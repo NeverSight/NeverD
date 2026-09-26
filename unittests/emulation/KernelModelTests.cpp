@@ -143,6 +143,44 @@ protected:
   }
 };
 
+TEST_F(DriverKernelModel,
+       ExceptionUserAuthorityStaysBoundToThreadProcessAndLifetime) {
+  constexpr uint32_t Process = DriverRequest::DefaultRequestorProcessID;
+  constexpr uint64_t Child = Scratch + profile::PageSize;
+  constexpr uint64_t Worker = Scratch + 2 * profile::PageSize;
+  constexpr uint64_t WorkerChild = Scratch + 3 * profile::PageSize;
+  const auto Allowed = [&] {
+    return Model->canCatchUserAccess(profile::UserArenaBase, 1);
+  };
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, Process));
+  ASSERT_TRUE(Allowed());
+  success(Model->inheritExecutionContext(Child, profile::StackBase));
+  Model->enterExecution(Child, profile::StackBase);
+  EXPECT_TRUE(Allowed());
+  Model->enterExecution(Child, Worker);
+  EXPECT_FALSE(Allowed());
+  Model->enterExecution(Child, profile::StackBase);
+  success(Model->setUserRequestContext(true, Process + 1));
+  EXPECT_FALSE(Allowed());
+  success(Model->setUserRequestContext(true, Process));
+  EXPECT_TRUE(Allowed());
+  success(Model->setUserRequestContext(false));
+  EXPECT_FALSE(Allowed());
+  success(Model->setUserRequestContext(true, Process));
+  success(Model->retireStack(Child, profile::PageSize));
+  Model->enterExecution(Child, profile::StackBase);
+  EXPECT_FALSE(Allowed());
+
+  // Even a lingering request process does not authorize a worker or its
+  // exception callback. Only the active parent's existing authority transfers.
+  Model->enterExecution(Worker);
+  EXPECT_FALSE(Allowed());
+  success(Model->inheritExecutionContext(WorkerChild, Worker));
+  Model->enterExecution(WorkerChild, Worker);
+  EXPECT_FALSE(Allowed());
+}
+
 TEST_F(DriverKernelModel, PoolOwnershipSurvivesBadTagAndRejectsUseAfterFree) {
   constexpr uint32_t Tag = 0x74736554;
   const uint64_t Pointer = invoke("ExAllocatePoolWithTag", {512, 48, Tag});

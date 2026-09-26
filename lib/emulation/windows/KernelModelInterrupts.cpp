@@ -29,7 +29,7 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     auto Old = Interrupts.acquire(A[0], CurrentExecution, CurrentIRQL);
     if (!Old)
       return Old.takeError();
-    CurrentIRQL = Interrupts.connection(A[0])->IRQL;
+    CurrentIRQL = Interrupts.connection(A[0])->SynchronizeIRQL;
     return *Old;
   }
   if (Name == kernel_api::KeReleaseInterruptSpinLock) {
@@ -44,7 +44,7 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     if (hasPendingModelGuestCall())
       return apiError("cannot replace a prepared guest callback");
     const auto *Connection = Interrupts.connection(A[0]);
-    if (!Connection || CurrentIRQL > Connection->IRQL)
+    if (!Connection || CurrentIRQL > Connection->SynchronizeIRQL)
       return apiError(
           "synchronization requires a live interrupt at caller IRQL <= DIRQL");
     auto Call = Interrupts.synchronize(A[0], A[1], A[2]);
@@ -149,10 +149,9 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
   if (!Output || !Routine)
     return apiError(
         "registration requires output storage and a service routine");
-  if (SpinLock || Share || Floating || Group ||
-      (!LineBased && Mode != uint32_t(DriverInterruptMode::Latched)))
-    return apiError("only private-lock exclusive latched CPU0/group0 "
-                    "interrupts are modeled");
+  if (Floating || Group)
+    return apiError("only CPU0/group0 interrupts without floating state saving "
+                    "are modeled");
   if (!LineBased && !Affinity)
     return windows::StatusInvalidParameter;
   if (auto E = validateGuestAccess(Output, profile::PointerSize, true))
@@ -164,23 +163,62 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
                                     Affinity, LineBased);
   if (!Candidate)
     return Candidate.takeError();
+  const auto &Resource =
+      Resources.find(Candidate->PDO)->Interrupts[Candidate->ResourceIndex];
+  if (!LineBased && Mode != uint32_t(Resource.Mode))
+    return apiError("interrupt mode must match the assigned resource");
+  if (!LineBased &&
+      bool(Share) != (Resource.Share == DriverInterruptShare::Shared))
+    return apiError("ShareVector must match the assigned interrupt resource");
   if (LineBased && !Synchronize)
     Synchronize = Candidate->IRQL;
-  if (Synchronize != Candidate->IRQL)
-    return apiError(
-        "single-vector synchronization IRQL must equal assigned DIRQL");
+  if (Synchronize < Candidate->IRQL ||
+      Synchronize > DriverInterruptMaximumLevel ||
+      (!SpinLock && Synchronize != Candidate->IRQL))
+    return apiError("synchronization IRQL requires the assigned DIRQL or a "
+                    "shared caller lock at a higher device DIRQL");
+  if (SpinLock) {
+    if (SpinLock < profile::UserProbeLimit ||
+        SpinLock > UINT64_MAX - profile::PointerSize ||
+        SpinLock % profile::PointerSize ||
+        (Output < SpinLock + profile::PointerSize &&
+         SpinLock < Output + profile::PointerSize))
+      return apiError(
+          "interrupt spin lock requires separate aligned kernel storage");
+    if (ExecutiveSpinLocks.contains(SpinLock))
+      return apiError(
+          "interrupt spin lock is already owned by an executive lock");
+    // A previously connected lock was already checked and is opaque while
+    // connected. Its address intentionally names the same lock authority.
+    if (!Interrupts.usesSpinLock(SpinLock)) {
+      if (auto E =
+              validateDispatcherStorage(SpinLock, profile::PointerSize, true))
+        return E;
+      auto Writable =
+          Memory.canAccess(SpinLock, profile::PointerSize, Read | Write);
+      if (!Writable)
+        return Writable.takeError();
+      if (!*Writable)
+        return apiError(
+            "interrupt spin lock requires writable nonpaged storage");
+      auto Value = Memory.readInteger(SpinLock, profile::PointerSize);
+      if (!Value)
+        return Value.takeError();
+      if (*Value)
+        return apiError("interrupt spin lock must be initialized and free");
+    }
+  }
   const uint64_t Aligned = (NextAllocation + interrupts::TokenSize - 1) &
                            ~(interrupts::TokenSize - 1);
   if (Aligned > AllocationEnd ||
       interrupts::TokenSize > AllocationEnd - Aligned)
     return windows::StatusInsufficientResources;
-  auto Object = allocate(interrupts::TokenSize);
-  if (!Object)
-    return Object.takeError();
-  Candidate->Object = *Object;
+  Candidate->Object = Aligned;
   Candidate->Routine = Routine;
   Candidate->Context = Context;
   Candidate->Version = Version;
+  Candidate->SpinLock = SpinLock;
+  Candidate->SynchronizeIRQL = uint8_t(Synchronize);
   for (const auto &[Address, Device] : Devices)
     if (Device.OwnerKind == DeviceOwnerKind::Guest && Device.Extension &&
         Output >= Device.Extension && Output < Address + Device.Size &&
@@ -191,6 +229,12 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
       Candidate->OutputDeviceSize = Device.Size;
       break;
     }
+  if (auto E = Interrupts.canConnect(*Candidate))
+    return E;
+  auto Object = allocate(interrupts::TokenSize);
+  if (!Object)
+    return Object.takeError();
+  Candidate->Object = *Object;
   // The candidate has been checked without publishing a connection. A failed
   // output write cannot leave a live opaque interrupt registration behind.
   if (auto E = Memory.writeInteger(Output, *Object, profile::PointerSize))
@@ -221,6 +265,10 @@ KernelModel::finishInterruptCall(uint64_t Token, uint64_t Value) {
   if (!Return)
     return Return.takeError();
   CurrentIRQL = Return->RestoredIRQL;
+  if (Return->Next) {
+    PendingInterruptCall = std::move(*Return->Next);
+    return std::optional<uint64_t>{};
+  }
   return std::optional<uint64_t>{Return->Value};
 }
 

@@ -65,6 +65,7 @@ ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
+static ULONG QueryStopCount, QueryRemoveCount;
 static const LONGLONG FileSendTimeout100ns = -5;
 static WDFQUEUE PowerQueue;
 static PVOID MappedResource;
@@ -138,31 +139,45 @@ static VOID FilterFileObjectDestroy(WDFOBJECT Object) {
 }
 
 static BOOLEAN UsesSynchronousFileSend(VOID) {
-  return ServiceMode == L's' || ServiceMode == L'q';
+  return ServiceMode == L's' || ServiceMode == L'q' || ServiceMode == L'c';
+}
+
+static BOOLEAN UsesAsynchronousFileSend(void) {
+  return ServiceMode == L'a' || ServiceMode == L'b' || ServiceMode == L't' ||
+         ServiceMode == L'd';
+}
+
+static BOOLEAN UsesFileSendTimeout(void) {
+  return ServiceMode == L'q' || ServiceMode == L't' || ServiceMode == L'c' ||
+         ServiceMode == L'd';
+}
+
+static LONGLONG RequestTimeout100ns(void) {
+  return ServiceMode == L'c' || ServiceMode == L'd' ? -FileSendTimeout100ns
+                                                    : FileSendTimeout100ns;
 }
 
 static VOID FilterFileCreate(WDFDEVICE Device, WDFREQUEST Request,
                              WDFFILEOBJECT File) {
   WDF_REQUEST_SEND_OPTIONS Options;
   WDFIOTARGET Target = WdfDeviceGetIoTarget(Device);
-  if ((UsesSynchronousFileSend() || ServiceMode == L'a' ||
-               ServiceMode == L'b' || ServiceMode == L't'
+  if ((UsesSynchronousFileSend() || UsesAsynchronousFileSend()
            ? File == NULL
            : File != NULL) ||
       Target == NULL || Target != WdfDeviceGetIoTarget(Device)) {
     WdfRequestComplete(Request, STATUS_INVALID_DEVICE_STATE);
     return;
   }
-  if (ServiceMode == L'a' || ServiceMode == L'b' || ServiceMode == L't') {
+  if (UsesAsynchronousFileSend()) {
     WdfRequestFormatRequestUsingCurrentType(Request);
     FileTarget = Target;
     WdfRequestSetCompletionRoutine(Request, FilterFileCreateCompleted, Target);
-    if (ServiceMode == L't') {
+    if (UsesFileSendTimeout()) {
       WDF_REQUEST_SEND_OPTIONS_INIT(&Options, 0);
-      WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&Options, FileSendTimeout100ns);
+      WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&Options, RequestTimeout100ns());
     }
     if (!WdfRequestSend(Request, Target,
-                        ServiceMode == L't' ? &Options : WDF_NO_SEND_OPTIONS))
+                        UsesFileSendTimeout() ? &Options : WDF_NO_SEND_OPTIONS))
       WdfRequestComplete(Request, WdfRequestGetStatus(Request));
     return;
   }
@@ -172,8 +187,8 @@ static VOID FilterFileCreate(WDFDEVICE Device, WDFREQUEST Request,
                                         WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET
       : UsesSynchronousFileSend() ? WDF_REQUEST_SEND_OPTION_SYNCHRONOUS
                                   : WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET);
-  if (ServiceMode == L'q')
-    WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&Options, FileSendTimeout100ns);
+  if (UsesFileSendTimeout())
+    WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&Options, RequestTimeout100ns());
   if (!WdfRequestSend(Request, Target, &Options)) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
@@ -215,6 +230,43 @@ static NTSTATUS DeviceD0Entry(WDFDEVICE Device,
   DbgPrint("KMDF PnP: D0 entry\n");
   return ServiceMode == L'Q' || ServiceMode == L'J' ? STATUS_UNSUCCESSFUL
                                                     : STATUS_SUCCESS;
+}
+
+static BOOLEAN UsesPnpNotifications(void) {
+  return ServiceMode == L'v' || ServiceMode == L'x' || ServiceMode == L'y' ||
+         ServiceMode == L'z';
+}
+
+static NTSTATUS DeviceQuery(WDFDEVICE Device, BOOLEAN Remove) {
+  LARGE_INTEGER Delay;
+  ULONG *Count = Remove ? &QueryRemoveCount : &QueryStopCount;
+  if (Device == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint(Remove ? "KMDF PnP: query remove\n" : "KMDF PnP: query stop\n");
+  if (ServiceMode == L'y')
+    return STATUS_PENDING;
+  if (ServiceMode == L'z')
+    return STATUS_NOT_SUPPORTED;
+  if (ServiceMode == L'x' && (*Count)++ == 0)
+    return STATUS_UNSUCCESSFUL;
+  Delay.QuadPart = -3;
+  return KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+}
+
+static NTSTATUS DeviceQueryStop(WDFDEVICE Device) {
+  return DeviceQuery(Device, FALSE);
+}
+
+static NTSTATUS DeviceQueryRemove(WDFDEVICE Device) {
+  return DeviceQuery(Device, TRUE);
+}
+
+static VOID DeviceSurpriseRemoval(WDFDEVICE Device) {
+  LARGE_INTEGER Delay;
+  UNREFERENCED_PARAMETER(Device);
+  Delay.QuadPart = -3;
+  DbgPrint("KMDF PnP: surprise removal\n");
+  (void)KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 }
 
 static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
@@ -424,15 +476,14 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (ServiceMode == L'X')
     WdfDeviceInitSetExclusive(Init, TRUE);
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
-      ServiceMode == L'p' || UsesSynchronousFileSend() || ServiceMode == L'a' ||
-      ServiceMode == L'b' || ServiceMode == L't' || ServiceMode == L'u') {
+      ServiceMode == L'p' || UsesSynchronousFileSend() ||
+      UsesAsynchronousFileSend() || ServiceMode == L'u') {
     if (ServiceMode != L'o')
       WdfFdoInitSetFilter(Init);
     WDF_FILEOBJECT_CONFIG_INIT(
         &FileConfig,
         ServiceMode == L'p' || UsesSynchronousFileSend() ||
-                ServiceMode == L'a' || ServiceMode == L'b' ||
-                ServiceMode == L't' || ServiceMode == L'u'
+                UsesAsynchronousFileSend() || ServiceMode == L'u'
             ? FilterFileCreate
             : NULL,
         FilterFileClose, FilterFileCleanup);
@@ -457,10 +508,16 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   }
   if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesAssignedMemory() ||
       (UsesPowerQueue() && ServiceMode != L'Y') || ServiceMode == L'H' ||
-      ServiceMode == L'I' || ServiceMode == L'J' || ServiceMode == L'U') {
+      ServiceMode == L'I' || ServiceMode == L'J' || ServiceMode == L'U' ||
+      UsesPnpNotifications()) {
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpCallbacks);
     PnpCallbacks.EvtDeviceD0Entry = DeviceD0Entry;
     PnpCallbacks.EvtDeviceD0Exit = DeviceD0Exit;
+    if (UsesPnpNotifications()) {
+      PnpCallbacks.EvtDeviceQueryStop = DeviceQueryStop;
+      PnpCallbacks.EvtDeviceQueryRemove = DeviceQueryRemove;
+      PnpCallbacks.EvtDeviceSurpriseRemoval = DeviceSurpriseRemoval;
+    }
     if (ServiceMode == L'H' || ServiceMode == L'I' || ServiceMode == L'J' ||
         UsesAssignedMemory()) {
       PnpCallbacks.EvtDevicePrepareHardware = DevicePrepareHardware;
@@ -494,8 +551,8 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     return STATUS_UNSUCCESSFUL;
   }
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
-      ServiceMode == L'p' || UsesSynchronousFileSend() || ServiceMode == L'a' ||
-      ServiceMode == L'b' || ServiceMode == L't' || ServiceMode == L'u') {
+      ServiceMode == L'p' || UsesSynchronousFileSend() ||
+      UsesAsynchronousFileSend() || ServiceMode == L'u') {
     DbgPrint("KMDF PnP: filter ready\n");
     return STATUS_SUCCESS;
   }

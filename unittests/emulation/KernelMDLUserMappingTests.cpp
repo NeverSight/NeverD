@@ -32,6 +32,16 @@ public:
       return llvm::make_error<GuestMemoryLimitError>();
     return Storage.mapAlias(Address, Source, Size, Permissions);
   }
+  llvm::Error unmapAlias(uint64_t Address, uint64_t Size) override {
+    return Storage.unmapAlias(Address, Size);
+  }
+  llvm::Error
+  replaceAliases(llvm::ArrayRef<GuestAliasRange> Removing,
+                 llvm::ArrayRef<GuestAliasMapping> Adding) override {
+    if (Exhausted && !Adding.empty())
+      return llvm::make_error<GuestMemoryLimitError>();
+    return Storage.replaceAliases(Removing, Adding);
+  }
   llvm::Error protect(uint64_t Address, uint64_t Size,
                       unsigned Permissions) override {
     return Storage.protect(Address, Size, Permissions);
@@ -321,7 +331,7 @@ TEST_F(KernelMDLUserMapping,
       call("MmGetSystemAddressForMdlSafe", {MDL, NormalPagePriority});
   const auto First = map(MDL);
   process(ProcessB);
-  const auto Second = map(MDL);
+  const auto Second = map(MDL, NormalPagePriority, First + profile::PageSize);
   EXPECT_EQ(Second & (profile::PageSize - 1), 3u);
   EXPECT_FALSE(allowed(First, Read));
   EXPECT_TRUE(allowed(Second, Read | Write));
@@ -430,7 +440,8 @@ TEST_F(KernelMDLUserMapping, ProcessExitRevokesItsViewsAndKeepsSystemAliases) {
   const auto FirstView = map(MDL);
   pending(First);
   const auto Second = begin(2, ProcessB);
-  const auto SecondView = map(MDL);
+  const auto SecondView =
+      map(MDL, NormalPagePriority, FirstView + profile::PageSize);
   pending(Second);
   success(Model->exitRequestorProcess(First));
   EXPECT_FALSE(allowed(FirstView, Read));
@@ -503,6 +514,388 @@ TEST_F(KernelMDLUserMapping, SubpagePoolOwnersCannotExposeNeighbouringStorage) {
             Pool);
   call("IoFreeMdl", {MDL});
   call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLUserMapping,
+       ReusedAddressChangesBackingAndPermissionsWithoutRetargetingPins) {
+  begin();
+  const auto FirstPool = pool();
+  const auto SecondPool = pool();
+  const auto First = poolMDL(FirstPool);
+  const auto Second = poolMDL(SecondPool);
+  put(FirstPool, 0x31, 1);
+  put(SecondPool, 0x72, 1);
+  const auto Address = map(First);
+  const auto Locked = descriptor(Address, 16);
+  call("MmProbeAndLockPages", {Locked, UserMode, IoWriteAccess});
+  const auto System =
+      call("MmGetSystemAddressForMdlSafe", {Locked, NormalPagePriority});
+  const auto FirstPFN = get(Locked + MDLSize);
+  call("MmUnmapLockedPages", {Address, First});
+  EXPECT_FALSE(allowed(Address, Read));
+  EXPECT_TRUE(Model->canCatchUserAccess(Address, 1));
+  success(Model->validateGuestAccess(Address, 1, false));
+  const auto NewLock = descriptor(Address, 16);
+  EXPECT_EQ(raised(Model->call("MmProbeAndLockPages",
+                               {NewLock, UserMode, IoReadAccess})),
+            exceptions::StatusAccessViolation);
+  EXPECT_FALSE(Memory->fault());
+
+  EXPECT_EQ(map(Second, NormalPagePriority | MdlMappingNoWrite, Address),
+            Address);
+  EXPECT_EQ(get(Address, 1), 0x72u);
+  EXPECT_FALSE(allowed(Address, Write));
+  EXPECT_FALSE(allowed(Address, Execute));
+  EXPECT_EQ(get(System, 1), 0x31u);
+  EXPECT_EQ(get(Locked + MDLSize), FirstPFN);
+  call("MmProbeAndLockPages", {NewLock, UserMode, IoReadAccess});
+  EXPECT_EQ(get(NewLock + MDLSize), get(Second + MDLSize));
+  EXPECT_NE(get(NewLock + MDLSize), FirstPFN);
+  rejected(Model->call("MmUnmapLockedPages", {Address, First}));
+  EXPECT_TRUE(allowed(Address, Read));
+  call("MmUnmapLockedPages", {Address, Second});
+  call("MmUnlockPages", {NewLock});
+  call("IoFreeMdl", {NewLock});
+
+  EXPECT_EQ(map(Second, NormalPagePriority, Address), Address);
+  put(Address, 0x43, 1);
+  EXPECT_EQ(get(SecondPool, 1), 0x43u);
+  EXPECT_EQ(get(System, 1), 0x31u);
+  call("MmUnmapLockedPages", {Address, Second});
+  call("MmUnlockPages", {Locked});
+  call("IoFreeMdl", {Locked});
+  for (auto MDL : {First, Second})
+    call("IoFreeMdl", {MDL});
+  for (auto Pool : {FirstPool, SecondPool})
+    call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLUserMapping,
+       RetiredViewAddressesAreReusableAfterProcessExitAndContextChanges) {
+  const auto IRP = begin();
+  const auto Pool = pool();
+  const auto MDL = poolMDL(Pool);
+  const auto Address = map(MDL);
+  pending(IRP);
+  success(Model->exitRequestorProcess(IRP));
+  EXPECT_FALSE(allowed(Address, Read));
+  process(ProcessB);
+  EXPECT_EQ(map(MDL, NormalPagePriority | MdlMappingNoWrite, Address), Address);
+  process(ProcessA);
+  EXPECT_FALSE(allowed(Address, Read));
+  rejected(Model->call("MmUnmapLockedPages", {Address, MDL}));
+  process(ProcessB);
+  EXPECT_TRUE(allowed(Address, Read));
+  EXPECT_FALSE(allowed(Address, Write));
+  call("MmUnmapLockedPages", {Address, MDL});
+  for (unsigned I = 0; I != 4; ++I) {
+    const auto Reused = map(MDL);
+    EXPECT_EQ(Reused, Address);
+    EXPECT_TRUE(allowed(Reused, Read | Write));
+    call("MmUnmapLockedPages", {Reused, MDL});
+  }
+  call("IoFreeMdl", {MDL});
+  call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLUserMapping,
+       FailedRemappingLeavesAddressAndBackingAvailableForRetry) {
+  begin();
+  const auto Pool = pool();
+  const auto MDL = poolMDL(Pool);
+  const auto Address = map(MDL);
+  call("MmUnmapLockedPages", {Address, MDL});
+  Budget->Exhausted = true;
+  EXPECT_EQ(raised(Model->call(
+                "MmMapLockedPagesSpecifyCache",
+                {MDL, UserMode, MmCached, Address, 0, NormalPagePriority})),
+            StatusInsufficientResources);
+  EXPECT_FALSE(allowed(Address, Read));
+  EXPECT_TRUE(allowed(Pool, Read | Write));
+  Budget->Exhausted = false;
+  EXPECT_EQ(map(MDL, NormalPagePriority, Address), Address);
+  call("MmUnmapLockedPages", {Address, MDL});
+  call("IoFreeMdl", {MDL});
+  call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLUserMapping, CacheRequestsInheritExistingRamPageAttributes) {
+  const auto IRP = begin();
+  const auto User = get(IRP + IRPUserBufferOffset);
+  const auto MDL = descriptor(User + 3, 16);
+  call("MmProbeAndLockPages", {MDL, UserMode, IoWriteAccess});
+  const auto PFN = get(MDL + MDLSize);
+  for (uint32_t Cache : {MmNonCached, MmCached, MmWriteCombined}) {
+    const auto System =
+        call("MmMapLockedPagesSpecifyCache",
+             {MDL, KernelMode, Cache, 0, 0, NormalPagePriority});
+    const auto UserView =
+        call("MmMapLockedPagesSpecifyCache",
+             {MDL, UserMode, Cache, 0, 0, NormalPagePriority});
+    put(System, Cache + 1, 1);
+    EXPECT_EQ(get(UserView, 1), Cache + 1);
+    EXPECT_EQ(get(User + 3, 1), Cache + 1);
+    EXPECT_EQ(get(MDL + MDLSize), PFN);
+    call("MmUnmapLockedPages", {UserView, MDL});
+    call("MmUnmapLockedPages", {System, MDL});
+  }
+  constexpr uint32_t ReservedCacheType = MmWriteCombined + 1;
+  for (uint32_t Mode : {KernelMode, UserMode}) {
+    rejected(
+        Model->call("MmMapLockedPagesSpecifyCache",
+                    {MDL, Mode, ReservedCacheType, 0, 0, NormalPagePriority}));
+    EXPECT_EQ(get(MDL + MDLMappedSystemVAOffset), 0u);
+    EXPECT_EQ(get(MDL + MDLSize), PFN);
+  }
+  call("MmUnlockPages", {MDL});
+  call("IoFreeMdl", {MDL});
+}
+
+TEST_F(KernelMDLUserMapping,
+       LeavingProcessContextRevokesOriginalAndMappedUserAddresses) {
+  const auto IRP = begin();
+  const auto User = get(IRP + IRPUserBufferOffset);
+  const auto MDL = descriptor(User, 16);
+  call("MmProbeAndLockPages", {MDL, UserMode, IoWriteAccess});
+  const auto Alias = map(MDL);
+  const auto System =
+      call("MmGetSystemAddressForMdlSafe", {MDL, NormalPagePriority});
+  success(Model->setUserRequestContext(false));
+  EXPECT_FALSE(allowed(User, Read));
+  EXPECT_FALSE(allowed(Alias, Read));
+  EXPECT_TRUE(allowed(System, Read | Write));
+  put(System, 0x51, 1);
+  process(ProcessA);
+  EXPECT_EQ(get(User, 1), 0x51u);
+  EXPECT_EQ(get(Alias, 1), 0x51u);
+  call("MmUnmapLockedPages", {Alias, MDL});
+  call("MmUnlockPages", {MDL});
+  call("IoFreeMdl", {MDL});
+}
+
+TEST_F(KernelMDLUserMapping,
+       ConcurrentProcessesBindTheSameAddressToIndependentPagesAndPermissions) {
+  begin();
+  const auto FirstPool = pool();
+  const auto SecondPool = pool(2 * profile::PageSize);
+  const auto First = poolMDL(FirstPool);
+  const auto Second = poolMDL(SecondPool, 2 * profile::PageSize);
+  put(FirstPool, 0x31, 1);
+  put(SecondPool, 0x72, 1);
+  const auto Address = map(First);
+  const auto FirstLock = descriptor(Address, 16);
+  call("MmProbeAndLockPages", {FirstLock, UserMode, IoWriteAccess});
+  const auto FirstSystem =
+      call("MmGetSystemAddressForMdlSafe", {FirstLock, NormalPagePriority});
+  process(ProcessB);
+  EXPECT_FALSE(allowed(Address, Read));
+  EXPECT_EQ(map(Second, NormalPagePriority | MdlMappingNoWrite, Address),
+            Address);
+  EXPECT_EQ(get(Address, 1), 0x72u);
+  EXPECT_FALSE(allowed(Address, Write));
+  EXPECT_TRUE(allowed(Address + profile::PageSize, Read));
+  EXPECT_FALSE(allowed(Address, Execute));
+  const auto SecondLock = descriptor(Address, 16);
+  EXPECT_EQ(raised(Model->call("MmProbeAndLockPages",
+                               {SecondLock, UserMode, IoWriteAccess})),
+            exceptions::StatusAccessViolation);
+  call("MmProbeAndLockPages", {SecondLock, UserMode, IoReadAccess});
+  const auto SecondSystem =
+      call("MmGetSystemAddressForMdlSafe", {SecondLock, NormalPagePriority});
+  EXPECT_NE(get(FirstLock + MDLSize), get(SecondLock + MDLSize));
+  EXPECT_EQ(get(SecondLock + MDLSize), get(Second + MDLSize));
+  rejected(Model->call("MmUnmapLockedPages", {Address, First}));
+  EXPECT_EQ(get(Address, 1), 0x72u);
+  EXPECT_EQ(
+      raised(Model->call("MmMapLockedPagesSpecifyCache",
+                         {Second, UserMode, MmCached,
+                          Address + profile::PageSize, 0, NormalPagePriority})),
+      StatusInsufficientResources);
+
+  process(ProcessA);
+  EXPECT_EQ(get(Address, 1), 0x31u);
+  EXPECT_TRUE(allowed(Address, Write));
+  EXPECT_FALSE(allowed(Address + profile::PageSize, Read));
+  put(Address, 0x43, 1);
+  EXPECT_EQ(get(FirstSystem, 1), 0x43u);
+  EXPECT_EQ(get(SecondSystem, 1), 0x72u);
+  rejected(Model->call("MmUnmapLockedPages", {Address, Second}));
+  success(Model->setUserRequestContext(false));
+  EXPECT_FALSE(allowed(Address, Read));
+  EXPECT_EQ(get(FirstSystem, 1), 0x43u);
+  EXPECT_EQ(get(SecondSystem, 1), 0x72u);
+  process(ProcessB);
+  EXPECT_EQ(get(Address, 1), 0x72u);
+  EXPECT_FALSE(allowed(Address, Write));
+  call("MmUnmapLockedPages", {Address, Second});
+  process(ProcessA);
+  EXPECT_EQ(get(Address, 1), 0x43u);
+  call("MmUnmapLockedPages", {Address, First});
+  for (auto Locked : {FirstLock, SecondLock}) {
+    call("MmUnlockPages", {Locked});
+    call("IoFreeMdl", {Locked});
+  }
+  for (auto MDL : {First, Second})
+    call("IoFreeMdl", {MDL});
+  for (auto Pool : {FirstPool, SecondPool})
+    call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLUserMapping,
+       ExitingAnInactiveProcessDoesNotUnmapAnotherProcessAtTheSameAddress) {
+  const auto FirstIRP = begin();
+  const auto FirstPool = pool();
+  const auto First = poolMDL(FirstPool);
+  const auto Address = map(First);
+  pending(FirstIRP);
+  const auto SecondIRP = begin(2, ProcessB);
+  const auto SecondPool = pool();
+  const auto Second = poolMDL(SecondPool);
+  put(SecondPool, 0x72, 1);
+  EXPECT_EQ(map(Second, NormalPagePriority | MdlMappingNoWrite, Address),
+            Address);
+  pending(SecondIRP);
+  success(Model->exitRequestorProcess(FirstIRP));
+  EXPECT_EQ(get(Address, 1), 0x72u);
+  EXPECT_FALSE(allowed(Address, Write));
+  call("IoFreeMdl", {First});
+  call("ExFreePoolWithTag", {FirstPool, PoolTag});
+  rejected(Model->call("IoFreeMdl", {Second}));
+  process(ProcessA);
+  EXPECT_FALSE(allowed(Address, Read));
+  process(ProcessB);
+  EXPECT_EQ(get(Address, 1), 0x72u);
+  call("MmUnmapLockedPages", {Address, Second});
+  call("IoFreeMdl", {Second});
+  call("ExFreePoolWithTag", {SecondPool, PoolTag});
+  complete(FirstIRP);
+  complete(SecondIRP);
+}
+
+TEST_F(KernelMDLUserMapping,
+       FailedProcessSwitchPreservesTheOriginalBindingsAndProcessAuthority) {
+  const auto FirstIRP = begin();
+  const auto FirstUser = get(FirstIRP + IRPUserBufferOffset);
+  const auto FirstPool = pool();
+  const auto First = poolMDL(FirstPool);
+  put(FirstPool, 0x31, 1);
+  const auto Address = map(First);
+  pending(FirstIRP);
+  const auto SecondIRP = begin(2, ProcessB);
+  const auto SecondUser = get(SecondIRP + IRPUserBufferOffset);
+  const auto SecondPool = pool(2 * profile::PageSize);
+  const auto Second = poolMDL(SecondPool, 2 * profile::PageSize);
+  put(SecondPool, 0x72, 1);
+  EXPECT_EQ(map(Second, NormalPagePriority | MdlMappingNoWrite, Address),
+            Address);
+  process(ProcessA);
+  Budget->Exhausted = true;
+  auto Error = Model->setUserRequestContext(true, ProcessB);
+  ASSERT_TRUE(bool(Error));
+  EXPECT_TRUE(Error.isA<GuestMemoryLimitError>());
+  llvm::consumeError(std::move(Error));
+  EXPECT_EQ(get(Address, 1), 0x31u);
+  EXPECT_TRUE(allowed(Address, Write));
+  EXPECT_FALSE(allowed(Address + profile::PageSize, Read));
+  EXPECT_TRUE(allowed(FirstUser, Read | Write));
+  EXPECT_FALSE(allowed(SecondUser, Read));
+  EXPECT_EQ(call("PsGetCurrentProcessId", {}), ProcessA);
+  EXPECT_FALSE(Memory->fault());
+  Budget->Exhausted = false;
+  process(ProcessB);
+  EXPECT_EQ(get(Address, 1), 0x72u);
+  EXPECT_FALSE(allowed(Address, Write));
+  EXPECT_FALSE(allowed(FirstUser, Read));
+  EXPECT_TRUE(allowed(SecondUser, Read | Write));
+  call("MmUnmapLockedPages", {Address, Second});
+  process(ProcessA);
+  call("MmUnmapLockedPages", {Address, First});
+  for (auto MDL : {First, Second})
+    call("IoFreeMdl", {MDL});
+  for (auto Pool : {FirstPool, SecondPool})
+    call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLUserMapping,
+       DispatcherObjectsKeepTheirBindingUntilTheViewIsExplicitlyUnmapped) {
+  begin();
+  const auto Pool = pool();
+  const auto MDL = poolMDL(Pool);
+  const auto Address = map(MDL);
+  call("KeInitializeEvent", {Address, dispatcher::NotificationObject, 1});
+  auto Error = Model->setUserRequestContext(true, ProcessB);
+  ASSERT_TRUE(bool(Error));
+  EXPECT_NE(llvm::toString(std::move(Error)).find("dispatcher object"),
+            std::string::npos);
+  EXPECT_TRUE(allowed(Address, Read | Write));
+  EXPECT_EQ(call("PsGetCurrentProcessId", {}), ProcessA);
+  EXPECT_EQ(call("KeReadStateEvent", {Address}), 1u);
+  call("MmUnmapLockedPages", {Address, MDL});
+  process(ProcessB);
+  EXPECT_EQ(map(MDL, NormalPagePriority, Address), Address);
+  rejected(Model->call("KeReadStateEvent", {Address}));
+  call("MmUnmapLockedPages", {Address, MDL});
+  call("IoFreeMdl", {MDL});
+  call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLUserMapping,
+       DispatcherAccessChecksTheOriginalUserBufferProcessAndPermissions) {
+  const auto IRP = begin();
+  const auto User = get(IRP + IRPUserBufferOffset);
+  call("KeInitializeEvent", {User, dispatcher::NotificationObject, 1});
+  process(ProcessB);
+  EXPECT_EQ(raised(Model->call("KeResetEvent", {User})),
+            exceptions::StatusAccessViolation);
+  EXPECT_FALSE(Memory->fault());
+  process(ProcessA);
+  EXPECT_EQ(call("KeReadStateEvent", {User}), 1u);
+}
+
+TEST_F(KernelMDLUserMapping,
+       FailedAttachmentDoesNotPublishSavedApcStateOrProcessPermissions) {
+  const auto IRP = begin();
+  const auto Process = call("IoGetRequestorProcess", {IRP});
+  const auto Pool = pool();
+  const auto MDL = poolMDL(Pool);
+  const auto Address = map(MDL);
+  const auto ApcState = pool(KAPCStateSize);
+  std::array<uint8_t, KAPCStateSize> Original;
+  Original.fill(0x63);
+  success(Memory->write(ApcState, Original));
+  const auto Work = call("IoAllocateWorkItem", {get(Scratch)});
+  call("IoQueueWorkItem", {Work, Entry, profile::DelayedWorkQueue, 0});
+  pending(IRP);
+  success(Model->setUserRequestContext(false));
+  auto Scheduled = take(Model->nextScheduled(false));
+  ASSERT_TRUE(Scheduled);
+  Model->enterExecution(profile::CallbackStackBase);
+  const auto SystemProcess = call("IoGetCurrentProcess", {});
+  Budget->Exhausted = true;
+  auto Attached = Model->call("KeStackAttachProcess", {Process, ApcState});
+  ASSERT_FALSE(bool(Attached));
+  auto Error = Attached.takeError();
+  EXPECT_TRUE(Error.isA<GuestMemoryLimitError>());
+  llvm::consumeError(std::move(Error));
+  std::array<uint8_t, KAPCStateSize> Actual;
+  success(Memory->read(ApcState, Actual));
+  EXPECT_EQ(Actual, Original);
+  EXPECT_EQ(call("IoGetCurrentProcess", {}), SystemProcess);
+  EXPECT_FALSE(allowed(Address, Read));
+  rejected(Model->call("KeUnstackDetachProcess", {ApcState}));
+  EXPECT_FALSE(Memory->fault());
+  Budget->Exhausted = false;
+  call("KeStackAttachProcess", {Process, ApcState});
+  EXPECT_EQ(call("IoGetCurrentProcess", {}), Process);
+  EXPECT_TRUE(allowed(Address, Read | Write));
+  call("MmUnmapLockedPages", {Address, MDL});
+  call("KeUnstackDetachProcess", {ApcState});
+  EXPECT_EQ(call("IoGetCurrentProcess", {}), SystemProcess);
+  success(Model->finishScheduled(Scheduled->ID));
+  call("IoFreeWorkItem", {Work});
+  call("IoFreeMdl", {MDL});
+  call("ExFreePoolWithTag", {Pool, PoolTag});
+  call("ExFreePoolWithTag", {ApcState, PoolTag});
 }
 
 } // namespace

@@ -81,6 +81,9 @@ public:
                   unsigned Permissions) override;
   llvm::Error mapAlias(uint64_t Address, uint64_t Source, uint64_t Size,
                        unsigned Permissions) override;
+  llvm::Error unmapAlias(uint64_t Address, uint64_t Size) override;
+  llvm::Error replaceAliases(llvm::ArrayRef<GuestAliasRange> Remove,
+                             llvm::ArrayRef<GuestAliasMapping> Add) override;
   llvm::Error protect(uint64_t Address, uint64_t Size,
                       unsigned Permissions) override;
   llvm::Error mapMMIO(uint64_t Address, uint64_t Size,

@@ -45,14 +45,14 @@ KernelModel::resolveUserMemoryRange(uint64_t Address, uint64_t Length,
       ExitedUserProcesses.contains(CurrentUserProcessID))
     return accessViolation();
   uint64_t Backing = 0;
-  auto View = UserMdlViews.upper_bound(Address);
+  auto View = UserMdlViews.upper_bound({CurrentUserProcessID, Address});
   if (View != UserMdlViews.begin()) {
     --View;
     const auto &V = View->second;
-    if (Address >= V.Address && Address - V.Address < V.Length &&
+    if (V.ProcessID == CurrentUserProcessID && Address >= V.Address &&
+        Address - V.Address < V.Length &&
         Length <= V.Length - (Address - V.Address)) {
-      if (V.Revoked || V.ProcessID != CurrentUserProcessID ||
-          (ForWrite && !(V.Permissions & Write)))
+      if (ForWrite && !(V.Permissions & Write))
         return accessViolation();
       Backing = V.BackingAddress + (Address - V.Address);
     }
@@ -83,9 +83,10 @@ KernelModel::resolveUserMemoryRange(uint64_t Address, uint64_t Length,
                          Backing};
 }
 
-llvm::Expected<uint64_t> KernelModel::mapUserMDL(uint64_t MDL,
-                                                 uint64_t RequestedAddress,
-                                                 uint32_t Priority) {
+llvm::Expected<uint64_t>
+KernelModel::mapUserMDL(uint64_t MDL, uint64_t RequestedAddress,
+                        uint32_t Priority,
+                        KernelPhysicalMemory::CacheType RequestedCache) {
   if (CurrentIRQL > APCLevel || !UserRequestContext ||
       !canCatchUserAccess(profile::UserMappedAliasBase, 1) ||
       ExitedUserProcesses.contains(CurrentUserProcessID))
@@ -103,6 +104,10 @@ llvm::Expected<uint64_t> KernelModel::mapUserMDL(uint64_t MDL,
   auto Owner = Physical.ownerForRange(State.BackingAddress, State.ByteCount);
   if (!Owner)
     return Owner.takeError();
+  auto Cache = Physical.cacheTypeForMapping(State.BackingAddress,
+                                            State.ByteCount, RequestedCache);
+  if (!Cache)
+    return Cache.takeError();
   const auto *Backing = Physical.find(*Owner);
   const bool PrivateRequestPages =
       std::any_of(MDLs.begin(), MDLs.end(), [&](const auto &Entry) {
@@ -126,17 +131,26 @@ llvm::Expected<uint64_t> KernelModel::mapUserMDL(uint64_t MDL,
                         ~(profile::PageSize - 1);
   const uint64_t End =
       profile::UserMappedAliasBase + profile::UserMappedAliasSize;
-  uint64_t Base = NextUserMappedAlias;
+  uint64_t Base = profile::UserMappedAliasBase;
   if (RequestedAddress) {
     if ((RequestedAddress & (profile::PageSize - 1)) != Offset)
       return userMappingError("requested user MDL address must preserve the "
                               "MDL page offset");
     Base = pageBase(RequestedAddress);
+  } else {
+    for (const auto &[Key, View] : UserMdlViews) {
+      if (View.ProcessID != CurrentUserProcessID)
+        continue;
+      if (Base <= View.PageBase && Span <= View.PageBase - Base)
+        break;
+      Base = std::max(Base, View.PageBase + View.MappedSize);
+    }
   }
   if (Base < profile::UserMappedAliasBase || Base > End || Span > End - Base)
     return mappingShortage();
-  for (const auto &[Address, View] : UserMdlViews)
-    if (Base < View.PageBase + View.MappedSize && View.PageBase < Base + Span)
+  for (const auto &[Key, View] : UserMdlViews)
+    if (View.ProcessID == CurrentUserProcessID &&
+        Base < View.PageBase + View.MappedSize && View.PageBase < Base + Span)
       return mappingShortage();
   if (auto E = Memory.validateBacking(pageBase(State.BackingAddress), Span))
     return E;
@@ -151,17 +165,16 @@ llvm::Expected<uint64_t> KernelModel::mapUserMDL(uint64_t MDL,
     return E;
   }
   const uint64_t Address = Base + Offset;
-  UserMdlViews.emplace(Address,
+  UserMdlViews.emplace(UserMdlViewKey{CurrentUserProcessID, Address},
                        UserMdlView{MDL, Address, Base, Span,
                                    State.BackingAddress, CurrentUserProcessID,
-                                   State.ByteCount, Permissions, false});
-  NextUserMappedAlias = std::max(NextUserMappedAlias, Base + Span);
+                                   State.ByteCount, Permissions});
   return Address;
 }
 
 llvm::Error KernelModel::unmapUserMDL(uint64_t Address, uint64_t MDL) {
-  auto It = UserMdlViews.find(Address);
-  if (It == UserMdlViews.end() || It->second.Revoked || It->second.MDL != MDL)
+  auto It = UserMdlViews.find({CurrentUserProcessID, Address});
+  if (It == UserMdlViews.end() || It->second.MDL != MDL)
     return userMappingError(
         "user MDL unmapping requires its live mapping address");
   auto &View = It->second;
@@ -173,15 +186,15 @@ llvm::Error KernelModel::unmapUserMDL(uint64_t Address, uint64_t MDL) {
     return E;
   if (auto E = prepareRevokeVirtualRange(View.PageBase, View.MappedSize))
     return E;
-  if (auto E = Memory.protect(View.PageBase, View.MappedSize, 0))
+  if (auto E = Memory.unmapAlias(View.PageBase, View.MappedSize))
     return E;
-  View.Revoked = true;
+  UserMdlViews.erase(It);
   return llvm::Error::success();
 }
 
 llvm::Error KernelModel::canReleaseMdlUserViews(uint64_t MDL) const {
   for (const auto &[Address, View] : UserMdlViews)
-    if (!View.Revoked && View.MDL == MDL)
+    if (View.MDL == MDL)
       return userMappingError("MDL still owns a live user mapping");
   return llvm::Error::success();
 }
@@ -193,7 +206,7 @@ llvm::Error KernelModel::canReleaseUserViewsForBacking(uint64_t Address,
   if (!Size)
     return llvm::Error::success();
   for (const auto &[Base, View] : UserMdlViews)
-    if (!View.Revoked && Address < View.BackingAddress + View.Length &&
+    if (Address < View.BackingAddress + View.Length &&
         View.BackingAddress < Address + Size)
       return userMappingError("backing storage still has a live user mapping");
   return llvm::Error::success();
@@ -202,7 +215,9 @@ llvm::Error KernelModel::canReleaseUserViewsForBacking(uint64_t Address,
 llvm::Error KernelModel::validateUserMdlViewAccess(uint64_t Address,
                                                    uint64_t Size,
                                                    bool IsWrite) const {
-  for (const auto &[Base, View] : UserMdlViews) {
+  for (const auto &[Key, View] : UserMdlViews) {
+    if (!UserRequestContext || View.ProcessID != CurrentUserProcessID)
+      continue;
     if (Address >= View.PageBase + View.MappedSize ||
         Address + Size <= View.PageBase)
       continue;
@@ -211,8 +226,7 @@ llvm::Error KernelModel::validateUserMdlViewAccess(uint64_t Address,
           "user MDL mapping belongs to another process context");
     // Page protection raises the guest access violation in a valid process
     // context, just as it does for revoked or read-only scenario buffers.
-    if (View.Revoked || View.ProcessID != CurrentUserProcessID ||
-        (IsWrite && !(View.Permissions & Write)))
+    if (IsWrite && !(View.Permissions & Write))
       continue;
     if (Address < View.Address || Address - View.Address >= View.Length ||
         Size > View.Length - (Address - View.Address))

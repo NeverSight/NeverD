@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace neverd::emulation {
 
@@ -30,6 +31,12 @@ enum class DriverInterruptShare : uint8_t {
 #define NEVERD_DRIVER_INTERRUPT_SHARE(Name, Value, Spelling) Name = Value,
 #include "neverd/emulation/DriverInterrupts.def"
 #undef NEVERD_DRIVER_INTERRUPT_SHARE
+};
+
+enum class DriverInterruptAction {
+#define NEVERD_DRIVER_INTERRUPT_ACTION(Name, Spelling) Name,
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_ACTION
 };
 
 #define NEVERD_DRIVER_INTERRUPT_LIMIT(Name, Value)                             \
@@ -51,6 +58,8 @@ struct DriverInterruptResource {
   uint64_t TranslatedAffinity = 0;
   DriverInterruptMode Mode = DriverInterruptMode::Latched;
   DriverInterruptShare Share = DriverInterruptShare::DeviceExclusive;
+  /// Explicit sampling period for a level-sensitive line; absent for pulses.
+  std::optional<uint64_t> RetriggerAfter100ns;
 };
 
 struct DriverInterruptEvent {
@@ -59,6 +68,15 @@ struct DriverInterruptEvent {
   uint64_t After100ns = 0;
   std::string DeviceID;
   std::string InterruptID;
+  DriverInterruptAction Action = DriverInterruptAction::Pulse;
+};
+
+struct DriverInterruptHandlerResult {
+  uint64_t InterruptObject = 0;
+  uint64_t DeliveredAt100ns = 0;
+  std::optional<uint64_t> ReturnedAt100ns;
+  std::optional<uint8_t> ReturnValue;
+  uint32_t DeliveryIndex = 0;
 };
 
 /// Independent observations, not IRPs or NTSTATUS completions. An armed event
@@ -77,6 +95,8 @@ struct DriverInterruptResult {
   /// Actual BOOLEAN low byte. Zero means unclaimed, not a scenario failure.
   std::optional<uint8_t> ReturnValue;
   std::optional<std::string> UndeliveredReason;
+  std::vector<DriverInterruptHandlerResult> Handlers;
+  DriverInterruptAction Action = DriverInterruptAction::Pulse;
 };
 
 } // namespace neverd::emulation

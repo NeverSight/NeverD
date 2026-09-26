@@ -560,7 +560,9 @@ TEST(DriverWDMNeither, RawCallerAddressInPendingWorkerStopsExplicitly) {
       ASSERT_EQ(Result->Requests.size(), 2u);
       EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
       EXPECT_FALSE(Result->Requests[1].Completed);
-      EXPECT_FALSE(Result->Fault);
+      ASSERT_TRUE(Result->Fault);
+      EXPECT_EQ(Result->Fault->Kind, "protection");
+      EXPECT_EQ(Result->Fault->Access, "read");
     }
 }
 

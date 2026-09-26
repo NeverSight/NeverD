@@ -17,6 +17,7 @@
 #include "neverd/emulation/DriverSession.h"
 
 #include <algorithm>
+#include <array>
 
 namespace neverd::emulation {
 namespace {
@@ -383,6 +384,55 @@ TEST(DriverKMDFPnp, SendAndForgetCreateAllowsDelayedLowerCompletion) {
                       DelayedFileCompletion100ns);
         EXPECT_TRUE(Result->UnloadCompleted);
       }
+}
+
+TEST(DriverKMDFPnp,
+     AbsoluteSendTimeoutUsesCurrentTimeAndPreservesImmediateWins) {
+  for (char Mode : {'c', 'd'})
+    for (const char *Image : pnpImages())
+      for (uint64_t StartTime : {uint64_t(0), uint64_t(11)})
+        for (uint64_t Delay :
+             {uint64_t(0), LowerBeforeTimeout100ns, FileSendTimeout100ns,
+              DelayedFileCompletion100ns}) {
+          SCOPED_TRACE(Mode);
+          SCOPED_TRACE(Image);
+          SCOPED_TRACE(StartTime);
+          SCOPED_TRACE(Delay);
+          const uint64_t Interval = StartTime < FileSendTimeout100ns
+                                        ? FileSendTimeout100ns - StartTime
+                                        : 0;
+          const bool TimedOut = Delay > Interval;
+          auto Input = forwardedFileOptions(Mode);
+          Input.Requests.front().Pnp->BusCompletion.Delay100ns = StartTime;
+          Input.Requests[1].FileBusCompletion =
+              DriverBusCompletion{windows::StatusSuccess, Delay};
+          if (TimedOut)
+            std::erase_if(Input.Requests, [](const DriverRequest &Request) {
+              return Request.Kind == DriverRequestKind::Cleanup ||
+                     Request.Kind == DriverRequestKind::Close;
+            });
+          auto Result = emulateDriver(Image, Input);
+          ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+          ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+              << Result->Diagnostic;
+          EXPECT_EQ(Result->Requests[1].IOStatus, TimedOut
+                                                      ? windows::StatusIOTimeout
+                                                      : windows::StatusSuccess);
+          EXPECT_TRUE(Result->Requests[1].Completed);
+          EXPECT_EQ(callCount(*Result, "WdfRequestGetCompletionParams"),
+                    Mode == 'd' ? 1u : 0u);
+          const auto QueryRemove = std::find_if(
+              Result->Requests.begin(), Result->Requests.end(),
+              [](const DriverRequestResult &Request) {
+                return Request.Pnp &&
+                       Request.Pnp->Minor == DevicePnpRequest::QueryRemove;
+              });
+          ASSERT_NE(QueryRemove, Result->Requests.end());
+          ASSERT_TRUE(QueryRemove->Pnp->BusReceivedAt100ns);
+          EXPECT_EQ(*QueryRemove->Pnp->BusReceivedAt100ns,
+                    StartTime + std::min(Delay, Interval));
+          EXPECT_TRUE(Result->UnloadCompleted);
+        }
 }
 
 TEST(DriverKMDFPnp, AutomaticFileForwardingWaitsForLowerCompletion) {
@@ -1003,6 +1053,124 @@ TEST(DriverKMDFPnp, UnmodeledPnpCallbackFailsAtRegistration) {
   EXPECT_NE(Result->Diagnostic.find("unsupported PnP power event callback"),
             std::string::npos);
   EXPECT_TRUE(Result->Requests.empty());
+}
+
+TEST(DriverKMDFPnp, QueryCallbacksRunAndMayWaitBeforeProviderDispatch) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Base);
+      auto Input = options('v');
+      Input.LoadAddress = Base;
+      Input.Requests = {pnp(DevicePnpRequest::Start),
+                        pnp(DevicePnpRequest::QueryStop),
+                        pnp(DevicePnpRequest::CancelStop),
+                        pnp(DevicePnpRequest::QueryRemove),
+                        pnp(DevicePnpRequest::CancelRemove),
+                        pnp(DevicePnpRequest::QueryRemove),
+                        pnp(DevicePnpRequest::Remove)};
+      auto Result = emulateDriver(Image, Input);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+      EXPECT_TRUE(Result->UnloadCompleted);
+      const std::array<size_t, 3> Queries{1, 3, 5};
+      for (size_t Index : Queries) {
+        const auto &Query = Result->Requests[Index];
+        EXPECT_EQ(Query.DispatchStatus, windows::StatusPending);
+        EXPECT_EQ(Query.IOStatus, windows::StatusSuccess);
+        ASSERT_TRUE(Query.Pnp->BusReceivedAt100ns);
+        ASSERT_TRUE(Result->Requests[Index - 1].Pnp->BusCompletedAt100ns);
+        EXPECT_GE(*Query.Pnp->BusReceivedAt100ns,
+                  *Result->Requests[Index - 1].Pnp->BusCompletedAt100ns + 3);
+      }
+      EXPECT_EQ(pnpMessages(*Result),
+                (std::vector<std::string>{
+                    "KMDF PnP: device ready\n", "KMDF PnP: D0 entry\n",
+                    "KMDF PnP: query stop\n", "KMDF PnP: query remove\n",
+                    "KMDF PnP: query remove\n", "KMDF PnP: D0 exit\n",
+                    "KMDF PnP: device cleanup\n", "KMDF PnP: device destroy\n",
+                    "KMDF PnP: driver unload\n"}));
+    }
+}
+
+TEST(DriverKMDFPnp, QueryVetoDoesNotReachProviderOrDisableDeviceIO) {
+  for (const char *Image : pnpImages()) {
+    SCOPED_TRACE(Image);
+    auto Input = options('x');
+    Input.Requests = {pnp(DevicePnpRequest::Start),
+                      pnp(DevicePnpRequest::QueryStop),
+                      file(DriverRequestKind::Create),
+                      file(DriverRequestKind::DeviceControl),
+                      file(DriverRequestKind::Cleanup),
+                      file(DriverRequestKind::Close),
+                      pnp(DevicePnpRequest::QueryRemove),
+                      pnp(DevicePnpRequest::QueryRemove),
+                      pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+    for (size_t Index : {1u, 6u}) {
+      const auto &Rejected = Result->Requests[Index];
+      EXPECT_TRUE(Rejected.Completed);
+      EXPECT_EQ(Rejected.IOStatus, windows::StatusUnsuccessful);
+      EXPECT_EQ(Rejected.Pnp->StateAfter, DevicePnpState::Started);
+      EXPECT_FALSE(Rejected.Pnp->BusReceivedAt100ns);
+      EXPECT_FALSE(Rejected.Pnp->BusCompletedAt100ns);
+    }
+    EXPECT_EQ(Result->Requests[3].Output,
+              (std::vector<uint8_t>{'P', 'N', 'P', 0x7a}));
+    EXPECT_EQ(Result->Requests[7].IOStatus, windows::StatusSuccess);
+    EXPECT_TRUE(Result->UnloadCompleted);
+  }
+}
+
+TEST(DriverKMDFPnp, SurpriseNotificationRunsOnceForStartedAndStoppedDevices) {
+  for (const char *Image : pnpImages())
+    for (bool Stopped : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Stopped);
+      auto Input = options('v');
+      Input.Requests = {pnp(DevicePnpRequest::Start)};
+      if (Stopped) {
+        Input.Requests.push_back(pnp(DevicePnpRequest::QueryStop));
+        Input.Requests.push_back(pnp(DevicePnpRequest::Stop));
+      }
+      Input.Requests.push_back(pnp(DevicePnpRequest::SurpriseRemoval));
+      Input.Requests.push_back(pnp(DevicePnpRequest::Remove));
+      auto Result = emulateDriver(Image, Input);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      EXPECT_TRUE(Result->UnloadCompleted);
+      auto Messages = pnpMessages(*Result);
+      EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
+                           "KMDF PnP: surprise removal\n"),
+                1);
+      auto Surprise = std::find(Messages.begin(), Messages.end(),
+                                "KMDF PnP: surprise removal\n");
+      auto Exit =
+          std::find(Messages.begin(), Messages.end(), "KMDF PnP: D0 exit\n");
+      EXPECT_EQ(Surprise < Exit, !Stopped);
+    }
+}
+
+TEST(DriverKMDFPnp, InvalidQueryCallbackStatusesFailBeforeProviderDispatch) {
+  for (char Mode : {'y', 'z'}) {
+    SCOPED_TRACE(Mode);
+    auto Input = options(Mode);
+    Input.Requests = {pnp(DevicePnpRequest::Start),
+                      pnp(DevicePnpRequest::QueryStop)};
+    auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find(Mode == 'y' ? "STATUS_PENDING"
+                                                  : "STATUS_NOT_SUPPORTED"),
+              std::string::npos);
+    ASSERT_EQ(Result->Requests.size(), 2u);
+    EXPECT_FALSE(Result->Requests.back().Pnp->BusReceivedAt100ns);
+    EXPECT_FALSE(Result->Requests.back().Completed);
+  }
 }
 
 TEST(DriverKMDFPnp, PnpDriverCanOmitEvtDriverUnload) {

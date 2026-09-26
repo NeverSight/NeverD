@@ -17,6 +17,10 @@ import unittest
 PROCESS_EXIT = 0x22210B
 WRONG_PROCESS_UNMAP = 0x22210F
 MAPPING_SHORTAGE = 0x222113
+RETAIN_PROCESS_VIEW = 0x22211F
+CONCURRENT_PROCESS_VIEW = 0x222123
+RELEASE_FIRST_PROCESS_VIEW = 0x222127
+RELEASE_SECOND_PROCESS_VIEW = 0x22212B
 
 SCENARIO = (Path(__file__).resolve().parents[3]
             / "docs/examples/driver-user-mapping-scenario.json")
@@ -126,6 +130,28 @@ class DriverUserMappingIntegrationTests(unittest.TestCase):
         for variant, fixture in self.fixtures:
             with self.subTest(variant=variant):
                 self._success(self._run(fixture, scenario, 4 * 1024 * 1024), ["01000000"])
+
+    def test_live_processes_keep_independent_pages_at_the_same_address(self) -> None:
+        scenario = self._single_request(RETAIN_PROCESS_VIEW)
+        template = scenario["requests"][1]
+        actions = ((RETAIN_PROCESS_VIEW, 4096), (CONCURRENT_PROCESS_VIEW, 4097),
+                   (RELEASE_FIRST_PROCESS_VIEW, 4096), (RELEASE_SECOND_PROCESS_VIEW, 4097))
+        requests = []
+        for action, process in actions:
+            request = copy.deepcopy(template)
+            request["code"] = hex(action)
+            request["requestor_process_id"] = process
+            requests.append(request)
+        scenario["requests"][1:2] = requests
+        for variant, fixture in self.fixtures:
+            for address in (0x180000000, 0x190000000):
+                with self.subTest(variant=variant, address=address):
+                    scenario["load_address"] = hex(address)
+                    result = self._run(fixture, scenario)
+                    self._success(result, ["01000000", "01000000", "43750101", "75010100"])
+                    self.assertEqual([request["requestor_process_id"]
+                                      for request in result["requests"][1:5]],
+                                     [process for _, process in actions])
 
 
 if __name__ == "__main__":

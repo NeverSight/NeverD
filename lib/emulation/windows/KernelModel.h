@@ -166,6 +166,9 @@ public:
       CancelLock.CallbackExecution = Identity;
     }
   }
+  /// A synchronous exception callback retains its parent's user-memory
+  /// authority while keeping its own execution and resource ownership.
+  llvm::Error inheritExecutionContext(uint64_t Child, uint64_t Parent);
   llvm::Error setUserRequestContext(
       bool Active,
       uint32_t ProcessID = DriverRequest::DefaultRequestorProcessID);
@@ -198,6 +201,7 @@ private:
                                                              uint64_t Result);
   void configureFrameworkDeviceHost();
   llvm::Error completeFrameworkPnpIfReady();
+  llvm::Expected<uint64_t> forwardFrameworkPnpRequest(uint64_t IRP);
   llvm::Error detachFrameworkPnpDevice(uint64_t Device, uint64_t PDO);
   /// Framework-owned WDM devices and their canonical symbolic-link keys.
   std::map<uint64_t, std::vector<std::string>> FrameworkDevices;
@@ -248,6 +252,19 @@ private:
   uint64_t CurrentExecution = 0;
   uint64_t CurrentThreadKey = 0;
   std::map<uint64_t, uint64_t> ExecutionThreadKeys;
+  struct ExecutionProcessContext {
+    uint32_t ProcessID, CreatingProcessID;
+    uint8_t PreviousMode;
+    bool Attached;
+  };
+  std::optional<ExecutionProcessContext> executionProcessContext() const;
+  struct InheritedExecutionContext {
+    uint64_t ThreadKey;
+    uint32_t UserProcessID;
+    bool UserMemoryAuthority;
+    std::optional<ExecutionProcessContext> Process;
+  };
+  std::map<uint64_t, InheritedExecutionContext> InheritedExecutionContexts;
   struct ApcState {
     uint16_t CriticalDepth = 0;
     uint16_t GuardedDepth = 0;
@@ -258,7 +275,6 @@ private:
   uint32_t CurrentUserProcessID = 0;
   uint64_t NextUserAddress = profile::UserArenaBase;
   uint64_t NextUserAlias = profile::UserAliasBase;
-  uint64_t NextUserMappedAlias = profile::UserMappedAliasBase;
   struct UserAllocation {
     uint64_t Size;
     uint32_t ProcessID;
@@ -276,9 +292,9 @@ private:
     uint32_t ProcessID = 0;
     uint32_t Length = 0;
     unsigned Permissions = 0;
-    bool Revoked = false;
   };
-  std::map<uint64_t, UserMdlView> UserMdlViews;
+  using UserMdlViewKey = std::pair<uint32_t, uint64_t>;
+  std::map<UserMdlViewKey, UserMdlView> UserMdlViews;
   std::map<uint32_t, uint64_t> ProcessObjects;
   std::map<uint64_t, uint32_t> ProcessObjectIDs;
   struct ProcessAttachment {
@@ -521,6 +537,7 @@ private:
     bool DispatchReturned = false;
     bool FrameworkRemoveStarted = false;
     bool FrameworkPnpAwaiting = false;
+    bool FrameworkPnpBeforeBus = false;
     bool FrameworkPnpHandled = false;
     bool PendingMarked = false;
     bool CancelRequested = false;
@@ -697,10 +714,13 @@ private:
                                             llvm::ArrayRef<uint8_t> Initial,
                                             bool Writable, uint64_t UserAddress,
                                             bool DmaWritable);
-  llvm::Expected<uint64_t> mapLockedPages(uint64_t MDL, uint32_t Priority,
-                                          bool ReuseExisting);
+  llvm::Expected<uint64_t>
+  mapLockedPages(uint64_t MDL, uint32_t Priority, bool ReuseExisting,
+                 KernelPhysicalMemory::CacheType Cache =
+                     KernelPhysicalMemory::CacheType::Cached);
   llvm::Expected<uint64_t> mapUserMDL(uint64_t MDL, uint64_t RequestedAddress,
-                                      uint32_t Priority);
+                                      uint32_t Priority,
+                                      KernelPhysicalMemory::CacheType Cache);
   llvm::Error unmapUserMDL(uint64_t Address, uint64_t MDL);
   llvm::Error canReleaseMdlUserViews(uint64_t MDL) const;
   llvm::Error canReleaseUserViewsForBacking(uint64_t Address,

@@ -27,6 +27,9 @@ KernelModel::callSpinLockAPI(llvm::StringRef Name,
   const uint64_t Address = Arguments[0];
   if (!Address || (Address & 7))
     return spinLockError("executive spin lock requires aligned kernel storage");
+  if (Interrupts.usesSpinLock(Address))
+    return spinLockError(
+        "connected interrupt spin lock requires its interrupt APIs");
   if (Name == kernel_api::KeReleaseSpinLock ||
       Name == kernel_api::KeReleaseSpinLockFromDpcLevel) {
     auto Lock = ExecutiveSpinLocks.find(Address);

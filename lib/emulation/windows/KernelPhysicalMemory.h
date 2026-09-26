@@ -46,6 +46,7 @@ namespace physical {
 
 class KernelPhysicalMemory {
 public:
+  enum class CacheType { Cached, NonCached, WriteCombined };
   explicit KernelPhysicalMemory(GuestMemory &Memory) : Memory(Memory) {}
   KernelPhysicalMemory(const KernelPhysicalMemory &) = delete;
   KernelPhysicalMemory &operator=(const KernelPhysicalMemory &) = delete;
@@ -57,10 +58,15 @@ public:
   };
   /// Returned metadata remains valid until this owner is retired.
   const Region *find(uint64_t Owner) const;
-  llvm::Error canRegisterRegion(uint64_t Owner, uint64_t Backing,
-                                uint64_t Size) const;
+  llvm::Error canRegisterRegion(uint64_t Owner, uint64_t Backing, uint64_t Size,
+                                CacheType Cache = CacheType::Cached) const;
   /// Owner tokens and physical page identities are never recycled.
-  llvm::Error registerRegion(uint64_t Owner, uint64_t Backing, uint64_t Size);
+  llvm::Error registerRegion(uint64_t Owner, uint64_t Backing, uint64_t Size,
+                             CacheType Cache = CacheType::Cached);
+  /// Existing RAM pages retain their allocation's cache attribute, regardless
+  /// of the valid attribute requested for a new MDL mapping.
+  llvm::Expected<CacheType> cacheTypeForMapping(uint64_t Backing, uint64_t Size,
+                                                CacheType Requested) const;
   /// IgnoredPin, when supplied, must be a live pin of this exact owner. This
   /// permits an owner to preflight release of its own mapping and then retire.
   llvm::Error canRetire(uint64_t Owner, uint64_t IgnoredPin = 0) const;
@@ -98,8 +104,14 @@ private:
   struct PinRecord {
     uint64_t Owner, Offset, Length;
   };
-  llvm::Expected<std::vector<uint64_t>>
-  planRegion(uint64_t Owner, uint64_t Backing, uint64_t Size) const;
+  struct PageRecord {
+    uint64_t Physical;
+    CacheType Cache;
+  };
+  llvm::Expected<std::vector<uint64_t>> planRegion(uint64_t Owner,
+                                                   uint64_t Backing,
+                                                   uint64_t Size,
+                                                   CacheType Cache) const;
   llvm::Expected<uint64_t> viewBacking(uint64_t Owner, uint64_t Offset,
                                        uint64_t Length) const;
   llvm::Expected<uint64_t> pinBacking(uint64_t Pin, uint64_t Offset,
@@ -108,7 +120,7 @@ private:
   std::map<uint64_t, Region> Regions;
   std::map<uint64_t, uint64_t> OwnersByAddress;
   std::set<uint64_t> UsedOwners;
-  std::map<uint64_t, uint64_t> Pages;
+  std::map<uint64_t, PageRecord> Pages;
   std::map<uint64_t, PinRecord> Pins;
   uint64_t NextPin = 1;
 };

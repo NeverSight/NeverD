@@ -86,6 +86,201 @@ TEST_F(DriverBackendBacking, SharedVirtualAliasHasOneRAMAuthority) {
   EXPECT_FALSE(CPU->fault());
 }
 
+TEST_F(DriverBackendBacking, AliasRetirementPreservesBackingAndDerivedAliases) {
+  constexpr uint64_t Alias = 0x8000, Derived = 0xa000;
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Alias, Data, Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Derived, Alias, Page, Read)), "");
+  ASSERT_EQ(llvm::toString(CPU->writeInteger(Alias, 0x12345678, 4)), "");
+  ASSERT_EQ(llvm::toString(CPU->unmapAlias(Alias, Page)), "");
+  auto Accessible = CPU->canAccess(Alias, 1, Read);
+  ASSERT_TRUE(bool(Accessible)) << llvm::toString(Accessible.takeError());
+  EXPECT_FALSE(*Accessible);
+  EXPECT_EQ(*CPU->readInteger(Derived, 4), 0x12345678u);
+  EXPECT_EQ(llvm::toString(CPU->validateBacking(Data, Page)), "");
+
+  ASSERT_EQ(llvm::toString(CPU->map(Alias, Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(CPU->writeInteger(Alias, 0xaabbccdd, 4)), "");
+  EXPECT_EQ(*CPU->readInteger(Derived, 4), 0x12345678u);
+  EXPECT_NE(llvm::toString(CPU->unmapAlias(Alias, Page)), "");
+  EXPECT_NE(llvm::toString(CPU->unmapAlias(Data, Page)), "");
+  EXPECT_FALSE(CPU->fault());
+}
+
+TEST_F(DriverBackendBacking,
+       AliasUnmapRequiresExactExtentDespiteProtectionSplits) {
+  constexpr uint64_t Source = 0x10000, Alias = 0x20000;
+  auto Created = UnicornBackend::create(4 * Page);
+  ASSERT_TRUE(bool(Created)) << llvm::toString(Created.takeError());
+  auto &Backend = **Created;
+  ASSERT_EQ(llvm::toString(Backend.map(Source, 2 * Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(Backend.mapAlias(Alias, Source, 2 * Page, Read)),
+            "");
+  ASSERT_EQ(llvm::toString(Backend.protect(Alias + Page, Page, 0)), "");
+  for (auto [Address, Size] :
+       std::array<std::pair<uint64_t, uint64_t>, 5>{{{Alias, 0},
+                                                     {Alias, Page},
+                                                     {Alias + Page, Page},
+                                                     {Alias, 3 * Page},
+                                                     {Source, 2 * Page}}}) {
+    EXPECT_NE(llvm::toString(Backend.unmapAlias(Address, Size)), "");
+    EXPECT_EQ(llvm::toString(Backend.validateBacking(Alias, 2 * Page)), "");
+  }
+  EXPECT_FALSE(Backend.fault());
+  ASSERT_EQ(llvm::toString(Backend.unmapAlias(Alias, 2 * Page)), "");
+  EXPECT_NE(llvm::toString(Backend.unmapAlias(Alias, 2 * Page)), "");
+  // Repeated retirement returns the exact mapping budget, not the RAM owner.
+  for (unsigned Iteration = 0; Iteration != 8; ++Iteration) {
+    ASSERT_EQ(llvm::toString(Backend.mapAlias(Alias, Source, 2 * Page, Read)),
+              "");
+    ASSERT_EQ(llvm::toString(Backend.unmapAlias(Alias, 2 * Page)), "");
+  }
+  EXPECT_EQ(llvm::toString(Backend.validateBacking(Source, 2 * Page)), "");
+}
+
+TEST_F(DriverBackendBacking, ReboundAliasUsesNewBackingInResumedCPUContexts) {
+  constexpr uint64_t Alias = 0x8000, Replacement = 0xa000;
+  ASSERT_EQ(llvm::toString(CPU->map(Replacement, Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(CPU->writeInteger(Replacement, 0xaabbccdd, 4)), "");
+  const std::array<uint8_t, 4> Original{0x44, 0x33, 0x22, 0x11};
+  ASSERT_EQ(llvm::toString(CPU->writeBacking(Data, Original)), "");
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Alias, Data, Page, Read)), "");
+  ASSERT_EQ(llvm::toString(CPU->write(Code, {0x8b, 0x01, 0x90})), "");
+  ASSERT_EQ(llvm::toString(CPU->setReg(X64Register::CX, Alias)), "");
+  BackendHooks Hooks;
+  Hooks.Instruction = [&](uint64_t PC, uint32_t) {
+    if (PC == Code + 2)
+      CPU->stop();
+  };
+  ASSERT_EQ(llvm::toString(CPU->installHooks(std::move(Hooks))), "");
+  auto Context = CPU->saveContext();
+  ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
+  ASSERT_EQ(llvm::toString(CPU->run(Code, 1000000)), "");
+  EXPECT_EQ(*CPU->reg(X64Register::AX), 0x11223344u);
+  ASSERT_EQ(llvm::toString(CPU->unmapAlias(Alias, Page)), "");
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Alias, Replacement, Page, Read)), "");
+  ASSERT_EQ(llvm::toString(CPU->restoreContext(**Context)), "");
+  ASSERT_EQ(llvm::toString(CPU->run(Code, 1000000)), "");
+  EXPECT_EQ(*CPU->reg(X64Register::AX), 0xaabbccddu);
+  std::array<uint8_t, 4> Bytes{};
+  ASSERT_EQ(llvm::toString(CPU->readBacking(Data, Bytes)), "");
+  EXPECT_EQ(Bytes, Original);
+}
+
+TEST_F(DriverBackendBacking, AliasReplacementCanMergeAndSplitAtFullBudget) {
+  constexpr uint64_t First = 0x10000, Second = 0x20000, Alias = 0x30000;
+  auto Created = UnicornBackend::create(6 * Page);
+  ASSERT_TRUE(bool(Created)) << llvm::toString(Created.takeError());
+  auto &Backend = **Created;
+  ASSERT_EQ(llvm::toString(Backend.map(First, 2 * Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(Backend.map(Second, 2 * Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(Backend.writeInteger(First, 0x11, 1)), "");
+  ASSERT_EQ(llvm::toString(Backend.writeInteger(Second, 0x22, 1)), "");
+  ASSERT_EQ(llvm::toString(Backend.writeInteger(Second + Page, 0x33, 1)), "");
+  ASSERT_EQ(llvm::toString(Backend.replaceAliases(
+                {}, {{Alias, First, Page, Read | Write},
+                     {Alias + Page, First + Page, Page, Read | Write}})),
+            "");
+  ASSERT_EQ(llvm::toString(
+                Backend.replaceAliases({{Alias, Page}, {Alias + Page, Page}},
+                                       {{Alias, Second, 2 * Page, Read}})),
+            "");
+  EXPECT_EQ(*Backend.readInteger(Alias, 1), 0x22u);
+  EXPECT_EQ(*Backend.readInteger(Alias + Page, 1), 0x33u);
+  auto Writable = Backend.canAccess(Alias, 2 * Page, Write);
+  ASSERT_TRUE(bool(Writable)) << llvm::toString(Writable.takeError());
+  EXPECT_FALSE(*Writable);
+  ASSERT_EQ(llvm::toString(Backend.replaceAliases(
+                {{Alias, 2 * Page}}, {{Alias, First, Page, Read},
+                                      {Alias + Page, Second, Page, Read}})),
+            "");
+  EXPECT_EQ(*Backend.readInteger(Alias, 1), 0x11u);
+  EXPECT_EQ(*Backend.readInteger(Alias + Page, 1), 0x22u);
+  EXPECT_FALSE(Backend.fault());
+}
+
+TEST_F(DriverBackendBacking, ReplacementPreflightPreservesEveryAliasOnFailure) {
+  constexpr uint64_t Alias = 0x8000, Replacement = 0xa000, Other = 0xc000;
+  ASSERT_EQ(llvm::toString(CPU->map(Replacement, Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Alias, Data, Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(CPU->writeInteger(Alias, 0x1234, 2)), "");
+  struct ReplacementCase {
+    std::vector<GuestAliasRange> Remove;
+    std::vector<GuestAliasMapping> Add;
+  };
+  const ReplacementCase Invalid[] = {
+      {{{Alias, Page}, {Alias, Page}}, {}},
+      {{{Data, Page}}, {}},
+      {{{Alias, 2 * Page}}, {}},
+      {{{Alias, Page}}, {{Alias, Alias, Page, Read}}},
+      {{{Alias, Page}}, {{Data, Replacement, Page, Read}}},
+      {{{Alias, Page}},
+       {{Alias, Replacement, Page, Read}, {Alias, Data, Page, Write}}},
+      {{{Alias, Page}},
+       {{Alias, Replacement, Page, Read},
+        {Other, Data, Page, Read},
+        {Other + Page, Data, Page, Read}}},
+      {{{Alias, Page}}, {{Alias, UINT64_MAX, Page, Read}}},
+      {{{Alias, Page}}, {{Alias, Replacement, Page, Execute << 1}}}};
+  for (const auto &Case : Invalid) {
+    EXPECT_NE(llvm::toString(CPU->replaceAliases(Case.Remove, Case.Add)), "");
+    auto Writable = CPU->canAccess(Alias, Page, Write);
+    ASSERT_TRUE(bool(Writable)) << llvm::toString(Writable.takeError());
+    EXPECT_TRUE(*Writable);
+    EXPECT_EQ(*CPU->readInteger(Alias, 2), 0x1234u);
+    EXPECT_FALSE(CPU->fault());
+  }
+  ASSERT_EQ(llvm::toString(CPU->replaceAliases(
+                {{Alias, Page}}, {{Alias, Replacement, Page, Read}})),
+            "");
+  EXPECT_EQ(*CPU->readInteger(Alias, 2), 0u);
+  std::array<uint8_t, 2> Original{};
+  ASSERT_EQ(llvm::toString(CPU->readBacking(Data, Original)), "");
+  EXPECT_EQ(Original, (std::array<uint8_t, 2>{0x34, 0x12}));
+}
+
+TEST_F(DriverBackendBacking,
+       AliasRetirementRejectsExecutionAndCallbackReentry) {
+  constexpr uint64_t Alias = 0x8000, Device = 0xa000;
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Alias, Data, Page, Read)), "");
+  unsigned Attempts = 0;
+  auto Attempt = [&] {
+    ++Attempts;
+    EXPECT_NE(llvm::toString(CPU->unmapAlias(Alias, Page)), "");
+    EXPECT_NE(llvm::toString(CPU->mapAlias(0xc000, Data, Page, Read)), "");
+  };
+  GuestMMIOCallbacks Callbacks{
+      [&](uint64_t, uint64_t, bool) {
+        Attempt();
+        return llvm::Error::success();
+      },
+      [](uint64_t, unsigned) -> llvm::Expected<uint64_t> { return 7; },
+      [](uint64_t, unsigned, uint64_t) { return llvm::Error::success(); }};
+  ASSERT_EQ(llvm::toString(CPU->mapMMIO(Device, Page, std::move(Callbacks))),
+            "");
+  auto Value = CPU->readInteger(Device, 1);
+  ASSERT_TRUE(bool(Value)) << llvm::toString(Value.takeError());
+  EXPECT_EQ(*Value, 7u);
+  ASSERT_EQ(llvm::toString(CPU->write(Code, {0x90})), "");
+  BackendHooks Hooks;
+  Hooks.Instruction = [&](uint64_t, uint32_t) {
+    Attempt();
+    CPU->stop();
+  };
+  ASSERT_EQ(llvm::toString(CPU->installHooks(std::move(Hooks))), "");
+  ASSERT_EQ(llvm::toString(CPU->run(Code, 1000000)), "");
+  EXPECT_GE(Attempts, 2u);
+  EXPECT_EQ(llvm::toString(CPU->validateBacking(Alias, Page)), "");
+  EXPECT_FALSE(CPU->fault());
+  std::array<uint8_t, 1> Byte{};
+  EXPECT_NE(llvm::toString(CPU->read(Data, Byte)), "");
+  const auto Fault = CPU->fault();
+  ASSERT_TRUE(Fault);
+  EXPECT_NE(llvm::toString(CPU->unmapAlias(Alias, Page)), "");
+  EXPECT_EQ(llvm::toString(CPU->snapshotBacking(Alias, Byte)), "");
+  EXPECT_EQ(CPU->fault()->Address, Fault->Address);
+  EXPECT_EQ(CPU->fault()->Kind, Fault->Kind);
+}
+
 TEST_F(DriverBackendBacking, RejectsWholeUnmappedRangeWithoutPrefixEffects) {
   const std::array<uint8_t, 2> Original{0x12, 0x34};
   const std::array<uint8_t, 4> Replacement{9, 8, 7, 6};
@@ -284,6 +479,8 @@ TEST(DriverBackendBackingOptional, OrdinaryImplementationsRejectDeviceAccess) {
   EXPECT_NE(llvm::toString(Memory.readBacking(0, Byte)), "");
   EXPECT_NE(llvm::toString(Memory.writeBacking(0, Byte)), "");
   EXPECT_NE(llvm::toString(Memory.snapshotBacking(0, Byte)), "");
+  EXPECT_NE(llvm::toString(Memory.unmapAlias(0, 1)), "");
+  EXPECT_NE(llvm::toString(Memory.replaceAliases({}, {})), "");
 }
 } // namespace
 } // namespace neverd::emulation

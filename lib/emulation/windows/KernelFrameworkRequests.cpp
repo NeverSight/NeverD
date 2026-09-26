@@ -953,8 +953,6 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         if (!RawTimeout)
           return RawTimeout.takeError();
         SendTimeout = std::bit_cast<int64_t>(*RawTimeout);
-        if (*SendTimeout > 0)
-          return requestError("absolute request send timeout is unsupported");
       }
     }
     if (Flags != 0 && Flags != RequestSendTimeout &&
@@ -962,7 +960,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         Flags != (RequestSendTimeout | RequestSendSynchronous))
       return requestError(
           "only default asynchronous, synchronous or send-and-forget file "
-          "forwarding with an optional relative timeout is modeled");
+          "forwarding with an optional timeout is modeled");
     if (!R->second.FileCreate || R->second.Queue ||
         R->second.Cancellation != CancelState::Unmarked ||
         !Device->second.Files.forwards(Device->second.Filter) ||

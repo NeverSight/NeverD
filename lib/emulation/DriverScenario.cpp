@@ -590,13 +590,13 @@ interruptResources(const llvm::json::Value &Value) {
     const auto *Object = Item.getAsObject();
     if (!Object)
       return invalid("each interrupt must be an object");
-    if (auto E = fields(*Object,
-                        {interruptField::ID, interruptField::RawVector,
-                         interruptField::RawLevel, interruptField::RawAffinity,
-                         interruptField::TranslatedVector,
-                         interruptField::TranslatedLevel,
-                         interruptField::TranslatedAffinity,
-                         interruptField::Mode, interruptField::Share}))
+    if (auto E = fields(
+            *Object,
+            {interruptField::ID, interruptField::RawVector,
+             interruptField::RawLevel, interruptField::RawAffinity,
+             interruptField::TranslatedVector, interruptField::TranslatedLevel,
+             interruptField::TranslatedAffinity, interruptField::Mode,
+             interruptField::Share, interruptField::RetriggerAfter100ns}))
       return std::move(E);
     auto ID = Object->getString(interruptField::ID);
     auto Mode = Object->getString(interruptField::Mode);
@@ -621,6 +621,12 @@ interruptResources(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_INTERRUPT_SHARE
     if (!ModeFound || !ShareFound)
       return invalid("unsupported interrupt mode or share");
+    if (const auto *Period = Object->get(interruptField::RetriggerAfter100ns)) {
+      auto Parsed = unsigned64(*Period, interruptField::RetriggerAfter100ns);
+      if (!Parsed)
+        return Parsed.takeError();
+      Resource.RetriggerAfter100ns = *Parsed;
+    }
     const std::pair<llvm::StringRef, uint32_t DriverInterruptResource::*>
         Words[] = {
             {interruptField::RawVector, &DriverInterruptResource::RawVector},
@@ -669,7 +675,7 @@ interruptEvents(const llvm::json::Value &Value) {
       return invalid("each interrupt event must be an object");
     if (auto E = fields(*Object,
                         {interruptField::After100ns, interruptField::DeviceID,
-                         interruptField::InterruptID}))
+                         interruptField::InterruptID, interruptField::Action}))
       return std::move(E);
     const auto *After = Object->get(interruptField::After100ns);
     auto DeviceID = Object->getString(interruptField::DeviceID);
@@ -680,7 +686,22 @@ interruptEvents(const llvm::json::Value &Value) {
     auto ParsedAfter = unsigned64(*After, interruptField::After100ns);
     if (!ParsedAfter)
       return ParsedAfter.takeError();
-    Result.push_back({*ParsedAfter, DeviceID->str(), InterruptID->str()});
+    DriverInterruptEvent Event{*ParsedAfter, DeviceID->str(),
+                               InterruptID->str()};
+    if (const auto *Field = Object->get(interruptField::Action)) {
+      auto Action = Field->getAsString();
+      bool Found = false;
+#define NEVERD_DRIVER_INTERRUPT_ACTION(Name, Spelling)                         \
+  if (Action && *Action == Spelling) {                                         \
+    Event.Action = DriverInterruptAction::Name;                                \
+    Found = true;                                                              \
+  }
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_ACTION
+      if (!Found)
+        return invalid("interrupt action must be pulse, assert or deassert");
+    }
+    Result.push_back(std::move(Event));
   }
   return Result;
 }
@@ -1270,7 +1291,7 @@ llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
 
 llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
   size_t Count = 0;
-  std::set<uint32_t> Vectors;
+  std::map<uint32_t, const DriverInterruptResource *> Vectors;
   for (const auto &Device : Devices) {
     if (Device.Bus == DriverBusKind::ResourceFree && !Device.Interrupts.empty())
       return invalid("resource_free devices cannot have interrupts");
@@ -1285,9 +1306,20 @@ llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
         return invalid("interrupt id must be a bounded ASCII identifier");
       if (!IDs.insert(Interrupt.ID).second)
         return invalid("duplicate interrupt id '" + Interrupt.ID + "'");
-      if (!Vectors.insert(Interrupt.TranslatedVector).second)
-        return invalid(
-            "translated interrupt vectors must be globally exclusive");
+      auto [Vector, Inserted] =
+          Vectors.emplace(Interrupt.TranslatedVector, &Interrupt);
+      if (!Inserted) {
+        const auto &Peer = *Vector->second;
+        if (Peer.Share != DriverInterruptShare::Shared ||
+            Interrupt.Share != DriverInterruptShare::Shared ||
+            Peer.Mode != Interrupt.Mode ||
+            Peer.RetriggerAfter100ns != Interrupt.RetriggerAfter100ns ||
+            Peer.TranslatedLevel != Interrupt.TranslatedLevel ||
+            Peer.TranslatedAffinity != Interrupt.TranslatedAffinity)
+          return invalid(
+              "translated interrupt vectors must be globally exclusive "
+              "or describe the same shared line");
+      }
       switch (Interrupt.Mode) {
 #define NEVERD_DRIVER_INTERRUPT_MODE(Name, Value, Spelling)                    \
   case DriverInterruptMode::Name:                                              \
@@ -1296,6 +1328,15 @@ llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
 #undef NEVERD_DRIVER_INTERRUPT_MODE
       default:
         return invalid("unsupported interrupt mode");
+      }
+      if (Interrupt.Mode == DriverInterruptMode::LevelSensitive) {
+        if (!Interrupt.RetriggerAfter100ns || !*Interrupt.RetriggerAfter100ns ||
+            *Interrupt.RetriggerAfter100ns > INT64_MAX)
+          return invalid("level-sensitive interrupts require positive "
+                         "retrigger_after_100ns within signed 64-bit time");
+      } else if (Interrupt.RetriggerAfter100ns) {
+        return invalid(
+            "latched interrupts cannot specify retrigger_after_100ns");
       }
       switch (Interrupt.Share) {
 #define NEVERD_DRIVER_INTERRUPT_SHARE(Name, Value, Spelling)                   \
@@ -1736,12 +1777,28 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
       if (Device == Options.PnpDevices.end())
         return invalid(
             "interrupt event device_id must name a configured pnp device");
-      if (std::none_of(Device->Interrupts.begin(), Device->Interrupts.end(),
+      const auto Interrupt =
+          std::find_if(Device->Interrupts.begin(), Device->Interrupts.end(),
                        [&](const DriverInterruptResource &I) {
                          return I.ID == Event.InterruptID;
-                       }))
+                       });
+      if (Interrupt == Device->Interrupts.end())
         return invalid(
             "interrupt_id must name an interrupt on the event device");
+      switch (Event.Action) {
+      case DriverInterruptAction::Pulse:
+        if (Interrupt->Mode != DriverInterruptMode::Latched)
+          return invalid(
+              "level-sensitive interrupts require assert/deassert actions");
+        break;
+      case DriverInterruptAction::Assert:
+      case DriverInterruptAction::Deassert:
+        if (Interrupt->Mode != DriverInterruptMode::LevelSensitive)
+          return invalid("latched interrupts require pulse actions");
+        break;
+      default:
+        return invalid("unsupported interrupt action");
+      }
     }
     if (!Request.Device.empty() && !Request.DeviceID.empty())
       return invalid("device and device_id are mutually exclusive");

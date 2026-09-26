@@ -65,36 +65,58 @@ KernelModel::allocateUserBuffer(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
 
 llvm::Error KernelModel::setUserRequestContext(bool Active,
                                                uint32_t ProcessID) {
-  for (const auto &[Address, View] : UserMdlViews)
-    if (auto E = Memory.validateBacking(View.PageBase, View.MappedSize))
-      return E;
-  if (Active) {
-    for (const auto &[Address, Allocation] : UserAllocations) {
-      const uint64_t Pages =
-          (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
-      if (auto E = Memory.validateBacking(Address, Pages))
+  const bool Switching = UserRequestContext != Active ||
+                         (Active && CurrentUserProcessID != ProcessID);
+  std::vector<GuestAliasRange> Removing;
+  std::vector<GuestAliasMapping> Adding;
+  if (Switching) {
+    for (const auto &[Key, View] : UserMdlViews) {
+      if (UserRequestContext && View.ProcessID == CurrentUserProcessID) {
+        if (auto E = canRevokeVirtualRange(View.PageBase, View.MappedSize))
+          return E;
+        // Dispatcher identities are currently kernel virtual addresses. Keep
+        // their original binding until the driver explicitly unmaps the view.
+        if (auto E = Dispatcher.validateGuestAccess(View.PageBase,
+                                                    View.MappedSize, false))
+          return userMemoryError("cannot switch process while a user MDL view "
+                                 "contains a dispatcher object: " +
+                                 llvm::toString(std::move(E)));
+        Removing.push_back({View.PageBase, View.MappedSize});
+      }
+      if (!Active || View.ProcessID != ProcessID)
+        continue;
+      auto Owner = Physical.ownerForRange(View.BackingAddress, View.Length);
+      if (!Owner)
+        return Owner.takeError();
+      const uint64_t BackingPage =
+          View.BackingAddress & ~(profile::PageSize - 1);
+      if (auto E = Memory.validateBacking(BackingPage, View.MappedSize))
         return E;
-    }
-    for (const auto &[Address, Allocation] : UserAllocations) {
-      const uint64_t Pages =
-          (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
-      const unsigned Permissions =
-          Allocation.ProcessID == ProcessID &&
-                  !ExitedUserProcesses.contains(ProcessID) &&
-                  !RevokedUserAllocations.contains(Address)
-              ? userPermissions(Allocation.Access)
-              : 0;
-      if (auto E = Memory.protect(Address, Pages, Permissions))
-        return E;
+      Adding.push_back(
+          {View.PageBase, BackingPage, View.MappedSize, View.Permissions});
     }
   }
-  for (const auto &[Address, View] : UserMdlViews) {
+  for (const auto &[Address, Allocation] : UserAllocations) {
+    const uint64_t Pages =
+        (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
+    if (auto E = Memory.validateBacking(Address, Pages))
+      return E;
+  }
+  // The backend preflights the whole replacement, including the final page
+  // budget. A failed switch leaves the old process and all its permissions.
+  if (!Removing.empty() || !Adding.empty())
+    if (auto E = Memory.replaceAliases(Removing, Adding))
+      return E;
+  for (const auto &[Address, Allocation] : UserAllocations) {
+    const uint64_t Pages =
+        (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
     const unsigned Permissions =
-        Active && View.ProcessID == ProcessID && !View.Revoked &&
-                !ExitedUserProcesses.contains(ProcessID)
-            ? View.Permissions
+        Active && Allocation.ProcessID == ProcessID &&
+                !ExitedUserProcesses.contains(ProcessID) &&
+                !RevokedUserAllocations.contains(Address)
+            ? userPermissions(Allocation.Access)
             : 0;
-    if (auto E = Memory.protect(View.PageBase, View.MappedSize, Permissions))
+    if (auto E = Memory.protect(Address, Pages, Permissions))
       return E;
   }
   UserRequestContext = Active;
@@ -225,23 +247,31 @@ llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
       return E;
     Ranges.emplace_back(Address, Pages);
   }
-  std::vector<uint64_t> Views;
-  for (const auto &[Address, View] : UserMdlViews) {
-    if (View.Revoked || View.ProcessID != Request->ProcessID)
+  const bool ActiveProcess =
+      UserRequestContext && CurrentUserProcessID == Request->ProcessID;
+  std::vector<UserMdlViewKey> Views;
+  std::vector<GuestAliasRange> Removing;
+  for (const auto &[Key, View] : UserMdlViews) {
+    if (View.ProcessID != Request->ProcessID)
       continue;
-    if (auto E = Memory.validateBacking(View.PageBase, View.MappedSize))
-      return E;
-    if (auto E = canRevokeVirtualRange(View.PageBase, View.MappedSize))
-      return E;
-    Views.push_back(Address);
+    if (ActiveProcess) {
+      if (auto E = Memory.validateBacking(View.PageBase, View.MappedSize))
+        return E;
+      if (auto E = canRevokeVirtualRange(View.PageBase, View.MappedSize))
+        return E;
+      Removing.push_back({View.PageBase, View.MappedSize});
+    }
+    Views.push_back(Key);
   }
-  for (uint64_t Address : Views) {
-    auto &View = UserMdlViews.at(Address);
-    if (auto E = prepareRevokeVirtualRange(View.PageBase, View.MappedSize))
+  if (!Removing.empty())
+    if (auto E = Memory.replaceAliases(Removing, {}))
       return E;
-    if (auto E = Memory.protect(View.PageBase, View.MappedSize, 0))
-      return E;
-    View.Revoked = true;
+  for (const auto &Key : Views) {
+    const auto &View = UserMdlViews.at(Key);
+    if (ActiveProcess)
+      if (auto E = prepareRevokeVirtualRange(View.PageBase, View.MappedSize))
+        return E;
+    UserMdlViews.erase(Key);
   }
   for (const auto &[Address, Pages] : Ranges) {
     if (auto E = Memory.protect(Address, Pages, 0))

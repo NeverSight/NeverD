@@ -37,6 +37,13 @@ struct GuestMMIOCallbacks {
   std::function<llvm::Expected<uint64_t>(uint64_t, unsigned)> Read;
   std::function<llvm::Error(uint64_t, unsigned, uint64_t)> Write;
 };
+struct GuestAliasRange {
+  uint64_t Address, Size;
+};
+struct GuestAliasMapping {
+  uint64_t Address, Source, Size;
+  unsigned Permissions;
+};
 class GuestMemory {
 public:
   virtual ~GuestMemory() = default;
@@ -46,6 +53,17 @@ public:
   /// are page aligned; the owner must separately govern their lifetimes.
   virtual llvm::Error mapAlias(uint64_t Address, uint64_t Source, uint64_t Size,
                                unsigned Permissions);
+  /// Retire exactly one complete RAM alias. Canonical storage and other
+  /// aliases survive; the address and mapping budget become available again.
+  /// Reject running/faulted CPUs, callbacks and partial or canonical ranges.
+  virtual llvm::Error unmapAlias(uint64_t Address, uint64_t Size);
+  /// Replace a set of complete RAM aliases at one stopped-CPU boundary.
+  /// Validate every removal, source, destination and the final mapping budget
+  /// before any change. Sources must remain mapped throughout the operation.
+  /// An unexpected engine failure is terminal; predictable errors leave all
+  /// aliases, permissions and accounting unchanged.
+  virtual llvm::Error replaceAliases(llvm::ArrayRef<GuestAliasRange> Remove,
+                                     llvm::ArrayRef<GuestAliasMapping> Add);
   virtual llvm::Error protect(uint64_t Address, uint64_t Size,
                               unsigned Permissions) = 0;
   /// Optional device access support; unrelated memory implementations reject

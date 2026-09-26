@@ -3171,7 +3171,10 @@ TEST_F(DriverScenarioPublic, RejectsInvalidInterruptFactsBeforeImageLoading) {
            {"translated_level", "2"},
            {"translated_affinity", "2"},
            {"mode", "\"level_sensitive\""},
-           {"share", "\"shared\""}}) {
+           {"share", "\"invalid\""},
+           {"retrigger_after_100ns", "3"}}) {
+    SCOPED_TRACE(Field);
+    SCOPED_TRACE(Fact);
     auto Value = llvm::json::parse(R"({"pnp_devices":[{
       "id":"interrupt0","bus":"register_bank","initial_device_power":"D0",
       "initial_system_power":"working","interrupts":[{
@@ -3206,6 +3209,103 @@ TEST_F(DriverScenarioPublic, RejectsInvalidInterruptFactsBeforeImageLoading) {
     EXPECT_NE(error().find("driver scenario:"), std::string::npos);
     EXPECT_EQ(neverd_session_is_loaded(Session), 0);
   }
+}
+
+TEST_F(DriverScenarioPublic, CAPIExecutesExplicitLevelAssertionAndDeassertion) {
+#ifdef NEVERD_WDM_INTERRUPT_FIXTURE
+  std::vector<const char *> Images{NEVERD_WDM_INTERRUPT_FIXTURE};
+#ifdef NEVERD_WDM_INTERRUPT_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_INTERRUPT_CFG_FIXTURE);
+#endif
+  constexpr char Scenario[] = R"({
+    "load_address":"0x190000000","unload":true,
+    "pnp_devices":[{"id":"interrupt0","bus":"register_bank",
+      "initial_device_power":"D0","initial_system_power":"working",
+      "resources":[{"id":"counter","raw_start":"0x200000000",
+        "translated_start":"0x300000000","length":"0x1000",
+        "registers":[{"offset":0,"width":4,"access":"read_write","value":0}]}],
+      "interrupts":[{"id":"line0","raw_vector":17,"raw_level":7,
+        "raw_affinity":1,"translated_vector":145,"translated_level":5,
+        "translated_affinity":1,"mode":"level_sensitive",
+        "share":"device_exclusive","retrigger_after_100ns":3}]}],
+    "requests":[
+      {"kind":"pnp","device_id":"interrupt0","minor":"start",
+       "bus_completion":{"status":0}},
+      {"kind":"create","device_id":"interrupt0","file":1},
+      {"kind":"ioctl","file":1,"code":"0x222000","output_size":32,
+       "interrupt_events":[
+         {"after_100ns":7,"device_id":"interrupt0","interrupt_id":"line0","action":"assert"},
+         {"after_100ns":15,"device_id":"interrupt0","interrupt_id":"line0","action":"deassert"}]},
+      {"kind":"cleanup","file":1},{"kind":"close","file":1},
+      {"kind":"pnp","device_id":"interrupt0","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"interrupt0","minor":"remove",
+       "bus_completion":{"status":0}}]})";
+  neverd_driver_options_v1 Options{};
+  Options.struct_size = sizeof(Options);
+  Options.instruction_limit = 100000;
+  Options.memory_limit = 64 * 1024 * 1024;
+  Options.event_limit = 10000;
+  Options.timeout_milliseconds = 5000;
+  Options.service_name = "NeverDInterruptD";
+  for (const char *Image : Images) {
+    SCOPED_TRACE(Image);
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, Image, Scenario, &Options)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned")
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Configuration = Report->getObject("configuration");
+    ASSERT_NE(Configuration, nullptr);
+    const auto *Devices = Configuration->getArray("pnp_devices");
+    ASSERT_NE(Devices, nullptr);
+    ASSERT_EQ(Devices->size(), 1u);
+    const auto *Resources =
+        Devices->front().getAsObject()->getArray("interrupts");
+    ASSERT_NE(Resources, nullptr);
+    ASSERT_EQ(Resources->size(), 1u);
+    const auto *Resource = Resources->front().getAsObject();
+    EXPECT_EQ(Resource->getString("mode"), "level_sensitive");
+    EXPECT_EQ(Resource->getInteger("retrigger_after_100ns"), 3);
+    const auto *Inputs = Configuration->getArray("interrupt_events");
+    ASSERT_NE(Inputs, nullptr);
+    ASSERT_EQ(Inputs->size(), 2u);
+    EXPECT_EQ((*Inputs)[0].getAsObject()->getString("action"), "assert");
+    EXPECT_EQ((*Inputs)[1].getAsObject()->getString("action"), "deassert");
+    const auto *Events = Report->getArray("interrupts");
+    ASSERT_NE(Events, nullptr);
+    ASSERT_EQ(Events->size(), 2u);
+    const auto *Assert = (*Events)[0].getAsObject();
+    EXPECT_EQ(Assert->getString("action"), "assert");
+    EXPECT_EQ(Assert->getInteger("occurred_at_100ns"), 7);
+    const auto *Handlers = Assert->getArray("handlers");
+    ASSERT_NE(Handlers, nullptr);
+    ASSERT_EQ(Handlers->size(), 3u);
+    for (size_t I = 0; I < Handlers->size(); ++I) {
+      const auto *Handler = (*Handlers)[I].getAsObject();
+      ASSERT_NE(Handler, nullptr);
+      EXPECT_EQ(Handler->getInteger("delivery_index"), I);
+      EXPECT_EQ(Handler->getInteger("delivered_at_100ns"), 7 + I * 3);
+      EXPECT_EQ(Handler->getInteger("returned_at_100ns"), 7 + I * 3);
+      EXPECT_EQ(Handler->getInteger("return_value"), I == 0 ? 1 : 0);
+      EXPECT_EQ(Handler->getBoolean("claimed"), I == 0);
+    }
+    const auto *Deassert = (*Events)[1].getAsObject();
+    EXPECT_EQ(Deassert->getString("action"), "deassert");
+    EXPECT_EQ(Deassert->getInteger("occurred_at_100ns"), 15);
+    EXPECT_TRUE(Deassert->getArray("handlers")->empty());
+    for (const char *Field : {"delivered_at_100ns", "returned_at_100ns",
+                              "interrupt_object", "return_value", "claimed"})
+      EXPECT_TRUE(Deassert->get(Field)->getAsNull()) << Field;
+  }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_INTERRUPT_FIXTURE requires a genuine WDK fixture";
+#endif
 }
 
 TEST_F(DriverScenarioPublic,

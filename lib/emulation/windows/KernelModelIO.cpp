@@ -78,16 +78,8 @@ llvm::Expected<uint64_t> KernelModel::requestorProcess(uint64_t IRP) {
 }
 
 llvm::Expected<uint64_t> KernelModel::currentProcess() {
-  if (CurrentExecution == profile::StackBase)
-    return processObject(UserRequestContext ? CurrentUserProcessID : 4);
-  if (Scheduler.active() &&
-      (Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem ||
-       Scheduler.active()->Kind == KernelScheduler::CallbackKind::SystemThread))
-    return processObject(!ProcessAttachments.empty() &&
-                                 ProcessAttachments.back().Execution ==
-                                     CurrentExecution
-                             ? CurrentUserProcessID
-                             : 4);
+  if (auto Context = executionProcessContext())
+    return processObject(Context->ProcessID);
   return ioError("current process requires a modeled foreground or system "
                  "thread");
 }
@@ -147,13 +139,13 @@ llvm::Error KernelModel::stackAttachProcess(uint64_t Process,
   auto PreviousProcess = processObject(LogicalPreviousProcessID);
   if (!PreviousProcess)
     return PreviousProcess.takeError();
+  if (auto E = setUserRequestContext(true, ProcessID))
+    return E;
   std::array<uint8_t, KAPCStateSize> Saved{};
   if (auto E = Memory.write(ApcState, Saved))
     return E;
   if (auto E = Memory.writeInteger(ApcState + KAPCStateProcessOffset,
                                    *PreviousProcess, 8))
-    return E;
-  if (auto E = setUserRequestContext(true, ProcessID))
     return E;
   ProcessAttachments.push_back(
       {CurrentExecution, ApcState, PreviousProcessID, PreviousUserContext});

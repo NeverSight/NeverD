@@ -14,6 +14,11 @@ enum DriverUserMappingAction {
   UserMappingWrongProcessUnmap = 0x22210f,
   UserMappingShortage = 0x222113,
   UserMappingPartialReuse = 0x222117,
+  UserMappingAddressReuse = 0x22211b,
+  UserMappingRetainProcessView = 0x22211f,
+  UserMappingConcurrentProcessView = 0x222123,
+  UserMappingReleaseFirstProcessView = 0x222127,
+  UserMappingReleaseSecondProcessView = 0x22212b,
   UserMappingReportSize = 4,
   UserMappingByteOffset = 17,
   UserMappingFirstByte = 0x43,
@@ -31,6 +36,13 @@ enum DriverPartialMappingChecks {
   PartialInheritedPrepare = 2,
   PartialSourceReleased = 4,
   PartialDescendantSurvives = 8
+};
+
+enum DriverUserRemappingChecks {
+  UserRemappingUnmappedFault = 1,
+  UserRemappingReadOnlyFault = 2,
+  UserRemappingReusedAddress = 4,
+  UserRemappingPreservedLockedPages = 8
 };
 
 typedef struct DriverUserMappingRequest {

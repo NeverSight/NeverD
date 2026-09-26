@@ -69,6 +69,53 @@ TEST_F(KernelPhysicalRAM, SamePageOwnersSharePFNButNeverByteAuthority) {
   EXPECT_NE(llvm::toString(Model->registerRegion(1, Base + 64, 1)), "");
 }
 
+TEST_F(KernelPhysicalRAM, MappingRequestsInheritTheExistingPageCacheType) {
+  using Cache = KernelPhysicalMemory::CacheType;
+  constexpr std::array Types{Cache::Cached, Cache::NonCached,
+                             Cache::WriteCombined};
+  for (size_t I = 0; I != Types.size(); ++I) {
+    const uint64_t Address = Base + I * Page;
+    ASSERT_EQ(
+        llvm::toString(Model->registerRegion(I + 1, Address, Page, Types[I])),
+        "");
+    const auto Physical = take(Model->physicalAddress(Address));
+    for (Cache Requested : Types) {
+      EXPECT_EQ(
+          take(Model->cacheTypeForMapping(Address + 3, Page - 3, Requested)),
+          Types[I]);
+      EXPECT_EQ(take(Model->physicalAddress(Address)), Physical);
+    }
+  }
+  rejects(Model->cacheTypeForMapping(Base, 1, static_cast<Cache>(-1)));
+  rejects(Model->cacheTypeForMapping(Base, Page + 1, Cache::Cached));
+}
+
+TEST_F(KernelPhysicalRAM, CacheConflictsDoNotPublishOwnersOrNewPages) {
+  using Cache = KernelPhysicalMemory::CacheType;
+  ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base + Page + 16, 16,
+                                                 Cache::NonCached)),
+            "");
+  const auto Existing = take(Model->physicalAddress(Base + Page + 16));
+  EXPECT_NE(llvm::toString(Model->canRegisterRegion(2, Base, Page + 8)), "");
+  EXPECT_NE(llvm::toString(Model->registerRegion(2, Base, Page + 8)), "");
+  EXPECT_EQ(Model->find(2), nullptr);
+  rejects(Model->physicalAddress(Base));
+  ASSERT_EQ(llvm::toString(
+                Model->registerRegion(2, Base, Page, Cache::WriteCombined)),
+            "");
+  EXPECT_EQ(take(Model->physicalAddress(Base)), physical::PhysicalBase + Page);
+  EXPECT_EQ(take(Model->physicalAddress(Base + Page + 16)), Existing);
+  ASSERT_EQ(llvm::toString(Model->retire(1)), "");
+  EXPECT_NE(llvm::toString(Model->registerRegion(3, Base + Page + 16, 16)), "");
+  ASSERT_EQ(llvm::toString(Model->registerRegion(3, Base + Page + 16, 16,
+                                                 Cache::NonCached)),
+            "");
+  EXPECT_EQ(take(Model->physicalAddress(Base + Page + 16)), Existing);
+  EXPECT_EQ(
+      take(Model->cacheTypeForMapping(Base + Page + 16, 16, Cache::Cached)),
+      Cache::NonCached);
+}
+
 TEST_F(KernelPhysicalRAM, AliasedPinsAndCPUObserveTheSameExistingBytes) {
   ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base + 16, 64)), "");
   const auto A = take(Model->pin(1, 8, 16));

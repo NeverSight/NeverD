@@ -151,6 +151,7 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
       if (*Size != PnpPowerCallbacksSize)
         return controlError("unsupported PnP power callback structure size");
       uint64_t Entry = 0, Exit = 0, Prepare = 0, Release = 0;
+      uint64_t QueryStop = 0, QueryRemove = 0, SurpriseRemoval = 0;
       for (unsigned Index = 0; Index < PnpPowerCallbacksCount; ++Index) {
         auto Callback = read(A[2] + PnpPowerCallbacksFirstOffset +
                              Index * sizeof(uint64_t));
@@ -164,6 +165,12 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
           Prepare = *Callback;
         else if (Index == PnpPowerReleaseHardwareIndex)
           Release = *Callback;
+        else if (Index == PnpPowerQueryStopIndex)
+          QueryStop = *Callback;
+        else if (Index == PnpPowerQueryRemoveIndex)
+          QueryRemove = *Callback;
+        else if (Index == PnpPowerSurpriseRemovalIndex)
+          SurpriseRemoval = *Callback;
         else if (*Callback)
           return controlError("unsupported PnP power event callback");
       }
@@ -171,6 +178,9 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
       I->second.D0Exit = Exit;
       I->second.PrepareHardware = Prepare;
       I->second.ReleaseHardware = Release;
+      I->second.QueryStop = QueryStop;
+      I->second.QueryRemove = QueryRemove;
+      I->second.SurpriseRemoval = SurpriseRemoval;
     } else {
       if (A[2] != ControlIoNeither && A[2] != ControlIoBuffered &&
           A[2] != ControlIoDirect)
@@ -251,6 +261,9 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     Devices.at(*Handle).Files = I->second.Files;
     Devices.at(*Handle).Filter = I->second.Filter;
     Devices.at(*Handle).D0Entry = I->second.D0Entry;
+    Devices.at(*Handle).QueryStop = I->second.QueryStop;
+    Devices.at(*Handle).QueryRemove = I->second.QueryRemove;
+    Devices.at(*Handle).SurpriseRemoval = I->second.SurpriseRemoval;
     Devices.at(*Handle).D0Exit = I->second.D0Exit;
     Devices.at(*Handle).PrepareHardware = I->second.PrepareHardware;
     Devices.at(*Handle).ReleaseHardware = I->second.ReleaseHardware;

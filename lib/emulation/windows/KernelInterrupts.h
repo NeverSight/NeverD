@@ -44,6 +44,8 @@ public:
     uint64_t OutputDeviceBase = 0;
     uint64_t OutputDeviceSize = 0;
     uint8_t IRQL = 0;
+    uint8_t SynchronizeIRQL = 0;
+    uint64_t SpinLock = 0;
     /// Zero is the legacy API; otherwise the exact Ex connection version.
     uint32_t Version = 0;
   };
@@ -53,7 +55,9 @@ public:
                                    uint64_t Affinity,
                                    bool LineBased = false) const;
   llvm::Error connect(Connection Candidate);
+  llvm::Error canConnect(const Connection &Candidate) const;
   const Connection *connection(uint64_t Object) const;
+  bool usesSpinLock(uint64_t Address) const;
   llvm::Error disconnect(uint64_t Object, uint32_t Version);
   llvm::Error canRelease(uint64_t PDO) const;
   /// Validate known storage retirement without inferring a context extent or
@@ -66,13 +70,16 @@ public:
   llvm::Error arm(llvm::ArrayRef<DriverInterruptEvent> Events,
                   size_t SourceIndex, uint64_t Now);
   std::optional<uint64_t> nextEventTime() const;
-  bool hasPendingEvents() const { return !Events.empty(); }
+  bool hasPendingEvents() const {
+    return !Events.empty() || !LevelLines.empty();
+  }
   /// Pure callback/token capacity check; hardware availability is observed at
   /// the actual boundary after same-time provider hardware publications.
   llvm::Expected<uint64_t> dueCount(uint64_t Time) const;
   struct Delivery {
     uint64_t PDO = 0;
     uint8_t IRQL = 0;
+    uint8_t Priority = 0;
     KernelGuestCall Call;
   };
   llvm::Expected<std::optional<Delivery>> queueNextDue(uint64_t Now);
@@ -84,6 +91,7 @@ public:
   struct CallbackReturn {
     uint8_t Value = 0;
     uint8_t RestoredIRQL = 0;
+    std::optional<KernelGuestCall> Next;
   };
   llvm::Expected<CallbackReturn> finishCall(uint64_t Token, uint64_t Value,
                                             uint8_t CurrentIRQL, uint64_t Now);
@@ -106,6 +114,10 @@ private:
     uint64_t Object;
     std::optional<size_t> Observation;
     bool Begun = false;
+    size_t Handler = 0;
+    std::vector<uint64_t> Chain;
+    std::optional<uint32_t> Line;
+    uint32_t DeliveryIndex = 0;
   };
   struct Event {
     uint64_t Object;
@@ -114,6 +126,24 @@ private:
     uint64_t Due;
     size_t Observation;
     bool Queued = false;
+    std::vector<uint64_t> Chain;
+    size_t ResourceIndex = 0;
+    uint32_t Vector = 0;
+    DriverInterruptAction Action = DriverInterruptAction::Pulse;
+    uint64_t RetriggerAfter100ns = 0;
+  };
+  using Source = std::pair<uint64_t, size_t>;
+  struct LevelLine {
+    std::map<Source, Event> Sources;
+    uint64_t Due = 0;
+    bool Queued = false;
+    uint32_t Deliveries = 0;
+  };
+  struct Boundary {
+    std::vector<size_t> Transitions;
+    std::map<uint32_t, LevelLine> Lines;
+    std::vector<size_t> Pulses;
+    std::vector<uint32_t> Levels;
   };
   const KernelResources &Resources;
   DriverResult &Result;
@@ -123,11 +153,17 @@ private:
   std::map<uint64_t, Call> Calls;
   std::vector<Hold> Holds;
   std::map<size_t, Event> Events;
+  std::map<uint32_t, LevelLine> LevelLines;
   uint64_t NextCall = 1;
+  uint64_t Deliveries = 0;
   llvm::Expected<Event> resolveEvent(const DriverInterruptEvent &Input,
                                      uint64_t Now) const;
   llvm::Error canHold(uint64_t Object, uint8_t CurrentIRQL) const;
   llvm::Error canPrepareCalls(uint64_t Count) const;
+  uint64_t lockIdentity(uint64_t Object) const;
+  bool sameLine(const Connection &Left, const Connection &Right) const;
+  Boundary planBoundary(uint64_t Time) const;
+  llvm::Error validateEvent(const Event &Event, bool CheckPower) const;
   llvm::Error deliveryError(Event &Event, const llvm::Twine &Message,
                             uint64_t Now);
 };

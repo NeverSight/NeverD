@@ -170,6 +170,76 @@ TEST(DriverWDMUserMapping, PartialMdlUsesGenuinePrepareAndSafeMappingInlines) {
       EXPECT_EQ(Calls("IoFreeMdl"), 4);
     }
 }
+
+TEST(DriverWDMUserMapping,
+     ReusedUserAddressCatchesStaleAndReadOnlyAccessWithoutRetargetingLocks) {
+  for (const auto *Image : images())
+    for (uint64_t LoadAddress : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(LoadAddress);
+      auto Result =
+          emulateDriver(Image, options(UserMappingAddressReuse, LoadAddress));
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      expectLifecycle(*Result,
+                      {UserMappingFirstByte, UserMappingSecondByte,
+                       UserRemappingUnmappedFault | UserRemappingReadOnlyFault |
+                           UserRemappingReusedAddress |
+                           UserRemappingPreservedLockedPages,
+                       1});
+      unsigned RequestedMappings = 0;
+      for (const auto &Call : Result->Calls)
+        if (Call.Name == "MmMapLockedPagesSpecifyCache" &&
+            uint8_t(Call.Arguments[1]) == windows::UserMode &&
+            Call.Arguments[3])
+          ++RequestedMappings;
+      EXPECT_EQ(RequestedMappings, 2u);
+    }
+}
+
+TEST(DriverWDMUserMapping,
+     ConcurrentProcessesShareAVirtualAddressWithoutSharingPagesOrPermissions) {
+  for (const auto *Image : images())
+    for (uint64_t LoadAddress : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(LoadAddress);
+      auto Options = options(UserMappingRetainProcessView, LoadAddress);
+      auto Second = Options.Requests[1];
+      Second.ControlCode = UserMappingConcurrentProcessView;
+      Second.RequestorProcessID = DriverRequest::DefaultRequestorProcessID + 1;
+      Options.Requests.insert(Options.Requests.begin() + 2, std::move(Second));
+      auto ReleaseFirst = Options.Requests[1];
+      ReleaseFirst.ControlCode = UserMappingReleaseFirstProcessView;
+      auto ReleaseSecond = Options.Requests[2];
+      ReleaseSecond.ControlCode = UserMappingReleaseSecondProcessView;
+      Options.Requests.insert(Options.Requests.begin() + 3,
+                              std::move(ReleaseFirst));
+      Options.Requests.insert(Options.Requests.begin() + 4,
+                              std::move(ReleaseSecond));
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 7u);
+      for (const auto &Request : Result->Requests) {
+        EXPECT_TRUE(Request.Completed);
+        EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+      }
+      ASSERT_EQ(Result->Requests[1].UserBuffers.size(), 1u);
+      ASSERT_EQ(Result->Requests[2].UserBuffers.size(), 1u);
+      ASSERT_EQ(Result->Requests[3].UserBuffers.size(), 1u);
+      ASSERT_EQ(Result->Requests[4].UserBuffers.size(), 1u);
+      EXPECT_EQ(Result->Requests[1].UserBuffers[0].Backing,
+                (std::vector<uint8_t>{1, 0, 0, 0}));
+      EXPECT_EQ(Result->Requests[2].UserBuffers[0].Backing,
+                (std::vector<uint8_t>{1, 0, 0, 0}));
+      EXPECT_EQ(Result->Requests[3].UserBuffers[0].Backing,
+                (std::vector<uint8_t>{UserMappingFirstByte,
+                                      UserMappingSecondByte, 1, 1}));
+      EXPECT_EQ(Result->Requests[4].UserBuffers[0].Backing,
+                (std::vector<uint8_t>{UserMappingSecondByte, 1, 1, 0}));
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_FALSE(Result->Fault);
+    }
+}
 #else
 TEST(DriverWDMUserMapping, GenuineWDKFixtureIsOptional) {
   GTEST_SKIP()

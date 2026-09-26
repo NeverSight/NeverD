@@ -8,13 +8,31 @@
 /// genuine WDK headers with stack-protector wrappers explicitly disabled.
 //===----------------------------------------------------------------------===//
 
-#include <ntddk.h>
+#include "driver_seh_test.h"
+
+#include <ntifs.h>
 
 C_ASSERT(sizeof(NTSTATUS) == 4);
 C_ASSERT(sizeof(ULONG_PTR) == 8);
 C_ASSERT(EXCEPTION_EXECUTE_HANDLER == 1);
 C_ASSERT(STATUS_ACCESS_VIOLATION == (NTSTATUS)0xc0000005);
 C_ASSERT(STATUS_DATATYPE_MISALIGNMENT == (NTSTATUS)0x80000002);
+
+C_ASSERT(sizeof(CONTEXT) == 1232);
+C_ASSERT(FIELD_OFFSET(CONTEXT, ContextFlags) == 48);
+C_ASSERT(FIELD_OFFSET(CONTEXT, SegCs) == 56);
+C_ASSERT(FIELD_OFFSET(CONTEXT, SegSs) == 66);
+C_ASSERT(FIELD_OFFSET(CONTEXT, EFlags) == 68);
+C_ASSERT(FIELD_OFFSET(CONTEXT, Rax) == 120);
+C_ASSERT(FIELD_OFFSET(CONTEXT, Rip) == 248);
+C_ASSERT(sizeof(EXCEPTION_RECORD) == 152);
+C_ASSERT(FIELD_OFFSET(EXCEPTION_RECORD, ExceptionFlags) == 4);
+C_ASSERT(FIELD_OFFSET(EXCEPTION_RECORD, ExceptionAddress) == 16);
+C_ASSERT(FIELD_OFFSET(EXCEPTION_RECORD, NumberParameters) == 24);
+C_ASSERT(FIELD_OFFSET(EXCEPTION_RECORD, ExceptionInformation) == 32);
+C_ASSERT((CONTEXT_CONTROL | CONTEXT_INTEGER) == 0x100003);
+C_ASSERT(SehRecoverControlCode ==
+         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900, METHOD_NEITHER, FILE_ANY_ACCESS));
 
 static volatile ULONG Stage;
 static CHAR Mode = 'S';
@@ -30,8 +48,8 @@ static NTSTATUS Check(BOOLEAN Condition, ULONG Line) {
 
 #define REQUIRE(Expression)                                                    \
   do {                                                                         \
-    NTSTATUS CheckStatus = Check((BOOLEAN)(Expression), __LINE__);               \
-    if (!NT_SUCCESS(CheckStatus))                                               \
+    NTSTATUS CheckStatus = Check((BOOLEAN)(Expression), __LINE__);             \
+    if (!NT_SUCCESS(CheckStatus))                                              \
       return CheckStatus;                                                      \
   } while (0)
 
@@ -54,9 +72,9 @@ __declspec(noinline) static NTSTATUS DirectRaise(VOID) {
     Stage = 2;
     DbgPrint("WDM SEH: direct caught code=%08lx local=%08lx\n", Code, Local);
   }
-  REQUIRE(Code == (ULONG)(Mode == 'A' ? STATUS_ACCESS_VIOLATION
-                            : Mode == 'D' ? STATUS_DATATYPE_MISALIGNMENT
-                                          : STATUS_INSUFFICIENT_RESOURCES));
+  REQUIRE(Code == (ULONG)(Mode == 'A'   ? STATUS_ACCESS_VIOLATION
+                          : Mode == 'D' ? STATUS_DATATYPE_MISALIGNMENT
+                                        : STATUS_INSUFFICIENT_RESOURCES));
   REQUIRE(Stage == 2 && Local == (0x12345678 ^ 0x00ff00ff));
   return STATUS_SUCCESS;
 }
@@ -67,7 +85,9 @@ __declspec(noinline) static VOID RaiseHelper(VOID) {
   // make register restoration observable at the enclosing handler.
   __asm__ volatile("movabsq $0x1122334455667788, %%rbx\n\t"
                    "movabsq $0x8877665544332211, %%r12"
-                   : : : "rbx", "r12");
+                   :
+                   :
+                   : "rbx", "r12");
   Stage = Local[2] + 7;
   ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
 }
@@ -78,7 +98,9 @@ __declspec(noinline) static NTSTATUS AcrossHelper(VOID) {
   volatile ULONG Local = 0x87654321;
   __asm__ volatile("movabsq $0x13579bdf2468ace0, %%rbx\n\t"
                    "movabsq $0xfedcba9876543210, %%r12"
-                   : : : "rbx", "r12");
+                   :
+                   :
+                   : "rbx", "r12");
   __try {
     RaiseHelper();
     Stage = 0xbad;
@@ -86,7 +108,9 @@ __declspec(noinline) static NTSTATUS AcrossHelper(VOID) {
     Code = (ULONG)GetExceptionCode();
     __asm__ volatile("movq %%rbx, %0\n\t"
                      "movq %%r12, %1"
-                     : "=&r"(SavedB), "=&r"(Saved12) : : "rbx", "r12");
+                     : "=&r"(SavedB), "=&r"(Saved12)
+                     :
+                     : "rbx", "r12");
     REQUIRE(Code == (ULONG)STATUS_INSUFFICIENT_RESOURCES);
     REQUIRE(Stage == 10 && Local == 0x87654321);
     REQUIRE(SavedB == 0x13579bdf2468ace0ULL);
@@ -180,28 +204,322 @@ __declspec(noinline) static NTSTATUS AcrossHelperHandler(VOID) {
   return STATUS_SUCCESS;
 }
 
-__declspec(noinline) static LONG DynamicFilter(ULONG Code) {
-  DbgPrint("WDM SEH: unsupported filter executed code=%08lx\n", Code);
-  return Code == (ULONG)STATUS_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER
-                                             : EXCEPTION_CONTINUE_SEARCH;
+static PEXCEPTION_POINTERS FirstPointers;
+
+// Deliberately use every home slot permitted by the Win64 call ABI.
+__attribute__((naked, noinline)) static VOID WriteHomeSlots(VOID) {
+  __asm__ volatile("movq $1, 8(%rsp)\n\t"
+                   "movq $2, 16(%rsp)\n\t"
+                   "movq $3, 24(%rsp)\n\t"
+                   "movq $4, 32(%rsp)\n\tretq");
 }
 
-__declspec(noinline) static NTSTATUS UnsupportedFilter(VOID) {
-  __try {
-    ExRaiseAccessViolation();
-  } __except (DynamicFilter((ULONG)GetExceptionCode())) {
-    DbgPrint("WDM SEH: unsupported filter handler executed\n");
+__declspec(noinline) static LONG DynamicFilter(PEXCEPTION_POINTERS Pointers,
+                                               volatile ULONG *Local,
+                                               LONG Decision) {
+  WriteHomeSlots();
+  if (!Pointers || !Pointers->ExceptionRecord || !Pointers->ContextRecord ||
+      Pointers->ExceptionRecord->ExceptionCode != STATUS_ACCESS_VIOLATION ||
+      Pointers->ExceptionRecord->ExceptionRecord ||
+      Pointers->ExceptionRecord->ExceptionFlags ||
+      !Pointers->ExceptionRecord->ExceptionAddress ||
+      Pointers->ContextRecord->ContextFlags !=
+          (CONTEXT_CONTROL | CONTEXT_INTEGER) ||
+      !Pointers->ContextRecord->Rip || !Pointers->ContextRecord->Rsp ||
+      !Local || *Local != 71 || (FirstPointers && FirstPointers != Pointers)) {
+    DbgPrint("WDM SEH: failure dynamic record contract\n");
+    return EXCEPTION_CONTINUE_SEARCH;
   }
-  return STATUS_UNSUCCESSFUL;
+  FirstPointers = Pointers;
+  ++Stage;
+  DbgPrint("WDM SEH: filter decision=%ld stage=%lu\n", Decision, Stage);
+  if (Mode == SehNestedFilter)
+    ExRaiseDatatypeMisalignment();
+  return Decision;
 }
 
-__declspec(noinline) static NTSTATUS UnsupportedFinally(VOID) {
+__declspec(noinline) static NTSTATUS FilteredRaise(VOID) {
+  volatile ULONG Local = 71;
+  Stage = 50;
+  FirstPointers = NULL;
+  __try {
+    __try {
+      ExRaiseAccessViolation();
+    } __except (
+        DynamicFilter(GetExceptionInformation(), &Local,
+                      Mode == SehSearchFilters ? EXCEPTION_CONTINUE_SEARCH
+                      : Mode == SehContinueApi ? EXCEPTION_CONTINUE_EXECUTION
+                                               : EXCEPTION_EXECUTE_HANDLER)) {
+      REQUIRE(Stage == 51 && Local == 71);
+      Local = 72;
+      DbgPrint("WDM SEH: dynamic inner handled\n");
+    }
+  } __except (DynamicFilter(GetExceptionInformation(), &Local,
+                            EXCEPTION_EXECUTE_HANDLER)) {
+    REQUIRE(Mode == SehSearchFilters && Stage == 52 && Local == 71);
+    Local = 72;
+    DbgPrint("WDM SEH: dynamic outer handled\n");
+  }
+  REQUIRE(Local == 72);
+  return STATUS_SUCCESS;
+}
+
+__declspec(noinline) static VOID FinallyHelper(VOID) {
+  volatile ULONG Local = 0xabc;
   __try {
     ExRaiseAccessViolation();
   } __finally {
-    DbgPrint("WDM SEH: unsupported finally executed\n");
+    if (Mode == SehNestedFinally)
+      ExRaiseDatatypeMisalignment();
+    if (!AbnormalTermination() || Local != 0xabc || Stage != 61) {
+      DbgPrint("WDM SEH: failure helper finally\n");
+      Stage = 0xbad;
+    } else {
+      Stage = 62;
+      DbgPrint("WDM SEH: helper finally abnormal\n");
+    }
   }
-  return STATUS_UNSUCCESSFUL;
+}
+
+__declspec(noinline) static NTSTATUS FinallyPaths(VOID) {
+  volatile ULONG Local = 71;
+  FirstPointers = NULL;
+  Stage = Mode == SehNormalFinally ? 61 : 60;
+  __try {
+    __try {
+      if (Mode != SehNormalFinally)
+        FinallyHelper();
+    } __finally {
+      if (Local != 71 || AbnormalTermination() != (Mode != SehNormalFinally) ||
+          Stage != (ULONG)(Mode == SehNormalFinally ? 61 : 62)) {
+        DbgPrint("WDM SEH: failure parent finally\n");
+        Stage = 0xbad;
+      } else {
+        Local = 72;
+        Stage = 63;
+        DbgPrint("WDM SEH: parent finally abnormal=%u\n",
+                 AbnormalTermination());
+      }
+    }
+  } __except (DynamicFilter(GetExceptionInformation(), &Local,
+                            EXCEPTION_EXECUTE_HANDLER)) {
+    REQUIRE(Mode == SehExceptionalFinally && Stage == 63 && Local == 72);
+    DbgPrint("WDM SEH: finally handler\n");
+  }
+  REQUIRE(Stage == 63 && Local == 72);
+  return STATUS_SUCCESS;
+}
+
+static ULONG RecoveredValue = SehRecoveredValue;
+
+static KPROCESSOR_MODE ExpectedMode;
+static HANDLE ExpectedCreatingProcess;
+static PEPROCESS ExpectedProcess;
+
+static VOID CaptureProcessContext(VOID) {
+  ExpectedMode = ExGetPreviousMode();
+  ExpectedCreatingProcess = PsGetCurrentProcessId();
+  ExpectedProcess = IoGetCurrentProcess();
+}
+
+__declspec(noinline) static LONG InspectUserBuffer(PVOID Buffer) {
+  PMDL Mdl;
+  volatile ULONG *Alias;
+  if (ExGetPreviousMode() != ExpectedMode ||
+      PsGetCurrentProcessId() != ExpectedCreatingProcess ||
+      IoGetCurrentProcess() != ExpectedProcess) {
+    DbgPrint("WDM SEH: failure filter process identity\n");
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  DbgPrint("WDM SEH: filter process mode=%u creating=%lu\n", ExpectedMode,
+           (ULONG)(ULONG_PTR)ExpectedCreatingProcess);
+  ProbeForRead(Buffer, sizeof(ULONG), sizeof(ULONG));
+  if (Mode != SehWorkerUserLock)
+    ProbeForWrite(Buffer, sizeof(ULONG), sizeof(ULONG));
+  Mdl = IoAllocateMdl(Buffer, sizeof(ULONG), FALSE, FALSE, NULL);
+  if (!Mdl)
+    return EXCEPTION_CONTINUE_SEARCH;
+  MmProbeAndLockPages(Mdl, UserMode, IoWriteAccess);
+  Alias = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+  if (!Alias) {
+    MmUnlockPages(Mdl);
+    IoFreeMdl(Mdl);
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  *(volatile ULONG *)Buffer = SehFilterUserMarker;
+  if (*Alias != SehFilterUserMarker) {
+    DbgPrint("WDM SEH: failure filter user alias\n");
+    MmUnlockPages(Mdl);
+    IoFreeMdl(Mdl);
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  *Alias ^= 1;
+  if (*(volatile ULONG *)Buffer != (SehFilterUserMarker ^ 1)) {
+    DbgPrint("WDM SEH: failure filter user write\n");
+    MmUnlockPages(Mdl);
+    IoFreeMdl(Mdl);
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  MmUnlockPages(Mdl);
+  IoFreeMdl(Mdl);
+  DbgPrint("WDM SEH: filter user memory verified\n");
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static PIRP WorkerIrp;
+static PIO_WORKITEM WorkerItem;
+static PVOID WorkerUserBuffer;
+static PEPROCESS WorkerProcess;
+
+static PMDL WorkerMdl;
+static BOOLEAN WorkerMdlLocked;
+
+__declspec(noinline) static LONG InspectAttachedBuffer(PVOID Buffer) {
+  volatile ULONG *Alias;
+  if (Mode == SehAttachedForbidden) {
+    // A child filter must preserve its parent's bounded attachment contract.
+    ExRaiseAccessViolation();
+  }
+  if (ExGetPreviousMode() != ExpectedMode ||
+      PsGetCurrentProcessId() != ExpectedCreatingProcess ||
+      IoGetCurrentProcess() != ExpectedProcess)
+    return EXCEPTION_CONTINUE_SEARCH;
+  ProbeForRead(Buffer, sizeof(ULONG), sizeof(ULONG));
+  ProbeForWrite(Buffer, sizeof(ULONG), sizeof(ULONG));
+  MmProbeAndLockPages(WorkerMdl, UserMode, IoWriteAccess);
+  WorkerMdlLocked = TRUE;
+  Alias = MmGetSystemAddressForMdlSafe(WorkerMdl, NormalPagePriority);
+  if (!Alias)
+    return EXCEPTION_CONTINUE_SEARCH;
+  *(volatile ULONG *)Buffer = SehFilterUserMarker;
+  if (*Alias != SehFilterUserMarker)
+    return EXCEPTION_CONTINUE_SEARCH;
+  *Alias ^= 1;
+  return *(volatile ULONG *)Buffer == (SehFilterUserMarker ^ 1)
+             ? EXCEPTION_EXECUTE_HANDLER
+             : EXCEPTION_CONTINUE_SEARCH;
+}
+
+static VOID UserWorker(PDEVICE_OBJECT Device, PVOID Context) {
+  NTSTATUS Status = STATUS_UNSUCCESSFUL;
+  KAPC_STATE ApcState;
+  const BOOLEAN Attached = Mode == SehAttachedWorker ||
+                           Mode == SehAttachedForbidden;
+  UNREFERENCED_PARAMETER(Device);
+  UNREFERENCED_PARAMETER(Context);
+  if (Attached) {
+    WorkerMdl = IoAllocateMdl(WorkerUserBuffer, sizeof(ULONG), FALSE, FALSE, NULL);
+    if (!WorkerMdl) {
+      WorkerIrp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+      IoCompleteRequest(WorkerIrp, IO_NO_INCREMENT);
+      IoFreeWorkItem(WorkerItem);
+      return;
+    }
+    KeStackAttachProcess(WorkerProcess, &ApcState);
+  }
+  CaptureProcessContext();
+  __try {
+    if (Attached)
+      ProbeForRead((PUCHAR)WorkerUserBuffer + 1, sizeof(ULONG), sizeof(ULONG));
+    else
+      ExRaiseAccessViolation();
+  } __except (Attached ? InspectAttachedBuffer(WorkerUserBuffer)
+                       : InspectUserBuffer(WorkerUserBuffer)) {
+    if (Attached && ExpectedMode == KernelMode &&
+        (ULONG_PTR)ExpectedCreatingProcess == 4 &&
+        ExpectedProcess == WorkerProcess) {
+      Status = STATUS_SUCCESS;
+      WorkerIrp->IoStatus.Information = sizeof(ULONG);
+    } else {
+      DbgPrint("WDM SEH: failure worker gained user authority\n");
+    }
+  }
+  if (Attached) {
+    KeUnstackDetachProcess(&ApcState);
+    if (WorkerMdlLocked)
+      MmUnlockPages(WorkerMdl);
+    IoFreeMdl(WorkerMdl);
+    if (NT_SUCCESS(Status)) {
+      DbgPrint("WDM SEH: filter process mode=%u creating=%lu\n", ExpectedMode,
+               (ULONG)(ULONG_PTR)ExpectedCreatingProcess);
+      DbgPrint("WDM SEH: filter user memory verified\n");
+      DbgPrint("WDM SEH: attached worker filter handled\n");
+    }
+  }
+  WorkerIrp->IoStatus.Status = Status;
+  IoCompleteRequest(WorkerIrp, IO_NO_INCREMENT);
+  IoFreeWorkItem(WorkerItem);
+}
+
+__declspec(noinline) static LONG RepairRead(PEXCEPTION_POINTERS Pointers,
+                                            PVOID FaultAddress, PVOID Buffer) {
+  if (Pointers->ExceptionRecord->ExceptionCode != STATUS_ACCESS_VIOLATION ||
+      Pointers->ExceptionRecord->NumberParameters != 2 ||
+      Pointers->ExceptionRecord->ExceptionInformation[0] != 0 ||
+      Pointers->ExceptionRecord->ExceptionInformation[1] !=
+          (ULONG_PTR)FaultAddress ||
+      Pointers->ContextRecord->Rax != (ULONG_PTR)FaultAddress)
+    return EXCEPTION_CONTINUE_SEARCH;
+  if (InspectUserBuffer(Buffer) != EXCEPTION_EXECUTE_HANDLER)
+    return EXCEPTION_CONTINUE_SEARCH;
+  Pointers->ContextRecord->Rax = (ULONG_PTR)&RecoveredValue;
+  if (Mode == SehRejectContextMutation)
+    Pointers->ContextRecord->SegCs ^= 1;
+  DbgPrint("WDM SEH: resume user read\n");
+  // Volatile CPU state belongs to the faulted instruction, not this callback.
+  __asm__ volatile("pxor %%xmm0, %%xmm0\n\tclc" : : : "xmm0", "cc");
+  return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+static DRIVER_DISPATCH Dispatch;
+static NTSTATUS Dispatch(PDEVICE_OBJECT Device, PIRP Irp) {
+  PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+  NTSTATUS Status = STATUS_SUCCESS;
+  UNREFERENCED_PARAMETER(Device);
+  Irp->IoStatus.Information = 0;
+  if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL) {
+    ULONG Value = 0;
+    ULONG64 Vector = 0;
+    UCHAR Carry = 0;
+    PVOID Source = Stack->Parameters.DeviceIoControl.Type3InputBuffer;
+    if (Mode == SehWorkerUserProbe || Mode == SehWorkerUserLock ||
+        Mode == SehAttachedWorker || Mode == SehAttachedForbidden) {
+      WorkerItem = IoAllocateWorkItem(Device);
+      if (!WorkerItem)
+        return STATUS_INSUFFICIENT_RESOURCES;
+      WorkerIrp = Irp;
+      WorkerUserBuffer = Irp->UserBuffer;
+      WorkerProcess = IoGetRequestorProcess(Irp);
+      IoMarkIrpPending(Irp);
+      IoQueueWorkItem(WorkerItem, UserWorker, DelayedWorkQueue, NULL);
+      return STATUS_PENDING;
+    }
+    CaptureProcessContext();
+    __try {
+      // Fixing RAX in the filter resumes exactly this faulting instruction.
+      __asm__ volatile("movabsq $0x1122334455667788, %1\n\t"
+                       "movq %1, %%xmm0\n\tstc\n\t"
+                       "movl (%%rax), %%eax\n\tsetc %2\n\t"
+                       "movq %%xmm0, %1"
+                       : "=a"(Value), "=&r"(Vector), "=&q"(Carry)
+                       : "a"(Source)
+                       : "memory", "cc", "xmm0");
+    } __except (
+        RepairRead(GetExceptionInformation(), Source, Irp->UserBuffer)) {
+      Status = GetExceptionCode();
+    }
+    if (Value != SehRecoveredValue || Vector != 0x1122334455667788ULL ||
+        Carry != 1)
+      Status = STATUS_UNSUCCESSFUL;
+    if (NT_SUCCESS(Status)) {
+      *(ULONG *)Irp->UserBuffer = Value;
+      Irp->IoStatus.Information = sizeof(Value);
+      DbgPrint("WDM SEH: resumed value=%08lx\n", Value);
+    }
+  }
+  Irp->IoStatus.Status = Status;
+  IoCompleteRequest(Irp, IO_NO_INCREMENT);
+  return Status;
 }
 
 __declspec(noinline) static NTSTATUS UnhandledRaise(VOID) {
@@ -222,12 +540,14 @@ __declspec(noinline) static NTSTATUS UnsupportedCPUFault(VOID) {
 
 static DRIVER_UNLOAD Unload;
 static VOID Unload(PDRIVER_OBJECT DriverObject) {
-  UNREFERENCED_PARAMETER(DriverObject);
+  if (DriverObject->DeviceObject)
+    IoDeleteDevice(DriverObject->DeviceObject);
   DbgPrint("WDM SEH: unload mode=%c stage=%lu\n", Mode, Stage);
 }
 
 DRIVER_INITIALIZE DriverEntry;
-NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
+NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
+                     PUNICODE_STRING RegistryPath) {
   PSEH_TEST Test = DirectRaise;
   NTSTATUS Status;
   if (RegistryPath && RegistryPath->Length >= sizeof(WCHAR)) {
@@ -236,15 +556,55 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
       Mode = (CHAR)Last;
   }
   switch (Mode) {
-  case 'H': Test = AcrossHelper; break;
-  case 'N': Test = NestedConstant; break;
-  case 'R': Test = RaiseFromHandler; break;
-  case 'G': Test = AcrossHelperHandler; break;
-  case 'F': Test = UnsupportedFilter; break;
-  case 'T': Test = UnsupportedFinally; break;
-  case 'U': Test = UnhandledRaise; break;
-  case 'C': Test = UnsupportedCPUFault; break;
-  default: break;
+  case 'H':
+    Test = AcrossHelper;
+    break;
+  case 'N':
+    Test = NestedConstant;
+    break;
+  case 'R':
+    Test = RaiseFromHandler;
+    break;
+  case 'G':
+    Test = AcrossHelperHandler;
+    break;
+  case SehDynamicFilter:
+  case SehSearchFilters:
+  case SehContinueApi:
+  case SehNestedFilter:
+    Test = FilteredRaise;
+    break;
+  case SehExceptionalFinally:
+  case SehNestedFinally:
+  case SehNormalFinally:
+    Test = FinallyPaths;
+    break;
+  case 'U':
+    Test = UnhandledRaise;
+    break;
+  case 'C':
+    Test = UnsupportedCPUFault;
+    break;
+  default:
+    break;
+  }
+  if (Mode == SehRecoverUserRead || Mode == SehRejectContextMutation ||
+      Mode == SehWorkerUserProbe || Mode == SehWorkerUserLock ||
+      Mode == SehAttachedWorker || Mode == SehAttachedForbidden) {
+    UNICODE_STRING Name;
+    RtlInitUnicodeString(&Name, L"\\Device\\NeverDSEH");
+    PDEVICE_OBJECT Device;
+    Status = IoCreateDevice(DriverObject, 0, &Name, FILE_DEVICE_UNKNOWN, 0,
+                            FALSE, &Device);
+    if (!NT_SUCCESS(Status))
+      return Status;
+    DriverObject->MajorFunction[IRP_MJ_CREATE] = Dispatch;
+    DriverObject->MajorFunction[IRP_MJ_CLEANUP] = Dispatch;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE] = Dispatch;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = Dispatch;
+    DriverObject->DriverUnload = Unload;
+    Device->Flags &= ~DO_DEVICE_INITIALIZING;
+    return STATUS_SUCCESS;
   }
   DbgPrint("WDM SEH: begin mode=%c\n", Mode);
   Status = Test();

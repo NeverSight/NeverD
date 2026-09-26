@@ -286,6 +286,19 @@ llvm::Error KernelModel::completeFrameworkPnpIfReady() {
       Request->FrameworkPnpHandled)
     return frameworkDeviceError("PnP callback return lost its pending IRP");
   Request->FrameworkPnpAwaiting = false;
+  if (Request->FrameworkPnpBeforeBus) {
+    Request->FrameworkPnpBeforeBus = false;
+    if (!(Pnp->Status & profile::NTStatusFailureMask)) {
+      auto Status = forwardFrameworkPnpRequest(Pnp->IRP);
+      if (!Status)
+        return Status.takeError();
+      return llvm::Error::success();
+    }
+    if (auto E = Memory.writeInteger(Pnp->IRP + windows::IRPInformationOffset,
+                                     0, sizeof(uint64_t)))
+      return E;
+    Request->IOStatusWritten.fill(true);
+  }
   Request->FrameworkPnpHandled = true;
   if (Pnp->Status & profile::NTStatusFailureMask)
     if (auto E = Memory.writeInteger(Pnp->IRP + windows::IRPStatusOffset,

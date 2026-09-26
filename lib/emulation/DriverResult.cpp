@@ -79,9 +79,17 @@ bool scenarioSucceeded(const DriverResult &Result) {
       (Result.Configuration.Unload && !Result.UnloadCompleted))
     return false;
   if (!llvm::all_of(Result.Interrupts, [](const DriverInterruptResult &Event) {
-        return Event.OccurredAt100ns && Event.DeliveredAt100ns &&
-               Event.ReturnedAt100ns && Event.ReturnValue &&
-               !Event.UndeliveredReason;
+        if (!Event.OccurredAt100ns || Event.UndeliveredReason)
+          return false;
+        switch (Event.Action) {
+        case DriverInterruptAction::Pulse:
+          return bool(Event.DeliveredAt100ns && Event.ReturnedAt100ns &&
+                      Event.ReturnValue);
+        case DriverInterruptAction::Assert:
+        case DriverInterruptAction::Deassert:
+          return true;
+        }
+        return false;
       }))
     return false;
   if (!llvm::all_of(Result.DmaTransfers, [](const DriverDmaResult &Event) {
@@ -303,11 +311,22 @@ const char *interruptShareName(DriverInterruptShare Share) {
   llvm_unreachable("invalid driver interrupt share");
 }
 
+const char *interruptActionName(DriverInterruptAction Action) {
+  switch (Action) {
+#define NEVERD_DRIVER_INTERRUPT_ACTION(Name, Spelling)                         \
+  case DriverInterruptAction::Name:                                            \
+    return Spelling;
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_ACTION
+  }
+  llvm_unreachable("invalid driver interrupt action");
+}
+
 llvm::json::Array
 interruptConfigurationJSON(llvm::ArrayRef<DriverInterruptResource> Interrupts) {
   llvm::json::Array Result;
-  for (const auto &Interrupt : Interrupts)
-    Result.push_back(llvm::json::Object{
+  for (const auto &Interrupt : Interrupts) {
+    llvm::json::Object Item{
         {interruptField::ID, Interrupt.ID},
         {interruptField::RawVector, Interrupt.RawVector},
         {interruptField::RawLevel, Interrupt.RawLevel},
@@ -316,7 +335,12 @@ interruptConfigurationJSON(llvm::ArrayRef<DriverInterruptResource> Interrupts) {
         {interruptField::TranslatedLevel, Interrupt.TranslatedLevel},
         {interruptField::TranslatedAffinity, Interrupt.TranslatedAffinity},
         {interruptField::Mode, interruptModeName(Interrupt.Mode)},
-        {interruptField::Share, interruptShareName(Interrupt.Share)}});
+        {interruptField::Share, interruptShareName(Interrupt.Share)}};
+    if (Interrupt.RetriggerAfter100ns)
+      Item[interruptField::RetriggerAfter100ns] =
+          *Interrupt.RetriggerAfter100ns;
+    Result.push_back(std::move(Item));
+  }
   return Result;
 }
 
@@ -330,6 +354,7 @@ interruptEventConfigurationJSON(const DriverOptions &Options) {
           {interruptField::SourceRequestIndex, I},
           {interruptField::EventIndex, J},
           {interruptField::After100ns, Events[J].After100ns},
+          {interruptField::Action, interruptActionName(Events[J].Action)},
           {interruptField::DeviceID, Events[J].DeviceID},
           {interruptField::InterruptID, Events[J].InterruptID}});
   }
@@ -608,6 +633,7 @@ std::string driverResultJSON(const DriverResult &Result) {
     llvm::json::Object Item{
         {interruptField::SourceRequestIndex, Interrupt.SourceRequestIndex},
         {interruptField::EventIndex, Interrupt.EventIndex},
+        {interruptField::Action, interruptActionName(Interrupt.Action)},
         {interruptField::DeviceID, Interrupt.DeviceID},
         {interruptField::InterruptID, Interrupt.InterruptID},
         {interruptField::Epoch, Interrupt.Epoch},
@@ -634,6 +660,24 @@ std::string driverResultJSON(const DriverResult &Result) {
     }
     if (Interrupt.UndeliveredReason)
       Item[interruptField::UndeliveredReason] = *Interrupt.UndeliveredReason;
+    llvm::json::Array Handlers;
+    for (const auto &Handler : Interrupt.Handlers) {
+      llvm::json::Object Call{
+          {interruptField::InterruptObject, Address(Handler.InterruptObject)},
+          {interruptField::DeliveryIndex, Handler.DeliveryIndex},
+          {interruptField::DeliveredAt100ns, Handler.DeliveredAt100ns},
+          {interruptField::ReturnedAt100ns, nullptr},
+          {interruptField::ReturnValue, nullptr},
+          {interruptField::Claimed, nullptr}};
+      if (Handler.ReturnedAt100ns)
+        Call[interruptField::ReturnedAt100ns] = *Handler.ReturnedAt100ns;
+      if (Handler.ReturnValue) {
+        Call[interruptField::ReturnValue] = *Handler.ReturnValue;
+        Call[interruptField::Claimed] = *Handler.ReturnValue != 0;
+      }
+      Handlers.push_back(std::move(Call));
+    }
+    Item[interruptField::Handlers] = std::move(Handlers);
     Interrupts.push_back(std::move(Item));
   }
   Root[interruptField::Interrupts] = std::move(Interrupts);

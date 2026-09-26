@@ -172,7 +172,53 @@ void delivered(const DriverInterruptResult &Event, uint32_t RequestIndex,
   EXPECT_FALSE(Event.UndeliveredReason);
 }
 
-TEST(DriverWDMInterrupt, LegacyElevenArgumentsIsrDpcExecuteNormalCfgAndRebased) {
+TEST(DriverWDMInterrupt,
+     LevelSourceRetriggersAfterClaimUntilExplicitDeassertion) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = options('D');
+      Options.LoadAddress = Address;
+      auto &Resource = Options.PnpDevices.front().Interrupts.front();
+      Resource.Mode = DriverInterruptMode::LevelSensitive;
+      Resource.RetriggerAfter100ns = 3;
+      Options.Requests.push_back(pnp(DevicePnpRequest::Start));
+      fileCycle(Options);
+      auto &Request = Options.Requests[2];
+      Request.InterruptEvents = {
+          {7, "interrupt0", "line0", DriverInterruptAction::Assert},
+          {15, "interrupt0", "line0", DriverInterruptAction::Deassert}};
+      remove(Options);
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      clean(*Result);
+      snapshot(Result->Requests[2], {1, 1, 1, 1, 2, 1, 1, 5});
+      ASSERT_EQ(Result->Interrupts.size(), 2u);
+      const auto &Assert = Result->Interrupts[0];
+      EXPECT_EQ(Assert.Action, DriverInterruptAction::Assert);
+      EXPECT_EQ(Assert.DueAt100ns, 7u);
+      EXPECT_EQ(Assert.OccurredAt100ns, 7u);
+      ASSERT_EQ(Assert.Handlers.size(), 3u);
+      for (size_t I = 0; I < Assert.Handlers.size(); ++I) {
+        EXPECT_EQ(Assert.Handlers[I].DeliveryIndex, I);
+        EXPECT_EQ(Assert.Handlers[I].DeliveredAt100ns, 7 + I * 3);
+        EXPECT_EQ(Assert.Handlers[I].ReturnedAt100ns, 7 + I * 3);
+        EXPECT_EQ(Assert.Handlers[I].ReturnValue, I == 0 ? 1u : 0u);
+      }
+      const auto &Deassert = Result->Interrupts[1];
+      EXPECT_EQ(Deassert.Action, DriverInterruptAction::Deassert);
+      EXPECT_EQ(Deassert.OccurredAt100ns, 15u);
+      EXPECT_FALSE(Deassert.DeliveredAt100ns);
+      EXPECT_TRUE(Deassert.Handlers.empty());
+      EXPECT_FALSE(Deassert.ReturnValue);
+      EXPECT_EQ(apiCount(*Result, "IoConnectInterruptEx"), 1u);
+      EXPECT_EQ(apiCount(*Result, "IoDisconnectInterruptEx"), 1u);
+    }
+}
+
+TEST(DriverWDMInterrupt,
+     LegacyElevenArgumentsIsrDpcExecuteNormalCfgAndRebased) {
   for (const auto *Image : images())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
       SCOPED_TRACE(Image);
@@ -218,7 +264,8 @@ TEST(DriverWDMInterrupt, LegacyElevenArgumentsIsrDpcExecuteNormalCfgAndRebased) 
     }
 }
 
-TEST(DriverWDMInterrupt, DpcCriticalSectionsAndManualLocksRestoreBothIrqlViews) {
+TEST(DriverWDMInterrupt,
+     DpcCriticalSectionsAndManualLocksRestoreBothIrqlViews) {
   for (const auto *Image : images()) {
     auto Options = options('C');
     Options.Requests.push_back(pnp(DevicePnpRequest::Start));
@@ -234,7 +281,51 @@ TEST(DriverWDMInterrupt, DpcCriticalSectionsAndManualLocksRestoreBothIrqlViews) 
   }
 }
 
-TEST(DriverWDMInterrupt, ExFullySpecifiedGroupZeroAndLineBasedUseSameCallbacks) {
+TEST(DriverWDMInterrupt, SharedLineInvokesEachIsrBeforeDpcWithOneCallerLock) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = options('R');
+      Options.LoadAddress = Address;
+      Options.PnpDevices.push_back(device(1));
+      for (auto &Device : Options.PnpDevices) {
+        auto &IRQ = Device.Interrupts.front();
+        IRQ.Share = DriverInterruptShare::Shared;
+        IRQ.TranslatedVector = 0x91;
+        IRQ.TranslatedLevel = 5;
+      }
+      Options.Requests.push_back(pnp(DevicePnpRequest::Start));
+      Options.Requests.push_back(
+          pnp(DevicePnpRequest::Start, 0, 0, "interrupt1"));
+      fileCycle(Options, 7, 1, "interrupt0");
+      fileCycle(Options, 7, 2, "interrupt1");
+      remove(Options);
+      remove(Options, "interrupt1");
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      clean(*Result, 2);
+      snapshot(Result->Requests[3], {1, 1, 1, 1, 2, 1, 1, 5});
+      snapshot(Result->Requests[7], {2, 1, 2, 1, 2, 1, 1, 5});
+      ASSERT_EQ(Result->Interrupts.size(), 2u);
+      for (size_t I = 0; I < Result->Interrupts.size(); ++I) {
+        const auto &Event = Result->Interrupts[I];
+        ASSERT_EQ(Event.Handlers.size(), 2u);
+        EXPECT_EQ(Event.ReturnValue, 1u);
+        EXPECT_EQ(Event.Handlers[I].ReturnValue, 1u);
+        EXPECT_EQ(Event.Handlers[1 - I].ReturnValue, 0u);
+        EXPECT_EQ(Event.Handlers[0].ReturnedAt100ns,
+                  Event.Handlers[1].DeliveredAt100ns);
+      }
+      EXPECT_LT(messageIndex(*Result, "ISR unit=2"),
+                messageIndex(*Result, "DPC unit=1"));
+      EXPECT_EQ(apiCount(*Result, "IoConnectInterruptEx"), 2u);
+      EXPECT_EQ(apiCount(*Result, "IoDisconnectInterruptEx"), 2u);
+    }
+}
+
+TEST(DriverWDMInterrupt,
+     ExFullySpecifiedGroupZeroAndLineBasedUseSameCallbacks) {
   for (const auto *Image : images())
     for (char Mode : {'E', 'G', 'L'}) {
       SCOPED_TRACE(Image);
@@ -259,7 +350,8 @@ TEST(DriverWDMInterrupt, ExFullySpecifiedGroupZeroAndLineBasedUseSameCallbacks) 
     }
 }
 
-TEST(DriverWDMInterrupt, FalseLowAlIgnoresUpperGarbageAndSurvivesCompletedSource) {
+TEST(DriverWDMInterrupt,
+     FalseLowAlIgnoresUpperGarbageAndSurvivesCompletedSource) {
   for (const auto *Image : images())
     for (uint64_t Delay : {0u, 7u}) {
       SCOPED_TRACE(Image);
@@ -283,16 +375,20 @@ TEST(DriverWDMInterrupt, FalseLowAlIgnoresUpperGarbageAndSurvivesCompletedSource
     }
 }
 
-TEST(DriverWDMInterrupt, StopRestartReplacesConnectionAndKeepsIndependentEpochs) {
+TEST(DriverWDMInterrupt,
+     StopRestartReplacesConnectionAndKeepsIndependentEpochs) {
   for (const auto *Image : images()) {
     auto Options = options();
     Options.Requests = {
-        pnp(DevicePnpRequest::Start), file(DriverRequestKind::Create),
+        pnp(DevicePnpRequest::Start),
+        file(DriverRequestKind::Create),
         file(DriverRequestKind::DeviceControl, 1, "interrupt0", 7),
-        pnp(DevicePnpRequest::QueryStop), pnp(DevicePnpRequest::Stop),
+        pnp(DevicePnpRequest::QueryStop),
+        pnp(DevicePnpRequest::Stop),
         pnp(DevicePnpRequest::Start, 3),
         file(DriverRequestKind::DeviceControl, 1, "interrupt0", 7),
-        file(DriverRequestKind::Cleanup), file(DriverRequestKind::Close)};
+        file(DriverRequestKind::Cleanup),
+        file(DriverRequestKind::Close)};
     remove(Options);
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
@@ -364,7 +460,8 @@ TEST(DriverWDMInterrupt, StopWithoutDisconnectFailsBeforeDeviceRetirement) {
   }
 }
 
-TEST(DriverWDMInterrupt, UnassignedVectorLevelAndProcessorDoNotInventConnections) {
+TEST(DriverWDMInterrupt,
+     UnassignedVectorLevelAndProcessorDoNotInventConnections) {
   for (const auto *Image : images())
     for (char Mode : {'Q', 'J', 'A', 'Z', 'M', 'P', 'V', 'Y'}) {
       SCOPED_TRACE(Image);
@@ -373,7 +470,8 @@ TEST(DriverWDMInterrupt, UnassignedVectorLevelAndProcessorDoNotInventConnections
       Options.Requests = {pnp(DevicePnpRequest::Start)};
       auto Result = emulateDriver(Image, Options);
       ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-      EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
+      EXPECT_EQ(Result->Stop, DriverStopReason::ModelError)
+          << Result->Diagnostic;
       EXPECT_FALSE(Result->Diagnostic.empty());
       EXPECT_EQ(messageIndex(*Result, "connected unit=1"),
                 Result->Messages.size());
@@ -391,7 +489,8 @@ TEST(DriverWDMInterrupt, RecursiveLockWrongRestoreAndOpaqueStaleTokensFail) {
                           file(DriverRequestKind::DeviceControl)};
       auto Result = emulateDriver(Image, Options);
       ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-      EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
+      EXPECT_EQ(Result->Stop, DriverStopReason::ModelError)
+          << Result->Diagnostic;
       EXPECT_FALSE(Result->Diagnostic.empty());
       EXPECT_FALSE(Result->UnloadCompleted);
       EXPECT_EQ(apiCount(*Result, "IoDeleteDevice"), 0u);
@@ -401,9 +500,9 @@ TEST(DriverWDMInterrupt, RecursiveLockWrongRestoreAndOpaqueStaleTokensFail) {
 TEST(DriverWDMInterrupt, IsrCannotWaitAtDirql) {
   for (const auto *Image : images()) {
     auto Options = options('B');
-    Options.Requests = {pnp(DevicePnpRequest::Start),
-                        file(DriverRequestKind::Create),
-                        file(DriverRequestKind::DeviceControl, 1, "interrupt0", 7)};
+    Options.Requests = {
+        pnp(DevicePnpRequest::Start), file(DriverRequestKind::Create),
+        file(DriverRequestKind::DeviceControl, 1, "interrupt0", 7)};
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
@@ -430,7 +529,8 @@ TEST(DriverWDMInterrupt, DeviceD3AndSurpriseCannotDeliverDeclaredPulse) {
           file(DriverRequestKind::DeviceControl, 1, "interrupt0", 7));
       auto Result = emulateDriver(Image, Options);
       ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-      EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
+      EXPECT_EQ(Result->Stop, DriverStopReason::ModelError)
+          << Result->Diagnostic;
       EXPECT_FALSE(Result->Diagnostic.empty());
       EXPECT_EQ(messageIndex(*Result, "ISR unit=1"), Result->Messages.size());
       EXPECT_EQ(apiCount(*Result, "KeInsertQueueDpc"), 0u);
@@ -447,8 +547,9 @@ TEST(DriverWDMInterrupt, DeviceD3AndSurpriseCannotDeliverDeclaredPulse) {
 }
 #else
 TEST(DriverWDMInterrupt, GenuineFixtureUnavailable) {
-  GTEST_SKIP() << "Set NEVERD_WDM_INTERRUPT_FIXTURE to an original driver built "
-                  "with genuine WDK headers/libraries; no substitute stub is used";
+  GTEST_SKIP()
+      << "Set NEVERD_WDM_INTERRUPT_FIXTURE to an original driver built "
+         "with genuine WDK headers/libraries; no substitute stub is used";
 }
 #endif
 } // namespace

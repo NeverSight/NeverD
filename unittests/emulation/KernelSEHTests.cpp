@@ -68,8 +68,8 @@ protected:
     S.HandlerVA = S.ContinuationVA = Base + Handler;
     return S;
   }
-  llvm::Expected<std::optional<KernelSEH::Transfer>> plan() {
-    KernelSEH Planner(
+  KernelSEH planner() {
+    return KernelSEH(
         Metadata, Base, ActualBase, ImageSize,
         [&](uint64_t Address) -> llvm::Expected<uint64_t> {
           Reads.push_back(Address);
@@ -83,7 +83,9 @@ protected:
           return PC != DeniedPC && PC >= ActualBase &&
                  PC - ActualBase < ImageSize;
         });
-    return Planner.plan(Code, Caller, {StackBase, StackSize});
+  }
+  llvm::Expected<std::optional<KernelSEH::Transfer>> plan() {
+    return planner().plan(Code, Caller, {StackBase, StackSize});
   }
   KernelSEH::Transfer selected() {
     auto P = plan();
@@ -231,10 +233,177 @@ TEST_F(DriverKernelSEH, ActiveFiltersAndFinallyNeverFallThrough) {
     auto Unsupported = scope(0x1030, 0x1060, 0x1070);
     Unsupported.Kind = Kind;
     Unsupported.FilterOrFinallyVA = Base + 0x2000;
+    if (Kind == SEHScopeKind::Finally) {
+      Unsupported.HandlerVA = Unsupported.FilterOrFinallyVA;
+      Unsupported.ContinuationVA = 0;
+    }
     F.SEH->Scopes.insert(F.SEH->Scopes.begin(), Unsupported);
     rejected("filter or finally");
     EXPECT_TRUE(Reads.empty());
   }
+}
+
+TEST_F(DriverKernelSEH, FiltersSearchBeforeAnyFinallyAndRetainNativeOrder) {
+  auto &F = handler();
+  auto Filter = scope(0x1030, 0x1060, 0x1070);
+  Filter.Kind = SEHScopeKind::Filter;
+  Filter.FilterOrFinallyVA = Base + 0x2000;
+  auto Cleanup = scope(0x1030, 0x1060, 0);
+  Cleanup.Kind = SEHScopeKind::Finally;
+  Cleanup.HandlerVA = Cleanup.FilterOrFinallyVA = Base + 0x2100;
+  Cleanup.ContinuationVA = 0;
+  F.SEH->Scopes.insert(F.SEH->Scopes.begin(), {Cleanup, Filter, Filter});
+  auto Planner = planner();
+  auto State = Planner.begin(Code, Caller, {StackBase, StackSize});
+  auto First = Planner.advance(State);
+  ASSERT_TRUE(bool(First)) << llvm::toString(First.takeError());
+  EXPECT_EQ(First->Kind, KernelSEH::ActionKind::Filter);
+  EXPECT_EQ(First->State.HandlerPC, Filter.FilterOrFinallyVA);
+  auto MissingResult = Planner.advance(State);
+  ASSERT_FALSE(bool(MissingResult));
+  llvm::consumeError(MissingResult.takeError());
+  auto Second = Planner.advance(State, 0);
+  ASSERT_TRUE(bool(Second)) << llvm::toString(Second.takeError());
+  EXPECT_EQ(Second->Kind, KernelSEH::ActionKind::Filter);
+  auto Finally = Planner.advance(State, 9);
+  ASSERT_TRUE(bool(Finally)) << llvm::toString(Finally.takeError());
+  EXPECT_EQ(Finally->Kind, KernelSEH::ActionKind::Finally);
+  EXPECT_EQ(Finally->State.HandlerPC, Cleanup.HandlerVA);
+  auto Handler = Planner.advance(State);
+  ASSERT_TRUE(bool(Handler)) << llvm::toString(Handler.takeError());
+  EXPECT_EQ(Handler->Kind, KernelSEH::ActionKind::Handler);
+  EXPECT_EQ(Handler->State.HandlerPC, Filter.ContinuationVA);
+  EXPECT_TRUE(Reads.empty());
+}
+
+TEST_F(DriverKernelSEH, NegativeFilterRestoresOriginalContextWithoutFinally) {
+  auto &F = handler();
+  F.SEH->Scopes[0].Kind = SEHScopeKind::Filter;
+  F.SEH->Scopes[0].FilterOrFinallyVA = Base + 0x2000;
+  auto Planner = planner();
+  auto State = Planner.begin(Code, Caller, {StackBase, StackSize});
+  auto First = Planner.advance(State);
+  ASSERT_TRUE(bool(First)) << llvm::toString(First.takeError());
+  auto Continued = Planner.advance(State, -9);
+  ASSERT_TRUE(bool(Continued)) << llvm::toString(Continued.takeError());
+  EXPECT_EQ(Continued->Kind, KernelSEH::ActionKind::ContinueExecution);
+  EXPECT_EQ(Continued->State.Registers.GPR, Caller.GPR);
+  EXPECT_EQ(Continued->State.Registers.PC, Caller.PC);
+}
+
+TEST_F(DriverKernelSEH,
+       SearchAndHandlerRejectImmutableRecordEditsBeforeAdvancing) {
+  auto &F = handler();
+  F.SEH->Scopes.front().Kind = SEHScopeKind::Filter;
+  F.SEH->Scopes.front().FilterOrFinallyVA = Base + 0x2000;
+  F.SEH->Scopes.push_back(F.SEH->Scopes.front());
+  constexpr uint64_t Storage = 0x80000000;
+  KernelSEH::Exception Raised{Caller, Code, 0, Caller.PC, {}};
+  auto Planner = planner();
+  for (int32_t Disposition : {0, 1}) {
+    for (uint64_t Offset :
+         {uint64_t(0), seh::ContextOffset + seh::ContextCSOffset}) {
+      SCOPED_TRACE(Disposition);
+      SCOPED_TRACE(Offset);
+      auto State = Planner.begin(Code, Caller, {StackBase, StackSize});
+      auto First = Planner.advance(State);
+      ASSERT_TRUE(bool(First)) << llvm::toString(First.takeError());
+      ASSERT_EQ(First->Kind, KernelSEH::ActionKind::Filter);
+      auto Bytes = KernelSEH::encodeRecords(Raised, Storage);
+      ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+      (*Bytes)[Offset] ^= 1;
+      const auto Before = *Bytes;
+      auto Invalid =
+          Planner.finishFilter(State, Disposition, *Bytes, Raised, Storage);
+      ASSERT_FALSE(bool(Invalid));
+      EXPECT_NE(llvm::toString(Invalid.takeError())
+                    .find("unsupported exception context fields"),
+                std::string::npos);
+      EXPECT_EQ(*Bytes, Before);
+      (*Bytes)[Offset] ^= 1;
+      auto Retried =
+          Planner.finishFilter(State, Disposition, *Bytes, Raised, Storage);
+      ASSERT_TRUE(bool(Retried)) << llvm::toString(Retried.takeError());
+      EXPECT_EQ(Retried->Kind, Disposition ? KernelSEH::ActionKind::Handler
+                                           : KernelSEH::ActionKind::Filter);
+      EXPECT_EQ(Retried->State.ExceptionCode, Code);
+    }
+  }
+}
+
+TEST_F(DriverKernelSEH,
+       SearchPreservesIntegerEditsForContinuationWithoutChangingUnwind) {
+  auto &F = handler();
+  F.SEH->Scopes.front().Kind = SEHScopeKind::Filter;
+  F.SEH->Scopes.front().FilterOrFinallyVA = Base + 0x2000;
+  F.SEH->Scopes.push_back(F.SEH->Scopes.front());
+  constexpr uint64_t Storage = 0x80000000;
+  KernelSEH::Exception Raised{Caller, Code, 0, Caller.PC, {}};
+  auto Planner = planner();
+  for (int32_t Disposition : {-1, 1}) {
+    auto State = Planner.begin(Code, Caller, {StackBase, StackSize});
+    auto First = Planner.advance(State);
+    ASSERT_TRUE(bool(First)) << llvm::toString(First.takeError());
+    auto Bytes = KernelSEH::encodeRecords(Raised, Storage);
+    ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+    (*Bytes)[seh::ContextOffset + seh::ContextGPROffset] ^= 1;
+    const auto Before = *Bytes;
+    auto Second = Planner.finishFilter(State, 0, *Bytes, Raised, Storage);
+    ASSERT_TRUE(bool(Second)) << llvm::toString(Second.takeError());
+    EXPECT_EQ(Second->Kind, KernelSEH::ActionKind::Filter);
+    EXPECT_EQ(Second->State.Registers.GPR, Caller.GPR);
+    EXPECT_EQ(*Bytes, Before);
+    auto Final =
+        Planner.finishFilter(State, Disposition, *Bytes, Raised, Storage);
+    ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
+    if (Disposition < 0) {
+      EXPECT_EQ(Final->Kind, KernelSEH::ActionKind::ContinueExecution);
+      auto Restored =
+          Planner.continuation(*Bytes, Raised, Storage, {StackBase, StackSize});
+      ASSERT_TRUE(bool(Restored)) << llvm::toString(Restored.takeError());
+      EXPECT_EQ(Restored->GPR[seh::ReturnRegister],
+                Caller.GPR[seh::ReturnRegister] ^ 1);
+    } else {
+      EXPECT_EQ(Final->Kind, KernelSEH::ActionKind::Handler);
+      EXPECT_EQ(Final->State.Registers.GPR[seh::ReturnRegister], Code);
+    }
+    EXPECT_EQ(*Bytes, Before);
+  }
+}
+
+TEST_F(DriverKernelSEH, ContextRecordsAllowOnlyBoundedIntegerControlChanges) {
+  KernelSEH::Exception Raised{Caller, Code, 0, Caller.PC, {0, 0x1234}};
+  constexpr uint64_t Storage = 0x80000000;
+  auto Bytes = KernelSEH::encodeRecords(Raised, Storage);
+  ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+  ASSERT_EQ(Bytes->size(), seh::RecordsSize);
+  auto Planner = planner();
+  auto Decode = [&] {
+    return Planner.continuation(*Bytes, Raised, Storage,
+                                {StackBase, StackSize});
+  };
+  auto Original = Decode();
+  ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+  EXPECT_EQ(Original->GPR, Caller.GPR);
+  (*Bytes)[seh::ContextOffset + seh::ContextGPROffset] ^= 1;
+  auto Changed = Decode();
+  ASSERT_TRUE(bool(Changed)) << llvm::toString(Changed.takeError());
+  EXPECT_EQ(Changed->GPR[0], Caller.GPR[0] ^ 1);
+  for (uint64_t Offset :
+       {seh::ExceptionFlagsOffset, seh::ExceptionPointersOffset,
+        seh::ContextOffset + seh::ContextCSOffset,
+        seh::ContextOffset + seh::ContextFlagsOffset,
+        seh::ContextOffset + seh::ContextSize - 1}) {
+    (*Bytes)[Offset] ^= 1;
+    auto Invalid = Decode();
+    ASSERT_FALSE(bool(Invalid)) << Offset;
+    llvm::consumeError(Invalid.takeError());
+    (*Bytes)[Offset] ^= 1;
+  }
+  (*Bytes)[seh::ContextOffset + seh::ContextEFlagsOffset + 1] ^= 2;
+  auto BadFlags = Decode();
+  ASSERT_FALSE(bool(BadFlags));
+  llvm::consumeError(BadFlags.takeError());
 }
 
 TEST_F(DriverKernelSEH, UnrelatedUnsupportedScopesAndFunctionsStayLazy) {

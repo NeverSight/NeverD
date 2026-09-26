@@ -49,8 +49,7 @@ protected:
   }
   void reject(llvm::Error E, llvm::StringRef Text) {
     ASSERT_TRUE(bool(E));
-    EXPECT_NE(llvm::toString(std::move(E)).find(Text.str()),
-              std::string::npos);
+    EXPECT_NE(llvm::toString(std::move(E)).find(Text.str()), std::string::npos);
   }
   template <class T>
   void reject(llvm::Expected<T> Value, llvm::StringRef Text) {
@@ -125,8 +124,7 @@ protected:
     DriverRequest Start;
     Start.Kind = DriverRequestKind::Pnp;
     Start.DeviceID = "sensor";
-    Start.Pnp =
-        DriverPnpOperation{DevicePnpRequest::Start, {StatusSuccess, 0}};
+    Start.Pnp = DriverPnpOperation{DevicePnpRequest::Start, {StatusSuccess, 0}};
     const auto Packet = take(Model->beginRequest(Start));
     const uint64_t Stack = get(Packet.IRP + IRPStackPointerOffset);
     std::array<uint8_t, StackCompletionOffset> Prefix;
@@ -199,6 +197,36 @@ TEST_F(KernelInterruptBridge, LineBasedExDoesNotReadUnselectedUnionTail) {
   exParameters(Parameters, interrupts::LineBased);
   EXPECT_EQ(call("IoConnectInterruptEx", {Parameters}), StatusSuccess);
   EXPECT_NE(get(Scratch), Interrupt);
+}
+
+TEST_F(KernelInterruptBridge,
+       CallerLockStorageAndSynchronizationIrqlAreRetained) {
+  call("IoDisconnectInterrupt", {Interrupt});
+  constexpr uint32_t LockTag = 0x4b724949;
+  const auto Lock =
+      call("ExAllocatePoolWithTag", {0, profile::PointerSize, LockTag});
+  ASSERT_NE(Lock, 0u);
+  call("KeInitializeSpinLock", {Lock});
+  EXPECT_EQ(call("IoConnectInterrupt",
+                 {Scratch, ISR, Scratch + 0x100, Lock, 0x55, 5, 7, 1, 0, 1, 0}),
+            StatusSuccess);
+  Interrupt = get(Scratch);
+  reject(Model->call("ExFreePool", {Lock}), "interrupt spin lock");
+  reject(Model->call("KeInitializeSpinLock", {Lock}), "interrupt APIs");
+  reject(Model->call("KeAcquireSpinLockRaiseToDpc", {Lock}), "interrupt APIs");
+  EXPECT_EQ(call("KeAcquireInterruptSpinLock", {Interrupt}), 0u);
+  EXPECT_EQ(Model->currentIRQL(), 7u);
+  call("KeReleaseInterruptSpinLock", {Interrupt, 0});
+  EXPECT_EQ(Model->currentIRQL(), 0u);
+  call("KeSynchronizeExecution", {Interrupt, Synchronize, Scratch + 0x100});
+  auto Call = Model->takeGuestCall();
+  ASSERT_TRUE(Call);
+  ok(Model->beginGuestCall(Call->Token));
+  EXPECT_EQ(Model->currentIRQL(), 7u);
+  EXPECT_EQ(take(Model->finishGuestCall(Call->Token, 0x101)), 1u);
+  EXPECT_EQ(Model->currentIRQL(), 0u);
+  call("IoDisconnectInterrupt", {Interrupt});
+  call("ExFreePool", {Lock});
 }
 
 TEST_F(KernelInterruptBridge, FullySpecifiedExDoesNotReadGroupField) {

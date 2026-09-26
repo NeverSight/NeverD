@@ -104,16 +104,38 @@ class DriverSEHIntegrationTests(unittest.TestCase):
                     self._success(result, mode, names)
                     self.assertTrue(any(marker in m for m in result["messages"]))
 
-    def test_dynamic_filter_and_finally_are_rejected_before_execution(self) -> None:
+    def test_dynamic_filters_and_finally_execute_in_search_and_unwind_order(self) -> None:
+        cases = {
+            "F": (["ExRaiseAccessViolation"], ["dynamic inner handled"]),
+            "Q": (["ExRaiseAccessViolation"],
+                  ["decision=0 stage=51", "decision=1 stage=52", "dynamic outer handled"]),
+            "T": (["ExRaiseAccessViolation"],
+                  ["filter decision=1 stage=61", "helper finally abnormal",
+                   "parent finally abnormal=1", "finally handler"]),
+            "L": ([], ["parent finally abnormal=0"]),
+        }
         for variant, fixture in self.fixtures:
-            for mode, kind in (("F", "filter"), ("T", "finally")):
+            for address in (0x180000000, 0x190000000):
+                for mode, (raises, markers) in cases.items():
+                    with self.subTest(variant=variant, address=address, mode=mode):
+                        result = self._run(fixture, mode, address)
+                        self._success(result, mode, raises)
+                        indices = [next(i for i, message in enumerate(result["messages"])
+                                        if marker in message) for marker in markers]
+                        self.assertEqual(indices, sorted(indices))
+
+    def test_unsupported_filter_continuation_and_nested_exceptions_stop(self) -> None:
+        for variant, fixture in self.fixtures:
+            for mode, reason in (("E", "continuing a modeled API"),
+                                 ("B", "nested exceptions"), ("J", "nested exceptions")):
                 with self.subTest(variant=variant, mode=mode):
                     result = self._run(fixture, mode)
                     self.assertEqual(result["stop_reason"], "model_error")
                     self.assertFalse(result["scenario_success"])
                     self.assertFalse(result["unload_completed"])
-                    self.assertIn(kind, result["diagnostic"])
-                    self.assertFalse(any("unsupported " + kind in m for m in result["messages"]))
+                    self.assertIn(reason, result["diagnostic"])
+                    self.assertFalse(any("dynamic inner handled" in m
+                                         for m in result["messages"]))
 
     def test_unhandled_api_raise_and_cpu_fault_remain_distinct_stops(self) -> None:
         for variant, fixture in self.fixtures:

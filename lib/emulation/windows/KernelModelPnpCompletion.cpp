@@ -81,8 +81,12 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
       const uint64_t LowerDelay = Request->FileBusCompletion->Delay100ns;
       uint32_t CompletionStatus = Status;
       int64_t Delay = -int64_t(LowerDelay);
-      if (SendTimeout && *SendTimeout < 0) {
-        const uint64_t TimeoutInterval = uint64_t(-(*SendTimeout + 1)) + 1;
+      if (SendTimeout && *SendTimeout) {
+        const uint64_t TimeoutInterval =
+            *SendTimeout < 0 ? uint64_t(-(*SendTimeout + 1)) + 1
+            : uint64_t(*SendTimeout) > Scheduler.now100ns()
+                ? uint64_t(*SendTimeout) - Scheduler.now100ns()
+                : 0;
         if (TimeoutInterval < LowerDelay) {
           Delay = *SendTimeout;
           CompletionStatus = StatusIOTimeout;

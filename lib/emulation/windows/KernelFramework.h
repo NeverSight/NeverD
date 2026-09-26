@@ -189,6 +189,10 @@ public:
     uint64_t IRP = 0;
     uint32_t Status = 0;
   };
+  /// Run driver veto/notification callbacks before the provider receives the
+  /// PnP IRP. A rejected query never changes hardware or queue power state.
+  llvm::Expected<bool> beginPnpPreprocess(uint64_t PDO, uint64_t IRP,
+                                          DevicePnpRequest Minor);
   /// The provider has completed successfully, but the framework may still
   /// need to run guest hardware and D0 callbacks before the IRP can unwind.
   llvm::Expected<bool> beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
@@ -271,6 +275,7 @@ private:
     uint64_t CallerContext = 0;
     uint64_t D0Entry = 0, D0Exit = 0;
     uint64_t PrepareHardware = 0, ReleaseHardware = 0;
+    uint64_t QueryStop = 0, QueryRemove = 0, SurpriseRemoval = 0;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
   struct ResourceList {
@@ -289,6 +294,7 @@ private:
     bool HasLink = false;
     uint64_t D0Entry = 0, D0Exit = 0;
     uint64_t PrepareHardware = 0, ReleaseHardware = 0;
+    uint64_t QueryStop = 0, QueryRemove = 0, SurpriseRemoval = 0;
     ResourceList RawResources, TranslatedResources;
     bool HardwarePrepared = false;
     bool ResourcesActive = false;
@@ -452,6 +458,9 @@ private:
   std::map<uint64_t, uint64_t> CanceledQueueCallbacks;
   std::map<uint64_t, uint64_t> ReadyQueueCallbacks;
   enum class PnpPhase {
+    QueryStop,
+    QueryRemove,
+    SurpriseRemoval,
     IoStop,
     IoResume,
     PrepareHardware,
@@ -474,6 +483,7 @@ private:
     PnpStep Current{PnpPhase::PrepareHardware};
     std::deque<PnpStep> Remaining;
     std::set<uint64_t> WaitingRequests;
+    bool BeforeBus = false;
   };
   std::map<uint64_t, PnpTransition> PnpTransitions;
   std::optional<PnpCompletion> CompletedPnp;

@@ -25,6 +25,17 @@ llvm::Error GuestMemory::mapAlias(uint64_t, uint64_t, uint64_t, unsigned) {
       llvm::inconvertibleErrorCode(),
       "guest memory does not support shared RAM aliases");
 }
+llvm::Error GuestMemory::unmapAlias(uint64_t, uint64_t) {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support RAM alias unmapping");
+}
+llvm::Error GuestMemory::replaceAliases(llvm::ArrayRef<GuestAliasRange>,
+                                        llvm::ArrayRef<GuestAliasMapping>) {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support transactional RAM alias replacement");
+}
 llvm::Error GuestMemory::mapMMIO(uint64_t, uint64_t, GuestMMIOCallbacks) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "guest memory does not support MMIO mappings");

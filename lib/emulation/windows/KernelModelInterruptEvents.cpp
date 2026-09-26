@@ -147,7 +147,7 @@ llvm::Error KernelModel::processInterruptEvents() {
     Callback.PC = Event.Call.PC;
     Callback.Arguments = std::move(Event.Call.Arguments);
     Callback.IRQL = Event.IRQL;
-    Callback.Priority = Event.IRQL;
+    Callback.Priority = Event.Priority;
     auto ID = Scheduler.enqueueInterrupt(std::move(Callback));
     if (!ID)
       return ID.takeError();

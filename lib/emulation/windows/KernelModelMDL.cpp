@@ -571,9 +571,9 @@ llvm::Error KernelModel::releaseFrameworkUserBuffer(uint64_t MDL) {
   return freeMDL(MDL);
 }
 
-llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
-                                                     uint32_t Priority,
-                                                     bool ReuseExisting) {
+llvm::Expected<uint64_t>
+KernelModel::mapLockedPages(uint64_t MDL, uint32_t Priority, bool ReuseExisting,
+                            KernelPhysicalMemory::CacheType RequestedCache) {
   auto It = MDLs.find(MDL);
   if (It == MDLs.end())
     return mdlError("mapping requires a live modeled MDL");
@@ -593,6 +593,10 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
       Physical.ownerForRange(State.BackingAddress, State.ByteCount);
   if (!PhysicalOwner)
     return PhysicalOwner.takeError();
+  auto Cache = Physical.cacheTypeForMapping(State.BackingAddress,
+                                            State.ByteCount, RequestedCache);
+  if (!Cache)
+    return Cache.takeError();
   if (!State.Mapped) {
     auto Writable = Memory.canAccess(MDL, State.Size, Write);
     if (!Writable)

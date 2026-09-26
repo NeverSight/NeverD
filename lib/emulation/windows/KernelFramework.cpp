@@ -138,6 +138,50 @@ llvm::Error KernelFramework::removePnpDevice(uint64_t PDO) {
   return llvm::Error::success();
 }
 
+llvm::Expected<bool>
+KernelFramework::beginPnpPreprocess(uint64_t PDO, uint64_t IRP,
+                                    DevicePnpRequest Minor) {
+  auto Handle = PnpDeviceHandles.find(PDO);
+  if (Handle == PnpDeviceHandles.end())
+    return invalid("PnP preprocessing lost its framework device");
+  auto Object = Objects.find(Handle->second);
+  auto Device = Devices.find(Handle->second);
+  if (Object == Objects.end() || Device == Devices.end() ||
+      Object->second.Deleting || !Device->second.Initialized)
+    return invalid("PnP preprocessing requires a live initialized device");
+  if (PendingCall || !PnpTransitions.empty() || CompletedPnp)
+    return invalid("another framework callback is still pending");
+  PnpStep Step{PnpPhase::QueryStop};
+  uint64_t Callback = 0;
+  switch (Minor) {
+  case DevicePnpRequest::QueryStop:
+    Callback = Device->second.QueryStop;
+    break;
+  case DevicePnpRequest::QueryRemove:
+    Step.Phase = PnpPhase::QueryRemove;
+    Callback = Device->second.QueryRemove;
+    break;
+  case DevicePnpRequest::SurpriseRemoval:
+    Step.Phase = PnpPhase::SurpriseRemoval;
+    Callback = Device->second.SurpriseRemoval;
+    break;
+  default:
+    return false;
+  }
+  if (!Callback)
+    return false;
+  if (NextContinuation == UINT64_MAX)
+    return invalid("framework callback identity exhausted");
+  const uint64_t Token = NextContinuation++;
+  PnpTransition Transition{IRP, Handle->second};
+  Transition.BeforeBus = true;
+  Transition.Current = Step;
+  PnpTransitions.emplace(Token, std::move(Transition));
+  Continuations.emplace(Token, Continuation{});
+  PendingCall = GuestCall{Token, Callback, {Handle->second}};
+  return true;
+}
+
 llvm::Expected<bool> KernelFramework::beginPnpPowerTransition(
     uint64_t PDO, uint64_t IRP, DevicePnpRequest Minor, uint64_t RawResources,
     uint64_t TranslatedResources, uint64_t ResourceListSize) {
@@ -294,6 +338,10 @@ llvm::Error KernelFramework::finalizePnpCallbacks(uint64_t Token) {
   auto Device = Devices.find(Transition->second.Device);
   if (Device == Devices.end())
     return invalid("PnP transition lost its device");
+  if (Transition->second.BeforeBus) {
+    Transition->second.CallbacksComplete = true;
+    return llvm::Error::success();
+  }
   const bool Ready =
       Transition->second.Entering &&
       !(Transition->second.Status & profile::NTStatusFailureMask);
@@ -348,6 +396,15 @@ llvm::Error KernelFramework::schedulePnpCallback(uint64_t Token) {
   uint64_t Callback = 0;
   std::vector<uint64_t> Arguments{Transition.Device};
   switch (Transition.Current.Phase) {
+  case PnpPhase::QueryStop:
+    Callback = D.QueryStop;
+    break;
+  case PnpPhase::QueryRemove:
+    Callback = D.QueryRemove;
+    break;
+  case PnpPhase::SurpriseRemoval:
+    Callback = D.SurpriseRemoval;
+    break;
   case PnpPhase::IoStop: {
     auto Queue = Queues.find(Transition.Current.Queue);
     auto Request = Requests.find(Transition.Current.Request);
@@ -1419,6 +1476,8 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
     if (!State.CallbacksComplete) {
       const bool StoppingRequest = State.Current.Phase == PnpPhase::IoStop;
       const bool ResumingRequest = State.Current.Phase == PnpPhase::IoResume;
+      const bool VoidResult = StoppingRequest || ResumingRequest ||
+                              State.Current.Phase == PnpPhase::SurpriseRemoval;
       if (StoppingRequest) {
         auto Request = Requests.find(State.Current.Request);
         if (Request != Requests.end() && !Request->second.Completed) {
@@ -1432,12 +1491,13 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
         if (auto Request = Requests.find(State.Current.Request);
             Request != Requests.end())
           Request->second.PowerSuspended = false;
-      const uint32_t Status = StoppingRequest || ResumingRequest
-                                  ? windows::StatusSuccess
-                                  : uint32_t(Result);
-      if (!StoppingRequest && !ResumingRequest &&
-          Status == windows::StatusPending)
+      const uint32_t Status =
+          VoidResult ? windows::StatusSuccess : uint32_t(Result);
+      if (!VoidResult && Status == windows::StatusPending)
         return invalid("PnP power callback returned STATUS_PENDING");
+      if (State.BeforeBus && !VoidResult &&
+          Status == windows::StatusNotSupported)
+        return invalid("PnP query callback returned STATUS_NOT_SUPPORTED");
       const bool Failed = Status & profile::NTStatusFailureMask;
       if (Failed && !(State.Status & profile::NTStatusFailureMask))
         State.Status = Status;

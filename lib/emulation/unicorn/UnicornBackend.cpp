@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <iterator>
 #include <map>
 #include <new>
 #include <unicorn/unicorn.h>
@@ -84,6 +85,7 @@ struct UnicornBackend::Impl {
   // guest permissions. CPU accesses use Unicorn's corresponding page metadata.
   std::map<uint64_t, unsigned> Pages;
   std::map<uint64_t, uint8_t *> PageBacking;
+  std::map<uint64_t, uint64_t> RAMAliases;
   std::vector<std::unique_ptr<uint8_t[]>> OwnedRAM;
   std::map<uint64_t, std::unique_ptr<MMIORegion>> MMIO;
   BackendHooks Hooks;
@@ -443,33 +445,112 @@ llvm::Error UnicornBackend::map(uint64_t Address, uint64_t Size,
 
 llvm::Error UnicornBackend::mapAlias(uint64_t Address, uint64_t Source,
                                      uint64_t Size, unsigned Permissions) {
-  if (!Size || (Address & (profile::PageSize - 1)) ||
-      (Source & (profile::PageSize - 1)) || (Size & (profile::PageSize - 1)) ||
-      Size - 1 > UINT64_MAX - Address || Size - 1 > UINT64_MAX - Source ||
-      (Permissions & ~(Read | Write | Execute)) || State->Running ||
-      State->effectsStopped())
-    return failure("invalid shared RAM alias");
-  if (Size > State->Limit - State->Mapped)
-    return llvm::make_error<GuestMemoryLimitError>();
-  auto First = State->PageBacking.find(Source);
-  if (First == State->PageBacking.end())
-    return failure("shared RAM alias has no source backing");
-  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
-    auto Page = State->PageBacking.find(Source + Offset);
-    if (State->Pages.count(Address + Offset) ||
-        Page == State->PageBacking.end() ||
-        Page->second != First->second + Offset)
-      return failure("shared RAM alias overlaps or crosses source backing");
+  return replaceAliases({}, {{Address, Source, Size, Permissions}});
+}
+
+llvm::Error UnicornBackend::unmapAlias(uint64_t Address, uint64_t Size) {
+  return replaceAliases({{Address, Size}}, {});
+}
+
+llvm::Error
+UnicornBackend::replaceAliases(llvm::ArrayRef<GuestAliasRange> Remove,
+                               llvm::ArrayRef<GuestAliasMapping> Add) {
+  if (State->Running || State->DeviceCallbackActive || State->effectsStopped())
+    return failure("cannot replace RAM aliases during execution, a callback or "
+                   "after a fault");
+  std::map<uint64_t, uint64_t> Retiring;
+  uint64_t FinalMapped = State->Mapped;
+  for (const auto &Range : Remove) {
+    auto Alias = State->RAMAliases.find(Range.Address);
+    if (Alias == State->RAMAliases.end() || Alias->second != Range.Size ||
+        !Retiring.emplace(Range.Address, Range.Size).second)
+      return failure(
+          "RAM alias removal requires unique exact complete mappings");
+    FinalMapped -= Range.Size;
   }
-  if (auto E = check(uc_mem_map_ptr(State->Engine, Address, Size, Permissions,
-                                    First->second),
-                     "map shared guest memory"))
-    return E;
-  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
-    State->Pages.emplace(Address + Offset, Permissions);
-    State->PageBacking.emplace(Address + Offset, First->second + Offset);
+  auto RetiresPage = [&](uint64_t Page) {
+    auto Next = Retiring.upper_bound(Page);
+    if (Next == Retiring.begin())
+      return false;
+    const auto &Range = *std::prev(Next);
+    return Page - Range.first < Range.second;
+  };
+  struct PreparedAlias {
+    GuestAliasMapping Mapping;
+    uint8_t *Backing;
+  };
+  std::vector<PreparedAlias> Prepared;
+  std::map<uint64_t, uint64_t> Destinations;
+  for (const auto &Mapping : Add) {
+    const auto [Address, Source, Size, Permissions] = Mapping;
+    if (!Size || (Address & (profile::PageSize - 1)) ||
+        (Source & (profile::PageSize - 1)) ||
+        (Size & (profile::PageSize - 1)) || Size - 1 > UINT64_MAX - Address ||
+        Size - 1 > UINT64_MAX - Source ||
+        (Permissions & ~(Read | Write | Execute)))
+      return failure("invalid shared RAM alias");
+    if (Size > State->Limit - FinalMapped)
+      return llvm::make_error<GuestMemoryLimitError>();
+    FinalMapped += Size;
+    auto Next = Destinations.lower_bound(Address);
+    if ((Next != Destinations.end() && Next->first - Address < Size) ||
+        (Next != Destinations.begin() &&
+         Address - std::prev(Next)->first < std::prev(Next)->second))
+      return failure("replacement RAM aliases overlap each other");
+    Destinations.emplace_hint(Next, Address, Size);
+    auto First = State->PageBacking.find(Source);
+    if (First == State->PageBacking.end())
+      return failure("shared RAM alias has no source backing");
+    for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
+      auto Page = State->PageBacking.find(Source + Offset);
+      if (RetiresPage(Source + Offset))
+        return failure("replacement RAM alias source is being retired");
+      if ((State->Pages.count(Address + Offset) &&
+           !RetiresPage(Address + Offset)) ||
+          Page == State->PageBacking.end() ||
+          reinterpret_cast<uintptr_t>(Page->second) !=
+              reinterpret_cast<uintptr_t>(First->second) + Offset)
+        return failure("shared RAM alias overlaps or crosses source backing");
+    }
+    Prepared.push_back({Mapping, First->second});
   }
-  State->Mapped += Size;
+  auto CheckMutation = [&](uc_err Status, const char *Operation,
+                           uint64_t Address, uint64_t Size) -> llvm::Error {
+    if (Status != UC_ERR_OK) {
+      // All predictable failures were checked before the first mutation. An
+      // unexpected engine failure must not leave a resumable partial switch.
+      State->FirstFault = BackendFault{BackendFaultKind::UnhandledException,
+                                       State->InstructionPC, Address, Size};
+      return check(Status, Operation);
+    }
+    return llvm::Error::success();
+  };
+  for (const auto &Range : Remove) {
+    if (auto E = CheckMutation(
+            uc_mem_unmap(State->Engine, Range.Address, Range.Size),
+            "unmap shared guest memory", Range.Address, Range.Size))
+      return E;
+    for (uint64_t Offset = 0; Offset < Range.Size;
+         Offset += profile::PageSize) {
+      State->Pages.erase(Range.Address + Offset);
+      State->PageBacking.erase(Range.Address + Offset);
+    }
+    State->RAMAliases.erase(Range.Address);
+    State->Mapped -= Range.Size;
+  }
+  for (const auto &Alias : Prepared) {
+    const auto [Address, Source, Size, Permissions] = Alias.Mapping;
+    if (auto E = CheckMutation(uc_mem_map_ptr(State->Engine, Address, Size,
+                                              Permissions, Alias.Backing),
+                               "map shared guest memory", Address, Size))
+      return E;
+    for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
+      State->Pages.emplace(Address + Offset, Permissions);
+      State->PageBacking.emplace(Address + Offset, Alias.Backing + Offset);
+    }
+    State->RAMAliases.emplace(Address, Size);
+    State->Mapped += Size;
+  }
   return llvm::Error::success();
 }
 

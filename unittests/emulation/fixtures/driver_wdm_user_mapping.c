@@ -24,6 +24,16 @@ typedef struct UserMappingWork {
 
 static UserMappingWork Pending;
 
+typedef struct UserMappingProcessView {
+  PMDL Mdl;
+  PUCHAR Pool;
+  PUCHAR Address;
+  PMDL LockedMdl;
+  PUCHAR System;
+} UserMappingProcessView;
+
+static UserMappingProcessView Retained[2];
+
 static NTSTATUS Complete(PIRP Irp, NTSTATUS Status) {
   Irp->IoStatus.Status = Status;
   Irp->IoStatus.Information = 0;
@@ -122,6 +132,172 @@ static NTSTATUS CheckAliases(PMDL Mdl, PUCHAR Pool, volatile UCHAR *Report) {
     MmUnmapLockedPages(ReadOnly, Mdl);
   if (First)
     MmUnmapLockedPages(First, Mdl);
+  return Status;
+}
+
+static NTSTATUS CheckAddressReuse(PMDL Mdl, PUCHAR Pool,
+                                  volatile UCHAR *Report) {
+  PUCHAR OtherPool =
+      ExAllocatePool2(POOL_FLAG_NON_PAGED, PAGE_SIZE, UserMappingPoolTag);
+  if (!OtherPool)
+    return STATUS_INSUFFICIENT_RESOURCES;
+  PMDL OtherMdl = IoAllocateMdl(OtherPool, PAGE_SIZE, FALSE, FALSE, NULL);
+  if (!OtherMdl) {
+    ExFreePoolWithTag(OtherPool, UserMappingPoolTag);
+    return STATUS_INSUFFICIENT_RESOURCES;
+  }
+  MmBuildMdlForNonPagedPool(OtherMdl);
+  PMDL LockedMdl = NULL, ViewMdl = NULL;
+  PUCHAR View = NULL;
+  BOOLEAN Locked = FALSE;
+  NTSTATUS Status = STATUS_SUCCESS;
+  __try {
+    Pool[UserMappingByteOffset] = UserMappingFirstByte;
+    OtherPool[UserMappingByteOffset] = UserMappingSecondByte;
+    View = MmMapLockedPagesSpecifyCache(Mdl, UserMode, MmNonCached, NULL, FALSE,
+                                        NormalPagePriority);
+    ViewMdl = Mdl;
+    PUCHAR Requested = View;
+    LockedMdl =
+        IoAllocateMdl(View + UserMappingByteOffset, 1, FALSE, FALSE, NULL);
+    if (!LockedMdl)
+      ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+    MmProbeAndLockPages(LockedMdl, UserMode, IoWriteAccess);
+    Locked = TRUE;
+    PUCHAR System =
+        MmMapLockedPagesSpecifyCache(LockedMdl, KernelMode, MmWriteCombined,
+                                     NULL, FALSE, NormalPagePriority);
+    if (!System)
+      ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+    const PFN_NUMBER FirstPFN = MmGetMdlPfnArray(LockedMdl)[0];
+    MmUnmapLockedPages(View, ViewMdl);
+    View = NULL;
+    __try {
+      Report[0] = ((volatile UCHAR *)Requested)[UserMappingByteOffset];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      if (GetExceptionCode() == STATUS_ACCESS_VIOLATION)
+        Report[2] |= UserRemappingUnmappedFault;
+    }
+    View = MmMapLockedPagesSpecifyCache(OtherMdl, UserMode, MmWriteCombined,
+                                        Requested, FALSE,
+                                        NormalPagePriority | MdlMappingNoWrite);
+    ViewMdl = OtherMdl;
+    if (View == Requested)
+      Report[2] |= UserRemappingReusedAddress;
+    Report[1] = ((volatile UCHAR *)Requested)[UserMappingByteOffset];
+    __try {
+      ((volatile UCHAR *)Requested)[UserMappingByteOffset] = 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      if (GetExceptionCode() == STATUS_ACCESS_VIOLATION)
+        Report[2] |= UserRemappingReadOnlyFault;
+    }
+    Report[0] = System[0];
+    if (FirstPFN == MmGetMdlPfnArray(LockedMdl)[0] &&
+        FirstPFN == MmGetMdlPfnArray(Mdl)[0] &&
+        FirstPFN != MmGetMdlPfnArray(OtherMdl)[0])
+      Report[2] |= UserRemappingPreservedLockedPages;
+    MmUnmapLockedPages(View, ViewMdl);
+    View = NULL;
+    View = MmMapLockedPagesSpecifyCache(OtherMdl, UserMode, MmCached, Requested,
+                                        FALSE, NormalPagePriority);
+    View[UserMappingByteOffset] = UserMappingWorkerByte;
+    Report[3] = View == Requested &&
+                OtherPool[UserMappingByteOffset] == UserMappingWorkerByte &&
+                System[0] == UserMappingFirstByte;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    Status = GetExceptionCode();
+  }
+  if (View)
+    MmUnmapLockedPages(View, ViewMdl);
+  if (Locked)
+    MmUnlockPages(LockedMdl);
+  if (LockedMdl)
+    IoFreeMdl(LockedMdl);
+  ReleasePool(OtherMdl, OtherPool);
+  return Status;
+}
+
+static NTSTATUS RetainProcessView(PMDL Mdl, PUCHAR Pool, volatile UCHAR *Report,
+                                  BOOLEAN Second) {
+  UserMappingProcessView *State = &Retained[Second ? 1 : 0];
+  if (State->Mdl || (Second && !Retained[0].Mdl))
+    return STATUS_INVALID_DEVICE_STATE;
+  PMDL LockedMdl = NULL;
+  PUCHAR View = NULL;
+  BOOLEAN Locked = FALSE;
+  NTSTATUS Status = STATUS_SUCCESS;
+  __try {
+    Pool[UserMappingByteOffset] =
+        Second ? UserMappingSecondByte : UserMappingFirstByte;
+    View = MmMapLockedPagesSpecifyCache(
+        Mdl, UserMode, MmCached, Second ? Retained[0].Address : NULL, FALSE,
+        NormalPagePriority | (Second ? MdlMappingNoWrite : 0));
+    LockedMdl =
+        IoAllocateMdl(View + UserMappingByteOffset, 1, FALSE, FALSE, NULL);
+    if (!LockedMdl)
+      ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+    MmProbeAndLockPages(LockedMdl, UserMode,
+                        Second ? IoReadAccess : IoWriteAccess);
+    Locked = TRUE;
+    PUCHAR System = MmGetSystemAddressForMdlSafe(LockedMdl, NormalPagePriority);
+    if (!System)
+      ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+    State->Mdl = Mdl;
+    State->Pool = Pool;
+    State->Address = View;
+    State->LockedMdl = LockedMdl;
+    State->System = System;
+    Report[0] = 1;
+    return STATUS_SUCCESS;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    Status = GetExceptionCode();
+  }
+  if (View)
+    MmUnmapLockedPages(View, Mdl);
+  if (Locked)
+    MmUnlockPages(LockedMdl);
+  if (LockedMdl)
+    IoFreeMdl(LockedMdl);
+  return Status;
+}
+
+static NTSTATUS ReleaseProcessView(volatile UCHAR *Report, BOOLEAN Second) {
+  UserMappingProcessView *State = &Retained[Second ? 1 : 0];
+  if (!State->Mdl || (!Second && !Retained[1].Mdl))
+    return STATUS_INVALID_DEVICE_STATE;
+  NTSTATUS Status = STATUS_SUCCESS;
+  __try {
+    Report[0] = ((volatile UCHAR *)State->Address)[UserMappingByteOffset];
+    if (Second) {
+      __try {
+        ((volatile UCHAR *)State->Address)[UserMappingByteOffset] = 0;
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (GetExceptionCode() == STATUS_ACCESS_VIOLATION)
+          Report[1] = 1;
+      }
+      Report[2] = State->System[0] == UserMappingSecondByte;
+    } else {
+      Report[1] = Retained[1].System[0];
+      Report[2] = State->Address == Retained[1].Address &&
+                  MmGetMdlPfnArray(State->LockedMdl)[0] ==
+                      MmGetMdlPfnArray(State->Mdl)[0] &&
+                  MmGetMdlPfnArray(Retained[1].LockedMdl)[0] ==
+                      MmGetMdlPfnArray(Retained[1].Mdl)[0] &&
+                  MmGetMdlPfnArray(State->LockedMdl)[0] !=
+                      MmGetMdlPfnArray(Retained[1].LockedMdl)[0];
+      ((volatile UCHAR *)State->Address)[UserMappingByteOffset] =
+          UserMappingWorkerByte;
+      Report[3] = State->System[0] == UserMappingWorkerByte &&
+                  Retained[1].System[0] == UserMappingSecondByte;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    Status = GetExceptionCode();
+  }
+  MmUnmapLockedPages(State->Address, State->Mdl);
+  MmUnlockPages(State->LockedMdl);
+  IoFreeMdl(State->LockedMdl);
+  ReleasePool(State->Mdl, State->Pool);
+  RtlZeroMemory(State, sizeof(*State));
   return Status;
 }
 
@@ -269,6 +445,11 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     return Complete(Irp, GetExceptionCode());
   }
+  if (Action == UserMappingReleaseFirstProcessView ||
+      Action == UserMappingReleaseSecondProcessView)
+    return Complete(
+        Irp, ReleaseProcessView(Report,
+                                Action == UserMappingReleaseSecondProcessView));
   const ULONG Size = Action == UserMappingShortage       ? 32 * PAGE_SIZE
                      : Action == UserMappingPartialReuse ? 2 * PAGE_SIZE
                                                          : PAGE_SIZE;
@@ -288,9 +469,17 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     Status = CheckShortage(Mdl, Report);
   else if (Action == UserMappingPartialReuse)
     Status = CheckPartialReuse(&Mdl, Pool, Report);
-  else if (Action == UserMappingAttachedWorker ||
-           Action == UserMappingProcessExit ||
-           Action == UserMappingWrongProcessUnmap) {
+  else if (Action == UserMappingAddressReuse)
+    Status = CheckAddressReuse(Mdl, Pool, Report);
+  else if (Action == UserMappingRetainProcessView ||
+           Action == UserMappingConcurrentProcessView) {
+    Status = RetainProcessView(Mdl, Pool, Report,
+                               Action == UserMappingConcurrentProcessView);
+    if (NT_SUCCESS(Status))
+      return Complete(Irp, Status);
+  } else if (Action == UserMappingAttachedWorker ||
+             Action == UserMappingProcessExit ||
+             Action == UserMappingWrongProcessUnmap) {
     PMDL ReportMdl =
         IoAllocateMdl((PVOID)Report, UserMappingReportSize, FALSE, FALSE, NULL);
     PIO_WORKITEM Work = IoAllocateWorkItem(Device);

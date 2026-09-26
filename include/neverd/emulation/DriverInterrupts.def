@@ -10,11 +10,19 @@
 //===----------------------------------------------------------------------===//
 
 #ifdef NEVERD_DRIVER_INTERRUPT_MODE
+NEVERD_DRIVER_INTERRUPT_MODE(LevelSensitive, 0, "level_sensitive")
 NEVERD_DRIVER_INTERRUPT_MODE(Latched, 1, "latched")
+#endif
+
+#ifdef NEVERD_DRIVER_INTERRUPT_ACTION
+NEVERD_DRIVER_INTERRUPT_ACTION(Pulse, "pulse")
+NEVERD_DRIVER_INTERRUPT_ACTION(Assert, "assert")
+NEVERD_DRIVER_INTERRUPT_ACTION(Deassert, "deassert")
 #endif
 
 #ifdef NEVERD_DRIVER_INTERRUPT_SHARE
 NEVERD_DRIVER_INTERRUPT_SHARE(DeviceExclusive, 1, "device_exclusive")
+NEVERD_DRIVER_INTERRUPT_SHARE(Shared, 3, "shared")
 #endif
 
 #ifdef NEVERD_DRIVER_INTERRUPT_LIMIT
@@ -23,6 +31,7 @@ NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptLimit, 32)
 NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptEventsPerRequestLimit, 64)
 NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptEventLimit, 1024)
 NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptIDLimit, 64)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptDeliveryLimit, 4096)
 NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptMinimumLevel, 3)
 NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptMaximumLevel, 12)
 NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptRawLevelLimit, 65535)
@@ -55,4 +64,8 @@ NEVERD_DRIVER_INTERRUPT_FIELD(InterruptObject, "interrupt_object")
 NEVERD_DRIVER_INTERRUPT_FIELD(ReturnValue, "return_value")
 NEVERD_DRIVER_INTERRUPT_FIELD(Claimed, "claimed")
 NEVERD_DRIVER_INTERRUPT_FIELD(UndeliveredReason, "undelivered_reason")
+NEVERD_DRIVER_INTERRUPT_FIELD(Handlers, "handlers")
+NEVERD_DRIVER_INTERRUPT_FIELD(Action, "action")
+NEVERD_DRIVER_INTERRUPT_FIELD(RetriggerAfter100ns, "retrigger_after_100ns")
+NEVERD_DRIVER_INTERRUPT_FIELD(DeliveryIndex, "delivery_index")
 #endif

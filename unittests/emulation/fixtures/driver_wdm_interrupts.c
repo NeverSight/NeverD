@@ -5,12 +5,13 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// Original driver using genuine WDK interrupt declarations and resource lists.
-/// A declared external pulse invokes a real ISR; its DPC completes a pending IRP.
+/// A declared external pulse invokes a real ISR; its DPC completes a pending
+/// IRP.
 //===----------------------------------------------------------------------===//
 #include <intrin.h>
 #include <ntddk.h>
 
-#define OFFSET(Type, Field, Value)                                            \
+#define OFFSET(Type, Field, Value)                                             \
   _Static_assert(__builtin_offsetof(Type, Field) == Value, #Type "." #Field)
 _Static_assert(sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR) == 20 &&
                    _Alignof(CM_PARTIAL_RESOURCE_DESCRIPTOR) == 4 &&
@@ -74,6 +75,7 @@ typedef struct {
 static UCHAR Mode;
 static ULONG Units;
 static ULONG Live;
+static KSPIN_LOCK SharedInterruptLock;
 
 static KIRQL ReadGuestCR8(void) {
   ULONG64 Value;
@@ -135,7 +137,7 @@ static void ManualLock(INTERRUPT_EXTENSION *Extension, KIRQL Expected) {
   CheckIRQL(Extension->IRQL, 13);
   ++Extension->Manual;
   KeReleaseInterruptSpinLock(Extension->Interrupt,
-                            Mode == 'K' ? (KIRQL)(Old + 1) : Old);
+                             Mode == 'K' ? (KIRQL)(Old + 1) : Old);
   CheckIRQL(Expected, 14);
 }
 
@@ -174,7 +176,8 @@ static BOOLEAN Isr(PKINTERRUPT Interrupt, PVOID Context) {
   DbgPrint("WDM interrupts: ISR unit=%lu count=%lu irql=%lu\n", Extension->Unit,
            Extension->ISRs, Extension->LastIRQL);
   if (Mode == 'B')
-    KeWaitForSingleObject(&Extension->Event, Executive, KernelMode, FALSE, NULL);
+    KeWaitForSingleObject(&Extension->Event, Executive, KernelMode, FALSE,
+                          NULL);
   if (!Extension->Pending)
     return FALSE;
   if (Extension->Register)
@@ -184,7 +187,8 @@ static BOOLEAN Isr(PKINTERRUPT Interrupt, PVOID Context) {
   return TRUE;
 }
 
-static BOOLEAN MessageIsr(PKINTERRUPT Interrupt, PVOID Context, ULONG MessageID) {
+static BOOLEAN MessageIsr(PKINTERRUPT Interrupt, PVOID Context,
+                          ULONG MessageID) {
   UNREFERENCED_PARAMETER(Interrupt);
   UNREFERENCED_PARAMETER(Context);
   UNREFERENCED_PARAMETER(MessageID);
@@ -203,9 +207,10 @@ FalseISRBody(PKINTERRUPT Interrupt, PVOID Context) {
   return FALSE;
 }
 
-__attribute__((naked)) static BOOLEAN
-FalseIsr(PKINTERRUPT Interrupt __attribute__((unused)),
-         PVOID Context __attribute__((unused))) {
+__attribute__((naked)) static BOOLEAN FalseIsr(PKINTERRUPT Interrupt
+                                               __attribute__((unused)),
+                                               PVOID Context
+                                               __attribute__((unused))) {
   __asm__ volatile("subq $40, %rsp\n\t"
                    "callq FalseISRBody\n\t"
                    "addq $40, %rsp\n\t"
@@ -276,13 +281,17 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
       Check(Extension->Register == NULL && Descriptor->u.Memory.Length >= 4,
             53);
       Extension->MapLength = 4;
-      Extension->Register = MmMapIoSpace(Descriptor->u.Memory.Start, 4,
-                                        MmNonCached);
+      Extension->Register =
+          MmMapIoSpace(Descriptor->u.Memory.Start, 4, MmNonCached);
       Check(Extension->Register != NULL, 54);
     } else if (Descriptor->Type == CmResourceTypeInterrupt) {
       Check(Interrupt == NULL &&
-                Descriptor->ShareDisposition == CmResourceShareDeviceExclusive &&
-                Descriptor->Flags == CM_RESOURCE_INTERRUPT_LATCHED &&
+                Descriptor->ShareDisposition ==
+                    (Mode == 'R' ? CmResourceShareShared
+                                 : CmResourceShareDeviceExclusive) &&
+                Descriptor->Flags ==
+                    (Mode == 'D' ? CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE
+                                 : CM_RESOURCE_INTERRUPT_LATCHED) &&
                 Descriptor->u.Interrupt.Affinity == 1 &&
                 Descriptor->u.Interrupt.Vector !=
                     R->PartialDescriptors[I].u.Interrupt.Vector,
@@ -300,11 +309,11 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
   PKSERVICE_ROUTINE Service = Mode == 'F' ? FalseIsr : Isr;
   NTSTATUS Status;
   if (Mode == 'E' || Mode == 'G' || Mode == 'L' || Mode == 'Z' || Mode == 'M' ||
-      Mode == 'P') {
+      Mode == 'P' || Mode == 'R' || Mode == 'D') {
     IO_CONNECT_INTERRUPT_PARAMETERS Parameters = {0};
     if (Mode == 'M' || Mode == 'P') {
-      Parameters.Version = Mode == 'M' ? CONNECT_MESSAGE_BASED
-                                       : CONNECT_MESSAGE_BASED_PASSIVE;
+      Parameters.Version =
+          Mode == 'M' ? CONNECT_MESSAGE_BASED : CONNECT_MESSAGE_BASED_PASSIVE;
       Parameters.MessageBased.PhysicalDeviceObject = Extension->PDO;
       Parameters.MessageBased.ConnectionContext.InterruptObject =
           &Extension->Interrupt;
@@ -326,10 +335,15 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
       Parameters.FullySpecified.InterruptObject = &Extension->Interrupt;
       Parameters.FullySpecified.ServiceRoutine = Service;
       Parameters.FullySpecified.ServiceContext = Extension;
+      Parameters.FullySpecified.SpinLock =
+          Mode == 'R' ? &SharedInterruptLock : NULL;
+      Parameters.FullySpecified.ShareVector =
+          Interrupt->ShareDisposition == CmResourceShareShared;
       Parameters.FullySpecified.SynchronizeIrql = Extension->IRQL;
       Parameters.FullySpecified.Vector = Extension->Vector;
       Parameters.FullySpecified.Irql = Extension->IRQL;
-      Parameters.FullySpecified.InterruptMode = Latched;
+      Parameters.FullySpecified.InterruptMode =
+          Mode == 'D' ? LevelSensitive : Latched;
       Parameters.FullySpecified.ProcessorEnableMask = 1;
       Parameters.FullySpecified.Group = Mode == 'Z' ? 1 : 0;
     }
@@ -340,7 +354,8 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
         &Extension->Interrupt, Service, Extension, NULL,
         Mode == 'Q' ? Extension->Vector + 1 : Extension->Vector,
         Mode == 'J' ? (KIRQL)(Extension->IRQL + 1) : Extension->IRQL,
-        Extension->IRQL, Latched, Mode == 'V', Mode == 'A' ? 2 : 1, Mode == 'Y');
+        Extension->IRQL, Latched, Mode == 'V', Mode == 'A' ? 2 : 1,
+        Mode == 'Y');
   }
   CheckIRQL(PASSIVE_LEVEL, 59);
   if (!NT_SUCCESS(Status)) {
@@ -413,9 +428,9 @@ static NTSTATUS DispatchFile(PDEVICE_OBJECT Device, PIRP Irp) {
   if (!Extension->Started)
     return Complete(Irp, STATUS_DEVICE_NOT_READY, 0);
   if (Stack->MajorFunction == IRP_MJ_CREATE)
-    return Complete(Irp, Extension->RemovePending ? STATUS_DELETE_PENDING
-                                                 : STATUS_SUCCESS,
-                    0);
+    return Complete(
+        Irp, Extension->RemovePending ? STATUS_DELETE_PENDING : STATUS_SUCCESS,
+        0);
   if (Stack->Parameters.DeviceIoControl.IoControlCode != 0x222000 ||
       Stack->Parameters.DeviceIoControl.OutputBufferLength < 32)
     return Complete(Irp, STATUS_INVALID_PARAMETER, 0);
@@ -477,12 +492,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT Driver, PUNICODE_STRING Path) {
   Mode = 'S';
   if (Path->Length >= sizeof(WCHAR)) {
     WCHAR Last = Path->Buffer[Path->Length / sizeof(WCHAR) - 1];
-    if (Last == 'S' || Last == 'F' || Last == 'C' || Last == 'E' || Last == 'G' ||
-        Last == 'L' || Last == 'Q' || Last == 'J' || Last == 'A' || Last == 'N' ||
-        Last == 'T' || Last == 'B' || Last == 'H' || Last == 'K' || Last == 'O' ||
-        Last == 'Z' || Last == 'M' || Last == 'P' || Last == 'V' || Last == 'Y')
+    if (Last == 'S' || Last == 'F' || Last == 'C' || Last == 'E' ||
+        Last == 'G' || Last == 'L' || Last == 'Q' || Last == 'J' ||
+        Last == 'A' || Last == 'N' || Last == 'T' || Last == 'B' ||
+        Last == 'H' || Last == 'K' || Last == 'O' || Last == 'Z' ||
+        Last == 'M' || Last == 'P' || Last == 'V' || Last == 'Y' ||
+        Last == 'R' || Last == 'D')
       Mode = (UCHAR)Last;
   }
+  if (Mode == 'R')
+    KeInitializeSpinLock(&SharedInterruptLock);
   Driver->DriverExtension->AddDevice = AddDevice;
   Driver->DriverUnload = Unload;
   Driver->MajorFunction[IRP_MJ_PNP] = DispatchPnp;

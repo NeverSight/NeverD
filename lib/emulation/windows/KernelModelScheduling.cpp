@@ -651,6 +651,11 @@ llvm::Error KernelModel::prepareReleaseRanges(
 llvm::Error KernelModel::validateDispatcherStorage(uint64_t Address,
                                                    uint32_t Size,
                                                    bool IsWrite) const {
+  if (Address < profile::UserProbeLimit) {
+    auto Range = resolveUserMemoryRange(Address, Size, IsWrite);
+    if (!Range)
+      return Range.takeError();
+  }
   if (auto E = validateGuestAccessImpl(Address, Size, IsWrite, false))
     return E;
   for (const auto &[Base, Allocation] : Allocations)
@@ -675,6 +680,7 @@ llvm::Error KernelModel::retireStack(uint64_t Base, uint64_t Size) {
   if (auto E = prepareReleaseRange(Base, Size))
     return E;
   ExecutionThreadKeys.erase(Base);
+  InheritedExecutionContexts.erase(Base);
   FreedRanges.emplace(Base, Size);
   return llvm::Error::success();
 }

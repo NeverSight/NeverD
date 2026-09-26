@@ -29,6 +29,16 @@ llvm::Error physicalError(const llvm::Twine &Message) {
 uint64_t pageBase(uint64_t Address) {
   return Address & ~(physical::PageSize - 1);
 }
+
+bool validCacheType(KernelPhysicalMemory::CacheType Cache) {
+  switch (Cache) {
+  case KernelPhysicalMemory::CacheType::Cached:
+  case KernelPhysicalMemory::CacheType::NonCached:
+  case KernelPhysicalMemory::CacheType::WriteCombined:
+    return true;
+  }
+  return false;
+}
 } // namespace
 
 const KernelPhysicalMemory::Region *
@@ -39,7 +49,9 @@ KernelPhysicalMemory::find(uint64_t Owner) const {
 
 llvm::Expected<std::vector<uint64_t>>
 KernelPhysicalMemory::planRegion(uint64_t Owner, uint64_t Backing,
-                                 uint64_t Size) const {
+                                 uint64_t Size, CacheType Cache) const {
+  if (!validCacheType(Cache))
+    return physicalError("physical RAM has an unsupported cache attribute");
   if (!Owner || UsedOwners.count(Owner))
     return physicalError("physical RAM owner is zero, duplicate or retired");
   if (!Size || Size > UINT64_MAX - Backing)
@@ -62,6 +74,10 @@ KernelPhysicalMemory::planRegion(uint64_t Owner, uint64_t Backing,
   const uint64_t Last = pageBase(Backing + Size - 1);
   const uint64_t Limit = physical::PhysicalSize / physical::PageSize;
   for (uint64_t Page = pageBase(Backing);; Page += physical::PageSize) {
+    const auto Existing = Pages.find(Page);
+    if (Existing != Pages.end() && Existing->second.Cache != Cache)
+      return physicalError("physical RAM cache attribute conflicts with its "
+                           "existing page");
     if (!Pages.count(Page)) {
       if (Pages.size() + NewPages.size() >= Limit)
         return llvm::make_error<PhysicalMemoryLimitError>(
@@ -76,8 +92,9 @@ KernelPhysicalMemory::planRegion(uint64_t Owner, uint64_t Backing,
 
 llvm::Error KernelPhysicalMemory::canRegisterRegion(uint64_t Owner,
                                                     uint64_t Backing,
-                                                    uint64_t Size) const {
-  auto Plan = planRegion(Owner, Backing, Size);
+                                                    uint64_t Size,
+                                                    CacheType Cache) const {
+  auto Plan = planRegion(Owner, Backing, Size, Cache);
   if (!Plan)
     return Plan.takeError();
   return llvm::Error::success();
@@ -85,17 +102,40 @@ llvm::Error KernelPhysicalMemory::canRegisterRegion(uint64_t Owner,
 
 llvm::Error KernelPhysicalMemory::registerRegion(uint64_t Owner,
                                                  uint64_t Backing,
-                                                 uint64_t Size) {
-  auto Plan = planRegion(Owner, Backing, Size);
+                                                 uint64_t Size,
+                                                 CacheType Cache) {
+  auto Plan = planRegion(Owner, Backing, Size, Cache);
   if (!Plan)
     return Plan.takeError();
   for (uint64_t Page : *Plan)
-    Pages.emplace(Page,
-                  physical::PhysicalBase + Pages.size() * physical::PageSize);
+    Pages.emplace(Page, PageRecord{physical::PhysicalBase +
+                                       Pages.size() * physical::PageSize,
+                                   Cache});
   Regions.emplace(Owner, Region{Backing, Size});
   OwnersByAddress.emplace(Backing, Owner);
   UsedOwners.insert(Owner);
   return llvm::Error::success();
+}
+
+llvm::Expected<KernelPhysicalMemory::CacheType>
+KernelPhysicalMemory::cacheTypeForMapping(uint64_t Backing, uint64_t Size,
+                                          CacheType Requested) const {
+  if (!validCacheType(Requested))
+    return physicalError("physical RAM mapping has an unsupported cache "
+                         "attribute");
+  auto Owner = ownerForRange(Backing, Size);
+  if (!Owner)
+    return Owner.takeError();
+  const auto First = Pages.at(pageBase(Backing)).Cache;
+  const uint64_t Last = pageBase(Backing + Size - 1);
+  for (uint64_t Page = pageBase(Backing);; Page += physical::PageSize) {
+    if (Pages.at(Page).Cache != First)
+      return physicalError("physical RAM owner has inconsistent page cache "
+                           "attributes");
+    if (Page == Last)
+      break;
+  }
+  return First;
 }
 
 llvm::Error KernelPhysicalMemory::canRetire(uint64_t Owner,
@@ -197,7 +237,7 @@ KernelPhysicalMemory::describe(uint64_t Owner, uint64_t Offset,
     const uint64_t Page = pageBase(Address);
     const uint64_t PageOffset = Address - Page;
     const uint64_t Count = std::min(Length, physical::PageSize - PageOffset);
-    Result.push_back({Pages.at(Page) + PageOffset, Address, Count});
+    Result.push_back({Pages.at(Page).Physical + PageOffset, Address, Count});
     Address += Count;
     Length -= Count;
   }
@@ -314,6 +354,6 @@ KernelPhysicalMemory::physicalAddress(uint64_t Backing) const {
   if (!Owner)
     return Owner.takeError();
   const uint64_t Page = pageBase(Backing);
-  return Pages.at(Page) + Backing - Page;
+  return Pages.at(Page).Physical + Backing - Page;
 }
 } // namespace neverd::emulation

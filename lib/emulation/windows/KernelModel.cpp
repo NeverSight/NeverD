@@ -542,8 +542,8 @@ llvm::Expected<uint64_t> KernelModel::call(
     return modelError(Name +
                       " requires IRQL <= " + std::to_string(*MaximumIRQL));
   }
-  if (!ProcessAttachments.empty() &&
-      ProcessAttachments.back().Execution == CurrentExecution &&
+  if (auto Context = executionProcessContext();
+      Context && Context->Attached &&
       Kind != KernelAPIKind::KeStackAttachProcess &&
       Kind != KernelAPIKind::KeUnstackDetachProcess &&
       Kind != KernelAPIKind::IoGetCurrentProcess &&
@@ -583,18 +583,13 @@ llvm::Expected<uint64_t> KernelModel::call(
   case KernelAPIKind::ProbeForWrite:
     return probeUserBuffer(A[0], A[1], uint32_t(A[2]),
                            Kind == KernelAPIKind::ProbeForWrite);
-  case KernelAPIKind::ExGetPreviousMode:
-    return UserRequestContext && CurrentExecution == profile::StackBase
-               ? uint64_t(UserMode)
-               : uint64_t(KernelMode);
+  case KernelAPIKind::ExGetPreviousMode: {
+    auto Context = executionProcessContext();
+    return uint64_t(Context ? Context->PreviousMode : KernelMode);
+  }
   case KernelAPIKind::PsGetCurrentProcessId:
-    if (CurrentExecution == profile::StackBase)
-      return uint64_t(UserRequestContext ? CurrentUserProcessID : 4);
-    if (Scheduler.active() &&
-        (Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem ||
-         Scheduler.active()->Kind ==
-             KernelScheduler::CallbackKind::SystemThread))
-      return uint64_t(4);
+    if (auto Context = executionProcessContext())
+      return uint64_t(Context->CreatingProcessID);
     return modelError("PsGetCurrentProcessId requires a modeled foreground "
                       "or system thread");
   case KernelAPIKind::PsCreateSystemThread:
@@ -755,24 +750,34 @@ llvm::Expected<uint64_t> KernelModel::call(
     return 0;
   }
   if (Kind == KernelAPIKind::MmMapLockedPagesSpecifyCache) {
-    if (static_cast<uint8_t>(A[1]) == UserMode) {
-      if (static_cast<uint32_t>(A[2]) != MmCached)
-        return modelError("user MDL mapping supports cached RAM pages");
-      return mapUserMDL(A[0], A[3], static_cast<uint32_t>(A[5]));
+    KernelPhysicalMemory::CacheType Cache;
+    switch (static_cast<uint32_t>(A[2])) {
+    case MmCached:
+      Cache = KernelPhysicalMemory::CacheType::Cached;
+      break;
+    case MmNonCached:
+      Cache = KernelPhysicalMemory::CacheType::NonCached;
+      break;
+    case MmWriteCombined:
+      Cache = KernelPhysicalMemory::CacheType::WriteCombined;
+      break;
+    default:
+      return modelError("MDL mapping has an unsupported cache type");
     }
-    if (static_cast<uint8_t>(A[1]) != KernelMode ||
-        static_cast<uint32_t>(A[2]) != MmCached || A[3] ||
+    if (static_cast<uint8_t>(A[1]) == UserMode)
+      return mapUserMDL(A[0], A[3], static_cast<uint32_t>(A[5]), Cache);
+    if (static_cast<uint8_t>(A[1]) != KernelMode || A[3] ||
         static_cast<uint8_t>(A[4]))
-      return modelError(
-          "MDL mapping requires KernelMode, MmCached, no requested "
-          "address and no bugcheck");
-    return mapLockedPages(A[0], static_cast<uint32_t>(A[5]), false);
+      return modelError("MDL mapping requires KernelMode, no requested "
+                        "address and no bugcheck");
+    return mapLockedPages(A[0], static_cast<uint32_t>(A[5]), false, Cache);
   }
   if (Kind == KernelAPIKind::MmGetSystemAddressForMdlSafe) {
     return mapLockedPages(A[0], static_cast<uint32_t>(A[1]), true);
   }
   if (Kind == KernelAPIKind::MmUnmapLockedPages) {
-    if (UserMdlViews.contains(A[0])) {
+    if (A[0] >= profile::UserMappedAliasBase &&
+        A[0] - profile::UserMappedAliasBase < profile::UserMappedAliasSize) {
       if (auto E = unmapUserMDL(A[0], A[1]))
         return E;
       return 0;
@@ -1295,10 +1300,61 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   return llvm::Error::success();
 }
 
+std::optional<KernelModel::ExecutionProcessContext>
+KernelModel::executionProcessContext() const {
+  const bool Attached = !ProcessAttachments.empty() &&
+                        ProcessAttachments.back().Execution == CurrentExecution;
+  if (auto It = InheritedExecutionContexts.find(CurrentExecution);
+      It != InheritedExecutionContexts.end() &&
+      It->second.ThreadKey == CurrentThreadKey) {
+    auto Context = It->second.Process;
+    if (Context && Attached) {
+      Context->ProcessID = CurrentUserProcessID;
+      Context->Attached = true;
+    }
+    return Context;
+  }
+  if (CurrentExecution == profile::StackBase) {
+    const uint32_t Process =
+        UserRequestContext ? CurrentUserProcessID : SystemProcessID;
+    return ExecutionProcessContext{
+        Process, Process, uint8_t(UserRequestContext ? UserMode : KernelMode),
+        Attached};
+  }
+  if (Scheduler.active() &&
+      (Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem ||
+       Scheduler.active()->Kind == KernelScheduler::CallbackKind::SystemThread))
+    return ExecutionProcessContext{Attached ? CurrentUserProcessID
+                                            : uint32_t(SystemProcessID),
+                                   SystemProcessID, KernelMode, Attached};
+  return std::nullopt;
+}
+
+llvm::Error KernelModel::inheritExecutionContext(uint64_t Child,
+                                                 uint64_t Parent) {
+  if (!Child || Child == Parent || Parent != CurrentExecution ||
+      ExecutionThreadKeys.contains(Child) ||
+      InheritedExecutionContexts.contains(Child))
+    return modelError("exception context inheritance requires a fresh "
+                      "child of the active execution");
+  InheritedExecutionContexts.emplace(
+      Child,
+      InheritedExecutionContext{CurrentThreadKey, CurrentUserProcessID,
+                                canCatchUserAccess(profile::UserArenaBase, 1),
+                                executionProcessContext()});
+  return llvm::Error::success();
+}
+
 bool KernelModel::canCatchUserAccess(uint64_t Address, uint64_t Size) const {
+  const auto Inherited = InheritedExecutionContexts.find(CurrentExecution);
+  const bool InheritedPermission =
+      Inherited != InheritedExecutionContexts.end() &&
+      Inherited->second.ThreadKey == CurrentThreadKey &&
+      Inherited->second.UserProcessID == CurrentUserProcessID &&
+      Inherited->second.UserMemoryAuthority;
   return Size && Address < profile::UserProbeLimit &&
          Size <= profile::UserProbeLimit - Address && UserRequestContext &&
-         (CurrentExecution == profile::StackBase ||
+         (CurrentExecution == profile::StackBase || InheritedPermission ||
           (!ProcessAttachments.empty() &&
            ProcessAttachments.back().Execution == CurrentExecution)) &&
          CurrentIRQL <= APCLevel;

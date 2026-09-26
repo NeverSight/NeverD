@@ -126,6 +126,102 @@ TEST(DriverInterruptScenario, RequiresAllDescriptorAndEventFacts) {
   invalidJSON(scenario(InterruptJSON, "null"));
 }
 
+TEST(DriverInterruptScenario, SharedVectorsRequireMatchingTranslatedLineFacts) {
+  auto Options = options();
+  Options.PnpDevices.push_back(device("unit-1"));
+  for (auto &Device : Options.PnpDevices)
+    Device.Interrupts.front().Share = DriverInterruptShare::Shared;
+  validNative(Options);
+  auto &Peer = Options.PnpDevices.back().Interrupts.front();
+  Peer.TranslatedLevel += 1;
+  invalidNative(Options, "same shared line");
+  Peer.TranslatedLevel -= 1;
+  Peer.Share = DriverInterruptShare::DeviceExclusive;
+  invalidNative(Options, "same shared line");
+  auto Value = llvm::json::parse(InterruptJSON);
+  ASSERT_TRUE(bool(Value));
+  (*Value->getAsObject())["share"] = "shared";
+  auto Parsed = driverOptionsFromScenarioJSON(
+      scenario(llvm::formatv("{0}", *Value).str()));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  EXPECT_EQ(Parsed->PnpDevices.front().Interrupts.front().Share,
+            DriverInterruptShare::Shared);
+}
+
+TEST(DriverInterruptScenario,
+     LevelSourcesRequireExplicitPeriodsAndStateActions) {
+  auto Options = options();
+  auto &Resource = Options.PnpDevices.front().Interrupts.front();
+  auto &Event = Options.Requests.front().InterruptEvents.front();
+  Resource.Mode = DriverInterruptMode::LevelSensitive;
+  Event.Action = DriverInterruptAction::Assert;
+  invalidNative(Options, "retrigger_after_100ns");
+  Resource.RetriggerAfter100ns = 0;
+  invalidNative(Options, "retrigger_after_100ns");
+  Resource.RetriggerAfter100ns = uint64_t(INT64_MAX) + 1;
+  invalidNative(Options, "retrigger_after_100ns");
+  Resource.RetriggerAfter100ns = 3;
+  validNative(Options);
+  Event.Action = DriverInterruptAction::Deassert;
+  validNative(Options);
+  Event.Action = DriverInterruptAction::Pulse;
+  invalidNative(Options, "assert/deassert");
+  Event.Action = static_cast<DriverInterruptAction>(0xff);
+  invalidNative(Options, "action");
+  Event.Action = DriverInterruptAction::Assert;
+  Resource.Mode = DriverInterruptMode::Latched;
+  invalidNative(Options, "cannot specify retrigger_after_100ns");
+  Resource.RetriggerAfter100ns.reset();
+  invalidNative(Options, "pulse");
+
+  auto IRQ = llvm::json::parse(InterruptJSON);
+  auto Input = llvm::json::parse(EventJSON);
+  ASSERT_TRUE(bool(IRQ));
+  ASSERT_TRUE(bool(Input));
+  (*IRQ->getAsObject())["mode"] = "level_sensitive";
+  (*IRQ->getAsObject())["retrigger_after_100ns"] = "0x3";
+  (*Input->getAsObject())["action"] = "assert";
+  auto Parse = [&] {
+    return scenario(llvm::formatv("{0}", *IRQ).str(),
+                    llvm::formatv("{0}", *Input).str());
+  };
+  auto Parsed = driverOptionsFromScenarioJSON(Parse());
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  EXPECT_EQ(Parsed->PnpDevices.front().Interrupts.front().RetriggerAfter100ns,
+            3u);
+  EXPECT_EQ(Parsed->Requests.front().InterruptEvents.front().Action,
+            DriverInterruptAction::Assert);
+  for (const char *Bad : {"null", "true", "-1", "0", "[]", "1.5", "\"3\""}) {
+    auto Value = llvm::json::parse(Bad);
+    ASSERT_TRUE(bool(Value));
+    (*IRQ->getAsObject())["retrigger_after_100ns"] = std::move(*Value);
+    invalidJSON(Parse());
+  }
+  (*IRQ->getAsObject())["retrigger_after_100ns"] = 3;
+  for (const char *Bad : {"null", "true", "0", "[]", "\"ack\""}) {
+    auto Value = llvm::json::parse(Bad);
+    ASSERT_TRUE(bool(Value));
+    (*Input->getAsObject())["action"] = std::move(*Value);
+    invalidJSON(Parse(), "action");
+  }
+}
+
+TEST(DriverInterruptScenario, SharedLevelSourcesRequireOneSamplingPeriod) {
+  auto Options = options();
+  Options.PnpDevices.push_back(device("unit-1"));
+  for (auto &Device : Options.PnpDevices) {
+    auto &Resource = Device.Interrupts.front();
+    Resource.Mode = DriverInterruptMode::LevelSensitive;
+    Resource.Share = DriverInterruptShare::Shared;
+    Resource.RetriggerAfter100ns = 3;
+  }
+  Options.Requests.front().InterruptEvents.front().Action =
+      DriverInterruptAction::Assert;
+  validNative(Options);
+  Options.PnpDevices.back().Interrupts.front().RetriggerAfter100ns = 4;
+  invalidNative(Options, "same shared line");
+}
+
 TEST(DriverInterruptScenario, RejectsWrongTypesUnknownFactsAndDuplicates) {
   for (const char *Field :
        {"raw_vector", "raw_level", "raw_affinity", "translated_vector",
@@ -235,10 +331,10 @@ TEST(DriverInterruptScenario,
     invalidNative(Options, "CPU zero");
     IRQ.TranslatedAffinity = 1;
   }
-  IRQ.Mode = static_cast<DriverInterruptMode>(0);
+  IRQ.Mode = static_cast<DriverInterruptMode>(2);
   invalidNative(Options, "mode");
   IRQ.Mode = DriverInterruptMode::Latched;
-  IRQ.Share = static_cast<DriverInterruptShare>(3);
+  IRQ.Share = static_cast<DriverInterruptShare>(4);
   invalidNative(Options, "share");
   for (const char *Field : {"mode", "share"}) {
     auto Value = llvm::json::parse(InterruptJSON);
@@ -428,6 +524,69 @@ DriverResult completedScenario() {
   Interrupt.ReturnValue = 0;
   Result.Interrupts.push_back(Interrupt);
   return Result;
+}
+
+TEST(DriverInterruptScenario, SharedHandlerReportPreservesIndividualBooleans) {
+  auto Result = completedScenario();
+  auto &Event = Result.Interrupts.front();
+  Event.ReturnValue = 0x80;
+  Event.Handlers = {{0x12340000, 9, 9, 0x80}, {0x12340010, 9, 9, 0}};
+  auto Report = llvm::json::parse(driverResultJSON(Result));
+  ASSERT_TRUE(bool(Report)) << llvm::toString(Report.takeError());
+  const auto *Item =
+      Report->getAsObject()->getArray("interrupts")->front().getAsObject();
+  ASSERT_TRUE(Item);
+  EXPECT_EQ(Item->getBoolean("claimed"), true);
+  const auto *Handlers = Item->getArray("handlers");
+  ASSERT_TRUE(Handlers);
+  ASSERT_EQ(Handlers->size(), 2u);
+  EXPECT_EQ((*Handlers)[0].getAsObject()->getInteger("delivery_index"), 0);
+  EXPECT_EQ((*Handlers)[0].getAsObject()->getInteger("return_value"), 0x80);
+  EXPECT_EQ((*Handlers)[0].getAsObject()->getBoolean("claimed"), true);
+  EXPECT_EQ((*Handlers)[1].getAsObject()->getInteger("return_value"), 0);
+  EXPECT_EQ((*Handlers)[1].getAsObject()->getBoolean("claimed"), false);
+}
+
+TEST(DriverInterruptScenario,
+     AppliedLevelStateReportsSuccessWithoutInventingAnIsr) {
+  auto Result = completedScenario();
+  auto &Resource = Result.Configuration.PnpDevices.front().Interrupts.front();
+  Resource.Mode = DriverInterruptMode::LevelSensitive;
+  Resource.RetriggerAfter100ns = 3;
+  auto &Configured =
+      Result.Configuration.Requests.front().InterruptEvents.front();
+  auto &Event = Result.Interrupts.front();
+  Configured.Action = Event.Action = DriverInterruptAction::Deassert;
+  Event.DeliveredAt100ns.reset();
+  Event.ReturnedAt100ns.reset();
+  Event.InterruptObject.reset();
+  Event.ReturnValue.reset();
+  auto Report = llvm::json::parse(driverResultJSON(Result));
+  ASSERT_TRUE(bool(Report)) << llvm::toString(Report.takeError());
+  const auto *Root = Report->getAsObject();
+  EXPECT_EQ(Root->getBoolean("scenario_success"), true);
+  const auto *Configuration = Root->getObject("configuration");
+  const auto *Device =
+      Configuration->getArray("pnp_devices")->front().getAsObject();
+  EXPECT_EQ(Device->getArray("interrupts")
+                ->front()
+                .getAsObject()
+                ->getInteger("retrigger_after_100ns"),
+            3);
+  EXPECT_EQ(Configuration->getArray("interrupt_events")
+                ->front()
+                .getAsObject()
+                ->getString("action"),
+            "deassert");
+  const auto *Observed = Root->getArray("interrupts")->front().getAsObject();
+  EXPECT_EQ(Observed->getString("action"), "deassert");
+  EXPECT_TRUE(Observed->get("delivered_at_100ns")->getAsNull());
+  EXPECT_TRUE(Observed->get("claimed")->getAsNull());
+  EXPECT_TRUE(Observed->getArray("handlers")->empty());
+  Event.OccurredAt100ns.reset();
+  Report = llvm::json::parse(driverResultJSON(Result));
+  ASSERT_TRUE(bool(Report));
+  EXPECT_EQ(Report->getAsObject()->getBoolean("scenario_success"), false);
 }
 
 TEST(DriverInterruptScenario, UnclaimedBooleanIsNotAnNtStatusFailure) {
