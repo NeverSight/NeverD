@@ -577,7 +577,9 @@ void LLVMCWriter::markSinglePrintedUseCalls(llvm::Function &Fn) {
               if (Blocked)
                 return;
               const auto *I = llvm::dyn_cast<llvm::Instruction>(U);
-              if (!I || llvm::isa<llvm::PHINode, llvm::InvokeInst>(I)) {
+              if (!I ||
+                  llvm::isa<llvm::PHINode, llvm::InvokeInst, llvm::SelectInst>(
+                      I)) {
                 Blocked = true;
                 return;
               }
@@ -2757,6 +2759,10 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+        if (!LI->isSimple()) {
+          ValueTexts[LI] = getName(LI);
+          continue;
+        }
         const uint16_t Size = llvmAccessSize(LI->getType());
         if (auto Acc = typedRecordAccess(LI->getPointerOperand(), Size)) {
           ValueTypes[LI] = Acc->Type;
@@ -2792,7 +2798,11 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
       if (llvm::isa<llvm::CastInst, llvm::FreezeInst>(&Inst)) {
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty())
-          ValueTexts[&Inst] = Text->second;
+          ValueTexts[&Inst] =
+              llvm::isa<llvm::SExtInst>(&Inst)
+                  ? castStr(Inst.getOpcode(), Text->second,
+                            Inst.getOperand(0)->getType(), Inst.getType())
+                  : Text->second;
         continue;
       }
       if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
@@ -2889,7 +2899,7 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
         auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst);
-        if (!LI)
+        if (!LI || !LI->isSimple())
           continue;
         const uint16_t Size = llvmAccessSize(LI->getType());
         if (auto Acc = typedRecordAccess(LI->getPointerOperand(), Size)) {
@@ -2934,7 +2944,11 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         continue;
       if (auto Text = ValueTexts.find(Inst.getOperand(0));
           Text != ValueTexts.end() && !Text->second.empty())
-        ValueTexts[&Inst] = Text->second;
+        ValueTexts[&Inst] =
+            llvm::isa<llvm::SExtInst>(&Inst)
+                ? castStr(Inst.getOpcode(), Text->second,
+                          Inst.getOperand(0)->getType(), Inst.getType())
+                : Text->second;
     }
   }
 
@@ -3177,13 +3191,20 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
     for (auto &Inst : BB) {
       if (Inst.getType()->isVoidTy())
         continue;
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+        if (!Load->isSimple())
+          continue;
       if (auto Text = ValueTexts.find(&Inst);
           Text != ValueTexts.end() && !Text->second.empty())
         Mark(Inst);
       if (llvm::isa<llvm::CastInst, llvm::FreezeInst>(&Inst)) {
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty()) {
-          ValueTexts[&Inst] = Text->second;
+          ValueTexts[&Inst] =
+              llvm::isa<llvm::SExtInst>(&Inst)
+                  ? castStr(Inst.getOpcode(), Text->second,
+                            Inst.getOperand(0)->getType(), Inst.getType())
+                  : Text->second;
           Mark(Inst);
         }
       }
@@ -3238,8 +3259,13 @@ std::string LLVMCWriter::composedReprintText(const llvm::Value *V) {
         return "this";
       return {};
     }
-    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Cur))
-      return Rec(Cast->getOperand(0));
+    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Cur)) {
+      std::string Text = Rec(Cast->getOperand(0));
+      if (!Text.empty() && llvm::isa<llvm::SExtInst>(Cast))
+        return castStr(Cast->getOpcode(), Text, Cast->getSrcTy(),
+                       Cast->getDestTy());
+      return Text;
+    }
     if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Cur))
       return Rec(Fr->getOperand(0));
     if (const auto *Phi = llvm::dyn_cast<llvm::PHINode>(Cur)) {
@@ -3835,7 +3861,7 @@ bool LLVMCWriter::isDeadImmediateInit(const llvm::AllocaInst *Slot,
 
 bool LLVMCWriter::storedTypedMemberLoad(const llvm::Value *Stored) const {
   const llvm::Value *Src = Stored;
-  std::set<const llvm::Value *> Seen;
+  llvm::SmallPtrSet<const llvm::Value *, 32> Seen;
   while (Src && Seen.insert(Src).second) {
     if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Src)) {
       Src = Fr->getOperand(0);
@@ -4126,6 +4152,11 @@ bool LLVMCWriter::allocaStoreIsHidden(const llvm::AllocaInst *Slot,
 }
 
 bool LLVMCWriter::instructionIsPrinted(const llvm::Instruction &Inst) {
+  // An unused volatile/atomic result does not make its read unobservable.
+  // Keep this in the same predicate used to eliminate passthrough blocks.
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+    if (!Load->isSimple())
+      return true;
   if (llvm::isa<llvm::DbgInfoIntrinsic, llvm::AllocaInst, llvm::PHINode,
                 llvm::CatchPadInst, llvm::CleanupPadInst, llvm::CatchSwitchInst>(
           &Inst))
@@ -7914,6 +7945,9 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
       if (llvm::isa<llvm::CatchSwitchInst, llvm::CatchPadInst,
                     llvm::CleanupPadInst>(&Inst))
         continue;
+      if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst))
+        if (classifyX86RepStos(Opts.TheArch, *Call))
+          continue;
       if (Analysis.IntrinsicStructVals.count(&Inst))
         continue;
       if (auto *EV = llvm::dyn_cast<llvm::ExtractValueInst>(&Inst))
@@ -7938,6 +7972,10 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
           continue;
       }
       if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+        if (!LI->isSimple()) {
+          NeedsDecl.insert(LI);
+          continue;
+        }
         if (isImportCalleeOnlyLoad(LI) || computedAllocaLoadIsForwarded(LI) ||
             typedRecordAccess(LI->getPointerOperand(),
                               llvmAccessSize(LI->getType())) ||
@@ -8019,7 +8057,8 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
     for (auto &Inst : BB) {
       if (auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst)) {
         const bool RawFrame =
-            !Analysis.RawFrameLocations.empty() && AI == SyntheticFrame;
+            Analysis.RawFrameAllocas.count(AI) ||
+            (!Analysis.RawFrameLocations.empty() && AI == SyntheticFrame);
         if (Analysis.DeadFrameAllocas.count(AI) && !RawFrame)
           continue;
         if (!RawFrame && !allocaAddressTaken(AI) &&

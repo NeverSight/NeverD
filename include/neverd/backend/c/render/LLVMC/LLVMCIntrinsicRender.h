@@ -22,11 +22,13 @@
 #include "llvm/Support/AtomicOrdering.h"
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace llvm {
 class LoadInst;
+class CallInst;
 class Value;
 } // namespace llvm
 
@@ -41,6 +43,17 @@ struct InlineAsmRender {
   std::string Code;
   bool SetIntrinsics = false;
 };
+
+// A deliberately narrow contract for the unused-output STOS assembly emitted
+// by MedLLVMX86ValueEmitter. The address/count register updates are already
+// represented separately in the lifted IR.
+struct X86RepStos {
+  enum Direction { Forward, Backward, Dynamic } Dir;
+  unsigned ElementBytes;
+  unsigned AddressBits;
+};
+std::optional<X86RepStos> classifyX86RepStos(Arch TheArch,
+                                             const llvm::CallInst &Call);
 
 //--- Arch-specific (LLVMCIntrinsicRenderX86.cpp) ---
 const char *lookupX86AsmToC(const char *Mnem);

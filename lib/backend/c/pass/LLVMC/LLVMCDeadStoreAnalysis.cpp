@@ -78,6 +78,7 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
   State.DeadFrameAllocas.clear();
   State.DeadFrameStores.clear();
   State.RawFrameLocations.clear();
+  State.RawFrameAllocas.clear();
 
   const llvm::Module *Mod = Fn.getParent();
   if (!Mod)
@@ -152,9 +153,21 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
         NoteLive(CX->getPointerOperand(), /*ExpandRecord=*/false, nullptr,
                  DL.getTypeStoreSize(CX->getCompareOperand()->getType())
                      .getFixedValue());
-      if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(&Inst))
-        for (const llvm::Use &U : CB->args())
+      if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(&Inst)) {
+        for (const llvm::Use &U : CB->args()) {
           NoteLive(U.get(), /*ExpandRecord=*/true, CB);
+          if (CB->isInlineAsm() && CB->mayReadOrWriteMemory()) {
+            // A memory asm operand is the start of a possibly dynamic span,
+            // not a scalar home. Splitting its allocation would detach indexed
+            // accesses and can turn REP STOS into an out-of-bounds scalar
+            // write.
+            const FrameAliases Aliases =
+                peelSyntheticFrames(U.get(), Stores, DL);
+            State.RawFrameAllocas.insert(Aliases.Frames.begin(),
+                                         Aliases.Frames.end());
+          }
+        }
+      }
     }
   }
   bool Grew = true;
@@ -195,13 +208,13 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
     }
   }
 
-  std::set<const llvm::AllocaInst *> EscapedFrames;
+  std::set<const llvm::AllocaInst *> EscapedFrames = State.RawFrameAllocas;
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst);
       if (!isSyntheticFrameAlloca(AI))
         continue;
-      if (UncertainFrameRead)
+      if (UncertainFrameRead || State.RawFrameAllocas.count(AI))
         continue;
 
       bool HasLoad = false;

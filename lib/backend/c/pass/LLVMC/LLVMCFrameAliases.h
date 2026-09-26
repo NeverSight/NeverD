@@ -107,12 +107,28 @@ inline FrameAliases peelSyntheticFrames(const llvm::Value *V,
           Walk(Select->getFalseValue(), Off, false, Seen);
           return;
         }
-        if (const auto *I2P = llvm::dyn_cast<llvm::IntToPtrInst>(Cur))
-          return Walk(I2P->getOperand(0), Off, false, Seen);
-        if (const auto *P2I = llvm::dyn_cast<llvm::PtrToIntInst>(Cur))
-          return Walk(P2I->getOperand(0), Off, false, Seen);
-        if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Cur))
-          return Walk(Cast->getOperand(0), Off, false, Seen);
+        if (const auto *I2P = llvm::dyn_cast<llvm::IntToPtrInst>(Cur)) {
+          if (I2P->getOperand(0)->getType()->getIntegerBitWidth() ==
+              DL.getPointerTypeSizeInBits(I2P->getType()))
+            return Walk(I2P->getOperand(0), Off, false, Seen);
+          Result.Incomplete = true;
+          return;
+        }
+        if (const auto *P2I = llvm::dyn_cast<llvm::PtrToIntInst>(Cur)) {
+          if (P2I->getType()->getIntegerBitWidth() >=
+              DL.getPointerTypeSizeInBits(P2I->getOperand(0)->getType()))
+            return Walk(P2I->getOperand(0), Off, false, Seen);
+          Result.Incomplete = true;
+          return;
+        }
+        if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Cur)) {
+          if (llvm::isa<llvm::BitCastInst, llvm::ZExtInst>(Cast))
+            return Walk(Cast->getOperand(0), Off, false, Seen);
+          // Truncation, sign extension and address-space conversion do not
+          // establish that all address bits still name this allocation.
+          Result.Incomplete = true;
+          return;
+        }
         if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Cur))
           return Walk(Fr->getOperand(0), Off, false, Seen);
         auto Adjust = [&](const llvm::Value *Base, int64_t Delta,

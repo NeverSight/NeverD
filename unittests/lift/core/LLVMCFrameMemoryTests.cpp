@@ -142,6 +142,32 @@ TEST(LLVMCFrameMemory, StraightLineStoreStillForwards) {
   EXPECT_EQ(State.DeadFrameStores.count(Store), 1u);
 }
 
+TEST(LLVMCFrameMemory, NarrowedAddressCannotForwardFromOriginalFrame) {
+  for (bool TruncatePointer : {false, true}) {
+    SCOPED_TRACE(TruncatePointer);
+    FrameFixture F;
+    auto *Ptr = F.address(F.Base, 8);
+    auto *Store = F.B.CreateStore(F.B.getInt32(17), Ptr);
+    llvm::Value *Narrow =
+        TruncatePointer
+            ? F.B.CreatePtrToInt(Ptr, F.B.getInt32Ty())
+            : F.B.CreateTrunc(F.B.CreatePtrToInt(Ptr, F.B.getInt64Ty()),
+                              F.B.getInt32Ty());
+    auto *Wrapped = F.B.CreateIntToPtr(F.B.CreateZExt(Narrow, F.B.getInt64Ty()),
+                                       F.B.getPtrTy());
+    auto *Load = F.B.CreateLoad(F.B.getInt32Ty(), Wrapped);
+    F.B.CreateRet(Load);
+    LLVMCAnalysisState State;
+    analyzeDeadFrameStores(State, *F.Fn);
+    analyzeStoreForwarding(State, *F.Fn);
+    // Removing the upper address bits can select unrelated memory. It does
+    // not prove an exact read from the original frame allocation.
+    EXPECT_EQ(State.ForwardedLoads.count(Load), 0u);
+    EXPECT_EQ(State.DeadFrameStores.count(Store), 0u);
+    EXPECT_EQ(State.DeadFrameAllocas.count(F.Frame), 0u);
+  }
+}
+
 TEST(LLVMCFrameMemory, PartialOverlappingReadKeepsProducer) {
   FrameFixture F;
   auto *Store = F.B.CreateStore(F.B.getInt64(0x1234567800000011ULL),

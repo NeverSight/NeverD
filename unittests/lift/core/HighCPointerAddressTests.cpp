@@ -21577,7 +21577,7 @@ TEST(LLVMCPointerAddresses, OmitsReturnAfterThrowDespiteJunkAssigns) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("throw "), std::string::npos) << Source;
+  EXPECT_NE(Source.find("throw;"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("return"), std::string::npos) << Source;
 }
 
@@ -21609,7 +21609,7 @@ TEST(LLVMCPointerAddresses, CxxThrowCallPrintsThrowWithoutDebugTrap) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("throw "), std::string::npos) << Source;
+  EXPECT_NE(Source.find("throw;"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
 }
 
@@ -31519,6 +31519,81 @@ TEST(HighCPointerAddresses, FuncLoadCxxThrowThunkPrintsThrowWithoutDebugBreak) {
   EXPECT_EQ(Source.find("sub_140001020"), std::string::npos) << Source;
 }
 
+TEST(LLVMCPointerAddresses, FuncLoadCxxThrowThunkPrintsThrowWithoutDebugBreak) {
+  // `--func` skips scanImportThunks.  `call jmp-[IAT]; int3` must still
+  // print `throw` from the import name, not `sub_*` plus `__debugbreak`.
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Thunk = 0x140001020;
+  constexpr va_t IAT = 0x140003000;
+  Img.Entry = Entry;
+  Img.LoadOnlyFunctionEntries.insert(Entry);
+  const int32_t CallRel = static_cast<int32_t>(Thunk - (Entry + 5));
+  const int32_t ThunkDisp = static_cast<int32_t>(IAT - (Thunk + 6));
+  std::vector<uint8_t> Text(0x30, 0xcc);
+  Text[0] = 0xe8;
+  std::memcpy(Text.data() + 1, &CallRel, sizeof(CallRel));
+  Text[5] = 0xcc;
+  Text[6] = 0xc3;
+  Text[0x20] = 0xff;
+  Text[0x21] = 0x25;
+  std::memcpy(Text.data() + 0x22, &ThunkDisp, sizeof(ThunkDisp));
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Entry;
+  Seg.Size = Text.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = Text;
+  Img.Segments.push_back(std::move(Seg));
+  Section Sec;
+  Sec.Name = ".text";
+  Sec.VA = Entry;
+  Sec.Size = Text.size();
+  Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Sec));
+  Img.KnownCodeRanges.emplace_back(Entry, Entry + 7);
+  Symbol FuncSym = Symbol::makeFunc(Entry, 7);
+  FuncSym.Name = "throws";
+  Img.Symbols.push_back(std::move(FuncSym));
+  Import Imp;
+  Imp.Name = "_CxxThrowException";
+  Imp.IATAddr = IAT;
+  Img.Imports.push_back(std::move(Imp));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  Opts.LiftMode = true;
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_TRUE(Result.LlvmModule);
+  llvm::Function *Keep = nullptr;
+  for (llvm::Function &Fn : *Result.LlvmModule)
+    if (!Fn.isDeclaration()) {
+      Keep = &Fn;
+      break;
+    }
+  ASSERT_NE(Keep, nullptr);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.Image = &Img;
+  ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, OS, Options, nullptr,
+                                  &Img, Keep));
+  OS.flush();
+  EXPECT_NE(Source.find("throw"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("sub_140001020"), std::string::npos) << Source;
+}
+
 TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
   if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
     GTEST_SKIP() << "windows-eh corpus root is not configured";
@@ -36018,6 +36093,106 @@ TEST(LLVMCPointerAddresses, SignedFieldCompareKeepsWidthCast) {
       << Source;
 }
 
+TEST(LLVMCPointerAddresses, IntegerWidthAndSignSurviveCExecution) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("integer-width-semantics", Context);
+  auto *I64 = llvm::Type::getInt64Ty(Context);
+  auto Make =
+      [&](llvm::StringRef Name, llvm::Type *ArgTy,
+          const std::function<llvm::Value *(llvm::IRBuilder<> &, llvm::Value *)>
+              &Body) {
+        auto *Fn = llvm::Function::Create(
+            llvm::FunctionType::get(I64, {ArgTy}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        Fn->getArg(0)->setName("input");
+        llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Fn));
+        B.CreateRet(Body(B, Fn->getArg(0)));
+      };
+  Make("shift_inline", I64,
+       [](auto &B, auto *V) { return B.CreateLShr(V, B.getInt64(40)); });
+  Make("shift_statement", I64, [](auto &B, auto *V) {
+    auto *Shift = B.CreateLShr(V, B.getInt64(40), "high");
+    return B.CreateAdd(Shift, Shift);
+  });
+  Make("divide_wide", I64,
+       [](auto &B, auto *V) { return B.CreateUDiv(V, B.getInt64(3)); });
+  Make("remainder_wide", I64, [](auto &B, auto *V) {
+    return B.CreateURem(V, B.getInt64(0x100000007ULL));
+  });
+  Make("compare_wide", I64, [I64](auto &B, auto *V) {
+    return B.CreateZExt(B.CreateICmpUGT(V, B.getInt64(10)), I64);
+  });
+  Make("sign_extend_word", llvm::Type::getInt32Ty(Context),
+       [I64](auto &B, auto *V) { return B.CreateSExt(V, I64); });
+  Make("sign_extend_bit", llvm::Type::getInt1Ty(Context),
+       [I64](auto &B, auto *V) { return B.CreateSExt(V, I64); });
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  OS.flush();
+  Source += R"(
+int main(void) {
+  const uint64_t high = UINT64_C(0x8000000000000000);
+  if (shift_inline(high) != (high >> 40)) return 1;
+  if (shift_statement(high) != 2 * (high >> 40)) return 2;
+  if (divide_wide(high) != high / 3) return 3;
+  if (remainder_wide(high) != high % UINT64_C(0x100000007)) return 4;
+  if (compare_wide(UINT64_C(0x100000001)) != 1) return 5;
+  if (sign_extend_word(UINT32_C(0x80000001)) != UINT64_C(0xffffffff80000001)) return 6;
+  if (sign_extend_bit(1) != UINT64_MAX || sign_extend_bit(0) != 0) return 7;
+  return 0;
+}
+)";
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, ExecutablePath, ErrorPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-integer-width", "c",
+                                                  SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-integer-width", "exe",
+                                                  ExecutablePath));
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-integer-width", "err",
+                                                  ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream File(SourcePath, EC);
+    ASSERT_FALSE(EC) << EC.message();
+    File << Source;
+  }
+  for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
+    SCOPED_TRACE(Optimization.str());
+    llvm::SmallVector<llvm::StringRef, 12> Args{
+        Compiler,   "-std=c11", Optimization,  "-Werror=shift-count-overflow",
+        SourcePath, "-o",       ExecutablePath};
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, ErrorPath.str()};
+    std::string Error;
+    int Status = llvm::sys::ExecuteAndWait(Compiler, Args, std::nullopt,
+                                           Redirects, 30, 0, &Error);
+    auto ErrorBuffer = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str()
+                                         : "")
+                         << "\n"
+                         << Source;
+    llvm::SmallVector<llvm::StringRef, 1> RunArgs{ExecutablePath};
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, RunArgs, std::nullopt,
+                                        {}, 30, 0, &Error),
+              0)
+        << Error << "\n"
+        << Source;
+  }
+}
+
 TEST(LLVMCPointerAddresses, X86DivCheckKeepsWidenedHomeShift) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-div-home", Context);
@@ -36238,6 +36413,27 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeHasSingleWin64Arg) {
   EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
 }
 
+// The lifter models image loads as volatile. Preserve that observable read
+// even for .rdata, then pass the captured SSA value to the exception call.
+void expectCapturedSehExceptionCode(const std::string &Source) {
+  const size_t DeclAt = Source.find("extern uint32_t g_140003260;");
+  const size_t LoadAt =
+      Source.find(" = *((uint32_t volatile*)(&g_140003260));");
+  ASSERT_NE(DeclAt, std::string::npos) << Source;
+  ASSERT_NE(LoadAt, std::string::npos) << Source;
+  EXPECT_LT(DeclAt, LoadAt) << Source;
+  const size_t LineAt = Source.rfind('\n', LoadAt);
+  const size_t NameAt = Source.find_first_not_of(" \t", LineAt + 1);
+  ASSERT_LT(NameAt, LoadAt) << Source;
+  const std::string Captured = Source.substr(NameAt, LoadAt - NameAt);
+  const size_t CallAt =
+      Source.find("RaiseException(" + Captured + ", 0, 0, 0);");
+  ASSERT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_LT(LoadAt, CallAt) << Source;
+  EXPECT_EQ(Source.find("RaiseException(0xE0421001"), std::string::npos)
+      << Source;
+}
+
 TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
     GTEST_SKIP() << "windows-eh corpus root is not configured";
@@ -36263,9 +36459,7 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("_call_clobber"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("RaiseException(0xE0421001"), std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("g_140003260"), std::string::npos) << Source;
+  expectCapturedSehExceptionCode(Source);
   EXPECT_EQ(Source.find("g_140003000"), std::string::npos) << Source;
   // The normal edge from the last try block reaches the range marker next
   // in printed order; the handler between them in LLVM order is printed in
@@ -36276,7 +36470,7 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   ASSERT_NE(SkipEnd, std::string::npos) << Source;
   const std::string SkipLabel = Source.substr(SkipAt + 5, SkipEnd - SkipAt - 5);
   const auto SkipTargetAt = Source.find("\n" + SkipLabel + ":\n");
-  const auto RaiseAt = Source.find("RaiseException(0xE0421001");
+  const auto RaiseAt = Source.find("RaiseException(");
   ASSERT_NE(SkipTargetAt, std::string::npos) << Source;
   EXPECT_LT(SkipAt, RaiseAt) << Source;
   EXPECT_LT(RaiseAt, SkipTargetAt) << Source;
@@ -36334,8 +36528,7 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   const std::string OptSource =
       llvmcOnlyFunction(std::move(*OptImg), 0x140001050, /*NoOpt=*/false);
   ASSERT_FALSE(OptSource.empty()) << OptSource;
-  EXPECT_NE(OptSource.find("RaiseException(0xE0421001"), std::string::npos)
-      << OptSource;
+  expectCapturedSehExceptionCode(OptSource);
   EXPECT_EQ(OptSource.find("= 0xE0421001"), std::string::npos) << OptSource;
   EXPECT_EQ(OptSource.find("5368722016"), std::string::npos) << OptSource;
 }
@@ -36422,7 +36615,8 @@ TEST(LLVMCPointerAddresses, CorpusSehProbeCliLlvmcKeepsProtectedEffects) {
   const std::string Source = (*Output)->getBuffer().str();
   const size_t TryAt = Source.find("__try {");
   const size_t ExceptAt = Source.find("} __except");
-  const size_t RaiseAt = Source.find("RaiseException(0xE0421001");
+  expectCapturedSehExceptionCode(Source);
+  const size_t RaiseAt = Source.find("RaiseException(");
   const size_t SuccessAt = Source.find("= -100;");
   const size_t HandlerAt = Source.find("= 41;");
   ASSERT_NE(TryAt, std::string::npos) << Source;
@@ -36503,36 +36697,86 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies) {
   if (!std::filesystem::exists(Path))
     GTEST_SKIP() << Path.string() << " is missing";
 
-  BinaryLoadOptions FuncOpts;
-  FuncOpts.OnlyFunctionEntries.insert(0x1400010B0);
-  auto Img = loadBinary(Path, FuncOpts);
-  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
-  const std::string Source = llvmcOnlyFunction(std::move(*Img), 0x1400010B0);
-  ASSERT_FALSE(Source.empty()) << Source;
-  const auto FinallyAt = Source.find("} __finally {");
-  const auto ExceptAt = Source.find("} __except");
-  ASSERT_NE(FinallyAt, std::string::npos) << Source;
-  ASSERT_NE(ExceptAt, std::string::npos) << Source;
-  EXPECT_LT(FinallyAt, ExceptAt) << Source;
-  const auto ExceptEnd = Source.find("\n    }", ExceptAt);
-  ASSERT_NE(ExceptEnd, std::string::npos) << Source;
-  const std::string Handler = Source.substr(ExceptAt, ExceptEnd - ExceptAt);
-  if (Handler.find(" += 20;") == std::string::npos) {
-    // Conservatively retained frame loads can print the same update as
-    // load/add/store. Require that the handler writes back to the exact slot
-    // from which that temporary was loaded, before leaving __except.
-    const auto AddAt = Handler.find(" + 20);");
-    ASSERT_NE(AddAt, std::string::npos) << Source;
-    const auto LineStart = Handler.rfind('\n', AddAt) + 1;
-    const auto AssignAt = Handler.find(" = (", LineStart);
-    ASSERT_LT(AssignAt, AddAt) << Source;
-    const std::string Slot =
-        llvm::StringRef(Handler).slice(LineStart, AssignAt).trim().str();
-    const std::string Loaded = Handler.substr(AssignAt + 4,
-                                               AddAt - AssignAt - 4);
-    const auto LoadAt = Handler.find(Loaded + " = " + Slot + ";");
-    ASSERT_NE(LoadAt, std::string::npos) << Source;
-    EXPECT_LT(LoadAt, LineStart) << Source;
+  for (bool NoOpt : {false, true}) {
+    SCOPED_TRACE(NoOpt ? "NoOpt" : "default");
+    BinaryLoadOptions FuncOpts;
+    FuncOpts.OnlyFunctionEntries.insert(0x1400010B0);
+    auto Img = loadBinary(Path, FuncOpts);
+    ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+    const std::string Source =
+        llvmcOnlyFunction(std::move(*Img), 0x1400010B0, NoOpt);
+    ASSERT_FALSE(Source.empty()) << Source;
+    EXPECT_EQ(Source.find("__asm { test"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("struct anon_"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("stos_count"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("__asm__(\"llvm.localaddress\")"), std::string::npos)
+        << Source;
+    // --func output intentionally omits other function bodies/declarations.
+    // Supply only those external prototypes; every local must still be declared
+    // and initialized by the emitter, and all integer address operations typed.
+    auto Compiler = llvm::sys::findProgramByName("clang");
+    ASSERT_TRUE(static_cast<bool>(Compiler)) << "clang is required";
+    llvm::SmallString<128> Input, Errors;
+    ASSERT_FALSE(
+        llvm::sys::fs::createTemporaryFile("neverd-gs-seh", "c", Input));
+    ASSERT_FALSE(
+        llvm::sys::fs::createTemporaryFile("neverd-gs-seh", "err", Errors));
+    llvm::FileRemover RemoveInput(Input), RemoveErrors(Errors);
+    std::error_code EC;
+    {
+      llvm::raw_fd_ostream OS(Input, EC);
+      ASSERT_FALSE(EC);
+      OS << "#include <stdint.h>\n"
+            "void RaiseException(uint32_t, uint32_t, uint32_t, const uintptr_t "
+            "*);\n"
+            "void sub_140002501(unsigned char, void *);\n"
+            "int sub_140002539(void *);\n"
+            "void *GetExceptionInformation(void);\n"
+         << Source;
+    }
+    llvm::SmallVector<llvm::StringRef, 16> Args{
+        *Compiler,
+        "-target",
+        "x86_64-pc-windows-msvc",
+        "-fms-extensions",
+        "-fsyntax-only",
+        "-Werror=int-conversion",
+        "-Werror=incompatible-pointer-types",
+        "-Werror=uninitialized",
+        Input};
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, Errors.str()};
+    std::string Error;
+    const int Status = llvm::sys::ExecuteAndWait(*Compiler, Args, std::nullopt,
+                                                 Redirects, 30, 0, &Error);
+    auto Log = llvm::MemoryBuffer::getFile(Errors);
+    EXPECT_EQ(Status, 0) << Error << (Log ? (*Log)->getBuffer().str() : "")
+                         << Source;
+    const auto FinallyAt = Source.find("} __finally {");
+    const auto ExceptAt = Source.find("} __except");
+    ASSERT_NE(FinallyAt, std::string::npos) << Source;
+    ASSERT_NE(ExceptAt, std::string::npos) << Source;
+    EXPECT_LT(FinallyAt, ExceptAt) << Source;
+    const auto ExceptEnd = Source.find("\n    }", ExceptAt);
+    ASSERT_NE(ExceptEnd, std::string::npos) << Source;
+    const std::string Handler = Source.substr(ExceptAt, ExceptEnd - ExceptAt);
+    if (Handler.find(" += 20;") == std::string::npos) {
+      // Conservatively retained frame loads can print the same update as
+      // load/add/store. Require that the handler writes back to the exact slot
+      // from which that temporary was loaded, before leaving __except.
+      const auto AddAt = Handler.find(" + 20);");
+      ASSERT_NE(AddAt, std::string::npos) << Source;
+      const auto LineStart = Handler.rfind('\n', AddAt) + 1;
+      const auto AssignAt = Handler.find(" = (", LineStart);
+      ASSERT_LT(AssignAt, AddAt) << Source;
+      const std::string Slot =
+          llvm::StringRef(Handler).slice(LineStart, AssignAt).trim().str();
+      const std::string Loaded =
+          Handler.substr(AssignAt + 4, AddAt - AssignAt - 4);
+      const auto LoadAt = Handler.find(Loaded + " = " + Slot + ";");
+      ASSERT_NE(LoadAt, std::string::npos) << Source;
+      EXPECT_LT(LoadAt, LineStart) << Source;
+    }
   }
 }
 
@@ -37218,6 +37462,118 @@ TEST(LLVMCPointerAddresses, StaticPointerClassSretKeepsObservedPointer) {
   ASSERT_NE(CallSite, std::string::npos) << Source;
   ASSERT_LT(CallSite + std::string("BuildName(").size(), Source.size());
   EXPECT_NE(Source[CallSite + std::string("BuildName(").size()], ')') << Source;
+}
+
+TEST(LLVMCPointerAddresses, TypedFieldAndFoldedHomeSignExtensionsExecute) {
+  class FieldDebug : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
+      if (Addr != 0x1000)
+        return std::nullopt;
+      auto Record = NdType::makeNamedRecord("CastRecord", 8);
+      Record->FieldDisplayNames = {"bits"};
+      Record->FieldDisplayOffsets = {4};
+      Record->FieldDisplayTypes = {NdType::makeInt(4, false)};
+      FunctionSym Symbol;
+      Symbol.Name = "field_sign";
+      Symbol.Addr = Addr;
+      Symbol.Params = {{"this", NdType::makePtr(Record)}};
+      return Symbol;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  llvm::LLVMContext Context;
+  llvm::Module Module("typed-and-folded-sign-extension", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Builder.getInt64Ty(), {Builder.getPtrTy()},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "field_sign", Module);
+  rewrite_source::setOriginalVA(*Function, 0x1000);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+  auto *Address = Builder.CreateGEP(Builder.getInt8Ty(), Function->getArg(0),
+                                    Builder.getInt64(4));
+  auto *Field = Builder.CreateLoad(Builder.getInt32Ty(), Address);
+  Builder.CreateRet(Builder.CreateSExt(Field, Builder.getInt64Ty()));
+  for (bool Narrow : {false, true}) {
+    auto *HomeFunction = llvm::Function::Create(
+        llvm::FunctionType::get(Builder.getInt64Ty(), false),
+        llvm::GlobalValue::ExternalLinkage, Narrow ? "narrow_sign" : "bit_sign",
+        Module);
+    Builder.SetInsertPoint(
+        llvm::BasicBlock::Create(Context, "entry", HomeFunction));
+    auto *Type = Narrow ? Builder.getInt64Ty() : Builder.getInt1Ty();
+    auto *Home = Builder.CreateAlloca(Type);
+    Builder.CreateStore(
+        llvm::ConstantInt::get(Type, Narrow ? UINT64_C(0x180000001) : 1), Home);
+    llvm::Value *Value = Builder.CreateLoad(Type, Home);
+    if (Narrow)
+      Value = Builder.CreateTrunc(Value, Builder.getInt32Ty());
+    Builder.CreateRet(Builder.CreateSExt(Value, Builder.getInt64Ty()));
+  }
+  std::string Source =
+      "#include <stdint.h>\n"
+      "typedef struct { uint32_t padding; uint32_t bits; } CastRecord;\n";
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, &Debug));
+  OS.flush();
+  Source += R"(
+int main(void) {
+  CastRecord record = {0, UINT32_C(0x80000001)};
+  if (field_sign(&record) != UINT64_C(0xffffffff80000001)) return 1;
+  if (bit_sign() != UINT64_MAX) return 2;
+  if (narrow_sign() != UINT64_C(0xffffffff80000001)) return 3;
+  return 0;
+}
+)";
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, ExecutablePath, ErrorPath;
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-cast-homes", "c", SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-cast-homes", "exe",
+                                                  ExecutablePath));
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-cast-homes", "err",
+                                                  ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream File(SourcePath, EC);
+    ASSERT_FALSE(EC) << EC.message();
+    File << Source;
+  }
+  for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
+    SCOPED_TRACE(Optimization.str());
+    llvm::SmallVector<llvm::StringRef, 12> Args{
+        Compiler,   "-std=c11", Optimization,  "-Werror=shift-count-overflow",
+        SourcePath, "-o",       ExecutablePath};
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, ErrorPath.str()};
+    std::string Error;
+    int Status = llvm::sys::ExecuteAndWait(Compiler, Args, std::nullopt,
+                                           Redirects, 30, 0, &Error);
+    auto ErrorBuffer = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str()
+                                         : "")
+                         << "\n"
+                         << Source;
+    llvm::SmallVector<llvm::StringRef, 1> RunArgs{ExecutablePath};
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, RunArgs, std::nullopt,
+                                        {}, 30, 0, &Error),
+              0)
+        << Error << "\n"
+        << Source;
+  }
 }
 
 } // namespace
