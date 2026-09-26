@@ -310,6 +310,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeClassReferenceAddress ||
       Hint.CallKind == Kind::RuntimeMetaclassReferenceAddress ||
       Hint.CallKind == Kind::RuntimeLocalStorageAddress ||
+      Hint.CallKind == Kind::RuntimeSwiftSmallStringAddress ||
       Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress ||
       Hint.CallKind == Kind::RuntimeSwiftNominalDescriptorAddress ||
       Hint.CallKind == Kind::RuntimeSwiftNominalMetadataAddress ||
@@ -427,6 +428,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Hint.TargetAddress || !Hint.ByteCount)
         return bad("local storage has no source extent");
       Value = "neverd_local_storage_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeSwiftSmallStringAddress) {
+      if (!Hint.TargetAddress || Hint.ByteCount != 16)
+        return bad("Swift small string has no complete source extent");
+      Value = "neverd_swift_small_string_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
     } else if (Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress) {
       if (!Hint.TargetAddress || !Hint.SwiftTypeMetadata || Hint.ByteCount ||

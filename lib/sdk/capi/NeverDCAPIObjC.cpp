@@ -645,6 +645,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::set<va_t> StaticIdentities;
       std::set<va_t> ClassReferenceCells;
       std::map<va_t, uint64_t> LocalStorageExtents;
+      std::set<va_t> SwiftSmallStrings;
       std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
           SwiftTypeMetadataPairs;
       std::map<va_t, std::string> SwiftNominalDescriptors;
@@ -671,6 +672,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
              Projections.at(Entry).LocalStorageExtents)
           LocalStorageExtents[Address] =
               std::max(LocalStorageExtents[Address], Width);
+        const auto &SmallStrings = Projections.at(Entry).SwiftSmallStrings;
+        SwiftSmallStrings.insert(SmallStrings.begin(), SmallStrings.end());
         for (const auto &[Address, Pair] :
              Projections.at(Entry).SwiftTypeMetadataPairs) {
           const auto [It, Added] =
@@ -763,6 +766,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           ProfileStorage.render(ProfileSections, SharedStorageFunctions) +
           renderObjCLocalStorageHelpers(S->Img, LocalStorageExtents,
                                         SharedStorageFunctions) +
+          renderObjCSwiftSmallStringHelpers(S->Img, SwiftSmallStrings,
+                                            SharedStorageFunctions) +
           renderObjCSwiftTypeMetadataHelpers(S->Img, SwiftTypeMetadataPairs,
                                              SharedStorageFunctions) +
           renderObjCSwiftNominalDescriptorHelpers(

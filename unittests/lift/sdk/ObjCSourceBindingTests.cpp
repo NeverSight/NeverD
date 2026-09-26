@@ -5369,6 +5369,66 @@ TEST(ObjCSourceBindings, NamedWritableScalarsUseSharedRebuiltStorage) {
   EXPECT_TRUE(Rejected.LocalStorageExtents.empty());
 }
 
+TEST(ObjCSourceBindings, ImmutableSwiftSmallStringKeepsSharedAddress) {
+  Fixture F;
+  constexpr va_t Address = 0x1040;
+  constexpr llvm::StringLiteral Name =
+      "_$s13WMFComponents9HtmlUtilsV17defaultListIndentSSvpZ";
+  F.Image.MachOTwoLevelNamespace = true;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.Symbols.push_back({Name.str(), Address, 16, false});
+  F.Image.Exports.push_back({Name.str(), 0, Address});
+  auto *Bytes = F.Image.Segments[0].Data.data() + Address - 0x1000;
+  std::fill(Bytes, Bytes + 16, 0);
+  std::fill(Bytes, Bytes + 4, ' ');
+  Bytes[15] = 0xe4;
+  F.Function.ReturnType = NdType::makeInt(8, false);
+  F.Function.Body[0].RetVal =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
+
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  EXPECT_EQ(Result.SwiftSmallStrings, std::set<va_t>{Address});
+  const auto Bound = Result.Function.Body[0].RetVal;
+  ASSERT_TRUE(Bound->SourceCallHint);
+  EXPECT_EQ(Bound->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeSwiftSmallStringAddress);
+  EXPECT_TRUE(objcSourceCallBound(*Bound, F.Image, {}));
+  std::set<std::string> Helpers;
+  const auto Source = renderObjCSwiftSmallStringHelpers(
+      F.Image, Result.SwiftSmallStrings, Helpers);
+  EXPECT_EQ(Helpers,
+            std::set<std::string>{"neverd_swift_small_string_1040_address"});
+  EXPECT_NE(Source.find("static const _Alignas(16) unsigned char storage[16]"),
+            std::string::npos);
+  EXPECT_NE(Source.find("[15] = 228"), std::string::npos);
+
+  for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+    auto Changed = F.Image;
+    if (Mutation == 0)
+      Changed.DataPtrRelocSlots.insert(Address);
+    if (Mutation == 1)
+      Changed.Symbols.back().Name = "_not_a_swift_string";
+    if (Mutation == 2)
+      Changed.Exports.clear();
+    if (Mutation == 3)
+      Changed.Segments[0].Data[Address - 0x1000 + 15] = 0xf4;
+    if (Mutation == 4) {
+      Changed.Sections[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      Changed.Segments[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+    }
+    if (Mutation == 5)
+      Changed.Symbols.push_back({"_interior", Address + 8, 0, false});
+    EXPECT_FALSE(objcSourceCallBound(*Bound, Changed, {})) << Mutation;
+    EXPECT_THROW(renderObjCSwiftSmallStringHelpers(
+                     Changed, Result.SwiftSmallStrings, Helpers),
+                 std::runtime_error)
+        << Mutation;
+  }
+}
+
 TEST(ObjCSourceBindings, PointerAccessesKeepStorageAndValueProofsSeparate) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Shape = 0; Shape < 3; ++Shape)

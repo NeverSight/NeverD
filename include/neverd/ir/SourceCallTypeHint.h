@@ -127,6 +127,9 @@ struct SourceCallTypeHint {
     /// Exact scalar accesses rooted at a uniquely named writable data symbol.
     /// ByteCount is the proven storage prefix rebuilt across methods.
     RuntimeLocalStorageAddress,
+    /// One exported, immutable Swift String static with an inline ASCII value.
+    /// The complete pointer-free 16-byte value is rebuilt in shared storage.
+    RuntimeSwiftSmallStringAddress,
     /// One address in a compiler-emitted Swift concrete-type metadata pair.
     /// The pair is a fresh zero cache plus a rebuilt relative mangled-name
     /// record; no initialized metadata pointer from the loaded image is copied.

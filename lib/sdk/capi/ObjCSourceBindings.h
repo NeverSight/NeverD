@@ -54,6 +54,7 @@ struct ObjCSourceBindingResult {
   std::set<va_t> StaticIdentities;
   std::set<va_t> ClassReferenceCells;
   std::map<va_t, uint64_t> LocalStorageExtents;
+  std::set<va_t> SwiftSmallStrings;
   std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
       SwiftTypeMetadataPairs;
   std::map<va_t, std::string> SwiftNominalDescriptors;
@@ -1426,6 +1427,99 @@ localStorageHint(const BinaryImage &Image, va_t Address, uint64_t Width) {
   if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
     return std::nullopt;
   return Hint;
+}
+
+inline bool swiftStaticStringStorageSymbol(llvm::StringRef Name) {
+  Name.consume_front("_");
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 8000;
+  Options.MaxNodes = 1024;
+  Options.MaxDepth = 64;
+  Options.MaxMemoryBytes = 1024 * 1024;
+  Options.MaxOperations = 100000;
+  const auto Parsed = llvm::swiftDemangle(Name, Options);
+  const auto Shape = [](const llvm::SwiftDemangleNode &Node,
+                        llvm::StringRef Kind, size_t Children) {
+    return Node.Kind == Kind && !Node.Text && !Node.Index &&
+           Node.Children.size() == Children;
+  };
+  const auto Named = [](const llvm::SwiftDemangleNode &Node,
+                        llvm::StringRef Kind) {
+    return Node.Kind == Kind && Node.Text && !Node.Text->empty() &&
+           !Node.Index && Node.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Static", 1) ||
+      !Shape(Parsed.Root->Children[0].Children[0], "Variable", 3))
+    return false;
+  const auto &Variable = Parsed.Root->Children[0].Children[0];
+  const auto &Owner = Variable.Children[0];
+  const auto &Property = Variable.Children[1];
+  const auto &Type = Variable.Children[2];
+  if ((Owner.Kind != "Structure" && Owner.Kind != "Class" &&
+       Owner.Kind != "Enum") ||
+      Owner.Text || Owner.Index || Owner.Children.size() != 2 ||
+      !Named(Owner.Children[0], "Module") ||
+      !Named(Owner.Children[1], "Identifier") ||
+      !Named(Property, "Identifier") || !Shape(Type, "Type", 1))
+    return false;
+  const auto &String = Type.Children[0];
+  return Shape(String, "Structure", 2) && Named(String.Children[0], "Module") &&
+         *String.Children[0].Text == "Swift" &&
+         Named(String.Children[1], "Identifier") &&
+         *String.Children[1].Text == "String";
+}
+
+inline std::optional<SourceCallTypeHint>
+swiftSmallStringStorageHint(const BinaryImage &Image, va_t Address) {
+  constexpr uint64_t Width = 16;
+  if (Image.Format != BinaryFormat::MachO || Image.Arch != Arch::AArch64 ||
+      Image.Bits != Bitness::Bits64 || Image.IsRelocatable ||
+      !Image.MachOTwoLevelNamespace || Image.MachOChainedFixupsAmbiguous ||
+      !Address || Address % Width || Address > InvalidVA - Width)
+    return std::nullopt;
+  const auto Bytes = readImmutableImageBytes(Image, Address, Width);
+  if (!Bytes || ((*Bytes)[15] & 0xf0) != 0xe0)
+    return std::nullopt;
+  const uint8_t Count = (*Bytes)[15] & 0x0f;
+  for (unsigned I = 0; I < 15; ++I)
+    if ((I < Count && (*Bytes)[I] >= 0x80) || (I >= Count && (*Bytes)[I] != 0))
+      return std::nullopt;
+
+  const Symbol *Storage = nullptr;
+  for (const auto &Candidate : Image.Symbols) {
+    if (Candidate.Addr > Address && Candidate.Addr < Address + Width)
+      return std::nullopt;
+    if (Candidate.Addr != Address)
+      continue;
+    if (Storage || Candidate.IsFunc || Candidate.Name.empty() ||
+        (Candidate.Size && Candidate.Size < Width))
+      return std::nullopt;
+    Storage = &Candidate;
+  }
+  if (!Storage || !swiftStaticStringStorageSymbol(Storage->Name))
+    return std::nullopt;
+  size_t Exports = 0;
+  for (const auto &Export : Image.Exports) {
+    if (Export.Addr == Address && Export.Name == Storage->Name)
+      ++Exports;
+    else if (Export.Addr == Address || Export.Name == Storage->Name)
+      return std::nullopt;
+  }
+  if (Exports != 1)
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftSmallStringAddress;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = Storage->Name;
+  Hint.ByteCount = Width;
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  return assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason)
+             ? std::optional<SourceCallTypeHint>(std::move(Hint))
+             : std::nullopt;
 }
 
 inline std::optional<SourceCallTypeHint>
@@ -3020,6 +3114,15 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           Result.StaticIdentities.insert(*Address);
           return Expression;
         }
+      if (Address)
+        if (auto Storage = swiftSmallStringStorageHint(Image, *Address)) {
+          *Expression = *HighExpr::makeCall({}, 0, {});
+          Expression->Type = Original->Type;
+          Expression->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Storage));
+          Result.SwiftSmallStrings.insert(*Address);
+          return Expression;
+        }
       auto Hint =
           Address ? constantStringSourceHint(Image, *Address) : std::nullopt;
       if (!Hint && Address)
@@ -4456,6 +4559,20 @@ inline bool objcSourceCallBound(
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftSmallStringAddress) {
+    const auto Expected =
+        swiftSmallStringStorageHint(Image, Binding.TargetAddress);
+    return Expected && Binding.TargetName == Expected->TargetName &&
+           Binding.ByteCount == Expected->ByteCount &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() && !Expression.IsIndirectCall &&
+           !Expression.CallAddr && Expression.CallTarget.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind ==
           SourceCallTypeHint::Kind::RuntimeClassReferenceAddress ||
       Binding.CallKind ==
           SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress) {
@@ -5488,6 +5605,39 @@ renderObjCLocalStorageHelpers(const BinaryImage &Image,
               std::to_string(Width) + "] = { ";
     bool Any = false;
     for (uint64_t I = 0; I < Width; ++I) {
+      if (!Bytes[I])
+        continue;
+      if (Any)
+        Source += ", ";
+      Source += "[" + std::to_string(I) + "] = " + std::to_string(Bytes[I]);
+      Any = true;
+    }
+    if (!Any)
+      Source += "0";
+    Source += " };\n  return (uintptr_t)storage;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string
+renderObjCSwiftSmallStringHelpers(const BinaryImage &Image,
+                                  const std::set<va_t> &Storage,
+                                  std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (const auto Address : Storage) {
+    if (!objc_binding_detail::swiftSmallStringStorageHint(Image, Address))
+      throw std::runtime_error("Swift small-string storage is no longer valid");
+    const auto *Bytes = Image.readVA(Address, 16);
+    if (!Bytes)
+      throw std::runtime_error("Swift small-string bytes are unavailable");
+    const std::string Name = "neverd_swift_small_string_" +
+                             llvm::utohexstr(Address, true) + "_address";
+    SharedFunctions.insert(Name);
+    Source += "\nuintptr_t " + Name +
+              "(void) {\n  static const _Alignas(16) unsigned char "
+              "storage[16] = { ";
+    bool Any = false;
+    for (unsigned I = 0; I < 16; ++I) {
       if (!Bytes[I])
         continue;
       if (Any)

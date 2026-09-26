@@ -847,6 +847,12 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                 "neverd_local_storage_" +
                 llvm::utohexstr(Hint.TargetAddress, true) + "_address");
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeSwiftSmallStringAddress) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_swift_small_string_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress) {
           if (Hint.SwiftTypeMetadata) {
             const auto &Pair = *Hint.SwiftTypeMetadata;
