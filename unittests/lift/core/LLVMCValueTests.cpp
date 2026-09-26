@@ -279,6 +279,66 @@ TEST(LLVMCValues, TruncatedPredicatesTestOnlyTheirLowBits) {
                          "low_bit(UINT64_MAX) != 1; }\n");
 }
 
+TEST(LLVMCValues, ForwardedHomesKeepNarrowSignAndWideShiftSemantics) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("forwarded-home-widths", Context);
+  auto *I32 = llvm::Type::getInt32Ty(Context);
+  auto *I64 = llvm::Type::getInt64Ty(Context);
+  auto *Pointer = llvm::PointerType::getUnqual(Context);
+  auto *Callee = llvm::Function::Create(
+      llvm::FunctionType::get(I64, {I64}, false),
+      llvm::GlobalValue::ExternalLinkage, "source_bits", Module);
+  llvm::IRBuilder<llvm::NoFolder> CalleeBuilder(
+      llvm::BasicBlock::Create(Context, "entry", Callee));
+  CalleeBuilder.CreateRet(Callee->getArg(0));
+
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                             {I64, I64, Pointer, Pointer, Pointer}, false),
+      llvm::GlobalValue::ExternalLinkage, "home_widths", Module);
+  llvm::IRBuilder<llvm::NoFolder> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  auto *WideHome = Builder.CreateAlloca(I64, nullptr, "wide_home");
+  auto *NarrowHome = Builder.CreateAlloca(I32, nullptr, "narrow_home");
+  auto *ReloadHome = Builder.CreateAlloca(I64, nullptr, "reload_home");
+  auto *Call = Builder.CreateCall(Callee, {Function->getArg(0)}, "call_bits");
+  Builder.CreateStore(Call, WideHome);
+  auto *Narrow = Builder.CreateTrunc(Builder.CreateLoad(I64, WideHome), I32);
+  Builder.CreateStore(Narrow, NarrowHome);
+  auto *Reloaded = Builder.CreateLoad(I32, NarrowHome);
+  Builder.CreateStore(Builder.CreateSExt(Reloaded, I64), Function->getArg(2));
+  Builder.CreateStore(Builder.CreateZExt(Reloaded, I64), ReloadHome);
+  auto *High = Builder.CreateLShr(Builder.CreateLoad(I64, ReloadHome),
+                                  llvm::ConstantInt::get(I64, 32));
+  Builder.CreateStore(High, Function->getArg(3));
+  auto *Other = Builder.CreateTrunc(Function->getArg(1), I32);
+  Builder.CreateStore(Builder.CreateAdd(Reloaded, Other), Function->getArg(4));
+  Builder.CreateRetVoid();
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  compileAndRun(Source + R"(
+int main(void) {
+  const uint64_t inputs[] = {
+      0, 0x7fffffffULL, 0x80000000ULL, 0xffffffffULL,
+      0x1234567800000001ULL, 0x1234567880000001ULL, UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    uint64_t sign = 0, high = 1;
+    uint32_t sum = 0;
+    const uint32_t low = (uint32_t)inputs[i];
+    const uint64_t expected_sign =
+        low & 0x80000000U ? (uint64_t)low | 0xffffffff00000000ULL : low;
+    home_widths(inputs[i], 0xfedcba98ffffffffULL, &sign, &high, &sum);
+    if (sign != expected_sign || high != 0 || sum != low - 1U)
+      return 1;
+  }
+  return 0;
+}
+)");
+}
+
 TEST(LLVMCValues, WideIntegerPointerConstantKeepsItsPointerWidth) {
   llvm::LLVMContext Context;
   llvm::Module Module("wide-integer-pointer", Context);

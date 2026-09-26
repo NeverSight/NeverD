@@ -313,6 +313,9 @@ TEST(ObjCImmutableStringCallbackSources,
 TEST(ObjCImmutableStringCallbackSources,
      PreservesStoresRetainAndSharedIdentity) {
   ImmutableCallbackFixture F;
+  ASSERT_NE(objc_super_getter_detail::completeLow(F.Result, F.Shared, 12),
+            nullptr);
+  EXPECT_EQ(F.Result.LowFuncs.size(), 3u);
   ASSERT_TRUE(F.proof());
   auto P =
       projectObjCImmutableStringCallback(F.high(), F.Image, F.Result, F.Once);

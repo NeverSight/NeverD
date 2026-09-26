@@ -71,4 +71,47 @@ TEST(AdjacentCalls, ProvenNoReturnTargetKeepsDecodedCallInsteadOfGetPCPush) {
               Function, LowInstructionBoundaryRequirement::Required)));
         }
 }
+
+TEST(AdjacentCalls, DirectTailTransferRespectsSymbolOutsideFunctionWorkSet) {
+  for (auto Architecture : {Arch::X86, Arch::X64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF}) {
+      SCOPED_TRACE(testing::Message() << static_cast<int>(Architecture) << " "
+                                     << static_cast<int>(Format));
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Bits =
+          Architecture == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+      Image.Format = Format;
+      Image.Base = 0x1000;
+      // jmp next; ret. The target symbol is not in a supplied function work
+      // set, but the explicit transfer must still preserve its identity.
+      Segment Text;
+      Text.VA = Image.Base;
+      Text.Data = {0xe9, 0, 0, 0, 0, 0xc3};
+      Text.Size = Text.Data.size();
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Image.Segments.push_back(std::move(Text));
+      auto Callee = Symbol::makeFunc(Image.Base + 5);
+      Callee.Name = "returning_tail_callee";
+      Image.Symbols.push_back(Callee);
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Architecture));
+      CFGBuilder Builder;
+      const auto Function =
+          Builder.build(Image, Dec, Image.Base, "adjacent_tail");
+      ASSERT_EQ(Function.Blocks.size(), 1U);
+      const auto &Block = Function.Blocks.front();
+      ASSERT_EQ(Block.InstructionBoundaries.size(), 1U);
+      EXPECT_EQ(Block.InstructionBoundaries.front().Control,
+                LowInstructionControl::TailCall);
+      ASSERT_EQ(Block.Ops.size(), 2U);
+      EXPECT_EQ(Block.Ops[0].Opcode, NdOp::CALL);
+      ASSERT_EQ(Block.Ops[0].NumInputs, 1U);
+      EXPECT_EQ(Block.Ops[0].Inputs[0].Offset, Callee.Addr);
+      EXPECT_EQ(Block.Ops[1].Opcode, NdOp::RETURN);
+      EXPECT_FALSE(static_cast<bool>(validateLowInstructionBoundaries(
+          Function, LowInstructionBoundaryRequirement::Required)));
+    }
+}
 } // namespace

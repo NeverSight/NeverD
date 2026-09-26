@@ -1549,16 +1549,10 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
         if (ArgListField && Size == 8 && Member->Type &&
             Member->Type->Size == Size) {
           const llvm::Value *Root = Stored;
-          bool SignedExtension = false;
-          bool ZeroExtension = false;
           std::set<const llvm::Value *> Seen;
           for (unsigned Depth = 0; Root && Depth < 8 && Seen.insert(Root).second;
                ++Depth) {
             if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Root)) {
-              if (llvm::isa<llvm::SExtInst>(Cast))
-                SignedExtension = true;
-              else if (llvm::isa<llvm::ZExtInst>(Cast))
-                ZeroExtension = true;
               if (llvm::isa<llvm::SExtInst, llvm::ZExtInst,
                             llvm::TruncInst, llvm::PtrToIntInst,
                             llvm::IntToPtrInst, llvm::BitCastInst>(Cast)) {
@@ -1597,18 +1591,17 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
             if (!ReturnType && Call->getType()->isIntegerTy())
               ReturnType = NdType::makeInt(
                   llvmAccessSize(Call->getType()), false);
-            if (ReturnType && StoredText == valueStr(Call)) {
+            if (Member->Type->Kind == NdTypeKind::Ptr &&
+                Stored->getType()->isIntegerTy()) {
+              // Preserve all LLVM truncation and extension in StoredText;
+              // the final field conversion must not bypass those operations.
+              StoredText = "(" + typeToC(Member->Type) + ")(uintptr_t)(" +
+                           StoredText + ")";
+            } else if (ReturnType && StoredText == valueStr(Call)) {
               if (Member->Type->Kind == NdTypeKind::Int &&
                   ReturnType->Kind == NdTypeKind::Ptr &&
                   ReturnType->Size == Size) {
                 StoredText = "(uintptr_t)(" + StoredText + ")";
-              } else if (Member->Type->Kind == NdTypeKind::Ptr &&
-                         ReturnType->Kind == NdTypeKind::Int &&
-                         (ReturnType->Size == Size || SignedExtension ||
-                          ZeroExtension)) {
-                const char *Carrier = SignedExtension ? "intptr_t" : "uintptr_t";
-                StoredText = "(" + typeToC(Member->Type) + ")(" + Carrier +
-                             ")(" + StoredText + ")";
               }
             }
           }

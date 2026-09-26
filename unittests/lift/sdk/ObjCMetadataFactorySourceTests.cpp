@@ -171,6 +171,12 @@ struct FactoryFixture {
 
 TEST(ObjCMetadataFactorySources, KeepsPerCallerTargetsAndSharedCounterStorage) {
   FactoryFixture F;
+  // Selecting callers does not make their symbol-backed tail targets part
+  // of the caller CFG, or add those targets to the requested work set.
+  const auto *Shared =
+      objc_super_getter_detail::completeLow(F.Result, F.Shared, 9);
+  ASSERT_NE(Shared, nullptr);
+  EXPECT_EQ(F.Result.LowFuncs.size(), 5u);
   const ObjCProfileStorage Storage(F.Image);
   const auto Plan =
       discoverObjCMetadataFactorySources(F.Image, F.Result, Storage);

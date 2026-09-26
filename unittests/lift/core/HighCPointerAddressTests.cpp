@@ -1656,12 +1656,12 @@ TEST(LLVMCPointerAddresses, SingleUseCallInlinesIntoHomeFedField) {
   ASSERT_TRUE(
       LLVMCEmitter().emit(Module, OS, Options, &Dbg, nullptr, Function));
   OS.flush();
-  EXPECT_NE(Source.find("this->values_ = GetLength("), std::string::npos)
+  EXPECT_NE(Source.find("this->values_ = "
+                        "(uint64_t)((int32_t)((uint32_t)(GetLength("),
+            std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("GetLength("), Source.rfind("GetLength(")) << Source;
   EXPECT_EQ(Source.find("len0"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint32_t)"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint64_t)"), std::string::npos) << Source;
 }
 
 TEST(LLVMCPointerAddresses, SingleUseCallInlinesIntoLaterCall) {
@@ -17945,7 +17945,8 @@ TEST(LLVMCPointerAddresses, NarrowedWideAddKeepsWidthCast) {
   OS.flush();
   const auto At = Source.find("trunc_add(");
   ASSERT_NE(At, std::string::npos) << Source;
-  EXPECT_NE(Source.find("(left + right)", At), std::string::npos) << Source;
+  EXPECT_NE(Source.find("((uint32_t)(left) + (uint32_t)(right))", At),
+            std::string::npos) << Source;
   EXPECT_EQ(Source.find("(uint32_t)((uint32_t)"), std::string::npos) << Source;
 }
 
@@ -34265,7 +34266,8 @@ TEST(LLVMCPointerAddresses, ArgListMixedCallStoresCastToFieldTypes) {
   EXPECT_NE(Source.find("((ArgList *)&pAuxData)->values_ = "),
             std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("(intptr_t)(GetLength("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(int64_t*)(uintptr_t)((uint64_t)((int32_t)(GetLength("),
+            std::string::npos) << Source;
   EXPECT_EQ(Source.find("->types_ = CSimpleStringT_cstr("),
             std::string::npos)
       << Source;
@@ -36265,7 +36267,9 @@ TEST(LLVMCPointerAddresses, X86DivCheckKeepsWidenedHomeShift) {
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, nullptr, nullptr,
                                   Function));
   OS.flush();
-  EXPECT_NE(Source.find("(uint64_t)((uint32_t)(eRecord)) >> 32"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint64_t)((uint32_t)((uint64_t)((uint32_t)(eRecord))))"
+                        " >> 32"),
+            std::string::npos) << Source;
   EXPECT_EQ(Source.find("(unsigned)eRecord >> 32"), std::string::npos) << Source;
   EXPECT_NE(Source.find("nBins == 0"), std::string::npos) << Source;
   EXPECT_NE(Source.find("||"), std::string::npos) << Source;
