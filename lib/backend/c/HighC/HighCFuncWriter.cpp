@@ -83,6 +83,7 @@ bool isWindowsLanguagePersonality(ExceptionPersonality Personality) {
   case ExceptionPersonality::CxxFrameHandler3:
   case ExceptionPersonality::CxxFrameHandler4:
   case ExceptionPersonality::GSHandlerCheckSEH:
+  case ExceptionPersonality::GSHandlerCheck:
   case ExceptionPersonality::GSHandlerCheckEH:
   case ExceptionPersonality::GSHandlerCheckEH4:
   case ExceptionPersonality::ExceptHandler3:

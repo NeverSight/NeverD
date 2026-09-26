@@ -129,7 +129,8 @@ public:
       FrameworkQueueStop,
       FrameworkQueueEmpty,
       FrameworkFileSend,
-      InterruptSynchronization
+      InterruptSynchronization,
+      FrameworkInterruptLock
     };
     Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
@@ -201,6 +202,7 @@ private:
   llvm::Expected<std::optional<uint64_t>> finishWdmGuestCall(uint64_t Token,
                                                              uint64_t Result);
   void configureFrameworkDeviceHost();
+  void configureFrameworkInterruptHost();
   llvm::Error completeFrameworkTransitionIfReady();
   llvm::Expected<uint64_t> forwardFrameworkTransitionRequest(uint64_t IRP);
   llvm::Error detachFrameworkPnpDevice(uint64_t Device, uint64_t PDO);
@@ -332,6 +334,8 @@ private:
   llvm::Expected<uint64_t> probeUserBuffer(uint64_t Address, uint64_t Size,
                                            uint32_t Alignment, bool ForWrite);
   std::optional<KernelGuestCall> PendingInterruptCall;
+  std::map<uint64_t, uint64_t> FrameworkInterruptContinuations;
+  std::map<std::pair<uint64_t, uint64_t>, uint8_t> FrameworkInterruptLocks;
   llvm::Expected<uint64_t> callInterruptAPI(llvm::StringRef Name,
                                             llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<std::optional<uint64_t>> finishInterruptCall(uint64_t Token,

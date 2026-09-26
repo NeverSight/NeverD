@@ -209,6 +209,23 @@ V9 schema tests round-trip all eight minor spellings and share final-status vali
 
 `DriverInterruptScenarioTests.cpp` covers explicit raw/translated descriptors, mixed and interrupt-only assignments, strict event fields/counts, source identity and independent BOOLEAN observations. `KernelInterruptsTests.cpp`, `KernelInterruptBridgeTests.cpp` and `SchedulerInterruptTests.cpp` cover exclusive tuple matching, opaque tokens, epoch/connection capture, event lifetime, exact selected Ex fields, shared lock/IRQL restoration, callback ownership, same-time ISR priority and capacity failure before mutation. `KernelFrameworkRequestTests.cpp` checks pure cancellation previews and batch token capacity without publishing calls or consuming references. The original genuine-WDK `driver_wdm_interrupts.c` uses `NEVERD_WDM_INTERRUPT_FIXTURE` / `NEVERD_WDM_INTERRUPT_CFG_FIXTURE`; `DriverWDMInterruptTests.cpp` exercises normal/active-CFG rebasing, the legacy eleven-argument ABI, Ex versions 1/2/4, actual ISR→DPC completion, low-AL FALSE, synchronization/manual locks, independent PDOs, restart epochs and invalid hardware facts. C API/CLI tests reject invalid declarations before image loading and execute the seven-request [driver-interrupt-scenario.json](examples/driver-interrupt-scenario.json), checking the pending IOCTL bytes and separate delivery observations. Missing images skip explicitly; execution evidence remains Linux-only and does not establish instruction-level preemption. Explicit message and passive-ISR coverage is described below. Shared-line tests verify every latched handler runs even after a claim, matching cross-PDO resource tuples, caller-provided nonpaged locks and assigned-DIRQL scheduling distinct from synchronization IRQL. Level tests cover source OR, same-time assert/deassert, repeated sampling without fabricated edges or acknowledgements, delivery limits and source lifetime. Genuine normal/CFG images at both bases execute shared ISR chains and level assertion/repetition/deassertion.
 
+`KernelFrameworkInterruptTests.cpp` checks the WDF interrupt lifecycle, exact
+configuration failures, excess unassigned objects, synchronization return width,
+resource lifetime, enable-failure rollback and deferred-callback draining before
+D0 exit. `KernelInterruptsTests.cpp` checks WDF service arguments on the original
+connection, descriptor-local message selection and waitable passive-lock
+ownership. `KernelSchedulerTests.cpp` checks coalescing, namespace separation,
+retention while suspended and separate passive framework continuations.
+The genuine WDK `driver_kmdf_pnp.c` includes `driver_kmdf_interrupt.h`;
+`NEVERD_KMDF_PNP_FIXTURE` / `NEVERD_KMDF_PNP_CFG_FIXTURE` cover real line/MSI and
+passive callbacks, creation in PrepareHardware, all eleven interrupt table
+slots, enable failure and STOP/restart reconnection through
+`DriverKMDFPnpTests.cpp`. Normal and active-CFG images run at preferred and
+rebased addresses. Missing external images skip explicitly; execution evidence
+remains Linux-only. External framework locks, automatic parent serialization,
+wake interrupts and retained inactive connections are unsupported contracts,
+not simulated successes.
+
 `DriverDMAScenarioTests.cpp` validates explicit capabilities, logical domains, byte/count/time limits, strict event directions and separate configuration/observations. `KernelPhysicalMemoryTests.cpp` and `BackendBackingTests.cpp` check shared-page allocation boundaries, pins, unchanged CPU permissions, MMIO/reentry exclusion and whole-span failure atomicity; `KernelRequestMDLTests.cpp` checks built descriptor aliases against the same physical identities. `KernelDMATests.cpp`, `KernelDMABridgeTests.cpp` and `SchedulerDMATests.cpp` exercise actual RAM bytes, adapter-bound table calls, inline/queued FIFO ownership, separate callback/map lifetimes, page fragments, wrong directions, release preflight, independent PDO domains and epoch/power failures. The original genuine-WDK `driver_wdm_dma.c` uses `NEVERD_WDM_DMA_FIXTURE` / `NEVERD_WDM_DMA_CFG_FIXTURE`; `DriverWDMDMATests.cpp` and C API/CLI coverage execute real adapter pointers, common/SG storage and separately configured DMA/interrupt events. The shared [driver-dma-scenario.json](examples/driver-dma-scenario.json) requires that fixture's protocol. Missing artifacts skip explicitly; execution evidence is Linux-only and does not establish real host DMA, PCI or a general device engine. `pluginsdk/python/tests/test_driver_dma_integration.py` exercises the existing owned JSON binding with `NEVERD_TEST_LIBNEVERD`, `NEVERD_TEST_WDM_DMA_FIXTURE` and `NEVERD_TEST_WDM_DMA_CFG_FIXTURE`, including bytes, callback order and reported failures.
 
 `KernelSEHTests.cpp` checks pure unwind plans, scope order, nonvolatile GPR restoration, bounded stacks and explicit unsupported metadata; `KernelExceptionTests.cpp` checks exact API arity, low-32-bit statuses, typed exceptions, IRQL limits and unchanged model/CPU state. The genuine-WDK `/GS-` `driver_wdm_seh.c` uses optional `NEVERD_WDM_SEH_FIXTURE` / `NEVERD_WDM_SEH_CFG_FIXTURE`; `DriverWDMSEHTests.cpp` runs normal/active-CFG/rebased images through direct and helper raises, nested handlers, rethrows, actual filters and unwind finally callbacks, search ordering, stable guest exception records, valid CPU-fault continuation and full flags/SIMD restoration. Foreground, unrelated worker and attached-worker filters check inherited process identity and probe/MDL authority. Nested filters and collided finally callbacks execute on linked logical stacks; unrelated CPU faults remain explicit negative cases. C API/CLI executes [driver-seh-scenario.json](examples/driver-seh-scenario.json) and verifies null API results with actual guest handler messages. `pluginsdk/python/tests/test_driver_seh_integration.py` uses `NEVERD_TEST_LIBNEVERD`, `NEVERD_TEST_WDM_SEH_FIXTURE` and `NEVERD_TEST_WDM_SEH_CFG_FIXTURE`. Missing external images skip explicitly; evidence remains Linux-only and does not establish general SEH support.
@@ -217,9 +234,15 @@ V9 schema tests round-trip all eight minor spellings and share final-status vali
 encoding, wrapped-handler flags, search/unwind rechecks after filter or finally
 mutation, prologue/epilogue exclusion and malformed metadata without stack reads.
 `driver_seh_gs.h` first calls the linked genuine WDK cookie checker with each
-original frame, then raises through `__GSHandlerCheck_SEH`; normal/CFG images
+original frame, then raises through `__GSHandlerCheck_SEH` or standalone
+`__GSHandlerCheck`; normal/CFG images
 at both load addresses must handle intact cookies and stop before handlers or
-unload for corrupted ones. The C API and Python binding preserve that outcome.
+unload for corrupted ones. The C API and Python binding preserve that outcome. Standalone checks
+must not invent C scope records. `COFFExceptionGSTests.cpp` verifies exact
+standalone identities, truncated aligned-cookie payloads and rejection of
+anonymous cookie-shaped metadata; `KernelSEHTests.cpp` verifies search and
+unwind-only checks, outer-filter order and malformed standalone payloads.
+
 
 `BackendBackingTests.cpp` also checks exact alias retirement, surviving derived
 aliases and shared backing, same-address reuse with saved CPU contexts, and

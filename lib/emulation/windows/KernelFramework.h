@@ -14,6 +14,7 @@
 
 #include "../GuestMemory.h"
 #include "KernelExportRegistry.h"
+#include "KernelGuestCall.h"
 
 #include "neverd/emulation/DriverPnp.h"
 
@@ -43,6 +44,7 @@ namespace api {
 #undef NEVERD_FRAMEWORK_LOADER_API
 } // namespace api
 #define NEVERD_FRAMEWORK_VALUE(Name, Value) constexpr uint64_t Name = Value;
+#include "KernelFrameworkInterruptValues.def"
 #include "KernelFrameworkQueueValues.def"
 #include "KernelFrameworkRequestValues.def"
 #include "KernelFrameworkValues.def"
@@ -62,6 +64,7 @@ public:
     uint64_t Token = 0;
     uint64_t PC = 0;
     std::vector<uint64_t> Arguments;
+    std::optional<GuestCallToken> ExecutionToken;
   };
   struct DeviceCreation {
     uint32_t Status = 0;
@@ -78,9 +81,46 @@ public:
         CreatePnp;
     std::function<llvm::Error(uint64_t)> Delete;
     std::function<llvm::Error(uint64_t)> FinishInitializing;
+    std::function<llvm::Error(const GuestCall &, uint64_t)> DeferCall;
     std::function<llvm::Expected<uint32_t>(uint64_t, llvm::StringRef)> Link;
   };
   void setDeviceHost(DeviceHost Host) { DevicesHost = std::move(Host); }
+  struct InterruptSelection {
+    uint64_t PDO = 0;
+    uint32_t Ordinal = 0;
+    std::optional<uint32_t> ResourceIndex;
+    uint32_t MessageOrdinal = 0;
+    bool Passive = false;
+    std::optional<bool> ShareVector;
+  };
+  struct InterruptConnection {
+    uint64_t Token = 0, Affinity = 0;
+    uint32_t Vector = 0, MessageID = 0, Polarity = 0, Mode = 0;
+    uint8_t IRQL = 0, SynchronizeIRQL = 0;
+    bool Message = false, Share = false;
+  };
+  /// WDM owns assigned resources, execution locks and interrupt delivery.
+  struct InterruptHost {
+    std::function<llvm::Expected<std::optional<InterruptConnection>>(
+        const InterruptSelection &)>
+        Describe;
+    std::function<llvm::Expected<std::optional<InterruptConnection>>(
+        const InterruptSelection &, uint64_t, uint64_t)>
+        Connect;
+    std::function<llvm::Error(uint64_t)> Disconnect;
+    std::function<llvm::Expected<GuestCallToken>(
+        uint64_t, uint64_t, llvm::ArrayRef<uint64_t>, uint64_t)>
+        PrepareCall;
+    std::function<llvm::Error(uint64_t)> Acquire;
+    std::function<llvm::Error(uint64_t)> Release;
+    std::function<llvm::Expected<bool>(
+        uint64_t, uint64_t, uint64_t, llvm::ArrayRef<uint64_t>, bool, uint64_t)>
+        QueueDeferred;
+    std::function<bool(uint64_t)> HasDeferred;
+  };
+  void setInterruptHost(InterruptHost Host) {
+    InterruptsHost = std::move(Host);
+  }
   struct RequestView {
     uint64_t IRP = 0, ByteOffset = 0;
     uint32_t Major = 0, ControlCode = 0, InputLength = 0, OutputLength = 0;
@@ -217,14 +257,20 @@ public:
   llvm::Expected<bool> queueWaitReady(uint64_t Queue,
                                       bool IncludePending) const;
   llvm::Error flushReadyNotifications();
+  llvm::Error resumeInterruptDrain() { return resumePausedPnp(); }
   /// Resume one suspended framework operation after its actual guest callback.
-  llvm::Expected<std::optional<uint64_t>> finishGuestCall(uint64_t Token,
-                                                          uint64_t Result);
+  llvm::Expected<std::optional<uint64_t>>
+  finishGuestCall(uint64_t Token, uint64_t Result, uint8_t IRQL = 0);
   llvm::Error validateGuestAccess(uint64_t Address, uint32_t Size,
                                   bool IsWrite) const;
   bool hasLiveBinding() const;
 
 private:
+  llvm::Expected<uint64_t> callImpl(const KernelExportRegistry::Export &Export,
+                                    llvm::ArrayRef<uint64_t> Arguments,
+                                    uint8_t IRQL);
+  llvm::Expected<bool> deferPassiveCall(uint64_t WdmDevice = 0);
+  uint8_t CallbackIRQL = 0;
   llvm::Error writeRequestParameters(uint64_t Address, const RequestView &View);
   llvm::Error writeRequestCompletionParams(uint64_t Address, uint32_t Status);
   GuestMemory &Memory;
@@ -250,6 +296,7 @@ private:
   };
   std::map<uint64_t, Binding> Bindings;
   DeviceHost DevicesHost;
+  InterruptHost InterruptsHost;
   struct Attributes {
     uint64_t Parent = 0, Cleanup = 0, Destroy = 0;
     uint64_t Type = 0, ContextSize = 0;
@@ -317,6 +364,22 @@ private:
     SelfManagedIoState SelfManagedIo = SelfManagedIoState::Uninitialized;
   };
   std::map<uint64_t, Device> Devices;
+  struct Interrupt {
+    uint64_t Device = 0, AssociatedObject = 0;
+    uint64_t ISR = 0, DPC = 0, WorkItem = 0, Enable = 0, Disable = 0;
+    InterruptSelection Selection;
+    std::optional<InterruptConnection> Connection;
+    bool Enabled = false;
+    bool ChangingState = false;
+  };
+  std::map<uint64_t, Interrupt> InterruptObjects;
+  enum class InterruptCallKind { Synchronize, Enable, Disable, Deferred };
+  struct InterruptContinuation {
+    uint64_t Object = 0;
+    InterruptCallKind Kind = InterruptCallKind::Synchronize;
+  };
+  std::map<uint64_t, InterruptContinuation> InterruptContinuations;
+
   struct FileObject {
     uint64_t Device = 0, Wdm = 0;
   };
@@ -412,6 +475,7 @@ private:
     File,
     Queue,
     Request,
+    Interrupt,
     Memory
   };
   struct Object {
@@ -478,7 +542,10 @@ private:
 #include "KernelFrameworkPnpCallbacks.def"
 #undef NEVERD_FRAMEWORK_PNP_CALLBACK
     IoStop,
-    IoResume
+    IoResume,
+    EnableInterrupts,
+    DisableInterrupts,
+    DrainInterrupts
   };
   struct PnpStep {
     PnpPhase Phase;
@@ -491,6 +558,7 @@ private:
     bool Removing = false;
     bool CallbacksComplete = false;
     bool WaitingForRequests = false;
+    bool WaitingForInterrupts = false;
     uint32_t Status = 0;
     PnpStep Current{PnpPhase::PrepareHardware};
     std::deque<PnpStep> Remaining;
@@ -499,6 +567,7 @@ private:
     bool ReleasesHardware = true;
     uint32_t PowerState = framework::PowerDeviceD3Final;
     bool SuspendAfterQueues = false;
+    uint64_t CurrentInterrupt = 0;
     bool nextPrecedesRequestDrain() const {
       if (Remaining.empty())
         return false;
@@ -532,6 +601,21 @@ private:
   llvm::Error schedulePnpCallback(uint64_t Token);
   llvm::Error finalizePnpCallbacks(uint64_t Token);
   llvm::Error resumePausedPnp();
+  llvm::Expected<bool> advancePnpInterrupts(uint64_t Token, bool Enable);
+  llvm::Error finishPnpInterrupt(uint64_t Token, uint32_t Status);
+  bool hasDeferredInterrupts(uint64_t Device) const;
+  llvm::Error disconnectInterrupts(uint64_t Device);
+  llvm::Expected<uint64_t> createInterrupt(Binding &B,
+                                           llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<std::optional<uint64_t>>
+  callInterrupt(llvm::StringRef Name, Binding &B,
+                llvm::ArrayRef<uint64_t> Arguments, uint8_t IRQL);
+  llvm::Expected<std::optional<uint64_t>>
+  finishInterruptCallback(uint64_t Token, uint64_t Result);
+  llvm::Error prepareInterruptCall(uint64_t Token, uint64_t Handle,
+                                   uint64_t Routine,
+                                   llvm::ArrayRef<uint64_t> Arguments);
+
   void appendPowerQueuePresentations(uint64_t Device,
                                      std::vector<Step> &Steps) const;
 

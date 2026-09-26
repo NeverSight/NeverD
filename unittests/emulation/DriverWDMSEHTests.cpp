@@ -10,6 +10,7 @@
 
 #include "fixtures/driver_seh_test.h"
 #include "gtest/gtest.h"
+#include "windows/DriverImage.h"
 
 #include "neverd/emulation/DriverSession.h"
 
@@ -95,7 +96,8 @@ TEST(DriverWDMSEH, ThreeRaiseExportsExecuteConstantHandlersWithCfgAndRebasing) {
 TEST(DriverWDMSEH, GSCookiesMatchRealRuntimeForFixedAndAlignedFrames) {
   for (const auto *Image : images())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
-      for (char Mode : {SehGSCookie, SehGSAlignedCookie}) {
+      for (char Mode : {SehGSCookie, SehGSAlignedCookie, SehGSStandaloneCookie,
+                        SehGSStandaloneAlignedCookie}) {
         SCOPED_TRACE(Image);
         SCOPED_TRACE(Mode);
         auto Result = emulateDriver(Image, options(Mode, Address));
@@ -108,10 +110,33 @@ TEST(DriverWDMSEH, GSCookiesMatchRealRuntimeForFixedAndAlignedFrames) {
       }
 }
 
+TEST(DriverWDMSEH, StandaloneRuntimeIdentityPreservesCookieOnlyMetadata) {
+  for (const auto *Path : images()) {
+    SCOPED_TRACE(Path);
+    auto Image = loadDriverImage(Path, profile::DefaultMemoryLimit);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    size_t Frames = 0;
+    for (const auto &Function : Image->Exceptions.Functions) {
+      if (Function.Personality != ExceptionPersonality::GSHandlerCheck)
+        continue;
+      ++Frames;
+      EXPECT_EQ(Function.ParseStatus, ExceptionParseStatus::Complete);
+      ASSERT_TRUE(Function.GSCookie);
+      EXPECT_EQ(Function.GSCookie->ParseStatus, ExceptionParseStatus::Complete);
+      EXPECT_FALSE(Function.SEH);
+      EXPECT_FALSE(Function.Cxx);
+      EXPECT_FALSE(Function.canRegenerateLanguageMetadata());
+    }
+    EXPECT_EQ(Frames, 2u);
+  }
+}
+
 TEST(DriverWDMSEH, CorruptGSCookiesCannotReachHandlersOrUnload) {
   for (const auto *Image : images())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
-      for (char Mode : {SehGSCorruptCookie, SehGSAlignedCorruptCookie}) {
+      for (char Mode : {SehGSCorruptCookie, SehGSAlignedCorruptCookie,
+                        SehGSStandaloneCorruptCookie,
+                        SehGSStandaloneAlignedCorruptCookie}) {
         SCOPED_TRACE(Image);
         SCOPED_TRACE(Mode);
         auto Result = emulateDriver(Image, options(Mode, Address));

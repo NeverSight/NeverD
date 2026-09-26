@@ -163,7 +163,17 @@ READ／WRITE／IOCTL 可宣告 `interrupt_events`，每項指定 `after_100ns`�
 
 [完整電源情境](../examples/driver-power-scenario.json) 可透過 `--scenario` 執行真正範例，包含啟動、系統查詢／睡眠／喚醒、移除及三個明確子回應。
 
-KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客體識別，下列 88 個 API 實作了執行語義。`WdfVersionBind` 與 `WdfVersionUnbind` 在真實 WDK `FxDriverEntry` 包裝函式前後管理客體繫結。`WdfGetDriver` 讀取公用驅動程式全域結構。非 PnP 驅動程式、一般物件、控制裝置、佇列和傳入請求共用具型別內容、參考計數，以及實際執行的清理／銷毀／卸載回呼。所有已建模的框架呼叫與回呼目前都要求 `PASSIVE_LEVEL`；清理完成後新增參考仍不在此設定的支援範圍內。未建模的函式槽、`WdfLdrQueryInterface`、類別擴充和 UMDF 會明確停止。
+KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客體識別，下列 99 個 API 實作了執行語義。`WdfVersionBind` 與 `WdfVersionUnbind` 在真實 WDK `FxDriverEntry` 包裝函式前後管理客體繫結。`WdfGetDriver` 讀取公用驅動程式全域結構。非 PnP 驅動程式、一般物件、控制裝置、佇列和傳入請求共用具型別內容、參考計數，以及實際執行的清理／銷毀／卸載回呼。除了中斷 DDI 及下文明列支援其他 IRQL 的要求／物件操作，已建模的框架呼叫與回呼仍要求 `PASSIVE_LEVEL`；清理完成後新增參考仍不在此設定的支援範圍內。未建模的函式槽、`WdfLdrQueryInterface`、類別擴充和 UMDF 會明確停止。
+
+中斷 API: `WdfInterruptCreate`, `WdfInterruptQueueDpcForIsr`, `WdfInterruptQueueWorkItemForIsr`, `WdfInterruptSynchronize`, `WdfInterruptAcquireLock`, `WdfInterruptReleaseLock`, `WdfInterruptEnable`, `WdfInterruptDisable`, `WdfInterruptWdmGetInterrupt`, `WdfInterruptGetInfo`, `WdfInterruptGetDevice`.
+
+框架中斷物件共用已指派的線路中斷或 MSI 資源及內部中斷鎖。ISR 與同步回呼在指派的 DIRQL 執行，被動中斷則在 `PASSIVE_LEVEL` 執行；`WdfInterruptGetInfo` 如實回報被動 IRQL。DPC 在 `DISPATCH_LEVEL` 執行，工作項目在 `PASSIVE_LEVEL` 執行。尚在佇列中的重複請求會合併，暫停與恢復保留回呼所有權直到返回。上電於 D0Entry 後連接並啟用中斷；斷電先停用並斷線，再等待延後回呼排空，最後執行 D0Exit 與資源釋放。明確啟用／停用執行真正的驅動回呼，不憑空產生硬體中斷。外部 `WDFSPINLOCK`／`WDFWAITLOCK`、父物件自動序列化、喚醒中斷及保留的 inactive 連線仍不支援；閒置／喚醒策略及失敗裝置自動重新列舉仍未建模。
+
+以下要求／物件 API 支援不高於 `DISPATCH_LEVEL` 的 IRQL：`WdfObjectDereferenceActual`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`, `WdfRequestRetrieveInputMemory`, `WdfRequestRetrieveOutputMemory`, `WdfRequestRetrieveInputWdmMdl`, `WdfRequestRetrieveOutputWdmMdl`, `WdfRequestGetInformation`, `WdfRequestSetInformation`, `WdfRequestGetIoQueue`, `WdfRequestGetFileObject`, `WdfRequestWdmGetIrp`, `WdfRequestGetParameters`, `WdfRequestGetStatus`, `WdfRequestMarkCancelableEx`, `WdfRequestUnmarkCancelable`, `WdfRequestIsCanceled`, `WdfMemoryGetBuffer`.
+
+`WdfObjectGetTypedContextWorker`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual` 也支援已建模的中斷 IRQL；內容存取與參考取得不會呼叫被動層級回呼。
+
+在高於 `PASSIVE_LEVEL` 的 IRQL 完成要求或釋放物件的最後一個參考時，真正的清理、銷毀與後續框架派送會排程至 `PASSIVE_LEVEL`。舊版 `WdfRequestMarkCancelable` 仍僅支援 `PASSIVE_LEVEL`，以保留要求已取消時同步執行回呼的語意。其他 API 保留既有 IRQL 限制。
 
 控制裝置要求複製可列印 ASCII 名稱，且 SDDL 必須精確為 `D:P(A;;GA;;;WD)`。這授予所有呼叫端存取權限，無需虛構呼叫端權杖；不支援其他安全描述元、未命名裝置和自動名稱。裝置初始化擁有一個 WDM 裝置。請求可透過現有工作階段命名空間中的符號連結別名 `\DosDevices\Name` 或 `\??\Name` 選擇裝置，報告仍保留正規裝置名稱。建立成功會消耗初始化物件並清空其指標；失敗則回復部分裝置擁有權。`WdfControlFinishInitializing` 決定何時可以遞送 I/O。僅在已建模的檔案、工作項目和請求允許時，刪除操作才移除裝置及其連結；不支援刪除過程中取消或排空請求。
 
@@ -364,7 +374,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v74`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v75`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 
@@ -372,7 +382,7 @@ JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`�
 
 例外傳遞使用映像已解碼的 x64 第一版展開表及 `__C_specific_handler` 範圍，執行真正的客體篩選函式、處理常式及展開期間的 `__finally`。篩選結果為零時繼續搜尋，正值選取處理常式，負值要求繼續執行；負值僅能恢復可捕捉的使用者 CPU 訪存例外，且只接受經驗證的 `CONTEXT_INTEGER | CONTEXT_CONTROL` 修改，其餘完整原始 CPU 狀態保持不變。支援一般輔助函式框架展開、已儲存的非揮發性通用暫存器還原、目前堆疊邊界及 `GetExceptionCode()`；正常流程與例外展開的 finally 都執行實際客體程式碼。篩選函式及 finally 繼承父執行的行程／執行緒身分與使用者存取權限，原本無權限的系統工作項不會因此取得權限。處理常式可再次引發例外至支援的外層範圍。支援篩選函式／finally 內巢狀與衝突展開、鏈結 V1 中繼資料、部分前置程式碼、標準尾聲及完整 XMM6–XMM15 還原。例外記錄保留鏈結，已進入的 finally 不會重複執行。C++ 處理機制與不完整中繼資料仍明確拒絕。未捕捉的 API 例外以 `model_error` 停止；其他不屬於可捕捉使用者訪存例外的 CPU 故障仍終止執行。 常數 `EXCEPTION_EXECUTE_HANDLER` 直接選取對應處理常式。只有選取處理常式後，展開才執行離開範圍的 finally；搜尋期間或篩選函式恢復原執行時不執行清理。每次篩選函式返回都驗證 `EXCEPTION_POINTERS`、例外記錄及不支援的 `CONTEXT` 欄位，修改它們會明確失敗。模型 API 引發的例外不能透過負篩選結果恢復。
 
-`__GSHandlerCheck_SEH` 在搜尋處理常式前及展開階段分別檢查映像目前的安全 cookie，包含沒有 finally 的堆疊框架。支援固定與動態對齊的位置、帶正負號的框架偏移及原始框架指標編碼；包裝層的 cookie 檢查與 C 處理常式旗標分別生效。前置程式碼及尾聲展開不會讀取尚未建立的 cookie。不匹配會在相關篩選函式、清理或處理常式執行前停止。獨立的 `__GSHandlerCheck` 及 GS/C++ 包裝仍不支援。`driver_seh_gs.h` 定義原創框架並實際呼叫連結的 WDK cookie 檢查函式。
+`__GSHandlerCheck_SEH` 在搜尋處理常式前及展開階段分別檢查映像目前的安全 cookie，包含沒有 finally 的堆疊框架。支援固定與動態對齊的位置、帶正負號的框架偏移及原始框架指標編碼；包裝層的 cookie 檢查與 C 處理常式旗標分別生效。前置程式碼及尾聲展開不會讀取尚未建立的 cookie。不匹配會在相關篩選函式、清理或處理常式執行前停止。獨立的 `__GSHandlerCheck` 也會在搜尋與展開時檢查 cookie，不虛構 C 範圍。辨識須依據精確符號或匯入身分，不從指令模式猜測匿名程式碼。GS/C++ 包裝與 C++ 例外 personality 仍不支援。`driver_seh_gs.h` 定義原創框架並實際呼叫連結的 WDK cookie 檢查函式。
 
 原創測試驅動 `driver_wdm_seh.c` 使用真正的 WDK 標頭與 `/GS-`。設定 `NEVERD_WDM_SEH_FIXTURE` 及 `NEVERD_WDM_SEH_CFG_FIXTURE`，即可提供一般及啟用 CFG 的映像。[driver-seh-scenario.json](../examples/driver-seh-scenario.json) 範例會重定位映像、在 DriverEntry 捕捉 API 例外，然後卸載。 獨立的 WDM METHOD_NEITHER 路徑現已支援使用者記憶體探測、MDL 鎖頁與可捕捉的記憶體故障。
 
@@ -409,6 +419,6 @@ WDM READ/WRITE/IOCTL 要求或無限並行 KMDF 預設佇列中的要求可設�
 
 明確的 `messages` 描述 MSI 配置，每條訊息包含位址、資料、向量、層級、親和性與極性。事件的 `message_id` 是描述元內索引，ISR 第三引數則是 PDO 全域索引。`CONNECT_MESSAGE_BASED`（3）傳回實際訊息表；`CONNECT_MESSAGE_BASED_PASSIVE`（5）與被動線路支援 PASSIVE_LEVEL 等待，同一中斷序列化，不同中斷各自保留執行框架。分別記錄到達及實際遞送時間，不推測 PCI 或裝置協定。
 
-`WdfDeviceInitSetPowerPolicyOwnership` 控制電源策略所有權。自管理 I/O 的 Init/Suspend/Restart/Flush/Cleanup 與 D0 前後回呼實際執行，普通 D3/D0 保留硬體資源。預設策略將 Sleeping3/Working 對應至 D3/D0，消費明確的 `requested_device_power`；獨立子 IRP 報告 `origin: "framework_power_policy"` 與 `response_index`。S3 等待子請求，S0 可於發出 D0 後完成。閒置／喚醒、WDF 中斷物件與失敗裝置自動重新列舉仍未建模。
+`WdfDeviceInitSetPowerPolicyOwnership` 控制電源策略所有權。自管理 I/O 的 Init/Suspend/Restart/Flush/Cleanup 與 D0 前後回呼實際執行，普通 D3/D0 保留硬體資源。預設策略將 Sleeping3/Working 對應至 D3/D0，消費明確的 `requested_device_power`；獨立子 IRP 報告 `origin: "framework_power_policy"` 與 `response_index`。S3 等待子請求，S0 可於發出 D0 後完成。閒置／喚醒、失敗裝置自動重新列舉仍未建模。
 
 系統 Query 等待對應裝置 Query 並保留其狀態；查詢本身不改變電源狀態。

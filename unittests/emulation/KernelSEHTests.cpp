@@ -74,6 +74,14 @@ protected:
     GS.HasExceptionHandler = GS.HasUnwindHandler = true;
     return F;
   }
+  ExceptionFunction &standaloneGS(uint64_t RVA = 0x2000) {
+    auto &F = gsHandler(RVA);
+    F.Personality = ExceptionPersonality::GSHandlerCheck;
+    F.SEH.reset();
+    F.GSCookie->HasExceptionHandler = false;
+    F.GSCookie->HasUnwindHandler = false;
+    return F;
+  }
   static SEHScopeRecord scope(uint64_t Begin, uint64_t End, uint64_t Handler) {
     SEHScopeRecord S;
     S.Kind = SEHScopeKind::CatchAll;
@@ -144,6 +152,63 @@ TEST_F(DriverKernelSEH, GSCookieIsCheckedDuringSearchAndTargetUnwind) {
   EXPECT_EQ(CookieReads, 2u);
   Words[SP + 32] ^= 1;
   rejected("cookie check failed");
+}
+
+TEST_F(DriverKernelSEH, StandaloneGSChecksWithoutInventingLanguageScopes) {
+  handler();
+  auto &Inner = standaloneGS();
+  Inner.UnwindOperations = {op(UnwindOperationKind::AllocateSmall, 8, 64)};
+  Caller.PC = Base + 0x2040;
+  const auto SP = Caller.GPR[seh::StackRegister];
+  Words = {{SP + 32, SP ^ SecurityCookie}, {SP + 64, Base + 0x1041}};
+  EXPECT_EQ(selected().HandlerPC, Base + 0x1080);
+  EXPECT_EQ(CookieReads, 2u);
+  EXPECT_EQ(Reads, (std::vector<uint64_t>{SP + 32, SP + 64, SP + 32}));
+  Words[SP + 32] ^= 1;
+  rejected("cookie check failed");
+}
+
+TEST_F(DriverKernelSEH, StandaloneGSUnwindOnlyChecksAfterOuterFilterSelection) {
+  auto &Outer = handler();
+  Outer.SEH->Scopes[0].Kind = SEHScopeKind::Filter;
+  Outer.SEH->Scopes[0].FilterOrFinallyVA = Base + 0x3000;
+  auto &Inner = standaloneGS();
+  Inner.UnwindFlags = seh::UnwindHandlerFlag;
+  Inner.UnwindOperations = {op(UnwindOperationKind::AllocateSmall, 8, 64)};
+  Caller.PC = Base + 0x2040;
+  const auto SP = Caller.GPR[seh::StackRegister];
+  Words = {{SP + 32, SP ^ SecurityCookie}, {SP + 64, Base + 0x1041}};
+  auto Planner = planner();
+  auto State = Planner.begin(Code, Caller, {StackBase, StackSize});
+  auto Filter = Planner.advance(State);
+  ASSERT_TRUE(bool(Filter)) << llvm::toString(Filter.takeError());
+  EXPECT_EQ(Filter->Kind, KernelSEH::ActionKind::Filter);
+  EXPECT_EQ(CookieReads, 0u);
+  Words[SP + 32] ^= 1;
+  auto Corrupt = Planner.advance(State, 1);
+  ASSERT_FALSE(bool(Corrupt));
+  EXPECT_NE(llvm::toString(Corrupt.takeError()).find("cookie check failed"),
+            std::string::npos);
+  Words[SP + 32] ^= 1;
+  auto Handler = Planner.advance(State, 1);
+  ASSERT_TRUE(bool(Handler)) << llvm::toString(Handler.takeError());
+  EXPECT_EQ(Handler->Kind, KernelSEH::ActionKind::Handler);
+}
+
+TEST_F(DriverKernelSEH,
+       StandaloneGSRejectsMissingCookieAndExtraLanguageTables) {
+  auto &F = standaloneGS();
+  Caller.PC = Base + 0x2040;
+  const auto Cookie = F.GSCookie;
+  F.GSCookie.reset();
+  rejected("inconsistent C exception-handler metadata");
+  F.GSCookie = Cookie;
+  F.SEH.emplace();
+  rejected("inconsistent C exception-handler metadata");
+  F.SEH.reset();
+  F.GSCookie->ParseStatus = ExceptionParseStatus::Malformed;
+  rejected("GS cookie metadata");
+  EXPECT_TRUE(Reads.empty());
 }
 
 TEST_F(DriverKernelSEH, GSAlignedSlotUsesOriginalFramePointerForEncoding) {

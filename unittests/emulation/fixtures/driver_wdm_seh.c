@@ -54,11 +54,32 @@ static NTSTATUS Check(BOOLEAN Condition, ULONG Line) {
   } while (0)
 
 static NTSTATUS GSCookiePaths(VOID) {
-  const BOOLEAN Corrupt =
-      Mode == SehGSCorruptCookie || Mode == SehGSAlignedCorruptCookie;
-  const BOOLEAN Aligned =
-      Mode == SehGSAlignedCookie || Mode == SehGSAlignedCorruptCookie;
-  NTSTATUS Status = Aligned ? SehGSAlignedFrame(Corrupt) : SehGSFrame(Corrupt);
+  const BOOLEAN Standalone = Mode == SehGSStandaloneCookie ||
+                             Mode == SehGSStandaloneAlignedCookie ||
+                             Mode == SehGSStandaloneCorruptCookie ||
+                             Mode == SehGSStandaloneAlignedCorruptCookie;
+  const BOOLEAN Corrupt = Mode == SehGSCorruptCookie ||
+                          Mode == SehGSAlignedCorruptCookie ||
+                          Mode == SehGSStandaloneCorruptCookie ||
+                          Mode == SehGSStandaloneAlignedCorruptCookie;
+  const BOOLEAN Aligned = Mode == SehGSAlignedCookie ||
+                          Mode == SehGSAlignedCorruptCookie ||
+                          Mode == SehGSStandaloneAlignedCookie ||
+                          Mode == SehGSStandaloneAlignedCorruptCookie;
+  NTSTATUS Status = STATUS_UNSUCCESSFUL;
+  if (Standalone) {
+    __try {
+      if (Aligned)
+        SehGSStandaloneAlignedFrame(Corrupt);
+      else
+        SehGSStandaloneFrame(Corrupt);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      REQUIRE(GetExceptionCode() == STATUS_ACCESS_VIOLATION);
+      Status = STATUS_SUCCESS;
+    }
+  } else {
+    Status = Aligned ? SehGSAlignedFrame(Corrupt) : SehGSFrame(Corrupt);
+  }
   REQUIRE(NT_SUCCESS(Status));
   DbgPrint("WDM SEH: GS cookie checked aligned=%u\n", Aligned);
   return STATUS_SUCCESS;
@@ -785,7 +806,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     if ((Last >= 'A' && Last <= 'Z') || Last == SehXmmUnwind ||
         Last == SehChainedUnwind || Last == SehPrologueUnwind ||
         Last == SehGSCookie || Last == SehGSAlignedCookie ||
-        Last == SehGSCorruptCookie || Last == SehGSAlignedCorruptCookie)
+        Last == SehGSCorruptCookie || Last == SehGSAlignedCorruptCookie ||
+        Last == SehGSStandaloneCookie || Last == SehGSStandaloneAlignedCookie ||
+        Last == SehGSStandaloneCorruptCookie ||
+        Last == SehGSStandaloneAlignedCorruptCookie)
       Mode = (CHAR)Last;
   }
   switch (Mode) {
@@ -793,6 +817,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   case SehGSAlignedCookie:
   case SehGSCorruptCookie:
   case SehGSAlignedCorruptCookie:
+  case SehGSStandaloneCookie:
+  case SehGSStandaloneAlignedCookie:
+  case SehGSStandaloneCorruptCookie:
+  case SehGSStandaloneAlignedCorruptCookie:
     Test = GSCookiePaths;
     break;
   case SehChainedUnwind:

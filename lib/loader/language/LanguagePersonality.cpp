@@ -82,6 +82,7 @@ constexpr PersonalityName kPersonalityNames[] = {
     {"__CxxFrameHandler3", ExceptionPersonality::CxxFrameHandler3},
     {"__CxxFrameHandler4", ExceptionPersonality::CxxFrameHandler4},
     {"__GSHandlerCheck_SEH", ExceptionPersonality::GSHandlerCheckSEH},
+    {"__GSHandlerCheck", ExceptionPersonality::GSHandlerCheck},
     {"__GSHandlerCheck_EH", ExceptionPersonality::GSHandlerCheckEH},
     {"__GSHandlerCheck_EH4", ExceptionPersonality::GSHandlerCheckEH4},
     // Windows x86-32 registration model.  `_except_handler3` canonicalizes to

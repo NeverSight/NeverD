@@ -391,6 +391,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     size_t WaitEvent = 0;
     bool PrivateStack = false;
     GuestCallToken ReturnToken;
+    std::optional<GuestCallToken> PendingEntry;
     std::optional<KernelGuestCall> ChildCall;
     bool ThreadTerminated = false;
     std::unique_ptr<ExceptionExecution> Exception;
@@ -884,14 +885,30 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                   const std::string &ParentPhase) -> llvm::Error {
     const bool Foreground = bool(Current) && !Current->ID;
     auto StartDetachedCall = [&](const KernelGuestCall &Call) -> llvm::Error {
-      if (auto E = Kernel.beginGuestCall(Call.Token))
-        return E;
+      auto Wait = Kernel.takeWait();
+      if (Wait &&
+          Wait->Type != KernelModel::Wait::Kind::InterruptSynchronization)
+        return failure("detached callback has an unrelated deferred wait");
+      if (!Wait)
+        if (auto E = Kernel.beginGuestCall(Call.Token))
+          return E;
       auto Frame = NewExecution(Call.PC, Call.Arguments,
                                 guestCallPhase(Call.Token), 0, true);
       if (!Frame)
         return Frame.takeError();
       (*Frame)->ReturnToken = Call.Token;
-      Current = std::move(*Frame);
+      if (Wait) {
+        auto Context = CPU.saveContext();
+        if (!Context)
+          return Context.takeError();
+        (*Frame)->Context = std::move(*Context);
+        (*Frame)->Wait = std::move(Wait);
+        (*Frame)->PendingEntry = Call.Token;
+        Waiting.push_back(std::move(*Frame));
+        Current.reset();
+      } else {
+        Current = std::move(*Frame);
+      }
       return llvm::Error::success();
     };
     auto CommitException = [&](KernelSEH::Context Registers,
@@ -959,6 +976,13 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     };
     while (!DeadlineExceeded()) {
       if (Current) {
+        if (Current->PendingEntry) {
+          if (auto E = Kernel.beginGuestCall(*Current->PendingEntry)) {
+            ModelFailure(std::move(E));
+            return llvm::Error::success();
+          }
+          Current->PendingEntry.reset();
+        }
         if (!Current->ChildCall)
           if (auto E = RunExecution(*Current)) {
             ModelFailure(std::move(E));
@@ -1146,22 +1170,15 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                     failure("model continuation lost its guest callback"));
                 return llvm::Error::success();
               }
-              auto Call = std::move(*Parent->ChildCall);
-              Parent->ChildCall.reset();
-              if (auto E = Kernel.beginGuestCall(Call.Token)) {
-                ModelFailure(std::move(E));
-                return llvm::Error::success();
+              if (auto Wait = Kernel.takeWait()) {
+                if (Parent->Wait) {
+                  ModelFailure(
+                      failure("callback cannot replace its caller wait"));
+                  return llvm::Error::success();
+                }
+                Parent->Wait = std::move(Wait);
               }
-              auto Child =
-                  NewExecution(Call.PC, Call.Arguments,
-                               guestCallPhase(Call.Token), Parent->ID, true);
-              if (!Child) {
-                ModelFailure(Child.takeError());
-                return llvm::Error::success();
-              }
-              (*Child)->ReturnToken = Call.Token;
-              (*Child)->Parent = std::move(Parent);
-              Current = std::move(*Child);
+              Current = std::move(Parent);
               continue;
             }
             Current = std::move(Parent);
@@ -1202,10 +1219,17 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
             return llvm::Error::success();
           }
           if (*Continuation) {
-            if (auto E = Kernel.beginGuestCall((**Continuation).Token)) {
-              ModelFailure(std::move(E));
+            auto Wait = Kernel.takeWait();
+            if (Wait && Wait->Type !=
+                            KernelModel::Wait::Kind::InterruptSynchronization) {
+              ModelFailure(failure("scheduled callback has an unrelated wait"));
               return llvm::Error::success();
             }
+            if (!Wait)
+              if (auto E = Kernel.beginGuestCall((**Continuation).Token)) {
+                ModelFailure(std::move(E));
+                return llvm::Error::success();
+              }
             auto Frame =
                 NewExecution((**Continuation).PC, (**Continuation).Arguments,
                              Current->Phase, Current->ID);
@@ -1213,7 +1237,24 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
               ModelFailure(Frame.takeError());
               return llvm::Error::success();
             }
-            Current = std::move(*Frame);
+            if (Wait) {
+              auto Context = CPU.saveContext();
+              if (!Context) {
+                ModelFailure(Context.takeError());
+                return llvm::Error::success();
+              }
+              (*Frame)->Context = std::move(*Context);
+              (*Frame)->Wait = std::move(Wait);
+              (*Frame)->PendingEntry = (**Continuation).Token;
+              if (auto E = Kernel.suspendScheduled(Current->ID)) {
+                ModelFailure(std::move(E));
+                return llvm::Error::success();
+              }
+              Waiting.push_back(std::move(*Frame));
+              Current.reset();
+            } else {
+              Current = std::move(*Frame);
+            }
             continue;
           }
           if (auto E = Kernel.finishScheduled(Current->ID)) {

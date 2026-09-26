@@ -262,6 +262,9 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
                          "resolved personality is not executable");
 
       switch (F.Personality) {
+      case ExceptionPersonality::GSHandlerCheck:
+        detail::parseGSCookie(F, Img, F.HandlerDataVA);
+        break;
       case ExceptionPersonality::CSpecificHandler:
         detail::parseSEH(F, Img);
         break;

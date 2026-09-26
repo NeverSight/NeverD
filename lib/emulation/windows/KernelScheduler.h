@@ -51,11 +51,15 @@ public:
     WDMCancel,
     WDMCompletion,
     FrameworkCompletion,
+    FrameworkPassive,
+    FrameworkInterruptDPC,
+    FrameworkInterruptWorkItem,
     Interrupt,
     DMAListControl,
     DMAAdapterControl
   };
   static bool isDMACallbackKind(CallbackKind Kind);
+  static bool isFrameworkInterruptCallbackKind(CallbackKind Kind);
   enum class DpcImportance { Low = 0, Medium = 1, High = 2, MediumHigh = 3 };
 
   struct Limits {
@@ -111,6 +115,9 @@ public:
   /// eligibility and the request lifetime; the scheduler only orders delivery.
   /// An already-queued cancellation object is an explicit error.
   llvm::Expected<uint64_t> enqueueFrameworkCancel(Callback Cancellation);
+  /// A framework continuation deferred from DISPATCH_LEVEL runs on the normal
+  /// worker FIFO. Its token is independent of interrupt and WDM work objects.
+  llvm::Expected<uint64_t> enqueueFrameworkPassive(Callback Call);
   llvm::Error
   canEnqueueWDMCancellations(llvm::ArrayRef<Callback> Cancellations) const;
   llvm::Expected<uint64_t> enqueueWDMCancellation(Callback Cancellation);
@@ -174,6 +181,13 @@ public:
   bool removeDPC(uint64_t Object);
   bool isDPCQueued(uint64_t Object) const;
   bool hasQueuedDPC() const { return !DPCs.empty(); }
+
+  /// Interrupt-owned deferred callbacks share the DPC/worker FIFOs while
+  /// retaining their own identity namespace and coalescing contract. A queued
+  /// invocation coalesces; a running invocation may queue its next delivery.
+  llvm::Expected<std::optional<uint64_t>>
+  queueFrameworkInterrupt(Callback Call, bool WorkItem);
+  bool hasFrameworkInterrupt(uint64_t Object) const;
 
   /// Returns one callback, retaining its ownership until finish(). Calling
   /// next() with an active callback is an error. With AdvanceTime false,

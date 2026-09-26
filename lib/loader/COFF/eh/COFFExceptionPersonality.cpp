@@ -257,6 +257,8 @@ ExceptionPersonality classifyPersonality(llvm::StringRef Name) {
     return ExceptionPersonality::CxxFrameHandler4;
   if (Bare == "GSHandlerCheck_SEH")
     return ExceptionPersonality::GSHandlerCheckSEH;
+  if (Bare == "GSHandlerCheck")
+    return ExceptionPersonality::GSHandlerCheck;
   if (Bare == "GSHandlerCheck_EH")
     return ExceptionPersonality::GSHandlerCheckEH;
   if (Bare == "GSHandlerCheck_EH4")

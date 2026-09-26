@@ -1,0 +1,30 @@
+//===- KernelFrameworkDispatchAPIs.def - Dispatch-level WDF operations ----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// Request operations whose guest DDI permits DISPATCH_LEVEL. Any resulting
+/// passive object, queue or power callbacks are dispatched by a worker.
+/// Interrupt DDIs validate their own lock and resource IRQL separately.
+//===----------------------------------------------------------------------===//
+
+NEVERD_FRAMEWORK_DISPATCH_API(WdfObjectDereferenceActual)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestComplete)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestCompleteWithInformation)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestRetrieveInputBuffer)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestRetrieveOutputBuffer)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestRetrieveInputMemory)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestRetrieveOutputMemory)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestRetrieveInputWdmMdl)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestRetrieveOutputWdmMdl)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestGetInformation)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestSetInformation)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestGetIoQueue)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestGetFileObject)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestWdmGetIrp)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestGetParameters)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestGetStatus)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestMarkCancelableEx)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestUnmarkCancelable)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfRequestIsCanceled)
+NEVERD_FRAMEWORK_DISPATCH_API(WdfMemoryGetBuffer)

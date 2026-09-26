@@ -208,6 +208,28 @@ void KernelModel::configureFrameworkDeviceHost() {
     FrameworkDevices.erase(Owner);
     return llvm::Error::success();
   };
+  Host.DeferCall = [this](const KernelFramework::GuestCall &Call,
+                          uint64_t Device) -> llvm::Error {
+    const auto Owner = Devices.find(Device);
+    if (!Call.Token || Owner == Devices.end() || Owner->second.DeletePending ||
+        !FrameworkDevices.contains(Device))
+      return frameworkDeviceError(
+          "deferred framework continuation requires its live WDM device");
+    if (Call.ExecutionToken &&
+        (Call.ExecutionToken->Owner != GuestCallOwner::Framework ||
+         Call.ExecutionToken->ID != Call.Token))
+      return frameworkDeviceError("deferred framework continuation cannot "
+                                  "transfer another model's lock");
+    KernelScheduler::Callback Callback{Call.Token, Device,
+                                       profile::WorkerThreadIdentity, Call.PC,
+                                       Call.Arguments};
+    auto ID = Scheduler.enqueueFrameworkPassive(std::move(Callback));
+    if (!ID)
+      return ID.takeError();
+    ScheduledModelContinuations.emplace(
+        *ID, GuestCallToken{GuestCallOwner::Framework, Call.Token});
+    return llvm::Error::success();
+  };
   Framework->setDeviceHost(std::move(Host));
 }
 
@@ -325,9 +347,9 @@ std::optional<KernelGuestCall> KernelModel::takeGuestCall() {
     return Call;
   if (Framework)
     if (auto Call = Framework->takeGuestCall())
-      return KernelGuestCall{{GuestCallOwner::Framework, Call->Token},
-                             Call->PC,
-                             std::move(Call->Arguments)};
+      return KernelGuestCall{Call->ExecutionToken.value_or(GuestCallToken{
+                                 GuestCallOwner::Framework, Call->Token}),
+                             Call->PC, std::move(Call->Arguments)};
   return std::nullopt;
 }
 
@@ -341,7 +363,7 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
     if (!Framework)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "framework callback has no owning model");
-    auto Continued = Framework->finishGuestCall(Token.ID, Result);
+    auto Continued = Framework->finishGuestCall(Token.ID, Result, CurrentIRQL);
     if (!Continued)
       return Continued.takeError();
     if (auto E = completeFrameworkTransitionIfReady())

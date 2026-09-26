@@ -1413,7 +1413,7 @@ bool ehAnnotationEncoding(llvm::StringRef Encoding) {
 
 bool ehAnnotationPersonality(llvm::StringRef Personality) {
   for (unsigned Value = 0;
-       Value <= static_cast<unsigned>(ExceptionPersonality::GoSEHTrampoline);
+       Value <= static_cast<unsigned>(ExceptionPersonality::GSHandlerCheck);
        ++Value)
     if (Personality ==
         getExceptionPersonalityName(static_cast<ExceptionPersonality>(Value)))

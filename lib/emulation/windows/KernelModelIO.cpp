@@ -89,6 +89,10 @@ llvm::Error KernelModel::stackAttachProcess(uint64_t Process,
   if (!Scheduler.active() ||
       (Scheduler.active()->Kind != KernelScheduler::CallbackKind::WorkItem &&
        Scheduler.active()->Kind !=
+           KernelScheduler::CallbackKind::FrameworkInterruptWorkItem &&
+       Scheduler.active()->Kind !=
+           KernelScheduler::CallbackKind::FrameworkPassive &&
+       Scheduler.active()->Kind !=
            KernelScheduler::CallbackKind::SystemThread) ||
       CurrentExecution == profile::StackBase)
     return ioError("process attachment requires a system work-item thread");

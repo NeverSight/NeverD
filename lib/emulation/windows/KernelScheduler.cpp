@@ -30,15 +30,19 @@ llvm::Error schedulerError(const llvm::Twine &Message) {
 }
 
 bool containsObject(const std::deque<KernelScheduler::Invocation> &Queue,
-                    uint64_t Object) {
-  return llvm::any_of(
-      Queue, [Object](const auto &Call) { return Call.Object == Object; });
+                    uint64_t Object,
+                    std::optional<KernelScheduler::CallbackKind> Kind = {}) {
+  return llvm::any_of(Queue, [Object, Kind](const auto &Call) {
+    return Call.Object == Object && (!Kind || Call.Kind == *Kind);
+  });
 }
 
 bool removeObject(std::deque<KernelScheduler::Invocation> &Queue,
-                  uint64_t Object) {
-  auto I = llvm::find_if(
-      Queue, [Object](const auto &Call) { return Call.Object == Object; });
+                  uint64_t Object,
+                  std::optional<KernelScheduler::CallbackKind> Kind = {}) {
+  auto I = llvm::find_if(Queue, [Object, Kind](const auto &Call) {
+    return Call.Object == Object && (!Kind || Call.Kind == *Kind);
+  });
   if (I == Queue.end())
     return false;
   Queue.erase(I);
@@ -50,6 +54,11 @@ bool removeObject(std::deque<KernelScheduler::Invocation> &Queue,
 bool KernelScheduler::isDMACallbackKind(CallbackKind Kind) {
   return Kind == CallbackKind::DMAListControl ||
          Kind == CallbackKind::DMAAdapterControl;
+}
+
+bool KernelScheduler::isFrameworkInterruptCallbackKind(CallbackKind Kind) {
+  return Kind == CallbackKind::FrameworkInterruptDPC ||
+         Kind == CallbackKind::FrameworkInterruptWorkItem;
 }
 
 llvm::Error KernelScheduler::validateTime() const {
@@ -117,8 +126,9 @@ KernelScheduler::Invocation KernelScheduler::makeInvocation(Callback Work,
   static_cast<Callback &>(Call) = std::move(Work);
   Call.ID = NextID++;
   Call.Kind = Kind;
-  Call.IRQL = Kind == CallbackKind::DPC || Kind == CallbackKind::WDMCancel ||
-                      isDMACallbackKind(Kind)
+  Call.IRQL = Kind == CallbackKind::DPC ||
+                      Kind == CallbackKind::FrameworkInterruptDPC ||
+                      Kind == CallbackKind::WDMCancel || isDMACallbackKind(Kind)
                   ? scheduler::DispatchLevel
                   : scheduler::PassiveLevel;
   Call.DueTime100ns = DueTime;
@@ -153,11 +163,11 @@ llvm::Expected<uint64_t> KernelScheduler::enqueueSystemThread(Callback Thread) {
 }
 
 bool KernelScheduler::cancelWorkItem(uint64_t Object) {
-  return removeObject(Workers, Object);
+  return removeObject(Workers, Object, CallbackKind::WorkItem);
 }
 
 bool KernelScheduler::isWorkItemQueued(uint64_t Object) const {
-  return containsObject(Workers, Object);
+  return containsObject(Workers, Object, CallbackKind::WorkItem);
 }
 
 llvm::Expected<uint64_t>
@@ -171,6 +181,26 @@ KernelScheduler::enqueueFrameworkCancel(Callback Cancellation) {
   Cancellations.push_back(makeInvocation(std::move(Cancellation),
                                          CallbackKind::FrameworkCancel, Now));
   return Cancellations.back().ID;
+}
+
+llvm::Expected<uint64_t>
+KernelScheduler::enqueueFrameworkPassive(Callback Call) {
+  if (auto E = validateCallback(Call))
+    return E;
+  auto Matches = [&](const Invocation &Existing) {
+    return Existing.Kind == CallbackKind::FrameworkPassive &&
+           Existing.Object == Call.Object;
+  };
+  if (containsObject(Workers, Call.Object, CallbackKind::FrameworkPassive) ||
+      (Active && Matches(*Active)) ||
+      llvm::any_of(Suspended,
+                   [&](const auto &Entry) { return Matches(Entry.second); }))
+    return schedulerError("framework continuation is already outstanding");
+  if (auto E = checkCapacity(1))
+    return E;
+  Workers.push_back(
+      makeInvocation(std::move(Call), CallbackKind::FrameworkPassive, Now));
+  return Workers.back().ID;
 }
 
 llvm::Error KernelScheduler::canEnqueueWDMCancellations(
@@ -217,6 +247,31 @@ llvm::Expected<bool> KernelScheduler::queueDPC(DpcCallback DPC) {
   else
     DPCs.push_back(std::move(Call));
   return true;
+}
+
+llvm::Expected<std::optional<uint64_t>>
+KernelScheduler::queueFrameworkInterrupt(Callback Call, bool WorkItem) {
+  if (auto E = validateCallback(Call))
+    return E;
+  const auto Kind = WorkItem ? CallbackKind::FrameworkInterruptWorkItem
+                             : CallbackKind::FrameworkInterruptDPC;
+  auto &Queue = WorkItem ? Workers : DPCs;
+  if (containsObject(Queue, Call.Object, Kind))
+    return std::optional<uint64_t>{};
+  if (auto E = checkCapacity(1))
+    return E;
+  Queue.push_back(makeInvocation(std::move(Call), Kind, Now));
+  return std::optional<uint64_t>{Queue.back().ID};
+}
+
+bool KernelScheduler::hasFrameworkInterrupt(uint64_t Object) const {
+  auto Matches = [Object](const Invocation &Call) {
+    return Call.Object == Object && isFrameworkInterruptCallbackKind(Call.Kind);
+  };
+  return (Active && Matches(*Active)) || llvm::any_of(Workers, Matches) ||
+         llvm::any_of(DPCs, Matches) ||
+         llvm::any_of(Suspended,
+                      [&](const auto &Entry) { return Matches(Entry.second); });
 }
 
 llvm::Error
@@ -289,7 +344,7 @@ KernelScheduler::enqueueInterrupt(InterruptCallback Interrupt) {
 }
 
 bool KernelScheduler::removeDPC(uint64_t Object) {
-  return removeObject(DPCs, Object);
+  return removeObject(DPCs, Object, CallbackKind::DPC);
 }
 
 llvm::Error KernelScheduler::canReserveDMACallback(const Callback &Call,
@@ -447,7 +502,7 @@ llvm::Error KernelScheduler::finishInlineDMAListControl(uint64_t ID) {
 }
 
 bool KernelScheduler::isDPCQueued(uint64_t Object) const {
-  return containsObject(DPCs, Object);
+  return containsObject(DPCs, Object, CallbackKind::DPC);
 }
 
 llvm::Expected<uint64_t>

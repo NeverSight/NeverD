@@ -66,6 +66,7 @@ ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
+#include "driver_kmdf_interrupt.h"
 static ULONG QueryStopCount, QueryRemoveCount;
 static ULONG PowerEntryCount, PowerExitCount;
 static const LONGLONG FileSendTimeout100ns = -5;
@@ -230,7 +231,8 @@ _Static_assert(sizeof(WDF_PNPPOWER_EVENT_CALLBACKS) == 144,
                "KMDF 1.33 PnP callback layout");
 
 static BOOLEAN UsesDevicePowerTransitions(void) {
-  return ServiceMode == L'6' || ServiceMode == L'9';
+  return ServiceMode == L'6' || ServiceMode == L'9' ||
+         ServiceMode == KmdfInterruptPassivePowerWait;
 }
 
 static NTSTATUS DeviceD0Entry(WDFDEVICE Device,
@@ -310,6 +312,16 @@ static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
 static NTSTATUS DevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw,
                                       WDFCMRESLIST Translated) {
   UNREFERENCED_PARAMETER(Device);
+  if (UsesFrameworkInterrupts()) {
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
+        WdfCmResourceListGetCount(Raw) != 1 ||
+        WdfCmResourceListGetCount(Translated) != 1)
+      return STATUS_INVALID_DEVICE_STATE;
+    DbgPrint("KMDF interrupt: prepare\n");
+    return ServiceMode == KmdfInterruptPrepare
+               ? CreateFrameworkInterrupts(Device, Raw, Translated)
+               : STATUS_SUCCESS;
+  }
   if (UsesAssignedMemory()) {
     PCM_PARTIAL_RESOURCE_DESCRIPTOR RawDescriptor;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR TranslatedDescriptor;
@@ -360,6 +372,14 @@ static NTSTATUS DeviceReleaseHardware(WDFDEVICE Device,
                                       WDFCMRESLIST Translated) {
   UNREFERENCED_PARAMETER(Device);
   ReleasedResourceList = Translated;
+  if (UsesFrameworkInterrupts()) {
+    ULONG Index;
+    for (Index = 0; Index < InterruptCount(); ++Index)
+      InterruptCheck(WdfInterruptWdmGetInterrupt(InterruptHandles[Index]) ==
+                     NULL);
+    DbgPrint("KMDF interrupt: release\n");
+    return InterruptFailure ? STATUS_INVALID_DEVICE_STATE : STATUS_SUCCESS;
+  }
   if (ServiceMode == L'R' || ServiceMode == L'L' || ServiceMode == L'9') {
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
     if (KeGetCurrentIrql() != PASSIVE_LEVEL || Translated == NULL ||
@@ -511,6 +531,10 @@ static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
   UCHAR *Output;
   UCHAR Value;
   NTSTATUS Status;
+  if (UsesFrameworkInterrupts()) {
+    InterruptIoControl(Request, OutputLength);
+    return;
+  }
   if (UsesPowerQueue() && (Queue != PowerQueue || !QueueIsPowerHeld(FALSE))) {
     WdfRequestCompleteWithInformation(Request, STATUS_INVALID_DEVICE_STATE, 0);
     return;
@@ -607,17 +631,21 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesAssignedMemory() ||
       (UsesPowerQueue() && ServiceMode != L'Y') || ServiceMode == L'H' ||
       ServiceMode == L'I' || ServiceMode == L'J' || ServiceMode == L'U' ||
-      UsesPnpNotifications()) {
+      UsesPnpNotifications() || UsesFrameworkInterrupts()) {
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpCallbacks);
     PnpCallbacks.EvtDeviceD0Entry = DeviceD0Entry;
     PnpCallbacks.EvtDeviceD0Exit = DeviceD0Exit;
+    if (UsesFrameworkInterrupts()) {
+      PnpCallbacks.EvtDeviceD0EntryPostInterruptsEnabled = InterruptPostEntry;
+      PnpCallbacks.EvtDeviceD0ExitPreInterruptsDisabled = InterruptPreExit;
+    }
     if (UsesPnpNotifications()) {
       PnpCallbacks.EvtDeviceQueryStop = DeviceQueryStop;
       PnpCallbacks.EvtDeviceQueryRemove = DeviceQueryRemove;
       PnpCallbacks.EvtDeviceSurpriseRemoval = DeviceSurpriseRemoval;
     }
     if (ServiceMode == L'H' || ServiceMode == L'I' || ServiceMode == L'J' ||
-        UsesAssignedMemory()) {
+        UsesAssignedMemory() || UsesFrameworkInterrupts()) {
       PnpCallbacks.EvtDevicePrepareHardware = DevicePrepareHardware;
       PnpCallbacks.EvtDeviceReleaseHardware = DeviceReleaseHardware;
     }
@@ -663,6 +691,11 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (ServiceMode == L'F') {
     DbgPrint("KMDF PnP: failing AddDevice\n");
     return STATUS_UNSUCCESSFUL;
+  }
+  if (UsesFrameworkInterrupts() && ServiceMode != KmdfInterruptPrepare) {
+    Status = CreateFrameworkInterrupts(Device, NULL, NULL);
+    if (!NT_SUCCESS(Status))
+      return Status;
   }
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
       ServiceMode == L'p' || UsesSynchronousFileSend() ||

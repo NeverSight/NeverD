@@ -255,6 +255,7 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
     Framework->configure(DriverObject, RegistryPath, Options.ServiceName);
     configureFrameworkDeviceHost();
     configureFrameworkRequestHost();
+    configureFrameworkInterruptHost();
   }
   return llvm::Error::success();
 }
@@ -1336,6 +1337,10 @@ KernelModel::executionProcessContext() const {
   }
   if (Scheduler.active() &&
       (Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem ||
+       Scheduler.active()->Kind ==
+           KernelScheduler::CallbackKind::FrameworkInterruptWorkItem ||
+       Scheduler.active()->Kind ==
+           KernelScheduler::CallbackKind::FrameworkPassive ||
        Scheduler.active()->Kind == KernelScheduler::CallbackKind::SystemThread))
     return ExecutionProcessContext{Attached ? CurrentUserProcessID
                                             : uint32_t(SystemProcessID),

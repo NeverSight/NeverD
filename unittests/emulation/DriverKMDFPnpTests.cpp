@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "fixtures/driver_kmdf_interrupt_test.h"
 #include "gtest/gtest.h"
 #include "windows/KernelFramework.h"
 #include "windows/WindowsKernelLayout.h"
@@ -140,6 +141,197 @@ std::vector<std::string> pnpMessages(const DriverResult &Result) {
 size_t callCount(const DriverResult &Result, llvm::StringRef Name) {
   return std::count_if(Result.Calls.begin(), Result.Calls.end(),
                        [Name](const auto &Call) { return Call.Name == Name; });
+}
+
+DriverOptions interruptOptions(char Mode) {
+  auto Input = options(Mode);
+  auto &Device = Input.PnpDevices.front();
+  Device.Bus = DriverBusKind::RegisterBank;
+  DriverInterruptResource Resource;
+  Resource.ID = "framework-interrupt";
+  Resource.RawVector = 17;
+  Resource.RawLevel = 7;
+  Resource.RawAffinity = 1;
+  Resource.TranslatedVector = KmdfInterruptVector;
+  Resource.TranslatedLevel = KmdfInterruptIrql;
+  Resource.TranslatedAffinity = 1;
+  const bool Message =
+      Mode == KmdfInterruptMsi || Mode == KmdfInterruptPassiveMsi;
+  if (Message) {
+    Resource.RawLevel = 0;
+    for (unsigned I = 0; I < KmdfInterruptMessages; ++I)
+      Resource.Messages.push_back({0xfee01000, 0x123400 + I,
+                                   KmdfInterruptVector + I,
+                                   KmdfInterruptIrql + I, 1});
+  }
+  Device.Interrupts.push_back(Resource);
+  auto &IO = Input.Requests[2];
+  IO.OutputSize = KmdfInterruptSnapshotWords * sizeof(uint32_t);
+  for (unsigned I = 0; I < (Message ? KmdfInterruptMessages : 1u); ++I) {
+    DriverInterruptEvent Event;
+    Event.After100ns = KmdfInterruptPulse100ns * (I + 1);
+    Event.DeviceID = DeviceID.str();
+    Event.InterruptID = Resource.ID;
+    if (Message)
+      Event.MessageID = I;
+    IO.InterruptEvents.push_back(Event);
+  }
+  return Input;
+}
+
+TEST(DriverKMDFPnp, FrameworkInterruptsExecuteRealDirqlAndPassiveCallbacks) {
+  for (const auto *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {KmdfInterruptLine, KmdfInterruptMsi,
+                        KmdfInterruptPassive, KmdfInterruptPrepare,
+                        KmdfInterruptPassiveCleanup, KmdfInterruptPassiveMsi}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Mode);
+        auto Input = interruptOptions(Mode);
+        Input.LoadAddress = Base;
+        auto Result = emulateDriver(Image, Input);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        EXPECT_TRUE(Result->UnloadCompleted);
+        ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+        for (const auto &Request : Result->Requests) {
+          EXPECT_TRUE(Request.Completed);
+          EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+        }
+        const bool Passive =
+            Mode == KmdfInterruptPassive || Mode == KmdfInterruptPassiveMsi;
+        const unsigned Count =
+            Mode == KmdfInterruptMsi || Mode == KmdfInterruptPassiveMsi
+                ? KmdfInterruptMessages
+                : 1;
+        ASSERT_EQ(Result->Interrupts.size(), Count);
+        for (const auto &Event : Result->Interrupts) {
+          EXPECT_EQ(Event.SourceRequestIndex, 2u);
+          ASSERT_TRUE(Event.DeliveredAt100ns);
+          ASSERT_TRUE(Event.ReturnedAt100ns);
+          EXPECT_EQ(Event.ReturnValue, 1u);
+          EXPECT_FALSE(Event.UndeliveredReason);
+          if (Passive)
+            EXPECT_GE(*Event.ReturnedAt100ns - *Event.DeliveredAt100ns,
+                      KmdfInterruptDelay100ns);
+        }
+        const unsigned Synchronizations = Count + (Count > 1);
+        std::vector<uint8_t> Snapshot;
+        for (uint32_t Word : {Count, Count, Synchronizations, Count * 2})
+          for (unsigned Shift = 0; Shift < 32; Shift += 8)
+            Snapshot.push_back(uint8_t(Word >> Shift));
+        EXPECT_EQ(Result->Requests[2].Output, Snapshot);
+        EXPECT_EQ(callCount(*Result, "WdfInterruptCreate"), Count);
+        EXPECT_EQ(callCount(*Result, "WdfInterruptSynchronize"),
+                  Synchronizations);
+        EXPECT_EQ(callCount(*Result, "WdfInterruptAcquireLock"), Count);
+        EXPECT_EQ(callCount(*Result, "WdfInterruptReleaseLock"), Count);
+        EXPECT_EQ(callCount(*Result, "WdfInterruptEnable"), Count);
+        EXPECT_EQ(callCount(*Result, "WdfInterruptDisable"), Count);
+        EXPECT_EQ(callCount(*Result, Passive ? "WdfInterruptQueueWorkItemForIsr"
+                                             : "WdfInterruptQueueDpcForIsr"),
+                  Count * 2);
+        for (const auto &Message : Result->Messages)
+          EXPECT_EQ(Message.find("KMDF interrupt: failure"), std::string::npos);
+        if (Mode == KmdfInterruptPassiveCleanup) {
+          std::vector<std::string> Lifetime;
+          for (const auto &Message : Result->Messages)
+            if (llvm::StringRef(Message).starts_with(
+                    "KMDF interrupt: request "))
+              Lifetime.push_back(Message);
+          EXPECT_EQ(Lifetime, (std::vector<std::string>{
+                                  "KMDF interrupt: request cleanup begin\n",
+                                  "KMDF interrupt: request cleanup end\n",
+                                  "KMDF interrupt: request destroy\n"}));
+          const auto &QueryRemove = Result->Requests[5];
+          ASSERT_TRUE(QueryRemove.Pnp);
+          ASSERT_TRUE(QueryRemove.Pnp->BusReceivedAt100ns);
+          EXPECT_GE(*QueryRemove.Pnp->BusReceivedAt100ns,
+                    *Result->Interrupts.front().ReturnedAt100ns +
+                        KmdfInterruptDelay100ns);
+        }
+        EXPECT_TRUE(Result->Devices.empty());
+        EXPECT_EQ(Result->PnpDevices.front().PnpState, DevicePnpState::Removed);
+      }
+}
+
+TEST(DriverKMDFPnp, FailedInterruptEnableUnwindsPreparedDevice) {
+  for (const auto *Image : pnpImages()) {
+    auto Input = interruptOptions(KmdfInterruptEnableFailure);
+    Input.Requests = {pnp(DevicePnpRequest::Start),
+                      pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 2u);
+    EXPECT_EQ(Result->Requests[0].IOStatus, windows::StatusUnsuccessful);
+    EXPECT_EQ(Result->Requests[1].IOStatus, windows::StatusSuccess);
+    EXPECT_TRUE(Result->UnloadCompleted);
+    EXPECT_TRUE(Result->Devices.empty());
+    EXPECT_EQ(std::count(Result->Messages.begin(), Result->Messages.end(),
+                         "KMDF interrupt: release\n"),
+              1);
+    EXPECT_EQ(std::count(Result->Messages.begin(), Result->Messages.end(),
+                         "KMDF interrupt: failure\n"),
+              0);
+  }
+}
+
+TEST(DriverKMDFPnp, FrameworkInterruptReconnectsAfterStopAndRestart) {
+  for (const auto *Image : pnpImages()) {
+    auto Input = interruptOptions(KmdfInterruptLine);
+    auto IO = Input.Requests[2];
+    Input.Requests = {pnp(DevicePnpRequest::Start),
+                      file(DriverRequestKind::Create),
+                      IO,
+                      file(DriverRequestKind::Cleanup),
+                      file(DriverRequestKind::Close),
+                      pnp(DevicePnpRequest::QueryStop),
+                      pnp(DevicePnpRequest::Stop),
+                      pnp(DevicePnpRequest::Start),
+                      file(DriverRequestKind::Create, 8),
+                      IO,
+                      file(DriverRequestKind::Cleanup, 8),
+                      file(DriverRequestKind::Close, 8),
+                      pnp(DevicePnpRequest::QueryRemove),
+                      pnp(DevicePnpRequest::Remove)};
+    Input.Requests[9].File = 8;
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+    for (const auto &Request : Result->Requests)
+      EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+    ASSERT_EQ(Result->Interrupts.size(), 2u);
+    EXPECT_NE(Result->Interrupts[0].InterruptObject,
+              Result->Interrupts[1].InterruptObject);
+    EXPECT_EQ(callCount(*Result, "WdfInterruptCreate"), 1u);
+    EXPECT_TRUE(Result->UnloadCompleted);
+    EXPECT_EQ(std::count(Result->Messages.begin(), Result->Messages.end(),
+                         "KMDF interrupt: release\n"),
+              2);
+    EXPECT_EQ(std::count(Result->Messages.begin(), Result->Messages.end(),
+                         "KMDF interrupt: failure\n"),
+              0);
+  }
+}
+
+TEST(DriverKMDFPnp, SerializedDpcCreationReportsIncompatibleExecutionLevel) {
+  for (const auto *Image : pnpImages()) {
+    auto Input = interruptOptions(KmdfInterruptSerialization);
+    Input.Requests.clear();
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->PnpDevices.size(), 1u);
+    EXPECT_EQ(Result->PnpDevices.front().AddDeviceStatus,
+              framework::IncompatibleExecutionLevel);
+    EXPECT_TRUE(Result->UnloadCompleted);
+    EXPECT_TRUE(Result->Devices.empty());
+    EXPECT_TRUE(Result->Interrupts.empty());
+  }
 }
 
 TEST(DriverKMDFPnp, AddStartIoRemoveAndUnloadFollowRealCallbacks) {
@@ -1066,6 +1258,56 @@ DriverRequest devicePower(DevicePowerRequest Minor, DevicePowerState State,
   Operation.BusCompletion = {windows::StatusSuccess, Delay};
   Request.Power = Operation;
   return Request;
+}
+
+TEST(DriverKMDFPnp, PassivePowerDisableWaitsForIsrAndDrainsWorkItem) {
+  for (const char *Image : pnpImages()) {
+    SCOPED_TRACE(Image);
+    auto Input = interruptOptions(KmdfInterruptPassivePowerWait);
+    auto IO = Input.Requests[2];
+    IO.DeferCallbackDrain = true;
+    Input.Requests = {
+        pnp(DevicePnpRequest::Start),
+        file(DriverRequestKind::Create),
+        IO,
+        devicePower(DevicePowerRequest::Set, DevicePowerState::D3),
+        file(DriverRequestKind::Cleanup),
+        file(DriverRequestKind::Close),
+        pnp(DevicePnpRequest::QueryRemove),
+        pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    EXPECT_TRUE(Result->UnloadCompleted);
+    ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+    for (const auto &Request : Result->Requests) {
+      EXPECT_TRUE(Request.Completed);
+      EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+    }
+    ASSERT_EQ(Result->Interrupts.size(), 1u);
+    const auto &Event = Result->Interrupts.front();
+    ASSERT_TRUE(Event.DeliveredAt100ns);
+    ASSERT_TRUE(Event.ReturnedAt100ns);
+    EXPECT_EQ(*Event.ReturnedAt100ns - *Event.DeliveredAt100ns,
+              KmdfInterruptDelay100ns);
+    ASSERT_TRUE(Result->Requests[3].Power);
+    ASSERT_TRUE(Result->Requests[3].Power->BusReceivedAt100ns);
+    EXPECT_GE(*Result->Requests[3].Power->BusReceivedAt100ns,
+              *Event.ReturnedAt100ns);
+    const auto &Messages = Result->Messages;
+    auto Position = std::find(Messages.begin(), Messages.end(),
+                              "KMDF interrupt: pre exit\n");
+    ASSERT_NE(Position, Messages.end());
+    for (llvm::StringRef Expected :
+         {"KMDF interrupt: ISR 0\n", "KMDF interrupt: disable 0\n",
+          "KMDF interrupt: deferred 0\n", "KMDF PnP: D0 exit\n"}) {
+      Position = std::find(std::next(Position), Messages.end(), Expected);
+      ASSERT_NE(Position, Messages.end()) << Expected.str();
+    }
+    for (const auto &Message : Messages)
+      EXPECT_EQ(Message.find("KMDF interrupt: failure"), std::string::npos);
+    EXPECT_TRUE(Result->Devices.empty());
+  }
 }
 
 TEST(DriverKMDFPnp, DevicePowerRetainsResourcesAndBracketsProviderPowerChange) {
