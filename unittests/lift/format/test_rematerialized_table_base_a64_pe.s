@@ -48,7 +48,9 @@ probe:
         b .Lheader
 
 .Lexit:
-        mov w0, #7
+        // Keep both relocated table reads observable while preserving 7.
+        eor x0, x9, x10
+        add x0, x0, #7
         ldr x22, [sp]
         ldr x28, [sp, #8]
         ldp x29, x30, [sp, #32]

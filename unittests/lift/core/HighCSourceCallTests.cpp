@@ -191,6 +191,75 @@ int main(void) {
                   {Opt, "-fsanitize=alignment", "-fsanitize-trap=alignment"});
 }
 
+TEST(HighCSourceCalls, UnusedCallsAfterPredicatesPreserveSideEffects) {
+  const auto Integer = NdType::makeInt(8);
+  const auto Effect = native("fixture_predicate_effect", Integer, {Integer});
+  const auto Marker = native("fixture_predicate_marker", NdType::makeVoid(), {});
+  std::vector<HighFunc> Functions;
+  for (unsigned Form = 0; Form != 3; ++Form) {
+    auto Function = returning("predicate_calls_" + std::to_string(Form),
+                              HighExpr::makeConst(0, 8), {Integer});
+    auto Predicate = call(Effect, Integer, {parameter(0, Integer)});
+    MedVar Result;
+    Result.Kind = MedVar::Temp;
+    Result.Id = 19;
+    Result.Size = 8;
+    HighStmt Unused;
+    Unused.Kind = StmtKind::Assign;
+    Unused.Dst = HighExpr::makeVar(Result, Integer);
+    Unused.Val = call(Effect, Integer, {HighExpr::makeConst(7, 8)});
+    HighStmt Guard;
+    Guard.Kind = StmtKind::If;
+    Guard.Cond = Predicate;
+    Guard.Body = {Unused};
+    if (Form == 1) {
+      MedVar PredicateResult = Result;
+      PredicateResult.Id = 18;
+      HighStmt Evaluate;
+      Evaluate.Kind = StmtKind::Assign;
+      Evaluate.Dst = HighExpr::makeVar(PredicateResult, Integer);
+      Evaluate.Val = Predicate;
+      Guard.Cond = HighExpr::makeVar(PredicateResult, Integer);
+      Function.Body.insert(Function.Body.begin(), {Evaluate, Guard});
+    } else if (Form == 2) {
+      HighStmt Mark;
+      Mark.Kind = StmtKind::Call;
+      Mark.CallExpr = call(Marker, NdType::makeVoid());
+      Guard.Body = {Mark};
+      Function.Body.insert(Function.Body.begin(), {Guard, Unused});
+    } else {
+      Function.Body.insert(Function.Body.begin(), Guard);
+    }
+    Functions.push_back(std::move(Function));
+  }
+  compileAndRun(emit(Functions) + R"(
+static int calls, total, markers;
+int64_t fixture_predicate_effect(int64_t value) {
+  ++calls;
+  total += value;
+  return value;
+}
+void fixture_predicate_marker(void) { ++markers; }
+int main(void) {
+  int64_t (*functions[])(int64_t) = {
+    predicate_calls_0, predicate_calls_1, predicate_calls_2
+  };
+  for (unsigned form = 0; form != 3; ++form) {
+    for (int condition = 0; condition != 2; ++condition) {
+      calls = total = markers = 0;
+      if (functions[form](condition) != 0)
+        return 1;
+      const int has_second = condition || form == 2;
+      if (calls != 1 + has_second || total != condition + 7 * has_second ||
+          markers != (form == 2 && condition))
+        return 2;
+    }
+  }
+  return 0;
+}
+)");
+}
+
 TEST(HighCSourceCalls, ExactNarrowZeroSuppliesOnlyPointerNullArguments) {
   auto Binding = native("fixture_pointer_consumer", NdType::makeVoid(),
                         {NdType::makePtr(NdType::makeVoid())});
@@ -979,6 +1048,7 @@ TEST(HighCSourceCalls, NoncontiguousOrNestedEntriesRemainAmbiguous) {
 
 TEST(HighCSourceCalls, ConditionalEntryEvaluatesBeforeItsTakenEdgeCopies) {
   for (bool ExplicitElse : {false, true}) {
+    SCOPED_TRACE(ExplicitElse);
     const auto Integer = NdType::makeInt(4);
     MedVar Variable;
     Variable.Kind = MedVar::Temp;

@@ -18,9 +18,11 @@
 #include "HighCWriter.h"
 
 #define DEBUG_TYPE "neverd-highc-emitter"
+#include "neverd/Common.h"
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -143,6 +145,12 @@ void validateMemoryAddressSpaceForC(NdMemoryAddressSpace AddressSpace,
         "FS/GS memory address spaces require an x86 C target");
 }
 
+bool useMsvcSegmentedRead(const CEmitterOptions &Opts,
+                          const HighFunc *Func) {
+  return (Func && Func->ExceptionMetadata) ||
+         (Opts.Image && Opts.Image->Format == BinaryFormat::COFF);
+}
+
 std::string memoryHelperName(llvm::StringRef Operation, unsigned TypeIndex,
                              NdMemoryOrdering Ordering,
                              NdMemoryAddressSpace AddressSpace) {
@@ -154,6 +162,28 @@ std::string memoryHelperName(llvm::StringRef Operation, unsigned TypeIndex,
   return Name + std::to_string(TypeIndex);
 }
 
+bool isBareCIntegerLiteral(llvm::StringRef S) {
+  if (S.empty())
+    return false;
+  if (S.front() == '-')
+    S = S.drop_front();
+  if (S.empty())
+    return false;
+  if (S.starts_with("0x") || S.starts_with("0X")) {
+    S = S.drop_front(2);
+    return !S.empty() && llvm::all_of(S, llvm::isHexDigit);
+  }
+  return llvm::all_of(S, llvm::isDigit);
+}
+
+std::string atomicValueCast(llvm::StringRef Type, llvm::StringRef Val) {
+  if (Val.starts_with("(" + Type.str() + ")"))
+    return Val.str();
+  if (isBareCIntegerLiteral(Val))
+    return Val.str();
+  return "(" + Type.str() + ")(" + Val.str() + ")";
+}
+
 std::string memoryPointerCast(llvm::StringRef Type, llvm::StringRef Address,
                               NdMemoryAddressSpace AddressSpace, bool IsConst) {
   std::string Qualified = IsConst ? "const " : "";
@@ -161,6 +191,13 @@ std::string memoryPointerCast(llvm::StringRef Type, llvm::StringRef Address,
   if (AddressSpace != NdMemoryAddressSpace::Default)
     Qualified += " __attribute__((address_space(" +
                  std::to_string(cMemoryAddressSpace(AddressSpace)) + ")))";
+  // addrStr already emits `(uintptr_t)base + imm` for typed pointer offsets.
+  // Another integer round-trip is `*(T *)(uintptr_t)((uintptr_t)p + 8)`.
+  // `&member` is already a typed object address; do not recast it.
+  if (Address.starts_with("&"))
+    return Address.str();
+  if (Address.contains("(uintptr_t)"))
+    return "(" + Qualified + " *)(" + Address.str() + ")";
   return "(" + Qualified + " *)(uintptr_t)(" + Address.str() + ")";
 }
 
@@ -172,6 +209,8 @@ void HighCWriter::prepareFunctionIdentifiers(
   FunctionIdentifiers.clear();
   FunctionIdentifiersBySourceName.clear();
   ExternalFunctionIdentifiers.clear();
+  ExternalCallSources.clear();
+  ExternalSourceIdentifiers.clear();
   DefinedFuncs.clear();
   DefinedFunctionsByIdentifier.clear();
   DefinedFunctionsByAddress.clear();
@@ -229,24 +268,38 @@ void HighCWriter::prepareFunctionIdentifiers(
   }
 
   for (const HighFunc &Func : Funcs) {
-    if (Func.Name.empty())
+    std::string SourceName = Func.Name;
+    if (Func.Entry &&
+        (SourceName.empty() || isSynthesizedFuncName(SourceName))) {
+      if (Dbg) {
+        if (auto Sym = Dbg->resolveFunction(Func.Entry);
+            Sym && !Sym->Name.empty())
+          SourceName = std::move(Sym->Name);
+      }
+      if ((SourceName.empty() || isSynthesizedFuncName(SourceName)) &&
+          Opts.Image) {
+        std::string FromImage = Opts.Image->getFunctionNameAt(Func.Entry);
+        if (!FromImage.empty() && !isSynthesizedFuncName(FromImage))
+          SourceName = std::move(FromImage);
+      }
+    }
+    if (SourceName.empty())
       continue;
-    DefinedFuncs[Func.Name] = &Func;
-    if (Func.Name.front() == '_')
-      DefinedFuncs[Func.Name.substr(1)] = &Func;
+    DefinedFuncs[SourceName] = &Func;
+    if (SourceName.front() == '_')
+      DefinedFuncs[SourceName.substr(1)] = &Func;
     if (Func.Entry) {
       auto [It, Added] = DefinedFunctionsByAddress.emplace(Func.Entry, &Func);
       if (!Added)
         It->second = nullptr;
     }
-    llvm::StringRef SourceName(Func.Name);
-    llvm::StringRef RenderedName = SourceName;
+    llvm::StringRef RenderedName(SourceName);
     RenderedName.consume_front("_");
     std::string Identifier =
         GlobalIdentifierAllocator.allocate(RenderedName, "nd_function");
     FunctionIdentifiers.emplace(&Func, Identifier);
     DefinedFunctionsByIdentifier.emplace(Identifier, &Func);
-    FunctionIdentifiersBySourceName.try_emplace(SourceName.str(), Identifier);
+    FunctionIdentifiersBySourceName.try_emplace(SourceName, Identifier);
     FunctionIdentifiersBySourceName.try_emplace(RenderedName.str(), Identifier);
   }
 }
@@ -263,6 +316,9 @@ std::string HighCWriter::functionIdentifier(const HighFunc &Func) const {
 std::string HighCWriter::functionIdentifier(llvm::StringRef SourceName) const {
   if (auto It = FunctionIdentifiersBySourceName.find(SourceName.str());
       It != FunctionIdentifiersBySourceName.end())
+    return It->second;
+  if (auto It = ExternalSourceIdentifiers.find(SourceName.str());
+      It != ExternalSourceIdentifiers.end())
     return It->second;
   if (auto It = ExternalFunctionIdentifiers.find(SourceName.str());
       It != ExternalFunctionIdentifiers.end())
@@ -311,7 +367,8 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
         E.MemoryOrdering == NdMemoryOrdering::None &&
         E.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
         (Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&
-        (E.Kind == ExprKind::Load || E.Kind == ExprKind::Store);
+        E.Kind == ExprKind::Load &&
+        useMsvcSegmentedRead(Opts, CurrentFunc);
     if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
       validateMemoryAddressSpaceForC(E.MemoryAddressSpace, Opts.TheArch);
       if (!MsvcSegmentedScalar)
@@ -538,10 +595,15 @@ HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
                             NdMemoryAddressSpace AddressSpace) const {
   validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
-  if (std::string Seg = renderX86MsvcSegmentedLoad(
-          Opts.TheArch, Ty ? Ty->Size : 0, Addr, Ordering, AddressSpace);
-      !Seg.empty())
-    return Seg;
+  // MSVC's FS/GS read intrinsics are a useful source-level spelling for
+  // Windows targets. Other formats keep the target address-space-qualified
+  // helper, so the segment remains explicit in the C memory type.
+  if (useMsvcSegmentedRead(Opts, CurrentFunc)) {
+    if (std::string Seg = renderX86MsvcSegmentedLoad(
+            Opts.TheArch, Ty ? Ty->Size : 0, Addr, Ordering, AddressSpace);
+        !Seg.empty())
+      return Seg;
+  }
   auto It = MemoryTypes.find(Type);
   if (It == MemoryTypes.end())
     llvm::report_fatal_error("HighC memory load type was not collected");
@@ -584,8 +646,9 @@ HighCWriter::atomicExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
   validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
   return "__atomic_exchange_n(" +
-         memoryPointerCast(Type, Addr, AddressSpace, false) + ", (" + Type +
-         ")(" + Val.str() + "), " + atomicOrderingToken(Ordering) + ")";
+         memoryPointerCast(Type, Addr, AddressSpace, false) + ", " +
+         atomicValueCast(Type, Val) + ", " + atomicOrderingToken(Ordering) +
+         ")";
 }
 
 std::string
@@ -598,8 +661,9 @@ HighCWriter::atomicFetchAddExpr(const TypeRef &Ty, llvm::StringRef Addr,
   validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
   return "__atomic_fetch_add(" +
-         memoryPointerCast(Type, Addr, AddressSpace, false) + ", (" + Type +
-         ")(" + Val.str() + "), " + atomicOrderingToken(Ordering) + ")";
+         memoryPointerCast(Type, Addr, AddressSpace, false) + ", " +
+         atomicValueCast(Type, Val) + ", " + atomicOrderingToken(Ordering) +
+         ")";
 }
 
 std::string HighCWriter::atomicCompareExchangeExpr(
@@ -612,10 +676,10 @@ std::string HighCWriter::atomicCompareExchangeExpr(
   validateAtomicIntegerWidth(Ty);
   validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
-  return "({ " + Type + " neverd_expected = (" + Type + ")(" + Expected.str() +
-         "); (void)__atomic_compare_exchange_n(" +
+  return "({ " + Type + " neverd_expected = " + atomicValueCast(Type, Expected) +
+         "; (void)__atomic_compare_exchange_n(" +
          memoryPointerCast(Type, Addr, AddressSpace, false) +
-         ", &neverd_expected, (" + Type + ")(" + Desired.str() + "), 0, " +
+         ", &neverd_expected, " + atomicValueCast(Type, Desired) + ", 0, " +
          atomicOrderingToken(Ordering) + ", " +
          atomicCmpXchgFailureOrderingToken(Ordering) + "); neverd_expected; })";
 }
@@ -914,27 +978,39 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
         for (const auto &Operand : Ex.Operands)
           if (Operand)
             Visit(*Operand);
+        if (Ex.IndirectTarget)
+          Visit(*Ex.IndirectTarget);
         return;
       }
       if (Ex.IntrinsicId == Intrinsic::A64_Frinti)
         NeedsFEnvAccess = true;
       if (Ex.IntrinsicId != Intrinsic::None && intrinsicCName(Ex.IntrinsicId))
         HasCIntrinsics = true;
-      std::string Name = Ex.CallTarget;
+      const std::string SourceName = resolvedCallTarget(Ex);
+      std::string Name = SourceName;
       if (!Name.empty()) {
         if (Ex.IntrinsicId != Intrinsic::None) {
           CIntrinsicNames.insert(Name);
         }
-        if (Ex.IntrinsicId == Intrinsic::None && Name[0] == '_')
-          Name = Name.substr(1);
+        if (Ex.IntrinsicId == Intrinsic::None)
+          Name = functionIdentifier(Name);
         if (!isMsvcCxxThrowCallName(Name) &&
-            !isMsvcCxxThrowCallName(Ex.CallTarget))
-          Targets.insert(Name);
+            !isMsvcCxxThrowCallName(Ex.CallTarget) &&
+            !HiddenCxxCtorIdentifiers.count(Name)) {
+          const bool UnresolvedIndirect =
+              Ex.IsIndirectCall || Name == "indirect";
+          if (!UnresolvedIndirect) {
+            ExternalCallSources[Name].insert(SourceName);
+            Targets.insert(Name);
+            if (auto FS = debugCallee(Ex)) {
+              noteDebugExtern(Name, *FS);
+              noteDebugExternCallSret(Name, *FS, Ex);
+            }
+          }
+        }
       }
     }
-    for (auto &Op : Ex.Operands)
-      if (Op)
-        Visit(*Op);
+    Ex.forEachChildExpr([&](const ExprPtr &Op) { Visit(*Op); });
   };
   Visit(Expr);
 }
@@ -942,6 +1018,16 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
 void HighCWriter::collectCallTargets(const std::vector<HighStmt> &Stmts,
                                      std::set<std::string> &Targets) {
   for (auto &S : Stmts) {
+    if (Analysis.DeadStmts.count(&S) || CxxThrowPrints.count(&S)) {
+      collectCallTargets(S.Body, Targets);
+      collectCallTargets(S.ElseBody, Targets);
+      for (auto &C : S.Cases)
+        collectCallTargets(C.Body, Targets);
+      collectCallTargets(S.DefaultBody, Targets);
+      for (auto &ClauseBody : S.EHClauseBodies)
+        collectCallTargets(ClauseBody, Targets);
+      continue;
+    }
     forEachExpr(S, [&](const ExprPtr &Ex) {
       if (Ex)
         collectCallTargetsExpr(*Ex, Targets);
@@ -973,11 +1059,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     Headers.insert("string.h");
 
   std::set<std::string> CallTargets;
-  for (auto &F : Funcs) {
-    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(F))
-      continue;
+  for (auto &F : Funcs)
     collectCallTargets(F.Body, CallTargets);
-  }
 
   for (auto &Name : CallTargets) {
     if (const char *Hdr = libc::headerFor(Name))
@@ -1025,11 +1108,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
 
   std::set<std::string> CallTargets;
-  for (auto &F : Funcs) {
-    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(F))
-      continue;
+  for (auto &F : Funcs)
     collectCallTargets(F.Body, CallTargets);
-  }
 
   for (const auto &[Name, Identifier] : SourceRuntimeDataIdentifiers) {
     if (ConflictingSourceRuntimeDataIdentities.count(Name))
@@ -1140,6 +1220,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
 
   for (auto &Name : CallTargets) {
+    if (HiddenCxxCtorIdentifiers.count(Name))
+      continue;
     if ((DefinedFuncs.count(Name) ||
          DefinedFunctionsByIdentifier.count(Name)) &&
         !SourceRuntimeLinkNames.count(Name))
@@ -1159,8 +1241,10 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
 
   for (const std::string &Name : ExternFuncs) {
+    // CallTargets already contains the C identifier returned by
+    // functionIdentifier (or the source-call projection).  Removing another
+    // leading underscore here declares a different function from the call.
     llvm::StringRef RenderedName(Name);
-    RenderedName.consume_front("_");
     const auto Existing = ExternalFunctionIdentifiers.find(Name);
     std::string Identifier =
         Existing == ExternalFunctionIdentifiers.end()
@@ -1168,6 +1252,10 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
             : Existing->second;
     ExternalFunctionIdentifiers.emplace(Name, Identifier);
     ExternalFunctionIdentifiers.try_emplace(RenderedName.str(), Identifier);
+    if (auto Sources = ExternalCallSources.find(Name);
+        Sources != ExternalCallSources.end())
+      for (const std::string &SourceName : Sources->second)
+        ExternalSourceIdentifiers[SourceName] = Identifier;
     auto SourceSignature = SourceNativeSignatures.find(Name);
     if (SourceSignature != SourceNativeSignatures.end() &&
         !ConflictingSourceNativeSignatures.count(Name)) {
@@ -1202,8 +1290,29 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         OS << "\")";
       }
       OS << ";\n";
+    } else if (!ConflictingSourceNativeSignatures.count(Name) &&
+               !ConflictingDebugExternSigs.count(Name) &&
+               DebugExternSigs.count(Name)) {
+      OS << debugExternPrototype(DebugExternSigs[Name], Identifier, Name)
+         << ";\n";
+    } else if (!ConflictingSourceNativeSignatures.count(Name) &&
+               msvcAtlCallee(Identifier)) {
+      OS << debugExternPrototype(FunctionSym{}, Identifier) << ";\n";
     } else if (!ConflictingSourceNativeSignatures.count(Name)) {
-      OS << "extern int " << Identifier << "()";
+      OS << "extern int " << Identifier << "(";
+      if (auto Arity = libc::libcArity(Name);
+          Arity && Arity->FpArgs == 0 && Arity->IntArgs >= 0) {
+        if (Arity->IntArgs == 0)
+          OS << "void";
+        else {
+          for (int I = 0; I < Arity->IntArgs; ++I) {
+            if (I)
+              OS << ", ";
+            OS << "int64_t";
+          }
+        }
+      }
+      OS << ")";
       if (libc::isNoReturnFunction(Name) ||
           libc::isNoReturnFunction(Identifier))
         OS << " __attribute__((noreturn))";
@@ -1219,7 +1328,51 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   ImageObjects.clear();
   if (!Opts.Image)
     return;
+  VarKeyMap<va_t> ImageLoadVars;
+  auto imageLoadVA = [&](const HighExpr &E) -> std::optional<va_t> {
+    const HighExpr *Inner = unwrapIntegerView(&E);
+    if (!Inner)
+      return std::nullopt;
+    if (Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
+        Inner->Operands[0])
+      return constAddress(*Inner->Operands[0]);
+    if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
+      if (auto It = ImageLoadVars.find(varKey(Inner->Var));
+          It != ImageLoadVars.end())
+        return It->second;
+    }
+    return std::nullopt;
+  };
+  for (const HighFunc &Func : Funcs)
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
+        return;
+      if (S.Dst->Kind != ExprKind::Var && S.Dst->Kind != ExprKind::Phi)
+        return;
+      if (auto VA = imageLoadVA(*S.Val))
+        ImageLoadVars[varKey(S.Dst->Var)] = *VA;
+    });
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
+    if (E.Kind == ExprKind::Const && isImageDataAddress(E.ConstVal) &&
+        !imageStringLiteral(Opts.Image, E.ConstVal)) {
+      bool Named = false;
+      if (Dbg) {
+        if (auto Data = Dbg->resolveDataObject(E.ConstVal);
+            Data && !Data->Name.empty() &&
+            !llvm::StringRef(Data->Name).starts_with("??_C@"))
+          Named = true;
+      }
+      if (!Named && Opts.Image) {
+        if (const Symbol *Sym = Opts.Image->findSymbolAt(E.ConstVal);
+            Sym && !Sym->IsFunc && !Sym->Name.empty() &&
+            llvm::StringRef(Sym->Name).find(kAutoFuncPrefix) != 0)
+          Named = true;
+      }
+      // Empty/non-ASCII rdata stays a named object (`&pwstr`), not a hex
+      // immediate. Printable C/wchar literals still fold at the call site.
+      if (Named)
+        noteImageObject(E.ConstVal, NdType::makeInt(2), false);
+    }
     if (E.Kind == ExprKind::Load && !E.Operands.empty() && E.Operands[0]) {
       if (auto VA = constAddress(*E.Operands[0])) {
         const uint16_t Size = E.Type ? E.Type->Size : 0;
@@ -1241,6 +1394,21 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     for (const ExprPtr &Op : E.Operands)
       if (Op)
         Visit(*Op);
+    if (E.Kind != ExprKind::Call)
+      return;
+    const auto Callee = debugCallee(E);
+    if (!Callee)
+      return;
+    for (size_t I = 0; I < E.Operands.size(); ++I) {
+      if (!E.Operands[I])
+        continue;
+      const TypeRef Expected = expectedDebugCallArgType(*Callee, I);
+      if (!Expected || Expected->Kind != NdTypeKind::Ptr || !Expected->Pointee ||
+          Expected->Pointee->SourceName.empty())
+        continue;
+      if (auto VA = imageLoadVA(*E.Operands[I]))
+        noteImageObject(*VA, Expected, false);
+    }
   };
   for (const HighFunc &Func : Funcs)
     walkStmts(Func.Body, [&](const HighStmt &S) {
@@ -1274,6 +1442,7 @@ void HighCWriter::writeImageObjects() {
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   prepareFunctionIdentifiers(Funcs);
   collectMemoryTypes(Funcs);
+  discoverHiddenCxxThrowCtors(Funcs);
   writeIncludes(Funcs);
   std::set<std::string> Records;
   std::function<void(const TypeRef &)> RecordType = [&](const TypeRef &Type) {

@@ -1,0 +1,29 @@
+//===- DriverUserMemory.def - Explicit user-memory vocabulary ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared buffer-reference kinds and scenario/report field names.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_DRIVER_USER_BUFFER_KIND
+NEVERD_DRIVER_USER_BUFFER_KIND(Input, "input")
+NEVERD_DRIVER_USER_BUFFER_KIND(Output, "output")
+NEVERD_DRIVER_USER_BUFFER_KIND(Memory, "memory")
+#endif
+
+#ifdef NEVERD_DRIVER_USER_MEMORY_FIELD
+NEVERD_DRIVER_USER_MEMORY_FIELD(UserBuffers, "user_buffers")
+NEVERD_DRIVER_USER_MEMORY_FIELD(UserPointers, "user_pointers")
+NEVERD_DRIVER_USER_MEMORY_FIELD(UserMemory, "user_memory")
+NEVERD_DRIVER_USER_MEMORY_FIELD(Input, "input")
+NEVERD_DRIVER_USER_MEMORY_FIELD(Buffer, "buffer")
+NEVERD_DRIVER_USER_MEMORY_FIELD(Offset, "offset")
+NEVERD_DRIVER_USER_MEMORY_FIELD(Source, "source")
+NEVERD_DRIVER_USER_MEMORY_FIELD(Target, "target")
+NEVERD_DRIVER_USER_MEMORY_FIELD(Revoked, "revoked")
+NEVERD_DRIVER_USER_MEMORY_FIELD(Backing, "backing_hex")
+#endif

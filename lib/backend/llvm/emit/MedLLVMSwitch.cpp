@@ -435,15 +435,18 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
   };
   std::map<va_t, int> SuccAddrToBlock;
   for (auto &MB : CurMedFunc->Blocks)
-    if (!MB.Ops.empty() && isSucc(MB.Id))
-      SuccAddrToBlock.emplace(MB.Ops.front().Addr, MB.Id);
+    if (isSucc(MB.Id) && MB.StartAddr != InvalidVA)
+      SuccAddrToBlock.emplace(MB.StartAddr, MB.Id);
 
   auto blockForTarget = [&](va_t T) -> int {
     auto It = SuccAddrToBlock.find(T);
     if (It != SuccAddrToBlock.end())
       return It->second;
     for (auto &MB : CurMedFunc->Blocks)
-      if (!MB.Ops.empty() && MB.Ops.front().Addr == T)
+      // Earlier MedIR passes may remove all operations at the native case
+      // label (for example stack-restore epilogue work). The recorded block
+      // boundary remains the target identity after those removals.
+      if (MB.StartAddr == T)
         return MB.Id;
     return -1;
   };

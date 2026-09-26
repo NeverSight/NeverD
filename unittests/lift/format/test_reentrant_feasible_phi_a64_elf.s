@@ -67,6 +67,8 @@ probe:
         b .Lheader
 
 .Ldead:
+        mov x9, #0
+        mov x10, #0
         ldr x11, [sp, #16]
         cmp x11, #0
         cset w0, ne
@@ -74,6 +76,8 @@ probe:
         b .Lexit
 
 .Lexit:
+        eor x11, x9, x10
+        add w0, w0, w11
         ldr x22, [sp]
         ldr x28, [sp, #8]
         ldp x29, x30, [sp, #48]
@@ -85,7 +89,7 @@ probe:
         .p2align 3
 table_a:
         .quad 100
-        .quad 84
+        .quad 100
         .quad 44
         .quad 28
         .quad 48
@@ -93,7 +97,7 @@ table_a:
         .quad 8
 table_b:
         .quad 136
-        .quad 120
+        .quad 136
         .quad 56
         .quad 40
         .quad 16

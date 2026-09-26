@@ -6,8 +6,10 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
 #include "neverd/debug/PDBLoader.h"
+#include "neverd/ir/NdTypes.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 
@@ -31,12 +33,51 @@
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
 using namespace neverd;
 
 namespace {
+
+bool isCharType(const TypeRef &T) {
+  return T && T->Kind == NdTypeKind::Int && T->Size == 1 &&
+         (T->SourceName == "char" || T->IsSigned);
+}
+
+bool isCharArray16(const TypeRef &T) {
+  return T && T->Kind == NdTypeKind::Array && T->ArrayCount == 16 &&
+         isCharType(T->ElemType);
+}
+
+bool isCharPointer(const TypeRef &T) {
+  return T && T->Kind == NdTypeKind::Ptr && isCharType(T->Pointee);
+}
+
+TEST(PDBTypeSpelling, MsvcRttiQualifiedId) {
+  EXPECT_EQ(msvcRttiTypeSpelling(".?AVProbeError@@"), "ProbeError");
+  EXPECT_EQ(msvcRttiTypeSpelling(".?AVInner@Outer@Ns@@"), "Ns::Outer::Inner");
+  EXPECT_EQ(msvcRttiTypeSpelling(".?AUPod@Ns@@"), "Ns::Pod");
+  EXPECT_TRUE(msvcRttiTypeSpelling(".?AV?$basic_string@D@@").empty());
+}
+
+TEST(PDBTypeSpelling, MsvcUdtDisplayNameStripsTemplates) {
+  EXPECT_EQ(msvcUdtDisplayName("ProbeError"), "ProbeError");
+  EXPECT_EQ(msvcUdtDisplayName("Ns::Outer::Inner"), "Ns::Outer::Inner");
+  EXPECT_EQ(msvcUdtDisplayName("ATL::CStringT<wchar_t, Trait>"),
+            "ATL::CStringT");
+  EXPECT_EQ(msvcUdtDisplayName(
+                "ATL::CAtlMap<enum RankCode, unsigned long>::CNode"),
+            "ATL::CAtlMap::CNode");
+  EXPECT_EQ(msvcUdtDisplayName(
+                "ATL::CAtlMap<enum RankCode, unsigned long, "
+                "ATL::CElementTraits<enum RankCode>>::CNode"),
+            "ATL::CAtlMap::CNode");
+  EXPECT_EQ(msvcUdtDisplayName("?$CStringT@_WV?$StrTraitMFC_DLL@D"),
+            "CStringT");
+  EXPECT_EQ(msvcUdtDisplayName(".?AV?$basic_string@D@@"), "basic_string");
+}
 
 PDBBuildIdentity makeIdentity(uint8_t Seed, uint32_t Age = 1) {
   PDBBuildIdentity Identity;
@@ -440,6 +481,75 @@ TEST(PDBFunctionNameRegistry, IdenticalNamesRemainUnique) {
   EXPECT_EQ(*Registry.name(0x140001000), "leaks_memory");
 }
 
+TEST(PDBNamedOffset, LocalWinsIncomingParamHomeInEitherOrder) {
+  for (const bool ParamFirst : {true, false}) {
+    SCOPED_TRACE(ParamFirst);
+    std::map<int64_t, VariableSym> Slots;
+    std::set<int64_t> Ambiguous;
+    VariableSym Param;
+    Param.Name = "this";
+    Param.IsParam = true;
+    Param.StackOffset = 8;
+    VariableSym Local;
+    Local.Name = "name";
+    Local.IsParam = false;
+    Local.StackOffset = 8;
+    if (ParamFirst) {
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 8, Param);
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 8, Local);
+    } else {
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 8, Local);
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 8, Param);
+    }
+    EXPECT_TRUE(Ambiguous.empty());
+    ASSERT_EQ(Slots.count(8), 1u);
+    EXPECT_EQ(Slots[8].Name, "name");
+    EXPECT_FALSE(Slots[8].IsParam);
+  }
+}
+
+TEST(PDBNamedOffset, ThisWithoutParamFlagLosesToLocal) {
+  for (const bool ThisFirst : {true, false}) {
+    SCOPED_TRACE(ThisFirst);
+    std::map<int64_t, VariableSym> Slots;
+    std::set<int64_t> Ambiguous;
+    VariableSym This;
+    This.Name = "this";
+    This.IsParam = false;
+    This.StackOffset = 0x1D0;
+    VariableSym Local;
+    Local.Name = "name";
+    Local.IsParam = false;
+    Local.StackOffset = 0x1D0;
+    if (ThisFirst) {
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 0x1D0, This);
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 0x1D0, Local);
+    } else {
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 0x1D0, Local);
+      pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 0x1D0, This);
+    }
+    EXPECT_TRUE(Ambiguous.empty());
+    ASSERT_EQ(Slots.count(0x1D0), 1u);
+    EXPECT_EQ(Slots[0x1D0].Name, "name");
+    EXPECT_FALSE(Slots[0x1D0].IsParam);
+  }
+}
+
+TEST(PDBNamedOffset, DistinctLocalsStayAmbiguous) {
+  std::map<int64_t, VariableSym> Slots;
+  std::set<int64_t> Ambiguous;
+  VariableSym First;
+  First.Name = "name";
+  First.StackOffset = 8;
+  VariableSym Second;
+  Second.Name = "itemName";
+  Second.StackOffset = 8;
+  pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 8, First);
+  pdb_loader_detail::publishNamedOffset(Slots, Ambiguous, 8, Second);
+  EXPECT_TRUE(Slots.empty());
+  EXPECT_TRUE(Ambiguous.count(8));
+}
+
 TEST(PDBIdentityIntegration, LoadReportsModuleProgress) {
   auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
   ASSERT_TRUE(static_cast<bool>(ImageOr))
@@ -496,6 +606,171 @@ TEST(PDBIdentityIntegration, MatchingFixtureAuthenticatesNamesButNotExtents) {
     EXPECT_FALSE(Function.ReturnType)
         << "Phase A must not consume an unvalidated PDB type graph";
   }
+}
+
+TEST(PDBIdentityIntegration, MatchingFixtureNamesLocalsWithoutAuthorizingExtents) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(static_cast<bool>(ImageOr))
+      << llvm::toString(ImageOr.takeError());
+
+  auto ContextOr =
+      PDBDebugContext::load(safetyFixture("safety_cases_pe_x64.pdb"), *ImageOr);
+  ASSERT_TRUE(static_cast<bool>(ContextOr))
+      << llvm::toString(ContextOr.takeError());
+  ASSERT_NE(*ContextOr, nullptr);
+  EXPECT_FALSE((*ContextOr)->hasAuthenticatedObjectExtents());
+  EXPECT_FALSE((*ContextOr)->hasAuthenticatedFunctionSignatures());
+  EXPECT_FALSE((*ContextOr)->hasExactObjectMetadataPrerequisites());
+
+  constexpr va_t Overflow = 0x140001000;
+  auto Fn = (*ContextOr)->resolveFunction(Overflow);
+  ASSERT_TRUE(Fn.has_value());
+  EXPECT_EQ(Fn->Name, "tainted_stack_overflow");
+  EXPECT_EQ(Fn->Size, 0u);
+  ASSERT_TRUE(Fn->ReturnType);
+  EXPECT_EQ(Fn->ReturnType->Kind, NdTypeKind::Void);
+
+  auto Buf = (*ContextOr)->resolveVariable(Overflow, -0x18);
+  ASSERT_TRUE(Buf.has_value());
+  EXPECT_EQ(Buf->Name, "buf");
+  EXPECT_FALSE(Buf->IsParam);
+  ASSERT_TRUE(Buf->Type) << "TPI must spell char buf[16]";
+  EXPECT_TRUE(isCharArray16(Buf->Type)) << Buf->Type->str();
+  auto Src = (*ContextOr)->resolveVariable(Overflow, -0x20);
+  ASSERT_TRUE(Src.has_value());
+  EXPECT_EQ(Src->Name, "s");
+  ASSERT_TRUE(Src->Type);
+  EXPECT_TRUE(isCharPointer(Src->Type)) << Src->Type->str();
+
+  auto BufSP = (*ContextOr)->resolveStackPointerVariable(Overflow, 48);
+  ASSERT_TRUE(BufSP.has_value());
+  EXPECT_EQ(BufSP->Name, "buf");
+  ASSERT_TRUE(BufSP->Type);
+  EXPECT_TRUE(isCharArray16(BufSP->Type)) << BufSP->Type->str();
+
+  constexpr va_t Outer = 0x1400012a0;
+  for (va_t Miss = Overflow + 8; Miss < Overflow + 0x40; Miss += 8)
+    (void)(*ContextOr)->resolveFunction(Miss);
+  auto BufAfterMiss = (*ContextOr)->resolveVariable(Overflow, -0x18);
+  ASSERT_TRUE(BufAfterMiss.has_value());
+  EXPECT_EQ(BufAfterMiss->Name, "buf");
+
+  auto OuterFn = (*ContextOr)->resolveFunction(Outer);
+  ASSERT_TRUE(OuterFn.has_value());
+  ASSERT_EQ(OuterFn->Params.size(), 1u);
+  EXPECT_EQ(OuterFn->Params[0].first, "s");
+  ASSERT_TRUE(OuterFn->Params[0].second);
+  EXPECT_TRUE(isCharPointer(OuterFn->Params[0].second))
+      << OuterFn->Params[0].second->str();
+
+  (*ContextOr)->completeType(Fn->ReturnType);
+  (*ContextOr)->completeType(Buf->Type);
+  (*ContextOr)->completeType(OuterFn->Params[0].second);
+  EXPECT_TRUE(isCharArray16(Buf->Type)) << Buf->Type->str();
+}
+
+// Outer is later in the CU than Overflow. The first walk must skip
+// Overflow's body (S_END) and still be able to seek back for buf/s.
+TEST(PDBIdentityIntegration, LaterFuncLoadStillNamesEarlierLocals) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(static_cast<bool>(ImageOr))
+      << llvm::toString(ImageOr.takeError());
+
+  auto ContextOr =
+      PDBDebugContext::load(safetyFixture("safety_cases_pe_x64.pdb"), *ImageOr);
+  ASSERT_TRUE(static_cast<bool>(ContextOr))
+      << llvm::toString(ContextOr.takeError());
+
+  constexpr va_t Overflow = 0x140001000;
+  constexpr va_t Outer = 0x1400012a0;
+  auto OuterFn = (*ContextOr)->resolveFunction(Outer);
+  ASSERT_TRUE(OuterFn.has_value());
+  ASSERT_EQ(OuterFn->Params.size(), 1u);
+  EXPECT_EQ(OuterFn->Params[0].first, "s");
+
+  auto Fn = (*ContextOr)->resolveFunction(Overflow);
+  ASSERT_TRUE(Fn.has_value());
+  EXPECT_EQ(Fn->Name, "tainted_stack_overflow");
+  auto Buf = (*ContextOr)->resolveVariable(Overflow, -0x18);
+  ASSERT_TRUE(Buf.has_value());
+  EXPECT_EQ(Buf->Name, "buf");
+  ASSERT_TRUE(Buf->Type);
+  EXPECT_TRUE(isCharArray16(Buf->Type)) << Buf->Type->str();
+  auto Src = (*ContextOr)->resolveVariable(Overflow, -0x20);
+  ASSERT_TRUE(Src.has_value());
+  EXPECT_EQ(Src->Name, "s");
+  ASSERT_TRUE(Src->Type);
+  EXPECT_TRUE(isCharPointer(Src->Type)) << Src->Type->str();
+}
+
+TEST(PDBIdentityIntegration, FuncLoadIngestsOnlyRequestedPublics) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(static_cast<bool>(ImageOr))
+      << llvm::toString(ImageOr.takeError());
+
+  constexpr va_t Overflow = 0x140001000;
+  constexpr va_t Outer = 0x1400012a0;
+
+  struct Seen {
+    unsigned long long PublicsTotal = 0;
+  };
+  auto attach = [](Seen &State) {
+    LoadProgress Progress;
+    Progress.User = &State;
+    Progress.Callback = [](void *User, const char *Phase, unsigned long long,
+                           unsigned long long Total, const char *Detail) {
+      if (!Phase || llvm::StringRef(Phase) != "debug")
+        return;
+      if (!Detail || llvm::StringRef(Detail) != "pdb publics")
+        return;
+      auto *S = static_cast<Seen *>(User);
+      if (Total > S->PublicsTotal)
+        S->PublicsTotal = Total;
+    };
+    return Progress;
+  };
+
+  Seen FullState;
+  auto FullOr = PDBDebugContext::load(
+      safetyFixture("safety_cases_pe_x64.pdb"), *ImageOr, attach(FullState));
+  ASSERT_TRUE(static_cast<bool>(FullOr))
+      << llvm::toString(FullOr.takeError());
+  const size_t FullCount = (*FullOr)->allFunctions().size();
+  ASSERT_GE(FullCount, 2u);
+  ASSERT_GT(FullState.PublicsTotal, 1u);
+
+  BinaryImage Restricted = *ImageOr;
+  Restricted.LoadOnlyFunctionEntries.insert(Overflow);
+  Seen RestrictedState;
+  auto ContextOr = PDBDebugContext::load(
+      safetyFixture("safety_cases_pe_x64.pdb"), Restricted,
+      attach(RestrictedState));
+  ASSERT_TRUE(static_cast<bool>(ContextOr))
+      << llvm::toString(ContextOr.takeError());
+  ASSERT_NE(*ContextOr, nullptr);
+  EXPECT_TRUE((*ContextOr)->hasInfo());
+  EXPECT_EQ(RestrictedState.PublicsTotal, 1u);
+  EXPECT_LT(RestrictedState.PublicsTotal, FullState.PublicsTotal);
+
+  const std::vector<FunctionSym> Seeded = (*ContextOr)->allFunctions();
+  ASSERT_EQ(Seeded.size(), 1u);
+  EXPECT_EQ(Seeded[0].Addr, Overflow);
+  EXPECT_EQ(Seeded[0].Name, "tainted_stack_overflow");
+  EXPECT_EQ(Seeded[0].Size, 0u);
+  EXPECT_FALSE(Seeded[0].ReturnType);
+  for (const FunctionSym &Function : Seeded)
+    EXPECT_NE(Function.Addr, Outer);
+
+  auto Buf = (*ContextOr)->resolveVariable(Overflow, -0x18);
+  ASSERT_TRUE(Buf.has_value());
+  EXPECT_EQ(Buf->Name, "buf");
+
+  auto OuterFn = (*ContextOr)->resolveFunction(Outer);
+  ASSERT_TRUE(OuterFn.has_value());
+  EXPECT_FALSE(OuterFn->Name.empty());
+  EXPECT_EQ(OuterFn->Size, 0u);
+  EXPECT_FALSE((*ContextOr)->hasAuthenticatedFunctionSignatures());
+  EXPECT_GE((*ContextOr)->allFunctions().size(), 2u);
 }
 
 TEST(PDBIdentityIntegration, CrossArchitectureFixtureIsRejectedByGuidAndAge) {
@@ -1097,6 +1372,48 @@ TEST(PDB20IdentityIntegration, StdcallParamsLocalsAndExtentReachDebugContext) {
   EXPECT_TRUE(Param->IsParam);
 }
 
+TEST(PDB20IdentityIntegration, TpiParamsWithoutLocalsStillPublishArity) {
+  constexpr uint32_t Signature = 0x99aabbcc;
+  constexpr uint32_t Age = 1;
+  constexpr uint32_t Chars = 0x60000020;
+  constexpr uint32_t Int32 = 0x74;
+  const std::vector<uint8_t> ArgList = makeArgList({Int32, Int32});
+  const std::vector<uint8_t> ProcType = makeProcedure(
+      Int32, /*stdcall=*/0x07, 2, /*ArgList=*/0x1000);
+  const std::vector<uint8_t> Tpi = makeTpi800({ArgList, ProcType});
+
+  auto Module = makeLegacyProcStream("legacy_target", 0x100, 1, 0x20, 0x1001);
+  const auto End = makeEnd();
+  Module.insert(Module.end(), End.begin(), End.end());
+
+  std::vector<std::vector<uint8_t>> Streams(6);
+  Streams[1] = makeLegacyInfo(Signature, Age);
+  Streams[2] = Tpi;
+  Streams[3] = makeLegacyDbi(Age, /*ModuleStream=*/5,
+                             static_cast<uint32_t>(Module.size()),
+                             /*SectionStream=*/4);
+  Streams[4] =
+      makeLegacySectionHdr(".text", 0x1000, 0x1000, 0x200, 0x400, Chars);
+  Streams[5] = Module;
+
+  ScratchDir Dir;
+  const std::filesystem::path PdbPath = writePdb(writeJgPdb(Streams), Dir);
+  BinaryImage Image = makeX86PeImage(Signature, Age, Chars);
+
+  auto ContextOr = PDBDebugContext::load(PdbPath, Image);
+  ASSERT_TRUE(static_cast<bool>(ContextOr))
+      << llvm::toString(ContextOr.takeError());
+  auto Fn = (*ContextOr)->resolveFunction(0x401100);
+  ASSERT_TRUE(Fn.has_value());
+  ASSERT_EQ(Fn->Params.size(), 2u);
+  EXPECT_EQ(Fn->Params[0].first, "arg0");
+  EXPECT_EQ(Fn->Params[1].first, "arg1");
+  ASSERT_TRUE(Fn->Params[0].second);
+  EXPECT_EQ(Fn->Params[0].second->Kind, NdTypeKind::Int);
+  ASSERT_TRUE(Fn->ReturnType);
+  EXPECT_EQ(Fn->ReturnType->Kind, NdTypeKind::Int);
+}
+
 TEST(PDB20IdentityIntegration, ThiscallPublishesThisAndCdecl) {
   constexpr uint32_t Signature = 0xaabbccdd;
   constexpr uint32_t Age = 1;
@@ -1151,6 +1468,72 @@ TEST(PDB20IdentityIntegration, ThiscallPublishesThisAndCdecl) {
   ASSERT_TRUE(CdeclFn.has_value());
   EXPECT_EQ(CdeclFn->Name, "cdecl_target");
   EXPECT_EQ(CdeclFn->CallConv, DebugCallConv::Cdecl);
+}
+
+TEST(PDBIdentity, BindDebugParamsEmptyLocalTypeTakesTpiType) {
+  const TypeRef EnumTy = NdType::makeNamedRecord("ProbeKind", 4, true);
+  const TypeRef Ptr = NdType::makePtr(NdType::makeNamedRecord("CStringT", 8));
+  const std::vector<std::pair<std::string, TypeRef>> Locals = {
+      {"this", TypeRef{}},
+      {"nType", TypeRef{}},
+      {"strKey", TypeRef{}},
+  };
+  const auto Bound = bindDebugParamsToTpi(Locals, {EnumTy, Ptr});
+  ASSERT_EQ(Bound.size(), 3u);
+  EXPECT_EQ(Bound[0].first, "this");
+  EXPECT_FALSE(Bound[0].second);
+  EXPECT_EQ(Bound[1].first, "nType");
+  ASSERT_TRUE(Bound[1].second);
+  EXPECT_TRUE(Bound[1].second->IsEnum);
+  EXPECT_EQ(Bound[2].first, "strKey");
+  ASSERT_TRUE(Bound[2].second);
+  EXPECT_EQ(Bound[2].second->Kind, NdTypeKind::Ptr);
+}
+
+TEST(PDBIdentity, BindDebugParamsUsesTpiWhenLocalsEmpty) {
+  const TypeRef EnumTy = NdType::makeNamedRecord("ProbeKind", 4, true);
+  const TypeRef Ptr = NdType::makePtr(NdType::makeNamedRecord("CStringT", 8));
+  const auto Bound = bindDebugParamsToTpi({}, {EnumTy, Ptr});
+  ASSERT_EQ(Bound.size(), 2u);
+  EXPECT_TRUE(Bound[0].first.empty());
+  ASSERT_TRUE(Bound[0].second);
+  EXPECT_TRUE(Bound[0].second->IsEnum);
+  EXPECT_TRUE(Bound[1].first.empty());
+  ASSERT_TRUE(Bound[1].second);
+  EXPECT_EQ(Bound[1].second->Kind, NdTypeKind::Ptr);
+}
+
+TEST(PDBIdentity, BindDebugParamsDropsExtraLocalAfterTpiArity) {
+  const TypeRef Int32 = NdType::makeInt(4);
+  const TypeRef Ptr = NdType::makePtr();
+  const std::vector<std::pair<std::string, TypeRef>> Locals = {
+      {"this", Ptr},
+      {"nType", Int32},
+      {"nKey", Int32},
+      {"lock", Ptr},
+  };
+  const auto Bound = bindDebugParamsToTpi(Locals, {Int32, Int32});
+  ASSERT_EQ(Bound.size(), 3u);
+  EXPECT_EQ(Bound[0].first, "this");
+  EXPECT_EQ(Bound[1].first, "nType");
+  EXPECT_EQ(Bound[2].first, "nKey");
+}
+
+TEST(PDBIdentity, BindDebugParamsSkipsMismatchedLocalBeforeTpiSlot) {
+  const TypeRef Int32 = NdType::makeInt(4);
+  const TypeRef Ptr = NdType::makePtr();
+  const std::vector<std::pair<std::string, TypeRef>> Locals = {
+      {"this", Ptr},
+      {"result", Ptr},
+      {"nType", Int32},
+      {"nKey", Int32},
+      {"lock", Ptr},
+  };
+  const auto Bound = bindDebugParamsToTpi(Locals, {Int32, Int32});
+  ASSERT_EQ(Bound.size(), 3u);
+  EXPECT_EQ(Bound[0].first, "this");
+  EXPECT_EQ(Bound[1].first, "nType");
+  EXPECT_EQ(Bound[2].first, "nKey");
 }
 
 } // namespace

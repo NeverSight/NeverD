@@ -221,6 +221,10 @@ bool ExecutableCodeOwnerIndex::isImportStubAt(va_t Addr) const {
          contains(ImportRanges, Addr);
 }
 
+bool ExecutableCodeOwnerIndex::hasFunctionSymbolAt(va_t Addr) const {
+  return std::binary_search(FunctionStarts.begin(), FunctionStarts.end(), Addr);
+}
+
 bool ExecutableCodeOwnerIndex::hasKnownOrTypedOwnerAt(va_t Addr) const {
   return std::binary_search(FunctionStarts.begin(), FunctionStarts.end(),
                             Addr) ||
@@ -258,6 +262,17 @@ bool BinaryImage::hasExecutableCodeOwnerAt(
         Normalized < Start + Sym.Size)
       return true;
   }
+  return false;
+}
+
+bool BinaryImage::hasFunctionSymbolAt(
+    va_t Addr, const ExecutableCodeOwnerIndex *Index) const {
+  const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
+  if (Index && Index->Image == this)
+    return Index->hasFunctionSymbolAt(Normalized);
+  for (const Symbol &Sym : Symbols)
+    if (Sym.IsFunc && normalizeCodeAddress(Sym.Addr, Arch, Mode) == Normalized)
+      return true;
   return false;
 }
 

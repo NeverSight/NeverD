@@ -12,6 +12,7 @@
 #ifndef NEVERD_SUPPORT_PARALLEL_H
 #define NEVERD_SUPPORT_PARALLEL_H
 
+#include "neverd/Limits.h"
 #include "neverd/support/StackSizeMain.h"
 
 #include <algorithm>
@@ -106,6 +107,16 @@ inline unsigned workerThreadCount() {
 template <typename Fn> void parallelForEach(size_t Total, Fn ThreadBody) {
   if (Total == 0)
     return;
+  // `--func` is one requested entry plus expanded unwind ActionVAs
+  // (often < 32).  Spawning an 8 MiB worker per core is CLI latency.
+  if (Total < limits::kMinParallelIRWorkItems) {
+    size_t Claimed = 0;
+    auto Claim = [&]() -> size_t {
+      return Claimed < Total ? Claimed++ : Total;
+    };
+    ThreadBody(Claim, Total);
+    return;
+  }
   const unsigned NumThreads =
       static_cast<unsigned>(std::min<size_t>(workerThreadCount(), Total));
   std::atomic<size_t> NextIdx{0};
@@ -138,6 +149,14 @@ void parallelForEachWeighted(const std::vector<uint64_t> &Weight,
   std::sort(Order.begin(), Order.end(), [&](size_t A, size_t B) {
     return Weight[A] != Weight[B] ? Weight[A] > Weight[B] : A < B;
   });
+  if (Total < limits::kMinParallelIRWorkItems) {
+    size_t Pos = 0;
+    auto Claim = [&]() -> size_t {
+      return Pos < Total ? Order[Pos++] : Total;
+    };
+    ThreadBody(Claim, Total);
+    return;
+  }
 
   const unsigned NumThreads =
       static_cast<unsigned>(std::min<size_t>(workerThreadCount(), Total));

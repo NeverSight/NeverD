@@ -16,9 +16,11 @@
 #include "neverd/Common.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace neverd {
 
+struct CxxUnwindAction;
 struct ExceptionFunction;
 
 /// The native language model whose source record passed every regeneration
@@ -129,6 +131,36 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
 /// Return the stable diagnostic spelling of \p Reason.
 const char *
 getWindowsEHNativeSourceReasonName(WindowsEHNativeSourceReason Reason);
+
+/// Complete Windows language source whose native LLVM WinEH subset is
+/// intentionally not produced (destructors, nested/out-of-line catches,
+/// AArch64 SEH callbacks). These stay metadata-only: not `Missing` lowering.
+/// Empty or missing tables stay outside this set so patch stays fail-closed.
+bool isIntentionalMetadataOnlyNativeIR(WindowsEHNativeSourceReason Reason);
+
+/// One DestructorWithObject whose callee is outside the function and whose
+/// own link is state -1.
+const CxxUnwindAction *cxxSingleObjectDestructor(const ExceptionFunction &EH);
+
+/// A single Direct unwind funclet outside the function, chained to state -1.
+/// The personality calls that funclet with the establisher frame.
+const CxxUnwindAction *cxxSingleDirectFunclet(const ExceptionFunction &EH);
+
+/// Direct unwind funclets in personality order, innermost first. Empty when
+/// the map is not one chain of Direct actions that ends at state -1.
+std::vector<const CxxUnwindAction *>
+cxxDirectFuncletChain(const ExceptionFunction &EH);
+
+/// Direct and DestructorWithObject actions in personality order, innermost
+/// first. The map must be one chain to state -1. A Direct action has a zero
+/// object offset. Its callee is outside the function, or it is a block inside
+/// the parent whose address is outside every try or is its own IP boundary.
+/// An address strictly inside a protected range stays out. A DestructorWithObject
+/// action has a nonzero offset and a callee outside the function.
+/// DestructorWithObjectPointer, an address inside a try, a cycle, or an action
+/// off that chain stays out.
+std::vector<const CxxUnwindAction *>
+cxxLowerableDestructorChain(const ExceptionFunction &EH);
 
 } // namespace neverd
 

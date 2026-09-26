@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import posixpath
 import re
 import subprocess
@@ -708,6 +709,7 @@ ENGLISH_DOCS = (
     Path("docs/testing.md"),
     Path("docs/windows-exception-reconstruction.md"),
     *(Path(f"docs/{stem}.md") for stem in GUIDE_STEMS),
+    Path("docs/driver-emulation.md"),
 )
 
 
@@ -728,6 +730,7 @@ def localized_paths(locale: str) -> tuple[Path, ...]:
         Path(f"docs/{locale}/sbf.md"),
         Path(f"docs/{locale}/android.md"),
         Path(f"docs/{locale}/ios.md"),
+        Path(f"docs/{locale}/driver-emulation.md"),
     )
 
 
@@ -2106,6 +2109,395 @@ def validate_markdown_structure(
             )
 
 
+def driver_report_profile(view: RepositoryView) -> str:
+    source = view.read_text(Path("include/neverd/emulation/DriverProfileStrings.def"))
+    profiles = re.findall(
+        r'NEVERD_DRIVER_PROFILE_STRING\(ReportProfile,\s*"([^"]+)"\)', source
+    )
+    if len(profiles) != 1:
+        raise ValueError("driver profile must have one ReportProfile definition")
+    return profiles[0]
+
+
+def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
+    """Keep execution examples, supported exports and locale entry points aligned."""
+    english = Path("docs/driver-emulation.md")
+    guides = (
+        english,
+        *(Path(f"docs/{locale}/driver-emulation.md") for locale in LOCALES),
+    )
+    source = view.read_text(english)
+    examples = re.findall(r"```[^\n]*\n(.*?)```", source, re.DOTALL)
+    register_example = Path("docs/examples/driver-register-bank-scenario.json")
+    public_tests = view.read_text(
+        Path("unittests/emulation/DriverScenarioPublicTests.cpp")
+    )
+    public_scenario = re.search(
+        r'CAPIAndCLIExecuteRegisterBanksAcrossStopAndRestart.*?'
+        r'const std::string Scenario = R"\((.*?)\)";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_public = public_scenario is not None and json.loads(
+            view.read_text(register_example)
+        ) == json.loads(public_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_public = False
+    if not matches_public:
+        report(errors, "driver register-bank example differs from public execution scenario")
+    interrupt_example = Path("docs/examples/driver-interrupt-scenario.json")
+    interrupt_scenario = re.search(
+        r'CAPIAndCLIExecuteExplicitInterruptAndDpcCompletion.*?'
+        r'const std::string Scenario = R"\((.*?)\)";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_interrupt = interrupt_scenario is not None and json.loads(
+            view.read_text(interrupt_example)
+        ) == json.loads(interrupt_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_interrupt = False
+    if not matches_interrupt:
+        report(errors, "driver interrupt example differs from public execution scenario")
+    dma_example = Path("docs/examples/driver-dma-scenario.json")
+    dma_scenario = re.search(
+        r'CAPIAndCLIObserveDmaRamBeforeExplicitInterrupt.*?'
+        r'const std::string Scenario\s*=\s*R"dma\((.*?)\)dma";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_dma = dma_scenario is not None and json.loads(
+            view.read_text(dma_example)
+        ) == json.loads(dma_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_dma = False
+    if not matches_dma:
+        report(errors, "driver DMA example differs from public execution scenario")
+    channel_example = Path("docs/examples/driver-dma-channel-scenario.json")
+    channel_scenario = re.search(
+        r'CAPIAndCLIFlushChannelFragmentsBeforeCompletion.*?'
+        r'const std::string Scenario\s*=\s*R"channel\((.*?)\)channel";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_channel = channel_scenario is not None and json.loads(
+            view.read_text(channel_example)
+        ) == json.loads(channel_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_channel = False
+    if not matches_channel:
+        report(errors, "driver DMA channel example differs from public execution scenario")
+    seh_example = Path("docs/examples/driver-seh-scenario.json")
+    seh_scenario = re.search(
+        r'CAPIAndCLIResumeGenuineConstantExceptionHandler.*?'
+        r'const std::string Scenario\s*=\s*R"seh\((.*?)\)seh";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_seh = seh_scenario is not None and json.loads(
+            view.read_text(seh_example)
+        ) == json.loads(seh_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_seh = False
+    if not matches_seh:
+        report(errors, "driver SEH example differs from public execution scenario")
+    exports = re.findall(
+        r"NEVERD_KERNEL_API\((\w+),",
+        view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
+    )
+    exports = [name for name in exports if name != "Name"]
+    exports += re.findall(
+        r"NEVERD_KERNEL_REGISTRY_API\((\w+),",
+        view.read_text(Path("lib/emulation/windows/KernelRegistryAPIs.def")),
+    )
+    exports += re.findall(
+        r"NEVERD_KERNEL_DISPATCHER_API\((\w+),",
+        view.read_text(Path("lib/emulation/windows/KernelDispatcherAPIs.def")),
+    )
+    # The 458-entry identity inventory also names unmodeled traps. Only the
+    # implemented table and loader ABI inventories establish documented APIs.
+    for inventory, macro in (
+        ("KernelInterruptAPIs.def", "NEVERD_KERNEL_INTERRUPT_API"),
+        ("KernelFrameworkAPIs.def", "NEVERD_FRAMEWORK_API"),
+        ("KernelFrameworkLoaderAPIs.def", "NEVERD_FRAMEWORK_LOADER_API"),
+    ):
+        exports += re.findall(
+            rf"{macro}\((\w+),",
+            view.read_text(Path("lib/emulation/windows") / inventory),
+        )
+    # These are adapter-bound indirect methods, not kernel import names. Only
+    # implemented entries belong to the supported API documentation inventory.
+    exports += re.findall(
+        r"NEVERD_DMA_OPERATION\((\w+),[^\n]*, true\)",
+        view.read_text(Path("lib/emulation/windows/KernelDMAOperations.def")),
+    )
+    required = (
+        "NEVERD_ENABLE_DRIVER_EMULATION=ON",
+        "BUILD_TESTING",
+        "--scenario",
+        "METHOD_BUFFERED",
+        "METHOD_IN_DIRECT",
+        "METHOD_OUT_DIRECT",
+        "METHOD_NEITHER",
+        "KMDF",
+        "UMDF",
+        "KMDF 1.33",
+        "CFG",
+        "XFG",
+        "NEVERD_KMDF_FIXTURE",
+        "NEVERD_KMDF_CFG_FIXTURE",
+        "NEVERD_KMDF_CONTROL_FIXTURE",
+        "NEVERD_KMDF_CONTROL_CFG_FIXTURE",
+        "NEVERD_WDM_STACK_FIXTURE",
+        "NEVERD_WDM_STACK_CFG_FIXTURE",
+        "NEVERD_WDM_PNP_FIXTURE",
+        "NEVERD_WDM_PNP_CFG_FIXTURE",
+        "configuration.pnp_devices",
+        "resource_free",
+        "initial_device_power",
+        "initial_system_power",
+        "device_id",
+        "bus_completion",
+        "delay_100ns",
+        "query_remove",
+        "cancel_remove",
+        "query_stop",
+        "cancel_stop",
+        "surprise_removal",
+        "STATUS_RESOURCE_REQUIREMENTS_CHANGED",
+        "0x119",
+        "add_device_status",
+        "provider_present",
+        "bus_received_at_100ns",
+        "bus_completed_at_100ns",
+        "add_device:<ID>",
+        "STATUS_NOT_SUPPORTED",
+        "STATUS_SUCCESS",
+        "IoCopyCurrentIrpStackLocationToNext",
+        "IoSkipCurrentIrpStackLocation",
+        "IoSetCompletionRoutine",
+        "STATUS_MORE_PROCESSING_REQUIRED",
+        "FILE_OBJECT.DeviceObject",
+        "ReferenceCount",
+        "WDF_IO_QUEUE_CONFIG",
+        "WDF_REQUEST_PARAMETERS",
+        "D:P(A;;GA;;;WD)",
+        "PASSIVE_LEVEL",
+        "DISPATCH_LEVEL",
+        "KernelMode",
+        "Executive",
+        "CPU0",
+        "Increment=0",
+        "Wait=FALSE",
+        "STATUS_PENDING",
+        "DelayedWorkQueue",
+        "callback:N",
+        "model_error",
+        "STATUS_INVALID_DEVICE_REQUEST",
+        "RegistryPath",
+        "security_cookie",
+        "neverd_emulate_driver_json",
+        "neverd_emulate_driver_scenario_json",
+        "neverd_driver_options_v1",
+        "neverd_free_string",
+        "neverd_last_error",
+        "scenario_success",
+        "output_hex",
+        "information_hex",
+        "configuration.registry",
+        driver_report_profile(view), "defer_callback_drain",
+        "PsCreateSystemThread", "PsTerminateSystemThread",
+        "ObReferenceObjectByHandle", "ObfDereferenceObject",
+        "KeEnterCriticalRegion", "KeLeaveCriticalRegion",
+        "KeEnterGuardedRegion", "KeLeaveGuardedRegion",
+        "KeAreApcsDisabled", "KeAreAllApcsDisabled",
+        "WdfRequestRetrieveUnsafeUserInputBuffer",
+        "WdfRequestRetrieveUnsafeUserOutputBuffer",
+        "WdfRequestProbeAndLockUserBufferForRead",
+        "WdfRequestProbeAndLockUserBufferForWrite", "WdfMemoryGetBuffer",
+        "WdfRequestForwardToIoQueue", "WdfRequestRequeue",
+        "WdfDeviceInitSetExclusive", "DO_EXCLUSIVE",
+        "WdfDeviceInitSetFileObjectConfig", "WdfFileObjectGetDevice",
+        "WdfFileObjectWdmGetFileObject", "EvtDeviceFileCreate",
+        "EvtFileCleanup", "EvtFileClose",
+        "EvtIoCanceledOnQueue",
+        "WdfIoQueueReadyNotify",
+        "WdfIoQueueFindRequest", "WdfIoQueueRetrieveFoundRequest",
+        "WdfIoQueueRetrieveNextRequest", "WdfIoQueueGetState",
+        "WdfIoQueuePnpHeld", "WdfUseDefault",
+        "EvtIoStop", "EvtIoResume", "WdfRequestStopAcknowledge",
+        "CM_PARTIAL_RESOURCE_DESCRIPTOR", "MmMapIoSpace",
+        "WdfIoQueueStop", "WdfIoQueueStopSynchronously", "WdfIoQueueStart",
+        "WdfIoQueueDrain", "WdfIoQueueDrainSynchronously",
+        "WdfIoQueuePurge", "WdfIoQueuePurgeSynchronously",
+        "WdfIoQueueStopAndPurge", "WdfIoQueueStopAndPurgeSynchronously",
+        "STATUS_WDF_PAUSED",
+        "asynchronous_file",
+        "ExRaiseStatus", "ExRaiseAccessViolation", "ExRaiseDatatypeMisalignment",
+        "__C_specific_handler", "EXCEPTION_EXECUTE_HANDLER", "GetExceptionCode",
+        "STATUS_ACCESS_VIOLATION", "STATUS_DATATYPE_MISALIGNMENT", "APC_LEVEL",
+        "NEVERD_WDM_SEH_FIXTURE", "NEVERD_WDM_SEH_CFG_FIXTURE",
+        "driver-seh-scenario.json", "ProbeForRead", "ProbeForWrite",
+        "user_input_access", "user_output_access", "no_access",
+        "user_unmap_after_dispatch", "requestor_process_id",
+        "requestor_exit_after_dispatch", "IoGetRequestorProcessId",
+        "IoGetRequestorProcess", "IoGetCurrentProcess", "PsGetProcessId",
+        "PsGetCurrentProcessId", "KeStackAttachProcess",
+        "KeUnstackDetachProcess", "KAPC_STATE",
+        "KeInitializeSpinLock", "KeAcquireSpinLockRaiseToDpc",
+        "KeReleaseSpinLock", "KeAcquireSpinLockAtDpcLevel",
+        "KeReleaseSpinLockFromDpcLevel", "KeTryToAcquireSpinLockAtDpcLevel",
+        "KeInitializeSemaphore", "KeReleaseSemaphore",
+        "KeReadStateSemaphore", "STATUS_SEMAPHORE_LIMIT_EXCEEDED",
+        "KeInitializeMutex", "KeReleaseMutex", "KeReadStateMutex",
+        "STATUS_MUTANT_NOT_OWNED",
+        "KfRaiseIrql", "KeLowerIrql",
+        "configuration.user_page_access", "IRP.UserBuffer",
+        "DriverDMA.h", "DriverDMA.def", "dma_events", "dma_transfers",
+        "address_bits", "maximum_length", "map_registers", "alignment",
+        "logical_base", "logical_length", "scatter_gather", "logical_address",
+        "read_memory", "write_memory", "data_hex", "completed_at_100ns",
+        "mapping", "adapter", "failure_reason", "DmaWritable",
+        "NEVERD_WDM_DMA_FIXTURE", "NEVERD_WDM_DMA_CFG_FIXTURE",
+        "driver-dma-scenario.json",
+        "AllocateAdapterChannel", "MapTransfer", "FlushAdapterBuffers",
+        "FreeMapRegisters", "KeFlushIoBuffers", "CurrentIrp",
+        "NEVERD_WDM_DMA_CHANNEL_FIXTURE", "NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE",
+        "driver-dma-channel-scenario.json",
+        "DriverInterrupts.h", "DriverInterrupts.def", "interrupt_events",
+        "after_100ns", "interrupt_id", "raw_vector", "raw_level", "raw_affinity",
+        "translated_vector", "translated_level", "translated_affinity",
+        "latched", "device_exclusive", "source_request_index", "event_index",
+        "due_at_100ns", "occurred_at_100ns", "delivered_at_100ns", "returned_at_100ns",
+        "interrupt_object", "return_value", "claimed", "undelivered_reason",
+        "NEVERD_WDM_INTERRUPT_FIXTURE", "NEVERD_WDM_INTERRUPT_CFG_FIXTURE",
+        "driver-interrupt-scenario.json",
+        "register_bank", "resources", "raw_start", "translated_start", "registers",
+        "read_only", "read_write", "DriverResources.h", "DriverResources.def",
+        "CM_RESOURCE_LIST", "NEVERD_WDM_RESOURCE_FIXTURE",
+        "NEVERD_WDM_RESOURCE_CFG_FIXTURE", "driver-register-bank-scenario.json",
+        "STATUS_DELETE_PENDING", "Driver Verifier",
+        "NEVERD_WDM_REMOVE_LOCK_FIXTURE", "NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE",
+        "NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE", "NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE",
+        "initial_reported_device_power", "requested_device_power",
+        "power_type", "power_state", "power_action", "system_context",
+        "response_index", "origin", "requested_device_object",
+        "device_state_before", "device_state_after",
+        "system_state_before", "system_state_after", "reported_device_power",
+        "DO_POWER_PAGABLE", "DO_POWER_INRUSH",
+        "NEVERD_WDM_POWER_FIXTURE", "NEVERD_WDM_POWER_CFG_FIXTURE",
+        "driver-power-scenario.json",
+        "STATUS_INTERNAL_ERROR",
+        "WdfSynchronizationScopeNone",
+        "ByteCount",
+        "cancel_after_100ns",
+        "cancel_requested_at_100ns",
+        "STATUS_CANCELLED",
+        "validate_windows_driver_sample.py",
+        "sioctl-validation.json",
+        "validate_zero_driver_sample.py",
+        "zero-validation.json",
+        *(f"`{name}`" for name in exports),
+    )
+    for guide in guides:
+        require_tokens(guide, required, errors, view)
+        text = view.read_text(guide)
+        if re.findall(r"```[^\n]*\n(.*?)```", text, re.DOTALL) != examples:
+            report(
+                errors,
+                f"{display_path(guide)}: driver examples differ from the English execution contract",
+            )
+        selectors = tuple(
+            posixpath.relpath(target.as_posix(), guide.parent.as_posix())
+            for target in guides
+        )
+        require_tokens(guide, selectors, errors, view)
+        require_tokens(guide.parent / "README.md", ("(driver-emulation.md)",), errors, view)
+        require_tokens(
+            guide.parent / "architecture.md",
+            ("NEVERD_ENABLE_DRIVER_EMULATION", "`lib/emulation`", "(driver-emulation.md)",
+             "KernelModelDeviceStack", "KernelModelIRPStack", "KernelGuestCall",
+             "STATUS_MORE_PROCESSING_REQUIRED", "DriverPnp.h", "DeviceLifecycle.def",
+             "devicePnpFinalStatusError",
+             "KernelModelPnpDevices", "KernelModelPnpRequests", "KernelModelPnpCompletion",
+             "KernelRemoveLocks", "DriverResources.h", "DriverResources.def",
+             "KernelMMIO", "KernelModelResources", "UnicornBackend",
+             "KernelResources", "KernelInterrupts", "DriverInterrupts.h",
+             "DriverDMA.h", "DriverDMA.def", "KernelPhysicalMemory", "KernelDMA",
+             "KernelDMAEvents", "KernelModelPhysicalMemory", "KernelModelDMA",
+             "KernelModelDMATransfers", "DmaWritable",
+             "KernelDMAChannels", "KernelModelDMAChannels", "DMAAdapterControl",
+             "KernelGuestException", "KernelSEH",
+             "KernelModelInterruptEvents", "KernelModelInterrupts",
+             "DriverPower.def", "DriverPowerOperation", "KernelModelPowerRequests",
+             "KernelModelPowerCompletion"),
+            errors,
+            view,
+        )
+        require_tokens(
+            guide.parent / "testing.md",
+            (
+                "NeverDDriverEmulationTests",
+                "NeverDDriverEmulationPublicTests",
+                "'^NeverDDriverEmulation'",
+                "(driver-emulation.md)",
+                "KernelSEHTests.cpp", "KernelExceptionTests.cpp",
+                "DriverWDMSEHTests.cpp", "NEVERD_WDM_SEH_FIXTURE",
+                "NEVERD_WDM_SEH_CFG_FIXTURE", "driver-seh-scenario.json",
+                "test_driver_seh_integration.py", "NEVERD_TEST_WDM_SEH_FIXTURE",
+                "NEVERD_TEST_WDM_SEH_CFG_FIXTURE",
+                "KernelDeviceStackTests.cpp",
+                "KernelIRPStackTests.cpp",
+                "DriverWDMStackTests.cpp",
+                "NEVERD_WDM_STACK_FIXTURE",
+                "NEVERD_WDM_STACK_CFG_FIXTURE",
+                "DriverResourceScenarioTests.cpp", "KernelMMIOTests.cpp",
+                "DriverDMAScenarioTests.cpp", "KernelPhysicalMemoryTests.cpp",
+                "BackendBackingTests.cpp", "KernelDMATests.cpp", "KernelDMABridgeTests.cpp",
+                "SchedulerDMATests.cpp", "DriverWDMDMATests.cpp",
+                "KernelDMAChannelTests.cpp", "KernelDMAChannelBridgeTests.cpp",
+                "DriverWDMDMAChannelTests.cpp", "NEVERD_WDM_DMA_CHANNEL_FIXTURE",
+                "NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE", "driver-dma-channel-scenario.json",
+                "test_driver_dma_channel_integration.py",
+                "NEVERD_TEST_WDM_DMA_CHANNEL_FIXTURE",
+                "NEVERD_TEST_WDM_DMA_CHANNEL_CFG_FIXTURE",
+                "NEVERD_WDM_DMA_FIXTURE", "NEVERD_WDM_DMA_CFG_FIXTURE",
+                "driver-dma-scenario.json", "test_driver_dma_integration.py",
+                "NEVERD_TEST_LIBNEVERD", "NEVERD_TEST_WDM_DMA_FIXTURE",
+                "NEVERD_TEST_WDM_DMA_CFG_FIXTURE",
+                "DriverInterruptScenarioTests.cpp", "KernelInterruptsTests.cpp",
+                "KernelInterruptBridgeTests.cpp", "SchedulerInterruptTests.cpp",
+                "DriverWDMInterruptTests.cpp", "NEVERD_WDM_INTERRUPT_FIXTURE",
+                "NEVERD_WDM_INTERRUPT_CFG_FIXTURE", "driver-interrupt-scenario.json",
+                "KernelMMIOFailureTests.cpp",
+                "KernelResourceBridgeTests.cpp", "UnicornMMIOTests.cpp",
+                "DriverWDMResourceTests.cpp", "NEVERD_WDM_RESOURCE_FIXTURE",
+                "NEVERD_WDM_RESOURCE_CFG_FIXTURE", "driver-register-bank-scenario.json",
+                "KernelRemoveLocksTests.cpp", "KernelRemoveLockBridgeTests.cpp",
+                "DriverWDMRemoveLockTests.cpp", "NEVERD_WDM_REMOVE_LOCK_FIXTURE",
+                "NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE", "NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE",
+                "NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE",
+                "DriverPowerScenarioTests.cpp", "KernelPowerRequestTests.cpp",
+                "KernelPowerCompletionTests.cpp", "DriverWDMPowerTests.cpp",
+                "NEVERD_WDM_POWER_FIXTURE", "NEVERD_WDM_POWER_CFG_FIXTURE",
+                "DriverPnpScenarioTests.cpp",
+                "KernelPnpDeviceTests.cpp",
+                "KernelPnpRequestTests.cpp",
+                "KernelPnpCompletionTests.cpp",
+                "DriverWDMPnpTests.cpp",
+                "NEVERD_WDM_PNP_FIXTURE",
+                "NEVERD_WDM_PNP_CFG_FIXTURE",
+            ),
+            errors,
+            view,
+        )
+
+
 def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     for path in MARKDOWN_DOCS:
         if not view.exists(path):
@@ -2116,6 +2508,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     if errors:
         return
 
+    validate_driver_documents(errors, view)
     validate_architecture_semantics(errors, view)
     validate_sbf_evidence(errors, view)
     validate_sbf_testing_rows(errors, view)
@@ -2175,6 +2568,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
             sbf_guide,
             android_guide,
             ios_guide,
+            _driver_guide,
         ) = localized_paths(locale)
         require_tokens(
             project_readme,

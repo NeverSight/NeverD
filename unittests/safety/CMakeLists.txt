@@ -155,6 +155,7 @@ if(TARGET neverd_shared)
 
   add_neverd_unittest(NeverDSafetyIntegrationTests
     SafetyCLIContractTests.cpp
+    PDBNamePreloadCLIContractTests.cpp
     RuntimeSanitizerCLIContractTests.cpp
     SafetyIntegrationTests.cpp
     LINK_LIBS neverd_shared

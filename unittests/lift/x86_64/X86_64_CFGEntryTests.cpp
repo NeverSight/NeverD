@@ -1402,6 +1402,46 @@ TEST(CFGBuilderCoverage,
   EXPECT_TRUE(AmbiguousRoots.RootsByOwner.empty());
 }
 
+TEST(CFGBuilderCoverage, SkipsEHReturnedCodeWhenRefsAreOnlyFunctionEntries) {
+  constexpr va_t EntryVA = 0x140001000;
+  constexpr va_t CalleeVA = 0x140002000;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = EntryVA;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = EntryVA;
+  Text.Size = 0x10;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xc3);
+  Img.Segments.push_back(std::move(Text));
+  Img.KnownCodeRanges.emplace_back(EntryVA, EntryVA + 0x10);
+  Img.KnownCodeRanges.emplace_back(CalleeVA, CalleeVA + 1);
+
+  ExceptionFunction Owner;
+  Owner.CodeRange = {EntryVA, EntryVA + 0x10};
+  Owner.Kind = RuntimeFunctionKind::Primary;
+  Owner.Encoding = ExceptionEncoding::X64UnwindV1;
+  Owner.ParseStatus = ExceptionParseStatus::Complete;
+  Owner.Cxx.emplace();
+  Owner.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+  Img.ExceptionMetadata.Functions.push_back(std::move(Owner));
+
+  LowFunc Func;
+  Func.Entry = EntryVA;
+  Func.CodeRefTargets = {CalleeVA};
+  const std::set<va_t> FunctionEntries{EntryVA, CalleeVA};
+  const auto Roots =
+      pipeline_detail::collectWindowsEHContinuationRootsForTesting(
+          Img, {Func}, FunctionEntries, /*TestBudget=*/0);
+  ASSERT_TRUE(Roots.AnalysisComplete)
+      << "ordinary call targets must not start returned-code dataflow";
+  EXPECT_TRUE(Roots.RootsByOwner.empty());
+}
+
 TEST(FuncDetectorCoverage,
      PreservesVerifiedMachODirectCallInsideBroadRangeAcrossX86) {
   constexpr va_t ImageVA = 0x1000;

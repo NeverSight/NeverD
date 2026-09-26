@@ -64,6 +64,124 @@ enum class NameOrigin { Synthesized, Analysis, Stated, User };
 /// nothing else, which is what every mint site produces.  Requiring the exact
 /// shape keeps a binary that genuinely exports `sub_total` or `func_ptr` from
 /// having its own name treated as up for grabs.
+/// MSVC RTTI `TypeDescriptor` name (`.?AVInner@Outer@Ns@@`) → `Ns::Outer::Inner`.
+/// Templates and other non-identifier decorations stay empty so callers can
+/// keep the raw string rather than invent a spelling.
+inline std::string msvcRttiTypeSpelling(llvm::StringRef Raw) {
+  if (Raw.starts_with(".?AV") || Raw.starts_with(".?AU") ||
+      Raw.starts_with(".?AT"))
+    Raw = Raw.drop_front(4);
+  else if (Raw.starts_with(".?AW4"))
+    Raw = Raw.drop_front(5);
+  else
+    return {};
+  std::vector<llvm::StringRef> Parts;
+  while (!Raw.empty()) {
+    const size_t At = Raw.find('@');
+    const llvm::StringRef Part =
+        At == llvm::StringRef::npos ? Raw : Raw.take_front(At);
+    if (Part.empty())
+      break;
+    const unsigned char Front = static_cast<unsigned char>(Part.front());
+    if (Front == '?' || (Front >= '0' && Front <= '9'))
+      return {};
+    bool Ident = true;
+    for (unsigned char Ch : Part.bytes()) {
+      if (!((Ch >= 'a' && Ch <= 'z') || (Ch >= 'A' && Ch <= 'Z') ||
+            (Ch >= '0' && Ch <= '9') || Ch == '_')) {
+        Ident = false;
+        break;
+      }
+    }
+    if (!Ident)
+      return {};
+    Parts.push_back(Part);
+    if (At == llvm::StringRef::npos)
+      break;
+    Raw = Raw.drop_front(At + 1);
+  }
+  if (Parts.empty())
+    return {};
+  std::string Out;
+  for (size_t I = Parts.size(); I > 0; --I) {
+    if (!Out.empty())
+      Out += "::";
+    Out += Parts[I - 1];
+  }
+  return Out;
+}
+
+/// LF_CLASS/STRUCT display name without template arguments.
+/// `ATL::CStringT<wchar_t, ...>` → `ATL::CStringT`. Nested members after a
+/// template (`ATL::CAtlMap<...>::CNode`) stay `ATL::CAtlMap::CNode` so
+/// `cNamedTypeSpelling` can keep `CNode`. Cutting at the first `<` used
+/// to leave `ATL::CAtlMap` and type map-node pointers as `CAtlMap*`.
+/// Invalid ident parts stay empty so a decoration is not a type spelling.
+inline std::string msvcUdtDisplayName(llvm::StringRef Name) {
+  auto TemplateStem = [](llvm::StringRef Raw) -> std::string {
+    Raw.consume_front(".?AV");
+    Raw.consume_front(".?AU");
+    Raw.consume_front(".?AT");
+    if (!Raw.consume_front("?$"))
+      return {};
+    const size_t At = Raw.find('@');
+    if (At == llvm::StringRef::npos || At == 0)
+      return {};
+    const llvm::StringRef Ident = Raw.take_front(At);
+    if (!((Ident.front() >= 'A' && Ident.front() <= 'Z') ||
+          (Ident.front() >= 'a' && Ident.front() <= 'z') ||
+          Ident.front() == '_'))
+      return {};
+    for (unsigned char Ch : Ident.bytes()) {
+      if (!((Ch >= 'a' && Ch <= 'z') || (Ch >= 'A' && Ch <= 'Z') ||
+            (Ch >= '0' && Ch <= '9') || Ch == '_'))
+        return {};
+    }
+    return Ident.str();
+  };
+  if (const std::string Stem = TemplateStem(Name); !Stem.empty())
+    return Stem;
+  std::string Buf;
+  Buf.reserve(Name.size());
+  unsigned Depth = 0;
+  for (unsigned char Ch : Name.bytes()) {
+    if (Ch == '<') {
+      ++Depth;
+      continue;
+    }
+    if (Ch == '>') {
+      if (Depth)
+        --Depth;
+      continue;
+    }
+    if (Depth == 0)
+      Buf.push_back(static_cast<char>(Ch));
+  }
+  llvm::StringRef Stripped = Buf;
+  if (Stripped.empty())
+    return {};
+  llvm::StringRef Rest = Stripped;
+  while (!Rest.empty()) {
+    const size_t Sep = Rest.find("::");
+    const llvm::StringRef Part =
+        Sep == llvm::StringRef::npos ? Rest : Rest.take_front(Sep);
+    if (Part.empty())
+      return {};
+    const unsigned char Front = static_cast<unsigned char>(Part.front());
+    if (Front == '?' || (Front >= '0' && Front <= '9'))
+      return {};
+    for (unsigned char Ch : Part.bytes()) {
+      if (!((Ch >= 'a' && Ch <= 'z') || (Ch >= 'A' && Ch <= 'Z') ||
+            (Ch >= '0' && Ch <= '9') || Ch == '_'))
+        return {};
+    }
+    if (Sep == llvm::StringRef::npos)
+      break;
+    Rest = Rest.drop_front(Sep + 2);
+  }
+  return Stripped.str();
+}
+
 inline bool isSynthesizedFuncName(llvm::StringRef Name) {
   if (Name.empty())
     return true;

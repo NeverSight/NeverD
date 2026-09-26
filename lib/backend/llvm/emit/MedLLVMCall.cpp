@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -558,6 +559,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           Callee->addFnAttr(llvm::Attribute::NoReturn);
       }
     }
+  }
+
+  if (Callee && CallAddr > 1 && Callee->isDeclaration()) {
+    auto VAOr = rewrite_source::getOriginalVA(*Callee);
+    if (VAOr && !*VAOr)
+      rewrite_source::setOriginalVA(*Callee, CallAddr);
   }
 
   if (Callee) {

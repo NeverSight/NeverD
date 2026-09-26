@@ -148,11 +148,13 @@ constexpr llvm::StringLiteral kMSVCMap =
     "\n"
     " Start         Length     Name                   Class\n"
     " 0001:00000000 00001000H .text                   CODE\n"
+    " 0002:00000000 00001000H .data                   DATA\n"
     "\n"
     "  Address         Publics by Value        Rva+Base       Lib:Object\n"
     "\n"
     " 0001:00001000       parse_header            0000140001000 f   probe.obj\n"
     " 0001:00001040       emit_record             0000140001040 f   probe.obj\n"
+    " 0002:00000000       ProbeSink               0000140002000     probe.obj\n"
     "\n"
     " entry point at        0001:00001000\n";
 
@@ -801,6 +803,24 @@ TEST(LoadDebugInfoTest, FindsMapBesideTheBinary) {
   EXPECT_EQ(Funcs[0].Addr, Img.Base + 0x1000);
   EXPECT_EQ(Funcs[1].Name, "emit_record");
   EXPECT_EQ(Funcs[1].Addr, Img.Base + 0x1040);
+}
+
+TEST(LoadDebugInfoTest, MSVCMapPublishesDataPublicsWithoutExtents) {
+  ScratchDir Dir;
+  Dir.write("probe.map", kMSVCMap);
+
+  BinaryImage Img = makePEImage();
+  DebugInfoResult R = loadDebugInfo(Dir.path("probe.exe"), Img);
+  ASSERT_TRUE(static_cast<bool>(R));
+  ASSERT_NE(R.Context, nullptr);
+
+  const std::vector<DataObjectSym> Objects = R.Context->allDataObjects();
+  ASSERT_EQ(Objects.size(), 1u);
+  EXPECT_EQ(Objects[0].Name, "ProbeSink");
+  EXPECT_EQ(Objects[0].Addr, Img.Base + 0x2000);
+  EXPECT_EQ(Objects[0].Size, 0u);
+  EXPECT_FALSE(Objects[0].IsBuffer);
+  EXPECT_FALSE(R.Context->hasAuthenticatedObjectExtents());
 }
 
 TEST(LoadDebugInfoTest, FindsMapNamedAfterTheWholeFileName) {

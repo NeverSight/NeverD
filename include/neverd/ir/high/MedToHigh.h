@@ -72,6 +72,7 @@ public:
 
   struct CallIndTarget {
     std::string Name = "indirect";
+    va_t Addr = 0;
     bool IsIndirect = true;
     int IndirectParam = -1;
   };
@@ -95,6 +96,10 @@ private:
   ExprPtr sourceScalarValue(const MedVar &Value, const TypeRef &Type);
   ExprPtr inlineableDefinition(VarKey Key) const;
   ExprPtr forceInlineExpr(const ExprPtr &E);
+  /// Like \ref forceInlineExpr, but a unique Load / add / copy may inline
+  /// even when the dest is a memory-read output.  Used for `INDIR_CALL`
+  /// callees so HighC prints `(*(*p))(...)` instead of an undeclared temp.
+  ExprPtr forceInlineCallTarget(const ExprPtr &E);
 
   int regToArgIdx(uint64_t RegOff) const;
   /// Map a MedIR parameter or its entry register to the ABI slot index in
@@ -115,6 +120,12 @@ private:
   /// call.  Returns false when unresolved.  Requires CurMed.
   bool reachingRegAtBlockEntry(const MedBlock &B, uint64_t RegOff,
                                MedVar &Out) const;
+  /// True when an immediate predecessor wrote \p LiveIn into \p RegOff
+  /// as call setup. Earlier leftover values (Find's nKey still in r9)
+  /// are not arguments of a later call. Also covers `lea r8` in the
+  /// shared fork of `mov edx; jmp call` join arms.
+  bool isCallArgSetupDef(const MedBlock &CallBlk, const MedVar &LiveIn,
+                         uint64_t RegOff) const;
 
   void lowerStore(HighFunc &Func, const MedOp &CurOp);
   void lowerCall(HighFunc &Func, const MedBlock &CurBlock, const MedOp &CurOp);

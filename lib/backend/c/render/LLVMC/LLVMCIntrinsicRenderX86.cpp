@@ -15,6 +15,7 @@
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/AtomicOrdering.h"
 
@@ -31,6 +32,52 @@ static const AsmToCEntry X86AsmTable[] = {
 };
 
 } // anonymous namespace
+
+std::optional<X86RepStos> classifyX86RepStos(Arch TheArch,
+                                             const llvm::CallInst &Call) {
+  const auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
+  if (!IA || (TheArch != Arch::X86 && TheArch != Arch::X64) ||
+      !Call.use_empty() || !IA->hasSideEffects() || IA->isAlignStack() ||
+      IA->canThrow() || IA->getDialect() != llvm::InlineAsm::AD_ATT)
+    return std::nullopt;
+  const unsigned Bits = TheArch == Arch::X86 ? 32 : 64;
+  const auto *Ret = llvm::dyn_cast<llvm::StructType>(Call.getType());
+  if (!Ret || !Ret->isLiteral() || Ret->getNumElements() != 2 ||
+      !Ret->getElementType(0)->isIntegerTy(Bits) ||
+      !Ret->getElementType(1)->isIntegerTy(Bits))
+    return std::nullopt;
+  for (unsigned Bytes : {1u, 2u, 4u, 8u}) {
+    if (Bytes == 8 && TheArch == Arch::X86)
+      continue;
+    const char Suffix = Bytes == 1   ? 'b'
+                        : Bytes == 2 ? 'w'
+                        : Bytes == 4 ? 'l'
+                                     : 'q';
+    const std::string Rep = std::string("rep stos") + Suffix;
+    for (auto Dir :
+         {X86RepStos::Forward, X86RepStos::Backward, X86RepStos::Dynamic}) {
+      const bool Dynamic = Dir == X86RepStos::Dynamic;
+      const std::string Asm =
+          Dir == X86RepStos::Forward ? Rep
+          : Dir == X86RepStos::Backward
+              ? "std\n\t" + Rep + "\n\tcld"
+              : "test $5,$5\n\tje 1f\n\tstd\n\t1:\n\t" + Rep + "\n\tcld";
+      const std::string Constraints = std::string("={di},={cx},0,1,{ax},") +
+                                      (Dynamic ? "r," : "") +
+                                      "~{memory},~{dirflag},~{cc}";
+      if (IA->getAsmString() != Asm ||
+          IA->getConstraintString() != Constraints ||
+          Call.arg_size() != (Dynamic ? 4u : 3u) ||
+          !Call.getArgOperand(0)->getType()->isIntegerTy(Bits) ||
+          !Call.getArgOperand(1)->getType()->isIntegerTy(Bits) ||
+          !Call.getArgOperand(2)->getType()->isIntegerTy(Bytes * 8) ||
+          (Dynamic && !Call.getArgOperand(3)->getType()->isIntegerTy(Bits)))
+        continue;
+      return X86RepStos{Dir, Bytes, Bits};
+    }
+  }
+  return std::nullopt;
+}
 
 const char *lookupX86AsmToC(const char *Mnem) {
   for (const auto &E : X86AsmTable)

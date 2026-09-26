@@ -1,0 +1,33 @@
+//===- KernelDispatcherAPIs.def - Dispatcher routine contracts ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Supported routine spellings and Win64 argument counts.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_DISPATCHER_API(KeInitializeDpc, 3)
+NEVERD_KERNEL_DISPATCHER_API(KeInsertQueueDpc, 3)
+NEVERD_KERNEL_DISPATCHER_API(KeRemoveQueueDpc, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeSetImportanceDpc, 2)
+NEVERD_KERNEL_DISPATCHER_API(KeSetTargetProcessorDpc, 2)
+NEVERD_KERNEL_DISPATCHER_API(KeInitializeTimer, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeInitializeTimerEx, 2)
+NEVERD_KERNEL_DISPATCHER_API(KeSetTimer, 3)
+NEVERD_KERNEL_DISPATCHER_API(KeSetTimerEx, 4)
+NEVERD_KERNEL_DISPATCHER_API(KeCancelTimer, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeReadStateTimer, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeInitializeEvent, 3)
+NEVERD_KERNEL_DISPATCHER_API(KeSetEvent, 3)
+NEVERD_KERNEL_DISPATCHER_API(KeResetEvent, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeClearEvent, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeReadStateEvent, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeInitializeSemaphore, 3)
+NEVERD_KERNEL_DISPATCHER_API(KeReleaseSemaphore, 4)
+NEVERD_KERNEL_DISPATCHER_API(KeReadStateSemaphore, 1)
+NEVERD_KERNEL_DISPATCHER_API(KeInitializeMutex, 2)
+NEVERD_KERNEL_DISPATCHER_API(KeReleaseMutex, 2)
+NEVERD_KERNEL_DISPATCHER_API(KeReadStateMutex, 1)

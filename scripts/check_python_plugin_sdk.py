@@ -16,6 +16,7 @@ C_API_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPI.h"
 SANITIZER_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPIPatch.h"
 SYMBOLIC_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPISymbolic.h"
 TRANSLATE_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPITranslate.h"
+EMULATION_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPIEmulation.h"
 PLUGIN_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDPlugin.h"
 OUTPUT_LANGUAGES = ROOT / "include" / "neverd" / "OutputLanguages.def"
 PYTHON_PACKAGE = ROOT / "pluginsdk" / "python"
@@ -250,6 +251,28 @@ def check_abi(errors: list[str]) -> None:
                 f"{name} ownership mismatch: expected={ownership.value}, "
                 f"Python={spec.ownership.value}"
             )
+
+
+def check_driver_emulation_abi(errors: list[str]) -> None:
+    import ctypes
+
+    from neverd_plugin import abi
+
+    name = "neverd_driver_options_v1"
+    native = parse_c_struct_layout(
+        EMULATION_HEADER.read_text(encoding="utf-8"), name
+    )
+    ctypes_by_name = {
+        "size_t": ctypes.c_size_t,
+        "uint64_t": ctypes.c_uint64,
+        "const char *": ctypes.c_char_p,
+    }
+    expected = tuple((field, ctypes_by_name.get(kind)) for field, kind in native)
+    actual = tuple(abi.NeverDDriverOptionsV1._fields_)
+    if expected != actual or any(kind is None for _, kind in expected):
+        errors.append(
+            f"{name} field/type mismatch: native={native!r}, Python={actual!r}"
+        )
 
 
 def check_plugin_enums(errors: list[str]) -> None:
@@ -777,6 +800,7 @@ def audit_repository(*, include_workflows: bool = True) -> list[str]:
     check_plugin_enums(errors)
     check_output_languages(errors)
     check_translation_abi(errors)
+    check_driver_emulation_abi(errors)
     check_sanitizer_abi(errors)
     check_concolic_abi(errors)
     check_versions(errors)

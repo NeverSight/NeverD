@@ -206,11 +206,11 @@ TEST(X86_32_DebugHighC, ThiscallQualifiedNameAndBodyAppearInC) {
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Opts, &Dbg));
   OS.flush();
 
-  EXPECT_NE(C.find("CBase_x3A__x3A_GetId"), std::string::npos) << C;
+  EXPECT_NE(C.find("CBase_GetId"), std::string::npos) << C;
   EXPECT_NE(C.find("__attribute__((thiscall))"), std::string::npos) << C;
   EXPECT_NE(C.find("return"), std::string::npos) << C;
   EXPECT_EQ(C.find("no structured body"), std::string::npos) << C;
-  EXPECT_EQ(C.find("CBase_x3A__x3A_GetId(void) {\n}"), std::string::npos) << C;
+  EXPECT_EQ(C.find("CBase_GetId(void) {\n}"), std::string::npos) << C;
 }
 
 TEST(X86_32_DebugHighC, GotoSkeletonEmitsLabelsNotTrap) {
@@ -246,4 +246,31 @@ TEST(X86_32_DebugHighC, GotoSkeletonEmitsLabelsNotTrap) {
   EXPECT_NE(C.find("goto L_"), std::string::npos) << C;
   EXPECT_EQ(C.find("no structured body"), std::string::npos) << C;
   EXPECT_EQ(C.find("__builtin_trap"), std::string::npos) << C;
+}
+
+TEST(X86_32_DebugHighC, SynthesizedNameTakesDebugFunctionName) {
+  HighFunc Func;
+  Func.Name = "sub_401100";
+  Func.Entry = 0x401100;
+  Func.ReturnType = NdType::makeInt(4, true);
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeConst(1, 4);
+  Func.Body.push_back(Ret);
+
+  Vc6DebugContext Dbg;
+  Dbg.Function.Name = "legacy_target";
+  Dbg.Function.Addr = 0x401100;
+  Dbg.Function.Size = 0x20;
+
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Opts;
+  Opts.TheArch = Arch::X86;
+  Opts.Format = BinaryFormat::COFF;
+  ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Opts, &Dbg));
+  OS.flush();
+
+  EXPECT_NE(C.find("legacy_target"), std::string::npos) << C;
+  EXPECT_EQ(C.find("sub_401100"), std::string::npos) << C;
 }

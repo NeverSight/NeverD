@@ -22,6 +22,7 @@ void removeUnreachableCode(std::vector<HighStmt> &);
 void eliminateRegAliasCopies(HighFunc &);
 void elimConsecutiveDeadStores(std::vector<HighStmt> &);
 void postRenameCleanup(std::vector<HighStmt> &);
+void renameVars(std::vector<HighStmt> &);
 void eliminateUnusedValues(std::vector<HighStmt> &);
 } // namespace neverd
 using namespace neverd;
@@ -109,6 +110,10 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition,
           .getZExtValue();
     }
     if (E->Kind == ExprKind::BinOp && E->Operands.size() == 2) {
+      if (E->Op == NdOp::BOOL_AND)
+        return uint64_t(Value(E->Operands[0]) && Value(E->Operands[1]));
+      if (E->Op == NdOp::BOOL_OR)
+        return uint64_t(Value(E->Operands[0]) || Value(E->Operands[1]));
       auto A = Value(E->Operands[0]), B = Value(E->Operands[1]);
       switch (E->Op) {
       case NdOp::INT_ADD:
@@ -1706,6 +1711,43 @@ TEST(HighControlFlowSemantics, EarlyReturnKeepsTransferPastOtherBranchEntries) {
   }
 }
 
+TEST(HighControlFlowSemantics, InlinedElseJoinPreservesPhiCopyBeforeWork) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  F.ReturnType = NdType::makeInt(8);
+
+  auto Phi = assign(0, 2, 23);
+  Phi.IsPhiCopy = true;
+  HighStmt Choice;
+  Choice.Kind = StmtKind::IfElse;
+  Choice.Addr = F.Entry;
+  Choice.Cond = local(0);
+  Choice.Body = {assign(0, 3, 11), jump(0, 0x3000)};
+  Choice.ElseBody = {Phi, jump(0, 0x2000)};
+
+  auto JoinWork = assign(0x2000, 3, 0);
+  JoinWork.Val = HighExpr::makeBinop(NdOp::INT_ADD, local(2),
+                                     HighExpr::makeConst(5, 8));
+  // The intervening return makes 0x2000 an exclusive jump target rather
+  // than the next fallthrough statement of the conditional.
+  F.Body = {Choice, result(0x1100, HighExpr::makeConst(99, 8)), JoinWork,
+            jump(0x2004, 0x3000), result(0x3000, local(3))};
+  ASSERT_EQ(execute(F, 0, true), 28U);
+  ASSERT_EQ(execute(F, 1, true), 11U);
+
+  invertSkipGotos(F);
+  ASSERT_EQ(F.Body.front().Kind, StmtKind::IfElse);
+  ASSERT_FALSE(F.Body.front().ElseBody.empty());
+  EXPECT_TRUE(F.Body.front().ElseBody.front().IsPhiCopy);
+  unsigned OldTransfers = 0;
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    OldTransfers += S.Kind == StmtKind::Goto && S.GotoTarget == 0x2000;
+  });
+  EXPECT_EQ(OldTransfers, 0U);
+  EXPECT_EQ(execute(F, 0, true), 28U);
+  EXPECT_EQ(execute(F, 1, true), 11U);
+}
+
 TEST(HighControlFlowSemantics, MultiEntryCycleKeepsExplicitTransfers) {
   HighFunc F;
   F.Entry = 0x1000;
@@ -2420,6 +2462,59 @@ TEST(HighControlFlowSemantics, TypedViewsStillReferenceTheirVariable) {
       Cleanup(F.Body);
       EXPECT_NO_THROW({ EXPECT_EQ(execute(F, 0), 16u); });
     }
+}
+
+TEST(HighControlFlowSemantics, IndirectCallTargetReceivesRegisterRename) {
+  MedVar Receiver;
+  Receiver.Kind = MedVar::Reg;
+  Receiver.Id = 31;
+  Receiver.SSAVer = 2;
+  Receiver.Size = 8;
+  Receiver.RegOff = 0;
+
+  HighStmt Definition;
+  Definition.Kind = StmtKind::Assign;
+  Definition.Addr = 0x1000;
+  Definition.Dst = HighExpr::makeVar(Receiver);
+  Definition.Val = HighExpr::makeCall("acquire", 0x1000, {});
+
+  HighStmt Use;
+  Use.Kind = StmtKind::Call;
+  Use.Addr = 0x1004;
+  Use.CallExpr =
+      HighExpr::makeCall("indirect", 0x1004, {HighExpr::makeVar(Receiver)});
+  Use.CallExpr->IsIndirectCall = true;
+  Use.CallExpr->IndirectTarget = HighExpr::makeVar(Receiver);
+
+  HighFunc F;
+  F.Body = {Definition, Use};
+  renameVars(F.Body);
+
+  ASSERT_EQ(F.Body[0].Dst->Kind, ExprKind::Var);
+  const auto &Renamed = F.Body[0].Dst->Var;
+  EXPECT_EQ(Renamed.SSAVer, 0);
+  ASSERT_EQ(F.Body[1].CallExpr->Operands[0]->Kind, ExprKind::Var);
+  ASSERT_EQ(F.Body[1].CallExpr->IndirectTarget->Kind, ExprKind::Var);
+  EXPECT_EQ(F.Body[1].CallExpr->Operands[0]->Var, Renamed);
+  EXPECT_EQ(F.Body[1].CallExpr->IndirectTarget->Var, Renamed);
+}
+
+TEST(HighControlFlowSemantics, IndirectCallTargetIsLiveAfterRenameCleanup) {
+  HighStmt Use;
+  Use.Kind = StmtKind::Call;
+  Use.Addr = 0x1004;
+  Use.CallExpr = HighExpr::makeCall("indirect", 0x1004, {});
+  Use.CallExpr->IsIndirectCall = true;
+  Use.CallExpr->IndirectTarget = local(8);
+
+  HighFunc F;
+  F.Body = {assign(0x1000, 8, 0x1234), Use};
+  postRenameCleanup(F.Body);
+
+  ASSERT_EQ(F.Body.size(), 2u);
+  ASSERT_EQ(F.Body[0].Dst->Kind, ExprKind::Var);
+  ASSERT_EQ(F.Body[1].CallExpr->IndirectTarget->Kind, ExprKind::Var);
+  EXPECT_EQ(F.Body[0].Dst->Var, F.Body[1].CallExpr->IndirectTarget->Var);
 }
 
 // Preserve the CFG while varying the presence of compiler-generated edge

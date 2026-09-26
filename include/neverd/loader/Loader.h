@@ -22,6 +22,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -37,6 +38,13 @@ public:
   virtual llvm::Expected<BinaryImage>
   load(const std::filesystem::path &Path) = 0;
 
+  /// Limit PE unwind/language materialization to these entries on the next
+  /// load.  Empty means decode every runtime-function record.  Exclusive-end
+  /// ranges from the rest of `.pdata` are still recorded.
+  void restrictFunctions(std::set<va_t> Entries) {
+    RestrictFunctionEntries = std::move(Entries);
+  }
+
   /// Auto-detect the binary format from file content and return the
   /// appropriate loader.  Follows LLVM's factory pattern
   /// (cf. llvm::object::ObjectFile::createObjectFile).
@@ -46,11 +54,15 @@ public:
   static std::unique_ptr<Loader> create(BinaryFormat Format);
 
 protected:
-  /// Read a file into a MemoryBuffer and copy raw bytes into \p Img.Raw.
+  std::set<va_t> RestrictFunctionEntries;
+
+  /// Read a file into a MemoryBuffer.  Copy raw bytes into \p Img.Raw unless
+  /// \p CopyRaw is false.  `--func` PE loads already keep section bytes in
+  /// Segment.Data; a second image-wide copy adds load time and memory use.
   /// Returns the buffer or an error.  Shared by all format loaders.
   static llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
   readFileInto(const std::filesystem::path &Path, BinaryImage &Img,
-               BinaryFormat Fmt) {
+               BinaryFormat Fmt, bool CopyRaw = true) {
     auto BufOrErr = llvm::MemoryBuffer::getFile(Path.string());
     if (!BufOrErr)
       return llvm::make_error<llvm::StringError>(
@@ -58,8 +70,9 @@ protected:
           llvm::inconvertibleErrorCode());
     auto &Buf = *BufOrErr;
     Img.Format = Fmt;
-    Img.Raw.assign(reinterpret_cast<const uint8_t *>(Buf->getBufferStart()),
-                   reinterpret_cast<const uint8_t *>(Buf->getBufferEnd()));
+    if (CopyRaw)
+      Img.Raw.assign(reinterpret_cast<const uint8_t *>(Buf->getBufferStart()),
+                     reinterpret_cast<const uint8_t *>(Buf->getBufferEnd()));
     return std::move(Buf);
   }
 

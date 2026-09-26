@@ -20,15 +20,15 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Verifier.h"
 
 #include <array>
 #include <filesystem>
@@ -49,6 +49,7 @@ struct ArtifactSelector {
   StringRef CxxFormat;
   bool SecurityCookie = false;
   StringRef Optimization;
+  int VisualStudioYear = 2022;
 };
 
 Expected<std::vector<WindowsEHArtifactExpectation>> loadExpectations() {
@@ -65,7 +66,8 @@ bool matches(const WindowsEHArtifactExpectation &Expectation,
          Expectation.Architecture == Selector.Architecture &&
          Expectation.CxxFormat == Selector.CxxFormat &&
          Expectation.SecurityCookie == Selector.SecurityCookie &&
-         Expectation.Optimization == Selector.Optimization;
+         Expectation.Optimization == Selector.Optimization &&
+         Expectation.VisualStudioYear == Selector.VisualStudioYear;
 }
 
 Expected<const WindowsEHArtifactExpectation *>
@@ -364,13 +366,17 @@ TEST(WindowsEHModesCorpus,
         WindowsEHNativeSourceReason::Eligible;
   };
   const std::array<AArch64Case, 4> Cases{{
-      {{"xcpt4", "msvc", "aarch64", "native", false, "o0"}, false,
+      {{"xcpt4", "msvc", "aarch64", "native", false, "o0"},
+       false,
        WindowsEHNativeSourceReason::UnsupportedSEHScopeGraph},
-      {{"xcpt4", "msvc", "aarch64", "native", false, "o2"}, false,
+      {{"xcpt4", "msvc", "aarch64", "native", false, "o2"},
+       false,
        WindowsEHNativeSourceReason::UnsupportedSEHScopeGraph},
-      {{"xcpt4", "clang-cl", "aarch64", "native", false, "o0"}, true,
+      {{"xcpt4", "clang-cl", "aarch64", "native", false, "o0"},
+       true,
        WindowsEHNativeSourceReason::Eligible},
-      {{"xcpt4", "clang-cl", "aarch64", "native", false, "o2"}, true,
+      {{"xcpt4", "clang-cl", "aarch64", "native", false, "o2"},
+       true,
        WindowsEHNativeSourceReason::Eligible},
   }};
 
@@ -429,10 +435,9 @@ TEST(WindowsEHModesCorpus,
       if (Function.Kind != RuntimeFunctionKind::Primary ||
           Function.Personality != ExceptionPersonality::CSpecificHandler ||
           !Function.SEH || Function.SEH->Scopes.empty() ||
-          !llvm::all_of(Function.SEH->Scopes,
-                        [](const SEHScopeRecord &Scope) {
-                          return Scope.Kind == SEHScopeKind::CatchAll;
-                        }))
+          !llvm::all_of(Function.SEH->Scopes, [](const SEHScopeRecord &Scope) {
+            return Scope.Kind == SEHScopeKind::CatchAll;
+          }))
         continue;
       ++ParsedCatchAllRecords;
 
@@ -482,8 +487,7 @@ TEST(WindowsEHModesCorpus,
       CFGBuilder Builder;
       LowFunc Low = Builder.build(
           *ImageOrErr, Dec, Function.CodeRange.Begin,
-          "corpus_aarch64_seh_" +
-              llvm::utohexstr(Function.CodeRange.Begin));
+          "corpus_aarch64_seh_" + llvm::utohexstr(Function.CodeRange.Begin));
       ASSERT_TRUE(Low.ExceptionMetadata.has_value());
       bool SawSemanticEnd = false;
       bool SawUnprotectedSuccessor = false;
@@ -515,8 +519,7 @@ TEST(WindowsEHModesCorpus,
 
       LowToMedConverter Converter;
       Converter.setBinaryImage(&*ImageOrErr);
-      MedFunc Med =
-          Converter.convert(Low, Arch::AArch64, BinaryFormat::COFF);
+      MedFunc Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::COFF);
       EXPECT_TRUE(llvm::any_of(Med.Blocks, [&](const MedBlock &Block) {
         return Block.EndAddr == SemanticRange->End;
       }));
@@ -544,8 +547,7 @@ TEST(WindowsEHModesCorpus,
           return llvm::isa<llvm::InvokeInst>(Instruction);
         });
       }));
-      auto Plan =
-          planCOFFExceptionPatch(*Module, *ImageOrErr, Arch::AArch64);
+      auto Plan = planCOFFExceptionPatch(*Module, *ImageOrErr, Arch::AArch64);
       ASSERT_TRUE(static_cast<bool>(Plan)) << llvm::toString(Plan.takeError());
     }
     EXPECT_EQ(ParsedCatchAllRecords, 1u)
@@ -554,8 +556,7 @@ TEST(WindowsEHModesCorpus,
     EXPECT_EQ(IREligibleCatchAllRecords, 1u)
         << "parsed ARM64 catch-all record did not pass the IR gate\n"
         << RecordDiagnostics;
-    EXPECT_EQ(OutputEligibleCatchAllRecords,
-              TestCase.OutputEligible ? 1u : 0u)
+    EXPECT_EQ(OutputEligibleCatchAllRecords, TestCase.OutputEligible ? 1u : 0u)
         << "ARM64 output boundary did not match the pinned source shape\n"
         << RecordDiagnostics;
   }

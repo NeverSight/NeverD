@@ -411,8 +411,12 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
   // must not keep the clobbered or reused argument register. MedIR may bump
   // the SSA version of rdi without a new def (`COPY r9.2 = rdi.2`); match the
   // register as well as the exact SSA pair.
+  // A PHI of this register is a join, not the entry parameter copy.  MSVC
+  // `__GSHandlerCheckCommon` saves rcx in r10, then overwrites r10 on the
+  // GS_HANDLER_DATA bit-2 align edge; mapping every later r10 SSA to arg0
+  // deletes that edge.
   if (CurMed && V.Kind == MedVar::Reg && TargetArch == Arch::X64 && Image &&
-      Image->Format == BinaryFormat::COFF) {
+      Image->Format == BinaryFormat::COFF && !PhiOutputVars.count(varKey(V))) {
     int Fallback = -1;
     for (const auto &Blk : CurMed->Blocks) {
       for (const auto &Op : Blk.Ops) {
@@ -439,12 +443,34 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
             return SourceParameter(Param, static_cast<size_t>(Idx));
           return HighExpr::makeVar(Param, TypeRef{});
         }
-        // Parameter registers (rcx/rdx/r8/r9) are reused as scratch after a
-        // call. Mapping every later SSA version to the entry argument turns
-        // GS flags and `rol cookie` into the raw parameter. Saved copies live
-        // in non-argument registers (rbp/rsi/rdi/r14), including Win64 rsi/rdi.
-        if (Fallback < 0 && regToArgIdx(V.RegOff) < 0)
-          Fallback = Idx;
+        // SSA-bumped callee-saves with no new def (`rdi.2` after `mov rdi, r9`)
+        // still hold the parameter.  A later computed def (INT_AND of r10 on
+        // the GS_HANDLER_DATA bit-2 edge) does not.
+        // A COPY from a Temp is also a computed def: `mov eax, edx` then
+        // `mov rax, [bins+i]` must not remap RAX.3 onto arg1.  That deleted
+        // Typed map bucket walks.
+        if (Fallback < 0 && regToArgIdx(V.RegOff) < 0) {
+          bool Computed = PhiOutputVars.count(varKey(V));
+          for (const auto &B2 : CurMed->Blocks) {
+            if (Computed)
+              break;
+            for (const auto &O2 : B2.Ops) {
+              if (O2.Output.Id != V.Id || O2.Output.SSAVer != V.SSAVer)
+                continue;
+              if (O2.Opcode != NdOp::COPY) {
+                Computed = true;
+                break;
+              }
+              if (O2.NumInputs >= 1 && O2.Inputs[0].Kind != MedVar::Reg &&
+                  O2.Inputs[0].Kind != MedVar::Param) {
+                Computed = true;
+                break;
+              }
+            }
+          }
+          if (!Computed)
+            Fallback = Idx;
+        }
       }
     }
     if (Fallback >= 0) {
@@ -586,6 +612,38 @@ ExprPtr MedToHighConverter::forceInlineExpr(const ExprPtr &E) {
   auto Result = std::make_shared<HighExpr>(*E);
   for (size_t I = 0; I < Result->Operands.size(); ++I)
     Result->Operands[I] = forceInlineExpr(Result->Operands[I]);
+  if (Result->IndirectTarget)
+    Result->IndirectTarget = forceInlineExpr(Result->IndirectTarget);
+  return Result;
+}
+
+ExprPtr MedToHighConverter::forceInlineCallTarget(const ExprPtr &E) {
+  struct DepthGuard {
+    int &D;
+    DepthGuard(int &Depth) : D(Depth) { ++D; }
+    ~DepthGuard() { --D; }
+  };
+  static thread_local int Depth = 0;
+  DepthGuard Guard(Depth);
+  if (!E || Depth > 16)
+    return E;
+  if (E->Kind == ExprKind::Var && E->Var.Id >= 0 && !E->Var.isConst()) {
+    auto Key = varKey(E->Var);
+    if (!PhiOutputVars.count(Key)) {
+      auto It = DefExpr.find(Key);
+      if (It != DefExpr.end() && It->second &&
+          It->second->Kind != ExprKind::Call &&
+          It->second->Kind != ExprKind::Phi &&
+          It->second->MemoryOrdering == NdMemoryOrdering::None &&
+          It->second.get() != E.get())
+        return forceInlineCallTarget(It->second);
+    }
+  }
+  auto Result = std::make_shared<HighExpr>(*E);
+  for (size_t I = 0; I < Result->Operands.size(); ++I)
+    Result->Operands[I] = forceInlineCallTarget(Result->Operands[I]);
+  if (Result->IndirectTarget)
+    Result->IndirectTarget = forceInlineCallTarget(Result->IndirectTarget);
   return Result;
 }
 
@@ -778,8 +836,12 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   // entered by the personality, so ordinary reachability would delete them
   // and leave empty __except/__catch arms.
   structureExceptionRegions(Func, Med);
+  auto TEh = std::chrono::steady_clock::now();
   eliminateDeadStmts(Func);
+  auto TDead = std::chrono::steady_clock::now();
+  invertSkipGotos(Func);
   Trace.high(Func, "after-dce");
+  auto TInvert = std::chrono::steady_clock::now();
   foldStructuredContinuations(Func, &Med);
   coalesceBranchEntryStatements(Func);
   eliminateHighDeadPhiCopies(Func);
@@ -790,7 +852,9 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
     auto TotalMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(TEnd - TStart)
             .count();
-    if (TotalMs > 1000) {
+    const char *Detail = std::getenv("NEVERD_HIGHIR_DETAIL");
+    const bool WantDetail = Detail && Detail[0] == '1' && Detail[1] == '\0';
+    if (TotalMs > 1000 || WantDetail) {
       auto ElapsedMs = [](auto Start, auto End) {
         return std::chrono::duration_cast<std::chrono::milliseconds>(End -
                                                                      Start)
@@ -804,6 +868,12 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
                     << "ms types=" << ElapsedMs(TTypes, TPost)
                     << "ms post=" << ElapsedMs(TPost, TDceStart)
                     << "ms dce=" << ElapsedMs(TDceStart, TEnd) << "ms]\n";
+      if (WantDetail)
+        syncWarning() << "m2h-dce: " << Med.Name
+                      << " [eh=" << ElapsedMs(TDceStart, TEh)
+                      << "ms dead=" << ElapsedMs(TEh, TDead)
+                      << "ms invert=" << ElapsedMs(TDead, TInvert)
+                      << "ms fold=" << ElapsedMs(TInvert, TEnd) << "ms]\n";
     }
   }
 

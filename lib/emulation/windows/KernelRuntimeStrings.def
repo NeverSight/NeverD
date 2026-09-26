@@ -1,0 +1,14 @@
+//===- KernelRuntimeStrings.def - Runtime representation strings ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Concrete textual representations used by the bounded runtime model.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_RUNTIME_STRING(NullString, "(null)")
+NEVERD_KERNEL_RUNTIME_STRING(LowerDigits, "0123456789abcdef")
+NEVERD_KERNEL_RUNTIME_STRING(UpperDigits, "0123456789ABCDEF")

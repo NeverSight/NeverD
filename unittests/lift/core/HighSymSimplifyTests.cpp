@@ -275,7 +275,10 @@ TEST(HighSymSimplify, KeepsWhatItCannotSeeInsideOf) {
   ASSERT_TRUE(Snapshot->Dst);
   ASSERT_EQ(Snapshot->Val->Operands.size(), 1U);
   ASSERT_EQ(Snapshot->Val->Operands[0]->Kind, ExprKind::Var);
-  EXPECT_EQ(Snapshot->Val->Operands[0]->Var, Addr);
+  EXPECT_EQ(Snapshot->Val->Operands[0]->Var.Kind, MedVar::Param);
+  EXPECT_EQ(Snapshot->Val->Operands[0]->Var.Id, 0);
+  EXPECT_EQ(Snapshot->Val->Operands[0]->Var.RegOff, Addr.RegOff);
+  EXPECT_EQ(Snapshot->Val->Operands[0]->Var.Size, Addr.Size);
   ASSERT_TRUE(Snapshot->Val->Type);
   EXPECT_EQ(Snapshot->Val->Type->Size, kWordBytes);
   ASSERT_NE(Return, nullptr);

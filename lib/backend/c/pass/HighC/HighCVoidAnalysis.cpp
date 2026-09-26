@@ -16,6 +16,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 
 namespace neverd {
 
@@ -25,6 +26,10 @@ bool isNoreturnCallExpr(const HighExpr &E) {
   // Only a known terminating operation authorizes omitting its result.
   return E.Kind == ExprKind::Call &&
          (libc::isNoReturnFunction(E.CallTarget) || isX86FastFailCall(E));
+}
+
+bool isNoreturnCallExpr(const HighCAnalysisState &, const HighExpr &E) {
+  return isNoreturnCallExpr(E);
 }
 
 bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
@@ -213,7 +218,7 @@ void analyzeVoidDeadChain(HighCAnalysisState &State, const HighFunc &Func,
 }
 
 void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
-                          VarNameFn VarFn) {
+                          VarNameFn VarFn, CallArgLimitFn ArgLimit) {
   auto ExprHasEffect = [](const HighExpr &E) -> bool {
     std::function<bool(const HighExpr &)> Walk = [&](const HighExpr &N) {
       if (N.Kind == ExprKind::Call || N.Kind == ExprKind::Store)
@@ -238,7 +243,7 @@ void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
         return;
       forEachRhsExpr(S, [&](const ExprPtr &E) {
         if (E)
-          collectUsedVarsExpr(*E, Used, VarFn);
+          collectUsedVarsExpr(*E, Used, VarFn, ArgLimit);
       });
     });
     walkStmts(Func.Body, [&](const HighStmt &S) {
@@ -256,6 +261,76 @@ void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
       Changed = true;
     });
   }
+}
+
+void analyzeUnusedCallResults(HighCAnalysisState &State, const HighFunc &Func,
+                              VarNameFn VarFn, CallArgLimitFn ArgLimit) {
+  std::map<std::string, TypeRef> Used;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (State.DeadStmts.count(&S))
+      return;
+    forEachRhsExpr(S, [&](const ExprPtr &E) {
+      if (E)
+        collectUsedVarsExpr(*E, Used, VarFn, ArgLimit);
+    });
+  });
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (State.DeadStmts.count(&S) || State.OmittedCallResults.count(&S))
+      return;
+    if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
+      return;
+    if (S.Dst->Kind != ExprKind::Var && S.Dst->Kind != ExprKind::Phi)
+      return;
+    if (S.Val->Kind != ExprKind::Call)
+      return;
+    if (isNoreturnCallExpr(State, *S.Val))
+      return;
+    if (Used.count(VarFn(S.Dst->Var)))
+      return;
+    State.OmittedCallResults.insert(&S);
+  });
+
+  // HighC prints cleanup `call();` and drops the trailing `return dest`.
+  // The dest is still "used" by that skipped return, so omit it here.
+  std::function<void(const std::vector<HighStmt> &)> WalkCleanup;
+  WalkCleanup = [&](const std::vector<HighStmt> &Stmts) {
+    for (const HighStmt &S : Stmts) {
+      WalkCleanup(S.Body);
+      WalkCleanup(S.ElseBody);
+      for (const auto &C : S.Cases)
+        WalkCleanup(C.Body);
+      WalkCleanup(S.DefaultBody);
+      for (size_t C = 0; C < S.EHClauseBodies.size(); ++C) {
+        const bool Cleanup =
+            C < S.EHClauses.size() &&
+            S.EHClauses[C].Kind == HighEHClauseKind::CxxCleanup;
+        if (Cleanup) {
+          const auto &Body = S.EHClauseBodies[C];
+          for (size_t J = 0; J < Body.size(); ++J) {
+            const HighStmt &CS = Body[J];
+            if (State.DeadStmts.count(&CS))
+              continue;
+            if (CS.Kind != StmtKind::Assign || !CS.Dst || !CS.Val)
+              continue;
+            if (CS.Val->Kind != ExprKind::Call)
+              continue;
+            const HighStmt *Ret = nullptr;
+            for (size_t K = J + 1; K < Body.size(); ++K) {
+              if (Body[K].Kind == StmtKind::Nop)
+                continue;
+              if (Body[K].Kind == StmtKind::Return)
+                Ret = &Body[K];
+              break;
+            }
+            if (Ret)
+              State.OmittedCallResults.insert(&CS);
+          }
+        }
+        WalkCleanup(S.EHClauseBodies[C]);
+      }
+    }
+  };
+  WalkCleanup(Func.Body);
 }
 
 } // namespace neverd

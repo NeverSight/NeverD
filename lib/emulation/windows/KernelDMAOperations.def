@@ -1,0 +1,25 @@
+//===- KernelDMAOperations.def - Version-one DMA method inventory ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Exact WDK pointer order, argument count and IRQL interval. An unmodeled
+/// method retains a named trap; it never acquires a success implementation.
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/ns-wdm-_dma_operations
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DMA_OPERATION(PutDmaAdapter, 0, 1, 0, 2, true)
+NEVERD_DMA_OPERATION(AllocateCommonBuffer, 1, 4, 0, 0, true)
+NEVERD_DMA_OPERATION(FreeCommonBuffer, 2, 5, 0, 0, true)
+NEVERD_DMA_OPERATION(AllocateAdapterChannel, 3, 5, 2, 2, true)
+NEVERD_DMA_OPERATION(FlushAdapterBuffers, 4, 6, 0, 2, true)
+NEVERD_DMA_OPERATION(FreeAdapterChannel, 5, 1, 2, 2, false)
+NEVERD_DMA_OPERATION(FreeMapRegisters, 6, 3, 2, 2, true)
+NEVERD_DMA_OPERATION(MapTransfer, 7, 6, 0, 2, true)
+NEVERD_DMA_OPERATION(GetDmaAlignment, 8, 1, 0, 0, true)
+NEVERD_DMA_OPERATION(ReadDmaCounter, 9, 1, 0, 2, false)
+NEVERD_DMA_OPERATION(GetScatterGatherList, 10, 8, 2, 2, true)
+NEVERD_DMA_OPERATION(PutScatterGatherList, 11, 3, 2, 2, true)

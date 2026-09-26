@@ -1,0 +1,31 @@
+//===- DriverAsyncCases.def - Guest asynchronous fixture cases ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared IOCTL function selectors for execution tests.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_ASYNC_CASE(DeferredSuccess, 0x222000)
+NEVERD_ASYNC_CASE(DoubleQueue, 0x222004)
+NEVERD_ASYNC_CASE(FreeQueued, 0x222008)
+NEVERD_ASYNC_CASE(MissingMark, 0x22200c)
+NEVERD_ASYNC_CASE(MarkedSuccess, 0x222010)
+NEVERD_ASYNC_CASE(NoProducer, 0x222014)
+NEVERD_ASYNC_CASE(EarlyCompletion, 0x222018)
+NEVERD_ASYNC_CASE(EarlyWrongReturn, 0x22201c)
+NEVERD_ASYNC_CASE(CallbackFault, 0x222020)
+NEVERD_ASYNC_CASE(RequeueCurrent, 0x222024)
+NEVERD_ASYNC_CASE(DeferredFailure, 0x222028)
+NEVERD_ASYNC_CASE(CompletedAccess, 0x22202c)
+NEVERD_ASYNC_CASE(OpaqueWorkItem, 0x222030)
+NEVERD_ASYNC_CASE(WorkerNoCompletion, 0x222034)
+NEVERD_ASYNC_CASE(DoubleFree, 0x222038)
+NEVERD_ASYNC_CASE(WorkerLoop, 0x22203c)
+NEVERD_ASYNC_CASE(DeleteInWorker, 0x222040)
+NEVERD_ASYNC_CASE(BatchDeferred, 0x222044)
+NEVERD_ASYNC_CASE(BatchCancelable, 0x222048)
+NEVERD_ASYNC_CASE(BatchAsyncOnly, 0x22204c)

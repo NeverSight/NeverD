@@ -96,7 +96,7 @@ LLDMapDebugContext::load(const std::filesystem::path &MapPath,
     break;
   case MapFormat::COFFStandard:
     MapDebugContextBase::parseCOFFMapContent(Content, Ctx->Functions,
-                                             ImageBase);
+                                             ImageBase, &Ctx->DataObjects);
     FmtName = "COFF /MAP";
     break;
   case MapFormat::COFFLLDMap:

@@ -131,6 +131,13 @@ struct CxxTryBlock {
   int32_t TryHigh = -1;
   int32_t CatchHigh = -1;
   std::vector<CxxCatchHandler> Handlers;
+
+  bool hasValidStateRange(uint32_t MaxState) const {
+    if (MaxState > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))
+      return false;
+    return TryLow >= 0 && TryHigh >= TryLow && CatchHigh > TryHigh &&
+           CatchHigh < static_cast<int32_t>(MaxState);
+  }
 };
 
 /// One type named by a dynamic exception specification (`void f() throw(A)`).
@@ -213,9 +220,7 @@ struct CxxExceptionInfo {
         return false;
     }
     for (const CxxTryBlock &Try : TryBlocks) {
-      if (Try.TryLow < 0 || Try.TryHigh < Try.TryLow ||
-          Try.CatchHigh <= Try.TryHigh ||
-          Try.CatchHigh >= static_cast<int32_t>(MaxState))
+      if (!Try.hasValidStateRange(MaxState))
         return false;
     }
     return true;

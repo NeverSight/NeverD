@@ -1,0 +1,20 @@
+//===- KernelSpinLockAPIs.def - Executive spin-lock import contract --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Public x64 WDK executive spin-lock entry points. This profile restricts
+/// DPC-level calls to exact DISPATCH_LEVEL in the owning model.
+///
+//===----------------------------------------------------------------------===//
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keacquirespinlockraisetodpc
+// https://learn.microsoft.com/windows-hardware/drivers/kernel/initializing-spin-locks
+NEVERD_KERNEL_SPINLOCK_API(KeInitializeSpinLock, 1, Any)
+NEVERD_KERNEL_SPINLOCK_API(KeAcquireSpinLockRaiseToDpc, 1, Dispatch)
+NEVERD_KERNEL_SPINLOCK_API(KeReleaseSpinLock, 2, Dispatch)
+NEVERD_KERNEL_SPINLOCK_API(KeAcquireSpinLockAtDpcLevel, 1, Dispatch)
+NEVERD_KERNEL_SPINLOCK_API(KeReleaseSpinLockFromDpcLevel, 1, Dispatch)
+NEVERD_KERNEL_SPINLOCK_API(KeTryToAcquireSpinLockAtDpcLevel, 1, Dispatch)

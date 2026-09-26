@@ -11,10 +11,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "LLVMCFrameAliases.h"
+
 #include "neverd/backend/c/pass/LLVMC/LLVMCPasses.h"
 
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 
 #include <functional>
@@ -26,121 +30,157 @@ namespace neverd {
 void analyzeStoreForwarding(LLVMCAnalysisState &State, llvm::Function &Fn) {
   State.ForwardedLoads.clear();
 
+  using namespace llvmc;
+  if (!Fn.getParent())
+    return;
+  const llvm::DataLayout &DL = Fn.getParent()->getDataLayout();
+  StoredValues Stores;
+  for (auto &BB : Fn)
+    for (auto &Inst : BB)
+      if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst))
+        if (const auto *Slot = asAlloca(SI->getPointerOperand()))
+          Stores[Slot].push_back(SI->getValueOperand());
+
+  struct Access {
+    int64_t Offset;
+    uint64_t Size;
+  };
+
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst);
-      if (!AI)
-        continue;
-      if (State.DeadFrameAllocas.count(AI))
-        continue;
-
-      auto *Arr = llvm::dyn_cast<llvm::ArrayType>(AI->getAllocatedType());
-      if (!Arr || !Arr->getElementType()->isIntegerTy(8))
+      if (!isSyntheticFrameAlloca(AI) || State.DeadFrameAllocas.count(AI) ||
+          State.RawFrameAllocas.count(AI))
         continue;
 
-      const llvm::Value *RspInit = nullptr;
-      const llvm::Value *RspInitNarrow = nullptr;
-      for (auto *User : AI->users()) {
-        auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(User);
-        if (!GEP)
-          continue;
-        for (auto *GU : GEP->users()) {
-          if (llvm::isa<llvm::PtrToIntInst>(GU)) {
-            RspInit = GU;
-            for (auto *TU : GU->users()) {
-              if (llvm::isa<llvm::TruncInst>(TU))
-                RspInitNarrow = TU;
-            }
-            break;
-          }
-        }
-        if (RspInit)
-          break;
-      }
-      if (!RspInit)
-        continue;
-
-      auto UnwrapZext = [](const llvm::Value *V) -> const llvm::Value * {
-        if (auto *ZE = llvm::dyn_cast<llvm::ZExtInst>(V))
-          return ZE->getOperand(0);
-        return V;
-      };
-
-      auto GetOffset = [&](const llvm::Value *Ptr) -> std::optional<int64_t> {
-        auto *I2P = llvm::dyn_cast<llvm::IntToPtrInst>(Ptr);
-        if (!I2P)
-          return std::nullopt;
-        auto *Inner = UnwrapZext(I2P->getOperand(0));
-        auto *Add = llvm::dyn_cast<llvm::BinaryOperator>(Inner);
-        if (!Add || Add->getOpcode() != llvm::Instruction::Add)
-          return std::nullopt;
-        if (Add->getOperand(0) != RspInit &&
-            Add->getOperand(0) != RspInitNarrow)
-          return std::nullopt;
-        auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Add->getOperand(1));
-        if (!CI)
-          return std::nullopt;
-        return CI->getSExtValue();
-      };
-
-      std::map<int64_t, const llvm::Value *> OffsetStore;
-      std::vector<std::pair<const llvm::LoadInst *, const llvm::Value *>> Fwds;
-      std::set<const llvm::StoreInst *> FrameStores;
-      bool HasUnfwdLoad = false;
-
-      for (auto &BB2 : Fn) {
-        for (auto &Inst2 : BB2) {
-          if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst2)) {
-            auto Off = GetOffset(SI->getPointerOperand());
-            if (Off.has_value()) {
-              OffsetStore[*Off] = SI->getValueOperand();
-              FrameStores.insert(SI);
-            }
-          }
-          if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst2)) {
-            auto Off = GetOffset(LI->getPointerOperand());
-            if (Off.has_value()) {
-              auto It = OffsetStore.find(*Off);
-              if (It != OffsetStore.end())
-                Fwds.emplace_back(LI, It->second);
-              else
-                HasUnfwdLoad = true;
-            }
-          }
-        }
-      }
-
+      // A frame is removable only after every address use has been accounted
+      // for. In particular, a stored/returned address or an invoke argument
+      // escapes just as an ordinary call argument does.
       bool FrameEscapes = false;
       std::set<const llvm::Value *> Checked;
       std::function<void(const llvm::Value *)> CheckEscape =
           [&](const llvm::Value *V) {
             if (FrameEscapes || !Checked.insert(V).second)
               return;
-            for (auto *User : V->users()) {
-              if (auto *CI = llvm::dyn_cast<llvm::CallInst>(User)) {
-                if (!llvm::isa<llvm::InlineAsm>(CI->getCalledOperand())) {
-                  for (unsigned I = 0; I < CI->arg_size(); ++I)
-                    if (CI->getArgOperand(I) == V) {
-                      FrameEscapes = true;
-                      return;
-                    }
-                }
+            for (const llvm::User *User : V->users()) {
+              if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(User)) {
+                FrameEscapes |= SI->getValueOperand() == V;
+                continue;
               }
-              if (!llvm::isa<llvm::StoreInst>(User) &&
-                  !llvm::isa<llvm::LoadInst>(User))
+              if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(User)) {
+                FrameEscapes |= LI->getPointerOperand() != V;
+                continue;
+              }
+              if (llvm::isa<llvm::CastInst, llvm::GetElementPtrInst,
+                            llvm::BinaryOperator, llvm::PHINode,
+                            llvm::SelectInst, llvm::FreezeInst>(User)) {
                 CheckEscape(User);
+                continue;
+              }
+              FrameEscapes = true;
             }
           };
       CheckEscape(AI);
+      if (FrameEscapes)
+        continue;
 
-      if (!FrameEscapes && !HasUnfwdLoad) {
-        State.DeadFrameAllocas.insert(AI);
-        for (auto *SI : FrameStores)
-          State.DeadFrameStores.insert(SI);
-        for (auto &[LI, Val] : Fwds) {
-          State.ForwardedLoads[LI] = Val;
-          State.DeadFrameStores.insert(LI);
+      std::map<const llvm::StoreInst *, Access> Writes;
+      std::map<const llvm::LoadInst *, Access> Reads;
+      bool Unresolved = false;
+      auto Classify = [&](const llvm::Value *Ptr, llvm::Type *Ty,
+                          bool Observable) -> std::optional<Access> {
+        FrameAliases Aliases = peelSyntheticFrames(Ptr, Stores, DL);
+        if (!Aliases.Frames.count(AI))
+          return std::nullopt;
+        const llvm::TypeSize Size = DL.getTypeStoreSize(Ty);
+        if (Aliases.Incomplete || Aliases.HasNonFrameAlternative ||
+            Aliases.Locations.size() != 1 ||
+            Aliases.Locations.begin()->first != AI || Size.isScalable() ||
+            Observable) {
+          Unresolved = true;
+          return std::nullopt;
         }
+        return Access{Aliases.Locations.begin()->second, Size.getFixedValue()};
+      };
+      for (auto &AccessBB : Fn) {
+        for (auto &AccessInst : AccessBB) {
+          if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&AccessInst)) {
+            if (auto A = Classify(SI->getPointerOperand(),
+                                  SI->getValueOperand()->getType(),
+                                  SI->isVolatile() || SI->isAtomic()))
+              Writes.emplace(SI, *A);
+          } else if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&AccessInst)) {
+            if (auto A = Classify(LI->getPointerOperand(), LI->getType(),
+                                  LI->isVolatile() || LI->isAtomic()))
+              Reads.emplace(LI, *A);
+          }
+        }
+      }
+      if (Unresolved || Reads.empty())
+        continue;
+
+      std::map<const llvm::LoadInst *, const llvm::Value *> Forwarded;
+      for (const auto &[LI, Read] : Reads) {
+        unsigned Budget = 1024;
+        std::set<const llvm::BasicBlock *> Active;
+        std::function<const llvm::Value *(const llvm::BasicBlock *,
+                                          const llvm::Instruction *)>
+            ReachingValue =
+                [&](const llvm::BasicBlock *Block,
+                    const llvm::Instruction *Before) -> const llvm::Value * {
+          if (!Budget || !Active.insert(Block).second)
+            return nullptr;
+          --Budget;
+          const llvm::Value *Result = nullptr;
+          auto End = Before ? Before->getIterator() : Block->end();
+          for (auto It = End; It != Block->begin();) {
+            if (!Budget) {
+              Active.erase(Block);
+              return nullptr;
+            }
+            --Budget;
+            const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&*--It);
+            auto Write = Writes.find(SI);
+            if (Write == Writes.end() ||
+                !frameRangesOverlap(Write->second.Offset, Write->second.Size,
+                                    Read.Offset, Read.Size))
+              continue;
+            if (Write->second.Offset == Read.Offset &&
+                Write->second.Size == Read.Size &&
+                SI->getValueOperand()->getType() == LI->getType())
+              Result = SI->getValueOperand();
+            Active.erase(Block);
+            return Result;
+          }
+          bool Any = false;
+          for (const llvm::BasicBlock *Pred : llvm::predecessors(Block)) {
+            const llvm::Value *Incoming = ReachingValue(Pred, nullptr);
+            if (!Incoming || (Any && Incoming != Result)) {
+              Active.erase(Block);
+              return nullptr;
+            }
+            Result = Incoming;
+            Any = true;
+          }
+          Active.erase(Block);
+          return Any ? Result : nullptr;
+        };
+        const llvm::Value *Value = ReachingValue(LI->getParent(), LI);
+        if (!Value) {
+          Unresolved = true;
+          break;
+        }
+        Forwarded.emplace(LI, Value);
+      }
+      if (Unresolved)
+        continue;
+
+      State.DeadFrameAllocas.insert(AI);
+      for (const auto &[SI, _] : Writes)
+        State.DeadFrameStores.insert(SI);
+      for (const auto &[LI, Value] : Forwarded) {
+        State.ForwardedLoads[LI] = Value;
+        State.DeadFrameStores.insert(LI);
       }
     }
   }
@@ -163,7 +203,8 @@ void analyzeStoreForwarding(LLVMCAnalysisState &State, llvm::Function &Fn) {
         return false;
       if (State.DeadFrameStores.count(UI))
         continue;
-      if (State.Inlinable.count(UI) && AllUsersDead(UI))
+      if (State.Inlinable.count(UI) && canDropDeadFrameValue(*UI) &&
+          AllUsersDead(UI))
         continue;
       return false;
     }
@@ -179,7 +220,7 @@ void analyzeStoreForwarding(LLVMCAnalysisState &State, llvm::Function &Fn) {
           continue;
         if (llvm::isa<llvm::AllocaInst>(&Inst2))
           continue;
-        if (llvm::isa<llvm::CallInst>(&Inst2))
+        if (!canDropDeadFrameValue(Inst2))
           continue;
         if (State.DeadFrameStores.count(&Inst2))
           continue;

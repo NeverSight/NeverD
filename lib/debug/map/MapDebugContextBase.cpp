@@ -57,6 +57,16 @@ std::optional<SourceLoc> MapDebugContextBase::sourceLocation(va_t Addr) const {
   return std::nullopt;
 }
 
+std::vector<DataObjectSym> MapDebugContextBase::allDataObjects() const {
+  std::vector<DataObjectSym> Result;
+  if (!Loaded)
+    return Result;
+  Result.reserve(DataObjects.size());
+  for (const auto &[_, Obj] : DataObjects)
+    Result.push_back(Obj);
+  return Result;
+}
+
 std::vector<FunctionSym> MapDebugContextBase::allFunctions() const {
   std::vector<FunctionSym> Result;
   if (!Loaded)
@@ -143,7 +153,7 @@ va_t resolveAddress(const std::vector<SectionEntry> &Sections, uint16_t Seg,
 
 void MapDebugContextBase::parseCOFFMapContent(
     llvm::StringRef Content, std::map<va_t, FunctionSym> &Functions,
-    uint64_t ImageBase) {
+    uint64_t ImageBase, std::map<va_t, DataObjectSym> *DataObjects) {
 
   enum class ParseState { Header, Sections, Symbols, Done };
   ParseState State = ParseState::Header;
@@ -223,10 +233,6 @@ void MapDebugContextBase::parseCOFFMapContent(
 
       bool HasFuncFlag = std::find(Tokens.begin() + 2, Tokens.end(),
                                    llvm::StringRef("f")) != Tokens.end();
-      if (!HasFuncFlag && !isCodeSegment(Sections, Seg))
-        continue;
-      if (!HasFuncFlag && Tokens.size() >= 3 && Tokens.back() == "data")
-        continue;
 
       std::string Name = Tokens[1].str();
 
@@ -241,13 +247,26 @@ void MapDebugContextBase::parseCOFFMapContent(
       }
       if (VA == 0)
         VA = resolveAddress(Sections, Seg, Offset, PreferredBase);
+      if (VA == 0 || Name.empty())
+        continue;
 
-      if (VA != 0 && Functions.find(VA) == Functions.end()) {
-        FunctionSym FS;
-        FS.Name = std::move(Name);
-        FS.Addr = VA;
-        Functions[VA] = std::move(FS);
+      if (HasFuncFlag || isCodeSegment(Sections, Seg)) {
+        if (Functions.find(VA) == Functions.end()) {
+          FunctionSym FS;
+          FS.Name = std::move(Name);
+          FS.Addr = VA;
+          Functions[VA] = std::move(FS);
+        }
+        continue;
       }
+      if (!DataObjects || DataObjects->find(VA) != DataObjects->end())
+        continue;
+      DataObjectSym Obj;
+      Obj.Name = std::move(Name);
+      Obj.Addr = VA;
+      Obj.Size = 0;
+      Obj.IsBuffer = false;
+      (*DataObjects)[VA] = std::move(Obj);
     }
   }
 }

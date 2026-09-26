@@ -10,11 +10,15 @@
 /// state map, and an Itanium LSDA call-site table.  The transform is
 /// deliberately interval-conservative: it moves statements only when one
 /// contiguous HighIR slice is wholly contained by a validated native range.
-/// Crossing or address-less shapes stay in their original order and are
-/// reported through the function's unstructured count.
+/// That slice may sit in a nested if/else/try list after `structureIfElse`;
+/// a crossing parent is not a reason to drop the inner range.  Attached
+/// cleanup funclets are not part of a try's address footprint.  Crossing or
+/// address-less shapes stay in their original order and are reported through
+/// the function's unstructured count.
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/loader/BinaryImage.h"
@@ -25,6 +29,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -70,6 +75,9 @@ std::string readMSVCTypeDescriptorName(const BinaryImage *Img,
   }
   if (Name.empty())
     return {};
+  if (const std::string Spelling = msvcRttiTypeSpelling(Name);
+      !Spelling.empty())
+    return Spelling;
   llvm::StringRef Mangled(Name);
   if (Mangled.starts_with(".?A") && Mangled.size() > 4) {
     llvm::StringRef Rest = Mangled.drop_front(4);
@@ -93,11 +101,43 @@ struct AddressFootprint {
   bool HasOutside = false;
 };
 
-void classifyStatements(const std::vector<HighStmt> &Statements,
-                        const ExceptionAddressRange &Range,
-                        AddressFootprint &Result);
+struct AddressSet {
+  ExceptionAddressRange Span;
+  std::vector<ExceptionAddressRange> Parts;
+  bool RequireCall = false;
 
-void classifyStatement(const HighStmt &Stmt, const ExceptionAddressRange &Range,
+  AddressSet(ExceptionAddressRange R) : Span(R) {}
+  AddressSet(ExceptionAddressRange R, std::vector<ExceptionAddressRange> P)
+      : Span(R), Parts(std::move(P)), RequireCall(!P.empty()) {}
+
+  bool contains(va_t Address) const {
+    if (Parts.empty())
+      return Span.contains(Address);
+    for (const ExceptionAddressRange &P : Parts)
+      if (P.contains(Address))
+        return true;
+    return false;
+  }
+  bool contains(const ExceptionAddressRange &Other) const {
+    if (Parts.empty())
+      return Span.contains(Other);
+    return Other.isValid() && contains(Other.Begin) &&
+           (Other.End <= Other.Begin + 1 || contains(Other.End - 1));
+  }
+  bool overlaps(const ExceptionAddressRange &Other) const {
+    if (Parts.empty())
+      return Span.overlaps(Other);
+    for (const ExceptionAddressRange &P : Parts)
+      if (P.overlaps(Other))
+        return true;
+    return false;
+  }
+};
+
+void classifyStatements(const std::vector<HighStmt> &Statements,
+                        const AddressSet &Range, AddressFootprint &Result);
+
+void classifyStatement(const HighStmt &Stmt, const AddressSet &Range,
                        AddressFootprint &Result) {
   auto AddAddress = [&](va_t Address) {
     if (Address == 0 || Address == InvalidVA)
@@ -108,7 +148,14 @@ void classifyStatement(const HighStmt &Stmt, const ExceptionAddressRange &Range,
       Result.HasOutside = true;
   };
 
-  AddAddress(Stmt.Addr);
+  // IfElse: the cond can sit in the previous IP state (FH3 delays the
+  // state bump until the first call in an arm).  Arms decide the
+  // footprint so a live parent can wrap the whole diamond.  A lone If
+  // still uses Stmt.Addr — its fallthrough is not ElseBody, and
+  // ignoring the cond would swallow the if when only the then-arm is
+  // in range.
+  if (Stmt.Kind != StmtKind::IfElse)
+    AddAddress(Stmt.Addr);
   if ((Stmt.Kind == StmtKind::SEHTry || Stmt.Kind == StmtKind::CxxTry ||
        Stmt.Kind == StmtKind::ItaniumTry) &&
       Stmt.EHRange.isValid()) {
@@ -125,19 +172,18 @@ void classifyStatement(const HighStmt &Stmt, const ExceptionAddressRange &Range,
   for (const SwitchCase &Case : Stmt.Cases)
     classifyStatements(Case.Body, Range, Result);
   classifyStatements(Stmt.DefaultBody, Range, Result);
-  for (const std::vector<HighStmt> &ClauseBody : Stmt.EHClauseBodies)
-    classifyStatements(ClauseBody, Range, Result);
+  // Cleanup / catch funclets live at ActionVA, outside the protected IP
+  // range.  Walking them here makes an inner try Crossing for every parent
+  // that does not also cover the funclet, so the parent cannot wrap it.
 }
 
 void classifyStatements(const std::vector<HighStmt> &Statements,
-                        const ExceptionAddressRange &Range,
-                        AddressFootprint &Result) {
+                        const AddressSet &Range, AddressFootprint &Result) {
   for (const HighStmt &Stmt : Statements)
     classifyStatement(Stmt, Range, Result);
 }
 
-RangeClass classifyStatement(const HighStmt &Stmt,
-                             const ExceptionAddressRange &Range) {
+RangeClass classifyStatement(const HighStmt &Stmt, const AddressSet &Range) {
   AddressFootprint Footprint;
   classifyStatement(Stmt, Range, Footprint);
   if (Footprint.HasInside && Footprint.HasOutside)
@@ -149,70 +195,232 @@ RangeClass classifyStatement(const HighStmt &Stmt,
   return RangeClass::Unknown;
 }
 
+bool isCallStmt(const HighStmt &Stmt) {
+  return Stmt.Kind == StmtKind::Call ||
+         (Stmt.Kind == StmtKind::Assign && Stmt.Val &&
+          Stmt.Val->Kind == ExprKind::Call);
+}
+
+bool stmtHasCoveredCall(const HighStmt &Stmt, const AddressSet &Range) {
+  bool Found = false;
+  std::function<void(const HighStmt &)> Walk = [&](const HighStmt &S) {
+    if (Found)
+      return;
+    if (isCallStmt(S) && Range.contains(S.Addr)) {
+      Found = true;
+      return;
+    }
+    for (const HighStmt &C : S.Body)
+      Walk(C);
+    for (const HighStmt &C : S.ElseBody)
+      Walk(C);
+    for (const HighStmt &C : S.DefaultBody)
+      Walk(C);
+    for (const auto &Case : S.Cases)
+      for (const HighStmt &C : Case.Body)
+        Walk(C);
+  };
+  Walk(Stmt);
+  return Found;
+}
+
+bool armHasCoveredCall(const std::vector<HighStmt> &Arm, const AddressSet &Range) {
+  for (const HighStmt &S : Arm)
+    if (stmtHasCoveredCall(S, Range))
+      return true;
+  return false;
+}
+
+bool isCoverDiamondIfElse(const HighStmt &Stmt, const AddressSet &Range) {
+  return Stmt.Kind == StmtKind::IfElse && armHasCoveredCall(Stmt.Body, Range) &&
+         armHasCoveredCall(Stmt.ElseBody, Range);
+}
+
+unsigned coverPartsTouched(const HighStmt &Stmt, const AddressSet &Range) {
+  unsigned Bits = 0;
+  const unsigned N = static_cast<unsigned>(Range.Parts.size());
+  for (unsigned I = 0; I < N && I < 32; ++I) {
+    AddressSet One{Range.Parts[I]};
+    if (stmtHasCoveredCall(Stmt, One))
+      Bits |= 1u << I;
+  }
+  return Bits;
+}
+
 bool extractAddressSlice(std::vector<HighStmt> &Statements,
-                         const ExceptionAddressRange &Range,
+                         const AddressSet &Range,
                          const ExceptionAddressRange &FunctionRange,
                          std::vector<HighStmt> &Body, size_t &InsertAt,
-                         bool IncludeFunctionEdgeUnknown = true) {
+                         bool IncludeFunctionEdgeUnknown,
+                         std::vector<HighStmt> **Host) {
   std::optional<size_t> First;
   std::optional<size_t> Last;
   std::vector<RangeClass> Classes;
   Classes.reserve(Statements.size());
+  bool Crossing = false;
   for (size_t I = 0; I < Statements.size(); ++I) {
     RangeClass Class = classifyStatement(Statements[I], Range);
-    if (Class == RangeClass::Crossing)
-      return false;
     Classes.push_back(Class);
+    if (Class == RangeClass::Crossing)
+      Crossing = true;
     if (Class == RangeClass::Inside) {
       if (!First)
         First = I;
       Last = I;
     }
   }
-  if (!First || !Last)
-    return false;
-  for (size_t I = *First; I <= *Last; ++I)
-    if (Classes[I] == RangeClass::Outside)
-      return false;
+  bool Contiguous = First && Last && !Crossing;
+  if (Contiguous) {
+    for (size_t I = *First; I <= *Last; ++I)
+      if (Classes[I] == RangeClass::Outside)
+        Contiguous = false;
+  }
+  if (Contiguous && !Range.Parts.empty()) {
+    // A split cleanup IP set is the two arms of one diamond.  A lone
+    // if-goto that merely sits in one fragment is not.
+    if (*Last != *First || !isCoverDiamondIfElse(Statements[*First], Range))
+      Contiguous = false;
+  }
+  if (Contiguous) {
+    // Address-less synthetic statements at a native edge belong to the range
+    // only when the range itself reaches that function edge.  This captures a
+    // synthesized trailing return without swallowing an unrelated neighbour.
+    size_t Begin = *First;
+    size_t End = *Last + 1;
+    if (IncludeFunctionEdgeUnknown && Range.Span.Begin == FunctionRange.Begin)
+      while (Begin != 0 && Classes[Begin - 1] == RangeClass::Unknown)
+        --Begin;
+    if (IncludeFunctionEdgeUnknown && Range.Span.End == FunctionRange.End)
+      while (End < Classes.size() && Classes[End] == RangeClass::Unknown)
+        ++End;
 
-  // Address-less synthetic statements at a native edge belong to the range
-  // only when the range itself reaches that function edge.  This captures a
-  // synthesized trailing return without swallowing an unrelated neighbour.
-  size_t Begin = *First;
-  size_t End = *Last + 1;
-  if (IncludeFunctionEdgeUnknown && Range.Begin == FunctionRange.Begin)
-    while (Begin != 0 && Classes[Begin - 1] == RangeClass::Unknown)
-      --Begin;
-  if (IncludeFunctionEdgeUnknown && Range.End == FunctionRange.End)
-    while (End < Classes.size() && Classes[End] == RangeClass::Unknown)
-      ++End;
+    Body.reserve(End - Begin);
+    for (size_t I = Begin; I < End; ++I)
+      Body.push_back(std::move(Statements[I]));
+    Statements.erase(Statements.begin() + static_cast<ptrdiff_t>(Begin),
+                     Statements.begin() + static_cast<ptrdiff_t>(End));
+    InsertAt = Begin;
+    if (Host)
+      *Host = &Statements;
+    return true;
+  }
 
-  Body.reserve(End - Begin);
-  for (size_t I = Begin; I < End; ++I)
-    Body.push_back(std::move(Statements[I]));
-  Statements.erase(Statements.begin() + static_cast<ptrdiff_t>(Begin),
-                   Statements.begin() + static_cast<ptrdiff_t>(End));
-  InsertAt = Begin;
-  return true;
+  // Split-cover cleanup is either one IfElse whose arms each contain a
+  // covered call, or an if/goto plus the later sibling that holds the
+  // other arm.  A lone if-goto in one fragment has no covered call.
+  if (!Range.Parts.empty()) {
+    std::optional<size_t> FirstCall;
+    std::optional<size_t> LastCall;
+    unsigned SeenParts = 0;
+    bool Hole = false;
+    bool AfterCall = false;
+    for (size_t I = 0; I < Statements.size(); ++I) {
+      const unsigned Parts = coverPartsTouched(Statements[I], Range);
+      if (Parts == 0) {
+        if (AfterCall && Classes[I] == RangeClass::Outside)
+          AfterCall = false;
+        continue;
+      }
+      if (!AfterCall && FirstCall)
+        Hole = true;
+      if (!FirstCall)
+        FirstCall = I;
+      LastCall = I;
+      SeenParts |= Parts;
+      AfterCall = true;
+    }
+    if (FirstCall && LastCall && !Hole &&
+        (SeenParts & (SeenParts - 1)) != 0 &&
+        (*FirstCall != *LastCall ||
+         isCoverDiamondIfElse(Statements[*FirstCall], Range))) {
+      bool SpanOk = true;
+      for (size_t I = *FirstCall; I <= *LastCall; ++I)
+        if (Classes[I] == RangeClass::Outside)
+          SpanOk = false;
+      if (SpanOk) {
+        const size_t Begin = *FirstCall;
+        const size_t End = *LastCall + 1;
+        Body.reserve(End - Begin);
+        for (size_t I = Begin; I < End; ++I)
+          Body.push_back(std::move(Statements[I]));
+        Statements.erase(Statements.begin() + static_cast<ptrdiff_t>(Begin),
+                         Statements.begin() + static_cast<ptrdiff_t>(End));
+        InsertAt = Begin;
+        if (Host)
+          *Host = &Statements;
+        return true;
+      }
+    }
+  }
+
+  // `structureIfElse` often nests a cleanup IP range inside `if` / `else`.
+  // A crossing parent is not unstructured; the contiguous slice is inner.
+  for (HighStmt &Stmt : Statements) {
+    auto Recurse = [&](std::vector<HighStmt> &Child) {
+      return !Child.empty() &&
+             extractAddressSlice(Child, Range, FunctionRange, Body, InsertAt,
+                                 /*IncludeFunctionEdgeUnknown=*/false, Host);
+    };
+    if (Recurse(Stmt.Body) || Recurse(Stmt.ElseBody) ||
+        Recurse(Stmt.DefaultBody))
+      return true;
+    for (SwitchCase &Case : Stmt.Cases)
+      if (Recurse(Case.Body))
+        return true;
+  }
+  return false;
+}
+
+bool extractAddressSlice(std::vector<HighStmt> &Statements,
+                         const AddressSet &Range,
+                         const ExceptionAddressRange &FunctionRange,
+                         std::vector<HighStmt> &Body, size_t &InsertAt,
+                         bool IncludeFunctionEdgeUnknown = true) {
+  std::vector<HighStmt> *Host = nullptr;
+  return extractAddressSlice(Statements, Range, FunctionRange, Body, InsertAt,
+                             IncludeFunctionEdgeUnknown, &Host);
 }
 
 struct RegionCandidate {
   StmtKind Kind = StmtKind::SEHTry;
   ExceptionAddressRange Range;
+  std::vector<ExceptionAddressRange> Cover;
   std::vector<HighEHClause> Clauses;
   unsigned NativeRegionCount = 0;
+  /// Native C++ try-map states.  Nested tries can collapse to the same IP
+  /// interval when inner-only states appear in the function body; those must
+  /// stay separate HighIR tries, not sibling `catch` clauses.
+  int32_t TryLow = 0;
+  int32_t TryHigh = 0;
+  bool HasTryStates = false;
 };
 
+bool cxxStateOnUnwindChain(const CxxExceptionInfo &Cxx, int32_t Current,
+                           int32_t Target) {
+  unsigned Guard = 0;
+  const unsigned Limit =
+      static_cast<unsigned>(Cxx.UnwindMap.size()) + 1;
+  while (Current >= 0 && Guard++ < Limit) {
+    if (static_cast<size_t>(Current) >= Cxx.UnwindMap.size())
+      return false;
+    if (Current == Target)
+      return true;
+    Current = Cxx.UnwindMap[Current].ToState;
+  }
+  return false;
+}
+
+template <typename Pred>
 std::vector<ExceptionAddressRange>
-codeRangesForStates(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
-                    int32_t LowState, int32_t HighState) {
+codeRangesMatching(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
+                   Pred Live) {
   std::vector<ExceptionAddressRange> Ranges;
   va_t Cursor = EH.CodeRange.Begin;
   int32_t State = -1;
   auto Add = [&](va_t Begin, va_t End, int32_t SegmentState) {
     Begin = std::max(Begin, EH.CodeRange.Begin);
     End = std::min(End, EH.CodeRange.End);
-    if (Begin >= End || SegmentState < LowState || SegmentState > HighState)
+    if (Begin >= End || !Live(SegmentState))
       return;
     if (!Ranges.empty() && Ranges.back().End == Begin)
       Ranges.back().End = End;
@@ -231,6 +439,36 @@ codeRangesForStates(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
   }
   Add(Cursor, EH.CodeRange.End, State);
   return Ranges;
+}
+
+std::vector<ExceptionAddressRange>
+codeRangesForStates(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
+                    int32_t LowState, int32_t HighState) {
+  return codeRangesMatching(EH, Cxx, [&](int32_t SegmentState) {
+    return SegmentState >= LowState && SegmentState <= HighState;
+  });
+}
+
+/// IPs that would run this cleanup, including child states.  A parent
+/// object whose exact IP fragments are split by nested states still has
+/// one live interval.
+std::vector<ExceptionAddressRange>
+codeRangesWhereStateIsLive(const ExceptionFunction &EH,
+                           const CxxExceptionInfo &Cxx, int32_t Target) {
+  return codeRangesMatching(EH, Cxx, [&](int32_t SegmentState) {
+    return cxxStateOnUnwindChain(Cxx, SegmentState, Target);
+  });
+}
+
+/// A try whose IP states are interrupted by `state=-1` holes yields more than
+/// one interval. The trailing fragment is a continuation, not a second try.
+ExceptionAddressRange
+primaryCxxTryRange(const std::vector<ExceptionAddressRange> &Ranges) {
+  ExceptionAddressRange Best;
+  for (const ExceptionAddressRange &Range : Ranges)
+    if (Range.isValid() && Range.size() > Best.size())
+      Best = Range;
+  return Best;
 }
 
 void addSEHCandidates(const ExceptionFunction &EH, Arch TargetArch,
@@ -364,17 +602,20 @@ void addCxxCandidates(const ExceptionFunction &EH, const BinaryImage *Img,
     return;
   const CxxExceptionInfo &Cxx = *EH.Cxx;
   for (const CxxTryBlock &Try : Cxx.TryBlocks) {
-    std::vector<ExceptionAddressRange> Ranges =
-        codeRangesForStates(EH, Cxx, Try.TryLow, Try.TryHigh);
-    if (Ranges.size() != 1 || !Ranges.front().isValid()) {
+    const ExceptionAddressRange Range =
+        primaryCxxTryRange(codeRangesForStates(EH, Cxx, Try.TryLow, Try.TryHigh));
+    if (!Range.isValid()) {
       ++Rejected;
       continue;
     }
 
     RegionCandidate Candidate;
     Candidate.Kind = StmtKind::CxxTry;
-    Candidate.Range = Ranges.front();
+    Candidate.Range = Range;
     Candidate.NativeRegionCount = 1;
+    Candidate.TryLow = Try.TryLow;
+    Candidate.TryHigh = Try.TryHigh;
+    Candidate.HasTryStates = true;
     for (const CxxCatchHandler &Catch : Try.Handlers) {
       HighEHClause Clause;
       Clause.Kind = HighEHClauseKind::CxxCatch;
@@ -389,6 +630,18 @@ void addCxxCandidates(const ExceptionFunction &EH, const BinaryImage *Img,
     }
     for (int32_t State = Try.TryLow; State <= Try.TryHigh; ++State) {
       if (State < 0 || State >= static_cast<int32_t>(Cxx.UnwindMap.size()))
+        continue;
+      bool OwnedByInner = false;
+      for (const CxxTryBlock &Other : Cxx.TryBlocks) {
+        if (Other.TryLow == Try.TryLow && Other.TryHigh == Try.TryHigh)
+          continue;
+        if (Other.TryLow >= Try.TryLow && Other.TryHigh <= Try.TryHigh &&
+            State >= Other.TryLow && State <= Other.TryHigh) {
+          OwnedByInner = true;
+          break;
+        }
+      }
+      if (OwnedByInner)
         continue;
       const CxxUnwindAction &Action = Cxx.UnwindMap[State];
       if (Action.ActionVA == 0)
@@ -405,6 +658,98 @@ void addCxxCandidates(const ExceptionFunction &EH, const BinaryImage *Img,
       ++Rejected;
       continue;
     }
+    Candidates.push_back(std::move(Candidate));
+  }
+}
+
+/// FH3/FH4 frames that only construct locals still have an UnwindMap and IP
+/// states, but no TryBlock.  That is a destructor scope, not SEH.  Hex-Rays
+/// prints `__wind`/`__unwind`; HighC keeps `try` + `/* unwind cleanup */`
+/// plus the attached funclet body, which is already the catch-with-dtor shape.
+void addCxxCleanupOnlyCandidates(const ExceptionFunction &EH,
+                                 std::vector<RegionCandidate> &Candidates,
+                                 unsigned &Rejected) {
+  if (!EH.Cxx)
+    return;
+  const CxxExceptionInfo &Cxx = *EH.Cxx;
+  auto coveredByTry = [&](int32_t State) {
+    for (const CxxTryBlock &Try : Cxx.TryBlocks)
+      if (State >= Try.TryLow && State <= Try.TryHigh)
+        return true;
+    return false;
+  };
+
+  std::map<std::pair<va_t, va_t>, size_t> ByRange;
+  for (int32_t State = 0; State < static_cast<int32_t>(Cxx.UnwindMap.size());
+       ++State) {
+    const CxxUnwindAction &Action = Cxx.UnwindMap[State];
+    if (Action.ActionVA == 0 || coveredByTry(State))
+      continue;
+    std::vector<ExceptionAddressRange> Ranges =
+        codeRangesForStates(EH, Cxx, State, State);
+    if (Ranges.size() != 1 || !Ranges.front().isValid()) {
+      std::vector<ExceptionAddressRange> Live =
+          codeRangesWhereStateIsLive(EH, Cxx, State);
+      if (Live.size() == 1 && Live.front().isValid())
+        Ranges = std::move(Live);
+    }
+    if ((Ranges.size() != 1 || !Ranges.front().isValid()) &&
+        Cxx.TryBlocks.empty() && Cxx.IPMap.empty() && EH.CodeRange.isValid())
+      Ranges = {EH.CodeRange};
+    std::vector<ExceptionAddressRange> Cover;
+    if (Ranges.size() > 1) {
+      ExceptionAddressRange BBox;
+      bool AllValid = true;
+      for (const ExceptionAddressRange &R : Ranges) {
+        if (!R.isValid()) {
+          AllValid = false;
+          break;
+        }
+        if (!BBox.isValid())
+          BBox = R;
+        else {
+          BBox.Begin = std::min(BBox.Begin, R.Begin);
+          BBox.End = std::max(BBox.End, R.End);
+        }
+      }
+      if (!AllValid || !BBox.isValid()) {
+        ++Rejected;
+        continue;
+      }
+      Cover = Ranges;
+      Ranges = {BBox};
+    }
+    if (Ranges.size() != 1 || !Ranges.front().isValid()) {
+      ++Rejected;
+      continue;
+    }
+
+    HighEHClause Clause;
+    Clause.Kind = HighEHClauseKind::CxxCleanup;
+    Clause.FilterOrActionVA = Action.ActionVA;
+    Clause.State = State;
+    Clause.UnwindActionKind = Action.Kind;
+    Clause.UnwindObjectOffset = Action.ObjectOffset;
+
+    const auto Key =
+        std::make_pair(Ranges.front().Begin, Ranges.front().End);
+    if (const auto It = ByRange.find(Key); It != ByRange.end()) {
+      Candidates[It->second].Clauses.push_back(std::move(Clause));
+      Candidates[It->second].TryHigh = State;
+      ++Candidates[It->second].NativeRegionCount;
+      continue;
+    }
+
+    RegionCandidate Candidate;
+    Candidate.Kind = StmtKind::CxxTry;
+    Candidate.Range = Ranges.front();
+    Candidate.Cover = std::move(Cover);
+    Candidate.NativeRegionCount = 1;
+    Candidate.TryLow = State;
+    Candidate.TryHigh = State;
+    Candidate.HasTryStates = true;
+    Candidate.Clauses.push_back(std::move(Clause));
+    ByRange.emplace(Key, Candidates.size());
     Candidates.push_back(std::move(Candidate));
   }
 }
@@ -698,6 +1043,7 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     addSEHCandidates(EH, TargetArch, Candidates, Rejected);
     addRegistrationCandidates(EH, Candidates, Rejected);
     addCxxCandidates(EH, Image, Candidates, Rejected);
+    addCxxCleanupOnlyCandidates(EH, Candidates, Rejected);
     addItaniumCandidates(EH, Candidates, Rejected);
   } else {
     Rejected += EH.SEH ? static_cast<unsigned>(EH.SEH->Scopes.size()) : 0;
@@ -714,26 +1060,39 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
   // explicit EHRange, so nesting never relies on incidental statement order.
   std::stable_sort(Candidates.begin(), Candidates.end(),
                    [](const RegionCandidate &A, const RegionCandidate &B) {
-                     return std::make_tuple(A.Range.size(), A.Range.Begin,
-                                            A.Range.End, A.Kind) <
-                            std::make_tuple(B.Range.size(), B.Range.Begin,
-                                            B.Range.End, B.Kind);
+                     const auto Span = [](const RegionCandidate &C) {
+                       return C.HasTryStates ? (C.TryHigh - C.TryLow) : 0;
+                     };
+                     return std::make_tuple(A.Range.size(), Span(A),
+                                            A.Range.Begin, A.Range.End,
+                                            A.Kind) <
+                            std::make_tuple(B.Range.size(), Span(B),
+                                            B.Range.Begin, B.Range.End,
+                                            B.Kind);
                    });
 
   // Several native try-map records may share one code interval (for example,
   // distinct ordered catch clauses).  Keep one HighIR try node and retain the
-  // native-record count for completeness accounting.
+  // native-record count for completeness accounting.  Nested C++ tries that
+  // collapse to the same IPs keep separate nodes so inner `try` stays nested.
   std::vector<RegionCandidate> Merged;
   for (RegionCandidate &Candidate : Candidates) {
     if (!Merged.empty() && Merged.back().Kind == Candidate.Kind &&
         Merged.back().Range.Begin == Candidate.Range.Begin &&
         Merged.back().Range.End == Candidate.Range.End) {
-      Merged.back().Clauses.insert(
-          Merged.back().Clauses.end(),
-          std::make_move_iterator(Candidate.Clauses.begin()),
-          std::make_move_iterator(Candidate.Clauses.end()));
-      Merged.back().NativeRegionCount += Candidate.NativeRegionCount;
-      continue;
+      const bool DistinctCxxTries =
+          Candidate.Kind == StmtKind::CxxTry &&
+          (Merged.back().HasTryStates != Candidate.HasTryStates ||
+           Merged.back().TryLow != Candidate.TryLow ||
+           Merged.back().TryHigh != Candidate.TryHigh);
+      if (!DistinctCxxTries) {
+        Merged.back().Clauses.insert(
+            Merged.back().Clauses.end(),
+            std::make_move_iterator(Candidate.Clauses.begin()),
+            std::make_move_iterator(Candidate.Clauses.end()));
+        Merged.back().NativeRegionCount += Candidate.NativeRegionCount;
+        continue;
+      }
     }
     Merged.push_back(std::move(Candidate));
   }
@@ -754,8 +1113,12 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     }
     std::vector<HighStmt> ProtectedBody;
     size_t InsertAt = 0;
-    if (!extractAddressSlice(Func.Body, Candidate.Range, EH.CodeRange,
-                             ProtectedBody, InsertAt)) {
+    std::vector<HighStmt> *Host = nullptr;
+    if (!extractAddressSlice(Func.Body,
+                             AddressSet{Candidate.Range, Candidate.Cover},
+                             EH.CodeRange, ProtectedBody, InsertAt,
+                             /*IncludeFunctionEdgeUnknown=*/true, &Host) ||
+        !Host) {
       Rejected += Candidate.NativeRegionCount;
       continue;
     }
@@ -772,8 +1135,8 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     Try.EHClauses = std::move(Candidate.Clauses);
     Try.EHClauseBodies.resize(Try.EHClauses.size());
     Try.EHIsReducible = true;
-    Func.Body.insert(Func.Body.begin() + static_cast<ptrdiff_t>(InsertAt),
-                     std::move(Try));
+    Host->insert(Host->begin() + static_cast<ptrdiff_t>(InsertAt),
+                 std::move(Try));
 
     std::vector<std::vector<HighStmt>> ClauseBodies(ClauseTargets.size());
     for (size_t ClauseIndex = 0; ClauseIndex < ClauseTargets.size();
@@ -794,19 +1157,21 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
       ClauseBodies[ClauseIndex] = std::move(HandlerBody);
     }
 
-    auto InsertedTry = std::find_if(
-        Func.Body.begin(), Func.Body.end(), [&](const HighStmt &Stmt) {
-          return Stmt.Kind == Candidate.Kind &&
-                 Stmt.EHRange.Begin == Candidate.Range.Begin &&
-                 Stmt.EHRange.End == Candidate.Range.End;
-        });
-    if (InsertedTry != Func.Body.end())
+    auto FindInsertedTry = [&]() -> HighStmt * {
+      for (HighStmt &Stmt : *Host)
+        if (Stmt.Kind == Candidate.Kind &&
+            Stmt.EHRange.Begin == Candidate.Range.Begin &&
+            Stmt.EHRange.End == Candidate.Range.End)
+          return &Stmt;
+      return nullptr;
+    };
+    if (HighStmt *InsertedTry = FindInsertedTry())
       InsertedTry->EHClauseBodies = std::move(ClauseBodies);
 
     // Filter thunks live in the same function as x86 registration EH but are
     // called only by the personality.  Drop them from the C body; the except
     // header already names the filter.
-    if (InsertedTry != Func.Body.end()) {
+    if (HighStmt *InsertedTry = FindInsertedTry()) {
       for (const HighEHClause &Clause : InsertedTry->EHClauses) {
         if (Clause.Kind != HighEHClauseKind::SEHExcept ||
             Clause.FilterOrActionVA == 0 ||
@@ -830,11 +1195,11 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
 
   // x86 registration and VC6 C++ often have no IP map.  Still surface a
   // readable try around the recovered body rather than leaving a flat listing.
+  // Cleanup-only C++ (UnwindMap, no TryBlocks) is a destructor scope, not SEH.
   if (Func.StructuredExceptionRegions == 0 && !Func.Body.empty() &&
       (EH.SEH || EH.Cxx || EH.Registration)) {
     HighStmt Try;
-    Try.Kind = (EH.Cxx && !EH.Cxx->TryBlocks.empty()) ? StmtKind::CxxTry
-                                                      : StmtKind::SEHTry;
+    Try.Kind = EH.Cxx ? StmtKind::CxxTry : StmtKind::SEHTry;
     Try.EHRange = EH.CodeRange;
     Try.EHIsReducible = false;
     Try.Body = std::move(Func.Body);
@@ -847,6 +1212,22 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
           Clause.TypeDescriptorVA = Catch.TypeDescriptorVA;
           Clause.Adjectives = Catch.Adjectives;
           fillCxxCatchType(Clause, Image);
+          Try.EHClauses.push_back(std::move(Clause));
+          Try.EHClauseBodies.emplace_back();
+        }
+      }
+      if (Try.EHClauses.empty()) {
+        for (int32_t State = 0;
+             State < static_cast<int32_t>(EH.Cxx->UnwindMap.size()); ++State) {
+          const CxxUnwindAction &Action = EH.Cxx->UnwindMap[State];
+          if (Action.ActionVA == 0)
+            continue;
+          HighEHClause Clause;
+          Clause.Kind = HighEHClauseKind::CxxCleanup;
+          Clause.FilterOrActionVA = Action.ActionVA;
+          Clause.State = State;
+          Clause.UnwindActionKind = Action.Kind;
+          Clause.UnwindObjectOffset = Action.ObjectOffset;
           Try.EHClauses.push_back(std::move(Clause));
           Try.EHClauseBodies.emplace_back();
         }
@@ -885,6 +1266,10 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     if (Func.UnstructuredExceptionRegions == 0)
       Func.UnstructuredExceptionRegions = 1;
   }
+  // Invert-skip of `if (c) goto L; work; L:` inside a try body is blocked
+  // before wrapping: Med blocks in the try have ExceptionalPreds. After the
+  // handler is a clause, the try list is a closed HighIR run.
+  invertSkipGotos(Func);
 }
 
 } // namespace neverd

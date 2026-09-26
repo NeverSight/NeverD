@@ -1,0 +1,35 @@
+//===- KernelResourceValues.def - Packed x64 hardware resource records ----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Genuine x64 WDK packed CM_RESOURCE_LIST fields and selected bus facts.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceHeaderSize, 20)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceDescriptorSize, 20)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceCountFieldSize, 4)
+NEVERD_KERNEL_RESOURCE_VALUE(SupportedFullDescriptorCount, 1)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceCountOffset, 0)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceInterfaceOffset, 4)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceBusOffset, 8)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceVersionOffset, 12)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceRevisionOffset, 14)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourcePartialCountOffset, 16)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceTypeOffset, 0)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceShareOffset, 1)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceFlagsOffset, 2)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceStartOffset, 4)
+NEVERD_KERNEL_RESOURCE_VALUE(ResourceLengthOffset, 12)
+NEVERD_KERNEL_RESOURCE_VALUE(InterfaceInternal, 0)
+NEVERD_KERNEL_RESOURCE_VALUE(MemoryType, 3)
+NEVERD_KERNEL_RESOURCE_VALUE(DeviceExclusive, 1)
+NEVERD_KERNEL_RESOURCE_VALUE(MemoryReadWrite, 0)
+NEVERD_KERNEL_RESOURCE_VALUE(InterruptType, 2)
+NEVERD_KERNEL_RESOURCE_VALUE(InterruptLatched, 1)
+NEVERD_KERNEL_RESOURCE_VALUE(InterruptLevelOffset, 4)
+NEVERD_KERNEL_RESOURCE_VALUE(InterruptVectorOffset, 8)
+NEVERD_KERNEL_RESOURCE_VALUE(InterruptAffinityOffset, 12)

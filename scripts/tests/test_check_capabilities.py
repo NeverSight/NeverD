@@ -3133,6 +3133,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "debug.hardware": "unsupported",
                 "debug.local": "unsupported",
                 "debug.remote": "unsupported",
+                "emulation.windows-driver-initialization": "experimental",
                 "exception.itanium.ada-d": "experimental",
                 "exception.rewrite.end-to-end": "unsupported",
                 "safety.binary-sanitizer-publication": "experimental",
@@ -3179,6 +3180,22 @@ class RepositoryCapabilityTests(unittest.TestCase):
             "debug.hardware": no_surfaces,
             "debug.local": no_surfaces,
             "debug.remote": no_surfaces,
+            "emulation.windows-driver-initialization": {
+                "c": [
+                    "neverd_emulate_driver_json",
+                    "neverd_emulate_driver_scenario_json",
+                ],
+                "python": [],
+                "cli": [
+                    "neverd emulate-driver",
+                    "neverd emulate-driver --instruction-limit",
+                    "neverd emulate-driver --scenario",
+                ],
+                "json": [
+                    "neverd_emulate_driver_json",
+                    "neverd_emulate_driver_scenario_json",
+                ],
+            },
             "exception.itanium.ada-d": no_surfaces,
             "exception.rewrite.end-to-end": no_surfaces,
             "safety.binary-sanitizer-publication": {

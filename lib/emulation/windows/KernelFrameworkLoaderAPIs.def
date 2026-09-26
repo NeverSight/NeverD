@@ -1,0 +1,15 @@
+//===- KernelFrameworkLoaderAPIs.def - Modeled WDF loader ABI
+//--------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Loader export argument counts from Microsoft's public fxldr.h. These are
+/// separate from the bound KMDF table and have no implicit globals argument.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_FRAMEWORK_LOADER_API(WdfVersionBind, 4)
+NEVERD_FRAMEWORK_LOADER_API(WdfVersionUnbind, 3)

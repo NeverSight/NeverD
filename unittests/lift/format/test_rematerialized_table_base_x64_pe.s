@@ -45,7 +45,10 @@ probe:
         jmp .Lheader
 
 .Lexit:
-        movl $7, %eax
+        // Keep both relocated table reads observable while preserving 7.
+        movq %r9, %rax
+        xorq %r10, %rax
+        addq $7, %rax
         popq %r15
         popq %r14
         popq %r13

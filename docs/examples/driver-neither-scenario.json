@@ -1,0 +1,11 @@
+{
+  "load_address": "0x190000000",
+  "unload": true,
+  "requests": [
+    {"kind": "create", "device": "\\Device\\NeverDNeither"},
+    {"kind": "ioctl", "device": "\\Device\\NeverDNeither", "code": "0x222003", "input": "01020304", "output_size": 4},
+    {"kind": "ioctl", "device": "\\Device\\NeverDNeither", "code": "0x222013", "input": "01020304", "output_size": 4},
+    {"kind": "cleanup", "device": "\\Device\\NeverDNeither"},
+    {"kind": "close", "device": "\\Device\\NeverDNeither"}
+  ]
+}

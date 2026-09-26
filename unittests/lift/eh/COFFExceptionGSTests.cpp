@@ -10,8 +10,10 @@
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BinaryLoading.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <iterator>
 #include <vector>
 
@@ -19,6 +21,32 @@ namespace {
 
 using namespace neverd;
 using namespace neverd::coff_eh_test;
+
+TEST(COFFExceptionParser, LoadsStrippedGSWrapperForFocusedX64Function) {
+  const std::filesystem::path Path =
+      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+      "corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe/"
+      "cxx_eh_probe-msvc-x86_64-fh4-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << "Windows EH corpus fixture is unavailable";
+
+  constexpr va_t FunctionVA = 0x140001320;
+  constexpr va_t WrapperVA = 0x140001528;
+  BinaryLoadOptions Options;
+  Options.OnlyFunctionEntries.insert(FunctionVA);
+  auto ImageOrError = loadBinary(Path, Options);
+  ASSERT_TRUE(static_cast<bool>(ImageOrError))
+      << llvm::toString(ImageOrError.takeError());
+
+  const ExceptionInfo &Info = ImageOrError->ExceptionMetadata;
+  const ExceptionFunction *Function = Info.findFunction(FunctionVA);
+  ASSERT_NE(Function, nullptr);
+  EXPECT_EQ(Function->Personality, ExceptionPersonality::GSHandlerCheckEH4);
+  EXPECT_EQ(Function->ParseStatus, ExceptionParseStatus::Complete);
+  EXPECT_TRUE(Function->Cxx.has_value());
+  EXPECT_TRUE(Function->GSCookie.has_value());
+  EXPECT_NE(Info.findFunction(WrapperVA), nullptr);
+}
 
 void addX64SEHGSPayload(BinaryImage &Img) {
   uint8_t *X = Img.Segments[1].Data.data();

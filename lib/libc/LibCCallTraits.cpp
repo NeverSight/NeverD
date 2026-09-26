@@ -240,10 +240,15 @@ NoReturnTargetIndex::NoReturnTargetIndex(const BinaryImage &Img) : Image(&Img) {
 
   // A returning import still permits the first same-address symbol to prove
   // no-return. Later symbol aliases do not override that first symbol.
-  std::set<va_t> SymbolAddresses;
-  for (const Symbol &Sym : Img.Symbols)
-    if (SymbolAddresses.insert(Sym.Addr).second && isNoReturnFunction(Sym.Name))
-      Targets.insert(Sym.Addr);
+  // `--func` already has the IAT map; walking every image symbol is the
+  // whole-PE cost that single-function export is trying to skip.
+  if (Img.LoadOnlyFunctionEntries.empty()) {
+    std::set<va_t> SymbolAddresses;
+    for (const Symbol &Sym : Img.Symbols)
+      if (SymbolAddresses.insert(Sym.Addr).second &&
+          isNoReturnFunction(Sym.Name))
+        Targets.insert(Sym.Addr);
+  }
   Targets.erase(InvalidVA);
 }
 

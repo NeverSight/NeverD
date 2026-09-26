@@ -131,9 +131,13 @@ std::string HighExpr::str() const {
              "*" + Operands[0]->str();
     return std::string(memoryAddressSpaceQualifier(MemoryAddressSpace)) + "*?";
   case ExprKind::Call: {
-    std::string S = CallTarget.empty()
-                        ? (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str()
-                        : CallTarget;
+    std::string S;
+    if (IsIndirectCall && IndirectTarget)
+      S = "(*" + IndirectTarget->str() + ")";
+    else
+      S = CallTarget.empty()
+              ? (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str()
+              : CallTarget;
     S += "(";
     for (size_t I = 0; I < Operands.size(); ++I) {
       if (I > 0)
@@ -236,6 +240,12 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
     if (!Operands[I]->structuralEq(*Other.Operands[I]))
       return false;
   }
+  if (static_cast<bool>(IndirectTarget) !=
+      static_cast<bool>(Other.IndirectTarget))
+    return false;
+  if (IndirectTarget &&
+      !IndirectTarget->structuralEq(*Other.IndirectTarget))
+    return false;
   return true;
 }
 
@@ -346,6 +356,17 @@ std::string HighStmt::str(int Indent) const {
   }
   case StmtKind::Nop:
     return "";
+  case StmtKind::Block: {
+    if (Body.empty())
+      return Pad + "{}";
+    std::string S = Pad + "{\n";
+    for (const HighStmt &ST : Body)
+      S += ST.str(Indent + 1) + "\n";
+    S += Pad + "}";
+    return S;
+  }
+  case StmtKind::ExprStmt:
+    return Pad + (Val ? Val->str() : "?") + ";";
   default:
     return Pad + "/* ? */";
   }

@@ -345,6 +345,47 @@ generated-code ABI 只为标量整数定义。浮点、SIMD、x87、原子操作
 该契约之外。选择 `ProvenSemanticAndLLVM` 策略的实现必须运行 NeverD 现有的证明
 门控语义简化，并与 LLVM 优化共同达到不动点；该策略本身不提供可执行翻译后端。
 
+## Windows 驱动模拟
+
+`lib/emulation` 是由 `NEVERD_ENABLE_DRIVER_EMULATION` 启用的可选执行组件。`emulate-driver` CLI 通过公共 C API 访问该组件。`DriverSession` 负责有界的 x64 WDM 初始化，以及可选的串行 create／IOCTL／read／write／cleanup／close／unload 调用；Windows 映像映射使用现有加载器提供的完整 `BinaryImage`，Windows 模型负责来宾对象和 API 语义。Unicorn 适配器负责 CPU 执行，并持有来宾内存的权威状态。此路径不使用实验性的原生翻译流水线，也不改变其支持范围。
+
+Unicorn 通过 `cmake/NeverDUnicorn.cmake` 统一配置一次，与语义测试共享，并在 `BUILD_TESTING=OFF` 时仍可用。未知 API 和 CPU 环境行为会明确停止；驱动返回失败与模拟未完成始终保持区分。限制、报告及不支持的生命周期操作见[驱动模拟](driver-emulation.md)。
+
+原有 C API 仍仅执行初始化。场景 JSON 在相同执行选项上使用统一的严格解析器，字段与请求类型通过 `.def` 目录声明。请求的基址重定位和安全 cookie 初始化由执行加载器负责。Windows 模型负责 IRP／栈位置／文件对象，并验证同步完成或工作项驱动的待处理完成；会话在共享执行预算下按顺序调用回调。未使用的未知导入采用延迟绑定；执行它们或读取未建模的导出数据时会明确停止。
+
+导出注册表为静态导入及动态例程查找分配稳定的来宾地址。导出可用性独立于实现：显式不存在的导出解析为 NULL，存在但未建模的例程绑定到陷阱，动态可用性未指定时停止。请求模型管理独立文件身份及请求拥有的 MDL，包括映射权限和失效时机。运行时通过会话中经过检查的 Win64 参数读取器读取来宾变参。后端故障保留首次结构化原因；观察和报告不会恢复已故障的 CPU，也不会通过 Windows 异常机制处理这些后端故障。
+
+Windows 模型还管理独立的非分页池 MDL；描述符释放不会释放底层缓冲区。MDL 链及 IRP 关联仍未建模。独立注册表模型管理显式场景树、句柄权限和键值生命周期，与静态导出目录分开。场景预检与执行使用同一注册表验证规则，报告保留最终键值；卸载检查遗留句柄。
+
+`KernelScheduler` 管理就绪队列顺序、回调身份和定时器期限；`KernelDispatcher` 管理不透明 DPC、定时器、事件及其信号。`KernelModel` 管理等待登记、工作项／设备生命周期和 IRP 完成。`DriverSession` 保存并恢复各回调的独立栈及完整 CPU 上下文，包括 Win64 栈参数，来宾内存保持共享。仅在没有就绪执行帧时，虚拟时间才推进到定时器／等待／取消边界；CPU0 以确定性的协作调度执行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作项。这不提供通用线程／APC／自旋锁调度、WDM／PnP 取消、并发场景提交、完整 PnP／电源或通用硬件。 API 的 IRQL 上限来自 `KernelAPIIRQL.def`，参数相关限制由所属模型检查。
+
+`KernelModelDeviceStack` 用单一记录管理每个设备的驱动所有者、分配、上下层邻居、待删除状态和内部引用。来宾 `NextDevice` 枚举链与宿主拥有的附着图含义不同。名称解析保留具名下层设备作为 `FILE_OBJECT` 和报告身份，选择当前栈顶进行初始派发及 READ/WRITE 缓冲配置，并保存保活整条路径的引用。拆链或删除不能使请求／回调仍持有的设备失效；公开 `ReferenceCount` 仍只计算打开句柄。
+
+`KernelModelIRPStack` 管理原始来宾数据包的有界栈游标、确切目标派发和完成展开；内联 Copy/Skip/SetCompletion 写入仍是权威数据。派发状态、完成回调控制值和最终 `IoStatus` 分离，pending 可以在派发返回后传播。`STATUS_MORE_PROCESSING_REQUIRED` 保留数据包、MDL 和缓冲区，直到继续执行并到达最终展开边界；这也适用于嵌套完成。`KernelGuestCall` 携带子系统所有者和局部 token，防止 WDM／WDF 续接身份碰撞；`DriverSession` 保存 CPU 帧和继承的 IRQL。一个来宾驱动可附着于单独拥有的场景 PDO；驱动自行分配的 IRP 仍不支持。WDF 附着／转发、活动栈附加、中间层拆除、改变主功能及路径外目标仍不支持。 在调用上层完成回调之前，已消耗的下层栈位置会被清零。
+
+`DriverPnp.h` 与公开 `DeviceLifecycle.def` 统一生命周期枚举和精确成功合约；`devicePnpFinalStatusError` 由场景预检与来宾最终完成共享。`KernelModelPnpDevices` 拥有稳定 PDO 身份、独立提供者驱动清单及真实 AddDevice 观测。`KernelModelPnpRequests` 将事务和不可变设备／文件身份关联到现有 IRP，不根据停止、待移除或电源状态虚构 I/O 拒绝。普通请求进入真实来宾派发，由驱动决定成功、失败或等待。`KernelModelPnpCompletion` 管理实际总线接收／完成和虚拟期限，复用 `KernelModelIRPStack` 及带所有者标记的续接。最终上层完成提交状态；成功 PnP 必须已完成总线转发，Start/QueryStop/QueryRemove 的上层早失败可保留空总线观测。Stop/CancelStop/SurpriseRemoval/CancelRemove/Remove 必须精确返回 STATUS_SUCCESS；QueryStop 的 STATUS_RESOURCE_REQUIREMENTS_CHANGED (0x119) 因资源重新查询未实现而拒绝。提供者退休和来宾拆链／删除保持独立，不会静默清理泄漏。八种常见次功能使用显式总线配置；公开执行器仍为串行，Remove 前要求关闭文件并排空先前请求。其他 PnP、其他硬件／资源及 KMDF PnP 仍不支持。
+
+`KernelRemoveLocks` 是锁登记、确切 DEVICE_OBJECT 所有者、大小、Tag 多重计数和排空锁存的唯一权威，与 `DeviceLifecycle` 事务分开；PDO 状态或 IRP 形状的 Tag 都不决定身份。`KernelModel` 验证扩展完整存储及不透明访问，路由四个 Ex 导出，并登记有类型的可恢复 RemoveLock 等待。最后一次 release 在回调返回前唤醒等待者，复用 CPU 续接而非合成回调。当前 AndWait 检查关联 REMOVE 路径及实际提供者接收，不要求下层完成或 Tag 指向存活包，也不等于完整 Driver Verifier。REMOVE 入口保留关闭文件／完成先前请求的限制，但允许回调运行并释放锁。会话保留 REMOVE 路径直到剩余执行帧结束，并在释放所有权前验证最终拆除。获取／等待存储检查先于 delete-pending 修改，扩展实际退休时才注销；排空不消费工作项或路径引用。
+
+`DriverPower.def` 定义电源类型／动作拼写和请求来源；`DriverPnp.h` 的同一个 `DriverPowerOperation` 用于场景包及每个 PDO 的响应 FIFO。`KernelModelPowerRequests` 拥有显式包事实、保存的路径和每个 DEVICE_OBJECT 的通知状态；`PoSetPowerState` 返回该设备的前值，不修改生命周期事务。`KernelModelPowerCompletion` 管理真实 `PoRequestPowerIrp` 子请求，每个都有独立 IRP、报告行和响应索引；只消费匹配的 PDO 队首，不从 context 猜父请求，不借用父报告。嵌套派发及最终五参数 void 回调复用带所有者的续接、保留路径和独立回调栈；状态快照跨等待有效到回调返回。同步子请求可先于 API 的 STATUS_PENDING 返回完成，System S0 父请求也可先于 D0 子请求完成。最终上层完成控制生命周期观测，与总线结果分开。当前有界范围要求 DO_POWER_PAGABLE 且无 DO_POWER_INRUSH、PASSIVE_LEVEL 派发，只支持 D0/D3 和 Working/Sleeping3 的 Query/Set；显式32位 SystemContext 保持不透明。不提供通用电源策略、WAIT_WAKE、关机／休眠、通用硬件、KMDF PnP 或并发公开场景提交。
+
+`DriverResources.h`／`DriverResources.def` 与 `DriverInterrupts.h`／`DriverInterrupts.def` 定义固定的 `register_bank` 内存及中断分配。`DriverScenario` 负责 JSON／原生预检，`DriverResult` 记录初始配置，不复制观测到的寄存器银行状态。`KernelResources` 独占紧凑布局的原始／转换后分配、资源代次、物理存在及电源状态。`KernelMMIO` 管理持久寄存器值及独立映射别名，`KernelInterrupts` 管理不透明连接、锁及显式脉冲。`KernelModelResources` 构造只读 START 包并接入真实提供者完成：下层 START 成功后，在上层回调前发布资源代次，提供者设备 SET 实际完成时更新 D0／D3 可访问性。失败 START 或 STOP／REMOVE 的拆除检查在最终 IRP 完成前进行，上层回调可先取消映射及断开连接，不会隐式清理。突然移除立即拒绝硬件访问。`GuestMemory` 与 `UnicornBackend` 在 MMIO 产生效果前验证完整 CPU／API 事务，并保留首次故障。固定分配的重启保留寄存器银行值。任意 RAM、资源重平衡、端口、共享／电平／消息中断及其他 DMA 接口仍不支持。
+
+`KernelInterrupts` 将每个显式脉冲绑定到源请求成功提交时的连接令牌和资源代次。`KernelModelInterruptEvents` 在推进时钟或修改观测前，预检同一时刻所有生产者的容量，包括精确的框架取消回调数量；定时器、提供者完成和取消不能悄悄占用 ISR 所需空间。提供者先发布实际硬件状态，再判定脉冲是否可递送；已接纳的中断先于 DPC 和被动级回调执行。调度仍是协作式：虚拟时间仅在空闲时推进，零延迟不意味着指令抢占。`KernelModelInterrupts` 解码传统的十一参数 ABI 及选定的 Ex 字段，`KernelGuestCall` 为中断回调提供独立所有者／令牌。ISR 与同步回调在分配的 DIRQL 持有同一把非递归锁；嵌套 CPU 帧保存调用方 IRQL／CR8，BOOLEAN 只使用 AL。手动锁要求同一执行身份及保存的 IRQL，回调不能带着未释放锁返回。已登记的脉冲独立于源 IRP 生命周期；断连、不可用资源代次或 D3 状态下的递送会记录明确未递送原因并停止，不会重新绑定或虚构 enable／ack 寄存器行为。`DriverResult.Interrupts` 包含独立观测，不伪造 IRP 或 NTSTATUS 完成。
+
+`DriverDMA.h`／`DriverDMA.def` 定义每 PDO 的显式能力及独立外部事务。`KernelPhysicalMemory` 注册确切有效 RAM 分配、分配共享页身份并固定字节范围；MDL 是该权威存储的视图，不是缓冲区副本。`GuestMemory`／`UnicornBackend` 提供整区间底层访问，在不修改 CPU 权限的情况下绕过该权限检查，拒绝 MMIO、运行中、重入或已有故障的访问，并锁存意外后端失败。`KernelDMA` 管理独立逻辑地址域、适配器绑定的方法身份、公共／SG 映射、映射寄存器接纳和回调引用；`KernelDMAEvents` 在实际递送时解析已捕捉的 PDO 资源代次。`KernelModelPhysicalMemory`、`KernelModelDMA` 和 `KernelModelDMATransfers` 将原分配／MDL 所有权接入真实间接来宾回调。SG 资源可用时允许内嵌递送；排队回调保留身份和容量直到 FIFO 晋升。映射与回调生命周期独立：Put 可在回调返回前释放数据／描述符固定引用，回调保留不会延长已完成 IRP 的生命。`DmaWritable` 独立于 CPU 映射权限记录锁定意图。同一时刻先发布提供者状态，再执行 DMA RAM 访问，最后判定中断递送资格。资源代次／存在／电源仍仅由 `KernelResources` 管理；DMA 不推断厂商寄存器、不触发 IRQ、不完成 IRP，也不复制生命周期。逻辑地址永不复用，事务验证失败保留观测且不修改 RAM。已建模接口包括有界模型 RAM 上的一致性公共缓冲区、V1 SG DMA 及经过地址转换的总线主设备通道 DMA；通用硬件、从属控制器和其他 DMA 接口仍不支持。
+
+`KernelDMAChannels` 在同一个地址域分配器中加入通道预约及带类型的 SG／通道 FIFO，分别管理回调状态、保留的映射寄存器和每次操作的整体映射。通道操作只预约一次逻辑窗口，并原地增长一个物理固定范围，因此穿插执行的 MapTransfer 不会复制 RAM、重复占用寄存器或重叠其他映射。纯转移、返回、刷新与释放计划在发布前校验身份及完整晋升批次。`KernelModelDMAChannels` 解码间接 ABI 和注册时实际 CurrentIrp 快照，与 SG 共用 MDL 视图助手。调度器独立的 `DMAAdapterControl` 类型共享 DMA 顺序、容量及内嵌父回调保持机制，只有 DMA 模型解释回调返回值低 32 位动作。排队时捕捉的 IRP 在终端栈展开前受到保护，进入回调即释放该输入保持，因此允许在回调体内完成 IRP。整体刷新退休映射字节，确切 FreeMapRegisters 退休独立预约。`KeFlushIoBuffers` 的一致性缓存契约不履行这两项释放义务。
+
+`KernelFramework` 管理 KMDF 1.33 绑定、函数表身份、WDF 对象与上下文、控制设备初始化记录、顺序默认队列和请求句柄。其类型化设备与请求宿主接口将 WDM 命名空间、存储、数据包状态、MDL 映射及完成验证交给 `KernelModel`；双方均不创建重复的设备或 IRP。队列路由将框架拥有的分派状态与返回类型为 `void` 的来宾回调返回分开记录。完成续接流程先执行清理和子对象销毁，再释放 IRP；外部引用仅保留 WDF 上下文。删除待处理请求会在修改祖先对象之前被拒绝；删除时自动取消或排空请求仍不受支持。`DriverSession` 在共享预算下执行嵌套回调。`DriverImage` 验证 CFG 元数据；`GuardControlFlow` 管理已声明的映像／API 目标，CPU 适配器保留检查／分派调用状态。PnP 设备、通用队列调度及其取消、类扩展及 UMDF 仍不受支持。
+
+场景通过 `cancel_after_100ns` 为传输请求设置虚拟取消期限，`KernelModel` 的独立 IRP 记录管理此期限及实际发生的绝对 `cancel_requested_at_100ns`；公开场景仍串行提交请求。`KernelModel` 在框架路由后、来宾 I/O 回调前应用零延迟取消，保留完成先发生的结果，并在空闲时间推进时考虑正数取消期限。`KernelFramework` 管理标记／解除标记、排队／已递送状态，以及保留到取消回调返回的内部引用。仅排队的取消回调不允许完成请求；递送后，工作项可在回调等待期间协调完成。保留 WDF 对象不会恢复已失效的 IRP 存储。`KernelScheduler` 将取消回调与工作项分开管理，在暂停／恢复时保留回调类别并共用容量和派发预算；优先级为 DPC、FIFO 取消回调、普通工作项及就绪被动等待帧的恢复，后两者均后于取消递送。取消回调在 `PASSIVE_LEVEL` 执行。此控制设备契约不提供 WDM 取消例程或通用队列调度器。
+
+旧版 `WdfRequestMarkCancelable` 遇到已取消的 IRP 时，在当前 API 续接中使用嵌套 `GuestCall`。取消、清理与最终销毁回调均可等待，整个续接结束后才恢复调用方；注册之后发生的取消仍使用调度器。`KernelFramework` 管理 WDF 句柄身份以及完成中／完成后的 getter 中性返回值。其请求访问宿主接口将原 IRP、64 位 Information 和 MDL 身份交由 `KernelModel` 管理，后者同时拒绝来宾通过 WDM 完成框架拥有的 IRP。每个请求按需创建唯一的 SystemBuffer MDL；直接缓冲区保留原描述符，获取本身不建立映射。完成操作使两种描述符与 IRP／缓冲区一起失效，不受 WDF 上下文引用保留的影响。
+
+`KernelGuestException` 是携带 32 位状态码的类型化 API 结果，与模型错误及后端故障独立。`DriverImage` 保留加载器已有的首选基址异常元数据；`KernelSEH` 在该元数据上通过受检地址转换和栈读取，生成纯且有界的 x64 版本 1 C catch-all 转移计划。它跨普通辅助栈帧恢复受支持的非易失 GPR 保存值，选择真实来宾处理器；遇到过滤器／finally、GS／C++ 异常处理例程、链式或不完整记录、序言及 XMM 恢复时明确拒绝。`DriverSession` 仅在正常 API 停止点提交已验证寄存器计划，保持 API 跟踪结果为 null，并在同一执行中继续处理器。它不会清除已锁存的后端故障，也不会展开到其他回调的栈。该边界支持 ExRaiseStatus／ExRaiseAccessViolation／ExRaiseDatatypeMisalignment；用户探测、锁定用户缓冲区及 CPU 故障恢复仍是独立的后续工作。
+
+
 ## 异常重写边界
 
 Mach-O compact unwind 当前具备原始 `__unwind_info` 的严格 parser、生成

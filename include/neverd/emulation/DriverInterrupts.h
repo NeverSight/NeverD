@@ -1,0 +1,84 @@
+//===- DriverInterrupts.h - Explicit interrupt scenario records -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Resource assignments and independent external interrupt pulses. These are
+/// synthetic single-processor facts, never inferred from register writes.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_EMULATION_DRIVERINTERRUPTS_H
+#define NEVERD_EMULATION_DRIVERINTERRUPTS_H
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+
+namespace neverd::emulation {
+
+enum class DriverInterruptMode : uint32_t {
+#define NEVERD_DRIVER_INTERRUPT_MODE(Name, Value, Spelling) Name = Value,
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_MODE
+};
+
+enum class DriverInterruptShare : uint8_t {
+#define NEVERD_DRIVER_INTERRUPT_SHARE(Name, Value, Spelling) Name = Value,
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_SHARE
+};
+
+#define NEVERD_DRIVER_INTERRUPT_LIMIT(Name, Value)                             \
+  inline constexpr size_t Name = Value;
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_LIMIT
+
+/// Ordered raw/translated CM_RESOURCE_LIST interrupt descriptor pair. Group
+/// zero and CPU zero are explicit provider facts. Memory descriptors precede
+/// these descriptors in the same full list; neither vector nor level is
+/// inferred from its counterpart.
+struct DriverInterruptResource {
+  std::string ID;
+  uint32_t RawVector = 0;
+  uint32_t RawLevel = 0;
+  uint64_t RawAffinity = 0;
+  uint32_t TranslatedVector = 0;
+  uint32_t TranslatedLevel = 0;
+  uint64_t TranslatedAffinity = 0;
+  DriverInterruptMode Mode = DriverInterruptMode::Latched;
+  DriverInterruptShare Share = DriverInterruptShare::DeviceExclusive;
+};
+
+struct DriverInterruptEvent {
+  /// Deadline relative to successful source request submission. Delivery is
+  /// at a supported callback boundary, including when this value is zero.
+  uint64_t After100ns = 0;
+  std::string DeviceID;
+  std::string InterruptID;
+};
+
+/// Independent observations, not IRPs or NTSTATUS completions. An armed event
+/// survives source IRP completion and remains bound to its resource epoch.
+struct DriverInterruptResult {
+  uint32_t SourceRequestIndex = 0;
+  uint32_t EventIndex = 0;
+  std::string DeviceID;
+  std::string InterruptID;
+  uint64_t Epoch = 0;
+  uint64_t DueAt100ns = 0;
+  std::optional<uint64_t> OccurredAt100ns;
+  std::optional<uint64_t> DeliveredAt100ns;
+  std::optional<uint64_t> ReturnedAt100ns;
+  std::optional<uint64_t> InterruptObject;
+  /// Actual BOOLEAN low byte. Zero means unclaimed, not a scenario failure.
+  std::optional<uint8_t> ReturnValue;
+  std::optional<std::string> UndeliveredReason;
+};
+
+} // namespace neverd::emulation
+
+#endif // NEVERD_EMULATION_DRIVERINTERRUPTS_H

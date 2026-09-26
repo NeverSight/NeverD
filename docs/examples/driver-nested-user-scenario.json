@@ -1,0 +1,163 @@
+{
+  "load_address": "0x190000000",
+  "unload": true,
+  "requests": [
+    {
+      "kind": "create",
+      "device": "\\Device\\NeverDNeither"
+    },
+    {
+      "kind": "ioctl",
+      "code": "0x222053",
+      "input": "00000000000000000000000000000000",
+      "user_input_access": "read_only",
+      "user_buffers": [
+        {
+          "id": "descriptor",
+          "size": 24,
+          "input": "000000000000000000000000000000000400000000000000",
+          "access": "read_only"
+        },
+        {
+          "id": "payload",
+          "size": 12,
+          "input": "a5a5a501020304a5a5a5a5a5",
+          "access": "read_only"
+        },
+        {
+          "id": "sink",
+          "size": 12,
+          "input": "a5a5a5a5a5a5a5a5a5a5a5a5"
+        }
+      ],
+      "user_pointers": [
+        {
+          "source": {
+            "buffer": "input",
+            "offset": 0
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "descriptor",
+            "offset": 0
+          }
+        },
+        {
+          "source": {
+            "buffer": "input",
+            "offset": 8
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "sink",
+            "offset": 4
+          }
+        },
+        {
+          "source": {
+            "buffer": "memory",
+            "id": "descriptor",
+            "offset": 0
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "payload",
+            "offset": 3
+          }
+        },
+        {
+          "source": {
+            "buffer": "memory",
+            "id": "descriptor",
+            "offset": 8
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "payload",
+            "offset": 3
+          }
+        }
+      ]
+    },
+    {
+      "kind": "ioctl",
+      "code": "0x222057",
+      "input": "00000000000000000000000000000000",
+      "user_input_access": "read_only",
+      "user_buffers": [
+        {
+          "id": "descriptor",
+          "size": 24,
+          "input": "000000000000000000000000000000000400000000000000",
+          "access": "read_only"
+        },
+        {
+          "id": "payload",
+          "size": 12,
+          "input": "a5a5a501020304a5a5a5a5a5",
+          "access": "read_only"
+        },
+        {
+          "id": "sink",
+          "size": 12,
+          "input": "a5a5a5a5a5a5a5a5a5a5a5a5"
+        }
+      ],
+      "user_pointers": [
+        {
+          "source": {
+            "buffer": "input",
+            "offset": 0
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "descriptor",
+            "offset": 0
+          }
+        },
+        {
+          "source": {
+            "buffer": "input",
+            "offset": 8
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "sink",
+            "offset": 4
+          }
+        },
+        {
+          "source": {
+            "buffer": "memory",
+            "id": "descriptor",
+            "offset": 0
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "payload",
+            "offset": 3
+          }
+        },
+        {
+          "source": {
+            "buffer": "memory",
+            "id": "descriptor",
+            "offset": 8
+          },
+          "target": {
+            "buffer": "memory",
+            "id": "payload",
+            "offset": 3
+          }
+        }
+      ],
+      "user_unmap_after_dispatch": true
+    },
+    {
+      "kind": "cleanup"
+    },
+    {
+      "kind": "close"
+    }
+  ]
+}

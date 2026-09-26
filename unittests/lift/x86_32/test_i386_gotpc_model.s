@@ -975,4 +975,181 @@ jt_i386_gotoff_peeled_table:
   .long .Lpeeled_case7@GOTOFF
 .size jt_i386_gotoff_peeled_table, .-jt_i386_gotoff_peeled_table
 
+// Two dispatches share one GOTOFF object.  The second selector has no local
+// mask: its finite domain is supplied by case bodies reached through the first
+// dispatch, and every case must be checked in the candidate graph.
+.text
+.p2align 2
+.globl jt_i386_gotoff_joint_loop
+.type jt_i386_gotoff_joint_loop, @function
+jt_i386_gotoff_joint_loop:
+  pushl %esi
+  call .Ljoint_pc
+.Ljoint_pc:
+  popl %esi
+  .byte 0x81, 0xc6
+.Ljoint_gotpc_field:
+  .long .Ljoint_gotpc_field - .Ljoint_pc
+  .reloc .Ljoint_gotpc_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl 8(%esp), %eax
+  andl $1, %eax
+  movl jt_i386_gotoff_joint_table@GOTOFF(%esi,%eax,4), %ecx
+  addl %esi, %ecx
+.globl jt_i386_gotoff_joint_first_branch
+jt_i386_gotoff_joint_first_branch:
+  jmp *%ecx
+.Ljoint_loop:
+  movl jt_i386_gotoff_joint_table@GOTOFF(%esi,%eax,4), %ecx
+  addl %esi, %ecx
+.globl jt_i386_gotoff_joint_second_branch
+jt_i386_gotoff_joint_second_branch:
+  jmp *%ecx
+.Ljoint_case0:
+  movl $2, %eax
+  jmp .Ljoint_loop
+.Ljoint_case1:
+  movl $3, %eax
+  jmp .Ljoint_loop
+.Ljoint_case2:
+  movl $4, %eax
+  jmp .Ljoint_loop
+.Ljoint_case3:
+  movl $4, %eax
+  jmp .Ljoint_loop
+.Ljoint_case4:
+  popl %esi
+  ret
+.size jt_i386_gotoff_joint_loop, .-jt_i386_gotoff_joint_loop
+
+.section .rodata
+.p2align 2
+.globl jt_i386_gotoff_joint_table
+.type jt_i386_gotoff_joint_table, @object
+jt_i386_gotoff_joint_table:
+  .long .Ljoint_case0@GOTOFF
+  .long .Ljoint_case1@GOTOFF
+  .long .Ljoint_case2@GOTOFF
+  .long .Ljoint_case3@GOTOFF
+  .long .Ljoint_case4@GOTOFF
+.size jt_i386_gotoff_joint_table, .-jt_i386_gotoff_joint_table
+
+// Poison: one case feeds index 5 into a five-slot second dispatch.
+.text
+.p2align 2
+.globl jt_i386_gotoff_joint_oob_loop
+.type jt_i386_gotoff_joint_oob_loop, @function
+jt_i386_gotoff_joint_oob_loop:
+  pushl %esi
+  call .Ljoint_oob_pc
+.Ljoint_oob_pc:
+  popl %esi
+  .byte 0x81, 0xc6
+.Ljoint_oob_gotpc_field:
+  .long .Ljoint_oob_gotpc_field - .Ljoint_oob_pc
+  .reloc .Ljoint_oob_gotpc_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl 8(%esp), %eax
+  andl $1, %eax
+  movl jt_i386_gotoff_joint_oob_table@GOTOFF(%esi,%eax,4), %ecx
+  addl %esi, %ecx
+.globl jt_i386_gotoff_joint_oob_first_branch
+jt_i386_gotoff_joint_oob_first_branch:
+  jmp *%ecx
+.Ljoint_oob_dispatch:
+  movl jt_i386_gotoff_joint_oob_table@GOTOFF(%esi,%eax,4), %ecx
+  addl %esi, %ecx
+.globl jt_i386_gotoff_joint_oob_second_branch
+jt_i386_gotoff_joint_oob_second_branch:
+  jmp *%ecx
+.Ljoint_oob_case0:
+  movl $2, %eax
+  jmp .Ljoint_oob_dispatch
+.Ljoint_oob_case1:
+  movl $3, %eax
+  jmp .Ljoint_oob_dispatch
+.Ljoint_oob_case2:
+  movl $4, %eax
+  jmp .Ljoint_oob_dispatch
+.Ljoint_oob_case3:
+  movl $5, %eax
+  jmp .Ljoint_oob_dispatch
+.Ljoint_oob_case4:
+  popl %esi
+  ret
+.size jt_i386_gotoff_joint_oob_loop, .-jt_i386_gotoff_joint_oob_loop
+
+.section .rodata
+.p2align 2
+.globl jt_i386_gotoff_joint_oob_table
+.type jt_i386_gotoff_joint_oob_table, @object
+jt_i386_gotoff_joint_oob_table:
+  .long .Ljoint_oob_case0@GOTOFF
+  .long .Ljoint_oob_case1@GOTOFF
+  .long .Ljoint_oob_case2@GOTOFF
+  .long .Ljoint_oob_case3@GOTOFF
+  .long .Ljoint_oob_case4@GOTOFF
+.size jt_i386_gotoff_joint_oob_table, .-jt_i386_gotoff_joint_oob_table
+
+// The first dispatch has exactly one runtime coordinate.  Its case enters a
+// second dispatch over the same exact five-slot GOTOFF object; the second can
+// visit every slot through its own case loop.  Both branches must retain their
+// separate finite domains across the proposal fixed point.
+.text
+.p2align 2
+.globl jt_i386_gotoff_joint_singleton_loop
+.type jt_i386_gotoff_joint_singleton_loop, @function
+jt_i386_gotoff_joint_singleton_loop:
+  pushl %esi
+  call .Ljoint_single_pc
+.Ljoint_single_pc:
+  popl %esi
+  .byte 0x81, 0xc6
+.Ljoint_single_gotpc_field:
+  .long .Ljoint_single_gotpc_field - .Ljoint_single_pc
+  .reloc .Ljoint_single_gotpc_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  xorl %eax, %eax
+  movl jt_i386_gotoff_joint_singleton_table@GOTOFF(%esi,%eax,4), %ecx
+  addl %esi, %ecx
+.globl jt_i386_gotoff_joint_singleton_first_branch
+jt_i386_gotoff_joint_singleton_first_branch:
+  jmp *%ecx
+.Ljoint_single_dispatch:
+  movl jt_i386_gotoff_joint_singleton_table@GOTOFF(%esi,%eax,4), %ecx
+  addl %esi, %ecx
+.globl jt_i386_gotoff_joint_singleton_second_branch
+jt_i386_gotoff_joint_singleton_second_branch:
+  jmp *%ecx
+.Ljoint_single_case0:
+  movl $1, %eax
+  jmp .Ljoint_single_dispatch
+.Ljoint_single_case1:
+  movl $2, %eax
+  jmp .Ljoint_single_dispatch
+.Ljoint_single_case2:
+  movl $3, %eax
+  jmp .Ljoint_single_dispatch
+.Ljoint_single_case3:
+  movl $4, %eax
+  jmp .Ljoint_single_dispatch
+.Ljoint_single_case4:
+  cmpl $0, 8(%esp)
+  jne .Ljoint_single_exit
+  xorl %eax, %eax
+  jmp .Ljoint_single_dispatch
+.Ljoint_single_exit:
+  popl %esi
+  ret
+.size jt_i386_gotoff_joint_singleton_loop, .-jt_i386_gotoff_joint_singleton_loop
+
+.section .rodata
+.p2align 2
+.globl jt_i386_gotoff_joint_singleton_table
+.type jt_i386_gotoff_joint_singleton_table, @object
+jt_i386_gotoff_joint_singleton_table:
+  .long .Ljoint_single_case0@GOTOFF
+  .long .Ljoint_single_case1@GOTOFF
+  .long .Ljoint_single_case2@GOTOFF
+  .long .Ljoint_single_case3@GOTOFF
+  .long .Ljoint_single_case4@GOTOFF
+.size jt_i386_gotoff_joint_singleton_table, .-jt_i386_gotoff_joint_singleton_table
+
 .section .note.GNU-stack,"",@progbits

@@ -70,6 +70,40 @@ struct FunctionSym {
   }
 };
 
+/// TPI LF_PROCEDURE / LF_MFUNCTION argument types own display arity.
+/// Extra S_LOCAL IsParameter names (RAII lock homes, this-relative REGREL)
+/// are locals, not call arguments.
+inline bool debugParamTypeFits(const TypeRef &Have, const TypeRef &Want) {
+  if (!Want || !Have)
+    return true;
+  return Have->Kind == Want->Kind;
+}
+
+inline std::vector<std::pair<std::string, TypeRef>>
+bindDebugParamsToTpi(std::vector<std::pair<std::string, TypeRef>> Locals,
+                     const std::vector<TypeRef> &TpiParams) {
+  if (TpiParams.empty())
+    return Locals;
+  std::vector<std::pair<std::string, TypeRef>> Kept;
+  size_t I = 0;
+  if (!Locals.empty() && Locals[0].first == "this") {
+    Kept.push_back(Locals[0]);
+    I = 1;
+  }
+  for (const TypeRef &Want : TpiParams) {
+    while (I < Locals.size() && !debugParamTypeFits(Locals[I].second, Want))
+      ++I;
+    if (I < Locals.size()) {
+      auto Named = Locals[I++];
+      if (!Named.second)
+        Named.second = Want;
+      Kept.push_back(std::move(Named));
+    } else
+      Kept.emplace_back(std::string{}, Want);
+  }
+  return Kept;
+}
+
 /// Authenticated, per-function return contract.  This is intentionally richer
 /// than a has-value bit: heap ownership can be carried only by a pointer-
 /// compatible integer ABI result, while floating-point and aggregate results
@@ -95,6 +129,9 @@ struct VariableSym {
   TypeRef Type;
   int64_t StackOffset = 0;
   bool IsParam = false;
+  /// Provider type-graph index (PDB TPI TypeIndex). 0 means none.
+  /// `resolveVariable` materializes Type from this; do not treat it as ABI.
+  uint32_t TypeId = 0;
 };
 
 /// A fixed-address, typed data object recovered from authenticated debug
@@ -145,6 +182,13 @@ public:
   virtual ~DebugContext() = default;
 
   virtual std::optional<FunctionSym> resolveFunction(va_t Addr) const = 0;
+  /// Public name only.  PDB `--func` must not walk the owning module's
+  /// S_LOCAL stream just to replace `sub_<va>`.
+  virtual std::optional<std::string> functionName(va_t Addr) const {
+    if (auto FS = resolveFunction(Addr); FS && !FS->Name.empty())
+      return FS->Name;
+    return std::nullopt;
+  }
   virtual std::optional<VariableSym> resolveVariable(va_t FuncAddr,
                                                      int64_t Offset) const = 0;
   /// True only when function declarations (including return kinds) are tied
@@ -201,11 +245,27 @@ public:
                                                              int64_t) const {
     return VariableExtentLookup::notFound();
   }
+  /// Attach display fields on a named TPI/DWARF record. Pointers peel to
+  /// the pointee. No-op when the provider already filled the record or the
+  /// type is not a named struct/enum. Callers that print `this->m` must
+  /// invoke this before walking FieldDisplayNames; PDB pointer fields stay
+  /// name-only until the pointee is completed.
+  virtual void completeType(const TypeRef &) const {}
   virtual std::optional<TypeSym> resolveType(uint64_t TypeId) const = 0;
   virtual std::optional<SourceLoc> sourceLocation(va_t Addr) const = 0;
 
   virtual std::vector<FunctionSym> allFunctions() const = 0;
   virtual std::vector<DataObjectSym> allDataObjects() const { return {}; }
+  /// Name a data public at exactly \p Addr.  The default walks
+  /// allDataObjects(); providers that keep an uningested publics index
+  /// override this so `--func` does not have to materialize every S_PUB32.
+  virtual std::optional<DataObjectSym> resolveDataObject(va_t Addr) const {
+    for (const DataObjectSym &Object : allDataObjects()) {
+      if (Object.Addr == Addr && !Object.Name.empty())
+        return Object;
+    }
+    return std::nullopt;
+  }
 
   virtual bool hasInfo() const = 0;
 };

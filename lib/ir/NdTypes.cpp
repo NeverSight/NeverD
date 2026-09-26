@@ -14,9 +14,35 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 
 namespace neverd {
+
+namespace {
+void abandonSmashedVector(void *Storage, size_t Bytes) {
+  auto *BytesPtr = static_cast<unsigned char *>(Storage);
+  bool BeginNull = true;
+  bool EndNull = true;
+  for (size_t I = 0; I < sizeof(void *); ++I) {
+    if (BytesPtr[I])
+      BeginNull = false;
+    if (BytesPtr[sizeof(void *) + I])
+      EndNull = false;
+  }
+  if (BeginNull != EndNull)
+    std::memset(BytesPtr, 0, Bytes);
+}
+} // namespace
+
+NdType::~NdType() {
+  if (Kind != NdTypeKind::Int && Kind != NdTypeKind::Float &&
+      Kind != NdTypeKind::Void && Kind != NdTypeKind::Unknown)
+    return;
+  abandonSmashedVector(&FieldDisplayNames, sizeof(FieldDisplayNames));
+  abandonSmashedVector(&FieldDisplayOffsets, sizeof(FieldDisplayOffsets));
+  abandonSmashedVector(&FieldDisplayTypes, sizeof(FieldDisplayTypes));
+}
 
 namespace {
 bool layout(const NdType &T, uint16_t &Size, uint16_t &Alignment,

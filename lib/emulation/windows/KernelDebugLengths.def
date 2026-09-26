@@ -1,0 +1,22 @@
+//===- KernelDebugLengths.def - Windows debug argument widths -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Longest spellings precede their prefixes. Windows x64 uses 32-bit long.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_DEBUG_LENGTH("I64", Int64, 64)
+NEVERD_KERNEL_DEBUG_LENGTH("I32", Int32, 32)
+NEVERD_KERNEL_DEBUG_LENGTH("hh", Byte, 8)
+NEVERD_KERNEL_DEBUG_LENGTH("ll", LongLong, 64)
+NEVERD_KERNEL_DEBUG_LENGTH("h", Short, 16)
+NEVERD_KERNEL_DEBUG_LENGTH("l", Long, 32)
+NEVERD_KERNEL_DEBUG_LENGTH("I", Native, 64)
+NEVERD_KERNEL_DEBUG_LENGTH("z", Size, 64)
+NEVERD_KERNEL_DEBUG_LENGTH("t", Difference, 64)
+NEVERD_KERNEL_DEBUG_LENGTH("j", Maximum, 64)
+NEVERD_KERNEL_DEBUG_LENGTH("w", Wide, 16)

@@ -181,9 +181,16 @@ void recoverStructReturnFromBody(const BinaryImage &Img,
   for (uint64_t R : TRI.FPReturnRegs)
     Cands.push_back({R, true});
   if (Img.Arch == Arch::AArch64 && Cands.size() >= 2) {
+    std::map<va_t, const LowFunc *> LowByEntry;
+    for (const auto &LF : Result.LowFuncs)
+      LowByEntry.emplace(LF.Entry, &LF);
+
     for (auto &MF : Result.MedFuncs) {
       if (!MF.MultiReturn.empty())
         continue;
+      const LowFunc *LF = nullptr;
+      if (auto It = LowByEntry.find(MF.Entry); It != LowByEntry.end())
+        LF = It->second;
 
       // A single 128-bit vector returned by value in V0 (a NEON `int32x4` /
       // `float __attribute__((vector_size(16)))`): the callee assembles the
@@ -286,6 +293,13 @@ void recoverStructReturnFromBody(const BinaryImage &Img,
 
       std::vector<MedReturnReg> Fields;
       for (const auto &Blk : MF.Blocks) {
+        const LowBlock *LowBlk = nullptr;
+        if (LF)
+          for (const auto &B : LF->Blocks)
+            if (B.Id == Blk.Id && B.StartAddr == Blk.StartAddr) {
+              LowBlk = &B;
+              break;
+            }
         int RetIdx = -1;
         for (size_t I = 0; I < Blk.Ops.size(); ++I)
           if (Blk.Ops[I].Opcode == NdOp::RETURN) {
@@ -338,6 +352,35 @@ void recoverStructReturnFromBody(const BinaryImage &Img,
                 Consumed = true;
                 break;
               }
+          }
+          // MedIR eliminates a compare whose flags are dead.  The machine
+          // instruction still read the register after its last write, so it
+          // must count for the body-only return-shape heuristic.  Read the
+          // pre-DCE LowIR for distinct later instructions; flag micro-ops at
+          // the producing instruction's own address are not consumers.
+          if (!Consumed && LowBlk) {
+            const va_t WriteAddr = Blk.Ops[WIdx].Addr;
+            const va_t ReturnAddr = Blk.Ops[RetIdx].Addr;
+            // AArch64's Q-register normalization may write 16 bytes for an
+            // S/D field; only the recovered field's low bytes are relevant.
+            const uint16_t FieldSize =
+                ElemSz ? ElemSz
+                       : std::min<uint16_t>(Blk.Ops[WIdx].Output.Size, 8);
+            const uint64_t RegEnd = C.RegOff + FieldSize;
+            for (const LowOp &O : LowBlk->Ops) {
+              if (O.Addr <= WriteAddr || O.Addr >= ReturnAddr)
+                continue;
+              for (uint8_t K = 0; K < O.NumInputs; ++K) {
+                const NdVar &In = O.Inputs[K];
+                if (In.isReg() && In.Offset < RegEnd &&
+                    C.RegOff < In.Offset + In.Size) {
+                  Consumed = true;
+                  break;
+                }
+              }
+              if (Consumed)
+                break;
+            }
           }
           if (Consumed)
             continue;

@@ -30,6 +30,51 @@ linker(`ld.lld`, `lld-link`)가 필요합니다. CMake는 많은 재배치 가�
 복제, 빌드 프로필, macOS 사전 빌드 LLVM은
 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
 
+## 드라이버 에뮬레이션 검사
+
+`NEVERD_ENABLE_DRIVER_EMULATION=ON`과 `BUILD_TESTING=ON`을 함께 활성화하면 전용 실행 스위트와 공유 C API/CLI 검사를 빌드할 수 있습니다.
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+fixture는 게스트 초기화, 성공/실패 반환, 미지원 동작, 메모리 오류, 엄격한 시나리오 파싱, 제한된 실행을 검증합니다. 또한 create, 전송, cleanup, close, unload를 거치며 동기 buffered/direct I/O, READ/WRITE, 독립적인 파일 수명, MDL 권한, 동적 export 해석, 게스트 가변 인수와 구조화된 CPU 오류를 검증합니다. JSON과 프로세스 종료 코드를 확인하려면 [`emulate-driver` CLI](driver-emulation.md)를 사용하세요. 프로덕션 빌드는 `BUILD_TESTING=OFF`에서도 이 기능을 활성화할 수 있으며, `libneverd`가 테스트 전용 Unicorn 구성에 의존해서는 안 됩니다.
+
+추가 테스트는 드라이버 소유 비페이지 풀 MDL, 설명자와 버퍼의 독립적인 수명, 레지스트리 조회 레이아웃과 짧은 버퍼, 핸들 권한, 삭제와 누수, 출력 없는 IOCTL의 전체 64비트 `information_hex`를 검증합니다. 실제 샘플 검증에는 Zero의 동기 직접 읽기·쓰기와 통계 조회도 포함됩니다.
+
+백엔드 테스트는 전체 CPU 컨텍스트(레지스터, 플래그, SIMD, FPU, CR8), 공유 메모리와 외부/장애 컨텍스트 거부를 검증합니다. 컴파일된 `driver_dispatcher.c`는 실제 DPC·작업 항목 콜백, 타이머 경계, 알림/동기화 이벤트와 타이머, 사유 `Executive`의 비경고 `KernelMode` 대기, 시간 초과/지연, 여러 차단 스택, 설정 직후 재설정해도 유지되는 깨우기, 콜백 인수와 잘못된 IRQL/수명을 검증합니다. 작업 항목의 보류/완료, 큐, 정체와 공유 예산 검증도 유지합니다. 이는 문서화된 부분집합의 증거이며 완전한 Windows 비동기 지원은 아닙니다.
+
+`driver_context_limits.c`: API IRQL 상한은 `KernelAPIIRQL.def`에 정의되며 인수별 제한은 담당 모델이 검사합니다. DPC는 레지스트리 API나 페이징 풀 할당·해제·접근을 사용할 수 없습니다. Unicode `DbgPrint` 변환은 `PASSIVE_LEVEL`이 필요하며 지원되는 ANSI 출력과 비페이징 작업은 `DISPATCH_LEVEL`에서 사용할 수 있습니다. 콜백 스택에는 경계가 있어 이탈한 스택 포인터가 다른 차단 작업자의 스택을 침범할 수 없습니다. 장치 확장의 활성 타이머는 조기 장치 회수를 막습니다. 일반 IRQL 전환을 제공하는 기능은 아닙니다.
+
+`KernelDeviceStackTests.cpp`는 소유/연결 관계의 독립성, 최상단 선택, 실패 원자성, 스택 용량, 불투명 필드, 핸들 수, 분리·삭제를 넘는 작업 항목/요청 유지, 파일과 디스패치 대상의 차이를 검사합니다. 원본 `driver_wdm_stack.c`는 실제 WDK 헤더와 인라인 Copy/Skip/SetCompletion을 사용하며 일반/활성 CFG 이미지는 선택적 `NEVERD_WDM_STACK_FIXTURE`/`NEVERD_WDM_STACK_CFG_FIXTURE`로 지정합니다. `DriverWDMStackTests.cpp`는 재배치, 실제 하위 상태, 완료 순서/조건, 지연 pending 전달, 작업자/DPC, 대기, `STATUS_MORE_PROCESSING_REQUIRED`, 직접 MDL 유지, 중첩 완료, 잘못된 커서/제어를 검증합니다. `DriverScenarioPublicTests.cpp`는 구성된 CFG 이미지를 포함해 C API/CLI 전달과 C API 유지/중첩 완료를 검사합니다. 산출물이 없으면 명시적으로 건너뛰며 Linux 근거는 동일 드라이버 스택 범위만 입증합니다. PDO/PnP/전원 지원을 뜻하지 않습니다. `KernelIRPStackTests.cpp`는 개수 기반 커서, 전체 인라인 Copy 범위, 소비된 위치 지우기, 상태/pending 전달, MPR 및 중첩 완료, continuation 소유자, 보존 경로를 검사합니다. 실제 READ/WRITE와 파일 수명 주기도 인라인 Copy로 검증합니다.
+
+`DriverPnpScenarioTests.cpp`는 JSON/네이티브 검증 일치, 필수 초기 사실, ID/개수 제한, 필드 조합, 최종 버스 상태, nullable 관측 보고서를 검증합니다. `KernelPnpDeviceTests.cpp`, `KernelPnpRequestTests.cpp`, `KernelPnpCompletionTests.cpp`는 제공자 소유권, AddDevice 성공/실패/누수, 초기 IRP, 파일 허용, 상태 롤백, 지연 완료, MPR/중첩/대기 continuation, 실패 원자성을 검증합니다. 원본 실제 WDK `driver_wdm_pnp.c`는 선택적 `NEVERD_WDM_PNP_FIXTURE`/`NEVERD_WDM_PNP_CFG_FIXTURE`를 사용합니다. `DriverWDMPnpTests.cpp`는 일반/활성 CFG 재배치 이미지에서 AddDevice, 파일 I/O, 순서 있는 제거, 지연 시작/제거, 시작/query 실패, 누수 유무에 따른 AddDevice 실패를 실행합니다. 산출물 누락은 명시적으로 건너뜁니다. 실행 근거는 Linux에 한정되며 문서화한 리소스 없는 PnP 부분집합만 입증합니다. `DriverScenarioPublicTests.cpp`는 일반/활성 CFG 이미지의 7개 요청 지연 PnP 보고서를 C API와 CLI로도 검증합니다.
+
+V9 schema 테스트는 여덟 부 기능 이름의 왕복과 공유 최종 상태 검증을 확인하고 QueryStop 0x119를 이미지 로딩 전에 거부합니다. 확장 모델/실제 픽스처는 query-stop 롤백, cancel-stop, 중지/재시작, 갑작스러운 제거, 정확한 성공 상태, 중지/제거 대기 소프트웨어 I/O, 제거 후 게스트 거부, 장치 식별자와 혼합 AddDevice 결과를 검증합니다. `DriverScenarioPublicTests.cpp`는 일반/활성 CFG 픽스처에서 16개 요청을 C API 및 CLI로 실행해 소프트웨어 IOCTL 성공 바이트, 제거 후 게스트 실패, 최종 cleanup/close/remove를 보존합니다. 공개 실행은 순차적이므로 현재 생산자가 없는 보류 IRP를 나중 start/cleanup 요청으로 해제할 수 없습니다. Remove 종료 조건은 프로필 경계이며 일반 Windows I/O 허용 정책이 아닙니다. 근거는 Linux에 한정됩니다.
+
+`KernelRemoveLocksTests.cpp`는 독립 소유권, NULL/중복 Tag, retail/DBG 크기, 즉시/지연 drain, 실패한 획득의 의무, 원자성, 용량 및 퇴역을 검증합니다. `KernelRemoveLockBridgeTests.cpp`는 연결 전 초기화, 확장부 범위, 불투명 영역, IRQL 및 위험한 Delete/Detach의 변경 전 거부를 검사합니다. 실제 `driver_wdm_remove_lock.c`의 retail/DBG와 일반/active-CFG4종은 `NEVERD_WDM_REMOVE_LOCK_FIXTURE`, `NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE`, `NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE`, `NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE`로 지정합니다. `DriverWDMRemoveLockTests.cpp`는 패킷 퇴역 후 release, drain 이후 버스 완료, 콜백 반환 전 준비, 워커 대기 및 깨끗한 AddDevice 실패를 확인합니다. C API/CLI는 기존 PnP 스키마로 수신/완료/최종 제거를 구분합니다. 산출물 부재는 명시적으로 건너뛰며 Linux 증거는 완전한 Driver Verifier나 일반 동시 drain을 의미하지 않습니다.
+
+`DriverPowerScenarioTests.cpp`는 필수 전원 사실, JSON/네이티브 일치, 불투명32비트 context, FIFO 제한 및 독립 자식 보고를 검증합니다. `KernelPowerRequestTests.cpp`와 `KernelPowerCompletionTests.cpp`는 패킷 배치, 경로 플래그, 수명과 알림 상태 구분, FIFO 매칭, 최종 콜백 소유권, MPR, 대기 및 해제 경계를 검사합니다. 정품 WDK의 자체 `driver_wdm_power.c`는 선택적 `NEVERD_WDM_POWER_FIXTURE`/`NEVERD_WDM_POWER_CFG_FIXTURE`를 사용합니다. `DriverWDMPowerTests.cpp`는 일반/active-CFG 재배치, 직접/중첩 Query/Set, 독립 지연 완료, S0가 D0보다 먼저 완료되는 순서, 대기를 넘는5인수 스냅샷, 워커 출처 자식, null 콜백, query 거부, PDO별 초기값/FIFO 및 누락 사실 실패를 확인합니다. `DriverScenarioPublicTests.cpp`는 잘못된 입력 사전 검사와 C API/CLI의6시나리오/3자식 절전·복귀를 추가합니다. 산출물이 없으면 명시적으로 건너뛰며 Linux 실행 증거는 문서화된 페이지 가능·리소스 없는 전원 부분집합에 한정됩니다.
+
+`DriverResourceScenarioTests.cpp`는 JSON／네이티브 명시 사실, 정수 폭, 개수, 물리／레지스터 중첩, 정렬, ID, 빈 뱅크와 설정 직렬화를 검사합니다. `KernelMMIOTests.cpp`, `KernelMMIOFailureTests.cpp`, `KernelResourceBridgeTests.cpp`, `UnicornMMIOTests.cpp`는 뱅크／매핑 소유권, 별칭, 세대, packed 목록 수명, 제공자 시점, 재시작 값 보존, 갑작스러운 제거／전원 접근성, 정확한 CPU／API 트랜잭션과 실패 원자성을 검증합니다. 자체 정품 WDK `driver_wdm_resources.c`는 `NEVERD_WDM_RESOURCE_FIXTURE`／`NEVERD_WDM_RESOURCE_CFG_FIXTURE`를 사용합니다. `DriverWDMResourceTests.cpp`는 실제 스칼라／REP 접근자, 일반／active-CFG 재배치, 하위 구간 별칭, 페이지 끝 매핑, STOP／재시작과 잘못된 접근을 실행합니다. C API／CLI는 이미지 로드 전에 잘못된 사실을 거부하고 동일한14요청 재시작 시나리오에서 유지된 IOCTL 출력과 정확한 map／unmap 횟수를 확인합니다. 공통 [driver-register-bank-scenario.json](../examples/driver-register-bank-scenario.json)에는 이 fixture의 레지스터／IOCTL 프로토콜이 필요합니다. 산출물 누락은 명시적으로 건너뛰며 증거는 Linux에 한정됩니다. 호스트 물리 메모리나 일반 장치 백엔드는 실행하지 않습니다.
+
+`DriverDMAScenarioTests.cpp`는 명시적 기능, 논리 도메인, 바이트／개수／시간 제한, 엄격한 이벤트 방향, 설정／관측 분리를 검증합니다. `KernelPhysicalMemoryTests.cpp`와 `BackendBackingTests.cpp`는 공유 페이지 할당 경계, 고정 참조, CPU 권한 불변, MMIO／재진입 배제, 전체 범위 검증 실패 원자성을 확인하며 `KernelRequestMDLTests.cpp`는 구성된 설명자 별칭이 같은 물리 식별자를 사용하는지 검사합니다. `KernelDMATests.cpp`, `KernelDMABridgeTests.cpp`, `SchedulerDMATests.cpp`는 실제 RAM 바이트, 어댑터 연결 테이블 호출, 인라인／대기 FIFO 소유권, 별개인 콜백／매핑 수명, 페이지 조각, 잘못된 방향, 해제 사전 검증, 독립 PDO 도메인, 세대／전원 실패를 실행합니다. 직접 작성한 실제 WDK fixture `driver_wdm_dma.c`는 `NEVERD_WDM_DMA_FIXTURE`／`NEVERD_WDM_DMA_CFG_FIXTURE`를 사용합니다. `DriverWDMDMATests.cpp`와 C API／CLI는 실제 어댑터 포인터, 공통／SG 저장소, 별도로 설정한 DMA／인터럽트 이벤트를 실행합니다. 공유 [driver-dma-scenario.json](../examples/driver-dma-scenario.json)은 이 fixture 프로토콜이 필요합니다. 산출물이 없으면 명시적으로 건너뜁니다. 실행 증거는 Linux에 한정되며 실제 호스트 DMA, PCI, 일반 장치 엔진을 보장하지 않습니다. `pluginsdk/python/tests/test_driver_dma_integration.py`는 `NEVERD_TEST_LIBNEVERD`, `NEVERD_TEST_WDM_DMA_FIXTURE`, `NEVERD_TEST_WDM_DMA_CFG_FIXTURE`로 기존 소유 JSON 바인딩을 실행하여 바이트, 콜백 순서, 보고된 실패를 검증합니다.
+
+`KernelSEHTests.cpp`는 순수 스택 해제 계획, 범위 순서, 비휘발성 GPR 복원, 제한된 스택 및 명시적 미지원 메타데이터를 검사합니다. `KernelExceptionTests.cpp`는 정확한 API 인수 수, 하위 32비트 상태, 형식화된 예외, IRQL 상한과 변하지 않는 모델／CPU 상태를 확인합니다. 실제 WDK `/GS-` `driver_wdm_seh.c`는 선택적 `NEVERD_WDM_SEH_FIXTURE`／`NEVERD_WDM_SEH_CFG_FIXTURE`를 사용합니다. `DriverWDMSEHTests.cpp`는 일반／활성 CFG／재배치 이미지에서 직접 또는 헬퍼를 통한 예외, 중첩 처리기, 재발생, 처리되지 않은 예외 및 필터／finally／CPU 오류의 명시적 거부를 실행합니다. C API／CLI는 [driver-seh-scenario.json](../examples/driver-seh-scenario.json)을 실행해 null API 결과와 실제 게스트 처리기 메시지를 검증합니다. `pluginsdk/python/tests/test_driver_seh_integration.py`는 `NEVERD_TEST_LIBNEVERD`, `NEVERD_TEST_WDM_SEH_FIXTURE`, `NEVERD_TEST_WDM_SEH_CFG_FIXTURE`를 사용합니다. 외부 이미지가 없으면 명시적으로 건너뛰며 증거는 Linux에 한정되고 사용자 버퍼나 일반 SEH 지원을 입증하지 않습니다.
+
+`KernelDMAChannelTests.cpp`, `KernelDMAChannelBridgeTests.cpp`, 공유 `SchedulerDMATests.cpp`는 혼합 할당 FIFO, 콜백 반환 폭, 순수 수용／해제 검증, 레지스터 재사용, 연속 페이지 조각, 작업 전체 플러시, CurrentIrp 스냅샷과 패킷／MDL／장치 수명을 확인합니다. 직접 작성하고 실제 WDK로 빌드한 `driver_wdm_dma_channel.c`는 선택적 `NEVERD_WDM_DMA_CHANNEL_FIXTURE`／`NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE`를 사용합니다. `DriverWDMDMAChannelTests.cpp`는 일반／활성 CFG／재배치 드라이버로 실제 MapTransfer 및 FlushAdapterBuffers 호출, 공통／SG／채널 공유 할당량, 명시적 장치 트랜잭션, IRQ/DPC 완료, 순차 작업, 두 PDO와 실패 사례를 실행합니다. C API／CLI는 두 매핑 조각 전체를 가로지르는 단일 트랜잭션을 포함하여 7개 요청의 [driver-dma-channel-scenario.json](../examples/driver-dma-channel-scenario.json)을 실행합니다. `pluginsdk/python/tests/test_driver_dma_channel_integration.py`는 `NEVERD_TEST_LIBNEVERD`, `NEVERD_TEST_WDM_DMA_CHANNEL_FIXTURE`, `NEVERD_TEST_WDM_DMA_CHANNEL_CFG_FIXTURE`로 같은 공개 JSON 인터페이스를 사용합니다. 산출물이 없으면 명시적으로 건너뛰며 Linux 증거는 시스템 DMA 컨트롤러나 임의 HAL 매핑／플러시 패턴의 지원을 입증하지 않습니다.
+
+`DriverInterruptScenarioTests.cpp`는 명시적 raw／변환 설명자, 혼합 및 인터럽트 전용 할당, 엄격한 이벤트 필드／개수, 원본 식별자와 독립 BOOLEAN 관측을 검증합니다. `KernelInterruptsTests.cpp`, `KernelInterruptBridgeTests.cpp`, `SchedulerInterruptTests.cpp`는 독점 튜플 일치, 불투명 토큰, 세대／연결 캡처, 이벤트 수명, 선택한 Ex 필드만 읽기, 같은 잠금과 IRQL 복원, 콜백 소유권, 같은 시각 ISR 우선순위와 변경 전 용량 실패를 검증합니다. `KernelFrameworkRequestTests.cpp`는 호출을 공개하거나 참조를 소비하지 않는 순수 취소 사전 검증 및 일괄 토큰 용량을 확인합니다. 실제 WDK로 빌드하는 자체 fixture `driver_wdm_interrupts.c`는 `NEVERD_WDM_INTERRUPT_FIXTURE` / `NEVERD_WDM_INTERRUPT_CFG_FIXTURE`를 사용합니다. `DriverWDMInterruptTests.cpp`는 일반／active-CFG 재배치, 기존 11인수 ABI, Ex 버전 1／2／4, 실제 ISR→DPC 완료, AL 하위의 FALSE, 동기화／수동 잠금, 독립 PDO, 재시작 세대와 잘못된 하드웨어 사실을 실행합니다. C API／CLI 테스트는 이미지 로드 전에 잘못된 선언을 거부하고 7개 요청의 [driver-interrupt-scenario.json](../examples/driver-interrupt-scenario.json)을 실행해 대기 IOCTL 바이트와 별도 전달 관측을 확인합니다. 이미지 누락은 명시적으로 건너뜁니다. 실행 증거는 Linux에 한정되며 공유／레벨／MSI 인터럽트나 명령어 단위 선점을 입증하지 않습니다.
+
+`DriverGuardTests.cpp`와 네 가지 원본 `driver_guard.c` 변형은 활성/비활성 CFG, 기준 주소 재배치, check/dispatch ABI와 잘못된 대상을 검증합니다. `KernelFrameworkTests.cpp`, `KernelFrameworkControlTests.cpp`, `KernelFrameworkQueueTests.cpp`, `KernelFrameworkRequestTests.cpp`는 바인딩, 실패 시 롤백되는 장치 생성, 큐 라우팅, 논리적 버퍼 길이와 정리 순서와 IRP/컨텍스트 수명을 검증합니다. 원본 `driver_kmdf_lifecycle.c`와 `driver_kmdf_control.c`는 실제 WDK 1.33 헤더로 선택적으로 컴파일하고 진짜 `FxDriverEntry` 라이브러리를 통해 링크합니다. CMake 캐시 경로에서 수명 주기 이미지에는 `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE`를, 일반 및 활성 CFG 제어 장치 이미지에는 `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE`를 지정합니다. 외부 산출물이 없으면 명시적으로 건너뜁니다. `DriverKMDFLifecycleTests.cpp`, `DriverKMDFControlTests.cpp`와 `DriverScenarioPublicTests.cpp`의 C API/CLI 사례는 실제 콜백, 버퍼/직접 I/O, 작업 항목을 통한 대기 요청 완료, 실패 상태, 언로드와 재배치된 CFG 실행을 검증합니다. 실행 증거는 Linux에 한정되며 완전한 KMDF나 PnP/전원 관리 지원을 입증하지 않습니다.
+
+이전 취소 API 테스트는 취소, 중첩 정리와 최종 파괴까지 API 연속 실행을 유지합니다. 이미 취소된 요청에서 Ex는 계속 콜백 없이 취소 상태를 반환합니다. `KernelFrameworkRequestAccessorTests.cpp`와 `KernelRequestMDLTests.cpp`는 공유 64비트 Information, 완료 시 길이 검증, 원래 큐/IRP 식별, NULL WDF 파일 핸들, 유지된 핸들의 getter 결과, 버퍼 MDL 캐시와 첫 방향 ByteCount, 직접 설명자 식별과 지연 매핑, 완료 시 무효화 및 WDM 완료 우회 거부를 검증합니다. 실제 제어 장치 fixture의 L, M, D, C 모드는 일반/활성 CFG 이미지에서 이전 API를 통한 취소, 버퍼 MDL/정보, 직접 READ/WRITE MDL과 완료 후 접근을 실행합니다.
+
+취소 테스트는 전송 요청에만 허용되는 가상 기한과 보고서 필드, 완료 우선 및 이미 취소된 경로, 표시/해제 결과, 큐 등록과 전달 완료 상태의 완료 권한, 콜백 대기와 내부 참조 수명을 검증합니다. 스케줄러 테스트는 DPC/취소/작업 항목 순서, 용량, 식별자 분리와 중단/복원을 독립적으로 검증합니다. WDM 취소는 여전히 명시적 모델 오류입니다.
+
+
 ## 테스트 배치
 
 `add_neverd_unittest`는 GoogleTest 실행 파일 하나를 만들고 발견한 각 사례에 실행
@@ -46,7 +91,7 @@ target 이름과 같은 CTest label을 지정합니다.
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFProgramImageTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFVerifierTests`, `NeverDSBFISAConformanceTests`, `NeverDSBFAgaveConformanceTests`, `NeverDSBFSemanticTests`, `NeverDSBFEmitterTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`, `NeverDSBFMalformedCorpusTests`, `NeverDSBFUpstreamConformanceTests`, `NeverDSBFExternalOracleTests`, `NeverDSBFSolanaModelTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 verifier/loader 동작, 고정된 ELF 아티팩트 23개, 독립 official oracle, 모든 opcode 가용성, 적대적 입력, CFG/복원, 실행된 LLVM/C/Rust 차분 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 네 ISA×세 object 포맷 재작성/난독화 동등성 |
 | `unittests/semantic`의 집중 변환 파일 | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | 큰 의미론 바이너리에서 분리한 빠른 재링크 probe |
-| `unittests/corpus`(submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | pin 된 실제 바이너리 317개에서 읽어내는 예외 및 런타임 metadata. 각 바이너리는 manifest에 복원이 넘어야 할 하한을 선언한다 |
+| `unittests/corpus`(submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests`, `NeverDAdaDEHCorpusTests` | pin 된 실제 바이너리 545개에서 읽어내는 예외 및 런타임 metadata. 각 바이너리는 manifest에 복원이 넘어야 할 하한을 선언한다 |
 
 등록의 기준은
 [`unittests/CMakeLists.txt`](../../unittests/CMakeLists.txt),
@@ -78,11 +123,11 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 
 `check-neverd-corpus`는 모든 라인을, `check-neverd-windows-eh-corpus`,
 `check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`,
-`check-neverd-cxx-itanium-eh-corpus`, `check-neverd-objc-eh-corpus`는 각각 한 라인을
-실행합니다. CI의 세 호스트 모두 이 플래그로 configure 하고 다섯 라인을 전부
+`check-neverd-cxx-itanium-eh-corpus`, `check-neverd-objc-eh-corpus`, `check-neverd-ada-d-eh-corpus`는 각각 한 라인을
+실행합니다. CI의 세 호스트 모두 이 플래그로 configure 하고 여섯 라인을 전부
 실행합니다. 바이트는 어디서나 같지만 그것을 읽는 쪽은 같지 않으며, 한 호스트에서의
 corpus 실행은 나머지 두 호스트에 대해 아무것도 증명하지 않습니다.
-`scripts/audit_ci_test_inventory.py`는 다섯 label 중 하나라도 빠진 inventory를
+`scripts/audit_ci_test_inventory.py`는 여섯 label 중 하나라도 빠진 inventory를
 거부합니다. corpus를 조용히 읽지 않게 된 빌드는 어떤 테스트도 잡을 수 없는
 회귀이기 때문입니다. 사라진 것이 바로 그 테스트입니다.
 

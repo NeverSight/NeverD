@@ -342,6 +342,11 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // Phase 2: LowIR -> MedIR (parallel).
   Trace.start(NativePipelineTrace::Stage::MedIR);
   buildMedIR(Img, Opts, Result);
+  if (!Result.Error.empty()) {
+    Result.Success = false;
+    Trace.finish(false);
+    return Result;
+  }
   Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
   propagateInternalNoReturn(Result.MedFuncs, Img.Arch);
 
@@ -377,7 +382,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // Phase 3: MedIR -> HighIR (parallel).
   Trace.start(NativePipelineTrace::Stage::HighIR);
   if (!pipeline_detail::runHighIRStage(
-          Result, [&] { buildHighIR(Img, Opts, Result); })) {
+          Result, [&] { buildHighIR(Img, Opts, Result, Dbg); })) {
     Trace.finish(false);
     return Result;
   }

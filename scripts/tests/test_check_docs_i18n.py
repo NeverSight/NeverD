@@ -75,8 +75,416 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 Path("docs/sbf.md"),
                 Path("docs/android.md"),
                 Path("docs/ios.md"),
+                Path("docs/driver-emulation.md"),
             },
         )
+
+    def test_driver_guide_rejects_changed_executable_example(self) -> None:
+        path = Path("docs/zh-CN/driver-emulation.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        errors: list[str] = []
+        changed = original.replace('"output_size": 4', '"output_size": 8')
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("driver examples differ" in error for error in errors), errors)
+
+    def test_driver_guide_tracks_supported_export_inventory(self) -> None:
+        path = Path("docs/de/driver-emulation.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        for symbol in (
+            "IoGetCurrentIrpStackLocation",
+            "ZwQueryValueKey",
+            "IoAllocateWorkItem",
+            "IoQueueWorkItem",
+            "IoFreeWorkItem",
+            "IoMarkIrpPending",
+            "KeInitializeDpc",
+            "KeSetTimerEx",
+            "KeSetEvent",
+            "KeWaitForSingleObject",
+            "KeDelayExecutionThread",
+            "WdfDriverCreate",
+            "WdfObjectAllocateContext",
+            "WdfRequestMarkCancelable",
+            "WdfRequestMarkCancelableEx",
+            "WdfDeviceInitSetIoInCallerContextCallback", "WdfDeviceEnqueueRequest",
+            "WdfRequestRetrieveUnsafeUserInputBuffer",
+            "WdfRequestRetrieveUnsafeUserOutputBuffer",
+            "WdfRequestProbeAndLockUserBufferForRead",
+            "WdfRequestProbeAndLockUserBufferForWrite", "WdfMemoryGetBuffer",
+            "WdfRequestRetrieveInputWdmMdl",
+            "WdfRequestRetrieveOutputWdmMdl",
+            "WdfRequestGetInformation",
+            "WdfRequestSetInformation",
+            "WdfRequestGetFileObject",
+            "WdfRequestGetIoQueue",
+            "WdfRequestWdmGetIrp",
+            "WdfRequestUnmarkCancelable",
+            "WdfRequestIsCanceled",
+            "WdfVersionBind",
+            "WdfVersionUnbind",
+        ):
+            with self.subTest(symbol=symbol):
+                errors: list[str] = []
+                changed = original.replace(f"`{symbol}`", "`UnknownAPI`")
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any(symbol in error for error in errors), errors)
+
+    def test_driver_guide_tracks_new_dispatcher_exports_from_source(self) -> None:
+        path = Path("lib/emulation/windows/KernelDispatcherAPIs.def")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original + "\nNEVERD_KERNEL_DISPATCHER_API(KeFutureDispatcherAPI, 1)\n"
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("KeFutureDispatcherAPI" in error for error in errors), errors)
+
+    def test_driver_guide_requires_concrete_dispatcher_limits(self) -> None:
+        path = Path("docs/ja/driver-emulation.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        for token in ("DISPATCH_LEVEL", "KernelMode", "Executive", "CPU0",
+                      "Increment=0", "Wait=FALSE"):
+            with self.subTest(token=token):
+                errors: list[str] = []
+                changed = original.replace(token, "RemovedContract")
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_guide_tracks_modeled_framework_inventories(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for inventory, macro in (
+            ("KernelFrameworkAPIs.def", "NEVERD_FRAMEWORK_API"),
+            ("KernelFrameworkLoaderAPIs.def", "NEVERD_FRAMEWORK_LOADER_API"),
+        ):
+            with self.subTest(inventory=inventory):
+                path = Path("lib/emulation/windows") / inventory
+                changed = view.read_text(path) + f"\n{macro}(WdfFutureModel, 1)\n"
+                errors: list[str] = []
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any("WdfFutureModel" in error for error in errors), errors)
+
+        path = Path("lib/emulation/windows/KernelFrameworkFunctions.def")
+        changed = view.read_text(path) + "\nNEVERD_FRAMEWORK_FUNCTION(WdfUnmodeledIdentity, 459)\n"
+        errors = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertFalse(any("WdfUnmodeledIdentity" in error for error in errors), errors)
+
+    def test_driver_guide_requires_framework_and_guard_limits(self) -> None:
+        path = Path("docs/zh-TW/driver-emulation.md")
+        view = i18n.RepositoryView(use_index=False)
+        original = view.read_text(path)
+        for token in ("KMDF 1.33", "CFG", "XFG", "NEVERD_KMDF_FIXTURE",
+                      "NEVERD_KMDF_CFG_FIXTURE", "NEVERD_KMDF_CONTROL_FIXTURE",
+                      "NEVERD_KMDF_CONTROL_CFG_FIXTURE", "WDF_IO_QUEUE_CONFIG", "WdfIoQueueGetState",
+                      "WdfIoQueueStop", "WdfIoQueueStopSynchronously", "WdfIoQueueStart",
+                      "WdfIoQueueDrain", "WdfIoQueueDrainSynchronously",
+                      "WdfIoQueuePurge", "WdfIoQueuePurgeSynchronously",
+                      "WdfIoQueueStopAndPurge",
+                      "WdfIoQueueStopAndPurgeSynchronously",
+                      "NEVERD_WDM_STACK_FIXTURE", "NEVERD_WDM_STACK_CFG_FIXTURE",
+                      "IoCopyCurrentIrpStackLocationToNext",
+                      "IoSkipCurrentIrpStackLocation", "IoSetCompletionRoutine",
+                      "STATUS_MORE_PROCESSING_REQUIRED", "FILE_OBJECT.DeviceObject",
+                      "ReferenceCount",
+                      "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
+                      "cancel_after_100ns", "cancel_requested_at_100ns",
+                      "STATUS_CANCELLED", i18n.driver_report_profile(view),
+                      "WdfIoQueuePnpHeld", "WdfUseDefault",
+                      "EvtIoStop", "EvtIoResume", "WdfRequestStopAcknowledge",
+                      "CM_PARTIAL_RESOURCE_DESCRIPTOR", "MmMapIoSpace",
+                      "EvtIoCanceledOnQueue",
+                      "WdfIoQueueReadyNotify",
+                      "WdfIoQueueFindRequest", "WdfIoQueueRetrieveFoundRequest",
+                      "defer_callback_drain",
+                      "asynchronous_file",
+                      "IoSetCancelRoutine", "IoAcquireCancelSpinLock",
+                      "IoReleaseCancelSpinLock", "IoCancelIrp",
+                      "user_input_access", "user_output_access",
+                      "user_unmap_after_dispatch", "requestor_process_id",
+                      "requestor_exit_after_dispatch",
+                      "IoGetRequestorProcessId", "IoGetRequestorProcess",
+                      "IoGetCurrentProcess", "PsGetProcessId",
+                      "PsGetCurrentProcessId", "KeStackAttachProcess",
+                      "KeUnstackDetachProcess", "KAPC_STATE",
+                      "KeInitializeSpinLock", "KeAcquireSpinLockRaiseToDpc",
+                      "KeReleaseSpinLock", "KeAcquireSpinLockAtDpcLevel",
+                      "KeReleaseSpinLockFromDpcLevel",
+                      "KeTryToAcquireSpinLockAtDpcLevel",
+                      "KeInitializeSemaphore", "KeReleaseSemaphore",
+                      "KeReadStateSemaphore", "STATUS_SEMAPHORE_LIMIT_EXCEEDED",
+                      "KeInitializeMutex", "KeReleaseMutex", "KeReadStateMutex",
+                      "STATUS_MUTANT_NOT_OWNED",
+                      "PsCreateSystemThread", "PsTerminateSystemThread",
+                      "ObReferenceObjectByHandle", "ObfDereferenceObject",
+                      "KeEnterCriticalRegion", "KeLeaveCriticalRegion",
+                      "KeEnterGuardedRegion", "KeLeaveGuardedRegion",
+                      "KeAreApcsDisabled", "KeAreAllApcsDisabled",
+                      "KfRaiseIrql", "KeLowerIrql",
+                      "no_access", "configuration.user_page_access",
+                      "IRP.UserBuffer",
+                      "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
+                      "ByteCount"):
+            with self.subTest(token=token):
+                errors: list[str] = []
+                changed = original.replace(token, "RemovedContract")
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_guide_requires_localized_testing_entry(self) -> None:
+        path = Path("docs/fr/testing.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        errors: list[str] = []
+        changed = original.replace("NeverDDriverEmulationPublicTests", "MissingPublicSuite")
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("NeverDDriverEmulationPublicTests" in error for error in errors), errors)
+
+    def test_driver_resources_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("register_bank", "raw_start", "translated_start",
+                                      "DriverResources.h", "CM_RESOURCE_LIST",
+                                      "MmMapIoSpace", "MmMapIoSpaceEx", "MmUnmapIoSpace",
+                                      "driver-register-bank-scenario.json")),
+            ("architecture.md", ("DriverResources.def", "KernelMMIO",
+                                 "KernelModelResources", "UnicornBackend")),
+            ("testing.md", ("DriverResourceScenarioTests.cpp", "KernelMMIOTests.cpp",
+                            "KernelMMIOFailureTests.cpp",
+                            "KernelResourceBridgeTests.cpp", "UnicornMMIOTests.cpp",
+                            "DriverWDMResourceTests.cpp", "NEVERD_WDM_RESOURCE_FIXTURE",
+                            "NEVERD_WDM_RESOURCE_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedResourceContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_register_bank_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-register-bank-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"value": "0x12"', '"value": "0x13"')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("register-bank example differs" in error for error in errors), errors)
+
+    def test_driver_interrupt_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("DriverInterrupts.h", "interrupt_events",
+                                     "raw_vector", "translated_level", "claimed",
+                                     "undelivered_reason", "source_request_index")),
+            ("architecture.md", ("KernelResources", "KernelInterrupts",
+                                  "KernelModelInterruptEvents", "KernelModelInterrupts")),
+            ("testing.md", ("DriverInterruptScenarioTests.cpp", "KernelInterruptsTests.cpp",
+                             "KernelInterruptBridgeTests.cpp", "SchedulerInterruptTests.cpp",
+                             "DriverWDMInterruptTests.cpp", "NEVERD_WDM_INTERRUPT_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedInterruptContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_interrupt_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-interrupt-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"after_100ns": 7', '"after_100ns": 8')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("interrupt example differs" in error for error in errors), errors)
+
+    def test_driver_interrupt_example_rejects_malformed_json(self) -> None:
+        path = Path("docs/examples/driver-interrupt-scenario.json")
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
+        self.assertTrue(any("interrupt example differs" in error for error in errors), errors)
+
+    def test_driver_dma_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("DriverDMA.h", "dma_events", "dma_transfers",
+                                     "logical_address", "map_registers", "read_memory",
+                                     "write_memory", "DmaWritable", "IoGetDmaAdapter",
+                                     "GetScatterGatherList", "PutScatterGatherList")),
+            ("architecture.md", ("KernelPhysicalMemory", "KernelDMAEvents",
+                                  "KernelModelPhysicalMemory", "KernelModelDMATransfers")),
+            ("testing.md", ("DriverDMAScenarioTests.cpp", "KernelPhysicalMemoryTests.cpp",
+                             "BackendBackingTests.cpp", "KernelDMATests.cpp",
+                             "KernelDMABridgeTests.cpp", "SchedulerDMATests.cpp",
+                             "DriverWDMDMATests.cpp", "NEVERD_WDM_DMA_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedDmaContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_dma_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-dma-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"after_100ns": 5', '"after_100ns": 6')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("DMA example differs" in error for error in errors), errors)
+
+    def test_driver_dma_example_rejects_malformed_json(self) -> None:
+        path = Path("docs/examples/driver-dma-scenario.json")
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
+        self.assertTrue(any("DMA example differs" in error for error in errors), errors)
+
+    def test_driver_dma_channel_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("AllocateAdapterChannel", "MapTransfer",
+                                     "FlushAdapterBuffers", "FreeMapRegisters",
+                                     "KeFlushIoBuffers", "CurrentIrp",
+                                     "driver-dma-channel-scenario.json")),
+            ("architecture.md", ("KernelDMAChannels", "KernelModelDMAChannels",
+                                  "DMAAdapterControl")),
+            ("testing.md", ("KernelDMAChannelTests.cpp", "KernelDMAChannelBridgeTests.cpp",
+                             "DriverWDMDMAChannelTests.cpp", "NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE",
+                             "test_driver_dma_channel_integration.py")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedChannelContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_dma_channel_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-dma-channel-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"length": 32', '"length": 31')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("DMA channel example differs" in error for error in errors), errors)
+
+    def test_driver_dma_channel_example_rejects_malformed_json(self) -> None:
+        path = Path("docs/examples/driver-dma-channel-scenario.json")
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
+        self.assertTrue(any("DMA channel example differs" in error for error in errors), errors)
+
+    def test_driver_seh_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("ExRaiseStatus", "ExRaiseAccessViolation",
+                                     "ExRaiseDatatypeMisalignment", "APC_LEVEL",
+                                     "EXCEPTION_EXECUTE_HANDLER", "GetExceptionCode",
+                                     "ProbeForRead", "ProbeForWrite",
+                                     "driver-seh-scenario.json")),
+            ("architecture.md", ("KernelGuestException", "KernelSEH")),
+            ("testing.md", ("KernelSEHTests.cpp", "KernelExceptionTests.cpp",
+                             "DriverWDMSEHTests.cpp", "NEVERD_WDM_SEH_CFG_FIXTURE",
+                             "test_driver_seh_integration.py")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedSEHContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_seh_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-seh-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"unload": true', '"unload": false')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("SEH example differs" in error for error in errors), errors)
+
+    def test_driver_seh_example_rejects_malformed_json(self) -> None:
+        path = Path("docs/examples/driver-seh-scenario.json")
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
+        self.assertTrue(any("SEH example differs" in error for error in errors), errors)
+
+    def test_driver_remove_lock_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("IoInitializeRemoveLockEx", "IoAcquireRemoveLockEx",
+                                      "IoReleaseRemoveLockEx", "IoReleaseRemoveLockAndWaitEx",
+                                      "STATUS_DELETE_PENDING", "Driver Verifier")),
+            ("architecture.md", ("KernelRemoveLocks",)),
+            ("testing.md", ("KernelRemoveLocksTests.cpp", "KernelRemoveLockBridgeTests.cpp",
+                            "DriverWDMRemoveLockTests.cpp", "NEVERD_WDM_REMOVE_LOCK_FIXTURE",
+                            "NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE",
+                            "NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE",
+                            "NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedLockContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_power_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("initial_reported_device_power", "requested_device_power",
+                                      "power_type", "power_state", "power_action",
+                                      "system_context", "response_index", "origin",
+                                      "requested_device_object", "device_state_before",
+                                      "device_state_after", "system_state_before",
+                                      "system_state_after", "reported_device_power",
+                                      "DO_POWER_PAGABLE", "DO_POWER_INRUSH",
+                                      "driver-power-scenario.json")),
+            ("architecture.md", ("DriverPower.def", "DriverPowerOperation",
+                                 "KernelModelPowerRequests", "KernelModelPowerCompletion")),
+            ("testing.md", ("DriverPowerScenarioTests.cpp", "KernelPowerRequestTests.cpp",
+                            "KernelPowerCompletionTests.cpp", "DriverWDMPowerTests.cpp",
+                            "NEVERD_WDM_POWER_FIXTURE", "NEVERD_WDM_POWER_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedPowerContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_pnp_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("configuration.pnp_devices", "resource_free",
+                                      "initial_device_power", "initial_system_power",
+                                      "device_id", "bus_completion", "delay_100ns",
+                                      "query_remove", "cancel_remove", "add_device_status",
+                                      "query_stop", "cancel_stop", "surprise_removal",
+                                      "STATUS_RESOURCE_REQUIREMENTS_CHANGED", "0x119",
+                                      "provider_present", "bus_received_at_100ns",
+                                      "bus_completed_at_100ns", "add_device:<ID>")),
+            ("architecture.md", ("DriverPnp.h", "DeviceLifecycle.def",
+                                 "devicePnpFinalStatusError",
+                                 "KernelModelPnpDevices", "KernelModelPnpRequests",
+                                 "KernelModelPnpCompletion")),
+            ("testing.md", ("DriverPnpScenarioTests.cpp", "KernelPnpDeviceTests.cpp",
+                            "KernelPnpRequestTests.cpp", "KernelPnpCompletionTests.cpp",
+                            "DriverWDMPnpTests.cpp", "NEVERD_WDM_PNP_FIXTURE",
+                            "NEVERD_WDM_PNP_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
 
     def test_repository_documentation_matrix_is_valid(self) -> None:
         """Exercise the same working-tree validation that the CLI performs."""

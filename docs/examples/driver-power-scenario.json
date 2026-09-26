@@ -1,0 +1,113 @@
+{
+  "load_address": "0x190000000",
+  "unload": true,
+  "pnp_devices": [
+    {
+      "id": "power0",
+      "bus": "resource_free",
+      "initial_device_power": "D0",
+      "initial_system_power": "working",
+      "initial_reported_device_power": "D3",
+      "requested_device_power": [
+        {
+          "minor": "query",
+          "power_type": "device",
+          "power_state": "D3",
+          "power_action": "sleep",
+          "system_context": "0x14400",
+          "bus_completion": {
+            "status": 0,
+            "delay_100ns": 11
+          }
+        },
+        {
+          "minor": "set",
+          "power_type": "device",
+          "power_state": "D3",
+          "power_action": "sleep",
+          "system_context": "0x14400",
+          "bus_completion": {
+            "status": 0,
+            "delay_100ns": 11
+          }
+        },
+        {
+          "minor": "set",
+          "power_type": "device",
+          "power_state": "D0",
+          "power_action": "sleep",
+          "system_context": "0x41100",
+          "bus_completion": {
+            "status": 0,
+            "delay_100ns": 11
+          }
+        }
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "kind": "pnp",
+      "device_id": "power0",
+      "minor": "start",
+      "bus_completion": {
+        "status": 0
+      }
+    },
+    {
+      "kind": "power",
+      "device_id": "power0",
+      "minor": "query",
+      "power_type": "system",
+      "power_state": "sleeping3",
+      "power_action": "sleep",
+      "system_context": "0x14400",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 7
+      }
+    },
+    {
+      "kind": "power",
+      "device_id": "power0",
+      "minor": "set",
+      "power_type": "system",
+      "power_state": "sleeping3",
+      "power_action": "sleep",
+      "system_context": "0x14400",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 7
+      }
+    },
+    {
+      "kind": "power",
+      "device_id": "power0",
+      "minor": "set",
+      "power_type": "system",
+      "power_state": "working",
+      "power_action": "sleep",
+      "system_context": "0x41100",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 7
+      }
+    },
+    {
+      "kind": "pnp",
+      "device_id": "power0",
+      "minor": "query_remove",
+      "bus_completion": {
+        "status": 0
+      }
+    },
+    {
+      "kind": "pnp",
+      "device_id": "power0",
+      "minor": "remove",
+      "bus_completion": {
+        "status": 0
+      }
+    }
+  ]
+}

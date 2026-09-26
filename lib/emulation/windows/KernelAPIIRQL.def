@@ -1,0 +1,242 @@
+//===- KernelAPIIRQL.def - Kernel routine IRQL ceilings ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Outer caller-IRQL limits from Microsoft's WDK DDI contracts. Conditional
+/// limits remain with the routine or guest-memory implementation. Any means
+/// any valid Windows x64 IRQL, not any integer representable by KIRQL.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_KERNEL_IRQL_VALUE
+NEVERD_KERNEL_IRQL_VALUE(Passive, scheduler::PassiveLevel)
+NEVERD_KERNEL_IRQL_VALUE(APC, windows::APCLevel)
+NEVERD_KERNEL_IRQL_VALUE(Dispatch, scheduler::DispatchLevel)
+// WDK wdm.h _AMD64_: CLOCK_LEVEL is 13; device levels precede the clock.
+// https://learn.microsoft.com/windows-hardware/drivers/kernel/managing-hardware-priorities
+NEVERD_KERNEL_IRQL_VALUE(Device, 12)
+NEVERD_KERNEL_IRQL_VALUE(Any, dispatcher::HighLevel)
+#endif
+
+#ifdef NEVERD_KERNEL_IRQL_API
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exraisestatus
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exraiseaccessviolation
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exraisedatatypemisalignment
+NEVERD_KERNEL_IRQL_API(ExRaiseStatus, APC)
+NEVERD_KERNEL_IRQL_API(ExRaiseAccessViolation, Passive)
+NEVERD_KERNEL_IRQL_API(ExRaiseDatatypeMisalignment, Passive)
+NEVERD_KERNEL_IRQL_API(ProbeForRead, APC)
+NEVERD_KERNEL_IRQL_API(ProbeForWrite, APC)
+NEVERD_KERNEL_IRQL_API(ExGetPreviousMode, Any)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetrequestorprocessid
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid
+NEVERD_KERNEL_IRQL_API(IoGetRequestorProcessId, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoGetRequestorProcess, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoGetCurrentProcess, Any)
+NEVERD_KERNEL_IRQL_API(PsGetCurrentProcessId, Any)
+NEVERD_KERNEL_IRQL_API(PsGetProcessId, Any)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-pscreatesystemthread
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obdereferenceobject
+NEVERD_KERNEL_IRQL_API(PsCreateSystemThread, Passive)
+NEVERD_KERNEL_IRQL_API(PsTerminateSystemThread, Passive)
+NEVERD_KERNEL_IRQL_API(ObReferenceObjectByHandle, Passive)
+NEVERD_KERNEL_IRQL_API(ObfDereferenceObject, Dispatch)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess
+NEVERD_KERNEL_IRQL_API(KeStackAttachProcess, APC)
+NEVERD_KERNEL_IRQL_API(KeUnstackDetachProcess, APC)
+// x64 WDK KeRaiseIrql/KeRaiseIrqlToDpcLevel call KfRaiseIrql; their saved
+// return value is restored by KeLowerIrql. Direction and pairing are checked
+// by the model against the current execution, not by this outer ceiling.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keraiseirqltodpclevel
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kelowerirql
+NEVERD_KERNEL_IRQL_API(KfRaiseIrql, Any)
+NEVERD_KERNEL_IRQL_API(KeLowerIrql, Any)
+// https://learn.microsoft.com/windows-hardware/drivers/kernel/disabling-apcs
+NEVERD_KERNEL_IRQL_API(KeEnterCriticalRegion, APC)
+NEVERD_KERNEL_IRQL_API(KeLeaveCriticalRegion, APC)
+NEVERD_KERNEL_IRQL_API(KeEnterGuardedRegion, APC)
+NEVERD_KERNEL_IRQL_API(KeLeaveGuardedRegion, APC)
+NEVERD_KERNEL_IRQL_API(KeAreApcsDisabled, Dispatch)
+NEVERD_KERNEL_IRQL_API(KeAreAllApcsDisabled, Dispatch)
+#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                            \
+  NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelSpinLockAPIs.def"
+#undef NEVERD_KERNEL_SPINLOCK_API
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioconnectinterrupt
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesynchronizeexecution
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keacquireinterruptspinlock
+// Object-dependent synchronization DIRQL and release ownership remain in the
+// interrupt model; Any is only the outer x64 valid-IRQL ceiling.
+#define NEVERD_KERNEL_INTERRUPT_API(Name, Arity, IRQL) NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelInterruptAPIs.def"
+#undef NEVERD_KERNEL_INTERRUPT_API
+// These routines require PASSIVE_LEVEL, including case-sensitive comparison.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlcompareunicodestring
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlequalunicodestring
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemroutineaddress
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iocreatesymboliclink
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iodeletesymboliclink
+NEVERD_KERNEL_IRQL_API(RtlCompareUnicodeString, Passive)
+NEVERD_KERNEL_IRQL_API(RtlEqualUnicodeString, Passive)
+NEVERD_KERNEL_IRQL_API(MmGetSystemRoutineAddress, Passive)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospace
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospaceex
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunmapiospace
+NEVERD_KERNEL_IRQL_API(MmMapIoSpace, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmMapIoSpaceEx, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmUnmapIoSpace, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoCreateSymbolicLink, Passive)
+NEVERD_KERNEL_IRQL_API(IoDeleteSymbolicLink, Passive)
+
+// Every supported Zw registry operation, including closing a handle, requires
+// PASSIVE_LEVEL. Expand only the explicit registry inventory, not a Zw prefix.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopenkey
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatekey
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwsetvaluekey
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletevaluekey
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletekey
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-zwclose
+#define NEVERD_KERNEL_REGISTRY_API(Name, Arity)                                \
+  NEVERD_KERNEL_IRQL_API(Name, Passive)
+#include "KernelRegistryAPIs.def"
+#undef NEVERD_KERNEL_REGISTRY_API
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iocreatedevice
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iodeletedevice
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kedelayexecutionthread
+NEVERD_KERNEL_IRQL_API(IoCreateDevice, APC)
+NEVERD_KERNEL_IRQL_API(IoDeleteDevice, APC)
+NEVERD_KERNEL_IRQL_API(KeDelayExecutionThread, APC)
+
+// Paged pool additionally requires <= APC_LEVEL for allocation and release.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithtag
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool2
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepoolwithtag
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepool
+NEVERD_KERNEL_IRQL_API(ExAllocatePoolWithTag, Dispatch)
+NEVERD_KERNEL_IRQL_API(ExAllocatePool2, Dispatch)
+NEVERD_KERNEL_IRQL_API(ExFreePoolWithTag, Dispatch)
+NEVERD_KERNEL_IRQL_API(ExFreePool, Dispatch)
+
+// User mappings additionally require <= APC_LEVEL; the supported mapping
+// subset is KernelMode. RtlInitUnicodeString requires resident storage at 2.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocatemdl
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iofreemdl
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmbuildmdlfornonpagedpool
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmaplockedpagesspecifycache
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemaddressformdlsafe
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunmaplockedpages
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitunicodestring
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdmsec/nf-wdmsec-wdmlibrtlinitunicodestringex
+NEVERD_KERNEL_IRQL_API(IoGetDmaAdapter, Passive)
+NEVERD_KERNEL_IRQL_API(IoAllocateMdl, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoFreeMdl, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmBuildMdlForNonPagedPool, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmProbeAndLockPages, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmUnlockPages, Dispatch)
+NEVERD_KERNEL_IRQL_API(KeFlushIoBuffers, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmMapLockedPagesSpecifyCache, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmGetSystemAddressForMdlSafe, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmUnmapLockedPages, Dispatch)
+NEVERD_KERNEL_IRQL_API(RtlInitUnicodeString, Dispatch)
+
+// IoCompleteRequest is the public macro for the IofCompleteRequest export.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iocompleterequest
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateworkitem
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioqueueworkitem
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iofreeworkitem
+NEVERD_KERNEL_IRQL_API(IofCompleteRequest, Dispatch)
+NEVERD_KERNEL_IRQL_API(IofCallDriver, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoCallDriver, Dispatch)
+// Vista+ forwarding has the IoCallDriver contract. Pageable stacks impose a
+// narrower execution context in the power packet model. PoSet(D3) also narrows
+// the ceiling to APC_LEVEL; PoRequest currently dispatches only at PASSIVE.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-pocalldriver
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-porequestpowerirp
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-posetpowerstate
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-postartnextpowerirp
+NEVERD_KERNEL_IRQL_API(PoCallDriver, Dispatch)
+NEVERD_KERNEL_IRQL_API(PoRequestPowerIrp, Dispatch)
+NEVERD_KERNEL_IRQL_API(PoSetPowerState, Dispatch)
+NEVERD_KERNEL_IRQL_API(PoStartNextPowerIrp, Dispatch)
+// The public WDK macros call these exports with the concrete lock size.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinitializeremovelock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioacquireremovelock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreleaseremovelock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreleaseremovelockandwait
+NEVERD_KERNEL_IRQL_API(IoInitializeRemoveLockEx, Passive)
+NEVERD_KERNEL_IRQL_API(IoAcquireRemoveLockEx, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoReleaseRemoveLockEx, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoReleaseRemoveLockAndWaitEx, Passive)
+NEVERD_KERNEL_IRQL_API(IoAttachDeviceToDeviceStack, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoDetachDevice, Passive)
+NEVERD_KERNEL_IRQL_API(IoCompleteRequest, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoAllocateWorkItem, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoQueueWorkItem, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoFreeWorkItem, Dispatch)
+
+// Only a non-null zero timeout permits DISPATCH_LEVEL. A blocking or infinite
+// wait additionally requires <= APC_LEVEL and a nonarbitrary thread context.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kewaitforsingleobject
+NEVERD_KERNEL_IRQL_API(KeWaitForSingleObject, Dispatch)
+
+// Unicode conversions additionally require PASSIVE_LEVEL, even with resident
+// input. The format parser owns this argument-dependent restriction.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgprint
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgprintex
+NEVERD_KERNEL_IRQL_API(DbgPrint, Device)
+NEVERD_KERNEL_IRQL_API(DbgPrintEx, Device)
+
+// Byte operations and Unicode copying are permitted at any IRQL with resident
+// operands. The modeled C memory primitives have the same residency rule as
+// their Rtl counterparts; their different return values remain API semantics.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlcopyunicodestring
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlcopymemory
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlmovememory
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlfillmemory
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlcomparememory
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlzeromemory
+NEVERD_KERNEL_IRQL_API(RtlCopyUnicodeString, Any)
+NEVERD_KERNEL_IRQL_API(memcpy, Any)
+NEVERD_KERNEL_IRQL_API(memmove, Any)
+NEVERD_KERNEL_IRQL_API(memset, Any)
+NEVERD_KERNEL_IRQL_API(memcmp, Any)
+NEVERD_KERNEL_IRQL_API(RtlCopyMemory, Any)
+NEVERD_KERNEL_IRQL_API(RtlMoveMemory, Any)
+NEVERD_KERNEL_IRQL_API(RtlFillMemory, Any)
+NEVERD_KERNEL_IRQL_API(RtlCompareMemory, Any)
+NEVERD_KERNEL_IRQL_API(RtlZeroMemory, Any)
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetcurrentirpstacklocation
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iomarkirppending
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetcurrentirql
+NEVERD_KERNEL_IRQL_API(IoGetCurrentIrpStackLocation, Any)
+NEVERD_KERNEL_IRQL_API(IoMarkIrpPending, Any)
+// The WDK IoSetCancelRoutine helper is an inline interlocked exchange of the
+// IRP field. Guest writes to that field obey the same live-packet boundary.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetcancelroutine
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioacquirecancelspinlock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreleasecancelspinlock
+NEVERD_KERNEL_IRQL_API(IoSetCancelRoutine, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoAcquireCancelSpinLock, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoReleaseCancelSpinLock, Dispatch)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iocancelirp
+NEVERD_KERNEL_IRQL_API(IoCancelIrp, Dispatch)
+NEVERD_KERNEL_IRQL_API(KeGetCurrentIrql, Any)
+
+// Dispatcher-owned checks remain authoritative for each routine's narrower
+// IRQL and argument-dependent restrictions. This only bounds the x64 KIRQL.
+#define NEVERD_KERNEL_DISPATCHER_API(Name, Arity)                              \
+  NEVERD_KERNEL_IRQL_API(Name, Any)
+#include "KernelDispatcherAPIs.def"
+#undef NEVERD_KERNEL_DISPATCHER_API
+#endif

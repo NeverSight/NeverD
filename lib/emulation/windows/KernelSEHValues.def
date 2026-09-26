@@ -1,0 +1,27 @@
+//===- KernelSEHValues.def - Bounded x64 SEH execution values -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Architectural widths, supported unwind flags and execution bounds.
+/// Define NEVERD_SEH_VALUE(Name, Value) before inclusion.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_SEH_VALUE(RegisterCount, 16)
+NEVERD_SEH_VALUE(ReturnRegister, 0)
+NEVERD_SEH_VALUE(StackRegister, 4)
+NEVERD_SEH_VALUE(NonvolatileRegisterMask, 0xF0E8)
+NEVERD_SEH_VALUE(PointerSize, 8)
+NEVERD_SEH_VALUE(FrameOffsetScale, 16)
+NEVERD_SEH_VALUE(MaxFrameOffset, 240)
+NEVERD_SEH_VALUE(ExceptionHandlerFlag, 1)
+NEVERD_SEH_VALUE(UnwindHandlerFlag, 2)
+NEVERD_SEH_VALUE(ChainFlag, 4)
+NEVERD_SEH_VALUE(MaxFrames, 128)
+NEVERD_SEH_VALUE(MaxFunctions, 65536)
+NEVERD_SEH_VALUE(MaxScopes, 4096)
+NEVERD_SEH_VALUE(MaxUnwindOperations, 255)
+NEVERD_SEH_VALUE(MaxSmallAllocation, 128)

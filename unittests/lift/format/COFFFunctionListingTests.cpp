@@ -7,12 +7,16 @@
 #include "NeverDLiftFixture.h"
 #include "gtest/gtest.h"
 
+#include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoader.h"
+#include "neverd/loader/ExceptionWindowsEH.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/support/BinaryLoading.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
@@ -288,6 +292,90 @@ TEST_F(COFFFunctionListingTest, UnnamedUnwindEntriesStillProduceFunctions) {
               Symbol::makeFunc(imageBase(A) + TextRVA).Name);
     EXPECT_EQ(Functions[0]->Size, functionSize(A));
   }
+}
+
+std::vector<uint8_t> makeTwoFunctionX64PE() {
+  auto Bytes = makePE(Arch::X64, false, false, true);
+  constexpr uint32_t SecondRVA = TextRVA + 11;
+  constexpr uint8_t SecondCode[] = {0x55, 0x48, 0x89, 0xe5, 0xb8, 0x2b,
+                                    0,    0,    0,    0x5d, 0xc3};
+  std::memcpy(Bytes.data() + TextOffset + 11, SecondCode, sizeof(SecondCode));
+  put32(Bytes, PDataOffset + 12, SecondRVA);
+  put32(Bytes, PDataOffset + 16, SecondRVA + 11);
+  put32(Bytes, PDataOffset + 20, 0x3008);
+  constexpr uint8_t Codes[] = {1, 4, 2, 5, 4, 3, 1, 0x50};
+  std::memcpy(Bytes.data() + XDataOffset + 8, Codes, sizeof(Codes));
+  const uint32_t Optional = 0x98;
+  const uint32_t Directories = Optional + 112;
+  const uint32_t Sections = Optional + 240;
+  put32(Bytes, Directories + 3 * 8 + 4, 24);
+  put32(Bytes, Sections + 8, 22);
+  put32(Bytes, Sections + 40 + 8, 24);
+  put32(Bytes, Sections + 80 + 8, 16);
+  return Bytes;
+}
+
+TEST_F(COFFFunctionListingTest,
+       LoadOnlyFunctionEntriesSkipsUnrelatedPdataBodies) {
+  const auto Bytes = makeTwoFunctionX64PE();
+  const fs::path Path = writeFixture(Bytes);
+  const va_t First = imageBase(Arch::X64) + TextRVA;
+  const va_t Second = First + 11;
+
+  auto All = loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(All)) << llvm::toString(All.takeError());
+  ASSERT_GE(All->ExceptionMetadata.Functions.size(), 2u);
+  EXPECT_TRUE(All->COFFPDataRecords.empty());
+
+  BinaryLoadOptions Opts;
+  Opts.OnlyFunctionEntries.insert(First);
+  auto One = loadBinary(Path, Opts);
+  ASSERT_TRUE(static_cast<bool>(One)) << llvm::toString(One.takeError());
+  EXPECT_EQ(One->ExceptionMetadata.Functions.size(), 1u);
+  ASSERT_TRUE(One->ExceptionMetadata.findFunction(First) != nullptr);
+  EXPECT_EQ(One->ExceptionMetadata.findFunction(First)->CodeRange.Begin, First);
+  EXPECT_EQ(One->ExceptionMetadata.findFunction(Second), nullptr);
+  EXPECT_GE(One->KnownCodeRanges.size(), 2u);
+  EXPECT_LE(One->KnownCodeRanges.size(), 3u)
+      << "--func must not copy every pdata range into KnownCodeRanges";
+  EXPECT_TRUE(One->hasKnownFunctionEntryAt(Second))
+      << "compact pdata index must still name the unmaterialized neighbor";
+  EXPECT_FALSE(One->COFFPDataRecords.empty());
+  EXPECT_TRUE(One->BaseRelocations.empty())
+      << "--func PE load must not walk the image-wide .reloc directory";
+  EXPECT_TRUE(One->Raw.empty())
+      << "--func PE load must not memcpy the whole image into BinaryImage.Raw";
+  EXPECT_FALSE(All->Raw.empty());
+
+  ASSERT_TRUE(coff_loader::ensureX64RuntimeFunction(*One, Second));
+  ASSERT_NE(One->ExceptionMetadata.findFunction(Second), nullptr);
+  EXPECT_EQ(One->ExceptionMetadata.findFunction(Second)->CodeRange.Begin,
+            Second);
+}
+
+TEST_F(COFFFunctionListingTest,
+       LoadOnlyFunctionEntriesMaterializesUnwindActionBodies) {
+  const auto Bytes = makeTwoFunctionX64PE();
+  const fs::path Path = writeFixture(Bytes);
+  const va_t First = imageBase(Arch::X64) + TextRVA;
+  const va_t Second = First + 11;
+
+  BinaryLoadOptions Opts;
+  Opts.OnlyFunctionEntries.insert(First);
+  auto One = loadBinary(Path, Opts);
+  ASSERT_TRUE(static_cast<bool>(One)) << llvm::toString(One.takeError());
+  ASSERT_EQ(One->ExceptionMetadata.Functions.size(), 1u);
+  One->ExceptionMetadata.Functions.front().Cxx.emplace();
+  CxxUnwindAction Action;
+  Action.ActionVA = Second;
+  One->ExceptionMetadata.Functions.front().Cxx->UnwindMap.push_back(Action);
+  One->ExceptionMetadata.Functions.front().LanguageTablesResolved = true;
+  coff_loader::ensureExceptionHandlers(*One, {First});
+  ASSERT_NE(One->ExceptionMetadata.findFunction(Second), nullptr)
+      << "--func must materialize C++ unwind ActionVA pdata, not only catch "
+         "handlers";
+  EXPECT_EQ(One->ExceptionMetadata.findFunction(Second)->CodeRange.Begin,
+            Second);
 }
 
 TEST_F(COFFFunctionListingTest, UnnamedPdataAcceptsWin64RegisterHome) {

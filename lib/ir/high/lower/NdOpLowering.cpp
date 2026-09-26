@@ -20,6 +20,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/MedIntrinsicOutputs.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -184,27 +185,13 @@ void MedToHighConverter::lowerIntrinsic(HighFunc &Func,
   uint8_t NumOut = intrinsicOutputCount(IID);
   if (NumOut > 0) {
     std::vector<MedVar> CoOutputs;
-    for (size_t CI = OpIdx + 1;
-         CI < CurBlock.Ops.size() && CoOutputs.size() < NumOut; ++CI) {
-      auto &NextOp = CurBlock.Ops[CI];
-      if (NextOp.Opcode == NdOp::COPY && NextOp.NumInputs >= 1) {
-        CoOutputs.push_back(NextOp.Inputs[0]);
-        // The pending-result convention binds the auxiliary value to the COPY
-        // input.  Expression building also inlines uses of the COPY output back
-        // to that input, so IntrinsicOutputs must keep the same identity.
-        IntrinsicSkip.insert(CI);
-        continue;
-      }
-      // LowToMed interleaves sub-register normalization (zero/sign extension
-      // of the value just copied, sub-piece extraction) between the output
-      // copies on targets with sub-register writes (e.g. an x86-64 EAX write
-      // zero-extends into RAX).  These feed later uses (stores, returns) and
-      // must still be lowered, so tolerate but do not skip them; otherwise a
-      // multi-output intrinsic such as RDTSC would drop its EDX half.
-      if (NextOp.Opcode == NdOp::INT_ZEXT || NextOp.Opcode == NdOp::INT_SEXT ||
-          NextOp.Opcode == NdOp::SUBBYTES)
-        continue;
-      break;
+    for (const MedIntrinsicOutputBinding &Binding :
+         collectMedIntrinsicOutputBindings(CurBlock, OpIdx, NumOut)) {
+      CoOutputs.push_back(Binding.Source);
+      // COPY only forwards the pending value.  Sub-register normalization
+      // still feeds later stores and returns and must be lowered normally.
+      if (Binding.IsCopy)
+        IntrinsicSkip.insert(Binding.OpIndex);
     }
     CallExpr->IntrinsicOutputs = std::move(CoOutputs);
   }

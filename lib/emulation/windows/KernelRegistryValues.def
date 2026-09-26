@@ -1,0 +1,62 @@
+//===- KernelRegistryValues.def - Registry protocol values ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Microsoft WDK public registry contracts and key-value structure offsets.
+/// HandleBase is a model-owned opaque identity, never a guest address.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_REGISTRY_VALUE(Success, 0)
+NEVERD_REGISTRY_VALUE(InvalidHandle, 0xc0000008)
+NEVERD_REGISTRY_VALUE(InvalidParameter, 0xc000000d)
+NEVERD_REGISTRY_VALUE(AccessDenied, 0xc0000022)
+NEVERD_REGISTRY_VALUE(BufferTooSmall, 0xc0000023)
+NEVERD_REGISTRY_VALUE(ObjectNameNotFound, 0xc0000034)
+NEVERD_REGISTRY_VALUE(ObjectPathNotFound, 0xc000003a)
+NEVERD_REGISTRY_VALUE(InsufficientResources, 0xc000009a)
+NEVERD_REGISTRY_VALUE(CannotDelete, 0xc0000121)
+NEVERD_REGISTRY_VALUE(KeyDeleted, 0xc000017c)
+NEVERD_REGISTRY_VALUE(ChildMustBeVolatile, 0xc0000181)
+NEVERD_REGISTRY_VALUE(BufferOverflow, 0x80000005)
+NEVERD_REGISTRY_VALUE(DatatypeMisalignment, 0x80000002)
+NEVERD_REGISTRY_VALUE(QueryValueAccess, 0x0001)
+NEVERD_REGISTRY_VALUE(SetValueAccess, 0x0002)
+NEVERD_REGISTRY_VALUE(CreateSubKeyAccess, 0x0004)
+NEVERD_REGISTRY_VALUE(DeleteAccess, 0x00010000)
+NEVERD_REGISTRY_VALUE(AllAccess, 0x000f003f)
+NEVERD_REGISTRY_VALUE(CaseInsensitive, 0x0040)
+NEVERD_REGISTRY_VALUE(VolatileOption, 1)
+NEVERD_REGISTRY_VALUE(CreatedNewKey, 1)
+NEVERD_REGISTRY_VALUE(OpenedExistingKey, 2)
+NEVERD_REGISTRY_VALUE(BasicInformation, 0)
+NEVERD_REGISTRY_VALUE(FullInformation, 1)
+NEVERD_REGISTRY_VALUE(PartialInformation, 2)
+NEVERD_REGISTRY_VALUE(FullInformationAlign64, 3)
+NEVERD_REGISTRY_VALUE(PartialInformationAlign64, 4)
+NEVERD_REGISTRY_VALUE(LayerInformation, 5)
+NEVERD_REGISTRY_VALUE(MaxInformationClass, 6)
+NEVERD_REGISTRY_VALUE(MaxValueType, 11)
+NEVERD_REGISTRY_VALUE(LinkValueType, 6)
+NEVERD_REGISTRY_VALUE(UnicodeSize, 16)
+NEVERD_REGISTRY_VALUE(UnicodeMaximumOffset, 2)
+NEVERD_REGISTRY_VALUE(UnicodeBufferOffset, 8)
+NEVERD_REGISTRY_VALUE(BasicHeaderSize, 12)
+NEVERD_REGISTRY_VALUE(FullHeaderSize, 20)
+NEVERD_REGISTRY_VALUE(PartialHeaderSize, 12)
+NEVERD_REGISTRY_VALUE(Partial64HeaderSize, 8)
+NEVERD_REGISTRY_VALUE(FullDataAlignment, 4)
+NEVERD_REGISTRY_VALUE(FullDataAlignment64, 8)
+NEVERD_REGISTRY_VALUE(TypeOffset, 4)
+NEVERD_REGISTRY_VALUE(BasicNameLengthOffset, 8)
+NEVERD_REGISTRY_VALUE(FullDataOffset, 8)
+NEVERD_REGISTRY_VALUE(FullDataLengthOffset, 12)
+NEVERD_REGISTRY_VALUE(FullNameLengthOffset, 16)
+NEVERD_REGISTRY_VALUE(PartialDataLengthOffset, 8)
+NEVERD_REGISTRY_VALUE(Partial64TypeOffset, 0)
+NEVERD_REGISTRY_VALUE(Partial64DataLengthOffset, 4)
+NEVERD_REGISTRY_VALUE(HandleBase, 0x40000000)
+NEVERD_REGISTRY_VALUE(HandleStride, 4)

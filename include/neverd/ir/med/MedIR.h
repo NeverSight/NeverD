@@ -167,6 +167,11 @@ struct MedOp {
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
   MedVar Output = {};
+  /// Values defined by a multi-result intrinsic besides its primary Output.
+  /// LowIR writes these through following COPY/sub-register operations; keep
+  /// the definition on the intrinsic so SSA does not invent a live-in value
+  /// when those transport operations are later propagated away.
+  std::vector<MedVar> IntrinsicOutputs;
   // Ordinary operations retain six inline slots. Source-bound calls may carry
   // their full scalar argument list through the same SSA/liveness operands.
   llvm::SmallVector<MedVar, 6> Inputs = llvm::SmallVector<MedVar, 6>(6);
