@@ -142,7 +142,11 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     bool Valid = true;
     std::vector<HighStmt *> Definitions;
     std::set<HighStmt *> PrefixDefinitions;
-    std::vector<ExprPtr *> Uses;
+    struct Use {
+      ExprPtr *Slot;
+      bool ZeroExtendForMask = false;
+    };
+    std::vector<Use> Uses;
   };
   VarKeyMap<Candidate> Candidates;
   struct CopyDefinition {
@@ -373,6 +377,28 @@ void narrowSourceConcatLocals(HighFunc &Func) {
               Plain(*Parent->Operands[1]) &&
               Parent->Operands[1]->Operands.empty() &&
               Parent->Operands[1]->ConstVal == 0));
+        // A full-width AND observes only the low word when every mask bit
+        // above that word is clear. Keep the AND at its original width, but
+        // give it an explicit zero extension after narrowing the local.
+        const bool MaskedPrefix =
+            Parent && Plain(*Parent) && Operand == 0 && C.Bytes == 4 &&
+            C.CarrierBytes == 8 && Parent->Kind == ExprKind::BinOp &&
+            Parent->Op == NdOp::INT_AND && Parent->Type &&
+            Parent->Type->Kind == NdTypeKind::Int && Parent->Type->Size == 8 &&
+            Parent->Operands.size() == 2 && Parent->Operands[1] &&
+            Plain(*Parent->Operands[1]) &&
+            Parent->Operands[1]->Kind == ExprKind::Const &&
+            Parent->Operands[1]->Operands.empty() &&
+            Parent->Operands[1]->Type &&
+            Parent->Operands[1]->Type->Kind == NdTypeKind::Int &&
+            Parent->Operands[1]->Type->Size &&
+            Parent->Operands[1]->Type->Size <= 8 &&
+            (Parent->Operands[1]->Type->Size == 8 ||
+             Parent->Operands[1]->ConstVal <
+                 (uint64_t{1}
+                  << (Parent->Operands[1]->Type->Size * 8 -
+                      unsigned(Parent->Operands[1]->Type->IsSigned)))) &&
+            (Parent->Operands[1]->ConstVal & ~UINT64_C(0xffffffff)) == 0;
         const auto Copy = CopyTargets.find(Root);
         const bool ProvenCopy =
             Copy != CopyTargets.end() && Copy->second.Leaf == Slot && C.Bytes &&
@@ -384,12 +410,13 @@ void narrowSourceConcatLocals(HighFunc &Func) {
         if (ProvenCopy && !Prefix)
           CopySources[varKey(Copy->second.Statement->Dst->Var)].push_back(
               It->first);
-        C.Valid &= (Prefix || ProvenCopy) && Plain(*E) && E->Operands.empty() &&
-                   E->Type && E->Type->Kind == NdTypeKind::Int &&
+        C.Valid &= (Prefix || MaskedPrefix || ProvenCopy) && Plain(*E) &&
+                   E->Operands.empty() && E->Type &&
+                   E->Type->Kind == NdTypeKind::Int &&
                    E->Type->Size == C.CarrierBytes &&
                    E->Var.Size == C.CarrierBytes && E->Var.RenameTag < 0 &&
                    (E->Var.Kind == MedVar::Reg || E->Var.Kind == MedVar::Temp);
-        C.Uses.push_back(Slot);
+        C.Uses.push_back({Slot, MaskedPrefix});
       }
     }
     for (unsigned J = 0; J < E->Operands.size(); ++J)
@@ -426,10 +453,19 @@ void narrowSourceConcatLocals(HighFunc &Func) {
   };
   // A recorded use may be another candidate's definition RHS. Rewrite all
   // uses first, before prefix extraction can replace that slot with a tree.
+  std::set<ExprPtr *> RewrittenUses;
   for (auto &[Key, C] : Candidates)
     if (C.Valid)
-      for (auto *Slot : C.Uses)
-        Narrow(*Slot, C.Bytes);
+      for (const auto &Use : C.Uses) {
+        if (!RewrittenUses.insert(Use.Slot).second)
+          continue;
+        Narrow(*Use.Slot, C.Bytes);
+        if (Use.ZeroExtendForMask) {
+          auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, *Use.Slot);
+          Extended->Type = NdType::makeInt(C.CarrierBytes, false);
+          *Use.Slot = std::move(Extended);
+        }
+      }
   for (auto &[Key, C] : Candidates) {
     if (!C.Valid)
       continue;

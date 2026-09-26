@@ -679,6 +679,63 @@ TEST(HighSourceScalarLocals, NarrowsRegisterMergesWithExplicitLowWordReads) {
     }
 }
 
+TEST(HighSourceScalarLocals, NarrowsOnlyWhollyMaskedRegisterHighWords) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
+      auto F = sourceConcatLocal(Architecture, 4, 8);
+      auto Mask = HighExpr::makeConst(
+          Mutation == 1 ? UINT64_C(0x100000001) : uint64_t{1}, 8);
+      if (Mutation == 2)
+        Mask = variable(9, 8);
+      if (Mutation == 5)
+        Mask = HighExpr::makeConst(1, 4);
+      if (Mutation == 6 || Mutation == 7) {
+        Mask = HighExpr::makeConst(UINT64_C(0x80000000), 4);
+        Mask->Type = NdType::makeInt(4, Mutation == 6);
+      }
+      auto And = HighExpr::makeBinop(NdOp::INT_AND, variable(4, 8), Mask);
+      And->Type = NdType::makeInt(8, false);
+      F.Body.back().RetVal = And;
+      if (Mutation == 3) {
+        HighStmt WideUse;
+        WideUse.Kind = StmtKind::ExprStmt;
+        WideUse.Val = variable(4, 8);
+        F.Body.insert(F.Body.end() - 1, WideUse);
+      }
+      if (Mutation == 8) {
+        HighStmt SharedUse;
+        SharedUse.Kind = StmtKind::ExprStmt;
+        SharedUse.Val = And;
+        F.Body.insert(F.Body.end() - 1, SharedUse);
+      }
+      if (Mutation == 4) {
+        auto Effect = HighExpr::makeCall("upper_effect", 0x4000, {});
+        Effect->Type = NdType::makeInt(4, false);
+        F.Body[0].Body[0].Val->Operands[0] = Effect;
+      }
+
+      narrowSourceConcatLocals(F);
+
+      const bool Narrowed =
+          Mutation == 0 || Mutation == 5 || Mutation == 7 || Mutation == 8;
+      EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, Narrowed ? 4U : 8U)
+          << Mutation;
+      EXPECT_EQ(F.Body[0].ElseBody[0].Dst->Var.Size, Narrowed ? 4U : 8U)
+          << Mutation;
+      if (!Narrowed)
+        continue;
+      const auto &Masked = F.Body.back().RetVal;
+      ASSERT_EQ(Masked->Kind, ExprKind::BinOp);
+      ASSERT_EQ(Masked->Op, NdOp::INT_AND);
+      ASSERT_EQ(Masked->Operands[0]->Kind, ExprKind::UnaryOp);
+      EXPECT_EQ(Masked->Operands[0]->Op, NdOp::INT_ZEXT);
+      EXPECT_EQ(Masked->Operands[0]->Type->Size, 8U);
+      EXPECT_EQ(Masked->Operands[0]->Operands[0]->Var.Size, 4U);
+      EXPECT_EQ(Masked->Operands[1]->ConstVal,
+                Mutation == 7 ? UINT64_C(0x80000000) : uint64_t{1});
+    }
+}
+
 TEST(HighSourceScalarLocals, RetainsObservedOrUnprovenRegisterCarrierBytes) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 15; ++Mutation) {
