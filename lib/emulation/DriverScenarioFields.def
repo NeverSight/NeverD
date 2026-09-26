@@ -1,0 +1,40 @@
+//===- DriverScenarioFields.def - Scenario JSON fields --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Strict root and request field inventories for driver scenario JSON.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(LoadAddress, "load_address")
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Unload, "unload")
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(KernelExports, "kernel_exports")
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Registry, "registry")
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Requests, "requests")
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(PnpDevices, "pnp_devices")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Kind, "kind")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Device, "device")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Code, "code")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Input, "input")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(OutputSize, "output_size")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(UserInputAccess, "user_input_access")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(UserOutputAccess, "user_output_access")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(UserUnmapAfterDispatch, "user_unmap_after_dispatch")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(RequestorExitAfterDispatch, "requestor_exit_after_dispatch")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(RequestorProcessID, "requestor_process_id")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(DirectInput, "direct_input")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(ByteOffset, "byte_offset")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(File, "file")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(AsynchronousFile, "asynchronous_file")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(CancelAfter100ns, "cancel_after_100ns")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(DeferCallbackDrain, "defer_callback_drain")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(DeviceID, "device_id")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Minor, "minor")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(BusCompletion, "bus_completion")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(PowerType, "power_type")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(PowerState, "power_state")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(PowerAction, "power_action")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(SystemContext, "system_context")

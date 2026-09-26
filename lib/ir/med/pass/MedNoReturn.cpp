@@ -34,8 +34,8 @@ bool isArchitecturalNoReturn(const MedOp &Op, Arch TheArch) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
   if (TheArch == Arch::AArch64)
     return Id == Intrinsic::Brk || Id == Intrinsic::Hlt_A64;
-  if ((TheArch == Arch::X86 || TheArch == Arch::X64) &&
-      Id == Intrinsic::IntN && Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+  if ((TheArch == Arch::X86 || TheArch == Arch::X64) && Id == Intrinsic::IntN &&
+      Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
       (Op.Inputs[1].ConstVal & 0xFF) == 0x29)
     return true;
   return false;
@@ -49,8 +49,8 @@ bool isArchitecturalNoReturn(const LowOp &Op, Arch TheArch) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   if (TheArch == Arch::AArch64)
     return Id == Intrinsic::Brk || Id == Intrinsic::Hlt_A64;
-  if ((TheArch == Arch::X86 || TheArch == Arch::X64) &&
-      Id == Intrinsic::IntN && Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+  if ((TheArch == Arch::X86 || TheArch == Arch::X64) && Id == Intrinsic::IntN &&
+      Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
       (Op.Inputs[1].Offset & 0xFF) == 0x29)
     return true;
   return false;
@@ -207,6 +207,8 @@ void propagateInternalNoReturn(std::vector<MedFunc> &Funcs, Arch TheArch) {
     Func.DoesNotReturn = NoReturnEntries.count(Func.Entry) != 0;
     for (MedBlock &Block : Func.Blocks)
       for (MedOp &Op : Block.Ops) {
+        // A following trap belongs to this caller; it cannot establish that
+        // the call itself never returns or authorize dropping that trap.
         if (isDirectCallTo(Op, NoReturnEntries))
           Op.DoesNotReturn = true;
         if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&

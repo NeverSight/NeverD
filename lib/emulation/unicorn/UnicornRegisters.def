@@ -1,0 +1,16 @@
+//===- UnicornRegisters.def - Driver ABI register mapping -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Register names shared by the driver ABI and the Unicorn adapter.
+/// Define NEVERD_UNICORN_REGISTER(Name, Register) before inclusion.
+///
+//===----------------------------------------------------------------------===//
+
+#define NEVERD_X64_REGISTER(Name, DecoderID, BackendID)                        \
+  NEVERD_UNICORN_REGISTER(Name, BackendID)
+#include "../X64Registers.def"
+#undef NEVERD_X64_REGISTER

@@ -488,7 +488,8 @@ renderSegmentedMaskedMemory(const HighExpr &Call, const HighExpr *PrimaryDst,
 
 std::string
 renderDivPrecondition(Arch TheArch, const HighExpr &Call,
-                      std::function<std::string(const HighExpr &)> ExprFn) {
+                      std::function<std::string(const HighExpr &)> ExprFn,
+                      SameWidthUnsignedFn SameWidthUnsigned) {
   const HighExpr *Dividend =
       Call.Operands.size() > 0 ? Call.Operands[0].get() : nullptr;
   const HighExpr *Divisor =
@@ -529,11 +530,18 @@ renderDivPrecondition(Arch TheArch, const HighExpr &Call,
   const std::string FullTy = typeToC(NdType::makeInt(FullBytes, false));
   const std::string HalfTy = typeToC(NdType::makeInt(HalfBytes, false));
 
+  auto Operand = [&](const HighExpr *Expr, uint16_t Width,
+                     const std::string &Ty) {
+    const std::string Text = ExprFn(*Expr);
+    if (SameWidthUnsigned && SameWidthUnsigned(*Expr, Width))
+      return Text;
+    return "(" + Ty + ")(" + Text + ")";
+  };
   std::string Result = "do {\n";
-  Result += "    " + FullTy + " neverd_dividend = (" + FullTy + ")(" +
-            ExprFn(*Dividend) + ");\n";
-  Result += "    " + HalfTy + " neverd_divisor = (" + HalfTy + ")(" +
-            ExprFn(*Divisor) + ");\n";
+  Result += "    " + FullTy + " neverd_dividend = " +
+            Operand(Dividend, FullBytes, FullTy) + ";\n";
+  Result += "    " + HalfTy + " neverd_divisor = " +
+            Operand(Divisor, HalfBytes, HalfTy) + ";\n";
 
   // Decide quotient representability without executing C division: the
   // exceptional divisor-zero and signed-min/-1 cases would otherwise be UB.
@@ -905,12 +913,14 @@ renderX86TypedIntrinsicCall(Arch TheArch, const HighExpr &Call,
 std::string renderX86SegmentedIntrinsicStatement(
     Arch TheArch, const HighExpr &Call, const HighExpr *PrimaryDst,
     std::function<std::string(const HighExpr &)> ExprFn,
-    std::function<std::string(const MedVar &)> VarFn, IsAliveFn IsAlive) {
+    std::function<std::string(const MedVar &)> VarFn, IsAliveFn IsAlive,
+    SameWidthUnsignedFn SameWidthUnsigned) {
   if (Call.Kind != ExprKind::Call ||
       (TheArch != Arch::X86 && TheArch != Arch::X64))
     return {};
   if (Call.IntrinsicId == Intrinsic::X86RequireDivPrecondition)
-    return renderDivPrecondition(TheArch, Call, std::move(ExprFn));
+    return renderDivPrecondition(TheArch, Call, std::move(ExprFn),
+                                 std::move(SameWidthUnsigned));
   if (auto Rendered = renderMemoryIntrinsic(TheArch, Call, ExprFn);
       !Rendered.empty())
     return Rendered;

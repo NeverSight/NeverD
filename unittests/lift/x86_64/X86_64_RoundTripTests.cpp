@@ -128,3 +128,27 @@ TEST_F(X86_64_RoundTrip, DecompileLLVMRoute) {
   auto CFile = tmpFile("decompiled.c");
   ASSERT_TRUE(fs::exists(CFile));
 }
+
+TEST_F(X86_64_RoundTrip, SignedTernaryComparesInputsOnBothCRoutes) {
+  for (bool UseLLVM : {false, true}) {
+    const auto CFile =
+        tmpFile(UseLLVM ? "ternary_llvm.c" : "ternary_high.c");
+    std::vector<std::string> Args = {"decompile"};
+    if (UseLLVM)
+      Args.push_back("--llvm");
+    Args.insert(Args.end(), {"--func", "rt_ternary", "-o", CFile.string(),
+                             roundtripObj().string()});
+    auto R = exec(ndBin(), Args);
+    ASSERT_EQ(R.exitCode, 0) << R.err;
+    std::ifstream Ifs(CFile);
+    ASSERT_TRUE(Ifs.good()) << CFile;
+    const std::string Source((std::istreambuf_iterator<char>(Ifs)),
+                             std::istreambuf_iterator<char>());
+    ASSERT_NE(Source.find("rt_ternary("), std::string::npos) << Source;
+    EXPECT_NE(Source.find("<="), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("__builtin_sub_overflow_p"), std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find(">> 31"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("var_mC - var_m10"), std::string::npos) << Source;
+  }
+}

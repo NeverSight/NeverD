@@ -506,7 +506,7 @@ TEST(ObjCSentinelCalls, RechecksActualArgumentsAndRejectsForeignPayloads) {
     if (Mutation == 6)
       Changed->CallKind = SourceCallTypeHint::Kind::Native;
     if (Mutation == 7)
-      Changed->Format.emplace();
+      Changed->Format.emplace(SourceCallTypeHint::FormatArguments{});
     if (Mutation == 8)
       Changed->DoesNotReturn = true;
     if (Mutation == 9)

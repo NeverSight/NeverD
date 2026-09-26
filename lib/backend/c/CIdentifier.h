@@ -15,6 +15,8 @@
 #ifndef NEVERD_LIB_BACKEND_C_CIDENTIFIER_H
 #define NEVERD_LIB_BACKEND_C_CIDENTIFIER_H
 
+#include "neverd/backend/c/MsvcAtlCallee.h"
+
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -99,6 +101,61 @@ inline bool isCProjectionIdentifierByte(unsigned char Ch) {
          (Ch >= '0' && Ch <= '9') || Ch == '_';
 }
 
+inline llvm::StringRef stripImportSymbolPrefix(llvm::StringRef Raw) {
+  while (Raw.consume_front("__imp_") || Raw.consume_front("_imp_"))
+    ;
+  return Raw;
+}
+
+/// `??0?$CStringT@...` / `??1?$Foo@H@@...` / `??4?$CStringT@...` /
+/// `??B?$CSimpleStringT@...` → `CStringT_ctor` / `Foo_dtor` /
+/// `CStringT_assign` / `CSimpleStringT_cstr`.
+/// Non-template `??1Widget@@` is `Widget_dtor` via \ref msvcDecorationStem.
+inline std::string msvcTemplateSpecialMemberStem(llvm::StringRef Raw) {
+  Raw = stripImportSymbolPrefix(Raw);
+  if (!Raw.consume_front("??") || Raw.empty())
+    return {};
+  const char *Suffix = msvcAtlSpecialMemberStem(Raw.front());
+  if (!Suffix)
+    return {};
+  Raw = Raw.drop_front();
+  if (!Raw.consume_front("?$"))
+    return {};
+  const size_t At = Raw.find('@');
+  if (At == llvm::StringRef::npos || At == 0)
+    return {};
+  const llvm::StringRef Name = Raw.take_front(At);
+  if (Name.empty() ||
+      (!isCProjectionIdentifierByte(
+           static_cast<unsigned char>(Name.front())) &&
+       Name.front() != '_'))
+    return {};
+  for (unsigned char Ch : Name.bytes())
+    if (!isCProjectionIdentifierByte(Ch))
+      return {};
+  return (Name + "_" + Suffix).str();
+}
+
+/// `??$LookupText@V?$CStringT@...` → `LookupText`.
+inline std::string msvcTemplateFunctionStem(llvm::StringRef Raw) {
+  Raw = stripImportSymbolPrefix(Raw);
+  if (!Raw.consume_front("??$"))
+    return {};
+  const size_t At = Raw.find('@');
+  if (At == llvm::StringRef::npos || At == 0)
+    return {};
+  const llvm::StringRef Name = Raw.take_front(At);
+  if (Name.empty() ||
+      (!isCProjectionIdentifierByte(
+           static_cast<unsigned char>(Name.front())) &&
+       Name.front() != '_'))
+    return {};
+  for (unsigned char Ch : Name.bytes())
+    if (!isCProjectionIdentifierByte(Ch))
+      return {};
+  return Name.str();
+}
+
 /// MSVC `?Name@Class@Namespace@@...` → `Namespace_Class_Name`.  Hex-escaping
 /// `?` as `_x3F_` made every C++ callee look like a raw decoration next to
 /// Hex-Rays' demangled spelling.
@@ -108,8 +165,12 @@ inline std::string msvcDecorationStem(llvm::StringRef Raw) {
   Raw = Raw.drop_front();
   while (!Raw.empty() && Raw.front() == '?')
     Raw = Raw.drop_front();
-  if (!Raw.empty() && (Raw.front() == '0' || Raw.front() == '1'))
-    Raw = Raw.drop_front();
+  const char *Suffix = nullptr;
+  if (!Raw.empty()) {
+    Suffix = msvcAtlSpecialMemberStem(Raw.front());
+    if (Suffix)
+      Raw = Raw.drop_front();
+  }
   std::vector<llvm::StringRef> Parts;
   while (!Raw.empty()) {
     const size_t At = Raw.find('@');
@@ -143,15 +204,124 @@ inline std::string msvcDecorationStem(llvm::StringRef Raw) {
       Out += '_';
     Out += Parts[I - 1];
   }
+  if (Suffix) {
+    Out += '_';
+    Out += Suffix;
+  }
+  return Out;
+}
+
+/// Demangled C++ `Ns::Class::Method` / `` `anonymous namespace'::Foo `` →
+/// a C identifier (`Ns_Class_Method`, `Foo`).  Templates are cut at `<`.
+inline std::string cxxDropAngleArgs(llvm::StringRef Raw) {
+  std::string Out;
+  unsigned Depth = 0;
+  for (unsigned char Ch : Raw.bytes()) {
+    if (Ch == '<') {
+      ++Depth;
+      continue;
+    }
+    if (Ch == '>') {
+      if (Depth)
+        --Depth;
+      continue;
+    }
+    if (Depth)
+      continue;
+    Out.push_back(static_cast<char>(Ch));
+  }
+  return Out;
+}
+
+inline std::string cxxQualifiedStem(llvm::StringRef Raw) {
+  while (!Raw.empty()) {
+    if (Raw.consume_front("`anonymous namespace'::") ||
+        Raw.consume_front("<anonymous namespace>::") ||
+        Raw.consume_front("(anonymous namespace)::") ||
+        Raw.consume_front("`anonymous-namespace'::"))
+      continue;
+    break;
+  }
+  const bool IsDtor = Raw.contains("::~") || Raw.starts_with("~");
+  const std::string Stripped = cxxDropAngleArgs(Raw);
+  Raw = Stripped;
+  if (IsDtor && !Raw.contains("::")) {
+    if (Raw.consume_front("~") && !Raw.empty())
+      return (Raw + "_dtor").str();
+    return {};
+  }
+  if (!Raw.contains("::"))
+    return {};
+  std::vector<llvm::StringRef> Parts;
+  llvm::StringRef Rest = Raw;
+  while (!Rest.empty()) {
+    const size_t Sep = Rest.find("::");
+    llvm::StringRef Part =
+        Sep == llvm::StringRef::npos ? Rest : Rest.take_front(Sep);
+    if (Part.consume_front("~"))
+      ;
+    if (Part.empty() ||
+        (!isCProjectionIdentifierByte(static_cast<unsigned char>(Part.front())) &&
+         Part.front() != '_'))
+      return {};
+    for (unsigned char Ch : Part.bytes()) {
+      if (!isCProjectionIdentifierByte(Ch))
+        return {};
+    }
+    Parts.push_back(Part);
+    if (Sep == llvm::StringRef::npos)
+      break;
+    Rest = Rest.drop_front(Sep + 2);
+  }
+  if (Parts.empty())
+    return {};
+  const bool IsCtor =
+      !IsDtor && Parts.size() >= 2 && Parts.back() == Parts[Parts.size() - 2];
+  if ((IsDtor || IsCtor) && Parts.size() >= 2 &&
+      Parts.back() == Parts[Parts.size() - 2])
+    Parts.pop_back();
+  std::string Out;
+  for (llvm::StringRef Part : Parts) {
+    if (!Out.empty())
+      Out += '_';
+    Out += Part;
+  }
+  if (IsDtor)
+    Out += "_dtor";
+  else if (IsCtor)
+    Out += "_ctor";
   return Out;
 }
 
 inline std::string
 canonicalizeCProjectionIdentifier(llvm::StringRef Raw,
                                   llvm::StringRef Fallback = "nd_symbol") {
-  const std::string Stem = msvcDecorationStem(Raw);
-  if (!Stem.empty())
-    Raw = Stem;
+  Raw = stripImportSymbolPrefix(Raw);
+  const std::string TemplateMember = msvcTemplateSpecialMemberStem(Raw);
+  const std::string TemplateFunction = msvcTemplateFunctionStem(Raw);
+  const std::string Decorated = msvcDecorationStem(Raw);
+  const std::string Qualified = cxxQualifiedStem(Raw);
+  std::string Stripped;
+  if (!TemplateMember.empty()) {
+    Raw = TemplateMember;
+  } else if (!TemplateFunction.empty()) {
+    Raw = TemplateFunction;
+  } else if (!Decorated.empty()) {
+    Raw = Decorated;
+  } else if (!Qualified.empty()) {
+    Raw = Qualified;
+  } else {
+    llvm::StringRef Rest = Raw;
+    while (Rest.consume_front("`anonymous namespace'::") ||
+           Rest.consume_front("<anonymous namespace>::") ||
+           Rest.consume_front("(anonymous namespace)::") ||
+           Rest.consume_front("`anonymous-namespace'::"))
+      ;
+    if (const size_t Lt = Rest.find('<'); Lt != llvm::StringRef::npos)
+      Rest = Rest.take_front(Lt);
+    Stripped = Rest.str();
+    Raw = Stripped;
+  }
   std::string Result;
   Result.reserve(Raw.size());
   for (unsigned char Ch : Raw.bytes()) {
@@ -178,6 +348,36 @@ canonicalizeCProjectionIdentifier(llvm::StringRef Raw,
   if (isCProjectionKeyword(Result))
     Result.insert(0, "nd_");
   return Result;
+}
+
+/// C++ TPI spellings (`ATL::CStringT<wchar_t, ...>`) become a C tag (`CStringT`).
+/// Nested members after a template (`ATL::CAtlMap<...>::CNode`) keep `CNode`;
+/// stripping at the first `<` used to leave `CAtlMap`.
+inline std::string cNamedTypeSpelling(llvm::StringRef Raw) {
+  std::string Buf;
+  Buf.reserve(Raw.size());
+  unsigned Depth = 0;
+  for (unsigned char Ch : Raw.bytes()) {
+    if (Ch == '<') {
+      ++Depth;
+      continue;
+    }
+    if (Ch == '>') {
+      if (Depth)
+        --Depth;
+      continue;
+    }
+    if (Depth == 0)
+      Buf.push_back(static_cast<char>(Ch));
+  }
+  llvm::StringRef Stripped = Buf;
+  while (Stripped.starts_with("::"))
+    Stripped = Stripped.drop_front(2);
+  while (Stripped.ends_with("::"))
+    Stripped = Stripped.drop_back(2);
+  if (const size_t Sep = Stripped.rfind("::"); Sep != llvm::StringRef::npos)
+    Stripped = Stripped.drop_front(Sep + 2);
+  return canonicalizeCProjectionIdentifier(Stripped, "nd_type");
 }
 
 /// Unnamed image data in C: `g_<hex VA>`.  The C type is already in the

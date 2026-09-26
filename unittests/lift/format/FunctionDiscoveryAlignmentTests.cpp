@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/loader/ExceptionInfo.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -288,6 +289,105 @@ TEST(FunctionDiscoveryAlignment,
   ASSERT_EQ(Img.Symbols.size(), 1u);
   EXPECT_EQ(Img.Symbols.front().Addr, 4u);
   EXPECT_TRUE(Img.Symbols.front().IsFunc);
+}
+
+TEST(FunctionDiscoveryAlignment, CoffFuncLoadSkipsPaddingAndDataScans) {
+  std::vector<uint8_t> Text(16, 0xcc);
+  Text[8] = 0x55;
+  Text[9] = 0x48;
+  Text[10] = 0x89;
+  Text[11] = 0xe5;
+  Text[12] = 0xc3;
+
+  BinaryImage WithPdata;
+  WithPdata.Arch = Arch::X64;
+  WithPdata.Bits = Bitness::Bits64;
+  WithPdata.Format = BinaryFormat::COFF;
+  WithPdata.Segments.push_back(executableSegment(0x1000, Text));
+  WithPdata.KnownCodeRanges.push_back({0x1000, 0x1008});
+  WithPdata.LoadOnlyFunctionEntries.insert(0x1000);
+  ExceptionFunction Owned;
+  Owned.CodeRange = ExceptionAddressRange{0x1000, 0x1008};
+  WithPdata.ExceptionMetadata.Functions.push_back(Owned);
+  WithPdata.Symbols.push_back(Symbol::makeFunc(0x1000, 8));
+  const size_t Before = WithPdata.Symbols.size();
+  runPostLoadDiscovery(WithPdata, "coff-pdata-func");
+  EXPECT_EQ(WithPdata.Symbols.size(), Before)
+      << "--func pdata load must not walk padding or data pointers";
+}
+
+TEST(FunctionDiscoveryAlignment, CoffFullLoadStillScansDataFuncPointers) {
+  std::vector<uint8_t> Text(16, 0xcc);
+  Text[0] = 0x55;
+  Text[1] = 0x48;
+  Text[2] = 0x89;
+  Text[3] = 0xe5;
+  Text[4] = 0xc3;
+  Text[8] = 0x55;
+  Text[9] = 0x48;
+  Text[10] = 0x89;
+  Text[11] = 0xe5;
+  Text[12] = 0xc3;
+
+  BinaryImage WithPdata;
+  WithPdata.Arch = Arch::X64;
+  WithPdata.Bits = Bitness::Bits64;
+  WithPdata.Format = BinaryFormat::COFF;
+  WithPdata.Segments.push_back(executableSegment(0x1000, Text));
+  WithPdata.KnownCodeRanges.push_back({0x1000, 0x1008});
+  ExceptionFunction Owned;
+  Owned.CodeRange = ExceptionAddressRange{0x1000, 0x1008};
+  WithPdata.ExceptionMetadata.Functions.push_back(Owned);
+  WithPdata.Symbols.push_back(Symbol::makeFunc(0x1000, 8));
+
+  Segment Data;
+  Data.VA = 0x2000;
+  Data.Size = 8;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(8);
+  writeLE<uint64_t>(Data.Data.data(), 0x1008);
+  WithPdata.Segments.push_back(std::move(Data));
+
+  runPostLoadDiscovery(WithPdata, "coff-pdata-full");
+  EXPECT_NE(std::find_if(WithPdata.Symbols.begin(), WithPdata.Symbols.end(),
+                         [](const Symbol &Sym) {
+                           return Sym.IsFunc && Sym.Addr == 0x1008;
+                         }),
+            WithPdata.Symbols.end())
+      << "full-image PE still discovers data-pointer callees outside pdata";
+}
+
+TEST(FunctionDiscoveryAlignment, FuncLoadNamesImportThunkWithoutScan) {
+  // `--func` skips scanImportThunks.  A call to an IAT veneer must still
+  // resolve `_CxxThrowException` so HighC can print `throw`.
+  constexpr va_t Thunk = 0x140001020;
+  constexpr va_t IAT = 0x140003000;
+  const int32_t Disp = static_cast<int32_t>(IAT - (Thunk + 6));
+  std::vector<uint8_t> Text(6, 0xcc);
+  Text[0] = 0xff;
+  Text[1] = 0x25;
+  Text[2] = static_cast<uint8_t>(Disp);
+  Text[3] = static_cast<uint8_t>(Disp >> 8);
+  Text[4] = static_cast<uint8_t>(Disp >> 16);
+  Text[5] = static_cast<uint8_t>(Disp >> 24);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.LoadOnlyFunctionEntries.insert(0x140001000);
+  Img.Segments.push_back(executableSegment(Thunk, Text));
+  Import Imp;
+  Imp.Name = "_CxxThrowException";
+  Imp.IATAddr = IAT;
+  Img.Imports.push_back(std::move(Imp));
+
+  runPostLoadDiscovery(Img, "coff-func-thunk");
+  EXPECT_TRUE(Img.ImportStubIndices.empty())
+      << "--func must not walk every executable byte for IAT veneers";
+  const Import *Named = Img.findImportAt(Thunk);
+  ASSERT_NE(Named, nullptr);
+  EXPECT_EQ(Named->Name, "_CxxThrowException");
 }
 
 } // namespace

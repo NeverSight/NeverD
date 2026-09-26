@@ -31,6 +31,7 @@ public:
   std::optional<TypeSym> resolveType(uint64_t) const override;
   std::optional<SourceLoc> sourceLocation(va_t Addr) const override;
   std::vector<FunctionSym> allFunctions() const override;
+  std::vector<DataObjectSym> allDataObjects() const override;
   bool hasInfo() const override;
 
   static bool isCOFFMapHeader(llvm::StringRef Line);
@@ -42,7 +43,9 @@ public:
   /// MSVCMapLoader and LLDMapLoader (which auto-detects this format).
   static void parseCOFFMapContent(llvm::StringRef Content,
                                   std::map<va_t, FunctionSym> &Functions,
-                                  uint64_t ImageBase = 0);
+                                  uint64_t ImageBase = 0,
+                                  std::map<va_t, DataObjectSym> *DataObjects =
+                                      nullptr);
 
   static void parseCOFFMapLineNumbers(llvm::StringRef Content,
                                       std::map<va_t, SourceLoc> &Locations,
@@ -50,6 +53,7 @@ public:
 
 protected:
   std::map<va_t, FunctionSym> Functions;
+  std::map<va_t, DataObjectSym> DataObjects;
   std::map<va_t, SourceLoc> SourceLocations;
   bool Loaded = false;
 

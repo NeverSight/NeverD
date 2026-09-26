@@ -86,6 +86,7 @@ add_neverd_tool(neverd
   cmd/NeverDCmdSimplify.cpp
   cmd/NeverDCmdOptimizeIR.cpp
   cmd/NeverDCmdTranslate.cpp
+  cmd/NeverDCmdEmulation.cpp
   cmd/NeverDCmdSafety.cpp
   cmd/NeverDCmdConcolic.cpp
   cmd/NeverDCmdMobile.cpp

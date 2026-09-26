@@ -187,6 +187,24 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   }
 
   // Seed: parameter register assignments before CALL/INDIR_CALL/tail-call
+  auto seedParamWrites = [&](const std::vector<MedOp> &Ops, int Before) {
+    for (int J = Before; J >= 0; --J) {
+      const MedOp &Prev = Ops[static_cast<size_t>(J)];
+      if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
+          Prev.Opcode == NdOp::INTRINSIC)
+        break;
+      if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
+          (TRI.isParamReg(Prev.Output.RegOff) ||
+           TRI.isVectorReg(Prev.Output.RegOff)))
+        MarkLive(Prev.Output);
+    }
+  };
+  auto blockById = [&](int Id) -> const MedBlock * {
+    for (const auto &Cand : Func.Blocks)
+      if (Cand.Id == Id)
+        return &Cand;
+    return nullptr;
+  };
   for (auto &Blk : Func.Blocks) {
     for (size_t I = 0; I < Blk.Ops.size(); ++I) {
       bool IsCall = (Blk.Ops[I].Opcode == NdOp::CALL ||
@@ -195,24 +213,46 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       bool IsTail = (Blk.Ops[I].Opcode == NdOp::INDIR_BR && Blk.Succs.empty());
       if (!IsCall && !IsTail)
         continue;
-      for (int J = static_cast<int>(I) - 1; J >= 0; --J) {
-        auto &Prev = Blk.Ops[J];
-        if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
-            Prev.Opcode == NdOp::INTRINSIC)
-          break;
-        if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0) {
-          if (TRI.isParamReg(Prev.Output.RegOff) ||
-              TRI.isVectorReg(Prev.Output.RegOff))
-            MarkLive(Prev.Output);
-        }
-      }
+      seedParamWrites(Blk.Ops, static_cast<int>(I) - 1);
+      // IP-map / EH splits often isolate the CALL. `lea r8; mov edx; lea rcx`
+      // then sit in the predecessor and must stay live as call setup.
+      if (I != 0)
+        continue;
+      for (int PredId : Blk.Preds)
+        if (const MedBlock *Pred = blockById(PredId))
+          seedParamWrites(Pred->Ops,
+                          static_cast<int>(Pred->Ops.size()) - 1);
     }
   }
 
-  // Seed: all PHI arguments
+  auto isFlagVar = [&](const MedVar &V) {
+    if (V.Kind == MedVar::Flag)
+      return true;
+    if (V.Kind != MedVar::Reg)
+      return false;
+    if (TRI.isFlag(V.RegOff, V.Size ? V.Size : 1))
+      return true;
+    return V.RegOff == TRI.FlagCF || V.RegOff == TRI.FlagZF ||
+           V.RegOff == TRI.FlagNF || V.RegOff == TRI.FlagVF ||
+           (TRI.FlagPF != 0 && V.RegOff == TRI.FlagPF) ||
+           (TRI.FlagDF != 0 && V.RegOff == TRI.FlagDF);
+  };
+
+  // Seed PHIs that can be implicit ABI live-ins (call args, returns,
+  // callee-saves, SP/FP).  Flag and temp PHIs stay live only when a later
+  // essential op reads them; otherwise CMP/TEST leftover PF popcount and
+  // flag SSA survive at joins (cookie / seh_probe LLVM-to-C).
   for (auto &Blk : Func.Blocks) {
     for (auto &Phi : Blk.Phis) {
-      MarkLive(Phi.Output);
+      const MedVar &V = Phi.Output;
+      if (isFlagVar(V) || V.Kind != MedVar::Reg)
+        continue;
+      if (!(TRI.isParamReg(V.RegOff) || TRI.isReturnReg(V.RegOff) ||
+            TRI.isCalleeSaveReg(V.RegOff) || TRI.isStackPointer(V.RegOff) ||
+            TRI.isFramePointer(V.RegOff) || TRI.isLinkRegister(V.RegOff) ||
+            TRI.isVectorReg(V.RegOff)))
+        continue;
+      MarkLive(V);
       for (auto &[PredId, Arg] : Phi.Args)
         MarkLive(Arg);
     }
@@ -277,6 +317,14 @@ void LowToMedConverter::runDce(MedFunc &Func) {
     Blk.Ops.erase(std::remove_if(Blk.Ops.begin(), Blk.Ops.end(),
                                  [](const MedOp &Op) { return Op.Dead; }),
                   Blk.Ops.end());
+    Blk.Phis.erase(std::remove_if(Blk.Phis.begin(), Blk.Phis.end(),
+                                  [&](const PhiNode &Phi) {
+                                    if (Phi.Output.Id < 0)
+                                      return false;
+                                    return !LiveDefs.count(
+                                        {Phi.Output.Id, Phi.Output.SSAVer});
+                                  }),
+                   Blk.Phis.end());
   }
 }
 

@@ -1,0 +1,18 @@
+//===- KernelInterruptAPIs.def - Interrupt API names and arities ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Genuine fixed-arity WDK interrupt registration and synchronization APIs.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_INTERRUPT_API(IoConnectInterrupt, 11, Passive)
+NEVERD_KERNEL_INTERRUPT_API(IoDisconnectInterrupt, 1, Passive)
+NEVERD_KERNEL_INTERRUPT_API(IoConnectInterruptEx, 1, Passive)
+NEVERD_KERNEL_INTERRUPT_API(IoDisconnectInterruptEx, 1, Passive)
+NEVERD_KERNEL_INTERRUPT_API(KeSynchronizeExecution, 3, Any)
+NEVERD_KERNEL_INTERRUPT_API(KeAcquireInterruptSpinLock, 1, Any)
+NEVERD_KERNEL_INTERRUPT_API(KeReleaseInterruptSpinLock, 2, Any)

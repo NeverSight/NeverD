@@ -292,6 +292,23 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     }
   }
 
+  auto fullyPreserved = [&](uint64_t RegOff, uint16_t Size) {
+    if (Size == 0)
+      return false;
+    if (TRI.callPreservedPrefixSize(RegOff, Size) >= Size)
+      return true;
+    // SysV callee-saves omit Win64 RSI/RDI and XMM6-15. Those live in
+    // callPreservedRanges(COFF). A partial prefix (ZMM low 16) stays a clobber.
+    for (const auto &Range : TRI.callPreservedRanges(TargetFormat)) {
+      if (RegOff < Range.Offset || Size > Range.Bytes)
+        continue;
+      if (RegOff + static_cast<uint64_t>(Size) <=
+          Range.Offset + static_cast<uint64_t>(Range.Bytes))
+        return true;
+    }
+    return false;
+  };
+
   auto CallClobberedIds = [&](const MedOp &Op) {
     std::set<int> Result;
     if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
@@ -304,8 +321,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       for (int Id : Ids) {
         auto It = RegVarOfId.find(Id);
         if (It == RegVarOfId.end() ||
-            TRI.callPreservedPrefixSize(RegOff, It->second.Size) <
-                It->second.Size)
+            !fullyPreserved(RegOff, It->second.Size))
           Result.insert(Id);
       }
     }
@@ -359,6 +375,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
               Kill.insert(It->second.begin(), It->second.end());
           }
         }
+        for (const MedVar &Aux : Op.IntrinsicOutputs)
+          if (Aux.Id >= 0 && Aux.Size > 0)
+            Kill.insert(Aux.Id);
         std::set<int> Clobbered = CallClobberedIds(Op);
         Kill.insert(Clobbered.begin(), Clobbered.end());
       }
@@ -456,6 +475,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     for (auto &Op : Func.Blocks[B].Ops) {
       if (Op.Output.Id >= 0 && Op.Output.Size > 0)
         VarDefs[Op.Output.Id].insert(B);
+      for (const MedVar &Aux : Op.IntrinsicOutputs)
+        if (Aux.Id >= 0 && Aux.Size > 0)
+          VarDefs[Aux.Id].insert(B);
       for (int Id : CallClobberedIds(Op))
         VarDefs[Id].insert(B);
     }
@@ -464,9 +486,13 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   // Step 4: Insert phi nodes
   std::map<int, MedVar> VarIdToVar = RegVarOfId;
   for (auto &Blk : Func.Blocks)
-    for (auto &Op : Blk.Ops)
+    for (auto &Op : Blk.Ops) {
       if (Op.Output.Id >= 0 && Op.Output.Size > 0)
         VarIdToVar.emplace(Op.Output.Id, Op.Output);
+      for (const MedVar &Aux : Op.IntrinsicOutputs)
+        if (Aux.Id >= 0 && Aux.Size > 0)
+          VarIdToVar.emplace(Aux.Id, Aux);
+    }
 
   for (auto &[VarId, DefBlocks] : VarDefs) {
     std::set<int> PhiBlocks;
@@ -544,6 +570,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       if (Op.Output.Id >= 0 && Op.Output.Size > 0) {
         Op.Output.SSAVer = NewVersion(Op.Output.Id);
         F.SavedSizes[Op.Output.Id]++;
+      }
+      for (MedVar &Aux : Op.IntrinsicOutputs) {
+        if (Aux.Id < 0 || Aux.Size == 0)
+          continue;
+        Aux.SSAVer = NewVersion(Aux.Id);
+        F.SavedSizes[Aux.Id]++;
       }
       for (int Id : CallClobberedIds(Op)) {
         auto It = RegVarOfId.find(Id);

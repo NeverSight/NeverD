@@ -50,13 +50,16 @@ Put the decision in one emitter helper and keep HighC/LLVMC consistent.
 - Image objects are `extern` (they already live in the original image).
 - Debug/`DataObjectSym`/symbol-table names win over `g_`.
 - `.rdata` scalar loads fold to immediates (`0xE0421001`), not `*(T*)(VA)`.
-- Functions without symbols stay `sub_<va>`.
+- Functions without symbols stay `sub_<va>`. An export or image
+  function symbol replaces that name when debug info does not
+  (`ImageSymbolReplacesSynthesizedFunctionName`).
 
 **Locals**
 
 - Every C identifier that is assigned must be declared.
 - HighC: collect `Var` and `Phi`; walk `__except`/`catch` bodies
-  (`collectUsedVars` / `collectUsedVarsExpr`).
+  (`collectUsedVars` / `collectUsedVarsExpr`). Unused call results print as
+  statements (`analyzeUnusedCallResults`); do not declare the dest.
 - LLVMC: declare every instruction `writeInstruction` assigns, including
   unused non-calls (obfuscation junk arithmetic). Skip only void/token,
   inlined values, dead frame stores, and calls whose result is omitted.
@@ -65,9 +68,16 @@ Put the decision in one emitter helper and keep HighC/LLVMC consistent.
 
 - HighC: structured `SEHTry`/`CxxTry` as `__try`/`__except`/`__finally` and
   C++ `try`/`catch`. Filter as `name(GetExceptionInformation())`.
-- LLVMC: goto-form plus a whole-function `__try` wrap when pads exist.
-  CatchSwitch comments may say `/* __except (filter) */`. This is weaker
-  than HighC and is known.
+- LLVMC: goto-form plus recovered EH wraps. A single CatchSwitch uses that
+  filter; a sibling CleanupPad+CatchSwitch nest `__try/__finally` inside
+  `__except`. CatchSwitch/CatchPad/handler-only blocks print inside the
+  matching `__except`/`__finally` (`LLVMCExceptWrapContainsHandlerBody`,
+  `CorpusFuncLoadSehProbeLlvmcExceptContainsHandler`). A matched
+  `llvm.seh.try.begin` / `try.end` pair per wrap prints the outer
+  continuation between `__finally` and `__except`
+  (`LLVMCNestedFinallyInsideExceptContainsBothBodies`). Analysis-only C++
+  without pads is `try { } /* unwind cleanup */`. HighC structured regions
+  remain the readable target.
 
 **ABI / calls**
 
@@ -97,9 +107,10 @@ cmake --build build-release --target NeverDLiftTests NeverDHighCStoreForwardingT
 ./bin/NeverDHighCStoreForwardingTests
 ```
 
-`NeverDHighCStoreForwardingTests` currently fails on this branch (named
-frame slots vs param-home copy-forward). Do not treat a green
-`NeverDLiftTests` filter as proof that store-forwarding is healthy.
+`NeverDHighCStoreForwardingTests` is 17/17. A later slot that stays in
+memory cannot drop a producer whose load was not substituted; accepted
+slots nest already-forwarded values so `arg0` remains visible. Do not
+treat a green `NeverDLiftTests` filter as the only store-forwarding check.
 
 Code owners: HighC `lib/backend/c/HighC/`, LLVMC `lib/backend/c/LLVMC/`,
 shared identifiers `lib/backend/c/CIdentifier.h`.

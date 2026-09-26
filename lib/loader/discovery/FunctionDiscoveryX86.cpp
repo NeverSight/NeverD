@@ -34,8 +34,6 @@ size_t scanImportThunksX86(BinaryImage &Img, const Segment &Seg,
     if (D[I] != x86::kJmpIndirectOp || D[I + 1] != x86::kJmpIndirectModRM)
       continue;
     va_t InsnVA = Seg.VA + I;
-    if (!Img.isCodeRange(InsnVA, x86::kJmpIndirectLen))
-      continue;
     va_t Target;
     if (Is64) {
       int32_t Disp;
@@ -49,6 +47,8 @@ size_t scanImportThunksX86(BinaryImage &Img, const Segment &Seg,
     }
     auto TargetIt = Targets.find(Target);
     if (TargetIt == Targets.end())
+      continue;
+    if (!Img.isCodeRange(InsnVA, x86::kJmpIndirectLen))
       continue;
     Img.recordImportStub(InsnVA, TargetIt->second);
     if (!Existing.insert(InsnVA).second)

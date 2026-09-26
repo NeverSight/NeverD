@@ -101,6 +101,42 @@ TEST(ExceptionCFGSeed, DecodesAnItaniumLandingPadNoBranchReaches) {
   EXPECT_EQ(blockStarts(Func), (std::vector<va_t>{kEntry, kEntry + 1}));
 }
 
+TEST(ExceptionCFGSeed, CxxIpMapDoesNotSplitSameStateCallFromArgSetup) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = kBase;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = kEntry;
+  Text.Size = 0x20;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0x90);
+  Text.Data.back() = 0xc3;
+  Img.Segments.push_back(std::move(Text));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {kEntry, kEntry + 0x20};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap = {{-1, 0}};
+  Cxx.IPMap = {
+      {kEntry + 0x08, -1},
+      {kEntry + 0x10, 0},
+      {kEntry + 0x18, -1},
+  };
+  EH.Cxx = std::move(Cxx);
+
+  const LowFunc Func = buildWith(Img, std::move(EH), Arch::X64);
+  EXPECT_EQ(blockStarts(Func),
+            (std::vector<va_t>{kEntry, kEntry + 0x10, kEntry + 0x18}))
+      << "first IP at a same-state call must stay with mov rcx, this";
+}
+
 TEST(ExceptionCFGSeed, SkipsAnItaniumCallSiteThatNamesNoLandingPad) {
   BinaryImage Img = makeImage(Arch::X64, BinaryFormat::ELF);
   ExceptionFunction EH = makeRecord(ExceptionEncoding::DwarfFDE,
@@ -192,6 +228,31 @@ TEST(ExceptionCFGSeed, DecodesAnExceptFilterAndItsHandlerBody) {
   EH.Registration = std::move(Chain);
 
   const LowFunc Func = buildWith(Img, std::move(EH), Arch::X86);
+  EXPECT_EQ(blockStarts(Func),
+            (std::vector<va_t>{kEntry, kEntry + 1, kEntry + 3}));
+}
+
+TEST(ExceptionCFGSeed, DecodesRegistrationThunksLabeledAsFunctionEntries) {
+  // MSVC labels the in-function filter/except thunks as symbols.  Those
+  // labels must not become foreign CFG entries that drop the except body.
+  BinaryImage Img = makeImage(Arch::X86, BinaryFormat::COFF);
+  ExceptionFunction EH = makeRecord(ExceptionEncoding::X86ScopeTableEH3,
+                                    ExceptionPersonality::ExceptHandler3);
+  RegistrationChainInfo Chain;
+  RegistrationScopeRecord Scope;
+  Scope.FilterVA = kEntry + 1;
+  Scope.HandlerVA = kEntry + 3;
+  Chain.Scopes.push_back(Scope);
+  EH.Registration = std::move(Chain);
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X86));
+  CFGBuilder Builder;
+  const std::set<va_t> Entries{kEntry, kEntry + 1, kEntry + 3};
+  Builder.setKnownFuncEntries(&Entries);
+  const LowFunc Func = Builder.build(Img, Dec, kEntry, "seeded");
   EXPECT_EQ(blockStarts(Func),
             (std::vector<va_t>{kEntry, kEntry + 1, kEntry + 3}));
 }

@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -62,6 +63,73 @@ void completeFunctionSizes(BinaryImage &Img, const FunctionSymbolIndex &Index,
       Img.Symbols[I].Size = Size;
 }
 
+void commitPrimaryFunctionSymbol(BinaryImage &Img, va_t Addr, va_t End,
+                                 const FunctionSymbolIndex &FunctionSymbols,
+                                 std::set<va_t> &Seen, size_t &Added) {
+  const bool AlreadySeen = !Seen.insert(Addr).second;
+  const auto *SegPtr = Img.getSegmentFor(Addr);
+  if (!SegPtr || !SegPtr->isExecutable())
+    return;
+  size_t Off = static_cast<size_t>(Addr - SegPtr->VA);
+  if (AlreadySeen) {
+    // Completing a pre-existing symbol still requires a decode-shaped
+    // start so a data alias at the same VA cannot inherit pdata size.
+    if (!checkPrologueAtOffset(*SegPtr, Off, Img.Arch))
+      return;
+    completeFunctionSizes(Img, FunctionSymbols, Addr, End - Addr);
+    return;
+  }
+  // A primary RUNTIME_FUNCTION is PE-authenticated function identity.
+  // Scan-style prologue heuristics (REX/push) miss MSVC Win64 homes such as
+  // `mov [rsp+8], ecx` (0x89) and would drop unnamed pdata entries.
+  Img.Symbols.push_back(Symbol::makeFunc(Addr, End - Addr));
+  ++Added;
+}
+
+bool runtimeFunctionCovers(va_t Addr, va_t End, va_t Query) {
+  return Query >= Addr && Query < End;
+}
+
+void commitKnownCodeRanges(BinaryImage &Img) {
+  std::sort(Img.KnownCodeRanges.begin(), Img.KnownCodeRanges.end());
+  Img.KnownCodeRanges.erase(
+      std::unique(Img.KnownCodeRanges.begin(), Img.KnownCodeRanges.end()),
+      Img.KnownCodeRanges.end());
+}
+
+void noteKnownCodeRange(BinaryImage &Img, va_t Begin, va_t End) {
+  if (Begin < End)
+    Img.KnownCodeRanges.emplace_back(Begin, End);
+}
+
+void notePdataNeighbors(BinaryImage &Img, uint64_t ImageBase, va_t Begin,
+                        va_t End) {
+  noteKnownCodeRange(Img, Begin, End);
+  if (Img.COFFPDataRecords.empty() || Begin < ImageBase)
+    return;
+  const uint32_t BeginRVA = static_cast<uint32_t>(Begin - ImageBase);
+  const auto It = std::lower_bound(
+      Img.COFFPDataRecords.begin(), Img.COFFPDataRecords.end(), BeginRVA,
+      [](const BinaryImage::COFFPDataRecord &Rec, uint32_t RVA) {
+        return Rec.BeginRVA < RVA;
+      });
+  auto addRec = [&](const BinaryImage::COFFPDataRecord &Rec) {
+    if (Rec.BeginRVA < Rec.EndRVA && Rec.BeginRVA <= InvalidVA - ImageBase &&
+        Rec.EndRVA <= InvalidVA - ImageBase)
+      noteKnownCodeRange(Img, ImageBase + Rec.BeginRVA,
+                         ImageBase + Rec.EndRVA);
+  };
+  if (It != Img.COFFPDataRecords.begin())
+    addRec(*std::prev(It));
+  if (It != Img.COFFPDataRecords.end()) {
+    const auto Next = std::next(It);
+    if (Next != Img.COFFPDataRecords.end())
+      addRec(*Next);
+  }
+}
+
+
+
 void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                         uint64_t ImageBase) {
   const data_directory *ExcDir =
@@ -101,6 +169,17 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   for (const auto &Entry : FunctionSymbols)
     Seen.insert(Entry.first);
 
+  const bool Restrict = !Img.LoadOnlyFunctionEntries.empty();
+  if (Restrict)
+    Img.KnownCodeRanges.reserve(Img.KnownCodeRanges.size() +
+                                3 * Img.LoadOnlyFunctionEntries.size() + 8);
+  else
+    Img.KnownCodeRanges.reserve(Img.KnownCodeRanges.size() + Count);
+  if (Restrict)
+    Img.COFFPDataRecords.reserve(Count);
+  else
+    Img.ExceptionMetadata.Functions.reserve(Count);
+
   [[maybe_unused]] size_t Added = 0;
   bool SawZeroEntry = false;
   bool DiagnosedInteriorPadding = false;
@@ -123,6 +202,32 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     uint32_t RecordRVA = RecordRVA64 <= std::numeric_limits<uint32_t>::max()
                              ? static_cast<uint32_t>(RecordRVA64)
                              : 0;
+    va_t Addr = 0;
+    va_t End = 0;
+    const bool HaveRange = RF.BeginAddress < RF.EndAddress &&
+                           RF.BeginAddress <= InvalidVA - ImageBase &&
+                           RF.EndAddress <= InvalidVA - ImageBase;
+    if (HaveRange) {
+      Addr = ImageBase + RF.BeginAddress;
+      End = ImageBase + RF.EndAddress;
+      if (!Restrict)
+        Img.KnownCodeRanges.emplace_back(Addr, End);
+    }
+    if (Restrict) {
+      Img.COFFPDataRecords.push_back(
+          {RF.BeginAddress, RF.EndAddress, RF.UnwindInformation, RecordRVA});
+      bool Needed = false;
+      if (HaveRange) {
+        for (va_t Query : Img.LoadOnlyFunctionEntries) {
+          if (runtimeFunctionCovers(Addr, End, Query)) {
+            Needed = true;
+            break;
+          }
+        }
+      }
+      if (!Needed)
+        continue;
+    }
     ExceptionFunction EF =
         decodeX64ExceptionFunction(Img, ImageBase, RecordRVA, RF.BeginAddress,
                                    RF.EndAddress, RF.UnwindInformation);
@@ -134,44 +239,38 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     const ExceptionFunction &Stored = Img.ExceptionMetadata.Functions.back();
     if (!HasRange)
       continue;
-    va_t Addr = Stored.CodeRange.Begin;
-    va_t End = Stored.CodeRange.End;
-
-    Img.KnownCodeRanges.emplace_back(Addr, End);
+    Addr = Stored.CodeRange.Begin;
+    End = Stored.CodeRange.End;
+    if (HasRange) {
+      if (Restrict)
+        notePdataNeighbors(Img, ImageBase, Addr, End);
+      else
+        Img.KnownCodeRanges.emplace_back(Addr, End);
+    }
 
     if (IsChained)
       continue;
-    const bool AlreadySeen = !Seen.insert(Addr).second;
+    commitPrimaryFunctionSymbol(Img, Addr, End, FunctionSymbols, Seen, Added);
+  }
 
-    const auto *SegPtr = Img.getSegmentFor(Addr);
-    if (!SegPtr || !SegPtr->isExecutable())
-      continue;
-
-    {
-      size_t Off = static_cast<size_t>(Addr - SegPtr->VA);
-      if (AlreadySeen) {
-        // Completing a pre-existing symbol still requires a decode-shaped
-        // start so a data alias at the same VA cannot inherit pdata size.
-        if (!checkPrologueAtOffset(*SegPtr, Off, Img.Arch))
-          continue;
-        completeFunctionSizes(Img, FunctionSymbols, Addr, End - Addr);
-        continue;
-      }
-    }
-    // A primary RUNTIME_FUNCTION is PE-authenticated function identity.
-    // Scan-style prologue heuristics (REX/push) miss MSVC Win64 homes such as
-    // `mov [rsp+8], ecx` (0x89) and would drop unnamed pdata entries.
-    Img.Symbols.push_back(
-        Symbol::makeFunc(Addr, RF.EndAddress - RF.BeginAddress));
-    ++Added;
+  if (Restrict) {
+    std::vector<va_t> Primaries;
+    for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions)
+      if (F.Kind == RuntimeFunctionKind::Chained && F.ChainedPrimaryRange)
+        Primaries.push_back(F.ChainedPrimaryRange->Begin);
+    for (va_t Primary : Primaries)
+      ensureX64RuntimeFunction(Img, Primary);
   }
 
   unwind_detail::resolveX64UnwindChains(Img.ExceptionMetadata);
 
-  std::sort(Img.KnownCodeRanges.begin(), Img.KnownCodeRanges.end());
-  Img.KnownCodeRanges.erase(
-      std::unique(Img.KnownCodeRanges.begin(), Img.KnownCodeRanges.end()),
-      Img.KnownCodeRanges.end());
+  if (Restrict) {
+    for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions)
+      if (F.CodeRange.isValid())
+        notePdataNeighbors(Img, ImageBase, F.CodeRange.Begin, F.CodeRange.End);
+  }
+
+  commitKnownCodeRanges(Img);
   Img.ExceptionMetadata.rebuildIndex();
   LLVM_DEBUG(llvm::dbgs() << "coff: parsed " << Count
                           << " RUNTIME_FUNCTION entries (" << Added
@@ -693,6 +792,66 @@ void unwind_detail::resolveX64UnwindChains(ExceptionInfo &Info) {
     Info.ParseStatus =
         mergeExceptionParseStatus(Info.ParseStatus, Root.ParseStatus);
   }
+}
+
+bool ensureX64RuntimeFunction(BinaryImage &Img, va_t Address) {
+  if (Img.Arch != Arch::X64)
+    return false;
+  if (const ExceptionFunction *Existing =
+          Img.ExceptionMetadata.findFunction(Address);
+      Existing && Existing->CodeRange.isValid())
+    return false;
+  if (Img.COFFPDataRecords.empty() || Address < Img.Base)
+    return false;
+
+  const uint32_t QueryRVA = static_cast<uint32_t>(Address - Img.Base);
+  const auto It = std::upper_bound(
+      Img.COFFPDataRecords.begin(), Img.COFFPDataRecords.end(), QueryRVA,
+      [](uint32_t RVA, const BinaryImage::COFFPDataRecord &Rec) {
+        return RVA < Rec.BeginRVA;
+      });
+  if (It == Img.COFFPDataRecords.begin())
+    return false;
+  const BinaryImage::COFFPDataRecord &Rec = *std::prev(It);
+  if (QueryRVA < Rec.BeginRVA || QueryRVA >= Rec.EndRVA)
+    return false;
+  for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+    if (F.RuntimeFunctionRVA == Rec.RecordRVA)
+      return false;
+    if (F.CodeRange.isValid() && F.CodeRange.Begin == Img.Base + Rec.BeginRVA &&
+        F.CodeRange.End == Img.Base + Rec.EndRVA)
+      return false;
+  }
+
+  ExceptionFunction EF = decodeX64ExceptionFunction(
+      Img, Img.Base, Rec.RecordRVA, Rec.BeginRVA, Rec.EndRVA, Rec.UnwindInfoRVA);
+  Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
+      Img.ExceptionMetadata.ParseStatus, EF.ParseStatus);
+  const bool HasRange = EF.CodeRange.isValid();
+  const bool IsChained = EF.Kind == RuntimeFunctionKind::Chained;
+  const std::optional<ExceptionAddressRange> PrimaryRange = EF.ChainedPrimaryRange;
+  Img.ExceptionMetadata.Functions.push_back(std::move(EF));
+  if (HasRange) {
+    const ExceptionFunction &Stored = Img.ExceptionMetadata.Functions.back();
+    notePdataNeighbors(Img, Img.Base, Stored.CodeRange.Begin,
+                       Stored.CodeRange.End);
+    commitKnownCodeRanges(Img);
+    if (!IsChained) {
+      const auto FunctionSymbols = indexFunctionSymbols(Img);
+      std::set<va_t> Seen;
+      for (const auto &Entry : FunctionSymbols)
+        Seen.insert(Entry.first);
+      size_t Added = 0;
+      commitPrimaryFunctionSymbol(Img, Stored.CodeRange.Begin,
+                                  Stored.CodeRange.End, FunctionSymbols, Seen,
+                                  Added);
+    }
+  }
+  Img.ExceptionMetadata.rebuildIndex();
+  if (IsChained && PrimaryRange)
+    ensureX64RuntimeFunction(Img, PrimaryRange->Begin);
+  unwind_detail::resolveX64UnwindChains(Img.ExceptionMetadata);
+  return true;
 }
 
 void parseExceptions(const COFFObjectFile &Obj, BinaryImage &Img,

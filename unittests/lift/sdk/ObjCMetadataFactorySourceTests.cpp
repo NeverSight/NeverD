@@ -400,7 +400,7 @@ TEST(ObjCMetadataFactorySources,
     else if (Mutation == 2)
       Hint->Signature.Parameters[0].Location.RegisterOffset = 16;
     else if (Mutation == 3)
-      Hint->Format.emplace();
+      Hint->Format.emplace(SourceCallTypeHint::FormatArguments{});
     else if (Mutation == 4)
       Hint->WeakImport = true;
     CEmitterOptions Options;

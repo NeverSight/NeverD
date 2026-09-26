@@ -30,6 +30,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
+#include "neverd/debug/PDBFunctionNameHint.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/sbf/analysis/SBFAnalysisLimits.h"
 #include "neverd/sbf/analysis/SBFFunctionBody.h"
@@ -42,6 +43,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <exception>
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -263,7 +265,9 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   }
 
   S->LoadProgressCb.report("image", 0, 1, "reading binary");
-  auto ImgOrErr = loadBinary(P);
+  BinaryLoadOptions LoadOpts;
+  LoadOpts.OnlyFunctionEntries = S->OnlyFunctionEntries;
+  auto ImgOrErr = loadBinary(P, LoadOpts);
   if (!ImgOrErr) {
     std::string Err;
     llvm::raw_string_ostream OS(Err);
@@ -345,6 +349,33 @@ void neverd_session_set_map_path(neverd_session_t Sess, const char *Path) {
 void neverd_session_set_debug_info_enabled(neverd_session_t Sess, int Enabled) {
   if (auto *S = toSession(Sess))
     S->DbgRequest.Enabled = Enabled != 0;
+}
+
+void neverd_session_restrict_function(neverd_session_t Sess,
+                                      neverd_va_t Entry) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return;
+  S->OnlyFunctionEntries.clear();
+  if (Entry)
+    S->OnlyFunctionEntries.insert(Entry);
+}
+
+neverd_va_t neverd_session_resolve_function_name_before_load(
+    neverd_session_t Sess, const char *BinaryPath, const char *Name) {
+  auto *S = toSession(Sess);
+  if (!S || !BinaryPath || !*BinaryPath || !Name || !*Name ||
+      !S->DbgRequest.Enabled || S->DbgRequest.PDBPath.empty())
+    return 0;
+  try {
+    return resolvePDBPublicFunctionNameHint(
+               std::filesystem::u8path(BinaryPath), S->DbgRequest.PDBPath,
+               Name)
+        .value_or(0);
+  } catch (const std::exception &) {
+    // An optional pre-load lookup never replaces normal load diagnostics.
+    return 0;
+  }
 }
 
 void neverd_session_set_load_progress(neverd_session_t Sess,

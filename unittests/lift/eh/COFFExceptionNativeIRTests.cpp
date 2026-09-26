@@ -8,6 +8,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
@@ -568,6 +569,1002 @@ TEST(COFFExceptionIR, EmitsVerifierCleanBoundedFH4CatchAllContract) {
       ++FH4ProvenanceAnchors;
     }
   EXPECT_EQ(FH4ProvenanceAnchors, 3u);
+}
+
+TEST(COFFExceptionIR, LLVMCNativeObjectDestructorPrintsInUnwindCleanup) {
+  DirectCxxFixture Fixture("native_obj_dtor", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t DtorVA = 0x140002000;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::DestructorWithObject;
+  Cxx.UnwindMap[0].ActionVA = DtorVA;
+  Cxx.UnwindMap[0].ObjectOffset = -32;
+  Cxx.UnwindMap[0].ToState = -1;
+  Fixture.Source.Blocks.front().StartAddr = EH.CodeRange.Begin + 4;
+  Cxx.IPMap = {{EH.CodeRange.Begin, -1},
+               {EH.CodeRange.Begin + 4, 0},
+               {EH.CodeRange.Begin + 0x20, 1},
+               {EH.CodeRange.Begin + 0x30, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+  ASSERT_EQ(IR.Model, WindowsEHNativeSourceModel::CxxFH3);
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call,
+                                             EH.CodeRange.Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, DtorVA, "release_object");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CleanupAt = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(CleanupAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("release_object(", CleanupAt);
+  EXPECT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("release_object(", CallAt + 1), std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeDirectFuncletPrintsInUnwindCleanup) {
+  DirectCxxFixture Fixture("native_direct_funclet", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t FuncletVA = 0x140002000;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[0].ActionVA = EH.CodeRange.Begin + 8;
+  Cxx.UnwindMap[0].ObjectOffset = 0;
+  Cxx.UnwindMap[0].ToState = -1;
+  Fixture.Source.Blocks.front().StartAddr = EH.CodeRange.Begin + 4;
+  Cxx.IPMap = {{EH.CodeRange.Begin, -1},
+               {EH.CodeRange.Begin + 4, 0},
+               {EH.CodeRange.Begin + 0x20, 1},
+               {EH.CodeRange.Begin + 0x30, -1}};
+
+  const WindowsEHNativeSourceClassification Inside =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  EXPECT_FALSE(Inside.canLowerNativeIR());
+
+  Cxx.UnwindMap[0].ActionVA = FuncletVA;
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+  ASSERT_EQ(IR.Model, WindowsEHNativeSourceModel::CxxFH3);
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call,
+                                             EH.CodeRange.Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, FuncletVA, "unwind_funclet");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CleanupAt = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(CleanupAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("unwind_funclet(", CleanupAt);
+  EXPECT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unwind_funclet(", CallAt + 1), std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeInParentDirectFuncletPrintsItsBodyInCleanup) {
+  DirectCxxFixture Fixture("native_inparent_direct_funclet", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  const va_t Begin = EH.CodeRange.Begin;
+  const va_t FuncletVA = Begin + 0x30;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[0].ActionVA = FuncletVA;
+  Cxx.UnwindMap[0].ObjectOffset = 0;
+  Cxx.UnwindMap[0].ToState = -1;
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  MedBlock Funclet;
+  Funclet.Id = 2;
+  Funclet.StartAddr = FuncletVA;
+  Funclet.EndAddr = Begin + 0x40;
+  Fixture.Source.Blocks.push_back(std::move(Funclet));
+  auto *BodyTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Fixture.Context), false);
+  auto *Body = llvm::Function::Create(
+      BodyTy, llvm::GlobalValue::ExternalLinkage, "dtor_body", Fixture.Module);
+  auto *FuncletBB =
+      llvm::BasicBlock::Create(Fixture.Context, "unwind.local", Fixture.Function);
+  llvm::IRBuilder<>(FuncletBB).CreateCall(Body);
+  llvm::IRBuilder<>(FuncletBB).CreateRetVoid();
+  Fixture.OriginalBlockMap.emplace(2, FuncletBB);
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {Begin + 0x20, 1},
+               {FuncletVA, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CleanupAt = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(CleanupAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("dtor_body(", CleanupAt);
+  EXPECT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("dtor_body(", CallAt + 1), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeTryBodyDirectFuncletPrintsItsBodyInCleanup) {
+  DirectCxxFixture Fixture("native_try_body_direct_funclet", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  const va_t Begin = EH.CodeRange.Begin;
+  const va_t FuncletVA = Begin + 0x10;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[0].ActionVA = FuncletVA;
+  Cxx.UnwindMap[0].ObjectOffset = 0;
+  Cxx.UnwindMap[0].ToState = -1;
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  Fixture.Source.Blocks.front().EndAddr = FuncletVA;
+  MedBlock Funclet;
+  Funclet.Id = 2;
+  Funclet.StartAddr = FuncletVA;
+  Funclet.EndAddr = Begin + 0x20;
+  Fixture.Source.Blocks.push_back(std::move(Funclet));
+  auto *BodyTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Fixture.Context), false);
+  auto *Body = llvm::Function::Create(
+      BodyTy, llvm::GlobalValue::ExternalLinkage, "try_dtor", Fixture.Module);
+  auto *FuncletBB = llvm::BasicBlock::Create(Fixture.Context, "unwind.try",
+                                             Fixture.Function);
+  llvm::IRBuilder<>(FuncletBB).CreateCall(Body);
+  llvm::IRBuilder<>(FuncletBB).CreateRetVoid();
+  Fixture.OriginalBlockMap.emplace(2, FuncletBB);
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {FuncletVA, 0},
+               {Begin + 0x20, 1},
+               {Begin + 0x30, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CleanupAt = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(CleanupAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("try_dtor(", CleanupAt);
+  EXPECT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("try_dtor(", CallAt + 1), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeDirectFuncletChainPrintsInUnwindOrder) {
+  DirectCxxFixture Fixture("native_direct_chain", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t OuterVA = 0x140002000;
+  constexpr va_t InnerVA = 0x140002010;
+  Cxx.MaxState = 3;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[0].ActionVA = OuterVA;
+  Cxx.UnwindMap[0].ObjectOffset = 0;
+  Cxx.UnwindMap[0].ToState = -1;
+  Cxx.UnwindMap[1].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[1].ActionVA = InnerVA;
+  Cxx.UnwindMap[1].ObjectOffset = 0;
+  Cxx.UnwindMap[1].ToState = 0;
+  CxxUnwindAction HandlerState;
+  HandlerState.Kind = CxxUnwindAction::ActionKind::None;
+  HandlerState.ToState = -1;
+  Cxx.UnwindMap.push_back(HandlerState);
+  Cxx.TryBlocks.front().TryLow = 0;
+  Cxx.TryBlocks.front().TryHigh = 1;
+  Cxx.TryBlocks.front().CatchHigh = 2;
+  Fixture.Source.Blocks.front().StartAddr = EH.CodeRange.Begin + 4;
+  Cxx.IPMap = {{EH.CodeRange.Begin, -1},
+               {EH.CodeRange.Begin + 4, 1},
+               {EH.CodeRange.Begin + 0x20, 2},
+               {EH.CodeRange.Begin + 0x30, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call,
+                                             EH.CodeRange.Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, InnerVA, "unwind_inner");
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, OuterVA, "unwind_outer");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CleanupAt = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(CleanupAt, std::string::npos) << Source;
+  const auto InnerAt = Source.find("unwind_inner(", CleanupAt);
+  const auto OuterAt = Source.find("unwind_outer(", CleanupAt);
+  EXPECT_NE(InnerAt, std::string::npos) << Source;
+  EXPECT_NE(OuterAt, std::string::npos) << Source;
+  EXPECT_LT(InnerAt, OuterAt) << Source;
+  EXPECT_EQ(Source.find("unwind_inner(", InnerAt + 1), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unwind_outer(", OuterAt + 1), std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeDirectFuncletChainAcrossTryPrintsBothEdges) {
+  DirectCxxFixture Fixture("native_direct_across_try", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t OuterVA = 0x140002000;
+  constexpr va_t InnerVA = 0x140002010;
+  Cxx.MaxState = 3;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[0].ActionVA = OuterVA;
+  Cxx.UnwindMap[0].ObjectOffset = 0;
+  Cxx.UnwindMap[0].ToState = -1;
+  Cxx.UnwindMap[1].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[1].ActionVA = InnerVA;
+  Cxx.UnwindMap[1].ObjectOffset = 0;
+  Cxx.UnwindMap[1].ToState = 0;
+  CxxUnwindAction HandlerState;
+  HandlerState.Kind = CxxUnwindAction::ActionKind::None;
+  HandlerState.ToState = 0;
+  Cxx.UnwindMap.push_back(HandlerState);
+  Cxx.TryBlocks.front().TryLow = 1;
+  Cxx.TryBlocks.front().TryHigh = 1;
+  Cxx.TryBlocks.front().CatchHigh = 2;
+  Fixture.Source.Blocks.front().StartAddr = EH.CodeRange.Begin + 4;
+  Cxx.IPMap = {{EH.CodeRange.Begin, -1},
+               {EH.CodeRange.Begin + 4, 1},
+               {EH.CodeRange.Begin + 0x20, 2},
+               {EH.CodeRange.Begin + 0x30, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call,
+                                             EH.CodeRange.Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, InnerVA, "unwind_inner");
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, OuterVA, "unwind_outer");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto InnerCleanup = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(InnerCleanup, std::string::npos) << Source;
+  const auto InnerAt = Source.find("unwind_inner(", InnerCleanup);
+  const auto CatchAt = Source.find("} catch (", InnerCleanup);
+  const auto OuterCleanup = Source.find("} /* unwind cleanup */",
+                                        InnerCleanup + 1);
+  ASSERT_NE(InnerAt, std::string::npos) << Source;
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  ASSERT_NE(OuterCleanup, std::string::npos) << Source;
+  const auto OuterAt = Source.find("unwind_outer(", OuterCleanup);
+  EXPECT_LT(InnerAt, CatchAt) << Source;
+  EXPECT_LT(CatchAt, OuterCleanup) << Source;
+  EXPECT_NE(OuterAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unwind_inner(", InnerAt + 1), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unwind_outer(", OuterAt + 1), std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeMixedDestructorChainPrintsInUnwindOrder) {
+  DirectCxxFixture Fixture("native_mixed_dtor_chain", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t ObjectVA = 0x140002000;
+  constexpr va_t FuncletVA = 0x140002010;
+  Cxx.MaxState = 3;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::DestructorWithObject;
+  Cxx.UnwindMap[0].ActionVA = ObjectVA;
+  Cxx.UnwindMap[0].ObjectOffset = -32;
+  Cxx.UnwindMap[0].ToState = -1;
+  Cxx.UnwindMap[1].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[1].ActionVA = FuncletVA;
+  Cxx.UnwindMap[1].ObjectOffset = 0;
+  Cxx.UnwindMap[1].ToState = 0;
+  CxxUnwindAction HandlerState;
+  HandlerState.Kind = CxxUnwindAction::ActionKind::None;
+  HandlerState.ToState = -1;
+  Cxx.UnwindMap.push_back(HandlerState);
+  Cxx.TryBlocks.front().TryLow = 0;
+  Cxx.TryBlocks.front().TryHigh = 1;
+  Cxx.TryBlocks.front().CatchHigh = 2;
+  Fixture.Source.Blocks.front().StartAddr = EH.CodeRange.Begin + 4;
+  Cxx.IPMap = {{EH.CodeRange.Begin, -1},
+               {EH.CodeRange.Begin + 4, 1},
+               {EH.CodeRange.Begin + 0x20, 2},
+               {EH.CodeRange.Begin + 0x30, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call,
+                                             EH.CodeRange.Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, FuncletVA, "unwind_inner");
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, ObjectVA, "release_object");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CleanupAt = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(CleanupAt, std::string::npos) << Source;
+  const auto InnerAt = Source.find("unwind_inner(", CleanupAt);
+  const auto ObjectAt = Source.find("release_object(", CleanupAt);
+  EXPECT_NE(InnerAt, std::string::npos) << Source;
+  EXPECT_NE(ObjectAt, std::string::npos) << Source;
+  EXPECT_LT(InnerAt, ObjectAt) << Source;
+  const auto InnerEnd = Source.find(';', InnerAt);
+  const auto ObjectEnd = Source.find(';', ObjectAt);
+  ASSERT_NE(InnerEnd, std::string::npos) << Source;
+  ASSERT_NE(ObjectEnd, std::string::npos) << Source;
+  EXPECT_EQ(Source.substr(InnerAt, InnerEnd - InnerAt).find("-32"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.substr(ObjectAt, ObjectEnd - ObjectAt).find("-32"),
+            std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeNestedOutOfLineFuncletsPrintInUnwindOrder) {
+  DirectCxxFixture Fixture("native_nested_ool_funclets", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t OuterVA = 0x140002000;
+  constexpr va_t InnerVA = 0x140002010;
+  const va_t Begin = EH.CodeRange.Begin;
+  Cxx.MaxState = 4;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[0].ActionVA = OuterVA;
+  Cxx.UnwindMap[0].ObjectOffset = 0;
+  Cxx.UnwindMap[0].ToState = -1;
+  Cxx.UnwindMap[1].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[1].ActionVA = InnerVA;
+  Cxx.UnwindMap[1].ObjectOffset = 0;
+  Cxx.UnwindMap[1].ToState = 0;
+  CxxUnwindAction HandlerState;
+  HandlerState.Kind = CxxUnwindAction::ActionKind::None;
+  HandlerState.ToState = -1;
+  Cxx.UnwindMap.push_back(HandlerState);
+  Cxx.UnwindMap.push_back(HandlerState);
+  Cxx.TryBlocks.front().TryLow = 0;
+  Cxx.TryBlocks.front().TryHigh = 1;
+  Cxx.TryBlocks.front().CatchHigh = 3;
+  Cxx.TryBlocks.front().Handlers.front().HandlerVA = Begin + 0x30;
+  CxxTryBlock InnerTry;
+  InnerTry.TryLow = 1;
+  InnerTry.TryHigh = 1;
+  InnerTry.CatchHigh = 2;
+  CxxCatchHandler InnerCatch;
+  InnerCatch.Adjectives = 0x40;
+  InnerCatch.TypeDescriptorVA = Begin + 0x280;
+  InnerCatch.HandlerVA = Begin + 0x20;
+  InnerTry.Handlers.push_back(InnerCatch);
+  Cxx.TryBlocks.push_back(std::move(InnerTry));
+  Fixture.Source.Blocks[0].StartAddr = Begin + 4;
+  Fixture.Source.Blocks[0].EndAddr = Begin + 0x10;
+  Fixture.Source.Blocks[1].StartAddr = Begin + 0x20;
+  Fixture.Source.Blocks[1].EndAddr = Begin + 0x30;
+  MedBlock OuterBody;
+  OuterBody.Id = 2;
+  OuterBody.StartAddr = Begin + 0x10;
+  OuterBody.EndAddr = Begin + 0x20;
+  MedBlock OuterHandler;
+  OuterHandler.Id = 3;
+  OuterHandler.StartAddr = Begin + 0x30;
+  OuterHandler.EndAddr = Begin + 0x40;
+  Fixture.Source.Blocks.push_back(std::move(OuterBody));
+  Fixture.Source.Blocks.push_back(std::move(OuterHandler));
+  auto *OuterBodyBB =
+      llvm::BasicBlock::Create(Fixture.Context, "outer", Fixture.Function);
+  auto *OuterHandlerBB = llvm::BasicBlock::Create(
+      Fixture.Context, "outer.handler", Fixture.Function);
+  llvm::IRBuilder<>(OuterBodyBB).CreateRetVoid();
+  llvm::IRBuilder<>(OuterHandlerBB).CreateRetVoid();
+  Fixture.OriginalBlockMap.emplace(2, OuterBodyBB);
+  Fixture.OriginalBlockMap.emplace(3, OuterHandlerBB);
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 1},
+               {Begin + 0x10, 0},
+               {Begin + 0x20, 2},
+               {Begin + 0x30, 3},
+               {Begin + 0x40, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason,
+            WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, InnerVA, "unwind_inner");
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, OuterVA, "unwind_outer");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto InnerCleanup = Source.find("} /* unwind cleanup */");
+  ASSERT_NE(InnerCleanup, std::string::npos) << Source;
+  const auto InnerAt = Source.find("unwind_inner(", InnerCleanup);
+  const auto CatchAt = Source.find("} catch (", InnerCleanup);
+  ASSERT_NE(InnerAt, std::string::npos) << Source;
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  const auto OuterCleanup = Source.find("} /* unwind cleanup */", CatchAt);
+  ASSERT_NE(OuterCleanup, std::string::npos) << Source;
+  const auto OuterAt = Source.find("unwind_outer(", OuterCleanup);
+  EXPECT_LT(InnerAt, CatchAt) << Source;
+  EXPECT_LT(CatchAt, OuterCleanup) << Source;
+  EXPECT_NE(OuterAt, std::string::npos) << Source;
+  const auto InnerEnd = Source.find(';', InnerAt);
+  const auto OuterEnd = Source.find(';', OuterAt);
+  ASSERT_NE(InnerEnd, std::string::npos) << Source;
+  ASSERT_NE(OuterEnd, std::string::npos) << Source;
+  EXPECT_EQ(Source.substr(InnerAt, InnerEnd - InnerAt).find("unwind_outer"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.substr(OuterAt, OuterEnd - OuterAt).find("unwind_inner"),
+            std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeOutOfLineCatchFuncletPrintsInCatch) {
+  DirectCxxFixture Fixture("native_ool_catch_funclet", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t FuncletVA = 0x140002000;
+  const va_t Begin = EH.CodeRange.Begin;
+  Cxx.TryBlocks.front().Handlers.front().HandlerVA = FuncletVA;
+  Cxx.TryBlocks.front().Handlers.front().ContinuationVAs = {Begin + 0x20};
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {Begin + 0x20, 1},
+               {Begin + 0x30, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason, WindowsEHNativeSourceReason::InvalidCxxHandler);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, FuncletVA, "catch_funclet");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CatchAt = Source.find("} catch (");
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("catch_funclet(", CatchAt);
+  ASSERT_NE(CallAt, std::string::npos) << Source;
+  const auto CallEnd = Source.find(';', CallAt);
+  ASSERT_NE(CallEnd, std::string::npos) << Source;
+  EXPECT_NE(Source.substr(CallAt, CallEnd - CallAt).find("eh_object"),
+            std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeOutOfLineCatchWithoutContinuationPrintsFunclet) {
+  DirectCxxFixture Fixture("native_ool_catch_no_cont", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t FuncletVA = 0x140002000;
+  const va_t Begin = EH.CodeRange.Begin;
+  Cxx.TryBlocks.front().Handlers.front().HandlerVA = FuncletVA;
+  Cxx.TryBlocks.front().Handlers.front().ContinuationVAs.clear();
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {Begin + 0x20, 1},
+               {Begin + 0x30, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason, WindowsEHNativeSourceReason::InvalidCxxHandler);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, FuncletVA, "catch_funclet");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CatchAt = Source.find("} catch (");
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("catch_funclet(", CatchAt);
+  ASSERT_NE(CallAt, std::string::npos) << Source;
+  const auto CallEnd = Source.find(';', CallAt);
+  ASSERT_NE(CallEnd, std::string::npos) << Source;
+  EXPECT_NE(Source.substr(CallAt, CallEnd - CallAt).find("eh_object"),
+            std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeOutOfLineCatchWithTwoContinuationsPrintsBoth) {
+  DirectCxxFixture Fixture("native_ool_catch_two_cont", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t FuncletVA = 0x140002000;
+  const va_t Begin = EH.CodeRange.Begin;
+  Cxx.TryBlocks.front().Handlers.front().HandlerVA = FuncletVA;
+  Cxx.TryBlocks.front().Handlers.front().ContinuationVAs = {Begin + 0x20,
+                                                           Begin + 0x28};
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  Fixture.Source.Blocks[1].EndAddr = Begin + 0x28;
+  MedBlock Second;
+  Second.Id = 2;
+  Second.StartAddr = Begin + 0x28;
+  Second.EndAddr = Begin + 0x38;
+  Fixture.Source.Blocks.push_back(std::move(Second));
+  auto *ResumeTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Fixture.Context), false);
+  auto *ResumeA = llvm::Function::Create(
+      ResumeTy, llvm::GlobalValue::ExternalLinkage, "resume_a", Fixture.Module);
+  auto *ResumeB = llvm::Function::Create(
+      ResumeTy, llvm::GlobalValue::ExternalLinkage, "resume_b", Fixture.Module);
+  llvm::BasicBlock *ContA = Fixture.OriginalBlockMap.at(1);
+  llvm::IRBuilder<>(ContA->getTerminator()).CreateCall(ResumeA);
+  auto *ContB = llvm::BasicBlock::Create(Fixture.Context, "cont_b",
+                                         Fixture.Function);
+  llvm::IRBuilder<>(ContB).CreateCall(ResumeB);
+  llvm::IRBuilder<>(ContB).CreateRetVoid();
+  Fixture.OriginalBlockMap.emplace(2, ContB);
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {Begin + 0x20, 1},
+               {Begin + 0x38, -1}};
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason, WindowsEHNativeSourceReason::InvalidCxxHandler);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, FuncletVA, "catch_funclet");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CatchAt = Source.find("} catch (");
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("catch_funclet(", CatchAt);
+  ASSERT_NE(CallAt, std::string::npos) << Source;
+  const auto CallEnd = Source.find(';', CallAt);
+  ASSERT_NE(CallEnd, std::string::npos) << Source;
+  EXPECT_NE(Source.substr(CallAt, CallEnd - CallAt).find("eh_object"),
+            std::string::npos)
+      << Source;
+  const auto ResumeAAt = Source.find("resume_a(", CatchAt);
+  const auto ResumeBAt = Source.find("resume_b(", CatchAt);
+  EXPECT_NE(ResumeAAt, std::string::npos) << Source;
+  EXPECT_NE(ResumeBAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("resume_a(", ResumeAAt + 1), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("resume_b(", ResumeBAt + 1), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_unreachable();", CatchAt), std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeOutOfLineCatchInsideBlockSplitsContinuation) {
+  DirectCxxFixture Fixture("native_ool_catch_interior", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t FuncletVA = 0x140002000;
+  const va_t Begin = EH.CodeRange.Begin;
+  Cxx.TryBlocks.front().Handlers.front().HandlerVA = FuncletVA;
+  Cxx.TryBlocks.front().Handlers.front().ContinuationVAs = {Begin + 0x28};
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {Begin + 0x20, 1},
+               {Begin + 0x30, -1}};
+  auto *ResumeTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Fixture.Context), false);
+  auto *BeforeFn = llvm::Function::Create(
+      ResumeTy, llvm::GlobalValue::ExternalLinkage, "before_resume",
+      Fixture.Module);
+  auto *AfterFn = llvm::Function::Create(
+      ResumeTy, llvm::GlobalValue::ExternalLinkage, "after_resume",
+      Fixture.Module);
+  llvm::BasicBlock *Body = Fixture.OriginalBlockMap.at(1);
+  llvm::IRBuilder<> BodyBuilder(Body->getTerminator());
+  llvm::CallInst *Before = BodyBuilder.CreateCall(BeforeFn);
+  llvm::CallInst *After = BodyBuilder.CreateCall(AfterFn);
+  markSourceCall(*Before, Begin + 0x20);
+  markSourceCall(*After, Begin + 0x28);
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason, WindowsEHNativeSourceReason::InvalidCxxHandler);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Before, Begin + 0x20);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *After, Begin + 0x28);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, FuncletVA, "catch_funclet");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CatchAt = Source.find("} catch (");
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("catch_funclet(", CatchAt);
+  ASSERT_NE(CallAt, std::string::npos) << Source;
+  const auto CallEnd = Source.find(';', CallAt);
+  ASSERT_NE(CallEnd, std::string::npos) << Source;
+  EXPECT_NE(Source.substr(CallAt, CallEnd - CallAt).find("eh_object"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("after_resume(", CatchAt), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("before_resume("), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeOutOfLineCatchInteriorStoreStaysBeforeResume) {
+  DirectCxxFixture Fixture("native_ool_catch_interior_store", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  constexpr va_t FuncletVA = 0x140002000;
+  const va_t Begin = EH.CodeRange.Begin;
+  Cxx.TryBlocks.front().Handlers.front().HandlerVA = FuncletVA;
+  Cxx.TryBlocks.front().Handlers.front().ContinuationVAs = {Begin + 0x28};
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {Begin + 0x20, 1},
+               {Begin + 0x30, -1}};
+  auto *ResumeTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Fixture.Context), false);
+  auto *BeforeFn = llvm::Function::Create(
+      ResumeTy, llvm::GlobalValue::ExternalLinkage, "before_resume",
+      Fixture.Module);
+  auto *AfterFn = llvm::Function::Create(
+      ResumeTy, llvm::GlobalValue::ExternalLinkage, "after_resume",
+      Fixture.Module);
+  auto *I32Ty = llvm::Type::getInt32Ty(Fixture.Context);
+  llvm::IRBuilder<> Entry(
+      &*Fixture.Function->getEntryBlock().getFirstInsertionPt());
+  auto *Slot = Entry.CreateAlloca(I32Ty, nullptr, "slot_mark");
+  llvm::BasicBlock *Body = Fixture.OriginalBlockMap.at(1);
+  llvm::IRBuilder<> BodyBuilder(Body->getTerminator());
+  llvm::CallInst *Before = BodyBuilder.CreateCall(BeforeFn);
+  BodyBuilder.CreateStore(llvm::ConstantInt::get(I32Ty, 99), Slot);
+  llvm::CallInst *After = BodyBuilder.CreateCall(AfterFn);
+  markSourceCall(*Before, Begin + 0x20);
+  markSourceCall(*After, Begin + 0x28);
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification Patch =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::OutputPatch);
+  EXPECT_FALSE(Patch.canPatchOutput());
+  EXPECT_EQ(Patch.Reason, WindowsEHNativeSourceReason::InvalidCxxHandler);
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Before, Begin + 0x20);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *After, Begin + 0x28);
+  MedLLVMEmitterTestPeer::setFunctionName(Emitter, FuncletVA, "catch_funclet");
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CatchAt = Source.find("} catch (");
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("catch_funclet(", CatchAt);
+  ASSERT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_NE(Source.find("after_resume(", CatchAt), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("before_resume("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("slot_mark", CatchAt), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNativeInFunctionCatchFuncletPrintsCallInCatch) {
+  DirectCxxFixture Fixture("native_infunction_catch_funclet", true);
+  ExceptionFunction &EH = *Fixture.Source.ExceptionMetadata;
+  const va_t Begin = EH.CodeRange.Begin;
+  Fixture.Source.Blocks.front().StartAddr = Begin + 4;
+  CxxExceptionInfo &Cxx = *EH.Cxx;
+  Cxx.IPMap = {{Begin, -1},
+               {Begin + 4, 0},
+               {Begin + 0x20, 1},
+               {Begin + 0x30, -1}};
+  auto *BodyTy =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Fixture.Context), false);
+  auto *Body = llvm::Function::Create(BodyTy, llvm::GlobalValue::ExternalLinkage,
+                                      "catch_body", Fixture.Module);
+  llvm::BasicBlock *HandlerBB = Fixture.OriginalBlockMap.at(1);
+  ASSERT_NE(HandlerBB->getTerminator(), nullptr);
+  llvm::IRBuilder<>(HandlerBB->getTerminator()).CreateCall(Body);
+  Fixture.Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+
+  const WindowsEHNativeSourceClassification IR =
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering);
+  ASSERT_TRUE(IR.canLowerNativeIR());
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call, Begin + 4);
+  ASSERT_TRUE(MedLLVMEmitterTestPeer::emitCxx(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap));
+  expectVerifierClean(Fixture.Module);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Fixture.Module, OS, Options, nullptr, nullptr,
+                                  Fixture.Function));
+  OS.flush();
+  const auto CatchAt = Source.find("} catch (");
+  ASSERT_NE(CatchAt, std::string::npos) << Source;
+  const auto CallAt = Source.find("catch_body(", CatchAt);
+  EXPECT_NE(CallAt, std::string::npos) << Source;
 }
 
 TEST(COFFExceptionIR, EmitsCompilerOwnedGSContractForBoundedFH4) {
@@ -2579,7 +3576,7 @@ TEST(COFFExceptionIR, RejectsRealLiftedAArch64FilterWithWidenedReturnABI) {
       LiftedParent->getMetadata(exception_rewrite::FunctionAttachment);
   ASSERT_NE(Contract, nullptr);
   EXPECT_EQ(metadataInteger(Contract, exception_rewrite::Lowering, 8),
-            static_cast<uint8_t>(exception_rewrite::LoweringState::Missing));
+            static_cast<uint8_t>(exception_rewrite::LoweringState::NotRequired));
 
   const WindowsEHNativeSourceClassification Classification =
       classifyWindowsEHNativeSource(EH, Arch::AArch64, BinaryFormat::COFF,

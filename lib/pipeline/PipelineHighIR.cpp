@@ -9,6 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/Common.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/loader/BinaryImage.h"
@@ -34,8 +36,34 @@ namespace neverd {
 
 void Pipeline::buildHighIR(const BinaryImage &Img,
                            const PipelineOptions & /*Opts*/,
-                           PipelineResult &Result) {
+                           PipelineResult &Result, DebugContext *Dbg) {
   auto AllFuncNames = buildFuncNameMap(Img, Result);
+  if (Dbg && Dbg->hasInfo()) {
+    for (const MedFunc &MF : Result.MedFuncs) {
+      if (auto DF = Dbg->functionName(MF.Entry); DF && !DF->empty()) {
+        auto It = AllFuncNames.find(MF.Entry);
+        if (It == AllFuncNames.end() || It->second.empty() ||
+            isSynthesizedFuncName(It->second))
+          AllFuncNames[MF.Entry] = *DF;
+      }
+      for (const MedBlock &B : MF.Blocks) {
+        for (const MedOp &Op : B.Ops) {
+          if (Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
+              !Op.Inputs[0].isConst())
+            continue;
+          const va_t Target = static_cast<va_t>(Op.Inputs[0].ConstVal);
+          if (!Target)
+            continue;
+          auto It = AllFuncNames.find(Target);
+          if (It != AllFuncNames.end() && !It->second.empty() &&
+              !isSynthesizedFuncName(It->second))
+            continue;
+          if (auto DF = Dbg->functionName(Target); DF && !DF->empty())
+            AllFuncNames[Target] = *DF;
+        }
+      }
+    }
+  }
 
   detectThunkStubs(Result.LowFuncs, AllFuncNames);
 

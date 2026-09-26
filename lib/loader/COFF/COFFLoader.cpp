@@ -33,7 +33,6 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -74,7 +73,8 @@ Arch machineToArch(uint16_t Machine) {
 llvm::Expected<BinaryImage>
 COFFLoader::load(const std::filesystem::path &Path) {
   BinaryImage Img;
-  auto BufOrErr = readFileInto(Path, Img, BinaryFormat::COFF);
+  auto BufOrErr = readFileInto(Path, Img, BinaryFormat::COFF,
+                               /*CopyRaw=*/RestrictFunctionEntries.empty());
   if (!BufOrErr)
     return BufOrErr.takeError();
   auto &Buf = *BufOrErr;
@@ -123,6 +123,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
   if (!IsRelocatable)
     Img.Entry = normalizeCodeAddress(Img.Entry, Img.Arch, Img.Mode);
   Img.Base = ImageBase;
+  Img.LoadOnlyFunctionEntries = RestrictFunctionEntries;
 
   // COFF object-file section headers are required to keep VirtualAddress at
   // zero. Build a private mapped layout instead of mutating that format-native
@@ -224,7 +225,9 @@ COFFLoader::load(const std::filesystem::path &Path) {
         kCOFFAlignShift;
     Sec.Alignment = AlignField > 0 ? (1u << (AlignField - 1)) : 1;
     Sec.Flags = coffFlagsToNd(CoffSec->Characteristics);
-    if (!Contents.empty())
+    // Segment.Data already holds the bytes.  A second copy of every section
+    // doubled `--func` load of a large PE.
+    if (Img.LoadOnlyFunctionEntries.empty() && !Contents.empty())
       Sec.Data.assign(Contents.begin(), Contents.end());
     Img.Sections.push_back(std::move(Sec));
   }

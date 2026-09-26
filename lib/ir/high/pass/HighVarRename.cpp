@@ -43,8 +43,7 @@ void renameVars(std::vector<HighStmt> &Stmts) {
         RenameIdMap[Key] = IdBase++;
       }
     }
-    for (auto &Op : E->Operands)
-      CollectVars(Op);
+    E->forEachChildExpr(CollectVars);
   };
   walkStmts(Stmts, [&](const HighStmt &S) { forEachExpr(S, CollectVars); });
   if (!RenameMap.empty()) {
@@ -65,6 +64,7 @@ void renameVars(std::vector<HighStmt> &Stmts) {
       }
       for (auto &Op : E->Operands)
         DoRename(Op);
+      DoRename(E->IndirectTarget);
     };
     walkStmts(Stmts, [&](HighStmt &S) { forEachExpr(S, DoRename); });
   }
@@ -80,8 +80,8 @@ static void collectRefExprLocal(const ExprPtr &E, VarKeySet &Refs,
     return;
   if (E->Kind == ExprKind::Var)
     Refs.insert(VK(E->Var));
-  for (auto &Op : E->Operands)
-    collectRefExprLocal(Op, Refs, Seen);
+  E->forEachChildExpr(
+      [&](const ExprPtr &Op) { collectRefExprLocal(Op, Refs, Seen); });
 }
 
 static void collectStmtRefsLocal(const std::vector<HighStmt> &Stmts,
@@ -184,8 +184,7 @@ void postRenameCleanup(std::vector<HighStmt> &Stmts) {
           return;
         if (E->Kind == ExprKind::Var && E->Var == Prev.Dst->Var)
           CurrUsesPrev = true;
-        for (auto &Op : E->Operands)
-          CheckRef(Op);
+        E->forEachChildExpr(CheckRef);
       };
       if (Curr.Val)
         CheckRef(Curr.Val);

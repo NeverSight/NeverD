@@ -20,8 +20,10 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -105,9 +107,20 @@ struct HighExpr {
   va_t CallAddr = 0;
   bool IsIndirectCall = false;
   int IndirectParamIdx = -1;
+  /// Unresolved `INDIR_CALL` callee.  Not a printed argument.
+  std::shared_ptr<HighExpr> IndirectTarget;
   std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
   Intrinsic IntrinsicId = Intrinsic::None;
   std::vector<MedVar> IntrinsicOutputs;
+
+  /// Operands plus \ref IndirectTarget.
+  template <typename F> void forEachChildExpr(F &&Fn) const {
+    for (const auto &Op : Operands)
+      if (Op)
+        Fn(Op);
+    if (IndirectTarget)
+      Fn(IndirectTarget);
+  }
 
   /// For Cast
   TypeRef CastTo;
@@ -461,41 +474,62 @@ struct HighFunc {
   unsigned UnstructuredExceptionRegions = 0;
 };
 
-/// Copy catch-funclet HighFunc bodies into empty `CxxCatch` clause slots of
-/// the parent. MSVC x64 catch handlers are separate pdata functions.
+/// After EH wrapping, invert `if (c) goto L; work; L:` in try/catch lists.
+/// Med `ExceptionalPreds` must not block this: the handler is already a clause.
+void invertSkipGotos(HighFunc &Func);
+
+/// Copy catch-funclet and C++ unwind-funclet HighFunc bodies into empty
+/// `CxxCatch` / `CxxCleanup` clause slots of the parent. MSVC x64 catch
+/// handlers and destructor unwind actions are separate pdata functions.
+/// A funclet body may itself be a structured `CxxTry` whose handler VA is
+/// this function or another funclet already on the attach stack; copying
+/// those bodies without a cycle guard overflows the stack on full-image
+/// HighC of MSVC catch-all probes.
 inline void attachCxxFuncletBodies(std::vector<HighFunc> &Funcs) {
   std::map<va_t, HighFunc *> ByEntry;
   for (HighFunc &Func : Funcs)
     if (Func.Entry)
       ByEntry[Func.Entry] = &Func;
-  auto Attach = [&](auto &&Self, std::vector<HighStmt> &Stmts) -> void {
-    for (HighStmt &Stmt : Stmts) {
-      if (Stmt.Kind == StmtKind::CxxTry) {
-        if (Stmt.EHClauseBodies.size() < Stmt.EHClauses.size())
-          Stmt.EHClauseBodies.resize(Stmt.EHClauses.size());
-        for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
-          if (!Stmt.EHClauseBodies[I].empty())
-            continue;
-          const HighEHClause &Clause = Stmt.EHClauses[I];
-          if (Clause.Kind != HighEHClauseKind::CxxCatch || !Clause.HandlerVA)
-            continue;
-          auto It = ByEntry.find(Clause.HandlerVA);
-          if (It == ByEntry.end() || It->second == nullptr)
-            continue;
-          Stmt.EHClauseBodies[I] = It->second->Body;
+  for (HighFunc &Func : Funcs) {
+    std::set<va_t> Active;
+    auto Attach = [&](auto &&Self, std::vector<HighStmt> &Stmts) -> void {
+      for (HighStmt &Stmt : Stmts) {
+        if (Stmt.Kind == StmtKind::CxxTry) {
+          if (Stmt.EHClauseBodies.size() < Stmt.EHClauses.size())
+            Stmt.EHClauseBodies.resize(Stmt.EHClauses.size());
+          for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
+            if (Stmt.EHClauseBodies[I].empty()) {
+              const HighEHClause &Clause = Stmt.EHClauses[I];
+              va_t Target = 0;
+              if (Clause.Kind == HighEHClauseKind::CxxCatch)
+                Target = Clause.HandlerVA;
+              else if (Clause.Kind == HighEHClauseKind::CxxCleanup)
+                Target = Clause.FilterOrActionVA;
+              if (Target && Target != Func.Entry && !Active.count(Target)) {
+                auto It = ByEntry.find(Target);
+                if (It != ByEntry.end() && It->second != nullptr &&
+                    It->second != &Func) {
+                  Active.insert(Target);
+                  Stmt.EHClauseBodies[I] = It->second->Body;
+                  Self(Self, Stmt.EHClauseBodies[I]);
+                  Active.erase(Target);
+                  continue;
+                }
+              }
+            }
+            Self(Self, Stmt.EHClauseBodies[I]);
+          }
         }
+        Self(Self, Stmt.Body);
+        Self(Self, Stmt.ElseBody);
+        for (auto &Case : Stmt.Cases)
+          Self(Self, Case.Body);
+        Self(Self, Stmt.DefaultBody);
       }
-      Self(Self, Stmt.Body);
-      Self(Self, Stmt.ElseBody);
-      for (auto &Case : Stmt.Cases)
-        Self(Self, Case.Body);
-      Self(Self, Stmt.DefaultBody);
-      for (auto &ClauseBody : Stmt.EHClauseBodies)
-        Self(Self, ClauseBody);
-    }
-  };
-  for (HighFunc &Func : Funcs)
+    };
     Attach(Attach, Func.Body);
+    invertSkipGotos(Func);
+  }
 }
 
 /// The entry register represented by the source projection's private frame.

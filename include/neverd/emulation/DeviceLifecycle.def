@@ -1,0 +1,69 @@
+//===- DeviceLifecycle.def - WDM lifecycle value inventory ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Authoritative lifecycle states, Windows minor codes and bounded inventories.
+///
+//===----------------------------------------------------------------------===//
+// PnP states are NeverD states. Request and power values are the documented
+// WDK IRP minor codes and DEVICE_POWER_STATE / SYSTEM_POWER_STATE values.
+
+#ifdef NEVERD_DEVICE_PNP_STATE
+NEVERD_DEVICE_PNP_STATE(NotStarted, 0)
+NEVERD_DEVICE_PNP_STATE(Started, 1)
+NEVERD_DEVICE_PNP_STATE(StopPending, 2)
+NEVERD_DEVICE_PNP_STATE(Stopped, 3)
+NEVERD_DEVICE_PNP_STATE(RemovePending, 4)
+NEVERD_DEVICE_PNP_STATE(SurpriseRemoved, 5)
+NEVERD_DEVICE_PNP_STATE(Removing, 6)
+NEVERD_DEVICE_PNP_STATE(Removed, 7)
+#endif
+
+#ifdef NEVERD_DEVICE_PNP_REQUEST
+NEVERD_DEVICE_PNP_REQUEST(Start, 0x00, true)
+NEVERD_DEVICE_PNP_REQUEST(QueryRemove, 0x01, true)
+NEVERD_DEVICE_PNP_REQUEST(Remove, 0x02, false)
+NEVERD_DEVICE_PNP_REQUEST(CancelRemove, 0x03, false)
+NEVERD_DEVICE_PNP_REQUEST(Stop, 0x04, false)
+NEVERD_DEVICE_PNP_REQUEST(QueryStop, 0x05, true)
+NEVERD_DEVICE_PNP_REQUEST(CancelStop, 0x06, false)
+NEVERD_DEVICE_PNP_REQUEST(SurpriseRemoval, 0x17, false)
+#endif
+
+#ifdef NEVERD_DEVICE_PNP_EXACT_SUCCESS
+// These completion contracts require STATUS_SUCCESS, not merely NT_SUCCESS.
+NEVERD_DEVICE_PNP_EXACT_SUCCESS(Remove)
+NEVERD_DEVICE_PNP_EXACT_SUCCESS(CancelRemove)
+NEVERD_DEVICE_PNP_EXACT_SUCCESS(Stop)
+NEVERD_DEVICE_PNP_EXACT_SUCCESS(CancelStop)
+NEVERD_DEVICE_PNP_EXACT_SUCCESS(SurpriseRemoval)
+#endif
+
+#ifdef NEVERD_DEVICE_POWER_STATE
+NEVERD_DEVICE_POWER_STATE(D0, 1)
+NEVERD_DEVICE_POWER_STATE(D1, 2)
+NEVERD_DEVICE_POWER_STATE(D2, 3)
+NEVERD_DEVICE_POWER_STATE(D3, 4)
+#endif
+
+#ifdef NEVERD_SYSTEM_POWER_STATE
+NEVERD_SYSTEM_POWER_STATE(Working, 1)
+NEVERD_SYSTEM_POWER_STATE(Sleeping1, 2)
+NEVERD_SYSTEM_POWER_STATE(Sleeping2, 3)
+NEVERD_SYSTEM_POWER_STATE(Sleeping3, 4)
+NEVERD_SYSTEM_POWER_STATE(Hibernate, 5)
+NEVERD_SYSTEM_POWER_STATE(Shutdown, 6)
+#endif
+
+#ifdef NEVERD_DEVICE_POWER_REQUEST
+NEVERD_DEVICE_POWER_REQUEST(Set, 0x02)
+NEVERD_DEVICE_POWER_REQUEST(Query, 0x03)
+#endif
+
+#ifdef NEVERD_DEVICE_LIFECYCLE_LIMIT
+NEVERD_DEVICE_LIFECYCLE_LIMIT(MaxDevices, 4096)
+NEVERD_DEVICE_LIFECYCLE_LIMIT(MaxOutstandingIo, 65536)
+#endif

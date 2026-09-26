@@ -25,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,13 @@ private:
   std::map<va_t, Record> Records;
 };
 
+/// Win64 often reuses an incoming register home for a later local. Keep the
+/// non-parameter name. Two distinct locals or two distinct parameters stay
+/// ambiguous so HighC does not guess.
+void publishNamedOffset(std::map<int64_t, VariableSym> &Slots,
+                        std::set<int64_t> &Ambiguous, int64_t Offset,
+                        VariableSym VS);
+
 } // namespace pdb_loader_detail
 
 llvm::Expected<std::unique_ptr<class PDBDebugContext>>
@@ -110,18 +118,24 @@ public:
        const LoadProgress &Progress = {});
 
   std::optional<FunctionSym> resolveFunction(va_t Addr) const override;
+  std::optional<std::string> functionName(va_t Addr) const override;
   std::optional<VariableSym> resolveVariable(va_t FuncAddr,
                                              int64_t Offset) const override;
+  std::optional<VariableSym>
+  resolveStackPointerVariable(va_t FuncAddr, int64_t Offset) const override;
+  void completeType(const TypeRef &Ty) const override;
   std::optional<TypeSym> resolveType(uint64_t TypeId) const override;
   std::optional<SourceLoc> sourceLocation(va_t Addr) const override;
   std::vector<FunctionSym> allFunctions() const override;
   std::vector<DataObjectSym> allDataObjects() const override;
+  std::optional<DataObjectSym> resolveDataObject(va_t Addr) const override;
   bool hasInfo() const override;
   bool hasAuthenticatedFunctionSignatures() const override;
   bool hasAuthenticatedObjectExtents() const override;
 
   bool hasAuthenticatedImageIdentity() const;
-  /// RSDS Phase A never authorizes exact object metadata.  A PDB 2.00 JG
+  /// RSDS Phase A never authorizes exact object metadata.  Names-only
+  /// S_LOCAL / S_REGREL32 recovery does not change that.  A PDB 2.00 JG
   /// companion that parsed TPI and S_BPREL32_ST without stream malformation
   /// may authorize extents for that image only.
   bool hasExactObjectMetadataPrerequisites() const;
@@ -132,6 +146,7 @@ private:
   void commitDebugFacts(std::vector<FunctionSym> Functions,
                         std::map<va_t, std::map<int64_t, VariableSym>> Locals,
                         bool Authenticated, bool Signatures, bool Extents);
+  void ensureLocalsForAddress(va_t Addr) const;
   friend llvm::Expected<std::unique_ptr<PDBDebugContext>>
   loadPdb20DebugContext(const std::filesystem::path &PdbPath,
                         const BinaryImage &Image);

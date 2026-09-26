@@ -168,6 +168,12 @@ TEST(MedTempIdentity, SeparatesReusedLowTempSlotsByWidth) {
   ByteDef.Output = NdVar::tmp(TmpBase, 1);
   ByteDef.addInput(NdVar::scalar(0x5a, 1));
   Block.Ops.push_back(ByteDef);
+  LowOp StoreByte;
+  StoreByte.Opcode = NdOp::STORE;
+  StoreByte.Addr = EntryVA;
+  StoreByte.addInput(NdVar::cst(0x4000, 8));
+  StoreByte.addInput(ByteDef.Output);
+  Block.Ops.push_back(StoreByte);
 
   LowOp WideDef;
   WideDef.Opcode = NdOp::POPCOUNT;
@@ -175,6 +181,12 @@ TEST(MedTempIdentity, SeparatesReusedLowTempSlotsByWidth) {
   WideDef.Output = NdVar::tmp(TmpBase, 2);
   WideDef.addInput(NdVar::scalar(0x1234, 2));
   Block.Ops.push_back(WideDef);
+  LowOp StoreWideDef;
+  StoreWideDef.Opcode = NdOp::STORE;
+  StoreWideDef.Addr = EntryVA + 1;
+  StoreWideDef.addInput(NdVar::cst(0x4002, 8));
+  StoreWideDef.addInput(WideDef.Output);
+  Block.Ops.push_back(StoreWideDef);
 
   LowOp WideUpdate;
   WideUpdate.Opcode = NdOp::POPCOUNT;
@@ -182,6 +194,10 @@ TEST(MedTempIdentity, SeparatesReusedLowTempSlotsByWidth) {
   WideUpdate.Output = NdVar::tmp(TmpBase, 2);
   WideUpdate.addInput(NdVar::scalar(0xabcd, 2));
   Block.Ops.push_back(WideUpdate);
+  LowOp StoreWideUpdate = StoreWideDef;
+  StoreWideUpdate.Addr = EntryVA + 2;
+  StoreWideUpdate.Inputs[1] = WideUpdate.Output;
+  Block.Ops.push_back(StoreWideUpdate);
 
   LowOp Return;
   Return.Opcode = NdOp::RETURN;

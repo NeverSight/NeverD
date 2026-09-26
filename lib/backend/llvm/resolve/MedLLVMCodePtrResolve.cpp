@@ -74,7 +74,55 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
     if (Block && Block->getParent())
       return llvm::BlockAddress::get(Block->getParent(), Block);
   }
-  return nullptr;
+  return resolveLiftedFunctionInterior(Address);
+}
+
+llvm::Constant *MedLLVMEmitter::resolveLiftedFunctionInterior(va_t Address) {
+  // The offset fallback is justified by COFF function extents. Other
+  // formats require an exact lifted block identity for an interior target.
+  if (!Mod || !Ctx || TargetFormat != BinaryFormat::COFF ||
+      EmittedFuncCodeEnds.empty())
+    return nullptr;
+  std::optional<va_t> BestEntry;
+  va_t BestSpan = ~va_t{0};
+  for (const auto &[Entry, End] : EmittedFuncCodeEnds) {
+    if (Address < Entry || Address >= End)
+      continue;
+    const va_t Span = End - Entry;
+    if (!BestEntry || Span < BestSpan ||
+        (Span == BestSpan && Entry > *BestEntry)) {
+      BestEntry = Entry;
+      BestSpan = Span;
+    }
+  }
+  if (!BestEntry && Img) {
+    for (const auto &Rec : Img->COFFPDataRecords) {
+      const va_t Begin = Img->Base + Rec.BeginRVA;
+      const va_t End = Img->Base + Rec.EndRVA;
+      if (Address < Begin || Address >= End)
+        continue;
+      const va_t Span = End - Begin;
+      if (!BestEntry || Span < BestSpan ||
+          (Span == BestSpan && Begin > *BestEntry)) {
+        BestEntry = Begin;
+        BestSpan = Span;
+      }
+    }
+  }
+  if (!BestEntry)
+    return nullptr;
+  llvm::Function *Function = resolveLiftedFunctionEntry(*BestEntry);
+  if (!Function)
+    Function = materializeImageFunctionDeclaration(
+        *BestEntry, Img ? Img->getFunctionNameAt(*BestEntry) : llvm::StringRef());
+  if (!Function)
+    return nullptr;
+  if (Address == *BestEntry)
+    return Function;
+  llvm::Type *I8Ty = llvm::Type::getInt8Ty(*Ctx);
+  llvm::Constant *Offset = llvm::ConstantInt::get(
+      llvm::Type::getInt64Ty(*Ctx), Address - *BestEntry);
+  return llvm::ConstantExpr::getGetElementPtr(I8Ty, Function, Offset);
 }
 
 llvm::Function *

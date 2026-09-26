@@ -40,7 +40,15 @@ bool imageContains(const BinaryImage &Img, llvm::StringRef Needle,
                    va_t *FoundVA = nullptr) {
   if (Needle.empty())
     return false;
+  // `--func` already has the requested VA.  Banner scans of a multi-megabyte
+  // image are only a fallback for unclassified full loads.
+  if (!Img.LoadOnlyFunctionEntries.empty())
+    return false;
   for (const Segment &Seg : Img.Segments) {
+    // Runtime banners live in data.  Scanning a 24MB `.text` for `go1.` is
+    // what made language detection dominate `--func` load of a large PE.
+    if (Seg.isExecutable())
+      continue;
     if (Seg.Data.size() < Needle.size())
       continue;
     llvm::StringRef Haystack(reinterpret_cast<const char *>(Seg.Data.data()),

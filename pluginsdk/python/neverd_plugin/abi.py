@@ -598,6 +598,19 @@ class NeverDSafetyOptions(ctypes.Structure):
     ]
 
 
+class NeverDDriverOptionsV1(ctypes.Structure):
+    """Exact layout of ``neverd_driver_options_v1`` (all budgets positive)."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("instruction_limit", ctypes.c_uint64),
+        ("memory_limit", ctypes.c_uint64),
+        ("event_limit", ctypes.c_uint64),
+        ("timeout_milliseconds", ctypes.c_uint64),
+        ("service_name", ctypes.c_char_p),
+    ]
+
+
 class Ownership(Enum):
     """Memory/lifetime contract for a native result."""
 
@@ -655,6 +668,7 @@ _C_TYPES: dict[str, object] = {
         NeverDLowIRConcolicOptionsV1
     ),
     "const neverd_safety_options *": ctypes.POINTER(NeverDSafetyOptions),
+    "const neverd_driver_options_v1 *": ctypes.POINTER(NeverDDriverOptionsV1),
     "const neverd_sanitize_options_v1 *": ctypes.POINTER(NeverDSanitizeOptionsV1),
     "neverd_sanitize_result_v1 *": ctypes.POINTER(NeverDSanitizeResultV1),
 }
@@ -711,6 +725,16 @@ def _declare(
 _declare("neverd_session_create", "neverd_session_t", [])
 _declare("neverd_session_destroy", "void", ["neverd_session_t"])
 _declare("neverd_session_load", "int", ["neverd_session_t", "const char *"])
+_declare(
+    "neverd_session_restrict_function",
+    "void",
+    ["neverd_session_t", "neverd_va_t"],
+)
+_declare(
+    "neverd_session_resolve_function_name_before_load",
+    "neverd_va_t",
+    ["neverd_session_t", "const char *", "const char *"],
+)
 _declare("neverd_session_is_loaded", "int", ["neverd_session_t"])
 _declare("neverd_session_analyze", "int", ["neverd_session_t"])
 _declare(
@@ -896,6 +920,23 @@ _declare(
         "neverd_session_t",
         "neverd_va_t",
         "const neverd_symbolic_explore_options *",
+    ],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_emulate_driver_json",
+    "const char *",
+    ["neverd_session_t", "const char *", "const neverd_driver_options_v1 *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_emulate_driver_scenario_json",
+    "const char *",
+    [
+        "neverd_session_t",
+        "const char *",
+        "const char *",
+        "const neverd_driver_options_v1 *",
     ],
     ownership=Ownership.OWNED_STRING,
 )
@@ -1343,6 +1384,7 @@ __all__ = [
     "FunctionSelectedData",
     "FunctionSpec",
     "NeverDEvent",
+    "NeverDDriverOptionsV1",
     "NeverDPlugin",
     "NeverDOptimizeLLVMOptions",
     "NeverDOptimizeLLVMResult",

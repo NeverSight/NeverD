@@ -127,6 +127,17 @@ void Pipeline::dumpMedIR(const std::vector<MedFunc> &Funcs,
     OS << "func " << MF.Name << " @ 0x" << llvm::utohexstr(MF.Entry)
        << " cc=" << static_cast<int>(MF.CC) << " FrameSize=" << MF.FrameSize
        << "\n";
+    OS << "  params=" << MF.Params.size();
+    for (const auto &P : MF.Params)
+      OS << " " << P.display();
+    OS << "\n";
+    for (const auto &CI : MF.CallInfos) {
+      OS << "  call b" << CI.BlockId << " op" << CI.OpIdx << " -> "
+         << CI.TargetName << " args=" << CI.Args.size();
+      for (const auto &A : CI.Args)
+        OS << " " << A.display();
+      OS << "\n";
+    }
     dumpExceptionSummary(MF.ExceptionMetadata, OS, "  ");
     for (auto &Blk : MF.Blocks) {
       OS << "  block " << Blk.Id << " succs=[" << joinInts(Blk.Succs, ",")

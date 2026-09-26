@@ -762,6 +762,8 @@ loadPdb20DebugContext(const std::filesystem::path &PdbPath,
         FS.Params.emplace_back(P.Name, Ty);
         ++Idx;
       }
+      if (Proc && !Proc->Args.empty())
+        FS.Params = bindDebugParamsToTpi(std::move(FS.Params), Proc->Args);
     } else if (Proc) {
       for (size_t I = 0; I < Proc->Args.size(); ++I)
         FS.Params.emplace_back("arg" + std::to_string(I), Proc->Args[I]);

@@ -28,6 +28,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -286,6 +287,74 @@ va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
   default:
     return 0;
   }
+}
+
+static int defIndexInBlock(const MedBlock &Blk, int FromIdx, const MedVar &V) {
+  for (int J = FromIdx - 1; J >= 0; --J) {
+    const auto &O = Blk.Ops[J];
+    if (O.Output.Kind == V.Kind && O.Output.Id == V.Id &&
+        O.Output.SSAVer == V.SSAVer && O.Output.RegOff == V.RegOff)
+      return J;
+  }
+  return -1;
+}
+
+static int peelCopyDefIndex(const MedBlock &Blk, int FromIdx, MedVar &V) {
+  int Idx = defIndexInBlock(Blk, FromIdx, V);
+  for (int Depth = 0; Idx >= 0 && Depth < 16; ++Depth) {
+    const MedOp &Def = Blk.Ops[Idx];
+    if ((Def.Opcode != NdOp::COPY && Def.Opcode != NdOp::INT_ZEXT &&
+         Def.Opcode != NdOp::INT_SEXT && Def.Opcode != NdOp::SUBBYTES) ||
+        Def.NumInputs < 1)
+      return Idx;
+    if (Def.Opcode == NdOp::SUBBYTES &&
+        (Def.NumInputs < 2 || !Def.Inputs[1].isConst() ||
+         Def.Inputs[1].ConstVal != 0))
+      return Idx;
+    V = Def.Inputs[0];
+    Idx = defIndexInBlock(Blk, Idx, V);
+  }
+  return Idx;
+}
+
+std::optional<MedVar> vtableCallObject(const MedBlock &Blk, int CallIdx,
+                                       const MedVar &Target) {
+  if (CallIdx <= 0 || Target.isConst())
+    return std::nullopt;
+  MedVar Slot = Target;
+  const int SlotIdx = peelCopyDefIndex(Blk, CallIdx, Slot);
+  if (SlotIdx < 0)
+    return std::nullopt;
+  const MedOp &SlotLoad = Blk.Ops[SlotIdx];
+  if (SlotLoad.Opcode != NdOp::LOAD || SlotLoad.NumInputs < 1)
+    return std::nullopt;
+  MedVar Addr = SlotLoad.Inputs[0];
+  const int AddrIdx = peelCopyDefIndex(Blk, SlotIdx, Addr);
+  if (AddrIdx < 0)
+    return std::nullopt;
+  const MedOp &Add = Blk.Ops[AddrIdx];
+  if ((Add.Opcode != NdOp::INT_ADD && Add.Opcode != NdOp::INT_OR) ||
+      Add.NumInputs != 2)
+    return std::nullopt;
+  const MedVar *Vtbl = nullptr;
+  uint64_t Off = 0;
+  if (Add.Inputs[1].isConst()) {
+    Off = Add.Inputs[1].ConstVal;
+    Vtbl = &Add.Inputs[0];
+  } else if (Add.Inputs[0].isConst()) {
+    Off = Add.Inputs[0].ConstVal;
+    Vtbl = &Add.Inputs[1];
+  }
+  if (!Vtbl || Off == 0)
+    return std::nullopt;
+  MedVar VtblVal = *Vtbl;
+  const int VtblIdx = peelCopyDefIndex(Blk, AddrIdx, VtblVal);
+  if (VtblIdx < 0)
+    return std::nullopt;
+  const MedOp &VtblLoad = Blk.Ops[VtblIdx];
+  if (VtblLoad.Opcode != NdOp::LOAD || VtblLoad.NumInputs < 1)
+    return std::nullopt;
+  return VtblLoad.Inputs[0];
 }
 
 std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
@@ -873,6 +942,15 @@ const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
   return Best;
 }
 
+bool phiCarriesIncoming(const PhiNode &Phi, const MedVar &V) {
+  if (V.isConst())
+    return false;
+  for (const auto &A : Phi.Args)
+    if (!A.second.isConst() && A.second == V)
+      return true;
+  return false;
+}
+
 // Value reaching argument register \p ArgIdx at the call in (\p BlockId,
 // \p OpIdx), found by walking the CFG backwards into predecessor blocks: the
 // nearest write to that argument register, then a block PHI for it.  Returns
@@ -891,7 +969,7 @@ std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
                                          const TargetRegInfo &TRI, Arch TheArch,
                                          int BlockId, int ArgIdx, bool IsWin64,
                                          bool AllowUnknownLiveIn,
-                                         bool *FromLiveIn) {
+                                         bool *FromLiveIn, bool *FoundDef) {
   std::map<int, const MedBlock *> ById;
   for (const auto &B : Func.Blocks)
     ById[B.Id] = &B;
@@ -909,14 +987,22 @@ std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
     return std::nullopt;
   };
 
+  if (FromLiveIn)
+    *FromLiveIn = false;
+  if (FoundDef)
+    *FoundDef = false;
+
   auto It = ById.find(BlockId);
   if (It == ById.end())
     return std::nullopt;
   // The call block's straight-line ops were already handled by the caller (with
   // its call-boundary stop); only its PHIs and the predecessor chain remain.
   if (const PhiNode *Phi =
-          selectAuthoritativeArgPhi(Func, *It->second, TRI, ArgIdx, IsWin64))
+          selectAuthoritativeArgPhi(Func, *It->second, TRI, ArgIdx, IsWin64)) {
+    if (FoundDef)
+      *FoundDef = true;
     return Phi->Output;
+  }
 
   std::set<int> Visited{BlockId};
   std::vector<int> Work(It->second->Preds.begin(), It->second->Preds.end());
@@ -929,8 +1015,11 @@ std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
     if (BIt == ById.end())
       continue;
     if (auto V =
-            scanBlock(*BIt->second, static_cast<int>(BIt->second->Ops.size())))
+            scanBlock(*BIt->second, static_cast<int>(BIt->second->Ops.size()))) {
+      if (FoundDef)
+        *FoundDef = true;
       return V;
+    }
     Work.insert(Work.end(), BIt->second->Preds.begin(),
                 BIt->second->Preds.end());
   }
@@ -966,6 +1055,139 @@ std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
         *FromLiveIn = true;
       return V;
     }
+  }
+  return std::nullopt;
+}
+
+std::optional<MedVar> uniquePredNonNullGuard(const MedFunc &Func,
+                                            const MedBlock &Blk) {
+  auto blockById = [&](int Id) -> const MedBlock * {
+    for (const auto &B : Func.Blocks)
+      if (B.Id == Id)
+        return &B;
+    return nullptr;
+  };
+  auto uniquePred = [&](const MedBlock &B) -> const MedBlock * {
+    const MedBlock *Found = nullptr;
+    for (int PredId : B.Preds) {
+      const MedBlock *Cand = blockById(PredId);
+      if (!Cand)
+        continue;
+      if (Found)
+        return nullptr;
+      Found = Cand;
+    }
+    return Found;
+  };
+  auto lastPointerTest = [&](const MedBlock &Pred) -> std::optional<MedVar> {
+    const MedVar *Best = nullptr;
+    for (const auto &Op : Pred.Ops) {
+      if (Op.Opcode == NdOp::LOAD && Op.Output.Size >= 4 &&
+          !Op.Output.isConst())
+        Best = &Op.Output;
+      if (Op.Opcode == NdOp::INT_AND && Op.NumInputs >= 2 &&
+          Op.Inputs[0].Size >= 4 && !Op.Inputs[0].isConst() &&
+          Op.Inputs[0].Kind == Op.Inputs[1].Kind &&
+          Op.Inputs[0].Id == Op.Inputs[1].Id &&
+          Op.Inputs[0].SSAVer == Op.Inputs[1].SSAVer)
+        Best = &Op.Inputs[0];
+      if ((Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL) &&
+          Op.NumInputs >= 2) {
+        const MedVar *Tested = nullptr;
+        if (Op.Inputs[1].isConst() && Op.Inputs[1].ConstVal == 0)
+          Tested = &Op.Inputs[0];
+        else if (Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal == 0)
+          Tested = &Op.Inputs[1];
+        if (Tested && Tested->Size >= 4 && !Tested->isConst())
+          Best = Tested;
+      }
+    }
+    if (Best)
+      return *Best;
+    return std::nullopt;
+  };
+  const MedBlock *Cur = uniquePred(Blk);
+  if (!Cur) {
+    const MedBlock *CondPred = nullptr;
+    for (int PredId : Blk.Preds) {
+      const MedBlock *Cand = blockById(PredId);
+      if (!Cand || Cand->Ops.empty() ||
+          Cand->Ops.back().Opcode != NdOp::COND_BR)
+        continue;
+      if (CondPred) {
+        CondPred = nullptr;
+        break;
+      }
+      CondPred = Cand;
+    }
+    Cur = CondPred;
+  }
+  for (unsigned I = 0; I < 8 && Cur; ++I) {
+    if (Cur->Ops.empty() || Cur->Ops.back().Opcode != NdOp::COND_BR ||
+        Cur->Ops.back().NumInputs < 2) {
+      Cur = uniquePred(*Cur);
+      continue;
+    }
+    const MedOp &Term = Cur->Ops.back();
+    MedVar Cond = Term.Inputs[0].isConst() ? Term.Inputs[1] : Term.Inputs[0];
+    auto defInPred = [&](const MedVar &V) -> const MedOp * {
+      const MedOp *Def = nullptr;
+      for (const auto &Op : Cur->Ops) {
+        if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
+            Op.Output.SSAVer == V.SSAVer && Op.Output.RegOff == V.RegOff)
+          Def = &Op;
+      }
+      return Def;
+    };
+    std::set<std::tuple<int, int, int, uint64_t>> Seen;
+    for (unsigned Depth = 0; Depth < 8; ++Depth) {
+      if (!Seen.insert({static_cast<int>(Cond.Kind), Cond.Id, Cond.SSAVer,
+                        Cond.RegOff})
+               .second)
+        break;
+      const MedOp *Def = defInPred(Cond);
+      if (!Def) {
+        if (Cond.Size >= 4 && !Cond.isConst())
+          return Cond;
+        break;
+      }
+      if (Def->Opcode == NdOp::BOOL_NOT && Def->NumInputs >= 1) {
+        Cond = Def->Inputs[0];
+        continue;
+      }
+      if ((Def->Opcode == NdOp::INT_EQUAL ||
+           Def->Opcode == NdOp::INT_NOTEQUAL) &&
+          Def->NumInputs >= 2) {
+        const MedVar *Tested = nullptr;
+        if (Def->Inputs[1].isConst() && Def->Inputs[1].ConstVal == 0)
+          Tested = &Def->Inputs[0];
+        else if (Def->Inputs[0].isConst() && Def->Inputs[0].ConstVal == 0)
+          Tested = &Def->Inputs[1];
+        if (Tested && Tested->Size >= 4 && !Tested->isConst())
+          return *Tested;
+        break;
+      }
+      if (Def->Opcode == NdOp::INT_AND && Def->NumInputs >= 2 &&
+          Def->Inputs[0].Size >= 4 && !Def->Inputs[0].isConst() &&
+          Def->Inputs[0].Kind == Def->Inputs[1].Kind &&
+          Def->Inputs[0].Id == Def->Inputs[1].Id &&
+          Def->Inputs[0].SSAVer == Def->Inputs[1].SSAVer)
+        return Def->Inputs[0];
+      if ((Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+           Def->Opcode == NdOp::INT_SEXT) &&
+          Def->NumInputs >= 1) {
+        Cond = Def->Inputs[0];
+        continue;
+      }
+      if (Def->Opcode == NdOp::LOAD && Def->Output.Size >= 4)
+        return Def->Output;
+      if (Def->Output.Size >= 4 && !Def->Output.isConst())
+        return Def->Output;
+      break;
+    }
+    if (auto Fallback = lastPointerTest(*Cur))
+      return Fallback;
+    Cur = uniquePred(*Cur);
   }
   return std::nullopt;
 }

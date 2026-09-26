@@ -19,11 +19,14 @@
 #include "HighDCEDetail.h"
 
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <unordered_set>
 #include <vector>
@@ -72,8 +75,16 @@ breakExprCycles(ExprPtr &Root,
       Current.Entered = true;
     }
 
-    if (Current.NextOperand < Expr->Operands.size()) {
-      ExprPtr &Operand = Expr->Operands[Current.NextOperand++];
+    ExprPtr *Child = nullptr;
+    if (Current.NextOperand < Expr->Operands.size())
+      Child = &Expr->Operands[Current.NextOperand++];
+    else if (Expr->IndirectTarget &&
+             Current.NextOperand == Expr->Operands.size()) {
+      ++Current.NextOperand;
+      Child = &Expr->IndirectTarget;
+    }
+    if (Child) {
+      ExprPtr &Operand = *Child;
       if (!Operand || KnownAcyclic.count(Operand.get()))
         continue;
       if (Path.count(Operand.get())) {
@@ -111,8 +122,8 @@ static void collectRefExpr(const ExprPtr &Root, VarKeySet &Refs) {
       continue;
     if (isLocalExpr(*E))
       Refs.insert(VK(E->Var));
-    for (const auto &Operand : E->Operands)
-      Work.push_back(Operand.get());
+    E->forEachChildExpr(
+        [&](const ExprPtr &Operand) { Work.push_back(Operand.get()); });
   }
 }
 
@@ -132,8 +143,8 @@ static bool removableAssignment(const HighStmt &S) {
         E->MemoryOrdering != NdMemoryOrdering::None ||
         E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return false;
-    for (const auto &Operand : E->Operands)
-      Work.push_back(Operand.get());
+    E->forEachChildExpr(
+        [&](const ExprPtr &Operand) { Work.push_back(Operand.get()); });
   }
   return true;
 }
@@ -366,9 +377,49 @@ static void eliminateGotoToLoop(std::vector<HighStmt> &Stmts) {
 // Phase 8b: Eliminate dead constant conditions
 //===----------------------------------------------------------------------===//
 
+static bool exprHasCall(const HighExpr *E) {
+  if (!E)
+    return false;
+  if (E->Kind == ExprKind::Call)
+    return true;
+  bool Found = false;
+  E->forEachChildExpr([&](const ExprPtr &Op) {
+    if (!Found)
+      Found = exprHasCall(Op.get());
+  });
+  return Found;
+}
+
+static bool followingHasObservableWork(const std::vector<HighStmt> &Stmts,
+                                       size_t After) {
+  const size_t Begin = After + 1;
+  for (size_t K = Begin; K < Stmts.size() && K - Begin <= 32; ++K) {
+    const HighStmt &S = Stmts[K];
+    if (S.Kind == StmtKind::Store || S.Kind == StmtKind::If ||
+        S.Kind == StmtKind::IfElse || S.Kind == StmtKind::CxxTry ||
+        S.Kind == StmtKind::SEHTry || S.Kind == StmtKind::While ||
+        S.Kind == StmtKind::Goto || S.Kind == StmtKind::Return)
+      break;
+    if (S.Kind == StmtKind::Call)
+      return true;
+    if (S.Kind == StmtKind::Assign && S.Val && S.Val->Kind == ExprKind::Call)
+      return true;
+  }
+  return false;
+}
+
 static void eliminateDeadConditions(std::vector<HighStmt> &Stmts) {
   for (size_t I = 0; I < Stmts.size();) {
     auto &S = Stmts[I];
+    if ((S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse) &&
+        S.Body.empty() && S.ElseBody.empty() && !exprHasCall(S.Cond.get())) {
+      // A skip-goto that lost its `goto` is `if (c) {} work;`. Erasing it
+      // leaves `work` unconditional. invertSkipGotos still owns that shape.
+      if (!followingHasObservableWork(Stmts, I)) {
+        Stmts.erase(Stmts.begin() + static_cast<long>(I));
+        continue;
+      }
+    }
     if ((S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse) && S.Cond &&
         S.Cond->Kind == ExprKind::Const && S.Cond->ConstVal == 0) {
       if (S.Kind == StmtKind::IfElse && !S.ElseBody.empty()) {
@@ -444,6 +495,11 @@ static void iterativeDCE(HighFunc &Func,
 //===----------------------------------------------------------------------===//
 
 void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
+  const char *Detail = std::getenv("NEVERD_HIGHIR_DETAIL");
+  const bool WantDetail = Detail && Detail[0] == '1' && Detail[1] == '\0';
+  using Clock = std::chrono::steady_clock;
+  const auto TStart = Clock::now();
+
   ExprRecurseDepth = 0;
   breakStmtCycles(Func.Body);
   coalesceBranchEntryStatements(Func.Body);
@@ -508,7 +564,9 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 13: iterative DCE (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");
+  const auto TIter = Clock::now();
   iterativeDCE(Func, Entries);
+  const auto TPost = Clock::now();
 
   elimUnreadPrivateFrameStores(Func, TargetArch);
   narrowSourceConcatLocals(Func);
@@ -533,6 +591,18 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   simplifyExprSemantics(Func.Body);
   breakStmtCycles(Func.Body);
   eliminateDeadConditions(Func.Body);
+
+  if (WantDetail) {
+    const auto TEnd = Clock::now();
+    auto ElapsedMs = [](Clock::time_point Start, Clock::time_point End) {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(End - Start)
+          .count();
+    };
+    syncWarning() << "m2h-dce-phase: " << Func.Name
+                  << " [pre=" << ElapsedMs(TStart, TIter)
+                  << "ms iterative=" << ElapsedMs(TIter, TPost)
+                  << "ms post=" << ElapsedMs(TPost, TEnd) << "ms]\n";
+  }
 }
 
 } // namespace neverd

@@ -175,6 +175,7 @@ extern llvm::cl::SubCommand SimplifyCmd;
 extern llvm::cl::SubCommand SymbolicCmd;
 extern llvm::cl::SubCommand OptimizeIRCmd;
 extern llvm::cl::SubCommand TranslateObjectCmd;
+extern llvm::cl::SubCommand EmulateDriverCmd;
 extern llvm::cl::SubCommand AuditCmd;
 extern llvm::cl::SubCommand HuntCmd;
 extern llvm::cl::SubCommand ConcolicCmd;
@@ -414,6 +415,9 @@ extern llvm::cl::opt<std::string> TranslateObjectOutput;
 extern llvm::cl::opt<TranslateObjectContainer> TranslateObjectFormat;
 extern llvm::cl::opt<std::string> TranslateObjectEntry;
 extern llvm::cl::opt<unsigned long long> TranslateObjectGeneration;
+extern llvm::cl::opt<std::string> EmulateDriverInput;
+extern llvm::cl::opt<unsigned long long> DriverInstructionLimit;
+extern llvm::cl::opt<std::string> DriverScenarioFile;
 
 //===----------------------------------------------------------------------===//
 // Command handlers
@@ -495,6 +499,7 @@ int runOptimizeIR();
 // Takes raw bytes rather than a binary session and does not link, load,
 // publish, dispatch, execute, or debug.
 int runTranslateObject();
+int runEmulateDriver();
 
 // NeverDCmdPipeline.cpp — engine-driven operations.
 bool configureAnalysisSession(neverd_session_t Sess);

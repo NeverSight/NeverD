@@ -390,6 +390,16 @@ void MedToHighConverter::lowerBranchInd(HighFunc &Func,
     auto Call = HighExpr::makeCall(TargetName, CurOp.Addr, std::move(Args));
     Call->IsIndirectCall = IsIndirect;
     Call->IndirectParamIdx = IndirectParam;
+    if (IsIndirect) {
+      ExprPtr Callee = TargetExpr;
+      if (Callee && Callee->Kind == ExprKind::Var && Callee->Var.Id >= 0) {
+        auto It = DefExpr.find(varKey(Callee->Var));
+        if (It != DefExpr.end() && It->second &&
+            It->second->Kind == ExprKind::Load)
+          Callee = It->second;
+      }
+      Call->IndirectTarget = forceInlineCallTarget(Callee);
+    }
 
     HighStmt RetStmt;
     RetStmt.Kind = StmtKind::Return;

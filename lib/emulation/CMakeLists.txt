@@ -1,0 +1,63 @@
+add_neverd_component_library(NeverDEmulation
+  DriverResult.cpp
+  DriverScenario.cpp
+  DriverSession.cpp
+  GuestMemory.cpp
+  X64ExecutionPolicy.cpp
+  unicorn/UnicornBackend.cpp
+  windows/DriverImage.cpp
+  windows/KernelExportRegistry.cpp
+  windows/KernelException.cpp
+  windows/KernelSEH.cpp
+  windows/GuardControlFlow.cpp
+  windows/KernelFramework.cpp
+  windows/KernelFrameworkControl.cpp
+  windows/KernelFrameworkFiles.cpp
+  windows/KernelFrameworkQueue.cpp
+  windows/KernelFrameworkRequests.cpp
+  windows/KernelFrameworkRequestAccessors.cpp
+  windows/KernelModelFramework.cpp
+  windows/KernelModelFrameworkRequests.cpp
+  windows/KernelModelExports.cpp
+  windows/KernelModel.cpp
+  windows/KernelModelIO.cpp
+  windows/KernelModelUserMemory.cpp
+  windows/KernelModelPhysicalMemory.cpp
+  windows/KernelModelMDL.cpp
+  windows/KernelModelIRPStack.cpp
+  windows/KernelModelDeviceStack.cpp
+  windows/KernelModelPnpDevices.cpp
+  windows/KernelModelPnpRequests.cpp
+  windows/KernelModelPnpCompletion.cpp
+  windows/KernelModelPowerRequests.cpp
+  windows/KernelModelPowerCompletion.cpp
+  windows/KernelModelResources.cpp
+  windows/KernelInterrupts.cpp
+  windows/KernelModelInterrupts.cpp
+  windows/KernelModelInterruptEvents.cpp
+  windows/KernelResources.cpp
+  windows/KernelPhysicalMemory.cpp
+  windows/KernelDMA.cpp
+  windows/KernelDMAChannels.cpp
+  windows/KernelDMAEvents.cpp
+  windows/KernelModelDMA.cpp
+  windows/KernelModelDMAChannels.cpp
+  windows/KernelModelDMATransfers.cpp
+  windows/KernelMMIO.cpp
+  windows/KernelModelRemoveLocks.cpp
+  windows/KernelRemoveLocks.cpp
+  windows/KernelModelRuntime.cpp
+  windows/KernelModelScheduling.cpp
+  windows/KernelModelSpinLocks.cpp
+  windows/KernelModelIRQL.cpp
+  windows/KernelModelCancellation.cpp
+  windows/KernelScheduler.cpp
+  windows/KernelDispatcher.cpp
+  windows/KernelAPIIRQL.cpp
+  windows/DeviceLifecycle.cpp
+  windows/KernelRegistry.cpp
+  LINK_COMPONENTS Loader
+  LINK_LIBS unicorn)
+if(WIN32)
+  target_compile_definitions(NeverDEmulation PRIVATE NOMINMAX)
+endif()

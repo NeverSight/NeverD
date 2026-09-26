@@ -654,6 +654,14 @@ public:
   void setKnownFuncEntries(const std::set<va_t> *Entries) {
     KnownFuncEntries = Entries;
   }
+  /// True when the borrowed set or image pdata/KnownCodeRanges names Addr as
+  /// a separately callable function start.
+  bool isKnownFunctionEntry(va_t Addr) const;
+  /// Next non-exceptional function start after After.  InvalidVA if none.
+  va_t nextKnownFunctionEntry(va_t After) const;
+  /// Conservative inventory size for jump-table work prepaid against entry
+  /// lookups.  Uses image metadata when the borrowed set is a `--func` shard.
+  size_t knownFunctionEntryCount() const;
   /// Share immutable import/symbol lookup across builds of one unchanged
   /// image. The index must outlive all builds; null retains the live lookup.
   void setNoReturnTargetIndex(const libc::NoReturnTargetIndex *Index) {
@@ -1059,6 +1067,10 @@ private:
   /// ownership proof for a separately callable entry.
   void establishCurrentFuncRange(const BinaryImage &Img,
                                  const ExceptionFunction *Exception);
+  bool isCurrentExceptionalEntry(va_t Address) const {
+    return CurrentExceptionalEntries.count(Address) != 0;
+  }
+  bool isCurrentOwnedFragment(va_t Address) const;
   /// Decode relocation-proven and same-function-discovered address-taken
   /// blocks as disconnected CFG roots, without splitting decoded instructions.
   void exploreAddressTakenRoots(const BinaryImage &Img, Decoder &Dec);
@@ -1603,9 +1615,18 @@ private:
     bool operator==(const JumpTableInfo &Other) const = default;
   };
 
-  /// Scratch-only assumptions for the narrow i386 dense-guard group proof.
+  /// Scratch-only assumptions for narrow i386 joint table proofs.
   /// They are never published as prior role/storage certificates. EmptyEdges
   /// removes every group edge for a hypothesis-free seed query.
+  struct FiniteGOTOFFRoundCertificate {
+    // A complete all-consumer certificate belongs to exactly one immutable
+    // group round. The next round uses a different edge/role hypothesis and
+    // starts with an empty certificate.
+    std::map<va_t, std::vector<uint32_t>> Domains;
+    std::map<va_t, std::vector<va_t>> PhysicalTargets;
+    std::map<va_t, std::vector<va_t>> HypothesisEdges;
+    std::set<va_t> Roots;
+  };
   struct GuardedJumpTableGroupProofContext {
     std::set<va_t> Roots;
     std::map<va_t, std::vector<va_t>> Edges;
@@ -1615,12 +1636,19 @@ private:
     /// outlives all scratch builders and is replaced only between phases.
     /// No selector, target, root, or ownership proof may borrow these results.
     const std::map<va_t, JumpTableInfo> *ConsumerRoleInfos = nullptr;
+    /// Borrowed from the enclosing round; never retained by a proposal.
+    FiniteGOTOFFRoundCertificate *FiniteRoundCertificate = nullptr;
+  };
+  enum class GuardedJumpTableGroupKind : uint8_t {
+    DenseGuard,
+    FiniteAdjacentGOTOFF,
   };
   struct GuardedJumpTableGroupKey {
     va_t OwnerBegin = InvalidVA;
     va_t OwnerEnd = InvalidVA;
     std::array<va_t, 8> Members{};
     size_t MemberCount = 0;
+    GuardedJumpTableGroupKind Kind = GuardedJumpTableGroupKind::DenseGuard;
     bool operator==(const GuardedJumpTableGroupKey &) const = default;
   };
   struct GuardedJumpTableGroupState {
@@ -1643,6 +1671,23 @@ private:
   bool prepayJumpTableInfoCopy(const JumpTableInfo &Info, size_t Copies);
   bool copyGuardedGroupProofSnapshot(
       CFGBuilder &Scratch, const GuardedJumpTableGroupProofContext &Context);
+  /// Decode authenticated physical case targets into a private, budgeted CFG
+  /// snapshot for a finite-domain induction query.  The snapshot may describe
+  /// hypothetical control flow only through the caller's query overrides;
+  /// this method never publishes a table edge or a proposal in the owner.
+  bool prepareCandidateFiniteProofScratch(
+      CFGBuilder &Scratch, const std::vector<va_t> &PhysicalTargets,
+      size_t *EvidenceBudget, bool *AnalysisIncomplete) const;
+  /// Prove exact i386 GOTOFF consumers over one private physical successor
+  /// over-approximation, including both pairs when two tables are adjacent.
+  /// Return each branch's separate finite runtime coordinates only after
+  /// replaying every pair on the frozen owner graph.
+  bool proveCandidateFiniteAbsoluteSiblings(
+      CFGBuilder &Scratch, const InsnRecord &Current,
+      const JumpTableInfo &Info, const std::vector<va_t> &PhysicalTargets,
+      std::map<va_t, std::vector<uint32_t>> &FiniteDomains,
+      size_t *EvidenceBudget,
+      bool *AnalysisIncomplete) const;
   uint32_t proveGroupDenseMaskBound(const InsnRecord &Rec,
                                     const JumpTableInfo &Info,
                                     size_t *AggregateEvidenceBudget,
@@ -1652,6 +1697,7 @@ private:
                                     bool &MadeProgress,
                                     bool &MetadataRefreshed);
   bool guardedGroupContains(va_t Branch) const;
+  bool finiteGOTOFFGroupClaimed() const;
   bool guardedGroupIsComplete() const;
   bool guardedGroupHasNoLiveMembers() const;
   void closeGuardedGroupOwners(std::set<va_t> &Owners) const;
@@ -1879,6 +1925,9 @@ private:
   /// sound bootstrap edge whose destination graph is not yet closed from an
   /// exhausted or disproved domain; callers may retain that edge only in the
   /// next immutable proposal universe and must not publish a partial domain.
+  /// A complete published runtime range can be replayed only with its exact
+  /// prior target vector and a closed current CFG; its physical size is not
+  /// itself a selector-domain proof.
   uint32_t inferBoundsFromMask(
       const InsnRecord &Rec, const JumpTableInfo &Info,
       bool AllowNonContiguous = false, bool *IncompleteIndexDomain = nullptr,
@@ -1900,7 +1949,37 @@ private:
       bool AllowInlineZeroCapacityBoundedReplay = false,
       // A mapped inline ceiling is exclusively a finite-domain search bound.
       // It does not authenticate table storage or indirect-branch identity.
-      uint32_t InlineRelativeReadableCapacity = 0) const;
+      uint32_t InlineRelativeReadableCapacity = 0,
+      const JumpTableStorageRange *OwnPublishedRuntimeStorage = nullptr) const;
+  struct ExactFiniteAbsoluteSingletonProof {
+    uint32_t Coordinate = 0;
+    va_t Target = InvalidVA;
+    JumpTableStorageRange PhysicalStorage;
+  };
+  /// The absolute singleton output is minted only by the paired, closed-world
+  /// finite proof. Keep the ordinary signature for other resolver callers.
+  uint32_t inferBoundsFromMaskWithAbsoluteProof(
+      const InsnRecord &Rec, const JumpTableInfo &Info,
+      bool AllowNonContiguous, bool *IncompleteIndexDomain,
+      bool *UsedNonContiguous,
+      std::vector<uint32_t> *FeasibleCoordinates,
+      std::vector<JumpTableMaskKnownOneWitness> *KnownOneWitnesses,
+      bool RequireProducerReachability,
+      const std::vector<va_t> *CandidateTargetsOverride,
+      const std::set<va_t> *ReachableInstructions,
+      bool AllowFixedPointBootstrap, bool AllowRawDenseShortcut,
+      size_t *AggregateEvidenceBudget, bool *SemanticIndexDomainAmbiguous,
+      const JumpTableExactConsumerGroup *ExactConsumerGroup,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
+      const JumpTableStorageRange *CertifiedSiblingRuntimeStorage,
+      std::optional<va_t> *ExactFiniteRelativeSingletonTarget,
+      bool *ExactFiniteRelativeClosureUnknown,
+      bool RetainProvisionalRelativeEdges,
+      bool AllowInlineZeroCapacityBoundedReplay,
+      uint32_t InlineRelativeReadableCapacity,
+      const JumpTableStorageRange *OwnPublishedRuntimeStorage,
+      std::optional<ExactFiniteAbsoluteSingletonProof> *AbsoluteSingletonProof)
+      const;
   void detectNormalization(const InsnRecord &Rec, JumpTableInfo &Info);
   void detectStride(const InsnRecord &Rec, JumpTableInfo &Info);
   uint32_t pullBackBound(uint32_t RawBound, const JumpTableInfo &Info) const;
@@ -1981,6 +2060,8 @@ private:
                                    int UseSeq, const JumpTableInfo &Info,
                                    bool AllowZeroExtension = false,
                                    bool AllowSignExtension = false) const;
+  /// UseGroupContext=false only for final joint-domain replay on one frozen
+  /// owner graph with every member's exact certified edge set.
   std::vector<bool> tableValuesMatchAtUses(
       const std::vector<JumpTableValueQuery> &Queries,
       bool *AnalysisComplete = nullptr,
@@ -1991,8 +2072,8 @@ private:
       const std::set<va_t> *CandidateBranchesSharingTargets = nullptr,
       std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr,
       uint32_t ResolverDepthLimit = 0,
-      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides =
-          nullptr) const;
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
+      bool UseGroupContext = true) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.
@@ -2024,13 +2105,15 @@ private:
   /// ClosedWorldControlFlow is true only if every reachable exit is modeled.
   /// Calls, opaque/resumable terminators, external successors, unresolved
   /// transfers, and a required fallthrough with no successor make it false.
+  /// UseGroupContext=false replays all exact member edges on the frozen owner.
   std::set<va_t> candidateReachableInstructions(
       const InsnRecord &Candidate, const std::vector<va_t> &CandidateTargets,
       const std::set<va_t> &Roots,
       const std::vector<JumpTableStorageRange> &CandidateStorage,
       size_t *GraphWorkBudget = nullptr, bool *AnalysisComplete = nullptr,
       const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
-      bool *ClosedWorldControlFlow = nullptr) const;
+      bool *ClosedWorldControlFlow = nullptr,
+      bool UseGroupContext = true) const;
   /// Prove that the conditional branch at BranchAddr actually gates the table
   /// LOAD: it dominates the LOAD and only one of its outgoing CFG edges can
   /// reach the access.  A comparison in a sibling/case-body block is not a
@@ -2276,6 +2359,16 @@ private:
 
   std::map<va_t, InsnRecord> Insns;
   std::set<va_t> BlockStarts;
+  /// Set only on a fresh finite-proof scratch builder.  Recursive descent
+  /// still follows ordinary direct edges, but indirect table resolution is
+  /// disabled and every new decode consumes the caller's proof allowance.
+  bool CandidateFiniteProofDecodeOnly = false;
+  size_t *CandidateFiniteProofDecodeBudget = nullptr;
+  size_t CandidateFiniteProofDecodeAttempts = 0;
+  bool CandidateFiniteProofDecodeIncomplete = false;
+  /// Private i386 model queries may see the full physical successor set as
+  /// an inductive hypothesis.  No proposal or published edge is created.
+  std::map<va_t, std::vector<va_t>> CandidateFiniteProofModelEdges;
   // Per-instruction membership set probed once for every decoded instruction
   // and every branch target in explore(); a cache-friendly open-addressing set
   // (no per-node allocation, no red-black tree walk) is materially faster here
@@ -2493,6 +2586,10 @@ private:
   size_t RelativeRelocationRootSourceCacheBuildCountForTesting = 0;
   size_t RelativeRelocationRootSourceCacheLookupCountForTesting = 0;
   const std::set<va_t> *KnownFuncEntries = nullptr;
+  /// Filter, handler, and landing-pad VAs inside the current primary range.
+  /// MSVC often labels those thunks as functions; they still belong to this
+  /// CFG, so KnownFuncEntries must not clip or refuse them.
+  std::set<va_t> CurrentExceptionalEntries;
   const libc::NoReturnTargetIndex *NoReturnTargets = nullptr;
   const detail::AbsoluteRelocationRootIndex *AbsoluteRelocationRoots = nullptr;
   const ExecutableCodeOwnerIndex *ExecutableCodeOwners = nullptr;

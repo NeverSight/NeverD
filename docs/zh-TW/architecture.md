@@ -256,6 +256,47 @@ generated-code ABI 只為純量整數定義。浮點、SIMD、x87、原子操作
 該契約之外。選擇 `ProvenSemanticAndLLVM` 策略的實作必須執行 NeverD 現有的證明
 閘控語意簡化，並與 LLVM 最佳化共同達到不動點；該策略本身不提供可執行翻譯後端。
 
+## Windows 驅動程式模擬
+
+`lib/emulation` 是由 `NEVERD_ENABLE_DRIVER_EMULATION` 啟用的選用執行元件。`emulate-driver` CLI 透過公開 C API 存取此元件。`DriverSession` 負責有界的 x64 WDM 初始化，以及選用的循序 create／IOCTL／read／write／cleanup／close／unload 呼叫；Windows 映像映射使用現有載入器提供的完整 `BinaryImage`，Windows 模型負責客體物件與 API 語義。Unicorn 配接器負責 CPU 執行，並持有客體記憶體的權威狀態。此路徑不使用實驗性的原生翻譯管線，也不改變其支援範圍。
+
+Unicorn 透過 `cmake/NeverDUnicorn.cmake` 統一設定一次，與語義測試共用，並在 `BUILD_TESTING=OFF` 時仍可用。未知 API 與 CPU 環境行為會明確停止；驅動程式傳回失敗與模擬未完成始終保持區分。限制、報告及不支援的生命週期操作見[驅動程式模擬](driver-emulation.md)。
+
+原有 C API 仍僅執行初始化。情境 JSON 在相同執行選項上使用統一的嚴格解析器，欄位與請求類型透過 `.def` 目錄宣告。要求的基底重新定位與安全性 cookie 初始化由執行載入器負責。Windows 模型負責 IRP／堆疊位置／檔案物件，並驗證同步完成或工作項目驅動的待處理完成；工作階段在共用執行預算下依序呼叫回呼。未使用的未知匯入採用延遲繫結；執行它們或讀取未建模的匯出資料時會明確停止。
+
+匯出登錄表為靜態匯入與動態解析提供穩定的客體位址，並將可用性與實作分開處理：明確不存在的匯出解析為 NULL；存在但未建模的匯出導向陷阱；未指定可用性的動態查詢會停止。Windows 模型擁有獨立的檔案識別碼及由請求擁有的 MDL，包括對映權限及完成時的失效。執行階段 API 格式化透過經檢查的 Win64 參數讀取器存取客體參數。後端保留第一個結構化錯誤；後續觀察不會清除該錯誤，也不會繼續執行或提供 Windows SEH。
+
+Windows 模型亦管理獨立的非分頁池 MDL；釋放描述符不會釋放底層緩衝區。MDL 鏈結與 IRP 關聯仍未建模。獨立登錄模型管理明確場景樹、控制代碼權限與機碼值生命週期，與靜態匯出目錄分開。場景預檢與執行使用相同登錄驗證規則，報告保留最終機碼值；卸載檢查遺留控制代碼。
+
+`KernelScheduler` 管理就緒佇列順序、回呼識別與計時器期限；`KernelDispatcher` 管理不透明 DPC、計時器、事件及其訊號。`KernelModel` 管理等待登記、工作項目／裝置生命週期與 IRP 完成。`DriverSession` 儲存並還原各回呼的獨立堆疊及完整 CPU 內容，包括 Win64 堆疊參數，客體記憶體保持共用。僅在沒有就緒執行框架時，虛擬時間才推進至計時器／等待／取消邊界；CPU0 以確定性的合作排程執行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作項目。這不提供一般執行緒／APC／自旋鎖排程、WDM／PnP 取消、並行公開情境提交、完整 PnP／電源或硬體。 API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。
+
+`KernelModelDeviceStack` 以單一記錄管理各裝置的驅動程式擁有者、配置、上下層鄰居、待刪除狀態與內部參考。客體 `NextDevice` 列舉串列與宿主擁有的附加圖意義不同。名稱解析保留具名下層裝置作為 `FILE_OBJECT` 和報告身分，選擇目前堆疊頂端進行初始派送及 READ/WRITE 緩衝設定，並保留整條請求路徑。解除附加或刪除不會讓請求／回呼仍持有的裝置失效；公開 `ReferenceCount` 仍只計算開啟的控制代碼。
+
+`KernelModelIRPStack` 管理原始客體封包的有界堆疊游標、確切目標派送及完成展開；內嵌 Copy/Skip/SetCompletion 寫入仍為權威資料。派送狀態、完成回呼控制值與最終 `IoStatus` 分離，pending 可在派送傳回後傳播。`STATUS_MORE_PROCESSING_REQUIRED` 保留封包、MDL 與緩衝區，直到繼續執行並到達最終展開邊界，包括巢狀完成。`KernelGuestCall` 攜帶子系統擁有者及區域 token，防止 WDM／WDF 續接身分碰撞；`DriverSession` 保留 CPU 框架與繼承的 IRQL。一個客體驅動程式可附加於獨立擁有的情境 PDO；驅動程式自行配置的 IRP 仍不支援。WDF 附加／轉送、活動堆疊附加、中間層移除、變更主要功能及路徑外目標仍不支援。 呼叫上層完成回呼之前，已消耗的下層堆疊位置會清零。
+
+`DriverPnp.h` 與公開 `DeviceLifecycle.def` 統一生命週期列舉及精確成功合約；`devicePnpFinalStatusError` 由情境預檢與客體最終完成共用。`KernelModelPnpDevices` 擁有穩定 PDO 身分、獨立提供者驅動程式清單與實際 AddDevice 觀測。`KernelModelPnpRequests` 將交易及不可變裝置／檔案身分關聯至既有 IRP，不根據停止、待移除或電源狀態虛構 I/O 拒絕。一般要求進入真正客體派送，由驅動程式決定成功、失敗或等待。`KernelModelPnpCompletion` 管理實際匯流排接收／完成和虛擬期限，沿用 `KernelModelIRPStack` 及標示擁有者的續接。最終上層完成提交狀態；成功 PnP 必須已完成匯流排轉送，Start/QueryStop/QueryRemove 的上層早期失敗可保留空觀測。Stop/CancelStop/SurpriseRemoval/CancelRemove/Remove 必須精確傳回 STATUS_SUCCESS；QueryStop 的 STATUS_RESOURCE_REQUIREMENTS_CHANGED (0x119) 因資源重新查詢未實作而拒絕。提供者退役與客體拆鏈／刪除保持獨立，不會靜默清理洩漏。八種常見次要功能支援此處描述的明確匯流排契約；公開執行器仍循序執行，Remove 前要求關閉檔案並排空先前要求。其他 PnP、其他硬體／資源及 KMDF PnP 仍不支援。
+
+`KernelRemoveLocks` 是鎖登記、確切 DEVICE_OBJECT 擁有者、大小、Tag 多重計數及排空鎖存的唯一權威，與 `DeviceLifecycle` 交易分開；PDO 狀態或 IRP 形狀的 Tag 都不決定身分。`KernelModel` 驗證延伸區完整儲存及不透明存取，路由四個 Ex 匯出，並登記有型別的可恢復 RemoveLock 等待。最後一次 release 在回呼傳回前喚醒等待者，沿用 CPU 續接而非合成回呼。目前 AndWait 檢查關聯 REMOVE 路徑及提供者實際接收，不要求下層完成或 Tag 指向存活封包，也不等於完整 Driver Verifier。REMOVE 入口保留關閉檔案／完成先前要求的限制，但允許回呼執行並釋放鎖。工作階段保留 REMOVE 路徑直到剩餘框架結束，在釋放所有權前驗證最終拆除。取得／等待儲存檢查先於 delete-pending 修改，延伸區實際退役才取消登記；排空不消耗工作項目或路徑參考。
+
+`DriverResources.h`／`DriverResources.def` 與 `DriverInterrupts.h`／`DriverInterrupts.def` 定義固定 `register_bank` 記憶體及中斷配置。`DriverScenario` 負責 JSON／C++ 預檢；`DriverResult` 記錄初始設定，不重複保存觀測到的暫存器組狀態。`KernelResources` 是緊密排列的原始／轉譯配置、資源世代、實體存在狀態與電源的唯一權威。`KernelMMIO` 擁有持久暫存器值及獨立映射別名；`KernelInterrupts` 擁有不透明連線、鎖定及明確脈衝。`KernelModelResources` 建立唯讀 START 封包並整合提供者實際完成：成功的下層 START 在上層回呼前發布世代，提供者實際裝置 SET 更新 D0／D3 可存取性。失敗 START 或 STOP／REMOVE 的清理在 IRP 最終完成前檢查，讓上層回呼有機會先解除映射及中斷連線，不會隱式清理。意外移除立即禁止硬體存取。`GuestMemory` 與 `UnicornBackend` 在 MMIO 產生效果前驗證完整 CPU／API 交易，並保留首次錯誤。固定配置重新啟動保留暫存器組的值。任意 RAM、資源重新平衡、連接埠、共用／電位觸發／訊息型中斷及其他 DMA 介面仍不支援。
+
+`DriverDMA.h`／`DriverDMA.def` 統一管理每個 PDO 的明確能力與獨立外部交易。`KernelPhysicalMemory` 註冊確切有效的 RAM 配置、指派共用頁面身分並固定位元組範圍；MDL 是該權威的檢視，不是複製緩衝區。`GuestMemory`／`UnicornBackend` 提供整段儲存存取，繞過但不改變 CPU 權限，拒絕 MMIO、執行中、重入或已故障的存取，並鎖存非預期後端失敗。`KernelDMA` 管理獨立邏輯域、adapter 繫結方法身分、common／SG 映射、map register 配額與回呼參考；`KernelDMAEvents` 在實際遞送時解析擷取的 PDO 世代。`KernelModelPhysicalMemory`、`KernelModelDMA` 與 `KernelModelDMATransfers` 橋接原始配置／MDL 所有權與真正間接客體回呼。SG 資源可用時直接遞送；排隊回呼保留身分與容量，直到 FIFO 取得配額。映射與回呼壽命分離：Put 可在回呼返回前解除資料／描述元固定，保留回呼不會延長已完成 IRP 的壽命。`DmaWritable` 分開記錄鎖定意圖與 CPU 映射權限。同時刻提供者發布先於 DMA RAM 效果，之後才判定中斷是否可遞送。資源世代、存在狀態與電源仍由 `KernelResources` 唯一管理；DMA 不推測廠商暫存器、不引發 IRQ、不完成 IRP，也不另建生命週期。邏輯位址永不回收重用，交易驗證失敗保留觀測且不變更 RAM。已建模介面包含有限模型 RAM 上的一致性 common buffer、版本一 SG 及具轉譯的匯流排主控 channel DMA；一般硬體、從屬控制器與其他 DMA 介面仍不支援。
+
+`KernelDMAChannels` 在同一邏輯域配置器上加入 channel reservation 與具型別的 SG／channel FIFO，分開保存回呼狀態、保留的 map registers 及每次操作的整體映射。每個操作只保留一次邏輯視窗，並原地延伸單一實體固定範圍，因此交錯的 MapTransfer 不會複製 RAM、重複扣除 registers 或重疊其他映射。純傳輸、返回、flush 與釋放計畫會在發布前驗證身分及整批佇列晉升。`KernelModelDMAChannels` 解碼間接 ABI 與實際註冊時的 CurrentIrp 快照，並與 SG 共用 MDL 檢視輔助函式。獨立的排程種類 `DMAAdapterControl` 共用 DMA 順序、容量與直接呼叫時的父框架保留；只有 DMA 模型解讀回呼返回動作的低 32 位元。排隊中擷取的 IRP 在最終堆疊展開前受保護；進入回呼後即釋放該輸入參考，容許在回呼內完成它。整體 flush 退役映射位元組；確切 FreeMapRegisters 退役獨立 reservation。`KeFlushIoBuffers` 的一致性快取契約不免除其中任何義務。
+
+`KernelInterrupts` 將每個明確脈衝綁定至來源要求成功提交時的連線權杖及資源世代。`KernelModelInterruptEvents` 在推進時鐘或變更觀測前預檢同一時刻所有事件產生者的容量，包含框架取消回呼的精確數量；計時器、提供者完成及取消不能默默佔用為 ISR 保留的容量。提供者實際硬體狀態發布先於脈衝資格檢查，已接納中斷先於 DPC 及被動層級回呼。排程仍是合作式：虛擬時間只在閒置時推進，零延遲不代表指令搶占。`KernelModelInterrupts` 解碼傳統十一引數 ABI 及選定 Ex 欄位；`KernelGuestCall` 為中斷回呼提供獨立擁有者／權杖。ISR 與同步回呼在配置的 DIRQL 持有同一把不可遞迴鎖；巢狀 CPU 框架保留呼叫者 IRQL／CR8，BOOLEAN 只使用 AL。手動鎖要求相同執行身分與儲存的 IRQL；回呼不可帶著未釋放的鎖返回。已設定脈衝的壽命不受來源 IRP 完成影響；連線已斷開、世代不可用或 D3 下的遞送會記錄明確未遞送原因並停止，不會重新綁定或臆造 enable／ack 暫存器行為。`DriverResult.Interrupts` 保存獨立觀測，不會合成 IRP 或 NTSTATUS 完成。
+
+`DriverPower.def` 定義電源類型／動作拼法及要求來源；`DriverPnp.h` 的同一個 `DriverPowerOperation` 用於情境封包及每個 PDO 的回應 FIFO。`KernelModelPowerRequests` 擁有明確封包事實、保留路徑和每個 DEVICE_OBJECT 的通知狀態；`PoSetPowerState` 傳回該裝置前值，不修改生命週期交易。`KernelModelPowerCompletion` 管理真正的 `PoRequestPowerIrp` 子要求，每個都有獨立 IRP、報告列和回應索引；只消耗符合的 PDO 首項，不從 context 猜父要求，也不借用父報告。巢狀派送及最終五參數 void 回呼沿用帶擁有者的續接、保留路徑及獨立回呼堆疊；狀態快照跨等待有效至回呼傳回。同步子要求可先於 API 的 STATUS_PENDING 傳回完成，System S0 父要求也可先於 D0 子要求完成。最終上層完成控制生命週期觀測，與匯流排結果分開。此有限合成匯流排範圍要求 DO_POWER_PAGABLE 且無 DO_POWER_INRUSH、PASSIVE_LEVEL 派送，只支援 D0/D3 和 Working/Sleeping3 的 Query/Set；明確32位元 SystemContext 保持不透明。不提供一般電源原則、WAIT_WAKE、關機／休眠、一般硬體、KMDF PnP 或並行公開情境提交。
+
+`KernelFramework` 管理 KMDF 1.33 繫結、函式表識別、WDF 物件與內容、控制裝置初始化記錄、循序預設佇列及要求控制代碼。其具型別的裝置與要求主控介面將 WDM 命名空間、儲存空間、封包狀態、MDL 對應及完成驗證交由 `KernelModel` 負責；雙方均不建立重複的裝置或 IRP。佇列路由將框架擁有的分派狀態與傳回型別為 `void` 的客體回呼返回分開記錄。完成接續流程先執行清理及子物件銷毀，再釋放 IRP；外部參考僅保留 WDF 內容。刪除待處理要求會在修改上層祖先物件之前遭到拒絕；刪除時自動取消或排空要求仍不受支援。`DriverSession` 在共用預算下執行巢狀回呼。`DriverImage` 驗證 CFG 中繼資料；`GuardControlFlow` 管理已宣告的映像／API 目標，CPU 介面卡保留檢查／分派呼叫狀態。PnP 裝置、一般佇列排程及其取消、類別擴充及 UMDF 仍不受支援。
+
+情境透過 `cancel_after_100ns` 為傳輸要求設定虛擬取消期限，`KernelModel` 的獨立 IRP 記錄管理此期限及實際發生的絕對 `cancel_requested_at_100ns`；公開情境仍循序提交要求。`KernelModel` 在框架路由後、客體 I/O 回呼前套用零延遲取消，保留完成先發生的結果，並在閒置時間推進時考慮正數取消期限。`KernelFramework` 管理標記／解除標記、排入佇列／已遞送狀態，以及保留至取消回呼傳回的內部參考。僅排入佇列的取消回呼不允許完成要求；遞送後，工作項目可在回呼等待期間協調完成。保留 WDF 物件不會恢復已失效的 IRP 儲存空間。`KernelScheduler` 將取消回呼與工作項目分開管理，在暫停／還原時保留回呼類別並共用容量與派送預算；DPC 優先，其後是 FIFO 取消回呼，再執行一般工作項目或還原就緒的被動等待框架。取消回呼在 `PASSIVE_LEVEL` 執行。此控制裝置契約不提供 WDM 取消常式或一般佇列排程器。
+
+舊版 `WdfRequestMarkCancelable` 遇到已取消的 IRP 時，在目前 API 接續中使用巢狀 `GuestCall`。取消、清理與最終銷毀回呼均可等待，整個接續結束後才還原呼叫端；註冊之後發生的取消仍使用排程器。`KernelFramework` 管理 WDF 控制代碼識別以及完成中／完成後 getter 的中性傳回值。其請求存取主控介面將原 IRP、64 位元 Information 和 MDL 識別交由 `KernelModel` 管理，後者同時拒絕客體透過 WDM 完成框架擁有的 IRP。每個請求視需要建立唯一的 SystemBuffer MDL；直接緩衝區保留原描述元，擷取本身不建立對映。完成操作使兩種描述元與 IRP／緩衝區一起失效，不受 WDF 內容參考保留的影響。
+
+`KernelGuestException` 是攜帶 32 位元狀態的具型別 API 結果，與模型錯誤及後端故障分開。`DriverImage` 保留載入器既有、以慣用基底表示的例外中繼資料。`KernelSEH` 以這些資料建立有界且不修改狀態的 x64 第一版 C 全捕捉處理常式轉移計畫，檢查位址轉換與堆疊讀取。它在一般輔助函式框架間展開時，還原支援的已儲存非揮發性通用暫存器，並選取真正的客體處理常式；遇到篩選函式/finally、GS/C++ 處理機制、鏈結、不完整記錄、前置程式碼或 XMM 還原時明確拒絕。`DriverSession` 僅在沒有故障的 API 停止點套用已驗證的暫存器計畫，維持 API 追蹤結果為 null，並在同一執行中恢復處理常式。它不會清除後端保留的故障，也不會展開至另一回呼的堆疊。此範圍支援 ExRaiseStatus/ExRaiseAccessViolation/ExRaiseDatatypeMisalignment；使用者位址探測、鎖定使用者緩衝區與 CPU 故障復原仍屬獨立工作。
+
+
 ## 例外重寫邊界
 
 Mach-O compact unwind 目前具備原始 `__unwind_info` 的嚴格 parser、產生

@@ -28,6 +28,51 @@ cmake --build build-release --parallel 4
 複製、建置設定與 macOS 預先建置 LLVM 說明見
 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 驅動程式模擬檢查
+
+同時啟用 `NEVERD_ENABLE_DRIVER_EMULATION=ON` 與 `BUILD_TESTING=ON`，即可建置專項執行套件及共享 C API／CLI 檢查：
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+fixture 涵蓋客體初始化、成功與失敗傳回、不支援的行為、記憶體錯誤、嚴格情境解析、有界執行，以及經過 create、傳輸、cleanup、close 和 unload 的同步緩衝／直接 I/O、READ/WRITE、獨立檔案生命週期、MDL 權限、動態匯出、客體可變參數及結構化 CPU 錯誤。使用 [`emulate-driver` CLI](driver-emulation.md) 驗證 JSON 與處理程序結束碼。生產建置可在 `BUILD_TESTING=OFF` 時啟用此功能；`libneverd` 不得依賴僅供測試使用的 Unicorn 設定。
+
+補充測試涵蓋驅動獨立擁有的非分頁池 MDL、描述符與緩衝區的獨立生命週期、登錄查詢配置與短緩衝區、控制代碼權限、刪除與洩漏，以及無輸出 IOCTL 的完整 64 位元 `information_hex`。真實範例驗收亦涵蓋 Zero 的同步直接讀寫與統計查詢。
+
+後端測試驗證完整 CPU 內容（暫存器、旗標、SIMD、FPU、CR8）、共用記憶體及跨後端／故障內容拒絕。編譯後的 `driver_dispatcher.c` 範例實際執行 DPC 與工作項目回呼，涵蓋計時器邊界、通知／同步事件與計時器、原因 `Executive` 的非警示 `KernelMode` 等待、逾時／延遲、多個阻塞堆疊、設定後重設仍保留喚醒、回呼參數及非法 IRQL／生命週期。工作項目測試繼續涵蓋待處理／完成、佇列、停滯與共用預算。這些案例證明所述子集，不代表完整 Windows 非同步支援。
+
+`driver_context_limits.c`: API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。DPC 不能呼叫登錄 API，也不能配置、釋放或存取分頁集區；Unicode `DbgPrint` 轉換要求 `PASSIVE_LEVEL`，支援的 ANSI 輸出與非分頁操作仍可在 `DISPATCH_LEVEL` 使用。回呼堆疊有明確邊界，越界堆疊指標不能進入另一阻塞工作項目的堆疊。裝置擴充中的已啟動計時器會阻止裝置提早回收。這些檢查並未開放一般 IRQL 切換。
+
+`KernelDeviceStackTests.cpp` 檢查獨立的擁有者／附加關係、頂端選擇、失敗原子性、堆疊容量、不透明欄位、開啟控制代碼計數、解除附加／刪除時的工作項目及請求保留，以及檔案身分與派送頂端的區別。原創 `driver_wdm_stack.c` 使用真正 WDK 標頭與內嵌 Copy/Skip/SetCompletion；一般／啟用 CFG 映像由選用的 `NEVERD_WDM_STACK_FIXTURE`／`NEVERD_WDM_STACK_CFG_FIXTURE` 設定。`DriverWDMStackTests.cpp` 涵蓋重新定位、實際下層狀態、完成順序和旗標、延遲 pending 傳播、工作項目／DPC、等待、`STATUS_MORE_PROCESSING_REQUIRED`、直接 MDL 保留、巢狀完成及格式錯誤的游標／控制值。`DriverScenarioPublicTests.cpp` 涵蓋 C API／CLI 轉送與 C API 保留／巢狀完成，包括已設定的 CFG 映像。缺少產物會明確略過；Linux 證據僅證明同驅動程式堆疊子集，不代表 PDO／PnP／電源支援。 `KernelIRPStackTests.cpp` 檢查計數游標、完整內嵌 Copy 前綴、已消耗位置清零、狀態／pending 傳播、MPR 與巢狀完成、續接擁有者檢查及保留路徑。真正 READ/WRITE 與檔案生命週期也使用內嵌 Copy 驗證。
+
+`DriverPnpScenarioTests.cpp` 檢查 JSON／原生預檢一致、明確初始事實、ID／數量限制、欄位互斥、最終匯流排狀態與可空觀測報告。`KernelPnpDeviceTests.cpp`、`KernelPnpRequestTests.cpp` 與 `KernelPnpCompletionTests.cpp` 檢查提供者擁有權、AddDevice 成功／失敗／洩漏、初始 IRP、檔案准入、生命週期回復、延遲完成、MPR／巢狀／等待續接及失敗原子性。原創真正 WDK 範例 `driver_wdm_pnp.c` 使用選用的 `NEVERD_WDM_PNP_FIXTURE`／`NEVERD_WDM_PNP_CFG_FIXTURE`。`DriverWDMPnpTests.cpp` 驗證一般／啟用 CFG 且重新定位的 AddDevice、檔案 I/O、有序移除、延遲啟動／移除、啟動／query 失敗與乾淨／洩漏的 AddDevice 失敗。缺少產物時明確略過。執行證據僅來自 Linux，只證明所述無資源 PnP 子集。 `DriverScenarioPublicTests.cpp` 另透過 C API 與 CLI 驗證一般／啟用 CFG 映像的七要求延遲 PnP 報告。
+
+V9 schema 測試往返驗證八種次要功能名稱，並與生命週期完成共用最終狀態校驗；QueryStop 0x119 在載入映像前拒絕。擴展模型及真正範例檢查 query-stop 回復、cancel-stop、停止／重啟、突然移除、精確成功失敗邊界、停止／待移除狀態的軟體 I/O、突然移除後的客體拒絕、裝置身分及混合 AddDevice 結果。`DriverScenarioPublicTests.cpp` 透過 C API 與 CLI，在一般／啟用 CFG 範例上執行 16 要求的停止／重啟／突然移除序列，保留成功軟體 IOCTL 位元組、客體拒絕的 IOCTL 及最終 cleanup/close/remove。公開執行為循序：保留 IRP 若無目前可用生產者，無法等待後續情境要求來啟動或清理裝置。Remove 排空要求是設定邊界，不是通用 Windows I/O 准入策略。證據仍僅來自 Linux。
+
+`KernelRemoveLocksTests.cpp` 檢查獨立鎖／裝置身分、NULL／重複 Tag、retail／DBG 大小、立即／延遲排空、失敗取得義務、失敗原子性、容量及退役。`KernelRemoveLockBridgeTests.cpp` 檢查附加前初始化、延伸區範圍、不透明儲存、IRQL 和修改前拒絕不安全 Delete／Detach。真正 `driver_wdm_remove_lock.c` 的 retail／DBG、普通／active-CFG 四種範例以 `NEVERD_WDM_REMOVE_LOCK_FIXTURE`、`NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE`、`NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE`、`NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE` 指定。`DriverWDMRemoveLockTests.cpp` 涵蓋封包退役後釋放、鎖排空後匯流排才完成、最後 release 先於回呼傳回喚醒、工作項目等待及乾淨 AddDevice 失敗。C API／CLI 使用既有 PnP 情境，保留匯流排接收／完成與最終拆除觀測。缺少產物明確略過；Linux 證據不代表完整 Driver Verifier 或一般並行排空。
+
+`DriverResourceScenarioTests.cpp` 檢查明確 JSON／C++ 事實、整數寬度、數量、實體／暫存器重疊、對齊、ID、空暫存器組及設定序列化。`KernelMMIOTests.cpp`、`KernelMMIOFailureTests.cpp`、`KernelResourceBridgeTests.cpp` 和 `UnicornMMIOTests.cpp` 涵蓋暫存器組／映射所有權、別名、資源世代、緊密排列清單的壽命、提供者時序、重新啟動持久性、意外移除／電源可存取性、精確 CPU／API 交易及失敗原子性。原創且以真正 WDK 建置的 `driver_wdm_resources.c` 使用 `NEVERD_WDM_RESOURCE_FIXTURE`／`NEVERD_WDM_RESOURCE_CFG_FIXTURE`；`DriverWDMResourceTests.cpp` 執行真正純量與 REP 存取函式、普通／有效 CFG 重定位、子範圍別名、頁尾映射、STOP／重新啟動及非法存取。C API／CLI 測試在載入映像前拒絕非法事實，並執行相同 14 個要求的重新啟動情境，驗證持久 IOCTL 輸出與精確 map／unmap 次數。共用 [driver-register-bank-scenario.json](../examples/driver-register-bank-scenario.json) 需要此樣本的暫存器／IOCTL 協定。缺少產物時明確跳過，證據僅來自 Linux；不會操作主機實體記憶體或一般裝置後端。
+
+`DriverInterruptScenarioTests.cpp` 涵蓋明確原始／轉譯描述元、混合及僅中斷配置、嚴格事件欄位／數量、來源身分與獨立 BOOLEAN 觀測。`KernelInterruptsTests.cpp`、`KernelInterruptBridgeTests.cpp` 與 `SchedulerInterruptTests.cpp` 涵蓋獨佔配置完整比對、不透明權杖、世代／連線擷取、事件壽命、選定 Ex 欄位的精確配置、同一把鎖／IRQL 恢復、回呼所有權、同時刻 ISR 優先順序，以及變更前的容量失敗。`KernelFrameworkRequestTests.cpp` 檢查純取消預覽及批次權杖容量，不發布呼叫或消耗參考。原創且以真正 WDK 建置的 `driver_wdm_interrupts.c` 使用 `NEVERD_WDM_INTERRUPT_FIXTURE`／`NEVERD_WDM_INTERRUPT_CFG_FIXTURE`；`DriverWDMInterruptTests.cpp` 執行普通／有效 CFG 重定位、傳統十一引數 ABI、Ex 1／2／4、真正 ISR→DPC 完成、AL 低位元組 FALSE、同步／手動鎖、獨立 PDO、重新啟動世代與非法硬體事實。C API／CLI 測試在載入映像前拒絕非法宣告，並執行七要求的 [driver-interrupt-scenario.json](../examples/driver-interrupt-scenario.json)，檢查 pending IOCTL 位元組及獨立遞送觀測。缺少映像時明確跳過；證據仍僅限 Linux，不代表共用／電位觸發／MSI 中斷或指令級搶占支援。
+
+`DriverDMAScenarioTests.cpp` 驗證明確能力、邏輯域、位元組／數量／時間上限、嚴格方向與分離的設定／觀測。`KernelPhysicalMemoryTests.cpp` 與 `BackendBackingTests.cpp` 檢查共用頁面的配置邊界、固定參考、CPU 權限不變、MMIO／重入排除及整段失敗原子性；`KernelRequestMDLTests.cpp` 檢查唯讀 PFN 與已建立描述元別名是否使用同一實體身分。`KernelDMATests.cpp`、`KernelDMABridgeTests.cpp` 與 `SchedulerDMATests.cpp` 涵蓋真正 RAM 位元組、adapter 繫結表呼叫、直接／排隊 FIFO 所有權、獨立回呼／映射壽命、頁面片段、錯誤方向、釋放預檢、獨立 PDO 域及世代／電源失敗。原創真正 WDK 樣本 `driver_wdm_dma.c` 使用 `NEVERD_WDM_DMA_FIXTURE`／`NEVERD_WDM_DMA_CFG_FIXTURE`；`DriverWDMDMATests.cpp` 與 C API／CLI 測試執行真正 adapter 指標、common／SG 儲存及分開設定的 DMA／中斷事件。共用 [driver-dma-scenario.json](../examples/driver-dma-scenario.json) 要求該樣本協定。缺少產物時明確跳過；執行證據僅限 Linux，不代表真正主機 DMA、PCI 或一般裝置引擎支援。 `pluginsdk/python/tests/test_driver_dma_integration.py` 透過既有擁有回傳 JSON 的繫結，使用 `NEVERD_TEST_LIBNEVERD`／`NEVERD_TEST_WDM_DMA_FIXTURE`／`NEVERD_TEST_WDM_DMA_CFG_FIXTURE` 驗證資料位元組、回呼順序與失敗觀測。
+
+`KernelSEHTests.cpp` 驗證不修改狀態的展開計畫、範圍順序、非揮發性通用暫存器還原、有界堆疊及明確不支援的中繼資料；`KernelExceptionTests.cpp` 驗證精確的 API 參數數目、低 32 位元狀態、具型別例外、IRQL 限制與模型/CPU 狀態不變。以真正 WDK 和 `/GS-` 建置的 `driver_wdm_seh.c` 使用選用的 `NEVERD_WDM_SEH_FIXTURE`／`NEVERD_WDM_SEH_CFG_FIXTURE`；`DriverWDMSEHTests.cpp` 執行一般、啟用 CFG 及重定位映像，涵蓋直接與輔助函式引發例外、巢狀處理常式、處理常式再次引發例外、未處理例外，以及明確拒絕篩選函式/finally/CPU 故障復原。C API/CLI 執行 [driver-seh-scenario.json](../examples/driver-seh-scenario.json)，驗證 API 結果為 null 且真正客體處理常式輸出訊息。`pluginsdk/python/tests/test_driver_seh_integration.py` 使用 `NEVERD_TEST_LIBNEVERD`、`NEVERD_TEST_WDM_SEH_FIXTURE` 及 `NEVERD_TEST_WDM_SEH_CFG_FIXTURE`。外部映像缺少時明確跳過；證據仍限 Linux，不能據此宣稱使用者緩衝區或一般 SEH 支援。
+
+`KernelDMAChannelTests.cpp`、`KernelDMAChannelBridgeTests.cpp` 與共用 `SchedulerDMATests.cpp` 檢查混合配置 FIFO、回傳寬度、純准入／釋放預檢、register 重用、連續頁面片段、整次操作 flush、CurrentIrp 快照及封包／MDL／裝置壽命。原創真正 WDK 樣本 `driver_wdm_dma_channel.c` 使用選用路徑 `NEVERD_WDM_DMA_CHANNEL_FIXTURE`／`NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE`；`DriverWDMDMAChannelTests.cpp` 執行 normal／active-CFG／重定位驅動程式，涵蓋真正 MapTransfer／FlushAdapterBuffers、共用 common／SG／channel 配額、明確裝置交易、IRQ／DPC 完成、連續操作、兩個 PDO 及失敗案例。C API／CLI 執行七筆要求的 [driver-dma-channel-scenario.json](../examples/driver-dma-channel-scenario.json)，包含一次跨越兩個映射片段的交易。`pluginsdk/python/tests/test_driver_dma_channel_integration.py` 以 `NEVERD_TEST_LIBNEVERD`、`NEVERD_TEST_WDM_DMA_CHANNEL_FIXTURE`、`NEVERD_TEST_WDM_DMA_CHANNEL_CFG_FIXTURE` 使用相同公開 JSON 介面。缺少產物時明確跳過；Linux 證據不代表系統 DMA 控制器或任意 HAL 映射／flush 模式的支援。
+
+`DriverPowerScenarioTests.cpp` 驗證必填電源事實、JSON／原生一致性、不透明32位元 context、回應 FIFO 限制及獨立子報告。`KernelPowerRequestTests.cpp` 與 `KernelPowerCompletionTests.cpp` 檢查封包配置、路徑旗標、生命週期與裝置通知區別、FIFO 配對、最終回呼所有權、MPR、等待及釋放邊界。真正 WDK 原始範例 `driver_wdm_power.c` 使用選用的 `NEVERD_WDM_POWER_FIXTURE`／`NEVERD_WDM_POWER_CFG_FIXTURE`；`DriverWDMPowerTests.cpp` 涵蓋普通／active-CFG 重新定位、直接及巢狀 Query/Set、獨立延遲完成、S0 先於 D0、跨等待五參數回呼快照、工作項目來源子要求、空回呼、query 拒絕、獨立 PDO 初值／FIFO 和缺失事實錯誤。`DriverScenarioPublicTests.cpp` 新增格式錯誤預檢及 C API／CLI 的六情境要求／三子要求睡眠喚醒序列。缺少真正產物明確略過；執行證據僅來自 Linux，只證明文件中的可分頁無資源電源子集。
+
+`DriverGuardTests.cpp` 與四個原創 `driver_guard.c` 變體涵蓋啟用／未啟用的 CFG、重新定位、檢查／分派 ABI 及格式錯誤的目標。`KernelFrameworkTests.cpp`、`KernelFrameworkControlTests.cpp`、`KernelFrameworkQueueTests.cpp` 和 `KernelFrameworkRequestTests.cpp` 涵蓋繫結、失敗時可復原的裝置建立、佇列路由、緩衝區邏輯長度，以及清理順序與 IRP／內容生命週期。原創 `driver_kmdf_lifecycle.c` 與 `driver_kmdf_control.c` 可選用真實 WDK 1.33 標頭編譯，並透過真正的 `FxDriverEntry` 程式庫連結。將 CMake 快取路徑 `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE` 指向生命週期映像，將 `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` 指向一般／啟用 CFG 的控制裝置映像。缺少外部產物時會明確略過。`DriverKMDFLifecycleTests.cpp`、`DriverKMDFControlTests.cpp` 及 `DriverScenarioPublicTests.cpp` 中的 C API／CLI 案例涵蓋實際回呼、緩衝／直接 I/O、工作項目完成待處理要求、失敗狀態、卸載及重新定位後的 CFG 執行。驗證證據仍僅限於 Linux，不代表完整 KMDF 或 PnP／電源管理支援。
+
+舊版取消測試將 API 接續保留至取消、巢狀清理與最終銷毀結束；對於已取消的請求，Ex 仍傳回取消狀態而不遞送回呼。`KernelFrameworkRequestAccessorTests.cpp` 與 `KernelRequestMDLTests.cpp` 涵蓋共用的 64 位元 Information、完成時長度驗證、來源佇列／IRP 識別、NULL WDF 檔案控制代碼、保留控制代碼的 getter 結果、緩衝 MDL 快取與首個方向的 ByteCount、直接描述元識別與延後對映、完成時回收，以及拒絕繞過 WDF 完成流程。真實控制裝置 fixture 的 L、M、D、C 模式在一般／啟用 CFG 映像中分別執行舊版取消、緩衝 MDL／資訊、直接 READ／WRITE MDL 和完成後的存取。
+
+取消測試涵蓋僅允許傳輸要求設定的虛擬期限及報告欄位、完成優先與已取消路徑、標記／解除標記結果、排入佇列與已遞送回呼的完成權限、回呼等待及內部參考生命週期。排程器測試獨立驗證 DPC／取消／工作項目順序、容量、識別隔離和暫停／還原。WDM 取消仍明確回報模型錯誤。
+
+
 ## 測試配置
 
 `add_neverd_unittest` 建立一個 GoogleTest 可執行檔，並為每個發現的案例指定
@@ -44,7 +89,7 @@ cmake --build build-release --parallel 4
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFProgramImageTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFVerifierTests`、`NeverDSBFISAConformanceTests`、`NeverDSBFAgaveConformanceTests`、`NeverDSBFSemanticTests`、`NeverDSBFEmitterTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`、`NeverDSBFMalformedCorpusTests`、`NeverDSBFUpstreamConformanceTests`、`NeverDSBFExternalOracleTests`、`NeverDSBFSolanaModelTests`、`NeverDSBFIntegrationTests` | v0-v4 中繼資料與 ELF 配置、嚴格 verifier/loader 行為、23 個固定 ELF 成品、獨立 official oracle、完整 opcode 可用性、惡意輸入、CFG/還原及已執行的 LLVM/C/Rust 差分 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三物件格式的重寫/混淆等價性 |
 | `unittests/semantic` 中的聚焦轉換檔案 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 從大型語意二進位拆出的快速重新連結探針 |
-| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests`、`NeverDObjCEHCorpusTests` | 從 317 個釘住的真實二進位讀出的例外與執行期 metadata，每一個都在 manifest 裡宣告了其復原必須達到的下限 |
+| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests`、`NeverDObjCEHCorpusTests`、`NeverDAdaDEHCorpusTests` | 從 545 個釘住的真實二進位讀出的例外與執行期 metadata，每一個都在 manifest 裡宣告了其復原必須達到的下限 |
 
 註冊的事實來源是
 [`unittests/CMakeLists.txt`](../../unittests/CMakeLists.txt)、
@@ -74,10 +119,10 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 
 `check-neverd-corpus` 跑全部產線；`check-neverd-windows-eh-corpus`、
 `check-neverd-rust-eh-corpus`、`check-neverd-go-eh-corpus`、
-`check-neverd-cxx-itanium-eh-corpus` 與 `check-neverd-objc-eh-corpus` 各跑一條。三個
-CI 主機都帶著這個開關配置並跑全部五條產線：位元組到處都一樣，但讀位元組的東西不一
+`check-neverd-cxx-itanium-eh-corpus`、`check-neverd-objc-eh-corpus` 與 `check-neverd-ada-d-eh-corpus` 各跑一條。三個
+CI 主機都帶著這個開關配置並跑全部六條產線：位元組到處都一樣，但讀位元組的東西不一
 樣，在一台主機上跑通不能說明另外兩台。`scripts/audit_ci_test_inventory.py` 會拒絕缺
-少五個標籤中任何一個的清單——建置悄悄不再讀 corpus 是一種沒有任何測試能捕捉的迴歸，
+少六個標籤中任何一個的清單——建置悄悄不再讀 corpus 是一種沒有任何測試能捕捉的迴歸，
 因為消失的正是那個測試。
 
 EVM 操作碼稽核每次都會以 `git fetch --depth=1 --force` 強制取得官方預設分支的 remote

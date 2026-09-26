@@ -702,6 +702,22 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           if (IsCall)
             break;
         }
+      for (int K = 0; RegArgsApply && K < static_cast<int>(IntParamRegs.size()) &&
+                      K < MaxArgs;
+           ++K) {
+        if (!FoundMask[K])
+          continue;
+        if (const PhiNode *Phi =
+                selectAuthoritativeArgPhi(Func, Blk, TRI, K, IsWin64)) {
+          // Else-edge `mov r9d, 0` sunk into the join must not beat the r9
+          // PHI. A same-block copy of a then-arm incoming (`p->field`)
+          // is the same leftover: the lookup key is the join, not one arm.
+          if (Found[K].isConst() || phiCarriesIncoming(*Phi, Found[K])) {
+            Found[K] = Phi->Output;
+            FoundMask[K] = true;
+          }
+        }
+      }
 
       // A BLR target is not an ABI argument.  When the function pointer came
       // from an incoming integer parameter (commonly x0 in a mixed
@@ -770,6 +786,44 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         return relStackOff(Func, TRI, Address, CallSpOffsets, 0);
       };
 
+      // Call-only Win64: the outgoing `[rsp+20h]` address is an INT_ADD in
+      // the predecessor. CallRelativeStackOffset may not yet have that temp
+      // in the call-SP map; walk the trailing window the same way HighIR
+      // collectSpilledStackArgs does.
+      auto predTrailingStoreOff =
+          [&](const MedBlock &Pred, int StoreIdx) -> std::optional<int64_t> {
+        const MedOp &Store = Pred.Ops[static_cast<size_t>(StoreIdx)];
+        if (auto Rel = CallRelativeStackOffset(Store.Inputs[0]))
+          return Rel;
+        const MedVar &AddrVar = Store.Inputs[0];
+        if (AddrVar.Kind == MedVar::Reg && AddrVar.RegOff == TRI.StackPointer)
+          return 0;
+        for (int K = StoreIdx - 1; K >= 0; --K) {
+          const MedOp &DefOp = Pred.Ops[static_cast<size_t>(K)];
+          if (DefOp.Opcode == NdOp::CALL || DefOp.Opcode == NdOp::INDIR_CALL ||
+              DefOp.Opcode == NdOp::INTRINSIC)
+            break;
+          if (DefOp.Output.Id != AddrVar.Id ||
+              DefOp.Output.SSAVer != AddrVar.SSAVer)
+            continue;
+          if (DefOp.Opcode != NdOp::INT_ADD || DefOp.NumInputs < 2)
+            break;
+          bool HasSP = false;
+          int64_t ConstOff = -1;
+          for (uint8_t KI = 0; KI < DefOp.NumInputs; ++KI) {
+            if (DefOp.Inputs[KI].Kind == MedVar::Reg &&
+                DefOp.Inputs[KI].RegOff == TRI.StackPointer)
+              HasSP = true;
+            if (DefOp.Inputs[KI].isConst())
+              ConstOff = static_cast<int64_t>(DefOp.Inputs[KI].ConstVal);
+          }
+          if (HasSP && ConstOff >= 0)
+            return ConstOff;
+          break;
+        }
+        return std::nullopt;
+      };
+
       // A value spilled to the call frame before the call (an outgoing `push` /
       // `str [sp,#k]` landing at or above the call SP) means the ABI has run
       // out of parameter registers — so every parameter register is necessarily
@@ -797,7 +851,57 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
               HasStackArgAtCallSP = true;
           }
       }
+      // Call-only block: `mov [rsp+20h], esi` sits in the predecessor after
+      // the last helper CALL. That store proves every parameter register is
+      // live at the call (`Concatenate` dest + two string/length pairs).
+      if (OI == 0 && IsWin64) {
+        for (int PredId : Blk.Preds) {
+          const MedBlock *Pred = nullptr;
+          for (const auto &Cand : Func.Blocks)
+            if (Cand.Id == PredId) {
+              Pred = &Cand;
+              break;
+            }
+          if (!Pred)
+            continue;
+          for (int J = static_cast<int>(Pred->Ops.size()) - 1; J >= 0; --J) {
+            const MedOp &Prev = Pred->Ops[static_cast<size_t>(J)];
+            if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
+                Prev.Opcode == NdOp::INTRINSIC)
+              break;
+            if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
+                Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+              continue;
+            if (auto Rel = predTrailingStoreOff(*Pred, J);
+                Rel && *Rel >= IntegerLayout.CallStackBase) {
+              HasStackArg = true;
+              if (*Rel == IntegerLayout.CallStackBase &&
+                  !(Prev.Inputs[1].Kind == MedVar::Reg &&
+                    TRI.isFrameOrLinkReg(Prev.Inputs[1].RegOff)))
+                HasStackArgAtCallSP = true;
+              break;
+            }
+          }
+        }
+      }
       const int NumIntParamRegs = static_cast<int>(IntParamRegs.size());
+
+      // Win64 `[rsp+20h]` proves rcx,rdx,r8,r9 are live at the call. An IAT
+      // INDIR_CALL is otherwise treated as unknown-arity: the later pred
+      // stack scan records only slot 4, and assemble skips the integer
+      // gaps, so Concatenate becomes a single ESI clobber.
+      if (IsWin64 && HasStackArg && RegArgsApply) {
+        for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
+          if (FoundMask[K])
+            continue;
+          auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K, IsWin64,
+                                      /*AllowUnknownLiveIn=*/false, nullptr);
+          if (!V)
+            continue;
+          Found[K] = *V;
+          FoundMask[K] = true;
+        }
+      }
 
       // An argument already resident in its parameter register — a loop-carried
       // value never re-moved before the call, e.g. `for(...) acc = f(acc, i)`
@@ -819,6 +923,16 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       int RegPhiLimit = MaxRegArg;
       if (HasStackArg)
         RegPhiLimit = std::max(RegPhiLimit, NumIntParamRegs - 1);
+      // Join that PHIs the next integer arg (Win64 `mov r9d` in both
+      // predecessors, `mov r8d` only at the call) is a real extra
+      // argument.  Do not treat that like unused function-entry r9.
+      if (!CI.IsIndirect && MaxRegArg >= 0 && !HasStackArg) {
+        while (RegPhiLimit + 1 < NumIntParamRegs &&
+               RegPhiLimit + 1 < MaxArgs &&
+               selectAuthoritativeArgPhi(Func, Blk, TRI, RegPhiLimit + 1,
+                                         IsWin64))
+          ++RegPhiLimit;
+      }
       for (int K = 0; RegArgsApply && K < MaxArgs; ++K) {
         if (FoundMask[K])
           continue;
@@ -843,6 +957,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // truncates any surplus to the callee arity) fill the remaining
       // consecutive register slots from the value reaching the call across the
       // CFG.
+      bool Arg0FromInBlock = FoundMask[0];
       if (!CI.IsIndirect && RegArgsApply)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
           if (FoundMask[K])
@@ -850,9 +965,13 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           if (K > 0 && !FoundMask[K - 1])
             break; // keep arguments consecutive from arg0
           // Recover a pure live-in (a forwarded incoming register with no
-          // reaching definition) only within the callee's arity, so a register
-          // the callee never takes is not invented as an argument.
-          bool AllowLiveIn = (CalleeRegArgs >= 0 && K < CalleeRegArgs);
+          // reaching definition) only for a proven slot: the callee's known
+          // arity, or a hole below a found argN (`lea rdx` without `mov rcx`
+          // still has live-in rcx as arg0 on Win64). Do not invent trailing
+          // registers the callee never takes.
+          const bool AllowLiveIn =
+              (CalleeRegArgs >= 0 && K < CalleeRegArgs) ||
+              (MaxRegArg >= 0 && K <= MaxRegArg);
           bool FromLiveIn = false;
           auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K, IsWin64,
                                       AllowLiveIn, &FromLiveIn);
@@ -872,6 +991,37 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             Found[K].Id = -1;
           }
         }
+
+      // Intervening Win64 thiscall clobbers rcx.  The unique predecessor's
+      // `if (p)` pointer is the callee this, not a
+      // reaching pred rcx / live-in parent this.  An in-block `mov rcx`
+      // after the helper still wins.
+      if (IsWin64 && !CI.IsIndirect && FoundMask[0]) {
+        for (const MedCallClobber &Clobber : Func.CallClobbers) {
+          if (Clobber.Value.Kind == Found[0].Kind &&
+              Clobber.Value.Id == Found[0].Id &&
+              Clobber.Value.SSAVer == Found[0].SSAVer &&
+              Clobber.Value.RegOff == Found[0].RegOff) {
+            Arg0FromInBlock = false;
+            break;
+          }
+        }
+      }
+      if (IsWin64 && !CI.IsIndirect && !Arg0FromInBlock) {
+        bool HasInterveningCall = false;
+        for (int J = 0; J < static_cast<int>(OI); ++J) {
+          const NdOp PrevOp = Blk.Ops[static_cast<size_t>(J)].Opcode;
+          if (PrevOp == NdOp::CALL || PrevOp == NdOp::INDIR_CALL) {
+            HasInterveningCall = true;
+            break;
+          }
+        }
+        if (HasInterveningCall)
+          if (auto Guard = uniquePredNonNullGuard(Func, Blk)) {
+            Found[0] = *Guard;
+            FoundMask[0] = true;
+          }
+      }
 
       // A verified selector stub overwrites x1 before reading it. Even a
       // recovered caller value may be a call clobber or a stale PHI; do not
@@ -924,6 +1074,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         for (int K = 0; K < MaxArgs; ++K)
           if (FoundMask[K])
             HiEvidenced = K;
+        if (IsWin64 && HasStackArg)
+          HiEvidenced = std::max(HiEvidenced, NumIntParamRegs);
         for (int K = 0; K < HiEvidenced && K < MaxArgs; ++K) {
           if (FoundMask[K])
             continue;
@@ -931,6 +1083,27 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                                       /*AllowUnknownLiveIn=*/false, nullptr);
           if (!V)
             continue;
+          Found[K] = *V;
+          FoundMask[K] = true;
+        }
+      }
+
+      // Win64 IAT call with no stack arg: rcx/rdx written in the predecessor
+      // are the real arguments (`cstr(&name)`, `assign(&dst, &src)`). Do not
+      // use the function's incoming this when nothing in the function wrote
+      // that register.
+      if (IsWin64 && CI.IsIndirect && !HasStackArg) {
+        for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
+          if (FoundMask[K])
+            continue;
+          if (K > 0 && !FoundMask[K - 1])
+            break;
+          bool FoundDef = false;
+          auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K, IsWin64,
+                                      /*AllowUnknownLiveIn=*/false, nullptr,
+                                      &FoundDef);
+          if (!V || !FoundDef)
+            break;
           Found[K] = *V;
           FoundMask[K] = true;
         }
@@ -944,6 +1117,34 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         if (ValueArgIdx == IndirectTargetArgIdx) {
           FoundMask[*IndirectTargetArgIdx] = false;
           Found[*IndirectTargetArgIdx] = MedVar();
+        }
+      }
+
+      // Win64 `call [vfptr+imm]` does not rewrite rcx/rdx in the call block
+      // (the object was loaded in a predecessor).  Recover the vfptr object
+      // as arg0 and, when this function already has an rdx param, sret as
+      // arg1.  Do not invent r8/r9.
+      if (CI.IsIndirect && RegArgsApply && Op.NumInputs >= 1) {
+        if (auto Obj = vtableCallObject(Blk, static_cast<int>(OI), Op.Inputs[0])) {
+          Found[0] = *Obj;
+          FoundMask[0] = true;
+        }
+        if (IsWin64 && FoundMask[0] && !FoundMask[1] &&
+            IntParamRegs.size() > 1) {
+          const uint64_t SretOff = IntParamRegs[1];
+          bool HaveSretParam = false;
+          for (const auto &P : Func.Params)
+            if ((P.Kind == MedVar::Reg || P.Kind == MedVar::Param) &&
+                P.RegOff == SretOff)
+              HaveSretParam = true;
+          if (HaveSretParam)
+            if (auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, 1,
+                                            IsWin64,
+                                            /*AllowUnknownLiveIn=*/false,
+                                            nullptr)) {
+              Found[1] = *V;
+              FoundMask[1] = true;
+            }
         }
       }
 
@@ -1185,6 +1386,47 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             Found[SlotIdx] = SV;
             FoundMask[SlotIdx] = true;
             FromStackScan[SlotIdx] = true;
+          }
+        }
+      }
+
+      if (OI == 0 && IsWin64) {
+        const int PredSlotSize = IntegerLayout.SlotBytes;
+        const int PredStackBase = static_cast<int>(IntParamRegs.size());
+        for (int PredId : Blk.Preds) {
+          const MedBlock *Pred = nullptr;
+          for (const auto &Cand : Func.Blocks)
+            if (Cand.Id == PredId) {
+              Pred = &Cand;
+              break;
+            }
+          if (!Pred)
+            continue;
+          for (int J = static_cast<int>(Pred->Ops.size()) - 1; J >= 0; --J) {
+            const MedOp &Prev = Pred->Ops[static_cast<size_t>(J)];
+            if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
+                Prev.Opcode == NdOp::INTRINSIC)
+              break;
+            if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
+                Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+              continue;
+            if (Prev.Inputs[1].Kind == MedVar::Reg &&
+                TRI.isCalleeSaveReg(Prev.Inputs[1].RegOff) &&
+                Prev.Inputs[1].SSAVer == 0)
+              continue;
+            auto Rel = predTrailingStoreOff(*Pred, J);
+            if (!Rel || *Rel < IntegerLayout.CallStackBase || PredSlotSize == 0)
+              continue;
+            const int64_t SlotOff = *Rel - IntegerLayout.CallStackBase;
+            if (SlotOff % PredSlotSize != 0)
+              continue;
+            const int SlotIdx =
+                PredStackBase + static_cast<int>(SlotOff / PredSlotSize);
+            if (SlotIdx >= 0 && SlotIdx < MaxArgs && !FoundMask[SlotIdx]) {
+              Found[SlotIdx] = Prev.Inputs[1];
+              FoundMask[SlotIdx] = true;
+              FromStackScan[SlotIdx] = true;
+            }
           }
         }
       }

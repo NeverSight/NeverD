@@ -1,0 +1,27 @@
+//===- KernelNames.def - Windows model namespace paths --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Object namespace prefixes and registry paths used by the Windows model.
+/// Namespace matching uses folded ASCII; guest registry names retain casing.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_NAME(DevicePrefix, "\\DEVICE\\")
+NEVERD_KERNEL_NAME(KernelProvider, "ntoskrnl.exe")
+NEVERD_KERNEL_NAME(KernelAliasProvider, "ntkrnlmp.exe")
+NEVERD_KERNEL_NAME(FrameworkLoaderProvider, "wdfldr.sys")
+NEVERD_KERNEL_NAME(FrameworkProvider, "wdf01000.sys")
+NEVERD_KERNEL_NAME(DMAProvider, "dma-adapter")
+NEVERD_KERNEL_NAME(FrameworkComponent, "KmdfLibrary")
+NEVERD_KERNEL_NAME(FrameworkUnloadRoutine, "NeverDFrameworkDriverUnload")
+NEVERD_KERNEL_NAME(FrameworkWorldFullAccess, "D:P(A;;GA;;;WD)")
+NEVERD_KERNEL_NAME(DosDevicesPrefix, "\\DOSDEVICES\\")
+NEVERD_KERNEL_NAME(DosDeviceAliasPrefix, "\\??\\")
+NEVERD_KERNEL_NAME(DriverPrefix, "\\Driver\\")
+NEVERD_KERNEL_NAME(RegistryServicesPrefix,
+                   "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\")
+NEVERD_KERNEL_NAME(RegistryHardwarePath, "\\Registry\\Machine\\Hardware")

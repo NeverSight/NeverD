@@ -20,6 +20,7 @@
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -29,6 +30,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <cassert>
@@ -81,12 +83,28 @@ bool MedLLVMEmitter::emitNativeCxxEH(
                          *Mod, GSWrapperName, PersonalityTy))
     return false;
 
-  // This native closure is intentionally exact and narrow.  Destructors,
-  // catch-object frame homes, noexcept, asynchronous /EHa, and out-of-line
-  // catch funclets all need parent-frame rewriting; metadata-only IR is safer
-  // until that proof is available.  Typed catches without a catch object are
-  // representable because the RTTI address remains an external absolute data
-  // symbol in the original image.
+  // This native closure is intentionally exact and narrow.  Catch-object frame
+  // homes, noexcept, and asynchronous /EHa stay metadata-only.  A standalone
+  // out-of-line catch calls that funclet with the establisher frame.  One
+  // in-function continuation is that call's block.  A continuation strictly
+  // inside one block splits that block at the call whose address is the
+  // continuation.  An earlier unaddressed instruction stays in the prefix.
+  // An unaddressed instruction before a later call stays out.  An empty continuation
+  // list on a void function gets a synthesized block that calls the funclet
+  // and returns.  Two or more in-function continuations switch on the
+  // funclet's pointer result; an address outside that list is unreachable.
+  // A chain of Direct funclets and
+  // DestructorWithObject actions is innermost call first.  A Direct action is
+  // passed the establisher frame.  A DestructorWithObject action is passed the
+  // synthetic frame plus the table offset.  Actions inside the try run before
+  // the catch; actions below every try run only when the exception propagates.
+  // A nested try keeps one cleanup per try, so an inner catchswitch unwinds
+  // through the outer try's funclets before the outer catch.  Along the chain,
+  // each next action stays in the same try or moves to an outer one.  The
+  // highest action outside a try while a lower one is inside stays out.
+  // Typed catches without a catch object are representable
+  // because the RTTI address remains an external absolute data symbol in the
+  // original image.
   //
   // A dynamic exception specification is excluded for a different reason: it
   // is not dispatch at all.  Escaping a `throw(A)` calls `unexpected` rather
@@ -99,16 +117,98 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       Cxx.IsNoExcept || Cxx.hasExceptionSpecification() ||
       (!IsFH4 && (Cxx.Flags & ~uint32_t(1)) != 0))
     return false;
-  for (const CxxUnwindAction &Action : Cxx.UnwindMap)
-    if (Action.ActionVA != 0 ||
-        Action.Kind != CxxUnwindAction::ActionKind::None)
-      return false;
+  const std::vector<const CxxUnwindAction *> Chain =
+      cxxLowerableDestructorChain(EH);
+  const CxxUnwindAction *Dtor = Chain.empty() ? nullptr : Chain.front();
+  if (!Dtor) {
+    for (const CxxUnwindAction &Action : Cxx.UnwindMap)
+      if (Action.ActionVA != 0 ||
+          Action.Kind != CxxUnwindAction::ActionKind::None)
+        return false;
+  }
+  struct UnwindCall {
+    std::string Name;
+    int32_t Offset = 0;
+    int32_t State = -1;
+    int Region = -1;
+    bool Frame = false;
+    llvm::BasicBlock *LocalBody = nullptr;
+  };
+  std::vector<UnwindCall> UnwindCalls;
+  llvm::FunctionType *DtorTy = nullptr;
+  if (Dtor) {
+    DtorTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), {PtrTy},
+                                     false);
+    auto LocalBodyAt = [&](va_t Address) -> llvm::BasicBlock * {
+      for (const MedBlock &Block : Func.Blocks) {
+        if (Block.StartAddr != Address)
+          continue;
+        auto It = OriginalBlockMap.find(Block.Id);
+        if (It == OriginalBlockMap.end() || !It->second ||
+            It->second->getParent() != &LLVMFunc)
+          return nullptr;
+        return It->second;
+      }
+      return nullptr;
+    };
+    auto BodyUsesOnlyItsOwnInstructions = [](const llvm::BasicBlock &BB) {
+      for (const llvm::Instruction &I : BB) {
+        if (I.isTerminator() || llvm::isa<llvm::PHINode>(&I))
+          continue;
+        for (const llvm::Value *Op : I.operands()) {
+          if (llvm::isa<llvm::Constant>(Op) || llvm::isa<llvm::Argument>(Op))
+            continue;
+          const auto *Def = llvm::dyn_cast<llvm::Instruction>(Op);
+          if (!Def || Def->getParent() != &BB)
+            return false;
+        }
+      }
+      return true;
+    };
+    auto Push = [&](const CxxUnwindAction *Action, bool Frame) {
+      UnwindCall Call;
+      Call.Offset = Action->ObjectOffset;
+      Call.State = static_cast<int32_t>(Action - Cxx.UnwindMap.data());
+      Call.Frame = Frame;
+      if (EH.CodeRange.contains(Action->ActionVA)) {
+        if (!Frame)
+          return false;
+        llvm::BasicBlock *Body = LocalBodyAt(Action->ActionVA);
+        if (!Body || Body == &LLVMFunc.getEntryBlock() ||
+            !BodyUsesOnlyItsOwnInstructions(*Body))
+          return false;
+        Call.LocalBody = Body;
+        UnwindCalls.push_back(std::move(Call));
+        return true;
+      }
+      auto NameIt = FuncNames.find(Action->ActionVA);
+      Call.Name = NameIt != FuncNames.end() && !NameIt->second.empty()
+                      ? NameIt->second
+                      : "sub_" + llvm::utohexstr(Action->ActionVA);
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+              *Mod, Call.Name, DtorTy))
+        return false;
+      UnwindCalls.push_back(std::move(Call));
+      return true;
+    };
+    for (const CxxUnwindAction *Action : Chain) {
+      const bool Frame = Action->Kind == CxxUnwindAction::ActionKind::Direct;
+      if (!Push(Action, Frame))
+        return false;
+    }
+  }
 
   struct Handler {
     const CxxCatchHandler *Catch = nullptr;
     llvm::BasicBlock *Target = nullptr;
     uint32_t SourceIndex = 0;
+    std::string FuncletName;
     llvm::mc_rewrite::RewriteWinEHSemanticToken SemanticToken;
+    bool SyntheticContinuation = false;
+    std::vector<llvm::BasicBlock *> Continuations;
+    std::vector<va_t> ContinuationVAs;
+    llvm::BasicBlock *InteriorOwner = nullptr;
+    llvm::Instruction *InteriorAt = nullptr;
   };
   struct Region {
     const CxxTryBlock *Try = nullptr;
@@ -140,6 +240,56 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     }
     return nullptr;
   };
+  // A continuation strictly inside one block is that block's suffix. The
+  // split is the first call whose source address is the continuation, so
+  // every earlier instruction is before that address. An unaddressed
+  // instruction before a later call, two owning blocks, or the entry block
+  // stays out.
+  auto PlanInteriorSplit =
+      [&](va_t ContVA,
+          const std::set<llvm::BasicBlock *> &Protected)
+      -> std::pair<llvm::BasicBlock *, llvm::Instruction *> {
+    const MedBlock *Owner = nullptr;
+    for (const MedBlock &Block : Func.Blocks) {
+      if (ContVA <= Block.StartAddr || ContVA >= Block.EndAddr)
+        continue;
+      if (Owner)
+        return {nullptr, nullptr};
+      Owner = &Block;
+    }
+    if (!Owner)
+      return {nullptr, nullptr};
+    auto It = OriginalBlockMap.find(Owner->Id);
+    if (It == OriginalBlockMap.end() || !It->second ||
+        It->second->getParent() != &LLVMFunc ||
+        It->second == &LLVMFunc.getEntryBlock() ||
+        Protected.count(It->second))
+      return {nullptr, nullptr};
+    llvm::BasicBlock *BB = It->second;
+    llvm::Instruction *SplitAt = nullptr;
+    bool UnanchoredBeforeSplit = false;
+    for (llvm::Instruction &Inst : *BB) {
+      if (llvm::isa<llvm::PHINode>(Inst))
+        continue;
+      if (Inst.isTerminator())
+        break;
+      const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+      auto AddrIt = Call ? CallSiteAddrs.find(Call) : CallSiteAddrs.end();
+      if (!Call || AddrIt == CallSiteAddrs.end()) {
+        if (!SplitAt)
+          UnanchoredBeforeSplit = true;
+        continue;
+      }
+      if (SplitAt || AddrIt->second < ContVA)
+        continue;
+      if (UnanchoredBeforeSplit && AddrIt->second != ContVA)
+        return {nullptr, nullptr};
+      SplitAt = &Inst;
+    }
+    if (!SplitAt)
+      return {nullptr, nullptr};
+    return {BB, SplitAt};
+  };
   auto IsMayUnwindCall = [](const llvm::CallInst &Call) {
     return !Call.doesNotThrow() && !Call.isMustTailCall() &&
            !llvm::isa<llvm::IntrinsicInst>(Call);
@@ -159,6 +309,10 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   Regions.reserve(Cxx.TryBlocks.size());
   if (Cxx.TryBlocks.size() > std::numeric_limits<uint32_t>::max())
     return false;
+  std::set<va_t> InParentFunclets;
+  for (const CxxUnwindAction *Action : Chain)
+    if (Action && EH.CodeRange.contains(Action->ActionVA))
+      InParentFunclets.insert(Action->ActionVA);
   for (size_t TryIndex = 0; TryIndex < Cxx.TryBlocks.size(); ++TryIndex) {
     const CxxTryBlock &Try = Cxx.TryBlocks[TryIndex];
     if (Try.Handlers.empty() ||
@@ -168,6 +322,8 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     R.Try = &Try;
     R.SourceIndex = static_cast<uint32_t>(TryIndex);
     for (const MedBlock &Block : Func.Blocks) {
+      if (InParentFunclets.count(Block.StartAddr))
+        continue;
       int32_t State = StateAt(Block.StartAddr);
       if (State < Try.TryLow || State > Try.TryHigh)
         continue;
@@ -185,17 +341,80 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       if (Catch.CatchObjectOffset != 0 || Catch.ParentFrameOffset != 0 ||
           Catch.HandlerVA == 0)
         return false;
-      llvm::BasicBlock *Target = BlockAt(Catch.HandlerVA);
-      if (!Target || Target == &LLVMFunc.getEntryBlock() ||
-          R.Blocks.count(Target) || !llvm::pred_empty(Target))
-        return false;
+      va_t TargetVA = Catch.HandlerVA;
+      std::string FuncletName;
+      bool SyntheticContinuation = false;
+      std::vector<llvm::BasicBlock *> ContBlocks;
+      std::vector<va_t> ContVAs;
+      if (!EH.CodeRange.contains(Catch.HandlerVA)) {
+        auto NameIt = FuncNames.find(Catch.HandlerVA);
+        FuncletName = NameIt != FuncNames.end() && !NameIt->second.empty()
+                          ? NameIt->second
+                          : "sub_" + llvm::utohexstr(Catch.HandlerVA);
+        const bool SelectsContinuation = Catch.ContinuationVAs.size() > 1;
+        auto *FuncletTy = llvm::FunctionType::get(
+            SelectsContinuation ? PtrTy : llvm::Type::getVoidTy(*Ctx), {PtrTy},
+            false);
+        if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+                *Mod, FuncletName, FuncletTy))
+          return false;
+        if (Catch.ContinuationVAs.empty()) {
+          // A synthesized continuation has nowhere to put a returned value.
+          if (!LLVMFunc.getReturnType()->isVoidTy())
+            return false;
+          SyntheticContinuation = true;
+        } else if (!SelectsContinuation) {
+          TargetVA = Catch.ContinuationVAs.front();
+          if (TargetVA == 0 || TargetVA == EH.CodeRange.Begin ||
+              !EH.CodeRange.contains(TargetVA))
+            return false;
+        } else {
+          for (va_t ContVA : Catch.ContinuationVAs) {
+            if (ContVA == 0 || ContVA == EH.CodeRange.Begin ||
+                !EH.CodeRange.contains(ContVA))
+              return false;
+            for (va_t Prev : ContVAs)
+              if (Prev == ContVA)
+                return false;
+            llvm::BasicBlock *Cont = BlockAt(ContVA);
+            if (!Cont || Cont == &LLVMFunc.getEntryBlock() ||
+                R.Blocks.count(Cont) || !llvm::pred_empty(Cont))
+              return false;
+            for (llvm::BasicBlock *Prev : ContBlocks)
+              if (Prev == Cont)
+                return false;
+            ContBlocks.push_back(Cont);
+            ContVAs.push_back(ContVA);
+          }
+        }
+      }
+      llvm::BasicBlock *Target = nullptr;
+      llvm::BasicBlock *InteriorOwner = nullptr;
+      llvm::Instruction *InteriorAt = nullptr;
+      if (!SyntheticContinuation && ContBlocks.empty()) {
+        Target = BlockAt(TargetVA);
+        if (!Target && !EH.CodeRange.contains(Catch.HandlerVA) &&
+            Catch.ContinuationVAs.size() == 1) {
+          std::tie(InteriorOwner, InteriorAt) =
+              PlanInteriorSplit(TargetVA, R.Blocks);
+        }
+        if (InteriorAt) {
+          if (!InteriorOwner || R.Blocks.count(InteriorOwner))
+            return false;
+        } else if (!Target || Target == &LLVMFunc.getEntryBlock() ||
+                   R.Blocks.count(Target) || !llvm::pred_empty(Target)) {
+          return false;
+        }
+      }
       const uint32_t SourceHandlerIndex = static_cast<uint32_t>(HandlerIndex);
       const auto SemanticToken = windows_eh_semantics::getCxxCatchSemanticToken(
           EH, TargetArch, R.SourceIndex, SourceHandlerIndex);
       if (!SemanticToken)
         return false;
-      R.Handlers.push_back(
-          {&Catch, Target, SourceHandlerIndex, *SemanticToken});
+      R.Handlers.push_back({&Catch, Target, SourceHandlerIndex,
+                            std::move(FuncletName), *SemanticToken,
+                            SyntheticContinuation, std::move(ContBlocks),
+                            std::move(ContVAs), InteriorOwner, InteriorAt});
     }
     Regions.push_back(std::move(R));
   }
@@ -236,18 +455,83 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     }
   }
 
-  // Catch bodies in this closure execute after catchret.  They must therefore
-  // be ordinary, call-free continuation blocks and cannot themselves be in a
-  // protected region.  This is equivalent for simple catch bodies and avoids
-  // pretending an out-of-line native funclet has the regenerated frame ABI.
+  std::vector<std::vector<UnwindCall>> LocalCalls(Regions.size());
+  std::vector<UnwindCall> RootCalls;
+  if (Dtor) {
+    auto SameOrOuter = [&](int Cur, int Prev) {
+      if (Cur == Prev || Cur < 0)
+        return true;
+      if (Prev < 0)
+        return false;
+      for (int Parent = Regions[static_cast<size_t>(Prev)].Parent; Parent >= 0;
+           Parent = Regions[static_cast<size_t>(Parent)].Parent)
+        if (Parent == Cur)
+          return true;
+      return false;
+    };
+    for (UnwindCall &Call : UnwindCalls) {
+      size_t Best = std::numeric_limits<size_t>::max();
+      int AtBest = 0;
+      int Found = -1;
+      for (size_t I = 0; I < Regions.size(); ++I) {
+        const CxxTryBlock &Try = *Regions[I].Try;
+        if (Call.State < Try.TryLow || Call.State > Try.TryHigh)
+          continue;
+        if (Regions[I].Blocks.size() < Best) {
+          Best = Regions[I].Blocks.size();
+          Found = static_cast<int>(I);
+          AtBest = 1;
+        } else if (Regions[I].Blocks.size() == Best) {
+          ++AtBest;
+        }
+      }
+      if (AtBest > 1)
+        return false;
+      Call.Region = Found;
+    }
+    if (!UnwindCalls.empty() && UnwindCalls.front().Region < 0) {
+      int RootRegions = 0;
+      for (const Region &R : Regions)
+        if (R.Parent < 0)
+          ++RootRegions;
+      if (RootRegions != 1)
+        return false;
+    }
+    int PrevRegion = UnwindCalls.empty() ? -1 : UnwindCalls.front().Region;
+    for (size_t I = 1; I < UnwindCalls.size(); ++I) {
+      if (!SameOrOuter(UnwindCalls[I].Region, PrevRegion))
+        return false;
+      PrevRegion = UnwindCalls[I].Region;
+    }
+    for (const UnwindCall &Call : UnwindCalls) {
+      if (Call.LocalBody)
+        for (const Region &R : Regions)
+          if (R.Blocks.count(Call.LocalBody))
+            return false;
+      if (Call.Region < 0)
+        RootCalls.push_back(Call);
+      else
+        LocalCalls[static_cast<size_t>(Call.Region)].push_back(Call);
+    }
+  }
+
+  // Catch continuations execute after catchret, so they stay outside every
+  // protected region.  A call there is the in-function catch funclet body and
+  // remains an ordinary call.
   for (const Region &R : Regions)
     for (const Handler &H : R.Handlers) {
-      for (const Region &Protected : Regions)
-        if (Protected.Blocks.count(H.Target))
+      auto InProtected = [&](llvm::BasicBlock *Block) {
+        if (!Block)
           return false;
-      for (const llvm::Instruction &Inst : *H.Target)
-        if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
-            Call && IsMayUnwindCall(*Call))
+        for (const Region &Protected : Regions)
+          if (Protected.Blocks.count(Block))
+            return true;
+        return false;
+      };
+      if (InProtected(H.Target) || InProtected(H.InteriorOwner))
+        return false;
+      for (llvm::BasicBlock *Cont : H.Continuations)
+        if (InProtected(Cont))
           return false;
     }
 
@@ -358,11 +642,64 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   };
 
   auto *TokenNone = llvm::ConstantTokenNone::get(*Ctx);
+  auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+  llvm::Value *Base = FrameBaseInt;
+  auto EnsureBase = [&]() {
+    if (Base)
+      return;
+    llvm::BasicBlock &EntryBB = LLVMFunc.getEntryBlock();
+    llvm::IRBuilder<> Entry(&EntryBB, EntryBB.getFirstNonPHIIt());
+    auto *Slot = Entry.CreateAlloca(I8Ty, nullptr, "eh.object.base");
+    Base = Entry.CreatePtrToInt(Slot, I64Ty, "eh.object.base.int");
+  };
+  auto EmitCalls = [&](llvm::IRBuilder<> &CB,
+                       const std::vector<UnwindCall> &Calls) {
+    EnsureBase();
+    for (const UnwindCall &Call : Calls) {
+      if (Call.LocalBody) {
+        llvm::ValueToValueMapTy VMap;
+        for (llvm::Instruction &I : *Call.LocalBody) {
+          if (I.isTerminator() || llvm::isa<llvm::PHINode>(&I))
+            continue;
+          auto *Cloned = I.clone();
+          VMap[&I] = Cloned;
+          llvm::RemapInstruction(Cloned, VMap,
+                                 llvm::RF_NoModuleLevelChanges |
+                                     llvm::RF_IgnoreMissingLocals);
+          if (auto *ClonedCall = llvm::dyn_cast<llvm::CallInst>(Cloned))
+            ClonedCall->setDoesNotThrow();
+          CB.Insert(Cloned);
+        }
+        continue;
+      }
+      llvm::Value *Obj = nullptr;
+      if (Call.Frame) {
+        Obj = CB.CreateIntToPtr(Base, PtrTy, "eh.frame");
+      } else {
+        llvm::Value *Addr = CB.CreateAdd(
+            Base, llvm::ConstantInt::getSigned(I64Ty, Call.Offset),
+            "eh.object.addr");
+        Obj = CB.CreateIntToPtr(Addr, PtrTy, "eh.object");
+      }
+      llvm::CallInst *DtorCall =
+          CB.CreateCall(Mod->getOrInsertFunction(Call.Name, DtorTy), {Obj});
+      DtorCall->setDoesNotThrow();
+    }
+  };
+  llvm::BasicBlock *RootCleanup = nullptr;
+  if (!RootCalls.empty()) {
+    RootCleanup = llvm::BasicBlock::Create(*Ctx, "cxx.unwind.cleanup.outer",
+                                           &LLVMFunc);
+    llvm::IRBuilder<> CB(RootCleanup);
+    auto *Pad = CB.CreateCleanupPad(TokenNone);
+    EmitCalls(CB, RootCalls);
+    CB.CreateCleanupRet(Pad, nullptr);
+  }
   for (size_t I = 0; I < Regions.size(); ++I) {
     Region &R = Regions[I];
     llvm::BasicBlock *ParentDest =
         R.Parent >= 0 ? Regions[static_cast<size_t>(R.Parent)].UnwindDest
-                      : nullptr;
+                      : RootCleanup;
     auto *Dispatch = llvm::BasicBlock::Create(
         *Ctx, "cxx.catch.dispatch." + std::to_string(I), &LLVMFunc);
     llvm::IRBuilder<> DB(Dispatch);
@@ -387,14 +724,81 @@ bool MedLLVMEmitter::emitNativeCxxEH(
           windows_eh_md::NativeProvenanceRole::RegionDispatch,
           EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex, H.SourceIndex,
           Pad, H.Catch->TypeDescriptorVA, H.Catch->Adjectives);
-      PB.CreateCatchRet(Pad, H.Target);
-      llvm::IRBuilder<> HandlerBuilder(&*H.Target->getFirstInsertionPt());
+      llvm::BasicBlock *Target = H.Target;
+      if (H.InteriorAt)
+        Target = H.InteriorOwner->splitBasicBlock(
+            H.InteriorAt, "cxx.cont.split." + std::to_string(I) + "." +
+                             std::to_string(J));
+      if (H.SyntheticContinuation) {
+        Target = llvm::BasicBlock::Create(
+            *Ctx,
+            "cxx.catch.cont." + std::to_string(I) + "." + std::to_string(J),
+            &LLVMFunc);
+        llvm::IRBuilder<>(Target).CreateRetVoid();
+      }
+      const bool SelectsContinuation = !H.Continuations.empty();
+      if (SelectsContinuation) {
+        Target = llvm::BasicBlock::Create(
+            *Ctx,
+            "cxx.catch.cont." + std::to_string(I) + "." + std::to_string(J),
+            &LLVMFunc);
+      }
+      PB.CreateCatchRet(Pad, Target);
+      if (SelectsContinuation) {
+        llvm::IRBuilder<> HB(Target);
+        EnsureBase();
+        med_llvm_eh::emitWindowsEHProvenanceAnchor(
+            HB, ProvenanceModel,
+            windows_eh_md::NativeProvenanceRole::HandlerTarget,
+            EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex,
+            H.SourceIndex);
+        auto *FuncletTy = llvm::FunctionType::get(PtrTy, {PtrTy}, false);
+        llvm::Value *Frame = HB.CreateIntToPtr(Base, PtrTy, "eh.frame");
+        llvm::CallInst *FuncletCall = HB.CreateCall(
+            Mod->getOrInsertFunction(H.FuncletName, FuncletTy), {Frame},
+            "eh.cont");
+        FuncletCall->setDoesNotThrow();
+        llvm::Value *ContInt =
+            HB.CreatePtrToInt(FuncletCall, I64Ty, "eh.cont.int");
+        auto *Miss = llvm::BasicBlock::Create(
+            *Ctx,
+            "cxx.catch.cont.miss." + std::to_string(I) + "." +
+                std::to_string(J),
+            &LLVMFunc);
+        llvm::IRBuilder<>(Miss).CreateUnreachable();
+        auto *SW = HB.CreateSwitch(ContInt, Miss, H.Continuations.size());
+        for (size_t K = 0; K < H.Continuations.size(); ++K)
+          SW->addCase(llvm::ConstantInt::get(
+                          I64Ty, static_cast<uint64_t>(H.ContinuationVAs[K])),
+                      H.Continuations[K]);
+        continue;
+      }
+      llvm::IRBuilder<> HandlerBuilder(&*Target->getFirstInsertionPt());
+      if (!H.FuncletName.empty()) {
+        EnsureBase();
+        auto *FuncletTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
+                                                  {PtrTy}, false);
+        llvm::Value *Frame =
+            HandlerBuilder.CreateIntToPtr(Base, PtrTy, "eh.frame");
+        llvm::CallInst *FuncletCall = HandlerBuilder.CreateCall(
+            Mod->getOrInsertFunction(H.FuncletName, FuncletTy), {Frame});
+        FuncletCall->setDoesNotThrow();
+      }
       med_llvm_eh::emitWindowsEHProvenanceAnchor(
           HandlerBuilder, ProvenanceModel,
           windows_eh_md::NativeProvenanceRole::HandlerTarget,
           EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex, H.SourceIndex);
     }
     R.UnwindDest = Dispatch;
+    if (!LocalCalls[I].empty()) {
+      auto *CleanupBB = llvm::BasicBlock::Create(
+          *Ctx, "cxx.unwind.cleanup." + std::to_string(I), &LLVMFunc);
+      llvm::IRBuilder<> CB(CleanupBB);
+      auto *Pad = CB.CreateCleanupPad(TokenNone);
+      EmitCalls(CB, LocalCalls[I]);
+      CB.CreateCleanupRet(Pad, Dispatch);
+      R.UnwindDest = CleanupBB;
+    }
   }
 
   for (const CallPlan &Plan : CallPlans) {

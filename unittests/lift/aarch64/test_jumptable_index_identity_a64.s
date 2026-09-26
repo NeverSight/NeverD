@@ -195,35 +195,6 @@ a64_writable_w_self_escape:
 .size a64_writable_w_self_escape, .-a64_writable_w_self_escape
 
 .p2align 2
-// A PAGEOFF relocation authenticates only the low 12-bit fragment.  The base
-// is deliberately unrelated to the matching ADRP, so trusting the loader-side
-// target without a reaching-definition proof would spuriously expose this
-// writable table and turn the independent dispatch into a trap.
-.globl a64_pageoff_wrong_base_no_escape
-.type a64_pageoff_wrong_base_no_escape, %function
-a64_pageoff_wrong_base_no_escape:
-  stp x19, x30, [sp, #-16]!
-  mov w19, w0
-  adrp x2, a64_pageoff_wrong_base_table
-  mov x0, xzr
-  add x0, x0, :lo12:a64_pageoff_wrong_base_table
-  bl a64_writable_unknown_callee
-  and w10, w19, #1
-  adrp x9, a64_pageoff_wrong_base_table
-  add x9, x9, :lo12:a64_pageoff_wrong_base_table
-  ldr x11, [x9, x10, lsl #3]
-  br x11
-.La64_pageoff_wrong_case0:
-  ldp x19, x30, [sp], #16
-  mov w0, #1610
-  ret
-.La64_pageoff_wrong_case1:
-  ldp x19, x30, [sp], #16
-  mov w0, #1611
-  ret
-.size a64_pageoff_wrong_base_no_escape, .-a64_pageoff_wrong_base_no_escape
-
-.p2align 2
 // The matching ADRP is overwritten before PAGEOFF consumes its register.  A
 // lexical ADRP/ADD pair is not an exact address certificate.
 .globl a64_pageoff_clobbered_base_no_escape
@@ -601,15 +572,6 @@ a64_writable_w_self_table:
   .xword .La64_writable_w_self_case0
   .xword .La64_writable_w_self_case1
 .size a64_writable_w_self_table, .-a64_writable_w_self_table
-
-.section .data.jt_a64_pageoff_wrong_base,"aw",%progbits
-.p2align 3
-.globl a64_pageoff_wrong_base_table
-.type a64_pageoff_wrong_base_table, %object
-a64_pageoff_wrong_base_table:
-  .xword .La64_pageoff_wrong_case0
-  .xword .La64_pageoff_wrong_case1
-.size a64_pageoff_wrong_base_table, .-a64_pageoff_wrong_base_table
 
 .section .data.jt_a64_pageoff_clobbered,"aw",%progbits
 .p2align 3

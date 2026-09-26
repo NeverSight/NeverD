@@ -25,7 +25,7 @@ renderMopsSetPrologue(Intrinsic IID, const std::vector<MedVar> &Outputs,
                       std::function<std::string(const HighExpr &)> ExprFn,
                       std::function<std::string(const MedVar &)> VarFn,
                       const IsAliveFn &IsAlive) {
-  if (Outputs.size() < 3 || Operands.size() < 3)
+  if (Outputs.size() < 2 || Operands.size() < 3)
     return {};
   const char *Mnemonic = intrinsicAsmMnemonic(IID);
   if (!Mnemonic)
@@ -45,7 +45,7 @@ renderMopsSetPrologue(Intrinsic IID, const std::vector<MedVar> &Outputs,
   Result += "                         : \"r\"(" + ExprFn(*Operands[2]) + ")\n";
   Result += "                         : \"memory\", \"cc\");\n";
   const char *Names[] = {"_nd_mops_dst", "_nd_mops_count", "_nd_mops_nzcv"};
-  for (size_t I = 0; I < 3; ++I)
+  for (size_t I = 0; I < Outputs.size() && I < 3; ++I)
     if (isAlive(Outputs[I], IsAlive))
       Result += "        " + VarFn(Outputs[I]) + " = " + Names[I] + ";\n";
   Result += "    }\n";
@@ -58,7 +58,7 @@ renderMopsCopyPrologue(const std::vector<MedVar> &Outputs,
                        std::function<std::string(const HighExpr &)> ExprFn,
                        std::function<std::string(const MedVar &)> VarFn,
                        const IsAliveFn &IsAlive) {
-  if (Outputs.size() < 4 || Operands.size() < 3)
+  if (Outputs.size() < 2 || Operands.size() < 3)
     return {};
 
   std::string Result = "{\n";
@@ -79,7 +79,7 @@ renderMopsCopyPrologue(const std::vector<MedVar> &Outputs,
   Result += "                         : \"memory\", \"cc\");\n";
   const char *Names[] = {"_nd_mops_dst", "_nd_mops_src", "_nd_mops_count",
                          "_nd_mops_nzcv"};
-  for (size_t I = 0; I < 4; ++I)
+  for (size_t I = 0; I < Outputs.size() && I < 4; ++I)
     if (isAlive(Outputs[I], IsAlive))
       Result += "        " + VarFn(Outputs[I]) + " = " + Names[I] + ";\n";
   Result += "    }\n";

@@ -67,8 +67,12 @@ bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
       !Img.hasExecutableCodeOwnerRange(Target, Align))
     return false;
 
-  if (KnownFuncEntries && KnownFuncEntries->count(Target) &&
-      Target != FuncEntry)
+  // A chained unwind fragment has its own runtime range start, but is still
+  // part of the current function's control flow.  That explicit ownership
+  // takes precedence over the generic entry boundary.
+  if (isKnownFunctionEntry(Target) && Target != FuncEntry &&
+      !isExplicitlyOwnedFunctionFragment(Img, FuncEntry, Target,
+                                         ExecutableCodeOwners))
     return false;
 
   // Once the detector has a symbol/unwind/next-entry boundary, distance is no
@@ -132,8 +136,9 @@ bool CFGBuilder::sanityCheckTargets(const BinaryImage &Img,
     if (Align > 1 && (Targets[I] % Align) != 0)
       ++InvalidCount;
 
-    if (KnownFuncEntries && KnownFuncEntries->count(Targets[I]) &&
-        Targets[I] != CurrentFuncEntry)
+    if (isKnownFunctionEntry(Targets[I]) && Targets[I] != CurrentFuncEntry &&
+        !isExplicitlyOwnedFunctionFragment(Img, CurrentFuncEntry, Targets[I],
+                                           ExecutableCodeOwners))
       ++InvalidCount;
   }
 

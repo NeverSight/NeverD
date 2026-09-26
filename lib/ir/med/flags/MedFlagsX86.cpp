@@ -20,7 +20,123 @@
 
 #include "MedFlagsDetail.h"
 
+#include <optional>
+
 namespace neverd {
+
+namespace {
+
+bool isSelfLowSliceOf(const MedOp &Op, const MedVar &Base) {
+  return Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 2 &&
+         Op.Output.Kind == MedVar::Reg && Base.Kind == MedVar::Reg &&
+         Op.Inputs[0] == Base && Op.Inputs[0].Size == Base.Size &&
+         Op.Output.RegOff == Base.RegOff &&
+         Op.Output.Size < Base.Size && Op.Inputs[1].isConst() &&
+         Op.Inputs[1].ConstVal == 0;
+}
+
+std::optional<int> selfLowSliceDef(const std::vector<MedOp> &Ops,
+                                   const MedVar &Value, int Before) {
+  for (int I = Before - 1; I >= 0; --I) {
+    const MedOp &Op = Ops[I];
+    if (Op.Output != Value || Op.Output.Size != Value.Size ||
+        Op.Output.RegOff != Value.RegOff)
+      continue;
+    if (Op.NumInputs < 1 || !isSelfLowSliceOf(Op, Op.Inputs[0]))
+      return std::nullopt;
+    return I;
+  }
+  return std::nullopt;
+}
+
+bool sameSignedCmpSliceWindow(const std::vector<MedOp> &Ops, int ConsumerIdx,
+                              int OverflowIdx, const CmpSource &Cmp,
+                              CondCode CC, const TargetRegInfo &TRI) {
+  if ((CC != CondCode::SLT && CC != CondCode::SGE &&
+      CC != CondCode::SLE && CC != CondCode::SGT) ||
+      !Cmp.Valid || !Cmp.FromSub || Cmp.SourceOpIndex < 0 ||
+      Cmp.SourceOpIndex >= OverflowIdx || OverflowIdx < 0 ||
+      ConsumerIdx < OverflowIdx ||
+      static_cast<std::vector<MedOp>::size_type>(ConsumerIdx) >= Ops.size() ||
+      Cmp.A.Kind != MedVar::Reg || Cmp.A.Size != 4 ||
+      Cmp.B.Size != 4 || Cmp.Result.Size != 4)
+    return false;
+
+  const MedOp &Sub = Ops[Cmp.SourceOpIndex];
+  const MedOp &Overflow = Ops[OverflowIdx];
+  if (Sub.Opcode != NdOp::INT_SUB || Sub.NumInputs < 2 ||
+      Sub.Output != Cmp.Result || Sub.Output.Size != Cmp.Result.Size ||
+      Sub.Inputs[0] != Cmp.A || Sub.Inputs[1] != Cmp.B ||
+      Sub.Inputs[0].Size != Cmp.A.Size ||
+      Sub.Inputs[1].Size != Cmp.B.Size ||
+      Sub.Inputs[0].RegOff != Cmp.A.RegOff ||
+      Overflow.Opcode != NdOp::INT_SBOR || Overflow.NumInputs < 2 ||
+      Overflow.Inputs[1] != Cmp.B ||
+      Overflow.Inputs[1].Size != Cmp.B.Size ||
+      Overflow.Inputs[0].Size != Cmp.A.Size ||
+      Sub.Addr != Overflow.Addr)
+    return false;
+  if (Cmp.B.Kind == MedVar::Reg &&
+      (Sub.Inputs[1].RegOff != Cmp.B.RegOff ||
+       Overflow.Inputs[1].RegOff != Cmp.B.RegOff))
+    return false;
+
+  const auto First = selfLowSliceDef(Ops, Cmp.A, Cmp.SourceOpIndex);
+  const auto Second =
+      selfLowSliceDef(Ops, Overflow.Inputs[0], OverflowIdx);
+  if (!First || !Second || *Second <= Cmp.SourceOpIndex ||
+      Ops[*First].Addr != Sub.Addr || Ops[*Second].Addr != Sub.Addr)
+    return false;
+  const MedVar &Base = Ops[*First].Inputs[0];
+  if (Ops[*Second].Inputs[0] != Base ||
+      Ops[*Second].Inputs[0].Size != Base.Size ||
+      Ops[*Second].Inputs[0].RegOff != Base.RegOff ||
+      Ops[*First].Output.Size != Ops[*Second].Output.Size)
+    return false;
+
+  // A fresh register write between the two projections ends their shared
+  // update window.  This includes the RHS when it overlaps the wide parent.
+  // Self-extracts of the exact same wide SSA value are reads.
+  for (int I = *First + 1; I < OverflowIdx; ++I) {
+    const MedOp &Op = Ops[I];
+    if (Op.Addr != Sub.Addr)
+      return false;
+    if (Op.Output.Kind != MedVar::Reg || Op.Output.Size == 0)
+      continue;
+    const bool OverlapsBase =
+        Op.Output.RegOff < Base.RegOff + Base.Size &&
+        Base.RegOff < Op.Output.RegOff + Op.Output.Size;
+    const bool OverlapsRight =
+        Cmp.B.Kind == MedVar::Reg &&
+        Op.Output.RegOff < Cmp.B.RegOff + Cmp.B.Size &&
+        Cmp.B.RegOff < Op.Output.RegOff + Op.Output.Size;
+    if (OverlapsRight || (OverlapsBase && !isSelfLowSliceOf(Op, Base)))
+      return false;
+  }
+
+  auto flagFromSubResult = [&](uint64_t Offset, NdOp Opcode) {
+    for (int I = ConsumerIdx; I > Cmp.SourceOpIndex; --I) {
+      const MedOp &Op = Ops[I];
+      if (Op.Output.Kind != MedVar::Flag || Op.Output.RegOff != Offset)
+        continue;
+      return Op.Opcode == Opcode && Op.Addr == Sub.Addr &&
+             Op.NumInputs >= 2 && Op.Inputs[0] == Cmp.Result &&
+             Op.Inputs[0].Size == Cmp.Result.Size &&
+             Op.Inputs[1].isConst() &&
+             Op.Inputs[1].Size == Cmp.Result.Size &&
+             Op.Inputs[1].ConstVal == 0;
+    }
+    return false;
+  };
+  if (!flagFromSubResult(TRI.FlagNF, NdOp::INT_SLESS))
+    return false;
+  if ((CC == CondCode::SLE || CC == CondCode::SGT) &&
+      !flagFromSubResult(TRI.FlagZF, NdOp::INT_EQUAL))
+    return false;
+  return true;
+}
+
+} // namespace
 
 CondCode resolveCompoundFlagPatternX86(const std::vector<MedOp> &Ops,
                                        const MedOp &Def, int DefIdx,
@@ -98,8 +214,10 @@ bool carryFlagMatchesCmpX86(const std::vector<MedOp> &Ops, int ConsumerIdx,
       continue;
     if (Def.Opcode != BorrowOp || Def.NumInputs < 2)
       return false;
-    return (Def.Inputs[0] == Cmp.A && Def.Inputs[1] == Cmp.B) ||
-           (Def.Inputs[0] == Cmp.B && Def.Inputs[1] == Cmp.A);
+    if ((Def.Inputs[0] == Cmp.A && Def.Inputs[1] == Cmp.B) ||
+        (Def.Inputs[0] == Cmp.B && Def.Inputs[1] == Cmp.A))
+      return true;
+    return sameSignedCmpSliceWindow(Ops, ConsumerIdx, J, Cmp, CC, TRI);
   }
   return false; // flag is live-in/loop-carried — not this block's CMP
 }

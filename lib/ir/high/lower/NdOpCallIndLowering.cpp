@@ -36,6 +36,7 @@ static bool tryResolveNamedAddress(va_t Addr,
     auto It = FuncNames->find(Addr);
     if (It != FuncNames->end()) {
       Out.Name = It->second;
+      Out.Addr = Addr;
       Out.IsIndirect = false;
       return true;
     }
@@ -44,12 +45,14 @@ static bool tryResolveNamedAddress(va_t Addr,
     if (const Import *Imp = Image->findImportAt(Addr);
         Imp && !Imp->Name.empty()) {
       Out.Name = Imp->Name;
+      Out.Addr = Imp->IATAddr ? Imp->IATAddr : Addr;
       Out.IsIndirect = false;
       return true;
     }
     std::string FnName = Image->getFunctionNameAt(Addr);
     if (!FnName.empty() && FnName.find(kAutoFuncPrefix) != 0) {
       Out.Name = FnName;
+      Out.Addr = Addr;
       Out.IsIndirect = false;
       return true;
     }
@@ -218,9 +221,20 @@ void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
     }
   auto Args = collectCallArgs(CurBlock, CI);
 
-  auto Call = HighExpr::makeCall(Target.Name, CurOp.Addr, std::move(Args));
+  auto Call = HighExpr::makeCall(
+      Target.Name, Target.Addr ? Target.Addr : CurOp.Addr, std::move(Args));
   Call->IsIndirectCall = Target.IsIndirect;
   Call->IndirectParamIdx = Target.IndirectParam;
+  if (Target.IsIndirect) {
+    ExprPtr Callee = TargetExpr;
+    if (Callee && Callee->Kind == ExprKind::Var && Callee->Var.Id >= 0) {
+      auto It = DefExpr.find(varKey(Callee->Var));
+      if (It != DefExpr.end() && It->second &&
+          It->second->Kind == ExprKind::Load)
+        Callee = It->second;
+    }
+    Call->IndirectTarget = forceInlineCallTarget(Callee);
+  }
   Call->SourceCallHint = CurOp.SourceCallHint;
   if (CurOp.SourceCallHint)
     Call->CallAddr = CurOp.SourceCallHint->TargetAddress;

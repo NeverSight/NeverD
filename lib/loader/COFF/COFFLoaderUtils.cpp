@@ -584,6 +584,10 @@ void parseTLSDirectory(const COFFObjectFile &Obj, BinaryImage &Img,
 
 void parseBaseRelocations(const COFFObjectFile &Obj, BinaryImage &Img,
                           uint64_t ImageBase) {
+  // `--func` HighC of a named PE entry does not need the image-wide DIR64
+  // pointer map.  Walking every .reloc page of a 36MB game is ~40ms.
+  if (!Img.LoadOnlyFunctionEntries.empty())
+    return;
   const data_directory *RelocDir =
       Obj.getDataDirectory(llvm::COFF::BASE_RELOCATION_TABLE);
   if (!RelocDir || RelocDir->RelativeVirtualAddress == 0 || RelocDir->Size == 0)

@@ -1,80 +1,71 @@
 # Remaining x64 C-quality work
 
-This is the backlog, not a claim of completion. Close items with a dump plus
-a regression, then delete the row.
+Use public fixtures and emitter tests as the durable contract. Private binary
+analysis and comparison output belong outside the repository.
 
-## Proven open
+## Open
 
-| Gap | Surface | Notes |
-|---|---|---|
-| Live x64 PE vs Hex-Rays | HighC | Cookie is `void` + unnamed `jmp` fail helper treated as noreturn when a sibling path is a bare `return`. Rotate prints `__builtin_rotateleft64`. `__GSHandlerCheck` keeps `return 1` (Const is not void). `__GSHandlerCheckCommon` still has a real body but HighC drops the GS_HANDLER_DATA bit-2 align branch (LLVM IR keeps `and i8 …, 4`). Hex-Rays still wins PDB types/struct fields (non-goal), `capture_previous_context` vs `sub_*`, and `__wind` ctor unwind. |
-| C++ ctor unwind | HighC | Destructor `__unwind` vs unstructured `__try` on large ctors is still open. Catch funclets now attach into `catch` bodies on `--func`. |
-| LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
-| `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
-| Flag / popcount noise | lift + LLVMC | Corpus dump still materializes PF/AF/OF, `__builtin_popcount`, and `*(T*)0 =` clobbers. Junk on obfuscated x64 will be worse until DCE owns it in LLVM, not the C printer. |
-| Extra Win64 params on LLVM route | MedLLVM / LLVMC | HighC compacted `probe_plain_seh` to `int32_t arg0`. LLVMC still showed `arg0..arg7`. GUI can show LLVM C via representation `llvmc` (`neverd_decompile_llvm`); default **C** tab remains HighC. |
-| Wrapping casts | HighC | `return (int32_t)(uint32_t)((uint32_t)var + 1)` is required by sanitizer tests. Do not strip. |
-| Source names | both | No PDB → `var_m18` / `arg0` / `g_1400050E0` / `sub_1400024E0`, not `Result` / `Value` / `ProbeSink` / `probe_filter`. MSVC `?A@B@@` now prints `B_A` instead of `_x3F_`. Hex-Rays still wins C++ types/`::`. |
-| x86 outlined except | HighC | Handler body can sit outside the function range; epilogue may read an adjacent slot instead of the try Result. |
-
-## Closed (do not regress)
-
-| Decision | Test / helper |
+| Gap | Next check |
 |---|---|
-| `g_<hex>` unnamed globals, not `dword_` | `makeSyntheticGlobalName`; `HighCPointerAddresses.NamesWritableImageDataStore`; `LLVMCPointerAddresses.NamesWritableNdDataGlobal` |
-| `extern` on image objects | HighC `writeImageObjects`; LLVMC `writeGlobals` for `__nd_data_*` |
-| Readonly image scalar → immediate | `HighCPointerAddresses.FoldsReadonlyImageIntegerLoad` |
-| HighC assigns are declared (`t22_1`, `v36_0`, Phi) | `HighCPointerAddresses.DeclaresAssignedTempsAndUnusedCallResults` |
-| LLVMC assigns are declared (including unused non-calls) | `LLVMCPointerAddresses.DeclaresAssignedTempsAndUnusedCallResults` |
-| Win64 `rcx,rdx,r8,r9` | HighC param recovery; dump `probe_plain_seh` as one `int32_t` |
-| x86 `call [IAT]` is an import | HighC `RaiseException` |
-| Unused params compacted only if unused ≥ 4 | `emittedParamIndices` |
-| Alloca load/store as named locals + `&` | `COFFExceptionIR.LLVMCAllocaLoadStoreUsesNamedLocalsAndAddressOf` |
-| CatchSwitch renders `__except` syntax | `COFFExceptionIR.LLVMCCatchSwitchRendersExceptSyntax` |
-| Unnamed x64 pdata with MSVC `mov [rsp+8], ecx` home | `COFFFunctionListingTest.UnnamedPdataAcceptsWin64RegisterHome`; `export --func 0x140001050` |
-| Named frame slots stay declared after copy-forward | `NeverDHighCStoreForwardingTests`; FrameSlots emit even if DeadVars |
-| LLVMC PHI edge copies, not `/* phi: */` | `LLVMCPointerAddresses.AssignsPhiAtPredecessorEdges` |
-| Const `return 1` is not void | `HighCPointerAddresses.ConstantReturnIsNotInferredVoid` |
-| Unnamed cookie fail + bare `return` is noreturn/void | `HighCPointerAddresses.UnnamedGsFailureCallOmitsSuccessReturn` |
-| `GetCurrentProcess()` is 0-arg | `HighCPointerAddresses.GetCurrentProcessTakesNoArguments` |
-| `TerminateProcess` is noreturn | `HighCPointerAddresses.TerminateProcessOmitsSuccessReturn`; `LLVMCPointerAddresses.TerminateProcessOmitsSuccessReturn` |
-| Image function exclusive-end code pointer | `LLVMCodePointerInvariantBoundary.UnliftedFunctionExclusiveEndResolvesAsGep` |
-| LLVMC IAT load → import call name | `LLVMCPointerAddresses.NamesIATIndirectCall` |
-| `--func` hex on a large PE lifts only that entry | `PipelineOptions.OnlyFunctionEntries`; `COFFExceptionIR.OnlyFunctionEntriesSkipsUnrequestedFunctions`; `neverd_decompile` sets the filter before `ensurePipeline` |
-| No clobber-0 operand comment | `HighCPointerAddresses.UndefOperandIsNotClobberComment`; Undef prints `0 /* unknown */`; add/sub of 0/Undef folds |
-| MSVC `throw` not `CxxThrowException`+`__debugbreak` | `HighCPointerAddresses.CxxThrowCallPrintsThrowWithoutDebugBreak`; `LLVMCPointerAddresses.CxxThrowCallPrintsThrowWithoutDebugTrap`; `LLVMCPointerAddresses.OmitsReturnAfterThrowDespiteJunkAssigns`; `CxxThrowException` is noreturn |
-| Empty `catch` filled from funclets | `HighCPointerAddresses.AttachesCxxFuncletBodyIntoCatch`; `attachCxxFuncletBodies`; OnlyFunctionEntries expands HandlerVA |
-| GS-like empty-if + join return | `HighCPointerAddresses.EmptyIfCallReturnDoesNotLeaveUninitOrUnknownArgs`; `stmtHiddenFromC`; if/else join → `return call(); return <then>` |
-| Win64 call reloads from callee-saves | `HighCPointerAddresses.Win64CallReloadsParamsFromCalleeSaves`; same-block COPYs + reaching defs |
-| MedIR Param SSA id → ABI slot | `HighCPointerAddresses.Win64ParamSsaIdMapsToAbiSlot`; `abiParamIndex` |
-| Same-reg new-SSA COPY is a call arg | `isNoopRegisterCopy` requires matching SSA; `Win64GsHandlerRestoresParamsAcrossCall` |
-| Win64 3-arg call does not take live-in r9 | `Win64ThreeArgCallIgnoresLiveInR9`; tail-call still fills rcx (`Win64ReportGsFailureKeepsCookieArgument`) |
-| Cookie PHI/rol/ror is the incoming cookie | `Win64CookiePhiPrefersIncomingParam`; no last-COPY-by-address across blocks |
-| Callee name from image symbols | `CallNameUsesImageFunctionSymbol`; `calleeDisplayName` |
-| Rotate `(x<<n)|(x>>(w-n))` | `HighCPointerAddresses.RotateOrPrintsBuiltin`; `__builtin_rotateleftN` |
-| CRT names keep leading `_` | `HighCPointerAddresses.KeepsLeadingUnderscoreRuntimeNames` |
-| PDB data publics name image objects | `HighCPointerAddresses.NamesImageDataFromDebugObject`; Phase A `allDataObjects` |
-| Copy-forwarded temps are not declared | `HighCPointerAddresses.OmitsCopyForwardedTempDeclarations` |
-| `sbb`/CF idiom is not `0 /* unknown */` | `HighCPointerAddresses.SbbCfIdiomDoesNotPrintUnknown` |
-| MSVC `?` decoration is not the only spelling | `HighCPointerAddresses.MsvcDecorationIsNotTheOnlyCalleeSpelling`; `LLVMCPointerAddresses.MsvcDecorationIsNotTheOnlyCalleeSpelling`; `msvcDecorationStem` |
-| Empty `if` is not printed | `HighCPointerAddresses.EmptyIfIsNotPrinted` |
-| `__security_check_cookie` is one Win64 arg | `HighCPointerAddresses.SecurityCheckCookieKeepsSingleArgument`; `libcArity("security_check_cookie")` |
-| Frame address used as a value still declares the slot | `HighCPointerAddresses.FrameAddressValueDeclaresSlot` |
-| Unused non-effect load assigns are not declared | `HighCPointerAddresses.UnusedLoadAssignIsNotDeclared`; `analyzeUnusedAssigns` |
-| Frame-alias temps do not declare unused `var_mN` | `HighCPointerAddresses.UnusedFrameAliasIsNotDeclared`; PrintedAddrSlots only from `&slot` / slot load-store |
-| `int 0x29` prints `__fastfail` | `HighCPointerAddresses.FastFailPrintsIntrinsicWithoutAssign`; `LLVMCPointerAddresses.FastFailPrintsIntrinsicWithoutAssign`; MedLLVM `@__fastfail(i32)` noreturn, not `int $0` with vector 41 as the code |
-| `_raise_securityfailure` is noreturn, no success `return` | `HighCPointerAddresses.RaiseSecurityFailureOmitsSuccessReturn`; `LLVMCPointerAddresses.RaiseSecurityFailureOmitsSuccessReturn`; `LibCNoReturn.inc` |
-| Used GS TEB/TLS loads print `__readgsqword` | `HighCPointerAddresses.GsTebLoadPrintsReadGsQword`; `LLVMCPointerAddresses.GsTebLoadPrintsReadGsQword`; `x86SegmentedReadIntrinsic`; hide only FS EH registration |
+| LLVMC Windows EH remains goto form | Keep recovered filters, nested cleanup order, and both normal and unwind edges visible. Compare the public `seh_probe` and C++ EH corpus output with HighC. |
+| LLVMC output may retain avoidable frame references or control flow | Reproduce each issue with a public synthetic LLVM fixture. Keep a negative test for any value or edge that must remain printed. |
+| Source types and member calls remain partially recovered | Use authenticated PDB/TPI type and method metadata; do not infer a virtual method name from a vtable offset alone. |
+| Release performance varies by function and debug input | Time paired fresh `--func` calls and separate load from decompile cost. Profile before changing shared analysis. Preserve byte-identical C and EH semantics. |
+| Toolset coverage varies by hosted runner | Verify each compiler's actual version and path before publishing corpus artifacts. Treat unavailable versions as explicit skips. |
 
-## Next x64 exe pass
+## Closed in the public SEH corpus
 
-Prefer HighC on reducible MSVC, LLVMC on obfuscated guests. Sequence:
+- LLVMC now projects canonical Windows EH SEH scopes, C++ unwind/try/catch/IP
+  records, and GS cookie facts as bounded comments. Unsupported or malformed
+  metadata is diagnosed explicitly; the executable C remains goto form.
+- HighC now keeps fixed slots and indexed accesses to the same frame in one
+  byte backing store, including C++ catch funclets and SEH handlers. Public
+  buffered C++/SEH cases and a fixed-write/indexed-read regression cover the
+  shared bytes; a real second argument remains a parameter.
+- LLVMC's fallback projection now lets the final normal try block fall into a
+  `seh.try.end` marker when intervening handler blocks are printed later in
+  `__except` and the edge needs no PHI copy. The public `seh_probe` regression
+  keeps its conditional skip and handler rejoin jumps.
+- LLVMC drops that try-end marker's now-unused C label only after the final
+  function text confirms no other reference. The same public regression keeps
+  the conditional skip and handler join labels that still have printed jumps.
+- LLVMC moves a shared SEH continuation after the full `__except` only when
+  each protected invoke's normal edge remains explicit or falls through to
+  the next printed block. A two-invoke regression keeps both nonadjacent
+  normal edges as labeled jumps; the final text requires each new target label
+  exactly once without a name collision. Public `seh_probe` passes Windows C syntax.
+- A handler-to-continuation PHI copy no longer prevents that continuation from
+  moving after `__except`; the copy is emitted on the handler edge and its
+  cached constant cannot replace the joined PHI in the continuation. When the
+  continuation still cannot move, LLVMC projects only invoke normal edges to
+  printed targets in the same fallback `__try`, checks each required C label,
+  and rejects a handler jump back into that protected scope. A proven shared
+  return epilogue can be inlined in `__except` without such a jump. Public
+  synthetic SEH fixtures cover the PHI join, fallback jumps and inlined
+  handler return, and unsafe cross-scope case.
 
-1. Kill HighC caller-saved `0 /* clobbered */` operands and uninitialized success returns on the CRT cookie / GS-handler shapes (public `seh_probe` plus a single `--func` dump, not a full-image guest decompile).
-2. Print C++ `throw` and ctor destructor unwind as source-like C; keep corpus `cxx_eh_probe` as the gate, re-dump one guest throw site only to scratch.
-3. Use PDB names for callees and image objects when debug info actually loaded.
-4. Make default `--llvm` (with opt) complete without shard `input-invalid` on the EH corpus.
-5. Kill flag/popcount/`*(T*)0` in LLVM (or mark them analysis-only) before pretty-print.
-6. Compact unused Win64 params on the LLVM route the same way HighC does.
+## Established rules
 
-Private PE/PDB fixtures are not the contract. Re-dump corpus `probe_plain_seh` after each of those layers.
+- HighC owns structured `__try` / `__except` / `__finally` and source-like
+  statements. LLVMC preserves a goto projection when structure is uncertain.
+- Win64 call arguments use Microsoft register and stack rules. Debug types can
+  improve names and display, but cannot authorize an unobserved argument.
+- Assigned locals have declarations; unused call results are statements.
+  PHI and register-home copies are printed only when their values are used.
+- Imports and recognized runtime calls use their actual names and arities.
+  Unknown semantics stay explicit; an unsupported operation is never a NOP.
+- Integer width, address-taken storage, exception edges, and noreturn behavior
+  remain semantic facts through C rendering.
+- Public regressions are in `HighCPointerAddresses.*`,
+  `LLVMCPointerAddresses.*`, `COFFExceptionIR.*`, and the Windows EH corpus.
+  Use `docs/testing.md` to select affected lift, patch, and store-forward checks.
+
+## Workflow
+
+1. Capture the smallest public reproduction and the before/after C output.
+2. Change the owning semantic or rendering layer once, then verify both emitters
+   when the behavior is shared.
+3. Run focused regression filters, affected EH and patch filters, and the
+   corpus producer verification when corpus code changes.
+4. Keep private binaries, PDBs, decompiler comparisons, addresses, names, and
+   timing logs in local scratch storage, outside Git.

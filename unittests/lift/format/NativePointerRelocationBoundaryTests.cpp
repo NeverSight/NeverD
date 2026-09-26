@@ -912,7 +912,7 @@ TEST_F(NativePointerRelocationBoundary,
 }
 
 TEST_F(NativePointerRelocationBoundary,
-       ReentrantFeasibleEdgePhiPreservesRelocatableAddressRelations) {
+       ReentrantFeasibleEdgePreservesRelocatableAddressRelations) {
   struct Case {
     const char *Name;
     BinaryFormat Format;
@@ -944,7 +944,9 @@ TEST_F(NativePointerRelocationBoundary,
     EXPECT_EQ(Med.err.find("ambiguous reachable read-only table-base PHI"),
               std::string::npos)
         << Med.err;
-    EXPECT_NE(Med.out.find("PHI X13"), std::string::npos) << Med.out;
+    // Re-materializing the same base may legitimately fold a trivial PHI.
+    // The selected table address must still reach its observable loads.
+    EXPECT_NE(Med.out.find("SELECT X8"), std::string::npos) << Med.out;
     EXPECT_TRUE(std::regex_search(
         Med.out, std::regex(R"(block 0 succs=\[[0-9]+,[0-9]+\])")))
         << Med.out;

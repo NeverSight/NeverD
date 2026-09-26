@@ -377,7 +377,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // Phase 3: MedIR -> HighIR (parallel).
   Trace.start(NativePipelineTrace::Stage::HighIR);
   if (!pipeline_detail::runHighIRStage(
-          Result, [&] { buildHighIR(Img, Opts, Result); })) {
+          Result, [&] { buildHighIR(Img, Opts, Result, Dbg); })) {
     Trace.finish(false);
     return Result;
   }

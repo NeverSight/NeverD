@@ -313,11 +313,56 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
       UpperBound += AddedBytes;
     }
 
-    if (WithinBudget) {
+    bool DepsForwarded = true;
+    for (const std::string &Dep : UniqueDeps[Addr]) {
+      if (!State.StoreFwd.count(Dep) &&
+          !State.StoreFwdByAddressKey.count(Dep)) {
+        DepsForwarded = false;
+        break;
+      }
+    }
+
+    if (WithinBudget && DepsForwarded) {
       std::string Expanded;
       auto ExprIt = AddrToValExpr.find(Addr);
-      if (ExprIt != AddrToValExpr.end() && ExprIt->second)
-        Expanded = storedIntegerValue(*ExprIt->second, ExprFn);
+      if (ExprIt != AddrToValExpr.end() && ExprIt->second) {
+        const HighExpr &Value = *ExprIt->second;
+        std::function<std::string(const HighExpr &)> Expand =
+            [&](const HighExpr &E) -> std::string {
+          if (E.Kind == ExprKind::Load && !E.Operands.empty() &&
+              E.Operands[0] &&
+              E.MemoryOrdering == NdMemoryOrdering::None) {
+            const HighExpr &AddrExpr = *E.Operands[0];
+            auto Hit = [&](const std::string &Key) -> const std::string * {
+              if (auto It = State.StoreFwd.find(Key);
+                  It != State.StoreFwd.end())
+                return &It->second;
+              if (auto It = State.StoreFwdByAddressKey.find(Key);
+                  It != State.StoreFwdByAddressKey.end())
+                return &It->second;
+              return nullptr;
+            };
+            if (const std::string *Fwd = Hit(ExprFn(AddrExpr)))
+              return "(" + typeToC(E.Type) + ")(" + *Fwd + ")";
+            if (auto KeyIt = State.AddressKeys.find(&AddrExpr);
+                KeyIt != State.AddressKeys.end()) {
+              if (const std::string *Fwd = Hit(KeyIt->second))
+                return "(" + typeToC(E.Type) + ")(" + *Fwd + ")";
+            }
+          }
+          if (E.Kind == ExprKind::BinOp && E.Operands.size() == 2 &&
+              E.Operands[0] && E.Operands[1] &&
+              (E.Op == NdOp::INT_ADD || E.Op == NdOp::INT_SUB ||
+               E.Op == NdOp::INT_MULT)) {
+            const char *Op = E.Op == NdOp::INT_ADD   ? " + "
+                             : E.Op == NdOp::INT_SUB ? " - "
+                                                     : " * ";
+            return Expand(*E.Operands[0]) + Op + Expand(*E.Operands[1]);
+          }
+          return ExprFn(E);
+        };
+        Expanded = "(" + typeToC(Value.Type) + ")(" + Expand(Value) + ")";
+      }
       const size_t ReadBytes = Expanded.size() + ReadCastBytes.at(Addr);
       const size_t ReadCount = SlotLoads.at(AddrToKey.at(Addr)).size();
       // A rejected parent stays as a real store, but each of its loads can

@@ -1,0 +1,106 @@
+{
+  "load_address": "0x190000000",
+  "unload": true,
+  "pnp_devices": [
+    {
+      "id": "dma0",
+      "bus": "register_bank",
+      "initial_device_power": "D0",
+      "initial_system_power": "working",
+      "interrupts": [
+        {
+          "id": "line0",
+          "raw_vector": 17,
+          "raw_level": 7,
+          "raw_affinity": 1,
+          "translated_vector": 145,
+          "translated_level": 5,
+          "translated_affinity": 1,
+          "mode": "latched",
+          "share": "device_exclusive"
+        }
+      ],
+      "dma": {
+        "address_bits": 64,
+        "maximum_length": 4096,
+        "map_registers": 4,
+        "alignment": 1,
+        "logical_base": "0x40000000",
+        "logical_length": 65536,
+        "scatter_gather": true
+      }
+    }
+  ],
+  "requests": [
+    {
+      "kind": "pnp",
+      "device_id": "dma0",
+      "minor": "start",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 11
+      }
+    },
+    {
+      "kind": "create",
+      "device_id": "dma0",
+      "file": 1
+    },
+    {
+      "kind": "ioctl",
+      "file": 1,
+      "code": "0x222000",
+      "output_size": 32,
+      "interrupt_events": [
+        {
+          "after_100ns": 7,
+          "device_id": "dma0",
+          "interrupt_id": "line0"
+        }
+      ],
+      "dma_events": [
+        {
+          "after_100ns": 5,
+          "device_id": "dma0",
+          "logical_address": "0x40000000",
+          "direction": "read_memory",
+          "length": 16
+        },
+        {
+          "after_100ns": 7,
+          "device_id": "dma0",
+          "logical_address": "0x40000000",
+          "direction": "write_memory",
+          "length": 16,
+          "data_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+        }
+      ]
+    },
+    {
+      "kind": "cleanup",
+      "file": 1
+    },
+    {
+      "kind": "close",
+      "file": 1
+    },
+    {
+      "kind": "pnp",
+      "device_id": "dma0",
+      "minor": "query_remove",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 0
+      }
+    },
+    {
+      "kind": "pnp",
+      "device_id": "dma0",
+      "minor": "remove",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 3
+      }
+    }
+  ]
+}

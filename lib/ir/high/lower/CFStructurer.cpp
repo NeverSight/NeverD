@@ -50,7 +50,10 @@ void MedToHighConverter::insertPhiCopies(
           CurBlock.Ops.empty() ? CurBlock.StartAddr : CurBlock.Ops.back().Addr;
       Copy.IsPhiCopy = true;
       Copy.Dst = HighExpr::makeVar(Output);
-      Copy.Val = medvarToExpr(Argument);
+      // Keep a join PHI's incoming expression, not just the predecessor
+      // register. `arg = this+imm` that feeds a later call is otherwise a
+      // skippable Var PhiCopy and invert-skip drops it before HighC.
+      Copy.Val = forceInlineExpr(medvarToExpr(Argument));
       bool ReadsDestination = false;
       std::set<const HighExpr *> Seen;
       std::function<void(const ExprPtr &)> Visit =
@@ -101,12 +104,23 @@ void MedToHighConverter::insertPhiCopies(
     va_t Target = TargetBlock.StartAddr;
     if (!Target && !TargetBlock.Ops.empty())
       Target = TargetBlock.Ops.front().Addr;
+    va_t TargetEnd = TargetBlock.EndAddr;
+    if (!TargetEnd)
+      TargetEnd = TargetBlock.Ops.empty() ? Target + 1
+                                          : TargetBlock.Ops.back().Addr + 1;
+    auto gotoHitsSuccessor = [&](va_t GotoTarget) {
+      if (!GotoTarget || GotoTarget == InvalidVA)
+        return false;
+      if (GotoTarget == Target)
+        return true;
+      return Target && GotoTarget >= Target && GotoTarget < TargetEnd;
+    };
     if (BranchIndex < Func.Body.size()) {
       auto &Branch = Func.Body[BranchIndex];
       if (Branch.Kind == StmtKind::Switch) {
         auto Insert = [&](std::vector<HighStmt> &Body) {
           if (!Body.empty() && Body.back().Kind == StmtKind::Goto &&
-              Body.back().GotoTarget == Target) {
+              gotoHitsSuccessor(Body.back().GotoTarget)) {
             Body.insert(Body.end() - 1, Copies.begin(), Copies.end());
             return true;
           }
@@ -128,11 +142,11 @@ void MedToHighConverter::insertPhiCopies(
       }
       if (Branch.Kind == StmtKind::If && !Branch.Body.empty() &&
           Branch.Body.back().Kind == StmtKind::Goto &&
-          Branch.Body.back().GotoTarget == Target) {
+          gotoHitsSuccessor(Branch.Body.back().GotoTarget)) {
         Branch.Body.insert(Branch.Body.end() - 1, Copies.begin(), Copies.end());
         continue;
       }
-      if (Branch.Kind == StmtKind::Goto && Branch.GotoTarget == Target) {
+      if (Branch.Kind == StmtKind::Goto && gotoHitsSuccessor(Branch.GotoTarget)) {
         Func.Body.insert(Func.Body.begin() + BranchIndex, Copies.begin(),
                          Copies.end());
         BranchIndex += Copies.size();

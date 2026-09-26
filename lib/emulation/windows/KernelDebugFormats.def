@@ -1,0 +1,22 @@
+//===- KernelDebugFormats.def - Supported debug conversions ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Debug format conversions. All guest arguments and strings are read through
+/// checked model interfaces; no guest format is delegated to host printf.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_DEBUG_FORMAT('d', SignedDecimal)
+NEVERD_KERNEL_DEBUG_FORMAT('i', SignedDecimal)
+NEVERD_KERNEL_DEBUG_FORMAT('u', UnsignedDecimal)
+NEVERD_KERNEL_DEBUG_FORMAT('o', Octal)
+NEVERD_KERNEL_DEBUG_FORMAT('x', HexLower)
+NEVERD_KERNEL_DEBUG_FORMAT('X', HexUpper)
+NEVERD_KERNEL_DEBUG_FORMAT('p', Pointer)
+NEVERD_KERNEL_DEBUG_FORMAT('s', String)
+NEVERD_KERNEL_DEBUG_FORMAT('c', Character)
+NEVERD_KERNEL_DEBUG_FORMAT('Z', CountedString)

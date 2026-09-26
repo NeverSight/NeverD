@@ -22,6 +22,8 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <tuple>
+
 namespace {
 
 using namespace neverd;
@@ -400,6 +402,69 @@ TEST(LowToMedX64CallingConv, Win64HomeLoadsAreNotStackParameters) {
   EXPECT_EQ(Med.Params[3].RegOff, x86reg::R9);
 }
 
+TEST(LowToMedX64CallingConv, Win64CoffKeepsRsiRdiAcrossCall) {
+  constexpr Arch TheArch = Arch::X64;
+  LowFunc Low;
+  Low.Entry = 0x140001000;
+  Low.Name = "win64_rsi_rdi";
+  Low.Blocks.resize(1);
+  LowBlock &Block = Low.Blocks[0];
+  Block.Id = 0;
+  Block.StartAddr = 0x140001000;
+  Block.EndAddr = 0x140001030;
+
+  auto Copy = [&](NdVar Dst, NdVar Src, va_t Addr) {
+    LowOp Op;
+    Op.Opcode = NdOp::COPY;
+    Op.Addr = Addr;
+    Op.Output = Dst;
+    Op.addInput(Src);
+    Block.Ops.push_back(Op);
+  };
+  Copy(NdVar::reg(x86reg::RSI, 8), NdVar::cst(0x111, 8), 0x140001000);
+  Copy(NdVar::reg(x86reg::RDI, 8), NdVar::cst(0x222, 8), 0x140001004);
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x140001010;
+  Call.addInput(NdVar::cst(0x140002000, 8));
+  Block.Ops.push_back(Call);
+  Copy(NdVar::reg(x86reg::RAX, 8), NdVar::reg(x86reg::RSI, 8), 0x140001018);
+  LowOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.Addr = 0x14000101C;
+  Store.addInput(NdVar::reg(x86reg::RSP, 8));
+  Store.addInput(NdVar::reg(x86reg::RDI, 8));
+  Block.Ops.push_back(Store);
+  LowOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = 0x14000101C;
+  Ret.addInput(NdVar::reg(x86reg::RAX, 8));
+  Block.Ops.push_back(Ret);
+
+  MedFunc Med =
+      LowToMedConverter().convert(Low, TheArch, BinaryFormat::COFF);
+  const MedOp *RaxUse = nullptr;
+  const MedOp *RdiStore = nullptr;
+  for (const MedBlock &Blk : Med.Blocks)
+    for (const MedOp &Op : Blk.Ops) {
+      if (Op.Opcode == NdOp::COPY && Op.Output.RegOff == x86reg::RAX &&
+          Op.NumInputs >= 1)
+        RaxUse = &Op;
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
+        RdiStore = &Op;
+    }
+  ASSERT_NE(RaxUse, nullptr);
+  ASSERT_NE(RdiStore, nullptr);
+  EXPECT_TRUE(RaxUse->Inputs[0].isConst());
+  EXPECT_EQ(RaxUse->Inputs[0].ConstVal, 0x111u);
+  EXPECT_TRUE(RdiStore->Inputs[1].isConst());
+  EXPECT_EQ(RdiStore->Inputs[1].ConstVal, 0x222u);
+  for (const MedCallClobber &Clobber : Med.CallClobbers) {
+    EXPECT_NE(Clobber.Value.RegOff, x86reg::RSI);
+    EXPECT_NE(Clobber.Value.RegOff, x86reg::RDI);
+  }
+}
+
 TEST(TargetRegInfo, X86UsesSysVCalleeSavedRegisters) {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::X86);
 
@@ -522,6 +587,657 @@ TEST(HighCallArguments, AArch64FullRegisterBankExtendsStackStoreScan) {
   ASSERT_EQ(HighCall->CallExpr->Operands.size(), 9u);
   ASSERT_EQ(HighCall->CallExpr->Operands.back()->Kind, ExprKind::Const);
   EXPECT_EQ(HighCall->CallExpr->Operands.back()->ConstVal, 0x9000u);
+}
+
+TEST(MedABIPass, Win64UnknownCalleeRecoversUnwrittenLiveInRcx) {
+  constexpr va_t Callee = 0x140002000;
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  const MedVar RCX0 = reg(10, 0, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX0 = reg(11, 0, 8, x86reg::RDX, Arch::X64);
+  const MedVar RBX0 = reg(20, 0, 8, x86reg::RBX, Arch::X64);
+  const MedVar RDI0 = reg(23, 0, 8, x86reg::RDI, Arch::X64);
+  const MedVar RDI1 = reg(23, 1, 8, x86reg::RDI, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+  const MedVar RSP0 = reg(4, 0, 8, x86reg::RSP, Arch::X64);
+  const MedVar RSP1 = reg(4, 1, 8, x86reg::RSP, Arch::X64);
+  const MedVar RSP2 = reg(4, 2, 8, x86reg::RSP, Arch::X64);
+  const MedVar Home8 = temp(50, 1, 8, Arch::X64);
+  const MedVar Home10 = temp(51, 3, 8, Arch::X64);
+  const MedVar Lea = temp(52, 6, 8, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "CRecord_GetRecordNameWithColor";
+  Func.CC = CallingConv::Win64;
+  Func.Blocks.resize(1);
+  Func.Blocks[0].Id = 0;
+  addLiveIn(Func.Blocks[0], RSP0);
+  addLiveIn(Func.Blocks[0], RBX0);
+  addLiveIn(Func.Blocks[0], RDX0);
+  addLiveIn(Func.Blocks[0], RDI0);
+  addLiveIn(Func.Blocks[0], RCX0);
+
+  MedOp AddHome8 = binary(NdOp::INT_ADD, Home8, RSP0, MedVar::makeConst(8, 8));
+  Func.Blocks[0].Ops.push_back(AddHome8);
+  MedOp StoreRbx;
+  StoreRbx.Opcode = NdOp::STORE;
+  StoreRbx.addInput(Home8);
+  StoreRbx.addInput(RBX0);
+  Func.Blocks[0].Ops.push_back(StoreRbx);
+  MedOp AddHome10 =
+      binary(NdOp::INT_ADD, Home10, RSP0, MedVar::makeConst(0x10, 8));
+  Func.Blocks[0].Ops.push_back(AddHome10);
+  MedOp StoreRdx;
+  StoreRdx.Opcode = NdOp::STORE;
+  StoreRdx.addInput(Home10);
+  StoreRdx.addInput(RDX0);
+  Func.Blocks[0].Ops.push_back(StoreRdx);
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_SUB, RSP1, RSP0, MedVar::makeConst(8, 8)));
+  MedOp StoreRdi;
+  StoreRdi.Opcode = NdOp::STORE;
+  StoreRdi.addInput(RSP1);
+  StoreRdi.addInput(RDI0);
+  Func.Blocks[0].Ops.push_back(StoreRdi);
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_SUB, RSP2, RSP1, MedVar::makeConst(0x20, 8)));
+  Func.Blocks[0].Ops.push_back(unary(NdOp::COPY, RDI1, RDX0));
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_ADD, Lea, RSP2, MedVar::makeConst(0x38, 8)));
+  Func.Blocks[0].Ops.push_back(unary(NdOp::COPY, RDX1, Lea));
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = reg(1, 0, 8, TRI.IntReturnReg, Arch::X64);
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[0].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "CRecord_GetRecordName"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 2u) << Func.CallInfos[0].Args.size();
+  EXPECT_EQ(Func.CallInfos[0].Args[0].RegOff, x86reg::RCX);
+  EXPECT_EQ(Func.CallInfos[0].Args[1], Lea);
+
+  llvm::LLVMContext Ctx;
+  auto Module = MedLLVMEmitter().emit({Func}, Ctx, Func.Name, Arch::X64, {},
+                                      &Img, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  unsigned TwoArgCalls = 0;
+  for (const llvm::Function &Fn : *Module)
+    for (const llvm::BasicBlock &BB : Fn)
+      for (const llvm::Instruction &Inst : BB)
+        if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst))
+          if (Call->arg_size() == 2)
+            ++TwoArgCalls;
+  EXPECT_EQ(TwoArgCalls, 1u);
+}
+
+TEST(MedABIPass, Win64VTableIndirectRecoversThisAndSret) {
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  const MedVar RCX0 = reg(10, 0, 8, x86reg::RCX, Arch::X64);
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX0 = reg(11, 0, 8, x86reg::RDX, Arch::X64);
+  const MedVar Add32 = temp(50, 1, 8, Arch::X64);
+  const MedVar Badge = temp(51, 1, 8, Arch::X64);
+  const MedVar Vtbl = temp(52, 1, 8, Arch::X64);
+  const MedVar Slot = temp(53, 1, 8, Arch::X64);
+  const MedVar Fn = temp(54, 1, 8, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140016d30;
+  Func.Name = "CRecordBadge_GetDisplayName";
+  Func.CC = CallingConv::Win64;
+  for (int I = 0; I < 2; ++I) {
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.TheArch = Arch::X64;
+    P.Id = I;
+    P.Size = 8;
+    P.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Func.Params.push_back(P);
+  }
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1};
+  addLiveIn(Func.Blocks[0], RCX0);
+  addLiveIn(Func.Blocks[0], RDX0);
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_ADD, Add32, RCX0, MedVar::makeConst(32, 8)));
+  Func.Blocks[0].Ops.push_back(unary(NdOp::LOAD, Badge, Add32));
+  Func.Blocks[0].Ops.push_back(unary(NdOp::COPY, RCX1, Badge));
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  Func.Blocks[1].Ops.push_back(unary(NdOp::LOAD, Vtbl, RCX1));
+  Func.Blocks[1].Ops.push_back(
+      binary(NdOp::INT_ADD, Slot, Vtbl, MedVar::makeConst(88, 8)));
+  Func.Blocks[1].Ops.push_back(unary(NdOp::LOAD, Fn, Slot));
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.Output = reg(1, 0, 8, TRI.IntReturnReg, Arch::X64);
+  Call.addInput(Fn);
+  Func.Blocks[1].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  recoverCallAbi(Func, Arch::X64, {}, &Img);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 2u) << Func.CallInfos[0].Args.size();
+  EXPECT_EQ(Func.CallInfos[0].Args[0].Id, RCX1.Id);
+  EXPECT_EQ(Func.CallInfos[0].Args[0].SSAVer, RCX1.SSAVer);
+  EXPECT_EQ(Func.CallInfos[0].Args[1].RegOff, x86reg::RDX);
+
+  llvm::LLVMContext Ctx;
+  auto Module = MedLLVMEmitter().emit({Func}, Ctx, Func.Name, Arch::X64, {},
+                                      &Img, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  unsigned TwoArgCalls = 0;
+  for (const llvm::Function &FnIR : *Module)
+    for (const llvm::BasicBlock &BB : FnIR)
+      for (const llvm::Instruction &Inst : BB)
+        if (const auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst))
+          if (!CI->getCalledFunction() && CI->arg_size() == 2)
+            ++TwoArgCalls;
+  EXPECT_EQ(TwoArgCalls, 1u);
+}
+
+TEST(MedABIPass, Win64JoinPhiR9IsFourthArg) {
+  constexpr va_t Callee = 0x140002000;
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+  const MedVar R81 = reg(12, 1, 4, x86reg::R8, Arch::X64);
+  const MedVar R9Then = reg(13, 1, 4, x86reg::R9, Arch::X64);
+  const MedVar R9Else = reg(13, 2, 4, x86reg::R9, Arch::X64);
+  const MedVar R9Join = reg(13, 3, 4, x86reg::R9, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "find_nkey_join";
+  Func.CC = CallingConv::Win64;
+  Func.Blocks.resize(4);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1, 2};
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  Func.Blocks[1].Succs = {3};
+  Func.Blocks[1].Ops.push_back(
+      unary(NdOp::COPY, R9Then, MedVar::makeConst(42, 4)));
+  Func.Blocks[2].Id = 2;
+  Func.Blocks[2].Preds = {0};
+  Func.Blocks[2].Succs = {3};
+  Func.Blocks[2].Ops.push_back(
+      unary(NdOp::COPY, R9Else, MedVar::makeConst(0, 4)));
+  Func.Blocks[3].Id = 3;
+  Func.Blocks[3].Preds = {1, 2};
+  Func.Blocks[3].Phis.push_back({R9Join, {{1, R9Then}, {2, R9Else}}});
+  Func.Blocks[3].Ops.push_back(
+      unary(NdOp::COPY, reg(13, 4, 4, x86reg::R9, Arch::X64),
+            MedVar::makeConst(0, 4)));
+  Func.Blocks[3].Ops.push_back(unary(NdOp::COPY, R81, MedVar::makeConst(1, 4)));
+  Func.Blocks[3].Ops.push_back(
+      unary(NdOp::COPY, RDX1, MedVar::makeConst(0x140005000, 8)));
+  Func.Blocks[3].Ops.push_back(
+      unary(NdOp::COPY, RCX1, MedVar::makeConst(0x140006000, 8)));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[3].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "Catalog_Lookup"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 4u) << Func.CallInfos[0].Args.size();
+  EXPECT_EQ(Func.CallInfos[0].Args[3].Id, R9Join.Id);
+  EXPECT_EQ(Func.CallInfos[0].Args[3].SSAVer, R9Join.SSAVer);
+}
+
+TEST(MedABIPass, Win64JoinPhiR9IncomingBeatsInBlockCopy) {
+  constexpr va_t Callee = 0x140002000;
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+  const MedVar R81 = reg(12, 1, 4, x86reg::R8, Arch::X64);
+  const MedVar R9Then = reg(13, 1, 4, x86reg::R9, Arch::X64);
+  const MedVar R9Else = reg(13, 2, 4, x86reg::R9, Arch::X64);
+  const MedVar R9Join = reg(13, 3, 4, x86reg::R9, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "find_nkey_join_incoming";
+  Func.CC = CallingConv::Win64;
+  Func.Blocks.resize(4);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1, 2};
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  Func.Blocks[1].Succs = {3};
+  Func.Blocks[1].Ops.push_back(
+      unary(NdOp::COPY, R9Then, MedVar::makeConst(42, 4)));
+  Func.Blocks[2].Id = 2;
+  Func.Blocks[2].Preds = {0};
+  Func.Blocks[2].Succs = {3};
+  Func.Blocks[2].Ops.push_back(
+      unary(NdOp::COPY, R9Else, MedVar::makeConst(0, 4)));
+  Func.Blocks[3].Id = 3;
+  Func.Blocks[3].Preds = {1, 2};
+  Func.Blocks[3].Phis.push_back({R9Join, {{1, R9Then}, {2, R9Else}}});
+  Func.Blocks[3].Ops.push_back(
+      unary(NdOp::COPY, reg(13, 4, 4, x86reg::R9, Arch::X64), R9Then));
+  Func.Blocks[3].Ops.push_back(unary(NdOp::COPY, R81, MedVar::makeConst(1, 4)));
+  Func.Blocks[3].Ops.push_back(
+      unary(NdOp::COPY, RDX1, MedVar::makeConst(0x140005000, 8)));
+  Func.Blocks[3].Ops.push_back(
+      unary(NdOp::COPY, RCX1, MedVar::makeConst(0x140006000, 8)));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[3].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "Catalog_Lookup"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 4u) << Func.CallInfos[0].Args.size();
+  EXPECT_EQ(Func.CallInfos[0].Args[3].Id, R9Join.Id);
+  EXPECT_EQ(Func.CallInfos[0].Args[3].SSAVer, R9Join.SSAVer);
+}
+
+TEST(MedABIPass, Win64CallOnlyBlockRecoversPredSetupR8) {
+  constexpr va_t Callee = 0x140002000;
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+  const MedVar R81 = reg(12, 1, 8, x86reg::R8, Arch::X64);
+  const MedVar RBP1 = reg(20, 1, 8, x86reg::RBP, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "getrecordname_custom";
+  Func.CC = CallingConv::Win64;
+  for (int I = 0; I < 2; ++I) {
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.TheArch = Arch::X64;
+    P.Id = I;
+    P.Size = 8;
+    P.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Func.Params.push_back(P);
+  }
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1};
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RCX1, MedVar::makeConst(0x140005000, 8)));
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RDX1, MedVar::makeConst(0x140006000, 8)));
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_ADD, R81, RBP1, MedVar::makeConst(0x40, 8)));
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[1].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "GetCustomRecordName"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 3u) << Func.CallInfos[0].Args.size();
+  EXPECT_EQ(Func.CallInfos[0].Args[2].Id, R81.Id);
+  EXPECT_EQ(Func.CallInfos[0].Args[2].SSAVer, R81.SSAVer);
+}
+
+TEST(MedABIPass, Win64InterveningThiscallKeepsPredNonNullGuardAsThis) {
+  constexpr va_t GetCatalog = 0x140003350;
+  constexpr va_t GetPeriod = 0x14000361B;
+  const MedVar RCX0 = reg(10, 0, 8, x86reg::RCX, Arch::X64);
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RAX1 = reg(1, 1, 4, x86reg::RAX, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 4, x86reg::RDX, Arch::X64);
+  const MedVar Table = temp(76, 1, 8, Arch::X64);
+  const MedVar Cmp = temp(77, 1, 1, Arch::X64);
+  const MedVar Record = temp(80, 1, 8, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "CRecord_GetRecordName";
+  Func.CC = CallingConv::Win64;
+  MedVar ThisP;
+  ThisP.Kind = MedVar::Param;
+  ThisP.TheArch = Arch::X64;
+  ThisP.Id = 0;
+  ThisP.Size = 8;
+  ThisP.RegOff = x86reg::RCX;
+  Func.Params.push_back(ThisP);
+  Func.Blocks.resize(3);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {2, 1};
+  addLiveIn(Func.Blocks[0], RCX0);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::LOAD, Table, MedVar::makeConst(0x140062ae8, 8)));
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_EQUAL, Cmp, Table, MedVar::makeConst(0, 8)));
+  MedOp Guard;
+  Guard.Opcode = NdOp::COND_BR;
+  Guard.addInput(MedVar::makeConst(0x140001080, 8));
+  Guard.addInput(Cmp);
+  Func.Blocks[0].Ops.push_back(Guard);
+
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  Func.Blocks[1].Ops.push_back(unary(NdOp::COPY, RCX1, Record));
+  MedOp Box;
+  Box.Opcode = NdOp::CALL;
+  Box.Output = RAX1;
+  Box.addInput(MedVar::makeConst(GetCatalog, 8));
+  Func.Blocks[1].Ops.push_back(Box);
+  Func.Blocks[1].Ops.push_back(unary(NdOp::COPY, RDX1, RAX1));
+  MedOp Period;
+  Period.Opcode = NdOp::CALL;
+  Period.Output = reg(1, 2, 4, x86reg::RAX, Arch::X64);
+  Period.addInput(MedVar::makeConst(GetPeriod, 8));
+  Func.Blocks[1].Ops.push_back(Period);
+
+  Func.Blocks[2].Id = 2;
+  Func.Blocks[2].Preds = {0};
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Func.Blocks[2].Ops.push_back(Ret);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{GetCatalog, "CRecordData_GetCatalogBoxID"},
+                                         {GetPeriod, "RecordCatalogBoxTable_GetPeriodID"}};
+  std::map<va_t, int> RegArity{{GetCatalog, 1}, {GetPeriod, 2}};
+  std::map<va_t, int> TotalArity{{GetCatalog, 1}, {GetPeriod, 2}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img, &RegArity, &TotalArity);
+
+  ASSERT_EQ(Func.CallInfos.size(), 2u);
+  ASSERT_GE(Func.CallInfos[1].Args.size(), 1u);
+  EXPECT_EQ(Func.CallInfos[1].Args[0].Id, Table.Id);
+  EXPECT_EQ(Func.CallInfos[1].Args[0].SSAVer, Table.SSAVer);
+}
+
+TEST(MedABIPass, Win64CallOnlyBlockRecoversPredR9AndHome) {
+  constexpr va_t Callee = 0x140002000;
+  const MedVar RSP1 = reg(4, 1, 8, x86reg::RSP, Arch::X64);
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+  const MedVar R81 = reg(12, 1, 8, x86reg::R8, Arch::X64);
+  const MedVar R91 = reg(13, 1, 8, x86reg::R9, Arch::X64);
+  const MedVar ESI1 = reg(14, 1, 4, x86reg::RSI, Arch::X64);
+  const MedVar Home = temp(50, 1, 8, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "getrecordname_concat";
+  Func.CC = CallingConv::Win64;
+  for (int I = 0; I < 2; ++I) {
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.TheArch = Arch::X64;
+    P.Id = I;
+    P.Size = 8;
+    P.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Func.Params.push_back(P);
+  }
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1};
+  addLiveIn(Func.Blocks[0], RSP1);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RCX1, MedVar::makeConst(0x1000, 8)));
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RDX1, MedVar::makeConst(0xAAA, 8)));
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, R81, MedVar::makeConst(11, 4)));
+  MedOp Helper;
+  Helper.Opcode = NdOp::INDIR_CALL;
+  Helper.addInput(MedVar::makeConst(0x140003000, 8));
+  Func.Blocks[0].Ops.push_back(Helper);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, ESI1, MedVar::makeConst(7, 4)));
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_ADD, Home, RSP1, MedVar::makeConst(0x20, 8)));
+  MedOp StoreHome;
+  StoreHome.Opcode = NdOp::STORE;
+  StoreHome.addInput(Home);
+  StoreHome.addInput(ESI1);
+  Func.Blocks[0].Ops.push_back(StoreHome);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, R91, MedVar::makeConst(0xBBB, 8)));
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[1].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "Concatenate"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  const MedCallInfo *CI = nullptr;
+  for (const auto &Cand : Func.CallInfos)
+    if (Cand.TargetAddr == Callee)
+      CI = &Cand;
+  ASSERT_NE(CI, nullptr);
+  ASSERT_EQ(CI->Args.size(), 5u) << CI->Args.size();
+  EXPECT_TRUE(CI->Args[3].isConst());
+  EXPECT_EQ(CI->Args[3].ConstVal, 0xBBBu);
+  EXPECT_EQ(CI->Args[4].Id, ESI1.Id);
+  EXPECT_EQ(CI->Args[4].SSAVer, ESI1.SSAVer);
+}
+
+TEST(MedABIPass, Win64CallOnlyIndirRecoversPredR9AndHome) {
+  constexpr va_t Callee = 0x140002000;
+  const MedVar RSP1 = reg(4, 1, 8, x86reg::RSP, Arch::X64);
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+  const MedVar R81 = reg(12, 1, 8, x86reg::R8, Arch::X64);
+  const MedVar R91 = reg(13, 1, 8, x86reg::R9, Arch::X64);
+  const MedVar ESI1 = reg(14, 1, 4, x86reg::RSI, Arch::X64);
+  const MedVar Home = temp(50, 1, 8, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "getrecordname_concat_iat";
+  Func.CC = CallingConv::Win64;
+  for (int I = 0; I < 2; ++I) {
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.TheArch = Arch::X64;
+    P.Id = I;
+    P.Size = 8;
+    P.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Func.Params.push_back(P);
+  }
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1};
+  addLiveIn(Func.Blocks[0], RSP1);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RCX1, MedVar::makeConst(0x1000, 8)));
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RDX1, MedVar::makeConst(0xAAA, 8)));
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, R81, MedVar::makeConst(11, 4)));
+  MedOp Helper;
+  Helper.Opcode = NdOp::INDIR_CALL;
+  Helper.addInput(MedVar::makeConst(0x140003000, 8));
+  Func.Blocks[0].Ops.push_back(Helper);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, ESI1, MedVar::makeConst(7, 4)));
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_ADD, Home, RSP1, MedVar::makeConst(0x20, 8)));
+  MedOp StoreHome;
+  StoreHome.Opcode = NdOp::STORE;
+  StoreHome.addInput(Home);
+  StoreHome.addInput(ESI1);
+  Func.Blocks[0].Ops.push_back(StoreHome);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, R91, MedVar::makeConst(0xBBB, 8)));
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[1].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "Concatenate"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  const MedCallInfo *CI = nullptr;
+  for (const auto &Cand : Func.CallInfos)
+    if (Cand.TargetAddr == Callee)
+      CI = &Cand;
+  ASSERT_NE(CI, nullptr);
+  ASSERT_TRUE(CI->IsIndirect);
+  ASSERT_EQ(CI->Args.size(), 5u) << CI->Args.size();
+  EXPECT_TRUE(CI->Args[3].isConst());
+  EXPECT_EQ(CI->Args[3].ConstVal, 0xBBBu);
+  EXPECT_EQ(CI->Args[4].Id, ESI1.Id);
+  EXPECT_EQ(CI->Args[4].SSAVer, ESI1.SSAVer);
+
+  llvm::LLVMContext Ctx;
+  auto Module = MedLLVMEmitter().emit({Func}, Ctx, Func.Name, Arch::X64, {},
+                                      &Img, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  unsigned FiveArgCalls = 0;
+  for (const llvm::Function &Fn : *Module)
+    for (const llvm::BasicBlock &BB : Fn)
+      for (const llvm::Instruction &Inst : BB)
+        if (const auto *ICall = llvm::dyn_cast<llvm::CallInst>(&Inst))
+          if (ICall->arg_size() == 5)
+            ++FiveArgCalls;
+  EXPECT_EQ(FiveArgCalls, 1u);
+}
+
+TEST(MedABIPass, Win64IndirCallOnlyRecoversPredRcxRdx) {
+  constexpr va_t Callee = 0x1400329d8;
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "getrecordname_cstr";
+  Func.CC = CallingConv::Win64;
+  MedVar ThisP;
+  ThisP.Kind = MedVar::Param;
+  ThisP.TheArch = Arch::X64;
+  ThisP.Id = 0;
+  ThisP.Size = 8;
+  ThisP.RegOff = x86reg::RCX;
+  Func.Params.push_back(ThisP);
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1};
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RCX1, MedVar::makeConst(0x1000, 8)));
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RDX1, MedVar::makeConst(0x2000, 8)));
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[1].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "CSimpleStringT_cstr"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  const MedCallInfo *CI = nullptr;
+  for (const auto &Cand : Func.CallInfos)
+    if (Cand.IsIndirect)
+      CI = &Cand;
+  ASSERT_NE(CI, nullptr);
+  ASSERT_EQ(CI->Args.size(), 2u) << CI->Args.size();
+  EXPECT_TRUE(CI->Args[0].isConst());
+  EXPECT_EQ(CI->Args[0].ConstVal, 0x1000u);
+  EXPECT_TRUE(CI->Args[1].isConst());
+  EXPECT_EQ(CI->Args[1].ConstVal, 0x2000u);
+}
+
+TEST(MedABIPass, Win64SameBlockRdxRecoversPredSetupR8) {
+  constexpr va_t Callee = 0x140002000;
+  const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
+  const MedVar RDX2 = reg(11, 2, 8, x86reg::RDX, Arch::X64);
+  const MedVar R81 = reg(12, 1, 8, x86reg::R8, Arch::X64);
+  const MedVar RBP1 = reg(20, 1, 8, x86reg::RBP, Arch::X64);
+
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "getrecordname_aux";
+  Func.CC = CallingConv::Win64;
+  for (int I = 0; I < 2; ++I) {
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.TheArch = Arch::X64;
+    P.Id = I;
+    P.Size = 8;
+    P.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Func.Params.push_back(P);
+  }
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1};
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, RCX1, MedVar::makeConst(0x140005000, 8)));
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_ADD, R81, RBP1, MedVar::makeConst(0x40, 8)));
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  Func.Blocks[1].Ops.push_back(
+      unary(NdOp::COPY, RDX2, MedVar::makeConst(0xCF1, 4)));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  Func.Blocks[1].Ops.push_back(Call);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  const std::map<va_t, std::string> Names{{Callee, "LookupTextW"}};
+  recoverCallAbi(Func, Arch::X64, Names, &Img);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 3u) << Func.CallInfos[0].Args.size();
+  EXPECT_EQ(Func.CallInfos[0].Args[2].Id, R81.Id);
+  EXPECT_EQ(Func.CallInfos[0].Args[2].SSAVer, R81.SSAVer);
 }
 
 TEST(MedABIPass, PromotedRegisterParamsRebaseMutableStackHomes) {
@@ -2114,15 +2830,15 @@ TEST(LowToMedX86CallingConv,
   EXPECT_EQ(Med.Params[0].RegOff, kNoParamReg);
   EXPECT_TRUE(Med.MutableStackParamHomes.empty());
 
-  bool SawParameterCopy = false;
+  bool SawParameterUse = false;
   for (const MedBlock &MedBlock : Med.Blocks)
     for (const MedOp &Op : MedBlock.Ops) {
-      SawParameterCopy |= Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                          Op.Inputs[0].Kind == MedVar::Param &&
-                          Op.Inputs[0].Id == 0;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        SawParameterUse |= Op.Inputs[I].Kind == MedVar::Param &&
+                           Op.Inputs[I].Id == 0;
       EXPECT_NE(Op.Opcode, NdOp::LOAD);
     }
-  EXPECT_TRUE(SawParameterCopy);
+  EXPECT_TRUE(SawParameterUse);
   EXPECT_TRUE(verifyMedFunc(Med, "test-extended-stack-parameter-address"));
 }
 
@@ -3955,6 +4671,105 @@ TEST(MedParamTypes, StackPointerRolesUseSlotIdentityAndAddressSpace) {
     EXPECT_EQ(Func.TypedParams[0].Type->Kind,
               Mode < 2 ? NdTypeKind::Ptr : NdTypeKind::Int);
     EXPECT_EQ(Func.TypedParams[1].Type->Kind, NdTypeKind::Int);
+  }
+}
+
+TEST(MedToHighCallArgs, Win64LateEighthStackArgKeepsCurrentFrameOnly) {
+  constexpr va_t Callee = 0x140002000;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+
+  for (int Mode : {0, 1, 2}) {
+    SCOPED_TRACE(Mode);
+    MedFunc Func;
+    Func.Entry = 0x140001000;
+    Func.Name = "late_stack_arg";
+    Func.CC = CallingConv::Win64;
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Func.Entry;
+    const MedVar Rsp0 = reg(4, 0, 8, x86reg::RSP, Arch::X64);
+    const MedVar Rsp1 = reg(4, 1, 8, x86reg::RSP, Arch::X64);
+    const MedVar Rsp2 = reg(4, 2, 8, x86reg::RSP, Arch::X64);
+    const MedVar Rsp3 = reg(4, 3, 8, x86reg::RSP, Arch::X64);
+    int NextTemp = 100;
+    auto stackStore = [&](const MedVar &Base, uint64_t Offset,
+                          uint64_t Value) {
+      const MedVar Address = temp(NextTemp++, 1, 8, Arch::X64);
+      Block.Ops.push_back(binary(NdOp::INT_ADD, Address, Base,
+                                 MedVar::makeConst(Offset, 8)));
+      MedOp Store;
+      Store.Opcode = NdOp::STORE;
+      Store.addInput(Address);
+      Store.addInput(MedVar::makeConst(Value, 8));
+      Block.Ops.push_back(std::move(Store));
+    };
+
+    // This write is relative to the entry SP, not the call's outgoing frame.
+    // A scan widened without an SP basis boundary would invent a ninth arg.
+    if (Mode == 1)
+      stackStore(Rsp0, 0x40, 99);
+    Block.Ops.push_back(binary(NdOp::INT_SUB, Rsp1, Rsp0,
+                               MedVar::makeConst(0x80, 8)));
+    if (Mode == 2) {
+      // A later COPY restores the entry SP, so this store belongs to the
+      // abandoned frame even though its offset looks like a ninth arg.
+      stackStore(Rsp1, 0x40, 99);
+      Block.Ops.push_back(unary(NdOp::COPY, Rsp2, Rsp0));
+    }
+    const MedVar ActiveSp = Mode == 2 ? Rsp2 : Rsp1;
+    const MedVar RenamedSp = Mode == 2 ? Rsp3 : Rsp2;
+    stackStore(ActiveSp, 0x38, 0); // The eighth arg is set up first.
+    // This SSA rename preserves the stack base; it must not stop the scan.
+    Block.Ops.push_back(unary(NdOp::COPY, RenamedSp, ActiveSp));
+    for (int I = 0; I < 9; ++I)
+      Block.Ops.push_back(unary(NdOp::COPY,
+                                temp(NextTemp++, 1, 8, Arch::X64),
+                                MedVar::makeConst(100 + I, 8)));
+    stackStore(RenamedSp, 0x30, 7);
+    stackStore(RenamedSp, 0x28, 6);
+    stackStore(RenamedSp, 0x20, 5);
+    for (const auto &[Id, Off, Value] :
+         {std::tuple{10, x86reg::RCX, 1u},
+          std::tuple{11, x86reg::RDX, 2u},
+          std::tuple{12, x86reg::R8, 3u},
+          std::tuple{13, x86reg::R9, 4u}})
+      Block.Ops.push_back(unary(NdOp::COPY,
+                                reg(Id, 1, 8, Off, Arch::X64),
+                                MedVar::makeConst(Value, 8)));
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = 0x140001080;
+    Call.addInput(MedVar::makeConst(Callee, 8));
+    Block.Ops.push_back(std::move(Call));
+    Block.EndAddr = 0x140001088;
+    Func.Blocks.push_back(std::move(Block));
+
+    std::map<va_t, std::string> Names{{Callee, "eight_args"}};
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    Converter.setFuncNames(&Names);
+    HighFunc High = Converter.convert(Func, Arch::X64);
+    const HighExpr *FoundCall = nullptr;
+    walkStmts(High.Body, [&](const HighStmt &Stmt) {
+      forEachExpr(Stmt, [&](const ExprPtr &Expr) {
+        auto Visit = [&](auto &&Self, const HighExpr *Node) -> void {
+          if (!Node)
+            return;
+          if (Node->Kind == ExprKind::Call && Node->CallAddr == Callee)
+            FoundCall = Node;
+          Node->forEachChildExpr(
+              [&](const ExprPtr &Child) { Self(Self, Child.get()); });
+        };
+        Visit(Visit, Expr.get());
+      });
+    });
+    ASSERT_NE(FoundCall, nullptr);
+    ASSERT_EQ(FoundCall->Operands.size(), 8u);
+    ASSERT_EQ(FoundCall->Operands[7]->Kind, ExprKind::Const);
+    EXPECT_EQ(FoundCall->Operands[7]->ConstVal, 0u);
   }
 }
 

@@ -1,0 +1,48 @@
+//===- MsvcAtlCallees.def - ATL/STL display callees -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// MSVC_ATL_CALLEE(ID, MATCH, DECORATION, MATCH_KIND, ARITY_KIND, MAX_ARGS,
+//                 RETURN_KIND, CLASS_STEM, FASTCALL)
+//
+// Display-only MSVC ATL/STL members that HighC and LLVMC share. Add a row
+// here instead of another `Name == "IsEmpty"` / `ends_with("_cstr")` check.
+//
+// MATCH_KIND:
+//   Exact              Identifier == MATCH
+//   Suffix             Identifier ends with "_" MATCH
+//   SuffixOrDtorAlias  Suffix, or a demangled `::~` destructor
+//
+// DECORATION: MSVC `??X` special-member code, or 0 if the name is not a
+// template special member (`??0` ctor / `??1` dtor / `??4` assign / `??B`
+// conversion-to-cstr).
+//
+// ARITY_KIND:
+//   Fixed    clamp printed operands to MAX_ARGS
+//   CtorDrop drop trailing unknown-only operands; keep at least MAX_ARGS
+//   Keep     print every recovered operand (`Format` / `Concatenate`)
+//
+// RETURN_KIND / CLASS_STEM drive the synthetic prototype when TPI has no
+// usable FunctionSym. CLASS_STEM FromMatch peels "_" MATCH; CStringT is
+// the default ATL string class for exact method names.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MSVC_ATL_CALLEE
+#define MSVC_ATL_CALLEE(ID, MATCH, DECORATION, MATCH_KIND, ARITY_KIND,         \
+                        MAX_ARGS, RETURN_KIND, CLASS_STEM, FASTCALL)
+#endif
+
+MSVC_ATL_CALLEE(Dtor, "dtor", '1', SuffixOrDtorAlias, Fixed, 1, Void, FromMatch, 1)
+MSVC_ATL_CALLEE(Ctor, "ctor", '0', Suffix, CtorDrop, 1, Void, FromMatch, 1)
+MSVC_ATL_CALLEE(Assign, "assign", '4', Suffix, Fixed, 2, Void, FromMatch, 1)
+MSVC_ATL_CALLEE(Cstr, "cstr", 'B', Suffix, Fixed, 1, WCharPtr, FromMatch, 1)
+MSVC_ATL_CALLEE(IsEmpty, "IsEmpty", 0, Exact, Fixed, 1, Bool, CStringT, 1)
+MSVC_ATL_CALLEE(GetLength, "GetLength", 0, Exact, Fixed, 1, Int32, CStringT, 1)
+MSVC_ATL_CALLEE(GetManager, "GetManager", 0, Exact, Fixed, 1, VoidPtr, CStringT, 1)
+MSVC_ATL_CALLEE(Format, "Format", 0, Exact, Keep, 2, Void, CStringT, 1)
+MSVC_ATL_CALLEE(Concatenate, "Concatenate", 0, Exact, Keep, 5, Void, CStringT, 1)
+
+#undef MSVC_ATL_CALLEE

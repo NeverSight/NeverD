@@ -13,6 +13,8 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/loader/BinaryImage.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -62,6 +64,75 @@ std::string escapeCString(llvm::StringRef Str) {
   return Result;
 }
 
+std::optional<std::string> imageStringLiteral(const BinaryImage *Img,
+                                              va_t Addr, bool AllowEmpty) {
+  if (!Img || Addr == 0 || Addr == InvalidVA)
+    return std::nullopt;
+  if (Img->findImportAt(Addr))
+    return std::nullopt;
+  const Segment *Seg = Img->getSegmentFor(Addr);
+  if (!Seg || !Seg->isReadable() || Seg->isWritable() || Seg->isExecutable())
+    return std::nullopt;
+  constexpr unsigned kMaxLit = 64;
+  auto Escape = [](uint32_t Ch, std::string &Out) {
+    switch (Ch) {
+    case '\\':
+      Out += "\\\\";
+      return true;
+    case '"':
+      Out += "\\\"";
+      return true;
+    case '\n':
+      Out += "\\n";
+      return true;
+    case '\t':
+      Out += "\\t";
+      return true;
+    case '\r':
+      Out += "\\r";
+      return true;
+    default:
+      if (Ch < 0x20 || Ch > 0x7E)
+        return false;
+      Out += static_cast<char>(Ch);
+      return true;
+    }
+  };
+  const uint64_t Off = Addr - Seg->VA;
+  if (Off >= Seg->Data.size())
+    return std::nullopt;
+  const uint8_t *Base = Seg->Data.data() + Off;
+  const size_t Remain = Seg->Data.size() - static_cast<size_t>(Off);
+  if (Remain >= 2 && Base[1] == 0) {
+    std::string Body;
+    unsigned N = 0;
+    for (size_t I = 0; I + 1 < Remain && N < kMaxLit; I += 2, ++N) {
+      const uint16_t Unit = readLE<uint16_t>(Base + I);
+      if (Unit == 0) {
+        if (N == 0)
+          return AllowEmpty ? std::optional<std::string>("L\"\"")
+                            : std::nullopt;
+        return "L\"" + Body + "\"";
+      }
+      if (!Escape(Unit, Body))
+        return std::nullopt;
+    }
+  }
+  std::string Body;
+  unsigned N = 0;
+  for (size_t I = 0; I < Remain && N < kMaxLit; ++I, ++N) {
+    const uint8_t Ch = Base[I];
+    if (Ch == 0) {
+      if (N == 0)
+        return AllowEmpty ? std::optional<std::string>("\"\"") : std::nullopt;
+      return "\"" + Body + "\"";
+    }
+    if (!Escape(Ch, Body))
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 namespace {
 std::string extendedIntegerType(unsigned Bytes, bool Signed) {
   if (Bytes == 32 || Bytes == 64)
@@ -90,6 +161,12 @@ bool containsFunction(const TypeRef &Type) {
 } // namespace
 
 std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator) {
+  if (Ty && Ty->Kind == NdTypeKind::Array && Ty->ElemType) {
+    std::string Inner = Declarator.str();
+    Inner += Ty->ArrayCount ? "[" + std::to_string(Ty->ArrayCount) + "]"
+                            : "[]";
+    return declarationToC(Ty->ElemType, Inner);
+  }
   if (!containsFunction(Ty))
     return typeToC(Ty) + (Declarator.empty() ? "" : " " + Declarator.str());
   if (!equalSourceTypes(Ty, Ty))
@@ -120,6 +197,8 @@ std::string typeToC(const TypeRef &Ty) {
   case NdTypeKind::Void:
     return "void";
   case NdTypeKind::Int:
+    if (!Ty->SourceName.empty())
+      return Ty->SourceName;
     if (Ty->IsSigned) {
       switch (Ty->Size) {
       case 1:
@@ -152,12 +231,16 @@ std::string typeToC(const TypeRef &Ty) {
       }
     }
   case NdTypeKind::Float:
+    if (!Ty->SourceName.empty())
+      return Ty->SourceName;
     return Ty->Size == 4 ? "float" : "double";
   case NdTypeKind::Ptr:
     if (!Ty->Pointee || Ty->Pointee->Kind == NdTypeKind::Void)
       return "void*";
     return typeToC(Ty->Pointee) + "*";
   case NdTypeKind::Struct: {
+    if (!Ty->SourceName.empty())
+      return Ty->SourceName;
     if (sourceAggregateMembers(Ty).empty())
       throw std::invalid_argument("C record has no supported source layout");
     std::function<std::string(const TypeRef &)> Code = [&](const TypeRef &T) {
@@ -289,6 +372,22 @@ llvm::SmallVector<const char *, 3> getArchIntrinsicHeaders(Arch TheArch) {
 void emitCIndent(llvm::raw_ostream &OS, int Level) {
   for (int I = 0; I < Level; ++I)
     OS << "    ";
+}
+
+void writeCIndentedSnippet(llvm::raw_ostream &OS, llvm::StringRef Text,
+                           int Level) {
+  while (!Text.empty()) {
+    const size_t Nl = Text.find('\n');
+    const llvm::StringRef Line =
+        Nl == llvm::StringRef::npos ? Text : Text.take_front(Nl);
+    if (!Line.empty())
+      emitCIndent(OS, Level);
+    OS << Line;
+    if (Nl == llvm::StringRef::npos)
+      return;
+    OS << '\n';
+    Text = Text.drop_front(Nl + 1);
+  }
 }
 
 } // namespace neverd

@@ -196,6 +196,29 @@ struct ResolverFlowGraph {
   std::vector<int> RootBlocks;
 };
 
+// A direct call to the following instruction is an internal CFG edge. On
+// i386 it also pushes the PC for a following POP, whose value is checked by
+// the separate exact GOTPC model. It must not be confused with a call into an
+// unmodeled callee when checking that a candidate proof graph is closed.
+static bool isExactLocalCallNext(const ResolverInsnSnapshot &Insn) {
+  if (!Insn.IsCall || Insn.IsIndirect || Insn.IsBranch || Insn.IsRet ||
+      Insn.IsNoReturnCall || Insn.Size == 0 ||
+      Insn.Addr > InvalidVA - Insn.Size)
+    return false;
+  const va_t Next = Insn.Addr + Insn.Size;
+  unsigned Calls = 0;
+  for (const LowOp &Op : Insn.Ops) {
+    if (Op.Opcode == NdOp::INDIR_CALL)
+      return false;
+    if (Op.Opcode != NdOp::CALL)
+      continue;
+    if (++Calls != 1 || Op.NumInputs < 1 || !Op.Inputs[0].isConst() ||
+        Op.Inputs[0].Offset != Next)
+      return false;
+  }
+  return Calls == 1;
+}
+
 /// Consume one candidate-local graph-construction allowance.  A null budget
 /// keeps the established non-fixed-point callers unmetered; fixed-point callers
 /// pass the same balance through snapshotting, graph construction, and value
@@ -353,9 +376,12 @@ static ResolverFlowGraph buildResolverFlowGraph(
 
   std::map<va_t, int> StartToBlock;
   if (Grouped.size() > static_cast<size_t>(std::numeric_limits<int>::max()) ||
-      !consumeProduct(Grouped.size(), 2) || !consumeWork(2))
+      !consumeProduct(Grouped.size(), 2) || !consumeProduct(Insns.size(), 2) ||
+      !consumeWork(2))
     return failIncomplete();
   Graph.Blocks.reserve(Grouped.size());
+  std::vector<std::pair<int, va_t>> LocalCallNextTargets;
+  LocalCallNextTargets.reserve(Insns.size());
   for (const auto &[Start, Members] : Grouped) {
     if (!consumeWork() || !consumeMapNodeInsert(StartToBlock.size()))
       return failIncomplete();
@@ -378,9 +404,18 @@ static ResolverFlowGraph buildResolverFlowGraph(
       return failIncomplete();
     Block.Ops.reserve(BlockOpCount);
     for (const ResolverInsnSnapshot *Insn : Members) {
-      if (!consumeWork())
+      if (!consumeWork() ||
+          (Insn->IsCall && !consumeProduct(Insn->Ops.size(), 1)))
         return failIncomplete();
-      Block.HasCall |= Insn->IsCall;
+      if (Insn->IsCall) {
+        if (isExactLocalCallNext(*Insn)) {
+          if (!consumeWork(4))
+            return failIncomplete();
+          LocalCallNextTargets.emplace_back(Id, Insn->Addr + Insn->Size);
+        } else {
+          Block.HasCall = true;
+        }
+      }
       Block.HasOpaqueTerminator |= Insn->IsOpaqueTerminator;
       Block.HasResumableTerminator |= Insn->IsResumableTerminator;
       if (!consumeMapNodeInsert(Graph.InsnToBlock.size()))
@@ -424,6 +459,12 @@ static ResolverFlowGraph buildResolverFlowGraph(
       Block.LastInsn = Insn;
     }
     Graph.Blocks.push_back(std::move(Block));
+  }
+  for (const auto &[BlockId, Next] : LocalCallNextTargets) {
+    if (!consumeWork() || !consumeLookup(Graph.InsnToBlock.size()))
+      return failIncomplete();
+    if (!Graph.InsnToBlock.count(Next))
+      Graph.Blocks[BlockId].HasCall = true;
   }
 
   auto blockAtInsn = [&](va_t Addr) -> int {
@@ -1322,9 +1363,20 @@ resolverSlice(const ResolverValue &Input, uint16_t Offset, uint16_t Size,
           return {};
         Inputs.push_back(std::move(Sliced));
       }
+      // A named Merge identifies a byte lane, not every slice of its
+      // container.  Preserve the root for a low slice (needed to match the
+      // zero-extended operand), but give each nonzero offset its own identity.
+      ResolverRootKey SliceRootKey;
+      std::string_view SliceRoot = Node->Root;
+      if (CurrentOffset != 0 && !SliceRoot.empty()) {
+        if (!makeResolverRootKey(SliceRootKey, SliceRoot, {CurrentOffset},
+                                 consume, AnalysisIncomplete))
+          return {};
+        SliceRoot = SliceRootKey.view();
+      }
       return remember(
           Node, CurrentOffset,
-          budgetedResolverMerge(Size, Node->Root, std::move(Inputs), consume));
+          budgetedResolverMerge(Size, SliceRoot, std::move(Inputs), consume));
     }
     if (CurrentOffset == 0 && Node->Input &&
         (Node->K == ResolverValueExpr::Kind::ZeroExtend ||
@@ -1977,6 +2029,61 @@ static bool provesExactUnsignedModuloRecipe(
       return false;
   }
 
+  // Clang can divide a zero-extended 32-bit value by N with the high half of
+  // a 64 x 64 multiply, using a 64-bit reciprocal coarser than the ordinary
+  // 32-bit magic recipe.  Authenticate the *observed* constant rather than
+  // borrowing a compiler-version-specific magic choice.  For
+  //   q = floor(x * M / 2^64), 0 <= x < 2^32,
+  // write N*M = 2^64 + E.  E >= 0 and (2^32-1)*E < 2^64 imply that the
+  // quotient is exactly floor(x/N), including the largest possible remainder
+  // N-1.  Here N < 2^32 and M < 2^64, so both N*M and E*(2^32-1) fit in the
+  // 128-bit APInt used below without wraparound.  Rebuild the entire selector
+  // with the same dividend and observed reciprocal; a matching constant in
+  // an unrelated expression grants nothing.
+  auto matchesObservedHighHalf = [&]() -> bool {
+    const llvm::APInt Scale = llvm::APInt::getOneBitSet(128, 64);
+    const llvm::APInt MaxDividend = llvm::APInt::getLowBitsSet(128, Width);
+    for (size_t NodeIndex = 0; NodeIndex < ExpressionNodeCount; ++NodeIndex) {
+      if (!consume())
+        return false;
+      if (!SelectorDependencies[NodeIndex])
+        continue;
+      const SymRef MagicRef(static_cast<uint32_t>(NodeIndex));
+      if (!Ctx.isConst(MagicRef) || Ctx.width(MagicRef) != 128)
+        continue;
+      const llvm::APInt MagicValue = Ctx.constValue(MagicRef);
+      if (MagicValue.isZero() || MagicValue.getActiveBits() > 64)
+        continue;
+      const llvm::APInt Product =
+          MagicValue * llvm::APInt(128, Divisor);
+      if (Product.ult(Scale))
+        continue;
+      const llvm::APInt Excess = Product - Scale;
+      if ((Excess * MaxDividend).uge(Scale))
+        continue;
+
+      for (SymRef Dividend : DividendCandidates) {
+        if (!consume(4))
+          return false;
+        const SymRef WideDividend = Ctx.mkZExt(Dividend, 128);
+        const SymRef FullProduct =
+            WideDividend ? mkMul2Budgeted(WideDividend, MagicRef) : SymRef{};
+        if (!FullProduct || !consumeExtractBuilder(FullProduct))
+          return false;
+        const SymRef Quotient = Ctx.mkExtract(FullProduct, 64, Width);
+        const SymRef BackMultiply =
+            mkMul2Budgeted(Quotient, Ctx.mkConst(Width, Divisor));
+        const SymRef Expected =
+            BackMultiply ? mkSubBudgeted(Dividend, BackMultiply) : SymRef{};
+        if (!Expected)
+          return false;
+        if (Expected == Remainder)
+          return true;
+      }
+    }
+    return false;
+  };
+
   for (const DividendRecipe &Recipe : DividendRecipes) {
     const SymRef Dividend = Recipe.RemainderDividend;
     if (!consume())
@@ -2181,7 +2288,7 @@ static bool provesExactUnsignedModuloRecipe(
         }
     }
   }
-  return false;
+  return Width == 32 && matchesObservedHighHalf();
 }
 
 enum class ResolverResultKind : uint8_t { Invalid, Cycle, Value };
@@ -3623,6 +3730,36 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
   // Published edges take precedence: an older provisional subset must never
   // replace the ordinary graph. Neither query may borrow storage authority.
   std::map<va_t, std::vector<va_t>> ModelReachEdgeOverrides;
+  if (CandidateFiniteProofDecodeOnly) {
+    // A fresh candidate-only graph may use all authenticated physical slots
+    // as an inductive successor hypothesis.  This map is absent from the
+    // owner builder and never enters its provisional or strong proposal maps.
+    const size_t ModeledBranches = CandidateFiniteProofModelEdges.size();
+    if (CandidateProposalStageActive ||
+        (ModeledBranches < 2 || ModeledBranches > 8 ||
+         ModeledBranches % 2 != 0) ||
+        !ConsumeProduct(ModeledBranches, 8)) {
+      RestoreProofRoots();
+      return false;
+    }
+    for (const auto &[Addr, Targets] : CandidateFiniteProofModelEdges) {
+      if (!consumeI386GOTOFFProposalEvidence(OrderedLookupWork(Insns.size())) ||
+          !ConsumeProduct(Targets.size(), 3) ||
+          !consumeI386GOTOFFProposalEvidence(
+              OrderedLookupWork(ModelReachEdgeOverrides.size()) + 3)) {
+        RestoreProofRoots();
+        return false;
+      }
+      const auto Found = Insns.find(Addr);
+      if (Found == Insns.end() || !Found->second.IsBranch ||
+          !Found->second.IsIndirect ||
+          !Found->second.JumpTableTargets.empty() || Targets.empty()) {
+        RestoreProofRoots();
+        return false;
+      }
+      ModelReachEdgeOverrides.emplace(Addr, Targets);
+    }
+  }
   if (CandidateProposalStageActive) {
     if (!ConsumeProduct(PriorProvisionalRelativeEdges.size(), 8)) {
       RestoreProofRoots();
@@ -3975,8 +4112,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const std::set<va_t> *CandidateBranchesSharingTargets,
     std::vector<uint64_t> *QueryUnsignedFeasibleMasks,
     uint32_t ResolverDepthLimit,
-    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides) const {
-  if (GuardedGroupProofContext)
+    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
+    bool UseGroupContext) const {
+  if (UseGroupContext && GuardedGroupProofContext)
     CertifiedEdgeOverrides =
         CandidateTargetsOverride && CandidateTargetsOverride->empty()
             ? &GuardedGroupProofContext->EmptyEdges
@@ -6134,19 +6272,25 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       } else if (Def.Opcode == NdOp::LOAD && Def.NumInputs >= 1) {
         const NdVar &Address =
             Def.NumInputs >= 2 ? Def.Inputs[1] : Def.Inputs[0];
-        ResolverResult AddressValue =
-            resolveOperand(Block, I, Address, Depth + 1);
-        if (AddressValue.Kind == ResolverResultKind::Value &&
-            AddressValue.Value &&
-            AddressValue.Value->K == ResolverValueExpr::Kind::Constant &&
-            isExactAddressProvenance(AddressValue.Value->Provenance))
-          Full = relocatedLiteralValue(AddressValue.Value->Constant,
-                                       Def.Output.Size);
         uint64_t SlotBase = InvalidVA;
         int64_t SlotOffset = 0;
+        // Canonical frame addresses have their own point-sensitive proof.
+        // Resolve that storage directly before expanding a generic address
+        // expression: reconstructing an invariant FP through every CFG merge
+        // also reconstructs unrelated loop predicates and can exhaust the
+        // candidate's evidence budget before reaching its dominating spill.
         const bool HasFrameSlot =
-            !Full &&
             canonicalFrameSlotKey(Block, I - 1, Address, SlotBase, SlotOffset);
+        if (!HasFrameSlot) {
+          ResolverResult AddressValue =
+              resolveOperand(Block, I, Address, Depth + 1);
+          if (AddressValue.Kind == ResolverResultKind::Value &&
+              AddressValue.Value &&
+              AddressValue.Value->K == ResolverValueExpr::Kind::Constant &&
+              isExactAddressProvenance(AddressValue.Value->Provenance))
+            Full = relocatedLiteralValue(AddressValue.Value->Constant,
+                                         Def.Output.Size);
+        }
         if (HasFrameSlot) {
           ResolverResult Loaded = resolveMemory(Block, I, SlotBase, SlotOffset,
                                                 Def.Output.Size, Depth + 1);
@@ -6750,8 +6894,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       }
       case ResolverValueExpr::Kind::Slice: {
-        // x86 MULHU of two 64-bit values is lifted as a 128-bit INT_MULT
-        // followed by SUBBYTES of the high half.  Exact unsigned-modulo
+        // A high-half product of two 64-bit values is lifted as a 128-bit
+        // INT_MULT followed by SUBBYTES of the high half.  Exact unsigned-modulo
         // recipes need that high half as a 64-bit extract; 16-byte nodes are
         // otherwise rejected so SAT never sees a 128-bit value.
         if (ExactModuloRecipeOnly && Node->Input && Node->Input->Size == 16 &&
@@ -6759,8 +6903,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             Node->Input->K == ResolverValueExpr::Kind::Transform &&
             Node->Input->HasOpcode && Node->Input->Opcode == NdOp::INT_MULT &&
             Node->Input->Inputs.size() == 2) {
-          auto peelMulhuOperand =
-              [&](const ResolverValue &Wide) -> ResolverValue {
+          auto symbolizeMulhuOperand =
+              [&](const ResolverValue &Wide) -> symbolic::SymRef {
             if (!Wide || Wide->Size != 16)
               return {};
             // Consecutive zexts collapse, so zext128(zext64(x32)) is stored
@@ -6769,21 +6913,46 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             auto accept = [](uint16_t Size) { return Size == 4 || Size == 8; };
             if (Wide->K == ResolverValueExpr::Kind::ZeroExtend && Wide->Input &&
                 accept(Wide->Input->Size))
-              return Wide->Input;
+              return Symbolize(Wide->Input, Depth + 1);
             if (Wide->K == ResolverValueExpr::Kind::Transform &&
                 Wide->HasOpcode &&
                 (Wide->Opcode == NdOp::INT_ZEXT ||
                  Wide->Opcode == NdOp::COPY) &&
                 Wide->Inputs.size() == 1 && Wide->Inputs[0] &&
                 accept(Wide->Inputs[0]->Size))
-              return Wide->Inputs[0];
+              return Symbolize(Wide->Inputs[0], Depth + 1);
+            // A graph-growth replay can turn zext128(x) into a named merge
+            // of zext128(x_i).  The low lane of that merge has the same
+            // identity as the named narrow merge used by the back-subtract.
+            // Every incoming arm must certify the same zero-extended width;
+            // a mixed/sign-extended/opaque 128-bit merge cannot be narrowed.
+            if (Depth < MaxResolverDepth &&
+                Wide->K == ResolverValueExpr::Kind::Merge &&
+                !Wide->Root.empty() && !Wide->Inputs.empty() &&
+                consumeSymbolWork(Wide->Inputs.size())) {
+              const ResolverValue &First = Wide->Inputs.front();
+              if (!First || First->K != ResolverValueExpr::Kind::ZeroExtend ||
+                  First->Size != 16 || !First->Input ||
+                  !accept(First->Input->Size))
+                return {};
+              const uint16_t LowSize = First->Input->Size;
+              if (!std::all_of(Wide->Inputs.begin(), Wide->Inputs.end(),
+                               [LowSize](const ResolverValue &Arm) {
+                                 return Arm &&
+                                        Arm->K ==
+                                            ResolverValueExpr::Kind::ZeroExtend &&
+                                        Arm->Size == 16 && Arm->Input &&
+                                        Arm->Input->Size == LowSize;
+                               }))
+                return {};
+              return unknownNamed(Wide->Root, uint32_t(LowSize) * 8u);
+            }
             return {};
           };
-          const ResolverValue Lo0 = peelMulhuOperand(Node->Input->Inputs[0]);
-          const ResolverValue Lo1 = peelMulhuOperand(Node->Input->Inputs[1]);
-          if (Lo0 && Lo1) {
-            symbolic::SymRef A = Symbolize(Lo0, Depth + 1);
-            symbolic::SymRef B = Symbolize(Lo1, Depth + 1);
+          if (symbolic::SymRef A =
+                  symbolizeMulhuOperand(Node->Input->Inputs[0])) {
+            symbolic::SymRef B =
+                symbolizeMulhuOperand(Node->Input->Inputs[1]);
             const bool WidthOk = A && B &&
                                  (Ctx.width(A) == 32 || Ctx.width(A) == 64) &&
                                  (Ctx.width(B) == 32 || Ctx.width(B) == 64);
@@ -7109,12 +7278,14 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Ctx.numNodes() > std::numeric_limits<uint32_t>::max())
         return false;
       const size_t SelectorExpressionNodeCount = Ctx.numNodes();
-      // A non-merged feasible-set proof issues at most one envelope query and
-      // one equality query per coordinate.  Preserve that transaction-wide
-      // solver ceiling when a predecessor merge is proved arm by arm; each
-      // solver invocation also continues to debit the shared symbolic and
-      // candidate evidence accounts.
-      size_t RemainingSolverQueries = static_cast<size_t>(Bound) + 1;
+      // Each independently symbolized predecessor arm can need one envelope
+      // query and one equality query per coordinate; a constant index needs
+      // only one path-predicate query. Reserve that allowance before its first
+      // SAT call, but cap the entire expanded proof at 128 possible calls.
+      // Every actual call also pays the local and candidate evidence accounts
+      // below. Exceeding either limit fails closed.
+      constexpr size_t MaxFiniteSetSolverQueries = 128;
+      size_t ReservedSolverQueries = 0;
       if (!consumeSymbolWork(2))
         return false;
       std::vector<ResolverValue> SyntheticValues;
@@ -7246,6 +7417,33 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             PathPredicate = Ctx.mkAnd(PathConstraints);
           }
         }
+        if (PathPredicate) {
+          if (const std::optional<llvm::APInt> ConstantPredicate =
+                  Ctx.asConst(PathPredicate)) {
+            if (ConstantPredicate->isZero())
+              return FeasibleProofOutcome::Proven;
+            PathPredicate = {};
+          }
+        }
+        const std::optional<llvm::APInt> ConstantIndex = Ctx.asConst(Index);
+        size_t RemainingLeafSolverQueries = 0;
+        bool LeafSolverQueriesReserved = false;
+        auto consumeLeafSolverQuery = [&] {
+          if (!LeafSolverQueriesReserved) {
+            const size_t PerLeaf =
+                ConstantIndex ? 1 : static_cast<size_t>(Bound) + 1;
+            if (PerLeaf > MaxFiniteSetSolverQueries - ReservedSolverQueries ||
+                !consumeSymbolWork(PerLeaf))
+              return false;
+            ReservedSolverQueries += PerLeaf;
+            RemainingLeafSolverQueries = PerLeaf;
+            LeafSolverQueriesReserved = true;
+          }
+          if (RemainingLeafSolverQueries == 0 || !consumeSymbolWork(3))
+            return false;
+          --RemainingLeafSolverQueries;
+          return true;
+        };
         auto constrainQuery = [&](symbolic::SymRef Query) {
           if (!PathPredicate)
             return Query;
@@ -7253,11 +7451,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             return symbolic::SymRef{};
           return Ctx.mkAnd(PathPredicate, Query);
         };
-        if (const std::optional<llvm::APInt> Constant = Ctx.asConst(Index)) {
+        if (ConstantIndex) {
           if (PathPredicate) {
-            if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+            if (!consumeLeafSolverQuery())
               return FeasibleProofOutcome::Incomplete;
-            --RemainingSolverQueries;
             const solver::SatResult ConstraintResult = solver::checkSat(
                 Ctx, PathPredicate, nullptr, makeSolverOptions());
             if (ConstraintResult == solver::SatResult::Unsat)
@@ -7265,10 +7462,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             if (ConstraintResult != solver::SatResult::Sat)
               return FeasibleProofOutcome::Incomplete;
           }
-          if (Constant->getActiveBits() > 64 ||
-              Constant->getZExtValue() >= Bound)
+          if (ConstantIndex->getActiveBits() > 64 ||
+              ConstantIndex->getZExtValue() >= Bound)
             return FeasibleProofOutcome::Counterexample;
-          Mask |= uint64_t{1} << Constant->getZExtValue();
+          Mask |= uint64_t{1} << ConstantIndex->getZExtValue();
           return FeasibleProofOutcome::Proven;
         }
         bool RecipeIncomplete = false;
@@ -7329,9 +7526,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         const bool FullWidthEnvelope =
             Width < 64 && Bound >= (uint64_t{1} << Width);
         if (!FullWidthEnvelope) {
-          if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+          if (!consumeLeafSolverQuery())
             return FeasibleProofOutcome::Incomplete;
-          --RemainingSolverQueries;
           symbolic::SymRef Counterexample = constrainQuery(
               Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound))));
           if (!Counterexample)
@@ -7346,9 +7542,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         for (uint64_t Coordinate = 0; Coordinate < Bound; ++Coordinate) {
           if (Width < 64 && Coordinate >= (uint64_t{1} << Width))
             continue;
-          if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+          if (!consumeLeafSolverQuery())
             return FeasibleProofOutcome::Incomplete;
-          --RemainingSolverQueries;
           symbolic::SymRef CoordinateQuery =
               constrainQuery(Ctx.mkEq(Index, Ctx.mkConst(Width, Coordinate)));
           if (!CoordinateQuery)
@@ -10951,8 +11146,8 @@ std::set<va_t> CFGBuilder::candidateReachableInstructions(
     const std::vector<JumpTableStorageRange> &CandidateStorage,
     size_t *GraphWorkBudget, bool *AnalysisComplete,
     const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
-    bool *ClosedWorldControlFlow) const {
-  if (GuardedGroupProofContext)
+    bool *ClosedWorldControlFlow, bool UseGroupContext) const {
+  if (UseGroupContext && GuardedGroupProofContext)
     CertifiedEdgeOverrides = CandidateTargets.empty()
                                  ? &GuardedGroupProofContext->EmptyEdges
                                  : &GuardedGroupProofContext->Edges;

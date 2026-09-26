@@ -667,6 +667,95 @@ TEST(SourceABI, SourceReturnComponentsNeverBecomeRewriteABIEvidence) {
   }
 }
 
+TEST(SourceABI, AArch64BodyReturnUsesPreDCELaterRegisterReads) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  ASSERT_GE(TRI.IntReturnRegs.size(), 2U);
+  auto Reg = [](uint64_t Offset, int Version) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.TheArch = Arch::AArch64;
+    V.RegOff = Offset;
+    V.Size = 8;
+    V.Id = static_cast<int>(Offset);
+    V.SSAVer = Version;
+    return V;
+  };
+  for (bool LaterRead : {false, true}) {
+    BinaryImage Image;
+    Image.Arch = Arch::AArch64;
+    PipelineResult Result;
+    Result.MedFuncs.resize(1);
+    Result.LowFuncs.resize(1);
+    auto &MF = Result.MedFuncs.front();
+    auto &LF = Result.LowFuncs.front();
+    MF.Entry = LF.Entry = 0x1000;
+    MF.Blocks.resize(1);
+    LF.Blocks.resize(1);
+    auto &MB = MF.Blocks.front();
+    auto &LB = LF.Blocks.front();
+    MB.Id = LB.Id = 0;
+    MB.StartAddr = LB.StartAddr = MF.Entry;
+    MB.EndAddr = LB.EndAddr = 0x1010;
+    for (unsigned I = 0; I != 2; ++I) {
+      const uint64_t RegOff = TRI.IntReturnRegs[I];
+      const va_t Addr = MF.Entry + I * 4;
+      MedOp Write;
+      Write.Opcode = NdOp::INT_ADD;
+      Write.Addr = Addr;
+      Write.Output = Reg(RegOff, 1);
+      Write.addInput(Reg(RegOff, 0));
+      Write.addInput(MedVar::makeConst(I + 1, 8));
+      MB.Ops.push_back(Write);
+
+      LowOp RawWrite;
+      RawWrite.Opcode = NdOp::INT_ADD;
+      RawWrite.Addr = Addr;
+      RawWrite.Output = NdVar::reg(RegOff, 8);
+      RawWrite.addInput(NdVar::reg(RegOff, 8));
+      RawWrite.addInput(NdVar::cst(I + 1, 8));
+      LB.Ops.push_back(RawWrite);
+    }
+    // Flag calculations from the X1-producing instruction read X1 at that
+    // same address.  They cannot disqualify a genuine two-register return.
+    LowOp SameInstructionFlag;
+    SameInstructionFlag.Opcode = NdOp::INT_EQUAL;
+    SameInstructionFlag.Addr = 0x1004;
+    SameInstructionFlag.Output = NdVar::reg(TRI.FlagZF, 1);
+    SameInstructionFlag.addInput(NdVar::reg(TRI.IntReturnRegs[1], 8));
+    SameInstructionFlag.addInput(NdVar::cst(0, 8));
+    LB.Ops.push_back(SameInstructionFlag);
+
+    if (LaterRead) {
+      // The later CMP disappears from optimized MedIR when its flags are dead,
+      // but its distinct LowIR instruction still consumes W1.
+      LowOp Compare;
+      Compare.Opcode = NdOp::INT_EQUAL;
+      Compare.Addr = 0x1008;
+      Compare.Output = NdVar::reg(TRI.FlagZF, 1);
+      Compare.addInput(NdVar::reg(TRI.IntReturnRegs[1], 4));
+      Compare.addInput(NdVar::cst(0, 4));
+      LB.Ops.push_back(Compare);
+    }
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = 0x100C;
+    Return.addInput(Reg(TRI.IntReturnRegs[0], 1));
+    MB.Ops.push_back(Return);
+    LowOp RawReturn;
+    RawReturn.Opcode = NdOp::RETURN;
+    RawReturn.Addr = Return.Addr;
+    LB.Ops.push_back(RawReturn);
+
+    recoverStructReturnFromBody(Image, Result);
+    if (LaterRead)
+      EXPECT_TRUE(MF.MultiReturn.empty());
+    else {
+      ASSERT_EQ(MF.MultiReturn.size(), 2U);
+      EXPECT_EQ(MF.MultiReturn[1].RegOff, TRI.IntReturnRegs[1]);
+    }
+  }
+}
+
 TEST(SourceABI, CallbackTypesKeepTheirSignaturesAndRejectMalformedGraphs) {
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
   const auto Callback =

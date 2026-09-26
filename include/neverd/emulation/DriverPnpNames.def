@@ -1,0 +1,54 @@
+//===- DriverPnpNames.def - Public PnP scenario spellings ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JSON spellings and the supported scenario subset. Numeric lifecycle and
+/// WDK enum values remain authoritative in DeviceLifecycle.def.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_DRIVER_BUS_KIND
+NEVERD_DRIVER_BUS_KIND(ResourceFree, "resource_free")
+NEVERD_DRIVER_BUS_KIND(RegisterBank, "register_bank")
+#endif
+
+#ifdef NEVERD_DRIVER_PNP_REQUEST
+NEVERD_DRIVER_PNP_REQUEST(Start, "start")
+NEVERD_DRIVER_PNP_REQUEST(QueryRemove, "query_remove")
+NEVERD_DRIVER_PNP_REQUEST(CancelRemove, "cancel_remove")
+NEVERD_DRIVER_PNP_REQUEST(Remove, "remove")
+NEVERD_DRIVER_PNP_REQUEST(QueryStop, "query_stop")
+NEVERD_DRIVER_PNP_REQUEST(Stop, "stop")
+NEVERD_DRIVER_PNP_REQUEST(CancelStop, "cancel_stop")
+NEVERD_DRIVER_PNP_REQUEST(SurpriseRemoval, "surprise_removal")
+#endif
+
+#ifdef NEVERD_DRIVER_PNP_STATE
+NEVERD_DRIVER_PNP_STATE(NotStarted, "not_started")
+NEVERD_DRIVER_PNP_STATE(Started, "started")
+NEVERD_DRIVER_PNP_STATE(StopPending, "stop_pending")
+NEVERD_DRIVER_PNP_STATE(Stopped, "stopped")
+NEVERD_DRIVER_PNP_STATE(RemovePending, "remove_pending")
+NEVERD_DRIVER_PNP_STATE(SurpriseRemoved, "surprise_removed")
+NEVERD_DRIVER_PNP_STATE(Removing, "removing")
+NEVERD_DRIVER_PNP_STATE(Removed, "removed")
+#endif
+
+#ifdef NEVERD_DRIVER_DEVICE_POWER
+NEVERD_DRIVER_DEVICE_POWER(D0, "D0")
+NEVERD_DRIVER_DEVICE_POWER(D1, "D1")
+NEVERD_DRIVER_DEVICE_POWER(D2, "D2")
+NEVERD_DRIVER_DEVICE_POWER(D3, "D3")
+#endif
+
+#ifdef NEVERD_DRIVER_SYSTEM_POWER
+NEVERD_DRIVER_SYSTEM_POWER(Working, "working")
+NEVERD_DRIVER_SYSTEM_POWER(Sleeping1, "sleeping1")
+NEVERD_DRIVER_SYSTEM_POWER(Sleeping2, "sleeping2")
+NEVERD_DRIVER_SYSTEM_POWER(Sleeping3, "sleeping3")
+NEVERD_DRIVER_SYSTEM_POWER(Hibernate, "hibernate")
+NEVERD_DRIVER_SYSTEM_POWER(Shutdown, "shutdown")
+#endif

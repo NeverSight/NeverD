@@ -1033,7 +1033,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       // higher runs, regardless of their physical separation.
       const size_t TargetCount = static_cast<size_t>(N) * 2;
       const size_t KnownEntryLookup =
-          KnownFuncEntries ? orderedLookupWork(KnownFuncEntries->size()) : 0;
+          orderedLookupWork(knownFunctionEntryCount());
       const size_t RuntimeEntryLookup =
           orderedLookupWork(Img.RuntimeFunctionAddrs.size());
       const size_t VerifiedEntryLookup =

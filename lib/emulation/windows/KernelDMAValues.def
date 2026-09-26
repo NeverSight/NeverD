@@ -1,0 +1,45 @@
+//===- KernelDMAValues.def - Checked x64 DMA interface layout -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Public WDK x64 records and bounded adapter bookkeeping. Historical
+/// DEVICE_DESCRIPTION versions use their 40-byte prefix, not modern sizeof.
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/ns-wdm-_dma_adapter
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/ns-wdm-_dma_operations
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/ns-wdm-_device_description
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_DMA_VALUE(AdapterSize, 16)
+NEVERD_KERNEL_DMA_VALUE(AdapterVersionOffset, 0)
+NEVERD_KERNEL_DMA_VALUE(AdapterSizeOffset, 2)
+NEVERD_KERNEL_DMA_VALUE(AdapterOperationsOffset, 8)
+NEVERD_KERNEL_DMA_VALUE(OperationsSize, 104)
+NEVERD_KERNEL_DMA_VALUE(OperationsSizeOffset, 0)
+NEVERD_KERNEL_DMA_VALUE(OperationFirstOffset, 8)
+NEVERD_KERNEL_DMA_VALUE(OperationCount, 12)
+NEVERD_KERNEL_DMA_VALUE(DescriptionVersion, 0)
+NEVERD_KERNEL_DMA_VALUE(DescriptionMaster, 4)
+NEVERD_KERNEL_DMA_VALUE(DescriptionScatterGather, 5)
+NEVERD_KERNEL_DMA_VALUE(DescriptionDma32, 8)
+NEVERD_KERNEL_DMA_VALUE(DescriptionReserved, 10)
+NEVERD_KERNEL_DMA_VALUE(DescriptionDma64, 11)
+NEVERD_KERNEL_DMA_VALUE(DescriptionInterface, 20)
+NEVERD_KERNEL_DMA_VALUE(DescriptionMaximumLength, 32)
+NEVERD_KERNEL_DMA_VALUE(DescriptionV1Size, 40)
+NEVERD_KERNEL_DMA_VALUE(ScatterGatherHeaderSize, 16)
+NEVERD_KERNEL_DMA_VALUE(ScatterGatherElementSize, 24)
+NEVERD_KERNEL_DMA_VALUE(ScatterGatherCountOffset, 0)
+NEVERD_KERNEL_DMA_VALUE(ScatterGatherAddressOffset, 0)
+NEVERD_KERNEL_DMA_VALUE(ScatterGatherLengthOffset, 8)
+NEVERD_KERNEL_DMA_VALUE(MaxAdapters, 64)
+NEVERD_KERNEL_DMA_VALUE(MaxMappings, 1024)
+NEVERD_KERNEL_DMA_VALUE(MaxCallbacks, 1024)
+NEVERD_KERNEL_DMA_VALUE(MaxChannels, 1024)
+NEVERD_KERNEL_DMA_VALUE(ChannelTokenSize, 16)
+NEVERD_KERNEL_DMA_VALUE(KeepObject, 1)
+NEVERD_KERNEL_DMA_VALUE(DeallocateObject, 2)
+NEVERD_KERNEL_DMA_VALUE(DeallocateObjectKeepRegisters, 3)

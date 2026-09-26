@@ -18,6 +18,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include "neverd/Limits.h"
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -38,6 +39,64 @@
 #define DEBUG_TYPE "neverd-cfg-builder"
 
 namespace neverd {
+
+bool CFGBuilder::isKnownFunctionEntry(va_t Addr) const {
+  if (KnownFuncEntries && KnownFuncEntries->count(Addr) != 0)
+    return true;
+  return CurrentImg && CurrentImg->hasKnownFunctionEntryAt(Addr);
+}
+
+bool CFGBuilder::isCurrentOwnedFragment(va_t Addr) const {
+  return CurrentImg &&
+         isExplicitlyOwnedFunctionFragment(*CurrentImg, CurrentFuncEntry, Addr,
+                                           ExecutableCodeOwners);
+}
+
+va_t CFGBuilder::nextKnownFunctionEntry(va_t After) const {
+  va_t Best = InvalidVA;
+  auto Consider = [&](va_t Addr) {
+    if (Addr == InvalidVA || Addr <= After || isCurrentExceptionalEntry(Addr) ||
+        isCurrentOwnedFragment(Addr))
+      return;
+    if (Best == InvalidVA || Addr < Best)
+      Best = Addr;
+  };
+  if (KnownFuncEntries) {
+    auto It = KnownFuncEntries->upper_bound(After);
+    while (It != KnownFuncEntries->end()) {
+      if (!isCurrentExceptionalEntry(*It) && !isCurrentOwnedFragment(*It)) {
+        Consider(*It);
+        break;
+      }
+      ++It;
+    }
+  }
+  if (CurrentImg) {
+    va_t Probe = After;
+    for (unsigned I = 0; I < 16; ++I) {
+      const va_t Next = CurrentImg->nextKnownFunctionEntryAfter(Probe);
+      if (Next == InvalidVA)
+        break;
+      if (!isCurrentExceptionalEntry(Next) && !isCurrentOwnedFragment(Next)) {
+        Consider(Next);
+        break;
+      }
+      Probe = Next;
+    }
+  }
+  return Best;
+}
+
+size_t CFGBuilder::knownFunctionEntryCount() const {
+  size_t N = KnownFuncEntries ? KnownFuncEntries->size() : 0;
+  if (!CurrentImg)
+    return N;
+  N = std::max(N, CurrentImg->RuntimeFunctionAddrs.size());
+  N = std::max(N, CurrentImg->KnownCodeRanges.size());
+  N = std::max(N, CurrentImg->ExceptionMetadata.FunctionIndex.size());
+  N = std::max(N, CurrentImg->COFFPDataRecords.size());
+  return N;
+}
 
 void detail::retireReplayedI386GOTPCAmbiguities(
     std::set<I386GOTOFFAmbiguityReplayKey> &Pending,
@@ -84,20 +143,20 @@ bool isBackwardSharedEpilogue(const BinaryImage &Image, va_t FunctionEntry,
         Contains(Image.RuntimeFunctionAddrs) ||
         Contains(Image.VerifiedFunctionEntries))
       return true;
-    return std::any_of(Image.Symbols.begin(), Image.Symbols.end(),
-                       [&](const Symbol &Symbol) {
-                         return Symbol.IsFunc && Symbol.Addr > Target &&
-                                Symbol.Addr < End;
-                       });
+    return std::any_of(
+        Image.Symbols.begin(), Image.Symbols.end(), [&](const Symbol &Symbol) {
+          return Symbol.IsFunc && Symbol.Addr > Target && Symbol.Addr < End;
+        });
   };
-  const auto BranchTarget = [](uint32_t Word, va_t Address)
-      -> std::optional<va_t> {
+  const auto BranchTarget = [](uint32_t Word,
+                               va_t Address) -> std::optional<va_t> {
     if ((Word & 0xfc000000) != 0x14000000u)
       return std::nullopt;
     const uint32_t Immediate = Word & 0x03ffffff;
-    const int64_t Offset = (Immediate & 0x02000000
-                                ? int64_t(Immediate) - 0x04000000
-                                : int64_t(Immediate)) * 4;
+    const int64_t Offset =
+        (Immediate & 0x02000000 ? int64_t(Immediate) - 0x04000000
+                                : int64_t(Immediate)) *
+        4;
     if ((Offset < 0 && Address < uint64_t(-Offset)) ||
         (Offset >= 0 && Address > InvalidVA - uint64_t(Offset)))
       return std::nullopt;
@@ -262,6 +321,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   PersistentCFGRoots.clear();
   OrdinaryCFGRoots.clear();
   DurableCFGRoots.clear();
+  CurrentExceptionalEntries.clear();
   RelocationCFGRootSources.clear();
   ActiveJumpTableProofRoots.reset();
   ActiveJumpTableCandidateAddr = InvalidVA;
@@ -334,7 +394,6 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   }
   if (!Exception)
     Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
-  establishCurrentFuncRange(Img, Exception);
   std::vector<va_t> ExceptionalRoots;
   std::vector<va_t> ContinuationRoots;
   if (Exception) {
@@ -373,8 +432,16 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
         AddBoundary(Scope.ContinuationVA);
       }
     if (Exception->Cxx) {
-      for (const CxxIPState &State : Exception->Cxx->IPMap)
-        AddBoundary(State.IP);
+      // IP map entries that keep the current state (including the implicit
+      // entry state -1) must not cut a block.  MSVC often plants the first
+      // IP on a call (`GetRank`); splitting there leaves `mov rcx, this` in
+      // the predecessor and collectCallArgs recovers the incoming sret.
+      int32_t PrevState = -1;
+      for (const CxxIPState &State : Exception->Cxx->IPMap) {
+        if (State.State != PrevState)
+          AddBoundary(State.IP);
+        PrevState = State.State;
+      }
       for (const CxxUnwindAction &Action : Exception->Cxx->UnwindMap)
         AddExceptionalRoot(Action.ActionVA);
       for (const CxxTryBlock &Try : Exception->Cxx->TryBlocks)
@@ -435,6 +502,9 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                          *Exception->Go->DeferReturnOffset);
     }
   }
+  CurrentExceptionalEntries.insert(ExceptionalRoots.begin(),
+                                   ExceptionalRoots.end());
+  establishCurrentFuncRange(Img, Exception);
   explore(Img, Dec, EntryAddr);
   // A relocation can take the address of a basic block that no ordinary edge
   // reaches (GNU computed-goto labels are the canonical case).  Decode those
@@ -1102,6 +1172,16 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     for (va_t Addr : *UnsafeJumpTableBranches)
       if (Insns.count(Addr))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  // A complete GOTOFF owner remains table-shaped even when one anchor or
+  // relocation slot is damaged. The joint proof must publish every member or
+  // none; retain the unresolved branch identity for downstream trap lowering.
+  if (finiteGOTOFFGroupClaimed())
+    for (size_t I = 0; I < GuardedGroupIdentity->MemberCount; ++I) {
+      const va_t Addr = GuardedGroupIdentity->Members[I];
+      if (auto It = Insns.find(Addr);
+          It != Insns.end() && It->second.JumpTableTargets.empty())
+        Func.UnsafeIndirectBranchAddresses.insert(Addr);
+    }
   if (PreservePotentialJumpTableBranches)
     for (va_t Addr : PotentialJumpTableBranches) {
       auto It = Insns.find(Addr);
@@ -1142,6 +1222,218 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   return Func;
 }
 
+static std::optional<size_t>
+candidateFiniteProofOwnerLookupWork(const BinaryImage &Img,
+                                    size_t KnownFunctionEntries) {
+  size_t Work = 128;
+  if (!detail::addLinearComparisonWork(Work, Img.Segments.size(), 16) ||
+      !detail::addLinearComparisonWork(Work, Img.Sections.size(), 16) ||
+      !detail::addLinearComparisonWork(Work, Img.Symbols.size(), 16) ||
+      !detail::addLinearComparisonWork(Work, Img.KnownCodeRanges.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, Img.ImportStubRanges.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, Img.Imports.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, Img.Exports.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, KnownFunctionEntries, 4))
+    return std::nullopt;
+  return Work;
+}
+
+bool CFGBuilder::prepareCandidateFiniteProofScratch(
+    CFGBuilder &Scratch, const std::vector<va_t> &PhysicalTargets,
+    size_t *EvidenceBudget, bool *AnalysisIncomplete) const {
+  if (AnalysisIncomplete)
+    *AnalysisIncomplete = false;
+  auto Incomplete = [&] {
+    if (EvidenceBudget)
+      *EvidenceBudget = 0;
+    if (AnalysisIncomplete)
+      *AnalysisIncomplete = true;
+    return false;
+  };
+  if (!EvidenceBudget || !CurrentImg || !CurrentFuncRange ||
+      !Scratch.Insns.empty() || Scratch.CurrentImg || PhysicalTargets.empty() ||
+      PhysicalTargets.size() > limits::kMaxJumpTableEntries)
+    return false;
+
+  const BinaryImage &Img = *CurrentImg;
+  const std::optional<size_t> OwnerWork =
+      candidateFiniteProofOwnerLookupWork(Img, knownFunctionEntryCount());
+  if (!OwnerWork)
+    return Incomplete();
+  const size_t OwnerLookupWork = *OwnerWork;
+  size_t CopyWork = 512;
+  auto Add = [&](size_t Count, size_t Cost) {
+    return detail::addLinearComparisonWork(CopyWork, Count, Cost);
+  };
+  // Charge construction, all owned copies, and retirement before filling the
+  // fresh builder.  Proposal caches, provisional/strong edges, group proof
+  // contexts, and resolved-table metadata are intentionally not copied.
+  if (!Add(Insns.size(), 192) || !Add(BlockStarts.size(), 24) ||
+      !Add(PublishedBlockStarts.size(), 16) ||
+      !Add(PublishedReachableInsns.size(), 24) ||
+      !Add(PersistentCFGRoots.size(), 24) ||
+      !Add(OrdinaryCFGRoots.size(), 24) || !Add(DurableCFGRoots.size(), 24) ||
+      !Add(RelocationCFGRootSources.size(), 64) ||
+      !Add(DiscoveredCodeRefSources.size(), 64) ||
+      !Add(ExploredAddrs.getMemorySize() / sizeof(va_t), 12) ||
+      !Add(RelocatedInstructionAddressOccurrences.size(), 384) ||
+      !Add(RelocatedInstructionScalarOperandOccurrences.size(), 192) ||
+      !Add(RelocatedInstructionScalarModelOccurrences.size(), 384) ||
+      !Add(I386GetPcOccurrences.size(), 96) ||
+      !Add(CurrentExceptionalEntries.size(), 24) ||
+      !Add(ActiveJumpTableProofRoots ? ActiveJumpTableProofRoots->size() : 0,
+           24) ||
+      !Add(PhysicalTargets.size(), 32))
+    return Incomplete();
+  // Every physical target may run owner-at, owner-range, mapped-byte and
+  // interior-target checks. Those helpers scan image inventories without an
+  // index when no borrowed owner index exists, so charge their worst-case
+  // repeated work before even the first scratch mutation.
+  for (unsigned Check = 0; Check != 6; ++Check)
+    if (!Add(PhysicalTargets.size(), OwnerLookupWork))
+      return Incomplete();
+  for (const auto &[Addr, Rec] : Insns) {
+    (void)Addr;
+    if (!Add(Rec.Ops.size(), 384) || !Add(Rec.JumpTableTargets.size(), 24))
+      return Incomplete();
+  }
+  for (const auto &[Target, Sources] : RelocationCFGRootSources) {
+    (void)Target;
+    if (!Add(Sources.size(), 24))
+      return Incomplete();
+  }
+  for (const auto &[Target, Sources] : DiscoveredCodeRefSources) {
+    (void)Target;
+    if (!Add(Sources.size(), 24))
+      return Incomplete();
+  }
+  for (const auto &Occurrence : RelocatedInstructionAddressOccurrences)
+    if (!Add(Occurrence.ArithmeticProof.size(), 384))
+      return Incomplete();
+  if (CopyWork > *EvidenceBudget)
+    return Incomplete();
+  *EvidenceBudget -= CopyWork;
+
+  const uint32_t Alignment = getInsnAlignment();
+  for (va_t Target : PhysicalTargets) {
+    if (Target == InvalidVA || (Alignment > 1 && Target % Alignment != 0) ||
+        !Img.hasExecutableCodeOwnerAt(Target) ||
+        !Img.hasExecutableCodeOwnerRange(Target, Alignment) ||
+        !Img.readVA(Target, 1))
+      return false;
+    // A physical pointer into another function, an unowned byte range, or
+    // the middle of an already decoded instruction is never a proof root.
+    if (Target != CurrentFuncEntry && !isCurrentOwnedFragment(Target) &&
+        !isCurrentExceptionalEntry(Target) &&
+        !isOwnedInteriorTarget(Img, Target))
+      return false;
+    auto After = Insns.upper_bound(Target);
+    if (After != Insns.begin()) {
+      const auto &Prev = *std::prev(After);
+      if (Prev.first < Target &&
+          Target - Prev.first < static_cast<va_t>(Prev.second.Size))
+        return false;
+    }
+  }
+
+  Scratch.Insns = Insns;
+  Scratch.BlockStarts = BlockStarts;
+  Scratch.PublishedBlockStarts = PublishedBlockStarts;
+  Scratch.PublishedReachableInsns = PublishedReachableInsns;
+  Scratch.PersistentCFGRoots = PersistentCFGRoots;
+  Scratch.OrdinaryCFGRoots = OrdinaryCFGRoots;
+  Scratch.DurableCFGRoots = DurableCFGRoots;
+  Scratch.RelocationCFGRootSources = RelocationCFGRootSources;
+  Scratch.DiscoveredCodeRefSources = DiscoveredCodeRefSources;
+  Scratch.ExploredAddrs = ExploredAddrs;
+  Scratch.RelocatedInstructionAddressOccurrences =
+      RelocatedInstructionAddressOccurrences;
+  Scratch.RelocatedInstructionScalarOperandOccurrences =
+      RelocatedInstructionScalarOperandOccurrences;
+  Scratch.RelocatedInstructionScalarModelOccurrences =
+      RelocatedInstructionScalarModelOccurrences;
+  Scratch.I386GetPcOccurrences = I386GetPcOccurrences;
+  Scratch.CurrentImg = CurrentImg;
+  Scratch.ExecutableCodeOwners = ExecutableCodeOwners;
+  Scratch.CurrentFuncEntry = CurrentFuncEntry;
+  Scratch.CurrentFuncRange = CurrentFuncRange;
+  Scratch.AuthoritativeCurrentFuncRange = AuthoritativeCurrentFuncRange;
+  Scratch.KnownFuncEntries = KnownFuncEntries;
+  Scratch.CurrentExceptionalEntries = CurrentExceptionalEntries;
+  Scratch.NoReturnTargets = NoReturnTargets;
+  Scratch.I386GOTModelEvidenceIncomplete = I386GOTModelEvidenceIncomplete;
+  Scratch.I386GOTOFFProposalEvidenceBudgetForTesting =
+      I386GOTOFFProposalEvidenceBudgetForTesting;
+  Scratch.I386GOTModelEvidenceBudgetForTesting =
+      I386GOTModelEvidenceBudgetForTesting;
+  Scratch.FiniteSetSymbolEvidenceBudgetForTesting =
+      FiniteSetSymbolEvidenceBudgetForTesting;
+  Scratch.StackTableEvidenceRemaining = StackTableEvidenceRemaining;
+  Scratch.CrossFunctionContinuationRoots = CrossFunctionContinuationRoots;
+  Scratch.ProtectedJumpTableRelocationSlots = ProtectedJumpTableRelocationSlots;
+  Scratch.UnsafeJumpTableBranches = UnsafeJumpTableBranches;
+  Scratch.ActiveJumpTableProofRoots = ActiveJumpTableProofRoots;
+  Scratch.ActiveJumpTableCandidateAddr = ActiveJumpTableCandidateAddr;
+  Scratch.ActiveJumpTableCandidateProofRank = ActiveJumpTableCandidateProofRank;
+  Scratch.ActiveJumpTableCandidateDependencyRank =
+      ActiveJumpTableCandidateDependencyRank;
+  Scratch.JumpTableProofContextComplete = JumpTableProofContextComplete;
+  Scratch.CandidateFiniteProofDecodeOnly = true;
+  Scratch.CandidateFiniteProofDecodeBudget = EvidenceBudget;
+
+  Decoder Dec;
+  Dec.setStrict(true);
+  if (!Dec.init(Img.Arch, Img.Mode)) {
+    Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+    return Incomplete();
+  }
+  for (va_t Target : PhysicalTargets) {
+    Scratch.BlockStarts.insert(Target);
+    if (!Scratch.ExploredAddrs.count(Target))
+      Scratch.explore(Img, Dec, Target);
+    if (Scratch.CandidateFiniteProofDecodeIncomplete) {
+      Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+      return Incomplete();
+    }
+    if (!Scratch.Insns.count(Target)) {
+      Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+      return Incomplete();
+    }
+  }
+  Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+  if (!Scratch.DecodeFailureAddresses.empty() ||
+      !Scratch.UnsupportedInstructionAddresses.empty() ||
+      !Scratch.TruncatedPathAddresses.empty())
+    return Incomplete();
+
+  size_t ValidationWork = 0;
+  if (OwnerLookupWork > std::numeric_limits<size_t>::max() - 32 ||
+      !detail::addLinearComparisonWork(ValidationWork, Scratch.Insns.size(),
+                                       OwnerLookupWork + 32) ||
+      ValidationWork > *EvidenceBudget)
+    return Incomplete();
+  *EvidenceBudget -= ValidationWork;
+  va_t PreviousEnd = 0;
+  bool HavePrevious = false;
+  for (const auto &[Addr, Rec] : Scratch.Insns) {
+    if (Rec.Size == 0 ||
+        static_cast<va_t>(Rec.Size) > std::numeric_limits<va_t>::max() - Addr ||
+        (HavePrevious && Addr < PreviousEnd))
+      return false;
+    PreviousEnd = Addr + static_cast<va_t>(Rec.Size);
+    HavePrevious = true;
+    if (Insns.count(Addr))
+      continue;
+    if (!Img.hasExecutableCodeOwnerRange(Addr, Rec.Size) ||
+        (Addr != CurrentFuncEntry && !isCurrentOwnedFragment(Addr) &&
+         !isCurrentExceptionalEntry(Addr) &&
+         (Addr <= CurrentFuncRange->first || Addr >= CurrentFuncRange->second ||
+          isKnownFunctionEntry(Addr))))
+      return false;
+  }
+  return true;
+}
+
 void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
   // Resolver-stage proposal caches are valid only for one immutable decoded
   // graph.  Exploring even one new target can add an alternate predecessor,
@@ -1168,13 +1460,38 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // Fallthrough or a queued edge into another function's entry belongs to
       // that function.  Following it here fuses callees into a multi-hundred-
       // thousand-op CFG and leaves the real PDB symbol as an empty HighC stub.
-      if (Cur != CurrentFuncEntry && KnownFuncEntries &&
-          KnownFuncEntries->count(Cur) != 0 &&
-          (!SourceBranch || !isBackwardSharedEpilogue(
-                                Img, CurrentFuncEntry, *SourceBranch, Cur,
-                                KnownFuncEntries)))
+      if (Cur != CurrentFuncEntry && isKnownFunctionEntry(Cur) &&
+          !isCurrentExceptionalEntry(Cur) && !isCurrentOwnedFragment(Cur) &&
+          (!SourceBranch ||
+           !isBackwardSharedEpilogue(Img, CurrentFuncEntry, *SourceBranch, Cur,
+                                     KnownFuncEntries)))
         break;
       SourceBranch.reset();
+      if (CandidateFiniteProofDecodeOnly) {
+        // This builder is a disposable proof snapshot.  Charge each attempted
+        // direct-path decode before it can allocate an instruction, its LowIR
+        // operations, relocation occurrences, or worklist successors.  The
+        // base charge includes their eventual destruction. Repeated live
+        // owner and relocation queries also pay for the image inventories;
+        // the hard cap bounds an unexpectedly large direct-path closure.
+        constexpr size_t MaxScratchDecodeAttempts = 1024;
+        const std::optional<size_t> OwnerWork =
+            candidateFiniteProofOwnerLookupWork(Img, knownFunctionEntryCount());
+        size_t ScratchDecodeWork = 8192;
+        if (!OwnerWork ||
+            !detail::addLinearComparisonWork(ScratchDecodeWork, *OwnerWork,
+                                             64) ||
+            !CandidateFiniteProofDecodeBudget ||
+            CandidateFiniteProofDecodeAttempts >= MaxScratchDecodeAttempts ||
+            *CandidateFiniteProofDecodeBudget < ScratchDecodeWork) {
+          CandidateFiniteProofDecodeIncomplete = true;
+          if (CandidateFiniteProofDecodeBudget)
+            *CandidateFiniteProofDecodeBudget = 0;
+          break;
+        }
+        *CandidateFiniteProofDecodeBudget -= ScratchDecodeWork;
+        ++CandidateFiniteProofDecodeAttempts;
+      }
       // An actual graph extension invalidates every generation-local replay
       // and positive ambiguity shadow.  Pending exact query identities remain
       // fail-closed carry, but only a fresh query on this immutable graph may
@@ -1523,13 +1840,15 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
 
       if (Saved.IsBranch && !Saved.IsCall) {
         if (Saved.IsIndirect && !Saved.IsCond) {
-          auto Targets = resolveJumpTable(Img, Saved);
-          if (!Targets.empty()) {
-            Saved.JumpTableTargets = std::move(Targets);
-            for (va_t T : Saved.JumpTableTargets) {
-              BlockStarts.insert(T);
-              if (!ExploredAddrs.count(T))
-                Worklist.push({T, std::nullopt});
+          if (!CandidateFiniteProofDecodeOnly) {
+            auto Targets = resolveJumpTable(Img, Saved);
+            if (!Targets.empty()) {
+              Saved.JumpTableTargets = std::move(Targets);
+              for (va_t T : Saved.JumpTableTargets) {
+                BlockStarts.insert(T);
+                if (!ExploredAddrs.count(T))
+                  Worklist.push({T, std::nullopt});
+              }
             }
           }
         }
@@ -4165,6 +4484,145 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   }
   CandidateProposalStageActive = false;
   CandidateProposalStageMutationAddrs.clear();
+
+  // A reachable unresolved transfer can re-enter an indexed LOAD after its
+  // local mask, invalidating the selector-domain proof even for a single
+  // dispatch.  Check after the proposal round stabilizes, when all sibling
+  // table edges are present; a temporary missing sibling edge is not an
+  // opaque re-entry.  If the round never stabilizes, withdraw relative
+  // tables instead.  A direct call into this function can also enter after
+  // the mask; an external direct call and a non-resumable trap cannot.
+  auto CanReenterAtUnknownAddress = [](const InsnRecord &Rec) {
+    return Rec.IsResumableTerminator ||
+           (Rec.IsIndirect && !Rec.IsRet && Rec.JumpTableTargets.empty()) ||
+           (Rec.IsBranch && !Rec.IsIndirect && !Rec.IsCall &&
+            Rec.BranchTarget == InvalidVA);
+  };
+  if (Img.Arch == Arch::X64 && !ResolvedTableInfo.empty()) {
+    size_t ClosureBudget = limits::kMaxJumpTableMaskFixedPointEvidenceWork;
+    auto DebitClosure = [&](size_t Work) {
+      if (Work > ClosureBudget) {
+        ClosureBudget = 0;
+        return false;
+      }
+      ClosureBudget -= Work;
+      return true;
+    };
+    bool HasRelativeTable = false;
+    bool RevokePublishedTables = !DebitClosure(ResolvedTableInfo.size());
+    if (RevokePublishedTables)
+      HasRelativeTable = true;
+    if (!RevokePublishedTables)
+      for (const auto &[Addr, Info] : ResolvedTableInfo) {
+        (void)Addr;
+        HasRelativeTable |= Info.IsRelative;
+      }
+    // An independent local bound may have been published before the proposal
+    // stage exhausted its iteration/work budget.  It still needs this final
+    // re-entry audit, which cannot certify an unstable graph.
+    if (HasRelativeTable && !ReachedFixedPoint)
+      RevokePublishedTables = true;
+    // The first scan is a cheap negative gate.  Most switch functions have no
+    // unknown target or direct call into this function and pay no graph-copy/
+    // reachability cost here.
+    bool HasUnknownTransfer = false;
+    if (HasRelativeTable) {
+      if (!DebitClosure(Insns.size()))
+        RevokePublishedTables = true;
+      else
+        for (const auto &[Addr, Rec] : Insns) {
+          (void)Addr;
+          HasUnknownTransfer = CanReenterAtUnknownAddress(Rec);
+          if (!HasUnknownTransfer && Rec.IsCall && !Rec.IsIndirect &&
+              Rec.Immediate) {
+            // The resolver flow graph models calls by their fallthrough.  A
+            // known call target in this same decoded function is another
+            // entry with potentially different selector state.
+            if (Insns.size() == std::numeric_limits<size_t>::max() ||
+                !DebitClosure(Insns.size() + 1)) {
+              RevokePublishedTables = true;
+              break;
+            }
+            HasUnknownTransfer = Insns.count(*Rec.Immediate) != 0;
+          }
+          if (HasUnknownTransfer)
+            break;
+        }
+    }
+    if (HasUnknownTransfer && !RevokePublishedTables) {
+      if (!DebitClosure(ResolvedTableInfo.size()))
+        RevokePublishedTables = true;
+      for (const auto &[Addr, Info] : ResolvedTableInfo) {
+        if (RevokePublishedTables)
+          break;
+        if (!Info.IsRelative)
+          continue;
+        // A balanced-tree lookup takes at most its node count plus one
+        // comparisons.  Reserve both it and the candidate graph query.
+        if (Insns.size() == std::numeric_limits<size_t>::max() ||
+            !DebitClosure(Insns.size() + 1)) {
+          RevokePublishedTables = true;
+          break;
+        }
+        const auto Branch = Insns.find(Addr);
+        if (Branch == Insns.end() || Branch->second.JumpTableTargets.empty())
+          continue;
+        bool ReachabilityComplete = false;
+        const std::set<va_t> Reachable = candidateReachableInstructions(
+            Branch->second, Branch->second.JumpTableTargets, PersistentCFGRoots,
+            Info.StorageRanges, &ClosureBudget, &ReachabilityComplete);
+        if (!ReachabilityComplete ||
+            Reachable.size() == std::numeric_limits<size_t>::max() ||
+            !DebitClosure(Reachable.size() + 1) ||
+            !Reachable.count(CurrentFuncEntry)) {
+          RevokePublishedTables = true;
+          break;
+        }
+        if (Insns.size() > std::numeric_limits<size_t>::max() - 2) {
+          RevokePublishedTables = true;
+          break;
+        }
+        const size_t LookupWork = Insns.size() + 2;
+        if ((Reachable.size() != 0 &&
+             LookupWork > ClosureBudget / Reachable.size()) ||
+            !DebitClosure(Reachable.size() * LookupWork)) {
+          RevokePublishedTables = true;
+          break;
+        }
+        for (va_t ReachableAddr : Reachable) {
+          const auto Open = Insns.find(ReachableAddr);
+          if (Open != Insns.end() && CanReenterAtUnknownAddress(Open->second)) {
+            RevokePublishedTables = true;
+            break;
+          }
+          if (Open != Insns.end() && Open->second.IsCall &&
+              !Open->second.IsIndirect && Open->second.Immediate) {
+            if (!DebitClosure(Insns.size() + 1) ||
+                Insns.count(*Open->second.Immediate) != 0) {
+              RevokePublishedTables = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (HasRelativeTable && RevokePublishedTables) {
+      // The target vectors and metadata were charged when retained by the
+      // proposal stage; withdrawing them needs no new allocation.
+      bool RemovedTableEdges = false;
+      for (auto &[Addr, Rec] : Insns) {
+        (void)Addr;
+        RemovedTableEdges |= !Rec.JumpTableTargets.empty();
+        Rec.JumpTableTargets.clear();
+      }
+      ResolvedTableInfo.clear();
+      PriorStrongJumpTableProposals.clear();
+      PriorProvisionalRelativeEdges.clear();
+      CandidateFixedPointExplorationTargets.clear();
+      if (RemovedTableEdges)
+        rebuildBlocks(Func);
+    }
+  }
 
   // A proof-dependent target set may only escape after one whole round saw no
   // new decoded targets and no target-set change.  If the bounded iteration

@@ -1,0 +1,20 @@
+//===- KernelPoolFlags.def - Documented ExAllocatePool2 flags -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// POOL_FLAGS values from the public Windows driver contract.
+/// https://learn.microsoft.com/windows-hardware/drivers/kernel/pool_flags
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_POOL_FLAG(UseQuota, 0x00000001)
+NEVERD_KERNEL_POOL_FLAG(Uninitialized, 0x00000002)
+NEVERD_KERNEL_POOL_FLAG(CacheAligned, 0x00000008)
+NEVERD_KERNEL_POOL_FLAG(RaiseOnFailure, 0x00000020)
+NEVERD_KERNEL_POOL_FLAG(NonPaged, 0x00000040)
+NEVERD_KERNEL_POOL_FLAG(NonPagedExecute, 0x00000080)
+NEVERD_KERNEL_POOL_FLAG(Paged, 0x00000100)
+NEVERD_KERNEL_POOL_FLAG(RequiredMask, 0xffffffff)

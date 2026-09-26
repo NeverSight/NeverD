@@ -117,6 +117,29 @@ static_assert(CanRegenerate == SchemaV5OperandCount - 1);
 static_assert(Registration == SchemaV5OperandCount);
 static_assert(OperandCount == SchemaV5OperandCount + 1);
 
+enum UnwindOperationOperand : unsigned {
+  UnwindOpKind = 0,
+  UnwindOpCodeOffset,
+  UnwindOpInfo,
+  UnwindOpSlotCount,
+  UnwindOpRegister,
+  UnwindOpStackOffset,
+  UnwindOpOperandBytes,
+  UnwindOpRegisterClass,
+  UnwindOpRegisterMask,
+  UnwindOpInstructionSize,
+  UnwindOperationOperandCount,
+};
+
+enum EpilogOperand : unsigned {
+  EpilogStartOffset = 0,
+  EpilogFlags,
+  EpilogFirstOperationOffset,
+  EpilogLastInstructionOffset,
+  EpilogOperations,
+  EpilogOperandCount,
+};
+
 enum CxxHeaderOperand : unsigned {
   CxxNativeEncoding = 0,
   CxxMagic,
@@ -139,6 +162,44 @@ enum CxxHeaderOperand : unsigned {
   CxxHeaderOperandCount,
 };
 
+enum CxxExceptionSpecOperand : unsigned {
+  CxxExceptionSpecAdjectives = 0,
+  CxxExceptionSpecTypeDescriptorVA,
+  CxxExceptionSpecOperandCount,
+};
+
+enum CxxUnwindOperand : unsigned {
+  CxxUnwindToState = 0,
+  CxxUnwindActionVA,
+  CxxUnwindKind,
+  CxxUnwindObjectOffset,
+  CxxUnwindOperandCount,
+};
+
+enum CxxTryOperand : unsigned {
+  CxxTryLow = 0,
+  CxxTryHigh,
+  CxxCatchHigh,
+  CxxTryHandlers,
+  CxxTryOperandCount,
+};
+
+enum CxxCatchOperand : unsigned {
+  CxxCatchAdjectives = 0,
+  CxxCatchTypeDescriptorVA,
+  CxxCatchObjectOffset,
+  CxxCatchHandlerVA,
+  CxxCatchParentFrameOffset,
+  CxxCatchContinuations,
+  CxxCatchOperandCount,
+};
+
+enum CxxIPOperand : unsigned {
+  CxxIPVA = 0,
+  CxxIPStateValue,
+  CxxIPOperandCount,
+};
+
 enum SEHScopeOperand : unsigned {
   SEHScopeGuardBegin = 0,
   SEHScopeGuardEnd,
@@ -149,6 +210,18 @@ enum SEHScopeOperand : unsigned {
   SEHScopeContinuationVA,
   SEHScopeParseStatus,
   SEHScopeOperandCount,
+};
+
+enum GSCookieOperand : unsigned {
+  GSCookieParseStatus = 0,
+  GSCookieOffset,
+  GSCookieHasExceptionHandler,
+  GSCookieHasUnwindHandler,
+  GSCookieHasAlignment,
+  GSCookieAlignmentBaseOffset,
+  GSCookieAlignment,
+  GSCookiePayload,
+  GSCookieOperandCount,
 };
 
 enum RegistrationOperand : unsigned {

@@ -1,0 +1,26 @@
+//===- KernelFrameworkRequestValues.def - Public KMDF request ABI ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Windows x64 WDF_REQUEST_PARAMETERS layout from public KMDF 1.33 headers.
+/// Request major codes share the existing DriverRequestKinds.def authority.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_FRAMEWORK_VALUE(RequestParametersSize, 40)
+NEVERD_FRAMEWORK_VALUE(RequestParametersType, 4)
+NEVERD_FRAMEWORK_VALUE(RequestParametersLength, 8)
+NEVERD_FRAMEWORK_VALUE(RequestParametersInputLength, 16)
+NEVERD_FRAMEWORK_VALUE(RequestParametersOffset, 24)
+NEVERD_FRAMEWORK_VALUE(RequestParametersControlCode, 24)
+NEVERD_FRAMEWORK_VALUE(RequestBufferTooSmall, 0xc0000023)
+NEVERD_FRAMEWORK_VALUE(RequestInvalidUserBuffer, 0xc00000e8)
+NEVERD_FRAMEWORK_VALUE(RequestAccessViolation, 0xc0000005)
+NEVERD_FRAMEWORK_VALUE(RequestCancelled, 0xc0000120)
+NEVERD_FRAMEWORK_VALUE(RequestInternalError, 0xc00000e5)
+NEVERD_FRAMEWORK_VALUE(RequestStopActionSuspend, 0x01)
+NEVERD_FRAMEWORK_VALUE(RequestStopActionPurge, 0x02)
+NEVERD_FRAMEWORK_VALUE(RequestStopRequestCancelable, 0x10000000)

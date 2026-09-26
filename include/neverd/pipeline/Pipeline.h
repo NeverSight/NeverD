@@ -500,7 +500,7 @@ private:
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
-                   PipelineResult &Result);
+                   PipelineResult &Result, DebugContext *Dbg = nullptr);
 
   static void
   mergeDebugSymbols(std::vector<std::pair<va_t, std::string>> &FuncEntries,

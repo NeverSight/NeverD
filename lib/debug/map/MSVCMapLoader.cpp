@@ -49,7 +49,8 @@ MSVCMapDebugContext::load(const std::filesystem::path &MapPath,
   }
 
   llvm::StringRef Content = (*BufOr)->getBuffer();
-  MapDebugContextBase::parseCOFFMapContent(Content, Ctx->Functions, ImageBase);
+  MapDebugContextBase::parseCOFFMapContent(Content, Ctx->Functions, ImageBase,
+                                           &Ctx->DataObjects);
   MapDebugContextBase::parseCOFFMapLineNumbers(Content, Ctx->SourceLocations,
                                                ImageBase);
 
