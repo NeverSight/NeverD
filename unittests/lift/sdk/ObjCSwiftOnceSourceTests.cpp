@@ -1011,6 +1011,22 @@ TEST(SwiftOnceSources, BindsSharedReturnAddressor) {
   }
 }
 
+TEST(SwiftOnceSources, BindsSharedReturnAddressorAfterIfElseStructuring) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    AddressorFixture F(Architecture, true);
+    F.Pipeline.HighFuncs[0].Body[1].Kind = StmtKind::IfElse;
+
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.Addressors.size(), 1U);
+    EXPECT_EQ(Plan.Addressors.begin()->second.Predicate,
+              AddressorFixture::PredicateAddress);
+    EXPECT_EQ(Plan.Addressors.begin()->second.Storage,
+              AddressorFixture::StorageAddress);
+    EXPECT_EQ(Plan.Addressors.begin()->second.Initializer,
+              AddressorFixture::InitializerAddress);
+  }
+}
+
 TEST(SwiftOnceSources, SharedReturnAddressorRequiresExactControlFlow) {
   for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
     SCOPED_TRACE(Mutation);

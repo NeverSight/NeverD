@@ -673,7 +673,10 @@ addressorContract(const HighFunc &F, const BinaryImage &Image) {
       (F.ReturnType->Kind != NdTypeKind::Int &&
        F.ReturnType->Kind != NdTypeKind::Ptr) ||
       Body.size() != 3 || Body[0]->Kind != StmtKind::Assign || !Body[0]->Dst ||
-      !Body[0]->Val || Body[1]->Kind != StmtKind::If || !Body[1]->Cond ||
+      !Body[0]->Val ||
+      (Body[1]->Kind != StmtKind::If &&
+       Body[1]->Kind != StmtKind::IfElse) ||
+      !Body[1]->Cond ||
       Body[2]->Kind != StmtKind::Return || !Body[2]->RetVal)
     return std::nullopt;
   const bool BranchReturn =
