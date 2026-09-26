@@ -76,6 +76,27 @@ std::string unsignedCmpOperand(const std::string &S) {
   return looksUnsignedCExpr(S) ? S : "(unsigned)" + S;
 }
 
+std::string signedIntegerOperand(const llvm::Value *Value,
+                                 const std::string &Text) {
+  const unsigned Width = Value->getType()->getIntegerBitWidth();
+  if (Width > 128)
+    throw std::runtime_error("LLVMC signed operand exceeds 128-bit carrier");
+  const unsigned Carrier = Width <= 8    ? 8
+                           : Width <= 16 ? 16
+                           : Width <= 32 ? 32
+                           : Width <= 64 ? 64
+                                         : 128;
+  const std::string Signed =
+      Carrier == 128 ? "__int128_t" : "int" + std::to_string(Carrier) + "_t";
+  if (Width == Carrier)
+    return "(" + Signed + ")(" + Text + ")";
+  const std::string Unsigned =
+      Carrier == 128 ? "__uint128_t" : "uint" + std::to_string(Carrier) + "_t";
+  const std::string Shift = std::to_string(Carrier - Width);
+  return "((" + Signed + ")((" + Unsigned + ")(" + Text + ") << " +
+         Shift + ") >> " + Shift + ")";
+}
+
 /// Drop one parenthesis pair that wraps a whole compare operand. `&&` and
 /// `||` inside stay wrapped so they do not bind tighter than the compare.
 std::string peelOperandWrap(std::string S) {
@@ -106,6 +127,20 @@ std::string syntheticFrameSlotName(int64_t Disp) {
   return (Disp < 0 ? "var_m" : "var_") + llvm::utohexstr(Mag);
 }
 
+const llvm::Value *losslessIntegerView(const llvm::CastInst *Cast) {
+  // Boolean zero-extension preserves the predicate. Other width changes
+  // must remain visible unless a matching extension/truncation cancels.
+  if (llvm::isa<llvm::ZExtInst>(Cast) && Cast->getSrcTy()->isIntegerTy(1))
+    return Cast->getOperand(0);
+  if (llvm::isa<llvm::TruncInst>(Cast)) {
+    const auto *Extension = llvm::dyn_cast<llvm::CastInst>(Cast->getOperand(0));
+    if (Extension && llvm::isa<llvm::ZExtInst, llvm::SExtInst>(Extension) &&
+        Extension->getSrcTy() == Cast->getDestTy())
+      return Extension->getOperand(0);
+  }
+  return nullptr;
+}
+
 bool orCanPeelAsAdd(const llvm::Value *Base, const llvm::ConstantInt *Bits) {
   if (Bits->isZero())
     return true;
@@ -126,9 +161,8 @@ const llvm::Value *LLVMCWriter::peelIntegerView(const llvm::Value *V) const {
   std::set<const llvm::Value *> Seen;
   while (V && Seen.insert(V).second) {
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (llvm::isa<llvm::ZExtInst, llvm::TruncInst>(Cast) &&
-          Cast->getSrcTy()->isIntegerTy() && Cast->getDestTy()->isIntegerTy()) {
-        V = Cast->getOperand(0);
+      if (const llvm::Value *Inner = losslessIntegerView(Cast)) {
+        V = Inner;
         continue;
       }
     }
@@ -444,7 +478,8 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
       return "(" + typeToCLLVM(CE->getType()) + ")(void*)" + valueStr(Src);
     }
     if (CE->getOpcode() == llvm::Instruction::IntToPtr) {
-      if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(CE->getOperand(0)))
+      if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(CE->getOperand(0));
+          CI && CI->getBitWidth() <= 64)
         if (auto Lit = imageStringLiteral(Img, CI->getZExtValue(),
                                          /*AllowEmpty=*/true))
           return *Lit;
@@ -516,10 +551,27 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
 
 std::optional<std::string>
 LLVMCWriter::foldImmediate(const llvm::Value *V) const {
-  // Wide constants use constStr's explicit carrier expression. Decimal text
-  // and the scalar-home cache are limited to 64-bit integer values.
-  if (!V || (V->getType()->isIntegerTy() &&
-             V->getType()->getIntegerBitWidth() > 64))
+  auto SupportsWidth = [](const llvm::Value *Value) {
+    return Value && (!Value->getType()->isIntegerTy() ||
+                     Value->getType()->getIntegerBitWidth() <= 64);
+  };
+  auto ParseInteger = [](llvm::StringRef Text,
+                         unsigned Width) -> std::optional<llvm::APInt> {
+    const bool Negative = Text.consume_front("-");
+    llvm::APInt Bits;
+    if (Text.getAsInteger(0, Bits))
+      return std::nullopt;
+    Bits = Bits.zextOrTrunc(Width);
+    return Negative ? -Bits : Bits;
+  };
+  auto IntegerText = [](const llvm::APInt &Bits) {
+    if (Bits.getBitWidth() == 1)
+      return Bits.isZero() ? std::string("0") : std::string("1");
+    return Bits.isNegative() ? std::to_string(Bits.getSExtValue())
+                             : std::to_string(Bits.getZExtValue());
+  };
+  // Wider values retain their full representation through constStr/renderInline.
+  if (!SupportsWidth(V) || llvm::isa<llvm::FreezeInst>(V))
     return std::nullopt;
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(V))
     if (!Load->isSimple())
@@ -534,6 +586,8 @@ LLVMCWriter::foldImmediate(const llvm::Value *V) const {
   if (isUnknownPlaceholder(V))
     return std::nullopt;
   if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(V)) {
+    if (CI->getBitWidth() > 64)
+      return std::nullopt;
     if (CI->getType()->isIntegerTy(1))
       return CI->isZero() ? std::string("0") : std::string("1");
     if (CI->isNegative() && CI->getBitWidth() <= 64)
@@ -557,15 +611,16 @@ LLVMCWriter::foldImmediate(const llvm::Value *V) const {
   llvm::SmallPtrSet<const llvm::Value *, 16> Seen;
   auto Rec = [&](auto &&Self, const llvm::Value *Cur)
       -> std::optional<std::string> {
-    if (!Cur || !Seen.insert(Cur).second ||
-        (Cur->getType()->isIntegerTy() &&
-         Cur->getType()->getIntegerBitWidth() > 64))
+    if (!SupportsWidth(Cur) || llvm::isa<llvm::FreezeInst>(Cur) ||
+        !Seen.insert(Cur).second)
       return std::nullopt;
     if (auto Known = KnownImmediates.find(Cur); Known != KnownImmediates.end())
       return Known->second;
     if (isUnknownPlaceholder(Cur))
       return std::nullopt;
     if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Cur)) {
+      if (CI->getBitWidth() > 64)
+        return std::nullopt;
       if (CI->getType()->isIntegerTy(1))
         return CI->isZero() ? std::string("0") : std::string("1");
       if (CI->isNegative() && CI->getBitWidth() <= 64)
@@ -601,35 +656,45 @@ LLVMCWriter::foldImmediate(const llvm::Value *V) const {
       return std::nullopt;
     }
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Cur)) {
-      auto Imm = Self(Self, Cast->getOperand(0));
-      if (!Imm ||
-          !llvm::isa<llvm::SExtInst, llvm::ZExtInst, llvm::TruncInst>(Cast))
-        return Imm;
-      // The folded text represents the source's bits. Reapply the integer
-      // cast before bypassing castStr, including i1 sign extension and
-      // truncations reached through scalar homes.
-      llvm::StringRef Text(*Imm);
-      const bool Negative = Text.consume_front("-");
-      llvm::APInt Bits;
-      if (Text.getAsInteger(0, Bits))
+      if (!Cast->getSrcTy()->isIntegerTy() ||
+          !Cast->getDestTy()->isIntegerTy())
+        return std::nullopt;
+      auto Text = Self(Self, Cast->getOperand(0));
+      if (!Text)
+        return std::nullopt;
+      auto Bits = ParseInteger(*Text, Cast->getSrcTy()->getIntegerBitWidth());
+      if (!Bits)
+        return std::nullopt;
+      const unsigned Width = Cast->getDestTy()->getIntegerBitWidth();
+      switch (Cast->getOpcode()) {
+      case llvm::Instruction::Trunc:
+        *Bits = Bits->trunc(Width);
+        break;
+      case llvm::Instruction::ZExt:
+        *Bits = Bits->zext(Width);
+        break;
+      case llvm::Instruction::SExt:
+        *Bits = Bits->sext(Width);
+        break;
+      case llvm::Instruction::BitCast:
+        break;
+      default:
+        return std::nullopt;
+      }
+      llvm::StringRef OriginalText(*Text);
+      const bool Negative = OriginalText.consume_front("-");
+      llvm::APInt OriginalBits;
+      if (OriginalText.getAsInteger(0, OriginalBits))
         return std::nullopt;
       llvm::SmallString<64> Original;
-      Bits.toString(Original, 10, false);
+      OriginalBits.toString(Original, 10, false);
       if (Negative)
         Original.insert(Original.begin(), '-');
-      Bits = Bits.zextOrTrunc(Cast->getSrcTy()->getIntegerBitWidth());
-      if (Negative)
-        Bits = -Bits;
-      const unsigned DestBits = Cast->getDestTy()->getIntegerBitWidth();
-      Bits = llvm::isa<llvm::SExtInst>(Cast) ? Bits.sext(DestBits)
-                                             : Bits.zextOrTrunc(DestBits);
       llvm::SmallString<64> Folded;
-      Bits.toString(Folded, 10, llvm::isa<llvm::SExtInst>(Cast));
+      Bits->toString(Folded, 10, llvm::isa<llvm::SExtInst>(Cast));
       // Preserve hexadecimal constants when the cast kept their value.
-      return Folded == Original ? Imm : std::optional(Folded.str().str());
+      return Folded == Original ? Text : std::optional(Folded.str().str());
     }
-    if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Cur))
-      return Self(Self, Fr->getOperand(0));
     if (const auto *Phi = llvm::dyn_cast<llvm::PHINode>(Cur)) {
       if (Phi->getNumIncomingValues() == 0)
         return std::nullopt;
@@ -686,15 +751,26 @@ LLVMCWriter::foldImmediate(const llvm::Value *V) const {
           BO->getOpcode() == llvm::Instruction::Sub) {
         auto LHS = Self(Self, BO->getOperand(0));
         auto RHS = Self(Self, BO->getOperand(1));
-        uint64_t A = 0;
-        uint64_t B = 0;
-        if (LHS && RHS && !llvm::StringRef(*LHS).getAsInteger(0, A) &&
-            !llvm::StringRef(*RHS).getAsInteger(0, B)) {
-          const uint64_t Sum = BO->getOpcode() == llvm::Instruction::Add
-                                   ? A + B
-                                   : A - B;
-          return std::to_string(Sum);
+        if (!LHS || !RHS || !BO->getType()->isIntegerTy())
+          return std::nullopt;
+        const unsigned Width = BO->getType()->getIntegerBitWidth();
+        auto A = ParseInteger(*LHS, Width);
+        auto B = ParseInteger(*RHS, Width);
+        if (!A || !B)
+          return std::nullopt;
+        const bool Add = BO->getOpcode() == llvm::Instruction::Add;
+        bool Overflow = false;
+        if (BO->hasNoUnsignedWrap()) {
+          (void)(Add ? A->uadd_ov(*B, Overflow) : A->usub_ov(*B, Overflow));
+          if (Overflow)
+            return std::nullopt;
         }
+        if (BO->hasNoSignedWrap()) {
+          (void)(Add ? A->sadd_ov(*B, Overflow) : A->ssub_ov(*B, Overflow));
+          if (Overflow)
+            return std::nullopt;
+        }
+        return IntegerText(Add ? *A + *B : *A - *B);
       }
     }
     return std::nullopt;
@@ -1248,6 +1324,10 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
 
 std::optional<std::pair<const llvm::Value *, uint64_t>>
 LLVMCWriter::peelPointerOffset(const llvm::Value *V) const {
+  if (auto It = Analysis.FramePointerLocations.find(V);
+      It != Analysis.FramePointerLocations.end())
+    return std::make_pair(It->second.first,
+                          static_cast<uint64_t>(It->second.second));
   uint64_t Off = 0;
   llvm::SmallPtrSet<const llvm::Value *, 32> Seen;
   static thread_local int PeelDepth = 0;
@@ -1455,8 +1535,8 @@ const llvm::Value *peelMulScale(
   std::set<const llvm::Value *> Seen;
   while (V && Seen.insert(V).second) {
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast)) {
-        V = Cast->getOperand(0);
+      if (const llvm::Value *Inner = losslessIntegerView(Cast)) {
+        V = Inner;
         continue;
       }
     }
@@ -1571,8 +1651,8 @@ std::string LLVMCWriter::indexExprStr(const llvm::Value *V) {
       if (!Load->isSimple())
         return getName(Load);
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast)) {
-        V = Cast->getOperand(0);
+      if (const llvm::Value *Inner = peelIntegerView(Cast); Inner != Cast) {
+        V = Inner;
         continue;
       }
     }
@@ -1592,13 +1672,28 @@ std::string LLVMCWriter::indexExprStr(const llvm::Value *V) {
   }
   if (!V)
     return {};
+  if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
+    if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(Cast)) {
+      const std::string Inner = indexExprStr(Cast->getOperand(0));
+      if (!Inner.empty())
+        return castStr(Cast->getOpcode(), Inner, Cast->getSrcTy(),
+                       Cast->getDestTy());
+    }
+  }
   if (const auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(V)) {
     if (BO->getOpcode() == llvm::Instruction::URem ||
         BO->getOpcode() == llvm::Instruction::SRem) {
       const std::string LHS = indexExprStr(BO->getOperand(0));
       const std::string RHS = indexExprStr(BO->getOperand(1));
-      if (!LHS.empty() && !RHS.empty())
-        return LHS + " % " + RHS;
+      if (!LHS.empty() && !RHS.empty()) {
+        if (BO->getOpcode() == llvm::Instruction::URem) {
+          const std::string Type = typeToCLLVM(BO->getType());
+          return "((" + Type + ")(" + LHS + ") % (" + Type + ")(" +
+                 RHS + "))";
+        }
+        return "(" + signedIntegerOperand(BO->getOperand(0), LHS) + " % " +
+               signedIntegerOperand(BO->getOperand(1), RHS) + ")";
+      }
     }
   }
   if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(V)) {
@@ -1732,15 +1827,15 @@ LLVMCWriter::invertedRelationalText(const llvm::Value *V) {
       }
     }
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast)) {
-        V = Cast->getOperand(0);
+      if (const llvm::Value *Inner = peelIntegerView(Cast); Inner != Cast) {
+        V = Inner;
         continue;
       }
     }
     if (const auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(V)) {
       if (BO->getOpcode() == llvm::Instruction::Or)
         if (const llvm::Value *Core = jleZeroCore(BO))
-          return valueStr(Core) + " > 0";
+          return signedIntegerOperand(Core, valueStr(Core)) + " > 0";
       return std::nullopt;
     }
     if (const auto *ICmp = llvm::dyn_cast<llvm::ICmpInst>(V)) {
@@ -1792,8 +1887,8 @@ std::string LLVMCWriter::condStr(const llvm::Value *V) {
       }
     }
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast)) {
-        V = Cast->getOperand(0);
+      if (const llvm::Value *Inner = peelIntegerView(Cast); Inner != Cast) {
+        V = Inner;
         continue;
       }
     }
@@ -1869,7 +1964,7 @@ std::string LLVMCWriter::condStr(const llvm::Value *V) {
         }
         if (BO->getOpcode() == llvm::Instruction::Or)
           if (const llvm::Value *Core = jleZeroCore(BO))
-            return valueStr(Core) + " <= 0";
+            return signedIntegerOperand(Core, valueStr(Core)) + " <= 0";
         if (llvm::isa<llvm::ICmpInst>(LHS) && llvm::isa<llvm::ICmpInst>(RHS)) {
           const char *Op =
               BO->getOpcode() == llvm::Instruction::Or ? " || " : " && ";
@@ -1919,8 +2014,8 @@ bool LLVMCWriter::isComposedRemValue(const llvm::Value *V) {
   std::set<const llvm::Value *> Seen;
   while (V && Seen.insert(V).second) {
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast)) {
-        V = Cast->getOperand(0);
+      if (const llvm::Value *Inner = peelIntegerView(Cast); Inner != Cast) {
+        V = Inner;
         continue;
       }
     }
@@ -2120,12 +2215,20 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V) {
   }
   if (isCallClobberValue(V))
     return "0 /* unknown */";
-  if (auto Imm = foldImmediate(V))
-    return *Imm;
-  // Every nonconstant freeze denotes its one materialized choice. Display
-  // aliases must not replace it with the potentially poison input expression.
   if (llvm::isa<llvm::FreezeInst>(V))
     return getName(V);
+  if (auto Imm = foldImmediate(V))
+    return *Imm;
+  if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V);
+      Cast && llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(Cast)) {
+    if (const llvm::Value *Inner = losslessIntegerView(Cast);
+        Inner && Inner->getType() == Cast->getType())
+      return valueStr(Inner);
+    // Typed/composed display names can describe the operand, but cannot
+    // replace a width-changing value. Keep materialized casts single-use
+    // here so an inlined producer is not evaluated again for every use.
+    return Analysis.Inlinable.count(Cast) ? renderInline(*Cast) : getName(Cast);
+  }
   if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(V))
     if (std::string Addr = ctorThisAddress(*CB); !Addr.empty())
       return Addr;
@@ -2340,42 +2443,63 @@ std::string LLVMCWriter::integerPointerOperandStr(const llvm::Value *Operand) {
     return Text;
   // The pointer-offset printer may return `&frame` for an integer IR value.
   // Integer operations on that value need its address representation in C.
-  return "(" + typeToCLLVM(Operand->getType()) + ")(uintptr_t)(" + Text +
-         ")";
+  return "(" + typeToCLLVM(Operand->getType()) + ")(uintptr_t)(" + Text + ")";
 }
 
 std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
                                  llvm::Type *SrcTy, llvm::Type *DstTy) {
-  std::string Dst = typeToCLLVM(DstTy);
-  if (Opcode == llvm::Instruction::SExt && SrcTy->isIntegerTy() &&
-      DstTy->isIntegerTy()) {
-    const unsigned Bits = SrcTy->getIntegerBitWidth();
-    if (Bits == 1)
-      return "(" + Dst + ")(0 - (" + Src + " & 1))";
-    if (Bits == 8 || Bits == 16 || Bits == 32 || Bits == 64 || Bits == 128) {
-      const std::string Signed =
-          Bits == 128 ? "__int128_t" : "int" + std::to_string(Bits) + "_t";
-      return "(" + Dst + ")(" + Signed + ")(" + Src + ")";
+  const std::string Dst = typeToCLLVM(DstTy);
+  if (!SrcTy->isIntegerTy() || !DstTy->isIntegerTy())
+    return "(" + Dst + ")" + Src;
+  const unsigned SrcWidth = SrcTy->getIntegerBitWidth();
+  const unsigned DstWidth = DstTy->getIntegerBitWidth();
+  if (SrcWidth > 128 || DstWidth > 128)
+    throw std::runtime_error("LLVMC integer cast exceeds 128-bit carrier");
+
+  auto Cast = [](const std::string &Type, const std::string &Text) {
+    return "(" + Type + ")(" + Text + ")";
+  };
+  auto Normalize = [&](const std::string &Text, llvm::Type *Type) {
+    const unsigned Width = Type->getIntegerBitWidth();
+    const std::string Carrier = typeToCLLVM(Type);
+    std::string Result = Cast(Carrier, Text);
+    const std::string Prefix = "(" + Carrier + ")";
+    if (Text.starts_with(Prefix)) {
+      const std::string Operand = Text.substr(Prefix.size());
+      if (peelOperandWrap(Operand) != Operand)
+        Result = Text;
     }
-    // For non-C integer widths, extend by shifting the sign bit to the
-    // destination width in unsigned arithmetic, then shifting it back as
-    // signed. The source is evaluated once.
-    const unsigned DestBits = DstTy->getIntegerBitWidth();
-    if (DestBits == 8 || DestBits == 16 || DestBits == 32 || DestBits == 64 ||
-        DestBits == 128) {
-      const std::string Signed = DestBits == 128
-                                     ? "__int128_t"
-                                     : "int" + std::to_string(DestBits) + "_t";
-      const std::string Shift = std::to_string(DestBits - Bits);
-      return "(" + Dst + ")((" + Signed + ")((" + Dst + ")(" + Src + ") << " +
-             Shift + ") >> " + Shift + ")";
+    if (Width != 8 && Width != 16 && Width != 32 && Width != 64 && Width != 128)
+      Result = "(" + Result + " & (((" + Carrier + ")1 << " +
+               std::to_string(Width) + ") - 1))";
+    return Result;
+  };
+  switch (Opcode) {
+  case llvm::Instruction::Trunc:
+    return Normalize(Src, DstTy);
+  case llvm::Instruction::ZExt:
+    // A folded constant may use a negative spelling, and narrow C integers
+    // promote to int. Reestablish the source bit pattern before widening.
+    return Cast(Dst, Normalize(Src, SrcTy));
+  case llvm::Instruction::SExt: {
+    if (SrcWidth == 8 || SrcWidth == 16 || SrcWidth == 32 || SrcWidth == 64) {
+      const std::string Signed = "int" + std::to_string(SrcWidth) + "_t";
+      return Normalize(Cast(Signed, Src), DstTy);
     }
+    // LLVM also permits widths without a signed C carrier. Move the sign bit
+    // into an unsigned destination and extend it without signed overflow.
+    const std::string Sign =
+        "((" + Dst + ")1 << " + std::to_string(SrcWidth - 1) + ")";
+    const std::string Value = Cast(Dst, Normalize(Src, SrcTy));
+    return Normalize("(" + Value + " ^ " + Sign + ") - " + Sign, DstTy);
   }
-  return "(" + Dst + ")" + Src;
+  default:
+    return "(" + Dst + ")" + Src;
+  }
 }
 
 bool LLVMCWriter::operandIsUnsignedWidth(const llvm::Value *V,
-                                          unsigned Bits) const {
+                                         unsigned Bits) const {
   if (!V || Bits == 0 || Bits % 8 != 0 || Bits > 128)
     return false;
   const llvm::Value *Cur = peelIntegerView(V);
@@ -2487,9 +2611,8 @@ std::string LLVMCWriter::logicalShiftLhs(const llvm::Instruction &Shift,
   }
   if (!Widen)
     return LHS;
-  const llvm::Value *Root = peelIntegerView(Widen->getOperand(0));
-  const std::string Inner = valueStr(Root ? Root : Widen->getOperand(0));
-  return "(" + typeToCLLVM(Widen->getDestTy()) + ")" + Inner;
+  return castStr(Widen->getOpcode(), valueStr(Widen->getOperand(0)),
+                 Widen->getSrcTy(), Widen->getDestTy());
 }
 
 std::string LLVMCWriter::icmpInlineText(const llvm::ICmpInst &CI) {
@@ -2560,31 +2683,20 @@ std::string LLVMCWriter::renderInline(const llvm::Instruction &Inst) {
         L = SourceAtDest(Bin->getOperand(0));
         R = SourceAtDest(Bin->getOperand(1));
       }
-      if (L && R && DestW >= 32)
+      if (L && R && (DestW == 32 || DestW == 64 || DestW == 128))
         return "(" + binopStr(Op, valueStr(L), valueStr(R), Trunc->getType()) +
                ")";
       if (L && R) {
-        llvm::Type *CarrierTy =
-            BinW >= 32 ? Bin->getType()
-                       : llvm::Type::getInt32Ty(Bin->getContext());
+        llvm::Type *CarrierTy = BinW >= 32
+                                    ? Bin->getType()
+                                    : llvm::Type::getInt32Ty(Bin->getContext());
         const std::string Carrier = "(" + typeToCLLVM(CarrierTy) + ")";
-        return "(" + typeToCLLVM(Trunc->getType()) + ")(" +
-               binopStr(Op, Carrier + valueStr(L), Carrier + valueStr(R),
-                        Trunc->getType()) +
-               ")";
+        return castStr(llvm::Instruction::Trunc,
+                       binopStr(Op, Carrier + valueStr(L),
+                                Carrier + valueStr(R), Trunc->getType()),
+                       CarrierTy, Trunc->getType());
       }
     }
-  }
-  if (Inst.isCast() && llvm::isa<llvm::ZExtInst, llvm::TruncInst>(&Inst) &&
-      Inst.getType()->isIntegerTy() &&
-      Inst.getOperand(0)->getType()->isIntegerTy()) {
-    const llvm::Value *Root = peelIntegerView(Inst.getOperand(0));
-    const std::string RootText = valueStr(Root);
-    const unsigned DestW = Inst.getType()->getIntegerBitWidth();
-    const unsigned RootW = Root->getType()->getIntegerBitWidth();
-    if (DestW == RootW)
-      return RootText;
-    return "(" + typeToCLLVM(Inst.getType()) + ")" + RootText;
   }
   if (Inst.isCast()) {
     auto Src = valueStr(Inst.getOperand(0));

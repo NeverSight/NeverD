@@ -47,9 +47,9 @@ bool CFGBuilder::isKnownFunctionEntry(va_t Addr) const {
 }
 
 bool CFGBuilder::isCurrentOwnedFragment(va_t Addr) const {
-  return CurrentImg && isExplicitlyOwnedFunctionFragment(
-                           *CurrentImg, CurrentFuncEntry, Addr,
-                           ExecutableCodeOwners);
+  return CurrentImg &&
+         isExplicitlyOwnedFunctionFragment(*CurrentImg, CurrentFuncEntry, Addr,
+                                           ExecutableCodeOwners);
 }
 
 va_t CFGBuilder::nextKnownFunctionEntry(va_t After) const {
@@ -143,20 +143,20 @@ bool isBackwardSharedEpilogue(const BinaryImage &Image, va_t FunctionEntry,
         Contains(Image.RuntimeFunctionAddrs) ||
         Contains(Image.VerifiedFunctionEntries))
       return true;
-    return std::any_of(Image.Symbols.begin(), Image.Symbols.end(),
-                       [&](const Symbol &Symbol) {
-                         return Symbol.IsFunc && Symbol.Addr > Target &&
-                                Symbol.Addr < End;
-                       });
+    return std::any_of(
+        Image.Symbols.begin(), Image.Symbols.end(), [&](const Symbol &Symbol) {
+          return Symbol.IsFunc && Symbol.Addr > Target && Symbol.Addr < End;
+        });
   };
-  const auto BranchTarget = [](uint32_t Word, va_t Address)
-      -> std::optional<va_t> {
+  const auto BranchTarget = [](uint32_t Word,
+                               va_t Address) -> std::optional<va_t> {
     if ((Word & 0xfc000000) != 0x14000000u)
       return std::nullopt;
     const uint32_t Immediate = Word & 0x03ffffff;
-    const int64_t Offset = (Immediate & 0x02000000
-                                ? int64_t(Immediate) - 0x04000000
-                                : int64_t(Immediate)) * 4;
+    const int64_t Offset =
+        (Immediate & 0x02000000 ? int64_t(Immediate) - 0x04000000
+                                : int64_t(Immediate)) *
+        4;
     if ((Offset < 0 && Address < uint64_t(-Offset)) ||
         (Offset >= 0 && Address > InvalidVA - uint64_t(Offset)))
       return std::nullopt;
@@ -1272,8 +1272,7 @@ bool CFGBuilder::prepareCandidateFiniteProofScratch(
       !Add(PublishedBlockStarts.size(), 16) ||
       !Add(PublishedReachableInsns.size(), 24) ||
       !Add(PersistentCFGRoots.size(), 24) ||
-      !Add(OrdinaryCFGRoots.size(), 24) ||
-      !Add(DurableCFGRoots.size(), 24) ||
+      !Add(OrdinaryCFGRoots.size(), 24) || !Add(DurableCFGRoots.size(), 24) ||
       !Add(RelocationCFGRootSources.size(), 64) ||
       !Add(DiscoveredCodeRefSources.size(), 64) ||
       !Add(ExploredAddrs.getMemorySize() / sizeof(va_t), 12) ||
@@ -1295,8 +1294,7 @@ bool CFGBuilder::prepareCandidateFiniteProofScratch(
       return Incomplete();
   for (const auto &[Addr, Rec] : Insns) {
     (void)Addr;
-    if (!Add(Rec.Ops.size(), 384) ||
-        !Add(Rec.JumpTableTargets.size(), 24))
+    if (!Add(Rec.Ops.size(), 384) || !Add(Rec.JumpTableTargets.size(), 24))
       return Incomplete();
   }
   for (const auto &[Target, Sources] : RelocationCFGRootSources) {
@@ -1372,13 +1370,11 @@ bool CFGBuilder::prepareCandidateFiniteProofScratch(
       FiniteSetSymbolEvidenceBudgetForTesting;
   Scratch.StackTableEvidenceRemaining = StackTableEvidenceRemaining;
   Scratch.CrossFunctionContinuationRoots = CrossFunctionContinuationRoots;
-  Scratch.ProtectedJumpTableRelocationSlots =
-      ProtectedJumpTableRelocationSlots;
+  Scratch.ProtectedJumpTableRelocationSlots = ProtectedJumpTableRelocationSlots;
   Scratch.UnsafeJumpTableBranches = UnsafeJumpTableBranches;
   Scratch.ActiveJumpTableProofRoots = ActiveJumpTableProofRoots;
   Scratch.ActiveJumpTableCandidateAddr = ActiveJumpTableCandidateAddr;
-  Scratch.ActiveJumpTableCandidateProofRank =
-      ActiveJumpTableCandidateProofRank;
+  Scratch.ActiveJumpTableCandidateProofRank = ActiveJumpTableCandidateProofRank;
   Scratch.ActiveJumpTableCandidateDependencyRank =
       ActiveJumpTableCandidateDependencyRank;
   Scratch.JumpTableProofContextComplete = JumpTableProofContextComplete;
@@ -1421,8 +1417,7 @@ bool CFGBuilder::prepareCandidateFiniteProofScratch(
   bool HavePrevious = false;
   for (const auto &[Addr, Rec] : Scratch.Insns) {
     if (Rec.Size == 0 ||
-        static_cast<va_t>(Rec.Size) >
-            std::numeric_limits<va_t>::max() - Addr ||
+        static_cast<va_t>(Rec.Size) > std::numeric_limits<va_t>::max() - Addr ||
         (HavePrevious && Addr < PreviousEnd))
       return false;
     PreviousEnd = Addr + static_cast<va_t>(Rec.Size);
@@ -1432,8 +1427,8 @@ bool CFGBuilder::prepareCandidateFiniteProofScratch(
     if (!Img.hasExecutableCodeOwnerRange(Addr, Rec.Size) ||
         (Addr != CurrentFuncEntry && !isCurrentOwnedFragment(Addr) &&
          !isCurrentExceptionalEntry(Addr) &&
-         (Addr <= CurrentFuncRange->first ||
-          Addr >= CurrentFuncRange->second || isKnownFunctionEntry(Addr))))
+         (Addr <= CurrentFuncRange->first || Addr >= CurrentFuncRange->second ||
+          isKnownFunctionEntry(Addr))))
       return false;
   }
   return true;
@@ -1467,9 +1462,9 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // thousand-op CFG and leaves the real PDB symbol as an empty HighC stub.
       if (Cur != CurrentFuncEntry && isKnownFunctionEntry(Cur) &&
           !isCurrentExceptionalEntry(Cur) && !isCurrentOwnedFragment(Cur) &&
-          (!SourceBranch || !isBackwardSharedEpilogue(
-                                Img, CurrentFuncEntry, *SourceBranch, Cur,
-                                KnownFuncEntries)))
+          (!SourceBranch ||
+           !isBackwardSharedEpilogue(Img, CurrentFuncEntry, *SourceBranch, Cur,
+                                     KnownFuncEntries)))
         break;
       SourceBranch.reset();
       if (CandidateFiniteProofDecodeOnly) {
@@ -1481,8 +1476,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         // the hard cap bounds an unexpectedly large direct-path closure.
         constexpr size_t MaxScratchDecodeAttempts = 1024;
         const std::optional<size_t> OwnerWork =
-            candidateFiniteProofOwnerLookupWork(Img,
-                                                knownFunctionEntryCount());
+            candidateFiniteProofOwnerLookupWork(Img, knownFunctionEntryCount());
         size_t ScratchDecodeWork = 8192;
         if (!OwnerWork ||
             !detail::addLinearComparisonWork(ScratchDecodeWork, *OwnerWork,
@@ -4515,8 +4509,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       return true;
     };
     bool HasRelativeTable = false;
-    bool RevokePublishedTables =
-        !DebitClosure(ResolvedTableInfo.size());
+    bool RevokePublishedTables = !DebitClosure(ResolvedTableInfo.size());
     if (RevokePublishedTables)
       HasRelativeTable = true;
     if (!RevokePublishedTables)
@@ -4576,9 +4569,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           continue;
         bool ReachabilityComplete = false;
         const std::set<va_t> Reachable = candidateReachableInstructions(
-            Branch->second, Branch->second.JumpTableTargets,
-            PersistentCFGRoots, Info.StorageRanges, &ClosureBudget,
-            &ReachabilityComplete);
+            Branch->second, Branch->second.JumpTableTargets, PersistentCFGRoots,
+            Info.StorageRanges, &ClosureBudget, &ReachabilityComplete);
         if (!ReachabilityComplete ||
             Reachable.size() == std::numeric_limits<size_t>::max() ||
             !DebitClosure(Reachable.size() + 1) ||
@@ -4599,8 +4591,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         }
         for (va_t ReachableAddr : Reachable) {
           const auto Open = Insns.find(ReachableAddr);
-          if (Open != Insns.end() &&
-              CanReenterAtUnknownAddress(Open->second)) {
+          if (Open != Insns.end() && CanReenterAtUnknownAddress(Open->second)) {
             RevokePublishedTables = true;
             break;
           }

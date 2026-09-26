@@ -62,9 +62,6 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
 /// True for a known libc noreturn call or architectural x86 fast-fail.
 /// Caller return shapes cannot prove that an unknown callee never returns.
 bool isNoreturnCallExpr(const HighExpr &E);
-/// Compatibility overload for call sites that already carry analysis state.
-/// Only independently proven call effects authorize omitting a result.
-bool isNoreturnCallExpr(const HighCAnalysisState &State, const HighExpr &E);
 
 void collectUsedVarsExpr(const HighExpr &Expr,
                          std::map<std::string, TypeRef> &Vars, VarNameFn VarFn,

@@ -640,8 +640,6 @@ _C_TYPES: dict[str, object] = {
     "neverd_translate_semantic_stop_t": ctypes.c_uint32,
     "neverd_translate_proof_status_t": ctypes.c_uint32,
     "neverd_sanitize_status_t": ctypes.c_uint32,
-    "void *": ctypes.c_void_p,
-    "neverd_load_progress_fn": ctypes.c_void_p,
     "const char *": ctypes.c_char_p,
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -733,9 +731,9 @@ _declare(
     ["neverd_session_t", "neverd_va_t"],
 )
 _declare(
-    "neverd_session_set_load_progress",
-    "void",
-    ["neverd_session_t", "neverd_load_progress_fn", "void *"],
+    "neverd_session_resolve_function_name_before_load",
+    "neverd_va_t",
+    ["neverd_session_t", "const char *", "const char *"],
 )
 _declare("neverd_session_is_loaded", "int", ["neverd_session_t"])
 _declare("neverd_session_analyze", "int", ["neverd_session_t"])

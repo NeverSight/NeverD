@@ -672,8 +672,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     // Flag lowering leaves PF/AF/OF writes that no remaining COND_BR reads.
     // Without DCE those become LLVMC `__builtin_popcount` / flag SSA noise on
     // `test`/`cmp` that only consume ZF.
-    runDce(Func);
-    debugVerifyMedFunc(Func, "runDce");
+    if (TheArch == Arch::X86 || TheArch == Arch::X64) {
+      runDce(Func);
+      debugVerifyMedFunc(Func, "runDce");
+    }
 
     // Bind public LowIR selector occurrences only after every MedIR rewrite and
     // SSA/propagation pass has finished.  A source op that disappeared, was

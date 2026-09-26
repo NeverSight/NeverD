@@ -60,6 +60,7 @@ struct FrameAliases {
   std::set<FrameLocation> Locations;
   bool Incomplete = false;
   bool HasNonFrameAlternative = false;
+  bool UsesCarrierLoad = false;
   std::set<const llvm::AllocaInst *> Frames;
 };
 
@@ -171,8 +172,10 @@ inline FrameAliases peelSyntheticFrames(const llvm::Value *V,
           // Only a scalar alloca carrier transports its stored addresses.
           // A value read from frame bytes is not the address of those bytes.
           if (const auto *Slot = asAlloca(LI->getPointerOperand());
-              Slot && !isSyntheticFrameAlloca(Slot))
+              Slot && !isSyntheticFrameAlloca(Slot)) {
+            Result.UsesCarrierLoad = true;
             return Walk(Slot, Off, true, Seen);
+          }
           Result.Incomplete = true;
           return;
         }

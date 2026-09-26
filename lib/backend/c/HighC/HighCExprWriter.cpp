@@ -150,7 +150,16 @@ std::string HighCWriter::varName(const MedVar &V) const {
   }
 }
 
-std::string HighCWriter::constStr(uint64_t Val) {
+std::string HighCWriter::constStr(uint64_t Val, TypeRef Type) {
+  // A narrow bit pattern is negative only in a signed integer type.
+  // Wider masks must retain their zero upper bytes.
+  if (Type && Type->Kind == NdTypeKind::Int && Type->Size && Type->Size < 8) {
+    const unsigned Bits = Type->Size * 8;
+    const uint64_t Mask = (UINT64_C(1) << Bits) - 1;
+    Val &= Mask;
+    if (Type->IsSigned && (Val & (UINT64_C(1) << (Bits - 1))))
+      Val |= ~Mask;
+  }
   if (Val == 0)
     return "0";
   if (Val <= limits::kDecimalConstThreshold)
@@ -550,7 +559,9 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
       }
     }
     if (Atl) {
-      if (const TypeRef Expected = msvcAtlExpectedCallArgType(*Atl, I)) {
+      if (const TypeRef Expected = I == 0
+                                       ? msvcAtlSyntheticThis(Name, *Atl)
+                                       : msvcAtlExpectedCallArgType(*Atl, I)) {
         S += exprStrAsTypedArg(*Op, Expected);
         continue;
       }
@@ -670,6 +681,10 @@ void HighCWriter::collectUnknownOnlyNames(const HighFunc &Func) {
     std::set<std::string> HasKnown;
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
+        return;
+      // Machine register reuse does not redefine the incoming source
+      // parameter; statement rendering omits the same synthetic copy.
+      if (isIncomingParamReuseAssign(S))
         return;
       if (S.Dst->Kind != ExprKind::Var && S.Dst->Kind != ExprKind::Phi)
         return;
@@ -920,6 +935,8 @@ bool HighCWriter::isCtorDisplayOperand(const HighExpr *Op) const {
 bool HighCWriter::isUnknownCallOperand(const HighExpr *Op) const {
   if (!Op)
     return true;
+  if (FrameStorageActive && certifiedFrameStorageDisplacement(*Op))
+    return false;
   const HighExpr *Inner = unwrapIntegerView(Op);
   if (!Inner)
     Inner = Op;
@@ -946,7 +963,7 @@ bool HighCWriter::looksLikeHiddenSretOperand(const HighExpr *Op) const {
     return true;
   if (Inner->Kind == ExprKind::Const && Inner->ConstVal != 0)
     return true;
-  if (namedFrameSlot(*Inner))
+  if (namedFrameSlot(*Inner) || certifiedFrameStorageDisplacement(*Inner))
     return true;
   if (Inner->Type && Inner->Type->Kind == NdTypeKind::Ptr)
     return true;
@@ -1125,8 +1142,6 @@ std::string HighCWriter::exprStrAsTypedArg(const HighExpr &E,
     }
     if (!Inner)
       Inner = &E;
-    if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi)
-      return printedForwardedVar(copyForwardName(varName(Inner->Var)), 16);
     if (Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
         Inner->Operands[0]) {
       if (auto Slot = namedFrameSlot(*Inner->Operands[0]))
@@ -1134,6 +1149,11 @@ std::string HighCWriter::exprStrAsTypedArg(const HighExpr &E,
     }
     if (auto Slot = namedFrameSlot(*Inner))
       return "&" + *Slot;
+    if (const auto Disp = certifiedFrameStorageDisplacement(*Inner))
+      return "(" + typeToC(Expected) + ")(uintptr_t)(" +
+             frameStorageAddress(*Disp) + ")";
+    if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi)
+      return printedForwardedVar(copyForwardName(varName(Inner->Var)), 16);
     if (Inner->Kind == ExprKind::Addr)
       return exprStr(*Inner);
     if (Inner != &E)
@@ -2317,6 +2337,14 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
   return std::nullopt;
 }
 
+bool HighCWriter::isRegistrationEstablisherFrame(const MedVar &V) const {
+  return InEHClauseBody && Opts.TheArch == Arch::X86 && CurrentFunc &&
+         CurrentFunc->ExceptionMetadata &&
+         CurrentFunc->ExceptionMetadata->Registration &&
+         V.Kind == MedVar::Reg && V.SSAVer == 0 && V.RenameTag < 0 &&
+         V.RegOff == getTargetRegInfo(Opts.TheArch).FramePointer;
+}
+
 std::optional<int64_t> HighCWriter::certifiedFrameStorageDisplacement(
     const HighExpr &E) const {
   if (!CurrentFunc)
@@ -2331,9 +2359,9 @@ std::optional<int64_t> HighCWriter::certifiedFrameStorageDisplacement(
     if (!Cur)
       return std::nullopt;
     if (Cur->Kind == ExprKind::Var) {
-      if (!isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc,
-                                        Opts.TheArch) &&
+      if (!isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch) &&
           !isCatchFuncletParentFrame(Cur->Var) &&
+          !isRegistrationEstablisherFrame(Cur->Var) &&
           !FrameAliases.count(varName(Cur->Var)))
         return std::nullopt;
       return frameDisplacement(E);
@@ -2407,6 +2435,16 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     if (auto Reach = ReachingCatchPtrs.find(Name);
         Reach != ReachingCatchPtrs.end())
       return Reach->second;
+    if (InEHClauseBody && isCatchFuncletParentFrame(E.Var))
+      return frameStorageAddress(CurrentFunc->FrameSize > 0
+                                     ? -CurrentFunc->FrameSize
+                                     : 0);
+    // The registration handler's EBP already has an establisher identity in
+    // frameDisplacement. Keep that identity when named slots are replaced by
+    // byte storage; an independent SSA root does not make it an unknown input.
+    if (FrameStorageActive && isRegistrationEstablisherFrame(E.Var))
+      if (const auto Disp = frameDisplacement(E))
+        return frameStorageAddress(*Disp);
     if (ProjectFrameAliasesIntoStorage) {
       if (CurrentFunc && isSyntheticEntryStackPointer(E.Var, *CurrentFunc,
                                                       Opts.TheArch))
@@ -2418,10 +2456,6 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       if (auto Alias = FrameAliases.find(RawName);
           Alias != FrameAliases.end())
         return frameStorageAddress(Alias->second);
-      if (InEHClauseBody && isCatchFuncletParentFrame(E.Var))
-        return frameStorageAddress(CurrentFunc->FrameSize > 0
-                                       ? -CurrentFunc->FrameSize
-                                       : 0);
       for (const auto &[Disp, Slot] : FrameStorageSlots)
         if (Slot.Name == Name && E.Var.Kind != MedVar::Param &&
             !isEmittedParamName(Name) && !isCxxCatchObjectName(Name))
@@ -2431,12 +2465,18 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     if (auto Printed = printedForwardedVar(Name, ParentPrec);
         Printed != Name)
       return Printed;
+    // Definitions consisting only of unknown values are omitted from C.
+    // Their observable uses must still fail, including renamed SSA temps.
+    if (UnknownOnlyNames.count(Name))
+      return "(__builtin_trap(), 0 /* unknown value */)";
     // An unassigned architectural register or flag can be a genuine unknown
     // live-in. Keep the failure at the point of use instead of emitting an
     // undeclared name or inventing zero.
     if ((E.Var.Kind == MedVar::Reg || E.Var.Kind == MedVar::Flag) &&
         E.Var.SSAVer == 0 && Name == RawName &&
-        !AssignedNames.count(RawName) && !isEmittedParamName(RawName))
+        !AssignedNames.count(RawName) && !isEmittedParamName(RawName) &&
+        !(CurrentFunc && isSyntheticEntryStackPointer(E.Var, *CurrentFunc,
+                                                       Opts.TheArch)))
       return "(__builtin_trap(), 0 /* unknown register */)";
     if (auto Slot = namedFrameSlot(E)) {
       if (const auto Disp = frameDisplacement(E)) {
@@ -2460,18 +2500,7 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       return *Lit;
     if (auto Name = imageObjectName(E.ConstVal))
       return "&" + *Name;
-    // A word-shaped bit pattern is negative only in a signed narrow type.
-    // In a 64-bit mask, 0x00000000ffffffff must keep its zero upper word.
-    uint64_t Value = E.ConstVal;
-    if (E.Type && E.Type->Kind == NdTypeKind::Int && E.Type->Size &&
-        E.Type->Size < 8) {
-      const unsigned Bits = E.Type->Size * 8;
-      const uint64_t Mask = (UINT64_C(1) << Bits) - 1;
-      Value &= Mask;
-      if (E.Type->IsSigned && (Value & (UINT64_C(1) << (Bits - 1))))
-        Value |= ~Mask;
-    }
-    return constStr(Value);
+    return constStr(E.ConstVal, E.Type);
   }
   case ExprKind::Undef:
     // Do not emit the former clobber-0 operand comment. Keep a short unknown

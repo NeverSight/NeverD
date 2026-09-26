@@ -231,7 +231,7 @@ public:
   certifiedFrameStorageDisplacement(const HighExpr &E) const;
   std::optional<std::string> namedFrameSlot(const HighExpr &E) const;
   bool isNamedFrameMemory(const HighExpr &E) const;
-  std::string constStr(uint64_t Val);
+  std::string constStr(uint64_t Val, TypeRef Type = nullptr);
   std::string formatReturnExpr(const HighExpr &Expr);
   std::string collapseHiLo(const HighExpr &Expr);
   std::string unwrapCastVar(const HighExpr &E);
@@ -259,6 +259,7 @@ public:
   /// x64 catch funclets receive the parent frame in rdx (`Param` id 1). After
   /// attach that param is not the parent's rdx argument.
   bool isCatchFuncletParentFrame(const MedVar &V) const;
+  bool isRegistrationEstablisherFrame(const MedVar &V) const;
   const HighExpr *parentFrameStoredValue(const HighStmt &Stmt) const;
   std::optional<std::string> copyForwardSource(const HighExpr &E) const;
   bool isHiddenCopyForwardAssign(const HighStmt &Stmt) const;
@@ -458,6 +459,12 @@ public:
   std::set<std::string> DeclaredCNames;
   std::map<std::string, std::string> ReachingCatchPtrs;
   std::map<std::string, std::string> ReachingCatchFields;
+  struct CatchAliasBinding {
+    std::string Name;
+    bool IsPointer = false;
+  };
+  /// Exact definitions certified before named slots become backing storage.
+  std::map<const HighStmt *, CatchAliasBinding> CatchAliasDefinitions;
   void foldCxxThrowConstructors(const HighFunc &Func);
   void discoverHiddenCxxThrowCtors(const std::vector<HighFunc> &Funcs);
   void nameCxxCatchObjects(const HighFunc &Func);
@@ -465,6 +472,7 @@ public:
   void simulateCatchReaching(const HighFunc &Func);
   std::map<int, std::string> ParamDisplayNames;
   bool InEHClauseBody = false;
+  bool FrameStorageActive = false;
   /// C++ destructor unwind funclets `ret` to the personality, not the parent.
   bool InCxxCleanupBody = false;
 

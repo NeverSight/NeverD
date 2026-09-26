@@ -69,11 +69,46 @@ TEST(LLVMCFrameMemory, PhiReadsKeepBothBranchStores) {
   EXPECT_EQ(State.DeadFrameStores.count(HandlerStore), 0u);
   EXPECT_EQ(State.RawFrameLocations.count({F.Frame, 48}), 1u);
   EXPECT_EQ(State.RawFrameLocations.count({F.Frame, 104}), 1u);
+  EXPECT_EQ(State.FramePointerLocations.count(Load->getPointerOperand()), 0u);
   analyzeStoreForwarding(State, *F.Fn);
   EXPECT_EQ(State.DeadFrameAllocas.count(F.Frame), 0u);
   EXPECT_EQ(State.DeadFrameStores.count(NormalStore), 0u);
   EXPECT_EQ(State.DeadFrameStores.count(HandlerStore), 0u);
   EXPECT_EQ(State.ForwardedLoads.count(Load), 0u);
+}
+
+TEST(LLVMCFrameMemory, EqualPhiAddressesShareTheStoresFrameLocation) {
+  FrameFixture F;
+  auto *Normal = llvm::BasicBlock::Create(F.Context, "normal", F.Fn);
+  auto *Handler = llvm::BasicBlock::Create(F.Context, "handler", F.Fn);
+  auto *Join = llvm::BasicBlock::Create(F.Context, "join", F.Fn);
+  F.B.CreateCondBr(F.Fn->getArg(0), Normal, Handler);
+  F.B.SetInsertPoint(Normal);
+  auto *NormalSP = F.B.CreateSub(F.Base, F.B.getInt64(56));
+  auto *NormalPtr = F.address(NormalSP, 32);
+  F.B.CreateStore(F.B.getInt32(-100), NormalPtr);
+  F.B.CreateBr(Join);
+  F.B.SetInsertPoint(Handler);
+  auto *HandlerSP = F.B.CreateSub(F.Base, F.B.getInt64(56));
+  auto *HandlerPtr = F.address(HandlerSP, 32);
+  F.B.CreateStore(F.B.getInt32(41), HandlerPtr);
+  F.B.CreateBr(Join);
+  F.B.SetInsertPoint(Join);
+  auto *SP = F.B.CreatePHI(F.B.getInt64Ty(), 2);
+  SP->addIncoming(NormalSP, Normal);
+  SP->addIncoming(HandlerSP, Handler);
+  auto *JoinedPtr = F.address(SP, 32);
+  F.B.CreateRet(F.B.CreateLoad(F.B.getInt32Ty(), JoinedPtr));
+
+  LLVMCAnalysisState State;
+  analyzeDeadFrameStores(State, *F.Fn);
+  for (const llvm::Value *Ptr : {NormalPtr, HandlerPtr, JoinedPtr}) {
+    const auto It = State.FramePointerLocations.find(Ptr);
+    ASSERT_NE(It, State.FramePointerLocations.end());
+    EXPECT_EQ(It->second.first, F.Frame);
+    EXPECT_EQ(It->second.second, 48);
+  }
+  EXPECT_EQ(State.RawFrameLocations.count({F.Frame, 48}), 0u);
 }
 
 TEST(LLVMCFrameMemory, StoreOnOneBranchCannotFeedJoinedLoad) {
@@ -97,6 +132,22 @@ TEST(LLVMCFrameMemory, StoreOnOneBranchCannotFeedJoinedLoad) {
   EXPECT_EQ(State.DeadFrameAllocas.count(F.Frame), 0u);
   EXPECT_EQ(State.DeadFrameStores.count(Store), 0u);
   EXPECT_EQ(State.ForwardedLoads.count(Load), 0u);
+}
+
+TEST(LLVMCFrameMemory, MutableCarrierIsNotAnSSAFrameAddressProof) {
+  FrameFixture F;
+  auto *Carrier = F.B.CreateAlloca(F.B.getPtrTy());
+  F.B.CreateStore(F.address(F.Base, 8), Carrier);
+  auto *Mutate = llvm::Function::Create(
+      llvm::FunctionType::get(F.B.getVoidTy(), {F.B.getPtrTy()}, false),
+      llvm::GlobalValue::ExternalLinkage, "mutate_carrier", F.Module);
+  F.B.CreateCall(Mutate, {Carrier});
+  auto *Ptr = F.B.CreateLoad(F.B.getPtrTy(), Carrier);
+  F.B.CreateRet(F.B.CreateLoad(F.B.getInt32Ty(), Ptr));
+
+  LLVMCAnalysisState State;
+  analyzeDeadFrameStores(State, *F.Fn);
+  EXPECT_EQ(State.FramePointerLocations.count(Ptr), 0u);
 }
 
 TEST(LLVMCFrameMemory, UnresolvedSubLoadKeepsFrame) {
@@ -165,6 +216,7 @@ TEST(LLVMCFrameMemory, NarrowedAddressCannotForwardFromOriginalFrame) {
     EXPECT_EQ(State.ForwardedLoads.count(Load), 0u);
     EXPECT_EQ(State.DeadFrameStores.count(Store), 0u);
     EXPECT_EQ(State.DeadFrameAllocas.count(F.Frame), 0u);
+    EXPECT_EQ(State.FramePointerLocations.count(Wrapped), 0u);
   }
 }
 

@@ -241,7 +241,7 @@ int64_t fixture_predicate_effect(int64_t value) {
 }
 void fixture_predicate_marker(void) { ++markers; }
 int main(void) {
-  int64_t (*functions[])(int64_t) = {
+  uint64_t (*functions[])(int64_t) = {
     predicate_calls_0, predicate_calls_1, predicate_calls_2
   };
   for (unsigned form = 0; form != 3; ++form) {
@@ -256,6 +256,56 @@ int main(void) {
     }
   }
   return 0;
+}
+)");
+}
+
+TEST(HighCSourceCalls, UnknownOnlyTempsFailAtTheirObservableUse) {
+  const auto Integer = NdType::makeInt(8);
+  MedVar Unknown;
+  Unknown.Kind = MedVar::Temp;
+  Unknown.Id = 731;
+  Unknown.Size = 8;
+  Unknown.SSAVer = 3;
+  HighStmt Define;
+  Define.Kind = StmtKind::Assign;
+  Define.Dst = HighExpr::makeVar(Unknown, Integer);
+  Define.Val = HighExpr::makeUndef(8);
+  HighStmt Consume;
+  Consume.Kind = StmtKind::Call;
+  Consume.CallExpr =
+      call(native("fixture_unknown_consumer", NdType::makeVoid(), {Integer}),
+           NdType::makeVoid(), {HighExpr::makeVar(Unknown, Integer)});
+  HighStmt Guard;
+  Guard.Kind = StmtKind::If;
+  Guard.Cond = parameter(0, Integer);
+  Guard.Body = {Consume};
+  auto Function =
+      returning("unknown_argument", HighExpr::makeConst(0, 8), {Integer});
+  Function.Body.insert(Function.Body.begin(), {Define, Guard});
+  const std::string Source = emit({Function});
+  EXPECT_NE(Source.find("__builtin_trap(), 0 /* unknown value */"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("t731"), std::string::npos) << Source;
+  // The harness intercepts the emitted failure intrinsic so both the normal
+  // path and the failure before calling a consumer can execute in one process.
+  compileAndRun(R"(
+#include <setjmp.h>
+static jmp_buf failure;
+static void fixture_unknown_trap(void) { longjmp(failure, 1); }
+#define __builtin_trap fixture_unknown_trap
+)" + Source + R"(
+static int consumed;
+void fixture_unknown_consumer(int64_t value) { ++consumed; }
+int main(void) {
+  if (unknown_argument(0) != 0 || consumed)
+    return 1;
+  if (setjmp(failure) == 0) {
+    unknown_argument(1);
+    return 2;
+  }
+  return consumed ? 3 : 0;
 }
 )");
 }

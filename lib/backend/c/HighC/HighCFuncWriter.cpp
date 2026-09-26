@@ -286,7 +286,7 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
     if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var)
       return;
     const HighExpr *Val = S.Val.get();
-    if (Val && (isNoreturnCallExpr(Analysis, *Val) ||
+    if (Val && (isNoreturnCallExpr(*Val) ||
                 Analysis.OmittedCallResults.count(&S)))
       return;
     Analysis.AssignedVars.insert(VarFn(S.Dst->Var));
@@ -474,7 +474,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
             !isHiddenCopyForwardAssign(S)) {
           const HighExpr *Val = S.Val.get();
           const bool ResultOmitted =
-              Val && (isNoreturnCallExpr(Analysis, *Val) ||
+              Val && (isNoreturnCallExpr(*Val) ||
                       Analysis.OmittedCallResults.count(&S));
           if (!ResultOmitted) {
             // Copy-forward aliases affect RHS uses, not a printed lvalue.
@@ -2226,7 +2226,7 @@ bool HighCWriter::isForwardableValueExpr(const HighExpr &E) const {
       return false;
     if (E.IntrinsicId != Intrinsic::None && !E.IntrinsicOutputs.empty())
       return false;
-    if (isNoreturnCallExpr(Analysis, E))
+    if (isNoreturnCallExpr(E))
       return false;
     if (isMsvcCxxThrowCallName(E.CallTarget))
       return false;
@@ -4161,7 +4161,22 @@ void HighCWriter::noteCatchReaching(const HighStmt &Stmt) {
   const std::string Dest = varName(Stmt.Dst->Var);
   if (Dest.empty() || isCxxCatchObjectName(Dest))
     return;
+  // FrameSlots may have been replaced by contiguous backing storage after
+  // simulation hid this definition. Replay that exact statement's proof;
+  // the reaching maps still follow the branch scopes of statement emission.
+  if (auto It = CatchAliasDefinitions.find(&Stmt);
+      It != CatchAliasDefinitions.end()) {
+    if (It->second.IsPointer) {
+      ReachingCatchPtrs[Dest] = It->second.Name;
+      ReachingCatchFields.erase(Dest);
+    } else {
+      ReachingCatchFields[Dest] = It->second.Name;
+      ReachingCatchPtrs.erase(Dest);
+    }
+    return;
+  }
   if (auto Ptr = cxxCatchPointerName(*Stmt.Val)) {
+    CatchAliasDefinitions[&Stmt] = {*Ptr, true};
     ReachingCatchPtrs[Dest] = *Ptr;
     ReachingCatchFields.erase(Dest);
     return;
@@ -4169,6 +4184,7 @@ void HighCWriter::noteCatchReaching(const HighStmt &Stmt) {
   if (Stmt.Val->Kind == ExprKind::Load && !Stmt.Val->Operands.empty() &&
       Stmt.Val->Operands[0]) {
     if (auto Field = cxxCatchFieldAccess(*Stmt.Val->Operands[0])) {
+      CatchAliasDefinitions[&Stmt] = {*Field, false};
       ReachingCatchFields[Dest] = *Field;
       ReachingCatchPtrs.erase(Dest);
       return;
@@ -4180,6 +4196,7 @@ void HighCWriter::noteCatchReaching(const HighStmt &Stmt) {
 
 void HighCWriter::simulateCatchReaching(const HighFunc &Func) {
   CatchAliasTemps.clear();
+  CatchAliasDefinitions.clear();
   ReachingCatchPtrs.clear();
   ReachingCatchFields.clear();
   auto Snapshot = [&]() {
@@ -4257,6 +4274,7 @@ void HighCWriter::simulateCatchReaching(const HighFunc &Func) {
 
 void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CurrentFunc = &Func;
+  FrameStorageActive = false;
   ProjectFrameAliasesIntoStorage = false;
   FrameStorageSlots.clear();
   CopyForward.clear();
@@ -4275,6 +4293,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CxxThrowPrints.clear();
   CxxCatchNames.clear();
   CatchAliasTemps.clear();
+  CatchAliasDefinitions.clear();
   DeclaredCNames.clear();
   ReachingCatchPtrs.clear();
   ReachingCatchFields.clear();
@@ -4317,10 +4336,18 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
         CheckDynamicFrameIndex(CheckDynamicFrameIndex, *Expr);
     });
   });
-  // The HighIR passes own copy propagation with reaching-definition proof.
-  // A function-wide alias map cannot represent branch and loop redefinitions.
+  // Escaping object addresses make neighboring fields observable even when
+  // no named load reads them. Indexed and escaped frames keep their stores.
+  const bool PreserveFrameStores =
+      HasDynamicFrameIndex ||
+      llvm::any_of(FrameSlots, [](const auto &Entry) {
+        return Entry.second.AddressTaken;
+      });
+  // Copy propagation belongs to the HighIR passes, which prove reaching
+  // definitions. A function-wide textual alias map cannot represent loop
+  // backedges, branches, or a later redefinition of a printed variable.
   hideX86SehRegistration(Func);
-  if (!HasDynamicFrameIndex)
+  if (!PreserveFrameStores)
     hideUnusedFrameSlotWrites(Func);
   {
     auto VarFn = [this](const MedVar &V) { return varName(V); };
@@ -4332,7 +4359,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
   // Epilogue reloads of callee-save / param homes become DeadStmts above.
   // Re-hide those stores so unused `var_m10 = this` / `var_m18 = 0` drop.
-  if (!HasDynamicFrameIndex)
+  if (!PreserveFrameStores)
     hideUnusedFrameSlotWrites(Func);
   hideBitClearSlotCopies(Func);
   hideX86CallPushSetup(Func);
@@ -4464,6 +4491,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     InEHClauseBody = Saved;
   };
   WalkFrameUses(Func.Body, false);
+  FrameStorageActive = NeedsFrameStorage;
   if (NeedsFrameStorage || !Analysis.StoreFwd.empty()) {
     // Integer store-to-load forwarding and named C locals are exclusive.
     // Mixing them leaves later loads on `frame_base` after the seed `arg0`
@@ -4665,7 +4693,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   std::set<std::string> PrintedAddrSlots;
   std::set<std::string> PrintedSlotStores;
   std::set<std::string> PrintedSlotLoads;
-  auto WalkPrintedAddr = [&](const HighExpr &Root) {
+  auto WalkPrintedAddr = [&](const HighExpr &Root, bool AsAddress = false) {
     std::function<void(const HighExpr &, bool)> Walk = [&](const HighExpr &N,
                                                            bool AsAddress) {
       if (N.Kind == ExprKind::Var || N.Kind == ExprKind::Phi) {
@@ -4722,7 +4750,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
         if (Op)
           Walk(*Op, AsAddress);
     };
-    Walk(Root, false);
+    Walk(Root, AsAddress);
   };
   std::function<void(const std::vector<HighStmt> &, bool)> CollectPrinted;
   CollectPrinted = [&](const std::vector<HighStmt> &Stmts, bool InHandler) {
@@ -4785,17 +4813,24 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
             Name && !isCxxCatchObjectName(*Name))
           PrintedSlotStores.insert(*Name);
       };
-      if (S.Kind == StmtKind::Store)
+      if (S.Kind == StmtKind::Store) {
         NotePrintedStore(S.StoreAddr.get(), S.StoreVal.get());
+        if (S.StoreAddr)
+          WalkPrintedAddr(*S.StoreAddr, true);
+      }
       if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
-          S.Dst->Kind == ExprKind::Load && !S.Dst->Operands.empty())
+          S.Dst->Kind == ExprKind::Load && !S.Dst->Operands.empty()) {
         NotePrintedStore(S.Dst->Operands[0].get(), S.Val.get());
+        if (S.Dst->Operands[0])
+          WalkPrintedAddr(*S.Dst->Operands[0], true);
+      }
       forEachRhsExpr(S, [&](const ExprPtr &E) {
         if (!E)
           return;
-        if (S.Kind == StmtKind::Store && E.get() == S.StoreAddr.get())
-          return;
-        WalkPrintedAddr(*E);
+        // A direct frame address identifies the destination, but a load
+        // inside that address still reads its pointer home.
+        WalkPrintedAddr(*E, S.Kind == StmtKind::Store &&
+                                E.get() == S.StoreAddr.get());
       });
     }
     InEHClauseBody = Saved;
@@ -4842,6 +4877,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
             Val = S.StoreVal.get();
           }
           if (Addr && Val && ValIsUnusedHome(*Val) &&
+              S.MemoryOrdering == NdMemoryOrdering::None &&
+              S.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
               !typedMemberAccess(*Addr)) {
             if (auto Name = namedFrameSlot(*Addr);
                 Name && !PrintedAddrSlots.count(*Name) &&

@@ -28,10 +28,6 @@ bool isNoreturnCallExpr(const HighExpr &E) {
          (libc::isNoReturnFunction(E.CallTarget) || isX86FastFailCall(E));
 }
 
-bool isNoreturnCallExpr(const HighCAnalysisState &, const HighExpr &E) {
-  return isNoreturnCallExpr(E);
-}
-
 bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
                        VarNameFn VarFn, ExprStrFn ExprFn) {
   if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
@@ -283,7 +279,7 @@ void analyzeUnusedCallResults(HighCAnalysisState &State, const HighFunc &Func,
       return;
     if (S.Val->Kind != ExprKind::Call)
       return;
-    if (isNoreturnCallExpr(State, *S.Val))
+    if (isNoreturnCallExpr(*S.Val))
       return;
     if (Used.count(VarFn(S.Dst->Var)))
       return;

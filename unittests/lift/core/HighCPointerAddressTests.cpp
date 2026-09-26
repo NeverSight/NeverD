@@ -153,6 +153,51 @@ lastCallArguments(std::string_view Source, std::string_view Callee) {
   return std::nullopt;
 }
 
+struct PortableStoreCall {
+  std::string_view Type;
+  std::string_view Address;
+  std::string_view Value;
+};
+
+std::vector<PortableStoreCall> portableStoreCalls(std::string_view Source) {
+  std::vector<PortableStoreCall> Stores;
+  constexpr std::string_view Prefix = "neverd_mem_store_";
+  for (size_t At = Source.find(Prefix); At != std::string_view::npos;
+       At = Source.find(Prefix, At + Prefix.size())) {
+    const size_t Line = Source.rfind('\n', At);
+    const size_t Start = Line == std::string_view::npos ? 0 : Line + 1;
+    if (Source.substr(Start, At - Start).find("static inline") !=
+        std::string_view::npos)
+      continue;
+    const size_t Open = Source.find('(', At);
+    const auto Name = Source.substr(At, Open - At);
+    const size_t Declaration =
+        Source.find(std::string(Name) + "(uintptr_t address, ");
+    if (Declaration == std::string_view::npos)
+      continue;
+    const size_t TypeStart = Source.find(", ", Declaration) + 2;
+    const size_t TypeEnd = Source.find(" value)", TypeStart);
+    const size_t End = Source.find('\n', At);
+    auto Args = lastCallArguments(Source.substr(Start, End - Start), Name);
+    if (TypeEnd != std::string_view::npos && Args && Args->size() == 2) {
+      const auto Value = llvm::StringRef((*Args)[1]).trim();
+      Stores.push_back({Source.substr(TypeStart, TypeEnd - TypeStart),
+                        (*Args)[0], std::string_view(Value.data(), Value.size())});
+    }
+  }
+  return Stores;
+}
+
+void expectPortableStore(std::string_view Source, std::string_view Type,
+                         std::string_view Address, std::string_view Value) {
+  const auto Stores = portableStoreCalls(Source);
+  EXPECT_TRUE(llvm::any_of(Stores, [&](const PortableStoreCall &Store) {
+    return Store.Type == Type &&
+           Store.Address.find(Address) != std::string_view::npos &&
+           Store.Value.find(Value) != std::string_view::npos;
+  })) << Source;
+}
+
 TEST(HighCPointerAddresses, TypedAndMachineWidthParametersUseByteOffsets) {
   for (Arch TheArch : {Arch::X64, Arch::AArch64}) {
     for (bool TypedExpr : {false, true}) {
@@ -318,6 +363,52 @@ TEST(HighCPointerAddresses, EmittedCExecutesByteLoadsStoresAndPointerResults) {
     Functions.push_back(std::move(PointerStore));
   }
 
+  for (unsigned Form = 0; Form < 3; ++Form) {
+    auto IndirectStore = pointerFunction("frame_pointer_store", NdType::makeVoid());
+    IndirectStore.Name += std::to_string(Form);
+    IndirectStore.FrameSize = 16;
+    IndirectStore.Params = {{"arg0", I32Ptr}, {"arg1", I32}};
+    MedVar SP;
+    SP.Kind = MedVar::Reg;
+    SP.Size = 8;
+    SP.TheArch = Arch::X64;
+    SP.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
+    auto Home = [&](unsigned Offset) {
+      return HighExpr::makeBinop(NdOp::INT_SUB, HighExpr::makeVar(SP),
+                                HighExpr::makeConst(Offset, 8));
+    };
+    HighStmt SavePointer;
+    SavePointer.Kind = StmtKind::Store;
+    SavePointer.StoreAddr = Home(8);
+    SavePointer.StoreVal = parameter(0, I32Ptr);
+    HighStmt SaveValue;
+    SaveValue.Kind = StmtKind::Store;
+    SaveValue.StoreAddr = Home(12);
+    SaveValue.StoreVal = parameter(1, I32);
+    IndirectStore.Body = {SavePointer, SaveValue};
+    auto Address = HighExpr::makeLoad(Home(8), I32Ptr);
+    auto Value = HighExpr::makeLoad(Home(12), I32);
+    HighStmt StoreThroughPointer;
+    if (Form == 0) {
+      StoreThroughPointer.Kind = StmtKind::Store;
+      StoreThroughPointer.StoreAddr = Address;
+      StoreThroughPointer.StoreVal = Value;
+      StoreThroughPointer.MemoryOrdering = NdMemoryOrdering::Release;
+    } else if (Form == 1) {
+      StoreThroughPointer.Kind = StmtKind::Assign;
+      StoreThroughPointer.Dst = HighExpr::makeLoad(Address, I32);
+      StoreThroughPointer.Val = Value;
+    } else {
+      StoreThroughPointer.Kind = StmtKind::ExprStmt;
+      StoreThroughPointer.Val = std::make_shared<HighExpr>();
+      StoreThroughPointer.Val->Kind = ExprKind::Store;
+      StoreThroughPointer.Val->Type = I32;
+      StoreThroughPointer.Val->Operands = {Address, Value};
+    }
+    IndirectStore.Body.push_back(std::move(StoreThroughPointer));
+    Functions.push_back(std::move(IndirectStore));
+  }
+
   std::string Source = emitFunctions(Functions);
   Source += R"(
 int main(void) {
@@ -340,6 +431,10 @@ int main(void) {
     if (advance(&values[2], UINT64_MAX) != &values[1]) return 14;
     if (advance(values, (UINT64_C(1) << 62) + 1) != &values[1]) return 15;
     if (difference(&values[1], &values[3]) != -8) return 16;
+    frame_pointer_store0(&values[0], 137);
+    frame_pointer_store1(&values[1], 149);
+    frame_pointer_store2(&values[2], 163);
+    if (values[0] != 137 || values[1] != 149 || values[2] != 163) return 17;
     return 0;
 }
 )";
@@ -395,7 +490,7 @@ int main(void) {
       << Source;
 }
 
-TEST(HighCPointerAddresses, BytePointersKeepCPointerArithmetic) {
+TEST(HighCPointerAddresses, BytePointersKeepMachineAddressArithmetic) {
   auto Func = pointerFunction("byte_load", NdType::makeInt(1, false));
   Func.Params[0].Type = NdType::makePtr(NdType::makeInt(1, false));
   returnValue(Func, HighExpr::makeLoad(
@@ -405,8 +500,8 @@ TEST(HighCPointerAddresses, BytePointersKeepCPointerArithmetic) {
                         Func.ReturnType));
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("uint8_t* arg0"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uintptr_t)arg0"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("*(uint8_t *)(arg0 +"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("*(uint8_t *)((uintptr_t)arg0 + arg1)"),
+            std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, PointerOffsetAddressOmitsArithmeticWrap) {
@@ -441,7 +536,7 @@ TEST(HighCPointerAddresses, PointerOffsetAddressOmitsArithmeticWrap) {
   EXPECT_NE(Source.find("(uintptr_t)"), std::string::npos) << Source;
   EXPECT_NE(Source.find("+ 8"), std::string::npos) << Source;
   EXPECT_NE(Source.find("__atomic_fetch_add"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uintptr_t)((uintptr_t)"), std::string::npos) << Source;
+  expectPortableStore(Source, "int32_t", "(uintptr_t)p + 8", "1");
 }
 
 TEST(HighCPointerAddresses, AtomicFetchAddComposesIntoCompare) {
@@ -595,7 +690,7 @@ TEST(HighCPointerAddresses, IncrementLoadKeptWhenValueIsUsed) {
   EXPECT_NE(Source.find("t94_8"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, FrameSlotsRenderAsNamedLocalsAndAddressOf) {
+TEST(HighCPointerAddresses, AddressTakenFrameSlotUsesSharedBacking) {
   const auto I32 = NdType::makeInt(4);
   HighFunc Func;
   Func.Name = "frame_slot";
@@ -620,11 +715,14 @@ TEST(HighCPointerAddresses, FrameSlotsRenderAsNamedLocalsAndAddressOf) {
   Addr->Operands.push_back(HighExpr::makeLoad(SlotAddr, I32));
   returnValue(Func, Addr);
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("int32_t var_m8;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("var_m8 = 7;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("return &var_m8;"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("stack_storage"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("neverd_mem_"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("uint8_t stack_storage[24]"), std::string::npos)
+      << Source;
+  expectPortableStore(Source, "uint32_t", "frame_base) - 8", "7");
+  const auto ReturnAt = Source.rfind("return ");
+  ASSERT_NE(ReturnAt, std::string::npos) << Source;
+  EXPECT_NE(Source.substr(ReturnAt).find("frame_base"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
 }
 
 BinaryImage makeImageObjectFixture(va_t Addr, std::vector<uint8_t> Bytes,
@@ -1558,12 +1656,14 @@ TEST(LLVMCPointerAddresses, SingleUseCallInlinesIntoHomeFedField) {
   ASSERT_TRUE(
       LLVMCEmitter().emit(Module, OS, Options, &Dbg, nullptr, Function));
   OS.flush();
-  EXPECT_NE(Source.find("this->values_ = GetLength("), std::string::npos)
+  EXPECT_NE(Source.find("this->values_ = (uint64_t)((int32_t)((uint32_t)("
+                        "GetLength(this))))"),
+            std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("GetLength("), Source.rfind("GetLength(")) << Source;
   EXPECT_EQ(Source.find("len0"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint32_t)"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint64_t)"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("this->values_ = GetLength("), std::string::npos)
+      << Source;
 }
 
 TEST(LLVMCPointerAddresses, SingleUseCallInlinesIntoLaterCall) {
@@ -1809,7 +1909,7 @@ TEST(LLVMCPointerAddresses, SingleUseCallInlinesIntoLaterIf) {
   ASSERT_TRUE(
       LLVMCEmitter().emit(Module, OS, Options, nullptr, nullptr, Function));
   OS.flush();
-  EXPECT_NE(Source.find("if (!(GetLength("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("if (!((uint32_t)(GetLength("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("= GetLength("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("GetLength("), Source.rfind("GetLength(")) << Source;
 }
@@ -3103,7 +3203,11 @@ TEST(HighCPointerAddresses, CallArgNamedFrameSlotOmitsIntegerView) {
   Ret.Kind = StmtKind::Return;
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("IsEmpty(&"), std::string::npos) << Source;
+  const auto Args = lastCallArguments(Source, "IsEmpty");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 1u) << Source;
+  EXPECT_NE((*Args)[0].find("frame_base"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("(int32_t)&"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("(uint32_t)&"), std::string::npos) << Source;
 }
@@ -3454,9 +3558,13 @@ TEST(HighCPointerAddresses, DebugCalleePointerArgsOmitIntegerView) {
                         "CRecord* this, CStringT* result)"),
             std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("CStringT var_m8"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("CRecord_GetRecordName(this, &var_m8)"), std::string::npos)
-      << Source;
+  const auto Args = lastCallArguments(Source, "CRecord_GetRecordName");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 2u) << Source;
+  EXPECT_EQ((*Args)[0], "this") << Source;
+  EXPECT_NE((*Args)[1].find("(CStringT*)(uintptr_t)((frame_base - 8))"),
+            std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_m8 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("CStringT* var_m8"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("GetRecordName((uintptr_t)this"), std::string::npos)
@@ -4105,7 +4213,7 @@ TEST(HighCPointerAddresses, UnionOverlayPicksUniqueAccessWidth) {
   Func.Body = {Load, Store, Fetch};
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("p->_m_nRef"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("__atomic_fetch_add(&p->_m_nRef, -1,"),
+  EXPECT_NE(Source.find("__atomic_fetch_add(&p->_m_nRef, 0xFFFFFFFF,"),
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("(uint32_t *)(&p->_m_nRef)"), std::string::npos)
@@ -5281,8 +5389,12 @@ TEST(HighCPointerAddresses, ClassByValueStringArgTakesPointer) {
   OS.flush();
   EXPECT_NE(Source.find("CStringT* recordName"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("CStringT recordName"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("CRecord_GetRecordName(this, &var_"), std::string::npos)
-      << Source;
+  const auto Args = lastCallArguments(Source, "CRecord_GetRecordName");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 2u) << Source;
+  EXPECT_EQ((*Args)[0], "this") << Source;
+  EXPECT_NE((*Args)[1].find("frame_base"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_NE(Source.find("this->m_rank"), std::string::npos) << Source;
   EXPECT_NE(Source.find("eRecordRank grade"), std::string::npos) << Source;
 }
@@ -5427,7 +5539,7 @@ TEST(HighCPointerAddresses, SingleUseCallsComposeAtUse) {
   EXPECT_EQ(Source.find("t1"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, SingleUseCallKeepsForwardedFrameSlotDecl) {
+TEST(HighCPointerAddresses, SingleUseCallKeepsForwardedFrameBacking) {
   HighFunc Func;
   Func.Name = "CRecord_GetRecordNameWithColor";
   Func.ReturnType = NdType::makeVoid();
@@ -5460,11 +5572,17 @@ TEST(HighCPointerAddresses, SingleUseCallKeepsForwardedFrameSlotDecl) {
        HighExpr::makeVar(Dest, NdType::makeInt(8))});
   Func.Body.push_back(std::move(Color));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("uint64_t var_m8;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("TextToHtml_GetRecordNameWithColor(result, "
-                        "CRecord_GetRecordName(this, &var_m8))"),
-            std::string::npos)
+  EXPECT_NE(Source.find("uint8_t stack_storage[24]"), std::string::npos)
       << Source;
+  const auto Args = lastCallArguments(Source, "CRecord_GetRecordName");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 2u) << Source;
+  EXPECT_EQ((*Args)[0], "this") << Source;
+  EXPECT_NE((*Args)[1].find("frame_base"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("TextToHtml_GetRecordNameWithColor(result, "
+                        "CRecord_GetRecordName(this,"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t24"), std::string::npos) << Source;
 }
 
@@ -5991,7 +6109,7 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
   EXPECT_NE(Source.find("if (this->m_completedCount)"), std::string::npos)
       << Source;
   EXPECT_NE(Source.find("this->m_completedCount"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("= GetLength("), std::string::npos) << Source;
+  expectPortableStore(Source, "int64_t", "0x140008008", "GetLength(this)");
   EXPECT_EQ(Source.find("\n    GetLength("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v97 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t97"), std::string::npos) << Source;
@@ -7930,7 +8048,7 @@ TEST(HighCPointerAddresses, InvertSkipInsideSehTryFoldsRaise) {
   const std::string Source = emitFunctions({Func}, Arch::X86);
   EXPECT_EQ(Source.find("goto L_"), std::string::npos) << Source;
   EXPECT_NE(Source.find("RaiseException"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("-100"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("0xFFFFFF9C"), std::string::npos) << Source;
   EXPECT_NE(Source.find("= 41"), std::string::npos) << Source;
 }
 
@@ -8199,7 +8317,7 @@ TEST(HighCPointerAddresses, X86UnmatchedSubStoreBeforeCallStays) {
       HighExpr::makeCall("use", 0x401200, {HighExpr::makeConst(7, 4)});
   Func.Body = {Store, Call};
   const std::string Source = emitFunctions({Func}, Arch::X86);
-  EXPECT_NE(Source.find("= 41"), std::string::npos) << Source;
+  expectPortableStore(Source, "uint32_t", "t7) - 4", "41");
   EXPECT_NE(Source.find("use(7)"), std::string::npos) << Source;
 }
 
@@ -9057,7 +9175,7 @@ TEST(HighCPointerAddresses, NegatedIfElseComposedCallResultSwapsToPositive) {
   EXPECT_LT(Unl, Reg) << Source;
 }
 
-TEST(HighCPointerAddresses, CallCondI32UndefStoreUsesCallResult) {
+TEST(HighCPointerAddresses, CallCondI32UndefStoreKeepsUnknownValue) {
   HighFunc Func;
   Func.Name = "adjustment_eax";
   Func.Entry = 0x140001000;
@@ -9123,15 +9241,16 @@ TEST(HighCPointerAddresses, CallCondI32UndefStoreUsesCallResult) {
   ASSERT_GE(Func.Body[2].Body.size(), 2u);
   ASSERT_EQ(Func.Body[2].Body[1].Kind, StmtKind::Store);
   ASSERT_TRUE(Func.Body[2].Body[1].StoreVal);
-  EXPECT_EQ(Func.Body[2].Body[1].StoreVal->Kind, ExprKind::Var);
-  EXPECT_EQ(Func.Body[2].Body[1].StoreVal->Var.Id, Level.Id);
-  EXPECT_EQ(Func.Body[2].Body[1].StoreVal->Var.Kind, MedVar::Temp);
+  const auto &Stored = Func.Body[2].Body[1].StoreVal;
+  ASSERT_EQ(Stored->Kind, ExprKind::Cast);
+  ASSERT_EQ(Stored->Operands.size(), 1u);
+  EXPECT_EQ(Stored->Operands[0]->Kind, ExprKind::Undef);
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetAdjustmentLevel"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("= 0 /* unknown */"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, CallCondUndefStoreAfterSetupUsesCallResult) {
+TEST(HighCPointerAddresses, CallCondUndefStoreAfterSetupKeepsUnknownValue) {
   HighFunc Func;
   Func.Name = "period_eax";
   Func.Entry = 0x140001000;
@@ -9187,22 +9306,22 @@ TEST(HighCPointerAddresses, CallCondUndefStoreAfterSetupUsesCallResult) {
   ASSERT_EQ(Func.Body.size(), 2u);
   ASSERT_EQ(Func.Body[1].Kind, StmtKind::If);
   ASSERT_GE(Func.Body[1].Body.size(), 10u);
-  const HighStmt *Filled = nullptr;
+  const HighStmt *UnknownStore = nullptr;
   for (const HighStmt &S : Func.Body[1].Body) {
     if (S.Kind == StmtKind::Store && S.StoreVal &&
-        S.StoreVal->Kind == ExprKind::Var &&
-        S.StoreVal->Var.Id == Period.Id) {
-      Filled = &S;
+        S.StoreVal->Kind == ExprKind::Undef) {
+      UnknownStore = &S;
       break;
     }
   }
-  ASSERT_TRUE(Filled) << "leftover EAX store after packing was not restored";
+  ASSERT_TRUE(UnknownStore) << "a prior call does not define an unknown store";
+  EXPECT_EQ(UnknownStore->StoreVal->Type->Size, 16u);
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetPeriodID"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("= 0 /* unknown */"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, LeftoverEaxPackedSiblingTakesCallResult) {
+TEST(HighCPointerAddresses, PackedUnknownValueDoesNotAcquirePriorCallResult) {
   HighFunc Func;
   Func.Name = "packed_eax";
   Func.Entry = 0x140001000;
@@ -9274,30 +9393,28 @@ TEST(HighCPointerAddresses, LeftoverEaxPackedSiblingTakesCallResult) {
   invertSkipGotos(Func);
   ASSERT_EQ(Func.Body.size(), 2u);
   ASSERT_EQ(Func.Body[1].Kind, StmtKind::If);
-  const HighStmt *Filled = nullptr;
+  bool KeptUnknownHome = false;
   unsigned PeriodStores = 0;
   for (const HighStmt &S : Func.Body[1].Body) {
-    if (S.Kind != StmtKind::Store || !S.StoreVal ||
-        S.StoreVal->Kind != ExprKind::Var || S.StoreVal->Var.Id != Period.Id)
+    if (S.Kind != StmtKind::Store || !S.StoreVal)
       continue;
-    ++PeriodStores;
-    Filled = &S;
+    if (S.StoreVal->Kind == ExprKind::Var && S.StoreVal->Var.Id == Period.Id)
+      ++PeriodStores;
+    if (S.StoreVal->Kind == ExprKind::Undef && S.StoreAddr &&
+        S.StoreAddr->structuralEq(*Home))
+      KeptUnknownHome = true;
   }
-  ASSERT_TRUE(Filled) << "packed sibling did not take leftover EAX";
-  EXPECT_EQ(PeriodStores, 1u) << "leftover home should not also keep EAX";
-  ASSERT_TRUE(Filled->StoreAddr);
-  EXPECT_TRUE(Filled->StoreAddr->structuralEq(*Second)) << "filled home, not sibling";
+  EXPECT_TRUE(KeptUnknownHome);
+  EXPECT_EQ(PeriodStores, 0u) << "undef has no proven relation to the prior call";
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("PeriodID"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("*(uint32_t *)&var_mA0 = PeriodID"),
-            std::string::npos)
-      << Source;
-  EXPECT_NE(Source.find("ArgList var_mA0"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("__int128 var_mA0"), std::string::npos) << Source;
+  for (const auto &Store : portableStoreCalls(Source))
+    EXPECT_EQ(Store.Value.find("PeriodID"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("= 0 /* unknown */"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, AddressTakenValuesHomeDeclaresArgList) {
+TEST(HighCPointerAddresses, AddressTakenValuesHomePreservesWideStore) {
   HighFunc Func;
   Func.Name = "values_home";
   Func.Entry = 0x140001000;
@@ -9389,14 +9506,11 @@ TEST(HighCPointerAddresses, AddressTakenValuesHomeDeclaresArgList) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("ArgList var_m50"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("*(uint32_t *)&var_m50 = AdjustmentLevel"),
-            std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("__int128 var_m50"), std::string::npos) << Source;
+  expectPortableStore(Source, "__int128", "frame_base) - 80", "AdjustmentLevel");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, CallCondUndefStoreInsideCxxTryUsesCallResult) {
+TEST(HighCPointerAddresses, CallCondUndefStoreInsideCxxTryKeepsUnknownValue) {
   HighFunc Func;
   Func.Name = "period_try_eax";
   Func.Entry = 0x140001000;
@@ -9452,8 +9566,7 @@ TEST(HighCPointerAddresses, CallCondUndefStoreInsideCxxTryUsesCallResult) {
   ASSERT_FALSE(Func.Body[1].Body[1].Body.empty());
   ASSERT_EQ(Func.Body[1].Body[1].Body[0].Kind, StmtKind::Store);
   ASSERT_TRUE(Func.Body[1].Body[1].Body[0].StoreVal);
-  EXPECT_EQ(Func.Body[1].Body[1].Body[0].StoreVal->Kind, ExprKind::Var);
-  EXPECT_EQ(Func.Body[1].Body[1].Body[0].StoreVal->Var.Id, Period.Id);
+  EXPECT_EQ(Func.Body[1].Body[1].Body[0].StoreVal->Kind, ExprKind::Undef);
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetPeriodID"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("= 0 /* unknown */"), std::string::npos) << Source;
@@ -17834,7 +17947,9 @@ TEST(LLVMCPointerAddresses, NarrowedWideAddKeepsWidthCast) {
   OS.flush();
   const auto At = Source.find("trunc_add(");
   ASSERT_NE(At, std::string::npos) << Source;
-  EXPECT_NE(Source.find("(left + right)", At), std::string::npos) << Source;
+  EXPECT_NE(Source.find("((uint32_t)(left) + (uint32_t)(right))", At),
+            std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("(uint32_t)((uint32_t)"), std::string::npos) << Source;
 }
 
@@ -18539,7 +18654,7 @@ TEST(LLVMCPointerAddresses, InvertedFlagOrNonPositivePrintsGreaterThanZero) {
   OS.flush();
   const auto BodyAt = Source.find("len_flag(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  const auto IfAt = Source.find("if (GetLength(", BodyAt);
+  const auto IfAt = Source.find("if ((int32_t)((uint32_t)(GetLength(", BodyAt);
   const auto ArmAt = Source.find("arm_step(", BodyAt);
   const auto UseAt = Source.find("use_step(", BodyAt);
   ASSERT_NE(IfAt, std::string::npos) << Source;
@@ -18974,7 +19089,7 @@ TEST(LLVMCPointerAddresses, EnumFieldComparePrintsEnumerator) {
   EXPECT_EQ(Source.find("!= 1"), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, ZeroTestOfTruncatedCallOmitsIntegerView) {
+TEST(LLVMCPointerAddresses, ZeroTestOfTruncatedCallPreservesIntegerView) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-trunc-cond", Context);
   llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
@@ -19006,9 +19121,9 @@ TEST(LLVMCPointerAddresses, ZeroTestOfTruncatedCallOmitsIntegerView) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("if (!(IsMediaPayload("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("if (!((uint32_t)(IsMediaPayload("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("payload0"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint32_t)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint32_t)"), std::string::npos) << Source;
 }
 
 TEST(LLVMCPointerAddresses, TestAndSignFlagOrPrintsSignedLessEqualZero) {
@@ -19060,11 +19175,11 @@ TEST(LLVMCPointerAddresses, TestAndSignFlagOrPrintsSignedLessEqualZero) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("if (GetLength("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("if ((int32_t)((uint32_t)(GetLength("), std::string::npos) << Source;
   EXPECT_NE(Source.find("<= 0)"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("len0"), std::string::npos) << Source;
   EXPECT_EQ(Source.find(" & "), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint32_t)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint32_t)"), std::string::npos) << Source;
 }
 
 TEST(LLVMCPointerAddresses, DebugArityDropsLeftoverLiveInArgs) {
@@ -19407,7 +19522,7 @@ TEST(HighCPointerAddresses, CxxThrowHidesFollowingJunkAssign) {
   EXPECT_EQ(Source.find("= 0"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, UnassignedRegisterReturnIsBareReturn) {
+TEST(HighCPointerAddresses, UnassignedRegisterReturnTrapsAtUse) {
   HighFunc Func;
   Func.Name = "voidish";
   Func.ReturnType = NdType::makeInt(8);
@@ -19421,7 +19536,9 @@ TEST(HighCPointerAddresses, UnassignedRegisterReturnIsBareReturn) {
   Ret.RetVal = HighExpr::makeVar(Rax);
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("return;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_trap(); /* unknown return value */"),
+            std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return;"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, AttachesCxxFuncletBodyIntoCatch) {
@@ -19892,12 +20009,17 @@ TEST(HighCPointerAddresses, PdbFrameSlotStripsAtlQualification) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("CStringT recordName"), std::string::npos) << Source;
+  const auto Args = lastCallArguments(Source, "CStringT_ctor");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_FALSE(Args->empty()) << Source;
+  EXPECT_NE((*Args)[0].find("CStringT*"), std::string::npos) << Source;
+  EXPECT_NE((*Args)[0].find("frame_base - 8"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("ATL::"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("StrTraitMFC"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, IncomingHomeReuseKeepsPdbLocalName) {
+TEST(HighCPointerAddresses, IncomingHomeReuseKeepsFrameAddress) {
   class SlotDbg : public NullDebugContext {
   public:
     std::optional<VariableSym> resolveVariable(va_t FuncAddr,
@@ -19983,14 +20105,17 @@ TEST(HighCPointerAddresses, IncomingHomeReuseKeepsPdbLocalName) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("CStringT name"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("Catalog_Lookup("), std::string::npos) << Source;
-  EXPECT_NE(Source.find("&name"), std::string::npos) << Source;
+  const auto Args = lastCallArguments(Source, "Catalog_Lookup");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 4u) << Source;
+  EXPECT_NE((*Args)[1].find("frame_base + 8"), std::string::npos) << Source;
+  EXPECT_NE((*Args)[1].find("CStringT*"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_8"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("&this"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, CtorHomeSlotDeclaresClassRecord) {
+TEST(HighCPointerAddresses, CtorHomeSlotUsesTypedFrameAddress) {
   HighFunc Func;
   Func.Name = "ctor_home";
   Func.Entry = 0x140001000;
@@ -20019,12 +20144,17 @@ TEST(HighCPointerAddresses, CtorHomeSlotDeclaresClassRecord) {
   Dtor.CallExpr = HighExpr::makeCall("CStringT_dtor", 0x140003100, {Home});
   Func.Body = {Init, Ctor, Dtor};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("CStringT var_m8"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("CStringT_ctor(&var_m8"), std::string::npos) << Source;
+  const auto Args = lastCallArguments(Source, "CStringT_ctor");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 2u) << Source;
+  EXPECT_NE((*Args)[0].find("CStringT*"), std::string::npos) << Source;
+  EXPECT_NE((*Args)[0].find("frame_base - 8"), std::string::npos) << Source;
+  expectPortableStore(Source, "uint64_t", "frame_base) - 8", "0");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("int64_t var_m8"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, WrapperRecordSameWidthPointerStorePrintsField) {
+TEST(HighCPointerAddresses, WrapperRecordSameWidthPointerStoreKeepsByteWidth) {
   class SlotDbg : public NullDebugContext {
   public:
     TypeRef Str;
@@ -20083,7 +20213,16 @@ TEST(HighCPointerAddresses, WrapperRecordSameWidthPointerStorePrintsField) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("badgeRecordName.m_pszData"), std::string::npos) << Source;
+  const auto Stores = portableStoreCalls(Source);
+  ASSERT_EQ(Stores.size(), 1u) << Source;
+  EXPECT_EQ(Stores[0].Type, "int64_t") << Source;
+  EXPECT_NE(Stores[0].Address.find("frame_base"), std::string::npos) << Source;
+  EXPECT_NE(Stores[0].Value.find("frame_base"), std::string::npos) << Source;
+  const auto Args = lastCallArguments(Source, "CStringT_dtor");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 1u) << Source;
+  EXPECT_NE((*Args)[0].find("frame_base - 8"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("badgeRecordName = &"), std::string::npos) << Source;
 }
 
@@ -21507,7 +21646,7 @@ TEST(HighCPointerAddresses, DynamicFrameReadKeepsAliasedFixedStore) {
 
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
-  EXPECT_NE(Source.find("= 7);"), std::string::npos) << Source;
+  expectPortableStore(Source, "uint8_t", "frame_base - 16", "7");
   EXPECT_EQ(Source.find("var_m10"), std::string::npos) << Source;
 }
 
@@ -21702,9 +21841,10 @@ TEST(HighCPointerAddresses, EmptyIfCallReturnDoesNotLeaveUninitOrUnknownArgs) {
   EXPECT_NE(Source.find("arg1"), std::string::npos) << Source;
   EXPECT_NE(Source.find("arg2"), std::string::npos) << Source;
   EXPECT_NE(Source.find("arg3"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("return t1"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("t3 = t1;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("t3 = CxxFrameHandler3("), std::string::npos) << Source;
   EXPECT_EQ(Source.find(") {\n    }"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("return t3"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return t3"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("return t4"), std::string::npos) << Source;
 }
 
@@ -21871,6 +22011,7 @@ TEST(HighCPointerAddresses, IncomingParamIsNotReassignedFromTemp) {
   returnValue(Func, parameter(0, Func.Params[0].Type));
   const std::string Source = emitFunctions({Func});
   EXPECT_EQ(Source.find("record ="), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
   EXPECT_NE(Source.find("CRecord_GetRank((uintptr_t)record)"), std::string::npos)
       << Source;
 }
@@ -22291,8 +22432,9 @@ TEST(HighCPointerAddresses, PtrBoxInteriorStoreSurvivesUnusedHomeHide) {
   Options.TheArch = Arch::X64;
   EXPECT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("pAuxData"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("= 0"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  expectPortableStore(Source, "uint64_t", "- 8", "0");
 }
 
 TEST(HighCPointerAddresses, UnusedEpilogueReloadDoesNotKeepPrologueHome) {
@@ -23305,20 +23447,23 @@ TEST(HighCPointerAddresses, ThrowOfFrameOffsetUsesNamedSlot) {
   Func.FrameSize = 0x60;
   Func.ReturnType = NdType::makeVoid();
   MedVar Sp;
-  Sp.Kind = MedVar::Temp;
-  Sp.Id = 0;
+  Sp.Kind = MedVar::Reg;
+  Sp.TheArch = Arch::X64;
+  Sp.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
   Sp.Size = 8;
   HighStmt Throw;
   Throw.Kind = StmtKind::Call;
   Throw.CallExpr = HighExpr::makeCall(
       "_CxxThrowException", 0x140002000,
-      {HighExpr::makeBinop(NdOp::INT_ADD, HighExpr::makeVar(Sp),
+      {HighExpr::makeBinop(NdOp::INT_SUB, HighExpr::makeVar(Sp),
                            HighExpr::makeConst(64, 8)),
        HighExpr::makeConst(0, 8)});
   Func.Body.push_back(std::move(Throw));
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("throw "), std::string::npos) << Source;
-  EXPECT_NE(Source.find("&var_40"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("frame_base"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("64"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, OmitsReturnAndEmptyBlockAfterCxxThrow) {
@@ -26770,7 +26915,7 @@ TEST(HighCPointerAddresses, UnknownOnlyReleasePhiStoreHidesZeroAssigns) {
   Func.Body = {ZeroPad, Guard, Store};
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("indirect("), std::string::npos) << Source;
-  EXPECT_NE(Source.find("= 0"), std::string::npos) << Source;
+  expectPortableStore(Source, "int64_t", "+ 56", "0");
   EXPECT_EQ(Source.find("v42"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t42"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v34"), std::string::npos) << Source;
@@ -26820,9 +26965,9 @@ TEST(HighCPointerAddresses, WholeSlotXmmCopyForwardsWithoutTemp) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("LookupTextW("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t116"), std::string::npos) << Source;
-  EXPECT_TRUE(Source.find("var_m80") != std::string::npos ||
-              Source.find("var_38") != std::string::npos)
-      << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  expectPortableStore(Source, "__int128", "+ 56", "neverd_mem_load_");
 }
 
 TEST(HighCPointerAddresses, WholeSlotCopyPropagatesRecordType) {
@@ -26876,8 +27021,9 @@ TEST(HighCPointerAddresses, WholeSlotCopyPropagatesRecordType) {
       {HighExpr::makeLoad(SlotB, NdType::makeInt(16))});
   Func.Body = {Init, Load, Store, UseA, UseB};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("ArgList var_m70"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("__int128 var_m70"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  expectPortableStore(Source, "__int128", "- 112", "neverd_mem_load_");
   EXPECT_EQ(Source.find("t116"), std::string::npos) << Source;
 }
 
@@ -26929,7 +27075,8 @@ TEST(HighCPointerAddresses, WholeSlotCopyPrefersSourceRecordOverOverlay) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("PtrBox "), std::string::npos) << Source;
   EXPECT_EQ(Source.find("ArgList var_"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("__int128"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__int128", Source.find("void tptr_copy_over_arglist(")),
+            std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, WholeSlotCopyPrefersNameOnlySourceRecord) {
@@ -27028,8 +27175,9 @@ TEST(HighCPointerAddresses, ArgListScalarStorePrintsTypesField) {
                                     {parameter(0), Slot});
   Func.Body = {Init, Types, Values, Use};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("types_ = 43"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("values_"), std::string::npos) << Source;
+  expectPortableStore(Source, "uint64_t", "- 128", "43");
+  expectPortableStore(Source, "uint64_t", "+ 8", "0x140005000");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_m80 = 43"), std::string::npos) << Source;
 }
 
@@ -27071,12 +27219,16 @@ TEST(HighCPointerAddresses, NarrowStoreIntoArgListBeforeWideCopyPreservesWidth) 
   Func.Body = {Color, Copy, Tag, Use};
 
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("ArgList var_m80;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("*(uint32_t *)&var_m80 ="), std::string::npos)
-      << Source;
-  EXPECT_NE(Source.find("\n    var_m70 = var_m80;"), std::string::npos)
-      << Source;
-  EXPECT_NE(Source.find("var_m80.types_ = 2;"), std::string::npos) << Source;
+  const auto Stores = portableStoreCalls(Source);
+  ASSERT_EQ(Stores.size(), 3u) << Source;
+  EXPECT_EQ(Stores[0].Type, "uint32_t") << Source;
+  EXPECT_EQ(Stores[0].Value, "0x12345678") << Source;
+  EXPECT_EQ(Stores[1].Type, "__int128") << Source;
+  EXPECT_NE(Stores[1].Value.find("neverd_mem_load_"), std::string::npos) << Source;
+  EXPECT_EQ(Stores[2].Type, "uint64_t") << Source;
+  EXPECT_EQ(Stores[2].Value, "2") << Source;
+  EXPECT_EQ(Stores[0].Address, Stores[2].Address) << Source;
+  EXPECT_NE(Stores[1].Address.find("- 112"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("\n    var_m80 = 0x12345678;"), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("\n    var_m80.types_ = 0x12345678;"),
@@ -27155,14 +27307,14 @@ TEST(HighCPointerAddresses, PointerStoreIntoNamedRecordPreservesWidth) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("PtrBox var_m80;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("ArgList var_m70;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("*(void* *)&var_m80 = get_text();"),
-            std::string::npos)
-      << Source;
+  expectPortableStore(Source, "void*", "- 128", "get_text()");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("\n    var_m80 ="), std::string::npos) << Source;
-  EXPECT_NE(Source.find("use_record(&var_m80, &var_m70)"), std::string::npos)
-      << Source;
+  const auto Args = lastCallArguments(Source, "use_record");
+  ASSERT_TRUE(Args) << Source;
+  ASSERT_EQ(Args->size(), 2u) << Source;
+  EXPECT_NE((*Args)[0].find("128"), std::string::npos) << Source;
+  EXPECT_NE((*Args)[1].find("112"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, FullWidthIntegerStoreIntoNamedRecordIsValidC) {
@@ -27207,11 +27359,8 @@ TEST(HighCPointerAddresses, FullWidthIntegerStoreIntoNamedRecordIsValidC) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("PtrBox var_m80;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("ArgList var_m70;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("*(unsigned __int128 *)&var_m80 = 178;"),
-            std::string::npos)
-      << Source;
+  expectPortableStore(Source, "unsigned __int128", "- 128", "178");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("\n    var_m80 = 178;"), std::string::npos)
       << Source;
 }
@@ -27254,9 +27403,7 @@ TEST(HighCPointerAddresses, InteriorPartialStoreKeepsMachineWidth) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("(*(uint32_t *)(&var_m80.p) = 42);"),
-            std::string::npos)
-      << Source;
+  expectPortableStore(Source, "uint32_t", "- 120", "42");
   EXPECT_EQ(Source.find("var_m80.p = 42;"), std::string::npos) << Source;
 }
 
@@ -27295,7 +27442,7 @@ TEST(HighCPointerAddresses, ArgListWidenedImmediateStorePrintsTypesField) {
                                     {parameter(0), Slot});
   Func.Body = {Init, Types, Use};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("types_ = 178"), std::string::npos) << Source;
+  expectPortableStore(Source, "unsigned __int128", "- 128", "178");
   EXPECT_EQ(Source.find("var_m80 = 178"), std::string::npos) << Source;
 }
 
@@ -27366,7 +27513,7 @@ TEST(HighCPointerAddresses, ArgListAddrTakenSlotTakesCallType) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("types_ = 178"), std::string::npos) << Source;
+  expectPortableStore(Source, "uint64_t", "- 80", "178");
   EXPECT_EQ(Source.find("var_m50 = 178"), std::string::npos) << Source;
 }
 
@@ -27484,15 +27631,12 @@ TEST(HighCPointerAddresses, ArgListOffsetStorePrintsValuesField) {
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("values_ = GetLength("), std::string::npos) << Source;
-  EXPECT_NE(Source.find("values_ = ",
-                        Source.find("values_ = GetLength(") + 1),
-            std::string::npos)
-      << Source;
+  expectPortableStore(Source, "uint32_t", "+ 8", "GetLength(");
+  expectPortableStore(Source, "int64_t", "+ 8", "GetLength(");
   EXPECT_EQ(Source.find(".p = GetLength("), std::string::npos) << Source;
   EXPECT_EQ(Source.find(".p = (int64_t)(GetLength("), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find(".p = 0"), std::string::npos) << Source;
+  expectPortableStore(Source, "uint64_t", "+ 8", "0");
   EXPECT_EQ(Source.find("values_ = 0"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("values_ = t90"), std::string::npos) << Source;
   EXPECT_NE(Source.find("use_p("), std::string::npos) << Source;
@@ -27540,9 +27684,8 @@ TEST(HighCPointerAddresses, SignedIntegerStoreIntoPointerFieldCastsWidth) {
   Use.CallExpr = HighExpr::makeCall("use_record", 0x140005000, {Addr});
   Func.Body = {Init, Length, Use};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("PtrBox var_m50;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find(".p = "), std::string::npos) << Source;
-  EXPECT_NE(Source.find("(intptr_t)(GetLength("), std::string::npos) << Source;
+  expectPortableStore(Source, "int64_t", "+ 8", "GetLength(");
+  EXPECT_NE(Source.find("int32_t GetLength("), std::string::npos) << Source;
   EXPECT_EQ(Source.find(".p = GetLength("), std::string::npos) << Source;
 }
 
@@ -27597,8 +27740,7 @@ TEST(HighCPointerAddresses, PackedValueAfterTakenSlotKeepsStore) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetPeriodID"), std::string::npos) << Source;
   EXPECT_NE(Source.find("LookupTextW("), std::string::npos) << Source;
-  EXPECT_TRUE(Source.find("var_m70") != std::string::npos)
-      << Source;
+  expectPortableStore(Source, "__int128", "- 112", "PeriodID");
   EXPECT_EQ(Source.find("var_m70 = 0"), std::string::npos) << Source;
 }
 
@@ -29157,7 +29299,7 @@ TEST(HighCPointerAddresses, CompareNeZeroPrintsBareCompare) {
   EXPECT_NE(Source.find("< 0"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, UnusedPredicateCallAfterAssignGuardIsNotPrinted) {
+TEST(HighCPointerAddresses, UnusedPredicateCallAfterAssignGuardKeepsEffects) {
   HighFunc Func;
   Func.Name = "implied_pred_assign";
   Func.Entry = 0x140001000;
@@ -29180,7 +29322,8 @@ TEST(HighCPointerAddresses, UnusedPredicateCallAfterAssignGuardIsNotPrinted) {
   Leftover.Val = HighExpr::makeCall("IsKind", 0x140002310, {parameter(0)});
   HighStmt Display;
   Display.Kind = StmtKind::Call;
-  Display.CallExpr = HighExpr::makeCall("GetDisplayName", 0x140002000, {parameter(0)});
+  Display.CallExpr =
+      HighExpr::makeCall("GetDisplayName", 0x140002000, {parameter(0)});
   HighStmt Guard;
   Guard.Kind = StmtKind::If;
   Guard.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL, HighExpr::makeVar(Dest),
@@ -29195,10 +29338,10 @@ TEST(HighCPointerAddresses, UnusedPredicateCallAfterAssignGuardIsNotPrinted) {
   for (size_t Pos = BodyAt;
        (Pos = Source.find("IsKind(", Pos)) != std::string::npos; Pos += 7)
     ++KindCount;
-  EXPECT_EQ(KindCount, 1u) << Source;
+  EXPECT_EQ(KindCount, 2u) << Source;
 }
 
-TEST(HighCPointerAddresses, UnusedPredicateCallInsideGuardIsNotPrinted) {
+TEST(HighCPointerAddresses, UnusedPredicateCallInsideGuardKeepsEffects) {
   HighFunc Func;
   Func.Name = "implied_pred_stmt";
   Func.Entry = 0x140001000;
@@ -29214,7 +29357,8 @@ TEST(HighCPointerAddresses, UnusedPredicateCallInsideGuardIsNotPrinted) {
   Leftover.Val = HighExpr::makeCall("IsKind", 0x140002300, {parameter(0)});
   HighStmt Display;
   Display.Kind = StmtKind::Call;
-  Display.CallExpr = HighExpr::makeCall("GetDisplayName", 0x140002000, {parameter(0)});
+  Display.CallExpr =
+      HighExpr::makeCall("GetDisplayName", 0x140002000, {parameter(0)});
   HighStmt Guard;
   Guard.Kind = StmtKind::If;
   Guard.Cond = HighExpr::makeBinop(
@@ -29231,10 +29375,10 @@ TEST(HighCPointerAddresses, UnusedPredicateCallInsideGuardIsNotPrinted) {
   for (size_t Pos = BodyAt;
        (Pos = Source.find("IsKind(", Pos)) != std::string::npos; Pos += 7)
     ++KindCount;
-  EXPECT_EQ(KindCount, 1u) << Source;
+  EXPECT_EQ(KindCount, 2u) << Source;
 }
 
-TEST(HighCPointerAddresses, UnusedPredicateCallAfterSiblingIfIsNotPrinted) {
+TEST(HighCPointerAddresses, UnusedPredicateCallAfterSiblingIfKeepsEffects) {
   HighFunc Func;
   Func.Name = "implied_pred_after";
   Func.Entry = 0x140001000;
@@ -29260,7 +29404,8 @@ TEST(HighCPointerAddresses, UnusedPredicateCallAfterSiblingIfIsNotPrinted) {
   Leftover.Val = HighExpr::makeCall("IsKind", 0x140002300, {parameter(0)});
   HighStmt Display;
   Display.Kind = StmtKind::Call;
-  Display.CallExpr = HighExpr::makeCall("GetDisplayName", 0x140002000, {parameter(0)});
+  Display.CallExpr =
+      HighExpr::makeCall("GetDisplayName", 0x140002000, {parameter(0)});
   Func.Body = {Skip, Leftover, Display};
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetDisplayName("), std::string::npos) << Source;
@@ -29270,7 +29415,7 @@ TEST(HighCPointerAddresses, UnusedPredicateCallAfterSiblingIfIsNotPrinted) {
   for (size_t Pos = BodyAt;
        (Pos = Source.find("IsKind(", Pos)) != std::string::npos; Pos += 7)
     ++KindCount;
-  EXPECT_EQ(KindCount, 1u) << Source;
+  EXPECT_EQ(KindCount, 2u) << Source;
 }
 
 TEST(HighCPointerAddresses, ThenPredChainConstArmIsNotSkippable) {
@@ -30060,9 +30205,10 @@ TEST(HighCPointerAddresses, GotoJoinCtorKeepsLabelPhiNotFrameSlot) {
   EXPECT_NE(Source.find("v22 = (CStringT*)(&this->m_virtualRecordName)"),
             std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("v22 = (CStringT*)(&var_m40)"),
-            std::string::npos)
-      << Source;
+  EXPECT_NE(Source.find("v22 = (CStringT*)(uintptr_t)"),
+            std::string::npos) << Source;
+  EXPECT_NE(Source.find("frame_base"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
 
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
@@ -30568,8 +30714,10 @@ TEST(HighCPointerAddresses, FrameAddressValueDeclaresSlot) {
   Ret.RetVal = SlotAddr;
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("var_m8"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("&var_m8"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return ((uint64_t)((uint64_t)(frame_base)"),
+            std::string::npos) << Source;
+  expectPortableStore(Source, "int64_t", "- 8", "arg0");
 }
 
 TEST(HighCPointerAddresses, OverwrittenCopyForwardDestIsDeclared) {
@@ -30694,7 +30842,9 @@ TEST(HighCPointerAddresses, UnusedFrameAliasIsNotDeclared) {
   Ret.RetVal = LiveAddr;
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("&var_m8"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  expectPortableStore(Source, "int64_t", "- 8", "t7");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_m38"), std::string::npos) << Source;
 }
 
@@ -30742,8 +30892,10 @@ TEST(HighCPointerAddresses, FrameBaseVarUsedAsMemoryPrintsSlotAddress) {
   Func.Body = {Alias, Init, Store, Call};
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("LookupTextW("), std::string::npos) << Source;
-  EXPECT_NE(Source.find("&var_mA0"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("t68"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("t68_3 = "), std::string::npos) << Source;
+  EXPECT_NE(Source.find("LookupTextW(arg0, t68_3)"), std::string::npos) << Source;
+  expectPortableStore(Source, "int64_t", "t68_3", "t68_3");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, UnusedLoadAssignIsNotDeclared) {
@@ -30847,8 +30999,56 @@ TEST(HighCPointerAddresses,
   const std::string Source = emitFunctions({Func});
   EXPECT_EQ(Source.find("void cookie"), std::string::npos) << Source;
   EXPECT_NE(Source.find("sub_14000173C("), std::string::npos) << Source;
-  EXPECT_NE(Source.find("return t3"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("t3 ="), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return (int64_t)sub_14000173C(arg0)"),
+            std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_trap(); /* unknown return value */"),
+            std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return;"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, FastFailBranchOmitsSuccessReturn) {
+  HighFunc Func;
+  Func.Name = "cookie";
+  Func.Entry = 0x140001350;
+  Func.ReturnType = NdType::makeInt(8);
+  Func.Params = {{"arg0", NdType::makeInt(8)}};
+
+  HighStmt IfElse;
+  IfElse.Kind = StmtKind::IfElse;
+  IfElse.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, parameter(0),
+                                    HighExpr::makeConst(1, 8));
+  HighStmt Ok;
+  Ok.Kind = StmtKind::Return;
+  MedVar Rax;
+  Rax.Kind = MedVar::Reg;
+  Rax.Id = 0;
+  Rax.SSAVer = 0;
+  Rax.Size = 8;
+  Ok.RetVal = HighExpr::makeVar(Rax);
+  IfElse.Body.push_back(std::move(Ok));
+  Func.Body.push_back(std::move(IfElse));
+
+  MedVar Dst;
+  Dst.Kind = MedVar::Temp;
+  Dst.Id = 3;
+  Dst.Size = 8;
+  HighStmt Call;
+  Call.Kind = StmtKind::Assign;
+  Call.Dst = HighExpr::makeVar(Dst);
+  Call.Val = HighExpr::makeCall(
+      "int", 0, {HighExpr::makeConst(0x29, 1), HighExpr::makeConst(2, 4)});
+  Call.Val->IntrinsicId = Intrinsic::IntN;
+  Func.Body.push_back(std::move(Call));
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeVar(Dst);
+  Func.Body.push_back(std::move(Ret));
+
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("void cookie"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__fastfail(2)"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return t3"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("t3 ="), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, GetCurrentProcessTakesNoArguments) {
@@ -31283,10 +31483,9 @@ TEST(HighCPointerAddresses, CallResultUsedByTestEaxIsAssigned) {
   EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, CallFollowedByInt3OmitsDebugBreakAndReturn) {
-  // MSVC plants `int3` after noreturn helpers.  An unnamed call immediately
-  // followed by `int3` must not print `__debugbreak()` or a success return
-  // (cxx_eh_probe throw / abort join).
+TEST(HighCPointerAddresses, ReturningCallFollowedByInt3PreservesDebugBreak) {
+  // The helper really returns. A following trap must remain observable and
+  // cannot turn the preceding call into a nonreturning operation.
   BinaryImage Img;
   Img.Arch = Arch::X64;
   Img.Bits = Bitness::Bits64;
@@ -31345,8 +31544,9 @@ TEST(HighCPointerAddresses, CallFollowedByInt3OmitsDebugBreakAndReturn) {
   ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
   OS.flush();
   EXPECT_NE(Source.find("abort_like("), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("= abort_like("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__debugbreak"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("= abort_like("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return (int32_t)v0"), std::string::npos) << Source;
 }
 
 TEST(LLVMCPointerAddresses, TestRcxDoesNotEmitPopcount) {
@@ -31704,14 +31904,39 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
   EXPECT_NE(Source.find("catch (const ProbeError &e)"), std::string::npos)
       << Source;
   EXPECT_NE(Source.find("if (e.Value == 31)"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("if (arg0 == 7)"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("sub_140001000(&var_m48, 1)"), std::string::npos)
-      << Source;
-  EXPECT_NE(Source.find("sub_140001000(&var_m40, 10)"), std::string::npos)
-      << Source;
-  EXPECT_NE(Source.find("return (int64_t)((int64_t)(uint32_t)var_m3C)"),
+  // Escaping constructor objects and parameter homes share byte storage.
+  // The prologue's -104 and the reload's +112 address the arg0 home at +8.
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  expectPortableStore(Source, "int32_t", "frame_base) + 8", "arg0");
+  EXPECT_NE(Source.find("(uint64_t)(frame_base) - (uint64_t)(104)"),
             std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("(v0) + 112)) == 7)"), std::string::npos) << Source;
+  const auto InnerCtor = lastCallArguments(Source, "sub_140001000");
+  ASSERT_TRUE(InnerCtor.has_value()) << Source;
+  ASSERT_EQ(InnerCtor->size(), 2u) << Source;
+  EXPECT_NE((*InnerCtor)[0].find("(v0) + (uint64_t)(40)"),
+            std::string_view::npos)
+      << Source;
+  EXPECT_EQ(llvm::StringRef((*InnerCtor)[1]).trim(), "10") << Source;
+  const size_t LastCtor = Source.rfind("sub_140001000(");
+  const auto OuterCtor = lastCallArguments(
+      std::string_view(Source).substr(0, LastCtor), "sub_140001000");
+  ASSERT_TRUE(OuterCtor.has_value()) << Source;
+  ASSERT_EQ(OuterCtor->size(), 2u) << Source;
+  EXPECT_NE((*OuterCtor)[0].find("(v0) + (uint64_t)(32)"),
+            std::string_view::npos)
+      << Source;
+  EXPECT_EQ(llvm::StringRef((*OuterCtor)[1]).trim(), "1") << Source;
+  expectPortableStore(Source, "uint32_t", "(v0) + 44", "0xFFFFFF9C");
+  EXPECT_NE(Source.find("(uint32_t)neverd_mem_load_"), std::string::npos)
+      << Source;
+  const auto ReturnedSlot = lastCallArguments(Source, "neverd_mem_load_0");
+  ASSERT_TRUE(ReturnedSlot.has_value()) << Source;
+  ASSERT_EQ(ReturnedSlot->size(), 1u) << Source;
+  EXPECT_NE((*ReturnedSlot)[0].find("(v0) + 44"), std::string_view::npos)
+      << Source;
+  EXPECT_EQ(Source.find("t26"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t29 = arg0"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t29_1 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_m38"), std::string::npos) << Source;
@@ -31725,7 +31950,7 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
   EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("throw 0"), std::string::npos) << Source;
   EXPECT_NE(Source.find("catch (...)"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("return -300"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return 0xFFFFFED4"), std::string::npos) << Source;
   const auto InnerUnwind = std::string("unwind cleanup(state=3");
   EXPECT_EQ(Source.find(InnerUnwind), Source.rfind(InnerUnwind)) << Source;
 }
@@ -31936,13 +32161,16 @@ TEST(HighCPointerAddresses, CorpusBufferedCatchUsesParentFrameForIndex) {
   const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
   ASSERT_FALSE(Source.empty()) << Source;
 
-  const auto Store = sourceLineContaining(Source, "= 5);");
+  const auto Stores = portableStoreCalls(Source);
+  const auto Store = llvm::find_if(Stores, [](const PortableStoreCall &S) {
+    return S.Type == "uint8_t" && S.Value == "5";
+  });
   const size_t Catch = Source.find("catch (const ProbeError &e)");
   ASSERT_NE(Catch, std::string::npos) << Source;
   const auto Load = sourceLineContaining(Source, "t31 =", Catch);
   const auto Clear = sourceLineContaining(Source, "neverd_di =");
-  const auto Home = sourceLineContaining(Source, "= arg0);");
-  ASSERT_FALSE(Store.empty()) << Source;
+  const auto Home = sourceLineContaining(Source, ", arg0);");
+  ASSERT_NE(Store, Stores.end()) << Source;
   ASSERT_FALSE(Load.empty()) << Source;
   ASSERT_FALSE(Clear.empty()) << Source;
   ASSERT_FALSE(Home.empty()) << Source;
@@ -31950,8 +32178,15 @@ TEST(HighCPointerAddresses, CorpusBufferedCatchUsesParentFrameForIndex) {
   EXPECT_NE(Clear.find("frame_base"), std::string_view::npos) << Source;
   EXPECT_NE(Home.find("frame_base"), std::string_view::npos) << Source;
   EXPECT_EQ(Home.find("unknown register"), std::string_view::npos) << Source;
-  EXPECT_NE(Store.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_NE(Store->Address.find("frame_base"), std::string_view::npos)
+      << Source;
   EXPECT_NE(Load.find("frame_base"), std::string_view::npos) << Source;
+  const auto LoadArgs = lastCallArguments(Load, "neverd_mem_load_2");
+  ASSERT_TRUE(LoadArgs.has_value()) << Source;
+  ASSERT_EQ(LoadArgs->size(), 1u) << Source;
+  EXPECT_EQ(Store->Address, (*LoadArgs)[0]) << Source;
+  EXPECT_NE(Clear.find("frame_base - 72"), std::string_view::npos) << Source;
+  EXPECT_NE(Home.find("frame_base + 8"), std::string_view::npos) << Source;
   EXPECT_EQ(Source.find("var_m48"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_8"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v0"), std::string::npos) << Source;
@@ -31976,12 +32211,15 @@ TEST(HighCPointerAddresses, CorpusSehIndexedBufferUsesSameFrame) {
   const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
   ASSERT_FALSE(Source.empty()) << Source;
 
-  const auto Store = sourceLineContaining(Source, "= 3);");
+  const auto Stores = portableStoreCalls(Source);
+  const auto Store = llvm::find_if(Stores, [](const PortableStoreCall &S) {
+    return S.Type == "uint8_t" && S.Value == "3";
+  });
   const auto Load = sourceLineContaining(Source, "t38_3 =");
   const auto Clear = sourceLineContaining(Source, "neverd_di =");
-  const auto Home = sourceLineContaining(Source, "= arg0);");
+  const auto Home = sourceLineContaining(Source, ", arg0);");
   const auto ExceptStore = sourceLineContaining(Source, "+= 20;");
-  ASSERT_FALSE(Store.empty()) << Source;
+  ASSERT_NE(Store, Stores.end()) << Source;
   ASSERT_FALSE(Load.empty()) << Source;
   ASSERT_FALSE(Clear.empty()) << Source;
   ASSERT_FALSE(Home.empty()) << Source;
@@ -31990,11 +32228,20 @@ TEST(HighCPointerAddresses, CorpusSehIndexedBufferUsesSameFrame) {
   EXPECT_NE(Clear.find("frame_base"), std::string_view::npos) << Source;
   EXPECT_NE(Home.find("frame_base"), std::string_view::npos) << Source;
   EXPECT_EQ(Home.find("unknown register"), std::string_view::npos) << Source;
-  EXPECT_NE(ExceptStore.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_NE(ExceptStore.find("frame_base - 100"), std::string_view::npos)
+      << Source;
+  expectPortableStore(Source, "uint32_t", "frame_base - 100", "1");
   EXPECT_EQ(ExceptStore.find("unknown register"), std::string_view::npos)
       << Source;
-  EXPECT_NE(Store.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_NE(Store->Address.find("frame_base"), std::string_view::npos)
+      << Source;
   EXPECT_NE(Load.find("frame_base"), std::string_view::npos) << Source;
+  const auto LoadArgs = lastCallArguments(Load, "neverd_mem_load_2");
+  ASSERT_TRUE(LoadArgs.has_value()) << Source;
+  ASSERT_EQ(LoadArgs->size(), 1u) << Source;
+  EXPECT_EQ(Store->Address, (*LoadArgs)[0]) << Source;
+  EXPECT_NE(Clear.find("frame_base - 72"), std::string_view::npos) << Source;
+  EXPECT_NE(Home.find("frame_base + 8"), std::string_view::npos) << Source;
   EXPECT_EQ(Source.find("var_m48"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_8"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v0"), std::string::npos) << Source;
@@ -32003,9 +32250,10 @@ TEST(HighCPointerAddresses, CorpusSehIndexedBufferUsesSameFrame) {
   EXPECT_NE(Source.find("__except"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, CorpusFuncLoadGsCookieIsVoidNoreturnFail) {
-  // Hex-Rays `_security_check_cookie` is void; the unnamed fail `jmp` is
-  // noreturn. Drive the public /GS seh_probe cookie, not stuffed HighIR.
+TEST(HighCPointerAddresses, CorpusFuncLoadGsCookieKeepsUnprovenFailReturn) {
+  // With no debug signature, a bare sibling return does not prove that the
+  // unnamed tail target is void or noreturn. Preserve its observed result and
+  // make the unproven bare return explicit instead of inventing a contract.
   if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
     GTEST_SKIP() << "windows-eh corpus root is not configured";
   const auto Path = gsSehProbePath();
@@ -32029,11 +32277,21 @@ TEST(HighCPointerAddresses, CorpusFuncLoadGsCookieIsVoidNoreturnFail) {
   ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
   const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
   ASSERT_FALSE(Source.empty()) << Source;
-  EXPECT_NE(Source.find("void "), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("= sub_"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("return v"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("return t"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("sub_"), std::string::npos) << Source;
+  const std::string Signature = "int64_t sub_" + llvm::utohexstr(Entry) + "(";
+  const size_t BodyAt = Source.find(Signature);
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const std::string Body = Source.substr(BodyAt);
+  EXPECT_NE(Body.find("__builtin_trap(); /* unknown return value */"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Body.find("return (int64_t)sub_"), std::string::npos) << Source;
+  EXPECT_EQ(Body.find("= sub_"), std::string::npos) << Source;
+  llvm::SmallVector<llvm::StringRef, 16> Lines;
+  llvm::StringRef(Body).split(Lines, '\n');
+  for (const llvm::StringRef Line : Lines) {
+    EXPECT_FALSE(Line.ltrim().starts_with("return v")) << Source;
+    EXPECT_FALSE(Line.ltrim().starts_with("return t")) << Source;
+  }
 }
 
 TEST(HighCPointerAddresses, CorpusFuncLoadGsHandlerCheckReturnsOne) {
@@ -32158,18 +32416,18 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues) {
     if (!Img)
       continue;
     std::string Text = highcOnlyFunction(*Img, Begin);
-    if (Text.find("return -200") == std::string::npos ||
-        Text.find("catch") == std::string::npos)
+    if (Text.find("throw ProbeDerived(11)") == std::string::npos ||
+        Text.find("catch (const ProbeBase &e_1)") == std::string::npos)
       continue;
     Entry = Begin;
     Source = std::move(Text);
     break;
   }
-  ASSERT_NE(Entry, 0u) << "no nested catch returning -200";
+  ASSERT_NE(Entry, 0u) << "no typed nested catch";
   EXPECT_EQ(Source.find("arg1"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("return v2"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("return v0"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("return -200"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return 0xFFFFFF38"), std::string::npos) << Source;
   EXPECT_NE(Source.find("catch (const ProbeBase &e_1)"), std::string::npos)
       << Source;
   EXPECT_NE(Source.find("e_1.Value"), std::string::npos) << Source;
@@ -32179,6 +32437,7 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues) {
       << Source;
   EXPECT_EQ(Source.find("(uint32_t)(e"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t12_1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("t26"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsUnwindDestructor) {
@@ -32207,7 +32466,7 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsUnwindDestructor) {
       continue;
     std::string Text = highcOnlyFunction(*Img, Begin);
     if (Text.find("unwind cleanup") == std::string::npos ||
-        Text.find("return -200") == std::string::npos)
+        Text.find("throw ProbeDerived(11)") == std::string::npos)
       continue;
     Entry = Begin;
     Source = std::move(Text);
@@ -32218,7 +32477,10 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsUnwindDestructor) {
   ASSERT_NE(CleanupAt, std::string::npos) << Source;
   const std::string After = Source.substr(CleanupAt);
   EXPECT_NE(After.find("sub_"), std::string::npos) << After;
-  EXPECT_NE(After.find("&var_m"), std::string::npos) << After;
+  // Unwind funclets address the same established frame as the constructors.
+  EXPECT_NE(After.find("frame_base - 104"), std::string::npos) << After;
+  EXPECT_NE(After.find("+ (uint64_t)(40)"), std::string::npos) << After;
+  EXPECT_NE(After.find("+ (uint64_t)(32)"), std::string::npos) << After;
   EXPECT_EQ(After.find("arg1"), std::string::npos) << After;
 }
 
@@ -32790,7 +33052,7 @@ TEST(LLVMCPointerAddresses, AddressOfWrapperRecordOmitsOffset0Field) {
       << Source;
 }
 
-TEST(LLVMCPointerAddresses, IntegerFieldStorePeelsCallView) {
+TEST(LLVMCPointerAddresses, IntegerFieldStorePreservesCallViewAndStoreWidth) {
   class FieldDbg : public NullDebugContext {
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
@@ -32841,9 +33103,9 @@ TEST(LLVMCPointerAddresses, IntegerFieldStorePeelsCallView) {
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, &Dbg, nullptr,
                                   Function));
   OS.flush();
-  EXPECT_NE(Source.find("this->values_ = "), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint32_t)"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(uint64_t)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("*(uint64_t*)&this->values_ = "), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint32_t)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint64_t)"), std::string::npos) << Source;
 }
 
 TEST(LLVMCPointerAddresses, UnsignedAbovePrintsGreater) {
@@ -34149,12 +34411,99 @@ TEST(LLVMCPointerAddresses, ArgListMixedCallStoresCastToFieldTypes) {
   EXPECT_NE(Source.find("((ArgList *)&pAuxData)->values_ = "),
             std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("(intptr_t)(GetLength("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(intptr_t)((uint64_t)((int32_t)(GetLength(arg0))))"),
+            std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("->types_ = CSimpleStringT_cstr("),
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("->values_ = GetLength("), std::string::npos)
       << Source;
+
+  const std::string ExecutableSource = R"(
+#include <stdint.h>
+#include <string.h>
+typedef struct { uintptr_t reserved; void *p; } PtrBox;
+typedef struct { uintptr_t types_; int64_t *values_; } ArgList;
+static uint32_t next_length;
+static unsigned length_calls;
+static uint64_t captured_types, captured_values;
+static const void *CSimpleStringT_cstr(void *input) { return input; }
+static uint32_t GetLength(void *input) {
+  (void)input;
+  ++length_calls;
+  return next_length;
+}
+static void format_args(void *input) {
+  memcpy(&captured_types, input, sizeof(captured_types));
+  memcpy(&captured_values, (char *)input + 8, sizeof(captured_values));
+}
+)" + Source + R"(
+int main(void) {
+  uint64_t object = 0;
+  const uint32_t lengths[] = {0, 7, UINT32_C(0x80000001), UINT32_MAX};
+  for (unsigned i = 0; i < sizeof(lengths) / sizeof(lengths[0]); ++i) {
+    next_length = lengths[i];
+    length_calls = 0;
+    pack_mixed_calls(&object);
+    if (length_calls != 1 || captured_types != (uintptr_t)&object) return 1;
+    if (captured_values != (uint64_t)(int64_t)(int32_t)lengths[i]) return 2;
+  }
+  return 0;
+}
+)";
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, ExecutablePath, ErrorPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-arglist-casts", "c",
+                                                  SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-arglist-casts", "exe",
+                                                  ExecutablePath));
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-arglist-casts", "err",
+                                                  ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream File(SourcePath, EC);
+    ASSERT_FALSE(EC) << EC.message();
+    File << ExecutableSource;
+  }
+  for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
+    SCOPED_TRACE(Optimization.str());
+    llvm::SmallVector<llvm::StringRef, 12> Args{
+        Compiler,
+        "-std=c11",
+        Optimization,
+        "-Werror=int-conversion",
+        "-Werror=incompatible-pointer-types",
+        SourcePath,
+        "-o",
+        ExecutablePath};
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, ErrorPath.str()};
+    std::string Error;
+    const int Status = llvm::sys::ExecuteAndWait(Compiler, Args, std::nullopt,
+                                                 Redirects, 30, 0, &Error);
+    auto ErrorBuffer = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str()
+                                         : "")
+                         << "\n"
+                         << ExecutableSource;
+    llvm::SmallVector<llvm::StringRef, 1> RunArgs{ExecutablePath};
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, RunArgs, std::nullopt,
+                                        {}, 30, 0, &Error),
+              0)
+        << Error << "\n"
+        << ExecutableSource;
+  }
 }
 
 TEST(LLVMCPointerAddresses, ExtraClippedArgListHomeTakesCallType) {
@@ -35449,17 +35798,17 @@ TEST(LLVMCPointerAddresses, TypedMapCursorPrintsHashNextValue) {
   EXPECT_NE(Source.find("CNode*"), std::string::npos) << Source;
   EXPECT_NE(Source.find("eRecordRank eRecord"), std::string::npos) << Source;
   EXPECT_NE(Source.find(
-                "m_ppBins[eRecord % this->m_colorTable.m_nBins]"),
+                "(uint32_t)(eRecord) % (uint32_t)(this->m_colorTable.m_nBins)"),
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("m_ppBins[RDX_"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("m_ppBins[rdx"), std::string::npos) << Source;
   EXPECT_EQ(Source.find(
-                "m_ppBins[eRecord % this->m_colorTable.m_nBins] == 0"),
+                "] == 0"),
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find(
-                "m_ppBins[eRecord % this->m_colorTable.m_nBins] + 16"),
+                "] + 16"),
             std::string::npos)
       << Source;
   EXPECT_NE(Source.find("->m_nHash == eRecord"), std::string::npos)
@@ -35665,7 +36014,7 @@ TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
   const auto KeyAt = Source.find("->m_key", BodyAt);
   const auto NextAt = Source.find("->m_pNext", BodyAt);
   const auto ValueAt = Source.find("->m_value", BodyAt);
-  const auto IndexAt = Source.find("eRecord % ", BodyAt);
+  const auto IndexAt = Source.find("(uint32_t)(eRecord) % ", BodyAt);
   ASSERT_NE(ForAt, std::string::npos) << Source;
   ASSERT_NE(HashAt, std::string::npos) << Source;
   ASSERT_NE(KeyAt, std::string::npos) << Source;
@@ -35693,7 +36042,7 @@ TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
   ASSERT_NE(ForClose, std::string::npos) << Source;
   EXPECT_LT(HashAt, ForClose) << Source;
   EXPECT_LT(ValueAt, ForClose) << Source;
-  EXPECT_EQ(Source.find("eRecord % ", IndexAt + 1), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("(uint32_t)(eRecord) % ", IndexAt + 1), std::string::npos) << Source;
   size_t BareCopies = 0;
   for (size_t Line = BodyAt; Line < Source.size();) {
     size_t End = Source.find('\n', Line);
@@ -35911,7 +36260,7 @@ TEST(LLVMCPointerAddresses, CursorNextStoreDoesNotRecurse) {
   EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, X86DivCheckOmitsNestedIntegerViewCasts) {
+TEST(LLVMCPointerAddresses, X86DivCheckPreservesIntegerViewWidths) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-div-check", Context);
   llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
@@ -35951,7 +36300,7 @@ TEST(LLVMCPointerAddresses, X86DivCheckOmitsNestedIntegerViewCasts) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("(uint64_t)eRecord >> 32"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint64_t)((uint32_t)(eRecord)) >> 32"), std::string::npos) << Source;
   EXPECT_NE(Source.find("nBins == 0"), std::string::npos) << Source;
   EXPECT_NE(Source.find("||"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("(unsigned)eRecord >> 32"), std::string::npos) << Source;
@@ -35961,7 +36310,7 @@ TEST(LLVMCPointerAddresses, X86DivCheckOmitsNestedIntegerViewCasts) {
       << Source;
 }
 
-TEST(LLVMCPointerAddresses, DivOverflowOrOmitsExtraParentheses) {
+TEST(LLVMCPointerAddresses, DivOverflowOrPreservesUnsignedShiftPrecedence) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-div-paren", Context);
   llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
@@ -36003,13 +36352,13 @@ TEST(LLVMCPointerAddresses, DivOverflowOrOmitsExtraParentheses) {
   OS.flush();
   const auto BodyAt = Source.find("div_paren(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  EXPECT_NE(Source.find("if (nBins == 0 || (uint64_t)eRecord >> 32 >= "
-                        "(unsigned)nBins)",
-                        BodyAt),
+  EXPECT_NE(Source.find("if (nBins == 0 || ", BodyAt), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("(uint32_t)(((uint64_t)((uint32_t)(eRecord)) >> 32)) "
+                        ">= (unsigned)nBins)", BodyAt),
             std::string::npos)
       << Source;
-  EXPECT_EQ(Source.find("(((uint64_t)", BodyAt), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("((uint64_t)eRecord >> 32)", BodyAt), std::string::npos)
+  EXPECT_EQ(Source.find("(unsigned)eRecord >> 32", BodyAt), std::string::npos)
       << Source;
 }
 
@@ -36249,7 +36598,11 @@ TEST(LLVMCPointerAddresses, X86DivCheckKeepsWidenedHomeShift) {
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, nullptr, nullptr,
                                   Function));
   OS.flush();
-  EXPECT_NE(Source.find("(uint64_t)eRecord >> 32"), std::string::npos) << Source;
+  EXPECT_NE(
+      Source.find("(uint64_t)((uint32_t)((uint64_t)((uint32_t)(eRecord))))"
+                  " >> 32"),
+      std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("(unsigned)eRecord >> 32"), std::string::npos) << Source;
   EXPECT_NE(Source.find("nBins == 0"), std::string::npos) << Source;
   EXPECT_NE(Source.find("||"), std::string::npos) << Source;
@@ -36282,7 +36635,7 @@ TEST(LLVMCPointerAddresses, X86DivCheckStatementShiftKeepsZext) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("= (uint64_t)eRecord >> 32"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("= (uint64_t)((uint32_t)(eRecord)) >> 32"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("(unsigned)eRecord >> 32"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("hi = (unsigned)"), std::string::npos) << Source;
 }
@@ -36431,9 +36784,23 @@ void expectCapturedSehExceptionCode(const std::string &Source) {
   const size_t NameAt = Source.find_first_not_of(" \t", LineAt + 1);
   ASSERT_LT(NameAt, LoadAt) << Source;
   const std::string Captured = Source.substr(NameAt, LoadAt - NameAt);
-  const size_t CallAt =
-      Source.find("RaiseException(" + Captured + ", 0, 0, 0);");
+  const size_t CallAt = Source.find("RaiseException(", LoadAt);
   ASSERT_NE(CallAt, std::string::npos) << Source;
+  const auto Args =
+      lastCallArguments(sourceLineContaining(Source, "RaiseException(", LoadAt),
+                        "RaiseException");
+  ASSERT_TRUE(Args.has_value()) << Source;
+  ASSERT_EQ(Args->size(), 4u) << Source;
+  for (size_t I = 1; I < Args->size(); ++I)
+    EXPECT_EQ(llvm::StringRef((*Args)[I]).trim(), "0") << Source;
+  const std::string First = llvm::StringRef((*Args)[0]).trim().str();
+  const std::string Extended = "(uint64_t)((uint32_t)(" + Captured + "))";
+  if (First != Captured && First != Extended) {
+    // NoOpt retains the zext SSA temporary; optimized output can inline it.
+    const size_t CopyAt = Source.find(First + " = " + Extended + ";", LoadAt);
+    ASSERT_NE(CopyAt, std::string::npos) << Source;
+    EXPECT_LT(CopyAt, CallAt) << Source;
+  }
   EXPECT_LT(LoadAt, CallAt) << Source;
   EXPECT_EQ(Source.find("RaiseException(0xE0421001"), std::string::npos)
       << Source;
@@ -36488,6 +36855,25 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   // The handler rejoins the normal path after the whole SEH statement.
   // Jumping from __except into its __try is invalid Windows C.
   EXPECT_LT(ExceptCloseAt, JoinAt) << Source;
+  const std::string NormalSlot = assignedNameBefore(Source, "= -100;");
+  const std::string ExceptSlot = assignedNameBefore(Source, "= 41;");
+  ASSERT_FALSE(NormalSlot.empty()) << Source;
+  EXPECT_EQ(NormalSlot, ExceptSlot) << Source;
+  const std::string Join = Source.substr(JoinAt);
+  // The RSP PHI has one proven frame displacement. Its joined loads must use
+  // the object that both branches wrote, never a separate byte-frame slot.
+  EXPECT_NE(Join.find(NormalSlot), std::string::npos) << Source;
+  EXPECT_EQ(Join.find("*(uint32_t*)"), std::string::npos) << Source;
+  const auto SinkLine = sourceLineContaining(Join, "g_1400050E0 = ");
+  ASSERT_FALSE(SinkLine.empty()) << Source;
+  constexpr std::string_view SinkPrefix = "g_1400050E0 = ";
+  const size_t SinkValueAt = SinkLine.find(SinkPrefix) + SinkPrefix.size();
+  const std::string SinkValue(SinkLine.substr(
+      SinkValueAt, SinkLine.find(';', SinkValueAt) - SinkValueAt));
+  if (SinkValue != NormalSlot)
+    EXPECT_NE(Join.find(SinkValue + " = " + NormalSlot + ";"),
+              std::string::npos)
+        << Source;
 
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
@@ -36577,7 +36963,8 @@ TEST(LLVMCPointerAddresses, CorpusOptimizedSehResultIsAssignedOnBothPaths) {
     };
     const std::string NormalHome = AssignedName(NormalValue);
     ASSERT_FALSE(NormalHome.empty()) << Source;
-    EXPECT_EQ(NormalHome, AssignedName(HandlerValue)) << Source;
+    const std::string HandlerHome = AssignedName(HandlerValue);
+    ASSERT_FALSE(HandlerHome.empty()) << Source;
     const size_t SinkAt = Source.find("g_1400030A0 = ");
     ASSERT_NE(SinkAt, std::string::npos) << Source;
     const size_t SinkValueAt = SinkAt + std::string("g_1400030A0 = ").size();
@@ -36585,11 +36972,23 @@ TEST(LLVMCPointerAddresses, CorpusOptimizedSehResultIsAssignedOnBothPaths) {
     ASSERT_NE(SinkEnd, std::string::npos) << Source;
     const std::string SinkHome =
         Source.substr(SinkValueAt, SinkEnd - SinkValueAt);
+    // Parallel PHI copies use one temporary per edge. Both edge values must
+    // reach the same post-SEH sink, with each copy inside its own path.
     if (SinkHome != NormalHome) {
-      const size_t CopyAt = Source.find(SinkHome + " = " + NormalHome + ";");
+      const size_t CopyAt =
+          Source.find(SinkHome + " = " + NormalHome + ";", NormalValue);
+      ASSERT_NE(CopyAt, std::string::npos) << Source;
+      EXPECT_LT(CopyAt, ExceptAt) << Source;
+    }
+    if (SinkHome != HandlerHome) {
+      const size_t CopyAt =
+          Source.find(SinkHome + " = " + HandlerHome + ";", HandlerValue);
       ASSERT_NE(CopyAt, std::string::npos) << Source;
       EXPECT_LT(CopyAt, SinkAt) << Source;
     }
+    EXPECT_NE(Source.find("return (" + SinkHome + " + 1);", SinkAt),
+              std::string::npos)
+        << Source;
   }
 }
 
@@ -37009,7 +37408,7 @@ TEST(HighCPointerAddresses, X86ExceptEbpStoreUsesTryResultSlot) {
   Func.Body.push_back(std::move(Ret));
 
   const std::string Source = emitFunctions({Func}, Arch::X86);
-  const std::string TrySlot = assignedNameBefore(Source, "= -100");
+  const std::string TrySlot = assignedNameBefore(Source, "= 0xFFFFFF9C");
   const std::string ExceptSlot = assignedNameBefore(Source, "= 41");
   ASSERT_FALSE(TrySlot.empty()) << Source;
   EXPECT_EQ(TrySlot, ExceptSlot) << Source;
@@ -37110,20 +37509,51 @@ TEST(HighCPointerAddresses, CorpusFuncLoadX86SehProbeExceptAssignsResult) {
   EXPECT_EQ(Source.find("goto L_"), std::string::npos)
       << Source << "\n"
       << Blocks << HighDump;
-  const std::string TrySlot = assignedNameBefore(Source, "= -100");
-  const std::string ExceptSlot = assignedNameBefore(Source, "= 41");
-  ASSERT_FALSE(TrySlot.empty()) << Source << "\n" << Blocks << HighDump;
-  EXPECT_EQ(TrySlot, ExceptSlot) << Source << "\n" << Blocks << HighDump;
-  EXPECT_NE(Source.find("= " + TrySlot), std::string::npos)
-      << Source << "\n"
-      << Blocks << HighDump;
-  EXPECT_NE(Source.find("RaiseException(0xE0421001, 0, 0, 0)"),
+  const auto Stores = portableStoreCalls(Source);
+  const auto Normal = llvm::find_if(Stores, [](const PortableStoreCall &S) {
+    return S.Type == "uint32_t" && S.Value == "0xFFFFFF9C";
+  });
+  const auto Handler = llvm::find_if(Stores, [](const PortableStoreCall &S) {
+    return S.Type == "uint32_t" && S.Value == "41";
+  });
+  ASSERT_NE(Normal, Stores.end()) << Source << "\n" << Blocks << HighDump;
+  ASSERT_NE(Handler, Stores.end()) << Source << "\n" << Blocks << HighDump;
+  const std::string EntryFrame =
+      "(int32_t)(uint32_t)((uint32_t)(frame_base) - (uint32_t)(4))";
+  const std::string NormalFrame = assignedNameBefore(Source, "= " + EntryFrame);
+  ASSERT_FALSE(NormalFrame.empty()) << Source;
+  EXPECT_EQ(Normal->Address,
+            "(uintptr_t)((uintptr_t)(" + NormalFrame + ") - 28)")
+      << Source;
+  EXPECT_EQ(Handler->Address, "(uintptr_t)((uintptr_t)((frame_base - 4)) - 28)")
+      << Source;
+  const size_t ExceptAt = Source.find("} __except (");
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  const std::string HandlerText = Source.substr(ExceptAt);
+  const std::string JoinFrame =
+      assignedNameBefore(HandlerText, "= (frame_base - 4);");
+  ASSERT_FALSE(JoinFrame.empty()) << Source;
+  const size_t NormalCopyAt = Source.find(JoinFrame + " = " + EntryFrame + ";");
+  ASSERT_NE(NormalCopyAt, std::string::npos) << Source;
+  EXPECT_LT(NormalCopyAt, ExceptAt) << Source;
+  const std::string JoinedLoad =
+      "neverd_mem_load_0((uintptr_t)((uintptr_t)(" + JoinFrame + ") - 28))";
+  EXPECT_NE(HandlerText.find("g_4040C8 = " + JoinedLoad + ";"),
             std::string::npos)
       << Source;
-  EXPECT_EQ(Source.find("= 0xE0421001"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("*("), std::string::npos) << Source;
+  EXPECT_NE(
+      sourceLineContaining(HandlerText, "return (int32_t)").find(JoinedLoad),
+      std::string_view::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find(JoinFrame + " = 0;"), std::string::npos) << Source;
+  // The retained SSA copy of the exception code must reach the call unchanged.
+  const std::string Code = assignedNameBefore(Source, "= 0xE0421001;");
+  ASSERT_FALSE(Code.empty()) << Source;
+  EXPECT_NE(Source.find("RaiseException(" + Code + ", 0, 0, 0)"),
+            std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("var_m14"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("t24"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, RsdsPdbNamesFrameSlotsOnSafetyFixture) {
@@ -37161,10 +37591,10 @@ TEST(HighCPointerAddresses, RsdsPdbNamesFrameSlotsOnSafetyFixture) {
   ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, COpts, DbgOr->get()));
   OS.flush();
   EXPECT_NE(Source.find("tainted_stack_overflow"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("buf[16]"), std::string::npos) << Source;
-  EXPECT_TRUE(Source.find("char* s") != std::string::npos ||
-              Source.find("char *s") != std::string::npos)
-      << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_NE(Source.find("strcpy("), std::string::npos) << Source;
+  expectPortableStore(Source, "int64_t", "+ 40", "getenv(\"PAYLOAD\")");
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_m18"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_m20"), std::string::npos) << Source;
 }

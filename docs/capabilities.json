@@ -3444,6 +3444,7 @@
       "public_surfaces": {
         "c": [
           "neverd_objc_methods_json",
+          "neverd_objc_methods_summary_json",
           "neverd_swift_methods_json"
         ],
         "python": [],
@@ -3465,6 +3466,7 @@
         ],
         "json": [
           "neverd_objc_methods_json",
+          "neverd_objc_methods_summary_json",
           "neverd_swift_methods_json"
         ]
       }

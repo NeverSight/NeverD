@@ -77,6 +77,7 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
   using namespace llvmc;
   State.DeadFrameAllocas.clear();
   State.DeadFrameStores.clear();
+  State.FramePointerLocations.clear();
   State.RawFrameLocations.clear();
   State.RawFrameAllocas.clear();
 
@@ -105,10 +106,16 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
     return false;
   };
   bool UncertainFrameRead = false;
+  auto NoteAddress = [&](const llvm::Value *Ptr, const FrameAliases &Aliases) {
+    if (!Aliases.Incomplete && !Aliases.HasNonFrameAlternative &&
+        !Aliases.UsesCarrierLoad && Aliases.Locations.size() == 1)
+      State.FramePointerLocations.emplace(Ptr, *Aliases.Locations.begin());
+  };
   auto NoteLive = [&](const llvm::Value *Ptr, bool ExpandRecord,
                       const llvm::CallBase *Call = nullptr,
                       uint64_t ReadSize = 0) {
     FrameAliases Aliases = peelSyntheticFrames(Ptr, Stores, DL);
+    NoteAddress(Ptr, Aliases);
     if (Aliases.Locations.size() > 1 ||
         (Aliases.HasNonFrameAlternative && !Aliases.Locations.empty()) ||
         (Aliases.Incomplete && !Aliases.Frames.empty()))
@@ -181,6 +188,7 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
           continue;
         FrameAliases Dest =
             peelSyntheticFrames(SI->getPointerOperand(), Stores, DL);
+        NoteAddress(SI->getPointerOperand(), Dest);
         bool DestIsLive = false;
         const llvm::TypeSize Size =
             DL.getTypeStoreSize(SI->getValueOperand()->getType());

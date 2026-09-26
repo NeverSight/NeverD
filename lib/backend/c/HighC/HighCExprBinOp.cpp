@@ -726,11 +726,13 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   }
 
   if (NeedsUnsignedCast || NeedsSignedCast) {
+    uint16_t CmpSize = E.Operands[0]->Type ? E.Operands[0]->Type->Size
+                                         : (E.Type ? E.Type->Size : 4);
+    // An inverted comparison can put a narrow immediate before its wider
+    // machine operand. Preserve the common width before simplifying views.
     const bool Comparison =
         E.Op == NdOp::INT_LESS || E.Op == NdOp::INT_LESSEQUAL ||
         E.Op == NdOp::INT_SLESS || E.Op == NdOp::INT_SLESSEQUAL;
-    uint16_t CmpSize = E.Operands[0]->Type ? E.Operands[0]->Type->Size
-                                           : (E.Type ? E.Type->Size : 4);
     if (Comparison && E.Operands[1]->Type)
       CmpSize = std::max(CmpSize, E.Operands[1]->Type->Size);
     auto PeelView = [&](const ExprPtr &Op) -> const HighExpr * {
@@ -821,36 +823,9 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
       }
       return {};
     };
-    auto IsTypedMemberOperand = [&](auto &&Self, const HighExpr *Op,
-                                    unsigned Depth) -> bool {
-      if (!Op || Depth > 6)
-        return false;
-      if ((Op->Kind == ExprKind::Cast || Op->Kind == ExprKind::BitCast ||
-           (Op->Kind == ExprKind::UnaryOp &&
-            (Op->Op == NdOp::INT_ZEXT || Op->Op == NdOp::INT_SEXT)) ||
-           (Op->Kind == ExprKind::BinOp && Op->Op == NdOp::SUBBYTES)) &&
-          !Op->Operands.empty() && Op->Operands[0])
-        return Self(Self, Op->Operands[0].get(), Depth + 1);
-      if (Op->Kind == ExprKind::Load && !Op->Operands.empty() && Op->Operands[0])
-        return typedMemberAccess(*Op->Operands[0], CmpSize).has_value() ||
-               typedMemberAccess(*Op->Operands[0]).has_value();
-      if (Op->Kind == ExprKind::Var || Op->Kind == ExprKind::Phi) {
-        const std::string Raw = varName(Op->Var);
-        const std::string Name = copyForwardName(Raw);
-        if (FieldForward.count(Raw) || FieldForward.count(Name))
-          return true;
-        if (auto Fwd = ValueForward.find(Raw);
-            Fwd != ValueForward.end() && Fwd->second && Fwd->second != Op)
-          return Self(Self, peelIntegerViewOps(Fwd->second), Depth + 1);
-        if (auto Fwd = ValueForward.find(Name);
-            Fwd != ValueForward.end() && Fwd->second && Fwd->second != Op)
-          return Self(Self, peelIntegerViewOps(Fwd->second), Depth + 1);
-      }
-      return false;
-    };
     auto CastOp = [&](const HighExpr *Op) {
-      if (Op->Kind == ExprKind::Const && Op->ConstVal == 0)
-        return std::string("0");
+      // Machine comparisons zero-extend narrower operands before applying
+      // their signedness, matching the MedLLVM interpretation.
       const uint16_t OpSize =
           Op->Type ? Op->Type->Size
                    : (Op->Kind == ExprKind::Var ? Op->Var.Size : 0);
@@ -858,6 +833,8 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
         return "(" + UTy + ")(" +
                typeToC(NdType::makeInt(OpSize, false)) + ")" +
                exprStr(*Op, 99);
+      if (Op->Kind == ExprKind::Const && Op->ConstVal == 0)
+        return std::string("0");
       if (Op->Type && Op->Type->Kind == NdTypeKind::Int &&
           Op->Type->Size == CmpSize && Op->Type->IsSigned == NeedsSignedCast)
         return exprStr(*Op, 99);
@@ -865,15 +842,15 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
         TypeRef Ret = knownCallReturnType(*Call);
         if (!Ret)
           Ret = Call->Type;
-        if (Ret && Ret->Kind == NdTypeKind::Int && Ret->Size == CmpSize)
+        if (Ret && Ret->Kind == NdTypeKind::Int && Ret->Size == CmpSize &&
+            Ret->IsSigned == NeedsSignedCast)
           return exprStr(*Call, 99);
       }
       if (TypeRef Ty = DisplayInt(DisplayInt, Op, 0);
           Ty && ((Ty->Kind == NdTypeKind::Int && Ty->Size == CmpSize &&
                   Ty->IsSigned == NeedsSignedCast) ||
-                 (Ty->IsEnum && (Ty->Size == CmpSize || Ty->Size == 0))))
-        return exprStr(*Op, 99);
-      if (IsTypedMemberOperand(IsTypedMemberOperand, Op, 0))
+                 (Ty->IsEnum && Ty->IsSigned == NeedsSignedCast &&
+                  Ty->Size == CmpSize)))
         return exprStr(*Op, 99);
       return "(" + UTy + ")" + exprStr(*Op, 99);
     };

@@ -233,6 +233,7 @@ TEST(X86_32_DebugHighC, GotoSkeletonEmitsLabelsNotTrap) {
   Func.Body.push_back(Lab);
   HighStmt Ret;
   Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeConst(0, 4);
   Func.Body.push_back(Ret);
 
   std::string C;

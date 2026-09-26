@@ -43,6 +43,28 @@ namespace {
 
 using namespace neverd;
 
+// PHI edges may use a temporary so all sources are read before any PHI is
+// overwritten. Check the value reaching the destination in either spelling.
+size_t findEdgeCopy(const std::string &Source, const std::string &Destination,
+                    const std::string &Value, size_t Start) {
+  const auto Direct = Source.find(Destination + " = " + Value + ";", Start);
+  if (Direct != std::string::npos)
+    return Direct;
+  const std::string Assignment = " = " + Value + ";";
+  for (auto At = Source.find(Assignment, Start); At != std::string::npos;
+       At = Source.find(Assignment, At + Assignment.size())) {
+    const auto NameStart = Source.find_last_of(" \n", At - 1);
+    if (NameStart == std::string::npos)
+      continue;
+    const std::string Temporary = Source.substr(NameStart + 1, At - NameStart - 1);
+    const auto Copy = Source.find(Destination + " = " + Temporary + ";", At);
+    const auto BlockEnd = Source.find('}', At);
+    if (Copy != std::string::npos && Copy < BlockEnd)
+      return Copy;
+  }
+  return std::string::npos;
+}
+
 bool hasHostFixtureCompiler() {
   return NEVERD_RUNTIME_FIXTURE_COMPILER[0] != '\0';
 }
@@ -1691,7 +1713,7 @@ TEST(COFFExceptionIR, LLVMCProjectsInvokeNormalEdgesWithHandlerPhiCopy) {
                           InvokeCopyValueEnd - InvokeCopyNameEnd - 3),
             "99") << Source;
   const auto HandlerCopyAt =
-      Source.find(JoinedName + " = 99;", ExceptAt);
+      findEdgeCopy(Source, JoinedName, "99", ExceptAt);
   ASSERT_NE(HandlerCopyAt, std::string::npos) << Source;
   EXPECT_LT(ExitAt, ExitGotoAt) << Source;
   EXPECT_LT(InvokeCopyAt, ExitGotoAt) << Source;
@@ -1774,11 +1796,14 @@ TEST(COFFExceptionIR, LLVMCProjectsBothConstantPhiCopiesAfterExcept) {
   ASSERT_NE(AfterAt, std::string::npos) << Source;
   const auto NormalCopyAt = Source.find("joined", ExitAt);
   ASSERT_NE(NormalCopyAt, std::string::npos) << Source;
-  const auto NameEnd = Source.find(" = 7;", NormalCopyAt);
+  const auto NameEnd = Source.find(" = ", NormalCopyAt);
   ASSERT_NE(NameEnd, std::string::npos) << Source;
   ASSERT_LT(NameEnd, ExceptAt) << Source;
   const std::string JoinedName = Source.substr(NormalCopyAt, NameEnd - NormalCopyAt);
-  const auto HandlerCopyAt = Source.find(JoinedName + " = 99;", ExceptAt);
+  const auto NormalValueAt = findEdgeCopy(Source, JoinedName, "7", ExitAt);
+  ASSERT_NE(NormalValueAt, std::string::npos) << Source;
+  EXPECT_LT(NormalValueAt, ExceptAt) << Source;
+  const auto HandlerCopyAt = findEdgeCopy(Source, JoinedName, "99", ExceptAt);
   ASSERT_NE(HandlerCopyAt, std::string::npos) << Source;
   EXPECT_LT(HandlerCopyAt, AfterAt) << Source;
   EXPECT_NE(Source.find("after_step(" + JoinedName + ");", AfterAt),
@@ -2342,16 +2367,19 @@ TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
   const auto NormalStateCopy = Source.find(" = 7;", OuterAt);
   ASSERT_NE(NormalStateCopy, std::string::npos) << Source;
   EXPECT_LT(NormalStateCopy, ExceptKw) << Source;
-  const auto StateLine = Source.rfind('\n', NormalStateCopy);
-  ASSERT_NE(StateLine, std::string::npos) << Source;
-  std::string StateName =
-      Source.substr(StateLine + 1, NormalStateCopy - StateLine - 1);
-  StateName.erase(0, StateName.find_first_not_of(" "));
-  EXPECT_NE(Source.find(StateName + " = 99;", ExceptKw), std::string::npos)
-      << Source;
-  EXPECT_NE(Source.find("record_state(" + StateName + ");", HandlerCopy),
-            std::string::npos)
-      << Source;
+  const auto StateCall = Source.find("record_state(", HandlerCopy);
+  ASSERT_NE(StateCall, std::string::npos) << Source;
+  const auto StateNameBegin = StateCall + std::string("record_state(").size();
+  const auto StateNameEnd = Source.find(')', StateNameBegin);
+  ASSERT_NE(StateNameEnd, std::string::npos) << Source;
+  const std::string StateName =
+      Source.substr(StateNameBegin, StateNameEnd - StateNameBegin);
+  const auto NormalState = findEdgeCopy(Source, StateName, "7", OuterAt);
+  const auto HandlerState = findEdgeCopy(Source, StateName, "99", ExceptKw);
+  ASSERT_NE(NormalState, std::string::npos) << Source;
+  ASSERT_NE(HandlerState, std::string::npos) << Source;
+  EXPECT_LT(NormalState, ExceptKw) << Source;
+  EXPECT_LT(HandlerState, StateCall) << Source;
   if (hasHostFixtureCompiler()) {
     const std::string Prelude =
         "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"

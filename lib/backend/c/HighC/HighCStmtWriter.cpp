@@ -114,13 +114,13 @@ const HighExpr *stmtCallExpr(const HighStmt &Stmt) {
   return nullptr;
 }
 
-bool isNoReturnCallStmt(const HighCAnalysisState &State, const HighStmt &Stmt) {
+bool isNoReturnCallStmt(const HighStmt &Stmt) {
   if (isCxxThrowStmt(Stmt))
     return true;
   const HighExpr *E = stmtCallExpr(Stmt);
   if (!E)
     return false;
-  return isNoreturnCallExpr(State, *E);
+  return isNoreturnCallExpr(*E);
 }
 
 bool stmtsAlwaysExit(const HighCAnalysisState &State,
@@ -148,7 +148,7 @@ bool stmtAlwaysExit(const HighCAnalysisState &State, const HighStmt &Stmt) {
         return false;
     return true;
   default:
-    return isNoReturnCallStmt(State, Stmt);
+    return isNoReturnCallStmt(Stmt);
   }
 }
 
@@ -335,7 +335,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     }
     // A call with custom statement rendering can have live auxiliary outputs
     // even when its primary result is unused. Render those effects first.
-    if (isNoreturnCallExpr(Analysis, *Stmt.Val) ||
+    if (isNoreturnCallExpr(*Stmt.Val) ||
         Analysis.OmittedCallResults.count(&Stmt) ||
         (Stmt.Val->Kind == ExprKind::Call && Stmt.Dst &&
          (Stmt.Dst->Kind == ExprKind::Var ||
@@ -737,13 +737,13 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
           !Analysis.AssignedVars.count(varName(Stmt.RetVal->Var)) &&
           (Stmt.RetVal->Var.Kind != MedVar::Param || InEHClauseBody))))
       OS << "return " << IndirectReturnName << ";\n";
-    else if (InferredVoid || !Stmt.RetVal ||
-             Stmt.RetVal->Kind == ExprKind::Undef)
+    else if (InferredVoid)
       OS << "return;\n";
-    else if (Stmt.RetVal->Kind == ExprKind::Var &&
-             !Analysis.AssignedVars.count(varName(Stmt.RetVal->Var)) &&
-             (Stmt.RetVal->Var.Kind != MedVar::Param || InEHClauseBody))
-      OS << "return;\n";
+    else if (!Stmt.RetVal || Stmt.RetVal->Kind == ExprKind::Undef ||
+             (Stmt.RetVal->Kind == ExprKind::Var &&
+              !Analysis.AssignedVars.count(varName(Stmt.RetVal->Var)) &&
+              (Stmt.RetVal->Var.Kind != MedVar::Param || InEHClauseBody)))
+      OS << "__builtin_trap(); /* unknown return value */\n";
     else
       OS << "return " << formatReturnExpr(*Stmt.RetVal) << ";\n";
     if (!IndirectReturnName.empty() && !InEHClauseBody && !InCxxCleanupBody)
@@ -838,7 +838,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     OS << "switch (" << exprStr(*Stmt.SwitchExpr) << ") {\n";
     for (auto &C : Stmt.Cases) {
       emitIndent(Indent);
-      OS << "case " << constStr(C.Value) << ":\n";
+      OS << "case " << constStr(C.Value, Stmt.SwitchExpr->Type) << ":\n";
       writeStmtsIsolated(C.Body, Indent + 1);
       emitIndent(Indent + 1);
       OS << "break;\n";
@@ -1703,7 +1703,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
           else
             OS << "return;\n";
           AfterNoReturn = isCxxThrowExpr(AssignCall->Val.get()) ||
-                          isNoreturnCallExpr(Analysis, *AssignCall->Val);
+                          isNoreturnCallExpr(*AssignCall->Val);
           ++I;
           continue;
         }
@@ -1766,7 +1766,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
       if (Ret) {
         emitIndent(Indent);
         OS << exprStr(*S.Val) << ";\n";
-        AfterNoReturn = isNoreturnCallExpr(Analysis, *S.Val);
+        AfterNoReturn = isNoreturnCallExpr(*S.Val);
         continue;
       }
     }
@@ -1815,7 +1815,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
       }
     }
     writeStmt(S, Indent);
-    AfterNoReturn = isNoReturnCallStmt(Analysis, S) || stmtAlwaysExit(Analysis, S);
+    AfterNoReturn = isNoReturnCallStmt(S) || stmtAlwaysExit(Analysis, S);
   }
 }
 
@@ -2730,9 +2730,13 @@ void HighCWriter::hideUnusedFrameSlotWrites(const HighFunc &Func) {
         if (S.Kind == StmtKind::Assign && S.Dst &&
             S.Dst->Kind == ExprKind::Load && !S.Dst->Operands.empty() &&
             S.Dst->Operands[0]) {
+          if (!namedFrameSlot(*S.Dst->Operands[0]))
+            NoteUse(*S.Dst->Operands[0]);
           if (S.Val)
             NoteUse(*S.Val);
         } else if (S.Kind == StmtKind::Store) {
+          if (S.StoreAddr && !namedFrameSlot(*S.StoreAddr))
+            NoteUse(*S.StoreAddr);
           if (S.StoreVal)
             NoteUse(*S.StoreVal);
         } else {
@@ -2774,7 +2778,9 @@ void HighCWriter::hideUnusedFrameSlotWrites(const HighFunc &Func) {
           Addr = S.StoreAddr.get();
           Val = S.StoreVal.get();
         }
-        if (Addr && Val && !ExprHasEffect(*Val)) {
+        if (Addr && Val && !ExprHasEffect(*Val) &&
+            S.MemoryOrdering == NdMemoryOrdering::None &&
+            S.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
           const auto Slot = namedFrameSlot(*Addr);
           if (Slot && !Observed.count(*Slot)) {
             bool OverlapsObserved = false;

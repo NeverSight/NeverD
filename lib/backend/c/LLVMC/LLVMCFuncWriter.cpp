@@ -440,6 +440,9 @@ void LLVMCWriter::markInlinable(llvm::Function &Fn) {
     for (auto &Inst : BB) {
       if (Inst.getType()->isVoidTy())
         continue;
+      // Freeze materializes one stable, defined choice before any folding.
+      if (llvm::isa<llvm::FreezeInst>(&Inst))
+        continue;
       if (foldImmediate(&Inst)) {
         Analysis.Inlinable.insert(&Inst);
         continue;
@@ -453,9 +456,6 @@ void LLVMCWriter::markInlinable(llvm::Function &Fn) {
       if (llvm::isa<llvm::LoadInst>(&Inst))
         continue;
       if (llvm::isa<llvm::PHINode>(&Inst))
-        continue;
-      // Freeze must materialize one defined choice for every use count.
-      if (llvm::isa<llvm::FreezeInst>(&Inst))
         continue;
       if (llvm::isa<llvm::ExtractValueInst>(&Inst))
         continue;
@@ -1081,7 +1081,8 @@ void LLVMCWriter::writeBasicBlock(const llvm::BasicBlock &BB, int Indent) {
   if (FoldedJoinArms.count(&BB) || InlinedFallthroughBlocks.count(&BB) ||
       ConditionChainBodies.count(&BB) || DuplicatedAssignBlocks.count(&BB))
     return;
-  if (BB.getParent() && isPrintPassthrough(&BB) &&
+  if (BB.getParent() && &BB != &BB.getParent()->getEntryBlock() &&
+      isPrintPassthrough(&BB) &&
       !EHPrintedPassthroughHandlers.count(&BB))
     return;
   const llvm::BasicBlock *LoopLatch = nullptr;
@@ -2800,13 +2801,11 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         continue;
       }
       if (llvm::isa<llvm::CastInst>(&Inst)) {
+        if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
+          continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty())
-          ValueTexts[&Inst] =
-              llvm::isa<llvm::SExtInst>(&Inst)
-                  ? castStr(Inst.getOpcode(), Text->second,
-                            Inst.getOperand(0)->getType(), Inst.getType())
-                  : Text->second;
+          ValueTexts[&Inst] = Text->second;
         continue;
       }
       if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
@@ -2944,15 +2943,12 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
   }
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
-      if (!llvm::isa<llvm::CastInst>(&Inst))
+      if (!llvm::isa<llvm::CastInst>(&Inst) ||
+          llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
         continue;
       if (auto Text = ValueTexts.find(Inst.getOperand(0));
           Text != ValueTexts.end() && !Text->second.empty())
-        ValueTexts[&Inst] =
-            llvm::isa<llvm::SExtInst>(&Inst)
-                ? castStr(Inst.getOpcode(), Text->second,
-                          Inst.getOperand(0)->getType(), Inst.getType())
-                : Text->second;
+        ValueTexts[&Inst] = Text->second;
     }
   }
 
@@ -3202,13 +3198,11 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
           Text != ValueTexts.end() && !Text->second.empty())
         Mark(Inst);
       if (llvm::isa<llvm::CastInst>(&Inst)) {
+        if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
+          continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty()) {
-          ValueTexts[&Inst] =
-              llvm::isa<llvm::SExtInst>(&Inst)
-                  ? castStr(Inst.getOpcode(), Text->second,
-                            Inst.getOperand(0)->getType(), Inst.getType())
-                  : Text->second;
+          ValueTexts[&Inst] = Text->second;
           Mark(Inst);
         }
       }
@@ -3264,14 +3258,16 @@ std::string LLVMCWriter::composedReprintText(const llvm::Value *V) {
       return {};
     }
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Cur)) {
-      std::string Text = Rec(Cast->getOperand(0));
-      if (!Text.empty() && llvm::isa<llvm::SExtInst>(Cast))
+      const std::string Text = Rec(Cast->getOperand(0));
+      if (Text.empty())
+        return {};
+      if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(Cast))
         return castStr(Cast->getOpcode(), Text, Cast->getSrcTy(),
                        Cast->getDestTy());
       return Text;
     }
-    if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Cur))
-      return getName(Fr);
+    if (llvm::isa<llvm::FreezeInst>(Cur))
+      return getName(Cur);
     if (const auto *Phi = llvm::dyn_cast<llvm::PHINode>(Cur)) {
       if (Phi->getNumIncomingValues() == 0)
         return {};
@@ -4165,6 +4161,8 @@ bool LLVMCWriter::instructionIsPrinted(const llvm::Instruction &Inst) {
                 llvm::CatchPadInst, llvm::CleanupPadInst, llvm::CatchSwitchInst>(
           &Inst))
     return false;
+  if (const auto *Freeze = llvm::dyn_cast<llvm::FreezeInst>(&Inst))
+    return !Freeze->use_empty() && !isCallClobberValue(Freeze);
   if (Analysis.Inlinable.count(&Inst) || Analysis.DeadFrameStores.count(&Inst) ||
       isUnusedCallClobber(Inst))
     return false;

@@ -25,6 +25,11 @@ namespace neverd {
 struct LLVMCAnalysisState {
   std::set<const llvm::AllocaInst *> DeadFrameAllocas;
   std::set<const llvm::Instruction *> DeadFrameStores;
+  /// Complete, unique SSA address proofs shared with the C frame-slot printer.
+  /// A PHI read must use the same backing as its incoming stores. Mutable
+  /// scalar-home loads need a separate reaching-store proof.
+  std::map<const llvm::Value *, std::pair<const llvm::AllocaInst *, int64_t>>
+      FramePointerLocations;
   /// Frame offsets reached through an ambiguous carrier stay in the backing
   /// array so named C locals cannot split stores from later pointer reads.
   std::set<std::pair<const llvm::AllocaInst *, int64_t>> RawFrameLocations;

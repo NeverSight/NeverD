@@ -28,8 +28,8 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <cctype>
-#include <stdexcept>
 #include <set>
+#include <stdexcept>
 
 namespace neverd {
 
@@ -1091,6 +1091,29 @@ bool LLVMCWriter::deadNullAssignBlocks(
 void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
   if (llvm::isa<llvm::DbgInfoIntrinsic>(&Inst))
     return;
+  if (auto *Freeze = llvm::dyn_cast<llvm::FreezeInst>(&Inst)) {
+    if (Freeze->use_empty() || isCallClobberValue(Freeze))
+      return;
+    const auto Name = getName(Freeze);
+    auto *Value = Freeze->getOperand(0);
+    auto *Ty = Value->getType();
+    if (Ty->isIntegerTy() || Ty->isPointerTy() || Ty->isFloatingPointTy()) {
+      // Explicit undef/poison permits an arbitrary stable choice. Copying a
+      // possibly-poison expression into C could instead introduce undefined
+      // behavior before freeze has a chance to define its result.
+      bool ChooseZero = llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Value);
+      if (ChooseZero || llvm::isGuaranteedNotToBeUndefOrPoison(
+                            Value, nullptr, Freeze, &Dominators)) {
+        emitIndent(Indent);
+        OS << Name << " = " << (ChooseZero ? "0" : valueStr(Value)) << ";\n";
+        return;
+      }
+    }
+    if (GuardAnalysisOnlyFunctions)
+      throw std::runtime_error("C freeze operand is not proved defined: " +
+                               Name);
+  }
+
   if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
     if (const llvm::AllocaInst *Slot =
             asAllocaPointer(SI->getPointerOperand())) {
@@ -1171,28 +1194,6 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     return;
 
   auto Name = Inst.getType()->isVoidTy() ? "" : getName(&Inst);
-
-  if (auto *Freeze = llvm::dyn_cast<llvm::FreezeInst>(&Inst)) {
-    if (Freeze->use_empty())
-      return;
-    auto *Value = Freeze->getOperand(0);
-    auto *Ty = Value->getType();
-    if (Ty->isIntegerTy() || Ty->isPointerTy() || Ty->isFloatingPointTy()) {
-      // Explicit undef/poison permits an arbitrary stable choice. Copying a
-      // possibly-poison expression into C could instead introduce undefined
-      // behavior before freeze has a chance to define its result.
-      bool ChooseZero = llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Value);
-      if (ChooseZero || llvm::isGuaranteedNotToBeUndefOrPoison(
-                            Value, nullptr, Freeze, &Dominators)) {
-        emitIndent(Indent);
-        OS << Name << " = " << (ChooseZero ? "0" : valueStr(Value)) << ";\n";
-        return;
-      }
-    }
-    if (GuardAnalysisOnlyFunctions)
-      throw std::runtime_error("C freeze operand is not proved defined: " +
-                               Name);
-  }
 
   if (Inst.isBinaryOp()) {
     if (Inst.getOpcode() == llvm::Instruction::URem ||
@@ -1628,15 +1629,19 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
             if (!ReturnType && Call->getType()->isIntegerTy())
               ReturnType = NdType::makeInt(
                   llvmAccessSize(Call->getType()), false);
-            if (ReturnType && StoredText == valueStr(Call)) {
+            if (ReturnType) {
               if (Member->Type->Kind == NdTypeKind::Int &&
                   ReturnType->Kind == NdTypeKind::Ptr &&
-                  ReturnType->Size == Size) {
+                  ReturnType->Size == Size && StoredText == valueStr(Call)) {
                 StoredText = "(uintptr_t)(" + StoredText + ")";
               } else if (Member->Type->Kind == NdTypeKind::Ptr &&
                          ReturnType->Kind == NdTypeKind::Int &&
                          (ReturnType->Size == Size || SignedExtension ||
-                          ZeroExtension)) {
+                          ZeroExtension) &&
+                         (Stored->getType()->isIntegerTy() ||
+                          StoredText == valueStr(Call))) {
+                // Integer view casts preserve machine bits before the final
+                // conversion to the field's pointer type.
                 const char *Carrier = SignedExtension ? "intptr_t" : "uintptr_t";
                 StoredText = "(" + typeToC(Member->Type) + ")(" + Carrier +
                              ")(" + StoredText + ")";
@@ -2924,12 +2929,6 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     return;
   }
 
-  if (auto *FI = llvm::dyn_cast<llvm::FreezeInst>(&Inst)) {
-    emitIndent(Indent);
-    OS << Name << " = " << valueStr(FI->getOperand(0)) << ";\n";
-    return;
-  }
-
   if (llvm::isa<llvm::UnreachableInst>(&Inst)) {
     emitIndent(Indent);
     OS << "__builtin_unreachable();\n";
@@ -3561,8 +3560,9 @@ std::string LLVMCWriter::inplaceIntegerUpdate(const llvm::StoreInst &SI,
   while (V && Seen.insert(V).second) {
     const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V);
     if (Cast && llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast)) {
-      V = Cast->getOperand(0);
-      continue;
+      // A compound assignment evaluates in the destination's width. It cannot
+      // replace arithmetic that deliberately narrows or extends its result.
+      return {};
     }
     if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(V)) {
       if (const llvm::AllocaInst *Home = asAllocaPointer(LI->getPointerOperand())) {
@@ -3597,16 +3597,7 @@ std::string LLVMCWriter::inplaceIntegerUpdate(const llvm::StoreInst &SI,
   }
   if (Delta == 0)
     return {};
-  const llvm::Value *PeeledBase = Base;
-  Seen.clear();
-  while (PeeledBase && Seen.insert(PeeledBase).second) {
-    const auto *Cast = llvm::dyn_cast<llvm::CastInst>(PeeledBase);
-    if (!Cast ||
-        !llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast))
-      break;
-    PeeledBase = Cast->getOperand(0);
-  }
-  if (valueStr(PeeledBase) != Dest)
+  if (BO->getType() != Stored->getType() || valueStr(Base) != Dest)
     return {};
   const uint64_t Abs = Delta > 0 ? static_cast<uint64_t>(Delta)
                                  : static_cast<uint64_t>(-Delta);
@@ -3619,8 +3610,7 @@ std::string LLVMCWriter::integerCallStoredText(const llvm::Value *Stored) {
   while (V && Seen.insert(V).second) {
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
       if (llvm::isa<llvm::ZExtInst, llvm::SExtInst, llvm::TruncInst>(Cast)) {
-        V = Cast->getOperand(0);
-        continue;
+        return valueStr(Stored);
       }
     }
     if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(V)) {
@@ -4600,7 +4590,8 @@ bool LLVMCWriter::phiIncomingIsPrinted(const llvm::PHINode *Phi,
        usersAreDeadCopies(Phi)) &&
       !phiPrintedAsJoinCallArg(Phi))
     return false;
-  if (!ForceMaterialized && foldImmediate(Phi) &&
+  if (!ForceMaterialized && Phi->getParent()->getSinglePredecessor() &&
+      foldImmediate(Incoming) &&
       usersOnlySeeImmediate(Phi) &&
       !phiPrintedAsJoinCallArg(Phi))
     return false;
@@ -4686,28 +4677,37 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
     return;
   struct PhiCopy {
     const llvm::PHINode *Phi;
-    std::string Source;
+    std::string RHS;
     std::string Temp;
   };
   std::vector<PhiCopy> Copies;
+  std::map<const llvm::Value *, std::string> EdgeImmediates;
+  const bool SinglePredecessor = To->getSinglePredecessor() != nullptr;
   const bool MaterializeEdge = phiEdgeNeedsMaterialization(From, To);
   for (const llvm::Instruction &Inst : *To) {
     const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);
     if (!Phi)
       break;
-    if (Phi->use_empty() || Analysis.Inlinable.count(Phi) ||
-        Analysis.DeadFrameStores.count(Phi))
+    if ((Phi->use_empty() && !phiPrintedAsJoinCallArg(Phi)) ||
+        Analysis.Inlinable.count(Phi) || Analysis.DeadFrameStores.count(Phi))
       continue;
-    llvm::Value *Incoming = Phi->getIncomingValueForBlock(From);
-    if (!Incoming)
+    const int IncomingIndex = Phi->getBasicBlockIndex(From);
+    if (IncomingIndex < 0)
       continue;
-    if (!phiIncomingIsPrinted(Phi, Incoming, MaterializeEdge))
-      continue;
-    const std::string Source = integerPointerOperandStr(Incoming);
-    // A taken edge does not prove this PHI constant on other incoming edges
-    // or the next loop iteration. Never publish its source as a global fact.
-    Copies.push_back({Phi, Source, freshVar("phi_edge")});
+    llvm::Value *Incoming = Phi->getIncomingValue(IncomingIndex);
+    if (SinglePredecessor)
+      if (auto Imm = foldImmediate(Incoming))
+        EdgeImmediates.emplace(Phi, *Imm);
+    if (phiIncomingIsPrinted(Phi, Incoming, MaterializeEdge))
+      Copies.push_back(
+          {Phi, integerPointerOperandStr(Incoming), freshVar("phi_edge")});
   }
+  // Evaluate the whole edge against its predecessor state before publishing
+  // any new PHI facts. Loop PHIs may exchange values, including cached ones.
+  for (const llvm::PHINode &Phi : To->phis())
+    KnownImmediates.erase(&Phi);
+  for (const auto &[Phi, Immediate] : EdgeImmediates)
+    KnownImmediates[Phi] = Immediate;
   if (Copies.empty())
     return;
   emitIndent(Indent);
@@ -4717,7 +4717,7 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
   for (const auto &Copy : Copies) {
     emitIndent(Indent + 1);
     OS << typeToCLLVM(Copy.Phi->getType()) << " " << Copy.Temp << " = "
-       << Copy.Source << ";\n";
+       << Copy.RHS << ";\n";
   }
   for (const auto &Copy : Copies) {
     emitIndent(Indent + 1);

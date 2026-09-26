@@ -78,7 +78,8 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
                      Scan.Image->Format == BinaryFormat::COFF;
   const auto Layout = TRI.integerArgumentLayout(Win64);
 
-  const BinaryFormat Format = Scan.Image ? Scan.Image->Format : BinaryFormat::Unknown;
+  const BinaryFormat Format =
+      Scan.Image ? Scan.Image->Format : BinaryFormat::Unknown;
   auto preserved = [&](const MedVar &V) {
     return V.Kind == MedVar::Reg &&
            isCallPreservedReg(TRI, Format, V.RegOff, V.Size);
@@ -182,8 +183,8 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
              Def.Opcode == NdOp::INTRINSIC) &&
             !preserved(Stored))
           break;
-        const bool SameSsa = Def.Output.Id == Stored.Id &&
-                             Def.Output.SSAVer == Stored.SSAVer;
+        const bool SameSsa =
+            Def.Output.Id == Stored.Id && Def.Output.SSAVer == Stored.SSAVer;
         const bool SameReg = Def.Output.Kind == MedVar::Reg &&
                              Def.Output.Size > 0 &&
                              Def.Output.RegOff == Stored.RegOff;
@@ -215,19 +216,17 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
       // Win64 outgoing frame to this call. An SP-to-SP copy may only cross
       // the scan boundary when it copies the currently reaching SP value;
       // restoring an older SP version changes the outgoing frame again.
-      if (Win64 && Prev.Output.Kind == MedVar::Reg &&
-          Prev.Output.Size != 0 && Prev.Output.RegOff == Scan.SpRegOff) {
-        const bool SpCopy =
-            Prev.Opcode == NdOp::COPY && Prev.NumInputs >= 1 &&
-            Prev.Inputs[0].Kind == MedVar::Reg &&
-            Prev.Inputs[0].RegOff == Scan.SpRegOff &&
-            Prev.Inputs[0].Size == Prev.Output.Size;
+      if (Win64 && Prev.Output.Kind == MedVar::Reg && Prev.Output.Size != 0 &&
+          Prev.Output.RegOff == Scan.SpRegOff) {
+        const bool SpCopy = Prev.Opcode == NdOp::COPY && Prev.NumInputs >= 1 &&
+                            Prev.Inputs[0].Kind == MedVar::Reg &&
+                            Prev.Inputs[0].RegOff == Scan.SpRegOff &&
+                            Prev.Inputs[0].Size == Prev.Output.Size;
         bool SameSpBase = SpCopy && isNoopRegisterCopy(Prev);
         if (SpCopy && !SameSpBase)
           for (int K = J - 1; K >= WindowFloor; --K) {
             const MedOp &Def = Ops[static_cast<size_t>(K)];
-            if (Def.Opcode == NdOp::CALL ||
-                Def.Opcode == NdOp::INDIR_CALL ||
+            if (Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL ||
                 Def.Opcode == NdOp::INTRINSIC)
               break;
             if (Def.Output.Kind != MedVar::Reg || Def.Output.Size == 0 ||
@@ -246,8 +245,9 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
   };
 
   const int StoreScanStart =
-      Win64 ? 0 : std::max(0, static_cast<int>(Scan.CallIdx) -
-                                 Scan.StoreScanWindow);
+      Win64
+          ? 0
+          : std::max(0, static_cast<int>(Scan.CallIdx) - Scan.StoreScanWindow);
   scanWindow(*Scan.Ops, static_cast<int>(Scan.CallIdx) - 1, StoreScanStart);
   for (const auto &W : Scan.ExtraWindows)
     if (W.Ops)
@@ -262,10 +262,10 @@ static bool preferScannedCallArg(const ExprPtr &Scanned, const ExprPtr &Hinted,
     return true;
   if (Hinted->Kind == ExprKind::Record)
     return false;
-  const bool ScannedParam = Scanned->Kind == ExprKind::Var &&
-                            Scanned->Var.Kind == MedVar::Param;
-  const bool HintedParam = Hinted->Kind == ExprKind::Var &&
-                           Hinted->Var.Kind == MedVar::Param;
+  const bool ScannedParam =
+      Scanned->Kind == ExprKind::Var && Scanned->Var.Kind == MedVar::Param;
+  const bool HintedParam =
+      Hinted->Kind == ExprKind::Var && Hinted->Var.Kind == MedVar::Param;
   const bool ScannedSlot =
       ScannedParam && Scanned->Var.Id == static_cast<int>(Slot);
   const bool HintedSlot =
@@ -274,8 +274,7 @@ static bool preferScannedCallArg(const ExprPtr &Scanned, const ExprPtr &Hinted,
     return true;
   // `mov rcx, item` leaves a different param in slot 0.  The CALL input is
   // still the incoming sret; the rewrite is the argument.
-  if (HintedSlot && ScannedParam &&
-      Scanned->Var.Id != static_cast<int>(Slot))
+  if (HintedSlot && ScannedParam && Scanned->Var.Id != static_cast<int>(Slot))
     return true;
   if (HintedSlot)
     return false;
@@ -328,8 +327,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   const auto &TRI = getTargetRegInfo(TargetArch);
   const BinaryFormat Format = Image ? Image->Format : BinaryFormat::Unknown;
   const auto ParamRegs = TRI.integerParamRegs(Format);
-  const bool Win64 =
-      TargetArch == Arch::X64 && Format == BinaryFormat::COFF;
+  const bool Win64 = TargetArch == Arch::X64 && Format == BinaryFormat::COFF;
   const auto IntLayout = TRI.integerArgumentLayout(Win64);
   auto integerSlot = [&](uint64_t RegOff) -> int {
     // Win64 `regToArgIdx` maps XMM0 onto slot 0, same as RCX. A `movups`
@@ -405,12 +403,10 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   // Walk the trailing window for the last write of that register.
   auto exprFromWindowValue = [&](MedVar V, const std::vector<MedOp> &Ops,
                                  int Before) -> ExprPtr {
-    const BinaryFormat Format =
-        Image ? Image->Format : BinaryFormat::Unknown;
+    const BinaryFormat Format = Image ? Image->Format : BinaryFormat::Unknown;
     auto preserved = [&](const MedVar &Reg) {
-      return Reg.Kind == MedVar::Reg &&
-             call_args_detail::isCallPreservedReg(TRI, Format, Reg.RegOff,
-                                                 Reg.Size);
+      return Reg.Kind == MedVar::Reg && call_args_detail::isCallPreservedReg(
+                                            TRI, Format, Reg.RegOff, Reg.Size);
     };
     for (int Peel = 0; Peel < 8; ++Peel) {
       ExprPtr E = medvarToExpr(V);
@@ -424,10 +420,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
         const bool SameSsa = Def.Output.Id == V.Id &&
                              Def.Output.SSAVer == V.SSAVer &&
                              Def.Output.Size > 0;
-        const bool SameReg = V.Kind == MedVar::Reg &&
-                             Def.Output.Kind == MedVar::Reg &&
-                             Def.Output.Size > 0 &&
-                             Def.Output.RegOff == V.RegOff;
+        const bool SameReg =
+            V.Kind == MedVar::Reg && Def.Output.Kind == MedVar::Reg &&
+            Def.Output.Size > 0 && Def.Output.RegOff == V.RegOff;
         if (SameSsa || SameReg) {
           if (Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL ||
               Def.Opcode == NdOp::INTRINSIC)
@@ -473,8 +468,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
       const MedBlock *Pred = blockById(PredId);
       if (!Pred || Pred->Ops.empty())
         continue;
-      ExtraWindows.push_back({&Pred->Ops,
-                              static_cast<int>(Pred->Ops.size()) - 1});
+      ExtraWindows.push_back(
+          {&Pred->Ops, static_cast<int>(Pred->Ops.size()) - 1});
       // i386 stdcall pushes live in ExtraWindows; ECX/EDX are not arguments.
       if (!Win64)
         continue;
@@ -491,8 +486,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
         if (ArgIdx < 0 || ArgIdx >= MaxArgs || Found[ArgIdx])
           continue;
         if (Prev.Opcode == NdOp::COPY && Prev.NumInputs >= 1)
-          Found[ArgIdx] =
-              exprFromWindowValue(Prev.Inputs[0], Pred->Ops, J - 1);
+          Found[ArgIdx] = exprFromWindowValue(Prev.Inputs[0], Pred->Ops, J - 1);
         else
           Found[ArgIdx] = medOpToExpr(Prev);
         if (!Found[ArgIdx] || Found[ArgIdx]->Kind == ExprKind::Undef)
@@ -520,8 +514,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
         for (const auto &Blk : CurMed->Blocks) {
           for (int I = 0; I < static_cast<int>(Blk.Ops.size()); ++I) {
             const MedOp &Op = Blk.Ops[static_cast<size_t>(I)];
-            if (Op.Output.Id != LiveIn.Id ||
-                Op.Output.SSAVer != LiveIn.SSAVer)
+            if (Op.Output.Id != LiveIn.Id || Op.Output.SSAVer != LiveIn.SSAVer)
               continue;
             ++Hits;
             Pred = &Blk;
@@ -657,10 +650,10 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
       // it from `mov edx; call`. Recover that setup; leftover r9 whose
       // pred did not write it stays out.
       int SetupNext = FillLast + 1;
-      while (SetupNext < static_cast<int>(ParamRegs.size()) &&
-             SetupNext < MaxArgs &&
-             (tryPredSetupArg(SetupNext) ||
-              tryDominatingForkSetup(SetupNext))) {
+      while (
+          SetupNext < static_cast<int>(ParamRegs.size()) &&
+          SetupNext < MaxArgs &&
+          (tryPredSetupArg(SetupNext) || tryDominatingForkSetup(SetupNext))) {
         FillLast = SetupNext;
         ++SetupNext;
       }
@@ -1071,8 +1064,7 @@ bool MedToHighConverter::reachingRegAtBlockEntry(const MedBlock &B,
           break;
         if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff &&
             Op.Output.Size > 0 && Op.NumInputs >= 1 &&
-            Op.Inputs[0].Kind == MedVar::Reg &&
-            Op.Inputs[0].RegOff == RegOff &&
+            Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].RegOff == RegOff &&
             Op.Inputs[0].Id == Op.Output.Id &&
             Op.Inputs[0].SSAVer == Op.Output.SSAVer) {
           R = Op.Output;

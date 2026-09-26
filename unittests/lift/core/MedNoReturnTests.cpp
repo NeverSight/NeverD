@@ -182,3 +182,38 @@ TEST(MedNoReturn, CallFollowedByInt3DoesNotProveNoreturn) {
   EXPECT_FALSE(Funcs[0].DoesNotReturn);
   EXPECT_FALSE(Funcs[0].Blocks[0].Ops[0].DoesNotReturn);
 }
+
+TEST(MedNoReturn, CallFollowedByTrapDoesNotInventCalleeNoReturn) {
+  constexpr va_t Entry = 0x1000;
+  constexpr va_t Helper = 0x2000;
+  constexpr va_t OrdinaryCaller = 0x3000;
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    for (Intrinsic Kind : {Intrinsic::Int3, Intrinsic::Int1, Intrinsic::Ud2}) {
+      SCOPED_TRACE(static_cast<int>(Kind));
+      MedOp Trap;
+      Trap.Opcode = NdOp::INTRINSIC;
+      Trap.addInput(MedVar::makeConst(static_cast<uint64_t>(Kind), 2));
+      auto Call = callOp(Helper);
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->CallKind = SourceCallTypeHint::Kind::Native;
+      Hint->TargetAddress = Helper;
+      Call.SourceCallHint = Hint;
+      std::vector<MedFunc> Functions = {
+          function(Entry, {block(0, {Call, Trap, returnOp()})}),
+          function(Helper, {block(0, {returnOp()})}),
+          function(OrdinaryCaller, {block(0, {callOp(Helper), returnOp()})})};
+      for (unsigned Iteration = 0; Iteration < 2; ++Iteration) {
+        propagateInternalNoReturn(Functions, Architecture);
+        EXPECT_FALSE(Functions[0].Blocks[0].Ops[0].DoesNotReturn);
+        ASSERT_TRUE(Functions[0].Blocks[0].Ops[0].SourceCallHint);
+        EXPECT_FALSE(
+            Functions[0].Blocks[0].Ops[0].SourceCallHint->DoesNotReturn);
+        EXPECT_FALSE(Hint->DoesNotReturn);
+        EXPECT_FALSE(Functions[1].DoesNotReturn);
+        EXPECT_FALSE(Functions[2].DoesNotReturn);
+        EXPECT_FALSE(Functions[2].Blocks[0].Ops[0].DoesNotReturn);
+      }
+    }
+  }
+}
