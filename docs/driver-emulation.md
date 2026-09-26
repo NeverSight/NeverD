@@ -254,7 +254,7 @@ For an already canceled request, legacy void `WdfRequestMarkCancelable` executes
 
 `WdfRequestRetrieveInputWdmMdl` and `WdfRequestRetrieveOutputWdmMdl` lazily describe the existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each requested direction must be valid and nonempty before using the request’s single cached descriptor; the first successful retrieval fixes its ByteCount even when the other direction has a different logical length. `MmGetSystemAddressForMdlSafe` returns the original VA for this descriptor; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output instead return the existing `IRP.MdlAddress` without mapping it merely by retrieval; direct IOCTL input uses the SystemBuffer cache. Descriptors, IRP and buffers retire at completion. Cancellation-internal or external references retain only WDF context, not completed I/O storage. Built physical PFNs are read-only; WDF MDL retrieval for `METHOD_NEITHER` remains unsupported; request-owned WDFMEMORY uses a separate locked user-page mapping.
 
-For buffered, direct and neither KMDF transfers, `WdfDeviceInitSetIoInCallerContextCallback` runs a prequeue callback in the requestor process at `PASSIVE_LEVEL`. It must complete the request or call `WdfDeviceEnqueueRequest` once before delivery to the default queue. For `METHOD_NEITHER` IOCTL and neither READ/WRITE, `WdfRequestRetrieveUnsafeUserInputBuffer` and `WdfRequestRetrieveUnsafeUserOutputBuffer` expose the original user VAs only in that callback. `WdfRequestProbeAndLockUserBufferForRead` and `WdfRequestProbeAndLockUserBufferForWrite` check page rights and pin request-owned memory; `WdfMemoryGetBuffer` returns a system alias that remains usable in the queue callback outside the requestor context. Completion releases the pins and aliases. Only the original scenario buffers are modeled; embedded user pointers and arbitrary user mappings remain unsupported.
+For buffered, direct and neither KMDF transfers, `WdfDeviceInitSetIoInCallerContextCallback` runs a prequeue callback in the requestor process at `PASSIVE_LEVEL`. It must complete the request or call `WdfDeviceEnqueueRequest` once before delivery to the default queue. For `METHOD_NEITHER` IOCTL and neither READ/WRITE, `WdfRequestRetrieveUnsafeUserInputBuffer` and `WdfRequestRetrieveUnsafeUserOutputBuffer` expose the original user VAs only in that callback. `WdfRequestProbeAndLockUserBufferForRead` and `WdfRequestProbeAndLockUserBufferForWrite` check page rights and pin request-owned memory; `WdfMemoryGetBuffer` returns a system alias that remains usable in the queue callback outside the requestor context. Completion releases the pins and aliases. The original scenario buffers and explicitly declared `user_buffers` are eligible, including buffers reached through embedded pointers. Locking remains restricted to the current request in caller context; arbitrary user mappings remain unsupported.
 
 `WdfRequestRetrieveInputMemory` and `WdfRequestRetrieveOutputMemory` expose request-owned WDFMEMORY views over existing buffered or direct input/output buffers. Repeated retrieval of one direction keeps its handle; `WdfMemoryGetBuffer` returns the original buffer and logical length. Zero-length or invalid-direction requests fail with their WDF statuses, and neither I/O still requires the caller-context probe-and-lock path. These borrowed views add no MDL pin and expire when the request completes.
 
@@ -435,9 +435,9 @@ an explicit per-request fact with a default of zero. Non-CREATE requests reject
 
 Only READ/WRITE/IOCTL requests accept optional `cancel_after_100ns`, a JSON integer from 0 through `INT64_MAX` (9223372036854775807). It schedules cancellation relative to request submission in virtual 100 ns units, not wall-clock time. For KMDF, zero applies after framework routing and before the guest I/O callback. With caller-context preprocessing, it applies after that callback enqueues the request and the queue routes it; if routing already completed the request, completion wins. For WDM, zero applies after dispatch returns. When the live IRP has a registered cancel routine, the scheduler clears that field and invokes the routine at `DISPATCH_LEVEL` with the cancel spin lock held. The routine must release the lock using `Irp->CancelIrql` before completion or return. Without a registered routine, cancellation sets `Irp->Cancel` but does not complete the request. The WDK inline `IoSetCancelRoutine` exchange, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` and driver-initiated `IoCancelIrp` use the same IRP and lock state; `IoCancelIrp` calls a registered routine synchronously and returns whether it did so. For positive delays, time advances to timer, wait or cancellation deadlines only when no callback/frame is ready. General queue and PnP cancellation remain unsupported. Each request report includes `cancel_requested_at_100ns`, either the actual absolute virtual cancellation time or null if cancellation never occurred, including when completion won first. A cancellation request alone does not complete an IRP or prescribe its final status.
 
-For a nonempty WDM neither-I/O READ/WRITE or `METHOD_NEITHER` IOCTL, optional Boolean `user_unmap_after_dispatch` revokes the original user virtual addresses after dispatch returns and before queued work or cancellation runs. A previously locked MDL and its system alias retain the same physical bytes until the driver unlocks them; raw user-pointer access and new locks fail. If the output user address is revoked, `output_hex` is empty because no caller-visible output buffer remains, even if the driver completes successfully with a nonzero Information value. The backing is retained for existing MDL pins and is never reused in this bounded scenario. Remapping and arbitrary unmap timing are not modeled.
+For a nonempty WDM neither-I/O READ/WRITE or `METHOD_NEITHER` IOCTL, optional Boolean `user_unmap_after_dispatch` revokes the request’s original and declared user virtual addresses after dispatch returns and before queued work or cancellation runs. A previously locked MDL and its system alias retain the same physical bytes until the driver unlocks them; raw user-pointer access and new locks fail. If the output user address is revoked, `output_hex` is empty because no caller-visible output buffer remains, even if the driver completes successfully with a nonzero Information value. The backing is retained for existing MDL pins and is never reused in this bounded scenario. Remapping and arbitrary unmap timing are not modeled.
 
-File requests may set `requestor_process_id` to a synthetic integer from 5 through `UINT32_MAX`; the default is 4096. `IoGetRequestorProcessId` returns that identity for a live file IRP and zero for an IRP without a requestor thread. `PsGetCurrentProcessId` returns the process that created the current thread: the requestor during foreground file dispatch and 4 in a modeled system work item. `IoGetRequestorProcess` returns an opaque process object for a live IRP; `IoGetCurrentProcess` and `PsGetProcessId` identify the process in the current APC state. A system work item may use `KeStackAttachProcess` with aligned writable `KAPC_STATE` storage on its own stack or in nonpaged pool while a request from that process remains live, access that process's original user VAs, then call `KeUnstackDetachProcess` with the same state before returning. Attachments to exited processes, unmatched detach, waits, IRP completion and other complex API calls while attached fail explicitly. `PsGetCurrentProcessId` remains 4 during attachment because the work item was created by the system process. Other callback thread identities and process attachment outside work items remain unsupported. Switching dispatch to another requestor makes the first requestor's original user VAs inaccessible while locked MDL system aliases remain valid. For a nonempty WDM neither-I/O transfer, Boolean `requestor_exit_after_dispatch` revokes all original user VAs belonging to that requestor after dispatch returns. Later CREATE/READ/WRITE/IOCTL requests from the exited identity are rejected; explicit CLEANUP and CLOSE requests remain available for teardown. Process exit does not imply cancellation, and the two post-dispatch revocation fields cannot be combined. This bounded event does not model automatic handle rundown, VA reuse or arbitrary exit timing.
+File requests may set `requestor_process_id` to a synthetic integer from 5 through `UINT32_MAX`; the default is 4096. `IoGetRequestorProcessId` returns that identity for a live file IRP and zero for an IRP without a requestor thread. `PsGetCurrentProcessId` returns the process that created the current thread: the requestor during foreground file dispatch and 4 in a modeled system work item. `IoGetRequestorProcess` returns an opaque process object for a live IRP; `IoGetCurrentProcess` and `PsGetProcessId` identify the process in the current APC state. A system work item may use `KeStackAttachProcess` with aligned writable `KAPC_STATE` storage on its own stack or in nonpaged pool while a request from that process remains live, access that process's original user VAs, then call `KeUnstackDetachProcess` with the same state before returning. Attachments to exited processes, unmatched detach, waits, IRP completion and other complex API calls while attached fail explicitly. `PsGetCurrentProcessId` remains 4 during attachment because the work item was created by the system process. Other callback thread identities and process attachment outside work items remain unsupported. Switching dispatch to another requestor makes the first requestor's original user VAs inaccessible while locked MDL system aliases remain valid. For a nonempty WDM neither-I/O transfer, Boolean `requestor_exit_after_dispatch` revokes all original and declared user VAs belonging to that requestor after dispatch returns. Later CREATE/READ/WRITE/IOCTL requests from the exited identity are rejected; explicit CLEANUP and CLOSE requests remain available for teardown. Process exit does not imply cancellation, and the two post-dispatch revocation fields cannot be combined. This bounded event does not model automatic handle rundown, VA reuse or arbitrary exit timing.
 
 For direct IOCTLs, `input` initializes the first system buffer, while
 `direct_input` initializes the separate MDL-described second buffer, padded
@@ -510,6 +510,43 @@ routine; arbitrary concurrent queue races remain outside this profile.
 The report's `configuration.user_page_access` lists only explicit protection
 facts, keyed by zero-based `source_request_index`; omitted directions use
 `read_write`.
+
+A METHOD_NEITHER IOCTL or neither READ/WRITE can also declare `user_buffers`
+and `user_pointers`. Each buffer has a request-local `id`, a nonzero `size`,
+optional initial `input` hex bytes (zero-padded), and optional `access` with the
+same three page rights. Each pointer has `source` and `target` references:
+`{"buffer":"input"|"output"|"memory", "offset":N}`; only `memory` requires an
+`id`. The source names one complete eight-byte x64 pointer slot. The target
+may point inside a buffer or exactly at its end. Slots need not be aligned,
+but overlapping source slots, unknown IDs and out-of-range references fail
+before execution. Repeated targets share bytes; cyclic pointer graphs are
+valid. No private IOCTL layout is inferred and no host addresses are exposed.
+
+The scenario permits at most 64 additional buffers and 256 pointer slots in
+total. IDs are 1–64 ASCII bytes matching `[A-Za-z0-9][A-Za-z0-9_.-]*`. Each buffer
+is at most 64 KiB, and its full size counts toward the existing 512 KiB
+scenario buffer budget. Initial
+bytes and pointer fixups are written before dispatch without relaxing final
+page rights. Neither READ accepts only the original `output` direction and
+neither WRITE only `input`; buffered/direct transfers reject these declarations.
+
+Declared regions use the existing requestor process, page rights and MDL
+backing. Completion does not revoke user allocations. Request unmap revokes
+all its original and declared VAs, while process exit revokes every allocation
+of that PID, including completed requests; already locked aliases retain the
+same physical bytes until unlock. WDF can probe and lock declared regions in
+`EvtIoInCallerContext`, then use their WDFMEMORY aliases in queue callbacks.
+Cross-request IDs, arbitrary process mappings and remapping remain unsupported.
+
+`configuration.user_memory` preserves declarations and pointer slots by
+`source_request_index`. Each request's `user_buffers` reports `id`, hexadecimal
+`address`, `size`, `access`, `revoked` and `backing_hex`. The latter is a diagnostic
+RAM snapshot at termination, including after revocation or faults; it grants
+no guest access and does not replace caller-visible `output_hex`. Snapshotting
+never invokes MMIO or clears a fault. The
+[nested-user example](examples/driver-nested-user-scenario.json) exercises a
+shared embedded pointer, interior offsets and a locked worker after unmap
+through the genuine WDK fixture. C API, CLI and Python use this same JSON.
 
 When an IOCTL has a nonzero `output_size`, `Information` must not exceed that
 size, even when the input buffer is larger. An IOCTL without an output buffer
@@ -637,7 +674,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v71`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v72`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

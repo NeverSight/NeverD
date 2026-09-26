@@ -18,6 +18,12 @@ NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioBufferLimit,
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioTotalBufferLimit,
                              NEVERD_DRIVER_SCENARIO_TOTAL_BUFFER_LIMIT,
                              512 * 1024)
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioUserBufferLimit,
+                             NEVERD_DRIVER_SCENARIO_USER_BUFFER_LIMIT, 64)
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioUserPointerLimit,
+                             NEVERD_DRIVER_SCENARIO_USER_POINTER_LIMIT, 256)
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioUserBufferIDLimit,
+                             NEVERD_DRIVER_SCENARIO_USER_BUFFER_ID_LIMIT, 64)
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioPnpDeviceLimit,
                              NEVERD_DRIVER_SCENARIO_PNP_DEVICE_LIMIT, 64)
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioDeviceIDLimit,

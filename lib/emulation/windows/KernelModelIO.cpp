@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../DriverScenario.h"
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
@@ -51,72 +52,7 @@ bool ntError(uint32_t Status) {
   return (Status >> profile::NTStatusSeverityShift) ==
          profile::NTStatusErrorSeverity;
 }
-unsigned userPermissions(DriverUserPageAccess Access) {
-  switch (Access) {
-  case DriverUserPageAccess::ReadWrite:
-    return Read | Write;
-  case DriverUserPageAccess::ReadOnly:
-    return Read;
-  case DriverUserPageAccess::NoAccess:
-    return 0;
-  }
-  llvm_unreachable("invalid driver user page access");
-}
 } // namespace
-
-llvm::Expected<uint64_t>
-KernelModel::allocateUserBuffer(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
-                                DriverUserPageAccess Access,
-                                uint32_t ProcessID) {
-  if (!Size)
-    return 0;
-  if (Initial.size() > Size || Size > profile::KernelArenaSize)
-    return ioError("invalid synthetic user buffer extent");
-  const uint64_t Pages =
-      (uint64_t(Size) + profile::PageSize - 1) & ~(profile::PageSize - 1);
-  const uint64_t End = profile::UserArenaBase + profile::UserArenaSize;
-  if (NextUserAddress > End || Pages > End - NextUserAddress)
-    return ioError("synthetic user address space exhausted");
-  const uint64_t Address = NextUserAddress;
-  if (auto E = Memory.map(Address, Pages, Read | Write))
-    return std::move(E);
-  if (auto E = Physical.registerRegion(Address, Address, Size))
-    return std::move(E);
-  if (auto E = Memory.write(Address, Initial))
-    return std::move(E);
-  if (auto E = Memory.protect(Address, Pages, userPermissions(Access)))
-    return std::move(E);
-  UserAllocations.emplace(Address, UserAllocation{Size, ProcessID, Access});
-  NextUserAddress += Pages;
-  return Address;
-}
-
-llvm::Error KernelModel::setUserRequestContext(bool Active,
-                                               uint32_t ProcessID) {
-  if (Active) {
-    for (const auto &[Address, Allocation] : UserAllocations) {
-      const uint64_t Pages =
-          (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
-      if (auto E = Memory.validateBacking(Address, Pages))
-        return E;
-    }
-    for (const auto &[Address, Allocation] : UserAllocations) {
-      const uint64_t Pages =
-          (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
-      const unsigned Permissions =
-          Allocation.ProcessID == ProcessID &&
-                  !ExitedUserProcesses.contains(ProcessID) &&
-                  !RevokedUserAllocations.contains(Address)
-              ? userPermissions(Allocation.Access)
-              : 0;
-      if (auto E = Memory.protect(Address, Pages, Permissions))
-        return E;
-    }
-  }
-  UserRequestContext = Active;
-  CurrentUserProcessID = Active ? ProcessID : 0;
-  return llvm::Error::success();
-}
 
 llvm::Expected<uint64_t> KernelModel::processObject(uint32_t ProcessID) {
   if (!ProcessID)
@@ -280,28 +216,8 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
   Request->InputSize = Input.Input.size();
   Request->ByteOffset = Input.ByteOffset;
   Request->TransferSize = IsWrite ? Input.Input.size() : Input.OutputSize;
-  if (Request->Neither) {
-    if (IsIOCTL) {
-      auto InputBuffer = allocateUserBuffer(
-          Input.Input.size(), Input.Input,
-          Input.UserInputAccess.value_or(DriverUserPageAccess::ReadWrite),
-          Request->ProcessID);
-      if (!InputBuffer)
-        return InputBuffer.takeError();
-      Request->UserInput = *InputBuffer;
-    }
-    auto UserBuffer = allocateUserBuffer(
-        IsWrite ? Input.Input.size() : Input.OutputSize,
-        IsWrite ? llvm::ArrayRef<uint8_t>(Input.Input)
-                : llvm::ArrayRef<uint8_t>(),
-        (IsWrite ? Input.UserInputAccess : Input.UserOutputAccess)
-            .value_or(DriverUserPageAccess::ReadWrite),
-        Request->ProcessID);
-    if (!UserBuffer)
-      return UserBuffer.takeError();
-    Request->UserBuffer = *UserBuffer;
-    return llvm::Error::success();
-  }
+  if (Request->Neither)
+    return prepareUserRequestBuffers(Record, Input);
   Request->BufferSize = Request->Direct ? (IsIOCTL ? Input.Input.size() : 0)
                                         : std::max<uint64_t>(Input.Input.size(),
                                                              Input.OutputSize);
@@ -341,57 +257,6 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
       return MDL.takeError();
     Request->Mdl = *MDL;
   }
-  return llvm::Error::success();
-}
-
-llvm::Error KernelModel::revokeRequestUserBuffers(uint64_t IRP) {
-  auto *Request = requestForIRP(IRP);
-  if (!Request || !Request->Neither || !Request->DispatchReturned)
-    return ioError("user unmapping requires a dispatched neither-I/O IRP");
-  std::vector<std::pair<uint64_t, uint64_t>> Ranges;
-  for (uint64_t Address : {Request->UserInput, Request->UserBuffer}) {
-    if (!Address)
-      continue;
-    auto It = UserAllocations.find(Address);
-    if (It == UserAllocations.end() || RevokedUserAllocations.contains(Address))
-      return ioError("user unmapping requires a live original buffer");
-    const uint64_t Pages =
-        (It->second.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
-    if (auto E = Memory.validateBacking(Address, Pages))
-      return E;
-    Ranges.emplace_back(Address, Pages);
-  }
-  for (const auto &[Address, Pages] : Ranges) {
-    if (auto E = Memory.protect(Address, Pages, 0))
-      return E;
-    RevokedUserAllocations.insert(Address);
-  }
-  return llvm::Error::success();
-}
-
-llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
-  const auto *Request = requestForIRP(IRP);
-  if (!Request || !Request->Neither || !Request->DispatchReturned ||
-      !Request->ProcessID || ExitedUserProcesses.contains(Request->ProcessID))
-    return ioError("requestor exit requires a live dispatched neither-I/O "
-                   "request and process");
-  std::vector<std::pair<uint64_t, uint64_t>> Ranges;
-  for (const auto &[Address, Allocation] : UserAllocations) {
-    if (Allocation.ProcessID != Request->ProcessID ||
-        RevokedUserAllocations.contains(Address))
-      continue;
-    const uint64_t Pages =
-        (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
-    if (auto E = Memory.validateBacking(Address, Pages))
-      return E;
-    Ranges.emplace_back(Address, Pages);
-  }
-  for (const auto &[Address, Pages] : Ranges) {
-    if (auto E = Memory.protect(Address, Pages, 0))
-      return E;
-    RevokedUserAllocations.insert(Address);
-  }
-  ExitedUserProcesses.insert(Request->ProcessID);
   return llvm::Error::success();
 }
 
@@ -537,6 +402,8 @@ KernelModel::beginRequest(const DriverRequest &Input,
   if (auto E = DMA.canArm(Input.DmaEvents, SourceIndex.value_or(Index),
                           Scheduler.now100ns()))
     return E;
+  if (auto E = validateDriverUserMemory(Input))
+    return E;
   if (Input.Kind == DriverRequestKind::Pnp) {
     if (auto E = snapshot())
       return E;
@@ -676,10 +543,13 @@ KernelModel::beginRequest(const DriverRequest &Input,
     Neither = !TransferFlags;
     Direct = TransferFlags == DeviceDirectIO;
   }
+  if (!Neither && (!Input.UserBuffers.empty() || !Input.UserPointers.empty()))
+    return ioError("declared user memory requires neither-I/O transfer");
   if (!Neither && (Input.UserInputAccess || Input.UserOutputAccess))
     return ioError("user page access requires neither READ/WRITE I/O");
   if (Input.UserUnmapAfterDispatch &&
-      (!Neither || (Input.Input.empty() && !Input.OutputSize)))
+      (!Neither ||
+       (Input.Input.empty() && !Input.OutputSize && Input.UserBuffers.empty())))
     return ioError("user unmapping requires a nonempty neither-I/O transfer");
   if (Input.RequestorProcessID <= 4)
     return ioError("requestor process identity must be above the system PID");
@@ -688,7 +558,8 @@ KernelModel::beginRequest(const DriverRequest &Input,
       Input.Kind != DriverRequestKind::Close)
     return ioError("requesting process has exited");
   if (Input.RequestorExitAfterDispatch &&
-      (!Neither || (Input.Input.empty() && !Input.OutputSize)))
+      (!Neither ||
+       (Input.Input.empty() && !Input.OutputSize && Input.UserBuffers.empty())))
     return ioError("requestor exit requires a nonempty neither-I/O transfer");
   auto FileIt = Files.find(Input.File);
   if (Input.Kind == DriverRequestKind::Create) {

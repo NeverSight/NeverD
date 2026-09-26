@@ -15,6 +15,9 @@
 
 #include "neverd/emulation/DriverProfile.h"
 
+#include "llvm/Support/Endian.h"
+
+#include <array>
 #include <initializer_list>
 
 namespace neverd::emulation {
@@ -101,7 +104,7 @@ protected:
     ASSERT_NE(Pool, 0u);
     success(Model->finishEntry());
   }
-  uint64_t begin(uint32_t Code = BufferedIOCTL, uint32_t File = 1) {
+  void open(uint32_t File = 1) {
     DriverRequest Create;
     Create.Kind = DriverRequestKind::Create;
     Create.Device = DeviceName;
@@ -110,13 +113,20 @@ protected:
     complete(Open.IRP);
     success(Model->recordDispatchReturn(Open.IRP, StatusSuccess));
     success(Model->finalizeRequest(Open.IRP));
+  }
+  uint64_t begin(DriverRequest IO, uint32_t File = 1) {
+    open(File);
+    IO.File = File;
+    return take(Model->beginRequest(IO)).IRP;
+  }
+  uint64_t begin(uint32_t Code = BufferedIOCTL, uint32_t File = 1) {
     DriverRequest IO;
     IO.Kind = DriverRequestKind::DeviceControl;
     IO.File = File;
     IO.ControlCode = Code;
     IO.Input = {1, 2, 3, 4};
     IO.OutputSize = IO.Input.size();
-    return take(Model->beginRequest(IO)).IRP;
+    return begin(std::move(IO), File);
   }
   uint64_t allocate(uint64_t IRP, bool Secondary, uint64_t Buffer = 0) {
     return call("IoAllocateMdl",
@@ -286,6 +296,244 @@ TEST_F(KernelMDLChain, CompletionUnlocksEveryUserDescriptorAndRevokesAliases) {
   EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
   EXPECT_FALSE(take(Memory->canAccess(SecondAlias, 1, Read)));
   EXPECT_EQ(get(User, sizeof(uint32_t)), 0x55443322u);
+}
+
+TEST_F(KernelMDLChain, ExplicitNestedPointersPreserveDeclaredPagePermissions) {
+  DriverRequest IO;
+  IO.Kind = DriverRequestKind::DeviceControl;
+  IO.ControlCode = NeitherIOCTL;
+  IO.Input.resize(2 * profile::PointerSize);
+  IO.OutputSize = profile::PointerSize;
+  IO.UserInputAccess = DriverUserPageAccess::ReadOnly;
+  IO.UserOutputAccess = DriverUserPageAccess::NoAccess;
+  IO.UserBuffers = {
+      {"descriptor", 24, {}, DriverUserPageAccess::ReadOnly},
+      {"payload", 12, {0x42, 0x51}, DriverUserPageAccess::ReadWrite},
+      {"sealed", 16, {0x63}, DriverUserPageAccess::NoAccess}};
+  using Kind = DriverUserBufferKind;
+  IO.UserPointers = {
+      {{Kind::Input, {}, 8}, {Kind::Memory, "descriptor", 8}},
+      {{Kind::Memory, "descriptor", 8}, {Kind::Memory, "payload", 3}},
+      {{Kind::Memory, "sealed", 8}, {Kind::Memory, "payload", 12}},
+      {{Kind::Output, {}, 0}, {Kind::Memory, "sealed", 0}}};
+  const auto IRP = begin(IO);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  const auto Stack = get(IRP + IRPStackPointerOffset);
+  const auto Root = get(Stack + StackType3InputOffset);
+  const auto Output = get(IRP + IRPUserBufferOffset);
+  const auto Descriptor = Result.Requests.back().UserBuffers[0].Address;
+  const auto Payload = Result.Requests.back().UserBuffers[1].Address;
+  const auto Sealed = Result.Requests.back().UserBuffers[2].Address;
+  EXPECT_EQ(get(Root + 8), Descriptor + 8);
+  EXPECT_EQ(get(Descriptor + 8), Payload + 3);
+  EXPECT_TRUE(take(Memory->canAccess(Root, IO.Input.size(), Read)));
+  EXPECT_FALSE(take(Memory->canAccess(Root, IO.Input.size(), Write)));
+  EXPECT_FALSE(take(Memory->canAccess(Descriptor, 24, Write)));
+  EXPECT_FALSE(take(Memory->canAccess(Sealed, 16, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(Output, IO.OutputSize, Read)));
+  std::array<uint8_t, profile::PointerSize> Pointer;
+  success(Memory->readBacking(Output, Pointer));
+  EXPECT_EQ(llvm::support::endian::read64le(Pointer.data()), Sealed);
+  success(Model->snapshot());
+  const auto &Buffers = Result.Requests.back().UserBuffers;
+  EXPECT_EQ(Buffers[1].Backing,
+            (std::vector<uint8_t>{0x42, 0x51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQ(Buffers[2].Backing.size(), 16u);
+  EXPECT_EQ(Buffers[2].Backing[0], 0x63u);
+  EXPECT_EQ(llvm::support::endian::read64le(Buffers[2].Backing.data() + 8),
+            Payload + 12);
+  EXPECT_FALSE(Buffers[2].Revoked);
+  EXPECT_FALSE(Result.Requests.back().Completed);
+  complete(IRP);
+  success(Model->recordDispatchReturn(IRP, StatusSuccess));
+  success(Model->finalizeRequest(IRP));
+  success(Model->snapshot());
+  EXPECT_EQ(Result.Requests.back().UserBuffers[2].Backing[0], 0x63u);
+}
+
+TEST_F(KernelMDLChain, NestedAliasesSurviveUnmapAndFinalSnapshotKeepsBacking) {
+  DriverRequest IO;
+  IO.Kind = DriverRequestKind::DeviceControl;
+  IO.ControlCode = NeitherIOCTL;
+  IO.Input.resize(profile::PointerSize);
+  IO.OutputSize = 4;
+  IO.UserBuffers = {{"payload", 12, {0x41}}};
+  IO.UserPointers = {{{DriverUserBufferKind::Input, {}, 0},
+                      {DriverUserBufferKind::Memory, "payload", 4}}};
+  const auto IRP = begin(IO);
+  const auto Payload = Result.Requests.back().UserBuffers[0].Address;
+  const auto Output = get(IRP + IRPUserBufferOffset);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  const auto MDL = allocate(IRP, false, Payload + 4);
+  const auto PeerMDL = allocate(IRP, true, Payload + 4);
+  for (auto Descriptor : {MDL, PeerMDL})
+    call("MmProbeAndLockPages", {Descriptor, UserMode, IoWriteAccess});
+  const auto Alias =
+      call("MmGetSystemAddressForMdlSafe", {MDL, NormalPagePriority});
+  const auto PeerAlias =
+      call("MmGetSystemAddressForMdlSafe", {PeerMDL, NormalPagePriority});
+  call("IoMarkIrpPending", {IRP});
+  success(Model->recordDispatchReturn(IRP, StatusPending));
+  success(Model->revokeRequestUserBuffers(IRP));
+  EXPECT_FALSE(take(Memory->canAccess(Payload, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(Output, 1, Read)));
+  put(Alias, 0x88776655, sizeof(uint32_t));
+  EXPECT_EQ(get(PeerAlias, sizeof(uint32_t)), 0x88776655u);
+  success(Model->snapshot());
+  EXPECT_TRUE(Result.Requests.back().UserBuffers[0].Revoked);
+  EXPECT_EQ(Result.Requests.back().UserBuffers[0].Backing,
+            (std::vector<uint8_t>{0x41, 0, 0, 0, 0x55, 0x66, 0x77, 0x88, 0, 0,
+                                  0, 0}));
+  complete(IRP, IO.OutputSize);
+  success(Model->finalizeRequest(IRP));
+  success(Model->snapshot());
+  EXPECT_TRUE(Result.Requests.back().Output.empty());
+  EXPECT_EQ(Result.Requests.back().UserBuffers[0].Backing[4], 0x55u);
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(PeerAlias, 1, Read)));
+}
+
+TEST_F(KernelMDLChain,
+       UserRegionsShareProcessContextAndExitRevokesAllRequests) {
+  DriverRequest IO;
+  IO.Kind = DriverRequestKind::DeviceControl;
+  IO.ControlCode = NeitherIOCTL;
+  IO.UserBuffers = {{"shared", 8, {0x11}}};
+  const auto First = begin(IO, 1);
+  const auto FirstAddress = Result.Requests.back().UserBuffers[0].Address;
+  call("IoMarkIrpPending", {First});
+  success(Model->recordDispatchReturn(First, StatusPending));
+  const auto Second = begin(IO, 2);
+  const auto SecondAddress = Result.Requests.back().UserBuffers[0].Address;
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  // Raw WDM probing uses the current process, independent of request-local IDs.
+  const auto SharedMDL = allocate(Second, false, FirstAddress);
+  call("MmProbeAndLockPages", {SharedMDL, UserMode, IoWriteAccess});
+  const auto Alias =
+      call("MmGetSystemAddressForMdlSafe", {SharedMDL, NormalPagePriority});
+  put(Alias, 0x35, 1);
+  EXPECT_EQ(get(FirstAddress, 1), 0x35u);
+  EXPECT_TRUE(take(Memory->canAccess(SecondAddress, 1, Read)));
+  success(Model->setUserRequestContext(
+      true, DriverRequest::DefaultRequestorProcessID + 1));
+  EXPECT_FALSE(take(Memory->canAccess(FirstAddress, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(SecondAddress, 1, Read)));
+  EXPECT_EQ(get(Alias, 1), 0x35u);
+  success(Model->setUserRequestContext(true));
+  EXPECT_EQ(get(FirstAddress, 1), 0x35u);
+  call("IoMarkIrpPending", {Second});
+  success(Model->recordDispatchReturn(Second, StatusPending));
+  success(Model->exitRequestorProcess(First));
+  EXPECT_FALSE(take(Memory->canAccess(FirstAddress, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(SecondAddress, 1, Read)));
+  put(Alias, 0x72, 1);
+  complete(Second);
+  complete(First);
+  success(Model->finalizeRequest(First));
+  success(Model->finalizeRequest(Second));
+  success(Model->snapshot());
+  unsigned Seen = 0;
+  for (const auto &Request : Result.Requests)
+    for (const auto &Buffer : Request.UserBuffers) {
+      EXPECT_TRUE(Buffer.Revoked);
+      if (Buffer.Address == FirstAddress)
+        EXPECT_EQ(Buffer.Backing[0], 0x72u);
+      ++Seen;
+    }
+  EXPECT_EQ(Seen, 2u);
+}
+
+TEST_F(KernelMDLChain, DeviceSelectedBufferedReadRejectsDeclaredUserMemory) {
+  open();
+  DriverRequest IO;
+  IO.Kind = DriverRequestKind::Read;
+  IO.File = 1;
+  IO.OutputSize = profile::PointerSize;
+  IO.UserBuffers = {{"nested", 8, {}}};
+  rejected(Model->beginRequest(IO), "requires neither-I/O");
+  EXPECT_TRUE(Result.Requests.back().UserBuffers.empty());
+  EXPECT_EQ(Result.Requests.back().IRP, 0u);
+}
+
+TEST_F(KernelMDLChain, ExitingOneProcessPreservesAnotherProcessUserRegions) {
+  DriverRequest IO;
+  IO.Kind = DriverRequestKind::DeviceControl;
+  IO.ControlCode = NeitherIOCTL;
+  IO.UserBuffers = {{"payload", 8, {0x11}}};
+  const auto First = begin(IO, 1);
+  const auto FirstAddress = Result.Requests.back().UserBuffers[0].Address;
+  call("IoMarkIrpPending", {First});
+  success(Model->recordDispatchReturn(First, StatusPending));
+  const uint32_t SecondProcess = IO.RequestorProcessID + 1;
+  IO.RequestorProcessID = SecondProcess;
+  IO.UserBuffers[0].Input = {0x22};
+  const auto Second = begin(IO, 2);
+  const auto SecondAddress = Result.Requests.back().UserBuffers[0].Address;
+  EXPECT_NE(FirstAddress, SecondAddress);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  EXPECT_EQ(get(FirstAddress, 1), 0x11u);
+  EXPECT_FALSE(take(Memory->canAccess(SecondAddress, 1, Read)));
+  success(Model->setUserRequestContext(true, SecondProcess));
+  EXPECT_FALSE(take(Memory->canAccess(FirstAddress, 1, Read)));
+  EXPECT_EQ(get(SecondAddress, 1), 0x22u);
+  const auto SecondMDL = allocate(Second, false, SecondAddress);
+  call("MmProbeAndLockPages", {SecondMDL, UserMode, IoWriteAccess});
+  const auto Alias =
+      call("MmGetSystemAddressForMdlSafe", {SecondMDL, NormalPagePriority});
+  call("IoMarkIrpPending", {Second});
+  success(Model->recordDispatchReturn(Second, StatusPending));
+  success(Model->exitRequestorProcess(First));
+  EXPECT_TRUE(take(Memory->canAccess(SecondAddress, 1, Read | Write)));
+  put(Alias, 0x44, 1);
+  EXPECT_EQ(get(SecondAddress, 1), 0x44u);
+  success(Model->setUserRequestContext(true));
+  EXPECT_FALSE(take(Memory->canAccess(FirstAddress, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(SecondAddress, 1, Read)));
+  success(Model->setUserRequestContext(true, SecondProcess));
+  EXPECT_FALSE(take(Memory->canAccess(FirstAddress, 1, Read)));
+  EXPECT_EQ(get(SecondAddress, 1), 0x44u);
+  complete(First);
+  complete(Second);
+  success(Model->finalizeRequest(First));
+  success(Model->finalizeRequest(Second));
+  success(Model->snapshot());
+  unsigned Seen = 0;
+  for (const auto &Request : Result.Requests)
+    for (const auto &Buffer : Request.UserBuffers) {
+      EXPECT_EQ(Buffer.Revoked, Buffer.Address == FirstAddress);
+      EXPECT_EQ(Buffer.Backing[0],
+                Buffer.Address == FirstAddress ? 0x11u : 0x44u);
+      ++Seen;
+    }
+  EXPECT_EQ(Seen, 2u);
+}
+
+TEST_F(KernelMDLChain, NativeInvalidPageAccessFailsBeforeAllocatingRequest) {
+  open();
+  DriverRequest IO;
+  IO.Kind = DriverRequestKind::DeviceControl;
+  IO.File = 1;
+  IO.ControlCode = NeitherIOCTL;
+  IO.Input = {0x11};
+  IO.OutputSize = 1;
+  const auto Invalid = static_cast<DriverUserPageAccess>(-1);
+  IO.UserInputAccess = Invalid;
+  rejected(Model->beginRequest(IO), "unsupported value");
+  EXPECT_EQ(Result.Requests.back().IRP, 0u);
+  IO.UserInputAccess.reset();
+  IO.UserOutputAccess = Invalid;
+  rejected(Model->beginRequest(IO), "unsupported value");
+  EXPECT_EQ(Result.Requests.back().IRP, 0u);
+  IO.UserOutputAccess.reset();
+  const auto IRP = take(Model->beginRequest(IO)).IRP;
+  EXPECT_NE(IRP, 0u);
+  complete(IRP);
+  success(Model->recordDispatchReturn(IRP, StatusSuccess));
+  success(Model->finalizeRequest(IRP));
 }
 } // namespace
 } // namespace neverd::emulation

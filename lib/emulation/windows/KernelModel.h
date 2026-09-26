@@ -467,6 +467,12 @@ private:
     bool CallbackStarted = false;
     bool CallbackReturned = false;
   };
+  struct UserRegion {
+    DriverUserBufferKind Kind;
+    std::string ID;
+    uint64_t Address;
+    uint32_t Size;
+  };
   struct ActiveRequest {
     DriverRequestKind Kind;
     size_t ResultIndex;
@@ -494,6 +500,7 @@ private:
     uint64_t SystemBuffer = 0;
     uint64_t UserBuffer = 0;
     uint64_t UserInput = 0;
+    std::vector<UserRegion> UserRegions;
     uint64_t BufferSize = 0;
     uint64_t SecurityContext = 0;
     uint32_t OutputSize = 0;
@@ -597,6 +604,9 @@ private:
   llvm::Error markRequestPending(uint64_t IRP);
   llvm::Error prepareRequestBuffers(ActiveRequest &Record,
                                     const DriverRequest &Input);
+  llvm::Error prepareUserRequestBuffers(ActiveRequest &Request,
+                                        const DriverRequest &Input);
+  llvm::Error snapshotUserBuffers();
   llvm::Expected<Invocation> beginPnpRequest(const DriverRequest &Input,
                                              size_t ResultIndex);
   llvm::Expected<Invocation> beginPowerRequest(const DriverRequest &Input,

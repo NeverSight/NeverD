@@ -8,6 +8,8 @@
 /// driver-created locked user MDLs with genuine WDK declarations.
 //===----------------------------------------------------------------------===//
 
+#include "driver_nested_user.h"
+
 #include <ntifs.h>
 
 _Static_assert(sizeof(KMUTEX) == 56, "x64 KMUTEX ABI size");
@@ -81,6 +83,126 @@ static NTSTATUS Complete(PIRP Irp, NTSTATUS Status, ULONG_PTR Length) {
   Irp->IoStatus.Information = Length;
   IoCompleteRequest(Irp, IO_NO_INCREMENT);
   return Status;
+}
+
+typedef struct {
+  PIRP Irp;
+  PIO_WORKITEM Work;
+  PMDL InputMdl;
+  PMDL ResultMdl;
+  PUCHAR Input;
+  PUCHAR Result;
+  ULONG RequestorPID;
+} NESTED_WORKER_STATE;
+
+static NESTED_WORKER_STATE NestedWork;
+
+static VOID NestedUserWorker(PDEVICE_OBJECT Object, PVOID Context) {
+  NESTED_WORKER_STATE *Work = Context;
+  PIRP Irp = Work->Irp;
+  NTSTATUS Status = STATUS_SUCCESS;
+  if (Object != Device || Work != &NestedWork || !Irp ||
+      ExGetPreviousMode() != KernelMode || !Work->Input || !Work->Result ||
+      IoGetRequestorProcessId(Irp) != Work->RequestorPID ||
+      (ULONG)(ULONG_PTR)PsGetCurrentProcessId() == Work->RequestorPID)
+    Status = STATUS_INVALID_DEVICE_STATE;
+  else
+    for (ULONG Index = 0; Index < NestedPayloadLength; ++Index)
+      Work->Result[Index] = Work->Input[Index] + NestedTransformDelta;
+  MmUnlockPages(Work->ResultMdl);
+  MmUnlockPages(Work->InputMdl);
+  IoFreeMdl(Work->ResultMdl);
+  IoFreeMdl(Work->InputMdl);
+  IoFreeWorkItem(Work->Work);
+  RtlZeroMemory(Work, sizeof(*Work));
+  Complete(Irp, Status, 0);
+}
+
+static NTSTATUS DispatchNestedUser(PIRP Irp, ULONG Code, PVOID Input,
+                                   ULONG InputLength, ULONG OutputLength) {
+  DriverNestedRequest Root;
+  DriverNestedBuffer Buffer;
+  NTSTATUS Status = STATUS_SUCCESS;
+  PMDL InputMdl = NULL, ResultMdl = NULL;
+  BOOLEAN InputLocked = FALSE, ResultLocked = FALSE;
+  PIO_WORKITEM Work = NULL;
+  if (InputLength != sizeof(Root) || OutputLength || !Input ||
+      Irp->RequestorMode != UserMode || Irp->AssociatedIrp.SystemBuffer ||
+      Irp->MdlAddress || NestedWork.Irp)
+    return Complete(Irp, STATUS_INVALID_PARAMETER, 0);
+  __try {
+    ProbeForRead(Input, sizeof(Root), __alignof(DriverNestedRequest));
+    Root = *(DriverNestedRequest *)Input;
+    ProbeForRead(Root.Buffer, sizeof(Buffer), __alignof(DriverNestedBuffer));
+    Buffer = *Root.Buffer;
+    if (Buffer.Length != NestedPayloadLength || Buffer.Reserved ||
+        Buffer.Data != Buffer.Alias)
+      Status = STATUS_INVALID_PARAMETER;
+    else {
+      ProbeForRead(Buffer.Alias, Buffer.Length, 1);
+      ProbeForWrite(Root.Result, Buffer.Length, 1);
+      if (Code == NestedUserTransform)
+        for (ULONG Index = 0; Index < Buffer.Length; ++Index)
+          Root.Result[Index] = Buffer.Data[Index] + NestedTransformDelta;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    Status = GetExceptionCode();
+  }
+  if (!NT_SUCCESS(Status) || Code == NestedUserTransform)
+    return Complete(Irp, Status, 0);
+  InputMdl = IoAllocateMdl(Buffer.Data, Buffer.Length, FALSE, FALSE, NULL);
+  ResultMdl = IoAllocateMdl(Root.Result, Buffer.Length, FALSE, FALSE, NULL);
+  if (!InputMdl || !ResultMdl) {
+    Status = STATUS_INSUFFICIENT_RESOURCES;
+    goto Failure;
+  }
+  __try {
+    MmProbeAndLockPages(InputMdl, UserMode, IoReadAccess);
+    InputLocked = TRUE;
+    MmProbeAndLockPages(ResultMdl, UserMode, IoWriteAccess);
+    ResultLocked = TRUE;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    Status = GetExceptionCode();
+  }
+  if (!NT_SUCCESS(Status))
+    goto Failure;
+  NestedWork.Input = MmGetSystemAddressForMdlSafe(InputMdl, NormalPagePriority);
+  NestedWork.Result =
+      MmGetSystemAddressForMdlSafe(ResultMdl, NormalPagePriority);
+  if (!NestedWork.Input || !NestedWork.Result) {
+    Status = STATUS_INSUFFICIENT_RESOURCES;
+    goto Failure;
+  }
+  if (NestedWork.Input == Buffer.Data || NestedWork.Result == Root.Result) {
+    Status = STATUS_INVALID_DEVICE_STATE;
+    goto Failure;
+  }
+  Work = IoAllocateWorkItem(Device);
+  if (!Work) {
+    Status = STATUS_INSUFFICIENT_RESOURCES;
+    goto Failure;
+  }
+  NestedWork.Irp = Irp;
+  NestedWork.Work = Work;
+  NestedWork.InputMdl = InputMdl;
+  NestedWork.ResultMdl = ResultMdl;
+  NestedWork.RequestorPID = IoGetRequestorProcessId(Irp);
+  IoMarkIrpPending(Irp);
+  IoQueueWorkItem(Work, NestedUserWorker, DelayedWorkQueue, &NestedWork);
+  return STATUS_PENDING;
+Failure:
+  if (Work)
+    IoFreeWorkItem(Work);
+  if (ResultLocked)
+    MmUnlockPages(ResultMdl);
+  if (InputLocked)
+    MmUnlockPages(InputMdl);
+  if (ResultMdl)
+    IoFreeMdl(ResultMdl);
+  if (InputMdl)
+    IoFreeMdl(InputMdl);
+  RtlZeroMemory(&NestedWork, sizeof(NestedWork));
+  return Complete(Irp, Status, 0);
 }
 
 static VOID NeitherCancel(PDEVICE_OBJECT Object, PIRP Irp) {
@@ -247,10 +369,14 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
 
   const ULONG Code = Stack->Parameters.DeviceIoControl.IoControlCode;
   const ULONG InputLength = Stack->Parameters.DeviceIoControl.InputBufferLength;
-  const ULONG OutputLength = Stack->Parameters.DeviceIoControl.OutputBufferLength;
+  const ULONG OutputLength =
+      Stack->Parameters.DeviceIoControl.OutputBufferLength;
   volatile UCHAR *Input =
       (volatile UCHAR *)Stack->Parameters.DeviceIoControl.Type3InputBuffer;
   volatile UCHAR *Output = (volatile UCHAR *)Irp->UserBuffer;
+  if (Code == NestedUserTransform || Code == NestedUserLockedWorker)
+    return DispatchNestedUser(Irp, Code, (PVOID)Input, InputLength,
+                              OutputLength);
   if ((Code & 3) != METHOD_NEITHER || InputLength != 4 || OutputLength != 4 ||
       !Input || !Output || Irp->RequestorMode != UserMode ||
       Irp->AssociatedIrp.SystemBuffer || Irp->MdlAddress) {
@@ -346,7 +472,8 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     break;
   case IO_LOCKED: {
     PMDL InMdl = IoAllocateMdl((PVOID)Input, InputLength, FALSE, FALSE, NULL);
-    PMDL OutMdl = IoAllocateMdl((PVOID)Output, OutputLength, FALSE, FALSE, NULL);
+    PMDL OutMdl =
+        IoAllocateMdl((PVOID)Output, OutputLength, FALSE, FALSE, NULL);
     BOOLEAN InLocked = FALSE, OutLocked = FALSE;
     if (!InMdl || !OutMdl) {
       Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -362,7 +489,8 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     }
     if (NT_SUCCESS(Status)) {
       PUCHAR InAlias = MmGetSystemAddressForMdlSafe(InMdl, NormalPagePriority);
-      PUCHAR OutAlias = MmGetSystemAddressForMdlSafe(OutMdl, NormalPagePriority);
+      PUCHAR OutAlias =
+          MmGetSystemAddressForMdlSafe(OutMdl, NormalPagePriority);
       if (!InAlias || !OutAlias)
         Status = STATUS_INSUFFICIENT_RESOURCES;
       else {
@@ -401,8 +529,7 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     KeInitializeSpinLock(&Lock);
     KeInitializeSpinLock(&DpcLock);
     KeAcquireSpinLock(&Lock, &OldIRQL);
-    if (OldIRQL != PASSIVE_LEVEL ||
-        KeGetCurrentIrql() != DISPATCH_LEVEL ||
+    if (OldIRQL != PASSIVE_LEVEL || KeGetCurrentIrql() != DISPATCH_LEVEL ||
         KeTryToAcquireSpinLockAtDpcLevel(&Lock))
       Status = STATUS_INVALID_DEVICE_STATE;
     KeAcquireSpinLockAtDpcLevel(&DpcLock);
@@ -682,8 +809,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT Driver, PUNICODE_STRING Path) {
   UNICODE_STRING Name;
   UNREFERENCED_PARAMETER(Path);
   RtlInitUnicodeString(&Name, L"\\Device\\NeverDNeither");
-  NTSTATUS Status = IoCreateDevice(Driver, 0, &Name, FILE_DEVICE_UNKNOWN, 0,
-                                   FALSE, &Device);
+  NTSTATUS Status =
+      IoCreateDevice(Driver, 0, &Name, FILE_DEVICE_UNKNOWN, 0, FALSE, &Device);
   if (!NT_SUCCESS(Status))
     return Status;
   Device->Flags &= ~DO_DEVICE_INITIALIZING;

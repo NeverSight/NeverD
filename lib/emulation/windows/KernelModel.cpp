@@ -636,8 +636,7 @@ llvm::Expected<uint64_t> KernelModel::call(
   case KernelAPIKind::KeAreApcsDisabled:
   case KernelAPIKind::KeAreAllApcsDisabled:
     return callApcStateAPI(Name);
-#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                           \
-  case KernelAPIKind::Name:
+#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL) case KernelAPIKind::Name:
 #include "KernelSpinLockAPIs.def"
 #undef NEVERD_KERNEL_SPINLOCK_API
     return callSpinLockAPI(Name, A);
@@ -988,8 +987,7 @@ llvm::Expected<uint64_t> KernelModel::call(
   auto PreflightUser = [&](uint64_t Address, bool IsWrite) -> llvm::Error {
     if (!Size || Address >= profile::UserProbeLimit)
       return llvm::Error::success();
-    auto Allowed = Memory.canAccess(Address, Size,
-                                     IsWrite ? Write : Read);
+    auto Allowed = Memory.canAccess(Address, Size, IsWrite ? Write : Read);
     if (!Allowed)
       return Allowed.takeError();
     if (!*Allowed)
@@ -1052,6 +1050,8 @@ llvm::Expected<uint64_t> KernelModel::call(
 }
 
 llvm::Error KernelModel::snapshot() {
+  if (auto E = snapshotUserBuffers())
+    return E;
   Result.Registry = Registry.snapshot();
   if (!DriverObject)
     return modelError("cannot snapshot an uninitialized kernel model");
@@ -1284,9 +1284,10 @@ bool KernelModel::canCatchUserAccess(uint64_t Address, uint64_t Size) const {
          CurrentIRQL <= APCLevel;
 }
 
-llvm::Expected<uint64_t>
-KernelModel::probeUserBuffer(uint64_t Address, uint64_t Size,
-                             uint32_t Alignment, bool ForWrite) {
+llvm::Expected<uint64_t> KernelModel::probeUserBuffer(uint64_t Address,
+                                                      uint64_t Size,
+                                                      uint32_t Alignment,
+                                                      bool ForWrite) {
   // A zero-length probe does not inspect even an invalid pointer/alignment.
   if (!Size)
     return 0;
@@ -1318,8 +1319,7 @@ KernelModel::probeUserBuffer(uint64_t Address, uint64_t Size,
       return Value.takeError();
     if (auto E = Memory.writeInteger(Byte, *Value, 1))
       return std::move(E);
-    const uint64_t Next =
-        (Byte & ~(profile::PageSize - 1)) + profile::PageSize;
+    const uint64_t Next = (Byte & ~(profile::PageSize - 1)) + profile::PageSize;
     if (Next >= Address + Size)
       return 0;
     Byte = Next;

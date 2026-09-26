@@ -57,6 +57,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "driver_nested_user.h"
+
 #include <ntifs.h>
 #include <wdf.h>
 
@@ -232,6 +234,16 @@ typedef struct {
   size_t OutputLength;
 } NEITHER_REQUEST_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NEITHER_REQUEST_CONTEXT, NeitherContext);
+
+typedef struct {
+  WDFMEMORY Root;
+  WDFMEMORY Descriptor;
+  WDFMEMORY Input;
+  WDFMEMORY Result;
+  PVOID RawInput;
+  PVOID RawResult;
+} NESTED_REQUEST_CONTEXT;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NESTED_REQUEST_CONTEXT, NestedContext);
 
 typedef struct {
   ULONG Phase;
@@ -775,6 +787,25 @@ static void TransformNeitherRequest(WDFREQUEST Request, size_t OutputLength,
                                     InputLength + TransformPrefixLength);
 }
 
+static void TransformNestedRequest(WDFREQUEST Request, size_t OutputLength,
+                                   size_t InputLength, ULONG Code) {
+  NESTED_REQUEST_CONTEXT *Context = NestedContext(Request);
+  size_t PayloadLength = 0, ResultLength = 0;
+  PUCHAR Input = WdfMemoryGetBuffer(Context->Input, &PayloadLength);
+  PUCHAR Result = WdfMemoryGetBuffer(Context->Result, &ResultLength);
+  if (Code != NestedUserTransform || OutputLength ||
+      InputLength != sizeof(DriverNestedRequest) ||
+      PayloadLength != NestedPayloadLength ||
+      ResultLength != NestedPayloadLength || !Input || !Result ||
+      Input == Context->RawInput || Result == Context->RawResult) {
+    WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+    return;
+  }
+  for (size_t Index = 0; Index < PayloadLength; ++Index)
+    Result[Index] = Input[Index] + NestedTransformDelta;
+  WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, 0);
+}
+
 static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
   DEFERRED_IOCTL_CONTEXT *Work = Context;
   WDFREQUEST Request = Work->Request;
@@ -1220,6 +1251,10 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
+  if (TransferMode == NestedFrameworkMode) {
+    TransformNestedRequest(Request, OutputLength, InputLength, IoControlCode);
+    return;
+  }
   // IoControlCode is the fifth Windows x64 argument, passed on the stack.
   if (IoControlCode != (TransferMode == 'T'   ? IOCTL_NEVERD_KMDF_NEITHER
                         : TransferMode == 'c' ? IOCTL_NEVERD_KMDF_DIRECT
@@ -1546,6 +1581,61 @@ static void DriverUnload(WDFDRIVER Driver) {
   DbgPrint("KMDF control: driver unload\n");
 }
 
+static void LockNestedUserRequest(WDFDEVICE Device, WDFREQUEST Request,
+                                  const WDF_REQUEST_PARAMETERS *Parameters) {
+  WDF_OBJECT_ATTRIBUTES Attributes;
+  NESTED_REQUEST_CONTEXT *Context = NULL;
+  PVOID Input = NULL;
+  size_t InputLength = 0;
+  if (Parameters->Type != WdfRequestTypeDeviceControl ||
+      Parameters->Parameters.DeviceIoControl.IoControlCode !=
+          NestedUserTransform ||
+      Parameters->Parameters.DeviceIoControl.OutputBufferLength) {
+    WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
+    return;
+  }
+  WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, NESTED_REQUEST_CONTEXT);
+  NTSTATUS Status =
+      WdfObjectAllocateContext(Request, &Attributes, (PVOID *)&Context);
+  if (NT_SUCCESS(Status))
+    Status = WdfRequestRetrieveUnsafeUserInputBuffer(
+        Request, sizeof(DriverNestedRequest), &Input, &InputLength);
+  if (NT_SUCCESS(Status) && InputLength != sizeof(DriverNestedRequest))
+    Status = STATUS_INVALID_PARAMETER;
+  if (NT_SUCCESS(Status))
+    Status = WdfRequestProbeAndLockUserBufferForRead(
+        Request, Input, InputLength, &Context->Root);
+  if (!NT_SUCCESS(Status)) {
+    WdfRequestComplete(Request, Status);
+    return;
+  }
+  const DriverNestedRequest *Root = WdfMemoryGetBuffer(Context->Root, NULL);
+  Status = WdfRequestProbeAndLockUserBufferForRead(
+      Request, Root->Buffer, sizeof(DriverNestedBuffer), &Context->Descriptor);
+  if (!NT_SUCCESS(Status)) {
+    WdfRequestComplete(Request, Status);
+    return;
+  }
+  const DriverNestedBuffer *Buffer =
+      WdfMemoryGetBuffer(Context->Descriptor, NULL);
+  if (Buffer->Length != NestedPayloadLength || Buffer->Reserved ||
+      Buffer->Data != Buffer->Alias) {
+    WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+    return;
+  }
+  Context->RawInput = Buffer->Data;
+  Context->RawResult = Root->Result;
+  Status = WdfRequestProbeAndLockUserBufferForRead(
+      Request, Buffer->Alias, Buffer->Length, &Context->Input);
+  if (NT_SUCCESS(Status))
+    Status = WdfRequestProbeAndLockUserBufferForWrite(
+        Request, Root->Result, Buffer->Length, &Context->Result);
+  if (NT_SUCCESS(Status))
+    Status = WdfDeviceEnqueueRequest(Device, Request);
+  if (!NT_SUCCESS(Status))
+    WdfRequestComplete(Request, Status);
+}
+
 static void IoInCallerContext(WDFDEVICE Device, WDFREQUEST Request) {
   WDF_REQUEST_PARAMETERS Parameters;
   WDF_REQUEST_PARAMETERS_INIT(&Parameters);
@@ -1562,6 +1652,10 @@ static void IoInCallerContext(WDFDEVICE Device, WDFREQUEST Request) {
     return;
   }
   ++CallerRequestCount;
+  if (TransferMode == NestedFrameworkMode) {
+    LockNestedUserRequest(Device, Request, &Parameters);
+    return;
+  }
   if (TransferMode == 'J')
     return;
   if (TransferMode == 'K') {
@@ -1649,6 +1743,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   WDF_OBJECT_ATTRIBUTES FileAttributes;
   WDF_FILEOBJECT_CONFIG FileConfiguration;
   WDF_IO_QUEUE_CONFIG QueueConfig;
+  WDF_DEVICE_IO_TYPE IoType;
   WDFDRIVER Driver = NULL;
   PWDFDEVICE_INIT DeviceInit = NULL;
   PDEVICE_OBJECT DeviceObject;
@@ -1674,6 +1769,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   case L'J':
   case L'K':
   case L'T':
+  case NestedFrameworkMode:
   case L'P':
   case L'F':
   case L'A':
@@ -1709,6 +1805,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     TransferMode = 'B';
     break;
   }
+  IoType = (TransferMode == 'D' || TransferMode == 'c') ? WdfDeviceIoDirect
+           : (TransferMode == 'T' || TransferMode == NestedFrameworkMode)
+               ? WdfDeviceIoNeither
+               : WdfDeviceIoBuffered;
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
   DriverConfig.DriverInitFlags = WdfDriverInitNonPnpDriver;
@@ -1727,13 +1827,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     return STATUS_INSUFFICIENT_RESOURCES;
   if (TransferMode == 'e')
     WdfDeviceInitSetExclusive(DeviceInit, TRUE);
-  WdfDeviceInitSetIoType(DeviceInit,
-                         (TransferMode == 'D' || TransferMode == 'c')
-                             ? WdfDeviceIoDirect
-                         : TransferMode == 'T' ? WdfDeviceIoNeither
-                                               : WdfDeviceIoBuffered);
+  WdfDeviceInitSetIoType(DeviceInit, IoType);
   if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K' ||
-      TransferMode == 'T' || TransferMode == '8')
+      TransferMode == '8' || IoType == WdfDeviceIoNeither)
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
   if (TransferMode == 'f' || TransferMode == 'g' || TransferMode == 'h' ||
       TransferMode == 'i' || TransferMode == 'j') {
@@ -1857,9 +1953,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   DeviceObject = WdfDeviceWdmGetDeviceObject(CreatedDevice);
   if (!Check(DeviceObject != NULL &&
                  (DeviceObject->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO)) ==
-                     (TransferMode == 'D' || TransferMode == 'c' ? DO_DIRECT_IO
-                      : TransferMode == 'T' ? 0
-                                            : DO_BUFFERED_IO) &&
+                     (IoType == WdfDeviceIoDirect    ? DO_DIRECT_IO
+                      : IoType == WdfDeviceIoNeither ? 0
+                                                     : DO_BUFFERED_IO) &&
                  (DeviceObject->Flags & DO_DEVICE_INITIALIZING) != 0 &&
                  !!(DeviceObject->Flags & DO_EXCLUSIVE) ==
                      (TransferMode == 'e'),

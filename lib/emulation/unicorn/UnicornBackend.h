@@ -91,11 +91,13 @@ public:
   llvm::Error write(uint64_t Address, llvm::ArrayRef<uint8_t> Bytes) override;
   llvm::Error validateBacking(uint64_t Address, uint64_t Size) const override;
   llvm::Expected<bool> canAccess(uint64_t Address, uint64_t Size,
-                                  unsigned Permissions) const override;
+                                 unsigned Permissions) const override;
   llvm::Error readBacking(uint64_t Address,
                           llvm::MutableArrayRef<uint8_t> Bytes) override;
   llvm::Error writeBacking(uint64_t Address,
                            llvm::ArrayRef<uint8_t> Bytes) override;
+  llvm::Error snapshotBacking(uint64_t Address,
+                              llvm::MutableArrayRef<uint8_t> Bytes) override;
   llvm::Error fetch(uint64_t Address, llvm::MutableArrayRef<uint8_t> Bytes);
   llvm::Expected<uint64_t> reg(X64Register Register);
   llvm::Error setReg(X64Register Register, uint64_t Value);

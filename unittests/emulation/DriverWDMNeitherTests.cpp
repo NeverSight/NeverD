@@ -1,4 +1,5 @@
-//===- DriverWDMNeitherTests.cpp - Genuine WDK user-buffer execution -------===//
+//===- DriverWDMNeitherTests.cpp - Genuine WDK user-buffer execution
+//-------===//
 //
 // NeverD Decompiler
 //
@@ -7,7 +8,11 @@
 /// Execute actual WDK packet, probe, CPU exception and user MDL paths.
 //===----------------------------------------------------------------------===//
 
+#include "DriverNestedUserTestSupport.h"
 #include "gtest/gtest.h"
+#include "windows/KernelException.h"
+#include "windows/WindowsKernelLayout.h"
+
 #include "neverd/emulation/DriverSession.h"
 
 namespace neverd::emulation {
@@ -32,6 +37,77 @@ DriverOptions options(uint32_t Code, uint64_t Address) {
   Request(DriverRequestKind::Cleanup);
   Request(DriverRequestKind::Close);
   return Options;
+}
+
+TEST(DriverWDMNeither,
+     NestedUserPointersPreserveAliasesAndCatchReadOnlyFaults) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (bool ReadOnlyResult : {false, true}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(ReadOnlyResult);
+        auto Options = options(NestedUserTransform, Address);
+        Options.Requests[1] = nested_user_test::request();
+        if (ReadOnlyResult)
+          Options.Requests[1].UserBuffers.back().Access =
+              DriverUserPageAccess::ReadOnly;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_EQ(Result->Requests.size(), 4u);
+        const auto &IO = Result->Requests[1];
+        EXPECT_TRUE(IO.Completed);
+        EXPECT_EQ(IO.IOStatus, ReadOnlyResult
+                                   ? exceptions::StatusAccessViolation
+                                   : windows::StatusSuccess);
+        EXPECT_EQ(IO.Information, 0u);
+        nested_user_test::expectBacking(IO, !ReadOnlyResult);
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_FALSE(Result->Fault);
+      }
+}
+
+TEST(DriverWDMNeither, NestedLockedAliasesSurviveUnmapAndRequestorExit) {
+  enum class Lifetime { Mapped, Unmapped, Exited };
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (auto Mode :
+           {Lifetime::Mapped, Lifetime::Unmapped, Lifetime::Exited}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(static_cast<unsigned>(Mode));
+        auto Options = options(NestedUserLockedWorker, Address);
+        auto IO = nested_user_test::request(NestedUserLockedWorker);
+        if (Mode == Lifetime::Unmapped)
+          IO.UserUnmapAfterDispatch = true;
+        if (Mode == Lifetime::Exited)
+          IO.RequestorExitAfterDispatch = true;
+        Options.Requests[1] = std::move(IO);
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_EQ(Result->Requests.size(), 4u);
+        const auto &Completed = Result->Requests[1];
+        EXPECT_TRUE(Completed.Completed);
+        EXPECT_EQ(Completed.DispatchStatus, windows::StatusPending);
+        EXPECT_EQ(Completed.IOStatus, windows::StatusSuccess);
+        EXPECT_EQ(Completed.Information, 0u);
+        nested_user_test::expectBacking(Completed, true,
+                                        Mode != Lifetime::Mapped);
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_FALSE(Result->Fault);
+      }
 }
 
 TEST(DriverWDMNeither, OriginalWDKHandlersObserveRealUserBytesAndFaultSites) {
@@ -76,8 +152,7 @@ TEST(DriverWDMNeither, ExecutiveSpinLockRestoresDispatchIrql) {
       SCOPED_TRACE(Address);
       auto Result = emulateDriver(Image, options(0x222037, Address));
       ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-      ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
-          << Result->Diagnostic;
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
       ASSERT_EQ(Result->Requests.size(), 4u);
       EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
       EXPECT_EQ(Result->Requests[1].Output, (std::vector<uint8_t>{0x5a}));
@@ -98,8 +173,7 @@ TEST(DriverWDMNeither, SemaphoreCountsCrossRealWaitAndReleaseCalls) {
       SCOPED_TRACE(Address);
       auto Result = emulateDriver(Image, options(0x22203b, Address));
       ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-      ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
-          << Result->Diagnostic;
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
       ASSERT_EQ(Result->Requests.size(), 4u);
       EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
       EXPECT_EQ(Result->Requests[1].Output, (std::vector<uint8_t>{0x6b}));
@@ -120,8 +194,7 @@ TEST(DriverWDMNeither, ExplicitIrqlHelpersTrackCR8) {
       SCOPED_TRACE(Address);
       auto Result = emulateDriver(Image, options(0x22203f, Address));
       ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-      ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
-          << Result->Diagnostic;
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
       ASSERT_EQ(Result->Requests.size(), 4u);
       EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
       EXPECT_EQ(Result->Requests[1].Output, (std::vector<uint8_t>{0x7c}));

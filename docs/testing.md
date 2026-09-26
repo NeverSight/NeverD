@@ -57,6 +57,17 @@ Use the
 codes. Production builds may enable this feature with `BUILD_TESTING=OFF`;
 test-only Unicorn configuration must not be required by `libneverd`.
 
+Explicit nested user-memory tests cover strict JSON/native graph validation,
+shared and cyclic references, unaligned pointer slots, page rights, request and
+process revocation, and WDF caller-context ownership. Genuine WDK WDM/KMDF tests
+follow two-level structures and interior aliases in normal/active-CFG images at
+preferred/rebased addresses; a WDM worker completes through locked aliases after
+unmap or requestor exit. C API/CLI and Python run
+`docs/examples/driver-nested-user-scenario.json` and inspect `backing_hex` without
+mistaking revoked memory for caller-visible output. Backend tests prove terminal
+snapshots preserve the original fault and reject MMIO, running CPUs and invalid
+spans without destination changes.
+
 Additional fixtures cover driver-owned nonpaged pool MDLs, independent descriptor
 and buffer lifetimes, registry query layouts and short buffers, handle rights,
 deletion and leaks, and full-width `information_hex` for zero-output IOCTLs.

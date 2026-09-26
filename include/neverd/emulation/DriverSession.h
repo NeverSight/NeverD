@@ -16,6 +16,7 @@
 #include "neverd/emulation/DriverPnp.h"
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/DriverRegistry.h"
+#include "neverd/emulation/DriverUserMemory.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -35,12 +36,6 @@ enum class DriverRequestKind {
 #define NEVERD_DRIVER_REQUEST_KIND(Name, Spelling, Major) Name,
 #include "neverd/emulation/DriverRequestKinds.def"
 #undef NEVERD_DRIVER_REQUEST_KIND
-};
-
-enum class DriverUserPageAccess {
-#define NEVERD_DRIVER_USER_PAGE_ACCESS(Name, Spelling) Name,
-#include "neverd/emulation/DriverUserPageAccess.def"
-#undef NEVERD_DRIVER_USER_PAGE_ACCESS
 };
 
 struct DriverRequest {
@@ -84,14 +79,18 @@ struct DriverRequest {
   std::optional<DriverPnpOperation> Pnp;
   /// Present exactly when Kind is Power; those packets have no FILE_OBJECT.
   std::optional<DriverPowerOperation> Power;
-  /// Explicit PDO response when a framework file lifecycle IRP reaches the
-  /// configured lower provider. A delay requires an asynchronous CREATE send.
+  /// Explicit PDO response when a forwarded file lifecycle IRP reaches the
+  /// configured lower provider, optionally after a virtual delay.
   std::optional<DriverBusCompletion> FileBusCompletion;
   /// Explicit external pulses for READ/WRITE/IOCTL. These events survive the
   /// source IRP's completion and do not imply device enable/ack semantics.
   std::vector<DriverInterruptEvent> InterruptEvents{};
   /// Independent external DMA transactions for READ/WRITE/IOCTL requests.
   std::vector<DriverDmaEvent> DmaEvents{};
+  /// Additional user allocations and explicit guest pointer slots for
+  /// neither-I/O requests. Every allocation belongs to RequestorProcessID.
+  std::vector<DriverUserBuffer> UserBuffers;
+  std::vector<DriverUserPointer> UserPointers;
 };
 
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
@@ -174,6 +173,7 @@ struct DriverRequestResult {
   DriverRequestOrigin Origin = DriverRequestOrigin::Scenario;
   /// Consumed per-PDO RequestedDevicePower entry; absent for scenario requests.
   std::optional<uint32_t> ResponseIndex;
+  std::vector<DriverUserBufferResult> UserBuffers;
 };
 
 struct DriverFault {

@@ -44,8 +44,8 @@ public:
                           unsigned Permissions) = 0;
   /// Map a second virtual range onto the same RAM pages. The source and alias
   /// are page aligned; the owner must separately govern their lifetimes.
-  virtual llvm::Error mapAlias(uint64_t Address, uint64_t Source,
-                               uint64_t Size, unsigned Permissions);
+  virtual llvm::Error mapAlias(uint64_t Address, uint64_t Source, uint64_t Size,
+                               unsigned Permissions);
   virtual llvm::Error protect(uint64_t Address, uint64_t Size,
                               unsigned Permissions) = 0;
   /// Optional device access support; unrelated memory implementations reject
@@ -65,7 +65,7 @@ public:
   /// Pure CPU-permission preflight. False means an access would fault; no
   /// first-fault state may be latched by this query.
   virtual llvm::Expected<bool> canAccess(uint64_t Address, uint64_t Size,
-                                          unsigned Permissions) const;
+                                         unsigned Permissions) const;
   /// Access the same RAM bytes without changing CPU permissions.
   /// Implementations validate the complete span before effects and reject
   /// running/faulted CPUs. Unexpected engine failures must prevent further
@@ -74,6 +74,13 @@ public:
                                   llvm::MutableArrayRef<uint8_t> Bytes);
   virtual llvm::Error writeBacking(uint64_t Address,
                                    llvm::ArrayRef<uint8_t> Bytes);
+  /// Diagnostic snapshot of existing RAM, including after a terminal fault.
+  /// Requires a stopped CPU without an active device callback. Validate the
+  /// complete span before copying; never invoke MMIO, change permissions or
+  /// clear fault state. This observation does not authorize guest/device
+  /// access.
+  virtual llvm::Error snapshotBacking(uint64_t Address,
+                                      llvm::MutableArrayRef<uint8_t> Bytes);
   llvm::Expected<uint64_t> readInteger(uint64_t Address, unsigned Size);
   llvm::Error writeInteger(uint64_t Address, uint64_t Value, unsigned Size);
 };

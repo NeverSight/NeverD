@@ -150,6 +150,52 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
                 self.assertEqual(result["requests"][1]["io_status"], 0xC0000005)
                 self.assertTrue(result["requests"][1]["completed"])
 
+    def test_nested_user_memory_preserves_aliases_after_revocation(self) -> None:
+        scenario = (
+            Path(__file__).resolve().parents[3]
+            / "docs/examples/driver-nested-user-scenario.json"
+        )
+        for fixture in self.fixtures:
+            for address in (0x180000000, 0x190000000):
+                for event in ("user_unmap_after_dispatch", "requestor_exit_after_dispatch"):
+                    with self.subTest(fixture=fixture, address=address, event=event):
+                        data = json.loads(scenario.read_text())
+                        data["load_address"] = hex(address)
+                        pending = data["requests"][2]
+                        del pending["user_unmap_after_dispatch"]
+                        pending[event] = True
+                        raw = self.host.owned_string(
+                            "neverd_emulate_driver_scenario_json", self.session,
+                            os.fsencode(fixture), json.dumps(data).encode("utf-8"), None,
+                        )
+                        self.assertIsNotNone(raw)
+                        result = json.loads(raw)
+                        self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
+                        self.assertTrue(result["scenario_success"])
+                        self.assertTrue(result["unload_completed"])
+                        self.assertIsNone(result["fault"])
+                        configured = result["configuration"]["user_memory"]
+                        self.assertEqual(len(configured), 2)
+                        for index in (1, 2):
+                            observed = result["requests"][index]
+                            self.assertEqual(observed["io_status"], 0)
+                            self.assertTrue(observed["completed"])
+                            self.assertEqual(observed["output_hex"], "")
+                            buffers = {item["id"]: item for item in observed["user_buffers"]}
+                            self.assertEqual(buffers["payload"]["backing_hex"],
+                                             "a5a5a501020304a5a5a5a5a5")
+                            self.assertEqual(buffers["sink"]["backing_hex"],
+                                             "a5a5a5a531323334a5a5a5a5")
+                            descriptor = bytes.fromhex(buffers["descriptor"]["backing_hex"])
+                            payload = int(buffers["payload"]["address"], 16)
+                            self.assertEqual(int.from_bytes(descriptor[:8], "little"), payload + 3)
+                            self.assertEqual(descriptor[:8], descriptor[8:16])
+                            revoked = index == 2 or event == "requestor_exit_after_dispatch"
+                            self.assertTrue(all(item["revoked"] == revoked
+                                                for item in buffers.values()))
+                        self.assertNotEqual(result["requests"][1]["user_buffers"][1]["address"],
+                                            result["requests"][2]["user_buffers"][1]["address"])
+
     def test_neither_read_write_uses_caller_buffer(self) -> None:
         from neverd_plugin.abi import NeverDDriverOptionsV1
 

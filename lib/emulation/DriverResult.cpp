@@ -42,6 +42,13 @@ namespace interruptField {
 #undef NEVERD_DRIVER_INTERRUPT_FIELD
 } // namespace interruptField
 
+namespace userField {
+#define NEVERD_DRIVER_USER_MEMORY_FIELD(Name, Spelling)                        \
+  constexpr llvm::StringLiteral Name = Spelling;
+#include "neverd/emulation/DriverUserMemory.def"
+#undef NEVERD_DRIVER_USER_MEMORY_FIELD
+} // namespace userField
+
 const char *requestKindName(DriverRequestKind Kind) {
   switch (Kind) {
 #define NEVERD_DRIVER_REQUEST_KIND(Name, Spelling, Major)                      \
@@ -386,6 +393,52 @@ const char *userPageAccessName(DriverUserPageAccess Access) {
   llvm_unreachable("invalid driver user page access");
 }
 
+const char *userBufferKindName(DriverUserBufferKind Kind) {
+  switch (Kind) {
+#define NEVERD_DRIVER_USER_BUFFER_KIND(Name, Spelling)                         \
+  case DriverUserBufferKind::Name:                                             \
+    return Spelling;
+#include "neverd/emulation/DriverUserMemory.def"
+#undef NEVERD_DRIVER_USER_BUFFER_KIND
+  }
+  llvm_unreachable("invalid driver user buffer kind");
+}
+
+llvm::json::Object userBufferRefJSON(const DriverUserBufferRef &Ref) {
+  llvm::json::Object Result{{userField::Buffer, userBufferKindName(Ref.Kind)},
+                            {userField::Offset, Ref.Offset}};
+  if (Ref.Kind == DriverUserBufferKind::Memory)
+    Result[field::ID] = Ref.ID;
+  return Result;
+}
+
+llvm::json::Array userMemoryConfigurationJSON(const DriverOptions &Options) {
+  llvm::json::Array Result;
+  for (size_t I = 0; I < Options.Requests.size(); ++I) {
+    const auto &Request = Options.Requests[I];
+    if (Request.UserBuffers.empty() && Request.UserPointers.empty())
+      continue;
+    llvm::json::Array Buffers;
+    for (const auto &Buffer : Request.UserBuffers)
+      Buffers.push_back(llvm::json::Object{
+          {field::ID, Buffer.ID},
+          {field::Size, Buffer.Size},
+          {userField::Input,
+           llvm::toHex(llvm::ArrayRef<uint8_t>(Buffer.Input), true)},
+          {field::Access, userPageAccessName(Buffer.Access)}});
+    llvm::json::Array Pointers;
+    for (const auto &Pointer : Request.UserPointers)
+      Pointers.push_back(llvm::json::Object{
+          {userField::Source, userBufferRefJSON(Pointer.Source)},
+          {userField::Target, userBufferRefJSON(Pointer.Target)}});
+    Result.push_back(llvm::json::Object{
+        {field::SourceRequestIndex, static_cast<uint64_t>(I)},
+        {userField::UserBuffers, std::move(Buffers)},
+        {userField::UserPointers, std::move(Pointers)}});
+  }
+  return Result;
+}
+
 llvm::json::Array
 userPageAccessConfigurationJSON(const DriverOptions &Options) {
   llvm::json::Array Result;
@@ -493,6 +546,8 @@ std::string driverResultJSON(const DriverResult &Result) {
       {dmaField::DmaEvents, dmaEventConfigurationJSON(Result.Configuration)},
       {field::UserPageAccess,
        userPageAccessConfigurationJSON(Result.Configuration)},
+      {userField::UserMemory,
+       userMemoryConfigurationJSON(Result.Configuration)},
       {field::KernelExports, std::move(Exports)}};
   if (Result.Fault) {
     const auto &Fault = *Result.Fault;
@@ -646,6 +701,16 @@ std::string driverResultJSON(const DriverResult &Result) {
   Root[field::Messages] = std::move(Messages);
   llvm::json::Array Requests;
   for (const auto &Request : Result.Requests) {
+    llvm::json::Array UserBuffers;
+    for (const auto &Buffer : Request.UserBuffers)
+      UserBuffers.push_back(llvm::json::Object{
+          {field::ID, Buffer.ID},
+          {field::Address, Address(Buffer.Address)},
+          {field::Size, Buffer.Size},
+          {field::Access, userPageAccessName(Buffer.Access)},
+          {userField::Revoked, Buffer.Revoked},
+          {userField::Backing,
+           llvm::toHex(llvm::ArrayRef<uint8_t>(Buffer.Backing), true)}});
     llvm::json::Object Item{
         {field::Kind, requestKindName(Request.Kind)},
         {field::Device, Request.Device},
@@ -666,7 +731,8 @@ std::string driverResultJSON(const DriverResult &Result) {
         {field::Information, Request.Information},
         {field::InformationHex, Address(Request.Information)},
         {field::Output,
-         llvm::toHex(llvm::ArrayRef<uint8_t>(Request.Output), true)}};
+         llvm::toHex(llvm::ArrayRef<uint8_t>(Request.Output), true)},
+        {userField::UserBuffers, std::move(UserBuffers)}};
     if (!Request.DeviceID.empty())
       Item[field::DeviceID] = Request.DeviceID;
     if (Request.RequestorProcessID)

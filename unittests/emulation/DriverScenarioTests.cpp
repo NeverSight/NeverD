@@ -322,6 +322,34 @@ TEST(DriverScenario, ParsesAndRestrictsNeitherUserPageAccessFacts) {
             std::string::npos);
 }
 
+TEST(DriverScenario, NativeUserPageAccessEnumsFailBeforeImageLoading) {
+  for (int Value : {-1, 255}) {
+    for (bool Input : {false, true}) {
+      SCOPED_TRACE(Value);
+      SCOPED_TRACE(Input);
+      DriverRequest Request;
+      Request.Kind = DriverRequestKind::DeviceControl;
+      Request.ControlCode = 3;
+      Request.Input = {1};
+      Request.OutputSize = 1;
+      auto &Access = Input ? Request.UserInputAccess : Request.UserOutputAccess;
+      Access = static_cast<DriverUserPageAccess>(Value);
+      DriverOptions Options;
+      Options.Requests.push_back(std::move(Request));
+      auto Parsed = driverOptionsFromScenarioJSON("{}", Options);
+      ASSERT_FALSE(bool(Parsed));
+      const auto Diagnostic = llvm::toString(Parsed.takeError());
+      EXPECT_NE(
+          Diagnostic.find(Input ? "user_input_access" : "user_output_access"),
+          std::string::npos);
+      auto Native =
+          emulateDriver("missing-user-page-access-preflight.sys", Options);
+      ASSERT_FALSE(bool(Native));
+      EXPECT_EQ(llvm::toString(Native.takeError()), Diagnostic);
+    }
+  }
+}
+
 TEST(DriverScenario, ParsesAndRestrictsPostDispatchUserUnmapping) {
   auto Parsed = driverOptionsFromScenarioJSON(R"({"requests":[
     {"kind":"ioctl","code":"0x222003","input":"01","output_size":1,
@@ -554,6 +582,319 @@ TEST(DriverScenario,
   }
   EXPECT_NE(Text.find("\"cancel_requested_at_100ns\":18446744073709551615"),
             std::string::npos);
+}
+
+DriverRequest userMemoryRequest() {
+  DriverRequest Request;
+  Request.ControlCode = 0x222003;
+  Request.Input.resize(profile::PointerSize * 2);
+  Request.OutputSize = profile::PointerSize * 2;
+  Request.UserBuffers.push_back(
+      {"payload", 16, {0x12, 0x34}, DriverUserPageAccess::ReadOnly});
+  Request.UserPointers.push_back(
+      {{DriverUserBufferKind::Input, {}, 0},
+       {DriverUserBufferKind::Memory, "payload", 0}});
+  return Request;
+}
+
+TEST(DriverScenario, UserMemoryParsesExplicitNestedPointersAndDefaults) {
+  auto Parsed = driverOptionsFromScenarioJSON(R"({"requests":[{
+    "kind":"ioctl","code":"0x222003",
+    "input":"00000000000000000000000000000000","output_size":16,
+    "user_buffers":[
+      {"id":"payload","size":16,"input":"1234","access":"read_only"},
+      {"id":"input","size":8}
+    ],
+    "user_pointers":[
+      {"source":{"buffer":"input","offset":0},
+       "target":{"buffer":"memory","id":"payload","offset":0}},
+      {"source":{"buffer":"input","offset":8},
+       "target":{"buffer":"memory","id":"payload","offset":16}},
+      {"source":{"buffer":"memory","id":"payload","offset":0},
+       "target":{"buffer":"input","offset":0}},
+      {"source":{"buffer":"output","offset":1},
+       "target":{"buffer":"memory","id":"payload","offset":0}}
+    ]
+  }]})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->Requests.size(), 1u);
+  const auto &Request = Parsed->Requests.front();
+  ASSERT_EQ(Request.UserBuffers.size(), 2u);
+  EXPECT_EQ(Request.UserBuffers[0].ID, "payload");
+  EXPECT_EQ(Request.UserBuffers[0].Size, 16u);
+  EXPECT_EQ(Request.UserBuffers[0].Input, (std::vector<uint8_t>{0x12, 0x34}));
+  EXPECT_EQ(Request.UserBuffers[0].Access, DriverUserPageAccess::ReadOnly);
+  EXPECT_EQ(Request.UserBuffers[1].ID, "input");
+  EXPECT_TRUE(Request.UserBuffers[1].Input.empty());
+  EXPECT_EQ(Request.UserBuffers[1].Access, DriverUserPageAccess::ReadWrite);
+  ASSERT_EQ(Request.UserPointers.size(), 4u);
+  EXPECT_EQ(Request.UserPointers[1].Target.Offset, 16u);
+  EXPECT_EQ(Request.UserPointers[2].Source.Kind, DriverUserBufferKind::Memory);
+  EXPECT_EQ(Request.UserPointers[2].Target.Kind, DriverUserBufferKind::Input);
+  EXPECT_EQ(Request.UserPointers[3].Source.Offset, 1u);
+  auto Native = driverOptionsFromScenarioJSON("{}", *Parsed);
+  ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
+}
+
+TEST(DriverScenario, UserMemoryRejectsMalformedDeclarationsAndReferences) {
+  const std::string Prefix =
+      R"({"requests":[{"kind":"ioctl","code":3,"input":"0000000000000000",)";
+  for (
+      const char *Fields :
+      {R"("user_buffers":null)",
+       R"("user_buffers":[null])",
+       R"("user_buffers":[{"size":1}])",
+       R"("user_buffers":[{"id":"x"}])",
+       R"("user_buffers":[{"id":"","size":1}])",
+       R"("user_buffers":[{"id":"bad id","size":1}])",
+       R"("user_buffers":[{"id":"x","size":0}])",
+       R"("user_buffers":[{"id":"x","size":1.0}])",
+       R"("user_buffers":[{"id":"x","size":65537}])",
+       R"("user_buffers":[{"id":"x","size":1,"input":"0102"}])",
+       R"("user_buffers":[{"id":"x","size":1,"input":"0"}])",
+       R"("user_buffers":[{"id":"x","size":1,"input":null}])",
+       R"("user_buffers":[{"id":"x","size":1,"access":"execute"}])",
+       R"("user_buffers":[{"id":"x","size":1,"access":false}])",
+       R"("user_buffers":[{"id":"x","size":1,"address":4096}])",
+       R"("user_buffers":[{"id":"x","size":1},{"id":"x","size":1}])",
+       R"("user_buffers":[{"id":"x","id":"y","size":1}])",
+       R"("user_pointers":null)",
+       R"("user_pointers":[null])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":null,"target":{}}])",
+       R"("user_pointers":[{"source":{"buffer":"input"},"target":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0},"target":{"buffer":"kernel","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0},"target":{"buffer":"memory","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0},"target":{"buffer":"memory","id":"missing","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","id":"","offset":0},"target":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":-1},"target":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0.0},"target":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":4294967296},"target":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":1},"target":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0},"target":{"buffer":"input","offset":9}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0},"target":{"buffer":"output","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0,"extra":0},"target":{"buffer":"input","offset":0}}])",
+       R"("user_pointers":[{"source":{"buffer":"input","offset":0},"target":{"buffer":"input","offset":0},"width":4}])"}) {
+    SCOPED_TRACE(Fields);
+    auto Parsed = driverOptionsFromScenarioJSON(Prefix + Fields + "}]}");
+    ASSERT_FALSE(bool(Parsed));
+    EXPECT_FALSE(llvm::toString(Parsed.takeError()).empty());
+  }
+  for (const char *Text :
+       {R"({"requests":[{"kind":"create","user_buffers":[]}]})",
+        R"({"requests":[{"kind":"close","user_pointers":[]}]})",
+        R"({"requests":[{"kind":"ioctl","code":0,"user_buffers":[]}]})",
+        R"({"requests":[{"kind":"ioctl","code":1,"user_pointers":[]}]})"}) {
+    auto Parsed = driverOptionsFromScenarioJSON(Text);
+    ASSERT_FALSE(bool(Parsed));
+    EXPECT_NE(llvm::toString(Parsed.takeError()).find("user memory"),
+              std::string::npos);
+  }
+}
+
+TEST(DriverScenario, UserMemoryNativeErrorsPrecedeImageLoading) {
+  using Mutator = void (*)(DriverRequest &);
+  for (Mutator Change :
+       {+[](DriverRequest &R) { R.Kind = DriverRequestKind::Create; },
+        +[](DriverRequest &R) { R.ControlCode = 0; },
+        +[](DriverRequest &R) { R.UserBuffers[0].Size = 0; },
+        +[](DriverRequest &R) { R.UserBuffers[0].Size = 1; },
+        +[](DriverRequest &R) { R.UserBuffers[0].ID.clear(); },
+        +[](DriverRequest &R) {
+          R.UserBuffers[0].Access = static_cast<DriverUserPageAccess>(-1);
+        },
+        +[](DriverRequest &R) {
+          R.UserBuffers.push_back(R.UserBuffers.front());
+        },
+        +[](DriverRequest &R) {
+          R.UserPointers[0].Source.Kind = static_cast<DriverUserBufferKind>(-1);
+        },
+        +[](DriverRequest &R) { R.UserPointers[0].Source.ID = "payload"; },
+        +[](DriverRequest &R) { R.UserPointers[0].Source.Offset = UINT32_MAX; },
+        +[](DriverRequest &R) { R.UserPointers[0].Target.Offset = 17; },
+        +[](DriverRequest &R) { R.UserPointers[0].Target.ID = "missing"; },
+        +[](DriverRequest &R) {
+          auto Overlap = R.UserPointers.front();
+          Overlap.Source.Offset = 1;
+          R.UserPointers.push_back(std::move(Overlap));
+        }}) {
+    DriverOptions Options;
+    auto Request = userMemoryRequest();
+    Change(Request);
+    Options.Requests.push_back(std::move(Request));
+    auto Parsed = driverOptionsFromScenarioJSON("{}", Options);
+    ASSERT_FALSE(bool(Parsed));
+    const auto Diagnostic = llvm::toString(Parsed.takeError());
+    SCOPED_TRACE(Diagnostic);
+    EXPECT_FALSE(Diagnostic.empty());
+    auto Native = emulateDriver("missing-user-memory-preflight.sys", Options);
+    ASSERT_FALSE(bool(Native));
+    EXPECT_EQ(llvm::toString(Native.takeError()), Diagnostic);
+  }
+}
+
+TEST(DriverScenario, UserMemoryUsesRequestLocalIDsAndMatchingTransferBuffers) {
+  DriverOptions Options;
+  auto Read = userMemoryRequest();
+  Read.Kind = DriverRequestKind::Read;
+  Read.ControlCode = 0;
+  Read.Input.clear();
+  Read.UserPointers[0].Source.Kind = DriverUserBufferKind::Output;
+  auto Write = userMemoryRequest();
+  Write.Kind = DriverRequestKind::Write;
+  Write.ControlCode = 0;
+  Write.OutputSize = 0;
+  Options.Requests = {Read, Write};
+  auto Valid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+  EXPECT_EQ(Valid->Requests[0].UserBuffers[0].ID,
+            Valid->Requests[1].UserBuffers[0].ID);
+  Options.Requests[0].UserPointers[0].Source.Kind = DriverUserBufferKind::Input;
+  auto Invalid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_FALSE(bool(Invalid));
+  EXPECT_NE(llvm::toString(Invalid.takeError()).find("source slot"),
+            std::string::npos);
+  Options.Requests = {Write};
+  Options.Requests[0].UserPointers[0].Target = {
+      DriverUserBufferKind::Output, {}, 0};
+  Invalid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_FALSE(bool(Invalid));
+  EXPECT_NE(llvm::toString(Invalid.takeError()).find("target"),
+            std::string::npos);
+}
+
+TEST(DriverScenario, UserMemoryChargesDeclaredCapacityAndCombinedCounts) {
+  DriverOptions Options;
+  DriverRequest Request;
+  Request.ControlCode = 3;
+  for (size_t I = 0;
+       I < DriverScenarioTotalBufferLimit / DriverScenarioBufferLimit; ++I)
+    Request.UserBuffers.push_back(
+        {"buffer" + std::to_string(I), DriverScenarioBufferLimit, {}});
+  Options.Requests = {Request};
+  auto Valid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+  Options.Requests[0].Input = {0};
+  auto Invalid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_FALSE(bool(Invalid));
+  EXPECT_NE(
+      llvm::toString(Invalid.takeError()).find("combined request buffers"),
+      std::string::npos);
+
+  Request.UserBuffers.clear();
+  for (size_t I = 0; I < DriverScenarioUserBufferLimit / 2; ++I)
+    Request.UserBuffers.push_back({"buffer" + std::to_string(I), 1, {}});
+  Options.Requests = {Request, Request};
+  Valid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+  Options.Requests.back().UserBuffers.push_back({"extra", 1, {}});
+  Invalid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_FALSE(bool(Invalid));
+  EXPECT_NE(
+      llvm::toString(Invalid.takeError()).find("combined buffer or pointer"),
+      std::string::npos);
+
+  Request.UserBuffers = {{"target", 1, {}}};
+  Request.Input.resize(DriverScenarioUserPointerLimit * profile::PointerSize);
+  for (size_t I = 0; I < DriverScenarioUserPointerLimit / 2; ++I)
+    Request.UserPointers.push_back(
+        {{DriverUserBufferKind::Input,
+          {},
+          static_cast<uint32_t>(I * profile::PointerSize)},
+         {DriverUserBufferKind::Memory, "target", 0}});
+  Options.Requests = {Request, Request};
+  Valid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+  Options.Requests.back().UserPointers.push_back(
+      {{DriverUserBufferKind::Input,
+        {},
+        static_cast<uint32_t>(DriverScenarioUserPointerLimit / 2 *
+                              profile::PointerSize)},
+       {DriverUserBufferKind::Memory, "target", 0}});
+  Invalid = driverOptionsFromScenarioJSON("{}", Options);
+  ASSERT_FALSE(bool(Invalid));
+  EXPECT_NE(
+      llvm::toString(Invalid.takeError()).find("combined buffer or pointer"),
+      std::string::npos);
+}
+
+TEST(DriverScenario, UserMemoryRevocationAcceptsDeclaredOnlyBuffers) {
+  for (const char *Event :
+       {"user_unmap_after_dispatch", "requestor_exit_after_dispatch"}) {
+    const std::string JSON =
+        std::string(R"({"requests":[{"kind":"ioctl","code":3,")") + Event +
+        R"(":true,"user_buffers":[{"id":"payload","size":16}]}]})";
+    auto Parsed = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+    EXPECT_TRUE(Parsed->Requests[0].Input.empty());
+    EXPECT_EQ(Parsed->Requests[0].OutputSize, 0u);
+  }
+}
+
+TEST(DriverScenario, UserMemoryReportSeparatesConfigurationAndObservedBacking) {
+  DriverResult Result;
+  Result.Configuration.Requests.resize(2);
+  Result.Configuration.Requests[1] = userMemoryRequest();
+  Result.Requests.resize(2);
+  Result.Requests[1].UserBuffers.push_back({"payload",
+                                            UINT64_MAX - 15,
+                                            16,
+                                            DriverUserPageAccess::ReadOnly,
+                                            true,
+                                            {0xab, 0xcd, 0xef}});
+  auto Parsed = llvm::json::parse(driverResultJSON(Result));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  const auto *Configuration = Root->getObject("configuration");
+  ASSERT_NE(Configuration, nullptr);
+  const auto *Memory = Configuration->getArray("user_memory");
+  ASSERT_NE(Memory, nullptr);
+  ASSERT_EQ(Memory->size(), 1u);
+  const auto *Config = (*Memory)[0].getAsObject();
+  ASSERT_NE(Config, nullptr);
+  EXPECT_EQ(Config->getInteger("source_request_index"), 1);
+  const auto *Buffers = Config->getArray("user_buffers");
+  ASSERT_NE(Buffers, nullptr);
+  ASSERT_EQ(Buffers->size(), 1u);
+  const auto *Buffer = (*Buffers)[0].getAsObject();
+  ASSERT_NE(Buffer, nullptr);
+  EXPECT_EQ(Buffer->getString("id"), "payload");
+  EXPECT_EQ(Buffer->getString("input"), "1234");
+  EXPECT_EQ(Buffer->getInteger("size"), 16);
+  EXPECT_EQ(Buffer->getString("access"), "read_only");
+  EXPECT_EQ(Buffer->get("address"), nullptr);
+  const auto *Pointers = Config->getArray("user_pointers");
+  ASSERT_NE(Pointers, nullptr);
+  ASSERT_EQ(Pointers->size(), 1u);
+  const auto *Pointer = (*Pointers)[0].getAsObject();
+  ASSERT_NE(Pointer, nullptr);
+  const auto *Source = Pointer->getObject("source");
+  const auto *Target = Pointer->getObject("target");
+  ASSERT_NE(Source, nullptr);
+  ASSERT_NE(Target, nullptr);
+  EXPECT_EQ(Source->getString("buffer"), "input");
+  EXPECT_EQ(Source->get("id"), nullptr);
+  EXPECT_EQ(Source->getInteger("offset"), 0);
+  EXPECT_EQ(Target->getString("buffer"), "memory");
+  EXPECT_EQ(Target->getString("id"), "payload");
+  const auto *Requests = Root->getArray("requests");
+  ASSERT_NE(Requests, nullptr);
+  ASSERT_EQ(Requests->size(), 2u);
+  const auto *Empty = (*Requests)[0].getAsObject()->getArray("user_buffers");
+  ASSERT_NE(Empty, nullptr);
+  EXPECT_TRUE(Empty->empty());
+  const auto *Observed = (*Requests)[1].getAsObject()->getArray("user_buffers");
+  ASSERT_NE(Observed, nullptr);
+  ASSERT_EQ(Observed->size(), 1u);
+  const auto *State = (*Observed)[0].getAsObject();
+  ASSERT_NE(State, nullptr);
+  EXPECT_EQ(State->getString("address"), "0xFFFFFFFFFFFFFFF0");
+  EXPECT_EQ(State->getString("backing_hex"), "abcdef");
+  EXPECT_EQ(State->getBoolean("revoked"), true);
+  EXPECT_EQ(State->getInteger("size"), 16);
+  EXPECT_EQ(State->get("input"), nullptr);
+  EXPECT_EQ((*Requests)[1].getAsObject()->getString("output_hex"), "");
 }
 
 } // namespace

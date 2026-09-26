@@ -387,17 +387,12 @@ KernelModel::frameworkProbeAndLockUserBuffer(uint64_t IRP, uint64_t Buffer,
       CurrentUserProcessID != Request->ProcessID)
     return Result{framework::RequestAccessViolation};
   const bool OwnedByRequest =
-      (Request->UserInput && Buffer >= Request->UserInput &&
-       Buffer - Request->UserInput < Request->InputSize &&
-       Length <= Request->InputSize - (Buffer - Request->UserInput)) ||
-      (Request->UserBuffer && Buffer >= Request->UserBuffer &&
-       Buffer - Request->UserBuffer < (Request->Kind == DriverRequestKind::Write
-                                           ? Request->InputSize
-                                           : Request->OutputSize) &&
-       Length <= (Request->Kind == DriverRequestKind::Write
-                      ? Request->InputSize
-                      : Request->OutputSize) -
-                     (Buffer - Request->UserBuffer));
+      std::any_of(Request->UserRegions.begin(), Request->UserRegions.end(),
+                  [&](const auto &Region) {
+                    return Buffer >= Region.Address &&
+                           Buffer - Region.Address < Region.Size &&
+                           Length <= Region.Size - (Buffer - Region.Address);
+                  });
   if (!OwnedByRequest)
     return Result{framework::RequestAccessViolation};
   auto Region = UserAllocations.upper_bound(Buffer);

@@ -11,6 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "DriverNestedUserTestSupport.h"
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/DriverSession.h"
@@ -1211,6 +1212,46 @@ TEST(DriverKMDFControl, NeitherBuffersUseRequestOwnedLockedSystemAliases) {
                 2u);
       EXPECT_GE(apiCount(*Result, "WdfMemoryGetBuffer"), 4u);
     }
+}
+
+TEST(DriverKMDFControl, CallerContextLocksNestedPointersBeforeQueueDelivery) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (bool ReadOnlyResult : {false, true}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(ReadOnlyResult);
+        auto Options = controlOptions(NestedFrameworkMode);
+        Options.LoadAddress = Address;
+        Options.Requests.resize(2);
+        Options.Requests[1] = nested_user_test::request();
+        if (ReadOnlyResult)
+          Options.Requests[1].UserBuffers.back().Access =
+              DriverUserPageAccess::ReadOnly;
+        Options.Requests.push_back(controlRequest(DriverRequestKind::Cleanup));
+        Options.Requests.push_back(controlRequest(DriverRequestKind::Close));
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_EQ(Result->NTStatus, 0u) << driverResultJSON(*Result);
+        ASSERT_EQ(Result->Requests.size(), 4u);
+        const auto &IO = Result->Requests[1];
+        EXPECT_TRUE(IO.Completed);
+        EXPECT_EQ(IO.IOStatus, ReadOnlyResult ? AccessViolation : 0u);
+        EXPECT_EQ(IO.Information, 0u);
+        nested_user_test::expectBacking(IO, !ReadOnlyResult);
+        EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveUnsafeUserInputBuffer"),
+                  1u);
+        EXPECT_EQ(apiCount(*Result, "WdfRequestProbeAndLockUserBufferForRead"),
+                  3u);
+        EXPECT_EQ(apiCount(*Result, "WdfRequestProbeAndLockUserBufferForWrite"),
+                  1u);
+        EXPECT_EQ(apiCount(*Result, "WdfDeviceEnqueueRequest"),
+                  ReadOnlyResult ? 0u : 1u);
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_FALSE(Result->Fault);
+      }
 }
 
 TEST(DriverKMDFControl, NeitherProbeRejectsInaccessibleUserPages) {

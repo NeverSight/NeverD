@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../TestProcess.h"
+#include "fixtures/driver_nested_user.h"
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/DriverProfile.h"
@@ -3611,6 +3612,94 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteGenuineNeitherUserBuffers) {
         EXPECT_EQ(Request->getString("output_hex"), Expected);
         EXPECT_EQ(Request->getInteger("io_status"), 0);
         EXPECT_EQ(Request->getBoolean("completed"), true);
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_NEITHER_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteNestedUserMemoryExample) {
+#ifdef NEVERD_WDM_NEITHER_FIXTURE
+  std::ifstream Input(NEVERD_DRIVER_NESTED_SCENARIO);
+  ASSERT_TRUE(Input.is_open());
+  const std::string Scenario(std::istreambuf_iterator<char>(Input), {});
+  for (const char *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    for (const char *Base : {"0x180000000", "0x190000000"}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Base);
+      auto Document = llvm::json::parse(Scenario);
+      ASSERT_TRUE(bool(Document)) << llvm::toString(Document.takeError());
+      (*Document->getAsObject())["load_address"] = Base;
+      const std::string JSON = llvm::formatv("{0}", *Document).str();
+      const std::string API = takeString(neverd_emulate_driver_scenario_json(
+          Session, Image, JSON.c_str(), nullptr));
+      ASSERT_FALSE(API.empty()) << error();
+      for (const auto &Text : {API, runCLI(JSON, 0, nullptr, Image)}) {
+        auto Parsed = llvm::json::parse(Text);
+        ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+        const auto *Report = Parsed->getAsObject();
+        ASSERT_NE(Report, nullptr);
+        EXPECT_EQ(Report->getString("stop_reason"), "returned")
+            << Report->getString("diagnostic").value_or("").str();
+        EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+        EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+        const auto *Configuration = Report->getObject("configuration");
+        ASSERT_NE(Configuration, nullptr);
+        const auto *Memory = Configuration->getArray("user_memory");
+        ASSERT_NE(Memory, nullptr);
+        ASSERT_EQ(Memory->size(), 2u);
+        const auto *Requests = Report->getArray("requests");
+        ASSERT_NE(Requests, nullptr);
+        ASSERT_EQ(Requests->size(), 5u);
+        std::string PreviousPayload;
+        for (size_t Index : {1u, 2u}) {
+          const auto *Request = (*Requests)[Index].getAsObject();
+          ASSERT_NE(Request, nullptr);
+          EXPECT_EQ(Request->getInteger("io_status"), 0);
+          EXPECT_EQ(Request->getBoolean("completed"), true);
+          EXPECT_EQ(Request->getString("output_hex"), "");
+          const auto *Buffers = Request->getArray("user_buffers");
+          ASSERT_NE(Buffers, nullptr);
+          ASSERT_EQ(Buffers->size(), 3u);
+          const auto *Descriptor = (*Buffers)[0].getAsObject();
+          const auto *Payload = (*Buffers)[1].getAsObject();
+          const auto *Sink = (*Buffers)[2].getAsObject();
+          ASSERT_NE(Descriptor, nullptr);
+          ASSERT_NE(Payload, nullptr);
+          ASSERT_NE(Sink, nullptr);
+          EXPECT_EQ(Payload->getString("id"), "payload");
+          EXPECT_EQ(Payload->getString("access"), "read_only");
+          EXPECT_EQ(Payload->getString("backing_hex"),
+                    "a5a5a501020304a5a5a5a5a5");
+          EXPECT_EQ(Sink->getString("backing_hex"), "a5a5a5a531323334a5a5a5a5");
+          const auto Address = Payload->getString("address");
+          ASSERT_TRUE(Address);
+          EXPECT_NE(Address->str(), PreviousPayload);
+          PreviousPayload = Address->str();
+          uint64_t PayloadAddress = 0;
+          ASSERT_FALSE(Address->getAsInteger(0, PayloadAddress));
+          const auto Backing = Descriptor->getString("backing_hex");
+          ASSERT_TRUE(Backing);
+          ASSERT_EQ(Backing->size(), sizeof(DriverNestedBuffer) * 2);
+          uint64_t Pointer = 0;
+          for (unsigned I = 0; I < sizeof(uint64_t); ++I) {
+            unsigned Byte = 0;
+            ASSERT_FALSE(Backing->substr(I * 2, 2).getAsInteger(16, Byte));
+            Pointer |= uint64_t(Byte) << (I * 8);
+          }
+          EXPECT_EQ(Pointer, PayloadAddress + NestedPayloadOffset);
+          EXPECT_EQ(
+              Backing->take_front(sizeof(uint64_t) * 2),
+              Backing->substr(sizeof(uint64_t) * 2, sizeof(uint64_t) * 2));
+          for (const auto &Buffer : *Buffers)
+            EXPECT_EQ(Buffer.getAsObject()->getBoolean("revoked"), Index == 2);
+        }
       }
     }
   }

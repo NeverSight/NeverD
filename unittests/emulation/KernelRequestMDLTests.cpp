@@ -115,7 +115,8 @@ protected:
     return take(Model->call(Name, Arguments));
   }
 
-  virtual bool directIO() const { return false; }
+  virtual uint32_t ioType() const { return framework::ControlIoBuffered; }
+  virtual uint64_t callerContextPC() const { return 0; }
 
   void SetUp() override {
     auto Backend = UnicornBackend::create(8 * 1024 * 1024);
@@ -170,7 +171,10 @@ protected:
                              {Globals, get(DriverSlot), Security});
     ASSERT_NE(Init, 0u);
     put(InitSlot, Init);
-    invoke("WdfDeviceInitSetIoType", {Globals, Init, directIO() ? 3u : 2u});
+    invoke("WdfDeviceInitSetIoType", {Globals, Init, ioType()});
+    if (callerContextPC())
+      invoke("WdfDeviceInitSetIoInCallerContextCallback",
+             {Globals, Init, callerContextPC()});
     unicode(DeviceName, Name);
     EXPECT_EQ(invoke("WdfDeviceInitAssignName", {Globals, Init, DeviceName}),
               0u);
@@ -205,11 +209,13 @@ protected:
     uint64_t IRP = 0, Request = 0;
   };
 
-  void open() {
+  void open(bool Asynchronous = false) {
     DriverRequest Request;
     Request.Kind = DriverRequestKind::Create;
     Request.Device = Name;
     Request.File = 1;
+    if (Asynchronous)
+      Request.AsynchronousFile = true;
     const auto Invocation = take(Model->beginRequest(Request));
     EXPECT_EQ(Invocation.PC, 0u);
     ASSERT_FALSE(Result.Requests.empty());
@@ -280,8 +286,159 @@ protected:
 
 class KernelDirectRequestMDL : public KernelRequestMDL {
 protected:
-  bool directIO() const override { return true; }
+  uint32_t ioType() const override { return framework::ControlIoDirect; }
 };
+
+class KernelNeitherRequestMDL : public KernelRequestMDL {
+protected:
+  static constexpr uint64_t CallerContextPC = Entry + 0x400;
+  uint32_t ioType() const override { return framework::ControlIoNeither; }
+  uint64_t callerContextPC() const override { return CallerContextPC; }
+
+  DriverRequest nestedRequest() {
+    DriverRequest Request;
+    Request.Kind = DriverRequestKind::DeviceControl;
+    Request.Device = Name;
+    Request.File = 1;
+    Request.ControlCode = 0x222000 | windows::MethodNeither;
+    Request.Input.resize(profile::PointerSize);
+    Request.UserBuffers = {
+        {"descriptor", 16, {}, DriverUserPageAccess::ReadOnly},
+        {"payload", 12, {0x31}},
+        {"sealed", 8, {}, DriverUserPageAccess::NoAccess}};
+    using Kind = DriverUserBufferKind;
+    Request.UserPointers = {
+        {{Kind::Input, {}, 0}, {Kind::Memory, "descriptor", 0}},
+        {{Kind::Memory, "descriptor", 0}, {Kind::Memory, "payload", 4}}};
+    return Request;
+  }
+
+  Transfer beginCaller(const DriverRequest &Input) {
+    auto Invocation = Model->beginRequest(Input);
+    if (!Invocation) {
+      ADD_FAILURE() << llvm::toString(Invocation.takeError());
+      return {};
+    }
+    EXPECT_TRUE(Invocation->FrameworkCallerContext);
+    EXPECT_EQ(Invocation->PC, CallerContextPC);
+    EXPECT_EQ(Invocation->Argument0, Device);
+    Model->enterExecution(profile::StackBase);
+    success(Model->setUserRequestContext(true, Input.RequestorProcessID));
+    return {Invocation->IRP, Invocation->Argument1};
+  }
+
+  void enqueue(const Transfer &Request) {
+    EXPECT_EQ(
+        invoke("WdfDeviceEnqueueRequest", {Globals, Device, Request.Request}),
+        windows::StatusSuccess);
+    const auto Dispatch =
+        take(Model->continueFrameworkCallerContext(Request.IRP));
+    EXPECT_EQ(Dispatch.PC, Entry);
+    EXPECT_EQ(Dispatch.Argument0, Queue);
+    EXPECT_EQ(Dispatch.Argument1, Request.Request);
+    success(Model->recordDispatchReturn(Request.IRP, Pending));
+  }
+
+  uint64_t lock(const Transfer &Request, uint64_t Buffer, uint64_t Size,
+                bool ForWrite = false) {
+    EXPECT_EQ(invoke(ForWrite ? "WdfRequestProbeAndLockUserBufferForWrite"
+                              : "WdfRequestProbeAndLockUserBufferForRead",
+                     {Globals, Request.Request, Buffer, Size, BufferSlot}),
+              windows::StatusSuccess);
+    return get(BufferSlot);
+  }
+
+  uint64_t memoryBuffer(uint64_t Handle) {
+    return invoke("WdfMemoryGetBuffer", {Globals, Handle, LengthSlot});
+  }
+};
+
+TEST_F(KernelNeitherRequestMDL,
+       CallerContextLocksNestedPointersAndRetainsAliasesAfterUnmap) {
+  open();
+  const auto Request = beginCaller(nestedRequest());
+  ASSERT_NE(Request.IRP, 0u);
+  EXPECT_EQ(invoke("WdfRequestRetrieveUnsafeUserInputBuffer",
+                   {Globals, Request.Request, profile::PointerSize, BufferSlot,
+                    LengthSlot}),
+            windows::StatusSuccess);
+  const auto Root = get(BufferSlot);
+  const auto RootMemory = lock(Request, Root, profile::PointerSize);
+  const auto Descriptor = get(memoryBuffer(RootMemory));
+  const auto DescriptorMemory = lock(Request, Descriptor, profile::PointerSize);
+  const auto Payload = get(memoryBuffer(DescriptorMemory));
+  const auto PayloadMemory = lock(Request, Payload, sizeof(uint32_t), true);
+  const auto Alias = memoryBuffer(PayloadMemory);
+  const auto PeerMemory = lock(Request, Payload, sizeof(uint32_t), true);
+  const auto PeerAlias = memoryBuffer(PeerMemory);
+  enqueue(Request);
+  // Returning from caller context closes probe-and-lock admission.
+  EXPECT_EQ(
+      invoke("WdfRequestProbeAndLockUserBufferForRead",
+             {Globals, Request.Request, Payload, sizeof(uint32_t), BufferSlot}),
+      framework::RequestAccessViolation);
+  success(Model->revokeRequestUserBuffers(Request.IRP));
+  EXPECT_FALSE(take(Memory->canAccess(Payload, 1, Read)));
+  put(Alias, 0x77665544, sizeof(uint32_t));
+  EXPECT_EQ(get(PeerAlias, sizeof(uint32_t)), 0x77665544u);
+  success(Model->snapshot());
+  EXPECT_TRUE(Result.Requests.back().UserBuffers[1].Revoked);
+  EXPECT_EQ(Result.Requests.back().UserBuffers[1].Backing[4], 0x44u);
+  complete(Request);
+  finalize(Request);
+  success(Model->snapshot());
+  EXPECT_TRUE(Result.Requests.back().Output.empty());
+  EXPECT_EQ(Result.Requests.back().UserBuffers[1].Backing[7], 0x77u);
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(PeerAlias, 1, Read)));
+}
+
+TEST_F(KernelNeitherRequestMDL,
+       ProbeAdmissionChecksPageRightsAndCurrentRequestDeclarations) {
+  open(true);
+  const auto First = beginCaller(nestedRequest());
+  ASSERT_NE(First.IRP, 0u);
+  const auto FirstPayload = Result.Requests.back().UserBuffers[1].Address;
+  enqueue(First);
+  const auto Second = beginCaller(nestedRequest());
+  ASSERT_NE(Second.IRP, 0u);
+  const auto Descriptor = Result.Requests.back().UserBuffers[0].Address;
+  const auto Payload = Result.Requests.back().UserBuffers[1].Address;
+  const auto Sealed = Result.Requests.back().UserBuffers[2].Address;
+  EXPECT_TRUE(take(Memory->canAccess(FirstPayload, 1, Read)));
+  for (const auto &Attempt : {std::pair<uint64_t, uint64_t>{FirstPayload, 4},
+                              {Payload + 10, 4},
+                              {Payload + 12, 1}}) {
+    EXPECT_EQ(invoke("WdfRequestProbeAndLockUserBufferForRead",
+                     {Globals, Second.Request, Attempt.first, Attempt.second,
+                      BufferSlot}),
+              framework::RequestAccessViolation);
+    EXPECT_EQ(get(BufferSlot), 0u);
+  }
+  EXPECT_EQ(invoke("WdfRequestProbeAndLockUserBufferForWrite",
+                   {Globals, Second.Request, Descriptor, profile::PointerSize,
+                    BufferSlot}),
+            framework::RequestAccessViolation);
+  EXPECT_EQ(get(BufferSlot), 0u);
+  success(Model->setUserRequestContext(
+      true, DriverRequest::DefaultRequestorProcessID + 1));
+  EXPECT_EQ(invoke("WdfRequestProbeAndLockUserBufferForRead",
+                   {Globals, Second.Request, Payload, 4, BufferSlot}),
+            framework::RequestAccessViolation);
+  EXPECT_EQ(get(BufferSlot), 0u);
+  success(Model->setUserRequestContext(true));
+  const auto DescriptorMemory = lock(Second, Descriptor, profile::PointerSize);
+  EXPECT_EQ(get(memoryBuffer(DescriptorMemory)), Payload + 4);
+  const auto PayloadMemory = lock(Second, Payload, 4, true);
+  put(memoryBuffer(PayloadMemory), 0x99887766, sizeof(uint32_t));
+  complete(Second);
+  const auto Return = take(Model->continueFrameworkCallerContext(Second.IRP));
+  EXPECT_EQ(Return.PC, 0u);
+  success(Model->recordDispatchReturn(Second.IRP, Pending));
+  finalize(Second);
+  complete(First);
+  finalize(First);
+}
 
 TEST_F(KernelRequestMDL,
        InformationAndRawIrpShareStorageAndFinalCompletionValidation) {

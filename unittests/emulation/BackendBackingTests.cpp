@@ -124,6 +124,7 @@ TEST_F(DriverBackendBacking, RejectsMMIOAndMixedSpansWithoutDeviceCallbacks) {
     EXPECT_NE(llvm::toString(CPU->validateBacking(Address, Bytes.size())), "");
     EXPECT_NE(llvm::toString(CPU->readBacking(Address, Bytes)), "");
     EXPECT_NE(llvm::toString(CPU->writeBacking(Address, Bytes)), "");
+    EXPECT_NE(llvm::toString(CPU->snapshotBacking(Address, Bytes)), "");
   }
   EXPECT_EQ(Bytes, (std::array<uint8_t, 4>{1, 2, 3, 4}));
   EXPECT_EQ(Effects, 0u);
@@ -141,6 +142,7 @@ TEST_F(DriverBackendBacking, RejectsRunningCPUWithoutPoisoningNormalBoundary) {
     EXPECT_NE(llvm::toString(CPU->validateBacking(Data, 1)), "");
     EXPECT_NE(llvm::toString(CPU->readBacking(Data, Byte)), "");
     EXPECT_NE(llvm::toString(CPU->writeBacking(Data, Byte)), "");
+    EXPECT_NE(llvm::toString(CPU->snapshotBacking(Data, Byte)), "");
     CPU->stop();
   };
   ASSERT_EQ(llvm::toString(CPU->installHooks(std::move(Hooks))), "");
@@ -160,6 +162,7 @@ TEST_F(DriverBackendBacking, RejectsDeviceCallbackReentryWithoutRAMEffects) {
     EXPECT_NE(llvm::toString(CPU->validateBacking(Data, 1)), "");
     EXPECT_NE(llvm::toString(CPU->readBacking(Data, Byte)), "");
     EXPECT_NE(llvm::toString(CPU->writeBacking(Data, Byte)), "");
+    EXPECT_NE(llvm::toString(CPU->snapshotBacking(Data, Byte)), "");
     EXPECT_EQ(Byte[0], 0xff);
   };
   GuestMMIOCallbacks Callbacks{
@@ -217,9 +220,46 @@ TEST_F(DriverBackendBacking, DeviceFailureAlsoPreventsBackingAccessAndResume) {
   EXPECT_NE(llvm::toString(CPU->readBacking(Data, Byte)), "");
   EXPECT_NE(llvm::toString(CPU->writeBacking(Data, Byte)), "");
   EXPECT_EQ(Byte[0], 0x12);
+  ASSERT_EQ(llvm::toString(CPU->snapshotBacking(Data, Byte)), "");
+  EXPECT_EQ(Byte[0], 0);
   EXPECT_NE(llvm::toString(CPU->run(Code, 1000000)), "");
   EXPECT_TRUE(CPU->hasDeviceError());
   EXPECT_FALSE(CPU->fault());
+}
+
+TEST_F(DriverBackendBacking, SnapshotPreservesTerminalFaultAndSharedRAM) {
+  constexpr uint64_t Alias = 0x8000;
+  ASSERT_EQ(llvm::toString(CPU->map(Data + Page, Page, 0)), "");
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Alias, Data, Page, Read | Write)), "");
+  const std::array<uint8_t, 4> Original{1, 2, 3, 4};
+  ASSERT_EQ(llvm::toString(CPU->writeBacking(Data + Page - 2, Original)), "");
+  ASSERT_EQ(llvm::toString(CPU->writeInteger(Alias + Page - 1, 0xa5, 1)), "");
+  std::array<uint8_t, 4> Bytes{};
+  EXPECT_NE(llvm::toString(CPU->read(Data, Bytes)), "");
+  const auto Fault = CPU->fault();
+  ASSERT_TRUE(Fault);
+  ASSERT_EQ(llvm::toString(CPU->snapshotBacking(Data + Page - 2, Bytes)), "");
+  EXPECT_EQ(Bytes, (std::array<uint8_t, 4>{1, 0xa5, 3, 4}));
+  std::array<uint8_t, 2> AliasBytes{};
+  ASSERT_EQ(llvm::toString(CPU->snapshotBacking(Alias + Page - 2, AliasBytes)),
+            "");
+  EXPECT_EQ(AliasBytes, (std::array<uint8_t, 2>{1, 0xa5}));
+  EXPECT_EQ(CPU->fault()->Kind, Fault->Kind);
+  EXPECT_EQ(CPU->fault()->PC, Fault->PC);
+  EXPECT_EQ(CPU->fault()->Address, Fault->Address);
+  EXPECT_NE(llvm::toString(CPU->readBacking(Data, Bytes)), "");
+  EXPECT_NE(llvm::toString(CPU->run(Code, 1000000)), "");
+}
+
+TEST_F(DriverBackendBacking, SnapshotRejectsWholeInvalidRangeWithoutEffects) {
+  std::array<uint8_t, 4> Bytes{1, 2, 3, 4};
+  const auto Original = Bytes;
+  for (uint64_t Address : {Data + Page - 2, UINT64_MAX - 1}) {
+    EXPECT_NE(llvm::toString(CPU->snapshotBacking(Address, Bytes)), "");
+    EXPECT_EQ(Bytes, Original);
+  }
+  EXPECT_FALSE(CPU->fault());
+  EXPECT_FALSE(CPU->hasDeviceError());
 }
 
 class OrdinaryMemoryOnly final : public GuestMemory {
@@ -243,6 +283,7 @@ TEST(DriverBackendBackingOptional, OrdinaryImplementationsRejectDeviceAccess) {
   EXPECT_NE(llvm::toString(Memory.validateBacking(0, 1)), "");
   EXPECT_NE(llvm::toString(Memory.readBacking(0, Byte)), "");
   EXPECT_NE(llvm::toString(Memory.writeBacking(0, Byte)), "");
+  EXPECT_NE(llvm::toString(Memory.snapshotBacking(0, Byte)), "");
 }
 } // namespace
 } // namespace neverd::emulation

@@ -17,6 +17,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <algorithm>
 #include <exception>
 #include <map>
 #include <new>
@@ -134,6 +135,14 @@ struct UnicornBackend::Impl {
                           : Address - Base < Region->Size)
         return Region.get();
     return nullptr;
+  }
+
+  llvm::Error validateRAMBacking(uint64_t Address, uint64_t Size) const {
+    if (accessFault(Address, Size, 0))
+      return failure("RAM backing range is unmapped or overflowing");
+    if (overlappingMMIO(Address, Size))
+      return failure("RAM backing access cannot include MMIO");
+    return llvm::Error::success();
   }
 
   bool effectsStopped() const {
@@ -304,9 +313,10 @@ struct UnicornBackend::Impl {
       uc_emu_stop(S.Engine);
       return false;
     }
-    BackendFault Fault{Kind, S.currentPC(), Address,
-                       Size > 0 ? std::optional<uint64_t>(Size) : std::nullopt,
-                       Access, std::nullopt};
+    BackendFault Fault{
+        Kind,    S.currentPC(),
+        Address, Size > 0 ? std::optional<uint64_t>(Size) : std::nullopt,
+        Access,  std::nullopt};
     S.invoke([&] {
       if (!S.effectsStopped() && S.Hooks.RecoverableFault &&
           S.Hooks.RecoverableFault(Fault)) {
@@ -418,9 +428,9 @@ llvm::Error UnicornBackend::map(uint64_t Address, uint64_t Size,
   auto *Raw = reinterpret_cast<uint8_t *>(
       (reinterpret_cast<uintptr_t>(Allocation.get()) + profile::PageSize - 1) &
       ~(uintptr_t(profile::PageSize) - 1));
-  if (auto E = check(uc_mem_map_ptr(State->Engine, Address, Size, Permissions,
-                                    Raw),
-                     "map guest memory"))
+  if (auto E =
+          check(uc_mem_map_ptr(State->Engine, Address, Size, Permissions, Raw),
+                "map guest memory"))
     return E;
   for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
     State->Pages.emplace(Address + Offset, Permissions);
@@ -434,11 +444,10 @@ llvm::Error UnicornBackend::map(uint64_t Address, uint64_t Size,
 llvm::Error UnicornBackend::mapAlias(uint64_t Address, uint64_t Source,
                                      uint64_t Size, unsigned Permissions) {
   if (!Size || (Address & (profile::PageSize - 1)) ||
-      (Source & (profile::PageSize - 1)) ||
-      (Size & (profile::PageSize - 1)) ||
+      (Source & (profile::PageSize - 1)) || (Size & (profile::PageSize - 1)) ||
       Size - 1 > UINT64_MAX - Address || Size - 1 > UINT64_MAX - Source ||
-      (Permissions & ~(Read | Write | Execute)) ||
-      State->Running || State->effectsStopped())
+      (Permissions & ~(Read | Write | Execute)) || State->Running ||
+      State->effectsStopped())
     return failure("invalid shared RAM alias");
   if (Size > State->Limit - State->Mapped)
     return llvm::make_error<GuestMemoryLimitError>();
@@ -586,15 +595,33 @@ llvm::Error UnicornBackend::validateBacking(uint64_t Address,
         "device callback");
   if (State->effectsStopped())
     return failure("cannot access RAM backing on a faulted CPU");
-  if (State->accessFault(Address, Size, 0))
-    return failure("RAM backing range is unmapped or overflowing");
-  if (State->overlappingMMIO(Address, Size))
-    return failure("RAM backing access cannot include MMIO");
+  return State->validateRAMBacking(Address, Size);
+}
+
+llvm::Error
+UnicornBackend::snapshotBacking(uint64_t Address,
+                                llvm::MutableArrayRef<uint8_t> Bytes) {
+  if (State->Running || State->DeviceCallbackActive)
+    return failure("RAM snapshot requires a stopped CPU without an active "
+                   "device callback");
+  if (auto E = State->validateRAMBacking(Address, Bytes.size()))
+    return E;
+  // Read adapter-owned RAM directly, without reentering a faulted engine.
+  // Each page may belong to a separate allocation or shared virtual alias.
+  while (!Bytes.empty()) {
+    const uint64_t Offset = Address & (profile::PageSize - 1);
+    const auto *Backing = State->PageBacking.at(Address - Offset);
+    const size_t Count =
+        std::min<uint64_t>(Bytes.size(), profile::PageSize - Offset);
+    std::copy_n(Backing + Offset, Count, Bytes.begin());
+    Bytes = Bytes.drop_front(Count);
+    Address += Count;
+  }
   return llvm::Error::success();
 }
 
 llvm::Expected<bool> UnicornBackend::canAccess(uint64_t Address, uint64_t Size,
-                                                unsigned Permissions) const {
+                                               unsigned Permissions) const {
   if ((Permissions & ~(Read | Write | Execute)) || State->Running ||
       State->DeviceCallbackActive || State->effectsStopped())
     return failure("CPU access preflight requires a healthy stopped CPU");

@@ -71,7 +71,15 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// separate direct IOCTL buffer's initial hex bytes). READ accepts output_size
 /// and byte_offset; WRITE accepts input and byte_offset. Offsets default to
 /// zero, accept integers or 0x strings, and the entire transfer must fit
-/// nonnegative signed 64-bit file offsets. Forwarded CREATE/CLEANUP/CLOSE
+/// nonnegative signed 64-bit file offsets. Neither transfers may declare
+/// user_buffers (id, size, optional input/access) and user_pointers with
+/// source/target references (buffer=input/output/memory, offset, and id only
+/// for memory). Pointer slots hold x64 guest addresses; declarations are
+/// validated before execution. Declared regions share the requestor's page
+/// rights, MDL pins and unmap/exit lifetime. Reports retain configuration facts
+/// and per-buffer diagnostic backing_hex snapshots, including after revocation;
+/// these snapshots do not imply caller-visible output or guest access.
+/// Forwarded CREATE/CLEANUP/CLOSE
 /// requests require an explicit bus_completion with a final status. A positive
 /// delay_100ns is accepted for WDM file forwarding, automatic KMDF forwarding,
 /// and synchronous, callback-based asynchronous, or SEND_AND_FORGET CREATE
