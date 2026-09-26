@@ -342,6 +342,11 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // Phase 2: LowIR -> MedIR (parallel).
   Trace.start(NativePipelineTrace::Stage::MedIR);
   buildMedIR(Img, Opts, Result);
+  if (!Result.Error.empty()) {
+    Result.Success = false;
+    Trace.finish(false);
+    return Result;
+  }
   Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
   propagateInternalNoReturn(Result.MedFuncs, Img.Arch);
 

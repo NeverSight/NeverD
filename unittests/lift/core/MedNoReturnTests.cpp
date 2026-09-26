@@ -165,6 +165,24 @@ TEST(MedNoReturn, RuntimeImportEffectSurvivesAnInventoriedVeneer) {
   }
 }
 
+TEST(MedNoReturn, CallFollowedByInt3DoesNotProveNoreturn) {
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Helper = 0x140002000;
+  MedOp Int3;
+  Int3.Opcode = NdOp::INTRINSIC;
+  Int3.addInput(MedVar::makeConst(static_cast<uint64_t>(Intrinsic::Int3), 2));
+  std::vector<MedFunc> Funcs;
+  Funcs.push_back(function(
+      Entry, {block(0, {callOp(Helper), Int3, returnOp()})}));
+
+  propagateInternalNoReturn(Funcs, Arch::X64);
+
+  ASSERT_FALSE(Funcs[0].Blocks.empty());
+  ASSERT_FALSE(Funcs[0].Blocks[0].Ops.empty());
+  EXPECT_FALSE(Funcs[0].DoesNotReturn);
+  EXPECT_FALSE(Funcs[0].Blocks[0].Ops[0].DoesNotReturn);
+}
+
 TEST(MedNoReturn, CallFollowedByTrapDoesNotInventCalleeNoReturn) {
   constexpr va_t Entry = 0x1000;
   constexpr va_t Helper = 0x2000;

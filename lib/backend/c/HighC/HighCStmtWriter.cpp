@@ -257,11 +257,6 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       OS << ";\n";
       break;
     }
-    if (isNoreturnCallExpr(*Stmt.Val)) {
-      emitIndent(Indent);
-      OS << exprStr(*Stmt.Val) << ";\n";
-      break;
-    }
     if (Stmt.Val->Kind == ExprKind::Load &&
         IsEHRuntimeSpace(Stmt.Val->MemoryAddressSpace))
       return;

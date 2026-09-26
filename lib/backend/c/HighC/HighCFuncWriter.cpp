@@ -4161,7 +4161,22 @@ void HighCWriter::noteCatchReaching(const HighStmt &Stmt) {
   const std::string Dest = varName(Stmt.Dst->Var);
   if (Dest.empty() || isCxxCatchObjectName(Dest))
     return;
+  // FrameSlots may have been replaced by contiguous backing storage after
+  // simulation hid this definition. Replay that exact statement's proof;
+  // the reaching maps still follow the branch scopes of statement emission.
+  if (auto It = CatchAliasDefinitions.find(&Stmt);
+      It != CatchAliasDefinitions.end()) {
+    if (It->second.IsPointer) {
+      ReachingCatchPtrs[Dest] = It->second.Name;
+      ReachingCatchFields.erase(Dest);
+    } else {
+      ReachingCatchFields[Dest] = It->second.Name;
+      ReachingCatchPtrs.erase(Dest);
+    }
+    return;
+  }
   if (auto Ptr = cxxCatchPointerName(*Stmt.Val)) {
+    CatchAliasDefinitions[&Stmt] = {*Ptr, true};
     ReachingCatchPtrs[Dest] = *Ptr;
     ReachingCatchFields.erase(Dest);
     return;
@@ -4169,6 +4184,7 @@ void HighCWriter::noteCatchReaching(const HighStmt &Stmt) {
   if (Stmt.Val->Kind == ExprKind::Load && !Stmt.Val->Operands.empty() &&
       Stmt.Val->Operands[0]) {
     if (auto Field = cxxCatchFieldAccess(*Stmt.Val->Operands[0])) {
+      CatchAliasDefinitions[&Stmt] = {*Field, false};
       ReachingCatchFields[Dest] = *Field;
       ReachingCatchPtrs.erase(Dest);
       return;
@@ -4180,6 +4196,7 @@ void HighCWriter::noteCatchReaching(const HighStmt &Stmt) {
 
 void HighCWriter::simulateCatchReaching(const HighFunc &Func) {
   CatchAliasTemps.clear();
+  CatchAliasDefinitions.clear();
   ReachingCatchPtrs.clear();
   ReachingCatchFields.clear();
   auto Snapshot = [&]() {
@@ -4257,6 +4274,7 @@ void HighCWriter::simulateCatchReaching(const HighFunc &Func) {
 
 void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CurrentFunc = &Func;
+  FrameStorageActive = false;
   ProjectFrameAliasesIntoStorage = false;
   FrameStorageSlots.clear();
   CopyForward.clear();
@@ -4275,6 +4293,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CxxThrowPrints.clear();
   CxxCatchNames.clear();
   CatchAliasTemps.clear();
+  CatchAliasDefinitions.clear();
   DeclaredCNames.clear();
   ReachingCatchPtrs.clear();
   ReachingCatchFields.clear();
@@ -4472,6 +4491,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     InEHClauseBody = Saved;
   };
   WalkFrameUses(Func.Body, false);
+  FrameStorageActive = NeedsFrameStorage;
   if (NeedsFrameStorage || !Analysis.StoreFwd.empty()) {
     // Integer store-to-load forwarding and named C locals are exclusive.
     // Mixing them leaves later loads on `frame_base` after the seed `arg0`

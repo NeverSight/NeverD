@@ -93,7 +93,7 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
     MedVar Stored = Prev.Inputs[1];
     // Incoming callee-save spills (SSA 0) are prologue saves. A computed
     // length parked in ESI/RDI is a real outgoing stack argument
-    // (`Concatenate(..., gemLen)` at [rsp+0x20]).
+    // (for example, a value stored at [rsp+0x20]).
     if (preserved(Stored) && Stored.SSAVer == 0)
       return;
     if (!Scan.ResolveWindow && Stored.Kind == MedVar::Reg) {

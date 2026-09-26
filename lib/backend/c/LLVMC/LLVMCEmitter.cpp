@@ -64,6 +64,10 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
               Img->getFunctionNameAt(static_cast<va_t>(Addr));
           if (!FromImage.empty() && !isSynthesizedFuncName(FromImage))
             DebugName = std::move(FromImage);
+          if (DebugName.empty())
+            if (const Import *Imp = Img->findImportStubAt(Addr);
+                Imp && !Imp->Name.empty())
+              DebugName = Imp->Name;
         }
       }
     }
@@ -180,6 +184,22 @@ void LLVMCWriter::writeStructDefs(llvm::Module &Mod) {
 }
 
 void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
+  // Permission to read a scalar from the image is not permission to remove a
+  // volatile/atomic access. Its named object must survive declaration pruning.
+  std::set<va_t> ObservedImageObjects;
+  for (const auto &Fn : Mod)
+    for (const auto &BB : Fn)
+      for (const auto &Inst : BB) {
+        const llvm::Value *Ptr = nullptr;
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
+            Load && !Load->isSimple())
+          Ptr = Load->getPointerOperand();
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst))
+          Ptr = Store->getPointerOperand();
+        if (Ptr)
+          if (auto VA = imageDataVA(Ptr))
+            ObservedImageObjects.insert(*VA);
+      }
   for (auto &GV : Mod.globals()) {
     std::string RawName = GV.getName().str();
     if (RawName.empty())
@@ -239,7 +259,8 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
             VTy && VTy->isIntegerTy()
                 ? static_cast<uint16_t>(VTy->getIntegerBitWidth() / 8)
                 : 0;
-        if (foldReadonlyScalar(*Slot, Size))
+        if (!ObservedImageObjects.count(*Slot) &&
+            foldReadonlyScalar(*Slot, Size))
           continue;
       }
       auto *VTy = GV.getValueType();
@@ -282,7 +303,7 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
 
 void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
   std::map<std::string, llvm::Type *> Objs;
-  auto Note = [&](const llvm::Value *Ptr, llvm::Type *Ty) {
+  auto Note = [&](const llvm::Value *Ptr, llvm::Type *Ty, bool MayFold) {
     std::string Name = imageDataCName(Ptr);
     if (Name.empty() || !Ty)
       return;
@@ -290,7 +311,7 @@ void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
       const uint16_t Size = Ty->isIntegerTy()
                                 ? static_cast<uint16_t>(Ty->getIntegerBitWidth() / 8)
                                 : 0;
-      if (foldReadonlyScalar(*VA, Size))
+      if (MayFold && foldReadonlyScalar(*VA, Size))
         return;
     }
     llvm::StringRef Raw = Name;
@@ -307,21 +328,12 @@ void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
   for (const auto &BB : Fn) {
     for (const auto &Inst : BB) {
       if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst))
-        Note(LI->getPointerOperand(), LI->getType());
+        Note(LI->getPointerOperand(), LI->getType(), LI->isSimple());
       else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst))
-        Note(SI->getPointerOperand(), SI->getValueOperand()->getType());
+        Note(SI->getPointerOperand(), SI->getValueOperand()->getType(), false);
     }
   }
   for (const auto &[Name, Ty] : Objs) {
-    if (Img) {
-      if (auto Slot = parseNdDataSymbol(Name)) {
-        const uint16_t Size = Ty->isIntegerTy()
-                                  ? static_cast<uint16_t>(Ty->getIntegerBitWidth() / 8)
-                                  : 0;
-        if (foldReadonlyScalar(*Slot, Size))
-          continue;
-      }
-    }
     OS << "extern " << typeToCLLVM(Ty) << " " << Name << ";\n";
   }
   if (!Objs.empty())

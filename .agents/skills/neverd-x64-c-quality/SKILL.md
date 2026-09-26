@@ -49,7 +49,8 @@ Put the decision in one emitter helper and keep HighC/LLVMC consistent.
   already prints the type.
 - Image objects are `extern` (they already live in the original image).
 - Debug/`DataObjectSym`/symbol-table names win over `g_`.
-- `.rdata` scalar loads fold to immediates (`0xE0421001`), not `*(T*)(VA)`.
+- Ordinary `.rdata` scalar loads fold to immediates (`0xE0421001`). Volatile or
+  atomic loads retain their access and use a declared image object.
 - Functions without symbols stay `sub_<va>`. An export or image
   function symbol replaces that name when debug info does not
   (`ImageSymbolReplacesSynthesizedFunctionName`).

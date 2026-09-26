@@ -826,10 +826,12 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     auto CastOp = [&](const HighExpr *Op) {
       // Machine comparisons zero-extend narrower operands before applying
       // their signedness, matching the MedLLVM interpretation.
-      if (Comparison && Op->Type && Op->Type->Size &&
-          Op->Type->Size < CmpSize)
+      const uint16_t OpSize =
+          Op->Type ? Op->Type->Size
+                   : (Op->Kind == ExprKind::Var ? Op->Var.Size : 0);
+      if (Comparison && OpSize && OpSize < CmpSize)
         return "(" + UTy + ")(" +
-               typeToC(NdType::makeInt(Op->Type->Size, false)) + ")" +
+               typeToC(NdType::makeInt(OpSize, false)) + ")" +
                exprStr(*Op, 99);
       if (Op->Kind == ExprKind::Const && Op->ConstVal == 0)
         return std::string("0");

@@ -3066,3 +3066,12 @@ if(COFF_NATIVE_EH_TEST_OBJECTS)
                     DEPENDS ${COFF_NATIVE_EH_TEST_OBJECTS})
   add_dependencies(NeverDLiftTests lift-coff-native-eh-test-objects)
 endif()
+
+add_neverd_unittest(NeverDLLVMCIntrinsicSemanticTests
+  core/LLVMCIntrinsicSemanticTests.cpp
+  LINK_COMPONENTS BackendC
+)
+target_include_directories(NeverDLLVMCIntrinsicSemanticTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)

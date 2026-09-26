@@ -13,11 +13,13 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <queue>
 #include <set>
@@ -26,7 +28,199 @@
 
 namespace neverd {
 
-void LowToMedConverter::buildSsa(MedFunc &Func) {
+namespace {
+
+/// Windows resumes an in-function __except body with its establisher SP, not
+/// with the entry SP used for an independent ordinary machine-code root.
+/// Certify the simple fixed-frame case against both normalized unwind actions
+/// and the decoded instructions. FrameSize is storage sizing, not this proof.
+uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
+                                  va_t Handler, const TargetRegInfo &TRI) {
+  auto Fail = [](const char *Why) -> void {
+    throw LowToMedConversionError(
+        std::string("Windows SEH establisher frame: ") + Why);
+  };
+  const ExceptionFunction &EH = *Low.ExceptionMetadata;
+  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
+      EH.Encoding != ExceptionEncoding::X64UnwindV1 || EH.UnwindVersion != 1 ||
+      EH.Kind != RuntimeFunctionKind::Primary || EH.ChainedPrimaryRange ||
+      EH.ChainedUnwindInfoRVA || EH.PrimaryFunctionIndex ||
+      (EH.UnwindFlags & ~3u) || EH.FrameRegister || EH.FrameOffset ||
+      EH.CodeRange.Begin != Low.Entry || !EH.CodeRange.contains(Handler))
+    Fail("unsupported unwind or frame-register contract");
+  if (Low.Blocks.empty() || Low.Blocks.front().StartAddr != Low.Entry ||
+      EH.PrologueSize > EH.CodeRange.End - Low.Entry)
+    Fail("missing decoded prologue");
+  const va_t PrologueEnd = Low.Entry + EH.PrologueSize;
+  if (Low.Blocks.front().EndAddr < PrologueEnd)
+    Fail("nonlinear prologue is not certified");
+
+  const size_t N = Low.Blocks.size();
+  std::vector<std::vector<int>> Preds(N);
+  int HandlerId = -1;
+  for (size_t B = 0; B < N; ++B) {
+    if (Low.Blocks[B].StartAddr == Handler)
+      HandlerId = static_cast<int>(B);
+    for (int S : Low.Blocks[B].Succs) {
+      if (S < 0 || static_cast<size_t>(S) >= N)
+        Fail("invalid ordinary CFG");
+      Preds[S].push_back(static_cast<int>(B));
+    }
+  }
+  if (!Preds[0].empty())
+    Fail("ordinary control flow re-enters the prologue");
+  if (HandlerId <= 0 || !Preds[HandlerId].empty() ||
+      Low.OrdinaryModuleAnalysisRoots.count(Handler))
+    Fail("handler also has an ordinary entry role");
+
+  // Every ordinary predecessor path into a protected block participates. A
+  // stack adjustment before the guarded interval matters just as much as one
+  // inside it. Independent sources cannot inherit the entry prologue proof.
+  std::vector<bool> Relevant(N, false);
+  std::vector<int> Work;
+  for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+    if (Scope.HandlerVA != Handler)
+      continue;
+    auto Range = getSemanticSEHGuardedRange(Scope, Arch::X64, EH.CodeRange);
+    if (Scope.ParseStatus != ExceptionParseStatus::Complete || !Range ||
+        Range->Begin < PrologueEnd)
+      Fail("protected scope overlaps an incomplete prologue");
+    for (size_t B = 0; B < N; ++B)
+      if (Low.Blocks[B].StartAddr < Range->End &&
+          Low.Blocks[B].EndAddr > Range->Begin)
+        Work.push_back(static_cast<int>(B));
+  }
+  if (Work.empty())
+    Fail("handler has no decoded protected scope");
+  while (!Work.empty()) {
+    const int B = Work.back();
+    Work.pop_back();
+    if (Relevant[B])
+      continue;
+    Relevant[B] = true;
+    Work.insert(Work.end(), Preds[B].begin(), Preds[B].end());
+  }
+  std::vector<bool> Reachable(N, false);
+  Work = {0};
+  while (!Work.empty()) {
+    int B = Work.back();
+    Work.pop_back();
+    if (Reachable[B])
+      continue;
+    Reachable[B] = true;
+    Work.insert(Work.end(), Low.Blocks[B].Succs.begin(),
+                Low.Blocks[B].Succs.end());
+  }
+  for (size_t B = 0; B < N; ++B)
+    if (Relevant[B] &&
+        (!Reachable[B] || (B != 0 && Low.OrdinaryModuleAnalysisRoots.count(
+                                         Low.Blocks[B].StartAddr))))
+      Fail("protected scope has an independent ordinary entry");
+
+  // X64 CodeOffset is the byte offset of the prologue instruction end,
+  // not an index in the native unwind slot array.
+  std::map<uint32_t, uint64_t> ExpectedAdjustments;
+  uint32_t PreviousOffset = EH.PrologueSize;
+  uint64_t FrameBytes = 0;
+  for (const UnwindOperation &Op : EH.UnwindOperations) {
+    if (!Op.CodeOffset || Op.CodeOffset > PreviousOffset)
+      Fail("invalid unwind instruction offset");
+    PreviousOffset = Op.CodeOffset;
+    uint64_t Bytes = 0;
+    switch (Op.Kind) {
+    case UnwindOperationKind::PushNonVolatile:
+      Bytes = 8;
+      break;
+    case UnwindOperationKind::AllocateSmall:
+    case UnwindOperationKind::AllocateLarge:
+      Bytes = Op.StackOffset;
+      if (!Bytes || Bytes % 8)
+        Fail("invalid fixed allocation");
+      break;
+    case UnwindOperationKind::SaveNonVolatile:
+    case UnwindOperationKind::SaveNonVolatileFar:
+    case UnwindOperationKind::SaveXMM128:
+    case UnwindOperationKind::SaveXMM128Far:
+      break;
+    default:
+      Fail("unwind action has no certified fixed SP effect");
+    }
+    if (Bytes) {
+      if (!ExpectedAdjustments.emplace(Op.CodeOffset, Bytes).second ||
+          Bytes > uint64_t(std::numeric_limits<int64_t>::max()) - FrameBytes)
+        Fail("conflicting or overflowing allocation");
+      FrameBytes += Bytes;
+    }
+  }
+
+  auto OverlapsSP = [&](const NdVar &V) {
+    return V.isReg() && V.Size && V.Offset < TRI.StackPointer + 8 &&
+           V.Offset + V.Size > TRI.StackPointer;
+  };
+  std::map<uint32_t, uint64_t> ActualAdjustments;
+  std::map<va_t, uint64_t> DecodedAdjustments;
+  for (size_t B = 0; B < N; ++B) {
+    if (!Relevant[B])
+      continue;
+    const LowBlock &Block = Low.Blocks[B];
+    if (auto Error = validateLowInstructionBoundaries(
+            Block, LowInstructionBoundaryRequirement::Required)) {
+      llvm::consumeError(std::move(Error));
+      Fail("missing or invalid instruction provenance");
+    }
+    for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries) {
+      for (size_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
+           ++I) {
+        const LowOp &Op = Block.Ops[I];
+        if (!OverlapsSP(Op.Output))
+          continue;
+        if (B != 0 || Boundary.Address + Boundary.Size > PrologueEnd ||
+            Op.Opcode != NdOp::INT_SUB || Op.Output.Size != 8 ||
+            Op.Output.Offset != TRI.StackPointer || Op.NumInputs != 2 ||
+            Op.Inputs[0] != NdVar::reg(TRI.StackPointer, 8) ||
+            !Op.Inputs[1].isConst() || Op.Inputs[1].Size != 8)
+          Fail("SP is not stable from prologue through protected scope");
+        const uint32_t Offset =
+            static_cast<uint32_t>(Boundary.Address + Boundary.Size - Low.Entry);
+        if (!ActualAdjustments.emplace(Offset, Op.Inputs[1].Offset).second)
+          Fail("multiple SP definitions at an unwind instruction");
+        DecodedAdjustments.emplace(Boundary.Address, Op.Inputs[1].Offset);
+      }
+    }
+  }
+  // Low->Med may add ABI effects (for example a known callee's ret-pop).
+  // Such effects are absent from decoded LowOps and must not bypass the SP
+  // stability certificate, whether in the prologue or a protected prefix.
+  std::map<va_t, uint64_t> ConvertedAdjustments;
+  for (const MedBlock &Block : Med.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Output.Kind != MedVar::Reg ||
+          Op.Output.RegOff != TRI.StackPointer || !Op.Output.Size)
+        continue;
+      for (size_t B = 0; B < N; ++B) {
+        if (!Relevant[B] || Op.Addr < Low.Blocks[B].StartAddr ||
+            Op.Addr >= Low.Blocks[B].EndAddr)
+          continue;
+        if (Op.Addr >= PrologueEnd || Op.Opcode != NdOp::INT_SUB ||
+            Op.Output.Size != 8 || Op.NumInputs != 2 ||
+            Op.Inputs[0].Kind != MedVar::Reg ||
+            Op.Inputs[0].RegOff != TRI.StackPointer || Op.Inputs[0].Size != 8 ||
+            !Op.Inputs[1].isConst() || Op.Inputs[1].Size != 8 ||
+            !ConvertedAdjustments.emplace(Op.Addr, Op.Inputs[1].ConstVal)
+                 .second)
+          Fail("converted ABI effect changes the protected SP");
+      }
+    }
+  if (ConvertedAdjustments != DecodedAdjustments)
+    Fail("converted prologue disagrees with decoded SP effects");
+  if (ExpectedAdjustments != ActualAdjustments)
+    Fail("decoded prologue disagrees with unwind allocation");
+  return FrameBytes;
+}
+
+} // namespace
+
+void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   if (Func.Blocks.empty())
     return;
   Func.CallClobbers.clear();
@@ -407,6 +601,33 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       }
     }
 
+    std::map<int, uint64_t> SEHFrameOffsets;
+    if (TargetArch == Arch::X64 && Low.ExceptionMetadata &&
+        Low.ExceptionMetadata->SEH) {
+      for (int B = 0; B < N; ++B) {
+        const bool IsSEHHandler =
+            std::any_of(Func.Blocks[B].ExceptionalPreds.begin(),
+                        Func.Blocks[B].ExceptionalPreds.end(),
+                        [](const ExceptionalEdge &E) {
+                          return E.Kind == ExceptionalEdgeKind::SEHHandler;
+                        });
+        if (!IsSEHHandler)
+          continue;
+        for (int Id : LiveIn[B]) {
+          auto V = VarOfId.find(Id);
+          if (V == VarOfId.end() || V->second.Kind != MedVar::Reg ||
+              V->second.RegOff != TRI.StackPointer)
+            continue;
+          if (!IsRoot[B] || V->second.Size != TRI.PointerSize)
+            throw LowToMedConversionError(
+                "Windows SEH establisher frame: handler is not an isolated "
+                "full-width SP root");
+          SEHFrameOffsets[B] = proveSEHEstablisherFrame(
+              Low, Func, Func.Blocks[B].StartAddr, TRI);
+        }
+      }
+    }
+
     for (int Root : Roots) {
       std::vector<MedOp> InitOps;
       const bool IsItaniumEHRoot =
@@ -436,6 +657,13 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           Input.Size = 4;
         }
         Init.addInput(Input);
+        if (Input.Kind == MedVar::Reg && Input.RegOff == TRI.StackPointer) {
+          auto Offset = SEHFrameOffsets.find(Root);
+          if (Offset != SEHFrameOffsets.end()) {
+            Init.Opcode = NdOp::INT_SUB;
+            Init.addInput(MedVar::makeConst(Offset->second, TRI.PointerSize));
+          }
+        }
         Init.Addr = Func.Blocks[Root].StartAddr;
         InitOps.push_back(Init);
         LLVM_DEBUG(llvm::dbgs() << "  live-in: " << VIt->second.display()

@@ -207,4 +207,41 @@ TEST(LLVMCVoidAnalysis, FreezeRejectsUnprovedPossiblyPoisonArithmetic) {
   }
 }
 
+TEST(LLVMCVoidAnalysis, FreezeThroughComparisonKeepsDefinedChoiceAndRejectsPoison) {
+  for (bool MayBePoison : {false, true}) {
+    SCOPED_TRACE(MayBePoison);
+    llvm::LLVMContext Context;
+    llvm::Module Module("freeze-comparison", Context);
+    auto *I64 = llvm::Type::getInt64Ty(Context);
+    auto *Type = llvm::FunctionType::get(llvm::Type::getInt1Ty(Context),
+                                        {I64, I64}, false);
+    auto *Function = llvm::Function::Create(
+        Type, llvm::GlobalValue::ExternalLinkage, "freeze_compare", Module);
+    for (auto &Argument : Function->args())
+      Argument.addAttr(llvm::Attribute::NoUndef);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    llvm::Value *Input = Function->getArg(0);
+    if (MayBePoison)
+      Input = Builder.CreateShl(Input, Function->getArg(1));
+    auto *Frozen = Builder.CreateFreeze(Input, "chosen");
+    Builder.CreateRet(Builder.CreateICmpEQ(Frozen, Builder.getInt64(0)));
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (MayBePoison) {
+      EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, {}),
+                   std::runtime_error);
+    } else {
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+      compileAndRun(Source + R"(
+int main(void) {
+  if (!freeze_compare(0, 0)) return 1;
+  if (freeze_compare(UINT64_C(0xfedcba9876543210), 0)) return 2;
+  return 0;
+}
+)");
+    }
+  }
+}
+
 } // namespace

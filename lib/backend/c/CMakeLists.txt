@@ -30,3 +30,6 @@ add_neverd_component_library(NeverDBackendC
   LINK_COMPONENTS
   IR
 )
+
+# Pure integer display folding uses LLVM's width and poison semantics.
+target_link_libraries(NeverDBackendC PRIVATE LLVMAnalysis)

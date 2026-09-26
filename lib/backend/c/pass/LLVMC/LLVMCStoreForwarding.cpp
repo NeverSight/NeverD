@@ -49,7 +49,8 @@ void analyzeStoreForwarding(LLVMCAnalysisState &State, llvm::Function &Fn) {
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst);
-      if (!isSyntheticFrameAlloca(AI) || State.DeadFrameAllocas.count(AI))
+      if (!isSyntheticFrameAlloca(AI) || State.DeadFrameAllocas.count(AI) ||
+          State.RawFrameAllocas.count(AI))
         continue;
 
       // A frame is removable only after every address use has been accounted

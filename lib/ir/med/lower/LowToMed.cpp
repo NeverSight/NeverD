@@ -16,6 +16,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
@@ -491,6 +492,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: skipping SSA for " << Func.Name
                             << " insns=" << Low.DecodedInstructionCount
                             << " ops=" << CopiedOps << "\n");
+    if (TheArch == Arch::X64 && Low.ExceptionMetadata &&
+        Low.ExceptionMetadata->SEH)
+      throw LowToMedConversionError(
+          "Windows SEH establisher frame: SSA size limit prevents proof");
     return Func;
   }
 
@@ -522,7 +527,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     neutralizeStackProbeCalls(Func);
     debugVerifyMedFunc(Func, "neutralizeStackProbeCalls");
 
-    buildSsa(Func);
+    buildSsa(Func, Low);
     debugVerifyMedFunc(Func, "buildSsa");
 
     // Model a call's floating-point/vector return (x86-64 returns it in XMM0, a
@@ -688,6 +693,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: " << Func.Blocks.size()
                             << " blocks, " << Func.Params.size() << " params, "
                             << Func.Locals.size() << " locals\n");
+  } catch (const LowToMedConversionError &) {
+    throw;
   } catch (const std::exception &) {
     LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: SSA/rewrite threw; keeping "
                                "copied blocks for "

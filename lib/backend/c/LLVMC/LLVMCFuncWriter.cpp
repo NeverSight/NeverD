@@ -580,7 +580,9 @@ void LLVMCWriter::markSinglePrintedUseCalls(llvm::Function &Fn) {
               if (Blocked)
                 return;
               const auto *I = llvm::dyn_cast<llvm::Instruction>(U);
-              if (!I || llvm::isa<llvm::PHINode, llvm::InvokeInst>(I)) {
+              if (!I ||
+                  llvm::isa<llvm::PHINode, llvm::InvokeInst, llvm::SelectInst>(
+                      I)) {
                 Blocked = true;
                 return;
               }
@@ -2762,6 +2764,10 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+        if (!LI->isSimple()) {
+          ValueTexts[LI] = getName(LI);
+          continue;
+        }
         const uint16_t Size = llvmAccessSize(LI->getType());
         if (auto Acc = typedRecordAccess(LI->getPointerOperand(), Size)) {
           ValueTypes[LI] = Acc->Type;
@@ -2794,9 +2800,8 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         }
         continue;
       }
-      if (llvm::isa<llvm::CastInst, llvm::FreezeInst>(&Inst)) {
-        if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst,
-                      llvm::FreezeInst>(&Inst))
+      if (llvm::isa<llvm::CastInst>(&Inst)) {
+        if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty())
@@ -2897,7 +2902,7 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
         auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst);
-        if (!LI)
+        if (!LI || !LI->isSimple())
           continue;
         const uint16_t Size = llvmAccessSize(LI->getType());
         if (auto Acc = typedRecordAccess(LI->getPointerOperand(), Size)) {
@@ -3184,14 +3189,16 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
   };
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
-      if (Inst.getType()->isVoidTy())
+      if (Inst.getType()->isVoidTy() || llvm::isa<llvm::FreezeInst>(&Inst))
         continue;
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+        if (!Load->isSimple())
+          continue;
       if (auto Text = ValueTexts.find(&Inst);
           Text != ValueTexts.end() && !Text->second.empty())
         Mark(Inst);
-      if (llvm::isa<llvm::CastInst, llvm::FreezeInst>(&Inst)) {
-        if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst,
-                      llvm::FreezeInst>(&Inst))
+      if (llvm::isa<llvm::CastInst>(&Inst)) {
+        if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty()) {
@@ -3211,7 +3218,7 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
       for (auto &Inst : BB) {
         if (Inst.getType()->isVoidTy() || Analysis.Inlinable.count(&Inst))
           continue;
-        const bool Chain = llvm::isa<llvm::CastInst, llvm::FreezeInst>(&Inst) ||
+        const bool Chain = llvm::isa<llvm::CastInst>(&Inst) ||
                            (llvm::isa<llvm::BinaryOperator>(&Inst) &&
                             (Inst.getOpcode() == llvm::Instruction::Add ||
                              Inst.getOpcode() == llvm::Instruction::Sub ||
@@ -3854,7 +3861,7 @@ bool LLVMCWriter::isDeadImmediateInit(const llvm::AllocaInst *Slot,
 
 bool LLVMCWriter::storedTypedMemberLoad(const llvm::Value *Stored) const {
   const llvm::Value *Src = Stored;
-  std::set<const llvm::Value *> Seen;
+  llvm::SmallPtrSet<const llvm::Value *, 32> Seen;
   while (Src && Seen.insert(Src).second) {
     if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Src)) {
       Src = Fr->getOperand(0);
@@ -4145,6 +4152,11 @@ bool LLVMCWriter::allocaStoreIsHidden(const llvm::AllocaInst *Slot,
 }
 
 bool LLVMCWriter::instructionIsPrinted(const llvm::Instruction &Inst) {
+  // An unused volatile/atomic result does not make its read unobservable.
+  // Keep this in the same predicate used to eliminate passthrough blocks.
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+    if (!Load->isSimple())
+      return true;
   if (llvm::isa<llvm::DbgInfoIntrinsic, llvm::AllocaInst, llvm::PHINode,
                 llvm::CatchPadInst, llvm::CleanupPadInst, llvm::CatchSwitchInst>(
           &Inst))
@@ -7935,6 +7947,9 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
       if (llvm::isa<llvm::CatchSwitchInst, llvm::CatchPadInst,
                     llvm::CleanupPadInst>(&Inst))
         continue;
+      if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst))
+        if (classifyX86RepStos(Opts.TheArch, *Call))
+          continue;
       if (Analysis.IntrinsicStructVals.count(&Inst))
         continue;
       if (auto *EV = llvm::dyn_cast<llvm::ExtractValueInst>(&Inst))
@@ -7959,6 +7974,10 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
           continue;
       }
       if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+        if (!LI->isSimple()) {
+          NeedsDecl.insert(LI);
+          continue;
+        }
         if (isImportCalleeOnlyLoad(LI) || computedAllocaLoadIsForwarded(LI) ||
             typedRecordAccess(LI->getPointerOperand(),
                               llvmAccessSize(LI->getType())) ||
@@ -8040,7 +8059,8 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
     for (auto &Inst : BB) {
       if (auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst)) {
         const bool RawFrame =
-            !Analysis.RawFrameLocations.empty() && AI == SyntheticFrame;
+            Analysis.RawFrameAllocas.count(AI) ||
+            (!Analysis.RawFrameLocations.empty() && AI == SyntheticFrame);
         if (Analysis.DeadFrameAllocas.count(AI) && !RawFrame)
           continue;
         if (!RawFrame && !allocaAddressTaken(AI) &&
@@ -8087,7 +8107,12 @@ bool isCIdentChar(unsigned char C) {
          (C >= 'a' && C <= 'z') || C == '_';
 }
 
-bool lineDeclaresName(llvm::StringRef Line, llvm::StringRef Name) {
+bool lineDeclaresName(llvm::StringRef Line, llvm::StringRef Name,
+                      llvm::StringRef ArrayDeclaration = {}) {
+  // Fixed array declarations come from their LLVM type. Match the complete
+  // spelling so an indexed access or return can never look like a declaration.
+  if (!ArrayDeclaration.empty())
+    return Line.trim() == ArrayDeclaration;
   if (Name.empty() || Line.find('=') != llvm::StringRef::npos)
     return false;
   bool Found = false;
@@ -8120,8 +8145,9 @@ bool lineDeclaresName(llvm::StringRef Line, llvm::StringRef Name) {
   return Found;
 }
 
-std::optional<size_t> firstNameUseOutsideDecl(llvm::StringRef Text,
-                                              llvm::StringRef Name) {
+std::optional<size_t>
+firstNameUseOutsideDecl(llvm::StringRef Text, llvm::StringRef Name,
+                       llvm::StringRef ArrayDeclaration = {}) {
   size_t Pos = 0;
   while (Pos < Text.size()) {
     const size_t At = Text.find(Name, Pos);
@@ -8138,7 +8164,8 @@ std::optional<size_t> firstNameUseOutsideDecl(llvm::StringRef Text,
       size_t LineEnd = Text.find('\n', At);
       if (LineEnd == llvm::StringRef::npos)
         LineEnd = Text.size();
-      if (!lineDeclaresName(Text.substr(LineStart, LineEnd - LineStart), Name))
+      if (!lineDeclaresName(Text.substr(LineStart, LineEnd - LineStart), Name,
+                            ArrayDeclaration))
         return At;
     }
     Pos = End;
@@ -8146,14 +8173,14 @@ std::optional<size_t> firstNameUseOutsideDecl(llvm::StringRef Text,
   return std::nullopt;
 }
 
-bool nameUsedOutsideDecl(llvm::StringRef Text, llvm::StringRef Name) {
-  return firstNameUseOutsideDecl(Text, Name).has_value();
-}
-
-std::string dropUnusedCallDecls(std::string Text,
-                                llvm::ArrayRef<std::string> Names) {
+std::string dropUnusedCallDecls(
+    std::string Text, llvm::ArrayRef<std::string> Names,
+    const llvm::StringMap<std::string> &ArrayDeclarations) {
   for (const std::string &Name : Names) {
-    if (Name.empty() || nameUsedOutsideDecl(Text, Name))
+    const auto Array = ArrayDeclarations.find(Name);
+    const llvm::StringRef ArrayDeclaration =
+        Array == ArrayDeclarations.end() ? llvm::StringRef() : Array->second;
+    if (Name.empty() || firstNameUseOutsideDecl(Text, Name, ArrayDeclaration))
       continue;
     std::string Out;
     Out.reserve(Text.size());
@@ -8164,7 +8191,7 @@ std::string dropUnusedCallDecls(std::string Text,
       if (!HaveNl)
         End = Text.size();
       const llvm::StringRef Line(Text.data() + Start, End - Start);
-      if (!lineDeclaresName(Line, Name))
+      if (!lineDeclaresName(Line, Name, ArrayDeclaration))
         Out.append(Text, Start, HaveNl ? End - Start + 1 : End - Start);
       Start = HaveNl ? End + 1 : End;
     }
@@ -9052,14 +9079,22 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   // or changing the instruction-order freshVar sequence.
   std::set<std::string> DeclaredNames(CallDeclNames.begin(),
                                       CallDeclNames.end());
+  llvm::StringMap<std::string> ArrayDeclarations;
   std::vector<std::pair<size_t, std::string>> MissingDecls;
   for (llvm::BasicBlock &BB : Fn) {
     for (llvm::Instruction &Inst : BB) {
       if (Inst.getType()->isVoidTy() || Inst.getType()->isTokenTy())
         continue;
       const auto It = ValNames.find(&Inst);
-      if (It == ValNames.end() || It->second.empty() ||
-          DeclaredNames.count(It->second))
+      if (It == ValNames.end() || It->second.empty())
+        continue;
+      if (const auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst))
+        if (const auto *Array =
+                llvm::dyn_cast<llvm::ArrayType>(AI->getAllocatedType()))
+          ArrayDeclarations[It->second] =
+              typeToCLLVM(Array->getElementType()) + " " + It->second + "[" +
+              std::to_string(Array->getNumElements()) + "];";
+      if (DeclaredNames.count(It->second))
         continue;
       const std::optional<size_t> FirstUse =
           firstNameUseOutsideDecl(Buffered, It->second);
@@ -9112,7 +9147,7 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   for (const llvm::BasicBlock *BB : EHFallthroughLabelCandidates)
     EHFallthroughLabels.push_back(blockLabel(BB));
   const std::string Final = dropUnreferencedFallthroughEHLabels(
-      dropUnusedCallDecls(std::move(Buffered), DropNames),
+      dropUnusedCallDecls(std::move(Buffered), DropNames, ArrayDeclarations),
       EHFallthroughLabels);
   for (const auto &[_, Target] : EHInvokeNormalGotos) {
     const std::string Name = blockLabel(Target);

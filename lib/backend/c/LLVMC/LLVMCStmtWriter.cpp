@@ -1133,6 +1133,37 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
       }
     }
   }
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
+      Load && !Load->isSimple() && Load->getPointerAddressSpace() == 0) {
+    const std::string Type = typeToCLLVM(Load->getType());
+    const llvm::Value *Address = Load->getPointerOperand();
+    std::string AddressText;
+    if (std::string Image = imageDataCName(Address); !Image.empty())
+      AddressText = "&" + Image;
+    else if (const auto *Slot = asAllocaPointer(Address))
+      AddressText = "&" + getName(Slot);
+    else if (llvm::isa<llvm::GlobalVariable>(Address->stripPointerCasts()))
+      AddressText = "&" + valueStr(Address->stripPointerCasts());
+    else
+      AddressText = valueStr(Address);
+    const std::string Pointer = "(" + Type +
+                                (Load->isVolatile() ? " volatile" : "") +
+                                "*)(" + AddressText + ")";
+    emitIndent(Indent);
+    if (Load->isAtomic()) {
+      const char *Ordering = "__ATOMIC_RELAXED";
+      if (Load->getOrdering() == llvm::AtomicOrdering::Acquire)
+        Ordering = "__ATOMIC_ACQUIRE";
+      else if (Load->getOrdering() ==
+               llvm::AtomicOrdering::SequentiallyConsistent)
+        Ordering = "__ATOMIC_SEQ_CST";
+      OS << "__atomic_load(" << Pointer << ", &" << getName(Load) << ", "
+         << Ordering << ");\n";
+    } else {
+      OS << getName(Load) << " = *(" << Pointer << ");\n";
+    }
+    return;
+  }
   if (Analysis.Inlinable.count(&Inst))
     return;
   if (!Inst.getType()->isVoidTy()) {
@@ -1175,6 +1206,7 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     }
     const bool NeedsIntegerPointerOperand =
         Inst.getOpcode() == llvm::Instruction::Or ||
+        Inst.getOpcode() == llvm::Instruction::Add ||
         Inst.getOpcode() == llvm::Instruction::Sub;
     auto LHS = logicalShiftLhs(
         Inst, NeedsIntegerPointerOperand
@@ -1597,10 +1629,10 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
               // the final field conversion must not bypass those operations.
               StoredText = "(" + typeToC(Member->Type) + ")(uintptr_t)(" +
                            StoredText + ")";
-            } else if (ReturnType && StoredText == valueStr(Call)) {
+            } else if (ReturnType) {
               if (Member->Type->Kind == NdTypeKind::Int &&
                   ReturnType->Kind == NdTypeKind::Ptr &&
-                  ReturnType->Size == Size) {
+                  ReturnType->Size == Size && StoredText == valueStr(Call)) {
                 StoredText = "(uintptr_t)(" + StoredText + ")";
               }
             }
@@ -2857,6 +2889,14 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
 
   if (auto *Sel = llvm::dyn_cast<llvm::SelectInst>(&Inst)) {
     emitIndent(Indent);
+    if (auto Condition = foldImmediate(Sel->getCondition());
+        Condition && (*Condition == "0" || *Condition == "1")) {
+      OS << Name << " = "
+         << valueStr(*Condition == "1" ? Sel->getTrueValue()
+                                       : Sel->getFalseValue())
+         << ";\n";
+      return;
+    }
     OS << Name << " = " << valueStr(Sel->getCondition()) << " ? "
        << valueStr(Sel->getTrueValue()) << " : "
        << valueStr(Sel->getFalseValue()) << ";\n";
@@ -2969,10 +3009,20 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
   if (IID == llvm::Intrinsic::sideeffect || IID == llvm::Intrinsic::donothing ||
       IID == llvm::Intrinsic::seh_try_begin ||
       IID == llvm::Intrinsic::seh_try_end ||
-      IID == llvm::Intrinsic::localaddress ||
       IID == llvm::Intrinsic::localescape ||
       IID == llvm::Intrinsic::localrecover)
     return true;
+  if (IID == llvm::Intrinsic::localaddress) {
+    // Keep the target-specific LLVM intrinsic: it can select SP, FP, or a base
+    // pointer depending on stack realignment. __builtin_frame_address differs.
+    const std::string IntrinsicName = freshVar("llvm_localaddress");
+    emitIndent(Indent);
+    OS << "extern void *" << IntrinsicName
+       << "(void) __asm__(\"llvm.localaddress\");\n";
+    emitIndent(Indent);
+    OS << getName(&Call) << " = " << IntrinsicName << "();\n";
+    return true;
+  }
   if (IID == llvm::Intrinsic::eh_exceptioncode) {
     if (!Call.getType()->isVoidTy()) {
       emitIndent(Indent);
@@ -3038,6 +3088,57 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   if (AsmStr.empty())
     return false;
 
+  if (auto Stos = classifyX86RepStos(Opts.TheArch, Call)) {
+    // Unsigned address arithmetic also models the final (possibly wrapping)
+    // register update without creating an out-of-bounds C pointer. Byte stores
+    // preserve little-endian values and avoid alignment/aliasing assumptions.
+    const std::string Dst = freshVar("stos_dst");
+    const std::string Count = freshVar("stos_count");
+    const std::string Value = freshVar("stos_value");
+    const std::string Backward = freshVar("stos_backward");
+    const std::string AddrTy =
+        "uint" + std::to_string(Stos->AddressBits) + "_t";
+    emitIndent(Indent);
+    OS << "{\n";
+    emitIndent(Indent + 1);
+    OS << AddrTy << " " << Dst << " = (" << AddrTy << ")(uintptr_t)("
+       << valueStr(Call.getArgOperand(0)) << ");\n";
+    emitIndent(Indent + 1);
+    OS << AddrTy << " " << Count << " = " << valueStr(Call.getArgOperand(1))
+       << ";\n";
+    emitIndent(Indent + 1);
+    OS << "uint" << Stos->ElementBytes * 8 << "_t " << Value << " = "
+       << valueStr(Call.getArgOperand(2)) << ";\n";
+    emitIndent(Indent + 1);
+    OS << "int " << Backward << " = "
+       << (Stos->Dir == X86RepStos::Dynamic
+               ? "(" + valueStr(Call.getArgOperand(3)) + ") != 0"
+           : Stos->Dir == X86RepStos::Backward ? "1"
+                                               : "0")
+       << ";\n";
+    emitIndent(Indent + 1);
+    OS << "while (" << Count << " != 0) {\n";
+    for (unsigned Byte = 0; Byte < Stos->ElementBytes; ++Byte) {
+      emitIndent(Indent + 2);
+      OS << "((unsigned char*)(uintptr_t)" << Dst << ")[" << Byte
+         << "] = (unsigned char)(" << Value << " >> " << Byte * 8 << ");\n";
+    }
+    emitIndent(Indent + 2);
+    OS << Dst << " = " << Backward << " ? " << Dst << " - "
+       << Stos->ElementBytes << " : " << Dst << " + " << Stos->ElementBytes
+       << ";\n";
+    emitIndent(Indent + 2);
+    OS << "--" << Count << ";\n";
+    emitIndent(Indent + 1);
+    OS << "}\n";
+    emitIndent(Indent);
+    OS << "}\n";
+    return true;
+  }
+  if ((Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&
+      llvm::StringRef(AsmStr).contains("rep stos"))
+    llvm::report_fatal_error("unsupported REP STOS inline assembly contract");
+
   std::vector<std::string> ArgStrs;
   for (unsigned I = 0; I < Call.arg_size(); ++I)
     ArgStrs.push_back(valueStr(Call.getArgOperand(I)));
@@ -3090,8 +3191,13 @@ void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
        isMsvcCxxThrowCallName(Call.getCalledFunction()->getName()))) {
     emitIndent(Indent);
     OS << "throw";
-    if (Call.arg_size() > 0)
-      OS << " " << valueStr(Call.getArgOperand(0));
+    if (Call.arg_size() > 0) {
+      const llvm::Value *Object = Call.getArgOperand(0);
+      const auto *Integer = llvm::dyn_cast<llvm::ConstantInt>(Object);
+      if (!llvm::isa<llvm::ConstantPointerNull>(Object) &&
+          !(Integer && Integer->isZero()))
+        OS << " " << valueStr(Object);
+    }
     OS << ";\n";
     AfterCxxThrow = true;
     return;
@@ -3522,7 +3628,9 @@ std::string LLVMCWriter::enumStoredText(const llvm::AllocaInst *Slot,
   const std::string RHS = valueStr(Stored);
   if (!Slot)
     return RHS;
-  if (!Analysis.RawFrameLocations.empty() && SyntheticFrame &&
+  if (SyntheticFrame &&
+      (!Analysis.RawFrameLocations.empty() ||
+       Analysis.RawFrameAllocas.count(SyntheticFrame)) &&
       Slot->getAllocatedType()->isIntegerTy())
     if (auto Frame = peelPointerOffset(Stored);
         Frame && Frame->first == SyntheticFrame)

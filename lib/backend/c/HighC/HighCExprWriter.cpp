@@ -682,6 +682,10 @@ void HighCWriter::collectUnknownOnlyNames(const HighFunc &Func) {
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
         return;
+      // Machine register reuse does not redefine the incoming source
+      // parameter; statement rendering omits the same synthetic copy.
+      if (isIncomingParamReuseAssign(S))
+        return;
       if (S.Dst->Kind != ExprKind::Var && S.Dst->Kind != ExprKind::Phi)
         return;
       const std::string Name = varName(S.Dst->Var);
@@ -931,6 +935,8 @@ bool HighCWriter::isCtorDisplayOperand(const HighExpr *Op) const {
 bool HighCWriter::isUnknownCallOperand(const HighExpr *Op) const {
   if (!Op)
     return true;
+  if (FrameStorageActive && certifiedFrameStorageDisplacement(*Op))
+    return false;
   const HighExpr *Inner = unwrapIntegerView(Op);
   if (!Inner)
     Inner = Op;
@@ -2268,20 +2274,11 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
           return Acc - CurrentFunc->FrameSize;
         return Acc;
       }
-      if (isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch)) {
-        // x64 SEH handlers are exceptional entries: LowIR models their RSP as
-        // the function-entry value, but the unwinder has already established
-        // the allocated frame.  Rebase onto a slot the try body already named.
-        if (CurrentFunc->FrameSize > 0) {
-          const int64_t Rebased = Acc - CurrentFunc->FrameSize;
-          if (InEHClauseBody)
-            return Rebased;
-          if (CurrentFunc->ExceptionMetadata && Slots.count(Rebased) &&
-              !Slots.count(Acc))
-            return Rebased;
-        }
+      // SSA version zero is always the architectural entry SP. Exceptional
+      // establisher adjustments are explicit shared MedIR definitions; doing
+      // another frame-size rebase here changes the handler's memory identity.
+      if (isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch))
         return Acc;
-      }
       auto Alias = FrameAliases.find(varName(Cur->Var));
       if (Alias != FrameAliases.end())
         return Acc + Alias->second;
@@ -2340,6 +2337,14 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
   return std::nullopt;
 }
 
+bool HighCWriter::isRegistrationEstablisherFrame(const MedVar &V) const {
+  return InEHClauseBody && Opts.TheArch == Arch::X86 && CurrentFunc &&
+         CurrentFunc->ExceptionMetadata &&
+         CurrentFunc->ExceptionMetadata->Registration &&
+         V.Kind == MedVar::Reg && V.SSAVer == 0 && V.RenameTag < 0 &&
+         V.RegOff == getTargetRegInfo(Opts.TheArch).FramePointer;
+}
+
 std::optional<int64_t> HighCWriter::certifiedFrameStorageDisplacement(
     const HighExpr &E) const {
   if (!CurrentFunc)
@@ -2354,9 +2359,9 @@ std::optional<int64_t> HighCWriter::certifiedFrameStorageDisplacement(
     if (!Cur)
       return std::nullopt;
     if (Cur->Kind == ExprKind::Var) {
-      if (!isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc,
-                                        Opts.TheArch) &&
+      if (!isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch) &&
           !isCatchFuncletParentFrame(Cur->Var) &&
+          !isRegistrationEstablisherFrame(Cur->Var) &&
           !FrameAliases.count(varName(Cur->Var)))
         return std::nullopt;
       return frameDisplacement(E);
@@ -2434,6 +2439,12 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       return frameStorageAddress(CurrentFunc->FrameSize > 0
                                      ? -CurrentFunc->FrameSize
                                      : 0);
+    // The registration handler's EBP already has an establisher identity in
+    // frameDisplacement. Keep that identity when named slots are replaced by
+    // byte storage; an independent SSA root does not make it an unknown input.
+    if (FrameStorageActive && isRegistrationEstablisherFrame(E.Var))
+      if (const auto Disp = frameDisplacement(E))
+        return frameStorageAddress(*Disp);
     if (ProjectFrameAliasesIntoStorage) {
       if (CurrentFunc && isSyntheticEntryStackPointer(E.Var, *CurrentFunc,
                                                       Opts.TheArch))
@@ -2454,6 +2465,10 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     if (auto Printed = printedForwardedVar(Name, ParentPrec);
         Printed != Name)
       return Printed;
+    // Definitions consisting only of unknown values are omitted from C.
+    // Their observable uses must still fail, including renamed SSA temps.
+    if (UnknownOnlyNames.count(Name))
+      return "(__builtin_trap(), 0 /* unknown value */)";
     // An unassigned architectural register or flag can be a genuine unknown
     // live-in. Keep the failure at the point of use instead of emitting an
     // undeclared name or inventing zero.

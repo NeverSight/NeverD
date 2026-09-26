@@ -276,7 +276,7 @@ TEST(HighCStoreForwarding, PartialOverlapAndEscapedFramesKeepTheirStores) {
 }
 
 TEST(HighCStoreForwarding,
-     AddressTakenCopyForwardSlotKeepsDeclarationAndInitialization) {
+     AddressTakenSlotKeepsBackingStorageAndInitialization) {
   const auto I32 = NdType::makeInt(4);
   const auto Pointer = NdType::makePtr(I32);
   HighFunc Func;
@@ -292,9 +292,20 @@ TEST(HighCStoreForwarding,
   Func.Body.push_back(ret(std::move(Address)));
 
   const auto Body = emitBody(Func);
-  EXPECT_NE(Body.find("int32_t var_m8;"), std::string::npos) << Body;
-  EXPECT_NE(Body.find("var_m8 = arg0;"), std::string::npos) << Body;
-  EXPECT_NE(Body.find("&var_m8"), std::string::npos) << Body;
+  // Escaped frame addresses use the common backing buffer so the store and
+  // returned pointer retain the same memory identity.
+  EXPECT_NE(Body.find("uint8_t stack_storage["), std::string::npos) << Body;
+  EXPECT_NE(Body.find("frame_base = (uintptr_t)(stack_storage +"),
+            std::string::npos)
+      << Body;
+  EXPECT_NE(Body.find("neverd_mem_store_0((uintptr_t)((uintptr_t)(frame_base) "
+                      "- 8), arg0);"),
+            std::string::npos)
+      << Body;
+  EXPECT_NE(Body.find("return (int32_t *)"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("(uint64_t)(frame_base) - (uint64_t)(8)"),
+            std::string::npos)
+      << Body;
 }
 
 TEST(HighCStoreForwarding, NamedPointerFrameSlotKeepsExplicitPointerBits) {
