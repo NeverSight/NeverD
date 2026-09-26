@@ -541,6 +541,7 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelRequestOwnershipTests.cpp
   KernelCancellationTests.cpp
   KernelFrameworkTests.cpp
+  KernelFrameworkInterruptTests.cpp
   KernelFrameworkControlTests.cpp
   KernelFrameworkFileTests.cpp
   KernelFrameworkFileSendTests.cpp

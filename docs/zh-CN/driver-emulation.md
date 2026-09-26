@@ -163,7 +163,17 @@ WDM 电源请求使用 `kind: "power"` 和已配置的 `device_id`。每个包�
 
 [完整电源场景](../examples/driver-power-scenario.json) 可通过 `--scenario` 运行真实样例，包含启动、系统查询／睡眠／唤醒、移除和三个显式子响应。
 
-KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来宾身份，下列 88 个 API 实现了执行语义。`WdfVersionBind` 和 `WdfVersionUnbind` 在真实 WDK `FxDriverEntry` 包装函数前后管理来宾绑定。`WdfGetDriver` 读取公共驱动全局结构。非 PnP 驱动、通用对象、控制设备、队列和传入请求共享类型化上下文、引用计数，以及实际执行的清理／销毁／卸载回调。所有已建模的框架调用和回调目前都要求 `PASSIVE_LEVEL`；清理完成后新增引用仍不在此配置的支持范围内。未建模的函数槽、`WdfLdrQueryInterface`、类扩展和 UMDF 会明确停止。
+KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来宾身份，下列 99 个 API 实现了执行语义。`WdfVersionBind` 和 `WdfVersionUnbind` 在真实 WDK `FxDriverEntry` 包装函数前后管理来宾绑定。`WdfGetDriver` 读取公共驱动全局结构。非 PnP 驱动、通用对象、控制设备、队列和传入请求共享类型化上下文、引用计数，以及实际执行的清理／销毁／卸载回调。除中断 DDI 及下文明示支持其他 IRQL 的请求／对象操作外，已建模的框架调用和回调仍要求 `PASSIVE_LEVEL`；清理完成后新增引用仍不在此配置的支持范围内。未建模的函数槽、`WdfLdrQueryInterface`、类扩展和 UMDF 会明确停止。
+
+中断 API: `WdfInterruptCreate`, `WdfInterruptQueueDpcForIsr`, `WdfInterruptQueueWorkItemForIsr`, `WdfInterruptSynchronize`, `WdfInterruptAcquireLock`, `WdfInterruptReleaseLock`, `WdfInterruptEnable`, `WdfInterruptDisable`, `WdfInterruptWdmGetInterrupt`, `WdfInterruptGetInfo`, `WdfInterruptGetDevice`.
+
+框架中断对象复用已分配的线中断或 MSI 资源及内部中断锁。ISR 与同步回调在分配的 DIRQL 运行，被动中断则在 `PASSIVE_LEVEL` 运行；`WdfInterruptGetInfo` 如实报告被动 IRQL。DPC 在 `DISPATCH_LEVEL` 执行，工作项在 `PASSIVE_LEVEL` 执行。尚在队列中的重复请求会合并，挂起与恢复始终保留回调所有权，直到回调返回。上电在 D0Entry 后连接并启用中断；断电先禁用并断连，再等待延后回调排空，最后执行 D0Exit 与资源释放。显式启用／禁用执行真实驱动回调，不凭空产生硬件中断。外部 `WDFSPINLOCK`／`WDFWAITLOCK`、父对象自动串行化、唤醒中断及保留的 inactive 连接仍不支持；空闲／唤醒策略和失败设备自动重新枚举仍未建模。
+
+以下请求／对象 API 支持不高于 `DISPATCH_LEVEL` 的 IRQL：`WdfObjectDereferenceActual`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`, `WdfRequestRetrieveInputMemory`, `WdfRequestRetrieveOutputMemory`, `WdfRequestRetrieveInputWdmMdl`, `WdfRequestRetrieveOutputWdmMdl`, `WdfRequestGetInformation`, `WdfRequestSetInformation`, `WdfRequestGetIoQueue`, `WdfRequestGetFileObject`, `WdfRequestWdmGetIrp`, `WdfRequestGetParameters`, `WdfRequestGetStatus`, `WdfRequestMarkCancelableEx`, `WdfRequestUnmarkCancelable`, `WdfRequestIsCanceled`, `WdfMemoryGetBuffer`.
+
+`WdfObjectGetTypedContextWorker`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual` 也支持已建模的中断 IRQL；上下文访问和引用获取不会调用被动级别回调。
+
+在高于 `PASSIVE_LEVEL` 的 IRQL 完成请求或释放对象的最后一个引用时，真实清理、销毁及后续框架投递会调度到 `PASSIVE_LEVEL`。旧版 `WdfRequestMarkCancelable` 仍仅支持 `PASSIVE_LEVEL`，以保留请求已取消时同步执行回调的语义。其他 API 保留既有 IRQL 限制。
 
 控制设备要求复制可打印 ASCII 名称，并且 SDDL 必须精确为 `D:P(A;;GA;;;WD)`。这授予所有调用方访问权限，无需虚构调用方令牌；不支持其他安全描述符、未命名设备和自动名称。设备初始化拥有一个 WDM 设备。请求可通过现有会话命名空间中的符号链接别名 `\DosDevices\Name` 或 `\??\Name` 选择设备，报告仍保留规范设备名。创建成功会消耗初始化对象并清空其指针；失败则回滚部分设备所有权。`WdfControlFinishInitializing` 决定何时可以递送 I/O。仅在已建模的文件、工作项和请求允许时，删除操作才移除设备及其链接；不支持删除过程中取消或排空请求。
 
@@ -358,7 +368,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v74`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v75`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 
@@ -366,7 +376,7 @@ JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、�
 
 异常递送使用镜像已解码的 x64 版本 1 展开表及 `__C_specific_handler` 作用域，执行真实来宾过滤器、处理器和展开过程中的 `__finally`。过滤器返回零继续搜索，正数选择处理器，负数请求继续执行；负值仅允许恢复可捕获的用户 CPU 访存异常，且只接受经过验证的 `CONTEXT_INTEGER | CONTEXT_CONTROL` 修改，其余完整原始 CPU 状态保持不变。支持普通辅助函数栈帧展开、保存的非易失通用寄存器恢复、当前执行栈边界及 `GetExceptionCode()`；正常执行的 finally 由来宾代码运行，异常展开的 finally 也实际执行。过滤器与 finally 继承父执行的进程／线程身份和用户访问权限，原本无用户权限的系统工作项不会因此获得权限。处理器可向受支持的外层作用域再次抛出异常。支持过滤器／finally 内嵌套及冲突展开、链式 V1 元数据、部分序言、规范尾声，以及完整 XMM6–XMM15 恢复。异常记录保留链接，已进入的 finally 不会重复执行。C++ 处理机制和不完整元数据仍明确拒绝。未捕获的 API 异常以 `model_error` 停止；其他不属于可捕获用户访存异常的 CPU 故障仍终止执行。 常量 `EXCEPTION_EXECUTE_HANDLER` 直接选中对应处理器。只有选中处理器后，展开才执行离开作用域的 finally；搜索期间或过滤器恢复原执行时不运行清理。每次过滤器返回都验证 `EXCEPTION_POINTERS`、异常记录及不支持的 `CONTEXT` 字段，修改这些内容会明确失败。模型 API 抛出的异常不能通过负过滤器恢复。
 
-`__GSHandlerCheck_SEH` 在搜索处理函数前和展开阶段分别检查镜像当前的安全 cookie，包括没有 finally 的栈帧。支持固定和动态对齐的 cookie 位置、带符号帧偏移和原始帧指针编码；包装层的 cookie 检查与 C 处理函数标志分别生效。序言和尾声展开不会读取尚未建立的 cookie。不匹配会在相关筛选函数、清理或处理函数运行前停止。独立的 `__GSHandlerCheck` 和 GS/C++ 包装仍不支持。测试中的 `driver_seh_gs.h` 定义原创栈帧，并实际调用链接的 WDK cookie 检查函数。
+`__GSHandlerCheck_SEH` 在搜索处理函数前和展开阶段分别检查镜像当前的安全 cookie，包括没有 finally 的栈帧。支持固定和动态对齐的 cookie 位置、带符号帧偏移和原始帧指针编码；包装层的 cookie 检查与 C 处理函数标志分别生效。序言和尾声展开不会读取尚未建立的 cookie。不匹配会在相关筛选函数、清理或处理函数运行前停止。独立的 `__GSHandlerCheck` 也在搜索与展开时检查 cookie，不虚构 C 作用域。识别必须依据精确符号或导入身份，不能从指令模式猜测匿名代码。GS/C++ 包装与 C++ 异常 personality 仍不支持。测试中的 `driver_seh_gs.h` 定义原创栈帧，并实际调用链接的 WDK cookie 检查函数。
 
 原创 `driver_wdm_seh.c` 测试驱动使用真实 WDK 头文件，C 函数使用 `/GS-`，GS 路径由原创汇编栈帧覆盖。通过 `NEVERD_WDM_SEH_FIXTURE` 和 `NEVERD_WDM_SEH_CFG_FIXTURE` 配置普通及活动 CFG 镜像。[driver-seh-scenario.json](../examples/driver-seh-scenario.json) 示例重定位镜像，在 DriverEntry 中捕获 API 异常后卸载。 独立的 WDM METHOD_NEITHER 路径现已支持用户内存探测、MDL 锁页和可捕获的内存故障。
 
@@ -409,6 +419,6 @@ WDM READ/WRITE/IOCTL 请求或无限并行 KMDF 默认队列中的请求可设 `
 
 显式 `messages` 描述 MSI 分配，每条消息提供地址、数据、向量、层级、亲和性及极性。事件的 `message_id` 是描述符内索引，ISR 第三个参数则是 PDO 全局索引。`CONNECT_MESSAGE_BASED`（3）返回真实消息表；`CONNECT_MESSAGE_BASED_PASSIVE`（5）与被动线路支持 PASSIVE_LEVEL 等待，同一中断串行化，不同中断独立保留执行帧。到达与实际递送时间分别记录；不推测 PCI 或设备协议。
 
-`WdfDeviceInitSetPowerPolicyOwnership` 控制电源策略所有权。自管理 I/O 的 Init/Suspend/Restart/Flush/Cleanup 与 D0 前后回调实际执行，普通 D3/D0 保留硬件资源。默认策略将 Sleeping3/Working 对应到 D3/D0，并消费显式 `requested_device_power`；独立子 IRP 报告 `origin: "framework_power_policy"` 和 `response_index`。S3 等待子请求，S0 可在发出 D0 后完成。空闲／唤醒、WDF 中断对象和失败设备自动重新枚举仍未建模。
+`WdfDeviceInitSetPowerPolicyOwnership` 控制电源策略所有权。自管理 I/O 的 Init/Suspend/Restart/Flush/Cleanup 与 D0 前后回调实际执行，普通 D3/D0 保留硬件资源。默认策略将 Sleeping3/Working 对应到 D3/D0，并消费显式 `requested_device_power`；独立子 IRP 报告 `origin: "framework_power_policy"` 和 `response_index`。S3 等待子请求，S0 可在发出 D0 后完成。空闲／唤醒、失败设备自动重新枚举仍未建模。
 
 系统 Query 等待对应设备 Query，并保留其状态；查询本身不改变电源状态。

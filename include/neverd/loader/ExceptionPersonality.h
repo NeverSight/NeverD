@@ -149,6 +149,9 @@ enum class ExceptionPersonality : uint8_t {
   /// (`runtime.asmcgocall_landingpad`) with this routine.  It carries no
   /// language data: the handler walks the goroutine stack itself.
   GoSEHTrampoline,
+  /// Windows cookie-only personality. It validates the frame and always
+  /// continues the exception search; it has no language-handler table.
+  GSHandlerCheck,
 };
 
 inline const char *getExceptionPersonalityName(ExceptionPersonality P) {
@@ -165,6 +168,8 @@ inline const char *getExceptionPersonalityName(ExceptionPersonality P) {
     return "__CxxFrameHandler4";
   case ExceptionPersonality::GSHandlerCheckSEH:
     return "__GSHandlerCheck_SEH";
+  case ExceptionPersonality::GSHandlerCheck:
+    return "__GSHandlerCheck";
   case ExceptionPersonality::GSHandlerCheckEH:
     return "__GSHandlerCheck_EH";
   case ExceptionPersonality::GSHandlerCheckEH4:
@@ -254,6 +259,11 @@ inline bool isGSWrappedPersonality(ExceptionPersonality P) {
   return P == ExceptionPersonality::GSHandlerCheckSEH ||
          P == ExceptionPersonality::GSHandlerCheckEH ||
          P == ExceptionPersonality::GSHandlerCheckEH4;
+}
+
+/// True when the personality consumes an independent GS cookie payload.
+inline bool hasGSCookiePersonality(ExceptionPersonality P) {
+  return P == ExceptionPersonality::GSHandlerCheck || isGSWrappedPersonality(P);
 }
 
 /// True for a personality that dispatches through an Itanium LSDA.

@@ -53,6 +53,9 @@ public:
     /// PDO table index supplied only to a message-service routine.
     std::optional<uint32_t> MessageID;
     bool Passive = false;
+    /// Framework ISR signatures differ from the WDM service routine. The
+    /// execution still belongs to this connection and its interrupt lock.
+    std::optional<std::vector<uint64_t>> ServiceArguments;
   };
   /// PDO zero selects the unique translated vector; LineBased selects the
   /// sole assigned line on an explicit PDO. Neither uses ServiceContext.
@@ -60,6 +63,11 @@ public:
                                    uint64_t Affinity, bool LineBased = false,
                                    bool Passive = false) const;
   llvm::Expected<std::vector<Connection>> matchMessages(uint64_t PDO) const;
+  /// Select one assigned line or message by resource-list order. An explicit
+  /// resource index narrows the ordinal to messages in that descriptor.
+  llvm::Expected<Connection>
+  matchOrdinal(uint64_t PDO, size_t Ordinal,
+               std::optional<size_t> ResourceIndex = {}) const;
   DriverInterruptMessage assignment(const Connection &Connection) const;
   llvm::Error canConnectMessages(uint64_t Table,
                                  llvm::ArrayRef<Connection> Candidates) const;
@@ -70,6 +78,9 @@ public:
   const Connection *connection(uint64_t Object) const;
   bool usesSpinLock(uint64_t Address) const;
   llvm::Error disconnect(uint64_t Object, uint32_t Version);
+  /// Retire an individually owned connection. WDM message tables remain an
+  /// atomic group and cannot be dismantled through this bridge.
+  llvm::Error disconnectConnection(uint64_t Object);
   llvm::Error canRelease(uint64_t PDO) const;
   /// Validate known storage retirement without inferring a context extent or
   /// recursively examining pointers stored inside caller-owned context data.
@@ -108,6 +119,8 @@ public:
   };
   llvm::Expected<CallbackReturn> finishCall(uint64_t Token, uint64_t Value,
                                             uint8_t CurrentIRQL, uint64_t Now);
+  /// Framework passive locks are waitable; an empty result retains no hold.
+  llvm::Expected<bool> tryAcquirePassive(uint64_t Object, uint64_t Execution);
   llvm::Expected<uint8_t> acquire(uint64_t Object, uint64_t Execution,
                                   uint8_t CurrentIRQL);
   llvm::Expected<uint8_t> release(uint64_t Object, uint64_t Execution,
@@ -173,6 +186,7 @@ private:
   std::vector<uint64_t> Tokens;
   std::map<uint64_t, Call> Calls;
   std::vector<Hold> Holds;
+  std::map<uint64_t, uint64_t> PassiveLockWaiters;
   std::map<size_t, Event> Events;
   std::map<uint32_t, LevelLine> LevelLines;
   uint64_t NextCall = 1;

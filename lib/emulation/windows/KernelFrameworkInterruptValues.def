@@ -1,0 +1,39 @@
+//===- KernelFrameworkInterruptValues.def - KMDF interrupt ABI ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// Public x64 WDF 1.33 interrupt layouts.
+//===----------------------------------------------------------------------===//
+
+NEVERD_FRAMEWORK_VALUE(InterruptConfigSize, 104)
+NEVERD_FRAMEWORK_VALUE(InterruptSpinLock, 8)
+NEVERD_FRAMEWORK_VALUE(InterruptShareVector, 16)
+NEVERD_FRAMEWORK_VALUE(InterruptFloatingSave, 20)
+NEVERD_FRAMEWORK_VALUE(InterruptAutomaticSerialization, 21)
+NEVERD_FRAMEWORK_VALUE(InterruptISR, 24)
+NEVERD_FRAMEWORK_VALUE(InterruptDPC, 32)
+NEVERD_FRAMEWORK_VALUE(InterruptEnable, 40)
+NEVERD_FRAMEWORK_VALUE(InterruptDisable, 48)
+NEVERD_FRAMEWORK_VALUE(InterruptWorkItem, 56)
+NEVERD_FRAMEWORK_VALUE(InterruptRaw, 64)
+NEVERD_FRAMEWORK_VALUE(InterruptTranslated, 72)
+NEVERD_FRAMEWORK_VALUE(InterruptWaitLock, 80)
+NEVERD_FRAMEWORK_VALUE(InterruptPassiveHandling, 88)
+NEVERD_FRAMEWORK_VALUE(InterruptReportInactive, 92)
+NEVERD_FRAMEWORK_VALUE(InterruptCanWake, 96)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoSize, 64)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoAffinity, 16)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoMessage, 28)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoVector, 32)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoIRQL, 36)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoMode, 40)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoPolarity, 44)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoMessageSignaled, 48)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoShare, 49)
+NEVERD_FRAMEWORK_VALUE(InterruptInfoGroup, 56)
+NEVERD_FRAMEWORK_VALUE(InterruptTriFalse, 0)
+NEVERD_FRAMEWORK_VALUE(InterruptTriTrue, 1)
+NEVERD_FRAMEWORK_VALUE(InterruptTriDefault, 2)
+NEVERD_FRAMEWORK_VALUE(IncompatibleExecutionLevel, 0xc020020c)
+NEVERD_FRAMEWORK_VALUE(InvalidDeviceState, 0xc0000184)

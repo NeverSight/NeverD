@@ -52,22 +52,27 @@ llvm::Error validateFrame(const ExceptionFunction &F) {
                         seh::ChainFlag) ||
       (Chained && F.UnwindFlags != seh::ChainFlag))
     return invalid("unsupported unwind flags");
-  const bool GS = F.Personality == ExceptionPersonality::GSHandlerCheckSEH;
+  const bool StandaloneGS =
+      F.Personality == ExceptionPersonality::GSHandlerCheck;
+  const bool GS =
+      StandaloneGS || F.Personality == ExceptionPersonality::GSHandlerCheckSEH;
   const bool CHandler =
-      GS || F.Personality == ExceptionPersonality::CSpecificHandler;
-  if (!CHandler && F.Personality != ExceptionPersonality::None)
+      F.Personality == ExceptionPersonality::GSHandlerCheckSEH ||
+      F.Personality == ExceptionPersonality::CSpecificHandler;
+  if (!CHandler && !StandaloneGS && F.Personality != ExceptionPersonality::None)
     return invalid("encountered unsupported language personality");
   if (F.Cxx || GS != F.GSCookie.has_value() ||
-      (((F.UnwindFlags & ~seh::ChainFlag) != 0) != CHandler) ||
+      (((F.UnwindFlags & ~seh::ChainFlag) != 0) !=
+       (CHandler || StandaloneGS)) ||
       (CHandler != F.SEH.has_value()))
     return invalid("inconsistent C exception-handler metadata");
   if (GS) {
     const auto &Cookie = *F.GSCookie;
     if (Cookie.ParseStatus != ExceptionParseStatus::Complete ||
         Cookie.CookieOffset % int32_t(seh::PointerSize) ||
-        (Cookie.HasExceptionHandler &&
+        (!StandaloneGS && Cookie.HasExceptionHandler &&
          !(F.UnwindFlags & seh::ExceptionHandlerFlag)) ||
-        (Cookie.HasUnwindHandler &&
+        (!StandaloneGS && Cookie.HasUnwindHandler &&
          !(F.UnwindFlags & seh::UnwindHandlerFlag)) ||
         (Cookie.HasAlignment &&
          (!Cookie.Alignment || (Cookie.Alignment & (Cookie.Alignment - 1)))) ||
@@ -294,7 +299,7 @@ KernelSEH::advanceImpl(Dispatch &State,
     return false;
   };
   const auto CollectCleanups = [&]() -> llvm::Error {
-    if (!State.Frame || !State.Frame->SEH || State.InPrologue)
+    if (!State.Frame || State.InPrologue)
       return llvm::Error::success();
     if (State.Frame->GSCookie &&
         (State.Frame->UnwindFlags & seh::UnwindHandlerFlag)) {
@@ -306,7 +311,7 @@ KernelSEH::advanceImpl(Dispatch &State,
             State.Bounds},
            State.Frame});
     }
-    if (!hasLanguageHandler(*State.Frame, true))
+    if (!State.Frame->SEH || !hasLanguageHandler(*State.Frame, true))
       return llvm::Error::success();
     for (size_t I = State.ScopeFloor; I < State.Frame->SEH->Scopes.size();
          ++I) {

@@ -148,11 +148,11 @@ struct ExceptionFunction {
                        DecodeProvenance->Language.Diagnostics.end());
   }
 
-  /// True when this record carries a decoded language table of any model.
+  /// True when this record carries decoded language or frame-security data.
   bool hasLanguageTable() const {
     return SEH.has_value() || Cxx.has_value() || Itanium.has_value() ||
            Registration.has_value() || Delphi.has_value() ||
-           DelphiScopes.has_value() || Go.has_value();
+           DelphiScopes.has_value() || Go.has_value() || GSCookie.has_value();
   }
 
   bool canRegenerateLanguageMetadata() const {
@@ -166,7 +166,7 @@ struct ExceptionFunction {
         if (Scope.NormalizedFilterVA != 0)
           return false;
     return ParseStatus == ExceptionParseStatus::Complete &&
-           !isGSWrappedPersonality(Personality) &&
+           !hasGSCookiePersonality(Personality) &&
            Personality != ExceptionPersonality::CxxFrameHandler4 &&
            Encoding != ExceptionEncoding::X64UnwindV3;
   }

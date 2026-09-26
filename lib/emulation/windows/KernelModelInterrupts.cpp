@@ -385,6 +385,14 @@ KernelModel::finishInterruptCall(uint64_t Token, uint64_t Value) {
     PendingInterruptCall = std::move(*Return->Next);
     return std::optional<uint64_t>{};
   }
+  auto FrameworkToken = FrameworkInterruptContinuations.find(Token);
+  if (FrameworkToken != FrameworkInterruptContinuations.end()) {
+    const uint64_t Continuation = FrameworkToken->second;
+    FrameworkInterruptContinuations.erase(FrameworkToken);
+    // The interrupt layer interprets only ISR BOOLEAN observations. Framework
+    // enable/disable callbacks return NTSTATUS and must retain every bit.
+    return finishGuestCall({GuestCallOwner::Framework, Continuation}, Value);
+  }
   return std::optional<uint64_t>{Return->Value};
 }
 

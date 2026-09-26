@@ -9,6 +9,7 @@
 
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/ExceptionInfo.h"
+#include "neverd/loader/LanguageRuntime.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/BinaryLoading.h"
 
@@ -98,6 +99,64 @@ TEST(COFFExceptionParser, KeepsGSWrapperDistinctAndFailClosed) {
   EXPECT_EQ(Decoded.GSCookie->Alignment, 0x10u);
   EXPECT_FALSE(Decoded.canRegenerateLanguageMetadata());
   EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+}
+
+TEST(COFFExceptionParser, StandaloneGSDecodesOnlyItsCookiePayload) {
+  for (llvm::StringRef Name : {"__GSHandlerCheck", "__imp___GSHandlerCheck",
+                               "ntoskrnl.exe!__GSHandlerCheck"}) {
+    SCOPED_TRACE(Name.str());
+    BinaryImage Img = makeX64ExceptionImage();
+    addPersonalityImport(Img, Img.Base + 0x1100, Name);
+    auto *Data = Img.Segments[1].Data.data();
+    writeLE<uint32_t>(Data, 0x24); // aligned cookie, with no scope count
+    writeLE<int32_t>(Data + 4, -0x10);
+    writeLE<uint32_t>(Data + 8, 0x20);
+    addStrippedGSFrame(Img, {Img.Base + 0x1100, Img.Base + 0x1101});
+    coff_loader::resolveExceptionHandlers(Img);
+    const auto &F = Img.ExceptionMetadata.Functions.front();
+    EXPECT_EQ(F.Personality, ExceptionPersonality::GSHandlerCheck);
+    EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_FALSE(F.SEH);
+    EXPECT_FALSE(F.Cxx);
+    ASSERT_TRUE(F.GSCookie);
+    EXPECT_EQ(F.GSCookie->CookieOffset, 0x20);
+    EXPECT_EQ(F.GSCookie->AlignmentBaseOffset, -0x10);
+    EXPECT_EQ(F.GSCookie->Alignment, 0x20u);
+    EXPECT_EQ(F.GSCookie->Payload.size(), 12u);
+    EXPECT_TRUE(F.hasLanguageTable());
+    EXPECT_FALSE(F.canRegenerateLanguageMetadata());
+    EXPECT_FALSE(isGSWrappedPersonality(F.Personality));
+    EXPECT_TRUE(hasGSCookiePersonality(F.Personality));
+  }
+  EXPECT_EQ(classifyPersonalityName("__GSHandlerCheck"),
+            ExceptionPersonality::GSHandlerCheck);
+}
+
+TEST(COFFExceptionParser, StandaloneGSRejectsTruncatedAlignedCookie) {
+  BinaryImage Img = makeX64ExceptionImage(8);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__GSHandlerCheck");
+  writeLE<uint32_t>(Img.Segments[1].Data.data(), 0x24);
+  addStrippedGSFrame(Img, {Img.Base + 0x1100, Img.Base + 0x1101});
+  coff_loader::resolveExceptionHandlers(Img);
+  const auto &F = Img.ExceptionMetadata.Functions.front();
+  EXPECT_EQ(F.Personality, ExceptionPersonality::GSHandlerCheck);
+  EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Malformed);
+  ASSERT_TRUE(F.GSCookie);
+  EXPECT_EQ(F.GSCookie->ParseStatus, ExceptionParseStatus::Malformed);
+  EXPECT_FALSE(F.SEH);
+}
+
+TEST(COFFExceptionParser, CookieShapedDataDoesNotIdentifyAnUnnamedPersonality) {
+  BinaryImage Img = makeX64ExceptionImage();
+  Img.Segments[0].Data[0x100] = 0xc3;
+  writeLE<uint32_t>(Img.Segments[1].Data.data(), 0x20);
+  addStrippedGSFrame(Img, {Img.Base + 0x1100, Img.Base + 0x1101});
+  coff_loader::resolveExceptionHandlers(Img);
+  const auto &F = Img.ExceptionMetadata.Functions.front();
+  EXPECT_EQ(F.Personality, ExceptionPersonality::Unknown);
+  EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Partial);
+  EXPECT_FALSE(F.GSCookie);
+  EXPECT_FALSE(F.SEH);
 }
 
 TEST(COFFExceptionParser, InfersStrippedX64GSWrapperFromCheckedStructure) {

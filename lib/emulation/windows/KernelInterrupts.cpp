@@ -106,6 +106,38 @@ KernelInterrupts::matchMessages(uint64_t PDO) const {
   return Result;
 }
 
+llvm::Expected<KernelInterrupts::Connection>
+KernelInterrupts::matchOrdinal(uint64_t PDO, size_t Ordinal,
+                               std::optional<size_t> ResourceIndex) const {
+  const auto *Device = Resources.find(PDO);
+  if (!Device || !Device->Assigned || !Device->Present)
+    return interruptError("connection requires a present assigned PDO");
+  uint32_t MessageID = 0;
+  for (size_t I = 0; I < Device->Interrupts.size(); ++I) {
+    const auto &Resource = Device->Interrupts[I];
+    for (size_t J = 0; J < std::max(size_t(1), Resource.Messages.size()); ++J) {
+      const bool Message = !Resource.Messages.empty();
+      if ((!ResourceIndex || *ResourceIndex == I) && Ordinal == 0) {
+        Connection Candidate;
+        Candidate.PDO = PDO;
+        Candidate.Epoch = Device->Epoch;
+        Candidate.ResourceIndex = I;
+        if (Message) {
+          Candidate.ResourceMessage = uint32_t(J);
+          Candidate.MessageID = MessageID;
+        }
+        Candidate.IRQL = uint8_t(assignment(Candidate).TranslatedLevel);
+        Candidate.SynchronizeIRQL = Candidate.IRQL;
+        return Candidate;
+      }
+      if (!ResourceIndex || *ResourceIndex == I)
+        --Ordinal;
+      MessageID += Message;
+    }
+  }
+  return interruptError("ordinal does not match an assigned interrupt");
+}
+
 bool KernelInterrupts::sameLine(const Connection &Left,
                                 const Connection &Right) const {
   const auto L = assignment(Left), R = assignment(Right);
@@ -269,7 +301,10 @@ llvm::Error KernelInterrupts::canDisconnect(uint64_t Object,
   if (!Connection || Connection->Version != Version)
     return interruptError(
         "disconnect requires its live connection and version");
-  if (std::any_of(Holds.begin(), Holds.end(),
+  if (std::any_of(
+          PassiveLockWaiters.begin(), PassiveLockWaiters.end(),
+          [&](const auto &Waiter) { return Waiter.second == Object; }) ||
+      std::any_of(Holds.begin(), Holds.end(),
                   [&](const Hold &Hold) { return Hold.Object == Object; }) ||
       std::any_of(Calls.begin(), Calls.end(), [&](const auto &Call) {
         if (Call.second.Object == Object)
@@ -308,6 +343,20 @@ llvm::Error KernelInterrupts::disconnect(uint64_t Object, uint32_t Version) {
   if (auto E = canDisconnect(Object, Version))
     return E;
   // Future external pulses survive disconnect and report their lost tokens.
+  Connections.erase(Object);
+  return llvm::Error::success();
+}
+
+llvm::Error KernelInterrupts::disconnectConnection(uint64_t Object) {
+  const auto *Connection = connection(Object);
+  if (!Connection)
+    return interruptError("disconnect requires a live connection");
+  for (const auto &[Table, Group] : MessageGroups)
+    if (Group.Live && std::find(Group.Objects.begin(), Group.Objects.end(),
+                                Object) != Group.Objects.end())
+      return interruptError("message table members must disconnect together");
+  if (auto E = canDisconnect(Object, Connection->Version))
+    return E;
   Connections.erase(Object);
   return llvm::Error::success();
 }
@@ -718,7 +767,9 @@ KernelInterrupts::serviceCall(uint64_t Token,
   KernelGuestCall Call{{GuestCallOwner::Interrupt, Token},
                        Connection.Routine,
                        {Connection.Object, Connection.Context}};
-  if (Connection.MessageID)
+  if (Connection.ServiceArguments)
+    Call.Arguments = *Connection.ServiceArguments;
+  else if (Connection.MessageID)
     Call.Arguments.push_back(*Connection.MessageID);
   return Call;
 }
@@ -856,6 +907,25 @@ KernelInterrupts::finishCall(uint64_t Token, uint64_t Value,
   return Return;
 }
 
+llvm::Expected<bool> KernelInterrupts::tryAcquirePassive(uint64_t Object,
+                                                         uint64_t Execution) {
+  const auto *Connection = connection(Object);
+  if (!Connection || !Connection->Passive || !Execution)
+    return interruptError("passive lock requires a live passive connection");
+  for (const auto &Hold : Holds)
+    if (lockIdentity(Hold.Object) == lockIdentity(Object)) {
+      if (Hold.Kind == HoldKind::Manual && Hold.Owner == Execution)
+        return interruptError("interrupt lock is nonrecursive");
+      auto [It, Inserted] = PassiveLockWaiters.emplace(Execution, Object);
+      if (!Inserted && It->second != Object)
+        return interruptError("execution already waits on another interrupt");
+      return false;
+    }
+  PassiveLockWaiters.erase(Execution);
+  Holds.push_back({Object, Execution, 0, HoldKind::Manual});
+  return true;
+}
+
 llvm::Expected<uint8_t> KernelInterrupts::acquire(uint64_t Object,
                                                   uint64_t Execution,
                                                   uint8_t CurrentIRQL) {
@@ -874,13 +944,16 @@ llvm::Expected<uint8_t> KernelInterrupts::release(uint64_t Object,
                                                   uint8_t OldIRQL,
                                                   uint8_t CurrentIRQL) {
   const auto *Connection = connection(Object);
-  if (!Connection || Holds.empty() || Holds.back().Kind != HoldKind::Manual ||
-      Holds.back().Object != Object || Holds.back().Owner != Execution ||
-      Holds.back().OldIRQL != OldIRQL ||
+  auto Owned = std::find_if(Holds.begin(), Holds.end(), [&](const Hold &Hold) {
+    return Hold.Kind == HoldKind::Manual && Hold.Object == Object &&
+           Hold.Owner == Execution;
+  });
+  if (!Connection || Owned == Holds.end() || Owned->OldIRQL != OldIRQL ||
+      (!Connection->Passive && std::next(Owned) != Holds.end()) ||
       CurrentIRQL != Connection->SynchronizeIRQL)
     return interruptError(
         "release requires the owning execution and saved IRQL");
-  Holds.pop_back();
+  Holds.erase(Owned);
   return OldIRQL;
 }
 

@@ -208,6 +208,7 @@ llvm::Expected<bool> KernelFramework::beginPowerTransition(
       Transition.Remaining.push_back({PnpPhase::PrepareHardware});
     if (D.Callbacks.D0Entry)
       Transition.Remaining.push_back({PnpPhase::D0Entry});
+    Transition.Remaining.push_back({PnpPhase::EnableInterrupts});
     if (D.Callbacks.D0EntryPostInterruptsEnabled)
       Transition.Remaining.push_back({PnpPhase::D0EntryPostInterruptsEnabled});
     Transition.Remaining.insert(Transition.Remaining.end(), Resumes.begin(),
@@ -222,6 +223,8 @@ llvm::Expected<bool> KernelFramework::beginPowerTransition(
   } else {
     if (D.InD0 && D.Callbacks.D0ExitPreInterruptsDisabled)
       Transition.Remaining.push_back({PnpPhase::D0ExitPreInterruptsDisabled});
+    Transition.Remaining.push_back({PnpPhase::DisableInterrupts});
+    Transition.Remaining.push_back({PnpPhase::DrainInterrupts});
     if (D.InD0 && D.Callbacks.D0Exit)
       Transition.Remaining.push_back({PnpPhase::D0Exit});
     if (ReleasesHardware && D.HardwarePrepared && D.Callbacks.ReleaseHardware)
@@ -236,8 +239,7 @@ llvm::Expected<bool> KernelFramework::beginPowerTransition(
       NextContinuation == UINT64_MAX)
     return invalid("framework callback identity exhausted");
 
-  if (Starting &&
-      (D.Callbacks.PrepareHardware || D.Callbacks.ReleaseHardware)) {
+  if (Starting) {
     if (D.RawResources.Handle || D.TranslatedResources.Handle)
       return invalid("previous hardware resource lists remain live");
     auto Raw = createResourceList(RawResources, ResourceListSize);
@@ -256,43 +258,8 @@ llvm::Expected<bool> KernelFramework::beginPowerTransition(
     D.RawResources = *Raw;
     D.TranslatedResources = *Translated;
     D.ResourcesActive = true;
-  }
-  if (Transition.Remaining.empty() && Transition.WaitingRequests.empty()) {
-    if (ReleasesHardware)
-      D.HardwarePrepared = Entering;
-    D.InD0 = Entering;
-    D.PowerQueuesHeld = !Entering;
-    if (Entering) {
-      D.SelfManagedIo = SelfManagedIoState::Running;
-    } else if (D.SelfManagedIo == SelfManagedIoState::Running ||
-               D.SelfManagedIo == SelfManagedIoState::Suspended) {
-      D.SelfManagedIo = Transition.Removing ? SelfManagedIoState::Flushed
-                                            : SelfManagedIoState::Suspended;
-    }
-    if (!Entering && ReleasesHardware) {
-      D.ResourcesActive = false;
-      if (auto E = retireResourceLists(D))
-        return std::move(E);
-    }
-    if (Entering) {
-      std::vector<Step> Steps;
-      appendPowerQueuePresentations(Handle->second, Steps);
-      if (!Steps.empty()) {
-        if (NextContinuation == UINT64_MAX)
-          return invalid("framework callback identity exhausted");
-        const uint64_t Token = NextContinuation++;
-        Transition.CallbacksComplete = true;
-        Continuations.emplace(Token, Continuation{std::move(Steps)});
-        PnpTransitions.emplace(Token, std::move(Transition));
-        auto Next = advance(Token);
-        if (!Next)
-          return Next.takeError();
-        if (!Next->has_value())
-          return true;
-        PnpTransitions.erase(Token);
-      }
-    }
-    return false;
+    if (!D.Callbacks.PrepareHardware)
+      D.HardwarePrepared = true;
   }
   const uint64_t Token = NextContinuation++;
   Continuations.emplace(Token, Continuation{});
@@ -304,6 +271,15 @@ llvm::Expected<bool> KernelFramework::beginPowerTransition(
   }
   if (auto E = schedulePnpCallback(Token))
     return E;
+  if (Active.CallbacksComplete) {
+    auto Next = advance(Token);
+    if (!Next)
+      return Next.takeError();
+    if (Next->has_value()) {
+      PnpTransitions.erase(Token);
+      return false;
+    }
+  }
   return true;
 }
 
@@ -356,19 +332,28 @@ llvm::Error KernelFramework::finalizePnpCallbacks(uint64_t Token) {
 }
 
 llvm::Error KernelFramework::resumePausedPnp() {
-  if (PendingCall)
+  // Dispatch-level completion releases the wait condition. The scheduler
+  // resumes power callbacks after the current DPC has retired.
+  if (CallbackIRQL || PendingCall)
     return llvm::Error::success();
   for (auto Transition = PnpTransitions.begin();
        Transition != PnpTransitions.end(); ++Transition) {
     auto &State = Transition->second;
-    if (!State.WaitingForRequests || !State.WaitingRequests.empty())
+    if ((!State.WaitingForRequests && !State.WaitingForInterrupts) ||
+        !State.WaitingRequests.empty() ||
+        (State.WaitingForInterrupts && hasDeferredInterrupts(State.Device)))
       continue;
     State.WaitingForRequests = false;
+    State.WaitingForInterrupts = false;
     const uint64_t Token = Transition->first;
-    if (!State.Remaining.empty())
-      return schedulePnpCallback(Token);
-    if (auto E = finalizePnpCallbacks(Token))
+    if (!State.Remaining.empty()) {
+      if (auto E = schedulePnpCallback(Token))
+        return E;
+      if (!State.CallbacksComplete)
+        return llvm::Error::success();
+    } else if (auto E = finalizePnpCallbacks(Token)) {
       return E;
+    }
     auto Next = advance(Token);
     if (!Next)
       return Next.takeError();
@@ -383,86 +368,116 @@ llvm::Error KernelFramework::resumePausedPnp() {
 
 llvm::Error KernelFramework::schedulePnpCallback(uint64_t Token) {
   auto &Transition = PnpTransitions.at(Token);
-  if (Transition.Remaining.empty())
-    return invalid("PnP transition has no remaining callback");
   auto &D = Devices.at(Transition.Device);
-  Transition.Current = Transition.Remaining.front();
-  Transition.Remaining.pop_front();
-  uint64_t Callback = 0;
-  switch (Transition.Current.Phase) {
+  while (!Transition.Remaining.empty()) {
+    Transition.Current = Transition.Remaining.front();
+    Transition.Remaining.pop_front();
+    const auto Phase = Transition.Current.Phase;
+    if (Phase == PnpPhase::EnableInterrupts ||
+        Phase == PnpPhase::DisableInterrupts) {
+      Transition.CurrentInterrupt = 0;
+      if (Phase == PnpPhase::EnableInterrupts)
+        D.InD0 = true;
+      auto Scheduled =
+          advancePnpInterrupts(Token, Phase == PnpPhase::EnableInterrupts);
+      if (!Scheduled)
+        return Scheduled.takeError();
+      if (*Scheduled)
+        return llvm::Error::success();
+      continue;
+    }
+    if (Phase == PnpPhase::DrainInterrupts) {
+      if (hasDeferredInterrupts(Transition.Device)) {
+        Transition.WaitingForInterrupts = true;
+        return llvm::Error::success();
+      }
+      continue;
+    }
+    uint64_t Callback = 0;
+    switch (Transition.Current.Phase) {
 #define NEVERD_FRAMEWORK_PNP_CALLBACK(Name, Index, Result)                     \
   case PnpPhase::Name:                                                         \
     Callback = D.Callbacks.Name;                                               \
     break;
 #include "KernelFrameworkPnpCallbacks.def"
 #undef NEVERD_FRAMEWORK_PNP_CALLBACK
-  case PnpPhase::IoStop:
-  case PnpPhase::IoResume:
-    break;
+    case PnpPhase::IoStop:
+    case PnpPhase::IoResume:
+    case PnpPhase::EnableInterrupts:
+    case PnpPhase::DisableInterrupts:
+    case PnpPhase::DrainInterrupts:
+      break;
+    }
+    std::vector<uint64_t> Arguments{Transition.Device};
+    switch (Transition.Current.Phase) {
+    case PnpPhase::EnableInterrupts:
+    case PnpPhase::DisableInterrupts:
+    case PnpPhase::DrainInterrupts:
+      llvm_unreachable(
+          "internal interrupt phase handled before guest dispatch");
+    case PnpPhase::QueryStop:
+    case PnpPhase::QueryRemove:
+    case PnpPhase::SurpriseRemoval:
+      break;
+    case PnpPhase::SelfManagedIoInit:
+    case PnpPhase::SelfManagedIoRestart:
+      D.InD0 = true;
+      D.PowerQueuesHeld = false;
+      D.SelfManagedIo = SelfManagedIoState::Running;
+      break;
+    case PnpPhase::SelfManagedIoSuspend:
+      D.SelfManagedIo = SelfManagedIoState::Suspended;
+      break;
+    case PnpPhase::SelfManagedIoFlush:
+      D.SelfManagedIo = SelfManagedIoState::Flushed;
+      break;
+    case PnpPhase::SelfManagedIoCleanup:
+      D.SelfManagedIo = SelfManagedIoState::Cleaned;
+      break;
+    case PnpPhase::IoStop: {
+      auto Queue = Queues.find(Transition.Current.Queue);
+      auto Request = Requests.find(Transition.Current.Request);
+      if (Queue == Queues.end() || Request == Requests.end() ||
+          Request->second.Completed || Request->second.Queued)
+        return invalid("I/O stop callback lost its driver-owned request");
+      Callback = Queue->second.IoStop;
+      uint64_t Flags = Transition.Removing ? RequestStopActionPurge
+                                           : RequestStopActionSuspend;
+      if (Request->second.Cancellation == CancelState::Marked)
+        Flags |= RequestStopRequestCancelable;
+      Arguments = {Transition.Current.Queue, Transition.Current.Request, Flags};
+      break;
+    }
+    case PnpPhase::IoResume: {
+      auto Queue = Queues.find(Transition.Current.Queue);
+      auto Request = Requests.find(Transition.Current.Request);
+      if (Queue == Queues.end() || Request == Requests.end() ||
+          !Request->second.PowerSuspended || Request->second.Completed)
+        return invalid("I/O resume callback lost its suspended request");
+      Callback = Queue->second.IoResume;
+      Arguments = {Transition.Current.Queue, Transition.Current.Request};
+      break;
+    }
+    case PnpPhase::PrepareHardware:
+      Arguments.push_back(D.RawResources.Handle);
+      Arguments.push_back(D.TranslatedResources.Handle);
+      break;
+    case PnpPhase::D0Entry:
+    case PnpPhase::D0EntryPostInterruptsEnabled:
+    case PnpPhase::D0Exit:
+    case PnpPhase::D0ExitPreInterruptsDisabled:
+      Arguments.push_back(Transition.PowerState);
+      break;
+    case PnpPhase::ReleaseHardware:
+      Arguments.push_back(D.TranslatedResources.Handle);
+      break;
+    }
+    if (!Callback)
+      return invalid("PnP transition lost its registered callback");
+    PendingCall = GuestCall{Token, Callback, std::move(Arguments)};
+    return llvm::Error::success();
   }
-  std::vector<uint64_t> Arguments{Transition.Device};
-  switch (Transition.Current.Phase) {
-  case PnpPhase::QueryStop:
-  case PnpPhase::QueryRemove:
-  case PnpPhase::SurpriseRemoval:
-    break;
-  case PnpPhase::SelfManagedIoInit:
-  case PnpPhase::SelfManagedIoRestart:
-    D.InD0 = true;
-    D.PowerQueuesHeld = false;
-    D.SelfManagedIo = SelfManagedIoState::Running;
-    break;
-  case PnpPhase::SelfManagedIoSuspend:
-    D.SelfManagedIo = SelfManagedIoState::Suspended;
-    break;
-  case PnpPhase::SelfManagedIoFlush:
-    D.SelfManagedIo = SelfManagedIoState::Flushed;
-    break;
-  case PnpPhase::SelfManagedIoCleanup:
-    D.SelfManagedIo = SelfManagedIoState::Cleaned;
-    break;
-  case PnpPhase::IoStop: {
-    auto Queue = Queues.find(Transition.Current.Queue);
-    auto Request = Requests.find(Transition.Current.Request);
-    if (Queue == Queues.end() || Request == Requests.end() ||
-        Request->second.Completed || Request->second.Queued)
-      return invalid("I/O stop callback lost its driver-owned request");
-    Callback = Queue->second.IoStop;
-    uint64_t Flags =
-        Transition.Removing ? RequestStopActionPurge : RequestStopActionSuspend;
-    if (Request->second.Cancellation == CancelState::Marked)
-      Flags |= RequestStopRequestCancelable;
-    Arguments = {Transition.Current.Queue, Transition.Current.Request, Flags};
-    break;
-  }
-  case PnpPhase::IoResume: {
-    auto Queue = Queues.find(Transition.Current.Queue);
-    auto Request = Requests.find(Transition.Current.Request);
-    if (Queue == Queues.end() || Request == Requests.end() ||
-        !Request->second.PowerSuspended || Request->second.Completed)
-      return invalid("I/O resume callback lost its suspended request");
-    Callback = Queue->second.IoResume;
-    Arguments = {Transition.Current.Queue, Transition.Current.Request};
-    break;
-  }
-  case PnpPhase::PrepareHardware:
-    Arguments.push_back(D.RawResources.Handle);
-    Arguments.push_back(D.TranslatedResources.Handle);
-    break;
-  case PnpPhase::D0Entry:
-  case PnpPhase::D0EntryPostInterruptsEnabled:
-  case PnpPhase::D0Exit:
-  case PnpPhase::D0ExitPreInterruptsDisabled:
-    Arguments.push_back(Transition.PowerState);
-    break;
-  case PnpPhase::ReleaseHardware:
-    Arguments.push_back(D.TranslatedResources.Handle);
-    break;
-  }
-  if (!Callback)
-    return invalid("PnP transition lost its registered callback");
-  PendingCall = GuestCall{Token, Callback, std::move(Arguments)};
-  return llvm::Error::success();
+  return finalizePnpCallbacks(Token);
 }
 
 std::optional<KernelFramework::PnpCompletion>
@@ -490,6 +505,10 @@ KernelFramework::finishPnpCallback(uint64_t Token, uint64_t Result) {
     break;
 #include "KernelFrameworkPnpCallbacks.def"
 #undef NEVERD_FRAMEWORK_PNP_CALLBACK
+      case PnpPhase::EnableInterrupts:
+      case PnpPhase::DisableInterrupts:
+        break;
+      case PnpPhase::DrainInterrupts:
       case PnpPhase::IoStop:
       case PnpPhase::IoResume:
         VoidResult = true;
@@ -519,6 +538,21 @@ KernelFramework::finishPnpCallback(uint64_t Token, uint64_t Result) {
       if (Failed && !(State.Status & profile::NTStatusFailureMask))
         State.Status = Status;
       auto &D = Device->second;
+      const bool InterruptPhase =
+          State.Current.Phase == PnpPhase::EnableInterrupts ||
+          State.Current.Phase == PnpPhase::DisableInterrupts;
+      if (InterruptPhase) {
+        if (auto E = finishPnpInterrupt(Token, Status))
+          return E;
+        if (!Failed || State.Current.Phase == PnpPhase::DisableInterrupts) {
+          auto Scheduled = advancePnpInterrupts(
+              Token, State.Current.Phase == PnpPhase::EnableInterrupts);
+          if (!Scheduled)
+            return Scheduled.takeError();
+          if (*Scheduled)
+            return PnpCallbackProgress::Scheduled;
+        }
+      }
       if (!Failed && State.Current.Phase == PnpPhase::PrepareHardware)
         D.HardwarePrepared = true;
       if (!Failed && State.Current.Phase == PnpPhase::D0Entry)
@@ -532,7 +566,8 @@ KernelFramework::finishPnpCallback(uint64_t Token, uint64_t Result) {
           return E;
       }
       if (State.Entering && Failed &&
-          (State.Current.Phase == PnpPhase::PrepareHardware ||
+          (State.Current.Phase == PnpPhase::EnableInterrupts ||
+           State.Current.Phase == PnpPhase::PrepareHardware ||
            State.Current.Phase == PnpPhase::D0Entry ||
            State.Current.Phase == PnpPhase::D0EntryPostInterruptsEnabled ||
            State.Current.Phase == PnpPhase::SelfManagedIoInit ||
@@ -542,6 +577,8 @@ KernelFramework::finishPnpCallback(uint64_t Token, uint64_t Result) {
         D.PowerQueuesHeld = true;
         if (D.InD0 && D.Callbacks.D0ExitPreInterruptsDisabled)
           State.Remaining.push_back({PnpPhase::D0ExitPreInterruptsDisabled});
+        State.Remaining.push_back({PnpPhase::DisableInterrupts});
+        State.Remaining.push_back({PnpPhase::DrainInterrupts});
         if (D.InD0 && D.Callbacks.D0Exit)
           State.Remaining.push_back({PnpPhase::D0Exit});
         if (D.Callbacks.ReleaseHardware)
@@ -569,7 +606,9 @@ KernelFramework::finishPnpCallback(uint64_t Token, uint64_t Result) {
       if (State.nextPrecedesRequestDrain()) {
         if (auto E = schedulePnpCallback(Token))
           return E;
-        return PnpCallbackProgress::Scheduled;
+        return State.CallbacksComplete      ? PnpCallbackProgress::Continue
+               : State.WaitingForInterrupts ? PnpCallbackProgress::Waiting
+                                            : PnpCallbackProgress::Scheduled;
       }
       if (!State.WaitingRequests.empty()) {
         State.WaitingForRequests = true;
@@ -578,7 +617,9 @@ KernelFramework::finishPnpCallback(uint64_t Token, uint64_t Result) {
       if (!State.Remaining.empty()) {
         if (auto E = schedulePnpCallback(Token))
           return E;
-        return PnpCallbackProgress::Scheduled;
+        return State.CallbacksComplete      ? PnpCallbackProgress::Continue
+               : State.WaitingForInterrupts ? PnpCallbackProgress::Waiting
+                                            : PnpCallbackProgress::Scheduled;
       }
       if (auto E = finalizePnpCallbacks(Token))
         return E;

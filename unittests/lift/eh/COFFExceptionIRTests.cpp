@@ -699,7 +699,23 @@ TEST(COFFExceptionIR, LLVMCProjectsCanonicalWindowsEHAsCommentsOnly) {
   Cxx.GSCookie->CookieOffset = 128;
   AddFunction("cxx_details", Cxx);
 
+  ExceptionFunction CookieOnly;
+  CookieOnly.CodeRange = {0x140006000, 0x140006080};
+  CookieOnly.Encoding = ExceptionEncoding::X64UnwindV1;
+  CookieOnly.Personality = ExceptionPersonality::GSHandlerCheck;
+  CookieOnly.PersonalityName =
+      getExceptionPersonalityName(CookieOnly.Personality);
+  CookieOnly.GSCookie.emplace();
+  CookieOnly.GSCookie->ParseStatus = ExceptionParseStatus::Complete;
+  CookieOnly.GSCookie->CookieOffset = 48;
+  AddFunction("cookie_only", CookieOnly);
+
   const std::string Source = emitLLVMC(Module);
+  EXPECT_NE(Source.find("personality=__GSHandlerCheck\n"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("gs.cookie_offset=48, ehandler=0, uhandler=0"),
+            std::string::npos)
+      << Source;
   EXPECT_NE(Source.find("seh.scope[0]: filter [0x140001010, 0x140001030)"),
             std::string::npos)
       << Source;

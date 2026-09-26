@@ -383,6 +383,12 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
   if (auto E = Scheduler.finish(ID))
     return E;
   CurrentIRQL = scheduler::PassiveLevel;
+  if (Framework) {
+    if (auto E = Framework->resumeInterruptDrain())
+      return E;
+    if (auto E = completeFrameworkTransitionIfReady())
+      return E;
+  }
   ApcStates.erase(ID);
   if (Invocation.Kind == KernelScheduler::CallbackKind::SystemThread) {
     SystemThreads.at(Invocation.Object).Exited = true;
@@ -401,6 +407,8 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
   }
   if (Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
       Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCompletion ||
+      Invocation.Kind == KernelScheduler::CallbackKind::FrameworkPassive ||
+      KernelScheduler::isFrameworkInterruptCallbackKind(Invocation.Kind) ||
       Invocation.Kind == KernelScheduler::CallbackKind::WDMCancel ||
       Invocation.Kind == KernelScheduler::CallbackKind::WDMCompletion ||
       Invocation.Kind == KernelScheduler::CallbackKind::Interrupt ||
@@ -523,6 +531,18 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
 
 llvm::Expected<std::optional<uint32_t>>
 KernelModel::pollWait(const Wait &Pending) {
+  if (Pending.Type == Wait::Kind::FrameworkInterruptLock) {
+    auto Acquired =
+        Interrupts.tryAcquirePassive(Pending.Object, Pending.Execution);
+    if (!Acquired)
+      return Acquired.takeError();
+    if (!*Acquired)
+      return std::optional<uint32_t>{};
+    FrameworkInterruptLocks.emplace(
+        std::make_pair(Pending.Execution, Pending.Object),
+        scheduler::PassiveLevel);
+    return std::optional<uint32_t>{windows::StatusSuccess};
+  }
   if (Pending.Type == Wait::Kind::InterruptSynchronization) {
     auto Ready = Interrupts.reserveSynchronization(Pending.Object);
     if (!Ready)

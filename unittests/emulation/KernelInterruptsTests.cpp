@@ -134,6 +134,76 @@ protected:
   }
 };
 
+TEST_F(KernelInterruptTest,
+       FrameworkServiceArgumentsRetainAssignedInterruptAndLockOwnership) {
+  constexpr uint64_t Handle = 0x6000;
+  auto Candidate = take(Model->matchOrdinal(PDO, 0));
+  Candidate.Object = Object;
+  Candidate.Routine = 0x180001000;
+  Candidate.ServiceArguments = std::vector<uint64_t>{Handle, 0};
+  ok(Model->connect(Candidate));
+  reject(Model->matchOrdinal(PDO, 1), "ordinal");
+  reject(Model->matchOrdinal(PDO, 0, 1), "ordinal");
+  arm();
+  auto Delivery = queue();
+  EXPECT_EQ(Delivery.Call.Arguments, (std::vector<uint64_t>{Handle, 0}));
+  EXPECT_EQ(take(Model->beginCall(Delivery.Call.Token.ID, 0, 17)), 5u);
+  reject(Model->acquire(Object, 77, 5), "nonrecursive");
+  reject(Model->disconnectConnection(Object), "owned");
+  take(Model->finishCall(Delivery.Call.Token.ID, 1, 5, 18));
+  ok(Model->disconnectConnection(Object));
+}
+
+TEST_F(KernelInterruptTest,
+       FrameworkPassiveLocksRetainWaitersAndAllowOtherOwners) {
+  connectPassive();
+  connectPassive(1);
+  EXPECT_TRUE(take(Model->tryAcquirePassive(Object, 11)));
+  EXPECT_FALSE(take(Model->tryAcquirePassive(Object, 22)));
+  reject(Model->tryAcquirePassive(Object, 11), "nonrecursive");
+  reject(Model->disconnectConnection(Object), "owned");
+  EXPECT_TRUE(take(Model->tryAcquirePassive(OtherObject, 33)));
+  // Independent passive locks do not impose an unrelated execution's LIFO.
+  EXPECT_EQ(take(Model->release(Object, 11, 0, 0)), 0u);
+  reject(Model->disconnectConnection(Object), "owned");
+  EXPECT_TRUE(take(Model->tryAcquirePassive(Object, 22)));
+  EXPECT_EQ(take(Model->release(OtherObject, 33, 0, 0)), 0u);
+  EXPECT_EQ(take(Model->release(Object, 22, 0, 0)), 0u);
+  ok(Model->disconnectConnection(Object));
+  ok(Model->disconnectConnection(OtherObject));
+}
+
+TEST_F(KernelInterruptTest, FrameworkMessageSelectionUsesDescriptorOrdinals) {
+  auto Device = configuration(2);
+  Device.Interrupts.front().Messages = {{0xfee01000, 0x100, 0x93, 5, 1},
+                                        {0xfee01000, 0x101, 0x94, 7, 1}};
+  auto Second = Device.Interrupts.front();
+  Second.ID = "second";
+  Second.Messages = {{0xfee02000, 0x102, 0x95, 8, 1}};
+  Device.Interrupts.push_back(Second);
+  constexpr uint64_t Owner = 0x4000;
+  ok(Resources.configure(Owner, Device));
+  start(Owner);
+  auto Candidate = take(Model->matchOrdinal(Owner, 0, 1));
+  EXPECT_EQ(Candidate.ResourceIndex, 1u);
+  EXPECT_EQ(Candidate.ResourceMessage, 0u);
+  EXPECT_EQ(Candidate.MessageID, 2u);
+  EXPECT_EQ(take(Model->matchOrdinal(Owner, 2)).MessageID, 2u);
+  Candidate.Object = Object;
+  Candidate.Routine = 0x180001000;
+  Candidate.Version = interrupts::MessageBased;
+  Candidate.ServiceArguments = std::vector<uint64_t>{0x6000, 2};
+  ok(Model->connect(Candidate));
+  DriverInterruptEvent Event{0, Device.ID, "second",
+                             DriverInterruptAction::Pulse, 0};
+  ok(Model->arm({Event}, 0, 0));
+  auto Delivery = queue(0);
+  EXPECT_EQ(Delivery.Call.Arguments, (std::vector<uint64_t>{0x6000, 2}));
+  EXPECT_EQ(take(Model->beginCall(Delivery.Call.Token.ID, 0, 0)), 8u);
+  take(Model->finishCall(Delivery.Call.Token.ID, 1, 8, 0));
+  ok(Model->disconnectConnection(Object));
+}
+
 TEST_F(KernelInterruptTest, SharedLatchedLineCallsEveryCapturedHandler) {
   const auto Connections = sharedConnections();
   reject(Model->match(0, 0xa0, 7, 1), "one assigned");
@@ -846,6 +916,7 @@ TEST_F(KernelInterruptTest, MessageIdsUsePdoOrderAndDisconnectIsAtomic) {
   reject(Model->connectMessages(Table, Incomplete), "every assigned message");
   EXPECT_EQ(Model->connection(Candidates.front().Object), nullptr);
   ok(Model->connectMessages(Table, Candidates));
+  reject(Model->disconnectConnection(Candidates.front().Object), "together");
   ok(Model->validateGuestAccess(Table, interrupts::MessageTableHeaderSize));
   reject(Model->validateGuestAccess(Table, 1, true), "read-only");
   const DriverInterruptEvent Event{0, Device.ID, "second",

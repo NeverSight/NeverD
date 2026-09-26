@@ -1101,13 +1101,17 @@ unrelated retained terminal fault. Handler execution remains on the original
 stack. Nested filter dispatch joins explicit logical stack segments and links
 exception records; collided finally dispatch advances past entered cleanups.
 Only abandoned exception callback frames are retired. API-raise continuation,
-C++ personalities, standalone GS handlers and incomplete metadata remain explicit failures.
-`KernelSEHGS` validates `__GSHandlerCheck_SEH` using loader-decoded offsets
+C++ personalities and incomplete metadata remain explicit failures.
+`KernelSEHGS` validates `__GSHandlerCheck_SEH` and standalone
+`__GSHandlerCheck` using loader-decoded offsets
 and live image/stack storage. GS checks are independent of wrapped C-handler
 flags. The unwind plan retains one check before each frame’s cleanup group,
 including frames with no finally, so search-time validation cannot hide later
 cookie corruption. Dynamic slot alignment does not change the frame pointer
-used to encode the cookie.
+used to encode the cookie. Standalone GS owns only its cookie payload and never
+invents C language scopes. Loader classification requires an exact symbol or
+import identity for that standalone personality; a cookie-shaped payload or
+anonymous instruction sequence cannot establish it.
 
 `KernelFrameworkPower` owns the ordered self-managed I/O, hardware and D0
 callback plan. `KernelModelPowerCompletion` creates independent framework power
@@ -1121,6 +1125,31 @@ release dependencies and system-view protection. Actual backend page rights
 remain the authority for access checks; aliases can reuse retired VA ranges
 without creating a second permission flag. Pure `canAccess` queries may run
 inside CPU hooks without entering the execution engine.
+
+`KernelFrameworkInterrupts` owns WDF interrupt objects, their typed continuations
+and power callback plan. `KernelModelFrameworkInterrupts` connects the typed
+host to `KernelInterrupts`; resource assignment, epoch, lock, IRQL and ISR
+ownership are never copied into a second interrupt model. An explicit service
+argument list supplies the WDF ISR signature while retaining the same WDM
+connection. Per-message connections preserve resource order, and excess WDF
+objects stay unassigned. Enable/disable callbacks use interrupt execution tokens
+mapped to framework continuations, preserving complete NTSTATUS values rather
+than interpreting them as ISR BOOLEAN results. Internal passive locks retain
+waiting executions and prevent disconnection while owned.
+
+`KernelScheduler` keeps interrupt DPCs, interrupt work items and deferred
+framework continuations as distinct callback kinds. They reuse the DPC/worker
+FIFOs, budgets and suspended-execution ownership. Interrupt queueing coalesces
+only while queued; framework passive continuations cannot duplicate an
+outstanding token. `DriverSession` preserves wait state before nested, detached
+and scheduled continuation entry. Power-down disconnects interrupt sources and
+waits for deferred callback retirement before D0Exit and hardware release;
+`KernelModel` resumes this drain after releasing scheduler ownership.
+DISPATCH_LEVEL request completion defers real cleanup and subsequent delivery
+to a retained PASSIVE_LEVEL framework continuation, without broadly relaxing
+other WDF API restrictions. External WDF lock objects, automatic parent
+serialization, wake interrupts, retained inactive connections and general
+idle/wake policy remain outside the profile.
 
 Message interrupt descriptors retain per-message assignment facts while
 `KernelInterrupts` owns the captured PDO-wide registration and opaque guest

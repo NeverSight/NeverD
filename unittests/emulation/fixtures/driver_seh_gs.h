@@ -25,21 +25,33 @@
 #define SEH_GS_STRING(Value) SEH_GS_STRING_IMPL(Value)
 
 // The WDK exposes the runtime-function entry through ntimage.h but leaves
-// DISPATCHER_CONTEXT opaque. The common checker reads only this ABI prefix.
+// DISPATCHER_CONTEXT opaque. These checkers read only this ABI prefix.
 typedef struct {
   ULONG64 ControlPc;
   ULONG64 ImageBase;
   PIMAGE_RUNTIME_FUNCTION_ENTRY FunctionEntry;
+  ULONG64 EstablisherFrame;
+  ULONG64 TargetIp;
+  PCONTEXT ContextRecord;
+  PVOID LanguageHandler;
+  PVOID HandlerData;
 } SEH_GS_DISPATCHER_PREFIX;
 
 C_ASSERT(FIELD_OFFSET(SEH_GS_DISPATCHER_PREFIX, ImageBase) == 8);
 C_ASSERT(FIELD_OFFSET(SEH_GS_DISPATCHER_PREFIX, FunctionEntry) == 16);
+C_ASSERT(FIELD_OFFSET(SEH_GS_DISPATCHER_PREFIX, HandlerData) == 56);
 
 VOID __GSHandlerCheckCommon(PVOID Frame, SEH_GS_DISPATCHER_PREFIX *Context,
                             PVOID CookieData);
+EXCEPTION_DISPOSITION __GSHandlerCheck(PEXCEPTION_RECORD Record, PVOID Frame,
+                                       PCONTEXT Registers,
+                                       SEH_GS_DISPATCHER_PREFIX *Context);
+
+// Link this fixture with /debug:dwarf to retain exact COFF runtime identities.
+// Cookie data alone cannot identify an arbitrary stripped personality.
 
 __attribute__((used)) __declspec(noinline) static VOID
-SehGSVerifyRuntime(PVOID Frame, PVOID CookieData) {
+SehGSVerifyRuntime(PVOID Frame, PVOID CookieData, BOOLEAN Standalone) {
   // Only the frame-register byte is used by this helper. Its two pointer
   // inputs remain separate, as they are in an actual dispatcher context.
   const UCHAR Unwind[] = {1, 0, 0, SEH_GS_FRAME_OFFSET | SEH_GS_FRAME_REGISTER};
@@ -47,13 +59,22 @@ SehGSVerifyRuntime(PVOID Frame, PVOID CookieData) {
   SEH_GS_DISPATCHER_PREFIX Context = {0};
   Context.ImageBase = (ULONG64)Unwind;
   Context.FunctionEntry = &Function;
-  __GSHandlerCheckCommon(Frame, &Context, CookieData);
+  Context.HandlerData = CookieData;
+  if (Standalone) {
+    if (__GSHandlerCheck(NULL, Frame, NULL, &Context) !=
+        ExceptionContinueSearch)
+      __debugbreak();
+  } else {
+    __GSHandlerCheckCommon(Frame, &Context, CookieData);
+  }
 }
 
 NTSTATUS SehGSFrame(BOOLEAN Corrupt);
 NTSTATUS SehGSAlignedFrame(BOOLEAN Corrupt);
+NTSTATUS SehGSStandaloneFrame(BOOLEAN Corrupt);
+NTSTATUS SehGSStandaloneAlignedFrame(BOOLEAN Corrupt);
 
-#define SEH_GS_FUNCTION(Name, Align, CookieFlags)                              \
+#define SEH_GS_FUNCTION(Name, Align, CookieFlags, Personality, Standalone)     \
   ".text\n.p2align 4\n.globl " #Name "\n" #Name ":\n"                          \
   ".seh_proc " #Name "\n"                                                      \
   "pushq %rbp\n.seh_pushreg %rbp\n"                                            \
@@ -66,6 +87,7 @@ NTSTATUS SehGSAlignedFrame(BOOLEAN Corrupt);
   "movq %rax, SehGSCookieOffset(%rsp)\n"                                       \
   "leaq -SehGSFrameOffset(%rbp), %rcx\n"                                       \
   "leaq .L" #Name "CookieData(%rip), %rdx\n"                                   \
+  "movl $" #Standalone ", %r8d\n"                                              \
   "callq SehGSVerifyRuntime\n"                                                 \
   "cmpb $0, SehGSArgumentOffset(%rbp)\nje .L" #Name "Raise\n"                  \
   "xorq $1, SehGSCookieOffset(%rsp)\n"                                         \
@@ -81,40 +103,32 @@ NTSTATUS SehGSAlignedFrame(BOOLEAN Corrupt);
   ".L" #Name "Failure:\nmovl $0xc0000001, %eax\n"                              \
   ".L" #Name "Return:\n"                                                       \
   "leaq SehGSStackSize-SehGSFrameOffset(%rbp), %rsp\npopq %rbp\nretq\n"        \
-  ".seh_handler __GSHandlerCheck_SEH, @except, @unwind\n"                      \
-  ".seh_handlerdata\n.long 1\n"                                                \
+  ".seh_handler " #Personality ", @except, @unwind\n"                          \
+  ".seh_handlerdata\n.if !" #Standalone "\n.long 1\n"                          \
   ".rva .L" #Name "Raise, .L" #Name "AfterRaise\n"                             \
   ".long 1\n.rva .L" #Name "Handler\n"                                         \
+  ".endif\n"                                                                   \
   ".L" #Name "CookieData:\n"                                                   \
   ".long SehGSCookieOffset | " #CookieFlags "\n"                               \
   ".if " #Align "\n.long 0, SehGSAlignment\n.endif\n"                          \
   ".text\n.seh_endproc\n"
 
-__asm__(".set SehGSFrameOffset, " SEH_GS_STRING(
-    SEH_GS_FRAME_OFFSET) "\n"
-                         ".set SehGSStackSize, " SEH_GS_STRING(
-                             SEH_GS_STACK_SIZE) "\n"
-                                                ".set "
-                                                "SehGSCookieOffset,"
-                                                " " SEH_GS_STRING(
-                                                    SEH_GS_COOKIE_OFFSET) "\n"
-                                                                          ".set"
-                                                                          " Seh"
-                                                                          "GSAr"
-                                                                          "gume"
-                                                                          "ntOf"
-                                                                          "fset"
-                                                                          ","
-                                                                          " " SEH_GS_STRING(
-                                                                              SEH_GS_ARGUMENT_OFFSET) "\n"
-                                                                                                      ".set SehGSAlignment, " SEH_GS_STRING(SEH_GS_ALIGNMENT) "\n" SEH_GS_FUNCTION(
-                                                                                                          SehGSFrame,
-                                                                                                          0,
-                                                                                                          3)
-                                                                                                          SEH_GS_FUNCTION(
-                                                                                                              SehGSAlignedFrame,
-                                                                                                              1,
-                                                                                                              7));
+#define SEH_GS_CONSTANT(Name, Value)                                           \
+  __asm__(".set " #Name ", " SEH_GS_STRING(Value));
+
+SEH_GS_CONSTANT(SehGSFrameOffset, SEH_GS_FRAME_OFFSET)
+SEH_GS_CONSTANT(SehGSStackSize, SEH_GS_STACK_SIZE)
+SEH_GS_CONSTANT(SehGSCookieOffset, SEH_GS_COOKIE_OFFSET)
+SEH_GS_CONSTANT(SehGSArgumentOffset, SEH_GS_ARGUMENT_OFFSET)
+SEH_GS_CONSTANT(SehGSAlignment, SEH_GS_ALIGNMENT)
+
+__asm__(SEH_GS_FUNCTION(SehGSFrame, 0, 3, __GSHandlerCheck_SEH, 0));
+__asm__(SEH_GS_FUNCTION(SehGSAlignedFrame, 1, 7, __GSHandlerCheck_SEH, 0));
+__asm__(SEH_GS_FUNCTION(SehGSStandaloneFrame, 0, 0, __GSHandlerCheck, 1));
+__asm__(SEH_GS_FUNCTION(SehGSStandaloneAlignedFrame, 1, 4, __GSHandlerCheck,
+                        1));
+
+#undef SEH_GS_CONSTANT
 
 #undef SEH_GS_FUNCTION
 #undef SEH_GS_STRING

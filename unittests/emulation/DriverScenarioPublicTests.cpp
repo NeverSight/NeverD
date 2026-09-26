@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../TestProcess.h"
+#include "fixtures/driver_kmdf_interrupt_test.h"
 #include "fixtures/driver_nested_user.h"
 #include "fixtures/driver_seh_test.h"
 #include "gtest/gtest.h"
@@ -1053,6 +1054,73 @@ TEST_F(DriverScenarioPublic, CAPIReportsFrameworkSystemPowerChildren) {
     }
   }
   EXPECT_EQ(Children, 2u);
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIFrameworkInterruptDpcAndWorkItemCompleteRequest) {
+#ifdef NEVERD_KMDF_PNP_FIXTURE
+  constexpr llvm::StringLiteral Scenario = R"({
+    "load_address":"0x190000000","unload":true,
+    "pnp_devices":[{"id":"kmdf-pdo","bus":"register_bank",
+      "initial_device_power":"D0","initial_system_power":"working",
+      "interrupts":[{"id":"framework-interrupt","raw_vector":17,
+        "raw_level":7,"raw_affinity":1,"translated_vector":145,
+        "translated_level":5,"translated_affinity":1,
+        "mode":"latched","share":"device_exclusive"}]}],
+    "requests":[
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"start",
+        "bus_completion":{"status":0}},
+      {"kind":"create","device_id":"kmdf-pdo","file":7},
+      {"kind":"ioctl","device_id":"kmdf-pdo","file":7,
+        "code":"0x222000","output_size":16,"interrupt_events":[{
+          "after_100ns":7,"device_id":"kmdf-pdo",
+          "interrupt_id":"framework-interrupt"}]},
+      {"kind":"cleanup","file":7},{"kind":"close","file":7},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"query_remove",
+        "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"remove",
+        "bus_completion":{"status":0}}]})";
+  std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
+#ifdef NEVERD_KMDF_PNP_CFG_FIXTURE
+  Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
+#endif
+  for (const auto *Image : Images)
+    for (char Mode : {KmdfInterruptLine, KmdfInterruptPassive,
+                      KmdfInterruptPassiveCleanup}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Mode);
+      const std::string Service = KMDFPnpServicePrefix.str() + Mode;
+      auto Options = kmdfPnpOptions(Service.c_str());
+      auto Parsed =
+          llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+              Session, Image, Scenario.data(), &Options)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      ASSERT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 7u);
+      const auto *IO = (*Requests)[2].getAsObject();
+      ASSERT_NE(IO, nullptr);
+      EXPECT_EQ(IO->getString("output_hex"),
+                "01000000010000000100000002000000");
+      const auto *Events = Report->getArray("interrupts");
+      ASSERT_NE(Events, nullptr);
+      ASSERT_EQ(Events->size(), 1u);
+      const auto *Event = Events->front().getAsObject();
+      ASSERT_NE(Event, nullptr);
+      EXPECT_EQ(Event->getInteger("return_value"), 1);
+      EXPECT_TRUE(Event->getInteger("delivered_at_100ns"));
+      EXPECT_TRUE(Event->getInteger("returned_at_100ns"));
+    }
 #else
   GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
 #endif
@@ -3829,12 +3897,17 @@ TEST_F(DriverScenarioPublic, CAPIGSCookieFailureCannotBecomeSuccessfulSEH) {
   Images.push_back(NEVERD_WDM_SEH_CFG_FIXTURE);
 #endif
   for (const auto *Image : Images)
-    for (char Mode : {SehGSCookie, SehGSAlignedCookie, SehGSCorruptCookie,
-                      SehGSAlignedCorruptCookie}) {
+    for (char Mode :
+         {SehGSCookie, SehGSAlignedCookie, SehGSCorruptCookie,
+          SehGSAlignedCorruptCookie, SehGSStandaloneCookie,
+          SehGSStandaloneAlignedCookie, SehGSStandaloneCorruptCookie,
+          SehGSStandaloneAlignedCorruptCookie}) {
       SCOPED_TRACE(Image);
       SCOPED_TRACE(Mode);
-      const bool Corrupt =
-          Mode == SehGSCorruptCookie || Mode == SehGSAlignedCorruptCookie;
+      const bool Corrupt = Mode == SehGSCorruptCookie ||
+                           Mode == SehGSAlignedCorruptCookie ||
+                           Mode == SehGSStandaloneCorruptCookie ||
+                           Mode == SehGSStandaloneAlignedCorruptCookie;
       const std::string Service = std::string("NeverDSEH") + Mode;
       neverd_driver_options_v1 Options{};
       Options.struct_size = sizeof(Options);

@@ -163,7 +163,17 @@ WDM 電源要求は `kind: "power"` と設定済み `device_id` を使います�
 
 [完全な電源シナリオ](../examples/driver-power-scenario.json) を `--scenario` に渡すと、開始、システム query／スリープ／復帰、削除と3件の明示子応答を真正フィクスチャで実行できます。
 
-KMDF 1.33 対応は正確な 1.33.0 ABI を使用します。458 個の関数スロットに安定したゲスト識別子を割り当て、以下の 88 API に実行意味論を実装しています。`WdfVersionBind` と `WdfVersionUnbind` は実際の WDK `FxDriverEntry` ラッパーの前後でゲストのバインドを管理します。`WdfGetDriver` は公開ドライバーグローバル構造を読みます。非 PnP ドライバー、汎用オブジェクト、制御デバイス、キュー、受信要求は、型付きコンテキスト、参照カウント、実際に実行するクリーンアップ／破棄／アンロードコールバックを共有します。モデル化したすべてのフレームワーク呼び出しとコールバックは現在 `PASSIVE_LEVEL` を必要とし、クリーンアップ完了後の新しい参照取得はこのプロファイルの対象外です。未実装スロット、`WdfLdrQueryInterface`、クラス拡張、UMDF は明示的に停止します。
+KMDF 1.33 対応は正確な 1.33.0 ABI を使用します。458 個の関数スロットに安定したゲスト識別子を割り当て、以下の 99 API に実行意味論を実装しています。`WdfVersionBind` と `WdfVersionUnbind` は実際の WDK `FxDriverEntry` ラッパーの前後でゲストのバインドを管理します。`WdfGetDriver` は公開ドライバーグローバル構造を読みます。非 PnP ドライバー、汎用オブジェクト、制御デバイス、キュー、受信要求は、型付きコンテキスト、参照カウント、実際に実行するクリーンアップ／破棄／アンロードコールバックを共有します。割り込み DDI と、対応 IRQL を以下に明記した要求／オブジェクト操作を除き、モデル化したフレームワーク呼び出しとコールバックは `PASSIVE_LEVEL` を必要とし、クリーンアップ完了後の新しい参照取得はこのプロファイルの対象外です。未実装スロット、`WdfLdrQueryInterface`、クラス拡張、UMDF は明示的に停止します。
+
+割り込み API: `WdfInterruptCreate`, `WdfInterruptQueueDpcForIsr`, `WdfInterruptQueueWorkItemForIsr`, `WdfInterruptSynchronize`, `WdfInterruptAcquireLock`, `WdfInterruptReleaseLock`, `WdfInterruptEnable`, `WdfInterruptDisable`, `WdfInterruptWdmGetInterrupt`, `WdfInterruptGetInfo`, `WdfInterruptGetDevice`.
+
+フレームワーク割り込みオブジェクトは、割り当て済みのライン／MSI リソースと内部割り込みロックを共有します。ISR と同期コールバックは割り当てられた DIRQL、パッシブ処理では `PASSIVE_LEVEL` で実行します。`WdfInterruptGetInfo` はパッシブ IRQL を報告します。DPC は `DISPATCH_LEVEL`、ワーク項目は `PASSIVE_LEVEL` で実行します。キュー内の重複登録をまとめ、待機中もコールバックが戻るまで所有権を保持します。電源投入では D0Entry 後に接続・有効化し、電源終了では無効化・切断後に遅延コールバックを排出してから D0Exit とリソース解放に進みます。明示的な有効化／無効化は実際のドライバーコールバックを呼び、ハードウェア割り込みを捏造しません。外部 `WDFSPINLOCK`／`WDFWAITLOCK`、親の自動直列化、ウェイク割り込み、inactive 接続の保持は未対応です。アイドル／ウェイクポリシーと障害デバイスの自動再列挙も対象外です。
+
+次の要求／オブジェクト API は `DISPATCH_LEVEL` 以下の IRQL に対応します：`WdfObjectDereferenceActual`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`, `WdfRequestRetrieveInputMemory`, `WdfRequestRetrieveOutputMemory`, `WdfRequestRetrieveInputWdmMdl`, `WdfRequestRetrieveOutputWdmMdl`, `WdfRequestGetInformation`, `WdfRequestSetInformation`, `WdfRequestGetIoQueue`, `WdfRequestGetFileObject`, `WdfRequestWdmGetIrp`, `WdfRequestGetParameters`, `WdfRequestGetStatus`, `WdfRequestMarkCancelableEx`, `WdfRequestUnmarkCancelable`, `WdfRequestIsCanceled`, `WdfMemoryGetBuffer`.
+
+`WdfObjectGetTypedContextWorker`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual` はモデル化した割り込み IRQL にも対応します。コンテキスト参照と参照カウントの取得はパッシブコールバックを呼び出しません。
+
+`PASSIVE_LEVEL` より高い IRQL での要求完了やオブジェクトの最後の参照解放では、実際のクリーンアップ、破棄、後続のフレームワーク配送を `PASSIVE_LEVEL` にスケジュールします。従来の `WdfRequestMarkCancelable` は、既にキャンセルされた要求のコールバックを同期実行するため、引き続き `PASSIVE_LEVEL` に限定します。その他の API は既存の IRQL 制限を維持します。
 
 制御デバイスには、コピーされた表示可能 ASCII 名と、正確に `D:P(A;;GA;;;WD)` という SDDL が必要です。すべての呼び出し元にアクセスを許可し、呼び出し元トークンを仮定しません。他のセキュリティ記述子、名前なしデバイス、自動命名は未対応です。デバイス初期化は一つの WDM デバイスを所有します。要求は既存のセッション名前空間のシンボリックリンク別名 `\DosDevices\Name` または `\??\Name` でデバイスを選択でき、レポートには正規のデバイス名を保持します。作成成功時は初期化オブジェクトを消費してそのポインターをクリアし、失敗時は部分的なデバイス所有権をロールバックします。`WdfControlFinishInitializing` が I/O 配信を許可します。モデル内のファイル、ワークアイテム、要求が許可する場合にのみ、削除によってデバイスとリンクを除去します。削除時のキャンセルや要求の排出は未対応です。
 
@@ -364,7 +374,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v74` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v75` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 
@@ -372,7 +382,7 @@ JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_su
 
 例外配送は、イメージから復号した x64 バージョン 1 の unwind 表と `__C_specific_handler` のスコープを使い、実際のゲストフィルター、ハンドラー、unwind 中の `__finally` を実行します。フィルターのゼロは検索継続、正値はハンドラー選択、負値は実行継続を要求します。負値で再開できるのは捕捉可能なユーザー CPU メモリー例外だけで、検証済みの `CONTEXT_INTEGER | CONTEXT_CONTROL` の変更のみを適用し、残りの完全な元 CPU 状態を維持します。通常のヘルパーフレームの unwind、保存された非揮発性汎用レジスターの復元、現在のスタック境界、`GetExceptionCode()` に対応します。正常経路の finally と例外 unwind の finally はいずれも実際のゲストコードです。フィルターと finally は親のプロセス／スレッド識別子とユーザーアクセス権を継承し、権限のないシステムワーカーを昇格させません。ハンドラーから対応範囲の外側スコープへ再度例外を発生させることもできます。フィルター／finally 内のネストと衝突 unwind、連鎖 V1 メタデータ、部分プロローグ、標準エピローグ、XMM6–XMM15 全体の復元に対応します。例外レコードのリンクを保持し、開始済み finally は繰り返しません。C++ パーソナリティーと不完全なメタデータは明示的に拒否します。未捕捉の API 例外は `model_error` で停止し、捕捉可能なユーザーメモリー例外以外の CPU 障害は実行を終了します。 定数 `EXCEPTION_EXECUTE_HANDLER` は対応するハンドラーを直接選びます。選択後の unwind でのみ、離れるスコープの finally を実行し、検索中やフィルターによる元の実行再開時にはクリーンアップを実行しません。各フィルターの戻り時に `EXCEPTION_POINTERS`、例外レコード、未対応の `CONTEXT` フィールドを検証し、それらの変更は明示的に失敗します。モデル化した API の例外発生から負のフィルターで再開することは未対応です。
 
-`__GSHandlerCheck_SEH` は検索前と unwind 時にイメージ内の現在のセキュリティ cookie を検証します。finally のないフレームも対象です。固定・動的整列スロット、符号付きオフセット、元のフレームポインターによる符号化に対応し、C ハンドラーフラグと cookie 検証を区別します。プロローグやエピローグでは未確立の cookie を読みません。不一致は対象フィルター、クリーンアップ、ハンドラーの実行前に停止します。単独の `__GSHandlerCheck` と GS/C++ ラッパーは未対応です。`driver_seh_gs.h` の独自フレームはリンクした WDK 検証関数も実行します。
+`__GSHandlerCheck_SEH` は検索前と unwind 時にイメージ内の現在のセキュリティ cookie を検証します。finally のないフレームも対象です。固定・動的整列スロット、符号付きオフセット、元のフレームポインターによる符号化に対応し、C ハンドラーフラグと cookie 検証を区別します。プロローグやエピローグでは未確立の cookie を読みません。不一致は対象フィルター、クリーンアップ、ハンドラーの実行前に停止します。単独の `__GSHandlerCheck` も検索と unwind で cookie を検証し、C スコープを捏造しません。認識には正確なシンボルまたはインポート識別子が必要で、匿名コードを命令パターンから推測しません。GS/C++ ラッパーと C++ 例外 personality は未対応です。`driver_seh_gs.h` の独自フレームはリンクした WDK 検証関数も実行します。
 
 独自の `driver_wdm_seh.c` フィクスチャーは真正 WDK ヘッダーと `/GS-` を使います。通常イメージと有効 CFG イメージには `NEVERD_WDM_SEH_FIXTURE` と `NEVERD_WDM_SEH_CFG_FIXTURE` を設定します。[driver-seh-scenario.json](../examples/driver-seh-scenario.json) の例はイメージを再配置し、DriverEntry 内で API 例外を捕捉してアンロードします。 別個の WDM METHOD_NEITHER 経路では、ユーザープローブ、MDL ロック、捕捉可能なメモリ障害に対応します。
 
@@ -409,6 +419,6 @@ CREATE 要求だけが真偽値 `asynchronous_file: true` を指定できます�
 
 明示的な `messages` は MSI のアドレス、データ、ベクトル、レベル、アフィニティー、極性を定義します。イベントの `message_id` は記述子内、ISR の第3引数は PDO 全体の番号です。`CONNECT_MESSAGE_BASED`（3）は実際のメッセージ表を返します。`CONNECT_MESSAGE_BASED_PASSIVE`（5）とパッシブラインは PASSIVE_LEVEL の待機に対応し、同じ割り込みを直列化しながら他の実行フレームを保持します。到着時刻と配送時刻を別々に記録し、PCI やデバイスプロトコルを推測しません。
 
-`WdfDeviceInitSetPowerPolicyOwnership` は電源ポリシーの所有権を設定します。自己管理 I/O の Init/Suspend/Restart/Flush/Cleanup と D0 前後のコールバックを実行し、通常の D3/D0 ではリソースを保持します。既定ポリシーは Sleeping3/Working を D3/D0 に対応させ、明示的な `requested_device_power` を消費します。子 IRP は独立し、`origin: "framework_power_policy"` と `response_index` を持ちます。S3 は子の完了を待ち、S0 は D0 の発行後に完了できます。アイドル／ウェイク、WDF 割り込みオブジェクト、自動再列挙は未対応です。
+`WdfDeviceInitSetPowerPolicyOwnership` は電源ポリシーの所有権を設定します。自己管理 I/O の Init/Suspend/Restart/Flush/Cleanup と D0 前後のコールバックを実行し、通常の D3/D0 ではリソースを保持します。既定ポリシーは Sleeping3/Working を D3/D0 に対応させ、明示的な `requested_device_power` を消費します。子 IRP は独立し、`origin: "framework_power_policy"` と `response_index` を持ちます。S3 は子の完了を待ち、S0 は D0 の発行後に完了できます。アイドル／ウェイク、自動再列挙は未対応です。
 
 システム Query は対応するデバイス Query を待ち、その結果を返します。問い合わせ自体は電源状態を変更しません。

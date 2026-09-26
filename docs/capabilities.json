@@ -3487,7 +3487,10 @@
       "limitations": [
         "Independent MDL pages support MmAllocatePagesForMdl/Ex, MmFreePagesFromMdl and MmProtectMdlSystemAddress over the bounded physical arena. Range/chunk constraints, cache identity, partial ownership, user/system aliases and release dependencies share existing physical-page authority. KernelMode pool locks make precisely pinned paged memory resident; backend page permissions remain authoritative for all mapping views.",
         "Message interrupt assignments preserve explicit per-message addresses/data/vectors/levels/affinity/polarity. PDO-wide message registration exposes real read-only interrupt tables and independent or unified synchronization. Passive ISR waits retain ownership, serialize repeated arrivals and allow independent frames and DPCs to progress; occurrence and delivery timestamps remain distinct.",
-        "KernelFrameworkPower sequences self-managed Init/Suspend/Restart/Flush/Cleanup and pre/post interrupt D0 callbacks. Ordinary device D3/D0 retains resources. Default FDO power policy consumes explicit requested_device_power templates for Sleeping3/Working Query/Set device children, reporting framework_power_policy origins and response indices. Idle/wake, WDF interrupt objects and automatic failed-device reenumeration are not modeled.",
+        "KMDF 1.33 implements 99 table APIs, including WdfInterruptCreate, WdfInterruptQueueDpcForIsr, WdfInterruptQueueWorkItemForIsr, WdfInterruptSynchronize, WdfInterruptAcquireLock, WdfInterruptReleaseLock, WdfInterruptEnable, WdfInterruptDisable, WdfInterruptWdmGetInterrupt, WdfInterruptGetInfo and WdfInterruptGetDevice. Framework interrupt objects use assigned line/MSI resources and existing WDM connection, epoch, lock and IRQL authority. ISR/synchronization run at assigned DIRQL or PASSIVE_LEVEL; passive GetInfo reports PASSIVE_LEVEL. Excess objects remain unassigned. Explicit enable/disable invokes genuine driver callbacks without inventing hardware pulses.",
+        "WDF interrupt DPCs and work items have distinct scheduler identities while sharing the existing DPC/worker FIFOs and budgets. Queued duplicates coalesce; active/suspended ownership remains until actual return. D0 entry precedes connection/enable, and shutdown disables/disconnects then drains deferred callbacks before D0 exit and resource release. Exact framework continuation tokens preserve full enable/disable NTSTATUS results. External WDFSPINLOCK/WDFWAITLOCK, automatic parent serialization, wake interrupts, retained inactive connections, broader idle/wake policy and automatic failed-device reenumeration remain unsupported.",
+        "WDF request/object APIs explicitly supported through DISPATCH_LEVEL are WdfObjectDereferenceActual, WdfRequestComplete, WdfRequestCompleteWithInformation, WdfRequestRetrieveInputBuffer, WdfRequestRetrieveOutputBuffer, WdfRequestRetrieveInputMemory, WdfRequestRetrieveOutputMemory, WdfRequestRetrieveInputWdmMdl, WdfRequestRetrieveOutputWdmMdl, WdfRequestGetInformation, WdfRequestSetInformation, WdfRequestGetIoQueue, WdfRequestGetFileObject, WdfRequestWdmGetIrp, WdfRequestGetParameters, WdfRequestGetStatus, WdfRequestMarkCancelableEx, WdfRequestUnmarkCancelable, WdfRequestIsCanceled, WdfMemoryGetBuffer. WdfObjectGetTypedContextWorker, WdfObjectContextGetObject and WdfObjectReferenceActual also support modeled interrupt IRQLs without invoking passive callbacks. Request completion and final object dereference above PASSIVE_LEVEL schedule actual cleanup, destruction and subsequent framework delivery in a separate FrameworkPassive continuation at PASSIVE_LEVEL. Its WDM device ownership persists through queueing, suspension, nested callbacks and final scheduler retirement. Legacy WdfRequestMarkCancelable remains PASSIVE_LEVEL-only to preserve synchronous callbacks for already-canceled requests; all other APIs retain their existing IRQL restrictions. The genuine WDK driver_kmdf_pnp.c interrupt extension covers normal/CFG and preferred/rebased line, MSI, passive, PrepareHardware creation, enable failure and reconnection; optional artifacts reuse NEVERD_KMDF_PNP_FIXTURE and NEVERD_KMDF_PNP_CFG_FIXTURE. Linux-only execution does not establish general WDF compatibility.",
+        "KernelFrameworkPower sequences self-managed Init/Suspend/Restart/Flush/Cleanup and pre/post interrupt D0 callbacks. Ordinary device D3/D0 retains resources. Default FDO power policy consumes explicit requested_device_power templates for Sleeping3/Working Query/Set device children, reporting framework_power_policy origins and response indices. Idle/wake and automatic failed-device reenumeration are not modeled.",
         "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested create, buffered/direct IOCTL, read/write, cleanup, close, configured AddDevice/resource-free or register-bank PnP, explicit pageable Query/Set power and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
         "WDM stacks contain guest-owned DEVICE_OBJECTs and optionally a separately owned scenario PDO. IoAttachDeviceToDeviceStack returns the previous top and derives StackSize/AlignmentRequirement without changing the NextDevice inventory or buffer flags. IoDetachDevice receives the saved lower at PASSIVE_LEVEL; attach permits DISPATCH_LEVEL. Named lower FILE_OBJECT/report identity stays distinct from top dispatch and top READ/WRITE flags; retained routes survive detach/delete through dispatch return. Internal holds do not inflate the open-handle ReferenceCount.",
@@ -3502,9 +3505,9 @@
         "Reports preserve configuration.pnp_devices and observed pnp_devices id/pdo/add_device_status/attached/pnp_state/provider_present. Attached is current and false after removal. AddDevice failures affect scenario_success without replacing DriverEntry nt_status. Requests add nullable device_id/pnp; PnP file is null, with minor/state_before/state_after and nullable bus_status/bus_received_at_100ns/bus_completed_at_100ns. Configured status appears only at actual bus completion; receipt time is independent and legacy field types are preserved.",
         "Original genuine-WDK driver_wdm_pnp.c uses optional NEVERD_WDM_PNP_FIXTURE/NEVERD_WDM_PNP_CFG_FIXTURE; native normal/active-CFG rebasing covers AddDevice, file I/O, orderly/delayed removal, start/query failure and clean/leaking AddDevice failure. C API/CLI test seven-request delayed PnP reports. Missing artifacts skip explicitly; evidence remains Linux-only and does not establish general PnP/power support. Additional native cases exercise query-stop/cancel-stop/stop/restart, surprise removal, software I/O in pause/remove-pending states, guest failure after surprise, independent PDO/file identities, mixed AddDevice outcomes and an independent control device. C API/CLI normal/CFG execution also covers a 16-request stop/restart/surprise sequence and preflight rejection of resource requery.",
         "KMDF caller-context preprocessing for buffered/direct/neither READ, WRITE and IOCTL runs at PASSIVE_LEVEL in the requestor process; the callback must complete or explicitly enqueue once before the configured default queue delivers I/O. For METHOD_NEITHER and neither READ/WRITE, unsafe accessors expose original scenario user buffers only there; WDF probe-and-lock checks page rights, pins request-owned physical bytes, and WdfMemoryGetBuffer returns a system alias usable by the queue outside requestor context. Completion releases aliases and pins; declared user_buffers support embedded pointers within the current request, while arbitrary user mappings remain unsupported.",
-        "KMDF 1.33 exact-version binding preserves real FxDriverEntry execution, separate WDFLDR module identity and 458 distinct function-table entries; only 87 documented table APIs plus WdfVersionBind/WdfVersionUnbind are modeled, and other reached entries remain unsupported_api traps; downlevel negotiation, class extensions and WdfLdrQueryInterface are unsupported",
-        "KMDF non-PnP drivers, generic objects, control devices, manual, sequential and finite or unlimited parallel default and nondefault queues, and incoming requests share typed contexts and guest cleanup/destroy callbacks at PASSIVE_LEVEL; nested continuations preserve caller CPU state and stack. Failed DriverEntry unregister cleans objects without EvtDriverUnload; adding references after cleanup is unsupported. Direct KMDF FDO/PDO pairs support resource-free and configured register-bank devices; WDF interrupt objects and automatic synchronization remain unmodeled; Managed PnP queues invoke EvtIoStop for driver-owned requests before D0 exit; WdfRequestStopAcknowledge requeues for delivery after restart or retains ownership for EvtIoResume after D0 entry. Framework-queued requests stay parked through STOP. Returning without completion or acknowledgment waits for the request to finish; a transition with no available completion producer stalls explicitly.",
-        "KMDF PnP drivers execute EvtDriverDeviceAdd once per configured PDO with a framework-owned initializer. WdfDeviceCreate builds the direct FDO/PDO pair; WdfDeviceInitSetDeviceType passes an optional 32-bit device type to the authoritative WDM DEVICE_OBJECT creator, defaulting to FILE_DEVICE_UNKNOWN; WdfDeviceInitSetExclusive passes the initial DO_EXCLUSIVE flag to that same device creator, but an exclusive PnP FDO does not make the named PDO or whole stack exclusive; IoCreateDevice also stores caller-supplied system or vendor device types as metadata, without modeling type-specific I/O priority boosts; WdfFdoInitWdmGetPhysicalDevice, WdfDeviceWdmGetPhysicalDevice, WdfDeviceWdmGetAttachedDevice, WdfWdmDeviceGetWdfDeviceHandle and WdfDeviceGetDriver preserve provider, stack and binding identity. A failed AddDevice automatically deletes created WDF devices and runs cleanup/destroy callbacks before provider retirement. Completed Remove runs WDF deletion before captured-route and PDO retirement. PnP queues accept WdfUseDefault/WdfTrue power management or WdfFalse driver-managed dispatch. WdfDeviceInitSetPnpPowerEventCallbacks accepts PrepareHardware, D0Entry, D0Exit, ReleaseHardware, QueryStop, QueryRemove and SurpriseRemoval in the exact 144-byte KMDF 1.33 structure. Resource-free WDFCMRESLIST handles support GetCount=0 and GetDescriptor=NULL; configured register-bank lists expose read-only raw/translated CM_PARTIAL_RESOURCE_DESCRIPTOR entries through ReleaseHardware, then retire their guest storage. After provider START, PrepareHardware precedes D0Entry before IRP completion; failed PrepareHardware or D0Entry becomes the START status and still runs ReleaseHardware. STOP, surprise removal or removal from D0 runs D0Exit then ReleaseHardware before completion. Power-managed queues report WdfIoQueuePnpHeld outside D0. Before D0Exit, power-managed queues wait for driver-owned requests to complete: EvtIoStop may complete, acknowledge or return while an existing worker finishes the request, and a queue without EvtIoStop also waits. True acknowledgment requeues for delivery after restart, while false retains ownership for EvtIoResume after D0Entry. A request with no completion producer stalls explicitly. Framework-queued requests resume delivery after START, including without hardware callbacks. QueryStop/QueryRemove run before the bus and may wait or reject the query without a bus observation or power transition; STATUS_PENDING and STATUS_NOT_SUPPORTED are invalid callback results. SurpriseRemoval is a void notification before lower forwarding. Unmodeled resource types, resource mutation, WDF interrupt objects and other PnP events remain unsupported. A genuine WDK driver maps translated memory with MmMapIoSpace in PrepareHardware, unmaps it in ReleaseHardware, and final PnP completion rejects leaked mappings. The original WDK-linked driver_kmdf_pnp.c fixture covers normal/active-CFG rebasing, successful and failed AddDevice, start/file I/O/remove/unload and optional EvtDriverUnload via native and C API/CLI tests; evidence remains Linux-only.",
+        "KMDF 1.33 exact-version binding preserves real FxDriverEntry execution, separate WDFLDR module identity and 458 distinct function-table entries; only 99 documented table APIs plus WdfVersionBind/WdfVersionUnbind are modeled, and other reached entries remain unsupported_api traps; downlevel negotiation, class extensions and WdfLdrQueryInterface are unsupported",
+        "KMDF non-PnP drivers, generic objects, control devices, manual, sequential and finite or unlimited parallel default and nondefault queues, and incoming requests share typed contexts and guest cleanup/destroy callbacks at PASSIVE_LEVEL; nested continuations preserve caller CPU state and stack. Failed DriverEntry unregister cleans objects without EvtDriverUnload; adding references after cleanup is unsupported. Direct KMDF FDO/PDO pairs support resource-free and configured register-bank devices; automatic parent synchronization remains unmodeled; Managed PnP queues invoke EvtIoStop for driver-owned requests before D0 exit; WdfRequestStopAcknowledge requeues for delivery after restart or retains ownership for EvtIoResume after D0 entry. Framework-queued requests stay parked through STOP. Returning without completion or acknowledgment waits for the request to finish; a transition with no available completion producer stalls explicitly.",
+        "KMDF PnP drivers execute EvtDriverDeviceAdd once per configured PDO with a framework-owned initializer. WdfDeviceCreate builds the direct FDO/PDO pair; WdfDeviceInitSetDeviceType passes an optional 32-bit device type to the authoritative WDM DEVICE_OBJECT creator, defaulting to FILE_DEVICE_UNKNOWN; WdfDeviceInitSetExclusive passes the initial DO_EXCLUSIVE flag to that same device creator, but an exclusive PnP FDO does not make the named PDO or whole stack exclusive; IoCreateDevice also stores caller-supplied system or vendor device types as metadata, without modeling type-specific I/O priority boosts; WdfFdoInitWdmGetPhysicalDevice, WdfDeviceWdmGetPhysicalDevice, WdfDeviceWdmGetAttachedDevice, WdfWdmDeviceGetWdfDeviceHandle and WdfDeviceGetDriver preserve provider, stack and binding identity. A failed AddDevice automatically deletes created WDF devices and runs cleanup/destroy callbacks before provider retirement. Completed Remove runs WDF deletion before captured-route and PDO retirement. PnP queues accept WdfUseDefault/WdfTrue power management or WdfFalse driver-managed dispatch. WdfDeviceInitSetPnpPowerEventCallbacks accepts PrepareHardware, D0Entry, D0Exit, ReleaseHardware, QueryStop, QueryRemove and SurpriseRemoval in the exact 144-byte KMDF 1.33 structure. Resource-free WDFCMRESLIST handles support GetCount=0 and GetDescriptor=NULL; configured register-bank lists expose read-only raw/translated CM_PARTIAL_RESOURCE_DESCRIPTOR entries through ReleaseHardware, then retire their guest storage. After provider START, PrepareHardware precedes D0Entry before IRP completion; failed PrepareHardware or D0Entry becomes the START status and still runs ReleaseHardware. STOP, surprise removal or removal from D0 runs D0Exit then ReleaseHardware before completion. Power-managed queues report WdfIoQueuePnpHeld outside D0. Before D0Exit, power-managed queues wait for driver-owned requests to complete: EvtIoStop may complete, acknowledge or return while an existing worker finishes the request, and a queue without EvtIoStop also waits. True acknowledgment requeues for delivery after restart, while false retains ownership for EvtIoResume after D0Entry. A request with no completion producer stalls explicitly. Framework-queued requests resume delivery after START, including without hardware callbacks. QueryStop/QueryRemove run before the bus and may wait or reject the query without a bus observation or power transition; STATUS_PENDING and STATUS_NOT_SUPPORTED are invalid callback results. SurpriseRemoval is a void notification before lower forwarding. Unmodeled resource types, resource mutation, other PnP events remain unsupported. A genuine WDK driver maps translated memory with MmMapIoSpace in PrepareHardware, unmaps it in ReleaseHardware, and final PnP completion rejects leaked mappings. The original WDK-linked driver_kmdf_pnp.c fixture covers normal/active-CFG rebasing, successful and failed AddDevice, start/file I/O/remove/unload and optional EvtDriverUnload via native and C API/CLI tests; evidence remains Linux-only.",
         "Control devices require a copied printable-ASCII name and exact universal-access SDDL D:P(A;;GA;;;WD); other DACLs need an unmodeled caller token. WdfDeviceInitSetExclusive makes a named control device exclusive until its first open file closes; the open check uses the named object rather than the upper dispatch target. Initializers are consumed only on success, partial creation is rolled back, and device/link ownership uses the WDM namespace; FinishInitializing gates delivery. Pending I/O or other live references prevent unsupported deletion/draining.",
         "The 96-byte WDF_IO_QUEUE_CONFIG supports manual, sequential and finite or unlimited parallel default and nondefault queues with explicit passive/no-synchronization attributes; control-device queues are not power-managed, while PnP queues honor their tri-state power policy. Parallel dispatch uses NumberOfPresentedRequests=-1 for unlimited delivery or a positive finite limit. Requests beyond a finite or sequential presentation limit wait in FIFO order until a presented request completes, leaves the queue or is canceled. A manual default queue retains incoming requests without callback delivery. WdfIoQueueStop pauses delivery while still accepting requests; WdfIoQueueStart resumes waiting automatic callbacks, and WdfIoQueueGetState reports queued/delivered counts and readiness bits. Retrieval while stopped returns STATUS_WDF_PAUSED; a stop-completion callback receives its context after all previously delivered requests complete or leave the queue, while queued waiters do not block it; duplicate pending callback registration fails explicitly. WdfIoQueueDrain rejects new arrivals with STATUS_INVALID_DEVICE_STATE while delivering already queued requests; its callback waits for both queued and driver-owned counts to reach zero, forwarding into a drained queue returns STATUS_WDF_BUSY, and WdfIoQueueStart restores acceptance. WdfIoQueuePurge also rejects arrivals, completes queued requests with STATUS_CANCELLED after cleanup, requests cancellation of marked driver-owned IRPs through their callbacks, and notifies only after queued, driver-owned and active cancel callback work has finished. WdfIoQueueStopSynchronously, WdfIoQueueDrainSynchronously and WdfIoQueuePurgeSynchronously suspend the caller until their respective delivered or queued-and-delivered work retires; purge waits through marked-request cancellation callbacks. A synchronous wait with no completion producer fails explicitly as stalled. WdfIoQueueStopAndPurge and WdfIoQueueStopAndPurgeSynchronously cancel requests queued at call time and marked driver-owned requests while keeping acceptance enabled and delivery paused. Later arrivals remain queued and do not delay the state callback or synchronous wait. Stop and StopSynchronously restore acceptance after a prior drain or purge. WdfRequestForwardToIoQueue transfers driver ownership to another same-device queue; an automatic destination presents its own matching callback when capacity permits, or completes with STATUS_INVALID_DEVICE_REQUEST after a slot opens if no handler matches. WdfIoQueueRetrieveNextRequest restores ownership from manual or sequential queues in FIFO order and returns STATUS_NO_MORE_ENTRIES with NULL when empty; parallel retrieval returns STATUS_INVALID_DEVICE_STATE. WdfRequestRequeue puts an unmarked retrieved request at the head of its manual queue. Cancellation of a still-queued request removes it and completes with STATUS_CANCELLED, executing cleanup callbacks before IRP retirement. Accepted requests mark the same IRP pending and return STATUS_PENDING independently of void callback RAX. Default file handling completes CREATE/CLEANUP/CLOSE with Information=0; zero READ/WRITE and missing default-queue handlers follow explicit framework policy.",
         "WdfIoQueueReadyNotify registers one EvtIoQueueState callback for a manual queue; it receives WDFQUEUE and WDFCONTEXT at PASSIVE_LEVEL when the queued count changes from empty to nonempty, including while earlier retrieved requests remain driver-owned. Registration on a nonempty queue may notify immediately, while a stopped queue defers until Start. Duplicate registration or deregistration before Stop returns STATUS_INVALID_DEVICE_REQUEST; NULL deregisters after Stop.",
@@ -3522,7 +3525,7 @@
         "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; buffered/direct/neither requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; arbitrary concurrent public scenario submissions and PnP request cancellation, APCs, general KMDF PnP devices and driver-held queue power transitions, UMDF, full PnP/power, other interrupt modes, general hardware and other DMA interfaces remain unsupported",
         "defer_callback_drain is a strict WDM or supported KMDF READ/WRITE/IOCTL Boolean that requires its dispatch to leave an IRP pending. It permits the next request on another file or the same asynchronous file to be submitted before callback draining; the next ordinary request or scenario end drains and finalizes the batch. Synchronous-file overlap, arbitrary thread preemption and external request arrival remain unsupported.",
         "CREATE-only asynchronous_file sets an asynchronous FILE_OBJECT, clearing FO_SYNCHRONOUS_IO and omitting IRP_SYNCHRONOUS_API on its file IRPs. Such a file admits overlapping READ/WRITE/IOCTL transfers during explicit deferred draining, but CLEANUP/CLOSE require prior transfers to finalize. The model does not advance an implicit current byte offset on asynchronous files; byte_offset remains per request with zero default. Non-CREATE use of the field is rejected even when false. Synthetic, genuine WDK, C API and CLI cases cover this bounded same-file overlap.",
-        "wdm-x64-scheduled-v72 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers and system threads execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "wdm-x64-scheduled-v75 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers and system threads execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "PsCreateSystemThread admits bounded system-process threads with NULL ProcessHandle/ClientId and NULL or kernel-handle-only object attributes. Separate kernel handles and opaque thread-object pointers survive ZwClose and ObReferenceObjectByHandle until ObDereferenceObject; KeWaitForSingleObject observes nonalertable termination. PsTerminateSystemThread ends its own guest execution without returning, publishes exit status and signals the thread object. A normal start-routine return fails. Process identity is system PID 4 unless the thread explicitly attaches to a live requestor. General APC delivery, thread priorities, non-system process handles and typed object references remain unsupported.",
         "KeInitializeSpinLock and five executive acquire/release/try APIs model resident, aligned x64 locks on CPU0. Ownership belongs to one guest execution, matching release variants restore the saved IRQL, and try-acquire returns false for a held lock. Guest writes, premature freeing, return or suspension while held stop explicitly. Contended blocking acquisition cannot progress in this cooperative profile and stops rather than spinning indefinitely; in-stack queued locks and cross-CPU contention remain unsupported.",
         "The x64 WDK KeRaiseIrql macros and KeRaiseIrqlToDpcLevel/SynchLevel inline helpers call KfRaiseIrql; KeLowerIrql restores its returned value. The model accepts nested nondecreasing raises through HIGH_LEVEL on one execution, requires exact LIFO restoration, rejects lowering under a held lock, and rejects callback return or suspension with unmatched raises. API boundaries synchronize CR8 and inlined KeGetCurrentIrql observes the new value. This is deterministic CPU0 state, without instruction-level interrupt preemption or a general multiprocessor HAL.",
@@ -3584,7 +3587,7 @@
         "The original genuine-WDK driver_wdm_dma_channel.c and optional NEVERD_WDM_DMA_CHANNEL_FIXTURE/NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE exercise real translated bus-master channel calls, aggregate fragments, retained-register reuse and shared common/SG/channel admission. Native normal/CFG/rebased runs and the seven-request C API/CLI example validate the bounded profile; Python uses the same scenario_json interface. Missing fixtures skip explicitly and evidence remains Linux-only.",
         "ExRaiseStatus, ExRaiseAccessViolation and ExRaiseDatatypeMisalignment produce typed guest exceptions without a normal API return. ExRaiseStatus uses only the low NTSTATUS dword; the wrappers use STATUS_ACCESS_VIOLATION and STATUS_DATATYPE_MISALIGNMENT. The selected profile follows the individual Microsoft DDI ceilings APC_LEVEL for ExRaiseStatus and PASSIVE_LEVEL for the wrappers, while acknowledging that some WDK SAL annotations permit APC_LEVEL for the wrappers. API traces retain a null result and record the raised code in detail.",
         "KernelSEH plans bounded x64 version-one C search/unwind over existing loader metadata, executes real guest filters and exited finally callbacks, and restores supported nonvolatile GPR saves across helpers. Filters receive stable exception/context records on a private stack; original full CPU state survives callbacks. Zero searches, positive selects a handler, and negative can resume an admitted user read/write CPU fault with validated INTEGER/CONTROL changes. Parent thread/process identity and existing user-access authority are preserved, without granting authority to unrelated workers. Actual handlers and enclosing-handler reraises execute. Nested filters and collided finally unwinding preserve explicit logical stack segments and linked exception records. Validated chains, partial prologues, canonical epilogues and complete XMM6-XMM15 restores are supported. API-raise continuation, GS/C++ personalities and incomplete records fail explicitly. Uncaught API/user exceptions are model_error; unrelated backend faults remain terminal. METHOD_NEITHER uses explicit requestor-owned user buffers, checked probes, independent MDL locks and shared kernel aliases; KMDF caller-context accessors and locked WDFMEMORY retain the same ownership rules.",
-        "The original genuine-WDK driver_wdm_seh.c with /GS- C routines and explicit GS assembly uses optional NEVERD_WDM_SEH_FIXTURE and NEVERD_WDM_SEH_CFG_FIXTURE. Native normal/active-CFG/rebased cases exercise all three exports, helper nonvolatile restoration, nested and reraised handlers, real filter/search/unwind ordering, guest exception records, supported CPU-fault continuation, full CPU restoration and foreground/worker/attached-worker identity and authority. __GSHandlerCheck_SEH validates fixed and dynamically aligned stack cookies during search and again during unwind, with flags separate from wrapped C handlers. Original GS frames also execute the linked WDK checker; native, C API and Python distinguish valid cookies from corruption before handler execution. Standalone GS and C++ personalities remain unsupported. Nested filters and collided finally callbacks execute; unrelated CPU faults fail explicitly. C API/CLI runs docs/examples/driver-seh-scenario.json with null raised-call results and actual handler messages. pluginsdk/python/tests/test_driver_seh_integration.py uses the existing JSON binding and optional NEVERD_TEST_LIBNEVERD / NEVERD_TEST_WDM_SEH_FIXTURE / NEVERD_TEST_WDM_SEH_CFG_FIXTURE inputs. Missing fixtures skip explicitly; evidence is Linux-only and does not establish general SEH.",
+        "The original genuine-WDK driver_wdm_seh.c with /GS- C routines and explicit GS assembly uses optional NEVERD_WDM_SEH_FIXTURE and NEVERD_WDM_SEH_CFG_FIXTURE. Native normal/active-CFG/rebased cases exercise all three exports, helper nonvolatile restoration, nested and reraised handlers, real filter/search/unwind ordering, guest exception records, supported CPU-fault continuation, full CPU restoration and foreground/worker/attached-worker identity and authority. __GSHandlerCheck_SEH validates fixed and dynamically aligned stack cookies during search and again during unwind, with flags separate from wrapped C handlers. Original GS frames also execute the linked WDK checker; native, C API and Python distinguish valid cookies from corruption before handler execution. Standalone __GSHandlerCheck validates cookie-only frames during search and unwind without adding C scopes. Exact symbol or import identity is required; anonymous instruction patterns and cookie-shaped payloads do not establish this personality. GS/C++ wrappers and C++ exception personalities remain unsupported. Nested filters and collided finally callbacks execute; unrelated CPU faults fail explicitly. C API/CLI runs docs/examples/driver-seh-scenario.json with null raised-call results and actual handler messages. pluginsdk/python/tests/test_driver_seh_integration.py uses the existing JSON binding and optional NEVERD_TEST_LIBNEVERD / NEVERD_TEST_WDM_SEH_FIXTURE / NEVERD_TEST_WDM_SEH_CFG_FIXTURE inputs. Missing fixtures skip explicitly; evidence is Linux-only and does not establish general SEH.",
         "The original genuine-WDK driver_wdm_neither.c uses optional NEVERD_WDM_NEITHER_FIXTURE and NEVERD_WDM_NEITHER_CFG_FIXTURE. Native normal/active-CFG and preferred/rebased runs verify six packet/probe/CPU-fault/locked-MDL paths. Backend and request-owner tests verify shared alias bytes, independent pins, write protection, completion output and terminal kernel faults. C API/CLI and Python execute docs/examples/driver-neither-scenario.json and verify plain and locked-alias output bytes. Missing external images skip explicitly; Linux evidence does not establish arbitrary Windows process memory.",
         "A nonempty WDM METHOD_NEITHER IOCTL may independently set user_input_access and user_output_access to read_write (default), read_only or no_access. These explicit page facts are applied after buffer initialization and before guest dispatch. No-access still retains a non-NULL caller pointer and RAM backing, so ProbeForRead can pass its numerical check before a CPU read faults, while ProbeForWrite and MmProbeAndLockPages raise access violations according to page rights. Strict JSON/native validation rejects rights on buffered/direct IOCTLs, wrong directions, empty buffers, unknown values and wrong types. The original WDK fixture runs CPU/probe/MDL negative paths through normal/CFG and preferred/rebased images; C/CLI/Python observe completed failing statuses without terminal backend faults. Caller-context restrictions keep raw user pointers unavailable in ordinary workers; a work item with a live requesting IRP can explicitly attach to that process for bounded raw user-memory access, while locked MDL system aliases remain independently usable. Optional user_unmap_after_dispatch revokes original and declared user virtual access after dispatch returns and before queued work/cancellation; locked MDL aliases retain physical bytes and an unmapped output has no caller-visible output_hex. Synthetic requestor_process_id distinguishes bounded caller contexts; IoGetRequestorProcessId retains the file IRP identity and PsGetCurrentProcessId distinguishes foreground from modeled system work-item execution. requestor_exit_after_dispatch revokes every original and declared VA of that identity before callbacks, while pinned MDL aliases can still complete or cancel. Later new I/O from an exited identity is rejected; explicit CLEANUP/CLOSE remain available, with no inferred handle rundown or cancellation. Arbitrary process address spaces, attachment outside system work items, unmap timing and reuse of original scenario allocation addresses remain unsupported.",
         "READ/WRITE on a WDM device with neither DO_BUFFERED_IO nor DO_DIRECT_IO uses the original caller address only through IRP.UserBuffer. WRITE carries initialized user input and READ a separate user output; neither creates a SystemBuffer or implicit MDL. User page rights apply to WRITE input or READ output only, and explicit rights on a buffered/direct device stop before guest dispatch. A genuine WDK normal/CFG fixture probes and accesses both directions under x64 SEH, including read-only/no-access failures, at preferred and rebased image addresses. C API, CLI and Python observe the same report bytes and request statuses. Deferred raw access still requires locking; general process address spaces remain unsupported.",
@@ -8482,6 +8485,240 @@
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/KernelDMABridgeTests.cpp",
           "filter": "KernelDMABridge.ActivePartialDmaRejectsFreeRebuildAndCompletionWithoutMutation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.AutomaticPowerCallbacksBracketD0AndResources",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.EnableFailureUnwindsPriorInterruptsAndPreservesStatus",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.InterruptWithoutPowerCallbacksStillConnectsAndDisconnects",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.ExcessObjectsRemainUnassigned",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.DeferredCallbackCoalescesAndDrainsBeforeD0Exit",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.InvalidConfigurationDoesNotPublishAnObject",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.CreationAfterStartIsRejectedBeforeMutation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.GetInfoEnforcesIRQLAndResourceLifetime",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.SynchronizeReturnsOnlyActualBooleanByte",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkInterruptTests.cpp",
+          "filter": "DriverKernelFrameworkInterrupt.ConnectedObjectCannotBeDeleted",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.FrameworkServiceArgumentsRetainAssignedInterruptAndLockOwnership",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.FrameworkPassiveLocksRetainWaitersAndAllowOtherOwners",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.FrameworkMessageSelectionUsesDescriptorOrdinals",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSchedulerTests.cpp",
+          "filter": "DriverKernelScheduler.FrameworkInterruptCallbacksCoalesceWithoutAliasingKernelObjects",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSchedulerTests.cpp",
+          "filter": "DriverKernelScheduler.FrameworkInterruptCoalescingDoesNotConsumeCapacityOrIdentities",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSchedulerTests.cpp",
+          "filter": "DriverKernelScheduler.FrameworkPassiveContinuationsRetainIdentityAndWorkerOrdering",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.StandaloneGSChecksWithoutInventingLanguageScopes",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.StandaloneGSUnwindOnlyChecksAfterOuterFilterSelection",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.StandaloneGSRejectsMissingCookieAndExtraLanguageTables",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMSEHTests.cpp",
+          "filter": "DriverWDMSEH.StandaloneRuntimeIdentityPreservesCookieOnlyMetadata",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFPnpTests.cpp",
+          "filter": "DriverKMDFPnp.FrameworkInterruptsExecuteRealDirqlAndPassiveCallbacks",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFPnpTests.cpp",
+          "filter": "DriverKMDFPnp.FailedInterruptEnableUnwindsPreparedDevice",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFPnpTests.cpp",
+          "filter": "DriverKMDFPnp.FrameworkInterruptReconnectsAfterStopAndRestart",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/COFFExceptionGSTests.cpp",
+          "filter": "COFFExceptionParser.StandaloneGSDecodesOnlyItsCookiePayload",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/COFFExceptionGSTests.cpp",
+          "filter": "COFFExceptionParser.StandaloneGSRejectsTruncatedAlignedCookie",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/COFFExceptionGSTests.cpp",
+          "filter": "COFFExceptionParser.CookieShapedDataDoesNotIdentifyAnUnnamedPersonality",
           "platforms": [
             "linux"
           ]

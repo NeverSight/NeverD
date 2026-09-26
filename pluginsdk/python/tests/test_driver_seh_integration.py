@@ -90,11 +90,11 @@ class DriverSEHIntegrationTests(unittest.TestCase):
 
     def test_gs_cookie_success_and_corruption_in_fixed_and_aligned_frames(self) -> None:
         for variant, fixture in self.fixtures:
-            for mode in ("g", "a", "b", "d"):
+            for mode in ("g", "a", "b", "d", "s", "t", "u", "v"):
                 with self.subTest(variant=variant, mode=mode):
                     result = self._run(fixture, mode)
                     self.assertNotEqual(int(result["security_cookie"], 16), 0)
-                    if mode in ("g", "a"):
+                    if mode in ("g", "a", "s", "t"):
                         self._success(result, mode, ["ExRaiseAccessViolation"])
                         self.assertTrue(any("GS cookie checked" in m
                                             for m in result["messages"]))

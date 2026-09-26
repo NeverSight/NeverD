@@ -191,6 +191,8 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
   const auto Kind = Scheduler.active()->Kind;
   if (Kind != KernelScheduler::CallbackKind::FrameworkCancel &&
       Kind != KernelScheduler::CallbackKind::FrameworkCompletion &&
+      Kind != KernelScheduler::CallbackKind::FrameworkPassive &&
+      !KernelScheduler::isFrameworkInterruptCallbackKind(Kind) &&
       Kind != KernelScheduler::CallbackKind::WDMCompletion &&
       Kind != KernelScheduler::CallbackKind::Interrupt &&
       !KernelScheduler::isDMACallbackKind(Kind))
@@ -200,13 +202,22 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
     return cancellationError("scheduled callback lost its model continuation");
   const auto ExpectedOwner =
       (Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
-       Kind == KernelScheduler::CallbackKind::FrameworkCompletion)
+       Kind == KernelScheduler::CallbackKind::FrameworkCompletion ||
+       Kind == KernelScheduler::CallbackKind::FrameworkPassive ||
+       KernelScheduler::isFrameworkInterruptCallbackKind(Kind))
           ? GuestCallOwner::Framework
       : Kind == KernelScheduler::CallbackKind::Interrupt
           ? GuestCallOwner::Interrupt
       : KernelScheduler::isDMACallbackKind(Kind) ? GuestCallOwner::DMA
                                                  : GuestCallOwner::WDM;
-  if (Token->second.Owner != ExpectedOwner)
+  auto IsFrameworkCall = [&](GuestCallToken Call) {
+    return Call.Owner == GuestCallOwner::Framework ||
+           (Call.Owner == GuestCallOwner::Interrupt &&
+            FrameworkInterruptContinuations.contains(Call.ID));
+  };
+  if (ExpectedOwner == GuestCallOwner::Framework
+          ? !IsFrameworkCall(Token->second)
+          : Token->second.Owner != ExpectedOwner)
     return cancellationError(
         "scheduled callback has a foreign continuation owner");
   auto Result = finishGuestCall(Token->second, ReturnValue);
@@ -217,9 +228,14 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
     return std::optional<KernelGuestCall>{};
   }
   auto Call = takeGuestCall();
-  if (!Call || Call->Token.Owner != Token->second.Owner ||
-      Call->Token.ID != Token->second.ID)
+  if (!Call || (ExpectedOwner == GuestCallOwner::Framework
+                    ? !IsFrameworkCall(Call->Token)
+                    : Call->Token.Owner != Token->second.Owner ||
+                          Call->Token.ID != Token->second.ID))
     return cancellationError("scheduled epilogue lost its guest callback");
+  // A framework continuation can resume a waiting power IRP, including a
+  // callback protected by the interrupt authority's separate lock token.
+  Token->second = Call->Token;
   return Call;
 }
 } // namespace neverd::emulation

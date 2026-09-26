@@ -17,11 +17,13 @@
 #include "KernelFramework.h"
 
 #include "KernelResources.h"
+#include "KernelScheduler.h"
 #include "WindowsKernelLayout.h"
 
 #include "neverd/emulation/DriverProfile.h"
 
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 #include <limits>
@@ -718,6 +720,14 @@ KernelFramework::prepareDeletion(uint64_t Handle, uint64_t UnlinkedFile) const {
             "deletion with an outstanding cancellation callback requires "
             "asynchronous draining, which is not modeled");
     }
+    if (I->second.Kind == ObjectKind::Interrupt) {
+      const auto &Interrupt = InterruptObjects.at(Current);
+      if (Interrupt.Connection || Interrupt.ChangingState ||
+          I->second.InternalReferences ||
+          (InterruptsHost.HasDeferred && InterruptsHost.HasDeferred(Current)))
+        return invalid(
+            "interrupt deletion requires disconnected and drained callbacks");
+    }
     if (I->second.Kind == ObjectKind::File) {
       auto File = FileObjects.find(Current);
       if (File == FileObjects.end())
@@ -1084,6 +1094,9 @@ KernelFramework::advance(uint64_t Token) {
       for (const auto &[Handle, Queue] : Queues)
         if (Queue.Device == S.Object)
           return invalid("device deletion still owns a referenced queue");
+      for (const auto &[Handle, Interrupt] : InterruptObjects)
+        if (Interrupt.Device == S.Object)
+          return invalid("device deletion still owns a referenced interrupt");
       if (!DevicesHost.Delete)
         return invalid("framework device host is not configured");
       if (auto E = DevicesHost.Delete(Devices.at(S.Object).Wdm))
@@ -1094,6 +1107,8 @@ KernelFramework::advance(uint64_t Token) {
         PnpDeviceHandles.erase(Devices.at(S.Object).PDO);
       Devices.erase(S.Object);
     }
+    if (O.Kind == ObjectKind::Interrupt)
+      InterruptObjects.erase(S.Object);
     if (O.Kind == ObjectKind::Queue)
       Queues.erase(S.Object);
     if (O.Kind == ObjectKind::File)
@@ -1156,7 +1171,11 @@ std::optional<KernelFramework::GuestCall> KernelFramework::takeGuestCall() {
 }
 
 llvm::Expected<std::optional<uint64_t>>
-KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
+KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result,
+                                 uint8_t IRQL) {
+  llvm::SaveAndRestore<uint8_t> CallbackLevel(CallbackIRQL, IRQL);
+  if (InterruptContinuations.contains(Token))
+    return finishInterruptCallback(Token, Result);
   const bool AutomaticFile = isAutomaticFileContinuation(Token);
   auto Progress = finishPnpCallback(Token, Result);
   if (!Progress)
@@ -1198,10 +1217,13 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
   if (*Next && !AutomaticFile) {
     if (auto E = flushReadyNotifications())
       return std::move(E);
-    if (PendingCall)
-      return std::optional<uint64_t>{};
   }
-  return Next;
+  auto Deferred = deferPassiveCall();
+  if (!Deferred)
+    return Deferred.takeError();
+  if (*Deferred)
+    return std::optional<uint64_t>{0};
+  return PendingCall ? std::optional<uint64_t>{} : *Next;
 }
 
 llvm::Error KernelFramework::flushReadyNotifications() {
@@ -1236,11 +1258,58 @@ bool KernelFramework::hasLiveBinding() const {
 llvm::Expected<uint64_t>
 KernelFramework::call(const KernelExportRegistry::Export &Export,
                       llvm::ArrayRef<uint64_t> A, uint8_t IRQL) {
+  llvm::SaveAndRestore<uint8_t> CallbackLevel(CallbackIRQL, IRQL);
+  // Capture device ownership before completion can retire the request handle.
+  uint64_t WdmDevice = 0;
+  if (IRQL && A.size() > 1) {
+    auto Object = Objects.find(A[1]);
+    while (Object != Objects.end()) {
+      if (auto Device = Devices.find(Object->first); Device != Devices.end()) {
+        WdmDevice = Device->second.Wdm;
+        break;
+      }
+      Object = Objects.find(Object->second.Parent);
+    }
+  }
+  auto Result = callImpl(Export, A, IRQL);
+  if (!Result)
+    return Result.takeError();
+  auto Deferred = deferPassiveCall(WdmDevice);
+  if (!Deferred)
+    return Deferred.takeError();
+  return *Result;
+}
+
+llvm::Expected<bool> KernelFramework::deferPassiveCall(uint64_t WdmDevice) {
+  if (!CallbackIRQL || !PendingCall || PendingCall->ExecutionToken)
+    return false;
+  if (!WdmDevice && !PendingCall->Arguments.empty()) {
+    auto Object = Objects.find(PendingCall->Arguments.front());
+    while (Object != Objects.end()) {
+      if (auto Device = Devices.find(Object->first); Device != Devices.end()) {
+        WdmDevice = Device->second.Wdm;
+        break;
+      }
+      Object = Objects.find(Object->second.Parent);
+    }
+  }
+  if (!WdmDevice || !DevicesHost.DeferCall)
+    return invalid("PASSIVE_LEVEL callback scheduling requires a device host");
+  if (auto E = DevicesHost.DeferCall(*PendingCall, WdmDevice))
+    return E;
+  PendingCall.reset();
+  return true;
+}
+
+llvm::Expected<uint64_t>
+KernelFramework::callImpl(const KernelExportRegistry::Export &Export,
+                          llvm::ArrayRef<uint64_t> A, uint8_t IRQL) {
   auto Count = argumentCount(Export);
   if (!Count || *Count != A.size())
     return invalid("unsupported framework routine or argument count");
-  if (IRQL)
-    return invalid("current framework object callbacks require PASSIVE_LEVEL");
+  if (IRQL &&
+      Export.Kind != KernelExportRegistry::ExportKind::FrameworkFunction)
+    return invalid("framework binding requires PASSIVE_LEVEL");
   if (Export.Kind != KernelExportRegistry::ExportKind::FrameworkFunction)
     return Export.Name == api::WdfVersionBind ? bind(A) : unbind(A);
   auto BI = Bindings.find(Export.Binding);
@@ -1248,6 +1317,8 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     return invalid("table entry belongs to an unbound framework instance");
   auto &B = BI->second;
   if (Export.Name == FrameworkUnloadRoutine) {
+    if (IRQL)
+      return invalid("framework unload requires PASSIVE_LEVEL");
     if (A[0] != Driver || !B.DriverHandle || B.Unloaded)
       return invalid("invalid or repeated framework driver unload");
     std::vector<Step> Steps;
@@ -1259,6 +1330,23 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
   }
   if (A[0] != B.Globals)
     return invalid("framework function received another binding's globals");
+  auto InterruptResult = callInterrupt(Export.Name, B, A, IRQL);
+  if (!InterruptResult)
+    return InterruptResult.takeError();
+  if (*InterruptResult)
+    return **InterruptResult;
+  if (IRQL && Export.Name != api::WdfObjectGetTypedContextWorker &&
+      Export.Name != api::WdfObjectContextGetObject &&
+      Export.Name != api::WdfObjectReferenceActual) {
+    bool DispatchAPI = false;
+#define NEVERD_FRAMEWORK_DISPATCH_API(Routine)                                 \
+  DispatchAPI |= Export.Name == api::Routine;
+#include "KernelFrameworkDispatchAPIs.def"
+#undef NEVERD_FRAMEWORK_DISPATCH_API
+    if (!DispatchAPI || IRQL > scheduler::DispatchLevel)
+      return invalid("framework routine requires PASSIVE_LEVEL or a supported "
+                     "DISPATCH_LEVEL operation");
+  }
   auto Control = callControl(Export.Name, B, A);
   if (!Control)
     return Control.takeError();

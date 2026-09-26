@@ -13,6 +13,8 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelSEHEpilogue.cpp
   windows/GuardControlFlow.cpp
   windows/KernelFramework.cpp
+  windows/KernelFrameworkInterrupts.cpp
+  windows/KernelModelFrameworkInterrupts.cpp
   windows/KernelFrameworkPower.cpp
   windows/KernelFrameworkControl.cpp
   windows/KernelFrameworkFiles.cpp
