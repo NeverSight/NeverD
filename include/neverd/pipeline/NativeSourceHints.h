@@ -25,6 +25,12 @@ struct NativeSourceCalleeContracts {
   std::map<va_t, SourceFunctionTypeHint> ZeroArgumentPointerCallees;
 };
 
+/// Collect exact native call ABIs already bound in one MedIR caller. This is
+/// physical input evidence for the Boolean difference proof, not a source-body
+/// certificate. Conflicting or incomplete bindings contribute no target.
+std::map<va_t, SourceFunctionTypeHint>
+boundNativeBooleanCallees(const MedFunc &Caller);
+
 /// Exact direct call targets followed by an observed full-word read of the
 /// second integer return register in the same block. This is a demand, not a
 /// callee ABI proof. Calls, intrinsics and overlapping writes end the scan.

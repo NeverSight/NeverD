@@ -16,7 +16,8 @@ struct BooleanFixture {
   BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false,
                  bool Prefix = false, bool OpaquePrefix = false,
                  bool ObjectEquality = false, bool Suffix = false,
-                 bool Native = false, bool Pair = false) {
+                 bool Native = false, bool Pair = false,
+                 bool NativeCallee = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
@@ -63,8 +64,21 @@ struct BooleanFixture {
       Body.insert(Body.end() - 2, 0xd2800021); // MOV X1,#1 before return.
     if (OpaquePrefix)
       Body[2] = 0x9400005e; // BL 0x1180 before any selected result exists.
+    if (NativeCallee)
+      Body = {0xa9be7bfd, 0x910003fd, 0xf9000bf3, 0xd28000a0,
+              0xd2800001, 0xd28000e2, 0xd2800003, 0x52800004,
+              0x94000038, // BL 0x1100: raw i1 Boolean.
+              0xaa0003e8, // Keep its undefined high bits in x8.
+              0x12000013, // AND W19,W0,#1: only bit 0 is observable.
+              0x94000075, // BL 0x1200: no-argument native result.
+              0xaa1303e0, 0xf9400bf3, 0xa8c27bfd, 0xd65f03c0};
     for (unsigned I = 0; I != std::size(Body); ++I)
       word(0x1000 + 4 * I, Body[I]);
+    if (NativeCallee) {
+      word(0x1200, 0xd2800000);
+      word(0x1204, 0xd65f03c0);
+      Image.Symbols.push_back({"native_noarg", 0x1200, 8, true});
+    }
     word(0x1100, 0xb0000010);
     word(0x1104, 0xf9404210);
     word(0x1108, 0xd61f0200);
@@ -88,6 +102,16 @@ struct BooleanFixture {
     PipelineOptions Options;
     Options.EmitDumpOutput = false;
     Options.OnlyFunctionEntries = {0x1000};
+    if (NativeCallee) {
+      SourceFunctionTypeHint Callee;
+      Callee.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Callee.ReturnType = NdType::makeInt(8, false);
+      std::string Error;
+      EXPECT_TRUE(assignDarwinScalarSourceABI(Callee, Image.Arch, Error))
+          << Error;
+      Options.OnlyFunctionEntries.insert(0x1200);
+      Options.SourceTypeHints.emplace(0x1200, std::move(Callee));
+    }
     if (Source) {
       auto Entry = Native ? *provisionalNativeSwiftBooleanEntry(Image, 0x1000)
                           : *objcMethodSourceTypeHint(Image, 0x1000);
@@ -137,6 +161,84 @@ struct BooleanFixture {
   }
 };
 } // namespace
+
+TEST(ObjCSwiftBooleanSources,
+     NativeBooleanProofUsesOnlyCurrentCompleteCalleeContracts) {
+  BooleanFixture F;
+  constexpr va_t Target = 0x1200;
+  SourceFunctionTypeHint Signature;
+  Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Signature.ReturnType = NdType::makeInt(8, false);
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, Arch::AArch64, Error))
+      << Error;
+
+  MedFunc Caller;
+  MedBlock Block;
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(Target, 8));
+  auto Binding = std::make_shared<SourceCallTypeHint>();
+  Binding->CallKind = SourceCallTypeHint::Kind::Native;
+  Binding->TargetAddress = Target;
+  Binding->Signature = Signature;
+  Call.SourceCallHint = Binding;
+  Block.Ops.push_back(Call);
+  Caller.Blocks.push_back(Block);
+
+  HighFunc Callee;
+  Callee.Entry = Target;
+  Callee.SourceTypeHint = Signature;
+  F.Result.HighFuncs.push_back(Callee);
+  PipelineFunctionAudit Audit;
+  Audit.Entry = Target;
+  Audit.Disposition = PipelineFunctionDisposition::Accepted;
+  Audit.HasLowIR = Audit.HasMedIR = Audit.MedIRVerified = true;
+  Audit.DecodedInstructions = Audit.LiftedInstructions = 2;
+  F.Result.FunctionAudits.push_back(Audit);
+
+  EXPECT_EQ(nativeBooleanPublicationCallees(F.Result, Caller).count(Target),
+            1U);
+  F.Result.FunctionAudits.back().MedIRVerified = false;
+  EXPECT_TRUE(nativeBooleanPublicationCallees(F.Result, Caller).empty());
+  F.Result.FunctionAudits.back().MedIRVerified = true;
+  F.Result.HighFuncs.back().SourceTypeHint->ReturnType = NdType::makeVoid();
+  EXPECT_TRUE(nativeBooleanPublicationCallees(F.Result, Caller).empty());
+  F.Result.HighFuncs.back().SourceTypeHint = Signature;
+  Caller.Blocks.front().Ops.push_back(Call);
+  auto Conflicting = std::make_shared<SourceCallTypeHint>(*Binding);
+  Conflicting->Signature.ReturnType = NdType::makeVoid();
+  Caller.Blocks.front().Ops.back().SourceCallHint = Conflicting;
+  EXPECT_TRUE(nativeBooleanPublicationCallees(F.Result, Caller).empty());
+}
+
+TEST(ObjCSwiftBooleanSources,
+     PublicationRechecksNativeCallAcrossObservedBooleanPadding) {
+  BooleanFixture F(true, false, false, false, false, false, false, false, false,
+                   true);
+  const auto E = F.expression();
+  ASSERT_TRUE(E);
+  const auto Bound = [&] {
+    return objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high());
+  };
+  ASSERT_TRUE(Bound());
+  auto Audit = std::find_if(F.Result.FunctionAudits.begin(),
+                            F.Result.FunctionAudits.end(),
+                            [](const PipelineFunctionAudit &Candidate) {
+                              return Candidate.Entry == 0x1200;
+                            });
+  ASSERT_NE(Audit, F.Result.FunctionAudits.end());
+  Audit->MedIRVerified = false;
+  EXPECT_FALSE(Bound());
+  Audit->MedIRVerified = true;
+  auto Callee = std::find_if(
+      F.Result.HighFuncs.begin(), F.Result.HighFuncs.end(),
+      [](const HighFunc &Candidate) { return Candidate.Entry == 0x1200; });
+  ASSERT_NE(Callee, F.Result.HighFuncs.end());
+  ASSERT_TRUE(Callee->SourceTypeHint);
+  Callee->SourceTypeHint->ReturnType = NdType::makeVoid();
+  EXPECT_FALSE(Bound());
+}
 
 TEST(ObjCSwiftBooleanSources, RealLoweringAndPublicationRepeatCallerProof) {
   BooleanFixture F;

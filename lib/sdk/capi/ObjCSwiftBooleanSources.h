@@ -8,6 +8,48 @@
 #include "neverd/pipeline/NativeSourceHints.h"
 
 namespace neverd::sdk {
+inline std::map<va_t, SourceFunctionTypeHint>
+nativeBooleanPublicationCallees(const PipelineResult &Result,
+                                const MedFunc &Caller) {
+  auto NativeCallees = boundNativeBooleanCallees(Caller);
+  std::map<va_t, const HighFunc *> HighCallees;
+  std::map<va_t, const PipelineFunctionAudit *> CalleeAudits;
+  for (const auto &Candidate : Result.HighFuncs) {
+    const auto [It, Inserted] =
+        HighCallees.emplace(Candidate.Entry, &Candidate);
+    if (!Inserted)
+      It->second = nullptr;
+  }
+  for (const auto &Candidate : Result.FunctionAudits) {
+    const auto [It, Inserted] =
+        CalleeAudits.emplace(Candidate.Entry, &Candidate);
+    if (!Inserted)
+      It->second = nullptr;
+  }
+  for (auto It = NativeCallees.begin(); It != NativeCallees.end();) {
+    const auto High = HighCallees.find(It->first);
+    const auto Audit = CalleeAudits.find(It->first);
+    const bool Complete =
+        High != HighCallees.end() && High->second &&
+        High->second->SourceTypeHint &&
+        equalSourceABIs(*High->second->SourceTypeHint, It->second) &&
+        Audit != CalleeAudits.end() && Audit->second &&
+        Audit->second->Disposition == PipelineFunctionDisposition::Accepted &&
+        Audit->second->HasLowIR && Audit->second->HasMedIR &&
+        Audit->second->MedIRVerified && Audit->second->DecodedInstructions &&
+        Audit->second->DecodedInstructions ==
+            Audit->second->LiftedInstructions &&
+        Audit->second->DecodeFailures.empty() &&
+        Audit->second->UnsupportedInstructions.empty() &&
+        Audit->second->TruncatedPaths.empty();
+    if (Complete)
+      ++It;
+    else
+      It = NativeCallees.erase(It);
+  }
+  return NativeCallees;
+}
+
 inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
                                             const BinaryImage &Image,
                                             const PipelineResult &Result,
@@ -105,8 +147,15 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
     if (!Inferred || !equalSourceABIs(*Inferred, *Function.SourceTypeHint))
       return false;
   }
-  const auto Current =
-      qualifySwiftBooleanProjections(Image, *Low, *Function.SourceTypeHint);
+  // The LowIR proof may cross a source-bound native call while the selected
+  // Boolean's upper result bits remain different. Reuse the same MedIR call
+  // ABI inventory as native inference, but retain only callees whose current
+  // HighIR declaration and complete audit independently agree. The final
+  // source graph still validates each callee body and dependency closure.
+  const auto NativeCallees = Med ? nativeBooleanPublicationCallees(Result, *Med)
+                                 : std::map<va_t, SourceFunctionTypeHint>{};
+  const auto Current = qualifySwiftBooleanProjections(
+      Image, *Low, *Function.SourceTypeHint, &NativeCallees);
   std::map<SourceCallOccurrenceKey, std::pair<va_t, std::string>> Sites;
   for (const auto &Projection : Current)
     Sites.emplace(Projection.Normalization.Site,
