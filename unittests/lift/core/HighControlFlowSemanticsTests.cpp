@@ -1882,6 +1882,31 @@ TEST(HighControlFlowSemantics, ExternalSkipInvertKeepsTakenPhiCopy) {
   EXPECT_EQ(execute(F, 1), 7U);
 }
 
+TEST(HighControlFlowSemantics, SameTargetSkipKeepsTakenPhiCopy) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  F.ReturnType = NdType::makeInt(8);
+  auto Choice = conditional(0x1000, 0x1040);
+  auto TakenCopy = assign(0, 1, 7);
+  TakenCopy.IsPhiCopy = true;
+  Choice.Body.insert(Choice.Body.begin(), TakenCopy);
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.Addr = 0x1010;
+  Store.StoreAddr = HighExpr::makeConst(0x2000, 8);
+  Store.StoreVal = HighExpr::makeConst(1, 8);
+  auto OtherCopy = assign(0, 1, 9);
+  OtherCopy.IsPhiCopy = true;
+  F.Body = {Choice, Store, OtherCopy, jump(0x1018, 0x1040),
+            result(0x1040, local(1))};
+
+  ASSERT_EQ(execute(F, 0, true), 9U);
+  ASSERT_EQ(execute(F, 1, true), 7U);
+  invertSkipGotos(F);
+  EXPECT_EQ(execute(F, 0, true), 9U);
+  EXPECT_EQ(execute(F, 1, true), 7U);
+}
+
 TEST(HighControlFlowSemantics, ExternalSkipInvertKeepsSharedTailEntry) {
   HighFunc F;
   F.Entry = 0x1000;

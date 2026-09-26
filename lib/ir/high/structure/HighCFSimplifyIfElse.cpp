@@ -3345,7 +3345,11 @@ static bool foldSameTargetSkipGoto(std::vector<HighStmt> &Body) {
   bool Changed = false;
   for (int I = 0; I < static_cast<int>(Body.size()); ++I) {
     HighStmt &Stmt = Body[I];
-    if (Stmt.Kind != StmtKind::If || !Stmt.Cond || !bodyIsSkipGoto(Stmt.Body))
+    // This fold clears the taken arm. A PHI edge copy before its goto is a
+    // real write, even when the arm otherwise looks like a skip; dropping it
+    // leaves the shared target's value undefined on that incoming path.
+    if (Stmt.Kind != StmtKind::If || !Stmt.Cond || Stmt.Body.size() != 1 ||
+        !bodyIsSkipGoto(Stmt.Body))
       continue;
     const va_t Target = Stmt.Body.back().GotoTarget;
     const size_t NextI = static_cast<size_t>(I) + 1;
