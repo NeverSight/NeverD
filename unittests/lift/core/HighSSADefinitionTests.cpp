@@ -534,6 +534,75 @@ TEST(HighSourceScalarLocals, NarrowsEveryDefinitionWithoutMovingLowEffects) {
     }
 }
 
+TEST(HighSourceScalarLocals,
+     NarrowsTruncatedConcatOnlyWhenEveryReadSelectsItsLowBytes) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Make = [&] {
+      auto F = sourceConcatLocal(Architecture, 4, 8);
+      for (auto *Definition : {&F.Body[0].Body[0],
+                               &F.Body[0].ElseBody[0]}) {
+        auto Low = Definition->Val->Operands[1];
+        auto Upper = std::make_shared<HighExpr>();
+        Upper->Kind = ExprKind::Undef;
+        Upper->Type = NdType::makeInt(12, false);
+        auto Wide = HighExpr::makeBinop(NdOp::CONCAT, Upper, Low);
+        Wide->Type = NdType::makeInt(16, false);
+        auto Truncated = std::make_shared<HighExpr>();
+        Truncated->Kind = ExprKind::Cast;
+        Truncated->CastTo = NdType::makeInt(8, false);
+        Truncated->Type = Truncated->CastTo;
+        Truncated->Operands = {Wide};
+        Definition->Val = std::move(Truncated);
+      }
+      return F;
+    };
+    auto F = Make();
+    auto Left = F.Body[0].Body[0].Val->Operands[0]->Operands[1];
+    auto Right = F.Body[0].ElseBody[0].Val->Operands[0]->Operands[1];
+    narrowSourceConcatLocals(F);
+    EXPECT_EQ(F.Body[0].Body[0].Val, Left);
+    EXPECT_EQ(F.Body[0].ElseBody[0].Val, Right);
+    EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 4U);
+    EXPECT_EQ(F.Body[0].ElseBody[0].Dst->Var.Size, 4U);
+    EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 4U);
+
+    auto Nested = sourceConcatLocal(Architecture, 4, 16);
+    for (auto *Definition : {&Nested.Body[0].Body[0],
+                             &Nested.Body[0].ElseBody[0]}) {
+      auto Low = Definition->Val->Operands[1];
+      auto Upper = std::make_shared<HighExpr>();
+      Upper->Kind = ExprKind::Undef;
+      Upper->Type = NdType::makeInt(12, false);
+      auto Wide = HighExpr::makeBinop(NdOp::CONCAT, Upper, Low);
+      Wide->Type = NdType::makeInt(16, false);
+      auto Prefix = HighExpr::makeBinop(NdOp::SUBBYTES, Wide,
+                                        HighExpr::makeConst(0, 4));
+      Prefix->Type = NdType::makeInt(8, false);
+      auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, Prefix);
+      Extended->Type = NdType::makeInt(16, false);
+      Definition->Val = std::move(Extended);
+    }
+    auto NestedLow =
+        Nested.Body[0].Body[0].Val->Operands[0]->Operands[0]->Operands[1];
+    narrowSourceConcatLocals(Nested);
+    EXPECT_EQ(Nested.Body[0].Body[0].Val, NestedLow);
+    EXPECT_EQ(Nested.Body[0].Body[0].Dst->Var.Size, 4U);
+    EXPECT_EQ(Nested.Body[0].ElseBody[0].Dst->Var.Size, 4U);
+
+    auto Escaped = Make();
+    Escaped.Body[1].RetVal = variable(4, 8);
+    narrowSourceConcatLocals(Escaped);
+    EXPECT_EQ(Escaped.Body[0].Body[0].Dst->Var.Size, 8U);
+
+    auto EffectfulUpper = Make();
+    auto Effect = HighExpr::makeCall("upper_effect", 0x3000, {});
+    Effect->Type = NdType::makeInt(12, false);
+    EffectfulUpper.Body[0].Body[0].Val->Operands[0]->Operands[0] = Effect;
+    narrowSourceConcatLocals(EffectfulUpper);
+    EXPECT_EQ(EffectfulUpper.Body[0].Body[0].Dst->Var.Size, 8U);
+  }
+}
+
 TEST(HighSourceScalarLocals, NarrowsPureExtendedAlternativeDefinition) {
   auto F = sourceConcatLocal(Arch::AArch64, 8);
   auto Low = variable(7, 8);

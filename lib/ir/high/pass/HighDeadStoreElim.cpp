@@ -136,6 +136,67 @@ void narrowSourceConcatLocals(HighFunc &Func) {
            E.MemoryOrdering == NdMemoryOrdering::None &&
            E.MemoryAddressSpace == NdMemoryAddressSpace::Default;
   };
+  // Follow only low-byte-preserving integer views. Native return packing can
+  // wrap a CONCAT in SUBBYTES and an extension before assigning its carrier;
+  // the undefined upper half is still dead when all later reads select the
+  // same low scalar. Every wrapper and discarded high operand must be pure.
+  const auto ConcatLowPrefix = [&](ExprPtr Value,
+                                   uint16_t CarrierBytes) -> ExprPtr {
+    uint16_t Capacity = CarrierBytes;
+    for (unsigned Depth = 0; Value && Depth < 16; ++Depth) {
+      if (!Budget-- || !Plain(*Value) || !Value->Type ||
+          Value->Type->Kind != NdTypeKind::Int || !Value->Type->Size)
+        return {};
+      Capacity = std::min(Capacity, Value->Type->Size);
+      if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::CONCAT &&
+          Value->Operands.size() == 2 && Value->Operands[0] &&
+          Value->Operands[1] && Value->Operands[0]->Type &&
+          Value->Operands[1]->Type &&
+          Value->Operands[1]->Type->Kind == NdTypeKind::Int &&
+          Value->Operands[0]->Type->Size +
+                  Value->Operands[1]->Type->Size ==
+              Value->Type->Size &&
+          (Value->Operands[1]->Type->Size == 4 ||
+           (CarrierBytes == 16 && Value->Operands[1]->Type->Size == 8)) &&
+          Value->Operands[1]->Type->Size <= Capacity &&
+          discardableIntegerValue(Value->Operands[0], Budget))
+        return Value->Operands[1];
+      if (Value->Kind == ExprKind::Cast && Value->CastTo &&
+          Value->CastTo->Kind == NdTypeKind::Int &&
+          Value->CastTo->Size == Value->Type->Size &&
+          Value->Operands.size() == 1 && Value->Operands[0] &&
+          Value->Operands[0]->Type &&
+          Value->Operands[0]->Type->Kind == NdTypeKind::Int) {
+        Value = Value->Operands[0];
+        continue;
+      }
+      if (Value->Kind == ExprKind::UnaryOp &&
+          (Value->Op == NdOp::INT_ZEXT || Value->Op == NdOp::INT_SEXT) &&
+          Value->Operands.size() == 1 && Value->Operands[0] &&
+          Value->Operands[0]->Type &&
+          Value->Operands[0]->Type->Kind == NdTypeKind::Int &&
+          Value->Operands[0]->Type->Size <= Value->Type->Size) {
+        Value = Value->Operands[0];
+        continue;
+      }
+      if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::SUBBYTES &&
+          Value->Operands.size() == 2 && Value->Operands[0] &&
+          Value->Operands[0]->Type &&
+          Value->Operands[0]->Type->Kind == NdTypeKind::Int &&
+          Value->Operands[0]->Type->Size >= Value->Type->Size &&
+          Value->Operands[1] && Plain(*Value->Operands[1]) &&
+          Value->Operands[1]->Kind == ExprKind::Const &&
+          Value->Operands[1]->Type &&
+          Value->Operands[1]->Type->Kind == NdTypeKind::Int &&
+          Value->Operands[1]->Operands.empty() &&
+          Value->Operands[1]->ConstVal == 0) {
+        Value = Value->Operands[0];
+        continue;
+      }
+      return {};
+    }
+    return {};
+  };
   struct Candidate {
     uint16_t Bytes = 0;
     uint16_t CarrierBytes = 0;
@@ -149,6 +210,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     std::vector<Use> Uses;
   };
   VarKeyMap<Candidate> Candidates;
+  std::map<HighStmt *, ExprPtr> ConcatPrefixes;
   struct CopyDefinition {
     HighStmt *Statement = nullptr;
     ExprPtr *Leaf = nullptr;
@@ -191,15 +253,12 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     const uint16_t CarrierBytes = DestinationShape ? D->Type->Size : 0;
     C.Valid &= !C.CarrierBytes || C.CarrierBytes == CarrierBytes;
     C.CarrierBytes = CarrierBytes;
-    const bool ConcatShape =
-        DestinationShape && V->Kind == ExprKind::BinOp &&
-        V->Op == NdOp::CONCAT && V->Type && V->Type->Kind == NdTypeKind::Int &&
-        V->Type->Size == CarrierBytes && V->Operands.size() == 2 &&
-        V->Operands[0] && V->Operands[1] && V->Operands[0]->Type &&
-        V->Operands[1]->Type && V->Operands[1]->Type->Kind == NdTypeKind::Int &&
-        (V->Operands[1]->Type->Size == 4 ||
-         (CarrierBytes == 16 && V->Operands[1]->Type->Size == 8)) &&
-        V->Operands[0]->Type->Size + V->Operands[1]->Type->Size == CarrierBytes;
+    const auto ConcatLow =
+        DestinationShape && V->Type && V->Type->Kind == NdTypeKind::Int &&
+                V->Type->Size == CarrierBytes
+            ? ConcatLowPrefix(V, CarrierBytes)
+            : ExprPtr{};
+    const bool ConcatShape = bool(ConcatLow);
     const bool ExtensionShape =
         DestinationShape && V->Type && V->Type->Kind == NdTypeKind::Int &&
         V->Type->Size == CarrierBytes && V->Operands.size() == 1 &&
@@ -260,16 +319,16 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     // side-effect-free proof. In particular, a float bitcast feeding INT_ZEXT
     // must remain evaluated even though it is not an integer-only tree.
     if ((!ConcatShape && !ExtensionShape && !CopyShape) ||
-        (!ExtensionShape &&
-         !discardableIntegerValue(ConcatShape ? V->Operands[0] : V,
-                                      Budget))) {
+        (!ConcatShape && !ExtensionShape &&
+         !discardableIntegerValue(V, Budget))) {
       C.Valid = false;
       continue;
     }
     if (ConcatShape) {
-      const auto Width = V->Operands[1]->Type->Size;
+      const auto Width = ConcatLow->Type->Size;
       C.Valid &= !C.Bytes || C.Bytes == Width;
       C.Bytes = Width;
+      ConcatPrefixes.emplace(S, ConcatLow);
     } else {
       if (ExtensionShape) {
         const auto Width = V->Operands[0]->Type->Size;
@@ -477,9 +536,10 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       continue;
     for (auto *S : C.Definitions) {
       Narrow(S->Dst, C.Bytes);
-      S->Val = C.PrefixDefinitions.count(S)
+      const auto Prefix = ConcatPrefixes.find(S);
+      S->Val = Prefix == ConcatPrefixes.end()
                    ? frameValuePrefix(S->Val, C.Bytes)
-                   : S->Val->Operands[1];
+                   : Prefix->second;
     }
   }
 }
