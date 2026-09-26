@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "LLVMCFrameAliases.h"
+
 #include "neverd/backend/c/pass/LLVMC/LLVMCPasses.h"
 
 #include "llvm/IR/Constants.h"
@@ -18,6 +20,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -30,32 +33,7 @@ namespace neverd {
 
 namespace {
 
-bool ptrDerivesFrom(const llvm::Value *V, const llvm::AllocaInst *AI,
-                    std::set<const llvm::Value *> &Visited) {
-  if (V == AI)
-    return true;
-  if (!Visited.insert(V).second)
-    return false;
-  if (auto *Inst = llvm::dyn_cast<llvm::Instruction>(V)) {
-    for (unsigned I = 0; I < Inst->getNumOperands(); ++I)
-      if (ptrDerivesFrom(Inst->getOperand(I), AI, Visited))
-        return true;
-  }
-  return false;
-}
-
-bool isSyntheticFrameAlloca(const llvm::AllocaInst *AI) {
-  if (!AI)
-    return false;
-  const auto *Arr = llvm::dyn_cast<llvm::ArrayType>(AI->getAllocatedType());
-  return Arr && Arr->getElementType()->isIntegerTy(8);
-}
-
-const llvm::AllocaInst *asAlloca(const llvm::Value *V) {
-  if (!V)
-    return nullptr;
-  return llvm::dyn_cast<llvm::AllocaInst>(V->stripPointerCasts());
-}
+using namespace llvmc;
 
 bool isZeroSpillValue(const llvm::Value *V) {
   std::set<const llvm::Value *> Seen;
@@ -93,98 +71,10 @@ bool isZeroSpillValue(const llvm::Value *V) {
   return Rec(V);
 }
 
-using FrameLocation = std::pair<const llvm::AllocaInst *, int64_t>;
-using StoredValues =
-    std::map<const llvm::AllocaInst *, std::vector<const llvm::Value *>>;
-
-struct FrameAliases {
-  std::set<FrameLocation> Locations;
-  bool Incomplete = false;
-};
-
-FrameAliases peelSyntheticFrames(const llvm::Value *V,
-                                 const StoredValues &Stores,
-                                 const llvm::DataLayout &DL) {
-  FrameAliases Result;
-  unsigned Visits = 0;
-  std::function<void(const llvm::Value *, int64_t, bool,
-                     std::set<const llvm::Value *>)>
-      Walk = [&](const llvm::Value *Cur, int64_t Off, bool FromLoad,
-                 std::set<const llvm::Value *> Seen) {
-        if (!Cur || !Seen.insert(Cur).second || ++Visits > 128) {
-          Result.Incomplete = true;
-          return;
-        }
-        if (const auto *AI = llvm::dyn_cast<llvm::AllocaInst>(Cur)) {
-          if (isSyntheticFrameAlloca(AI)) {
-            Result.Locations.emplace(AI, Off);
-            return;
-          }
-          if (!FromLoad)
-            return;
-          auto It = Stores.find(AI);
-          if (It == Stores.end() || It->second.empty()) {
-            Result.Incomplete = true;
-            return;
-          }
-          // A join carrier can hold different frame addresses on its normal
-          // and exceptional paths. A textual last store is not its value.
-          for (const llvm::Value *Stored : It->second)
-            Walk(Stored, Off, false, Seen);
-          return;
-        }
-        if (const auto *I2P = llvm::dyn_cast<llvm::IntToPtrInst>(Cur))
-          return Walk(I2P->getOperand(0), Off, false, Seen);
-        if (const auto *P2I = llvm::dyn_cast<llvm::PtrToIntInst>(Cur))
-          return Walk(P2I->getOperand(0), Off, false, Seen);
-        if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Cur))
-          return Walk(Cast->getOperand(0), Off, false, Seen);
-        if (const auto *Fr = llvm::dyn_cast<llvm::FreezeInst>(Cur))
-          return Walk(Fr->getOperand(0), Off, false, Seen);
-        if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Cur)) {
-          llvm::APInt Acc(64, 0);
-          if (GEP->accumulateConstantOffset(DL, Acc))
-            return Walk(GEP->getPointerOperand(), Off + Acc.getSExtValue(),
-                        false, Seen);
-          if (GEP->getNumOperands() == 2)
-            if (const auto *CI =
-                    llvm::dyn_cast<llvm::ConstantInt>(GEP->getOperand(1)))
-              return Walk(GEP->getPointerOperand(), Off + CI->getSExtValue(),
-                          false, Seen);
-          Result.Incomplete = true;
-          return;
-        }
-        if (const auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(Cur)) {
-          const llvm::Value *LHS = BO->getOperand(0);
-          const llvm::Value *RHS = BO->getOperand(1);
-          if (BO->getOpcode() == llvm::Instruction::Add) {
-            if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(RHS))
-              return Walk(LHS, Off + CI->getSExtValue(), false, Seen);
-            if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(LHS))
-              return Walk(RHS, Off + CI->getSExtValue(), false, Seen);
-          }
-          if (BO->getOpcode() == llvm::Instruction::Sub)
-            if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(RHS))
-              return Walk(LHS, Off - CI->getSExtValue(), false, Seen);
-          Result.Incomplete = true;
-          return;
-        }
-        if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(Cur))
-          return Walk(LI->getPointerOperand(), Off, true, Seen);
-        // A literal address, including an entry zero initializer, is known
-        // not to alias the synthetic frame. Keep genuinely unresolved
-        // alternatives conservative below.
-        if (llvm::isa<llvm::ConstantInt, llvm::ConstantPointerNull>(Cur))
-          return;
-        Result.Incomplete = true;
-      };
-  Walk(V, 0, false, {});
-  return Result;
-}
-
 } // anonymous namespace
 
 void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
+  using namespace llvmc;
   State.DeadFrameAllocas.clear();
   State.DeadFrameStores.clear();
   State.RawFrameLocations.clear();
@@ -205,20 +95,32 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
   std::set<std::pair<const llvm::AllocaInst *, int64_t>> DirectLive;
   std::set<std::pair<const llvm::AllocaInst *, int64_t>> Plus8Live;
   std::map<FrameLocation, std::vector<const llvm::CallBase *>> Plus16Readers;
+  std::map<FrameLocation, uint64_t> DirectReadSizes;
+  auto OverlapsRead = [&](FrameLocation Store, uint64_t Size) {
+    for (const auto &[Read, ReadSize] : DirectReadSizes)
+      if (Store.first == Read.first &&
+          frameRangesOverlap(Store.second, Size, Read.second, ReadSize))
+        return true;
+    return false;
+  };
   bool UncertainFrameRead = false;
   auto NoteLive = [&](const llvm::Value *Ptr, bool ExpandRecord,
-                      const llvm::CallBase *Call = nullptr) {
+                      const llvm::CallBase *Call = nullptr,
+                      uint64_t ReadSize = 0) {
     FrameAliases Aliases = peelSyntheticFrames(Ptr, Stores, DL);
     if (Aliases.Locations.size() > 1 ||
-        (Aliases.Incomplete && !Aliases.Locations.empty()))
+        (Aliases.HasNonFrameAlternative && !Aliases.Locations.empty()) ||
+        (Aliases.Incomplete && !Aliases.Frames.empty()))
       State.RawFrameLocations.insert(Aliases.Locations.begin(),
                                      Aliases.Locations.end());
-    if (Aliases.Incomplete && !Aliases.Locations.empty()) {
+    if (Aliases.Incomplete && !Aliases.Frames.empty()) {
       UncertainFrameRead = true;
     }
     for (const FrameLocation &Slot : Aliases.Locations) {
       LiveSlots.insert(Slot);
       DirectLive.insert(Slot);
+      if (ReadSize)
+        DirectReadSizes[Slot] = std::max(DirectReadSizes[Slot], ReadSize);
       if (ExpandRecord) {
         auto Plus8 = std::make_pair(Slot.first, Slot.second + 8);
         LiveSlots.insert(Plus8);
@@ -236,8 +138,20 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
         const llvm::AllocaInst *Slot = asAlloca(LI->getPointerOperand());
         if (Slot && !isSyntheticFrameAlloca(Slot))
           continue;
-        NoteLive(LI->getPointerOperand(), /*ExpandRecord=*/false);
+        const llvm::TypeSize Size = DL.getTypeStoreSize(LI->getType());
+        if (Size.isScalable())
+          UncertainFrameRead = true;
+        NoteLive(LI->getPointerOperand(), /*ExpandRecord=*/false, nullptr,
+                 Size.isScalable() ? 0 : Size.getFixedValue());
       }
+      if (const auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Inst))
+        NoteLive(RMW->getPointerOperand(), /*ExpandRecord=*/false, nullptr,
+                 DL.getTypeStoreSize(RMW->getValOperand()->getType())
+                     .getFixedValue());
+      if (const auto *CX = llvm::dyn_cast<llvm::AtomicCmpXchgInst>(&Inst))
+        NoteLive(CX->getPointerOperand(), /*ExpandRecord=*/false, nullptr,
+                 DL.getTypeStoreSize(CX->getCompareOperand()->getType())
+                     .getFixedValue());
       if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(&Inst))
         for (const llvm::Use &U : CB->args())
           NoteLive(U.get(), /*ExpandRecord=*/true, CB);
@@ -255,13 +169,16 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
         FrameAliases Dest =
             peelSyntheticFrames(SI->getPointerOperand(), Stores, DL);
         bool DestIsLive = false;
+        const llvm::TypeSize Size =
+            DL.getTypeStoreSize(SI->getValueOperand()->getType());
         for (const FrameLocation &Loc : Dest.Locations)
-          DestIsLive |= LiveSlots.count(Loc) != 0;
+          DestIsLive |= LiveSlots.count(Loc) != 0 || Size.isScalable() ||
+                        OverlapsRead(Loc, Size.getFixedValue());
         if (!DestIsLive)
           continue;
         FrameAliases Src =
             peelSyntheticFrames(SI->getValueOperand(), Stores, DL);
-        if (Src.Incomplete && !Src.Locations.empty()) {
+        if (Src.Incomplete && !Src.Frames.empty()) {
           UncertainFrameRead = true;
           State.RawFrameLocations.insert(Src.Locations.begin(),
                                          Src.Locations.end());
@@ -278,44 +195,87 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
     }
   }
 
+  std::set<const llvm::AllocaInst *> EscapedFrames;
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst);
       if (!isSyntheticFrameAlloca(AI))
         continue;
-      // A partially resolved frame read can still reach this allocation.
-      // Declaring it dead would leave a printed address of an undeclared
-      // synthetic frame when another predecessor is retained.
       if (UncertainFrameRead)
         continue;
 
       bool HasLoad = false;
+      bool Escapes = false;
       for (const auto &Slot : LiveSlots)
         if (Slot.first == AI)
           HasLoad = true;
       std::set<const llvm::Value *> Visited;
       std::function<void(const llvm::Value *)> Check =
           [&](const llvm::Value *V) {
-            if (HasLoad || !Visited.insert(V).second)
+            if (!Visited.insert(V).second)
               return;
-            for (auto *User : V->users()) {
+            for (const llvm::User *User : V->users()) {
               if (llvm::isa<llvm::LoadInst>(User)) {
                 HasLoad = true;
-                return;
+                continue;
               }
-              if (auto *CB = llvm::dyn_cast<llvm::CallBase>(User)) {
-                for (unsigned I = 0; I < CB->arg_size(); ++I)
-                  if (CB->getArgOperand(I) == V) {
-                    HasLoad = true;
-                    return;
+              if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(User)) {
+                if (SI->isVolatile() || SI->isAtomic()) {
+                  HasLoad = true;
+                  Escapes |= SI->getValueOperand() == V;
+                }
+                if (SI->getValueOperand() == V) {
+                  // Ordinary scalar allocas carry frame addresses internally.
+                  // Follow their reloads, but an externally stored address lets
+                  // the consumer observe every byte in the original frame.
+                  const auto *Slot = asAlloca(SI->getPointerOperand());
+                  if (!Slot || isSyntheticFrameAlloca(Slot)) {
+                    Escapes = true;
+                  } else {
+                    for (const llvm::User *CarrierUser : Slot->users()) {
+                      if (const auto *LI =
+                              llvm::dyn_cast<llvm::LoadInst>(CarrierUser)) {
+                        Check(LI);
+                      } else if (const auto *Store =
+                                     llvm::dyn_cast<llvm::StoreInst>(
+                                         CarrierUser)) {
+                        Escapes |= Store->getPointerOperand() != Slot;
+                      } else {
+                        Escapes = true;
+                      }
+                    }
                   }
+                }
+                if (SI->getPointerOperand() == V) {
+                  const FrameAliases Dest = peelSyntheticFrames(V, Stores, DL);
+                  HasLoad |= Dest.Incomplete || Dest.HasNonFrameAlternative;
+                }
+                continue;
               }
-              if (!llvm::isa<llvm::StoreInst>(User))
+              if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(User)) {
+                for (const llvm::Use &Arg : CB->args())
+                  HasLoad |= Arg.get() == V;
+                continue;
+              }
+              if (llvm::isa<llvm::ReturnInst>(User)) {
+                Escapes = true;
+                continue;
+              }
+              if (llvm::isa<llvm::CastInst, llvm::GetElementPtrInst,
+                            llvm::BinaryOperator, llvm::PHINode,
+                            llvm::SelectInst, llvm::FreezeInst>(User)) {
                 Check(User);
+              } else {
+                // Pointer identity and observable memory instructions also need
+                // the allocation to remain, even without an ordinary load.
+                HasLoad = true;
+              }
             }
           };
       Check(AI);
-      if (!HasLoad)
+      if (Escapes)
+        EscapedFrames.insert(AI);
+      if (!HasLoad && !Escapes)
         State.DeadFrameAllocas.insert(AI);
     }
   }
@@ -323,24 +283,28 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst);
-      if (!SI)
+      if (!SI || SI->isVolatile() || SI->isAtomic())
         continue;
-      bool Dead = false;
-      for (auto *AI : State.DeadFrameAllocas) {
-        std::set<const llvm::Value *> Visited;
-        if (ptrDerivesFrom(SI->getPointerOperand(), AI, Visited)) {
-          Dead = true;
-          break;
-        }
+      const FrameAliases Dest =
+          peelSyntheticFrames(SI->getPointerOperand(), Stores, DL);
+      const bool AllFrame = !Dest.Incomplete && !Dest.HasNonFrameAlternative &&
+                            !Dest.Locations.empty();
+      bool Dead = AllFrame;
+      bool Escapes = false;
+      for (const FrameLocation &Loc : Dest.Locations) {
+        Dead &= State.DeadFrameAllocas.count(Loc.first) != 0;
+        Escapes |= EscapedFrames.count(Loc.first) != 0;
       }
-      if (!Dead && !UncertainFrameRead) {
-        FrameAliases Dest =
-            peelSyntheticFrames(SI->getPointerOperand(), Stores, DL);
-        if (!Dest.Incomplete && !Dest.Locations.empty()) {
-          bool AllDead = true;
+      if (!Dead && !UncertainFrameRead && !Escapes) {
+        if (AllFrame) {
+          const llvm::TypeSize Size =
+              DL.getTypeStoreSize(SI->getValueOperand()->getType());
+          bool AllDead = !Size.isScalable();
           bool AllZeroSpillsDead = isZeroSpillValue(SI->getValueOperand());
           for (const FrameLocation &Loc : Dest.Locations) {
-            AllDead &= LiveSlots.count(Loc) == 0;
+            const bool ReadOverlap =
+                Size.isScalable() || OverlapsRead(Loc, Size.getFixedValue());
+            AllDead &= LiveSlots.count(Loc) == 0 && !ReadOverlap;
             bool Plus16ObservedAfterStore = false;
             if (auto Readers = Plus16Readers.find(Loc);
                 Readers != Plus16Readers.end())
@@ -350,7 +314,7 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
                   Plus16ObservedAfterStore = true;
                   break;
                 }
-            AllZeroSpillsDead &= DirectLive.count(Loc) == 0 &&
+            AllZeroSpillsDead &= !ReadOverlap && DirectLive.count(Loc) == 0 &&
                                  Plus8Live.count(Loc) == 0 &&
                                  !Plus16ObservedAfterStore;
           }
@@ -376,20 +340,27 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
         return false;
       if (State.DeadFrameStores.count(UI))
         continue;
-      if (State.Inlinable.count(UI) && AllUsersDead(UI))
+      if (State.Inlinable.count(UI) && canDropDeadFrameValue(*UI) &&
+          AllUsersDead(UI))
         continue;
       const auto *SI = llvm::dyn_cast<llvm::StoreInst>(UI);
-      if (SI && SI->getValueOperand() == V) {
+      if (SI && !SI->isVolatile() && !SI->isAtomic() &&
+          SI->getValueOperand() == V) {
         const llvm::AllocaInst *Slot = asAlloca(SI->getPointerOperand());
         if (!Slot)
           return false;
         for (const llvm::User *SU : Slot->users()) {
-          if (llvm::isa<llvm::StoreInst>(SU))
-            continue;
+          if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(SU)) {
+            if (Store->getPointerOperand() == Slot &&
+                Store->getValueOperand() != Slot)
+              continue;
+            return false;
+          }
           const auto *LI = llvm::dyn_cast<llvm::LoadInst>(SU);
           if (!LI)
             return false;
-          if (!State.DeadFrameStores.count(LI) && !AllUsersDead(LI))
+          if (!canDropDeadFrameValue(*LI) ||
+              (!State.DeadFrameStores.count(LI) && !AllUsersDead(LI)))
             return false;
         }
         continue;
@@ -404,11 +375,17 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
       return false;
     bool AnyLoad = false;
     for (const llvm::User *U : Slot->users()) {
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(U)) {
+        if (Store->getPointerOperand() == Slot &&
+            Store->getValueOperand() != Slot)
+          continue;
+        return false;
+      }
       const auto *LI = llvm::dyn_cast<llvm::LoadInst>(U);
       if (!LI)
-        continue;
+        return false;
       AnyLoad = true;
-      if (!State.DeadFrameStores.count(LI))
+      if (!canDropDeadFrameValue(*LI) || !State.DeadFrameStores.count(LI))
         return false;
     }
     return AnyLoad;
@@ -420,7 +397,8 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
         if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
-          if (State.DeadFrameStores.count(SI))
+          if (SI->isVolatile() || SI->isAtomic() ||
+              State.DeadFrameStores.count(SI))
             continue;
           const llvm::AllocaInst *Slot = asAlloca(SI->getPointerOperand());
           if (Slot && AllocaLoadsAreDead(Slot)) {
@@ -433,9 +411,7 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
           continue;
         if (llvm::isa<llvm::AllocaInst>(&Inst))
           continue;
-        // An invoke may have no live result while its call and unwind edge
-        // remain observable.
-        if (llvm::isa<llvm::CallBase>(&Inst))
+        if (!canDropDeadFrameValue(Inst))
           continue;
         if (State.DeadFrameStores.count(&Inst))
           continue;

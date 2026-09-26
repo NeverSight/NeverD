@@ -6271,19 +6271,25 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       } else if (Def.Opcode == NdOp::LOAD && Def.NumInputs >= 1) {
         const NdVar &Address =
             Def.NumInputs >= 2 ? Def.Inputs[1] : Def.Inputs[0];
-        ResolverResult AddressValue =
-            resolveOperand(Block, I, Address, Depth + 1);
-        if (AddressValue.Kind == ResolverResultKind::Value &&
-            AddressValue.Value &&
-            AddressValue.Value->K == ResolverValueExpr::Kind::Constant &&
-            isExactAddressProvenance(AddressValue.Value->Provenance))
-          Full = relocatedLiteralValue(AddressValue.Value->Constant,
-                                       Def.Output.Size);
         uint64_t SlotBase = InvalidVA;
         int64_t SlotOffset = 0;
+        // Canonical frame addresses have their own point-sensitive proof.
+        // Resolve that storage directly before expanding a generic address
+        // expression: reconstructing an invariant FP through every CFG merge
+        // also reconstructs unrelated loop predicates and can exhaust the
+        // candidate's evidence budget before reaching its dominating spill.
         const bool HasFrameSlot =
-            !Full &&
             canonicalFrameSlotKey(Block, I - 1, Address, SlotBase, SlotOffset);
+        if (!HasFrameSlot) {
+          ResolverResult AddressValue =
+              resolveOperand(Block, I, Address, Depth + 1);
+          if (AddressValue.Kind == ResolverResultKind::Value &&
+              AddressValue.Value &&
+              AddressValue.Value->K == ResolverValueExpr::Kind::Constant &&
+              isExactAddressProvenance(AddressValue.Value->Provenance))
+            Full = relocatedLiteralValue(AddressValue.Value->Constant,
+                                         Def.Output.Size);
+        }
         if (HasFrameSlot) {
           ResolverResult Loaded = resolveMemory(Block, I, SlotBase, SlotOffset,
                                                 Def.Output.Size, Depth + 1);

@@ -2194,7 +2194,7 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
   }
 }
 
-std::string LLVMCWriter::orOperandStr(const llvm::Value *Operand) {
+std::string LLVMCWriter::integerPointerOperandStr(const llvm::Value *Operand) {
   if (!Operand)
     return {};
   std::string Text = valueStr(Operand);
@@ -2204,7 +2204,7 @@ std::string LLVMCWriter::orOperandStr(const llvm::Value *Operand) {
   if (!Peeled || !Peeled->first->getType()->isPointerTy())
     return Text;
   // The pointer-offset printer may return `&frame` for an integer IR value.
-  // A C bitwise OR needs that address in its integer representation.
+  // Integer operations on that value need its address representation in C.
   return "(" + typeToCLLVM(Operand->getType()) + ")(uintptr_t)(" + Text +
          ")";
 }
@@ -2348,12 +2348,17 @@ std::string LLVMCWriter::renderInline(const llvm::Instruction &Inst) {
   if (const auto *CI = llvm::dyn_cast<llvm::ICmpInst>(&Inst))
     return "(" + icmpInlineText(*CI) + ")";
   if (Inst.isBinaryOp()) {
-    const bool IsOr = Inst.getOpcode() == llvm::Instruction::Or;
+    const bool NeedsIntegerPointerOperand =
+        Inst.getOpcode() == llvm::Instruction::Or ||
+        Inst.getOpcode() == llvm::Instruction::Sub;
     std::string LHS = logicalShiftLhs(
-        Inst, IsOr ? orOperandStr(Inst.getOperand(0))
-                   : valueStr(Inst.getOperand(0)));
-    const std::string RHS = IsOr ? orOperandStr(Inst.getOperand(1))
-                                 : valueStr(Inst.getOperand(1));
+        Inst, NeedsIntegerPointerOperand
+                  ? integerPointerOperandStr(Inst.getOperand(0))
+                  : valueStr(Inst.getOperand(0)));
+    const std::string RHS =
+        NeedsIntegerPointerOperand
+            ? integerPointerOperandStr(Inst.getOperand(1))
+            : valueStr(Inst.getOperand(1));
     return "(" + binopStr(Inst.getOpcode(), LHS, RHS, Inst.getType()) + ")";
   }
   if (const auto *Trunc = llvm::dyn_cast<llvm::TruncInst>(&Inst)) {

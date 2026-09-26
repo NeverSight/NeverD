@@ -1101,6 +1101,16 @@ target_include_directories(NeverDHighCStoreForwardingTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+add_neverd_unittest(NeverDLLVMCFrameMemoryTests
+  core/LLVMCFrameMemoryTests.cpp
+  LINK_COMPONENTS BackendC
+)
+
+target_include_directories(NeverDLLVMCFrameMemoryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 # Keeps the COFF exception-metadata authentication contract independently
 # runnable during RED/GREEN iterations of the patch planner.
 add_neverd_unittest(NeverDCOFFExceptionPatchTests
@@ -2097,6 +2107,21 @@ add_custom_command(
   DEPENDS ${i386_adjacent_twotable_src}
   COMMENT "Compiling optimized adjacent i386 GOTOFF tables")
 list(APPEND TEST_OBJECTS ${i386_adjacent_twotable_obj})
+
+# O0 uses an EBP-relative GOT spill across three independent switch loops.
+set(i386_three_switch_loops_src
+    "${CMAKE_CURRENT_SOURCE_DIR}/x86_32/test_i386_three_switch_loops.c")
+set(i386_three_switch_loops_obj
+    "${CMAKE_CURRENT_BINARY_DIR}/test_i386_three_switch_loops.o")
+add_custom_command(
+  OUTPUT ${i386_three_switch_loops_obj}
+  COMMAND ${CLANG_EXEC} -target i386-linux-gnu -nostdlib -nostdlibinc -c -O0
+          -fno-stack-protector -fno-exceptions -fno-unwind-tables
+          -fno-asynchronous-unwind-tables -march=pentium4
+          ${i386_three_switch_loops_src} -o ${i386_three_switch_loops_obj}
+  DEPENDS ${i386_three_switch_loops_src}
+  COMMENT "Compiling O0 i386 PIC switch loops with a shared GOT spill")
+list(APPEND TEST_OBJECTS ${i386_three_switch_loops_obj})
 
 set(i386_adjacent_function_pointer_src
     "${CMAKE_CURRENT_SOURCE_DIR}/x86_32/test_i386_adjacent_function_pointer_runs.S")

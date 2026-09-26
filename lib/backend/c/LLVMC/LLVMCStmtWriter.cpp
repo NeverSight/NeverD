@@ -24,6 +24,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <cctype>
 #include <set>
@@ -1147,11 +1148,16 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
         return;
       }
     }
-    const bool IsOr = Inst.getOpcode() == llvm::Instruction::Or;
-    auto LHS = logicalShiftLhs(Inst, IsOr ? orOperandStr(Inst.getOperand(0))
-                                        : valueStr(Inst.getOperand(0)));
-    auto RHS = IsOr ? orOperandStr(Inst.getOperand(1))
-                    : valueStr(Inst.getOperand(1));
+    const bool NeedsIntegerPointerOperand =
+        Inst.getOpcode() == llvm::Instruction::Or ||
+        Inst.getOpcode() == llvm::Instruction::Sub;
+    auto LHS = logicalShiftLhs(
+        Inst, NeedsIntegerPointerOperand
+                  ? integerPointerOperandStr(Inst.getOperand(0))
+                  : valueStr(Inst.getOperand(0)));
+    auto RHS = NeedsIntegerPointerOperand
+                   ? integerPointerOperandStr(Inst.getOperand(1))
+                   : valueStr(Inst.getOperand(1));
     emitIndent(Indent);
     OS << Name << " = " << binopStr(Inst.getOpcode(), LHS, RHS, Inst.getType())
        << ";\n";
@@ -4479,7 +4485,37 @@ bool LLVMCWriter::phiEdgeNeedsMaterialization(
   if (EHMovedContinuationBlocks.count(To))
     return true;
   const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(From->getTerminator());
-  return Invoke && Invoke->getNormalDest() == To;
+  if (Invoke && Invoke->getNormalDest() == To)
+    return true;
+  // A reserved invoke goto may skip nonprinting blocks whose outgoing PHI
+  // copies still belong to the invoke's normal path.  writeInvoke clears
+  // path-local immediates after each edge, so every such copy needs a C
+  // assignment, including constant incoming values.
+  for (const auto &[InvokeBB, PrintedTarget] : EHInvokeNormalGotos) {
+    const auto *Reserved =
+        llvm::dyn_cast<llvm::InvokeInst>(InvokeBB->getTerminator());
+    if (!Reserved)
+      continue;
+    const llvm::BasicBlock *EdgeFrom = InvokeBB;
+    const llvm::BasicBlock *EdgeTo = Reserved->getNormalDest();
+    llvm::SmallPtrSet<const llvm::BasicBlock *, 8> Seen;
+    bool Matches = false;
+    while (EdgeTo && Seen.insert(EdgeTo).second) {
+      Matches |= EdgeFrom == From && EdgeTo == To;
+      if (EdgeTo == PrintedTarget) {
+        if (Matches)
+          return true;
+        break;
+      }
+      const auto *Bridge =
+          llvm::dyn_cast<llvm::UncondBrInst>(EdgeTo->getTerminator());
+      if (!Bridge)
+        break;
+      EdgeFrom = EdgeTo;
+      EdgeTo = Bridge->getSuccessor(0);
+    }
+  }
+  return false;
 }
 
 bool LLVMCWriter::edgePrintsPhiCopy(const llvm::BasicBlock *From,
@@ -4530,7 +4566,7 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
          usersAreDeadCopies(Phi)) &&
         !phiPrintedAsJoinCallArg(Phi))
       continue;
-    const std::string RHS = valueStr(Incoming);
+    const std::string RHS = integerPointerOperandStr(Incoming);
     if (auto Imm = foldImmediate(Incoming)) {
       KnownImmediates[Phi] = *Imm;
       // Invoke normal edges clear their cached PHIs, and a continuation
@@ -4669,20 +4705,37 @@ void LLVMCWriter::writeInvoke(llvm::InvokeInst &Invoke, const std::string &Name,
   // only an EH boundary intrinsic.  Its unwind edge must not assign the
   // normal incoming value, so emit the copy only after the call returns.
   if (!AfterCxxThrow) {
-    writePhiCopies(Invoke.getParent(), Invoke.getNormalDest(), Indent);
-    // This copy is path-local. The normal destination may also be reached
-    // through an exception handler, so it cannot inherit a constant from
-    // the invoke edge when its own statements are rendered.
-    for (const llvm::Instruction &Inst : *Invoke.getNormalDest()) {
-      const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);
-      if (!Phi)
-        break;
-      KnownImmediates.erase(Phi);
-    }
+    auto WriteNormalCopy = [&](const llvm::BasicBlock *From,
+                               const llvm::BasicBlock *To) {
+      writePhiCopies(From, To, Indent);
+      // An invoke's normal edge is path-local.  A shared normal/handler
+      // continuation cannot inherit its immediate on the later block walk.
+      for (const llvm::Instruction &Inst : *To) {
+        const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);
+        if (!Phi)
+          break;
+        KnownImmediates.erase(Phi);
+      }
+    };
     if (auto It = EHInvokeNormalGotos.find(Invoke.getParent());
         It != EHInvokeNormalGotos.end()) {
+      const llvm::BasicBlock *From = Invoke.getParent();
+      const llvm::BasicBlock *To = Invoke.getNormalDest();
+      llvm::SmallPtrSet<const llvm::BasicBlock *, 8> Seen;
+      while (To && To != It->second && isPrintPassthrough(To) &&
+             Seen.insert(To).second) {
+        WriteNormalCopy(From, To);
+        From = To;
+        To = To->getTerminator()->getSuccessor(0);
+      }
+      if (To != It->second)
+        llvm::report_fatal_error(
+            "LLVMC EH invoke normal path changed before rendering");
+      WriteNormalCopy(From, To);
       emitIndent(Indent);
       OS << "goto " << blockLabel(It->second) << ";\n";
+    } else {
+      WriteNormalCopy(Invoke.getParent(), Invoke.getNormalDest());
     }
   }
 }

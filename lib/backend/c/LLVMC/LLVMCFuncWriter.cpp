@@ -1955,10 +1955,12 @@ bool LLVMCWriter::usersAreDeadCopies(const llvm::Value *V) const {
       const auto *UI = llvm::dyn_cast<llvm::Instruction>(U);
       if (!UI)
         return false;
-      if (OmittedUnknowns.count(UI) || OmittedInlined.count(UI) ||
-          Analysis.Inlinable.count(UI))
+      if (OmittedUnknowns.count(UI) || OmittedInlined.count(UI))
         continue;
-      if (llvm::isa<llvm::CastInst, llvm::FreezeInst, llvm::PHINode>(UI)) {
+      // An inlined address expression still consumes its operands when its
+      // load or store is printed. Follow the expression to its actual use.
+      if (Analysis.Inlinable.count(UI) ||
+          llvm::isa<llvm::CastInst, llvm::FreezeInst, llvm::PHINode>(UI)) {
         if (!Dead(UI))
           return false;
         continue;
@@ -8493,7 +8495,33 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
       UseRanges = false;
   }
 
+  if (UseRanges) {
+    // Range continuations are printed after their handlers. Incoming PHI
+    // constants are path-local, so materialize them on both normal and
+    // handler edges instead of folding the last printed edge globally.
+    for (const SehRangeMarker &Slot : RangeMarkers) {
+      const auto *End = llvm::cast<llvm::InvokeInst>(Slot.End->getTerminator());
+      EHMovedContinuationBlocks.insert(End->getNormalDest());
+    }
+    for (const EHWrapClause &Clause : EHWraps)
+      for (const llvm::BasicBlock *Body : Clause.Body)
+        if (const auto *Branch =
+                llvm::dyn_cast<llvm::UncondBrInst>(Body->getTerminator()))
+          if (EHMovedContinuationBlocks.count(Branch->getSuccessor(0)) &&
+              edgePrintsPhiCopy(Body, Branch->getSuccessor(0)))
+            EHPrintedPassthroughHandlers.insert(Body);
+  }
+
+  auto ClearRangeNormalImmediates = [&](const llvm::InvokeInst &Marker) {
+    for (const llvm::Instruction &Inst : *Marker.getNormalDest()) {
+      const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);
+      if (!Phi)
+        break;
+      KnownImmediates.erase(Phi);
+    }
+  };
   auto WriteRangeResidue = [&](llvm::BasicBlock &BB, int Indent) {
+    AfterCxxThrow = false;
     for (llvm::Instruction &Inst : BB) {
       if (llvm::isa<llvm::InvokeInst, llvm::UncondBrInst>(&Inst))
         continue;
@@ -8546,20 +8574,35 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
       AfterWrap.insert(&BB);
     }
     EHMovedContinuationBlocks.insert(AfterWrap.begin(), AfterWrap.end());
-    const llvm::BasicBlock *FirstCont = nullptr;
-    for (const llvm::BasicBlock &BB : Fn) {
-      if (!AfterWrap.count(&BB))
-        continue;
-      FirstCont = &BB;
-      break;
-    }
     const llvm::Instruction *HandlerTerm =
         Handler ? Handler->getTerminator() : nullptr;
     const auto *HandlerBr =
         llvm::dyn_cast_or_null<llvm::UncondBrInst>(HandlerTerm);
-    bool Ok = FirstCont && !InvokeBlocks.empty() && HandlerTerm &&
+    // A split normal edge can place a print-passthrough block before the
+    // actual normal/handler join in LLVM order.  The handler successor owns
+    // that join; the preceding bridge belongs to the normal exit only.
+    const llvm::BasicBlock *FirstCont =
+        HandlerBr ? HandlerBr->getSuccessor(0) : nullptr;
+    if (!HandlerBr)
+      for (const llvm::BasicBlock &BB : Fn)
+        if (AfterWrap.count(&BB)) {
+          FirstCont = &BB;
+          break;
+        }
+    bool Ok = FirstCont && AfterWrap.count(FirstCont) &&
+              !InvokeBlocks.empty() && HandlerTerm &&
               ((HandlerBr && HandlerBr->getSuccessor(0) == FirstCont) ||
                llvm::isa<llvm::ReturnInst>(HandlerTerm));
+    if (Ok)
+      for (const llvm::BasicBlock &BB : Fn) {
+        if (&BB == FirstCont)
+          break;
+        if (AfterWrap.count(&BB) &&
+            (!isPrintPassthrough(&BB) || printBranchTarget(&BB) != FirstCont)) {
+          Ok = false;
+          break;
+        }
+      }
     auto MainBlocks = [&]() {
       llvm::SmallVector<const llvm::BasicBlock *, 16> Blocks;
       for (const llvm::BasicBlock &BB : Fn)
@@ -8582,10 +8625,8 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
           return nullptr;
         const llvm::BasicBlock *Next =
             Target->getTerminator()->getSuccessor(0);
-        // writeInvoke prints the direct normal PHI copies, but it does not
-        // print copies on later passthrough edges.
-        if (edgePrintsPhiCopy(Target, Next))
-          return nullptr;
+        // The invoke printer walks this same path and prints PHI copies on
+        // each skipped edge before reaching the printed target.
         Target = Next;
       }
       return Target;
@@ -8634,13 +8675,14 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
       for (const llvm::BasicBlock *InvokeBB : InvokeBlocks) {
         const auto *Invoke =
             llvm::cast<llvm::InvokeInst>(InvokeBB->getTerminator());
-        const bool ExitsTry = Invoke->getNormalDest() == FirstCont;
+        const llvm::BasicBlock *NormalDest = NormalPrintTarget(*Invoke);
+        const bool ExitsTry = AfterWrap.count(Invoke->getNormalDest()) &&
+                              NormalDest == FirstCont;
         HasNormalExit |= ExitsTry;
         if (!ExitsTry && !TryRegion.count(Invoke->getNormalDest())) {
           Ok = false;
           break;
         }
-        const llvm::BasicBlock *NormalDest = NormalPrintTarget(*Invoke);
         const auto It = std::find(MainWalk.begin(), MainWalk.end(), InvokeBB);
         if (It == MainWalk.end() || !NormalDest ||
             (ExitsTry ? !AfterWrap.count(NormalDest)
@@ -8652,14 +8694,16 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         if (!ExitsTry) {
           // The invoke printer falls through after the call and PHI copies.
           // Preserve an internal normal edge that is not the next statement.
-          if (std::next(It) == MainWalk.end() || *std::next(It) != NormalDest)
+          if (Invoke->getNormalDest() != NormalDest ||
+              std::next(It) == MainWalk.end() ||
+              *std::next(It) != NormalDest)
             NeedGoto.emplace(InvokeBB, NormalDest);
           continue;
         }
         // A normal exit can fall through the end of __try only if every
         // remaining main-walk block is an empty EH boundary marker. Otherwise
         // jump to the continuation after the entire __except statement.
-        if (NormalDest != FirstCont)
+        if (Invoke->getNormalDest() != NormalDest)
           NeedGoto.emplace(InvokeBB, NormalDest);
         for (auto Later = std::next(It); Later != MainWalk.end(); ++Later) {
           const auto *End =
@@ -8691,7 +8735,11 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         bool Any = false;
         for (const llvm::BasicBlock *Pred : llvm::predecessors(BB)) {
           Any = true;
-          const bool FromInvoke = InvokeBlocks.count(Pred) && BB == FirstCont;
+          const auto *PredInvoke =
+              llvm::dyn_cast<llvm::InvokeInst>(Pred->getTerminator());
+          const bool FromInvoke = InvokeBlocks.count(Pred) && PredInvoke &&
+                                  PredInvoke->getNormalDest() == BB &&
+                                  NormalPrintTarget(*PredInvoke) == FirstCont;
           const bool FromHandler = Pred == Handler && BB == FirstCont;
           const bool FromCont = AfterWrap.count(Pred);
           if (!FromInvoke && !FromHandler && !FromCont) {
@@ -8751,7 +8799,7 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         if (From == FallbackWalk.end() || To == FallbackWalk.end())
           llvm::report_fatal_error(
               "LLVMC EH fallback invoke normal edge has no printed try target");
-        if (std::next(From) == To)
+        if (std::next(From) == To && Invoke->getNormalDest() == Target)
           continue;
         if (!HasGotoLabel(Target))
           llvm::report_fatal_error(
@@ -8944,14 +8992,19 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         writeEHWrapOpen(EHWraps[static_cast<size_t>(BeginIndex)],
                         1 + EHTryDepth);
         ++EHTryDepth;
+        writeInvoke(*llvm::cast<llvm::InvokeInst>(BB.getTerminator()), {},
+                    1 + EHTryDepth);
         continue;
       }
       if (EndIndex >= 0) {
         OS << blockLabel(&BB) << ":\n";
         WriteRangeResidue(BB, 1 + EHTryDepth);
+        auto &Marker = *llvm::cast<llvm::InvokeInst>(BB.getTerminator());
+        writeInvoke(Marker, {}, 1 + EHTryDepth);
         --EHTryDepth;
         writeEHWrapClose(EHWraps[static_cast<size_t>(EndIndex)],
                          1 + EHTryDepth);
+        ClearRangeNormalImmediates(Marker);
         continue;
       }
       if (SkipInTry.contains(&BB))

@@ -11413,7 +11413,7 @@ TEST(LLVMCPointerAddresses, KeepsNestedPointerTestAfterPointerStore) {
   EXPECT_EQ(IfCount, 2u) << Source;
 }
 
-TEST(LLVMCPointerAddresses, UnreadRegisterSpillOfZeroAtFrameSlotIsOmitted) {
+TEST(LLVMCPointerAddresses, RecordVisibleRegisterSpillOfZeroIsKept) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-zero-frame-spill", Context);
   llvm::Type *I8 = llvm::Type::getInt8Ty(Context);
@@ -11521,7 +11521,13 @@ TEST(LLVMCPointerAddresses, UnreadRegisterSpillOfZeroAtFrameSlotIsOmitted) {
   EXPECT_NE(ZeroFn.find("= 7"), std::string::npos) << Source;
   EXPECT_NE(ZeroFn.find("= 2"), std::string::npos) << Source;
   EXPECT_NE(ZeroFn.find("+ 56"), std::string::npos) << Source;
-  EXPECT_EQ(ZeroFn.find("+ 80"), std::string::npos) << Source;
+  // The callee can follow [record + 8] to frame + 64 and read its +16
+  // field at frame + 80. Without an access bound, zero is observable too.
+  const auto ZeroStoreAt = ZeroFn.find("+ 80) = 0;");
+  const auto RecordCallAt = ZeroFn.find("use_record(");
+  ASSERT_NE(ZeroStoreAt, std::string::npos) << Source;
+  ASSERT_NE(RecordCallAt, std::string::npos) << Source;
+  EXPECT_LT(ZeroStoreAt, RecordCallAt) << Source;
   EXPECT_NE(KeptFn.find("+ 80"), std::string::npos) << Source;
   EXPECT_NE(KeptFn.find("= 9"), std::string::npos) << Source;
 }
@@ -36264,14 +36270,17 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   // The normal edge from the last try block reaches the range marker next
   // in printed order; the handler between them in LLVM order is printed in
   // __except.  Keep both the conditional skip and handler rejoin edges.
-  EXPECT_NE(Source.find("goto L_seh_try_end_0_0;"), std::string::npos)
-      << Source;
-  EXPECT_NE(Source.find("L_seh_try_end_0_0:"), std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("goto L_seh_try_end_0_1;"), std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("L_seh_try_end_0_1:"), std::string::npos)
-      << Source;
+  const auto SkipAt = Source.find("goto L_seh_try_end_0_");
+  ASSERT_NE(SkipAt, std::string::npos) << Source;
+  const auto SkipEnd = Source.find(';', SkipAt);
+  ASSERT_NE(SkipEnd, std::string::npos) << Source;
+  const std::string SkipLabel = Source.substr(SkipAt + 5, SkipEnd - SkipAt - 5);
+  const auto SkipTargetAt = Source.find("\n" + SkipLabel + ":\n");
+  const auto RaiseAt = Source.find("RaiseException(0xE0421001");
+  ASSERT_NE(SkipTargetAt, std::string::npos) << Source;
+  EXPECT_LT(SkipAt, RaiseAt) << Source;
+  EXPECT_LT(RaiseAt, SkipTargetAt) << Source;
+  EXPECT_LT(SkipTargetAt, ExceptAt) << Source;
   EXPECT_NE(Source.find("goto L_bb_5;"), std::string::npos) << Source;
   const auto JoinAt = Source.find("L_bb_5:");
   const auto ExceptCloseAt = Source.find("\n    }\n", ExceptAt);
@@ -36280,6 +36289,45 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   // The handler rejoins the normal path after the whole SEH statement.
   // Jumping from __except into its __try is invalid Windows C.
   EXPECT_LT(ExceptCloseAt, JoinAt) << Source;
+
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, ErrorPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-seh-join", "c",
+                                                  SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-seh-join", "err",
+                                                  ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream File(SourcePath, EC);
+    ASSERT_FALSE(EC) << EC.message();
+    File << "#include <stdint.h>\n"
+            "extern uint32_t g_1400050E0;\n"
+            "extern void RaiseException(uint32_t, uint32_t, uint32_t, "
+            "uint32_t);\n"
+            "extern int sub_1400024E0(void *);\n"
+            "extern void *GetExceptionInformation(void);\n"
+         << Source;
+  }
+  llvm::SmallVector<llvm::StringRef, 8> Arguments{
+      Compiler, "--target=x86_64-pc-windows-msvc", "-fms-extensions",
+      "-std=c11", "-fsyntax-only", "-Werror=uninitialized", SourcePath};
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, std::nullopt, ErrorPath.str()};
+  std::string Error;
+  const int CompileStatus = llvm::sys::ExecuteAndWait(
+      Compiler, Arguments, std::nullopt, Redirects, 30, 0, &Error);
+  auto ErrorBuffer = llvm::MemoryBuffer::getFile(ErrorPath);
+  EXPECT_EQ(CompileStatus, 0)
+      << Error << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str() : "") << "\n"
+      << Source;
 
   auto OptImg = loadBinary(Path, FuncOpts);
   ASSERT_TRUE(static_cast<bool>(OptImg)) << llvm::toString(OptImg.takeError());
@@ -36463,12 +36511,29 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies) {
   ASSERT_FALSE(Source.empty()) << Source;
   const auto FinallyAt = Source.find("} __finally {");
   const auto ExceptAt = Source.find("} __except");
-  const auto AccAt = Source.find("+= 20");
-  EXPECT_NE(FinallyAt, std::string::npos) << Source;
-  EXPECT_NE(ExceptAt, std::string::npos) << Source;
+  ASSERT_NE(FinallyAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
   EXPECT_LT(FinallyAt, ExceptAt) << Source;
-  EXPECT_NE(AccAt, std::string::npos) << Source;
-  EXPECT_LT(ExceptAt, AccAt) << Source;
+  const auto ExceptEnd = Source.find("\n    }", ExceptAt);
+  ASSERT_NE(ExceptEnd, std::string::npos) << Source;
+  const std::string Handler = Source.substr(ExceptAt, ExceptEnd - ExceptAt);
+  if (Handler.find(" += 20;") == std::string::npos) {
+    // Conservatively retained frame loads can print the same update as
+    // load/add/store. Require that the handler writes back to the exact slot
+    // from which that temporary was loaded, before leaving __except.
+    const auto AddAt = Handler.find(" + 20);");
+    ASSERT_NE(AddAt, std::string::npos) << Source;
+    const auto LineStart = Handler.rfind('\n', AddAt) + 1;
+    const auto AssignAt = Handler.find(" = (", LineStart);
+    ASSERT_LT(AssignAt, AddAt) << Source;
+    const std::string Slot =
+        llvm::StringRef(Handler).slice(LineStart, AssignAt).trim().str();
+    const std::string Loaded = Handler.substr(AssignAt + 4,
+                                               AddAt - AssignAt - 4);
+    const auto LoadAt = Handler.find(Loaded + " = " + Slot + ";");
+    ASSERT_NE(LoadAt, std::string::npos) << Source;
+    EXPECT_LT(LoadAt, LineStart) << Source;
+  }
 }
 
 TEST(LLVMCPointerAddresses, CorpusFuncLoadCxxEhProbeCatchContinuationEmits) {

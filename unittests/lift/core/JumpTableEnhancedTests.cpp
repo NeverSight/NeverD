@@ -346,6 +346,52 @@ countI386AdjacentTwoTableIndirectBranches(const neverd::LowFunc &Low) {
   return Count;
 }
 
+TEST_F(JTE_X86_32, O0ThreeSwitchLoopsReuseCanonicalFrameSpill) {
+  auto ImageOrErr = neverd::loadBinary(
+      fs::path(TEST_OBJ_DIR) / "test_i386_three_switch_loops.o");
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("i386_three_switch_loops");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.hasCompleteInstructionLift());
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  ASSERT_EQ(Low.JumpTables.size(), 3u);
+  std::set<neverd::va_t> StorageBases;
+  for (const neverd::JumpTable &Table : Low.JumpTables) {
+    EXPECT_EQ(Table.Targets.size(), 5u);
+    EXPECT_TRUE(StorageBases.insert(Table.BaseAddr).second);
+  }
+  EXPECT_EQ(Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
+            3u);
+}
+
+TEST_F(JTE_X86_32, O0ThreeSwitchLoopsRemainOpaqueOnIncompleteModelProof) {
+  auto ImageOrErr = neverd::loadBinary(
+      fs::path(TEST_OBJ_DIR) / "test_i386_three_switch_loops.o");
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("i386_three_switch_loops");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setI386GOTOFFProposalEvidenceBudgetForTesting(1);
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.hasCompleteInstructionLift());
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 3u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 3u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
 TEST_F(JTE_X86_32, AdjacentGOTOFFTablesProveAllFourExactConsumers) {
   auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))

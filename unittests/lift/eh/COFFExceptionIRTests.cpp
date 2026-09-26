@@ -1351,6 +1351,256 @@ TEST(COFFExceptionIR, LLVMCProjectsNonAdjacentInvokeNormalEdges) {
   EXPECT_NE(Source.find("L_join:", BodyAt), std::string::npos) << Source;
 }
 
+TEST(COFFExceptionIR, LLVMCProjectsInternalInvokePhiBridgeCopy) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-internal-phi-bridge", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(I32, /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {llvm::Type::getInt1Ty(Context)}, false),
+      llvm::GlobalValue::ExternalLinkage, "seh_internal_phi_bridge", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  llvm::BasicBlock *Inside =
+      llvm::BasicBlock::Create(Context, "inside", Function);
+  llvm::BasicBlock *Bridge =
+      llvm::BasicBlock::Create(Context, "bridge", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      llvm::FunctionType::get(Void, false),
+      llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *InsideStep = llvm::Function::Create(
+      llvm::FunctionType::get(Void, false),
+      llvm::GlobalValue::ExternalLinkage, "inside_step", Module);
+  llvm::Function *Consume = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {I32}, false),
+      llvm::GlobalValue::ExternalLinkage, "consume_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::AllocaInst *Slot = EntryBuilder.CreateAlloca(I32, nullptr, "slot");
+  EntryBuilder.CreateCondBr(Function->getArg(0), Exit, Inside);
+  llvm::IRBuilder<> ExitBuilder(Exit);
+  llvm::PHINode *Incoming = ExitBuilder.CreatePHI(I32, 2, "incoming");
+  Incoming->addIncoming(ExitBuilder.getInt32(7), Entry);
+  Incoming->addIncoming(ExitBuilder.getInt32(13), Bridge);
+  ExitBuilder.CreateStore(Incoming, Slot);
+  ExitBuilder.CreateCall(Consume, {ExitBuilder.CreateLoad(I32, Slot)});
+  ExitBuilder.CreateInvoke(ExitStep, Join, Dispatch);
+  llvm::IRBuilder<> InsideBuilder(Inside);
+  InsideBuilder.CreateInvoke(InsideStep, Bridge, Dispatch);
+  llvm::IRBuilder<> BridgeBuilder(Bridge);
+  BridgeBuilder.CreateBr(Exit);
+  llvm::IRBuilder<> JoinBuilder(Join);
+  JoinBuilder.CreateRetVoid();
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Join);
+  ASSERT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto InsideAt = Source.find("inside_step();");
+  ASSERT_NE(InsideAt, std::string::npos) << Source;
+  const auto CopyAt = Source.find(" = 13;", InsideAt);
+  const auto GotoAt = Source.find("goto L_exit;", InsideAt);
+  ASSERT_NE(CopyAt, std::string::npos) << Source;
+  ASSERT_NE(GotoAt, std::string::npos) << Source;
+  EXPECT_LT(CopyAt, GotoAt) << Source;
+  EXPECT_EQ(Source.find(" = 13;", GotoAt), std::string::npos) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "void exit_step(void);\nvoid inside_step(void);\n"
+        "void consume_step(uint32_t);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCProjectsFallbackAdjacentInvokePhiBridgeCopy) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-fallback-phi-bridge", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(I32, /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {llvm::Type::getInt1Ty(Context),
+                                    llvm::Type::getInt1Ty(Context)}, false),
+      llvm::GlobalValue::ExternalLinkage, "seh_fallback_phi_bridge", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  llvm::BasicBlock *Inside =
+      llvm::BasicBlock::Create(Context, "inside", Function);
+  llvm::BasicBlock *Bridge =
+      llvm::BasicBlock::Create(Context, "bridge", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::BasicBlock *Gate = llvm::BasicBlock::Create(Context, "gate", Function);
+  llvm::BasicBlock *EarlyReturn =
+      llvm::BasicBlock::Create(Context, "early_return", Function);
+  Inside->moveBefore(Exit);
+  Gate->moveBefore(Inside);
+  EarlyReturn->moveBefore(Join);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      llvm::FunctionType::get(Void, false),
+      llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *InsideStep = llvm::Function::Create(
+      llvm::FunctionType::get(Void, false),
+      llvm::GlobalValue::ExternalLinkage, "inside_step", Module);
+  llvm::Function *Consume = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {I32}, false),
+      llvm::GlobalValue::ExternalLinkage, "consume_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::AllocaInst *Slot = EntryBuilder.CreateAlloca(I32, nullptr, "slot");
+  EntryBuilder.CreateCondBr(Function->getArg(0), Gate, EarlyReturn);
+  llvm::IRBuilder<> GateBuilder(Gate);
+  GateBuilder.CreateCondBr(Function->getArg(1), Exit, Inside);
+  llvm::IRBuilder<> EarlyReturnBuilder(EarlyReturn);
+  EarlyReturnBuilder.CreateRetVoid();
+  llvm::IRBuilder<> ExitBuilder(Exit);
+  llvm::PHINode *Incoming = ExitBuilder.CreatePHI(I32, 2, "incoming");
+  Incoming->addIncoming(ExitBuilder.getInt32(7), Gate);
+  Incoming->addIncoming(ExitBuilder.getInt32(13), Bridge);
+  ExitBuilder.CreateStore(Incoming, Slot);
+  ExitBuilder.CreateCall(Consume, {ExitBuilder.CreateLoad(I32, Slot)});
+  ExitBuilder.CreateInvoke(ExitStep, Join, Dispatch);
+  llvm::IRBuilder<> InsideBuilder(Inside);
+  InsideBuilder.CreateInvoke(InsideStep, Bridge, Dispatch);
+  llvm::IRBuilder<> BridgeBuilder(Bridge);
+  BridgeBuilder.CreateBr(Exit);
+  llvm::IRBuilder<> JoinBuilder(Join);
+  JoinBuilder.CreateRetVoid();
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateRetVoid();
+  ASSERT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto InsideAt = Source.find("inside_step();");
+  ASSERT_NE(InsideAt, std::string::npos) << Source;
+  const auto CopyAt = Source.find(" = 13;", InsideAt);
+  const auto GotoAt = Source.find("goto L_exit;", InsideAt);
+  ASSERT_NE(CopyAt, std::string::npos) << Source;
+  ASSERT_NE(GotoAt, std::string::npos) << Source;
+  EXPECT_LT(CopyAt, GotoAt) << Source;
+  EXPECT_EQ(Source.find(" = 13;", GotoAt), std::string::npos) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "void exit_step(void);\nvoid inside_step(void);\n"
+        "void consume_step(uint32_t);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCProjectsAddressPhiThroughInlinedExpression) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-address-phi", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(I32, /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      llvm::FunctionType::get(I32, {I64, I64}, false),
+      llvm::GlobalValue::ExternalLinkage, "seh_address_phi", Module);
+  Function->setPersonalityFn(Personality);
+  Function->getArg(0)->setName("normal_address");
+  Function->getArg(1)->setName("handler_address");
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *Step = llvm::Function::Create(
+      llvm::FunctionType::get(Void, false),
+      llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateInvoke(Step, Join, Dispatch);
+  llvm::IRBuilder<> JoinBuilder(Join);
+  llvm::PHINode *Address = JoinBuilder.CreatePHI(I64, 2, "address");
+  Address->addIncoming(Function->getArg(0), Entry);
+  Address->addIncoming(Function->getArg(1), Handler);
+  llvm::Value *Offset = JoinBuilder.CreateAdd(Address, JoinBuilder.getInt64(32));
+  llvm::Value *Pointer = JoinBuilder.CreateIntToPtr(
+      Offset, llvm::PointerType::getUnqual(Context));
+  JoinBuilder.CreateRet(JoinBuilder.CreateLoad(I32, Pointer));
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Join);
+  ASSERT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto ExceptAt = Source.find("} __except (");
+  const auto NormalCopy = Source.find(" = normal_address;");
+  const auto HandlerCopy = Source.find(" = handler_address;");
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  ASSERT_NE(NormalCopy, std::string::npos) << Source;
+  ASSERT_NE(HandlerCopy, std::string::npos) << Source;
+  EXPECT_LT(NormalCopy, ExceptAt) << Source;
+  EXPECT_GT(HandlerCopy, ExceptAt) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "void may_raise(void);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only", "-Werror=uninitialized"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
 TEST(COFFExceptionIR, LLVMCProjectsInvokeNormalEdgesWithHandlerPhiCopy) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-seh-except-phi-exit-order", Context);
@@ -1933,6 +2183,7 @@ TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
   Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
   llvm::Type *Void = llvm::Type::getVoidTy(Context);
   llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
   llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
   llvm::FunctionType *PersonalityType =
       llvm::FunctionType::get(I32, /*isVarArg=*/true);
@@ -1944,8 +2195,10 @@ TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
   llvm::Function *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
       &Module, llvm::Intrinsic::seh_try_end);
   llvm::Function *Function = llvm::Function::Create(
-      VoidType, llvm::GlobalValue::ExternalLinkage, "nested_seh_bodies",
-      Module);
+      llvm::FunctionType::get(Void, {I64, I64}, false),
+      llvm::GlobalValue::ExternalLinkage, "nested_seh_bodies", Module);
+  Function->getArg(0)->setName("normal_address");
+  Function->getArg(1)->setName("handler_address");
   Function->setPersonalityFn(Personality);
   auto *Sink = new llvm::GlobalVariable(
       Module, I32, /*isConstant=*/false, llvm::GlobalValue::ExternalLinkage,
@@ -2001,7 +2254,22 @@ TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
   AfterInnerBuilder.CreateBr(EndOuter);
   llvm::IRBuilder<> EndOuterBuilder(EndOuter);
   EndOuterBuilder.CreateInvoke(TryEnd, AfterOuter, CatchDispatch);
+  llvm::Function *RecordState = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {I32}, false),
+      llvm::GlobalValue::ExternalLinkage, "record_state", Module);
   llvm::IRBuilder<> AfterOuterBuilder(AfterOuter);
+  llvm::PHINode *Address = AfterOuterBuilder.CreatePHI(I64, 2, "address");
+  Address->addIncoming(Function->getArg(0), EndOuter);
+  Address->addIncoming(Function->getArg(1), Handler);
+  llvm::PHINode *State = AfterOuterBuilder.CreatePHI(I32, 2, "state");
+  State->addIncoming(AfterOuterBuilder.getInt32(7), EndOuter);
+  State->addIncoming(AfterOuterBuilder.getInt32(99), Handler);
+  llvm::Value *Offset = AfterOuterBuilder.CreateAdd(
+      Address, AfterOuterBuilder.getInt64(36));
+  llvm::Value *Pointer = AfterOuterBuilder.CreateIntToPtr(
+      Offset, llvm::PointerType::getUnqual(Context));
+  AfterOuterBuilder.CreateStore(AfterOuterBuilder.CreateLoad(I32, Pointer), Sink);
+  AfterOuterBuilder.CreateCall(RecordState, {State});
   AfterOuterBuilder.CreateRetVoid();
 
   llvm::IRBuilder<> DispatchBuilder(CatchDispatch);
@@ -2065,6 +2333,37 @@ TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("llvm_x2E_seh"), std::string::npos) << Source;
+  const auto NormalCopy = Source.find(" = normal_address;", BodyAt);
+  const auto HandlerCopy = Source.find(" = handler_address;", BodyAt);
+  ASSERT_NE(NormalCopy, std::string::npos) << Source;
+  ASSERT_NE(HandlerCopy, std::string::npos) << Source;
+  EXPECT_LT(NormalCopy, ExceptKw) << Source;
+  EXPECT_GT(HandlerCopy, ExceptKw) << Source;
+  const auto NormalStateCopy = Source.find(" = 7;", OuterAt);
+  ASSERT_NE(NormalStateCopy, std::string::npos) << Source;
+  EXPECT_LT(NormalStateCopy, ExceptKw) << Source;
+  const auto StateLine = Source.rfind('\n', NormalStateCopy);
+  ASSERT_NE(StateLine, std::string::npos) << Source;
+  std::string StateName =
+      Source.substr(StateLine + 1, NormalStateCopy - StateLine - 1);
+  StateName.erase(0, StateName.find_first_not_of(" "));
+  EXPECT_NE(Source.find(StateName + " = 99;", ExceptKw), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("record_state(" + StateName + ");", HandlerCopy),
+            std::string::npos)
+      << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "extern uint32_t ProbeSink;\n"
+        "void arm_region(void);\nvoid may_raise(void);\n"
+        "void outer_step(void);\nvoid run_finally(void);\n"
+        "void record_state(uint32_t);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only", "-Werror=uninitialized"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
 }
 
 TEST(COFFExceptionIR, LLVMCCxxCleanupWrapContainsDestructor) {
