@@ -2183,6 +2183,24 @@ TEST(ObjCSourceBindings, CountdownByteTableRebasesOnlyBoundedPrivatePointer) {
   EXPECT_TRUE(readOnlyScalarSourceHelpers(Bound.Function, F.Image).empty());
 }
 
+TEST(ObjCSourceBindings, CountdownByteTableMayTestBeforeDecrementing) {
+  auto F = countdownByteTableFixture();
+  auto &Steps = F.Function.Body[2].Body;
+  // The last iteration exits before either induction local advances.
+  std::rotate(Steps.begin() + 3, Steps.begin() + 4, Steps.begin() + 6);
+  auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  ASSERT_EQ(Bound.BorrowedBytes.size(), 1U);
+  EXPECT_EQ(*Bound.BorrowedBytes.begin(), (BorrowedByteRange{0x1040, 720}));
+  EXPECT_EQ(readOnlyScalarSourceHelpers(Bound.Function, F.Image).size(), 3U);
+
+  // The publication proof must reject a modified exit condition, even after
+  // the helper was already installed by the binder.
+  auto &Exit = Bound.Function.Body[2].Body[4];
+  Exit.Cond->Op = NdOp::INT_NEGATE;
+  EXPECT_TRUE(readOnlyScalarSourceHelpers(Bound.Function, F.Image).empty());
+}
+
 TEST(ObjCSourceBindings, CountdownByteTablePublicationRechecksLoopAndHelper) {
   for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
     SCOPED_TRACE(Mutation);

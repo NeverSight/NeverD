@@ -342,24 +342,37 @@ inline ReadOnlyLoopBytePlans readOnlyLoopBytePlans(const HighFunc &Function,
         continue;
       const auto &Steps = Loop.Body;
       const size_t End = Steps.size();
-      const auto Decrement = Local(Steps[End - 6].Dst);
-      const auto Test = Local(Steps[End - 5].Dst);
+      // Compilers may test the final iteration before computing the next
+      // countdown value. Both orders exit before advancing the pointer after
+      // the last read, provided the tail has no other control-flow edges.
+      const bool TestFirst =
+          Steps[End - 6].Kind == StmtKind::Assign &&
+          Steps[End - 6].Val &&
+          Steps[End - 6].Val->Kind == ExprKind::BinOp &&
+          Steps[End - 6].Val->Op == NdOp::INT_NOTEQUAL;
+      const size_t DecrementAt = TestFirst ? End - 4 : End - 6;
+      const size_t TestAt = TestFirst ? End - 6 : End - 5;
+      const size_t ExitAt = TestFirst ? End - 5 : End - 4;
+      const auto Decrement = Local(Steps[DecrementAt].Dst);
+      const auto Test = Local(Steps[TestAt].Dst);
       const auto Increment = Local(Steps[End - 3].Dst);
       if (!Decrement || !Test || !Increment || *Decrement == *Count ||
           *Decrement == *Pointer || *Test == *Count || *Test == *Pointer ||
           *Increment == *Count || *Increment == *Pointer ||
-          Assignment(Steps[End - 6], *Decrement) != Steps[End - 6].Val ||
-          !Binary(Steps[End - 6].Val, NdOp::INT_SUB, *Count, 1) ||
-          Assignment(Steps[End - 5], *Test) != Steps[End - 5].Val ||
-          !Binary(Steps[End - 5].Val, NdOp::INT_NOTEQUAL, *Count, 1) ||
-          Steps[End - 4].Kind != StmtKind::If ||
-          !Steps[End - 4].ElseBody.empty() || Steps[End - 4].Body.size() != 1 ||
-          Steps[End - 4].Body[0].Kind != StmtKind::Break ||
-          !Steps[End - 4].Cond ||
-          Steps[End - 4].Cond->Kind != ExprKind::UnaryOp ||
-          Steps[End - 4].Cond->Op != NdOp::BOOL_NOT ||
-          Steps[End - 4].Cond->Operands.size() != 1 ||
-          Local(Steps[End - 4].Cond->Operands[0]) != *Test ||
+          Assignment(Steps[DecrementAt], *Decrement) !=
+              Steps[DecrementAt].Val ||
+          !Binary(Steps[DecrementAt].Val, NdOp::INT_SUB, *Count, 1) ||
+          Assignment(Steps[TestAt], *Test) != Steps[TestAt].Val ||
+          !Binary(Steps[TestAt].Val, NdOp::INT_NOTEQUAL, *Count, 1) ||
+          Steps[ExitAt].Kind != StmtKind::If ||
+          !Steps[ExitAt].ElseBody.empty() ||
+          Steps[ExitAt].Body.size() != 1 ||
+          Steps[ExitAt].Body[0].Kind != StmtKind::Break ||
+          !Steps[ExitAt].Cond ||
+          Steps[ExitAt].Cond->Kind != ExprKind::UnaryOp ||
+          Steps[ExitAt].Cond->Op != NdOp::BOOL_NOT ||
+          Steps[ExitAt].Cond->Operands.size() != 1 ||
+          Local(Steps[ExitAt].Cond->Operands[0]) != *Test ||
           Assignment(Steps[End - 3], *Increment) != Steps[End - 3].Val ||
           !Binary(Steps[End - 3].Val, NdOp::INT_ADD, *Pointer, 3) ||
           Local(Steps[End - 2].Dst) != *Count ||
