@@ -1071,6 +1071,16 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     for (va_t Addr : *UnsafeJumpTableBranches)
       if (Insns.count(Addr))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  // A four-consumer GOTOFF owner remains table-shaped even when one anchor or
+  // relocation slot is damaged. The joint proof must publish all four or none;
+  // retain the unresolved branch identity for downstream trap lowering.
+  if (finiteGOTOFFGroupClaimed())
+    for (size_t I = 0; I < GuardedGroupIdentity->MemberCount; ++I) {
+      const va_t Addr = GuardedGroupIdentity->Members[I];
+      if (auto It = Insns.find(Addr);
+          It != Insns.end() && It->second.JumpTableTargets.empty())
+        Func.UnsafeIndirectBranchAddresses.insert(Addr);
+    }
   if (PreservePotentialJumpTableBranches)
     for (va_t Addr : PotentialJumpTableBranches) {
       auto It = Insns.find(Addr);

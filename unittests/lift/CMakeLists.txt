@@ -2082,6 +2082,35 @@ add_custom_command(
   COMMENT "Compiling PIC i386 stack-materialized jump-table fixture")
 list(APPEND TEST_OBJECTS ${stack_cgoto_i386_pic_obj})
 
+# Keep the optimized i386 PIC layout used by the adjacent two-table semantic
+# roundtrip probe: two five-entry GOTOFF runs and two dispatches per run.
+set(i386_adjacent_twotable_src
+    "${CMAKE_CURRENT_SOURCE_DIR}/x86_32/test_i386_adjacent_twotable.c")
+set(i386_adjacent_twotable_obj
+    "${CMAKE_CURRENT_BINARY_DIR}/test_i386_adjacent_twotable.o")
+add_custom_command(
+  OUTPUT ${i386_adjacent_twotable_obj}
+  COMMAND ${CLANG_EXEC} -target i386-linux-gnu -nostdlib -nostdlibinc -c -O2
+          -fno-stack-protector -fno-exceptions -fno-unwind-tables
+          -fno-asynchronous-unwind-tables -march=pentium4
+          ${i386_adjacent_twotable_src} -o ${i386_adjacent_twotable_obj}
+  DEPENDS ${i386_adjacent_twotable_src}
+  COMMENT "Compiling optimized adjacent i386 GOTOFF tables")
+list(APPEND TEST_OBJECTS ${i386_adjacent_twotable_obj})
+
+set(i386_adjacent_function_pointer_src
+    "${CMAKE_CURRENT_SOURCE_DIR}/x86_32/test_i386_adjacent_function_pointer_runs.S")
+set(i386_adjacent_function_pointer_obj
+    "${CMAKE_CURRENT_BINARY_DIR}/test_i386_adjacent_function_pointer_runs.o")
+add_custom_command(
+  OUTPUT ${i386_adjacent_function_pointer_obj}
+  COMMAND ${CLANG_EXEC} -target i386-linux-gnu -nostdlib -nostdlibinc -c
+          ${i386_adjacent_function_pointer_src}
+          -o ${i386_adjacent_function_pointer_obj}
+  DEPENDS ${i386_adjacent_function_pointer_src}
+  COMMENT "Compiling adjacent i386 GOT-relative function-pointer runs")
+list(APPEND TEST_OBJECTS ${i386_adjacent_function_pointer_obj})
+
 foreach(src ${AARCH64_TEST_SOURCES})
   get_filename_component(base ${src} NAME_WE)
   set(obj "${CMAKE_CURRENT_BINARY_DIR}/${base}.o")

@@ -2132,9 +2132,8 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
         if (CandidateProposalStageActive && CurrentImg &&
             CurrentImg->Arch == Arch::X86 && CurrentImg->isELF() &&
             CurrentImg->getPointerSize() == 4 && Info.RelocAbsolute &&
-            !Info.IsRelative && !Info.PreScaledIndex &&
-            !Info.TwoTableSelect && !Info.TwoLevelIndex &&
-            Info.PhysicalCapacity == CandidateCapacity &&
+            !Info.IsRelative && !Info.PreScaledIndex && !Info.TwoTableSelect &&
+            !Info.TwoLevelIndex && Info.PhysicalCapacity == CandidateCapacity &&
             CandidateCapacity <= 64 && IndexOccurrences.size() == 1 &&
             Authorized.size() < CandidateCapacity &&
             hasTwoSameObjectIndirectConsumers()) {
@@ -2146,24 +2145,65 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
           // branch owns a published edge.  Prove both source roles and both
           // finite selectors on one private all-physical successor graph,
           // then replay their separate finite sets on the frozen owner graph.
-          CFGBuilder Scratch;
-          bool ScratchIncomplete = false;
-          if (!prepareCandidateFiniteProofScratch(
-                  Scratch, PhysicalTargets, EvidenceBudget,
-                  &ScratchIncomplete)) {
-            if (ScratchIncomplete && IncompleteIndexDomain)
-              *IncompleteIndexDomain = true;
-            return 0;
-          }
           std::map<va_t, std::vector<uint32_t>> JointDomains;
-          bool JointIncomplete = false;
-          const bool JointProven = proveCandidateFiniteAbsoluteSiblings(
-              Scratch, Rec, Info, PhysicalTargets, JointDomains,
-              EvidenceBudget, &JointIncomplete);
-          if (!JointProven) {
-            if (JointIncomplete && IncompleteIndexDomain)
-              *IncompleteIndexDomain = true;
-            return 0;
+          FiniteGOTOFFRoundCertificate *RoundCertificate =
+              GuardedGroupProofContext && finiteGOTOFFGroupClaimed()
+                  ? GuardedGroupProofContext->FiniteRoundCertificate
+                  : nullptr;
+          if (RoundCertificate && !RoundCertificate->Domains.empty()) {
+            // Four domains and four physical runs are bounded at 64 entries
+            // each. Pay for all vector copies and map comparisons before
+            // reading a cached certificate, including eventual destruction.
+            if (!consumeBudgetProducts(
+                    {{4, 64 * 32},
+                     {GuardedGroupProofContext->Roots.size(), 8}}))
+              return 0;
+            const auto Physical =
+                RoundCertificate->PhysicalTargets.find(Rec.Addr);
+            if (Physical == RoundCertificate->PhysicalTargets.end() ||
+                Physical->second != PhysicalTargets ||
+                RoundCertificate->Domains.size() != 4 ||
+                RoundCertificate->PhysicalTargets.size() != 4 ||
+                RoundCertificate->HypothesisEdges.size() != 4 ||
+                GuardedGroupProofContext->Edges.size() != 4 ||
+                !RoundCertificate->Domains.count(Rec.Addr) ||
+                RoundCertificate->HypothesisEdges !=
+                    GuardedGroupProofContext->Edges ||
+                RoundCertificate->Roots != GuardedGroupProofContext->Roots)
+              return 0;
+            JointDomains = RoundCertificate->Domains;
+          } else {
+            CFGBuilder Scratch;
+            bool ScratchIncomplete = false;
+            if (!prepareCandidateFiniteProofScratch(Scratch, PhysicalTargets,
+                                                    EvidenceBudget,
+                                                    &ScratchIncomplete)) {
+              if (ScratchIncomplete && IncompleteIndexDomain)
+                *IncompleteIndexDomain = true;
+              return 0;
+            }
+            bool JointIncomplete = false;
+            const bool JointProven = proveCandidateFiniteAbsoluteSiblings(
+                Scratch, Rec, Info, PhysicalTargets, JointDomains,
+                EvidenceBudget, &JointIncomplete);
+            if (!JointProven) {
+              if (JointIncomplete && IncompleteIndexDomain)
+                *IncompleteIndexDomain = true;
+              return 0;
+            }
+            if (RoundCertificate) {
+              if (JointDomains.size() != 4 ||
+                  GuardedGroupProofContext->Edges.size() != 4 ||
+                  RoundCertificate->PhysicalTargets.size() != 4 ||
+                  !consumeBudgetProducts(
+                      {{4, 64 * 32},
+                       {GuardedGroupProofContext->Roots.size(), 8}}))
+                return 0;
+              RoundCertificate->Domains = JointDomains;
+              RoundCertificate->HypothesisEdges =
+                  GuardedGroupProofContext->Edges;
+              RoundCertificate->Roots = GuardedGroupProofContext->Roots;
+            }
           }
           const auto CurrentDomain = JointDomains.find(Rec.Addr);
           if (CurrentDomain == JointDomains.end() ||

@@ -196,6 +196,29 @@ struct ResolverFlowGraph {
   std::vector<int> RootBlocks;
 };
 
+// A direct call to the following instruction is an internal CFG edge. On
+// i386 it also pushes the PC for a following POP, whose value is checked by
+// the separate exact GOTPC model. It must not be confused with a call into an
+// unmodeled callee when checking that a candidate proof graph is closed.
+static bool isExactLocalCallNext(const ResolverInsnSnapshot &Insn) {
+  if (!Insn.IsCall || Insn.IsIndirect || Insn.IsBranch || Insn.IsRet ||
+      Insn.IsNoReturnCall || Insn.Size == 0 ||
+      Insn.Addr > InvalidVA - Insn.Size)
+    return false;
+  const va_t Next = Insn.Addr + Insn.Size;
+  unsigned Calls = 0;
+  for (const LowOp &Op : Insn.Ops) {
+    if (Op.Opcode == NdOp::INDIR_CALL)
+      return false;
+    if (Op.Opcode != NdOp::CALL)
+      continue;
+    if (++Calls != 1 || Op.NumInputs < 1 || !Op.Inputs[0].isConst() ||
+        Op.Inputs[0].Offset != Next)
+      return false;
+  }
+  return Calls == 1;
+}
+
 /// Consume one candidate-local graph-construction allowance.  A null budget
 /// keeps the established non-fixed-point callers unmetered; fixed-point callers
 /// pass the same balance through snapshotting, graph construction, and value
@@ -353,9 +376,12 @@ static ResolverFlowGraph buildResolverFlowGraph(
 
   std::map<va_t, int> StartToBlock;
   if (Grouped.size() > static_cast<size_t>(std::numeric_limits<int>::max()) ||
-      !consumeProduct(Grouped.size(), 2) || !consumeWork(2))
+      !consumeProduct(Grouped.size(), 2) || !consumeProduct(Insns.size(), 2) ||
+      !consumeWork(2))
     return failIncomplete();
   Graph.Blocks.reserve(Grouped.size());
+  std::vector<std::pair<int, va_t>> LocalCallNextTargets;
+  LocalCallNextTargets.reserve(Insns.size());
   for (const auto &[Start, Members] : Grouped) {
     if (!consumeWork() || !consumeMapNodeInsert(StartToBlock.size()))
       return failIncomplete();
@@ -378,9 +404,18 @@ static ResolverFlowGraph buildResolverFlowGraph(
       return failIncomplete();
     Block.Ops.reserve(BlockOpCount);
     for (const ResolverInsnSnapshot *Insn : Members) {
-      if (!consumeWork())
+      if (!consumeWork() ||
+          (Insn->IsCall && !consumeProduct(Insn->Ops.size(), 1)))
         return failIncomplete();
-      Block.HasCall |= Insn->IsCall;
+      if (Insn->IsCall) {
+        if (isExactLocalCallNext(*Insn)) {
+          if (!consumeWork(4))
+            return failIncomplete();
+          LocalCallNextTargets.emplace_back(Id, Insn->Addr + Insn->Size);
+        } else {
+          Block.HasCall = true;
+        }
+      }
       Block.HasOpaqueTerminator |= Insn->IsOpaqueTerminator;
       Block.HasResumableTerminator |= Insn->IsResumableTerminator;
       if (!consumeMapNodeInsert(Graph.InsnToBlock.size()))
@@ -424,6 +459,12 @@ static ResolverFlowGraph buildResolverFlowGraph(
       Block.LastInsn = Insn;
     }
     Graph.Blocks.push_back(std::move(Block));
+  }
+  for (const auto &[BlockId, Next] : LocalCallNextTargets) {
+    if (!consumeWork() || !consumeLookup(Graph.InsnToBlock.size()))
+      return failIncomplete();
+    if (!Graph.InsnToBlock.count(Next))
+      Graph.Blocks[BlockId].HasCall = true;
   }
 
   auto blockAtInsn = [&](va_t Addr) -> int {
@@ -3693,9 +3734,10 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     // A fresh candidate-only graph may use all authenticated physical slots
     // as an inductive successor hypothesis.  This map is absent from the
     // owner builder and never enters its provisional or strong proposal maps.
+    const size_t ModeledBranches = CandidateFiniteProofModelEdges.size();
     if (CandidateProposalStageActive ||
-        CandidateFiniteProofModelEdges.size() != 2 ||
-        !ConsumeProduct(CandidateFiniteProofModelEdges.size(), 8)) {
+        (ModeledBranches != 2 && ModeledBranches != 4) ||
+        !ConsumeProduct(ModeledBranches, 8)) {
       RestoreProofRoots();
       return false;
     }
@@ -4069,8 +4111,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const std::set<va_t> *CandidateBranchesSharingTargets,
     std::vector<uint64_t> *QueryUnsignedFeasibleMasks,
     uint32_t ResolverDepthLimit,
-    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides) const {
-  if (GuardedGroupProofContext)
+    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
+    bool UseGroupContext) const {
+  if (UseGroupContext && GuardedGroupProofContext)
     CertifiedEdgeOverrides =
         CandidateTargetsOverride && CandidateTargetsOverride->empty()
             ? &GuardedGroupProofContext->EmptyEdges
@@ -11096,8 +11139,8 @@ std::set<va_t> CFGBuilder::candidateReachableInstructions(
     const std::vector<JumpTableStorageRange> &CandidateStorage,
     size_t *GraphWorkBudget, bool *AnalysisComplete,
     const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
-    bool *ClosedWorldControlFlow) const {
-  if (GuardedGroupProofContext)
+    bool *ClosedWorldControlFlow, bool UseGroupContext) const {
+  if (UseGroupContext && GuardedGroupProofContext)
     CertifiedEdgeOverrides = CandidateTargets.empty()
                                  ? &GuardedGroupProofContext->EmptyEdges
                                  : &GuardedGroupProofContext->Edges;

@@ -1615,9 +1615,18 @@ private:
     bool operator==(const JumpTableInfo &Other) const = default;
   };
 
-  /// Scratch-only assumptions for the narrow i386 dense-guard group proof.
+  /// Scratch-only assumptions for narrow i386 joint table proofs.
   /// They are never published as prior role/storage certificates. EmptyEdges
   /// removes every group edge for a hypothesis-free seed query.
+  struct FiniteGOTOFFRoundCertificate {
+    // A complete four-consumer certificate belongs to exactly one immutable
+    // group round. The next round uses a different edge/role hypothesis and
+    // starts with an empty certificate.
+    std::map<va_t, std::vector<uint32_t>> Domains;
+    std::map<va_t, std::vector<va_t>> PhysicalTargets;
+    std::map<va_t, std::vector<va_t>> HypothesisEdges;
+    std::set<va_t> Roots;
+  };
   struct GuardedJumpTableGroupProofContext {
     std::set<va_t> Roots;
     std::map<va_t, std::vector<va_t>> Edges;
@@ -1627,12 +1636,19 @@ private:
     /// outlives all scratch builders and is replaced only between phases.
     /// No selector, target, root, or ownership proof may borrow these results.
     const std::map<va_t, JumpTableInfo> *ConsumerRoleInfos = nullptr;
+    /// Borrowed from the enclosing round; never retained by a proposal.
+    FiniteGOTOFFRoundCertificate *FiniteRoundCertificate = nullptr;
+  };
+  enum class GuardedJumpTableGroupKind : uint8_t {
+    DenseGuard,
+    FiniteAdjacentGOTOFF,
   };
   struct GuardedJumpTableGroupKey {
     va_t OwnerBegin = InvalidVA;
     va_t OwnerEnd = InvalidVA;
     std::array<va_t, 8> Members{};
     size_t MemberCount = 0;
+    GuardedJumpTableGroupKind Kind = GuardedJumpTableGroupKind::DenseGuard;
     bool operator==(const GuardedJumpTableGroupKey &) const = default;
   };
   struct GuardedJumpTableGroupState {
@@ -1662,9 +1678,10 @@ private:
   bool prepareCandidateFiniteProofScratch(
       CFGBuilder &Scratch, const std::vector<va_t> &PhysicalTargets,
       size_t *EvidenceBudget, bool *AnalysisIncomplete) const;
-  /// Prove both exact i386 GOTOFF consumers over the same private physical
-  /// successor over-approximation.  Return each branch's separate finite
-  /// runtime coordinates; the caller must replay both on the owner graph.
+  /// Prove exact i386 GOTOFF consumers over one private physical successor
+  /// over-approximation, including both pairs when two tables are adjacent.
+  /// Return each branch's separate finite runtime coordinates only after
+  /// replaying every pair on the frozen owner graph.
   bool proveCandidateFiniteAbsoluteSiblings(
       CFGBuilder &Scratch, const InsnRecord &Current,
       const JumpTableInfo &Info, const std::vector<va_t> &PhysicalTargets,
@@ -1680,6 +1697,7 @@ private:
                                     bool &MadeProgress,
                                     bool &MetadataRefreshed);
   bool guardedGroupContains(va_t Branch) const;
+  bool finiteGOTOFFGroupClaimed() const;
   bool guardedGroupIsComplete() const;
   bool guardedGroupHasNoLiveMembers() const;
   void closeGuardedGroupOwners(std::set<va_t> &Owners) const;
@@ -2042,6 +2060,8 @@ private:
                                    int UseSeq, const JumpTableInfo &Info,
                                    bool AllowZeroExtension = false,
                                    bool AllowSignExtension = false) const;
+  /// UseGroupContext=false only for final joint-domain replay on one frozen
+  /// owner graph with every member's exact certified edge set.
   std::vector<bool> tableValuesMatchAtUses(
       const std::vector<JumpTableValueQuery> &Queries,
       bool *AnalysisComplete = nullptr,
@@ -2052,8 +2072,8 @@ private:
       const std::set<va_t> *CandidateBranchesSharingTargets = nullptr,
       std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr,
       uint32_t ResolverDepthLimit = 0,
-      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides =
-          nullptr) const;
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
+      bool UseGroupContext = true) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.
@@ -2085,13 +2105,15 @@ private:
   /// ClosedWorldControlFlow is true only if every reachable exit is modeled.
   /// Calls, opaque/resumable terminators, external successors, unresolved
   /// transfers, and a required fallthrough with no successor make it false.
+  /// UseGroupContext=false replays all exact member edges on the frozen owner.
   std::set<va_t> candidateReachableInstructions(
       const InsnRecord &Candidate, const std::vector<va_t> &CandidateTargets,
       const std::set<va_t> &Roots,
       const std::vector<JumpTableStorageRange> &CandidateStorage,
       size_t *GraphWorkBudget = nullptr, bool *AnalysisComplete = nullptr,
       const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
-      bool *ClosedWorldControlFlow = nullptr) const;
+      bool *ClosedWorldControlFlow = nullptr,
+      bool UseGroupContext = true) const;
   /// Prove that the conditional branch at BranchAddr actually gates the table
   /// LOAD: it dominates the LOAD and only one of its outgoing CFG edges can
   /// reach the access.  A comparison in a sibling/case-body block is not a

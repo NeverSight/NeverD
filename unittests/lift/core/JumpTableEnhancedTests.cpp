@@ -307,6 +307,366 @@ static fs::path i386StackPICObj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_stack_loc8_pic.o";
 }
 
+static fs::path i386AdjacentTwoTableObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_i386_adjacent_twotable.o";
+}
+
+static fs::path i386AdjacentFunctionPointerObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_i386_adjacent_function_pointer_runs.o";
+}
+
+static neverd::LowFunc buildI386AdjacentTwoTable(
+    neverd::BinaryImage &Image, size_t Budget = 0, size_t *Published = nullptr,
+    const std::set<neverd::va_t> *ProtectedSlots = nullptr) {
+  const neverd::Symbol *Function = Image.findSymbol("x86tt_twomachine");
+  if (!Function)
+    return {};
+  neverd::Decoder Decoder;
+  if (!Decoder.init(Image.Arch, Image.Mode))
+    return {};
+  neverd::CFGBuilder Builder;
+  if (Budget != 0)
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+  if (ProtectedSlots)
+    Builder.setProtectedJumpTableRelocationSlots(ProtectedSlots);
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  if (Published)
+    *Published =
+        Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount;
+  return Low;
+}
+
+static size_t
+countI386AdjacentTwoTableIndirectBranches(const neverd::LowFunc &Low) {
+  size_t Count = 0;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      Count += Op.Opcode == neverd::NdOp::INDIR_BR;
+  return Count;
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesProveAllFourExactConsumers) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  const neverd::va_t FirstBase = *Image.CodePtrRelocSlots.begin();
+  const neverd::va_t SecondBase = FirstBase + 5u * 4u;
+  ASSERT_EQ(Image.CodePtrRelocSlots.count(SecondBase), 1u);
+
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 0, &Published);
+  ASSERT_EQ(Low.JumpTables.size(), 4u);
+  EXPECT_EQ(Published, 4u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_EQ(std::count_if(Low.JumpTables.begin(), Low.JumpTables.end(),
+                          [&](const neverd::JumpTable &JT) {
+                            return JT.BaseAddr == FirstBase;
+                          }),
+            2);
+  EXPECT_EQ(std::count_if(Low.JumpTables.begin(), Low.JumpTables.end(),
+                          [&](const neverd::JumpTable &JT) {
+                            return JT.BaseAddr == SecondBase;
+                          }),
+            2);
+  std::map<neverd::va_t, std::vector<neverd::va_t>> PhysicalTargets;
+  for (neverd::va_t Base : {FirstBase, SecondBase}) {
+    auto &Run = PhysicalTargets[Base];
+    for (unsigned Slot = 0; Slot < 5; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(Base + 4u * Slot, sizeof(uint32_t));
+      ASSERT_NE(Bytes, nullptr);
+      uint32_t Target = 0;
+      std::memcpy(&Target, Bytes, sizeof(Target));
+      Run.push_back(Target);
+    }
+  }
+  const std::set<neverd::va_t> FirstTargets(
+      PhysicalTargets.at(FirstBase).begin(),
+      PhysicalTargets.at(FirstBase).end());
+  const std::set<neverd::va_t> SecondTargets(
+      PhysicalTargets.at(SecondBase).begin(),
+      PhysicalTargets.at(SecondBase).end());
+  for (neverd::va_t Target : FirstTargets)
+    ASSERT_EQ(SecondTargets.count(Target), 0u);
+  for (const neverd::JumpTable &JT : Low.JumpTables) {
+    ASSERT_TRUE(JT.HasBaseAddr);
+    ASSERT_TRUE(JT.HasDispatchSlotMap);
+    ASSERT_EQ(JT.EntrySize, sizeof(uint32_t));
+    ASSERT_EQ(JT.SlotIndices.size(), JT.Targets.size());
+    ASSERT_FALSE(JT.Targets.empty());
+    ASSERT_LE(JT.Targets.size(), 5u);
+    const auto Expected = PhysicalTargets.find(JT.BaseAddr);
+    ASSERT_NE(Expected, PhysicalTargets.end());
+    const auto &OtherTargets =
+        JT.BaseAddr == FirstBase ? SecondTargets : FirstTargets;
+    for (size_t I = 0; I < JT.Targets.size(); ++I) {
+      ASSERT_LT(JT.SlotIndices[I], 5u);
+      EXPECT_EQ(JT.Targets[I], Expected->second[JT.SlotIndices[I]]);
+      EXPECT_EQ(OtherTargets.count(JT.Targets[I]), 0u);
+    }
+    for (neverd::va_t Slot : JT.SuppressibleRelocationSlots) {
+      EXPECT_GE(Slot, JT.BaseAddr);
+      EXPECT_LT(Slot, JT.BaseAddr + 20u);
+      EXPECT_EQ((Slot - JT.BaseAddr) % 4u, 0u);
+    }
+  }
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesRejectMissingSecondAnchor) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  const neverd::va_t SecondBase = *Image.CodePtrRelocSlots.begin() + 5u * 4u;
+  size_t Removed = 0;
+  for (auto It = Image.DataAddressRelocOperands.begin();
+       It != Image.DataAddressRelocOperands.end();) {
+    if (It->second.TargetVA == SecondBase && Removed == 0) {
+      It = Image.DataAddressRelocOperands.erase(It);
+      ++Removed;
+    } else {
+      ++It;
+    }
+  }
+  ASSERT_EQ(Removed, 1u);
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 0, &Published);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 4u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesRejectBothSecondRunAnchors) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  const neverd::va_t SecondBase = *Image.CodePtrRelocSlots.begin() + 5u * 4u;
+  size_t Removed = 0;
+  for (auto It = Image.DataAddressRelocOperands.begin();
+       It != Image.DataAddressRelocOperands.end();) {
+    if (It->second.TargetVA == SecondBase) {
+      It = Image.DataAddressRelocOperands.erase(It);
+      ++Removed;
+    } else {
+      ++It;
+    }
+  }
+  ASSERT_EQ(Removed, 2u);
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 0, &Published);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 4u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
+}
+
+TEST_F(JTE_X86_32,
+       AdjacentGOTOFFTablesRejectMissingAnchorsWithExtraRawReference) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  const neverd::va_t FirstBase = *Image.CodePtrRelocSlots.begin();
+  const neverd::va_t SecondBase = FirstBase + 5u * 4u;
+  const neverd::Symbol *Function = Image.findSymbol("x86tt_twomachine");
+  ASSERT_NE(Function, nullptr);
+  const neverd::Section *CodeSection = Image.getSectionFor(Function->Addr);
+  ASSERT_NE(CodeSection, nullptr);
+  // This separate `mov ecx, imm32` is outside all four indexed LOADs. Make
+  // its immediate refer to A and add an otherwise unrelated raw GOTOFF field.
+  // The negative identity must count only fields consumed by the four jumps.
+  const neverd::va_t ExtraField = Function->Addr + 0x94u;
+  ASSERT_GE(ExtraField, CodeSection->VA);
+  ASSERT_LT(ExtraField + 4, CodeSection->VA + CodeSection->Size);
+  const uint8_t *Opcode = Image.readVA(ExtraField - 1, 1);
+  ASSERT_NE(Opcode, nullptr);
+  ASSERT_EQ(*Opcode, 0xb9u);
+  const uint32_t BaseValue = static_cast<uint32_t>(FirstBase);
+  const uint8_t BaseBytes[4] = {static_cast<uint8_t>(BaseValue),
+                                static_cast<uint8_t>(BaseValue >> 8),
+                                static_cast<uint8_t>(BaseValue >> 16),
+                                static_cast<uint8_t>(BaseValue >> 24)};
+  ASSERT_TRUE(Image.writeVA(ExtraField, BaseBytes, sizeof(BaseBytes)));
+  const auto Raw =
+      std::find_if(Image.Relocations.begin(), Image.Relocations.end(),
+                   [&](const neverd::RelocationEntry &Entry) {
+                     if (Entry.SectionName != ".rel" + CodeSection->Name ||
+                         Entry.Address >= CodeSection->Size)
+                       return false;
+                     const auto Field = Image.DataAddressRelocOperands.find(
+                         CodeSection->VA + Entry.Address);
+                     return Field != Image.DataAddressRelocOperands.end() &&
+                            Field->second.TargetVA == FirstBase;
+                   });
+  ASSERT_NE(Raw, Image.Relocations.end());
+  neverd::RelocationEntry Extra = *Raw;
+  Extra.Address = ExtraField - CodeSection->VA;
+  Image.Relocations.push_back(std::move(Extra));
+  size_t Removed = 0;
+  for (auto It = Image.DataAddressRelocOperands.begin();
+       It != Image.DataAddressRelocOperands.end();) {
+    if (It->second.TargetVA == SecondBase) {
+      It = Image.DataAddressRelocOperands.erase(It);
+      ++Removed;
+    } else {
+      ++It;
+    }
+  }
+  ASSERT_EQ(Removed, 2u);
+
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 0, &Published);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 4u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesRejectDamagedDerivedAnchor) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  const neverd::va_t FirstBase = *Image.CodePtrRelocSlots.begin();
+  const neverd::va_t SecondBase = FirstBase + 5u * 4u;
+  bool Damaged = false;
+  for (auto &[FieldVA, Field] : Image.DataAddressRelocOperands) {
+    (void)FieldVA;
+    if (Field.TargetVA == SecondBase) {
+      Field.TargetVA = FirstBase;
+      Damaged = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(Damaged);
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 0, &Published);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 4u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesRejectSecondRunRelocHole) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  const neverd::va_t SecondBase = *Image.CodePtrRelocSlots.begin() + 5u * 4u;
+  ASSERT_EQ(Image.CodePtrRelocSlots.erase(SecondBase + 2u * 4u), 1u);
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 0, &Published);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 4u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesRejectIndependentSecondRunRoot) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  const neverd::va_t SecondBase = *Image.CodePtrRelocSlots.begin() + 5u * 4u;
+  const std::set<neverd::va_t> ProtectedSlots{SecondBase + 2u * 4u};
+  size_t Published = 0;
+  const neverd::LowFunc Low =
+      buildI386AdjacentTwoTable(Image, 0, &Published, &ProtectedSlots);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 4u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesDoNotClaimUnrelatedTailJump) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("x86tt_twomachine");
+  ASSERT_NE(Function, nullptr);
+  // Keep every GOTOFF relocation, but change the fourth dispatch from
+  // `jmp ecx` (the table-loaded target) to `jmp eax` (an unrelated value).
+  // A lexical relocation-to-next-branch association would still claim it.
+  const neverd::va_t CallbackBranch = Function->Addr + 0x10du;
+  const uint8_t *Original = Image.readVA(CallbackBranch, 2);
+  ASSERT_NE(Original, nullptr);
+  ASSERT_EQ(Original[0], 0xffu);
+  ASSERT_EQ(Original[1], 0xe1u);
+  const uint8_t CallbackInsn[2]{0xffu, 0xe0u};
+  ASSERT_TRUE(
+      Image.writeVA(CallbackBranch, CallbackInsn, sizeof(CallbackInsn)));
+
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 0, &Published);
+  EXPECT_EQ(Published, 0u);
+  EXPECT_TRUE(std::none_of(Low.JumpTables.begin(), Low.JumpTables.end(),
+                           [&](const neverd::JumpTable &JT) {
+                             return JT.InsnAddr == CallbackBranch;
+                           }));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(CallbackBranch), 0u);
+  bool SawIndirectCall = false;
+  bool SawIndirectBranch = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Addr == CallbackBranch) {
+        SawIndirectCall |= Op.Opcode == neverd::NdOp::INDIR_CALL;
+        SawIndirectBranch |= Op.Opcode == neverd::NdOp::INDIR_BR;
+      }
+  EXPECT_TRUE(SawIndirectCall);
+  EXPECT_FALSE(SawIndirectBranch);
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFFunctionPointerRunsRemainTailCalls) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentFunctionPointerObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("x86tt_fourtails");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 10u);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(
+      Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
+      0u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  std::set<neverd::va_t> TailCalls;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Opcode == neverd::NdOp::INDIR_CALL)
+        TailCalls.insert(Op.Addr);
+  EXPECT_EQ(TailCalls.size(), 4u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 0u);
+}
+
+TEST_F(JTE_X86_32, AdjacentGOTOFFTablesEvidenceExhaustionFailsClosed) {
+  auto ImageOrErr = neverd::loadBinary(i386AdjacentTwoTableObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(Image, 1, &Published);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
+}
+
 TEST_F(JTE_X86_32, StackMemcpyTableNeedsDedicatedEvidenceCeiling) {
   auto ImageOrErr = neverd::loadBinary(i386StackPICObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
