@@ -33,6 +33,12 @@ enum class DriverInterruptShare : uint8_t {
 #undef NEVERD_DRIVER_INTERRUPT_SHARE
 };
 
+enum class DriverInterruptPolarity : uint32_t {
+#define NEVERD_DRIVER_INTERRUPT_POLARITY(Name, Value, Spelling) Name = Value,
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_POLARITY
+};
+
 enum class DriverInterruptAction {
 #define NEVERD_DRIVER_INTERRUPT_ACTION(Name, Spelling) Name,
 #include "neverd/emulation/DriverInterrupts.def"
@@ -43,6 +49,17 @@ enum class DriverInterruptAction {
   inline constexpr size_t Name = Value;
 #include "neverd/emulation/DriverInterrupts.def"
 #undef NEVERD_DRIVER_INTERRUPT_LIMIT
+
+/// Explicit message programming and translated assignment. MessageAddress is
+/// a reported device programming fact; writing it does not inject an interrupt.
+struct DriverInterruptMessage {
+  uint64_t MessageAddress = 0;
+  uint32_t MessageData = 0;
+  uint32_t TranslatedVector = 0;
+  uint32_t TranslatedLevel = 0;
+  uint64_t TranslatedAffinity = 0;
+  DriverInterruptPolarity Polarity = DriverInterruptPolarity::Unknown;
+};
 
 /// Ordered raw/translated CM_RESOURCE_LIST interrupt descriptor pair. Group
 /// zero and CPU zero are explicit provider facts. Memory descriptors precede
@@ -60,6 +77,9 @@ struct DriverInterruptResource {
   DriverInterruptShare Share = DriverInterruptShare::DeviceExclusive;
   /// Explicit sampling period for a level-sensitive line; absent for pulses.
   std::optional<uint64_t> RetriggerAfter100ns;
+  /// Nonempty for message resources. Entries in one raw descriptor share a
+  /// message address; multiple descriptors can declare distinct addresses.
+  std::vector<DriverInterruptMessage> Messages;
 };
 
 struct DriverInterruptEvent {
@@ -69,6 +89,8 @@ struct DriverInterruptEvent {
   std::string DeviceID;
   std::string InterruptID;
   DriverInterruptAction Action = DriverInterruptAction::Pulse;
+  /// Index within the named resource's Messages, required for message events.
+  std::optional<uint32_t> MessageID;
 };
 
 struct DriverInterruptHandlerResult {
@@ -77,6 +99,8 @@ struct DriverInterruptHandlerResult {
   std::optional<uint64_t> ReturnedAt100ns;
   std::optional<uint8_t> ReturnValue;
   uint32_t DeliveryIndex = 0;
+  /// Actual third ISR argument: the index in its PDO-wide message table.
+  std::optional<uint32_t> MessageID;
 };
 
 /// Independent observations, not IRPs or NTSTATUS completions. An armed event
@@ -97,6 +121,8 @@ struct DriverInterruptResult {
   std::optional<std::string> UndeliveredReason;
   std::vector<DriverInterruptHandlerResult> Handlers;
   DriverInterruptAction Action = DriverInterruptAction::Pulse;
+  /// Source resource-local message index, independent of peer handler IDs.
+  std::optional<uint32_t> MessageID;
 };
 
 } // namespace neverd::emulation

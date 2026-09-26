@@ -87,6 +87,65 @@ protected:
   }
 };
 
+TEST_F(DriverBackendContext, PermissionPreflightWorksInsideLiveMemoryHooks) {
+  // MOV rax, [rcx]; MOV [rcx], rax; NOP.
+  const std::array<uint8_t, 7> Code = {0x48, 0x8b, 0x01, 0x48,
+                                       0x89, 0x01, 0x90};
+  ASSERT_EQ(llvm::toString(CPU->write(CodeAddress, Code)), "");
+  ASSERT_EQ(llvm::toString(CPU->setReg(X64Register::CX, DataAddress)), "");
+  unsigned Reads = 0, Writes = 0;
+  const auto Check = [&](uint64_t Address, uint32_t Size) {
+    auto Allowed = CPU->canAccess(Address, Size, Read | Write);
+    ASSERT_TRUE(bool(Allowed)) << llvm::toString(Allowed.takeError());
+    EXPECT_TRUE(*Allowed);
+    auto Denied = CPU->canAccess(Address, Size, Execute);
+    ASSERT_TRUE(bool(Denied)) << llvm::toString(Denied.takeError());
+    EXPECT_FALSE(*Denied);
+    auto Missing = CPU->canAccess(DataAddress + profile::PageSize, 1, Read);
+    ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+    EXPECT_FALSE(*Missing);
+    EXPECT_FALSE(CPU->fault());
+  };
+  BackendHooks Hooks;
+  Hooks.Read = [&](uint64_t Address, uint32_t Size) {
+    ++Reads;
+    Check(Address, Size);
+  };
+  Hooks.Write = [&](uint64_t Address, uint32_t Size, uint64_t) {
+    ++Writes;
+    Check(Address, Size);
+  };
+  Hooks.Instruction = [&](uint64_t PC, uint32_t) {
+    if (PC == CodeAddress + Code.size() - 1)
+      CPU->stop();
+  };
+  ASSERT_EQ(llvm::toString(CPU->installHooks(std::move(Hooks))), "");
+  ASSERT_EQ(llvm::toString(CPU->run(CodeAddress, RunTimeout)), "");
+  EXPECT_EQ(Reads, 1u);
+  EXPECT_EQ(Writes, 1u);
+  EXPECT_FALSE(CPU->fault());
+}
+
+TEST_F(DriverBackendContext,
+       XmmAccessPreservesBothHalvesAndRejectsInvalidIndex) {
+  const UnicornBackend::XmmValue Value = {0x123456789abcdef0,
+                                          0xfedcba9876543210};
+  for (unsigned Register : {0u, 6u, 15u}) {
+    ASSERT_EQ(llvm::toString(CPU->setXmm(Register, Value)), "");
+    auto Read = CPU->xmm(Register);
+    ASSERT_TRUE(bool(Read)) << llvm::toString(Read.takeError());
+    EXPECT_EQ(*Read, Value);
+  }
+  EXPECT_NE(llvm::toString(CPU->setXmm(16, {})).find("invalid"),
+            std::string::npos);
+  auto Invalid = CPU->xmm(16);
+  ASSERT_FALSE(bool(Invalid));
+  llvm::consumeError(Invalid.takeError());
+  auto Last = CPU->xmm(15);
+  ASSERT_TRUE(bool(Last));
+  EXPECT_EQ(*Last, Value);
+}
+
 TEST_F(DriverBackendContext, RestoresGeneralRegistersFlagsStackAndInstruction) {
   const std::array<X64Register, 5> Registers = {
       X64Register::AX, X64Register::CX, X64Register::DX, X64Register::R8,

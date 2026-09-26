@@ -15,6 +15,7 @@
 
 #include "../GuestMemory.h"
 #include "KernelResources.h"
+#include "WindowsKernelLayout.h"
 
 #include "neverd/emulation/DriverPnp.h"
 

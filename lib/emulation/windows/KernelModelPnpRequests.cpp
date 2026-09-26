@@ -146,8 +146,8 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
     if (!Preprocess)
       return Preprocess.takeError();
     if (*Preprocess) {
-      Request.FrameworkPnpBeforeBus = true;
-      Request.FrameworkPnpAwaiting = true;
+      Request.FrameworkTransitionBeforeBus = true;
+      Request.FrameworkTransitionAwaiting = true;
       if (auto E = markRequestPending(*Packet))
         return E;
       if (auto E = recordDispatchReturn(*Packet, StatusPending))
@@ -156,7 +156,7 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
       Call.IRP = *Packet;
       return Call;
     }
-    auto Status = forwardFrameworkPnpRequest(*Packet);
+    auto Status = forwardFrameworkTransitionRequest(*Packet);
     if (!Status)
       return Status.takeError();
     if (auto E = recordDispatchReturn(*Packet, uint32_t(*Status)))
@@ -170,10 +170,12 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
   return Call;
 }
 
-llvm::Expected<uint64_t> KernelModel::forwardFrameworkPnpRequest(uint64_t IRP) {
+llvm::Expected<uint64_t>
+KernelModel::forwardFrameworkTransitionRequest(uint64_t IRP) {
   auto *Request = requestForIRP(IRP);
-  if (!Request || !Request->PnpOperation || Request->Completed ||
-      Request->Forwarded || Request->FrameworkPnpAwaiting ||
+  if (!Request || (!Request->PnpOperation && !Request->PowerOperation) ||
+      Request->Completed || Request->Forwarded ||
+      Request->FrameworkTransitionAwaiting ||
       Request->DeviceRoute.size() != 2 || Request->StackCount < 2 ||
       Request->DeviceRoute.back() != Request->PnpDevice ||
       !FrameworkDevices.count(Request->DeviceRoute.front()))

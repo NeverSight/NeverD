@@ -749,32 +749,32 @@ llvm::Expected<uint64_t> KernelModel::call(
       return E;
     return 0;
   }
+  if (Kind == KernelAPIKind::MmAllocatePagesForMdl ||
+      Kind == KernelAPIKind::MmAllocatePagesForMdlEx)
+    return allocatePagesForMDL(A,
+                               Kind == KernelAPIKind::MmAllocatePagesForMdlEx);
+  if (Kind == KernelAPIKind::MmFreePagesFromMdl) {
+    if (auto E = freePagesFromMDL(A[0]))
+      return E;
+    return 0;
+  }
   if (Kind == KernelAPIKind::MmMapLockedPagesSpecifyCache) {
-    KernelPhysicalMemory::CacheType Cache;
-    switch (static_cast<uint32_t>(A[2])) {
-    case MmCached:
-      Cache = KernelPhysicalMemory::CacheType::Cached;
-      break;
-    case MmNonCached:
-      Cache = KernelPhysicalMemory::CacheType::NonCached;
-      break;
-    case MmWriteCombined:
-      Cache = KernelPhysicalMemory::CacheType::WriteCombined;
-      break;
-    default:
-      return modelError("MDL mapping has an unsupported cache type");
-    }
+    auto Cache = memoryCacheType(static_cast<uint32_t>(A[2]));
+    if (!Cache)
+      return Cache.takeError();
     if (static_cast<uint8_t>(A[1]) == UserMode)
-      return mapUserMDL(A[0], A[3], static_cast<uint32_t>(A[5]), Cache);
+      return mapUserMDL(A[0], A[3], static_cast<uint32_t>(A[5]), *Cache);
     if (static_cast<uint8_t>(A[1]) != KernelMode || A[3] ||
         static_cast<uint8_t>(A[4]))
       return modelError("MDL mapping requires KernelMode, no requested "
                         "address and no bugcheck");
-    return mapLockedPages(A[0], static_cast<uint32_t>(A[5]), false, Cache);
+    return mapLockedPages(A[0], static_cast<uint32_t>(A[5]), false, *Cache);
   }
   if (Kind == KernelAPIKind::MmGetSystemAddressForMdlSafe) {
     return mapLockedPages(A[0], static_cast<uint32_t>(A[1]), true);
   }
+  if (Kind == KernelAPIKind::MmProtectMdlSystemAddress)
+    return protectMDLSystemAddress(A[0], uint32_t(A[1]));
   if (Kind == KernelAPIKind::MmUnmapLockedPages) {
     if (A[0] >= profile::UserMappedAliasBase &&
         A[0] - profile::UserMappedAliasBase < profile::UserMappedAliasSize) {
@@ -944,11 +944,23 @@ llvm::Expected<uint64_t> KernelModel::call(
   }
   if (Kind == KernelAPIKind::ExFreePoolWithTag ||
       Kind == KernelAPIKind::ExFreePool) {
+    if (auto Mdl = MDLs.find(A[0]);
+        Mdl != MDLs.end() &&
+        (Mdl->second.Owner == LockedMdl::Ownership::AllocatedPages ||
+         Mdl->second.Owner == LockedMdl::Ownership::ReleasedPages)) {
+      // The WDK ExFreePool macro calls ExFreePoolWithTag with a zero tag.
+      if (Kind == KernelAPIKind::ExFreePoolWithTag && uint32_t(A[1]))
+        return modelError(
+            "physical MDL descriptors require untagged ExFreePool");
+      if (auto E = freeAllocatedMDL(A[0]))
+        return E;
+      return 0;
+    }
     auto It = Allocations.find(A[0]);
     if (It == Allocations.end())
       return modelError(
           "pool free received an unknown or already freed pointer");
-    if (Kind == KernelAPIKind::ExFreePoolWithTag &&
+    if (Kind == KernelAPIKind::ExFreePoolWithTag && uint32_t(A[1]) &&
         static_cast<uint32_t>(A[1]) != It->second.Tag)
       return modelError("ExFreePoolWithTag tag does not match allocation");
     if (!It->second.NonPaged && CurrentIRQL > APCLevel)
@@ -1161,8 +1173,9 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   if (CurrentIRQL > APCLevel)
     for (const auto &[Base, Allocation] : Allocations)
       if (!Allocation.NonPaged && Address < Base + Allocation.Size &&
-          Base < End)
-        return modelError("paged pool access requires IRQL <= APC_LEVEL");
+          Base < End && !Physical.hasPinnedPages(Address, Size))
+        return modelError("paged pool access requires IRQL <= APC_LEVEL or "
+                          "live physical page locks");
   if (Address < profile::ThunkBase + profile::ThunkSize &&
       profile::ThunkBase < End)
     return modelError(
@@ -1195,7 +1208,7 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
     return E;
   if (auto E = DMA.validateGuestAccess(Address, Size, IsWrite))
     return E;
-  if (auto E = Interrupts.validateGuestAccess(Address, Size))
+  if (auto E = Interrupts.validateGuestAccess(Address, Size, IsWrite))
     return E;
   for (const auto &[Item, Device] : WorkItems)
     if (Address < Item + profile::WorkItemTokenSize && Item < End)

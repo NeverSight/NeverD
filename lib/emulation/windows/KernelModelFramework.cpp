@@ -65,6 +65,7 @@ void KernelModel::configureFrameworkDeviceHost() {
     if (!Configured || !Configured->AddDeviceActive || !isProviderDevice(PDO))
       return frameworkDeviceError(
           "PnP framework creation requires the active physical device");
+    uint32_t PowerFlags = windows::DevicePowerPageable;
     if (Filter) {
       auto Lower = topAttachedDevice(PDO);
       if (!Lower)
@@ -72,6 +73,8 @@ void KernelModel::configureFrameworkDeviceHost() {
       auto Flags = Memory.readInteger(*Lower + windows::DeviceFlagsOffset, 4);
       if (!Flags)
         return Flags.takeError();
+      PowerFlags =
+          *Flags & (windows::DevicePowerPageable | windows::DevicePowerInrush);
       const uint32_t Transfer =
           *Flags & (windows::DeviceBufferedIO | windows::DeviceDirectIO);
       if (Transfer == (windows::DeviceBufferedIO | windows::DeviceDirectIO))
@@ -90,6 +93,12 @@ void KernelModel::configureFrameworkDeviceHost() {
       return KernelFramework::DeviceCreation{Created->Status, 0};
     const uint64_t Device = Created->Address;
     if (auto E = SetIoType(Device, IoType))
+      return llvm::joinErrors(std::move(E), deleteDevice(Device));
+    auto Flags = Memory.readInteger(Device + windows::DeviceFlagsOffset, 4);
+    if (!Flags)
+      return llvm::joinErrors(Flags.takeError(), deleteDevice(Device));
+    if (auto E = Memory.writeInteger(Device + windows::DeviceFlagsOffset,
+                                     *Flags | PowerFlags, 4))
       return llvm::joinErrors(std::move(E), deleteDevice(Device));
     auto Attached = attachDevice(Device, PDO);
     if (!Attached)
@@ -242,7 +251,7 @@ llvm::Expected<uint64_t> KernelModel::call(
   auto Result = Framework->call(Export, Arguments, CurrentIRQL);
   if (!Result)
     return Result.takeError();
-  if (auto E = completeFrameworkPnpIfReady())
+  if (auto E = completeFrameworkTransitionIfReady())
     return E;
   // Preserve the complete caller frame until the lower provider responds.
   // The eventual API return is BOOLEAN; the NTSTATUS belongs to GetStatus.
@@ -275,21 +284,21 @@ llvm::Expected<uint64_t> KernelModel::call(
   return *Result;
 }
 
-llvm::Error KernelModel::completeFrameworkPnpIfReady() {
+llvm::Error KernelModel::completeFrameworkTransitionIfReady() {
   if (!Framework)
     return llvm::Error::success();
   auto Pnp = Framework->takePnpCompletion();
   if (!Pnp)
     return llvm::Error::success();
   auto *Request = requestForIRP(Pnp->IRP);
-  if (!Request || !Request->FrameworkPnpAwaiting ||
-      Request->FrameworkPnpHandled)
+  if (!Request || !Request->FrameworkTransitionAwaiting ||
+      Request->FrameworkTransitionHandled)
     return frameworkDeviceError("PnP callback return lost its pending IRP");
-  Request->FrameworkPnpAwaiting = false;
-  if (Request->FrameworkPnpBeforeBus) {
-    Request->FrameworkPnpBeforeBus = false;
+  Request->FrameworkTransitionAwaiting = false;
+  if (Request->FrameworkTransitionBeforeBus) {
+    Request->FrameworkTransitionBeforeBus = false;
     if (!(Pnp->Status & profile::NTStatusFailureMask)) {
-      auto Status = forwardFrameworkPnpRequest(Pnp->IRP);
+      auto Status = forwardFrameworkTransitionRequest(Pnp->IRP);
       if (!Status)
         return Status.takeError();
       return llvm::Error::success();
@@ -299,7 +308,7 @@ llvm::Error KernelModel::completeFrameworkPnpIfReady() {
       return E;
     Request->IOStatusWritten.fill(true);
   }
-  Request->FrameworkPnpHandled = true;
+  Request->FrameworkTransitionHandled = true;
   if (Pnp->Status & profile::NTStatusFailureMask)
     if (auto E = Memory.writeInteger(Pnp->IRP + windows::IRPStatusOffset,
                                      Pnp->Status, 4))
@@ -335,7 +344,7 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
     auto Continued = Framework->finishGuestCall(Token.ID, Result);
     if (!Continued)
       return Continued.takeError();
-    if (auto E = completeFrameworkPnpIfReady())
+    if (auto E = completeFrameworkTransitionIfReady())
       return E;
     return Continued;
   }

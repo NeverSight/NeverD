@@ -37,6 +37,26 @@ OFFSET(IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.ProcessorEnableMask, 64);
 OFFSET(IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.Group, 72);
 OFFSET(IO_CONNECT_INTERRUPT_PARAMETERS, LineBased.SynchronizeIrql, 48);
 OFFSET(IO_DISCONNECT_INTERRUPT_PARAMETERS, ConnectionContext, 8);
+OFFSET(CM_PARTIAL_RESOURCE_DESCRIPTOR, u.MessageInterrupt.Raw.MessageCount, 6);
+OFFSET(IO_CONNECT_INTERRUPT_PARAMETERS, MessageBased.FallBackServiceRoutine,
+       56);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO, UnifiedIrql, 0);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO, MessageCount, 4);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO, MessageInfo, 8);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, MessageAddress, 0);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, TargetProcessorSet, 8);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, InterruptObject, 16);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, MessageData, 24);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, Vector, 28);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, Irql, 32);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, Mode, 36);
+OFFSET(IO_INTERRUPT_MESSAGE_INFO_ENTRY, Polarity, 40);
+_Static_assert(sizeof(IO_INTERRUPT_MESSAGE_INFO_ENTRY) == 48 &&
+                   CM_RESOURCE_INTERRUPT_MESSAGE == 2 &&
+                   CONNECT_MESSAGE_BASED == 3 &&
+                   InterruptPolarityUnknown == 0 && InterruptRisingEdge == 1 &&
+                   InterruptFallingEdge == 2,
+               "genuine message interrupt ABI");
 _Static_assert(CmResourceTypeInterrupt == 2 &&
                    CmResourceShareDeviceExclusive == 1 &&
                    CM_RESOURCE_INTERRUPT_LATCHED == 1 && Latched == 1 &&
@@ -50,7 +70,9 @@ typedef struct {
   PDEVICE_OBJECT Lower;
   KEVENT Event;
   KDPC Dpc;
+  KTIMER Timer;
   PKINTERRUPT Interrupt;
+  PIO_INTERRUPT_MESSAGE_INFO MessageTable;
   PIRP Pending;
   PIRP Transfer;
   volatile ULONG *Register;
@@ -76,6 +98,10 @@ static UCHAR Mode;
 static ULONG Units;
 static ULONG Live;
 static KSPIN_LOCK SharedInterruptLock;
+
+static BOOLEAN PassiveMode(void) {
+  return Mode == 'P' || Mode == 'W' || Mode == 'X';
+}
 
 static KIRQL ReadGuestCR8(void) {
   ULONG64 Value;
@@ -122,6 +148,13 @@ static BOOLEAN Critical(PVOID Context) {
   }
   ++Extension->SyncTrue;
   if (Extension->SyncAction == 2) {
+    if (PassiveMode()) {
+      LARGE_INTEGER Delay;
+      Delay.QuadPart = -2;
+      Check(KeDelayExecutionThread(KernelMode, FALSE, &Delay) == STATUS_SUCCESS,
+            111);
+      CheckIRQL(PASSIVE_LEVEL, 112);
+    }
     Check(Extension->Pending == NULL, 11);
     Extension->Pending = Extension->Transfer;
   } else if (Extension->SyncAction == 3) {
@@ -167,6 +200,17 @@ static void Dpc(PKDPC Object, PVOID Context, PVOID Argument1, PVOID Argument2) {
   Extension->Transfer = NULL;
 }
 
+static void PassiveSignal(PKDPC Object, PVOID Context, PVOID Argument1,
+                          PVOID Argument2) {
+  INTERRUPT_EXTENSION *Extension = Context;
+  UNREFERENCED_PARAMETER(Argument1);
+  UNREFERENCED_PARAMETER(Argument2);
+  Check(Object == &Extension->Dpc, 113);
+  CheckIRQL(DISPATCH_LEVEL, 114);
+  ++Extension->DPCs;
+  KeSetEvent(&Extension->Event, IO_NO_INCREMENT, FALSE);
+}
+
 static BOOLEAN Isr(PKINTERRUPT Interrupt, PVOID Context) {
   INTERRUPT_EXTENSION *Extension = Context;
   Check(Interrupt == Extension->Interrupt && Extension->Started, 30);
@@ -180,6 +224,23 @@ static BOOLEAN Isr(PKINTERRUPT Interrupt, PVOID Context) {
                           NULL);
   if (!Extension->Pending)
     return FALSE;
+  if (PassiveMode()) {
+    LARGE_INTEGER Delay;
+    Delay.QuadPart = -5;
+    KeClearEvent(&Extension->Event);
+    Check(!KeSetTimer(&Extension->Timer, Delay, &Extension->Dpc), 115);
+    Check(KeWaitForSingleObject(&Extension->Event, Executive, KernelMode, FALSE,
+                                NULL) == STATUS_SUCCESS,
+          116);
+    CheckIRQL(PASSIVE_LEVEL, 117);
+    PIRP Irp = Extension->Pending;
+    Extension->Pending = NULL;
+    Extension->Transfer = NULL;
+    Snapshot(Extension, Irp->AssociatedIrp.SystemBuffer);
+    DbgPrint("WDM interrupts: passive completed unit=%lu\n", Extension->Unit);
+    Complete(Irp, STATUS_SUCCESS, 32);
+    return TRUE;
+  }
   if (Extension->Register)
     WRITE_REGISTER_ULONG(Extension->Register,
                          READ_REGISTER_ULONG(Extension->Register) + 1);
@@ -189,11 +250,20 @@ static BOOLEAN Isr(PKINTERRUPT Interrupt, PVOID Context) {
 
 static BOOLEAN MessageIsr(PKINTERRUPT Interrupt, PVOID Context,
                           ULONG MessageID) {
-  UNREFERENCED_PARAMETER(Interrupt);
-  UNREFERENCED_PARAMETER(Context);
-  UNREFERENCED_PARAMETER(MessageID);
-  Check(FALSE, 35);
-  return FALSE;
+  INTERRUPT_EXTENSION *Extension = Context;
+  PIO_INTERRUPT_MESSAGE_INFO Table = Extension->MessageTable;
+  Check(Table && MessageID < Table->MessageCount, 35);
+  PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry = &Table->MessageInfo[MessageID];
+  Check(Entry->InterruptObject == Interrupt && Entry->Mode == Latched &&
+            Entry->TargetProcessorSet == 1,
+        36);
+  Extension->Interrupt = Interrupt;
+  Extension->IRQL = PassiveMode()        ? PASSIVE_LEVEL
+                    : Table->UnifiedIrql ? Table->UnifiedIrql
+                                         : Entry->Irql;
+  DbgPrint("WDM interrupts: message unit=%lu id=%lu vector=%lu data=%lu\n",
+           Extension->Unit, MessageID, Entry->Vector, Entry->MessageData);
+  return Isr(Interrupt, Context);
 }
 
 // This original wrapper deliberately leaves nonzero undefined high return bits.
@@ -243,12 +313,17 @@ static void Disconnect(INTERRUPT_EXTENSION *Extension) {
     if (Extension->ConnectVersion) {
       IO_DISCONNECT_INTERRUPT_PARAMETERS Parameters = {0};
       Parameters.Version = Extension->ConnectVersion;
-      Parameters.ConnectionContext.InterruptObject = Extension->Interrupt;
+      if (Extension->MessageTable)
+        Parameters.ConnectionContext.InterruptMessageTable =
+            Extension->MessageTable;
+      else
+        Parameters.ConnectionContext.InterruptObject = Extension->Interrupt;
       IoDisconnectInterruptEx(&Parameters);
     } else {
       IoDisconnectInterrupt(Extension->Interrupt);
     }
     Extension->Interrupt = NULL;
+    Extension->MessageTable = NULL;
     DbgPrint("WDM interrupts: disconnected unit=%lu\n", Extension->Unit);
   }
 }
@@ -273,6 +348,8 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
   PCM_PARTIAL_RESOURCE_LIST R = &Raw->List[0].PartialResourceList;
   PCM_PARTIAL_RESOURCE_LIST T = &Translated->List[0].PartialResourceList;
   PCM_PARTIAL_RESOURCE_DESCRIPTOR Interrupt = NULL;
+  ULONG MessageCount = 0;
+  KIRQL MaximumIRQL = 0;
   Check(R->Count == T->Count && T->Version == 1 && T->Revision == 1, 51);
   for (ULONG I = 0; I < T->Count; ++I) {
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor = &T->PartialDescriptors[I];
@@ -285,18 +362,34 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
           MmMapIoSpace(Descriptor->u.Memory.Start, 4, MmNonCached);
       Check(Extension->Register != NULL, 54);
     } else if (Descriptor->Type == CmResourceTypeInterrupt) {
-      Check(Interrupt == NULL &&
+      const BOOLEAN Message =
+          (Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0;
+      Check((!Interrupt || Message) &&
                 Descriptor->ShareDisposition ==
-                    (Mode == 'R' ? CmResourceShareShared
-                                 : CmResourceShareDeviceExclusive) &&
+                    (Mode == 'R' || Mode == 'U'
+                         ? CmResourceShareShared
+                         : CmResourceShareDeviceExclusive) &&
                 Descriptor->Flags ==
-                    (Mode == 'D' ? CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE
-                                 : CM_RESOURCE_INTERRUPT_LATCHED) &&
+                    (Mode == 'D'
+                         ? CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE
+                         : CM_RESOURCE_INTERRUPT_LATCHED |
+                               (Message ? CM_RESOURCE_INTERRUPT_MESSAGE : 0)) &&
                 Descriptor->u.Interrupt.Affinity == 1 &&
                 Descriptor->u.Interrupt.Vector !=
                     R->PartialDescriptors[I].u.Interrupt.Vector,
             55);
-      Interrupt = Descriptor;
+      if (!Interrupt)
+        Interrupt = Descriptor;
+      if (Message) {
+        Check(R->PartialDescriptors[I].Flags == Descriptor->Flags &&
+                  R->PartialDescriptors[I].u.MessageInterrupt.Raw.MessageCount >
+                      0,
+              105);
+        MessageCount +=
+            R->PartialDescriptors[I].u.MessageInterrupt.Raw.MessageCount;
+      }
+      if (Descriptor->u.Interrupt.Level > MaximumIRQL)
+        MaximumIRQL = (KIRQL)Descriptor->u.Interrupt.Level;
     } else {
       Check(FALSE, 56);
     }
@@ -305,22 +398,28 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
     return STATUS_DEVICE_CONFIGURATION_ERROR;
   Extension->Vector = Interrupt->u.Interrupt.Vector;
   Extension->IRQL = (KIRQL)Interrupt->u.Interrupt.Level;
-  Check(Extension->IRQL >= 3 && Extension->IRQL <= 12, 58);
+  Check((Mode == 'X' && Extension->IRQL == PASSIVE_LEVEL) ||
+            (Extension->IRQL >= 3 && Extension->IRQL <= 12),
+        58);
   PKSERVICE_ROUTINE Service = Mode == 'F' ? FalseIsr : Isr;
   NTSTATUS Status;
   if (Mode == 'E' || Mode == 'G' || Mode == 'L' || Mode == 'Z' || Mode == 'M' ||
-      Mode == 'P' || Mode == 'R' || Mode == 'D') {
+      Mode == 'P' || Mode == 'R' || Mode == 'D' || Mode == 'U' || Mode == 'I' ||
+      Mode == 'W' || Mode == 'X') {
     IO_CONNECT_INTERRUPT_PARAMETERS Parameters = {0};
-    if (Mode == 'M' || Mode == 'P') {
+    if (Mode == 'M' || Mode == 'P' || Mode == 'U' || Mode == 'I') {
       Parameters.Version =
-          Mode == 'M' ? CONNECT_MESSAGE_BASED : CONNECT_MESSAGE_BASED_PASSIVE;
+          Mode == 'P' ? CONNECT_MESSAGE_BASED_PASSIVE : CONNECT_MESSAGE_BASED;
       Parameters.MessageBased.PhysicalDeviceObject = Extension->PDO;
       Parameters.MessageBased.ConnectionContext.InterruptObject =
           &Extension->Interrupt;
       Parameters.MessageBased.MessageServiceRoutine = MessageIsr;
       Parameters.MessageBased.ServiceContext = Extension;
       Parameters.MessageBased.FallBackServiceRoutine = Service;
-    } else if (Mode == 'L') {
+      Parameters.MessageBased.SpinLock =
+          Mode == 'U' ? &SharedInterruptLock : NULL;
+      Parameters.MessageBased.SynchronizeIrql = Mode == 'I' ? 9 : 0;
+    } else if (Mode == 'L' || Mode == 'X') {
       Parameters.Version = CONNECT_LINE_BASED;
       Parameters.LineBased.PhysicalDeviceObject = Extension->PDO;
       Parameters.LineBased.InterruptObject = &Extension->Interrupt;
@@ -339,9 +438,11 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
           Mode == 'R' ? &SharedInterruptLock : NULL;
       Parameters.FullySpecified.ShareVector =
           Interrupt->ShareDisposition == CmResourceShareShared;
-      Parameters.FullySpecified.SynchronizeIrql = Extension->IRQL;
+      Parameters.FullySpecified.SynchronizeIrql =
+          Mode == 'W' ? PASSIVE_LEVEL : Extension->IRQL;
       Parameters.FullySpecified.Vector = Extension->Vector;
-      Parameters.FullySpecified.Irql = Extension->IRQL;
+      Parameters.FullySpecified.Irql =
+          Mode == 'W' ? PASSIVE_LEVEL : Extension->IRQL;
       Parameters.FullySpecified.InterruptMode =
           Mode == 'D' ? LevelSensitive : Latched;
       Parameters.FullySpecified.ProcessorEnableMask = 1;
@@ -349,6 +450,39 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
     }
     Status = IoConnectInterruptEx(&Parameters);
     Extension->ConnectVersion = Parameters.Version;
+    if (NT_SUCCESS(Status) &&
+        (Parameters.Version == CONNECT_MESSAGE_BASED ||
+         Parameters.Version == CONNECT_MESSAGE_BASED_PASSIVE)) {
+      Extension->MessageTable =
+          (PIO_INTERRUPT_MESSAGE_INFO)Extension->Interrupt;
+      PIO_INTERRUPT_MESSAGE_INFO Table = Extension->MessageTable;
+      Check(Table->MessageCount == MessageCount && MessageCount > 0, 106);
+      KIRQL Highest = 0;
+      for (ULONG I = 0; I < Table->MessageCount; ++I) {
+        PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry = &Table->MessageInfo[I];
+        Check(Entry->InterruptObject && Entry->TargetProcessorSet == 1 &&
+                  Entry->MessageAddress.QuadPart != 0 &&
+                  Entry->MessageData != 0 && Entry->Mode == Latched &&
+                  Entry->Irql >= 3 && Entry->Irql <= 12 &&
+                  Entry->Polarity <= InterruptFallingEdge,
+              107);
+        if (Entry->Irql > Highest)
+          Highest = Entry->Irql;
+        if (I)
+          Check(Entry->InterruptObject !=
+                    Table->MessageInfo[I - 1].InterruptObject,
+                108);
+      }
+      Check(Highest >= MaximumIRQL &&
+                Table->UnifiedIrql == (Mode == 'I'   ? 9
+                                       : Mode == 'U' ? Highest
+                                                     : 0),
+            109);
+      Check(Table->MessageInfo[0].Vector == Extension->Vector, 110);
+      Extension->Interrupt = Table->MessageInfo[0].InterruptObject;
+      Extension->IRQL =
+          Table->UnifiedIrql ? Table->UnifiedIrql : Table->MessageInfo[0].Irql;
+    }
   } else {
     Status = IoConnectInterrupt(
         &Extension->Interrupt, Service, Extension, NULL,
@@ -362,6 +496,8 @@ static NTSTATUS Start(INTERRUPT_EXTENSION *Extension, PCM_RESOURCE_LIST Raw,
     Stop(Extension);
     return Status;
   }
+  if (PassiveMode())
+    Extension->IRQL = PASSIVE_LEVEL;
   Check(Extension->Interrupt != NULL, 60);
   ++Extension->Starts;
   Extension->Started = TRUE;
@@ -448,7 +584,8 @@ static NTSTATUS DispatchFile(PDEVICE_OBJECT Device, PIRP Irp) {
   Extension->SyncAction = 1;
   Check(!KeSynchronizeExecution(Extension->Interrupt, Critical, Extension), 85);
   CheckIRQL(PASSIVE_LEVEL, 86);
-  ManualLock(Extension, PASSIVE_LEVEL);
+  if (!PassiveMode())
+    ManualLock(Extension, PASSIVE_LEVEL);
   if (Mode == 'F') {
     Snapshot(Extension, Irp->AssociatedIrp.SystemBuffer);
     DbgPrint("WDM interrupts: foreground complete unit=%lu\n", Extension->Unit);
@@ -471,7 +608,9 @@ static NTSTATUS AddDevice(PDRIVER_OBJECT Driver, PDEVICE_OBJECT PDO) {
   Extension->PDO = PDO;
   Extension->Unit = ++Units;
   KeInitializeEvent(&Extension->Event, NotificationEvent, FALSE);
-  KeInitializeDpc(&Extension->Dpc, Dpc, Extension);
+  KeInitializeDpc(&Extension->Dpc, PassiveMode() ? PassiveSignal : Dpc,
+                  Extension);
+  KeInitializeTimer(&Extension->Timer);
   Extension->Lower = IoAttachDeviceToDeviceStack(Device, PDO);
   if (!Extension->Lower) {
     IoDeleteDevice(Device);
@@ -497,10 +636,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT Driver, PUNICODE_STRING Path) {
         Last == 'A' || Last == 'N' || Last == 'T' || Last == 'B' ||
         Last == 'H' || Last == 'K' || Last == 'O' || Last == 'Z' ||
         Last == 'M' || Last == 'P' || Last == 'V' || Last == 'Y' ||
-        Last == 'R' || Last == 'D')
+        Last == 'R' || Last == 'D' || Last == 'U' || Last == 'I' ||
+        Last == 'W' || Last == 'X')
       Mode = (UCHAR)Last;
   }
-  if (Mode == 'R')
+  if (Mode == 'R' || Mode == 'U')
     KeInitializeSpinLock(&SharedInterruptLock);
   Driver->DriverExtension->AddDevice = AddDevice;
   Driver->DriverUnload = Unload;

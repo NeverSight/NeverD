@@ -39,8 +39,13 @@ public:
     /// RDI, R8 through R15. PC is the control address used for scope lookup.
     std::array<uint64_t, seh::RegisterCount> GPR{};
     uint64_t PC = 0;
+    /// Scope lookup uses return address minus one after a virtual return.
+    bool FromReturnAddress = false;
     uint32_t Flags = 0;
     uint16_t CS = 0, SS = 0;
+    std::array<std::array<uint64_t, seh::XmmWordCount>,
+               seh::NonvolatileXmmCount>
+        Xmm{};
   };
   struct Stack {
     uint64_t Base = 0;
@@ -62,36 +67,52 @@ public:
   struct Action {
     ActionKind Kind = ActionKind::Unhandled;
     Transfer State;
+    Stack Bounds;
+    size_t SegmentIndex = 0, ScopeIndex = 0;
+    uint32_t ExceptionFlags = 0;
   };
   struct Exception {
     Context Registers;
     uint32_t Code = 0, Flags = 0;
     uint64_t Address = 0;
     std::vector<uint64_t> Parameters;
+    uint64_t PreviousRecord = 0;
   };
   /// A suspended search retains the original exception context independently
   /// of the virtual unwind state and of registers clobbered by guest callbacks.
   class Dispatch {
     friend class KernelSEH;
+    struct Segment {
+      Context Registers;
+      Stack Bounds;
+      size_t ScopeIndex = 0;
+      uint64_t NestedFrame = 0;
+    };
     Context Original, Current;
     Stack Bounds;
+    std::vector<Segment> Path;
+    size_t SegmentIndex = 0, ScopeFloor = 0;
     uint32_t Code = 0;
     uint64_t Depth = 0, OriginalPC = 0, Establisher = 0;
     size_t ScopeIndex = 0, CleanupIndex = 0;
     const ExceptionFunction *Frame = nullptr;
-    bool FrameActive = false, Complete = false;
+    std::vector<const ExceptionFunction *> UnwindFrames;
+    bool FrameActive = false, Complete = false, InPrologue = false;
+    uint64_t ControlOffset = 0;
     std::set<std::pair<uint64_t, uint64_t>> Seen;
     std::optional<Transfer> FilterCandidate, Selected;
-    std::vector<Transfer> Cleanups;
+    std::vector<Action> Cleanups;
   };
   using ReadStack64 = std::function<llvm::Expected<uint64_t>(uint64_t)>;
   using IsExecutable = std::function<bool(uint64_t)>;
+  using ReadCode =
+      std::function<llvm::Error(uint64_t, llvm::MutableArrayRef<uint8_t>)>;
 
   /// Metadata retains preferred-base VAs. It must outlive the planner and
   /// remain immutable. Stack reads must be side-effect-free checked reads.
   KernelSEH(const ExceptionInfo &Metadata, uint64_t PreferredBase,
             uint64_t ActualBase, uint64_t ImageSize, ReadStack64 ReadStack,
-            IsExecutable Executable);
+            IsExecutable Executable, ReadCode Code = {});
 
   /// Caller is a local copy after the modeled raising API's return-address
   /// pop. Its control PC is the checked saved return address minus one.
@@ -102,6 +123,13 @@ public:
 
   Dispatch begin(uint32_t ExceptionCode, const Context &Caller,
                  Stack Bounds) const;
+  /// Extend the callback's physical stack with its suspended logical stack.
+  /// A nested search revisits the original protected scopes. A collided unwind
+  /// starts after the termination scope already entered, without rerunning it.
+  llvm::Expected<Dispatch> beginNested(uint32_t ExceptionCode,
+                                       const Context &Caller, Stack Bounds,
+                                       const Dispatch &Suspended,
+                                       const Action &Callback) const;
   /// Filter actions require the actual low-32-bit signed guest result on the
   /// next advance. Finally actions advance after their guest call returns.
   /// Errors leave the dispatch cursor unchanged; no guest state is written.
@@ -127,6 +155,10 @@ private:
   uint64_t ImageSize;
   ReadStack64 ReadStack;
   IsExecutable Executable;
+  ReadCode Code;
+  llvm::Expected<std::optional<Context>>
+  unwindEpilogue(const ExceptionFunction &Frame, const Context &Current,
+                 Stack Bounds) const;
   llvm::Expected<Action> advanceImpl(Dispatch &State,
                                      std::optional<int32_t> FilterResult) const;
   llvm::Expected<Context> validateRecords(llvm::ArrayRef<uint8_t> Records,

@@ -7,6 +7,9 @@
 #define NEVERD_DRIVER_SEH_TEST_H
 
 enum {
+  SehXmmUnwind = 'x',
+  SehChainedUnwind = 'c',
+  SehPrologueUnwind = 'p',
   SehDynamicFilter = 'F',
   SehSearchFilters = 'Q',
   SehExceptionalFinally = 'T',
@@ -14,6 +17,10 @@ enum {
   SehContinueApi = 'E',
   SehNestedFilter = 'B',
   SehNestedFinally = 'J',
+  SehLocalFilter = 'I',
+  SehLocalFinally = 'O',
+  SehNestedSearch = 'P',
+  SehRepeatedFilter = 'X',
   SehRecoverUserRead = 'V',
   SehRejectContextMutation = 'M',
   SehWorkerUserProbe = 'W',

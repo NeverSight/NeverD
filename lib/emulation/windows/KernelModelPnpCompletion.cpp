@@ -249,7 +249,7 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
     return E;
   if (auto E = completeRequest(IRP, 0))
     return E;
-  if (Request->FrameworkPnpAwaiting)
+  if (Request->FrameworkTransitionAwaiting)
     return StatusPending;
   if (PendingWdmCall)
     IRPCalls.at(PendingWdmCall->Token.ID).ReturnValue = Status;

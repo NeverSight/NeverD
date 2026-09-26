@@ -172,6 +172,160 @@ void delivered(const DriverInterruptResult &Event, uint32_t RequestIndex,
   EXPECT_FALSE(Event.UndeliveredReason);
 }
 
+TEST(DriverWDMInterrupt, MessageTablesAndActualIsrIdsMatchEveryResource) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {'M', 'I', 'U'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Mode);
+        auto Options = options(Mode);
+        Options.LoadAddress = Address;
+        auto &First = Options.PnpDevices[0].Interrupts.front();
+        First.RawLevel = 0;
+        First.Share = Mode == 'U' ? DriverInterruptShare::Shared
+                                  : DriverInterruptShare::DeviceExclusive;
+        First.Messages = {{0xfee01000, 0x123400, 0x91, 5, 1,
+                           DriverInterruptPolarity::RisingEdge},
+                          {0xfee01000, 0x123401, 0x92, 7, 1,
+                           DriverInterruptPolarity::FallingEdge}};
+        auto Second = First;
+        Second.ID = "message-bank";
+        Second.TranslatedVector = 0x93;
+        Second.TranslatedLevel = 8;
+        Second.Messages = {{0xfee02000, 0x123402, 0x93, 8, 1}};
+        Options.PnpDevices[0].Interrupts.push_back(Second);
+        Options.Requests.push_back(pnp(DevicePnpRequest::Start));
+        for (uint32_t I = 0; I < 3; ++I) {
+          fileCycle(Options, 5, I + 1);
+          auto &Event = Options.Requests[Options.Requests.size() - 3]
+                            .InterruptEvents.front();
+          Event.InterruptID = I == 2 ? "message-bank" : "line0";
+          Event.MessageID = I == 2 ? 0 : I;
+        }
+        remove(Options);
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        clean(*Result);
+        ASSERT_EQ(Result->Interrupts.size(), 3u);
+        for (uint32_t I = 0; I < 3; ++I) {
+          const auto &Event = Result->Interrupts[I];
+          delivered(Event, 2 + I * 4);
+          EXPECT_EQ(Event.MessageID, I == 2 ? 0u : I);
+          ASSERT_EQ(Event.Handlers.size(), 1u);
+          EXPECT_EQ(Event.Handlers[0].MessageID, I);
+          const uint32_t IRQL = Mode == 'I'   ? 9
+                                : Mode == 'U' ? 8
+                                : I == 0      ? 5
+                                : I == 1      ? 7
+                                              : 8;
+          snapshot(Result->Requests[2 + I * 4],
+                   {1, 1, I + 1, I + 1, (I + 1) * 2, I + 1, I + 1, IRQL});
+        }
+        EXPECT_EQ(apiCount(*Result, "IoConnectInterruptEx"), 1u);
+        EXPECT_EQ(apiCount(*Result, "IoDisconnectInterruptEx"), 1u);
+      }
+}
+
+TEST(DriverWDMInterrupt, PassiveIsrWaitsForDpcAndSerializesRepeatedArrivals) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {'W', 'X', 'P'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Mode);
+        auto Options = options(Mode);
+        Options.LoadAddress = Address;
+        auto &IRQ = Options.PnpDevices[0].Interrupts[0];
+        if (Mode == 'X')
+          IRQ.TranslatedLevel = 0;
+        if (Mode == 'P') {
+          IRQ.RawLevel = 0;
+          IRQ.Messages = {{0xfee01000, 0x123400, 0x91, 5, 1}};
+        }
+        Options.Requests.push_back(pnp(DevicePnpRequest::Start));
+        fileCycle(Options, 1);
+        auto &Events = Options.Requests[2].InterruptEvents;
+        if (Mode == 'P')
+          Events.front().MessageID = 0;
+        auto Again = Events.front();
+        Again.After100ns = 3;
+        Events.push_back(Again);
+        remove(Options);
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        clean(*Result);
+        ASSERT_EQ(Result->Interrupts.size(), 2u);
+        const auto &First = Result->Interrupts[0];
+        const auto &Second = Result->Interrupts[1];
+        delivered(First, 2);
+        EXPECT_EQ(First.OccurredAt100ns, 1u);
+        EXPECT_EQ(First.DeliveredAt100ns, 2u);
+        EXPECT_EQ(First.ReturnedAt100ns, 7u);
+        EXPECT_EQ(Second.OccurredAt100ns, 3u);
+        EXPECT_EQ(Second.DeliveredAt100ns, 7u);
+        EXPECT_EQ(Second.ReturnValue, 0u);
+        snapshot(Result->Requests[2], {1, 1, 1, 1, 1, 1, 0, 0});
+        EXPECT_EQ(apiCount(*Result, "KeWaitForSingleObject"), 1u);
+        EXPECT_EQ(apiCount(*Result, "KeDelayExecutionThread"), 1u);
+        EXPECT_EQ(apiCount(*Result, "KeAcquireInterruptSpinLock"), 0u);
+      }
+}
+
+TEST(DriverWDMInterrupt, IndependentPassiveIsrsRetainTheirOwnBlockedFrames) {
+  for (const auto *Image : images()) {
+    auto Options = options('W');
+    Options.PnpDevices.push_back(device(1));
+    for (unsigned I = 0; I < 2; ++I) {
+      const std::string ID = "interrupt" + std::to_string(I);
+      Options.Requests.push_back(pnp(DevicePnpRequest::Start, 0, 0, ID));
+      Options.Requests.push_back(file(DriverRequestKind::Create, I + 1, ID));
+    }
+    for (unsigned I = 0; I < 2; ++I) {
+      auto Request = file(DriverRequestKind::DeviceControl, I + 1,
+                          "interrupt" + std::to_string(I), 0);
+      Request.DeferCallbackDrain = I == 0;
+      Options.Requests.push_back(std::move(Request));
+    }
+    for (unsigned I = 0; I < 2; ++I) {
+      const std::string ID = "interrupt" + std::to_string(I);
+      Options.Requests.push_back(file(DriverRequestKind::Cleanup, I + 1, ID));
+      Options.Requests.push_back(file(DriverRequestKind::Close, I + 1, ID));
+      remove(Options, ID);
+    }
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    clean(*Result, 2);
+    ASSERT_EQ(Result->Interrupts.size(), 2u);
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto &Event = Result->Interrupts[I];
+      delivered(Event, 4 + I);
+      ASSERT_TRUE(Event.DeliveredAt100ns);
+      ASSERT_TRUE(Event.ReturnedAt100ns);
+      EXPECT_EQ(*Event.ReturnedAt100ns - *Event.DeliveredAt100ns, 5u);
+      snapshot(Result->Requests[4 + I], {I + 1, 1, 1, 1, 1, 1, 0, 0});
+    }
+  }
+}
+
+TEST(DriverWDMInterrupt, MessageVersionFallsBackToLineRegistration) {
+  for (const auto *Image : images()) {
+    auto Options = options('M');
+    Options.Requests.push_back(pnp(DevicePnpRequest::Start));
+    fileCycle(Options);
+    remove(Options);
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    clean(*Result);
+    ASSERT_EQ(Result->Interrupts.size(), 1u);
+    delivered(Result->Interrupts[0], 2);
+    ASSERT_EQ(Result->Interrupts[0].Handlers.size(), 1u);
+    EXPECT_FALSE(Result->Interrupts[0].Handlers[0].MessageID);
+    EXPECT_EQ(apiCount(*Result, "IoConnectInterruptEx"), 1u);
+    EXPECT_EQ(apiCount(*Result, "IoDisconnectInterruptEx"), 1u);
+  }
+}
+
 TEST(DriverWDMInterrupt,
      LevelSourceRetriggersAfterClaimUntilExplicitDeassertion) {
   for (const auto *Image : images())
@@ -463,7 +617,7 @@ TEST(DriverWDMInterrupt, StopWithoutDisconnectFailsBeforeDeviceRetirement) {
 TEST(DriverWDMInterrupt,
      UnassignedVectorLevelAndProcessorDoNotInventConnections) {
   for (const auto *Image : images())
-    for (char Mode : {'Q', 'J', 'A', 'Z', 'M', 'P', 'V', 'Y'}) {
+    for (char Mode : {'Q', 'J', 'A', 'Z', 'V', 'Y'}) {
       SCOPED_TRACE(Image);
       SCOPED_TRACE(Mode);
       auto Options = options(Mode);

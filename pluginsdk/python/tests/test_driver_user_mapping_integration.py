@@ -14,6 +14,11 @@ from pathlib import Path
 import unittest
 
 
+INDEPENDENT_PAGES = 0x22212F
+LEGACY_PAGES = 0x222133
+INDEPENDENT_PARTIAL = 0x222137
+CONTIGUOUS_CHUNKS = 0x22213B
+KERNEL_POOL_LOCK = 0x22213F
 PROCESS_EXIT = 0x22210B
 WRONG_PROCESS_UNMAP = 0x22210F
 MAPPING_SHORTAGE = 0x222113
@@ -107,6 +112,22 @@ class DriverUserMappingIntegrationTests(unittest.TestCase):
         scenario["requests"] = [scenario["requests"][0], request,
                                 {"kind": "cleanup"}, {"kind": "close"}]
         return scenario
+
+    def test_independent_pages_protection_and_pool_residency(self) -> None:
+        cases = ((INDEPENDENT_PAGES, "01437501"), (LEGACY_PAGES, "01437501"),
+                 (CONTIGUOUS_CHUNKS, "01437501"),
+                 (INDEPENDENT_PARTIAL, "01430101"),
+                 (KERNEL_POOL_LOCK, "43440101"))
+        for variant, fixture in self.fixtures:
+            for action, expected in cases:
+                with self.subTest(variant=variant, action=hex(action)):
+                    result = self._run(fixture, self._single_request(action))
+                    self._success(result, [expected])
+                    calls = [call["name"] for call in result["calls"]]
+                    if action in (INDEPENDENT_PAGES, LEGACY_PAGES,
+                                  CONTIGUOUS_CHUNKS):
+                        self.assertEqual(calls.count("MmProtectMdlSystemAddress"), 2)
+                        self.assertIn("MmFreePagesFromMdl", calls)
 
     def test_exit_keeps_the_locked_report_observable(self) -> None:
         scenario = self._single_request(PROCESS_EXIT)

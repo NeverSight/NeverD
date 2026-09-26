@@ -1,0 +1,22 @@
+//===- KernelFrameworkPnpCallbacks.def - KMDF PnP callback ABI -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Name, WDF_PNPPOWER_EVENT_CALLBACKS pointer index, return convention.
+//===----------------------------------------------------------------------===//
+
+NEVERD_FRAMEWORK_PNP_CALLBACK(D0Entry, 0, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(D0EntryPostInterruptsEnabled, 1, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(D0Exit, 2, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(D0ExitPreInterruptsDisabled, 3, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(PrepareHardware, 4, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(ReleaseHardware, 5, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(SelfManagedIoCleanup, 6, Void)
+NEVERD_FRAMEWORK_PNP_CALLBACK(SelfManagedIoFlush, 7, Void)
+NEVERD_FRAMEWORK_PNP_CALLBACK(SelfManagedIoInit, 8, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(SelfManagedIoSuspend, 9, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(SelfManagedIoRestart, 10, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(SurpriseRemoval, 11, Void)
+NEVERD_FRAMEWORK_PNP_CALLBACK(QueryRemove, 12, Status)
+NEVERD_FRAMEWORK_PNP_CALLBACK(QueryStop, 13, Status)

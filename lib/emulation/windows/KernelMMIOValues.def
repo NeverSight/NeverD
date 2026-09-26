@@ -10,8 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-NEVERD_KERNEL_MMIO_VALUE(NonCached, 0)
-NEVERD_KERNEL_MMIO_VALUE(PageReadOnly, 0x02)
-NEVERD_KERNEL_MMIO_VALUE(PageReadWrite, 0x04)
-NEVERD_KERNEL_MMIO_VALUE(PageNoCache, 0x200)
+NEVERD_KERNEL_MMIO_VALUE(NonCached, windows::MmNonCached)
+NEVERD_KERNEL_MMIO_VALUE(PageReadOnly, windows::PageReadOnly)
+NEVERD_KERNEL_MMIO_VALUE(PageReadWrite, windows::PageReadWrite)
+NEVERD_KERNEL_MMIO_VALUE(PageNoCache, windows::PageNoCache)
 NEVERD_KERNEL_MMIO_VALUE(MaxMappings, 64)

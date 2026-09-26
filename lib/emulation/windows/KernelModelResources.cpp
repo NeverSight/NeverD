@@ -56,14 +56,10 @@ llvm::Error KernelModel::validatePnpRequestCompletion(
     const ActiveRequest &Request, uint32_t Status, bool ProviderProbe) const {
   if (auto E = Lifecycle.validatePnpCompletion(*Request.PnpTicket, Status))
     return E;
-  // START has not assigned resources at the provider probe. A framework FDO
-  // may also retain mappings until ReleaseHardware runs after the lower bus
-  // completes STOP/REMOVE; ordinary WDM routes must release them before
-  // forwarding. Final completion validates both paths.
-  if (ProviderProbe &&
-      (Request.PnpOperation->Minor == DevicePnpRequest::Start ||
-       (!Request.DeviceRoute.empty() &&
-        FrameworkDevices.count(Request.DeviceRoute.front()))))
+  // START has not assigned resources at the provider probe. All STOP/REMOVE
+  // routes, including framework ReleaseHardware, retire resources before
+  // forwarding to the provider. Final completion validates both paths.
+  if (ProviderProbe && Request.PnpOperation->Minor == DevicePnpRequest::Start)
     return llvm::Error::success();
   return Resources.validateCompletion(Request.PnpDevice,
                                       Request.PnpOperation->Minor, Status);

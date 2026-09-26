@@ -93,7 +93,8 @@ KernelModel::mapUserMDL(uint64_t MDL, uint64_t RequestedAddress,
     return userMappingError("user MDL mapping requires a live process context "
                             "at IRQL <= APC_LEVEL");
   auto It = MDLs.find(MDL);
-  if (It == MDLs.end() || It->second.Owner == LockedMdl::Ownership::Driver)
+  if (It == MDLs.end() || It->second.Owner == LockedMdl::Ownership::Driver ||
+      It->second.Owner == LockedMdl::Ownership::ReleasedPages)
     return userMappingError("user mapping requires a built, live MDL");
   const auto &State = It->second;
   const uint32_t BasePriority =
@@ -120,7 +121,7 @@ KernelModel::mapUserMDL(uint64_t MDL, uint64_t RequestedAddress,
        (Backing->Size & (profile::PageSize - 1))))
     return userMappingError("user MDL mapping requires private backing pages");
   if (auto Pool = Allocations.find(*Owner); Pool != Allocations.end()) {
-    if (!Pool->second.NonPaged ||
+    if ((!Pool->second.NonPaged && !State.Pin) ||
         (Backing->Backing & (profile::PageSize - 1)) ||
         (Backing->Size & (profile::PageSize - 1)))
       return userMappingError("user mapping of pool requires a nonpaged "
@@ -164,6 +165,9 @@ KernelModel::mapUserMDL(uint64_t MDL, uint64_t RequestedAddress,
     }
     return E;
   }
+  if (auto E = Physical.commitMappingCache(State.BackingAddress,
+                                           State.ByteCount, *Cache))
+    return E;
   const uint64_t Address = Base + Offset;
   UserMdlViews.emplace(UserMdlViewKey{CurrentUserProcessID, Address},
                        UserMdlView{MDL, Address, Base, Span,

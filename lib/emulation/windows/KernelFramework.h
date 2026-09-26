@@ -200,6 +200,10 @@ public:
                                                uint64_t RawResources,
                                                uint64_t TranslatedResources,
                                                uint64_t ResourceListSize);
+  llvm::Expected<bool> beginDevicePowerTransition(uint64_t PDO, uint64_t IRP,
+                                                  DevicePowerState Previous,
+                                                  DevicePowerState Target);
+  llvm::Expected<bool> ownsPowerPolicy(uint64_t WdmDevice) const;
   std::optional<PnpCompletion> takePnpCompletion();
   static std::optional<unsigned>
   argumentCount(const KernelExportRegistry::Export &Export);
@@ -261,6 +265,11 @@ private:
              (AutoForward == framework::FileAutoForwardDefault && Filter);
     }
   };
+  struct PnpCallbacks {
+#define NEVERD_FRAMEWORK_PNP_CALLBACK(Name, Index, Result) uint64_t Name = 0;
+#include "KernelFrameworkPnpCallbacks.def"
+#undef NEVERD_FRAMEWORK_PNP_CALLBACK
+  };
   enum class DeviceInitKind { Control, Pnp };
   struct DeviceInit {
     uint64_t Binding = 0;
@@ -271,17 +280,23 @@ private:
     uint32_t IoType = framework::ControlIoBuffered;
     bool Exclusive = false;
     bool Filter = false;
+    std::optional<bool> PowerPolicyOwner;
     FileConfig Files;
     uint64_t CallerContext = 0;
-    uint64_t D0Entry = 0, D0Exit = 0;
-    uint64_t PrepareHardware = 0, ReleaseHardware = 0;
-    uint64_t QueryStop = 0, QueryRemove = 0, SurpriseRemoval = 0;
+    PnpCallbacks Callbacks;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
   struct ResourceList {
     uint64_t Handle = 0;
     uint64_t Descriptors = 0;
     uint32_t Count = 0;
+  };
+  enum class SelfManagedIoState {
+    Uninitialized,
+    Running,
+    Suspended,
+    Flushed,
+    Cleaned
   };
   struct Device {
     uint64_t Wdm = 0, PDO = 0;
@@ -291,15 +306,15 @@ private:
     FileConfig Files;
     bool Filter = false;
     bool Initialized = false;
+    bool PowerPolicyOwner = true;
     bool HasLink = false;
-    uint64_t D0Entry = 0, D0Exit = 0;
-    uint64_t PrepareHardware = 0, ReleaseHardware = 0;
-    uint64_t QueryStop = 0, QueryRemove = 0, SurpriseRemoval = 0;
+    PnpCallbacks Callbacks;
     ResourceList RawResources, TranslatedResources;
     bool HardwarePrepared = false;
     bool ResourcesActive = false;
     bool InD0 = false;
     bool PowerQueuesHeld = true;
+    SelfManagedIoState SelfManagedIo = SelfManagedIoState::Uninitialized;
   };
   std::map<uint64_t, Device> Devices;
   struct FileObject {
@@ -428,6 +443,7 @@ private:
     TryDestroy,
     Destroy,
     BeginDriverDelete,
+    BeginDeviceDelete,
     FinishBindingUnbind,
     DriverUnloaded
   };
@@ -458,15 +474,11 @@ private:
   std::map<uint64_t, uint64_t> CanceledQueueCallbacks;
   std::map<uint64_t, uint64_t> ReadyQueueCallbacks;
   enum class PnpPhase {
-    QueryStop,
-    QueryRemove,
-    SurpriseRemoval,
+#define NEVERD_FRAMEWORK_PNP_CALLBACK(Name, Index, Result) Name,
+#include "KernelFrameworkPnpCallbacks.def"
+#undef NEVERD_FRAMEWORK_PNP_CALLBACK
     IoStop,
-    IoResume,
-    PrepareHardware,
-    D0Entry,
-    D0Exit,
-    ReleaseHardware
+    IoResume
   };
   struct PnpStep {
     PnpPhase Phase;
@@ -483,12 +495,40 @@ private:
     PnpStep Current{PnpPhase::PrepareHardware};
     std::deque<PnpStep> Remaining;
     std::set<uint64_t> WaitingRequests;
-    bool BeforeBus = false;
+    bool NotificationOnly = false;
+    bool ReleasesHardware = true;
+    uint32_t PowerState = framework::PowerDeviceD3Final;
+    bool SuspendAfterQueues = false;
+    bool nextPrecedesRequestDrain() const {
+      if (Remaining.empty())
+        return false;
+      const auto Phase = Remaining.front().Phase;
+      return Phase == PnpPhase::IoStop || Phase == PnpPhase::SurpriseRemoval ||
+             (Phase == PnpPhase::SelfManagedIoSuspend && !SuspendAfterQueues);
+    }
   };
   std::map<uint64_t, PnpTransition> PnpTransitions;
   std::optional<PnpCompletion> CompletedPnp;
   std::optional<GuestCall> PendingCall;
 
+  enum class PowerTransitionKind {
+    Start,
+    Stop,
+    Remove,
+    SurpriseRemoval,
+    PowerUp,
+    PowerDown
+  };
+  llvm::Expected<bool> beginPowerTransition(uint64_t PDO, uint64_t IRP,
+                                            PowerTransitionKind Kind,
+                                            uint32_t PowerState,
+                                            uint64_t RawResources = 0,
+                                            uint64_t TranslatedResources = 0,
+                                            uint64_t ResourceListSize = 0);
+
+  enum class PnpCallbackProgress { Continue, Scheduled, Waiting };
+  llvm::Expected<PnpCallbackProgress> finishPnpCallback(uint64_t Token,
+                                                        uint64_t Result);
   llvm::Error schedulePnpCallback(uint64_t Token);
   llvm::Error finalizePnpCallbacks(uint64_t Token);
   llvm::Error resumePausedPnp();

@@ -28,6 +28,7 @@ NEVERD_DRIVER_POWER_REQUEST(Set, "set")
 #ifdef NEVERD_DRIVER_REQUEST_ORIGIN
 NEVERD_DRIVER_REQUEST_ORIGIN(Scenario, "scenario")
 NEVERD_DRIVER_REQUEST_ORIGIN(PoRequestPowerIrp, "PoRequestPowerIrp")
+NEVERD_DRIVER_REQUEST_ORIGIN(FrameworkPowerPolicy, "framework_power_policy")
 #endif
 
 #ifdef NEVERD_DRIVER_POWER_DEVICE_STATE

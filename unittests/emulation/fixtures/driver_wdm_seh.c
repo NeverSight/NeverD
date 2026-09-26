@@ -122,6 +122,146 @@ __declspec(noinline) static NTSTATUS AcrossHelper(VOID) {
   return STATUS_SUCCESS;
 }
 
+__declspec(noinline) static VOID RaiseWithSavedXmm(VOID) {
+  __asm__ volatile("pxor %%xmm6, %%xmm6\n\t"
+                   "pcmpeqd %%xmm15, %%xmm15"
+                   :
+                   :
+                   : "xmm6", "xmm15");
+  ExRaiseAccessViolation();
+}
+
+__declspec(noinline) static NTSTATUS AcrossXmmHelper(VOID) {
+  const ULONG64 Expected[2] = {0x123456789abcdef0ULL, 0xfedcba9876543210ULL};
+  ULONG64 Saved6[2] = {0}, Saved15[2] = {0};
+  __asm__ volatile("movdqu %0, %%xmm6\n\t"
+                   "movdqu %0, %%xmm15"
+                   :
+                   : "m"(Expected)
+                   : "xmm6", "xmm15");
+  __try {
+    RaiseWithSavedXmm();
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    __asm__ volatile("movdqu %%xmm6, %0\n\t"
+                     "movdqu %%xmm15, %1"
+                     : "=m"(Saved6), "=m"(Saved15));
+    REQUIRE(GetExceptionCode() == STATUS_ACCESS_VIOLATION);
+    REQUIRE(Saved6[0] == Expected[0] && Saved6[1] == Expected[1]);
+    REQUIRE(Saved15[0] == Expected[0] && Saved15[1] == Expected[1]);
+    Stage = 90;
+  }
+  REQUIRE(Stage == 90);
+  DbgPrint("WDM SEH: full nonvolatile XMM restored\n");
+  return STATUS_SUCCESS;
+}
+
+// Two noncontiguous runtime-function entries describe one stack frame. The
+// secondary record saves R12 in the primary allocation, then chains to it.
+extern VOID SehChainedRaise(VOID);
+extern VOID SehPrologueFault(PVOID Address);
+__asm__(".text\n"
+        ".p2align 4\n"
+        ".globl SehChainedRaise\n"
+        "SehChainedRaise:\n"
+        "pushq %rbx\n"
+        ".LSehPrimaryPushEnd:\n"
+        "subq $48, %rsp\n"
+        ".LSehPrimaryAllocEnd:\n"
+        "jmp .LSehSecondary\n"
+        ".LSehPrimaryEnd:\n"
+        ".p2align 4\n"
+        ".LSehSecondary:\n"
+        "movq %r12, 32(%rsp)\n"
+        ".LSehSecondarySaveEnd:\n"
+        "movabsq $0x1122334455667788, %rbx\n"
+        "movabsq $0x8877665544332211, %r12\n"
+        "callq *__imp_ExRaiseAccessViolation(%rip)\n"
+        "ud2\n"
+        ".LSehSecondaryEnd:\n"
+        ".section .xdata,\"dr\"\n"
+        ".p2align 2\n"
+        ".set SehUnwindVersion, 1\n"
+        ".set SehChainFlag, 4\n"
+        ".set SehPushNonvolatile, 0\n"
+        ".set SehAllocateSmall, 2\n"
+        ".set SehSaveNonvolatile, 4\n"
+        ".set SehRbx, 3\n"
+        ".set SehR12, 12\n"
+        ".LSehPrimaryUnwind:\n"
+        ".byte SehUnwindVersion, .LSehPrimaryAllocEnd-SehChainedRaise, 2, 0\n"
+        ".byte .LSehPrimaryAllocEnd-SehChainedRaise\n"
+        ".byte (((48-8)/8)<<4)|SehAllocateSmall\n"
+        ".byte .LSehPrimaryPushEnd-SehChainedRaise, "
+        "(SehRbx<<4)|SehPushNonvolatile\n"
+        ".LSehSecondaryUnwind:\n"
+        ".byte (SehChainFlag<<3)|SehUnwindVersion\n"
+        ".byte .LSehSecondarySaveEnd-.LSehSecondary, 2, 0\n"
+        ".byte .LSehSecondarySaveEnd-.LSehSecondary, "
+        "(SehR12<<4)|SehSaveNonvolatile\n"
+        ".short 32/8\n"
+        ".rva SehChainedRaise, .LSehPrimaryEnd, .LSehPrimaryUnwind\n"
+        ".section .pdata,\"dr\"\n"
+        ".p2align 2\n"
+        ".rva SehChainedRaise, .LSehPrimaryEnd, .LSehPrimaryUnwind\n"
+        ".rva .LSehSecondary, .LSehSecondaryEnd, .LSehSecondaryUnwind\n"
+        ".text\n"
+        ".p2align 4\n"
+        ".globl SehPrologueFault\n"
+        "SehPrologueFault:\n"
+        ".seh_proc SehPrologueFault\n"
+        "pushq %rbx\n"
+        ".seh_pushreg %rbx\n"
+        "movabsq $0x1122334455667788, %rbx\n"
+        "movl (%rcx), %eax\n"
+        "subq $32, %rsp\n"
+        ".seh_stackalloc 32\n"
+        ".seh_endprologue\n"
+        "addq $32, %rsp\n"
+        "popq %rbx\n"
+        "retq\n"
+        ".seh_endproc\n");
+
+__declspec(noinline) static NTSTATUS AcrossChainedHelper(VOID) {
+  ULONG64 SavedB = 0, Saved12 = 0;
+  __asm__ volatile("movabsq $0x13579bdf2468ace0, %%rbx\n\t"
+                   "movabsq $0xfedcba9876543210, %%r12"
+                   :
+                   :
+                   : "rbx", "r12");
+  __try {
+    SehChainedRaise();
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    __asm__ volatile("movq %%rbx, %0\n\t"
+                     "movq %%r12, %1"
+                     : "=&r"(SavedB), "=&r"(Saved12)
+                     :
+                     : "rbx", "r12");
+    REQUIRE(GetExceptionCode() == STATUS_ACCESS_VIOLATION);
+    REQUIRE(SavedB == 0x13579bdf2468ace0ULL);
+    REQUIRE(Saved12 == 0xfedcba9876543210ULL);
+    Stage = 91;
+  }
+  REQUIRE(Stage == 91);
+  DbgPrint("WDM SEH: chained nonvolatile restored\n");
+  return STATUS_SUCCESS;
+}
+
+__declspec(noinline) static NTSTATUS AcrossPrologueFault(PVOID Address) {
+  ULONG64 SavedB = 0;
+  __asm__ volatile("movabsq $0x13579bdf2468ace0, %%rbx" : : : "rbx");
+  __try {
+    SehPrologueFault(Address);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    __asm__ volatile("movq %%rbx, %0" : "=r"(SavedB) : : "rbx");
+    REQUIRE(GetExceptionCode() == STATUS_ACCESS_VIOLATION);
+    REQUIRE(SavedB == 0x13579bdf2468ace0ULL);
+    Stage = 92;
+  }
+  REQUIRE(Stage == 92);
+  DbgPrint("WDM SEH: partial prologue restored\n");
+  return STATUS_SUCCESS;
+}
+
 __declspec(noinline) static NTSTATUS NestedConstant(VOID) {
   ULONG InnerCode = 0;
   volatile ULONG Local = 0xabcdef01;
@@ -214,10 +354,62 @@ __attribute__((naked, noinline)) static VOID WriteHomeSlots(VOID) {
                    "movq $4, 32(%rsp)\n\tretq");
 }
 
+__declspec(noinline) static LONG LinkedFilter(PEXCEPTION_POINTERS Pointers,
+                                              PEXCEPTION_POINTERS Outer) {
+  if (Pointers == Outer || !Pointers || !Outer ||
+      Pointers->ExceptionRecord->ExceptionCode !=
+          STATUS_DATATYPE_MISALIGNMENT ||
+      Pointers->ExceptionRecord->ExceptionRecord != Outer->ExceptionRecord ||
+      Outer->ExceptionRecord->ExceptionCode != STATUS_ACCESS_VIOLATION ||
+      !Pointers->ContextRecord->Rip || !Pointers->ContextRecord->Rsp)
+    return EXCEPTION_CONTINUE_SEARCH;
+  DbgPrint("WDM SEH: nested exception record linked\n");
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
+__declspec(noinline) static VOID LocalNestedRaise(PEXCEPTION_POINTERS Outer) {
+  volatile ULONG Local = 0x51a;
+  __try {
+    ExRaiseDatatypeMisalignment();
+  } __except (LinkedFilter(GetExceptionInformation(), Outer)) {
+    if (GetExceptionCode() != STATUS_DATATYPE_MISALIGNMENT || Local != 0x51a ||
+        Outer->ExceptionRecord->ExceptionCode != STATUS_ACCESS_VIOLATION) {
+      DbgPrint("WDM SEH: failure local nested handler\n");
+      return;
+    }
+    DbgPrint("WDM SEH: local nested handler\n");
+  }
+}
+
 __declspec(noinline) static LONG DynamicFilter(PEXCEPTION_POINTERS Pointers,
                                                volatile ULONG *Local,
                                                LONG Decision) {
   WriteHomeSlots();
+  if ((Mode == SehNestedFilter || Mode == SehNestedSearch ||
+       Mode == SehRepeatedFilter || Mode == SehNestedFinally) &&
+      Pointers &&
+      Pointers->ExceptionRecord->ExceptionCode != STATUS_ACCESS_VIOLATION) {
+    PEXCEPTION_RECORD Record = Pointers->ExceptionRecord;
+    const BOOLEAN Repeated = Mode == SehRepeatedFilter && Stage == 52;
+    const NTSTATUS ExpectedCode =
+        Repeated ? STATUS_INVALID_PARAMETER : STATUS_DATATYPE_MISALIGNMENT;
+    const NTSTATUS PreviousCode =
+        Repeated ? STATUS_DATATYPE_MISALIGNMENT : STATUS_ACCESS_VIOLATION;
+    if (Record->ExceptionCode != ExpectedCode || !Record->ExceptionRecord ||
+        Record->ExceptionRecord->ExceptionCode != PreviousCode || !Local ||
+        *Local != 71 ||
+        ((Record->ExceptionFlags & EXCEPTION_NESTED_CALL) != 0) !=
+            (Mode != SehNestedFinally)) {
+      DbgPrint("WDM SEH: failure nested record contract\n");
+      return EXCEPTION_CONTINUE_SEARCH;
+    }
+    ++Stage;
+    if (Mode == SehRepeatedFilter && !Repeated)
+      ExRaiseStatus(STATUS_INVALID_PARAMETER);
+    DbgPrint("WDM SEH: nested filter decision=%ld stage=%lu\n", Decision,
+             Stage);
+    return Decision;
+  }
   if (!Pointers || !Pointers->ExceptionRecord || !Pointers->ContextRecord ||
       Pointers->ExceptionRecord->ExceptionCode != STATUS_ACCESS_VIOLATION ||
       Pointers->ExceptionRecord->ExceptionRecord ||
@@ -233,8 +425,11 @@ __declspec(noinline) static LONG DynamicFilter(PEXCEPTION_POINTERS Pointers,
   FirstPointers = Pointers;
   ++Stage;
   DbgPrint("WDM SEH: filter decision=%ld stage=%lu\n", Decision, Stage);
-  if (Mode == SehNestedFilter)
+  if (Mode == SehNestedFilter || Mode == SehNestedSearch ||
+      Mode == SehRepeatedFilter)
     ExRaiseDatatypeMisalignment();
+  if (Mode == SehLocalFilter)
+    LocalNestedRaise(Pointers);
   return Decision;
 }
 
@@ -247,16 +442,27 @@ __declspec(noinline) static NTSTATUS FilteredRaise(VOID) {
       ExRaiseAccessViolation();
     } __except (
         DynamicFilter(GetExceptionInformation(), &Local,
-                      Mode == SehSearchFilters ? EXCEPTION_CONTINUE_SEARCH
+                      (Mode == SehSearchFilters || Mode == SehNestedSearch)
+                          ? EXCEPTION_CONTINUE_SEARCH
                       : Mode == SehContinueApi ? EXCEPTION_CONTINUE_EXECUTION
                                                : EXCEPTION_EXECUTE_HANDLER)) {
-      REQUIRE(Stage == 51 && Local == 71);
+      const ULONG ExpectedStage = Mode == SehRepeatedFilter ? 53
+                                  : Mode == SehNestedFilter ? 52
+                                                            : 51;
+      REQUIRE(Stage == ExpectedStage && Local == 71);
+      if (Mode == SehNestedFilter || Mode == SehRepeatedFilter)
+        REQUIRE(GetExceptionCode() == (Mode == SehNestedFilter
+                                           ? STATUS_DATATYPE_MISALIGNMENT
+                                           : STATUS_INVALID_PARAMETER));
       Local = 72;
       DbgPrint("WDM SEH: dynamic inner handled\n");
     }
   } __except (DynamicFilter(GetExceptionInformation(), &Local,
                             EXCEPTION_EXECUTE_HANDLER)) {
-    REQUIRE(Mode == SehSearchFilters && Stage == 52 && Local == 71);
+    REQUIRE((Mode == SehSearchFilters || Mode == SehNestedSearch) &&
+            Stage == (ULONG)(Mode == SehNestedSearch ? 53 : 52) && Local == 71);
+    if (Mode == SehNestedSearch)
+      REQUIRE((NTSTATUS)GetExceptionCode() == STATUS_DATATYPE_MISALIGNMENT);
     Local = 72;
     DbgPrint("WDM SEH: dynamic outer handled\n");
   }
@@ -269,8 +475,12 @@ __declspec(noinline) static VOID FinallyHelper(VOID) {
   __try {
     ExRaiseAccessViolation();
   } __finally {
-    if (Mode == SehNestedFinally)
+    if (Mode == SehNestedFinally) {
+      DbgPrint("WDM SEH: collided finally entered\n");
       ExRaiseDatatypeMisalignment();
+    }
+    if (Mode == SehLocalFinally)
+      LocalNestedRaise(FirstPointers);
     if (!AbnormalTermination() || Local != 0xabc || Stage != 61) {
       DbgPrint("WDM SEH: failure helper finally\n");
       Stage = 0xbad;
@@ -303,7 +513,11 @@ __declspec(noinline) static NTSTATUS FinallyPaths(VOID) {
     }
   } __except (DynamicFilter(GetExceptionInformation(), &Local,
                             EXCEPTION_EXECUTE_HANDLER)) {
-    REQUIRE(Mode == SehExceptionalFinally && Stage == 63 && Local == 72);
+    REQUIRE((Mode == SehExceptionalFinally || Mode == SehLocalFinally ||
+             Mode == SehNestedFinally) &&
+            Stage == 63 && Local == 72);
+    if (Mode == SehNestedFinally)
+      REQUIRE((NTSTATUS)GetExceptionCode() == STATUS_DATATYPE_MISALIGNMENT);
     DbgPrint("WDM SEH: finally handler\n");
   }
   REQUIRE(Stage == 63 && Local == 72);
@@ -403,12 +617,13 @@ __declspec(noinline) static LONG InspectAttachedBuffer(PVOID Buffer) {
 static VOID UserWorker(PDEVICE_OBJECT Device, PVOID Context) {
   NTSTATUS Status = STATUS_UNSUCCESSFUL;
   KAPC_STATE ApcState;
-  const BOOLEAN Attached = Mode == SehAttachedWorker ||
-                           Mode == SehAttachedForbidden;
+  const BOOLEAN Attached =
+      Mode == SehAttachedWorker || Mode == SehAttachedForbidden;
   UNREFERENCED_PARAMETER(Device);
   UNREFERENCED_PARAMETER(Context);
   if (Attached) {
-    WorkerMdl = IoAllocateMdl(WorkerUserBuffer, sizeof(ULONG), FALSE, FALSE, NULL);
+    WorkerMdl =
+        IoAllocateMdl(WorkerUserBuffer, sizeof(ULONG), FALSE, FALSE, NULL);
     if (!WorkerMdl) {
       WorkerIrp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
       IoCompleteRequest(WorkerIrp, IO_NO_INCREMENT);
@@ -477,7 +692,11 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Device, PIRP Irp) {
   NTSTATUS Status = STATUS_SUCCESS;
   UNREFERENCED_PARAMETER(Device);
   Irp->IoStatus.Information = 0;
-  if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL) {
+  if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL &&
+      Mode == SehPrologueUnwind) {
+    Status =
+        AcrossPrologueFault(Stack->Parameters.DeviceIoControl.Type3InputBuffer);
+  } else if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL) {
     ULONG Value = 0;
     ULONG64 Vector = 0;
     UCHAR Carry = 0;
@@ -552,10 +771,17 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   NTSTATUS Status;
   if (RegistryPath && RegistryPath->Length >= sizeof(WCHAR)) {
     WCHAR Last = RegistryPath->Buffer[RegistryPath->Length / sizeof(WCHAR) - 1];
-    if (Last >= 'A' && Last <= 'Z')
+    if ((Last >= 'A' && Last <= 'Z') || Last == SehXmmUnwind ||
+        Last == SehChainedUnwind || Last == SehPrologueUnwind)
       Mode = (CHAR)Last;
   }
   switch (Mode) {
+  case SehChainedUnwind:
+    Test = AcrossChainedHelper;
+    break;
+  case SehXmmUnwind:
+    Test = AcrossXmmHelper;
+    break;
   case 'H':
     Test = AcrossHelper;
     break;
@@ -572,10 +798,14 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   case SehSearchFilters:
   case SehContinueApi:
   case SehNestedFilter:
+  case SehNestedSearch:
+  case SehRepeatedFilter:
+  case SehLocalFilter:
     Test = FilteredRaise;
     break;
   case SehExceptionalFinally:
   case SehNestedFinally:
+  case SehLocalFinally:
   case SehNormalFinally:
     Test = FinallyPaths;
     break;
@@ -588,9 +818,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   default:
     break;
   }
-  if (Mode == SehRecoverUserRead || Mode == SehRejectContextMutation ||
-      Mode == SehWorkerUserProbe || Mode == SehWorkerUserLock ||
-      Mode == SehAttachedWorker || Mode == SehAttachedForbidden) {
+  if (Mode == SehPrologueUnwind || Mode == SehRecoverUserRead ||
+      Mode == SehRejectContextMutation || Mode == SehWorkerUserProbe ||
+      Mode == SehWorkerUserLock || Mode == SehAttachedWorker ||
+      Mode == SehAttachedForbidden) {
     UNICODE_STRING Name;
     RtlInitUnicodeString(&Name, L"\\Device\\NeverDSEH");
     PDEVICE_OBJECT Device;

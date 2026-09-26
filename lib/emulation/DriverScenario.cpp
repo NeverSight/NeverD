@@ -580,6 +580,70 @@ memoryResources(const llvm::json::Value &Value) {
   return Result;
 }
 
+llvm::Expected<std::vector<DriverInterruptMessage>>
+interruptMessages(const llvm::json::Value &Value) {
+  const auto *Array = Value.getAsArray();
+  if (!Array || Array->empty() ||
+      Array->size() > DriverScenarioInterruptMessageLimit)
+    return invalid("messages must be a nonempty bounded array");
+  std::vector<DriverInterruptMessage> Result;
+  for (const auto &Item : *Array) {
+    const auto *Object = Item.getAsObject();
+    if (!Object)
+      return invalid("each interrupt message must be an object");
+    if (auto E = fields(
+            *Object,
+            {interruptField::MessageAddress, interruptField::MessageData,
+             interruptField::TranslatedVector, interruptField::TranslatedLevel,
+             interruptField::TranslatedAffinity, interruptField::Polarity}))
+      return std::move(E);
+    DriverInterruptMessage Message;
+    const std::pair<llvm::StringRef, uint32_t DriverInterruptMessage::*>
+        Words[] = {
+            {interruptField::MessageData, &DriverInterruptMessage::MessageData},
+            {interruptField::TranslatedVector,
+             &DriverInterruptMessage::TranslatedVector},
+            {interruptField::TranslatedLevel,
+             &DriverInterruptMessage::TranslatedLevel}};
+    for (const auto &[Name, Member] : Words) {
+      const auto *Fact = Object->get(Name);
+      if (!Fact)
+        return invalid("interrupt messages require explicit " + Name);
+      auto Parsed = unsigned32(*Fact, Name);
+      if (!Parsed)
+        return Parsed.takeError();
+      Message.*Member = *Parsed;
+    }
+    const std::pair<llvm::StringRef, uint64_t DriverInterruptMessage::*>
+        Wide[] = {{interruptField::MessageAddress,
+                   &DriverInterruptMessage::MessageAddress},
+                  {interruptField::TranslatedAffinity,
+                   &DriverInterruptMessage::TranslatedAffinity}};
+    for (const auto &[Name, Member] : Wide) {
+      const auto *Fact = Object->get(Name);
+      if (!Fact)
+        return invalid("interrupt messages require explicit " + Name);
+      auto Parsed = unsigned64(*Fact, Name);
+      if (!Parsed)
+        return Parsed.takeError();
+      Message.*Member = *Parsed;
+    }
+    auto Polarity = Object->getString(interruptField::Polarity);
+    bool Found = false;
+#define NEVERD_DRIVER_INTERRUPT_POLARITY(Name, Value, Spelling)                \
+  if (Polarity && *Polarity == Spelling) {                                     \
+    Message.Polarity = DriverInterruptPolarity::Name;                          \
+    Found = true;                                                              \
+  }
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_POLARITY
+    if (!Found)
+      return invalid("unsupported or missing interrupt message polarity");
+    Result.push_back(Message);
+  }
+  return Result;
+}
+
 llvm::Expected<std::vector<DriverInterruptResource>>
 interruptResources(const llvm::json::Value &Value) {
   const auto *Array = Value.getAsArray();
@@ -596,7 +660,8 @@ interruptResources(const llvm::json::Value &Value) {
              interruptField::RawLevel, interruptField::RawAffinity,
              interruptField::TranslatedVector, interruptField::TranslatedLevel,
              interruptField::TranslatedAffinity, interruptField::Mode,
-             interruptField::Share, interruptField::RetriggerAfter100ns}))
+             interruptField::Share, interruptField::RetriggerAfter100ns,
+             interruptField::Messages}))
       return std::move(E);
     auto ID = Object->getString(interruptField::ID);
     auto Mode = Object->getString(interruptField::Mode);
@@ -658,6 +723,12 @@ interruptResources(const llvm::json::Value &Value) {
         return Parsed.takeError();
       Resource.*Member = *Parsed;
     }
+    if (const auto *Messages = Object->get(interruptField::Messages)) {
+      auto Parsed = interruptMessages(*Messages);
+      if (!Parsed)
+        return Parsed.takeError();
+      Resource.Messages = std::move(*Parsed);
+    }
     Result.push_back(std::move(Resource));
   }
   return Result;
@@ -675,7 +746,8 @@ interruptEvents(const llvm::json::Value &Value) {
       return invalid("each interrupt event must be an object");
     if (auto E = fields(*Object,
                         {interruptField::After100ns, interruptField::DeviceID,
-                         interruptField::InterruptID, interruptField::Action}))
+                         interruptField::InterruptID, interruptField::Action,
+                         interruptField::MessageID}))
       return std::move(E);
     const auto *After = Object->get(interruptField::After100ns);
     auto DeviceID = Object->getString(interruptField::DeviceID);
@@ -700,6 +772,12 @@ interruptEvents(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_INTERRUPT_ACTION
       if (!Found)
         return invalid("interrupt action must be pulse, assert or deassert");
+    }
+    if (const auto *ID = Object->get(interruptField::MessageID)) {
+      auto Parsed = unsigned32(*ID, interruptField::MessageID);
+      if (!Parsed)
+        return Parsed.takeError();
+      Event.MessageID = *Parsed;
     }
     Result.push_back(std::move(Event));
   }
@@ -1290,8 +1368,31 @@ llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
 }
 
 llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
-  size_t Count = 0;
-  std::map<uint32_t, const DriverInterruptResource *> Vectors;
+  size_t Count = 0, MessageCount = 0;
+  struct VectorFacts {
+    const DriverInterruptResource *Resource;
+    uint32_t Level;
+    uint64_t Affinity;
+  };
+  std::map<uint32_t, VectorFacts> Vectors;
+  auto AddVector = [&](const DriverInterruptResource &Interrupt,
+                       uint32_t Vector, uint32_t Level,
+                       uint64_t Affinity) -> llvm::Error {
+    auto [It, Inserted] =
+        Vectors.emplace(Vector, VectorFacts{&Interrupt, Level, Affinity});
+    if (!Inserted) {
+      const auto &Peer = *It->second.Resource;
+      if (Peer.Share != DriverInterruptShare::Shared ||
+          Interrupt.Share != DriverInterruptShare::Shared ||
+          Peer.Mode != Interrupt.Mode ||
+          Peer.RetriggerAfter100ns != Interrupt.RetriggerAfter100ns ||
+          It->second.Level != Level || It->second.Affinity != Affinity)
+        return invalid(
+            "translated interrupt vectors must be globally exclusive "
+            "or describe the same shared line");
+    }
+    return llvm::Error::success();
+  };
   for (const auto &Device : Devices) {
     if (Device.Bus == DriverBusKind::ResourceFree && !Device.Interrupts.empty())
       return invalid("resource_free devices cannot have interrupts");
@@ -1306,20 +1407,6 @@ llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
         return invalid("interrupt id must be a bounded ASCII identifier");
       if (!IDs.insert(Interrupt.ID).second)
         return invalid("duplicate interrupt id '" + Interrupt.ID + "'");
-      auto [Vector, Inserted] =
-          Vectors.emplace(Interrupt.TranslatedVector, &Interrupt);
-      if (!Inserted) {
-        const auto &Peer = *Vector->second;
-        if (Peer.Share != DriverInterruptShare::Shared ||
-            Interrupt.Share != DriverInterruptShare::Shared ||
-            Peer.Mode != Interrupt.Mode ||
-            Peer.RetriggerAfter100ns != Interrupt.RetriggerAfter100ns ||
-            Peer.TranslatedLevel != Interrupt.TranslatedLevel ||
-            Peer.TranslatedAffinity != Interrupt.TranslatedAffinity)
-          return invalid(
-              "translated interrupt vectors must be globally exclusive "
-              "or describe the same shared line");
-      }
       switch (Interrupt.Mode) {
 #define NEVERD_DRIVER_INTERRUPT_MODE(Name, Value, Spelling)                    \
   case DriverInterruptMode::Name:                                              \
@@ -1350,13 +1437,55 @@ llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
       if (Interrupt.RawLevel > DriverInterruptRawLevelLimit)
         return invalid(
             "raw interrupt level must fit the group-zero descriptor");
-      if (Interrupt.TranslatedLevel < DriverInterruptMinimumLevel ||
+      if ((Interrupt.TranslatedLevel &&
+           Interrupt.TranslatedLevel < DriverInterruptMinimumLevel) ||
           Interrupt.TranslatedLevel > DriverInterruptMaximumLevel)
         return invalid(
             "translated interrupt level must be a supported device DIRQL");
       if (Interrupt.RawAffinity != DriverInterruptAffinity ||
           Interrupt.TranslatedAffinity != DriverInterruptAffinity)
         return invalid("interrupt affinity must name only CPU zero");
+      if (Interrupt.Messages.empty()) {
+        if (auto E = AddVector(Interrupt, Interrupt.TranslatedVector,
+                               Interrupt.TranslatedLevel,
+                               Interrupt.TranslatedAffinity))
+          return E;
+        continue;
+      }
+      if (Interrupt.Messages.size() >
+          DriverScenarioInterruptMessageLimit - MessageCount)
+        return invalid("interrupt messages exceed the combined count limit");
+      MessageCount += Interrupt.Messages.size();
+      const auto &First = Interrupt.Messages.front();
+      if (Interrupt.Mode != DriverInterruptMode::Latched ||
+          Interrupt.RawLevel ||
+          Interrupt.TranslatedVector != First.TranslatedVector ||
+          Interrupt.TranslatedLevel != First.TranslatedLevel ||
+          Interrupt.TranslatedAffinity != First.TranslatedAffinity)
+        return invalid("message descriptors require latched mode, raw_level "
+                       "zero and the first message translated tuple");
+      for (const auto &Message : Interrupt.Messages) {
+        if (Message.MessageAddress != First.MessageAddress)
+          return invalid("messages in one descriptor require one address");
+        if (Message.TranslatedLevel < DriverInterruptMinimumLevel ||
+            Message.TranslatedLevel > DriverInterruptMaximumLevel ||
+            Message.TranslatedAffinity != DriverInterruptAffinity)
+          return invalid(
+              "interrupt messages require supported DIRQL and CPU zero");
+        switch (Message.Polarity) {
+#define NEVERD_DRIVER_INTERRUPT_POLARITY(Name, Value, Spelling)                \
+  case DriverInterruptPolarity::Name:                                          \
+    break;
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_POLARITY
+        default:
+          return invalid("unsupported interrupt message polarity");
+        }
+        if (auto E =
+                AddVector(Interrupt, Message.TranslatedVector,
+                          Message.TranslatedLevel, Message.TranslatedAffinity))
+          return E;
+      }
     }
   }
   return llvm::Error::success();
@@ -1785,6 +1914,12 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
       if (Interrupt == Device->Interrupts.end())
         return invalid(
             "interrupt_id must name an interrupt on the event device");
+      if (Interrupt->Messages.empty()
+              ? Event.MessageID.has_value()
+              : (!Event.MessageID ||
+                 *Event.MessageID >= Interrupt->Messages.size()))
+        return invalid("message_id must select a declared message and is "
+                       "forbidden for line interrupts");
       switch (Event.Action) {
       case DriverInterruptAction::Pulse:
         if (Interrupt->Mode != DriverInterruptMode::Latched)

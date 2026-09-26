@@ -265,9 +265,18 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
     return llvm::joinErrors(Status.takeError(), Information.takeError());
   if (uint32_t(*Status) == StatusPending)
     return stackError("IoCompleteRequest cannot complete with STATUS_PENDING");
-  if (Request->FrameworkPnpAwaiting)
+  if (Request->FrameworkTransitionAwaiting)
     return stackError("framework PnP callback still owns this completion");
-  if (Framework && Request->PnpOperation && !Request->FrameworkPnpHandled &&
+  if (!(uint32_t(*Status) & profile::NTStatusFailureMask)) {
+    auto Policy = beginFrameworkPowerPolicy(IRP);
+    if (!Policy)
+      return Policy.takeError();
+    if (*Policy)
+      return llvm::Error::success();
+  }
+  if (Framework && Request->PnpOperation &&
+      Request->PnpOperation->Minor == DevicePnpRequest::Start &&
+      !Request->FrameworkTransitionHandled &&
       !(uint32_t(*Status) & profile::NTStatusFailureMask) &&
       !Request->DeviceRoute.empty() &&
       FrameworkDevices.count(Request->DeviceRoute.front())) {
@@ -277,8 +286,30 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
         Request->ResourceListSize);
     if (!Deferred)
       return Deferred.takeError();
-    Request->FrameworkPnpHandled = !*Deferred;
-    Request->FrameworkPnpAwaiting = *Deferred;
+    Request->FrameworkTransitionHandled = !*Deferred;
+    Request->FrameworkTransitionAwaiting = *Deferred;
+    if (*Deferred) {
+      if (auto E = markRequestPending(IRP))
+        return E;
+      return llvm::Error::success();
+    }
+  }
+  if (Framework && Request->PowerOperation &&
+      Request->PowerOperation->Minor == DevicePowerRequest::Set &&
+      Request->PowerOperation->Type == DriverPowerType::Device &&
+      Request->PowerOperation->State == uint32_t(DevicePowerState::D0) &&
+      !Request->FrameworkTransitionHandled &&
+      !(uint32_t(*Status) & profile::NTStatusFailureMask) &&
+      !Request->DeviceRoute.empty() &&
+      FrameworkDevices.count(Request->DeviceRoute.front())) {
+    const auto &Power = *Result.Requests[Request->ResultIndex].Power;
+    auto Deferred = Framework->beginDevicePowerTransition(
+        Request->PnpDevice, IRP, Power.DeviceStateBefore,
+        DevicePowerState(Power.State));
+    if (!Deferred)
+      return Deferred.takeError();
+    Request->FrameworkTransitionHandled = !*Deferred;
+    Request->FrameworkTransitionAwaiting = *Deferred;
     if (*Deferred) {
       if (auto E = markRequestPending(IRP))
         return E;

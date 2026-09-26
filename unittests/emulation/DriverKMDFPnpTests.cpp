@@ -942,9 +942,17 @@ TEST(DriverKMDFPnp, SurpriseRemovalPurgesDriverOwnedRequestBeforeD0Exit) {
     EXPECT_EQ(Result->Requests[2].IOStatus, framework::RequestCancelled);
     EXPECT_EQ(Result->Requests[3].IOStatus, windows::StatusSuccess);
     const auto Messages = pnpMessages(*Result);
-    EXPECT_NE(
-        std::find(Messages.begin(), Messages.end(), "KMDF PnP: I/O stop\n"),
-        Messages.end());
+    const auto Stop =
+        std::find(Messages.begin(), Messages.end(), "KMDF PnP: I/O stop\n");
+    const auto Suspend = std::find(Messages.begin(), Messages.end(),
+                                   "KMDF PnP: self-managed suspend\n");
+    const auto Exit =
+        std::find(Messages.begin(), Messages.end(), "KMDF PnP: D0 exit\n");
+    ASSERT_NE(Stop, Messages.end());
+    ASSERT_NE(Suspend, Messages.end());
+    ASSERT_NE(Exit, Messages.end());
+    EXPECT_LT(Stop, Suspend);
+    EXPECT_LT(Suspend, Exit);
   }
 }
 
@@ -1044,6 +1052,413 @@ TEST(DriverKMDFPnp, FailedD0EntryFailsStartWithoutCallingD0Exit) {
                 "KMDF PnP: device ready\n", "KMDF PnP: D0 entry\n",
                 "KMDF PnP: device cleanup\n", "KMDF PnP: device destroy\n",
                 "KMDF PnP: driver unload\n"}));
+}
+
+DriverRequest devicePower(DevicePowerRequest Minor, DevicePowerState State,
+                          uint64_t Delay = 0) {
+  DriverRequest Request;
+  Request.Kind = DriverRequestKind::Power;
+  Request.DeviceID = DeviceID.str();
+  DriverPowerOperation Operation;
+  Operation.Minor = Minor;
+  Operation.Type = DriverPowerType::Device;
+  Operation.State = uint32_t(State);
+  Operation.BusCompletion = {windows::StatusSuccess, Delay};
+  Request.Power = Operation;
+  return Request;
+}
+
+TEST(DriverKMDFPnp, DevicePowerRetainsResourcesAndBracketsProviderPowerChange) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Base);
+      auto Input = resourceOptions('9');
+      Input.LoadAddress = Base;
+      Input.Requests = {
+          pnp(DevicePnpRequest::Start),
+          devicePower(DevicePowerRequest::Query, DevicePowerState::D3, 3),
+          devicePower(DevicePowerRequest::Set, DevicePowerState::D3, 7),
+          devicePower(DevicePowerRequest::Set, DevicePowerState::D0, 11),
+          pnp(DevicePnpRequest::QueryRemove),
+          pnp(DevicePnpRequest::Remove)};
+      auto Result = emulateDriver(Image, Input);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      EXPECT_TRUE(Result->UnloadCompleted);
+      ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+      for (const auto &Request : Result->Requests) {
+        EXPECT_TRUE(Request.Completed);
+        EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+      }
+      EXPECT_EQ(Result->Requests[1].Power->DeviceStateAfter,
+                DevicePowerState::D0);
+      EXPECT_EQ(Result->Requests[2].Power->DeviceStateAfter,
+                DevicePowerState::D3);
+      EXPECT_EQ(Result->Requests[3].Power->DeviceStateAfter,
+                DevicePowerState::D0);
+      EXPECT_EQ(callCount(*Result, "MmMapIoSpace"), 1u);
+      EXPECT_EQ(callCount(*Result, "MmUnmapIoSpace"), 1u);
+      EXPECT_EQ(
+          pnpMessages(*Result),
+          (std::vector<std::string>{"KMDF PnP: device ready\n",
+                                    "KMDF PnP: mapped hardware\n",
+                                    "KMDF PnP: D0 entry\n",
+                                    "KMDF PnP: D0 entry post interrupts\n",
+                                    "KMDF PnP: self-managed init\n",
+                                    "KMDF PnP: self-managed suspend\n",
+                                    "KMDF PnP: D0 exit pre interrupts\n",
+                                    "KMDF PnP: D0 exit\n",
+                                    "KMDF PnP: D0 entry\n",
+                                    "KMDF PnP: D0 entry post interrupts\n",
+                                    "KMDF PnP: self-managed restart\n",
+                                    "KMDF PnP: self-managed suspend\n",
+                                    "KMDF PnP: D0 exit pre interrupts\n",
+                                    "KMDF PnP: D0 exit\n",
+                                    "KMDF PnP: unmapped hardware\n",
+                                    "KMDF PnP: self-managed flush\n",
+                                    "KMDF PnP: self-managed cleanup\n",
+                                    "KMDF PnP: device cleanup\n",
+                                    "KMDF PnP: device destroy\n",
+                                    "KMDF PnP: driver unload\n"}));
+    }
+}
+
+TEST(DriverKMDFPnp, ReassertingDevicePowerDoesNotDuplicateCallbacks) {
+  auto Input = options('0');
+  Input.Requests = {
+      pnp(DevicePnpRequest::Start),
+      devicePower(DevicePowerRequest::Set, DevicePowerState::D0, 7),
+      pnp(DevicePnpRequest::QueryRemove), pnp(DevicePnpRequest::Remove)};
+  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  EXPECT_TRUE(Result->UnloadCompleted);
+  const auto Messages = pnpMessages(*Result);
+  EXPECT_EQ(
+      std::count(Messages.begin(), Messages.end(), "KMDF PnP: D0 entry\n"), 1);
+  EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
+                       "KMDF PnP: self-managed init\n"),
+            1);
+}
+
+DriverRequest systemPower(DevicePowerRequest Minor, SystemPowerState State,
+                          uint64_t Delay = 0) {
+  auto Request = devicePower(Minor, DevicePowerState::D0, Delay);
+  Request.Power->Type = DriverPowerType::System;
+  Request.Power->State = uint32_t(State);
+  Request.Power->Action = State == SystemPowerState::Working
+                              ? DriverPowerAction::None
+                              : DriverPowerAction::Sleep;
+  return Request;
+}
+
+TEST(DriverKMDFPnp, SystemPowerPolicyUsesIndependentExplicitDeviceResponses) {
+  for (const char *Image : pnpImages()) {
+    auto Input = resourceOptions('9');
+    auto Down =
+        *devicePower(DevicePowerRequest::Set, DevicePowerState::D3, 7).Power;
+    Down.Action = DriverPowerAction::Sleep;
+    auto Up =
+        *devicePower(DevicePowerRequest::Set, DevicePowerState::D0, 13).Power;
+    auto Query = Down;
+    Query.Minor = DevicePowerRequest::Query;
+    Input.PnpDevices.front().RequestedDevicePower = {Query, Down, Up};
+    Input.Requests = {
+        pnp(DevicePnpRequest::Start),
+        systemPower(DevicePowerRequest::Query, SystemPowerState::Sleeping3, 3),
+        systemPower(DevicePowerRequest::Set, SystemPowerState::Sleeping3, 5),
+        systemPower(DevicePowerRequest::Set, SystemPowerState::Working, 11),
+        pnp(DevicePnpRequest::QueryRemove),
+        pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    EXPECT_TRUE(Result->UnloadCompleted);
+    ASSERT_EQ(Result->Requests.size(), Input.Requests.size() + 3);
+    for (const auto &Request : Result->Requests) {
+      EXPECT_TRUE(Request.Completed);
+      EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+    }
+    const auto FindPower = [&](DriverRequestOrigin Origin, DriverPowerType Type,
+                               uint32_t State) {
+      return std::find_if(Result->Requests.begin(), Result->Requests.end(),
+                          [&](const auto &Request) {
+                            return Request.Origin == Origin && Request.Power &&
+                                   Request.Power->Type == Type &&
+                                   Request.Power->Minor ==
+                                       DevicePowerRequest::Set &&
+                                   Request.Power->State == State;
+                          });
+    };
+    const auto SleepIt =
+        FindPower(DriverRequestOrigin::Scenario, DriverPowerType::System,
+                  uint32_t(SystemPowerState::Sleeping3));
+    const auto WakeIt =
+        FindPower(DriverRequestOrigin::Scenario, DriverPowerType::System,
+                  uint32_t(SystemPowerState::Working));
+    const auto DownIt =
+        FindPower(DriverRequestOrigin::FrameworkPowerPolicy,
+                  DriverPowerType::Device, uint32_t(DevicePowerState::D3));
+    const auto UpIt =
+        FindPower(DriverRequestOrigin::FrameworkPowerPolicy,
+                  DriverPowerType::Device, uint32_t(DevicePowerState::D0));
+    ASSERT_NE(SleepIt, Result->Requests.end());
+    ASSERT_NE(WakeIt, Result->Requests.end());
+    ASSERT_NE(DownIt, Result->Requests.end());
+    ASSERT_NE(UpIt, Result->Requests.end());
+    const auto &Sleep = *SleepIt;
+    const auto &Wake = *WakeIt;
+    const auto &DownResult = *DownIt;
+    const auto &UpResult = *UpIt;
+    EXPECT_EQ(DownResult.Origin, DriverRequestOrigin::FrameworkPowerPolicy);
+    EXPECT_EQ(UpResult.Origin, DriverRequestOrigin::FrameworkPowerPolicy);
+    EXPECT_EQ(DownResult.ResponseIndex, 1u);
+    EXPECT_EQ(UpResult.ResponseIndex, 2u);
+    EXPECT_NE(DownResult.IRP, Sleep.IRP);
+    EXPECT_NE(UpResult.IRP, Wake.IRP);
+    EXPECT_EQ(DownResult.Power->BusReceivedAt100ns,
+              Sleep.Power->BusCompletedAt100ns);
+    EXPECT_EQ(UpResult.Power->BusReceivedAt100ns,
+              Wake.Power->BusCompletedAt100ns);
+    EXPECT_EQ(Sleep.Power->SystemStateAfter, SystemPowerState::Sleeping3);
+    EXPECT_EQ(Wake.Power->SystemStateAfter, SystemPowerState::Working);
+    EXPECT_EQ(DownResult.Power->DeviceStateAfter, DevicePowerState::D3);
+    EXPECT_EQ(UpResult.Power->DeviceStateAfter, DevicePowerState::D0);
+    EXPECT_EQ(callCount(*Result, "MmMapIoSpace"), 1u);
+    EXPECT_EQ(callCount(*Result, "MmUnmapIoSpace"), 1u);
+  }
+}
+
+TEST(DriverKMDFPnp, FailedDeviceQueryCompletesSystemQueryWithoutPowerChange) {
+  for (const char *Image : pnpImages()) {
+    auto Input = options('0');
+    auto Query =
+        *devicePower(DevicePowerRequest::Query, DevicePowerState::D3, 7).Power;
+    Query.Action = DriverPowerAction::Sleep;
+    Query.BusCompletion.Status = windows::StatusUnsuccessful;
+    Input.PnpDevices.front().RequestedDevicePower = {Query};
+    Input.Requests = {
+        pnp(DevicePnpRequest::Start),
+        systemPower(DevicePowerRequest::Query, SystemPowerState::Sleeping3, 3),
+        pnp(DevicePnpRequest::QueryRemove), pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    EXPECT_TRUE(Result->UnloadCompleted);
+    ASSERT_EQ(Result->Requests.size(), Input.Requests.size() + 1);
+    unsigned Queries = 0;
+    for (const auto &Request : Result->Requests) {
+      if (!Request.Power)
+        continue;
+      ++Queries;
+      EXPECT_TRUE(Request.Completed);
+      EXPECT_EQ(Request.IOStatus, windows::StatusUnsuccessful);
+      EXPECT_EQ(Request.Power->Minor, DevicePowerRequest::Query);
+      EXPECT_EQ(Request.Power->DeviceStateAfter, DevicePowerState::D0);
+      EXPECT_EQ(Request.Power->SystemStateAfter, SystemPowerState::Working);
+      if (Request.Origin == DriverRequestOrigin::FrameworkPowerPolicy)
+        EXPECT_EQ(Request.ResponseIndex, 0u);
+      else
+        EXPECT_EQ(Request.Power->BusStatus, windows::StatusSuccess);
+    }
+    EXPECT_EQ(Queries, 2u);
+  }
+}
+
+TEST(DriverKMDFPnp, NonOwnerForwardsSystemPowerWithoutInventingChildren) {
+  auto Input = options('8');
+  Input.Requests = {
+      pnp(DevicePnpRequest::Start),
+      systemPower(DevicePowerRequest::Set, SystemPowerState::Sleeping3),
+      systemPower(DevicePowerRequest::Set, SystemPowerState::Working),
+      pnp(DevicePnpRequest::QueryRemove), pnp(DevicePnpRequest::Remove)};
+  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  EXPECT_TRUE(Result->UnloadCompleted);
+  EXPECT_EQ(Result->Requests.size(), Input.Requests.size());
+  EXPECT_EQ(callCount(*Result, "WdfDeviceInitSetPowerPolicyOwnership"), 1u);
+  const auto Messages = pnpMessages(*Result);
+  EXPECT_EQ(
+      std::count(Messages.begin(), Messages.end(), "KMDF PnP: D0 entry\n"), 1);
+  EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
+                       "KMDF PnP: self-managed suspend\n"),
+            1);
+}
+
+TEST(DriverKMDFPnp, PowerPolicyRejectsMissingAndMismatchedDeviceResponses) {
+  for (bool Mismatched : {false, true}) {
+    auto Input = options('0');
+    Input.Requests = {
+        pnp(DevicePnpRequest::Start),
+        systemPower(DevicePowerRequest::Set, SystemPowerState::Sleeping3)};
+    if (Mismatched)
+      Input.PnpDevices.front().RequestedDevicePower = {
+          *devicePower(DevicePowerRequest::Set, DevicePowerState::D0).Power};
+    auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("requested_device_power"),
+              std::string::npos);
+    EXPECT_EQ(Result->Requests.size(), Input.Requests.size());
+  }
+}
+
+TEST(DriverKMDFPnp, SelfManagedIoInitializesOnceAcrossRebalanceAndRemoval) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {'0', '7'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Mode);
+        auto Input = options(Mode);
+        Input.LoadAddress = Base;
+        Input.Requests = {pnp(DevicePnpRequest::Start),
+                          pnp(DevicePnpRequest::QueryStop),
+                          pnp(DevicePnpRequest::Stop),
+                          pnp(DevicePnpRequest::Start),
+                          pnp(DevicePnpRequest::QueryRemove),
+                          pnp(DevicePnpRequest::Remove)};
+        auto Result = emulateDriver(Image, Input);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        EXPECT_TRUE(Result->UnloadCompleted);
+        for (const auto &Request : Result->Requests)
+          EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+        std::vector<std::string> Expected{
+            "KMDF PnP: device ready\n", "KMDF PnP: prepare hardware\n",
+            "KMDF PnP: D0 entry\n", "KMDF PnP: D0 entry post interrupts\n"};
+        if (Mode != '7')
+          Expected.push_back("KMDF PnP: self-managed init\n");
+        Expected.insert(
+            Expected.end(),
+            {"KMDF PnP: self-managed suspend\n",
+             "KMDF PnP: D0 exit pre interrupts\n", "KMDF PnP: D0 exit\n",
+             "KMDF PnP: release hardware\n", "KMDF PnP: prepare hardware\n",
+             "KMDF PnP: D0 entry\n", "KMDF PnP: D0 entry post interrupts\n",
+             "KMDF PnP: self-managed restart\n",
+             "KMDF PnP: self-managed suspend\n",
+             "KMDF PnP: D0 exit pre interrupts\n", "KMDF PnP: D0 exit\n",
+             "KMDF PnP: release hardware\n", "KMDF PnP: self-managed flush\n",
+             "KMDF PnP: self-managed cleanup\n", "KMDF PnP: device cleanup\n",
+             "KMDF PnP: device destroy\n", "KMDF PnP: driver unload\n"});
+        EXPECT_EQ(pnpMessages(*Result), Expected);
+      }
+}
+
+TEST(DriverKMDFPnp, SelfManagedIoFlushesOnSurpriseAndCleansUpOnRemoval) {
+  for (const char *Image : pnpImages()) {
+    auto Input = options('0');
+    Input.Requests = {pnp(DevicePnpRequest::Start),
+                      pnp(DevicePnpRequest::SurpriseRemoval),
+                      pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    EXPECT_TRUE(Result->UnloadCompleted);
+    EXPECT_EQ(
+        pnpMessages(*Result),
+        (std::vector<std::string>{
+            "KMDF PnP: device ready\n", "KMDF PnP: prepare hardware\n",
+            "KMDF PnP: D0 entry\n", "KMDF PnP: D0 entry post interrupts\n",
+            "KMDF PnP: self-managed init\n", "KMDF PnP: self-managed suspend\n",
+            "KMDF PnP: D0 exit pre interrupts\n", "KMDF PnP: D0 exit\n",
+            "KMDF PnP: release hardware\n", "KMDF PnP: self-managed flush\n",
+            "KMDF PnP: self-managed cleanup\n", "KMDF PnP: device cleanup\n",
+            "KMDF PnP: device destroy\n", "KMDF PnP: driver unload\n"}));
+  }
+}
+
+TEST(DriverKMDFPnp, ReleasedResourceListsExpireBeforeSelfManagedFlush) {
+  auto Input = options('e');
+  Input.Requests = {pnp(DevicePnpRequest::Start),
+                    pnp(DevicePnpRequest::QueryRemove),
+                    pnp(DevicePnpRequest::Remove)};
+  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(Result->Diagnostic.find("resource-list query requires a live"),
+            std::string::npos)
+      << Result->Diagnostic;
+  const auto Messages = pnpMessages(*Result);
+  EXPECT_NE(std::find(Messages.begin(), Messages.end(),
+                      "KMDF PnP: release hardware\n"),
+            Messages.end());
+  EXPECT_EQ(std::find(Messages.begin(), Messages.end(),
+                      "KMDF PnP: self-managed flush\n"),
+            Messages.end());
+}
+
+TEST(DriverKMDFPnp, FailedSelfManagedInitializationUnwindsBeforeRemoval) {
+  for (const char *Image : pnpImages()) {
+    auto Input = options('1');
+    Input.Requests = {pnp(DevicePnpRequest::Start),
+                      pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    EXPECT_TRUE(Result->UnloadCompleted);
+    ASSERT_EQ(Result->Requests.size(), 2u);
+    EXPECT_EQ(Result->Requests[0].IOStatus, windows::StatusUnsuccessful);
+    EXPECT_EQ(Result->Requests[1].IOStatus, windows::StatusSuccess);
+    EXPECT_EQ(
+        pnpMessages(*Result),
+        (std::vector<std::string>{
+            "KMDF PnP: device ready\n", "KMDF PnP: prepare hardware\n",
+            "KMDF PnP: D0 entry\n", "KMDF PnP: D0 entry post interrupts\n",
+            "KMDF PnP: self-managed init\n",
+            "KMDF PnP: D0 exit pre interrupts\n", "KMDF PnP: D0 exit\n",
+            "KMDF PnP: release hardware\n", "KMDF PnP: self-managed flush\n",
+            "KMDF PnP: self-managed cleanup\n", "KMDF PnP: device cleanup\n",
+            "KMDF PnP: device destroy\n", "KMDF PnP: driver unload\n"}));
+  }
+}
+
+TEST(DriverKMDFPnp, FailedSelfManagedRestartReleasesHardwareAndCleansUpOnce) {
+  for (const char *Image : pnpImages()) {
+    auto Input = options('3');
+    Input.Requests = {pnp(DevicePnpRequest::Start),
+                      pnp(DevicePnpRequest::QueryStop),
+                      pnp(DevicePnpRequest::Stop), pnp(DevicePnpRequest::Start),
+                      pnp(DevicePnpRequest::Remove)};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    EXPECT_TRUE(Result->UnloadCompleted);
+    ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+    EXPECT_EQ(Result->Requests[3].IOStatus, windows::StatusUnsuccessful);
+    EXPECT_EQ(Result->Requests[4].IOStatus, windows::StatusSuccess);
+    const auto Messages = pnpMessages(*Result);
+    const auto Count = [&](const char *Text) {
+      return std::count(Messages.begin(), Messages.end(), Text);
+    };
+    EXPECT_EQ(Count("KMDF PnP: self-managed init\n"), 1);
+    EXPECT_EQ(Count("KMDF PnP: self-managed restart\n"), 1);
+    EXPECT_EQ(Count("KMDF PnP: self-managed flush\n"), 1);
+    EXPECT_EQ(Count("KMDF PnP: self-managed cleanup\n"), 1);
+    EXPECT_EQ(Count("KMDF PnP: release hardware\n"), 2);
+  }
+}
+
+TEST(DriverKMDFPnp, FailedPostInterruptEntryDoesNotInitializeSelfManagedIo) {
+  auto Input = options('4');
+  Input.Requests = {pnp(DevicePnpRequest::Start),
+                    pnp(DevicePnpRequest::Remove)};
+  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  EXPECT_TRUE(Result->UnloadCompleted);
+  ASSERT_EQ(Result->Requests.size(), 2u);
+  EXPECT_EQ(Result->Requests[0].IOStatus, windows::StatusUnsuccessful);
+  EXPECT_EQ(pnpMessages(*Result),
+            (std::vector<std::string>{
+                "KMDF PnP: device ready\n", "KMDF PnP: prepare hardware\n",
+                "KMDF PnP: D0 entry\n", "KMDF PnP: D0 entry post interrupts\n",
+                "KMDF PnP: D0 exit pre interrupts\n", "KMDF PnP: D0 exit\n",
+                "KMDF PnP: release hardware\n", "KMDF PnP: device cleanup\n",
+                "KMDF PnP: device destroy\n", "KMDF PnP: driver unload\n"}));
 }
 
 TEST(DriverKMDFPnp, UnmodeledPnpCallbackFailsAtRegistration) {

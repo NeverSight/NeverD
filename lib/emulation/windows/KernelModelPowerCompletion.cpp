@@ -111,7 +111,24 @@ llvm::Error KernelModel::tryFinalizePowerRequest(uint64_t IRP) {
   if (std::any_of(IRPCalls.begin(), IRPCalls.end(),
                   [&](const auto &Entry) { return Entry.second.IRP == IRP; }))
     return llvm::Error::success();
-  return finalizeRequest(IRP);
+  const uint64_t ParentIRP = Child.FrameworkParent;
+  const auto Status = Result.Requests[Request->ResultIndex].IOStatus;
+  if (auto E = finalizeRequest(IRP))
+    return E;
+  if (ParentIRP) {
+    auto *Parent = requestForIRP(ParentIRP);
+    if (!Parent || !Parent->FrameworkPolicyIssued ||
+        !Parent->FrameworkTransitionAwaiting || !Status)
+      return powerError("framework power child lost its retained system IRP");
+    Parent->FrameworkTransitionAwaiting = false;
+    if (Parent->PowerOperation->Minor == DevicePowerRequest::Query ||
+        (*Status & profile::NTStatusFailureMask))
+      if (auto E = Memory.writeInteger(ParentIRP + windows::IRPStatusOffset,
+                                       *Status, sizeof(uint32_t)))
+        return E;
+    return completeRequest(ParentIRP, 0);
+  }
+  return llvm::Error::success();
 }
 
 llvm::Expected<std::optional<uint64_t>>

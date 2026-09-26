@@ -128,7 +128,8 @@ public:
       RemoveLock,
       FrameworkQueueStop,
       FrameworkQueueEmpty,
-      FrameworkFileSend
+      FrameworkFileSend,
+      InterruptSynchronization
     };
     Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
@@ -200,8 +201,8 @@ private:
   llvm::Expected<std::optional<uint64_t>> finishWdmGuestCall(uint64_t Token,
                                                              uint64_t Result);
   void configureFrameworkDeviceHost();
-  llvm::Error completeFrameworkPnpIfReady();
-  llvm::Expected<uint64_t> forwardFrameworkPnpRequest(uint64_t IRP);
+  llvm::Error completeFrameworkTransitionIfReady();
+  llvm::Expected<uint64_t> forwardFrameworkTransitionRequest(uint64_t IRP);
   llvm::Error detachFrameworkPnpDevice(uint64_t Device, uint64_t PDO);
   /// Framework-owned WDM devices and their canonical symbolic-link keys.
   std::map<uint64_t, std::vector<std::string>> FrameworkDevices;
@@ -274,7 +275,6 @@ private:
   bool UserRequestContext = false;
   uint32_t CurrentUserProcessID = 0;
   uint64_t NextUserAddress = profile::UserArenaBase;
-  uint64_t NextUserAlias = profile::UserAliasBase;
   struct UserAllocation {
     uint64_t Size;
     uint32_t ProcessID;
@@ -495,6 +495,8 @@ private:
     uint32_t ResponseIndex = 0;
     bool CallbackStarted = false;
     bool CallbackReturned = false;
+    DriverRequestOrigin Origin = DriverRequestOrigin::PoRequestPowerIrp;
+    uint64_t FrameworkParent = 0;
   };
   struct UserRegion {
     DriverUserBufferKind Kind;
@@ -536,9 +538,10 @@ private:
     bool Completed = false;
     bool DispatchReturned = false;
     bool FrameworkRemoveStarted = false;
-    bool FrameworkPnpAwaiting = false;
-    bool FrameworkPnpBeforeBus = false;
-    bool FrameworkPnpHandled = false;
+    bool FrameworkTransitionAwaiting = false;
+    bool FrameworkTransitionBeforeBus = false;
+    bool FrameworkTransitionHandled = false;
+    bool FrameworkPolicyIssued = false;
     bool PendingMarked = false;
     bool CancelRequested = false;
     std::optional<uint64_t> CancelDeadline = std::nullopt;
@@ -646,6 +649,8 @@ private:
   llvm::Expected<Invocation>
   preparePowerRequest(const DriverRequest &Input, size_t ResultIndex,
                       std::optional<RequestedPower> Child = std::nullopt);
+  llvm::Expected<uint32_t> dispatchPreparedPowerRequest(const Invocation &Call);
+  llvm::Expected<bool> beginFrameworkPowerPolicy(uint64_t IRP);
   llvm::Expected<uint64_t> requestPowerIrp(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<uint64_t> setPowerState(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error startNextPowerIrp(uint64_t IRP);
@@ -668,6 +673,9 @@ private:
       Driver,
       NonPagedPool,
       UserLocked,
+      KernelLocked,
+      AllocatedPages,
+      ReleasedPages,
       Partial
     };
     Ownership Owner = Ownership::Request;
@@ -688,11 +696,19 @@ private:
     bool Writable = false;
     bool DmaWritable = false;
     bool Mapped = false;
-    bool MappingWritable = false;
+    bool isProbeLocked() const {
+      return Owner == Ownership::UserLocked || Owner == Ownership::KernelLocked;
+    }
   };
   std::map<uint64_t, LockedMdl> MDLs;
   llvm::Error initializeMDLPhysicalPages(const LockedMdl &State);
   llvm::Expected<uint64_t> allocateMDL(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t>
+  allocatePagesForMDL(llvm::ArrayRef<uint64_t> Arguments, bool Extended);
+  llvm::Error freePagesFromMDL(uint64_t MDL);
+  llvm::Error freeAllocatedMDL(uint64_t MDL);
+  static llvm::Expected<KernelPhysicalMemory::CacheType>
+  memoryCacheType(uint32_t Value);
   llvm::Error buildNonPagedMDL(uint64_t MDL);
   llvm::Error buildPartialMDL(uint64_t Source, uint64_t Target,
                               uint64_t Address, uint32_t Length);
@@ -702,6 +718,8 @@ private:
   llvm::Error probeAndLockPages(uint64_t MDL, uint32_t Mode,
                                 uint32_t Operation);
   llvm::Error unlockPages(uint64_t MDL);
+  llvm::Expected<uint64_t> protectMDLSystemAddress(uint64_t MDL,
+                                                   uint32_t Protection);
   llvm::Error freeMDL(uint64_t MDL);
   llvm::Expected<uint64_t> createMDLRecord(uint64_t Address, uint32_t Size,
                                            uint16_t Flags);
