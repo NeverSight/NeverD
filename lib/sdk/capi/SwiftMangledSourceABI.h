@@ -621,6 +621,94 @@ swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image, va_t Entry) {
              : std::nullopt;
 }
 
+// A direct Swift class getter for Optional<any P> writes its existential
+// result through x8 and takes the class instance in swiftself. The complete
+// mangled tree excludes class-constrained and protocol-composition layouts.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledClassOptionalExistentialGetterSourceABI(const BinaryImage &Image,
+                                                    va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Candidate : Image.Symbols)
+    if (Candidate.Addr == Entry && Candidate.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Candidate;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Identifier = [&](const Node &N, llvm::StringRef Kind) {
+    return N.Kind == Kind && N.Text && !N.Text->empty() && !N.Index &&
+           N.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Getter", 1) ||
+      !Shape(Parsed.Root->Children[0].Children[0], "Variable", 3))
+    return std::nullopt;
+  const auto &Variable = Parsed.Root->Children[0].Children[0];
+  const auto &Owner = Variable.Children[0];
+  const auto &Type = Variable.Children[2];
+  if (!Shape(Owner, "Class", 2) || !Identifier(Owner.Children[0], "Module") ||
+      !Identifier(Owner.Children[1], "Identifier") ||
+      !Identifier(Variable.Children[1], "Identifier") ||
+      !Shape(Type, "Type", 1) ||
+      !Shape(Type.Children[0], "BoundGenericEnum", 2))
+    return std::nullopt;
+  const auto &Optional = Type.Children[0];
+  if (!Shape(Optional.Children[0], "Type", 1) ||
+      !Shape(Optional.Children[0].Children[0], "Enum", 2) ||
+      !Identifier(Optional.Children[0].Children[0].Children[0], "Module") ||
+      *Optional.Children[0].Children[0].Children[0].Text != "Swift" ||
+      !Identifier(Optional.Children[0].Children[0].Children[1], "Identifier") ||
+      *Optional.Children[0].Children[0].Children[1].Text != "Optional" ||
+      !Shape(Optional.Children[1], "TypeList", 1) ||
+      !Shape(Optional.Children[1].Children[0], "Type", 1) ||
+      !Shape(Optional.Children[1].Children[0].Children[0], "ProtocolList", 1) ||
+      !Shape(Optional.Children[1].Children[0].Children[0].Children[0],
+             "TypeList", 1))
+    return std::nullopt;
+  const auto &ProtocolType =
+      Optional.Children[1].Children[0].Children[0].Children[0].Children[0];
+  if (!Shape(ProtocolType, "Type", 1) ||
+      !Shape(ProtocolType.Children[0], "Protocol", 2) ||
+      !Identifier(ProtocolType.Children[0].Children[0], "Module") ||
+      !Identifier(ProtocolType.Children[0].Children[1], "Identifier"))
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makeVoid();
+  Hint.Parameters = {{"result", NdType::makePtr(NdType::makeVoid())},
+                     {"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[0].TheRole =
+      SourceParameterTypeHint::Role::SwiftIndirectResult;
+  Hint.Parameters[1].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
 // A direct Swift class property getter takes only swiftself. The complete
 // mangled tree determines whether its result is Bool, Int, or arm64 CGFloat;
 // ObjC thunk suffixes and extensions have separate entry contracts.

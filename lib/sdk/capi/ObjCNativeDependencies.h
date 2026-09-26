@@ -265,6 +265,12 @@ inline size_t inferObjCNativeDependencies(
         ++Added;
         continue;
       }
+      if (auto Mangled = swiftMangledClassOptionalExistentialGetterSourceABI(
+              Image, Target)) {
+        Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
+        ++Added;
+        continue;
+      }
       if (auto Mangled =
               swiftMangledClassScalarGetterSourceABI(Image, Target)) {
         Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
