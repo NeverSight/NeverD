@@ -650,7 +650,8 @@ untypedSixParameterGetter(const HighFunc &F, const BinaryImage &Image) {
 /// The native signature may contain x0/x1 placeholders solely to reach the
 /// incidental swift_once context in x2; the compiler-level addressor itself
 /// has no parameters. Restricting this to the exact load/test/call/return
-/// shape keeps that machine artifact from becoming public source ABI.
+/// shapes (including a shared return after the conditional) keeps that
+/// machine artifact from becoming public source ABI.
 inline std::optional<SwiftOnceAddressorContract>
 addressorContract(const HighFunc &F, const BinaryImage &Image) {
   const auto InertLabel = [](const HighStmt &S) {
@@ -673,10 +674,19 @@ addressorContract(const HighFunc &F, const BinaryImage &Image) {
        F.ReturnType->Kind != NdTypeKind::Ptr) ||
       Body.size() != 3 || Body[0]->Kind != StmtKind::Assign || !Body[0]->Dst ||
       !Body[0]->Val || Body[1]->Kind != StmtKind::If || !Body[1]->Cond ||
-      !Body[1]->ElseBody.empty() || Body[1]->Body.size() != 2 ||
-      Body[1]->Body[0].Kind != StmtKind::Call || !Body[1]->Body[0].CallExpr ||
-      Body[1]->Body[1].Kind != StmtKind::Return || !Body[1]->Body[1].RetVal ||
       Body[2]->Kind != StmtKind::Return || !Body[2]->RetVal)
+    return std::nullopt;
+  const bool BranchReturn =
+      Body[1]->ElseBody.empty() && Body[1]->Body.size() == 2 &&
+      Body[1]->Body[0].Kind == StmtKind::Call &&
+      Body[1]->Body[0].CallExpr &&
+      Body[1]->Body[1].Kind == StmtKind::Return &&
+      Body[1]->Body[1].RetVal;
+  const bool SharedReturn =
+      Body[1]->Body.empty() && Body[1]->ElseBody.size() == 1 &&
+      Body[1]->ElseBody[0].Kind == StmtKind::Call &&
+      Body[1]->ElseBody[0].CallExpr;
+  if (!BranchReturn && !SharedReturn)
     return std::nullopt;
   for (const auto &Parameter : F.Params)
     if (!Parameter.Type || Parameter.Type->Size != 8 ||
@@ -730,7 +740,9 @@ addressorContract(const HighFunc &F, const BinaryImage &Image) {
   };
   auto Condition = Plain(Body[1]->Cond);
   if (!Condition || Condition->Kind != ExprKind::BinOp ||
-      Condition->Op != NdOp::INT_NOTEQUAL || Condition->Operands.size() != 2)
+      Condition->Op !=
+          (SharedReturn ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL) ||
+      Condition->Operands.size() != 2)
     return std::nullopt;
   ExprPtr Added;
   if (IsConstant(Condition->Operands[0], 0))
@@ -748,7 +760,8 @@ addressorContract(const HighFunc &F, const BinaryImage &Image) {
   if (!AddedValue || AddedValue.get() != Loaded.get())
     return std::nullopt;
 
-  const auto &Once = *Body[1]->Body[0].CallExpr;
+  const auto &Once = *(SharedReturn ? Body[1]->ElseBody[0].CallExpr
+                                   : Body[1]->Body[0].CallExpr);
   if (!onceCall(Once, Image))
     return std::nullopt;
   const auto OncePredicate =
@@ -757,7 +770,8 @@ addressorContract(const HighFunc &F, const BinaryImage &Image) {
       objc_binding_detail::constantAddress(*Once.Operands[1]);
   const auto Context = parameter(Once.Operands[2]);
   const auto FirstStorage = objc_binding_detail::constantAddress(
-      *ResolveAssigned(Body[1]->Body[1].RetVal));
+      *ResolveAssigned(SharedReturn ? Body[2]->RetVal
+                                    : Body[1]->Body[1].RetVal));
   const auto SecondStorage =
       objc_binding_detail::constantAddress(*ResolveAssigned(Body[2]->RetVal));
   if (!Predicate || !OncePredicate || *Predicate != *OncePredicate ||

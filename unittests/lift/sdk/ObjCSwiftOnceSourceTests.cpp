@@ -184,7 +184,7 @@ struct AddressorFixture {
   PipelineResult Pipeline;
   ExprPtr Once;
 
-  explicit AddressorFixture(Arch Architecture) {
+  explicit AddressorFixture(Arch Architecture, bool SharedReturn = false) {
     Image.Format = BinaryFormat::MachO;
     Image.Arch = Architecture;
     Image.Bits = Bitness::Bits64;
@@ -278,6 +278,12 @@ struct AddressorFixture {
     ContinuationLabel.Kind = StmtKind::Block;
     ContinuationLabel.Addr = AccessorAddress + 0x3c;
     Accessor.Body = {Load, Initialize, ContinuationLabel, SecondReturn};
+    if (SharedReturn) {
+      auto &Guard = Accessor.Body[1];
+      Guard.Cond->Op = NdOp::INT_EQUAL;
+      Guard.ElseBody.push_back(Guard.Body.front());
+      Guard.Body.clear();
+    }
 
     HighFunc Initializer;
     Initializer.Entry = InitializerAddress;
@@ -965,6 +971,60 @@ TEST(SwiftOnceSources, BindsCanonicalZeroArgumentAddressor) {
     EXPECT_NE(Helpers.find("neverd_swift_once_initializer_1080"),
               std::string::npos);
     EXPECT_EQ(Shared, std::set<std::string>{"neverd_swift_once_accessor_1000"});
+  }
+}
+
+TEST(SwiftOnceSources, BindsSharedReturnAddressor) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    AddressorFixture F(Architecture, true);
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.Addressors.size(), 1U);
+    EXPECT_EQ(Plan.AddressorHints.size(), 1U);
+    EXPECT_EQ(Plan.CallbackHints.size(), 1U);
+    const auto Contracts =
+        swiftOnceNativeCalleeContracts(F.Image, F.Pipeline, Plan);
+    ASSERT_EQ(Contracts.ZeroArgumentPointerCallees.size(), 1U);
+    const auto Bound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Dependencies,
+              std::set<va_t>{AddressorFixture::InitializerAddress});
+    EXPECT_EQ(Bound.SwiftOnceAccessors,
+              std::set<va_t>{AddressorFixture::AccessorAddress});
+    EXPECT_EQ(Bound.LocalStorageExtents,
+              (std::map<va_t, uint64_t>{{AddressorFixture::PredicateAddress, 8},
+                                        {AddressorFixture::StorageAddress, 8}}));
+    const auto Call = Bound.Function.Body[0].RetVal;
+    ASSERT_TRUE(Call->SourceCallHint);
+    EXPECT_TRUE(swiftOnceAddressorBound(*Call, F.Image, Plan, F.functions()));
+    std::set<std::string> Shared;
+    const auto Helpers = renderSwiftOnceAddressorHelpers(
+        F.Image, Bound.SwiftOnceAccessors, Plan, F.functions(), Shared);
+    EXPECT_NE(Helpers.find("neverd_swift_once_initializer_1080"),
+              std::string::npos);
+  }
+}
+
+TEST(SwiftOnceSources, SharedReturnAddressorRequiresExactControlFlow) {
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    AddressorFixture F(Arch::AArch64, true);
+    auto &Accessor = F.Pipeline.HighFuncs[0];
+    auto &Guard = Accessor.Body[1];
+    if (Mutation == 0)
+      Guard.Cond->Op = NdOp::INT_NOTEQUAL;
+    if (Mutation == 1)
+      Guard.Body.push_back(Guard.ElseBody.front());
+    if (Mutation == 2)
+      Guard.ElseBody.push_back(Guard.ElseBody.front());
+    if (Mutation == 3)
+      Accessor.Body.back().RetVal = HighExpr::makeConst(0x2018, 8);
+    if (Mutation == 4)
+      F.Once->Operands[1] = HighExpr::makeConst(0x1090, 8);
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    EXPECT_TRUE(Plan.Addressors.empty());
+    const auto Bound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
+    EXPECT_TRUE(Bound.SwiftOnceAccessors.empty());
   }
 }
 
