@@ -2506,6 +2506,65 @@ TEST(ObjCCallHints, SwiftHasherSeedAndFinalizeKeepSpecialCarriers) {
   }
 }
 
+TEST(ObjCCallHints, SwiftArrayAnyObjectAppendKeepsSpecializedABI) {
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  struct Case {
+    const char *Name;
+    std::initializer_list<NdTypeKind> OrdinaryKinds;
+    std::initializer_list<unsigned> OrdinarySizes;
+  };
+  const Case Cases[] = {
+      {"$sSa034_makeUniqueAndReserveCapacityIfNotB0yyFyXl_Ts5", {}, {}},
+      {"$sSa16_createNewBuffer14bufferIsUnique15minimumCapacity13growForAppendy"
+       "Sb_SiSbtFyXl_Ts5",
+       {NdTypeKind::Int, NdTypeKind::Int, NdTypeKind::Int}, {1, 8, 1}},
+      {"$sSa37_appendElementAssumeUniqueAndCapacity_03newB0ySi_xntFyXl_Ts5",
+       {NdTypeKind::Int, NdTypeKind::Ptr}, {8, 8}},
+  };
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const auto &Test : Cases) {
+      SCOPED_TRACE(Test.Name);
+      const std::string Import = "_" + std::string(Test.Name);
+      auto Image = runtimeImage(Import, Architecture);
+      Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+      const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint);
+      EXPECT_FALSE(Hint->DoesNotReturn);
+      const auto &Signature = Hint->Signature;
+      EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+      EXPECT_EQ(Signature.Convention,
+                SourceFunctionTypeHint::ConventionKind::Swift);
+      ASSERT_TRUE(Signature.ReturnType);
+      EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Void);
+      ASSERT_EQ(Signature.Parameters.size(), Test.OrdinaryKinds.size() + 1);
+      auto Kind = Test.OrdinaryKinds.begin();
+      auto Size = Test.OrdinarySizes.begin();
+      for (size_t I = 0; I < Test.OrdinaryKinds.size(); ++I, ++Kind, ++Size) {
+        const auto &Parameter = Signature.Parameters[I];
+        EXPECT_EQ(Parameter.Type->Kind, *Kind);
+        EXPECT_EQ(Parameter.Type->Size, *Size);
+        EXPECT_EQ(Parameter.TheRole, SourceParameterTypeHint::Role::Ordinary);
+        EXPECT_EQ(Parameter.Location.RegisterOffset,
+                  getTargetRegInfo(Architecture).IntParamRegs[I]);
+        if (*Size == 1)
+          EXPECT_EQ(Parameter.Location.ValueBytes, 1U);
+      }
+      const auto &Context = Signature.Parameters.back();
+      EXPECT_EQ(Context.Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Context.TheRole, SourceParameterTypeHint::Role::SwiftContext);
+      EXPECT_EQ(Context.Location.RegisterOffset,
+                Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13);
+      std::string Diagnostic;
+      EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+      auto Wrong = Image;
+      Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+      Wrong = Image;
+      Wrong.DyldBindSlots[0x2180].Addend = 1;
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    }
+}
+
 TEST(ObjCCallHints, SwiftDictionaryStorageAllocationKeepsMetadataContext) {
   constexpr llvm::StringLiteral Name =
       "$ss18_DictionaryStorageC8allocate8capacityAByxq_GSi_tFZ";

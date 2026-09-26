@@ -198,6 +198,11 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
     {"$sSS6appendyySSF", "/usr/lib/swift/libswiftCore.dylib", "vzpC"},
     // Character occupies the same two scalar result carriers as String.
     {"$sSSySJSS5IndexVcig", "/usr/lib/swift/libswiftCore.dylib", "(zz)zzp"},
+    // Swift 6.1.2 arm64 and x86_64 client IR specializes Array<AnyObject>
+    // append into these exact libswiftCore entries. The mutable Array value
+    // lives in swiftself; the element is an object pointer.
+    {"$sSa034_makeUniqueAndReserveCapacityIfNotB0yyFyXl_Ts5",
+     "/usr/lib/swift/libswiftCore.dylib", "vC"},
     {"$sSa10FoundationE19_bridgeToObjectiveCSo7NSArrayCyF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
@@ -209,6 +214,11 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "ppp"},
+    {"$sSa16_createNewBuffer14bufferIsUnique15minimumCapacity13growForAppendy"
+     "Sb_SiSbtFyXl_Ts5",
+     "/usr/lib/swift/libswiftCore.dylib", "vbzbC"},
+    {"$sSa37_appendElementAssumeUniqueAndCapacity_03newB0ySi_xntFyXl_Ts5",
+     "/usr/lib/swift/libswiftCore.dylib", "vzpC"},
     {"$sSo21OS_dispatch_semaphoreC8DispatchE4waityyF",
      "/usr/lib/swift/libswiftDispatch.dylib", "vC"},
     {"$sSo21OS_dispatch_semaphoreC8DispatchE6signalSiyF",
