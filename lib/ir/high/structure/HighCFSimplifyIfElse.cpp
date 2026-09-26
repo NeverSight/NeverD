@@ -1951,24 +1951,6 @@ static bool condIsLogicalCombo(const HighExpr *E) {
           E->Op == NdOp::INT_AND || E->Op == NdOp::INT_OR);
 }
 
-/// Dest of `v = call(...)` that feeds `if (v)` / `if (v == 0)`, walking
-/// leftover view copies. AND/OR guards are not a single call result.
-static const HighExpr *guardPtrFromCond(const HighExpr *E) {
-  const HighExpr *Val = nullptr;
-  bool NonZero = false;
-  if (condAsZeroTest(E, Val, NonZero) && NonZero && Val) {
-    Val = peelCond(Val);
-    if (Val && Val->Kind != ExprKind::Call)
-      return Val;
-    return nullptr;
-  }
-  E = peelCond(E);
-  if (E && (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi ||
-            E->Kind == ExprKind::Load))
-    return E;
-  return nullptr;
-}
-
 static bool isParentThisExpr(const HighExpr *E) {
   E = peelCond(E);
   return E && (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) &&
@@ -1992,36 +1974,13 @@ static bool retargetParentThisTo(HighExpr *C, const HighExpr *P) {
   return true;
 }
 
-static bool rewriteThenGuardedCalls(std::vector<HighStmt> &Then,
-                                    const HighExpr *P) {
-  bool Changed = false;
-  bool SeenCall = false;
-  std::function<void(std::vector<HighStmt> &)> Walk =
-      [&](std::vector<HighStmt> &Stmts) {
-        for (HighStmt &T : Stmts) {
-          if (HighExpr *C = stmtCallExpr(T)) {
-            if (SeenCall)
-              Changed |= retargetParentThisTo(C, P);
-            SeenCall = true;
-          }
-          Walk(T.Body);
-          Walk(T.ElseBody);
-          Walk(T.DefaultBody);
-          for (auto &Case : T.Cases)
-            Walk(Case.Body);
-          for (auto &Clause : T.EHClauseBodies)
-            Walk(Clause);
-        }
-      };
-  Walk(Then);
-  return Changed;
-}
-
 static bool rewriteGuardedCallThis(std::vector<HighStmt> &Body) {
   bool Changed = false;
   for (size_t I = 0; I < Body.size(); ++I) {
     HighStmt &S = Body[I];
     if ((S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse) && S.Cond) {
+      // A nonzero guard alone does not identify the receiver of calls in its
+      // arm: the guard can be a Boolean result while those calls still use self.
       const HighExpr *Val = nullptr;
       bool NonZero = false;
       const bool NullThen =
@@ -2053,8 +2012,6 @@ static bool rewriteGuardedCallThis(std::vector<HighStmt> &Body) {
             break;
           }
         }
-      } else if (const HighExpr *P = guardPtrFromCond(S.Cond.get())) {
-        Changed |= rewriteThenGuardedCalls(S.Body, P);
       }
     }
     Changed |= rewriteGuardedCallThis(S.Body);

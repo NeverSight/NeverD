@@ -9737,7 +9737,7 @@ TEST(HighCPointerAddresses, IfNarrowCastOfAddKeepsWrap) {
   EXPECT_NE(Source.find("(int16_t)"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, GuardedSingletonCallUsesGuardNotParentThis) {
+TEST(HighCPointerAddresses, GuardedDirectCallKeepsExplicitReceiver) {
   HighFunc Func;
   Func.Name = "period";
   Func.Entry = 0x140001000;
@@ -9766,10 +9766,46 @@ TEST(HighCPointerAddresses, GuardedSingletonCallUsesGuardNotParentThis) {
   ASSERT_TRUE(This);
   EXPECT_EQ(This->Kind, ExprKind::Var);
   EXPECT_EQ(This->Var.Kind, MedVar::Param);
-  EXPECT_EQ(This->Var.Id, 1);
+  EXPECT_EQ(This->Var.Id, 0);
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("GetPeriodID(table, 1)"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("GetPeriodID(this,"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("GetPeriodID(this, 1)"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("GetPeriodID(table,"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, BooleanGuardDoesNotBecomeMessageReceiver) {
+  HighFunc Func;
+  Func.Name = "method";
+  Func.Entry = 0x1000;
+  Func.ReturnType = NdType::makeVoid();
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  Func.Params = {{"objc_self", Pointer}};
+  MedVar Boolean;
+  Boolean.Kind = MedVar::Temp;
+  Boolean.Id = 25;
+  Boolean.Size = 1;
+  HighStmt Guard;
+  Guard.Kind = StmtKind::If;
+  Guard.Cond = HighExpr::makeVar(Boolean, NdType::makeInt(1));
+  HighStmt Selector;
+  Selector.Kind = StmtKind::Call;
+  Selector.CallExpr = HighExpr::makeCall("sel_registerName", 0x2000, {});
+  HighStmt Message;
+  Message.Kind = StmtKind::Call;
+  Message.CallExpr =
+      HighExpr::makeCall("objc_msgSend", 0x2100, {parameter(0, Pointer)});
+  Guard.Body = {Selector, Message};
+  Func.Body = {Guard};
+
+  invertSkipGotos(Func);
+  ASSERT_EQ(Func.Body.size(), 1U);
+  ASSERT_EQ(Func.Body[0].Body.size(), 2U);
+  const auto Receiver = Func.Body[0].Body[1].CallExpr->Operands.front();
+  ASSERT_TRUE(Receiver);
+  EXPECT_EQ(Receiver->Kind, ExprKind::Var);
+  EXPECT_EQ(Receiver->Var.Kind, MedVar::Param);
+  EXPECT_EQ(Receiver->Var.Id, 0);
+  EXPECT_EQ(Receiver->Type->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(Receiver->Type->Size, 8U);
 }
 
 TEST(HighCPointerAddresses, GuardedNullReturnIndirectCallUsesGuardThis) {
