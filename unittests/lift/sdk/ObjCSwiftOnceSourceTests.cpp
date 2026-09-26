@@ -329,7 +329,8 @@ struct ObjCThunkFixture : AddressorFixture {
   static constexpr va_t RetainSlot = 0x2088;
   static constexpr const char *ThunkName = "_$s4Test5valueSo8NSObjectCvgZTo";
 
-  explicit ObjCThunkFixture(Arch Architecture, bool SeparateRetain = false)
+  explicit ObjCThunkFixture(Arch Architecture, bool SeparateRetain = false,
+                            bool SharedReturn = false)
       : AddressorFixture(Architecture) {
     Image.Symbols.push_back({ThunkName, ThunkAddress, 0, true});
     const auto RetainName =
@@ -403,7 +404,7 @@ struct ObjCThunkFixture : AddressorFixture {
     Invoke.CallExpr = OnceCall;
     HighStmt Jump;
     Jump.Kind = StmtKind::Goto;
-    Jump.GotoTarget = ThunkAddress + 0x3c;
+    Jump.GotoTarget = ThunkAddress + 0x1c;
     HighStmt Initialize;
     Initialize.Kind = StmtKind::If;
     Initialize.Cond =
@@ -467,6 +468,12 @@ struct ObjCThunkFixture : AddressorFixture {
           std::make_shared<SourceCallTypeHint>(*Autorelease);
       Thunk.Body.back().RetVal = ReleaseResult.Dst;
       Thunk.Body.insert(Thunk.Body.end() - 1, ReleaseResult);
+    }
+    if (SharedReturn) {
+      auto &Guard = Thunk.Body[1];
+      Guard.Cond->Op = NdOp::INT_EQUAL;
+      Guard.ElseBody.push_back(Guard.Body[SeparateRetain ? 1 : 0]);
+      Guard.Body.clear();
     }
     Pipeline.HighFuncs[0] = std::move(Thunk);
   }
@@ -1167,6 +1174,62 @@ TEST(SwiftOnceSources, ProjectsCanonicalObjCLazyStaticGetterThunk) {
     const auto Projection =
         bindObjCSourceReferences(Bound.Function, F.Image, nullptr, &Functions);
     EXPECT_TRUE(Projection.Limitation.empty()) << Projection.Limitation;
+  }
+}
+
+TEST(SwiftOnceSources, ProjectsSharedReturnObjCLazyStaticGetterThunk) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const bool SeparateRetain : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Architecture));
+      SCOPED_TRACE(SeparateRetain);
+      ObjCThunkFixture F(Architecture, SeparateRetain, true);
+      const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+      ASSERT_EQ(Plan.ObjCThunks.size(), 1U);
+      auto Bound = bindSwiftOnceSourceReferences(
+          F.Pipeline.HighFuncs[0], F.Image, Plan, F.functions());
+      ASSERT_EQ(Bound.SwiftOnceObjCThunks,
+                std::set<va_t>{ObjCThunkFixture::ThunkAddress});
+      EXPECT_EQ(Bound.Dependencies,
+                std::set<va_t>{AddressorFixture::InitializerAddress});
+      ASSERT_TRUE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
+      ASSERT_EQ(Bound.Function.Params.size(), 2U);
+      const auto &Once = *Bound.Function.Body[1].ElseBody[0].CallExpr;
+      ASSERT_EQ(Once.Operands.size(), 3U);
+      ASSERT_EQ(Once.Operands[2]->Kind, ExprKind::Const);
+      EXPECT_EQ(Once.Operands[2]->ConstVal, 0U);
+      EXPECT_EQ(Once.Operands[2]->Type->Kind, NdTypeKind::Ptr);
+      const auto Functions = F.functions();
+      const auto Projection = bindObjCSourceReferences(
+          Bound.Function, F.Image, nullptr, &Functions);
+      EXPECT_TRUE(Projection.Limitation.empty()) << Projection.Limitation;
+    }
+  }
+}
+
+TEST(SwiftOnceSources, SharedReturnObjCGetterRequiresExactControlFlow) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ObjCThunkFixture F(Arch::AArch64, false, true);
+    auto &Thunk = F.Pipeline.HighFuncs[0];
+    auto &Guard = Thunk.Body[1];
+    if (Mutation == 0)
+      Guard.Cond->Op = NdOp::INT_NOTEQUAL;
+    if (Mutation == 1)
+      Guard.Body.push_back(Guard.ElseBody[0]);
+    if (Mutation == 2)
+      Guard.ElseBody.push_back(Guard.ElseBody[0]);
+    if (Mutation == 3)
+      Thunk.Body[2].CallExpr = Guard.ElseBody[0].CallExpr;
+    if (Mutation == 4)
+      Thunk.Body[2].GotoTarget = Thunk.Body[2].Addr;
+    if (Mutation == 5)
+      Thunk.Body[2].Addr = 0x2000;
+    if (Mutation == 6)
+      Guard.ElseBody[0].CallExpr->Operands[2] = HighExpr::makeConst(0, 8);
+    if (Mutation == 7)
+      Thunk.Body[5].RetVal = Thunk.Body[3].Dst;
+    EXPECT_TRUE(
+        discoverSwiftOnceSources(F.Image, F.Pipeline).ObjCThunks.empty());
   }
 }
 

@@ -900,6 +900,16 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
   const auto &Label = F.Body[2];
   const auto &Return = F.Body[SeparateRetain ? 6 : 5];
   const size_t OnceIndex = Branch.Body.size() == 3 ? 1 : 0;
+  const bool BranchGoto =
+      Branch.ElseBody.empty() && Branch.Body.size() == OnceIndex + 2 &&
+      Branch.Body[OnceIndex].Kind == StmtKind::Call &&
+      Branch.Body[OnceIndex].CallExpr &&
+      Branch.Body[OnceIndex + 1].Kind == StmtKind::Goto &&
+      Branch.Body[OnceIndex + 1].GotoTarget;
+  const bool SharedReturn =
+      Branch.Body.empty() && Branch.ElseBody.size() == 1 &&
+      Branch.ElseBody[0].Kind == StmtKind::Call &&
+      Branch.ElseBody[0].CallExpr;
   if (OnceIndex) {
     const auto &EntryLabel = Branch.Body.front();
     bool HasExpression = false;
@@ -912,15 +922,25 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
         EntryLabel.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return std::nullopt;
   }
+  const auto InertContinuationLabel = [&] {
+    bool HasExpression = false;
+    forEachExpr(Label, [&](const ExprPtr &) { HasExpression = true; });
+    return Label.Kind == StmtKind::Block && Label.Addr &&
+           Image.isCodeAddress(Label.Addr) && !HasExpression &&
+           Label.Body.empty() && Label.ElseBody.empty() &&
+           Label.Cases.empty() && Label.DefaultBody.empty() &&
+           Label.EHClauses.empty() && Label.EHClauseBodies.empty() &&
+           !Label.GotoTarget && !Label.LoopHeaderAddr &&
+           !Label.EHRange.Begin && !Label.EHRange.End &&
+           !Label.EHIsReducible && !Label.IsPhiCopy &&
+           Label.MemoryOrdering == NdMemoryOrdering::None &&
+           Label.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
   if (!PredicateAssignment || !StorageAssignment || !RetainAssignment ||
       !ResultAssignment || Branch.Kind != StmtKind::If || !Branch.Cond ||
-      !Branch.ElseBody.empty() || Branch.Body.size() != OnceIndex + 2 ||
-      Branch.Body[OnceIndex].Kind != StmtKind::Call ||
-      !Branch.Body[OnceIndex].CallExpr ||
-      Branch.Body[OnceIndex + 1].Kind != StmtKind::Goto ||
-      !Branch.Body[OnceIndex + 1].GotoTarget || Label.Kind != StmtKind::Block ||
-      Label.Addr != Branch.Body[OnceIndex + 1].GotoTarget ||
-      !Label.Body.empty() || !Label.ElseBody.empty() ||
+      (!BranchGoto && !SharedReturn) || !InertContinuationLabel() ||
+      (BranchGoto &&
+       Label.Addr != Branch.Body[OnceIndex + 1].GotoTarget) ||
       Return.Kind != StmtKind::Return || !Return.RetVal ||
       !SameLocal(Return.RetVal, ResultAssignment->Dst))
     return std::nullopt;
@@ -931,7 +951,9 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
     return std::nullopt;
   auto Condition = Plain(Branch.Cond);
   if (!Condition || Condition->Kind != ExprKind::BinOp ||
-      Condition->Op != NdOp::INT_NOTEQUAL || Condition->Operands.size() != 2)
+      Condition->Op !=
+          (SharedReturn ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL) ||
+      Condition->Operands.size() != 2)
     return std::nullopt;
   ExprPtr Added;
   if (IsConstant(Condition->Operands[0], 0))
@@ -949,7 +971,8 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
   if (!SameLocal(Loaded, PredicateAssignment->Dst))
     return std::nullopt;
 
-  const auto &Once = *Branch.Body[OnceIndex].CallExpr;
+  const auto &Once = *(SharedReturn ? Branch.ElseBody[0].CallExpr
+                                   : Branch.Body[OnceIndex].CallExpr);
   if (!onceCall(Once, Image))
     return std::nullopt;
   const auto OncePredicate =
