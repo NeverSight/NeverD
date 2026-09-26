@@ -730,6 +730,19 @@ SwiftTypeMetadataFixture swiftDictionaryTypeMetadataFixture() {
   return F;
 }
 
+SwiftTypeMetadataFixture swiftManagedBufferTypeMetadataFixture() {
+  auto F = swiftStdlibTypeMetadataFixture();
+  F.Image.ImportPtrSlots.clear();
+  F.Image.ImportStorageSlots.clear();
+  F.Image.DyldBindSlots.clear();
+  EXPECT_TRUE(F.Image.recordDyldBindSlot(
+      SwiftTypeMetadataFixture::DescriptorSlot, "_$ss13ManagedBufferCMn", 0,
+      "/usr/lib/swift/libswiftCore.dylib", false));
+  F.Image.Symbols[0].Name = "_$ss13ManagedBufferCyypGMR";
+  F.Image.Symbols[1].Name = "_$ss13ManagedBufferCyypGMd";
+  return F;
+}
+
 SwiftTypeMetadataFixture
 printableSwiftTypeMetadataFixture(Arch Architecture,
                                   llvm::StringRef TypeReference) {
@@ -1333,6 +1346,27 @@ TEST(ObjCSourceBindings, SwiftStdlibDescriptorRebuildsExactMetadataRecipe) {
   F.Image.DyldBindSlots[F.DescriptorSlot].WeakImport = true;
   EXPECT_FALSE(objcSourceCallBound(*Result.Function.Body[0].Val->Operands[0],
                                    F.Image, {}));
+  EXPECT_THROW(renderObjCSwiftTypeMetadataHelpers(
+                   F.Image, Result.SwiftTypeMetadataPairs, Helpers),
+               std::runtime_error);
+}
+
+TEST(ObjCSourceBindings, SwiftManagedBufferDescriptorNeedsExactCoreBind) {
+  auto F = swiftManagedBufferTypeMetadataFixture();
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  EXPECT_EQ(Result.SwiftTypeMetadataPairs.at(F.Cache).DescriptorSymbol,
+            "_$ss13ManagedBufferCMn");
+  const auto Address = Result.Function.Body[0].Val->Operands[1];
+  ASSERT_TRUE(Address->SourceCallHint);
+  EXPECT_TRUE(objcSourceCallBound(*Address, F.Image, {}));
+  std::set<std::string> Helpers;
+  const auto Source = renderObjCSwiftTypeMetadataHelpers(
+      F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+  EXPECT_NE(Source.find("_$ss13ManagedBufferCMn"), std::string::npos);
+  F.Image.DyldBindSlots[F.DescriptorSlot].Module = "/tmp/foreign.dylib";
+  EXPECT_FALSE(objcSourceCallBound(*Address, F.Image, {}));
   EXPECT_THROW(renderObjCSwiftTypeMetadataHelpers(
                    F.Image, Result.SwiftTypeMetadataPairs, Helpers),
                std::runtime_error);

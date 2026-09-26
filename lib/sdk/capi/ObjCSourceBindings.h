@@ -815,7 +815,8 @@ inline bool swiftImportedNominalDescriptor(const BinaryImage &Image, va_t Slot,
   // The linked image's exact strong dyld bind proves this descriptor's
   // provider on its target runtime. Only its identity is reconstructed;
   // the storage class layout and metadata contents remain opaque.
-  return Symbol == "_$ss18_DictionaryStorageCMn";
+  return Symbol == "_$ss18_DictionaryStorageCMn" ||
+         Symbol == "_$ss13ManagedBufferCMn";
 }
 
 inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,
