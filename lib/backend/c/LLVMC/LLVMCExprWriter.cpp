@@ -336,6 +336,41 @@ std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
   return std::nullopt;
 }
 
+std::optional<std::pair<const llvm::GlobalVariable *, uint64_t>>
+LLVMCWriter::imageByteArrayBacking(const llvm::Value *V,
+                                   uint64_t AccessSize) const {
+  if (!CurMod || AccessSize == 0)
+    return std::nullopt;
+  const auto Addr = imageDataVA(V);
+  if (!Addr)
+    return std::nullopt;
+  for (const auto &GV : CurMod->globals()) {
+    const auto Base = parseNdDataSymbol(GV.getName());
+    const auto *Array = llvm::dyn_cast<llvm::ArrayType>(GV.getValueType());
+    if (!Base || !Array || !Array->getElementType()->isIntegerTy(8) ||
+        !GV.hasInitializer() ||
+        !llvm::isa<llvm::ConstantAggregateZero>(GV.getInitializer()) ||
+        *Addr < *Base || AccessSize > Array->getNumElements())
+      continue;
+    const uint64_t Offset = *Addr - *Base;
+    if (Offset > Array->getNumElements() - AccessSize)
+      continue;
+    return std::make_pair(&GV, Offset);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string>
+LLVMCWriter::imageByteArrayPointer(const llvm::Value *V,
+                                   uint64_t AccessSize) const {
+  const auto Backing = imageByteArrayBacking(V, AccessSize);
+  if (!Backing)
+    return std::nullopt;
+  const auto Base = parseNdDataSymbol(Backing->first->getName());
+  return "(" + namedImageObject(*Base) + " + " +
+         std::to_string(Backing->second) + ")";
+}
+
 std::optional<uint64_t> LLVMCWriter::foldReadonlyScalar(va_t Addr,
                                                         uint16_t Size) const {
   if (!Img)
@@ -2620,6 +2655,17 @@ std::string LLVMCWriter::icmpInlineText(const llvm::ICmpInst &CI) {
       peelOperandWrap(comparedOperandText(CI.getOperand(0), CI.getOperand(1)));
   std::string RHS =
       peelOperandWrap(comparedOperandText(CI.getOperand(1), CI.getOperand(0)));
+  // Equality has higher precedence than bitwise operators in C.  Retain the
+  // grouping of an inlined status-word bit test such as `(sw & C2) != 0`.
+  auto GroupBitwise = [](const llvm::Value *V, std::string &Text) {
+    const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(V);
+    if (Op && (Op->getOpcode() == llvm::Instruction::And ||
+               Op->getOpcode() == llvm::Instruction::Or ||
+               Op->getOpcode() == llvm::Instruction::Xor))
+      Text = "(" + Text + ")";
+  };
+  GroupBitwise(CI.getOperand(0), LHS);
+  GroupBitwise(CI.getOperand(1), RHS);
   if (CI.isUnsigned()) {
     LHS = unsignedCompareOperand(CI.getOperand(0), std::move(LHS));
     RHS = unsignedCompareOperand(CI.getOperand(1), std::move(RHS));

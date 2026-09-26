@@ -111,6 +111,21 @@ TEST(SymExpr, BitwiseIdentitiesHoldOnConstruction) {
   EXPECT_EQ(Ctx.mkXor(X, Ctx.mkZero(W32)), X);
 }
 
+TEST(SymExpr, MaskedOrKeepsDisjointKnownBits) {
+  SymContext Ctx;
+  SymRef Quotient = Ctx.mkVar("quotient", 16);
+  SymRef Top = Ctx.mkVar("top", 16);
+  SymRef Status =
+      Ctx.mkOr(Ctx.mkConst(16, 0x0400),
+               Ctx.mkOr(Ctx.mkAnd(Quotient, Ctx.mkConst(16, 0x4300)),
+                        Ctx.mkAnd(Top, Ctx.mkConst(16, 0x3800))));
+
+  EXPECT_EQ(Ctx.mkAnd(Status, Ctx.mkConst(16, 0x0400)),
+            Ctx.mkConst(16, 0x0400));
+  EXPECT_FALSE(Ctx.isConst(Ctx.mkAnd(Status, Ctx.mkConst(16, 0x0100))));
+  EXPECT_FALSE(Ctx.isConst(Ctx.mkAnd(Status, Ctx.mkConst(16, 0x0800))));
+}
+
 TEST(SymExpr, StructuralOperatorsCollapseWhereTheyCan) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", W32);

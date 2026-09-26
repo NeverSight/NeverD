@@ -549,6 +549,22 @@ public:
   std::optional<va_t> uniqueAllocaImageImmediate(const llvm::AllocaInst *Slot) const;
   std::string namedImageObject(va_t Addr) const;
   std::optional<va_t> imageDataVA(const llvm::Value *V) const;
+  static unsigned imageIntegerAccessSize(const llvm::Type *Ty) {
+    if (!Ty || !Ty->isIntegerTy())
+      return 0;
+    const unsigned Bits = Ty->getIntegerBitWidth();
+    return Bits == 8 || Bits == 16 || Bits == 32 || Bits == 64 || Bits == 80 ||
+                   Bits == 128
+               ? Bits / 8
+               : 0;
+  }
+  /// A shared image range and byte offset within its IR byte-array global.
+  std::optional<std::pair<const llvm::GlobalVariable *, uint64_t>>
+  imageByteArrayBacking(const llvm::Value *V, uint64_t AccessSize) const;
+  /// Pointer into that backing range.  Interior offsets must not become
+  /// independent C globals.
+  std::optional<std::string>
+  imageByteArrayPointer(const llvm::Value *V, uint64_t AccessSize) const;
   std::optional<uint64_t> foldReadonlyScalar(va_t Addr, uint16_t Size) const;
   std::optional<std::string> foldImmediate(const llvm::Value *V) const;
   std::string imageDataCName(const llvm::Value *V) const;
@@ -595,6 +611,9 @@ public:
   int NextVar = 0;
   std::map<const llvm::Value *, std::string> ValNames;
   std::set<std::string> UsedNames;
+  /// Separate FPREM/FNSTSW IR calls whose status was captured inside the
+  /// FPREM asm before C compilation can spill and pop the x87 stack.
+  std::set<const llvm::CallInst *> CapturedX87StatusCalls;
   std::map<const llvm::BasicBlock *, std::string> BlockLabels;
   std::set<const llvm::BasicBlock *> ReferencedBlocks;
   bool HasCIntrinsics = false;

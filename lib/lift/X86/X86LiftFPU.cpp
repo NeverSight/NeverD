@@ -720,18 +720,33 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
   }
   case X86_INS_WAIT:
-  case X86_INS_FFREE:
+    S.emitVoidIntrinsic(Intrinsic::X87Wait);
+    break;
+  case X86_INS_FFREE: {
+    if (X86.op_count != 1 || X86.operands[0].type != X86_OP_REG)
+      return false;
+    const auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
+    if (RI.Offset < x86reg::ST0 || RI.Offset > x86reg::ST7 ||
+        (RI.Offset - x86reg::ST0) % x86reg::FPURegStride != 0)
+      return false;
+    const int Idx = x86reg::stRegIndex(RI.Offset);
+    S.emitVoidIntrinsic(Intrinsic::X87Ffree,
+                        {ST(Idx), NdVar::cst(static_cast<uint64_t>(Idx), 1)});
+    break;
+  }
+  case X86_INS_FINCSTP:
+    S.emitVoidIntrinsic(Intrinsic::X87Fincstp);
+    FPUTop = (FPUTop + 1) & 7;
+    break;
   case X86_INS_FFREEP:
   case X86_INS_FDECSTP:
-  case X86_INS_FINCSTP:
   case X86_INS_FSTPNCE:
   case X86_INS_FBLD:
   case X86_INS_FBSTP:
   case X86_INS_FSETPM:
   case X86_INS_FDISI8087_NOP:
   case X86_INS_FENI8087_NOP:
-    S.emitIntrinsic(Intrinsic::X87Op);
-    break;
+    return false;
 
   default:
     return false;

@@ -159,3 +159,57 @@ static const std::vector<RoundTripTC> kX64X87FpremIterative = {
 
 INSTANTIATE_TEST_SUITE_P(X87FpremIterative, X64X87FpremIterativeRT,
                          ::testing::ValuesIn(kX64X87FpremIterative), rtTCName);
+
+class X64X87FpremAntiEmulationRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(X64X87FpremAntiEmulationRT, Verify) { roundTripX64(GetParam()); }
+
+// Adapted from Packmad's MIT-licensed fprem-anti-emulation, revision
+// f49ff009e062af2a23c5c5eec91649520ca605f0 (2026-09-26).
+// See THIRD_PARTY_NOTICES.md and LICENSES/FPREM-Anti-Emulation.txt.
+// fprem-anti-emulation uses a single FPREM with an exponent gap of exactly 64.
+// The negative divisor's sign bit is intentional: the original PoC constructs
+// its high word as 0x8000 | 0x7fbe.  A complete reduction would clear C2 and
+// select the wrong branch.  The Unicorn fork has a direct oracle for these
+// operands; this case checks that lifting preserves the branch through FNSTSW.
+static const std::vector<RoundTripTC> kX64X87FpremAntiEmulation = {
+    {"x87_fprem_c2_branch",
+     "int x87_fprem_c2_branch(long unused) {\n"
+     "  (void)unused;\n"
+     "  struct __attribute__((packed)) Ext80 {\n"
+     "    unsigned long long significand;\n"
+     "    unsigned short sign_exponent;\n"
+     "  };\n"
+     "  struct Ext80 large = {0x8000000000000001ULL, 0x7ffe};\n"
+     "  struct Ext80 small = {0x8000000000000003ULL, 0xffbe};\n"
+     "  struct Ext80 remainder;\n"
+     "  unsigned short sw;\n"
+     "  int result;\n"
+     "  __asm__ volatile (\n"
+     "    \"finit\\n\\t\"\n"
+     "    \"fldt %[small]\\n\\t\"\n"
+     "    \"fldt %[large]\\n\\t\"\n"
+     "    \"fprem\\n\\t\"\n"
+     "    \"fnstsw %%ax\\n\\t\"\n"
+     "    \"movw %%ax, %[sw]\\n\\t\"\n"
+     "    \"fstpt %[remainder]\\n\\t\"\n"
+     "    \"ffree %%st(0)\\n\\t\"\n"
+     "    \"fincstp\\n\\t\"\n"
+     "    \"testw $0x0400, %%ax\\n\\t\"\n"
+     "    \"jnz 1f\\n\\t\"\n"
+     "    \"movl $1, %%eax\\n\\t\"\n"
+     "    \"jmp 2f\\n\"\n"
+     "    \"1: xorl %%eax, %%eax\\n\"\n"
+     "    \"2:\"\n"
+     "    : \"=a\"(result), [sw] \"=m\"(sw), [remainder] \"=m\"(remainder)\n"
+     "    : [small] \"m\"(small), [large] \"m\"(large)\n"
+     "    : \"cc\", \"st\", \"st(1)\");\n"
+     "  return result;\n"
+     "}\n",
+     {0}, "X87FpremAntiEmulation"},
+};
+
+INSTANTIATE_TEST_SUITE_P(X87FpremAntiEmulation, X64X87FpremAntiEmulationRT,
+                         ::testing::ValuesIn(kX64X87FpremAntiEmulation),
+                         rtTCName);

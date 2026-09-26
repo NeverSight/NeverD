@@ -30,7 +30,9 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <functional>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -395,9 +397,14 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
           OrdinaryMemory && partialIntegerBytes(E.Type) == 0 && AddressType &&
           AddressType->Kind == NdTypeKind::Ptr && AddressType->Pointee &&
           equalSourceTypes(AddressType->Pointee, E.Type);
+      bool ExactImageBytes = false;
+      if (E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          !E.Operands.empty() && E.Operands[0])
+        if (auto VA = constAddress(*E.Operands[0]))
+          ExactImageBytes = imageBackingAddress(*VA).has_value();
       // Raw machine addresses do not prove C alignment or effective type.
-      // Keep memcpy-based helpers for synthetic frames and untyped loads.
-      if (!MsvcSegmentedScalar && !DirectTypedLoad)
+      // Image aliases also require byte-copy helpers to share exact storage.
+      if ((!MsvcSegmentedScalar && !DirectTypedLoad) || ExactImageBytes)
         Names.insert(Type);
       if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
           !MsvcSegmentedScalar)
@@ -589,11 +596,15 @@ void HighCWriter::writeMemoryHelpers() {
   }
 }
 
-std::string
-HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                            NdMemoryOrdering Ordering,
-                            NdMemoryAddressSpace AddressSpace) const {
+std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                                        NdMemoryOrdering Ordering,
+                                        NdMemoryAddressSpace AddressSpace,
+                                        bool ExactImageBytes) const {
   validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
+  if (ExactImageBytes && (Ordering != NdMemoryOrdering::None ||
+                          AddressSpace != NdMemoryAddressSpace::Default))
+    llvm::report_fatal_error(
+        "HighC cannot project an ordered or segmented image alias");
   std::string Type = memoryTypeName(Ty);
   // MSVC's FS/GS read intrinsics are a useful source-level spelling for
   // Windows targets. Other formats keep the target address-space-qualified
@@ -614,11 +625,17 @@ HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
          "((uintptr_t)(" + Addr.str() + "))";
 }
 
-std::string
-HighCWriter::memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                             llvm::StringRef Val, NdMemoryOrdering Ordering,
-                             NdMemoryAddressSpace AddressSpace) const {
+std::string HighCWriter::memoryStoreExpr(const TypeRef &Ty,
+                                         llvm::StringRef Addr,
+                                         llvm::StringRef Val,
+                                         NdMemoryOrdering Ordering,
+                                         NdMemoryAddressSpace AddressSpace,
+                                         bool ExactImageBytes) const {
   validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
+  if (ExactImageBytes && (Ordering != NdMemoryOrdering::None ||
+                          AddressSpace != NdMemoryAddressSpace::Default))
+    llvm::report_fatal_error(
+        "HighC cannot project an ordered or segmented image alias");
   std::string Type = memoryTypeName(Ty);
   const std::string Value = Ty && Ty->Kind == NdTypeKind::Ptr
                                 ? "(" + Type + ")(uintptr_t)(" + Val.str() + ")"
@@ -984,7 +1001,15 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
       }
       if (Ex.IntrinsicId == Intrinsic::A64_Frinti)
         NeedsFEnvAccess = true;
-      if (Ex.IntrinsicId != Intrinsic::None && intrinsicCName(Ex.IntrinsicId))
+      const bool IsX87FpremHelper = Ex.IntrinsicId == Intrinsic::X87Fprem ||
+                                    Ex.IntrinsicId == Intrinsic::X87Fprem1 ||
+                                    Ex.IntrinsicId == Intrinsic::X87ReadStatus;
+      if (IsX87FpremHelper)
+        NeedsX87FpremHelpers = true;
+      else if (Ex.IntrinsicId == Intrinsic::X64Syscall)
+        NeedsX64SyscallHelper = true;
+      else if (Ex.IntrinsicId != Intrinsic::None &&
+               intrinsicCName(Ex.IntrinsicId))
         HasCIntrinsics = true;
       const std::string SourceName = resolvedCallTarget(Ex);
       std::string Name = SourceName;
@@ -1326,6 +1351,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
 
 void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   ImageObjects.clear();
+  ImageBackings.clear();
   if (!Opts.Image)
     return;
   VarKeyMap<va_t> ImageLoadVars;
@@ -1333,8 +1359,10 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     const HighExpr *Inner = unwrapIntegerView(&E);
     if (!Inner)
       return std::nullopt;
-    if (Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
-        Inner->Operands[0])
+    if (Inner->Kind == ExprKind::Load &&
+        Inner->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        Inner->MemoryOrdering == NdMemoryOrdering::None &&
+        !Inner->Operands.empty() && Inner->Operands[0])
       return constAddress(*Inner->Operands[0]);
     if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
       if (auto It = ImageLoadVars.find(varKey(Inner->Var));
@@ -1373,20 +1401,25 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       if (Named)
         noteImageObject(E.ConstVal, NdType::makeInt(2), false);
     }
-    if (E.Kind == ExprKind::Load && !E.Operands.empty() && E.Operands[0]) {
+    if (E.Kind == ExprKind::Load &&
+        E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        !E.Operands.empty() && E.Operands[0]) {
       if (auto VA = constAddress(*E.Operands[0])) {
         const uint16_t Size = E.Type ? E.Type->Size : 0;
         if (!foldReadonlyScalar(*VA, Size))
-          noteImageObject(*VA, E.Type, false);
+          noteImageObject(*VA, E.Type, false, true);
       }
     }
-    if (E.Kind == ExprKind::Store && E.Operands.size() >= 2 && E.Operands[0]) {
+    if (E.Kind == ExprKind::Store &&
+        E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        E.Operands.size() >= 2 && E.Operands[0]) {
       if (auto VA = constAddress(*E.Operands[0]))
         noteImageObject(*VA, E.Operands[1] ? E.Operands[1]->Type : nullptr,
-                        true);
+                        true, true);
     }
     if (E.Kind == ExprKind::Addr && !E.Operands.empty() && E.Operands[0] &&
         E.Operands[0]->Kind == ExprKind::Load &&
+        E.Operands[0]->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         !E.Operands[0]->Operands.empty() && E.Operands[0]->Operands[0]) {
       if (auto VA = constAddress(*E.Operands[0]->Operands[0]))
         noteImageObject(*VA, E.Operands[0]->Type, false);
@@ -1412,21 +1445,84 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   };
   for (const HighFunc &Func : Funcs)
     walkStmts(Func.Body, [&](const HighStmt &S) {
-      if (S.Kind == StmtKind::Store && S.StoreAddr) {
+      if (S.Kind == StmtKind::Store &&
+          S.MemoryAddressSpace == NdMemoryAddressSpace::Default && S.StoreAddr) {
         if (auto VA = constAddress(*S.StoreAddr))
-          noteImageObject(*VA, S.StoreVal ? S.StoreVal->Type : nullptr, true);
+          noteImageObject(*VA, S.StoreVal ? S.StoreVal->Type : nullptr, true,
+                          true);
       }
       forEachExpr(S, [&](const ExprPtr &E) {
         if (E)
           Visit(*E);
       });
     });
+
+  // A C _BitInt(80) object can occupy 16 bytes while the guest x87 value
+  // occupies 10. Also, independently declared globals cannot represent two
+  // image accesses whose guest address ranges overlap. Project each connected
+  // alias range as one byte array and use exact-width memory helpers at uses.
+  va_t GroupBase = 0, GroupEnd = 0;
+  unsigned GroupCount = 0;
+  bool NeedsBacking = false;
+  auto FinishGroup = [&] {
+    if (GroupCount && NeedsBacking)
+      ImageBackings.push_back(
+          {GroupBase, GroupEnd,
+           GlobalIdentifierAllocator.allocate(
+               makeSyntheticGlobalName(GroupBase) + "_bytes", "g")});
+  };
+  for (const auto &[Addr, Obj] : ImageObjects) {
+    const unsigned Size = Obj.Type ? Obj.Type->Size : 0;
+    if (!Size || Addr > std::numeric_limits<va_t>::max() - Size)
+      llvm::report_fatal_error("HighC image object has invalid extent");
+    const va_t End = Addr + Size;
+    if (GroupCount && Addr >= GroupEnd) {
+      FinishGroup();
+      GroupCount = 0;
+      GroupEnd = 0;
+      NeedsBacking = false;
+    }
+    if (!GroupCount)
+      GroupBase = Addr;
+    else
+      NeedsBacking = true;
+    GroupEnd = std::max(GroupEnd, End);
+    ++GroupCount;
+    NeedsBacking |= Obj.MemoryWidths.size() > 1;
+    for (uint16_t Width : Obj.MemoryWidths)
+      NeedsBacking |= Width && (Width & (Width - 1)) != 0;
+  }
+  FinishGroup();
 }
 
 void HighCWriter::writeImageObjects() {
   if (ImageObjects.empty())
     return;
+  for (const ImageBacking &Backing : ImageBackings) {
+    if (Opts.EmitComments)
+      OS << "/* neverd.image: 0x" << llvm::utohexstr(Backing.Base) << " .. 0x"
+         << llvm::utohexstr(Backing.End) << " */\n";
+    OS << "unsigned char " << Backing.Name << "[" << Backing.End - Backing.Base
+       << "]";
+    bool Initialized = false;
+    for (va_t Addr = Backing.Base; Addr < Backing.End; ++Addr) {
+      const uint8_t *Byte = Opts.Image->readVA(Addr, 1);
+      if (!Byte || !*Byte)
+        continue;
+      if (!Initialized) {
+        OS << " = {";
+        Initialized = true;
+      }
+      OS << " [" << Addr - Backing.Base << "] = 0x" << llvm::utohexstr(*Byte)
+         << ",";
+    }
+    if (Initialized)
+      OS << " }";
+    OS << ";\n";
+  }
   for (auto &[Addr, Obj] : ImageObjects) {
+    if (imageBackingAddress(Addr))
+      continue;
     if (Obj.Name.empty())
       Obj.Name = GlobalIdentifierAllocator.allocate(
           makeSyntheticGlobalName(Addr), "g");
@@ -1439,8 +1535,87 @@ void HighCWriter::writeImageObjects() {
   OS << "\n";
 }
 
+void HighCWriter::writeX87FpremHelpers() {
+  if (!NeedsX87FpremHelpers)
+    return;
+  // The status must be sampled inside the same asm block as FPREM. A separate
+  // C expression could let the compiler spill an x87 value before FNSTSW and
+  // thereby change the condition codes observed by the source program.
+  OS << "static _Thread_local uint16_t neverd_x87_fprem_status;\n"
+        "static _Thread_local unsigned char "
+        "neverd_x87_fprem_status_pending;\n\n"
+        "static inline _BitInt(80) neverd_x87_partial_remainder(\n"
+        "    _BitInt(80) dividend, _BitInt(80) divisor, int nearest) {\n"
+        "    unsigned char lhs[10], rhs[10], result[10];\n"
+        "    uint16_t status;\n"
+        "    __builtin_memcpy(lhs, &dividend, 10);\n"
+        "    __builtin_memcpy(rhs, &divisor, 10);\n"
+        "    if (nearest) {\n"
+        "        __asm__ volatile(\"fldt %[rhs]\\n\\t"
+        "fldt %[lhs]\\n\\tfprem1\\n\\tfnstsw %%ax\\n\\t"
+        "fstpt %[result]\\n\\tfstp %%st(0)\"\n"
+        "            : [result] \"=m\"(result), \"=a\"(status)\n"
+        "            : [lhs] \"m\"(lhs), [rhs] \"m\"(rhs)\n"
+        "            : \"cc\", \"memory\", \"st\", \"st(1)\");\n"
+        "    } else {\n"
+        "        __asm__ volatile(\"fldt %[rhs]\\n\\t"
+        "fldt %[lhs]\\n\\tfprem\\n\\tfnstsw %%ax\\n\\t"
+        "fstpt %[result]\\n\\tfstp %%st(0)\"\n"
+        "            : [result] \"=m\"(result), \"=a\"(status)\n"
+        "            : [lhs] \"m\"(lhs), [rhs] \"m\"(rhs)\n"
+        "            : \"cc\", \"memory\", \"st\", \"st(1)\");\n"
+        "    }\n"
+        "    neverd_x87_fprem_status = status;\n"
+        "    neverd_x87_fprem_status_pending = 1;\n"
+        "    _BitInt(80) bits = 0;\n"
+        "    __builtin_memcpy(&bits, result, 10);\n"
+        "    return bits;\n"
+        "}\n\n"
+        "static inline _BitInt(80) neverd_x87_fprem(\n"
+        "    _BitInt(80) dividend, _BitInt(80) divisor) {\n"
+        "    return neverd_x87_partial_remainder(dividend, divisor, 0);\n"
+        "}\n\n"
+        "static inline _BitInt(80) neverd_x87_fprem1(\n"
+        "    _BitInt(80) dividend, _BitInt(80) divisor) {\n"
+        "    return neverd_x87_partial_remainder(dividend, divisor, 1);\n"
+        "}\n\n"
+        "static inline uint16_t neverd_x87_read_status(void) {\n"
+        "    if (!neverd_x87_fprem_status_pending) __builtin_trap();\n"
+        "    neverd_x87_fprem_status_pending = 0;\n"
+        "    return neverd_x87_fprem_status;\n"
+        "}\n\n";
+}
+
+void HighCWriter::writeX64SyscallHelper() {
+  if (!NeedsX64SyscallHelper)
+    return;
+  // Linux x86-64 SYSCALL uses rax for the number, then rdi/rsi/rdx/r10/r8/r9
+  // for arguments. It returns rax and writes the pre-entry flags to r11.
+  OS << "#if !defined(__linux__) || !defined(__x86_64__)\n"
+        "#error \"neverd_x64_syscall requires Linux x86-64\"\n"
+        "#endif\n"
+        "static inline unsigned __int128 neverd_x64_syscall(\n"
+        "    uint64_t number, uint64_t arg1, unsigned __int128 arg2_3,\n"
+        "    unsigned __int128 arg4_5, uint64_t arg6) {\n"
+        "    uint64_t result = number;\n"
+        "    register uint64_t in_r10 __asm__(\"r10\") = (uint64_t)arg4_5;\n"
+        "    register uint64_t in_r8 __asm__(\"r8\") =\n"
+        "        (uint64_t)(arg4_5 >> 64);\n"
+        "    register uint64_t in_r9 __asm__(\"r9\") = arg6;\n"
+        "    register uint64_t out_r11 __asm__(\"r11\");\n"
+        "    __asm__ volatile(\"syscall\"\n"
+        "        : \"+a\"(result), \"=r\"(out_r11)\n"
+        "        : \"D\"(arg1), \"S\"((uint64_t)arg2_3),\n"
+        "          \"d\"((uint64_t)(arg2_3 >> 64)), \"r\"(in_r10),\n"
+        "          \"r\"(in_r8), \"r\"(in_r9)\n"
+        "        : \"rcx\", \"memory\", \"cc\");\n"
+        "    return ((unsigned __int128)out_r11 << 64) | result;\n"
+        "}\n\n";
+}
+
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   prepareFunctionIdentifiers(Funcs);
+  collectImageObjects(Funcs);
   collectMemoryTypes(Funcs);
   discoverHiddenCxxThrowCtors(Funcs);
   writeIncludes(Funcs);
@@ -1494,8 +1669,9 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
               [&](const HighStmt &Stmt) { forEachExpr(Stmt, Visit); });
   }
   writeMemoryHelpers();
+  writeX87FpremHelpers();
+  writeX64SyscallHelper();
   writeForwardDecls(Funcs);
-  collectImageObjects(Funcs);
   writeImageObjects();
 
   for (size_t I = 0; I < Funcs.size(); ++I) {

@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
@@ -153,6 +154,24 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     if (F.isDeclaration())
       continue;
     std::string Resolved = resolveSymbolAlias(F.getName().str(), SymByName);
+    if (Resolved.empty() && Image.isELF() && Image.Entry != 0) {
+      // A stripped ELF entry point, or one marked STT_NOTYPE, has no function
+      // symbol to match.  Its exact lifted source identity and the loader's
+      // authenticated entry are sufficient to recover this one replacement.
+      auto OriginalVA = rewrite_source::getOriginalVA(F);
+      if (!OriginalVA) {
+        llvm::WithColor::error()
+            << "inplace: " << llvm::toString(OriginalVA.takeError()) << "\n";
+        return PatchResult{};
+      }
+      if (*OriginalVA && **OriginalVA == Image.Entry &&
+          Image.hasAuthenticatedFunctionEntryAt(Image.Entry)) {
+        Symbol EntrySymbol = Symbol::makeFunc(Image.Entry);
+        EntrySymbol.Name = F.getName().str();
+        SymByName.emplace(EntrySymbol.Name, std::move(EntrySymbol));
+        Resolved = F.getName().str();
+      }
+    }
     if (Resolved.empty())
       continue;
     auto It = SymByName.find(Resolved);
@@ -168,6 +187,9 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
       for (auto &[_, S] : SymByName)
         if (S.Addr > OrigVA && S.Addr < Closest && S.IsFunc)
           Closest = S.Addr;
+      if (const va_t Next = Image.nextKnownFunctionEntryAfter(OrigVA);
+          Next > OrigVA && Next < Closest)
+        Closest = Next;
       OrigSize = Closest - OrigVA;
     }
 

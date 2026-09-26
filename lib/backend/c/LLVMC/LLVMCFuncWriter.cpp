@@ -443,6 +443,14 @@ void LLVMCWriter::markInlinable(llvm::Function &Fn) {
       // Freeze materializes one stable, defined choice before any folding.
       if (llvm::isa<llvm::FreezeInst>(&Inst))
         continue;
+      // x87 bitcasts need a 10-byte representation copy in C.  A numeric C
+      // cast, used for ordinary inlined casts, would change their value.
+      if (const auto *Cast = llvm::dyn_cast<llvm::BitCastInst>(&Inst))
+        if ((Cast->getSrcTy()->isIntegerTy(80) &&
+             Cast->getDestTy()->isX86_FP80Ty()) ||
+            (Cast->getSrcTy()->isX86_FP80Ty() &&
+             Cast->getDestTy()->isIntegerTy(80)))
+          continue;
       if (foldImmediate(&Inst)) {
         Analysis.Inlinable.insert(&Inst);
         continue;
@@ -2122,6 +2130,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   NextVar = 0;
   ValNames.clear();
   UsedNames.clear();
+  CapturedX87StatusCalls.clear();
   BlockLabels.clear();
   ReferencedBlocks.clear();
   KnownImmediates.clear();

@@ -2051,6 +2051,10 @@ private:
 
   llvm::Value *PendingIntrinsicOutputs[4] = {};
   unsigned PendingIntrinsicCount = 0;
+  /// Status sampled inside an FPREM/FPREM1 asm call. Only the immediately
+  /// following synthetic X87ReadStatus in the same LLVM block may consume it.
+  llvm::Value *PendingX87FpremStatus = nullptr;
+  llvm::BasicBlock *PendingX87FpremBlock = nullptr;
 };
 
 } // namespace neverd

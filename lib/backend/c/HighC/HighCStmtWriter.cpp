@@ -417,11 +417,13 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
           OS << ";\n";
           break;
         }
-      if (auto VA = constAddress(*Stmt.Dst->Operands[0])) {
-        if (auto Name = imageObjectName(*VA)) {
-          emitIndent(Indent);
-          OS << *Name << " = " << exprStr(*Stmt.Val) << ";\n";
-          break;
+      if (Stmt.Dst->MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+        if (auto VA = constAddress(*Stmt.Dst->Operands[0])) {
+          if (auto Name = imageObjectName(*VA)) {
+            emitIndent(Indent);
+            OS << *Name << " = " << exprStr(*Stmt.Val) << ";\n";
+            break;
+          }
         }
       }
       emitIndent(Indent);
@@ -430,9 +432,16 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
           Stmt.Dst->Type->Kind == NdTypeKind::Int &&
           Stmt.Val->Type->Kind == NdTypeKind::Ptr)
         Value = "(" + typeToC(Stmt.Dst->Type) + ")(uintptr_t)(" + Value + ")";
-      OS << memoryStoreExpr(Stmt.Dst->Type, exprStr(*Stmt.Dst->Operands[0]),
+      bool ExactImageBytes = false;
+      if (Stmt.Dst->MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        if (auto VA = constAddress(*Stmt.Dst->Operands[0]))
+          ExactImageBytes = imageBackingAddress(*VA).has_value();
+      OS << memoryStoreExpr(Stmt.Dst->Type,
+                            addrStr(*Stmt.Dst->Operands[0], 0,
+                                    Stmt.Dst->MemoryAddressSpace ==
+                                        NdMemoryAddressSpace::Default),
                             Value, Stmt.Dst->MemoryOrdering,
-                            Stmt.Dst->MemoryAddressSpace)
+                            Stmt.Dst->MemoryAddressSpace, ExactImageBytes)
          << ";\n";
       break;
     }
@@ -546,7 +555,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     break;
   }
 
-  case StmtKind::Store:
+  case StmtKind::Store: {
     if (!Stmt.StoreAddr || !Stmt.StoreVal)
       return;
     {
@@ -663,26 +672,36 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
         OS << ";\n";
         break;
       }
-    if (auto VA = constAddress(*Stmt.StoreAddr)) {
-      if (auto Name = imageObjectName(*VA)) {
-        emitIndent(Indent);
-        OS << *Name << " = ";
-        if (isUnknownCallOperand(Stmt.StoreVal.get()))
-          OS << "0";
-        else
-          OS << exprStr(*Stmt.StoreVal);
-        OS << ";\n";
-        break;
+    if (Stmt.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+      if (auto VA = constAddress(*Stmt.StoreAddr)) {
+        if (auto Name = imageObjectName(*VA)) {
+          emitIndent(Indent);
+          OS << *Name << " = ";
+          if (isUnknownCallOperand(Stmt.StoreVal.get()))
+            OS << "0";
+          else
+            OS << exprStr(*Stmt.StoreVal);
+          OS << ";\n";
+          break;
+        }
       }
     }
     emitIndent(Indent);
-    OS << memoryStoreExpr(Stmt.StoreVal->Type, addrStr(*Stmt.StoreAddr),
-                          isUnknownCallOperand(Stmt.StoreVal.get())
-                              ? "0"
-                              : exprStr(*Stmt.StoreVal),
-                          Stmt.MemoryOrdering, Stmt.MemoryAddressSpace)
+    bool ExactImageBytes = false;
+    if (Stmt.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+      if (auto VA = constAddress(*Stmt.StoreAddr))
+        ExactImageBytes = imageBackingAddress(*VA).has_value();
+    OS << memoryStoreExpr(
+              Stmt.StoreVal->Type,
+              addrStr(*Stmt.StoreAddr, 0,
+                      Stmt.MemoryAddressSpace == NdMemoryAddressSpace::Default),
+              isUnknownCallOperand(Stmt.StoreVal.get())
+                  ? "0"
+                  : exprStr(*Stmt.StoreVal),
+              Stmt.MemoryOrdering, Stmt.MemoryAddressSpace, ExactImageBytes)
        << ";\n";
     break;
+  }
 
   case StmtKind::Call:
     if (!Stmt.CallExpr)

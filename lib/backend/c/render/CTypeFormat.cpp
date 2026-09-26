@@ -335,6 +335,8 @@ std::string typeToCLLVM(llvm::Type *Ty) {
     return "float";
   if (Ty->isDoubleTy())
     return "double";
+  if (Ty->isX86_FP80Ty())
+    return "long double";
   if (Ty->isPointerTy())
     return "void*";
 
