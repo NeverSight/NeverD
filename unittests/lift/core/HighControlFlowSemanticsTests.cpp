@@ -1786,6 +1786,48 @@ TEST(HighControlFlowSemantics, NearbyNestedFallthroughKeepsExactGotoTarget) {
   EXPECT_EQ(execute(F, 2, true), 2U);
 }
 
+TEST(HighControlFlowSemantics,
+     SameTargetGuardsKeepDistinctPredicateCallsAndLaterValueUse) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  F.ReturnType = NdType::makeInt(8);
+  auto Store = [](va_t Address, va_t Slot, ExprPtr Value) {
+    HighStmt S;
+    S.Kind = StmtKind::Store;
+    S.Addr = Address;
+    S.StoreAddr = HighExpr::makeConst(Slot, 8);
+    S.StoreVal = std::move(Value);
+    return S;
+  };
+  auto Observe = [](va_t Slot) {
+    auto Call = HighExpr::makeCall(
+        "observe", 0,
+        {HighExpr::makeConst(0, 8), HighExpr::makeConst(Slot, 8)});
+    Call->Type = NdType::makeInt(8);
+    return Call;
+  };
+  auto FirstCall = assign(0x1008, 1, 0);
+  FirstCall.Val = Observe(0x2000);
+  auto FirstGuard = conditional(0x100c, 0x1040);
+  FirstGuard.Cond = HighExpr::makeBinop(
+      NdOp::INT_EQUAL, local(1), HighExpr::makeConst(0, 8));
+  auto SecondCall = assign(0x1010, 2, 0);
+  SecondCall.Val = Observe(0x2008);
+  auto SecondGuard = conditional(0x1014, 0x1040);
+  SecondGuard.Cond = HighExpr::makeBinop(
+      NdOp::INT_EQUAL, local(2), HighExpr::makeConst(0, 8));
+  F.Body = {Store(0x1000, 0x2000, HighExpr::makeConst(1, 8)),
+            Store(0x1004, 0x2008, local(0)), FirstCall, FirstGuard,
+            SecondCall, SecondGuard, result(0x1018, local(2)),
+            result(0x1040, HighExpr::makeConst(7, 8))};
+
+  ASSERT_EQ(execute(F, 0, true), 7U);
+  ASSERT_EQ(execute(F, 1, true), 1U);
+  invertSkipGotos(F);
+  EXPECT_EQ(execute(F, 0, true), 7U);
+  EXPECT_EQ(execute(F, 1, true), 1U);
+}
+
 TEST(HighControlFlowSemantics, InlinedElseJoinPreservesPhiCopyBeforeWork) {
   HighFunc F;
   F.Entry = 0x1000;

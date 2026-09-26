@@ -317,6 +317,20 @@ static bool exprHasCall(const HighExpr *E) {
   return false;
 }
 
+static bool exprHasObservableEffect(const HighExpr *E) {
+  if (!E)
+    return false;
+  if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Store ||
+      E->MemoryOrdering != NdMemoryOrdering::None ||
+      E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return true;
+  bool Effect = false;
+  E->forEachChildExpr([&](const ExprPtr &Child) {
+    Effect |= exprHasObservableEffect(Child.get());
+  });
+  return Effect;
+}
+
 static bool stmtIsSkipResidue(const HighStmt &S) {
   if (S.Kind == StmtKind::Nop || S.Kind == StmtKind::Block)
     return true;
@@ -2153,6 +2167,19 @@ static bool stmtsUseVar(const std::vector<HighStmt> &Stmts, const MedVar &V) {
   return Used;
 }
 
+static bool stmtTreeUsesVar(const HighStmt &S, const MedVar &V) {
+  if (stmtUsesVar(S, V) || stmtsUseVar(S.Body, V) ||
+      stmtsUseVar(S.ElseBody, V) || stmtsUseVar(S.DefaultBody, V))
+    return true;
+  for (const auto &Case : S.Cases)
+    if (stmtsUseVar(Case.Body, V))
+      return true;
+  for (const auto &Clause : S.EHClauseBodies)
+    if (stmtsUseVar(Clause, V))
+      return true;
+  return false;
+}
+
 static bool exprHasSameCall(const HighExpr *E, va_t Addr,
                             const std::string &Target) {
   if (!E)
@@ -3132,17 +3159,37 @@ static bool dropDuplicateSkipGotos(std::vector<HighStmt> &Body) {
         !bodyIsSkipGoto(Body[J].Body) ||
         Body[J].Body.back().GotoTarget != SkipTo)
       continue;
+    // The prefix is erased by this fold. A second call to the same function
+    // can use different inputs or have effects, and a value produced between
+    // the guards may still feed the fallthrough work after the second guard.
+    if (exprHasObservableEffect(Stmt.Cond.get()) ||
+        exprHasObservableEffect(Body[J].Cond.get()))
+      continue;
+    bool PrefixSafe = true;
+    for (size_t K = static_cast<size_t>(I) + 1; K < J; ++K) {
+      const HighStmt &Prefix = Body[K];
+      if (isEmptyLabel(Prefix))
+        continue;
+      if (Prefix.Kind != StmtKind::Assign || !Prefix.Dst ||
+          Prefix.Dst->Kind != ExprKind::Var ||
+          exprHasObservableEffect(Prefix.Val.get())) {
+        PrefixSafe = false;
+        break;
+      }
+      for (size_t Tail = J + 1; Tail < Body.size(); ++Tail)
+        if (stmtTreeUsesVar(Body[Tail], Prefix.Dst->Var)) {
+          PrefixSafe = false;
+          break;
+        }
+      if (!PrefixSafe)
+        break;
+    }
+    if (!PrefixSafe)
+      continue;
     auto NextCond = composePrefixesIntoCond(
         Body, static_cast<size_t>(I) + 1, J, Body[J].Cond);
-    bool Same = NextCond && condStructEq(Stmt.Cond.get(), NextCond->get());
-    if (!Same) {
-      const HighExpr *A = reachingPredCall(Body, static_cast<size_t>(I));
-      const HighExpr *B = reachingPredCall(Body, J);
-      Same = samePredCall(A, B);
-    }
-    if (!Same)
-      Same = samePredCall(precedingPredCall(Body, static_cast<size_t>(I)),
-                          precedingPredCall(Body, J));
+    const bool Same =
+        NextCond && condStructEq(Stmt.Cond.get(), NextCond->get());
     if (Same) {
       Body.erase(Body.begin() + static_cast<long>(I) + 1,
                  Body.begin() + static_cast<long>(J) + 1);
