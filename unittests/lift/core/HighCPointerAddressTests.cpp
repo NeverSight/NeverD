@@ -2435,7 +2435,8 @@ TEST(HighCPointerAddresses, NamedEmptyWideImageConstPrintsAddressOfObject) {
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
-  EXPECT_NE(Source.find("CStringT_ctor(result, &pwstr)"), std::string::npos)
+  EXPECT_NE(Source.find("CStringT_ctor(result, (uint64_t)(uintptr_t)(&pwstr))"),
+            std::string::npos)
       << Source;
   EXPECT_NE(Source.find("int16_t pwstr"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("CStringT_ctor(result, 0x1400050E0)"), std::string::npos)
@@ -2508,6 +2509,30 @@ TEST(HighCPointerAddresses, NamesImageDataFromDebugObject) {
   OS.flush();
   EXPECT_NE(Source.find("__security_cookie"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("g_1400050E0"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, IntegerImageAddressStoreCastsNamedObjectPointer) {
+  constexpr va_t DataVA = 0x1400050E0;
+  BinaryImage Img = makeImageObjectFixture(
+      DataVA, {0x80, 0x13, 0x37, 0x42, 0, 0, 0, 0}, false);
+  Symbol Data;
+  Data.Name = "_block_descriptor";
+  Data.Addr = DataVA;
+  Img.Symbols.push_back(Data);
+
+  HighFunc Func;
+  Func.Name = "store_descriptor_address";
+  Func.ReturnType = NdType::makeVoid();
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.StoreAddr = HighExpr::makeConst(0x2000, 8);
+  Store.StoreVal = HighExpr::makeConst(DataVA, 8);
+  Func.Body = {Store};
+
+  const std::string Source = emitFunctions({Func}, Arch::X64, &Img);
+  EXPECT_NE(Source.find("(uint64_t)(uintptr_t)(&block_descriptor)"),
+            std::string::npos)
+      << Source;
 }
 
 TEST(HighCPointerAddresses, TypedCallArgPromotesImageObjectPointerType) {

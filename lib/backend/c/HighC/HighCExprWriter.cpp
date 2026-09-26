@@ -2498,8 +2498,15 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     }
     if (auto Lit = imageStringLiteral(Opts.Image, E.ConstVal, AllowEmpty))
       return *Lit;
-    if (auto Name = imageObjectName(E.ConstVal))
-      return "&" + *Name;
+    if (auto Name = imageObjectName(E.ConstVal)) {
+      const std::string Address = "&" + *Name;
+      // Replacing a machine integer address with a C object pointer must
+      // preserve the expression's integer type (for example, a block
+      // descriptor address stored through a uint64_t memory helper).
+      if (E.Type && E.Type->Kind == NdTypeKind::Int)
+        return "(" + typeToC(E.Type) + ")(uintptr_t)(" + Address + ")";
+      return Address;
+    }
     return constStr(E.ConstVal, E.Type);
   }
   case ExprKind::Undef:
