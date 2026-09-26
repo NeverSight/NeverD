@@ -89,6 +89,16 @@ the meaning of the ordinary CFG:
   parent-frame offsets, cleanup action kinds and object offsets, states, and
   continuation VAs.
 
+For an x64 in-function SEH handler that needs RSP, MedIR proves the established
+frame before initializing the exceptional root. Normalized fixed unwind
+allocations must match decoded prologue instructions and converted SP effects;
+all ordinary paths into the protected scope must retain that SP. Independent
+entries, prologue backedges, dynamic SP changes, frame-register or chained
+unwind contracts, and incomplete evidence are rejected explicitly. Conversion
+failure reaches the pipeline caller without aborting its process or publishing
+a partial function. HighC and LLVM-derived C consume the same explicit SP
+adjustment; the C renderer does not apply another frame-size correction.
+
 The HighIR structurer is interval-conservative. It only moves one contiguous
 statement slice whose addresses are wholly contained by a complete protected
 range. Nested regions are processed inner-first. Crossing regions, partial

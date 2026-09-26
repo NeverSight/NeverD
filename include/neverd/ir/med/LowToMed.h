@@ -195,7 +195,7 @@ private:
   /// Runs before buildSsa; no-op when StackProbeSlots is null/empty.  See
   /// setStackProbeSlots.
   void neutralizeStackProbeCalls(MedFunc &Func);
-  void buildSsa(MedFunc &Func);
+  void buildSsa(MedFunc &Func, const LowFunc &Low);
   void runDce(MedFunc &Func);
   void propagate(MedFunc &Func);
   void resolveSwitchSelectorPlans(MedFunc &Func);

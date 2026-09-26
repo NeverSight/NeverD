@@ -15,6 +15,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -28,7 +29,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 #define DEBUG_TYPE "neverd-pipeline"
@@ -45,6 +48,9 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
 
   const size_t Total = Result.LowFuncs.size();
   Result.MedFuncs.resize(Total);
+  // Each worker owns one element; publish errors in stable function order
+  // only after all workers have joined.
+  std::vector<std::optional<std::string>> ConversionErrors(Total);
 
   // Runtime metadata is a source-rendering hint, not a rewrite ABI contract.
   // Patch/lift and safety evidence keep their existing independent semantics.
@@ -120,6 +126,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
         if (MF.Blocks.size() <= limits::kMaxStructurableMedBlocks &&
             MedOps <= static_cast<size_t>(limits::kMaxSSANodes))
           inferMedTypes(MF, Img.Arch);
+      } catch (const LowToMedConversionError &Error) {
+        ConversionErrors[I] = Error.what();
       } catch (...) {
         syncWarning() << "pipeline: low->med threw on "
                       << Result.LowFuncs[I].Name << "\n";
@@ -146,6 +154,16 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       }
     }
   });
+
+  for (size_t I = 0; I < Total; ++I) {
+    if (!ConversionErrors[I])
+      continue;
+    Result.Error = "LowIR to MedIR failed for " + Result.LowFuncs[I].Name +
+                   ": " + *ConversionErrors[I];
+    Result.Success = false;
+    Result.MedFuncs.clear();
+    return;
+  }
 
   recordMedIRVerification(Result, "pipeline-med-final");
 

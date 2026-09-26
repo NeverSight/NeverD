@@ -22093,9 +22093,13 @@ TEST(HighCPointerAddresses, LiveSlotAfterDeadZeroInitIsDeclared) {
         HighExpr::makeConst(40, 8));
   };
   auto CleanupSlot = [&]() {
-    return HighExpr::makeBinop(
+    // The cleanup receives the established frame. Express that adjustment
+    // explicitly; the shared SSA-zero SP still denotes architectural entry.
+    auto Established = HighExpr::makeBinop(
         NdOp::INT_SUB, HighExpr::makeVar(SP, NdType::makeInt(8, false)),
-        HighExpr::makeConst(8, 8));
+        HighExpr::makeConst(Func.FrameSize, 8));
+    return HighExpr::makeBinop(NdOp::INT_SUB, Established,
+                               HighExpr::makeConst(8, 8));
   };
   HighStmt Zero;
   Zero.Kind = StmtKind::Store;
@@ -36630,27 +36634,31 @@ TEST(LLVMCPointerAddresses, CorpusSehProbeCliLlvmcKeepsProtectedEffects) {
   EXPECT_LT(TryAt, SuccessAt) << Source;
   EXPECT_LT(SuccessAt, ExceptAt) << Source;
   EXPECT_LT(ExceptAt, HandlerAt) << Source;
-  // The two paths select different frame locations. Their stores must still
-  // alias the later load through the selected stack-pointer carrier.
+  // Both paths use the proven post-prologue stack pointer and the same local.
+  // Their stores must alias the later load through the joined carrier.
   EXPECT_NE(Source.find("uint8_t frame0["), std::string::npos) << Source;
   EXPECT_NE(Source.find("((char*)&frame0 + 48) = -100;"), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("((char*)&frame0 + 104) = 41;"), std::string::npos)
+  EXPECT_NE(Source.find("((char*)&frame0 + 48) = 41;", ExceptAt),
+            std::string::npos)
       << Source;
   const size_t NormalCarrier =
       Source.find("= (uintptr_t)((char*)&frame0 + 16);");
   const size_t HandlerCarrier =
-      Source.find("= (uintptr_t)((char*)&frame0 + 72);");
+      Source.find("= (uintptr_t)((char*)&frame0 + 16);", HandlerAt);
   ASSERT_NE(NormalCarrier, std::string::npos) << Source;
   ASSERT_NE(HandlerCarrier, std::string::npos) << Source;
+  EXPECT_LT(NormalCarrier, ExceptAt) << Source;
+  EXPECT_GT(HandlerCarrier, ExceptAt) << Source;
   const size_t CarrierStart = Source.rfind('\n', HandlerCarrier);
   ASSERT_NE(CarrierStart, std::string::npos) << Source;
   const std::string Carrier = Source.substr(
       Source.find_first_not_of(' ', CarrierStart + 1),
       HandlerCarrier - Source.find_first_not_of(' ', CarrierStart + 1) - 1);
-  EXPECT_NE(Source.find(Carrier + " = (uintptr_t)((char*)&frame0 + 16);"),
-            std::string::npos)
-      << Source;
+  const size_t NormalJoinedCarrier =
+      Source.find(Carrier + " = (uintptr_t)((char*)&frame0 + 16);");
+  ASSERT_NE(NormalJoinedCarrier, std::string::npos) << Source;
+  EXPECT_LT(NormalJoinedCarrier, ExceptAt) << Source;
   EXPECT_NE(Source.find("= " + Carrier + ";"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("llvm_x2E_seh_x2E_try"), std::string::npos)
       << Source;

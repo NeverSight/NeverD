@@ -15,6 +15,25 @@ analysis and comparison output belong outside the repository.
 
 ## Closed in the public SEH corpus
 
+- Fixed x64 SEH handlers recover their established SP in shared MedIR from
+  matching unwind, decoded prologue and converted SP effects. Normal, handler
+  and continuation accesses share the same local bytes on both C routes.
+  Unsupported frames return an explicit pipeline error; HighC no longer
+  applies a second frame-size adjustment to the entry SP.
+- LLVMC preserves exact integer widths for unsigned division, remainder and
+  shifts, and sign extension through typed fields and scalar homes. Generated C
+  is compiled and executed at both `-O0` and `-O2`; narrowing an address cannot
+  authorize forwarding from the original frame slot.
+- Canonical x86 REP STOS retains element width, direction and zero-count
+  behavior. Unknown assembly contracts fail explicitly. `llvm.localaddress`
+  remains an intrinsic binding so target lowering chooses the correct frame
+  address; it is never guessed from a C builtin.
+- Literal integer guards use LLVM's width semantics. Eliminating a constant
+  select preserves unconditional calls and volatile or atomic producers,
+  including load ordering and pointer-slot qualifiers.
+- Import veneers with authenticated IAT bindings recover the runtime callee
+  name on the LLVM route as well as HighC. A null C++ throw object prints a bare
+  rethrow, and neither route emits a success return after the throw.
 - LLVMC now projects canonical Windows EH SEH scopes, C++ unwind/try/catch/IP
   records, and GS cookie facts as bounded comments. Unsupported or malformed
   metadata is diagnosed explicitly; the executable C remains goto form.
@@ -50,8 +69,9 @@ analysis and comparison output belong outside the repository.
   statements. LLVMC preserves a goto projection when structure is uncertain.
 - Win64 call arguments use Microsoft register and stack rules. Debug types can
   improve names and display, but cannot authorize an unobserved argument.
-- Assigned locals have declarations; unused call results are statements.
-  PHI and register-home copies are printed only when their values are used.
+- Assigned locals have declarations. HighC can print calls with unused results
+  as statements; LLVMC retains their result assignments. PHI and register-home
+  copies are printed only when their values are used.
 - Imports and recognized runtime calls use their actual names and arities.
   Unknown semantics stay explicit; an unsupported operation is never a NOP.
 - Integer width, address-taken storage, exception edges, and noreturn behavior
