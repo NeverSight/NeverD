@@ -1208,6 +1208,93 @@ TEST(ObjCSourceBindings, SwiftSingletonMetadataRejectsForgedProvider) {
 }
 
 TEST(ObjCSourceBindings,
+     SwiftSingletonMetadataBindsDescriptorThroughProvenNativeHelper) {
+  SwiftSingletonDescriptorFixture F;
+  constexpr va_t HelperAddress = 0x5050;
+  HighFunc Helper;
+  Helper.Entry = HelperAddress;
+  Helper.ReturnType = NdType::makePtr(NdType::makeVoid());
+  Helper.Params = {{"request", NdType::makeInt(8)},
+                   {"cache", NdType::makePtr(NdType::makeVoid())},
+                   {"descriptor", NdType::makePtr(NdType::makeVoid())}};
+  SourceFunctionTypeHint Signature;
+  Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Signature.ReturnType = Helper.ReturnType;
+  for (const auto &Parameter : Helper.Params)
+    Signature.Parameters.push_back({Parameter.Name, Parameter.Type});
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, F.Image.Arch, Error))
+      << Error;
+  Helper.SourceTypeHint = Signature;
+  auto Parameter = [](int Id, TypeRef Type) {
+    MedVar Variable;
+    Variable.Kind = MedVar::Param;
+    Variable.Id = Id;
+    Variable.Size = 8;
+    return HighExpr::makeVar(Variable, Type);
+  };
+  auto Runtime = swiftRuntimeSourceCallHint(F.Image, F.RuntimeSlot);
+  ASSERT_TRUE(Runtime);
+  auto RuntimeCall =
+      HighExpr::makeCall("swift_getSingletonMetadata", F.CallAddress,
+                         {Parameter(0, Helper.Params[0].Type),
+                          Parameter(2, Helper.Params[2].Type)});
+  RuntimeCall->Type = Runtime->Signature.ReturnType;
+  RuntimeCall->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Runtime);
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeRecordField(RuntimeCall, 0, 8);
+  Helper.Body = {Return};
+  const auto HelperBody = Helper.Body;
+  auto Native = std::make_shared<SourceCallTypeHint>();
+  Native->CallKind = SourceCallTypeHint::Kind::Native;
+  Native->TargetAddress = HelperAddress;
+  Native->Signature = Signature;
+  auto CallerCall = HighExpr::makeCall(
+      "native_metadata_helper", HelperAddress,
+      {HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar),
+       HighExpr::makeConst(F.Cache, 8, ConstantAddressProvenance::DataAddress),
+       HighExpr::makeConst(F.LocalDescriptor, 8,
+                           ConstantAddressProvenance::DataAddress)});
+  CallerCall->Type = Helper.ReturnType;
+  CallerCall->SourceCallHint = Native;
+  HighFunc Caller;
+  Caller.Entry = 0x5070;
+  Caller.ReturnType = Helper.ReturnType;
+  Return.RetVal = CallerCall;
+  Caller.Body = {Return};
+  const std::map<va_t, const HighFunc *> Functions{{HelperAddress, &Helper}};
+  const auto Bind = [&] {
+    return bindObjCSourceReferences(Caller, F.Image, nullptr, &Functions);
+  };
+  auto Result = Bind();
+  ASSERT_EQ(Result.SwiftNominalDescriptors.size(), 1U);
+  EXPECT_EQ(Result.SwiftNominalDescriptors.at(F.LocalDescriptor),
+            "_$s7WMFData24WMFFeatureConfigResponseVMn");
+  auto Descriptor = Result.Function.Body[0].RetVal->Operands[2];
+  ASSERT_TRUE(Descriptor->SourceCallHint);
+  EXPECT_EQ(Descriptor->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeSwiftNominalDescriptorAddress);
+
+  RuntimeCall->Operands[1] = Parameter(1, Helper.Params[1].Type);
+  EXPECT_TRUE(Bind().SwiftNominalDescriptors.empty());
+  RuntimeCall->Operands[1] = Parameter(2, Helper.Params[2].Type);
+  Native->Signature.Parameters[2].Location.RegisterOffset =
+      Native->Signature.Parameters[1].Location.RegisterOffset;
+  EXPECT_TRUE(Bind().SwiftNominalDescriptors.empty());
+  Native->Signature = Signature;
+  Helper.Body.clear();
+  EXPECT_TRUE(Bind().SwiftNominalDescriptors.empty());
+  Helper.Body = HelperBody;
+  F.Image.DyldBindSlots[F.RuntimeSlot].Module = "/tmp/foreign.dylib";
+  EXPECT_TRUE(Bind().SwiftNominalDescriptors.empty());
+  F.Image.DyldBindSlots[F.RuntimeSlot].Module =
+      "/usr/lib/swift/libswiftCore.dylib";
+  F.Image.Exports.clear();
+  EXPECT_TRUE(Bind().SwiftNominalDescriptors.empty());
+}
+
+TEST(ObjCSourceBindings,
      SwiftConcreteTypeMetadataPairsRebuildFreshCacheAndRelativeReference) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64})
     for (const bool CombineNominal : {false, true}) {
