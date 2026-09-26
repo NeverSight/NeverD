@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "fixtures/driver_mdl_actions.h"
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/DriverSession.h"
@@ -34,7 +35,9 @@ DriverOptions mdlScenario(unsigned Action = 0) {
   Create.Device = "\\Device\\NeverDMDL";
   Options.Requests.push_back(std::move(Create));
   auto IO = mdlRequest(DriverRequestKind::DeviceControl);
-  IO.ControlCode = 0x222000 | (Action << 2) | (Action == 19 ? 2 : 0);
+  const bool Direct =
+      Action == 19 || Action == MdlAppendDirect || Action == MdlReplaceDirect;
+  IO.ControlCode = 0x222000 | (Action << 2) | (Direct ? 2 : 0);
   IO.OutputSize = 2;
   Options.Requests.push_back(std::move(IO));
   Options.Requests.push_back(mdlRequest(DriverRequestKind::Cleanup));
@@ -111,13 +114,12 @@ TEST(DriverMDL, NonpagedPoolRejectsAdditionalMappingAndUnmapping) {
   expectRejected(8, "existing system-space mapping");
 }
 
-TEST(DriverMDL, BuiltPhysicalPagesAreReadableAndPublicFieldsRemainReadOnly) {
+TEST(DriverMDL, BuiltPhysicalPagesAreReadableAndOpaqueFieldsRemainReadOnly) {
   auto Result = emulateDriver(mdlFixture(), mdlScenario(9));
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
   expectCompleted(*Result);
   expectRejected(24, "process");
   expectRejected(10, "read-only");
-  expectRejected(28, "read-only");
 }
 
 TEST(DriverMDL, DescriptorAndPoolUseAfterFreeStopAtTheFirstAccess) {
@@ -127,9 +129,35 @@ TEST(DriverMDL, DescriptorAndPoolUseAfterFreeStopAtTheFirstAccess) {
 }
 
 TEST(DriverMDL, RequestOwnershipAndUnmodeledAllocationContractsAreRejected) {
-  for (unsigned Action : {16u, 17u, 18u})
-    expectRejected(Action, "standalone");
+  expectRejected(17, "associated IRP");
+  expectRejected(18, "ChargeQuota");
   expectRejected(19, "request-owned");
+}
+
+TEST(DriverMDL, GuestChainLinksSupportAssociationReplacementAndUnlinking) {
+  for (unsigned Action :
+       {MdlAttachPrimary, MdlAppendChain, MdlAppendFirst, MdlReplacePrimary,
+        MdlUnlinkMiddle, MdlAppendDirect}) {
+    SCOPED_TRACE(Action);
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      auto Options = mdlScenario(Action);
+      Options.LoadAddress = Address;
+      auto Result = emulateDriver(mdlFixture(), Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      expectCompleted(*Result);
+      if (Action == MdlAppendDirect) {
+        ASSERT_GE(Result->Requests.size(), 2u);
+        EXPECT_EQ(Result->Requests[1].Output,
+                  (std::vector<uint8_t>{0x62, 0x73}));
+      }
+    }
+  }
+}
+
+TEST(DriverMDL, MalformedChainsAndOriginalDirectReplacementFailExplicitly) {
+  expectRejected(MdlCyclicChain, "cycle");
+  expectRejected(MdlFreeAttached, "freed descriptor");
+  expectRejected(MdlReplaceDirect, "original direct-I/O");
 }
 
 TEST(DriverMDL, InvalidBufferLengthsFailExplicitly) {

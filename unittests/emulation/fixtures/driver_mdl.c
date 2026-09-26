@@ -9,6 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "driver_mdl_actions.h"
+
 typedef unsigned char U8;
 typedef unsigned short U16;
 typedef unsigned int U32;
@@ -80,6 +82,10 @@ __declspec(dllimport) void MmUnmapLockedPages(void *, MDL *);
 __declspec(dllimport) U8 *MmGetSystemAddressForMdlSafe(MDL *, U32);
 
 static const U32 Tag = 0x4d646c54;
+static const NTSTATUS StatusInvalidParameter = (NTSTATUS)0xc000000dU;
+static const U32 NormalPagePriority = 16;
+// Keep a loader-relocated pointer live so every MDL scenario also runs rebased.
+static const U16 *volatile DevicePath = L"\\Device\\NeverDMDL";
 static DEVICE_OBJECT *Device;
 static U8 *Pool;
 static MDL *Descriptor;
@@ -109,7 +115,7 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
     case 0:
       if (Buffer != Pool + 17 ||
           MmGetSystemAddressForMdlSafe(Descriptor, 0xc0000010U) != Buffer)
-        Status = (NTSTATUS)0xc000000dU;
+        Status = StatusInvalidParameter;
       Request->SystemBuffer[0] = Buffer[0];
       Request->SystemBuffer[1] = Buffer[8192];
       ++Buffer[0]; // Existing pool mapping ignores new no-write requests.
@@ -122,7 +128,7 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
       Descriptor = 0;
       Buffer[0] = 0x61;
       if (Pool[17] != 0x61)
-        Status = (NTSTATUS)0xc000000dU;
+        Status = StatusInvalidParameter;
       break;
     case 2:
       Temporary = IoAllocateMdl(Local, sizeof(Local), 0, 0, 0);
@@ -142,10 +148,11 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
       break;
     case 6:
       Temporary = IoAllocateMdl(Pool, 16, 0, 0, 0);
-      Observed = (U64)MmGetSystemAddressForMdlSafe(Temporary, 16);
+      Observed =
+          (U64)MmGetSystemAddressForMdlSafe(Temporary, NormalPagePriority);
       break;
     case 7:
-      MmMapLockedPagesSpecifyCache(Descriptor, 0, 1, 0, 0, 16);
+      MmMapLockedPagesSpecifyCache(Descriptor, 0, 1, 0, 0, NormalPagePriority);
       break;
     case 8:
       MmUnmapLockedPages(Buffer, Descriptor);
@@ -170,7 +177,8 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
       break;
     case 14:
       ExFreePoolWithTag(Pool, Tag);
-      Observed = (U64)MmGetSystemAddressForMdlSafe(Descriptor, 16);
+      Observed =
+          (U64)MmGetSystemAddressForMdlSafe(Descriptor, NormalPagePriority);
       break;
     case 15:
       ExFreePoolWithTag(Pool, Tag);
@@ -178,7 +186,7 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
       IoFreeMdl(Descriptor);
       Descriptor = 0;
       break;
-    case 16:
+    case MdlAttachPrimary:
       IoAllocateMdl(Pool, 16, 0, 0, Request);
       break;
     case 17:
@@ -203,10 +211,10 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
       MmBuildMdlForNonPagedPool(Temporary);
       if (SystemAddress(Temporary, 0xc0000010U) != Other + 3 ||
           (Action != 31 && Other[3]))
-        Status = (NTSTATUS)0xc000000dU;
+        Status = StatusInvalidParameter;
       SystemAddress(Temporary, 0xc0000010U)[0] = 0x75;
       if (Other[3] != 0x75)
-        Status = (NTSTATUS)0xc000000dU;
+        Status = StatusInvalidParameter;
       IoFreeMdl(Temporary);
       ExFreePoolWithTag(Other, Tag);
       break;
@@ -227,14 +235,67 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
     case 27:
       MmBuildMdlForNonPagedPool(Descriptor);
       break;
-    case 28:
-      ((volatile MDL *)Descriptor)->Next = Descriptor;
+    case MdlCyclicChain:
+      Request->MdlAddress = Descriptor;
+      Descriptor->Next = Descriptor;
       break;
     case 29:
       IoFreeMdl((MDL *)Pool);
       break;
     case 30:
       IoAllocateMdl(Pool, 0x100001, 0, 0, 0);
+      break;
+    case MdlAppendChain: {
+      MDL *First = IoAllocateMdl(Pool, 16, 0, 0, Request);
+      MDL *Middle = IoAllocateMdl(Pool + 16, 16, 1, 0, Request);
+      MDL *Last = IoAllocateMdl(Pool + 32, 16, 1, 0, Request);
+      MmBuildMdlForNonPagedPool(First);
+      MmBuildMdlForNonPagedPool(Middle);
+      if (Request->MdlAddress != First || First->Next != Middle ||
+          Middle->Next != Last || Last->Next ||
+          MmGetSystemAddressForMdlSafe(Middle, NormalPagePriority) != Pool + 16)
+        Status = StatusInvalidParameter;
+      break;
+    }
+    case MdlAppendFirst:
+      Temporary = IoAllocateMdl(Pool, 16, 1, 0, Request);
+      if (Request->MdlAddress != Temporary || Temporary->Next)
+        Status = StatusInvalidParameter;
+      break;
+    case MdlReplacePrimary:
+      Temporary = IoAllocateMdl(Pool, 16, 0, 0, Request);
+      IoAllocateMdl(Pool + 16, 16, 0, 0, Request);
+      if (Request->MdlAddress == Temporary || Temporary->Next)
+        Status = StatusInvalidParameter;
+      IoFreeMdl(Temporary);
+      break;
+    case MdlUnlinkMiddle: {
+      MDL *First = IoAllocateMdl(Pool, 16, 0, 0, Request);
+      MDL *Middle = IoAllocateMdl(Pool + 16, 16, 1, 0, Request);
+      MDL *Last = IoAllocateMdl(Pool + 32, 16, 0, 0, 0);
+      Middle->Next = Last;
+      First->Next = Last;
+      IoFreeMdl(Middle);
+      if (First->Next != Last || Last->Next)
+        Status = StatusInvalidParameter;
+      break;
+    }
+    case MdlFreeAttached:
+      Temporary = IoAllocateMdl(Pool, 16, 0, 0, Request);
+      IoFreeMdl(Temporary); // Completion must detect the dangling chain head.
+      break;
+    case MdlAppendDirect:
+      Temporary = IoAllocateMdl(Pool, 16, 1, 0, Request);
+      if (Request->MdlAddress->Next != Temporary || Temporary->Next)
+        Status = StatusInvalidParameter;
+      Buffer =
+          MmGetSystemAddressForMdlSafe(Request->MdlAddress, NormalPagePriority);
+      Buffer[0] = 0x62;
+      Buffer[1] = 0x73;
+      Information = 2;
+      break;
+    case MdlReplaceDirect:
+      IoAllocateMdl(Pool, 16, 0, 0, Request);
       break;
     }
   }
@@ -256,7 +317,7 @@ static void Unload(DRIVER_OBJECT *Driver) {
 NTSTATUS DriverEntry(DRIVER_OBJECT *Driver, UNICODE_STRING *RegistryPath) {
   (void)RegistryPath;
   UNICODE_STRING Name;
-  RtlInitUnicodeString(&Name, L"\\Device\\NeverDMDL");
+  RtlInitUnicodeString(&Name, DevicePath);
   NTSTATUS Status =
       IoCreateDevice(Driver, 0, &Name, 0x22, 0, 0, (void **)&Device);
   if (Status < 0)
@@ -273,18 +334,18 @@ NTSTATUS DriverEntry(DRIVER_OBJECT *Driver, UNICODE_STRING *RegistryPath) {
   if (Descriptor->Next || Descriptor->Size != 0x48 ||
       Descriptor->ByteOffset != 17 || Descriptor->ByteCount != 8193 ||
       Descriptor->StartVa != Pool)
-    return (NTSTATUS)0xc000000dU;
+    return StatusInvalidParameter;
   MmBuildMdlForNonPagedPool(Descriptor);
   if (!(Descriptor->MdlFlags & 4) ||
       SystemAddress(Descriptor, 0xc0000010U) != Pool + 17)
-    return (NTSTATUS)0xc000000dU;
+    return StatusInvalidParameter;
   // Two MDLs over the same bytes retain one authoritative pool allocation.
   MDL *Alias = IoAllocateMdl(Pool + 17, 8, 0, 0, 0);
   MmBuildMdlForNonPagedPool(Alias);
-  SystemAddress(Alias, 16)[1] = 0x51;
+  SystemAddress(Alias, NormalPagePriority)[1] = 0x51;
   IoFreeMdl(Alias);
-  if (SystemAddress(Descriptor, 16)[1] != 0x51)
-    return (NTSTATUS)0xc000000dU;
+  if (SystemAddress(Descriptor, NormalPagePriority)[1] != 0x51)
+    return StatusInvalidParameter;
   Driver->MajorFunction[0] = (void *)Dispatch;
   Driver->MajorFunction[2] = (void *)Dispatch;
   Driver->MajorFunction[14] = (void *)Dispatch;

@@ -196,16 +196,22 @@ TEST(DriverPnpScenario, FileBusResponsesRequireAnExplicitFinalStatus) {
   }
   auto Delayed = driverOptionsFromScenarioJSON(scenario(R"(
     {"kind":"create","device_id":"port-0",
+     "bus_completion":{"status":0,"delay_100ns":17}},
+    {"kind":"cleanup","device_id":"port-0",
+     "bus_completion":{"status":0,"delay_100ns":17}},
+    {"kind":"close","device_id":"port-0",
      "bus_completion":{"status":0,"delay_100ns":17}}
   )"));
   ASSERT_TRUE(bool(Delayed)) << llvm::toString(Delayed.takeError());
-  ASSERT_TRUE(Delayed->Requests.front().FileBusCompletion);
-  EXPECT_EQ(Delayed->Requests.front().FileBusCompletion->Delay100ns, 17u);
+  ASSERT_EQ(Delayed->Requests.size(), 3u);
+  for (const auto &Request : Delayed->Requests) {
+    ASSERT_TRUE(Request.FileBusCompletion);
+    EXPECT_EQ(Request.FileBusCompletion->Delay100ns, 17u);
+  }
   for (
       llvm::StringRef Request :
       {R"({"kind":"create","bus_completion":{"status":0}})",
        R"({"kind":"create","device_id":"port-0","bus_completion":{"status":259}})",
-       R"({"kind":"cleanup","device_id":"port-0","bus_completion":{"status":0,"delay_100ns":1}})",
        R"({"kind":"cleanup","device_id":"port-0","bus_completion":{"delay_100ns":1}})",
        R"({"kind":"read","device_id":"port-0","bus_completion":{"status":0}})"})
     invalidJSON(scenario(Request));
@@ -219,7 +225,8 @@ TEST(DriverPnpScenario, FileBusResponsesRequireAnExplicitFinalStatus) {
   invalidNative(Native, "file bus_completion delay exceeds signed time range");
   Native.Requests.front().Kind = DriverRequestKind::Cleanup;
   Native.Requests.front().FileBusCompletion->Delay100ns = 1;
-  invalidNative(Native, "delayed file bus_completion requires CREATE");
+  auto Validation = validateDriverScenario(Native);
+  EXPECT_FALSE(bool(Validation)) << llvm::toString(std::move(Validation));
 }
 
 TEST(DriverPnpScenario, BusCompletionHasExplicitFinalStatusAndBoundedDelay) {

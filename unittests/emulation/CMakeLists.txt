@@ -104,6 +104,9 @@ foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl dr
     set(_driver_entry DriverEntry)
   endif()
   set(_driver_additional_dependencies)
+  if(_driver_name STREQUAL "driver_mdl")
+    list(APPEND _driver_additional_dependencies fixtures/driver_mdl_actions.h)
+  endif()
   if(_driver_name STREQUAL "driver_async")
     list(APPEND _driver_additional_dependencies
       fixtures/driver_io.c fixtures/DriverAsyncCases.def
@@ -511,10 +514,12 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelFrameworkTests.cpp
   KernelFrameworkControlTests.cpp
   KernelFrameworkFileTests.cpp
+  KernelFrameworkFileSendTests.cpp
   KernelFrameworkQueueTests.cpp
   KernelFrameworkRequestTests.cpp
   KernelFrameworkRequestAccessorTests.cpp
   KernelRequestMDLTests.cpp
+  KernelMDLChainTests.cpp
   KernelDeviceStackTests.cpp
   KernelPnpRequestTests.cpp
   KernelPnpDeviceTests.cpp

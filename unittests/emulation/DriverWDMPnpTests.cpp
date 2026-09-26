@@ -1,4 +1,5 @@
-//===- DriverWDMPnpTests.cpp - Genuine AddDevice and PnP execution ---------===//
+//===- DriverWDMPnpTests.cpp - Genuine AddDevice and PnP execution
+//---------===//
 //
 // NeverD Decompiler
 //
@@ -11,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
+
 #include "neverd/emulation/DriverSession.h"
 
 #include <algorithm>
@@ -98,7 +100,7 @@ void cleanSession(const DriverResult &Result) {
 }
 
 void cleanRemoval(const DriverResult &Result, size_t Count = 1,
-                   size_t ExtraDevices = 0) {
+                  size_t ExtraDevices = 0) {
   cleanSession(Result);
   ASSERT_EQ(Result.PnpDevices.size(), Count);
   for (size_t I = 0; I != Count; ++I) {
@@ -118,14 +120,59 @@ void cleanRemoval(const DriverResult &Result, size_t Count = 1,
 void softwareOutput(const DriverRequestResult &Request, bool Control = false) {
   EXPECT_EQ(Request.IOStatus, 0u);
   EXPECT_EQ(Request.Information, 4u);
-  EXPECT_EQ(Request.Output, Control ? (std::vector<uint8_t>{'C', 'T', 'L', '!'})
-                                   : (std::vector<uint8_t>{'P', 'N', 'P', '!'}));
+  EXPECT_EQ(Request.Output, Control
+                                ? (std::vector<uint8_t>{'C', 'T', 'L', '!'})
+                                : (std::vector<uint8_t>{'P', 'N', 'P', '!'}));
 }
 
 void addSecondPdo(DriverOptions &Options) {
   auto Device = Options.PnpDevices.front();
   Device.ID = "resource1";
   Options.PnpDevices.push_back(std::move(Device));
+}
+
+TEST(DriverWDMPnp, DelayedFileForwardingRunsActualCompletionCallbacks) {
+  constexpr uint64_t FileDelay100ns = 13;
+  constexpr uint32_t StatusPending = 0x103;
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+      for (bool FailCreate : {false, true}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(FailCreate);
+        auto Options = pnpOptions('D');
+        Options.LoadAddress = Base;
+        Options.Requests.push_back(pnpRequest(DevicePnpRequest::Start));
+        for (auto Kind : {DriverRequestKind::Create, DriverRequestKind::Cleanup,
+                          DriverRequestKind::Close}) {
+          if (FailCreate && Kind != DriverRequestKind::Create)
+            continue;
+          auto Request = fileRequest(Kind, 9, "resource0");
+          Request.FileBusCompletion =
+              DriverBusCompletion{FailCreate ? Failed : 0, FileDelay100ns};
+          Options.Requests.push_back(std::move(Request));
+        }
+        Options.Requests.push_back(pnpRequest(DevicePnpRequest::QueryRemove));
+        Options.Requests.push_back(pnpRequest(DevicePnpRequest::Remove));
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        cleanRemoval(*Result);
+        ASSERT_EQ(Result->Requests.size(), Options.Requests.size());
+        const size_t FileCount = FailCreate ? 1 : 3;
+        for (size_t I = 1; I <= FileCount; ++I) {
+          EXPECT_EQ(Result->Requests[I].DispatchStatus, StatusPending);
+          EXPECT_EQ(Result->Requests[I].IOStatus, FailCreate ? Failed : 0u);
+        }
+        EXPECT_EQ(std::count(Result->Messages.begin(), Result->Messages.end(),
+                             "WDM PnP: forwarded file completed\n"),
+                  FileCount);
+        const auto &Start = Result->Requests.front().Pnp;
+        const auto &Remove = Result->Requests[FileCount + 1].Pnp;
+        ASSERT_TRUE(Start && Start->BusCompletedAt100ns);
+        ASSERT_TRUE(Remove && Remove->BusReceivedAt100ns);
+        EXPECT_GE(*Remove->BusReceivedAt100ns,
+                  *Start->BusCompletedAt100ns + FileCount * FileDelay100ns);
+      }
 }
 
 TEST(DriverWDMPnp, AddStartFileRequestsAndOrderlyRemovalExecuteRealGuestCode) {
@@ -222,7 +269,8 @@ TEST(DriverWDMPnp, FailedStartStillRunsRemoveAndPreservesDistinctBusResult) {
       ASSERT_TRUE(Result->Requests[0].Pnp);
       EXPECT_EQ(Result->Requests[0].IOStatus, Failed);
       EXPECT_EQ(Result->Requests[0].Pnp->BusStatus, Mode == 'S' ? Failed : 0u);
-      EXPECT_EQ(Result->Requests[0].Pnp->StateAfter, DevicePnpState::NotStarted);
+      EXPECT_EQ(Result->Requests[0].Pnp->StateAfter,
+                DevicePnpState::NotStarted);
     }
 }
 
@@ -265,20 +313,19 @@ TEST(DriverWDMPnp, StopAndRestartPreserveSoftwareIoAndOpenFiles) {
   for (const auto *Image : pnpImages()) {
     SCOPED_TRACE(Image);
     auto Options = pnpOptions();
-    Options.Requests = {
-        pnpRequest(DevicePnpRequest::Start),
-        fileRequest(DriverRequestKind::Create, 9, "resource0"),
-        pnpRequest(DevicePnpRequest::QueryStop, 0, 5),
-        fileRequest(DriverRequestKind::DeviceControl),
-        pnpRequest(DevicePnpRequest::Stop, 0, 7),
-        fileRequest(DriverRequestKind::DeviceControl),
-        fileRequest(DriverRequestKind::Create, 10, "resource0"),
-        pnpRequest(DevicePnpRequest::Start, 0, 11),
-        fileRequest(DriverRequestKind::DeviceControl),
-        fileRequest(DriverRequestKind::Cleanup),
-        fileRequest(DriverRequestKind::Close),
-        pnpRequest(DevicePnpRequest::QueryRemove),
-        pnpRequest(DevicePnpRequest::Remove)};
+    Options.Requests = {pnpRequest(DevicePnpRequest::Start),
+                        fileRequest(DriverRequestKind::Create, 9, "resource0"),
+                        pnpRequest(DevicePnpRequest::QueryStop, 0, 5),
+                        fileRequest(DriverRequestKind::DeviceControl),
+                        pnpRequest(DevicePnpRequest::Stop, 0, 7),
+                        fileRequest(DriverRequestKind::DeviceControl),
+                        fileRequest(DriverRequestKind::Create, 10, "resource0"),
+                        pnpRequest(DevicePnpRequest::Start, 0, 11),
+                        fileRequest(DriverRequestKind::DeviceControl),
+                        fileRequest(DriverRequestKind::Cleanup),
+                        fileRequest(DriverRequestKind::Close),
+                        pnpRequest(DevicePnpRequest::QueryRemove),
+                        pnpRequest(DevicePnpRequest::Remove)};
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     cleanRemoval(*Result);
@@ -333,7 +380,8 @@ TEST(DriverWDMPnp, QueryStopFailureAndCancellationRestoreGuestAndModelState) {
         EXPECT_FALSE(Result->Requests[1].Pnp->BusCompletedAt100ns);
       }
       EXPECT_EQ(Result->Requests[2].Pnp->StateAfter, DevicePnpState::Started);
-      EXPECT_EQ(Result->Requests[3].Pnp->StateAfter, DevicePnpState::StopPending);
+      EXPECT_EQ(Result->Requests[3].Pnp->StateAfter,
+                DevicePnpState::StopPending);
       EXPECT_EQ(Result->Requests[4].Pnp->StateAfter, DevicePnpState::Started);
       softwareOutput(Result->Requests[6]);
     }
@@ -343,20 +391,19 @@ TEST(DriverWDMPnp, RemovePendingDeliversSoftwareIoAndGuestRejectsNewCreate) {
   for (const auto *Image : pnpImages()) {
     SCOPED_TRACE(Image);
     auto Options = pnpOptions();
-    Options.Requests = {
-        pnpRequest(DevicePnpRequest::Start),
-        fileRequest(DriverRequestKind::Create, 9, "resource0"),
-        pnpRequest(DevicePnpRequest::QueryRemove),
-        fileRequest(DriverRequestKind::DeviceControl),
-        fileRequest(DriverRequestKind::Create, 10, "resource0"),
-        pnpRequest(DevicePnpRequest::CancelRemove),
-        fileRequest(DriverRequestKind::Create, 10, "resource0"),
-        fileRequest(DriverRequestKind::Cleanup, 10),
-        fileRequest(DriverRequestKind::Close, 10),
-        fileRequest(DriverRequestKind::Cleanup),
-        fileRequest(DriverRequestKind::Close),
-        pnpRequest(DevicePnpRequest::QueryRemove),
-        pnpRequest(DevicePnpRequest::Remove)};
+    Options.Requests = {pnpRequest(DevicePnpRequest::Start),
+                        fileRequest(DriverRequestKind::Create, 9, "resource0"),
+                        pnpRequest(DevicePnpRequest::QueryRemove),
+                        fileRequest(DriverRequestKind::DeviceControl),
+                        fileRequest(DriverRequestKind::Create, 10, "resource0"),
+                        pnpRequest(DevicePnpRequest::CancelRemove),
+                        fileRequest(DriverRequestKind::Create, 10, "resource0"),
+                        fileRequest(DriverRequestKind::Cleanup, 10),
+                        fileRequest(DriverRequestKind::Close, 10),
+                        fileRequest(DriverRequestKind::Cleanup),
+                        fileRequest(DriverRequestKind::Close),
+                        pnpRequest(DevicePnpRequest::QueryRemove),
+                        pnpRequest(DevicePnpRequest::Remove)};
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     cleanRemoval(*Result);
@@ -376,17 +423,16 @@ TEST(DriverWDMPnp, SurpriseRemovalKeepsFdoForGuestFailuresAndFileTeardown) {
   for (const auto *Image : pnpImages()) {
     SCOPED_TRACE(Image);
     auto Options = pnpOptions();
-    Options.Requests = {
-        pnpRequest(DevicePnpRequest::Start),
-        fileRequest(DriverRequestKind::Create, 9, "resource0"),
-        pnpRequest(DevicePnpRequest::SurpriseRemoval, 0, 5),
-        fileRequest(DriverRequestKind::DeviceControl),
-        fileRequest(DriverRequestKind::Create, 10, "resource0"),
-        fileRequest(DriverRequestKind::Read),
-        fileRequest(DriverRequestKind::Write),
-        fileRequest(DriverRequestKind::Cleanup),
-        fileRequest(DriverRequestKind::Close),
-        pnpRequest(DevicePnpRequest::Remove, 0, 7)};
+    Options.Requests = {pnpRequest(DevicePnpRequest::Start),
+                        fileRequest(DriverRequestKind::Create, 9, "resource0"),
+                        pnpRequest(DevicePnpRequest::SurpriseRemoval, 0, 5),
+                        fileRequest(DriverRequestKind::DeviceControl),
+                        fileRequest(DriverRequestKind::Create, 10, "resource0"),
+                        fileRequest(DriverRequestKind::Read),
+                        fileRequest(DriverRequestKind::Write),
+                        fileRequest(DriverRequestKind::Cleanup),
+                        fileRequest(DriverRequestKind::Close),
+                        pnpRequest(DevicePnpRequest::Remove, 0, 7)};
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     cleanRemoval(*Result);
@@ -427,7 +473,8 @@ TEST(DriverWDMPnp, MultiplePdosKeepIndependentFdoFileAndLifecycleIdentity) {
         pnpRequest(DevicePnpRequest::Start, 0, 3, "resource1"),
         fileRequest(DriverRequestKind::Create, 9, "resource0"),
         fileRequest(DriverRequestKind::Create, 10, "resource1"),
-        Unit0, Unit1,
+        Unit0,
+        Unit1,
         pnpRequest(DevicePnpRequest::QueryStop),
         pnpRequest(DevicePnpRequest::Stop),
         fileRequest(DriverRequestKind::DeviceControl, 9),
@@ -500,24 +547,23 @@ TEST(DriverWDMPnp, IndependentControlDeviceOutlivesStoppedAndRemovedPdo) {
     auto Options = pnpOptions('C');
     auto OpenControl = fileRequest(DriverRequestKind::Create, 90);
     OpenControl.Device = "\\Device\\NeverDPnpControl";
-    Options.Requests = {
-        OpenControl,
-        fileRequest(DriverRequestKind::DeviceControl, 90),
-        pnpRequest(DevicePnpRequest::Start),
-        fileRequest(DriverRequestKind::Create, 9, "resource0"),
-        pnpRequest(DevicePnpRequest::QueryStop),
-        pnpRequest(DevicePnpRequest::Stop),
-        fileRequest(DriverRequestKind::DeviceControl, 9),
-        fileRequest(DriverRequestKind::DeviceControl, 90),
-        pnpRequest(DevicePnpRequest::SurpriseRemoval),
-        fileRequest(DriverRequestKind::DeviceControl, 9),
-        fileRequest(DriverRequestKind::DeviceControl, 90),
-        fileRequest(DriverRequestKind::Cleanup, 9),
-        fileRequest(DriverRequestKind::Close, 9),
-        pnpRequest(DevicePnpRequest::Remove),
-        fileRequest(DriverRequestKind::DeviceControl, 90),
-        fileRequest(DriverRequestKind::Cleanup, 90),
-        fileRequest(DriverRequestKind::Close, 90)};
+    Options.Requests = {OpenControl,
+                        fileRequest(DriverRequestKind::DeviceControl, 90),
+                        pnpRequest(DevicePnpRequest::Start),
+                        fileRequest(DriverRequestKind::Create, 9, "resource0"),
+                        pnpRequest(DevicePnpRequest::QueryStop),
+                        pnpRequest(DevicePnpRequest::Stop),
+                        fileRequest(DriverRequestKind::DeviceControl, 9),
+                        fileRequest(DriverRequestKind::DeviceControl, 90),
+                        pnpRequest(DevicePnpRequest::SurpriseRemoval),
+                        fileRequest(DriverRequestKind::DeviceControl, 9),
+                        fileRequest(DriverRequestKind::DeviceControl, 90),
+                        fileRequest(DriverRequestKind::Cleanup, 9),
+                        fileRequest(DriverRequestKind::Close, 9),
+                        pnpRequest(DevicePnpRequest::Remove),
+                        fileRequest(DriverRequestKind::DeviceControl, 90),
+                        fileRequest(DriverRequestKind::Cleanup, 90),
+                        fileRequest(DriverRequestKind::Close, 90)};
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     cleanRemoval(*Result, 1, 1);
@@ -537,7 +583,8 @@ TEST(DriverWDMPnp, IndependentControlDeviceOutlivesStoppedAndRemovedPdo) {
 
 #else
 TEST(DriverWDMPnp, OptionalGenuineFixtureIsConfigured) {
-  GTEST_SKIP() << "NEVERD_WDM_PNP_FIXTURE requires a genuine WDK-linked fixture";
+  GTEST_SKIP()
+      << "NEVERD_WDM_PNP_FIXTURE requires a genuine WDK-linked fixture";
 }
 #endif
 } // namespace

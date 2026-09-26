@@ -387,6 +387,24 @@ TEST_F(KernelRequestMDL,
   }
 }
 
+TEST_F(KernelRequestMDL, PrivateFrameworkDescriptorCannotJoinWdmChain) {
+  open();
+  const auto Request = begin();
+  const auto Private = mdl(Request, true);
+  const auto Link = Request.IRP + windows::IRPMdlOffset;
+  success(Model->validateGuestAccess(Link, sizeof(uint64_t), true));
+  put(Link, Private);
+  rejected(call("WdfRequestComplete", {Globals, Request.Request, 0}),
+           "framework buffer");
+  EXPECT_TRUE(Model->requestPending(Request.IRP));
+  EXPECT_EQ(mdl(Request, true), Private);
+  success(Model->validateGuestAccess(Private, sizeof(uint64_t), false));
+  put(Link, 0);
+  complete(Request);
+  rejected(Model->validateGuestAccess(Private, 1, false), "freed");
+  finalize(Request);
+}
+
 TEST_F(KernelRequestMDL,
        BothDirectIoctlMethodsKeepInputDescriptorSeparateAndMappingRestricted) {
   open();

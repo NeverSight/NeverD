@@ -319,8 +319,10 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
           Token->second.Owner != GuestCallOwner::Framework)
         return schedulingError(
             "request completion lost its framework identity");
-      if (auto E = Framework->beginRequestCompletionCallback(Token->second.ID))
-        return E;
+      if (!Framework->isAutomaticFileContinuation(Token->second.ID))
+        if (auto E =
+                Framework->beginRequestCompletionCallback(Token->second.ID))
+          return E;
     }
     if ((**Next).Kind == KernelScheduler::CallbackKind::Interrupt) {
       auto Token = ScheduledModelContinuations.find((**Next).ID);
@@ -521,6 +523,14 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
 
 llvm::Expected<std::optional<uint32_t>>
 KernelModel::pollWait(const Wait &Pending) {
+  if (Pending.Type == Wait::Kind::FrameworkFileSend) {
+    if (!Framework)
+      return schedulingError("synchronous file wait lost its framework");
+    auto Waiting = Framework->synchronousFileSendPending(Pending.Object);
+    if (!Waiting)
+      return schedulingError("synchronous file wait lost its request");
+    return *Waiting ? std::optional<uint32_t>{} : std::optional<uint32_t>{1};
+  }
   if (Pending.Type == Wait::Kind::FrameworkQueueStop ||
       Pending.Type == Wait::Kind::FrameworkQueueEmpty) {
     if (!Framework)

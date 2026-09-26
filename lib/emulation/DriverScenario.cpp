@@ -1538,9 +1538,6 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
                        "nonpending explicit final status");
       if (Request.FileBusCompletion->Delay100ns > INT64_MAX)
         return invalid("file bus_completion delay exceeds signed time range");
-      if (Request.FileBusCompletion->Delay100ns &&
-          Request.Kind != DriverRequestKind::Create)
-        return invalid("delayed file bus_completion requires CREATE");
     }
     if (Request.CancelAfter100ns) {
       if (*Request.CancelAfter100ns > INT64_MAX)

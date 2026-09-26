@@ -954,21 +954,8 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
                                                    : Request->OutputSize);
   if (Request->SecurityContext)
     Retiring.emplace_back(Request->SecurityContext, SecurityContextSize);
-  if (Request->Mdl) {
-    auto It = MDLs.find(Request->Mdl);
-    if (It == MDLs.end())
-      return ioError("active request lost ownership of its MDL");
-    Retiring.emplace_back(It->second.Address, It->second.Size);
-    Retiring.emplace_back(It->second.Buffer & ~(profile::PageSize - 1),
-                          It->second.AllocationSize);
-  }
-  if (Request->SystemMdl) {
-    auto It = MDLs.find(Request->SystemMdl);
-    if (It == MDLs.end() || It->second.OwnerIRP != IRP ||
-        It->second.Owner != LockedMdl::Ownership::RequestSystemBuffer)
-      return ioError("active request lost ownership of its system-buffer MDL");
-    Retiring.emplace_back(It->second.Address, It->second.Size);
-  }
+  if (auto E = appendRequestMDLReleaseRanges(IRP, Retiring))
+    return E;
   if (Request->PowerTicket) {
     if (auto E = validatePowerRequestCompletion(*Request, uint32_t(*Status)))
       return E;
@@ -1256,7 +1243,9 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
     const auto *Request = &Record;
     if (auto E = Check(Request->IRP, IRPSize, [&](uint64_t Offset) {
           if (IsWrite)
-            return (Offset >= IRPStatusOffset &&
+            return (Offset >= IRPMdlOffset &&
+                    Offset < IRPMdlOffset + profile::PointerSize) ||
+                   (Offset >= IRPStatusOffset &&
                     Offset < IRPRequestorModeOffset) ||
                    (Offset >= IRPCancelRoutineOffset &&
                     Offset < IRPCancelRoutineOffset + profile::PointerSize) ||

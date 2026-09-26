@@ -127,7 +127,8 @@ public:
       Delay,
       RemoveLock,
       FrameworkQueueStop,
-      FrameworkQueueEmpty
+      FrameworkQueueEmpty,
+      FrameworkFileSend
     };
     Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
@@ -547,7 +548,8 @@ private:
     WDM,
     FrameworkFile,
     FrameworkFileSynchronous,
-    FrameworkFileAsynchronous
+    FrameworkFileAsynchronous,
+    FrameworkFileAutomatic
   };
   llvm::Expected<uint64_t>
   callDriver(uint64_t Device, uint64_t IRP,
@@ -568,9 +570,15 @@ private:
       uint64_t IRP,
       std::optional<uint32_t> StatusOverride = std::nullopt) const;
   struct ProviderCompletion {
+    enum class Kind {
+      WDM,
+      FrameworkCallback,
+      FrameworkSynchronous,
+      FrameworkAutomatic
+    };
     uint64_t Device = 0, Deadline = 0, Sequence = 0;
     uint32_t Status = 0;
-    bool FrameworkCallback = false;
+    Kind Owner = Kind::WDM;
   };
   uint64_t NextProviderSequence = 1;
   std::map<uint64_t, ProviderCompletion> ProviderCompletions;
@@ -660,6 +668,9 @@ private:
   llvm::Error unmapLockedPages(uint64_t Address, uint64_t MDL);
   llvm::Error validateMDLAccess(uint64_t Address, uint32_t Size,
                                 bool IsWrite) const;
+  llvm::Expected<std::vector<uint64_t>> requestMDLChain(uint64_t IRP) const;
+  llvm::Error appendRequestMDLReleaseRanges(
+      uint64_t IRP, std::vector<std::pair<uint64_t, uint64_t>> &Ranges) const;
   llvm::Error expireRequestMDL(uint64_t IRP);
   llvm::Expected<std::vector<uint8_t>> readMDLBytes(uint64_t MDL,
                                                     uint32_t Count);

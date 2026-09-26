@@ -32,7 +32,32 @@ KernelModel::preflightScheduledBoundary(uint64_t Time) {
     if (!Request || Request->Completed || Request->PnpDevice != Provider.Device)
       return interruptEventError(
           "PnP provider: deadline lost its live request or PDO identity");
-    if (Provider.FrameworkCallback) {
+    if (Provider.Owner == ProviderCompletion::Kind::FrameworkAutomatic) {
+      ++WDMProviderCount;
+      auto Plan = planIRPCompletion(IRP, Provider.Status);
+      if (!Plan)
+        return Plan.takeError();
+      if (Plan->PC)
+        return interruptEventError(
+            "automatic file completion cannot own a WDM callback");
+      if (!Framework)
+        return interruptEventError("file completion lost its framework model");
+      auto Call =
+          Framework->previewAutomaticFileCompletion(IRP, Provider.Status);
+      if (!Call)
+        return Call.takeError();
+      if (*Call)
+        ProviderCallbacks.push_back({IRP, Request->Device,
+                                     profile::WorkerThreadIdentity, (**Call).PC,
+                                     (**Call).Arguments});
+    } else if (Provider.Owner ==
+               ProviderCompletion::Kind::FrameworkSynchronous) {
+      if (!Framework)
+        return interruptEventError("file completion lost its framework model");
+      if (auto E = Framework->validateSynchronousFileCompletion(
+              IRP, Provider.Status))
+        return E;
+    } else if (Provider.Owner == ProviderCompletion::Kind::FrameworkCallback) {
       if (!Framework)
         return interruptEventError("file completion lost its framework model");
       auto Call = Framework->previewFileSendCompletion(IRP, Provider.Status,

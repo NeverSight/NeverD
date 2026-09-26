@@ -31,6 +31,7 @@ constexpr uint32_t InitialRegisterValue = 0x12345678;
 constexpr uint64_t DelayedFileCompletion100ns = 17;
 constexpr uint64_t FileSendTimeout100ns = 5;
 constexpr uint64_t LowerBeforeTimeout100ns = 3;
+constexpr uint64_t FileContextCleanupDelay100ns = 3;
 
 std::vector<const char *> pnpImages() {
   std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
@@ -236,97 +237,104 @@ TEST(DriverKMDFPnp, FileLifecycleRespectsFilterForwardingChoice) {
     }
 }
 
-TEST(DriverKMDFPnp, AsyncCreateWaitsForDelayedLowerCompletion) {
-  for (const char *Image : pnpImages())
-    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
-      for (uint32_t Status :
-           {windows::StatusSuccess, windows::StatusUnsuccessful}) {
-        SCOPED_TRACE(Image);
-        SCOPED_TRACE(Base);
-        SCOPED_TRACE(Status);
-        auto Input = forwardedFileOptions('a');
-        Input.LoadAddress = Base;
-        Input.Requests[1].FileBusCompletion =
-            DriverBusCompletion{Status, DelayedFileCompletion100ns};
-        if (Status != windows::StatusSuccess)
-          Input.Requests.erase(
-              std::remove_if(Input.Requests.begin(), Input.Requests.end(),
-                             [](const DriverRequest &Request) {
-                               return Request.Kind ==
-                                          DriverRequestKind::Cleanup ||
-                                      Request.Kind == DriverRequestKind::Close;
-                             }),
-              Input.Requests.end());
-        auto Result = emulateDriver(Image, Input);
-        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
-            << Result->Diagnostic;
-        EXPECT_EQ(Result->Requests[1].DispatchStatus, windows::StatusPending);
-        EXPECT_EQ(Result->Requests[1].IOStatus, Status);
-        EXPECT_TRUE(Result->Requests[1].Completed);
-        EXPECT_EQ(callCount(*Result, "WdfRequestSend"), 1u);
-        EXPECT_EQ(callCount(*Result, "WdfRequestGetCompletionParams"), 1u);
-        EXPECT_EQ(callCount(*Result, "WdfRequestGetStatus"), 1u);
-        ASSERT_TRUE(Result->Requests.front().Pnp);
-        ASSERT_TRUE(Result->Requests.front().Pnp->BusCompletedAt100ns);
-        const auto &QueryRemove =
-            Result->Requests[Status == windows::StatusSuccess ? 4u : 2u];
-        ASSERT_TRUE(QueryRemove.Pnp);
-        ASSERT_TRUE(QueryRemove.Pnp->BusReceivedAt100ns);
-        EXPECT_GE(*QueryRemove.Pnp->BusReceivedAt100ns,
-                  *Result->Requests.front().Pnp->BusCompletedAt100ns +
-                      DelayedFileCompletion100ns);
-        EXPECT_TRUE(Result->UnloadCompleted);
-      }
+TEST(DriverKMDFPnp, OwnedCreateWaitsForDelayedLowerCompletion) {
+  for (char Mode : {'a', 's'})
+    for (const char *Image : pnpImages())
+      for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+        for (uint32_t Status :
+             {windows::StatusSuccess, windows::StatusUnsuccessful}) {
+          SCOPED_TRACE(Image);
+          SCOPED_TRACE(Base);
+          SCOPED_TRACE(Status);
+          auto Input = forwardedFileOptions(Mode);
+          Input.LoadAddress = Base;
+          Input.Requests[1].FileBusCompletion =
+              DriverBusCompletion{Status, DelayedFileCompletion100ns};
+          if (Status != windows::StatusSuccess)
+            Input.Requests.erase(
+                std::remove_if(Input.Requests.begin(), Input.Requests.end(),
+                               [](const DriverRequest &Request) {
+                                 return Request.Kind ==
+                                            DriverRequestKind::Cleanup ||
+                                        Request.Kind ==
+                                            DriverRequestKind::Close;
+                               }),
+                Input.Requests.end());
+          auto Result = emulateDriver(Image, Input);
+          ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+          ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+              << Result->Diagnostic;
+          EXPECT_EQ(Result->Requests[1].DispatchStatus, windows::StatusPending);
+          EXPECT_EQ(Result->Requests[1].IOStatus, Status);
+          EXPECT_TRUE(Result->Requests[1].Completed);
+          EXPECT_EQ(callCount(*Result, "WdfRequestSend"), 1u);
+          EXPECT_EQ(callCount(*Result, "WdfRequestGetCompletionParams"),
+                    Mode == 'a' ? 1u : 0u);
+          EXPECT_EQ(callCount(*Result, "WdfRequestGetStatus"), 1u);
+          ASSERT_TRUE(Result->Requests.front().Pnp);
+          ASSERT_TRUE(Result->Requests.front().Pnp->BusCompletedAt100ns);
+          const auto &QueryRemove =
+              Result->Requests[Status == windows::StatusSuccess ? 4u : 2u];
+          ASSERT_TRUE(QueryRemove.Pnp);
+          ASSERT_TRUE(QueryRemove.Pnp->BusReceivedAt100ns);
+          EXPECT_GE(*QueryRemove.Pnp->BusReceivedAt100ns,
+                    *Result->Requests.front().Pnp->BusCompletedAt100ns +
+                        DelayedFileCompletion100ns);
+          EXPECT_TRUE(Result->UnloadCompleted);
+        }
 }
 
-TEST(DriverKMDFPnp, AsyncCreateTimeoutCompetesWithLowerCompletion) {
-  for (const char *Image : pnpImages())
-    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
-      for (uint64_t Delay : {LowerBeforeTimeout100ns, FileSendTimeout100ns,
-                             DelayedFileCompletion100ns}) {
-        SCOPED_TRACE(Image);
-        SCOPED_TRACE(Base);
-        SCOPED_TRACE(Delay);
-        const bool TimedOut = Delay > FileSendTimeout100ns;
-        auto Input = forwardedFileOptions('t');
-        Input.LoadAddress = Base;
-        Input.Requests[1].FileBusCompletion =
-            DriverBusCompletion{windows::StatusSuccess, Delay};
-        if (TimedOut)
-          Input.Requests.erase(
-              std::remove_if(Input.Requests.begin(), Input.Requests.end(),
-                             [](const DriverRequest &Request) {
-                               return Request.Kind ==
-                                          DriverRequestKind::Cleanup ||
-                                      Request.Kind == DriverRequestKind::Close;
-                             }),
-              Input.Requests.end());
-        auto Result = emulateDriver(Image, Input);
-        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
-            << Result->Diagnostic;
-        EXPECT_EQ(Result->Requests[1].IOStatus,
-                  TimedOut ? windows::StatusIOTimeout : windows::StatusSuccess);
-        EXPECT_TRUE(Result->Requests[1].Completed);
-        EXPECT_EQ(callCount(*Result, "WdfRequestSend"), 1u);
-        EXPECT_EQ(callCount(*Result, "WdfRequestGetStatus"), 1u);
-        EXPECT_EQ(callCount(*Result, "WdfRequestGetCompletionParams"), 1u);
-        ASSERT_TRUE(Result->Requests.front().Pnp);
-        ASSERT_TRUE(Result->Requests.front().Pnp->BusCompletedAt100ns);
-        const auto QueryRemove = std::find_if(
-            Result->Requests.begin(), Result->Requests.end(),
-            [](const DriverRequestResult &Request) {
-              return Request.Pnp &&
-                     Request.Pnp->Minor == DevicePnpRequest::QueryRemove;
-            });
-        ASSERT_NE(QueryRemove, Result->Requests.end());
-        ASSERT_TRUE(QueryRemove->Pnp->BusReceivedAt100ns);
-        EXPECT_GE(*QueryRemove->Pnp->BusReceivedAt100ns,
-                  *Result->Requests.front().Pnp->BusCompletedAt100ns +
-                      std::min(Delay, FileSendTimeout100ns));
-        EXPECT_TRUE(Result->UnloadCompleted);
-      }
+TEST(DriverKMDFPnp, OwnedCreateTimeoutCompetesWithLowerCompletion) {
+  for (char Mode : {'t', 'q'})
+    for (const char *Image : pnpImages())
+      for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+        for (uint64_t Delay : {LowerBeforeTimeout100ns, FileSendTimeout100ns,
+                               DelayedFileCompletion100ns}) {
+          SCOPED_TRACE(Image);
+          SCOPED_TRACE(Base);
+          SCOPED_TRACE(Delay);
+          const bool TimedOut = Delay > FileSendTimeout100ns;
+          auto Input = forwardedFileOptions(Mode);
+          Input.LoadAddress = Base;
+          Input.Requests[1].FileBusCompletion =
+              DriverBusCompletion{windows::StatusSuccess, Delay};
+          if (TimedOut)
+            Input.Requests.erase(
+                std::remove_if(Input.Requests.begin(), Input.Requests.end(),
+                               [](const DriverRequest &Request) {
+                                 return Request.Kind ==
+                                            DriverRequestKind::Cleanup ||
+                                        Request.Kind ==
+                                            DriverRequestKind::Close;
+                               }),
+                Input.Requests.end());
+          auto Result = emulateDriver(Image, Input);
+          ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+          ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+              << Result->Diagnostic;
+          EXPECT_EQ(Result->Requests[1].IOStatus, TimedOut
+                                                      ? windows::StatusIOTimeout
+                                                      : windows::StatusSuccess);
+          EXPECT_TRUE(Result->Requests[1].Completed);
+          EXPECT_EQ(callCount(*Result, "WdfRequestSend"), 1u);
+          EXPECT_EQ(callCount(*Result, "WdfRequestGetStatus"), 1u);
+          EXPECT_EQ(callCount(*Result, "WdfRequestGetCompletionParams"),
+                    Mode == 't' ? 1u : 0u);
+          ASSERT_TRUE(Result->Requests.front().Pnp);
+          ASSERT_TRUE(Result->Requests.front().Pnp->BusCompletedAt100ns);
+          const auto QueryRemove = std::find_if(
+              Result->Requests.begin(), Result->Requests.end(),
+              [](const DriverRequestResult &Request) {
+                return Request.Pnp &&
+                       Request.Pnp->Minor == DevicePnpRequest::QueryRemove;
+              });
+          ASSERT_NE(QueryRemove, Result->Requests.end());
+          ASSERT_TRUE(QueryRemove->Pnp->BusReceivedAt100ns);
+          EXPECT_GE(*QueryRemove->Pnp->BusReceivedAt100ns,
+                    *Result->Requests.front().Pnp->BusCompletedAt100ns +
+                        std::min(Delay, FileSendTimeout100ns));
+          EXPECT_TRUE(Result->UnloadCompleted);
+        }
 }
 
 TEST(DriverKMDFPnp, SendAndForgetCreateAllowsDelayedLowerCompletion) {
@@ -377,21 +385,75 @@ TEST(DriverKMDFPnp, SendAndForgetCreateAllowsDelayedLowerCompletion) {
       }
 }
 
-TEST(DriverKMDFPnp, DelayedCreateRejectsImplicitAndSynchronousForwarding) {
-  for (char Mode : {'O', 's'}) {
-    SCOPED_TRACE(Mode);
-    auto Input = forwardedFileOptions(Mode);
-    Input.Requests[1].FileBusCompletion =
-        DriverBusCompletion{windows::StatusSuccess, DelayedFileCompletion100ns};
-    auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
-    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-    EXPECT_NE(Result->Diagnostic.find("configured bus response within the "
-                                      "send mode"),
-              std::string::npos);
-    ASSERT_GE(Result->Requests.size(), 2u);
-    EXPECT_FALSE(Result->Requests[1].Completed);
-  }
+TEST(DriverKMDFPnp, AutomaticFileForwardingWaitsForLowerCompletion) {
+  for (char Mode : {'O', 'o'})
+    for (const char *Image : pnpImages())
+      for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+        for (std::optional<DriverRequestKind> Failure :
+             {std::optional<DriverRequestKind>{},
+              std::optional{DriverRequestKind::Create},
+              std::optional{DriverRequestKind::Cleanup},
+              std::optional{DriverRequestKind::Close}}) {
+          SCOPED_TRACE(Mode);
+          SCOPED_TRACE(Image);
+          SCOPED_TRACE(Base);
+          auto Input = forwardedFileOptions(Mode);
+          Input.LoadAddress = Base;
+          uint64_t LowerDelay = 0;
+          if (Failure == DriverRequestKind::Create)
+            std::erase_if(Input.Requests, [](const DriverRequest &Request) {
+              return Request.Kind == DriverRequestKind::Cleanup ||
+                     Request.Kind == DriverRequestKind::Close;
+            });
+          for (auto &Request : Input.Requests)
+            if (Request.FileBusCompletion) {
+              Request.FileBusCompletion = DriverBusCompletion{
+                  Failure == Request.Kind ? windows::StatusUnsuccessful
+                                          : windows::StatusSuccess,
+                  DelayedFileCompletion100ns};
+              LowerDelay += DelayedFileCompletion100ns;
+            }
+          auto Result = emulateDriver(Image, Input);
+          ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+          ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+              << Result->Diagnostic;
+          ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+          for (size_t I = 0; I < Input.Requests.size(); ++I)
+            if (Input.Requests[I].FileBusCompletion) {
+              EXPECT_TRUE(Result->Requests[I].Completed);
+              EXPECT_EQ(Result->Requests[I].DispatchStatus,
+                        windows::StatusPending);
+              EXPECT_EQ(Result->Requests[I].IOStatus,
+                        Input.Requests[I].FileBusCompletion->Status);
+            }
+          const auto Messages = pnpMessages(*Result);
+          for (llvm::StringRef Invalid : {"KMDF PnP: file storage invalid\n",
+                                          "KMDF PnP: file order invalid\n"})
+            EXPECT_EQ(std::count(Messages.begin(), Messages.end(), Invalid), 0);
+          auto Cleanup = std::find(Messages.begin(), Messages.end(),
+                                   "KMDF PnP: file object cleanup\n");
+          auto Destroy = std::find(Messages.begin(), Messages.end(),
+                                   "KMDF PnP: file object destroy\n");
+          ASSERT_NE(Cleanup, Messages.end());
+          ASSERT_NE(Destroy, Messages.end());
+          EXPECT_LT(Cleanup, Destroy);
+          EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
+                               "KMDF PnP: file cleanup\n"),
+                    Failure == DriverRequestKind::Create ? 0 : 1);
+          const auto QueryRemove = std::find_if(
+              Result->Requests.begin(), Result->Requests.end(),
+              [](const DriverRequestResult &Request) {
+                return Request.Pnp &&
+                       Request.Pnp->Minor == DevicePnpRequest::QueryRemove;
+              });
+          ASSERT_NE(QueryRemove, Result->Requests.end());
+          ASSERT_TRUE(QueryRemove->Pnp->BusReceivedAt100ns);
+          ASSERT_TRUE(Result->Requests.front().Pnp->BusCompletedAt100ns);
+          EXPECT_GE(*QueryRemove->Pnp->BusReceivedAt100ns,
+                    *Result->Requests.front().Pnp->BusCompletedAt100ns +
+                        LowerDelay + FileContextCleanupDelay100ns);
+          EXPECT_TRUE(Result->UnloadCompleted);
+        }
 }
 
 TEST(DriverKMDFPnp, CompletionRoutineCanOverrideLowerCreateStatus) {

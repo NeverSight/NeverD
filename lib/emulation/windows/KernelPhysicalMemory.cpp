@@ -197,9 +197,16 @@ KernelPhysicalMemory::pin(uint64_t Owner, uint64_t Offset, uint64_t Length) {
   return ID;
 }
 
-llvm::Error KernelPhysicalMemory::unpin(uint64_t Pin) {
-  if (!Pins.erase(Pin))
+llvm::Error KernelPhysicalMemory::canUnpin(uint64_t Pin) const {
+  if (!Pins.contains(Pin))
     return physicalError("physical RAM unpin requires a live pin");
+  return llvm::Error::success();
+}
+
+llvm::Error KernelPhysicalMemory::unpin(uint64_t Pin) {
+  if (auto E = canUnpin(Pin))
+    return E;
+  Pins.erase(Pin);
   return llvm::Error::success();
 }
 

@@ -54,7 +54,7 @@ establish compatibility with arbitrary third-party drivers.
 | x64 software WDM driver using the listed APIs | Bounded x64 WDM initialization, buffered/direct/neither requests, work items, timers, DPCs, events and waits, with behavior reports and limits | Each additional executed API must have a defined model |
 | `METHOD_BUFFERED` IOCTL | Buffered/direct I/O with work-item or DPC completion; pending WDM requests may overlap across files or on one asynchronous file | Only the API subset below; synchronous files remain serial |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
-| Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool or one live user allocation, with shared physical page identities | IRP association, MDL chains and other user address spaces |
+| Driver-allocated MDLs | Standalone or IRP-associated descriptors over nonpaged pool or one live user allocation; guest chain links and completion-time release | Quota, hand-built/partial MDLs and arbitrary user mappings |
 | READ/WRITE | Buffered/direct/neither I/O with work-item or DPC completion; pending WDM requests may overlap across files or on one asynchronous file | Only the API subset below; synchronous files remain serial and no implicit file position is modeled |
 | WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults, driver-created user MDLs, synthetic requestor identities, bounded work-item process attachment, post-dispatch VA revocation or process exit and cancellation | No arbitrary user mappings or remapping |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, manual, sequential and parallel default queues, nondefault manual and automatic queues, and buffered/direct/neither requests with executed callbacks | No PnP devices, queue power transitions, class extensions or UMDF |
@@ -264,7 +264,9 @@ For a PnP FDO, `WdfDeviceInitSetDeviceType` stores the supplied 32-bit type in t
 
 `WdfDeviceInitSetExclusive` sets `DO_EXCLUSIVE` on the WDM device created from the initializer. A named control device admits one independent open until its file closes. On a PnP FDO, this flag alone does not make the named PDO or the whole stack exclusive; INF-specified PDO exclusivity is outside this profile.
 
-`WdfDeviceInitSetFileObjectConfig` registers `EvtDeviceFileCreate`, `EvtFileCleanup` and `EvtFileClose` and copies optional file-object context attributes before device creation. This profile supports `WdfFileObjectNotRequired`, `WdfFileObjectWdfCanUseFsContext`, `WdfFileObjectWdfCanUseFsContext2` and `WdfFileObjectWdfCannotUseFsContexts`. The selected WDM context slot holds the WDF handle until failed CREATE or CLOSE and must be initially empty. For the three classes that require file objects, `WdfFileObjectCanBeOptional` permits I/O with no matching WDM file identity; `WdfRequestGetFileObject` then returns NULL. CREATE, CLEANUP and CLOSE still require a WDM file object. `WdfFdoInitSetFilter` enables filter-default file forwarding; `WdfTrue` forwards explicitly and `WdfFalse` keeps requests local. Forwarding requires a direct FDO/PDO route and an explicit `bus_completion` for each file request. A positive `delay_100ns` is supported for default asynchronous CREATE sends with completion routines and `SEND_AND_FORGET` CREATE sends; other file forwarding modes require an immediate response. CLEANUP and CLOSE callbacks run before lower dispatch. A CREATE callback with `WdfFileObjectNotRequired` can obtain its device-owned local target through `WdfDeviceGetIoTarget` and forward the original request with `WdfRequestSend` using only `WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET`. The retained PDO consumes the explicit bus response and owns terminal completion, including when the lower response is delayed. A CREATE callback with a framework file object can use `WDF_REQUEST_SEND_OPTION_SYNCHRONOUS`, read the lower result through `WdfRequestGetStatus`, and complete the original request with that status. A default asynchronous send first formats the request with `WdfRequestFormatRequestUsingCurrentType` and registers `WdfRequestSetCompletionRoutine`. Its callback receives `WDF_REQUEST_COMPLETION_PARAMS`, can read the lower result through `WdfRequestGetCompletionParams` or `WdfRequestGetStatus`, and completes the original request with its own chosen status. For a callback-based send, a delayed PDO response leaves the request outstanding until the virtual deadline, then queues its completion callback with the final lower status. A relative `WDF_REQUEST_SEND_OPTION_TIMEOUT` on an asynchronous CREATE send competes with the configured lower delay: an earlier timeout delivers `STATUS_IO_TIMEOUT`, while the lower response wins an equal deadline. Zero disables the timeout; absolute timeouts and other send options remain unsupported. A configured file object keeps the WDM `FILE_OBJECT` and WDF handle distinct. `WdfRequestGetFileObject`, `WdfFileObjectGetDevice` and `WdfFileObjectWdmGetFileObject` expose that identity while it is live. `WdfFileObjectGetFileName` returns the WDM file-name record and `WdfFileObjectGetFlags` reads its current flags. Failed CREATE deletes the WDF file object without file cleanup or close callbacks; successful CLEANUP and CLOSE run their callbacks before context cleanup and destruction.
+`WdfDeviceInitSetFileObjectConfig` registers `EvtDeviceFileCreate`, `EvtFileCleanup` and `EvtFileClose` and copies optional file-object context attributes before device creation. This profile supports `WdfFileObjectNotRequired`, `WdfFileObjectWdfCanUseFsContext`, `WdfFileObjectWdfCanUseFsContext2` and `WdfFileObjectWdfCannotUseFsContexts`. The selected WDM context slot holds the WDF handle until failed CREATE or CLOSE and must be initially empty. For the three classes that require file objects, `WdfFileObjectCanBeOptional` permits I/O with no matching WDM file identity; `WdfRequestGetFileObject` then returns NULL. CREATE, CLEANUP and CLOSE still require a WDM file object. `WdfFdoInitSetFilter` enables filter-default file forwarding; `WdfTrue` forwards explicitly and `WdfFalse` keeps requests local. Forwarding requires a direct FDO/PDO route and an explicit `bus_completion` for each file request. A positive `delay_100ns` is supported for automatic CREATE/CLEANUP/CLOSE forwarding and for synchronous, callback-based asynchronous or `SEND_AND_FORGET` CREATE sends. CLEANUP and CLOSE callbacks run before lower dispatch. Automatic forwarding retains the WDM IRP and file through cleanup and destruction callbacks required during completion. External WDF references preserve context but do not extend the lifetime of a completed WDM file. A CREATE callback with `WdfFileObjectNotRequired` can obtain its device-owned local target through `WdfDeviceGetIoTarget` and forward the original request with `WdfRequestSend` using only `WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET`. The retained PDO consumes the explicit bus response and owns terminal completion, including when the lower response is delayed. A CREATE callback with a framework file object can use `WDF_REQUEST_SEND_OPTION_SYNCHRONOUS`, read the lower result through `WdfRequestGetStatus`, and complete the original request with that status. A delayed synchronous send suspends the actual guest caller frame until completion and then resumes with the Boolean sent result; the final NTSTATUS is available through `WdfRequestGetStatus`. A default asynchronous send first formats the request with `WdfRequestFormatRequestUsingCurrentType` and registers `WdfRequestSetCompletionRoutine`. Its callback receives `WDF_REQUEST_COMPLETION_PARAMS`, can read the lower result through `WdfRequestGetCompletionParams` or `WdfRequestGetStatus`, and completes the original request with its own chosen status. For a callback-based send, a delayed PDO response leaves the request outstanding until the virtual deadline, then queues its completion callback with the final lower status. A relative `WDF_REQUEST_SEND_OPTION_TIMEOUT` on a synchronous or callback-based asynchronous CREATE send competes with the configured lower delay: an earlier timeout delivers `STATUS_IO_TIMEOUT`, while the lower response wins an equal deadline. Zero disables the timeout; absolute timeouts and other send options remain unsupported. A configured file object keeps the WDM `FILE_OBJECT` and WDF handle distinct. `WdfRequestGetFileObject`, `WdfFileObjectGetDevice` and `WdfFileObjectWdmGetFileObject` expose that identity while it is live. `WdfFileObjectGetFileName` returns the WDM file-name record and `WdfFileObjectGetFlags` reads its current flags. Failed CREATE deletes the WDF file object without file cleanup or close callbacks; successful CLEANUP and CLOSE run their callbacks before context cleanup and destruction.
+
+WDM CREATE/CLEANUP/CLOSE forwarded to a configured PDO accept the same explicit delayed `bus_completion`. The real guest completion routine runs after the lower deadline and retains the usual pending propagation and final-status ownership rules.
 
 Optional genuine-WDK validation compiles `driver_kmdf_lifecycle.c`, `driver_kmdf_control.c` and `driver_kmdf_pnp.c` separately with the real KMDF entry library. `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE` select lifecycle images; `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` select normal/active-CFG control-device images. Missing external artifacts produce explicit skips. See [testing](testing.md) for native and C API/CLI coverage. Current execution evidence is limited to Linux hosts.
 
@@ -279,7 +281,7 @@ The initial API model deliberately has a finite contract:
 | `ExAllocatePool2` | Paged/nonpaged NX allocations, zeroed by default; uninitialized and cache-aligned flags modeled; invalid required flags return NULL, quota/executable pools and raised allocation exceptions stop |
 | `MmGetSystemRoutineAddress` | Resolves a counted guest name through the shared export inventory |
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Request-owned MDLs with cached KernelMode mappings and permissions; nonpaged pool MDLs reuse the original pool mapping through the safe helper |
-| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | Standalone nonpaged-pool descriptors or driver-created user MDLs with independent locks and shared system aliases; no IRP association, chains or quota |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | Standalone or IRP-associated nonpaged-pool/user descriptors, mutable chain links, independent locks and shared system aliases; no quota |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Explicit session registry, per-handle rights and lifetime, query buffer sizing and mutations; no host registry access |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Data allocations for pool types `0`, `1`, and `512`; positive size/tag, matching tagged frees, no address reuse |
 | `IoCreateDevice`, `IoDeleteDevice` | Device type `0x22`, characteristics `0` or `0x100`, bounded extensions, ASCII `\Device\Name` names |
@@ -445,21 +447,35 @@ scenario buffers. `MdlMappingNoWrite` removes mapping write access and
 `MdlMappingNoExecute` removes execute access. Unmapping revokes the system VA;
 remapping retains the same locked data. Completion expires the MDL and mapping.
 The public MDL fields and built physical PFN arrays used by WDM macros are
-modeled read-only; process fields, unbuilt PFN access, hand-built MDLs, user
+modeled read-only except for `MDL.Next`; process fields, unbuilt PFN access, hand-built MDLs, user
 mappings and direct access through raw UserBuffer are rejected. A zero-length direct buffer has a null MDL.
 
-`IoAllocateMdl` allocates standalone metadata for a nonempty, nonoverflowing
-buffer of at most 1 MiB; it does not probe or lock that buffer. `Irp` must be
-NULL and `SecondaryBuffer` and `ChargeQuota` must be FALSE. Arena exhaustion
-returns NULL. `MmBuildMdlForNonPagedPool` requires the entire described range
+`IoAllocateMdl` allocates metadata for a nonempty, nonoverflowing buffer of at
+most 1 MiB; it does not probe or lock that buffer. `Irp` may be NULL or a live
+modeled IRP. A primary descriptor replaces the current driver-owned chain head;
+the detached descriptors remain driver-owned. A secondary descriptor appends
+to the current chain, or becomes the head when the chain is empty. The original
+request-owned direct-I/O MDL must remain reachable and cannot be replaced or
+freed by the driver. `ChargeQuota` must be FALSE. Arena exhaustion returns NULL.
+`MmBuildMdlForNonPagedPool` requires the entire described range
 to belong to one live nonpaged pool allocation. The safe helper and ordinary
 WDM macro reuse its original address, preserving aliases and existing
 permissions even when new no-write/no-execute flags are supplied. Additional
-system mappings and unmapping are rejected. `IoFreeMdl` expires only the
-descriptor; the pool buffer has its own lifetime. Both release orders are
-supported when freed storage is not used afterward. All modeled MDL fields are
-read-only, including built PFNs; process fields, unbuilt PFN access, descriptor
-chains and manual field changes remain unsupported. Unload must release every driver-owned descriptor.
+system mappings and unmapping are rejected. `IoFreeMdl` expires only the named
+driver-owned descriptor: it neither unlinks it nor follows `Next`. A manually
+freed user MDL must first be unlocked. The pool buffer has its own lifetime;
+both release orders are supported when freed storage is not used afterward.
+
+Drivers may edit `MDL.Next` and `IRP.MdlAddress` to insert or detach modeled
+descriptors. Final IRP completion validates the current chain before mutation,
+unlocks attached user descriptors, revokes their aliases and retires all
+attached descriptors. Detached descriptors and pool backing remain driver-owned.
+Cycles, unknown or freed links, descriptors shared between live IRPs and private
+WDF descriptors spliced into WDM chains fail explicitly. Live DMA and dispatcher
+dependencies prevent premature retirement. Other modeled MDL fields and built
+PFNs remain read-only; process fields, unbuilt PFN access, hand-built or partial
+MDLs and arbitrary user mappings remain unsupported. Unload must release every
+remaining driver-owned descriptor.
 
 For a WDM `METHOD_NEITHER` IOCTL, the input pointer in
 `Type3InputBuffer` and the output pointer in `IRP.UserBuffer` refer to separate
@@ -621,7 +637,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v70`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v71`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

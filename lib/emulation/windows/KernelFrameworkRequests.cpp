@@ -583,6 +583,37 @@ llvm::Error KernelFramework::beginRequestCompletionCallback(uint64_t Token) {
   return llvm::Error::success();
 }
 
+std::optional<bool>
+KernelFramework::synchronousFileSendPending(uint64_t Handle) const {
+  auto Request = Requests.find(Handle);
+  if (Request == Requests.end() || Request->second.Completed)
+    return std::nullopt;
+  return Request->second.SynchronousSendPending;
+}
+
+llvm::Error
+KernelFramework::validateSynchronousFileCompletion(uint64_t IRP,
+                                                   uint32_t Status) const {
+  auto Request = llvm::find_if(
+      Requests, [IRP](const auto &Entry) { return Entry.second.IRP == IRP; });
+  if (Status == windows::StatusPending || Request == Requests.end() ||
+      Request->second.Completed || !Request->second.SynchronousSendPending ||
+      Request->second.LastSendStatus)
+    return requestError("lower completion lost its synchronous file send");
+  return llvm::Error::success();
+}
+
+llvm::Error KernelFramework::completeSynchronousFileSend(uint64_t IRP,
+                                                         uint32_t Status) {
+  if (auto E = validateSynchronousFileCompletion(IRP, Status))
+    return E;
+  auto Request = llvm::find_if(
+      Requests, [IRP](const auto &Entry) { return Entry.second.IRP == IRP; });
+  Request->second.LastSendStatus = Status;
+  Request->second.SynchronousSendPending = false;
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
                              llvm::ArrayRef<uint64_t> A) {
@@ -633,6 +664,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return requestError("invalid, foreign or completed framework request");
   if (R->second.Completing)
     return requestError("request completion in progress");
+  if (R->second.SynchronousSendPending)
+    return requestError("lower target owns the pending synchronous request");
   if (Name == api::WdfRequestStopAcknowledge) {
     if (A[2] > 1)
       return requestError(
@@ -956,7 +989,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
          : Synchronous ? !RequestsHost.SendFileSynchronously
                        : !RequestsHost.SendFileAsynchronously))
       return requestError("lower file-request host is unavailable");
-    if (auto E = RequestsHost.ValidateFileForward(R->second.IRP, !Synchronous))
+    if (auto E = RequestsHost.ValidateFileForward(R->second.IRP))
       return E;
     uint64_t CompletionParams = 0;
     if (Asynchronous) {
@@ -973,7 +1006,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     auto Status =
         SendAndForget ? RequestsHost.ForwardFile(R->second.IRP)
         : Synchronous
-            ? RequestsHost.SendFileSynchronously(R->second.IRP)
+            ? RequestsHost.SendFileSynchronously(R->second.IRP, SendTimeout)
             : RequestsHost.SendFileAsynchronously(R->second.IRP, SendTimeout);
     if (!Status) {
       auto E = Status.takeError();
@@ -985,8 +1018,6 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       }
       return E;
     }
-    if (*Status == windows::StatusPending && Synchronous)
-      return requestError("asynchronous lower file completion is unsupported");
     if (!SendAndForget) {
       if (Asynchronous) {
         if (*Status != windows::StatusPending) {
@@ -995,7 +1026,9 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
             return Call.takeError();
           PendingCall = std::move(*Call);
         }
-      } else
+      } else if (*Status == windows::StatusPending)
+        R->second.SynchronousSendPending = true;
+      else
         R->second.LastSendStatus = *Status;
       return Result{1};
     }

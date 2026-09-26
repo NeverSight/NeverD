@@ -110,11 +110,14 @@ public:
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> Complete;
     /// Forward a file lifecycle IRP on its retained lower-device route. The
     /// WDM host owns the original packet and its terminal completion.
-    std::function<llvm::Error(uint64_t, bool)> ValidateFileForward;
+    std::function<llvm::Error(uint64_t)> ValidateFileForward;
     std::function<llvm::Expected<uint32_t>(uint64_t)> ForwardFile;
+    /// Automatic forwarding retains the packet until file-object cleanup ends.
+    std::function<llvm::Expected<uint32_t>(uint64_t)> ForwardFileAutomatically;
     /// A synchronous lower send returns its status while the framework keeps
     /// the original CREATE request for a later WdfRequestComplete.
-    std::function<llvm::Expected<uint32_t>(uint64_t)> SendFileSynchronously;
+    std::function<llvm::Expected<uint32_t>(uint64_t, std::optional<int64_t>)>
+        SendFileSynchronously;
     /// An asynchronous send can retain the request until a later provider
     /// completion, even when the lower provider responds immediately.
     std::function<llvm::Expected<uint32_t>(uint64_t, std::optional<int64_t>)>
@@ -138,6 +141,15 @@ public:
                                                     uint32_t Status,
                                                     uint64_t ReturnValue = 0);
   llvm::Error beginRequestCompletionCallback(uint64_t Token);
+  llvm::Expected<std::optional<GuestCall>>
+  previewAutomaticFileCompletion(uint64_t IRP, uint32_t Status) const;
+  llvm::Expected<std::optional<GuestCall>>
+  completeAutomaticFileForward(uint64_t IRP, uint32_t Status);
+  bool isAutomaticFileContinuation(uint64_t Token) const;
+  std::optional<bool> synchronousFileSendPending(uint64_t Request) const;
+  llvm::Error validateSynchronousFileCompletion(uint64_t IRP,
+                                                uint32_t Status) const;
+  llvm::Error completeSynchronousFileSend(uint64_t IRP, uint32_t Status);
   llvm::Expected<RequestDispatch> continueCallerContext(uint64_t IRP);
   /// The WDM host first records cancellation, then asks for the one guest
   /// notification owned by this request. Ordinary WDM requests return nullopt.
@@ -348,6 +360,7 @@ private:
     bool CompletionCallbackPending = false;
     bool CompletionCallbackEntered = false;
     std::optional<uint32_t> LastSendStatus;
+    bool SynchronousSendPending = false;
   };
   std::map<uint64_t, Request> Requests;
   struct RequestCompletionCallback {
@@ -417,13 +430,22 @@ private:
     uint64_t Object;
     uint64_t PC = 0;
     uint64_t File = 0;
+    uint32_t Status = 0;
   };
   struct Continuation {
     std::vector<Step> Steps;
     size_t Index = 0;
     /// API result restored after a nested guest callback returns.
     uint64_t ReturnValue = 0;
+    /// File teardown owns no queue request or power transition. Nested guest
+    /// APIs retain their own continuations for queue and power notifications.
+    bool AutomaticFile = false;
   };
+  struct AutomaticFileForward {
+    uint64_t Token = 0, File = 0;
+    uint32_t Major = 0;
+  };
+  std::map<uint64_t, AutomaticFileForward> AutomaticFileForwards;
   uint64_t NextContinuation = 1;
   std::map<uint64_t, Continuation> Continuations;
   std::map<uint64_t, uint64_t> CancelCallbacks;
@@ -505,6 +527,16 @@ private:
   callRequestAccessors(llvm::StringRef Name, Binding &B,
                        llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<std::string> readControlString(uint64_t Address);
+  struct DeletionPlan {
+    std::vector<Step> Steps;
+    std::vector<uint64_t> Objects;
+  };
+  llvm::Expected<DeletionPlan> prepareDeletion(uint64_t Handle,
+                                               uint64_t UnlinkedFile = 0) const;
+  void commitDeletion(const DeletionPlan &Plan);
+  llvm::Expected<DeletionPlan>
+  prepareAutomaticFileCompletion(uint64_t IRP, uint32_t Status) const;
+  llvm::Error finishAutomaticFileForward(uint64_t IRP, uint32_t Status);
   llvm::Error planDelete(uint64_t Handle, std::vector<Step> &Steps);
   llvm::Expected<std::optional<uint64_t>> advance(uint64_t Token);
   llvm::Expected<uint64_t> start(std::vector<Step> Steps);

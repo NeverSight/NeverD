@@ -17,6 +17,7 @@
 /// it on a filter, p sends CREATE without a file object, s synchronously sends
 /// CREATE with a file object, a uses an asynchronous completion callback,
 /// b completes the original request with an independent status,
+/// t/q add relative timeouts to asynchronous/synchronous sends,
 /// u uses unsupported send flags, and F fails AddDevice.
 ///
 //===----------------------------------------------------------------------===//
@@ -71,6 +72,8 @@ static ULONG DeliveryCount;
 static PIO_WORKITEM PendingWorkItem;
 static ULONG FilePhase;
 static WDFIOTARGET FileTarget;
+static PFILE_OBJECT ClosingFile;
+static const LONGLONG FileContextCleanupDelay100ns = -3;
 
 _Static_assert(sizeof(WDF_REQUEST_COMPLETION_PARAMS) == 72,
                "KMDF 1.33 request completion layout");
@@ -111,15 +114,39 @@ static VOID FilterFileClose(WDFFILEOBJECT File) {
   if ((ServiceMode != L'p' && File == NULL) || FilePhase != 1)
     DbgPrint("KMDF PnP: file order invalid\n");
   FilePhase = 2;
+  if (ServiceMode == L'O' || ServiceMode == L'o')
+    ClosingFile = WdfFileObjectWdmGetFileObject(File);
   DbgPrint("KMDF PnP: file close\n");
+}
+
+static VOID FilterFileObjectCleanup(WDFOBJECT Object) {
+  LARGE_INTEGER Delay;
+  UNREFERENCED_PARAMETER(Object);
+  Delay.QuadPart = FileContextCleanupDelay100ns;
+  if (!NT_SUCCESS(KeDelayExecutionThread(KernelMode, FALSE, &Delay)) ||
+      (ClosingFile != NULL && ClosingFile->Type != IO_TYPE_FILE))
+    DbgPrint("KMDF PnP: file storage invalid\n");
+  DbgPrint("KMDF PnP: file object cleanup\n");
+}
+
+static VOID FilterFileObjectDestroy(WDFOBJECT Object) {
+  UNREFERENCED_PARAMETER(Object);
+  if (ClosingFile != NULL && ClosingFile->Type != IO_TYPE_FILE)
+    DbgPrint("KMDF PnP: file storage invalid\n");
+  ClosingFile = NULL;
+  DbgPrint("KMDF PnP: file object destroy\n");
+}
+
+static BOOLEAN UsesSynchronousFileSend(VOID) {
+  return ServiceMode == L's' || ServiceMode == L'q';
 }
 
 static VOID FilterFileCreate(WDFDEVICE Device, WDFREQUEST Request,
                              WDFFILEOBJECT File) {
   WDF_REQUEST_SEND_OPTIONS Options;
   WDFIOTARGET Target = WdfDeviceGetIoTarget(Device);
-  if ((ServiceMode == L's' || ServiceMode == L'a' || ServiceMode == L'b' ||
-               ServiceMode == L't'
+  if ((UsesSynchronousFileSend() || ServiceMode == L'a' ||
+               ServiceMode == L'b' || ServiceMode == L't'
            ? File == NULL
            : File != NULL) ||
       Target == NULL || Target != WdfDeviceGetIoTarget(Device)) {
@@ -141,15 +168,17 @@ static VOID FilterFileCreate(WDFDEVICE Device, WDFREQUEST Request,
   }
   WDF_REQUEST_SEND_OPTIONS_INIT(
       &Options,
-      ServiceMode == L'u'   ? WDF_REQUEST_SEND_OPTION_SYNCHRONOUS |
-                                  WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET
-      : ServiceMode == L's' ? WDF_REQUEST_SEND_OPTION_SYNCHRONOUS
-                            : WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET);
+      ServiceMode == L'u'         ? WDF_REQUEST_SEND_OPTION_SYNCHRONOUS |
+                                        WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET
+      : UsesSynchronousFileSend() ? WDF_REQUEST_SEND_OPTION_SYNCHRONOUS
+                                  : WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET);
+  if (ServiceMode == L'q')
+    WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&Options, FileSendTimeout100ns);
   if (!WdfRequestSend(Request, Target, &Options)) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
-  if (ServiceMode == L's')
+  if (UsesSynchronousFileSend())
     WdfRequestComplete(Request, WdfRequestGetStatus(Request));
   DbgPrint("KMDF PnP: file create forwarded\n");
 }
@@ -395,15 +424,15 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (ServiceMode == L'X')
     WdfDeviceInitSetExclusive(Init, TRUE);
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
-      ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
+      ServiceMode == L'p' || UsesSynchronousFileSend() || ServiceMode == L'a' ||
       ServiceMode == L'b' || ServiceMode == L't' || ServiceMode == L'u') {
     if (ServiceMode != L'o')
       WdfFdoInitSetFilter(Init);
     WDF_FILEOBJECT_CONFIG_INIT(
         &FileConfig,
-        ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
-                ServiceMode == L'b' || ServiceMode == L't' ||
-                ServiceMode == L'u'
+        ServiceMode == L'p' || UsesSynchronousFileSend() ||
+                ServiceMode == L'a' || ServiceMode == L'b' ||
+                ServiceMode == L't' || ServiceMode == L'u'
             ? FilterFileCreate
             : NULL,
         FilterFileClose, FilterFileCleanup);
@@ -413,8 +442,16 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
       FileConfig.AutoForwardCleanupClose = WdfTrue;
     if (ServiceMode == L'n')
       FileConfig.AutoForwardCleanupClose = WdfFalse;
-    WdfDeviceInitSetFileObjectConfig(Init, &FileConfig,
-                                     WDF_NO_OBJECT_ATTRIBUTES);
+    if (ServiceMode == L'O' || ServiceMode == L'o') {
+      WDF_OBJECT_ATTRIBUTES FileAttributes;
+      WDF_OBJECT_ATTRIBUTES_INIT(&FileAttributes);
+      FileAttributes.EvtCleanupCallback = FilterFileObjectCleanup;
+      FileAttributes.EvtDestroyCallback = FilterFileObjectDestroy;
+      WdfDeviceInitSetFileObjectConfig(Init, &FileConfig, &FileAttributes);
+    } else {
+      WdfDeviceInitSetFileObjectConfig(Init, &FileConfig,
+                                       WDF_NO_OBJECT_ATTRIBUTES);
+    }
   } else {
     WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
   }
@@ -457,7 +494,7 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     return STATUS_UNSUCCESSFUL;
   }
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
-      ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
+      ServiceMode == L'p' || UsesSynchronousFileSend() || ServiceMode == L'a' ||
       ServiceMode == L'b' || ServiceMode == L't' || ServiceMode == L'u') {
     DbgPrint("KMDF PnP: filter ready\n");
     return STATUS_SUCCESS;

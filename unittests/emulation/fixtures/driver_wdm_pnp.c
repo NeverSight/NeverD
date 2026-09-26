@@ -1,4 +1,5 @@
-//===- driver_wdm_pnp.c - Genuine WDK AddDevice and PnP fixture ------------===//
+//===- driver_wdm_pnp.c - Genuine WDK AddDevice and PnP fixture
+//------------===//
 //
 // NeverD Decompiler
 //
@@ -9,8 +10,9 @@
 /// headers and libraries. START and queries wait for lower completion with
 /// MORE_PROCESSING_REQUIRED; REMOVE forwards then detaches and deletes its FDO.
 /// A fails AddDevice after cleanup, L leaks its FDO, F fails START, T rejects
-/// its first QUERY_STOP, M fails only the first AddDevice, and C owns an unrelated
-/// control device. Every FDO has independent software state. No hardware is used.
+/// its first QUERY_STOP, M fails only the first AddDevice, and C owns an
+/// unrelated control device. D forwards file lifecycle requests with completion
+/// callbacks. Every FDO has independent software state. No hardware is used.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -25,8 +27,8 @@ _Static_assert(NeverDPowerSet == IRP_MN_SET_POWER &&
                    NeverDPowerQuery == IRP_MN_QUERY_POWER,
                "public power request codes match the WDK");
 
-#define ABI_OFFSET(Type, Member, Offset)                                      \
-  _Static_assert(__builtin_offsetof(Type, Member) == Offset,                  \
+#define ABI_OFFSET(Type, Member, Offset)                                       \
+  _Static_assert(__builtin_offsetof(Type, Member) == Offset,                   \
                  #Type "." #Member " x64 ABI")
 
 _Static_assert(sizeof(void *) == 8 && sizeof(IRP) == 0xd0 &&
@@ -35,13 +37,14 @@ _Static_assert(sizeof(void *) == 8 && sizeof(IRP) == 0xd0 &&
 ABI_OFFSET(DRIVER_EXTENSION, AddDevice, 8);
 ABI_OFFSET(IO_STACK_LOCATION, MinorFunction, 1);
 ABI_OFFSET(IO_STACK_LOCATION, Parameters.StartDevice.AllocatedResources, 8);
-ABI_OFFSET(IO_STACK_LOCATION, Parameters.StartDevice.AllocatedResourcesTranslated,
-           16);
+ABI_OFFSET(IO_STACK_LOCATION,
+           Parameters.StartDevice.AllocatedResourcesTranslated, 16);
 ABI_OFFSET(IRP, RequestorMode, 0x40);
 ABI_OFFSET(IRP, Tail.Overlay.OriginalFileObject, 0xc0);
 _Static_assert(IRP_MJ_PNP == 0x1b && IRP_MN_START_DEVICE == 0 &&
                    IRP_MN_QUERY_REMOVE_DEVICE == 1 &&
-                   IRP_MN_REMOVE_DEVICE == 2 && IRP_MN_CANCEL_REMOVE_DEVICE == 3 &&
+                   IRP_MN_REMOVE_DEVICE == 2 &&
+                   IRP_MN_CANCEL_REMOVE_DEVICE == 3 &&
                    IRP_MN_STOP_DEVICE == 4 && IRP_MN_QUERY_STOP_DEVICE == 5 &&
                    IRP_MN_CANCEL_STOP_DEVICE == 6 &&
                    IRP_MN_SURPRISE_REMOVAL == 0x17,
@@ -76,7 +79,8 @@ static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
 
 static NTSTATUS Completion(PDEVICE_OBJECT Device, PIRP Irp, PVOID Context) {
   PNP_EXTENSION *Extension = Context;
-  if (!Check(Device == Extension->Self && Extension == Device->DeviceExtension &&
+  if (!Check(Device == Extension->Self &&
+                 Extension == Device->DeviceExtension &&
                  KeGetCurrentIrql() == PASSIVE_LEVEL &&
                  IoGetCurrentIrpStackLocation(Irp)->DeviceObject == Device &&
                  Irp->IoStatus.Information == 0,
@@ -137,8 +141,8 @@ static NTSTATUS DispatchPnp(PDEVICE_OBJECT Device, PIRP Irp) {
     return IoCallDriver(Extension->Lower, Irp);
   }
   if (Minor != IRP_MN_START_DEVICE && Minor != IRP_MN_QUERY_REMOVE_DEVICE &&
-      Minor != IRP_MN_CANCEL_REMOVE_DEVICE && Minor != IRP_MN_QUERY_STOP_DEVICE &&
-      Minor != IRP_MN_CANCEL_STOP_DEVICE) {
+      Minor != IRP_MN_CANCEL_REMOVE_DEVICE &&
+      Minor != IRP_MN_QUERY_STOP_DEVICE && Minor != IRP_MN_CANCEL_STOP_DEVICE) {
     Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -206,6 +210,15 @@ static NTSTATUS DispatchPnp(PDEVICE_OBJECT Device, PIRP Irp) {
   return Status;
 }
 
+static NTSTATUS CompleteFile(PDEVICE_OBJECT Device, PIRP Irp, PVOID Context) {
+  UNREFERENCED_PARAMETER(Context);
+  Check(Device != NULL && Irp->IoStatus.Information == 0, 10);
+  if (Irp->PendingReturned)
+    IoMarkIrpPending(Irp);
+  DbgPrint("WDM PnP: forwarded file completed\n");
+  return STATUS_CONTINUE_COMPLETION;
+}
+
 static NTSTATUS DispatchFile(PDEVICE_OBJECT Device, PIRP Irp) {
   PNP_EXTENSION *Extension = Device->DeviceExtension;
   PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
@@ -251,6 +264,12 @@ static NTSTATUS DispatchFile(PDEVICE_OBJECT Device, PIRP Irp) {
   DbgPrint("WDM PnP: file major=%u\n", (unsigned)Stack->MajorFunction);
   DbgPrint("WDM PnP: unit=%lu file status=0x%08lx\n", Extension->Unit,
            (ULONG)Status);
+  if (Mode == 'D' && NT_SUCCESS(Status) &&
+      (Stack->MajorFunction == IRP_MJ_CREATE || Releasing)) {
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp, CompleteFile, NULL, TRUE, TRUE, TRUE);
+    return IoCallDriver(Extension->Lower, Irp);
+  }
   Irp->IoStatus.Status = Status;
   Irp->IoStatus.Information = Information;
   IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -266,9 +285,9 @@ static NTSTATUS AddDevice(PDRIVER_OBJECT Driver, PDEVICE_OBJECT PDO) {
                  (PDO->Flags & DO_BUS_ENUMERATED_DEVICE) != 0,
              7))
     return STATUS_UNSUCCESSFUL;
-  Status = IoCreateDevice(Driver, sizeof(PNP_EXTENSION), NULL,
-                          FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, FALSE,
-                          &Fdo);
+  Status =
+      IoCreateDevice(Driver, sizeof(PNP_EXTENSION), NULL, FILE_DEVICE_UNKNOWN,
+                     FILE_DEVICE_SECURE_OPEN, FALSE, &Fdo);
   if (!NT_SUCCESS(Status))
     return Status;
   PNP_EXTENSION *Extension = Fdo->DeviceExtension;
@@ -315,7 +334,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT Driver, PUNICODE_STRING RegistryPath) {
     const WCHAR Last =
         RegistryPath->Buffer[RegistryPath->Length / sizeof(WCHAR) - 1];
     if (Last == 'A' || Last == 'L' || Last == 'F' || Last == 'T' ||
-        Last == 'M' || Last == 'C')
+        Last == 'M' || Last == 'C' || Last == 'D')
       Mode = (UCHAR)Last;
   }
   Driver->DriverExtension->AddDevice = AddDevice;
@@ -331,10 +350,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT Driver, PUNICODE_STRING RegistryPath) {
     static WCHAR ControlName[] = L"\\Device\\NeverDPnpControl";
     UNICODE_STRING Name = {sizeof(ControlName) - sizeof(WCHAR),
                            sizeof(ControlName), ControlName};
-    NTSTATUS Status = IoCreateDevice(Driver, sizeof(PNP_EXTENSION), &Name,
-                                     FILE_DEVICE_UNKNOWN,
-                                     FILE_DEVICE_SECURE_OPEN, FALSE,
-                                     &ControlDevice);
+    NTSTATUS Status = IoCreateDevice(
+        Driver, sizeof(PNP_EXTENSION), &Name, FILE_DEVICE_UNKNOWN,
+        FILE_DEVICE_SECURE_OPEN, FALSE, &ControlDevice);
     if (!NT_SUCCESS(Status))
       return Status;
     PNP_EXTENSION *Extension = ControlDevice->DeviceExtension;

@@ -954,8 +954,9 @@ KernelFramework::createDriver(Binding &B, llvm::ArrayRef<uint64_t> A) {
   return 0;
 }
 
-llvm::Error KernelFramework::planDelete(uint64_t Handle,
-                                        std::vector<Step> &Steps) {
+llvm::Expected<KernelFramework::DeletionPlan>
+KernelFramework::prepareDeletion(uint64_t Handle, uint64_t UnlinkedFile) const {
+  DeletionPlan Plan;
   // Cancellation/draining of live queue requests needs an explicit schedule.
   // Detect that boundary before changing any ancestor or invoking cleanup.
   auto Preflight = [&](auto &&Self, uint64_t Current) -> llvm::Error {
@@ -977,7 +978,7 @@ llvm::Error KernelFramework::planDelete(uint64_t Handle,
       auto File = FileObjects.find(Current);
       if (File == FileObjects.end())
         return invalid("framework file object lost its WDM identity");
-      if (FileHandles.contains(File->second.Wdm))
+      if (Current != UnlinkedFile && FileHandles.contains(File->second.Wdm))
         return invalid("deletion with an open file requires CLOSE");
     }
     if (I->second.Kind == ObjectKind::IoTarget && I->second.References)
@@ -1005,25 +1006,40 @@ llvm::Error KernelFramework::planDelete(uint64_t Handle,
     auto I = Objects.find(Handle);
     if (I == Objects.end())
       return invalid("delete requires a live framework object");
-    auto &O = I->second;
+    const auto &O = I->second;
     if (O.Deleting)
       return invalid("object deletion is already in progress");
-    O.Deleting = true;
+    Plan.Objects.push_back(Handle);
     for (uint64_t Child : O.Children)
       if (Objects.count(Child) && !Objects.at(Child).Deleting)
         if (auto E = Self(Self, Child))
           return E;
     for (uint64_t Type : O.ContextOrder)
       if (O.Contexts.at(Type).Cleanup)
-        Steps.push_back(
+        Plan.Steps.push_back(
             {StepKind::Callback, Handle, O.Contexts.at(Type).Cleanup});
-    Steps.push_back({StepKind::Cleaned, Handle});
+    Plan.Steps.push_back({StepKind::Cleaned, Handle});
     Destruction.push_back({StepKind::TryDestroy, Handle});
     return llvm::Error::success();
   };
   if (auto E = Visit(Visit, Handle))
     return E;
-  Steps.insert(Steps.end(), Destruction.begin(), Destruction.end());
+  Plan.Steps.insert(Plan.Steps.end(), Destruction.begin(), Destruction.end());
+  return Plan;
+}
+
+void KernelFramework::commitDeletion(const DeletionPlan &Plan) {
+  for (uint64_t Handle : Plan.Objects)
+    Objects.at(Handle).Deleting = true;
+}
+
+llvm::Error KernelFramework::planDelete(uint64_t Handle,
+                                        std::vector<Step> &Steps) {
+  auto Plan = prepareDeletion(Handle);
+  if (!Plan)
+    return Plan.takeError();
+  commitDeletion(*Plan);
+  Steps.insert(Steps.end(), Plan->Steps.begin(), Plan->Steps.end());
   return llvm::Error::success();
 }
 
@@ -1072,7 +1088,7 @@ KernelFramework::advance(uint64_t Token) {
     }
     return false;
   };
-  if (NotifyQueueState())
+  if (!C.AutomaticFile && NotifyQueueState())
     return std::optional<uint64_t>{};
   while (C.Index < C.Steps.size()) {
     const Step S = C.Steps[C.Index++];
@@ -1245,30 +1261,30 @@ KernelFramework::advance(uint64_t Token) {
     if (S.Kind == StepKind::CompleteFileIRP) {
       if (!RequestsHost.Complete)
         return invalid("file request completion host is unavailable");
-      if (auto E = RequestsHost.Complete(S.Object, windows::StatusSuccess, 0))
+      if (auto E = RequestsHost.Complete(S.Object, S.Status, 0))
         return E;
       continue;
     }
     if (S.Kind == StepKind::ForwardFileIRP) {
-      if (!RequestsHost.ForwardFile || !RequestsHost.View)
+      if (!RequestsHost.ForwardFileAutomatically || !RequestsHost.View)
         return invalid("lower file-request host is unavailable");
       auto View = RequestsHost.View(S.Object);
       if (!View)
         return View.takeError();
-      auto Status = RequestsHost.ForwardFile(S.Object);
-      if (!Status)
+      if (!AutomaticFileForwards
+               .emplace(S.Object,
+                        AutomaticFileForward{Token, S.File, View->Major})
+               .second)
+        return invalid("automatic file request is already forwarded");
+      auto Status = RequestsHost.ForwardFileAutomatically(S.Object);
+      if (!Status) {
+        AutomaticFileForwards.erase(S.Object);
         return Status.takeError();
-      if (*Status == windows::StatusPending)
-        return invalid("asynchronous lower file completion is unsupported");
-      if (View->Major == RequestMajorCreate &&
-          (*Status & profile::NTStatusFailureMask) && S.File) {
-        if (auto E = unlinkFileObject(S.File))
-          return E;
-        std::vector<Step> Delete;
-        if (auto E = planDelete(S.File, Delete))
-          return E;
-        C.Steps.insert(C.Steps.begin() + C.Index, Delete.begin(), Delete.end());
       }
+      if (*Status == windows::StatusPending)
+        return std::optional<uint64_t>{C.ReturnValue};
+      if (auto E = finishAutomaticFileForward(S.Object, *Status))
+        return E;
       continue;
     }
     if (S.Kind == StepKind::CancelReturned) {
@@ -1356,16 +1372,22 @@ KernelFramework::advance(uint64_t Token) {
     Objects.erase(OI);
   }
   const uint64_t ReturnValue = C.ReturnValue;
+  const bool AutomaticFile = C.AutomaticFile;
   Continuations.erase(I);
-  if (auto E = resumePausedPnp())
-    return E;
+  if (!AutomaticFile)
+    if (auto E = resumePausedPnp())
+      return E;
   return PendingCall ? std::optional<uint64_t>{}
                      : std::optional<uint64_t>{ReturnValue};
 }
 
 llvm::Expected<uint64_t> KernelFramework::start(std::vector<Step> Steps) {
   const uint64_t Token = NextContinuation++;
-  Continuations.emplace(Token, Continuation{std::move(Steps)});
+  Continuation Sequence{std::move(Steps)};
+  Sequence.AutomaticFile = std::any_of(
+      Sequence.Steps.begin(), Sequence.Steps.end(),
+      [](const Step &S) { return S.Kind == StepKind::ForwardFileIRP; });
+  Continuations.emplace(Token, std::move(Sequence));
   auto Result = advance(Token);
   if (!Result)
     return Result.takeError();
@@ -1387,6 +1409,7 @@ std::optional<KernelFramework::GuestCall> KernelFramework::takeGuestCall() {
 
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
+  const bool AutomaticFile = isAutomaticFileContinuation(Token);
   auto Transition = PnpTransitions.find(Token);
   if (Transition != PnpTransitions.end()) {
     auto Device = Devices.find(Transition->second.Device);
@@ -1474,7 +1497,7 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
       PnpTransitions.erase(Complete);
     }
   }
-  if (*Next) {
+  if (*Next && !AutomaticFile) {
     if (auto E = flushReadyNotifications())
       return std::move(E);
     if (PendingCall)

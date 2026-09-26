@@ -73,9 +73,13 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// zero, accept integers or 0x strings, and the entire transfer must fit
 /// nonnegative signed 64-bit file offsets. Forwarded CREATE/CLEANUP/CLOSE
 /// requests require an explicit bus_completion with a final status. A positive
-/// delay_100ns is accepted for a default asynchronous CREATE send with a
-/// completion routine or a SEND_AND_FORGET CREATE send; other file sends
-/// require an immediate response.
+/// delay_100ns is accepted for WDM file forwarding, automatic KMDF forwarding,
+/// and synchronous, callback-based asynchronous, or SEND_AND_FORGET CREATE
+/// sends. Synchronous sends suspend the guest caller until the lower response
+/// or relative timeout. Automatic KMDF forwarding retains the WDM IRP/file
+/// through cleanup and destruction callbacks required during completion.
+/// External WDF references preserve context but do not extend the lifetime
+/// of a completed WDM file.
 /// Configured pnp_devices require a
 /// unique case-sensitive ASCII id, bus="resource_free" or "register_bank",
 /// initial_device_power=

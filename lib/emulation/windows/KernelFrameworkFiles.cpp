@@ -13,6 +13,8 @@
 #include "KernelFramework.h"
 #include "WindowsKernelLayout.h"
 
+#include "neverd/emulation/DriverProfile.h"
+
 #include <optional>
 
 namespace neverd::emulation {
@@ -190,6 +192,114 @@ llvm::Error KernelFramework::unlinkFileObject(uint64_t File) {
   return llvm::Error::success();
 }
 
+bool KernelFramework::isAutomaticFileContinuation(uint64_t Token) const {
+  auto Sequence = Continuations.find(Token);
+  return Sequence != Continuations.end() && Sequence->second.AutomaticFile;
+}
+
+llvm::Expected<KernelFramework::DeletionPlan>
+KernelFramework::prepareAutomaticFileCompletion(uint64_t IRP,
+                                                uint32_t Status) const {
+  auto Forward = AutomaticFileForwards.find(IRP);
+  if (Forward == AutomaticFileForwards.end() ||
+      !isAutomaticFileContinuation(Forward->second.Token) ||
+      Status == windows::StatusPending)
+    return fileError("lower completion lost its automatic file continuation");
+  const auto &Sequence = Continuations.at(Forward->second.Token);
+  if (Sequence.Index != Sequence.Steps.size())
+    return fileError("automatic file continuation has an unexpected tail");
+  if (!RequestsHost.ValidateCompletion)
+    return fileError("file completion validation host is unavailable");
+  if (auto E = RequestsHost.ValidateCompletion(IRP, Status, 0))
+    return E;
+  const auto &State = Forward->second;
+  const bool Delete = State.File && (State.Major == RequestMajorClose ||
+                                     (State.Major == RequestMajorCreate &&
+                                      (Status & profile::NTStatusFailureMask)));
+  DeletionPlan Plan;
+  if (Delete) {
+    auto File = FileObjects.find(State.File);
+    if (File == FileObjects.end())
+      return fileError("automatic completion lost its framework file");
+    auto Handle = requestFileObject(File->second.Device, File->second.Wdm);
+    if (!Handle)
+      return Handle.takeError();
+    if (*Handle != State.File)
+      return fileError("automatic completion changed its framework file");
+    if (auto Offset =
+            fileContextOffset(Devices.at(File->second.Device).Files.Class))
+      if (auto E = ValidateAccess(File->second.Wdm + *Offset, sizeof(uint64_t),
+                                  true))
+        return E;
+    auto Deleted = prepareDeletion(State.File, State.File);
+    if (!Deleted)
+      return Deleted.takeError();
+    Plan = std::move(*Deleted);
+  }
+  Plan.Steps.push_back({StepKind::CompleteFileIRP, IRP, 0, 0, Status});
+  return Plan;
+}
+
+llvm::Expected<std::optional<KernelFramework::GuestCall>>
+KernelFramework::previewAutomaticFileCompletion(uint64_t IRP,
+                                                uint32_t Status) const {
+  auto Plan = prepareAutomaticFileCompletion(IRP, Status);
+  if (!Plan)
+    return Plan.takeError();
+  const uint64_t Token = AutomaticFileForwards.at(IRP).Token;
+  for (const auto &Step : Plan->Steps) {
+    if (Step.Kind == StepKind::Callback)
+      return std::optional<GuestCall>{{Token, Step.PC, {Step.Object}}};
+    if (Step.Kind != StepKind::TryDestroy)
+      continue;
+    const auto &Object = Objects.at(Step.Object);
+    if (Object.References || Object.InternalReferences)
+      continue;
+    for (uint64_t Type : Object.ContextOrder)
+      if (Object.Contexts.at(Type).Destroy)
+        return std::optional<GuestCall>{
+            {Token, Object.Contexts.at(Type).Destroy, {Step.Object}}};
+  }
+  return std::optional<GuestCall>{};
+}
+
+llvm::Error KernelFramework::finishAutomaticFileForward(uint64_t IRP,
+                                                        uint32_t Status) {
+  auto Plan = prepareAutomaticFileCompletion(IRP, Status);
+  if (!Plan)
+    return Plan.takeError();
+  const auto State = AutomaticFileForwards.at(IRP);
+  if (!Plan->Objects.empty())
+    if (auto E = unlinkFileObject(State.File))
+      return E;
+  commitDeletion(*Plan);
+  auto &Sequence = Continuations.at(State.Token);
+  Sequence.Steps.insert(Sequence.Steps.end(), Plan->Steps.begin(),
+                        Plan->Steps.end());
+  AutomaticFileForwards.erase(IRP);
+  return llvm::Error::success();
+}
+
+llvm::Expected<std::optional<KernelFramework::GuestCall>>
+KernelFramework::completeAutomaticFileForward(uint64_t IRP, uint32_t Status) {
+  auto Expected = previewAutomaticFileCompletion(IRP, Status);
+  if (!Expected)
+    return Expected.takeError();
+  const uint64_t Token = AutomaticFileForwards.at(IRP).Token;
+  if (auto E = finishAutomaticFileForward(IRP, Status))
+    return E;
+  auto Continued = advance(Token);
+  if (!Continued)
+    return Continued.takeError();
+  auto Call = takeGuestCall();
+  if (bool(Call) != bool(*Expected) ||
+      (Call &&
+       (Call->Token != (**Expected).Token || Call->PC != (**Expected).PC ||
+        Call->Arguments != (**Expected).Arguments)))
+    return fileError("automatic completion changed after preflight");
+  return Call;
+}
+
 llvm::Expected<std::optional<KernelFramework::RequestDispatch>>
 KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
                                   const RequestView &View) {
@@ -207,9 +317,10 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
   if (!View.File)
     return fileError("file lifecycle request has no WDM FILE_OBJECT");
   if (Forward && !(View.Major == RequestMajorCreate && Config.Create)) {
-    if (!RequestsHost.ValidateFileForward || !RequestsHost.ForwardFile)
+    if (!RequestsHost.ValidateFileForward ||
+        !RequestsHost.ForwardFileAutomatically)
       return fileError("lower file-request host is unavailable");
-    if (auto E = RequestsHost.ValidateFileForward(IRP, false))
+    if (auto E = RequestsHost.ValidateFileForward(IRP))
       return E;
   }
   if (View.Major == RequestMajorCreate) {
@@ -286,8 +397,6 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
       Steps.push_back({StepKind::DeleteFileObject, *File});
     Steps.push_back({StepKind::CompleteFileIRP, IRP});
   }
-  if (Forward && View.Major == RequestMajorClose && *File)
-    Steps.push_back({StepKind::DeleteFileObject, *File});
   if (auto E = RequestsHost.MarkPending(IRP))
     return E;
   auto Started = start(std::move(Steps));

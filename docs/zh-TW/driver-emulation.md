@@ -41,7 +41,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 使用下列 API 的 x64 軟體 WDM 驅動程式 | 有界 x64 WDM 初始化、循序緩衝／直接／neither 請求、工作項目、計時器、DPC、事件與等待，以及行為報告和限制 | 每個額外執行到的 API 都必須有明確的模型 |
 | `METHOD_BUFFERED` IOCTL | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交 或 一般 WDM 請求取消 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 由請求擁有的 MDL、系統對映及唯讀共用模型 PFN | 使用者對映及其他 DMA 介面 |
-| 驅動程式自行配置的 MDL | 描述非分頁集區或單一使用者配置的獨立描述元，共用實體頁面身分 | 不支援 IRP 關聯、MDL 鏈或任意程序 |
+| 驅動程式自行配置的 MDL | 獨立或 IRP 關聯的非分頁集區／單一使用者配置描述元；來賓鏈指標與完成時釋放 | 不支援配額、手工／部分 MDL 或任意使用者映射 |
 | READ/WRITE | 循序緩衝／直接／neither I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交、一般 WDM 請求取消或隱含檔案位置 |
 | WDM `METHOD_NEITHER` | 獨立使用者緩衝區、存取探測、MDL 鎖頁、合成要求行程身分、派送後 VA 撤銷或行程結束及有限取消 | 不支援一般行程附加、任意使用者對映或重新對映 |
 | KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、手動、循序或有限或無限並行預設及非預設佇列，以及實際執行回呼的緩衝／直接／neither 請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
@@ -205,7 +205,11 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 
 `WdfDeviceInitSetExclusive` 會在初始化器建立的 WDM 裝置上設定 `DO_EXCLUSIVE`。具名控制裝置在第一個檔案關閉前拒絕第二次獨立開啟。PnP FDO 上的此旗標本身不會讓具名 PDO 或整個裝置堆疊獨占；此設定尚未模擬 INF 指定的 PDO 獨占屬性。
 
-`WdfDeviceInitSetFileObjectConfig` 在建立裝置前註冊 `EvtDeviceFileCreate`、`EvtFileCleanup`、`EvtFileClose`，並複製可選的檔案物件內容屬性。目前支援 `WdfFileObjectNotRequired`、`WdfFileObjectWdfCanUseFsContext`、`WdfFileObjectWdfCanUseFsContext2` 與 `WdfFileObjectWdfCannotUseFsContexts`。選定的 WDM 內容槽在 CREATE 失敗或 CLOSE 前保存 WDF 控制代碼，建立前必須為空。設定 `WdfFileObjectCanBeOptional` 後，若 I/O 要求沒有相符的 WDM 檔案物件，`WdfRequestGetFileObject` 會傳回 NULL。CREATE、CLEANUP 與 CLOSE 仍需要 WDM 檔案物件；`WdfFdoInitSetFilter` 啟用篩選驅動的預設轉送；`WdfTrue` 明確啟用，`WdfFalse` 停用。檔案要求轉送需要直接 FDO/PDO 路徑和明確的 `bus_completion`；具備完成回呼的預設非同步 CREATE 傳送及 `SEND_AND_FORGET` CREATE 傳送允許正數 `delay_100ns`，其餘模式要求即時回應；CLEANUP 與 CLOSE 回呼先於下層派送。使用 `WdfFileObjectNotRequired` 的 CREATE 回呼可透過 `WdfDeviceGetIoTarget` 取得裝置持有的本機目標，並以唯一支援的 `WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET` 選項呼叫 `WdfRequestSend` 轉送原始要求。保留的 PDO 消耗明確的匯流排回應並負責最終完成，下層回應延遲時也是如此。持有框架檔案物件的 CREATE 回呼可使用 `WDF_REQUEST_SEND_OPTION_SYNCHRONOUS`，透過 `WdfRequestGetStatus` 讀取下層結果，再以該狀態完成原始要求。預設非同步傳送須先以 `WdfRequestFormatRequestUsingCurrentType` 格式化要求，再註冊 `WdfRequestSetCompletionRoutine`。完成回呼會收到 `WDF_REQUEST_COMPLETION_PARAMS`，可透過 `WdfRequestGetCompletionParams` 或 `WdfRequestGetStatus` 讀取下層結果，並以可獨立於下層結果選擇的狀態完成原始要求。對於具備完成回呼的傳送，延遲的 PDO 回應讓要求保持未完成，直到虛擬時間到達期限，再以下層最終狀態排入回呼。非同步 CREATE 傳送可設定相對 `WDF_REQUEST_SEND_OPTION_TIMEOUT`：逾時先發生時向回呼交付 `STATUS_IO_TIMEOUT`，與下層回應同時到期時優先採用下層結果。零表示不逾時；絕對逾時及其他傳送選項仍不支援。WDF 檔案控制代碼與 WDM `FILE_OBJECT` 保持不同身分，存活期間可由 `WdfRequestGetFileObject`、`WdfFileObjectGetDevice` 及 `WdfFileObjectWdmGetFileObject` 查詢。CREATE 失敗只刪除 WDF 檔案物件，不呼叫檔案清理或關閉回呼；成功開啟後的 CLEANUP、CLOSE 回呼先於內容清理與銷毀執行。
+`WdfDeviceInitSetFileObjectConfig` 在建立裝置前註冊 `EvtDeviceFileCreate`、`EvtFileCleanup`、`EvtFileClose`，並複製可選的檔案物件內容屬性。目前支援 `WdfFileObjectNotRequired`、`WdfFileObjectWdfCanUseFsContext`、`WdfFileObjectWdfCanUseFsContext2` 與 `WdfFileObjectWdfCannotUseFsContexts`。選定的 WDM 內容槽在 CREATE 失敗或 CLOSE 前保存 WDF 控制代碼，建立前必須為空。設定 `WdfFileObjectCanBeOptional` 後，若 I/O 要求沒有相符的 WDM 檔案物件，`WdfRequestGetFileObject` 會傳回 NULL。CREATE、CLEANUP 與 CLOSE 仍需要 WDM 檔案物件；`WdfFdoInitSetFilter` 啟用篩選驅動的預設轉送；`WdfTrue` 明確啟用，`WdfFalse` 停用。檔案要求轉送需要直接 FDO/PDO 路徑和明確的 `bus_completion`；自動轉送 CREATE/CLEANUP/CLOSE，以及同步、具備完成回呼的非同步或 `SEND_AND_FORGET` CREATE 傳送均允許正數 `delay_100ns`；CLEANUP 與 CLOSE 回呼先於下層派送。使用 `WdfFileObjectNotRequired` 的 CREATE 回呼可透過 `WdfDeviceGetIoTarget` 取得裝置持有的本機目標，並以唯一支援的 `WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET` 選項呼叫 `WdfRequestSend` 轉送原始要求。保留的 PDO 消耗明確的匯流排回應並負責最終完成，下層回應延遲時也是如此。持有框架檔案物件的 CREATE 回呼可使用 `WDF_REQUEST_SEND_OPTION_SYNCHRONOUS`，透過 `WdfRequestGetStatus` 讀取下層結果，再以該狀態完成原始要求。預設非同步傳送須先以 `WdfRequestFormatRequestUsingCurrentType` 格式化要求，再註冊 `WdfRequestSetCompletionRoutine`。完成回呼會收到 `WDF_REQUEST_COMPLETION_PARAMS`，可透過 `WdfRequestGetCompletionParams` 或 `WdfRequestGetStatus` 讀取下層結果，並以可獨立於下層結果選擇的狀態完成原始要求。對於具備完成回呼的傳送，延遲的 PDO 回應讓要求保持未完成，直到虛擬時間到達期限，再以下層最終狀態排入回呼。非同步 CREATE 傳送可設定相對 `WDF_REQUEST_SEND_OPTION_TIMEOUT`：逾時先發生時向回呼交付 `STATUS_IO_TIMEOUT`，與下層回應同時到期時優先採用下層結果。零表示不逾時；絕對逾時及其他傳送選項仍不支援。WDF 檔案控制代碼與 WDM `FILE_OBJECT` 保持不同身分，存活期間可由 `WdfRequestGetFileObject`、`WdfFileObjectGetDevice` 及 `WdfFileObjectWdmGetFileObject` 查詢。CREATE 失敗只刪除 WDF 檔案物件，不呼叫檔案清理或關閉回呼；成功開啟後的 CLEANUP、CLOSE 回呼先於內容清理與銷毀執行。
+
+延遲的同步 `WdfRequestSend` 保留並暫停真實來賓呼叫框架，完成後恢復並傳回表示已傳送的 BOOLEAN；最終 NTSTATUS 由 `WdfRequestGetStatus` 提供。同步 CREATE 也支援相對 `WDF_REQUEST_SEND_OPTION_TIMEOUT`：逾時早於下層回應時傳回 `STATUS_IO_TIMEOUT`，同時到期則下層回應優先，零停用逾時。自動轉送仍先執行檔案回呼，再派送至下層；WDM IRP 和檔案在完成流程所需的清理、銷毀回呼期間保持有效。外部 WDF 參考保留內容，但不延長已完成請求對應 WDM 檔案的生命週期。
+
+轉送到已配置 PDO 的 WDM CREATE/CLEANUP/CLOSE 也接受明確延遲的 `bus_completion`。真實來賓完成例程在下層期限後執行，保留待處理狀態傳播和最終狀態歸屬規則。
 
 可選的真實 WDK 驗證以真正的 KMDF 進入點程式庫分別編譯 `driver_kmdf_lifecycle.c` 和 `driver_kmdf_control.c`。`NEVERD_KMDF_FIXTURE`／`NEVERD_KMDF_CFG_FIXTURE` 選擇生命週期映像；`NEVERD_KMDF_CONTROL_FIXTURE`／`NEVERD_KMDF_CONTROL_CFG_FIXTURE` 選擇一般／啟用 CFG 的控制裝置映像。缺少外部產物時會明確略過。原生及 C API／CLI 涵蓋範圍見[測試指南](testing.md)。目前執行證據僅來自 Linux 主機。
 
@@ -227,7 +231,7 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 | `IoConnectInterrupt`, `IoDisconnectInterrupt`, `IoConnectInterruptEx`, `IoDisconnectInterruptEx` | 精確配置的獨佔 latched 線路，PASSIVE_LEVEL 下的傳統及 Ex 1／2／4；不透明連線與精確世代壽命 |
 | `KeSynchronizeExecution`, `KeAcquireInterruptSpinLock`, `KeReleaseInterruptSpinLock` | 真正 BOOLEAN 同步回呼及配置 DIRQL 下的同一把不可遞迴鎖；恢復原始呼叫者 IRQL 與所有權 |
 | `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | 請求擁有的 MDL 支援 KernelMode 快取對映及權限；非分頁集區 MDL 透過安全輔助函式重複使用原始集區對映 |
-| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | 獨立描述元，完整範圍須位於同一個有效非分頁集區配置內；描述元與緩衝區生命週期獨立，不支援 IRP 關聯、MDL 鏈或配額 |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | 獨立或 IRP 關聯的非分頁集區／使用者描述元；可修改鏈指標，鎖頁與系統別名獨立；不支援配額 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 明確配置的工作階段登錄、每個控制代碼的權限與生命週期、查詢緩衝區大小及修改；不存取主機登錄 |
 | `ExAllocatePoolWithTag`、`ExFreePoolWithTag`、`ExFreePool` | 對集區類型 `0`、`1`、`512` 提供資料配置；大小／標籤必須為正，帶標籤釋放必須相符，位址不重複使用 |
 | `IoCreateDevice`、`IoDeleteDevice` | 裝置類型為 `0x22`，characteristics 為 `0` 或 `0x100`，擴充區大小有界，名稱為 ASCII `\Device\Name` |
@@ -307,7 +311,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 對於直接 IOCTL，`input` 初始化第一個系統緩衝區，`direct_input` 則初始化由 MDL 描述的獨立第二個緩衝區，並以零補齊至 `output_size`。`METHOD_IN_DIRECT` 要求可讀取，但不代表系統對映唯讀。兩種方法都使用可讀寫的情境緩衝區。`MdlMappingNoWrite` 移除對映的寫入權限，`MdlMappingNoExecute` 移除執行權限。解除對映會撤銷系統 VA；重新對映仍保留相同的鎖定資料。完成請求後，MDL 及對映皆失效。模型提供 WDM 巨集使用的公開 MDL 欄位；處理程序欄位與未建立 MDL 的 PFN、手工建立的 MDL、使用者對映，以及透過原始 UserBuffer 直接存取都會遭拒絕。長度為零的直接緩衝區使用空 MDL。
 
-`IoAllocateMdl` 為非空、不溢位且不超過 1 MiB 的緩衝區配置獨立中繼資料，不探查或鎖定緩衝區。`Irp` 必須為 NULL，`SecondaryBuffer` 與 `ChargeQuota` 必須為 FALSE；物件區耗盡時傳回 NULL。`MmBuildMdlForNonPagedPool` 要求完整描述範圍位於同一個有效非分頁集區配置內。安全輔助函式及一般 WDM 巨集重複使用原始位址，保留別名關係與既有權限，即使再次傳入禁止寫入／執行旗標也不改變權限。額外系統對映與解除對映會遭拒絕。`IoFreeMdl` 僅使描述元失效，集區緩衝區有獨立生命週期；只要不再使用已釋放的儲存空間，兩種釋放順序皆受支援。所有模型 MDL 欄位皆為唯讀；處理程序及未建立 MDL 的 PFN 存取、描述元鏈及手動修改欄位仍不受支援。卸載前必須釋放所有驅動程式擁有的描述元。
+`IoAllocateMdl` 為非空、不溢位且不超過 1 MiB 的緩衝區配置中繼資料，不探測或鎖定緩衝區。`Irp` 可為 NULL 或有效的建模 IRP。主要描述元取代目前驅動鏈的頭部，脫離的描述元仍由驅動擁有；`SecondaryBuffer` 將描述元附加至鏈尾，空鏈則設為頭部。原始請求擁有的 direct-I/O MDL 必須保持可達，不能由驅動取代或釋放。`ChargeQuota` 必須為 FALSE；物件區耗盡時傳回 NULL。`MmBuildMdlForNonPagedPool` 要求完整範圍位於同一個有效非分頁集區配置內。安全輔助函式及 WDM 巨集重用原始位址與權限；新增禁止寫入／執行旗標不改變既有權限，額外系統映射及解除映射會被拒絕。`IoFreeMdl` 僅釋放指定的驅動描述元，不解除鏈連結，也不沿 `Next` 釋放後繼；手動釋放使用者 MDL 前必須先解除鎖定。集區緩衝區的生命週期獨立，只要不再存取已釋放儲存空間，兩種釋放順序均受支援。
+
+驅動可修改 `MDL.Next` 和 `IRP.MdlAddress`，插入或脫離建模描述元。IRP 最終完成前驗證目前整條鏈，隨後解除附加使用者 MDL 的鎖定、撤銷其別名並釋放附加描述元；脫離的描述元和集區緩衝區仍由驅動擁有。環、未知或已釋放節點、多個活動 IRP 共用描述元，以及把 WDF 私有描述元接入 WDM 鏈，均明確失敗。活動 DMA 和排程器相依性阻止過早回收。其他建模 MDL 欄位及已建構 PFN 陣列唯讀；程序欄位、未建構 PFN、手工或部分 MDL、任意使用者映射仍不支援。卸載前必須釋放剩餘驅動描述元。
 
 IOCTL 的 `output_size` 非零時，`Information` 不得超過該大小，即使輸入緩衝區較大亦然。沒有輸出緩衝區的 IOCTL 可在此欄位傳回驅動程式自訂結果，不會複製輸出位元組；`information_hex` 精確保留原始 64 位元值。
 
@@ -350,7 +356,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v70`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v71`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 

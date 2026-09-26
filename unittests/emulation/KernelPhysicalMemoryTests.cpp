@@ -125,7 +125,12 @@ TEST_F(KernelPhysicalRAM, PinsPreventRetirementBeforeAnyOwnerMutation) {
   ASSERT_NE(Model->find(1), nullptr);
   EXPECT_EQ(Model->find(1)->Backing, Base);
   EXPECT_EQ(take(Model->ownerForRange(Base, 32)), 1u);
+  EXPECT_EQ(llvm::toString(Model->canUnpin(Pin)), "");
+  // Preflight does not release the pin or permit its owner to retire.
+  EXPECT_NE(llvm::toString(Model->canRetire(1)), "");
+  EXPECT_NE(llvm::toString(Model->canUnpin(Pin + 1)), "");
   ASSERT_EQ(llvm::toString(Model->unpin(Pin)), "");
+  EXPECT_NE(llvm::toString(Model->canUnpin(Pin)), "");
   ASSERT_EQ(llvm::toString(Model->retire(1)), "");
   EXPECT_EQ(Model->find(1), nullptr);
   std::array<uint8_t, 1> Byte{};

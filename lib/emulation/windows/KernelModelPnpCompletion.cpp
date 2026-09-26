@@ -60,22 +60,23 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
     const uint32_t Status = *Request->FileBusCompletion->Status;
     if (Status == StatusPending)
       return providerError("file bus response requires a final status");
+    const bool Automatic = Owner == ForwardingOwner::FrameworkFileAutomatic;
     const bool RetainRequest =
-        Owner == ForwardingOwner::FrameworkFileSynchronous ||
+        Automatic || Owner == ForwardingOwner::FrameworkFileSynchronous ||
         Owner == ForwardingOwner::FrameworkFileAsynchronous;
-    if (RetainRequest && Request->Kind != DriverRequestKind::Create)
+    if (RetainRequest && !Automatic &&
+        Request->Kind != DriverRequestKind::Create)
       return providerError("framework file send requires CREATE");
     if (Request->FileBusCompletion->Delay100ns) {
-      const bool SendAndForget = Owner == ForwardingOwner::FrameworkFile;
-      if ((!SendAndForget &&
-           Owner != ForwardingOwner::FrameworkFileAsynchronous) ||
-          ProviderCompletions.count(IRP))
-        return providerError(
-            "delayed file response requires one asynchronous CREATE send");
-      if (SendAndForget) {
+      if (ProviderCompletions.count(IRP))
+        return providerError("file request already has a lower completion");
+      if (!RetainRequest || Automatic) {
         auto Plan = planIRPCompletion(IRP, Status);
         if (!Plan)
           return Plan.takeError();
+        if (Automatic && Plan->PC)
+          return providerError(
+              "automatic file completion cannot own a WDM callback");
       }
       const uint64_t LowerDelay = Request->FileBusCompletion->Delay100ns;
       uint32_t CompletionStatus = Status;
@@ -94,16 +95,25 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
         return providerError("completion identity exhausted");
       if (auto E = markRequestPending(IRP))
         return E;
+      const auto CompletionOwner =
+          !RetainRequest ? ProviderCompletion::Kind::WDM
+          : Automatic    ? ProviderCompletion::Kind::FrameworkAutomatic
+          : Owner == ForwardingOwner::FrameworkFileSynchronous
+              ? ProviderCompletion::Kind::FrameworkSynchronous
+              : ProviderCompletion::Kind::FrameworkCallback;
       ProviderCompletions.emplace(
           IRP, ProviderCompletion{Device, *Deadline, NextProviderSequence++,
-                                  CompletionStatus, !SendAndForget});
+                                  CompletionStatus, CompletionOwner});
       Request->FileBusReceived = true;
       return StatusPending;
     }
-    if (!RetainRequest) {
+    if (!RetainRequest || Automatic) {
       auto Plan = planIRPCompletion(IRP, Status);
       if (!Plan)
         return Plan.takeError();
+      if (Automatic && Plan->PC)
+        return providerError(
+            "automatic file completion cannot own a WDM callback");
     }
     if (auto E = Memory.writeInteger(IRP + IRPStatusOffset, Status, 4))
       return E;
@@ -258,7 +268,34 @@ llvm::Error KernelModel::processProviderCompletions() {
     const auto *Request = requestForIRP(IRP);
     if (!Request || Request->Completed || Request->PnpDevice != Provider.Device)
       return providerError("deadline lost its live request or PDO identity");
-    if (Provider.FrameworkCallback) {
+    if (Provider.Owner == ProviderCompletion::Kind::FrameworkAutomatic) {
+      ++WDMCompletions;
+      auto Plan = planIRPCompletion(IRP, Provider.Status);
+      if (!Plan)
+        return Plan.takeError();
+      if (Plan->PC)
+        return providerError(
+            "automatic file completion cannot own a WDM callback");
+      if (!Framework || !Request->FileBusReceived)
+        return providerError("file completion lost its framework request");
+      auto Call =
+          Framework->previewAutomaticFileCompletion(IRP, Provider.Status);
+      if (!Call)
+        return Call.takeError();
+      if (*Call)
+        Callbacks.push_back({IRP, Request->Device,
+                             profile::WorkerThreadIdentity, (**Call).PC,
+                             (**Call).Arguments});
+      Due.push_back({IRP, Provider, std::nullopt});
+    } else if (Provider.Owner ==
+               ProviderCompletion::Kind::FrameworkSynchronous) {
+      if (!Framework || !Request->FileBusReceived)
+        return providerError("file completion lost its framework request");
+      if (auto E = Framework->validateSynchronousFileCompletion(
+              IRP, Provider.Status))
+        return E;
+      Due.push_back({IRP, Provider, std::nullopt});
+    } else if (Provider.Owner == ProviderCompletion::Kind::FrameworkCallback) {
       if (!Framework || !Request->FileBusReceived)
         return providerError("file completion lost its framework request");
       auto Call = Framework->previewFileSendCompletion(IRP, Provider.Status,
@@ -303,7 +340,7 @@ llvm::Error KernelModel::processProviderCompletions() {
     if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, 0, 8))
       return E;
     Request.IOStatusWritten.fill(true);
-    if (Completion.Provider.FrameworkCallback) {
+    if (Completion.Provider.Owner != ProviderCompletion::Kind::WDM) {
       auto Cursor = requestStackCursor(IRP);
       if (!Cursor)
         return Cursor.takeError();
@@ -312,11 +349,35 @@ llvm::Error KernelModel::processProviderCompletions() {
       if (auto E = Memory.writeInteger(IRP + IRPStackPointerOffset,
                                        IRP + IRPSize + *Cursor * StackSize, 8))
         return E;
-      auto Call =
-          Framework->queueFileSendCompletion(IRP, Completion.Provider.Status);
-      if (!Call)
-        return Call.takeError();
+      if (Completion.Provider.Owner ==
+          ProviderCompletion::Kind::FrameworkSynchronous) {
+        if (auto E = Framework->completeSynchronousFileSend(
+                IRP, Completion.Provider.Status))
+          return E;
+        ProviderCompletions.erase(IRP);
+        continue;
+      }
+      std::optional<KernelFramework::GuestCall> Call;
+      if (Completion.Provider.Owner ==
+          ProviderCompletion::Kind::FrameworkAutomatic) {
+        ProviderCompletions.erase(IRP);
+        auto Continued = Framework->completeAutomaticFileForward(
+            IRP, Completion.Provider.Status);
+        if (!Continued) {
+          ProviderCompletions.emplace(IRP, Completion.Provider);
+          return Continued.takeError();
+        }
+        Call = std::move(*Continued);
+      } else {
+        auto Queued =
+            Framework->queueFileSendCompletion(IRP, Completion.Provider.Status);
+        if (!Queued)
+          return Queued.takeError();
+        Call = std::move(*Queued);
+      }
       ProviderCompletions.erase(IRP);
+      if (!Call)
+        continue;
       auto ID = Scheduler.enqueueFrameworkCompletion(
           {IRP, Request.Device, profile::WorkerThreadIdentity, Call->PC,
            std::move(Call->Arguments)});

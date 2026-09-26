@@ -235,7 +235,8 @@ llvm::Expected<uint64_t> KernelModel::call(
   const bool EmptySync =
       Export.Name == framework::api::WdfIoQueueDrainSynchronously ||
       Export.Name == framework::api::WdfIoQueuePurgeSynchronously;
-  if ((StopSync || StopPurgeSync || EmptySync) && PendingWait)
+  const bool RequestSend = Export.Name == framework::api::WdfRequestSend;
+  if ((StopSync || StopPurgeSync || EmptySync || RequestSend) && PendingWait)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "previous deferred wait was not consumed");
   auto Result = Framework->call(Export, Arguments, CurrentIRQL);
@@ -243,6 +244,19 @@ llvm::Expected<uint64_t> KernelModel::call(
     return Result.takeError();
   if (auto E = completeFrameworkPnpIfReady())
     return E;
+  // Preserve the complete caller frame until the lower provider responds.
+  // The eventual API return is BOOLEAN; the NTSTATUS belongs to GetStatus.
+  if (RequestSend) {
+    auto Pending = Framework->synchronousFileSendPending(Arguments[1]);
+    if (Pending && *Pending) {
+      Wait Send;
+      Send.Type = Wait::Kind::FrameworkFileSend;
+      Send.Object = Arguments[1];
+      Send.Execution = CurrentExecution;
+      Send.IRQL = CurrentIRQL;
+      PendingWait = Send;
+    }
+  }
   if (StopSync || StopPurgeSync || EmptySync) {
     auto Ready = Framework->queueWaitReady(Arguments[1], EmptySync);
     if (!Ready)

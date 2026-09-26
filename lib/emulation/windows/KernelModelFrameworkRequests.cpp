@@ -65,6 +65,9 @@ llvm::Error KernelModel::validateRequestCompletion(uint64_t IRP,
   if (auto E =
           DMA.canReleaseRange(IRP, IRPSize + Request->StackCount * StackSize))
     return E;
+  auto Chain = requestMDLChain(IRP);
+  if (!Chain)
+    return Chain.takeError();
   if (Status == StatusPending)
     return frameworkRequestError(
         "IoCompleteRequest cannot complete with STATUS_PENDING");
@@ -224,8 +227,7 @@ void KernelModel::configureFrameworkRequestHost() {
     Request->IOStatusWritten.fill(true);
     return completeRequest(IRP, 0);
   };
-  Host.ValidateFileForward = [this](uint64_t IRP,
-                                    bool AllowDelayed) -> llvm::Error {
+  Host.ValidateFileForward = [this](uint64_t IRP) -> llvm::Error {
     const auto *Request = requestForIRP(IRP);
     if (!Request || Request->Completed ||
         Request->DeviceRoute.size() != DirectPnpRouteSize ||
@@ -234,20 +236,16 @@ void KernelModel::configureFrameworkRequestHost() {
         Request->PnpDevice != Request->DeviceRoute.back())
       return frameworkRequestError(
           "framework file forwarding requires a direct live PDO target");
-    if (!Request->FileBusCompletion || !Request->FileBusCompletion->Status ||
-        (Request->FileBusCompletion->Delay100ns && !AllowDelayed))
+    if (!Request->FileBusCompletion || !Request->FileBusCompletion->Status)
       return frameworkRequestError(
-          "framework file forwarding requires a configured bus response "
-          "within the send mode");
+          "framework file forwarding requires a configured bus response");
     return llvm::Error::success();
   };
   auto ForwardFile = [this, Validate = Host.ValidateFileForward](
                          uint64_t IRP, ForwardingOwner Owner,
                          std::optional<int64_t> SendTimeout =
                              std::nullopt) -> llvm::Expected<uint32_t> {
-    const bool AllowsDelayed =
-        Owner != ForwardingOwner::FrameworkFileSynchronous;
-    if (auto E = Validate(IRP, AllowsDelayed))
+    if (auto E = Validate(IRP))
       return E;
     auto *Request = requestForIRP(IRP);
     auto Stack = currentRequestStack(IRP);
@@ -275,12 +273,10 @@ void KernelModel::configureFrameworkRequestHost() {
             (Owner == ForwardingOwner::FrameworkFile && !LowerOwnsPendingFile))
       return frameworkRequestError(
           "framework file target did not honor its completion ownership");
-    if (*Status == windows::StatusPending &&
-        Owner == ForwardingOwner::FrameworkFileSynchronous)
-      return frameworkRequestError("file send unexpectedly remained pending");
-    if (Owner == ForwardingOwner::FrameworkFileSynchronous ||
-        (Owner == ForwardingOwner::FrameworkFileAsynchronous &&
-         *Status != windows::StatusPending)) {
+    if ((Owner == ForwardingOwner::FrameworkFileSynchronous ||
+         Owner == ForwardingOwner::FrameworkFileAsynchronous ||
+         Owner == ForwardingOwner::FrameworkFileAutomatic) &&
+        *Status != windows::StatusPending) {
       if (!Request->FileBusReceived)
         return frameworkRequestError("file send lost its lower response");
       if (auto E = Memory.writeInteger(IRP + IRPLocationOffset, *Cursor + 1, 1))
@@ -294,9 +290,14 @@ void KernelModel::configureFrameworkRequestHost() {
   Host.ForwardFile = [ForwardFile](uint64_t IRP) {
     return ForwardFile(IRP, ForwardingOwner::FrameworkFile);
   };
-  Host.SendFileSynchronously = [ForwardFile](uint64_t IRP) {
-    return ForwardFile(IRP, ForwardingOwner::FrameworkFileSynchronous);
+  Host.ForwardFileAutomatically = [ForwardFile](uint64_t IRP) {
+    return ForwardFile(IRP, ForwardingOwner::FrameworkFileAutomatic);
   };
+  Host.SendFileSynchronously =
+      [ForwardFile](uint64_t IRP, std::optional<int64_t> SendTimeout) {
+        return ForwardFile(IRP, ForwardingOwner::FrameworkFileSynchronous,
+                           SendTimeout);
+      };
   Host.SendFileAsynchronously =
       [ForwardFile](uint64_t IRP, std::optional<int64_t> SendTimeout) {
         return ForwardFile(IRP, ForwardingOwner::FrameworkFileAsynchronous,

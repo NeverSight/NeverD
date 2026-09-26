@@ -78,6 +78,7 @@ public:
   /// Grow forward in place without releasing ownership or taking a second pin.
   llvm::Error canExtendPin(uint64_t Pin, uint64_t NewLength) const;
   llvm::Error extendPin(uint64_t Pin, uint64_t NewLength);
+  llvm::Error canUnpin(uint64_t Pin) const;
   llvm::Error unpin(uint64_t Pin);
   llvm::Error read(uint64_t Pin, uint64_t Offset,
                    llvm::MutableArrayRef<uint8_t> Bytes);
