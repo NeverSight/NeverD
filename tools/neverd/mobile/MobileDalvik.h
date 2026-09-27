@@ -127,6 +127,38 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget);
 ClassMap linkClasses(std::vector<Class> classes, Budget &budget);
 std::vector<Class> parseDex(std::string_view bytes, std::string_view input_id,
                             Budget &budget);
+// Class descriptors in class_def order. Checks container integrity and the
+// referenced class metadata, without verifying method bodies or annotations.
+std::vector<std::string> listDexClasses(std::string_view bytes, Budget &budget);
+enum class DexReferenceKind { String, Type, Method, Field };
+struct DexReferenceQuery {
+  DexReferenceKind kind = DexReferenceKind::String;
+  std::string text;
+  bool exact = false;
+  std::optional<std::string> owner;
+};
+struct DexReferenceSite {
+  MethodRef method;
+  uint32_t pc_code_units = 0;
+  std::string opcode;
+  uint32_t target_index = 0;
+  std::string target;
+  std::optional<std::u16string> target_utf16;
+};
+struct DexReferenceResult {
+  std::vector<std::string> class_descriptors;
+  std::vector<DexReferenceSite> references;
+  uint64_t defined_method_count = 0;
+  uint64_t scanned_method_count = 0;
+  uint64_t scanned_code_item_count = 0;
+  uint64_t matching_pool_entries = 0;
+  bool code_scan_complete = false;
+};
+// Direct instruction operands only. Every defined code body is checked before
+// returning; annotations and declaration-only references are not result sites.
+DexReferenceResult findDexReferences(std::string_view bytes,
+                                     const DexReferenceQuery &query,
+                                     Budget &budget);
 Class parseSmali(std::string_view text, std::string_view input_id,
                  Budget &budget);
 llvm::json::Object recoverJava(const ClassMap &classes, Budget &budget);

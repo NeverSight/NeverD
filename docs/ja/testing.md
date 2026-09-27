@@ -702,6 +702,69 @@ provenance/test のみです。`SBFFaultCodes.def` は execution fault の安定
 machine 固有時間は固定しません。cluster/account/slot row は通常 test を
 deterministic/offline に保ったまま `RPC activation audit` を可能にします。
 
+## Android クラス一覧の性能
+
+`neverd mobile INPUT --list-classes` を測定する前に、`NeverDMobileTests` を Release でビルドし、そのラベルを実行します。
+リーダーテストは疎なメタデータ、Unicode、不正な参照、未対応のメソッド本体、チェックサム、予算を対象とします。
+アーカイブテストは完全展開と選択ペイロードのクエリーを区別し、CLI テストは接頭辞の絞り込み、JSON の範囲、
+既存出力の保持、multidex の失敗原子性を検査します。
+
+独立したフィクスチャー／測定ハーネスは、計測サンプルを受け入れる前に各プロセスの完全な記述子一覧を検証します。
+
+```sh
+python3 -m unittest scripts.tests.test_benchmark_mobile_inventory -v
+python3 scripts/benchmark_mobile_inventory.py \
+  --output-dir /tmp/neverd-inventory-benchmark \
+  --class-count 6000 --dex-count 3 --code-units 64 \
+  --extra-string-bytes 8388608 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+実行ごとに新しい出力ディレクトリを使用します。`--generate-only` はフィクスチャーと manifest を書き込み、計時しません。
+`--workload` は任意の `--peer-command 'tool {input} {prefix}'` 用に共通入力の種類を選択し、入力準備は計測コマンドの外で行います。
+レポートにはハッシュ、コマンド、すべての新規プロセスのサンプル、ウォームキャッシュの前提、および GNU time のある Linux では
+最大子プロセス RSS を保持します。この RSS は複数プロセスを使うツールの合計ピークではありません。
+合成 APK はクエリー用コンテナーであり、インストール可能なアプリではありません。一覧取得の速度は参照検索の速度や Java 復元の品質を証明しません。
+
+ハイブリッド CPU では、ハーネスと継承される子プロセスを同じ許可済み CPU に固定します
+（Linux なら `taskset -c 4 python3 ...` など）。これにより高性能コアと高効率コアの混在を避けます。
+レポートには継承した CPU アフィニティーを記録します。
+
+## Android コード参照の性能
+
+参照クエリーは復元リーダーの命令境界とコード検証を共有します。この境界を変更したらモバイルスイートを実行してください。
+リーダーテストはオペランドプールの種類、照合モード、メソッド所有関係と共有コード、参照に見えるペイロード／即値、
+不正入力、リソース上限を対象とします。共有デバッグストリームは各所有本体のフレーム、範囲、引数に対して検査します。
+記憶領域上限のテストでは、大きなメンバー一覧と分岐が密集した本体の両方を維持します。永続索引と一時コンテナー拡張では寿命が異なります。
+順序が変わった項目や重なる項目、同じ幅でも互換性のないプロトタイプを持つ共有コード、アラインされない入力記憶領域、
+検索ブロック境界をまたぐ部分文字列一致も検査します。非公開デコーダーデータの性能変更は、完全な所有復元モデルと
+参照出現の多重集合を維持し、未対応の復元メタデータでの失敗動作も保つ必要があります。
+独立して生成した期待値と、実入力でのツール間の一致は区別してください。
+
+独立した参照ハーネスは、命令を出力する際に期待する出現を記録します。測定する毎回の実行で完全なメソッド識別情報、
+code unit 単位の PC、opcode、ターゲット識別情報、UTF-16 単位、重複数を検査します。
+独立に期待する NeverD のカバレッジ集計数と `code_scan_complete` も検査します。
+
+```sh
+NEVERD_REFERENCE_TEST_BINARY="$PWD/build-release/bin/neverd" \
+  python3 -m unittest scripts.tests.test_benchmark_mobile_references -v
+python3 scripts/benchmark_mobile_references.py \
+  --output-dir /tmp/neverd-reference-benchmark \
+  --class-count 500 --methods-per-class 64 --matching-methods 2 \
+  --dex-count 3 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+`--kind` と `--workload` でケースを選択します。`--extra-strings 65536` は実際の 32 ビット文字列索引を検査します。
+ペイロードの囮は既定で有効です。`--no-payload-lookalikes` は同じレイアウトと真の参照を維持し、囮のペイロード値を置き換えて共通入力で比較できます。
+正しさと計測の両結果を保持してください。偽のペイロード参照を返す、または実際の参照を取りこぼすクエリーは検証に失敗し、計測を受け入れません。
+
+任意の `--peer-command` は `{input}`、`{kind}`、`{query}` を含む argv テンプレートを受け付けます。
+別のツールが異なる意味を使う場合はクエリー構文を明示的に調整し、完全な出現多重集合を比較します。
+宣言された検証範囲を保持し、完全なコードスキャンを行ったとは主張しません。一覧ベンチマークと同じ新規ディレクトリ、
+CPU アフィニティー、新規プロセス、ウォームキャッシュ、RSS の条件が適用されます。
+`NEVERD_REFERENCE_TEST_BINARY` がビルド済み実行ファイルを指さない限り、任意の CLI 単体テストはスキップされるため、そのスキップを報告してください。
+
 ## モバイル SDK のエクスポート証拠
 
 手動ワークフロー `Mobile SDK Export Evidence` は、固定した Xcode SDK に対して `collect_mobile_ios_sdk_declarations.py --exports-only` を実行します。iOS 実機用とシミュレータ用の両 SDK から Foundation、CoreFoundation、UIKit のリンカーマップをそのまま保存し、ターゲット、SDK バージョン、SDK 設定のハッシュ、ファイルサイズ、SHA-256 を記録します。通常の宣言収集でも同じマップを保存します。ファイルの欠落、空ファイル、サイズ超過、SDK 外のファイルは収集を失敗させ、完了済みの証拠は保持します。リンカーマップはシンボルのエクスポートの証拠であり、呼び出し ABI やメソッド復元の成功を証明するものではありません。

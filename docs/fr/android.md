@@ -65,6 +65,8 @@ Une compilation multiconfiguration peut placer l’exécutable dans `build/bin/R
 
 ## Entrées prises en charge et limites
 
+La table des entrées ci-dessous décrit la reconstruction. Les modes de requête présentés plus loin ont des périmètres de validation plus restreints.
+
 | Entrée | Comportement | Limite importante |
 |--------|--------------|-------------------|
 | `.apk` | Valider le ZIP entier, puis analyser ensemble tous les `classes.dex`, `classes2.dex` et autres DEX numérotés à la racine de l’archive | Code uniquement ; aucun décodage des ressources ou du manifeste |
@@ -78,6 +80,111 @@ Les APK fractionnés constituent des entrées séparées. Chaque APK contenant d
 
 Les ressources APK, `AndroidManifest.xml`, les assets, les bibliothèques JNI/natives et le code téléchargé à l’exécution ne sont pas reconstruits en Java. Extrayez séparément une bibliothèque native `.so` et utilisez `neverd decompile library.so -o library.c`. Pour ce traitement statique, les charges utiles chiffrées ou empaquetées doivent déjà être disponibles sous forme de DEX/smali ordinaires ; aucun dépaquetage de protection, aucune connexion à un appareil et aucun contournement de protection ne sont effectués.
 
+## Inventaire rapide des classes
+
+```sh
+neverd mobile app.apk --list-classes
+neverd mobile classes.dex --list-classes --class-prefix com.example
+neverd mobile app.apk --list-classes --class-prefix Lcom/example/ --json
+neverd mobile app.apk --list-classes -o classes.txt
+```
+
+Cette requête lit les identités des classes sans décoder les corps de méthodes
+ni générer de Java. Elle ne nécessite ni répertoire de préparation ni environnement
+d’exécution externe. La sortie texte contient un descripteur DEX exact par ligne,
+dans l’ordre du répertoire ZIP puis des définitions DEX. `--class-prefix` accepte
+un préfixe de descripteur ou de package avec des points ; la correspondance est
+littérale, sans imposer une frontière de package. Les définitions de classe en
+double, y compris entre fichiers DEX, échouent explicitement. Les identités de
+classe impossibles à représenter sans perte en UTF-8 échouent également.
+
+Sans `-o`, la requête écrit sur stdout. En mode requête, `-o` désigne un
+**nouveau fichier**, et non un répertoire de reconstruction. Les fichiers
+existants restent intacts. Les résultats sont conservés en mémoire jusqu’à la
+réussite de tous les DEX sélectionnés : un DEX malformé rencontré plus tard
+empêche toute publication partielle. `--json` inclut les nombres de classes
+correspondantes et totales, le nombre de DEX et
+`validation_scope: "dex-envelope-and-class-identities"`.
+
+Tous les noms ZIP, en-têtes, plages et limites de ressources déclarées sont
+vérifiés. Seules les charges utiles `classes.dex` et `classesN.dex` numérotées
+à la racine sont décompressées et vérifiées par CRC ; l’intégrité des autres
+ressources reste non vérifiée. Chaque DEX conserve les contrôles d’en-tête,
+SHA-1, Adler-32, limites de la map et métadonnées de classe référencées. Les
+corps de méthodes et les métadonnées non référencées ne sont pas validés. Il
+s’agit d’un inventaire, pas d’un contrôle d’intégrité de l’archive entière ni
+d’une preuve de reconstruction Java. DEX 041, les sections de handles de
+méthode et de sites d’appel personnalisés restent non pris en charge. Le
+parcours habituel de reconstruction complète valide toujours toutes les
+charges utiles de l’archive.
+
+`--timeout`, `--max-files` et `--max-bytes` s’appliquent. La limite de classes
+compte toutes les définitions de tous les DEX avant filtrage ; les entrées ZIP
+non sélectionnées comptent toujours dans les limites de l’archive. `--jadx`,
+les options iOS et les entrées smali ne sont pas acceptés pour l’inventaire.
+
+## Requêtes de références dans le code
+
+Recherchez les opérandes directs des instructions sans générer de Java :
+
+```sh
+neverd mobile app.apk --find-refs string --query 'login failed' --json
+neverd mobile classes.dex --find-refs type --query 'Lcom/example/Service;' --exact
+neverd mobile app.apk --find-refs method --query '->connect(' --owner 'Lcom/example/Client;'
+neverd mobile app.apk --find-refs field --query 'Lcom/example/State;->ready:Z' --exact -o refs.jsonl
+```
+
+La recherche utilise des sous-chaînes littérales et respecte la casse.
+`--exact` compare la cible entière : contenu d’une chaîne, descripteur de type,
+identité de méthode telle que `Lpkg/Type;->name(I)V` ou identité de champ telle
+que `Lpkg/Type;->name:I`. `--owner` limite le propriétaire cible des références
+de méthode ou de champ à un descripteur exact. Il ne filtre pas la méthode
+contenant la référence. Les requêtes vides, les entrées smali et le mélange
+d’options de requête et de reconstruction ne sont pas pris en charge ; les
+métacaractères d’expression régulière sont des caractères littéraux ordinaires.
+
+Par défaut, la sortie contient un objet JSON compact par occurrence (JSON Lines).
+`--json` produit un rapport avec des compteurs et un tableau `references`.
+Chaque ligne contient `dex_entry`, l’identité complète de la méthode contenant
+la référence dans `method`, `pc_code_units` (unités de 16 bits depuis la première
+instruction de la méthode), `opcode`, `kind`, `target_index` (local au DEX) et
+`target`. Toutes les occurrences sont conservées, y compris le code partagé
+attribué à plusieurs définitions de méthode. Les lignes de chaînes contiennent
+aussi les unités exactes `target_utf16` ; `target` vaut null lorsqu’un surrogate
+isolé empêche une publication UTF-8 sans perte. Les autres identités doivent
+être représentables en UTF-8.
+
+Le scanner utilise les frontières d’instructions, les contrôles d’opérandes,
+le traitement des charges utiles et les contrôles de flot de contrôle du
+lecteur de reconstruction. Les valeurs immédiates et les données des charges
+utiles switch/array ne peuvent pas devenir des références. Il vérifie chaque
+corps de code défini, même si aucune cible ne correspond, avant de fixer
+`code_scan_complete: true`. `defined_method_count` inclut les déclarations
+natives et abstraites ; `scanned_method_count` compte les définitions avec un
+corps, et `scanned_code_item_count` les corps physiques distincts par DEX.
+`matching_pool_entries` compte les cibles correspondantes, même non référencées.
+
+`validation_scope: "dex-code-references"` couvre l’enveloppe DEX, les tables
+d’identifiants, l’appartenance des classes/membres et les données de code,
+d’exceptions et de débogage consommées. Les annotations, les valeurs statiques
+encodées, les usages limités aux déclarations et les métadonnées non référencées
+sont hors de ce périmètre. Ce n’est ni une reconstruction Java ni un vérificateur
+ART. Le code non pris en charge et les données consommées malformées échouent
+explicitement. La validation APK suit la même frontière des charges utiles
+sélectionnées que l’inventaire des classes ; l’intégrité des autres ressources
+reste non vérifiée.
+
+Les résultats de tous les DEX sélectionnés sont conservés avant publication,
+y compris les vérifications de classes en double entre DEX. L’option `-o`
+désigne un nouveau fichier. `--max-files` borne séparément les totaux de
+définitions de classes, de définitions de méthodes et d’occurrences retournées,
+ainsi que les entrées ZIP. `--max-bytes` borne l’entrée, les données de requête
+conservées, la mémoire de travail par corps et la sortie (avec des marges
+conservatrices pour l’expansion JSON). Ce sont des budgets d’opération ; le RSS
+du processus inclut aussi les tampons d’entrée, le surcoût de l’allocateur et
+l’environnement d’exécution. Les budgets habituels de temps et de travail
+s’appliquent également.
+
 ## Options et priorité
 
 ```sh
@@ -87,13 +194,19 @@ neverd mobile app.apk -o recovered-app --platform=android \
 
 | Option | Valeur par défaut | Signification |
 |--------|-------------------|---------------|
-| `-o DIRECTORY` | Obligatoire | Nouveau répertoire de sortie, extérieur à toute entrée de type répertoire ; ne jamais écraser une sortie existante |
+| `-o PATH` | Obligatoire pour la reconstruction | Nouveau répertoire de reconstruction ; dans les deux modes de requête, nouveau fichier de sortie facultatif |
+| `--list-classes` | Désactivé | Rechercher les identités des classes APK/DEX sans reconstruction Java |
+| `--class-prefix PREFIX` | Toutes les classes | Préfixe littéral de descripteur ou avec points ; exige `--list-classes` |
+| `--find-refs KIND` | Désactivé | Rechercher les références directes d’instructions à une chaîne, un type, une méthode ou un champ |
+| `--query TEXT` | Obligatoire pour les références | Sous-chaîne littérale de l’identité cible |
+| `--exact` | Désactivé | Faire correspondre l’identité cible entière de la référence |
+| `--owner DESCRIPTOR` | Tout propriétaire | Propriétaire cible exact pour les requêtes de méthodes/champs |
 | `--platform=auto\|android` | `auto` | Choisir Android explicitement ou déduire la plateforme de l’entrée |
 | `--jadx PATH` | Non défini : moteur intégré | Sélection explicite de l’adaptateur de compatibilité JADX installé séparément ; aucune sélection par l’environnement ni aucun repli automatique |
 | `--timeout N` | `300` | Budget de temps positif pour l’analyse intégrée ; limite en secondes par processus externe, vérification de version comprise |
 | `--max-files N` | `20000` | Limite positive du nombre d’entrées, répertoires créés compris |
 | `--max-bytes N` | `2147483648` | Limite positive en octets pour l’entrée, les données extraites et la sortie finale |
-| `--json` | Désactivé | Afficher le rapport en JSON plutôt que sous forme de résumé destiné à l’utilisateur |
+| `--json` | Désactivé | Afficher un rapport JSON ; les requêtes de références produisent sinon du JSON Lines |
 
 Une sélection `--arch` autre que la valeur par défaut, `--artifact`, `--metadata-only` et un `--max-func` non nul sont réservés à iOS et refusés pour Android ; `--arch=auto` explicite est accepté. Aucune transmission d’options arbitraires au backend n’est prévue. L’adaptateur JADX explicite isole les répertoires de configuration, cache et fichiers temporaires et n’importe pas les réglages ambiants ni la configuration des plugins.
 

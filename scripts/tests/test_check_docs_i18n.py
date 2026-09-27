@@ -503,6 +503,9 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             (Path("docs/zh-CN/README.md"), "android.md"),
             (Path("docs/android.md"), "--max-bytes"),
             (Path("docs/zh-CN/android.md"), "java_source_count"),
+            (Path("docs/zh-CN/android.md"), "dex-code-references"),
+            (Path("docs/ja/android.md"), "target_utf16"),
+            (Path("docs/fr/testing.md"), "NEVERD_REFERENCE_TEST_BINARY"),
         ):
             with self.subTest(path=path, token=token):
                 self.assertIn(token, view.read_text(path))

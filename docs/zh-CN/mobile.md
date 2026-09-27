@@ -14,6 +14,12 @@
 
 ## Android 用法
 
+无需恢复 Java 即可快速列出类：`neverd mobile app.apk --list-classes`，可配合 `--class-prefix com.example` 或 `--json`。[类清单约定](android.md#快速类清单)说明排序、限额和选中载荷的校验范围。查询不需要输出目录；可选的 `-o` 指定新文件。
+
+直接字节码引用可用 `neverd mobile app.apk --find-refs string --query 'example' --json`。[引用查询约定](android.md#代码引用查询)也涵盖类型、方法、字段操作数，字面/精确匹配，每处引用的位置，UTF-16 保留及代码校验范围。未指定 `--json` 时输出 JSON Lines，`-o` 同样只创建新文件。
+
+以下示例和输出说明均针对恢复操作。
+
 ```sh
 neverd mobile app.apk -o recovered-app
 neverd mobile classes.dex -o recovered-dex
@@ -23,9 +29,9 @@ neverd mobile decoded/smali -o recovered-java
 
 APK 根目录中的 `classes.dex`、`classes2.dex` 等字节码会一起分析。smali 目录会递归收集类，在同一次调用中处理嵌套类和跨类引用；单个 smali 文件仅提供该类的上下文。
 
-内置输出包括 `sources/`、`metadata/android-methods.json` 和 `report.json`，其中 `backend: {"name": "neverd", "version": "1", "execution": "builtin"}`。报告包含 `android_method_recovery`：`method_count = recovered_method_count + declaration_only_method_count`，且发布前 `unrecovered_method_count` 必须为零。原有 `native`、`abstract` 声明与恢复的方法体分开计数。显式外部适配器保留自己的后端日志。此 Java 流程不恢复 APK 资源、Manifest、原生库或动态加载代码；原生库可另用 `neverd decompile` 分析。
+内置恢复输出包括 `sources/`、`metadata/android-methods.json` 和 `report.json`，其中 `backend: {"name": "neverd", "version": "1", "execution": "builtin"}`。报告包含 `android_method_recovery`：`method_count = recovered_method_count + declaration_only_method_count`，且发布前 `unrecovered_method_count` 必须为零。原有 `native`、`abstract` 声明与恢复的方法体分开计数。显式外部适配器保留自己的后端日志。此 Java 流程不恢复 APK 资源、Manifest、原生库或动态加载代码；原生库可另用 `neverd decompile` 分析。
 
-内置读取器共用独立实现的带类型 Dalvik 模型和有界 Java 生成器，面向 DEX 035/037–040 与 smali 中可表示的常规代码。DEX 041、`invoke-custom` 等动态调用、部分初始化路径、未知操作和无法用 Java 表示的标识符都会明确失败。生成的 Java 可能使用分派循环，不执行原始 DEX，也不通过运行时桥接调用它。原始注释、排版和已删除名称无法还原。这个实验性引擎不承诺与 JADX 功能等价、语义等价或任意 APK 的完整恢复。
+内置恢复读取器共用独立实现的带类型 Dalvik 模型和有界 Java 生成器，面向 DEX 035/037–040 与 smali 中可表示的常规代码。DEX 041、`invoke-custom` 等动态调用、部分初始化路径、未知操作和无法用 Java 表示的标识符都会明确失败。生成的 Java 可能使用分派循环，不执行原始 DEX，也不通过运行时桥接调用它。原始注释、排版和已删除名称无法还原。这个实验性引擎不承诺与 JADX 功能等价、语义等价或任意 APK 的完整恢复。
 
 ## iOS 用法
 
@@ -50,11 +56,11 @@ Swift 恢复通过 NeverD LLVM fork 中的 `LLVMSwiftDemangle`，直接在 C++ �
 
 ## 限制与失败处理
 
-`-o` 必须指定不存在的目录，且不能位于目录输入内部。已有输出不会覆盖，只有恢复和验证成功后才发布结果。原生 CLI 成功返回零，恢复失败返回非零。使用 `--json` 时，已处理的失败包含 `schema_version`、`status: "error"` 和 `error`。参数解析、原生程序或依赖库启动失败以及中断仍可能只报告 stderr。调用方应先检查退出状态。
+恢复操作的 `-o` 必须指定不存在的目录，且不能位于目录输入内部。查询操作改为接受可选的新输出文件。已有输出不会覆盖，恢复流程只有在恢复和验证成功后才发布结果；查询则缓冲结果，直到每个选中 DEX 都成功。原生 CLI 成功返回零，恢复失败返回非零。使用 `--json` 时，已处理的失败包含 `schema_version`、`status: "error"` 和 `error`。参数解析、原生程序或依赖库启动失败以及中断仍可能只报告 stderr。调用方应先检查退出状态。
 
 默认最多 20,000 个条目、2 GiB 输入/解包或最终输出数据，内置 Android/iOS 分析时间预算或每个显式 JADX 进程上限为 300 秒。iOS 子进程使用总分析预算的剩余时间。内置读取器和生成器还实施有界工作量预算。可用 `--max-files`、`--max-bytes` 和 `--timeout` 调整，均必须大于零。后台运行期间会监测临时工作区，允许暂存输入与中间产物共存，条目数和字节数上限为配置值的三倍。每个进程的诊断最多 16 MiB。
 
-APK 暂存只写出根目录的 `classes.dex`、`classes2.dex` 和后续编号 DEX。所有 ZIP 成员仍须经过头部与范围校验、解压、长度和 CRC 验证，并计入归档条目数与解压后字节数限额。不写出的资源允许使用区分大小写的不同名称，例如 `res/-A.xml` 与 `res/-a.xml`。ZIP 精确重名及同一路径的文件/目录类型冲突仍会失败；跨平台文件系统的大小写冲突检查只针对实际写出的成员。包括 IPA 在内的全量提取仍拒绝这些输出路径冲突。整个归档中的路径穿越、链接、特殊文件和加密 ZIP 条目仍被拒绝；目录输入也拒绝链接和特殊文件。
+恢复操作的 APK 暂存只写出根目录的 `classes.dex`、`classes2.dex` 和后续编号 DEX。所有 ZIP 成员仍须经过头部与范围校验、解压、长度和 CRC 验证，并计入归档条目数与解压后字节数限额。不写出的资源允许使用区分大小写的不同名称，例如 `res/-A.xml` 与 `res/-a.xml`。ZIP 精确重名及同一路径的文件/目录类型冲突仍会失败；跨平台文件系统的大小写冲突检查只针对实际写出的成员。包括 IPA 在内的全量提取仍拒绝这些输出路径冲突。整个归档中的路径穿越、链接、特殊文件和加密 ZIP 条目仍被拒绝；目录输入也拒绝链接和特殊文件。
 
 这些限制用于增强健壮性，不是第三方后端的安全沙箱。失败的临时结果会清理。后端非零退出时会附带长度受限的诊断尾部。后端超时保留原有超时消息；若已捕获的日志文本可用，会追加长度受限的尾部；启动失败和超出预算保留各自的错误信息。
 

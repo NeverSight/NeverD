@@ -1107,6 +1107,87 @@ python3 -m unittest scripts.tests.test_audit_ci_test_inventory \
   scripts.tests.test_audit_ci_test_results scripts.tests.test_ci_configuration -v
 ```
 
+## Android class inventory performance
+
+Build `NeverDMobileTests` in Release and run its label before measuring
+`neverd mobile INPUT --list-classes`. Reader tests cover sparse metadata,
+Unicode, invalid references, unsupported method bodies, checksums and budgets;
+archive tests distinguish full extraction from selected-payload queries. CLI
+tests check prefix filtering, JSON scope, output preservation and multidex
+failure atomicity.
+
+The independent fixture/measurement harness validates every process's complete
+descriptor inventory before accepting a timing sample:
+
+```sh
+python3 -m unittest scripts.tests.test_benchmark_mobile_inventory -v
+python3 scripts/benchmark_mobile_inventory.py \
+  --output-dir /tmp/neverd-inventory-benchmark \
+  --class-count 6000 --dex-count 3 --code-units 64 \
+  --extra-string-bytes 8388608 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Use a new output directory for each run. `--generate-only` writes fixtures and
+their manifest without timings. `--workload` selects shared input kinds for an
+optional `--peer-command 'tool {input} {prefix}'`; input preparation is outside
+the timed command. Reports retain hashes, commands, all fresh-process samples,
+warm-cache assumptions and, on Linux with GNU time, maximum child RSS. That RSS
+is not the combined peak of a multiprocess tool. Synthetic APKs are query
+containers, not installable apps. Inventory speed proves neither reference
+search speed nor Java recovery quality.
+
+On hybrid CPUs, pin the harness and inherited children to the same allowed CPU
+(for example, `taskset -c 4 python3 ...` on Linux) to avoid mixing performance
+and efficiency cores. The report records the inherited CPU affinity.
+
+## Android code reference performance
+
+Reference queries share the recovery reader's instruction boundaries and code
+validation. Run the mobile suite after changing this boundary. Reader tests
+cover operand pool kinds, matching modes, method ownership and shared code,
+payload/immediate lookalikes, malformed inputs and resource limits. Shared debug
+streams are checked against every owning body's frame, extent and parameters.
+Keep both large member inventories and branch-dense bodies in storage-limit
+coverage; persistent indexes and temporary container growth have different
+lifetimes.
+Also check reordered and overlapping items, shared code with incompatible
+same-width prototypes, unaligned input storage, and substring matches crossing
+search-block boundaries. Performance changes to private decoder data must
+preserve complete owned recovery models and reference occurrence multisets,
+including failure behavior on unsupported recovery metadata. Distinguish
+independently emitted expectations from cross-tool agreement on real inputs.
+
+The independent reference harness records expected occurrences while emitting
+instructions. It checks full method identities, code-unit PCs, opcodes, target
+identities, UTF-16 units and multiplicity on every measured run. It also checks
+NeverD's independently expected coverage counts and `code_scan_complete`:
+
+```sh
+NEVERD_REFERENCE_TEST_BINARY="$PWD/build-release/bin/neverd" \
+  python3 -m unittest scripts.tests.test_benchmark_mobile_references -v
+python3 scripts/benchmark_mobile_references.py \
+  --output-dir /tmp/neverd-reference-benchmark \
+  --class-count 500 --methods-per-class 64 --matching-methods 2 \
+  --dex-count 3 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Use `--kind` and `--workload` to select cases. `--extra-strings 65536` exercises
+actual 32-bit string indices. Payload decoys are enabled by default;
+`--no-payload-lookalikes` retains the same layout and true references while
+replacing decoy payload values, for common-input comparisons. Keep both
+correctness and timing results. A query returning false payload references or
+missing real references fails validation and receives no accepted timing.
+
+An optional `--peer-command` accepts an argv template containing `{input}`,
+`{kind}` and `{query}`. Adapt query syntax explicitly where another tool uses
+different semantics, and compare complete occurrence multisets. Its declared
+validation scope is retained without claiming a full code scan. The same
+fresh-directory, CPU-affinity, fresh-process, warm-cache and RSS qualifications
+as the inventory benchmark apply. The optional CLI unit test is skipped unless
+`NEVERD_REFERENCE_TEST_BINARY` names the built executable; report that skip.
+
 ## Mobile SDK export evidence
 
 The manual `Mobile SDK Export Evidence` workflow runs `collect_mobile_ios_sdk_declarations.py --exports-only` against the pinned Xcode SDKs. It retains the exact Foundation, CoreFoundation, and UIKit linker maps for both the iOS device and simulator SDKs, with target, SDK version, SDK settings hash, file size, and SHA-256. The normal declaration collector retains these maps too. Missing, empty, oversized, or SDK-external files fail collection while preserving completed evidence. Linker maps establish symbol export evidence; they do not prove a call ABI or method recovery.

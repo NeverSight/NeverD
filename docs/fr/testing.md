@@ -780,6 +780,100 @@ multi-latch sans figer un temps machine. Les lignes cluster/account/slot
 permettent un `RPC activation audit`, les tests ordinaires restant déterministes
 et offline.
 
+## Performances de l’inventaire des classes Android
+
+Compilez `NeverDMobileTests` en Release et exécutez son label avant de mesurer
+`neverd mobile INPUT --list-classes`. Les tests du lecteur couvrent les
+métadonnées éparses, Unicode, les références invalides, les corps de méthodes
+non pris en charge, les sommes de contrôle et les budgets ; les tests d’archive
+distinguent l’extraction complète des requêtes sur charges utiles sélectionnées.
+Les tests CLI vérifient le filtrage par préfixe, le périmètre JSON, la préservation
+des sorties et l’atomicité des échecs multidex.
+
+Le générateur et banc de mesure indépendants valident l’inventaire complet des
+descripteurs de chaque processus avant d’accepter une mesure de temps :
+
+```sh
+python3 -m unittest scripts.tests.test_benchmark_mobile_inventory -v
+python3 scripts/benchmark_mobile_inventory.py \
+  --output-dir /tmp/neverd-inventory-benchmark \
+  --class-count 6000 --dex-count 3 --code-units 64 \
+  --extra-string-bytes 8388608 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Utilisez un nouveau répertoire de sortie à chaque exécution. `--generate-only`
+écrit les jeux d’essai et leur manifeste sans chronométrage. `--workload`
+sélectionne des types d’entrée communs pour une éventuelle commande
+`--peer-command 'tool {input} {prefix}'` ; la préparation des entrées est hors
+chronométrage. Les rapports conservent les empreintes, les commandes, tous les
+échantillons issus de nouveaux processus, les hypothèses de cache chaud et,
+sous Linux avec GNU time, le RSS maximal des processus enfants. Ce RSS n’est
+pas le pic cumulé d’un outil multiprocessus. Les APK synthétiques sont des
+conteneurs de requête, pas des applications installables. La vitesse de
+l’inventaire ne prouve ni celle des recherches de références ni la qualité de
+la reconstruction Java.
+
+Sur les processeurs hybrides, fixez le banc et ses enfants à un même CPU autorisé
+(par exemple `taskset -c 4 python3 ...` sous Linux) pour éviter de mélanger les
+cœurs de performance et d’efficacité. Le rapport consigne l’affinité CPU héritée.
+
+## Performances des références de code Android
+
+Les requêtes de références partagent les frontières d’instructions et la
+validation du code du lecteur de reconstruction. Exécutez la suite mobile
+après toute modification de cette frontière. Les tests du lecteur couvrent les
+types de pools d’opérandes, les modes de recherche, l’appartenance des méthodes
+et le code partagé, les faux semblants dans les charges utiles/valeurs
+immédiates, les entrées malformées et les limites de ressources. Les flux de
+débogage partagés sont vérifiés avec le cadre, l’étendue et les paramètres de
+chaque corps propriétaire. Conservez les grands inventaires de membres et les
+corps riches en branchements dans la couverture des limites de stockage ; les
+index persistants et la croissance temporaire des conteneurs ont des durées de
+vie différentes.
+Vérifiez aussi les éléments réordonnés ou se chevauchant, le code partagé entre
+prototypes incompatibles de même largeur, le stockage d’entrée non aligné et
+les sous-chaînes traversant les frontières des blocs de recherche. Les
+optimisations des données privées du décodeur doivent préserver les modèles
+complets de reconstruction possédant leurs données et les multiensembles
+d’occurrences de références, y compris les échecs sur les métadonnées de
+reconstruction non prises en charge. Distinguez les résultats attendus produits
+indépendamment de la concordance entre outils sur des entrées réelles.
+
+Le banc de références indépendant enregistre les occurrences attendues pendant
+l’émission des instructions. Il vérifie à chaque mesure les identités complètes
+de méthodes, les PC en unités de code, les opcodes, les identités cibles, les
+unités UTF-16 et les multiplicités. Il vérifie aussi les compteurs de couverture
+attendus indépendamment pour NeverD et `code_scan_complete` :
+
+```sh
+NEVERD_REFERENCE_TEST_BINARY="$PWD/build-release/bin/neverd" \
+  python3 -m unittest scripts.tests.test_benchmark_mobile_references -v
+python3 scripts/benchmark_mobile_references.py \
+  --output-dir /tmp/neverd-reference-benchmark \
+  --class-count 500 --methods-per-class 64 --matching-methods 2 \
+  --dex-count 3 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Utilisez `--kind` et `--workload` pour sélectionner les cas. `--extra-strings 65536`
+exerce de véritables indices de chaînes sur 32 bits. Les leurres de charges
+utiles sont activés par défaut ; `--no-payload-lookalikes` conserve la disposition
+et les vraies références tout en remplaçant les valeurs des leurres, pour des
+comparaisons sur entrées communes. Conservez les résultats de correction et de
+temps. Une requête produisant de fausses références dans les charges utiles ou
+omettant des références réelles échoue à la validation ; aucune mesure n’est
+alors acceptée.
+
+L’option `--peer-command` accepte un modèle argv contenant `{input}`, `{kind}`
+et `{query}`. Adaptez explicitement la syntaxe si un autre outil utilise une
+sémantique différente et comparez les multiensembles complets d’occurrences.
+Son périmètre de validation déclaré est conservé sans lui attribuer un balayage
+complet du code. Les mêmes réserves sur le nouveau répertoire, l’affinité CPU,
+les nouveaux processus, le cache chaud et le RSS que pour l’inventaire
+s’appliquent. Le test unitaire CLI facultatif est ignoré sauf si
+`NEVERD_REFERENCE_TEST_BINARY` désigne l’exécutable compilé ; signalez ce saut.
+
 ## Preuves des exports des SDK mobiles
 
 Le workflow manuel `Mobile SDK Export Evidence` exécute `collect_mobile_ios_sdk_declarations.py --exports-only` avec les SDK Xcode épinglés. Il conserve sans modification les tables du linker de Foundation, CoreFoundation et UIKit des SDK iOS pour appareil et simulateur, avec la cible, la version du SDK, le hachage des paramètres du SDK, la taille et le SHA-256. Le collecteur de déclarations habituel les conserve aussi. Un fichier absent, vide, trop volumineux ou situé hors du SDK fait échouer la collecte tout en préservant les preuves déjà recueillies. Ces tables attestent les exports de symboles, sans prouver une ABI d’appel ni la récupération d’une méthode.

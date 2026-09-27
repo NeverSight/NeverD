@@ -504,6 +504,45 @@ ni du lowering natif.
 
 ## Carte des composants
 
+La CLI mobile expérimentale gère l’inventaire des classes APK/DEX et les
+requêtes de références dans le code dans `tools/neverd/mobile`. Les deux
+parcours partagent avec la reconstruction le lecteur d’enveloppe DEX/MUTF-8
+et le validateur des métadonnées ZIP. L’inventaire matérialise uniquement les
+identités de classe. Les requêtes observent les opérandes de pool dans le
+décodeur d’instructions existant et partagent la validation de l’appartenance
+des classes/membres et du flot de contrôle ; aucun décodeur distinct de largeur
+d’instruction n’est utilisé. Le décodeur produit des informations compactes de
+flot dans les deux modes ; la reconstruction crée en plus des instructions
+possédant leurs données. Après validation de chaque opérande, les requêtes ne
+conservent que les références sélectionnées. Les entrées privées du pool de
+membres empruntent les tables d’identifiants complètes et immuables ; les
+modèles de reconstruction et les résultats de référence matérialisent
+explicitement des données de membres possédées. Les prototypes empruntent aussi
+les listes de types validées. Les deux représentations utilisent le même
+formateur canonique d’identité de méthode et le même validateur des indicateurs
+d’accès encodés. Le décodeur résout une seule fois les arêtes de branchement
+privées en indices d’instructions ; les cibles publiques de reconstruction
+conservent leurs PC en unités de code. Les requêtes réutilisent les tables de
+classes validées et collectent les étendues des éléments par section de la map,
+en vérifiant les chevauchements avant publication même lorsque l’ordre physique
+des éléments diffère.
+Les débits du budget de travail restent immédiats. Les lectures scalaires,
+comparaisons courtes et étapes d’instructions bornées partagent des points de
+contrôle de délai ; les opérations plus grandes le vérifient directement.
+Les flux de débogage sont vérifiés pour le cadre et l’étendue de chaque élément
+de code, sans cache d’un succès indépendant du contexte. Les sites compacts
+sont rejoués pour chaque propriétaire d’un élément de code physique partagé.
+La recherche gère la sélection littérale des cibles ; la passerelle de conteneur
+gère l’agrégation entre DEX et la publication JSON, y compris les unités UTF-16
+sans perte des chaînes. `visitZipMembers` valide toutes les métadonnées des
+membres et toutes les charges utiles sélectionnées avant de les parcourir en
+mémoire ; `extractZip` conserve la validation des charges utiles de l’archive
+entière. Les résultats s’accumulent avant publication et excluent explicitement
+l’intégrité des charges utiles non sélectionnées. L’inventaire exclut les corps
+de méthodes ; les requêtes de références valident tous les corps définis sans
+prétendre valider les annotations ou la reconstruction Java. Aucun de ces
+parcours n’étend le contrat de formats du SDK binaire natif.
+
 Chaque composant est une archive statique créée par
 `add_neverd_component_library`. Le tableau liste les dépendances NeverD
 importantes, pas toutes les bibliothèques LLVM et Capstone communes fournies par

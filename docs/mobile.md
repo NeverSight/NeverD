@@ -14,6 +14,22 @@ The default engine is implemented in C++20 and needs no Python, Java, or JADX ru
 
 ## Android
 
+For a quick class directory without Java recovery, use
+`neverd mobile app.apk --list-classes`, optionally with
+`--class-prefix com.example` or `--json`. The
+[inventory contract](android.md#fast-class-inventory) describes ordering,
+limits and selected-payload validation. Query mode needs no output directory;
+its optional `-o` names a new file.
+
+For direct bytecode references, use
+`neverd mobile app.apk --find-refs string --query 'example' --json`.
+The [reference query contract](android.md#code-reference-queries) also covers
+type, method and field operands, literal/exact matching, per-occurrence
+positions, UTF-16 preservation and code-validation scope. Without `--json`,
+this operation emits JSON Lines. It shares the new-file `-o` behavior.
+
+The following examples and output describe recovery.
+
 ```sh
 neverd mobile app.apk -o recovered-app
 neverd mobile classes.dex -o recovered-dex
@@ -23,9 +39,9 @@ neverd mobile decoded/smali -o recovered-java
 
 All root `classes.dex`, `classes2.dex`, and subsequent numbered DEX files in an APK are analyzed together. A smali directory is searched recursively and all its classes are analyzed in one invocation, including nested and sibling classes. Use a directory when recovering classes that reference each other. A single smali file only supplies that class.
 
-Built-in output contains `sources/`, `metadata/android-methods.json`, and `report.json`, with `backend: {"name": "neverd", "version": "1", "execution": "builtin"}`. The report embeds `android_method_recovery`: `method_count = recovered_method_count + declaration_only_method_count`, and `unrecovered_method_count` must be zero before publication. Original `native`/`abstract` declarations are counted separately from recovered bodies. The explicit external adapter retains its own backend logs. APK resources, manifests, native libraries, and dynamically loaded code are outside this Java path; native libraries can be analyzed separately with `neverd decompile`.
+Built-in recovery output contains `sources/`, `metadata/android-methods.json`, and `report.json`, with `backend: {"name": "neverd", "version": "1", "execution": "builtin"}`. The report embeds `android_method_recovery`: `method_count = recovered_method_count + declaration_only_method_count`, and `unrecovered_method_count` must be zero before publication. Original `native`/`abstract` declarations are counted separately from recovered bodies. The explicit external adapter retains its own backend logs. APK resources, manifests, native libraries, and dynamically loaded code are outside this Java path; native libraries can be analyzed separately with `neverd decompile`.
 
-The built-in readers share an independently implemented typed Dalvik model and bounded Java emitter for representable ordinary DEX 035/037–040 and smali code. DEX 041, dynamic calls such as `invoke-custom`, some initialization paths, unknown operations, and identifiers unrepresentable in Java fail explicitly. Generated Java may use a dispatch loop; it does not execute the original DEX or call it through a runtime bridge. Original comments, formatting, and removed names cannot be restored. The experimental engine does not promise JADX feature parity, semantic equivalence, or complete recovery of arbitrary APKs.
+The built-in recovery readers share an independently implemented typed Dalvik model and bounded Java emitter for representable ordinary DEX 035/037–040 and smali code. DEX 041, dynamic calls such as `invoke-custom`, some initialization paths, unknown operations, and identifiers unrepresentable in Java fail explicitly. Generated Java may use a dispatch loop; it does not execute the original DEX or call it through a runtime bridge. Original comments, formatting, and removed names cannot be restored. The experimental engine does not promise JADX feature parity, semantic equivalence, or complete recovery of arbitrary APKs.
 
 ## iOS
 
@@ -50,11 +66,11 @@ Original comments, formatting, removed identifiers, and compilation-lost source 
 
 ## Limits and failures
 
-`-o` must name a new directory outside any directory input. Existing output is never overwritten. Work is staged and published only after successful recovery and output validation. Successful native CLI runs return zero. Recovery failures return nonzero; `--json` reports handled failures with `schema_version`, `status: "error"`, and `error`. Argument parsing, native executable or library startup failures, and interruptions can instead report on stderr. Consumers must inspect the exit status first.
+For recovery, `-o` must name a new directory outside any directory input. Query modes instead accept an optional new output file. Existing output is never overwritten. Recovery work is staged and published only after successful recovery and output validation. Query results are buffered until every selected DEX succeeds. Successful native CLI runs return zero. Recovery failures return nonzero; `--json` reports handled failures with `schema_version`, `status: "error"`, and `error`. Argument parsing, native executable or library startup failures, and interruptions can instead report on stderr. Consumers must inspect the exit status first.
 
 The defaults are 20,000 entries, 2 GiB of input/extracted or final output data, and 300 seconds for built-in Android/iOS analysis or each explicit JADX process. iOS child processes receive the remaining total analysis budget. The built-in reader and emitter also enforce a bounded work budget. Set `--max-files`, `--max-bytes`, and `--timeout` to adjust these positive limits. The temporary work area is monitored while backends run, with up to three times the entry/byte limits to allow staged input and intermediate output to coexist. Diagnostics are capped at 16 MiB per process.
 
-APK staging writes only root `classes.dex`, `classes2.dex`, and subsequent numbered DEX files. Every ZIP member still undergoes header/range checks, decompression, length and CRC validation, and counts toward archive entry and uncompressed-byte limits. Unwritten resources may have distinct case-sensitive names such as `res/-A.xml` and `res/-a.xml`. Exact duplicate ZIP names and file/directory identity conflicts remain errors; portable filesystem case-collision checks apply to members actually written. Full extraction, including IPA input, still rejects such output collisions. Traversal paths, links, special files, and encrypted ZIP entries remain rejected throughout the archive. Directory inputs also reject symbolic links and special files.
+During recovery, APK staging writes only root `classes.dex`, `classes2.dex`, and subsequent numbered DEX files. Every ZIP member still undergoes header/range checks, decompression, length and CRC validation, and counts toward archive entry and uncompressed-byte limits. Unwritten resources may have distinct case-sensitive names such as `res/-A.xml` and `res/-a.xml`. Exact duplicate ZIP names and file/directory identity conflicts remain errors; portable filesystem case-collision checks apply to members actually written. Full extraction, including IPA input, still rejects such output collisions. Traversal paths, links, special files, and encrypted ZIP entries remain rejected throughout the archive. Directory inputs also reject symbolic links and special files.
 
 These limits are robustness controls, not a sandbox for third-party backend code. Explicit JADX and native source-export commands run as local child processes. Failed staging output is removed. Nonzero backend exits include a bounded diagnostic tail. Backend timeouts preserve the timeout message and append a bounded tail when captured log text is available. Launch failures and budget violations retain their own error messages.
 

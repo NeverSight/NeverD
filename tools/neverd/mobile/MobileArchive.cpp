@@ -123,7 +123,8 @@ void zip64(std::string_view extra, uint64_t &uncompressed, uint64_t &compressed,
 }
 
 void extractEntry(Archive &archive, const Entry &entry,
-                  const std::optional<fs::path> &dest, Budget &budget) {
+                  const std::optional<fs::path> &dest, Budget &budget,
+                  std::string *contents = nullptr) {
   // Directory entries can contain an encoded empty deflate stream. Validate
   // that stream and its CRC too, without opening a file at the directory path.
   std::optional<OutputFile> file;
@@ -139,6 +140,8 @@ void extractEntry(Archive &archive, const Entry &entry,
                 static_cast<uInt>(bytes.size()));
     if (file)
       file->write(bytes);
+    if (contents)
+      contents->append(bytes);
   };
   if (entry.method == 0) {
     if (entry.compressed != entry.uncompressed)
@@ -191,14 +194,11 @@ void extractEntry(Archive &archive, const Entry &entry,
   if (file)
     file->close();
 }
-} // namespace
-
-std::vector<fs::path>
-extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
-           const std::function<bool(const fs::path &)> &Select) {
-  limits.validate();
-  Budget budget(limits);
-  Archive archive(source, limits.max_bytes);
+std::vector<Entry>
+readDirectory(Archive &archive, Budget &budget,
+              const std::function<bool(const fs::path &)> &Select,
+              bool filesystem_output) {
+  const auto &limits = budget.limits;
   uint64_t footer_start =
       archive.size - std::min<uint64_t>(archive.size, 65557);
   auto footer = archive.read(footer_start, archive.size - footer_start);
@@ -309,6 +309,8 @@ extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
       throw Error("encrypted or multi-volume ZIP entry is unsupported");
     if (entry.method != 0 && entry.method != 8)
       throw Error("unsupported ZIP compression method");
+    if (entry.method == 0 && entry.compressed != entry.uncompressed)
+      throw Error("stored ZIP entry size disagrees");
     if (entry.directory && entry.uncompressed)
       throw Error("ZIP directory entry contains file data");
     unsigned kind = (attributes >> 16) & 0170000;
@@ -325,14 +327,14 @@ extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
     for (auto parent = entry.path.parent_path(); !parent.empty();
          parent = parent.parent_path()) {
       reserve(ArchivePaths, parent, true, false, false);
-      if (entry.selected)
+      if (entry.selected && filesystem_output)
         reserve(OutputPaths, parent, true, false, true);
     }
     // ZIP identities are case-sensitive. Only entries written to host paths
     // need the additional portable filesystem collision check. APK resources
     // can legitimately differ only by case and remain in the original APK.
     reserve(ArchivePaths, entry.path, entry.directory, true, false);
-    if (entry.selected)
+    if (entry.selected && filesystem_output)
       reserve(OutputPaths, entry.path, entry.directory, true, true);
     entries.push_back(std::move(entry));
     cursor += 46 + name_length + extra_length + comment_length;
@@ -377,6 +379,18 @@ extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
     if (ranges[i].first < ranges[i - 1].second)
       throw Error("ZIP entries overlap");
 
+  return entries;
+}
+} // namespace
+
+std::vector<fs::path>
+extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
+           const std::function<bool(const fs::path &)> &Select) {
+  limits.validate();
+  Budget budget(limits);
+  Archive archive(source, limits.max_bytes);
+  auto entries = readDirectory(archive, budget, Select, true);
+
   fs::create_directories(dest);
   std::vector<fs::path> written;
   for (const auto &entry : entries) {
@@ -394,5 +408,32 @@ extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
     }
   }
   return written;
+}
+
+void visitZipMembers(
+    const fs::path &source, Budget &budget,
+    const std::function<bool(const fs::path &)> &select,
+    const std::function<void(const fs::path &, std::string_view)> &visit) {
+  if (!select || !visit)
+    throw Error("ZIP query requires member selection and a visitor");
+  Archive archive(source, budget.limits.max_bytes);
+  auto entries = readDirectory(archive, budget, select, false);
+  for (const auto &entry : entries) {
+    budget.check();
+    if (!entry.selected)
+      continue;
+    // Query validation covers every header/range but only selected payloads.
+    // Never publish a selected member before its complete size/CRC check.
+    std::string contents;
+    // Stored bytes already have a checked physical range. For DEFLATE, grow
+    // beyond that range only as actual output arrives, never from an unchecked
+    // expansion claim. This avoids repeated copies of large stored DEX files.
+    const auto initial = std::min(entry.compressed, entry.uncompressed);
+    if (initial > contents.max_size())
+      throw Error("ZIP query member exceeds the addressable byte limit");
+    contents.reserve(static_cast<size_t>(initial));
+    extractEntry(archive, entry, std::nullopt, budget, &contents);
+    visit(entry.path, contents);
+  }
 }
 } // namespace neverd::mobile

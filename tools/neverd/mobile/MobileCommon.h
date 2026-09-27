@@ -35,6 +35,13 @@ struct Budget {
   uint64_t output_bytes = 0;
   explicit Budget(Limits limits = {});
   void tick(uint64_t count = 1);
+  // For bounded inner loops that check the deadline separately. Work is
+  // debited immediately so nested readers share the same remaining limit.
+  void consumeWork(uint64_t count) {
+    if (count > remaining)
+      throw Error("mobile analysis exceeded its work budget");
+    remaining -= count;
+  }
   void output(uint64_t count);
   void check() const;
 };
@@ -67,6 +74,13 @@ void copyTree(const fs::path &source, const fs::path &dest,
 std::vector<fs::path>
 extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
            const std::function<bool(const fs::path &)> &Select = {});
+// Validate all ZIP metadata and selected payloads, then visit each selected
+// member in directory order. The contents live only for the callback. This
+// query boundary does not validate the contents of unselected members.
+void visitZipMembers(
+    const fs::path &source, Budget &budget,
+    const std::function<bool(const fs::path &)> &select,
+    const std::function<void(const fs::path &, std::string_view)> &visit);
 std::optional<std::string> findProgram(std::string_view name);
 void runTool(
     const std::vector<std::string> &argv, const fs::path &log, uint64_t timeout,
@@ -80,4 +94,13 @@ llvm::json::Object recoverAndroid(const Options &options,
 llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
                               Budget &budget);
 llvm::json::Object recover(const Options &options);
+bool androidDexName(std::string_view name);
+struct AndroidClassInventory {
+  std::vector<std::string> classes;
+  uint64_t dex_count = 0;
+  uint64_t total_class_count = 0;
+};
+AndroidClassInventory listAndroidClasses(const fs::path &input,
+                                         std::string_view prefix,
+                                         Budget &budget);
 } // namespace neverd::mobile

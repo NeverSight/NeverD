@@ -65,6 +65,8 @@ cmake --build build --target neverd
 
 ## 支援的輸入與範圍
 
+下表描述還原操作接受的輸入。後文介紹的查詢模式採用較窄的驗證範圍。
+
 | 輸入 | 行為 | 重要限制 |
 |------|------|----------|
 | `.apk` | 驗證完整 ZIP，再一起分析根目錄中的 `classes.dex`、`classes2.dex` 與後續編號的 DEX 檔案 | 僅處理程式碼；不解碼資源或 manifest |
@@ -78,6 +80,72 @@ Split APK 各自視為獨立輸入。每個含 DEX 的 APK 都能單獨處理，
 
 APK 資源、`AndroidManifest.xml`、assets、JNI／原生函式庫，以及執行期間下載的程式碼，都不會還原為 Java。請另外擷取原生 `.so`，再使用 `neverd decompile library.so -o library.c`。此靜態流程要求加密或加殼內容已經以一般 DEX/smali 形式提供；不會執行脫殼、連接裝置或繞過保護。
 
+## 快速類別清單
+
+```sh
+neverd mobile app.apk --list-classes
+neverd mobile classes.dex --list-classes --class-prefix com.example
+neverd mobile app.apk --list-classes --class-prefix Lcom/example/ --json
+neverd mobile app.apk --list-classes -o classes.txt
+```
+
+此查詢讀取類別身分，不解碼方法本體，也不產生 Java；不需要暫存工作目錄或外部執行階段。
+文字輸出每行保留一個精確的 DEX 描述符，先依 ZIP 目錄順序，再依 DEX 定義順序排列。
+`--class-prefix` 接受描述符前綴或以點分隔的套件前綴，採用字面前綴比對，不檢查套件邊界。
+重複類別定義（包括跨 DEX 檔案）會明確失敗；無法無損表示為 UTF-8 的類別身分也會失敗。
+
+未指定 `-o` 時寫入 stdout。查詢模式中的 `-o` 指定**新檔案**，不是還原目錄；既有檔案保持不變。
+所有選定 DEX 成功前，結果都會暫存在記憶體中，因此後面的 DEX 格式錯誤不會發布部分清單。
+`--json` 包含符合條件及總類別數、DEX 數，以及
+`validation_scope: "dex-envelope-and-class-identities"`。
+
+所有 ZIP 名稱、標頭、範圍與宣告的資源限制都會檢查。只有根目錄的 `classes.dex` 和編號的
+`classesN.dex` 內容會解壓縮及檢查 CRC；無關資源內容的完整性未驗證。每個 DEX 仍會檢查標頭、
+SHA-1、Adler-32、map 範圍和被參照的類別中繼資料。方法本體及未被參照的中繼資料不在驗證範圍內。
+這是清單查詢，不是整個封存檔的完整性檢查，也不是 Java 還原證明。DEX 041、method-handle 和
+custom-call-site 區段仍不支援。一般完整還原路徑仍會驗證每個封存內容。
+
+`--timeout`、`--max-files` 和 `--max-bytes` 都會套用。類別限制在篩選前計算所有 DEX 的定義；
+未選定的 ZIP 項目仍計入封存限制。清單操作不接受 `--jadx`、iOS 選項或 smali 輸入。
+
+## 程式碼參照查詢
+
+無須產生 Java 即可尋找指令的直接運算元：
+
+```sh
+neverd mobile app.apk --find-refs string --query 'login failed' --json
+neverd mobile classes.dex --find-refs type --query 'Lcom/example/Service;' --exact
+neverd mobile app.apk --find-refs method --query '->connect(' --owner 'Lcom/example/Client;'
+neverd mobile app.apk --find-refs field --query 'Lcom/example/State;->ready:Z' --exact -o refs.jsonl
+```
+
+比對採用區分大小寫的字面子字串。`--exact` 比對完整目標：字串內容、型別描述符、
+例如 `Lpkg/Type;->name(I)V` 的方法身分，或例如 `Lpkg/Type;->name:I` 的欄位身分。
+`--owner` 以精確描述符限制方法或欄位參照的目標擁有者，不篩選包含參照的方法。
+不支援空查詢、smali 輸入及混合查詢／還原選項；正規表示式特殊字元視為一般字面字元。
+
+預設每次出現輸出一個精簡 JSON 物件（JSON Lines）；`--json` 傳回包含計數及 `references`
+陣列的報告。每列記錄 `dex_entry`、完整的所屬 `method`、`pc_code_units`（從方法第一個指令
+起算的 16 位元單位）、`opcode`、`kind`、`target_index`（DEX 內部索引）及 `target`。
+保留所有出現次數，包括歸屬於多個方法定義的共用程式碼。字串列另含精確的 `target_utf16`
+單位；若孤立代理碼使內容無法無損發布為 UTF-8，`target` 為 null。其他身分必須可表示為 UTF-8。
+
+掃描器使用還原讀取器的指令邊界、運算元檢查、payload 處理及控制流程檢查。立即值及 switch／array
+payload 資料不會被視為參照。即使沒有目標符合條件，也會先檢查每個已定義的程式碼本體，
+再設定 `code_scan_complete: true`。`defined_method_count` 包含 native 和 abstract 宣告；
+`scanned_method_count` 計算具有本體的定義，`scanned_code_item_count` 計算每個 DEX 中不同的
+實體本體。`matching_pool_entries` 計算符合條件的目標，包括未被參照的目標。
+
+`validation_scope: "dex-code-references"` 涵蓋 DEX 外層結構、識別碼表、類別／成員歸屬，以及
+實際讀取的程式碼、例外和除錯資料。註解、靜態編碼值、僅出現在宣告中的使用及未被參照的中繼資料
+不在查詢範圍內。這不是 Java 還原或 ART 驗證器。不支援的程式碼及格式錯誤的已讀取資料會明確失敗。
+APK 驗證採用與類別清單相同的選定內容邊界；未選定資源內容的完整性未驗證。
+
+所有選定 DEX 的結果都會先暫存，包括跨 DEX 重複類別檢查，然後才發布。選用的 `-o` 指定新檔案。
+`--max-files` 分別限制累計類別定義數、方法定義數、結果出現次數，以及 ZIP 項目數。
+`--max-bytes` 限制輸入、保留的查詢資料、每個本體的工作儲存及輸出（保守計入 JSON 展開量）。
+這些是操作預算；程序 RSS 還包含輸入緩衝區、配置器額外負擔及執行階段。一般逾時與工作量預算也會套用。
+
 ## 選項與優先順序
 
 ```sh
@@ -87,13 +155,19 @@ neverd mobile app.apk -o recovered-app --platform=android \
 
 | 選項 | 預設值 | 意義 |
 |------|--------|------|
-| `-o DIRECTORY` | 必填 | 位於任何目錄輸入之外的新輸出目錄；不覆寫既有輸出 |
+| `-o PATH` | 還原時必填 | 新還原目錄；兩種查詢模式中則為選用的新輸出檔案 |
+| `--list-classes` | 關閉 | 查詢 APK/DEX 類別身分，不進行 Java 還原 |
+| `--class-prefix PREFIX` | 所有類別 | 字面描述符或點分隔前綴；須搭配 `--list-classes` |
+| `--find-refs KIND` | 關閉 | 查詢 string、type、method 或 field 的直接指令參照 |
+| `--query TEXT` | 參照查詢時必填 | 目標身分的字面子字串 |
+| `--exact` | 關閉 | 比對完整參照目標身分 |
+| `--owner DESCRIPTOR` | 任意擁有者 | method／field 查詢的精確目標擁有者 |
 | `--platform=auto\|android` | `auto` | 明確選擇 Android，或根據輸入推斷平台 |
 | `--jadx PATH` | 未設定：內建引擎 | 明確選用另外安裝的 JADX 相容轉接器；不透過環境變數選用，也不自動切換 |
 | `--timeout N` | `300` | 內建分析的正值時間預算；外部後端則為每個程序的秒數上限，包含版本探測 |
 | `--max-files N` | `20000` | 正值的項目數上限，包含實際建立的目錄 |
 | `--max-bytes N` | `2147483648` | 輸入、解壓縮資料與最終輸出的位元組上限，須為正值 |
-| `--json` | 關閉 | 以 JSON 列印報告，而非供人閱讀的摘要 |
+| `--json` | 關閉 | 以 JSON 列印報告；參照查詢未指定時輸出 JSON Lines |
 
 非預設 `--arch`、`--artifact`、`--metadata-only` 與非零 `--max-func` 屬於 iOS，在 Android 下會被拒絕；明確指定 `--arch=auto` 則可接受。不支援傳遞任意後端選項。明確選用的 JADX 轉接器會隔離各次執行的設定、快取與暫存目錄，不匯入環境中的後端設定或外掛組態。
 

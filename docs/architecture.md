@@ -1297,6 +1297,37 @@ AArch64 PE, ELF, and Mach-O images.
 
 ## Component map
 
+The experimental mobile CLI owns APK/DEX class inventory and code-reference
+queries in `tools/neverd/mobile`. Both use the same DEX envelope/MUTF-8 reader
+and ZIP metadata validator as recovery. Class inventory materializes only
+class identities. Reference queries observe pool operands in the existing
+instruction decoder, sharing class/member ownership and code-flow validation;
+there is no separate instruction-width decoder. The decoder produces compact
+flow facts in both modes; recovery additionally creates owned instructions.
+Queries retain only selected reference operands after validating every operand.
+Private member-pool entries borrow completed, immutable identifier tables;
+recovery models and reference results explicitly materialize owned member data.
+Prototype entries also borrow validated type lists. Both representations use
+the same canonical method-identity formatter and encoded access-flag validator.
+The decoder resolves private branch edges to instruction ordinals once;
+public recovery targets retain their code-unit PCs. Queries reuse validated
+class tables and collect item extents per mapped section, checking overlaps
+before publication even when physical items arrive out of order.
+Work charges remain immediate. Bounded scalar reads, short comparisons and
+instruction steps share deadline checkpoints; larger operations check directly.
+Debug streams are checked for each code item's frame and extent without caching
+a context-independent success flag. Compact sites are replayed for every owner
+of a shared physical code item. Query matching owns literal target
+selection, while the container bridge owns cross-DEX aggregation and JSON
+publication, including lossless UTF-16 string units.
+`visitZipMembers` validates all member metadata and complete selected payloads
+before visiting them in memory; `extractZip` retains whole-archive payload
+validation. Query results are accumulated before publication and explicitly
+exclude unselected payload integrity. Class inventory excludes method bodies;
+reference queries validate every defined body but do not claim annotation or
+Java recovery validation. Neither route extends the native binary SDK format
+contract.
+
 The optional Z3 backend remains inside `lib/solver`; `lib/symbolic` has no
 external solver dependency. It translates the expression DAG directly and
 caches nodes within a solver session. Permanent assertions and per-check

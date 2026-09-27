@@ -16,6 +16,7 @@
 #include <functional>
 #include <iterator>
 #include <tuple>
+#include <zlib.h>
 
 using namespace neverd::mobile;
 using namespace neverd::mobile::dalvik;
@@ -88,10 +89,13 @@ struct FixtureOptions {
   unsigned registers = 1, flags = 9;
   std::vector<std::array<uint32_t, 3>> tries;
   std::string handlers;
+  std::string debug_info;
   std::vector<std::u16string> extras;
   std::optional<std::string> static_value;
   std::string field_type = "I";
   std::optional<MethodRef> referenced_method;
+  std::vector<MethodRef> extra_methods;
+  std::vector<FieldRef> extra_fields;
   std::string owner = "Lfixture/Sample;";
   std::vector<FixtureAnnotation> annotations;
   std::vector<std::vector<size_t>> annotation_sets;
@@ -102,6 +106,11 @@ struct FixtureOptions {
   unsigned class_flags = 1;
   std::vector<std::string> interfaces;
   bool define_method = true;
+  bool define_referenced_method = false;
+  bool separate_referenced_code = false;
+  unsigned referenced_registers = 1;
+  std::vector<uint16_t> referenced_words{0x000e};
+  bool duplicate_class = false;
 };
 struct Fixture {
   std::string data;
@@ -130,9 +139,12 @@ Fixture fixture(FixtureOptions options = {}) {
     method_refs.push_back(definition);
   if (options.referenced_method)
     method_refs.push_back(*options.referenced_method);
+  method_refs.insert(method_refs.end(), options.extra_methods.begin(),
+                     options.extra_methods.end());
   std::set<std::u16string> names{utf16(owner), utf16(parent)};
   std::set<std::string> type_set{owner, parent};
-  std::set<FieldRef> field_set;
+  std::set<FieldRef> field_set(options.extra_fields.begin(),
+                               options.extra_fields.end());
   for (const auto &type : options.interfaces) {
     names.insert(utf16(type));
     type_set.insert(type);
@@ -235,6 +247,18 @@ Fixture fixture(FixtureOptions options = {}) {
       std::find(method_refs.begin(), method_refs.end(), definition);
   unsigned definition_index =
       unsigned(definition_position - method_refs.begin());
+  std::vector<unsigned> defined_indices;
+  if (options.define_method)
+    defined_indices.push_back(definition_index);
+  if (options.define_referenced_method) {
+    if (!options.define_method || !options.referenced_method)
+      throw Error("shared code fixture requires two defined methods");
+    defined_indices.push_back(
+        unsigned(std::find(method_refs.begin(), method_refs.end(),
+                           *options.referenced_method) -
+                 method_refs.begin()));
+    std::sort(defined_indices.begin(), defined_indices.end());
+  }
   unsigned incoming = !(options.flags & 8);
   for (auto &p : options.params)
     incoming += p == "J" || p == "D" ? 2 : 1;
@@ -278,7 +302,8 @@ Fixture fixture(FixtureOptions options = {}) {
     at["methods"] = section(5, method_refs.size(), raw);
   if (options.define_method)
     at["defined_method"] = at["methods"] + definition_index * 8;
-  at["class"] = section(6, 1, std::string(32, '\0'));
+  const unsigned class_count = options.duplicate_class ? 2 : 1;
+  at["class"] = section(6, class_count, std::string(32 * class_count, '\0'));
   size_t data_off = out.size();
   at["string_data"] = out.size();
   for (size_t i = 0; i < fixture.strings.size(); ++i) {
@@ -334,23 +359,53 @@ Fixture fixture(FixtureOptions options = {}) {
       append(raw, t[2], 2);
     }
     raw += options.handlers;
-    code = section(0x2001, 1, raw);
+    size_t second = 0;
+    if (options.separate_referenced_code) {
+      if (!options.define_referenced_method || !options.referenced_method)
+        throw Error("separate code fixture needs referenced declaration");
+      while (raw.size() % 4)
+        raw += '\0';
+      second = raw.size();
+      unsigned incoming2 = !(options.flags & 8);
+      for (const auto &arg : options.referenced_method->parameters)
+        incoming2 += arg == "J" || arg == "D" ? 2 : 1;
+      append(raw, options.referenced_registers, 2);
+      append(raw, incoming2, 2);
+      append(raw, 255, 2);
+      append(raw, 0, 2);
+      append(raw, 0, 4);
+      append(raw, options.referenced_words.size(), 4);
+      for (auto word : options.referenced_words)
+        append(raw, word, 2);
+    }
+    code = section(0x2001, second ? 2 : 1, raw);
+    at["referenced_code"] = second ? code + second : 0;
   }
   at["code"] = code;
+  if (code && !options.debug_info.empty()) {
+    at["debug"] = section(0x2003, 1, options.debug_info);
+    patch(out, code + 8, at["debug"]);
+    if (at["referenced_code"])
+      patch(out, at["referenced_code"] + 8, at["debug"]);
+  }
   bool direct = options.flags & (8 | 2 | 0x10000);
   raw.clear();
   uleb(raw, bool(options.static_value));
   uleb(raw, 0);
-  uleb(raw, options.define_method && direct);
-  uleb(raw, options.define_method && !direct);
+  uleb(raw, direct ? defined_indices.size() : 0);
+  uleb(raw, direct ? 0 : defined_indices.size());
   if (options.static_value) {
     uleb(raw, field_index);
     uleb(raw, 0x19);
   }
-  if (options.define_method) {
-    uleb(raw, definition_index);
+  unsigned previous_definition = 0;
+  for (auto index : defined_indices) {
+    uleb(raw, index - previous_definition);
     uleb(raw, options.flags);
-    uleb(raw, code);
+    uleb(raw, options.separate_referenced_code && index != definition_index
+                  ? at["referenced_code"]
+                  : code);
+    previous_definition = index;
   }
   if (options.define_method || options.static_value)
     at["class_data"] = section(0x2000, 1, raw);
@@ -450,7 +505,7 @@ Fixture fixture(FixtureOptions options = {}) {
            {3, protos.size(), at["protos"]},
            {4, fixture.fields.size(), at["fields"]},
            {5, method_refs.size(), at["methods"]},
-           {6, 1, at["class"]}}) {
+           {6, class_count, at["class"]}}) {
     patch(out, 56 + (kind - 1) * 8, count);
     patch(out, 60 + (kind - 1) * 8, offset);
   }
@@ -473,8 +528,47 @@ Fixture fixture(FixtureOptions options = {}) {
                               uint32_t(at["values"])};
   for (size_t i = 0; i < cls.size(); ++i)
     patch(out, at["class"] + i * 4, cls[i]);
+  if (options.duplicate_class)
+    out.replace(at["class"] + 32, 32, out.substr(at["class"], 32));
   out = seal(std::move(out));
   return fixture;
+}
+std::string storedDexArchive(
+    const std::vector<std::pair<std::string, std::string>> &members) {
+  std::string result, directory;
+  for (const auto &[name, bytes] : members) {
+    const auto crc =
+        crc32(0, reinterpret_cast<const Bytef *>(bytes.data()), bytes.size());
+    const auto local_offset = result.size();
+    std::string local(30, '\0');
+    patch(local, 0, 0x04034b50);
+    patch(local, 4, 20, 2);
+    patch(local, 6, 0x800, 2);
+    patch(local, 14, crc);
+    patch(local, 18, bytes.size());
+    patch(local, 22, bytes.size());
+    patch(local, 26, name.size(), 2);
+    result += local + name + bytes;
+    std::string central(46, '\0');
+    patch(central, 0, 0x02014b50);
+    patch(central, 4, 0x314, 2);
+    patch(central, 6, 20, 2);
+    patch(central, 8, 0x800, 2);
+    patch(central, 16, crc);
+    patch(central, 20, bytes.size());
+    patch(central, 24, bytes.size());
+    patch(central, 28, name.size(), 2);
+    patch(central, 38, 0100644u << 16);
+    patch(central, 42, local_offset);
+    directory += central + name;
+  }
+  std::string end(22, '\0');
+  patch(end, 0, 0x06054b50);
+  patch(end, 8, members.size(), 2);
+  patch(end, 10, members.size(), 2);
+  patch(end, 12, directory.size());
+  patch(end, 16, result.size());
+  return result + directory + end;
 }
 std::vector<Class> parse(const std::string &data) {
   Budget budget;
@@ -524,6 +618,50 @@ unsigned fixtureStringIndex(const Fixture &f, const std::string &text) {
   auto found = std::find(f.strings.begin(), f.strings.end(), utf16(text));
   EXPECT_NE(found, f.strings.end());
   return unsigned(found - f.strings.begin());
+}
+Fixture referenceFixture() {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  options.registers = 2;
+  options.extras = {u"needle", u"a needle suffix"};
+  options.referenced_method = MethodRef{"Lfixture/Target;", "call", {}, "V"};
+  options.extra_methods = {{"Lfixture/Target;", "call", {"I"}, "V"},
+                           {"Lother/Target;", "call", {}, "V"}};
+  options.extra_fields = {{"Lfixture/Target;", "VALUE", "I"},
+                          {"Lfixture/Target;", "VALUE", "J"},
+                          {"Lother/Target;", "VALUE", "I"}};
+  // Apparent references at PCs 1, 4, 6 and 9 are immediate words. Actual
+  // reference instructions begin at PCs 11, 13, 15 and 17.
+  options.words = {0x0014, 0x001a, 0,      0x0018, 0x0071, 0, 0x0060,
+                   0,      0x0014, 0x001c, 0,      0x001a, 0, 0x001c,
+                   0,      0x0060, 0,      0x0071, 0,      0, 0x000e};
+  auto f = fixture(options);
+  const auto method_index = std::find(f.methods.begin(), f.methods.end(),
+                                      *options.referenced_method) -
+                            f.methods.begin();
+  const auto field_index =
+      std::find(f.fields.begin(), f.fields.end(), options.extra_fields[0]) -
+      f.fields.begin();
+  for (auto [pc, index] : std::vector<std::pair<size_t, size_t>>{
+           {2, fixtureStringIndex(f, "needle")},
+           {5, size_t(method_index)},
+           {7, size_t(field_index)},
+           {10, fixtureTypeIndex(f, "Lfixture/Target;")},
+           {12, fixtureStringIndex(f, "needle")},
+           {14, fixtureTypeIndex(f, "Lfixture/Target;")},
+           {16, size_t(field_index)},
+           {18, size_t(method_index)}})
+    patch(f.data, f.at["code"] + 16 + pc * 2, index, 2);
+  f.data = seal(std::move(f.data));
+  return f;
+}
+DexReferenceResult references(const Fixture &f, DexReferenceKind kind,
+                              std::string text, bool exact = false,
+                              std::optional<std::string> owner = {}) {
+  Budget budget;
+  return findDexReferences(
+      f.data, {kind, std::move(text), exact, std::move(owner)}, budget);
 }
 void annotationIndex(std::string &out, unsigned kind, unsigned index) {
   // A four-byte unsigned pool index, encoded with value_arg == 3.
@@ -799,6 +937,861 @@ TEST(MobileDalvikReader, DexVersionsAndExactMethodInventory) {
     EXPECT_EQ(m.instructions[0].registers, std::vector<unsigned>{0});
   }
 }
+TEST(MobileDalvikReader,
+     DexClassInventorySkipsUnsupportedBodiesAndUnusedStrings) {
+  for (auto version : {"035", "037", "038", "039", "040"}) {
+    FixtureOptions options;
+    options.version = version;
+    options.words = {0xffff};
+    options.extras = {std::u16string(40000, u'x')};
+    auto f = fixture(options);
+    Budget budget;
+    // The integrity scan and selected class metadata fit; decoding the unused
+    // string or attempting the unsupported method does not.
+    budget.remaining = 10000;
+    EXPECT_EQ(listDexClasses(f.data, budget),
+              std::vector<std::string>{"Lfixture/Sample;"});
+    EXPECT_GT(budget.remaining, 0u);
+    EXPECT_THROW(parse(f.data), Error);
+  }
+}
+TEST(MobileDalvikReader, DexClassInventoryPreservesUnicodeDescriptors) {
+  FixtureOptions options;
+  options.extras = {u"Lfixture/\u03bb\U0001f600;"};
+  auto f = fixture(options);
+  const auto class_type =
+      std::find(f.types.begin(), f.types.end(), options.owner) -
+      f.types.begin();
+  const auto unicode_string =
+      std::find(f.strings.begin(), f.strings.end(), options.extras[0]) -
+      f.strings.begin();
+  patch(f.data, f.at["types"] + class_type * 4, unicode_string);
+  f.data = seal(std::move(f.data));
+  Budget budget;
+  const std::string name = "Lfixture/\xce\xbb\xf0\x9f\x98\x80;";
+  EXPECT_EQ(listDexClasses(f.data, budget), std::vector<std::string>{name});
+  EXPECT_EQ(parse(f.data)[0].name, name);
+}
+TEST(MobileDalvikReader, DexClassInventoryKeepsDefinitionOrder) {
+  FixtureOptions options;
+  options.duplicate_class = true;
+  options.referenced_method = MethodRef{"Lfixture/Other;", "unused", {}, "V"};
+  auto f = fixture(options);
+  patch(f.data, f.at["class"] + 32, fixtureTypeIndex(f, "Lfixture/Other;"));
+  patch(f.data, f.at["class"] + 32 + 24, 0);
+  f.data = seal(std::move(f.data));
+  Budget budget;
+  EXPECT_EQ(listDexClasses(f.data, budget),
+            (std::vector<std::string>{"Lfixture/Sample;", "Lfixture/Other;"}));
+  EXPECT_EQ(parse(f.data).size(), 2u);
+}
+TEST(MobileDalvikReader, DexClassInventoryRejectsInvalidReferencedMetadata) {
+  auto f = fixture();
+  const auto class_type =
+      std::find(f.types.begin(), f.types.end(), "Lfixture/Sample;") -
+      f.types.begin();
+  const auto class_string =
+      std::find(f.strings.begin(), f.strings.end(), u"Lfixture/Sample;") -
+      f.strings.begin();
+  const auto primitive_type =
+      std::find(f.types.begin(), f.types.end(), "I") - f.types.begin();
+  for (auto [offset, value] : std::vector<std::pair<size_t, uint64_t>>{
+           {f.at["class"], UINT32_MAX},
+           {f.at["class"], uint64_t(primitive_type)},
+           {f.at["class"] + 4, 0x80000000},
+           {f.at["class"] + 8, uint64_t(class_type)},
+           {f.at["class"] + 8, uint64_t(primitive_type)},
+           {f.at["class"] + 12, f.at["string_data"]},
+           {f.at["class"] + 16, f.strings.size()},
+           {f.at["class"] + 20, f.at["string_data"]},
+           {f.at["class"] + 24, f.at["string_data"]},
+           {f.at["class"] + 28, f.at["string_data"]},
+           {f.at["types"] + class_type * 4, UINT32_MAX},
+           {f.at["strings"] + class_string * 4, 0},
+           {f.at["map"] + 8, 0}}) {
+    auto broken = f.data;
+    patch(broken, offset, value);
+    Budget budget;
+    EXPECT_THROW(listDexClasses(seal(std::move(broken)), budget), Error)
+        << "offset=" << offset << " value=" << value;
+  }
+  uint32_t string_offset = 0;
+  for (unsigned i = 0; i < 4; ++i)
+    string_offset |=
+        uint32_t(uint8_t(f.data[f.at["strings"] + class_string * 4 + i]))
+        << (i * 8);
+  for (auto invalid : {char(0xf0), '.'}) {
+    auto broken = f.data;
+    broken[string_offset + 2] = invalid;
+    Budget budget;
+    EXPECT_THROW(listDexClasses(seal(std::move(broken)), budget), Error);
+  }
+  FixtureOptions duplicate;
+  duplicate.duplicate_class = true;
+  Budget duplicate_budget;
+  EXPECT_THROW(listDexClasses(fixture(duplicate).data, duplicate_budget),
+               Error);
+  FixtureOptions interface;
+  interface.interfaces = {"I"};
+  Budget interface_budget;
+  EXPECT_THROW(listDexClasses(fixture(interface).data, interface_budget),
+               Error);
+}
+TEST(MobileDalvikReader, DexClassInventoryRetainsIntegrityAndResourceBounds) {
+  auto f = fixture();
+  auto corrupted = f.data;
+  corrupted.back() ^= 1;
+  Budget integrity;
+  EXPECT_THROW(listDexClasses(corrupted, integrity), Error);
+  for (auto version : {"036", "041", "999"}) {
+    auto broken = f.data;
+    broken.replace(4, 3, version);
+    Budget budget;
+    EXPECT_THROW(listDexClasses(seal(std::move(broken)), budget), Error);
+  }
+  Budget work;
+  work.remaining = 1;
+  EXPECT_THROW(listDexClasses(f.data, work), Error);
+  Budget time;
+  time.deadline = std::chrono::steady_clock::time_point::min();
+  EXPECT_THROW(listDexClasses(f.data, time), Error);
+  Limits limits;
+  limits.max_bytes = f.data.size() - 1;
+  Budget bytes(limits);
+  EXPECT_THROW(listDexClasses(f.data, bytes), Error);
+  FixtureOptions duplicate;
+  duplicate.duplicate_class = true;
+  limits = Limits{};
+  limits.max_files = 1;
+  Budget files(limits);
+  EXPECT_THROW(listDexClasses(fixture(duplicate).data, files), Error);
+}
+TEST(MobileDalvikReader,
+     DexClassInventoryCLIReportsScopeAndFiltersWithoutRecovery) {
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "unsupported.dex";
+  FixtureOptions options;
+  options.words = {0xffff};
+  const auto f = fixture(options);
+  writeFile(source, f.data);
+  EXPECT_THROW(parse(f.data), Error);
+  unsigned invocation = 0;
+  auto invoke = [&](std::initializer_list<std::string> extra) {
+    std::vector<std::string> command{NEVERD_MOBILE_CLI, "mobile",
+                                     pathText(source), "--list-classes"};
+    command.insert(command.end(), extra.begin(), extra.end());
+    const auto log = temporary.path / (std::to_string(invocation++) + ".log");
+    runTool(command, log, 30);
+    return readFile(log, 100000);
+  };
+  EXPECT_EQ(invoke({}), "Lfixture/Sample;\n");
+  EXPECT_EQ(invoke({"--class-prefix=Lfixture/"}), "Lfixture/Sample;\n");
+  EXPECT_EQ(invoke({"--class-prefix=fixture.Sample"}), "Lfixture/Sample;\n");
+  EXPECT_EQ(invoke({"--class-prefix=other."}), "");
+  auto report = parseJSON(invoke({"--json"}), "class inventory");
+  const auto *object = report.getAsObject();
+  ASSERT_NE(object, nullptr);
+  EXPECT_EQ(object->getString("status"), "success");
+  EXPECT_EQ(object->getString("validation_scope"),
+            "dex-envelope-and-class-identities");
+  EXPECT_EQ(object->getBoolean("method_bodies_validated"), false);
+  EXPECT_EQ(object->getBoolean("unselected_zip_payloads_validated"), false);
+  EXPECT_EQ(object->getInteger("class_count"), 1);
+  EXPECT_EQ(object->getInteger("total_class_count"), 1);
+  EXPECT_EQ(object->getInteger("dex_count"), 1);
+  const auto *classes = object->getArray("classes");
+  ASSERT_NE(classes, nullptr);
+  ASSERT_EQ(classes->size(), 1u);
+  EXPECT_EQ((*classes)[0].getAsString(), "Lfixture/Sample;");
+  auto filtered = parseJSON(invoke({"--json", "--class-prefix=other."}),
+                            "filtered class inventory");
+  const auto *filtered_object = filtered.getAsObject();
+  ASSERT_NE(filtered_object, nullptr);
+  EXPECT_EQ(filtered_object->getInteger("class_count"), 0);
+  EXPECT_EQ(filtered_object->getInteger("total_class_count"), 1);
+  EXPECT_EQ(readFile(source, 100000), f.data);
+}
+TEST(MobileDalvikReader,
+     DexClassInventoryCLICreatesRelativeFileWithoutOverwrite) {
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "sample.dex";
+  writeFile(source, fixture().data);
+  struct RestoreDirectory {
+    fs::path previous = fs::current_path();
+    ~RestoreDirectory() {
+      std::error_code error;
+      fs::current_path(previous, error);
+      EXPECT_FALSE(error);
+    }
+  } restore;
+  fs::current_path(temporary.path);
+  const std::vector<std::string> command{
+      NEVERD_MOBILE_CLI, "mobile", pathText(source),
+      "--list-classes",  "-o",     "classes.txt"};
+  runTool(command, temporary.path / "first.log", 30);
+  const auto output = temporary.path / "classes.txt";
+  EXPECT_EQ(readFile(output, 100000), "Lfixture/Sample;\n");
+  EXPECT_THROW(runTool(command, temporary.path / "second.log", 30), Error);
+  EXPECT_EQ(readFile(output, 100000), "Lfixture/Sample;\n");
+}
+TEST(MobileDalvikReader,
+     DexClassInventoryCLIRejectsUnrepresentablePublication) {
+  FixtureOptions options;
+  options.extras = {std::u16string(u"Lfixture/") + char16_t(0xd800) + u";"};
+  auto f = fixture(options);
+  const auto class_type = fixtureTypeIndex(f, options.owner);
+  const auto surrogate_string =
+      std::find(f.strings.begin(), f.strings.end(), options.extras[0]) -
+      f.strings.begin();
+  patch(f.data, f.at["types"] + class_type * 4, surrogate_string);
+  f.data = seal(std::move(f.data));
+  Budget model;
+  EXPECT_EQ(listDexClasses(f.data, model),
+            std::vector<std::string>{"Lfixture/\xed\xa0\x80;"});
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "surrogate.dex";
+  const auto output = temporary.path / "classes.txt";
+  const auto log = temporary.path / "failure.log";
+  writeFile(source, f.data);
+  const std::vector<std::string> command{
+      NEVERD_MOBILE_CLI, "mobile", pathText(source), "--list-classes",
+      "--json",          "-o",     pathText(output)};
+  EXPECT_THROW(runTool(command, log, 30), Error);
+  auto report = parseJSON(readFile(log, 100000), "class inventory failure");
+  ASSERT_NE(report.getAsObject(), nullptr);
+  EXPECT_EQ(report.getAsObject()->getString("status"), "error");
+  EXPECT_FALSE(fs::exists(output));
+}
+TEST(MobileDalvikReader, DexClassInventoryCLIAcceptsUppercaseLDottedPackages) {
+  FixtureOptions options;
+  options.owner = "LLibrary/example/Sample;";
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "library.dex";
+  const auto log = temporary.path / "inventory.log";
+  writeFile(source, fixture(options).data);
+  runTool({NEVERD_MOBILE_CLI, "mobile", pathText(source), "--list-classes",
+           "--class-prefix=Library.example"},
+          log, 30);
+  EXPECT_EQ(readFile(log, 100000), "LLibrary/example/Sample;\n");
+}
+TEST(MobileDalvikReader,
+     DexClassInventoryAPKIncludesOnlyRootMultidexDefinitions) {
+  FixtureOptions other;
+  other.owner = "Lfixture/Other;";
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "multidex.apk";
+  writeFile(source,
+            storedDexArchive({{"assets/classes.dex", "not a DEX"},
+                              {"classes.dex", fixture().data},
+                              {"classes2.dex", fixture(other).data},
+                              {"classes1.dex", "not a root code name"},
+                              {"classes01.dex", "not a root code name"}}));
+  Budget budget;
+  const auto inventory = listAndroidClasses(source, {}, budget);
+  EXPECT_EQ(inventory.dex_count, 2u);
+  EXPECT_EQ(inventory.total_class_count, 2u);
+  EXPECT_EQ(inventory.classes,
+            (std::vector<std::string>{"Lfixture/Sample;", "Lfixture/Other;"}));
+  const auto log = temporary.path / "inventory.log";
+  runTool({NEVERD_MOBILE_CLI, "mobile", pathText(source), "--list-classes"},
+          log, 30);
+  EXPECT_EQ(readFile(log, 100000), "Lfixture/Sample;\nLfixture/Other;\n");
+}
+TEST(MobileDalvikReader,
+     DexClassInventoryAPKRejectsFilteredCrossDexDuplicates) {
+  const auto f = fixture();
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "duplicate.apk";
+  const auto output = temporary.path / "classes.txt";
+  const auto log = temporary.path / "failure.log";
+  writeFile(source, storedDexArchive(
+                        {{"classes.dex", f.data}, {"classes2.dex", f.data}}));
+  Budget budget;
+  EXPECT_THROW(listAndroidClasses(source, "other.", budget), Error);
+  const std::vector<std::string> command{NEVERD_MOBILE_CLI,
+                                         "mobile",
+                                         pathText(source),
+                                         "--list-classes",
+                                         "--class-prefix=other.",
+                                         "--json",
+                                         "-o",
+                                         pathText(output)};
+  EXPECT_THROW(runTool(command, log, 30), Error);
+  auto report = parseJSON(readFile(log, 100000), "duplicate class inventory");
+  ASSERT_NE(report.getAsObject(), nullptr);
+  EXPECT_EQ(report.getAsObject()->getString("status"), "error");
+  auto error = report.getAsObject()->getString("error");
+  ASSERT_TRUE(error);
+  EXPECT_NE(error->find("duplicate Android class definition"),
+            llvm::StringRef::npos);
+  EXPECT_FALSE(fs::exists(output));
+}
+TEST(MobileDalvikReader, DexClassInventoryAPKBoundsTheAggregateClassCount) {
+  FixtureOptions first;
+  first.duplicate_class = true;
+  first.referenced_method = MethodRef{"Lfixture/Other;", "unused", {}, "V"};
+  auto f = fixture(first);
+  patch(f.data, f.at["class"] + 32, fixtureTypeIndex(f, "Lfixture/Other;"));
+  patch(f.data, f.at["class"] + 32 + 24, 0);
+  f.data = seal(std::move(f.data));
+  FixtureOptions second;
+  second.owner = "Lfixture/Third;";
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "three-classes.apk";
+  const auto output = temporary.path / "classes.txt";
+  writeFile(source, storedDexArchive({{"classes.dex", f.data},
+                                      {"classes2.dex", fixture(second).data}}));
+  Limits limits;
+  limits.max_files = 2;
+  Budget budget(limits);
+  try {
+    (void)listAndroidClasses(source, {}, budget);
+    FAIL() << "Two DEX entries must not bypass the three-class inventory limit";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(),
+                 "Android class inventory exceeds the file limit");
+  }
+  const std::vector<std::string> command{
+      NEVERD_MOBILE_CLI, "mobile", pathText(source), "--list-classes",
+      "--max-files=2",   "-o",     pathText(output)};
+  EXPECT_THROW(runTool(command, temporary.path / "failure.log", 30), Error);
+  EXPECT_FALSE(fs::exists(output));
+}
+TEST(MobileDalvikReader, DexClassInventoryCLIRejectsConflictingOptions) {
+  DexRecoveryDirectory temporary;
+  const auto source = temporary.path / "sample.dex";
+  const auto output = temporary.path / "classes.txt";
+  writeFile(source, fixture().data);
+  unsigned invocation = 0;
+  for (const auto *conflict :
+       {"--platform=ios", "--arch=x86_64", "--metadata-only",
+        "--jadx=missing-backend", "--artifact=App", "--max-func=1"}) {
+    const auto log = temporary.path / (std::to_string(invocation++) + ".log");
+    const std::vector<std::string> command{NEVERD_MOBILE_CLI,
+                                           "mobile",
+                                           pathText(source),
+                                           "--list-classes",
+                                           conflict,
+                                           "--json",
+                                           "-o",
+                                           pathText(output)};
+    EXPECT_THROW(runTool(command, log, 30), Error) << conflict;
+    auto report = parseJSON(readFile(log, 100000), "conflicting query options");
+    ASSERT_NE(report.getAsObject(), nullptr);
+    EXPECT_EQ(report.getAsObject()->getString("status"), "error");
+    EXPECT_FALSE(fs::exists(output));
+  }
+  const auto log = temporary.path / "prefix-only.log";
+  const std::vector<std::string> command{
+      NEVERD_MOBILE_CLI, "mobile", pathText(source), "--class-prefix=fixture.",
+      "--json",          "-o",     pathText(output)};
+  EXPECT_THROW(runTool(command, log, 30), Error);
+  auto report = parseJSON(readFile(log, 100000), "prefix without inventory");
+  ASSERT_NE(report.getAsObject(), nullptr);
+  EXPECT_EQ(report.getAsObject()->getString("error"),
+            "--class-prefix requires --list-classes");
+  EXPECT_FALSE(fs::exists(output));
+}
+TEST(MobileDalvikReader, DexReferencesUseOnlyDecodedOperandBoundaries) {
+  const auto f = referenceFixture();
+  ASSERT_NO_THROW(parse(f.data));
+  for (const auto &[kind, target, pc, opcode] : std::vector<
+           std::tuple<DexReferenceKind, std::string, uint32_t, std::string>>{
+           {DexReferenceKind::String, "needle", 11, "const-string"},
+           {DexReferenceKind::Type, "Lfixture/Target;", 13, "const-class"},
+           {DexReferenceKind::Field, "Lfixture/Target;->VALUE:I", 15, "sget"},
+           {DexReferenceKind::Method, "Lfixture/Target;->call()V", 17,
+            "invoke-static"}}) {
+    const auto result = references(f, kind, target, true);
+    EXPECT_TRUE(result.code_scan_complete);
+    EXPECT_EQ(result.class_descriptors,
+              std::vector<std::string>{"Lfixture/Sample;"});
+    EXPECT_EQ(result.defined_method_count, 1u);
+    EXPECT_EQ(result.scanned_method_count, 1u);
+    EXPECT_EQ(result.scanned_code_item_count, 1u);
+    EXPECT_EQ(result.matching_pool_entries, 1u);
+    ASSERT_EQ(result.references.size(), 1u);
+    const auto &site = result.references[0];
+    EXPECT_EQ(site.method.identity(), "Lfixture/Sample;->value()V");
+    EXPECT_EQ(site.pc_code_units, pc);
+    EXPECT_EQ(site.opcode, opcode);
+    EXPECT_EQ(site.target, target);
+    uint32_t encoded_index = 0;
+    for (unsigned i = 0; i < 2; ++i)
+      encoded_index |=
+          uint32_t(uint8_t(f.data[f.at.at("code") + 16 + (pc + 1) * 2 + i]))
+          << (i * 8);
+    EXPECT_EQ(site.target_index, encoded_index);
+    if (kind == DexReferenceKind::String) {
+      ASSERT_TRUE(site.target_utf16);
+      EXPECT_EQ(*site.target_utf16, u"needle");
+    } else
+      EXPECT_FALSE(site.target_utf16);
+  }
+}
+TEST(MobileDalvikReader,
+     DexReferenceMatchingKeepsOwnersOverloadsAndUnusedPools) {
+  const auto f = referenceFixture();
+  auto strings = references(f, DexReferenceKind::String, "needle");
+  EXPECT_EQ(strings.matching_pool_entries, 2u);
+  EXPECT_EQ(strings.references.size(), 1u);
+  auto unused =
+      references(f, DexReferenceKind::String, "a needle suffix", true);
+  EXPECT_EQ(unused.matching_pool_entries, 1u);
+  EXPECT_TRUE(unused.references.empty());
+  EXPECT_TRUE(unused.code_scan_complete);
+  EXPECT_EQ(unused.scanned_method_count, 1u);
+  auto methods = references(f, DexReferenceKind::Method, "call");
+  EXPECT_EQ(methods.matching_pool_entries, 3u);
+  EXPECT_EQ(methods.references.size(), 1u);
+  auto overload = references(f, DexReferenceKind::Method,
+                             "Lfixture/Target;->call(I)V", true);
+  EXPECT_EQ(overload.matching_pool_entries, 1u);
+  EXPECT_TRUE(overload.references.empty());
+  auto other =
+      references(f, DexReferenceKind::Method, "call", false, "Lother/Target;");
+  EXPECT_EQ(other.matching_pool_entries, 1u);
+  EXPECT_TRUE(other.references.empty());
+  auto fields = references(f, DexReferenceKind::Field, "VALUE", false,
+                           "Lfixture/Target;");
+  EXPECT_EQ(fields.matching_pool_entries, 2u);
+  ASSERT_EQ(fields.references.size(), 1u);
+  EXPECT_EQ(fields.references[0].target, "Lfixture/Target;->VALUE:I");
+  auto absent = references(f, DexReferenceKind::String, "absent from pool");
+  EXPECT_EQ(absent.matching_pool_entries, 0u);
+  EXPECT_TRUE(absent.references.empty());
+  EXPECT_TRUE(absent.code_scan_complete);
+  EXPECT_EQ(absent.scanned_method_count, 1u);
+}
+TEST(MobileDalvikReader, DexExactReferencesChargeOnlyComparedTargetBytes) {
+  FixtureOptions options;
+  for (char letter : {'a', 'b'})
+    options.extra_methods.push_back(
+        {"Lexternal/Target;", std::string(8192, letter), {}, "V"});
+  const auto f = fixture(options);
+  const DexReferenceQuery short_query{DexReferenceKind::Method, "absent!",
+                                      true};
+  const auto target_size = options.extra_methods[0].identity().size();
+  const DexReferenceQuery same_length_query{
+      DexReferenceKind::Method, std::string(target_size, '?'), true};
+  Budget short_budget, same_length_budget;
+  const auto initial_work = short_budget.remaining;
+  const auto short_result =
+      findDexReferences(f.data, short_query, short_budget);
+  const auto same_length_result =
+      findDexReferences(f.data, same_length_query, same_length_budget);
+  EXPECT_TRUE(short_result.references.empty());
+  EXPECT_TRUE(same_length_result.references.empty());
+  EXPECT_TRUE(short_result.code_scan_complete);
+  EXPECT_TRUE(same_length_result.code_scan_complete);
+  // Both scan the same complete DEX. Only the two equal-length target
+  // comparisons require byte work; unequal lengths need a constant check.
+  EXPECT_EQ(short_budget.remaining - same_length_budget.remaining,
+            2 * target_size);
+  const auto short_work = initial_work - short_budget.remaining;
+  Budget bounded_short;
+  bounded_short.remaining = short_work;
+  EXPECT_NO_THROW(findDexReferences(f.data, short_query, bounded_short));
+  Budget bounded_same_length;
+  bounded_same_length.remaining = short_work + 2 * target_size - 1;
+  EXPECT_THROW(
+      findDexReferences(f.data, same_length_query, bounded_same_length), Error);
+}
+TEST(MobileDalvikReader, DexReferenceQueryRejectsInvalidFilters) {
+  const auto f = referenceFixture();
+  EXPECT_THROW(references(f, DexReferenceKind::String, ""), Error);
+  EXPECT_THROW(references(f, DexReferenceKind::String, "needle", false,
+                          "Lfixture/Target;"),
+               Error);
+  EXPECT_THROW(references(f, DexReferenceKind::Type, "Target", false,
+                          "Lfixture/Target;"),
+               Error);
+  EXPECT_THROW(
+      references(f, DexReferenceKind::Method, "call", false, "fixture.Target"),
+      Error);
+  EXPECT_THROW(references(f, DexReferenceKind::Method, "call", false, "I"),
+               Error);
+  EXPECT_THROW(references(f, DexReferenceKind::Field, "VALUE", false, "[I"),
+               Error);
+  EXPECT_THROW(references(f, static_cast<DexReferenceKind>(255), "needle"),
+               Error);
+}
+TEST(MobileDalvikReader, DexReferenceMethodOwnersCanBeArrayDescriptors) {
+  FixtureOptions options;
+  options.params = {"[I"};
+  options.returns = "V";
+  options.referenced_method =
+      MethodRef{"[I", "clone", {}, "Ljava/lang/Object;"};
+  options.words = {0x106e, 0, 0, 0x000e};
+  auto f = fixture(options);
+  const auto index = std::find(f.methods.begin(), f.methods.end(),
+                               *options.referenced_method) -
+                     f.methods.begin();
+  patch(f.data, f.at["code"] + 18, index, 2);
+  f.data = seal(std::move(f.data));
+  const auto result =
+      references(f, DexReferenceKind::Method, "clone", false, "[I");
+  ASSERT_EQ(result.references.size(), 1u);
+  EXPECT_EQ(result.references[0].target, "[I->clone()Ljava/lang/Object;");
+  EXPECT_EQ(result.references[0].pc_code_units, 0u);
+}
+TEST(MobileDalvikReader,
+     DexReferencesNeverInterpretPayloadWordsAsInstructions) {
+  for (unsigned payload_kind = 0; payload_kind < 3; ++payload_kind) {
+    FixtureOptions options;
+    options.params = {};
+    options.returns = "V";
+    options.extras = {u"needle"};
+    if (payload_kind < 2)
+      options.words = {0x001a,
+                       0,
+                       0x0012,
+                       uint16_t(payload_kind ? 0x002c : 0x002b),
+                       5,
+                       0,
+                       0x000e,
+                       0,
+                       uint16_t(payload_kind ? 0x0200 : 0x0100),
+                       1,
+                       0x001a,
+                       0,
+                       3,
+                       0};
+    else {
+      options.params = {"[I"};
+      options.registers = 2;
+      options.words = {0x001a, 0, 0x0126, 4,      0, 0x000e, 0x0300,
+                       4,      2, 0,      0x001a, 0, 0x001c, 0};
+    }
+    auto f = fixture(options);
+    const auto string_index = fixtureStringIndex(f, "needle");
+    patch(f.data, f.at["code"] + 18, string_index, 2);
+    patch(f.data, f.at["code"] + 16 + 11 * 2, string_index, 2);
+    if (payload_kind == 2)
+      patch(f.data, f.at["code"] + 16 + 13 * 2, fixtureTypeIndex(f, "[I"), 2);
+    f.data = seal(std::move(f.data));
+    ASSERT_NO_THROW(parse(f.data));
+    const auto result = references(f, DexReferenceKind::String, "needle", true);
+    ASSERT_EQ(result.references.size(), 1u) << payload_kind;
+    EXPECT_EQ(result.references[0].pc_code_units, 0u) << payload_kind;
+    if (payload_kind == 2)
+      EXPECT_TRUE(
+          references(f, DexReferenceKind::Type, "[I", true).references.empty());
+  }
+}
+TEST(MobileDalvikReader,
+     DexReferenceSharedCodeRetainsEveryDeclaredMethodOwner) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  options.extras = {u"needle"};
+  options.referenced_method = MethodRef{options.owner, "another", {}, "V"};
+  options.define_referenced_method = true;
+  options.words = {0x001a, 0, 0x000e};
+  auto f = fixture(options);
+  patch(f.data, f.at["code"] + 18, fixtureStringIndex(f, "needle"), 2);
+  f.data = seal(std::move(f.data));
+  ASSERT_EQ(parse(f.data)[0].methods.size(), 2u);
+  const auto result = references(f, DexReferenceKind::String, "needle", true);
+  EXPECT_EQ(result.defined_method_count, 2u);
+  EXPECT_EQ(result.scanned_method_count, 2u);
+  EXPECT_EQ(result.scanned_code_item_count, 1u);
+  ASSERT_EQ(result.references.size(), 2u);
+  EXPECT_EQ(result.references[0].method.identity(),
+            "Lfixture/Sample;->another()V");
+  EXPECT_EQ(result.references[1].method.identity(),
+            "Lfixture/Sample;->value()V");
+  EXPECT_EQ(result.references[0].pc_code_units, 0u);
+  EXPECT_EQ(result.references[1].pc_code_units, 0u);
+  Limits limits;
+  limits.max_files = 1;
+  Budget budget(limits);
+  EXPECT_THROW(
+      findDexReferences(f.data, {DexReferenceKind::String, "needle"}, budget),
+      Error);
+  options.referenced_method->returns = "I";
+  EXPECT_THROW(references(fixture(options), DexReferenceKind::String, "needle"),
+               Error);
+  options.referenced_method->returns = "V";
+  options.referenced_method->owner = "Lother/Target;";
+  EXPECT_THROW(references(fixture(options), DexReferenceKind::String, "needle"),
+               Error);
+}
+TEST(MobileDalvikReader, SharedCodeRequiresExactPrototypeEvenWithoutMatches) {
+  for (const std::string parameter : {"F", "Ljava/lang/Object;"}) {
+    FixtureOptions options;
+    options.params = {"I"};
+    options.returns = "V";
+    options.words = {0x000e};
+    options.referenced_method =
+        MethodRef{options.owner, "another", {parameter}, "V"};
+    options.define_referenced_method = true;
+    auto f = fixture(options);
+    const char *error =
+        "Invalid DEX: shared data item has inconsistent declaration context";
+    expectDexError(f.data, error);
+    try {
+      (void)references(f, DexReferenceKind::String, "absent");
+      FAIL() << "same-width parameter types shared a code context";
+    } catch (const Error &e) {
+      EXPECT_STREQ(e.what(), error);
+    }
+  }
+}
+
+TEST(MobileDalvikReader, QueryRangesCheckReorderedAndOverlappingStringItems) {
+  auto stringOffset = [](const Fixture &f, const std::string &text) {
+    size_t row = f.at.at("strings") + fixtureStringIndex(f, text) * 4;
+    uint32_t offset = 0;
+    for (unsigned i = 0; i < 4; ++i)
+      offset |= uint32_t(uint8_t(f.data[row + i])) << (8 * i);
+    return std::pair{row, offset};
+  };
+  FixtureOptions options;
+  options.extras = {u"alpha", u"bravo"};
+  auto f = fixture(options);
+  const auto [row_a, a] = stringOffset(f, "alpha");
+  const auto [row_b, b] = stringOffset(f, "bravo");
+  const auto first = f.data.substr(a, 7), second = f.data.substr(b, 7);
+  f.data.replace(a, 7, second);
+  f.data.replace(b, 7, first);
+  patch(f.data, row_a, b);
+  patch(f.data, row_b, a);
+  f.data = seal(std::move(f.data));
+  EXPECT_NO_THROW(parse(f.data));
+  EXPECT_TRUE(
+      references(f, DexReferenceKind::String, "absent").code_scan_complete);
+
+  options.extras = {std::u16string{1, u'a'}, u"a"};
+  f = fixture(options);
+  const auto [outer_row, outer] = stringOffset(f, std::string("\1a", 2));
+  const auto [inner_row, inner] = stringOffset(f, "a");
+  patch(f.data, inner_row, outer + 1);
+  f.data = seal(std::move(f.data));
+  EXPECT_THROW(parse(f.data), Error);
+  try {
+    (void)references(f, DexReferenceKind::String, "absent");
+    FAIL() << "overlapping valid string encodings were accepted";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(),
+                 "Invalid DEX: overlapping variable-length data items");
+  }
+}
+
+TEST(MobileDalvikReader, DexReferenceStringsKeepNulPairsAndIsolatedSurrogates) {
+  const std::u16string literal{u'n', u'e', u'e',   u'd',   u'l',
+                               u'e', 0,    0xd800, 0xd83d, 0xde00};
+  const auto f = stringReturningFixture(literal);
+  const auto result = references(f, DexReferenceKind::String, "needle");
+  ASSERT_EQ(result.references.size(), 1u);
+  const auto &site = result.references[0];
+  ASSERT_TRUE(site.target_utf16);
+  EXPECT_EQ(*site.target_utf16, literal);
+  EXPECT_EQ(site.target,
+            std::string("needle\0", 7) + "\xed\xa0\x80\xf0\x9f\x98\x80");
+  EXPECT_EQ(references(f, DexReferenceKind::String, site.target, true)
+                .references.size(),
+            1u);
+}
+TEST(MobileDalvikReader,
+     QuerySubstringSearchCrossesBlocksAndKeepsLongFallback) {
+  for (const std::string needle :
+       {"z", "abcdefghijklmnop", "abcdefghijklmnopq"}) {
+    for (size_t prefix : {4095u, 4096u, 4097u, 8191u}) {
+      const std::string text = std::string(prefix, 'x') + needle + "tail";
+      const auto f = stringReturningFixture(utf16(text));
+      const auto result = references(f, DexReferenceKind::String, needle);
+      ASSERT_EQ(result.references.size(), 1u);
+      EXPECT_EQ(result.references[0].target, text);
+      EXPECT_EQ(result.references[0].pc_code_units, 0u);
+      EXPECT_TRUE(result.code_scan_complete);
+    }
+  }
+  const auto repeated = stringReturningFixture(std::u16string(65536, u'a'));
+  for (size_t length : {16u, 17u}) {
+    const auto result = references(repeated, DexReferenceKind::String,
+                                   std::string(length - 1, 'a') + 'b');
+    EXPECT_TRUE(result.references.empty());
+    EXPECT_TRUE(result.code_scan_complete);
+  }
+}
+
+TEST(MobileDalvikReader, DexReferenceQueriesRejectMalformedAndUnmatchedBodies) {
+  const auto f = referenceFixture();
+  for (auto [pc, value] :
+       std::vector<std::pair<unsigned, unsigned>>{{12, 65535},
+                                                  {14, 65535},
+                                                  {16, 65535},
+                                                  {18, 65535},
+                                                  {11, 0xffff},
+                                                  {20, 0x001a}}) {
+    auto changed = f;
+    patch(changed.data, changed.at["code"] + 16 + pc * 2, value, 2);
+    changed.data = seal(std::move(changed.data));
+    for (const auto &[kind, matching] :
+         std::vector<std::pair<DexReferenceKind, std::string>>{
+             {DexReferenceKind::String, "needle"},
+             {DexReferenceKind::Type, "Lfixture/Target;"},
+             {DexReferenceKind::Method, "call"},
+             {DexReferenceKind::Field, "VALUE"}}) {
+      SCOPED_TRACE(pc);
+      SCOPED_TRACE(matching);
+      // Empty selection and unrelated matching targets must both retain
+      // every operand's validation, including the other three pool kinds.
+      EXPECT_THROW(references(changed, kind, "absent"), Error);
+      EXPECT_THROW(references(changed, kind, matching), Error);
+    }
+  }
+  FixtureOptions branch;
+  branch.params = {};
+  branch.returns = "V";
+  branch.words = {0x0029, 1, 0x000e};
+  EXPECT_THROW(references(fixture(branch), DexReferenceKind::String, "absent"),
+               Error);
+  auto wrong_owner = f;
+  patch(wrong_owner.data, wrong_owner.at["defined_method"],
+        fixtureTypeIndex(wrong_owner, "Lfixture/Target;"), 2);
+  wrong_owner.data = seal(std::move(wrong_owner.data));
+  EXPECT_THROW(references(wrong_owner, DexReferenceKind::String, "needle"),
+               Error);
+  FixtureOptions native;
+  native.flags |= 0x100;
+  const auto declarations =
+      references(fixture(native), DexReferenceKind::String, "absent");
+  EXPECT_EQ(declarations.defined_method_count, 1u);
+  EXPECT_EQ(declarations.scanned_method_count, 0u);
+  EXPECT_EQ(declarations.scanned_code_item_count, 0u);
+  EXPECT_TRUE(declarations.code_scan_complete);
+}
+TEST(MobileDalvikReader, DexReferenceQueriesBoundWorkTimeSitesAndStorage) {
+  const auto f = referenceFixture();
+  const DexReferenceQuery query{DexReferenceKind::String, "needle"};
+  Budget work;
+  work.remaining = 1;
+  EXPECT_THROW(findDexReferences(f.data, query, work), Error);
+  Budget time;
+  time.deadline = std::chrono::steady_clock::time_point::min();
+  EXPECT_THROW(findDexReferences(f.data, query, time), Error);
+  FixtureOptions many;
+  many.params = {};
+  many.returns = "V";
+  many.extras = {u"needle"};
+  many.words.clear();
+  for (unsigned i = 0; i < 32; ++i)
+    many.words.insert(many.words.end(), {0x001a, 0});
+  many.words.push_back(0x000e);
+  auto expanded = fixture(many);
+  for (unsigned i = 0; i < 32; ++i)
+    patch(expanded.data, expanded.at["code"] + 18 + i * 4,
+          fixtureStringIndex(expanded, "needle"), 2);
+  expanded.data = seal(std::move(expanded.data));
+  Limits limits;
+  limits.max_files = 1;
+  Budget sites(limits);
+  EXPECT_THROW(findDexReferences(expanded.data, query, sites), Error);
+  limits = Limits{};
+  limits.max_bytes = expanded.data.size();
+  Budget storage(limits);
+  try {
+    (void)findDexReferences(expanded.data, query, storage);
+    FAIL() << "retained reference rows escaped the byte bound";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(), "reference query storage exceeds byte limit");
+  }
+}
+TEST(MobileDalvikReader, DexReferenceScanDoesNotCopyUnusedLiteralsPerSite) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  const std::string literal(50000, 'q');
+  options.extras = {utf16(literal)};
+  options.words.clear();
+  for (unsigned i = 0; i < 1000; ++i)
+    options.words.insert(options.words.end(), {0x001a, 0});
+  options.words.push_back(0x000e);
+  auto f = fixture(options);
+  for (unsigned i = 0; i < 1000; ++i)
+    patch(f.data, f.at["code"] + 18 + i * 4, fixtureStringIndex(f, literal), 2);
+  f.data = seal(std::move(f.data));
+  Limits limits;
+  limits.max_bytes = 2 * 1024 * 1024;
+  Budget budget(limits);
+  const auto result =
+      findDexReferences(f.data, {DexReferenceKind::String, "absent"}, budget);
+  EXPECT_TRUE(result.references.empty());
+  EXPECT_EQ(result.scanned_code_item_count, 1u);
+  EXPECT_TRUE(result.code_scan_complete);
+}
+TEST(MobileDalvikReader, DexReferencePoolExpansionIsBoundedBeforeCopies) {
+  const std::string long_type = "L" + std::string(4096, 'x') + ";";
+  for (bool repeated_parameters : {false, true}) {
+    FixtureOptions options;
+    if (repeated_parameters) {
+      options.referenced_method =
+          MethodRef{"Lfixture/Target;", "many",
+                    std::vector<std::string>(64, long_type), "V"};
+    } else {
+      for (unsigned i = 0; i < 64; ++i)
+        options.extra_methods.push_back(
+            {long_type, "method" + std::to_string(i), {}, "V"});
+    }
+    const auto f = fixture(options);
+    Limits limits;
+    limits.max_bytes = 128 * 1024;
+    ASSERT_LT(f.data.size(), limits.max_bytes);
+    if (!repeated_parameters) {
+      // Unused IDs share their owner descriptor; no expanded pool copy remains.
+      Budget budget(limits);
+      const auto result = findDexReferences(
+          f.data, {DexReferenceKind::String, "absent"}, budget);
+      EXPECT_TRUE(result.code_scan_complete);
+      EXPECT_TRUE(result.references.empty());
+      EXPECT_EQ(result.class_descriptors,
+                std::vector<std::string>{options.owner});
+      EXPECT_EQ(result.defined_method_count, 1u);
+      EXPECT_EQ(result.scanned_method_count, 1u);
+      EXPECT_EQ(result.scanned_code_item_count, 1u);
+      EXPECT_EQ(result.matching_pool_entries, 0u);
+      continue;
+    }
+    Budget budget(limits);
+    try {
+      (void)findDexReferences(f.data, {DexReferenceKind::String, "absent"},
+                              budget);
+      FAIL() << "expanded pool copies escaped the byte bound";
+    } catch (const Error &error) {
+      EXPECT_STREQ(error.what(), "reference query storage exceeds byte limit");
+    }
+    if (repeated_parameters) {
+      // A large byte allowance must not let repeated descriptor copies escape
+      // the separate work bound merely because their encoded indices are tiny.
+      Budget work;
+      work.remaining = 20000;
+      EXPECT_THROW(
+          findDexReferences(f.data, {DexReferenceKind::String, "absent"}, work),
+          Error);
+    }
+  }
+}
+TEST(MobileDalvikReader, DexDebugInfoAcceptsZeroLinesAndRejectsNegativeLines) {
+  FixtureOptions options;
+  // Zero start line, one unnamed parameter, a position at PC zero/line zero.
+  options.debug_info =
+      std::string({char(0), char(1), char(0), char(14), char(0)});
+  const auto zero = fixture(options);
+  ASSERT_NO_THROW(parse(zero.data));
+  EXPECT_TRUE(
+      references(zero, DexReferenceKind::String, "absent").code_scan_complete);
+  // DBG_ADVANCE_LINE -1 must still fail, even without an emitted position.
+  options.debug_info =
+      std::string({char(0), char(1), char(0), char(2), char(0x7f), char(0)});
+  const auto negative = fixture(options);
+  EXPECT_THROW(parse(negative.data), Error);
+  EXPECT_THROW(references(negative, DexReferenceKind::String, "absent"), Error);
+  options.debug_info =
+      std::string({char(0), char(1), char(0), char(10), char(0)});
+  EXPECT_THROW(parse(fixture(options).data), Error);
+}
 TEST(MobileDalvikReader, DexHeaderIntegrityAndUnsupportedContainers) {
   auto f = fixture();
   EXPECT_THROW(parse(f.data.substr(0, 111)), Error);
@@ -881,6 +1874,31 @@ TEST(MobileDalvikReader, DexInstructionFormatsKeepLiteralsAndRegisterWords) {
   o.words = {0x0110};
   EXPECT_THROW(parse(fixture(o).data), Error);
 }
+TEST(MobileDalvikReader, DexLargeBodiesPreserveLittleEndianWideLiterals) {
+  for (unsigned prefix : {2046, 2047, 2048, 4094, 4095, 4096}) {
+    SCOPED_TRACE(prefix);
+    FixtureOptions options;
+    options.params = {};
+    options.returns = "J";
+    options.registers = 2;
+    options.words.assign(prefix, 0);
+    options.words.insert(options.words.end(),
+                         {0x0018, 0xcdef, 0x89ab, 0x4567, 0x0123, 0x0010});
+    const auto f = fixture(options);
+    const auto classes = parse(f.data);
+    const auto &instructions = classes[0].methods[0].instructions;
+    ASSERT_EQ(instructions.size(), prefix + 2u);
+    EXPECT_EQ(instructions[prefix].pc, prefix);
+    EXPECT_EQ(instructions[prefix].opcode, "const-wide");
+    EXPECT_EQ(std::get<int64_t>(instructions[prefix].literal),
+              INT64_C(0x0123456789abcdef));
+    EXPECT_EQ(instructions.back().pc, prefix + 5u);
+    const auto result = references(f, DexReferenceKind::String, "absent");
+    EXPECT_TRUE(result.references.empty());
+    EXPECT_EQ(result.scanned_code_item_count, 1u);
+    EXPECT_TRUE(result.code_scan_complete);
+  }
+}
 TEST(MobileDalvikReader, DexInvokesValidateReferencesAndArgumentWords) {
   FixtureOptions o;
   o.words = {0x1071, 0, 0, 0x000a, 0x000f};
@@ -894,6 +1912,100 @@ TEST(MobileDalvikReader, DexInvokesValidateReferencesAndArgumentWords) {
                                           {0x00fa, 0, 0, 0, 0x000f}}) {
     o.words = code;
     EXPECT_THROW(parse(fixture(o).data), Error);
+  }
+}
+TEST(MobileDalvikReader, DexRangeInvokesKeepEveryArgumentRegister) {
+  for (unsigned count : {5, 6, 255}) {
+    SCOPED_TRACE(count);
+    FixtureOptions options;
+    options.params.assign(count, "I");
+    options.returns = "V";
+    options.registers = count;
+    options.referenced_method =
+        MethodRef{"Lexternal/Target;", "accept", options.params, "V"};
+    options.words = {uint16_t((count << 8) | 0x77), 0, 0, 0x000e};
+    auto f = fixture(options);
+    const auto index = std::find(f.methods.begin(), f.methods.end(),
+                                 *options.referenced_method) -
+                       f.methods.begin();
+    patch(f.data, f.at["code"] + 18, index, 2);
+    f.data = seal(std::move(f.data));
+    const auto classes = parse(f.data);
+    const auto &invoke = classes[0].methods[0].instructions[0];
+    ASSERT_EQ(invoke.registers.size(), count);
+    for (unsigned i = 0; i < count; ++i)
+      EXPECT_EQ(invoke.registers[i], i);
+    const auto found = references(f, DexReferenceKind::Method, "accept");
+    ASSERT_EQ(found.references.size(), 1u);
+    EXPECT_EQ(found.references[0].target,
+              options.referenced_method->identity());
+    // Moving the same range by one register must reject its final operand.
+    patch(f.data, f.at["code"] + 20, 1, 2);
+    f.data = seal(std::move(f.data));
+    EXPECT_THROW(parse(f.data), Error);
+    EXPECT_THROW(references(f, DexReferenceKind::String, "absent"), Error);
+  }
+}
+TEST(MobileDalvikReader, DexWideRegistersPreserveScalarAndPairBoundaries) {
+  // Three registers make v2 valid as a scalar, but invalid as a wide pair.
+  // Exercise both recovery and query decoding through their shared authority.
+  for (const auto &[name, words, valid] :
+       std::vector<std::tuple<std::string, std::vector<uint16_t>, bool>>{
+           {"move-wide", {0x1004}, true},
+           {"move-wide destination", {0x0204}, false},
+           {"move-wide source", {0x2004}, false},
+           {"move-wide/from16", {0x0005, 1}, true},
+           {"move-wide/from16 source", {0x0005, 2}, false},
+           {"move-wide/16", {0x0006, 0, 1}, true},
+           {"move-wide/16 destination", {0x0006, 2, 0}, false},
+           {"const-wide", {0x0016, 0}, true},
+           {"const-wide destination", {0x0216, 0}, false},
+           {"int-to-long scalar source", {0x2081}, true},
+           {"int-to-long destination", {0x0281}, false},
+           {"long-to-int scalar destination", {0x0284}, true},
+           {"long-to-int source", {0x2084}, false},
+           {"double-to-long", {0x018b}, true},
+           {"double-to-long destination", {0x028b}, false},
+           {"double-to-long source", {0x208b}, false},
+           {"cmp-long scalar destination", {0x0231, 0x0100}, true},
+           {"cmp-long first source", {0x0231, 0x0002}, false},
+           {"cmp-long second source", {0x0231, 0x0200}, false},
+           {"cmpl-double scalar destination", {0x022f, 0x0100}, true},
+           {"cmpl-double second source", {0x022f, 0x0200}, false},
+           {"aget-wide scalar array and index", {0x0045, 0x0202}, true},
+           {"aget-wide destination", {0x0245, 0x0202}, false},
+           {"aput-wide scalar array and index", {0x004c, 0x0202}, true},
+           {"aput-wide value", {0x024c, 0x0202}, false},
+           {"neg-long", {0x107d}, true},
+           {"neg-long source", {0x207d}, false},
+           {"add-long", {0x019b, 0x0100}, true},
+           {"add-long destination", {0x029b, 0x0100}, false},
+           {"add-long source", {0x019b, 0x0200}, false},
+           {"shl-long scalar shift", {0x00a3, 0x0201}, true},
+           {"shl-long destination", {0x02a3, 0x0201}, false},
+           {"shl-long source", {0x00a3, 0x0202}, false},
+           {"shr-long scalar shift", {0x00a4, 0x0201}, true},
+           {"ushr-long scalar shift", {0x00a5, 0x0201}, true},
+           {"shl-long/2addr scalar shift", {0x21c3}, true},
+           {"shl-long/2addr destination", {0x02c3}, false},
+           {"shr-long/2addr scalar shift", {0x21c4}, true},
+           {"ushr-long/2addr scalar shift", {0x21c5}, true}}) {
+    SCOPED_TRACE(name);
+    FixtureOptions options;
+    options.params = {};
+    options.returns = "V";
+    options.registers = 3;
+    options.words = words;
+    options.words.push_back(0x000e);
+    const auto f = fixture(options);
+    if (valid) {
+      EXPECT_NO_THROW(parse(f.data));
+      EXPECT_TRUE(
+          references(f, DexReferenceKind::String, "absent").code_scan_complete);
+    } else {
+      expectDexError(f.data, "Invalid DEX: wide register pair exceeds frame");
+      EXPECT_THROW(references(f, DexReferenceKind::String, "absent"), Error);
+    }
   }
 }
 TEST(MobileDalvikReader, DexArrayCloneCallsAgreeWithSmali) {
@@ -1201,6 +2313,74 @@ TEST(MobileDalvikReader, DexStringReaderRetainsWorkAndIntegrityLimits) {
   patch(corrupt, f.at["code"] + 18, 65535, 2);
   expectDexError(seal(std::move(corrupt)),
                  "Invalid DEX: string index out of bounds");
+}
+TEST(MobileDalvikReader, DexASCIIStringRunsRetainExactByteWork) {
+  const auto ascii = stringReturningFixture(std::u16string(8192, u'x'));
+  const auto unicode = stringReturningFixture(std::u16string(4096, u'\u03bb'));
+  // Both strings have exactly 8192 MUTF-8 payload bytes and two-byte UTF-16
+  // lengths. Everything else, including envelope scan charges, has equal size.
+  ASSERT_EQ(ascii.data.size(), unicode.data.size());
+  Budget ascii_budget, unicode_budget;
+  auto ascii_classes = parseDex(ascii.data, "ascii.dex", ascii_budget);
+  auto unicode_classes = parseDex(unicode.data, "unicode.dex", unicode_budget);
+  ASSERT_EQ(ascii_classes.size(), 1u);
+  ASSERT_EQ(unicode_classes.size(), 1u);
+  EXPECT_EQ(ascii_budget.remaining, unicode_budget.remaining);
+  EXPECT_EQ(std::get<std::string>(
+                ascii_classes[0].methods[0].instructions[0].literal),
+            std::string(8192, 'x'));
+  const auto &decoded = std::get<std::string>(
+      unicode_classes[0].methods[0].instructions[0].literal);
+  EXPECT_EQ(decoded.size(), 8192u);
+  EXPECT_EQ(decoded.substr(0, 2), "\xce\xbb");
+  Budget initial;
+  const auto spent = initial.remaining - ascii_budget.remaining;
+  Budget exact;
+  exact.remaining = spent;
+  EXPECT_NO_THROW(parseDex(ascii.data, "ascii.dex", exact));
+  EXPECT_EQ(exact.remaining, 0u);
+  Budget insufficient;
+  insufficient.remaining = spent - 1;
+  EXPECT_THROW(parseDex(ascii.data, "ascii.dex", insufficient), Error);
+  EXPECT_EQ(insufficient.remaining, 0u);
+}
+TEST(MobileDalvikReader, DexASCIIChunkBoundariesPreserveMUTF8AndLengthChecks) {
+  for (const size_t prefix : {4095, 4096, 4097}) {
+    std::u16string literal(prefix, u'x');
+    literal += std::u16string{0, 0x03bb, 0xd83d, 0xde00, 0xd800, u'z'};
+    auto f = stringReturningFixture(literal);
+    auto classes = parse(f.data);
+    const auto &decoded =
+        std::get<std::string>(classes[0].methods[0].instructions[0].literal);
+    EXPECT_EQ(decoded, std::string(prefix, 'x') + std::string(1, '\0') +
+                           "\xce\xbb\xf0\x9f\x98\x80\xed\xa0\x80z");
+    const auto index = std::find(f.strings.begin(), f.strings.end(), literal) -
+                       f.strings.begin();
+    uint32_t offset = 0;
+    for (unsigned i = 0; i < 4; ++i)
+      offset |= uint32_t(uint8_t(f.data[f.at["strings"] + index * 4 + i]))
+                << (i * 8);
+    std::string length;
+    uleb(length, literal.size());
+    const auto boundary = offset + length.size() + prefix;
+    auto broken = f.data;
+    broken[boundary] = char(0xf0);
+    expectDexError(seal(std::move(broken)),
+                   "Invalid DEX: invalid MUTF-8 leading byte");
+    broken = f.data;
+    broken[boundary + 1] = ' ';
+    expectDexError(seal(std::move(broken)),
+                   "Invalid DEX: invalid MUTF-8 continuation");
+    for (const auto expected : {literal.size() - 1, literal.size() + 1}) {
+      std::string changed_length;
+      uleb(changed_length, expected);
+      ASSERT_EQ(changed_length.size(), length.size());
+      broken = f.data;
+      broken.replace(offset, length.size(), changed_length);
+      expectDexError(seal(std::move(broken)),
+                     "Invalid DEX: UTF-16 string length mismatch");
+    }
+  }
 }
 TEST(MobileDalvikReader, SmaliAbsoluteWordAliasesAndBodylessDeclarations) {
   auto cls =
@@ -3323,6 +4503,421 @@ TEST(MobileDalvikReader, PersistentReaderVectorsMatchCompleteTypedModels) {
                                    << "expected model: " << jsonText(*expected);
     }
   }
+}
+
+TEST(MobileDalvikReader, DexCodeWordsReadUnalignedHostStorageInLittleEndian) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "J";
+  options.registers = 2;
+  options.words = {0x0018, 0x3210, 0x7654, 0xba98, 0xfedc, 0x0010};
+  const auto f = fixture(options);
+  const std::string padded = "x" + f.data;
+  const auto unaligned = std::string_view(padded).substr(1);
+  Budget aligned_budget, unaligned_budget;
+  auto aligned = parseDex(f.data, "fixture.dex", aligned_budget);
+  auto result = parseDex(unaligned, "fixture.dex", unaligned_budget);
+  ASSERT_EQ(result.size(), 1u);
+  EXPECT_EQ(modelJSON(result[0]), modelJSON(aligned[0]));
+  EXPECT_EQ(unaligned_budget.remaining, aligned_budget.remaining);
+  EXPECT_EQ(std::get<int64_t>(result[0].methods[0].instructions[0].literal),
+            std::bit_cast<int64_t>(uint64_t(0xfedcba9876543210)));
+  Budget query_budget;
+  DexReferenceQuery query{DexReferenceKind::String, "absent", true, {}};
+  const auto refs = findDexReferences(unaligned, query, query_budget);
+  EXPECT_EQ(refs.scanned_code_item_count, 1u);
+  EXPECT_TRUE(refs.code_scan_complete);
+}
+
+TEST(MobileDalvikReader, CompactFlowResultKindsPreserveRecoveryAndQueryErrors) {
+  for (const std::string type :
+       {"V", "I", "F", "J", "D", "Ljava/lang/Object;", "[I"}) {
+    for (unsigned opcode : {0xau, 0xbu, 0xcu}) {
+      SCOPED_TRACE(type + ":" + std::to_string(opcode));
+      FixtureOptions options;
+      options.params = {};
+      options.returns = "V";
+      options.registers = 2;
+      options.referenced_method =
+          MethodRef{"Lexternal/Target;", "run", {}, type};
+      options.words = {0x0071, 0, 0, uint16_t(opcode), 0x000e};
+      auto f = fixture(options);
+      auto index = std::find(f.methods.begin(), f.methods.end(),
+                             *options.referenced_method) -
+                   f.methods.begin();
+      patch(f.data, f.at["code"] + 18, index, 2);
+      f.data = seal(std::move(f.data));
+      const auto expected = type == "J" || type == "D" ? 0xbu
+                            : type.starts_with('L') || type.starts_with('[')
+                                ? 0xcu
+                                : 0xau;
+      if (type != "V" && opcode == expected) {
+        EXPECT_NO_THROW(parse(f.data));
+        EXPECT_TRUE(references(f, DexReferenceKind::String, "absent")
+                        .code_scan_complete);
+      } else {
+        expectDexError(
+            f.data,
+            "Invalid DEX: move-result kind disagrees with invocation result");
+        EXPECT_THROW(references(f, DexReferenceKind::String, "absent"), Error);
+      }
+    }
+  }
+  FixtureOptions none;
+  none.params = {};
+  none.returns = "V";
+  none.words = {0x0000, 0x000a, 0x000e};
+  const auto f = fixture(none);
+  expectDexError(
+      f.data,
+      "Invalid DEX: move-result does not immediately follow an invocation");
+  EXPECT_THROW(references(f, DexReferenceKind::String, "absent"), Error);
+}
+
+TEST(MobileDalvikReader, SharedDebugAlwaysChecksEachRegisterFrame) {
+  FixtureOptions o;
+  o.params = {};
+  o.returns = "V";
+  o.words = {0x000e};
+  o.registers = 2;
+  o.referenced_method = MethodRef{o.owner, "zsecond", {}, "V"};
+  o.define_referenced_method = true;
+  o.separate_referenced_code = true;
+  o.referenced_registers = 2;
+  o.debug_info = std::string(
+      {char(0), char(0), char(3), char(1), char(0), char(0), char(0)});
+  auto valid = fixture(o);
+  ASSERT_NO_THROW(parse(valid.data));
+  EXPECT_TRUE(
+      references(valid, DexReferenceKind::String, "absent").code_scan_complete);
+  o.referenced_registers = 1;
+  auto invalid = fixture(o);
+  EXPECT_THROW(parse(invalid.data), Error);
+  EXPECT_THROW(references(invalid, DexReferenceKind::String, "absent"), Error);
+}
+TEST(MobileDalvikReader, SharedDebugAlwaysChecksEachCodeExtent) {
+  FixtureOptions o;
+  o.params = {};
+  o.returns = "V";
+  o.words = {0, 0, 0x000e};
+  o.registers = 1;
+  o.referenced_method = MethodRef{o.owner, "zsecond", {}, "V"};
+  o.define_referenced_method = true;
+  o.separate_referenced_code = true;
+  o.referenced_words = o.words;
+  o.debug_info = std::string({char(0), char(0), char(1), char(2), char(0)});
+  auto valid = fixture(o);
+  ASSERT_NO_THROW(parse(valid.data));
+  EXPECT_TRUE(
+      references(valid, DexReferenceKind::String, "absent").code_scan_complete);
+  o.referenced_words = {0x000e};
+  auto invalid = fixture(o);
+  EXPECT_THROW(parse(invalid.data), Error);
+  EXPECT_THROW(references(invalid, DexReferenceKind::String, "absent"), Error);
+}
+TEST(MobileDalvikReader, SharedDebugAlwaysChecksEachParameterCount) {
+  FixtureOptions o;
+  o.params = {"I"};
+  o.returns = "V";
+  o.words = {0x000e};
+  o.registers = 1;
+  o.referenced_method = MethodRef{o.owner, "zsecond", {"I"}, "V"};
+  o.define_referenced_method = true;
+  o.separate_referenced_code = true;
+  o.debug_info = std::string({char(0), char(1), char(0), char(0)});
+  auto valid = fixture(o);
+  ASSERT_NO_THROW(parse(valid.data));
+  EXPECT_TRUE(
+      references(valid, DexReferenceKind::String, "absent").code_scan_complete);
+  o.referenced_method->parameters.clear();
+  auto invalid = fixture(o);
+  EXPECT_THROW(parse(invalid.data), Error);
+  EXPECT_THROW(references(invalid, DexReferenceKind::String, "absent"), Error);
+}
+using MemberGroups = std::array<std::vector<std::array<uint32_t, 3>>, 4>;
+Fixture memberGroups(Fixture input, const MemberGroups &groups) {
+  std::string raw;
+  for (const auto &group : groups)
+    uleb(raw, group.size());
+  for (size_t group = 0; group < groups.size(); ++group) {
+    uint32_t previous = 0;
+    for (const auto &member : groups[group]) {
+      uleb(raw, member[0] - previous);
+      uleb(raw, member[1]);
+      if (group >= 2)
+        uleb(raw, member[2]);
+      previous = member[0];
+    }
+  }
+  auto &data = input.data;
+  const auto map = data.substr(input.at.at("map"));
+  data.resize(input.at.at("class_data"));
+  data += raw;
+  while (data.size() % 4)
+    data += '\0';
+  input.at["map"] = data.size();
+  data += map;
+  auto u32 = [&](size_t offset) {
+    uint32_t result = 0;
+    for (unsigned i = 0; i < 4; ++i)
+      result |= uint32_t(uint8_t(data.at(offset + i))) << (8 * i);
+    return result;
+  };
+  patch(data, 32, data.size());
+  patch(data, 52, input.at["map"]);
+  patch(data, 104, data.size() - u32(108));
+  const auto count = u32(input.at["map"]);
+  for (unsigned i = 0; i < count; ++i) {
+    const auto at = input.at["map"] + 4 + 12 * i;
+    if ((u32(at) & 0xffff) == 0x1000)
+      patch(data, at + 8, input.at["map"]);
+  }
+  data = seal(std::move(data));
+  return input;
+}
+Fixture memberGroupFixture(unsigned fields = 2, unsigned methods = 2) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  options.flags = 0x109;
+  for (unsigned i = 0; i < fields; ++i)
+    options.extra_fields.push_back(
+        {options.owner, "field" + std::to_string(i), "I"});
+  for (unsigned i = 0; i < methods; ++i)
+    options.extra_methods.push_back(
+        {options.owner, "method" + std::to_string(i), {}, "V"});
+  return fixture(options);
+}
+TEST(MobileDalvikReader, ClassDataGroupDuplicatesPreserveDiagnostics) {
+  const auto base = memberGroupFixture();
+  for (unsigned kind = 0; kind < 2; ++kind) {
+    MemberGroups groups;
+    const unsigned first = kind ? 2 : 0, second = first + 1;
+    groups[first].push_back({0, kind ? 0x109u : 9u, 0});
+    groups[second].push_back({0, kind ? 0x101u : 1u, 0});
+    auto bad = memberGroups(base, groups);
+    expectDexError(bad.data, "Invalid DEX: duplicate defined member");
+    EXPECT_THROW(references(bad, DexReferenceKind::String, "absent"), Error);
+    groups[second].clear();
+    groups[first].push_back(groups[first].front());
+    bad = memberGroups(base, groups);
+    expectDexError(bad.data, "Invalid DEX: duplicate class-data member index");
+    EXPECT_THROW(references(bad, DexReferenceKind::String, "absent"), Error);
+  }
+}
+TEST(MobileDalvikReader, ClassDataEmptyGroupsPreserveDeclarations) {
+  const auto base = memberGroupFixture();
+  for (unsigned mask = 0; mask < 16; ++mask) {
+    SCOPED_TRACE(mask);
+    MemberGroups groups;
+    for (unsigned g = 0; g < 4; ++g)
+      if (mask & (1u << g))
+        groups[g].push_back(
+            {g & 1, g < 2 ? (g == 0 ? 9u : 1u) : (g == 2 ? 0x109u : 0x101u),
+             0});
+    const auto input = memberGroups(base, groups);
+    const auto cls = parse(input.data).front();
+    EXPECT_EQ(cls.fields.size(), bool(mask & 1) + bool(mask & 2));
+    EXPECT_EQ(cls.methods.size(), bool(mask & 4) + bool(mask & 8));
+    const auto result = references(input, DexReferenceKind::String, "absent");
+    EXPECT_TRUE(result.code_scan_complete);
+    EXPECT_EQ(result.defined_method_count, cls.methods.size());
+    EXPECT_EQ(result.scanned_method_count, 0u);
+  }
+}
+TEST(MobileDalvikReader, ClassDataLargeInterleavedGroupsStayBounded) {
+  const auto base = memberGroupFixture(1024, 4096);
+  MemberGroups groups;
+  for (uint32_t index = 0; index < base.fields.size(); ++index)
+    groups[index & 1].push_back({index, (index & 1) ? 1u : 9u, 0});
+  for (uint32_t index = 0; index < base.methods.size(); ++index)
+    groups[2 + (index & 1)].push_back(
+        {index, (index & 1) ? 0x101u : 0x109u, 0});
+  const auto input = memberGroups(base, groups);
+  const auto cls = parse(input.data).front();
+  EXPECT_EQ(cls.fields.size(), base.fields.size());
+  EXPECT_EQ(cls.methods.size(), base.methods.size());
+  const auto result = references(input, DexReferenceKind::String, "absent");
+  EXPECT_TRUE(result.code_scan_complete);
+  EXPECT_EQ(result.defined_method_count, base.methods.size());
+  groups[3].insert(groups[3].begin(), {0, 0x101, 0});
+  const auto duplicate = memberGroups(base, groups);
+  expectDexError(duplicate.data, "Invalid DEX: duplicate defined member");
+  EXPECT_THROW(references(duplicate, DexReferenceKind::String, "absent"),
+               Error);
+  Budget constrained;
+  constrained.remaining = 100;
+  EXPECT_THROW(findDexReferences(input.data,
+                                 {DexReferenceKind::String, "absent"},
+                                 constrained),
+               Error);
+}
+TEST(MobileDalvikReader,
+     BorrowedPoolModelsOwnMemberTextAfterParserDestruction) {
+  const std::string owner = "Lfixture/" + std::string(80, 'O') + ";";
+  const std::string parameter = "Lfixture/" + std::string(80, 'P') + ";";
+  const MethodRef callee{owner, std::string(60, 'm'), {"J", parameter}, "V"};
+  const FieldRef field{owner, "VALUE", parameter};
+  std::vector<Class> model;
+  DexReferenceResult sites;
+  {
+    FixtureOptions options;
+    options.owner = owner;
+    options.method_name = std::string(60, 'd');
+    options.params = {parameter};
+    options.returns = "V";
+    options.registers = 3;
+    options.static_value = std::string(1, char(0x1e));
+    options.field_type = parameter;
+    options.referenced_method = callee;
+    options.words = {0x0062, 0, 0x3071, 0, 0x0210, 0x000e};
+    for (unsigned i = 0; i < 200; ++i) {
+      const auto type = "Lextra/T" + std::to_string(i) + ";";
+      options.extra_methods.push_back({type, "extra", {type}, type});
+      options.extra_fields.push_back({type, "extra", type});
+    }
+    auto f = fixture(options);
+    auto member_index = std::find(f.methods.begin(), f.methods.end(), callee) -
+                        f.methods.begin();
+    auto field_index =
+        std::find(f.fields.begin(), f.fields.end(), field) - f.fields.begin();
+    patch(f.data, f.at["code"] + 18, field_index, 2);
+    patch(f.data, f.at["code"] + 22, member_index, 2);
+    f.data = seal(std::move(f.data));
+    model = parse(f.data);
+    sites = references(f, DexReferenceKind::Method, callee.identity(), true);
+    std::fill(f.data.begin(), f.data.end(), char(0xdd));
+  }
+  // Both Dex instances, their source tables and the input storage are gone.
+  std::vector<std::string> churn(4096, std::string(160, 'z'));
+  ASSERT_EQ(model.size(), 1u);
+  ASSERT_EQ(model[0].fields.size(), 1u);
+  EXPECT_EQ(model[0].fields[0].reference, field);
+  ASSERT_EQ(model[0].methods.size(), 1u);
+  const MethodRef caller{owner, std::string(60, 'd'), {parameter}, "V"};
+  EXPECT_EQ(model[0].methods[0].reference, caller);
+  const auto &ins = model[0].methods[0].instructions;
+  ASSERT_EQ(ins.size(), 3u);
+  EXPECT_EQ(std::get<FieldRef>(ins[0].reference), field);
+  EXPECT_EQ(std::get<MethodRef>(ins[1].reference), callee);
+  ASSERT_EQ(sites.references.size(), 1u);
+  EXPECT_EQ(sites.references[0].method, caller);
+  EXPECT_EQ(sites.references[0].target, callee.identity());
+  EXPECT_EQ(sites.references[0].pc_code_units, 2u);
+}
+
+TEST(MobileDalvikReader, BorrowedPoolMaterializedReferenceCopiesStayBounded) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  const MethodRef target{"L" + std::string(4096, 'x') + ";", "many", {}, "V"};
+  options.referenced_method = target;
+  options.words.clear();
+  for (unsigned i = 0; i < 64; ++i)
+    options.words.insert(options.words.end(), {0x0071, 0, 0});
+  options.words.push_back(0x000e);
+  auto f = fixture(options);
+  const auto index =
+      std::find(f.methods.begin(), f.methods.end(), target) - f.methods.begin();
+  for (unsigned i = 0; i < 64; ++i)
+    patch(f.data, f.at["code"] + 18 + i * 6, index, 2);
+  f.data = seal(std::move(f.data));
+  const DexReferenceQuery query{DexReferenceKind::Method, target.identity(),
+                                true};
+  Budget normal;
+  const auto result = findDexReferences(f.data, query, normal);
+  ASSERT_EQ(result.references.size(), 64u);
+  EXPECT_TRUE(result.code_scan_complete);
+  for (size_t i = 0; i < result.references.size(); ++i) {
+    EXPECT_EQ(result.references[i].target, target.identity());
+    EXPECT_EQ(result.references[i].pc_code_units, i * 3);
+  }
+  Limits limits;
+  limits.max_bytes = 128 * 1024;
+  ASSERT_LT(f.data.size(), limits.max_bytes);
+  Budget storage(limits);
+  try {
+    (void)findDexReferences(f.data, query, storage);
+    FAIL() << "actual result strings escaped the byte bound";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(), "reference query storage exceeds byte limit");
+  }
+  Budget work;
+  work.remaining = 20000;
+  EXPECT_THROW(findDexReferences(f.data, query, work), Error);
+}
+void expectQueryStorageLimit(const Fixture &input, uint64_t low,
+                             uint64_t high) {
+  Limits limits;
+  limits.max_bytes = low;
+  Budget small(limits);
+  try {
+    (void)findDexReferences(input.data, {DexReferenceKind::String, "absent"},
+                            small);
+    FAIL() << "query accepted insufficient transient storage";
+  } catch (const Error &error) {
+    EXPECT_EQ(std::string(error.what()),
+              "reference query storage exceeds byte limit");
+  }
+  limits.max_bytes = high;
+  Budget adequate(limits);
+  const auto result = findDexReferences(
+      input.data, {DexReferenceKind::String, "absent"}, adequate);
+  EXPECT_TRUE(result.code_scan_complete);
+  EXPECT_TRUE(result.references.empty());
+}
+TEST(MobileDalvikReader,
+     QueryStorageChargesBranchFlowCapacityBeforeAllocation) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  options.words = {0x0012};
+  for (unsigned i = 0; i < 10000; ++i)
+    options.words.insert(options.words.end(), {0x0038, 2});
+  options.words.push_back(0x000e);
+  const auto input = fixture(options);
+  EXPECT_EQ(parse(input.data).front().methods.front().instructions.size(),
+            10002u);
+  expectQueryStorageLimit(input, 600000, 2000000);
+}
+TEST(MobileDalvikReader,
+     QueryStorageChargesSharedSwitchTargetsAndPendingEdges) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  options.words.clear();
+  constexpr unsigned switches = 1024, targets = 128,
+                     payload_pc = switches * 3 + 2;
+  for (unsigned i = 0; i < switches; ++i) {
+    const uint32_t delta = payload_pc - i * 3;
+    options.words.insert(options.words.end(),
+                         {0x002b, uint16_t(delta), uint16_t(delta >> 16)});
+  }
+  options.words.insert(options.words.end(), {0x000e, 0, 0x0100, targets, 0, 0});
+  for (unsigned i = 0; i < targets; ++i)
+    options.words.insert(options.words.end(), {3, 0});
+  const auto input = fixture(options);
+  EXPECT_EQ(parse(input.data)
+                .front()
+                .methods.front()
+                .instructions.front()
+                .targets.size(),
+            targets);
+  expectQueryStorageLimit(input, 1000000, 8000000);
+}
+TEST(MobileDalvikReader, QueryStorageChargesTryRegionsAndSharedHandlerCopies) {
+  FixtureOptions options;
+  options.params = {};
+  options.returns = "V";
+  constexpr unsigned count = 4096;
+  options.words.assign(count + 1, 0x000e);
+  for (unsigned i = 0; i < count; ++i)
+    options.tries.push_back({i, 1, 1});
+  options.handlers = std::string("\1\0", 2);
+  uleb(options.handlers, count);
+  const auto input = fixture(options);
+  EXPECT_EQ(parse(input.data).front().methods.front().tries.size(), count);
+  expectQueryStorageLimit(input, 650000, 2000000);
 }
 
 } // namespace

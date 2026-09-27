@@ -501,6 +501,43 @@ Personality-Erkennung noch aus dem nativen Lowering.
 
 ## Komponentenübersicht
 
+Die experimentelle mobile CLI verwaltet APK-/DEX-Klasseninventare und
+Codereferenzabfragen in `tools/neverd/mobile`. Beide verwenden denselben Leser
+für DEX-Rahmen/MUTF-8 und denselben ZIP-Metadatenvalidator wie die
+Rekonstruktion. Das Klasseninventar materialisiert nur Klassenidentitäten.
+Referenzabfragen beobachten Pool-Operanden im bestehenden Instruktionsdecoder
+und teilen die Prüfung der Klassen-/Member-Zuordnung und des Kontrollflusses;
+es gibt keinen separaten Instruktionsbreitendecoder. Der Decoder erzeugt in
+beiden Modi kompakte Kontrollflussdaten; die Rekonstruktion erstellt zusätzlich
+Instruktionen mit eigenen Daten. Abfragen behalten nach Prüfung sämtlicher
+Operanden nur die ausgewählten Referenzoperanden. Private Member-Pool-Einträge
+leihen Daten aus vollständig aufgebauten, unveränderlichen Identifikatortabellen;
+Rekonstruktionsmodelle und Referenzergebnisse materialisieren ausdrücklich eigene
+Member-Daten. Prototypeinträge leihen auch validierte Typlisten. Beide
+Darstellungen verwenden denselben kanonischen Formatierer für
+Methodenidentitäten und Validator für kodierte Zugriffsflags. Der Decoder löst
+private Verzweigungskanten einmalig in Instruktionsindizes auf; öffentliche
+Rekonstruktionsziele behalten ihre PCs in Codeeinheiten. Abfragen verwenden
+validierte Klassentabellen wieder und erfassen Elementbereiche je Map-Abschnitt.
+Sie prüfen Überlappungen vor der Veröffentlichung auch dann, wenn physische
+Elemente in anderer Reihenfolge eintreffen.
+Arbeitskosten werden weiterhin sofort abgebucht. Begrenzte skalare Lesevorgänge,
+kurze Vergleiche und Instruktionsschritte teilen Zeitlimit-Prüfpunkte; größere
+Operationen prüfen direkt. Debug-Ströme werden für den Rahmen und die Ausdehnung
+jedes Code-Elements geprüft, ohne einen kontextunabhängigen Erfolg zu cachen.
+Kompakte Fundstellen werden für jeden Besitzer eines gemeinsam genutzten
+physischen Code-Elements erneut zugeordnet. Der Abgleich verwaltet die wörtliche
+Zielauswahl, während die Container-Brücke für DEX-übergreifende Zusammenfassung
+und JSON-Veröffentlichung einschließlich verlustfreier UTF-16-Zeichenketteneinheiten
+zuständig ist. `visitZipMembers` validiert sämtliche Eintragsmetadaten und die
+vollständigen ausgewählten Nutzdaten vor deren Besuch im Speicher; `extractZip`
+behält die Nutzdatenvalidierung des gesamten Archivs bei. Abfrageergebnisse
+werden vor der Veröffentlichung gesammelt und schließen die Integrität nicht
+ausgewählter Nutzdaten ausdrücklich aus. Das Klasseninventar schließt
+Methodenrümpfe aus; Referenzabfragen prüfen jeden definierten Rumpf, beanspruchen
+jedoch keine Validierung von Annotationen oder Java-Rekonstruktion. Keiner der
+beiden Pfade erweitert den Formatvertrag des nativen Binär-SDKs.
+
 Jede Komponente ist ein von `add_neverd_component_library` erzeugtes statisches
 Archiv. Die Tabelle nennt wichtige NeverD-Abhängigkeiten, nicht alle durch den
 CMake-Helper bereitgestellten LLVM- und Capstone-Bibliotheken.

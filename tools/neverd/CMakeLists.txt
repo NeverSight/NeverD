@@ -37,6 +37,8 @@ add_library(NeverDMobile STATIC
   mobile/MobileProcess.cpp
   mobile/MobileRecovery.cpp
   mobile/MobileAndroid.cpp
+  mobile/MobileAndroidInventory.cpp
+  mobile/MobileAndroidReferences.cpp
   mobile/MobileDalvikModel.cpp
   mobile/MobileDalvikSignature.cpp
   mobile/MobileDalvikDex.cpp

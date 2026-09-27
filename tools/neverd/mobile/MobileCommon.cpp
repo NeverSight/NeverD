@@ -54,9 +54,7 @@ void Budget::check() const {
 
 void Budget::tick(uint64_t count) {
   check();
-  if (count > remaining)
-    throw Error("mobile analysis exceeded its work budget");
-  remaining -= count;
+  consumeWork(count);
 }
 
 void Budget::output(uint64_t count) {

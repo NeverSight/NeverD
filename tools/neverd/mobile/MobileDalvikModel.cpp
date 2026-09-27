@@ -1,6 +1,8 @@
 //===- MobileDalvikModel.cpp - Shared Dalvik declaration validation
 //--------===//
 #include "MobileDalvik.h"
+#include "MobileDalvikAccess.h"
+#include "MobileDalvikIdentity.h"
 #include "MobileDalvikSignature.h"
 
 #include <algorithm>
@@ -103,21 +105,13 @@ prototype(std::string_view value) {
 }
 
 std::string MethodRef::signature() const {
-  std::string result = "(";
-  for (const auto &p : parameters)
-    result += p;
-  return result + ")" + returns;
+  return detail::methodSignature(parameters, returns);
 }
 std::string MethodRef::identity() const {
-  return owner + "->" + name + signature();
+  return detail::methodIdentity(owner, name, parameters, returns);
 }
 unsigned Method::incomingWords() const {
-  uint64_t result = !has(access, "static");
-  for (const auto &p : reference.parameters)
-    result += width(p);
-  if (result > 65535)
-    throw Error("Dalvik incoming register frame exceeds its word limit");
-  return static_cast<unsigned>(result);
+  return detail::incomingWords(reference.parameters, has(access, "static"));
 }
 
 MethodRef methodRef(std::string_view value) {
@@ -144,32 +138,11 @@ FieldRef fieldRef(std::string_view value) {
 }
 
 Access accessFlags(uint32_t value) {
-  static const std::pair<uint32_t, const char *> flags[] = {
-      {1, "public"},
-      {2, "private"},
-      {4, "protected"},
-      {8, "static"},
-      {0x10, "final"},
-      {0x20, "synchronized"},
-      {0x40, "volatile"},
-      {0x80, "transient"},
-      {0x100, "native"},
-      {0x200, "interface"},
-      {0x400, "abstract"},
-      {0x800, "strictfp"},
-      {0x1000, "synthetic"},
-      {0x2000, "annotation"},
-      {0x4000, "enum"},
-      {0x10000, "constructor"},
-      {0x20000, "declared-synchronized"}};
+  detail::validateAccessBits(value);
   Access result;
-  for (const auto &[bit, name] : flags) {
+  for (const auto &[bit, name] : detail::DeclarationFlags)
     if (value & bit)
       result.emplace(name);
-    value &= ~bit;
-  }
-  if (value)
-    throw Error("unknown Dalvik declaration access flags");
   return result;
 }
 

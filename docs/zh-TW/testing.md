@@ -653,6 +653,64 @@ execution fault 的穩定值；`SBFSourceStatuses.def` 獨立擁有 generated-so
 的耗時。cluster/account/slot row 支援 `RPC activation audit`，一般測試仍保持
 deterministic 與 offline。
 
+## Android 類別清單效能
+
+在量測 `neverd mobile INPUT --list-classes` 前，以 Release 建置 `NeverDMobileTests` 並執行其標籤。
+讀取器測試涵蓋稀疏中繼資料、Unicode、無效參照、不支援的方法本體、校驗和及預算；
+封存測試區分完整擷取與選定內容查詢。CLI 測試檢查前綴篩選、JSON 範圍、既有輸出保護及 multidex 失敗原子性。
+
+獨立的樣本／量測工具在接受計時樣本前，會驗證每個程序的完整描述符清單：
+
+```sh
+python3 -m unittest scripts.tests.test_benchmark_mobile_inventory -v
+python3 scripts/benchmark_mobile_inventory.py \
+  --output-dir /tmp/neverd-inventory-benchmark \
+  --class-count 6000 --dex-count 3 --code-units 64 \
+  --extra-string-bytes 8388608 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+每次執行使用新的輸出目錄。`--generate-only` 只寫入樣本和 manifest，不計時。
+`--workload` 為選用的 `--peer-command 'tool {input} {prefix}'` 選擇共用輸入類型；
+輸入準備不計入命令時間。報告保留雜湊、命令、所有新程序樣本、暖快取假設，以及在具有 GNU time
+的 Linux 上的最大子程序 RSS。該 RSS 不是多程序工具的合計尖峰。合成 APK 是查詢容器，不是可安裝的應用程式。
+清單速度不能證明參照搜尋速度或 Java 還原品質。
+
+混合核心 CPU 上，將量測工具及其繼承的子程序綁定至同一個允許的 CPU（例如 Linux 的
+`taskset -c 4 python3 ...`），避免混合效能核心與效率核心。報告會記錄繼承的 CPU 親和性。
+
+## Android 程式碼參照效能
+
+參照查詢與還原讀取器共用指令邊界和程式碼驗證。修改此邊界後應執行行動測試套件。
+讀取器測試涵蓋運算元池種類、比對模式、方法歸屬與共用程式碼、看似參照的 payload／立即值、
+格式錯誤輸入及資源限制。共用除錯資料流須依每個所屬本體的框架、範圍和參數檢查。
+儲存上限測試應同時保留大型成員清單及密集分支本體；持久索引和暫時容器擴充的生命週期不同。
+另須檢查重新排序和重疊項目、寬度相同但原型不相容的共用程式碼、未對齊輸入儲存，以及跨越搜尋區塊邊界的子字串。
+私有解碼資料的效能變更必須保留完整的具所有權還原模型及參照出現多重集合，包括不支援還原中繼資料時的失敗行為。
+請區分獨立產生的預期結果與真實輸入上的跨工具一致性。
+
+獨立參照量測工具在產生指令時記錄預期出現位置。每次量測都檢查完整方法身分、以 code unit
+計算的 PC、opcode、目標身分、UTF-16 單位和重複次數，並檢查獨立預期的 NeverD 覆蓋計數及 `code_scan_complete`：
+
+```sh
+NEVERD_REFERENCE_TEST_BINARY="$PWD/build-release/bin/neverd" \
+  python3 -m unittest scripts.tests.test_benchmark_mobile_references -v
+python3 scripts/benchmark_mobile_references.py \
+  --output-dir /tmp/neverd-reference-benchmark \
+  --class-count 500 --methods-per-class 64 --matching-methods 2 \
+  --dex-count 3 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+使用 `--kind` 和 `--workload` 選擇案例。`--extra-strings 65536` 測試實際的 32 位元字串索引。
+預設啟用 payload 誘餌；`--no-payload-lookalikes` 保留相同配置和真實參照，只替換誘餌 payload 值，
+供共同輸入比較使用。正確性和計時結果都要保留。若查詢回傳假的 payload 參照或漏掉真實參照，驗證失敗且計時不被接受。
+
+選用的 `--peer-command` 接受含 `{input}`、`{kind}` 和 `{query}` 的 argv 範本。
+若其他工具語義不同，須明確調整查詢語法並比較完整出現多重集合。報告保留其宣告的驗證範圍，不宣稱完整程式碼掃描。
+清單基準的全新目錄、CPU 親和性、新程序、暖快取及 RSS 限定同樣適用。
+除非 `NEVERD_REFERENCE_TEST_BINARY` 指向已建置的可執行檔，否則選用 CLI 單元測試會略過；請報告該略過情況。
+
 ## 行動 SDK 匯出證據
 
 手動工作流程 `Mobile SDK Export Evidence` 針對固定的 Xcode SDK 執行 `collect_mobile_ios_sdk_declarations.py --exports-only`。它原樣保留 iOS 實機與模擬器 SDK 的 Foundation、CoreFoundation、UIKit 連結器映射，並記錄目標、SDK 版本、SDK 設定雜湊、檔案大小及 SHA-256。一般宣告收集器也會保留這些映射。檔案缺失、為空、超出大小限制或位於 SDK 外部時，收集失敗，並保留已完成的證據。連結器映射提供符號匯出證據，不能證明呼叫 ABI 或方法復原成功。

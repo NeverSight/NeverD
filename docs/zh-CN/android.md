@@ -65,6 +65,8 @@ cmake --build build --target neverd
 
 ## 支持的输入与范围
 
+下表描述恢复操作；后面的查询模式采用更窄的校验范围。
+
 | 输入 | 处理方式 | 重要限制 |
 |------|----------|----------|
 | `.apk` | 验证整个 ZIP，再一起分析根目录的 `classes.dex`、`classes2.dex` 和后续编号 DEX | 仅恢复代码，不解码资源或 Manifest |
@@ -78,6 +80,44 @@ Split APK 视为独立输入。含 DEX 的每个 APK 可单独处理，但此命
 
 APK 资源、`AndroidManifest.xml`、assets、JNI/原生库和运行时下载代码不在 Java 恢复范围内。原生 `.so` 可单独提取后执行 `neverd decompile library.so -o library.c`。加密或加壳载荷需要事先以普通 DEX/smali 形式可用；本静态流程不执行脱壳、设备附加或保护绕过。
 
+## 快速类清单
+
+```sh
+neverd mobile app.apk --list-classes
+neverd mobile classes.dex --list-classes --class-prefix com.example
+neverd mobile app.apk --list-classes --class-prefix Lcom/example/ --json
+neverd mobile app.apk --list-classes -o classes.txt
+```
+
+此查询只读取类身份，不解码方法体或生成 Java，不需要暂存目录或外部运行时。文本输出每行一个原始 DEX 描述符，先按 ZIP 目录顺序，再按 DEX 定义顺序排列。`--class-prefix` 接受描述符前缀或点分包名前缀，进行字面前缀匹配，不要求包名边界。重复类定义（包括跨 DEX 重复）及无法无损表示为 UTF-8 的类身份均明确失败。
+
+未指定 `-o` 时写入标准输出。查询模式的 `-o` 指定**新文件**，而非恢复目录，已有文件保持不变。结果在所有选中 DEX 成功后才发布；后面的 DEX 损坏时不会输出部分清单。`--json` 包含匹配类数、总类数、DEX 数及 `validation_scope: "dex-envelope-and-class-identities"`。
+
+所有 ZIP 名称、头部、范围和声明的资源限制都会检查。只解压并校验根目录 `classes.dex` 和编号 `classesN.dex` 的 CRC，未验证无关资源载荷的完整性。每个 DEX 仍检查头部、SHA-1、Adler-32、映射范围及引用到的类元数据，不验证方法体或未引用元数据。这不是整个归档的完整性检查，也不证明 Java 恢复成功。DEX 041、method-handle 和 custom-call-site 节仍不支持；常规完整恢复流程仍校验归档中每个载荷。
+
+`--timeout`、`--max-files` 和 `--max-bytes` 均适用。类数量限制在筛选前统计所有 DEX 的定义，未选中的 ZIP 条目也计入归档限额。类清单操作不接受 `--jadx`、iOS 选项或 smali 输入。
+
+## 代码引用查询
+
+查询指令直接引用的操作数，无需生成 Java：
+
+```sh
+neverd mobile app.apk --find-refs string --query 'login failed' --json
+neverd mobile classes.dex --find-refs type --query 'Lcom/example/Service;' --exact
+neverd mobile app.apk --find-refs method --query '->connect(' --owner 'Lcom/example/Client;'
+neverd mobile app.apk --find-refs field --query 'Lcom/example/State;->ready:Z' --exact -o refs.jsonl
+```
+
+默认区分大小写，按字面子串匹配。`--exact` 匹配完整目标：字符串内容、类型描述符、`Lpkg/Type;->name(I)V` 形式的方法身份，或 `Lpkg/Type;->name:I` 形式的字段身份。`--owner` 以精确描述符限定方法或字段目标的所属类型，不筛选包含引用的调用方法。空查询、smali 输入及混用查询/恢复选项均不支持；正则表达式元字符按普通字符处理。
+
+默认每处引用输出一个紧凑 JSON 对象（JSON Lines）；`--json` 输出包含计数和 `references` 数组的报告。每行记录 `dex_entry`、完整的所属 `method`、`pc_code_units`（从方法首条指令起算的16位代码单元偏移）、`opcode`、`kind`、DEX 内部的 `target_index` 和 `target`。所有出现位置均保留，包括同一物理代码分别归属于多个方法定义的情况。字符串行还保留精确的 `target_utf16` 单元；孤立代理项无法无损发布为 UTF-8 时，`target` 为 null。其他身份必须可表示为 UTF-8。
+
+扫描器共用恢复读取器的指令边界、操作数检查、payload 处理和控制流检查。立即数及 switch/数组 payload 数据不会被误计为引用。即使没有匹配目标，也检查每个已定义方法体，全部完成后才设置 `code_scan_complete: true`。`defined_method_count` 包含 native 和 abstract 声明；`scanned_method_count` 统计带方法体的定义；`scanned_code_item_count` 统计每个 DEX 内不同的物理方法体；`matching_pool_entries` 统计匹配的池目标，包括未被引用的目标。
+
+`validation_scope: "dex-code-references"` 涵盖 DEX 封装、标识符表、类/成员归属及实际读取的代码、异常和调试数据。注解、静态编码值、仅出现在声明中的使用及未引用元数据不在范围内。这不是 Java 恢复或 ART 验证器；不支持的代码和读取到的损坏数据会明确失败。APK 使用与类清单相同的选中载荷校验范围，未选择资源载荷的完整性仍未验证。
+
+所有选中 DEX 的结果（包括跨 DEX 重复类检查）成功后才统一发布。可选 `-o` 指定新文件。`--max-files` 分别限制聚合的类定义、方法定义和结果出现次数，并限制 ZIP 条目数。`--max-bytes` 限制输入、保留的查询数据、每个方法体的工作存储及输出（包含保守的 JSON 扩展预留）。这是操作预算；进程 RSS 还包含输入缓冲、分配器开销和运行时。常规超时及工作量预算也继续适用。
+
 ## 参数与优先级
 
 ```sh
@@ -87,13 +127,19 @@ neverd mobile app.apk -o recovered-app --platform=android \
 
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
-| `-o DIRECTORY` | 必填 | 尚不存在的输出目录，不能位于目录输入内部；不覆盖已有输出 |
+| `-o PATH` | 恢复时必填 | 新的恢复目录；两种查询模式中为可选的新输出文件 |
+| `--list-classes` | 关闭 | 查询 APK/DEX 的类身份，不执行 Java 恢复 |
+| `--class-prefix PREFIX` | 所有类 | 描述符或点分字面前缀；要求 `--list-classes` |
+| `--find-refs KIND` | 关闭 | 查询指令对 `string`、`type`、`method` 或 `field` 的引用 |
+| `--query TEXT` | 引用查询时必填 | 非空字面子串；与 `--exact` 配合时匹配完整目标 |
+| `--exact` | 关闭 | 完整目标匹配；要求 `--find-refs` |
+| `--owner DESCRIPTOR` | 所有目标所属类型 | 方法/字段目标的精确所属类型；要求 `--find-refs` |
 | `--platform=auto\|android` | `auto` | 明确选择 Android，或自动识别输入平台 |
 | `--jadx PATH` | 未设置：内置引擎 | 显式选择单独安装的 JADX 兼容适配器；不通过环境变量选择，也不自动回退 |
 | `--timeout N` | `300` | 内置分析的正数时间预算；外部后端则为每个进程的秒数上限，包括版本探测 |
 | `--max-files N` | `20000` | 条目数量上限，包含实际创建的目录，必须为正 |
 | `--max-bytes N` | `2147483648` | 输入、解包数据和最终输出的字节上限，必须为正 |
-| `--json` | 关闭 | 向标准输出打印 JSON 报告，而非人类可读摘要 |
+| `--json` | 关闭 | 输出 JSON 报告；引用查询未指定此项时输出 JSON Lines |
 
 非默认 `--arch`、`--artifact`、`--metadata-only` 和非零 `--max-func` 属于 iOS，在 Android 下会被拒绝；显式 `--arch=auto` 可用。不支持透传任意后端参数。显式 JADX 适配器为每次运行隔离配置、缓存和临时目录，不导入环境中的后端设置或插件配置。
 

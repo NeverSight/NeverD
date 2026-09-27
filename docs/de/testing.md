@@ -785,6 +785,96 @@ Multi-Latch-Verhalten ohne eine Maschinenzeit zu fixieren. Cluster-/Account-/
 Slot-Zeilen ermöglichen einen `RPC activation audit`, während normale Tests
 deterministisch und offline bleiben.
 
+## Leistung des Android-Klasseninventars
+
+Bauen Sie `NeverDMobileTests` in Release und führen Sie sein Label aus, bevor
+Sie `neverd mobile INPUT --list-classes` messen. Lesertests decken spärliche
+Metadaten, Unicode, ungültige Referenzen, nicht unterstützte Methodenrümpfe,
+Prüfsummen und Budgets ab; Archivtests unterscheiden vollständige Extraktion
+von Abfragen ausgewählter Nutzdaten. CLI-Tests prüfen Präfixfilterung,
+JSON-Prüfumfang, Erhaltung bestehender Ausgaben und atomare Fehler bei Multidex.
+
+Der unabhängige Fixture- und Messrahmen validiert das vollständige
+Deskriptorinventar jedes Prozesses, bevor er einen Zeitmesswert akzeptiert:
+
+```sh
+python3 -m unittest scripts.tests.test_benchmark_mobile_inventory -v
+python3 scripts/benchmark_mobile_inventory.py \
+  --output-dir /tmp/neverd-inventory-benchmark \
+  --class-count 6000 --dex-count 3 --code-units 64 \
+  --extra-string-bytes 8388608 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Verwenden Sie für jeden Lauf ein neues Ausgabeverzeichnis. `--generate-only`
+schreibt Fixtures und Manifest ohne Zeitmessung. `--workload` wählt gemeinsame
+Eingabearten für ein optionales `--peer-command 'tool {input} {prefix}'`;
+die Eingabevorbereitung liegt außerhalb des gemessenen Befehls. Berichte
+bewahren Hashes, Befehle, sämtliche Messwerte aus neuen Prozessen,
+Warm-Cache-Annahmen und unter Linux mit GNU time den maximalen RSS der
+Kindprozesse auf. Dieser RSS ist nicht die kombinierte Spitze eines Werkzeugs
+mit mehreren Prozessen. Synthetische APKs sind Abfragecontainer, keine
+installierbaren Apps. Inventargeschwindigkeit belegt weder die Geschwindigkeit
+der Referenzsuche noch die Qualität der Java-Rekonstruktion.
+
+Binden Sie auf Hybrid-CPUs den Messrahmen und seine Kindprozesse an dieselbe
+zulässige CPU (unter Linux etwa `taskset -c 4 python3 ...`), um Performance-
+und Effizienzkerne nicht zu vermischen. Der Bericht erfasst die geerbte CPU-Affinität.
+
+## Leistung von Android-Codereferenzen
+
+Referenzabfragen teilen die Instruktionsgrenzen und Codevalidierung des
+Rekonstruktionslesers. Führen Sie nach Änderungen an dieser Grenze die mobile
+Testsuite aus. Lesertests decken Operanden-Pool-Arten, Abgleichmodi,
+Methodenzuordnung und gemeinsam genutzten Code, täuschende Payload-/Immediate-Werte,
+fehlerhafte Eingaben und Ressourcenlimits ab. Gemeinsam genutzte Debug-Ströme
+werden gegen Rahmen, Ausdehnung und Parameter jedes zugehörigen Rumpfs geprüft.
+Behalten Sie große Member-Inventare und verzweigungsreiche Rümpfe in den Tests
+für Speicherlimits bei; dauerhafte Indizes und temporäres Containerwachstum
+haben unterschiedliche Lebensdauern.
+Prüfen Sie auch umgeordnete und überlappende Elemente, gemeinsamen Code mit
+inkompatiblen Prototypen gleicher Breite, nicht ausgerichteten Eingabespeicher
+und Teilzeichenfolgen über Suchblockgrenzen hinweg. Leistungsänderungen an
+privaten Decoderdaten müssen vollständige Rekonstruktionsmodelle mit eigenen
+Daten und Multimengen der Referenzvorkommen bewahren, einschließlich des
+Fehlerverhaltens bei nicht unterstützten Rekonstruktionsmetadaten. Unterscheiden
+Sie unabhängig erzeugte Erwartungen von Übereinstimmung mehrerer Werkzeuge
+bei realen Eingaben.
+
+Der unabhängige Referenzmessrahmen erfasst erwartete Vorkommen beim Erzeugen
+der Instruktionen. Er prüft bei jedem gemessenen Lauf vollständige
+Methodenidentitäten, PCs in Codeeinheiten, Opcodes, Zielidentitäten,
+UTF-16-Einheiten und Häufigkeiten. Er prüft außerdem die unabhängig erwarteten
+Abdeckungszähler von NeverD und `code_scan_complete`:
+
+```sh
+NEVERD_REFERENCE_TEST_BINARY="$PWD/build-release/bin/neverd" \
+  python3 -m unittest scripts.tests.test_benchmark_mobile_references -v
+python3 scripts/benchmark_mobile_references.py \
+  --output-dir /tmp/neverd-reference-benchmark \
+  --class-count 500 --methods-per-class 64 --matching-methods 2 \
+  --dex-count 3 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Wählen Sie Fälle mit `--kind` und `--workload`. `--extra-strings 65536` testet
+echte 32-Bit-Zeichenkettenindizes. Payload-Köder sind standardmäßig aktiv;
+`--no-payload-lookalikes` bewahrt Anordnung und echte Referenzen, ersetzt aber
+die Köderwerte für Vergleiche mit gemeinsamen Eingaben. Bewahren Sie sowohl
+Korrektheits- als auch Zeitergebnisse auf. Liefert eine Abfrage falsche
+Payload-Referenzen oder fehlen echte Referenzen, schlägt die Validierung fehl
+und es wird kein Zeitmesswert akzeptiert.
+
+Ein optionales `--peer-command` akzeptiert eine argv-Vorlage mit `{input}`,
+`{kind}` und `{query}`. Passen Sie die Abfragesyntax ausdrücklich an, wenn ein
+anderes Werkzeug andere Semantik verwendet, und vergleichen Sie vollständige
+Multimengen von Vorkommen. Sein angegebener Validierungsumfang bleibt erhalten,
+ohne ihm einen vollständigen Codescan zuzuschreiben. Dieselben Einschränkungen
+bezüglich neuer Verzeichnisse, CPU-Affinität, neuer Prozesse, warmem Cache und
+RSS wie beim Inventarbenchmark gelten. Der optionale CLI-Unittest wird
+übersprungen, solange `NEVERD_REFERENCE_TEST_BINARY` nicht das gebaute Programm
+bezeichnet; melden Sie diesen übersprungenen Test.
+
 ## Exportnachweise der mobilen SDKs
 
 Der manuelle Workflow `Mobile SDK Export Evidence` führt `collect_mobile_ios_sdk_declarations.py --exports-only` mit den festgelegten Xcode-SDKs aus. Er bewahrt die Linkerdateien von Foundation, CoreFoundation und UIKit für iOS-Geräte und Simulatoren unverändert auf, einschließlich Ziel, SDK-Version, Hash der SDK-Einstellungen, Dateigröße und SHA-256. Der reguläre Deklarationssammler bewahrt diese Dateien ebenfalls auf. Fehlende, leere, zu große oder außerhalb des SDK liegende Dateien lassen die Erfassung scheitern; bereits erfasste Nachweise bleiben erhalten. Die Linkerdateien belegen Symbolexporte, jedoch keine Aufruf-ABI oder erfolgreiche Methodenwiederherstellung.

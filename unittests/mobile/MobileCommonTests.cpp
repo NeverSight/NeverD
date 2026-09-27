@@ -154,6 +154,22 @@ TEST_F(MobileCommonTest, WorkOutputAndTimeBudgetsReject) {
   budget.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
   EXPECT_THROW(budget.check(), Error);
 }
+
+TEST_F(MobileCommonTest, InnerLoopWorkIsImmediateAndDoesNotUnderflow) {
+  Budget budget;
+  budget.remaining = 3;
+  budget.consumeWork(2);
+  EXPECT_EQ(budget.remaining, 1u);
+  EXPECT_THROW(budget.tick(2), Error);
+  EXPECT_EQ(budget.remaining, 1u);
+  budget.tick();
+  EXPECT_EQ(budget.remaining, 0u);
+  EXPECT_THROW(budget.consumeWork(UINT64_MAX), Error);
+  EXPECT_EQ(budget.remaining, 0u);
+  budget.deadline = std::chrono::steady_clock::time_point::min();
+  EXPECT_THROW(budget.tick(0), Error);
+  EXPECT_THROW(budget.check(), Error);
+}
 TEST_F(MobileCommonTest, ExtractsStoredDeflatedEmptyAndUnicodeZip64) {
   auto archive = root / "input.zip", output = root / "output";
   writeFile(archive, zip({{"empty", ""},
@@ -369,6 +385,89 @@ TEST_F(MobileCommonTest,
                Error);
   EXPECT_FALSE(fs::exists(root / "case-conflict"));
 }
+TEST_F(MobileCommonTest, QueryVisitsSelectedPayloadsWithoutFilesystemStaging) {
+  auto archive = root / "query.apk";
+  writeFile(archive, zip({{"resource", "unused"},
+                          {"classes2.dex", std::string(100000, 'x'), true},
+                          {"classes.dex", "first"}},
+                         true));
+  Budget budget;
+  std::vector<std::string> names, contents;
+  visitZipMembers(
+      archive, budget,
+      [](const fs::path &path) { return androidDexName(pathText(path)); },
+      [&](const fs::path &path, std::string_view bytes) {
+        names.push_back(pathText(path));
+        contents.emplace_back(bytes);
+      });
+  EXPECT_EQ(names, (std::vector<std::string>{"classes2.dex", "classes.dex"}));
+  EXPECT_EQ(contents,
+            (std::vector<std::string>{std::string(100000, 'x'), "first"}));
+  EXPECT_EQ(
+      std::distance(fs::directory_iterator(root), fs::directory_iterator()), 1);
+}
+
+TEST_F(MobileCommonTest, QueryScopeSkipsOnlyUnselectedPayloadIntegrity) {
+  auto select = [](const fs::path &path) { return path == "classes.dex"; };
+  auto bytes =
+      zip({{"resource", "payload"}, {"classes.dex", "bytecode", true}});
+  bytes[30 + std::string("resource").size()] ^= 1;
+  auto archive = root / "resource-crc.apk";
+  writeFile(archive, bytes);
+  Budget budget;
+  unsigned calls = 0;
+  visitZipMembers(archive, budget, select,
+                  [&](const fs::path &, std::string_view content) {
+                    ++calls;
+                    EXPECT_EQ(content, "bytecode");
+                  });
+  EXPECT_EQ(calls, 1u);
+  EXPECT_THROW(extractZip(archive, root / "strict", {}, select), Error);
+
+  for (bool deflated : {false, true}) {
+    auto damaged = zip({{"classes.dex", "bytecode", deflated}});
+    const auto central = damaged.find(std::string("PK\1\2", 4));
+    ASSERT_NE(central, std::string::npos);
+    // Agreeing headers with a bad payload CRC cannot reach the visitor.
+    damaged[14] ^= 1;
+    damaged[central + 16] ^= 1;
+    auto path = root / (deflated ? "deflate-crc.apk" : "stored-crc.apk");
+    writeFile(path, damaged);
+    Budget bad_budget;
+    EXPECT_THROW(visitZipMembers(path, bad_budget, select,
+                                 [&](const fs::path &, std::string_view) {
+                                   ADD_FAILURE() << "invalid selected payload";
+                                 }),
+                 Error);
+  }
+}
+
+TEST_F(MobileCommonTest, QueryRejectsUnselectedUnsafeMetadataAndLimits) {
+  auto select = [](const fs::path &path) { return path == "classes.dex"; };
+  auto visit = [](const fs::path &, std::string_view) {
+    ADD_FAILURE() << "preflight failure must precede selected payload visits";
+  };
+  unsigned index = 0;
+  for (auto items : std::vector<std::vector<ZipItem>>{
+           {{"classes.dex", "code"}, {"../escape", "bad"}},
+           {{"classes.dex", "code"}, {"same", "a"}, {"same", "b"}},
+           {{"classes.dex", "code"}, {"link", "bad", false, 0120777u << 16}},
+           {{"classes.dex", "code"}, {"a", "file"}, {"a/b", "nested"}}}) {
+    auto archive = root / (std::to_string(index++) + ".apk");
+    writeFile(archive, zip(items));
+    Budget budget;
+    EXPECT_THROW(visitZipMembers(archive, budget, select, visit), Error);
+  }
+  auto archive = root / "large.apk";
+  writeFile(archive, zip({{"classes.dex", "code"},
+                          {"resource", std::string(100000, 'x'), true}}));
+  Budget bytes({30, 10, 99999}), files({30, 1, 200000}), expired;
+  EXPECT_THROW(visitZipMembers(archive, bytes, select, visit), Error);
+  EXPECT_THROW(visitZipMembers(archive, files, select, visit), Error);
+  expired.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+  EXPECT_THROW(visitZipMembers(archive, expired, select, visit), Error);
+}
+
 TEST_F(MobileCommonTest, RecoveryPreservesExistingOutputAndCleansFailure) {
   auto input = root / "bad.smali";
   writeFile(

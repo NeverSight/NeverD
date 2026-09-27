@@ -765,6 +765,96 @@ Fixture in scala 10,000 proteggono worklist, function ownership e multi-latch
 senza fissare tempi di macchina. Le righe cluster/account/slot consentono un
 `RPC activation audit` mentre i test ordinari restano deterministic e offline.
 
+## Prestazioni dell’inventario delle classi Android
+
+Compila `NeverDMobileTests` in Release ed esegui la relativa etichetta prima di
+misurare `neverd mobile INPUT --list-classes`. I test del lettore coprono metadati
+sparsi, Unicode, riferimenti non validi, corpi di metodo non supportati, checksum
+e budget; quelli degli archivi distinguono l’estrazione completa dalle query sui
+payload selezionati. I test CLI verificano filtri di prefisso, ambito JSON,
+preservazione dell’output e atomicità degli errori multidex.
+
+Il sistema indipendente di fixture e misurazione convalida l’intero inventario
+dei descrittori di ogni processo prima di accettare un campione temporale:
+
+```sh
+python3 -m unittest scripts.tests.test_benchmark_mobile_inventory -v
+python3 scripts/benchmark_mobile_inventory.py \
+  --output-dir /tmp/neverd-inventory-benchmark \
+  --class-count 6000 --dex-count 3 --code-units 64 \
+  --extra-string-bytes 8388608 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Usa una nuova directory di output per ogni esecuzione. `--generate-only` scrive
+fixture e manifest senza misure temporali. `--workload` seleziona i tipi di input
+comuni per un eventuale `--peer-command 'tool {input} {prefix}'`; la preparazione
+dell’input resta fuori dal comando misurato. I report conservano hash, comandi,
+tutti i campioni da nuovi processi, ipotesi sulla cache calda e, su Linux con GNU
+time, il massimo RSS del processo figlio. Questo RSS non è il picco combinato di
+uno strumento multiprocesso. Gli APK sintetici sono contenitori per query, non
+app installabili. La velocità dell’inventario non dimostra né quella della
+ricerca dei riferimenti né la qualità del recupero Java.
+
+Sulle CPU ibride, vincola il sistema di misura e i figli che ne ereditano le
+impostazioni alla stessa CPU consentita (per esempio `taskset -c 4 python3 ...`
+su Linux) per non mescolare core ad alte prestazioni e a basso consumo. Il report
+registra l’affinità CPU ereditata.
+
+## Prestazioni dei riferimenti nel codice Android
+
+Le query sui riferimenti condividono i confini delle istruzioni e la convalida
+del codice del lettore di recupero. Esegui la suite mobile dopo modifiche a
+questo confine. I test del lettore coprono tipi di pool degli operandi, modalità
+di corrispondenza, appartenenza dei metodi e codice condiviso, payload/immediati
+che imitano riferimenti, input malformati e limiti delle risorse. I flussi di
+debug condivisi vengono verificati rispetto a frame, estensione e parametri di
+ogni corpo proprietario. Mantieni nella copertura dei limiti di memoria sia
+grandi inventari dei membri sia corpi densi di salti; indici persistenti e
+crescita dei contenitori temporanei hanno durate diverse.
+Controlla anche elementi riordinati e sovrapposti, codice condiviso con prototipi
+incompatibili della stessa larghezza, memoria di input non allineata e
+corrispondenze di sottostringhe che attraversano i confini dei blocchi di ricerca.
+Le ottimizzazioni dei dati privati del decoder devono preservare i modelli di
+recupero completi con dati propri e i multinsiemi delle occorrenze dei
+riferimenti, incluso il comportamento di errore per metadati di recupero non
+supportati. Distingui le aspettative generate indipendentemente dall’accordo
+tra strumenti su input reali.
+
+Il sistema indipendente per i riferimenti registra le occorrenze attese mentre
+emette le istruzioni. Controlla identità complete dei metodi, PC in unità di
+codice, opcode, identità delle destinazioni, unità UTF-16 e molteplicità a ogni
+esecuzione misurata. Verifica anche i conteggi di copertura attesi di NeverD,
+determinati indipendentemente, e `code_scan_complete`:
+
+```sh
+NEVERD_REFERENCE_TEST_BINARY="$PWD/build-release/bin/neverd" \
+  python3 -m unittest scripts.tests.test_benchmark_mobile_references -v
+python3 scripts/benchmark_mobile_references.py \
+  --output-dir /tmp/neverd-reference-benchmark \
+  --class-count 500 --methods-per-class 64 --matching-methods 2 \
+  --dex-count 3 --resource-bytes 16777216 \
+  --repetitions 7 --neverd build-release/bin/neverd
+```
+
+Usa `--kind` e `--workload` per selezionare i casi. `--extra-strings 65536`
+esercita veri indici di stringa a 32 bit. I payload esca sono abilitati per
+impostazione predefinita; `--no-payload-lookalikes` mantiene disposizione e
+riferimenti reali, sostituendo i valori esca nei payload per confronti su input
+comuni. Conserva sia i risultati di correttezza sia quelli temporali. Una query
+che restituisce falsi riferimenti ai payload o omette riferimenti reali non
+supera la convalida e non riceve una misura temporale accettata.
+
+L’opzione facoltativa `--peer-command` accetta un modello argv contenente
+`{input}`, `{kind}` e `{query}`. Adatta esplicitamente la sintassi della query
+quando un altro strumento usa semantiche diverse e confronta multinsiemi
+completi delle occorrenze. Il suo ambito di convalida dichiarato viene conservato
+senza affermare una scansione completa del codice. Si applicano le stesse
+precisazioni su directory nuove, affinità CPU, processi nuovi, cache calda e RSS
+del benchmark dell’inventario. Il test CLI facoltativo viene saltato se
+`NEVERD_REFERENCE_TEST_BINARY` non indica l’eseguibile compilato; segnala il test
+saltato.
+
 ## Evidenze delle esportazioni degli SDK mobili
 
 Il workflow manuale `Mobile SDK Export Evidence` esegue `collect_mobile_ios_sdk_declarations.py --exports-only` con gli SDK Xcode fissati. Conserva senza modifiche le mappe del linker di Foundation, CoreFoundation e UIKit degli SDK iOS per dispositivo e simulatore, con destinazione, versione SDK, hash delle impostazioni SDK, dimensione e SHA-256. Anche il normale raccoglitore di dichiarazioni conserva queste mappe. File mancanti, vuoti, troppo grandi o esterni allo SDK fanno fallire la raccolta, mantenendo le evidenze già completate. Le mappe attestano le esportazioni dei simboli, ma non dimostrano una ABI di chiamata né il recupero di un metodo.

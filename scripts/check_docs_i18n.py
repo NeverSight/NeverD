@@ -512,6 +512,11 @@ GUIDE_REQUIRED_TOKENS = {
         "--metadata-only", "check-neverd-mobile", "test_mobile_android_backend.py",
         "test_mobile_android_internal.py", "metadata/android-methods.json",
         "android_method_recovery", "declaration_only_method_count",
+        "--list-classes", "--class-prefix", "--find-refs", "--query",
+        "--exact", "--owner", "dex-envelope-and-class-identities",
+        "dex-code-references", "pc_code_units", "target_utf16",
+        "code_scan_complete", "defined_method_count", "scanned_method_count",
+        "scanned_code_item_count", "matching_pool_entries", "JSON Lines",
         "2147483648", "20000", "300",
     ),
     "evm": (
@@ -622,6 +627,10 @@ GUIDE_REQUIRED_TOKENS = {
     ),
 }
 TESTING_REQUIRED_TOKENS = (
+    "benchmark_mobile_inventory.py",
+    "benchmark_mobile_references.py",
+    "NEVERD_REFERENCE_TEST_BINARY",
+    "--no-payload-lookalikes",
     "git fetch",
     "--depth=1",
     "--force",

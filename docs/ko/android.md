@@ -65,6 +65,8 @@ cmake --build build --target neverd
 
 ## 지원 입력과 범위
 
+아래 입력 표는 복원 작업을 설명합니다. 뒤에서 설명하는 쿼리 모드는 더 좁은 검증 범위를 적용합니다.
+
 | 입력 | 동작 | 주요 제한 |
 |------|------|-----------|
 | `.apk` | 전체 ZIP을 검증한 뒤 루트의 `classes.dex`, `classes2.dex` 및 이후 번호의 DEX 파일을 함께 분석 | 코드만 처리하며 리소스나 매니페스트는 디코딩하지 않음 |
@@ -78,6 +80,75 @@ cmake --build build --target neverd
 
 APK 리소스, `AndroidManifest.xml`, 에셋, JNI/네이티브 라이브러리, 실행 중 다운로드되는 코드는 Java로 복구되지 않습니다. 네이티브 `.so`는 별도로 추출한 뒤 `neverd decompile library.so -o library.c`를 사용하세요. 암호화되거나 패킹된 페이로드는 이 정적 분석 흐름에 전달하기 전에 일반 DEX/smali 형태로 준비되어 있어야 합니다. 언패킹, 기기 연결, 보호 우회는 수행하지 않습니다.
 
+## 빠른 클래스 목록 조회
+
+```sh
+neverd mobile app.apk --list-classes
+neverd mobile classes.dex --list-classes --class-prefix com.example
+neverd mobile app.apk --list-classes --class-prefix Lcom/example/ --json
+neverd mobile app.apk --list-classes -o classes.txt
+```
+
+이 쿼리는 메서드 본문을 디코딩하거나 Java를 생성하지 않고 클래스 식별 정보를 읽습니다.
+준비용 디렉터리나 외부 런타임이 필요하지 않습니다. 텍스트 출력은 정확한 DEX 설명자를 줄마다 하나씩 담으며,
+ZIP 디렉터리 순서와 각 DEX의 정의 순서를 따릅니다. `--class-prefix`는 설명자 접두사 또는 점으로 구분한
+패키지 접두사를 받으며 패키지 경계를 확인하지 않는 리터럴 접두사 일치를 수행합니다.
+DEX 파일 간 중복을 포함한 중복 클래스 정의는 명시적으로 실패합니다. UTF-8로 손실 없이 표현할 수 없는 클래스 식별 정보도 거부합니다.
+
+`-o`가 없으면 stdout에 씁니다. 쿼리 모드의 `-o`는 복원 디렉터리가 아닌 **새 파일**을 지정하며 기존 파일은 변경하지 않습니다.
+선택한 모든 DEX가 성공할 때까지 결과를 버퍼에 보관하므로, 뒤의 DEX가 잘못되어도 부분 목록을 공개하지 않습니다.
+`--json`에는 일치하는 클래스 수와 전체 클래스 수, DEX 수,
+`validation_scope: "dex-envelope-and-class-identities"`가 포함됩니다.
+
+모든 ZIP 이름, 헤더, 범위 및 선언된 리소스 제한을 검사합니다. 루트의 `classes.dex`와 번호가 붙은
+`classesN.dex` 페이로드만 압축을 풀고 CRC를 검사하며, 관련 없는 리소스 페이로드의 무결성은 검증하지 않습니다.
+각 DEX의 헤더, SHA-1, Adler-32, map 경계 및 참조된 클래스 메타데이터 검사는 유지합니다.
+메서드 본문과 참조되지 않는 메타데이터는 검증하지 않습니다. 이는 목록 쿼리이며 전체 아카이브 무결성 검사나
+Java 복원 증명이 아닙니다. DEX 041, method-handle 및 custom-call-site 섹션은 계속 지원하지 않습니다.
+일반적인 전체 복원 경로는 여전히 모든 아카이브 페이로드를 검증합니다.
+
+`--timeout`, `--max-files`, `--max-bytes`가 적용됩니다. 클래스 제한은 필터링 전에 모든 DEX의 정의를 계산하며,
+선택하지 않은 ZIP 항목도 아카이브 제한에 포함됩니다. 목록 작업은 `--jadx`, iOS 옵션 및 smali 입력을 받지 않습니다.
+
+## 코드 참조 쿼리
+
+Java를 생성하지 않고 명령의 직접 피연산자를 찾습니다.
+
+```sh
+neverd mobile app.apk --find-refs string --query 'login failed' --json
+neverd mobile classes.dex --find-refs type --query 'Lcom/example/Service;' --exact
+neverd mobile app.apk --find-refs method --query '->connect(' --owner 'Lcom/example/Client;'
+neverd mobile app.apk --find-refs field --query 'Lcom/example/State;->ready:Z' --exact -o refs.jsonl
+```
+
+일치는 대소문자를 구분하는 리터럴 부분 문자열 비교입니다. `--exact`는 문자열 내용, 타입 설명자,
+`Lpkg/Type;->name(I)V`와 같은 메서드 식별 정보 또는 `Lpkg/Type;->name:I`와 같은 필드 식별 정보 전체를 비교합니다.
+`--owner`는 메서드 또는 필드 참조의 대상 소유자를 정확한 설명자로 제한하며, 참조를 포함하는 메서드를 필터링하지 않습니다.
+빈 쿼리, smali 입력, 쿼리와 복원 옵션 혼용은 지원하지 않습니다. 정규식 메타 문자는 일반 리터럴 문자로 취급합니다.
+
+기본 출력은 각 발생 위치당 간결한 JSON 객체 하나인 JSON Lines입니다. `--json`은 집계 수와 `references`
+배열을 담은 보고서를 반환합니다. 각 행에는 `dex_entry`, 참조를 포함하는 전체 `method`,
+`pc_code_units`(메서드의 첫 명령부터 계산한 16비트 단위), `opcode`, `kind`, `target_index`(DEX 내부 인덱스),
+`target`이 기록됩니다. 여러 메서드 정의에 속하는 공유 코드도 포함해 모든 발생을 유지합니다.
+문자열 행에는 정확한 `target_utf16` 단위도 포함되며, 단독 서로게이트 때문에 UTF-8로 손실 없이 공개할 수 없으면
+`target`은 null입니다. 다른 식별 정보는 UTF-8로 표현할 수 있어야 합니다.
+
+스캐너는 복원 판독기의 명령 경계, 피연산자 검사, 페이로드 처리 및 제어 흐름 검사를 사용합니다.
+즉시값과 switch/array 페이로드 데이터는 참조가 될 수 없습니다. 일치하는 대상이 없더라도 정의된 모든 코드 본문을
+검사한 뒤 `code_scan_complete: true`를 설정합니다. `defined_method_count`는 native 및 abstract 선언을 포함하고,
+`scanned_method_count`는 본문이 있는 정의 수, `scanned_code_item_count`는 DEX별 서로 다른 물리적 본문 수입니다.
+`matching_pool_entries`는 참조되지 않는 대상을 포함하여 일치하는 대상을 계산합니다.
+
+`validation_scope: "dex-code-references"`는 DEX 외곽 구조, 식별자 테이블, 클래스/멤버 소유 관계,
+읽은 코드, 예외 및 디버그 데이터를 포함합니다. 애너테이션, 정적 인코딩 값, 선언에만 있는 사용 및 참조되지 않는
+메타데이터는 범위 밖입니다. Java 복원이나 ART 검증기가 아닙니다. 지원하지 않는 코드나 읽은 데이터의 형식 오류는
+명시적으로 실패합니다. APK 검증은 클래스 목록과 같은 선택 페이로드 경계를 적용하며, 선택하지 않은 리소스 페이로드의 무결성은 검증하지 않습니다.
+
+DEX 간 중복 클래스 검사까지 마친 모든 선택 DEX의 결과를 버퍼에 보관한 뒤 공개합니다. 선택적 `-o`는 새 파일을 지정합니다.
+`--max-files`는 ZIP 항목뿐 아니라 누적 클래스 정의 수, 메서드 정의 수, 결과 발생 수를 각각 제한합니다.
+`--max-bytes`는 입력, 유지되는 쿼리 데이터, 본문별 작업 저장 공간 및 출력에 적용되며 JSON 확장량을 보수적으로 반영합니다.
+이는 작업 예산이며, 프로세스 RSS에는 입력 버퍼, 할당기 오버헤드 및 런타임도 포함됩니다. 일반적인 시간 및 처리량 예산도 적용됩니다.
+
 ## 옵션과 우선순위
 
 ```sh
@@ -87,13 +158,19 @@ neverd mobile app.apk -o recovered-app --platform=android \
 
 | 옵션 | 기본값 | 의미 |
 |------|--------|------|
-| `-o DIRECTORY` | 필수 | 디렉터리 입력 바깥에 위치한 새 출력 디렉터리. 기존 출력은 덮어쓰지 않음 |
+| `-o PATH` | 복원 시 필수 | 새 복원 디렉터리. 두 쿼리 모드에서는 선택적 새 출력 파일 |
+| `--list-classes` | 꺼짐 | Java 복원 없이 APK/DEX 클래스 식별 정보 조회 |
+| `--class-prefix PREFIX` | 모든 클래스 | 리터럴 설명자 또는 점 구분 접두사. `--list-classes` 필요 |
+| `--find-refs KIND` | 꺼짐 | string, type, method, field의 직접 명령 참조 조회 |
+| `--query TEXT` | 참조 조회 시 필수 | 대상 식별 정보의 리터럴 부분 문자열 |
+| `--exact` | 꺼짐 | 참조 대상 식별 정보 전체 일치 |
+| `--owner DESCRIPTOR` | 모든 소유자 | method/field 쿼리의 정확한 대상 소유자 |
 | `--platform=auto\|android` | `auto` | Android를 명시적으로 선택하거나 입력에서 플랫폼을 추론 |
 | `--jadx PATH` | 미설정: 내장 엔진 | 별도로 설치한 JADX 호환 어댑터를 명시적으로 선택. 환경 변수로 선택하거나 자동 대체하지 않음 |
 | `--timeout N` | `300` | 내장 분석의 양수 시간 예산. 외부 백엔드는 버전 확인을 포함한 각 프로세스의 초 단위 제한 |
 | `--max-files N` | `20000` | 실제로 생성되는 디렉터리를 포함한 항목 수 상한. 양수 지정 |
 | `--max-bytes N` | `2147483648` | 입력, 압축 해제 데이터, 최종 출력에 적용되는 바이트 상한. 양수 지정 |
-| `--json` | 꺼짐 | 사람이 읽는 요약 대신 JSON 보고서 출력 |
+| `--json` | 꺼짐 | JSON 보고서 출력. 참조 쿼리는 이 옵션이 없으면 JSON Lines 출력 |
 
 기본값 이외의 `--arch`, `--artifact`, `--metadata-only`, 0이 아닌 `--max-func`는 iOS용이므로 Android에서 거부됩니다. 명시적인 `--arch=auto`는 허용됩니다. 임의의 백엔드 옵션을 전달하는 기능은 없습니다. 명시적으로 선택한 JADX 어댑터는 실행별 설정·캐시·임시 디렉터리를 격리하며 기존 환경의 백엔드 설정이나 플러그인 구성을 가져오지 않습니다.
 

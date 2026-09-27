@@ -65,6 +65,9 @@ Multi-configuration builds may put the executable under `build/bin/Release/`. Fo
 
 ## Supported inputs and boundaries
 
+The input table below describes recovery. The query modes described later use
+narrower validation scopes.
+
 | Input | Behavior | Important boundary |
 |-------|----------|--------------------|
 | `.apk` | Validate the complete ZIP, then analyze all root `classes.dex`, `classes2.dex`, and later numbered DEX files together | Code only; no resources or manifest decoding |
@@ -78,6 +81,97 @@ Split APKs are separate inputs. Each APK containing DEX can be processed indepen
 
 APK resources, `AndroidManifest.xml`, assets, JNI/native libraries, and code downloaded at runtime are not recovered as Java. Extract a native `.so` separately and use `neverd decompile library.so -o library.c`. Encrypted or packed payloads must already be available as ordinary DEX/smali for this static workflow; no unpacking, device attachment, or protection bypass is performed.
 
+## Fast class inventory
+
+```sh
+neverd mobile app.apk --list-classes
+neverd mobile classes.dex --list-classes --class-prefix com.example
+neverd mobile app.apk --list-classes --class-prefix Lcom/example/ --json
+neverd mobile app.apk --list-classes -o classes.txt
+```
+
+This query reads class identities without decoding method bodies or generating
+Java. It needs no staging directory or external runtime. Text output contains
+one exact DEX descriptor per line, in ZIP directory order and then DEX
+definition order. `--class-prefix` accepts a descriptor prefix or a dotted
+package prefix; it performs a literal prefix match, not a package-boundary
+match. Duplicate class definitions, including across DEX files, fail explicitly.
+Class identities that cannot be represented losslessly as UTF-8 also fail.
+
+Without `-o`, the query writes to stdout. In query mode `-o` names a **new file**,
+not a recovery directory. Existing files remain untouched. Results are buffered
+until every selected DEX succeeds, so a later malformed DEX publishes no partial
+inventory. `--json` includes matching and total class counts, DEX count, and
+`validation_scope: "dex-envelope-and-class-identities"`.
+
+All ZIP names, headers, ranges and declared resource limits are checked. Only
+root `classes.dex` and numbered `classesN.dex` payloads are decompressed and
+CRC-checked; unrelated resource payload integrity remains unverified. Each DEX
+retains header, SHA-1, Adler-32, map bounds and referenced class metadata checks.
+Method bodies and unreferenced metadata are not validated. This is an inventory
+query, not a whole-archive integrity check or proof of Java recovery. DEX 041,
+method-handle and custom-call-site sections remain unsupported. The usual full
+recovery path still validates every archive payload.
+
+`--timeout`, `--max-files` and `--max-bytes` apply. The class limit counts all
+definitions across DEX files before filtering; unselected ZIP entries still
+count against archive limits. `--jadx`, iOS options and smali inputs are not
+accepted by the inventory operation.
+
+## Code reference queries
+
+Find direct instruction operands without generating Java:
+
+```sh
+neverd mobile app.apk --find-refs string --query 'login failed' --json
+neverd mobile classes.dex --find-refs type --query 'Lcom/example/Service;' --exact
+neverd mobile app.apk --find-refs method --query '->connect(' --owner 'Lcom/example/Client;'
+neverd mobile app.apk --find-refs field --query 'Lcom/example/State;->ready:Z' --exact -o refs.jsonl
+```
+
+Matching is case-sensitive literal substring matching. `--exact` matches the
+complete target: string contents, a type descriptor, a method identity such as
+`Lpkg/Type;->name(I)V`, or a field identity such as `Lpkg/Type;->name:I`.
+`--owner` restricts the target owner of method or field references to an exact
+descriptor. It does not filter the method containing the reference. Empty
+queries, smali inputs, and mixed query/recovery options are unsupported;
+regex metacharacters are ordinary literal characters.
+
+The default output is one compact JSON object per occurrence (JSON Lines).
+`--json` returns a report with counts and a `references` array. Each row records
+`dex_entry`, the full containing `method`, `pc_code_units` (16-bit units from
+the method's first instruction), `opcode`, `kind`, `target_index` (DEX-local),
+and `target`. All occurrences are preserved, including shared code attributed
+to multiple method definitions. String rows also contain exact `target_utf16`
+units; `target` is null when an isolated surrogate prevents lossless UTF-8
+publication. Other identities must be representable as UTF-8.
+
+The scanner uses the recovery reader's instruction boundaries, operand checks,
+payload handling, and control-flow checks. Immediate values and switch/array
+payload data cannot become references. It checks every defined code body,
+including when no target matches, before setting `code_scan_complete: true`.
+`defined_method_count` includes native and abstract declarations;
+`scanned_method_count` counts definitions with bodies, and
+`scanned_code_item_count` counts distinct physical bodies per DEX.
+`matching_pool_entries` counts matching targets, including unreferenced targets.
+
+`validation_scope: "dex-code-references"` covers the DEX envelope, identifier
+tables, class/member ownership, and consumed code, exception and debug data.
+Annotations, static encoded values, declaration-only uses and unreferenced
+metadata are outside this query. This is not Java recovery or an ART verifier.
+Unsupported code and malformed consumed data fail explicitly. APK validation
+has the same selected-payload boundary as class inventory; unselected resource
+payload integrity remains unverified.
+
+Results are buffered across all selected DEX files before publication, including
+cross-DEX duplicate-class checks. Optional `-o` names a new file.
+`--max-files` bounds aggregate class definitions, method definitions and result
+occurrences separately, as well as ZIP entries. `--max-bytes` bounds input,
+retained query data, per-body working storage and output (with conservative JSON
+expansion allowances). These are operation budgets; process RSS also includes
+input buffers, allocator overhead and the runtime. The usual timeout and work
+budgets also apply.
+
 ## Options and precedence
 
 ```sh
@@ -87,13 +181,19 @@ neverd mobile app.apk -o recovered-app --platform=android \
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| `-o DIRECTORY` | Required | New output directory outside any directory input; never overwrite existing output |
+| `-o PATH` | Required for recovery | New recovery directory; with either query mode, optional new output file |
+| `--list-classes` | Off | Query APK/DEX class identities without Java recovery |
+| `--class-prefix PREFIX` | All classes | Literal descriptor or dotted prefix; requires `--list-classes` |
+| `--find-refs KIND` | Off | Query direct string, type, method, or field instruction references |
+| `--query TEXT` | Required for references | Literal substring of the target identity |
+| `--exact` | Off | Match the whole reference target identity |
+| `--owner DESCRIPTOR` | Any owner | Exact target owner for method/field queries |
 | `--platform=auto\|android` | `auto` | Select Android explicitly or infer the platform from the input |
 | `--jadx PATH` | Not set: built-in engine | Explicitly select the separately installed JADX compatibility adapter; no environment-based selection or automatic fallback |
 | `--timeout N` | `300` | Positive analysis-time budget for the built-in engine; positive seconds per external backend process, including version probing |
 | `--max-files N` | `20000` | Positive entry limit, including materialized directories |
 | `--max-bytes N` | `2147483648` | Positive input, extracted-data, and final-output byte limit |
-| `--json` | Off | Print the report as JSON rather than a human summary |
+| `--json` | Off | Print a report as JSON; reference queries otherwise emit JSON Lines |
 
 Non-default `--arch` selection, `--artifact`, `--metadata-only`, and a nonzero `--max-func` belong to iOS and are rejected for Android; explicit `--arch=auto` is accepted. There is no arbitrary backend-option passthrough. The explicit JADX adapter isolates config/cache/temp directories and does not import ambient backend settings or plugin configuration.
 

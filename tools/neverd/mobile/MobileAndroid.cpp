@@ -13,6 +13,19 @@
 #include <tuple>
 
 namespace neverd::mobile {
+bool androidDexName(std::string_view name) {
+  if (name == "classes.dex")
+    return true;
+  if (!name.starts_with("classes") || !name.ends_with(".dex"))
+    return false;
+  auto number = name.substr(7, name.size() - 11);
+  if (number.empty() || number.front() == '0')
+    return false;
+  if (number.size() == 1 && number.front() < '2')
+    return false;
+  return std::all_of(number.begin(), number.end(),
+                     [](char c) { return c >= '0' && c <= '9'; });
+}
 namespace {
 using llvm::json::Array;
 using llvm::json::Object;
@@ -77,19 +90,6 @@ void checkDex(const fs::path &path) {
       magic[5] > '9' || magic[6] < '0' || magic[6] > '9')
     throw Error("Invalid DEX header: " + pathText(path.filename()));
 }
-bool dexName(std::string_view name) {
-  if (name == "classes.dex")
-    return true;
-  if (!name.starts_with("classes") || !name.ends_with(".dex"))
-    return false;
-  auto number = name.substr(7, name.size() - 11);
-  if (number.empty() || number.front() == '0')
-    return false;
-  if (number.size() == 1 && number.front() < '2')
-    return false;
-  return std::all_of(number.begin(), number.end(),
-                     [](char c) { return c >= '0' && c <= '9'; });
-}
 struct Inputs {
   std::string kind;
   fs::path code;
@@ -136,11 +136,12 @@ Inputs stageInputs(const fs::path &source, const fs::path &work,
       auto extracted =
           extractZip(archive, tree, limits, [](const fs::path &Path) {
             return Path.parent_path().empty() &&
-                   dexName(pathText(Path.filename()));
+                   androidDexName(pathText(Path.filename()));
           });
       std::vector<fs::path> paths;
       for (auto &path : extracted)
-        if (path.parent_path() == tree && dexName(pathText(path.filename())))
+        if (path.parent_path() == tree &&
+            androidDexName(pathText(path.filename())))
           paths.push_back(path);
       std::sort(paths.begin(), paths.end(),
                 [](const fs::path &a, const fs::path &b) {

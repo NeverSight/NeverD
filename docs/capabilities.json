@@ -3367,6 +3367,7 @@
       ],
       "limitations": [
         "Mobile recovery runs in the C++ CLI, with no Python interpreter or deployed helper directory. Android defaults to NeverD builtin DEX/smali readers, register verification and Java emission; it needs no external decompiler or JVM at runtime. Only explicit --jadx selects the separately installed compatibility backend. ZIP decompression uses zlib.",
+        "Separate Android APK/DEX query modes do not generate Java: --list-classes validates the DEX envelope and referenced class identities; --find-refs validates identifier tables and every defined method body through the shared decoder, and reports direct string/type/method/field operands. Literal substring/exact matching and target-owner filtering do not validate annotations, static encoded values or declaration-only references. Both query modes validate all ZIP metadata and selected root DEX payloads only; unselected payload integrity is unverified. Results are buffered across all DEX files, including duplicate-class checks, and optional -o creates a new file. No whole-archive, ART verification or source-recovery guarantee follows from query success.",
         "Builtin Android emits verified Java dispatch bodies for its supported DEX/smali subset, with complete per-input method accounting and separate native/abstract declarations. Unsupported bodies reject the transaction; no backend fallback or placeholder body is used. Resources and native libraries are excluded.",
         "Builtin Android is experimental, not a guarantee for arbitrary APKs or all bytecode. Generic/dynamic invocation, monitor operations, unproven initialization, unsupported annotations, unavailable local member bindings, and non-representable Java declarations are rejected. Original source text and compilation-lost information cannot be recovered. Generation uses conservative byte, work and time budgets.",
         "Android acceptance recompiles generated source without original classes and compares behavior against independently compiled owned fixtures. JDK and D8 are test tools only. iOS retains LLVM/Capstone dependencies and uses LLVMSwiftDemangle from the NeverD LLVM fork for in-process structured Swift signature demangling. Fork source builds and matching LLVM packages include this component; NeverD does not fetch a separate Swift source dependency or require an installed Swift compiler/toolchain to build or run. Independent Swift behavior tests require swiftc.",
@@ -3466,6 +3467,50 @@
             "linux",
             "windows"
           ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMobileTests",
+          "source": "unittests/mobile/MobileDalvikReaderTests.cpp",
+          "filter": "MobileDalvikReader.DexClassInventoryAPKIncludesOnlyRootMultidexDefinitions",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMobileTests",
+          "source": "unittests/mobile/MobileDalvikReaderTests.cpp",
+          "filter": "MobileDalvikReader.DexReferencesUseOnlyDecodedOperandBoundaries",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMobileTests",
+          "source": "unittests/mobile/MobileDalvikReaderTests.cpp",
+          "filter": "MobileDalvikReader.DexReferenceQueriesRejectMalformedAndUnmatchedBodies",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMobileTests",
+          "source": "unittests/mobile/MobileDalvikReaderTests.cpp",
+          "filter": "MobileDalvikReader.DexReferenceSharedCodeRetainsEveryDeclaredMethodOwner",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         }
       ],
       "public_surfaces": {
@@ -3489,7 +3534,13 @@
           "neverd mobile --platform",
           "neverd mobile --timeout",
           "neverd export --max-func",
-          "neverd export --source-signatures"
+          "neverd export --source-signatures",
+          "neverd mobile --list-classes",
+          "neverd mobile --class-prefix",
+          "neverd mobile --find-refs",
+          "neverd mobile --query",
+          "neverd mobile --exact",
+          "neverd mobile --owner"
         ],
         "json": [
           "neverd_objc_methods_json",

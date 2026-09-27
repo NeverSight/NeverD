@@ -60,6 +60,28 @@ cl::opt<bool> MobileMetadataOnly(
     "metadata-only",
     cl::desc("Export iOS metadata without native C decompilation"),
     cl::sub(MobileCmd));
+cl::opt<bool> MobileListClasses(
+    "list-classes", cl::desc("List APK/DEX class descriptors without recovery"),
+    cl::sub(MobileCmd));
+cl::opt<std::string> MobileClassPrefix(
+    "class-prefix",
+    cl::desc("Class descriptor or dotted prefix for --list-classes"),
+    cl::init(""), cl::sub(MobileCmd));
+cl::opt<std::string> MobileFindRefs(
+    "find-refs",
+    cl::desc("Find APK/DEX code references: string, type, method, field"),
+    cl::init(""), cl::sub(MobileCmd));
+cl::opt<std::string>
+    MobileReferenceQuery("query",
+                         cl::desc("Literal target text for --find-refs"),
+                         cl::init(""), cl::sub(MobileCmd));
+cl::opt<bool> MobileReferenceExact(
+    "exact", cl::desc("Match the complete target identity for --find-refs"),
+    cl::sub(MobileCmd));
+cl::opt<std::string> MobileReferenceOwner(
+    "owner",
+    cl::desc("Exact target owner descriptor for method/field references"),
+    cl::init(""), cl::sub(MobileCmd));
 cl::opt<bool> MobileInternalIOSWorker("internal-ios-worker", cl::Hidden,
                                       cl::init(false), cl::sub(MobileCmd));
 cl::opt<unsigned> MobileTimeout(

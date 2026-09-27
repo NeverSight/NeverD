@@ -1,7 +1,11 @@
 //===- MobileDalvikDex.cpp - Bounded standard DEX reader
 //-------------------===//
 #include "MobileDalvik.h"
+#include "MobileDalvikAccess.h"
+#include "MobileDalvikIdentity.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/SHA1.h"
 
 #include <algorithm>
@@ -10,8 +14,11 @@
 #include <bit>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <tuple>
+#include <type_traits>
 #include <utility>
+#include <zlib.h>
 
 namespace neverd::mobile::dalvik {
 namespace {
@@ -29,21 +36,50 @@ uint32_t targetPC(uint32_t pc, int64_t delta) {
     bad("branch target outside code address space");
   return uint32_t(target);
 }
+// Share deadline checkpoints across bounded operations, including nested
+// readers and short methods. Every operation still debits its work immediately.
+void boundedWork(Budget &budget, unsigned &steps, uint64_t count = 1) {
+  if (count > 128 || ++steps >= 128) {
+    budget.tick(count);
+    steps = 0;
+  } else
+    budget.consumeWork(count);
+}
 struct Cursor {
   std::string_view data;
   size_t pos, end;
   Budget &budget;
-  Cursor(std::string_view data, size_t offset, size_t end, Budget &budget)
-      : data(data), pos(offset), end(end), budget(budget) {
+  unsigned &small_reads;
+  Cursor(std::string_view data, size_t offset, size_t end, Budget &budget,
+         unsigned &small_reads)
+      : data(data), pos(offset), end(end), budget(budget),
+        small_reads(small_reads) {
     if (offset > end || end > data.size())
       bad("item lies outside its section");
   }
   std::string_view take(size_t size) {
-    budget.tick(1 + size / 16);
+    // Check the first read, then at most 128 bounded scalar reads apart
+    // across this DEX's cursors, including nested readers.
+    // Larger reads always check; work limits still apply to every read.
+    if (size > 16 || ++small_reads >= 128) {
+      budget.tick(1 + size / 16);
+      small_reads = 0;
+    } else
+      budget.consumeWork(1 + size / 16);
     if (size > end - pos)
       bad("truncated item");
     auto result = data.substr(pos, size);
     pos += size;
+    return result;
+  }
+  std::string_view takeCodeUnits(uint32_t count) {
+    // Match count separate u16() reads without a clock call per code unit.
+    boundedWork(budget, small_reads, count);
+    if (count > (end - pos) / 2)
+      bad("truncated item");
+    const auto bytes = size_t(count) * 2;
+    auto result = data.substr(pos, bytes);
+    pos += bytes;
     return result;
   }
   uint64_t integer(unsigned size) {
@@ -116,16 +152,148 @@ struct AnnotationDirectory {
   AnnotationSet classes;
   std::array<std::vector<std::pair<uint32_t, uint32_t>>, 3> members;
 };
+constexpr uint32_t formatCode(std::string_view form) {
+  return (uint32_t(uint8_t(form[0])) << 16) |
+         (uint32_t(uint8_t(form[1])) << 8) | uint8_t(form[2]);
+}
+enum class Format : uint32_t {
+  F10t = formatCode("10t"),
+  F10x = formatCode("10x"),
+  F11n = formatCode("11n"),
+  F11x = formatCode("11x"),
+  F12x = formatCode("12x"),
+  F20t = formatCode("20t"),
+  F21c = formatCode("21c"),
+  F21h = formatCode("21h"),
+  F21s = formatCode("21s"),
+  F21t = formatCode("21t"),
+  F22b = formatCode("22b"),
+  F22c = formatCode("22c"),
+  F22s = formatCode("22s"),
+  F22t = formatCode("22t"),
+  F22x = formatCode("22x"),
+  F23x = formatCode("23x"),
+  F30t = formatCode("30t"),
+  F31c = formatCode("31c"),
+  F31i = formatCode("31i"),
+  F31t = formatCode("31t"),
+  F32x = formatCode("32x"),
+  F35c = formatCode("35c"),
+  F3rc = formatCode("3rc"),
+  F51l = formatCode("51l"),
+};
+struct WideOperands {
+  unsigned mask = 0;
+  bool all = false, except_last = false;
+};
+WideOperands wideOperands(std::string_view name) {
+  WideOperands result;
+  const auto base = name.substr(0, name.find('/'));
+  if (base == "move-wide")
+    result.mask = 3;
+  else if (base == "move-result-wide" || base == "return-wide" ||
+           base == "const-wide" || base == "aget-wide" || base == "aput-wide" ||
+           base == "iget-wide" || base == "iput-wide" || base == "sget-wide" ||
+           base == "sput-wide")
+    result.mask = 1;
+  else if (auto at = base.find("-to-"); at != std::string_view::npos) {
+    const auto source = base.substr(0, at), dest = base.substr(at + 4);
+    if (dest == "long" || dest == "double")
+      result.mask |= 1;
+    if (source == "long" || source == "double")
+      result.mask |= 2;
+  } else if (base == "cmp-long" || base == "cmpl-double" ||
+             base == "cmpg-double")
+    result.mask = 6;
+  else if (base.ends_with("-long") || base.ends_with("-double")) {
+    result.all = true;
+    result.except_last = base.starts_with("shl-") || base.starts_with("shr-") ||
+                         base.starts_with("ushr-");
+  }
+  return result;
+}
+enum class ResultKind : uint8_t { None, Void, Scalar, Wide, Object };
+enum class FlowControl : uint8_t { Fallthrough, Conditional, Goto, Stop };
+enum class ProducerKind : uint8_t { None, Method, Array };
+struct FlowProperties {
+  FlowControl control = FlowControl::Fallthrough;
+  ResultKind result_use = ResultKind::None;
+  ProducerKind producer = ProducerKind::None;
+  uint16_t payload_ident = 0;
+  bool move_exception = false, zero_branch = false;
+};
+FlowProperties flowProperties(std::string_view name) {
+  FlowProperties result;
+  if (name.starts_with("if-"))
+    result.control = FlowControl::Conditional;
+  else if (name.starts_with("goto"))
+    result.control = FlowControl::Goto;
+  else if (name.starts_with("return") || name == "throw")
+    result.control = FlowControl::Stop;
+  if (name == "move-result")
+    result.result_use = ResultKind::Scalar;
+  else if (name == "move-result-wide")
+    result.result_use = ResultKind::Wide;
+  else if (name == "move-result-object")
+    result.result_use = ResultKind::Object;
+  result.move_exception = name == "move-exception";
+  result.zero_branch = name == "goto/32";
+  if (name.starts_with("invoke-"))
+    result.producer = ProducerKind::Method;
+  else if (name.starts_with("filled-new-array"))
+    result.producer = ProducerKind::Array;
+  if (name == "packed-switch")
+    result.payload_ident = 0x100;
+  else if (name == "sparse-switch")
+    result.payload_ident = 0x200;
+  else if (name == "fill-array-data")
+    result.payload_ident = 0x300;
+  return result;
+}
+ResultKind resultKind(std::string_view descriptor) {
+  if (descriptor == "V")
+    return ResultKind::Void;
+  if (descriptor == "J" || descriptor == "D")
+    return ResultKind::Wide;
+  if (descriptor.starts_with('L') || descriptor.starts_with('['))
+    return ResultKind::Object;
+  return ResultKind::Scalar;
+}
+// Decoder-local targets begin as PCs. Before instructions() returns, branch
+// and switch edges become ordinals from its authoritative boundary index;
+// public Instruction targets remain PCs. Payload pointers are decode-only.
+struct FlowInstruction {
+  uint32_t pc = 0;
+  uint8_t opcode = 0, width = 0;
+  ResultKind produced = ResultKind::None;
+  std::optional<uint32_t> target;
+  std::vector<uint32_t> targets;
+};
 struct OpSpec {
-  std::string name, form;
+  std::string name;
+  Format form{};
+  unsigned size = 0;
+  WideOperands wide;
   char pool = 0;
+  bool reserved_high = false;
+  FlowProperties flow;
 };
 const std::array<OpSpec, 256> &opcodes() {
   static const auto table = [] {
     std::array<OpSpec, 256> ops{};
     auto put = [&](unsigned code, std::string name, std::string form,
                    char pool = 0) {
-      ops[code] = {std::move(name), std::move(form), pool};
+      if (form.size() != 3)
+        bad("invalid instruction format label");
+      const auto format = static_cast<Format>(formatCode(form));
+      ops[code] = {name,
+                   format,
+                   unsigned(form[0] - '0'),
+                   wideOperands(name),
+                   pool,
+                   format == Format::F10x || format == Format::F20t ||
+                       format == Format::F30t || format == Format::F32x,
+                   flowProperties(name)};
     };
     for (auto [base, name] :
          {std::pair{1, "move"}, {4, "move-wide"}, {7, "move-object"}}) {
@@ -229,9 +397,17 @@ const std::array<OpSpec, 256> &opcodes() {
   }();
   return table;
 }
+using ItemKey = std::pair<unsigned, size_t>;
+using ItemRanges = std::map<ItemKey, size_t>;
+struct QueryRange {
+  uint32_t start, end, order;
+};
 struct Section {
   size_t start, end;
   uint32_t count;
+  std::optional<ItemRanges::iterator> final_range;
+  std::vector<QueryRange> query_ranges;
+  bool ranges_ordered = true;
 };
 struct Payload {
   size_t size = 0;
@@ -245,27 +421,183 @@ struct Code {
   std::vector<TryRegion> tries;
   uint32_t size;
 };
+struct CodeReference {
+  uint32_t pc, index;
+  uint8_t opcode;
+  char pool;
+};
+struct CodeUnits {
+  std::string_view bytes;
+  size_t size() const { return bytes.size() / 2; }
+  uint16_t operator[](size_t index) const {
+    const auto offset = index * 2;
+    return uint16_t(uint8_t(bytes[offset])) |
+           (uint16_t(uint8_t(bytes[offset + 1])) << 8);
+  }
+};
+// Private views borrow only completed immutable Dex-owned tables. Public
+// models are materialized explicitly and retain no references to this storage.
+struct FieldPoolEntry {
+  const std::string &owner, &name, &type;
+};
+struct TypeListEntry {
+  std::vector<std::string> names;
+  std::vector<unsigned> indices;
+};
+struct PrototypePoolEntry {
+  const std::vector<std::string> &parameters;
+  const std::string &returns;
+};
+struct MethodPoolEntry {
+  const std::string &owner, &name;
+  const std::vector<std::string> &parameters;
+  const std::string &returns;
+  uint16_t prototype;
+  std::string identity() const {
+    return detail::methodIdentity(owner, name, parameters, returns);
+  }
+};
 class Dex {
   std::string_view data;
   std::string source_id;
   Budget &budget;
-  using Key = std::pair<unsigned, size_t>;
+  unsigned scalar_reads = 127;
+  using Key = ItemKey;
   std::map<unsigned, Section> sections;
   std::map<Key, std::any> cache;
-  std::map<Key, size_t> ranges;
-  std::set<Key> active;
+  ItemRanges ranges;
+  llvm::SmallVector<Key, 8> active;
   std::map<Key, std::string> contexts;
+  std::map<uint32_t, uint32_t> code_contexts;
   std::vector<std::string> strings, types;
   std::map<std::string, unsigned> type_indices;
-  std::vector<std::pair<std::vector<std::string>, std::string>> protos;
-  std::vector<FieldRef> fields;
-  std::vector<MethodRef> methods;
+  std::vector<PrototypePoolEntry> protos;
+  std::vector<FieldPoolEntry> fields;
+  std::vector<MethodPoolEntry> methods;
   std::map<std::string, std::vector<std::string>> members;
+  struct Match {
+    std::string text;
+    std::optional<std::u16string> utf16;
+  };
+  using ReferenceMatches = std::map<uint32_t, Match>;
+  char reference_pool = 0;
+  const ReferenceMatches *reference_matches = nullptr;
+  uint64_t *query_retained = nullptr;
+  uint64_t query_persistent = 0;
+  void retainQueryStorage(uint64_t bytes) {
+    if (!query_retained)
+      return;
+    if (bytes > budget.limits.max_bytes - *query_retained)
+      throw Error("reference query storage exceeds byte limit");
+    *query_retained += bytes;
+  }
+  void retainQueryPersistent(uint64_t bytes) {
+    if (!query_retained)
+      return;
+    retainQueryStorage(bytes);
+    query_persistent += bytes;
+  }
+  template <class T>
+  void queryReserve(std::vector<T> &values, size_t count, bool exact = false) {
+    if (!query_retained || count <= values.capacity())
+      return;
+    const auto maximum = values.max_size();
+    if (count > maximum)
+      throw Error("reference query storage exceeds byte limit");
+    const size_t capacity =
+        exact
+            ? count
+            : std::max(count, values.capacity() > maximum / 2
+                                  ? maximum
+                                  : std::max<size_t>(1, values.capacity() * 2));
+    const uint64_t previous = uint64_t(values.capacity()) * sizeof(T);
+    retainQueryStorage(uint64_t(capacity) * sizeof(T));
+    values.reserve(capacity);
+    *query_retained -= previous;
+  }
+  template <class Container> static constexpr uint64_t queryNodeBytes() {
+    // Cover tree links, color/padding, and value alignment before allocation.
+    return sizeof(typename Container::value_type) + 4 * sizeof(void *) +
+           alignof(typename Container::value_type);
+  }
+  template <class Set, class Value>
+  auto queryInsert(Set &values, const Value &value) {
+    if (!query_retained)
+      return values.insert(value);
+    const auto position = values.lower_bound(value);
+    if (position != values.end() && !values.key_comp()(value, *position))
+      return std::pair{position, false};
+    retainQueryStorage(queryNodeBytes<Set>());
+    return std::pair{values.emplace_hint(position, value), true};
+  }
+  struct QueryTemporary {
+    uint64_t *total;
+    uint64_t bytes = 0;
+    ~QueryTemporary() {
+      if (total)
+        *total -= bytes;
+    }
+  };
+  void queryCopyWork(uint64_t bytes) {
+    // Cursor and instruction loops already charge fixed-size construction.
+    // Charge separately only deep text copies whose size can be amplified by
+    // repeated pool references, without checking the clock for every field.
+    if (query_retained && bytes >= 16) {
+      // Small copies are bounded by the surrounding scalar/instruction loop's
+      // checkpoints. Large copies always check before allocating or copying.
+      if (bytes < 2048)
+        budget.consumeWork(bytes / 16);
+      else
+        budget.tick(bytes / 16);
+    }
+  }
+  void retainStrings(const std::vector<std::string> &values) {
+    if (!query_retained)
+      return;
+    retainQueryStorage(uint64_t(values.size()) * sizeof(std::string));
+    uint64_t text_bytes = 0;
+    for (const auto &value : values)
+      text_bytes += value.size();
+    retainQueryStorage(text_bytes);
+    queryCopyWork(text_bytes);
+  }
+  template <class MethodReference>
+  void retainMethod(const MethodReference &method) {
+    if (!query_retained)
+      return;
+    retainQueryStorage(sizeof(MethodRef));
+    retainQueryStorage(method.owner.size());
+    retainQueryStorage(method.name.size());
+    retainQueryStorage(method.returns.size());
+    retainStrings(method.parameters);
+    queryCopyWork(method.owner.size() + method.name.size() +
+                  method.returns.size());
+  }
+  MethodRef materializeMethod(const MethodPoolEntry &method) {
+    retainMethod(method);
+    return {method.owner, method.name, method.parameters, method.returns};
+  }
+  FieldRef materializeField(const FieldPoolEntry &field) {
+    retainQueryStorage(sizeof(FieldRef) + field.owner.size() +
+                       field.name.size() + field.type.size());
+    queryCopyWork(field.owner.size() + field.name.size() + field.type.size());
+    return {field.owner, field.name, field.type};
+  }
+  template <class T> void retainItemCopy(const T &value) {
+    if constexpr (std::is_same_v<T, DecodedString>) {
+      retainQueryStorage(sizeof(DecodedString));
+      retainQueryStorage(value.text.size());
+      retainQueryStorage(uint64_t(value.units.size()) * sizeof(char16_t));
+      queryCopyWork(value.text.size() +
+                    uint64_t(value.units.size()) * sizeof(char16_t));
+    } else if constexpr (std::is_same_v<T, std::vector<std::string>>)
+      retainStrings(value);
+  }
   Cursor cursor(size_t offset) {
-    return Cursor(data, offset, data.size(), budget);
+    return Cursor(data, offset, data.size(), budget, scalar_reads);
   }
   Cursor cursor(size_t offset, size_t end) {
-    return Cursor(data, offset, end, budget);
+    return Cursor(data, offset, end, budget, scalar_reads);
   }
   template <class T>
   const T &at(const std::vector<T> &values, uint64_t index,
@@ -275,40 +607,139 @@ class Dex {
     return values[size_t(index)];
   }
   std::string string(uint64_t index) { return at(strings, index, "string"); }
-  std::string type(uint64_t index, bool allow_void = false) {
-    auto result = at(types, index, "type");
+  const std::string &typeValue(uint64_t index, bool allow_void = false) {
+    const auto &result = at(types, index, "type");
     if (result == "V" && !allow_void)
       bad("void outside return type");
     return result;
   }
+  std::string type(uint64_t index, bool allow_void = false) {
+    return typeValue(index, allow_void);
+  }
   template <class T, class F>
-  T item(unsigned kind, size_t offset, F read, unsigned alignment = 1) {
+  T item(unsigned kind, size_t offset, F read, unsigned alignment = 1,
+         bool cache_result = true) {
     Key key{kind, offset};
-    if (auto found = cache.find(key); found != cache.end())
-      return std::any_cast<const T &>(found->second);
-    if (active.contains(key))
+    if (cache_result) {
+      if (auto found = cache.find(key); found != cache.end()) {
+        const auto &value = std::any_cast<const T &>(found->second);
+        retainItemCopy(value);
+        return value;
+      }
+    }
+    if (std::find(active.begin(), active.end(), key) != active.end())
       bad("cyclic data item reference");
     auto section = sections.find(kind);
     if (section == sections.end() || offset % alignment ||
         offset < section->second.start || offset >= section->second.end)
       bad("item points outside its mapped section");
     auto reader = cursor(offset, section->second.end);
-    active.insert(key);
-    try {
-      T result = read(reader);
-      active.erase(key);
-      ranges[key] = reader.pos;
-      cache[key] = result;
-      return result;
-    } catch (...) {
-      active.erase(key);
-      throw;
+    active.push_back(key);
+    struct ActiveItem {
+      llvm::SmallVector<Key, 8> &items;
+      ~ActiveItem() { items.pop_back(); }
+    } active_item{active};
+    T result = read(reader);
+    recordRange(key, reader.pos);
+    if (cache_result) {
+      retainItemCopy(result);
+      // Nested item reads may populate the cache; obtain the insertion
+      // hint only after the callback has finished.
+      const auto position = cache.lower_bound(key);
+      if (position != cache.end() && position->first == key)
+        position->second = result;
+      else {
+        retainQueryPersistent(sizeof(decltype(cache)::value_type) +
+                              4 * sizeof(void *));
+        cache.emplace_hint(position, key, result);
+      }
+    }
+    return result;
+  }
+  void recordRange(const Key &key, size_t end) {
+    if (query_retained) {
+      auto &section = sections.at(key.first);
+      auto &visits = section.query_ranges;
+      // The standard header has bounded every offset and end to uint32_t.
+      if (visits.size() >= UINT32_MAX)
+        bad("too many variable-length data item visits");
+      const auto previous = visits.capacity();
+      queryReserve(visits, visits.size() + 1);
+      query_persistent +=
+          uint64_t(visits.capacity() - previous) * sizeof(QueryRange);
+      if (!visits.empty() && visits.back().start > key.second)
+        section.ranges_ordered = false;
+      visits.push_back(
+          {uint32_t(key.second), uint32_t(end), uint32_t(visits.size())});
+      return;
+    }
+    auto &last = sections.at(key.first).final_range;
+    // Each section normally arrives in file order, even while item readers
+    // interleave sections. The final node gives an exact insertion hint; an
+    // out-of-order read still uses the ordered lookup and duplicate check.
+    const auto found =
+        last && (*last)->first.second <= key.second
+            ? ((*last)->first.second == key.second ? *last : std::next(*last))
+            : ranges.lower_bound(key);
+    if (found != ranges.end() && found->first == key) {
+      found->second = end;
+      return;
+    }
+    retainQueryPersistent(sizeof(decltype(ranges)::value_type) +
+                          4 * sizeof(void *));
+    auto inserted = ranges.emplace_hint(found, key, end);
+    if (!last || (*last)->first.second < key.second)
+      last = inserted;
+  }
+  void checkRangeOverlaps() {
+    if (query_retained) {
+      size_t comparisons = 0;
+      budget.check();
+      for (auto &[kind, section] : sections) {
+        auto &visits = section.query_ranges;
+        // File-order sections need no sorting. Shared and out-of-order visits
+        // retain their last recorded extent, matching ordered-map assignment.
+        if (!section.ranges_ordered)
+          std::sort(visits.begin(), visits.end(),
+                    [&](const QueryRange &a, const QueryRange &b) {
+                      if (!(comparisons++ % 4096))
+                        budget.check();
+                      return std::tie(a.start, a.order) <
+                             std::tie(b.start, b.order);
+                    });
+        const QueryRange *previous = nullptr;
+        for (size_t i = 0; i < visits.size(); ++i) {
+          if (!(i % 4096))
+            budget.check();
+          const auto &range = visits[i];
+          if (i + 1 < visits.size() && visits[i + 1].start == range.start)
+            continue;
+          if (previous && previous->end > range.start)
+            bad("overlapping variable-length data items");
+          previous = &range;
+        }
+      }
+    } else {
+      std::optional<std::pair<Key, size_t>> previous;
+      for (const auto &[key, end] : ranges) {
+        if (previous && previous->first.first == key.first &&
+            previous->second > key.second)
+          bad("overlapping variable-length data items");
+        previous = std::pair{key, end};
+      }
     }
   }
   void context(unsigned kind, size_t offset, const std::string &identity) {
-    auto [it, inserted] = contexts.emplace(Key{kind, offset}, identity);
-    if (!inserted && it->second != identity)
-      bad("shared data item has inconsistent declaration context");
+    const Key key{kind, offset};
+    const auto found = contexts.lower_bound(key);
+    if (found != contexts.end() && found->first == key) {
+      if (found->second != identity)
+        bad("shared data item has inconsistent declaration context");
+      return;
+    }
+    retainQueryPersistent(sizeof(decltype(contexts)::value_type) +
+                          4 * sizeof(void *) + identity.size());
+    contexts.emplace_hint(found, key, identity);
   }
   using Tables = std::map<unsigned, std::pair<uint32_t, uint32_t>>;
   Tables header() {
@@ -325,18 +756,16 @@ class Dex {
     auto reader = cursor(8, 112);
     uint32_t checksum = reader.u32();
     auto signature = reader.take(20);
-    uint32_t a = 1, b = 0;
+    uLong actual_checksum = adler32(0, Z_NULL, 0);
     for (size_t start = 12; start < data.size();) {
-      size_t end = std::min(data.size(), start + 5552);
+      const auto length = std::min<size_t>(5552, data.size() - start);
       budget.tick();
-      for (; start < end; ++start) {
-        a += uint8_t(data[start]);
-        b += a;
-      }
-      a %= 65521;
-      b %= 65521;
+      actual_checksum = adler32(
+          actual_checksum, reinterpret_cast<const Bytef *>(data.data() + start),
+          static_cast<uInt>(length));
+      start += length;
     }
-    if ((a | (b << 16)) != checksum)
+    if (actual_checksum != checksum)
       bad("checksum mismatch");
     auto hash = llvm::SHA1::hash(llvm::ArrayRef<uint8_t>(
         reinterpret_cast<const uint8_t *>(data.data() + 32), data.size() - 32));
@@ -425,11 +854,45 @@ class Dex {
     size_t expected = size_t(reader.leb());
     if (expected > reader.end - reader.pos)
       bad("impossible UTF-16 string length");
+    // One decoded unit needs at most three WTF-8 bytes and two UTF-16 bytes.
+    // Reserve the logical expansion before decoding; item() accounts its copy.
+    retainQueryStorage(sizeof(DecodedString) + uint64_t(expected) * 5);
     DecodedString result;
+    const size_t text_start = reader.pos;
+    bool ascii = true;
     while (true) {
+      // ASCII consumes one UTF-16 unit per byte. Keep the same byte-work
+      // charge while checking the deadline at bounded run boundaries.
+      size_t limit = std::min<size_t>(4096, reader.end - reader.pos);
+      if (budget.remaining < limit)
+        limit = size_t(budget.remaining);
+      if (expected - result.units.size() < limit)
+        limit = expected - result.units.size() + 1;
+      size_t run = 0;
+      while (run < limit) {
+        const auto byte = uint8_t(reader.data[reader.pos + run]);
+        if (!byte || byte >= 0x80)
+          break;
+        ++run;
+      }
+      if (run) {
+        // Short ASCII runs are bounded by the shared scalar-read checkpoint
+        // (length prefix and terminator); longer runs check independently.
+        if (run < 128)
+          budget.consumeWork(run);
+        else
+          budget.tick(run);
+        result.units.append(reader.data.begin() + reader.pos,
+                            reader.data.begin() + reader.pos + run);
+        reader.pos += run;
+        if (result.units.size() > expected)
+          bad("UTF-16 string length mismatch");
+        continue;
+      }
       unsigned first = reader.u8(), unit;
       if (!first)
         break;
+      ascii &= first < 0x80;
       if (first < 0x80)
         unit = first;
       else if (first >= 0xc0 && first <= 0xdf) {
@@ -454,6 +917,10 @@ class Dex {
     }
     if (result.units.size() != expected)
       bad("UTF-16 string length mismatch");
+    if (ascii) {
+      result.text.assign(reader.data.substr(text_start, expected));
+      return result;
+    }
     for (size_t i = 0; i < result.units.size(); ++i) {
       uint32_t cp = result.units[i];
       if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < result.units.size() &&
@@ -463,21 +930,41 @@ class Dex {
     }
     return result;
   }
-  std::vector<std::string> typeList(uint32_t offset) {
+  const TypeListEntry &typeListEntry(uint32_t offset) {
+    static const TypeListEntry empty;
     if (!offset)
-      return {};
-    return item<std::vector<std::string>>(
+      return empty;
+    // The item cache owns the immutable list. Prototypes borrow its names and
+    // compare its original type IDs without reconstructing a reverse index.
+    const auto entry = item<std::shared_ptr<TypeListEntry>>(
         0x1001, offset,
         [&](Cursor &reader) {
           auto size = reader.u32();
           if (size > (reader.end - reader.pos) / 2)
             bad("truncated type list");
-          std::vector<std::string> result;
-          for (uint32_t i = 0; i < size; ++i)
-            result.push_back(type(reader.u16()));
+          retainQueryStorage(sizeof(TypeListEntry) + 4 * sizeof(void *));
+          auto result = std::make_shared<TypeListEntry>();
+          queryReserve(result->names, size, true);
+          queryReserve(result->indices, size, true);
+          result->names.reserve(size);
+          result->indices.reserve(size);
+          for (uint32_t i = 0; i < size; ++i) {
+            const auto index = reader.u16();
+            const auto &value = typeValue(index);
+            retainQueryStorage(value.size());
+            queryCopyWork(value.size());
+            result->names.push_back(value);
+            result->indices.push_back(index);
+          }
           return result;
         },
         4);
+    return *entry;
+  }
+  std::vector<std::string> typeList(uint32_t offset) {
+    const auto &entry = typeListEntry(offset);
+    retainStrings(entry.names);
+    return entry.names;
   }
   void readTables(const Tables &tables) {
     auto records = [&](unsigned kind) {
@@ -485,56 +972,79 @@ class Dex {
       return cursor(offset, count ? sections.at(kind).end : offset);
     };
     auto reader = records(1);
+    const auto string_count = tables.at(1).first;
+    retainQueryStorage(uint64_t(string_count) * sizeof(std::string));
+    strings.reserve(string_count);
     std::optional<std::u16string> previous_string;
-    for (uint32_t i = 0; i < tables.at(1).first; ++i) {
-      auto value = item<DecodedString>(0x2002, reader.u32(),
-                                       [&](Cursor &r) { return mutf8(r); });
+    for (uint32_t i = 0; i < string_count; ++i) {
+      auto value = item<DecodedString>(
+          0x2002, reader.u32(), [&](Cursor &r) { return mutf8(r); }, 1, false);
       if (previous_string && *previous_string >= value.units)
         bad("string IDs are duplicate or unordered");
-      previous_string = value.units;
+      previous_string = std::move(value.units);
       strings.push_back(std::move(value.text));
     }
     auto type_reader = records(2);
+    const auto type_count = tables.at(2).first;
+    retainQueryStorage(uint64_t(type_count) * sizeof(std::string));
+    types.reserve(type_count);
     int64_t previous = -1;
-    for (uint32_t i = 0; i < tables.at(2).first; ++i) {
+    for (uint32_t i = 0; i < type_count; ++i) {
       uint32_t index = type_reader.u32();
       if (int64_t(index) <= previous)
         bad("type IDs are duplicate or unordered");
       previous = index;
-      types.push_back(descriptor(string(index), true));
-      type_indices[types.back()] = unsigned(types.size() - 1);
+      const auto &value = at(strings, index, "string");
+      retainQueryStorage(value.size());
+      queryCopyWork(value.size());
+      types.push_back(descriptor(value, true));
+      if (!query_retained)
+        type_indices[types.back()] = unsigned(types.size() - 1);
     }
     auto proto_reader = records(3);
-    std::optional<std::pair<uint32_t, std::vector<unsigned>>> previous_proto;
-    for (uint32_t i = 0; i < tables.at(3).first; ++i) {
+    const auto proto_count = tables.at(3).first;
+    retainQueryStorage(uint64_t(proto_count) * sizeof(PrototypePoolEntry));
+    protos.reserve(proto_count);
+    uint32_t previous_return = 0;
+    const std::vector<unsigned> *previous_parameters = nullptr;
+    for (uint32_t i = 0; i < proto_count; ++i) {
       uint32_t shorty = proto_reader.u32(), result = proto_reader.u32(),
                parameters = proto_reader.u32();
-      auto returns = type(result, true);
-      auto args = typeList(parameters);
+      const auto &return_type = typeValue(result, true);
+      const auto &args = typeListEntry(parameters);
       auto shortType = [](const std::string &t) {
         return t.starts_with('L') || t.starts_with('[') ? "L" : t;
       };
-      std::string expected = shortType(returns);
-      std::vector<unsigned> indices;
-      for (auto &arg : args) {
+      std::string expected = shortType(return_type);
+      for (auto &arg : args.names) {
         expected += shortType(arg);
-        indices.push_back(type_indices.at(arg));
       }
       if (string(shorty) != expected)
         bad("prototype shorty disagrees with descriptors");
-      auto key = std::pair{result, indices};
-      if (previous_proto && key <= *previous_proto)
+      if (previous_parameters &&
+          (result < previous_return ||
+           (result == previous_return && args.indices <= *previous_parameters)))
         bad("prototype IDs are duplicate or unordered");
-      previous_proto = std::move(key);
-      protos.emplace_back(std::move(args), std::move(returns));
+      previous_return = result;
+      previous_parameters = &args.indices;
+      protos.push_back({args.names, return_type});
     }
     for (unsigned kind : {4, 5}) {
       auto r = records(kind);
+      const auto count = tables.at(kind).first;
+      if (kind == 4) {
+        retainQueryStorage(uint64_t(count) * sizeof(FieldPoolEntry));
+        fields.reserve(count);
+      } else {
+        retainQueryStorage(uint64_t(count) * sizeof(MethodPoolEntry));
+        methods.reserve(count);
+      }
       std::optional<std::tuple<unsigned, uint32_t, unsigned>> previous_member;
-      for (uint32_t i = 0; i < tables.at(kind).first; ++i) {
+      for (uint32_t i = 0; i < count; ++i) {
         unsigned owner = r.u16(), typ = r.u16();
         uint32_t name = r.u32();
-        auto owner_name = type(owner), member = string(name);
+        const auto &owner_name = typeValue(owner);
+        const auto &member = at(strings, name, "string");
         // A method ID may name an array's clone or inherited Object method.
         // Field IDs still require a class owner; type() validates descriptors.
         bool valid_owner = owner_name.starts_with('L') ||
@@ -545,11 +1055,12 @@ class Dex {
         if (previous_member && key <= *previous_member)
           bad("member IDs are duplicate or unordered");
         previous_member = key;
-        if (kind == 4)
-          fields.push_back({owner_name, member, type(typ)});
-        else {
-          auto [args, result] = at(protos, typ, "prototype");
-          methods.push_back({owner_name, member, args, result});
+        if (kind == 4) {
+          const auto &field_type = typeValue(typ);
+          fields.push_back({owner_name, member, field_type});
+        } else {
+          const auto &[args, result] = at(protos, typ, "prototype");
+          methods.push_back({owner_name, member, args, result, uint16_t(typ)});
         }
       }
     }
@@ -859,7 +1370,7 @@ class Dex {
           const auto &ref = at(fields, index, "annotated field");
           if (ref.owner != cls.name)
             bad("annotation directory owner mismatch");
-          auto found = defined_fields.find(ref);
+          auto found = defined_fields.find(materializeField(ref));
           if (found == defined_fields.end())
             bad("annotated field has no class_data definition");
           sourceAnnotations(
@@ -871,7 +1382,7 @@ class Dex {
         const auto &ref = at(methods, index, "annotated method");
         if (ref.owner != cls.name)
           bad("annotation directory owner mismatch");
-        auto found = defined_methods.find(ref);
+        auto found = defined_methods.find(materializeMethod(ref));
         if (found == defined_methods.end())
           bad("annotated method has no class_data definition");
         if (kind == 1) {
@@ -992,7 +1503,7 @@ class Dex {
       members[cls.name] = std::move(names);
     }
   }
-  Payload payload(const std::vector<uint16_t> &words, size_t pc) {
+  Payload payload(CodeUnits words, size_t pc, bool materialize = true) {
     if (pc % 2 || words.size() - pc < 2)
       bad("unaligned/truncated payload");
     Payload result;
@@ -1014,18 +1525,23 @@ class Dex {
         int64_t first = signedValue(value(pc + 2), 32);
         if (count && first + int64_t(count) - 1 > INT32_MAX)
           bad("packed switch key overflow");
-        for (uint64_t i = 0; i < count; ++i)
-          result.keys.push_back(int32_t(first + int64_t(i)));
+        if (materialize)
+          for (uint64_t i = 0; i < count; ++i)
+            result.keys.push_back(int32_t(first + int64_t(i)));
         start = pc + 4;
       } else {
+        std::optional<int32_t> previous;
         for (size_t i = 0; i < count; ++i) {
           int32_t key = int32_t(signedValue(value(pc + 2 + i * 2), 32));
-          if (!result.keys.empty() && key <= result.keys.back())
+          if (previous && key <= *previous)
             bad("sparse switch keys unordered");
-          result.keys.push_back(key);
+          previous = key;
+          if (materialize)
+            result.keys.push_back(key);
         }
         start = pc + 2 + size_t(count) * 2;
       }
+      queryReserve(result.targets, size_t(count), true);
       for (size_t i = 0; i < count; ++i)
         result.targets.push_back(
             int32_t(signedValue(value(start + i * 2), 32)));
@@ -1042,6 +1558,8 @@ class Dex {
         bad("truncated array payload");
       result.size = size_t(size);
       budget.tick(bytes);
+      if (!materialize)
+        return result;
       for (uint64_t i = 0; i < count; ++i) {
         uint64_t bits = 0;
         for (unsigned j = 0; j < result.element_width; ++j) {
@@ -1055,68 +1573,104 @@ class Dex {
     }
     bad("unknown payload pseudo-opcode");
   }
-  static void wideRegisters(const std::string &name,
-                            const std::vector<unsigned> &registers,
+  static void wideRegisters(const WideOperands &wide,
+                            llvm::ArrayRef<unsigned> registers,
                             unsigned count) {
-    std::set<size_t> wide;
-    auto base = name.substr(0, name.find('/'));
-    if (base == "move-wide")
-      wide = {0, 1};
-    else if (base == "move-result-wide" || base == "return-wide" ||
-             base == "const-wide" || base == "aget-wide" ||
-             base == "aput-wide" || base == "iget-wide" ||
-             base == "iput-wide" || base == "sget-wide" || base == "sput-wide")
-      wide = {0};
-    else if (auto at = base.find("-to-"); at != std::string::npos) {
-      auto source = base.substr(0, at), dest = base.substr(at + 4);
-      if (source == "long" || source == "double")
-        wide.insert(1);
-      if (dest == "long" || dest == "double")
-        wide.insert(0);
-    } else if (base == "cmp-long" || base == "cmpl-double" ||
-               base == "cmpg-double")
-      wide = {1, 2};
-    else if (base.ends_with("-long") || base.ends_with("-double")) {
-      for (size_t i = 0; i < registers.size(); ++i)
-        wide.insert(i);
-      if (base.starts_with("shl-") || base.starts_with("shr-") ||
-          base.starts_with("ushr-"))
-        wide.erase(registers.size() - 1);
-    }
-    for (auto index : wide)
+    auto check = [&](size_t index) {
       if (index >= registers.size() || registers[index] + 1 >= count)
         bad("wide register pair exceeds frame");
+    };
+    for (unsigned index = 0, mask = wide.mask; mask; ++index, mask >>= 1)
+      if (mask & 1)
+        check(index);
+    if (wide.all)
+      for (size_t i = 0; i < registers.size(); ++i)
+        if (!wide.except_last || i + 1 != registers.size())
+          check(i);
   }
-  using Instructions =
-      std::pair<std::vector<Instruction>, std::map<uint32_t, unsigned>>;
-  Instructions instructions(const std::vector<uint16_t> &words,
-                            unsigned registers, unsigned outs) {
+  class InstructionLengths {
+    using Entry = std::pair<uint32_t, unsigned>;
+    std::vector<Entry> entries;
+    auto find(uint32_t pc) const {
+      return std::lower_bound(entries.begin(), entries.end(), pc,
+                              [](const Entry &entry, uint32_t target) {
+                                return entry.first < target;
+                              });
+    }
+
+  public:
+    void reserve(size_t count, Dex &dex) {
+      if (dex.query_retained)
+        dex.queryReserve(entries, count, true);
+      else
+        entries.reserve(count);
+    }
+    // The instruction decoder appends starts in strictly increasing PC order.
+    void append(uint32_t pc, unsigned width, Dex &dex) {
+      dex.queryReserve(entries, entries.size() + 1);
+      entries.emplace_back(pc, width);
+    }
+    std::optional<uint32_t> ordinal(uint32_t pc) const {
+      const auto found = find(pc);
+      if (found == entries.end() || found->first != pc)
+        return std::nullopt;
+      return uint32_t(found - entries.begin());
+    }
+    bool contains(uint32_t pc) const { return ordinal(pc).has_value(); }
+  };
+  struct Instructions {
+    std::vector<Instruction> recovery;
+    std::vector<FlowInstruction> flow;
+    InstructionLengths lengths;
+  };
+  Instructions instructions(CodeUnits words, unsigned registers, unsigned outs,
+                            std::vector<CodeReference> *references = nullptr) {
     Instructions result;
-    auto &[code, lengths] = result;
+    auto &[code, flow, lengths] = result;
+    const auto &specs = opcodes();
+    const size_t initial = std::min<size_t>(words.size(), 32);
+    if (query_retained)
+      queryReserve(flow, initial, true);
+    else
+      flow.reserve(initial);
+    lengths.reserve(initial, *this);
     std::map<uint32_t, Payload> payloads;
+    auto retain = [&](uint64_t bytes) {
+      if (references)
+        retainQueryStorage(bytes);
+    };
     for (size_t pc = 0; pc < words.size();) {
-      budget.tick();
+      boundedWork(budget, scalar_reads);
       unsigned word = words[pc], opcode = word & 255;
       if (!opcode && word) {
-        auto data_payload = payload(words, pc);
+        auto data_payload = payload(words, pc, !references);
         size_t size = data_payload.size;
+        retain(queryNodeBytes<decltype(payloads)>());
         payloads.emplace(uint32_t(pc), std::move(data_payload));
         pc += size;
         continue;
       }
-      auto &spec = opcodes()[opcode];
+      auto &spec = specs[opcode];
       if (spec.name.empty())
         bad("unsupported opcode at code unit " + std::to_string(pc));
       auto &name = spec.name;
       auto &form = spec.form;
-      unsigned size = unsigned(form[0] - '0');
+      unsigned size = spec.size;
       if (size > words.size() - pc)
         bad("truncated instruction");
       unsigned high = word >> 8;
-      Instruction ins;
-      ins.pc = uint32_t(pc);
-      ins.opcode = name;
-      auto &regs = ins.registers;
+      FlowInstruction fact;
+      fact.pc = uint32_t(pc);
+      fact.opcode = uint8_t(opcode);
+      fact.width = uint8_t(size);
+      std::optional<Instruction> ins;
+      if (!references) {
+        ins.emplace();
+        ins->pc = uint32_t(pc);
+        ins->opcode = name;
+      }
+      QueryTemporary register_storage{query_retained};
+      llvm::SmallVector<unsigned, 5> regs;
       auto tail = [&](unsigned i) { return words[pc + 1 + i]; };
       auto tailValue = [&] {
         uint64_t value = 0;
@@ -1125,53 +1679,81 @@ class Dex {
         return value;
       };
       uint64_t index = 0;
-      if ((form == "10x" || form == "20t" || form == "30t" || form == "32x") &&
-          high)
+      if (spec.reserved_high && high)
         bad("nonzero reserved instruction bits");
-      if (form == "12x")
+      switch (form) {
+      case Format::F10x:
+        break;
+      case Format::F12x:
         regs = {high & 15, high >> 4};
-      else if (form == "11x")
+        break;
+      case Format::F11x:
         regs = {high};
-      else if (form == "11n") {
+        break;
+      case Format::F11n:
         regs = {high & 15};
-        ins.literal = signedValue(high >> 4, 4);
-      } else if (form == "22x")
+        if (ins)
+          ins->literal = signedValue(high >> 4, 4);
+        break;
+      case Format::F22x:
         regs = {high, tail(0)};
-      else if (form == "32x")
+        break;
+      case Format::F32x:
         regs = {tail(0), tail(1)};
-      else if (form == "23x")
+        break;
+      case Format::F23x:
         regs = {high, unsigned(tail(0) & 255), unsigned(tail(0) >> 8)};
-      else if (form == "22b") {
+        break;
+      case Format::F22b:
         regs = {high, unsigned(tail(0) & 255)};
-        ins.literal = signedValue(tail(0) >> 8, 8);
-      } else if (form == "21s" || form == "21h" || form == "31i" ||
-                 form == "51l") {
+        if (ins)
+          ins->literal = signedValue(tail(0) >> 8, 8);
+        break;
+      case Format::F21s:
+      case Format::F21h:
+      case Format::F31i:
+      case Format::F51l: {
         regs = {high};
         int64_t value = signedValue(tailValue(), 16 * (size - 1));
-        if (form == "21h")
+        if (form == Format::F21h)
           value = std::bit_cast<int64_t>(uint64_t(value)
                                          << (opcode == 0x19 ? 48 : 16));
-        ins.literal = value;
-      } else if (form == "22s") {
+        if (ins)
+          ins->literal = value;
+        break;
+      }
+      case Format::F22s:
         regs = {high & 15, high >> 4};
-        ins.literal = signedValue(tail(0), 16);
-      } else if (form == "21c" || form == "31c") {
+        if (ins)
+          ins->literal = signedValue(tail(0), 16);
+        break;
+      case Format::F21c:
+      case Format::F31c:
         regs = {high};
         index = tailValue();
-      } else if (form == "22c") {
+        break;
+      case Format::F22c:
         regs = {high & 15, high >> 4};
         index = tail(0);
-      } else if (form == "21t" || form == "22t" || form == "31t") {
-        regs = form == "22t" ? std::vector<unsigned>{high & 15, high >> 4}
-                             : std::vector<unsigned>{high};
-        ins.target =
+        break;
+      case Format::F21t:
+      case Format::F22t:
+      case Format::F31t:
+        regs = form == Format::F22t
+                   ? llvm::SmallVector<unsigned, 5>{high & 15, high >> 4}
+                   : llvm::SmallVector<unsigned, 5>{high};
+        fact.target =
             targetPC(uint32_t(pc), signedValue(tailValue(), 16 * (size - 1)));
-      } else if (form == "10t" || form == "20t" || form == "30t") {
-        ins.target =
-            targetPC(uint32_t(pc),
-                     form == "10t" ? signedValue(high, 8)
+        break;
+      case Format::F10t:
+      case Format::F20t:
+      case Format::F30t:
+        fact.target = targetPC(uint32_t(pc),
+                               form == Format::F10t
+                                   ? signedValue(high, 8)
                                    : signedValue(tailValue(), 16 * (size - 1)));
-      } else if (form == "35c") {
+        break;
+      case Format::F35c: {
         unsigned count = high >> 4;
         index = tail(0);
         if (count > 5)
@@ -1180,22 +1762,43 @@ class Dex {
           regs.push_back((tail(1) >> (4 * i)) & 15);
         if (count == 5)
           regs.push_back(high & 15);
-      } else if (form == "3rc") {
+        break;
+      }
+      case Format::F3rc:
+        if (query_retained && high > regs.capacity()) {
+          // The range count is one byte; bound SmallVector's growth before it
+          // can spill, and release this per-instruction temporary on exit.
+          const uint64_t bytes = uint64_t(2 * high + 1) * sizeof(unsigned);
+          retainQueryStorage(bytes);
+          register_storage.bytes = bytes;
+          regs.reserve(high);
+        }
         index = tail(0);
         for (unsigned i = 0; i < high; ++i)
           regs.push_back(tail(1) + i);
+        break;
+      default:
+        bad("unsupported instruction format");
       }
       for (auto reg : regs)
         if (reg >= registers)
           bad("instruction register exceeds frame");
-      if (spec.pool == 's')
-        ins.literal = string(index);
-      else if (spec.pool == 't')
-        ins.reference = type(index);
-      else if (spec.pool == 'f')
-        ins.reference = at(fields, index, "field");
-      else if (spec.pool == 'm') {
-        auto ref = at(methods, index, "method");
+      if (spec.pool == 's') {
+        const auto &value = at(strings, index, "string");
+        if (ins)
+          ins->literal = value;
+      } else if (spec.pool == 't') {
+        const auto &value = typeValue(index);
+        if (ins)
+          ins->reference = value;
+        if (spec.flow.producer == ProducerKind::Array)
+          fact.produced = ResultKind::Object;
+      } else if (spec.pool == 'f') {
+        const auto &value = at(fields, index, "field");
+        if (ins)
+          ins->reference = materializeField(value);
+      } else if (spec.pool == 'm') {
+        const auto &ref = at(methods, index, "method");
         if (ref.owner.starts_with('[') &&
             (ref.name == "<init>" || ref.name == "<clinit>"))
           bad("array type cannot own an initializer invocation");
@@ -1210,13 +1813,16 @@ class Dex {
             bad("invoke wide argument is not an adjacent register pair");
           word_index += width(typ);
         }
-        ins.reference = std::move(ref);
+        if (spec.flow.producer == ProducerKind::Method)
+          fact.produced = resultKind(ref.returns);
+        if (ins)
+          ins->reference = materializeMethod(ref);
       }
       if (spec.pool == 't') {
-        auto &ref = std::get<std::string>(ins.reference);
+        const auto &ref = typeValue(index);
         if (name.starts_with("filled-new-array") &&
-            (!ref.starts_with('[') || ref.substr(1) == "J" ||
-             ref.substr(1) == "D"))
+            (!ref.starts_with('[') || std::string_view(ref).substr(1) == "J" ||
+             std::string_view(ref).substr(1) == "D"))
           bad("filled-new-array requires a single-word array component");
         if (name == "new-instance" && !ref.starts_with('L'))
           bad("new-instance requires class type");
@@ -1226,37 +1832,59 @@ class Dex {
             !ref.starts_with('L') && !ref.starts_with('['))
           bad("reference operation requires object type");
       }
-      wideRegisters(name, regs, registers);
-      lengths[uint32_t(pc)] = size;
-      code.push_back(std::move(ins));
+      wideRegisters(spec.wide, regs, registers);
+      if (references && spec.pool == reference_pool &&
+          reference_matches->contains(uint32_t(index))) {
+        queryReserve(*references, references->size() + 1);
+        references->push_back(
+            {uint32_t(pc), uint32_t(index), uint8_t(opcode), spec.pool});
+      }
+      lengths.append(uint32_t(pc), size, *this);
+      if (ins) {
+        ins->target = fact.target;
+        ins->registers.assign(regs.begin(), regs.end());
+        code.push_back(std::move(*ins));
+      }
+      queryReserve(flow, flow.size() + 1);
+      flow.push_back(std::move(fact));
       pc += size;
     }
     std::set<uint32_t> used_payloads;
-    for (auto &ins : code) {
-      if (ins.opcode == "packed-switch" || ins.opcode == "sparse-switch" ||
-          ins.opcode == "fill-array-data") {
+    for (size_t i = 0; i < flow.size(); ++i) {
+      auto &ins = flow[i];
+      const auto &properties = specs[ins.opcode].flow;
+      if (properties.payload_ident) {
         auto found = payloads.find(*ins.target);
-        unsigned expected = ins.opcode == "packed-switch"   ? 0x100
-                            : ins.opcode == "sparse-switch" ? 0x200
-                                                            : 0x300;
-        if (found == payloads.end() || found->second.ident != expected)
+        if (found == payloads.end() ||
+            found->second.ident != properties.payload_ident)
           bad("instruction has missing/mismatched payload");
-        used_payloads.insert(*ins.target);
-        auto &p = found->second;
-        ins.keys = p.keys;
-        ins.data = p.data;
-        ins.element_width = p.element_width;
+        queryInsert(used_payloads, *ins.target);
+        const auto &p = found->second;
+        if (!references) {
+          code[i].keys = p.keys;
+          code[i].data = p.data;
+          code[i].element_width = p.element_width;
+        }
         for (auto delta : p.targets) {
+          budget.tick();
           auto target = targetPC(ins.pc, delta);
-          if (!lengths.contains(target))
+          const auto index = lengths.ordinal(target);
+          if (!index)
             bad("switch target is not an instruction boundary");
-          ins.targets.push_back(target);
+          queryReserve(ins.targets, ins.targets.size() + 1);
+          ins.targets.push_back(*index);
+          if (!references)
+            code[i].targets.push_back(target);
         }
       } else if (ins.target) {
-        if (!lengths.contains(*ins.target))
+        const auto index = lengths.ordinal(*ins.target);
+        if (!index)
           bad("branch target is not an instruction boundary");
-        if (*ins.target == ins.pc && ins.opcode != "goto/32")
+        if (*ins.target == ins.pc && !properties.zero_branch)
           bad("zero branch displacement");
+        // Public instructions already own their code-unit target. Flow uses
+        // the resolved ordinal from this same boundary check.
+        ins.target = *index;
       }
     }
     if (used_payloads.size() != payloads.size())
@@ -1267,125 +1895,197 @@ class Dex {
                  size_t parameter_count) {
     if (!offset)
       return;
-    cache.erase(Key{0x2003, offset});
-    item<bool>(0x2003, offset, [&](Cursor &reader) {
-      int64_t line = reader.leb(), count = reader.leb();
-      if (line < 1 || uint64_t(count) != parameter_count)
-        bad("debug header disagrees with method");
-      auto optionalString = [&] {
-        auto index = reader.leb() - 1;
-        if (index >= 0)
-          string(uint64_t(index));
-      };
-      for (int64_t i = 0; i < count; ++i)
-        optionalString();
-      uint64_t address = 0;
-      while (true) {
-        unsigned opcode = reader.u8();
-        if (!opcode)
-          break;
-        if (opcode == 1)
-          address += uint64_t(reader.leb());
-        else if (opcode == 2)
-          line += reader.leb(true);
-        else if (opcode == 3 || opcode == 4) {
-          if (uint64_t(reader.leb()) >= registers)
-            bad("debug register outside frame");
-          optionalString();
-          auto typ = reader.leb() - 1;
-          if (typ >= 0)
-            type(uint64_t(typ));
-          if (opcode == 4)
+    item<bool>(
+        0x2003, offset,
+        [&](Cursor &reader) {
+          int64_t line = reader.leb(), count = reader.leb();
+          if (line < 0 || uint64_t(count) != parameter_count)
+            bad("debug header disagrees with method");
+          auto optionalString = [&] {
+            auto index = reader.leb() - 1;
+            if (index >= 0)
+              at(strings, uint64_t(index), "string");
+          };
+          for (int64_t i = 0; i < count; ++i)
             optionalString();
-        } else if (opcode == 5 || opcode == 6) {
-          if (uint64_t(reader.leb()) >= registers)
-            bad("debug register outside frame");
-        } else if (opcode == 9)
-          optionalString();
-        else if (opcode >= 10) {
-          address += (opcode - 10) / 15;
-          line += int((opcode - 10) % 15) - 4;
-        }
-        if (address > code_end || line < 1)
-          bad("debug position outside method");
-      }
-      return true;
-    });
+          uint64_t address = 0;
+          while (true) {
+            unsigned opcode = reader.u8();
+            if (!opcode)
+              break;
+            if (opcode == 1)
+              address += uint64_t(reader.leb());
+            else if (opcode == 2)
+              line += reader.leb(true);
+            else if (opcode == 3 || opcode == 4) {
+              if (uint64_t(reader.leb()) >= registers)
+                bad("debug register outside frame");
+              optionalString();
+              auto typ = reader.leb() - 1;
+              if (typ >= 0)
+                typeValue(uint64_t(typ));
+              if (opcode == 4)
+                optionalString();
+            } else if (opcode == 5 || opcode == 6) {
+              if (uint64_t(reader.leb()) >= registers)
+                bad("debug register outside frame");
+            } else if (opcode == 9)
+              optionalString();
+            else if (opcode >= 10) {
+              address += (opcode - 10) / 15;
+              line += int((opcode - 10) % 15) - 4;
+            }
+            if (address > code_end || line < 0)
+              bad("debug position outside method");
+          }
+          return true;
+        },
+        1, false);
   }
-  void codeFlow(const std::vector<Instruction> &instructions,
-                const std::map<uint32_t, unsigned> &lengths,
-                const std::vector<TryRegion> &tries) {
-    std::map<uint32_t, const Instruction *> by_pc;
-    std::set<uint32_t> handlers, explicit_targets;
-    for (auto &region : tries)
-      for (auto &handler : region.handlers)
-        handlers.insert(handler.target);
-    explicit_targets = handlers;
-    for (auto &ins : instructions) {
-      by_pc[ins.pc] = &ins;
-      explicit_targets.insert(ins.targets.begin(), ins.targets.end());
-      if (ins.opcode.starts_with("if-") || ins.opcode.starts_with("goto"))
-        explicit_targets.insert(*ins.target);
+  void codeFlow(const std::vector<FlowInstruction> &instructions,
+                const std::vector<TryRegion> &tries,
+                const InstructionLengths &lengths) {
+    const auto &specs = opcodes();
+    enum : uint8_t { Explicit = 1, HandlerEntry = 2, Reached = 4 };
+    std::vector<uint8_t> flags;
+    auto mark = [&](uint32_t index, uint8_t bits) {
+      if (flags.empty()) {
+        queryReserve(flags, instructions.size(), true);
+        flags.resize(instructions.size(), 0);
+      }
+      flags[index] |= bits;
+    };
+    for (const auto &region : tries)
+      for (const auto &handler : region.handlers)
+        mark(*lengths.ordinal(handler.target), Explicit | HandlerEntry);
+    for (const auto &ins : instructions) {
+      for (auto index : ins.targets)
+        mark(index, Explicit);
+      const auto control = specs[ins.opcode].flow.control;
+      if (control == FlowControl::Conditional || control == FlowControl::Goto)
+        mark(*ins.target, Explicit);
     }
-    const Instruction *previous = nullptr;
-    for (auto &ins : instructions) {
-      if (ins.opcode == "move-exception" && !handlers.contains(ins.pc))
+    const FlowInstruction *previous = nullptr;
+    for (size_t i = 0; i < instructions.size(); ++i) {
+      const auto &ins = instructions[i];
+      const unsigned entry = flags.empty() ? 0 : flags[i];
+      const auto &properties = specs[ins.opcode].flow;
+      if (properties.move_exception && !(entry & HandlerEntry))
         bad("move-exception outside an exception handler entry");
-      if (ins.opcode.starts_with("move-result")) {
-        if (explicit_targets.contains(ins.pc) || !previous ||
-            previous->pc + lengths.at(previous->pc) != ins.pc)
+      if (properties.result_use != ResultKind::None) {
+        if ((entry & Explicit) || !previous ||
+            previous->pc + previous->width != ins.pc)
           bad("move-result has an invalid control-flow predecessor");
-        std::string result;
-        if (previous->opcode.starts_with("invoke-") &&
-            std::holds_alternative<MethodRef>(previous->reference))
-          result = std::get<MethodRef>(previous->reference).returns;
-        else if (previous->opcode.starts_with("filled-new-array"))
-          result = std::get<std::string>(previous->reference);
-        else
+        if (previous->produced == ResultKind::None)
           bad("move-result does not immediately follow an invocation");
-        auto expected = result == "J" || result == "D" ? "move-result-wide"
-                        : result.starts_with('L') || result.starts_with('[')
-                            ? "move-result-object"
-                            : "move-result";
-        if (result == "V" || ins.opcode != expected)
+        if (previous->produced == ResultKind::Void ||
+            properties.result_use != previous->produced)
           bad("move-result kind disagrees with invocation result");
       }
       previous = &ins;
     }
-    std::vector<std::pair<uint32_t, bool>> pending{{0, false}};
-    std::set<uint32_t> reached;
-    for (auto handler : handlers)
-      pending.emplace_back(handler, true);
+    auto visitWork = [&] { boundedWork(budget, scalar_reads); };
+    if (flags.empty()) {
+      // With no branch or handler entries the reachable path is a prefix.
+      // Validate every predecessor above, including unreachable instructions,
+      // then follow that prefix without allocating a queue and visited set.
+      uint32_t pc = 0;
+      for (const auto &ins : instructions) {
+        visitWork();
+        if (ins.pc != pc)
+          bad("normal or handler execution falls outside executable "
+              "instructions");
+        if (specs[ins.opcode].flow.control == FlowControl::Stop)
+          return;
+        pc += ins.width;
+      }
+      visitWork();
+      bad("normal or handler execution falls outside executable "
+          "instructions");
+    }
+    std::vector<std::pair<uint32_t, bool>> pending;
+    auto enqueue = [&](uint32_t index, bool exception_edge) {
+      queryReserve(pending, pending.size() + 1);
+      pending.emplace_back(index, exception_edge);
+    };
+    enqueue(lengths.ordinal(0).value_or(UINT32_MAX), false);
+    // Ordinals follow PC order, preserving the handler queue's traversal order.
+    for (size_t i = 0; i < flags.size(); ++i)
+      if (flags[i] & HandlerEntry)
+        enqueue(uint32_t(i), true);
     while (!pending.empty()) {
-      budget.tick();
-      auto [pc, exception_edge] = pending.back();
+      visitWork();
+      auto [index, exception_edge] = pending.back();
       pending.pop_back();
-      auto found = by_pc.find(pc);
-      if (found == by_pc.end())
+      // Invalid fallthrough is diagnosed when visited, preserving traversal
+      // order even when a branch or exception entry was queued later.
+      if (index == UINT32_MAX)
         bad("normal or handler execution falls outside executable "
             "instructions");
-      auto &ins = *found->second;
-      if (ins.opcode == "move-exception" && !exception_edge)
+      const auto &ins = instructions[index];
+      const auto &properties = specs[ins.opcode].flow;
+      if (properties.move_exception && !exception_edge)
         bad("normal execution enters move-exception");
-      if (!reached.insert(pc).second)
+      if (flags[index] & Reached)
         continue;
-      if (ins.opcode.starts_with("return") || ins.opcode == "throw")
+      flags[index] |= Reached;
+      if (properties.control == FlowControl::Stop)
         continue;
-      if (ins.opcode.starts_with("goto"))
-        pending.emplace_back(*ins.target, false);
+      if (properties.control == FlowControl::Goto)
+        enqueue(*ins.target, false);
       else {
-        pending.emplace_back(pc + lengths.at(pc), false);
-        if (ins.opcode.starts_with("if-"))
-          pending.emplace_back(*ins.target, false);
+        const auto next = index + 1;
+        enqueue(next < instructions.size() &&
+                        instructions[next].pc == ins.pc + ins.width
+                    ? next
+                    : UINT32_MAX,
+                false);
+        if (properties.control == FlowControl::Conditional)
+          enqueue(*ins.target, false);
         for (auto target : ins.targets)
-          pending.emplace_back(target, false);
+          enqueue(target, false);
       }
     }
   }
-  void code(uint32_t offset, Method &method) {
-    context(0x2001, offset,
-            method.reference.signature() +
-                (has(method.access, "static") ? ":static" : ":instance"));
+  struct MethodContext {
+    const MethodPoolEntry &reference;
+    bool is_static;
+    uint32_t identity() const {
+      return uint32_t(reference.prototype) * 2 + is_static;
+    }
+    unsigned incomingWords() const {
+      return detail::incomingWords(reference.parameters, is_static);
+    }
+  };
+  static void requireCodeContext(uint32_t actual, uint32_t expected) {
+    if (actual != expected)
+      bad("shared data item has inconsistent declaration context");
+  }
+  void codeContext(uint32_t offset, const MethodContext &method) {
+    const auto found = code_contexts.lower_bound(offset);
+    if (found != code_contexts.end() && found->first == offset) {
+      requireCodeContext(found->second, method.identity());
+      return;
+    }
+    code_contexts.emplace_hint(found, offset, method.identity());
+  }
+  Code code(uint32_t offset, const MethodContext &method,
+            std::vector<CodeReference> *references = nullptr) {
+    struct ScratchStorage {
+      uint64_t *total;
+      uint64_t previous;
+      const uint64_t &persistent;
+      uint64_t previous_persistent;
+      ~ScratchStorage() {
+        if (total)
+          *total = previous + (persistent - previous_persistent);
+      }
+    } scratch{query_retained, query_retained ? *query_retained : 0,
+              query_persistent, query_persistent};
+    // Reference queries keep this context beside the decoded sites. Recovery
+    // retains it separately from the public, owned body cache.
+    if (!references)
+      codeContext(offset, method);
     auto result = item<Code>(
         0x2001, offset,
         [&](Cursor &reader) {
@@ -1396,11 +2096,11 @@ class Dex {
             bad("empty/truncated method instructions");
           if (incoming != method.incomingWords() || incoming > registers)
             bad("incoming register words disagree with method");
-          std::vector<uint16_t> words;
-          words.reserve(size);
-          for (uint32_t i = 0; i < size; ++i)
-            words.push_back(reader.u16());
-          auto [ins, lengths] = instructions(words, registers, outgoing);
+          // The validated input owns these bytes throughout decoding. Load
+          // little-endian units directly, including unaligned host addresses.
+          const CodeUnits words{reader.takeCodeUnits(size)};
+          auto [ins, flow, lengths] =
+              instructions(words, registers, outgoing, references);
           std::vector<std::tuple<uint32_t, uint32_t, unsigned>> raw_tries;
           if (tries_count && size % 2 && reader.u16())
             bad("nonzero try alignment padding");
@@ -1412,6 +2112,7 @@ class Dex {
                 (end != size && !lengths.contains(uint32_t(end))) ||
                 (!raw_tries.empty() && start < std::get<1>(raw_tries.back())))
               bad("invalid or overlapping try range");
+            queryReserve(raw_tries, raw_tries.size() + 1);
             raw_tries.emplace_back(start, uint32_t(end), handler);
           }
           std::map<size_t, std::vector<Handler>> handlers;
@@ -1425,21 +2126,26 @@ class Dex {
               uint64_t magnitude = uint64_t(length < 0 ? -length : length);
               budget.tick(magnitude);
               std::vector<Handler> entries;
-              std::set<std::string> caught_types;
+              std::set<uint64_t> caught_types;
               for (uint64_t j = 0; j < magnitude; ++j) {
-                auto typ = type(uint64_t(reader.leb()));
+                const auto type_index = uint64_t(reader.leb());
+                const auto &typ = typeValue(type_index);
                 auto target = uint32_t(reader.leb());
                 if (!typ.starts_with('L') || !lengths.contains(target) ||
-                    !caught_types.insert(typ).second)
+                    !queryInsert(caught_types, type_index).second)
                   bad("invalid or duplicate typed exception handler");
-                entries.push_back({typ, target});
+                queryReserve(entries, entries.size() + 1);
+                entries.push_back(
+                    {references ? std::optional<std::string>{} : typ, target});
               }
               if (length <= 0) {
                 auto target = uint32_t(reader.leb());
                 if (!lengths.contains(target))
                   bad("catch-all target is not an instruction");
+                queryReserve(entries, entries.size() + 1);
                 entries.push_back({std::nullopt, target});
               }
+              retainQueryStorage(queryNodeBytes<decltype(handlers)>());
               handlers.emplace(handler_offset, std::move(entries));
             }
           }
@@ -1448,83 +2154,134 @@ class Dex {
             auto found = handlers.find(handler);
             if (found == handlers.end())
               bad("try references non-handler offset");
+            queryReserve(tries, tries.size() + 1);
+            retainQueryStorage(uint64_t(found->second.size()) *
+                               sizeof(Handler));
+            budget.tick(found->second.size());
             tries.push_back({start, end, found->second});
           }
-          codeFlow(ins, lengths, tries);
+          codeFlow(flow, tries, lengths);
           debugInfo(debug, registers, size, method.reference.parameters.size());
           return Code{registers, incoming, std::move(ins), std::move(tries),
                       size};
         },
-        4);
+        4, !references);
     if (result.incoming != method.incomingWords())
       bad("shared code item signature mismatch");
-    method.registers = result.registers;
-    method.instructions = std::move(result.instructions);
-    method.tries = std::move(result.tries);
-    method.code_end = result.size;
+    return result;
   }
-  void classData(Class &cls, uint32_t offset) {
+  using MethodVisitor = std::function<void(const MethodContext &, uint32_t)>;
+  void classData(Class &cls, uint32_t offset, const MethodVisitor &visit = {}) {
     if (!offset)
       return;
     context(0x2000, offset, cls.name);
-    item<bool>(0x2000, offset, [&](Cursor &reader) {
-      std::array<uint64_t, 4> counts{};
-      uint64_t total = 0;
-      for (auto &count : counts) {
-        count = uint64_t(reader.leb());
-        total += count;
-      }
-      budget.tick(total);
-      std::set<uint64_t> seen_fields, seen_methods;
-      for (unsigned group = 0; group < 4; ++group) {
-        uint64_t index = 0;
-        for (uint64_t member_index = 0; member_index < counts[group];
-             ++member_index) {
-          auto diff = uint64_t(reader.leb());
-          auto flags = uint32_t(reader.leb());
-          if (member_index && !diff)
-            bad("duplicate class-data member index");
-          index += diff;
-          auto access = accessFlags(flags);
-          auto &seen = group < 2 ? seen_fields : seen_methods;
-          if (!seen.insert(index).second)
-            bad("duplicate defined member");
-          if (group < 2) {
-            auto reference = at(fields, index, "defined member");
-            if (reference.owner != cls.name)
-              bad("class-data member owner mismatch");
-            if (has(access, "static") != (group == 0))
-              bad("field storage/access mismatch");
-            cls.fields.push_back({reference, std::move(access), {}});
-          } else {
-            auto reference = at(methods, index, "defined member");
-            if (reference.owner != cls.name)
-              bad("class-data member owner mismatch");
-            if (access.erase("volatile"))
-              access.insert("bridge");
-            if (access.erase("transient"))
-              access.insert("varargs");
-            bool direct = has(access, "static") || has(access, "private") ||
-                          has(access, "constructor") ||
-                          reference.name == "<init>" ||
-                          reference.name == "<clinit>";
-            if (direct != (group == 2))
-              bad("direct/virtual method classification mismatch");
-            uint32_t code_off = uint32_t(reader.leb());
-            bool no_body = has(access, "native") || has(access, "abstract");
-            if (bool(code_off) == no_body)
-              bad("method code/access mismatch");
-            Method method;
-            method.reference = std::move(reference);
-            method.access = std::move(access);
-            if (code_off)
-              code(code_off, method);
-            cls.methods.push_back(std::move(method));
+    item<bool>(
+        0x2000, offset,
+        [&](Cursor &reader) {
+          std::array<uint64_t, 4> counts{};
+          uint64_t total = 0;
+          for (auto &count : counts) {
+            count = uint64_t(reader.leb());
+            total += count;
           }
-        }
-      }
-      return true;
-    });
+          budget.tick(total);
+          std::vector<uint64_t> first_fields, first_methods;
+          struct MemberStorage {
+            uint64_t *total;
+            uint64_t bytes = 0;
+            ~MemberStorage() {
+              if (total)
+                *total -= bytes;
+            }
+          } member_storage{query_retained};
+          auto remember = [&](std::vector<uint64_t> &first, uint64_t index,
+                              uint64_t count) {
+            if (first.size() == first.capacity()) {
+              const uint64_t previous =
+                  uint64_t(first.capacity()) * sizeof(uint64_t);
+              const size_t next = size_t(std::min<uint64_t>(
+                  count,
+                  std::max<uint64_t>(4, uint64_t(first.capacity()) * 2)));
+              const uint64_t bytes = uint64_t(next) * sizeof(uint64_t);
+              // Account both buffers while reserve copies the bounded integer
+              // list.
+              retainQueryStorage(bytes);
+              if (query_retained)
+                member_storage.bytes += bytes;
+              first.reserve(next);
+              if (query_retained) {
+                *query_retained -= previous;
+                member_storage.bytes -= previous;
+              }
+            }
+            first.push_back(index);
+          };
+          for (unsigned group = 0; group < 4; ++group) {
+            uint64_t index = 0;
+            for (uint64_t member_index = 0; member_index < counts[group];
+                 ++member_index) {
+              auto diff = uint64_t(reader.leb());
+              auto flags = uint32_t(reader.leb());
+              if (member_index && !diff)
+                bad("duplicate class-data member index");
+              index += diff;
+              detail::validateAccessBits(flags);
+              auto &first = group < 2 ? first_fields : first_methods;
+              if (!(group & 1)) {
+                if (counts[group + 1])
+                  remember(first, index, counts[group]);
+              } else if (std::binary_search(first.begin(), first.end(), index))
+                bad("duplicate defined member");
+              if (group < 2) {
+                const auto &reference = at(fields, index, "defined member");
+                if (reference.owner != cls.name)
+                  bad("class-data member owner mismatch");
+                if (bool(flags & detail::Static) != (group == 0))
+                  bad("field storage/access mismatch");
+                if (!visit)
+                  cls.fields.push_back(
+                      {materializeField(reference), accessFlags(flags), {}});
+              } else {
+                const auto &reference = at(methods, index, "defined member");
+                if (reference.owner != cls.name)
+                  bad("class-data member owner mismatch");
+                bool direct = (flags & (detail::Static | detail::Private |
+                                        detail::Constructor)) ||
+                              reference.name == "<init>" ||
+                              reference.name == "<clinit>";
+                if (direct != (group == 2))
+                  bad("direct/virtual method classification mismatch");
+                uint32_t code_off = uint32_t(reader.leb());
+                bool no_body = flags & (detail::Native | detail::Abstract);
+                if (bool(code_off) == no_body)
+                  bad("method code/access mismatch");
+                const MethodContext method_context{
+                    reference, bool(flags & detail::Static)};
+                if (visit)
+                  visit(method_context, code_off);
+                else {
+                  Method method;
+                  method.reference = materializeMethod(reference);
+                  method.access = accessFlags(flags);
+                  if (method.access.erase("volatile"))
+                    method.access.insert("bridge");
+                  if (method.access.erase("transient"))
+                    method.access.insert("varargs");
+                  if (code_off) {
+                    auto body = code(code_off, method_context);
+                    method.registers = body.registers;
+                    method.instructions = std::move(body.instructions);
+                    method.tries = std::move(body.tries);
+                    method.code_end = body.size;
+                  }
+                  cls.methods.push_back(std::move(method));
+                }
+              }
+            }
+          }
+          return true;
+        },
+        1, false);
   }
   void staticValues(Class &cls, uint32_t offset) {
     if (!offset)
@@ -1564,8 +2321,355 @@ class Dex {
   }
 
 public:
+  // Pool entries refer to this object's table storage.
+  Dex(const Dex &) = delete;
+  Dex &operator=(const Dex &) = delete;
+  Dex(Dex &&) = delete;
+  Dex &operator=(Dex &&) = delete;
   Dex(std::string_view data, std::string_view source_id, Budget &budget)
       : data(data), source_id(source_id), budget(budget) {}
+  std::vector<std::string> listClasses() {
+    const auto tables = header();
+    return classDefinitions(tables);
+  }
+  using ClassVisitor =
+      std::function<void(const std::string &, uint32_t, uint32_t)>;
+  enum class ClassTables { Sparse, Validated };
+  std::vector<std::string>
+  classDefinitions(const Tables &tables, const ClassVisitor &visit = {},
+                   ClassTables mode = ClassTables::Sparse) {
+    const auto [count, offset] = tables.at(6);
+    if (count > budget.limits.max_files)
+      bad("class inventory exceeds file limit");
+    auto record = [&](unsigned kind, uint32_t index, unsigned width) {
+      const auto [size, start] = tables.at(kind);
+      if (index >= size)
+        bad(kind == 1 ? "string index out of bounds"
+                      : "type index out of bounds");
+      return cursor(size_t(start) + size_t(index) * width,
+                    sections.at(kind).end);
+    };
+    auto dataOffset = [&](unsigned kind, uint32_t at, unsigned alignment) {
+      const auto section = sections.find(kind);
+      if (section == sections.end() || at % alignment ||
+          at < section->second.start || at >= section->second.end)
+        bad("item points outside its mapped section");
+    };
+    std::map<uint32_t, std::string> referenced_types;
+    uint64_t type_bytes = 0;
+    auto classType = [&](uint32_t index) -> const std::string & {
+      if (mode == ClassTables::Validated) {
+        // readTables has already decoded every string and validated every
+        // type descriptor. Reuse that authoritative result in full queries.
+        const auto &name = at(types, index, "type");
+        if (name == "V")
+          (void)descriptor(name);
+        if (!name.starts_with('L'))
+          bad("class metadata requires class type");
+        return name;
+      }
+      if (const auto found = referenced_types.find(index);
+          found != referenced_types.end())
+        return found->second;
+      auto type_record = record(2, index, 4);
+      auto string_record = record(1, type_record.u32(), 4);
+      const auto string_offset = string_record.u32();
+      dataOffset(0x2002, string_offset, 1);
+      auto string_reader = cursor(string_offset, sections.at(0x2002).end);
+      // The type cache owns the validated name. Retain only the decoded item
+      // range here, without keeping a second UTF-8/UTF-16 string inventory.
+      auto decoded = mutf8(string_reader);
+      recordRange(Key{0x2002, string_offset}, string_reader.pos);
+      auto name = descriptor(decoded.text);
+      if (!name.starts_with('L'))
+        bad("class metadata requires class type");
+      if (name.size() > budget.limits.max_bytes - type_bytes)
+        bad("class metadata exceeds byte limit");
+      type_bytes += name.size();
+      return referenced_types.emplace(index, std::move(name)).first->second;
+    };
+    auto reader = cursor(offset, count ? sections.at(6).end : offset);
+    std::vector<std::string> result;
+    result.reserve(count);
+    std::set<std::string> names;
+    std::vector<uint8_t> defined_types;
+    std::vector<uint32_t> interface_classes;
+    QueryTemporary identity_storage{query_retained};
+    if (mode == ClassTables::Validated) {
+      const uint64_t bytes =
+          uint64_t(types.size()) * (sizeof(uint8_t) + sizeof(uint32_t));
+      retainQueryStorage(bytes);
+      identity_storage.bytes = bytes;
+      defined_types.resize(types.size(), 0);
+      interface_classes.resize(types.size(), UINT32_MAX);
+    }
+    uint64_t name_bytes = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      budget.tick();
+      const uint32_t index = reader.u32(), flags = reader.u32(),
+                     parent = reader.u32(), interfaces = reader.u32(),
+                     source = reader.u32(), annotations = reader.u32(),
+                     class_data = reader.u32(), values = reader.u32();
+      const auto &name = classType(index);
+      if (mode == ClassTables::Validated) {
+        // Full table validation proved that type IDs have unique names.
+        if (defined_types[index])
+          bad("invalid/duplicate class definition");
+        defined_types[index] = 1;
+      } else if (!names.insert(name).second)
+        bad("invalid/duplicate class definition");
+      detail::validateAccessBits(flags);
+      if (parent != UINT32_MAX && classType(parent) == name)
+        bad("invalid superclass");
+      if (interfaces) {
+        dataOffset(0x1001, interfaces, 4);
+        auto list = cursor(interfaces, sections.at(0x1001).end);
+        const auto length = list.u32();
+        if (length > (list.end - list.pos) / 2)
+          bad("truncated type list");
+        std::set<std::string> implemented;
+        for (uint32_t j = 0; j < length; ++j) {
+          const auto interface = list.u16();
+          const auto &type = classType(interface);
+          if (mode == ClassTables::Validated) {
+            if (interface_classes[interface] == i)
+              bad("invalid/duplicate interface");
+            interface_classes[interface] = i;
+          } else if (!implemented.insert(type).second)
+            bad("invalid/duplicate interface");
+        }
+        recordRange(Key{0x1001, interfaces}, list.pos);
+      }
+      if (source != UINT32_MAX) {
+        auto source_record = record(1, source, 4);
+        dataOffset(0x2002, source_record.u32(), 1);
+      }
+      if (annotations)
+        dataOffset(0x2006, annotations, 4);
+      if (class_data)
+        dataOffset(0x2000, class_data, 1);
+      if (values)
+        dataOffset(0x2005, values, 1);
+      if (name.size() > budget.limits.max_bytes - name_bytes)
+        bad("class inventory exceeds byte limit");
+      name_bytes += name.size();
+      result.push_back(name);
+      if (visit)
+        visit(name, flags, class_data);
+    }
+    checkRangeOverlaps();
+    return result;
+  }
+  DexReferenceResult findReferences(const DexReferenceQuery &query) {
+    if (query.text.empty())
+      throw Error("reference query text must not be empty");
+    char pool;
+    switch (query.kind) {
+    case DexReferenceKind::String:
+      pool = 's';
+      break;
+    case DexReferenceKind::Type:
+      pool = 't';
+      break;
+    case DexReferenceKind::Method:
+      pool = 'm';
+      break;
+    case DexReferenceKind::Field:
+      pool = 'f';
+      break;
+    default:
+      throw Error("invalid reference query kind");
+    }
+    if (query.owner) {
+      if (pool != 'm' && pool != 'f')
+        throw Error("reference owner filter requires a method or field query");
+      const auto owner = descriptor(*query.owner);
+      if (!owner.starts_with('L') && !(pool == 'm' && owner.starts_with('[')))
+        throw Error("invalid reference owner descriptor");
+    }
+    uint64_t retained = 0;
+    query_retained = &retained;
+    auto retain = [&](uint64_t bytes) { retainQueryStorage(bytes); };
+    retain(query.text.size());
+    // Bound substring matching linearly even for repeated pool/query prefixes.
+    std::vector<size_t> prefix;
+    if (!query.exact) {
+      if (query.text.size() > budget.limits.max_bytes / sizeof(size_t))
+        throw Error("reference query storage exceeds byte limit");
+      retain(query.text.size() * sizeof(size_t));
+      budget.tick(query.text.size());
+      budget.tick(query.text.size());
+      prefix.resize(query.text.size());
+      for (size_t i = 1, matched = 0; i < query.text.size(); ++i) {
+        if (!(i % 4096))
+          budget.check();
+        while (matched && query.text[i] != query.text[matched])
+          matched = prefix[matched - 1];
+        if (query.text[i] == query.text[matched])
+          ++matched;
+        prefix[i] = matched;
+      }
+    }
+    auto matches = [&](std::string_view text) {
+      if (query.exact) {
+        boundedWork(budget, scalar_reads);
+        if (text.size() != query.text.size())
+          return false;
+        boundedWork(budget, scalar_reads, text.size());
+        return text == query.text;
+      }
+      boundedWork(budget, scalar_reads, text.size());
+      budget.consumeWork(text.size());
+      if (query.text.size() <= 16) {
+        // Fixed short needles bound comparison work independently of the
+        // input and use the library's byte search. Overlapping bounded blocks
+        // preserve matches across block edges and deadline checks.
+        for (size_t start = 0; start < text.size(); start += 4096) {
+          if (start)
+            budget.check();
+          const auto count = std::min<size_t>(4096 + query.text.size() - 1,
+                                              text.size() - start);
+          if (text.substr(start, count).find(query.text) !=
+              std::string_view::npos)
+            return true;
+        }
+        return false;
+      }
+      for (size_t i = 0, matched = 0; i < text.size(); ++i) {
+        if (i && !(i % 4096))
+          budget.check();
+        while (matched && text[i] != query.text[matched])
+          matched = prefix[matched - 1];
+        if (text[i] == query.text[matched])
+          ++matched;
+        if (matched == query.text.size())
+          return true;
+      }
+      return false;
+    };
+    const auto tables = header();
+    readTables(tables);
+    ReferenceMatches selected;
+    auto select = [&](uint32_t index, const std::string &text) {
+      if (!matches(text))
+        return;
+      retainQueryPersistent(sizeof(ReferenceMatches::value_type) +
+                            4 * sizeof(void *));
+      retain(text.size());
+      Match match{text, {}};
+      if (pool == 's') {
+        auto row = cursor(size_t(tables.at(1).second) + size_t(index) * 4,
+                          sections.at(1).end);
+        auto value = item<DecodedString>(
+            0x2002, row.u32(), [&](Cursor &r) { return mutf8(r); }, 1, false);
+        match.utf16 = std::move(value.units);
+      }
+      selected.emplace(index, std::move(match));
+    };
+    if (pool == 's' || pool == 't') {
+      const auto &values = pool == 's' ? strings : types;
+      for (size_t i = 0; i < values.size(); ++i)
+        select(uint32_t(i), values[i]);
+    } else if (pool == 'm') {
+      for (size_t i = 0; i < methods.size(); ++i) {
+        budget.tick();
+        if (!query.owner || methods[i].owner == *query.owner)
+          select(uint32_t(i), methods[i].identity());
+      }
+    } else {
+      for (size_t i = 0; i < fields.size(); ++i) {
+        budget.tick();
+        const auto &field = fields[i];
+        if (!query.owner || field.owner == *query.owner)
+          select(uint32_t(i),
+                 field.owner + "->" + field.name + ":" + field.type);
+      }
+    }
+    DexReferenceResult result;
+    result.matching_pool_entries = selected.size();
+    reference_pool = pool;
+    reference_matches = &selected;
+    struct ReferencedCode {
+      uint32_t context;
+      std::vector<CodeReference> sites;
+    };
+    std::map<uint32_t, ReferencedCode> code_references;
+    result.class_descriptors = classDefinitions(
+        tables,
+        [&](const std::string &name, uint32_t flags, uint32_t offset) {
+          retain(sizeof(std::string));
+          retain(name.size());
+          Class cls;
+          queryCopyWork(name.size());
+          cls.name = name;
+          classData(
+              cls, offset,
+              [&](const MethodContext &method, uint32_t code_offset) {
+                boundedWork(budget, scalar_reads);
+                if (result.defined_method_count >= budget.limits.max_files)
+                  bad("defined method inventory exceeds file limit");
+                ++result.defined_method_count;
+                if (!code_offset)
+                  return;
+                // Code items are commonly visited in file order. Both paths
+                // produce an exact insertion hint and still check every
+                // shared-code context.
+                auto found =
+                    code_references.empty() ||
+                            code_references.rbegin()->first < code_offset
+                        ? code_references.end()
+                        : code_references.lower_bound(code_offset);
+                if (found == code_references.end() ||
+                    found->first != code_offset) {
+                  std::vector<CodeReference> references;
+                  (void)code(code_offset, method, &references);
+                  // Recovery owns typed bodies. Queries retain matching operand
+                  // sites after full validation and replay every method owner.
+                  retain(uint64_t(references.capacity()) *
+                         sizeof(CodeReference));
+                  retainQueryPersistent(
+                      sizeof(decltype(code_references)::value_type) +
+                      4 * sizeof(void *));
+                  found = code_references.emplace_hint(
+                      found, code_offset,
+                      ReferencedCode{method.identity(), std::move(references)});
+                  ++result.scanned_code_item_count;
+                } else
+                  requireCodeContext(found->second.context, method.identity());
+                ++result.scanned_method_count;
+                for (const auto &reference : found->second.sites) {
+                  budget.tick();
+                  if (reference.pool != pool)
+                    continue;
+                  const auto match = selected.find(reference.index);
+                  if (match == selected.end())
+                    continue;
+                  if (result.references.size() >= budget.limits.max_files)
+                    bad("reference site inventory exceeds file limit");
+                  retain(sizeof(DexReferenceSite));
+                  const auto &opcode = opcodes()[reference.opcode].name;
+                  retain(opcode.size());
+                  retain(match->second.text.size());
+                  if (match->second.utf16)
+                    retain(uint64_t(match->second.utf16->size()) *
+                           sizeof(char16_t));
+                  queryCopyWork(match->second.text.size() +
+                                (match->second.utf16
+                                     ? uint64_t(match->second.utf16->size()) *
+                                           sizeof(char16_t)
+                                     : 0));
+                  result.references.push_back(
+                      {materializeMethod(method.reference), reference.pc,
+                       opcode, reference.index, match->second.text,
+                       match->second.utf16});
+                }
+              });
+        },
+        ClassTables::Validated);
+    budget.check();
+    result.code_scan_complete = true;
+    return result;
+  }
   std::vector<Class> parse() {
     auto tables = header();
     readTables(tables);
@@ -1645,5 +2749,14 @@ public:
 std::vector<Class> parseDex(std::string_view bytes, std::string_view input_id,
                             Budget &budget) {
   return Dex(bytes, input_id, budget).parse();
+}
+std::vector<std::string> listDexClasses(std::string_view bytes,
+                                        Budget &budget) {
+  return Dex(bytes, {}, budget).listClasses();
+}
+DexReferenceResult findDexReferences(std::string_view bytes,
+                                     const DexReferenceQuery &query,
+                                     Budget &budget) {
+  return Dex(bytes, {}, budget).findReferences(query);
 }
 } // namespace neverd::mobile::dalvik
