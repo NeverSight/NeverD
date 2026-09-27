@@ -2,7 +2,7 @@
 
 # Recuperación de código nativo y fuentes de iOS
 
-[← Índice de documentación](README.md) · [Resumen móvil](../mobile.md)
+[← Índice de documentación](README.md) · [Resumen móvil](mobile.md)
 
 `neverd mobile` acepta IPA, `.app` y Mach-O. Exporta C nativo, metadatos del runtime y fuentes experimentales Objective-C `.m` y Swift `.swift` para los cuerpos nativos compatibles. Un resultado publicado puede incluir métodos sin recuperar: consulte la cobertura antes de usarlo. Los contenedores móviles pertenecen a la CLI; el SDK C nativo carga por separado el Mach-O seleccionado.
 

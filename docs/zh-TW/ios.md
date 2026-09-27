@@ -2,7 +2,7 @@
 
 # iOS 原生程式碼與原始碼恢復
 
-[← 文件索引](README.md) · [行動應用程式概覽](../mobile.md)
+[← 文件索引](README.md) · [行動應用程式概覽](mobile.md)
 
 `neverd mobile` 接受 IPA、`.app` 和 Mach-O，輸出原生 C、執行階段中繼資料，以及受支援原生方法本體的實驗性 Objective-C `.m` 和 Swift `.swift` 原始碼。釋出成功的結果仍可能包含未恢復方法，使用原始碼前請檢查覆蓋率報告。行動應用程式容器由 CLI 處理；原生 C SDK 可單獨載入選中的 Mach-O。
 

@@ -21,7 +21,7 @@ NeverD prend en charge Android et iOS via la CLI expérimentale `neverd mobile` 
 | [Plugins Python](python-plugins.md) | Création, API de session et d’événements, isolation, tests et publication |
 | [Décompilation EVM](evm.md) | Entrées, hardforks, IR par étapes, ABI host C/LLVM, reconstruction Solidity et limites |
 | [Décompilation Solana SBF](sbf.md) | SBF v0-v4, LLVM IR, sorties C/Rust, vérification et limites connues |
-| [Vue d’ensemble mobile (English)](../mobile.md) | CLI expérimentale Android/iOS, entrées, sorties, rapports et limites |
+| [Vue d’ensemble mobile](mobile.md) | CLI expérimentale Android/iOS, entrées, sorties, rapports et limites |
 | [Reconstruction Java pour Android](android.md) | APK (y compris multidex), DEX, fichiers/répertoires smali → Java ; CLI, rapport JSON, dépannage, limites et vérification |
 | [Récupération des sources iOS](ios.md) | IPA/.app/Mach-O (arm64/x86_64) → C natif et sources Objective-C/Swift prises en charge ; dispositions, CLI/export, couverture JSON, limites et tests exécutés |
 | [Feuille de route](roadmap.md) | État : formats natifs, EVM et Solana SBF implémentés |

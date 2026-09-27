@@ -311,4 +311,4 @@ python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/nev
 
 Les tests des composants et de la CLI vérifient l’analyse, les contrats de sortie et le nettoyage après échec. Le test d’exécution interne utilise un JDK (`java` et `javac`) et D8 pour construire des exemples DEX/APK indépendants, puis compiler et exécuter le Java restauré. Ce sont des dépendances de test, pas des prérequis de restauration intégrée. Exécutez-le sur la compilation actuelle et examinez les résultats avant de déclarer un cas vérifié. Le test de compatibilité distinct nécessite en plus JADX et vérifie cet adaptateur. La réussite d’exemples ne démontre pas la restauration complète de toute application.
 
-Consultez la [présentation mobile](../mobile.md) pour le parcours iOS associé.
+Consultez la [présentation mobile](mobile.md) pour le parcours iOS associé.

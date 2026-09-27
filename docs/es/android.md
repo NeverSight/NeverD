@@ -311,4 +311,4 @@ python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/nev
 
 Las pruebas de componentes y CLI comprueban el análisis, los contratos de salida y la limpieza tras fallos. El ejecutor interno de comparación usa un JDK (`java` y `javac`) y D8 para crear ejemplos DEX/APK independientes y compilar y ejecutar el Java recuperado. Son dependencias de prueba, no requisitos de la recuperación integrada. Ejecútelo con la compilación actual y examine sus resultados antes de declarar verificado un caso. El ejecutor de compatibilidad separado necesita además JADX y comprueba ese adaptador. El éxito de ejemplos no demuestra la recuperación completa de cualquier aplicación.
 
-Consulte la [descripción general móvil](../mobile.md) para el flujo relacionado de iOS.
+Consulte la [descripción general móvil](mobile.md) para el flujo relacionado de iOS.

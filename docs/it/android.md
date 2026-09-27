@@ -308,4 +308,4 @@ python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/nev
 
 I test dei componenti e della CLI controllano parsing, contratti di output e pulizia dopo gli errori. Il runner interno di confronto usa un JDK (`java` e `javac`) e D8 per costruire esempi DEX/APK indipendenti, poi compilare ed eseguire il Java recuperato. Sono dipendenze di test, non requisiti per il recupero integrato. Eseguirlo sulla build attuale ed esaminarne i risultati prima di dichiarare verificato un caso. Il runner di compatibilità separato richiede anche JADX e verifica quell’adattatore. Il successo degli esempi non dimostra il recupero completo di qualsiasi applicazione.
 
-Vedere la [panoramica mobile](../mobile.md) per il flusso iOS correlato.
+Vedere la [panoramica mobile](mobile.md) per il flusso iOS correlato.

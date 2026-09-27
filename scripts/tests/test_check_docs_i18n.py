@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from scripts import check_docs_i18n as i18n
 
@@ -76,6 +77,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 Path("docs/android.md"),
                 Path("docs/ios.md"),
                 Path("docs/driver-emulation.md"),
+                Path("docs/mobile.md"),
             },
         )
 
@@ -599,6 +601,94 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                     self.assertIn(path.as_posix(), errors[0])
                     self.assertIn("must match docs/android.md", errors[0])
 
+    def test_mobile_overview_is_required_in_every_locale(self) -> None:
+        for locale in i18n.LOCALES:
+            path = Path(f"docs/{locale}/mobile.md")
+            with self.subTest(locale=locale):
+                view = i18n.RepositoryView(use_index=False)
+                exists = view.exists
+                errors: list[str] = []
+                with patch.object(view, "exists", side_effect=lambda p: p != path and exists(p)):
+                    i18n.validate_matrix(errors, view)
+                self.assertIn(
+                    f"missing localized documentation file: {path.as_posix()}", errors
+                )
+
+    def test_mobile_overview_translated_commands_match_english(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for locale in i18n.LOCALES:
+            path = Path(f"docs/{locale}/mobile.md")
+            original = view.read_text(path)
+            for command in (
+                "neverd mobile classes.dex -o recovered-dex",
+                "neverd mobile executable -o metadata --metadata-only",
+                "cmake --build build --target check-neverd-mobile-ios",
+            ):
+                with self.subTest(locale=locale, command=command):
+                    self.assertIn(command, original)
+                    errors: list[str] = []
+                    i18n.validate_mobile_examples(errors, _OverlayView({
+                        path: original.replace(command, "removed-command", 1),
+                    }), "mobile")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertIn(path.as_posix(), errors[0])
+                    self.assertIn("must match docs/mobile.md exactly", errors[0])
+
+    def test_mobile_overview_entries_cannot_fall_back_to_english(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for locale in i18n.LOCALES:
+            for name in ("README.md", "android.md", "ios.md"):
+                path = Path(f"docs/{locale}/{name}")
+                with self.subTest(path=path):
+                    original = view.read_text(path)
+                    self.assertIn("(mobile.md)", original)
+                    errors: list[str] = []
+                    i18n.validate_mobile_overview_links(errors, _OverlayView({
+                        path: original.replace("(mobile.md)", "(../mobile.md)"),
+                    }))
+                    self.assertEqual(errors, [
+                        f"{path.as_posix()}: must link to its local mobile.md overview",
+                    ])
+
+    def test_mobile_overview_inline_queries_cannot_drift_or_disappear(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for locale in i18n.LOCALES:
+            path = Path(f"docs/{locale}/mobile.md")
+            original = view.read_text(path)
+            for command in (
+                "neverd mobile app.apk --list-classes",
+                "neverd mobile app.apk --find-refs string --query 'example' --json",
+            ):
+                for replacement in ("removed-query-command", command + " --incorrect"):
+                    with self.subTest(locale=locale, command=command, replacement=replacement):
+                        self.assertIn(f"`{command}`", original)
+                        errors: list[str] = []
+                        i18n.validate_mobile_examples(errors, _OverlayView({
+                            path: original.replace(f"`{command}`", f"`{replacement}`", 1),
+                        }), "mobile")
+                        self.assertEqual(errors, [
+                            f"{path.as_posix()}: mobile inline CLI commands "
+                            "must match docs/mobile.md exactly",
+                        ])
+
+    def test_mobile_overview_language_selector_requires_all_locales(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for path in i18n.MOBILE_OVERVIEW_DOCS:
+            original = view.read_text(path)
+            for target_path in i18n.MOBILE_OVERVIEW_DOCS:
+                target = i18n.posixpath.relpath(
+                    target_path.as_posix(), path.parent.as_posix()
+                )
+                with self.subTest(path=path, target=target):
+                    self.assertIn(f"({target})", original)
+                    errors: list[str] = []
+                    i18n.validate_mobile_overview_links(errors, _OverlayView({
+                        path: original.replace(f"({target})", "(missing-overview.md)"),
+                    }))
+                    self.assertEqual(errors, [
+                        f"{path.as_posix()}: mobile language selector must link to {target!r}",
+                    ])
+
     def test_mobile_runtime_rejects_obsolete_interpreter_and_helper_contracts(self) -> None:
         view = i18n.RepositoryView(use_index=False)
         examples = (
@@ -606,6 +696,10 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             (Path("docs/ru/ios.md"), "\n`NEVERD_PYTHON`\n"),
             (Path("docs/mobile.md"), "\nDistribute the sibling `mobile/` directory.\n"),
             (Path("docs/zh-CN/mobile.md"), "\n```sh\nneverd mobile a.apk --python python3\n```\n"),
+            *(
+                (Path(f"docs/{locale}/mobile.md"), "\n`NEVERD_PYTHON`\n")
+                for locale in i18n.LOCALES
+            ),
             (Path("docs/es/project.md"), "\n`neverd mobile` requires Python 3.10+.\n"),
             (Path("docs/ja/android.md"), "\n| Python | Python 3.10+ | PATH |\n"),
             (Path("docs/es/README.md"), "\n| [Android](android.md) | Python 3.10+ |\n"),
@@ -626,7 +720,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     def test_ios_builtin_signature_component_is_required_in_prose(self) -> None:
         view = i18n.RepositoryView(use_index=False)
         paths = (
-            Path("docs/ios.md"), Path("docs/mobile.md"), Path("docs/zh-CN/mobile.md"),
+            Path("docs/ios.md"), *i18n.MOBILE_OVERVIEW_DOCS,
             *(Path(f"docs/{locale}/ios.md") for locale in i18n.LOCALES),
         )
         for path in paths:
@@ -643,7 +737,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
 
     def test_mobile_native_runtime_marker_must_be_in_localized_prose(self) -> None:
         view = i18n.RepositoryView(use_index=False)
-        for stem in ("android", "ios"):
+        for stem in ("android", "ios", "mobile"):
             for locale in i18n.LOCALES:
                 path = Path(f"docs/{locale}/{stem}.md")
                 text = view.read_text(path)

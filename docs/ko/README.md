@@ -21,7 +21,7 @@
 | [Python 플러그인](python-plugins.md) | 플러그인 작성, 세션·이벤트 API, 격리, 테스트 및 배포 |
 | [EVM 디컴파일](evm.md) | 입력, hardfork, 단계별 IR, C/LLVM host ABI, Solidity 복구 및 제한 |
 | [Solana SBF 디컴파일](sbf.md) | SBF v0-v4, LLVM IR, C/Rust 출력, 검증 및 알려진 제한 사항 |
-| [모바일 지원 개요 (English)](../mobile.md) | Android / iOS 입력, 소스 출력, CLI 흐름 및 제한 |
+| [모바일 지원 개요](mobile.md) | Android / iOS 입력, 소스 출력, CLI 흐름 및 제한 |
 | [Android Java 복구](android.md) | APK(multidex)·DEX·smali 파일/디렉터리 → Java. CLI 흐름, 실행 환경, 옵션, JSON 보고서, 오류 처리 및 검증 제한 |
 | [iOS 소스 복원](ios.md) | IPA·`.app`·Mach-O → 네이티브 C 및 지원되는 Objective-C / Swift 소스. 입력 선택, 메서드 본문과 배치, CLI/export, JSON 커버리지 보고서, 제한 및 실행 검증 |
 | [로드맵](roadmap.md) | 상태: native format, EVM, Solana SBF 구현 완료 |

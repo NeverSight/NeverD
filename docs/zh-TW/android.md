@@ -272,4 +272,4 @@ python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/nev
 
 元件與 CLI 測試檢查解析、輸出契約及失敗清理。內建執行對照腳本使用 JDK（`java`、`javac`）與 D8 建立獨立 DEX/APK 範例，再編譯執行還原的 Java；這些是測試相依套件，不是內建還原的執行需求。請針對目前建置執行並檢查結果，再宣稱某個範例已驗證。獨立相容性測試還需要 JADX，用於驗證外部轉接器。範例成功不代表任意應用程式都能完整還原。
 
-相關 iOS 流程請見 [行動應用程式概覽](../mobile.md)。
+相關 iOS 流程請見 [行動應用程式概覽](mobile.md)。

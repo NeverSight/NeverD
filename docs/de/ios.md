@@ -2,7 +2,7 @@
 
 # iOS: nativen Code und Quelltext rekonstruieren
 
-[← Dokumentationsindex](README.md) · [Mobile Übersicht](../mobile.md)
+[← Dokumentationsindex](README.md) · [Mobile Übersicht](mobile.md)
 
 `neverd mobile` verarbeitet IPA, `.app` und Mach-O. Es exportiert natives C, Laufzeitmetadaten sowie experimentellen Objective-C-Quelltext (`.m`) und Swift-Quelltext (`.swift`) für unterstützte native Funktionskörper. Veröffentlichte Ergebnisse können nicht rekonstruierte Methoden enthalten; prüfen Sie vor der Verwendung den Abdeckungsbericht. Mobile Container gehören zum CLI-Ablauf; das native C-SDK lädt die ausgewählte Mach-O-Datei separat.
 

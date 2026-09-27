@@ -2,7 +2,7 @@
 
 # iOS 네이티브 코드와 소스 복원
 
-[← 문서 색인](README.md) · [모바일 개요](../mobile.md)
+[← 문서 색인](README.md) · [모바일 개요](mobile.md)
 
 `neverd mobile`은 IPA, `.app`, Mach-O를 받아 네이티브 C, 런타임 메타데이터와 지원되는 네이티브 본문에서 실험적으로 복원한 Objective-C `.m`, Swift `.swift`를 출력합니다. 게시된 결과에도 복원하지 못한 메서드가 포함될 수 있으므로 사용 전에 범위 보고서를 확인하세요. 모바일 컨테이너는 CLI 기능이며 네이티브 C SDK는 선택한 Mach-O를 별도로 로드합니다.
 

@@ -1,3 +1,5 @@
+**Languages**: [English](mobile.md) | [简体中文](zh-CN/mobile.md) | [繁體中文](zh-TW/mobile.md) | [日本語](ja/mobile.md) | [한국어](ko/mobile.md) | [Français](fr/mobile.md) | [Deutsch](de/mobile.md) | [Español](es/mobile.md) | [Italiano](it/mobile.md) | [Русский](ru/mobile.md) | [العربية](ar/mobile.md)
+
 # Mobile application recovery
 
 [← Documentation index](README.md) · [Complete Android guide](android.md) · [Complete iOS guide](ios.md)
