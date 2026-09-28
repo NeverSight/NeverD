@@ -646,3 +646,77 @@ TEST(ControlDiscovery, MaskScanningAndRunsConsumeDiscoveryBudget) {
   EXPECT_EQ(Limited.Visited, 4u);
   EXPECT_TRUE(Limited.RegisterRanges.empty());
 }
+
+TEST(ControlDiscovery, WideConstantMasksChargeTheirEntirePayloadBeforeSlicing) {
+  constexpr uint32_t Width = 4096;
+  constexpr uint32_t Bit = 1025;
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext Ctx;
+    SymState State(Ctx, Order);
+    const auto Input = State.read(SymSpace::Register, 0, Width / 8);
+    auto Mask = llvm::APInt::getOneBitSet(Width, Bit);
+    Mask.setBit(3);
+    for (auto Value : {Ctx.mkAnd(Input, Ctx.mkConst(Mask)),
+                       Ctx.mkOr(Input, Ctx.mkConst(~Mask))}) {
+      // A nonzero offset keeps the full-width operation below the Extract.
+      const auto Slice = Ctx.mkExtract(Value, Bit, 1);
+      ASSERT_EQ(Ctx.op(Slice), SymOp::Extract);
+      ASSERT_EQ(Ctx.width(Ctx.operand(Slice, 0)), Width);
+      const auto Short = gatherControlDependencies(State, Slice, {}, 8);
+      EXPECT_EQ(Short.Status, ControlDiscoveryStatus::BudgetExceeded);
+      EXPECT_EQ(Short.Visited, 8u);
+      EXPECT_TRUE(Short.RegisterRanges.empty());
+      EXPECT_TRUE(Short.FrameSlots.empty());
+      const auto Full = gatherControlDependencies(State, Slice, {}, 1000);
+      ASSERT_EQ(Full.Status, ControlDiscoveryStatus::Complete);
+      EXPECT_GE(Full.Visited, Width / 64);
+      ASSERT_EQ(Full.RegisterRanges.size(), 1u);
+      EXPECT_EQ(Full.RegisterRanges[0].Offset, Order == llvm::endianness::little
+                                                   ? Bit / 8
+                                                   : Width / 8 - Bit / 8 - 1);
+      EXPECT_EQ(Full.RegisterRanges[0].Bytes, 1u);
+      EXPECT_EQ(Full.RegisterRanges[0].DemandedBits, 1u << (Bit % 8));
+    }
+  }
+}
+
+TEST(ControlDiscovery, WideMultiplyAndShiftConstantsChargeBeforeReading) {
+  constexpr uint32_t Width = 4096;
+  constexpr uint32_t Bit = 1025;
+  SymContext Ctx;
+  SymState State(Ctx);
+  const auto Input = State.read(SymSpace::Register, 0, Width / 8);
+  const auto Product =
+      Ctx.mkMul(Input, Ctx.mkConst(llvm::APInt::getOneBitSet(Width, Bit - 1)));
+  ASSERT_EQ(Ctx.op(Product), SymOp::Mul);
+  // Shift amount widths are independent of the shifted value's width.
+  const auto Amount = Ctx.mkConst(llvm::APInt(Width * 2, 1));
+  const auto Logical = Ctx.mkLShr(Input, Amount);
+  const auto Arithmetic = Ctx.mkAShr(Input, Amount);
+  ASSERT_EQ(Ctx.op(Logical), SymOp::LShr);
+  ASSERT_EQ(Ctx.op(Arithmetic), SymOp::AShr);
+  for (auto Value : {Product, Logical, Arithmetic}) {
+    const auto Slice = Ctx.mkExtract(Value, Bit, 1);
+    ASSERT_EQ(Ctx.op(Slice), SymOp::Extract);
+    const auto Short = gatherControlDependencies(State, Slice, {}, 8);
+    EXPECT_EQ(Short.Status, ControlDiscoveryStatus::BudgetExceeded);
+    EXPECT_EQ(Short.Visited, 8u);
+    EXPECT_TRUE(Short.RegisterRanges.empty());
+    const auto Full = gatherControlDependencies(State, Slice, {}, 1000);
+    ASSERT_EQ(Full.Status, ControlDiscoveryStatus::Complete);
+    const uint32_t ConstantWords = (Value == Product ? Width : Width * 2) / 64;
+    EXPECT_GE(Full.Visited, ConstantWords);
+    ASSERT_EQ(Full.RegisterRanges.size(), 1u);
+    const uint32_t SourceBit = Value == Product ? 1 : Bit + 1;
+    EXPECT_EQ(Full.RegisterRanges[0].Offset, SourceBit / 8);
+    EXPECT_EQ(Full.RegisterRanges[0].Bytes, 1u);
+    EXPECT_EQ(Full.RegisterRanges[0].DemandedBits, 1u << (SourceBit % 8));
+    const auto Exact =
+        gatherControlDependencies(State, Slice, {}, Full.Visited);
+    EXPECT_EQ(Exact.Status, ControlDiscoveryStatus::Complete);
+    const auto JustShort =
+        gatherControlDependencies(State, Slice, {}, Full.Visited - 1);
+    EXPECT_EQ(JustShort.Status, ControlDiscoveryStatus::BudgetExceeded);
+    EXPECT_TRUE(JustShort.RegisterRanges.empty());
+  }
+}

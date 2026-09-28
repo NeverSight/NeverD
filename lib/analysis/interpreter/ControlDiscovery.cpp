@@ -27,9 +27,12 @@ std::optional<uint64_t> frameRelativeOffset(const SymContext &Ctx, SymRef Value,
   if (Ctx.op(Value) != SymOp::Add || Ctx.operands(Value).size() != 2)
     return std::nullopt;
   for (unsigned I = 0; I < 2; ++I)
-    if (Ctx.operand(Value, I) == Root)
-      if (const auto Offset = Ctx.asConst(Ctx.operand(Value, 1 - I)))
-        return Offset->getZExtValue();
+    if (Ctx.operand(Value, I) == Root) {
+      const auto Offset = Ctx.operand(Value, 1 - I);
+      // This unbudgeted affine helper only reads a single 64-bit word.
+      if (Ctx.isConst(Offset) && Ctx.width(Offset) == 64)
+        return Ctx.constValue(Offset).getZExtValue();
+    }
   return std::nullopt;
 }
 
@@ -243,10 +246,12 @@ private:
         return;
       llvm::APInt Live = llvm::APInt::getAllOnes(Current.Bits);
       for (SymRef Operand : Operands)
-        if (const auto Constant = Ctx.asConst(Operand)) {
-          if (!charge(Words))
+        if (Ctx.isConst(Operand)) {
+          // constValue copies the entire payload, even for a one-bit slice.
+          if (!charge((uint64_t(Ctx.width(Operand)) + 63) / 64))
             return;
-          const auto Slice = Constant->extractBits(Current.Bits, Current.Low);
+          const auto Constant = Ctx.constValue(Operand);
+          const auto Slice = Constant.extractBits(Current.Bits, Current.Low);
           Live &= Ctx.op(Current.Value) == SymOp::And ? Slice : ~Slice;
         }
       while (!Live.isZero()) {
@@ -291,12 +296,13 @@ private:
         bool PowerOfTwo = true;
         llvm::SmallVector<SymRef, 4> Inputs;
         for (SymRef Operand : Operands)
-          if (const auto Constant = Ctx.asConst(Operand)) {
-            if (!charge((uint64_t(Width) + 63) / 64))
+          if (Ctx.isConst(Operand)) {
+            if (!charge((uint64_t(Ctx.width(Operand)) + 63) / 64))
               return;
+            const auto Constant = Ctx.constValue(Operand);
             Shift = std::min(uint64_t(Width),
-                             uint64_t(Shift) + Constant->countr_zero());
-            PowerOfTwo &= Constant->isPowerOf2();
+                             uint64_t(Shift) + Constant.countr_zero());
+            PowerOfTwo &= Constant.isPowerOf2();
           } else
             Inputs.push_back(Operand);
         if (Shift >= End)
@@ -325,19 +331,21 @@ private:
         unsupported();
         return;
       }
-      const auto Amount = Ctx.asConst(Operands[1]);
-      if (!Amount) {
+      if (!Ctx.isConst(Operands[1])) {
         fullOperands(Operands);
         return;
       }
+      if (!charge((uint64_t(Ctx.width(Operands[1])) + 63) / 64))
+        return;
+      const auto Amount = Ctx.constValue(Operands[1]);
       const uint32_t Width = Ctx.width(Current.Value);
       const bool Arithmetic = Ctx.op(Current.Value) == SymOp::AShr;
-      if (Amount->uge(Width)) {
+      if (Amount.uge(Width)) {
         if (Arithmetic)
           enqueue(Operands.front(), Width - 1, 1);
         return;
       }
-      const uint32_t Shift = Amount->getZExtValue();
+      const uint32_t Shift = Amount.getZExtValue();
       if (Ctx.op(Current.Value) == SymOp::Shl) {
         leftShift(Operands.front(), Current, Shift);
         return;
