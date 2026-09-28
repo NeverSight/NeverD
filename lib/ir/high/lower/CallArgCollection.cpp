@@ -405,33 +405,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
       }
     }
   }
-  // Else-edge `mov r9d, 0` sunk into the join must not beat the r9 PHI
-  // (`p ? p->field : 0` for a lookup). A same-block copy of
-  // the then-arm incoming is the same leftover.
-  for (int K = 0; K < static_cast<int>(ParamRegs.size()) && K < MaxArgs; ++K) {
-    if (!Found[K])
-      continue;
-    for (const auto &Phi : CurBlock.Phis) {
-      if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size == 0 ||
-          Phi.Output.RegOff != ParamRegs[K])
-        continue;
-      bool Replace = Found[K]->Kind == ExprKind::Const;
-      if (!Replace) {
-        for (const auto &A : Phi.Args) {
-          if (A.second.isConst())
-            continue;
-          ExprPtr Inc = medvarToExpr(A.second);
-          if (Inc && Found[K]->structuralEq(*Inc)) {
-            Replace = true;
-            break;
-          }
-        }
-      }
-      if (Replace)
-        Found[K] = medvarToExpr(Phi.Output);
-      break;
-    }
-  }
+  // A write in this block follows its entry PHIs and reaches the call.
+  // Recover an entry PHI only for slots without an in-block write below.
 
   std::vector<call_args_detail::CallArgScan::OpWindow> ExtraWindows;
   auto blockById = [&](int Id) -> const MedBlock * {

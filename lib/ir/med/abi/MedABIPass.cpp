@@ -702,31 +702,9 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           if (IsCall)
             break;
         }
-      for (int K = 0; RegArgsApply && K < static_cast<int>(IntParamRegs.size()) &&
-                      K < MaxArgs;
-           ++K) {
-        if (!FoundMask[K])
-          continue;
-        if (const PhiNode *Phi =
-                selectAuthoritativeArgPhi(Func, Blk, TRI, K, IsWin64)) {
-          // Else-edge `mov r9d, 0` sunk into the join must not beat the r9
-          // PHI. A same-block copy of a then-arm incoming (`p->field`)
-          // is the same leftover: the lookup key is the join, not one arm.
-          // A value this block itself computes before the call still reaches
-          // it, even when a loop back edge also carries it into the PHI.
-          const bool DefinedHere =
-              !Found[K].isConst() &&
-              std::any_of(Blk.Ops.begin(), Blk.Ops.begin() + OI,
-                          [&](const MedOp &Def) {
-                            return Def.Output == Found[K];
-                          });
-          if (!DefinedHere &&
-              (Found[K].isConst() || phiCarriesIncoming(*Phi, Found[K]))) {
-            Found[K] = Phi->Output;
-            FoundMask[K] = true;
-          }
-        }
-      }
+      // The nearest in-block register write executes after the block PHIs and
+      // reaches this call even when its source is a constant.  Only slots with
+      // no such write may fall back to an entry PHI below.
 
       // A BLR target is not an ABI argument.  When the function pointer came
       // from an incoming integer parameter (commonly x0 in a mixed

@@ -768,7 +768,7 @@ TEST(MedABIPass, Win64VTableIndirectRecoversThisAndSret) {
   EXPECT_EQ(TwoArgCalls, 1u);
 }
 
-TEST(MedABIPass, Win64JoinPhiR9IsFourthArg) {
+TEST(MedABIPass, Win64InBlockConstantOverridesJoinPhi) {
   constexpr va_t Callee = 0x140002000;
   const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
   const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
@@ -819,11 +819,11 @@ TEST(MedABIPass, Win64JoinPhiR9IsFourthArg) {
 
   ASSERT_EQ(Func.CallInfos.size(), 1u);
   ASSERT_EQ(Func.CallInfos[0].Args.size(), 4u) << Func.CallInfos[0].Args.size();
-  EXPECT_EQ(Func.CallInfos[0].Args[3].Id, R9Join.Id);
-  EXPECT_EQ(Func.CallInfos[0].Args[3].SSAVer, R9Join.SSAVer);
+  EXPECT_TRUE(Func.CallInfos[0].Args[3].isConst());
+  EXPECT_EQ(Func.CallInfos[0].Args[3].ConstVal, 0u);
 }
 
-TEST(MedABIPass, Win64JoinPhiR9IncomingBeatsInBlockCopy) {
+TEST(MedABIPass, Win64JoinPhiFlowsThroughInBlockCopy) {
   constexpr va_t Callee = 0x140002000;
   const MedVar RCX1 = reg(10, 1, 8, x86reg::RCX, Arch::X64);
   const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
@@ -853,7 +853,7 @@ TEST(MedABIPass, Win64JoinPhiR9IncomingBeatsInBlockCopy) {
   Func.Blocks[3].Preds = {1, 2};
   Func.Blocks[3].Phis.push_back({R9Join, {{1, R9Then}, {2, R9Else}}});
   Func.Blocks[3].Ops.push_back(
-      unary(NdOp::COPY, reg(13, 4, 4, x86reg::R9, Arch::X64), R9Then));
+      unary(NdOp::COPY, reg(13, 4, 4, x86reg::R9, Arch::X64), R9Join));
   Func.Blocks[3].Ops.push_back(unary(NdOp::COPY, R81, MedVar::makeConst(1, 4)));
   Func.Blocks[3].Ops.push_back(
       unary(NdOp::COPY, RDX1, MedVar::makeConst(0x140005000, 8)));
@@ -2478,6 +2478,56 @@ TEST(MedABIPass, DirectCallPhiAliasSelectionIsSharedAcrossRegisterAbis) {
     ASSERT_EQ(Func.CallInfos[0].Args.size(), 2u);
     EXPECT_EQ(Func.CallInfos[0].Args[1], WidePhi);
     EXPECT_EQ(Func.CallInfos[0].Args[1].Size, TRI.PointerSize);
+  }
+}
+
+TEST(MedABIPass, InBlockConstantArgumentOverridesLoopPhi) {
+  constexpr va_t Callee = 0x2000;
+  for (Arch TheArch : {Arch::ARM, Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(TheArch));
+    const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+    ASSERT_GE(TRI.IntParamRegs.size(), 3u);
+
+    MedFunc Func;
+    Func.Entry = 0x1000;
+    Func.Name = "constant_call_argument_in_loop";
+    Func.Blocks.resize(2);
+    Func.Blocks[0].Id = 0;
+    Func.Blocks[0].Succs = {1};
+
+    MedBlock &Loop = Func.Blocks[1];
+    Loop.Id = 1;
+    Loop.Preds = {0, 1};
+    Loop.Succs = {1};
+    const uint64_t Arg2 = TRI.IntParamRegs[2];
+    Loop.Phis.push_back({reg(20, 2, TRI.PointerSize, Arg2, TheArch),
+                         {{0, reg(20, 0, TRI.PointerSize, Arg2, TheArch)},
+                          {1, reg(20, 1, TRI.PointerSize, Arg2, TheArch)}}});
+    for (int K = 0; K < 3; ++K) {
+      Loop.Ops.push_back(
+          unary(NdOp::COPY,
+                reg(100 + K, 0, TRI.PointerSize, TRI.IntParamRegs[K], TheArch),
+                MedVar::makeConst(K == 2   ? 160
+                                  : K == 0 ? 1
+                                           : 0,
+                                  TRI.PointerSize)));
+    }
+
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Output = reg(300, 0, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+    Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+    Loop.Ops.push_back(Call);
+
+    const std::map<va_t, std::string> Names{{Callee, "known_callee"}};
+    std::map<va_t, int> RegArity{{Callee, 3}};
+    std::map<va_t, int> TotalArity{{Callee, 3}};
+    recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
+
+    ASSERT_EQ(Func.CallInfos.size(), 1u);
+    ASSERT_EQ(Func.CallInfos[0].Args.size(), 3u);
+    EXPECT_TRUE(Func.CallInfos[0].Args[2].isConst());
+    EXPECT_EQ(Func.CallInfos[0].Args[2].ConstVal, 160u);
   }
 }
 

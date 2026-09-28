@@ -126,11 +126,6 @@ const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
                                          const TargetRegInfo &TRI, int ArgIdx,
                                          bool IsWin64);
 
-/// True when \p V is a non-const incoming of \p Phi.  A same-block copy of a
-/// then-arm field load (`mov r9d, edi` of `p->field`) must not beat the
-/// join PHI that also carries the else `0`.
-bool phiCarriesIncoming(const PhiNode &Phi, const MedVar &V);
-
 /// Value reaching argument register \p ArgIdx at the call in block \p BlockId,
 /// found by walking the CFG backwards into predecessor blocks (nearest write,
 /// then a block PHI, then -- when \p AllowUnknownLiveIn -- an incoming

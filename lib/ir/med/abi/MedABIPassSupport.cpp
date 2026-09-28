@@ -942,15 +942,6 @@ const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
   return Best;
 }
 
-bool phiCarriesIncoming(const PhiNode &Phi, const MedVar &V) {
-  if (V.isConst())
-    return false;
-  for (const auto &A : Phi.Args)
-    if (!A.second.isConst() && A.second == V)
-      return true;
-  return false;
-}
-
 // Value reaching argument register \p ArgIdx at the call in (\p BlockId,
 // \p OpIdx), found by walking the CFG backwards into predecessor blocks: the
 // nearest write to that argument register, then a block PHI for it.  Returns
