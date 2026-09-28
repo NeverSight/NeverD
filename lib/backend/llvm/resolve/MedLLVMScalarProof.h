@@ -13,6 +13,7 @@
 #include "llvm/ADT/APInt.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 
 namespace neverd::detail {
@@ -45,37 +46,65 @@ bool provesUnsignedMagicRemainder(const MedVar &Value, LookupDefFn &&LookupDef,
       return A.StackOff == B.StackOff;
     return true;
   };
-  MedVar Quotient;
-  uint64_t Divisor = 0;
-  if (Scale->Opcode == NdOp::INT_MULT) {
-    for (unsigned I = 0; I < 2; ++I)
-      if (auto C = TraceConstant(Scale->Inputs[I]);
-          C && *C >= 2 && *C <= limits::kMaxJumpTableEntries) {
-        Quotient = Scale->Inputs[I ^ 1u];
-        Divisor = *C;
-        break;
-      }
-  } else if (Scale->Opcode == NdOp::INT_ADD) {
-    for (unsigned I = 0; I < 2; ++I) {
-      const MedVar Candidate = Scale->Inputs[I];
-      const MedOp *Shift = LookupDef(Scale->Inputs[I ^ 1u]);
-      if (!Shift || Shift->Opcode != NdOp::INT_LEFT || Shift->NumInputs != 2 ||
-          Shift->Output.Size != 4 || Shift->Inputs[0].Size != 4 ||
-          Shift->Inputs[1].Size != 4 || !sameValue(Shift->Inputs[0], Candidate))
-        continue;
-      auto Amount = TraceConstant(Shift->Inputs[1]);
-      if (!Amount || *Amount >= 31)
-        continue;
-      const uint64_t D = uint64_t{1} + (uint64_t{1} << *Amount);
-      if (D < 2 || D > limits::kMaxJumpTableEntries)
-        continue;
-      Quotient = Candidate;
-      Divisor = D;
-      break;
+  struct ScaledQuotient {
+    MedVar Value;
+    uint64_t Factor;
+  };
+  // Compilers can factor D*q as (q + (q << 1)) << 1 for D=6. Recover
+  // the exact coefficient from a small same-width DAG; every leaf must be
+  // the same quotient, with no extra variable or relocatable constant.
+  std::function<std::optional<ScaledQuotient>(const MedVar &, unsigned)>
+      scaleFactor = [&](const MedVar &V,
+                        unsigned Depth) -> std::optional<ScaledQuotient> {
+    if (V.Size != 4 || Depth > 8)
+      return std::nullopt;
+    const MedOp *Def = LookupDef(V);
+    if (!Def || Def->Output.Size != 4)
+      return std::nullopt;
+    if (Def->Opcode == NdOp::INT_RIGHT && Def->NumInputs == 2)
+      return ScaledQuotient{V, 1};
+    if (Def->NumInputs != 2 || Def->Inputs[0].Size != 4 ||
+        Def->Inputs[1].Size != 4)
+      return std::nullopt;
+    if (Def->Opcode == NdOp::INT_LEFT) {
+      auto Amount = TraceConstant(Def->Inputs[1]);
+      if (!Amount || *Amount >= 32)
+        return std::nullopt;
+      auto Input = scaleFactor(Def->Inputs[0], Depth + 1);
+      if (!Input || Input->Factor > (limits::kMaxJumpTableEntries >> *Amount))
+        return std::nullopt;
+      Input->Factor <<= *Amount;
+      return Input;
     }
-  }
-  if (!Divisor || Quotient.Size != 4)
+    if (Def->Opcode == NdOp::INT_MULT) {
+      for (unsigned I = 0; I < 2; ++I) {
+        auto Factor = TraceConstant(Def->Inputs[I]);
+        if (!Factor || *Factor == 0 || *Factor > limits::kMaxJumpTableEntries)
+          continue;
+        auto Input = scaleFactor(Def->Inputs[I ^ 1u], Depth + 1);
+        if (Input && Input->Factor <= limits::kMaxJumpTableEntries / *Factor) {
+          Input->Factor *= *Factor;
+          return Input;
+        }
+      }
+      return std::nullopt;
+    }
+    if (Def->Opcode == NdOp::INT_ADD) {
+      auto Left = scaleFactor(Def->Inputs[0], Depth + 1);
+      auto Right = scaleFactor(Def->Inputs[1], Depth + 1);
+      if (!Left || !Right || !sameValue(Left->Value, Right->Value) ||
+          Right->Factor > limits::kMaxJumpTableEntries - Left->Factor)
+        return std::nullopt;
+      Left->Factor += Right->Factor;
+      return Left;
+    }
+    return std::nullopt;
+  };
+  auto Scaled = scaleFactor(Subtract->Inputs[1], 0);
+  if (!Scaled || Scaled->Factor < 2)
     return false;
+  const MedVar Quotient = Scaled->Value;
+  const uint64_t Divisor = Scaled->Factor;
   const MedOp *Shift = LookupDef(Quotient);
   if (!Shift || Shift->Opcode != NdOp::INT_RIGHT || Shift->NumInputs != 2 ||
       Shift->Output.Size != 4 || Shift->Inputs[0].Size != 4 ||

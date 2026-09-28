@@ -2727,10 +2727,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
               return collectFrameReloadSources(Load, Sources);
             });
       };
-      auto scalarLanes = [&](const std::set<uint64_t> *KnownBases,
+      auto scalarLanes = [&](const MedOp *CandidateLoad,
+                             const std::set<uint64_t> *KnownBases,
                              const std::vector<MedVar> *KnownTerms) {
         return analyzeIndexedPointerLane(
-            Def->Inputs[0], Img, PointerSize,
+            CandidateLoad->Inputs[0], Img, PointerSize,
             [&](const MedVar &Value) { return lookupDef(Value); },
             traceLaneConst,
             [&](const MedVar &Value, uint64_t &Base, bool &HaveBase,
@@ -2752,12 +2753,14 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
             },
             KnownBases, KnownTerms, false,
             loadIndexConstraint(
-                CurMedFunc, Def, [&](const MedVar &V) { return lookupDef(V); },
+                CurMedFunc, CandidateLoad,
+                [&](const MedVar &V) { return lookupDef(V); },
                 [&](const MedVar &V) {
                   return constantIsStableAddressOffset(V);
                 }));
       };
-      IndexedPointerLaneSummary ScalarLane = scalarLanes(nullptr, nullptr);
+      IndexedPointerLaneSummary ScalarLane = scalarLanes(Def, nullptr, nullptr);
+      std::vector<MedVar> PointerIndexTerms;
       if (!ScalarLane.Complete) {
         // A pointer table may select one of several immutable integer arrays.
         // Audit every authenticated relocation target using the same index
@@ -2768,8 +2771,50 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
           for (unsigned Side = 0; Side < 2 && !ScalarLane.Complete; ++Side) {
             std::set<DataAddressIdentity> Identities;
             if (!recoverAbsoluteDataPointerLoadIdentities(Address->Inputs[Side],
-                                                          Identities) ||
-                Identities.empty())
+                                                          Identities)) {
+              // A scalar loop can select a pointer record whose index in turn
+              // depends on the loaded integer. Classify the pointer slots
+              // algebraically first, then audit their index in this same DFS
+              // after establishing that every target is immutable scalar data.
+              // This breaks only the proof cycle; no pointer role is inferred
+              // from a mixed or partly reachable record lane.
+              const MedOp *PointerLoad = lookupDef(Address->Inputs[Side]);
+              if (!PointerLoad || PointerLoad->Opcode != NdOp::LOAD ||
+                  PointerLoad->NumInputs < 1 ||
+                  PointerLoad->Output.Size != PointerSize ||
+                  PointerLoad->MemoryAddressSpace !=
+                      NdMemoryAddressSpace::Default)
+                continue;
+              IndexedPointerLaneSummary PointerLane =
+                  scalarLanes(PointerLoad, nullptr, nullptr);
+              if (!PointerLane.Complete || PointerLane.Slots.empty())
+                continue;
+              bool DataOnly = true;
+              for (uint64_t Slot : PointerLane.Slots) {
+                if (!Img->DataPtrRelocSlots.count(Slot) ||
+                    Img->CodePtrRelocSlots.count(Slot) ||
+                    EffectiveImportStorageSlots.count(Slot) ||
+                    Img->hasRuntimeCallablePointerSlotAt(Slot)) {
+                  DataOnly = false;
+                  break;
+                }
+                const uint8_t *Bytes = Img->readVA(Slot, PointerSize);
+                auto Owner = Img->DataPtrRelocTargetOwners.find(Slot);
+                if (!Bytes || Owner == Img->DataPtrRelocTargetOwners.end()) {
+                  DataOnly = false;
+                  break;
+                }
+                uint64_t Target = 0;
+                std::memcpy(&Target, Bytes, PointerSize);
+                if (PointerSize < 8)
+                  Target &= (uint64_t(1) << (PointerSize * 8)) - 1;
+                Identities.insert({Target, Owner->second});
+              }
+              if (!DataOnly)
+                continue;
+              PointerIndexTerms = std::move(PointerLane.IndexTerms);
+            }
+            if (Identities.empty())
               continue;
             std::set<uint64_t> Bases;
             bool OwnersValid = true;
@@ -2785,7 +2830,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
             if (!OwnersValid || Bases.size() != Identities.size())
               continue;
             std::vector<MedVar> Terms{Address->Inputs[Side ^ 1u]};
-            ScalarLane = scalarLanes(&Bases, &Terms);
+            ScalarLane = scalarLanes(Def, &Bases, &Terms);
           }
       }
       if (ScalarLane.Complete) {
@@ -2804,8 +2849,14 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
           const Key LoadKey = keyOf(Start);
           const bool Inserted =
               ActiveImmutableScalarLoads.insert(LoadKey).second;
-          for (const MedVar &Term : ScalarLane.IndexTerms)
+          for (const MedVar &Term : PointerIndexTerms)
             if (!prove(Term, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis)) {
+              ScalarOnly = false;
+              break;
+            }
+          for (const MedVar &Term : ScalarLane.IndexTerms)
+            if (ScalarOnly &&
+                !prove(Term, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis)) {
               ScalarOnly = false;
               break;
             }

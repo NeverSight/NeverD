@@ -9627,6 +9627,22 @@ TEST(JTE_ScalarProof, UnsignedMagicRemainderRequiresExactQuotient) {
   Ops[4].Inputs[1] = scalar(1, 4);
   Ops[5].Inputs[1] = scalar(1, 4);
 
+  // The same quotient can be multiplied by six through a factored LEA-style
+  // DAG rather than one multiply: (q + 2*q) << 1.
+  Ops[4].Inputs[1] = scalar(2, 4);
+  add(NdOp::INT_LEFT, temp(10, 4), {temp(8, 4), scalar(1, 4)});
+  Ops[7].Inputs[1] = temp(10, 4);
+  EXPECT_TRUE(proves());
+  Ops[5].Inputs[1] = scalar(2, 4);
+  EXPECT_FALSE(proves()) << "a wrong factored divisor cannot prove a bound";
+  Ops[5].Inputs[1] = scalar(1, 4);
+  Ops[6].Inputs[0] = temp(11, 4);
+  EXPECT_FALSE(proves()) << "each factor must use the same quotient";
+  Ops[6].Inputs[0] = temp(6, 4);
+  Ops[7].Inputs[1] = temp(8, 4);
+  Ops.pop_back();
+  Ops[4].Inputs[1] = scalar(1, 4);
+
   Ops[1].Inputs[0] = scalar(0xaaaaaaac, 4);
   EXPECT_FALSE(proves()) << "a nearby multiplier is not a quotient proof";
   Ops[1].Inputs[0] = scalar(0xaaaaaaab, 4);
@@ -9638,6 +9654,53 @@ TEST(JTE_ScalarProof, UnsignedMagicRemainderRequiresExactQuotient) {
   Ops[3].Inputs[1] = scalar(4, 4);
   Ops[6].Inputs[1] = temp(10, 4);
   EXPECT_FALSE(proves()) << "both quotient factors must be identical";
+}
+
+TEST_F(JTE_ARM32, ScalarRecordLaneRejectsIncompletePointerEvidence) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target Clang unavailable";
+  const fs::path Source = tmpFile("scalar_record.c");
+  const fs::path Object = tmpFile("scalar_record.o");
+  {
+    std::ofstream File(Source);
+    File << R"(
+struct record { const int *p; unsigned k; };
+static const int a[6] = {3, 9, 27, 81, 243, 729};
+static const int b[6] = {5, 25, 125, 625, 3125, 15625};
+static const struct record records[2] = {{a, 7u}, {b, 11u}};
+int scalar_record(int input) {
+  unsigned value = (unsigned)input;
+  for (int i = 0; i < 90; ++i) {
+    const struct record *r = &records[(value >> 1) & 1u];
+    value = value * 131u + (unsigned)r->p[value % 6u] + r->k * (unsigned)i;
+  }
+  return (int)value;
+}
+)";
+  }
+  auto Compiled =
+      exec(NEVERD_TEST_CLANG, {"-target", "armv7-linux-gnueabi", "-O2", "-c",
+                               Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+  auto ImageOrErr = neverd::loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  auto &Image = *ImageOrErr;
+  ASSERT_EQ(Image.DataPtrRelocSlots.size(), 2u);
+  auto Valid = runPipelineWithEvidenceBudget(Image, 256);
+  ASSERT_TRUE(Valid.Result.Success) << Valid.Result.Error;
+
+  const uint64_t MissingSlot = *Image.DataPtrRelocSlots.begin();
+  Image.DataPtrRelocSlots.erase(MissingSlot);
+  auto Incomplete = runPipelineWithEvidenceBudget(Image, 256);
+  EXPECT_FALSE(Incomplete.Result.Success)
+      << "a reachable record without a data-pointer relocation is unproved";
+  Image.DataPtrRelocSlots.insert(MissingSlot);
+
+  Image.CodePtrRelocSlots.insert(MissingSlot);
+  auto Conflicting = runPipelineWithEvidenceBudget(Image, 256);
+  EXPECT_FALSE(Conflicting.Result.Success)
+      << "a conflicting code/data slot cannot certify scalar array data";
 }
 
 TEST_F(JTE_ARM32,
