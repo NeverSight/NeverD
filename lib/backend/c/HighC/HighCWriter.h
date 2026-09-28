@@ -472,6 +472,7 @@ public:
   bool NeedsDarwinBlocks = false;
   bool NeedsDarwinStackGuard = false;
   bool NeedsDarwinStackFailure = false;
+  bool NeedsDarwinAffineTransformBridge = false;
   bool NeedsSwiftStringBridge = false;
   std::set<std::string> SwiftBooleanProjectionImports;
   bool NeedsSwiftStringFromNSString = false;

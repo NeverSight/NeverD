@@ -161,6 +161,21 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     return Call + "))";
   }
   const auto &Signature = Hint.Signature;
+  if (Hint.CallKind == Kind::DarwinRuntimeCall &&
+      (Hint.ByteCount || Hint.TargetName == "CGContextConcatCTM")) {
+    SourceFunctionTypeHint Expected;
+    Expected.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+    Expected.ReturnType = NdType::makeVoid();
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Expected.Parameters = {{"context", Pointer}, {"transform", Pointer}};
+    std::string Diagnostic;
+    if (Opts.TheArch != Arch::AArch64 || Hint.ByteCount != 48 ||
+        Hint.TargetName != "CGContextConcatCTM" || Hint.WeakImport ||
+        Hint.DoesNotReturn || Hint.Format ||
+        !assignDarwinScalarSourceABI(Expected, Opts.TheArch, Diagnostic) ||
+        !equalSourceABIs(Signature, Expected))
+      return bad("invalid indirect CGAffineTransform source binding");
+  }
   if (Hint.NilTerminated &&
       (Hint.CallKind != Kind::ObjCMessage || Hint.Format || !Hint.Receiver ||
        Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||

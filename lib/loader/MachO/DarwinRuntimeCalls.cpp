@@ -83,6 +83,35 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   if (!Name.consume_front("_"))
     return std::nullopt;
 
+  // AAPCS64 passes a six-double CGAffineTransform by an indirect pointer.
+  // Keep that physical carrier in the source call hint; the C emitter copies
+  // the 48 bytes into a genuine by-value argument before calling CoreGraphics.
+  // Other record imports continue through the ordinary declaration catalog.
+  if (Name == "CGContextConcatCTM") {
+    const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+    if (Image.Arch != Arch::AArch64 || Bind == Image.DyldBindSlots.end() ||
+        !darwinExportModuleMatches(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics|"
+            "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/"
+            "CoreGraphics",
+            Bind->second.Module))
+      return std::nullopt;
+    SourceCallTypeHint Result;
+    Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+    Result.TargetAddress = ImportSlot;
+    Result.TargetName = Name.str();
+    Result.ByteCount = 48;
+    auto &Signature = Result.Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+    Signature.ReturnType = NdType::makeVoid();
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Signature.Parameters = {{"context", Pointer}, {"transform", Pointer}};
+    std::string Diagnostic;
+    if (!assignDarwinScalarSourceABI(Signature, Image.Arch, Diagnostic))
+      return std::nullopt;
+    return Result;
+  }
+
   // SCNetworkReachability.h declares these fixed C calls. Keep the
   // callback's complete input shape even when a caller passes null: other
   // callers can install a real callback and context through the same import.

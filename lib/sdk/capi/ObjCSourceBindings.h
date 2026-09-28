@@ -223,7 +223,8 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
          !Binding.SelectorForwardingUse &&
          !Binding.SelectorArgumentStorageUse &&
-         !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
+         !Binding.ObjCIndirectResultStorage &&
+         Binding.ByteCount == Expected.ByteCount &&
          !Binding.SwiftTypeMetadata && !Binding.NilTerminated &&
          !Expected.NilTerminated &&
          bool(Binding.Format) == bool(Expected.Format) &&

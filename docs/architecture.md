@@ -569,7 +569,12 @@ x86_64 indirect results remain unsupported.
 Darwin ARM64 fixed C calls also return naturally laid-out records of exactly
 six doubles through x8. These are not homogeneous floating aggregates under
 the four-member register limit. By-value six-double parameters remain
-unsupported until their indirect argument storage is modeled.
+unsupported in general. The exact arm64 CoreGraphics `CGContextConcatCTM`
+import is an exception: its second physical argument is a pointer to 48 bytes,
+and a generated helper copies those bytes into a by-value C
+`CGAffineTransform` before calling the original function. The binding requires
+the exact strong provider and is revalidated; it does not infer other indirect
+record parameters.
 Padding, packed fields, mixed floating/integer classes and incomplete components
 remain explicitly unsupported. Source record carriers never authorize binary
 rewriting.

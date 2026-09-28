@@ -720,6 +720,9 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                 SourceCallTypeHint::Kind::RuntimeClassReferenceAddress ||
             Hint.CallKind ==
                 SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress;
+        if (DeclaredC && Hint.TargetName == "CGContextConcatCTM" &&
+            Hint.ByteCount == 48)
+          NeedsDarwinAffineTransformBridge = true;
         if (Hint.CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall &&
             !DeclaredC) {
           if (Hint.TargetName == "__stack_chk_fail")
@@ -1199,6 +1202,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     Headers.insert("os/lock.h");
   if (NeedsDarwinBlocks)
     Headers.insert("Block.h");
+  if (NeedsDarwinAffineTransformBridge)
+    Headers.insert("string.h");
 
   if (HasCIntrinsics)
     for (const char *Hdr : getArchIntrinsicHeaders(Opts.TheArch))
@@ -1438,6 +1443,33 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         !ConflictingSourceNativeSignatures.count(Name)) {
       const auto &Declaration = SourceSignature->second;
       const auto &Signature = *Declaration.Signature;
+      if (NeedsDarwinAffineTransformBridge &&
+          Name == "neverd_darwin_CGContextConcatCTM") {
+        SourceFunctionTypeHint Expected;
+        Expected.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+        Expected.ReturnType = NdType::makeVoid();
+        const auto Pointer = NdType::makePtr(NdType::makeVoid());
+        Expected.Parameters = {{"context", Pointer}, {"transform", Pointer}};
+        std::string Diagnostic;
+        if (Declaration.WeakImport || Declaration.VariadicFixedCount ||
+            !assignDarwinScalarSourceABI(Expected, Opts.TheArch, Diagnostic) ||
+            !equalSourceABIs(Signature, Expected))
+          throw std::invalid_argument(
+              "Invalid indirect CGAffineTransform source declaration");
+        OS << "typedef struct { double a, b, c, d, tx, ty; } "
+              "neverd_CGAffineTransform;\n"
+              "extern void neverd_CGContextConcatCTM_original(void *, "
+              "neverd_CGAffineTransform) "
+              "__asm__(\"_CGContextConcatCTM\");\n"
+              "static inline void "
+           << Identifier
+           << "(void *context, const void *transform) {\n"
+              "  neverd_CGAffineTransform value;\n"
+              "  memcpy(&value, transform, sizeof(value));\n"
+              "  neverd_CGContextConcatCTM_original(context, value);\n"
+              "}\n";
+        continue;
+      }
       std::string Declarator = Identifier + "(";
       const auto Count =
           Declaration.VariadicFixedCount.value_or(Signature.Parameters.size());

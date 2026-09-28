@@ -583,4 +583,105 @@ TEST(DarwinUIKitSourceCalls,
       "!= 2 || mismatch; }\n";
   executeSource(Source);
 }
+TEST(DarwinIndirectRecordCalls,
+     ConcatCTMBridgesOnlyTheExactCoreGraphicsArm64Import) {
+  constexpr auto CoreGraphics =
+      "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
+  auto I = image("_CGContextConcatCTM");
+  I.DynInfo.NeededLibs = {CoreGraphics};
+  I.DyldBindSlots.at(0x2180).Module = CoreGraphics;
+  const auto Hint = darwinRuntimeSourceCallHint(I, 0x2180);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::DarwinRuntimeCall);
+  EXPECT_EQ(Hint->ByteCount, 48U);
+  EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(Hint->Signature.Parameters.size(), 2U);
+  EXPECT_EQ(Hint->Signature.Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Hint->Signature.Parameters[1].Location.RegisterOffset, a64reg::X1);
+  EXPECT_EQ(Hint->Signature.Parameters[1].Type->Kind, NdTypeKind::Ptr);
+
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  auto Parameter = [&](unsigned Id) {
+    MedVar V;
+    V.Kind = MedVar::Param;
+    V.Id = Id;
+    V.Size = 8;
+    V.TheArch = Arch::AArch64;
+    return HighExpr::makeVar(V, Pointer);
+  };
+  auto Call = HighExpr::makeCall("CGContextConcatCTM", 0x1100,
+                                 {Parameter(0), Parameter(1)});
+  Call->Type = NdType::makeVoid();
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Call, I, {}));
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    auto Wrong = std::make_shared<SourceCallTypeHint>(*Hint);
+    if (Mutation == 0)
+      Wrong->ByteCount = 47;
+    else if (Mutation == 1)
+      Wrong->Signature.Parameters[1].Type = NdType::makeInt(8);
+    else if (Mutation == 2)
+      Wrong->Signature.ReturnType = Pointer;
+    else
+      Wrong->Signature.Parameters[1].Location.RegisterOffset = a64reg::X2;
+    auto Changed = *Call;
+    Changed.SourceCallHint = Wrong;
+    EXPECT_FALSE(sdk::objcSourceCallBound(Changed, I, {})) << Mutation;
+  }
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    auto Changed = I;
+    if (Mutation == 0)
+      Changed.Arch = Arch::X64;
+    else if (Mutation == 1)
+      Changed.DyldBindSlots.at(0x2180).Module =
+          "/System/Library/Frameworks/UIKit.framework/UIKit";
+    else if (Mutation == 2)
+      Changed.DyldBindSlots.at(0x2180).WeakImport = true;
+    else if (Mutation == 3)
+      Changed.DyldBindSlots.at(0x2180).Addend = 8;
+    else
+      Changed.IsRelocatable = true;
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(Changed, 0x2180)) << Mutation;
+  }
+
+  HighFunc F;
+  F.Entry = 0x1200;
+  F.Name = "concat_ctm";
+  F.Params = {{"context", Pointer}, {"transform", Pointer}};
+  F.ReturnType = NdType::makeVoid();
+  F.SourceTypeHint = Hint->Signature;
+  HighStmt Effect;
+  Effect.Kind = StmtKind::Call;
+  Effect.CallExpr = Call;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  F.Body = {Effect, Return};
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  ASSERT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+  ASSERT_NE(Source.find("memcpy(&value, transform, sizeof(value))"),
+            std::string::npos)
+      << Source;
+  Source += R"(
+static unsigned observed_calls;
+static int mismatch;
+void coregraphics_probe(void *, neverd_CGAffineTransform)
+    __asm__("_CGContextConcatCTM");
+void coregraphics_probe(void *context, neverd_CGAffineTransform value) {
+  ++observed_calls;
+  mismatch |= (uintptr_t)context != 0x1234 || value.a != 1.0 ||
+              value.b != 2.0 || value.c != 3.0 || value.d != 4.0 ||
+              value.tx != 5.0 || value.ty != 6.0;
+}
+int main(void) {
+  double values[6] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+  concat_ctm((void *)(uintptr_t)0x1234, values);
+  return observed_calls != 1 || mismatch;
+}
+)";
+  executeSource(Source);
+}
 } // namespace
