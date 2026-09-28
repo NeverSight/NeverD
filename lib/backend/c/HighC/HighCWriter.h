@@ -85,6 +85,8 @@ public:
 
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
+  TypeRef declaredFunctionReturnType(const HighFunc &Func) const;
+  void prepareFunctionReturns(std::vector<HighFunc> &Funcs) const;
   void prepareFunctionIdentifiers(const std::vector<HighFunc> &Funcs);
   std::string functionIdentifier(const HighFunc &Func) const;
   std::string functionIdentifier(llvm::StringRef SourceName) const;

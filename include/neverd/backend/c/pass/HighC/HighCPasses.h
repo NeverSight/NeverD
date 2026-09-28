@@ -63,6 +63,10 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
 /// Caller return shapes cannot prove that an unknown callee never returns.
 bool isNoreturnCallExpr(const HighExpr &E);
 
+/// Calls, writes and ordered accesses remain observable even when their
+/// scalar result is unused. Shared by return projection and local liveness.
+bool highCExpressionHasEffect(const HighExpr &E);
+
 void collectUsedVarsExpr(const HighExpr &Expr,
                          std::map<std::string, TypeRef> &Vars, VarNameFn VarFn,
                          CallArgLimitFn ArgLimit = {});

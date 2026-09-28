@@ -79,6 +79,25 @@ bool isNoreturnCallExpr(const HighExpr &E) {
          (libc::isNoReturnFunction(E.CallTarget) || isX86FastFailCall(E));
 }
 
+bool highCExpressionHasEffect(const HighExpr &E) {
+  std::set<const HighExpr *> Seen;
+  std::vector<const HighExpr *> Pending{&E};
+  while (!Pending.empty()) {
+    const HighExpr *Current = Pending.back();
+    Pending.pop_back();
+    if (!Current || !Seen.insert(Current).second)
+      continue;
+    if (Current->Kind == ExprKind::Call || Current->Kind == ExprKind::Store ||
+        Current->MemoryOrdering != NdMemoryOrdering::None)
+      return true;
+    Current->forEachChildExpr([&](const ExprPtr &Child) {
+      if (Child)
+        Pending.push_back(Child.get());
+    });
+  }
+  return false;
+}
+
 bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
                        VarNameFn VarFn, ExprStrFn ExprFn) {
   if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
@@ -269,20 +288,6 @@ void analyzeVoidDeadChain(HighCAnalysisState &State, const HighFunc &Func,
 
 void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
                           VarNameFn VarFn, CallArgLimitFn ArgLimit) {
-  auto ExprHasEffect = [](const HighExpr &E) -> bool {
-    std::function<bool(const HighExpr &)> Walk = [&](const HighExpr &N) {
-      if (N.Kind == ExprKind::Call || N.Kind == ExprKind::Store)
-        return true;
-      if (N.MemoryOrdering != NdMemoryOrdering::None)
-        return true;
-      for (const ExprPtr &Op : N.Operands)
-        if (Op && Walk(*Op))
-          return true;
-      return false;
-    };
-    return Walk(E);
-  };
-
   bool Changed = true;
   unsigned Guard = 0;
   while (Changed && Guard++ < 8) {
@@ -303,7 +308,7 @@ void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
         return;
       if (S.Dst->Kind != ExprKind::Var && S.Dst->Kind != ExprKind::Phi)
         return;
-      if (ExprHasEffect(*S.Val))
+      if (highCExpressionHasEffect(*S.Val))
         return;
       if (Used.count(VarFn(S.Dst->Var)))
         return;

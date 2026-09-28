@@ -213,6 +213,64 @@ std::string x86CIntrinsicTargetFeatures(const HighFunc &Func) {
 
 } // anonymous namespace
 
+TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {
+  // A bound source ABI is authoritative even when optional debug information
+  // disagrees. Debug-only projections still use one type for their declaration,
+  // body and return-value conversion.
+  if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
+    return Func.SourceTypeHint->ReturnType;
+  const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  if (!DebugFn || !DebugFn->ReturnType)
+    return {};
+  if (isMsvcIndirectReturn(DebugFn->ReturnType)) {
+    const NdType *Record = msvcIndirectReturnRecord(DebugFn->ReturnType);
+    return NdType::makePtr(
+        NdType::makeNamedRecord(cNamedTypeSpelling(Record->SourceName),
+                                Record->Size ? Record->Size : 8));
+  }
+  return DebugFn->ReturnType;
+}
+
+void HighCWriter::prepareFunctionReturns(std::vector<HighFunc> &Funcs) const {
+  for (HighFunc &Func : Funcs) {
+    if (TypeRef Declared = declaredFunctionReturnType(Func))
+      Func.ReturnType = std::move(Declared);
+    if (!Func.ReturnType || Func.ReturnType->Kind != NdTypeKind::Void)
+      continue;
+
+    // A discarded result is not a discarded evaluation. Materialize effects
+    // at the original return before liveness and frame analysis, so their
+    // operands remain defined and their storage stays alive.
+    auto Prepare = [&](auto &&Self, std::vector<HighStmt> &Body) -> void {
+      std::vector<HighStmt> Projected;
+      Projected.reserve(Body.size());
+      for (HighStmt &Stmt : Body) {
+        Self(Self, Stmt.Body);
+        Self(Self, Stmt.ElseBody);
+        Self(Self, Stmt.DefaultBody);
+        for (auto &Case : Stmt.Cases)
+          Self(Self, Case.Body);
+        for (auto &Clause : Stmt.EHClauseBodies)
+          Self(Self, Clause);
+        if (Stmt.Kind == StmtKind::Return && Stmt.RetVal) {
+          if (highCExpressionHasEffect(*Stmt.RetVal)) {
+            HighStmt Evaluate;
+            Evaluate.Kind = StmtKind::ExprStmt;
+            Evaluate.Addr = Stmt.Addr;
+            Evaluate.Val = Stmt.RetVal;
+            Stmt.Addr = 0;
+            Projected.push_back(std::move(Evaluate));
+          }
+          Stmt.RetVal.reset();
+        }
+        Projected.push_back(std::move(Stmt));
+      }
+      Body = std::move(Projected);
+    };
+    Prepare(Prepare, Func.Body);
+  }
+}
+
 bool HighCWriter::highIRIncludesIndirectReturn(const HighFunc &Func,
                                                const FunctionSym &FS) const {
   return isMsvcIndirectReturn(FS.ReturnType) &&
@@ -322,7 +380,10 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
       return;
     Analysis.AssignedVars.insert(VarFn(S.Dst->Var));
   });
-  InferredVoid = analyzeVoidReturn(Analysis, Func, VarFn, ExprFn);
+  const TypeRef DeclaredReturn = declaredFunctionReturnType(Func);
+  InferredVoid = DeclaredReturn
+                     ? DeclaredReturn->Kind == NdTypeKind::Void
+                     : analyzeVoidReturn(Analysis, Func, VarFn, ExprFn);
 
   HiLoPairs.clear();
   auto RegisterHiLo = [this](const HighStmt &S, const HighExpr &CE) {
@@ -370,7 +431,9 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
     });
   }
 
-  FuncReturnType = InferredVoid ? nullptr : Func.ReturnType;
+  FuncReturnType = InferredVoid
+                       ? nullptr
+                       : (DeclaredReturn ? DeclaredReturn : Func.ReturnType);
 }
 
 void HighCWriter::emitLocalDecls(const HighFunc &Func,
@@ -4426,7 +4489,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   ParamDisplayNames.clear();
   IndirectReturnName.clear();
   if (const auto DebugFn = debugFunction(Dbg, Func.Entry);
-      DebugFn && isMsvcIndirectReturn(DebugFn->ReturnType))
+      !Func.SourceTypeHint && DebugFn &&
+      isMsvcIndirectReturn(DebugFn->ReturnType))
     IndirectReturnName = "result";
   PrintedIndirectReturn = false;
   Analysis = {};
@@ -4727,17 +4791,14 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   const auto DebugFn = debugFunction(Dbg, Func.Entry);
   TypeRef ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
   TypeRef IndirectReturnPtr;
-  if (DebugFn && isMsvcIndirectReturn(DebugFn->ReturnType)) {
+  if (!Func.SourceTypeHint && DebugFn &&
+      isMsvcIndirectReturn(DebugFn->ReturnType)) {
     IndirectReturnName = "result";
     InferredVoid = false;
-    const NdType *Record = msvcIndirectReturnRecord(DebugFn->ReturnType);
-    const std::string Spell = cNamedTypeSpelling(Record->SourceName);
-    IndirectReturnPtr = NdType::makePtr(
-        NdType::makeNamedRecord(Spell, Record->Size ? Record->Size : 8));
+    IndirectReturnPtr = FuncReturnType;
     ReturnType = IndirectReturnPtr;
     FuncReturnType = IndirectReturnPtr;
-  } else if (!InferredVoid && DebugFn && DebugFn->ReturnType)
-    ReturnType = DebugFn->ReturnType;
+  }
 
   std::string FName = functionIdentifier(Func);
 
