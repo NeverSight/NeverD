@@ -8,6 +8,10 @@ holds.  Every asset becomes lines in one file:
 
     toolset assets  ->  pe/<x86|arm>/<32|64>/vs<year>.pat
     winsdk assets   ->  pe/<x86|arm>/<32|64>/winsdk.pat
+    library assets  ->  pe/<x86|arm>/<32|64>/<library>.pat
+
+A library asset holds static libraries that belong to no Visual Studio
+release, such as the MASM32 SDK's, and names its file in its manifest.
 
 so a year's servicing toolsets (VS 2026's 14.50 and its current default, say)
 land in the same file, and so do all Windows SDK versions.
@@ -69,6 +73,7 @@ import bisect
 import fnmatch
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -90,6 +95,11 @@ ARCHITECTURES = {
 }
 
 LIBRARY_SUFFIXES = (".lib", ".obj")
+
+# What a library asset may name its file: a plain stem, and not one the
+# toolset and SDK files already use.
+LIBRARY_NAME = re.compile(r"[a-z0-9][a-z0-9._+-]*")
+RESERVED_LIBRARY = re.compile(r"vs[0-9]{4}|winsdk")
 
 # Lines whose first bytes are relocated are not searched for routines that
 # state them; see settle_directory.
@@ -133,6 +143,13 @@ class Asset:
             return f"vs{int(self.manifest['visual_studio']['year'])}"
         if kind == "winsdk":
             return "winsdk"
+        if kind == "library":
+            # A static library that belongs to no Visual Studio release, such
+            # as the MASM32 SDK's, named by its manifest.
+            name = str(self.manifest.get("library", ""))
+            if not LIBRARY_NAME.fullmatch(name) or RESERVED_LIBRARY.fullmatch(name):
+                raise BuildError(f"{self.name}: {name!r} cannot name a library file")
+            return name
         raise BuildError(f"{self.name}: unknown asset kind {kind!r}")
 
     @property
@@ -146,7 +163,8 @@ class Asset:
             "kind": self.manifest["kind"],
             "arch": self.arch,
         }
-        for key in ("toolset_version", "compiler_version", "windows_sdk_version"):
+        for key in ("toolset_version", "compiler_version", "windows_sdk_version",
+                    "library_version"):
             if self.manifest.get(key):
                 entry[key] = self.manifest[key]
         return entry

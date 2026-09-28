@@ -272,6 +272,21 @@ class AssetTests(unittest.TestCase):
         with self.assertRaises(BuildError):
             _ = asset.output
 
+    def test_library_assets_name_their_own_file(self) -> None:
+        asset = self._asset(
+            {"asset": "masm32-11r-x86", "kind": "library", "arch": "x86",
+             "library": "masm32", "library_version": "11r",
+             "archive": {"sha256": "ab"}}
+        )
+        self.assertEqual(asset.output, Path("pe/x86/32/masm32.pat"))
+        self.assertEqual(asset.provenance()["library_version"], "11r")
+        for name in ("vs2013", "winsdk", "../escape", "", "Masm32"):
+            bad = self._asset(
+                {"asset": "x", "kind": "library", "arch": "x86", "library": name}
+            )
+            with self.subTest(name=name), self.assertRaises(BuildError):
+                _ = bad.output
+
 
 FAKE_SIGMAKER = textwrap.dedent(
     """\

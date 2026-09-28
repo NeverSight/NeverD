@@ -179,6 +179,8 @@ keeps in a release:
 - Visual Studio 2005 through 2013 for x86 and x64, and 2012 and 2013 for
   ARM32, unpacked from Microsoft's installation media together with the
   Windows SDK libraries those media install.
+- Static libraries that belong to no Visual Studio release, such as the MASM32
+  SDK's. Such a `library` asset names its own file (`masm32.pat`).
 
 ```bash
 cmake --build build --target neverd-sigmaker
