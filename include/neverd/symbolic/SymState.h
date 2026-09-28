@@ -143,6 +143,22 @@ public:
   /// should inspect `loadOrigins` instead.
   const LoadOrigin *loadOrigin(SymRef Value) const;
 
+  struct MemoryInputOrigin {
+    SymRef Base;
+    uint64_t Offset = 0;
+    uint16_t Bytes = 0;
+
+    friend bool operator==(const MemoryInputOrigin &,
+                           const MemoryInputOrigin &) = default;
+  };
+
+  /// Where an untouched symbolic-region input was first materialised. Unlike
+  /// loadOrigins(), this describes input creation, not later loads of equal
+  /// or forwarded values. Post-clobber unknowns have no entry-memory origin.
+  /// Composite reads retain these origins on their input leaves. This is
+  /// dependency metadata, not a current-memory or accessibility certificate.
+  llvm::ArrayRef<MemoryInputOrigin> memoryInputOrigins(SymRef Value) const;
+
   /// True once a store the engine could not resolve to a numeric address has
   /// happened.  Such a store keeps its own region exactly and forgets every
   /// other one, so this does not say that nothing is known any more; it says
@@ -222,6 +238,8 @@ private:
     /// input origins.  Symbolic pointer regions deliberately have no kind.
     std::optional<SymInputKind> InputKind;
     uint64_t Epoch = 0;
+    /// Exact symbolic region identity; invalid for scalar/absolute banks.
+    SymRef RegionBase;
   };
 
   /// Where an address points, as a base and a displacement from it.  An
@@ -254,6 +272,7 @@ private:
   /// Add one fact to a value's load provenance without making insertion order
   /// observable.
   void recordLoadOrigin(SymRef Value, LoadOrigin Origin);
+  void recordMemoryInputOrigin(SymRef Value, MemoryInputOrigin Origin);
 
   /// Join \p Bytes byte expressions into one word, in this state's byte order.
   SymRef joinBytes(llvm::ArrayRef<SymRef> Bytes) const;
@@ -261,15 +280,17 @@ private:
   SymContext *Ctx;
   llvm::endianness Order;
 
-  Bank Registers{{}, nullptr, "reg", SymInputKind::Register, 0};
-  Bank Temporaries{{}, nullptr, "tmp", SymInputKind::Temporary, 0};
-  Bank AbsoluteMemory{{}, nullptr, "mem", SymInputKind::AbsoluteMemory, 0};
+  Bank Registers{{}, nullptr, "reg", SymInputKind::Register, 0, {}};
+  Bank Temporaries{{}, nullptr, "tmp", SymInputKind::Temporary, 0, {}};
+  Bank AbsoluteMemory{{}, nullptr, "mem", SymInputKind::AbsoluteMemory, 0, {}};
   /// One bank per symbolic base, keyed by the node that base interned to.
   std::map<uint32_t, Bank> Regions;
   /// Null for entry memory; replaced by every potentially aliasing write.
   std::shared_ptr<UnknownRegions> UnseenRegions;
   /// Keyed by the node index of the value the loads produced.
   std::map<uint32_t, llvm::SmallVector<LoadOrigin, 1>> LoadOrigins;
+  std::map<uint32_t, llvm::SmallVector<MemoryInputOrigin, 1>>
+      MemoryInputOrigins;
 
   bool MemoryClobbered = false;
 };

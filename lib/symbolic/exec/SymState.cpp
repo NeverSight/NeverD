@@ -119,6 +119,8 @@ SymRef SymState::byteAt(Bank &B, uint64_t Offset) {
                       Name, kByteBits,
                       SymInputOrigin{*B.InputKind, Offset, 1, B.Epoch}, Order)
                 : Ctx->mkVar(Name, kByteBits);
+    if (B.RegionBase && B.Epoch == 0)
+      recordMemoryInputOrigin(Input, {B.RegionBase, Offset, 1});
   }
   B.Bytes.emplace(Offset, Input);
   return Input;
@@ -161,6 +163,8 @@ SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
           Order);
     } else {
       Input = Ctx->mkVar(Name, Width);
+      if (B.RegionBase && B.Epoch == 0)
+        recordMemoryInputOrigin(Input, {B.RegionBase, Offset, Bytes});
     }
     if (!writeBank(B, Offset, Input))
       return {};
@@ -273,6 +277,7 @@ SymState::Bank &SymState::bankFor(const Location &Where) {
   // that is all this region has: what it holds is `*(base + n)` for the
   // displacements the code used, and nothing says what base is.
   Fresh.Name = ("ptr$" + llvm::Twine(Where.Base.index())).str();
+  Fresh.RegionBase = Where.Base;
   if (UnseenRegions) {
     auto &Unknowns = UnseenRegions->Values[Where.Base.index()];
     if (!Unknowns)
@@ -307,6 +312,29 @@ llvm::ArrayRef<SymState::LoadOrigin> SymState::loadOrigins(SymRef Value) const {
 const SymState::LoadOrigin *SymState::loadOrigin(SymRef Value) const {
   llvm::ArrayRef<LoadOrigin> Origins = loadOrigins(Value);
   return Origins.size() == 1 ? &Origins.front() : nullptr;
+}
+
+llvm::ArrayRef<SymState::MemoryInputOrigin>
+SymState::memoryInputOrigins(SymRef Value) const {
+  auto It = MemoryInputOrigins.find(Value.index());
+  return It == MemoryInputOrigins.end()
+             ? llvm::ArrayRef<MemoryInputOrigin>()
+             : llvm::ArrayRef<MemoryInputOrigin>(It->second);
+}
+
+void SymState::recordMemoryInputOrigin(SymRef Value, MemoryInputOrigin Origin) {
+  auto &Origins = MemoryInputOrigins[Value.index()];
+  const auto Less = [](const MemoryInputOrigin &Left,
+                       const MemoryInputOrigin &Right) {
+    if (Left.Base != Right.Base)
+      return Left.Base < Right.Base;
+    if (Left.Offset != Right.Offset)
+      return Left.Offset < Right.Offset;
+    return Left.Bytes < Right.Bytes;
+  };
+  auto It = std::lower_bound(Origins.begin(), Origins.end(), Origin, Less);
+  if (It == Origins.end() || *It != Origin)
+    Origins.insert(It, Origin);
 }
 
 void SymState::recordLoadOrigin(SymRef Value, LoadOrigin Origin) {
@@ -401,6 +429,9 @@ bool SymState::mergeIdentical(const SymState &Other) {
   for (const auto &Entry : Other.LoadOrigins)
     for (const LoadOrigin &Origin : Entry.second)
       recordLoadOrigin(SymRef(Entry.first), Origin);
+  for (const auto &Entry : Other.MemoryInputOrigins)
+    for (const MemoryInputOrigin &Origin : Entry.second)
+      recordMemoryInputOrigin(SymRef(Entry.first), Origin);
   return true;
 }
 

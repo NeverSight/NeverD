@@ -1230,6 +1230,53 @@ TEST(InterpreterSpecialization,
 }
 
 TEST(InterpreterSpecialization,
+     OneVaryingColumnReusesItsCompleteJointWitnesses) {
+  Provider P;
+  P.add(0x100, {op(NdOp::INT_AND, reg(16), {reg(8), constant(1)}),
+                op(NdOp::COPY, reg(24), {constant(17)}), jump(0x200)});
+  P.add(0x200, {op(NdOp::INT_ADD, reg(0), {reg(16), reg(24)}), ret()});
+  SpecializationOptions Options;
+  Options.ControlRegisters = {{16, 8}, {24, 8}};
+  // Two witnesses are not an exhaustive proof. The third query proves that
+  // the varying column has no other values; the other column is constant on
+  // this same path, so that proof already supplies the complete joint rows.
+  Options.MaxSolverQueries = 2;
+  auto Result = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_EQ(Result.Status, SpecializationStatus::BudgetExceeded);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+  EXPECT_TRUE(Result.Reads.empty());
+  EXPECT_TRUE(Result.Origins.empty());
+  Options.MaxSolverQueries = 3;
+  Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_EQ(Result.SolverQueries, 3u);
+  for (uint64_t Input : {0ULL, 1ULL, 2ULL, 0x123456789abcdef0ULL, ~0ULL})
+    EXPECT_EQ(execute(Result.Residual, {{8, Input}}), 17 + (Input & 1));
+}
+
+TEST(InterpreterSpecialization,
+     ConstantProjectionColumnsDoNotProveAnImpossiblePathReachable) {
+  Provider P;
+  P.add(0x100,
+        {op(NdOp::INT_AND, reg(16), {reg(8), constant(3)}),
+         op(NdOp::INT_MULT, reg(24), {reg(16), reg(16)}),
+         op(NdOp::INT_AND, reg(24), {reg(24), constant(3)}),
+         op(NdOp::INT_EQUAL, reg(32, 1), {reg(24), constant(2)}),
+         op(NdOp::COPY, reg(48), {constant(7)}),
+         op(NdOp::COND_BR, {}, {constant(0xdead), reg(32, 1)})},
+        0x200);
+  P.add(0x200, {op(NdOp::COPY, reg(0), {reg(8)}), ret()});
+  SpecializationOptions Options;
+  Options.ControlRegisters = {{48, 8}};
+  const auto Result = specializeInterpreter(P, {0x100}, Options);
+  // No square is 2 modulo 4. A constant control column alone is not a witness
+  // that its incoming predicate is satisfiable; the missing node is dead.
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  for (uint64_t Input : {0ULL, 1ULL, 2ULL, 3ULL, ~0ULL})
+    EXPECT_EQ(execute(Result.Residual, {{8, Input}}), Input);
+}
+
+TEST(InterpreterSpecialization,
      FiniteReadCapturesOverlappingRegisterAndTemporaryAddressBytes) {
   for (uint16_t Width : {1, 2, 4, 8})
     for (bool Temporary : {false, true}) {

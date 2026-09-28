@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <set>
 #include <tuple>
 
@@ -63,10 +64,10 @@ public:
       Result.RegisterRanges.clear();
       Result.FrameSlots.clear();
     } else {
-      for (const auto &[Offset, Bytes] : Registers)
-        Result.RegisterRanges.push_back({Offset, Bytes});
-      for (const auto &[Offset, Bytes] : Slots)
-        Result.FrameSlots.push_back({Offset, Bytes});
+      for (const auto &[Range, Mask] : Registers)
+        Result.RegisterRanges.push_back({Range.first, Range.second, Mask});
+      for (const auto &[Range, Mask] : Slots)
+        Result.FrameSlots.push_back({Range.first, Range.second, Mask});
     }
     return std::move(Result);
   }
@@ -85,12 +86,13 @@ private:
       Result.Status = ControlDiscoveryStatus::UnsupportedOrigin;
   }
 
-  bool charge() {
-    if (Result.Visited >= MaxVisited) {
+  bool charge(uint64_t Count = 1) {
+    if (Count > MaxVisited - Result.Visited) {
+      Result.Visited = MaxVisited;
       Result.Status = ControlDiscoveryStatus::BudgetExceeded;
       return false;
     }
-    ++Result.Visited;
+    Result.Visited += Count;
     return true;
   }
 
@@ -108,9 +110,9 @@ private:
     Pending.push_back({Value, Low, Bits});
   }
 
-  /// Cover the demanded bits with exact byte lanes, conservatively including
-  /// the other bits of a partially demanded byte. This never widens a one-byte
-  /// demand into the unknown high bytes of a word.
+  /// Locate the smallest byte range covering a bit slice. byteRangeMask keeps
+  /// the exact demanded bits within it; the other bits of a partial byte do
+  /// not become dependencies or facts.
   std::optional<std::pair<uint16_t, uint16_t>> byteRange(const Demand &Current,
                                                          uint16_t Bytes) {
     if (!Bytes || uint64_t(Bytes) * 8 != Ctx.width(Current.Value)) {
@@ -128,38 +130,76 @@ private:
         End - First};
   }
 
-  bool inspectLoads(const Demand &Current) {
-    bool FrameSource = false;
-    for (const auto &Origin : State.loadOrigins(Current.Value)) {
+  uint64_t byteRangeMask(const Demand &Current) const {
+    // byteRange has already established that the slice fits at most 8 bytes.
+    // The selected scalar's least-significant byte is the source byte at
+    // floor(Low / 8), regardless of its address in the machine byte order.
+    return llvm::APInt::getBitsSet(64, Current.Low % 8,
+                                   Current.Low % 8 + Current.Bits)
+        .getZExtValue();
+  }
+
+  void inspectMemoryInput(const Demand &Current) {
+    const auto Inputs = State.memoryInputOrigins(Current.Value);
+    for (const auto &Origin : Inputs) {
       if (!charge())
-        break;
-      if (!valid(Origin.Address)) {
+        return;
+      if (!valid(Origin.Base)) {
         unsupported();
         continue;
       }
-      const auto Offset = frameRelativeOffset(Ctx, Origin.Address, Root);
       const auto Range = byteRange(Current, Origin.Bytes);
-      if (Offset && Range &&
-          *Offset <=
+      if (Origin.Base == Root && Range &&
+          Origin.Offset <=
               std::numeric_limits<uint64_t>::max() - (Origin.Bytes - 1)) {
-        Slots.emplace(static_cast<int64_t>(*Offset + Range->first),
-                      Range->second);
-        FrameSource = true;
+        Slots[{static_cast<int64_t>(Origin.Offset + Range->first),
+               Range->second}] |= byteRangeMask(Current);
       } else {
-        // An unresolved loaded value has no replayable external-memory field.
-        // Its address may still explain which entry control inputs were lost.
         unsupported();
-        enqueue(Origin.Address, 0, Ctx.width(Origin.Address));
+        enqueue(Origin.Base, 0, Ctx.width(Origin.Base));
       }
     }
-    return FrameSource;
+    if (!Inputs.empty())
+      return;
+
+    // A later memory epoch is not the node's entry memory. Historical loads
+    // may still explain its address, but never nominate their storage as an
+    // input. In particular, spilling a value does not change its birthplace.
+    unsupported();
+    for (const auto &Origin : State.loadOrigins(Current.Value)) {
+      if (!charge())
+        return;
+      if (valid(Origin.Address))
+        enqueue(Origin.Address, 0, Ctx.width(Origin.Address));
+    }
+  }
+
+  bool sameWidth(const Demand &Current, llvm::ArrayRef<SymRef> Operands) {
+    for (SymRef Operand : Operands)
+      if (!valid(Operand) || Ctx.width(Operand) != Ctx.width(Current.Value)) {
+        unsupported();
+        return false;
+      }
+    return true;
+  }
+
+  void fullOperands(llvm::ArrayRef<SymRef> Operands) {
+    for (SymRef Operand : Operands) {
+      enqueue(Operand, 0, Ctx.width(Operand));
+      if (exhausted())
+        return;
+    }
+  }
+
+  void leftShift(SymRef Operand, const Demand &Current, uint32_t Shift) {
+    const uint64_t End = uint64_t(Current.Low) + Current.Bits;
+    const uint64_t Low = std::max(uint64_t(Current.Low), uint64_t(Shift));
+    if (Low < End)
+      enqueue(Operand, Low - Shift, End - Low);
   }
 
   void visit(const Demand &Current) {
-    if (Ctx.isConst(Current.Value))
-      return;
-    const bool FrameSource = inspectLoads(Current);
-    if (exhausted())
+    if (Ctx.isConst(Current.Value) || Current.Value == Root)
       return;
 
     const auto Operands = Ctx.operands(Current.Value);
@@ -173,12 +213,141 @@ private:
         const auto Range = byteRange(Current, Origin.Bytes);
         if (Range && Origin.Offset <= std::numeric_limits<uint64_t>::max() -
                                           (Origin.Bytes - 1))
-          Registers.emplace(Origin.Offset + Range->first, Range->second);
+          Registers[{Origin.Offset + Range->first, Range->second}] |=
+              byteRangeMask(Current);
         else
           unsupported();
-      } else if (!FrameSource) {
-        unsupported();
+      } else
+        inspectMemoryInput(Current);
+      return;
+    }
+    case SymOp::And:
+    case SymOp::Or: {
+      if (!sameWidth(Current, Operands))
+        return;
+      if (std::none_of(Operands.begin(), Operands.end(),
+                       [&](SymRef V) { return Ctx.isConst(V); })) {
+        for (SymRef Operand : Operands) {
+          enqueue(Operand, Current.Low, Current.Bits);
+          if (exhausted())
+            return;
+        }
+        return;
       }
+      // A constant zero in AND, or one in OR, kills that output bit's
+      // dependence on every other operand. Keep disjoint live runs separate.
+      // Charge mask construction and each scan in 64-bit words, so sparse or
+      // very wide masks cannot perform unbounded work outside the DAG budget.
+      const uint64_t Words = (uint64_t(Current.Bits) + 63) / 64;
+      if (!charge(Words))
+        return;
+      llvm::APInt Live = llvm::APInt::getAllOnes(Current.Bits);
+      for (SymRef Operand : Operands)
+        if (const auto Constant = Ctx.asConst(Operand)) {
+          if (!charge(Words))
+            return;
+          const auto Slice = Constant->extractBits(Current.Bits, Current.Low);
+          Live &= Ctx.op(Current.Value) == SymOp::And ? Slice : ~Slice;
+        }
+      while (!Live.isZero()) {
+        if (!charge(Words))
+          return;
+        const uint32_t Low = Live.countr_zero();
+        const uint32_t Bits = Live.lshr(Low).countr_one();
+        for (SymRef Operand : Operands) {
+          if (!Ctx.isConst(Operand))
+            enqueue(Operand, Current.Low + Low, Bits);
+          if (exhausted())
+            return;
+        }
+        Live.clearBits(Low, Low + Bits);
+      }
+      return;
+    }
+    case SymOp::Xor:
+    case SymOp::Not:
+      if (!sameWidth(Current, Operands) ||
+          (Ctx.op(Current.Value) == SymOp::Not && Operands.size() != 1)) {
+        unsupported();
+        return;
+      }
+      for (SymRef Operand : Operands) {
+        if (!Ctx.isConst(Operand))
+          enqueue(Operand, Current.Low, Current.Bits);
+        if (exhausted())
+          return;
+      }
+      return;
+    case SymOp::Add:
+    case SymOp::Mul: {
+      if (!sameWidth(Current, Operands))
+        return;
+      // Modulo 2^N arithmetic cannot carry from a higher bit into a lower
+      // one. Subtraction and negation are canonical Add/Mul nodes as well.
+      uint32_t End = Current.Low + Current.Bits;
+      if (Ctx.op(Current.Value) == SymOp::Mul) {
+        const uint32_t Width = Ctx.width(Current.Value);
+        uint32_t Shift = 0;
+        bool PowerOfTwo = true;
+        llvm::SmallVector<SymRef, 4> Inputs;
+        for (SymRef Operand : Operands)
+          if (const auto Constant = Ctx.asConst(Operand)) {
+            if (!charge((uint64_t(Width) + 63) / 64))
+              return;
+            Shift = std::min(uint64_t(Width),
+                             uint64_t(Shift) + Constant->countr_zero());
+            PowerOfTwo &= Constant->isPowerOf2();
+          } else
+            Inputs.push_back(Operand);
+        if (Shift >= End)
+          return;
+        // SymContext represents a constant left shift as multiplication by a
+        // power of two. Preserve the exact shifted slice for this shape.
+        if (Inputs.size() == 1 && PowerOfTwo) {
+          leftShift(Inputs.front(), Current, Shift);
+          return;
+        }
+        End -= Shift;
+      }
+      for (SymRef Operand : Operands) {
+        if (!Ctx.isConst(Operand))
+          enqueue(Operand, 0, End);
+        if (exhausted())
+          return;
+      }
+      return;
+    }
+    case SymOp::Shl:
+    case SymOp::LShr:
+    case SymOp::AShr: {
+      if (Operands.size() != 2 ||
+          Ctx.width(Operands.front()) != Ctx.width(Current.Value)) {
+        unsupported();
+        return;
+      }
+      const auto Amount = Ctx.asConst(Operands[1]);
+      if (!Amount) {
+        fullOperands(Operands);
+        return;
+      }
+      const uint32_t Width = Ctx.width(Current.Value);
+      const bool Arithmetic = Ctx.op(Current.Value) == SymOp::AShr;
+      if (Amount->uge(Width)) {
+        if (Arithmetic)
+          enqueue(Operands.front(), Width - 1, 1);
+        return;
+      }
+      const uint32_t Shift = Amount->getZExtValue();
+      if (Ctx.op(Current.Value) == SymOp::Shl) {
+        leftShift(Operands.front(), Current, Shift);
+        return;
+      }
+      const uint64_t Low = uint64_t(Current.Low) + Shift;
+      const uint64_t End = Low + Current.Bits;
+      if (Low < Width)
+        enqueue(Operands.front(), Low, std::min(End, uint64_t(Width)) - Low);
+      if (Arithmetic && End > Width)
+        enqueue(Operands.front(), Width - 1, 1);
       return;
     }
     case SymOp::Extract:
@@ -237,13 +406,8 @@ private:
       return;
     default:
       // Unknown arithmetic dependency is conservatively widened to complete
-      // operands. We do not infer finite values, pointer provenance, or facts
-      // from bit masks while discovering candidate locations.
-      for (SymRef Operand : Operands) {
-        enqueue(Operand, 0, Ctx.width(Operand));
-        if (exhausted())
-          return;
-      }
+      // operands. Bit dependence never certifies values or pointer facts.
+      fullOperands(Operands);
       return;
     }
   }
@@ -255,8 +419,8 @@ private:
   ControlDiscovery Result;
   llvm::SmallVector<Demand, 16> Pending;
   std::set<std::tuple<uint32_t, uint32_t, uint32_t>> Seen;
-  std::set<std::pair<uint64_t, uint16_t>> Registers;
-  std::set<std::pair<int64_t, uint16_t>> Slots;
+  std::map<std::pair<uint64_t, uint16_t>, uint64_t> Registers;
+  std::map<std::pair<int64_t, uint16_t>, uint64_t> Slots;
 };
 
 } // namespace

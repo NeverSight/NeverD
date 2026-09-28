@@ -126,8 +126,9 @@ enum class SelectorInput { MaskedScalar, UnboundedScalar, UnknownMemory };
 
 // This toy register bank contains one dispatch selector and one unconstrained
 // payload. Neither an image-specific layout nor an entry value is assumed.
-BankProvider
-makeBankProgram(bool Loop, SelectorInput Input = SelectorInput::MaskedScalar) {
+BankProvider makeBankProgram(bool Loop,
+                             SelectorInput Input = SelectorInput::MaskedScalar,
+                             unsigned LaneCount = 4) {
   BankProvider P;
   P.add(Entry,
         {operation(NdOp::INT_SUB, r(BankRegister), {r(FrameRegister), c(96)}),
@@ -142,7 +143,7 @@ makeBankProgram(bool Loop, SelectorInput Input = SelectorInput::MaskedScalar) {
                    {r(PayloadAddressRegister), r(ValueRegister)}),
          Input == SelectorInput::MaskedScalar
              ? operation(NdOp::INT_AND, r(SelectorRegister),
-                         {r(InputRegister), c(3)})
+                         {r(InputRegister), c(LaneCount - 1)})
          : Input == SelectorInput::UnboundedScalar
              ? operation(NdOp::COPY, r(SelectorRegister), {r(InputRegister)})
              : operation(NdOp::LOAD, r(SelectorRegister),
@@ -163,7 +164,7 @@ makeBankProgram(bool Loop, SelectorInput Input = SelectorInput::MaskedScalar) {
                    {r(AddressRegister), c(TableBase)}),
          operation(NdOp::LOAD, r(ValueRegister), {r(AddressRegister)}),
          operation(NdOp::INDIR_BR, {}, {r(ValueRegister)})});
-  for (unsigned Lane = 0; Lane < 4; ++Lane) {
+  for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
     const va_t Handler = HandlerBase + 0x20 * Lane;
     for (unsigned Byte = 0; Byte < 8; ++Byte)
       P.Image[TableBase + Lane * 8 + Byte] = Handler >> (Byte * 8);
@@ -184,7 +185,7 @@ makeBankProgram(bool Loop, SelectorInput Input = SelectorInput::MaskedScalar) {
            operation(NdOp::INT_ADD, r(SelectorRegister),
                      {r(SelectorRegister), c(1)}),
            operation(NdOp::INT_AND, r(SelectorRegister),
-                     {r(SelectorRegister), c(3)}),
+                     {r(SelectorRegister), c(LaneCount - 1)}),
            operation(NdOp::STORE, {},
                      {r(SelectorAddressRegister), r(SelectorRegister)}),
            jump(Latch)});
@@ -201,6 +202,135 @@ makeBankProgram(bool Loop, SelectorInput Input = SelectorInput::MaskedScalar) {
     P.add(Exit, {ret()});
   }
   return P;
+}
+
+constexpr va_t FirstPhaseEntry = 0x200;
+constexpr uint64_t FirstSelectorRegister = 0x300;
+constexpr int64_t FirstSelectorSlot = -112;
+
+BankProvider makeSeparateControlLifetimesProgram() {
+  auto Provider = makeBankProgram(true, SelectorInput::MaskedScalar, 8);
+  constexpr va_t FirstReload = 0x220;
+  constexpr va_t FirstDispatch = 0x240;
+  constexpr va_t FirstHandlerBase = 0x900;
+  constexpr va_t FirstTableBase = 0x6800;
+  constexpr uint64_t FirstSlotAddressRegister = 0x308;
+  Provider.add(
+      FirstPhaseEntry,
+      {operation(NdOp::INT_ADD, r(FirstSlotAddressRegister),
+                 {r(FrameRegister), c(FirstSelectorSlot)}),
+       operation(NdOp::INT_AND, r(FirstSelectorRegister),
+                 {r(InputRegister), c(7)}),
+       operation(NdOp::STORE, {},
+                 {r(FirstSlotAddressRegister), r(FirstSelectorRegister)}),
+       jump(FirstReload)});
+  Provider.add(FirstReload, {operation(NdOp::LOAD, r(FirstSelectorRegister),
+                                       {r(FirstSlotAddressRegister)}),
+                             jump(FirstDispatch)});
+  Provider.add(FirstDispatch,
+               {operation(NdOp::INT_MULT, r(AddressRegister),
+                          {r(FirstSelectorRegister), c(8)}),
+                operation(NdOp::INT_ADD, r(AddressRegister),
+                          {r(AddressRegister), c(FirstTableBase)}),
+                operation(NdOp::LOAD, r(ValueRegister), {r(AddressRegister)}),
+                operation(NdOp::INDIR_BR, {}, {r(ValueRegister)})});
+  for (unsigned Lane = 0; Lane < 8; ++Lane) {
+    const va_t Handler = FirstHandlerBase + 0x20 * Lane;
+    for (unsigned Byte = 0; Byte < 8; ++Byte)
+      Provider.Image[FirstTableBase + Lane * 8 + Byte] = Handler >> (8 * Byte);
+    Provider.add(Handler, {jump(Entry)});
+  }
+  // Both selector domains contain eight independent values. The first one
+  // dies before the second phase and must not multiply its relation by eight.
+  auto LoopEntry = Provider.Code.at(Entry).Ops;
+  LoopEntry[7].Inputs[0] = r(SelectorRegister);
+  LoopEntry.insert(LoopEntry.begin() + 7,
+                   operation(NdOp::INT_RIGHT, r(SelectorRegister),
+                             {r(InputRegister), c(3)}));
+  Provider.Code.erase(Entry);
+  Provider.add(Entry, LoopEntry);
+  return Provider;
+}
+
+constexpr uint64_t FirstProducerRegister = 0x1200;
+constexpr unsigned FirstProducerInputs = 17;
+
+BankProvider makeFiniteProducerProgram() {
+  auto Provider = makeSeparateControlLifetimesProgram();
+  llvm::SmallVector<LowOp, 20> Producers{operation(
+      NdOp::COPY, r(FirstSelectorRegister), {r(FirstProducerRegister)})};
+  for (unsigned I = 1; I < FirstProducerInputs; ++I)
+    Producers.push_back(operation(
+        NdOp::INT_XOR, r(FirstSelectorRegister),
+        {r(FirstSelectorRegister), r(FirstProducerRegister + I * 8)}));
+  auto FirstEntry = Provider.Code.at(FirstPhaseEntry).Ops;
+  FirstEntry[1].Inputs[0] = r(FirstSelectorRegister);
+  FirstEntry.insert(FirstEntry.begin() + 1, Producers.begin(), Producers.end());
+  Provider.Code.erase(FirstPhaseEntry);
+  Provider.add(FirstPhaseEntry, FirstEntry);
+
+  constexpr uint64_t FirstContributionRegister = 0x310;
+  for (unsigned Lane = 0; Lane < 8; ++Lane) {
+    const va_t Handler = 0x900 + 0x20 * Lane;
+    Provider.Code.erase(Handler);
+    Provider.add(Handler, {operation(NdOp::COPY, r(FirstContributionRegister),
+                                     {c(9 + 7 * Lane)}),
+                           jump(Entry)});
+  }
+  // The first dispatch contributes to the observable result. Its 17 caller
+  // inputs must stay dynamic even when discovery can stop at the masked value.
+  auto LoopEntry = Provider.Code.at(Entry).Ops;
+  LoopEntry[3].Inputs[0] = r(FirstContributionRegister);
+  Provider.Code.erase(Entry);
+  Provider.add(Entry, LoopEntry);
+  return Provider;
+}
+
+constexpr int64_t WideControlSlot = -32;
+
+BankProvider makeCommonControlByteProgram(bool FrameField,
+                                          llvm::endianness Order,
+                                          bool HasConflictingByte = false) {
+  BankProvider Provider;
+  llvm::SmallVector<LowOp, 8> EntryOps{
+      operation(NdOp::INT_EQUAL, r(ConditionRegister, 1),
+                {r(InputRegister), c(0)}),
+      operation(NdOp::SELECT, r(SelectorRegister),
+                {r(ConditionRegister, 1), c(0x100), c(0)})};
+  if (HasConflictingByte) {
+    EntryOps.push_back(operation(NdOp::INT_EQUAL, r(ConditionRegister, 1),
+                                 {r(InputRegister), c(1)}));
+    EntryOps.push_back(
+        operation(NdOp::SELECT, r(SelectorRegister),
+                  {r(ConditionRegister, 1), c(8), r(SelectorRegister)}));
+  }
+  if (FrameField) {
+    EntryOps.push_back(operation(NdOp::INT_ADD, r(SelectorAddressRegister),
+                                 {r(FrameRegister), c(WideControlSlot)}));
+    EntryOps.push_back(operation(
+        NdOp::STORE, {}, {r(SelectorAddressRegister), r(SelectorRegister)}));
+  }
+  EntryOps.push_back(jump(Route));
+  Provider.add(Entry, EntryOps);
+  llvm::SmallVector<LowOp, 12> ConsumerOps;
+  if (FrameField)
+    ConsumerOps.push_back(operation(NdOp::LOAD, r(SelectorRegister),
+                                    {r(SelectorAddressRegister)}));
+  const uint64_t LowByte = Order == llvm::endianness::little ? 0 : 7;
+  ConsumerOps.append(
+      {operation(NdOp::INT_ZEXT, r(AddressRegister),
+                 {r(SelectorRegister + LowByte, 1)}),
+       operation(NdOp::INT_ADD, r(AddressRegister),
+                 {r(FrameRegister), r(AddressRegister)}),
+       operation(NdOp::INT_SUB, r(AddressRegister), {r(AddressRegister), c(8)}),
+       operation(NdOp::INT_XOR, r(ValueRegister), {r(InputRegister), c(29)}),
+       operation(NdOp::STORE, {}, {r(AddressRegister), r(ValueRegister)}),
+       operation(NdOp::LOAD, r(ResultRegister), {r(AddressRegister)}),
+       operation(NdOp::INT_ADD, r(ResultRegister),
+                 {r(ResultRegister), r(SelectorRegister)}),
+       ret()});
+  Provider.add(Route, ConsumerOps);
+  return Provider;
 }
 
 SpecializationOptions bankOptions(bool SlotHint, bool RegisterHint) {
@@ -335,6 +465,59 @@ BankProvider makeFiniteDependencyProgram() {
   return Provider;
 }
 
+BankProvider makeCrossPhaseBitDemandProgram() {
+  auto Provider = makeFiniteDependencyProgram();
+  constexpr va_t PrefixReload = 0x220;
+  constexpr va_t PrefixDispatch = 0x240;
+  constexpr va_t PrefixTable = 0x6800;
+  constexpr uint64_t PrefixSlotAddress = 0x308;
+  constexpr uint64_t PrefixContribution = 0x310;
+  llvm::SmallVector<LowOp, 28> ProducerOps{operation(
+      NdOp::COPY, r(FirstSelectorRegister), {r(FirstProducerRegister)})};
+  for (unsigned I = 1; I < FirstProducerInputs; ++I)
+    ProducerOps.push_back(operation(
+        NdOp::INT_XOR, r(FirstSelectorRegister),
+        {r(FirstSelectorRegister), r(FirstProducerRegister + I * 8)}));
+  ProducerOps.append(
+      {operation(NdOp::INT_AND, r(FirstSelectorRegister),
+                 {r(FirstSelectorRegister), c(15)}),
+       operation(NdOp::INT_MULT, r(FirstSelectorRegister),
+                 {r(FirstSelectorRegister), c(16)}),
+       operation(NdOp::INT_SUB, r(PrefixSlotAddress),
+                 {r(FrameRegister), c(160)}),
+       operation(NdOp::STORE, {},
+                 {r(PrefixSlotAddress), r(FirstSelectorRegister)}),
+       jump(PrefixReload)});
+  Provider.add(FirstPhaseEntry, ProducerOps);
+  Provider.add(PrefixReload, {operation(NdOp::LOAD, r(FirstSelectorRegister),
+                                        {r(PrefixSlotAddress)}),
+                              jump(PrefixDispatch)});
+  Provider.add(
+      PrefixDispatch,
+      {operation(NdOp::INT_AND, r(ValueRegister),
+                 {r(FirstSelectorRegister), c(1)}),
+       operation(NdOp::INT_MULT, r(AddressRegister), {r(ValueRegister), c(8)}),
+       operation(NdOp::INT_ADD, r(AddressRegister),
+                 {r(AddressRegister), c(PrefixTable)}),
+       operation(NdOp::LOAD, r(ValueRegister), {r(AddressRegister)}),
+       operation(NdOp::INDIR_BR, {}, {r(ValueRegister)})});
+  constexpr va_t Handler = 0x900;
+  for (unsigned Byte = 0; Byte < 8; ++Byte)
+    Provider.Image[PrefixTable + Byte] = Handler >> (8 * Byte);
+  // There is no second table record. Recovery must prove that the spilled
+  // byte's low bit is zero, while preserving its observable high nibble.
+  Provider.add(Handler, {operation(NdOp::INT_ADD, r(PrefixContribution),
+                                   {r(FirstSelectorRegister), c(9)}),
+                         jump(Entry)});
+  auto ConsumerOps = Provider.Code.at(HandlerBase).Ops;
+  ConsumerOps.insert(ConsumerOps.end() - 1,
+                     operation(NdOp::INT_ADD, r(ResultRegister),
+                               {r(ResultRegister), r(PrefixContribution)}));
+  Provider.Code.erase(HandlerBase);
+  Provider.add(HandlerBase, ConsumerOps);
+  return Provider;
+}
+
 SpecializationOptions finiteDependencyOptions(bool Manual, bool Automatic) {
   auto Options = bankOptions(false, false);
   Options.RequireRestoredFrameAtReturn = true;
@@ -351,7 +534,8 @@ SpecializationOptions finiteDependencyOptions(bool Manual, bool Automatic) {
 // avoids symbolic execution and rejects missing runtime bytes or opcodes.
 std::optional<uint64_t>
 run(const LowFunc &Function, uint64_t Input, uint64_t Limit,
-    const std::map<uint64_t, uint64_t> &ExtraRegisters = {}) {
+    const std::map<uint64_t, uint64_t> &ExtraRegisters = {},
+    llvm::endianness Order = llvm::endianness::little) {
   using Key = std::pair<VnodeSpace, uint64_t>;
   std::map<Key, uint8_t> Values;
   std::map<uint64_t, uint8_t> Memory;
@@ -359,9 +543,13 @@ run(const LowFunc &Function, uint64_t Input, uint64_t Limit,
   for (const auto &Block : Function.Blocks)
     Blocks.emplace(Block.Id, &Block);
   bool Valid = true;
+  const auto ByteShift = [&](unsigned Byte, unsigned Bytes) {
+    return 8 * (Order == llvm::endianness::little ? Byte : Bytes - Byte - 1);
+  };
   const auto Write = [&](NdVar Destination, uint64_t Value) {
     for (unsigned I = 0; I < Destination.Size; ++I)
-      Values[{Destination.Space, Destination.Offset + I}] = Value >> (8 * I);
+      Values[{Destination.Space, Destination.Offset + I}] =
+          Value >> ByteShift(I, Destination.Size);
   };
   const auto Read = [&](NdVar Value) {
     uint64_t Result = Value.isConst() ? Value.Offset : 0;
@@ -372,7 +560,7 @@ run(const LowFunc &Function, uint64_t Input, uint64_t Limit,
           Valid = false;
           return uint64_t{0};
         }
-        Result |= uint64_t{At->second} << (8 * I);
+        Result |= uint64_t{At->second} << ByteShift(I, Value.Size);
       }
     return Value.Size == 8 ? Result
                            : Result & ((uint64_t{1} << (Value.Size * 8)) - 1);
@@ -412,6 +600,11 @@ run(const LowFunc &Function, uint64_t Input, uint64_t Limit,
       case NdOp::INT_XOR:
         Write(Op.Output, A() ^ B());
         break;
+      case NdOp::INT_RIGHT: {
+        const auto Shift = B();
+        Write(Op.Output, Shift < Op.Inputs[0].Size * 8 ? A() >> Shift : 0);
+        break;
+      }
       case NdOp::INT_EQUAL:
         Write(Op.Output, A() == B());
         break;
@@ -435,7 +628,7 @@ run(const LowFunc &Function, uint64_t Input, uint64_t Limit,
           const auto At = Memory.find(Address + Byte);
           if (At == Memory.end())
             return std::nullopt;
-          Value |= uint64_t{At->second} << (8 * Byte);
+          Value |= uint64_t{At->second} << ByteShift(Byte, Access.AccessSize);
         }
         Write(Op.Output, Value);
         break;
@@ -445,7 +638,7 @@ run(const LowFunc &Function, uint64_t Input, uint64_t Limit,
         const auto Address = Read(*Access.Address);
         const auto Value = Read(*Access.StoredValue);
         for (unsigned Byte = 0; Byte < Access.AccessSize; ++Byte)
-          Memory[Address + Byte] = Value >> (8 * Byte);
+          Memory[Address + Byte] = Value >> ByteShift(Byte, Access.AccessSize);
         break;
       }
       case NdOp::BRANCH:
@@ -635,6 +828,119 @@ TEST(ControlStateRecovery, DiscoveryIgnoresUnrelatedControlRegisterReuse) {
   }
 }
 
+TEST(ControlStateRecovery, AutomaticRelationsFollowSeparateControlLifetimes) {
+  auto Provider = makeSeparateControlLifetimesProgram();
+  auto Options = automaticBankOptions();
+  Options.MaxContextsPerAddress = 1;
+  // Two independent eight-value selectors need only eight tuples at a time.
+  // Their 64-value product exceeds the unchanged 32-tuple default. The first
+  // selector is never used in the loop, so keeping that product would discard
+  // precision needed by the second selector for no semantic reason.
+  ASSERT_EQ(Options.MaxControlTuples, 32u);
+  const auto Result =
+      specializeInterpreter(Provider, {FirstPhaseEntry}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_GE(Result.DiscoveredControlFields, 2u);
+  EXPECT_EQ(Result.DiscoveredContextFields, 0u);
+  EXPECT_LE(Result.ControlRefinements, Options.MaxControlRefinements);
+  EXPECT_LE(Result.DiscoveryVisits, Options.MaxDiscoveryVisits);
+  EXPECT_LE(Result.SolverQueries, Options.MaxSolverQueries);
+  for (uint64_t Input = 0; Input < 64; ++Input)
+    for (uint64_t Limit : {1ULL, 3ULL, 11ULL}) {
+      uint64_t Expected = 0;
+      for (uint64_t Iteration = 0; Iteration < Limit; ++Iteration)
+        Expected += (Input ^ 45) + 3 + 11 * (((Input >> 3) + Iteration) & 7);
+      EXPECT_EQ(run(Result.Residual, Input, Limit), Expected);
+    }
+}
+
+TEST(ControlStateRecovery,
+     AlreadyFiniteProducersDoNotStarveLaterControlDiscovery) {
+  auto Provider = makeFiniteProducerProgram();
+  auto Options = automaticBankOptions();
+  Options.MaxContextsPerAddress = 1;
+  ASSERT_EQ(Options.MaxControlFields, 16u);
+  // The first masked selector is already provably finite. Expanding all 17
+  // of its producers while the second phase still needs new fields exhausts
+  // the field budget without adding needed precision to the first dispatch.
+  const auto Result =
+      specializeInterpreter(Provider, {FirstPhaseEntry}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_LE(Result.DiscoveredControlFields, Options.MaxControlFields);
+  EXPECT_EQ(Result.DiscoveredContextFields, 0u);
+  EXPECT_LE(Result.ControlRefinements, Options.MaxControlRefinements);
+  EXPECT_LE(Result.DiscoveryVisits, Options.MaxDiscoveryVisits);
+  EXPECT_LE(Result.SolverQueries, Options.MaxSolverQueries);
+  EXPECT_EQ(Result.Reads.size(), 16u);
+  for (uint64_t FirstSelector = 0; FirstSelector < 8; ++FirstSelector) {
+    std::map<uint64_t, uint64_t> ExtraRegisters;
+    uint64_t Combined = 0;
+    for (unsigned I = 0; I + 1 < FirstProducerInputs; ++I) {
+      const auto Value = uint64_t{0x9e3779b97f4a7c15} * (I + 1);
+      Combined ^= Value;
+      ExtraRegisters.emplace(FirstProducerRegister + I * 8, Value);
+    }
+    ExtraRegisters.emplace(FirstProducerRegister +
+                               (FirstProducerInputs - 1) * 8,
+                           Combined ^ FirstSelector);
+    for (uint64_t Input : {0ULL, 7ULL, 8ULL, 19ULL, 63ULL, ~0ULL})
+      for (uint64_t Limit : {1ULL, 11ULL}) {
+        uint64_t Expected = 9 + 7 * FirstSelector;
+        for (uint64_t Iteration = 0; Iteration < Limit; ++Iteration)
+          Expected += (Input ^ 45) + 3 + 11 * (((Input >> 3) + Iteration) & 7);
+        EXPECT_EQ(run(Result.Residual, Input, Limit, ExtraRegisters), Expected);
+      }
+  }
+}
+
+TEST(ControlStateRecovery, CompleteWideDomainsRetainCommonByteLanes) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big})
+    for (bool FrameField : {false, true}) {
+      SCOPED_TRACE(Order == llvm::endianness::little ? "little" : "big");
+      SCOPED_TRACE(FrameField ? "frame" : "register");
+      auto Provider = makeCommonControlByteProgram(FrameField, Order);
+      auto Options = bankOptions(false, !FrameField);
+      Options.ByteOrder = Order;
+      Options.RequireRestoredFrameAtReturn = true;
+      Options.MaxContextsPerAddress = 1;
+      if (FrameField)
+        Options.ControlFrameSlots = {{WideControlSlot, 8}};
+      // Neither whole word is constant. Only a complete two-value proof can
+      // retain the low byte as zero and establish the exact frame write.
+      const auto Result = specializeInterpreter(Provider, {Entry}, Options);
+      ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+      EXPECT_EQ(Result.DiscoveredControlFields, 0u);
+      for (uint64_t Input : {0ULL, 1ULL, 2ULL, 19ULL, ~0ULL})
+        EXPECT_EQ(run(Result.Residual, Input, 1, {}, Order),
+                  (Input ^ 29) + (Input == 0 ? 0x100 : 0));
+    }
+}
+
+TEST(ControlStateRecovery, IncompleteWideDomainsDoNotInventCommonBytes) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big})
+    for (bool FrameField : {false, true})
+      for (uint32_t TupleLimit : {1u, 2u}) {
+        SCOPED_TRACE(Order == llvm::endianness::little ? "little" : "big");
+        SCOPED_TRACE(FrameField ? "frame" : "register");
+        SCOPED_TRACE(TupleLimit);
+        auto Provider = makeCommonControlByteProgram(FrameField, Order, true);
+        auto Options = bankOptions(false, !FrameField);
+        Options.ByteOrder = Order;
+        Options.RequireRestoredFrameAtReturn = true;
+        Options.MaxControlTuples = TupleLimit;
+        if (FrameField)
+          Options.ControlFrameSlots = {{WideControlSlot, 8}};
+        // The third value has low byte eight, which would make the write
+        // overlap the entry return slot. A prefix of the domain is no proof.
+        const auto Result = specializeInterpreter(Provider, {Entry}, Options);
+        EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported)
+            << Result.Diagnostic;
+        EXPECT_TRUE(Result.Residual.Blocks.empty());
+        EXPECT_TRUE(Result.Origins.empty());
+        EXPECT_TRUE(Result.Reads.empty());
+      }
+}
+
 TEST(ControlStateRecovery, AutomaticDiscoveryCannotInventUnboundedInputs) {
   for (auto Input :
        {SelectorInput::UnboundedScalar, SelectorInput::UnknownMemory}) {
@@ -791,4 +1097,33 @@ TEST(ControlStateRecovery, MemoryDemandFollowsAlreadyFiniteProducerChain) {
   EXPECT_EQ(Result.Reads.front().Address, TableBase);
   for (uint64_t Input : {0ULL, 1ULL, 6ULL, 17ULL, 0xabcdef0123456789ULL, ~0ULL})
     EXPECT_EQ(run(Result.Residual, Input, 0), Input ^ 83);
+}
+
+TEST(ControlStateRecovery, BitDemandsDoNotExpandAcrossProducerPhases) {
+  auto Provider = makeCrossPhaseBitDemandProgram();
+  const auto Options = finiteDependencyOptions(false, true);
+  // Only bit zero of the first phase's 16-value byte selects a handler. Its
+  // upper nibble comes from 17 unrelated inputs. Expanding a one-bit demand
+  // to a byte while walking back over a boundary would register those inputs
+  // when the later finite dependency chain needs deferred refinement.
+  ASSERT_EQ(Options.MaxControlFields, 16u);
+  const auto Result =
+      specializeInterpreter(Provider, {FirstPhaseEntry}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_LE(Result.DiscoveredControlFields, Options.MaxControlFields);
+  EXPECT_LE(Result.ControlRefinements, Options.MaxControlRefinements);
+  EXPECT_LE(Result.DiscoveryVisits, Options.MaxDiscoveryVisits);
+  EXPECT_LE(Result.SolverQueries, Options.MaxSolverQueries);
+  for (uint64_t Seed : {0ULL, 37ULL, ~0ULL}) {
+    std::map<uint64_t, uint64_t> ExtraRegisters;
+    uint64_t Combined = 0;
+    for (unsigned I = 0; I < FirstProducerInputs; ++I) {
+      const auto Value = (Seed + 23 * I) ^ (Seed >> I);
+      Combined ^= Value;
+      ExtraRegisters.emplace(FirstProducerRegister + I * 8, Value);
+    }
+    for (uint64_t Input : {0ULL, 1ULL, 6ULL, 17ULL, 0xabcdefULL, ~0ULL})
+      EXPECT_EQ(run(Result.Residual, Input, 0, ExtraRegisters),
+                (Input ^ 83) + 9 + 16 * (Combined & 15));
+  }
 }
