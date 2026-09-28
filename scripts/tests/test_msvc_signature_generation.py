@@ -308,7 +308,7 @@ FAKE_SIGMAKER = textwrap.dedent(
     lines.append("DEADBEEF 00 0000 0004 :0000 ??$fold@H@@YAXXZ")
     lines.append("DEADBEEF 00 0000 0004 :0000 ??$fold@I@@YAXXZ")
     output.write_text("\\n".join(lines) + "\\n")
-    print(f"Generated {{len(lines)}} signatures")
+    print(f"Generated {{len(lines)}} signatures \u2192 {{output}} (1 object)")
     """
 )
 
@@ -407,6 +407,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(
             [source["asset"] for source in provenance["sources"]],
             ["vs2026-14.50.1-arm64", "vs2026-14.51.2-arm64"],
+        )
+        # The record does not name the scratch directory the lines were made in.
+        self.assertEqual(
+            provenance["sources"][0]["sigmaker"],
+            "Generated 3 signatures \u2192 vs2026-14.50.1-arm64.pat (1 object)",
         )
 
     def test_imported_lines_join_the_generated_file_under_the_same_rules(self) -> None:

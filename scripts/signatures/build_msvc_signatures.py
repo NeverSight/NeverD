@@ -599,7 +599,9 @@ def generate(
             raise BuildError(f"{asset.name} produced no signatures")
         generated.extend(lines)
         entry = asset.provenance()
-        entry["sigmaker"] = summary
+        # The summary names the scratch file it wrote; the record keeps only
+        # the file's name, so that it reads the same on every machine and run.
+        entry["sigmaker"] = summary.replace(str(pat), pat.name)
         sources.append(entry)
         shutil.rmtree(work_root / asset.name)
         pat.unlink()
