@@ -522,7 +522,7 @@ void proveSourceFlow(const HighFunc &F, Facts Initial, Transfer Evaluate,
   const auto Graph = buildHighSourceFlowGraph(F);
   if (!Graph.Diagnostics.Complete || Graph.Nodes.empty())
     throw Invalid("block source has incomplete source control flow");
-  constexpr size_t MaxWork = 1000000, MaxFacts = 262144;
+  constexpr size_t MaxWork = 4000000, MaxFacts = 262144;
   size_t Work = 0, FactCount = 0;
   std::vector<std::optional<Facts>> Incoming(Graph.Nodes.size());
   std::vector<bool> Queued(Graph.Nodes.size());
