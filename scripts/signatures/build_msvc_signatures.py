@@ -94,7 +94,9 @@ ARCHITECTURES = {
     "arm64": (Path("pe/arm/64"), "arm64"),
 }
 
-LIBRARY_SUFFIXES = (".lib", ".obj")
+# MSVC's archives and objects, and the GNU ar archives and objects MinGW
+# builds: both hold COFF objects, which --machine sorts by architecture.
+LIBRARY_SUFFIXES = (".lib", ".obj", ".a", ".o")
 
 # What a library asset may name its file: a plain stem, and not one the
 # toolset and SDK files already use.

@@ -448,6 +448,21 @@ class BuildTests(unittest.TestCase):
                        for source in provenance["sources"]])
         self.assertIn("ambiguous groups dropped", report)
 
+    def test_a_library_built_with_mingw_is_read_from_its_ar_archive(self) -> None:
+        self._asset(
+            "mingw32-zlib-1.3-x86",
+            {"kind": "library", "arch": "x86", "library": "mingw32-zlib",
+             "library_version": "1.3"},
+            {"mingw32-zlib/x86/libz.a": b"a", "mingw32-zlib/x86/README": b"r"},
+        )
+
+        self._run()
+
+        self.assertEqual(
+            (self.root / "sigs/pe/x86/32/mingw32-zlib.pat").read_text().splitlines(),
+            ["AA04CCDD 00 0000 0004 :0000 x86_libz"],
+        )
+
     def test_archive_that_disagrees_with_its_manifest_fails(self) -> None:
         self._asset(
             "winsdk-10.0.26100.0-x64",
