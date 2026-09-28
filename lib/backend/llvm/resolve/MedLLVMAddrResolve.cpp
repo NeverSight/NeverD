@@ -1648,9 +1648,19 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       return {};
     }
   };
+  std::map<AddressProvenanceVarKey, FrameRootKey> FrameRootMemo;
   auto frameRoot = [&](const MedVar &Start, int Depth,
                        std::set<Key> Seen) -> std::optional<FrameRootKey> {
+    const bool IndependentQuery = Depth == 0 && Seen.empty();
+    const auto CacheKey = addressProvenanceVarKey(Start);
+    if (IndependentQuery)
+      if (auto It = FrameRootMemo.find(CacheKey); It != FrameRootMemo.end())
+        return It->second;
     FrameRootProof Proof = frameRootProof(Start, Depth, std::move(Seen));
+    // Reuse only complete acyclic root proofs. Recurrence and rejected paths
+    // can depend on the calling DFS or an exhausted budget.
+    if (IndependentQuery && Proof.Valid && !Proof.SawCycle && Proof.Root)
+      FrameRootMemo.emplace(CacheKey, *Proof.Root);
     return Proof.Valid ? Proof.Root : std::nullopt;
   };
   std::set<FrameRootKey> ActiveFrameDomains;
