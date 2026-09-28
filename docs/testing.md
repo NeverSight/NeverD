@@ -156,7 +156,9 @@ control hints: direct-threaded pointer bytecode, a bounded software CALL/RET
 stack with nested virtual calls, and a loop with rotating opcode-decoder state.
 The tests compare native SysV/Win64 execution and both recovered C backends at
 O0/O2 against independent mathematical oracles, including returned values,
-output stores and canaries. They also assemble ELF and COFF variants. Unknown
+output stores and canaries. They also assemble ELF and COFF variants. COFF
+coverage is assembly-only; the Win64 calling-convention oracle runs as Linux
+ELF with `ms_abi`, not as a Windows PE executable. Unknown
 virtual return cursors, unconstrained decoder keys and an exhausted recovery
 budget must refuse source publication.
 

@@ -3153,7 +3153,9 @@ class RepositoryCapabilityTests(unittest.TestCase):
         expected_surfaces = {
             "analysis.interpreter-source-recovery": {
                 "c": ["neverd_devirtualize_source_v1",
-                      "neverd_devirtualize_machine_source_v1"],
+                      "neverd_devirtualize_machine_source_v1",
+                      "neverd_devirtualize_source_v2",
+                      "neverd_devirtualize_machine_source_v2"],
                 "python": [],
                 "cli": [
                     "neverd decompile --devirtualize",
@@ -3164,6 +3166,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd decompile --vm-max-contexts",
                     "neverd decompile --vm-max-nodes",
                     "neverd decompile --vm-max-operations",
+                    "neverd decompile --vm-max-refinements",
                 ],
                 "json": [],
             },
