@@ -566,6 +566,19 @@ class NeverDDevirtualizeOptionsV1(ctypes.Structure):
     ]
 
 
+class NeverDDevirtualizeOptionsV2(ctypes.Structure):
+    """v1 base plus a refinement limit; zero selects the default of 16.
+
+    Initialize ``base.struct_size`` with ``ctypes.sizeof(options)``.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV1),
+        ("max_control_refinements", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -676,6 +689,9 @@ _C_TYPES: dict[str, object] = {
     "const char * *": ctypes.POINTER(ctypes.c_void_p),
     "const neverd_devirtualize_options_v1 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV1
+    ),
+    "const neverd_devirtualize_options_v2 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV2
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -1421,6 +1437,20 @@ _declare(
      "const neverd_devirtualize_options_v1 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_devirtualize_source_v2",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v2 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v2",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v2 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_version", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_project_name", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_version_number", "const char *", [], ownership=Ownership.OWNED_STRING)
@@ -1438,6 +1468,7 @@ __all__ = [
     "NeverDDriverOptionsV1",
     "NeverDDevirtualizeFrameSlotV1",
     "NeverDDevirtualizeOptionsV1",
+    "NeverDDevirtualizeOptionsV2",
     "NeverDPlugin",
     "NeverDOptimizeLLVMOptions",
     "NeverDOptimizeLLVMResult",

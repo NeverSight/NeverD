@@ -358,6 +358,10 @@ cl::opt<unsigned> VMMaxNodes("vm-max-nodes", cl::desc("Recovery node budget"),
 cl::opt<unsigned> VMMaxContexts("vm-max-contexts",
                                 cl::desc("Contexts per native address"),
                                 cl::init(64), cl::sub(DecompileCmd));
+cl::opt<std::string> VMMaxRefinements(
+    "vm-max-refinements",
+    cl::desc("Control-state refinement rounds (positive; default: 16)"),
+    cl::value_desc("count"), cl::init("16"), cl::sub(DecompileCmd));
 cl::opt<uint64_t> VMMaxOperations("vm-max-operations",
                                   cl::desc("Recovery operation budget"),
                                   cl::init(262144), cl::sub(DecompileCmd));

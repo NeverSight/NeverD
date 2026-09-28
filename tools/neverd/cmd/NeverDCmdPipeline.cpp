@@ -435,12 +435,23 @@ int runDecompile(neverd_session_t Sess) {
       (VMMachineState || !VMControlRegisters.empty() ||
        !VMControlFrameSlots.empty() || !VMRecoveryReport.empty() ||
        VMMaxNodes.getNumOccurrences() || VMMaxContexts.getNumOccurrences() ||
-       VMMaxOperations.getNumOccurrences())) {
+       VMMaxOperations.getNumOccurrences() ||
+       VMMaxRefinements.getNumOccurrences())) {
     WithColor::error() << "VM recovery options require --devirtualize\n";
     return 1;
   }
   if (Devirtualize && (!VMMaxNodes || !VMMaxContexts || !VMMaxOperations)) {
     WithColor::error() << "VM recovery budgets must be positive\n";
+    return 1;
+  }
+  uint32_t MaxRefinements = 0;
+  const StringRef RefinementsText(VMMaxRefinements.getValue());
+  if (Devirtualize &&
+      (RefinementsText.empty() ||
+       RefinementsText.find_first_not_of("0123456789") != StringRef::npos ||
+       RefinementsText.getAsInteger(10, MaxRefinements) || !MaxRefinements)) {
+    WithColor::error()
+        << "--vm-max-refinements expects a positive 32-bit decimal integer\n";
     return 1;
   }
   const char *Source = nullptr;
@@ -487,23 +498,24 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v1 Recovery{};
-      Recovery.struct_size = sizeof(Recovery);
-      Recovery.control_registers = Controls.data();
-      Recovery.control_register_count = Controls.size();
-      Recovery.control_frame_slots = FrameSlots.data();
-      Recovery.control_frame_slot_count = FrameSlots.size();
-      Recovery.max_nodes = VMMaxNodes;
-      Recovery.max_contexts_per_address = VMMaxContexts;
-      Recovery.max_operations = VMMaxOperations;
-      Recovery.use_llvm = LlvmRoute;
-      Recovery.no_opt = NoOpt;
+      neverd_devirtualize_options_v2 Recovery{};
+      Recovery.base.struct_size = sizeof(Recovery);
+      Recovery.max_control_refinements = MaxRefinements;
+      Recovery.base.control_registers = Controls.data();
+      Recovery.base.control_register_count = Controls.size();
+      Recovery.base.control_frame_slots = FrameSlots.data();
+      Recovery.base.control_frame_slot_count = FrameSlots.size();
+      Recovery.base.max_nodes = VMMaxNodes;
+      Recovery.base.max_contexts_per_address = VMMaxContexts;
+      Recovery.base.max_operations = VMMaxOperations;
+      Recovery.base.use_llvm = LlvmRoute;
+      Recovery.base.no_opt = NoOpt;
       const char *Report = nullptr;
       Source =
           VMMachineState
-              ? neverd_devirtualize_machine_source_v1(Sess, Entry, &Recovery,
+              ? neverd_devirtualize_machine_source_v2(Sess, Entry, &Recovery,
                                                       &Report)
-              : neverd_devirtualize_source_v1(Sess, Entry, &Recovery, &Report);
+              : neverd_devirtualize_source_v2(Sess, Entry, &Recovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;
         raw_fd_ostream OS(VMRecoveryReport, EC);

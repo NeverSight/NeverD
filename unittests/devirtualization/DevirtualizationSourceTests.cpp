@@ -526,6 +526,7 @@ TEST_F(DevirtualizationSourceTest, CLIEmitsSourceAndEvidenceOnlyOnSuccess) {
   ASSERT_NE(Object, nullptr);
   EXPECT_EQ(Object->getBoolean("complete"), true);
   EXPECT_EQ(Object->getBoolean("controlComplete"), true);
+  EXPECT_EQ(Object->getInteger("maxControlRefinements"), 16);
   for (const char *Key :
        {"maxNodes", "maxContextsPerAddress", "maxOperations",
         "maxNodeEvaluations", "maxIndirectTargets", "maxImmutableReadAddresses",
@@ -565,6 +566,84 @@ TEST_F(DevirtualizationSourceTest, CLIEmitsSourceAndEvidenceOnlyOnSuccess) {
       << llvm::toString(InvalidJSON.takeError());
   ASSERT_NE(InvalidJSON->getAsObject(), nullptr);
   EXPECT_EQ(InvalidJSON->getAsObject()->getBoolean("complete"), false);
+}
+
+TEST_F(DevirtualizationSourceTest, CLIRefinementBudgetControlsBothSourceABIs) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "public recovery budget checks require clang";
+  const auto Binary = tmpFile("generic-refinement-budget.elf");
+  const auto Compiled = buildFixture(Binary, "generic_control_state.S");
+  ASSERT_TRUE(Compiled.ok()) << Compiled.err;
+  for (bool MachineState : {false, true})
+    for (bool LLVM : {false, true})
+      for (unsigned Limit : {1u, 2u}) {
+        SCOPED_TRACE(MachineState ? "machine-state" : "ordinary-source");
+        SCOPED_TRACE(LLVM ? "LLVMC" : "HighC");
+        SCOPED_TRACE(Limit);
+        const auto Stem = std::to_string(MachineState) + "-" +
+                          std::to_string(LLVM) + "-" + std::to_string(Limit);
+        const auto Source = tmpFile(Stem + ".c");
+        const auto Report = tmpFile(Stem + ".json");
+        std::vector<std::string> Args{"decompile",
+                                      Binary.string(),
+                                      "--func",
+                                      "generic_control_state",
+                                      "--devirtualize",
+                                      "--vm-max-refinements=" +
+                                          std::to_string(Limit),
+                                      "--recovery-report=" + Report.string(),
+                                      "-o",
+                                      Source.string()};
+        if (MachineState)
+          Args.push_back("--vm-machine-state");
+        if (LLVM)
+          Args.push_back("--llvm");
+        const auto Recovered = exec(ndBin(), Args);
+        const bool Complete = Limit == 2;
+        EXPECT_EQ(Recovered.ok(), Complete) << Recovered.err;
+        EXPECT_EQ(fs::exists(Source), Complete);
+        auto JSON = llvm::json::parse(readSource(Report));
+        ASSERT_TRUE(static_cast<bool>(JSON))
+            << llvm::toString(JSON.takeError());
+        const auto *Object = JSON->getAsObject();
+        ASSERT_NE(Object, nullptr);
+        EXPECT_EQ(Object->getBoolean("complete"), Complete);
+        EXPECT_EQ(Object->getBoolean("controlComplete"), Complete);
+        EXPECT_EQ(Object->getInteger("maxControlRefinements"), Limit);
+        EXPECT_EQ(Object->getInteger("controlRefinements"), Limit);
+        for (const char *Key : {"controlRegisters", "controlFrameSlots"}) {
+          const auto *Fields = Object->getArray(Key);
+          ASSERT_NE(Fields, nullptr);
+          EXPECT_TRUE(Fields->empty());
+        }
+        if (Complete)
+          EXPECT_FALSE(readSource(Source).empty());
+      }
+}
+
+TEST_F(DevirtualizationSourceTest, CLIRejectsInvalidRefinementBudgets) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "public recovery budget checks require clang";
+  const auto Binary = tmpFile("generic-refinement-options.elf");
+  const auto Compiled = buildFixture(Binary);
+  ASSERT_TRUE(Compiled.ok()) << Compiled.err;
+  const auto Source = tmpFile("invalid-refinement-options.c");
+  for (const char *Value : {"0", "-1", "4294967296", "1junk"}) {
+    SCOPED_TRACE(Value);
+    const auto Refused =
+        exec(ndBin(), {"decompile", Binary.string(), "--func",
+                       "generic_vm_register_arithmetic", "--devirtualize",
+                       std::string("--vm-max-refinements=") + Value, "-o",
+                       Source.string()});
+    EXPECT_FALSE(Refused.ok());
+    EXPECT_FALSE(fs::exists(Source));
+  }
+  const auto WithoutRecovery =
+      exec(ndBin(), {"decompile", Binary.string(), "--func",
+                     "generic_vm_register_arithmetic", "--vm-max-refinements=2",
+                     "-o", Source.string()});
+  EXPECT_FALSE(WithoutRecovery.ok());
+  EXPECT_FALSE(fs::exists(Source));
 }
 
 TEST_F(DevirtualizationSourceTest,

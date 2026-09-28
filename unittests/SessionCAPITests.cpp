@@ -595,6 +595,114 @@ protected:
   neverd_session_t Session = nullptr;
 };
 
+TEST_F(SessionCAPITest, InterpreterRecoveryV2RejectsTruncationBeforeTailReads) {
+  for (auto Recover :
+       {neverd_devirtualize_source_v2, neverd_devirtualize_machine_source_v2}) {
+    // The v2 entry point must not read beyond a caller's accessible prefix.
+    size_t SizeOnly = sizeof(size_t);
+    neverd_devirtualize_options_v1 V1Only{};
+    V1Only.struct_size = sizeof(V1Only);
+    neverd_devirtualize_options_v2 Partial{};
+    Partial.base.struct_size = sizeof(Partial) - 1;
+    for (const auto *Options :
+         {reinterpret_cast<const neverd_devirtualize_options_v2 *>(&SizeOnly),
+          reinterpret_cast<const neverd_devirtualize_options_v2 *>(&V1Only),
+          static_cast<const neverd_devirtualize_options_v2 *>(&Partial)}) {
+      const char *Report = nullptr;
+      EXPECT_EQ(Recover(Session, 0, Options, &Report), nullptr);
+      const std::string Text = takeString(Report);
+      EXPECT_NE(Text.find("complete v2 structure"), std::string::npos);
+    }
+  }
+}
+
+TEST_F(SessionCAPITest, InterpreterRecoveryV2RejectsBothReservedFields) {
+  for (auto Recover :
+       {neverd_devirtualize_source_v2, neverd_devirtualize_machine_source_v2}) {
+    for (bool Extension : {false, true}) {
+      neverd_devirtualize_options_v2 Options{};
+      Options.base.struct_size = sizeof(Options);
+      if (Extension)
+        Options.reserved = 1;
+      else
+        Options.base.reserved = 1;
+      const char *Report = nullptr;
+      EXPECT_EQ(Recover(Session, 0, &Options, &Report), nullptr);
+      auto Parsed = llvm::json::parse(takeString(Report));
+      ASSERT_TRUE(static_cast<bool>(Parsed));
+      const auto *Object = Parsed->getAsObject();
+      ASSERT_NE(Object, nullptr);
+      EXPECT_EQ(Object->getBoolean("complete"), false);
+      EXPECT_EQ(Object->getString("error"),
+                Extension ? "invalid devirtualize v2 flags"
+                          : "invalid devirtualize flags");
+    }
+    const char *Report = "previous";
+    EXPECT_EQ(Recover(nullptr, 0, nullptr, &Report), nullptr);
+    EXPECT_EQ(Report, nullptr);
+  }
+}
+
+TEST_F(SessionCAPITest,
+       InterpreterRecoveryVersionsPreserveDefaultsAndFutureTails) {
+  const auto Input = write("recovery-options.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  // The v1 layout, including its tail padding, is frozen on the supported
+  // 64-bit ABI. v2 adds fields after that complete base, not inside padding.
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v2, base), 0u);
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v2, max_control_refinements),
+            sizeof(neverd_devirtualize_options_v1));
+  if (sizeof(void *) == 8) {
+    EXPECT_EQ(sizeof(neverd_devirtualize_options_v1), 72u);
+    EXPECT_EQ(sizeof(neverd_devirtualize_options_v2), 80u);
+  }
+  for (bool Machine : {false, true}) {
+    SCOPED_TRACE(Machine);
+    const auto V1 = Machine ? neverd_devirtualize_machine_source_v1
+                            : neverd_devirtualize_source_v1;
+    const auto V2 = Machine ? neverd_devirtualize_machine_source_v2
+                            : neverd_devirtualize_source_v2;
+    const auto Check = [&](auto Recover, const auto *Options,
+                           uint32_t ExpectedBudget) {
+      const char *Report = nullptr;
+      const std::string Source =
+          takeString(Recover(Session, Entry, Options, &Report));
+      const std::string Evidence = takeString(Report);
+      ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+      auto Parsed = llvm::json::parse(Evidence);
+      ASSERT_TRUE(static_cast<bool>(Parsed));
+      const auto *Object = Parsed->getAsObject();
+      ASSERT_NE(Object, nullptr);
+      EXPECT_EQ(Object->getBoolean("complete"), true);
+      EXPECT_EQ(Object->getInteger("maxControlRefinements"), ExpectedBudget);
+      EXPECT_EQ(Object->getString("sourceABI"),
+                Machine ? "x64-machine-state-v1" : "ordinary-source");
+    };
+    Check(V1, static_cast<const neverd_devirtualize_options_v1 *>(nullptr), 16);
+    Check(V2, static_cast<const neverd_devirtualize_options_v2 *>(nullptr), 16);
+    neverd_devirtualize_options_v2 Options{};
+    Options.base.struct_size = sizeof(Options);
+    Check(V2, &Options, 16);
+    for (uint32_t Limit : {1u, 37u}) {
+      Options.max_control_refinements = Limit;
+      Check(V2, &Options, Limit);
+    }
+    // An older caller/library treats every future byte as opaque, even when
+    // it happens to resemble a newer version's budget or reserved field.
+    Options.reserved = ~uint32_t{0};
+    Check(V1, &Options.base, 16);
+    struct FutureOptions {
+      neverd_devirtualize_options_v2 Known;
+      uint64_t Opaque;
+    } Future{};
+    Future.Known.base.struct_size = sizeof(Future);
+    Future.Known.max_control_refinements = 23;
+    Future.Opaque = ~uint64_t{0};
+    Check(V2, &Future.Known, 23);
+  }
+}
+
 TEST_F(SessionCAPITest,
        NativeMobileObserverSeesRawImageBeforeNormalizedPublication) {
   ScopedNativePhaseEnvironment Environment;

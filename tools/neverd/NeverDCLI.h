@@ -186,6 +186,7 @@ extern llvm::cl::list<std::string> VMControlRegisters;
 extern llvm::cl::list<std::string> VMControlFrameSlots;
 extern llvm::cl::opt<unsigned> VMMaxNodes;
 extern llvm::cl::opt<unsigned> VMMaxContexts;
+extern llvm::cl::opt<std::string> VMMaxRefinements;
 extern llvm::cl::opt<uint64_t> VMMaxOperations;
 extern llvm::cl::opt<std::string> VMRecoveryReport;
 extern llvm::cl::opt<bool> VMMachineState;

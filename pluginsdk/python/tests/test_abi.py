@@ -6,6 +6,7 @@ import unittest
 from scripts.check_python_plugin_sdk import (
     C_API_HEADER,
     check_concolic_abi,
+    check_devirtualization_abi,
     check_sanitizer_abi,
     parse_c_api_header,
 )
@@ -21,6 +22,42 @@ class ABIInventoryTests(unittest.TestCase):
         errors: list[str] = []
         check_concolic_abi(errors)
         self.assertEqual(errors, [])
+
+    def test_devirtualization_v2_extends_the_frozen_v1_layout(self) -> None:
+        from neverd_plugin import abi
+
+        errors: list[str] = []
+        check_devirtualization_abi(errors)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            abi.NeverDDevirtualizeOptionsV2._fields_,
+            [("base", abi.NeverDDevirtualizeOptionsV1),
+             ("max_control_refinements", ctypes.c_uint32),
+             ("reserved", ctypes.c_uint32)],
+        )
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV2.base.offset, 0)
+        self.assertEqual(
+            abi.NeverDDevirtualizeOptionsV2.max_control_refinements.offset,
+            ctypes.sizeof(abi.NeverDDevirtualizeOptionsV1),
+        )
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV1), 72)
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV2), 80)
+        options = abi.NeverDDevirtualizeOptionsV2()
+        options.base.struct_size = ctypes.sizeof(options)
+        self.assertEqual(options.max_control_refinements, 0)
+        self.assertEqual(options.base.reserved, 0)
+        self.assertEqual(options.reserved, 0)
+        for version in (1, 2):
+            for prefix in ("source", "machine_source"):
+                spec = abi.FUNCTION_SPECS[f"neverd_devirtualize_{prefix}_v{version}"]
+                self.assertEqual(
+                    spec.c_arguments,
+                    ("neverd_session_t", "neverd_va_t",
+                     f"const neverd_devirtualize_options_v{version} *",
+                     "const char * *"),
+                )
+                self.assertIs(spec.ownership, abi.Ownership.OWNED_STRING)
 
     def test_public_enums_are_the_exact_abi_definitions(self) -> None:
         import neverd_plugin

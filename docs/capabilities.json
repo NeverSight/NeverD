@@ -9470,12 +9470,32 @@
           "platforms": [
             "linux"
           ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDevirtualizationSourceTests",
+          "source": "unittests/devirtualization/DevirtualizationSourceTests.cpp",
+          "filter": "DevirtualizationSourceTest.CLIRefinementBudgetControlsBothSourceABIs",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDevirtualizationSourceTests",
+          "source": "unittests/devirtualization/DevirtualizationSourceTests.cpp",
+          "filter": "DevirtualizationSourceTest.CLIRejectsInvalidRefinementBudgets",
+          "platforms": [
+            "linux"
+          ]
         }
       ],
       "public_surfaces": {
         "c": [
           "neverd_devirtualize_source_v1",
-          "neverd_devirtualize_machine_source_v1"
+          "neverd_devirtualize_machine_source_v1",
+          "neverd_devirtualize_source_v2",
+          "neverd_devirtualize_machine_source_v2"
         ],
         "python": [],
         "cli": [
@@ -9486,7 +9506,8 @@
           "neverd decompile --vm-machine-state",
           "neverd decompile --vm-max-contexts",
           "neverd decompile --vm-max-nodes",
-          "neverd decompile --vm-max-operations"
+          "neverd decompile --vm-max-operations",
+          "neverd decompile --vm-max-refinements"
         ],
         "json": []
       }

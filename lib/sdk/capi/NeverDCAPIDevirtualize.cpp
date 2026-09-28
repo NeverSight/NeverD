@@ -258,10 +258,11 @@ std::string llvmRecoverySourceLimitation(const llvm::Module &Module) {
 }
 } // namespace
 
-static const char *
-devirtualizeSource(neverd_session_t Session, neverd_va_t Entry,
-                   const neverd_devirtualize_options_v1 *Options,
-                   const char **Report, bool MachineState) {
+static const char *devirtualizeSource(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v1 *Options, const char **Report,
+    bool MachineState,
+    const neverd_devirtualize_options_v2 *ExtendedOptions = nullptr) {
   if (Report)
     *Report = nullptr;
   auto *S = toSession(Session);
@@ -311,9 +312,18 @@ devirtualizeSource(neverd_session_t Session, neverd_va_t Entry,
           "disjoint from "
           "guest memory; fixed original mappings; little-endian 64-bit host";
     if (Options) {
-      if (Options->struct_size < sizeof(*Options))
+      const size_t RequiredSize =
+          ExtendedOptions ? sizeof(*ExtendedOptions) : sizeof(*Options);
+      if (Options->struct_size < RequiredSize)
         return Fail(
-            "devirtualize options do not cover the complete v1 structure");
+            ExtendedOptions
+                ? "devirtualize options do not cover the complete v2 structure"
+                : "devirtualize options do not cover the complete v1 "
+                  "structure");
+      // A v1 caller may provide an arbitrary future tail. Inspect extension
+      // fields only through a v2 entry point, after validating its full size.
+      if (ExtendedOptions && ExtendedOptions->reserved)
+        return Fail("invalid devirtualize v2 flags");
       if (Options->reserved ||
           (Options->use_llvm != 0 && Options->use_llvm != 1) ||
           (Options->no_opt != 0 && Options->no_opt != 1))
@@ -353,6 +363,8 @@ devirtualizeSource(neverd_session_t Session, neverd_va_t Entry,
         Config.MaxContextsPerAddress = Options->max_contexts_per_address;
       if (Options->max_operations)
         Config.MaxOperations = Options->max_operations;
+      if (ExtendedOptions && ExtendedOptions->max_control_refinements)
+        Config.MaxControlRefinements = ExtendedOptions->max_control_refinements;
       PO.LiftMode = Options->use_llvm != 0;
       PO.NoOpt = Options->no_opt != 0;
     }
@@ -536,4 +548,19 @@ extern "C" const char *neverd_devirtualize_machine_source_v1(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v1 *Options, const char **Report) {
   return devirtualizeSource(Session, Entry, Options, Report, true);
+}
+
+extern "C" const char *
+neverd_devirtualize_source_v2(neverd_session_t Session, neverd_va_t Entry,
+                              const neverd_devirtualize_options_v2 *Options,
+                              const char **Report) {
+  return devirtualizeSource(Session, Entry, Options ? &Options->base : nullptr,
+                            Report, false, Options);
+}
+
+extern "C" const char *neverd_devirtualize_machine_source_v2(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v2 *Options, const char **Report) {
+  return devirtualizeSource(Session, Entry, Options ? &Options->base : nullptr,
+                            Report, true, Options);
 }
