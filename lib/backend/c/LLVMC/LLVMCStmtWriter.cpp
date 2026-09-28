@@ -1351,31 +1351,8 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
   }
 
   if (auto *CI = llvm::dyn_cast<llvm::ICmpInst>(&Inst)) {
-    auto LHS = comparedOperandText(CI->getOperand(0), CI->getOperand(1));
-    auto RHS = comparedOperandText(CI->getOperand(1), CI->getOperand(0));
-    // C equality operators bind more tightly than &, ^, and |.  Inlining
-    // the bit test from an x87 status word without parentheses changes the
-    // branch from `(sw & C2) != 0` to `sw & (C2 != 0)`.
-    auto GroupBitwise = [](const llvm::Value *V, std::string &Text) {
-      const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(V);
-      if (!Op)
-        return;
-      if (Op->getOpcode() == llvm::Instruction::And ||
-          Op->getOpcode() == llvm::Instruction::Or ||
-          Op->getOpcode() == llvm::Instruction::Xor)
-        Text = "(" + Text + ")";
-    };
-    GroupBitwise(CI->getOperand(0), LHS);
-    GroupBitwise(CI->getOperand(1), RHS);
-    if (CI->isUnsigned()) {
-      LHS = unsignedCompareOperand(CI->getOperand(0), std::move(LHS));
-      RHS = unsignedCompareOperand(CI->getOperand(1), std::move(RHS));
-    }
     emitIndent(Indent);
-    OS << Name << " = "
-       << cmpStr(CI->getPredicate(), LHS, RHS, false,
-                 /*CastUnsigned=*/!CI->isUnsigned())
-       << ";\n";
+    OS << Name << " = " << icmpInlineText(*CI) << ";\n";
     return;
   }
 

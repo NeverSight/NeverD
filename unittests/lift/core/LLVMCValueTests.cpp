@@ -350,6 +350,250 @@ TEST(LLVMCValues, SwitchCasesPreserveTheirSelectorBitPattern) {
     compileAndRun(Source + Main, Optimization);
 }
 
+TEST(LLVMCValues, EqualityPreservesNarrowBitsAcrossEveryComparisonSurface) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("comparison-bit-patterns", Context);
+  auto *I32 = llvm::Type::getInt32Ty(Context);
+  auto *I128 = llvm::Type::getInt128Ty(Context);
+  auto *Signature = llvm::FunctionType::get(
+      I32, {I128, llvm::PointerType::getUnqual(Context)}, false);
+  auto Literal = [](const llvm::APInt &Value) {
+    const auto Wide = Value.zextOrTrunc(128);
+    return "(((__uint128_t)" +
+           std::to_string(Wide.extractBitsAsZExtValue(64, 64)) +
+           "ULL << 64) | " +
+           std::to_string(Wide.extractBitsAsZExtValue(64, 0)) + "ULL)";
+  };
+  std::string Main = "int main(void) { uint32_t observed;\n";
+  unsigned Index = 0;
+  for (unsigned Width : {1u, 2u, 3u, 8u, 16u, 31u, 33u, 65u, 127u}) {
+    const auto High = llvm::APInt::getSignedMinValue(Width);
+    for (const auto &Constant : {llvm::APInt(Width, 0), High})
+      for (bool Equal : {false, true})
+        for (bool Reversed : {false, true})
+          for (unsigned Surface = 0; Surface != 3; ++Surface) {
+            const std::string Name = "compare_bits" + std::to_string(Index++);
+            auto *Function = llvm::Function::Create(
+                Signature, llvm::GlobalValue::ExternalLinkage, Name, Module);
+            llvm::IRBuilder<llvm::NoFolder> Builder(
+                llvm::BasicBlock::Create(Context, "entry", Function));
+            auto *Type = Builder.getIntNTy(Width);
+            auto *Narrow = Builder.CreateTrunc(Function->getArg(0), Type);
+            // Keep modular wrap visible to comparison spelling, including
+            // the EQ/NE-zero condition shortcuts.
+            auto *Wrapped = Builder.CreateAdd(
+                Narrow, llvm::ConstantInt::get(Type, 1), "wrapped");
+            llvm::Value *LHS = Wrapped;
+            llvm::Value *RHS = llvm::ConstantInt::get(Context, Constant);
+            if (Reversed)
+              std::swap(LHS, RHS);
+            auto *Compare = Equal ? Builder.CreateICmpEQ(LHS, RHS)
+                                  : Builder.CreateICmpNE(LHS, RHS);
+            if (Surface == 2) {
+              // Only the false edge has an effect. The structured writer
+              // renders an inverted condition before the shared return.
+              auto *Done = llvm::BasicBlock::Create(Context, "done", Function);
+              auto *Miss = llvm::BasicBlock::Create(Context, "miss", Function);
+              Builder.CreateCondBr(Compare, Done, Miss);
+              Builder.SetInsertPoint(Miss);
+              Builder.CreateStore(Builder.getInt32(13), Function->getArg(1));
+              Builder.CreateBr(Done);
+              Builder.SetInsertPoint(Done);
+              Builder.CreateRet(Builder.getInt32(41));
+            } else {
+              llvm::Value *Selected = Builder.CreateSelect(
+                  Compare, Builder.getInt32(41), Builder.getInt32(13));
+              if (Surface == 1)
+                // Two uses force an assigned ICmp instead of inline text.
+                Selected = Builder.CreateAdd(Selected,
+                                             Builder.CreateZExt(Compare, I32));
+              Builder.CreateRet(Selected);
+            }
+            for (const auto &Input :
+                 {llvm::APInt(128, 0), llvm::APInt(128, 1), llvm::APInt(128, 2),
+                  llvm::APInt(128, 3), llvm::APInt(128, 7), High.zext(128),
+                  (High - 1).zext(128), (High + 1).zext(128),
+                  llvm::APInt::getAllOnes(128)}) {
+              const auto Bits = Input.trunc(Width) + 1;
+              const bool Matches = (Bits == Constant) == Equal;
+              const unsigned Returned = Surface == 2 ? 41
+                                        : Matches    ? (Surface == 1 ? 42 : 41)
+                                                     : 13;
+              const unsigned Stored = Surface == 2 && !Matches ? 13 : 41;
+              Main += "observed = 41; if (" + Name + "(" + Literal(Input) +
+                      ", &observed) != " + std::to_string(Returned) +
+                      " || observed != " + std::to_string(Stored) +
+                      ") return 1;\n";
+            }
+          }
+  }
+  Main += "return 0; }\n";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
+    SCOPED_TRACE(Optimization.str());
+    compileAndRun(Source + Main, Optimization);
+  }
+}
+
+TEST(LLVMCValues, BooleanExtensionDoesNotPeelArithmeticNormalization) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("boolean-arithmetic-view", Context);
+  auto *I32 = llvm::Type::getInt32Ty(Context);
+  auto *Signature = llvm::FunctionType::get(I32, {I32}, false);
+  std::string Main = "int main(void) { for (uint32_t x = 0; x < 16; ++x) {\n";
+  for (bool Equal : {false, true}) {
+    const std::string Name = Equal ? "wrapped_eq" : "wrapped_ne";
+    auto *Function = llvm::Function::Create(
+        Signature, llvm::GlobalValue::ExternalLinkage, Name, Module);
+    llvm::IRBuilder<llvm::NoFolder> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Sum = Builder.CreateAdd(
+        Builder.CreateTrunc(Function->getArg(0), Builder.getInt1Ty()),
+        Builder.getInt1(true));
+    auto *Extended = Builder.CreateZExt(Sum, Builder.getInt8Ty());
+    auto *Compare = Equal ? Builder.CreateICmpEQ(Extended, Builder.getInt8(0))
+                          : Builder.CreateICmpNE(Extended, Builder.getInt8(0));
+    auto *True = llvm::BasicBlock::Create(Context, "true", Function);
+    auto *False = llvm::BasicBlock::Create(Context, "false", Function);
+    Builder.CreateCondBr(Compare, True, False);
+    Builder.SetInsertPoint(True);
+    Builder.CreateRet(Builder.getInt32(1));
+    Builder.SetInsertPoint(False);
+    Builder.CreateRet(Builder.getInt32(0));
+    Main += "if (" + Name + "(x) != " + (Equal ? "(x & 1)" : "((x & 1) ^ 1)") +
+            ") return 1;\n";
+  }
+  Main += "} return 0; }\n";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source + Main, Optimization);
+}
+
+TEST(LLVMCValues, BooleanFlagViewsKeepOneObservableCall) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("boolean-call-effects", Context);
+  auto *I8 = llvm::Type::getInt8Ty(Context);
+  auto *I32 = llvm::Type::getInt32Ty(Context);
+  auto *I64 = llvm::Type::getInt64Ty(Context);
+  auto *Next = llvm::Function::Create(llvm::FunctionType::get(I64, {}, false),
+                                      llvm::GlobalValue::ExternalLinkage,
+                                      "next_value", Module);
+  for (bool Invert : {false, true}) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(I32, {}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Invert ? "inverted_flags" : "direct_flags", Module);
+    llvm::IRBuilder<llvm::NoFolder> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Home = Builder.CreateAlloca(I32);
+    Builder.CreateStore(Builder.CreateTrunc(Builder.CreateCall(Next), I32),
+                        Home);
+    auto *Word = Builder.CreateAnd(Builder.CreateLoad(I32, Home),
+                                   Builder.CreateLoad(I32, Home));
+    auto *Zero = Builder.CreateICmpEQ(Word, Builder.getInt32(0));
+    auto *Sign = Builder.CreateICmpSLT(Word, Builder.getInt32(0));
+    auto *Flags = Builder.CreateOr(Builder.CreateZExt(Zero, I8),
+                                   Builder.CreateZExt(Sign, I8));
+    auto *Test = Invert ? Builder.CreateICmpEQ(Flags, Builder.getInt8(0))
+                        : Builder.CreateICmpNE(Flags, Builder.getInt8(0));
+    auto *True = llvm::BasicBlock::Create(Context, "true", Function);
+    auto *False = llvm::BasicBlock::Create(Context, "false", Function);
+    Builder.CreateCondBr(Test, True, False);
+    Builder.SetInsertPoint(True);
+    Builder.CreateRet(Builder.getInt32(1));
+    Builder.SetInsertPoint(False);
+    Builder.CreateRet(Builder.getInt32(0));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  const std::string Main = R"(
+static uint64_t supplied;
+static unsigned calls;
+uint64_t next_value(void) { ++calls; return supplied; }
+int main(void) {
+  const uint64_t values[] = {0, 1, 0x7fffffff, 0x80000000, 0xffffffff,
+                            0x100000000ULL, 0x180000000ULL};
+  for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+    supplied = values[i];
+    uint32_t bits = (uint32_t)supplied;
+    unsigned nonpositive = bits == 0 || (bits & 0x80000000U) != 0;
+    calls = 0;
+    if (direct_flags() != nonpositive || calls != 1) return 1;
+    calls = 0;
+    if (inverted_flags() != !nonpositive || calls != 1) return 2;
+  }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source + Main, Optimization);
+}
+
+TEST(LLVMCValues, OrderedComparisonsUseTheirLLVMWidthAndSignedness) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("ordered-comparison-widths", Context);
+  auto *I128 = llvm::Type::getInt128Ty(Context);
+  auto *Signature =
+      llvm::FunctionType::get(llvm::Type::getInt32Ty(Context), {I128}, false);
+  auto Literal = [](const llvm::APInt &Value) {
+    const auto Wide = Value.zextOrTrunc(128);
+    return "(((__uint128_t)" +
+           std::to_string(Wide.extractBitsAsZExtValue(64, 64)) +
+           "ULL << 64) | " +
+           std::to_string(Wide.extractBitsAsZExtValue(64, 0)) + "ULL)";
+  };
+  std::string Main = "int main(void) {\n";
+  unsigned Index = 0;
+  for (unsigned Width :
+       {1u, 2u, 3u, 8u, 16u, 31u, 32u, 33u, 64u, 65u, 127u, 128u}) {
+    const auto High = llvm::APInt::getSignedMinValue(Width);
+    for (auto Predicate : {llvm::CmpInst::ICMP_ULT, llvm::CmpInst::ICMP_UGT,
+                           llvm::CmpInst::ICMP_SLT, llvm::CmpInst::ICMP_SGT}) {
+      const std::string Name = "ordered_bits" + std::to_string(Index++);
+      auto *Function = llvm::Function::Create(
+          Signature, llvm::GlobalValue::ExternalLinkage, Name, Module);
+      llvm::IRBuilder<llvm::NoFolder> Builder(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      auto *Value = Builder.CreateZExtOrTrunc(Function->getArg(0),
+                                              Builder.getIntNTy(Width));
+      Builder.CreateRet(Builder.CreateZExt(
+          Builder.CreateICmp(Predicate, Value,
+                             llvm::ConstantInt::get(Context, High)),
+          Builder.getInt32Ty()));
+      for (const auto &Input :
+           {llvm::APInt(128, 0), llvm::APInt(128, 1), High.zextOrTrunc(128),
+            (High - 1).zextOrTrunc(128), (High + 1).zextOrTrunc(128),
+            llvm::APInt::getAllOnes(128)}) {
+        const auto Bits = Input.zextOrTrunc(Width);
+        const bool Expected =
+            Predicate == llvm::CmpInst::ICMP_ULT   ? Bits.ult(High)
+            : Predicate == llvm::CmpInst::ICMP_UGT ? Bits.ugt(High)
+            : Predicate == llvm::CmpInst::ICMP_SLT ? Bits.slt(High)
+                                                   : Bits.sgt(High);
+        Main += "if (" + Name + "(" + Literal(Input) +
+                ") != " + std::to_string(Expected) + ") return 1;\n";
+      }
+    }
+  }
+  Main += "return 0; }\n";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
+    SCOPED_TRACE(Optimization.str());
+    compileAndRun(Source + Main, Optimization);
+  }
+}
+
 TEST(LLVMCValues, TruncatedPredicatesTestOnlyTheirLowBits) {
   llvm::LLVMContext Context;
   llvm::Module Module("truncated-predicate", Context);

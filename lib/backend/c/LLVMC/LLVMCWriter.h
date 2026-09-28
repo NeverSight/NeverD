@@ -423,6 +423,8 @@ public:
   /// Intervening handler blocks print later inside the exception clause.
   bool uncondBranchFallsIntoEHBoundary(const llvm::BasicBlock *From,
                                        const llvm::BasicBlock *To) const;
+  /// Bounded structural proof that the C spelling is already zero or one.
+  bool isNormalizedBoolean(const llvm::Value *V) const;
   const llvm::Value *peelIntegerView(const llvm::Value *V) const;
   /// Logical shift whose amount does not fit the peeled source. Keep the
   /// widening cast so `>> 32` is not applied to a 32-bit C operand.
@@ -591,14 +593,13 @@ public:
   std::string cmpStr(llvm::CmpInst::Predicate Pred, const std::string &LHS,
                      const std::string &RHS, bool IsFP,
                      bool CastUnsigned = true);
-  /// Compare spelling shared by an assigned icmp and a condition. No
-  /// outer parentheses; `renderInline` adds those for expression context.
-  std::string icmpInlineText(const llvm::ICmpInst &CI);
+  /// Width-aware spelling shared by assigned, inline and inverted icmp.
+  /// No outer parentheses; renderInline adds them for expression context.
+  std::string icmpInlineText(const llvm::ICmpInst &CI, bool Invert = false);
   /// True when \p V prints as an unsigned integer of exactly \p Bits.
   /// Untyped values and widening views stay cast.
   bool operandIsUnsignedWidth(const llvm::Value *V, unsigned Bits) const;
-  std::string unsignedCompareOperand(const llvm::Value *V,
-                                     std::string Text) const;
+  std::string unsignedCompareOperand(const llvm::Value *V, std::string Text);
   std::string renderInline(const llvm::Instruction &Inst);
   std::string callExpr(const llvm::CallBase &Call);
   std::string atomicRMWText(const llvm::AtomicRMWInst &AI);

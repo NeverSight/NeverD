@@ -781,6 +781,11 @@ its matrix arithmetic is not approximated with scalar multiply/add.
 Inline and materialized LLVM GEP expressions share data-layout-derived byte
 offsets, including nested aggregates and signed dynamic indices. Ordinary raw
 scalar accesses with insufficient alignment use exact-width byte copies.
+Integer comparisons share one LLVMC rendering rule across inline expressions,
+assigned results, and inverted branches. Operands retain their LLVM bit width
+before C integer promotion, and signed predicates interpret that width's sign
+bit. A comparison with zero must preserve modular truncation before any Boolean
+shorthand is applied.
 
 `lib/pipeline/Pipeline.cpp` is the source of truth for route selection. Keep
 representation-specific logic in its owning IR or backend library; the pipeline

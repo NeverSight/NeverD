@@ -18846,7 +18846,7 @@ TEST(LLVMCPointerAddresses, InvertedNonPositiveComparePrintsGreaterThanZero) {
   OS.flush();
   const auto BodyAt = Source.find("len_positive(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  const auto IfAt = Source.find("if (len > 0)", BodyAt);
+  const auto IfAt = Source.find("if ((int32_t)(len) > (int32_t)(0))", BodyAt);
   const auto ArmAt = Source.find("arm_step(", BodyAt);
   const auto UseAt = Source.find("use_step(", BodyAt);
   ASSERT_NE(IfAt, std::string::npos) << Source;
@@ -18894,8 +18894,12 @@ TEST(LLVMCPointerAddresses, KeepsNonPositiveCompareOnTrueReturn) {
   OS.flush();
   const auto BodyAt = Source.find("len_keep(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  EXPECT_NE(Source.find("len <= 0", BodyAt), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("len > 0", BodyAt), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(int32_t)(len) <= (int32_t)(0)", BodyAt),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("(int32_t)(len) > (int32_t)(0)", BodyAt),
+            std::string::npos)
+      << Source;
   EXPECT_NE(Source.find("miss_step(", BodyAt), std::string::npos) << Source;
 }
 

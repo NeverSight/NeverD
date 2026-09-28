@@ -74,6 +74,11 @@ bool looksUnsignedCExpr(const std::string &S) {
          S.starts_with("((unsigned)") || S.starts_with("((uint");
 }
 
+bool integerComparisonNeedsNormalization(const llvm::Type *Type) {
+  return Type->isIntegerTy() && !Type->isIntegerTy(32) &&
+         !Type->isIntegerTy(64) && !Type->isIntegerTy(128);
+}
+
 std::string unsignedCmpOperand(const std::string &S) {
   return looksUnsignedCExpr(S) ? S : "(unsigned)" + S;
 }
@@ -130,10 +135,13 @@ std::string syntheticFrameSlotName(int64_t Disp) {
   return (Disp < 0 ? "var_m" : "var_") + llvm::utohexstr(Mag);
 }
 
-const llvm::Value *losslessIntegerView(const llvm::CastInst *Cast) {
-  // Boolean zero-extension preserves the predicate. Other width changes
-  // must remain visible unless a matching extension/truncation cancels.
-  if (llvm::isa<llvm::ZExtInst>(Cast) && Cast->getSrcTy()->isIntegerTy(1))
+const llvm::Value *losslessIntegerView(const llvm::CastInst *Cast,
+                                       bool NormalizedBoolean) {
+  // A predicate already spelled as C zero or one can lose its extension.
+  // An arbitrary i1 operation still needs its source-width normalization.
+  // Other width changes remain visible unless an extension/truncation cancels.
+  if (NormalizedBoolean && llvm::isa<llvm::ZExtInst>(Cast) &&
+      Cast->getSrcTy()->isIntegerTy(1))
     return Cast->getOperand(0);
   if (llvm::isa<llvm::TruncInst>(Cast)) {
     const auto *Extension = llvm::dyn_cast<llvm::CastInst>(Cast->getOperand(0));
@@ -160,11 +168,61 @@ bool orCanPeelAsAdd(const llvm::Value *Base, const llvm::ConstantInt *Bits) {
 }
 } // namespace
 
+bool LLVMCWriter::isNormalizedBoolean(const llvm::Value *V) const {
+  // This is a proof about the emitted C expression, not its LLVM i1 type:
+  // an inlined i1 add can promote to int and produce two before truncation.
+  llvm::SmallVector<const llvm::Value *, 8> Pending{V};
+  unsigned Budget = 64;
+  while (!Pending.empty()) {
+    const auto *Current = Pending.pop_back_val();
+    if (!Current || !Current->getType()->isIntegerTy() || Budget == 0)
+      return false;
+    --Budget;
+    if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Current)) {
+      if (!CI->isZero() && !CI->isOne())
+        return false;
+      continue;
+    }
+    if (llvm::isa<llvm::CmpInst>(Current))
+      continue;
+    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Current)) {
+      if (llvm::isa<llvm::ZExtInst, llvm::TruncInst>(Cast) ||
+          (llvm::isa<llvm::SExtInst>(Cast) &&
+           !Cast->getSrcTy()->isIntegerTy(1))) {
+        Pending.push_back(Cast->getOperand(0));
+        continue;
+      }
+    }
+    if (const auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(Current)) {
+      if (BO->getOpcode() == llvm::Instruction::And ||
+          BO->getOpcode() == llvm::Instruction::Or ||
+          BO->getOpcode() == llvm::Instruction::Xor) {
+        Pending.push_back(BO->getOperand(0));
+        Pending.push_back(BO->getOperand(1));
+        continue;
+      }
+    }
+    if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(Current)) {
+      if (!LI->isSimple())
+        return false;
+      if (const auto *Stored =
+              allocaStoredValue(asAllocaPointer(LI->getPointerOperand()));
+          Stored && Stored != Current) {
+        Pending.push_back(Stored);
+        continue;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
 const llvm::Value *LLVMCWriter::peelIntegerView(const llvm::Value *V) const {
   std::set<const llvm::Value *> Seen;
   while (V && Seen.insert(V).second) {
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (const llvm::Value *Inner = losslessIntegerView(Cast)) {
+      if (const llvm::Value *Inner = losslessIntegerView(
+              Cast, isNormalizedBoolean(Cast->getOperand(0)))) {
         V = Inner;
         continue;
       }
@@ -1583,18 +1641,19 @@ LLVMCWriter::typedRecordAccess(const llvm::Value *Ptr, uint16_t AccessSize,
 }
 
 namespace {
-const llvm::Value *
-peelMulScale(const llvm::Value *V, uint64_t Scale,
-             const std::function<const llvm::Value *(const llvm::AllocaInst *)>
-                 &StoredOf,
-             const std::function<const llvm::AllocaInst *(const llvm::Value *)>
-                 &AsSlot) {
+const llvm::Value *peelMulScale(
+    const llvm::Value *V, uint64_t Scale,
+    const std::function<const llvm::Value *(const llvm::AllocaInst *)>
+        &StoredOf,
+    const std::function<const llvm::AllocaInst *(const llvm::Value *)> &AsSlot,
+    const std::function<bool(const llvm::Value *)> &NormalizedBoolean) {
   if (!V || !Scale)
     return nullptr;
   std::set<const llvm::Value *> Seen;
   while (V && Seen.insert(V).second) {
     if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
-      if (const llvm::Value *Inner = losslessIntegerView(Cast)) {
+      if (const llvm::Value *Inner = losslessIntegerView(
+              Cast, NormalizedBoolean(Cast->getOperand(0)))) {
         V = Inner;
         continue;
       }
@@ -1661,9 +1720,14 @@ LLVMCWriter::typedIndexAccess(const llvm::Value *Ptr) {
   auto StoredOf = [this](const llvm::AllocaInst *Slot) {
     return allocaStoredValue(Slot);
   };
-  if ((Index = peelMulScale(Add->getOperand(1), 8, StoredOf, AsSlot)))
+  auto NormalizedBoolean = [this](const llvm::Value *V) {
+    return isNormalizedBoolean(V);
+  };
+  if ((Index = peelMulScale(Add->getOperand(1), 8, StoredOf, AsSlot,
+                            NormalizedBoolean)))
     Base = Add->getOperand(0);
-  else if ((Index = peelMulScale(Add->getOperand(0), 8, StoredOf, AsSlot)))
+  else if ((Index = peelMulScale(Add->getOperand(0), 8, StoredOf, AsSlot,
+                                 NormalizedBoolean)))
     Base = Add->getOperand(1);
   if (!Base || !Index)
     return std::nullopt;
@@ -1910,6 +1974,9 @@ LLVMCWriter::invertedRelationalText(const llvm::Value *V) {
       else if (LC && LC->isZero())
         Inner = RHS;
       if (Inner && (Ne || Eq)) {
+        if (integerComparisonNeedsNormalization(Inner->getType()) &&
+            !isNormalizedBoolean(Inner))
+          return icmpInlineText(*ICmp, /*Invert=*/true);
         const llvm::Value *Shown = peelIntegerView(Inner);
         if (!Shown)
           Shown = Inner;
@@ -1919,15 +1986,7 @@ LLVMCWriter::invertedRelationalText(const llvm::Value *V) {
         }
         return std::nullopt;
       }
-      const llvm::CmpInst::Predicate Inv = ICmp->getInversePredicate();
-      std::string Left = comparedOperandText(LHS, RHS);
-      std::string Right = comparedOperandText(RHS, LHS);
-      const bool Unsigned = llvm::CmpInst::isUnsigned(Inv);
-      if (Unsigned) {
-        Left = unsignedCompareOperand(LHS, std::move(Left));
-        Right = unsignedCompareOperand(RHS, std::move(Right));
-      }
-      return cmpStr(Inv, Left, Right, false, /*CastUnsigned=*/!Unsigned);
+      return icmpInlineText(*ICmp, /*Invert=*/true);
     }
     break;
   }
@@ -2051,6 +2110,9 @@ std::string LLVMCWriter::condStr(const llvm::Value *V) {
       else if (LC && LC->isZero())
         Inner = RHS;
       if (Inner && (Ne || Eq)) {
+        if (integerComparisonNeedsNormalization(Inner->getType()) &&
+            !isNormalizedBoolean(Inner))
+          return icmpInlineText(*ICmp);
         const llvm::Value *Shown = peelIntegerView(Inner);
         if (!Shown)
           Shown = Inner;
@@ -2058,6 +2120,10 @@ std::string LLVMCWriter::condStr(const llvm::Value *V) {
           V = Shown;
           continue;
         }
+        // Reuse the inverted condition owner before expanding a boolean
+        // flag tree; the tree can contain repeated views of one call.
+        if (auto Inverted = invertedRelationalText(Shown))
+          return *Inverted;
         return "!(" + valueStr(Shown) + ")";
       }
       if (Analysis.Inlinable.count(ICmp))
@@ -2283,7 +2349,8 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V) {
   if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V);
       Cast &&
       llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(Cast)) {
-    if (const llvm::Value *Inner = losslessIntegerView(Cast);
+    if (const llvm::Value *Inner =
+            losslessIntegerView(Cast, isNormalizedBoolean(Cast->getOperand(0)));
         Inner && Inner->getType() == Cast->getType())
       return valueStr(Inner);
     // Typed/composed display names can describe the operand, but cannot
@@ -2606,10 +2673,15 @@ bool LLVMCWriter::operandIsUnsignedWidth(const llvm::Value *V,
 }
 
 std::string LLVMCWriter::unsignedCompareOperand(const llvm::Value *V,
-                                                std::string Text) const {
+                                                std::string Text) {
   unsigned Bits = 0;
   if (V && V->getType()->isIntegerTy())
     Bits = V->getType()->getIntegerBitWidth();
+  // C promotes small carriers to int, while nonstandard LLVM widths occupy
+  // a wider C carrier. Normalize both operands before these promotions can
+  // compare a negative literal with a positive spelling of the same bits.
+  if (V && integerComparisonNeedsNormalization(V->getType()))
+    return castStr(llvm::Instruction::Trunc, Text, V->getType(), V->getType());
   if (Bits && operandIsUnsignedWidth(V, Bits))
     return Text;
   if (Bits > 32) {
@@ -2705,7 +2777,8 @@ std::string LLVMCWriter::logicalShiftLhs(const llvm::Instruction &Shift,
                  Widen->getSrcTy(), Widen->getDestTy());
 }
 
-std::string LLVMCWriter::icmpInlineText(const llvm::ICmpInst &CI) {
+std::string LLVMCWriter::icmpInlineText(const llvm::ICmpInst &CI, bool Invert) {
+  const auto Predicate = Invert ? CI.getInversePredicate() : CI.getPredicate();
   std::string LHS =
       peelOperandWrap(comparedOperandText(CI.getOperand(0), CI.getOperand(1)));
   std::string RHS =
@@ -2721,12 +2794,16 @@ std::string LLVMCWriter::icmpInlineText(const llvm::ICmpInst &CI) {
   };
   GroupBitwise(CI.getOperand(0), LHS);
   GroupBitwise(CI.getOperand(1), RHS);
-  if (CI.isUnsigned()) {
+  const auto *Type = CI.getOperand(0)->getType();
+  if (Type->isIntegerTy() && llvm::CmpInst::isSigned(Predicate)) {
+    LHS = signedIntegerOperand(CI.getOperand(0), LHS);
+    RHS = signedIntegerOperand(CI.getOperand(1), RHS);
+  } else if (llvm::CmpInst::isUnsigned(Predicate) ||
+             integerComparisonNeedsNormalization(Type)) {
     LHS = unsignedCompareOperand(CI.getOperand(0), std::move(LHS));
     RHS = unsignedCompareOperand(CI.getOperand(1), std::move(RHS));
   }
-  return cmpStr(CI.getPredicate(), LHS, RHS, false,
-                /*CastUnsigned=*/!CI.isUnsigned());
+  return cmpStr(Predicate, LHS, RHS, false, /*CastUnsigned=*/false);
 }
 
 bool LLVMCWriter::isFloatingPointBitcast(const llvm::Instruction &Inst) {
