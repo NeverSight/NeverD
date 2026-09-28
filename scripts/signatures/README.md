@@ -212,6 +212,23 @@ are bytes that two files name differently. Without this, a debug-CRT wrapper
 that is unique among the SDK's libraries would still name the byte-identical
 template instantiations that `vs2026.pat` had dropped as ambiguous.
 
+Each line also names, as `^offset name`, the routines its function branches
+to directly (`neverd-sigmaker --references`): the rel32 field of an x86 or x64
+`call` or `jmp`, and the ARM64 `B`/`BL` or Thumb-2 `B.W`/`BL`/`BLX`
+instruction. The matcher follows each branch in the image. A target that the
+other matches name differently drops the match; a target they name the same,
+or that the named routine's own pattern matches, confirms it; a target nothing
+names, such as an import thunk, a veneer or a routine the program replaced,
+decides nothing. Lines of one file that state the same bytes under different
+names are therefore kept when, for every two of them, one offset holds a
+reference in both to different routines: at a match only one of them can be
+confirmed. Bytes that two files name differently are still dropped from both,
+because the Rich header loads only one of them, where the line would have no
+rival to be told apart from.
+Copies of one routine whose builds call different routines, such as the
+debug CRT's `_free_dbg` where the release CRT calls `free`, keep the
+references they share. A loader older than the references rejects such lines.
+
 The matcher compares a line only as far as the line's own length and accepts
 any byte where the line has a wildcard, so a line is dropped as well when a
 routine of another name, at least as long, states every byte the line states.

@@ -11,6 +11,7 @@
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/sigs/PatternParser.h"
 #include "neverd/sigs/SignatureMatcher.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -19,8 +20,11 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
+#include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 using namespace neverd;
@@ -47,7 +51,7 @@ void SignatureDB::commitSource(std::vector<PatternModule> &&Mods,
       Source.ModuleStart = ModuleStart;
       ModuleStart += Source.ModuleCount;
     }
-    Matches.clear();
+    clearMatches();
     return;
   }
 
@@ -60,7 +64,7 @@ void SignatureDB::commitSource(std::vector<PatternModule> &&Mods,
 
   Modules.insert(Modules.end(), std::make_move_iterator(Mods.begin()),
                  std::make_move_iterator(Mods.end()));
-  Matches.clear();
+  clearMatches();
 }
 
 const std::string &SignatureDB::libraryNameOf(size_t ModuleIndex) const {
@@ -252,13 +256,13 @@ SignatureDB::loadFiles(const std::vector<std::filesystem::path> &PatFiles) {
   }
   Modules.swap(NewModules);
   LoadedFiles.swap(NewSources);
-  Matches.clear();
+  clearMatches();
   return llvm::Error::success();
 }
 
 void SignatureDB::apply(const BinaryImage &Img,
                         const std::vector<uint64_t> &FuncEntries) {
-  Matches.clear();
+  clearMatches();
   if (Modules.empty() || FuncEntries.empty())
     return;
 
@@ -283,9 +287,12 @@ void SignatureDB::apply(const BinaryImage &Img,
             M.LibraryName = libraryNameOf(ModIdx);
             M.FuncLen = Mod.TotalLen;
             Matches.push_back(std::move(M));
+            MatchModules.push_back(ModIdx);
+            MatchConfirmed.push_back(false);
           }
         });
   }
+  checkReferences(Img);
 }
 
 size_t SignatureDB::identifyPersonalityRoutines(BinaryImage &Img) {
@@ -346,6 +353,8 @@ size_t SignatureDB::identifyPersonalityRoutines(BinaryImage &Img) {
     if (!adoptPersonalityRoutineName(Img, Addr, Match.Name))
       continue;
     Matches.push_back(Match);
+    MatchModules.push_back(NoModule);
+    MatchConfirmed.push_back(false);
     ++Named;
   }
 
@@ -370,16 +379,28 @@ const SigMatch *SignatureDB::findMatch(uint64_t Addr) const {
 }
 
 std::unordered_map<uint64_t, std::string> SignatureDB::buildNameMap() const {
+  // Every name proposed for an address, and whether a match with confirmed
+  // references proposed it.
+  std::unordered_map<uint64_t, std::map<std::string, bool>> Proposed;
+  for (size_t I = 0; I < Matches.size(); ++I) {
+    bool &Confirmed = Proposed[Matches[I].Address][Matches[I].Name];
+    Confirmed = Confirmed || (I < MatchConfirmed.size() && MatchConfirmed[I]);
+  }
   std::unordered_map<uint64_t, std::string> Map;
-  std::unordered_set<uint64_t> Disputed;
-  for (const auto &M : Matches) {
-    if (Disputed.count(M.Address))
+  for (const auto &[Address, Names] : Proposed) {
+    if (Names.size() == 1) {
+      Map.emplace(Address, Names.begin()->first);
       continue;
-    auto [It, Inserted] = Map.emplace(M.Address, M.Name);
-    if (!Inserted && It->second != M.Name) {
-      Map.erase(It);
-      Disputed.insert(M.Address);
     }
+    const std::string *Settled = nullptr;
+    size_t ConfirmedNames = 0;
+    for (const auto &[Name, Confirmed] : Names)
+      if (Confirmed) {
+        Settled = &Name;
+        ++ConfirmedNames;
+      }
+    if (ConfirmedNames == 1)
+      Map.emplace(Address, *Settled);
   }
   return Map;
 }
@@ -387,5 +408,221 @@ std::unordered_map<uint64_t, std::string> SignatureDB::buildNameMap() const {
 void SignatureDB::clear() {
   Modules.clear();
   LoadedFiles.clear();
+  clearMatches();
+}
+
+void SignatureDB::clearMatches() {
   Matches.clear();
+  MatchModules.clear();
+  MatchConfirmed.clear();
+}
+
+namespace {
+
+enum class ReferenceVerdict { Unknown, Confirmed, Contradicted };
+
+int64_t signExtend(uint64_t Value, unsigned Bits) {
+  const uint64_t Sign = uint64_t(1) << (Bits - 1);
+  return static_cast<int64_t>((Value ^ Sign) - Sign);
+}
+
+uint64_t wrapToImage(const BinaryImage &Img, uint64_t Address) {
+  return Img.is64Bit() ? Address : Address & 0xFFFFFFFFu;
+}
+
+/// The target of a Thumb-2 B.W (T4), BL (T1) or BLX (T2) at \p Address, or
+/// of only a B.W when \p JumpOnly.
+std::optional<uint64_t> thumbBranchTarget(const BinaryImage &Img,
+                                          uint64_t Address, bool JumpOnly) {
+  const uint8_t *Insn = Img.readVA(Address, 4);
+  if (!Insn)
+    return std::nullopt;
+  const uint16_t First = readLE<uint16_t>(Insn);
+  const uint16_t Second = readLE<uint16_t>(Insn + 2);
+  if ((First & 0xF800) != 0xF000)
+    return std::nullopt;
+  const unsigned Kind = Second & 0xD000;
+  const bool Jump = Kind == 0x9000, Link = Kind == 0xD000,
+             Exchange = Kind == 0xC000;
+  if (!(Jump || (!JumpOnly && (Link || Exchange))))
+    return std::nullopt;
+  const uint64_t S = (First >> 10) & 1;
+  const uint64_t I1 = ~(((Second >> 13) & 1) ^ S) & 1;
+  const uint64_t I2 = ~(((Second >> 11) & 1) ^ S) & 1;
+  const uint64_t Offset = (S << 24) | (I1 << 23) | (I2 << 22) |
+                          (uint64_t(First & 0x3FF) << 12) |
+                          (uint64_t(Second & 0x7FF) << 1);
+  uint64_t Target = Address + 4 + static_cast<uint64_t>(signExtend(Offset, 25));
+  if (Exchange)
+    Target &= ~uint64_t(3);
+  return wrapToImage(Img, Target);
+}
+
+/// Where the direct branch a reference describes goes, when the image holds
+/// that branch at \p Site; see PatternModule::References for the offsets.
+std::optional<uint64_t> branchTarget(const BinaryImage &Img, uint64_t Site) {
+  switch (Img.Arch) {
+  case Arch::X86:
+  case Arch::X64: {
+    if (Site == 0)
+      return std::nullopt;
+    const uint8_t *Insn = Img.readVA(Site - 1, 5);
+    if (!Insn || (Insn[0] != 0xE8 && Insn[0] != 0xE9))
+      return std::nullopt;
+    const int64_t Disp = readLE<int32_t>(Insn + 1);
+    return wrapToImage(Img, Site + 4 + static_cast<uint64_t>(Disp));
+  }
+  case Arch::AArch64: {
+    const uint8_t *Insn = Img.readVA(Site, 4);
+    if (!Insn)
+      return std::nullopt;
+    const uint32_t Word = readLE<uint32_t>(Insn);
+    // B and BL; a veneer or anything else is not the branch the library had.
+    if ((Word & 0x7C000000u) != 0x14000000u)
+      return std::nullopt;
+    return Site + static_cast<uint64_t>(signExtend(Word & 0x03FFFFFFu, 26) * 4);
+  }
+  case Arch::ARM:
+    return thumbBranchTarget(Img, Site, /*JumpOnly=*/false);
+  default:
+    return std::nullopt;
+  }
+}
+
+/// The routine a thunk at \p Address jumps to, when all it is is one
+/// unconditional direct jump: an incremental-linking thunk, or a branch
+/// island.
+std::optional<uint64_t> thunkTarget(const BinaryImage &Img, uint64_t Address) {
+  switch (Img.Arch) {
+  case Arch::X86:
+  case Arch::X64: {
+    const uint8_t *Insn = Img.readVA(Address, 5);
+    if (!Insn || Insn[0] != 0xE9)
+      return std::nullopt;
+    const int64_t Disp = readLE<int32_t>(Insn + 1);
+    return wrapToImage(Img, Address + 5 + static_cast<uint64_t>(Disp));
+  }
+  case Arch::AArch64: {
+    const uint8_t *Insn = Img.readVA(Address, 4);
+    if (!Insn)
+      return std::nullopt;
+    const uint32_t Word = readLE<uint32_t>(Insn);
+    if ((Word & 0xFC000000u) != 0x14000000u)
+      return std::nullopt;
+    return Address +
+           static_cast<uint64_t>(signExtend(Word & 0x03FFFFFFu, 26) * 4);
+  }
+  case Arch::ARM:
+    return thumbBranchTarget(Img, Address, /*JumpOnly=*/true);
+  default:
+    return std::nullopt;
+  }
+}
+
+} // namespace
+
+void SignatureDB::checkReferences(const BinaryImage &Img) {
+  bool AnyReferences = false;
+  for (size_t Module : MatchModules)
+    AnyReferences |= Module != NoModule && !Modules[Module].References.empty();
+  if (!AnyReferences)
+    return;
+
+  // What the bytes alone settle, which is what a reference is checked
+  // against: an address two matches name differently names nothing.
+  const std::unordered_map<uint64_t, std::string> Settled = buildNameMap();
+
+  // The modules that describe each routine from its start, to confirm a
+  // reference by the named routine's own pattern.
+  std::unordered_map<std::string, std::vector<size_t>> ByName;
+  for (size_t I = 0; I < Modules.size(); ++I)
+    for (const FuncRef &Name : Modules[I].PublicNames)
+      if (Name.Offset == 0)
+        ByName[Name.Name].push_back(I);
+
+  auto PatternAt = [&](const std::string &Name, uint64_t Address) {
+    const auto Candidates = ByName.find(Name);
+    const Segment *Seg = Img.getSegmentFor(Address);
+    if (Candidates == ByName.end() || !Seg || !Seg->isExecutable() ||
+        Address < Seg->VA || Address - Seg->VA >= Seg->Data.size())
+      return false;
+    const size_t Offset = static_cast<size_t>(Address - Seg->VA);
+    for (size_t Module : Candidates->second)
+      if (SignatureMatcher::matchPattern(Modules[Module],
+                                         Seg->Data.data() + Offset,
+                                         Seg->Data.size() - Offset))
+        return true;
+    return false;
+  };
+
+  // A Thumb routine may be entered with the interworking bit set.
+  auto SettledAt = [&](uint64_t Target) {
+    auto It = Settled.find(Target);
+    if (It == Settled.end() && Img.Arch == Arch::ARM)
+      It = Settled.find(Target | 1);
+    return It;
+  };
+
+  auto Judge = [&](const std::string &Name, uint64_t Target) {
+    // An import thunk is named after the import, not after the decorated
+    // symbol the library called; it settles nothing either way.
+    if (Img.decodeImportThunkAt(Target))
+      return ReferenceVerdict::Unknown;
+    if (const auto It = SettledAt(Target); It != Settled.end())
+      return It->second == Name ? ReferenceVerdict::Confirmed
+                                : ReferenceVerdict::Contradicted;
+    // A routine the image replaced (operator new, say) does not match the
+    // library's pattern and is still the routine called, so a pattern that
+    // does not match contradicts nothing.
+    return PatternAt(Name, Target) ? ReferenceVerdict::Confirmed
+                                   : ReferenceVerdict::Unknown;
+  };
+
+  std::vector<SigMatch> Kept;
+  std::vector<size_t> KeptModules;
+  std::vector<bool> KeptConfirmed;
+  Kept.reserve(Matches.size());
+  for (size_t I = 0; I < Matches.size(); ++I) {
+    const size_t Module = MatchModules[I];
+    const std::vector<FuncRef> *References =
+        Module == NoModule ? nullptr : &Modules[Module].References;
+    bool Contradicted = false;
+    size_t Confirmed = 0;
+    if (References) {
+      // Every public name of a module shares its references; the module's
+      // start is the match address less the name's offset.
+      uint64_t Start = Matches[I].Address;
+      for (const FuncRef &Name : Modules[Module].PublicNames)
+        if (Name.Name == Matches[I].Name) {
+          Start = Matches[I].Address - Name.Offset;
+          break;
+        }
+      if (Img.Arch == Arch::ARM)
+        Start &= ~uint64_t(1);
+      for (const FuncRef &Ref : *References) {
+        const std::optional<uint64_t> Target =
+            branchTarget(Img, Start + Ref.Offset);
+        if (!Target)
+          continue;
+        ReferenceVerdict Verdict = Judge(Ref.Name, *Target);
+        if (Verdict == ReferenceVerdict::Unknown)
+          if (const std::optional<uint64_t> Next = thunkTarget(Img, *Target))
+            Verdict = Judge(Ref.Name, *Next);
+        if (Verdict == ReferenceVerdict::Contradicted) {
+          Contradicted = true;
+          break;
+        }
+        Confirmed += Verdict == ReferenceVerdict::Confirmed;
+      }
+    }
+    if (Contradicted)
+      continue;
+    Kept.push_back(std::move(Matches[I]));
+    KeptModules.push_back(Module);
+    KeptConfirmed.push_back(References && !References->empty() &&
+                            Confirmed == References->size());
+  }
+  Matches = std::move(Kept);
+  MatchModules = std::move(KeptModules);
+  MatchConfirmed = std::move(KeptConfirmed);
 }

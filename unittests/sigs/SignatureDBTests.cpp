@@ -13,8 +13,11 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <utility>
@@ -210,4 +213,102 @@ TEST(SignatureDBAddresses, OmitsDisputedNamesFromTheApplicationMap) {
 
   ASSERT_EQ(Database.matches().size(), 2u);
   EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u);
+}
+
+namespace {
+
+/// An x64 image with a caller at 0x1000 whose `call` at 0x1004 goes to
+/// \p CallTarget, a callee at 0x1100, and an incremental-linking thunk at
+/// 0x1200 that jumps to the callee.
+neverd::BinaryImage makeCallingImage(uint64_t CallTarget) {
+  neverd::BinaryImage Image;
+  Image.Arch = neverd::Arch::X64;
+  Image.Bits = neverd::Bitness::Bits64;
+  neverd::Segment Code;
+  Code.VA = 0x1000;
+  Code.Size = 0x300;
+  Code.FileSz = 0x300;
+  Code.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Code.Data.assign(0x300, 0xCC);
+  const uint8_t Caller[] = {0x55, 0x48, 0x89, 0xE5, 0xE8, 0,
+                            0,    0,    0,    0x5D, 0xC3};
+  std::copy(std::begin(Caller), std::end(Caller), Code.Data.begin());
+  const int32_t Disp = static_cast<int32_t>(CallTarget - 0x1009);
+  std::memcpy(Code.Data.data() + 5, &Disp, sizeof(Disp));
+  const uint8_t Callee[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xC3};
+  std::copy(std::begin(Callee), std::end(Callee), Code.Data.begin() + 0x100);
+  Code.Data[0x200] = 0xE9;
+  const int32_t Jump = 0x1100 - 0x1205;
+  std::memcpy(Code.Data.data() + 0x201, &Jump, sizeof(Jump));
+  Image.Segments.push_back(std::move(Code));
+  return Image;
+}
+
+constexpr const char *CalleeLine = "AABBCCDDC3 00 0000 0005 :0000 callee\n";
+
+std::string callerLine(llvm::StringRef Name, llvm::StringRef References) {
+  return ("554889E5E8........5DC3 00 0000 000B :0000 " + Name + References +
+          "\n")
+      .str();
+}
+
+} // namespace
+
+TEST(SignatureDBReferences, ACallToARoutineNamedOtherwiseDropsTheMatch) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      CalleeLine + callerLine("caller", " ^0005 somebody_else"), "refs"));
+  Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
+
+  const auto Names = Database.buildNameMap();
+  EXPECT_EQ(Names.count(0x1000), 0u);
+  EXPECT_EQ(Names.at(0x1100), "callee");
+}
+
+TEST(SignatureDBReferences, ACallNothingNamesKeepsTheMatch) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      callerLine("caller", " ^0005 somebody_else"), "refs"));
+  Database.apply(makeCallingImage(0x1100), {0x1000});
+
+  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+}
+
+TEST(SignatureDBReferences, AConfirmedCallSettlesIdenticalBytes) {
+  // Two routines with the same bytes: only what one of them calls is there.
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      CalleeLine + callerLine("caller_of_callee", " ^0005 callee") +
+          callerLine("unreferenced_twin", ""),
+      "refs"));
+  Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
+
+  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller_of_callee");
+}
+
+TEST(SignatureDBReferences, ThePatternOfADisputedCalleeConfirms) {
+  // The callee's bytes name two routines, so nothing names 0x1100, but the
+  // referenced routine's own pattern still matches there.
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      std::string(CalleeLine) + "AABBCCDDC3 00 0000 0005 :0000 callee_twin\n" +
+          callerLine("caller_of_callee", " ^0005 callee") +
+          callerLine("unreferenced_twin", ""),
+      "refs"));
+  Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
+
+  const auto Names = Database.buildNameMap();
+  EXPECT_EQ(Names.count(0x1100), 0u);
+  EXPECT_EQ(Names.at(0x1000), "caller_of_callee");
+}
+
+TEST(SignatureDBReferences, IncrementalLinkingThunksAreFollowed) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      CalleeLine + callerLine("caller", " ^0005 somebody_else"), "refs"));
+  Database.apply(makeCallingImage(0x1200), {0x1000, 0x1100});
+
+  EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u)
+      << "the thunk leads to a routine named otherwise";
 }

@@ -24,6 +24,8 @@
 #ifndef NEVERD_SIGS_PATTERNGENERATOR_H
 #define NEVERD_SIGS_PATTERNGENERATOR_H
 
+#include "neverd/sigs/Signature.h"
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
@@ -50,6 +52,10 @@ struct PatternGeneratorOptions {
   /// Bytes stated one by one after the CRC span. A value at least as large
   /// as a function covers it to its end.
   unsigned TailLen = 0;
+  /// State the routines each COFF function branches to directly as
+  /// `^offset name` references (see PatternModule::References). Off by
+  /// default: a loader older than the references rejects a line with one.
+  bool EmitReferences = false;
 };
 
 /// What one object contributed, and what it could not.
@@ -85,14 +91,27 @@ size_t statedByteCount(llvm::ArrayRef<bool> Wildcard,
                        const PatternGeneratorOptions &Opts);
 
 /// Writes one .pat line for \p Data, the complete bytes of function
-/// \p Name, where \p Wildcard marks the bytes relocations rewrite.
+/// \p Name, where \p Wildcard marks the bytes relocations rewrite and
+/// \p References, sorted by offset, the routines it branches to.
 /// Returns false, writing nothing, when the function is shorter than
 /// Opts.MinFuncSize or its line would state fewer than
 /// SignatureMatcher::MinStatedBytes bytes exactly.
 bool emitPatternLine(llvm::raw_ostream &OS, llvm::StringRef Name,
                      llvm::ArrayRef<uint8_t> Data,
                      llvm::ArrayRef<bool> Wildcard,
-                     const PatternGeneratorOptions &Opts);
+                     const PatternGeneratorOptions &Opts,
+                     llvm::ArrayRef<FuncRef> References = {});
+
+/// Where a COFF relocation states a direct branch: the function offset a
+/// `^offset name` reference names, or std::nullopt.  That is a REL32 field
+/// after an E8 or E9 opcode on x86 and x64, and a BRANCH26 (ARM64) or
+/// BRANCH24T/BLX23T (Thumb-2) instruction.  \p Code holds the section's
+/// bytes, \p RelocationOffset and \p FunctionOffset are section offsets.
+std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
+                                                  uint16_t Type,
+                                                  llvm::ArrayRef<uint8_t> Code,
+                                                  uint64_t RelocationOffset,
+                                                  uint64_t FunctionOffset);
 
 /// Writes one .pat line per function \p Obj defines.
 ///

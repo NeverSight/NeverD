@@ -83,6 +83,44 @@ class FoldTests(unittest.TestCase):
         result = fold(["BB 00 0000 0004 :0000 b", "AA 00 0000 0004 :0000 a"])
         self.assertEqual(result.texts, ["AA 00 0000 0004 :0000 a", "BB 00 0000 0004 :0000 b"])
 
+    def test_references_are_not_part_of_the_key(self) -> None:
+        line = parse_line("AAE8........C3 00 0000 0007 :0000 f ^0002 g ^0002 h C3")
+        self.assertEqual(line.key, "AAE8........C3 00 0000 0007 C3")
+        self.assertEqual(line.refs, ((2, "g"), (2, "h")))
+        self.assertEqual(line.with_refs(((2, "g"),)).text,
+                         "AAE8........C3 00 0000 0007 :0000 f ^0002 g C3")
+
+    def test_copies_under_one_name_keep_the_references_they_share(self) -> None:
+        # The release build calls free, the debug build _free_dbg.
+        result = fold(
+            [
+                "AAE8........C3 00 0000 0007 :0000 f ^0002 free ^0005 g",
+                "AAE8........C3 00 0000 0007 :0000 f ^0002 _free_dbg ^0005 g",
+            ]
+        )
+        self.assertEqual(result.texts, ["AAE8........C3 00 0000 0007 :0000 f ^0005 g"])
+
+    def test_same_bytes_that_call_different_routines_are_kept(self) -> None:
+        result = fold(
+            [
+                "AAE8........C3 00 0000 0007 :0000 ??$less@H@@YA_NXZ ^0002 ??$cmp@H@@YA_NXZ",
+                "AAE8........C3 00 0000 0007 :0000 ??$less@I@@YA_NXZ ^0002 ??$cmp@I@@YA_NXZ",
+            ]
+        )
+        self.assertEqual(len(result.texts), 2)
+        self.assertEqual(result.distinguished_lines, 2)
+        self.assertEqual(result.ambiguous_keys, set())
+
+    def test_a_twin_without_a_telling_reference_leaves_the_bytes_ambiguous(self) -> None:
+        result = fold(
+            [
+                "AAE8........C3 00 0000 0007 :0000 ??$less@H@@YA_NXZ ^0002 ??$cmp@H@@YA_NXZ",
+                "AAE8........C3 00 0000 0007 :0000 unreferenced_twin",
+            ]
+        )
+        self.assertEqual(result.texts, [])
+        self.assertEqual(result.ambiguous_keys, {"AAE8........C3 00 0000 0007"})
+
 
 class SettleDirectoryTests(unittest.TestCase):
     def test_bytes_one_file_found_ambiguous_are_dropped_from_the_others(self) -> None:
@@ -116,6 +154,25 @@ class SettleDirectoryTests(unittest.TestCase):
         self.assertEqual(newer.texts, [])
         self.assertEqual(older.dropped_across_files, 1)
         self.assertEqual(newer.dropped_across_files, 1)
+
+    def test_references_do_not_tell_apart_what_two_files_name_differently(self) -> None:
+        # The Rich header loads one of these files; the line it keeps would
+        # have no rival there, so nothing would check its references.
+        older = fold(["AAE8........C3 00 0000 0007 :0000 _fseeki64_nolock ^0002 _lseeki64"])
+        newer = fold(["AAE8........C3 00 0000 0007 :0000 _fseeki64 ^0002 _fseeki64_nolock"])
+        settle_directory({Path("vs2017.pat"): older, Path("vs2026.pat"): newer})
+        self.assertEqual(older.texts, [])
+        self.assertEqual(newer.texts, [])
+
+    def test_files_that_keep_the_same_told_apart_group_keep_it(self) -> None:
+        group = [
+            "AAE8........C3 00 0000 0007 :0000 ??$less@H@@YA_NXZ ^0002 ??$cmp@H@@YA_NXZ",
+            "AAE8........C3 00 0000 0007 :0000 ??$less@I@@YA_NXZ ^0002 ??$cmp@I@@YA_NXZ",
+        ]
+        older, newer = fold(group), fold(group)
+        settle_directory({Path("vs2022.pat"): older, Path("vs2026.pat"): newer})
+        self.assertEqual(len(older.texts), 2)
+        self.assertEqual(len(newer.texts), 2)
 
     def test_a_claim_several_files_repeat_under_one_name_is_kept(self) -> None:
         line = "11223344 00 0000 0004 :0000 memcpy"

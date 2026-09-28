@@ -131,6 +131,11 @@ TEST(RichHeader, BuildsNameTheirRelease) {
   const RichToolInfo OldC = describeRichEntry(0x0083, 30729);
   EXPECT_EQ(OldC.Tool, RichTool::C);
   EXPECT_EQ(OldC.VisualStudioYear, 2008u);
+  // VS 2005 and VS 2012 were both build 50727; only the product id tells
+  // their linkers apart.
+  EXPECT_EQ(describeRichEntry(0x0078, 50727).VisualStudioYear, 2005u);
+  EXPECT_EQ(describeRichEntry(0x00CC, 50727).VisualStudioYear, 2012u);
+  EXPECT_EQ(describeRichEntry(0x00CC, 50727).Tool, RichTool::Linker);
 
   EXPECT_EQ(describeRichEntry(0xFFF0, 1).Tool, RichTool::Unknown);
   EXPECT_EQ(describeRichEntry(0xFFF0, 1).VisualStudioYear, 0u);

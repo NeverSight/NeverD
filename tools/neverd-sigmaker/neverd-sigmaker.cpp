@@ -72,6 +72,12 @@ static cl::opt<std::string>
             cl::desc("Keep only COFF objects for this architecture "
                      "(x86, x64, arm, arm64); others are skipped and counted"),
             cl::init(""));
+static cl::opt<bool> References(
+    "references",
+    cl::desc("State the routines each COFF function branches to directly as "
+             "^offset name references, which matching checks against the "
+             "image; loaders older than the references reject such lines"),
+    cl::init(false));
 static cl::opt<bool>
     Verify("verify",
            cl::desc("Parse the positional .pat files with the signature "
@@ -215,6 +221,7 @@ int main(int Argc, char *Argv[]) {
   Opts.LeadingLen = LeadingLen;
   Opts.MinFuncSize = MinFuncSize;
   Opts.TailLen = TailLen;
+  Opts.EmitReferences = References;
 
   InputStats Stats;
   for (const std::string &Path : Inputs)

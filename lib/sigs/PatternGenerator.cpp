@@ -145,6 +145,44 @@ std::optional<unsigned> coffRelocationWidth(uint16_t Machine, uint16_t Type) {
   return std::nullopt;
 }
 
+std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
+                                                  uint16_t Type,
+                                                  ArrayRef<uint8_t> Code,
+                                                  uint64_t RelocationOffset,
+                                                  uint64_t FunctionOffset) {
+  if (RelocationOffset < FunctionOffset || RelocationOffset >= Code.size())
+    return std::nullopt;
+  const uint64_t Offset = RelocationOffset - FunctionOffset;
+  switch (Machine) {
+  case COFF::IMAGE_FILE_MACHINE_I386:
+  case COFF::IMAGE_FILE_MACHINE_AMD64: {
+    const bool Rel32 = Machine == COFF::IMAGE_FILE_MACHINE_I386
+                           ? Type == COFF::IMAGE_REL_I386_REL32
+                           : Type == COFF::IMAGE_REL_AMD64_REL32;
+    // The opcode before the field is what makes the field a branch target;
+    // a REL32 after anything else is a data reference.
+    if (!Rel32 || Offset == 0)
+      return std::nullopt;
+    const uint8_t Opcode = Code[RelocationOffset - 1];
+    if (Opcode != 0xE8 && Opcode != 0xE9)
+      return std::nullopt;
+    return Offset;
+  }
+  case COFF::IMAGE_FILE_MACHINE_ARM64:
+  case COFF::IMAGE_FILE_MACHINE_ARM64EC:
+  case COFF::IMAGE_FILE_MACHINE_ARM64X:
+    if (Type == COFF::IMAGE_REL_ARM64_BRANCH26)
+      return Offset;
+    return std::nullopt;
+  case COFF::IMAGE_FILE_MACHINE_ARMNT:
+    if (Type == COFF::IMAGE_REL_ARM_BRANCH24T ||
+        Type == COFF::IMAGE_REL_ARM_BLX23T)
+      return Offset;
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 namespace {
 
 void emitPatternBytes(raw_ostream &OS, ArrayRef<uint8_t> Data,
@@ -182,13 +220,20 @@ void markWildcard(MutableArrayRef<bool> Wildcard, uint64_t Offset,
 /// Writes a function's line, or counts why it has none.
 void countOrEmit(raw_ostream &OS, StringRef Name, ArrayRef<uint8_t> Data,
                  ArrayRef<bool> Wildcard, const PatternGeneratorOptions &Opts,
-                 PatternGeneratorStats &Stats) {
+                 PatternGeneratorStats &Stats,
+                 ArrayRef<FuncRef> References = {}) {
   if (Data.size() < Opts.MinFuncSize)
     ++Stats.TooSmall;
   else if (statedByteCount(Wildcard, Opts) < SignatureMatcher::MinStatedBytes)
     ++Stats.TooWeak;
-  else if (emitPatternLine(OS, Name, Data, Wildcard, Opts))
+  else if (emitPatternLine(OS, Name, Data, Wildcard, Opts, References))
     ++Stats.Functions;
+}
+
+/// Whether a relocation target's name can be a reference: a routine's
+/// linkage name, not a section (".text$mn") or a label ("$LN5").
+bool isReferenceName(StringRef Name) {
+  return !Name.empty() && !Name.starts_with(".") && !Name.starts_with("$");
 }
 
 /// The reading every object format shares: each function symbol ends at the
@@ -296,6 +341,7 @@ struct COFFCodeSection {
     uint64_t Offset;
     std::optional<unsigned> Width;
     uint16_t Type;
+    uint32_t Symbol;
   };
   std::vector<Relocation> Relocations;
 };
@@ -356,7 +402,8 @@ PatternGeneratorStats generateCOFF(const COFFObjectFile &Obj,
       for (const coff_relocation &Rel : Obj.getRelocations(Sec)) {
         uint64_t Offset = uint64_t(Rel.VirtualAddress) - Sec->VirtualAddress;
         It->second.Relocations.push_back(
-            {Offset, coffRelocationWidth(Machine, Rel.Type), Rel.Type});
+            {Offset, coffRelocationWidth(Machine, Rel.Type), Rel.Type,
+             Rel.SymbolTableIndex});
       }
     }
     if (It->second.Contents.empty() ||
@@ -392,6 +439,7 @@ PatternGeneratorStats generateCOFF(const COFFObjectFile &Obj,
     const uint64_t Size = End - Fn.Offset;
 
     SmallVector<bool, 256> Wildcard(Size, false);
+    std::vector<FuncRef> References;
     bool Supported = true;
     for (const COFFCodeSection::Relocation &Rel : Sec.Relocations) {
       if (Rel.Offset < Fn.Offset || Rel.Offset >= End)
@@ -402,14 +450,37 @@ PatternGeneratorStats generateCOFF(const COFFObjectFile &Obj,
         continue;
       }
       markWildcard(Wildcard, Rel.Offset - Fn.Offset, *Rel.Width);
+      if (!Opts.EmitReferences)
+        continue;
+      const std::optional<uint64_t> At = coffBranchReferenceOffset(
+          Machine, Rel.Type, Sec.Contents, Rel.Offset, Fn.Offset);
+      if (!At)
+        continue;
+      Expected<COFFSymbolRef> TargetOrErr = Obj.getSymbol(Rel.Symbol);
+      if (!TargetOrErr) {
+        consumeError(TargetOrErr.takeError());
+        continue;
+      }
+      Expected<StringRef> TargetName = Obj.getSymbolName(*TargetOrErr);
+      if (!TargetName) {
+        consumeError(TargetName.takeError());
+        continue;
+      }
+      // A branch to the function's own start is recursion, not a reference
+      // to anything the image has to confirm.
+      if (isReferenceName(*TargetName) && *TargetName != Fn.Name)
+        References.push_back({static_cast<uint32_t>(*At), TargetName->str()});
     }
     if (!Supported) {
       ++Stats.UnsupportedRelocation;
       continue;
     }
+    llvm::sort(References, [](const FuncRef &A, const FuncRef &B) {
+      return A.Offset < B.Offset;
+    });
 
     ArrayRef<uint8_t> Data = Sec.Contents.slice(Fn.Offset, Size);
-    countOrEmit(OS, Fn.Name, Data, Wildcard, Opts, Stats);
+    countOrEmit(OS, Fn.Name, Data, Wildcard, Opts, Stats, References);
   }
   return Stats;
 }
@@ -434,7 +505,8 @@ size_t statedByteCount(ArrayRef<bool> Wildcard,
 
 bool emitPatternLine(raw_ostream &OS, StringRef Name, ArrayRef<uint8_t> Data,
                      ArrayRef<bool> Wildcard,
-                     const PatternGeneratorOptions &Opts) {
+                     const PatternGeneratorOptions &Opts,
+                     ArrayRef<FuncRef> References) {
   const size_t Size = Data.size();
   if (Size < Opts.MinFuncSize || Wildcard.size() != Size ||
       statedByteCount(Wildcard, Opts) < SignatureMatcher::MinStatedBytes)
@@ -452,6 +524,8 @@ bool emitPatternLine(raw_ostream &OS, StringRef Name, ArrayRef<uint8_t> Data,
   OS << format(" %02X %04X %04X", static_cast<unsigned>(CRCLen), CRC,
                static_cast<unsigned>(Size));
   OS << " :0000 " << Name;
+  for (const FuncRef &Ref : References)
+    OS << format(" ^%04X ", static_cast<unsigned>(Ref.Offset)) << Ref.Name;
 
   // Everything the CRC had to stop short of, stated byte by byte so that a
   // wildcard can stand where a relocation does.  This is what lets a match

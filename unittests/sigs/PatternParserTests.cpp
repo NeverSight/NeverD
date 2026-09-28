@@ -18,14 +18,31 @@
 
 using namespace neverd::sigs;
 
-TEST(PatternParserStrictness, RejectsUnsupportedReferenceConstraints) {
+TEST(PatternParserReferences, ReadsReferencesBetweenNamesAndTail) {
   auto ModuleOrErr = PatternParser::parseLine(
-      "AABB 00 0000 0002 :0000 public_name ^0001 referenced_name");
+      "AABBE8........C3 00 0000 0008 :0000 caller ^0003 _callee@4 "
+      "^0003 ?other@@YAXXZ CC");
+  ASSERT_TRUE(bool(ModuleOrErr)) << llvm::toString(ModuleOrErr.takeError());
+  ASSERT_EQ(ModuleOrErr->References.size(), 2u);
+  EXPECT_EQ(ModuleOrErr->References[0].Offset, 3u);
+  EXPECT_EQ(ModuleOrErr->References[0].Name, "_callee@4");
+  EXPECT_EQ(ModuleOrErr->References[1].Name, "?other@@YAXXZ");
+  EXPECT_EQ(ModuleOrErr->TailBytes.size(), 1u);
+}
 
-  ASSERT_FALSE(ModuleOrErr) << "an unmodeled constraint must not be ignored";
-  EXPECT_NE(llvm::toString(ModuleOrErr.takeError())
-                .find("reference constraint is not supported"),
-            std::string::npos);
+TEST(PatternParserReferences, RejectsMalformedReferences) {
+  for (const char *Line : {
+           "AABB 00 0000 0002 :0000 name ^0002 past_the_end",
+           "AABB 00 0000 0002 :0000 name ^0001",
+           "AABB 00 0000 0002 :0000 name ^zz callee",
+           "AABB 00 0000 0002 :0000 name ^0001 callee :0001 late_name",
+           "AABB 00 0000 0002 :0000 name CC ^0001 callee",
+       }) {
+    auto ModuleOrErr = PatternParser::parseLine(Line);
+    EXPECT_FALSE(bool(ModuleOrErr)) << Line;
+    if (!ModuleOrErr)
+      llvm::consumeError(ModuleOrErr.takeError());
+  }
 }
 
 TEST(PatternParserStrictness, RejectsTheWholeFileWhenOneRecordIsMalformed) {

@@ -130,18 +130,45 @@ llvm::Expected<PatternModule> PatternParser::parseLine(llvm::StringRef Line) {
     return llvm::make_error<llvm::StringError>(
         "CRC range is outside total length", llvm::inconvertibleErrorCode());
 
-  // Remaining tokens form :offset/name pairs followed by at most one tail.
+  // Remaining tokens form :offset/name pairs, then ^offset/name references,
+  // followed by at most one tail.
   bool SawTail = false;
   for (size_t I = 4; I < Tokens.size(); ++I) {
-    if (Tokens[I].starts_with("^"))
-      return llvm::make_error<llvm::StringError>(
-          "reference constraint is not supported: " + Tokens[I].str(),
-          llvm::inconvertibleErrorCode());
+    if (Tokens[I].starts_with("^")) {
+      if (SawTail)
+        return llvm::make_error<llvm::StringError>(
+            "reference follows the tail pattern",
+            llvm::inconvertibleErrorCode());
+      auto OffStr = Tokens[I].drop_front(1);
+      unsigned Off;
+      if (OffStr.empty() || OffStr.getAsInteger(16, Off))
+        return llvm::make_error<llvm::StringError>(
+            "invalid reference offset: " + Tokens[I].str(),
+            llvm::inconvertibleErrorCode());
+      if (Off >= Mod.TotalLen)
+        return llvm::make_error<llvm::StringError>(
+            "reference offset is outside total length",
+            llvm::inconvertibleErrorCode());
+      if (I + 1 >= Tokens.size() || Tokens[I + 1].starts_with(":") ||
+          Tokens[I + 1].starts_with("^") || Tokens[I + 1].starts_with(".."))
+        return llvm::make_error<llvm::StringError>(
+            "reference name is missing after offset: " + Tokens[I].str(),
+            llvm::inconvertibleErrorCode());
+
+      FuncRef Ref;
+      Ref.Offset = Off;
+      Ref.Name = Tokens[++I].str();
+      Mod.References.push_back(std::move(Ref));
+      continue;
+    }
     if (Tokens[I].starts_with(":")) {
       if (SawTail)
         return llvm::make_error<llvm::StringError>(
             "public name follows the tail pattern",
             llvm::inconvertibleErrorCode());
+      if (!Mod.References.empty())
+        return llvm::make_error<llvm::StringError>(
+            "public name follows a reference", llvm::inconvertibleErrorCode());
       auto OffStr = Tokens[I].drop_front(1);
       unsigned Off;
       if (OffStr.empty() || OffStr.getAsInteger(16, Off))

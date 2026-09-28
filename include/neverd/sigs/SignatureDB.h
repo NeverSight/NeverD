@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -69,6 +70,15 @@ public:
   /// Apply loaded signatures against a binary image.
   /// Matches are stored internally and can be queried with matches().
   /// \p FuncEntries are the known function entry addresses to check.
+  ///
+  /// A module's references (PatternModule::References) are then checked
+  /// against the image.  A reference whose branch goes to a routine the other
+  /// matches name differently contradicts the match, which is dropped.  One
+  /// whose target those matches name the same, or whose target the named
+  /// routine's own pattern matches, confirms it.  Anything else -- an import
+  /// thunk, a veneer, a routine nothing names -- neither confirms nor
+  /// contradicts.  A branch to an incremental-linking thunk is followed to
+  /// the thunk's target when the thunk itself settles nothing.
   void apply(const BinaryImage &Img, const std::vector<uint64_t> &FuncEntries);
 
   /// Name the personality routines \p Img installs but cannot name itself,
@@ -117,6 +127,11 @@ public:
   const SigMatch *findMatch(uint64_t Addr) const;
 
   /// Build a map from address to function name for quick lookup.
+  ///
+  /// An address the matches name differently gets no name, unless exactly one
+  /// of those names comes from a match whose references were all confirmed:
+  /// the bytes alone could not tell the routines apart, but what they call
+  /// could.
   std::unordered_map<uint64_t, std::string> buildNameMap() const;
 
 private:
@@ -130,6 +145,18 @@ private:
   std::vector<PatternModule> Modules;
   std::vector<SigSource> LoadedFiles;
   std::vector<SigMatch> Matches;
+
+  /// Per entry of \ref Matches: the module that made it, or NoModule, and
+  /// whether it has references and all of them were confirmed.
+  static constexpr size_t NoModule = std::numeric_limits<size_t>::max();
+  std::vector<size_t> MatchModules;
+  std::vector<bool> MatchConfirmed;
+
+  void clearMatches();
+
+  /// Drop the matches their references contradict and record the ones they
+  /// confirm; see \ref apply.
+  void checkReferences(const BinaryImage &Img);
 
   void commitSource(std::vector<PatternModule> &&Mods,
                     const std::string &LibName, const std::string &FilePath);

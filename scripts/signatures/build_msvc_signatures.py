@@ -44,6 +44,13 @@ Four rules decide what a file holds:
     byte the line states: in a linked image it would name that routine too.
     The counts are reported.
 
+  * Lines state the routines they branch to as `^offset name` references,
+    which the matcher checks in the image (`neverd-sigmaker --references`).
+    Lines of one file with the same bytes and different names are kept when
+    references tell every two of them apart, because at a match only one of
+    them can be confirmed.  Across files the rule above stands: the Rich
+    header loads one release's file, where such a line would have no rival.
+
 Every file written is read back through `neverd-sigmaker --verify`, the
 loader's own parser: the loader rejects a whole directory for one bad line.
 
@@ -197,11 +204,61 @@ def extract(asset: Asset, destination: Path) -> list[Path]:
 
 @dataclass(frozen=True)
 class PatternLine:
-    """One .pat line split into what it asserts and what it names."""
+    """One .pat line split into what it asserts and what it names.
+
+    `refs` are its `^offset name` references: the routines it branches to,
+    which the matcher checks against the image.  They are not part of the
+    key, because they state nothing about the line's own bytes.
+    """
 
     text: str
     key: str
     names: tuple[str, ...]
+    refs: tuple[tuple[int, str], ...] = ()
+
+    def with_refs(self, refs: tuple[tuple[int, str], ...]) -> "PatternLine":
+        """This line stating only `refs`."""
+
+        tokens = self.key.split()
+        head, tail = tokens[:4], tokens[4:]
+        stated = [f"^{offset:04X} {name}" for offset, name in refs]
+        text = " ".join([*head, *self.names, *stated, *tail])
+        return PatternLine(text, self.key, self.names, refs)
+
+
+def distinguished(lines: list[PatternLine]) -> bool:
+    """Whether references tell apart every two of these same-byte lines.
+
+    Two lines are told apart when one offset holds a reference in both and
+    they name different routines there: at a match, only one of them can be
+    confirmed.  Anything less leaves the bytes naming several routines.
+    """
+
+    tables = [dict(line.refs) for line in lines]
+    for first in range(len(tables)):
+        for second in range(first + 1, len(tables)):
+            a, b = tables[first], tables[second]
+            if not any(offset in b and b[offset] != name for offset, name in a.items()):
+                return False
+    return True
+
+
+def common_refs(lines: list[PatternLine]) -> PatternLine:
+    """One line for copies that make the same claim under the same names.
+
+    Builds of one library can call different routines from byte-identical
+    code -- the debug CRT's `_free_dbg` where the release one calls `free` --
+    so only the references every copy states are kept; the others would
+    contradict the build that lacks them.
+    """
+
+    first = lines[0]
+    if all(line.refs == first.refs for line in lines[1:]):
+        return first
+    shared = set(first.refs)
+    for line in lines[1:]:
+        shared &= set(line.refs)
+    return first.with_refs(tuple(sorted(shared)))
 
 
 @dataclass(frozen=True)
@@ -279,6 +336,7 @@ def parse_line(text: str) -> PatternLine | None:
     if len(tokens) < 6:
         raise BuildError(f"malformed pattern line: {stripped[:120]}")
     names: list[str] = []
+    refs: list[tuple[int, str]] = []
     rest = tokens[:4]
     index = 4
     while index < len(tokens):
@@ -287,11 +345,15 @@ def parse_line(text: str) -> PatternLine | None:
             names.append(f"{token} {tokens[index + 1]}")
             index += 2
             continue
+        if token.startswith("^") and index + 1 < len(tokens):
+            refs.append((int(token[1:], 16), tokens[index + 1]))
+            index += 2
+            continue
         rest.append(token)
         index += 1
     if not names:
         raise BuildError(f"pattern line names nothing: {stripped[:120]}")
-    return PatternLine(stripped, " ".join(rest), tuple(names))
+    return PatternLine(stripped, " ".join(rest), tuple(names), tuple(sorted(refs)))
 
 
 @dataclass
@@ -305,6 +367,9 @@ class FoldResult:
     duplicates: int = 0
     conflicting_lines: int = 0
     conflicting_groups: int = 0
+    # Lines kept although others state the same bytes: references tell them
+    # apart.
+    distinguished_lines: int = 0
     conflict_examples: list[list[str]] = field(default_factory=list)
     dropped_across_files: int = 0
     dropped_covered: int = 0
@@ -320,21 +385,28 @@ def fold(lines: list[str]) -> FoldResult:
     A group of lines with the same key but more than one set of names is
     ambiguous: the bytes cannot say which routine they are.  All of its
     lines are dropped, and the key is kept so that `settle_directory` can
-    drop the same bytes from the other files of the directory.
+    drop the same bytes from the other files of the directory -- unless
+    their references tell every two of them apart (see `distinguished`),
+    when the matcher can: they are all kept.
     """
 
-    groups: dict[str, dict[tuple[str, ...], PatternLine]] = {}
+    copies: dict[str, dict[tuple[str, ...], list[PatternLine]]] = {}
     seen = 0
     for raw in lines:
         parsed = parse_line(raw)
         if parsed is None:
             continue
         seen += 1
-        groups.setdefault(parsed.key, {}).setdefault(parsed.names, parsed)
+        copies.setdefault(parsed.key, {}).setdefault(parsed.names, []).append(parsed)
 
     result = FoldResult(lines=[])
-    for key, variants in groups.items():
+    for key, by_names in copies.items():
+        variants = {names: common_refs(lines) for names, lines in by_names.items()}
         result.evidence.extend(variants.values())
+        if len(variants) > 1 and distinguished(list(variants.values())):
+            result.lines.extend(variants.values())
+            result.distinguished_lines += len(variants)
+            continue
         if len(variants) > 1:
             result.ambiguous_keys.add(key)
             result.conflicting_groups += 1
@@ -345,7 +417,7 @@ def fold(lines: list[str]) -> FoldResult:
         (line,) = variants.values()
         result.lines.append(line)
     result.lines.sort(key=lambda line: line.text)
-    result.duplicates = seen - sum(len(v) for v in groups.values())
+    result.duplicates = seen - sum(len(v) for v in copies.values())
     return result
 
 
@@ -360,16 +432,23 @@ def settle_directory(results: dict[Path, FoldResult]) -> None:
     a CRT routine that several toolsets share unchanged, are kept.
     """
 
-    claims: dict[str, tuple[str, ...] | None] = {}
+    # The names each file gives each key.  A key stays only if no file found
+    # it ambiguous and every file that states it gives it the same names:
+    # with the Rich header choosing one release's file, references tell
+    # same-byte routines apart only among the lines of that one file.
+    claims: dict[str, frozenset[tuple[str, ...]] | None] = {}
     for result in results.values():
         for key in result.ambiguous_keys:
             claims[key] = None
     for result in results.values():
+        named: dict[str, set[tuple[str, ...]]] = {}
         for line in result.lines:
-            if line.key not in claims:
-                claims[line.key] = line.names
-            elif claims[line.key] != line.names:
-                claims[line.key] = None
+            named.setdefault(line.key, set()).add(line.names)
+        for key, names in named.items():
+            if key not in claims:
+                claims[key] = frozenset(names)
+            elif claims[key] != frozenset(names):
+                claims[key] = None
     for result in results.values():
         kept = [line for line in result.lines if claims[line.key] is not None]
         result.dropped_across_files = len(result.lines) - len(kept)
@@ -465,6 +544,7 @@ def run_sigmaker(
         machine,
         "--tail",
         str(tail),
+        "--references",
     ]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.stderr.strip():
@@ -565,7 +645,8 @@ def write(
         f"{result.dropped_across_files} dropped for bytes another file of "
         f"{relative.parent.as_posix()} names differently, "
         f"{result.dropped_covered} for bytes a routine of another name states "
-        f"as well)",
+        f"as well; {result.distinguished_lines} kept because references tell "
+        f"same-byte routines apart)",
         flush=True,
     )
     for example in result.conflict_examples[:5]:

@@ -319,6 +319,65 @@ TEST(PatternGeneratorCOFF, LabelsDoNotEndAFunction) {
   EXPECT_EQ(Mod->PublicNames[0].Name, "?Dispatch@@YAHH@Z");
 }
 
+TEST(PatternGeneratorCOFF, DirectBranchesBecomeReferencesOnRequest) {
+  // x64: a call at 8 and a RIP-relative load at 16; only the call's rel32
+  // field is a branch the matcher can follow.
+  std::vector<uint8_t> Code = sequentialCode(48);
+  Code[8] = 0xE8;
+  Code[16] = 0x8B;
+  Code[17] = 0x05;
+  COFFObjectBuilder Builder(COFF::IMAGE_FILE_MACHINE_AMD64, Code);
+  Builder.addFunction("caller", 0);
+  Builder.addRelocation(9, COFF::IMAGE_REL_AMD64_REL32);
+  Builder.addRelocation(18, COFF::IMAGE_REL_AMD64_REL32);
+  PatternGeneratorOptions Opts;
+  Opts.TailLen = 0xFFFF;
+
+  Generated Plain = generate(Builder.build(), Opts);
+  ASSERT_EQ(Plain.Lines.size(), 1u);
+  EXPECT_EQ(Plain.Lines[0].find('^'), std::string::npos)
+      << "references are off unless asked for";
+
+  Opts.EmitReferences = true;
+  Generated Out = generate(Builder.build(), Opts);
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  auto Mod = PatternParser::parseLine(Out.Lines[0]);
+  ASSERT_TRUE(static_cast<bool>(Mod)) << toString(Mod.takeError());
+  ASSERT_EQ(Mod->References.size(), 1u);
+  EXPECT_EQ(Mod->References[0].Offset, 9u);
+  EXPECT_EQ(Mod->References[0].Name, "target");
+}
+
+TEST(PatternGeneratorCOFF, BranchReferencesUseEachMachinesOffset) {
+  using namespace COFF;
+  const std::vector<uint8_t> Call = {0x55, 0xE8, 0, 0, 0, 0, 0xC3};
+  EXPECT_EQ(coffBranchReferenceOffset(IMAGE_FILE_MACHINE_I386,
+                                      IMAGE_REL_I386_REL32, Call, 2, 0),
+            2u);
+  // The same relocation after a non-branch opcode, or at the function's
+  // first byte, is no branch.
+  EXPECT_EQ(coffBranchReferenceOffset(IMAGE_FILE_MACHINE_I386,
+                                      IMAGE_REL_I386_REL32, Call, 3, 0),
+            std::nullopt);
+  EXPECT_EQ(coffBranchReferenceOffset(IMAGE_FILE_MACHINE_I386,
+                                      IMAGE_REL_I386_REL32, Call, 2, 2),
+            std::nullopt);
+  EXPECT_EQ(coffBranchReferenceOffset(IMAGE_FILE_MACHINE_I386,
+                                      IMAGE_REL_I386_DIR32, Call, 2, 0),
+            std::nullopt);
+  const std::vector<uint8_t> Words(16, 0);
+  EXPECT_EQ(coffBranchReferenceOffset(IMAGE_FILE_MACHINE_ARM64,
+                                      IMAGE_REL_ARM64_BRANCH26, Words, 12, 4),
+            8u);
+  EXPECT_EQ(coffBranchReferenceOffset(IMAGE_FILE_MACHINE_ARMNT,
+                                      IMAGE_REL_ARM_BLX23T, Words, 6, 2),
+            4u);
+  EXPECT_EQ(coffBranchReferenceOffset(IMAGE_FILE_MACHINE_ARM64,
+                                      IMAGE_REL_ARM64_PAGEBASE_REL21, Words, 12,
+                                      4),
+            std::nullopt);
+}
+
 TEST(PatternGeneratorCOFF, Addr64IsWildcardedAcrossEightBytes) {
   // sub rsp, 28h ; mov rax, imm64 (the address) ; call rel32 ;
   // add rsp, 28h ; xor eax, eax ; ret ; int3 padding
