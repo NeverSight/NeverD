@@ -268,12 +268,29 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       return bad("invalid Swift virtual binding");
     const bool VoidCall = Signature.ReturnType->Kind == NdTypeKind::Void;
     const bool Setter = VoidCall && Signature.Parameters.size() == 2;
-    if (Signature.Parameters.size() != (Setter ? 2U : 1U) ||
+    const bool ZeroArguments = Hint.Virtual->ZeroArgumentWords == 2;
+    if ((!ZeroArguments && Hint.Virtual->ZeroArgumentWords != 0) ||
+        (ZeroArguments && !VoidCall) || (Setter && ZeroArguments) ||
+        Signature.Parameters.size() != (ZeroArguments ? 3U
+                                        : Setter      ? 2U
+                                                      : 1U) ||
         E.Operands.size() != Signature.Parameters.size() ||
         std::any_of(E.Operands.begin(), E.Operands.end(),
                     [](const auto &Operand) { return !Operand; }) ||
         (Setter && Signature.Parameters[0].TheRole !=
                        SourceParameterTypeHint::Role::Ordinary) ||
+        (ZeroArguments &&
+         (!Signature.Parameters[0].Type || !Signature.Parameters[1].Type ||
+          Signature.Parameters[0].Type->Kind != NdTypeKind::Int ||
+          Signature.Parameters[1].Type->Kind != NdTypeKind::Int ||
+          Signature.Parameters[0].Type->Size != 8 ||
+          Signature.Parameters[1].Type->Size != 8 ||
+          Signature.Parameters[0].Type->IsSigned ||
+          Signature.Parameters[1].Type->IsSigned ||
+          Signature.Parameters[0].TheRole !=
+              SourceParameterTypeHint::Role::Ordinary ||
+          Signature.Parameters[1].TheRole !=
+              SourceParameterTypeHint::Role::Ordinary)) ||
         Signature.Parameters.back().TheRole !=
             SourceParameterTypeHint::Role::SwiftContext ||
         !Signature.Parameters.back().Type ||
@@ -294,7 +311,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
            (ValueType->Kind == NdTypeKind::Int && ValueType->Size == 1 &&
             !ValueType->IsSigned))))
       return bad("invalid Swift virtual binding");
-    const size_t ContextIndex = Setter ? 1 : 0;
+    const size_t ContextIndex = Signature.Parameters.size() - 1;
     auto Context = sourceValue(exprStr(*E.Operands[ContextIndex]),
                                E.Operands[ContextIndex]->Type,
                                Signature.Parameters[ContextIndex].Type);
@@ -307,19 +324,33 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Value)
         return bad("Swift value carrier disagrees with ABI");
     }
+    std::string ArgumentTypes;
+    std::string Arguments;
+    if (ZeroArguments) {
+      for (size_t I = 0; I < 2; ++I) {
+        auto Argument =
+            sourceValue(exprStr(*E.Operands[I]), E.Operands[I]->Type,
+                        Signature.Parameters[I].Type);
+        if (!Argument)
+          return bad("Swift zero-word carrier disagrees with ABI");
+        ArgumentTypes += "uint64_t, ";
+        Arguments += *Argument + ", ";
+      }
+    } else if (Setter) {
+      ArgumentTypes = ValueType->Kind == NdTypeKind::Int
+                          ? "_Bool, "
+                          : typeToC(ValueType) + ", ";
+      Arguments = *Value + ", ";
+    }
     const std::string ReturnType = Signature.ReturnType->Kind == NdTypeKind::Int
                                        ? "_Bool"
                                        : typeToC(Signature.ReturnType);
     const std::string Prototype =
-        ReturnType + " __attribute__((swiftcall)) (*)(" +
-        (Setter
-             ? (ValueType->Kind == NdTypeKind::Int ? "_Bool, "
-                                                   : typeToC(ValueType) + ", ")
-             : "") +
+        ReturnType + " __attribute__((swiftcall)) (*)(" + ArgumentTypes +
         sourceParameterType(Signature.Parameters.back()) + ")";
     const std::string Call = "((" + Prototype + ")(uintptr_t)(" +
-                             exprStr(*E.IndirectTarget) + "))(" +
-                             (Setter ? *Value + ", " : "") + *Context + ")";
+                             exprStr(*E.IndirectTarget) + "))(" + Arguments +
+                             *Context + ")";
     if (VoidCall)
       return Call;
     auto Result = sourceValue(Call, Signature.ReturnType, E.Type);

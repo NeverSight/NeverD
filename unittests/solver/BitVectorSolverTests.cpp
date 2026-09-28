@@ -569,6 +569,25 @@ TEST(BitVectorSolver, RecoversProvedSplitWordArithmetic) {
               SubExpected);
     EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
 
+    SymRef OffsetLow = Ctx.mkConst(Width, 0xf0);
+    SymRef OffsetHigh = Ctx.mkConst(Width, 0x56);
+    SymRef Offset = Ctx.mkConcat(OffsetHigh, OffsetLow);
+    auto BiasResult = [&](SymRef Upper, SymRef Lower) {
+      SymRef BiasedLow = Ctx.mkAdd(Lower, OffsetLow);
+      SymRef Carry = Ctx.mkZExt(Ctx.mkUlt(BiasedLow, Lower), Width);
+      return Ctx.mkConcat(Ctx.mkAdd({Upper, OffsetHigh, Carry}), BiasedLow);
+    };
+    SymRef AffineAdd = BiasResult(High, Low);
+    SymRef AffineAddExpected = Ctx.mkAdd(Expected, Offset);
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, AffineAdd, Verify),
+              AffineAddExpected);
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
+    SymRef AffineSub = BiasResult(SubHigh, SubLow);
+    SymRef AffineSubExpected = Ctx.mkAdd(SubExpected, Offset);
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, AffineSub, Verify),
+              AffineSubExpected);
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
+
     SymRef Rare = Ctx.mkAnd(Ctx.mkEq(AL, Ctx.mkConst(Width, 0x6d)),
                             Ctx.mkEq(AH, Ctx.mkConst(Width, 0x29)));
     SymRef Wrong = Ctx.mkConcat(

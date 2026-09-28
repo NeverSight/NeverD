@@ -146,6 +146,8 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
     return true;
   case OpTag::ICmp:
     return !llvm::cast<llvm::ICmpInst>(I).hasSameSign();
+  case OpTag::Select:
+    return I.getOperand(0)->getType()->isIntegerTy(1);
   case OpTag::FShl: {
     const auto *Amount = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(2));
     return Amount != nullptr;
@@ -218,6 +220,8 @@ OpTag tagOf(const llvm::Instruction &I) {
     return OpTag::SExt;
   if (llvm::isa<llvm::ICmpInst>(I))
     return OpTag::ICmp;
+  if (llvm::isa<llvm::SelectInst>(I))
+    return OpTag::Select;
   switch (I.getOpcode()) {
   case llvm::Instruction::Add:
     return OpTag::Add;
@@ -257,7 +261,8 @@ bool isTranslatable(const llvm::Value *V, bool WithComparisons) {
   OpTag Tag = tagOf(*I);
   if (Tag == OpTag::FShl && !llvm::isa<llvm::ConstantInt>(I->getOperand(2)))
     return false;
-  return Tag != OpTag::None && (WithComparisons || Tag != OpTag::ICmp);
+  return Tag != OpTag::None &&
+         (WithComparisons || (Tag != OpTag::ICmp && Tag != OpTag::Select));
 }
 
 sym::SymRef Translator::build(const llvm::Instruction &I) {
@@ -335,6 +340,8 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
       break;
     }
     break;
+  case OpTag::Select:
+    return Ctx.mkIte(M(A), M(B), M(I.getOperand(2)));
   case OpTag::FShl: {
     const auto *Amount = llvm::cast<llvm::ConstantInt>(I.getOperand(2));
     const uint32_t Shift = static_cast<uint32_t>(

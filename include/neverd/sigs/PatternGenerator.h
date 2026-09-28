@@ -170,9 +170,11 @@ std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
 /// symbol is a function, ending at the next symbol of any kind in its
 /// section. An ELF object keeps its relocations in sections of their own,
 /// each naming the section it applies to; their footprints come from
-/// elfRelocationFootprint. The ELF function symbols that label one address
-/// are one routine's aliases and share one line, their names in
-/// preferredAliasOrder. Mach-O relocations cover four bytes.
+/// elfRelocationFootprint. An ELF function ends earlier where its symbol's
+/// size says so, before the padding that aligns the next one. The ELF
+/// function symbols that label one address are one routine's aliases and
+/// share one line, their names in preferredAliasOrder. Mach-O relocations
+/// cover four bytes.
 PatternGeneratorStats generatePatterns(const llvm::object::ObjectFile &Obj,
                                        const PatternGeneratorOptions &Opts,
                                        llvm::raw_ostream &OS);

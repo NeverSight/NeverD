@@ -56,6 +56,9 @@ SymRef recoverSplitWordArithmetic(SymContext &Ctx, SymRef Expr,
   Values.reserve(Ctx.numVars());
   for (uint32_t Id = 0; Id < Ctx.numVars(); ++Id)
     Values.emplace_back(Ctx.varInfo(Id).Width, 0);
+  // At zero inputs, packed addition and subtraction vanish. Any remaining
+  // value is the modular offset required by an affine candidate.
+  const SymRef Offset = Ctx.mkConst(Ctx.eval(Expr, Values));
   llvm::SmallVector<llvm::APInt, 8> Expected;
   const uint64_t Seeds[8][4] = {
       {0, 0, 0, 0},
@@ -81,7 +84,9 @@ SymRef recoverSplitWordArithmetic(SymContext &Ctx, SymRef Expr,
       // The two operands of addition are exchangeable; subtraction is not.
       if (!Subtract && Order[0] > Order[2])
         continue;
-      const SymRef Candidate = Subtract ? Ctx.mkSub(A, B) : Ctx.mkAdd(A, B);
+      const SymRef Arithmetic = Subtract ? Ctx.mkSub(A, B) : Ctx.mkAdd(A, B);
+      const SymRef Candidate =
+          Ctx.isConstZero(Offset) ? Arithmetic : Ctx.mkAdd(Arithmetic, Offset);
       if (!Tried.insert(Candidate.index()).second ||
           Ctx.readabilityCost(Candidate) >= Ctx.readabilityCost(Expr))
         continue;

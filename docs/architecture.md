@@ -70,6 +70,11 @@ and unrelated names do not select a decoder mode. A fully stripped image can
 leave an indirect target's state unknowable from static bytes alone; the
 file-level default is not proof that all of its executable bytes use one mode.
 
+`BinaryImage::readImmutableARMLiteral` is the shared authority for folding a
+fixed-width read from a `$d` island inside executable storage. Both HighIR and
+LLVM emission require the whole read to stay in the island and reject writable
+or relocated bytes.
+
 After ARM call-arity recovery, MedIR propagates a proven pointer parameter
 through direct calls only when the argument is the exact incoming parameter;
 computed register versions do not inherit that role. HighC uses the same

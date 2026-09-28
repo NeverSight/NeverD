@@ -248,6 +248,7 @@ struct SourceCallTypeHint {
     va_t CallSite = 0;
     va_t IsaMaskImport = 0;
     uint32_t VtableByteOffset = 0;
+    uint8_t ZeroArgumentWords = 0;
     bool operator==(const SwiftVirtualEvidence &) const = default;
   };
   std::optional<SwiftVirtualEvidence> Virtual;

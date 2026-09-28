@@ -12,6 +12,7 @@
 
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -208,7 +209,18 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
 
   case NdOp::LOAD: {
     if (Op.NumInputs >= 1) {
-      return HighExpr::makeLoad(memoryAddressExpr(Op.Inputs[0]),
+      auto Address = memoryAddressExpr(Op.Inputs[0]);
+      if (Image && Address && Address->Kind == ExprKind::Const &&
+          Op.MemoryOrdering == NdMemoryOrdering::None &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        if (auto Value = Image->readImmutableARMLiteral(Address->ConstVal,
+                                                        Op.Output.Size)) {
+          auto Constant = HighExpr::makeConst(
+              *Value, Op.Output.Size, ConstantAddressProvenance::Scalar);
+          Constant->Type = NdType::makeInt(Op.Output.Size);
+          return Constant;
+        }
+      return HighExpr::makeLoad(std::move(Address),
                                 NdType::makeInt(Op.Output.Size),
                                 Op.MemoryOrdering, Op.MemoryAddressSpace);
     }

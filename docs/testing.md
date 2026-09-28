@@ -81,12 +81,15 @@ The 32-bit register-pair fixture separately checks that both C routes preserve
 an observed 64-bit return through a call on i386 (including PIC call/pop),
 ARM32, Thumb-1, and Thumb-2. Its edge and random-word oracles check the complete
 64-bit result and a caller that consumes both halves. Three independent
-Boolean forms exercise wide addition and subtraction. The output must remove
-their residual XOR, AND, and complement operations, while retaining the shifts
-and OR needed to assemble input halves. The shared symbolic candidate search
-uses sample values only to discard candidates; `NeverDSolverTests` also checks
-that an exact proof accepts equivalent arithmetic and rejects a rare
-counterexample or an incomplete proof.
+Boolean forms exercise wide addition and subtraction; two more add a nonzero
+64-bit offset after the Boolean form. The output must remove their residual
+XOR, AND, and complement operations, while retaining the shifts and OR needed
+to assemble input halves. Thumb-1 compilers may place these offsets in a
+read-only literal island inside executable code; mapping and relocation
+evidence must authorize constant reads in both C routes. The shared symbolic
+candidate search uses sample values only to discard candidates;
+`NeverDSolverTests` also checks that an exact proof accepts equivalent
+arithmetic and rejects a rare counterexample or an incomplete proof.
 
 The frame-spill source matrix also covers x86-32 (ELF/COFF/Mach-O), ARM32
 (ARM, Thumb-2 and Cortex-M Thumb-1 ELF), and AArch64 (ELF/COFF/Mach-O)

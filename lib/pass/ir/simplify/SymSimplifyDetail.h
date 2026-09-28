@@ -36,7 +36,7 @@ namespace neverd {
 namespace sym = symbolic;
 
 /// The integer operators this pass carries into the engine.  Everything else
-/// -- selects, loads, calls -- becomes an opaque input.
+/// -- loads and calls -- becomes an opaque input.
 enum class OpTag {
   None,
   Add,
@@ -56,6 +56,7 @@ enum class OpTag {
   ZExt,
   SExt,
   ICmp,
+  Select,
   FShl,
 };
 
@@ -172,6 +173,7 @@ private:
     case OpTag::ZExt:
     case OpTag::SExt:
       return {I.getOperand(0)};
+    case OpTag::Select:
     case OpTag::FShl:
       return {I.getOperand(0), I.getOperand(1), I.getOperand(2)};
     default:

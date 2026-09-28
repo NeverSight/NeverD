@@ -181,8 +181,9 @@ public:
   ELFObjectBuilder(uint16_t Machine, bool Is64, std::vector<uint8_t> Code)
       : Machine(Machine), Is64(Is64), Code(std::move(Code)) {}
 
-  void addFunction(StringRef Name, uint64_t Offset) {
+  void addFunction(StringRef Name, uint64_t Offset, uint64_t Size = 0) {
     Functions.push_back({Name.str(), Offset});
+    Sizes.push_back(Size);
   }
 
   void addRelocation(uint64_t Offset, uint32_t Type) {
@@ -252,28 +253,28 @@ public:
     align(8);
     const size_t SymBegin = Out.size();
     auto putSymbol = [&](uint32_t Name, uint8_t Info, uint16_t Section,
-                         uint64_t Value) {
+                         uint64_t Value, uint64_t Size) {
       put(Name, 4);
       if (Is64) {
         Out.push_back(Info);
         Out.push_back(0);
         put(Section, 2);
         put(Value, 8);
-        put(0, 8);
+        put(Size, 8);
       } else {
         put(Value, 4);
-        put(0, 4);
+        put(Size, 4);
         Out.push_back(Info);
         Out.push_back(0);
         put(Section, 2);
       }
     };
-    putSymbol(0, 0, 0, 0);
+    putSymbol(0, 0, 0, 0, 0);
     for (size_t I = 0; I < Functions.size(); ++I)
       putSymbol(NameOffsets[I], (ELF::STB_GLOBAL << 4) | ELF::STT_FUNC, 1,
-                Functions[I].second);
+                Functions[I].second, Sizes[I]);
     putSymbol(TargetName, (ELF::STB_GLOBAL << 4) | ELF::STT_NOTYPE,
-              ELF::SHN_UNDEF, 0);
+              ELF::SHN_UNDEF, 0, 0);
     const Placed Symtab{SymBegin, Out.size() - SymBegin};
 
     const Placed Strtab{Out.size(), Strings.size()};
@@ -336,6 +337,7 @@ private:
   bool Is64;
   std::vector<uint8_t> Code;
   std::vector<std::pair<std::string, uint64_t>> Functions;
+  std::vector<uint64_t> Sizes;
   std::vector<std::pair<uint64_t, uint32_t>> Relocations;
 };
 
@@ -857,4 +859,26 @@ TEST(PatternGeneratorMachine, ObjectsAreKeptForTheirOwnArchitecture) {
   EXPECT_FALSE(Is(Amd64COFF, TargetMachine::ARM64));
   EXPECT_EQ(parseTargetMachine("arm64"), TargetMachine::ARM64);
   EXPECT_FALSE(parseTargetMachine("mips").has_value());
+}
+
+TEST(PatternGeneratorELF, AFunctionEndsAtItsSymbolsSize) {
+  // Twenty bytes of code, twelve of NOP padding, then the next function.
+  std::vector<uint8_t> Code = sequentialCode(20);
+  Code.insert(Code.end(), 12, 0x90);
+  std::vector<uint8_t> Next = sequentialCode(32);
+  Code.insert(Code.end(), Next.begin(), Next.end());
+  ELFObjectBuilder Sized(ELF::EM_X86_64, true, Code);
+  Sized.addFunction("padded", 0, 20);
+  Sized.addFunction("next", 32, 32);
+  Generated Out = generate(Sized.build());
+  ASSERT_EQ(Out.Lines.size(), 2u);
+  EXPECT_TRUE(StringRef(Out.Lines[0]).ends_with(" 0014 :0000 padded")) << Out.Lines[0];
+
+  // A symbol with no size runs to the next symbol, as before.
+  ELFObjectBuilder Unsized(ELF::EM_X86_64, true, Code);
+  Unsized.addFunction("padded", 0);
+  Unsized.addFunction("next", 32);
+  Out = generate(Unsized.build());
+  ASSERT_EQ(Out.Lines.size(), 2u);
+  EXPECT_TRUE(StringRef(Out.Lines[0]).ends_with(" 0020 :0000 padded")) << Out.Lines[0];
 }

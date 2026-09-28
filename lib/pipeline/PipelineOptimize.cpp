@@ -49,6 +49,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -496,6 +497,10 @@ runOptimizationPipeline(llvm::Module &Mod,
   }
   llvm::FunctionPassManager FramePromotion;
   FramePromotion.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
+  // Forward memory-equivalent frame reloads before semantic measurement.
+  // MemorySSA preserves intervening stores that may alias the same slot.
+  if (!Options.Conservative)
+    FramePromotion.addPass(llvm::EarlyCSEPass(/*UseMemorySSA=*/true));
   llvm::ModulePassManager FramePipeline;
   FramePipeline.addPass(
       llvm::createModuleToFunctionPassAdaptor(std::move(FramePromotion)));

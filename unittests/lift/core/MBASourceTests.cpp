@@ -19,17 +19,24 @@ std::string readSource(const fs::path &Path) {
 }
 
 std::string functionBody(const std::string &Source, const std::string &Name) {
-  const auto NamePos = Source.find(Name + "(");
-  EXPECT_NE(NamePos, std::string::npos) << "Missing " << Name << "\n" << Source;
-  if (NamePos == std::string::npos)
-    return {};
-  const auto Begin = Source.find('{', NamePos);
-  const auto End = Source.find("\n}", Begin);
-  EXPECT_NE(Begin, std::string::npos) << Source;
-  EXPECT_NE(End, std::string::npos) << Source;
-  if (Begin == std::string::npos || End == std::string::npos)
-    return {};
-  return Source.substr(Begin, End - Begin);
+  size_t Search = 0;
+  while (true) {
+    const auto NamePos = Source.find(Name + "(", Search);
+    if (NamePos == std::string::npos)
+      break;
+    const auto Begin = Source.find('{', NamePos);
+    const auto Semicolon = Source.find(';', NamePos);
+    if (Begin != std::string::npos &&
+        (Semicolon == std::string::npos || Begin < Semicolon)) {
+      const auto End = Source.find("\n}", Begin);
+      EXPECT_NE(End, std::string::npos) << Source;
+      return End == std::string::npos ? std::string{}
+                                      : Source.substr(Begin, End - Begin);
+    }
+    Search = NamePos + Name.size() + 1;
+  }
+  ADD_FAILURE() << "Missing function definition " << Name << "\n" << Source;
+  return {};
 }
 
 std::string returnedExpression(const std::string &Body) {
@@ -252,6 +259,24 @@ uint32_t addressed_add(uint32_t x, uint32_t y) {
   EXPECT_TRUE(containsResidualMBA(functionAST(Source, "hidden_mba")));
   EXPECT_TRUE(containsResidualMBA(functionAST(Source, "compound_mba")));
   EXPECT_FALSE(containsResidualMBA(functionAST(Source, "addressed_add")));
+}
+
+TEST(MBASourceBodyTest, FindsDefinitionAfterPrototypeAndCall) {
+  const std::string Source = R"(
+int target(int);
+int unrelated(int x) {
+  return x + 1;
+}
+int caller(void) {
+  return target(1);
+}
+int target(int x) {
+  return x ^ 1;
+}
+)";
+  const std::string Body = functionBody(Source, "target");
+  EXPECT_NE(Body.find("x ^ 1"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("x + 1"), std::string::npos) << Body;
 }
 
 class MBASourceTest : public MBAExecutableSourceTest,
@@ -782,9 +807,18 @@ TEST_P(MBARegisterPairSourceTest, PreservesObservedWideReturnAndFold) {
   EXPECT_EQ(SubPairBody.find(" ^ "), std::string::npos) << SubPairBody;
   EXPECT_EQ(SubPairBody.find(" & "), std::string::npos) << SubPairBody;
   EXPECT_EQ(SubPairBody.find("~"), std::string::npos) << SubPairBody;
+  for (const char *Name : {"mba_pair_affine_add", "mba_pair_affine_sub"}) {
+    const std::string Body = functionBody(Source, Name);
+    EXPECT_FALSE(Body.empty()) << Name;
+    EXPECT_EQ(Body.find(" ^ "), std::string::npos) << Body;
+    EXPECT_EQ(Body.find(" & "), std::string::npos) << Body;
+    EXPECT_EQ(Body.find("~"), std::string::npos) << Body;
+  }
   EXPECT_FALSE(functionBody(Source, "mba_pair_fold").empty());
   EXPECT_FALSE(functionBody(Source, "mba_pair_or_fold").empty());
   EXPECT_FALSE(functionBody(Source, "mba_pair_sub_fold").empty());
+  EXPECT_FALSE(functionBody(Source, "mba_pair_affine_add_fold").empty());
+  EXPECT_FALSE(functionBody(Source, "mba_pair_affine_sub_fold").empty());
 
   const char *Harness = R"(
 #include <inttypes.h>
@@ -797,14 +831,27 @@ static int check_pair(uint32_t xl, uint32_t xh, uint32_t yl, uint32_t yh) {
   uint64_t or_actual = (uint64_t)mba_pair_or_add(xl, xh, yl, yh);
   uint64_t expected_difference = x - y;
   uint64_t difference = (uint64_t)mba_pair_sub(xl, xh, yl, yh);
+  uint64_t affine_sum = expected + UINT64_C(0x123456789abcdef0);
+  uint64_t affine_difference =
+      expected_difference + UINT64_C(0x123456789abcdef0);
   uint32_t folded = (uint32_t)expected ^ (uint32_t)(expected >> 32);
   uint32_t folded_difference =
       (uint32_t)expected_difference ^ (uint32_t)(expected_difference >> 32);
+  uint32_t folded_affine_sum =
+      (uint32_t)affine_sum ^ (uint32_t)(affine_sum >> 32);
+  uint32_t folded_affine_difference =
+      (uint32_t)affine_difference ^ (uint32_t)(affine_difference >> 32);
   if (actual != expected || or_actual != expected ||
       difference != expected_difference ||
+      (uint64_t)mba_pair_affine_add(xl, xh, yl, yh) != affine_sum ||
+      (uint64_t)mba_pair_affine_sub(xl, xh, yl, yh) != affine_difference ||
       (uint32_t)mba_pair_fold(xl, xh, yl, yh) != folded ||
       (uint32_t)mba_pair_or_fold(xl, xh, yl, yh) != folded ||
-      (uint32_t)mba_pair_sub_fold(xl, xh, yl, yh) != folded_difference) {
+      (uint32_t)mba_pair_sub_fold(xl, xh, yl, yh) != folded_difference ||
+      (uint32_t)mba_pair_affine_add_fold(xl, xh, yl, yh) !=
+          folded_affine_sum ||
+      (uint32_t)mba_pair_affine_sub_fold(xl, xh, yl, yh) !=
+          folded_affine_difference) {
     fprintf(stderr, "pair mismatch %08" PRIx32 ":%08" PRIx32
                     " %08" PRIx32 ":%08" PRIx32 "\n", xh, xl, yh, yl);
     return 1;

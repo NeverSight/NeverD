@@ -957,6 +957,36 @@ struct BinaryImage {
     return Seg && Seg->isReadable() && !isCodeAddress(Addr);
   }
 
+  /// Read a fixed scalar from an AArch32 literal island only when mapping
+  /// symbols prove the entire access is immutable data. A relocation may
+  /// change the stored value at load time, so such slots stay memory reads.
+  std::optional<uint64_t> readImmutableARMLiteral(va_t Addr,
+                                                  uint16_t Size) const {
+    if (Arch != neverd::Arch::ARM ||
+        (Size != 1 && Size != 2 && Size != 4 && Size != 8))
+      return std::nullopt;
+    const ARMCodeRegion *Region = armMappingRegionAt(Addr);
+    const Segment *Seg = getSegmentFor(Addr);
+    if (!Region || Region->Kind != ARMCodeRegionKind::Data ||
+        Size > Region->End - Addr || !Seg || !Seg->isReadable() ||
+        !Seg->isExecutable() || Seg->isWritable())
+      return std::nullopt;
+    // A fixup can begin before this access and overlap it. Conservatively
+    // exclude every possible eight-byte slot touching the scalar.
+    const va_t First = Addr >= 7 ? Addr - 7 : 0;
+    const va_t Last = Addr + Size - 1;
+    for (va_t Byte = First; Byte <= Last; ++Byte)
+      if (hasRelocationProvenanceAt(Byte))
+        return std::nullopt;
+    const uint8_t *Bytes = readVA(Addr, Size);
+    if (!Bytes)
+      return std::nullopt;
+    uint64_t Value = 0;
+    for (uint16_t I = 0; I < Size; ++I)
+      Value |= static_cast<uint64_t>(Bytes[I]) << (8 * I);
+    return Value;
+  }
+
   const Section *getSectionByName(llvm::StringRef Name) const {
     for (const auto &Sec : Sections)
       if (Sec.Name == Name)

@@ -746,6 +746,69 @@ int main(void) {
 )");
 }
 
+TEST(HighCSourceCalls, SwiftVirtualVoidMethodPreservesTwoZeroWords) {
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::SwiftVirtual;
+  Hint.TargetName = "swift_virtual";
+  Hint.Virtual =
+      SourceCallTypeHint::SwiftVirtualEvidence{0x1000, 0x1010, 0x2000, 232, 2};
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Hint.Signature.ReturnType = NdType::makeVoid();
+  const auto Word = NdType::makeInt(8, false);
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  Hint.Signature.Parameters = {
+      {"zero", Word}, {"zero", Word}, {"self", Pointer}};
+  Hint.Signature.Parameters.back().TheRole =
+      SourceParameterTypeHint::Role::SwiftContext;
+  std::string Diagnostic;
+  ASSERT_TRUE(
+      assignDarwinSwiftSourceABI(Hint.Signature, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+
+  auto Param = [&](unsigned Id) {
+    MedVar V;
+    V.Kind = MedVar::Param;
+    V.Id = Id;
+    V.Size = 8;
+    V.TheArch = Arch::AArch64;
+    return HighExpr::makeVar(V, Pointer);
+  };
+  auto Call = HighExpr::makeCall(
+      "indirect_call", 0,
+      {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8), Param(0)});
+  Call->Type = NdType::makeVoid();
+  Call->IsIndirectCall = true;
+  Call->IndirectTarget = Param(1);
+  Call->SourceCallHint = std::make_shared<const SourceCallTypeHint>(Hint);
+  HighFunc Function;
+  Function.Entry = 0x1000;
+  Function.Name = "call_virtual_nil_action";
+  Function.ReturnType = NdType::makeVoid();
+  Function.Params = {{"context", Pointer}, {"target", Pointer}};
+  HighStmt Statement;
+  Statement.Kind = StmtKind::Call;
+  Statement.CallExpr = Call;
+  Function.Body = {Statement};
+  const auto Source = emit({Function}, true, Arch::AArch64);
+  EXPECT_NE(Source.find("uint64_t, uint64_t, void* "
+                        "__attribute__((swift_context))"),
+            std::string::npos)
+      << Source;
+  compileAndRun(Source + R"(
+static void __attribute__((swiftcall)) action(
+    uint64_t first, uint64_t second,
+    void *self __attribute__((swift_context))) {
+  if (first == 0 && second == 0)
+    ++*(int *)self;
+}
+int main(void) {
+  int value = 41;
+  call_virtual_nil_action(&value, (void *)&action);
+  return value == 42 ? 0 : 1;
+}
+)");
+}
+
 TEST(HighCSourceCalls,
      SwiftValueWitnessInitializeWithCopyReturnsRuntimeDestination) {
   using OperationKind = SourceCallTypeHint::SwiftValueWitnessKind;

@@ -210,12 +210,26 @@ public:
   }
 };
 
-bool exactVoidMethodCallWindow(const BinaryImage &Image, const LowBlock &Block,
-                               size_t Index) {
+std::optional<uint8_t> exactVoidMethodCallWindow(const BinaryImage &Image,
+                                                 const LowBlock &Block,
+                                                 size_t Index) {
   if (Index < 3)
-    return false;
-  const auto &Retain = Block.Ops[Index - 3];
-  const auto &Saved = Block.Ops[Index - 2];
+    return std::nullopt;
+  const bool ZeroArguments =
+      Index >= 5 && Block.Ops[Index - 3].Opcode == NdOp::COPY &&
+      Block.Ops[Index - 3].Output == NdVar::reg(a64reg::X0, 8) &&
+      Block.Ops[Index - 3].NumInputs == 1 &&
+      Block.Ops[Index - 3].Inputs[0].isConst() &&
+      Block.Ops[Index - 3].Inputs[0].Offset == 0 &&
+      Block.Ops[Index - 3].Inputs[0].Size == 8 &&
+      Block.Ops[Index - 2].Opcode == NdOp::COPY &&
+      Block.Ops[Index - 2].Output == NdVar::reg(a64reg::X1, 8) &&
+      Block.Ops[Index - 2].NumInputs == 1 &&
+      Block.Ops[Index - 2].Inputs[0].isConst() &&
+      Block.Ops[Index - 2].Inputs[0].Offset == 0 &&
+      Block.Ops[Index - 2].Inputs[0].Size == 8;
+  const auto &Retain = Block.Ops[Index - (ZeroArguments ? 5 : 3)];
+  const auto &Saved = Block.Ops[Index - (ZeroArguments ? 4 : 2)];
   const auto &Link = Block.Ops[Index - 1];
   if (Retain.Opcode != NdOp::CALL ||
       Retain.Output != NdVar::reg(a64reg::X0, 8) || Retain.NumInputs != 1 ||
@@ -225,19 +239,24 @@ bool exactVoidMethodCallWindow(const BinaryImage &Image, const LowBlock &Block,
       Link.Opcode != NdOp::COPY || Link.Output != NdVar::reg(a64reg::X30, 8) ||
       Link.NumInputs != 1 || !Link.Inputs[0].isConst() ||
       Link.Inputs[0].Offset != Block.Ops[Index].Addr + 4)
-    return false;
+    return std::nullopt;
   const auto *Import = Image.findImportStubAt(Retain.Inputs[0].Offset);
   return Import && Import->Name == "_objc_retain" &&
-         darwinExportModuleMatches("/usr/lib/libobjc.A.dylib", Import->Module);
+                 darwinExportModuleMatches("/usr/lib/libobjc.A.dylib",
+                                           Import->Module)
+             ? std::optional<uint8_t>(ZeroArguments ? 2 : 0)
+             : std::nullopt;
 }
 
 std::optional<SourceCallTypeHint> canonicalAccessor(const BinaryImage &Image,
                                                     va_t Entry, va_t CallSite,
                                                     va_t IsaMaskImport,
-                                                    uint32_t Slot) {
+                                                    uint32_t Slot,
+                                                    uint8_t ZeroArgumentWords) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 || !Entry ||
       !CallSite || !IsaMaskImport || Slot < 0x40 || Slot > 0x1000 || Slot % 8 ||
+      (ZeroArgumentWords != 0 && ZeroArgumentWords != 2) ||
       !Image.isCodeAddress(Entry) || !Image.isCodeAddress(CallSite))
     return std::nullopt;
   const auto Import = darwinRuntimeImport(Image, IsaMaskImport);
@@ -265,6 +284,8 @@ std::optional<SourceCallTypeHint> canonicalAccessor(const BinaryImage &Image,
                           Method->Selector.find(':') == std::string::npos;
   const bool Setter = DoubleSetter || BoolSetter;
   const bool Floating = DoubleGetter || DoubleSetter;
+  if (ZeroArgumentWords && !VoidMethod)
+    return std::nullopt;
   if (!DoubleGetter && !BoolGetter && !DoubleSetter && !BoolSetter &&
       !VoidMethod)
     return std::nullopt;
@@ -313,8 +334,8 @@ std::optional<SourceCallTypeHint> canonicalAccessor(const BinaryImage &Image,
   SourceCallTypeHint Hint;
   Hint.CallKind = SourceCallTypeHint::Kind::SwiftVirtual;
   Hint.TargetName = "swift_virtual";
-  Hint.Virtual = SourceCallTypeHint::SwiftVirtualEvidence{Entry, CallSite,
-                                                          IsaMaskImport, Slot};
+  Hint.Virtual = SourceCallTypeHint::SwiftVirtualEvidence{
+      Entry, CallSite, IsaMaskImport, Slot, ZeroArgumentWords};
   Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
   Hint.Signature.ReturnType =
       (Setter || VoidMethod)
@@ -323,6 +344,8 @@ std::optional<SourceCallTypeHint> canonicalAccessor(const BinaryImage &Image,
   if (Setter)
     Hint.Signature.Parameters.push_back(
         {"value", Floating ? NdType::makeFloat(8) : NdType::makeInt(1, false)});
+  for (uint8_t I = 0; I < ZeroArgumentWords; ++I)
+    Hint.Signature.Parameters.push_back({"zero", NdType::makeInt(8, false)});
   Hint.Signature.Parameters.push_back(
       {"self", NdType::makePtr(NdType::makeVoid())});
   Hint.Signature.Parameters.back().TheRole =
@@ -352,7 +375,8 @@ bool isSwiftVirtualSourceCallHint(const BinaryImage &Image,
     return false;
   const auto Expected = canonicalAccessor(
       Image, Hint.Virtual->MethodEntry, Hint.Virtual->CallSite,
-      Hint.Virtual->IsaMaskImport, Hint.Virtual->VtableByteOffset);
+      Hint.Virtual->IsaMaskImport, Hint.Virtual->VtableByteOffset,
+      Hint.Virtual->ZeroArgumentWords);
   return Expected && Expected->Virtual == Hint.Virtual &&
          equalSourceABIs(Expected->Signature, Hint.Signature);
 }
@@ -394,9 +418,13 @@ buildSwiftVirtualCallHints(const BinaryImage &Image, const LowFunc &Function) {
         ++CallsAtSite;
     if (CallsAtSite != 1)
       continue;
-    if (Method->TypeEncoding == "v16@0:8" &&
-        !exactVoidMethodCallWindow(Image, Block, I))
-      continue;
+    uint8_t ZeroArgumentWords = 0;
+    if (Method->TypeEncoding == "v16@0:8") {
+      const auto Window = exactVoidMethodCallWindow(Image, Block, I);
+      if (!Window)
+        continue;
+      ZeroArgumentWords = *Window;
+    }
     BlockTrace Trace(Image, Function, Block);
     auto Target = Trace.resolve(Op.Inputs[0], I, Op.Addr);
     auto Context = Trace.resolve(NdVar::reg(a64reg::X20, 8), I, Op.Addr);
@@ -406,8 +434,9 @@ buildSwiftVirtualCallHints(const BinaryImage &Image, const LowFunc &Function) {
         Trace.virtualTarget(*Target, *Context, Method->ClassName);
     if (!Virtual)
       continue;
-    auto Hint = canonicalAccessor(Image, Function.Entry, Op.Addr,
-                                  Virtual->first, Virtual->second);
+    auto Hint =
+        canonicalAccessor(Image, Function.Entry, Op.Addr, Virtual->first,
+                          Virtual->second, ZeroArgumentWords);
     if (Hint)
       Result.emplace(Op.Addr, std::move(*Hint));
   }

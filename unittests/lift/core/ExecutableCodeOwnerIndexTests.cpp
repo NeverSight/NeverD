@@ -288,6 +288,16 @@ TEST(ExecutableCodeOwnerIndex,
   Image.ARMCodeRegions = {{0x100, 0x140, ARMCodeRegionKind::ARM},
                           {0x140, 0x160, ARMCodeRegionKind::Data},
                           {0x160, 0x180, ARMCodeRegionKind::ARM}};
+  Image.Segments[0].Data[0x40] = 0x78;
+  Image.Segments[0].Data[0x41] = 0x56;
+  Image.Segments[0].Data[0x42] = 0x34;
+  Image.Segments[0].Data[0x43] = 0x12;
+  EXPECT_EQ(Image.readImmutableARMLiteral(0x140, 4), 0x12345678u);
+  EXPECT_FALSE(Image.readImmutableARMLiteral(0x13c, 4));
+  EXPECT_FALSE(Image.readImmutableARMLiteral(0x15e, 4));
+  Image.Relocations.push_back(RelocationEntry{.Address = 0x140});
+  EXPECT_FALSE(Image.readImmutableARMLiteral(0x140, 4));
+  Image.Relocations.clear();
   const ExecutableCodeOwnerIndex Index(Image);
   EXPECT_TRUE(Image.isCodeRange(0x130, 4));
   EXPECT_FALSE(Image.isCodeRange(0x130, 0x38));

@@ -821,6 +821,17 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     const MedVar &AddrVar = Op.Inputs[0];
     const bool IsSegmentRelative =
         Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+    if (!IsSegmentRelative && Op.MemoryOrdering == NdMemoryOrdering::None &&
+        Img) {
+      const auto VA = AddrVar.isConst()
+                          ? std::optional<uint64_t>(AddrVar.ConstVal)
+                          : traceSSAConst(AddrVar);
+      if (VA)
+        if (auto Value = Img->readImmutableARMLiteral(*VA, Op.Output.Size)) {
+          Result = llvm::ConstantInt::get(ValTy, *Value);
+          break;
+        }
+    }
     if (!IsSegmentRelative && Op.NumInputs >= 1 && Img)
       Ptr = tryResolveDirectGlobalDataAddress(AddrVar, Op.Output.Size);
     bool IsGlobalData = (Ptr != nullptr);

@@ -253,7 +253,27 @@ TEST(SwiftVirtualCalls, ExactVoidMethodWindowRejectsOrdinaryArguments) {
   ExtraArgument.Opcode = NdOp::COPY;
   ExtraArgument.Output = NdVar::reg(a64reg::X0, 8);
   ExtraArgument.addInput(NdVar::scalar(0, 8));
+  ExtraArgument.Inputs[0].Provenance = ConstantAddressProvenance::Unknown;
   Ops.insert(Ops.end() - 2, ExtraArgument);
+  EXPECT_TRUE(buildSwiftVirtualCallHints(F.Image, F.Function).empty());
+
+  LowOp SecondZero = ExtraArgument;
+  SecondZero.Addr = 0x114c;
+  SecondZero.Output = NdVar::reg(a64reg::X1, 8);
+  Ops.insert(Ops.end() - 2, SecondZero);
+  const auto NilArgumentHints = buildSwiftVirtualCallHints(F.Image, F.Function);
+  ASSERT_EQ(NilArgumentHints.size(), 1U);
+  const auto &NilHint = NilArgumentHints.at(Fixture::CallSite);
+  ASSERT_TRUE(NilHint.Virtual);
+  EXPECT_EQ(NilHint.Virtual->ZeroArgumentWords, 2U);
+  ASSERT_EQ(NilHint.Signature.Parameters.size(), 3U);
+  EXPECT_EQ(NilHint.Signature.Parameters[0].Type->Kind, NdTypeKind::Int);
+  EXPECT_EQ(NilHint.Signature.Parameters[1].Type->Kind, NdTypeKind::Int);
+  EXPECT_EQ(NilHint.Signature.Parameters[2].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_TRUE(isSwiftVirtualSourceCallHint(F.Image, NilHint));
+
+  Ops[Ops.size() - 3].Inputs[0] = NdVar::scalar(1, 8);
   EXPECT_TRUE(buildSwiftVirtualCallHints(F.Image, F.Function).empty());
 }
 

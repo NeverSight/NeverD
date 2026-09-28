@@ -51,8 +51,12 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
   // 32-bit callee may look low-word-only until another function reads both
   // return registers.  Recover the module-wide return contract before call
   // ABI recovery and source return lowering inspect its functions.
+  // Source-bound entries already have authoritative parameters and return
+  // types. Re-inferring them can reinterpret preserved register seeds as
+  // additional source parameters and discard the binding.
   for (MedFunc &MF : Result.MedFuncs)
-    inferMedTypes(MF, Img.Arch);
+    if (!MF.SourceParametersBound)
+      inferMedTypes(MF, Img.Arch);
   modelWideIntReturns(Img, Result);
 
   auto AllFuncNames = buildFuncNameMap(Img, Result);
