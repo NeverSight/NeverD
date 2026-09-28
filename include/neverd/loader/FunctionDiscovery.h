@@ -51,6 +51,12 @@ void scanImportThunks(BinaryImage &Img);
 /// and register functions at the first plausible prologue after each gap.
 void scanPaddingBoundaries(BinaryImage &Img);
 
+/// Register the hotpatchable entries of a linked x86 PE image (see
+/// isX86HotpatchEntryAt).  x86 PE has no function table, and optimized MSVC
+/// code packs functions after `ret` without padding, where the padding scan
+/// cannot see them.
+void scanX86HotpatchEntries(BinaryImage &Img);
+
 /// Scan read-only data segments for pointer-sized values that point into
 /// executable segments at plausible function prologues.
 void scanDataFuncPointers(BinaryImage &Img);
@@ -87,6 +93,9 @@ inline void runPostLoadDiscovery(BinaryImage &Img,
       (!Img.ExceptionMetadata.Functions.empty() ||
        !Img.COFFPDataRecords.empty() || !Img.KnownCodeRanges.empty());
   if (!RestrictToExceptionDirectory) {
+    // Before the padding scan, which would otherwise record a hotpatch entry
+    // after padding as a mere boundary guess.
+    scanX86HotpatchEntries(Img);
     scanPaddingBoundaries(Img);
     scanDataFuncPointers(Img);
   }

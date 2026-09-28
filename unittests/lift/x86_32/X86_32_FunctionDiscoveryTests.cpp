@@ -15,6 +15,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -209,6 +210,69 @@ TEST(X86_32_FunctionDiscovery, RecoversUnalignedStackAdjustAfterStdcallRet) {
       << "expected packed unaligned sub-esp prologue after ret imm16";
 }
 
+TEST(X86_32_FunctionDiscovery, StartsUnalignedHotpatchFrameAtItsNoOp) {
+  // MSVC's hotpatchable entry, `mov edi, edi; push ebp; mov ebp, esp`, packed
+  // after another function's ret.  The frame scan finds `push ebp` two bytes
+  // in, but the function begins at the no-op.
+  std::vector<uint8_t> Bytes(0x20, 0xCC);
+  const uint8_t Entry[] = {0x55, 0x8B, 0xEC, 0x5D, 0xC3};
+  std::copy(Entry, Entry + sizeof(Entry), Bytes.begin());
+  const uint8_t Hotpatch[] = {0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0x5D, 0xC3};
+  std::copy(Hotpatch, Hotpatch + sizeof(Hotpatch), Bytes.begin() + 0x05);
+
+  BinaryImage Img = makePeText(std::move(Bytes));
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X86));
+  FuncDetector Detector;
+  const auto Functions = Detector.detect(Img, Dec);
+  EXPECT_TRUE(hasEntry(Functions, 0x401005));
+  EXPECT_FALSE(hasEntry(Functions, 0x401007))
+      << "the push after the hotpatch no-op is not an entry of its own";
+}
+
+TEST(X86_32_FunctionDiscovery, LoaderRegistersPackedHotpatchEntries) {
+  std::vector<uint8_t> Bytes = {
+      0x55, 0x8B, 0xEC, 0x5D, 0xC2, 0x08, 0x00, // 00: frame; ret 8
+      0x8B, 0xFF, 0x56, 0x5E, 0xC3,             // 07: no-op; push esi
+      0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0x5D, 0xC3, // 0C: no-op; EBP frame
+      0xB8, 0x8B, 0xFF, 0x56, 0x00, 0xC3,       // 13: mov eax, 0056FF8Bh
+      0x8B, 0xFF, 0x55, 0x29, 0x40, 0x00,       // 19: no-op, jump table
+  };
+  BinaryImage Img = makePeText(std::move(Bytes));
+  // x86 PE has no function table to claim ranges from.
+  Img.KnownCodeRanges.clear();
+
+  scanX86HotpatchEntries(Img);
+
+  std::vector<va_t> Found;
+  for (const Symbol &Sym : Img.Symbols) {
+    EXPECT_TRUE(Sym.IsFunc);
+    EXPECT_FALSE(Sym.IsBoundaryGuess);
+    Found.push_back(Sym.Addr);
+  }
+  std::sort(Found.begin(), Found.end());
+  // A push after the no-op begins a function only after another one ends:
+  // inside an immediate, or where MSVC pads a jump table, it does not.
+  EXPECT_EQ(Found, (std::vector<va_t>{0x401007, 0x40100C}));
+}
+
+TEST(X86_32_FunctionDiscovery, HotpatchEntryAfterPaddingIsNotAGuess) {
+  std::vector<uint8_t> Bytes = {0x55, 0x8B, 0xEC, 0x5D, 0xC3, 0xCC, 0xCC,
+                                0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0x5D, 0xC3};
+  BinaryImage Img = makePeText(std::move(Bytes));
+  Img.KnownCodeRanges.clear();
+
+  runPostLoadDiscovery(Img, "test");
+
+  const auto It =
+      std::find_if(Img.Symbols.begin(), Img.Symbols.end(),
+                   [](const Symbol &Sym) { return Sym.Addr == 0x401007; });
+  ASSERT_NE(It, Img.Symbols.end());
+  EXPECT_FALSE(It->IsBoundaryGuess)
+      << "a direct jump to a hotpatch entry is a tail call";
+  EXPECT_TRUE(Img.boundaryGuessFunctionStarts().empty());
+}
+
 TEST(X86_32_FunctionDiscovery,
      SeedsPrimaryExceptionFunctionInsideCoarseKnownRange) {
   std::vector<uint8_t> Bytes(0x20, 0xCC);
@@ -255,11 +319,11 @@ public:
 
 TEST(X86_32_FunctionDiscovery, PipelineDropsInteriorsInsideDebugExtents) {
   std::vector<uint8_t> Bytes(0x40, 0xCC);
-  const uint8_t Leaf[] = {0x68, 0x00, 0x00, 0x00, 0x00, 0x55, 0x8B, 0xEC,
-                          0x5D, 0xC3, 0x90};
+  const uint8_t Leaf[] = {0x68, 0x00, 0x00, 0x00, 0x00, 0x55,
+                          0x8B, 0xEC, 0x5D, 0xC3, 0x90};
   std::copy(Leaf, Leaf + sizeof(Leaf), Bytes.begin());
-  const uint8_t Caller[] = {0x55, 0x8B, 0xEC, 0xE8, 0xDD, 0xFF, 0xFF, 0xFF,
-                            0x5D, 0xC3};
+  const uint8_t Caller[] = {0x55, 0x8B, 0xEC, 0xE8, 0xDD,
+                            0xFF, 0xFF, 0xFF, 0x5D, 0xC3};
   std::copy(Caller, Caller + sizeof(Caller), Bytes.begin() + 0x20);
 
   BinaryImage Img = makePeText(std::move(Bytes));
@@ -272,14 +336,16 @@ TEST(X86_32_FunctionDiscovery, PipelineDropsInteriorsInsideDebugExtents) {
   PipelineOptions Opts;
   Opts.EmitDumpOutput = false;
   PipelineResult Result = Pipeline().run(Img, Ctx, Opts, &Dbg);
-  EXPECT_TRUE(std::any_of(Result.HighFuncs.begin(), Result.HighFuncs.end(),
-                          [](const HighFunc &F) { return F.Entry == 0x401000; }));
-  EXPECT_FALSE(std::any_of(Result.HighFuncs.begin(), Result.HighFuncs.end(),
-                           [](const HighFunc &F) { return F.Entry == 0x401005; }))
+  EXPECT_TRUE(
+      std::any_of(Result.HighFuncs.begin(), Result.HighFuncs.end(),
+                  [](const HighFunc &F) { return F.Entry == 0x401000; }));
+  EXPECT_FALSE(
+      std::any_of(Result.HighFuncs.begin(), Result.HighFuncs.end(),
+                  [](const HighFunc &F) { return F.Entry == 0x401005; }))
       << "debug-sized function must keep interior CALL targets as blocks";
-  const auto Covering = std::find_if(
-      Result.HighFuncs.begin(), Result.HighFuncs.end(),
-      [](const HighFunc &F) { return F.Entry == 0x401000; });
+  const auto Covering =
+      std::find_if(Result.HighFuncs.begin(), Result.HighFuncs.end(),
+                   [](const HighFunc &F) { return F.Entry == 0x401000; });
   ASSERT_NE(Covering, Result.HighFuncs.end());
   EXPECT_FALSE(Covering->Body.empty());
 }

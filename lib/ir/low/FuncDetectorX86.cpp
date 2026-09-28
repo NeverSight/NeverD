@@ -11,7 +11,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "FuncDetectorDetail.h"
+
 #include "neverd/ir/low/FuncDetector.h"
+#include "neverd/support/ProloguePatterns.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -72,17 +74,6 @@ bool isX86StackAdjustPrologue(llvm::ArrayRef<uint8_t> Bytes) {
          (Bytes[0] == 0x81 || Bytes[0] == 0x83);
 }
 
-bool isX86FunctionGapBefore(llvm::ArrayRef<uint8_t> SecBytes, size_t Off) {
-  if (Off >= 1) {
-    const uint8_t Prev = SecBytes[Off - 1];
-    if (Prev == 0xC3 || Prev == 0xCC || Prev == 0x90)
-      return true;
-  }
-  // stdcall `ret imm16` is C2 iw; the last byte of the encoding is the
-  // immediate high byte, so look back three bytes for the opcode.
-  return Off >= 3 && SecBytes[Off - 3] == 0xC2;
-}
-
 bool isX86MsvcPrologue(llvm::ArrayRef<uint8_t> Bytes) {
   if (isX86StrongFramePrologue(Bytes) || isX86StackAdjustPrologue(Bytes))
     return true;
@@ -114,16 +105,22 @@ void considerX86Prologue(const BinaryImage &Img, Decoder &Dec,
                          std::set<va_t> &Out,
                          std::set<va_t> &UnsymbolizedX86Entries) {
   auto InteriorOfSizedSymbol = [&](va_t A) {
-    auto It = std::upper_bound(
-        Occupied.begin(), Occupied.end(), A,
-        [](va_t Needle, const std::pair<va_t, va_t> &Range) {
-          return Needle < Range.first;
-        });
+    auto It =
+        std::upper_bound(Occupied.begin(), Occupied.end(), A,
+                         [](va_t Needle, const std::pair<va_t, va_t> &Range) {
+                           return Needle < Range.first;
+                         });
     if (It == Occupied.begin())
       return false;
     --It;
     return A > It->first && A < It->second;
   };
+  // The push after MSVC's hotpatch no-op is the second instruction of a
+  // function that begins at the no-op, never an entry of its own.
+  if (Addr >= Seg.VA + 2 &&
+      isX86HotpatchEntryAt(Seg.Data.data(), Seg.Data.size(),
+                           static_cast<size_t>(Addr - Seg.VA) - 2))
+    Addr -= 2;
   if (InteriorOfSizedSymbol(Addr) || !Img.hasExecutableCodeOwnerAt(Addr))
     return;
   if (Addr < Seg.VA)
@@ -182,17 +179,18 @@ void FuncDetector::scanX86UnsymbolizedEntries(const BinaryImage &Img,
     }
 
     // Unaligned EBP frames: only visit 0x55 bytes instead of every address.
-    const size_t DataN = static_cast<size_t>(
-        std::min<va_t>(Seg->Data.size(), SecEnd > Seg->VA ? SecEnd - Seg->VA : 0));
+    const size_t DataN = static_cast<size_t>(std::min<va_t>(
+        Seg->Data.size(), SecEnd > Seg->VA ? SecEnd - Seg->VA : 0));
     const uint8_t *Base = Seg->Data.data();
     const uint8_t *Cur = Base;
     const uint8_t *Limit = Base + DataN;
     while (Cur + 3 < Limit) {
-      const void *Hit = std::memchr(Cur, 0x55, static_cast<size_t>(Limit - Cur));
+      const void *Hit =
+          std::memchr(Cur, 0x55, static_cast<size_t>(Limit - Cur));
       if (!Hit)
         break;
-      const size_t Off = static_cast<size_t>(static_cast<const uint8_t *>(Hit) -
-                                             Base);
+      const size_t Off =
+          static_cast<size_t>(static_cast<const uint8_t *>(Hit) - Base);
       const va_t Addr = Seg->VA + Off;
       Cur = static_cast<const uint8_t *>(Hit) + 1;
       if ((Addr & 15u) == 0)
@@ -205,7 +203,7 @@ void FuncDetector::scanX86UnsymbolizedEntries(const BinaryImage &Img,
 
     // Packed `sub esp` immediately after ret / int3 / nop.
     for (size_t Off = 1; Off + 3 < DataN; ++Off) {
-      if (!isX86FunctionGapBefore(SecBytes, Off))
+      if (!isX86FunctionEndBefore(SecBytes.data(), Off))
         continue;
       const va_t Addr = Seg->VA + Off;
       if ((Addr & 15u) == 0)

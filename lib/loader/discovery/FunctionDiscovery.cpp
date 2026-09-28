@@ -11,8 +11,6 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
-#include <cstring>
-
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -186,6 +184,43 @@ void scanPaddingBoundaries(BinaryImage &Img) {
     }
   }
   LLVM_DEBUG(llvm::dbgs() << "func-discovery: padding scan added " << Added
+                          << " functions\n");
+}
+
+void scanX86HotpatchEntries(BinaryImage &Img) {
+  if (Img.Arch != Arch::X86 || Img.Format != BinaryFormat::COFF ||
+      Img.IsRelocatable)
+    return;
+  const auto Known = collectClaimedCodeRanges(Img);
+  auto Existing = Img.getSymbolAddresses();
+
+  [[maybe_unused]] size_t Added = 0;
+  for (const auto &Seg : Img.Segments) {
+    if (!Seg.isExecutable())
+      continue;
+    const uint8_t *D = Seg.Data.data();
+    const size_t N = Seg.Data.size();
+    // Every entry begins with 8B, so only those bytes are examined.
+    for (size_t Off = 0; Off < N; ++Off) {
+      const void *Hit = std::memchr(D + Off, 0x8B, N - Off);
+      if (!Hit)
+        break;
+      Off = static_cast<size_t>(static_cast<const uint8_t *>(Hit) - D);
+      if (!isX86HotpatchEntryAt(D, N, Off))
+        continue;
+      const va_t Addr = Seg.VA + Off;
+      // A hotpatch entry is the compiler's own mark of a function start, so
+      // unlike a guess after padding it is not flagged IsBoundaryGuess: a
+      // direct jump to it is a tail call.
+      if (insideInterval(Known, Addr) ||
+          !Img.hasExecutableCodeOwnerRange(Addr, 3) ||
+          !Existing.insert(Addr).second)
+        continue;
+      Img.Symbols.push_back(Symbol::makeFunc(Addr));
+      ++Added;
+    }
+  }
+  LLVM_DEBUG(llvm::dbgs() << "func-discovery: x86 hotpatch scan added " << Added
                           << " functions\n");
 }
 

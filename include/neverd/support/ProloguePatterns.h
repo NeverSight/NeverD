@@ -136,6 +136,47 @@ inline bool isRelaxedPrologueByteX86(uint8_t B) {
   }
 }
 
+/// Whether the bytes before \p Off end an x86 function, so that \p Off can
+/// begin the next one: `ret`, `ret imm16`, or INT3/NOP padding.  A byte
+/// sequence cannot prove an instruction boundary, so this is evidence, not
+/// proof, and callers pair it with a specific prologue.
+inline bool isX86FunctionEndBefore(const uint8_t *Data, size_t Off) {
+  if (Off >= 1) {
+    const uint8_t Prev = Data[Off - 1];
+    if (Prev == 0xC3 || Prev == x86::kInt3 || Prev == x86::kNop)
+      return true;
+  }
+  // `ret imm16` is C2 iw; the last byte of the encoding is the immediate's
+  // high byte, so the opcode is three bytes back.
+  return Off >= 3 && Data[Off - 3] == 0xC2;
+}
+
+/// MSVC's hotpatchable x86 functions begin with `mov edi, edi` (8B FF), a
+/// two-byte no-op the compiler emits only as a function's first instruction,
+/// so that a patch can replace it with a short jump.  The no-op belongs to
+/// the function: the push after it is the second instruction, never an entry
+/// of its own.
+///
+/// The no-op followed by an EBP frame (`push ebp; mov ebp, esp`) begins a
+/// function wherever it appears.  Followed only by a callee-saved push, it
+/// does so after the end of another function: MSVC also pads with `8B FF`
+/// in front of a jump table, whose first entry can begin with a push's byte.
+inline bool isX86HotpatchEntryAt(const uint8_t *Data, size_t Size, size_t Off) {
+  if (Off >= Size || Size - Off < 3 || Data[Off] != 0x8B ||
+      Data[Off + 1] != 0xFF)
+    return false;
+  const uint8_t *Body = Data + Off + 2;
+  const size_t BodyLen = Size - Off - 2;
+  // push ebp; mov ebp, esp, in either encoding of the mov.
+  if (Body[0] == 0x55)
+    return BodyLen >= 3 && ((Body[1] == 0x8B && Body[2] == 0xEC) ||
+                            (Body[1] == 0x89 && Body[2] == 0xE5));
+  // push ebx, push esi or push edi.
+  const bool CalleeSavedPush =
+      Body[0] == 0x53 || Body[0] == 0x56 || Body[0] == 0x57;
+  return CalleeSavedPush && isX86FunctionEndBefore(Data, Off);
+}
+
 // ===--------------------------------------------------------------------===//
 // AArch64 prologue word patterns (first 32-bit instruction)
 // ===--------------------------------------------------------------------===//
