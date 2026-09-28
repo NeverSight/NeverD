@@ -164,8 +164,15 @@ public:
       case NdOp::CALL:
       case NdOp::INDIR_CALL:
         if (Options.ExplicitMachineState && Options.X64CetDisabled &&
-            Insn.Id == X86_INS_CALL && Op.Opcode == NdOp::CALL &&
-            Op.NumInputs == 1 && Op.Inputs[0].isConst())
+            Insn.Id == X86_INS_CALL && Op.NumInputs == 1 &&
+            ((Op.Opcode == NdOp::CALL && Op.Inputs[0].isConst()) ||
+             (Op.Opcode == NdOp::INDIR_CALL && Op.Inputs[0].isReg() &&
+              Insn.Raw && Insn.Raw->detail &&
+              Insn.Raw->detail->x86.op_count == 1 &&
+              Insn.Raw->detail->x86.operands[0].type == X86_OP_REG)))
+          // Constant-slot INDIR_CALL operands identify an IAT/GOT address,
+          // not the loaded callee. Only decoded register operands certify
+          // this direct-value near-call contract.
           Result.NativeStackControl = SpecializationNativeStackControl::Call;
         B.Control = LowInstructionControl::Call;
         B.ControlFlags |= LowInstructionControlFlag::Call;

@@ -98,10 +98,11 @@ neverd_devirtualize_source_v1(neverd_session_t Session, neverd_va_t Entry,
 /// and reserved flag bits canonical; executed POPFQ images must keep TF/AC
 /// clear. Generated source checks flag-profile violations with a nonzero
 /// status. Invalid executions may already have memory effects; no rollback is
-/// promised. Internal direct near calls and exactly resolved returns are
-/// supported. Exception dispatch and fault/unwind behavior are outside this
-/// profile. Other v1 options, report ownership and failure rules match the API
-/// above.
+/// promised. Internal direct near calls, exhaustively finite register-indirect
+/// near calls, and finite internal returns are supported. Memory-indirect calls
+/// are unsupported. Exception dispatch and fault/unwind behavior are outside
+/// this profile. Other v1 options, report ownership and failure rules match the
+/// API above.
 NEVERD_API const char *neverd_devirtualize_machine_source_v1(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v1 *Options, const char **Report);

@@ -90,16 +90,20 @@ struct Projection {
 struct ContextKey {
   SpecializationCursor Cursor;
   std::vector<std::optional<uint64_t>> Controls;
+  // A complete entry-relative pointer is a structural fact, not a numeric
+  // constant. Keep its displacement separately so a selected virtual stack
+  // cursor can distinguish contexts without fixing the invocation's address.
+  std::vector<std::optional<uint64_t>> FrameControls;
   bool NativeStackActive = false;
   std::optional<uint64_t> StackDisplacement;
   std::vector<std::pair<uint64_t, std::optional<uint64_t>>> ReturnSlots;
 
   bool operator<(const ContextKey &Other) const {
-    return std::tie(Cursor.Address, Cursor.Mode, Controls, NativeStackActive,
-                    StackDisplacement, ReturnSlots) <
+    return std::tie(Cursor.Address, Cursor.Mode, Controls, FrameControls,
+                    NativeStackActive, StackDisplacement, ReturnSlots) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
-                    Other.NativeStackActive, Other.StackDisplacement,
-                    Other.ReturnSlots);
+                    Other.FrameControls, Other.NativeStackActive,
+                    Other.StackDisplacement, Other.ReturnSlots);
   }
 };
 
@@ -115,6 +119,7 @@ struct Node {
   LowBlock Block;
   std::vector<NativeSlice> Slices;
   std::vector<SpecializationReadWitness> Reads;
+  bool ConditionalGuard = false;
   bool Pending = false;
 };
 
@@ -468,7 +473,13 @@ LowOp branchTo(int NodeId) {
 
 // Candidates are precision requests, never semantic facts. A failed attempt
 // may propose fields, but only a complete fresh fixed point may be published.
-enum class ControlDemand { Target, Memory, Producer, DeferredProducer };
+enum class ControlDemand {
+  Target,
+  Memory,
+  Producer,
+  DeferredProducer,
+  DeferredGuard
+};
 using ProducerDemand =
     std::tuple<va_t, InstructionMode, bool, uint64_t, uint16_t>;
 struct DeferredProducerDemand {
@@ -497,6 +508,7 @@ struct ControlRefinement {
   std::map<ProducerDemand, uint64_t> ProducerDemands;
   std::map<ProducerDemand, uint64_t> PendingProducerDemands;
   std::map<ProducerDemand, DeferredProducerDemand> DeferredProducerDemands;
+  std::map<ProducerDemand, DeferredProducerDemand> DeferredGuardDemands;
   uint64_t Visits = 0;
   uint32_t CreatedNodes = 0;
   bool BudgetExceeded = false;
@@ -593,6 +605,7 @@ private:
                    const FrameOrigins &Origins, const FrameFacts &Frame,
                    StepResult Flow);
   bool publish();
+  void refineUnsupportedGuards();
   SymRef controlValue(SymState &State, SymRef Root, uint32_t Field);
   SymRef controlPredicate(SymState &State, SymRef Root,
                           const ControlRelation &Relation);
@@ -620,6 +633,8 @@ private:
   std::map<std::pair<va_t, InstructionMode>, uint32_t> ContextCounts;
   std::deque<int> Pending;
   bool Failed = false;
+  int FailureNode = -1;
+  bool SawUndecidedGuard = false;
   va_t FailureCursor = InvalidVA;
   SpecializationCursor DemandCursor;
   std::set<uint64_t> AffineCandidates;
@@ -629,6 +644,7 @@ private:
   static constexpr uint64_t ReadAddressTemp = DispatchTemp + 8;
   static constexpr uint64_t ReadConditionTemp = DispatchTemp + 16;
   static constexpr uint64_t NativeReturnTemp = DispatchTemp + 24;
+  static constexpr uint64_t NativeCallTargetTemp = DispatchTemp + 32;
 };
 
 void Specializer::discover(SymState &State, SymRef Value, SymRef Root,
@@ -688,12 +704,17 @@ void Specializer::discover(SymState &State, SymRef Value, SymRef Root,
     const uint64_t NewBits =
         DemandedBits & ~(KnownBits(Refinement.ProducerDemands) |
                          KnownBits(Refinement.PendingProducerDemands));
-    if (Demand == ControlDemand::DeferredProducer) {
-      if (NewBits) {
+    if (Demand == ControlDemand::DeferredProducer ||
+        Demand == ControlDemand::DeferredGuard) {
+      const bool Guard = Demand == ControlDemand::DeferredGuard;
+      const uint64_t Bits = Guard ? DemandedBits : NewBits;
+      auto &Demands = Guard ? Refinement.DeferredGuardDemands
+                            : Refinement.DeferredProducerDemands;
+      if (Bits) {
         const uint64_t CarrierOffset = static_cast<uint64_t>(Carrier.Offset);
-        auto [It, Inserted] = Refinement.DeferredProducerDemands.emplace(
+        auto [It, Inserted] = Demands.emplace(
             Producer,
-            DeferredProducerDemand{CarrierOffset, Carrier.Bytes, NewBits});
+            DeferredProducerDemand{CarrierOffset, Carrier.Bytes, Bits});
         // Keep a common physical carrier across observations, falling back
         // to the original narrow location if the chosen ranges disagree.
         if (!Inserted) {
@@ -702,7 +723,7 @@ void Specializer::discover(SymState &State, SymRef Value, SymRef Root,
             It->second.CarrierOffset = static_cast<uint64_t>(Field.Offset);
             It->second.CarrierBytes = Field.Bytes;
           }
-          It->second.DemandedBits |= NewBits;
+          It->second.DemandedBits |= Bits;
         }
       }
       return;
@@ -1155,21 +1176,38 @@ int Specializer::enqueue(SpecializationCursor Cursor,
     return -1;
   }
   ContextKey Key{Cursor, {}};
+  const auto FrameControl = [](const auto &Values, uint64_t Offset,
+                               uint16_t Bytes) -> std::optional<uint64_t> {
+    if (Bytes != 8)
+      return std::nullopt;
+    const auto At = Values.find(Offset);
+    return At == Values.end() ? std::nullopt
+                              : std::optional<uint64_t>(At->second);
+  };
+  const auto RegisterControl = [&](const SymRegisterRange &Range) {
+    Key.Controls.push_back(
+        constantWord(Incoming.Scalars, Range, Options.ByteOrder));
+    Key.FrameControls.push_back(
+        FrameControl(Incoming.AffineRegisters, Range.Offset, Range.Bytes));
+  };
+  const auto SlotControl = [&](const SpecializationFrameSlot &Slot) {
+    Key.Controls.push_back(
+        constantFrameWord(Incoming.FrameBytes, Slot, Options.ByteOrder));
+    Key.FrameControls.push_back(FrameControl(Incoming.Frame.AffineValues,
+                                             static_cast<uint64_t>(Slot.Offset),
+                                             Slot.Bytes));
+  };
   // Ordinary automatically demanded fields refine joins only. Context
   // separation additionally requires a repeated unresolved memory dependency;
   // it stays subject to the same cumulative node and per-address bounds.
   for (size_t I = 0; I < ManualRegisters; ++I)
-    Key.Controls.push_back(constantWord(
-        Incoming.Scalars, Options.ControlRegisters[I], Options.ByteOrder));
+    RegisterControl(Options.ControlRegisters[I]);
   for (size_t I = 0; I < ManualSlots; ++I)
-    Key.Controls.push_back(constantFrameWord(
-        Incoming.FrameBytes, Options.ControlFrameSlots[I], Options.ByteOrder));
+    SlotControl(Options.ControlFrameSlots[I]);
   for (const auto &Range : Refinement.ContextRegisters)
-    Key.Controls.push_back(
-        constantWord(Incoming.Scalars, Range, Options.ByteOrder));
+    RegisterControl(Range);
   for (const auto &Slot : Refinement.ContextSlots)
-    Key.Controls.push_back(
-        constantFrameWord(Incoming.FrameBytes, Slot, Options.ByteOrder));
+    SlotControl(Slot);
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
   if (Key.NativeStackActive) {
     const auto At =
@@ -1334,6 +1372,12 @@ bool Specializer::emitTargets(Node &Draft,
       Draft.Block.Succs = {Next};
       return true;
     }
+    // A widened decoder state can expose an unsupported error arm before
+    // reaching indirect dispatch. Retain only bounded dependency locations;
+    // activate them if the attempt fails, never assume the guard is false.
+    SawUndecidedGuard |= Options.DiscoverControlState;
+    discover(State, Condition, FrameRoot, ControlDemand::DeferredGuard);
+    Draft.ConditionalGuard = true;
     Residual.Inputs[0] = NdVar::cst(static_cast<uint64_t>(Taken), 8);
     Draft.Block.Ops.push_back(std::move(Residual));
     Draft.Block.Succs = {Taken, Other};
@@ -1393,6 +1437,7 @@ bool Specializer::emitTargets(Node &Draft,
 }
 
 bool Specializer::evaluate(int Id) {
+  FailureNode = Id;
   if (++Result.NodeEvaluations > Options.MaxNodeEvaluations)
     return fail(SpecializationStatus::BudgetExceeded,
                 "specialization fixed-point evaluation budget exhausted");
@@ -1447,6 +1492,7 @@ bool Specializer::evaluate(int Id) {
                   llvm::toString(std::move(Error)));
     std::vector<LowOp> Operations = Instruction.Ops;
     bool ExpandedReturn = false;
+    bool ExpandedIndirectCall = false;
     if (Instruction.NativeStackControl !=
         SpecializationNativeStackControl::None) {
       if (!FrameRoot || !Options.RequireRestoredFrameAtReturn ||
@@ -1480,10 +1526,15 @@ bool Specializer::evaluate(int Id) {
       Frame.NativeStackActive = true;
       if (Instruction.NativeStackControl ==
           SpecializationNativeStackControl::Call) {
-        if (Control.Opcode != NdOp::CALL || Control.NumInputs != 1 ||
-            !Control.Inputs[0].isConst() || Control.Inputs[0].Size != 8 ||
-            !Control.Output.isReg() || Control.Output.Size != 8 ||
-            !validValue(Control.Output) ||
+        const bool Direct = Control.Opcode == NdOp::CALL &&
+                            Control.NumInputs == 1 &&
+                            Control.Inputs[0].isConst();
+        const bool Indirect = Control.Opcode == NdOp::INDIR_CALL &&
+                              Control.NumInputs == 1 &&
+                              Control.Inputs[0].isReg();
+        if ((!Direct && !Indirect) || Control.Inputs[0].Size != 8 ||
+            !validValue(Control.Inputs[0]) || !Control.Output.isReg() ||
+            Control.Output.Size != 8 || !validValue(Control.Output) ||
             Control.MemoryOrdering != NdMemoryOrdering::None ||
             Control.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
             Instruction.Origin.Control != LowInstructionControl::Call)
@@ -1494,10 +1545,20 @@ bool Specializer::evaluate(int Id) {
           return fail(SpecializationStatus::BudgetExceeded,
                       "native return-slot context budget exhausted");
         Operations.clear();
+        if (Indirect) {
+          // The architectural target is evaluated before the stack push.
+          // In particular a register operand may name the stack register.
+          ExpandedIndirectCall = true;
+          Make(NdOp::COPY, NdVar::tmp(NativeCallTargetTemp, 8),
+               {Control.Inputs[0]});
+        }
         Make(NdOp::INT_SUB, Stack, {Stack, NdVar::scalar(8, 8)});
         Make(NdOp::STORE, {},
              {Stack, NdVar::scalar(Instruction.Fallthrough.Address, 8)});
-        Make(NdOp::BRANCH, {}, {Control.Inputs[0]});
+        if (Indirect)
+          Make(NdOp::INDIR_BR, {}, {NdVar::tmp(NativeCallTargetTemp, 8)});
+        else
+          Make(NdOp::BRANCH, {}, {Control.Inputs[0]});
       } else if (Instruction.NativeStackControl ==
                  SpecializationNativeStackControl::Return) {
         if (Control.Opcode != NdOp::RETURN || Control.NumInputs > 1 ||
@@ -1511,7 +1572,8 @@ bool Specializer::evaluate(int Id) {
         if (*Displacement != 0) {
           const SymRef ReturnValue =
               State.load(State.read(SymSpace::Register, Base.Offset, 8), 8);
-          auto Targets = enumerate(Ctx, Exec.pathPredicate(), {ReturnValue}, 1);
+          auto Targets = enumerate(Ctx, Exec.pathPredicate(), {ReturnValue},
+                                   Options.MaxIndirectTargets);
           if (Failed)
             return false;
           if (Targets.Status == FiniteValueStatus::Unknown)
@@ -1519,18 +1581,18 @@ bool Specializer::evaluate(int Id) {
                         "native return-target proof exceeded its solver "
                         "budget");
           if (Targets.Status != FiniteValueStatus::Complete ||
-              Targets.Tuples.size() != 1) {
+              Targets.Tuples.empty()) {
             discover(State, ReturnValue, FrameRoot);
             return fail(SpecializationStatus::UnresolvedControl,
-                        "native return address is not one exact target");
+                        "native return address is not an exact finite target "
+                        "set");
           }
           Frame.NativeReturnSlots.erase(*Displacement);
           Operations.clear();
           ExpandedReturn = true;
           Make(NdOp::LOAD, NdVar::tmp(NativeReturnTemp, 8), {Stack});
           Make(NdOp::INT_ADD, Stack, {Stack, NdVar::scalar(8, 8)});
-          Make(NdOp::BRANCH, {},
-               {NdVar::cst(Targets.Tuples.front().front(), 8)});
+          Make(NdOp::INDIR_BR, {}, {NdVar::tmp(NativeReturnTemp, 8)});
         }
         // Reaching the untouched entry return slot is an outer exit even
         // when native code has discarded one or more intermediate frames.
@@ -1567,6 +1629,8 @@ bool Specializer::evaluate(int Id) {
       }
       const auto ReservedTemporary = [&](const NdVar &V) {
         if (ExpandedReturn && V == NdVar::tmp(NativeReturnTemp, 8))
+          return false;
+        if (ExpandedIndirectCall && V == NdVar::tmp(NativeCallTargetTemp, 8))
           return false;
         return V.isTemp() &&
                (V.Offset >= DispatchTemp || V.Size > DispatchTemp - V.Offset);
@@ -1835,6 +1899,7 @@ bool Specializer::evaluate(int Id) {
   Nodes[Id].Block = std::move(Draft.Block);
   Nodes[Id].Slices = std::move(Draft.Slices);
   Nodes[Id].Reads = std::move(Draft.Reads);
+  Nodes[Id].ConditionalGuard = Draft.ConditionalGuard;
   return true;
 }
 
@@ -1958,6 +2023,54 @@ bool Specializer::publish() {
   return true;
 }
 
+void Specializer::refineUnsupportedGuards() {
+  // Refine the nearest undecided guards that can reach this failure,
+  // rather than collecting unrelated business conditions elsewhere.
+  // Edges already belong to the bounded attempted graph. This reverse
+  // walk is only candidate selection and proves no path infeasible.
+  const auto ChargeVisit = [&]() {
+    if (Refinement.Visits >= Options.MaxDiscoveryVisits) {
+      Refinement.BudgetExceeded = true;
+      Refinement.PrecisionFailure = true;
+      return false;
+    }
+    ++Refinement.Visits;
+    return true;
+  };
+  std::vector<std::vector<int>> Predecessors(Nodes.size());
+  for (size_t I = 0; I < Nodes.size(); ++I)
+    for (int Next : Nodes[I].Block.Succs) {
+      if (!ChargeVisit())
+        return;
+      Predecessors[Next].push_back(static_cast<int>(I));
+    }
+  std::set<std::pair<va_t, InstructionMode>> Guards;
+  std::vector<bool> Seen(Nodes.size(), false);
+  std::vector<int> Frontier{FailureNode};
+  Seen[FailureNode] = true;
+  while (!Frontier.empty() && Guards.empty()) {
+    std::vector<int> NextFrontier;
+    for (int Current : Frontier)
+      for (int Parent : Predecessors[Current]) {
+        if (!ChargeVisit())
+          return;
+        if (Seen[Parent])
+          continue;
+        Seen[Parent] = true;
+        if (Nodes[Parent].ConditionalGuard)
+          Guards.emplace(Nodes[Parent].Key.Cursor.Address,
+                         Nodes[Parent].Key.Cursor.Mode);
+        else
+          NextFrontier.push_back(Parent);
+      }
+    Frontier = std::move(NextFrontier);
+  }
+  std::erase_if(Refinement.DeferredGuardDemands, [&](const auto &Entry) {
+    return !Guards.count({std::get<0>(Entry.first), std::get<1>(Entry.first)});
+  });
+  Refinement.PrecisionFailure |= !Refinement.DeferredGuardDemands.empty();
+}
+
 SpecializationResult Specializer::run() {
   if (Entry.Address == InvalidVA || Entry.Address >= (uint64_t{1} << 63) ||
       (Options.ByteOrder != llvm::endianness::little &&
@@ -2071,6 +2184,13 @@ SpecializationResult Specializer::run() {
     publish();
   Result.Contexts += static_cast<uint32_t>(Indices.size());
   if (Failed) {
+    if (Result.Status == SpecializationStatus::Unsupported &&
+        SawUndecidedGuard && Refinement.BudgetExceeded)
+      Refinement.PrecisionFailure = true;
+    if (Result.Status == SpecializationStatus::Unsupported &&
+        !Refinement.DeferredGuardDemands.empty() && FailureNode >= 0) {
+      refineUnsupportedGuards();
+    }
     Result.Residual = {};
     Result.Origins.clear();
     Result.Reads.clear();
@@ -2089,6 +2209,7 @@ specializeInterpreter(SpecializationProvider &Provider,
   SpecializationResult Result;
   for (;;) {
     Refinement.DeferredProducerDemands.clear();
+    Refinement.DeferredGuardDemands.clear();
     Result =
         Specializer(Provider, Entry, Effective, Options.ControlRegisters.size(),
                     Options.ControlFrameSlots.size(), Refinement,
@@ -2104,6 +2225,63 @@ specializeInterpreter(SpecializationProvider &Provider,
                          !Refinement.PendingContextRegisters.empty() ||
                          !Refinement.PendingContextSlots.empty() ||
                          !Refinement.PendingProducerDemands.empty();
+    if (Result.Status == SpecializationStatus::Unsupported &&
+        !Refinement.BudgetExceeded) {
+      for (const auto &[Demand, Carrier] : Refinement.DeferredGuardDemands) {
+        const auto &[Offset, Bytes, Bits] = Carrier;
+        const auto Add = [&](auto &Pending, const auto &Existing,
+                             const auto &Contexts, auto &PendingContexts,
+                             size_t ManualCount, const auto &Field) {
+          const auto Same = [&](const auto &Other) {
+            return Field.Offset == Other.Offset && Field.Bytes == Other.Bytes;
+          };
+          if (std::none_of(Existing.begin(), Existing.end(), Same)) {
+            if (std::none_of(Pending.begin(), Pending.end(), Same)) {
+              Pending.push_back(Field);
+              HasCandidates = true;
+            }
+          } else if (std::none_of(Existing.begin(),
+                                  Existing.begin() + ManualCount, Same) &&
+                     std::none_of(Contexts.begin(), Contexts.end(), Same) &&
+                     std::none_of(PendingContexts.begin(),
+                                  PendingContexts.end(), Same)) {
+            // Relations get the first attempt. Repeated imprecision can
+            // separate only proven constants/relative pointers in this field.
+            PendingContexts.push_back(Field);
+            HasCandidates = true;
+          }
+        };
+        if (std::get<2>(Demand))
+          Add(Refinement.Registers, Effective.ControlRegisters,
+              Refinement.ContextRegisters, Refinement.PendingContextRegisters,
+              Options.ControlRegisters.size(), SymRegisterRange{Offset, Bytes});
+        else
+          Add(Refinement.Slots, Effective.ControlFrameSlots,
+              Refinement.ContextSlots, Refinement.PendingContextSlots,
+              Options.ControlFrameSlots.size(),
+              SpecializationFrameSlot{static_cast<int64_t>(Offset), Bytes});
+        const auto At = Refinement.ProducerDemands.find(Demand);
+        const uint64_t NewBits =
+            Bits & ~(At == Refinement.ProducerDemands.end() ? 0 : At->second);
+        if (NewBits) {
+          Refinement.PendingProducerDemands[Demand] |= NewBits;
+          HasCandidates = true;
+        }
+        const uint64_t RawCount = Effective.ControlRegisters.size() +
+                                  Effective.ControlFrameSlots.size() +
+                                  Refinement.Registers.size() +
+                                  Refinement.Slots.size();
+        if (RawCount > uint64_t{36} * Options.MaxControlFields) {
+          Refinement.BudgetExceeded = true;
+          break;
+        }
+      }
+      if (!Refinement.BudgetExceeded &&
+          canonicalControlCount(
+              Effective, Refinement, Options.ControlRegisters.size(),
+              Options.ControlFrameSlots.size()) > Options.MaxControlFields)
+        Refinement.BudgetExceeded = true;
+    }
     // An exhaustive finite transfer already supplies a useful abstraction.
     // Expanding all its producers eagerly can consume the field budget on
     // ordinary runtime inputs while another unresolved field needs precision.

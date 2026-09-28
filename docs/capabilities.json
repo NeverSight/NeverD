@@ -9372,7 +9372,7 @@
       "limitations": [
         "Fixed mapped bytes and permissions; immutable reads require mapping evidence.",
         "Single native entry with ordinary ABI returns; external-origin stores must not overlap the entry return slot.",
-        "Default ABI refuses calls and exception boundaries. Explicit machine-state ABI supports certified direct near calls and exact returns under a normal nonfaulting CPL3/CET-disabled profile; exception execution, mutable code, unresolved control and exhausted budgets refuse recovery.",
+        "Default ABI refuses calls and exception boundaries. Explicit machine-state ABI supports certified direct near calls, exhaustively finite register-indirect near calls and internal returns under a normal nonfaulting CPL3/CET-disabled profile. Memory-indirect calls, exception execution, mutable code, unresolved control and exhausted budgets refuse recovery.",
         "Input-dependent addresses and joint decoder states require exhaustive finite proofs within budgets; unbounded schemes remain unsupported.",
         "Ordinary source-frame relocation requires external LOAD/STORE ranges disjoint from native and reconstructed private frame storage. Undefined flags influencing control, addresses, or defined outputs need an independent noninterference proof, which the recovery report does not provide.",
         "PE recovery requires a full image-wide relocation and exception metadata load. Structurally incomplete directories refuse recovery; reached exception handlers require the explicit normal-execution profile. Source recovery does not certify binary replacement."
@@ -9485,6 +9485,66 @@
           "target": "NeverDDevirtualizationSourceTests",
           "source": "unittests/devirtualization/DevirtualizationSourceTests.cpp",
           "filter": "DevirtualizationSourceTest.CLIRejectsInvalidRefinementBudgets",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterSpecializationTests",
+          "source": "unittests/devirtualization/NativeStackSpecializationTests.cpp",
+          "filter": "NativeStackSpecialization.AutomaticContextsPreserveRelativeFrameCursors",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterSpecializationTests",
+          "source": "unittests/devirtualization/NativeStackSpecializationTests.cpp",
+          "filter": "NativeStackSpecialization.ReachableUnsupportedGuardIsNeverAssumedAway",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterSpecializationTests",
+          "source": "unittests/devirtualization/NativeStackSpecializationTests.cpp",
+          "filter": "NativeStackSpecialization.GuardDiscoveryExhaustionPublishesNothing",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDevirtualizationSourceTests",
+          "source": "unittests/devirtualization/VMShapeSourceTests.cpp",
+          "filter": "*/VMShapeRoundTripTest.ZeroHintsPreserveIndependentArithmeticAndStores/*",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterMachineStateTests",
+          "source": "unittests/devirtualization/MachineControlSourceTests.cpp",
+          "filter": "*/MachineControlRoundTripTest.FiniteTransfersPreserveRegistersFlagsAndExactStackWrites/*",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterMachineStateTests",
+          "source": "unittests/devirtualization/MachineControlSourceTests.cpp",
+          "filter": "MachineControlSourceTest.UnprovedAndMemoryFormTransfersNeverPublish",
           "platforms": [
             "linux"
           ]

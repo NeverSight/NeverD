@@ -62,10 +62,13 @@ public:
       LowOp &Op = Insn.Ops[I];
       Op.Addr = Address;
       Op.Seq = static_cast<int>(I);
-      if (Op.Opcode == NdOp::CALL) {
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         Insn.Origin.Control = LowInstructionControl::Call;
         Insn.Origin.ControlFlags = LowInstructionControlFlag::Call;
-        Insn.Origin.Immediate = Op.Inputs[0].Offset;
+        if (Op.Opcode == NdOp::INDIR_CALL)
+          Insn.Origin.ControlFlags |= LowInstructionControlFlag::Indirect;
+        else
+          Insn.Origin.Immediate = Op.Inputs[0].Offset;
       } else if (Op.Opcode == NdOp::RETURN) {
         Insn.Origin.Control = LowInstructionControl::Return;
         Insn.Origin.ControlFlags = LowInstructionControlFlag::Return;
@@ -82,6 +85,10 @@ public:
 
   void nativeCall(va_t Address, va_t Target) {
     add(Address, {call(Target)}, SpecializationNativeStackControl::Call);
+  }
+  void nativeIndirectCall(va_t Address, NdVar Target) {
+    add(Address, {operation(NdOp::INDIR_CALL, r(0), {Target})},
+        SpecializationNativeStackControl::Call);
   }
   void nativeReturn(va_t Address) {
     add(Address, {ret()}, SpecializationNativeStackControl::Return);
@@ -109,10 +116,11 @@ struct Execution {
   uint64_t Stack;
 };
 
-std::optional<Execution> execute(const LowFunc &Function, uint64_t Input = 0,
-                                 uint64_t Flag = 0) {
+std::optional<Execution>
+execute(const LowFunc &Function, uint64_t Input = 0, uint64_t Flag = 0,
+        llvm::endianness Order = llvm::endianness::little) {
   SymContext Ctx;
-  SymState State(Ctx);
+  SymState State(Ctx, Order);
   State.write(SymSpace::Register, 0, Ctx.mkConst(64, 0));
   State.write(SymSpace::Register, 8, Ctx.mkConst(64, Input));
   State.write(SymSpace::Register, 32, Ctx.mkConst(64, 0x10000));
@@ -137,6 +145,20 @@ std::optional<Execution> execute(const LowFunc &Function, uint64_t Input = 0,
         if (!Value || !Stack)
           return std::nullopt;
         return Execution{Value->getZExtValue(), Stack->getZExtValue()};
+      }
+      if (Flow == StepResult::CondBranch) {
+        const auto Condition = Ctx.asConst(Exec.branchCondition());
+        if (!Condition || Block->Succs.size() != 2)
+          return std::nullopt;
+        const int Next = Block->Succs[Condition->isZero() ? 1 : 0];
+        const auto Target = std::find_if(
+            Function.Blocks.begin(), Function.Blocks.end(),
+            [&](const LowBlock &Candidate) { return Candidate.Id == Next; });
+        if (Target == Function.Blocks.end())
+          return std::nullopt;
+        Address = Target->StartAddr;
+        Transferred = true;
+        break;
       }
       if (Flow != StepResult::Branch)
         return std::nullopt;
@@ -186,6 +208,228 @@ TEST(NativeStackSpecialization, SharedCalleeKeepsDistinctReturnContexts) {
   ASSERT_TRUE(Run);
   EXPECT_EQ(Run->Value, 7u);
   EXPECT_EQ(Run->Stack, 0x10000u);
+}
+
+StackProvider finiteCalls() {
+  StackProvider P;
+  P.add(0x100, {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+                operation(NdOp::SELECT, r(16), {r(24), c(0x200), c(0x300)})});
+  P.nativeIndirectCall(0x101, r(16));
+  P.nativeReturn(0x102);
+  P.add(0x200, {operation(NdOp::INT_ADD, r(0), {r(8), c(17)})});
+  P.nativeReturn(0x201);
+  P.add(0x300, {operation(NdOp::INT_XOR, r(0), {r(8), c(0x1234)})});
+  P.nativeReturn(0x301);
+  return P;
+}
+
+TEST(NativeStackSpecialization, FiniteRegisterCallsRetainTargetsAndGuestStack) {
+  auto P = finiteCalls();
+  auto Result = specializeInterpreter(P, {0x100}, stackOptions());
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{42}, UINT64_MAX}) {
+    auto Run = execute(Result.Residual, Input);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, Input & 1 ? Input + 17 : Input ^ 0x1234);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+  }
+  for (const auto &Block : Result.Residual.Blocks)
+    for (const auto &Op : Block.Ops) {
+      EXPECT_NE(Op.Opcode, NdOp::CALL);
+      EXPECT_NE(Op.Opcode, NdOp::INDIR_CALL);
+      EXPECT_NE(Op.Opcode, NdOp::INDIR_BR);
+    }
+}
+
+TEST(NativeStackSpecialization,
+     FiniteRegisterCallTargetBudgetRefusesPublication) {
+  auto P = finiteCalls();
+  auto Options = stackOptions();
+  Options.MaxIndirectTargets = 1;
+  auto Result = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_FALSE(Result.complete());
+  EXPECT_TRUE(Result.Status == SpecializationStatus::UnresolvedControl ||
+              Result.Status == SpecializationStatus::BudgetExceeded);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, UnknownRegisterCallDoesNotInventACallee) {
+  StackProvider P;
+  P.nativeIndirectCall(0x100, r(8));
+  auto Result = specializeInterpreter(P, {0x100}, stackOptions());
+  EXPECT_EQ(Result.Status, SpecializationStatus::UnresolvedControl);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, FiniteInternalReturnsConsumeActualSlotOnce) {
+  StackProvider P;
+  P.nativeCall(0x100, 0x200);
+  // Neither selected destination is the original call continuation.
+  P.add(0x200, {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+                operation(NdOp::SELECT, r(16), {r(24), c(0x300), c(0x400)}),
+                operation(NdOp::STORE, {}, {r(32), r(16)})});
+  P.nativeReturn(0x201);
+  P.add(0x300, {operation(NdOp::INT_ADD, r(0), {r(8), c(17)})});
+  P.nativeReturn(0x301);
+  P.add(0x400, {operation(NdOp::INT_XOR, r(0), {r(8), c(0x1234)})});
+  P.nativeReturn(0x401);
+  auto Result = specializeInterpreter(P, {0x100}, stackOptions());
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{42}, UINT64_MAX}) {
+    auto Run = execute(Result.Residual, Input);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, Input & 1 ? Input + 17 : Input ^ 0x1234);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+  }
+  auto Options = stackOptions();
+  Options.MaxIndirectTargets = 1;
+  auto Limited = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_EQ(Limited.Status, SpecializationStatus::UnresolvedControl);
+  EXPECT_TRUE(Limited.Residual.Blocks.empty());
+}
+
+StackProvider frameCursor(bool Spilled) {
+  StackProvider P;
+  if (Spilled)
+    P.add(0x100, {operation(NdOp::INT_SUB, r(40), {r(32), c(40)}),
+                  operation(NdOp::INT_SUB, r(48), {r(32), c(32)}),
+                  operation(NdOp::STORE, {}, {r(40), r(48)}), branch(0x200)});
+  else
+    P.add(0x100,
+          {operation(NdOp::INT_SUB, r(48), {r(32), c(32)}), branch(0x200)});
+  P.add(0x200, {});
+  if (Spilled)
+    P.add(0x200, {operation(NdOp::LOAD, r(48), {r(40)})});
+  P.add(0x201, {operation(NdOp::STORE, {}, {r(48), r(8)}),
+                operation(NdOp::INT_ADD, r(48), {r(48), c(8)})});
+  if (Spilled)
+    P.add(0x202, {operation(NdOp::STORE, {}, {r(40), r(48)})});
+  else
+    P.add(0x202, {});
+  P.add(0x203,
+        {operation(NdOp::INT_SUB, r(56), {r(32), c(16)}),
+         operation(NdOp::INT_NOTEQUAL, r(24, 1), {r(48), r(56)}),
+         operation(NdOp::COND_BR, {}, {NdVar::cst(0x200, 8), r(24, 1)})});
+  P.add(0x204, {operation(NdOp::INT_SUB, r(56), {r(32), c(24)}),
+                operation(NdOp::LOAD, r(0), {r(56)})});
+  P.nativeReturn(0x205);
+  return P;
+}
+
+TEST(NativeStackSpecialization, AutomaticContextsPreserveRelativeFrameCursors) {
+  for (bool Spilled : {false, true}) {
+    SCOPED_TRACE(Spilled);
+    auto P = frameCursor(Spilled);
+    auto Options = stackOptions();
+    Options.DiscoverControlState = true;
+    auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    EXPECT_GT(Result.DiscoveredContextFields, 0u);
+    for (uint64_t Input : {uint64_t{0}, uint64_t{71}, UINT64_MAX}) {
+      auto Run = execute(Result.Residual, Input);
+      ASSERT_TRUE(Run);
+      EXPECT_EQ(Run->Value, Input);
+      EXPECT_EQ(Run->Stack, 0x10000u);
+    }
+    Options.MaxContextsPerAddress = 1;
+    auto Limited = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_EQ(Limited.Status, SpecializationStatus::BudgetExceeded);
+    EXPECT_TRUE(Limited.Residual.Blocks.empty());
+  }
+}
+
+StackProvider guardedDecoder(bool Unknown) {
+  StackProvider P;
+  P.add(0x100,
+        {operation(NdOp::COPY, r(16), {Unknown ? r(8) : c(0)}), branch(0x200)});
+  // A shared decoder rejects invalid opcodes before its direct handler tests.
+  // The two valid phases need a relation even though there is no indirect JMP.
+  P.add(0x200,
+        {operation(NdOp::INT_LESS, r(24, 1), {c(1), r(16)}),
+         operation(NdOp::COND_BR, {}, {NdVar::cst(0xdead, 8), r(24, 1)})});
+  P.add(0x201,
+        {operation(NdOp::INT_EQUAL, r(24, 1), {r(16), c(0)}),
+         operation(NdOp::COND_BR, {}, {NdVar::cst(0x300, 8), r(24, 1)})});
+  P.add(0x202, {operation(NdOp::INT_ADD, r(0), {r(8), c(17)})});
+  P.nativeReturn(0x203);
+  P.add(0x300, {operation(NdOp::COPY, r(16), {c(1)}), branch(0x200)});
+  return P;
+}
+
+TEST(NativeStackSpecialization, RefinesGuardsBeforeRejectingAnUnsupportedPath) {
+  auto P = guardedDecoder(false);
+  auto Options = stackOptions();
+  Options.DiscoverControlState = true;
+  auto Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_GT(Result.ControlRefinements, 0u);
+  for (uint64_t Input : {uint64_t{0}, uint64_t{42}, UINT64_MAX}) {
+    auto Run = execute(Result.Residual, Input);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, Input + 17);
+  }
+  Options.MaxControlRefinements = 0;
+  auto Limited = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_EQ(Limited.Status, SpecializationStatus::BudgetExceeded);
+  EXPECT_TRUE(Limited.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, ReachableUnsupportedGuardIsNeverAssumedAway) {
+  auto P = guardedDecoder(true);
+  auto Options = stackOptions();
+  Options.DiscoverControlState = true;
+  auto Result = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, GuardDiscoveryExhaustionPublishesNothing) {
+  auto P = guardedDecoder(false);
+  auto Options = stackOptions();
+  Options.DiscoverControlState = true;
+  Options.MaxDiscoveryVisits = 1;
+  auto Result = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_EQ(Result.Status, SpecializationStatus::BudgetExceeded);
+  EXPECT_LE(Result.DiscoveryVisits, Options.MaxDiscoveryVisits);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, NarrowGuardsKeepWideCarrierCoordinates) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SCOPED_TRACE(Order == llvm::endianness::little ? "little" : "big");
+    auto P = guardedDecoder(false);
+    // The upper seven bytes remain unbounded business input. A manual wide
+    // carrier cannot supply a constant context key; only the demanded low
+    // byte can establish the two legal decoder phases.
+    const auto Phase = r(16 + (Order == llvm::endianness::little ? 0 : 7), 1);
+    P.add(0x100, {operation(NdOp::INT_AND, r(16), {r(8), c(~uint64_t{255})}),
+                  branch(0x200)});
+    P.add(0x200,
+          {operation(NdOp::INT_LESS, r(24, 1), {c(1, 1), Phase}),
+           operation(NdOp::COND_BR, {}, {NdVar::cst(0xdead, 8), r(24, 1)})});
+    P.add(0x201,
+          {operation(NdOp::INT_EQUAL, r(24, 1), {Phase, c(0, 1)}),
+           operation(NdOp::COND_BR, {}, {NdVar::cst(0x300, 8), r(24, 1)})});
+    P.add(0x300,
+          {operation(NdOp::INT_OR, r(16), {r(16), c(1)}), branch(0x200)});
+    auto Options = stackOptions();
+    Options.ByteOrder = Order;
+    Options.DiscoverControlState = true;
+    Options.ControlRegisters.push_back({16, 8});
+    auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    EXPECT_GT(Result.ControlRefinements, 0u);
+    for (uint64_t Input : {uint64_t{0}, uint64_t{42}, UINT64_MAX}) {
+      auto Run = execute(Result.Residual, Input, 0, Order);
+      ASSERT_TRUE(Run);
+      EXPECT_EQ(Run->Value, Input + 17);
+    }
+    P.add(0x300,
+          {operation(NdOp::INT_OR, r(16), {r(16), c(2)}), branch(0x200)});
+    auto Invalid = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_EQ(Invalid.Status, SpecializationStatus::Unsupported);
+    EXPECT_TRUE(Invalid.Residual.Blocks.empty());
+  }
 }
 
 TEST(NativeStackSpecialization, RestoredEntryStackMayDiscardCalleeFrames) {

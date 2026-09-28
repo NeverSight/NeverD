@@ -1424,6 +1424,17 @@ entry-frame-relative fields. Historical load addresses may still explain
 address dependencies, but do not establish entry slots. Neither record proves
 current memory contents, accessibility, or disjointness.
 
+Interpreter specialization also owns context keys for exact entry-frame-relative
+pointers. Full-width proven displacements stay distinct from numeric constants;
+no sampled root address enters a key. When an unsupported operation is reached,
+bounded reverse traversal can nominate fields from the nearest undecided
+predecessor guards for control-state refinement. This is a candidate heuristic,
+not an unreachability proof: a fresh complete specialization must still prove
+all retained paths before publication. The binary provider certifies native
+control forms; the common specializer preserves guest stack effects and proves
+finite register-call and internal-return targets. Memory-call slot addresses
+never stand in for loaded callees.
+
 Interpreter specialization owns finite-query reuse in its run-local
 `FiniteQueryCache`. Complete domains and proved domain-limit excesses are
 keyed by the full ordered expression DAG under consistent free-variable

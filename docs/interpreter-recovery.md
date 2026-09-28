@@ -60,10 +60,22 @@ prefix that can carry or borrow into a demanded bit.
 
 If already tracked memory dependencies repeatedly prevent an exact address
 proof, refinement may additionally use their proven incoming constants as
-context keys. It does not partition multivalue tuples into new edges or emit
+context keys. Complete 64-bit register values or spilled pointers proved equal
+to the entry frame root plus an exact displacement can also distinguish these
+contexts. The key retains the displacement, not a guessed numeric invocation
+address. Partial or potentially aliasing writes invalidate the pointer fact.
+This refinement does not partition multivalue tuples into new edges or emit
 extra guest-memory reads: a finite-value proof alone does not establish that an
 added load is safe. Dynamic or unbounded memory-dependent state may therefore
 still stop recovery within the configured limits.
+
+Conditional guards may nominate dependencies for bounded refinement before the
+final control proof. When an imprecise join exposes an unsupported successor,
+the candidate search selects the nearest undecided predecessor guards; it is
+not a complete backward slice. A nomination never proves a guard false.
+Reachability and every retained target still require the complete proof; a
+remaining reachable unsupported operation or exhausted required budget prevents
+publication.
 
 Backward producer demands identify a native node entry, instruction mode, and
 field kind and byte range. Only an edge whose successor demands that field
@@ -246,14 +258,22 @@ reserved bits follow the user-mode preservation rules. RDSSP preserves its
 destination when shadow stacks are disabled; reached INCSSP is unsupported.
 These rules follow the [Intel instruction reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
 
-The adapter certifies direct near CALL and ordinary near RET semantics.
-Internal calls retain the actual guest return-address store; internal returns
-require a proved singleton target and retain the read and stack increment.
-Restoring the entry stack can leave an internal call without returning to its
-continuation. Callee-pop returns, unresolved return targets and arbitrary stack
-pivots remain unsupported. Exact frame pointers survive complete spills, with
-partial or potentially aliasing writes invalidating the facts. Active stack
-positions and return-slot values separate contexts and are budgeted.
+Under this machine-state ABI, the adapter certifies direct near CALL and
+register-indirect near CALL with an exhaustively proved finite target set.
+An indirect call captures the original target register before changing RSP and
+stores the actual fallthrough address exactly once. Memory-indirect CALL remains
+unsupported, including read-only pointer slots and `[rsp]`: a slot address must
+not be treated as a callee address.
+
+An internal near RET may select from a completely proved finite target set.
+The residual code retains one guest stack read, captures its value before the
+stack increment, and dispatches on that captured value. Reaching the preserved
+entry return slot remains an outer exit, even after discarding an internal
+frame. Unknown targets, sets containing missing or nonexecutable destinations,
+callee-pop returns and arbitrary stack pivots remain unsupported. Exact frame
+pointers survive complete spills, with partial or potentially aliasing writes
+invalidating the facts. Active stack positions and return-slot values separate
+contexts and are budgeted.
 
 Exception handler metadata may be traversed only under this explicit normal
 execution profile; exception dispatch and unwind equivalence are not certified.
@@ -297,9 +317,10 @@ not proofs of a complete address or target set. This mechanism does not require
 the optional Z3 backend.
 
 A node is identified by its native cursor and instruction mode, active native
-return-stack state, and proven constants in manual or selectively promoted
-context fields. Other byte-level facts meet by intersection. When an incoming
-fact weakens, the node is evaluated again. Ordinary business values remain
+return-stack state, and proven constants or complete entry-frame-relative
+pointer displacements in manual or selectively promoted context fields. Other
+byte-level facts meet by intersection. When an incoming fact weakens, the node
+is evaluated again. Ordinary business values remain
 dynamic; promoted state remains subject to context limits. All reachable values
 of an indirect target must belong to a bounded, exhaustively proved set;
 selected targets become explicit residual comparisons and CFG edges.
@@ -352,5 +373,23 @@ depends on live program state. Their independent native oracle uses both SysV
 and Win64 calling conventions; both recovered C routes are checked at O0/O2 with
 undefined-behavior traps and output canaries. Missing read certificates and
 insufficient proof budgets must not publish a partial result.
+
+The extended test matrix requires three further independent shapes to recover
+without manual control hints: direct-threaded pointer bytecode, a bounded
+software CALL/RET stack with nested virtual calls, and a loop with rotating
+opcode-decoder state. Their native SysV/Win64 executions and recovered HighC
+and LLVMC at O0/O2 are compared with independent mathematical oracles, including
+output canaries. Unknown virtual return cursors, unconstrained decoder keys and
+exhausted budgets must refuse publication.
+
+A separate machine-state matrix requires native and both recovered C routes at
+O0/O2 to agree on all 16 general registers, defined flags and every byte of the
+tested guest stack. Register-indirect CALL callees both read and overwrite the
+target register; return-threaded dispatch selects between known destinations.
+The oracle checks the actual fallthrough store, unchanged flags and restored
+RSP. Symbol lookup supplies expected code addresses. Unknown or invalid target
+sets and memory-indirect calls must fail without source. These are coverage
+requirements for original fixtures, satisfied by local x64 Linux validation;
+they are not a guarantee for arbitrary virtual machines or protection products.
 
 See [testing.md](testing.md) for the focused targets.

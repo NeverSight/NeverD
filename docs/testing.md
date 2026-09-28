@@ -145,6 +145,26 @@ ctest --test-dir build-release -L '^NeverD(InterpreterSpecialization|Devirtualiz
 
 Core tests check context splitting, fixed-point joins, dynamic loops, overlapping registers, alias invalidation, finite dispatch, and refusal without a partial replacement. Source tests assemble original register, stack and finite-address x64 machines, recover both C routes, compile at O0/O2 with undefined-behavior traps, and compare execution with independent unsigned arithmetic and memory oracles. Finite-address fixtures exercise input-selected records and related cursor/key controls; native checks cover SysV and Win64 calling conventions. The suite also exercises the public CLI, recovery budgets and unsupported-input reports. Cross-target Clang and LLD are required; original ELF execution additionally requires an x64 Linux host. Missing tools or a nonmatching host are skipped coverage, not a pass.
 
+`VMShapeSourceTests.cpp` adds three original shapes recovered without manual
+control hints: direct-threaded pointer bytecode, a bounded software CALL/RET
+stack with nested virtual calls, and a loop with rotating opcode-decoder state.
+The tests compare native SysV/Win64 execution and both recovered C backends at
+O0/O2 against independent mathematical oracles, including returned values,
+output stores and canaries. They also assemble ELF and COFF variants. Unknown
+virtual return cursors, unconstrained decoder keys and an exhausted recovery
+budget must refuse source publication.
+
+`MachineControlSourceTests.cpp` exercises the explicit machine-state ABI with
+finite register-indirect native CALL and finite internal RET dispatch. Its
+separate native observer compares all 16 general registers, defined RFLAGS and
+every byte of the tested guest stack with HighC and LLVMC at O0/O2. Callees read
+and overwrite the target register; checks require one actual fallthrough-address
+store, preserved flags and restored RSP. Expected code addresses come from ELF
+symbols. Unknown targets, finite sets containing a missing or nonexecutable
+destination, read-only memory-indirect CALL and `call [rsp]` must fail without
+source. These original fixtures have been validated locally on x64 Linux;
+their coverage does not establish support for arbitrary virtual machines.
+
 The flag-state fixture retains `PUSHFQ` and `POPFQ` across finite indirect
 dispatch, then executes recovered HighC and LLVMC at O0/O2. Core negative cases
 reject malformed flag intrinsics, snapshots of unbound entry flags, flag-derived
