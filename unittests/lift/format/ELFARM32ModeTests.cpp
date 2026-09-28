@@ -64,6 +64,43 @@ protected:
     }
     return ELFLoader().load(Object);
   }
+
+  /// Links \p Source for ARM32 and removes its section table, the way a
+  /// stripped image reaches the loader: only the entry and the code remain.
+  llvm::Expected<BinaryImage>
+  loadStrippedLinkedAssembly(const std::string &Name,
+                             const std::string &Source) {
+    const auto Assembly = tmpFile(Name + ".s");
+    std::ofstream(Assembly) << Source;
+    const auto Object = tmpFile(Name + ".o");
+    const auto Linked = tmpFile(Name + "-linked.elf");
+    const auto Stripped = tmpFile(Name + "-stripped.elf");
+    const auto Compiled =
+        exec(NEVERD_TEST_CLANG, {"-target", "armv7-linux-gnueabi", "-c",
+                                 Assembly.string(), "-o", Object.string()});
+    if (!Compiled.ok())
+      return llvm::make_error<llvm::StringError>(
+          Compiled.err, llvm::inconvertibleErrorCode());
+    const auto LinkedOk =
+        exec("ld.lld", {"-m", "armelf_linux_eabi", "-e", "_start",
+                        Object.string(), "-o", Linked.string()});
+    if (!LinkedOk.ok())
+      return llvm::make_error<llvm::StringError>(
+          LinkedOk.err, llvm::inconvertibleErrorCode());
+    std::ifstream Input(Linked, std::ios::binary);
+    std::vector<uint8_t> Bytes(std::istreambuf_iterator<char>(Input), {});
+    llvm::object::ELF32LE::Ehdr Header;
+    std::memcpy(&Header, Bytes.data(), sizeof(Header));
+    Header.e_shoff = 0;
+    Header.e_shnum = 0;
+    Header.e_shentsize = 0;
+    Header.e_shstrndx = llvm::ELF::SHN_UNDEF;
+    std::memcpy(Bytes.data(), &Header, sizeof(Header));
+    std::ofstream Output(Stripped, std::ios::binary);
+    Output.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+    Output.close();
+    return ELFLoader().load(Stripped);
+  }
 };
 
 TEST_F(ELFARM32ModeTest, PreservesThumbModeBeforeNormalizingFunctionAddresses) {
@@ -709,6 +746,77 @@ arm_entry:
   Decoder Dec;
   ASSERT_TRUE(Dec.init(*Image));
   EXPECT_FALSE(Dec.selectMode(*Image, Image->Entry + 8));
+}
+
+// After a call that does not return comes the caller's literal pool, which
+// its own PC-relative load proves is data. Decoded as Thumb, this pool word
+// opens a 32-bit instruction across the next function's first one.
+TEST_F(ELFARM32ModeTest, StopsAtTheLiteralPoolAfterACallThatDoesNotReturn) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "ARM fixture requires cross-target clang";
+  if (!exec("ld.lld", {"--version"}).ok())
+    GTEST_SKIP() << "ARM ELF linker is unavailable";
+
+  auto Image = loadStrippedLinkedAssembly("pool", R"(
+.syntax unified
+.text
+.thumb
+.globl _start
+.type _start,%function
+.thumb_func
+_start:
+  push {r4, lr}
+  bl next
+  ldr r0, pool
+  bl stop
+  nop
+.p2align 2
+pool:
+  .word 0xfffb0000
+.thumb_func
+next:
+  adds r0, r0, #1
+  bx lr
+.thumb_func
+stop:
+  b stop
+)");
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  const va_t Entry = Image->Entry & ~va_t(1);
+  // push, bl next, ldr, bl stop, nop: the pool starts 14 bytes in, aligned.
+  const va_t Pool = Entry + 16;
+  EXPECT_FALSE(Image->instructionModeAt(Pool));
+  EXPECT_EQ(Image->instructionModeAt(Pool + 4), InstructionMode::Thumb);
+}
+
+TEST_F(ELFARM32ModeTest, StillRejectsACallIntoTheMiddleOfAnInstruction) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "ARM fixture requires cross-target clang";
+  if (!exec("ld.lld", {"--version"}).ok())
+    GTEST_SKIP() << "ARM ELF linker is unavailable";
+
+  auto Image = loadStrippedLinkedAssembly("middle", R"(
+.syntax unified
+.text
+.thumb
+.globl _start
+.type _start,%function
+.thumb_func
+_start:
+  push {r4, lr}
+  bl inner
+  bl whole
+  pop {r4, pc}
+.thumb_func
+whole:
+  ldr.w r0, [r1, #4]
+  bx lr
+.set inner, whole + 2
+)");
+  ASSERT_FALSE(static_cast<bool>(Image));
+  const std::string Message = llvm::toString(Image.takeError());
+  EXPECT_NE(Message.find("overlaps the instruction at"), std::string::npos)
+      << Message;
 }
 
 TEST_F(ELFARM32ModeTest, UsesAddressSpecificModesInMixedImages) {

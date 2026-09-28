@@ -22,6 +22,7 @@
 #include <capstone/capstone.h>
 #include <deque>
 #include <map>
+#include <optional>
 
 namespace neverd {
 
@@ -78,6 +79,83 @@ size_t scanThumbImportThunks(BinaryImage &Img, const Segment &Seg,
   return Added;
 }
 
+/// Disjoint byte ranges proven to hold data.
+class LiteralRanges {
+public:
+  bool overlaps(va_t Begin, va_t End) const {
+    auto It = Ranges.lower_bound(End);
+    if (It == Ranges.begin())
+      return false;
+    return std::prev(It)->second > Begin;
+  }
+
+  /// Adds [Begin, End), and says whether any of it was new.
+  bool insert(va_t Begin, va_t End) {
+    if (Begin >= End)
+      return false;
+    auto It = Ranges.upper_bound(Begin);
+    if (It != Ranges.begin() && std::prev(It)->second >= End)
+      return false;
+    if (It != Ranges.begin() && std::prev(It)->second >= Begin)
+      --It;
+    while (It != Ranges.end() && It->first <= End) {
+      Begin = std::min(Begin, It->first);
+      End = std::max(End, It->second);
+      It = Ranges.erase(It);
+    }
+    Ranges.emplace(Begin, End);
+    return true;
+  }
+
+private:
+  std::map<va_t, va_t> Ranges;
+};
+
+/// The bytes a PC-relative load reads: its literal, which is data.
+std::optional<std::pair<va_t, va_t>> literalRead(const cs_insn &Insn,
+                                                 InstructionMode Mode) {
+  uint64_t Size = 0;
+  switch (Insn.id) {
+  case ARM_INS_LDR:
+  case ARM_INS_VLDR:
+    Size = 4;
+    break;
+  case ARM_INS_LDRB:
+  case ARM_INS_LDRSB:
+    Size = 1;
+    break;
+  case ARM_INS_LDRH:
+  case ARM_INS_LDRSH:
+    Size = 2;
+    break;
+  case ARM_INS_LDRD:
+    Size = 8;
+    break;
+  default:
+    return std::nullopt;
+  }
+  const cs_arm &Arm = Insn.detail->arm;
+  for (uint8_t Index = 0; Index < Arm.op_count; ++Index) {
+    const cs_arm_op &Op = Arm.operands[Index];
+    if (Insn.id == ARM_INS_VLDR && Op.type == ARM_OP_REG &&
+        Op.reg >= ARM_REG_D0 && Op.reg <= ARM_REG_D31)
+      Size = 8;
+    if (Op.type != ARM_OP_MEM || Op.mem.base != ARM_REG_PC ||
+        Op.mem.index != ARM_REG_INVALID)
+      continue;
+    // Thumb reads relative to the word-aligned PC, ARM to the instruction
+    // plus 8; an ARM offset below the PC is a subtracted one.
+    const int64_t Disp = Op.subtracted ? -static_cast<int64_t>(Op.mem.disp)
+                                       : static_cast<int64_t>(Op.mem.disp);
+    const va_t Base = Mode == InstructionMode::Thumb
+                          ? (Insn.address + 4) & ~va_t(3)
+                          : Insn.address + arm::kPCBias;
+    const va_t Begin = Base + static_cast<va_t>(Disp);
+    return std::make_pair(Begin, Begin + Size);
+  }
+  return std::nullopt;
+}
+
 } // anonymous namespace
 
 llvm::Error discoverARMReachableModes(BinaryImage &Img) {
@@ -128,135 +206,189 @@ llvm::Error discoverARMReachableModes(BinaryImage &Img) {
   };
 
   using ModeAt = std::pair<va_t, InstructionMode>;
-  std::deque<ModeAt> Pending;
-  for (const auto &[Address, Mode] : Img.ARMCodeModeEntries)
-    if (Mode == InstructionMode::ARM || Mode == InstructionMode::Thumb)
-      Pending.emplace_back(Address, Mode);
 
+  // A PC-relative load proves that what it reads is data: the literal pool a
+  // function keeps after its code. The bytes after a call are code only when
+  // the callee returns, and after one that does not, such as `bl abort`, the
+  // pool follows; decoded as instructions, it runs across the code after it.
+  // A path therefore stops where it would enter proven data. A pass that
+  // finds literals it did not start with, and meets a conflict or decoded
+  // across one of them, is repeated with every literal known from the start.
+  // A conflict no new literal explains still fails.
+  LiteralRanges Literals;
   // One entry per decoded instruction until the final adjacent-span merge.
   // Keeping the extents separate makes a branch into an instruction interior
   // a detectable conflict, rather than accidentally decoding from there.
   std::map<va_t, ARMCodeRegion> Decoded;
   std::map<va_t, InstructionMode> VeneerCandidates;
   constexpr size_t kMaxDiscoveredInstructions = 4'000'000;
-  while (!Pending.empty()) {
-    const auto [Start, Mode] = Pending.front();
-    Pending.pop_front();
-    va_t Cur = Start;
-    while (true) {
-      const Segment *Seg = Img.getSegmentFor(Cur);
-      if (!Seg || !Img.isCodeAddress(Cur) || Cur < Seg->VA ||
-          Cur - Seg->VA >= Seg->Data.size())
-        break;
-      const uint64_t Align = Mode == InstructionMode::Thumb ? 2 : 4;
-      if ((Cur & (Align - 1)) != 0 || Img.instructionModeAt(Cur, Mode) != Mode)
-        return llvm::make_error<llvm::StringError>(
-            std::string(Format) +
-                ": conflicting or misaligned reachable ARM/Thumb mode",
-            llvm::inconvertibleErrorCode());
-      const auto Existing = Decoded.lower_bound(Cur);
-      if (Existing != Decoded.end() && Existing->first == Cur) {
-        if (Existing->second.Kind != (Mode == InstructionMode::Thumb
-                                          ? ARMCodeRegionKind::Thumb
-                                          : ARMCodeRegionKind::ARM))
-          return llvm::make_error<llvm::StringError>(
-              std::string(Format) +
-                  ": conflicting reachable ARM/Thumb instructions at " +
-                  Hex(Cur) + ", reached as " + ModeName(Mode) + " from " +
-                  Hex(Start),
-              llvm::inconvertibleErrorCode());
-        break;
-      }
-      if (Existing != Decoded.begin() && std::prev(Existing)->second.End > Cur)
-        return llvm::make_error<llvm::StringError>(
-            std::string(Format) + ": " + ModeName(Mode) + " code reached at " +
-                Hex(Cur) + " from " + Hex(Start) +
-                " enters the middle of the instruction at " +
-                Hex(std::prev(Existing)->first),
-            llvm::inconvertibleErrorCode());
-
-      const size_t Offset = static_cast<size_t>(Cur - Seg->VA);
-      const uint8_t *Bytes = Seg->Data.data() + Offset;
-      size_t Remaining = Seg->Data.size() - Offset;
-      uint64_t DecodeAddress = Cur;
-      const csh Handle = Mode == InstructionMode::Thumb ? Dec.Thumb : Dec.ARM;
-      cs_insn *Insn =
-          Mode == InstructionMode::Thumb ? Dec.ThumbInsn : Dec.ARMInsn;
-      if (!cs_disasm_iter(Handle, &Bytes, &Remaining, &DecodeAddress, Insn) ||
-          !Img.isCodeRange(Cur, Insn->size))
-        break;
-      if (Insn->size > InvalidVA - Cur ||
-          (Existing != Decoded.end() && Existing->first < Cur + Insn->size))
-        return llvm::make_error<llvm::StringError>(
-            std::string(Format) + ": the " + ModeName(Mode) +
-                " instruction at " + Hex(Cur) + ", reached from " + Hex(Start) +
-                ", overlaps the instruction at " +
-                Hex(Existing == Decoded.end() ? Cur : Existing->first),
-            llvm::inconvertibleErrorCode());
-      if (Decoded.size() == kMaxDiscoveredInstructions)
-        return llvm::make_error<llvm::StringError>(
-            std::string(Format) + ": ARM/Thumb reachable decode limit exceeded",
-            llvm::inconvertibleErrorCode());
-
-      const ARMCodeRegionKind Kind = Mode == InstructionMode::Thumb
-                                         ? ARMCodeRegionKind::Thumb
-                                         : ARMCodeRegionKind::ARM;
-      Decoded.emplace(Cur, ARMCodeRegion{Cur, Cur + Insn->size, Kind});
-      // This exact instruction reads the following literal and transfers
-      // control to its tagged code pointer. The literal itself is never an
-      // instruction. Linked code and rewritten functions both use this
-      // veneer, including when no section table survives.
-      if (Mode == InstructionMode::ARM && Insn->size == arm::kInsnSize &&
-          Seg->Data.size() - Offset >= arm::kLdrPCTrampLen &&
-          Img.isCodeRange(Cur, arm::kLdrPCTrampLen) &&
-          readLE<uint32_t>(Seg->Data.data() + Offset) == arm::kLdrPC) {
-        const uint32_t Tagged =
-            readLE<uint32_t>(Seg->Data.data() + Offset + arm::kInsnSize);
-        const va_t Target = clearThumbBit(Tagged);
-        if (Img.isCodeAddress(Target)) {
-          const InstructionMode TargetMode =
-              (Tagged & 1u) ? InstructionMode::Thumb : InstructionMode::ARM;
-          Pending.emplace_back(Target, TargetMode);
-          VeneerCandidates.emplace(Target, TargetMode);
-        }
-      }
-      const auto HasGroup = [&](uint8_t Group) {
-        for (uint8_t Index = 0; Index < Insn->detail->groups_count; ++Index)
-          if (Insn->detail->groups[Index] == Group)
-            return true;
-        return false;
-      };
-      const bool IsCall = HasGroup(CS_GRP_CALL);
-      const bool IsJump = HasGroup(CS_GRP_JUMP);
-      const bool Conditional = Insn->detail->arm.cc < ARMCC_AL ||
-                               Insn->id == ARM_INS_CBZ ||
-                               Insn->id == ARM_INS_CBNZ;
-      if (IsCall || IsJump) {
-        for (uint8_t Index = 0; Index < Insn->detail->arm.op_count; ++Index) {
-          const cs_arm_op &Op = Insn->detail->arm.operands[Index];
-          if (Op.type != ARM_OP_IMM || Op.imm < 0)
-            continue;
-          InstructionMode TargetMode = Mode;
-          if (Insn->id == ARM_INS_BLX)
-            TargetMode = Mode == InstructionMode::Thumb
-                             ? InstructionMode::ARM
-                             : InstructionMode::Thumb;
-          const va_t Target = clearThumbBit(static_cast<va_t>(Op.imm));
-          if (Img.isCodeAddress(Target))
-            Pending.emplace_back(Target, TargetMode);
+  while (true) {
+    Decoded.clear();
+    VeneerCandidates.clear();
+    std::deque<ModeAt> Pending;
+    for (const auto &[Address, Mode] : Img.ARMCodeModeEntries)
+      if (Mode == InstructionMode::ARM || Mode == InstructionMode::Thumb)
+        Pending.emplace_back(Address, Mode);
+    // The first conflict of this pass, which fails only if the pass found no
+    // literal it did not start with.
+    std::optional<std::string> Conflict;
+    bool FoundLiterals = false;
+    // The branch each target was first reached from, for the diagnostics.
+    std::map<ModeAt, va_t> Origins;
+    const auto From = [&](va_t Start, InstructionMode Mode) {
+      const auto It = Origins.find({Start, Mode});
+      return Hex(Start) +
+             (It == Origins.end()
+                  ? std::string(", an entry")
+                  : ", the target of the branch at " + Hex(It->second));
+    };
+    while (!Pending.empty()) {
+      const auto [Start, Mode] = Pending.front();
+      Pending.pop_front();
+      va_t Cur = Start;
+      while (true) {
+        const Segment *Seg = Img.getSegmentFor(Cur);
+        if (!Seg || !Img.isCodeAddress(Cur) || Cur < Seg->VA ||
+            Cur - Seg->VA >= Seg->Data.size())
+          break;
+        if (Literals.overlaps(Cur, Cur + 1))
+          break;
+        const uint64_t Align = Mode == InstructionMode::Thumb ? 2 : 4;
+        if ((Cur & (Align - 1)) != 0 ||
+            Img.instructionModeAt(Cur, Mode) != Mode) {
+          if (!Conflict)
+            Conflict = std::string(Format) +
+                       ": conflicting or misaligned reachable ARM/Thumb mode "
+                       "at " +
+                       Hex(Cur) + ", reached as " + ModeName(Mode) + " from " +
+                       From(Start, Mode);
           break;
         }
+        const auto Existing = Decoded.lower_bound(Cur);
+        if (Existing != Decoded.end() && Existing->first == Cur) {
+          if (Existing->second.Kind != (Mode == InstructionMode::Thumb
+                                            ? ARMCodeRegionKind::Thumb
+                                            : ARMCodeRegionKind::ARM) &&
+              !Conflict)
+            Conflict = std::string(Format) +
+                       ": conflicting reachable ARM/Thumb instructions at " +
+                       Hex(Cur) + ", reached as " + ModeName(Mode) + " from " +
+                       From(Start, Mode);
+          break;
+        }
+        if (Existing != Decoded.begin() &&
+            std::prev(Existing)->second.End > Cur) {
+          if (!Conflict)
+            Conflict = std::string(Format) + ": " + ModeName(Mode) +
+                       " code reached at " + Hex(Cur) + " from " +
+                       From(Start, Mode) +
+                       " enters the middle of the instruction at " +
+                       Hex(std::prev(Existing)->first);
+          break;
+        }
+
+        const size_t Offset = static_cast<size_t>(Cur - Seg->VA);
+        const uint8_t *Bytes = Seg->Data.data() + Offset;
+        size_t Remaining = Seg->Data.size() - Offset;
+        uint64_t DecodeAddress = Cur;
+        const csh Handle = Mode == InstructionMode::Thumb ? Dec.Thumb : Dec.ARM;
+        cs_insn *Insn =
+            Mode == InstructionMode::Thumb ? Dec.ThumbInsn : Dec.ARMInsn;
+        if (!cs_disasm_iter(Handle, &Bytes, &Remaining, &DecodeAddress, Insn) ||
+            !Img.isCodeRange(Cur, Insn->size) ||
+            Literals.overlaps(Cur, Cur + Insn->size))
+          break;
+        if (Insn->size > InvalidVA - Cur ||
+            (Existing != Decoded.end() && Existing->first < Cur + Insn->size)) {
+          if (!Conflict)
+            Conflict = std::string(Format) + ": the " + ModeName(Mode) +
+                       " instruction at " + Hex(Cur) + ", reached from " +
+                       From(Start, Mode) + ", overlaps the instruction at " +
+                       Hex(Existing == Decoded.end() ? Cur : Existing->first);
+          break;
+        }
+        if (Decoded.size() == kMaxDiscoveredInstructions)
+          return llvm::make_error<llvm::StringError>(
+              std::string(Format) +
+                  ": ARM/Thumb reachable decode limit exceeded",
+              llvm::inconvertibleErrorCode());
+
+        const ARMCodeRegionKind Kind = Mode == InstructionMode::Thumb
+                                           ? ARMCodeRegionKind::Thumb
+                                           : ARMCodeRegionKind::ARM;
+        Decoded.emplace(Cur, ARMCodeRegion{Cur, Cur + Insn->size, Kind});
+        if (const auto Literal = literalRead(*Insn, Mode))
+          FoundLiterals |= Literals.insert(Literal->first, Literal->second);
+        // This exact instruction reads the following literal and transfers
+        // control to its tagged code pointer. The literal itself is never an
+        // instruction. Linked code and rewritten functions both use this
+        // veneer, including when no section table survives.
+        if (Mode == InstructionMode::ARM && Insn->size == arm::kInsnSize &&
+            Seg->Data.size() - Offset >= arm::kLdrPCTrampLen &&
+            Img.isCodeRange(Cur, arm::kLdrPCTrampLen) &&
+            readLE<uint32_t>(Seg->Data.data() + Offset) == arm::kLdrPC) {
+          const uint32_t Tagged =
+              readLE<uint32_t>(Seg->Data.data() + Offset + arm::kInsnSize);
+          const va_t Target = clearThumbBit(Tagged);
+          if (Img.isCodeAddress(Target)) {
+            const InstructionMode TargetMode =
+                (Tagged & 1u) ? InstructionMode::Thumb : InstructionMode::ARM;
+            Pending.emplace_back(Target, TargetMode);
+            Origins.try_emplace({Target, TargetMode}, Cur);
+            VeneerCandidates.emplace(Target, TargetMode);
+          }
+        }
+        const auto HasGroup = [&](uint8_t Group) {
+          for (uint8_t Index = 0; Index < Insn->detail->groups_count; ++Index)
+            if (Insn->detail->groups[Index] == Group)
+              return true;
+          return false;
+        };
+        const bool IsCall = HasGroup(CS_GRP_CALL);
+        const bool IsJump = HasGroup(CS_GRP_JUMP);
+        const bool Conditional = Insn->detail->arm.cc < ARMCC_AL ||
+                                 Insn->id == ARM_INS_CBZ ||
+                                 Insn->id == ARM_INS_CBNZ;
+        if (IsCall || IsJump) {
+          for (uint8_t Index = 0; Index < Insn->detail->arm.op_count; ++Index) {
+            const cs_arm_op &Op = Insn->detail->arm.operands[Index];
+            if (Op.type != ARM_OP_IMM || Op.imm < 0)
+              continue;
+            InstructionMode TargetMode = Mode;
+            if (Insn->id == ARM_INS_BLX)
+              TargetMode = Mode == InstructionMode::Thumb
+                               ? InstructionMode::ARM
+                               : InstructionMode::Thumb;
+            const va_t Target = clearThumbBit(static_cast<va_t>(Op.imm));
+            if (Img.isCodeAddress(Target)) {
+              Pending.emplace_back(Target, TargetMode);
+              Origins.try_emplace({Target, TargetMode}, Cur);
+            }
+            break;
+          }
+        }
+        uint16_t Read[64], Written[64];
+        uint8_t ReadCount = 0, WriteCount = 0;
+        const bool WritesPC =
+            cs_regs_access(Handle, Insn, Read, &ReadCount, Written,
+                           &WriteCount) == CS_ERR_OK &&
+            std::find(Written, Written + WriteCount, ARM_REG_PC) !=
+                Written + WriteCount;
+        if ((IsJump || (WritesPC && !IsCall)) && !Conditional)
+          break;
+        Cur += Insn->size;
       }
-      uint16_t Read[64], Written[64];
-      uint8_t ReadCount = 0, WriteCount = 0;
-      const bool WritesPC = cs_regs_access(Handle, Insn, Read, &ReadCount,
-                                           Written, &WriteCount) == CS_ERR_OK &&
-                            std::find(Written, Written + WriteCount,
-                                      ARM_REG_PC) != Written + WriteCount;
-      if ((IsJump || (WritesPC && !IsCall)) && !Conditional)
-        break;
-      Cur += Insn->size;
     }
+    if (FoundLiterals &&
+        (Conflict ||
+         std::any_of(Decoded.begin(), Decoded.end(), [&](const auto &Entry) {
+           return Literals.overlaps(Entry.second.Start, Entry.second.End);
+         })))
+      continue;
+    if (Conflict)
+      return llvm::make_error<llvm::StringError>(
+          *Conflict, llvm::inconvertibleErrorCode());
+    break;
   }
 
   for (const auto &[Address, Region] : Decoded) {
