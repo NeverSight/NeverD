@@ -33,7 +33,8 @@ and can still return a JSON diagnostic. Both owned strings use
 
 ## Automatic control-state discovery
 
-The CLI and both source-recovery C APIs enable automatic discovery by default.
+The CLI and all source-recovery C API versions enable automatic discovery by
+default.
 Provider-neutral C++ callers opt in with `SpecializationOptions::DiscoverControlState = true`;
 its default is `false`. Manual `--vm-control` and `--vm-control-stack` hints remain
 optional context keys. Ordinary automatically discovered fields preserve bounded
@@ -41,12 +42,21 @@ joint finite-value relations without creating context keys or binding runtime
 inputs to sampled values. Ordinary counters remain dynamic unless their proven
 constants are needed for the selective memory refinement below.
 
-Discovery follows unresolved control and address dependencies through structured register
-inputs and exact entry-relative frame loads, including narrow byte slices.
-Missing dependencies trigger refinement from the function entry. Every field
-still needs a complete finite-value proof, and aliasing writes still invalidate
-memory facts. Arbitrary external memory and unbounded correlated values are not
-made finite by discovery.
+Discovery follows unresolved control and address dependencies through
+structured node-entry register inputs and memory-input creation origins,
+including narrow byte slices. A frame slot is nominated only when its creation
+origin identifies untouched node-entry memory at an exact entry-frame-relative
+range. Later loads of equal or forwarded values do not create additional input
+dependencies, and unknown bytes created after memory clobbering are not
+treated as entry slots. Historical load records remain available to other
+analyses. Missing dependencies trigger refinement from the function entry.
+Every retained relation still needs a complete finite-value proof for the bits
+it constrains, and aliasing writes still invalidate memory facts. Arbitrary
+external memory and unbounded correlated values are not made finite by discovery.
+
+Producer requests preserve bit masks across node boundaries without rounding
+them to full bytes; arithmetic still conservatively includes the lower-bit
+prefix that can carry or borrow into a demanded bit.
 
 If already tracked memory dependencies repeatedly prevent an exact address
 proof, refinement may additionally use their proven incoming constants as
@@ -63,6 +73,66 @@ global role to a reused physical register. Dependency discovery is bounded and
 incomplete; recovery without manual hints is not guaranteed for every
 interpreter.
 
+Projection of ordinary automatic fields is also scoped to the destination
+node's demands. A nonconstant field enters an edge's joint finite-value
+relation only when the destination demands it. Manual fields and
+automatically promoted context-key fields continue to be projected globally.
+Known constant bytes, exact pointers relative to the entry frame, and
+provenance facts are preserved independently of demand. This prevents
+unrelated fields in different handler phases from multiplying the relation's
+value combinations. The configured budgets and the required proofs for control
+targets, memory addresses, and return state remain unchanged.
+
+For ordinary automatic fields, each tuple column constrains only the demanded
+bits and carries the corresponding mask. Joins retain only bits constrained on
+every incoming path. Other bits in the same byte remain runtime values: a
+field's storage range does not certify a complete finite domain over that
+entire range. A byte becomes constant only when all eight bits are proved
+constant.
+
+Manual fields and promoted context fields still try full-width relations
+globally. If that proof is inconclusive, they may instead retain a relation
+for demanded bits; this never supplies unproved bytes to a context key or
+bypasses an exhausted global budget.
+
+At a fresh-graph restart, ordinary automatic storage ranges fully contained
+in other fields can share those wider carriers. Original phase locations and
+bit demands remain unchanged. Manual fields, context fields, and fields
+nominated directly by an unresolved memory address retain their exact ranges.
+`MaxControlFields` limits the actual retained fields after this normalization.
+`DiscoveredControlFields` remains cumulative and can exceed the active count;
+the field limit and global work budgets are not raised.
+
+An ordinary automatic field with a complete finite-domain proof does not
+immediately add all of its producers as control fields. Discovery records
+those candidate dependencies and activates them only if recovery remains
+blocked and immediate refinement produces no candidates. Fields promoted to
+context keys continue to expand their producers immediately. Discovery visits,
+restarts, and proof work retain their existing cumulative budgets.
+
+A complete finite domain can also prove individual byte lanes constant even
+when the whole word varies. For example, the domain `{0, 0x100}` has a constant
+low byte. Only bytes equal in every enumerated tuple are retained, using the
+target byte order; other lanes remain dynamic. Partial enumeration, unknown
+solver results, or exhausted proof budgets supply no such facts.
+
+Finite proofs can be reused within one recovery run, including refinement
+restarts. A bounded cache compares the complete ordered expression DAG modulo
+consistent renaming of free variables; variable sharing, widths, constant
+bits, operator payloads, and the projection limit remain part of the key.
+Only complete domains and proofs that a domain exceeds its limit are cached.
+Unknown or partial results are not cached; cache misses or capacity limits use
+the ordinary proof path. All global budgets remain enforced, and
+`solverQueries` counts actual solver calls.
+
+Under the same predicate, one complete varying-column domain and proved
+singleton values for every other column determine the exact joint relation,
+provided reachability is established. Multiple varying columns still require
+a joint proof. A masked column covering its entire bit domain can be omitted
+only after proving its input bits independent of the predicate and every other
+column. Shared inputs, unknown results, and partial enumeration never justify
+assuming a Cartesian product.
+
 Defaults are `MaxControlFields = 16` for manual and automatic fields together,
 `MaxControlRefinements = 16`, and `MaxDiscoveryVisits = 65536`. Restarts share
 global node (including synthetic nodes), operation, evaluation, solver-query,
@@ -72,6 +142,17 @@ across attempts. Per-address contexts, active native return slots, control-field
 counts, and tuple counts remain structural limits within each attempt. The
 default solver-query limit remains 4096. Exhaustion publishes no partial result;
 `residualBlocks` describes only the final residual graph.
+
+The CLI option `--vm-max-refinements=N` requires a positive integer and
+defaults to 16. C callers can select the same bound through
+`neverd_devirtualize_source_v2()` or
+`neverd_devirtualize_machine_source_v2()`: zero-initialize
+`neverd_devirtualize_options_v2`, set
+`base.struct_size = sizeof(neverd_devirtualize_options_v2)`, and set
+`max_control_refinements` (zero keeps the default of 16). The embedded `base`
+holds the v1 options; both reserved members must remain zero. Existing v1
+layouts and entry points are unchanged and ignore extension tails. Other
+work and proof budgets still apply.
 
 The JSON report adds `discoverControlState`, `maxControlRefinements`,
 `maxDiscoveryVisits`, `discoveredControlFields`, `discoveredContextFields`,
