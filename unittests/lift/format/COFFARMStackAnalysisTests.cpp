@@ -175,6 +175,75 @@ TEST_F(COFFARMPipeline, StackAnalysisKillsAddressOnArbitraryRedefinition) {
   EXPECT_EQ(Med.FrameHeadroom, 0);
 }
 
+TEST_F(COFFARMPipeline, StackAnalysisRequiresFramePointerProvenance) {
+  for (Arch TheArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    const auto &TRI = getTargetRegInfo(TheArch);
+    SCOPED_TRACE(static_cast<int>(TheArch));
+
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    Low.Name = "frame_pointer_reused_for_data";
+    LowBlock Block;
+    Block.Id = 0;
+
+    NdVar SP = NdVar::reg(TRI.StackPointer, TRI.PointerSize);
+    NdVar FP = NdVar::reg(TRI.FramePointer, TRI.PointerSize);
+    NdVar Addr = NdVar::tmp(TmpBase, TRI.PointerSize);
+
+    LowOp Allocate;
+    Allocate.Opcode = NdOp::INT_SUB;
+    Allocate.Output = SP;
+    Allocate.addInput(SP);
+    Allocate.addInput(NdVar::cst(32, TRI.PointerSize));
+    Block.Ops.push_back(Allocate);
+
+    LowOp SetFramePointer;
+    SetFramePointer.Opcode = NdOp::COPY;
+    SetFramePointer.Output = FP;
+    SetFramePointer.addInput(SP);
+    Block.Ops.push_back(SetFramePointer);
+
+    LowOp FormFrameAddress;
+    FormFrameAddress.Opcode = NdOp::INT_ADD;
+    FormFrameAddress.Output = Addr;
+    FormFrameAddress.addInput(FP);
+    FormFrameAddress.addInput(NdVar::cst(8, TRI.PointerSize));
+    Block.Ops.push_back(FormFrameAddress);
+
+    LowOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(Addr);
+    Store.addInput(NdVar::cst(1, 4));
+    Block.Ops.push_back(Store);
+
+    LowOp ReuseAsData;
+    ReuseAsData.Opcode = NdOp::COPY;
+    ReuseAsData.Output = FP;
+    ReuseAsData.addInput(NdVar::cst(0x79920000, TRI.PointerSize));
+    Block.Ops.push_back(ReuseAsData);
+
+    LowOp LargeDataAdd;
+    LargeDataAdd.Opcode = NdOp::INT_ADD;
+    LargeDataAdd.Output = NdVar::tmp(TmpBase + TmpStride, TRI.PointerSize);
+    LargeDataAdd.addInput(FP);
+    LargeDataAdd.addInput(NdVar::cst(0x800000, TRI.PointerSize));
+    Block.Ops.push_back(LargeDataAdd);
+
+    LowOp Ret;
+    Ret.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(Ret);
+    Low.Blocks.push_back(std::move(Block));
+
+    MedFunc Med = LowToMedConverter().convert(Low, TheArch);
+    EXPECT_EQ(Med.FrameSize, 32);
+    EXPECT_EQ(Med.FrameHeadroom, 0);
+    EXPECT_TRUE(std::any_of(Med.Locals.begin(), Med.Locals.end(),
+                            [](const MedVar &Local) {
+                              return Local.StackOff == -24 && Local.Size == 4;
+                            }));
+  }
+}
+
 TEST_F(COFFARMPipeline, StackAnalysisAccumulatesInPlaceSPUpdates) {
   constexpr Arch TheArch = Arch::X86;
   const auto &TRI = getTargetRegInfo(TheArch);

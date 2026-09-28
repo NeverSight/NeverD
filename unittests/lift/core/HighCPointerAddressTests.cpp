@@ -32902,7 +32902,7 @@ TEST(HighCPointerAddresses, CorpusBufferedCatchUsesParentFrameForIndex) {
   });
   const size_t Catch = Source.find("catch (const ProbeError &e)");
   ASSERT_NE(Catch, std::string::npos) << Source;
-  const auto Load = sourceLineContaining(Source, "t31 =", Catch);
+  const auto Load = sourceLineContaining(Source, "neverd_mem_load_2(", Catch);
   const auto Clear = sourceLineContaining(Source, "neverd_di =");
   const auto Home = sourceLineContaining(Source, ", arg0);");
   ASSERT_NE(Store, Stores.end()) << Source;

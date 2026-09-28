@@ -59,10 +59,13 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
   std::set<std::pair<int64_t, uint16_t>> SeenSlots;
 
   const auto &TRI = getTargetRegInfo(TargetArch);
-  auto IsFrameReg = [&TRI](const NdVar &VN) -> bool {
+  // Only SP has an architectural stack meaning.  A nominal frame-pointer
+  // register is an ordinary callee-saved register until an SP-derived
+  // definition below proves that it actually holds a frame address.
+  auto IsImplicitFrameBase = [&TRI](const NdVar &VN) -> bool {
     if (!VN.isReg())
       return false;
-    return TRI.isFrameReg(VN.Offset);
+    return TRI.isStackPointer(VN.Offset);
   };
 
   auto AddSlot = [&](int64_t Disp, uint16_t Sz) {
@@ -127,7 +130,7 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
       Offset = It->second;
       return true;
     }
-    if (IsFrameReg(VN)) {
+    if (IsImplicitFrameBase(VN)) {
       Offset = 0;
       return true;
     }
@@ -236,7 +239,7 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
             uint8_t Other = 1 - I;
             if (Other >= Op.NumInputs || Op.Inputs[Other].isConst())
               continue;
-            if (!IsFrameReg(Op.Inputs[I]) &&
+            if (!IsImplicitFrameBase(Op.Inputs[I]) &&
                 !FrameDefsInBlock.count(VnKey(Op.Inputs[I])))
               continue;
             int64_t Base = 0;
