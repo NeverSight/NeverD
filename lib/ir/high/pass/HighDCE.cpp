@@ -484,7 +484,7 @@ static void iterativeDCE(HighFunc &Func,
     VarKeyMap<ExprPtr> InlineDefs;
     VarKeyMap<int> InlineDefCount;
     VarKeyMap<int> InlineUseCount;
-    std::unordered_set<const HighExpr *> Seen;
+    std::unordered_map<const HighExpr *, uint8_t> Visits;
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
           S.Dst->Kind == ExprKind::Var) {
@@ -495,7 +495,7 @@ static void iterativeDCE(HighFunc &Func,
           InlineDefs[Key] = S.Val;
       }
       forEachRhsExpr(S, [&](const ExprPtr &E) {
-        countExprVarUses(E, InlineUseCount, Seen);
+        countExprVarUsesUpToTwo(E, InlineUseCount, Visits);
       });
     });
     for (auto It = InlineDefs.begin(); It != InlineDefs.end();) {

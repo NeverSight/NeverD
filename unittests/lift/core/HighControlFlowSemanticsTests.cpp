@@ -2536,6 +2536,27 @@ TEST(HighControlFlowSemantics, ImmutableSingleUseExpressionStillInlines) {
   EXPECT_EQ(F.Body.back().RetVal->Kind, ExprKind::BinOp);
 }
 
+TEST(HighControlFlowSemantics, SharedExpressionKeepsItsRepeatedInputUse) {
+  HighFunc F;
+  auto Calculation = assign(0x1004, 2, 0);
+  Calculation.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(7, 8));
+  auto Shared =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(2), HighExpr::makeConst(1, 8));
+  auto FirstUse = assign(0x1008, 3, 0);
+  FirstUse.Val = Shared;
+  auto SecondUse = assign(0x100c, 4, 0);
+  SecondUse.Val = Shared;
+  F.Body = {
+      assign(0x1000, 1, 10), Calculation, FirstUse, SecondUse,
+      result(0x1010, HighExpr::makeBinop(NdOp::INT_ADD, local(3), local(4)))};
+  ASSERT_EQ(execute(F, 0), 36u);
+  inlineSingleDefSingleUse(F.Body);
+  EXPECT_EQ(execute(F, 0), 36u);
+  EXPECT_EQ(Shared->Operands[0]->Kind, ExprKind::Var);
+  EXPECT_EQ(Shared->Operands[0]->Var.Id, 2u);
+}
+
 TEST(HighControlFlowSemantics, NestedCallRetainsItsPrecedingMemorySnapshot) {
   HighFunc F;
   const auto Address = HighExpr::makeConst(0x4000, 8);

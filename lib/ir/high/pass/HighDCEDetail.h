@@ -18,6 +18,7 @@
 
 #include "neverd/ir/high/HighIR.h"
 
+#include <unordered_map>
 #include <unordered_set>
 
 namespace neverd {
@@ -36,6 +37,12 @@ void rewriteRhsVars(std::vector<HighStmt> &Stmts,
                     const VarKeyMap<ExprPtr> &Map);
 void countExprVarUses(const ExprPtr &E, VarKeyMap<int> &Uses,
                       std::unordered_set<const HighExpr *> &Seen);
+/// Single-use inlining must count a shared expression once per use site,
+/// rather than once per DAG node. Counts saturate at two because only the
+/// distinction between one and multiple uses matters here.
+void countExprVarUsesUpToTwo(
+    const ExprPtr &E, VarKeyMap<int> &Uses,
+    std::unordered_map<const HighExpr *, uint8_t> &Visits);
 /// Reads and effects belong to their original statement. Without an ordering
 /// proof, expression propagation cannot move or duplicate them at a use.
 bool containsNonMovableEffect(const ExprPtr &E);

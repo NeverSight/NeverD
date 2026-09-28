@@ -183,6 +183,30 @@ void countExprVarUses(const ExprPtr &E, VarKeyMap<int> &Uses,
       [&](const ExprPtr &Op) { countExprVarUses(Op, Uses, Seen); });
 }
 
+void countExprVarUsesUpToTwo(
+    const ExprPtr &E, VarKeyMap<int> &Uses,
+    std::unordered_map<const HighExpr *, uint8_t> &Visits) {
+  std::vector<const HighExpr *> Work;
+  if (E)
+    Work.push_back(E.get());
+  while (!Work.empty()) {
+    const HighExpr *Current = Work.back();
+    Work.pop_back();
+    auto &Count = Visits[Current];
+    if (Count == 2)
+      continue;
+    ++Count;
+    if (Current->Kind == ExprKind::Var) {
+      auto &UseCount = Uses[VK(Current->Var)];
+      UseCount = std::min(2, UseCount + 1);
+    }
+    Current->forEachChildExpr([&](const ExprPtr &Child) {
+      if (Child)
+        Work.push_back(Child.get());
+    });
+  }
+}
+
 void inlineSingleDefs(std::vector<HighStmt> &Stmts,
                       const VarKeyMap<ExprPtr> &Candidates) {
   auto Defs = Candidates;
@@ -406,7 +430,7 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
   VarKeyMap<ExprPtr> SingleUseDefs;
   VarKeyMap<int> SingleDefCount;
   VarKeyMap<int> SingleUseCount;
-  std::unordered_set<const HighExpr *> Seen;
+  std::unordered_map<const HighExpr *, uint8_t> Visits;
   walkStmts(Stmts, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
         S.Dst->Kind == ExprKind::Var) {
@@ -420,7 +444,7 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
         SingleUseDefs[Key] = S.Val;
     }
     forEachRhsExpr(S, [&](const ExprPtr &E) {
-      countExprVarUses(E, SingleUseCount, Seen);
+      countExprVarUsesUpToTwo(E, SingleUseCount, Visits);
     });
   });
   for (auto It = SingleUseDefs.begin(); It != SingleUseDefs.end();) {
