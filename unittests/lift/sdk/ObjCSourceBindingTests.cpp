@@ -1573,6 +1573,39 @@ TEST(ObjCSourceBindings,
   EXPECT_TRUE(
       Helpers.count("neverd_swift_private_nominal_metadata_6020_address"));
 
+  // Value-witness arguments take a dedicated binding path before the general
+  // expression walker. They must acquire the same private identity helper.
+  auto WitnessFixture = Fixture();
+  const auto Witness = swiftValueWitnessSourceCallHint(
+      Arch::AArch64, SourceCallTypeHint::SwiftValueWitnessKind::Destroy);
+  ASSERT_TRUE(Witness);
+  auto Value = HighExpr::makeConst(0, 8);
+  Value->Type = NdType::makePtr(NdType::makeVoid());
+  auto Identity =
+      HighExpr::makeConst(Metadata, 8, ConstantAddressProvenance::DataAddress);
+  Identity->Type = NdType::makePtr(NdType::makeVoid());
+  auto Call = HighExpr::makeCall("indirect_call", 0,
+                                 {std::move(Value), std::move(Identity)});
+  Call->Type = NdType::makeVoid();
+  Call->IsIndirectCall = true;
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Witness);
+  HighStmt Statement;
+  Statement.Kind = StmtKind::ExprStmt;
+  Statement.Val = std::move(Call);
+  WitnessFixture.Function.ReturnType = NdType::makeVoid();
+  WitnessFixture.Function.Body = {std::move(Statement)};
+  const auto WitnessBound =
+      bindObjCSourceReferences(WitnessFixture.Function, WitnessFixture.Image);
+  ASSERT_TRUE(WitnessBound.Limitation.empty()) << WitnessBound.Limitation;
+  ASSERT_EQ(WitnessBound.SwiftPrivateNominalMetadataAccessors.size(), 1U);
+  const auto WitnessIdentity =
+      WitnessBound.Function.Body[0].Val->Operands.back();
+  ASSERT_TRUE(WitnessIdentity->SourceCallHint);
+  EXPECT_EQ(
+      WitnessIdentity->SourceCallHint->CallKind,
+      SourceCallTypeHint::Kind::RuntimeSwiftPrivateNominalMetadataAddress);
+  EXPECT_TRUE(objcSourceCallBound(*WitnessIdentity, WitnessFixture.Image, {}));
+
   // The published binding is invalidated by a changed machine return.
   llvm::support::endian::write32le(F.Image.Segments.back().Data.data() + 0x24,
                                    0x91008400);
