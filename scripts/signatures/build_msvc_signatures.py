@@ -246,6 +246,45 @@ class PatternLine:
         return PatternLine(text, self.key, self.names, refs)
 
 
+def alias_order(name: str) -> tuple:
+    """Where a `:offset name` token sorts among one routine's names.
+
+    NeverD shows, of the names a routine has at one offset, the one with the
+    fewest leading underscores, then the shorter, then the smaller
+    (preferredAliasOrder in include/neverd/sigs/Signature.h); lines list them
+    in that order.
+    """
+
+    offset, _, bare = name.partition(" ")
+    return (offset, len(bare) - len(bare.lstrip("_")), len(bare), bare)
+
+
+def shared_names(name_sets: list[tuple[str, ...]]) -> set[str]:
+    """The names every one of these claims gives its routine."""
+
+    shared = set(name_sets[0])
+    for names in name_sets[1:]:
+        shared &= set(names)
+    return shared
+
+
+def aliases_of(lines: list[PatternLine]) -> PatternLine:
+    """One line for claims that give the same bytes names they share.
+
+    ELF libraries give one routine several symbols -- glibc's `puts` is also
+    `_IO_puts` -- and builds of a library do not all define the same ones.
+    Byte-identical claims that share a name are one routine, which has every
+    name any of them gives it.
+    """
+
+    names = tuple(sorted({name for line in lines for name in line.names}, key=alias_order))
+    merged = common_refs(lines)
+    tokens = merged.key.split()
+    stated = [f"^{offset:04X} {name}" for offset, name in merged.refs]
+    text = " ".join([*tokens[:4], *names, *stated, *tokens[4:]])
+    return PatternLine(text, merged.key, names, merged.refs)
+
+
 def distinguished(lines: list[PatternLine]) -> bool:
     """Whether references tell apart every two of these same-byte lines.
 
@@ -385,6 +424,8 @@ class FoldResult:
     # Every distinct claim the libraries made, the dropped ones included.
     evidence: list[PatternLine] = field(default_factory=list)
     duplicates: int = 0
+    # Groups of same-byte claims merged because their names are one routine's.
+    merged_aliases: int = 0
     conflicting_lines: int = 0
     conflicting_groups: int = 0
     # Lines kept although others state the same bytes: references tell them
@@ -402,12 +443,15 @@ class FoldResult:
 def fold(lines: list[str]) -> FoldResult:
     """Fold identical lines and drop every ambiguous byte claim.
 
-    A group of lines with the same key but more than one set of names is
-    ambiguous: the bytes cannot say which routine they are.  All of its
-    lines are dropped, and the key is kept so that `settle_directory` can
-    drop the same bytes from the other files of the directory -- unless
-    their references tell every two of them apart (see `distinguished`),
-    when the matcher can: they are all kept.
+    Lines with the same key whose sets of names share a name are one
+    routine's, under the aliases its builds define: they become one line with
+    all of those names (see `aliases_of`).  A group of lines with the same
+    key but sets of names with nothing in common is ambiguous: the bytes
+    cannot say which routine they are.  All of its lines are dropped, and the
+    key is kept so that `settle_directory` can drop the same bytes from the
+    other files of the directory -- unless their references tell every two of
+    them apart (see `distinguished`), when the matcher can: they are all
+    kept.
     """
 
     copies: dict[str, dict[tuple[str, ...], list[PatternLine]]] = {}
@@ -423,6 +467,11 @@ def fold(lines: list[str]) -> FoldResult:
     for key, by_names in copies.items():
         variants = {names: common_refs(lines) for names, lines in by_names.items()}
         result.evidence.extend(variants.values())
+        if len(variants) > 1 and shared_names(list(variants)):
+            result.lines.append(
+                aliases_of([line for lines in by_names.values() for line in lines]))
+            result.merged_aliases += 1
+            continue
         if len(variants) > 1 and distinguished(list(variants.values())):
             result.lines.extend(variants.values())
             result.distinguished_lines += len(variants)
@@ -441,6 +490,12 @@ def fold(lines: list[str]) -> FoldResult:
     return result
 
 
+def another_routine(names: tuple[str, ...], other: tuple[str, ...]) -> bool:
+    """Whether two claims name different routines: no name in common."""
+
+    return not set(names) & set(other)
+
+
 def settle_directory(results: dict[Path, FoldResult]) -> None:
     """Drop lines whose bytes another file of the same directory contradicts.
 
@@ -453,24 +508,33 @@ def settle_directory(results: dict[Path, FoldResult]) -> None:
     """
 
     # The names each file gives each key.  A key stays only if no file found
-    # it ambiguous and every file that states it gives it the same names:
-    # with the Rich header choosing one release's file, references tell
-    # same-byte routines apart only among the lines of that one file.
-    claims: dict[str, frozenset[tuple[str, ...]] | None] = {}
+    # it ambiguous and the files that state it agree: each names one routine
+    # and a name is common to all of them (the routine's aliases differ from
+    # library to library), or they keep the same lines that references tell
+    # apart -- with the Rich header choosing one release's file, references
+    # tell same-byte routines apart only among the lines of that one file.
+    ambiguous: set[str] = set()
     for result in results.values():
-        for key in result.ambiguous_keys:
-            claims[key] = None
+        ambiguous |= result.ambiguous_keys
+    claims: dict[str, list[frozenset[tuple[str, ...]]]] = {}
     for result in results.values():
         named: dict[str, set[tuple[str, ...]]] = {}
         for line in result.lines:
             named.setdefault(line.key, set()).add(line.names)
         for key, names in named.items():
-            if key not in claims:
-                claims[key] = frozenset(names)
-            elif claims[key] != frozenset(names):
-                claims[key] = None
+            claims.setdefault(key, []).append(frozenset(names))
+
+    def agreed(key: str) -> bool:
+        if key in ambiguous:
+            return False
+        entries = claims[key]
+        if all(len(entry) == 1 for entry in entries):
+            return bool(shared_names([next(iter(entry)) for entry in entries]))
+        return all(entry == entries[0] for entry in entries)
+
+    settled = {key: agreed(key) for key in claims}
     for result in results.values():
-        kept = [line for line in result.lines if claims[line.key] is not None]
+        kept = [line for line in result.lines if settled[line.key]]
         result.dropped_across_files = len(result.lines) - len(kept)
         result.lines = kept
 
@@ -517,7 +581,8 @@ def settle_directory(results: dict[Path, FoldResult]) -> None:
             if shape.crc_len and len(shape.lead) < 2 * shape.total:
                 for k in by_crc.get((shape.crc_len, shape.crc), ()):
                     _, other, names = claimed[k]
-                    if names != line.names and other != shape and shape.covered_by(other):
+                    if another_routine(names, line.names) and other != shape \
+                            and shape.covered_by(other):
                         covered = True
                         break
             # A line whose first bytes are relocated has no range to search;
@@ -538,7 +603,8 @@ def settle_directory(results: dict[Path, FoldResult]) -> None:
                             break
                 for k in sorted(candidates) if candidates is not None else range(start, end):
                     _, other, names = claimed[k]
-                    if names != line.names and other != shape and shape.covered_by(other):
+                    if another_routine(names, line.names) and other != shape \
+                            and shape.covered_by(other):
                         covered = True
                         break
             if not covered:
@@ -668,7 +734,10 @@ def write(
         f"{relative.parent.as_posix()} names differently, "
         f"{result.dropped_covered} for bytes a routine of another name states "
         f"as well; {result.distinguished_lines} kept because references tell "
-        f"same-byte routines apart)",
+        f"same-byte routines apart"
+        + (f", {result.merged_aliases} merged as one routine's aliases"
+           if result.merged_aliases else "")
+        + ")",
         flush=True,
     )
     for example in result.conflict_examples[:5]:

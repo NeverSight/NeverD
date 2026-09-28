@@ -114,17 +114,27 @@ std::optional<unsigned> coffRelocationWidth(uint16_t Machine, uint16_t Type);
 size_t statedByteCount(llvm::ArrayRef<bool> Wildcard,
                        const PatternGeneratorOptions &Opts);
 
-/// Writes one .pat line for \p Data, the complete bytes of function
-/// \p Name, where \p Wildcard marks the bytes relocations rewrite and
-/// \p References, sorted by offset, the routines it branches to.
-/// Returns false, writing nothing, when the function is shorter than
-/// Opts.MinFuncSize or its line would state fewer than
+/// Writes one .pat line for \p Data, the complete bytes of the function
+/// called \p Names -- one name, or every linkage name of a routine several
+/// symbols label, each at offset 0 -- where \p Wildcard marks the bytes
+/// relocations rewrite and \p References, sorted by offset, the routines it
+/// branches to. Returns false, writing nothing, when the function is shorter
+/// than Opts.MinFuncSize or its line would state fewer than
 /// SignatureMatcher::MinStatedBytes bytes exactly.
-bool emitPatternLine(llvm::raw_ostream &OS, llvm::StringRef Name,
+bool emitPatternLine(llvm::raw_ostream &OS,
+                     llvm::ArrayRef<llvm::StringRef> Names,
                      llvm::ArrayRef<uint8_t> Data,
                      llvm::ArrayRef<bool> Wildcard,
                      const PatternGeneratorOptions &Opts,
                      llvm::ArrayRef<FuncRef> References = {});
+inline bool emitPatternLine(llvm::raw_ostream &OS, llvm::StringRef Name,
+                            llvm::ArrayRef<uint8_t> Data,
+                            llvm::ArrayRef<bool> Wildcard,
+                            const PatternGeneratorOptions &Opts,
+                            llvm::ArrayRef<FuncRef> References = {}) {
+  return emitPatternLine(OS, llvm::ArrayRef<llvm::StringRef>(Name), Data,
+                         Wildcard, Opts, References);
+}
 
 /// Where a COFF relocation states a direct branch: the function offset a
 /// `^offset name` reference names, or std::nullopt.  That is a REL32 field
@@ -147,7 +157,9 @@ std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
 /// symbol is a function, ending at the next symbol of any kind in its
 /// section. An ELF object keeps its relocations in sections of their own,
 /// each naming the section it applies to; their footprints come from
-/// elfRelocationFootprint. Mach-O relocations cover four bytes.
+/// elfRelocationFootprint. The ELF function symbols that label one address
+/// are one routine's aliases and share one line, their names in
+/// preferredAliasOrder. Mach-O relocations cover four bytes.
 PatternGeneratorStats generatePatterns(const llvm::object::ObjectFile &Obj,
                                        const PatternGeneratorOptions &Opts,
                                        llvm::raw_ostream &OS);

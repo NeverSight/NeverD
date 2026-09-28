@@ -111,6 +111,33 @@ class FoldTests(unittest.TestCase):
         self.assertEqual(result.distinguished_lines, 2)
         self.assertEqual(result.ambiguous_keys, set())
 
+    def test_claims_that_share_a_name_are_one_routines_aliases(self) -> None:
+        # One glibc build defines __libc_malloc at malloc's address too, the
+        # other only malloc: one routine, which has both names.
+        result = fold(
+            [
+                "AABBCCDD 00 0000 0004 :0000 malloc :0000 __libc_malloc",
+                "AABBCCDD 00 0000 0004 :0000 malloc",
+                "AABBCCDD 00 0000 0004 :0000 __malloc :0000 malloc",
+            ]
+        )
+        self.assertEqual(
+            result.texts,
+            ["AABBCCDD 00 0000 0004 :0000 malloc :0000 __malloc :0000 __libc_malloc"],
+        )
+        self.assertEqual(result.merged_aliases, 1)
+        self.assertEqual(result.ambiguous_keys, set())
+
+    def test_alias_sets_with_no_name_in_common_are_ambiguous(self) -> None:
+        result = fold(
+            [
+                "AABBCCDD 00 0000 0004 :0000 puts :0000 _IO_puts",
+                "AABBCCDD 00 0000 0004 :0000 fputs",
+            ]
+        )
+        self.assertEqual(result.texts, [])
+        self.assertEqual(result.ambiguous_keys, {"AABBCCDD 00 0000 0004"})
+
     def test_a_twin_without_a_telling_reference_leaves_the_bytes_ambiguous(self) -> None:
         result = fold(
             [
@@ -174,6 +201,18 @@ class SettleDirectoryTests(unittest.TestCase):
         self.assertEqual(len(older.texts), 2)
         self.assertEqual(len(newer.texts), 2)
 
+    def test_files_that_give_one_routine_different_aliases_keep_it(self) -> None:
+        older = fold(["AABBCCDD 00 0000 0004 :0000 malloc :0000 __malloc"])
+        newer = fold(["AABBCCDD 00 0000 0004 :0000 malloc :0000 __libc_malloc"])
+        disjoint = fold(["11223344 00 0000 0004 :0000 puts :0000 _IO_puts"])
+        other = fold(["11223344 00 0000 0004 :0000 fputs"])
+        settle_directory({Path("libc6-2.31.pat"): older, Path("libc6-2.35.pat"): newer,
+                          Path("a.pat"): disjoint, Path("b.pat"): other})
+        self.assertEqual(older.texts, ["AABBCCDD 00 0000 0004 :0000 malloc :0000 __malloc"])
+        self.assertEqual(newer.texts, ["AABBCCDD 00 0000 0004 :0000 malloc :0000 __libc_malloc"])
+        self.assertEqual(disjoint.texts, [])
+        self.assertEqual(other.texts, [])
+
     def test_a_claim_several_files_repeat_under_one_name_is_kept(self) -> None:
         line = "11223344 00 0000 0004 :0000 memcpy"
         older, newer = fold([line]), fold([line])
@@ -204,6 +243,11 @@ class OpeningTests(unittest.TestCase):
     def test_the_same_routine_at_another_length_does_not_drop_it(self) -> None:
         short = f"{self.PROLOGUE} 00 0000 0010 :0000 ?g@@YAXXZ"
         longer = f"{self.PROLOGUE}F30300AAFD7BC1A8 00 0000 0018 :0000 ?g@@YAXXZ"
+        self.assertEqual(self._settle(short, longer), [short, longer])
+
+    def test_an_alias_of_the_same_routine_at_another_length_does_not_drop_it(self) -> None:
+        short = f"{self.PROLOGUE} 00 0000 0010 :0000 _exit"
+        longer = f"{self.PROLOGUE}F30300AAFD7BC1A8 00 0000 0018 :0000 _Exit :0000 _exit"
         self.assertEqual(self._settle(short, longer), [short, longer])
 
     def test_a_byte_the_longer_routine_relocates_is_a_difference(self) -> None:

@@ -414,15 +414,16 @@ void markWildcard(MutableArrayRef<bool> Wildcard, uint64_t Offset,
 }
 
 /// Writes a function's line, or counts why it has none.
-void countOrEmit(raw_ostream &OS, StringRef Name, ArrayRef<uint8_t> Data,
-                 ArrayRef<bool> Wildcard, const PatternGeneratorOptions &Opts,
+void countOrEmit(raw_ostream &OS, ArrayRef<StringRef> Names,
+                 ArrayRef<uint8_t> Data, ArrayRef<bool> Wildcard,
+                 const PatternGeneratorOptions &Opts,
                  PatternGeneratorStats &Stats,
                  ArrayRef<FuncRef> References = {}) {
   if (Data.size() < Opts.MinFuncSize)
     ++Stats.TooSmall;
   else if (statedByteCount(Wildcard, Opts) < SignatureMatcher::MinStatedBytes)
     ++Stats.TooWeak;
-  else if (emitPatternLine(OS, Name, Data, Wildcard, Opts, References))
+  else if (emitPatternLine(OS, Names, Data, Wildcard, Opts, References))
     ++Stats.Functions;
 }
 
@@ -574,7 +575,29 @@ PatternGeneratorStats generateELF(const ELFObjectFileBase &Obj,
       List.push_back({Rel.getOffset(), static_cast<uint32_t>(Rel.getType())});
   }
 
+  // The function symbols that label one address are one routine's names:
+  // glibc's `puts` and `_IO_puts`, or a constructor's C1 and C2 symbols.
+  struct Routine {
+    GenericFunction Fn;
+    SmallVector<StringRef, 2> Names;
+  };
+  std::vector<Routine> Routines;
+  std::map<std::pair<SectionRef, uint64_t>, size_t> ByStart;
   forEachGenericFunction(Obj, [&](const GenericFunction &Fn) {
+    auto [It, Fresh] =
+        ByStart.try_emplace({Fn.Section, Fn.Offset}, Routines.size());
+    if (Fresh)
+      Routines.push_back({Fn, {}});
+    SmallVector<StringRef, 2> &Names = Routines[It->second].Names;
+    if (!llvm::is_contained(Names, Fn.Name))
+      Names.push_back(Fn.Name);
+  });
+
+  for (Routine &R : Routines) {
+    llvm::sort(R.Names, [](StringRef A, StringRef B) {
+      return preferredAliasOrder(A, B);
+    });
+    const GenericFunction &Fn = R.Fn;
     const uint64_t Begin = Fn.Offset;
     const uint64_t End = Fn.Offset + Fn.Data.size();
     SmallVector<bool, 256> Wildcard(Fn.Data.size(), false);
@@ -603,10 +626,10 @@ PatternGeneratorStats generateELF(const ELFObjectFileBase &Obj,
     }
     if (!Supported) {
       ++Stats.UnsupportedRelocation;
-      return;
+      continue;
     }
-    countOrEmit(OS, Fn.Name, Fn.Data, Wildcard, Opts, Stats);
-  });
+    countOrEmit(OS, R.Names, Fn.Data, Wildcard, Opts, Stats);
+  }
   return Stats;
 }
 
@@ -783,12 +806,12 @@ size_t statedByteCount(ArrayRef<bool> Wildcard,
   return Stated;
 }
 
-bool emitPatternLine(raw_ostream &OS, StringRef Name, ArrayRef<uint8_t> Data,
-                     ArrayRef<bool> Wildcard,
+bool emitPatternLine(raw_ostream &OS, ArrayRef<StringRef> Names,
+                     ArrayRef<uint8_t> Data, ArrayRef<bool> Wildcard,
                      const PatternGeneratorOptions &Opts,
                      ArrayRef<FuncRef> References) {
   const size_t Size = Data.size();
-  if (Size < Opts.MinFuncSize || Wildcard.size() != Size ||
+  if (Names.empty() || Size < Opts.MinFuncSize || Wildcard.size() != Size ||
       statedByteCount(Wildcard, Opts) < SignatureMatcher::MinStatedBytes)
     return false;
 
@@ -803,7 +826,8 @@ bool emitPatternLine(raw_ostream &OS, StringRef Name, ArrayRef<uint8_t> Data,
 
   OS << format(" %02X %04X %04X", static_cast<unsigned>(CRCLen), CRC,
                static_cast<unsigned>(Size));
-  OS << " :0000 " << Name;
+  for (StringRef Name : Names)
+    OS << " :0000 " << Name;
   for (const FuncRef &Ref : References)
     OS << format(" ^%04X ", static_cast<unsigned>(Ref.Offset)) << Ref.Name;
 

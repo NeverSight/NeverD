@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -128,10 +129,12 @@ public:
 
   /// Build a map from address to function name for quick lookup.
   ///
-  /// An address the matches name differently gets no name, unless exactly one
-  /// of those names comes from a match whose references were all confirmed:
-  /// the bytes alone could not tell the routines apart, but what they call
-  /// could.
+  /// Each match gives the routine at its address a set of names: its name
+  /// and its aliases. Matches whose sets share a name agree, and the address
+  /// takes the preferred shared name (preferredAliasOrder). An address the
+  /// matches name differently gets no name, unless the matches whose
+  /// references were all confirmed agree on one: the bytes alone could not
+  /// tell the routines apart, but what they call could.
   std::unordered_map<uint64_t, std::string> buildNameMap() const;
 
 private:
@@ -151,6 +154,15 @@ private:
   std::vector<size_t> MatchModules;
 
   void clearMatches();
+
+  /// What the matches settle for one address: the name shown, and every name
+  /// the agreeing matches give the routine.
+  struct SettledRoutine {
+    std::string Name;
+    std::set<std::string> Names;
+  };
+  /// The routines the matches settle; see \ref buildNameMap.
+  std::unordered_map<uint64_t, SettledRoutine> settleRoutines() const;
 
   /// Drop the matches their references contradict and record the ones they
   /// confirm; see \ref apply.

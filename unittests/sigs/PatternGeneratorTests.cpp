@@ -803,3 +803,24 @@ TEST(PatternGeneratorELF, FootprintTable) {
   EXPECT_FALSE(elfRelocationFootprint(ELF::EM_ARM, ELF::R_ARM_PRIVATE_0));
   EXPECT_FALSE(elfRelocationFootprint(ELF::EM_MIPS, ELF::R_MIPS_32));
 }
+
+TEST(PatternGeneratorELF, SymbolsThatLabelOneAddressShareALine) {
+  std::vector<uint8_t> Code = sequentialCode(64);
+  ELFObjectBuilder Builder(ELF::EM_X86_64, true, Code);
+  // glibc defines _IO_puts and makes puts an alias of it.
+  Builder.addFunction("_IO_puts", 0);
+  Builder.addFunction("puts", 0);
+  Builder.addFunction("__IO_puts_internal", 0);
+  Builder.addFunction("fputs", 32);
+
+  Generated Out = generate(Builder.build());
+  ASSERT_EQ(Out.Lines.size(), 2u);
+  EXPECT_TRUE(StringRef(Out.Lines[0]).ends_with(
+      ":0000 puts :0000 _IO_puts :0000 __IO_puts_internal"))
+      << Out.Lines[0];
+  EXPECT_TRUE(StringRef(Out.Lines[1]).ends_with(":0000 fputs"));
+  EXPECT_EQ(Out.Stats.Functions, 2u);
+  auto Parsed = PatternParser::parseLine(Out.Lines[0]);
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  EXPECT_EQ(Parsed->PublicNames.size(), 3u);
+}
