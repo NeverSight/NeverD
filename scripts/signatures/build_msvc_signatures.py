@@ -671,20 +671,36 @@ def verify(sigmaker: Path, path: Path) -> None:
 
 def generate(
     args: argparse.Namespace, members: list[Asset], work_root: Path
-) -> tuple[list[str], list[dict]]:
-    """Every line neverd-sigmaker writes for one file's assets, and their sources."""
+) -> tuple[list[str], int, list[dict]]:
+    """Every distinct line neverd-sigmaker writes for one file's assets, how
+    many copies of those lines it wrote besides, and the assets' sources.
 
-    generated: list[str] = []
+    The builds of a library an asset collects -- hundreds of glibc package
+    revisions -- write most lines over and over, so each is kept once as it
+    is read.
+    """
+
+    generated: dict[str, None] = {}
+    repeated = 0
     sources = []
     for asset in members:
         libraries = extract(asset, work_root / asset.name)
         pat = work_root / f"{asset.name}.pat"
         summary = run_sigmaker(args.sigmaker, libraries, asset.machine, args.tail, pat)
-        lines = pat.read_text(encoding="utf-8").splitlines()
         print(f"{asset.name}: {len(libraries)} libraries; {summary}", flush=True)
-        if not lines:
+        written = 0
+        with pat.open(encoding="utf-8") as lines:
+            for line in lines:
+                line = line.rstrip("\n")
+                if not line.strip():
+                    continue
+                written += 1
+                if line in generated:
+                    repeated += 1
+                else:
+                    generated[line] = None
+        if not written:
             raise BuildError(f"{asset.name} produced no signatures")
-        generated.extend(lines)
         entry = asset.provenance()
         # The summary names the scratch file it wrote; the record keeps only
         # the file's name, so that it reads the same on every machine and run.
@@ -692,7 +708,7 @@ def generate(
         sources.append(entry)
         shutil.rmtree(work_root / asset.name)
         pat.unlink()
-    return generated, sources
+    return list(generated), repeated, sources
 
 
 def imported_lines(output: Path, relative: Path) -> tuple[list[str], dict | None]:
@@ -816,12 +832,13 @@ def build(args: argparse.Namespace) -> int:
             results: dict[Path, FoldResult] = {}
             sources: dict[Path, list[dict]] = {}
             for relative, members in sorted(outputs.items()):
-                generated, sources[relative] = generate(args, members, work_root)
+                generated, repeated, sources[relative] = generate(args, members, work_root)
                 imported, provenance = imported_lines(args.output, relative)
                 if provenance:
                     generated.extend(imported)
                     sources[relative].append(provenance)
                 results[relative] = fold(generated)
+                results[relative].duplicates += repeated
                 del generated
             settle_directory(results)
             for relative, result in sorted(results.items()):

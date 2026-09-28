@@ -564,6 +564,23 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(provenance["lines"], 4)
         self.assertIn("4 lines in 2 parts", report)
 
+    def test_lines_builds_repeat_are_kept_once_and_counted(self) -> None:
+        toolset = {"kind": "toolset", "arch": "x64", "visual_studio": {"year": 2022}}
+        for version in ("14.43.1", "14.44.2"):
+            self._asset(
+                f"vs2022-{version}-x64", dict(toolset, toolset_version=version),
+                {"vc/lib/x64/libcmt.lib": version.encode()},
+            )
+
+        report = self._run()
+
+        self.assertEqual(
+            (self.root / "sigs/pe/x86/64/vs2022.pat").read_text().splitlines(),
+            ["AA06CCDD 00 0000 0004 :0000 x64_libcmt"],
+        )
+        # Each build wrote the same three lines.
+        self.assertIn("(3 duplicates folded,", report)
+
     def test_archive_that_disagrees_with_its_manifest_fails(self) -> None:
         self._asset(
             "winsdk-10.0.26100.0-x64",
