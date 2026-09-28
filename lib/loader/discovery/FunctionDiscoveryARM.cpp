@@ -15,6 +15,7 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Error.h"
 
 #include <capstone/arm.h>
@@ -121,6 +122,11 @@ llvm::Error discoverARMReachableModes(BinaryImage &Img) {
             ": ARM mode discovery could not initialize the disassembler",
         llvm::inconvertibleErrorCode());
 
+  const auto Hex = [](va_t Address) { return "0x" + llvm::utohexstr(Address); };
+  const auto ModeName = [](InstructionMode Mode) {
+    return Mode == InstructionMode::Thumb ? "Thumb" : "ARM";
+  };
+
   using ModeAt = std::pair<va_t, InstructionMode>;
   std::deque<ModeAt> Pending;
   for (const auto &[Address, Mode] : Img.ARMCodeModeEntries)
@@ -156,14 +162,17 @@ llvm::Error discoverARMReachableModes(BinaryImage &Img) {
           return llvm::make_error<llvm::StringError>(
               std::string(Format) +
                   ": conflicting reachable ARM/Thumb instructions at " +
-                  std::to_string(Cur),
+                  Hex(Cur) + ", reached as " + ModeName(Mode) + " from " +
+                  Hex(Start),
               llvm::inconvertibleErrorCode());
         break;
       }
       if (Existing != Decoded.begin() && std::prev(Existing)->second.End > Cur)
         return llvm::make_error<llvm::StringError>(
-            std::string(Format) +
-                ": branch enters the middle of an ARM/Thumb instruction",
+            std::string(Format) + ": " + ModeName(Mode) + " code reached at " +
+                Hex(Cur) + " from " + Hex(Start) +
+                " enters the middle of the instruction at " +
+                Hex(std::prev(Existing)->first),
             llvm::inconvertibleErrorCode());
 
       const size_t Offset = static_cast<size_t>(Cur - Seg->VA);
@@ -179,8 +188,10 @@ llvm::Error discoverARMReachableModes(BinaryImage &Img) {
       if (Insn->size > InvalidVA - Cur ||
           (Existing != Decoded.end() && Existing->first < Cur + Insn->size))
         return llvm::make_error<llvm::StringError>(
-            std::string(Format) +
-                ": overlapping reachable ARM/Thumb instructions",
+            std::string(Format) + ": the " + ModeName(Mode) +
+                " instruction at " + Hex(Cur) + ", reached from " + Hex(Start) +
+                ", overlaps the instruction at " +
+                Hex(Existing == Decoded.end() ? Cur : Existing->first),
             llvm::inconvertibleErrorCode());
       if (Decoded.size() == kMaxDiscoveredInstructions)
         return llvm::make_error<llvm::StringError>(
