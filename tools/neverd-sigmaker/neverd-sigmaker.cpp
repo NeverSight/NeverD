@@ -233,6 +233,11 @@ int main(int Argc, char *Argv[]) {
                          << format_hex(Type, 6) << " (machine "
                          << format_hex(Mach, 6)
                          << ") were left out: its width is unknown\n";
+  for (const auto &[Mach, Type] : Stats.Patterns.UnsupportedELFRelocations)
+    WithColor::warning() << "functions with ELF relocation type " << Type
+                         << " (machine " << Mach
+                         << ") were left out: the bytes it may change are "
+                            "unknown\n";
 
   outs() << "Generated " << Stats.Patterns.Functions << " signatures → "
          << OutputFile << " (" << Stats.Objects << " objects";

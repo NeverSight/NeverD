@@ -11,7 +11,9 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/COFF.h"
+#include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Format.h"
 
@@ -33,7 +35,201 @@ PatternGeneratorStats::operator+=(const PatternGeneratorStats &Other) {
   UnsupportedRelocation += Other.UnsupportedRelocation;
   UnsupportedCOFFRelocations.insert(Other.UnsupportedCOFFRelocations.begin(),
                                     Other.UnsupportedCOFFRelocations.end());
+  UnsupportedELFRelocations.insert(Other.UnsupportedELFRelocations.begin(),
+                                   Other.UnsupportedELFRelocations.end());
   return *this;
+}
+
+std::optional<ELFRelocationFootprint> elfRelocationFootprint(uint16_t Machine,
+                                                             uint32_t Type) {
+  auto Field = [](unsigned Width) { return ELFRelocationFootprint{0, Width}; };
+  switch (Machine) {
+  case ELF::EM_X86_64:
+    switch (Type) {
+    case ELF::R_X86_64_NONE:
+      return Field(0);
+    case ELF::R_X86_64_8:
+    case ELF::R_X86_64_PC8:
+      return Field(1);
+    case ELF::R_X86_64_16:
+    case ELF::R_X86_64_PC16:
+      return Field(2);
+    case ELF::R_X86_64_PC32:
+    case ELF::R_X86_64_GOT32:
+    case ELF::R_X86_64_PLT32:
+    case ELF::R_X86_64_GOTPCREL:
+    case ELF::R_X86_64_32:
+    case ELF::R_X86_64_32S:
+    case ELF::R_X86_64_DTPOFF32:
+    case ELF::R_X86_64_TPOFF32:
+    case ELF::R_X86_64_GOTPC32:
+    case ELF::R_X86_64_SIZE32:
+      return Field(4);
+    case ELF::R_X86_64_64:
+    case ELF::R_X86_64_DTPMOD64:
+    case ELF::R_X86_64_DTPOFF64:
+    case ELF::R_X86_64_TPOFF64:
+    case ELF::R_X86_64_PC64:
+    case ELF::R_X86_64_GOTOFF64:
+    case ELF::R_X86_64_GOT64:
+    case ELF::R_X86_64_GOTPCREL64:
+    case ELF::R_X86_64_GOTPC64:
+    case ELF::R_X86_64_GOTPLT64:
+    case ELF::R_X86_64_PLTOFF64:
+    case ELF::R_X86_64_SIZE64:
+      return Field(8);
+    // A relaxable GOT load: the opcode and ModRM ahead of the field become
+    // those of `lea`, a direct `call`/`jmp` (with a prefix or a trailing
+    // `nop`) or an immediate form. The REX variants reach one byte further
+    // back to the REX prefix, the CODE_4 ones to a two-byte REX2 prefix.
+    case ELF::R_X86_64_GOTPCRELX:
+      return ELFRelocationFootprint{2, 4};
+    case ELF::R_X86_64_REX_GOTPCRELX:
+    // Initial-exec and descriptor loads become immediate moves when the
+    // variable is the executable's own.
+    case ELF::R_X86_64_GOTTPOFF:
+    case ELF::R_X86_64_GOTPC32_TLSDESC:
+      return ELFRelocationFootprint{3, 4};
+    case ELF::R_X86_64_CODE_4_GOTPCRELX:
+    case ELF::R_X86_64_CODE_4_GOTTPOFF:
+    case ELF::R_X86_64_CODE_4_GOTPC32_TLSDESC:
+      return ELFRelocationFootprint{4, 4};
+    case ELF::R_X86_64_CODE_6_GOTTPOFF:
+      return ELFRelocationFootprint{6, 4};
+    // The descriptor call `call *(%rax)` becomes a two-byte no-op.
+    case ELF::R_X86_64_TLSDESC_CALL:
+      return Field(2);
+    // General dynamic: `.byte 0x66; lea x@tlsgd(%rip),%rdi` and a call to
+    // __tls_get_addr, 16 bytes with the field at 4, all rewritten.
+    case ELF::R_X86_64_TLSGD:
+      return ELFRelocationFootprint{4, 12};
+    // Local dynamic: `lea x@tlsld(%rip),%rdi` and the call, 12 bytes (13
+    // with `call *__tls_get_addr@GOTPCREL(%rip)`) with the field at 3.
+    case ELF::R_X86_64_TLSLD:
+      return ELFRelocationFootprint{3, 10};
+    }
+    return std::nullopt;
+
+  case ELF::EM_386:
+    switch (Type) {
+    case ELF::R_386_NONE:
+      return Field(0);
+    case ELF::R_386_8:
+    case ELF::R_386_PC8:
+      return Field(1);
+    case ELF::R_386_16:
+    case ELF::R_386_PC16:
+      return Field(2);
+    case ELF::R_386_32:
+    case ELF::R_386_PC32:
+    case ELF::R_386_GOT32:
+    case ELF::R_386_PLT32:
+    case ELF::R_386_GOTOFF:
+    case ELF::R_386_GOTPC:
+    case ELF::R_386_32PLT:
+    case ELF::R_386_TLS_TPOFF:
+    case ELF::R_386_TLS_LE:
+    case ELF::R_386_TLS_LDO_32:
+    case ELF::R_386_TLS_LE_32:
+    case ELF::R_386_TLS_DTPMOD32:
+    case ELF::R_386_TLS_DTPOFF32:
+    case ELF::R_386_TLS_TPOFF32:
+      return Field(4);
+    // Relaxable GOT loads and initial-exec or descriptor loads: the opcode
+    // and ModRM ahead of the field change with the instruction.
+    case ELF::R_386_GOT32X:
+    case ELF::R_386_TLS_IE:
+    case ELF::R_386_TLS_GOTIE:
+    case ELF::R_386_TLS_IE_32:
+    case ELF::R_386_TLS_GOTDESC:
+      return ELFRelocationFootprint{2, 4};
+    case ELF::R_386_TLS_DESC_CALL:
+      return Field(2);
+    // General dynamic: `lea x@tlsgd(,%ebx,1),%eax` (the field at 3) and a
+    // call to ___tls_get_addr, direct or through the GOT.
+    case ELF::R_386_TLS_GD:
+      return ELFRelocationFootprint{3, 10};
+    // Local dynamic: `lea x@tlsldm(%ebx),%eax` (the field at 2) and the call.
+    case ELF::R_386_TLS_LDM:
+      return ELFRelocationFootprint{2, 10};
+    }
+    return std::nullopt;
+
+  case ELF::EM_AARCH64:
+    switch (Type) {
+    case ELF::R_AARCH64_NONE:
+      return Field(0);
+    case ELF::R_AARCH64_ABS16:
+    case ELF::R_AARCH64_PREL16:
+      return Field(2);
+    case ELF::R_AARCH64_ABS32:
+    case ELF::R_AARCH64_PREL32:
+    case ELF::R_AARCH64_GOTREL32:
+    case ELF::R_AARCH64_PLT32:
+    case ELF::R_AARCH64_GOTPCREL32:
+      return Field(4);
+    case ELF::R_AARCH64_ABS64:
+    case ELF::R_AARCH64_PREL64:
+    case ELF::R_AARCH64_GOTREL64:
+    case ELF::R_AARCH64_AUTH_ABS64:
+      return Field(8);
+    }
+    // Every other static relocation patches one instruction, and TLS
+    // relaxation rewrites only instructions that carry one of their own
+    // (TLSDESC_CALL marks the `blr` that becomes a `nop`).
+    if ((Type >= ELF::R_AARCH64_MOVW_UABS_G0 &&
+         Type <= ELF::R_AARCH64_LD64_GOTPAGE_LO15) ||
+        Type == ELF::R_AARCH64_PATCHINST ||
+        (Type >= ELF::R_AARCH64_TLSGD_ADR_PREL21 &&
+         Type <= ELF::R_AARCH64_TLSLD_LDST128_DTPREL_LO12_NC) ||
+        (Type >= ELF::R_AARCH64_AUTH_MOVW_GOTOFF_G0 &&
+         Type <= ELF::R_AARCH64_AUTH_TLSDESC_ADD_LO12))
+      return Field(4);
+    return std::nullopt;
+
+  case ELF::EM_ARM:
+    switch (Type) {
+    case ELF::R_ARM_NONE:
+    case ELF::R_ARM_GNU_VTENTRY:
+    case ELF::R_ARM_GNU_VTINHERIT:
+      return Field(0);
+    case ELF::R_ARM_ABS8:
+      return Field(1);
+    // Data halfwords, and the 16-bit Thumb instructions.
+    case ELF::R_ARM_ABS16:
+    case ELF::R_ARM_THM_ABS5:
+    case ELF::R_ARM_THM_PC8:
+    case ELF::R_ARM_THM_SWI8:
+    case ELF::R_ARM_THM_JUMP6:
+    case ELF::R_ARM_THM_JUMP11:
+    case ELF::R_ARM_THM_JUMP8:
+    case ELF::R_ARM_THM_TLS_DESCSEQ16:
+    case ELF::R_ARM_THM_ALU_ABS_G0_NC:
+    case ELF::R_ARM_THM_ALU_ABS_G1_NC:
+    case ELF::R_ARM_THM_ALU_ABS_G2_NC:
+    case ELF::R_ARM_THM_ALU_ABS_G3:
+      return Field(2);
+    // The dynamic types and the platform-private ones.
+    case ELF::R_ARM_TLS_DESC:
+    case ELF::R_ARM_TLS_DTPMOD32:
+    case ELF::R_ARM_TLS_DTPOFF32:
+    case ELF::R_ARM_TLS_TPOFF32:
+    case ELF::R_ARM_COPY:
+    case ELF::R_ARM_GLOB_DAT:
+    case ELF::R_ARM_JUMP_SLOT:
+    case ELF::R_ARM_RELATIVE:
+    case ELF::R_ARM_IRELATIVE:
+      return std::nullopt;
+    }
+    // Every other static relocation patches a data word, an ARM instruction
+    // or a 32-bit Thumb instruction -- including V4BX, whose `bx` a linker
+    // for ARMv4 rewrites, and BL, which interworking turns into BLX.
+    if (Type <= ELF::R_ARM_TLS_IE12GP || Type == ELF::R_ARM_THM_TLS_DESCSEQ32 ||
+        (Type >= ELF::R_ARM_THM_BF16 && Type <= ELF::R_ARM_THM_BF18))
+      return Field(4);
+    return std::nullopt;
+  }
+  return std::nullopt;
 }
 
 std::optional<unsigned> coffRelocationWidth(uint16_t Machine, uint16_t Type) {
@@ -236,16 +432,10 @@ bool isReferenceName(StringRef Name) {
   return !Name.empty() && !Name.starts_with(".") && !Name.starts_with("$");
 }
 
-/// The reading every object format shares: each function symbol ends at the
-/// next symbol of any kind in its section, and every relocation covers four
-/// bytes. ELF and Mach-O signatures have always been made this way.
-PatternGeneratorStats generateGeneric(const ObjectFile &Obj,
-                                      const PatternGeneratorOptions &Opts,
-                                      raw_ostream &OS) {
-  PatternGeneratorStats Stats;
-
-  // Every symbol's address, per section, sorted: a function ends at the
-  // first one after it.
+/// Every symbol's address, per section, sorted: a function ends at the first
+/// one after it.
+std::map<SectionRef, std::vector<uint64_t>>
+symbolAddressesBySection(const ObjectFile &Obj) {
   std::map<SectionRef, std::vector<uint64_t>> SymbolAddresses;
   for (const SymbolRef &Sym : Obj.symbols()) {
     Expected<uint64_t> Addr = Sym.getAddress();
@@ -264,7 +454,23 @@ PatternGeneratorStats generateGeneric(const ObjectFile &Obj,
   }
   for (auto &Entry : SymbolAddresses)
     llvm::sort(Entry.second);
+  return SymbolAddresses;
+}
 
+/// One function symbol of an ELF or Mach-O object: where it starts in its
+/// section, and its bytes up to the next symbol of any kind there.
+struct GenericFunction {
+  StringRef Name;
+  SectionRef Section;
+  uint64_t Offset;
+  ArrayRef<uint8_t> Data;
+};
+
+/// Calls \p Visit for each function symbol of \p Obj, in symbol-table order.
+template <typename VisitorT>
+void forEachGenericFunction(const ObjectFile &Obj, VisitorT Visit) {
+  std::map<SectionRef, std::vector<uint64_t>> SymbolAddresses =
+      symbolAddressesBySection(Obj);
   for (const SymbolRef &Sym : Obj.symbols()) {
     Expected<SymbolRef::Type> Type = Sym.getType();
     if (!Type) {
@@ -316,17 +522,91 @@ PatternGeneratorStats generateGeneric(const ObjectFile &Obj,
     if (Next != Addresses.end() && *Next - Addr < FuncSize)
       FuncSize = *Next - Addr;
 
-    SmallVector<bool, 256> Wildcard(FuncSize, false);
-    for (const RelocationRef &Rel : Sec->relocations()) {
-      uint64_t RelOffset = Rel.getOffset() - Offset;
-      if (RelOffset < FuncSize)
-        markWildcard(Wildcard, RelOffset, 4);
-    }
-
     ArrayRef<uint8_t> Data(
         reinterpret_cast<const uint8_t *>(Contents->data()) + Offset, FuncSize);
-    countOrEmit(OS, Name, Data, Wildcard, Opts, Stats);
+    Visit(GenericFunction{Name, *Sec, Offset, Data});
   }
+}
+
+/// The reading Mach-O objects keep: every relocation covers four bytes.
+PatternGeneratorStats generateGeneric(const ObjectFile &Obj,
+                                      const PatternGeneratorOptions &Opts,
+                                      raw_ostream &OS) {
+  PatternGeneratorStats Stats;
+  forEachGenericFunction(Obj, [&](const GenericFunction &Fn) {
+    SmallVector<bool, 256> Wildcard(Fn.Data.size(), false);
+    for (const RelocationRef &Rel : Fn.Section.relocations()) {
+      uint64_t RelOffset = Rel.getOffset() - Fn.Offset;
+      if (RelOffset < Fn.Data.size())
+        markWildcard(Wildcard, RelOffset, 4);
+    }
+    countOrEmit(OS, Fn.Name, Fn.Data, Wildcard, Opts, Stats);
+  });
+  return Stats;
+}
+
+/// An ELF object keeps a section's relocations in a section of their own
+/// (SHT_REL or SHT_RELA) that names the section it applies to, so the code
+/// section itself lists none. Each relocation leaves its footprint -- the
+/// field, and the instruction bytes a linker may rewrite around it -- as
+/// wildcards.
+PatternGeneratorStats generateELF(const ELFObjectFileBase &Obj,
+                                  const PatternGeneratorOptions &Opts,
+                                  raw_ostream &OS) {
+  PatternGeneratorStats Stats;
+  const uint16_t Machine = Obj.getEMachine();
+
+  struct ELFRelocation {
+    uint64_t Offset;
+    uint32_t Type;
+  };
+  std::map<SectionRef, std::vector<ELFRelocation>> Relocations;
+  for (const SectionRef &Sec : Obj.sections()) {
+    Expected<section_iterator> Target = Sec.getRelocatedSection();
+    if (!Target) {
+      consumeError(Target.takeError());
+      continue;
+    }
+    if (*Target == Obj.section_end())
+      continue;
+    std::vector<ELFRelocation> &List = Relocations[**Target];
+    for (const RelocationRef &Rel : Sec.relocations())
+      List.push_back({Rel.getOffset(), static_cast<uint32_t>(Rel.getType())});
+  }
+
+  forEachGenericFunction(Obj, [&](const GenericFunction &Fn) {
+    const uint64_t Begin = Fn.Offset;
+    const uint64_t End = Fn.Offset + Fn.Data.size();
+    SmallVector<bool, 256> Wildcard(Fn.Data.size(), false);
+    bool Supported = true;
+    if (auto It = Relocations.find(Fn.Section); It != Relocations.end()) {
+      for (const ELFRelocation &Rel : It->second) {
+        const std::optional<ELFRelocationFootprint> Footprint =
+            elfRelocationFootprint(Machine, Rel.Type);
+        if (!Footprint) {
+          if (Rel.Offset >= Begin && Rel.Offset < End) {
+            Supported = false;
+            Stats.UnsupportedELFRelocations.insert({Machine, Rel.Type});
+          }
+          continue;
+        }
+        // The footprint may reach back past the function's start, or begin
+        // in the function for a field that starts past its end.
+        const uint64_t From =
+            Rel.Offset > Footprint->Before ? Rel.Offset - Footprint->Before : 0;
+        const uint64_t To = Rel.Offset + Footprint->Width;
+        if (To <= Begin || From >= End)
+          continue;
+        const uint64_t Start = std::max(From, Begin);
+        markWildcard(Wildcard, Start - Begin, std::min(To, End) - Start);
+      }
+    }
+    if (!Supported) {
+      ++Stats.UnsupportedRelocation;
+      return;
+    }
+    countOrEmit(OS, Fn.Name, Fn.Data, Wildcard, Opts, Stats);
+  });
   return Stats;
 }
 
@@ -548,6 +828,8 @@ PatternGeneratorStats generatePatterns(const ObjectFile &Obj,
                                        raw_ostream &OS) {
   if (const auto *COFF = dyn_cast<COFFObjectFile>(&Obj))
     return generateCOFF(*COFF, Opts, OS);
+  if (const auto *ELFObj = dyn_cast<ELFObjectFileBase>(&Obj))
+    return generateELF(*ELFObj, Opts, OS);
   return generateGeneric(Obj, Opts, OS);
 }
 

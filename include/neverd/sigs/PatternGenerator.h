@@ -71,9 +71,33 @@ struct PatternGeneratorStats {
   unsigned UnsupportedRelocation = 0;
   /// (COFF machine, relocation type) pairs behind UnsupportedRelocation.
   std::set<std::pair<uint16_t, uint16_t>> UnsupportedCOFFRelocations;
+  /// (ELF machine, relocation type) pairs behind UnsupportedRelocation.
+  std::set<std::pair<uint16_t, uint32_t>> UnsupportedELFRelocations;
 
   PatternGeneratorStats &operator+=(const PatternGeneratorStats &Other);
 };
+
+/// The bytes an ELF relocation may leave different in a linked image: its
+/// field, and the instruction bytes around it a linker may rewrite.
+///
+/// A linker does more to ELF code than fill in fields. It relaxes GOT loads
+/// (`mov foo@GOTPCREL(%rip)` becomes `lea`, `call *foo@GOTPCREL(%rip)` a
+/// direct call), and in a static or executable link it replaces whole TLS
+/// access sequences. Such a relocation's footprint starts \p Before bytes
+/// ahead of the field and spans \p Before + \p Width bytes, the most any
+/// form of the instruction or sequence it marks takes.
+struct ELFRelocationFootprint {
+  unsigned Before = 0;
+  unsigned Width = 0;
+};
+
+/// The footprint of an ELF relocation of \p Type in a relocatable object for
+/// \p Machine (an EM_* value): x86 and x86-64, ARM and AArch64. Markers that
+/// rewrite nothing have an empty footprint. Returns std::nullopt for a
+/// machine or type this table does not know, including the dynamic types a
+/// relocatable object does not hold.
+std::optional<ELFRelocationFootprint> elfRelocationFootprint(uint16_t Machine,
+                                                             uint32_t Type);
 
 /// The number of bytes a COFF relocation of \p Type rewrites at its offset
 /// for objects of \p Machine (an IMAGE_FILE_MACHINE_* value).
@@ -119,9 +143,11 @@ std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
 /// function-typed external or static symbol in a code section, and it ends
 /// where the next such symbol starts or where its section does -- label
 /// symbols such as MSVC's `$LN` jump targets do not end it. Relocation widths
-/// come from coffRelocationWidth. ELF and Mach-O objects keep the generic
-/// reading: every function symbol, ending at the next symbol of any kind in
-/// its section, with four-byte relocations.
+/// come from coffRelocationWidth. In ELF and Mach-O objects every function
+/// symbol is a function, ending at the next symbol of any kind in its
+/// section. An ELF object keeps its relocations in sections of their own,
+/// each naming the section it applies to; their footprints come from
+/// elfRelocationFootprint. Mach-O relocations cover four bytes.
 PatternGeneratorStats generatePatterns(const llvm::object::ObjectFile &Obj,
                                        const PatternGeneratorOptions &Opts,
                                        llvm::raw_ostream &OS);

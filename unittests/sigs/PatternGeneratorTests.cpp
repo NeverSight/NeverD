@@ -12,6 +12,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ObjectFile.h"
 
 #include <cstdint>
@@ -167,6 +168,175 @@ private:
   uint32_t Characteristics;
   std::vector<Symbol> Symbols;
   std::vector<std::pair<uint32_t, uint16_t>> Relocations;
+};
+
+/// A relocatable ELF object with one code section, assembled in memory.
+///
+/// ELFCLASS64 objects carry RELA relocations and ELFCLASS32 ones REL, as the
+/// x86-64 and AArch64, and the i386 and ARM, toolchains write them. Every
+/// function is a global STT_FUNC symbol in .text; every relocation points at
+/// one undefined symbol, added by build().
+class ELFObjectBuilder {
+public:
+  ELFObjectBuilder(uint16_t Machine, bool Is64, std::vector<uint8_t> Code)
+      : Machine(Machine), Is64(Is64), Code(std::move(Code)) {}
+
+  void addFunction(StringRef Name, uint64_t Offset) {
+    Functions.push_back({Name.str(), Offset});
+  }
+
+  void addRelocation(uint64_t Offset, uint32_t Type) {
+    Relocations.push_back({Offset, Type});
+  }
+
+  std::vector<uint8_t> build() const {
+    std::vector<uint8_t> Out;
+    auto put = [&](uint64_t V, unsigned Bytes) {
+      for (unsigned I = 0; I < Bytes; ++I)
+        Out.push_back((V >> (8 * I)) & 0xFF);
+    };
+    const unsigned Addr = Is64 ? 8 : 4;
+    auto align = [&](size_t To) {
+      while (Out.size() % To)
+        Out.push_back(0);
+    };
+
+    std::string Strings(1, '\0');
+    std::vector<uint32_t> NameOffsets;
+    for (const auto &[Name, Offset] : Functions) {
+      NameOffsets.push_back(static_cast<uint32_t>(Strings.size()));
+      Strings += Name;
+      Strings.push_back('\0');
+    }
+    const uint32_t TargetName = static_cast<uint32_t>(Strings.size());
+    Strings += "target";
+    Strings.push_back('\0');
+    const uint32_t TargetIndex = 1 + static_cast<uint32_t>(Functions.size());
+    const char *RelName = Is64 ? ".rela.text" : ".rel.text";
+    std::string SectionNames(1, '\0');
+    auto addName = [&](StringRef Name) {
+      uint32_t Offset = static_cast<uint32_t>(SectionNames.size());
+      SectionNames += Name.str();
+      SectionNames.push_back('\0');
+      return Offset;
+    };
+    const uint32_t TextName = addName(".text");
+    const uint32_t RelSectionName = addName(RelName);
+    const uint32_t SymtabName = addName(".symtab");
+    const uint32_t StrtabName = addName(".strtab");
+    const uint32_t ShstrtabName = addName(".shstrtab");
+
+    const size_t HeaderSize = Is64 ? 64 : 52;
+    Out.resize(HeaderSize);
+
+    struct Placed {
+      uint64_t Offset, Size;
+    };
+    align(16);
+    const Placed Text{Out.size(), Code.size()};
+    Out.insert(Out.end(), Code.begin(), Code.end());
+
+    align(8);
+    const size_t RelBegin = Out.size();
+    for (const auto &[Offset, Type] : Relocations) {
+      put(Offset, Addr);
+      if (Is64) {
+        put((uint64_t(TargetIndex) << 32) | Type, 8);
+        put(0, 8);
+      } else {
+        put((TargetIndex << 8) | Type, 4);
+      }
+    }
+    const Placed Rel{RelBegin, Out.size() - RelBegin};
+
+    align(8);
+    const size_t SymBegin = Out.size();
+    auto putSymbol = [&](uint32_t Name, uint8_t Info, uint16_t Section,
+                         uint64_t Value) {
+      put(Name, 4);
+      if (Is64) {
+        Out.push_back(Info);
+        Out.push_back(0);
+        put(Section, 2);
+        put(Value, 8);
+        put(0, 8);
+      } else {
+        put(Value, 4);
+        put(0, 4);
+        Out.push_back(Info);
+        Out.push_back(0);
+        put(Section, 2);
+      }
+    };
+    putSymbol(0, 0, 0, 0);
+    for (size_t I = 0; I < Functions.size(); ++I)
+      putSymbol(NameOffsets[I], (ELF::STB_GLOBAL << 4) | ELF::STT_FUNC, 1,
+                Functions[I].second);
+    putSymbol(TargetName, (ELF::STB_GLOBAL << 4) | ELF::STT_NOTYPE,
+              ELF::SHN_UNDEF, 0);
+    const Placed Symtab{SymBegin, Out.size() - SymBegin};
+
+    const Placed Strtab{Out.size(), Strings.size()};
+    Out.insert(Out.end(), Strings.begin(), Strings.end());
+    const Placed Shstrtab{Out.size(), SectionNames.size()};
+    Out.insert(Out.end(), SectionNames.begin(), SectionNames.end());
+
+    align(8);
+    const uint64_t SectionHeaders = Out.size();
+    auto putSection = [&](uint32_t Name, uint32_t Type, uint64_t Flags,
+                          Placed Where, uint32_t Link, uint32_t Info,
+                          uint64_t Align, uint64_t EntSize) {
+      put(Name, 4);
+      put(Type, 4);
+      put(Flags, Addr);
+      put(0, Addr);
+      put(Where.Offset, Addr);
+      put(Where.Size, Addr);
+      put(Link, 4);
+      put(Info, 4);
+      put(Align, Addr);
+      put(EntSize, Addr);
+    };
+    putSection(0, ELF::SHT_NULL, 0, {0, 0}, 0, 0, 0, 0);
+    putSection(TextName, ELF::SHT_PROGBITS, ELF::SHF_ALLOC | ELF::SHF_EXECINSTR,
+               Text, 0, 0, 16, 0);
+    putSection(RelSectionName, Is64 ? ELF::SHT_RELA : ELF::SHT_REL,
+               ELF::SHF_INFO_LINK, Rel, 3, 1, Addr, Is64 ? 24 : 8);
+    putSection(SymtabName, ELF::SHT_SYMTAB, 0, Symtab, 4, 1, Addr,
+               Is64 ? 24 : 16);
+    putSection(StrtabName, ELF::SHT_STRTAB, 0, Strtab, 0, 0, 1, 0);
+    putSection(ShstrtabName, ELF::SHT_STRTAB, 0, Shstrtab, 0, 0, 1, 0);
+
+    std::vector<uint8_t> Header;
+    std::swap(Header, Out);
+    Out.clear();
+    const uint8_t Ident[16] = {0x7F, 'E', 'L', 'F',
+                               uint8_t(Is64 ? ELF::ELFCLASS64 : ELF::ELFCLASS32),
+                               ELF::ELFDATA2LSB, ELF::EV_CURRENT};
+    Out.insert(Out.end(), Ident, Ident + 16);
+    put(ELF::ET_REL, 2);
+    put(Machine, 2);
+    put(ELF::EV_CURRENT, 4);
+    put(0, Addr);
+    put(0, Addr);
+    put(SectionHeaders, Addr);
+    put(0, 4);
+    put(HeaderSize, 2);
+    put(0, 2);
+    put(0, 2);
+    put(Is64 ? 64 : 40, 2);
+    put(6, 2);
+    put(5, 2);
+    std::copy(Out.begin(), Out.end(), Header.begin());
+    return Header;
+  }
+
+private:
+  uint16_t Machine;
+  bool Is64;
+  std::vector<uint8_t> Code;
+  std::vector<std::pair<std::string, uint64_t>> Functions;
+  std::vector<std::pair<uint64_t, uint32_t>> Relocations;
 };
 
 struct Generated {
@@ -465,4 +635,171 @@ TEST(PatternGeneratorCOFF, LinesStatingTooFewExactBytesAreNotWritten) {
   SmallVector<bool> Floor(20, false);
   Floor[16] = Floor[17] = Floor[18] = Floor[19] = true;
   EXPECT_EQ(statedByteCount(Floor, Opts), SignatureMatcher::MinStatedBytes);
+}
+
+/// \p Code with \p Replacement written over it at \p Offset: the bytes a
+/// linker leaves where the object held placeholders.
+std::vector<uint8_t> linked(std::vector<uint8_t> Code, size_t Offset,
+                            std::vector<uint8_t> Replacement) {
+  std::copy(Replacement.begin(), Replacement.end(), Code.begin() + Offset);
+  return Code;
+}
+
+TEST(PatternGeneratorELF, RelocationSectionsApplyToTheCodeTheyName) {
+  // push rbp; mov rbp,rsp; call target (PLT32); mov rbp,[rip+stdout] (PC32)
+  std::vector<uint8_t> Code = {0x55, 0x48, 0x89, 0xE5, 0xE8, 0,    0,    0,
+                               0,    0x48, 0x8B, 0x2D, 0,    0,    0,    0};
+  std::vector<uint8_t> Rest = sequentialCode(16);
+  Code.insert(Code.end(), Rest.begin(), Rest.end());
+  ELFObjectBuilder Builder(ELF::EM_X86_64, true, Code);
+  Builder.addFunction("_IO_puts", 0);
+  Builder.addRelocation(5, ELF::R_X86_64_PLT32);
+  Builder.addRelocation(12, ELF::R_X86_64_PC32);
+
+  PatternGeneratorOptions Opts;
+  Opts.TailLen = 0xFFFF;
+  Generated Out = generate(Builder.build(), Opts);
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  EXPECT_TRUE(StringRef(Out.Lines[0]).starts_with("554889E5E8........488B2D........"));
+  std::vector<uint8_t> Linked =
+      linked(linked(Code, 5, {0x16, 0xFE, 0xFF, 0xFF}), 12, {0x5D, 0x3C, 0x1A, 0});
+  EXPECT_TRUE(lineMatches(Out.Lines[0], Linked));
+}
+
+TEST(PatternGeneratorELF, RelaxedGotAccessesKeepTheirMatch) {
+  // mov rax,[rip+foo@GOTPCREL]; mov eax,[rip+bar@GOTPCREL];
+  // call [rip+baz@GOTPCREL]; then code no relocation touches.
+  std::vector<uint8_t> Code = {0x48, 0x8B, 0x05, 0, 0, 0, 0, 0x8B, 0x05, 0, 0,
+                               0,    0,    0xFF, 0x15, 0, 0, 0, 0};
+  std::vector<uint8_t> Rest = sequentialCode(20);
+  Code.insert(Code.end(), Rest.begin(), Rest.end());
+  ELFObjectBuilder Builder(ELF::EM_X86_64, true, Code);
+  Builder.addFunction("gotloads", 0);
+  Builder.addRelocation(3, ELF::R_X86_64_REX_GOTPCRELX);
+  Builder.addRelocation(9, ELF::R_X86_64_GOTPCRELX);
+  Builder.addRelocation(15, ELF::R_X86_64_GOTPCRELX);
+
+  PatternGeneratorOptions Opts;
+  Opts.TailLen = 0xFFFF;
+  Generated Out = generate(Builder.build(), Opts);
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  // In a static link: lea rax,[rip+foo]; mov eax,imm32; addr32 call baz.
+  std::vector<uint8_t> Relaxed = linked(
+      Code, 0,
+      {0x48, 0x8D, 0x05, 0x10, 0x20, 0, 0, 0xC7, 0xC0, 0x30, 0x40, 0x50, 0,
+       0x67, 0xE8, 0x60, 0x70, 0, 0});
+  EXPECT_TRUE(lineMatches(Out.Lines[0], Relaxed));
+}
+
+TEST(PatternGeneratorELF, TlsSequencesAreWildcardedWhole) {
+  // General dynamic: data16 lea rdi,[rip+x@tlsgd]; data16 data16 rex64 call
+  // __tls_get_addr@PLT.
+  std::vector<uint8_t> Code = {0x66, 0x48, 0x8D, 0x3D, 0,    0, 0, 0,
+                               0x66, 0x66, 0x48, 0xE8, 0,    0, 0, 0};
+  std::vector<uint8_t> Rest = sequentialCode(24);
+  Code.insert(Code.end(), Rest.begin(), Rest.end());
+  ELFObjectBuilder Builder(ELF::EM_X86_64, true, Code);
+  Builder.addFunction("tls_reader", 0);
+  Builder.addRelocation(4, ELF::R_X86_64_TLSGD);
+  Builder.addRelocation(12, ELF::R_X86_64_PLT32);
+
+  PatternGeneratorOptions Opts;
+  Opts.TailLen = 0xFFFF;
+  Generated Out = generate(Builder.build(), Opts);
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  // Local exec: mov rax,fs:0; lea rax,[rax+x@tpoff].
+  std::vector<uint8_t> Relaxed =
+      linked(Code, 0,
+             {0x64, 0x48, 0x8B, 0x04, 0x25, 0, 0, 0, 0, 0x48, 0x8D, 0x80, 0xF8,
+              0xFF, 0xFF, 0xFF});
+  EXPECT_TRUE(lineMatches(Out.Lines[0], Relaxed));
+}
+
+TEST(PatternGeneratorELF, WideAndNarrowFieldsHaveTheirOwnWidths) {
+  // movabs rax,imm64 (R_X86_64_64) then a byte that stays stated.
+  std::vector<uint8_t> Code = {0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0xC3};
+  std::vector<uint8_t> Rest = sequentialCode(24);
+  Code.insert(Code.end(), Rest.begin(), Rest.end());
+  ELFObjectBuilder Builder(ELF::EM_X86_64, true, Code);
+  Builder.addFunction("load_address", 0);
+  Builder.addRelocation(2, ELF::R_X86_64_64);
+
+  PatternGeneratorOptions Opts;
+  Opts.TailLen = 0xFFFF;
+  Generated Out = generate(Builder.build(), Opts);
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  EXPECT_TRUE(StringRef(Out.Lines[0]).starts_with("48B8................C3"));
+}
+
+TEST(PatternGeneratorELF, I386GotLoadsAreRelaxable) {
+  // mov eax,[ebx+foo@GOT] becomes lea eax,[ebx+foo@GOTOFF].
+  std::vector<uint8_t> Code = {0x8B, 0x83, 0, 0, 0, 0};
+  std::vector<uint8_t> Rest = sequentialCode(24);
+  Code.insert(Code.end(), Rest.begin(), Rest.end());
+  ELFObjectBuilder Builder(ELF::EM_386, false, Code);
+  Builder.addFunction("got_load", 0);
+  Builder.addRelocation(2, ELF::R_386_GOT32X);
+
+  PatternGeneratorOptions Opts;
+  Opts.TailLen = 0xFFFF;
+  Generated Out = generate(Builder.build(), Opts);
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  EXPECT_TRUE(lineMatches(Out.Lines[0],
+                          linked(Code, 0, {0x8D, 0x83, 0x10, 0xE0, 0xFF, 0xFF})));
+}
+
+TEST(PatternGeneratorELF, AArch64RelocationsCoverTheirInstruction) {
+  std::vector<uint8_t> Code = sequentialCode(8);
+  const std::vector<uint8_t> Bl = {0, 0, 0, 0x94};
+  Code.insert(Code.end(), Bl.begin(), Bl.end());
+  std::vector<uint8_t> Rest = sequentialCode(20);
+  Code.insert(Code.end(), Rest.begin(), Rest.end());
+  ELFObjectBuilder Builder(ELF::EM_AARCH64, true, Code);
+  Builder.addFunction("caller", 0);
+  Builder.addRelocation(8, ELF::R_AARCH64_CALL26);
+
+  PatternGeneratorOptions Opts;
+  Opts.TailLen = 0xFFFF;
+  Generated Out = generate(Builder.build(), Opts);
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  EXPECT_TRUE(StringRef(Out.Lines[0]).starts_with("4041424344454647........"));
+}
+
+TEST(PatternGeneratorELF, UnknownRelocationLeavesOnlyItsFunctionOut) {
+  std::vector<uint8_t> Code = sequentialCode(64);
+  ELFObjectBuilder Builder(ELF::EM_X86_64, true, Code);
+  Builder.addFunction("copied", 0);
+  Builder.addFunction("clean", 32);
+  Builder.addRelocation(4, ELF::R_X86_64_COPY);
+
+  Generated Out = generate(Builder.build());
+  ASSERT_EQ(Out.Lines.size(), 1u);
+  EXPECT_TRUE(StringRef(Out.Lines[0]).ends_with(":0000 clean"));
+  EXPECT_EQ(Out.Stats.UnsupportedRelocation, 1u);
+  EXPECT_EQ(Out.Stats.UnsupportedELFRelocations.count(
+                {ELF::EM_X86_64, ELF::R_X86_64_COPY}),
+            1u);
+}
+
+TEST(PatternGeneratorELF, FootprintTable) {
+  auto Is = [](uint16_t Machine, uint32_t Type, unsigned Before,
+               unsigned Width) {
+    std::optional<ELFRelocationFootprint> F =
+        elfRelocationFootprint(Machine, Type);
+    return F && F->Before == Before && F->Width == Width;
+  };
+  EXPECT_TRUE(Is(ELF::EM_X86_64, ELF::R_X86_64_TLSLD, 3, 10));
+  EXPECT_TRUE(Is(ELF::EM_X86_64, ELF::R_X86_64_TLSDESC_CALL, 0, 2));
+  EXPECT_TRUE(Is(ELF::EM_X86_64, ELF::R_X86_64_CODE_4_GOTPCRELX, 4, 4));
+  EXPECT_TRUE(Is(ELF::EM_386, ELF::R_386_TLS_GD, 3, 10));
+  EXPECT_TRUE(Is(ELF::EM_AARCH64, ELF::R_AARCH64_TLSDESC_CALL, 0, 4));
+  EXPECT_TRUE(Is(ELF::EM_AARCH64, ELF::R_AARCH64_PREL64, 0, 8));
+  EXPECT_TRUE(Is(ELF::EM_ARM, ELF::R_ARM_THM_JUMP11, 0, 2));
+  EXPECT_TRUE(Is(ELF::EM_ARM, ELF::R_ARM_THM_TLS_DESCSEQ32, 0, 4));
+  EXPECT_TRUE(Is(ELF::EM_ARM, ELF::R_ARM_V4BX, 0, 4));
+  // Dynamic types, private ones, and machines the table does not know.
+  EXPECT_FALSE(elfRelocationFootprint(ELF::EM_X86_64, ELF::R_X86_64_JUMP_SLOT));
+  EXPECT_FALSE(elfRelocationFootprint(ELF::EM_AARCH64, ELF::R_AARCH64_COPY));
+  EXPECT_FALSE(elfRelocationFootprint(ELF::EM_ARM, ELF::R_ARM_PRIVATE_0));
+  EXPECT_FALSE(elfRelocationFootprint(ELF::EM_MIPS, ELF::R_MIPS_32));
 }
