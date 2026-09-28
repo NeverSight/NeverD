@@ -844,6 +844,9 @@ TEST(HighCSourceCalls,
     Return.RetVal = Copy;
     Function.Body = {Return};
     const auto Source = emit({Function});
+    // The public declaration follows the pointer source ABI, even though the
+    // call expression still carries the result through a machine integer.
+    EXPECT_NE(Source.find("void* copy_value("), std::string::npos) << Source;
     const auto Slot = swiftValueWitnessSlot(Operation);
     ASSERT_TRUE(Slot);
     EXPECT_EQ(*Slot, ExpectedSlot);
@@ -866,8 +869,8 @@ int main(void) {
     void *metadata_words[2] = {table, 0};
     expected_metadata = &metadata_words[1];
     unsigned source = 73, destination = 0;
-    uintptr_t result = copy_value(&destination, &source, expected_metadata);
-    return (void *)result == &destination && destination == source ? 0 : 1;
+    void *result = copy_value(&destination, &source, expected_metadata);
+    return result == &destination && destination == source ? 0 : 1;
 }
 )");
   }
