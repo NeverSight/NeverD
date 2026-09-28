@@ -387,6 +387,58 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
 
   analyzeStack(Low);
 
+  // CFGBuilder proves the complete value of an ARM PC + R_ARM_REL32 literal
+  // at the exact ADD output. Preserve that occurrence proof across the LowIR
+  // to MedIR boundary: the literal word is a relative fragment, and treating
+  // its old-image integer as an independent table base loses relocation.
+  using OccurrenceKey = std::pair<va_t, int>;
+  std::map<OccurrenceKey, const RelocatedInstructionAddressOccurrence *>
+      ExactRelativeAddressOutputs;
+  std::set<OccurrenceKey> AmbiguousRelativeAddressOutputs;
+  if (TheArch == Arch::ARM && Fmt == BinaryFormat::ELF && Image &&
+      Image->Arch == Arch::ARM && Image->isELF()) {
+    for (const auto &Occurrence : Low.RelocatedInstructionAddressOccurrences) {
+      const OccurrenceKey Key{Occurrence.InstructionAddr, Occurrence.OpSeq};
+      if (Occurrence.DefinesOutput && Occurrence.OutputMayDepend)
+        AmbiguousRelativeAddressOutputs.insert(Key);
+      if (!Occurrence.DefinesOutput || Occurrence.OutputMayDepend ||
+          Occurrence.Authority !=
+              RelocatedInstructionAddressProofKind::LoaderField ||
+          Occurrence.OutputOpcode != NdOp::INT_ADD || Occurrence.Width != 4 ||
+          Occurrence.OutputWitness.Size != 4 ||
+          (!Occurrence.OutputWitness.isReg() &&
+           !Occurrence.OutputWitness.isTemp()) ||
+          (Occurrence.Provenance != ConstantAddressProvenance::DataAddress &&
+           Occurrence.Provenance != ConstantAddressProvenance::CodeAddress))
+        continue;
+      const auto Field =
+          Image->ARMRelativeLiteralFields.find(Occurrence.FieldVA);
+      if (Field == Image->ARMRelativeLiteralFields.end() ||
+          Field->second.TargetVA != Occurrence.TargetVA ||
+          Field->second.TargetOwnerVA != Occurrence.TargetOwnerVA ||
+          static_cast<uint32_t>(Occurrence.InstructionAddr + 8) +
+                  Field->second.EncodedValue !=
+              static_cast<uint32_t>(Occurrence.TargetVA) ||
+          !Image->relocatedTargetBelongsToOwner(Occurrence.TargetVA,
+                                                Occurrence.TargetOwnerVA))
+        continue;
+      const Segment *Slot = Image->getSegmentFor(Occurrence.FieldVA);
+      const uint8_t *Bytes = Image->readVA(Occurrence.FieldVA, 4);
+      if (!Slot || !Slot->isReadable() || Slot->isWritable() || !Bytes ||
+          (uint32_t(Bytes[0]) | (uint32_t(Bytes[1]) << 8) |
+           (uint32_t(Bytes[2]) << 16) | (uint32_t(Bytes[3]) << 24)) !=
+              Field->second.EncodedValue)
+        continue;
+      auto [It, Inserted] =
+          ExactRelativeAddressOutputs.emplace(Key, &Occurrence);
+      if (!Inserted && (It->second->TargetVA != Occurrence.TargetVA ||
+                        It->second->TargetOwnerVA != Occurrence.TargetOwnerVA ||
+                        It->second->Provenance != Occurrence.Provenance ||
+                        It->second->OutputWitness != Occurrence.OutputWitness))
+        AmbiguousRelativeAddressOutputs.insert(Key);
+    }
+  }
+
   MedFunc Func;
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
@@ -630,6 +682,23 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
         }
       }
 
+      const OccurrenceKey MaterializationKey{LOp.Addr, LOp.Seq};
+      auto Materialization =
+          ExactRelativeAddressOutputs.find(MaterializationKey);
+      if (Materialization != ExactRelativeAddressOutputs.end() &&
+          !AmbiguousRelativeAddressOutputs.count(MaterializationKey) &&
+          LOp.Opcode == NdOp::INT_ADD && LOp.NumInputs == 2 &&
+          LOp.Output == Materialization->second->OutputWitness &&
+          MOp.Opcode == NdOp::INT_ADD && MOp.Output.Size == 4 &&
+          MOp.IntrinsicOutputs.empty() &&
+          MOp.MemoryOrdering == NdMemoryOrdering::None &&
+          MOp.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+        const auto &Proof = *Materialization->second;
+        MOp.Opcode = NdOp::COPY;
+        MOp.NumInputs = 0;
+        MOp.addInput(MedVar::makeConst(Proof.TargetVA, 4, Proof.Provenance,
+                                       Proof.TargetOwnerVA));
+      }
       MB.Ops.push_back(MOp);
 
       // i386 callee-cleanup: a direct CALL to a callee that pops bytes on

@@ -14,6 +14,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/llvm/resolve/MedLLVMScalarProof.h"
 #include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
 #include "NeverDLiftFixture.h"
 #include "PipelineLowIRDetail.h"
@@ -9511,6 +9512,132 @@ TEST_F(JTE_ARM32, RelativeLiteralOutputRequiresExactReachingLoad) {
   ASSERT_EQ(Found.size(), 1u);
   EXPECT_TRUE(Found.front()->OutputMayDepend)
       << "the direct predecessor must prevent an exact output certificate";
+}
+
+TEST_F(JTE_ARM32, ExactRelativeLiteralOutputSurvivesMedLowering) {
+  auto ImageOrErr = neverd::loadBinary(rel32ReachingARMObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::ARM));
+
+  for (const char *Name :
+       {"arm_rel32_same_offset_a", "arm_rel32_same_target_two_literals",
+        "arm_rel32_bypass_may_depend"}) {
+    SCOPED_TRACE(Name);
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Name);
+    neverd::LowToMedConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const neverd::MedFunc Med =
+        Converter.convert(Low, neverd::Arch::ARM, neverd::BinaryFormat::ELF);
+
+    size_t Certificates = 0;
+    for (const auto &Occurrence : Low.RelocatedInstructionAddressOccurrences) {
+      if (!Occurrence.DefinesOutput ||
+          Occurrence.OutputOpcode != neverd::NdOp::INT_ADD)
+        continue;
+      ++Certificates;
+      const neverd::MedOp *Bound = nullptr;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.Addr == Occurrence.InstructionAddr &&
+              Op.OriginSeq == Occurrence.OpSeq &&
+              Op.Output.Kind == neverd::MedVar::Reg &&
+              Op.Output.RegOff == Occurrence.OutputWitness.Offset)
+            Bound = &Op;
+      ASSERT_NE(Bound, nullptr);
+      if (Occurrence.OutputMayDepend) {
+        EXPECT_EQ(Bound->Opcode, neverd::NdOp::INT_ADD);
+      } else {
+        ASSERT_EQ(Bound->Opcode, neverd::NdOp::COPY);
+        ASSERT_EQ(Bound->NumInputs, 1);
+        EXPECT_TRUE(Bound->Inputs[0].isConst());
+        EXPECT_EQ(Bound->Inputs[0].ConstVal, Occurrence.TargetVA);
+        EXPECT_EQ(Bound->Inputs[0].Provenance, Occurrence.Provenance);
+        EXPECT_EQ(Bound->Inputs[0].AddressOwnerVA, Occurrence.TargetOwnerVA);
+      }
+    }
+    EXPECT_GT(Certificates, 0u);
+  }
+}
+
+TEST(JTE_ScalarProof, UnsignedMagicRemainderRequiresExactQuotient) {
+  using neverd::MedOp;
+  using neverd::MedVar;
+  using neverd::NdOp;
+  auto temp = [](int Id, uint16_t Size) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = Size;
+    return Value;
+  };
+  auto scalar = [](uint64_t Bits, uint16_t Size) {
+    return MedVar::makeConst(Bits, Size,
+                             neverd::ConstantAddressProvenance::Scalar);
+  };
+  const MedVar X = temp(1, 4);
+  std::vector<MedOp> Ops;
+  auto add = [&](NdOp Opcode, MedVar Output,
+                 std::initializer_list<MedVar> Inputs) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Output;
+    for (const MedVar &Input : Inputs)
+      Op.addInput(Input);
+    Ops.push_back(std::move(Op));
+  };
+  add(NdOp::INT_ZEXT, temp(2, 8), {X});
+  add(NdOp::INT_ZEXT, temp(3, 8), {scalar(0xaaaaaaab, 4)});
+  add(NdOp::INT_MULT, temp(4, 8), {temp(2, 8), temp(3, 8)});
+  add(NdOp::SUBBYTES, temp(5, 4), {temp(4, 8), scalar(4, 4)});
+  add(NdOp::INT_RIGHT, temp(6, 4), {temp(5, 4), scalar(1, 4)});
+  add(NdOp::INT_LEFT, temp(7, 4), {temp(6, 4), scalar(1, 4)});
+  add(NdOp::INT_ADD, temp(8, 4), {temp(6, 4), temp(7, 4)});
+  add(NdOp::INT_SUB, temp(9, 4), {X, temp(8, 4)});
+  auto lookup = [&](const MedVar &Value) -> const MedOp * {
+    for (const MedOp &Op : Ops)
+      if (Op.Output == Value)
+        return &Op;
+    return nullptr;
+  };
+  auto constant = [](const MedVar &Value) -> std::optional<uint64_t> {
+    if (Value.isConst() &&
+        Value.Provenance == neverd::ConstantAddressProvenance::Scalar)
+      return Value.ConstVal;
+    return std::nullopt;
+  };
+  auto proves = [&]() {
+    return neverd::detail::provesUnsignedMagicRemainder(temp(9, 4), lookup,
+                                                        constant);
+  };
+  ASSERT_TRUE(proves());
+
+  Ops[1].Inputs[0] = scalar(0xcccccccd, 4);
+  Ops[4].Inputs[1] = scalar(2, 4);
+  Ops[5].Inputs[1] = scalar(2, 4);
+  EXPECT_TRUE(proves()) << "the same proof covers a five-way selector";
+  Ops[1].Inputs[0] = scalar(0xaaaaaaab, 4);
+  Ops[4].Inputs[1] = scalar(1, 4);
+  Ops[5].Inputs[1] = scalar(1, 4);
+
+  Ops[1].Inputs[0] = scalar(0xaaaaaaac, 4);
+  EXPECT_FALSE(proves()) << "a nearby multiplier is not a quotient proof";
+  Ops[1].Inputs[0] = scalar(0xaaaaaaab, 4);
+  Ops[1].Inputs[0].Provenance = neverd::ConstantAddressProvenance::DataAddress;
+  EXPECT_FALSE(proves()) << "an address occurrence is not a scalar multiplier";
+  Ops[1].Inputs[0] = scalar(0xaaaaaaab, 4);
+  Ops[3].Inputs[1] = scalar(0, 4);
+  EXPECT_FALSE(proves()) << "the low product word is not the quotient";
+  Ops[3].Inputs[1] = scalar(4, 4);
+  Ops[6].Inputs[1] = temp(10, 4);
+  EXPECT_FALSE(proves()) << "both quotient factors must be identical";
 }
 
 TEST_F(JTE_ARM32,

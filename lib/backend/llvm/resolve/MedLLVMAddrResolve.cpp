@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../data/MedLLVMFailureSnapshot.h"
+#include "MedLLVMScalarProof.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -2297,6 +2298,10 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
                  ? true
                  : stableOffsetFailure("mapped-constant", Start, Depth);
     }
+    if (detail::provesUnsignedMagicRemainder(
+            Start, [&](const MedVar &V) { return lookupDef(V); },
+            [&](const MedVar &V) { return traceControlConst(V); }))
+      return true;
     Seen.insert(keyOf(Start));
 
     if (const PhiNode *Nested = lookupPhi(Start)) {
@@ -2722,32 +2727,67 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
               return collectFrameReloadSources(Load, Sources);
             });
       };
-      const IndexedPointerLaneSummary ScalarLane = analyzeIndexedPointerLane(
-          Def->Inputs[0], Img, PointerSize,
-          [&](const MedVar &Value) { return lookupDef(Value); }, traceLaneConst,
-          [&](const MedVar &Value, uint64_t &Base, bool &HaveBase,
-              std::vector<MedVar> &Terms) {
-            if (collectIndexedGlobalBase(Value, Base, HaveBase, Terms) &&
-                HaveBase)
-              return true;
-            Base = 0;
-            HaveBase = false;
-            Terms.clear();
-            return collectLiteralPoolBase(Value, Base, HaveBase, Terms);
-          },
-          [&](const MedVar &Value) {
-            return ptrTableUniqueSegment(Value,
-                                         /*IncludeSymbolizedEvidence=*/true);
-          },
-          [&](const Segment *Segment, uint64_t &RunStart, uint64_t &RunEnd) {
-            readOnlyAfterRelocRun(Segment, RunStart, RunEnd);
-          },
-          nullptr, nullptr, false,
-          loadIndexConstraint(
-              CurMedFunc, Def, [&](const MedVar &V) { return lookupDef(V); },
-              [&](const MedVar &V) {
-                return constantIsStableAddressOffset(V);
-              }));
+      auto scalarLanes = [&](const std::set<uint64_t> *KnownBases,
+                             const std::vector<MedVar> *KnownTerms) {
+        return analyzeIndexedPointerLane(
+            Def->Inputs[0], Img, PointerSize,
+            [&](const MedVar &Value) { return lookupDef(Value); },
+            traceLaneConst,
+            [&](const MedVar &Value, uint64_t &Base, bool &HaveBase,
+                std::vector<MedVar> &Terms) {
+              if (collectIndexedGlobalBase(Value, Base, HaveBase, Terms) &&
+                  HaveBase)
+                return true;
+              Base = 0;
+              HaveBase = false;
+              Terms.clear();
+              return collectLiteralPoolBase(Value, Base, HaveBase, Terms);
+            },
+            [&](const MedVar &Value) {
+              return ptrTableUniqueSegment(Value,
+                                           /*IncludeSymbolizedEvidence=*/true);
+            },
+            [&](const Segment *Segment, uint64_t &RunStart, uint64_t &RunEnd) {
+              readOnlyAfterRelocRun(Segment, RunStart, RunEnd);
+            },
+            KnownBases, KnownTerms, false,
+            loadIndexConstraint(
+                CurMedFunc, Def, [&](const MedVar &V) { return lookupDef(V); },
+                [&](const MedVar &V) {
+                  return constantIsStableAddressOffset(V);
+                }));
+      };
+      IndexedPointerLaneSummary ScalarLane = scalarLanes(nullptr, nullptr);
+      if (!ScalarLane.Complete) {
+        // A pointer table may select one of several immutable integer arrays.
+        // Audit every authenticated relocation target using the same index
+        // constraint; one bad or unbounded candidate invalidates the domain.
+        const MedOp *Address = lookupDef(Def->Inputs[0]);
+        if (Address && Address->Opcode == NdOp::INT_ADD &&
+            Address->NumInputs == 2)
+          for (unsigned Side = 0; Side < 2 && !ScalarLane.Complete; ++Side) {
+            std::set<DataAddressIdentity> Identities;
+            if (!recoverAbsoluteDataPointerLoadIdentities(Address->Inputs[Side],
+                                                          Identities) ||
+                Identities.empty())
+              continue;
+            std::set<uint64_t> Bases;
+            bool OwnersValid = true;
+            for (const DataAddressIdentity &Identity : Identities) {
+              if (Identity.OwnerVA == InvalidVA ||
+                  !Img->relocatedTargetBelongsToOwner(Identity.VA,
+                                                      Identity.OwnerVA)) {
+                OwnersValid = false;
+                break;
+              }
+              Bases.insert(Identity.VA);
+            }
+            if (!OwnersValid || Bases.size() != Identities.size())
+              continue;
+            std::vector<MedVar> Terms{Address->Inputs[Side ^ 1u]};
+            ScalarLane = scalarLanes(&Bases, &Terms);
+          }
+      }
       if (ScalarLane.Complete) {
         bool ScalarOnly = true;
         for (uint64_t Slot : ScalarLane.Slots) {

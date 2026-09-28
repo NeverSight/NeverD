@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../resolve/MedLLVMScalarProof.h"
 #include "MedLLVMFailureSnapshot.h"
 
 #include "neverd/Limits.h"
@@ -1145,6 +1146,10 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
              Def->Inputs[1].ConstVal > 0 &&
              Def->Inputs[1].ConstVal <= limits::kMaxJumpTableEntries;
     case NdOp::INT_SUB: {
+      if (detail::provesUnsignedMagicRemainder(
+              Value, [&](const MedVar &V) { return lookupDef(V); },
+              [&](const MedVar &V) { return traceControlConst(V); }))
+        return true;
       // clang -O2 `x % C` is `x - q*C` (or `x - (q*4+q)` for C=5, 20, …).
       if (Def->NumInputs < 2)
         return false;
