@@ -23,6 +23,7 @@ from scripts.signatures.build_msvc_signatures import (
     main,
     parse_line,
     settle_directory,
+    split_parts,
 )
 
 
@@ -281,6 +282,20 @@ class OpeningTests(unittest.TestCase):
         self.assertEqual(self._settle(short, longer), [longer])
 
 
+class SplitTests(unittest.TestCase):
+    def test_a_small_file_is_one_part(self) -> None:
+        self.assertEqual(split_parts(["a", "b"], 100), [["a", "b"]])
+
+    def test_a_large_file_is_split_evenly_and_in_order(self) -> None:
+        texts = [f"line{index:02d}" for index in range(10)]  # 7 bytes each with a newline
+        parts = split_parts(texts, 30)
+        self.assertEqual([text for part in parts for text in part], texts)
+        self.assertEqual(len(parts), 3)
+        for part in parts:
+            self.assertLessEqual(sum(len(text) + 1 for text in part), 30)
+        self.assertLessEqual(max(map(len, parts)) - min(map(len, parts)), 1)
+
+
 class AssetTests(unittest.TestCase):
     def _asset(self, manifest: dict) -> Asset:
         return Asset(manifest["asset"], manifest, Path("unused.tar.zst"))
@@ -330,6 +345,22 @@ class AssetTests(unittest.TestCase):
             )
             with self.subTest(name=name), self.assertRaises(BuildError):
                 _ = bad.output
+
+    def test_elf_libraries_are_filed_in_the_elf_tree(self) -> None:
+        asset = self._asset(
+            {"asset": "ubuntu-libstdc++-12-x64", "kind": "library", "arch": "x64",
+             "format": "elf", "library": "ubuntu-libstdc++-12"}
+        )
+        self.assertEqual(asset.output, Path("elf/x86/64/ubuntu-libstdc++-12.pat"))
+        self.assertEqual(asset.machine, "x64")
+        for manifest in (
+            {"asset": "x", "kind": "library", "arch": "x64", "format": "macho",
+             "library": "libz"},
+            {"asset": "x", "kind": "toolset", "arch": "x64", "format": "elf",
+             "visual_studio": {"year": 2026}},
+        ):
+            with self.subTest(manifest=manifest), self.assertRaises(BuildError):
+                _ = self._asset(manifest).output
 
 
 FAKE_SIGMAKER = textwrap.dedent(
@@ -506,6 +537,32 @@ class BuildTests(unittest.TestCase):
             (self.root / "sigs/pe/x86/32/mingw32-zlib.pat").read_text().splitlines(),
             ["AA04CCDD 00 0000 0004 :0000 x86_libz"],
         )
+
+    def test_a_file_larger_than_the_limit_is_written_in_parts(self) -> None:
+        self._asset(
+            "ubuntu-libc6-x64",
+            {"kind": "library", "arch": "x64", "format": "elf", "library": "ubuntu-libc6"},
+            {f"ubuntu-libc6/pkg/lib{name}.a": b"a" for name in ("aa", "bbb", "cccc", "ddddd")},
+        )
+        directory = self.root / "sigs/elf/x86/64"
+        directory.mkdir(parents=True)
+        # A part an earlier, larger build left behind.
+        (directory / "ubuntu-libc6.part3.pat").write_text("01020304 00 0000 0004 :0000 stale\n")
+
+        report = self._run("--max-file-bytes", "100")
+
+        first = (directory / "ubuntu-libc6.pat").read_text().splitlines()
+        second = (directory / "ubuntu-libc6.part2.pat").read_text().splitlines()
+        self.assertEqual(len(first) + len(second), 4)
+        self.assertTrue(first and second)
+        self.assertFalse((directory / "ubuntu-libc6.part3.pat").exists())
+        provenance = json.loads((directory / "ubuntu-libc6.sources.json").read_text())
+        self.assertEqual(
+            [part["file"] for part in provenance["parts"]],
+            ["elf/x86/64/ubuntu-libc6.pat", "elf/x86/64/ubuntu-libc6.part2.pat"],
+        )
+        self.assertEqual(provenance["lines"], 4)
+        self.assertIn("4 lines in 2 parts", report)
 
     def test_archive_that_disagrees_with_its_manifest_fails(self) -> None:
         self._asset(

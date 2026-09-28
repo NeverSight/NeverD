@@ -180,7 +180,10 @@ keeps in a release:
   ARM32, unpacked from Microsoft's installation media together with the
   Windows SDK libraries those media install.
 - Static libraries that belong to no Visual Studio release, such as the MASM32
-  SDK's. Such a `library` asset names its own file (`masm32.pat`).
+  SDK's. Such a `library` asset names its own file (`masm32.pat`), and its
+  `format` (`pe` by default, or `elf`) puts the file under `pe/` or `elf/`:
+  the signatures repository files the packages its ELF files came from, such
+  as Ubuntu's `libc6-dev` builds, as `elf` library assets.
 
 ```bash
 cmake --build build --target neverd-sigmaker
@@ -191,7 +194,9 @@ python3 scripts/signatures/build_msvc_signatures.py \
 ```
 
 Each asset runs through the signature maker with `--machine` set to its
-architecture and a tail that covers every function to its end. Lines from
+architecture, which keeps the COFF objects of that machine and the ELF
+objects of its class and machine, and a tail that covers every function to
+its end. Lines from
 every servicing toolset of one Visual Studio year go into the same file, and
 so do lines from every SDK version.
 
@@ -205,8 +210,13 @@ the linkage names the libraries spell. Its lines join the generated ones and
 every rule below applies to them alike; its comment lines, which hold what
 could not be renamed, are not read, and neither does the loader read the file.
 
-When two lines state the same bytes under different names, all of them are
-dropped and the count is reported: the pattern cannot tell those routines
+ELF libraries give one routine several symbols -- glibc's `puts` is also
+`_IO_puts` -- and the signature maker writes them as one line with each name
+at offset 0. Lines that state the same bytes under names they share are one
+routine's, and become one line with every name any of them gives it; the
+matcher shows the name with the fewest leading underscores
+(`preferredAliasOrder`). When two lines state the same bytes under names with
+nothing in common, all of them are dropped and the count is reported: the pattern cannot tell those routines
 apart, and picking one name would be a guess. The loader applies every file
 of a directory together, so the rule spans the directory. Bytes that one
 file's libraries give several names are dropped from every file there, and so
@@ -238,6 +248,12 @@ An ARM64 catch funclet that is nothing but a prologue is the typical case: its
 line would name every function that begins with the same prologue. So is a
 short routine whose relocated operands are wildcards in its own line but
 fixed in a longer routine's.
+
+A file larger than 50 MB (`--max-file-bytes`), which GitHub warns about and
+at 100 MB refuses, is written as parts of even size: `<name>.pat`, then
+`<name>.part2.pat` and so on. The loader reads the parts as one library:
+their matches name it as theirs, and the Rich header chooses a release's
+parts together.
 
 Every file written is read back through `neverd-sigmaker --verify`, which uses
 the loader's parser, because one bad line makes the loader reject its whole

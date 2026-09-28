@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Build the pe/ signature files from collected MSVC and Windows SDK libraries.
+"""Build the pe/ and elf/ signature files from collected static libraries.
 
 The inputs are the release assets the signatures repository's
 `msvc-libraries.yml` workflow publishes: one zstd-compressed tar per
-toolset-or-SDK and architecture, each with a JSON manifest naming what it
-holds.  Every asset becomes lines in one file:
+toolset, SDK or library and architecture, each with a JSON manifest naming
+what it holds.  Every asset becomes lines in one file:
 
     toolset assets  ->  pe/<x86|arm>/<32|64>/vs<year>.pat
     winsdk assets   ->  pe/<x86|arm>/<32|64>/winsdk.pat
-    library assets  ->  pe/<x86|arm>/<32|64>/<library>.pat
+    library assets  ->  <pe|elf>/<x86|arm>/<32|64>/<library>.pat
 
 A library asset holds static libraries that belong to no Visual Studio
-release, such as the MASM32 SDK's, and names its file in its manifest.
+release, such as the MASM32 SDK's or a Linux distribution's, and names its
+file in its manifest; its `format` (`pe`, the default, or `elf`) says which
+tree the file belongs to.
 
 so a year's servicing toolsets (VS 2026's 14.50 and its current default, say)
 land in the same file, and so do all Windows SDK versions.
@@ -88,11 +90,14 @@ FULL_COVERAGE_TAIL = 65535
 # The collector's architecture names, the directory the loader searches for
 # that architecture, and the COFF machine neverd-sigmaker keeps.
 ARCHITECTURES = {
-    "x86": (Path("pe/x86/32"), "x86"),
-    "x64": (Path("pe/x86/64"), "x64"),
-    "arm": (Path("pe/arm/32"), "arm"),
-    "arm64": (Path("pe/arm/64"), "arm64"),
+    "x86": (Path("x86/32"), "x86"),
+    "x64": (Path("x86/64"), "x64"),
+    "arm": (Path("arm/32"), "arm"),
+    "arm64": (Path("arm/64"), "arm64"),
 }
+
+# The object formats an asset's libraries hold, each a tree of its own.
+FORMATS = ("pe", "elf")
 
 # MSVC's archives and objects, and the GNU ar archives and objects MinGW
 # builds: both hold COFF objects, which --machine sorts by architecture.
@@ -102,6 +107,11 @@ LIBRARY_SUFFIXES = (".lib", ".obj", ".a", ".o")
 # toolset and SDK files already use.
 LIBRARY_NAME = re.compile(r"[a-z0-9][a-z0-9._+-]*")
 RESERVED_LIBRARY = re.compile(r"vs[0-9]{4}|winsdk")
+
+# GitHub recommends no file above 50 MB and refuses one above 100 MB.  A file
+# larger than this is written as parts, which the loader reads as one library:
+# <name>.pat, then <name>.part2.pat, <name>.part3.pat, ...
+MAX_FILE_BYTES = 50_000_000
 
 # Lines whose first bytes are relocated are not searched for routines that
 # state them; see settle_directory.
@@ -131,8 +141,17 @@ class Asset:
         return self.manifest["arch"]
 
     @property
+    def format(self) -> str:
+        fmt = str(self.manifest.get("format", "pe"))
+        if fmt not in FORMATS:
+            raise BuildError(f"{self.name}: unknown format {fmt!r}")
+        if fmt != "pe" and self.manifest["kind"] != "library":
+            raise BuildError(f"{self.name}: a {self.manifest['kind']} asset holds PE libraries")
+        return fmt
+
+    @property
     def directory(self) -> Path:
-        return ARCHITECTURES[self.arch][0]
+        return Path(self.format) / ARCHITECTURES[self.arch][0]
 
     @property
     def machine(self) -> str:
@@ -700,6 +719,35 @@ def imported_lines(output: Path, relative: Path) -> tuple[list[str], dict | None
     }
 
 
+def split_parts(texts: list[str], limit: int) -> list[list[str]]:
+    """The lines in as few parts of at most `limit` bytes as hold them, of
+    even size, in order."""
+
+    total = sum(len(text) + 1 for text in texts)
+    count = max(1, -(-total // limit))
+    while True:
+        target = -(-total // count)
+        parts: list[list[str]] = [[]]
+        size = 0
+        for text in texts:
+            if parts[-1] and size + len(text) + 1 > target and len(parts) < count:
+                parts.append([])
+                size = 0
+            parts[-1].append(text)
+            size += len(text) + 1
+        if all(sum(len(text) + 1 for text in part) <= limit for part in parts):
+            return parts
+        count += 1
+
+
+def part_path(destination: Path, index: int) -> Path:
+    """Where part `index` (from 1) of a file goes."""
+
+    if index == 1:
+        return destination
+    return destination.with_name(f"{destination.stem}.part{index}{destination.suffix}")
+
+
 def write(
     args: argparse.Namespace, relative: Path, result: FoldResult, sources: list[dict]
 ) -> None:
@@ -707,8 +755,17 @@ def write(
         raise BuildError(f"{relative}: nothing left to write")
     destination = args.output / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text("\n".join(result.texts) + "\n", encoding="utf-8")
-    verify(args.sigmaker, destination)
+    parts = split_parts(result.texts, args.max_file_bytes)
+    written = []
+    for index, texts in enumerate(parts, start=1):
+        path = part_path(destination, index)
+        path.write_text("\n".join(texts) + "\n", encoding="utf-8")
+        verify(args.sigmaker, path)
+        written.append({"file": path.relative_to(args.output).as_posix(), "lines": len(texts)})
+    # The parts an earlier, larger build left would still be loaded.
+    for stale in destination.parent.glob(f"{destination.stem}.part*{destination.suffix}"):
+        if stale.relative_to(args.output).as_posix() not in {w["file"] for w in written}:
+            stale.unlink()
 
     provenance = {
         "file": relative.as_posix(),
@@ -722,12 +779,15 @@ def write(
         ),
         "lines": len(result.lines),
     }
+    if len(written) > 1:
+        provenance["parts"] = written
     destination.with_suffix(".sources.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(
-        f"{relative}: {len(result.lines)} lines "
-        f"({result.duplicates} duplicates folded, "
+        f"{relative}: {len(result.lines)} lines"
+        + (f" in {len(written)} parts" if len(written) > 1 else "")
+        + f" ({result.duplicates} duplicates folded, "
         f"{result.conflicting_lines} lines in {result.conflicting_groups} "
         f"ambiguous groups dropped, "
         f"{result.dropped_across_files} dropped for bytes another file of "
@@ -779,8 +839,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--asset", action="append", default=[],
                         help="only assets whose name matches this glob (repeatable)")
     parser.add_argument("--output", type=Path, required=True,
-                        help="signature tree root; files land under pe/")
+                        help="signature tree root; files land under pe/ and elf/")
     parser.add_argument("--tail", type=int, default=FULL_COVERAGE_TAIL)
+    parser.add_argument("--max-file-bytes", type=int, default=MAX_FILE_BYTES,
+                        help="write a larger file as parts: <name>.pat, <name>.part2.pat, ...")
     parser.add_argument("--neverd-ref", default=None,
                         help="NeverD revision of the signature maker, for provenance")
     parser.add_argument("--release", default=None,

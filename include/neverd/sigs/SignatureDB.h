@@ -45,10 +45,16 @@ public:
   /// file's library name is its stem, as with \ref loadDirectory.
   llvm::Error loadFiles(const std::vector<std::filesystem::path> &Files);
 
+  /// The library a pattern file holds lines of: the file's stem, less the
+  /// `.part<N>` (N from 2) of a file written in parts --
+  /// `ubuntu-libc6.part2.pat` holds lines of ubuntu-libc6, `vs2026.part2.pat`
+  /// of Visual Studio 2026.  Matches report it as their library.
+  static std::string libraryName(const std::filesystem::path &File);
+
   /// The pattern files among \p Files that fit \p Img.
   ///
-  /// A file named `vs<year>.pat` holds one Visual Studio release's runtime
-  /// libraries.  A PE file links the static runtime libraries of its
+  /// A file of library `vs<year>` (see \ref libraryName) holds one Visual
+  /// Studio release's runtime libraries.  A PE file links the static runtime libraries of its
   /// linker's release, and other releases state some of the same bytes under
   /// other names, so when the image's Rich header names the release of its
   /// linker, only that release's file is kept.  Every file that belongs to no

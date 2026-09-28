@@ -40,6 +40,48 @@ PatternGeneratorStats::operator+=(const PatternGeneratorStats &Other) {
   return *this;
 }
 
+std::optional<TargetMachine> parseTargetMachine(StringRef Name) {
+  if (Name == "x86")
+    return TargetMachine::X86;
+  if (Name == "x64")
+    return TargetMachine::X64;
+  if (Name == "arm")
+    return TargetMachine::ARM;
+  if (Name == "arm64")
+    return TargetMachine::ARM64;
+  return std::nullopt;
+}
+
+bool isObjectForMachine(const ObjectFile &Obj, TargetMachine Machine) {
+  if (const auto *COFF = dyn_cast<COFFObjectFile>(&Obj)) {
+    switch (Machine) {
+    case TargetMachine::X86:
+      return COFF->getMachine() == COFF::IMAGE_FILE_MACHINE_I386;
+    case TargetMachine::X64:
+      return COFF->getMachine() == COFF::IMAGE_FILE_MACHINE_AMD64;
+    case TargetMachine::ARM:
+      return COFF->getMachine() == COFF::IMAGE_FILE_MACHINE_ARMNT;
+    case TargetMachine::ARM64:
+      return COFF->getMachine() == COFF::IMAGE_FILE_MACHINE_ARM64;
+    }
+    return false;
+  }
+  if (const auto *ELFObj = dyn_cast<ELFObjectFileBase>(&Obj)) {
+    const bool Is64 = Obj.getBytesInAddress() == 8;
+    switch (Machine) {
+    case TargetMachine::X86:
+      return !Is64 && ELFObj->getEMachine() == ELF::EM_386;
+    case TargetMachine::X64:
+      return Is64 && ELFObj->getEMachine() == ELF::EM_X86_64;
+    case TargetMachine::ARM:
+      return !Is64 && ELFObj->getEMachine() == ELF::EM_ARM;
+    case TargetMachine::ARM64:
+      return Is64 && ELFObj->getEMachine() == ELF::EM_AARCH64;
+    }
+  }
+  return false;
+}
+
 std::optional<ELFRelocationFootprint> elfRelocationFootprint(uint16_t Machine,
                                                              uint32_t Type) {
   auto Field = [](unsigned Width) { return ELFRelocationFootprint{0, Width}; };

@@ -824,3 +824,37 @@ TEST(PatternGeneratorELF, SymbolsThatLabelOneAddressShareALine) {
   ASSERT_TRUE(static_cast<bool>(Parsed));
   EXPECT_EQ(Parsed->PublicNames.size(), 3u);
 }
+
+TEST(PatternGeneratorMachine, ObjectsAreKeptForTheirOwnArchitecture) {
+  auto Is = [](const std::vector<uint8_t> &Bytes, TargetMachine Machine) {
+    StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+    auto ObjOrErr =
+        object::ObjectFile::createObjectFile(MemoryBufferRef(Data, "test.o"));
+    if (!ObjOrErr) {
+      ADD_FAILURE() << toString(ObjOrErr.takeError());
+      return false;
+    }
+    return isObjectForMachine(**ObjOrErr, Machine);
+  };
+  const std::vector<uint8_t> Code = sequentialCode(32);
+  const auto X64 = ELFObjectBuilder(ELF::EM_X86_64, true, Code).build();
+  const auto I386 = ELFObjectBuilder(ELF::EM_386, false, Code).build();
+  // The x32 ABI: x86-64 instructions in an ELFCLASS32 object.
+  const auto X32 = ELFObjectBuilder(ELF::EM_X86_64, false, Code).build();
+  const auto AArch64 = ELFObjectBuilder(ELF::EM_AARCH64, true, Code).build();
+  const auto Amd64COFF =
+      COFFObjectBuilder(COFF::IMAGE_FILE_MACHINE_AMD64, Code).build();
+
+  EXPECT_TRUE(Is(X64, TargetMachine::X64));
+  EXPECT_FALSE(Is(X64, TargetMachine::X86));
+  EXPECT_TRUE(Is(I386, TargetMachine::X86));
+  EXPECT_FALSE(Is(I386, TargetMachine::X64));
+  EXPECT_FALSE(Is(X32, TargetMachine::X64));
+  EXPECT_FALSE(Is(X32, TargetMachine::X86));
+  EXPECT_TRUE(Is(AArch64, TargetMachine::ARM64));
+  EXPECT_FALSE(Is(AArch64, TargetMachine::ARM));
+  EXPECT_TRUE(Is(Amd64COFF, TargetMachine::X64));
+  EXPECT_FALSE(Is(Amd64COFF, TargetMachine::ARM64));
+  EXPECT_EQ(parseTargetMachine("arm64"), TargetMachine::ARM64);
+  EXPECT_FALSE(parseTargetMachine("mips").has_value());
+}

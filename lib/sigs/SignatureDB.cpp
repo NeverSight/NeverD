@@ -84,7 +84,7 @@ llvm::Error SignatureDB::loadFile(const std::filesystem::path &Path) {
     auto ModsOrErr = PatternParser::parseFile(Path);
     if (!ModsOrErr)
       return ModsOrErr.takeError();
-    std::string LibName = Path.stem().string();
+    std::string LibName = libraryName(Path);
     commitSource(std::move(*ModsOrErr), LibName, Path.string());
     return llvm::Error::success();
   }
@@ -157,6 +157,21 @@ SignatureDB::listDirectory(const std::filesystem::path &Dir) {
   return PatFiles;
 }
 
+std::string SignatureDB::libraryName(const std::filesystem::path &File) {
+  const std::string Stem = File.stem().string();
+  const size_t Dot = Stem.rfind(".part");
+  if (Dot == std::string::npos || Dot == 0)
+    return Stem;
+  const llvm::StringRef Number = llvm::StringRef(Stem).drop_front(Dot + 5);
+  unsigned Part = 0;
+  // Part 1 is the file under the library's own name; a part number is
+  // written without leading zeros.
+  if (Number.empty() || Number.front() == '0' ||
+      Number.getAsInteger(10, Part) || Part < 2)
+    return Stem;
+  return Stem.substr(0, Dot);
+}
+
 std::vector<std::filesystem::path>
 SignatureDB::selectForImage(const BinaryImage &Img,
                             std::vector<std::filesystem::path> Files) {
@@ -168,7 +183,7 @@ SignatureDB::selectForImage(const BinaryImage &Img,
 
   // "vs2026.pat" belongs to Visual Studio 2026; other names to no release.
   auto ReleaseOf = [](const std::filesystem::path &Path) {
-    const std::string Stem = Path.stem().string();
+    const std::string Stem = libraryName(Path);
     unsigned Year = 0;
     if (Stem.size() != 6 || llvm::StringRef(Stem).take_front(2) != "vs" ||
         llvm::StringRef(Stem).drop_front(2).getAsInteger(10, Year))
@@ -247,7 +262,7 @@ SignatureDB::loadFiles(const std::vector<std::filesystem::path> &PatFiles) {
   for (ParsedFile &File : Parsed) {
     SigSource Source;
     Source.Path = File.Path.string();
-    Source.LibraryName = File.Path.stem().string();
+    Source.LibraryName = libraryName(File.Path);
     Source.ModuleStart = NewModules.size();
     Source.ModuleCount = File.Modules.size();
     NewSources.push_back(std::move(Source));

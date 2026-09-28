@@ -165,6 +165,17 @@ TEST_F(SignatureDirectoryTest, ReportsTheFirstInvalidFileBySortedPath) {
   EXPECT_EQ(Message.find("z-invalid.pat"), std::string::npos) << Message;
 }
 
+TEST_F(SignatureDirectoryTest, APartsMatchesNameItsLibrary) {
+  write("ubuntu-libc6.pat", "CCDD 00 0000 0002 :0000 other_part\n");
+  write("ubuntu-libc6.part2.pat", "AABB 00 0000 0002 :0000 puts\n");
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadDirectory(Directory));
+  Database.apply(makeMatchingImage(), {0x1000});
+
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_EQ(Database.matches()[0].LibraryName, "ubuntu-libc6");
+}
+
 TEST_F(SignatureDirectoryTest, ReloadReplacesTheWholeDirectorySnapshot) {
   write("a.pat", "AABB 00 0000 0002 :0000 first_name\n");
   write("b.pat", "CCDD 00 0000 0002 :0000 stale_name\n");
