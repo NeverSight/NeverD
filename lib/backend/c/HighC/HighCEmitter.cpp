@@ -759,8 +759,7 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                    SourceCallTypeHint::Kind::SwiftValueWitness) {
           // The expression reloads the required witness from its runtime
           // metadata argument and therefore needs no linked declaration.
-        } else if (Hint.CallKind ==
-                   SourceCallTypeHint::Kind::SwiftVirtual) {
+        } else if (Hint.CallKind == SourceCallTypeHint::Kind::SwiftVirtual) {
           // The proven target is a local value loaded before the call.
         } else if (Hint.CallKind == SourceCallTypeHint::Kind::Native ||
                    Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall ||

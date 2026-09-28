@@ -209,7 +209,8 @@ int main(void) {
 TEST(HighCSourceCalls, UnusedCallsAfterPredicatesPreserveSideEffects) {
   const auto Integer = NdType::makeInt(8);
   const auto Effect = native("fixture_predicate_effect", Integer, {Integer});
-  const auto Marker = native("fixture_predicate_marker", NdType::makeVoid(), {});
+  const auto Marker =
+      native("fixture_predicate_marker", NdType::makeVoid(), {});
   std::vector<HighFunc> Functions;
   for (unsigned Form = 0; Form != 3; ++Form) {
     auto Function = returning("predicate_calls_" + std::to_string(Form),
@@ -336,15 +337,14 @@ TEST(HighCSourceCalls, ExactNarrowZeroSuppliesOnlyPointerNullArguments) {
     Function.ReturnType = NdType::makeVoid();
     HighStmt Statement;
     Statement.Kind = StmtKind::Call;
-    Statement.CallExpr = call(Binding, NdType::makeVoid(),
-                              {HighExpr::makeConst(Value, 4)});
+    Statement.CallExpr =
+        call(Binding, NdType::makeVoid(), {HighExpr::makeConst(Value, 4)});
     Function.Body = {std::move(Statement)};
     return emit({Function});
   };
 
   const auto Null = Render(0);
-  EXPECT_NE(Null.find("fixture_pointer_consumer((void*)0)"),
-            std::string::npos)
+  EXPECT_NE(Null.find("fixture_pointer_consumer((void*)0)"), std::string::npos)
       << Null;
   EXPECT_EQ(Null.find("bad source call"), std::string::npos) << Null;
 
@@ -1591,9 +1591,8 @@ TEST(HighCSourceCalls, ForwardedCallResultsKeepInterveningCallOrder) {
   First.TheArch = Arch::X64;
   MedVar Second = First;
   Second.Id = 2;
-  HighFunc Function = returning("ordered_calls",
-                                HighExpr::makeVar(Second, Pointer),
-                                {Pointer, Pointer});
+  HighFunc Function = returning(
+      "ordered_calls", HighExpr::makeVar(Second, Pointer), {Pointer, Pointer});
   HighStmt FirstCall;
   FirstCall.Kind = StmtKind::Assign;
   FirstCall.Addr = 0x1000;
@@ -1633,9 +1632,9 @@ TEST(HighCSourceCalls, RuntimeImportsDoNotBindToLiftedVeneersWithTheSameName) {
   auto Runtime = native("objc_opt_self", Pointer, {Pointer});
   Runtime.CallKind = SourceCallTypeHint::Kind::ObjCRuntimeCall;
   Runtime.TargetAddress = 0xc772f8;
-  auto Veneer = returning("_objc_opt_self",
-                          call(Runtime, Pointer, {parameter(0, Pointer)}),
-                          {Pointer});
+  auto Veneer =
+      returning("_objc_opt_self",
+                call(Runtime, Pointer, {parameter(0, Pointer)}), {Pointer});
   Veneer.Entry = 0x915d3c;
 
   const auto Source = emit({Veneer});
@@ -1643,11 +1642,9 @@ TEST(HighCSourceCalls, RuntimeImportsDoNotBindToLiftedVeneersWithTheSameName) {
   EXPECT_NE(Source.find("extern void* objc_opt_self(void*);"),
             std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("void* objc_opt_self_2(void* arg0)"),
-            std::string::npos)
+  EXPECT_NE(Source.find("void* objc_opt_self_2(void* arg0)"), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("objc_opt_self((void*)(uintptr_t)("),
-            std::string::npos)
+  EXPECT_NE(Source.find("objc_opt_self((void*)(uintptr_t)("), std::string::npos)
       << Source;
   compileAndRun(Source + R"(
 void *objc_opt_self(void *object) {
@@ -2069,16 +2066,16 @@ TEST(HighCSourceCalls, DynamicFormatsPermitEmptyOrPointerVariadicTails) {
       3, 2, 0, SourceCallTypeHint::FormatSyntax::NSString, {}, false, true};
   PointerTail.Signature.Parameters.push_back({"first", Pointer});
   PointerTail.Signature.Parameters.push_back({"second", Pointer});
-  ASSERT_TRUE(assignDarwinVariadicSourceABI(PointerTail.Signature, 3,
-                                             Arch::X64, Error));
-  const auto PointerTailSource = emit(
-      {returning("send_dynamic_pointer_format",
-                 call(PointerTail, Pointer,
-                      {parameter(0, Pointer), parameter(1, Pointer),
-                       parameter(2, Pointer), parameter(3, Pointer),
-                       parameter(4, Pointer)}),
-                 {Pointer, Pointer, Pointer, Pointer, Pointer})},
-      false);
+  ASSERT_TRUE(assignDarwinVariadicSourceABI(PointerTail.Signature, 3, Arch::X64,
+                                            Error));
+  const auto PointerTailSource =
+      emit({returning("send_dynamic_pointer_format",
+                      call(PointerTail, Pointer,
+                           {parameter(0, Pointer), parameter(1, Pointer),
+                            parameter(2, Pointer), parameter(3, Pointer),
+                            parameter(4, Pointer)}),
+                      {Pointer, Pointer, Pointer, Pointer, Pointer})},
+           false);
   EXPECT_NE(PointerTailSource.find("(*)(id, SEL, void*, ...)"),
             std::string::npos)
       << PointerTailSource;
@@ -2087,13 +2084,12 @@ TEST(HighCSourceCalls, DynamicFormatsPermitEmptyOrPointerVariadicTails) {
 
   auto ConflictingDynamic = PointerTail;
   ConflictingDynamic.Format->DynamicWithoutArguments = true;
-  EXPECT_NE(emit({returning(
-                      "bad_conflicting_dynamic_format",
-                      call(ConflictingDynamic, Pointer,
-                           {parameter(0, Pointer), parameter(1, Pointer),
-                            parameter(2, Pointer), parameter(3, Pointer),
-                            parameter(4, Pointer)}),
-                      {Pointer, Pointer, Pointer, Pointer, Pointer})},
+  EXPECT_NE(emit({returning("bad_conflicting_dynamic_format",
+                            call(ConflictingDynamic, Pointer,
+                                 {parameter(0, Pointer), parameter(1, Pointer),
+                                  parameter(2, Pointer), parameter(3, Pointer),
+                                  parameter(4, Pointer)}),
+                            {Pointer, Pointer, Pointer, Pointer, Pointer})},
                  false)
                 .find("bad source call: invalid variadic source declaration"),
             std::string::npos);
@@ -2208,23 +2204,20 @@ TEST(HighCSourceCalls, DarwinWeakImportsRemainOptionalInDeclarations) {
 TEST(HighCSourceCalls, CompilerRTPlatformCheckKeepsItsExactLinkNameAndABI) {
   const auto I32 = NdType::makeInt(4, true);
   const auto U32 = NdType::makeInt(4, false);
-  auto Hint = native("__isPlatformVersionAtLeast", I32,
-                     {U32, U32, U32, U32});
+  auto Hint = native("__isPlatformVersionAtLeast", I32, {U32, U32, U32, U32});
   Hint.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
-  Hint.Signature.Origin =
-      SourceFunctionTypeHint::OriginKind::DarwinRuntime;
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinRuntime;
   std::string Error;
   ASSERT_TRUE(assignDarwinFixedSourceABI(Hint.Signature, Arch::X64, Error));
-  auto Function = returning(
-      "check_platform",
-      call(Hint, I32,
-           {parameter(0, U32), parameter(1, U32), parameter(2, U32),
-            parameter(3, U32)}),
-      {U32, U32, U32, U32});
+  auto Function = returning("check_platform",
+                            call(Hint, I32,
+                                 {parameter(0, U32), parameter(1, U32),
+                                  parameter(2, U32), parameter(3, U32)}),
+                            {U32, U32, U32, U32});
   const auto Source = emit({Function});
-  EXPECT_NE(Source.find(
-                "extern int32_t neverd_darwin___isPlatformVersionAtLeast("),
-            std::string::npos)
+  EXPECT_NE(
+      Source.find("extern int32_t neverd_darwin___isPlatformVersionAtLeast("),
+      std::string::npos)
       << Source;
   EXPECT_NE(Source.find("__asm__(\"___isPlatformVersionAtLeast\")"),
             std::string::npos)
@@ -2512,8 +2505,7 @@ TEST(HighCSourceCalls, PointerValuesAssignedToIntegerTempsUsePointerBits) {
   Function.Name = "pointer_temp_bits";
   Function.ReturnType = I64;
   Function.Params = {{"value", BytePointer}};
-  Function.SourceTypeHint =
-      native(Function.Name, I64, {BytePointer}).Signature;
+  Function.SourceTypeHint = native(Function.Name, I64, {BytePointer}).Signature;
   HighStmt Assign;
   Assign.Kind = StmtKind::Assign;
   Assign.Dst = HighExpr::makeVar(Bits, I64);
@@ -2760,7 +2752,8 @@ int main(void) {
       Bad.Signature.Parameters[4].Location.EntryStackOffset = 16;
     }
     if (Mutation == 10) {
-      ASSERT_TRUE(assignDarwinFixedSourceABI(Bad.Signature, Arch::AArch64, Error));
+      ASSERT_TRUE(
+          assignDarwinFixedSourceABI(Bad.Signature, Arch::AArch64, Error));
       ASSERT_TRUE(validateSourceABI(Bad.Signature, Error));
     }
     EXPECT_NE(Render(Bad).find("bad source call"), std::string::npos);

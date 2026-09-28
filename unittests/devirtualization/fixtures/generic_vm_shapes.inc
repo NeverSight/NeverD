@@ -1,4 +1,6 @@
 // Original public fixture scaffolding. The machines use only caller-saved GPRs.
+// Assembly syntax must not be reformatted as C++.
+// clang-format off
 #if defined(_WIN32) || defined(GENERIC_VM_MS_ABI)
 #define SHAPE_X %rcx
 #define SHAPE_Y %rdx
