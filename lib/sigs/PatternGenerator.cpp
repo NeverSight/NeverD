@@ -507,6 +507,8 @@ struct GenericFunction {
   SectionRef Section;
   uint64_t Offset;
   ArrayRef<uint8_t> Data;
+  /// The size an ELF symbol states (st_size), or 0.
+  uint64_t SymbolSize = 0;
 };
 
 /// Calls \p Visit for each function symbol of \p Obj, in symbol-table order.
@@ -567,7 +569,10 @@ void forEachGenericFunction(const ObjectFile &Obj, VisitorT Visit) {
 
     ArrayRef<uint8_t> Data(
         reinterpret_cast<const uint8_t *>(Contents->data()) + Offset, FuncSize);
-    Visit(GenericFunction{Name, *Sec, Offset, Data});
+    uint64_t SymbolSize = 0;
+    if (isa<ELFObjectFileBase>(&Obj))
+      SymbolSize = ELFSymbolRef(Sym).getSize();
+    Visit(GenericFunction{Name, *Sec, Offset, Data, SymbolSize});
   }
 }
 
@@ -622,6 +627,7 @@ PatternGeneratorStats generateELF(const ELFObjectFileBase &Obj,
   struct Routine {
     GenericFunction Fn;
     SmallVector<StringRef, 2> Names;
+    uint64_t Size = 0;
   };
   std::vector<Routine> Routines;
   std::map<std::pair<SectionRef, uint64_t>, size_t> ByStart;
@@ -630,15 +636,23 @@ PatternGeneratorStats generateELF(const ELFObjectFileBase &Obj,
         ByStart.try_emplace({Fn.Section, Fn.Offset}, Routines.size());
     if (Fresh)
       Routines.push_back({Fn, {}});
-    SmallVector<StringRef, 2> &Names = Routines[It->second].Names;
-    if (!llvm::is_contained(Names, Fn.Name))
-      Names.push_back(Fn.Name);
+    Routine &R = Routines[It->second];
+    if (!llvm::is_contained(R.Names, Fn.Name))
+      R.Names.push_back(Fn.Name);
+    R.Size = std::max(R.Size, Fn.SymbolSize);
   });
 
   for (Routine &R : Routines) {
     llvm::sort(R.Names, [](StringRef A, StringRef B) {
       return preferredAliasOrder(A, B);
     });
+    // A function ends where its symbol's size says, before the padding that
+    // aligns what follows it: builds of a library pad the same code
+    // differently, and a line that took the padding in would give the same
+    // routine a different claim in each. With no size, or a symbol inside
+    // it, the next symbol still ends it.
+    if (R.Size && R.Size < R.Fn.Data.size())
+      R.Fn.Data = R.Fn.Data.take_front(R.Size);
     const GenericFunction &Fn = R.Fn;
     const uint64_t Begin = Fn.Offset;
     const uint64_t End = Fn.Offset + Fn.Data.size();
