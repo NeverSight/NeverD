@@ -35,6 +35,11 @@ sequence. `LowIR -> MedIR` is shared. Structured decompilation then uses
 `MedIR -> LLVM IR` route. In particular, patch and lift modes deliberately skip
 HighIR.
 
+Both source routes apply the same module-wide return modeling before recovering
+call arguments. On 32-bit targets, a callee proven to return a 64-bit integer
+uses the two integer return registers; HighIR and LLVM emission must preserve
+both halves through callers and source returns.
+
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
 `lib/sdk/SessionImpl.h`; `neverd_session_load` selects a loader and builds a
@@ -1423,6 +1428,15 @@ establishes independence from the predicate and all other columns. Marginal
 domains alone never authorize a Cartesian-product assumption.
 
 MBA simplification keeps exact derivations inside `lib/symbolic/mba`.
+Split-word arithmetic recovery also lives there as a solver-independent
+candidate search: it proposes packed addition or subtraction from four
+same-width word inputs, then requires the caller's bitvector equivalence
+proof. Its deterministic samples only discard candidates. The HighIR and LLVM
+bridges translate exact concatenation and defined carry predicates into that
+shared expression; the LLVM bridge admits a disjoint packed OR and a widened
+no-wrap shift only when their operand widths prove the flags for every input.
+Unknown operators, incomplete proofs, and unprofitable output leave the
+original expression intact.
 Before HighIR algebra, private-frame forwarding uses source-local identities
 after renaming and the shared target-width frame-address proof. Exact integer
 reads in straight-line functions can reuse a stored value while its inputs and
@@ -1431,6 +1445,22 @@ calls, ordered memory, malformed graphs and control-flow joins prevent this
 proof. Replayed operations must be total and explicitly typed, store/load
 truncation is retained, and budgets count rendered trees including repeated
 DAG edges. The proof applies to both 32-bit and 64-bit targets.
+HighIR's scalar-definition proof also survives an ordinary store whose address
+and value contain no hidden effects: the store changes memory, not an
+unescaped register or temporary. A derivational rewrite that ties the local
+expression's size may still replace it when expanding those definitions proves
+a smaller expression; dead scalar assignments are then removed without another
+copy-propagation round.
+On the LLVM route, temporary allocas are promoted first. Exact accesses wholly
+inside the synthetic private frame then regain their frame-pointer provenance
+before SROA and MBA simplification. Dynamic offsets, escaping pointers,
+ordered accesses and out-of-frame ranges keep their original representation.
+A 32-bit view of the entry stack pointer qualifies only for a 32-bit target;
+truncating a 64-bit target address does not prove a frame alias.
+When an explicit return reads a proven private-frame slot, the optimizer keeps
+that value-flow fact on the return terminator through SROA. LLVMC uses it to
+distinguish an intentional memory-derived result from a residual call register
+when inferring whether generated C should return a value.
 The MedIR-to-HighIR memory boundary recovers a target-width unsigned address
 view only from an explicit zero extension of that width into the LowIR VA
 carrier. Arbitrary wide expressions and sign extensions remain intact; frame

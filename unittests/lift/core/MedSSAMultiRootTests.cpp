@@ -699,3 +699,96 @@ TEST(MedSEHEstablisherFrame, PublicNestedSEHUsesOneSlotInMedAndHighC) {
 }
 
 } // namespace
+
+namespace {
+
+// sub rsp,0x38; mov rax,[rsp+0x60]; mov [rsp+0x20],rax; call callee;
+// add rsp,0x38; ret -- RCX, RDX, R8 and R9 are passed through untouched.
+BinaryImage makeWin64ForwarderImage() {
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Callee = 0x140001020;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = Entry;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Entry;
+  Text.Size = 0x30;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  const int32_t Rel = static_cast<int32_t>(Callee - (Entry + 0x13 + 5));
+  const uint8_t Code[] = {0x48,
+                          0x83,
+                          0xec,
+                          0x38, // sub
+                          0x48,
+                          0x8b,
+                          0x44,
+                          0x24,
+                          0x60, // mov rax
+                          0x48,
+                          0x89,
+                          0x44,
+                          0x24,
+                          0x20, // mov [rsp]
+                          0x90,
+                          0x90,
+                          0x90,
+                          0x90,
+                          0x90, // pad
+                          0xe8,
+                          static_cast<uint8_t>(Rel), // call
+                          static_cast<uint8_t>(Rel >> 8),
+                          static_cast<uint8_t>(Rel >> 16),
+                          static_cast<uint8_t>(Rel >> 24),
+                          0x48,
+                          0x83,
+                          0xc4,
+                          0x38,  // add
+                          0xc3}; // ret
+  std::copy(std::begin(Code), std::end(Code), Text.Data.begin());
+  Text.Data[Callee - Entry] = 0xc3;
+  Img.Segments.push_back(std::move(Text));
+  Section Section;
+  Section.Name = ".text";
+  Section.VA = Entry;
+  Section.Size = 0x30;
+  Section.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Section));
+  Img.Symbols.push_back(Symbol::makeFunc(Entry, 0x20));
+  Img.Symbols.push_back(Symbol::makeFunc(Callee, 1));
+  return Img;
+}
+
+} // namespace
+
+TEST(Win64Forwarder, UntouchedRegisterArgumentsPassTheParameters) {
+  auto Img = makeWin64ForwarderImage();
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  const HighFunc *Forwarder = nullptr;
+  for (const HighFunc &Func : Result.HighFuncs)
+    if (Func.Entry == Img.Entry)
+      Forwarder = &Func;
+  ASSERT_NE(Forwarder, nullptr);
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.Image = &Img;
+  ASSERT_TRUE(HighCEmitter().emit({*Forwarder}, Stream, Options));
+  Stream.flush();
+  // The outgoing stack argument means all four register slots are arguments;
+  // the function never writes them, so they carry its own parameters.
+  EXPECT_NE(Source.find("(arg0, arg1, arg2, arg3, arg4)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("(0, 0, 0, 0,"), std::string::npos) << Source;
+}

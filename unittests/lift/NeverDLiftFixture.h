@@ -119,8 +119,11 @@ protected:
     return exec(ndBin(), {"lift", "-dump-high", Binary.string()});
   }
 
-  RunResult liftToLLVMIR(const fs::path &Binary, const std::string &Func = "") {
+  RunResult liftToLLVMIR(const fs::path &Binary, const std::string &Func = "",
+                         bool NoOptimization = false) {
     (void)Func;
+    if (NoOptimization)
+      return exec(ndBin(), {"lift", "--no-opt", Binary.string()});
     return exec(ndBin(), {"lift", Binary.string()});
   }
 
@@ -165,8 +168,9 @@ protected:
   }
 
   void verifyLLVMIRContains(const fs::path &Binary, const std::string &Func,
-                            const std::string &Needle) {
-    auto R = liftToLLVMIR(Binary, Func);
+                            const std::string &Needle,
+                            bool NoOptimization = false) {
+    auto R = liftToLLVMIR(Binary, Func, NoOptimization);
     ASSERT_EQ(R.exitCode, 0) << "LLVM IR lift failed: " << R.err;
     EXPECT_TRUE(R.out.find(Needle) != std::string::npos)
         << "Expected '" << Needle << "' in LLVM IR:\n"

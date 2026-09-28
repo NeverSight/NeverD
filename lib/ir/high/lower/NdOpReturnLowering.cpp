@@ -14,6 +14,9 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 
+#include <algorithm>
+#include <stdexcept>
+
 namespace neverd {
 
 namespace {
@@ -62,6 +65,16 @@ ExprPtr unchangedDeclaredReturnParameter(const MedFunc &Med,
     return HighExpr::makeVar(Parameter, Med.TypedParams[I].Type);
   }
   return nullptr;
+}
+
+const MedBlock *onlyPredecessor(const MedFunc &Med, const MedBlock &Block) {
+  if (Block.Preds.size() != 1)
+    return nullptr;
+  const int Id = Block.Preds.front();
+  auto It = std::find_if(
+      Med.Blocks.begin(), Med.Blocks.end(),
+      [Id](const MedBlock &Candidate) { return Candidate.Id == Id; });
+  return It == Med.Blocks.end() ? nullptr : &*It;
 }
 } // namespace
 
@@ -156,11 +169,9 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     }
   }
 
-  if (!RetVal && CurBlock.Preds.size() == 1) {
-    const int PI = CurBlock.Preds.front();
-    if (PI >= 0 && PI < static_cast<int>(Med.Blocks.size())) {
-      const auto &Pred = Med.Blocks[PI];
-      for (auto RIt = Pred.Ops.rbegin(); RIt != Pred.Ops.rend(); ++RIt) {
+  if (!RetVal) {
+    if (const MedBlock *Pred = onlyPredecessor(Med, CurBlock)) {
+      for (auto RIt = Pred->Ops.rbegin(); RIt != Pred->Ops.rend(); ++RIt) {
         if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0 ||
             RIt->Output.RegOff != ReturnReg)
           continue;
@@ -176,6 +187,56 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
 
   if (!RetVal)
     RetVal = unchangedDeclaredReturnParameter(Med, TRI, ReturnReg);
+
+  // A proven i64 result on a 32-bit target occupies both integer return
+  // registers.  The RETURN operand names only the low register, so recover
+  // the high register from the same reaching definitions before constructing
+  // the source return value.  Keep the low and high SSA values separate until
+  // this boundary; an unrelated earlier write to the high register is not a
+  // substitute for the value reaching this RETURN.
+  if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Int &&
+      Func.ReturnType->Size == 2 * TRI.PointerSize && TRI.PointerSize == 4 &&
+      TRI.IntReturnReg2 != 0 && RetVal && RetVal->Type &&
+      RetVal->Type->Size == TRI.PointerSize) {
+    ExprPtr High;
+    for (auto RIt = CurBlock.Ops.rbegin(); RIt != CurBlock.Ops.rend(); ++RIt) {
+      if (RIt->Opcode == NdOp::RETURN)
+        continue;
+      if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
+          RIt->Output.RegOff == TRI.IntReturnReg2) {
+        High = ValueFromDefinition(*RIt);
+        break;
+      }
+    }
+    if (!High)
+      for (const auto &Phi : CurBlock.Phis)
+        if (Phi.Output.Kind == MedVar::Reg &&
+            Phi.Output.RegOff == TRI.IntReturnReg2) {
+          High = HighExpr::makeVar(Phi.Output);
+          break;
+        }
+    if (!High) {
+      if (const MedBlock *Pred = onlyPredecessor(Med, CurBlock)) {
+        for (auto RIt = Pred->Ops.rbegin(); RIt != Pred->Ops.rend(); ++RIt) {
+          if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0 ||
+              RIt->Output.RegOff != TRI.IntReturnReg2)
+            continue;
+          High = ValueFromDefinition(*RIt);
+          break;
+        }
+      }
+    }
+    if (High) {
+      auto Pair = HighExpr::makeBinop(
+          NdOp::CONCAT, sourceBitSlice(High, 0, TRI.PointerSize),
+          sourceBitSlice(RetVal, 0, TRI.PointerSize));
+      Pair->Type = Func.ReturnType;
+      RetVal = std::move(Pair);
+    } else {
+      throw std::runtime_error(
+          "cannot recover the high register of a wide integer return");
+    }
+  }
 
   if (!RetVal) {
     uint16_t RetSz = Func.ReturnType && Func.ReturnType->Size

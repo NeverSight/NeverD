@@ -24,6 +24,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/pass/ir/simplify/SymSimplifyPass.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -37,6 +38,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -111,6 +113,38 @@ llvm::Function *buildCarrySaveAddShift(llvm::Module &M) {
   llvm::Value *And = B.CreateAnd(X, Y);
   llvm::Value *Two = B.CreateShl(And, llvm::ConstantInt::get(I64, 1));
   B.CreateRet(B.CreateAdd(Xor, Two));
+  return F;
+}
+
+llvm::Function *buildSplitWordCarrySave(llvm::Module &M, bool SignedNoWrap) {
+  llvm::LLVMContext &C = M.getContext();
+  auto *I32 = llvm::Type::getInt32Ty(C);
+  auto *I64 = llvm::Type::getInt64Ty(C);
+  auto *FT = llvm::FunctionType::get(I64, {I32, I32, I32, I32}, false);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage,
+                             SignedNoWrap ? "packed_nsw" : "packed_nuw", &M);
+  llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+  auto It = F->arg_begin();
+  llvm::Value *AL = &*It++;
+  llvm::Value *AH = &*It++;
+  llvm::Value *BL = &*It++;
+  llvm::Value *BH = &*It++;
+  llvm::Value *Parity = B.CreateXor(AL, BL);
+  llvm::Value *Both = B.CreateAnd(AL, BL);
+  llvm::Value *HighParity = B.CreateXor(AH, BH);
+  llvm::Value *HighBoth = B.CreateAnd(AH, BH);
+  auto *Funnel =
+      llvm::Intrinsic::getOrInsertDeclaration(&M, llvm::Intrinsic::fshl, {I32});
+  llvm::Value *Shifted = B.CreateCall(Funnel, {HighBoth, Both, B.getInt32(1)});
+  llvm::Value *Low = B.CreateAdd(AL, BL);
+  llvm::Value *Carry = B.CreateICmpULT(Low, Parity);
+  llvm::Value *High =
+      B.CreateAdd(B.CreateAdd(HighParity, Shifted), B.CreateZExt(Carry, I32));
+  llvm::Value *Upper =
+      B.CreateShl(B.CreateZExt(High, I64), B.getInt64(32), "",
+                  /*HasNUW=*/!SignedNoWrap, /*HasNSW=*/SignedNoWrap);
+  B.CreateRet(B.CreateDisjointOr(Upper, B.CreateZExt(Low, I64)));
   return F;
 }
 
@@ -289,6 +323,35 @@ TEST(SymSimplifyGuard, RewritesCarrySaveAdditionWithAConstantLeftShift) {
   EXPECT_GT(SymSimplifyPass::simplify(*F), 0u) << printFunction(*F);
   for (const llvm::Instruction &I : llvm::instructions(*F))
     EXPECT_NE(I.getOpcode(), llvm::Instruction::Xor) << printFunction(*F);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+TEST(SymSimplifyGuard, ProvesPackedDisjointOrAndUnsignedWidenedShift) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildSplitWordCarrySave(M, /*SignedNoWrap=*/false);
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+
+  const SymSimplifyResult Result = SymSimplifyPass::simplifyWithResult(*F);
+  EXPECT_GT(Result.Rewrites, 0u) << printFunction(*F);
+  EXPECT_EQ(Result.Proof, solver::ProofStatus::Equivalent);
+  const std::string After = printFunction(*F);
+  EXPECT_NE(After.find("add i64"), std::string::npos) << After;
+  EXPECT_EQ(After.find("@llvm.fshl"), std::string::npos) << After;
+  EXPECT_EQ(After.find("or disjoint"), std::string::npos) << After;
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+TEST(SymSimplifyGuard, RetainsSignedNoWrapShiftWithUnprovedDomain) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildSplitWordCarrySave(M, /*SignedNoWrap=*/true);
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+
+  SymSimplifyPass::simplify(*F);
+  const std::string After = printFunction(*F);
+  EXPECT_NE(After.find("shl nsw i64"), std::string::npos) << After;
+  EXPECT_NE(After.find("or disjoint i64"), std::string::npos) << After;
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
@@ -2586,7 +2649,7 @@ TEST(SymSimplifyGuard, MeasuresSharedArithmeticInsideOneClosedRegion) {
   }
 }
 
-TEST(SymSimplifyGuard, KeepsExternallyUsedSharedComputationOpaque) {
+TEST(SymSimplifyGuard, PreservesExternallyUsedSharedComputation) {
   llvm::LLVMContext C;
   llvm::Module M("external_shared", C);
   auto *Ty = llvm::Type::getInt32Ty(C);
@@ -2599,11 +2662,39 @@ TEST(SymSimplifyGuard, KeepsExternallyUsedSharedComputationOpaque) {
   llvm::Value *X = F->getArg(0);
   llvm::Value *Y = F->getArg(1);
   llvm::Value *Union = B.CreateOr(X, Y);
-  B.CreateStore(Union, F->getArg(2));
+  auto *Stored = B.CreateStore(Union, F->getArg(2));
   B.CreateRet(B.CreateOr(B.CreateSub(Union, X), Union));
-  const std::string Before = printFunction(*F);
-  EXPECT_EQ(SymSimplifyPass::simplify(*F), 0u);
-  EXPECT_EQ(printFunction(*F), Before);
+  EXPECT_GT(SymSimplifyPass::simplify(*F), 0u);
+  EXPECT_EQ(Stored->getValueOperand(), Union);
+  EXPECT_EQ(instructionCount(*F), 4u) << printFunction(*F);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+TEST(SymSimplifyGuard, SimplifiesCarrySaveWithExternallyUsedAnd) {
+  llvm::LLVMContext C;
+  llvm::Module M("shared_carry_save", C);
+  auto *Ty = llvm::Type::getInt32Ty(C);
+  auto *Ptr = llvm::PointerType::get(C, 0);
+  auto *FT = llvm::FunctionType::get(Ty, {Ty, Ty, Ptr}, false);
+  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage,
+                                   "shared_carry_save", &M);
+  auto *BB = llvm::BasicBlock::Create(C, "entry", F);
+  llvm::IRBuilder<> B(BB);
+  llvm::Value *X = F->getArg(0);
+  llvm::Value *Y = F->getArg(1);
+  llvm::Value *And = B.CreateAnd(X, Y);
+  auto *Stored = B.CreateStore(And, F->getArg(2));
+  B.CreateRet(B.CreateAdd(B.CreateXor(X, Y), B.CreateShl(And, 1)));
+
+  EXPECT_GT(SymSimplifyPass::simplify(*F), 0u) << printFunction(*F);
+  EXPECT_EQ(Stored->getValueOperand(), And);
+  EXPECT_EQ(instructionCount(*F), 4u) << printFunction(*F);
+  const auto *Ret = llvm::cast<llvm::ReturnInst>(BB->getTerminator());
+  const auto *Sum = llvm::dyn_cast<llvm::BinaryOperator>(Ret->getReturnValue());
+  ASSERT_NE(Sum, nullptr);
+  EXPECT_EQ(Sum->getOpcode(), llvm::Instruction::Add);
+  EXPECT_TRUE((Sum->getOperand(0) == X && Sum->getOperand(1) == Y) ||
+              (Sum->getOperand(0) == Y && Sum->getOperand(1) == X));
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
@@ -2635,6 +2726,121 @@ TEST(SymSimplifyGuard, PropagatesExternalUsesBeforeCountingDeadInstructions) {
   EXPECT_EQ(Stored->getValueOperand(), Shared);
   EXPECT_EQ(instructionCount(*F), 5u) << printFunction(*F);
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+TEST(SymSimplifyGuard, PromotesOnlyProvenPrivateFrameAccesses) {
+  llvm::LLVMContext C;
+  llvm::Module M("private_frame", C);
+  M.setDataLayout("e-m:e-p:64:64-i64:64-n8:16:32:64-S128");
+  auto *I8 = llvm::Type::getInt8Ty(C);
+  auto *I32 = llvm::Type::getInt32Ty(C);
+  auto *I64 = llvm::Type::getInt64Ty(C);
+  auto *Ptr = llvm::PointerType::get(C, 0);
+  auto Build = [&](llvm::StringRef Name, bool Dynamic) {
+    auto *FT = llvm::FunctionType::get(
+        I32,
+        Dynamic ? std::vector<llvm::Type *>{I32, I32, I32}
+                : std::vector<llvm::Type *>{I32, I32},
+        false);
+    auto *F =
+        llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
+    auto *BB = llvm::BasicBlock::Create(C, kFrameSetupBlock, F);
+    llvm::IRBuilder<> B(BB);
+    auto *Frame =
+        B.CreateAlloca(llvm::ArrayType::get(I8, 64), nullptr, "frame");
+    auto *End = B.CreateInBoundsGEP(I8, Frame, B.getInt64(32), "frame_end");
+    llvm::Value *SP = B.CreatePtrToInt(End, I64, kRspInitValue);
+    auto Slot = [&](int64_t Offset) {
+      return B.CreateIntToPtr(B.CreateAdd(SP, B.getInt64(Offset)), Ptr);
+    };
+    llvm::Value *X = F->getArg(0), *Y = F->getArg(1);
+    B.CreateStore(X, Slot(-4));
+    B.CreateStore(Y, Slot(-8));
+    if (Dynamic) {
+      llvm::Value *Index = B.CreateAnd(F->getArg(2), B.getInt32(1));
+      llvm::Value *Offset = B.CreateAdd(
+          B.CreateMul(B.CreateZExt(Index, I64), B.getInt64(4)), B.getInt64(-8));
+      B.CreateStore(Y, B.CreateIntToPtr(B.CreateAdd(SP, Offset), Ptr));
+      B.CreateRet(B.CreateLoad(I32, Slot(-4)));
+    } else {
+      llvm::Value *A = B.CreateLoad(I32, Slot(-4));
+      llvm::Value *D = B.CreateLoad(I32, Slot(-8));
+      llvm::Value *Parity = B.CreateXor(A, D);
+      llvm::Value *Carry = B.CreateShl(B.CreateAnd(A, D), B.getInt32(1));
+      B.CreateRet(B.CreateAdd(Parity, Carry));
+    }
+  };
+  Build("exact_private", false);
+  Build("dynamic_alias", true);
+  auto BuildUnproved = [&](llvm::StringRef Name, int64_t Offset, bool Narrow,
+                           bool Volatile) {
+    auto *FT = llvm::FunctionType::get(I32, {I32}, false);
+    auto *F =
+        llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, kFrameSetupBlock, F));
+    auto *Frame =
+        B.CreateAlloca(llvm::ArrayType::get(I8, 64), nullptr, "frame");
+    auto *End = B.CreateInBoundsGEP(I8, Frame, B.getInt64(32), "frame_end");
+    llvm::Value *SP = B.CreatePtrToInt(End, I64, kRspInitValue);
+    if (Narrow)
+      SP = B.CreateZExt(B.CreateTrunc(SP, I32), I64);
+    llvm::Value *Address = B.CreateAdd(SP, B.getInt64(Offset));
+    auto *Store = B.CreateStore(F->getArg(0), B.CreateIntToPtr(Address, Ptr));
+    Store->setVolatile(Volatile);
+    B.CreateRet(B.getInt32(0));
+  };
+  BuildUnproved("truncated_64bit_stack", -4, true, false);
+  BuildUnproved("outside_private_frame", 40, false, false);
+  BuildUnproved("ordered_private_store", -4, false, true);
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+
+  Pipeline::OptimizationOptions Options;
+  Options.Strength = Pipeline::OptStrength::Thin;
+  const OptimizationResult Result = Pipeline::optimizeModule(M, Options);
+  EXPECT_EQ(Result.Stop, OptimizationStopReason::Stable);
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+  auto *Exact = M.getFunction("exact_private");
+  auto *Dynamic = M.getFunction("dynamic_alias");
+  ASSERT_NE(Exact, nullptr);
+  ASSERT_NE(Dynamic, nullptr);
+  auto OpcodeCount = [](const llvm::Function &F, unsigned Opcode) {
+    unsigned Count = 0;
+    for (const llvm::Instruction &I : llvm::instructions(F))
+      Count += I.getOpcode() == Opcode;
+    return Count;
+  };
+  EXPECT_EQ(OpcodeCount(*Exact, llvm::Instruction::Xor), 0u)
+      << printFunction(*Exact);
+  EXPECT_EQ(OpcodeCount(*Exact, llvm::Instruction::And), 0u)
+      << printFunction(*Exact);
+  EXPECT_EQ(loadCount(*Exact), 0u) << printFunction(*Exact);
+  auto *Return = llvm::cast<llvm::ReturnInst>(Exact->back().getTerminator());
+  EXPECT_TRUE(llvm_value_provenance::isExplicitMemoryReturn(*Return));
+  auto *Sum = llvm::dyn_cast<llvm::BinaryOperator>(Return->getReturnValue());
+  ASSERT_NE(Sum, nullptr) << printFunction(*Exact);
+  EXPECT_EQ(Sum->getOpcode(), llvm::Instruction::Add);
+  EXPECT_TRUE((Sum->getOperand(0) == Exact->getArg(0) &&
+               Sum->getOperand(1) == Exact->getArg(1)) ||
+              (Sum->getOperand(0) == Exact->getArg(1) &&
+               Sum->getOperand(1) == Exact->getArg(0)))
+      << printFunction(*Exact);
+  EXPECT_EQ(loadCount(*Dynamic), 1u) << printFunction(*Dynamic);
+  bool DynamicStore = false;
+  for (llvm::Instruction &I : llvm::instructions(*Dynamic))
+    if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I))
+      DynamicStore |= llvm::isa<llvm::IntToPtrInst>(Store->getPointerOperand());
+  EXPECT_TRUE(DynamicStore) << printFunction(*Dynamic);
+  for (const char *Name : {"truncated_64bit_stack", "outside_private_frame",
+                           "ordered_private_store"}) {
+    auto *Unproved = M.getFunction(Name);
+    ASSERT_NE(Unproved, nullptr);
+    bool KeptIntegerAddress = false;
+    for (const llvm::Instruction &I : llvm::instructions(*Unproved))
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I))
+        KeptIntegerAddress |=
+            llvm::isa<llvm::IntToPtrInst>(Store->getPointerOperand());
+    EXPECT_TRUE(KeptIntegerAddress) << Name << "\n" << printFunction(*Unproved);
+  }
 }
 
 } // namespace

@@ -304,6 +304,7 @@ void foldStructuredContinuations(HighFunc &Func, const MedFunc *Med) {
 
 static bool bodyIsSkipGoto(const std::vector<HighStmt> &Body);
 static bool isValueAssign(const HighStmt &S, MedVar &Dest, ExprPtr &Val);
+static bool sameMedVar(const MedVar &A, const MedVar &B);
 static void dropDuplicateSkipGotosNested(std::vector<HighStmt> &Body,
                                          const std::set<va_t> &Targets);
 static void foldJoinValueGotoChainNested(std::vector<HighStmt> &Body);
@@ -419,6 +420,14 @@ static bool invertSkipGotosIn(std::vector<HighStmt> &Body) {
     if ((Stmt.Kind != StmtKind::If && Stmt.Kind != StmtKind::IfElse) ||
         !Stmt.Cond || exprHasCall(Stmt.Cond.get()) || !bodyIsSkipArm(Stmt.Body))
       continue;
+    // The rewrite replaces both arms with the skipped work. An else arm that
+    // does anything is code the rewrite would drop.
+    if (!std::all_of(Stmt.ElseBody.begin(), Stmt.ElseBody.end(),
+                     [](const HighStmt &S) {
+                       return S.Kind == StmtKind::Nop ||
+                              (S.Kind == StmtKind::Block && S.Body.empty());
+                     }))
+      continue;
     const size_t NextI = static_cast<size_t>(I) + 1;
     size_t TargetIndex = SIZE_MAX;
     if (bodyIsSkipGoto(Stmt.Body)) {
@@ -459,9 +468,26 @@ static bool invertSkipGotosIn(std::vector<HighStmt> &Body) {
     }
     if (!rangeHasObservableWork(Body, NextI, TargetIndex))
       continue;
-    Stmt.Kind = StmtKind::If;
+    // The skip path still runs its copies before it reaches the target; they
+    // become the else arm of the inverted test.
+    std::vector<HighStmt> SkipCopies;
+    for (HighStmt &S : Stmt.Body) {
+      MedVar Dest;
+      ExprPtr Val;
+      if (S.Kind == StmtKind::Goto || S.Kind == StmtKind::Nop ||
+          (S.Kind == StmtKind::Block && S.Body.empty()))
+        continue;
+      // An undefined value or a copy of a variable into itself sets nothing.
+      if (isValueAssign(S, Dest, Val) && Val &&
+          (Val->Kind == ExprKind::Undef ||
+           ((Val->Kind == ExprKind::Var || Val->Kind == ExprKind::Phi) &&
+            sameMedVar(Val->Var, Dest))))
+        continue;
+      SkipCopies.push_back(std::move(S));
+    }
+    Stmt.Kind = SkipCopies.empty() ? StmtKind::If : StmtKind::IfElse;
     Stmt.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, Stmt.Cond);
-    Stmt.ElseBody.clear();
+    Stmt.ElseBody = std::move(SkipCopies);
     Stmt.Body.clear();
     for (size_t K = NextI; K < TargetIndex; ++K)
       Stmt.Body.push_back(std::move(Body[K]));

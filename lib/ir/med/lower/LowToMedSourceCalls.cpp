@@ -8,6 +8,7 @@
 #include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/Swift/SwiftValueWitnessCalls.h"
+#include "neverd/loader/Swift/SwiftVirtualCalls.h"
 
 #include <algorithm>
 #include <optional>
@@ -58,6 +59,12 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   if (Image) {
     auto SwiftHints = buildSwiftValueWitnessCallHints(*Image, Low);
     for (auto &[Address, Hint] : SwiftHints) {
+      auto [It, Inserted] = Hints.emplace(Address, std::move(Hint));
+      if (!Inserted)
+        Hints.erase(It);
+    }
+    auto VirtualHints = buildSwiftVirtualCallHints(*Image, Low);
+    for (auto &[Address, Hint] : VirtualHints) {
       auto [It, Inserted] = Hints.emplace(Address, std::move(Hint));
       if (!Inserted)
         Hints.erase(It);

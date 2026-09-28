@@ -3663,13 +3663,12 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
     return All;
   }
   std::set<int> Used;
+  // An indirect call's target is a use too.
   std::function<void(const HighExpr &)> Walk = [&](const HighExpr &E) {
     if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
         E.Var.Kind == MedVar::Param)
       Used.insert(E.Var.Id);
-    for (const ExprPtr &Op : E.Operands)
-      if (Op)
-        Walk(*Op);
+    E.forEachChildExpr([&](const ExprPtr &Child) { Walk(*Child); });
   };
   walkStmts(Func.Body, [&](const HighStmt &S) {
     forEachExpr(S, [&](const ExprPtr &E) {

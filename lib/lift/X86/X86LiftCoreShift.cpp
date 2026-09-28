@@ -253,8 +253,48 @@ ApxDoubleShift decodeApxDoubleShift(const cs_insn *Insn, const cs_x86 &X86) {
   return Result;
 }
 
+/// The architecturally masked shift count. A constant count is masked here,
+/// so the zero-count and one-bit decisions it feeds are made at lift time.
+NdVar maskedShiftCount(X86Lifter::LiftState &S, NdVar Count, uint64_t Mask,
+                       uint16_t Size) {
+  if (Count.isConst())
+    return NdVar::scalar(Count.Offset & Mask, Size);
+  NdVar Masked = S.makeTemp(Size);
+  S.emit(NdOp::INT_AND, Masked, {Count, NdVar::scalar(Mask, Size)});
+  return Masked;
+}
+
+/// The bits a rotate through carry wraps around: \p Src shifted by
+/// Bits+1-Count, or 0 when that amount is not below Bits (a one-bit rotate
+/// wraps nothing, and a shift by the full width would be undefined).
+NdVar wrapThroughCarry(X86Lifter::LiftState &S, NdOp Shift, NdVar Src,
+                       NdVar Count, uint16_t Size, uint16_t Bits) {
+  if (Count.isConst()) {
+    if (Count.Offset > uint64_t(Bits) + 1 ||
+        uint64_t(Bits) + 1 - Count.Offset >= Bits)
+      return NdVar::scalar(0, Size);
+    NdVar Wrapped = S.makeTemp(Size);
+    S.emit(Shift, Wrapped,
+           {Src, NdVar::scalar(uint64_t(Bits) + 1 - Count.Offset, Size)});
+    return Wrapped;
+  }
+  NdVar WrapAmtRaw = S.makeTemp(Size);
+  S.emit(NdOp::INT_SUB, WrapAmtRaw, {NdVar::scalar(Bits + 1, Size), Count});
+  NdVar WrapOk = S.makeTemp(1);
+  S.emit(NdOp::INT_LESS, WrapOk, {WrapAmtRaw, NdVar::scalar(Bits, Size)});
+  NdVar WrapSafe = S.makeTemp(Size);
+  S.emit(Shift, WrapSafe, {Src, WrapAmtRaw});
+  NdVar Wrapped = S.makeTemp(Size);
+  S.emit(NdOp::SELECT, Wrapped, {WrapOk, WrapSafe, NdVar::scalar(0, Size)});
+  return Wrapped;
+}
+
 void emitZeroCountResultGuard(X86Lifter::LiftState &S, NdVar Count,
                               NdVar Original, NdVar Candidate, NdVar Result) {
+  if (Count.isConst()) {
+    S.emit(NdOp::COPY, Result, {Count.Offset == 0 ? Original : Candidate});
+    return;
+  }
   NdVar IsZero = S.makeTemp(1);
   S.emit(NdOp::INT_EQUAL, IsZero, {Count, NdVar::scalar(0, Count.Size)});
   S.emit(NdOp::SELECT, Result, {IsZero, Original, Candidate});
@@ -297,8 +337,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
     // x86 masks the shift count: 0x1F for 8/16/32-bit, 0x3F for 64-bit
     uint64_t ShiftMask = (Bits == 64) ? 0x3F : 0x1F;
-    NdVar MaskedCnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, MaskedCnt, {Cnt, NdVar::scalar(ShiftMask, Sz)});
+    NdVar MaskedCnt = maskedShiftCount(S, Cnt, ShiftMask, Sz);
 
     // Snapshot the source before the shift writes the (aliased) destination, so
     // SHR's OF (= MSB of the original operand) reads the pre-shift value.
@@ -391,8 +430,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
     // x86 masks rotate count: 0x1F for 8/16/32-bit, 0x3F for 64-bit
     uint64_t RotMask = (Bits == 64) ? 0x3F : 0x1F;
-    NdVar MaskedCnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, MaskedCnt, {Cnt, NdVar::scalar(RotMask, Sz)});
+    NdVar MaskedCnt = maskedShiftCount(S, Cnt, RotMask, Sz);
     // BYTE/WORD rotates take a SECOND reduction mod the operand size (Intel
     // SDM: tempCOUNT = (COUNT AND 1Fh) MOD size).  Since size is a power of two
     // this is `& (Bits-1)`.  Without it, e.g. `rolb $9` feeds x<<9 into the
@@ -401,11 +439,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // Flag updates use the architectural masked count even when a whole
     // byte/word rotation leaves the operand unchanged.
     NdVar RotateCnt = MaskedCnt;
-    if (Bits < 32) {
-      RotateCnt = S.makeTemp(Sz);
-      S.emit(NdOp::INT_AND, RotateCnt,
-             {MaskedCnt, NdVar::scalar(Bits - 1, Sz)});
-    }
+    if (Bits < 32)
+      RotateCnt = maskedShiftCount(S, MaskedCnt, Bits - 1, Sz);
 
     // Rotates affect only CF and OF; snapshot CF so a zero count preserves it.
     NdVar OldCF;
@@ -490,8 +525,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     bool MemDst = BaseIndex == 0 && X86.operands[BaseIndex].type == X86_OP_MEM;
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t ShldMask = (Bits == 64) ? 0x3F : 0x1F;
-    NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(ShldMask, Sz)});
+    NdVar Cnt = maskedShiftCount(S, CntRaw, ShldMask, Sz);
     // Snapshot flags so a zero (post-mask) count restores them: x86 leaves all
     // flags unchanged when SHLD/SHRD shift by 0 (same rule as the single
     // shifts).
@@ -559,8 +593,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     bool MemDst = BaseIndex == 0 && X86.operands[BaseIndex].type == X86_OP_MEM;
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t ShrdMask = (Bits == 64) ? 0x3F : 0x1F;
-    NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(ShrdMask, Sz)});
+    NdVar Cnt = maskedShiftCount(S, CntRaw, ShrdMask, Sz);
     // Snapshot the original destination MSB (for OF) and the flags (for a zero
     // count) before the result write aliases the destination register.
     NdVar PreMsb, OldCF, OldZF, OldSF, OldPF;
@@ -628,15 +661,16 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         SourceIndex == 0 && X86.operands[SourceIndex].type == X86_OP_MEM;
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t RcrMask = (Bits == 64) ? 0x3F : 0x1F;
-    NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(RcrMask, Sz)});
+    NdVar Cnt = maskedShiftCount(S, CntRaw, RcrMask, Sz);
     // RCR affects only CF and OF; snapshot CF so a zero count preserves it.
     NdVar OldCF = S.makeTemp(1);
     S.emit(NdOp::COPY, OldCF, {NdVar::reg(x86reg::CF, 1)});
     // Rotate-through-carry cycles through Bits+1 positions (operand bits + CF),
     // so BYTE/WORD counts reduce mod 9/17 (Intel SDM), not just the 5-bit mask.
     // 32/64-bit need no step (the masked count is already < Bits+1).
-    if (Bits < 32) {
+    if (Bits < 32 && Cnt.isConst()) {
+      Cnt = NdVar::scalar(Cnt.Offset % (uint64_t(Bits) + 1), Sz);
+    } else if (Bits < 32) {
       NdVar Modded = S.makeTemp(Sz);
       S.emit(NdOp::INT_REM, Modded,
              {Cnt, NdVar::scalar((uint64_t)Bits + 1, Sz)});
@@ -656,15 +690,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::INT_SUB, CfPos, {NdVar::scalar(Bits, Sz), Cnt});
     NdVar CfIn = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, CfIn, {CfExt, CfPos});
-    // WrapAmt = Bits+1-Cnt.  Clamp to avoid UB shift when Cnt==1.
-    NdVar WrapAmtRaw = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, WrapAmtRaw, {NdVar::scalar(Bits + 1, Sz), Cnt});
-    NdVar WrapOk = S.makeTemp(1);
-    S.emit(NdOp::INT_LESS, WrapOk, {WrapAmtRaw, NdVar::scalar(Bits, Sz)});
-    NdVar WrapSafe = S.makeTemp(Sz);
-    S.emit(NdOp::INT_LEFT, WrapSafe, {SrcR, WrapAmtRaw});
-    NdVar Wrapped = S.makeTemp(Sz);
-    S.emit(NdOp::SELECT, Wrapped, {WrapOk, WrapSafe, NdVar::scalar(0, Sz)});
+    NdVar Wrapped = wrapThroughCarry(S, NdOp::INT_LEFT, SrcR, Cnt, Sz, Bits);
     NdVar Tmp1 = S.makeTemp(Sz);
     S.emit(NdOp::INT_OR, Tmp1, {Lower, CfIn});
     NdVar Candidate = S.makeTemp(Sz);
@@ -704,15 +730,16 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         SourceIndex == 0 && X86.operands[SourceIndex].type == X86_OP_MEM;
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t RclMask = (Bits == 64) ? 0x3F : 0x1F;
-    NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(RclMask, Sz)});
+    NdVar Cnt = maskedShiftCount(S, CntRaw, RclMask, Sz);
     // RCL affects only CF and OF; snapshot CF so a zero count preserves it.
     NdVar OldCF = S.makeTemp(1);
     S.emit(NdOp::COPY, OldCF, {NdVar::reg(x86reg::CF, 1)});
     // Rotate-through-carry cycles through Bits+1 positions (operand bits + CF),
     // so BYTE/WORD counts reduce mod 9/17 (Intel SDM), not just the 5-bit mask.
     // 32/64-bit need no step (the masked count is already < Bits+1).
-    if (Bits < 32) {
+    if (Bits < 32 && Cnt.isConst()) {
+      Cnt = NdVar::scalar(Cnt.Offset % (uint64_t(Bits) + 1), Sz);
+    } else if (Bits < 32) {
       NdVar Modded = S.makeTemp(Sz);
       S.emit(NdOp::INT_REM, Modded,
              {Cnt, NdVar::scalar((uint64_t)Bits + 1, Sz)});
@@ -732,16 +759,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::INT_SUB, CfPos, {Cnt, NdVar::scalar(1, Sz)});
     NdVar CfIn = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, CfIn, {CfExt, CfPos});
-    // WrapAmt = Bits+1-Cnt.  When Cnt==1, WrapAmt==Bits which is UB for
-    // a shift-right of Bits-wide value.  Guard with a saturating clamp.
-    NdVar WrapAmtRaw = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, WrapAmtRaw, {NdVar::scalar(Bits + 1, Sz), Cnt});
-    NdVar WrapOk = S.makeTemp(1);
-    S.emit(NdOp::INT_LESS, WrapOk, {WrapAmtRaw, NdVar::scalar(Bits, Sz)});
-    NdVar WrapSafe = S.makeTemp(Sz);
-    S.emit(NdOp::INT_RIGHT, WrapSafe, {SrcR, WrapAmtRaw});
-    NdVar Wrapped = S.makeTemp(Sz);
-    S.emit(NdOp::SELECT, Wrapped, {WrapOk, WrapSafe, NdVar::scalar(0, Sz)});
+    NdVar Wrapped = wrapThroughCarry(S, NdOp::INT_RIGHT, SrcR, Cnt, Sz, Bits);
     NdVar Tmp1 = S.makeTemp(Sz);
     S.emit(NdOp::INT_OR, Tmp1, {Upper, CfIn});
     NdVar Candidate = S.makeTemp(Sz);

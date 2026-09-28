@@ -51,10 +51,11 @@ Build the symbolic engine, LLVM safety guards, HighIR bridge tests, and source
 roundtrips together when changing shared bitvector simplification:
 
 ```sh
-cmake --build build-release --target NeverDSymbolicTests \
+cmake --build build-release --target NeverDSymbolicTests NeverDSolverTests \
   NeverDSymSimplifyGuardTests NeverDLiftTests NeverDMBASourceTests \
   NeverDHighCStoreForwardingTests NeverDMetadataJSONTests --parallel 4
 build-release/bin/NeverDSymbolicTests
+build-release/bin/NeverDSolverTests
 build-release/bin/NeverDSymSimplifyGuardTests
 build-release/bin/NeverDLiftTests \
   --gtest_filter='HighSymSimplify.*:HighFrameStoreForwarding.*:ELFARM32ModeTest.*'
@@ -71,6 +72,21 @@ oracles. A full-product counterexample ensures low-word rules do not discard
 observable upper bits. The symbolic and HighIR tests additionally check signed
 extension, carry boundaries, shared-DAG traversal, and effect preservation.
 Missing cross-target Clang is a skip, not evidence for that format.
+Nested source expressions additionally compile at `-O0` for x86-32/64,
+ARM32, Thumb-1/2 and AArch64. Both C routes must remove the MBA, recompile at
+`-O0` and `-O2`, and match unsigned arithmetic on byte pairs, edge values and
+random words. A pipeline guard checks that exact synthetic-frame accesses can
+be promoted while a dynamic store that may alias the frame remains observable.
+The 32-bit register-pair fixture separately checks that both C routes preserve
+an observed 64-bit return through a call on i386 (including PIC call/pop),
+ARM32, Thumb-1, and Thumb-2. Its edge and random-word oracles check the complete
+64-bit result and a caller that consumes both halves. Three independent
+Boolean forms exercise wide addition and subtraction. The output must remove
+their residual XOR, AND, and complement operations, while retaining the shifts
+and OR needed to assemble input halves. The shared symbolic candidate search
+uses sample values only to discard candidates; `NeverDSolverTests` also checks
+that an exact proof accepts equivalent arithmetic and rejects a rare
+counterexample or an incomplete proof.
 
 The frame-spill source matrix also covers x86-32 (ELF/COFF/Mach-O), ARM32
 (ARM, Thumb-2 and Cortex-M Thumb-1 ELF), and AArch64 (ELF/COFF/Mach-O)

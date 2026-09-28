@@ -186,4 +186,26 @@ TEST(RichHeader, SelectsTheLinkersReleaseAndEveryOtherFile) {
   EXPECT_EQ(sigs::SignatureDB::selectForImage(Img, Files), Files);
 }
 
+TEST(RichHeader, APartOfAReleasesFileIsThatRelease) {
+  const std::vector<std::filesystem::path> Files = {
+      "d/vs2022.pat", "d/vs2022.part2.pat", "d/vs2026.pat",
+      "d/vs2026.part2.pat", "d/winsdk.pat", "d/winsdk.part2.pat"};
+  BinaryImage Img;
+  RichHeader Header;
+  Header.ChecksumMatches = true;
+  Header.Entries = {{Linker, 36257, 1}};
+  Img.COFFRichHeader = Header;
+  EXPECT_EQ(names(sigs::SignatureDB::selectForImage(Img, Files)),
+            (std::vector<std::filesystem::path>{
+                "vs2026.pat", "vs2026.part2.pat", "winsdk.pat",
+                "winsdk.part2.pat"}));
+
+  EXPECT_EQ(sigs::SignatureDB::libraryName("d/ubuntu-libc6.part12.pat"),
+            "ubuntu-libc6");
+  EXPECT_EQ(sigs::SignatureDB::libraryName("d/ubuntu-libc6.pat"), "ubuntu-libc6");
+  EXPECT_EQ(sigs::SignatureDB::libraryName("d/x.part1.pat"), "x.part1");
+  EXPECT_EQ(sigs::SignatureDB::libraryName("d/x.part02.pat"), "x.part02");
+  EXPECT_EQ(sigs::SignatureDB::libraryName("d/x.partial.pat"), "x.partial");
+}
+
 } // namespace

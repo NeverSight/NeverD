@@ -133,11 +133,9 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
 }
 
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
-  if (!Opts.EmitIncludes)
-    return;
-
   std::set<std::string> Headers;
   Headers.insert("stdint.h");
+  std::set<std::pair<unsigned, bool>> FunnelShifts;
 
   for (auto &Fn : Mod) {
     if (OnlyFunction && &Fn != OnlyFunction)
@@ -159,6 +157,16 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
           auto *Callee = CI->getCalledFunction();
           if (!Callee)
             continue;
+          const auto IID = Callee->getIntrinsicID();
+          if (IID == llvm::Intrinsic::fshl || IID == llvm::Intrinsic::fshr) {
+            const auto *Ty = llvm::dyn_cast<llvm::IntegerType>(CI->getType());
+            const unsigned Width = Ty ? Ty->getBitWidth() : 0;
+            if (CI->arg_size() != 3 ||
+                (Width != 8 && Width != 16 && Width != 32 && Width != 64 &&
+                 Width != 128))
+              throw std::runtime_error("unsupported LLVM funnel shift width");
+            FunnelShifts.insert({Width, IID == llvm::Intrinsic::fshl});
+          }
           auto Name = Callee->getName().str();
 
           if (const char *Mapped = llvmIntrinsicToCName(Name.c_str())) {
@@ -183,9 +191,28 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     for (const char *Hdr : getArchIntrinsicHeaders(Opts.TheArch))
       Headers.insert(Hdr);
 
-  for (auto &H : Headers)
-    OS << "#include <" << H << ">\n";
-  OS << "\n";
+  if (Opts.EmitIncludes) {
+    for (auto &H : Headers)
+      OS << "#include <" << H << ">\n";
+    OS << "\n";
+  }
+  for (const auto &[Width, Left] : FunnelShifts) {
+    const std::string Type = Width == 128
+                                 ? "unsigned __int128"
+                                 : "uint" + std::to_string(Width) + "_t";
+    OS << "static inline " << Type << " neverd_llvm_fsh" << (Left ? "l" : "r")
+       << "_i" << Width << "(" << Type << " a, " << Type << " b, " << Type
+       << " amount) {\n"
+       << "    unsigned int shift = (unsigned int)(amount % " << Width
+       << ");\n";
+    if (Left)
+      OS << "    return shift == 0 ? a : (" << Type
+         << ")((a << shift) | (b >> (" << Width << " - shift)));\n";
+    else
+      OS << "    return shift == 0 ? b : (" << Type << ")((a << (" << Width
+         << " - shift)) | (b >> shift));\n";
+    OS << "}\n\n";
+  }
 }
 
 void LLVMCWriter::writeStructDefs(llvm::Module &Mod) {

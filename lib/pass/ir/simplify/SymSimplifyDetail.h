@@ -56,17 +56,17 @@ enum class OpTag {
   ZExt,
   SExt,
   ICmp,
+  FShl,
 };
 
 OpTag tagOf(const llvm::Instruction &I);
 
 /// True for an integer instruction the engine has an operator for.
 ///
-/// A comparison is carried only when the caller asks for it, and only one
-/// caller does.  Rebuilding an expression is what the ordinary path is for, and
-/// a comparison has no place in one: it would have to come back out as an
-/// instruction, and the engine's answer for a comparison is worth having only
-/// when it is a constant.  Deciding a branch is that one case.
+/// A comparison is carried only when the caller asks for it. The ordinary
+/// simplifier treats it as an opaque boundary; branch folding and proof-gated
+/// split-word recovery can inspect it. A rewritten expression may only be
+/// materialized when no predicate remains in the candidate.
 bool isTranslatable(const llvm::Value *V, bool WithComparisons);
 
 //===----------------------------------------------------------------------===//
@@ -75,8 +75,10 @@ bool isTranslatable(const llvm::Value *V, bool WithComparisons);
 
 class Translator {
 public:
-  explicit Translator(sym::SymContext &Ctx, bool CarryComparisons = false)
-      : Ctx(Ctx), CarryComparisons(CarryComparisons) {}
+  explicit Translator(sym::SymContext &Ctx, bool CarryComparisons = false,
+                      bool ExpandSharedPure = false)
+      : Ctx(Ctx), CarryComparisons(CarryComparisons),
+        ExpandSharedPure(ExpandSharedPure) {}
 
   /// Translate the region rooted at \p Root, including shared integer
   /// operators whose uses all belong to that region. Everything else stays
@@ -152,10 +154,12 @@ public:
   /// the set that RAUW leaves dead.  This is what a rebuilt form has to beat.
   unsigned descendedInsts() const { return NumDescended; }
 
+  bool hasSharedBoundary() const { return SharedBoundary; }
+
 private:
-  /// Find the maximal integer-expression region whose internal instructions
-  /// have no uses outside it. Every descended instruction can then become dead
-  /// after replacing the root, including computation shared inside the region.
+  /// Find the translatable integer-expression region. The usual pass keeps
+  /// externally shared values opaque; a second pass may inspect those pure
+  /// definitions while counting only instructions that can actually die.
   void collectRegion(llvm::Value *Root);
 
   bool descend(const llvm::Value *V) const { return Region.contains(V); }
@@ -168,6 +172,8 @@ private:
     case OpTag::ZExt:
     case OpTag::SExt:
       return {I.getOperand(0)};
+    case OpTag::FShl:
+      return {I.getOperand(0), I.getOperand(1), I.getOperand(2)};
     default:
       return {I.getOperand(0), I.getOperand(1)};
     }
@@ -241,6 +247,8 @@ private:
 
   sym::SymContext &Ctx;
   bool CarryComparisons = false;
+  bool ExpandSharedPure = false;
+  bool SharedBoundary = false;
   llvm::DenseMap<const llvm::Value *, sym::SymRef> Memo;
   llvm::DenseSet<const llvm::Value *> Region;
   /// Engine node index to the LLVM value it stands for, for the way back.

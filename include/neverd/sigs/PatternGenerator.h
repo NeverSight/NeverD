@@ -71,9 +71,46 @@ struct PatternGeneratorStats {
   unsigned UnsupportedRelocation = 0;
   /// (COFF machine, relocation type) pairs behind UnsupportedRelocation.
   std::set<std::pair<uint16_t, uint16_t>> UnsupportedCOFFRelocations;
+  /// (ELF machine, relocation type) pairs behind UnsupportedRelocation.
+  std::set<std::pair<uint16_t, uint32_t>> UnsupportedELFRelocations;
 
   PatternGeneratorStats &operator+=(const PatternGeneratorStats &Other);
 };
+
+/// The bytes an ELF relocation may leave different in a linked image: its
+/// field, and the instruction bytes around it a linker may rewrite.
+///
+/// A linker does more to ELF code than fill in fields. It relaxes GOT loads
+/// (`mov foo@GOTPCREL(%rip)` becomes `lea`, `call *foo@GOTPCREL(%rip)` a
+/// direct call), and in a static or executable link it replaces whole TLS
+/// access sequences. Such a relocation's footprint starts \p Before bytes
+/// ahead of the field and spans \p Before + \p Width bytes, the most any
+/// form of the instruction or sequence it marks takes.
+struct ELFRelocationFootprint {
+  unsigned Before = 0;
+  unsigned Width = 0;
+};
+
+/// The footprint of an ELF relocation of \p Type in a relocatable object for
+/// \p Machine (an EM_* value): x86 and x86-64, ARM and AArch64. Markers that
+/// rewrite nothing have an empty footprint. Returns std::nullopt for a
+/// machine or type this table does not know, including the dynamic types a
+/// relocatable object does not hold.
+std::optional<ELFRelocationFootprint> elfRelocationFootprint(uint16_t Machine,
+                                                             uint32_t Type);
+
+/// An architecture a signature file is made for, as neverd-sigmaker's
+/// `--machine` names it.
+enum class TargetMachine { X86, X64, ARM, ARM64 };
+
+/// The architecture `x86`, `x64`, `arm` or `arm64` names, or std::nullopt.
+std::optional<TargetMachine> parseTargetMachine(llvm::StringRef Name);
+
+/// Whether \p Obj holds code for \p Machine: a COFF object of that machine,
+/// or an ELF object of its class and e_machine. An x32 object (ELFCLASS32
+/// with EM_X86_64) is not x64 code, and no other format matches.
+bool isObjectForMachine(const llvm::object::ObjectFile &Obj,
+                        TargetMachine Machine);
 
 /// The number of bytes a COFF relocation of \p Type rewrites at its offset
 /// for objects of \p Machine (an IMAGE_FILE_MACHINE_* value).
@@ -90,17 +127,27 @@ std::optional<unsigned> coffRelocationWidth(uint16_t Machine, uint16_t Type);
 size_t statedByteCount(llvm::ArrayRef<bool> Wildcard,
                        const PatternGeneratorOptions &Opts);
 
-/// Writes one .pat line for \p Data, the complete bytes of function
-/// \p Name, where \p Wildcard marks the bytes relocations rewrite and
-/// \p References, sorted by offset, the routines it branches to.
-/// Returns false, writing nothing, when the function is shorter than
-/// Opts.MinFuncSize or its line would state fewer than
+/// Writes one .pat line for \p Data, the complete bytes of the function
+/// called \p Names -- one name, or every linkage name of a routine several
+/// symbols label, each at offset 0 -- where \p Wildcard marks the bytes
+/// relocations rewrite and \p References, sorted by offset, the routines it
+/// branches to. Returns false, writing nothing, when the function is shorter
+/// than Opts.MinFuncSize or its line would state fewer than
 /// SignatureMatcher::MinStatedBytes bytes exactly.
-bool emitPatternLine(llvm::raw_ostream &OS, llvm::StringRef Name,
+bool emitPatternLine(llvm::raw_ostream &OS,
+                     llvm::ArrayRef<llvm::StringRef> Names,
                      llvm::ArrayRef<uint8_t> Data,
                      llvm::ArrayRef<bool> Wildcard,
                      const PatternGeneratorOptions &Opts,
                      llvm::ArrayRef<FuncRef> References = {});
+inline bool emitPatternLine(llvm::raw_ostream &OS, llvm::StringRef Name,
+                            llvm::ArrayRef<uint8_t> Data,
+                            llvm::ArrayRef<bool> Wildcard,
+                            const PatternGeneratorOptions &Opts,
+                            llvm::ArrayRef<FuncRef> References = {}) {
+  return emitPatternLine(OS, llvm::ArrayRef<llvm::StringRef>(Name), Data,
+                         Wildcard, Opts, References);
+}
 
 /// Where a COFF relocation states a direct branch: the function offset a
 /// `^offset name` reference names, or std::nullopt.  That is a REL32 field
@@ -119,9 +166,13 @@ std::optional<uint64_t> coffBranchReferenceOffset(uint16_t Machine,
 /// function-typed external or static symbol in a code section, and it ends
 /// where the next such symbol starts or where its section does -- label
 /// symbols such as MSVC's `$LN` jump targets do not end it. Relocation widths
-/// come from coffRelocationWidth. ELF and Mach-O objects keep the generic
-/// reading: every function symbol, ending at the next symbol of any kind in
-/// its section, with four-byte relocations.
+/// come from coffRelocationWidth. In ELF and Mach-O objects every function
+/// symbol is a function, ending at the next symbol of any kind in its
+/// section. An ELF object keeps its relocations in sections of their own,
+/// each naming the section it applies to; their footprints come from
+/// elfRelocationFootprint. The ELF function symbols that label one address
+/// are one routine's aliases and share one line, their names in
+/// preferredAliasOrder. Mach-O relocations cover four bytes.
 PatternGeneratorStats generatePatterns(const llvm::object::ObjectFile &Obj,
                                        const PatternGeneratorOptions &Opts,
                                        llvm::raw_ostream &OS);

@@ -739,7 +739,42 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
       if (Arg.Id >= 0)
         UseCount[varKey(Arg)]++;
 
-  for (auto &Blk : Med.Blocks) {
+  // Build each definition before its uses: a use builds its single-use
+  // definition inline, and a definition that is not yet built leaves a name
+  // whose assignment is never emitted. Block order is not dominance order (a
+  // loop entered at its bottom test lays that test out after the body that
+  // uses its values), so walk each root's blocks in reverse post-order.
+  std::vector<const MedBlock *> Order;
+  {
+    std::unordered_map<int, size_t> IndexOf;
+    for (size_t I = 0; I < Med.Blocks.size(); ++I)
+      IndexOf[Med.Blocks[I].Id] = I;
+    std::vector<char> Seen(Med.Blocks.size(), 0);
+    for (size_t Root = 0; Root < Med.Blocks.size(); ++Root) {
+      if (Seen[Root])
+        continue;
+      std::vector<const MedBlock *> Post;
+      std::vector<std::pair<size_t, size_t>> Stack{{Root, 0}};
+      Seen[Root] = 1;
+      while (!Stack.empty()) {
+        const size_t B = Stack.back().first;
+        const std::vector<int> &Succs = Med.Blocks[B].Succs;
+        if (Stack.back().second < Succs.size()) {
+          auto It = IndexOf.find(Succs[Stack.back().second++]);
+          if (It != IndexOf.end() && !Seen[It->second]) {
+            Seen[It->second] = 1;
+            Stack.push_back({It->second, 0});
+          }
+          continue;
+        }
+        Post.push_back(&Med.Blocks[B]);
+        Stack.pop_back();
+      }
+      Order.insert(Order.end(), Post.rbegin(), Post.rend());
+    }
+  }
+  for (const MedBlock *Block : Order) {
+    const MedBlock &Blk = *Block;
     for (auto &Op : Blk.Ops) {
       if (Op.Output.Id >= 0 && Op.Output.Size > 0) {
         auto Key = varKey(Op.Output);

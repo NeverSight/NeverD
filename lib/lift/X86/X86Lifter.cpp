@@ -402,6 +402,12 @@ NdVar X86Lifter::extractBit(LiftState &S, NdVar Val, unsigned BitPos) {
 }
 
 void X86Lifter::emitShiftRotateOF(LiftState &S, NdVar Cnt, NdVar OfBit) {
+  // Only a one-bit shift or rotate defines OF; a constant count decides here.
+  if (Cnt.isConst()) {
+    if (Cnt.Offset == 1)
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {OfBit});
+    return;
+  }
   NdVar IsOne = S.makeTemp(1);
   S.emit(NdOp::INT_EQUAL, IsOne, {Cnt, NdVar::scalar(1, Cnt.Size)});
   NdVar NewOF = S.makeTemp(1);
@@ -412,6 +418,14 @@ void X86Lifter::emitShiftRotateOF(LiftState &S, NdVar Cnt, NdVar OfBit) {
 void X86Lifter::emitZeroCountFlagGuard(
     LiftState &S, NdVar Cnt,
     std::initializer_list<std::pair<int, NdVar>> Flags) {
+  // A zero count restores every flag and any other count keeps the new ones;
+  // a constant count decides here.
+  if (Cnt.isConst()) {
+    if (Cnt.Offset == 0)
+      for (const auto &F : Flags)
+        S.emit(NdOp::COPY, NdVar::reg(F.first, 1), {F.second});
+    return;
+  }
   NdVar IsZero = S.makeTemp(1);
   S.emit(NdOp::INT_EQUAL, IsZero, {Cnt, NdVar::scalar(0, Cnt.Size)});
   for (const auto &F : Flags) {

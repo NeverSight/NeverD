@@ -23,6 +23,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -83,7 +84,7 @@ llvm::Error SignatureDB::loadFile(const std::filesystem::path &Path) {
     auto ModsOrErr = PatternParser::parseFile(Path);
     if (!ModsOrErr)
       return ModsOrErr.takeError();
-    std::string LibName = Path.stem().string();
+    std::string LibName = libraryName(Path);
     commitSource(std::move(*ModsOrErr), LibName, Path.string());
     return llvm::Error::success();
   }
@@ -156,6 +157,21 @@ SignatureDB::listDirectory(const std::filesystem::path &Dir) {
   return PatFiles;
 }
 
+std::string SignatureDB::libraryName(const std::filesystem::path &File) {
+  const std::string Stem = File.stem().string();
+  const size_t Dot = Stem.rfind(".part");
+  if (Dot == std::string::npos || Dot == 0)
+    return Stem;
+  const llvm::StringRef Number = llvm::StringRef(Stem).drop_front(Dot + 5);
+  unsigned Part = 0;
+  // Part 1 is the file under the library's own name; a part number is
+  // written without leading zeros.
+  if (Number.empty() || Number.front() == '0' ||
+      Number.getAsInteger(10, Part) || Part < 2)
+    return Stem;
+  return Stem.substr(0, Dot);
+}
+
 std::vector<std::filesystem::path>
 SignatureDB::selectForImage(const BinaryImage &Img,
                             std::vector<std::filesystem::path> Files) {
@@ -167,7 +183,7 @@ SignatureDB::selectForImage(const BinaryImage &Img,
 
   // "vs2026.pat" belongs to Visual Studio 2026; other names to no release.
   auto ReleaseOf = [](const std::filesystem::path &Path) {
-    const std::string Stem = Path.stem().string();
+    const std::string Stem = libraryName(Path);
     unsigned Year = 0;
     if (Stem.size() != 6 || llvm::StringRef(Stem).take_front(2) != "vs" ||
         llvm::StringRef(Stem).drop_front(2).getAsInteger(10, Year))
@@ -246,7 +262,7 @@ SignatureDB::loadFiles(const std::vector<std::filesystem::path> &PatFiles) {
   for (ParsedFile &File : Parsed) {
     SigSource Source;
     Source.Path = File.Path.string();
-    Source.LibraryName = File.Path.stem().string();
+    Source.LibraryName = libraryName(File.Path);
     Source.ModuleStart = NewModules.size();
     Source.ModuleCount = File.Modules.size();
     NewSources.push_back(std::move(Source));
@@ -278,12 +294,21 @@ void SignatureDB::apply(const BinaryImage &Img,
         Seg.Data.data(), Seg.Data.size(), Seg.VA, FuncEntries, Modules, Index,
         [&](uint64_t Addr, const PatternModule &Mod) {
           const size_t ModIdx = static_cast<size_t>(&Mod - Modules.data());
-          for (const auto &Ref : Mod.PublicNames) {
-            if (Ref.Offset > std::numeric_limits<uint64_t>::max() - Addr)
+          // The names a module gives one offset are one routine's aliases,
+          // so each offset makes one match.
+          std::map<uint32_t, std::vector<std::string_view>> ByOffset;
+          for (const auto &Ref : Mod.PublicNames)
+            ByOffset[Ref.Offset].push_back(Ref.Name);
+          for (auto &[Offset, Names] : ByOffset) {
+            if (Offset > std::numeric_limits<uint64_t>::max() - Addr)
               continue;
+            std::sort(Names.begin(), Names.end(), preferredAliasOrder);
+            Names.erase(std::unique(Names.begin(), Names.end()), Names.end());
             SigMatch M;
-            M.Address = Addr + Ref.Offset;
-            M.Name = Ref.Name;
+            M.Address = Addr + Offset;
+            M.Name = std::string(Names.front());
+            for (auto It = std::next(Names.begin()); It != Names.end(); ++It)
+              M.Aliases.emplace_back(*It);
             M.LibraryName = libraryNameOf(ModIdx);
             M.FuncLen = Mod.TotalLen;
             Matches.push_back(std::move(M));
@@ -322,24 +347,30 @@ size_t SignatureDB::identifyPersonalityRoutines(BinaryImage &Img) {
                   SignatureMatcher::MinStatedBytes)
             return;
 
+          // Of the personality routines the module names at its start --
+          // aliases of one routine when there are several -- the preferred.
+          // A name at a non-zero offset belongs to some other function the
+          // module also describes, not to the routine being identified.
+          const std::string *Chosen = nullptr;
           for (const FuncRef &Ref : Mod.PublicNames) {
-            // A name at a non-zero offset belongs to some other function the
-            // module also describes, not to the routine being identified.
             if (Ref.Offset != 0)
               continue;
             const ExceptionPersonality P = classifyPersonalityName(Ref.Name);
             if (P == ExceptionPersonality::None ||
                 P == ExceptionPersonality::Unknown)
               continue;
-
+            if (!Chosen || preferredAliasOrder(Ref.Name, *Chosen))
+              Chosen = &Ref.Name;
+          }
+          if (Chosen) {
             SigMatch M;
             M.Address = Addr;
-            M.Name = Ref.Name;
+            M.Name = *Chosen;
             M.LibraryName =
                 libraryNameOf(static_cast<size_t>(&Mod - Modules.data()));
             M.FuncLen = Mod.TotalLen;
             auto [It, Fresh] = Proposed.emplace(Addr, std::move(M));
-            if (!Fresh && It->second.Name != Ref.Name)
+            if (!Fresh && It->second.Name != *Chosen)
               Disputed.insert(Addr);
           }
         });
@@ -376,30 +407,68 @@ const SigMatch *SignatureDB::findMatch(uint64_t Addr) const {
   return nullptr;
 }
 
-std::unordered_map<uint64_t, std::string> SignatureDB::buildNameMap() const {
-  // Every name proposed for an address, and whether a match with confirmed
-  // references proposed it.
-  std::unordered_map<uint64_t, std::map<std::string, bool>> Proposed;
-  for (size_t I = 0; I < Matches.size(); ++I) {
-    bool &Confirmed = Proposed[Matches[I].Address][Matches[I].Name];
-    Confirmed = Confirmed || Matches[I].Confirmed;
+std::unordered_map<uint64_t, SignatureDB::SettledRoutine>
+SignatureDB::settleRoutines() const {
+  // Each match's names for its address: its name and its aliases.
+  struct Proposal {
+    std::set<std::string> Names;
+    bool Confirmed = false;
+  };
+  std::unordered_map<uint64_t, std::vector<Proposal>> Proposed;
+  for (const SigMatch &M : Matches) {
+    Proposal P;
+    P.Names.insert(M.Name);
+    P.Names.insert(M.Aliases.begin(), M.Aliases.end());
+    P.Confirmed = M.Confirmed;
+    Proposed[M.Address].push_back(std::move(P));
   }
-  std::unordered_map<uint64_t, std::string> Map;
-  for (const auto &[Address, Names] : Proposed) {
-    if (Names.size() == 1) {
-      Map.emplace(Address, Names.begin()->first);
-      continue;
+
+  // Proposals agree when a name is in every one of them; the routine then
+  // takes the preferred such name, and has every name any of them gives it.
+  auto Agree = [](const std::vector<const Proposal *> &Proposals)
+      -> std::optional<SettledRoutine> {
+    if (Proposals.empty())
+      return std::nullopt;
+    std::set<std::string> Shared = Proposals.front()->Names;
+    SettledRoutine Routine;
+    for (const Proposal *P : Proposals) {
+      std::set<std::string> Next;
+      std::set_intersection(Shared.begin(), Shared.end(), P->Names.begin(),
+                            P->Names.end(), std::inserter(Next, Next.end()));
+      Shared = std::move(Next);
+      Routine.Names.insert(P->Names.begin(), P->Names.end());
     }
-    const std::string *Settled = nullptr;
-    size_t ConfirmedNames = 0;
-    for (const auto &[Name, Confirmed] : Names)
-      if (Confirmed) {
-        Settled = &Name;
-        ++ConfirmedNames;
-      }
-    if (ConfirmedNames == 1)
-      Map.emplace(Address, *Settled);
+    if (Shared.empty())
+      return std::nullopt;
+    Routine.Name = *std::min_element(Shared.begin(), Shared.end(),
+                                     [](const std::string &A,
+                                        const std::string &B) {
+                                       return preferredAliasOrder(A, B);
+                                     });
+    return Routine;
+  };
+
+  std::unordered_map<uint64_t, SettledRoutine> Settled;
+  for (const auto &[Address, Proposals] : Proposed) {
+    std::vector<const Proposal *> All, Confirmed;
+    for (const Proposal &P : Proposals) {
+      All.push_back(&P);
+      if (P.Confirmed)
+        Confirmed.push_back(&P);
+    }
+    std::optional<SettledRoutine> Routine = Agree(All);
+    if (!Routine)
+      Routine = Agree(Confirmed);
+    if (Routine)
+      Settled.emplace(Address, std::move(*Routine));
   }
+  return Settled;
+}
+
+std::unordered_map<uint64_t, std::string> SignatureDB::buildNameMap() const {
+  std::unordered_map<uint64_t, std::string> Map;
+  for (auto &[Address, Routine] : settleRoutines())
+    Map.emplace(Address, std::move(Routine.Name));
   return Map;
 }
 
@@ -527,7 +596,7 @@ void SignatureDB::checkReferences(const BinaryImage &Img) {
 
   // What the bytes alone settle, which is what a reference is checked
   // against: an address two matches name differently names nothing.
-  const std::unordered_map<uint64_t, std::string> Settled = buildNameMap();
+  const std::unordered_map<uint64_t, SettledRoutine> Settled = settleRoutines();
 
   // The modules that describe each routine from its start, to confirm a
   // reference by the named routine's own pattern.
@@ -565,9 +634,11 @@ void SignatureDB::checkReferences(const BinaryImage &Img) {
     // symbol the library called; it settles nothing either way.
     if (Img.decodeImportThunkAt(Target))
       return ReferenceVerdict::Unknown;
+    // A library calls a routine by whichever of its names it uses, so any
+    // name the routine settled with confirms the call.
     if (const auto It = SettledAt(Target); It != Settled.end())
-      return It->second == Name ? ReferenceVerdict::Confirmed
-                                : ReferenceVerdict::Contradicted;
+      return It->second.Names.count(Name) ? ReferenceVerdict::Confirmed
+                                          : ReferenceVerdict::Contradicted;
     // A routine the image replaced (operator new, say) does not match the
     // library's pattern and is still the routine called, so a pattern that
     // does not match contradicts nothing.

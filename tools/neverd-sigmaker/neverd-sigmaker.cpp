@@ -69,7 +69,7 @@ static cl::opt<unsigned>
             cl::init(0));
 static cl::opt<std::string>
     Machine("machine",
-            cl::desc("Keep only COFF objects for this architecture "
+            cl::desc("Keep only COFF and ELF objects for this architecture "
                      "(x86, x64, arm, arm64); others are skipped and counted"),
             cl::init(""));
 static cl::opt<bool> References(
@@ -94,30 +94,18 @@ struct InputStats {
   PatternGeneratorStats Patterns;
 };
 
-std::optional<uint16_t> parseMachine(StringRef Name) {
-  return StringSwitch<std::optional<uint16_t>>(Name)
-      .Case("x86", COFF::IMAGE_FILE_MACHINE_I386)
-      .Case("x64", COFF::IMAGE_FILE_MACHINE_AMD64)
-      .Case("arm", COFF::IMAGE_FILE_MACHINE_ARMNT)
-      .Case("arm64", COFF::IMAGE_FILE_MACHINE_ARM64)
-      .Default(std::nullopt);
-}
-
-void processObject(const ObjectFile &Obj, std::optional<uint16_t> Required,
+void processObject(const ObjectFile &Obj, std::optional<TargetMachine> Required,
                    const PatternGeneratorOptions &Opts, raw_ostream &OS,
                    InputStats &Stats) {
-  if (Required) {
-    const auto *COFF = dyn_cast<COFFObjectFile>(&Obj);
-    if (!COFF || COFF->getMachine() != *Required) {
-      ++Stats.OtherMachine;
-      return;
-    }
+  if (Required && !isObjectForMachine(Obj, *Required)) {
+    ++Stats.OtherMachine;
+    return;
   }
   ++Stats.Objects;
   Stats.Patterns += generatePatterns(Obj, Opts, OS);
 }
 
-bool processInput(StringRef Path, std::optional<uint16_t> Required,
+bool processInput(StringRef Path, std::optional<TargetMachine> Required,
                   const PatternGeneratorOptions &Opts, raw_ostream &OS,
                   InputStats &Stats) {
   auto BufOrErr = MemoryBuffer::getFile(Path);
@@ -200,9 +188,9 @@ int main(int Argc, char *Argv[]) {
     return 1;
   }
 
-  std::optional<uint16_t> Required;
+  std::optional<TargetMachine> Required;
   if (!Machine.empty()) {
-    Required = parseMachine(Machine);
+    Required = parseTargetMachine(Machine);
     if (!Required) {
       WithColor::error() << "unknown --machine '" << Machine
                          << "'; expected x86, x64, arm, or arm64\n";
@@ -233,6 +221,11 @@ int main(int Argc, char *Argv[]) {
                          << format_hex(Type, 6) << " (machine "
                          << format_hex(Mach, 6)
                          << ") were left out: its width is unknown\n";
+  for (const auto &[Mach, Type] : Stats.Patterns.UnsupportedELFRelocations)
+    WithColor::warning() << "functions with ELF relocation type " << Type
+                         << " (machine " << Mach
+                         << ") were left out: the bytes it may change are "
+                            "unknown\n";
 
   outs() << "Generated " << Stats.Patterns.Functions << " signatures → "
          << OutputFile << " (" << Stats.Objects << " objects";

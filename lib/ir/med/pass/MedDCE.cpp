@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <vector>
 
 namespace neverd {
 
@@ -204,6 +205,43 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         return &Cand;
     return nullptr;
   };
+  auto seedReachingStackPointer = [&](const MedBlock &Start, int Before) {
+    // A call reads SP to locate outgoing stack arguments, but its implicit
+    // input is added only by later ABI recovery. Keep the reaching definition
+    // on every incoming path, including a final POP or an adjustment in a
+    // predecessor block; otherwise the call frame can shift after DCE.
+    std::vector<std::pair<const MedBlock *, int>> Pending{{&Start, Before}};
+    std::set<std::pair<int, int>> Visited;
+    while (!Pending.empty()) {
+      const auto [Block, Last] = Pending.back();
+      Pending.pop_back();
+      if (!Visited.insert({Block->Id, Last}).second)
+        continue;
+      bool Found = false;
+      for (int J = Last; J >= 0; --J) {
+        const MedVar &Output = Block->Ops[static_cast<size_t>(J)].Output;
+        if (Output.Kind != MedVar::Reg || Output.Size == 0 ||
+            !TRI.isStackPointer(Output.RegOff))
+          continue;
+        MarkLive(Output);
+        Found = true;
+        break;
+      }
+      if (Found)
+        continue;
+      for (const PhiNode &Phi : Block->Phis)
+        if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
+            TRI.isStackPointer(Phi.Output.RegOff)) {
+          MarkLive(Phi.Output);
+          Found = true;
+        }
+      if (Found)
+        continue;
+      for (int PredId : Block->Preds)
+        if (const MedBlock *Pred = blockById(PredId))
+          Pending.push_back({Pred, static_cast<int>(Pred->Ops.size()) - 1});
+    }
+  };
   for (auto &Blk : Func.Blocks) {
     for (size_t I = 0; I < Blk.Ops.size(); ++I) {
       bool IsCall = (Blk.Ops[I].Opcode == NdOp::CALL ||
@@ -212,6 +250,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       bool IsTail = (Blk.Ops[I].Opcode == NdOp::INDIR_BR && Blk.Succs.empty());
       if (!IsCall && !IsTail)
         continue;
+      seedReachingStackPointer(Blk, static_cast<int>(I) - 1);
       seedParamWrites(Blk.Ops, static_cast<int>(I) - 1);
       // IP-map / EH splits often isolate the CALL. `lea r8; mov edx; lea rcx`
       // then sit in the predecessor and must stay live as call setup.
@@ -219,8 +258,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         continue;
       for (int PredId : Blk.Preds)
         if (const MedBlock *Pred = blockById(PredId))
-          seedParamWrites(Pred->Ops,
-                          static_cast<int>(Pred->Ops.size()) - 1);
+          seedParamWrites(Pred->Ops, static_cast<int>(Pred->Ops.size()) - 1);
     }
   }
 

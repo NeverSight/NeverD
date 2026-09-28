@@ -23,6 +23,7 @@ from scripts.signatures.build_msvc_signatures import (
     main,
     parse_line,
     settle_directory,
+    split_parts,
 )
 
 
@@ -111,6 +112,33 @@ class FoldTests(unittest.TestCase):
         self.assertEqual(result.distinguished_lines, 2)
         self.assertEqual(result.ambiguous_keys, set())
 
+    def test_claims_that_share_a_name_are_one_routines_aliases(self) -> None:
+        # One glibc build defines __libc_malloc at malloc's address too, the
+        # other only malloc: one routine, which has both names.
+        result = fold(
+            [
+                "AABBCCDD 00 0000 0004 :0000 malloc :0000 __libc_malloc",
+                "AABBCCDD 00 0000 0004 :0000 malloc",
+                "AABBCCDD 00 0000 0004 :0000 __malloc :0000 malloc",
+            ]
+        )
+        self.assertEqual(
+            result.texts,
+            ["AABBCCDD 00 0000 0004 :0000 malloc :0000 __malloc :0000 __libc_malloc"],
+        )
+        self.assertEqual(result.merged_aliases, 1)
+        self.assertEqual(result.ambiguous_keys, set())
+
+    def test_alias_sets_with_no_name_in_common_are_ambiguous(self) -> None:
+        result = fold(
+            [
+                "AABBCCDD 00 0000 0004 :0000 puts :0000 _IO_puts",
+                "AABBCCDD 00 0000 0004 :0000 fputs",
+            ]
+        )
+        self.assertEqual(result.texts, [])
+        self.assertEqual(result.ambiguous_keys, {"AABBCCDD 00 0000 0004"})
+
     def test_a_twin_without_a_telling_reference_leaves_the_bytes_ambiguous(self) -> None:
         result = fold(
             [
@@ -174,6 +202,18 @@ class SettleDirectoryTests(unittest.TestCase):
         self.assertEqual(len(older.texts), 2)
         self.assertEqual(len(newer.texts), 2)
 
+    def test_files_that_give_one_routine_different_aliases_keep_it(self) -> None:
+        older = fold(["AABBCCDD 00 0000 0004 :0000 malloc :0000 __malloc"])
+        newer = fold(["AABBCCDD 00 0000 0004 :0000 malloc :0000 __libc_malloc"])
+        disjoint = fold(["11223344 00 0000 0004 :0000 puts :0000 _IO_puts"])
+        other = fold(["11223344 00 0000 0004 :0000 fputs"])
+        settle_directory({Path("libc6-2.31.pat"): older, Path("libc6-2.35.pat"): newer,
+                          Path("a.pat"): disjoint, Path("b.pat"): other})
+        self.assertEqual(older.texts, ["AABBCCDD 00 0000 0004 :0000 malloc :0000 __malloc"])
+        self.assertEqual(newer.texts, ["AABBCCDD 00 0000 0004 :0000 malloc :0000 __libc_malloc"])
+        self.assertEqual(disjoint.texts, [])
+        self.assertEqual(other.texts, [])
+
     def test_a_claim_several_files_repeat_under_one_name_is_kept(self) -> None:
         line = "11223344 00 0000 0004 :0000 memcpy"
         older, newer = fold([line]), fold([line])
@@ -206,6 +246,11 @@ class OpeningTests(unittest.TestCase):
         longer = f"{self.PROLOGUE}F30300AAFD7BC1A8 00 0000 0018 :0000 ?g@@YAXXZ"
         self.assertEqual(self._settle(short, longer), [short, longer])
 
+    def test_an_alias_of_the_same_routine_at_another_length_does_not_drop_it(self) -> None:
+        short = f"{self.PROLOGUE} 00 0000 0010 :0000 _exit"
+        longer = f"{self.PROLOGUE}F30300AAFD7BC1A8 00 0000 0018 :0000 _Exit :0000 _exit"
+        self.assertEqual(self._settle(short, longer), [short, longer])
+
     def test_a_byte_the_longer_routine_relocates_is_a_difference(self) -> None:
         short = f"{self.PROLOGUE}F30300AA 00 0000 0014 :0000 ?f@@YAXXZ"
         longer = f"{self.PROLOGUE}........FD7BC1A8 00 0000 0018 :0000 ?g@@YAXXZ"
@@ -235,6 +280,20 @@ class OpeningTests(unittest.TestCase):
         short = f"{lead}.. 04 1A2B 002A :0000 ?f@@YAXXZ 4883C4205FC3"
         longer = f"{lead}.. 04 1A2B 0040 :0000 ?g@@YAXXZ 4883C4205FC3CCCC48895C24"
         self.assertEqual(self._settle(short, longer), [longer])
+
+
+class SplitTests(unittest.TestCase):
+    def test_a_small_file_is_one_part(self) -> None:
+        self.assertEqual(split_parts(["a", "b"], 100), [["a", "b"]])
+
+    def test_a_large_file_is_split_evenly_and_in_order(self) -> None:
+        texts = [f"line{index:02d}" for index in range(10)]  # 7 bytes each with a newline
+        parts = split_parts(texts, 30)
+        self.assertEqual([text for part in parts for text in part], texts)
+        self.assertEqual(len(parts), 3)
+        for part in parts:
+            self.assertLessEqual(sum(len(text) + 1 for text in part), 30)
+        self.assertLessEqual(max(map(len, parts)) - min(map(len, parts)), 1)
 
 
 class AssetTests(unittest.TestCase):
@@ -286,6 +345,22 @@ class AssetTests(unittest.TestCase):
             )
             with self.subTest(name=name), self.assertRaises(BuildError):
                 _ = bad.output
+
+    def test_elf_libraries_are_filed_in_the_elf_tree(self) -> None:
+        asset = self._asset(
+            {"asset": "ubuntu-libstdc++-12-x64", "kind": "library", "arch": "x64",
+             "format": "elf", "library": "ubuntu-libstdc++-12"}
+        )
+        self.assertEqual(asset.output, Path("elf/x86/64/ubuntu-libstdc++-12.pat"))
+        self.assertEqual(asset.machine, "x64")
+        for manifest in (
+            {"asset": "x", "kind": "library", "arch": "x64", "format": "macho",
+             "library": "libz"},
+            {"asset": "x", "kind": "toolset", "arch": "x64", "format": "elf",
+             "visual_studio": {"year": 2026}},
+        ):
+            with self.subTest(manifest=manifest), self.assertRaises(BuildError):
+                _ = self._asset(manifest).output
 
 
 FAKE_SIGMAKER = textwrap.dedent(
@@ -447,6 +522,64 @@ class BuildTests(unittest.TestCase):
                       [{k: v for k, v in source.items() if k != "archive_sha256"}
                        for source in provenance["sources"]])
         self.assertIn("ambiguous groups dropped", report)
+
+    def test_a_library_built_with_mingw_is_read_from_its_ar_archive(self) -> None:
+        self._asset(
+            "mingw32-zlib-1.3-x86",
+            {"kind": "library", "arch": "x86", "library": "mingw32-zlib",
+             "library_version": "1.3"},
+            {"mingw32-zlib/x86/libz.a": b"a", "mingw32-zlib/x86/README": b"r"},
+        )
+
+        self._run()
+
+        self.assertEqual(
+            (self.root / "sigs/pe/x86/32/mingw32-zlib.pat").read_text().splitlines(),
+            ["AA04CCDD 00 0000 0004 :0000 x86_libz"],
+        )
+
+    def test_a_file_larger_than_the_limit_is_written_in_parts(self) -> None:
+        self._asset(
+            "ubuntu-libc6-x64",
+            {"kind": "library", "arch": "x64", "format": "elf", "library": "ubuntu-libc6"},
+            {f"ubuntu-libc6/pkg/lib{name}.a": b"a" for name in ("aa", "bbb", "cccc", "ddddd")},
+        )
+        directory = self.root / "sigs/elf/x86/64"
+        directory.mkdir(parents=True)
+        # A part an earlier, larger build left behind.
+        (directory / "ubuntu-libc6.part3.pat").write_text("01020304 00 0000 0004 :0000 stale\n")
+
+        report = self._run("--max-file-bytes", "100")
+
+        first = (directory / "ubuntu-libc6.pat").read_text().splitlines()
+        second = (directory / "ubuntu-libc6.part2.pat").read_text().splitlines()
+        self.assertEqual(len(first) + len(second), 4)
+        self.assertTrue(first and second)
+        self.assertFalse((directory / "ubuntu-libc6.part3.pat").exists())
+        provenance = json.loads((directory / "ubuntu-libc6.sources.json").read_text())
+        self.assertEqual(
+            [part["file"] for part in provenance["parts"]],
+            ["elf/x86/64/ubuntu-libc6.pat", "elf/x86/64/ubuntu-libc6.part2.pat"],
+        )
+        self.assertEqual(provenance["lines"], 4)
+        self.assertIn("4 lines in 2 parts", report)
+
+    def test_lines_builds_repeat_are_kept_once_and_counted(self) -> None:
+        toolset = {"kind": "toolset", "arch": "x64", "visual_studio": {"year": 2022}}
+        for version in ("14.43.1", "14.44.2"):
+            self._asset(
+                f"vs2022-{version}-x64", dict(toolset, toolset_version=version),
+                {"vc/lib/x64/libcmt.lib": version.encode()},
+            )
+
+        report = self._run()
+
+        self.assertEqual(
+            (self.root / "sigs/pe/x86/64/vs2022.pat").read_text().splitlines(),
+            ["AA06CCDD 00 0000 0004 :0000 x64_libcmt"],
+        )
+        # Each build wrote the same three lines.
+        self.assertIn("(3 duplicates folded,", report)
 
     def test_archive_that_disagrees_with_its_manifest_fails(self) -> None:
         self._asset(

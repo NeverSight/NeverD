@@ -940,6 +940,10 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
     MedVar LiveIn;
     if (reachingRegAtBlockEntry(CurBlock, ParamRegs[Index], LiveIn))
       return medvarToExpr(LiveIn);
+    // A register this function never writes, at its only call, still holds
+    // its incoming value: a recovered parameter is passed straight through.
+    if (auto Param = untouchedParamRegister(ParamRegs[Index]))
+      return medvarToExpr(*Param);
     return nullptr;
   };
   Scan.ReachingRegArg = ReachingRegArg;
@@ -1190,6 +1194,39 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   return BoundKnownCalleeArity(std::move(Args));
 }
 
+std::optional<MedVar>
+MedToHighConverter::untouchedParamRegister(uint64_t RegOff) const {
+  if (!CurMed)
+    return std::nullopt;
+  // Any write to the register, or to one of its byte lanes, and any other
+  // call that may clobber it, leaves its value at the call undetermined here.
+  size_t Calls = 0;
+  auto Writes = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.RegOff >= RegOff && V.RegOff < RegOff + 8;
+  };
+  for (const auto &Blk : CurMed->Blocks) {
+    for (const auto &Phi : Blk.Phis)
+      if (Writes(Phi.Output))
+        return std::nullopt;
+    for (const auto &Op : Blk.Ops) {
+      if (Writes(Op.Output))
+        return std::nullopt;
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        ++Calls;
+    }
+  }
+  if (Calls != 1)
+    return std::nullopt;
+  for (size_t I = 0; I < CurMed->Params.size(); ++I)
+    if (CurMed->Params[I].RegOff == RegOff) {
+      MedVar Param = CurMed->Params[I];
+      Param.Kind = MedVar::Param;
+      Param.Id = static_cast<int>(I);
+      return Param;
+    }
+  return std::nullopt;
+}
+
 bool MedToHighConverter::reachingRegAtBlockEntry(const MedBlock &B,
                                                  uint64_t RegOff,
                                                  MedVar &Out) const {
@@ -1224,8 +1261,7 @@ bool MedToHighConverter::reachingRegAtBlockEntry(const MedBlock &B,
         if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff &&
             Op.Output.Size > 0 && Op.NumInputs >= 1 &&
             Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].RegOff == RegOff &&
-            Op.Inputs[0].Id == Op.Output.Id &&
-            Op.Inputs[0].SSAVer == Op.Output.SSAVer) {
+            Op.Inputs[0].Id == Op.Output.Id && Op.Inputs[0].SSAVer == 0) {
           R = Op.Output;
           return true;
         }

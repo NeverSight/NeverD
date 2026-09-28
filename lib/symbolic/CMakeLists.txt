@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDSymbolic
   mba/SymMBAPoly.cpp
   mba/SymMBAProduct.cpp
   mba/SymMBARegion.cpp
+  mba/SymWideArithmetic.cpp
   parse/SymParse.cpp
   parse/SymParseCall.cpp
   parse/SymParseLex.cpp

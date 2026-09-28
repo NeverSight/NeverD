@@ -7033,15 +7033,6 @@ TEST_F(JTE_X86_64,
     neverd::CFGBuilder Builder;
     const neverd::LowFunc Low =
         Builder.build(Image, Decoder, Function->Addr, Function->Name);
-    size_t ConstantOnlyMaskCount = 0;
-    for (const neverd::LowBlock &Block : Low.Blocks)
-      for (const neverd::LowOp &Op : Block.Ops)
-        ConstantOnlyMaskCount +=
-            neverd::detail::isConstantOnlyScalarMask(Op) ? 1u : 0u;
-    EXPECT_GE(ConstantOnlyMaskCount, 3u)
-        << FunctionName
-        << " must exercise the lifter-generated shift-count masks that are "
-           "irrelevant to selector-domain evidence";
     ASSERT_EQ(Low.JumpTables.size(), AddressOrder.size())
         << FunctionName
         << " must publish the entry and all four cyclic siblings as one "

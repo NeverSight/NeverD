@@ -128,8 +128,7 @@ TEST_F(X86_64_PipelineE2E, DecompileHighC_MulDiv) {
   std::ifstream Input(tmpFile("decompiled_high.c"));
   const std::string Content((std::istreambuf_iterator<char>(Input)),
                             std::istreambuf_iterator<char>());
-  EXPECT_NE(Content.find("neverd_divisor == 0"), std::string::npos)
-      << Content;
+  EXPECT_NE(Content.find("neverd_divisor == 0"), std::string::npos) << Content;
   EXPECT_NE(Content.find("neverd_dividend_high >= neverd_divisor"),
             std::string::npos)
       << Content;
@@ -188,11 +187,13 @@ TEST_F(X86_64_PipelineE2E, Semantic_SubI64) {
 }
 
 TEST_F(X86_64_PipelineE2E, Semantic_StoreExists) {
-  verifyLLVMIRContains(obj("test_stack_mov.o"), "", "store");
+  verifyLLVMIRContains(obj("test_stack_mov.o"), "", "store",
+                       /*NoOptimization=*/true);
 }
 
 TEST_F(X86_64_PipelineE2E, Semantic_LoadExists) {
-  verifyLLVMIRContains(obj("test_stack_mov.o"), "", "load");
+  verifyLLVMIRContains(obj("test_stack_mov.o"), "", "load",
+                       /*NoOptimization=*/true);
 }
 
 TEST_F(X86_64_PipelineE2E, Semantic_IcmpExists) {

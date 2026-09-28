@@ -3591,3 +3591,142 @@ TEST(HighControlFlowSemantics, CopyOnlyThenArmReadAfterItsListStays) {
   for (uint64_t Input : {uint64_t{0}, uint64_t{3}, uint64_t{5}})
     EXPECT_EQ(execute(F, Input), Input == 5 ? 7u : 2u);
 }
+
+TEST(HighControlFlowSemantics, SkipInvertKeepsAnElseArmThatDoesWork) {
+  // In a try body, `if (c) goto L; else { work; goto J; } fall; L: ...` is not
+  // a skip over `fall`: the else arm never reaches it. Rewriting the pair as
+  // `if (!c) { fall }` would drop the else arm's work.
+  auto Store = [](va_t Address, uint64_t Slot, uint64_t Value) {
+    HighStmt S;
+    S.Kind = StmtKind::Store;
+    S.Addr = Address;
+    S.StoreAddr = HighExpr::makeConst(Slot, 8);
+    S.StoreVal = HighExpr::makeConst(Value, 8);
+    return S;
+  };
+  HighStmt Check;
+  Check.Kind = StmtKind::IfElse;
+  Check.Addr = 0x100c;
+  Check.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL, local(0),
+                                   HighExpr::makeConst(0, 8));
+  Check.Body = {jump(0x100c, 0x1020)};
+  Check.ElseBody = {Store(0x1010, 0x300, 7), jump(0x1014, 0x1030)};
+  HighStmt Try;
+  Try.Kind = StmtKind::SEHTry;
+  Try.Addr = 0x100c;
+  Try.Body = {Check, Store(0x1018, 0x308, 1), Store(0x1020, 0x310, 2),
+              jump(0x1028, 0x1030)};
+  HighFunc F;
+  F.Body = {Try, result(0x1030, HighExpr::makeConst(0, 8))};
+  invertSkipGotos(F);
+  bool ElseWork = false;
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    ElseWork |= S.Kind == StmtKind::Store && S.StoreAddr &&
+                S.StoreAddr->Kind == ExprKind::Const &&
+                S.StoreAddr->ConstVal == 0x300;
+  });
+  EXPECT_TRUE(ElseWork);
+}
+
+TEST(HighControlFlowSemantics, SkipInvertKeepsTheSkipPathCopies) {
+  // In a try body, `if (c) { r = x; goto L; } work; L: out = r;` sets r only
+  // on the skip path. `if (!c) { work }` alone would lose that copy.
+  auto Store = [](va_t Address, uint64_t Slot, ExprPtr Value) {
+    HighStmt S;
+    S.Kind = StmtKind::Store;
+    S.Addr = Address;
+    S.StoreAddr = HighExpr::makeConst(Slot, 8);
+    S.StoreVal = std::move(Value);
+    return S;
+  };
+  auto Copy = assign(0x100c, 5, 0);
+  Copy.Val = local(1);
+  Copy.IsPhiCopy = true;
+  HighStmt Skip;
+  Skip.Kind = StmtKind::If;
+  Skip.Addr = 0x100c;
+  Skip.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL, local(0),
+                                  HighExpr::makeConst(0, 8));
+  Skip.Body = {Copy, jump(0x100c, 0x1020)};
+  HighStmt Try;
+  Try.Kind = StmtKind::SEHTry;
+  Try.Addr = 0x1008;
+  Try.Body = {assign(0x1008, 5, 3), Skip,
+              Store(0x1018, 0x308, HighExpr::makeConst(1, 8)),
+              Store(0x1020, 0x300, local(5))};
+  HighFunc F;
+  F.Body = {assign(0x1000, 1, 9), Try,
+            result(0x1030, HighExpr::makeConst(0, 8))};
+  invertSkipGotos(F);
+  bool SkipCopy = false;
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    SkipCopy |= S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+                S.Dst->Kind == ExprKind::Var && S.Dst->Var.Id == 5 &&
+                S.Val->Kind == ExprKind::Var && S.Val->Var.Id == 1;
+  });
+  EXPECT_TRUE(SkipCopy);
+}
+
+TEST(HighControlFlowSemantics, DefinitionLaidOutAfterItsUseIsStillBuilt) {
+  // The entry jumps to the block that defines t1, which jumps back to an
+  // earlier block that uses t1 once: block order is not dominance order, as
+  // in a loop entered at its bottom test.
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Name = "late_definition";
+    F.ReturnType = NdType::makeInt(8, false);
+    auto Input = machineValue(0, Architecture);
+    Input.Kind = MedVar::Param;
+    Input.RegOff = getTargetRegInfo(Architecture).IntParamRegs[0];
+    F.Params = {Input};
+    auto T1 = machineValue(1, Architecture), T2 = machineValue(2, Architecture);
+    auto T3 = machineValue(3, Architecture);
+    auto Value = machineValue(4, Architecture);
+    auto Return = machineValue(5, Architecture);
+    Return.Kind = MedVar::Reg;
+    Return.RegOff = getTargetRegInfo(Architecture).IntReturnReg;
+    F.Blocks.resize(3);
+    for (int I = 0; I < 3; ++I) {
+      F.Blocks[I].Id = I;
+      F.Blocks[I].StartAddr = 0x1000 + I * 0x100;
+      F.Blocks[I].EndAddr = F.Blocks[I].StartAddr + 0x40;
+    }
+    F.Blocks[0].Succs = {2};
+    F.Blocks[0].Ops = {
+        operation(NdOp::BRANCH, 0x1000, {}, {MedVar::makeConst(0x1200, 8)})};
+    auto &Use = F.Blocks[1];
+    Use.Preds = {2};
+    Use.Ops = {
+        operation(NdOp::INT_ADD, 0x1100, T2, {T1, MedVar::makeConst(2, 8)}),
+        operation(NdOp::STORE, 0x1104, {}, {T2, MedVar::makeConst(7, 8)}),
+        operation(NdOp::INT_ADD, 0x1108, T3, {Input, MedVar::makeConst(7, 8)}),
+        operation(NdOp::LOAD, 0x110c, Value, {T3}),
+        operation(NdOp::COPY, 0x1110, Return, {Value}),
+        operation(NdOp::RETURN, 0x1114, {}, {Return})};
+    auto &Def = F.Blocks[2];
+    Def.Preds = {0};
+    Def.Succs = {1};
+    Def.Ops = {
+        operation(NdOp::INT_ADD, 0x1200, T1, {Input, MedVar::makeConst(5, 8)}),
+        operation(NdOp::BRANCH, 0x1204, {}, {MedVar::makeConst(0x1100, 8)})};
+    const auto High = MedToHighConverter().convert(F, Architecture);
+    // Every temporary the body reads has an assignment, or was inlined.
+    std::set<VarKey> Defined, Read;
+    walkStmts(High.Body, [&](const HighStmt &S) {
+      if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var)
+        Defined.insert(varKey(S.Dst->Var));
+      forEachRhsExpr(S, [&](const ExprPtr &E) {
+        std::function<void(const HighExpr &)> Walk = [&](const HighExpr &N) {
+          if (N.Kind == ExprKind::Var && N.Var.Kind == MedVar::Temp)
+            Read.insert(varKey(N.Var));
+          N.forEachChildExpr([&](const ExprPtr &C) { Walk(*C); });
+        };
+        if (E)
+          Walk(*E);
+      });
+    });
+    for (const VarKey &Key : Read)
+      EXPECT_TRUE(Defined.count(Key)) << "t" << Key.first << "_" << Key.second;
+  }
+}

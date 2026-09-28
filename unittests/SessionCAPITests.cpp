@@ -469,7 +469,9 @@ protected:
     return Path;
   }
 
-  void expectSignatureJSONName(const std::string &Name) {
+  void expectSignatureJSONName(const std::string &Name,
+                               const std::string &Aliases = "",
+                               const std::vector<std::string> &Listed = {}) {
     const auto Input =
         write("signature-input.elf", makeNamedNativeELF("entry"));
     ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
@@ -478,7 +480,7 @@ protected:
     ASSERT_EQ(neverd_func_count(Session), 1);
     const auto Pattern =
         write("signature-library.pat",
-              "B807000000C3 00 0000 0006 :0000 " + Name + "\n");
+              "B807000000C3 00 0000 0006 :0000 " + Name + Aliases + "\n");
     ASSERT_EQ(neverd_apply_signature_file(Session, Pattern.c_str()), 1)
         << takeString(neverd_last_error(Session));
     EXPECT_EQ(neverd_sig_match_count(Session), 1);
@@ -495,6 +497,16 @@ protected:
     EXPECT_EQ(Match->getString("library"), "signature-library");
     EXPECT_EQ(Match->getInteger("func_len"), 6);
     EXPECT_EQ(Match->getBoolean("confirmed"), false);
+    const auto *AliasArray = Match->getArray("aliases");
+    if (Listed.empty()) {
+      EXPECT_EQ(AliasArray, nullptr);
+    } else {
+      ASSERT_NE(AliasArray, nullptr);
+      std::vector<std::string> Seen;
+      for (const llvm::json::Value &Alias : *AliasArray)
+        Seen.push_back(Alias.getAsString().value_or("").str());
+      EXPECT_EQ(Seen, Listed);
+    }
     const auto Address = Match->getString("addr");
     ASSERT_TRUE(Address.has_value());
     uint64_t ParsedAddress = 0;
@@ -1843,6 +1855,13 @@ TEST_F(SessionCAPITest, SignatureJSONPreservesASCIINameAndMatchFields) {
 
 TEST_F(SessionCAPITest, SignatureJSONPreservesUnicodeNameAndMatchFields) {
   expectSignatureJSONName("\xe5\x87\xbd\xe6\x95\xb0_caf\xc3\xa9");
+}
+
+TEST_F(SessionCAPITest, SignatureJSONListsTheRoutinesOtherNames) {
+  // One routine the library defines under three names: the match takes the
+  // public one and lists the others.
+  expectSignatureJSONName("puts", " :0000 __IO_puts_internal :0000 _IO_puts",
+                          {"_IO_puts", "__IO_puts_internal"});
 }
 
 TEST_F(SessionCAPITest, AnnotationsPreserveExactNumericAddressKeys) {

@@ -28,15 +28,64 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace neverd {
 
 namespace {
+
+struct SplitWordAssembly {
+  llvm::Value *High;
+  llvm::Value *Low;
+};
+
+/// A disjoint OR may be read as a concatenation only when its operands are
+/// statically confined to the upper and lower halves. This also proves the
+/// widened shift's unsigned no-wrap flag for every value of its source.
+std::optional<SplitWordAssembly> splitWordAssembly(const llvm::Instruction &I) {
+  if (I.getOpcode() != llvm::Instruction::Or || !I.getType()->isIntegerTy() ||
+      I.getType()->getIntegerBitWidth() % 2 != 0)
+    return std::nullopt;
+  const unsigned Wide = I.getType()->getIntegerBitWidth();
+  const unsigned Half = Wide / 2;
+  for (unsigned Side = 0; Side < 2; ++Side) {
+    const auto *Shift =
+        llvm::dyn_cast<llvm::BinaryOperator>(I.getOperand(Side));
+    const auto *Low = llvm::dyn_cast<llvm::ZExtInst>(I.getOperand(1 - Side));
+    if (!Shift || Shift->getOpcode() != llvm::Instruction::Shl || !Low ||
+        Shift->getType() != I.getType() || Low->getType() != I.getType() ||
+        !Low->getSrcTy()->isIntegerTy(Half))
+      continue;
+    const auto *High = llvm::dyn_cast<llvm::ZExtInst>(Shift->getOperand(0));
+    const auto *Amount =
+        llvm::dyn_cast<llvm::ConstantInt>(Shift->getOperand(1));
+    if (!High || High->getType() != I.getType() ||
+        !High->getSrcTy()->isIntegerTy(Half) || !Amount ||
+        !Amount->equalsInt(Half) || Shift->hasNoSignedWrap())
+      continue;
+    return SplitWordAssembly{High->getOperand(0), Low->getOperand(0)};
+  }
+  return std::nullopt;
+}
+
+bool safeWidenedShift(const llvm::Instruction &I) {
+  if (I.getOpcode() != llvm::Instruction::Shl || !I.getType()->isIntegerTy())
+    return false;
+  const auto *Source = llvm::dyn_cast<llvm::ZExtInst>(I.getOperand(0));
+  const auto *Amount = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1));
+  if (!Source || !Amount || !Source->getSrcTy()->isIntegerTy() ||
+      I.hasNoSignedWrap())
+    return false;
+  const unsigned ResultWidth = I.getType()->getIntegerBitWidth();
+  const unsigned SourceWidth = Source->getSrcTy()->getIntegerBitWidth();
+  return Amount->getValue().ule(ResultWidth - SourceWidth);
+}
 
 /// Whether \p I has the same domain in LLVM IR and in the engine's total
 /// bitvector algebra.
@@ -51,8 +100,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
   // This catches poison-generating flags added to LLVM after this switch was
   // written.  The per-opcode checks below remain deliberate documentation of
   // the exact language subset accepted today.
-  if (I.hasPoisonGeneratingFlags() || I.hasPoisonGeneratingAttributes() ||
-      I.hasPoisonGeneratingMetadata())
+  if ((I.hasPoisonGeneratingFlags() && !splitWordAssembly(I) &&
+       !safeWidenedShift(I)) ||
+      I.hasPoisonGeneratingAttributes() || I.hasPoisonGeneratingMetadata())
     return false;
 
   auto HasNoWrap = [&] {
@@ -73,9 +123,10 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
   case OpTag::Xor:
     return true;
   case OpTag::Or:
-    return !llvm::cast<llvm::PossiblyDisjointInst>(I).isDisjoint();
+    return !llvm::cast<llvm::PossiblyDisjointInst>(I).isDisjoint() ||
+           splitWordAssembly(I).has_value();
   case OpTag::Shl:
-    return !HasNoWrap() && HasInRangeConstantShift();
+    return (!HasNoWrap() || safeWidenedShift(I)) && HasInRangeConstantShift();
   case OpTag::LShr:
   case OpTag::AShr:
     return !llvm::cast<llvm::PossiblyExactOperator>(I).isExact() &&
@@ -95,6 +146,10 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
     return true;
   case OpTag::ICmp:
     return !llvm::cast<llvm::ICmpInst>(I).hasSameSign();
+  case OpTag::FShl: {
+    const auto *Amount = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(2));
+    return Amount != nullptr;
+  }
   case OpTag::None:
     return false;
   }
@@ -105,7 +160,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
 /// scalar bitvector algebra.
 bool hasIncompatibleSemantics(const llvm::Instruction &I,
                               bool WithComparisons) {
-  if (llvm::isa<llvm::FreezeInst>(I) || I.hasPoisonGeneratingAnnotations())
+  if (llvm::isa<llvm::FreezeInst>(I) ||
+      (I.hasPoisonGeneratingAnnotations() && !splitWordAssembly(I) &&
+       !safeWidenedShift(I)))
     return true;
   return isTranslatable(&I, WithComparisons) && !hasCompatibleSemantics(I);
 }
@@ -150,6 +207,9 @@ bool hasHiddenIncompatibleSemantics(const llvm::Instruction &Root,
 } // namespace
 
 OpTag tagOf(const llvm::Instruction &I) {
+  if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I))
+    if (Intrinsic->getIntrinsicID() == llvm::Intrinsic::fshl)
+      return OpTag::FShl;
   if (llvm::isa<llvm::TruncInst>(I))
     return OpTag::Trunc;
   if (llvm::isa<llvm::ZExtInst>(I))
@@ -195,6 +255,8 @@ bool isTranslatable(const llvm::Value *V, bool WithComparisons) {
   if (!I || !I->getType()->isIntegerTy())
     return false;
   OpTag Tag = tagOf(*I);
+  if (Tag == OpTag::FShl && !llvm::isa<llvm::ConstantInt>(I->getOperand(2)))
+    return false;
   return Tag != OpTag::None && (WithComparisons || Tag != OpTag::ICmp);
 }
 
@@ -216,6 +278,8 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
   case OpTag::And:
     return Ctx.mkAnd(M(A), M(B));
   case OpTag::Or:
+    if (auto Pair = splitWordAssembly(I))
+      return Ctx.mkConcat(M(Pair->High), M(Pair->Low));
     return Ctx.mkOr(M(A), M(B));
   case OpTag::Xor:
     // `x ^ -1` is complement, a generator of the bitwise algebra the solver
@@ -271,6 +335,17 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
       break;
     }
     break;
+  case OpTag::FShl: {
+    const auto *Amount = llvm::cast<llvm::ConstantInt>(I.getOperand(2));
+    const uint32_t Shift = static_cast<uint32_t>(
+        Amount->getValue()
+            .urem(llvm::APInt(Amount->getBitWidth(), Width))
+            .getZExtValue());
+    if (Shift == 0)
+      return M(A);
+    return Ctx.mkOr(Ctx.mkShl(M(A), Ctx.mkConst(Width, Shift)),
+                    Ctx.mkLShr(M(B), Ctx.mkConst(Width, Width - Shift)));
+  }
   case OpTag::None:
     break;
   }
@@ -287,21 +362,47 @@ void Translator::collectRegion(llvm::Value *Root) {
     Pending.append(Ops.begin(), Ops.end());
   }
 
-  // An externally used instruction is an opaque boundary. Removing it can
-  // expose another external use of an operand, so close that boundary towards
-  // the leaves before translation and before computing instruction savings.
+  // The closed region is cheaper to measure and gives shared computations a
+  // stable opaque identity.  If it cannot simplify, a second translation may
+  // inspect pure shared definitions, which is needed when a split-word carry
+  // also reads a carry-save expression's XOR or AND.
   for (const llvm::Value *V : Region)
     if (V != Root && llvm::any_of(V->users(), [&](const llvm::User *U) {
           return !Region.contains(U);
-        }))
-      Pending.push_back(const_cast<llvm::Value *>(V));
-  while (!Pending.empty()) {
-    llvm::Value *V = Pending.pop_back_val();
-    if (!Region.erase(V))
-      continue;
-    for (llvm::Value *Operand : children(*llvm::cast<llvm::Instruction>(V)))
-      if (Operand != Root && Region.contains(Operand))
-        Pending.push_back(Operand);
+        })) {
+      SharedBoundary = true;
+      if (!ExpandSharedPure)
+        Pending.push_back(const_cast<llvm::Value *>(V));
+    }
+  if (!ExpandSharedPure)
+    while (!Pending.empty()) {
+      llvm::Value *V = Pending.pop_back_val();
+      if (!Region.erase(V))
+        continue;
+      for (llvm::Value *Operand : children(*llvm::cast<llvm::Instruction>(V)))
+        if (Operand != Root && Region.contains(Operand))
+          Pending.push_back(Operand);
+    }
+
+  // Count only operations whose every use dies after Root is replaced. Pure
+  // shared expressions remain live for their other consumers even when the
+  // second translation uses their definitions to prove an identity.
+  llvm::DenseMap<const llvm::Value *, unsigned> RemainingUses;
+  for (const llvm::Value *V : Region)
+    RemainingUses[V] = V->getNumUses();
+  llvm::SmallVector<const llvm::Value *, 64> Dead{Root};
+  llvm::DenseSet<const llvm::Value *> Scheduled{Root};
+  while (!Dead.empty()) {
+    const llvm::Value *V = Dead.pop_back_val();
+    ++NumDescended;
+    for (const llvm::Value *Operand :
+         children(*llvm::cast<llvm::Instruction>(V))) {
+      auto It = RemainingUses.find(Operand);
+      if (It == RemainingUses.end() || It->second == 0)
+        continue;
+      if (--It->second == 0 && Scheduled.insert(Operand).second)
+        Dead.push_back(Operand);
+    }
   }
 }
 
@@ -366,7 +467,6 @@ sym::SymRef Translator::in(llvm::Value *Root) {
 
     Active.erase(V);
     Memo[V] = build(I);
-    ++NumDescended;
   }
   return Memo.lookup(Root);
 }
@@ -566,10 +666,12 @@ Translator::out(sym::SymRef R, llvm::Instruction *At,
       break;
     }
     case sym::SymOp::Concat: {
-      llvm::Value *Acc = llvm::ConstantInt::get(Ty, 0);
-      for (sym::SymRef Op : Ops) {
+      llvm::Value *Acc = get(Ops.front());
+      if (Acc)
+        Acc = B.CreateZExt(Acc, Ty);
+      for (sym::SymRef Op : Ops.drop_front()) {
         llvm::Value *V = get(Op);
-        if (!V) {
+        if (!Acc || !V) {
           Acc = nullptr;
           break;
         }
@@ -587,8 +689,7 @@ Translator::out(sym::SymRef R, llvm::Instruction *At,
       break;
     }
     default:
-      // Rotates and comparisons never come back out, because nothing on the way
-      // in ever puts one in.
+      // Rotates and comparisons have no output spelling in this translator.
       Result = nullptr;
       break;
     }

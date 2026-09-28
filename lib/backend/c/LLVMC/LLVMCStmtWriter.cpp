@@ -3719,6 +3719,27 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call) {
       return getName(&Call);
   RenderingCalls.push_back(&Call);
 
+  if (const auto *Callee = Call.getCalledFunction()) {
+    const auto IID = Callee->getIntrinsicID();
+    if (IID == llvm::Intrinsic::fshl || IID == llvm::Intrinsic::fshr) {
+      const auto *Ty = llvm::dyn_cast<llvm::IntegerType>(Call.getType());
+      const unsigned Width = Ty ? Ty->getBitWidth() : 0;
+      if (Call.arg_size() != 3 || (Width != 8 && Width != 16 && Width != 32 &&
+                                   Width != 64 && Width != 128))
+        throw std::runtime_error("unsupported LLVM funnel shift width");
+      std::string Expr = "neverd_llvm_fsh";
+      Expr += IID == llvm::Intrinsic::fshl ? 'l' : 'r';
+      Expr += "_i" + std::to_string(Width) + "(";
+      for (unsigned I = 0; I < 3; ++I) {
+        if (I)
+          Expr += ", ";
+        Expr += callArgStr(Call.getArgOperand(I), Call, I);
+      }
+      RenderingCalls.pop_back();
+      return Expr + ")";
+    }
+  }
+
   std::string CalleeName;
   if (auto *Callee = Call.getCalledFunction()) {
     const std::string RawCalleeName = Callee->getName().str();

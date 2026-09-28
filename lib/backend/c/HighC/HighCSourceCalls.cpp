@@ -211,6 +211,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     return bad("weak import belongs to another binding kind");
   if (Hint.ValueWitness && Hint.CallKind != Kind::SwiftValueWitness)
     return bad("value-witness operation belongs to another binding kind");
+  if (Hint.Virtual && Hint.CallKind != Kind::SwiftVirtual)
+    return bad("Swift virtual evidence belongs to another binding kind");
   if (Hint.CallKind == Kind::SwiftValueWitness) {
     if (!isSwiftValueWitnessSourceCallHint(Hint, Opts.TheArch) ||
         !E.IsIndirectCall || E.CallAddr || !Hint.ValueWitness ||
@@ -254,6 +256,76 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                ? *Result
                : bad("Swift value-witness result carrier disagrees with ABI");
   }
+  if (Hint.CallKind == Kind::SwiftVirtual) {
+    if (!Hint.Virtual || !CurrentFunc ||
+        CurrentFunc->Entry != Hint.Virtual->MethodEntry || !E.IsIndirectCall ||
+        E.CallAddr || !E.IndirectTarget ||
+        E.IndirectTarget->Kind != ExprKind::Var ||
+        Signature.Architecture != Arch::AArch64 ||
+        Opts.TheArch != Arch::AArch64 || !Signature.HasExplicitABI ||
+        Signature.Convention != SourceFunctionTypeHint::ConventionKind::Swift ||
+        !Signature.ReturnType)
+      return bad("invalid Swift virtual binding");
+    const bool VoidCall = Signature.ReturnType->Kind == NdTypeKind::Void;
+    const bool Setter = VoidCall && Signature.Parameters.size() == 2;
+    if (Signature.Parameters.size() != (Setter ? 2U : 1U) ||
+        E.Operands.size() != Signature.Parameters.size() ||
+        std::any_of(E.Operands.begin(), E.Operands.end(),
+                    [](const auto &Operand) { return !Operand; }) ||
+        (Setter && Signature.Parameters[0].TheRole !=
+                       SourceParameterTypeHint::Role::Ordinary) ||
+        Signature.Parameters.back().TheRole !=
+            SourceParameterTypeHint::Role::SwiftContext ||
+        !Signature.Parameters.back().Type ||
+        Signature.Parameters.back().Type->Kind != NdTypeKind::Ptr ||
+        Signature.Parameters.back().Type->Size != 8)
+      return bad("invalid Swift virtual binding");
+    const auto &ValueType =
+        Setter ? Signature.Parameters[0].Type : Signature.ReturnType;
+    if (!VoidCall &&
+        (!ValueType ||
+         !((ValueType->Kind == NdTypeKind::Float && ValueType->Size == 8) ||
+           (ValueType->Kind == NdTypeKind::Int && ValueType->Size == 1 &&
+            !ValueType->IsSigned))))
+      return bad("invalid Swift virtual binding");
+    if (Setter &&
+        (!ValueType ||
+         !((ValueType->Kind == NdTypeKind::Float && ValueType->Size == 8) ||
+           (ValueType->Kind == NdTypeKind::Int && ValueType->Size == 1 &&
+            !ValueType->IsSigned))))
+      return bad("invalid Swift virtual binding");
+    const size_t ContextIndex = Setter ? 1 : 0;
+    auto Context = sourceValue(exprStr(*E.Operands[ContextIndex]),
+                               E.Operands[ContextIndex]->Type,
+                               Signature.Parameters[ContextIndex].Type);
+    if (!Context)
+      return bad("Swift context carrier disagrees with ABI");
+    std::optional<std::string> Value;
+    if (Setter) {
+      Value = sourceValue(exprStr(*E.Operands[0]), E.Operands[0]->Type,
+                          Signature.Parameters[0].Type);
+      if (!Value)
+        return bad("Swift value carrier disagrees with ABI");
+    }
+    const std::string ReturnType = Signature.ReturnType->Kind == NdTypeKind::Int
+                                       ? "_Bool"
+                                       : typeToC(Signature.ReturnType);
+    const std::string Prototype =
+        ReturnType + " __attribute__((swiftcall)) (*)(" +
+        (Setter
+             ? (ValueType->Kind == NdTypeKind::Int ? "_Bool, "
+                                                   : typeToC(ValueType) + ", ")
+             : "") +
+        sourceParameterType(Signature.Parameters.back()) + ")";
+    const std::string Call = "((" + Prototype + ")(uintptr_t)(" +
+                             exprStr(*E.IndirectTarget) + "))(" +
+                             (Setter ? *Value + ", " : "") + *Context + ")";
+    if (VoidCall)
+      return Call;
+    auto Result = sourceValue(Call, Signature.ReturnType, E.Type);
+    return Result ? *Result
+                  : bad("Swift virtual result carrier disagrees with ABI");
+  }
   if ((Hint.CallKind == Kind::SwiftStringBridge ||
        Hint.CallKind == Kind::SwiftStringFromNSString) &&
       Signature.Convention != SourceFunctionTypeHint::ConventionKind::Swift)
@@ -289,9 +361,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         Hint.Format || Hint.NilTerminated || Hint.SwiftTypeMetadata ||
         Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
         Hint.SelectorArgumentTypeUse || Hint.SelectorForwardingUse ||
-        Hint.SelectorArgumentStorageUse ||
-        Hint.ObjCIndirectResultStorage || Hint.ByteCount ||
-        Hint.ImmutablePointerSlot ||
+        Hint.SelectorArgumentStorageUse || Hint.ObjCIndirectResultStorage ||
+        Hint.ByteCount || Hint.ImmutablePointerSlot ||
         std::any_of(Signature.Parameters.begin(), Signature.Parameters.end(),
                     [](const auto &Parameter) {
                       return !Parameter.Type ||

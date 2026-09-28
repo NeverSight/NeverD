@@ -364,3 +364,5 @@ ARM64 Swift 的 `UIColor.init(_ value: Int)` 扩展只有在完整的名称改�
 HighIR 仅在参与符号折叠的每个字面量（包括通过可见局部定义追溯到的字面量）都已证明为标量时，才在折叠后保留标量来源。未知或源于地址的输入不会获得数值来源。
 
 Objective-C 选择器桩调用也仅在重新验证准确的接收者声明和选择器桩、参数整数宽度匹配，且字面量具有无地址所有者的标量来源时，才将数值碰巧落在映像地址内的标量保留为整数实参。来源未知或源于地址的值仍须提供重定位证明。
+
+在 ARM64 Mach-O 中，作为 Objective-C 方法暴露的 Swift CGFloat、Double 或 Bool getter，只有当精确的 `d16@0:8` 或 `B16@0:8` 方法编码、匹配且唯一的 Swift getter thunk 符号、接收者 ivar 偏移引用、来自 libswiftCore 的强 _swift_isaMask 导入、经掩码 isa 的表项加载以及 blr x21 目标全部吻合时，才会绑定其虚调用。Setter 还要求相同的证据、精确的 `v24@0:8d16` 或 `v20@0:8B16` 编码，以及匹配且唯一的 Swift setter thunk；Bool setter 使用 blr x22，浮点 setter 使用 blr x21。无参数 void 方法还要求精确的 `v16@0:8` 编码、匹配的 `yyFTo` 符号，以及 retain 到调用之间没有普通参数寄存器写入的窗口；Swift 调用只传 context。生成的 C 将表项加载保留在 retain/release 之前，并以 swiftcall 和 swift_context 调用目标；Bool getter 的结果和 setter 的传入值使用 `_Bool`，其他虚调用形态仍不恢复。

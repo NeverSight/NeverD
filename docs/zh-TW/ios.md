@@ -350,3 +350,5 @@ ARM64 Swift 的 `UIColor.init(_ value: Int)` 擴充只有在完整的名稱改�
 HighIR 只有在參與符號摺疊的每個常值（包括經由可見區域定義追溯的常值）都已證明為純量時，才於摺疊後保留純量來源。未知或源於位址的輸入不會取得數值來源。
 
 Objective-C 選擇器樁呼叫也僅在重新驗證準確的接收者宣告與選擇器樁、參數整數寬度相符，且字面值具有無位址擁有者的純量來源時，才將數值恰好落在映像位址內的純量保留為整數引數。來源未知或源於位址的值仍須提供重定位證明。
+
+在 ARM64 Mach-O 中，作為 Objective-C 方法公開的 Swift CGFloat、Double 或 Bool getter，只有在精確的 `d16@0:8` 或 `B16@0:8` 方法編碼、相符且唯一的 Swift getter thunk 符號、接收者 ivar 位移參照、來自 libswiftCore 的強式 _swift_isaMask 匯入、經遮罩 isa 的表項載入，以及 blr x21 目標全都吻合時，才會繫結其虛擬呼叫。Setter 也要求相同的證據、精確的 `v24@0:8d16` 或 `v20@0:8B16` 編碼，以及相符且唯一的 Swift setter thunk；Bool setter 使用 blr x22，浮點 setter 使用 blr x21。無參數 void 方法還要求精確的 `v16@0:8` 編碼、相符的 `yyFTo` 符號，以及 retain 到呼叫之間沒有一般參數暫存器寫入的區段；Swift 呼叫只傳 context。產生的 C 將表項載入保留在 retain/release 之前，並以 swiftcall 和 swift_context 呼叫目標；Bool getter 的結果和 setter 的傳入值使用 `_Bool`，其他虛擬呼叫形式仍不復原。

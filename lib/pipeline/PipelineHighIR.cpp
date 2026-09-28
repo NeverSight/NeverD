@@ -9,6 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineReturnModelingDetail.h"
+
 #include "neverd/Common.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/NdTypes.h"
@@ -44,6 +46,15 @@ namespace neverd {
 void Pipeline::buildHighIR(const BinaryImage &Img,
                            const PipelineOptions & /*Opts*/,
                            PipelineResult &Result, DebugContext *Dbg) {
+  // The HighIR route needs the same call-site evidence for register-pair
+  // integer returns as direct MedIR -> LLVM emission.  In particular, a
+  // 32-bit callee may look low-word-only until another function reads both
+  // return registers.  Recover the module-wide return contract before call
+  // ABI recovery and source return lowering inspect its functions.
+  for (MedFunc &MF : Result.MedFuncs)
+    inferMedTypes(MF, Img.Arch);
+  modelWideIntReturns(Img, Result);
+
   auto AllFuncNames = buildFuncNameMap(Img, Result);
   if (Img.Arch == Arch::ARM) {
     const auto &TRI = getTargetRegInfo(Img.Arch);

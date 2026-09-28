@@ -23,6 +23,7 @@
 #include "neverd/loader/Swift/SwiftMetadata.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/loader/Swift/SwiftStringCalls.h"
+#include "neverd/loader/Swift/SwiftVirtualCalls.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Demangle/SwiftDemangle.h"
@@ -5024,6 +5025,9 @@ inline bool objcSourceCallBound(
   if (Binding.ValueWitness &&
       Binding.CallKind != SourceCallTypeHint::Kind::SwiftValueWitness)
     return false;
+  if (Binding.Virtual &&
+      Binding.CallKind != SourceCallTypeHint::Kind::SwiftVirtual)
+    return false;
   if (Binding.SwiftTypeMetadata &&
       Binding.CallKind !=
           SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress)
@@ -5402,6 +5406,13 @@ inline bool objcSourceCallBound(
   if (Binding.CallKind == SourceCallTypeHint::Kind::SwiftValueWitness)
     return Expression.IsIndirectCall && Expression.CallAddr == 0 &&
            isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
+  if (Binding.CallKind == SourceCallTypeHint::Kind::SwiftVirtual)
+    return ContainingFunction && Binding.Virtual &&
+           ContainingFunction->Entry == Binding.Virtual->MethodEntry &&
+           Expression.IsIndirectCall && Expression.CallAddr == 0 &&
+           Expression.IndirectTarget &&
+           Expression.IndirectTarget->Kind == ExprKind::Var &&
+           isSwiftVirtualSourceCallHint(Image, Binding);
   if (Binding.NilTerminated) {
     const auto Expected = objcSelectorStubSentinelSourceCallHint(
         Image, Binding.TargetAddress, *Binding.Receiver,

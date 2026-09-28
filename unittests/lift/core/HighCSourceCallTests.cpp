@@ -519,6 +519,7 @@ static void __attribute__((swiftcall)) witness(void *value, void *metadata) {
     ++*(unsigned *)value;
     ++calls;
 }
+
 int main(void) {
     void *table[2] = {0, (void *)&witness};
     void *metadata_words[2] = {table, 0};
@@ -536,6 +537,213 @@ int main(void) {
   EXPECT_NE(emit({Function}, false)
                 .find("bad source call: invalid Swift value-witness binding"),
             std::string::npos);
+}
+
+TEST(HighCSourceCalls, SwiftVirtualGetterUsesSwiftContextFunctionType) {
+  for (bool Bool : {false, true}) {
+    SourceCallTypeHint Hint;
+    Hint.CallKind = SourceCallTypeHint::Kind::SwiftVirtual;
+    Hint.TargetName = "swift_virtual";
+    Hint.Virtual = SourceCallTypeHint::SwiftVirtualEvidence{
+        0x1000, 0x1010, 0x2000, Bool ? 600U : 624U};
+    Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Hint.Signature.ReturnType =
+        Bool ? NdType::makeInt(1, false) : NdType::makeFloat(8);
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Hint.Signature.Parameters = {{"self", Pointer}};
+    Hint.Signature.Parameters[0].TheRole =
+        SourceParameterTypeHint::Role::SwiftContext;
+    std::string Diagnostic;
+    ASSERT_TRUE(
+        assignDarwinSwiftSourceABI(Hint.Signature, Arch::AArch64, Diagnostic))
+        << Diagnostic;
+
+    auto Param = [&](unsigned Id) {
+      MedVar V;
+      V.Kind = MedVar::Param;
+      V.Id = Id;
+      V.Size = 8;
+      V.TheArch = Arch::AArch64;
+      return HighExpr::makeVar(V, Pointer);
+    };
+    auto Call = HighExpr::makeCall("indirect_call", 0, {Param(0)});
+    Call->Type = Hint.Signature.ReturnType;
+    Call->IsIndirectCall = true;
+    Call->IndirectTarget = Param(1);
+    Call->SourceCallHint = std::make_shared<const SourceCallTypeHint>(Hint);
+    HighFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "call_virtual";
+    Function.ReturnType = Hint.Signature.ReturnType;
+    Function.Params = {{"context", Pointer}, {"target", Pointer}};
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Call;
+    Function.Body = {Return};
+    const auto Source = emit({Function}, true, Arch::AArch64);
+    EXPECT_NE(Source.find(Bool ? "_Bool __attribute__((swiftcall)) (*)"
+                               : "double __attribute__((swiftcall)) (*)"),
+              std::string::npos)
+        << Source;
+    if (Bool) {
+      compileAndRun(Source + R"(
+static _Bool __attribute__((swiftcall)) getter(
+    void *self __attribute__((swift_context))) {
+  return (*(const uint8_t *)self & 1) != 0;
+}
+int main(void) {
+  uint8_t value = 1;
+  return call_virtual(&value, (void *)&getter) == 1 ? 0 : 1;
+}
+)");
+    } else {
+      compileAndRun(Source + R"(
+static double __attribute__((swiftcall)) getter(
+    void *self __attribute__((swift_context))) {
+  return *(const double *)self + 0.5;
+}
+int main(void) {
+  double value = 42.0;
+  return call_virtual(&value, (void *)&getter) == 42.5 ? 0 : 1;
+}
+)");
+    }
+  }
+}
+
+TEST(HighCSourceCalls, SwiftVirtualSetterUsesValueAndSwiftContext) {
+  for (bool Bool : {false, true}) {
+    SourceCallTypeHint Hint;
+    Hint.CallKind = SourceCallTypeHint::Kind::SwiftVirtual;
+    Hint.TargetName = "swift_virtual";
+    Hint.Virtual = SourceCallTypeHint::SwiftVirtualEvidence{
+        0x1000, 0x1010, 0x2000, Bool ? 608U : 632U};
+    Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Hint.Signature.ReturnType = NdType::makeVoid();
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    const auto ValueType =
+        Bool ? NdType::makeInt(1, false) : NdType::makeFloat(8);
+    Hint.Signature.Parameters = {{"value", ValueType}, {"self", Pointer}};
+    Hint.Signature.Parameters[1].TheRole =
+        SourceParameterTypeHint::Role::SwiftContext;
+    std::string Diagnostic;
+    ASSERT_TRUE(
+        assignDarwinSwiftSourceABI(Hint.Signature, Arch::AArch64, Diagnostic))
+        << Diagnostic;
+
+    auto Param = [&](unsigned Id, TypeRef Type) {
+      MedVar V;
+      V.Kind = MedVar::Param;
+      V.Id = Id;
+      V.Size = Type->Size;
+      V.TheArch = Arch::AArch64;
+      return HighExpr::makeVar(V, Type);
+    };
+    auto Call = HighExpr::makeCall("indirect_call", 0,
+                                   {Param(0, ValueType), Param(1, Pointer)});
+    Call->Type = NdType::makeVoid();
+    Call->IsIndirectCall = true;
+    Call->IndirectTarget = Param(2, Pointer);
+    Call->SourceCallHint = std::make_shared<const SourceCallTypeHint>(Hint);
+    HighFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "call_virtual_setter";
+    Function.ReturnType = NdType::makeVoid();
+    Function.Params = {
+        {"value", ValueType}, {"context", Pointer}, {"target", Pointer}};
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Call;
+    Statement.CallExpr = Call;
+    Function.Body = {Statement};
+    const auto Source = emit({Function}, true, Arch::AArch64);
+    EXPECT_NE(
+        Source.find(Bool ? "(*)(_Bool, void* __attribute__((swift_context)))"
+                         : "(*)(double, void* __attribute__((swift_context)))"),
+        std::string::npos)
+        << Source;
+    if (Bool) {
+      compileAndRun(Source + R"(
+static void __attribute__((swiftcall)) setter(
+    _Bool value, void *self __attribute__((swift_context))) {
+  *(uint8_t *)self = value;
+}
+int main(void) {
+  uint8_t value = 0;
+  call_virtual_setter(1, &value, (void *)&setter);
+  return value == 1 ? 0 : 1;
+}
+)");
+    } else {
+      compileAndRun(Source + R"(
+static void __attribute__((swiftcall)) setter(
+    double value, void *self __attribute__((swift_context))) {
+  *(double *)self = value;
+}
+int main(void) {
+  double value = 0.0;
+  call_virtual_setter(42.5, &value, (void *)&setter);
+  return value == 42.5 ? 0 : 1;
+}
+)");
+    }
+  }
+}
+
+TEST(HighCSourceCalls, SwiftVirtualVoidMethodUsesSwiftContextOnly) {
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::SwiftVirtual;
+  Hint.TargetName = "swift_virtual";
+  Hint.Virtual =
+      SourceCallTypeHint::SwiftVirtualEvidence{0x1000, 0x1010, 0x2000, 280};
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Hint.Signature.ReturnType = NdType::makeVoid();
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  Hint.Signature.Parameters = {{"self", Pointer}};
+  Hint.Signature.Parameters[0].TheRole =
+      SourceParameterTypeHint::Role::SwiftContext;
+  std::string Diagnostic;
+  ASSERT_TRUE(
+      assignDarwinSwiftSourceABI(Hint.Signature, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+
+  auto Param = [&](unsigned Id) {
+    MedVar V;
+    V.Kind = MedVar::Param;
+    V.Id = Id;
+    V.Size = 8;
+    V.TheArch = Arch::AArch64;
+    return HighExpr::makeVar(V, Pointer);
+  };
+  auto Call = HighExpr::makeCall("indirect_call", 0, {Param(0)});
+  Call->Type = NdType::makeVoid();
+  Call->IsIndirectCall = true;
+  Call->IndirectTarget = Param(1);
+  Call->SourceCallHint = std::make_shared<const SourceCallTypeHint>(Hint);
+  HighFunc Function;
+  Function.Entry = 0x1000;
+  Function.Name = "call_virtual_action";
+  Function.ReturnType = NdType::makeVoid();
+  Function.Params = {{"context", Pointer}, {"target", Pointer}};
+  HighStmt Statement;
+  Statement.Kind = StmtKind::Call;
+  Statement.CallExpr = Call;
+  Function.Body = {Statement};
+  const auto Source = emit({Function}, true, Arch::AArch64);
+  EXPECT_NE(Source.find("void __attribute__((swiftcall)) (*)(void* "
+                        "__attribute__((swift_context)))"),
+            std::string::npos)
+      << Source;
+  compileAndRun(Source + R"(
+static void __attribute__((swiftcall)) action(
+    void *self __attribute__((swift_context))) {
+  ++*(int *)self;
+}
+int main(void) {
+  int value = 41;
+  call_virtual_action(&value, (void *)&action);
+  return value == 42 ? 0 : 1;
+}
+)");
 }
 
 TEST(HighCSourceCalls,

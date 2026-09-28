@@ -373,6 +373,13 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
       !SwiftEmptyCollection.empty() && Bind != Image.DyldBindSlots.end() &&
       darwinExportModuleMatches("/usr/lib/swift/libswiftCore.dylib",
                                 Bind->second.Module);
+  // Swift class dispatch loads the exported runtime mask as data. Preserve
+  // the import cell and its native load instead of materializing its value.
+  const bool SwiftIsaMask =
+      Image.Arch == Arch::AArch64 && *Import == "_swift_isaMask" &&
+      Bind != Image.DyldBindSlots.end() &&
+      darwinExportModuleMatches("/usr/lib/swift/libswiftCore.dylib",
+                                Bind->second.Module);
   // Compiler .self queries prove these are external non-TLS data addresses,
   // not metadata accessors. Exact per-architecture exports authenticate the
   // provider; neither a mangled-name suffix nor metadata contents are guessed.
@@ -391,7 +398,8 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
               Image.Arch == Arch::AArch64 ? D.AArch64Modules : D.X64Modules,
               Bind->second.Module))
         SwiftMetadata = D.Name;
-  if (FrameworkData.empty() && !SwiftEmptyStorage && SwiftMetadata.empty() &&
+  if (FrameworkData.empty() && !SwiftEmptyStorage && !SwiftIsaMask &&
+      SwiftMetadata.empty() &&
       *Import != "___stack_chk_guard")
     return darwinDeclaredSourceGlobalAddressHint(Image, ImportSlot);
 
@@ -402,9 +410,12 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
     Result.TargetName = FrameworkData.str();
     Result.Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
     Result.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
-  } else if (SwiftEmptyStorage || !SwiftMetadata.empty()) {
+  } else if (SwiftEmptyStorage || SwiftIsaMask || !SwiftMetadata.empty()) {
     Result.TargetName =
-        (SwiftEmptyStorage ? SwiftEmptyCollection : SwiftMetadata).str();
+        (SwiftEmptyStorage ? SwiftEmptyCollection
+                           : SwiftIsaMask ? llvm::StringRef("swift_isaMask")
+                                          : SwiftMetadata)
+            .str();
     Result.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
     Result.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
   } else {

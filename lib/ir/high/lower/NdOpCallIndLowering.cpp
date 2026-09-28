@@ -229,14 +229,23 @@ void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
   Call->IsIndirectCall = Target.IsIndirect;
   Call->IndirectParamIdx = Target.IndirectParam;
   if (Target.IsIndirect) {
-    ExprPtr Callee = TargetExpr;
-    if (Callee && Callee->Kind == ExprKind::Var && Callee->Var.Id >= 0) {
-      auto It = DefExpr.find(varKey(Callee->Var));
-      if (It != DefExpr.end() && It->second &&
-          It->second->Kind == ExprKind::Load)
-        Callee = It->second;
+    // A bound Swift virtual call must use the target loaded before the
+    // intervening retain/release effects; reloading its table slot here can
+    // change both dispatch and the order of observable memory operations.
+    if (CurOp.SourceCallHint &&
+        CurOp.SourceCallHint->CallKind ==
+            SourceCallTypeHint::Kind::SwiftVirtual) {
+      Call->IndirectTarget = TargetExpr;
+    } else {
+      ExprPtr Callee = TargetExpr;
+      if (Callee && Callee->Kind == ExprKind::Var && Callee->Var.Id >= 0) {
+        auto It = DefExpr.find(varKey(Callee->Var));
+        if (It != DefExpr.end() && It->second &&
+            It->second->Kind == ExprKind::Load)
+          Callee = It->second;
+      }
+      Call->IndirectTarget = forceInlineCallTarget(Callee);
     }
-    Call->IndirectTarget = forceInlineCallTarget(Callee);
   }
   Call->SourceCallHint = CurOp.SourceCallHint;
   if (CurOp.SourceCallHint)

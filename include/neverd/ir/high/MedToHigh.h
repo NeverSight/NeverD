@@ -155,6 +155,9 @@ private:
   /// walked back through predecessors).  Used to recover a register call
   /// argument that is live-in to the call block rather than written before the
   /// call.  Returns false when unresolved.  Requires CurMed.
+  /// The parameter a register still holds at the function's only call when
+  /// the function never writes that register.
+  std::optional<MedVar> untouchedParamRegister(uint64_t RegOff) const;
   bool reachingRegAtBlockEntry(const MedBlock &B, uint64_t RegOff,
                                MedVar &Out) const;
   /// True when an immediate predecessor wrote \p LiveIn into \p RegOff

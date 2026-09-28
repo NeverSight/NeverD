@@ -163,10 +163,16 @@ inline std::string msvcDecorationStem(llvm::StringRef Raw) {
   if (!Raw.starts_with("?"))
     return {};
   Raw = Raw.drop_front();
-  while (!Raw.empty() && Raw.front() == '?')
+  // Only `??` introduces an operator or special member code; after a single
+  // `?` the name itself starts, so `?BTreeSearch` is not `operator` +
+  // `TreeSearch`.
+  bool SpecialMember = false;
+  while (!Raw.empty() && Raw.front() == '?') {
     Raw = Raw.drop_front();
+    SpecialMember = true;
+  }
   const char *Suffix = nullptr;
-  if (!Raw.empty()) {
+  if (SpecialMember && !Raw.empty()) {
     Suffix = msvcAtlSpecialMemberStem(Raw.front());
     if (Suffix)
       Raw = Raw.drop_front();

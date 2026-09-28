@@ -25,6 +25,7 @@
 #include "neverd/solver/SymSynthVerifier.h"
 #include "neverd/symbolic/SymExpr.h"
 #include "neverd/symbolic/SymSynth.h"
+#include "neverd/symbolic/SymWideArithmetic.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -528,6 +529,57 @@ TEST(BitVectorSolver, SynthesisVerifierRefutationsBelongToTheCurrentContext) {
     ASSERT_TRUE(Report.Counterexample.has_value());
     EXPECT_EQ(Report.Counterexample->value(First.varId(X))->getBitWidth(), 8u);
     EXPECT_EQ(Report.Stats.Queries, 4u);
+  }
+}
+
+TEST(BitVectorSolver, RecoversProvedSplitWordArithmetic) {
+  using namespace neverd::symbolic;
+  for (uint32_t Width : {8u, 16u, 32u}) {
+    SymContext Ctx;
+    SymRef AL = Ctx.mkVar("al", Width);
+    SymRef AH = Ctx.mkVar("ah", Width);
+    SymRef BL = Ctx.mkVar("bl", Width);
+    SymRef BH = Ctx.mkVar("bh", Width);
+    SymRef Parity = Ctx.mkXor(AL, BL);
+    SymRef Both = Ctx.mkAnd(AL, BL);
+    SymRef Low = Ctx.mkAdd(Parity, Ctx.mkShl(Both, Ctx.mkOne(Width)));
+    SymRef High =
+        Ctx.mkAdd({Ctx.mkXor(AH, BH),
+                   Ctx.mkOr(Ctx.mkShl(Ctx.mkAnd(AH, BH), Ctx.mkOne(Width)),
+                            Ctx.mkLShr(Both, Ctx.mkConst(Width, Width - 1))),
+                   Ctx.mkZExt(Ctx.mkUlt(Low, Parity), Width)});
+    SymRef Original = Ctx.mkConcat(High, Low);
+    SymRef Expected = Ctx.mkAdd(Ctx.mkConcat(AH, AL), Ctx.mkConcat(BH, BL));
+    SymSynthVerifier Verifier;
+    auto Verify = [&](SymContext &Context, SymRef A, SymRef B) {
+      return Verifier(Context, A, B);
+    };
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, Original, Verify), Expected);
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
+
+    SymRef NotBL = Ctx.mkNot(BL);
+    SymRef SubLow = Ctx.mkAdd(
+        {Ctx.mkXor(AL, NotBL),
+         Ctx.mkShl(Ctx.mkAnd(AL, NotBL), Ctx.mkOne(Width)), Ctx.mkOne(Width)});
+    SymRef SubHigh =
+        Ctx.mkSub(Ctx.mkSub(AH, BH), Ctx.mkZExt(Ctx.mkUlt(AL, BL), Width));
+    SymRef SubOriginal = Ctx.mkConcat(SubHigh, SubLow);
+    SymRef SubExpected = Ctx.mkSub(Ctx.mkConcat(AH, AL), Ctx.mkConcat(BH, BL));
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, SubOriginal, Verify),
+              SubExpected);
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
+
+    SymRef Rare = Ctx.mkAnd(Ctx.mkEq(AL, Ctx.mkConst(Width, 0x6d)),
+                            Ctx.mkEq(AH, Ctx.mkConst(Width, 0x29)));
+    SymRef Wrong = Ctx.mkConcat(
+        Ctx.mkIte(Rare, Ctx.mkAdd(High, Ctx.mkOne(Width)), High), Low);
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, Wrong, Verify), Wrong);
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Different);
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, Original,
+                                         [](SymContext &, SymRef, SymRef) {
+                                           return SynthVerification::Unknown;
+                                         }),
+              Original);
   }
 }
 

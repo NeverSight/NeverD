@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -44,10 +45,16 @@ public:
   /// file's library name is its stem, as with \ref loadDirectory.
   llvm::Error loadFiles(const std::vector<std::filesystem::path> &Files);
 
+  /// The library a pattern file holds lines of: the file's stem, less the
+  /// `.part<N>` (N from 2) of a file written in parts --
+  /// `ubuntu-libc6.part2.pat` holds lines of ubuntu-libc6, `vs2026.part2.pat`
+  /// of Visual Studio 2026.  Matches report it as their library.
+  static std::string libraryName(const std::filesystem::path &File);
+
   /// The pattern files among \p Files that fit \p Img.
   ///
-  /// A file named `vs<year>.pat` holds one Visual Studio release's runtime
-  /// libraries.  A PE file links the static runtime libraries of its
+  /// A file of library `vs<year>` (see \ref libraryName) holds one Visual
+  /// Studio release's runtime libraries.  A PE file links the static runtime libraries of its
   /// linker's release, and other releases state some of the same bytes under
   /// other names, so when the image's Rich header names the release of its
   /// linker, only that release's file is kept.  Every file that belongs to no
@@ -128,10 +135,12 @@ public:
 
   /// Build a map from address to function name for quick lookup.
   ///
-  /// An address the matches name differently gets no name, unless exactly one
-  /// of those names comes from a match whose references were all confirmed:
-  /// the bytes alone could not tell the routines apart, but what they call
-  /// could.
+  /// Each match gives the routine at its address a set of names: its name
+  /// and its aliases. Matches whose sets share a name agree, and the address
+  /// takes the preferred shared name (preferredAliasOrder). An address the
+  /// matches name differently gets no name, unless the matches whose
+  /// references were all confirmed agree on one: the bytes alone could not
+  /// tell the routines apart, but what they call could.
   std::unordered_map<uint64_t, std::string> buildNameMap() const;
 
 private:
@@ -151,6 +160,15 @@ private:
   std::vector<size_t> MatchModules;
 
   void clearMatches();
+
+  /// What the matches settle for one address: the name shown, and every name
+  /// the agreeing matches give the routine.
+  struct SettledRoutine {
+    std::string Name;
+    std::set<std::string> Names;
+  };
+  /// The routines the matches settle; see \ref buildNameMap.
+  std::unordered_map<uint64_t, SettledRoutine> settleRoutines() const;
 
   /// Drop the matches their references contradict and record the ones they
   /// confirm; see \ref apply.

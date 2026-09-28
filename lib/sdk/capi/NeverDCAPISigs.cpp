@@ -172,6 +172,14 @@ const char *neverd_sig_matches_json(neverd_session_t Sess) {
     llvm::json::Object Obj;
     Obj["addr"] = vaHex(M.Address);
     Obj["name"] = jsonSafeText(M.Name);
+    // The routine's other linkage names in its library, which the match
+    // gives the same address.
+    if (!M.Aliases.empty()) {
+      llvm::json::Array Aliases;
+      for (const std::string &Alias : M.Aliases)
+        Aliases.push_back(jsonSafeText(Alias));
+      Obj["aliases"] = std::move(Aliases);
+    }
     Obj["library"] = jsonSafeText(M.LibraryName);
     Obj["func_len"] = static_cast<int64_t>(M.FuncLen);
     // Whether the image confirmed every routine the match's signature

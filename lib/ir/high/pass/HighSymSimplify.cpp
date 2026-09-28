@@ -12,21 +12,23 @@
 /// is enough for the residue of ordinary lifting and useless against anything
 /// deliberate: an expression mixing `+ - *` with `& | ^ ~` blocks every rule
 /// either algebra can state, which is the entire point of writing one.  This
-/// pass does not look at the shape at all.  It measures what the expression
-/// computes and writes the shortest thing that computes the same.
+/// general MBA pass measures what the expression computes and writes the
+/// shortest thing that computes the same. A separate proof-gated search
+/// reconstructs arithmetic spanning two machine words.
 ///
-/// Translation in both directions is deliberately narrow.  Only the operators
-/// that are bitvector arithmetic on a whole word are carried across; a load, a
-/// call, a comparison, anything of a width the engine cannot see —
-/// each becomes one opaque input, and comes back untouched.  Everything the
-/// pass does not understand it therefore preserves exactly, and the part it
-/// does understand it reasons about exactly.
+/// Translation in both directions is deliberately narrow. Integer arithmetic,
+/// exact word concatenation, and byte-valued integer predicates with known
+/// operand widths are carried across. A load, a call, or an ambiguous width
+/// becomes an opaque input and comes back untouched. The result only uses
+/// operators the source IR can spell, so unknown semantics remain in place.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/solver/SymSynthVerifier.h"
 #include "neverd/symbolic/SymMBA.h"
+#include "neverd/symbolic/SymWideArithmetic.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -144,10 +146,8 @@ uint32_t bitWidthOf(const ExprPtr &E) {
 
 /// The engine operator a binary HighIR operator stands for, if any.
 ///
-/// Comparisons are absent on purpose.  They produce one bit, HighIR stores
-/// that in a byte, and the two are indistinguishable here from an eight-bit
-/// integer — so a predicate is carried across as an opaque input rather than
-/// risk being measured at the wrong width.
+/// Comparisons are handled separately below: HighIR stores their one-bit
+/// result in a byte, which requires an explicit symbolic zero-extension.
 enum class BinKind {
   None,
   Add,
@@ -233,6 +233,21 @@ bool isIntegerSlice(const ExprPtr &E) {
          E->Type->Size <= E->Operands[0]->Type->Size - Offset->ConstVal;
 }
 
+bool isIntegerPredicate(NdOp Op) {
+  switch (Op) {
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::INT_CARRY:
+    return true;
+  default:
+    return false;
+  }
+}
+
 /// Rewriting arithmetic must not erase an observation or manufacture pointer
 /// or unknown-value facts. Descendants are checked separately by the DAG walk.
 bool isRewriteableNode(const ExprPtr &E) {
@@ -274,6 +289,15 @@ bool canTranslateOperands(const ExprPtr &E, const WidthFn &WidthOf) {
     return false;
   if (isIntegerConversion(E) || isIntegerSlice(E))
     return true;
+  if (E->Kind == ExprKind::BinOp && E->Operands.size() == 2 && E->Operands[0] &&
+      E->Operands[1]) {
+    const uint32_t Left = WidthOf(E->Operands[0]);
+    const uint32_t Right = WidthOf(E->Operands[1]);
+    if (E->Op == NdOp::CONCAT)
+      return Left && Right && Left + Right == Width;
+    if (isIntegerPredicate(E->Op))
+      return Width == 8 && Left && Left == Right;
+  }
   if (E->Kind == ExprKind::UnaryOp && E->Operands.size() == 1 &&
       (E->Op == NdOp::INT_NOT || E->Op == NdOp::INT_NEGATE ||
        E->Op == NdOp::INT_NEG2))
@@ -572,10 +596,14 @@ sym::SymRef Translator::in(const ExprPtr &E) {
       } else if (isIntegerConversion(Current) || isIntegerSlice(Current)) {
         Dependencies.push_back(Current->Operands[0]);
       } else if (Width != 0 && Current->Kind == ExprKind::BinOp &&
-                 binKindOf(Current->Op) != BinKind::None &&
+                 (binKindOf(Current->Op) != BinKind::None ||
+                  Current->Op == NdOp::CONCAT ||
+                  isIntegerPredicate(Current->Op)) &&
                  Current->Operands.size() == 2) {
         for (const ExprPtr &Operand : Current->Operands)
-          if (widthOf(Operand) == Width)
+          if (widthOf(Operand) != 0 &&
+              (widthOf(Operand) == Width || Current->Op == NdOp::CONCAT ||
+               isIntegerPredicate(Current->Op)))
             Dependencies.push_back(Operand);
       } else if (Width != 0 && Current->Kind == ExprKind::UnaryOp &&
                  (Current->Op == NdOp::INT_NOT ||
@@ -640,6 +668,49 @@ sym::SymRef Translator::in(const ExprPtr &E) {
       if (isIntegerSlice(Current)) {
         Result = Ctx.mkExtract(in(Current->Operands[0]),
                                Current->Operands[1]->ConstVal * 8, Width);
+        break;
+      }
+      if (Current->Op == NdOp::CONCAT && Current->Operands.size() == 2 &&
+          canTranslateOperands(Current, [&](const ExprPtr &Operand) {
+            return widthOf(Operand);
+          })) {
+        Result =
+            Ctx.mkConcat(in(Current->Operands[0]), in(Current->Operands[1]));
+        break;
+      }
+      if (isIntegerPredicate(Current->Op) && Current->Operands.size() == 2 &&
+          canTranslateOperands(Current, [&](const ExprPtr &Operand) {
+            return widthOf(Operand);
+          })) {
+        const sym::SymRef A = in(Current->Operands[0]);
+        const sym::SymRef B = in(Current->Operands[1]);
+        sym::SymRef Predicate;
+        switch (Current->Op) {
+        case NdOp::INT_EQUAL:
+          Predicate = Ctx.mkEq(A, B);
+          break;
+        case NdOp::INT_NOTEQUAL:
+          Predicate = Ctx.mkNe(A, B);
+          break;
+        case NdOp::INT_LESS:
+          Predicate = Ctx.mkUlt(A, B);
+          break;
+        case NdOp::INT_SLESS:
+          Predicate = Ctx.mkSlt(A, B);
+          break;
+        case NdOp::INT_LESSEQUAL:
+          Predicate = Ctx.mkUle(A, B);
+          break;
+        case NdOp::INT_SLESSEQUAL:
+          Predicate = Ctx.mkSle(A, B);
+          break;
+        case NdOp::INT_CARRY:
+          Predicate = Ctx.mkUlt(Ctx.mkAdd(A, B), A);
+          break;
+        default:
+          llvm_unreachable("non-predicate entered predicate translation");
+        }
+        Result = Ctx.mkZExt(Predicate, Width);
         break;
       }
       BinKind Kind = binKindOf(Current->Op);
@@ -926,9 +997,21 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       }
       break;
     }
+    case sym::SymOp::Concat: {
+      llvm::ArrayRef<sym::SymRef> Parts = Ctx.operands(Item.Ref);
+      if (Parts.size() != 2)
+        break;
+      ExprPtr High = get(Parts[0]);
+      ExprPtr Low = get(Parts[1]);
+      if (!High || !Low)
+        break;
+      Result = HighExpr::makeBinop(NdOp::CONCAT, High, Low);
+      Result->Type = NdType::makeInt(ByteSize, false);
+      break;
+    }
 
     default:
-      // Concatenation, selects and predicates have no input mapping here.
+      // Selects and predicates have no output spelling here.
       Result = nullptr;
       break;
     }
@@ -1009,6 +1092,15 @@ void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions) {
   if (Result.Changed && Result.Evidence != sym::MBAEvidence::Derivation)
     return;
 
+  solver::SymSynthVerifier WideVerifier;
+  const sym::SymRef Recovered = sym::recoverSplitWordArithmetic(
+      Ctx, Result.Expr,
+      [&](sym::SymContext &Context, sym::SymRef A, sym::SymRef B) {
+        return WideVerifier(Context, A, B);
+      });
+  if (Recovered != Result.Expr)
+    Result.Expr = Recovered;
+
   ExprPtr After =
       Xlat.out(Result.Expr, Width, hasOnlyScalarLiteralInputs(E, Definitions));
   if (!After)
@@ -1031,7 +1123,14 @@ void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions) {
     }
   }
   const std::optional<size_t> AfterCost = expressionCost(After);
-  if (!AfterCost || *BeforeCost < *AfterCost + kMinGain)
+  // An equal-size source expression can hide a much larger proved expansion
+  // through earlier scalar definitions. Accept that tie when the expanded
+  // algebra became strictly smaller; dead definitions can then be removed.
+  const bool ShorterExpandedDefinition =
+      AfterCost && *AfterCost == *BeforeCost && !Definitions.empty() &&
+      Result.Changed && Result.SizeAfter < Result.SizeBefore;
+  if (!AfterCost ||
+      (*BeforeCost < *AfterCost + kMinGain && !ShorterExpandedDefinition))
     return;
   E = After;
 }
@@ -1210,7 +1309,8 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts) {
 
       const bool Straight =
           (S.Kind == StmtKind::Assign || S.Kind == StmtKind::ExprStmt ||
-           S.Kind == StmtKind::Return || S.Kind == StmtKind::Nop) &&
+           S.Kind == StmtKind::Return || S.Kind == StmtKind::Nop ||
+           S.Kind == StmtKind::Store) &&
           S.Body.empty() && S.ElseBody.empty() && S.Cases.empty() &&
           S.DefaultBody.empty() && S.EHClauses.empty() &&
           S.EHClauseBodies.empty() && !S.IsPhiCopy &&
@@ -1227,6 +1327,12 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts) {
         Definitions.clear();
         continue;
       }
+      // An ordinary store changes memory, not a scalar register, temporary,
+      // or unescaped parameter.  Its address and value have already been
+      // checked for effects; keep proven scalar definitions available to the
+      // following expressions, including a store/reload pair in the frame.
+      if (S.Kind == StmtKind::Store)
+        continue;
       if (S.Kind != StmtKind::Assign)
         continue;
       if (!isScalarLocal(S.Dst)) {

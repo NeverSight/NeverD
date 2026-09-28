@@ -172,6 +172,10 @@ struct SourceCallTypeHint {
     /// and metadata argument; source emission repeats that lookup instead of
     /// retaining an address from the original image.
     SwiftValueWitness,
+    /// A compiler-emitted Swift class-property thunk whose indirect target is
+    /// loaded from the receiver's masked isa and one exact virtual-table slot.
+    /// The original target load remains a separate ordered source statement.
+    SwiftVirtual,
     /// A verified Darwin constant-string object with one rebuilt identity.
     RuntimeConstantString,
     /// A fixed Darwin platform C ABI emitted against its public SDK header.
@@ -239,6 +243,14 @@ struct SourceCallTypeHint {
   };
   /// Present only for a dynamically loaded required Swift value witness.
   std::optional<SwiftValueWitnessKind> ValueWitness;
+  struct SwiftVirtualEvidence {
+    va_t MethodEntry = 0;
+    va_t CallSite = 0;
+    va_t IsaMaskImport = 0;
+    uint32_t VtableByteOffset = 0;
+    bool operator==(const SwiftVirtualEvidence &) const = default;
+  };
+  std::optional<SwiftVirtualEvidence> Virtual;
   /// The bound source routine has a noreturn contract. Runtime bindings must
   /// revalidate this effect against their authoritative catalog.
   bool DoesNotReturn = false;

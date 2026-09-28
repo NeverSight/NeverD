@@ -165,6 +165,17 @@ TEST_F(SignatureDirectoryTest, ReportsTheFirstInvalidFileBySortedPath) {
   EXPECT_EQ(Message.find("z-invalid.pat"), std::string::npos) << Message;
 }
 
+TEST_F(SignatureDirectoryTest, APartsMatchesNameItsLibrary) {
+  write("ubuntu-libc6.pat", "CCDD 00 0000 0002 :0000 other_part\n");
+  write("ubuntu-libc6.part2.pat", "AABB 00 0000 0002 :0000 puts\n");
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadDirectory(Directory));
+  Database.apply(makeMatchingImage(), {0x1000});
+
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_EQ(Database.matches()[0].LibraryName, "ubuntu-libc6");
+}
+
 TEST_F(SignatureDirectoryTest, ReloadReplacesTheWholeDirectorySnapshot) {
   write("a.pat", "AABB 00 0000 0002 :0000 first_name\n");
   write("b.pat", "CCDD 00 0000 0002 :0000 stale_name\n");
@@ -313,4 +324,55 @@ TEST(SignatureDBReferences, IncrementalLinkingThunksAreFollowed) {
 
   EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u)
       << "the thunk leads to a routine named otherwise";
+}
+
+TEST(SignatureDBAliases, OneModulesNamesForAnOffsetAreOneRoutine) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "AABB 00 0000 0002 :0000 _IO_puts :0000 puts\n", "libc"));
+  Database.apply(makeMatchingImage(), {0x1000});
+
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_EQ(Database.matches()[0].Name, "puts");
+  EXPECT_EQ(Database.matches()[0].Aliases, std::vector<std::string>{"_IO_puts"});
+  EXPECT_EQ(Database.buildNameMap().at(0x1000), "puts");
+}
+
+TEST(SignatureDBAliases, MatchesThatShareANameAgreeOnIt) {
+  // Two builds of the library define different aliases for the routine.
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "AABB 00 0000 0002 :0000 malloc :0000 __libc_malloc\n"
+      "AABB 00 0000 0002 :0000 __libc_malloc :0000 __malloc\n",
+      "libc"));
+  Database.apply(makeMatchingImage(), {0x1000});
+
+  EXPECT_EQ(Database.buildNameMap().at(0x1000), "__libc_malloc");
+}
+
+TEST(SignatureDBAliases, AliasSetsWithNothingInCommonAreDisputed) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "AABB 00 0000 0002 :0000 puts :0000 _IO_puts\n"
+      "AABB 00 0000 0002 :0000 fputs\n",
+      "libc"));
+  Database.apply(makeMatchingImage(), {0x1000});
+
+  EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u);
+}
+
+TEST(SignatureDBAliases, ACallByAnyNameOfTheCalleeConfirms) {
+  // The caller's object calls the routine by its internal name; the callee's
+  // line shows it by its public one.
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "AABBCCDDC3 00 0000 0005 :0000 callee :0000 __callee_internal\n" +
+          callerLine("caller", " ^0005 __callee_internal") +
+          callerLine("unreferenced_twin", ""),
+      "refs"));
+  Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
+
+  const auto Names = Database.buildNameMap();
+  EXPECT_EQ(Names.at(0x1100), "callee");
+  EXPECT_EQ(Names.at(0x1000), "caller");
 }

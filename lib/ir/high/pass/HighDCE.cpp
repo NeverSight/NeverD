@@ -648,6 +648,16 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   forwardPrivateFrameLoads(Func, TargetArch);
   simplifyExprSemantics(Func.Body);
   breakStmtCycles(Func.Body);
+  // Semantic rewriting can make the scalar definitions that held an MBA
+  // expansion dead. Remove them without feeding the shared result back through
+  // copy propagation, which could create a cycle in the expression DAG.
+  for (int Iter = 0; Iter < 10; ++Iter) {
+    VarKeySet Refs;
+    collectLiveRefs(Func.Body, Refs);
+    if (!eliminateDeadAssigns(Func.Body, Refs,
+                              referencedStatementEntries(Func.Body)))
+      break;
+  }
   eliminateDeadConditions(Func.Body, referencedStatementEntries(Func.Body));
 
   if (WantDetail) {
