@@ -145,6 +145,10 @@ struct SourceCallTypeHint {
     /// a value-witness call. The metadata and its nominal descriptor remain
     /// owned by the original linked image; source only names their identity.
     RuntimeSwiftNominalMetadataAddress,
+    /// A private Swift nominal metadata record returned unchanged by its
+    /// uniquely exported, immutable four-instruction metadata accessor.
+    /// Source calls that accessor to retain the linked image's identity.
+    RuntimeSwiftPrivateNominalMetadataAddress,
     /// The exact address of a uniquely exported Swift protocol witness table.
     /// The table stays owned by the linked image; source names its symbol.
     RuntimeSwiftWitnessTableAddress,

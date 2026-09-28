@@ -64,6 +64,7 @@ struct ObjCSourceBindingResult {
       SwiftTypeMetadataPairs;
   std::map<va_t, std::string> SwiftNominalDescriptors;
   std::map<va_t, std::string> SwiftNominalMetadata;
+  std::map<va_t, std::string> SwiftPrivateNominalMetadataAccessors;
   std::map<va_t, std::string> SwiftWitnessTables;
   /// Cache address -> exact accessor entry, revalidated when helpers render.
   std::map<va_t, va_t> SwiftWitnessCaches;
@@ -1574,6 +1575,117 @@ swiftNominalMetadataAddressHint(const BinaryImage &Image, va_t Address) {
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftNominalMetadataAddress;
   Hint.TargetAddress = Address;
   Hint.TargetName = Metadata->Name;
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  return assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason)
+             ? std::optional<SourceCallTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
+// A private metadata symbol cannot be named by rebuilt source. A uniquely
+// exported accessor can supply its original address when its complete machine
+// body returns that exact address without consulting or changing runtime state.
+inline std::optional<SourceCallTypeHint>
+swiftPrivateNominalMetadataAccessorHint(const BinaryImage &Image,
+                                        va_t Address) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.MachOTwoLevelNamespace || Image.MachOChainedFixupsAmbiguous ||
+      Address % 8 || Address > InvalidVA - 16)
+    return std::nullopt;
+  const auto *Section = Image.getSectionFor(Address);
+  const auto Header = readImmutableImageBytes(Image, Address, 8);
+  const auto DescriptorAddress = readImmutableImagePointer(Image, Address + 8);
+  if (!Section || Image.getSectionFor(Address + 15) != Section || !Header ||
+      !DescriptorAddress)
+    return std::nullopt;
+  const Symbol *Metadata = nullptr;
+  for (const auto &Candidate : Image.Symbols)
+    if (Candidate.Addr == Address) {
+      if (Metadata || Candidate.IsFunc || Candidate.Name.empty())
+        return std::nullopt;
+      Metadata = &Candidate;
+    }
+  if (!Metadata || (Metadata->Size && Metadata->Size < 16))
+    return std::nullopt;
+  const llvm::StringRef Name(Metadata->Name);
+  const bool Struct = Name.starts_with("_$s") && Name.ends_with("VN");
+  const bool Enum = Name.starts_with("_$s") && Name.ends_with("ON");
+  if ((!Struct && !Enum) || llvm::support::endian::read64le(Header->data()) !=
+                                (Struct ? 0x200u : 0x201u))
+    return std::nullopt;
+  const std::string DescriptorName = Name.drop_back(1).str() + "Mn";
+  const Symbol *Descriptor = nullptr;
+  for (const auto &Candidate : Image.Symbols)
+    if (Candidate.Addr == *DescriptorAddress) {
+      if (Descriptor || Candidate.IsFunc || Candidate.Name != DescriptorName)
+        return std::nullopt;
+      Descriptor = &Candidate;
+    }
+  const auto DescriptorBytes =
+      readImmutableImageBytes(Image, *DescriptorAddress, 20);
+  if (!Descriptor || !DescriptorBytes ||
+      (llvm::support::endian::read32le(DescriptorBytes->data()) & 0x1f) !=
+          (Struct ? 17u : 18u) ||
+      !swiftExportedNominalDescriptor(DescriptorName))
+    return std::nullopt;
+  const std::string AccessorName = Name.drop_back(1).str() + "Ma";
+  const Symbol *Accessor = nullptr;
+  for (const auto &Candidate : Image.Symbols)
+    if (Candidate.Name == AccessorName) {
+      if (Accessor || !Candidate.IsFunc)
+        return std::nullopt;
+      Accessor = &Candidate;
+    }
+  if (!Accessor || Accessor->Addr % 4 ||
+      (Accessor->Size && Accessor->Size < 16) ||
+      Accessor->Addr > InvalidVA - 16)
+    return std::nullopt;
+  for (const auto &Candidate : Image.Symbols)
+    if (&Candidate != Accessor && Candidate.Addr >= Accessor->Addr &&
+        Candidate.Addr - Accessor->Addr < 16)
+      return std::nullopt;
+  size_t AccessorExports = 0;
+  for (const auto &Export : Image.Exports) {
+    if (Export.Addr == Address || Export.Name == Metadata->Name ||
+        Export.Addr == *DescriptorAddress || Export.Name == DescriptorName)
+      return std::nullopt;
+    if (Export.Addr == Accessor->Addr || Export.Name == AccessorName) {
+      if (Export.Addr != Accessor->Addr || Export.Name != AccessorName)
+        return std::nullopt;
+      ++AccessorExports;
+    }
+  }
+  if (AccessorExports != 1)
+    return std::nullopt;
+  const auto Code = readImmutableCodeBytes(Image, Accessor->Addr, 16);
+  if (!Code)
+    return std::nullopt;
+  const auto Word = [&](unsigned Index) {
+    return llvm::support::endian::read32le(Code->data() + 4 * Index);
+  };
+  if ((Word(0) & 0x9f00001f) != 0x90000000 ||
+      (Word(1) & 0xffc003ff) != 0x91000000 || Word(2) != 0xd2800001 ||
+      Word(3) != 0xd65f03c0)
+    return std::nullopt;
+  const uint32_t Immediate =
+      ((Word(0) >> 29) & 3) | (((Word(0) >> 5) & 0x7ffff) << 2);
+  const int64_t Delta =
+      (int64_t(Immediate) - ((Immediate & 0x100000) ? 0x200000 : 0)) * 4096;
+  const va_t Page = Accessor->Addr & ~va_t(4095);
+  if ((Delta < 0 && Page < uint64_t(-Delta)) ||
+      (Delta >= 0 && Page > InvalidVA - uint64_t(Delta)))
+    return std::nullopt;
+  const va_t TargetPage = Page + Delta;
+  const va_t Offset = (Word(1) >> 10) & 4095;
+  if (TargetPage > InvalidVA - Offset || TargetPage + Offset != Address)
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind =
+      SourceCallTypeHint::Kind::RuntimeSwiftPrivateNominalMetadataAddress;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = AccessorName;
   Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
   Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
   std::string Reason;
@@ -4014,6 +4126,17 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           return Expression;
         }
       if (ObjectAddress && Address)
+        if (auto Metadata =
+                swiftPrivateNominalMetadataAccessorHint(Image, *Address)) {
+          *Expression = *HighExpr::makeCall({}, 0, {});
+          Expression->Type = Original->Type;
+          Expression->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Metadata));
+          Result.SwiftPrivateNominalMetadataAccessors[*Address] =
+              Expression->SourceCallHint->TargetName;
+          return Expression;
+        }
+      if (ObjectAddress && Address)
         if (auto Table = swiftWitnessTableAddressHint(Image, *Address)) {
           *Expression = *HighExpr::makeCall({}, 0, {});
           Expression->Type = Original->Type;
@@ -4555,8 +4678,16 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       if (Operand && WitnessMetadata &&
           Index + 1 == Expression->Operands.size()) {
         auto Hint = swiftNominalMetadataAddressHint(Image, *WitnessMetadata);
+        if (!Hint)
+          Hint =
+              swiftPrivateNominalMetadataAccessorHint(Image, *WitnessMetadata);
         if (Hint) {
-          Result.SwiftNominalMetadata[*WitnessMetadata] = Hint->TargetName;
+          if (Hint->CallKind ==
+              SourceCallTypeHint::Kind::RuntimeSwiftNominalMetadataAddress)
+            Result.SwiftNominalMetadata[*WitnessMetadata] = Hint->TargetName;
+          else
+            Result.SwiftPrivateNominalMetadataAccessors[*WitnessMetadata] =
+                Hint->TargetName;
           auto Metadata = HighExpr::makeCall({}, 0, {});
           Metadata->Type = Operand->Type;
           Metadata->SourceCallHint =
@@ -5552,6 +5683,19 @@ inline bool objcSourceCallBound(
       SourceCallTypeHint::Kind::RuntimeSwiftNominalMetadataAddress) {
     const auto Expected =
         swiftNominalMetadataAddressHint(Image, Binding.TargetAddress);
+    return Expected && Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() && !Expression.IsIndirectCall &&
+           !Expression.CallAddr && Expression.CallTarget.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftPrivateNominalMetadataAddress) {
+    const auto Expected =
+        swiftPrivateNominalMetadataAccessorHint(Image, Binding.TargetAddress);
     return Expected && Binding.TargetName == Expected->TargetName &&
            Binding.Selector.empty() && Binding.OwnerClass.empty() &&
            !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
@@ -6594,6 +6738,32 @@ inline std::string renderObjCSwiftNominalMetadataHelpers(
               "_address(void) {\n"
               "  return (uintptr_t)" +
               Stem + "_bytes;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string renderObjCSwiftPrivateNominalMetadataHelpers(
+    const BinaryImage &Image, const std::map<va_t, std::string> &Metadata,
+    std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (const auto &[Address, Accessor] : Metadata) {
+    const auto Expected =
+        objc_binding_detail::swiftPrivateNominalMetadataAccessorHint(Image,
+                                                                     Address);
+    if (!Expected || Expected->TargetName != Accessor)
+      throw std::runtime_error(
+          "Swift private nominal metadata accessor is no longer valid");
+    const std::string Stem = "neverd_swift_private_nominal_metadata_" +
+                             llvm::utohexstr(Address, true);
+    SharedFunctions.insert(Stem + "_address");
+    Source += "\nextern void *" + Stem +
+              "_accessor(uintptr_t) __attribute__((swiftcall)) "
+              "__asm__(\"" +
+              Accessor + "\");\n";
+    Source += "uintptr_t " + Stem +
+              "_address(void) {\n"
+              "  return (uintptr_t)" +
+              Stem + "_accessor(0);\n}\n";
   }
   return Source;
 }

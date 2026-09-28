@@ -961,6 +961,13 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                 "neverd_swift_nominal_metadata_" +
                 llvm::utohexstr(Hint.TargetAddress, true) + "_address");
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::
+                       RuntimeSwiftPrivateNominalMetadataAddress) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_swift_private_nominal_metadata_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::RuntimeSwiftWitnessTableAddress) {
           if (Hint.TargetAddress)
             SourceObjectAddressHelpers.insert(

@@ -1485,6 +1485,129 @@ TEST(ObjCSourceBindings,
                   .SwiftNominalMetadata.empty());
 }
 
+TEST(ObjCSourceBindings,
+     SwiftPrivateNominalMetadataUsesOnlyExactExportedAccessor) {
+  constexpr va_t Metadata = 0x6020;
+  constexpr va_t Accessor = 0x7020;
+  const std::string MetadataName = "_$s7WMFData24WMFFeatureConfigResponseVN";
+  const std::string AccessorName = "_$s7WMFData24WMFFeatureConfigResponseVMa";
+  auto Fixture = [&] {
+    SwiftTypeMetadataFixture F(Arch::AArch64, false, false, false, true);
+    F.Image.Exports.clear(); // The descriptor and metadata stay image-private.
+    llvm::support::endian::write32le(F.Image.Segments[3].Data.data() + 0x20,
+                                     0x51);
+    Segment Data;
+    Data.VA = Data.FileOff = 0x6000;
+    Data.Size = Data.FileSz = 0x100;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.ReadOnlyAfterRelocations = true;
+    Data.Data.resize(0x100);
+    llvm::support::endian::write64le(Data.Data.data() + 0x20, 0x200);
+    llvm::support::endian::write64le(Data.Data.data() + 0x28,
+                                     F.LocalDescriptor);
+    F.Image.Segments.push_back(Data);
+    Section DataSection;
+    DataSection.VA = DataSection.FileOff = 0x6000;
+    DataSection.Size = DataSection.FileSz = 0x100;
+    DataSection.Flags = Data.Flags;
+    F.Image.Sections.push_back(DataSection);
+    F.Image.MachOHasChainedFixups = true;
+    F.Image.DataPtrRelocSlots.insert(Metadata + 8);
+    F.Image.MachOResolvedChainedPointerSlots.insert(Metadata + 8);
+    F.Image.DataPtrRelocTargetOwners[Metadata + 8] = 0x4000;
+    F.Image.Symbols.push_back({MetadataName, Metadata, 0, false});
+
+    Segment Code;
+    Code.VA = Code.FileOff = 0x7000;
+    Code.Size = Code.FileSz = 0x100;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Code.Data.resize(0x100);
+    llvm::support::endian::write32le(Code.Data.data() + 0x20, 0xf0ffffe0);
+    llvm::support::endian::write32le(Code.Data.data() + 0x24, 0x91008000);
+    llvm::support::endian::write32le(Code.Data.data() + 0x28, 0xd2800001);
+    llvm::support::endian::write32le(Code.Data.data() + 0x2c, 0xd65f03c0);
+    F.Image.Segments.push_back(Code);
+    Section CodeSection;
+    CodeSection.VA = CodeSection.FileOff = 0x7000;
+    CodeSection.Size = CodeSection.FileSz = 0x100;
+    CodeSection.Flags = Code.Flags;
+    CodeSection.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    F.Image.Sections.push_back(CodeSection);
+    F.Image.Symbols.push_back({AccessorName, Accessor, 0, true});
+    F.Image.Exports.push_back({AccessorName, 0, Accessor});
+
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = HighExpr::makeConst(Metadata, 8,
+                                        ConstantAddressProvenance::DataAddress);
+    F.Function.ReturnType = Return.RetVal->Type;
+    F.Function.Body = {std::move(Return)};
+    return F;
+  };
+
+  auto F = Fixture();
+  ASSERT_TRUE(readImmutableImageBytes(F.Image, Metadata, 8));
+  ASSERT_EQ(readImmutableImagePointer(F.Image, Metadata + 8),
+            F.LocalDescriptor);
+  ASSERT_TRUE(readImmutableImageBytes(F.Image, F.LocalDescriptor, 20));
+  ASSERT_TRUE(readImmutableCodeBytes(F.Image, Accessor, 16));
+  ASSERT_TRUE(objc_binding_detail::swiftPrivateNominalMetadataAccessorHint(
+      F.Image, Metadata));
+  auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftPrivateNominalMetadataAccessors.size(), 1U);
+  EXPECT_EQ(Result.SwiftPrivateNominalMetadataAccessors.at(Metadata),
+            AccessorName);
+  const auto Bound = Result.Function.Body[0].RetVal;
+  ASSERT_TRUE(Bound->SourceCallHint);
+  EXPECT_EQ(
+      Bound->SourceCallHint->CallKind,
+      SourceCallTypeHint::Kind::RuntimeSwiftPrivateNominalMetadataAddress);
+  EXPECT_TRUE(objcSourceCallBound(*Bound, F.Image, {}));
+  std::set<std::string> Helpers;
+  const auto Source = renderObjCSwiftPrivateNominalMetadataHelpers(
+      F.Image, Result.SwiftPrivateNominalMetadataAccessors, Helpers);
+  EXPECT_NE(Source.find("__asm__(\"" + AccessorName + "\")"),
+            std::string::npos);
+  EXPECT_NE(Source.find("_accessor(0)"), std::string::npos);
+  EXPECT_TRUE(
+      Helpers.count("neverd_swift_private_nominal_metadata_6020_address"));
+
+  // The published binding is invalidated by a changed machine return.
+  llvm::support::endian::write32le(F.Image.Segments.back().Data.data() + 0x24,
+                                   0x91008400);
+  EXPECT_FALSE(objcSourceCallBound(*Bound, F.Image, {}));
+  EXPECT_THROW(
+      renderObjCSwiftPrivateNominalMetadataHelpers(
+          F.Image, Result.SwiftPrivateNominalMetadataAccessors, Helpers),
+      std::runtime_error);
+  auto Forged = Fixture();
+  Forged.Image.Exports.clear();
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftPrivateNominalMetadataAccessors.empty());
+  Forged = Fixture();
+  Forged.Image.Exports.push_back({MetadataName, 0, Metadata});
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftPrivateNominalMetadataAccessors.empty());
+  Forged = Fixture();
+  llvm::support::endian::write32le(Forged.Image.Segments[3].Data.data() + 0x20,
+                                   0x52);
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftPrivateNominalMetadataAccessors.empty());
+  Forged = Fixture();
+  Forged.Image.MachOResolvedChainedPointerSlots.clear();
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftPrivateNominalMetadataAccessors.empty());
+  Forged = Fixture();
+  Forged.Image.CodePtrRelocSlots.insert(Accessor);
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftPrivateNominalMetadataAccessors.empty());
+  Forged = Fixture();
+  Forged.Image.Symbols.push_back({"_other", Accessor + 4, 0, true});
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftPrivateNominalMetadataAccessors.empty());
+}
+
 TEST(ObjCSourceBindings, SwiftEnumMetadataNeedsMatchingExportedDescriptor) {
   constexpr va_t Metadata = 0x6020;
   const std::string MetadataName = "_$s7WMFData24WMFFeatureConfigResponseON";
