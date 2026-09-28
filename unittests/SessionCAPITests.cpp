@@ -494,6 +494,7 @@ protected:
     EXPECT_EQ(Match->getString("name"), Name);
     EXPECT_EQ(Match->getString("library"), "signature-library");
     EXPECT_EQ(Match->getInteger("func_len"), 6);
+    EXPECT_EQ(Match->getBoolean("confirmed"), false);
     const auto Address = Match->getString("addr");
     ASSERT_TRUE(Address.has_value());
     uint64_t ParsedAddress = 0;

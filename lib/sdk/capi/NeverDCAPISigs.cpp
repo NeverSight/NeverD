@@ -174,6 +174,9 @@ const char *neverd_sig_matches_json(neverd_session_t Sess) {
     Obj["name"] = jsonSafeText(M.Name);
     Obj["library"] = jsonSafeText(M.LibraryName);
     Obj["func_len"] = static_cast<int64_t>(M.FuncLen);
+    // Whether the image confirmed every routine the match's signature
+    // branches to: such a match settles an address other matches dispute.
+    Obj["confirmed"] = M.Confirmed;
     Arr.push_back(std::move(Obj));
   }
   return dupStr(jsonToString(llvm::json::Value(std::move(Arr))));

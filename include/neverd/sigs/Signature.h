@@ -63,6 +63,10 @@ struct SigMatch {
   std::string Name;
   std::string LibraryName;
   uint32_t FuncLen = 0;
+  /// The module has references and the image confirmed every one of them;
+  /// see SignatureDB::apply.  Such a match settles an address that other
+  /// matches name differently.
+  bool Confirmed = false;
 };
 
 } // namespace sigs

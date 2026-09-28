@@ -146,11 +146,9 @@ private:
   std::vector<SigSource> LoadedFiles;
   std::vector<SigMatch> Matches;
 
-  /// Per entry of \ref Matches: the module that made it, or NoModule, and
-  /// whether it has references and all of them were confirmed.
+  /// Per entry of \ref Matches: the module that made it, or NoModule.
   static constexpr size_t NoModule = std::numeric_limits<size_t>::max();
   std::vector<size_t> MatchModules;
-  std::vector<bool> MatchConfirmed;
 
   void clearMatches();
 

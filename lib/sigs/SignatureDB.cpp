@@ -288,7 +288,6 @@ void SignatureDB::apply(const BinaryImage &Img,
             M.FuncLen = Mod.TotalLen;
             Matches.push_back(std::move(M));
             MatchModules.push_back(ModIdx);
-            MatchConfirmed.push_back(false);
           }
         });
   }
@@ -354,7 +353,6 @@ size_t SignatureDB::identifyPersonalityRoutines(BinaryImage &Img) {
       continue;
     Matches.push_back(Match);
     MatchModules.push_back(NoModule);
-    MatchConfirmed.push_back(false);
     ++Named;
   }
 
@@ -384,7 +382,7 @@ std::unordered_map<uint64_t, std::string> SignatureDB::buildNameMap() const {
   std::unordered_map<uint64_t, std::map<std::string, bool>> Proposed;
   for (size_t I = 0; I < Matches.size(); ++I) {
     bool &Confirmed = Proposed[Matches[I].Address][Matches[I].Name];
-    Confirmed = Confirmed || (I < MatchConfirmed.size() && MatchConfirmed[I]);
+    Confirmed = Confirmed || Matches[I].Confirmed;
   }
   std::unordered_map<uint64_t, std::string> Map;
   for (const auto &[Address, Names] : Proposed) {
@@ -414,7 +412,6 @@ void SignatureDB::clear() {
 void SignatureDB::clearMatches() {
   Matches.clear();
   MatchModules.clear();
-  MatchConfirmed.clear();
 }
 
 namespace {
@@ -580,7 +577,6 @@ void SignatureDB::checkReferences(const BinaryImage &Img) {
 
   std::vector<SigMatch> Kept;
   std::vector<size_t> KeptModules;
-  std::vector<bool> KeptConfirmed;
   Kept.reserve(Matches.size());
   for (size_t I = 0; I < Matches.size(); ++I) {
     const size_t Module = MatchModules[I];
@@ -618,11 +614,10 @@ void SignatureDB::checkReferences(const BinaryImage &Img) {
     if (Contradicted)
       continue;
     Kept.push_back(std::move(Matches[I]));
+    Kept.back().Confirmed =
+        References && !References->empty() && Confirmed == References->size();
     KeptModules.push_back(Module);
-    KeptConfirmed.push_back(References && !References->empty() &&
-                            Confirmed == References->size());
   }
   Matches = std::move(Kept);
   MatchModules = std::move(KeptModules);
-  MatchConfirmed = std::move(KeptConfirmed);
 }

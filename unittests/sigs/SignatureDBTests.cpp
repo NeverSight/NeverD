@@ -285,6 +285,8 @@ TEST(SignatureDBReferences, AConfirmedCallSettlesIdenticalBytes) {
   Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
 
   EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller_of_callee");
+  for (const SigMatch &Match : Database.matches())
+    EXPECT_EQ(Match.Confirmed, Match.Name == "caller_of_callee") << Match.Name;
 }
 
 TEST(SignatureDBReferences, ThePatternOfADisputedCalleeConfirms) {
