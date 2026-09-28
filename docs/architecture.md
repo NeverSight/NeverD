@@ -1450,13 +1450,14 @@ domains alone never authorize a Cartesian-product assumption.
 
 MBA simplification keeps exact derivations inside `lib/symbolic/mba`.
 Split-word arithmetic recovery also lives there as a solver-independent
-candidate search: it partitions low-word dependencies from high-word inputs
-and proposes packed arithmetic over two or three operands, then requires the
-caller's bitvector equivalence proof. Its deterministic samples only discard
-candidates. The HighIR and LLVM bridges translate exact concatenation and
-defined carry predicates into the shared expression; the LLVM bridge admits a
-disjoint packed OR and a widened
-no-wrap shift only when their operand widths prove the flags for every input.
+candidate generator: it partitions low-word dependencies from high-word inputs,
+infers signed coefficients from modular basis responses, and proposes packed
+arithmetic over up to four operands. The caller's bitvector equivalence proof
+is required; deterministic samples only discard candidates. An exact modular
+carry identity removes a wide constant offset before proof. The HighIR and
+LLVM bridges translate exact concatenation and defined carry predicates into
+the shared expression; the LLVM bridge admits a disjoint packed OR and a
+widened no-wrap shift only when operand widths prove the flags for every input.
 Unknown operators, incomplete proofs, and unprofitable output leave the
 original expression intact.
 Before HighIR algebra, private-frame forwarding uses source-local identities

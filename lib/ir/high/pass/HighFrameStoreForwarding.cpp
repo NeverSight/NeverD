@@ -389,24 +389,15 @@ void forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture) {
     if (Stmt.Kind == StmtKind::Assign && Stmt.Dst->Kind == ExprKind::Var)
       ++DefinitionCounts[highSourceLocalIdentity(Stmt.Dst->Var)];
 
-  // Only immutable aliases from the dominating entry prefix are frame facts.
+  // Learn an immutable frame alias only after its assignment.  Prologue
+  // spills can precede a frame-pointer assignment, so requiring a contiguous
+  // alias-only prefix loses otherwise exact private-frame accesses.  Following
+  // statement order also keeps an alias unavailable to earlier reads.
   FrameAliases Aliases;
   const auto Alias = [&](const MedVar &V) -> ExprPtr {
     auto It = Aliases.find(highSourceLocalIdentity(V));
     return It == Aliases.end() ? nullptr : It->second;
   };
-  for (const HighStmt &Stmt : Func.Body) {
-    if (Stmt.Kind != StmtKind::Assign || Stmt.Dst->Kind != ExprKind::Var ||
-        Stmt.Dst->Var.Kind == MedVar::Stack || !Stmt.Dst->Type ||
-        Stmt.Dst->Type->Size != PointerBytes ||
-        Stmt.Dst->Var.Size != PointerBytes ||
-        DefinitionCounts[highSourceLocalIdentity(Stmt.Dst->Var)] != 1)
-      break;
-    if (!high_detail::frameAddressOffset(Stmt.Val, Func, Architecture, Budget,
-                                         0, Alias))
-      break;
-    Aliases.emplace(highSourceLocalIdentity(Stmt.Dst->Var), Stmt.Val);
-  }
 
   size_t ExpansionBudget = kFrameWalkBudget;
   std::map<int64_t, StoredFrameValue> Stores;
@@ -434,6 +425,13 @@ void forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture) {
       if (Stmt.Dst->Var.Kind == MedVar::Stack)
         Stores.clear();
       invalidateWrittenVariable(Stores, Stmt.Dst->Var);
+      if (Stmt.Dst->Var.Kind != MedVar::Stack && Stmt.Dst->Type &&
+          Stmt.Dst->Type->Size == PointerBytes &&
+          Stmt.Dst->Var.Size == PointerBytes &&
+          DefinitionCounts[highSourceLocalIdentity(Stmt.Dst->Var)] == 1 &&
+          high_detail::frameAddressOffset(Stmt.Val, Func, Architecture, Budget,
+                                          0, Alias))
+        Aliases.emplace(highSourceLocalIdentity(Stmt.Dst->Var), Stmt.Val);
     }
   }
 }

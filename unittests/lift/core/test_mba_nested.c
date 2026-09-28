@@ -41,4 +41,10 @@ u64 mba_wide_three(u64 x, u64 y, u64 z) {
   u64 majority = (x & y) | (x & z) | (y & z);
   return parity + (majority << 1);
 }
+
+u64 mba_wide_four(u64 x, u64 y, u64 z, u64 w) {
+  u64 parity = x ^ y ^ z;
+  u64 majority = (x & y) | (x & z) | (y & z);
+  return (parity ^ w) + ((parity & w) << 1) + (majority << 1);
+}
 #endif

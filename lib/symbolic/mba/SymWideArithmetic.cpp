@@ -10,7 +10,6 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -27,7 +26,7 @@ SymRef recoverSplitWordArithmetic(SymContext &Ctx, SymRef Expr,
   if (Width < 8 || Width != Ctx.width(Upper) || Ctx.op(Lower) != SymOp::Add)
     return Expr;
 
-  llvm::SmallVector<SymRef, 6> Inputs;
+  llvm::SmallVector<SymRef, 8> Inputs;
   llvm::SmallVector<SymRef, 32> Work{Expr};
   llvm::DenseSet<uint32_t> Seen;
   while (!Work.empty()) {
@@ -38,21 +37,21 @@ SymRef recoverSplitWordArithmetic(SymContext &Ctx, SymRef Expr,
       if (Ctx.width(Current) != Width)
         return Expr;
       Inputs.push_back(Current);
-      if (Inputs.size() > 6)
+      if (Inputs.size() > 10)
         return Expr;
       continue;
     }
     const auto Operands = Ctx.operands(Current);
     Work.append(Operands.begin(), Operands.end());
   }
-  if (Inputs.size() != 4 && Inputs.size() != 6)
+  if (Inputs.size() < 4 || Inputs.size() % 2 != 0)
     return Expr;
   std::sort(Inputs.begin(), Inputs.end(),
             [](SymRef A, SymRef B) { return A.index() < B.index(); });
 
-  // A low word cannot depend on a high input of an ordinary packed
-  // arithmetic expression. Partition by actual dependence before trying
-  // pairings; this also keeps the six-input search finite.
+  // A low word cannot depend on a high input of ordinary packed arithmetic.
+  // Partition by actual dependence; pairing within one coefficient class is
+  // immaterial to the sum, so input order does not affect the result.
   llvm::DenseSet<uint32_t> LowInputIds;
   Work = {Lower};
   Seen.clear();
@@ -67,7 +66,7 @@ SymRef recoverSplitWordArithmetic(SymContext &Ctx, SymRef Expr,
     const auto Operands = Ctx.operands(Current);
     Work.append(Operands.begin(), Operands.end());
   }
-  llvm::SmallVector<SymRef, 3> LowInputs, HighInputs;
+  llvm::SmallVector<SymRef, 4> LowInputs, HighInputs;
   for (SymRef Input : Inputs) {
     if (LowInputIds.contains(Input.index()))
       LowInputs.push_back(Input);
@@ -76,68 +75,95 @@ SymRef recoverSplitWordArithmetic(SymContext &Ctx, SymRef Expr,
   }
   if (LowInputs.size() != HighInputs.size())
     return Expr;
-  const unsigned NumWords = LowInputs.size();
 
-  // A handful of deterministic assignments reject wrong pairings cheaply.
-  // They never authorize a rewrite; only Verify can do that.
+  // A packed +/- input changes the result by +/-1 for its low word and by
+  // +/-2^Width for its high word. This identifies each coefficient without
+  // enumerating pairings or signs. The all-ones response rejects accidental
+  // one-point matches; neither response is an equivalence proof.
   std::vector<llvm::APInt> Values;
   Values.reserve(Ctx.numVars());
   for (uint32_t Id = 0; Id < Ctx.numVars(); ++Id)
     Values.emplace_back(Ctx.varInfo(Id).Width, 0);
-  // At zero inputs, packed addition and subtraction vanish. Any remaining
-  // value is the modular offset required by an affine candidate.
-  const SymRef Offset = Ctx.mkConst(Ctx.eval(Expr, Values));
-  llvm::SmallVector<llvm::APInt, 8> Expected;
-  const uint64_t Seeds[8][6] = {{0, 0, 0, 0, 0, 0},
-                                {1, 2, 4, 8, 16, 32},
-                                {~0ULL, 1, 0, 0, 0, 0},
-                                {0, ~0ULL, 1, 0, 0, 0},
-                                {~0ULL, ~0ULL, ~0ULL, ~0ULL, ~0ULL, ~0ULL},
-                                {0x13579bdfULL, 0x2468ace0ULL, 0x31415926ULL,
-                                 0x27182818ULL, 0xdeadbeefULL, 0x10293847ULL},
-                                {0x80000000ULL, 0x7fffffffULL, 0xffffffffULL, 1,
-                                 0x80000001ULL, 0x7ffffffeULL},
-                                {0xaaaaaaaaULL, 0x55555555ULL, 0x33333333ULL,
-                                 0xccccccccULL, 0xf0f0f0f0ULL, 0x0f0f0f0fULL}};
-  for (unsigned Sample = 0; Sample < 8; ++Sample) {
-    for (unsigned I = 0; I < Inputs.size(); ++I)
-      Values[Ctx.varId(Inputs[I])] = llvm::APInt(Width, Seeds[Sample][I]);
-    Expected.push_back(Ctx.eval(Expr, Values));
+  const llvm::APInt OffsetValue = Ctx.eval(Expr, Values);
+  const uint32_t Wide = Ctx.width(Expr);
+  auto Coefficient = [&](SymRef Input, bool High) {
+    const uint32_t Id = Ctx.varId(Input);
+    llvm::APInt Unit(Wide, 1);
+    if (High)
+      Unit <<= Width;
+    Values[Id] = llvm::APInt(Width, 1);
+    const llvm::APInt Delta = Ctx.eval(Expr, Values) - OffsetValue;
+    Values[Id] = llvm::APInt::getAllOnes(Width);
+    const llvm::APInt AllDelta = Ctx.eval(Expr, Values) - OffsetValue;
+    llvm::APInt AllUnit = Values[Id].zext(Wide);
+    if (High)
+      AllUnit <<= Width;
+    Values[Id] = llvm::APInt(Width, 0);
+    if (Delta == Unit && AllDelta == AllUnit)
+      return 1;
+    if (Delta == -Unit && AllDelta == -AllUnit)
+      return -1;
+    return 0;
+  };
+  llvm::SmallVector<SymRef, 4> PositiveLow, NegativeLow;
+  llvm::SmallVector<SymRef, 4> PositiveHigh, NegativeHigh;
+  for (SymRef Input : LowInputs) {
+    const int Sign = Coefficient(Input, false);
+    if (!Sign)
+      return Expr;
+    (Sign > 0 ? PositiveLow : NegativeLow).push_back(Input);
   }
+  for (SymRef Input : HighInputs) {
+    const int Sign = Coefficient(Input, true);
+    if (!Sign)
+      return Expr;
+    (Sign > 0 ? PositiveHigh : NegativeHigh).push_back(Input);
+  }
+  if (PositiveLow.size() != PositiveHigh.size() ||
+      NegativeLow.size() != NegativeHigh.size())
+    return Expr;
 
-  std::array<unsigned, 3> HighOrder{0, 1, 2};
-  llvm::DenseSet<uint32_t> Tried;
-  do {
-    std::array<SymRef, 3> Packed;
-    for (unsigned I = 0; I < NumWords; ++I)
-      Packed[I] = Ctx.mkConcat(HighInputs[HighOrder[I]], LowInputs[I]);
-    std::array<unsigned, 3> Order{0, 1, 2};
-    do {
-      for (unsigned Signs = 0; Signs < (1u << (NumWords - 1)); ++Signs) {
-        SymRef Arithmetic = Packed[Order[0]];
-        for (unsigned I = 1; I < NumWords; ++I)
-          Arithmetic = Signs & (1u << (I - 1))
-                           ? Ctx.mkSub(Arithmetic, Packed[Order[I]])
-                           : Ctx.mkAdd(Arithmetic, Packed[Order[I]]);
-        const SymRef Candidate = Ctx.isConstZero(Offset)
-                                     ? Arithmetic
-                                     : Ctx.mkAdd(Arithmetic, Offset);
-        if (!Tried.insert(Candidate.index()).second ||
-            Ctx.readabilityCost(Candidate) >= Ctx.readabilityCost(Expr))
-          continue;
-        bool Matches = true;
-        for (unsigned Sample = 0; Sample < 8 && Matches; ++Sample) {
-          for (unsigned I = 0; I < Inputs.size(); ++I)
-            Values[Ctx.varId(Inputs[I])] = llvm::APInt(Width, Seeds[Sample][I]);
-          Matches = Ctx.eval(Candidate, Values) == Expected[Sample];
-        }
-        if (Matches &&
-            Verify(Ctx, Expr, Candidate) == SynthVerification::Equivalent)
-          return Candidate;
-      }
-    } while (std::next_permutation(Order.begin(), Order.begin() + NumWords));
-  } while (
-      std::next_permutation(HighOrder.begin(), HighOrder.begin() + NumWords));
+  SymRef Arithmetic = Ctx.mkZero(Wide);
+  for (unsigned I = 0; I < PositiveLow.size(); ++I)
+    Arithmetic =
+        Ctx.mkAdd(Arithmetic, Ctx.mkConcat(PositiveHigh[I], PositiveLow[I]));
+  for (unsigned I = 0; I < NegativeLow.size(); ++I)
+    Arithmetic =
+        Ctx.mkSub(Arithmetic, Ctx.mkConcat(NegativeHigh[I], NegativeLow[I]));
+  const SymRef Offset = Ctx.mkConst(OffsetValue);
+  const SymRef Candidate =
+      Ctx.isConstZero(Offset) ? Arithmetic : Ctx.mkAdd(Arithmetic, Offset);
+  if (Ctx.readabilityCost(Candidate) >= Ctx.readabilityCost(Expr))
+    return Expr;
+
+  // Mixed assignments cheaply reject nonlinear coincidences at the basis
+  // points. Only the caller's complete equivalence proof accepts a rewrite.
+  uint64_t Seed = 0x9e3779b97f4a7c15ULL;
+  for (unsigned Sample = 0; Sample < 8; ++Sample) {
+    for (SymRef Input : Inputs) {
+      Seed = Seed * 6364136223846793005ULL + 1;
+      Values[Ctx.varId(Input)] = llvm::APInt(Width, Sample ? Seed : ~0ULL);
+    }
+    if (Ctx.eval(Candidate, Values) != Ctx.eval(Expr, Values))
+      return Expr;
+  }
+  // For L' = L + c_low, the carry into the upper word is [L' < L].
+  // Subtracting c and that carry from the two halves is an exact inverse of
+  // adding the wide offset. Prove the offset-free relation instead; this
+  // avoids making the solver rediscover a long constant-carry chain.
+  SymRef ProofBefore = Expr;
+  SymRef ProofAfter = Candidate;
+  if (!OffsetValue.isZero()) {
+    const SymRef LowOffset = Ctx.mkConst(OffsetValue.trunc(Width));
+    const SymRef HighOffset = Ctx.mkConst(OffsetValue.lshr(Width).trunc(Width));
+    const SymRef BaseLow = Ctx.mkSub(Lower, LowOffset);
+    const SymRef Carry = Ctx.mkZExt(Ctx.mkUlt(Lower, BaseLow), Width);
+    const SymRef BaseHigh = Ctx.mkSub(Ctx.mkSub(Upper, HighOffset), Carry);
+    ProofBefore = Ctx.mkConcat(BaseHigh, BaseLow);
+    ProofAfter = Arithmetic;
+  }
+  if (Verify(Ctx, ProofBefore, ProofAfter) == SynthVerification::Equivalent)
+    return Candidate;
   return Expr;
 }
 

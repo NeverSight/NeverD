@@ -295,6 +295,45 @@ TEST(HighFrameStoreForwarding, FollowsDominatingFrameAliases) {
   }
 }
 
+TEST(HighFrameStoreForwarding, LearnsFrameAliasesAfterEarlierSpills) {
+  for (Arch Architecture : Architectures) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    const auto Type = NdType::makeInt(4, false);
+    const auto PointerType =
+        NdType::makeInt(getTargetRegInfo(Architecture).PointerSize, false);
+    auto Function = roundTrip(Architecture, Type);
+    auto Alias = temporary(12, PointerType, Architecture);
+    Function.Body.insert(
+        Function.Body.begin(),
+        store(frameSlot(Architecture, 32), parameter(1, Type, Architecture)));
+    Function.Body.insert(Function.Body.begin() + 1,
+                         assign(Alias, frameSlot(Architecture)));
+    Function.Body[2].StoreAddr = Alias;
+    Function.Body.back().RetVal->Operands[0] = Alias;
+    forwardPrivateFrameLoads(Function, Architecture);
+    EXPECT_FALSE(hasLoad(Function.Body.back().RetVal));
+  }
+}
+
+TEST(HighFrameStoreForwarding, DoesNotUseLaterAliasForEarlierReads) {
+  for (Arch Architecture : Architectures) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    const auto Type = NdType::makeInt(4, false);
+    const auto PointerType =
+        NdType::makeInt(getTargetRegInfo(Architecture).PointerSize, false);
+    auto Function = roundTrip(Architecture, Type);
+    auto Alias = temporary(12, PointerType, Architecture);
+    auto Earlier = temporary(13, Type, Architecture);
+    Function.Body.insert(Function.Body.begin() + 1,
+                         assign(Earlier, HighExpr::makeLoad(Alias, Type)));
+    Function.Body.insert(Function.Body.begin() + 2,
+                         assign(Alias, frameSlot(Architecture)));
+    Function.Body.back().RetVal = Earlier;
+    forwardPrivateFrameLoads(Function, Architecture);
+    EXPECT_TRUE(hasLoad(Function.Body[1].Val));
+  }
+}
+
 TEST(HighFrameStoreForwarding, RequiresExactTargetWidthForAddressViews) {
   for (Arch Architecture : Architectures)
     for (bool Reinterpret : {false, true})

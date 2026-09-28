@@ -654,6 +654,88 @@ TEST(BitVectorSolver, RecoversProvedThreeInputSplitWordArithmetic) {
   }
 }
 
+TEST(BitVectorSolver, RecoversProvedFourInputSplitWordArithmetic) {
+  using namespace neverd::symbolic;
+  for (uint32_t Width : {8u, 16u, 32u}) {
+    SymContext Ctx;
+    SymRef AL = Ctx.mkVar("al", Width);
+    SymRef AH = Ctx.mkVar("ah", Width);
+    SymRef BL = Ctx.mkVar("bl", Width);
+    SymRef BH = Ctx.mkVar("bh", Width);
+    SymRef CL = Ctx.mkVar("cl", Width);
+    SymRef CH = Ctx.mkVar("ch", Width);
+    SymRef DL = Ctx.mkVar("dl", Width);
+    SymRef DH = Ctx.mkVar("dh", Width);
+    auto Majority = [&](SymRef A, SymRef B, SymRef C) {
+      return Ctx.mkOr(Ctx.mkAnd(A, B),
+                      Ctx.mkOr(Ctx.mkAnd(A, C), Ctx.mkAnd(B, C)));
+    };
+    SymRef LowParity = Ctx.mkXor(Ctx.mkXor(AL, BL), CL);
+    SymRef LowMajority = Majority(AL, BL, CL);
+    SymRef LowPair = Ctx.mkAnd(LowParity, DL);
+    SymRef LowXor = Ctx.mkXor(LowParity, DL);
+    SymRef LowFirst = Ctx.mkAdd(LowXor, Ctx.mkShl(LowPair, Ctx.mkOne(Width)));
+    SymRef Low = Ctx.mkAdd(LowFirst, Ctx.mkShl(LowMajority, Ctx.mkOne(Width)));
+    SymRef HighParity = Ctx.mkXor(Ctx.mkXor(AH, BH), CH);
+    SymRef High =
+        Ctx.mkAdd({Ctx.mkXor(HighParity, DH),
+                   Ctx.mkShl(Ctx.mkAnd(HighParity, DH), Ctx.mkOne(Width)),
+                   Ctx.mkShl(Majority(AH, BH, CH), Ctx.mkOne(Width)),
+                   Ctx.mkLShr(LowPair, Ctx.mkConst(Width, Width - 1)),
+                   Ctx.mkLShr(LowMajority, Ctx.mkConst(Width, Width - 1)),
+                   Ctx.mkZExt(Ctx.mkUlt(LowFirst, LowXor), Width),
+                   Ctx.mkZExt(Ctx.mkUlt(Low, LowFirst), Width)});
+    SymRef Original = Ctx.mkConcat(High, Low);
+    SymRef Expected = Ctx.mkAdd({Ctx.mkConcat(AH, AL), Ctx.mkConcat(BH, BL),
+                                 Ctx.mkConcat(CH, CL), Ctx.mkConcat(DH, DL)});
+    SymSynthVerifier Verifier;
+    auto Verify = [&](SymContext &Context, SymRef A, SymRef B) {
+      return Verifier(Context, A, B);
+    };
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, Original, Verify), Expected);
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
+
+    SymRef AddedLow = Ctx.mkAdd(AL, BL);
+    SymRef FirstDifference = Ctx.mkSub(AddedLow, CL);
+    SymRef MixedLow = Ctx.mkSub(FirstDifference, DL);
+    SymRef MixedHigh = Ctx.mkSub(
+        Ctx.mkSub(
+            Ctx.mkAdd({AH, BH, Ctx.mkZExt(Ctx.mkUlt(AddedLow, AL), Width)}),
+            CH),
+        DH);
+    MixedHigh = Ctx.mkSub(
+        Ctx.mkSub(MixedHigh, Ctx.mkZExt(Ctx.mkUlt(AddedLow, CL), Width)),
+        Ctx.mkZExt(Ctx.mkUlt(FirstDifference, DL), Width));
+    SymRef Mixed = Ctx.mkConcat(MixedHigh, MixedLow);
+    SymRef MixedExpected = Ctx.mkSub(
+        Ctx.mkSub(Ctx.mkAdd(Ctx.mkConcat(AH, AL), Ctx.mkConcat(BH, BL)),
+                  Ctx.mkConcat(CH, CL)),
+        Ctx.mkConcat(DH, DL));
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, Mixed, Verify), MixedExpected);
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
+
+    SymRef OffsetLow = Ctx.mkConst(Width, 0xf0);
+    SymRef OffsetHigh = Ctx.mkConst(Width, 0x56);
+    SymRef Offset = Ctx.mkConcat(OffsetHigh, OffsetLow);
+    SymRef BiasedLow = Ctx.mkAdd(Low, OffsetLow);
+    SymRef BiasedHigh = Ctx.mkAdd(
+        {High, OffsetHigh, Ctx.mkZExt(Ctx.mkUlt(BiasedLow, Low), Width)});
+    SymRef Affine = Ctx.mkConcat(BiasedHigh, BiasedLow);
+    EXPECT_EQ(recoverSplitWordArithmetic(Ctx, Affine, Verify),
+              Ctx.mkAdd(Expected, Offset));
+    EXPECT_EQ(Verifier.report().Proof, ProofStatus::Equivalent);
+
+    if (Width == 8) {
+      SymRef Rare = Ctx.mkAnd(Ctx.mkEq(AL, Ctx.mkConst(Width, 0x6d)),
+                              Ctx.mkEq(DL, Ctx.mkConst(Width, 0x29)));
+      SymRef Wrong = Ctx.mkConcat(
+          Ctx.mkIte(Rare, Ctx.mkAdd(High, Ctx.mkOne(Width)), High), Low);
+      EXPECT_EQ(recoverSplitWordArithmetic(Ctx, Wrong, Verify), Wrong);
+      EXPECT_EQ(Verifier.report().Proof, ProofStatus::Different);
+    }
+  }
+}
+
 TEST(BitVectorSolver, SynthesisVerifierReportsDeterministicBudgetUnknown) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", W32);

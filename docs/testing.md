@@ -84,14 +84,20 @@ ARM32, Thumb-1, and Thumb-2. Its edge and random-word oracles check the complete
 Boolean forms exercise wide addition and subtraction; two more add a nonzero
 64-bit offset after the Boolean form. A three-input parity/majority form checks
 carry recovery across the two words, with a matching native 64-bit check on
-x86-64 and AArch64. The output must remove their residual
+x86-64 and AArch64. A four-input carry-save form checks the same matrix with
+independently randomized operands and the corresponding native 64-bit paths.
+An independent five-input carry-save form extends the split-word matrix;
+Thumb-2 HighC also checks a frame-pointer alias established after earlier
+spills. Native x86-64 and AArch64 repeat the five-input check through both C
+routes. The output must remove their residual
 XOR, AND, and complement operations, while retaining the shifts and OR needed
 to assemble input halves. Thumb-1 compilers may place these offsets in a
 read-only literal island inside executable code; mapping and relocation
 evidence must authorize constant reads in both C routes. The shared symbolic
-candidate search uses sample values only to discard candidates;
-`NeverDSolverTests` also checks that an exact proof accepts equivalent
-arithmetic and rejects a rare counterexample or an incomplete proof.
+candidate generator infers signed coefficients from basis responses and uses
+mixed samples only to discard candidates. `NeverDSolverTests` checks that an
+exact proof accepts equivalent arithmetic and rejects rare counterexamples or
+an incomplete proof.
 
 The frame-spill source matrix also covers x86-32 (ELF/COFF/Mach-O), ARM32
 (ARM, Thumb-2 and Cortex-M Thumb-1 ELF), and AArch64 (ELF/COFF/Mach-O)
