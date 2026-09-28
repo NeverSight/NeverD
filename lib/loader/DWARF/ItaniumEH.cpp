@@ -12,8 +12,10 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -96,6 +98,31 @@ void summarizeItanium(const ItaniumEHInfo &Info,
         "Itanium record declares no landing pad: the frame only forwards");
 }
 
+/// Where the function whose frame begins at \p FrameBegin starts.
+///
+/// bionic's AArch64 assembly entry macro puts `bti c` before
+/// `.cfi_startproc`, so the frame of each such function -- every syscall
+/// stub -- begins at its second instruction. A call landing pad directly
+/// before a frame, which no frame covers, is that function's first
+/// instruction.
+va_t functionEntry(const BinaryImage &Img, va_t FrameBegin,
+                   const std::vector<std::pair<va_t, va_t>> &Frames) {
+  if (Img.Arch != Arch::AArch64 || FrameBegin < aarch64::kInsnSize ||
+      FrameBegin % aarch64::kInsnSize != 0)
+    return FrameBegin;
+  const va_t Pad = FrameBegin - aarch64::kInsnSize;
+  const auto Next = std::upper_bound(Frames.begin(), Frames.end(),
+                                     std::make_pair(Pad, InvalidVA));
+  if (Next != Frames.begin() && Pad < std::prev(Next)->second)
+    return FrameBegin;
+  const Segment *Seg = Img.getSegmentFor(Pad);
+  if (!Seg || !Seg->isExecutable() || Pad < Seg->VA ||
+      FrameBegin - Seg->VA > Seg->Data.size())
+    return FrameBegin;
+  const uint32_t Word = readLE<uint32_t>(Seg->Data.data() + (Pad - Seg->VA));
+  return Word == aarch64::kBTI_C || Word == aarch64::kBTI_JC ? Pad : FrameBegin;
+}
+
 } // namespace
 
 void parseItaniumExceptions(BinaryImage &Img) {
@@ -147,6 +174,23 @@ void parseItaniumExceptions(BinaryImage &Img) {
         if (llvm::StringRef(Rel.SectionName).ends_with(FrameName))
           RelocatedOffsets.insert(Rel.Address);
   }
+
+  // Every code range a frame describes, to tell a landing pad before one
+  // frame from the last instruction of another.
+  std::vector<std::pair<va_t, va_t>> FrameRanges;
+  for (const DwarfFDE &FDE : Frames.FDEs) {
+    if (RelocatedOffsets.contains(FDE.InitialLocationOffset))
+      continue;
+    const va_t Begin = Img.Arch == Arch::ARM
+                           ? clearThumbBit(FDE.InitialLocation)
+                           : FDE.InitialLocation;
+    if (auto Range =
+            ExceptionAddressRange::fromStartAndSize(Begin, FDE.AddressRange))
+      FrameRanges.emplace_back(Range->Begin, Range->End);
+  }
+  std::sort(FrameRanges.begin(), FrameRanges.end());
+  // Frames whose function starts at the landing pad before them.
+  llvm::DenseSet<va_t> PaddedFrameStarts;
 
   for (DwarfFDE &FDE : Frames.FDEs) {
     const DwarfCIE *CIE = Out.findCIE(FDE.CIESectionOffset);
@@ -224,20 +268,32 @@ void parseItaniumExceptions(BinaryImage &Img) {
     F.rebuildParseSummary();
 
     if (F.CodeRange.isValid()) {
-      Img.KnownCodeRanges.emplace_back(F.CodeRange.Begin, F.CodeRange.End);
+      const va_t Entry = functionEntry(Img, F.CodeRange.Begin, FrameRanges);
+      if (Entry != F.CodeRange.Begin)
+        PaddedFrameStarts.insert(F.CodeRange.Begin);
+      Img.KnownCodeRanges.emplace_back(Entry, F.CodeRange.End);
       // An FDE is an authoritative function boundary, which is stronger
       // evidence than the .eh_frame_hdr search table alone: the table only
       // holds the entry point, while the FDE also proves the extent.
       if (Seg && Seg->isExecutable() &&
           F.ParseStatus != ExceptionParseStatus::Malformed &&
-          SeenSymbols.insert(F.CodeRange.Begin).second) {
-        Img.Symbols.push_back(
-            Symbol::makeFunc(F.CodeRange.Begin, F.CodeRange.size()));
+          SeenSymbols.insert(Entry).second) {
+        Img.Symbols.push_back(Symbol::makeFunc(Entry, F.CodeRange.End - Entry));
         ++Added;
       }
     }
     Out.Functions.push_back(std::move(F));
   }
+
+  // .eh_frame_hdr's search table names each frame's first address, which the
+  // ELF loader already made a function; where the function starts at the
+  // landing pad before its frame, that address is its second instruction.
+  if (!PaddedFrameStarts.empty())
+    llvm::erase_if(Img.Symbols, [&](const Symbol &Sym) {
+      return Sym.IsFunc && Sym.Size == 0 &&
+             PaddedFrameStarts.contains(Sym.Addr) &&
+             Sym.Name == Symbol::makeFunc(Sym.Addr).Name;
+    });
 
   if (Unrelocated != 0) {
     ImageStructural.mergeStatus(ExceptionParseStatus::Partial);

@@ -130,6 +130,10 @@ constexpr uint32_t kNop = 0xD503201F;
 constexpr uint32_t kBR_X16 = 0xD61F0200;
 constexpr uint32_t kBR_X17 = 0xD61F0220;
 
+// --- Branch target identification: the landing pads of indirect calls ---
+constexpr uint32_t kBTI_C = 0xD503245F;
+constexpr uint32_t kBTI_JC = 0xD50324DF;
+
 /// +/- 128 MB reach of B/BL (26-bit signed imm << 2).
 constexpr int64_t kBranchRange = 1LL << 27;
 

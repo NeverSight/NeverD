@@ -503,6 +503,108 @@ TEST(ItaniumEHDriver, NormalizesFrameSectionIntoExceptionMetadata) {
   EXPECT_EQ(Found->CodeRange.Begin, FuncVA);
 }
 
+/// An AArch64 image whose `.eh_frame` holds one frame for \p FrameVA, with
+/// \p Code written at \p CodeVA.
+BinaryImage makeAArch64FrameImage(va_t CodeVA, const std::vector<uint8_t> &Code,
+                                  va_t FrameVA, uint64_t FrameSize) {
+  BinaryImage Img = makeImage();
+  Img.Arch = Arch::AArch64;
+  writeData(Img, CodeVA, Code);
+  FrameBytes Frame = buildSimpleFrame(kDataVA, FrameVA, FrameSize, "zR", 0, 0);
+  writeData(Img, kDataVA, Frame.Bytes);
+  Section EhFrame;
+  EhFrame.Name = ".eh_frame";
+  EhFrame.VA = kDataVA;
+  EhFrame.Size = Frame.Bytes.size();
+  EhFrame.Data = Frame.Bytes;
+  Img.Sections.push_back(std::move(EhFrame));
+  return Img;
+}
+
+const Symbol *functionAt(const BinaryImage &Img, va_t VA) {
+  for (const Symbol &Sym : Img.Symbols)
+    if (Sym.IsFunc && Sym.Addr == VA)
+      return &Sym;
+  return nullptr;
+}
+
+// bionic's syscall stubs open their frame after the `bti c` landing pad.
+const std::vector<uint8_t> kBTIStub = {
+    0x5f, 0x24, 0x03, 0xd5, // bti c
+    0x08, 0x04, 0x80, 0xd2, // mov x8, #32
+    0x01, 0x00, 0x00, 0xd4, // svc #0
+    0xc0, 0x03, 0x5f, 0xd6, // ret
+};
+
+TEST(ItaniumEHDriver, StartsAnAArch64FunctionAtTheLandingPadBeforeItsFrame) {
+  const va_t StubVA = kTextVA + 0x100;
+  BinaryImage Img = makeAArch64FrameImage(StubVA, kBTIStub, StubVA + 4, 12);
+
+  parseItaniumExceptions(Img);
+
+  // The frame still describes the code it covers...
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+  EXPECT_EQ(Img.ExceptionMetadata.Functions[0].CodeRange.Begin, StubVA + 4);
+  // ...but the function begins at its landing pad.
+  const Symbol *Stub = functionAt(Img, StubVA);
+  ASSERT_NE(Stub, nullptr);
+  EXPECT_EQ(Stub->Size, 16u);
+  EXPECT_EQ(functionAt(Img, StubVA + 4), nullptr);
+}
+
+TEST(ItaniumEHDriver, DropsTheSearchTableEntryInsideAPaddedFunction) {
+  const va_t StubVA = kTextVA + 0x100;
+  BinaryImage Img = makeAArch64FrameImage(StubVA, kBTIStub, StubVA + 4, 12);
+  // The ELF loader makes each .eh_frame_hdr entry, the frame's first
+  // address, a function before the frames are read.
+  Img.Symbols.push_back(Symbol::makeFunc(StubVA + 4));
+
+  parseItaniumExceptions(Img);
+
+  ASSERT_NE(functionAt(Img, StubVA), nullptr);
+  EXPECT_EQ(functionAt(Img, StubVA + 4), nullptr);
+}
+
+TEST(ItaniumEHDriver, LeavesAFrameThatNoLandingPadPrecedesWhereItBegins) {
+  const va_t StubVA = kTextVA + 0x100;
+  std::vector<uint8_t> Code = kBTIStub;
+  // The word before the frame is the previous function's `ret`.
+  Code[0] = 0xc0, Code[1] = 0x03, Code[2] = 0x5f, Code[3] = 0xd6;
+  BinaryImage Img = makeAArch64FrameImage(StubVA, Code, StubVA + 4, 12);
+
+  parseItaniumExceptions(Img);
+
+  EXPECT_NE(functionAt(Img, StubVA + 4), nullptr);
+  EXPECT_EQ(functionAt(Img, StubVA), nullptr);
+}
+
+TEST(ItaniumEHDriver, LeavesALandingPadAnotherFrameCovers) {
+  const va_t StubVA = kTextVA + 0x100;
+  BinaryImage Img = makeImage();
+  Img.Arch = Arch::AArch64;
+  writeData(Img, StubVA, kBTIStub);
+  // Two frames: one that covers the landing pad, and the stub's own. Each
+  // built frame section ends in a terminator; the first one's is dropped.
+  FrameBytes First = buildSimpleFrame(kDataVA, StubVA - 8, 12, "zR", 0, 0);
+  std::vector<uint8_t> Bytes(First.Bytes.begin(), First.Bytes.end() - 4);
+  FrameBytes Second =
+      buildSimpleFrame(kDataVA + Bytes.size(), StubVA + 4, 12, "zR", 0, 0);
+  Bytes.insert(Bytes.end(), Second.Bytes.begin(), Second.Bytes.end());
+  writeData(Img, kDataVA, Bytes);
+  Section EhFrame;
+  EhFrame.Name = ".eh_frame";
+  EhFrame.VA = kDataVA;
+  EhFrame.Size = Bytes.size();
+  EhFrame.Data = Bytes;
+  Img.Sections.push_back(std::move(EhFrame));
+
+  parseItaniumExceptions(Img);
+
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 2u);
+  EXPECT_NE(functionAt(Img, StubVA + 4), nullptr);
+  EXPECT_EQ(functionAt(Img, StubVA), nullptr);
+}
+
 TEST(ItaniumEHDriver, IgnoresAnImageWithoutAFrameSection) {
   BinaryImage Img = makeImage();
   parseItaniumExceptions(Img);
