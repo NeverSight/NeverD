@@ -423,7 +423,8 @@ struct SourceCallTypeHint {
     bool operator==(const ObjCIndirectResultStorageEvidence &) const = default;
   };
   std::optional<ObjCIndirectResultStorageEvidence> ObjCIndirectResultStorage;
-  /// RuntimeBorrowedBytes/RuntimeReadOnlyBytes extent at TargetAddress.
+  /// Kind-specific byte extent: rebuilt storage or borrowed contents for
+  /// address bindings, or an exact indirect record argument for Darwin calls.
   uint32_t ByteCount = 0;
   /// Constant strings/objects: the immutable relocated slot whose loaded
   /// value supplied TargetAddress. For RuntimeCStringStorage, TargetAddress
