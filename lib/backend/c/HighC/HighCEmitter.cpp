@@ -957,6 +957,13 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
             SourceObjectAddressHelpers.insert(
                 "neverd_swift_nominal_descriptor_" +
                 llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::
+                       RuntimeSwiftConformanceDescriptorAddress) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_swift_conformance_descriptor_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
         } else if (Hint.CallKind == SourceCallTypeHint::Kind::
                                         RuntimeSwiftNominalMetadataAddress) {
           if (Hint.TargetAddress)

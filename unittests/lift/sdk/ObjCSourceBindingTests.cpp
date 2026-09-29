@@ -1375,6 +1375,42 @@ TEST(ObjCSourceBindings, LocalWitnessRequiresMatchingExportedNominalType) {
   EXPECT_NE(Source.find("__asm__(\"_$s3WMF12RequestErrorON\")"),
             std::string::npos);
 
+  HighFunc Direct;
+  Direct.Entry = 0x3040;
+  Direct.ReturnType = NdType::makePtr(NdType::makeVoid());
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeConst(Conformance, 8,
+                                      ConstantAddressProvenance::DataAddress);
+  Direct.Body = {Return};
+  const auto Bound = bindObjCSourceReferences(Direct, F.Image);
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  EXPECT_EQ(Bound.SwiftConformanceDescriptors,
+            (std::map<va_t, std::string>{
+                {Conformance, "_$s3WMF12RequestErrorOs0C0AAMc"}}));
+  const auto Descriptor = Bound.Function.Body[0].RetVal;
+  ASSERT_TRUE(Descriptor->SourceCallHint);
+  EXPECT_EQ(Descriptor->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeSwiftConformanceDescriptorAddress);
+  EXPECT_TRUE(objcSourceCallBound(*Descriptor, F.Image, {}));
+  Helpers.clear();
+  const auto DescriptorSource = renderObjCSwiftConformanceDescriptorHelpers(
+      F.Image, Bound.SwiftConformanceDescriptors, Helpers);
+  EXPECT_NE(
+      DescriptorSource.find("neverd_swift_conformance_descriptor_5020_address"),
+      std::string::npos);
+  EXPECT_NE(
+      DescriptorSource.find("__asm__(\"_$s3WMF12RequestErrorOs0C0AAMc\")"),
+      std::string::npos);
+  Direct.Body[0].RetVal->ConstProvenance = ConstantAddressProvenance::Scalar;
+  EXPECT_TRUE(bindObjCSourceReferences(Direct, F.Image)
+                  .SwiftConformanceDescriptors.empty());
+  F.Image.Exports.erase(F.Image.Exports.begin());
+  EXPECT_FALSE(objcSourceCallBound(*Descriptor, F.Image, {}));
+  EXPECT_THROW(renderObjCSwiftConformanceDescriptorHelpers(
+                   F.Image, Bound.SwiftConformanceDescriptors, Helpers),
+               std::runtime_error);
+
   auto WrongType = Fixture();
   WrongType.Image.Symbols[2].Name = "_$s3WMF12DifferentErrorOs0C0AAMc";
   WrongType.Image.Exports[0].Name = WrongType.Image.Symbols[2].Name;

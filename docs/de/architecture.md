@@ -717,6 +717,7 @@ Die Quellsignatur-Inferenz für native Hilfsfunktionen weist durch eine begrenzt
 
 - Ein träger Swift-Zeugentabellen-Accessor wird nur nach Nachweis des `Wl`/`WL`-Cachemusters, der exakten Laufzeitabfrage und eines neu aufgebauten Caches rekonstruiert; die ursprüngliche Cacheadresse wird nicht kopiert.
 - Bei einem direkt gelinkten Swift-Konformitätsdeskriptor und nominalen Metadaten müssen beide Identitäten eindeutig exportiert, der Deskriptor unveränderlich und die demangelten nominalen Typen gleich sein; gemischte Import-Slots und direkte Adressen, widersprüchliche Exporte oder abweichende Typen werden abgelehnt.
+- Wird die Adresse eines Konformitätsdeskriptors direkt im Quelltext verwendet, wird das unveränderliche, eindeutig exportierte `Mc`-Symbol über seinen Namen gebunden und vor der Ausgabe erneut geprüft; die ursprüngliche Bildadresse wird nicht kopiert.
 - `Any.self` wird nur dann zur Konstante, wenn ein exaktes inneres Element des vollständigen Existential-Containers oder der öffentliche Export `$sypN` die Metadatenidentität belegt.
 - Eine Objective-C-Klassenreferenzzelle behält ihre zusätzliche Indirektion und ist nur für einen typisierten nativen Ladezugriff ohne mehrdeutige Verwendungen zulässig.
 - Ivar-Offsets dürfen über den CFG nur bei gleicher Klasse, gleicher Breite und genau einem Ladezugriff zusammengeführt werden. Der Once-Getter eines zweiwortigen Swift-Strings verlangt außerdem den exakten Vertrag aller vier Träger.

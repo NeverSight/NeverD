@@ -63,6 +63,7 @@ struct ObjCSourceBindingResult {
   std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
       SwiftTypeMetadataPairs;
   std::map<va_t, std::string> SwiftNominalDescriptors;
+  std::map<va_t, std::string> SwiftConformanceDescriptors;
   std::map<va_t, std::string> SwiftNominalMetadata;
   std::map<va_t, std::string> SwiftPrivateNominalMetadataAccessors;
   std::map<va_t, std::string> SwiftWitnessTables;
@@ -1914,18 +1915,17 @@ inline std::optional<SourceCallTypeHint> swiftTypeMetadataAddressHint(
 inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
                                                unsigned Depth = 0);
 
-// A local lazy witness accessor may pass the defining image's conformance
-// descriptor and concrete metadata directly instead of loading imported GOT
-// slots. Name those exact exported identities only when Swift's demangler
-// proves that the descriptor and metadata describe the same nominal type.
-inline std::optional<std::array<std::string, 2>>
-swiftLocalWitnessGlobals(const BinaryImage &Image, va_t ConformanceAddress,
-                         va_t MetadataAddress) {
-  const auto Metadata = swiftNominalMetadataAddressHint(Image, MetadataAddress);
+inline std::optional<std::string>
+swiftExportedConformanceDescriptorName(const BinaryImage &Image,
+                                       va_t ConformanceAddress) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.MachOTwoLevelNamespace || Image.MachOChainedFixupsAmbiguous)
+    return std::nullopt;
   const auto Bytes = readImmutableImageBytes(Image, ConformanceAddress, 4);
   const auto *Section = Image.getSectionFor(ConformanceAddress);
   const auto *Segment = Image.getSegmentFor(ConformanceAddress);
-  if (!Metadata || !Bytes || !Section || !Segment || !Section->isReadable() ||
+  if (!Bytes || !Section || !Segment || !Section->isReadable() ||
       Section->isWritable() || !Segment->isReadable() ||
       Segment->isWritable() ||
       Image.hasExecutableCodeOwnerAt(ConformanceAddress))
@@ -1951,7 +1951,6 @@ swiftLocalWitnessGlobals(const BinaryImage &Image, va_t ConformanceAddress,
   }
   if (Exports != 1)
     return std::nullopt;
-
   llvm::SwiftDemangleOptions Options;
   Options.MaxInputBytes = 8000;
   Options.MaxNodes = 1024;
@@ -1960,6 +1959,61 @@ swiftLocalWitnessGlobals(const BinaryImage &Image, va_t ConformanceAddress,
   Options.MaxOperations = 100000;
   const auto ParsedConformance = llvm::swiftDemangle(
       llvm::StringRef(Conformance->Name).drop_front(1), Options);
+  const auto Shape = [](const llvm::SwiftDemangleNode &Node,
+                        llvm::StringRef Kind, size_t Children) {
+    return Node.Kind == Kind && !Node.Text && !Node.Index &&
+           Node.Children.size() == Children;
+  };
+  if (!ParsedConformance.Root || !ParsedConformance.Error.empty() ||
+      !Shape(*ParsedConformance.Root, "Global", 1) ||
+      !Shape(ParsedConformance.Root->Children[0],
+             "ProtocolConformanceDescriptor", 1) ||
+      !Shape(ParsedConformance.Root->Children[0].Children[0],
+             "ProtocolConformance", 3) ||
+      !Shape(ParsedConformance.Root->Children[0].Children[0].Children[0],
+             "Type", 1))
+    return std::nullopt;
+  return Conformance->Name;
+}
+
+inline std::optional<SourceCallTypeHint>
+swiftConformanceDescriptorAddressHint(const BinaryImage &Image, va_t Address) {
+  const auto Name = swiftExportedConformanceDescriptorName(Image, Address);
+  if (!Name)
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind =
+      SourceCallTypeHint::Kind::RuntimeSwiftConformanceDescriptorAddress;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = *Name;
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
+    return std::nullopt;
+  return Hint;
+}
+
+// A local lazy witness accessor may pass the defining image's conformance
+// descriptor and concrete metadata directly instead of loading imported GOT
+// slots. Name those exact exported identities only when Swift's demangler
+// proves that the descriptor and metadata describe the same nominal type.
+inline std::optional<std::array<std::string, 2>>
+swiftLocalWitnessGlobals(const BinaryImage &Image, va_t ConformanceAddress,
+                         va_t MetadataAddress) {
+  const auto Metadata = swiftNominalMetadataAddressHint(Image, MetadataAddress);
+  const auto Conformance =
+      swiftExportedConformanceDescriptorName(Image, ConformanceAddress);
+  if (!Metadata || !Conformance)
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 8000;
+  Options.MaxNodes = 1024;
+  Options.MaxDepth = 64;
+  Options.MaxMemoryBytes = 1024 * 1024;
+  Options.MaxOperations = 100000;
+  const auto ParsedConformance =
+      llvm::swiftDemangle(llvm::StringRef(*Conformance).drop_front(1), Options);
   const auto ParsedMetadata = llvm::swiftDemangle(
       llvm::StringRef(Metadata->TargetName).drop_front(1), Options);
   const auto Shape = [](const llvm::SwiftDemangleNode &Node,
@@ -1996,7 +2050,7 @@ swiftLocalWitnessGlobals(const BinaryImage &Image, va_t ConformanceAddress,
       !SameType(SameType, ConformanceType, MetadataType, 0))
     return std::nullopt;
   return std::array<std::string, 2>{
-      llvm::StringRef(Conformance->Name).drop_front(1).str(),
+      llvm::StringRef(*Conformance).drop_front(1).str(),
       llvm::StringRef(Metadata->TargetName).drop_front(1).str()};
 }
 
@@ -4238,6 +4292,17 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           return Expression;
         }
       if (ObjectAddress && Address)
+        if (auto Descriptor =
+                swiftConformanceDescriptorAddressHint(Image, *Address)) {
+          *Expression = *HighExpr::makeCall({}, 0, {});
+          Expression->Type = Original->Type;
+          Expression->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Descriptor));
+          Result.SwiftConformanceDescriptors[*Address] =
+              Expression->SourceCallHint->TargetName;
+          return Expression;
+        }
+      if (ObjectAddress && Address)
         if (auto Metadata =
                 swiftPrivateNominalMetadataAccessorHint(Image, *Address)) {
           *Expression = *HighExpr::makeCall({}, 0, {});
@@ -5792,6 +5857,19 @@ inline bool objcSourceCallBound(
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftConformanceDescriptorAddress) {
+    const auto Expected =
+        swiftConformanceDescriptorAddressHint(Image, Binding.TargetAddress);
+    return Expected && Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() && !Expression.IsIndirectCall &&
+           !Expression.CallAddr && Expression.CallTarget.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind ==
       SourceCallTypeHint::Kind::RuntimeSwiftNominalMetadataAddress) {
     const auto Expected =
         swiftNominalMetadataAddressHint(Image, Binding.TargetAddress);
@@ -6821,6 +6899,30 @@ inline std::string renderObjCSwiftNominalDescriptorHelpers(
       throw std::runtime_error("Swift nominal descriptor is no longer valid");
     const std::string Stem =
         "neverd_swift_nominal_descriptor_" + llvm::utohexstr(Address, true);
+    SharedFunctions.insert(Stem + "_address");
+    Source += "\nextern unsigned char " + Stem + "_bytes[] __asm__(\"" +
+              Symbol + "\");\n";
+    Source += "uintptr_t " + Stem +
+              "_address(void) {\n"
+              "  return (uintptr_t)" +
+              Stem + "_bytes;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string renderObjCSwiftConformanceDescriptorHelpers(
+    const BinaryImage &Image, const std::map<va_t, std::string> &Descriptors,
+    std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (const auto &[Address, Symbol] : Descriptors) {
+    const auto Expected =
+        objc_binding_detail::swiftConformanceDescriptorAddressHint(Image,
+                                                                   Address);
+    if (!Expected || Expected->TargetName != Symbol)
+      throw std::runtime_error(
+          "Swift conformance descriptor is no longer valid");
+    const std::string Stem =
+        "neverd_swift_conformance_descriptor_" + llvm::utohexstr(Address, true);
     SharedFunctions.insert(Stem + "_address");
     Source += "\nextern unsigned char " + Stem + "_bytes[] __asm__(\"" +
               Symbol + "\");\n";

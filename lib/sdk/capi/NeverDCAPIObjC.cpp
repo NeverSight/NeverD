@@ -264,9 +264,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         continue;
       auto BlockBinding = bindObjCBlockSourceReferences(*Func, BlockSource,
                                                         BlockPlan, Functions);
-      if (const auto Cleanup =
-              proveObjCSynchronizedReceiverCleanup(S->Img,
-                                                   BlockBinding.Function))
+      if (const auto Cleanup = proveObjCSynchronizedReceiverCleanup(
+              S->Img, BlockBinding.Function))
         (void)omitProvenObjCSynchronizedLandingPad(BlockBinding.Function,
                                                    *Cleanup);
       auto Inputs =
@@ -716,6 +715,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
           SwiftTypeMetadataPairs;
       std::map<va_t, std::string> SwiftNominalDescriptors;
+      std::map<va_t, std::string> SwiftConformanceDescriptors;
       std::map<va_t, std::string> SwiftNominalMetadata;
       std::map<va_t, std::string> SwiftPrivateNominalMetadataAccessors;
       std::map<va_t, std::string> SwiftWitnessTables;
@@ -758,6 +758,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           if (!Added && It->second != Symbol)
             throw std::runtime_error(
                 "conflicting Swift nominal descriptor identities");
+        }
+        for (const auto &[Address, Symbol] :
+             Projections.at(Entry).SwiftConformanceDescriptors) {
+          const auto [It, Added] =
+              SwiftConformanceDescriptors.emplace(Address, Symbol);
+          if (!Added && It->second != Symbol)
+            throw std::runtime_error(
+                "conflicting Swift conformance descriptor identities");
         }
         for (const auto &[Address, Symbol] :
              Projections.at(Entry).SwiftNominalMetadata) {
@@ -863,6 +871,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                              SharedStorageFunctions) +
           renderObjCSwiftNominalDescriptorHelpers(
               S->Img, SwiftNominalDescriptors, SharedStorageFunctions) +
+          renderObjCSwiftConformanceDescriptorHelpers(
+              S->Img, SwiftConformanceDescriptors, SharedStorageFunctions) +
           renderObjCSwiftNominalMetadataHelpers(S->Img, SwiftNominalMetadata,
                                                 SharedStorageFunctions) +
           renderObjCSwiftPrivateNominalMetadataHelpers(

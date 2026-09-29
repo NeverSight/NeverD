@@ -711,6 +711,7 @@ L’inferenza della firma sorgente degli ausiliari nativi dimostra un risultato 
 
 - Un accessor lazy della witness table Swift viene ricostruito solo dopo aver provato il modello di cache `Wl`/`WL`, la query runtime esatta e una cache ricostruita; l’indirizzo originale non viene copiato.
 - Per un descrittore di conformità Swift e metadati nominali collegati direttamente, entrambe le identità devono essere esportate in modo univoco, il descrittore deve essere immutabile e i tipi nominali demangled devono coincidere; slot importati mescolati a indirizzi diretti, esportazioni in conflitto o tipi diversi vengono rifiutati.
+- Quando il sorgente usa direttamente l’indirizzo del descrittore di conformità, il simbolo `Mc` immutabile ed esportato in modo univoco viene collegato per nome e verificato di nuovo prima dell’emissione; l’indirizzo dell’immagine originale non viene copiato.
 - `Any.self` diventa una costante solo quando un membro interno esatto dell’intero contenitore esistenziale o l’export pubblico `$sypN` dimostra l’identità dei metadati.
 - Una cella di riferimento a classe Objective-C conserva il livello aggiuntivo di indirezione ed è ammessa solo per un caricamento nativo tipizzato, senza usi ambigui.
 - Gli offset degli ivar si uniscono nel CFG solo con classe e larghezza uguali e un singolo caricamento. Il getter once di una `String` Swift a due parole richiede inoltre il contratto esatto dei quattro portatori.

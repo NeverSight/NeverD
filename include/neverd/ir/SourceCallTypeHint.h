@@ -141,6 +141,9 @@ struct SourceCallTypeHint {
     /// The address of one uniquely exported, read-only Swift nominal type
     /// descriptor passed to an authenticated singleton-metadata runtime call.
     RuntimeSwiftNominalDescriptorAddress,
+    /// The exact exported identity of an immutable Swift protocol
+    /// conformance descriptor, independent of its witness-cache storage.
+    RuntimeSwiftConformanceDescriptorAddress,
     /// The exact exported address of concrete Swift struct metadata used by
     /// a value-witness call. The metadata and its nominal descriptor remain
     /// owned by the original linked image; source only names their identity.
