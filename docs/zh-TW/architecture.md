@@ -543,6 +543,7 @@ MedIR 原始碼參數驗證從宣告的回傳值、控制流程、記憶體副�
 - Swift 延遲 witness table accessor 只有在證明 `Wl`/`WL` 快取模式、精確 runtime 查詢及重新建立的快取後才會復原；不會複製原始快取位址。
 - 對於直接連結的 Swift 一致性描述符與名義型別中繼資料，兩者都必須唯一匯出、描述符不可變，且解碼後的名義型別相同；匯入槽與直接位址混用、匯出衝突或型別不符時拒絕繫結。
 - 原始碼直接使用一致性描述符位址時，僅按名稱重新繫結唯一匯出且不可變的 `Mc` 符號，並在輸出前重新驗證；不會複製原始映像位址。
+- 若偵測到的函式在 accessor 最終返回後還包含獨立 Swift 程式碼，只有證明所有入口路徑均返回且不會跳入後續區塊時，才把 accessor 證明限定在前段；後續程式碼仍保留原有診斷。
 - `Any.self` 只有在完整 existential container 的精確內部成員或公開匯出 `$sypN` 證明中繼資料身分時才會成為常數。
 - Objective-C class-reference cell 會保留額外的間接層級，且只允許沒有歧義用途的具型別原生 load。
 - ivar offset 只有在類別與寬度一致且僅有一次 load 時，才能跨 CFG 合併。雙字 Swift `String` once getter 還需要四個 carrier 的精確契約。

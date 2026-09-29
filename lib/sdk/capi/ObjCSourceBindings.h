@@ -2091,8 +2091,30 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
       (!Function.Name.empty() && Function.Name != Accessor->Name))
     return std::nullopt;
 
+  // Some stripped Mach-O inventories place independent, entry-unreachable
+  // Swift destructors after the accessor's final return. A complete
+  // assign/if-return/assign/store/return prefix has no edge into the following
+  // block. Ignore that detached suffix only for this accessor proof; the
+  // ordinary native body still retains all of its pipeline diagnostics.
+  std::vector<HighStmt> ReachablePrefix;
+  const std::vector<HighStmt> *ProofBody = &Function.Body;
+  if (!Function.StructuredExceptionRegions && Function.Body.size() > 5) {
+    const auto &Body = Function.Body;
+    if (Body[0].Kind == StmtKind::Assign && Body[1].Kind == StmtKind::If &&
+        Body[1].Body.size() == 1 && Body[1].Body[0].Kind == StmtKind::Return &&
+        Body[1].ElseBody.empty() && Body[2].Kind == StmtKind::Assign &&
+        Body[3].Kind == StmtKind::Store && Body[4].Kind == StmtKind::Return &&
+        Body[5].Kind == StmtKind::Block && Body[0].Addr >= Function.Entry &&
+        Body[0].Addr <= Body[1].Addr && Body[1].Addr <= Body[1].Body[0].Addr &&
+        Body[1].Body[0].Addr < Body[2].Addr && Body[2].Addr <= Body[3].Addr &&
+        Body[3].Addr < Body[4].Addr && Body[4].Addr < Body[5].Addr) {
+      ReachablePrefix.assign(Body.begin(), Body.begin() + 5);
+      ProofBody = &ReachablePrefix;
+    }
+  }
+
   VarKeyMap<std::vector<ExprPtr>> Definitions;
-  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+  walkStmts(*ProofBody, [&](const HighStmt &Statement) {
     if (Statement.Kind == StmtKind::Assign && Statement.Dst && Statement.Val &&
         (Statement.Dst->Kind == ExprKind::Var ||
          Statement.Dst->Kind == ExprKind::Phi))
@@ -2121,7 +2143,7 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
 
   std::vector<ExprPtr> CacheLoads, WitnessCalls, Returns;
   std::vector<const HighStmt *> CacheStores;
-  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+  walkStmts(*ProofBody, [&](const HighStmt &Statement) {
     if (Statement.Kind == StmtKind::Store && ExactAddress(Statement.StoreAddr))
       CacheStores.push_back(&Statement);
     if (Statement.Kind == StmtKind::Return && Statement.RetVal)

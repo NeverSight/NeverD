@@ -1277,6 +1277,51 @@ TEST(ObjCSourceBindings, SwiftWitnessAccessorRebuildsZeroArgumentCacheHelper) {
   }
 }
 
+TEST(ObjCSourceBindings,
+     SwiftWitnessAccessorIgnoresOnlyDetachedPostReturnCode) {
+  SwiftWitnessAccessorFixture F(Arch::AArch64);
+  auto &Body = F.Accessor.Body;
+  Body[0].Addr = 0x3024;
+  Body[1].Addr = 0x3028;
+  Body[1].Body[0].Addr = 0x302c;
+  Body[2].Addr = 0x3040;
+  Body[3].Addr = 0x3044;
+  Body[4].Addr = 0x3048;
+  HighStmt Detached;
+  Detached.Kind = StmtKind::Block;
+  Detached.Addr = 0x3050;
+  HighStmt AlienReturn;
+  AlienReturn.Kind = StmtKind::Return;
+  AlienReturn.Addr = 0x3054;
+  AlienReturn.RetVal = HighExpr::makeConst(0, 8);
+  Body.push_back(Detached);
+  Body.push_back(AlienReturn);
+
+  const auto Hint = [&] {
+    return sdk::objc_binding_detail::swiftWitnessAccessorCallHint(F.Accessor,
+                                                                  F.Image);
+  };
+  EXPECT_TRUE(Hint());
+  const std::map<va_t, const HighFunc *> Functions{
+      {F.Accessor.Entry, &F.Accessor}};
+  const auto Result =
+      bindObjCSourceReferences(F.Caller, F.Image, nullptr, &Functions);
+  EXPECT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  EXPECT_TRUE(Result.Dependencies.empty());
+  EXPECT_EQ(Result.SwiftWitnessCaches,
+            (std::map<va_t, va_t>{{F.Cache, F.Accessor.Entry}}));
+
+  Body[5].Addr = Body[4].Addr;
+  EXPECT_FALSE(Hint());
+  Body[5].Addr = 0x3050;
+  Body[4].Kind = StmtKind::Goto;
+  Body[4].GotoTarget = Body[5].Addr;
+  EXPECT_FALSE(Hint());
+  Body[4].Kind = StmtKind::Return;
+  F.Accessor.StructuredExceptionRegions = true;
+  EXPECT_FALSE(Hint());
+}
+
 TEST(ObjCSourceBindings, SubstringSequenceWitnessKeepsExactMetadataPair) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     SwiftWitnessAccessorFixture F(Architecture, true);

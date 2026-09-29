@@ -511,6 +511,7 @@ and repeats the runtime query; it never publishes the captured process cache or
 witness pointer.
 
 Directly linked Swift conformance descriptors and nominal metadata may also serve this accessor. Both identities must be uniquely exported, the descriptor must be immutable, and their demangled nominal types must match. Mixed imported and direct inputs, conflicting exports, and mismatched types reject the binding. When source uses a conformance descriptor address directly, its immutable, uniquely exported `Mc` symbol is rebound by name and revalidated before emission; the original image address is not copied.
+When a detected function also contains independent Swift code after the accessor’s final return, the accessor proof uses only its leading body if every entry path returns and no branch reaches the following block. The trailing code keeps its ordinary diagnostics.
 
 Standard Swift metadata storage addresses use compiler-generated `.self`
 queries; standard Hashable witness storage uses the direct witness argument
