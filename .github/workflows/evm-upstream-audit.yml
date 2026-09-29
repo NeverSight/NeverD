@@ -5,6 +5,8 @@ on:
     branches:
       - dev
   pull_request:
+    # closed cancels this PR's run through its concurrency group; no job runs.
+    types: [opened, synchronize, reopened, closed]
   schedule:
     - cron: '37 3 * * *'
   workflow_dispatch:
@@ -19,6 +21,7 @@ concurrency:
 jobs:
   opcode-metadata:
     name: Audit latest go-ethereum instruction sets
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:

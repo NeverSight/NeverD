@@ -8,6 +8,8 @@ on:
   push:
     branches: [dev]
   pull_request:
+    # closed cancels this PR's run through its concurrency group; no job runs.
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +22,7 @@ concurrency:
 jobs:
   native:
     name: C++ mobile (${{ matrix.os }})
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:

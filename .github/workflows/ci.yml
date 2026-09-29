@@ -5,6 +5,8 @@ on:
     branches:
       - dev
   pull_request:
+    # closed cancels this PR's run through its concurrency group; no job runs.
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
     inputs:
       use_prebuilt_llvm:
@@ -23,6 +25,7 @@ concurrency:
 jobs:
   build-and-test:
     name: Build and test (${{ matrix.name }})
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ${{ matrix.runner }}
     env:
       NEVERD_LLVM_PREBUILT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.use_prebuilt_llvm && 'ON' || 'OFF' }}

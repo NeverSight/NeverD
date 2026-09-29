@@ -5,6 +5,8 @@ on:
     branches:
       - dev
   pull_request:
+    # closed cancels this PR's run through its concurrency group; no job runs.
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +19,7 @@ concurrency:
 jobs:
   format:
     name: clang-format 22.1.2
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 

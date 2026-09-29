@@ -5,6 +5,8 @@ on:
     branches: [dev]
     paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'scripts/check_gui_i18n.py', '.github/workflows/gui.yml']
   pull_request:
+    # closed cancels this PR's run through its concurrency group; no job runs.
+    types: [opened, synchronize, reopened, closed]
     paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'scripts/check_gui_i18n.py', '.github/workflows/gui.yml']
   workflow_dispatch:
 
@@ -18,6 +20,7 @@ concurrency:
 jobs:
   desktop:
     name: Qt Quick (${{ matrix.runner }})
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

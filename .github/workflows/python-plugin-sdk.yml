@@ -14,6 +14,8 @@ on:
       - 'scripts/check_python_plugin_sdk.py'
       - 'scripts/tests/test_check_python_plugin_sdk.py'
   pull_request:
+    # closed cancels this PR's run through its concurrency group; no job runs.
+    types: [opened, synchronize, reopened, closed]
     paths:
       - '.github/workflows/python-plugin-sdk.yml'
       - 'include/neverd/OutputLanguages.def'
@@ -40,6 +42,7 @@ concurrency:
 jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

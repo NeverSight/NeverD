@@ -1,9 +1,10 @@
 name: Cancel Closed Pull Request Runs
 
-# Per-PR concurrency groups only cancel a run when a newer commit arrives, so a
-# merged or closed PR would keep its last runs queued or running after dev has
-# moved on. pull_request_target gives fork PRs the same write token; this
-# workflow never checks out or executes pull-request code.
+# The PR workflows cancel their own runs on close through their concurrency
+# groups, which needs no runner. This job has to wait for a runner, so it only
+# catches what those groups cannot: default-setup CodeQL runs and any workflow
+# without the closed trigger. pull_request_target gives fork PRs the same write
+# token; this workflow never checks out or executes pull-request code.
 on:
   pull_request_target:
     types: [closed]

@@ -5,6 +5,8 @@ on:
     branches:
       - dev
   pull_request:
+    # closed cancels this PR's run through its concurrency group; no job runs.
+    types: [opened, synchronize, reopened, closed]
   schedule:
     - cron: '17 */6 * * *'
   workflow_dispatch:
@@ -19,6 +21,7 @@ concurrency:
 jobs:
   published-assets:
     name: Verify published packages match source pins
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
