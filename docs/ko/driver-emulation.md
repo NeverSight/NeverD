@@ -6,6 +6,19 @@
 
 NeverD의 선택적 드라이버 에뮬레이터는 지원되는 x64 WDM 드라이버의 PE 진입점을 실행하며, 필요하면 명시적인 순차 요청 시나리오를 실행한 뒤 드라이버를 언로드합니다. CPU 실행에는 Unicorn을, Windows 환경에는 NeverD 자체의 제한된 모델을 사용합니다. 드라이버를 호스트 커널에 로드하거나 게스트 API 호출을 호스트 OS 서비스에 전달하지 않습니다.
 
+## 실행 백엔드
+
+기본 `driver-strict` 계약은 Unicorn을 유지합니다. 실험적인 정수 전용 `checked-x64-v1` 계약에서는 `--backend auto`가 Linux x86_64에서 KVM, Windows x64에서 WHP를 선택합니다. 명시적 선택은 대체 백엔드로 전환하지 않으며, 하드웨어나 계약이 맞지 않으면 실행 전에 실패합니다.
+
+명령과 메모리 접근을 검사한 후 단일 단계로 실행하며 Windows 객체 검사, 쓰기 관찰, 공유 별칭을 유지합니다. SIMD/x87, REP, 잠금, 메모리 읽기-수정-쓰기, 페이지 경계를 넘는 데이터 접근, MMIO, 다른 OS 및 사용자 프로세스는 지원하지 않습니다. 제한된 명령 사이에서 시간 제한과 취소를 확인하며 실행 시작 후 백엔드를 바꿔 재실행하지 않습니다. 아래의 전체 드라이버 호환성을 뜻하지 않습니다.
+
+빌드 옵션은 `NEVERD_EMULATION_BACKEND_KVM`, `NEVERD_EMULATION_BACKEND_WHP`입니다. KVM은 `/dev/kvm` 접근 권한이 필요합니다. WHP는 시스템 DLL을 동적으로 로드하며 Windows 실기 실행 검증이 필요합니다. 새 C API는 `neverd_emulate_driver_backend_json`이며 v1 ABI는 유지됩니다. 보고서는 백엔드, 계약과 선택 이유를 기록합니다.
+
+```bash
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --backend auto --execution-contract checked-x64-v1
+```
+
 ## 빌드 및 실행
 
 이 기능은 명시적으로 활성화해야 하며 `BUILD_TESTING`과 독립적입니다.

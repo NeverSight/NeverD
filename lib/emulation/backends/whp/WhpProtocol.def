@@ -1,0 +1,20 @@
+//===- WhpProtocol.def - Dynamically resolved Windows hypervisor API -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_WHP_STRING
+NEVERD_WHP_STRING(Library, L"WinHvPlatform.dll")
+#endif
+#ifdef NEVERD_WHP_FUNCTION
+NEVERD_WHP_FUNCTION(WHvGetCapability)
+NEVERD_WHP_FUNCTION(WHvCreatePartition)
+NEVERD_WHP_FUNCTION(WHvDeletePartition)
+NEVERD_WHP_FUNCTION(WHvSetPartitionProperty)
+NEVERD_WHP_FUNCTION(WHvSetupPartition)
+NEVERD_WHP_FUNCTION(WHvMapGpaRange)
+NEVERD_WHP_FUNCTION(WHvCreateVirtualProcessor)
+NEVERD_WHP_FUNCTION(WHvGetVirtualProcessorRegisters)
+NEVERD_WHP_FUNCTION(WHvSetVirtualProcessorRegisters)
+NEVERD_WHP_FUNCTION(WHvRunVirtualProcessor)
+#endif

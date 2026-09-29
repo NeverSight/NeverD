@@ -1,4 +1,4 @@
-//===- X64ExecutionPolicy.cpp - Driver CPU environment checks -------------===//
+//===- WindowsX64ExecutionPolicy.cpp - Driver CPU environment checks ----===//
 //
 // NeverD Decompiler
 //
@@ -10,9 +10,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "X64ExecutionPolicy.h"
+#include "WindowsX64ExecutionPolicy.h"
 
-#include "windows/WindowsKernelLayout.h"
+#include "WindowsKernelLayout.h"
 
 #include "llvm/Support/Error.h"
 
@@ -21,49 +21,56 @@
 
 namespace neverd::emulation {
 namespace {
+namespace policy {
+#define NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(Name, Text)                        \
+  constexpr char Name[] = Text;
+#include "WindowsExecutionDiagnostics.def"
+#undef NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC
+} // namespace policy
+
 llvm::Error failure(const std::string &Text) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(), Text);
 }
 } // namespace
-X64ExecutionPolicy::~X64ExecutionPolicy() {
+WindowsX64ExecutionPolicy::~WindowsX64ExecutionPolicy() {
   if (Handle)
     cs_close(&Handle);
 }
-llvm::Error X64ExecutionPolicy::initialize() {
+llvm::Error WindowsX64ExecutionPolicy::initialize() {
   if (cs_open(CS_ARCH_X86, CS_MODE_64, &Handle) != CS_ERR_OK ||
       cs_option(Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK)
-    return failure("cannot initialize x64 instruction policy");
+    return failure(policy::Initialize);
   return llvm::Error::success();
 }
 
-llvm::Error X64ExecutionPolicy::validate(llvm::ArrayRef<uint8_t> Bytes,
-                                         uint64_t PC) {
+llvm::Error WindowsX64ExecutionPolicy::validate(llvm::ArrayRef<uint8_t> Bytes,
+                                                uint64_t PC) {
   auto Result = inspect(Bytes, PC);
   if (!Result)
     return Result.takeError();
   return llvm::Error::success();
 }
 
-llvm::Expected<std::optional<X64ExecutionPolicy::Action>>
-X64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
+llvm::Expected<std::optional<WindowsX64ExecutionPolicy::Action>>
+WindowsX64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
   cs_insn *Decoded = nullptr;
   size_t Count = cs_disasm(Handle, Bytes.data(), Bytes.size(), PC, 1, &Decoded);
   if (!Count)
-    return failure("instruction cannot be decoded by the execution policy");
+    return failure(policy::Decode);
   std::unique_ptr<cs_insn, void (*)(cs_insn *)> Insn(
       Decoded, [](cs_insn *P) { cs_free(P, 1); });
   if (Insn->size != Bytes.size() || !Insn->detail)
-    return failure("CPU and instruction policy disagree on instruction extent");
+    return failure(policy::Extent);
   auto Rejected = [&]() {
-    return failure(std::string("unmodeled CPU environment instruction: ") +
-                   Insn->mnemonic);
+    return failure(std::string(policy::Rejected) + Insn->mnemonic);
   };
   const cs_x86 &X86 = Insn->detail->x86;
   // WDK headers inline the IRQL and current-thread queries. Decode only the
   // exact full-width reads whose values belong to the Windows model. Other
   // segment offsets and all writes remain outside this execution profile.
   if (Insn->id == X86_INS_MOV && X86.op_count == 2 &&
-      X86.operands[0].type == X86_OP_REG && X86.operands[0].size == 8) {
+      X86.operands[0].type == X86_OP_REG &&
+      X86.operands[0].size == sizeof(uint64_t)) {
     const auto &Source = X86.operands[1];
     std::optional<Action::Kind> Kind;
     if (Source.type == X86_OP_REG && Source.reg == X86_REG_CR8)
@@ -77,11 +84,10 @@ X64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
 #define NEVERD_X64_REGISTER(Name, DecoderID, BackendID)                        \
   case DecoderID:                                                              \
     return std::optional<Action>{{*Kind, X64Register::Name}};
-#include "X64Registers.def"
+#include "../X64Registers.def"
 #undef NEVERD_X64_REGISTER
       default:
-        return failure(
-            "environment read has an unsupported full-width destination");
+        return failure(policy::Destination);
       }
     }
   }
@@ -97,7 +103,7 @@ X64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
   // initialization profile, even where the decoder does not mark privilege.
   switch (Insn->id) {
 #define NEVERD_DRIVER_UNSUPPORTED_X64(Instruction) case Instruction:
-#include "X64UnsupportedInstructions.def"
+#include "../X64UnsupportedInstructions.def"
 #undef NEVERD_DRIVER_UNSUPPORTED_X64
     return Rejected();
   default:
@@ -108,8 +114,7 @@ X64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
   // address, so the ordinary operand walk cannot establish this boundary.
   if (Insn->id == X86_INS_XLATB &&
       (X86.prefix[1] == X86_PREFIX_FS || X86.prefix[1] == X86_PREFIX_GS))
-    return failure("FS/GS memory access requires an unsupported Windows "
-                   "thread profile");
+    return failure(policy::ThreadProfile);
   bool ReadsCurrentThread = false;
   for (unsigned I = 0; I < X86.op_count; ++I) {
     const auto &Operand = X86.operands[I];
@@ -120,8 +125,7 @@ X64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
           Operand.mem.base != X86_REG_INVALID ||
           Operand.mem.index != X86_REG_INVALID ||
           Operand.mem.disp != windows::GSCurrentThreadOffset)
-        return failure("FS/GS memory access requires an unsupported Windows "
-                       "thread profile");
+        return failure(policy::ThreadProfile);
       ReadsCurrentThread = true;
     }
     if (Operand.type == X86_OP_REG &&

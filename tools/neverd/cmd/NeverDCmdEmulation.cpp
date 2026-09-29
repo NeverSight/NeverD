@@ -79,12 +79,15 @@ int runEmulateDriver() {
       WithColor::error() << toString(Scenario.takeError()) << "\n";
       return 1;
     }
-    Report = neverd_emulate_driver_scenario_json(
+    Report = neverd_emulate_driver_backend_json(
         Sess, EmulateDriverInput.getValue().c_str(), Scenario->c_str(),
-        &Options);
+        &Options, DriverBackend.getValue().c_str(),
+        DriverExecutionContract.getValue().c_str());
   } else {
-    Report = neverd_emulate_driver_json(
-        Sess, EmulateDriverInput.getValue().c_str(), &Options);
+    Report = neverd_emulate_driver_backend_json(
+        Sess, EmulateDriverInput.getValue().c_str(), nullptr, &Options,
+        DriverBackend.getValue().c_str(),
+        DriverExecutionContract.getValue().c_str());
   }
   if (!Report) {
     WithColor::error() << takeLastError(Sess) << "\n";

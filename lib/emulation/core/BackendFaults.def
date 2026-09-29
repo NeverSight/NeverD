@@ -1,0 +1,26 @@
+//===- BackendFaults.def - CPU fault vocabulary --------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Stable fault names and memory-event classifications. A fault
+/// describes an observed stop; it does not imply Windows exception dispatch.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_BACKEND_FAULT_KIND
+NEVERD_BACKEND_FAULT_KIND(UnmappedMemory, "unmapped_memory")
+NEVERD_BACKEND_FAULT_KIND(Protection, "protection")
+NEVERD_BACKEND_FAULT_KIND(InvalidMemoryRange, "invalid_memory_range")
+NEVERD_BACKEND_FAULT_KIND(InvalidInstruction, "invalid_instruction")
+NEVERD_BACKEND_FAULT_KIND(Interrupt, "interrupt")
+NEVERD_BACKEND_FAULT_KIND(UnhandledException, "unhandled_exception")
+#endif
+
+#ifdef NEVERD_BACKEND_ACCESS_KIND
+NEVERD_BACKEND_ACCESS_KIND(Read, "read")
+NEVERD_BACKEND_ACCESS_KIND(Write, "write")
+NEVERD_BACKEND_ACCESS_KIND(Execute, "execute")
+#endif

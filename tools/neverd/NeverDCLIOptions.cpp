@@ -16,6 +16,7 @@
 #include "NeverDCLI.h"
 
 #include "neverd/emulation/DriverProfile.h"
+#include "neverd/emulation/ExecutionBackend.h"
 
 using namespace llvm;
 
@@ -1070,6 +1071,15 @@ cl::opt<unsigned long long> DriverInstructionLimit(
     cl::desc("Maximum guest instructions (must be positive)"),
     cl::init(emulation::profile::DefaultInstructionLimit),
     cl::sub(EmulateDriverCmd));
+cl::opt<std::string> DriverBackend(emulation::execution::BackendOption,
+                                   cl::desc(emulation::execution::BackendHelp),
+                                   cl::init(emulation::execution::Auto),
+                                   cl::sub(EmulateDriverCmd));
+cl::opt<std::string>
+    DriverExecutionContract(emulation::execution::ContractOption,
+                            cl::desc(emulation::execution::ContractHelp),
+                            cl::init(emulation::execution::Legacy),
+                            cl::sub(EmulateDriverCmd));
 cl::opt<std::string> DriverScenarioFile(
     "scenario", cl::desc("Strict driver lifecycle scenario JSON file"),
     cl::value_desc("path"), cl::init(""), cl::sub(EmulateDriverCmd));

@@ -142,7 +142,9 @@ add_custom_target(check-neverd-capabilities
 
 # --- NeverD component libraries ---
 option(NEVERD_ENABLE_DRIVER_EMULATION
-       "Enable bounded x64 Windows driver initialization with Unicorn" OFF)
+       "Enable bounded x64 Windows driver execution" OFF)
+option(NEVERD_EMULATION_BACKEND_KVM "Build the Linux x64 KVM adapter" ON)
+option(NEVERD_EMULATION_BACKEND_WHP "Build the Windows x64 WHP adapter" ON)
 include(${CMAKE_SOURCE_DIR}/cmake/NeverDUnicorn.cmake)
 if(NEVERD_ENABLE_DRIVER_EMULATION)
     neverd_require_unicorn()

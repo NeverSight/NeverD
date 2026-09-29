@@ -38,6 +38,15 @@ prebuilt-LLVM guidance.
 
 ## Driver emulation checks
 
+`HardwareBackendTests.cpp` exercises the native checked backend on supported
+hosts: high virtual addresses, pre-effect observer stops, RAM aliases, context
+restore against current mappings, fault lifetime, bounded loops, unsupported
+instructions and driver fixture comparisons. It runs in
+`NeverDDriverEmulationTests` and skips explicitly when no native backend is
+available. Linux runs exercise KVM; WHP needs a separate Windows runtime run.
+`HardwareBackendPublicTests.cpp` protects backend selection and the unchanged
+v1 C ABI. Focus hardware checks with `--gtest_filter='HardwareBackend.*:BackendSelection.*'`.
+
 Enable `NEVERD_ENABLE_DRIVER_EMULATION=ON` together with `BUILD_TESTING=ON`
 to build the focused execution suite and the shared C API/CLI checks:
 

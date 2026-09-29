@@ -1,0 +1,43 @@
+//===- X64Machine.def - Checked machine constants -------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_X64_MACHINE_VALUE
+NEVERD_X64_MACHINE_VALUE(PageSize, memory::PageSize)
+NEVERD_X64_MACHINE_VALUE(PageBits, 12)
+NEVERD_X64_MACHINE_VALUE(TableBits, 9)
+NEVERD_X64_MACHINE_VALUE(TableLevels, 4)
+NEVERD_X64_MACHINE_VALUE(TableEntries, 512)
+NEVERD_X64_MACHINE_VALUE(TableReserve, memory::ProjectionReserve)
+NEVERD_X64_MACHINE_VALUE(FirstTableRoot, memory::PageSize)
+NEVERD_X64_MACHINE_VALUE(SecondTableRoot, 2 * memory::PageSize)
+NEVERD_X64_MACHINE_VALUE(FirstChildTable, 3 * memory::PageSize)
+NEVERD_X64_MACHINE_VALUE(MaxRAM, memory::MaxRAM)
+NEVERD_X64_MACHINE_VALUE(MaxInstructionBytes, 15)
+NEVERD_X64_MACHINE_VALUE(WordBytes, 8)
+NEVERD_X64_MACHINE_VALUE(WordBits, 64)
+NEVERD_X64_MACHINE_VALUE(DWordBytes, 4)
+NEVERD_X64_MACHINE_VALUE(XmmCount, 16)
+NEVERD_X64_MACHINE_VALUE(Present, 1)
+NEVERD_X64_MACHINE_VALUE(Writable, 2)
+NEVERD_X64_MACHINE_VALUE(NoExecute, 1ull << 63)
+NEVERD_X64_MACHINE_VALUE(AddressMask, 0x000ffffffffff000ull)
+NEVERD_X64_MACHINE_VALUE(UserMax, 0x00007fffffffffffull)
+NEVERD_X64_MACHINE_VALUE(KernelMin, 0xffff800000000000ull)
+NEVERD_X64_MACHINE_VALUE(CodeSelector, 8)
+NEVERD_X64_MACHINE_VALUE(DataSelector, 16)
+NEVERD_X64_MACHINE_VALUE(CodeType, 11)
+NEVERD_X64_MACHINE_VALUE(DataType, 3)
+NEVERD_X64_MACHINE_VALUE(SegmentLimit, 0xffffffffu)
+NEVERD_X64_MACHINE_VALUE(CR0, 0x80010033)
+NEVERD_X64_MACHINE_VALUE(CR4, 0x620)
+NEVERD_X64_MACHINE_VALUE(EFER, 0xd00)
+NEVERD_X64_MACHINE_VALUE(InitialFlags, 0x202)
+NEVERD_X64_MACHINE_VALUE(TrapFlag, 0x100)
+NEVERD_X64_MACHINE_VALUE(ReservedFlag, 0x2)
+NEVERD_X64_MACHINE_VALUE(AllowedFlags, 0xed7)
+NEVERD_X64_MACHINE_VALUE(DebugVector, 1)
+NEVERD_X64_MACHINE_VALUE(DebugSingleStep, 1ull << 14)
+NEVERD_X64_MACHINE_VALUE(MaxCR8, 0xf)
+#endif

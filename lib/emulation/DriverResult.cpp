@@ -658,6 +658,19 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::NTStatus, nullptr},
       {field::NTSuccess, nullptr},
       {field::Fault, nullptr}};
+  if (Result.Configuration.ReportBackendSelection ||
+      Result.Configuration.Backend != ExecutionBackendKind::Unicorn ||
+      Result.Configuration.Contract != ExecutionContract::Legacy) {
+    Root[execution::RequestedBackend] =
+        executionBackendName(Result.Configuration.Backend);
+    Root[execution::SelectedBackend] =
+        executionBackendName(Result.SelectedBackend);
+    Root[execution::ExecutionContract] =
+        executionContractName(Result.Configuration.Contract);
+    Root[execution::SelectionReason] = Result.BackendSelectionReason;
+    if (Result.Configuration.Contract == ExecutionContract::CheckedX64)
+      Root[field::Profile] = execution::CheckedX64;
+  }
   Root[field::Registry] = registryJSON(Result.Registry);
   llvm::json::Object Exports;
   for (const auto &[Name, Present] : Result.Configuration.KernelExports)

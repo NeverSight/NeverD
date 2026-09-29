@@ -568,6 +568,7 @@ foreach(_driver_user_mapping_variable NEVERD_WDM_USER_MAPPING_FIXTURE
 endforeach()
 
 add_neverd_unittest(NeverDDriverEmulationTests
+  HardwareBackendTests.cpp
   DriverWDMUserMappingTests.cpp
   DriverWDMNeitherTests.cpp
   DriverWDMSEHTests.cpp
@@ -694,6 +695,7 @@ if(TARGET neverd_shared AND TARGET neverd)
   # Keep public tests on the shared engine, without a second static copy of
   # the emulation component or LLVM's process-global registries.
   add_neverd_unittest(NeverDDriverEmulationPublicTests
+    HardwareBackendPublicTests.cpp
     DriverEmulationPublicTests.cpp
     DriverScenarioPublicTests.cpp
   DriverD3ColdPublicTests.cpp

@@ -1,0 +1,11 @@
+//===- WindowsExecutionDiagnostics.def - CPU environment diagnostics ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(Initialize, "cannot initialize x64 instruction policy")
+NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(Decode, "instruction cannot be decoded by the execution policy")
+NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(Extent, "CPU and instruction policy disagree on instruction extent")
+NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(Rejected, "unmodeled CPU environment instruction: ")
+NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(Destination, "environment read has an unsupported full-width destination")
+NEVERD_WINDOWS_EXECUTION_DIAGNOSTIC(ThreadProfile, "FS/GS memory access requires an unsupported Windows thread profile")

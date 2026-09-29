@@ -1,4 +1,4 @@
-//===- X64ExecutionPolicy.h - Driver CPU execution policy -----------------===//
+//===- WindowsX64ExecutionPolicy.h - Driver CPU execution policy --------===//
 //
 // NeverD Decompiler
 //
@@ -9,10 +9,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_EMULATION_X64EXECUTIONPOLICY_H
-#define NEVERD_EMULATION_X64EXECUTIONPOLICY_H
+#ifndef NEVERD_EMULATION_WINDOWS_X64EXECUTIONPOLICY_H
+#define NEVERD_EMULATION_WINDOWS_X64EXECUTIONPOLICY_H
 
-#include "X64Registers.h"
+#include "../X64Registers.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -23,12 +23,13 @@
 
 namespace neverd::emulation {
 
-class X64ExecutionPolicy {
+class WindowsX64ExecutionPolicy {
 public:
-  X64ExecutionPolicy() = default;
-  X64ExecutionPolicy(const X64ExecutionPolicy &) = delete;
-  X64ExecutionPolicy &operator=(const X64ExecutionPolicy &) = delete;
-  ~X64ExecutionPolicy();
+  WindowsX64ExecutionPolicy() = default;
+  WindowsX64ExecutionPolicy(const WindowsX64ExecutionPolicy &) = delete;
+  WindowsX64ExecutionPolicy &
+  operator=(const WindowsX64ExecutionPolicy &) = delete;
+  ~WindowsX64ExecutionPolicy();
   llvm::Error initialize();
   struct Action {
     enum class Kind { ReadIRQL, ReadCurrentThread };
@@ -48,4 +49,4 @@ private:
 };
 
 } // namespace neverd::emulation
-#endif // NEVERD_EMULATION_X64EXECUTIONPOLICY_H
+#endif // NEVERD_EMULATION_WINDOWS_X64EXECUTIONPOLICY_H

@@ -4,7 +4,20 @@
 
 # Windows 驱动模拟
 
-NeverD 的可选驱动模拟器执行受支持的 x64 WDM 驱动的 PE 入口点，并可在卸载前执行显式指定的请求场景（默认串行）。它使用 Unicorn 执行 CPU 指令，使用 NeverD 自有的有界 Windows 环境模型。它不会将驱动加载到宿主内核，也不会把来宾 API 调用转发给宿主操作系统服务。
+NeverD 的可选驱动模拟器执行受支持的 x64 WDM 驱动的 PE 入口点，并可在卸载前执行显式指定的请求场景（默认串行）。它默认使用 Unicorn 执行 CPU 指令，使用 NeverD 自有的有界 Windows 环境模型。它不会将驱动加载到宿主内核，也不会把来宾 API 调用转发给宿主操作系统服务。
+
+## 执行后端
+
+默认 `driver-strict` 契约继续使用 Unicorn。新增实验性 `checked-x64-v1` 整数执行配置：`--backend auto` 在 Linux x86_64 选择 KVM，在 Windows x64 选择 WHP。显式选择 `kvm` 或 `whp` 不会回退；硬件不可用或契约不匹配在执行前报错。
+
+硬件路径逐条预检指令和访存，再单步执行，保留 Windows 对象检查、写入观察、RAM 别名和仅保存 CPU 的上下文。目前拒绝 SIMD/x87、REP、加锁操作、内存读改写、跨页数据访问、MMIO 和未建模的 CPU 行为，不代表下文所有驱动场景均已兼容，也尚不支持其他系统或用户进程。超时与取消在有界指令之间检查；这不是通用的异步抢占 VM 执行器。guest 开始执行后不会换后端重跑。
+
+构建选项为 `NEVERD_EMULATION_BACKEND_KVM`、`NEVERD_EMULATION_BACKEND_WHP`。Windows API 从系统 DLL 动态加载；KVM 要求当前用户能访问 `/dev/kvm`，模拟器不修改宿主权限。WHP 仍需 Windows 实机运行验证，交叉编译不能代替。新增 C 入口 `neverd_emulate_driver_backend_json`，现有 v1 结构和入口不变；新报告包含请求/实际后端、执行契约及选择原因。
+
+```bash
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --backend auto --execution-contract checked-x64-v1
+```
 
 ## 构建与运行
 

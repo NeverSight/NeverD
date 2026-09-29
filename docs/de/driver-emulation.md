@@ -11,6 +11,19 @@ er Unicorn, für die begrenzte Windows-Umgebung NeverDs eigenes Modell. Er lädt
 den Treiber nicht in den Host-Kernel und leitet Gast-API-Aufrufe nicht an
 Betriebssystemdienste des Hosts weiter.
 
+## Ausführungsbackends
+
+Der Standardvertrag `driver-strict` verwendet weiterhin Unicorn. Der experimentelle Ganzzahlvertrag `checked-x64-v1` wählt mit `--backend auto` KVM auf Linux x86_64 beziehungsweise WHP auf Windows x64. Eine ausdrückliche Auswahl fällt nicht auf ein anderes Backend zurück; fehlende Hardware oder ein unpassender Vertrag führen vor der Ausführung zum Fehler.
+
+Anweisungen und Speicherzugriffe werden vor jedem Einzelschritt geprüft. Windows-Objektprüfungen, Schreibbeobachtungen und gemeinsame Aliase bleiben erhalten. SIMD/x87, REP, gesperrte Operationen, Speicher-Lese-Änderungs-Schreiboperationen, seitenübergreifende Datenzugriffe, MMIO, andere Betriebssysteme und Benutzerprozesse sind ausgeschlossen. Zeitlimits und Abbruch werden zwischen begrenzten Anweisungen geprüft. Nach Ausführungsbeginn erfolgt kein Neustart auf einem anderen Backend. Die unten beschriebene vollständige Treiberabdeckung wird nicht zugesichert.
+
+Optionen: `NEVERD_EMULATION_BACKEND_KVM`, `NEVERD_EMULATION_BACKEND_WHP`. KVM benötigt Zugriff auf `/dev/kvm`. WHP lädt die System-DLL dynamisch und benötigt noch Laufzeitvalidierung auf Windows. Die neue C-API `neverd_emulate_driver_backend_json` erhält die v1-ABI. Berichte nennen Backend, Vertrag und Auswahlgrund.
+
+```bash
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --backend auto --execution-contract checked-x64-v1
+```
+
 ## Bauen und ausführen
 
 Die Funktion muss ausdrücklich aktiviert werden und ist unabhängig von `BUILD_TESTING`:

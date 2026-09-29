@@ -1,0 +1,6 @@
+//===- KvmProtocol.def - Linux backend protocol names ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+NEVERD_KVM_STRING(Device, "/dev/kvm")

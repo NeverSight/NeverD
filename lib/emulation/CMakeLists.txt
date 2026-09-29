@@ -1,10 +1,23 @@
+add_neverd_component_library(NeverDEmulationCore
+  GuestMemory.cpp
+  core/ExecutionBackend.cpp
+  core/PhysicalMemory.cpp
+  arch/x86_64/CheckedX64Backend.cpp
+  arch/x86_64/X64PageTables.cpp
+  backends/kvm/KvmMachine.cpp
+  backends/whp/WhpMachine.cpp)
+
+add_neverd_component_library(NeverDEmulationUnicorn
+  unicorn/UnicornBackend.cpp
+  LINK_COMPONENTS EmulationCore
+  LINK_LIBS unicorn)
+
 add_neverd_component_library(NeverDEmulation
+  core/BackendRegistry.cpp
   DriverResult.cpp
   DriverScenario.cpp
   DriverSession.cpp
-  GuestMemory.cpp
-  X64ExecutionPolicy.cpp
-  unicorn/UnicornBackend.cpp
+  windows/WindowsX64ExecutionPolicy.cpp
   windows/DriverImage.cpp
   windows/KernelExportRegistry.cpp
   windows/KernelException.cpp
@@ -71,8 +84,16 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelAPIIRQL.cpp
   windows/DeviceLifecycle.cpp
   windows/KernelRegistry.cpp
-  LINK_COMPONENTS Loader
-  LINK_LIBS unicorn)
+  LINK_COMPONENTS Loader EmulationCore EmulationUnicorn)
 if(WIN32)
   target_compile_definitions(NeverDEmulation PRIVATE NOMINMAX)
+  target_compile_definitions(NeverDEmulationCore PRIVATE NOMINMAX)
+  target_compile_definitions(NeverDEmulationUnicorn PRIVATE NOMINMAX)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NEVERD_EMULATION_BACKEND_KVM)
+  target_compile_definitions(NeverDEmulationCore PRIVATE NEVERD_EMULATION_KVM=1)
+endif()
+if(WIN32 AND NEVERD_EMULATION_BACKEND_WHP)
+  target_compile_definitions(NeverDEmulationCore PRIVATE NEVERD_EMULATION_WHP=1)
 endif()

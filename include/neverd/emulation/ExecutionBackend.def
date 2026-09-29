@@ -1,0 +1,28 @@
+//===- ExecutionBackend.def - Public execution selection vocabulary -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_EXECUTION_BACKEND
+NEVERD_EXECUTION_BACKEND(Auto, "auto")
+NEVERD_EXECUTION_BACKEND(Unicorn, "unicorn")
+NEVERD_EXECUTION_BACKEND(KVM, "kvm")
+NEVERD_EXECUTION_BACKEND(WHP, "whp")
+#endif
+#ifdef NEVERD_EXECUTION_CONTRACT
+NEVERD_EXECUTION_CONTRACT(Legacy, "driver-strict")
+NEVERD_EXECUTION_CONTRACT(CheckedX64, "checked-x64-v1")
+#endif
+#ifdef NEVERD_EXECUTION_TEXT
+NEVERD_EXECUTION_TEXT(BackendOption, "backend")
+NEVERD_EXECUTION_TEXT(BackendHelp, "CPU backend: auto, unicorn, kvm, whp")
+NEVERD_EXECUTION_TEXT(ContractOption, "execution-contract")
+NEVERD_EXECUTION_TEXT(ContractHelp, "Execution contract: driver-strict or checked-x64-v1")
+NEVERD_EXECUTION_TEXT(RequestedBackend, "requested_backend")
+NEVERD_EXECUTION_TEXT(SelectedBackend, "selected_backend")
+NEVERD_EXECUTION_TEXT(ExecutionContract, "execution_contract")
+NEVERD_EXECUTION_TEXT(SelectionReason, "backend_selection_reason")
+NEVERD_EXECUTION_TEXT(LegacySelection, "driver-strict requires the complete Unicorn observation contract")
+NEVERD_EXECUTION_TEXT(HostSelection, "selected the native backend for this host and checked contract")
+NEVERD_EXECUTION_TEXT(ExplicitSelection, "explicit backend selection")
+#endif

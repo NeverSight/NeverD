@@ -1,0 +1,38 @@
+//===- HardwareBackendCases.def - Hardware contract fixtures --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_HARDWARE_TEST_VALUE
+NEVERD_HARDWARE_TEST_VALUE(Code, 0xfffff80000100000ull)
+NEVERD_HARDWARE_TEST_VALUE(Data, 0x200000)
+NEVERD_HARDWARE_TEST_VALUE(Alias, 0x400000)
+NEVERD_HARDWARE_TEST_VALUE(Stack, 0x800000)
+NEVERD_HARDWARE_TEST_VALUE(Value, 42)
+NEVERD_HARDWARE_TEST_VALUE(Updated, 123)
+NEVERD_HARDWARE_TEST_VALUE(Timeout, 1000000)
+NEVERD_HARDWARE_TEST_VALUE(MemoryPages, 16)
+NEVERD_HARDWARE_TEST_VALUE(ArithmeticFlags, 0x257)
+NEVERD_HARDWARE_TEST_VALUE(RemapIterations, 32)
+#endif
+#ifdef NEVERD_HARDWARE_TEST_CODE
+// mov eax, 42; mov [rcx], rax; mov rdx, [rcx]; nop
+NEVERD_HARDWARE_TEST_CODE(StoreLoad, 0xb8, 0x2a, 0, 0, 0, 0x48, 0x89, 0x01, 0x48, 0x8b, 0x11, 0x90)
+// mov rax, [rcx]; nop
+NEVERD_HARDWARE_TEST_CODE(Load, 0x48, 0x8b, 0x01, 0x90)
+// mov [rcx], rax; nop
+NEVERD_HARDWARE_TEST_CODE(Store, 0x48, 0x89, 0x01, 0x90)
+// jmp $
+NEVERD_HARDWARE_TEST_CODE(Loop, 0xeb, 0xfe)
+// rep movsb -- deliberately outside checked-x64-v1
+NEVERD_HARDWARE_TEST_CODE(Unsupported, 0xf3, 0xa4)
+// mov eax, -1; add eax, 1; nop
+NEVERD_HARDWARE_TEST_CODE(Arithmetic, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x83, 0xc0, 0x01, 0x90)
+#endif
+#ifdef NEVERD_HARDWARE_DRIVER_CASE
+NEVERD_HARDWARE_DRIVER_CASE(Success, "success.sys")
+NEVERD_HARDWARE_DRIVER_CASE(Failure, "failure.sys")
+NEVERD_HARDWARE_DRIVER_CASE(Fault, "fault.sys")
+NEVERD_HARDWARE_DRIVER_CASE(Unknown, "unknown.sys")
+NEVERD_HARDWARE_DRIVER_CASE(Objects, "opaque.sys")
+#endif

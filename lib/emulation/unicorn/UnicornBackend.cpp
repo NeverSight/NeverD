@@ -48,28 +48,6 @@ int registerID(X64Register Register) {
 }
 } // namespace
 
-const char *backendFaultKindName(BackendFaultKind Kind) {
-  switch (Kind) {
-#define NEVERD_UNICORN_FAULT_KIND(Name, Spelling)                              \
-  case BackendFaultKind::Name:                                                 \
-    return Spelling;
-#include "UnicornFaults.def"
-#undef NEVERD_UNICORN_FAULT_KIND
-  }
-  llvm_unreachable("unknown backend fault kind");
-}
-
-const char *backendAccessKindName(BackendAccessKind Kind) {
-  switch (Kind) {
-#define NEVERD_UNICORN_ACCESS_KIND(Name, Spelling)                             \
-  case BackendAccessKind::Name:                                                \
-    return Spelling;
-#include "UnicornFaults.def"
-#undef NEVERD_UNICORN_ACCESS_KIND
-  }
-  llvm_unreachable("unknown backend access kind");
-}
-
 struct UnicornBackend::Impl {
   struct MMIORegion {
     Impl *Backend;
@@ -360,21 +338,14 @@ struct UnicornBackend::Impl {
   }
 };
 
-struct BackendContext::Impl {
+struct UnicornContext final : BackendContext::Storage {
   uc_context *Context = nullptr;
-  std::weak_ptr<const void> Owner;
 
-  ~Impl() {
+  ~UnicornContext() override {
     if (Context)
       uc_context_free(Context);
   }
 };
-
-BackendContext::BackendContext(std::unique_ptr<Impl> State)
-    : State(std::move(State)) {}
-BackendContext::~BackendContext() = default;
-BackendContext::BackendContext(BackendContext &&) noexcept = default;
-BackendContext &BackendContext::operator=(BackendContext &&) noexcept = default;
 
 UnicornBackend::UnicornBackend(std::unique_ptr<Impl> State)
     : State(std::move(State)) {}
@@ -779,7 +750,7 @@ llvm::Error UnicornBackend::setXmm(unsigned Register, const XmmValue &Value) {
 llvm::Expected<std::unique_ptr<BackendContext>> UnicornBackend::saveContext() {
   if (State->FirstFault || State->CallbackFailed || State->MMIOFailed)
     return failure("cannot save a faulted CPU instance");
-  auto Saved = std::make_unique<BackendContext::Impl>();
+  auto Saved = std::make_unique<UnicornContext>();
   Saved->Owner = State->Identity;
   if (auto E = check(uc_context_alloc(State->Engine, &Saved->Context),
                      "allocate CPU context"))
@@ -798,8 +769,10 @@ llvm::Error UnicornBackend::saveContext(BackendContext &Context) {
     return failure("CPU context belongs to another backend instance");
   if (State->FirstFault || State->CallbackFailed || State->MMIOFailed)
     return failure("cannot save a faulted CPU instance");
-  return check(uc_context_save(State->Engine, Context.State->Context),
-               "save CPU context");
+  return check(
+      uc_context_save(State->Engine,
+                      static_cast<UnicornContext &>(*Context.State).Context),
+      "save CPU context");
 }
 
 llvm::Error UnicornBackend::restoreContext(const BackendContext &Context) {
@@ -811,7 +784,9 @@ llvm::Error UnicornBackend::restoreContext(const BackendContext &Context) {
     return failure("cannot restore a faulted CPU instance");
   if (State->Running)
     return failure("cannot restore CPU context during guest execution");
-  if (auto E = check(uc_context_restore(State->Engine, Context.State->Context),
+  if (auto E = check(uc_context_restore(
+                         State->Engine,
+                         static_cast<UnicornContext &>(*Context.State).Context),
                      "restore CPU context"))
     return E;
   State->InstructionPC = State->currentPC();

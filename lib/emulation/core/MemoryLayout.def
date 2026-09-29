@@ -1,0 +1,8 @@
+//===- MemoryLayout.def - Bounded physical backing policy -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+NEVERD_MEMORY_VALUE(PageSize, 4096)
+NEVERD_MEMORY_VALUE(ProjectionReserve, 8 * 1024 * 1024)
+NEVERD_MEMORY_VALUE(MaxRAM, 1024ull * 1024 * 1024)

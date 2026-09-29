@@ -956,13 +956,25 @@ backend.
 
 ## Windows driver emulation
 
+The execution boundary now lives in `core/ExecutionBackend.h`; backend-specific
+CPU snapshots retain instance ownership without restoring memory. The
+`NeverDEmulationCore` target owns the checked hardware runner and shared physical
+backing, `NeverDEmulationUnicorn` owns the software adapter, and `NeverDEmulation`
+composes them with the existing Windows models. `arch/x86_64/X64PageTables.cpp`
+materializes virtual mappings for KVM/WHP. Windows CR8/GS admission belongs to
+`windows/WindowsX64ExecutionPolicy`, not the hardware adapters. The experimental
+`checked-x64-v1` integer contract is explicitly narrower than the existing
+`driver-strict` contract; unsupported accesses stop before native execution.
+See the backend section in [driver emulation](driver-emulation.md).
+
 `lib/emulation` is an optional execution component, enabled by
 `NEVERD_ENABLE_DRIVER_EMULATION`. The `emulate-driver` CLI reaches it through
 the public C API. `DriverSession` owns bounded x64 WDM initialization and
 optional serial create/IOCTL/read/write/cleanup/close/unload invocations;
 Windows image mapping consumes the existing loader's complete `BinaryImage`,
-and the Windows model owns guest objects and API semantics. The Unicorn adapter
-owns CPU execution and the authoritative guest memory. This path does not use
+and the Windows model owns guest objects and API semantics. Under `driver-strict`,
+the Unicorn adapter owns CPU execution and authoritative guest memory; checked
+hardware execution uses the shared backing described above. This path does not use
 the experimental native translation pipeline or alter its supported profile.
 
 Unicorn is configured once through `cmake/NeverDUnicorn.cmake`, shared with

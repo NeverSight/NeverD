@@ -17,6 +17,7 @@
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/DriverRegistry.h"
 #include "neverd/emulation/DriverUserMemory.h"
+#include "neverd/emulation/ExecutionBackend.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -99,6 +100,9 @@ struct DriverRequest {
 /// All pointers describe guest addresses, never native pointers. No host OS
 /// services are forwarded. Unsupported APIs and CPU environment effects stop.
 struct DriverOptions {
+  ExecutionBackendKind Backend = ExecutionBackendKind::Unicorn;
+  ExecutionContract Contract = ExecutionContract::Legacy;
+  bool ReportBackendSelection = false;
   uint64_t InstructionLimit = profile::DefaultInstructionLimit;
   uint64_t MemoryLimit = profile::DefaultMemoryLimit;
   uint64_t EventLimit = profile::DefaultEventLimit;
@@ -187,6 +191,8 @@ struct DriverFault {
 };
 
 struct DriverResult {
+  ExecutionBackendKind SelectedBackend = ExecutionBackendKind::Unicorn;
+  std::string BackendSelectionReason;
   DriverOptions Configuration;
   DriverStopReason Stop = DriverStopReason::EngineError;
   uint64_t PC = 0;

@@ -6,6 +6,19 @@
 
 NeverD 的選用驅動程式模擬器執行受支援 x64 WDM 驅動程式的 PE 進入點，並可在卸載前執行明確指定的循序請求情境。它使用 Unicorn 執行 CPU 指令，使用 NeverD 自有的有界 Windows 環境模型。它不會將驅動程式載入主機核心，也不會把客體 API 呼叫轉送給主機作業系統服務。
 
+## 執行後端
+
+預設 `driver-strict` 契約繼續使用 Unicorn。實驗性 `checked-x64-v1` 整數設定以 `--backend auto` 在 Linux x86_64 選擇 KVM，在 Windows x64 選擇 WHP；明確選擇不會降級。硬體不可用或契約不符會在執行前失敗。
+
+每條指令與記憶體存取先經檢查，再單步執行；保留 Windows 物件檢查、寫入觀察及共享別名。目前不支援 SIMD/x87、REP、鎖定操作、記憶體讀改寫、跨頁資料存取、MMIO、其他 OS 或使用者程序。逾時與取消在有界指令之間檢查，執行後不切换後端重跑。這不代表下文的完整驅動相容性。
+
+開關：`NEVERD_EMULATION_BACKEND_KVM`、`NEVERD_EMULATION_BACKEND_WHP`。KVM 需要 `/dev/kvm` 權限；WHP 動態載入系統 DLL，仍需 Windows 實機驗證。新 C 入口為 `neverd_emulate_driver_backend_json`，v1 ABI 不變。報告記錄後端、契約與選擇原因。
+
+```bash
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --backend auto --execution-contract checked-x64-v1
+```
+
 ## 建置與執行
 
 此功能須明確啟用，且不依賴 `BUILD_TESTING`：

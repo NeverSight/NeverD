@@ -10,9 +10,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "X64ExecutionPolicy.h"
 #include "gtest/gtest.h"
 #include "unicorn/UnicornBackend.h"
+#include "windows/WindowsX64ExecutionPolicy.h"
 
 #include "neverd/emulation/DriverProfile.h"
 
@@ -22,7 +22,7 @@ namespace neverd::emulation {
 namespace {
 class DriverExecutionPolicy : public ::testing::Test {
 protected:
-  X64ExecutionPolicy Policy;
+  WindowsX64ExecutionPolicy Policy;
   void SetUp() override {
     auto Error = Policy.initialize();
     ASSERT_FALSE(static_cast<bool>(Error)) << llvm::toString(std::move(Error));
@@ -88,13 +88,14 @@ TEST_F(DriverExecutionPolicy, NormalizesCR8ReadsToEveryFullWidthGPR) {
       X64Register::R12, X64Register::R13, X64Register::R14, X64Register::R15};
   for (unsigned I = 0; I < Registers.size(); ++I) {
     SCOPED_TRACE(I);
-    const std::array<uint8_t, 4> Bytes = {
-        uint8_t(I < 8 ? 0x44 : 0x45), 0x0f, 0x20, uint8_t(0xc0 | (I & 7))};
+    const std::array<uint8_t, 4> Bytes = {uint8_t(I < 8 ? 0x44 : 0x45), 0x0f,
+                                          0x20, uint8_t(0xc0 | (I & 7))};
     auto Action = Policy.inspect(Bytes, 0x1000);
     ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
     ASSERT_TRUE(*Action);
     EXPECT_EQ((**Action).Destination, Registers[I]);
-    EXPECT_EQ((**Action).Source, X64ExecutionPolicy::Action::Kind::ReadIRQL);
+    EXPECT_EQ((**Action).Source,
+              WindowsX64ExecutionPolicy::Action::Kind::ReadIRQL);
   }
   auto Ordinary = Policy.inspect({0x48, 0x89, 0xd8}, 0x1000);
   ASSERT_TRUE(bool(Ordinary)) << llvm::toString(Ordinary.takeError());
@@ -119,7 +120,7 @@ TEST_F(DriverExecutionPolicy, RecognizesOnlyExactFullWidthCurrentThreadReads) {
     ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
     ASSERT_TRUE(*Action);
     EXPECT_EQ((**Action).Source,
-              X64ExecutionPolicy::Action::Kind::ReadCurrentThread);
+              WindowsX64ExecutionPolicy::Action::Kind::ReadCurrentThread);
     EXPECT_FALSE((**Action).Destination);
   }
   // The compiler may fold the same intrinsic into a comparison. The backend
@@ -129,7 +130,7 @@ TEST_F(DriverExecutionPolicy, RecognizesOnlyExactFullWidthCurrentThreadReads) {
   ASSERT_TRUE(bool(Compare)) << llvm::toString(Compare.takeError());
   ASSERT_TRUE(*Compare);
   EXPECT_EQ((**Compare).Source,
-            X64ExecutionPolicy::Action::Kind::ReadCurrentThread);
+            WindowsX64ExecutionPolicy::Action::Kind::ReadCurrentThread);
   EXPECT_FALSE((**Compare).Destination);
   // Other segment identities, offsets, widths, stores and indexed addresses
   // must not turn into a current-thread query.
@@ -141,10 +142,10 @@ TEST_F(DriverExecutionPolicy, RecognizesOnlyExactFullWidthCurrentThreadReads) {
 }
 
 TEST_F(DriverExecutionPolicy, RejectedControlAccessCannotProduceAnAction) {
-  for (const std::vector<uint8_t> &Bytes : {
-           std::vector<uint8_t>{0x44, 0x0f, 0x22, 0xc0}, // Write CR8.
-           std::vector<uint8_t>{0x0f, 0x20, 0xc0},       // Read CR0.
-           std::vector<uint8_t>{0x44, 0x0f, 0x20, 0xc0, 0x90}}) {
+  for (const std::vector<uint8_t> &Bytes :
+       {std::vector<uint8_t>{0x44, 0x0f, 0x22, 0xc0}, // Write CR8.
+        std::vector<uint8_t>{0x0f, 0x20, 0xc0},       // Read CR0.
+        std::vector<uint8_t>{0x44, 0x0f, 0x20, 0xc0, 0x90}}) {
     auto Action = Policy.inspect(Bytes, 0x1000);
     ASSERT_FALSE(bool(Action));
     llvm::consumeError(Action.takeError());
@@ -163,8 +164,8 @@ TEST_F(DriverExecutionPolicy,
     };
     Check(CPU.map(0x1000, 2 * profile::PageSize, Read | Write | Execute));
     // xor eax,eax; stc; mov r9,cr8; pushfq; pop rax; nop.
-    const std::array<uint8_t, 10> Bytes = {
-        0x31, 0xc0, 0xf9, 0x45, 0x0f, 0x20, 0xc1, 0x9c, 0x58, 0x90};
+    const std::array<uint8_t, 10> Bytes = {0x31, 0xc0, 0xf9, 0x45, 0x0f,
+                                           0x20, 0xc1, 0x9c, 0x58, 0x90};
     Check(CPU.write(0x1000, Bytes));
     Check(CPU.setReg(X64Register::SP, 0x2ff0));
     Check(CPU.setReg(X64Register::CR8, Level));
@@ -188,7 +189,7 @@ TEST_F(DriverExecutionPolicy,
       ++Instructions;
       if (*Action) {
         EXPECT_EQ((**Action).Source,
-                  X64ExecutionPolicy::Action::Kind::ReadIRQL);
+                  WindowsX64ExecutionPolicy::Action::Kind::ReadIRQL);
         Pending = (**Action).Destination;
         NextPC = PC + Size;
         ++Actions;

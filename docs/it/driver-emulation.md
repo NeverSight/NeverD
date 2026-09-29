@@ -11,6 +11,19 @@ CPU e il modello circoscritto dell’ambiente Windows proprio di NeverD. Non
 carica il driver nel kernel dell’host e non inoltra le chiamate API del guest
 ai servizi del sistema operativo host.
 
+## Backend di esecuzione
+
+Il contratto predefinito `driver-strict` mantiene Unicorn. Il contratto sperimentale per interi `checked-x64-v1` seleziona KVM su Linux x86_64 o WHP su Windows x64 con `--backend auto`. Una scelta esplicita non passa a un altro backend; hardware assente o contratto incompatibile causano un errore prima dell’esecuzione.
+
+Istruzioni e accessi alla memoria sono controllati prima di ogni passo, conservando i controlli sugli oggetti Windows, le osservazioni delle scritture e gli alias condivisi. Sono esclusi SIMD/x87, REP, operazioni con lock, lettura-modifica-scrittura della memoria, accessi dati fra pagine, MMIO, altri OS e processi utente. Timeout e annullamento sono controllati fra istruzioni limitate; dopo l’avvio non si riparte su un altro backend. Non viene garantita tutta la compatibilità descritta sotto.
+
+Opzioni: `NEVERD_EMULATION_BACKEND_KVM`, `NEVERD_EMULATION_BACKEND_WHP`. KVM richiede accesso a `/dev/kvm`. WHP carica dinamicamente la DLL di sistema e richiede ancora verifiche su Windows. La nuova API C `neverd_emulate_driver_backend_json` mantiene l’ABI v1. I rapporti indicano backend, contratto e motivo della scelta.
+
+```bash
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --backend auto --execution-contract checked-x64-v1
+```
+
 ## Compilazione ed esecuzione
 
 La funzionalità richiede un’attivazione esplicita ed è indipendente da `BUILD_TESTING`:

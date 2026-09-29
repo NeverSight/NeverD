@@ -27,7 +27,9 @@ namespace {
 
 const char *runDriver(neverd_session_t Sess, const char *Path,
                       const char *ScenarioJSON,
-                      const neverd_driver_options_v1 *Options) {
+                      const neverd_driver_options_v1 *Options,
+                      const char *Backend = nullptr,
+                      const char *Contract = nullptr) {
   auto *S = toSession(Sess);
   if (!S)
     return nullptr;
@@ -52,6 +54,21 @@ const char *runDriver(neverd_session_t Sess, const char *Path,
     }
 #ifdef NEVERD_ENABLE_DRIVER_EMULATION
     emulation::DriverOptions EngineOptions;
+    if (Backend || Contract) {
+      auto Kind = emulation::parseExecutionBackend(Backend ? Backend : "");
+      if (!Kind) {
+        S->setError(llvm::toString(Kind.takeError()));
+        return nullptr;
+      }
+      auto Mode = emulation::parseExecutionContract(Contract ? Contract : "");
+      if (!Mode) {
+        S->setError(llvm::toString(Mode.takeError()));
+        return nullptr;
+      }
+      EngineOptions.Backend = *Kind;
+      EngineOptions.Contract = *Mode;
+      EngineOptions.ReportBackendSelection = true;
+    }
     if (Options) {
       EngineOptions.InstructionLimit = Options->instruction_limit;
       EngineOptions.MemoryLimit = Options->memory_limit;
@@ -118,4 +135,14 @@ neverd_emulate_driver_scenario_json(neverd_session_t Sess, const char *Path,
     return nullptr;
   }
   return runDriver(Sess, Path, ScenarioJSON, Options);
+}
+
+extern "C" const char *
+neverd_emulate_driver_backend_json(neverd_session_t Sess, const char *Path,
+                                   const char *ScenarioJSON,
+                                   const neverd_driver_options_v1 *Options,
+                                   const char *Backend, const char *Contract) {
+  // Empty names are rejected by the same parser as unknown names.
+  return runDriver(Sess, Path, ScenarioJSON, Options, Backend ? Backend : "",
+                   Contract ? Contract : "");
 }

@@ -426,6 +426,8 @@ extern llvm::cl::opt<unsigned long long> TranslateObjectGeneration;
 extern llvm::cl::opt<std::string> EmulateDriverInput;
 extern llvm::cl::opt<unsigned long long> DriverInstructionLimit;
 extern llvm::cl::opt<std::string> DriverScenarioFile;
+extern llvm::cl::opt<std::string> DriverBackend;
+extern llvm::cl::opt<std::string> DriverExecutionContract;
 
 //===----------------------------------------------------------------------===//
 // Command handlers

@@ -11,6 +11,19 @@ ejecutar la CPU y el modelo acotado de Windows propio de NeverD. No carga el
 controlador en el kernel del host ni reenvía las llamadas de API del invitado
 a los servicios del sistema operativo anfitrión.
 
+## Motores de ejecución
+
+El contrato predeterminado `driver-strict` mantiene Unicorn. El contrato experimental de enteros `checked-x64-v1` selecciona KVM en Linux x86_64 o WHP en Windows x64 con `--backend auto`. Una selección explícita no cambia a otro motor; la falta de hardware o un contrato incompatible falla antes de ejecutar.
+
+Se comprueban las instrucciones y los accesos a memoria antes de cada paso, conservando las comprobaciones de objetos Windows, las observaciones de escritura y los alias compartidos. Se excluyen SIMD/x87, REP, operaciones bloqueadas, lectura-modificación-escritura de memoria, accesos de datos entre páginas, MMIO, otros sistemas y procesos de usuario. Los límites de tiempo y la cancelación se comprueban entre instrucciones acotadas; nunca se reinicia en otro motor tras comenzar. Esto no garantiza toda la compatibilidad descrita a continuación.
+
+Opciones: `NEVERD_EMULATION_BACKEND_KVM`, `NEVERD_EMULATION_BACKEND_WHP`. KVM necesita acceso a `/dev/kvm`. WHP carga la DLL del sistema dinámicamente y aún requiere validación en Windows. La nueva API C `neverd_emulate_driver_backend_json` conserva la ABI v1. Los informes indican motor, contrato y motivo de selección.
+
+```bash
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --backend auto --execution-contract checked-x64-v1
+```
+
 ## Compilar y ejecutar
 
 La función requiere activación explícita y es independiente de `BUILD_TESTING`:
