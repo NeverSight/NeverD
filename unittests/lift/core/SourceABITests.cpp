@@ -69,9 +69,23 @@ TEST(SourceABI, NativeAArch64FullQRegisterRequiresVectorCarrier) {
   Bad = Hint;
   Bad.Architecture = Arch::X64;
   EXPECT_FALSE(validateSourceABI(Bad, Error));
+
+  Hint.Parameters.push_back({"next_payload", Vector});
+  Hint.Parameters[1].Location = {SourceABICarrierKind::FloatingRegister,
+                                 a64reg::V(1), 0, 16};
+  EXPECT_TRUE(validateSourceABI(Hint, Error)) << Error;
+  Bad = Hint;
+  Bad.Parameters[1].Location.RegisterOffset = a64reg::V(2);
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+  Bad = Hint;
+  Bad.Parameters.erase(Bad.Parameters.begin());
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+  Hint.Parameters[0].Type = NdType::makeFloat(8);
+  Hint.Parameters[0].Location.ValueBytes = 8;
+  EXPECT_TRUE(validateSourceABI(Hint, Error)) << Error;
 }
 
-TEST(SourceABI, NativeAArch64FullQRegisterEmitsExecutableSource) {
+TEST(SourceABI, NativeAArch64TwoFullQRegistersEmitExecutableSource) {
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
   Hint.Architecture = Arch::AArch64;
@@ -81,9 +95,11 @@ TEST(SourceABI, NativeAArch64FullQRegisterEmitsExecutableSource) {
                          8};
   auto Vector = NdType::makeInt(16);
   Vector->SourceName = kSourceAArch64Vector128CType;
-  Hint.Parameters = {{"payload", Vector}};
+  Hint.Parameters = {{"payload", Vector}, {"next_payload", Vector}};
   Hint.Parameters[0].Location = {SourceABICarrierKind::FloatingRegister,
                                  a64reg::V0, 0, 16};
+  Hint.Parameters[1].Location = {SourceABICarrierKind::FloatingRegister,
+                                 a64reg::V(1), 0, 16};
   std::string Error;
   ASSERT_TRUE(validateSourceABI(Hint, Error)) << Error;
 
@@ -93,7 +109,7 @@ TEST(SourceABI, NativeAArch64FullQRegisterEmitsExecutableSource) {
   LowBlock Block;
   Block.Id = 0;
   Block.StartAddr = Low.Entry;
-  Block.EndAddr = Low.Entry + 16;
+  Block.EndAddr = Low.Entry + 32;
   LowOp Extract;
   Extract.Opcode = NdOp::SUBBYTES;
   Extract.Addr = Low.Entry;
@@ -104,17 +120,36 @@ TEST(SourceABI, NativeAArch64FullQRegisterEmitsExecutableSource) {
   ExtractHigh.Addr = Low.Entry + 4;
   ExtractHigh.Output = NdVar::tmp(1, 8);
   ExtractHigh.Inputs[1] = NdVar::cst(8, 4);
+  LowOp ExtractNext = Extract;
+  ExtractNext.Addr = Low.Entry + 8;
+  ExtractNext.Output = NdVar::tmp(2, 8);
+  ExtractNext.Inputs[0] = NdVar::reg(a64reg::V(1), 16);
+  LowOp ExtractNextHigh = ExtractNext;
+  ExtractNextHigh.Addr = Low.Entry + 12;
+  ExtractNextHigh.Output = NdVar::tmp(3, 8);
+  ExtractNextHigh.Inputs[1] = NdVar::cst(8, 4);
   LowOp Combine;
   Combine.Opcode = NdOp::INT_XOR;
-  Combine.Addr = Low.Entry + 8;
-  Combine.Output = NdVar::reg(a64reg::X0, 8);
+  Combine.Addr = Low.Entry + 16;
+  Combine.Output = NdVar::tmp(4, 8);
   Combine.addInput(Extract.Output);
   Combine.addInput(ExtractHigh.Output);
+  LowOp CombineNext = Combine;
+  CombineNext.Addr = Low.Entry + 20;
+  CombineNext.Output = NdVar::tmp(5, 8);
+  CombineNext.Inputs[0] = ExtractNext.Output;
+  CombineNext.Inputs[1] = ExtractNextHigh.Output;
+  LowOp CombineBoth = Combine;
+  CombineBoth.Addr = Low.Entry + 24;
+  CombineBoth.Output = NdVar::reg(a64reg::X0, 8);
+  CombineBoth.Inputs[0] = Combine.Output;
+  CombineBoth.Inputs[1] = CombineNext.Output;
   LowOp Return;
   Return.Opcode = NdOp::RETURN;
-  Return.Addr = Low.Entry + 12;
+  Return.Addr = Low.Entry + 28;
   Return.addInput(NdVar::reg(a64reg::X0, 8));
-  Block.Ops = {Extract, ExtractHigh, Combine, Return};
+  Block.Ops = {Extract, ExtractHigh, ExtractNext, ExtractNextHigh,
+               Combine, CombineNext, CombineBoth, Return};
   Low.Blocks = {Block};
   std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, Hint}};
   LowToMedConverter Converter;
@@ -168,9 +203,14 @@ int main(void) {
   uint8_t __attribute__((vector_size(16))) payload = {
       0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
       0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
-  return vector_forward(payload) ==
+  uint8_t __attribute__((vector_size(16))) next_payload = {
+      0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+      0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+  return vector_forward(payload, next_payload) ==
                  (UINT64_C(0xfedcba9876543210) ^
-                  UINT64_C(0xefcdab8967452301))
+                  UINT64_C(0xefcdab8967452301) ^
+                  UINT64_C(0x1122334455667788) ^
+                  UINT64_C(0x8877665544332211))
              ? 0 : 1;
 }
 )",

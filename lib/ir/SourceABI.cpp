@@ -401,8 +401,6 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     if (Location.Kind == SourceABICarrierKind::FloatingRegister)
       return (Type->Kind == NdTypeKind::Float || Vector128) &&
              TRI.isVectorReg(Location.RegisterOffset) &&
-             (!Vector128 ||
-              Location.RegisterOffset == TRI.FPParamRegs.front()) &&
              (!IsReturn || Location.RegisterOffset == TRI.FPReturnReg);
     if (Location.Kind == SourceABICarrierKind::IntegerRegister)
       return Type->Kind != NdTypeKind::Float &&
@@ -505,6 +503,8 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                       Hint.ReturnLocation.RegisterOffset);
   std::vector<std::pair<int64_t, int64_t>> StackRanges;
   size_t PhysicalCount = 0;
+  std::vector<uint64_t> FloatingRegisters;
+  bool HasNativeVector = false;
   for (const auto &Parameter : Hint.Parameters) {
     if (Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary &&
         Hint.Convention != SourceFunctionTypeHint::ConventionKind::Swift)
@@ -520,10 +520,17 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     const auto Locations = Parameter.Components.empty()
                                ? std::vector{Parameter.Location}
                                : Parameter.Components;
+    HasNativeVector |=
+        Hint.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+        Hint.Architecture == Arch::AArch64 && Parameter.Type &&
+        Parameter.Type->Kind == NdTypeKind::Int && Parameter.Type->Size == 16 &&
+        Parameter.Type->SourceName == kSourceAArch64Vector128CType;
     PhysicalCount += Locations.size();
     if (PhysicalCount > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
       return fail(Diagnostic, "Source parameter carrier budget exceeded");
     for (const auto &Location : Locations) {
+      if (Location.Kind == SourceABICarrierKind::FloatingRegister)
+        FloatingRegisters.push_back(Location.RegisterOffset);
       if (Location.Kind == SourceABICarrierKind::Stack) {
         const int64_t Begin = Location.EntryStackOffset;
         const int64_t End = Begin + Location.ValueBytes;
@@ -538,6 +545,16 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                     "Source parameters share one physical register");
       }
     }
+  }
+  if (HasNativeVector) {
+    if (FloatingRegisters.size() > TRI.FPParamRegs.size())
+      return fail(Diagnostic,
+                  "Native vector parameters exceed the floating register bank");
+    for (size_t Index = 0; Index < FloatingRegisters.size(); ++Index)
+      if (FloatingRegisters[Index] != TRI.FPParamRegs[Index])
+        return fail(Diagnostic,
+                    "Native vector parameters require a contiguous floating "
+                    "register prefix");
   }
   return true;
 }

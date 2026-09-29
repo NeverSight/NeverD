@@ -1228,8 +1228,7 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
             return Reject("native floating parameter has no entry-byte proof");
           const auto Bytes = EntryBytes->at(Parameter.RegOff);
           if (Bytes == 0xFFFF && Type->Kind == NdTypeKind::Int &&
-              Image.Arch == Arch::AArch64 &&
-              Parameter.RegOff == TRI.FPParamRegs.front()) {
+              Image.Arch == Arch::AArch64) {
             Source.Type = NdType::makeInt(16, Type->IsSigned);
             Source.Type->SourceName = kSourceAArch64Vector128CType;
             Source.Location.Kind = SourceABICarrierKind::FloatingRegister;

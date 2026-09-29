@@ -4679,6 +4679,33 @@ TEST(NativeSourceHints, FloatingParametersRequireProvenEntryBytes) {
     }
 }
 
+TEST(NativeSourceHints, TwoFullQInputsRequireIndependentEntryByteProofs) {
+  for (bool FullSecond : {false, true}) {
+    NativeFloatingFixture Fixture(Arch::AArch64, 8, true);
+    auto &Ops = Fixture.Med.Blocks[0].Ops;
+    for (unsigned Index = 0; Index != (FullSecond ? 2U : 1U); ++Index) {
+      MedOp Store;
+      Store.Opcode = NdOp::STORE;
+      Store.addInput(MedVar::makeConst(0x1080 + Index * 16, 8));
+      Store.addInput(Fixture.Med.Params[Index]);
+      Ops.insert(Ops.end() - 1, Store);
+    }
+    std::string Error;
+    const auto Hint = Fixture.infer(Error);
+    ASSERT_TRUE(Hint) << Error;
+    ASSERT_EQ(Hint->Parameters.size(), 2U);
+    EXPECT_EQ(Hint->Parameters[0].Type->SourceName,
+              kSourceAArch64Vector128CType);
+    EXPECT_EQ(Hint->Parameters[0].Location.ValueBytes, 16U);
+    EXPECT_EQ(Hint->Parameters[1].Type->SourceName,
+              FullSecond ? kSourceAArch64Vector128CType : "");
+    EXPECT_EQ(Hint->Parameters[1].Location.ValueBytes, FullSecond ? 16U : 8U);
+    for (unsigned Index = 0; Index != 2; ++Index)
+      EXPECT_EQ(Hint->Parameters[Index].Location.RegisterOffset,
+                getTargetRegInfo(Arch::AArch64).FPParamRegs[Index]);
+  }
+}
+
 TEST(NativeSourceHints,
      FloatingParameterEffectsSurviveAnUnprovedProvisionalReturn) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
