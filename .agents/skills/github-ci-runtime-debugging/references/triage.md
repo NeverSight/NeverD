@@ -54,8 +54,8 @@ Record all of the following:
 - the last known green run on the same leg.
 
 Check the run conclusion before interpreting a truncated log. The workflows use
-`cancel-in-progress: true`; a newer push can cancel the old run and mimic a killed or incomplete
-test process.
+`cancel-in-progress: true`, and closing a pull request cancels its unfinished runs; either a newer
+push or the close can cancel the old run and mimic a killed or incomplete test process.
 
 Do not rerun workflows, push debug commits, or create a temporary workflow for a read-only
 diagnosis unless the user has authorized those external changes.

@@ -14,13 +14,18 @@ on:
 permissions:
   contents: read
 
+# Qualify only the newest dev producer: each completion supersedes the older
+# in-flight run, as a newer push does for every other workflow.
 concurrency:
-  group: mobile-real-apps-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  group: mobile-real-apps-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
   trigger:
     name: Verify the upstream run identity
+    # A cancelled producer was superseded by a newer dev push, whose own
+    # completion schedules the replacement run; skip the whole graph.
+    if: ${{ github.event.workflow_run.conclusion != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
