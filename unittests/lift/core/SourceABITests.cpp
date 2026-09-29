@@ -34,6 +34,118 @@ using namespace neverd;
 
 void executeC(const std::string &Source, bool Math);
 
+TEST(SourceABI, NativeAArch64FullQRegisterRequiresVectorCarrier) {
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Hint.Architecture = Arch::AArch64;
+  Hint.HasExplicitABI = true;
+  Hint.ReturnType = NdType::makeVoid();
+  auto Vector = NdType::makeInt(16);
+  Vector->SourceName = kSourceAArch64Vector128CType;
+  Hint.Parameters = {{"payload", Vector}};
+  Hint.Parameters[0].Location = {SourceABICarrierKind::FloatingRegister,
+                                 a64reg::V0, 0, 16};
+  std::string Error;
+  ASSERT_TRUE(validateSourceABI(Hint, Error)) << Error;
+
+  auto Scalar = NdType::makeInt(16);
+  EXPECT_FALSE(equalSourceTypes(Vector, Scalar));
+  auto Bad = Hint;
+  Bad.Parameters[0].Type = Scalar;
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+  Bad = Hint;
+  Bad.Parameters[0].Location.ValueBytes = 8;
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+  Bad = Hint;
+  Bad.Parameters[0].Location.Kind = SourceABICarrierKind::IntegerRegister;
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+  Bad = Hint;
+  Bad.Parameters[0].Location.RegisterOffset =
+      getTargetRegInfo(Arch::AArch64).FPParamRegs[1];
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+  Bad = Hint;
+  Bad.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+  Bad = Hint;
+  Bad.Architecture = Arch::X64;
+  EXPECT_FALSE(validateSourceABI(Bad, Error));
+}
+
+TEST(SourceABI, NativeAArch64FullQRegisterEmitsExecutableSource) {
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Hint.Architecture = Arch::AArch64;
+  Hint.HasExplicitABI = true;
+  Hint.ReturnType = NdType::makeInt(8);
+  Hint.ReturnLocation = {SourceABICarrierKind::IntegerRegister, a64reg::X0, 0,
+                         8};
+  auto Vector = NdType::makeInt(16);
+  Vector->SourceName = kSourceAArch64Vector128CType;
+  Hint.Parameters = {{"payload", Vector}};
+  Hint.Parameters[0].Location = {SourceABICarrierKind::FloatingRegister,
+                                 a64reg::V0, 0, 16};
+  std::string Error;
+  ASSERT_TRUE(validateSourceABI(Hint, Error)) << Error;
+
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "vector_word_xor";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Low.Entry;
+  Block.EndAddr = Low.Entry + 16;
+  LowOp Extract;
+  Extract.Opcode = NdOp::SUBBYTES;
+  Extract.Addr = Low.Entry;
+  Extract.Output = NdVar::tmp(0, 8);
+  Extract.addInput(NdVar::reg(a64reg::V0, 16));
+  Extract.addInput(NdVar::cst(0, 4));
+  LowOp ExtractHigh = Extract;
+  ExtractHigh.Addr = Low.Entry + 4;
+  ExtractHigh.Output = NdVar::tmp(1, 8);
+  ExtractHigh.Inputs[1] = NdVar::cst(8, 4);
+  LowOp Combine;
+  Combine.Opcode = NdOp::INT_XOR;
+  Combine.Addr = Low.Entry + 8;
+  Combine.Output = NdVar::reg(a64reg::X0, 8);
+  Combine.addInput(Extract.Output);
+  Combine.addInput(ExtractHigh.Output);
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Low.Entry + 12;
+  Return.addInput(NdVar::reg(a64reg::X0, 8));
+  Block.Ops = {Extract, ExtractHigh, Combine, Return};
+  Low.Blocks = {Block};
+  std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, Hint}};
+  LowToMedConverter Converter;
+  Converter.setSourceCalleeTypeHints(&Hints);
+  auto Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+  Med.SourceTypeHint = Hint;
+  inferMedTypes(Med, Arch::AArch64);
+  ASSERT_TRUE(Med.SourceTypeHint);
+  auto High = MedToHighConverter().convert(Med, Arch::AArch64);
+  ASSERT_TRUE(High.SourceTypeHint);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+  OS.flush();
+  EXPECT_NE(Source.find("vector_size(16)"), std::string::npos) << Source;
+  executeC(Source + R"(
+int main(void) {
+  uint8_t __attribute__((vector_size(16))) payload = {
+      0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+      0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
+  return vector_word_xor(payload) ==
+                 (UINT64_C(0xfedcba9876543210) ^
+                  UINT64_C(0xefcdab8967452301))
+             ? 0 : 1;
+}
+)",
+           false);
+}
+
 TEST(SourceABI, EmptyBoundCallDoesNotAcquireUnrelatedRegisterArguments) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     const auto &TRI = getTargetRegInfo(Architecture);

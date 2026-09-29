@@ -59,6 +59,10 @@ std::optional<std::string> sourceValue(llvm::StringRef Text,
   if (Carrier && Source && Carrier->Kind == NdTypeKind::Struct &&
       Source->Kind == NdTypeKind::Struct && equalSourceTypes(Carrier, Source))
     return Text.str();
+  if (integerPair(Carrier) && integerPair(Source) &&
+      Source->SourceName == kSourceAArch64Vector128CType)
+    return "__builtin_bit_cast(" + typeToC(Source) + ", (" +
+           typeToC(Carrier) + ")(" + Text.str() + "))";
   if (integerPair(Carrier) && integerPair(Source))
     return "(" + typeToC(Source) + ")(" + Text.str() + ")";
   if (!scalar(Carrier) || !scalar(Source) || Carrier->Size != Source->Size)

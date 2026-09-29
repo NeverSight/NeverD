@@ -7,6 +7,11 @@
 
 namespace neverd {
 
+/// C vector spelling for an entire AArch64 q-register passed by value.
+/// Keep its 16 bytes distinct from a 128-bit integer's x-register ABI.
+inline constexpr char kSourceAArch64Vector128CType[] =
+    "uint8_t __attribute__((vector_size(16)))";
+
 /// Compare supported source types structurally, including fixed C callback
 /// signatures. Malformed, cyclic, and excessively deep types never compare
 /// equal, even when both references identify the same object.

@@ -1229,6 +1229,16 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
           if (!EntryBytes || !EntryBytes->count(Parameter.RegOff))
             return Reject("native floating parameter has no entry-byte proof");
           const auto Bytes = EntryBytes->at(Parameter.RegOff);
+          if (Bytes == 0xFFFF && Type->Kind == NdTypeKind::Int &&
+              Image.Arch == Arch::AArch64 &&
+              Parameter.RegOff == TRI.FPParamRegs.front()) {
+            Source.Type = NdType::makeInt(16, Type->IsSigned);
+            Source.Type->SourceName = kSourceAArch64Vector128CType;
+            Source.Location.Kind = SourceABICarrierKind::FloatingRegister;
+            Source.Location.RegisterOffset = Parameter.RegOff;
+            Hint.Parameters.push_back(std::move(Source));
+            continue;
+          }
           if (!Bytes || (Bytes & ~uint64_t(0xFF)))
             return Reject(
                 "native floating parameter observes non-scalar lanes");

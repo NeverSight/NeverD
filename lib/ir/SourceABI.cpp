@@ -31,6 +31,11 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
   case NdTypeKind::Void:
     return Left->Size == 0;
   case NdTypeKind::Int:
+    if (Left->Size == 16 &&
+        (Left->SourceName == kSourceAArch64Vector128CType ||
+         Right->SourceName == kSourceAArch64Vector128CType) &&
+        Left->SourceName != Right->SourceName)
+      return false;
     return Left->Size == 1 || Left->Size == 2 || Left->Size == 4 ||
            Left->Size == 8 || Left->Size == 16;
   case NdTypeKind::Float:
@@ -371,7 +376,13 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
   auto ValidLocation = [&](const TypeRef &Type,
                            const SourceABIValueLocation &Location,
                            bool IsReturn) {
-    if (!scalarType(Type) || Location.ValueBytes != Type->Size)
+    const bool Vector128 =
+        Hint.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+        Hint.Architecture == Arch::AArch64 && !IsReturn && Type &&
+        Type->Kind == NdTypeKind::Int && Type->Size == 16 &&
+        Type->SourceName == kSourceAArch64Vector128CType &&
+        Location.Kind == SourceABICarrierKind::FloatingRegister;
+    if ((!scalarType(Type) && !Vector128) || Location.ValueBytes != Type->Size)
       return false;
     if (Location.ExtendTo32Bits &&
         ((IsReturn &&
@@ -389,8 +400,10 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     if (Location.EntryStackOffset != 0)
       return false;
     if (Location.Kind == SourceABICarrierKind::FloatingRegister)
-      return Type->Kind == NdTypeKind::Float &&
+      return (Type->Kind == NdTypeKind::Float || Vector128) &&
              TRI.isVectorReg(Location.RegisterOffset) &&
+             (!Vector128 ||
+              Location.RegisterOffset == TRI.FPParamRegs.front()) &&
              (!IsReturn || Location.RegisterOffset == TRI.FPReturnReg);
     if (Location.Kind == SourceABICarrierKind::IntegerRegister)
       return Type->Kind != NdTypeKind::Float &&

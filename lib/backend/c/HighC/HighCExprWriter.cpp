@@ -2756,6 +2756,9 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     }
     if (pointerNeedsIntegerView(DeclaredType))
       return "(uintptr_t)" + Name;
+    if (DeclaredType &&
+        DeclaredType->SourceName == kSourceAArch64Vector128CType)
+      return "__builtin_bit_cast(__int128, " + Name + ")";
     return Name;
   }
   case ExprKind::Const: {
