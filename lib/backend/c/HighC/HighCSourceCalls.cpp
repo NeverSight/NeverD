@@ -696,7 +696,14 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     return bad("unsupported result type");
   for (const auto &Parameter : Signature.Parameters)
     if (!scalar(Parameter.Type) &&
-        sourceAggregateMembers(Parameter.Type).empty())
+        sourceAggregateMembers(Parameter.Type).empty() &&
+        !(Signature.HasExplicitABI &&
+          Signature.Origin ==
+              SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+          Parameter.Type && Parameter.Type->Kind == NdTypeKind::Int &&
+          Parameter.Type->Size == 16 &&
+          Parameter.Type->SourceName == kSourceAArch64Vector128CType &&
+          validateSourceABI(Signature, ABIDiagnostic)))
       return bad("unsupported parameter type");
   const bool Block = Hint.CallKind == Kind::BlockInvoke;
   if (Block &&

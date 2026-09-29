@@ -125,19 +125,50 @@ TEST(SourceABI, NativeAArch64FullQRegisterEmitsExecutableSource) {
   ASSERT_TRUE(Med.SourceTypeHint);
   auto High = MedToHighConverter().convert(Med, Arch::AArch64);
   ASSERT_TRUE(High.SourceTypeHint);
+
+  LowFunc Forward;
+  Forward.Entry = 0x1100;
+  Forward.Name = "vector_forward";
+  LowBlock ForwardBlock;
+  ForwardBlock.Id = 0;
+  ForwardBlock.StartAddr = Forward.Entry;
+  ForwardBlock.EndAddr = Forward.Entry + 8;
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = Forward.Entry;
+  Call.addInput(NdVar::cst(Low.Entry, 8));
+  LowOp ForwardReturn;
+  ForwardReturn.Opcode = NdOp::RETURN;
+  ForwardReturn.Addr = Forward.Entry + 4;
+  ForwardReturn.addInput(NdVar::reg(a64reg::X0, 8));
+  ForwardBlock.Ops = {Call, ForwardReturn};
+  Forward.Blocks = {ForwardBlock};
+  Converter.setSourceCallHintsEnabled(true);
+  auto ForwardMed =
+      Converter.convert(Forward, Arch::AArch64, BinaryFormat::MachO);
+  ForwardMed.SourceTypeHint = Hint;
+  const std::map<va_t, std::string> Names{{Low.Entry, Low.Name}};
+  recoverCallAbi(ForwardMed, Arch::AArch64, Names);
+  inferMedTypes(ForwardMed, Arch::AArch64);
+  MedToHighConverter HighConverter;
+  HighConverter.setFuncNames(&Names);
+  auto ForwardHigh = HighConverter.convert(ForwardMed, Arch::AArch64);
+  ASSERT_TRUE(ForwardHigh.SourceTypeHint);
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
   Options.TheArch = Arch::AArch64;
-  ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+  ASSERT_TRUE(HighCEmitter().emit({ForwardHigh, High}, OS, Options));
   OS.flush();
   EXPECT_NE(Source.find("vector_size(16)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_bit_cast(uint8_t"), std::string::npos)
+      << Source;
   executeC(Source + R"(
 int main(void) {
   uint8_t __attribute__((vector_size(16))) payload = {
       0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
       0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
-  return vector_word_xor(payload) ==
+  return vector_forward(payload) ==
                  (UINT64_C(0xfedcba9876543210) ^
                   UINT64_C(0xefcdab8967452301))
              ? 0 : 1;
