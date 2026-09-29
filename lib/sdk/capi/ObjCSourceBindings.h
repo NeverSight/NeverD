@@ -1914,6 +1914,92 @@ inline std::optional<SourceCallTypeHint> swiftTypeMetadataAddressHint(
 inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
                                                unsigned Depth = 0);
 
+// A local lazy witness accessor may pass the defining image's conformance
+// descriptor and concrete metadata directly instead of loading imported GOT
+// slots. Name those exact exported identities only when Swift's demangler
+// proves that the descriptor and metadata describe the same nominal type.
+inline std::optional<std::array<std::string, 2>>
+swiftLocalWitnessGlobals(const BinaryImage &Image, va_t ConformanceAddress,
+                         va_t MetadataAddress) {
+  const auto Metadata = swiftNominalMetadataAddressHint(Image, MetadataAddress);
+  const auto Bytes = readImmutableImageBytes(Image, ConformanceAddress, 4);
+  const auto *Section = Image.getSectionFor(ConformanceAddress);
+  const auto *Segment = Image.getSegmentFor(ConformanceAddress);
+  if (!Metadata || !Bytes || !Section || !Segment || !Section->isReadable() ||
+      Section->isWritable() || !Segment->isReadable() ||
+      Segment->isWritable() ||
+      Image.hasExecutableCodeOwnerAt(ConformanceAddress))
+    return std::nullopt;
+  const Symbol *Conformance = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == ConformanceAddress && !Symbol.IsFunc &&
+        !Symbol.Name.empty()) {
+      if (Conformance)
+        return std::nullopt;
+      Conformance = &Symbol;
+    }
+  if (!Conformance || !llvm::StringRef(Conformance->Name).starts_with("_$s") ||
+      !llvm::StringRef(Conformance->Name).ends_with("Mc"))
+    return std::nullopt;
+  size_t Exports = 0;
+  for (const auto &Export : Image.Exports) {
+    if (Export.Addr == ConformanceAddress && Export.Name == Conformance->Name)
+      ++Exports;
+    else if (Export.Addr == ConformanceAddress ||
+             Export.Name == Conformance->Name)
+      return std::nullopt;
+  }
+  if (Exports != 1)
+    return std::nullopt;
+
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 8000;
+  Options.MaxNodes = 1024;
+  Options.MaxDepth = 64;
+  Options.MaxMemoryBytes = 1024 * 1024;
+  Options.MaxOperations = 100000;
+  const auto ParsedConformance = llvm::swiftDemangle(
+      llvm::StringRef(Conformance->Name).drop_front(1), Options);
+  const auto ParsedMetadata = llvm::swiftDemangle(
+      llvm::StringRef(Metadata->TargetName).drop_front(1), Options);
+  const auto Shape = [](const llvm::SwiftDemangleNode &Node,
+                        llvm::StringRef Kind, size_t Children) {
+    return Node.Kind == Kind && !Node.Text && !Node.Index &&
+           Node.Children.size() == Children;
+  };
+  if (!ParsedConformance.Root || !ParsedConformance.Error.empty() ||
+      !ParsedMetadata.Root || !ParsedMetadata.Error.empty() ||
+      !Shape(*ParsedConformance.Root, "Global", 1) ||
+      !Shape(ParsedConformance.Root->Children[0],
+             "ProtocolConformanceDescriptor", 1) ||
+      !Shape(ParsedConformance.Root->Children[0].Children[0],
+             "ProtocolConformance", 3) ||
+      !Shape(*ParsedMetadata.Root, "Global", 1) ||
+      !Shape(ParsedMetadata.Root->Children[0], "TypeMetadata", 1))
+    return std::nullopt;
+  const auto &ConformanceType =
+      ParsedConformance.Root->Children[0].Children[0].Children[0];
+  const auto &MetadataType = ParsedMetadata.Root->Children[0].Children[0];
+  const auto SameType =
+      [&](const auto &Self, const llvm::SwiftDemangleNode &Left,
+          const llvm::SwiftDemangleNode &Right, unsigned Depth) -> bool {
+    if (Depth > 64 || Left.Kind != Right.Kind || Left.Text != Right.Text ||
+        Left.Index != Right.Index ||
+        Left.Children.size() != Right.Children.size())
+      return false;
+    for (size_t I = 0; I < Left.Children.size(); ++I)
+      if (!Self(Self, Left.Children[I], Right.Children[I], Depth + 1))
+        return false;
+    return true;
+  };
+  if (!Shape(ConformanceType, "Type", 1) || !Shape(MetadataType, "Type", 1) ||
+      !SameType(SameType, ConformanceType, MetadataType, 0))
+    return std::nullopt;
+  return std::array<std::string, 2>{
+      llvm::StringRef(Conformance->Name).drop_front(1).str(),
+      llvm::StringRef(Metadata->TargetName).drop_front(1).str()};
+}
+
 /// Recognize a complete compiler-emitted lazy witness
 /// accessor. Private Swift cache symbols can repeat, so the proof is rooted in
 /// this exact function's dataflow rather than a suffix or global name lookup.
@@ -2024,25 +2110,50 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
       Resolve(Resolve, Store->StoreVal).get() != Witness.get())
     return std::nullopt;
 
-  std::array<std::string, 2> ImportedGlobals;
-  for (size_t Index = 0; Index < 2; ++Index) {
-    const auto Value = Resolve(Resolve, Witness->Operands[Index]);
-    if (!Value || Value->Kind != ExprKind::Load ||
-        Value->Operands.size() != 1 || !Value->Type || Value->Type->Size != 8 ||
-        Value->MemoryOrdering != NdMemoryOrdering::None ||
-        Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+  std::array<ExprPtr, 2> Inputs = {Resolve(Resolve, Witness->Operands[0]),
+                                   Resolve(Resolve, Witness->Operands[1])};
+  std::array<std::string, 2> WitnessGlobals;
+  const auto DirectAddress = [](const ExprPtr &Value) {
+    return Value && Value->Kind == ExprKind::Const && Value->Type &&
+           Value->Type->Size == 8 &&
+           (Value->Type->Kind == NdTypeKind::Int ||
+            Value->Type->Kind == NdTypeKind::Ptr) &&
+           Value->Operands.empty() && Value->IntrinsicId == Intrinsic::None &&
+           Value->IntrinsicOutputs.empty() &&
+           Value->MemoryOrdering == NdMemoryOrdering::None &&
+           Value->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           isExactAddressProvenance(Value->ConstProvenance) &&
+           !isCodeAddressProvenance(Value->ConstProvenance) &&
+           (Value->AddressOwnerVA == InvalidVA ||
+            Value->AddressOwnerVA == Value->ConstVal);
+  };
+  if (DirectAddress(Inputs[0]) && DirectAddress(Inputs[1])) {
+    const auto Globals = swiftLocalWitnessGlobals(Image, Inputs[0]->ConstVal,
+                                                  Inputs[1]->ConstVal);
+    if (!Globals)
       return std::nullopt;
-    const auto Slot = constantAddress(*Value->Operands[0]);
-    const auto Global =
-        Slot ? darwinRuntimeGlobalAddressHint(Image, *Slot) : std::nullopt;
-    if (!Global || Global->Signature.Origin !=
-                       SourceFunctionTypeHint::OriginKind::SwiftRuntime)
+    WitnessGlobals = *Globals;
+  } else {
+    for (size_t Index = 0; Index < 2; ++Index) {
+      const auto &Value = Inputs[Index];
+      if (!Value || Value->Kind != ExprKind::Load ||
+          Value->Operands.size() != 1 || !Value->Type ||
+          Value->Type->Size != 8 ||
+          Value->MemoryOrdering != NdMemoryOrdering::None ||
+          Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return std::nullopt;
+      const auto Slot = constantAddress(*Value->Operands[0]);
+      const auto Global =
+          Slot ? darwinRuntimeGlobalAddressHint(Image, *Slot) : std::nullopt;
+      if (!Global || Global->Signature.Origin !=
+                         SourceFunctionTypeHint::OriginKind::SwiftRuntime)
+        return std::nullopt;
+      WitnessGlobals[Index] = Global->TargetName;
+    }
+    if (WitnessGlobals != std::array<std::string, 2>{"$sSSSysMc", "$sSSN"} &&
+        WitnessGlobals != std::array<std::string, 2>{"$sSsSTsMc", "$sSsN"})
       return std::nullopt;
-    ImportedGlobals[Index] = Global->TargetName;
   }
-  if (ImportedGlobals != std::array<std::string, 2>{"$sSSSysMc", "$sSSN"} &&
-      ImportedGlobals != std::array<std::string, 2>{"$sSsSTsMc", "$sSsN"})
-    return std::nullopt;
   const bool ReturnsLoad =
       std::any_of(Returns.begin(), Returns.end(), [&](const ExprPtr &Value) {
         return Value.get() == Load.get();
@@ -2064,7 +2175,7 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
   if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
     return std::nullopt;
   if (Globals)
-    *Globals = std::move(ImportedGlobals);
+    *Globals = std::move(WitnessGlobals);
   return Hint;
 }
 

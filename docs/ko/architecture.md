@@ -589,6 +589,7 @@ MedIR 소스 매개변수 검증은 선언된 반환값, 제어 흐름, 메모�
 ## 최근 소스 복원 경계
 
 - Swift 지연 witness table accessor는 `Wl`/`WL` 캐시 패턴, 정확한 런타임 질의, 재구축된 캐시가 증명될 때만 복원합니다. 원래 캐시 주소는 복사하지 않습니다.
+- 직접 연결된 Swift 프로토콜 준수 설명자와 명목형 메타데이터를 사용할 때는 둘 다 고유하게 내보내져야 하고 설명자가 불변이어야 하며 디맹글된 명목형이 일치해야 합니다. 가져온 슬롯과 직접 주소의 혼합, 충돌하는 내보내기, 형식 불일치는 거부합니다.
 - `Any.self`는 전체 existential container의 정확한 내부 멤버나 공개 export `$sypN`이 메타데이터 정체성을 증명할 때만 상수로 만듭니다.
 - Objective-C class-reference cell은 추가 간접 참조 단계를 유지하며, 모호한 사용이 없는 타입 지정 네이티브 load에서만 허용됩니다.
 - ivar offset은 클래스와 폭이 같고 load가 하나뿐일 때만 CFG 전반에서 병합합니다. 두 단어 Swift `String` once getter에는 네 carrier 모두에 대한 정확한 계약도 필요합니다.

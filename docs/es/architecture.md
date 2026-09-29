@@ -712,6 +712,7 @@ La inferencia de firmas fuente de auxiliares nativos demuestra un resultado ente
 ## Límites recientes de recuperación de código fuente
 
 - Un accesor diferido de tablas de testigos de Swift solo se reconstruye tras demostrar el patrón de caché `Wl`/`WL`, la consulta exacta al runtime y una caché nueva; nunca se copia su dirección original.
+- Para un descriptor de conformidad Swift y metadatos nominales enlazados directamente, ambas identidades deben tener una exportación única, el descriptor debe ser inmutable y los tipos nominales desmanglados deben coincidir; se rechazan las entradas mixtas de importación y dirección directa, las exportaciones contradictorias y los tipos distintos.
 - `Any.self` solo se convierte en constante cuando un miembro interior exacto del contenedor existencial completo o la exportación pública `$sypN` demuestra la identidad de metadatos.
 - Una celda de referencia a clase Objective-C conserva su nivel extra de indirección y solo se acepta en una carga nativa tipada, sin usos ambiguos.
 - Los valores de desplazamiento de ivar solo se unen a través del CFG si coinciden clase y anchura y existe una única carga. El getter once de un `String` Swift de dos palabras exige además el contrato exacto de sus cuatro portadores.

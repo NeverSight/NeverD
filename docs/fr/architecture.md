@@ -720,6 +720,7 @@ L’inférence de signature source des fonctions auxiliaires natives prouve un r
 ## Limites récentes de reconstruction de source
 
 - Un accesseur différé de table de témoins Swift n’est reconstruit qu’après preuve du motif de cache `Wl`/`WL`, de la requête exacte au runtime et d’un cache rebâti ; l’adresse originale du cache n’est jamais copiée.
+- Pour une paire locale de descripteur de conformité Swift et de métadonnées nominales, les deux identités doivent être exportées de manière unique, le descripteur immuable et les types nominaux démanglés identiques ; un mélange avec un emplacement importé, des exports conflictuels ou des types différents est rejeté.
 - `Any.self` ne devient une constante que si un membre intérieur exact du conteneur existentiel complet ou l’export public `$sypN` prouve l’identité des métadonnées.
 - Une cellule de référence de classe Objective-C conserve son niveau d’indirection supplémentaire et n’est admise que pour un chargement natif typé sans utilisation ambiguë.
 - Les décalages d’ivar ne sont fusionnés dans le CFG que si la classe et la largeur concordent et qu’un seul chargement existe. Le getter once d’un `String` Swift de deux mots exige aussi le contrat exact de ses quatre porteurs.

@@ -510,6 +510,8 @@ own machine-inferred entry signature. Generated C rebuilds a fresh shared cache
 and repeats the runtime query; it never publishes the captured process cache or
 witness pointer.
 
+Directly linked Swift conformance descriptors and nominal metadata may also serve this accessor. Both identities must be uniquely exported, the descriptor must be immutable, and their demangled nominal types must match. Mixed imported and direct inputs, conflicting exports, and mismatched types reject the binding.
+
 Standard Swift metadata storage addresses use compiler-generated `.self`
 queries; standard Hashable witness storage uses the direct witness argument
 of a compiler-generated constrained generic call. Both require matching SDK
