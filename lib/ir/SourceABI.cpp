@@ -115,18 +115,18 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
           ++FloatingParameters >
               getTargetRegInfo(Architecture).FPParamRegs.size())
         return false;
-    } else if (Parameter.Type &&
-               Parameter.Type->Kind == NdTypeKind::Struct) {
+    } else if (Parameter.Type && Parameter.Type->Kind == NdTypeKind::Struct) {
       // The closed CGRect shape lowers to four independent double lanes under
       // arm64 swiftcc. Other records need their own compiler-backed contract.
       const auto Members = sourceAggregateMembers(Parameter.Type);
       if (Architecture != Arch::AArch64 ||
           Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary ||
           Members.size() != 4 || Parameter.Type->Size != 32 ||
-          !std::all_of(Members.begin(), Members.end(), [](const auto &M) {
-            return M.Type && M.Type->Kind == NdTypeKind::Float &&
-                   M.Type->Size == 8;
-          }) ||
+          !std::all_of(Members.begin(), Members.end(),
+                       [](const auto &M) {
+                         return M.Type && M.Type->Kind == NdTypeKind::Float &&
+                                M.Type->Size == 8;
+                       }) ||
           (FloatingParameters += 4) >
               getTargetRegInfo(Architecture).FPParamRegs.size())
         return false;
@@ -335,8 +335,7 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
         Expected.RegisterOffset = TRI.FPParamRegs[FloatingIndex++];
       } else if (P.Type->Kind == NdTypeKind::Struct) {
         const auto Members = sourceAggregateMembers(P.Type);
-        if (!EmptyLocation(P.Location) ||
-            P.Components.size() != Members.size())
+        if (!EmptyLocation(P.Location) || P.Components.size() != Members.size())
           return fail(Diagnostic, "Unsupported fixed Swift record carrier");
         for (size_t J = 0; J < Members.size(); ++J) {
           const SourceABIValueLocation Member = {
@@ -829,9 +828,8 @@ bool isSwiftValueWitnessSourceCallHint(const SourceCallTypeHint &Hint,
          !Hint.Format && !Hint.NilTerminated && !Hint.Receiver &&
          !Hint.SelectorResultUse && !Hint.SelectorResultTypeUse &&
          !Hint.SelectorArgumentTypeUse && !Hint.SelectorForwardingUse &&
-         !Hint.SelectorArgumentStorageUse &&
-         !Hint.ObjCIndirectResultStorage && Hint.ByteCount == 0 &&
-         Hint.ImmutablePointerSlot == 0 &&
+         !Hint.SelectorArgumentStorageUse && !Hint.ObjCIndirectResultStorage &&
+         Hint.ByteCount == 0 && Hint.ImmutablePointerSlot == 0 &&
          equalSourceABIs(Hint.Signature, Expected->Signature);
 }
 

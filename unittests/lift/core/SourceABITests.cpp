@@ -252,8 +252,8 @@ TEST(SourceABI, SwiftArm64HomogeneousFloatRecordUsesFourFPLanes) {
   Hint.Parameters[0].Components[2].RegisterOffset = TRI.FPParamRegs[4];
   EXPECT_FALSE(validateSourceABI(Hint, Error));
   Hint.Parameters[0].Components[2].RegisterOffset = TRI.FPParamRegs[2];
-  Hint.Parameters[0].Type = NdType::makeStruct(
-      {Double, NdType::makeInt(8), Double, Double});
+  Hint.Parameters[0].Type =
+      NdType::makeStruct({Double, NdType::makeInt(8), Double, Double});
   EXPECT_FALSE(validateSourceABI(Hint, Error));
 }
 
@@ -270,11 +270,13 @@ TEST(SourceABI, BoundRecordCallAbiRetainsEveryRenamedComponent) {
       std::string Error;
       if (Floating && Architecture == Arch::X64) {
         // Darwin x64 floating records are outside the supported fixed layout.
-        EXPECT_FALSE(assignDarwinFixedSourceABI(Hint->Signature, Architecture, Error));
+        EXPECT_FALSE(
+            assignDarwinFixedSourceABI(Hint->Signature, Architecture, Error));
         continue;
       }
       ASSERT_TRUE(
-          assignDarwinFixedSourceABI(Hint->Signature, Architecture, Error)) << Error;
+          assignDarwinFixedSourceABI(Hint->Signature, Architecture, Error))
+          << Error;
       MedOp Call;
       Call.Opcode = NdOp::CALL;
       Call.SourceCallHint = Hint;

@@ -4069,8 +4069,7 @@ TEST(NativeSourceHints, SwiftEndAccessUsesBoundedPrivateFrameScratch) {
   EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
 
   auto Overlap = Fixture;
-  Overlap.Low.Blocks[0].Ops[Overlap.CallIndex - 1].Inputs[1] =
-      NdVar::cst(0, 8);
+  Overlap.Low.Blocks[0].Ops[Overlap.CallIndex - 1].Inputs[1] = NdVar::cst(0, 8);
   EXPECT_FALSE(Overlap.inferVoid(Error));
 
   auto Forged = Fixture;

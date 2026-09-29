@@ -61,8 +61,8 @@ std::optional<std::string> sourceValue(llvm::StringRef Text,
     return Text.str();
   if (integerPair(Carrier) && integerPair(Source) &&
       Source->SourceName == kSourceAArch64Vector128CType)
-    return "__builtin_bit_cast(" + typeToC(Source) + ", (" +
-           typeToC(Carrier) + ")(" + Text.str() + "))";
+    return "__builtin_bit_cast(" + typeToC(Source) + ", (" + typeToC(Carrier) +
+           ")(" + Text.str() + "))";
   if (integerPair(Carrier) && integerPair(Source))
     return "(" + typeToC(Source) + ")(" + Text.str() + ")";
   if (!scalar(Carrier) || !scalar(Source) || Carrier->Size != Source->Size)
@@ -188,11 +188,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
        !Hint.SwiftStringInputs.empty() || Hint.SwiftTypeMetadata ||
        Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
        Hint.SelectorArgumentTypeUse || Hint.SelectorForwardingUse ||
-       Hint.SelectorArgumentStorageUse ||
-       Hint.ObjCIndirectResultStorage || Hint.ByteCount ||
-       Hint.ImmutablePointerSlot || Hint.TargetName != "objc_msgSend" ||
-       Hint.Selector.empty() || !Hint.TargetAddress ||
-       !Hint.SelectorReferenceAddress ||
+       Hint.SelectorArgumentStorageUse || Hint.ObjCIndirectResultStorage ||
+       Hint.ByteCount || Hint.ImmutablePointerSlot ||
+       Hint.TargetName != "objc_msgSend" || Hint.Selector.empty() ||
+       !Hint.TargetAddress || !Hint.SelectorReferenceAddress ||
        Hint.Receiver->Origin !=
            ObjCReceiverTypeHint::OriginKind::ClassReference ||
        !Hint.Receiver->IsClassMethod || !Hint.Receiver->Steps.empty() ||
@@ -915,14 +914,13 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     // constant instead of requiring the integer carrier to have pointer width.
     // Do not widen any nonzero integer here: those still require an explicit,
     // size-compatible pointer carrier.
-    auto Value = Argument.Kind == ExprKind::Const && Carrier &&
-                         Carrier->Kind == NdTypeKind::Int &&
-                         Argument.ConstVal == 0 && SourceType &&
-                         SourceType->Kind == NdTypeKind::Ptr &&
-                         Carrier->Size != SourceType->Size
-                     ? std::optional<std::string>("(" + typeToC(SourceType) +
-                                                  ")0")
-                     : sourceValue(exprStr(Argument), Carrier, SourceType);
+    auto Value =
+        Argument.Kind == ExprKind::Const && Carrier &&
+                Carrier->Kind == NdTypeKind::Int && Argument.ConstVal == 0 &&
+                SourceType && SourceType->Kind == NdTypeKind::Ptr &&
+                Carrier->Size != SourceType->Size
+            ? std::optional<std::string>("(" + typeToC(SourceType) + ")0")
+            : sourceValue(exprStr(Argument), Carrier, SourceType);
     if (!Value)
       return bad("argument carrier disagrees with the source declaration");
     if (I != FirstArgument)
