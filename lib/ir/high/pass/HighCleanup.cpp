@@ -330,6 +330,7 @@ void MedToHighConverter::ensureTrailingReturn(HighFunc &Func,
     }
     if (RetExpr) {
       RetExpr = forceInlineExpr(RetExpr);
+      renameCoalescedVars(RetExpr);
       break;
     }
   }

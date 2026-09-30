@@ -300,6 +300,26 @@ void fillUnstructuredGotoSkeleton(HighFunc &Func, const MedFunc &Med) {
 // MedToHighConverter — expression helpers
 //===----------------------------------------------------------------------===//
 
+void MedToHighConverter::renameCoalescedVars(const ExprPtr &E) const {
+  if (CoalescedNames.empty())
+    return;
+  std::unordered_set<const HighExpr *> Seen;
+  std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &Node) {
+    if (!Node || !Seen.insert(Node.get()).second)
+      return;
+    if (Node->Kind == ExprKind::Var || Node->Kind == ExprKind::Phi)
+      if (auto It = CoalescedNames.find(varKey(Node->Var));
+          It != CoalescedNames.end())
+        Node->Var = It->second;
+    for (MedVar &Output : Node->IntrinsicOutputs)
+      if (auto It = CoalescedNames.find(varKey(Output));
+          It != CoalescedNames.end())
+        Output = It->second;
+    Node->forEachChildExpr(Visit);
+  };
+  Visit(E);
+}
+
 ExprPtr MedToHighConverter::inlineableDefinition(VarKey Key) const {
   if (PhiOutputVars.count(Key) || MemoryReadOutputs.count(Key))
     return nullptr;
@@ -694,6 +714,7 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
       }
   CallOutputs.clear();
   PhiOutputVars.clear();
+  CoalescedNames.clear();
   MemoryReadOutputs.clear();
   NextHighTempId = 0;
   auto ReserveIdentity = [&](const MedVar &Value) {
@@ -904,6 +925,29 @@ void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
     eliminateDeadStmts(Func);
 }
 
+static bool isVarSelfAssign(const HighStmt &S) {
+  return S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+         S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Var &&
+         S.Dst->Var == S.Val->Var;
+}
+
+/// True when exception dispatch may enter a block of \p Med along an edge
+/// that ordinary control flow does not show. The CFG builder owns those
+/// edges; a decoded scope table is checked too. A GS cookie check enters no
+/// block.
+static bool mayEnterByException(const MedFunc &Med) {
+  for (const MedBlock &Block : Med.Blocks) {
+    if (!Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty())
+      return true;
+    for (const PhiNode &Phi : Block.Phis)
+      if (Phi.ExceptionalEntry)
+        return true;
+  }
+  const auto &EH = Med.ExceptionMetadata;
+  return EH && (EH->SEH || EH->Cxx || EH->Itanium || EH->Registration ||
+                EH->Delphi || EH->DelphiScopes || EH->Go);
+}
+
 HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   HighConversionTrace Trace(Med, TheArch);
   Trace.med();
@@ -985,12 +1029,8 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
     structureControlFlow(Func, Med);
     Trace.high(Func, "structured");
     inferTypes(Func);
-    eraseKeepingBranchEntries(
-        Func.Body, gotoTargets(Func.Body), [](const HighStmt &S) {
-          return S.Kind == StmtKind::Assign && S.Dst && S.Val &&
-                 S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Var &&
-                 S.Dst->Var == S.Val->Var;
-        });
+    eraseKeepingBranchEntries(Func.Body, gotoTargets(Func.Body),
+                              isVarSelfAssign);
     ensureTrailingReturn(Func, Med);
     structureExceptionRegions(Func, Med);
     attachSEHHandlerEntryCopies(Func, Med);
@@ -1004,6 +1044,11 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   auto TStruct = std::chrono::steady_clock::now();
   structureControlFlow(Func, Med);
   Trace.high(Func, "structured");
+  if (!mayEnterByException(Med)) {
+    for (const auto &[From, To] : coalescePhiCopies(Func))
+      CoalescedNames[varKey(From)] = To;
+    Trace.high(Func, "coalesced");
+  }
   auto TSimp = std::chrono::steady_clock::now();
   simplifyControlFlow(Func, Med);
   Trace.high(Func, "simplified");
@@ -1011,12 +1056,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   inferTypes(Func);
   auto TPost = std::chrono::steady_clock::now();
 
-  eraseKeepingBranchEntries(
-      Func.Body, gotoTargets(Func.Body), [](const HighStmt &S) {
-        return S.Kind == StmtKind::Assign && S.Dst && S.Val &&
-               S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Var &&
-               S.Dst->Var == S.Val->Var;
-      });
+  eraseKeepingBranchEntries(Func.Body, gotoTargets(Func.Body), isVarSelfAssign);
 
   stripPrologueEpilogue(Func);
   ensureTrailingReturn(Func, Med);

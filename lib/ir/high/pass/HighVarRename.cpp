@@ -14,9 +14,12 @@
 #include "HighDCEDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
 
 #include <functional>
+#include <map>
+#include <set>
 #include <unordered_set>
 
 namespace neverd {
@@ -213,6 +216,65 @@ void postRenameCleanup(std::vector<HighStmt> &Stmts) {
   VarKeySet FinalRefs;
   collectStmtRefsLocal(Stmts, FinalRefs);
   eliminateDeadAssignsLocal(Stmts, FinalRefs);
+}
+
+//===----------------------------------------------------------------------===//
+// coalescePhiCopies — drop unread PHI copies, then name each PHI web once
+//===----------------------------------------------------------------------===//
+
+/// Erase the statements \p ShouldErase selects at every nesting level; one a
+/// goto still enters leaves an anchor behind.
+static void
+eraseEverywhere(std::vector<HighStmt> &Body, const std::set<va_t> &Targets,
+                const std::function<bool(const HighStmt &)> &ShouldErase) {
+  for (HighStmt &S : Body) {
+    eraseEverywhere(S.Body, Targets, ShouldErase);
+    eraseEverywhere(S.ElseBody, Targets, ShouldErase);
+    for (auto &Case : S.Cases)
+      eraseEverywhere(Case.Body, Targets, ShouldErase);
+    eraseEverywhere(S.DefaultBody, Targets, ShouldErase);
+    for (auto &Clause : S.EHClauseBodies)
+      eraseEverywhere(Clause, Targets, ShouldErase);
+  }
+  eraseKeepingBranchEntries(Body, Targets, ShouldErase);
+}
+
+std::vector<std::pair<MedVar, MedVar>> coalescePhiCopies(HighFunc &Func) {
+  auto Cleanup = highSourcePhiCleanup(Func);
+  const auto Targets = gotoTargets(Func.Body);
+  if (!Cleanup.DeadCopies.empty())
+    eraseEverywhere(Func.Body, Targets, [&](const HighStmt &S) {
+      return Cleanup.DeadCopies.count(&S) != 0;
+    });
+  if (Cleanup.Renames.empty())
+    return {};
+  std::map<HighSourceLocalIdentity, MedVar> Names;
+  for (const auto &[From, To] : Cleanup.Renames)
+    Names.emplace(highSourceLocalIdentity(From), To);
+  auto Rename = [&](MedVar &Variable) {
+    auto It = Names.find(highSourceLocalIdentity(Variable));
+    if (It != Names.end())
+      Variable = It->second;
+  };
+  // Expressions are shared; each node is renamed once.
+  std::unordered_set<const HighExpr *> Seen;
+  std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
+    if (!E || !Seen.insert(E.get()).second)
+      return;
+    if (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi)
+      Rename(E->Var);
+    for (MedVar &Output : E->IntrinsicOutputs)
+      Rename(Output);
+    E->forEachChildExpr(Visit);
+  };
+  walkStmts(Func.Body, [&](HighStmt &S) { forEachExpr(S, Visit); });
+  // A copy between two names of one web now assigns a local to itself.
+  eraseEverywhere(Func.Body, Targets, [](const HighStmt &S) {
+    return S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+           S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Var &&
+           S.Dst->Var == S.Val->Var;
+  });
+  return std::move(Cleanup.Renames);
 }
 
 } // namespace neverd

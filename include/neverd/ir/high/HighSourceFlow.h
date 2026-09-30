@@ -10,6 +10,7 @@
 #include "neverd/ir/high/HighIR.h"
 
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -77,5 +78,21 @@ std::vector<std::optional<uint64_t>> highSourceUnsignedUpperBounds(
 /// feasible emitted path. Unknown control flow or exhausted analysis budgets
 /// leave the function unchanged. Retains addresses used as source labels.
 bool eliminateHighDeadPhiCopies(HighFunc &Function);
+struct HighSourcePhiCleanup {
+  /// Side-effect-free PHI copies whose values no emitted path reads,
+  /// including copies that only feed other such copies.
+  std::set<const HighStmt *> DeadCopies;
+  /// (member, representative) pairs of scalar locals joined by the other PHI
+  /// copies that may share one emitted name: no emitted path writes either
+  /// local while the other holds a value still to be read, other than the
+  /// copy between them. Only locals defined in the function take part, and
+  /// every representative is a PHI copy destination.
+  std::vector<std::pair<MedVar, MedVar>> Renames;
+};
+/// Statements sharing one address are resolved the way the emitter groups
+/// branch entries. The complete, unrefined graph is used. Unknown control
+/// flow or exhausted analysis budgets yield an empty result. Statement
+/// pointers borrow Function.
+HighSourcePhiCleanup highSourcePhiCleanup(const HighFunc &Function);
 } // namespace neverd
 #endif

@@ -8,7 +8,10 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 
+#include "llvm/ADT/bit.h"
+
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -102,6 +105,20 @@ class SourceFlow {
   size_t Operations = 0, EdgeCount = 0, CaseCount = 0;
   std::set<size_t> AddressTaken;
   std::set<const HighStmt *> *DeadCopies;
+  // Guard refinement only removes infeasible paths. PHI cleanup uses the
+  // complete graph, a superset of every refined path.
+  bool Refine = true;
+  // Resolve a shared address the way the emitter groups branch entries,
+  // rather than requiring one statement per address.
+  bool EmitterLabels = false;
+  struct Site {
+    const std::vector<HighStmt> *List = nullptr;
+    size_t Position = 0;
+    const HighStmt *Parent = nullptr;
+    size_t Order = 0; // Source pre-order.
+  };
+  std::map<const HighStmt *, Site> Sites;
+  std::map<va_t, std::vector<size_t>> Entries;
 
   [[noreturn]] void
   fail(const char *Reason,
@@ -323,6 +340,8 @@ class SourceFlow {
       auto [It, Fresh] = Labels.emplace(Statement.Addr, Index);
       if (!Fresh)
         It->second = NoNode; // An emitted goto label must be unique.
+      if (EmitterLabels)
+        Entries[Statement.Addr].push_back(Index);
     }
     switch (Statement.Kind) {
     case StmtKind::Assign:
@@ -1095,29 +1114,364 @@ class SourceFlow {
     }
   }
 
+  // A register's value on entry. Lowering declares one read before any write
+  // with a self-assignment; that names the caller's value, not a definition.
+  static bool entryRegister(const MedVar &Variable) {
+    return Variable.Kind == MedVar::Reg && Variable.SSAVer == 0;
+  }
+
+  static bool returnControlRegister(const MedVar &Variable) {
+    return Variable.Kind == MedVar::Reg &&
+           getTargetRegInfo(Variable.TheArch)
+               .isReturnControlReg(Variable.RegOff);
+  }
+
+  void site(const std::vector<HighStmt> &Body, const HighStmt *Parent,
+            unsigned Depth) {
+    if (Depth > 200)
+      fail("method control flow exceeds the source projection depth limit",
+           HighSourceFlowIssue::Budget);
+    for (size_t I = 0; I < Body.size(); ++I) {
+      spend();
+      const HighStmt &S = Body[I];
+      Sites[&S] = {&Body, I, Parent, Sites.size()};
+      site(S.Body, &S, Depth + 1);
+      site(S.ElseBody, &S, Depth + 1);
+      for (const auto &Case : S.Cases)
+        site(Case.Body, &S, Depth + 1);
+      site(S.DefaultBody, &S, Depth + 1);
+    }
+  }
+
+  // A PHI copy leading an arm of the conditional that owns \p Address is
+  // part of that branch, not a separate entry.
+  bool leadingEdgeCopy(const HighStmt &S, const Site &Where,
+                       va_t Address) const {
+    const HighStmt *Owner = Where.Parent;
+    if (!Owner ||
+        (Owner->Kind != StmtKind::If && Owner->Kind != StmtKind::IfElse) ||
+        !Owner->Cond || Owner->Addr != Address ||
+        (Where.List != &Owner->Body && Where.List != &Owner->ElseBody))
+      return false;
+    for (size_t I = 0; I <= Where.Position; ++I) {
+      const HighStmt &Copy = (*Where.List)[I];
+      if (Copy.Kind != StmtKind::Assign || !Copy.IsPhiCopy ||
+          Copy.Addr != Address || !Copy.Dst || !Copy.Val ||
+          Copy.Dst->Kind != ExprKind::Var || !Copy.Body.empty() ||
+          !Copy.ElseBody.empty() || !Copy.Cases.empty() ||
+          !Copy.DefaultBody.empty() || !Copy.EHClauseBodies.empty())
+        return false;
+    }
+    return &(*Where.List)[Where.Position] == &S;
+  }
+
+  // The node a goto to \p Address enters once statements sharing it are
+  // grouped: one adjacent run in a single list is entered at its first
+  // statement. Anything else is ambiguous.
+  size_t emitterEntry(va_t Address) const {
+    auto It = Entries.find(Address);
+    if (It == Entries.end())
+      return NoNode;
+    const std::vector<HighStmt> *List = nullptr;
+    size_t First = NoNode, Last = 0, Count = 0, Entry = NoNode;
+    for (size_t Index : It->second) {
+      const HighStmt *S = Nodes[Index].Statement;
+      auto Where = Sites.find(S);
+      if (!S || Where == Sites.end())
+        return NoNode;
+      if (leadingEdgeCopy(*S, Where->second, Address))
+        continue;
+      if (List && Where->second.List != List)
+        return NoNode;
+      List = Where->second.List;
+      ++Count;
+      if (Where->second.Position < First) {
+        First = Where->second.Position;
+        Entry = Index;
+      }
+      Last = std::max(Last, Where->second.Position);
+    }
+    return Count && Last - First + 1 == Count ? Entry : NoNode;
+  }
+
+  // Side-effect-free PHI copies no emitted path reads, found to a fixed point
+  // so a chain of dead joins disappears as a whole. Then the scalar locals
+  // joined by the remaining copies that may share one emitted name: each
+  // write interferes with every candidate live after it, except the source
+  // of a plain copy (both names would hold the same value). Copies merge
+  // their classes in source order while no members of the two classes
+  // interfere; a class keeps the name of the destination that started it.
+  void phiCleanup(size_t Entry, std::set<const HighStmt *> &Dead,
+                  std::vector<std::pair<MedVar, MedVar>> &Renames) {
+    std::vector<bool> Reachable(Nodes.size());
+    std::vector<size_t> Pending{Entry};
+    Reachable[Entry] = true;
+    for (size_t I = 0; I < Pending.size(); ++I) {
+      spend();
+      for (size_t Successor : Nodes[Pending[I]].Next)
+        if (!Reachable[Successor]) {
+          Reachable[Successor] = true;
+          Pending.push_back(Successor);
+        }
+    }
+    // Liveness is per local: only the PHI copy operands need it.
+    std::vector<size_t> Dense(Locals.size(), NoNode);
+    std::vector<size_t> Sparse;
+    auto Track = [&](size_t Local) {
+      if (Dense[Local] == NoNode) {
+        Dense[Local] = Sparse.size();
+        Sparse.push_back(Local);
+      }
+    };
+    std::vector<size_t> CopyNodes;
+    for (size_t I = 0; I < Nodes.size(); ++I) {
+      spend();
+      if (!Reachable[I] || !Nodes[I].PhiCopy || !Nodes[I].Definition ||
+          AddressTaken.count(*Nodes[I].Definition))
+        continue;
+      CopyNodes.push_back(I);
+      Track(*Nodes[I].Definition);
+      for (size_t Use : Nodes[I].Uses)
+        Track(Use);
+    }
+    if (CopyNodes.empty())
+      return;
+    const size_t Count = Sparse.size();
+    const size_t Words = (Count + 63) / 64;
+    if (Nodes.size() > MaxStateWords / Words ||
+        Count > MaxStateWords / Words / 2)
+      fail("method source-flow analysis exceeds its state memory limit",
+           HighSourceFlowIssue::Budget);
+    auto Set = [&](std::vector<uint64_t> &Bits, size_t Row, size_t Bit) {
+      Bits[Row * Words + Bit / 64] |= uint64_t{1} << (Bit % 64);
+    };
+
+    std::vector<uint64_t> Live(Nodes.size() * Words);
+    std::vector<uint64_t> Out(Words);
+    auto LiveOut = [&](size_t Index) {
+      std::fill(Out.begin(), Out.end(), 0);
+      for (size_t Next : Nodes[Index].Next) {
+        spend(Words + 1);
+        for (size_t W = 0; W < Words; ++W)
+          Out[W] |= Live[Next * Words + W];
+      }
+    };
+    auto Solve = [&] {
+      spend(Nodes.size() * Words);
+      std::fill(Live.begin(), Live.end(), 0);
+      std::vector<bool> Queued = Reachable;
+      std::vector<size_t> Work;
+      for (size_t I = 0; I < Nodes.size(); ++I)
+        if (Reachable[I])
+          Work.push_back(I);
+      while (!Work.empty()) {
+        spend();
+        const size_t Index = Work.back();
+        Work.pop_back();
+        Queued[Index] = false;
+        LiveOut(Index);
+        if (auto Definition = Nodes[Index].Definition)
+          if (const size_t Killed = Dense[*Definition]; Killed != NoNode)
+            Out[Killed / 64] &= ~(uint64_t{1} << (Killed % 64));
+        for (size_t Use : Nodes[Index].Uses)
+          if (const size_t Read = Dense[Use]; Read != NoNode)
+            Out[Read / 64] |= uint64_t{1} << (Read % 64);
+        bool Changed = false;
+        spend(Words);
+        for (size_t W = 0; W < Words; ++W) {
+          auto &State = Live[Index * Words + W];
+          Changed |= State != Out[W];
+          State = Out[W];
+        }
+        if (Changed)
+          for (size_t Previous : Nodes[Index].Previous) {
+            spend();
+            if (Reachable[Previous] && !Queued[Previous]) {
+              Queued[Previous] = true;
+              Work.push_back(Previous);
+            }
+          }
+      }
+    };
+    auto LiveAfter = [&](size_t Local) {
+      const size_t Bit = Dense[Local];
+      return (Out[Bit / 64] >> (Bit % 64)) & 1;
+    };
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      Solve();
+      for (size_t I : CopyNodes) {
+        if (!Nodes[I].Definition)
+          continue;
+        LiveOut(I);
+        if (LiveAfter(*Nodes[I].Definition))
+          continue;
+        // The copy is erased, so it neither reads nor writes any more.
+        Dead.insert(Nodes[I].Statement);
+        Nodes[I].Uses.clear();
+        Nodes[I].Writes.clear();
+        Nodes[I].Definition.reset();
+        Changed = true;
+      }
+    }
+
+    std::vector<unsigned> Definitions(Locals.size());
+    // A byte insert keeps a register's other bytes only because the machine
+    // did. Left as its own value, dead-byte narrowing can drop them; joined
+    // into a web they would become a real multi-byte value.
+    std::vector<bool> ByteInsert(Locals.size());
+    for (size_t I = 0; I < Nodes.size(); ++I)
+      if (Reachable[I] && Nodes[I].Definition) {
+        ++Definitions[*Nodes[I].Definition];
+        const HighStmt *S = Nodes[I].Statement;
+        if (S && S->Kind == StmtKind::Assign && S->Val &&
+            S->Val->Kind == ExprKind::BinOp && S->Val->Op == NdOp::CONCAT)
+          ByteInsert[*Nodes[I].Definition] = true;
+      }
+    struct Copy {
+      size_t Position, Destination, Source;
+    };
+    std::vector<Copy> Copies;
+    std::map<size_t, MedVar> Names;
+    for (size_t I : CopyNodes) {
+      if (!Nodes[I].Definition)
+        continue;
+      const HighStmt &S = *Nodes[I].Statement;
+      auto Where = Sites.find(&S);
+      if (Where == Sites.end() || !scalarLocal(S.Val) ||
+          entryValue(S.Val->Var) || S.Val->Var.Size != S.Dst->Var.Size ||
+          entryRegister(S.Dst->Var) || entryRegister(S.Val->Var) ||
+          returnControlRegister(S.Dst->Var) ||
+          returnControlRegister(S.Val->Var))
+        continue;
+      const size_t Destination = *Nodes[I].Definition;
+      const size_t Source = local(S.Val->Var);
+      if (Destination == Source || Dense[Source] == NoNode ||
+          AddressTaken.count(Source) || !Definitions[Source] ||
+          ByteInsert[Source] || ByteInsert[Destination])
+        continue;
+      Names.emplace(Destination, S.Dst->Var);
+      Names.emplace(Source, S.Val->Var);
+      Copies.push_back({Where->second.Order, Destination, Source});
+    }
+    if (Copies.empty())
+      return;
+    std::sort(Copies.begin(), Copies.end(), [](const Copy &A, const Copy &B) {
+      return A.Position < B.Position;
+    });
+
+    // The last round erased nothing, so Live is current.
+    std::vector<uint64_t> Interference(Count * Words, 0);
+    for (size_t I = 0; I < Nodes.size(); ++I) {
+      if (!Reachable[I] || Nodes[I].Writes.empty())
+        continue;
+      LiveOut(I);
+      size_t Moved = NoNode;
+      if (const HighStmt *S = Nodes[I].Statement;
+          S && S->Kind == StmtKind::Assign && S->Val &&
+          (S->Val->Kind == ExprKind::Var || S->Val->Kind == ExprKind::Phi) &&
+          S->Val->Operands.empty() && !entryValue(S->Val->Var))
+        Moved = local(S->Val->Var);
+      for (size_t Written : Nodes[I].Writes) {
+        const size_t Target = Dense[Written];
+        if (Target == NoNode)
+          continue;
+        for (size_t W = 0; W < Words; ++W)
+          for (uint64_t Bits = Out[W]; Bits; Bits &= Bits - 1) {
+            spend();
+            const size_t Other = W * 64 + llvm::countr_zero(Bits);
+            if (Other == Target || Sparse[Other] == Moved)
+              continue;
+            Set(Interference, Target, Other);
+            Set(Interference, Other, Target);
+          }
+      }
+    }
+
+    // A web whose only definitions are unknown values or copies within the
+    // webs carries no value of its own. Joining two such webs changes no
+    // name worth reading; it only hides which path left the value unknown.
+    std::vector<bool> Real(Count);
+    for (size_t I = 0; I < Nodes.size(); ++I) {
+      if (!Reachable[I] || !Nodes[I].Definition)
+        continue;
+      const size_t Defined = Dense[*Nodes[I].Definition];
+      if (Defined == NoNode)
+        continue;
+      const HighStmt *S = Nodes[I].Statement;
+      const HighExpr *Value =
+          S && S->Kind == StmtKind::Assign && S->Val ? S->Val.get() : nullptr;
+      bool Known = !Value || Value->Kind != ExprKind::Undef;
+      if (Known && Value &&
+          (Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi) &&
+          Value->Operands.empty() && !entryValue(Value->Var))
+        Known = Dense[local(Value->Var)] == NoNode;
+      if (Known)
+        Real[Defined] = true;
+    }
+
+    std::vector<size_t> Parent(Count);
+    std::vector<uint64_t> Members(Count * Words, 0);
+    for (size_t K = 0; K < Count; ++K) {
+      Parent[K] = K;
+      Set(Members, K, K);
+    }
+    auto Find = [&](size_t K) {
+      while (Parent[K] != K)
+        K = Parent[K] = Parent[Parent[K]];
+      return K;
+    };
+    for (const Copy &C : Copies) {
+      spend(Words);
+      const size_t Root = Find(Dense[C.Destination]);
+      const size_t Joined = Find(Dense[C.Source]);
+      if (Root == Joined || (!Real[Root] && !Real[Joined]))
+        continue;
+      bool Conflict = false;
+      for (size_t W = 0; W < Words && !Conflict; ++W)
+        Conflict = Interference[Root * Words + W] & Members[Joined * Words + W];
+      if (Conflict)
+        continue;
+      Parent[Joined] = Root;
+      Real[Root] = true;
+      for (size_t W = 0; W < Words; ++W) {
+        Interference[Root * Words + W] |= Interference[Joined * Words + W];
+        Members[Root * Words + W] |= Members[Joined * Words + W];
+      }
+    }
+    for (size_t K = 0; K < Count; ++K)
+      if (const size_t Root = Find(K); Root != K)
+        Renames.emplace_back(Names.at(Sparse[K]), Names.at(Sparse[Root]));
+  }
+
   std::optional<size_t> build() {
     node(); // Node zero is the emitted function's fallthrough exit.
     size_t Entry = block(Function.Body, 0, {}, 1);
     CurrentAddress = 0;
     bool MissingTarget = false;
     for (const auto &[Index, Address] : Gotos) {
-      auto Target = Labels.find(Address);
-      if (!Address || Address == InvalidVA || Target == Labels.end() ||
-          Target->second == NoNode) {
+      size_t Target = NoNode;
+      if (Address && Address != InvalidVA) {
+        if (EmitterLabels)
+          Target = emitterEntry(Address);
+        else if (auto It = Labels.find(Address); It != Labels.end())
+          Target = It->second;
+      }
+      if (Target == NoNode) {
         MissingTarget = true;
         Diagnostics.Complete = false;
         Diagnostics.add(HighSourceFlowIssue::ControlFlow,
                         "method source goto has no unique emitted target",
                         Nodes[Index].Address, nullptr, Address);
       } else {
-        edge(Index, Target->second);
+        edge(Index, Target);
       }
     }
     // Unknown edges invalidate reachability and must-defined conclusions.
     // The outer validator can still inventory independent expressions.
     if (MissingTarget)
       return std::nullopt;
-    return refine(Entry);
+    return Refine ? refine(Entry) : Entry;
   }
 
   void analyze(bool NeedsReturn) {
@@ -1323,6 +1677,22 @@ public:
       Diagnostics.add(Error.Issue, Error.Reason, Error.Address);
     }
   }
+
+  void cleanup(std::set<const HighStmt *> &Dead,
+               std::vector<std::pair<MedVar, MedVar>> &Renames) {
+    try {
+      Refine = false;
+      EmitterLabels = true;
+      site(Function.Body, nullptr, 1);
+      if (const auto Entry = build())
+        phiCleanup(*Entry, Dead, Renames);
+    } catch (const Failure &Error) {
+      Dead.clear();
+      Renames.clear();
+      Diagnostics.Complete = false;
+      Diagnostics.add(Error.Issue, Error.Reason, Error.Address);
+    }
+  }
 };
 
 } // namespace
@@ -1343,6 +1713,12 @@ HighSourceFlowReport analyzeHighSourceFlow(const HighFunc &Function,
                                            bool NeedsReturn) {
   HighSourceFlowReport Result;
   SourceFlow(Function, Result).collect(NeedsReturn);
+  return Result;
+}
+HighSourcePhiCleanup highSourcePhiCleanup(const HighFunc &Function) {
+  HighSourcePhiCleanup Result;
+  HighSourceFlowReport Diagnostics;
+  SourceFlow(Function, Diagnostics).cleanup(Result.DeadCopies, Result.Renames);
   return Result;
 }
 bool eliminateHighDeadPhiCopies(HighFunc &Function) {

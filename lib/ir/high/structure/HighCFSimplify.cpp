@@ -349,9 +349,11 @@ void MedToHighConverter::inlineGotoReturns(HighFunc &Func, const MedFunc &Med) {
                      Op.Output == CurrOp.Inputs[0];
             });
         if ((CurrOp.Opcode == NdOp::COPY || CurrOp.Opcode == NdOp::INT_ZEXT) &&
-            CurrOp.NumInputs >= 1 && !DefinedHere)
-          ReturnBlocks[MedBlock.Ops.front().Addr] =
-              medvarToExpr(CurrOp.Inputs[0]);
+            CurrOp.NumInputs >= 1 && !DefinedHere) {
+          auto Value = medvarToExpr(CurrOp.Inputs[0]);
+          renameCoalescedVars(Value);
+          ReturnBlocks[MedBlock.Ops.front().Addr] = std::move(Value);
+        }
         break;
       }
     }

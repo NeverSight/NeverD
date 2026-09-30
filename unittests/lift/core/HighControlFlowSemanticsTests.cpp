@@ -4853,6 +4853,129 @@ TEST(HighControlFlowSemantics, JoinDefaultKeepsValuesOfAnArmWithTwoJumps) {
   EXPECT_EQ(execute(Late, 2), std::optional<uint64_t>(10));
 }
 
+namespace {
+/// `P = 0; while (P < 10) { b = P + 3; P = b; } return P;` in the flat form
+/// structureControlFlow produces, both PHI edge copies marked. With
+/// \p ReadAfterStep the body also stores P after b is defined.
+HighFunc loopCarriedCopy(bool ReadAfterStep) {
+  auto Initial = assign(0x1000, 1, 0);
+  Initial.IsPhiCopy = true;
+  HighStmt Exit;
+  Exit.Kind = StmtKind::If;
+  Exit.Addr = 0x1004;
+  Exit.Cond = HighExpr::makeUnary(
+      NdOp::BOOL_NOT, HighExpr::makeBinop(NdOp::INT_LESS, local(1),
+                                          HighExpr::makeConst(10, 8)));
+  // Lowering leaves a conditional's own goto without an address.
+  Exit.Body = {jump(0, 0x1020)};
+  auto Step = assign(0x1008, 2, 0);
+  Step.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(3, 8));
+  auto Back = assign(0x1010, 1, 0);
+  Back.Val = local(2);
+  Back.IsPhiCopy = true;
+  const auto Slot = HighExpr::makeConst(0x100, 8);
+  HighFunc F;
+  F.Body = {Initial, Exit, Step};
+  if (ReadAfterStep) {
+    HighStmt Keep;
+    Keep.Kind = StmtKind::Store;
+    Keep.Addr = 0x100c;
+    Keep.StoreAddr = Slot;
+    Keep.StoreVal = local(1);
+    F.Body.push_back(Keep);
+  }
+  F.Body.push_back(Back);
+  F.Body.push_back(jump(0x1010, 0x1004));
+  F.Body.push_back(result(
+      0x1020, ReadAfterStep ? HighExpr::makeBinop(
+                                  NdOp::INT_ADD, local(1),
+                                  HighExpr::makeLoad(Slot, NdType::makeInt(8)))
+                            : local(1)));
+  return F;
+}
+
+bool namesLocal(const HighFunc &F, int Id) {
+  bool Found = false;
+  std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
+    Found |= E->Kind == ExprKind::Var && E->Var.Id == Id;
+    E->forEachChildExpr(Visit);
+  };
+  walkStmts(F.Body, [&](const HighStmt &S) { forEachExpr(S, Visit); });
+  return Found;
+}
+} // namespace
+
+TEST(HighControlFlowSemantics, LoopCarriedValueTakesItsPhiName) {
+  auto F = loopCarriedCopy(false);
+  const auto Before = execute(F, 0);
+  ASSERT_EQ(Before, std::optional<uint64_t>(12));
+  const auto Renames = coalescePhiCopies(F);
+  ASSERT_EQ(Renames.size(), 1u);
+  EXPECT_EQ(Renames[0].first.Id, 2);
+  EXPECT_EQ(Renames[0].second.Id, 1);
+  EXPECT_FALSE(namesLocal(F, 2));
+  EXPECT_EQ(execute(F, 0), Before);
+}
+
+TEST(HighControlFlowSemantics, PhiValueReadAfterItsSuccessorKeepsItsCopy) {
+  auto F = loopCarriedCopy(true);
+  const auto Before = execute(F, 0);
+  ASSERT_EQ(Before, std::optional<uint64_t>(21));
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  EXPECT_TRUE(namesLocal(F, 2));
+  EXPECT_EQ(execute(F, 0), Before);
+}
+
+TEST(HighControlFlowSemantics, DestinationWriteWhileTheSourceIsLiveKeepsCopy) {
+  auto Source = assign(0x1000, 2, 0);
+  Source.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(0), HighExpr::makeConst(1, 8));
+  const auto Slot = HighExpr::makeConst(0x100, 8);
+  HighStmt Keep;
+  Keep.Kind = StmtKind::Store;
+  Keep.Addr = 0x1008;
+  Keep.StoreAddr = Slot;
+  Keep.StoreVal = local(1);
+  auto Copy = assign(0x100c, 1, 0);
+  Copy.Val = local(2);
+  Copy.IsPhiCopy = true;
+  HighFunc F;
+  F.Body = {Source, assign(0x1004, 1, 5), Keep, Copy,
+            result(0x1010, HighExpr::makeBinop(
+                               NdOp::INT_ADD, local(1),
+                               HighExpr::makeLoad(Slot, NdType::makeInt(8))))};
+  const auto Before = execute(F, 7);
+  ASSERT_EQ(Before, std::optional<uint64_t>(13));
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  EXPECT_EQ(execute(F, 7), Before);
+}
+
+TEST(HighControlFlowSemantics, EntryRegisterValueKeepsItsOwnName) {
+  MedVar Entry;
+  Entry.Kind = MedVar::Reg;
+  Entry.Id = 7;
+  Entry.SSAVer = 0;
+  Entry.Size = 8;
+  Entry.RegOff = 24;
+  // Lowering declares a register read before any write with an entry
+  // self-assignment. It names the caller's value, not a definition here.
+  HighStmt Declare;
+  Declare.Kind = StmtKind::Assign;
+  Declare.Addr = 0x1000;
+  Declare.Dst = HighExpr::makeVar(Entry);
+  Declare.Val = HighExpr::makeVar(Entry);
+  auto Copy = assign(0x1004, 1, 0);
+  Copy.Val = HighExpr::makeVar(Entry);
+  Copy.IsPhiCopy = true;
+  HighFunc F;
+  F.Body = {Declare, Copy, result(0x1008, local(1))};
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  size_t Copies = 0;
+  walkStmts(F.Body, [&](const HighStmt &S) { Copies += S.IsPhiCopy; });
+  EXPECT_EQ(Copies, 1u);
+}
+
 TEST(HighControlFlowSemantics, IndirectCallTargetKeepsItsConditionTemporary) {
   // t1 = *slot; if (t1) return t1(); return 0;
   // The call target reads t1 as well, so t1 cannot fold into the condition.
@@ -4875,6 +4998,83 @@ TEST(HighControlFlowSemantics, IndirectCallTargetKeepsItsConditionTemporary) {
     Assigned |= S.Kind == StmtKind::Assign && S.Dst && S.Dst->Var.Id == 1;
   });
   EXPECT_TRUE(Assigned);
+}
+
+TEST(HighControlFlowSemantics, UnreadPhiDestinationJoinsNoNames) {
+  // t1 is never read: renaming t2 to t1 would only make a dead value a
+  // second write of a shared local that dead-code elimination must keep.
+  auto Source = assign(0x1000, 2, 0);
+  Source.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(0), HighExpr::makeConst(1, 8));
+  auto Copy = assign(0x1004, 1, 0);
+  Copy.Val = local(2);
+  Copy.IsPhiCopy = true;
+  HighFunc F;
+  F.Body = {Source, Copy, result(0x1008, HighExpr::makeConst(5, 8))};
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+}
+
+TEST(HighControlFlowSemantics, UnreadPhiChainDisappearsAsAWhole) {
+  // t3 = t1 is never read, so t1 = t2 only feeds a dead copy: both go, and
+  // neither joins t2 to a name.
+  auto Source = assign(0x1000, 2, 0);
+  Source.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(0), HighExpr::makeConst(1, 8));
+  auto First = assign(0x1004, 1, 0);
+  First.Val = local(2);
+  First.IsPhiCopy = true;
+  auto Second = assign(0x1008, 3, 0);
+  Second.Val = local(1);
+  Second.IsPhiCopy = true;
+  HighFunc F;
+  F.Body = {Source, First, Second, result(0x100c, local(2))};
+  const auto Before = execute(F, 4);
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  size_t Copies = 0;
+  walkStmts(F.Body, [&](const HighStmt &S) { Copies += S.IsPhiCopy; });
+  EXPECT_EQ(Copies, 0u);
+  EXPECT_EQ(execute(F, 4), Before);
+}
+
+TEST(HighControlFlowSemantics, SharedEntryAddressStillJoinsTheWeb) {
+  // Lowering can give the loop test and the statement before it one native
+  // address. The back edge enters that run at its first statement.
+  auto F = loopCarriedCopy(false);
+  auto Mark = assign(0x1004, 9, 0);
+  F.Body.insert(F.Body.begin() + 1, Mark);
+  const auto Before = execute(F, 0);
+  ASSERT_EQ(Before, std::optional<uint64_t>(12));
+  const auto Renames = coalescePhiCopies(F);
+  ASSERT_EQ(Renames.size(), 1u);
+  EXPECT_FALSE(namesLocal(F, 2));
+  EXPECT_EQ(execute(F, 0), Before);
+}
+
+TEST(HighControlFlowSemantics, ByteInsertWebKeepsItsIncomingNames) {
+  // t1 = t0 ? t2 : {t2[1..8), 10}. The byte insert keeps t2's upper bytes
+  // only because the register did; joining t2 into t1 would make them a
+  // real value that dead-byte narrowing could no longer drop.
+  auto Source = assign(0x1000, 2, 0);
+  Source.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(0), HighExpr::makeConst(1, 8));
+  auto Insert = assign(0x1004, 1, 0);
+  Insert.Val =
+      concatenate(byteSlice(local(2), 1, 7), HighExpr::makeConst(10, 1));
+  Insert.IsPhiCopy = true;
+  HighStmt Test;
+  Test.Kind = StmtKind::If;
+  Test.Addr = 0x1004;
+  Test.Cond = local(0);
+  Test.Body = {Insert, jump(0, 0x1010)};
+  auto Copy = assign(0x1008, 1, 0);
+  Copy.Val = local(2);
+  Copy.IsPhiCopy = true;
+  HighFunc F;
+  F.Body = {Source, Test, Copy, result(0x1010, byteSlice(local(1), 0, 1))};
+  const auto Before = execute(F, 3);
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  EXPECT_TRUE(namesLocal(F, 2));
+  EXPECT_EQ(execute(F, 3), Before);
 }
 
 TEST(HighControlFlowSemantics, NestedIfMergeKeepsAnEnteredPrefix) {
@@ -4952,4 +5152,26 @@ TEST(HighControlFlowSemantics, JoinDefaultStaysWhereAnEarlierJumpEntersIt) {
   EXPECT_EQ(execute(F, 2), std::optional<uint64_t>(7));
   EXPECT_EQ(execute(F, 0), std::optional<uint64_t>(7));
   EXPECT_EQ(execute(F, 6), std::optional<uint64_t>(11));
+TEST(HighControlFlowSemantics, WebsWithoutARealValueKeepTheirNames) {
+  // t1 = unknown; t2 = t0 ? t1 : unknown; return t2. Neither local ever
+  // receives a computed value, so one name would only hide which path left
+  // the result unknown.
+  auto First = assign(0x1000, 1, 0);
+  First.Val = HighExpr::makeUndef(8);
+  First.IsPhiCopy = true;
+  auto Pass = assign(0x1004, 2, 0);
+  Pass.Val = local(1);
+  Pass.IsPhiCopy = true;
+  HighStmt Test;
+  Test.Kind = StmtKind::If;
+  Test.Addr = 0x1004;
+  Test.Cond = local(0);
+  Test.Body = {Pass, jump(0, 0x1010)};
+  auto Other = assign(0x1008, 2, 0);
+  Other.Val = HighExpr::makeUndef(8);
+  Other.IsPhiCopy = true;
+  HighFunc F;
+  F.Body = {First, Test, Other, result(0x1010, local(2))};
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  EXPECT_TRUE(namesLocal(F, 1));
 }

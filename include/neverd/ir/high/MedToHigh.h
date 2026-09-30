@@ -56,6 +56,13 @@ void simplifyExprSemantics(std::vector<HighStmt> &Stmts);
 /// Preserve external entries and require exact fallthrough destinations.
 void foldStructuredContinuations(HighFunc &Func, const MedFunc *Med = nullptr);
 
+/// Replace PHI copies no emitted path reads with Nops, then give the source
+/// of each remaining scalar PHI copy its destination's name when no emitted
+/// path needs both values at once, turning that copy into a self-assignment.
+/// Returns the (old, new) names.  The flow graph has no exceptional edges, so
+/// callers must skip functions that a personality enters.
+std::vector<std::pair<MedVar, MedVar>> coalescePhiCopies(HighFunc &Func);
+
 /// Replace `goto L` with a copy of L's tail when L is at most three pure
 /// assignments followed by a return.  The original stays for other paths.
 /// Returns true when a goto was replaced.
@@ -218,6 +225,10 @@ private:
   std::vector<SourceABIParameter> SourceParameters;
   VarKeySet CallOutputs;
   VarKeySet PhiOutputVars;
+  /// SSA values that took a PHI destination's name after structuring. Every
+  /// expression built from MedIR after that point must use the same names.
+  VarKeyMap<MedVar> CoalescedNames;
+  void renameCoalescedVars(const ExprPtr &E) const;
   /// Per-function indexes for the Win64 callee-save parameter mapping in
   /// medvarToExpr: register COPYs whose source is an entry parameter (in
   /// block/op order, with that parameter's index), and every (Id, SSAVer)
