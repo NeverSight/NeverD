@@ -222,8 +222,9 @@ void postRenameCleanup(std::vector<HighStmt> &Stmts) {
 // coalescePhiCopies — drop unread PHI copies, then name each PHI web once
 //===----------------------------------------------------------------------===//
 
-/// Erase the statements \p ShouldErase selects at every nesting level; one a
-/// goto still enters leaves an anchor behind.
+/// Erase the statements \p ShouldErase selects at every nesting level. One a
+/// goto enters stays: structuring reads an empty anchor as padding, so the
+/// work after it could lose that entry. Later cleanup removes it.
 static void
 eraseEverywhere(std::vector<HighStmt> &Body, const std::set<va_t> &Targets,
                 const std::function<bool(const HighStmt &)> &ShouldErase) {
@@ -236,7 +237,9 @@ eraseEverywhere(std::vector<HighStmt> &Body, const std::set<va_t> &Targets,
     for (auto &Clause : S.EHClauseBodies)
       eraseEverywhere(Clause, Targets, ShouldErase);
   }
-  eraseKeepingBranchEntries(Body, Targets, ShouldErase);
+  eraseKeepingBranchEntries(Body, Targets, [&](const HighStmt &S) {
+    return !Targets.count(S.Addr) && ShouldErase(S);
+  });
 }
 
 std::vector<std::pair<MedVar, MedVar>> coalescePhiCopies(HighFunc &Func) {

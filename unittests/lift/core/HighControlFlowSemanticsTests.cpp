@@ -5152,6 +5152,8 @@ TEST(HighControlFlowSemantics, JoinDefaultStaysWhereAnEarlierJumpEntersIt) {
   EXPECT_EQ(execute(F, 2), std::optional<uint64_t>(7));
   EXPECT_EQ(execute(F, 0), std::optional<uint64_t>(7));
   EXPECT_EQ(execute(F, 6), std::optional<uint64_t>(11));
+}
+
 TEST(HighControlFlowSemantics, WebsWithoutARealValueKeepTheirNames) {
   // t1 = unknown; t2 = t0 ? t1 : unknown; return t2. Neither local ever
   // receives a computed value, so one name would only hide which path left
@@ -5174,4 +5176,34 @@ TEST(HighControlFlowSemantics, WebsWithoutARealValueKeepTheirNames) {
   F.Body = {First, Test, Other, result(0x1010, local(2))};
   EXPECT_TRUE(coalescePhiCopies(F).empty());
   EXPECT_TRUE(namesLocal(F, 1));
+}
+
+TEST(HighControlFlowSemantics, CopyCycleWithoutAReaderDisappears) {
+  // t1 = 5; loop: t9 = t0 + 1; t2 = t1; t1 = t2; if (t0) goto loop;
+  // return 7. Each copy is read only by the other, so neither value is ever
+  // used: the copies go, and none of them joins a name.
+  auto Initial = assign(0x1000, 1, 5);
+  Initial.IsPhiCopy = true;
+  auto Work = assign(0x1004, 9, 0);
+  Work.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(0), HighExpr::makeConst(1, 8));
+  auto Forward = assign(0x1008, 2, 0);
+  Forward.Val = local(1);
+  Forward.IsPhiCopy = true;
+  auto Back = assign(0x100c, 1, 0);
+  Back.Val = local(2);
+  Back.IsPhiCopy = true;
+  HighStmt Again;
+  Again.Kind = StmtKind::If;
+  Again.Addr = 0x1010;
+  Again.Cond = local(0);
+  Again.Body = {jump(0, 0x1004)};
+  HighFunc F;
+  F.Body = {Initial, Work, Forward, Back, Again,
+            result(0x1014, HighExpr::makeConst(7, 8))};
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  size_t Copies = 0;
+  walkStmts(F.Body, [&](const HighStmt &S) { Copies += S.IsPhiCopy; });
+  EXPECT_EQ(Copies, 0u);
+  EXPECT_EQ(execute(F, 0), std::optional<uint64_t>(7));
 }

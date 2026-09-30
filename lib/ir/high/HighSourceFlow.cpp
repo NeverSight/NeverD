@@ -1246,6 +1246,14 @@ class SourceFlow {
       Bits[Row * Words + Bit / 64] |= uint64_t{1} << (Bit % 64);
     };
 
+    // A copy a jump enters stays, as the label's statement, and keeps reading
+    // its source; only the others can be erased.
+    std::set<va_t> Entered;
+    for (const auto &Jump : Gotos)
+      Entered.insert(Jump.second);
+    std::vector<bool> IsCopy(Nodes.size());
+    for (size_t I : CopyNodes)
+      IsCopy[I] = !Entered.count(Nodes[I].Statement->Addr);
     std::vector<uint64_t> Live(Nodes.size() * Words);
     std::vector<uint64_t> Out(Words);
     auto LiveOut = [&](size_t Index) {
@@ -1256,6 +1264,12 @@ class SourceFlow {
           Out[W] |= Live[Next * Words + W];
       }
     };
+    auto LiveAfter = [&](size_t Local) {
+      const size_t Bit = Dense[Local];
+      return (Out[Bit / 64] >> (Bit % 64)) & 1;
+    };
+    // Strong liveness: a copy reads its source only for a destination that
+    // is itself still read, so a cycle of copies keeps nothing alive.
     auto Solve = [&] {
       spend(Nodes.size() * Words);
       std::fill(Live.begin(), Live.end(), 0);
@@ -1270,12 +1284,16 @@ class SourceFlow {
         Work.pop_back();
         Queued[Index] = false;
         LiveOut(Index);
-        if (auto Definition = Nodes[Index].Definition)
+        const auto Definition = Nodes[Index].Definition;
+        const bool Reads =
+            !IsCopy[Index] || !Definition || LiveAfter(*Definition);
+        if (Definition)
           if (const size_t Killed = Dense[*Definition]; Killed != NoNode)
             Out[Killed / 64] &= ~(uint64_t{1} << (Killed % 64));
-        for (size_t Use : Nodes[Index].Uses)
-          if (const size_t Read = Dense[Use]; Read != NoNode)
-            Out[Read / 64] |= uint64_t{1} << (Read % 64);
+        if (Reads)
+          for (size_t Use : Nodes[Index].Uses)
+            if (const size_t Read = Dense[Use]; Read != NoNode)
+              Out[Read / 64] |= uint64_t{1} << (Read % 64);
         bool Changed = false;
         spend(Words);
         for (size_t W = 0; W < Words; ++W) {
@@ -1293,27 +1311,23 @@ class SourceFlow {
           }
       }
     };
-    auto LiveAfter = [&](size_t Local) {
-      const size_t Bit = Dense[Local];
-      return (Out[Bit / 64] >> (Bit % 64)) & 1;
-    };
-    for (bool Changed = true; Changed;) {
-      Changed = false;
-      Solve();
-      for (size_t I : CopyNodes) {
-        if (!Nodes[I].Definition)
-          continue;
-        LiveOut(I);
-        if (LiveAfter(*Nodes[I].Definition))
-          continue;
-        // The copy is erased, so it neither reads nor writes any more.
-        Dead.insert(Nodes[I].Statement);
-        Nodes[I].Uses.clear();
-        Nodes[I].Writes.clear();
-        Nodes[I].Definition.reset();
-        Changed = true;
-      }
+    Solve();
+    bool Erased = false;
+    for (size_t I : CopyNodes) {
+      if (!IsCopy[I])
+        continue;
+      LiveOut(I);
+      if (LiveAfter(*Nodes[I].Definition))
+        continue;
+      // The copy is erased, so it neither reads nor writes any more.
+      Dead.insert(Nodes[I].Statement);
+      Nodes[I].Uses.clear();
+      Nodes[I].Writes.clear();
+      Nodes[I].Definition.reset();
+      Erased = true;
     }
+    if (Erased)
+      Solve();
 
     std::vector<unsigned> Definitions(Locals.size());
     // A byte insert keeps a register's other bytes only because the machine
@@ -1360,7 +1374,6 @@ class SourceFlow {
       return A.Position < B.Position;
     });
 
-    // The last round erased nothing, so Live is current.
     std::vector<uint64_t> Interference(Count * Words, 0);
     for (size_t I = 0; I < Nodes.size(); ++I) {
       if (!Reachable[I] || Nodes[I].Writes.empty())
