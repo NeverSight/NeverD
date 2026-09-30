@@ -17,6 +17,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include <map>
@@ -227,7 +228,9 @@ private:
   VarKeySet PhiOutputVars;
   /// SSA values that took a PHI destination's name after structuring. Every
   /// expression built from MedIR after that point must use the same names.
-  VarKeyMap<MedVar> CoalescedNames;
+  /// Keyed by emitted-local identity: a register and a temporary may share
+  /// an {Id, SSAVer} key.
+  std::map<HighSourceLocalIdentity, MedVar> CoalescedNames;
   void renameCoalescedVars(const ExprPtr &E) const;
   /// Per-function indexes for the Win64 callee-save parameter mapping in
   /// medvarToExpr: register COPYs whose source is an entry parameter (in

@@ -243,7 +243,12 @@ eraseEverywhere(std::vector<HighStmt> &Body, const std::set<va_t> &Targets,
 }
 
 std::vector<std::pair<MedVar, MedVar>> coalescePhiCopies(HighFunc &Func) {
-  auto Cleanup = highSourcePhiCleanup(Func);
+  // An unread copy of a computed value goes only when evaluating it costs no
+  // memory access, call or trap.
+  size_t Budget = limits::kMaxPhiCleanupDiscardNodes;
+  auto Cleanup = highSourcePhiCleanup(Func, [&](const HighStmt &S) {
+    return discardableIntegerValue(S.Val, Budget);
+  });
   const auto Targets = gotoTargets(Func.Body);
   if (!Cleanup.DeadCopies.empty())
     eraseEverywhere(Func.Body, Targets, [&](const HighStmt &S) {

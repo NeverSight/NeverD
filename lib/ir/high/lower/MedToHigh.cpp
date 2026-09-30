@@ -308,11 +308,11 @@ void MedToHighConverter::renameCoalescedVars(const ExprPtr &E) const {
     if (!Node || !Seen.insert(Node.get()).second)
       return;
     if (Node->Kind == ExprKind::Var || Node->Kind == ExprKind::Phi)
-      if (auto It = CoalescedNames.find(varKey(Node->Var));
+      if (auto It = CoalescedNames.find(highSourceLocalIdentity(Node->Var));
           It != CoalescedNames.end())
         Node->Var = It->second;
     for (MedVar &Output : Node->IntrinsicOutputs)
-      if (auto It = CoalescedNames.find(varKey(Output));
+      if (auto It = CoalescedNames.find(highSourceLocalIdentity(Output));
           It != CoalescedNames.end())
         Output = It->second;
     Node->forEachChildExpr(Visit);
@@ -1046,7 +1046,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   Trace.high(Func, "structured");
   if (!mayEnterByException(Med)) {
     for (const auto &[From, To] : coalescePhiCopies(Func))
-      CoalescedNames[varKey(From)] = To;
+      CoalescedNames[highSourceLocalIdentity(From)] = To;
     Trace.high(Func, "coalesced");
   }
   auto TSimp = std::chrono::steady_clock::now();

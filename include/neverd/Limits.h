@@ -358,6 +358,10 @@ constexpr int kMaxExprDepth = 500;
 /// Maximum SSA nodes to process in a single function.
 constexpr int kMaxSSANodes = 10000;
 
+/// Expression nodes one function's PHI cleanup may inspect while proving
+/// unread PHI copies free of memory accesses, calls and traps.
+constexpr size_t kMaxPhiCleanupDiscardNodes = 100000;
+
 /// Skip HighIR control-flow structuring when MedIR exceeds this many blocks.
 /// Flattened or obfuscated functions stay as goto skeletons.
 constexpr size_t kMaxStructurableMedBlocks = 1024;

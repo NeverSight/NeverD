@@ -9,6 +9,7 @@
 
 #include "neverd/ir/high/HighIR.h"
 
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
@@ -93,6 +94,10 @@ struct HighSourcePhiCleanup {
 /// branch entries. The complete, unrefined graph is used. Unknown control
 /// flow or exhausted analysis budgets yield an empty result. Statement
 /// pointers borrow Function.
-HighSourcePhiCleanup highSourcePhiCleanup(const HighFunc &Function);
+/// \p Erasable says which PHI copies whose value is not a plain local may
+/// be erased when unread; copies of a local or constant always may.
+HighSourcePhiCleanup
+highSourcePhiCleanup(const HighFunc &Function,
+                     const std::function<bool(const HighStmt &)> &Erasable);
 } // namespace neverd
 #endif

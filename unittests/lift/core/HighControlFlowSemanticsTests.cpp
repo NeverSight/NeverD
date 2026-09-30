@@ -5207,3 +5207,25 @@ TEST(HighControlFlowSemantics, CopyCycleWithoutAReaderDisappears) {
   EXPECT_EQ(Copies, 0u);
   EXPECT_EQ(execute(F, 0), std::optional<uint64_t>(7));
 }
+
+TEST(HighControlFlowSemantics, UnreadSlicePhiCopyGoesButALoadStays) {
+  // t1 = zext(t2[0..4)) and t3 = *slot are unread PHI copies. Evaluating the
+  // extension costs nothing, so it goes; the load is a memory access and
+  // stays.
+  auto Source = assign(0x1000, 2, 0);
+  Source.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(0), HighExpr::makeConst(1, 8));
+  auto Product = assign(0x1004, 1, 0);
+  Product.Val = HighExpr::makeUnary(NdOp::INT_ZEXT, byteSlice(local(2), 0, 4));
+  Product.Val->Type = NdType::makeInt(8, false);
+  Product.IsPhiCopy = true;
+  auto Read = assign(0x1008, 3, 0);
+  Read.Val =
+      HighExpr::makeLoad(HighExpr::makeConst(0x100, 8), NdType::makeInt(8));
+  Read.IsPhiCopy = true;
+  HighFunc F;
+  F.Body = {Source, Product, Read, result(0x100c, local(2))};
+  EXPECT_TRUE(coalescePhiCopies(F).empty());
+  EXPECT_FALSE(namesLocal(F, 1));
+  EXPECT_TRUE(namesLocal(F, 3));
+}

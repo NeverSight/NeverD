@@ -119,6 +119,8 @@ class SourceFlow {
   };
   std::map<const HighStmt *, Site> Sites;
   std::map<va_t, std::vector<size_t>> Entries;
+  // Which PHI copies of a computed value PHI cleanup may erase when unread.
+  const std::function<bool(const HighStmt &)> *Erasable = nullptr;
 
   [[noreturn]] void
   fail(const char *Reason,
@@ -1226,8 +1228,15 @@ class SourceFlow {
     std::vector<size_t> CopyNodes;
     for (size_t I = 0; I < Nodes.size(); ++I) {
       spend();
-      if (!Reachable[I] || !Nodes[I].PhiCopy || !Nodes[I].Definition ||
+      if (!Reachable[I] || !Nodes[I].Definition ||
           AddressTaken.count(*Nodes[I].Definition))
+        continue;
+      const HighStmt *S = Nodes[I].Statement;
+      const bool Computed = S && S->Kind == StmtKind::Assign && S->IsPhiCopy &&
+                            S->Body.empty() && S->ElseBody.empty() &&
+                            S->Cases.empty() && S->DefaultBody.empty() &&
+                            scalarLocal(S->Dst) && Erasable && (*Erasable)(*S);
+      if (!Nodes[I].PhiCopy && !Computed)
         continue;
       CopyNodes.push_back(I);
       Track(*Nodes[I].Definition);
@@ -1691,9 +1700,11 @@ public:
     }
   }
 
-  void cleanup(std::set<const HighStmt *> &Dead,
+  void cleanup(const std::function<bool(const HighStmt &)> &CanErase,
+               std::set<const HighStmt *> &Dead,
                std::vector<std::pair<MedVar, MedVar>> &Renames) {
     try {
+      Erasable = &CanErase;
       Refine = false;
       EmitterLabels = true;
       site(Function.Body, nullptr, 1);
@@ -1728,10 +1739,13 @@ HighSourceFlowReport analyzeHighSourceFlow(const HighFunc &Function,
   SourceFlow(Function, Result).collect(NeedsReturn);
   return Result;
 }
-HighSourcePhiCleanup highSourcePhiCleanup(const HighFunc &Function) {
+HighSourcePhiCleanup
+highSourcePhiCleanup(const HighFunc &Function,
+                     const std::function<bool(const HighStmt &)> &Erasable) {
   HighSourcePhiCleanup Result;
   HighSourceFlowReport Diagnostics;
-  SourceFlow(Function, Diagnostics).cleanup(Result.DeadCopies, Result.Renames);
+  SourceFlow(Function, Diagnostics)
+      .cleanup(Erasable, Result.DeadCopies, Result.Renames);
   return Result;
 }
 bool eliminateHighDeadPhiCopies(HighFunc &Function) {
