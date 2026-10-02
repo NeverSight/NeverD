@@ -28,5 +28,29 @@ NEVERD_PROCESS_TEST_TEXT(AllBits, "ffffffffffffffff")
 NEVERD_PROCESS_TEST_TEXT(BinaryHex, "00ff7f")
 NEVERD_PROCESS_TEST_TEXT(ARMFile, "AArch64.elf")
 NEVERD_PROCESS_TEST_TEXT(X64File, "X64.elf")
-NEVERD_PROCESS_TEST_TEXT(ProbeOptions, "{\"backend\":\"unicorn\",\"architecture\":\"aarch64\",\"contract\":\"checked-user-aarch64-v1\"}")
+NEVERD_PROCESS_TEST_TEXT(
+    ProbeOptions, "{\"backend\":\"unicorn\",\"architecture\":\"aarch64\","
+                  "\"contract\":\"checked-user-aarch64-v1\"}")
+#endif
+
+#ifdef NEVERD_PROCESS_INVALID_JSON
+NEVERD_PROCESS_INVALID_JSON(WindowsScalar, R"({"windows":1})")
+NEVERD_PROCESS_INVALID_JSON(WindowsUnknown, R"({"windows":{"unknown":[]}})")
+NEVERD_PROCESS_INVALID_JSON(WindowsModulesObject,
+                            R"({"windows":{"modules":{}}})")
+NEVERD_PROCESS_INVALID_JSON(WindowsModuleMissingPath,
+                            R"({"windows":{"modules":[{"name":"leaf.dll"}]}})")
+NEVERD_PROCESS_INVALID_JSON(
+    WindowsModuleExtra,
+    R"({"windows":{"modules":[{"name":"leaf.dll","path":"leaf.dll","other":1}]}})")
+NEVERD_PROCESS_INVALID_JSON(
+    WindowsModuleNUL,
+    R"({"windows":{"modules":[{"name":"leaf.dll","path":"a\u0000b"}]}})")
+#endif
+#ifdef NEVERD_PROCESS_TEST_TEXT
+NEVERD_PROCESS_TEST_TEXT(
+    WindowsModuleOptions,
+    R"({"windows":{"modules":[{"name":"leaf.dll","path":"explicit/leaf.dll"}]}})")
+NEVERD_PROCESS_TEST_TEXT(WindowsModuleName, "leaf.dll")
+NEVERD_PROCESS_TEST_TEXT(WindowsModulePath, "explicit/leaf.dll")
 #endif

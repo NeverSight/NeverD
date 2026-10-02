@@ -11,6 +11,8 @@
 #include "../os/windows/process/WindowsProcess.h"
 #include "RuntimeValues.h"
 
+#include "neverd/emulation/ProcessReportFields.h"
+
 #include "llvm/Support/ErrorHandling.h"
 
 namespace neverd::emulation {
@@ -45,6 +47,8 @@ const char *processStopReasonName(ProcessStopReason Reason) {
 llvm::Expected<ProcessResult> emulateProcess(const std::filesystem::path &Path,
                                              ProcessProfile Profile,
                                              const ProcessOptions &Options) {
+  if (Options.Windows && Profile != ProcessProfile::WindowsPE64)
+    return diagnostic::error(process_report::WindowsProfile);
   switch (Profile) {
   case ProcessProfile::LinuxELF64:
     return linux_model::runProcess(Path, Options);

@@ -80,7 +80,7 @@ x64 的 `arch_prctl` 支援 `ARCH_SET_FS`、`ARCH_GET_FS`、`ARCH_SET_GS`、`ARC
 
 ## Windows PE64 設定檔
 
-`windows-pe64-v1` 新增有界 Windows x64/ARM64 主控台程序：PE 載入、PEB/TEB、靜態與動態 TLS、啟動／結束回呼及具名 Win32 API 模型。它獨立使用 CPU 層，不需啟用驅動程式模擬；DLL/CRT 載入、GUI、使用者態 SEH、執行緒及通用 Windows 相容性仍待完成。
+`windows-pe64-v1` 支援有界 Windows x64/ARM64 主控台程序，包括 PEB/TEB、EXE TLS、具名 Win32 API 與明確無環啟動 DLL 圖。客體 DLL 支援名稱／序號程式碼及資料匯入、DIR64 重定位及真實載入器串列身分。DLL 進入點／TLS、動態載入、轉送匯出、CRT／GUI、使用者 SEH 與執行緒仍待完成；原生 ARM64 KVM/WHP 證據仍缺。
 
 Windows 虛擬記憶體新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` 及目前行程的 `FlushInstructionCache`。OS 層管理保留區域，`AddressSpace` 統一管理已認可頁面、權限和實體儲存。測試涵蓋動態程式碼改寫、存取錯誤和記憶體額度回收。
 
@@ -95,11 +95,19 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
   --options='{"backend":"auto","arguments":["guest.exe","argument"],"environment":["MODE=test"]}'
 ```
 
-此版本化單執行緒模型以偏好基址載入 AMD64/ARM64 PE32+ 主控台 EXE。映射前核對原始位元組與載入器資料；保留使用者頁權限及堆疊保護間隙。未知、序號、繫結或延遲匯入、載入設定／CFG、受控映像、GUI 和 DLL 進入點明確拒絕。會驗證重定位紀錄，但不改變基址。系統 API 模型不是已安裝 DLL；載入器串列僅有實際映射的 EXE，`GetModuleHandleW` 目前僅接受 NULL。
+單執行緒設定將 PE32+ EXE 保持在偏好基址，接受進入點為零且無 TLS 目錄的明確 DLL。`WindowsProcessOptions::Modules` 或 JSON `windows.modules` 以 `name`、`path` 提供最多 64 個客體基本名稱與主機輸入路徑，不搜尋或執行主機 DLL。ASCII 名稱不分大小寫；拒絕重複名稱及覆寫系統 API 提供者，只讀取可達檔案。名稱／序號函式與資料匯入繫結實際映射匯出；空洞、缺少符號、循環、轉送、繫結／延遲匯入及未支援的載入設定／CFG 明確失敗。可移動 DLL 衝突時套用 DIR64；固定衝突及寫入連結中繼資料的重定位在建立 CPU 前失敗。
+
+`readPEProgramExports` 擁有原始匯出身分與有界中繼資料讀取範圍；`WindowsProcessModules` 擁有模組圖和全程序精確提供者／名稱 API 跳板。`VirtualMemory` 在映射前登記全部映像，`AddressSpace` 管理頁面及權限。PEB/LDR 僅列真實映像，初始化串列依相依順序排列 DLL。`GetModuleHandleW` 接受 NULL 或 ASCII 基本名稱，不分大小寫，無副檔名時補 `.dll`；路徑、非 ASCII 查詢及結尾點規則仍不支援。找不到名稱回傳錯誤 126，成功保留 LastError。API 模型不是已安裝系統 DLL。
+
+輸入總位元組與映像總範圍各受 `memory_limit` 限制，執行期映射也計入映像預算。準備階段共用 65,536 筆紀錄、64 MiB 中繼資料讀取、名稱長度及整體截止時間；阻塞主機 I/O 無硬即時保證。原創 EXE→DLL→DLL 樣例驗證重定位指標、序號呼叫、共享資料、API 指標身分、`MEM_IMAGE`、載入器串列及 EXE TLS 掛接／分離。`NeverDWindowsProcessTests` 包含直接原生 Windows 對照，`NeverDPEProgramExportsTests` 驗證畸形資料與預算，`NeverDProcessPublicTests` 驗證 C ABI/CLI 目錄一致性。不可用後端明確略過。
+
+```json
+{"windows":{"modules":[{"name":"middle.dll","path":"inputs/middle.dll"},{"name":"leaf.dll","path":"inputs/leaf.dll"}]}}
+```
 
 x64 GS、ARM64 x18 指向 TEB，提供堆疊邊界、自指標、PID/TID、PEB、程序參數、LastError 與 TLS。嚴格將 UTF-8 轉為 UTF-16，argv 依 Microsoft CRT 規則加引號。環境名稱限 ASCII，拒絕不分大小寫的重複名稱；值可為 Unicode，排序後以雙 NUL 結尾，不繼承主機環境或檔案系統。靜態 TLS 複製範本、清零 BSS、寫入 32 位索引；動態 TLS 使用獨立 TEB 槽位。啟動／結束依序讀取即時回呼表，共用截止時間及資源額度。進入點返回與正常退出都執行結束回呼；結束回呼內遞迴退出會明確停止。
 
-`WindowsProcessServices.def` 管理完整 API 清單：`ExitProcess`、`RtlExitUserProcess`、標準輸出控制代碼與同步 `WriteFile`、LastError、程序／執行緒識別與虛擬控制代碼、`GetCommandLineW`、程序堆配置／釋放／大小、動態 TLS、NULL `GetModuleHandleW`。提供者限 `kernel32.dll`、`kernelbase.dll`、`ntdll.dll` 並精確匹配匯出名稱。直接 syscall 與偽造回呼入口無法選擇 API。堆有程序所有權並於釋放時回收；輸出保留二進位資料，API 參數錯誤、非同步 I/O 與使用者例外限制分開處理。別名指標會看到完成計數的初始清零與實際返回位址變更。
+`WindowsProcessServices.def` 管理完整 API 清單：`ExitProcess`、`RtlExitUserProcess`、標準輸出控制代碼與同步 `WriteFile`、LastError、程序／執行緒識別與虛擬控制代碼、`GetCommandLineW`、程序堆配置／釋放／大小、動態 TLS、`GetModuleHandleW`。提供者限 `kernel32.dll`、`kernelbase.dll`、`ntdll.dll` 並精確匹配匯出名稱。直接 syscall 與偽造回呼入口無法選擇 API。堆有程序所有權並於釋放時回收；輸出保留二進位資料，API 參數錯誤、非同步 I/O 與使用者例外限制分開處理。別名指標會看到完成計數的初始清零與實際返回位址變更。
 
 `windows.native_calls` 保留 DLL／函式名稱、宣告的純量參數及可空結果，不假造 NT syscall 編號。`NeverDWindowsProcessTests` 驗證真實 PE、編譯器 TLS、回呼修改、堆／LastError、別名、畸形資料、權限與預算；`NeverDProcessPublicTests` 驗證 CLI/C ABI。Windows CI 直接執行相同 EXE 作獨立對照，並要求 WHP 測試通過；原生 ARM64 執行證據仍需對應機器。
 

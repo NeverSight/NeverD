@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
+<!-- i18n-source: d157cf302643e879be2748919ad949d2979c1d36798e295ee566f247834396f4 -->
 
 <div align="center" dir="rtl">
 
@@ -115,7 +115,7 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 
 يفصل تنفيذ المعالج بين قبول ISA وذاكرة الضيف ونقل المحرك وسياسة نظام الضيف. يتيح `NEVERD_ENABLE_CPU_EMULATION` طبقة x64/ARM64، ويضيف `NEVERD_ENABLE_DRIVER_EMULATION` بيئة Windows WDM/KMDF x64 المحدودة. يشغّل `linux-elf64-v1` عمليات Linux ELF المدعومة. انظر [تنفيذ المعالج](cpu-execution.md) و[محاكاة عمليات الضيف](process-emulation.md) و[محاكاة برامج تشغيل Windows](driver-emulation.md).
 
-يضيف `windows-pe64-v1` عمليات وحدة تحكم Windows محدودة لـx64/ARM64: تحميل PE وPEB/TEB وTLS ثابت وديناميكي واستدعاءات بدء وإنهاء ونماذج Win32 مسماة. يستخدم طبقة CPU مستقلاً عن محاكاة برامج التشغيل؛ ولا يزال تحميل DLL/CRT وGUI وSEH المستخدم والخيوط والتوافق العام مع Windows غير مكتمل.
+يدعم `windows-pe64-v1` عمليات Windows x64/ARM64 محدودة لوحدة التحكم مع PEB/TEB وTLS لملف EXE وواجهات Win32 مسماة ورسوم DLL بدء صريحة بلا دورات. تدعم DLL استيراد الشيفرة والبيانات بالاسم أو الرقم وإعادة التموضع DIR64 وهويات حقيقية بقوائم المحمّل. ما زالت مداخل/TLS ملفات DLL والتحميل الديناميكي والتصدير المحوّل وCRT/GUI وSEH المستخدم والخيوط غير مكتملة؛ وتغيب أدلة ARM64 KVM/WHP الأصلية.
 
 تضيف الذاكرة الافتراضية في Windows دعم `VirtualAlloc` و`VirtualFree` و`VirtualProtect` و`VirtualQuery` و`FlushInstructionCache` للعملية الحالية. تدير طبقة OS الحجوزات، وتبقى `AddressSpace` المرجع للصفحات الملتزم بها والصلاحيات والتخزين الفعلي. تشمل الاختبارات تعديل الشيفرة وأخطاء الوصول وإعادة استخدام ميزانية الذاكرة.
 

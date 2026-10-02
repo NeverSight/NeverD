@@ -1,0 +1,76 @@
+//===- WindowsModuleCases.def - Original startup DLL observations --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_MODULE_VALUE
+NEVERD_MODULE_VALUE(LeafSeed, 17)
+NEVERD_MODULE_VALUE(MiddleSeed, 5)
+NEVERD_MODULE_VALUE(LastErrorSeed, 0x345)
+NEVERD_MODULE_VALUE(ExitStatus, 37)
+NEVERD_MODULE_VALUE(FailureStatus, 89)
+NEVERD_MODULE_VALUE(StdoutSelector, 0xfffffff5)
+NEVERD_MODULE_VALUE(StderrSelector, 0xfffffff4)
+NEVERD_MODULE_VALUE(MemImage, 0x1000000)
+NEVERD_MODULE_VALUE(MemCommit, 0x1000)
+NEVERD_MODULE_VALUE(Release, 0x8000)
+NEVERD_MODULE_VALUE(ErrorInvalidParameter, 87)
+NEVERD_MODULE_VALUE(ErrorModuleNotFound, 126)
+NEVERD_MODULE_VALUE(TebPEB, 0x60)
+NEVERD_MODULE_VALUE(PebLdr, 0x18)
+NEVERD_MODULE_VALUE(LdrLoadList, 0x10)
+NEVERD_MODULE_VALUE(LdrMemoryList, 0x20)
+NEVERD_MODULE_VALUE(LdrInitList, 0x30)
+NEVERD_MODULE_VALUE(ModuleBase, 0x30)
+NEVERD_MODULE_VALUE(ModuleEntry, 0x38)
+NEVERD_MODULE_VALUE(ModuleSize, 0x40)
+NEVERD_MODULE_VALUE(ModuleName, 0x58)
+NEVERD_MODULE_VALUE(UnicodeBuffer, 8)
+NEVERD_MODULE_VALUE(MaxModules, 256)
+NEVERD_MODULE_VALUE(OrdinalHole, 8)
+NEVERD_MODULE_VALUE(NativeTimeoutSeconds, 10)
+NEVERD_MODULE_VALUE(PreferredDLLBase, 0x180000000)
+NEVERD_MODULE_VALUE(TLSSeed, 23)
+#endif
+#ifdef NEVERD_MODULE_TEXT
+NEVERD_MODULE_TEXT(LeafFile, "leaf.dll")
+NEVERD_MODULE_TEXT(MiddleFile, "middle.dll")
+NEVERD_MODULE_TEXT(ProgramFile, "module process.exe")
+NEVERD_MODULE_TEXT(StdoutFile, "stdout.bin")
+NEVERD_MODULE_TEXT(StderrFile, "stderr.bin")
+NEVERD_MODULE_TEXT(X64Dir, "X64")
+NEVERD_MODULE_TEXT(AArch64Dir, "AArch64")
+NEVERD_MODULE_TEXT(TempPrefix, "neverd-module-graph")
+NEVERD_MODULE_TEXT(Message, "startup-dlls\n")
+NEVERD_MODULE_TEXT(Detached, "dlls-detached\n")
+NEVERD_MODULE_TEXT(MissingTools, "requires Clang and lld-link module fixtures")
+NEVERD_MODULE_TEXT(NativeOnly, "requires native Windows x64")
+NEVERD_MODULE_TEXT(MissingModule, "absent.dll")
+NEVERD_MODULE_TEXT(DuplicateModule, "LEAF.DLL")
+NEVERD_MODULE_TEXT(PathModule, "../leaf.dll")
+NEVERD_MODULE_TEXT(SystemModule, "kernel32.dll")
+NEVERD_MODULE_TEXT(UnknownSymbol, "MiddleProbf")
+NEVERD_MODULE_TEXT(ProbeSymbol, "MiddleProbe")
+#endif
+#ifdef NEVERD_MODULE_WIDE
+NEVERD_MODULE_WIDE(LeafName, L"LEAF.DLL")
+NEVERD_MODULE_WIDE(MiddleName, L"MiDdLe")
+NEVERD_MODULE_WIDE(MissingName, L"absent.dll")
+#endif
+#ifdef NEVERD_MODULE_ASM
+#if defined(_M_X64) || defined(__x86_64__)
+NEVERD_MODULE_ASM(ReadTEB, "movq %%gs:0x30, %0")
+#else
+NEVERD_MODULE_ASM(ReadTEB, "mov %0, x18")
+#endif
+#endif
+
+#ifdef NEVERD_MODULE_LEAF_EXPORT
+NEVERD_MODULE_LEAF_EXPORT(LeafValue, "@4 DATA")
+NEVERD_MODULE_LEAF_EXPORT(LeafOrdinal, "@9 NONAME")
+#endif
+#ifdef NEVERD_MODULE_MIDDLE_EXPORT
+NEVERD_MODULE_MIDDLE_EXPORT(MiddleProbe, "")
+NEVERD_MODULE_MIDDLE_EXPORT(MiddleAPIGate, "")
+NEVERD_MODULE_MIDDLE_EXPORT(MiddleValue, "DATA")
+#endif

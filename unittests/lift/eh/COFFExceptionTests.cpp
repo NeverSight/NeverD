@@ -8,8 +8,10 @@
 #include "COFFUnwindDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/ExceptionInfo.h"
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
@@ -105,6 +107,48 @@ TEST(COFFExceptionModel, QueriesOwningRuntimeFunction) {
   ASSERT_NE(EI.findFunction(0x1800), nullptr);
   EXPECT_EQ(EI.findFunction(0x1800)->CodeRange.Begin, 0x1000u);
   EXPECT_EQ(EI.findFunction(0x1800)->CodeRange.End, 0x3000u);
+}
+
+TEST(COFFExceptionParser, ChainedFragmentsBelongToTheirChainsPrimary) {
+  // ExIsResourceAcquiredSharedLite: the record at +0x7f chains to the one at
+  // +0x79, which chains to the function's primary record.  Code in either
+  // fragment is part of the function, so a jump into it is not a tail call.
+  BinaryImage Image;
+  Image.Format = BinaryFormat::COFF;
+  Image.Arch = Arch::X64;
+  ExceptionInfo &Info = Image.ExceptionMetadata;
+  auto Add = [&](RuntimeFunctionKind Kind, va_t Begin, va_t End,
+                 uint32_t UnwindInfoRVA) {
+    ExceptionFunction Function;
+    Function.Kind = Kind;
+    Function.CodeRange = {Begin, End};
+    Function.UnwindInfoRVA = UnwindInfoRVA;
+    Info.Functions.push_back(std::move(Function));
+  };
+  Add(RuntimeFunctionKind::Primary, 0x140001000, 0x140001058, 0x3000);
+  Add(RuntimeFunctionKind::Chained, 0x140001079, 0x14000107f, 0x3010);
+  Add(RuntimeFunctionKind::Chained, 0x14000107f, 0x140001123, 0x3020);
+  for (size_t I = 1; I != 3; ++I) {
+    Info.Functions[I].ChainedPrimaryRange = Info.Functions[I - 1].CodeRange;
+    Info.Functions[I].ChainedUnwindInfoRVA =
+        Info.Functions[I - 1].UnwindInfoRVA;
+  }
+
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+  ASSERT_EQ(Info.ParseStatus, ExceptionParseStatus::Complete);
+
+  const ExecutableCodeOwnerIndex Owners(Image);
+  for (const ExecutableCodeOwnerIndex *Index :
+       {static_cast<const ExecutableCodeOwnerIndex *>(nullptr), &Owners}) {
+    for (va_t Target : {0x140001079ULL, 0x14000107fULL, 0x140001122ULL})
+      EXPECT_TRUE(
+          isExplicitlyOwnedFunctionFragment(Image, 0x140001000, Target, Index))
+          << std::hex << Target;
+    EXPECT_FALSE(isExplicitlyOwnedFunctionFragment(Image, 0x140001000,
+                                                   0x140001123, Index));
+    EXPECT_FALSE(isExplicitlyOwnedFunctionFragment(Image, 0x140001079,
+                                                   0x14000107f, Index));
+  }
 }
 
 TEST(COFFExceptionParser, AcceptsAcyclicX64UnwindChainBeyondLegacyDepth) {

@@ -19,6 +19,8 @@ NEVERD_PROCESS_OPTION_STRINGS(Arguments, "arguments", Arguments)
 NEVERD_PROCESS_OPTION_STRINGS(Environment, "environment", Environment)
 #endif
 #ifdef NEVERD_PROCESS_REPORT_FIELD
+NEVERD_PROCESS_REPORT_FIELD(Modules, "modules")
+NEVERD_PROCESS_REPORT_FIELD(Path, "path")
 NEVERD_PROCESS_REPORT_FIELD(Android, "android")
 NEVERD_PROCESS_REPORT_FIELD(EntrySymbol, "entry_symbol")
 NEVERD_PROCESS_REPORT_FIELD(EntryAddress, "entry_address")
@@ -107,9 +109,10 @@ NEVERD_PROCESS_CLI_STRING(
     "windows-pe64-v1")
 NEVERD_PROCESS_CLI_STRING(ProfileValue, "name")
 NEVERD_PROCESS_CLI_STRING(OptionsOption, "options")
-NEVERD_PROCESS_CLI_STRING(OptionsHelp,
-                          "Options JSON: backend, resource limits, "
-                          "arguments/environment or android native options")
+NEVERD_PROCESS_CLI_STRING(
+    OptionsHelp,
+    "Options JSON: backend, resource limits, "
+    "arguments/environment, Android native or Windows module options")
 NEVERD_PROCESS_CLI_STRING(OptionsValue, "json")
 #endif
 #ifdef NEVERD_PROCESS_CLI_STATUS
@@ -117,4 +120,10 @@ NEVERD_PROCESS_CLI_STATUS(Success, 0)
 NEVERD_PROCESS_CLI_STATUS(Error, 1)
 NEVERD_PROCESS_CLI_STATUS(GuestFailure, 2)
 NEVERD_PROCESS_CLI_STATUS(Incomplete, 3)
+#endif
+
+#ifdef NEVERD_PROCESS_REPORT_TEXT
+NEVERD_PROCESS_REPORT_TEXT(WindowsOptions, "invalid Windows process option: ")
+NEVERD_PROCESS_REPORT_TEXT(WindowsProfile,
+                           "Windows options require windows-pe64-v1")
 #endif

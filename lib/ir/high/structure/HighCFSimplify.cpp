@@ -3042,8 +3042,6 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
         Bad = true;
       std::vector<HighStmt> Moved(LL.begin() + K, LL.begin() + M + 1);
       Bad |= hasLooseBreakOrContinue(Moved);
-      walkStmts(Moved,
-                [&](const HighStmt &S) { Bad |= S.Kind == StmtKind::SEHTry; });
       if (Bad)
         continue;
       if (FallTarget) {

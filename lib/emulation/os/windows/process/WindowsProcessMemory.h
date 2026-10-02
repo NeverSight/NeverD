@@ -29,8 +29,12 @@ struct MemoryInformation {
 /// require exclusive OS ownership at a stopped execution boundary.
 class VirtualMemory final {
 public:
+  VirtualMemory(AddressSpace &Space, const ProcessOptions &Options);
   VirtualMemory(AddressSpace &Space, const Image &Image,
                 const ProcessOptions &Options);
+  /// Reserve image identity before any image mappings or CPU are exposed.
+  llvm::Expected<uint64_t> reserveImage(uint64_t Preferred, uint64_t Size,
+                                        bool Relocatable);
   llvm::Expected<MemoryResult> allocate(uint64_t Address, uint64_t Size,
                                         uint32_t Type, uint32_t Protection);
   llvm::Expected<MemoryResult> free(uint64_t Address, uint64_t Size,

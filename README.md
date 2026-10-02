@@ -116,7 +116,7 @@ Recovery depends on supported code patterns; see the [mobile overview](docs/mobi
 
 CPU execution separates ISA admission, guest memory, backend transport and guest OS policy. `NEVERD_ENABLE_CPU_EMULATION` enables the x64/ARM64 CPU layer; `NEVERD_ENABLE_DRIVER_EMULATION` adds the bounded x64 Windows WDM/KMDF environment. The `linux-elf64-v1` profile runs supported Linux ELF processes. See [CPU execution](docs/cpu-execution.md), [Guest process emulation](docs/process-emulation.md) and [Windows driver emulation](docs/driver-emulation.md).
 
-`windows-pe64-v1` adds bounded Windows x64/ARM64 console processes: PE loading, PEB/TEB, static and dynamic TLS, startup/exit callbacks and named Win32 API models. It uses the CPU layer independently of driver emulation; DLL/CRT loading, GUI, user SEH, threads and general Windows compatibility remain unfinished.
+`windows-pe64-v1` supports bounded Windows x64/ARM64 console processes with PEB/TEB, executable TLS, named Win32 APIs and explicit acyclic startup DLL graphs. Guest DLLs support named/ordinal code and data imports, DIR64 rebasing and actual loader-list identities. DLL entry points/TLS, dynamic loading, forwarded exports, CRT/GUI, user SEH and threads remain unfinished; native ARM64 KVM/WHP evidence is still pending.
 
 Windows virtual memory adds `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` and current-process `FlushInstructionCache`. The OS layer owns reservations; `AddressSpace` remains the authority for committed pages, permissions and backing. Tests cover dynamic code rewriting, access faults and memory-budget reuse.
 

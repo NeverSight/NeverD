@@ -61,12 +61,15 @@ bool roundRange(uint64_t &Address, uint64_t &Size, uint64_t Alignment) {
 
 VirtualMemory::VirtualMemory(AddressSpace &Space, const Image &Image,
                              const ProcessOptions &Options)
+    : VirtualMemory(Space, Options) {
+  llvm::cantFail(reserveImage(Image.Base, Image.Size, false));
+}
+VirtualMemory::VirtualMemory(AddressSpace &Space, const ProcessOptions &Options)
     : Space(Space) {
   auto Add = [&](uint64_t Base, uint64_t Size, uint32_t Protection,
                  uint32_t Type, Owner Kind) {
     Ranges.emplace(Base, Reservation{Size, Protection, Type, Kind});
   };
-  Add(Image.Base, Image.Size, PageExecuteWriteCopy, MemImage, Owner::Image);
   Add(TEB, EnvironmentEnd - TEB, PageReadWrite, MemPrivate, Owner::Runtime);
   Add(GateBase, GateSize, PageExecuteRead, MemPrivate, Owner::Runtime);
   Add(HeapHandle, PageSize, PageNoAccess, MemPrivate, Owner::Runtime);
@@ -76,6 +79,28 @@ VirtualMemory::VirtualMemory(AddressSpace &Space, const Image &Image,
   Add(StackTop - Options.StackSize - PageSize, PageSize, PageNoAccess,
       MemPrivate, Owner::Runtime);
   Add(StackTop, PageSize, PageNoAccess, MemPrivate, Owner::Runtime);
+}
+llvm::Expected<uint64_t> VirtualMemory::reserveImage(uint64_t Preferred,
+                                                     uint64_t Size,
+                                                     bool Relocatable) {
+  if (Preferred < ImageAlignment || Preferred % ImageAlignment ||
+      Preferred >= UserLimit || !Size || Size % PageSize ||
+      Size > UserLimit - Preferred)
+    return failure(text::Layout);
+  auto Next = Ranges.lower_bound(Preferred);
+  if ((Next != Ranges.end() && Next->first < Preferred + Size) ||
+      (Next != Ranges.begin() &&
+       std::prev(Next)->first + std::prev(Next)->second.Size > Preferred)) {
+    if (!Relocatable)
+      return failure(text::Layout);
+    auto Gap = findGap(Size, false);
+    if (!Gap)
+      return failure(text::Layout);
+    Preferred = *Gap;
+  }
+  Ranges.emplace(Preferred, Reservation{Size, PageExecuteWriteCopy, MemImage,
+                                        Owner::Image});
+  return Preferred;
 }
 VirtualMemory::Reservations::iterator
 VirtualMemory::containing(uint64_t Address, uint64_t Size) {

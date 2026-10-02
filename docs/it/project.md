@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
+<!-- i18n-source: d157cf302643e879be2748919ad949d2979c1d36798e295ee566f247834396f4 -->
 
 <div align="center">
 
@@ -116,7 +116,7 @@ Il recupero dipende dai modelli di codice supportati; per copertura e limiti con
 
 L’esecuzione CPU separa ammissione ISA, memoria guest, trasporto del backend e politiche OS. `NEVERD_ENABLE_CPU_EMULATION` attiva il livello CPU x64/ARM64; `NEVERD_ENABLE_DRIVER_EMULATION` aggiunge l’ambiente Windows WDM/KMDF x64 limitato. `linux-elf64-v1` esegue processi Linux ELF supportati. Vedere [Esecuzione CPU](cpu-execution.md), [Emulazione dei processi guest](process-emulation.md) e [Emulazione dei driver Windows](driver-emulation.md).
 
-`windows-pe64-v1` aggiunge processi console Windows x64/ARM64 limitati: caricamento PE, PEB/TEB, TLS statico e dinamico, callback di avvio/uscita e modelli Win32 nominativi. Usa il livello CPU indipendentemente dai driver; caricamento DLL/CRT, GUI, SEH utente, thread e compatibilità Windows generale restano incompleti.
+`windows-pe64-v1` supporta processi console Windows x64/ARM64 limitati con PEB/TEB, TLS dell’EXE, API Win32 nominate e grafi aciclici di DLL iniziali esplicite. Le DLL supportano import di codice/dati per nome o ordinale, rebasing DIR64 e identità reali negli elenchi del loader. Ingressi/TLS DLL, caricamento dinamico, export inoltrati, CRT/GUI, SEH utente e thread restano incompleti; mancano prove native ARM64 KVM/WHP.
 
 La memoria virtuale Windows aggiunge `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` e `FlushInstructionCache` per il processo corrente. Il livello OS gestisce le prenotazioni; `AddressSpace` resta responsabile delle pagine impegnate, dei permessi e della memoria sottostante. I test verificano modifiche al codice, errori di accesso e riutilizzo del budget di memoria.
 

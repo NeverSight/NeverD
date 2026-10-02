@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <deque>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -348,6 +349,68 @@ static bool overlapsParameterRegister(const MedFunc &Func, const MedVar &V) {
   return false;
 }
 
+static uint16_t definedLowBytesRec(
+    const std::map<std::pair<int, int>, const MedOp *> &Defs,
+    const std::map<std::pair<int, int>, const PhiNode *> &PhiDefs,
+    const MedFunc &Func, const MedVar &V, int Depth,
+    std::map<std::pair<int, int>, uint16_t> &Memo);
+
+/// The defined low bytes of an x86 sub-register write merged into its wide
+/// register, `Wide = (Old & ~LowMask) | Narrow` with Narrow zero above the
+/// low bytes the mask clears: the low bytes come from Narrow and the rest
+/// from Old.  nullopt for any other definition.
+static std::optional<uint16_t> definedMergedLowBytes(
+    const std::map<std::pair<int, int>, const MedOp *> &Defs,
+    const std::map<std::pair<int, int>, const PhiNode *> &PhiDefs,
+    const MedFunc &Func, const MedOp &D, uint16_t Size, int Depth,
+    std::map<std::pair<int, int>, uint16_t> &Memo) {
+  if (D.Opcode != NdOp::INT_OR || D.NumInputs != 2 || Size == 0 || Size > 8)
+    return std::nullopt;
+  const uint64_t SizeMask =
+      Size == 8 ? ~uint64_t{0} : (uint64_t{1} << (Size * 8)) - 1;
+  for (unsigned KeepIdx = 0; KeepIdx != 2; ++KeepIdx) {
+    const MedVar &Kept = D.Inputs[KeepIdx];
+    const MedVar &Narrow = D.Inputs[1 - KeepIdx];
+    auto AndIt = Defs.find({Kept.Id, Kept.SSAVer});
+    if (Kept.isConst() || AndIt == Defs.end())
+      continue;
+    const MedOp &And = *AndIt->second;
+    if (And.Opcode != NdOp::INT_AND || And.NumInputs != 2 ||
+        !And.Inputs[1].isConst())
+      continue;
+    const uint64_t Cleared = ~And.Inputs[1].ConstVal & SizeMask;
+    // The mask clears exactly the low 1, 2 or 4 bytes.
+    uint16_t Low = 0;
+    for (uint16_t Bytes : {1, 2, 4})
+      if (Bytes < Size && Cleared == (uint64_t{1} << (Bytes * 8)) - 1)
+        Low = Bytes;
+    if (Low == 0)
+      continue;
+    // Narrow must not reach above those bytes.
+    uint16_t NarrowDefined;
+    if (Narrow.isConst()) {
+      if (Narrow.ConstVal & SizeMask & ~Cleared)
+        continue;
+      NarrowDefined = Low;
+    } else {
+      auto ExtIt = Defs.find({Narrow.Id, Narrow.SSAVer});
+      if (ExtIt == Defs.end() || ExtIt->second->Opcode != NdOp::INT_ZEXT ||
+          ExtIt->second->NumInputs != 1 || ExtIt->second->Inputs[0].Size > Low)
+        continue;
+      const MedVar &Source = ExtIt->second->Inputs[0];
+      const uint16_t SourceDefined =
+          definedLowBytesRec(Defs, PhiDefs, Func, Source, Depth + 1, Memo);
+      NarrowDefined = SourceDefined < Source.Size ? SourceDefined : Low;
+    }
+    if (NarrowDefined < Low)
+      return NarrowDefined;
+    const uint16_t OldDefined =
+        definedLowBytesRec(Defs, PhiDefs, Func, And.Inputs[0], Depth + 1, Memo);
+    return OldDefined > Low ? std::min(OldDefined, Size) : Low;
+  }
+  return std::nullopt;
+}
+
 /// Low bytes of \p V this function defines on every path.  The bytes above
 /// them come from the entry value of a register that is not a parameter, so
 /// the caller never gave them a meaning: after `mov al, 1; ret` only AL of RAX
@@ -359,9 +422,21 @@ static uint16_t definedLowBytesRec(
     std::map<std::pair<int, int>, uint16_t> &Memo) {
   if (V.Size == 0 || V.isConst() || Depth > 16)
     return V.Size;
-  if (V.Kind == MedVar::Reg && V.SSAVer == 0)
-    return overlapsParameterRegister(Func, V) ? V.Size : 0;
   const std::pair<int, int> Key{V.Id, V.SSAVer};
+  // The value a register enters with: version 0 with no definition of its
+  // own, or the entry copy of it.  A register that is not live in takes
+  // version 0 at its first definition too.
+  if (V.Kind == MedVar::Reg && V.SSAVer == 0 && !PhiDefs.count(Key)) {
+    auto OpIt = Defs.find(Key);
+    const bool EntryCopy = OpIt != Defs.end() &&
+                           OpIt->second->Opcode == NdOp::COPY &&
+                           OpIt->second->NumInputs == 1 &&
+                           OpIt->second->Inputs[0].Kind == MedVar::Reg &&
+                           OpIt->second->Inputs[0].Id == V.Id &&
+                           OpIt->second->Inputs[0].SSAVer == 0;
+    if (OpIt == Defs.end() || EntryCopy)
+      return overlapsParameterRegister(Func, V) ? V.Size : 0;
+  }
   if (auto It = Memo.find(Key); It != Memo.end())
     return It->second;
   // A PHI cycle defines what its other arms define.
@@ -399,6 +474,10 @@ static uint16_t definedLowBytesRec(
           std::min(Result, definedLowBytesRec(Defs, PhiDefs, Func, Arg.second,
                                               Depth + 1, Memo));
   }
+  if (auto OpIt = Defs.find(Key); OpIt != Defs.end())
+    if (std::optional<uint16_t> Merged = definedMergedLowBytes(
+            Defs, PhiDefs, Func, *OpIt->second, V.Size, Depth, Memo))
+      Result = *Merged;
   Memo[Key] = Result;
   return Result;
 }

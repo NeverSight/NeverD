@@ -41428,6 +41428,20 @@ TEST(HighCPointerAddresses, PushfKeepsTheFlagsACompareSets) {
   expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
 }
 
+TEST(HighCPointerAddresses, SetccIntoALReturnsOnlyTheByte) {
+  // `sete al; ret` defines AL alone; the rest of RAX is whatever the caller
+  // left there, so the function returns a byte, as a C `bool` routine does.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x85, 0xc9, // test rcx, rcx
+                                     0x0f, 0x94, 0xc0, // sete al
+                                     0xc3};            // ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("int8_t sub_"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("/* unknown"), std::string::npos) << HighC;
+  expectCompilesForMsvc(HighC);
+}
+
 TEST(HighCPointerAddresses, BranchOnAnEntryFlagStaysUnknown) {
   // A jb before any flag is set reads the caller's CF, an input outside the
   // calling convention, so it still fails clearly; the PUSHF on the other

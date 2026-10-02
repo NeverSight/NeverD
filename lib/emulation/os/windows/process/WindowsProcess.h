@@ -10,6 +10,7 @@
 #include "neverd/emulation/AddressSpace.h"
 #include "neverd/emulation/IntegerABI.h"
 #include "neverd/emulation/ProcessSession.h"
+#include "neverd/loader/COFF/PEProgramExports.h"
 
 #include "llvm/ADT/StringRef.h"
 
@@ -23,6 +24,7 @@ namespace value {
 #define NEVERD_WINDOWS_PROCESS_BYTES(Name, ...)                                \
   inline constexpr uint8_t Name[] = {__VA_ARGS__};
 #include "WindowsProcess.def"
+#include "WindowsProcessModules.def"
 #undef NEVERD_WINDOWS_PROCESS_BYTES
 #undef NEVERD_WINDOWS_PROCESS_VALUE
 } // namespace value
@@ -30,6 +32,7 @@ namespace text {
 #define NEVERD_WINDOWS_PROCESS_TEXT(Name, Text)                                \
   inline constexpr char Name[] = Text;
 #include "WindowsProcess.def"
+#include "WindowsProcessModules.def"
 #undef NEVERD_WINDOWS_PROCESS_TEXT
 } // namespace text
 inline llvm::Error failure(const llvm::Twine &Message) {
@@ -62,6 +65,8 @@ struct Import {
   const Service *Target;
   std::string Module;
   uint64_t Gate;
+  std::string Name;
+  std::optional<uint16_t> Ordinal;
 };
 struct Image {
   GuestArchitecture Architecture;
@@ -71,6 +76,19 @@ struct Image {
   uint64_t TLSIndex = 0, TLSSize = 0, TLSCallbackPointer = 0;
   std::vector<uint8_t> TLSBytes;
   std::vector<uint64_t> TLSCallbacks;
+  std::vector<std::string> Dependencies;
+  std::vector<uint64_t> Relocations;
+  PEProgramExports Exports;
+  bool Relocatable = false;
+};
+struct ModuleIdentity {
+  std::string Name;
+  uint64_t Base, Size, Entry;
+};
+struct ImageReadBudget {
+  uint64_t FileBytes, MappedBytes;
+  uint64_t Records = windows_process_limits::MetadataRecords;
+  uint64_t MetadataBytes = windows_process_limits::MetadataBytes;
 };
 struct Environment {
   uint64_t CommandLine;
@@ -78,10 +96,13 @@ struct Environment {
 };
 llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
                                 uint64_t MemoryLimit);
-llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
-                                               const Image &Image,
-                                               const ProcessOptions &Options,
-                                               llvm::StringRef ImageName);
+llvm::Expected<Image> loadProgramImage(const std::filesystem::path &Path,
+                                       ImageReadBudget &Budget, bool DLL);
+llvm::Expected<Environment>
+prepareEnvironment(AddressSpace &Memory, const Image &Image,
+                   const ProcessOptions &Options, llvm::StringRef ImageName,
+                   llvm::ArrayRef<ModuleIdentity> Modules = {},
+                   llvm::ArrayRef<size_t> InitOrder = {});
 llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
                                          const ProcessOptions &Options);
 
@@ -89,9 +110,10 @@ class Services final {
 public:
   Services(ExecutionBackend &CPU, AddressSpace &Memory, const Image &Image,
            const Environment &Environment, const ProcessOptions &Options,
-           ProcessResult &Result)
+           ProcessResult &Result, VirtualMemory &Virtual,
+           llvm::ArrayRef<ModuleIdentity> Modules)
       : CPU(CPU), Memory(Memory), Loaded(Image), Env(Environment),
-        Options(Options), Result(Result), Virtual(Memory, Image, Options) {}
+        Options(Options), Result(Result), Virtual(Virtual), Modules(Modules) {}
   llvm::Expected<std::optional<uint64_t>> invoke(const Service &Service,
                                                  const NativeCallEvent &Event);
 
@@ -109,7 +131,8 @@ private:
   const Environment &Env;
   const ProcessOptions &Options;
   ProcessResult &Result;
-  VirtualMemory Virtual;
+  VirtualMemory &Virtual;
+  llvm::ArrayRef<ModuleIdentity> Modules;
   std::bitset<value::DynamicTLSCount> TLSSlots;
   struct Allocation {
     uint64_t Size, MappedSize;

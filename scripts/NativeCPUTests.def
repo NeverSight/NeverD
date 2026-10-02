@@ -538,3 +538,12 @@ NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "ExplicitBackends/WindowsProcess.GuardPagesRequireExplicitExceptionSupport/"
     "WhpX64")
 #endif
+
+#ifdef NEVERD_NATIVE_CPU_REQUIRED_TEST
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "WindowsModuleImage.NativeWindowsLoaderRunsTheSameDLLGraph")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsModules.LinksRelocatedDLLCodeDataOrdinalAPIsAndExecutableTLS/"
+    "WhpX64")
+#endif

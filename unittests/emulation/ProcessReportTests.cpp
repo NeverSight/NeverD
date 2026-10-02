@@ -71,5 +71,21 @@ TEST(ProcessReport, PreservesBinaryOutputRawRegisterBitsAndNullableStatus) {
   ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
   EXPECT_EQ(Parsed->getAsObject()->getInteger(field::ExitStatus), 0);
 }
+TEST(ProcessReport, PreservesExplicitWindowsCatalogueAndRejectsOtherProfiles) {
+  auto O = processOptionsFromJSON(WindowsModuleOptions);
+  ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
+  ASSERT_TRUE(O->Windows);
+  ASSERT_EQ(O->Windows->Modules.size(), 1u);
+  EXPECT_EQ(O->Windows->Modules.front().Name, WindowsModuleName);
+  EXPECT_EQ(O->Windows->Modules.front().Path.generic_string(),
+            WindowsModulePath);
+  for (auto Profile :
+       {ProcessProfile::LinuxELF64, ProcessProfile::AndroidNativeAArch64}) {
+    auto R = emulateProcess(WindowsModulePath, Profile, *O);
+    EXPECT_FALSE(bool(R));
+    if (!R)
+      EXPECT_EQ(llvm::toString(R.takeError()), field::WindowsProfile);
+  }
+}
 } // namespace
 } // namespace neverd::emulation

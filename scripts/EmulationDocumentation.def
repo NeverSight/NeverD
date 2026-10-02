@@ -1,4 +1,5 @@
-//===- EmulationDocumentation.def - Localized execution contract entries ---===//
+//===- EmulationDocumentation.def - Localized execution contract entries
+//---===//
 //
 // NeverD Decompiler
 //
@@ -41,8 +42,10 @@ NEVERD_EMULATION_DOC_PATH(SSE, "docs/{locale}/cpu-execution.md")
 NEVERD_EMULATION_DOC_PATH(SSE, "docs/{locale}/driver-emulation.md")
 NEVERD_EMULATION_DOC_PATH(SSE, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(SSE, "X64SSEInstructions.def")
-NEVERD_EMULATION_DOC_TOKEN(SSE, "MaskedSSEArithmeticMatchesIndependentHostExecution")
-NEVERD_EMULATION_DOC_TOKEN(SSE, "SSEMemoryObserverStopsBeforeResultAndStatusChanges")
+NEVERD_EMULATION_DOC_TOKEN(SSE,
+                           "MaskedSSEArithmeticMatchesIndependentHostExecution")
+NEVERD_EMULATION_DOC_TOKEN(SSE,
+                           "SSEMemoryObserverStopsBeforeResultAndStatusChanges")
 NEVERD_EMULATION_DOC_PATH(NativeDriver, "docs/architecture.md")
 NEVERD_EMULATION_DOC_PATH(NativeDriver, "docs/cpu-execution.md")
 NEVERD_EMULATION_DOC_PATH(NativeDriver, "docs/driver-emulation.md")
@@ -53,7 +56,8 @@ NEVERD_EMULATION_DOC_PATH(NativeDriver, "docs/{locale}/driver-emulation.md")
 NEVERD_EMULATION_DOC_PATH(NativeDriver, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriver, "NativeLegacyX64")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriver, "NeverDNativeDriverTests")
-NEVERD_EMULATION_DOC_TOKEN(NativeDriver, "executionCapabilities(Contract, ISA, Backend)")
+NEVERD_EMULATION_DOC_TOKEN(NativeDriver,
+                           "executionCapabilities(Contract, ISA, Backend)")
 NEVERD_EMULATION_DOC_PATH(Deadline, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(Deadline, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(Deadline, "NeverDUnicornDeadlineTests")
@@ -75,9 +79,12 @@ NEVERD_EMULATION_DOC_TOKEN(KvmTransfer, "KvmRunControl")
 NEVERD_EMULATION_DOC_TOKEN(KvmTransfer, "KvmAArch64Machine.cpp")
 NEVERD_EMULATION_DOC_PATH(KvmTransferTest, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(KvmTransferTest, "docs/{locale}/testing.md")
-NEVERD_EMULATION_DOC_TOKEN(KvmTransferTest, "StateTransfersUseTheEntryThreadAndPrepareOnceAcrossRetries")
-NEVERD_EMULATION_DOC_TOKEN(KvmTransferTest,
-                         "SequentialEntriesReuseWorkerWithoutRetainingPriorTransfers")
+NEVERD_EMULATION_DOC_TOKEN(
+    KvmTransferTest,
+    "StateTransfersUseTheEntryThreadAndPrepareOnceAcrossRetries")
+NEVERD_EMULATION_DOC_TOKEN(
+    KvmTransferTest,
+    "SequentialEntriesReuseWorkerWithoutRetainingPriorTransfers")
 NEVERD_EMULATION_DOC_PATH(NativeCapture, "docs/architecture.md")
 NEVERD_EMULATION_DOC_PATH(NativeCapture, "docs/cpu-execution.md")
 NEVERD_EMULATION_DOC_PATH(NativeCapture, "docs/driver-emulation.md")
@@ -88,7 +95,9 @@ NEVERD_EMULATION_DOC_TOKEN(NativeCapture, "X64HostRegisters.def")
 NEVERD_EMULATION_DOC_TOKEN(NativeCapture, "X64FPState.def")
 NEVERD_EMULATION_DOC_PATH(NativeCaptureTest, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(NativeCaptureTest, "docs/{locale}/testing.md")
-NEVERD_EMULATION_DOC_TOKEN(NativeCaptureTest, "ReusesCapturedStateAndInstallsHostChangesAcrossFaultsAndStops")
+NEVERD_EMULATION_DOC_TOKEN(
+    NativeCaptureTest,
+    "ReusesCapturedStateAndInstallsHostChangesAcrossFaultsAndStops")
 NEVERD_EMULATION_DOC_TOKEN(NativeCaptureTest, "NeverDKvmStateTransferTests")
 NEVERD_EMULATION_DOC_PATH(ArmCapture, "docs/architecture.md")
 NEVERD_EMULATION_DOC_PATH(ArmCapture, "docs/cpu-execution.md")
@@ -143,7 +152,7 @@ NEVERD_EMULATION_DOC_PATH(ArmScalarTest, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(ArmScalarTest, "NeverDUnicornStateTransferTests")
 NEVERD_EMULATION_DOC_TOKEN(ArmScalarTest, "UnicornStateTransferCases.def")
 NEVERD_EMULATION_DOC_TOKEN(ArmScalarTest,
-                         "CapturesDeclaredWidthsWithoutStaleUpperBits")
+                           "CapturesDeclaredWidthsWithoutStaleUpperBits")
 NEVERD_EMULATION_DOC_TOKEN(ArmScalarTest, "NeverDAArch64FPTests")
 NEVERD_EMULATION_DOC_TOKEN(ArmScalarTest, "AArch64FPCases.def")
 NEVERD_EMULATION_DOC_TOKEN(ArmScalarTest, "AArch64VectorMemoryCases.def")
@@ -159,18 +168,25 @@ NEVERD_EMULATION_DOC_TOKEN(UnicornControl, "MachineRunControl")
 NEVERD_EMULATION_DOC_TOKEN(UnicornControl, "UC_HOOK_CODE")
 NEVERD_EMULATION_DOC_PATH(UnicornControlTest, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(UnicornControlTest, "docs/{locale}/testing.md")
-NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "NeverDUnicornMachineControlTests")
+NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest,
+                           "NeverDUnicornMachineControlTests")
 NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "UnicornMachineControlCases.def")
 NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest,
-                         "RejectedEntryPreservesStateAndRAMAndAllowsRetry")
-NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "StopDuringCaptureCannotPublishAndAllowsRetry")
-NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "ExpiredCaptureCannotPublishAndAllowsRetry")
-NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "CompletedStoreCannotPublishCancelledCapture")
-NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "StopDuringCaptureCannotHideRealGuestException")
+                           "RejectedEntryPreservesStateAndRAMAndAllowsRetry")
+NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest,
+                           "StopDuringCaptureCannotPublishAndAllowsRetry")
+NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest,
+                           "ExpiredCaptureCannotPublishAndAllowsRetry")
+NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest,
+                           "CompletedStoreCannotPublishCancelledCapture")
+NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest,
+                           "StopDuringCaptureCannotHideRealGuestException")
 NEVERD_EMULATION_DOC_TOKEN(UnicornControl, "MachineInterruptedError")
-NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "CancellationKeepsTypedExitStateAndRAMConsistent")
+NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest,
+                           "CancellationKeepsTypedExitStateAndRAMConsistent")
 NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "NeverDKvmStateTransferTests")
-NEVERD_EMULATION_DOC_TOKEN(UnicornControlTest, "PublicCancellationRetainsStateRAMAndFailurePriority")
+NEVERD_EMULATION_DOC_TOKEN(
+    UnicornControlTest, "PublicCancellationRetainsStateRAMAndFailurePriority")
 NEVERD_EMULATION_DOC_PATH(ArmProbe, "docs/architecture.md")
 NEVERD_EMULATION_DOC_PATH(ArmProbe, "docs/{locale}/architecture.md")
 NEVERD_EMULATION_DOC_PATH(ArmProbe, "docs/cpu-execution.md")
@@ -198,8 +214,10 @@ NEVERD_EMULATION_DOC_PATH(NativeEntryTest, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(NativeEntryTest, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(NativeEntryTest, "NativeEntryTests.cpp")
 NEVERD_EMULATION_DOC_TOKEN(NativeEntryTest, "WhpEntryControlTests.cpp")
-NEVERD_EMULATION_DOC_TOKEN(NativeEntryTest, "ActualCPUExceptionOutranksStopDuringCapture")
-NEVERD_EMULATION_DOC_TOKEN(NativeEntryTest, "PublicCPUExceptionOutranksStopDuringCapture")
+NEVERD_EMULATION_DOC_TOKEN(NativeEntryTest,
+                           "ActualCPUExceptionOutranksStopDuringCapture")
+NEVERD_EMULATION_DOC_TOKEN(NativeEntryTest,
+                           "PublicCPUExceptionOutranksStopDuringCapture")
 NEVERD_EMULATION_DOC_PATH(X64Startup, "docs/architecture.md")
 NEVERD_EMULATION_DOC_PATH(X64Startup, "docs/{locale}/architecture.md")
 NEVERD_EMULATION_DOC_PATH(X64Startup, "docs/cpu-execution.md")
@@ -265,10 +283,12 @@ NEVERD_EMULATION_DOC_PATH(X64Xsave, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(X64Xsave, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(X64Xsave, "X64XsaveCases.def")
 NEVERD_EMULATION_DOC_TOKEN(X64Xsave, "X64XsaveTests.cpp")
-NEVERD_EMULATION_DOC_TOKEN(X64Xsave, "CompactedOffsetsFollowLayoutRatherThanPresentBits")
+NEVERD_EMULATION_DOC_TOKEN(X64Xsave,
+                           "CompactedOffsetsFollowLayoutRatherThanPresentBits")
 NEVERD_EMULATION_DOC_TOKEN(X64Xsave, "InitialCETComponentsDoNotHideFPState")
 NEVERD_EMULATION_DOC_TOKEN(X64Xsave, "InitialWideComponentsDoNotHideFPState")
-NEVERD_EMULATION_DOC_TOKEN(X64Xsave, "WideLayoutIgnoresAbsentComponentsAndAlignmentPadding")
+NEVERD_EMULATION_DOC_TOKEN(
+    X64Xsave, "WideLayoutIgnoresAbsentComponentsAndAlignmentPadding")
 NEVERD_EMULATION_DOC_PATH(NativeTestBuild, "README.md")
 NEVERD_EMULATION_DOC_PATH(NativeTestBuild, "docs/{locale}/project.md")
 NEVERD_EMULATION_DOC_PATH(NativeTestBuild, "docs/architecture.md")
@@ -281,7 +301,7 @@ NEVERD_EMULATION_DOC_TOKEN(NativeTestBuild, "NEVERD_ENABLE_SEMANTIC_TESTS")
 NEVERD_EMULATION_DOC_PATH(NativeProbeDiagnostics, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(NativeProbeDiagnostics, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(NativeProbeDiagnostics,
-                         "DiagnosticIdentifiesStepFieldAndBothValues")
+                           "DiagnosticIdentifiesStepFieldAndBothValues")
 NEVERD_EMULATION_DOC_PATH(WhpMetadata, "docs/architecture.md")
 NEVERD_EMULATION_DOC_PATH(WhpMetadata, "docs/{locale}/architecture.md")
 NEVERD_EMULATION_DOC_PATH(WhpMetadata, "docs/cpu-execution.md")
@@ -291,14 +311,16 @@ NEVERD_EMULATION_DOC_PATH(WhpMetadata, "docs/{locale}/driver-emulation.md")
 NEVERD_EMULATION_DOC_PATH(WhpMetadata, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(WhpMetadata, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(WhpMetadata, "WhpXsaveRegisters.def")
-NEVERD_EMULATION_DOC_TOKEN(WhpMetadata, "NamedMetadataRestoresOmittedPacketFields")
+NEVERD_EMULATION_DOC_TOKEN(WhpMetadata,
+                           "NamedMetadataRestoresOmittedPacketFields")
 
 #ifdef NEVERD_EMULATION_DOC_PATH
 NEVERD_EMULATION_DOC_PATH(WhpFPBoundary, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(WhpFPBoundary, "docs/{locale}/testing.md")
 #endif
 #ifdef NEVERD_EMULATION_DOC_TOKEN
-NEVERD_EMULATION_DOC_TOKEN(WhpFPBoundary, "NativeGuestRAMDistinguishesEntryFromCaptureLoss")
+NEVERD_EMULATION_DOC_TOKEN(WhpFPBoundary,
+                           "NativeGuestRAMDistinguishesEntryFromCaptureLoss")
 #endif
 
 #ifdef NEVERD_EMULATION_DOC_PATH
@@ -313,7 +335,7 @@ NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "--with-drivers")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "WDKDriverFixtures.def")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "build_wdk_driver_fixtures.py")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "DriverNativeOutcomes.def")
-NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "164 CPU + 224 WHP + 4 SEH = 392")
+NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "166 CPU + 224 WHP + 4 SEH = 394")
 NEVERD_EMULATION_DOC_TOKEN(Project, "FOP/FIP/FDP")
 NEVERD_EMULATION_DOC_TOKEN(X64Startup, "FOP/FIP/FDP")
 #endif
@@ -338,10 +360,10 @@ NEVERD_EMULATION_DOC_PATH(SEHContinuation, "docs/{locale}/testing.md")
 #ifdef NEVERD_EMULATION_DOC_TOKEN
 NEVERD_EMULATION_DOC_TOKEN(SEHContinuation, "KernelSEHContinuationCases.def")
 NEVERD_EMULATION_DOC_TOKEN(SEHContinuation,
-                         "ScopeEndLabelMayOverlapTheHandlerLandingPad")
+                           "ScopeEndLabelMayOverlapTheHandlerLandingPad")
 NEVERD_EMULATION_DOC_TOKEN(SEHContinuation, "EndLabel + 1")
 NEVERD_EMULATION_DOC_TOKEN(SEHContinuation,
-                         "FinallyRespectsRawScopeEndAtHandlerTarget")
+                           "FinallyRespectsRawScopeEndAtHandlerTarget")
 #endif
 
 #ifdef NEVERD_EMULATION_DOC_PATH
@@ -367,7 +389,8 @@ NEVERD_EMULATION_DOC_PATH(X64StringTransfer, "docs/{locale}/architecture.md")
 NEVERD_EMULATION_DOC_PATH(X64StringTransfer, "docs/cpu-execution.md")
 NEVERD_EMULATION_DOC_PATH(X64StringTransfer, "docs/{locale}/cpu-execution.md")
 NEVERD_EMULATION_DOC_PATH(X64StringTransfer, "docs/driver-emulation.md")
-NEVERD_EMULATION_DOC_PATH(X64StringTransfer, "docs/{locale}/driver-emulation.md")
+NEVERD_EMULATION_DOC_PATH(X64StringTransfer,
+                          "docs/{locale}/driver-emulation.md")
 NEVERD_EMULATION_DOC_PATH(X64StringTransfer, "docs/testing.md")
 NEVERD_EMULATION_DOC_PATH(X64StringTransfer, "docs/{locale}/testing.md")
 #endif
@@ -413,4 +436,18 @@ NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "VirtualProtect")
 NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "VirtualQuery")
 NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "FlushInstructionCache")
 NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "AddressSpace")
+#endif
+
+#ifdef NEVERD_EMULATION_DOC_PATH
+NEVERD_EMULATION_DOC_PATH(WindowsModules, "docs/process-emulation.md")
+NEVERD_EMULATION_DOC_PATH(WindowsModules, "docs/{locale}/process-emulation.md")
+#endif
+#ifdef NEVERD_EMULATION_DOC_TOKEN
+NEVERD_EMULATION_DOC_TOKEN(WindowsModules, "windows.modules")
+NEVERD_EMULATION_DOC_TOKEN(WindowsModules, "WindowsProcessOptions::Modules")
+NEVERD_EMULATION_DOC_TOKEN(WindowsModules, "WindowsProcessModules")
+NEVERD_EMULATION_DOC_TOKEN(WindowsModules, "readPEProgramExports")
+NEVERD_EMULATION_DOC_TOKEN(WindowsModules, "DIR64")
+NEVERD_EMULATION_DOC_TOKEN(WindowsModules, "NeverDPEProgramExportsTests")
+NEVERD_EMULATION_DOC_TOKEN(WindowsModules, "EXE→DLL→DLL")
 #endif

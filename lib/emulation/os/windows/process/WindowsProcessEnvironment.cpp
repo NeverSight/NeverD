@@ -45,10 +45,17 @@ std::u16string quote(const std::u16string &Input) {
 }
 } // namespace
 
-llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
-                                               const Image &Image,
-                                               const ProcessOptions &Options,
-                                               llvm::StringRef ImageName) {
+llvm::Expected<Environment>
+prepareEnvironment(AddressSpace &Memory, const Image &Image,
+                   const ProcessOptions &Options, llvm::StringRef ImageName,
+                   llvm::ArrayRef<ModuleIdentity> Modules,
+                   llvm::ArrayRef<size_t> InitOrder) {
+  const ModuleIdentity Main{ImageName.str(), Image.Base, Image.Size,
+                            Image.Entry};
+  if (Modules.empty())
+    Modules = llvm::ArrayRef(Main);
+  if (Modules.size() > windows_process_limits::Modules + 1)
+    return failure(text::ModuleBudget);
   auto Name = utf16(ImageName);
   if (!Name)
     return Name.takeError();
@@ -105,7 +112,7 @@ llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
   if (auto E =
           Memory.map(TEB, EnvironmentEnd - TEB, Read | Write | UserAccessible))
     return std::move(E);
-  uint64_t Cursor = StringBase;
+  uint64_t Cursor = ModuleEntry + Modules.size() * ModuleStride;
   auto Store = [&](const std::u16string &Text) -> llvm::Expected<uint64_t> {
     const uint64_t Size = (Text.size() + 1) * WideSize;
     if (Size > EnvironmentEnd - Cursor)
@@ -163,34 +170,59 @@ llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
       {Parameters + ParamsStdError, StandardError},
       {Parameters + ParamsEnvironment, *EnvAddress},
       {Ldr, LdrSize, DWordSize},
-      {Ldr + LdrInitialized, 1, 1},
-      {ModuleEntry + ModuleBase, Image.Base},
-      {ModuleEntry + ModuleEntryPoint, Image.Entry},
-      {ModuleEntry + ModuleImageSize, Image.Size, DWordSize}};
+      {Ldr + LdrInitialized, 1, 1}};
   for (const auto &F : Fields)
     if (auto E = Memory.writeInteger(F.Address, F.Value, F.Size))
       return std::move(E);
-  // Only the executable is mapped as a PE module. Named system API models are
-  // not disguised as installed system DLLs or discoverable PE exports.
-  for (auto [Head, Node] :
-       {std::pair{Ldr + LdrLoadList, ModuleEntry},
-        std::pair{Ldr + LdrMemoryList, ModuleEntry + ModuleMemoryLink}}) {
-    for (uint64_t Offset : {uint64_t(0), PointerSize}) {
-      if (auto E = Memory.writeInteger(Head + Offset, Node, PointerSize))
+  // Publish only actually mapped images. API models have no synthetic DLL.
+  for (size_t I = 0; I < Modules.size(); ++I) {
+    const auto &M = Modules[I];
+    const uint64_t Node = ModuleEntry + I * ModuleStride;
+    auto Text = utf16(M.Name);
+    if (!Text)
+      return Text.takeError();
+    auto Address = I ? Store(*Text) : llvm::Expected<uint64_t>(*ImageAddress);
+    if (!Address)
+      return Address.takeError();
+    for (const auto &F : {Field{Node + ModuleBase, M.Base},
+                          Field{Node + ModuleEntryPoint, M.Entry},
+                          Field{Node + ModuleImageSize, M.Size, DWordSize}})
+      if (auto E = Memory.writeInteger(F.Address, F.Value, F.Size))
         return std::move(E);
-      if (auto E = Memory.writeInteger(Node + Offset, Head, PointerSize))
+    for (uint64_t Offset : {ModuleFullName, ModuleBaseName})
+      if (auto E = Unicode(Node + Offset, *Address, Text->size()))
         return std::move(E);
-    }
   }
-  for (uint64_t Offset : {uint64_t(0), PointerSize})
-    if (auto E = Memory.writeInteger(Ldr + LdrInitList + Offset,
-                                     Ldr + LdrInitList, PointerSize))
-      return std::move(E);
-  for (uint64_t Address :
-       {Parameters + ParamsImagePath, ModuleEntry + ModuleFullName,
-        ModuleEntry + ModuleBaseName})
-    if (auto E = Unicode(Address, *ImageAddress, Name->size()))
-      return std::move(E);
+  auto Link = [&](uint64_t Head, uint64_t LinkOffset,
+                  llvm::ArrayRef<size_t> Order) -> llvm::Error {
+    uint64_t Previous = Head;
+    for (size_t I : Order) {
+      if (I >= Modules.size())
+        return failure(text::Layout);
+      const uint64_t Node = ModuleEntry + I * ModuleStride + LinkOffset;
+      if (auto E = Memory.writeInteger(Previous, Node, PointerSize))
+        return E;
+      if (auto E =
+              Memory.writeInteger(Node + PointerSize, Previous, PointerSize))
+        return E;
+      Previous = Node;
+    }
+    if (auto E = Memory.writeInteger(Previous, Head, PointerSize))
+      return E;
+    return Memory.writeInteger(Head + PointerSize, Previous, PointerSize);
+  };
+  std::vector<size_t> Order;
+  for (size_t I = 0; I < Modules.size(); ++I)
+    Order.push_back(I);
+  if (auto E = Link(Ldr + LdrLoadList, 0, Order))
+    return std::move(E);
+  if (auto E = Link(Ldr + LdrMemoryList, ModuleMemoryLink, Order))
+    return std::move(E);
+  if (auto E = Link(Ldr + LdrInitList, ModuleInitLink, InitOrder))
+    return std::move(E);
+  if (auto E =
+          Unicode(Parameters + ParamsImagePath, *ImageAddress, Name->size()))
+    return std::move(E);
   if (auto E = Unicode(Parameters + ParamsCommandLine, *CommandAddress,
                        Command.size()))
     return std::move(E);

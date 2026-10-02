@@ -1,0 +1,24 @@
+//===- PEProgramExports.def - Original PE export metadata contracts ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_PE_EXPORT_LIMIT
+NEVERD_PE_EXPORT_LIMIT(Bytes, 64 * 1024 * 1024)
+NEVERD_PE_EXPORT_LIMIT(Records, 65536)
+NEVERD_PE_EXPORT_LIMIT(StringBytes, 32768)
+#endif
+#ifdef NEVERD_PE_EXPORT_TEXT
+NEVERD_PE_EXPORT_TEXT(Prefix, "PE export metadata: ")
+NEVERD_PE_EXPORT_TEXT(Header, "invalid or truncated linked PE headers")
+NEVERD_PE_EXPORT_TEXT(Sections,
+                      "invalid or overlapping original section extents")
+NEVERD_PE_EXPORT_TEXT(Mapping, "export metadata is not uniquely file backed")
+NEVERD_PE_EXPORT_TEXT(Directory, "invalid export directory or table extent")
+NEVERD_PE_EXPORT_TEXT(Name, "invalid, excessive or unterminated export string")
+NEVERD_PE_EXPORT_TEXT(Order, "export names are duplicated or not sorted")
+NEVERD_PE_EXPORT_TEXT(Ordinal, "export ordinal is outside its address table")
+NEVERD_PE_EXPORT_TEXT(Target, "export address is outside the image")
+NEVERD_PE_EXPORT_TEXT(Budget, "metadata work budget exhausted")
+NEVERD_PE_EXPORT_TEXT(DOSMagic, "MZ")
+#endif

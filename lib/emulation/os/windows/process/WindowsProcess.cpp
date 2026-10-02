@@ -3,10 +3,8 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
-#include "WindowsProcess.h"
-
-#include "../../../core/ExecutionDeadline.h"
 #include "../../../runtime/RuntimeValues.h"
+#include "WindowsProcessModules.h"
 
 #include "neverd/emulation/ExecutionSession.h"
 
@@ -24,39 +22,36 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
       Options.StackSize >= Options.MemoryLimit ||
       Options.OutputLimit > Options.MemoryLimit)
     return failure(text::Limits);
-  auto Deadline = makeExecutionDeadline(Options.Limits.TimeoutMicroseconds);
-  if (!Deadline)
-    return Deadline.takeError();
-  auto Loaded = loadImage(Path, Options.MemoryLimit);
-  if (!Loaded)
-    return Loaded.takeError();
+  auto Budget = ExecutionBudget::create(Options.Limits);
+  if (!Budget)
+    return Budget.takeError();
+  std::shared_ptr<ExecutionBudget> Resources(std::move(*Budget));
   const uint64_t StackBase = StackTop - Options.StackSize;
-  for (auto [Begin, End] :
-       {std::pair{TEB, EnvironmentEnd},
-        std::pair{GateBase, GateBase + GateSize},
-        std::pair{HeapHandle, HeapHandle + PageSize},
-        std::pair{HeapBase, HeapLimit},
-        std::pair{StackBase - PageSize, StackTop + PageSize}})
-    if (Loaded->Base < End && Loaded->Base + Loaded->Size > Begin)
-      return failure(text::Layout);
   auto Physical = PhysicalMemory::create(Options.MemoryLimit);
   if (!Physical)
     return Physical.takeError();
   auto Space = AddressSpace::create(*Physical, Options.MemoryLimit);
   if (!Space)
     return Space.takeError();
-  for (const auto &Region : Loaded->Regions) {
-    if (auto E = (*Space)->map(Region.Address, Region.Bytes.size(),
-                               Read | Write | UserAccessible))
-      return std::move(E);
-    if (auto E = (*Space)->write(Region.Address, Region.Bytes))
-      return std::move(E);
-  }
+  VirtualMemory Virtual(**Space, Options);
+  auto Program = loadProgram(Path, Options, *Resources, Virtual);
+  if (!Program)
+    return Program.takeError();
+  auto *Loaded = &Program->Modules.front().Loaded;
+  for (const auto &Module : Program->Modules)
+    for (const auto &Region : Module.Loaded.Regions) {
+      if (auto E = (*Space)->map(Region.Address, Region.Bytes.size(),
+                                 Read | Write | UserAccessible))
+        return std::move(E);
+      if (auto E = (*Space)->write(Region.Address, Region.Bytes))
+        return std::move(E);
+    }
   const auto FileName = Path.filename().u8string();
   auto Env = prepareEnvironment(
       **Space, *Loaded, Options,
       llvm::StringRef(reinterpret_cast<const char *>(FileName.data()),
-                      FileName.size()));
+                      FileName.size()),
+      Program->Identities, Program->InitializationOrder);
   if (!Env)
     return Env.takeError();
   if (auto E = (*Space)->map(StackBase, Options.StackSize,
@@ -75,23 +70,28 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
   for (uint64_t Gate : {ReturnGate, AttachReturnGate, DetachReturnGate})
     if (auto E = (*Space)->write(Gate, Trap))
       return std::move(E);
-  for (const auto &Import : Loaded->Imports) {
-    if (auto E = (*Space)->write(Import.Gate, Trap))
+  for (const auto &Gate : Program->Gates)
+    if (auto E = (*Space)->write(Gate.Gate, Trap))
       return std::move(E);
-    if (auto E = (*Space)->writeInteger(Import.Slot, Import.Gate, PointerSize))
-      return std::move(E);
-  }
+  for (const auto &Module : Program->Modules)
+    for (const auto &Import : Module.Loaded.Imports)
+      if (auto E =
+              (*Space)->writeInteger(Import.Slot, Import.Gate, PointerSize))
+        return std::move(E);
   if (auto E = (*Space)->protect(GateBase, GateSize,
                                  Read | Execute | UserAccessible))
     return std::move(E);
-  for (const auto &Region : Loaded->Regions)
-    if (auto E = (*Space)->protect(Region.Address, Region.Bytes.size(),
-                                   Region.Permissions))
-      return std::move(E);
+  for (const auto &Module : Program->Modules)
+    for (const auto &Region : Module.Loaded.Regions)
+      if (auto E = (*Space)->protect(Region.Address, Region.Bytes.size(),
+                                     Region.Permissions))
+        return std::move(E);
   auto ABI = IntegerABI::get(X64 ? IntegerCallingConvention::Win64
                                  : IntegerCallingConvention::AAPCS64);
   if (!ABI)
     return ABI.takeError();
+  if (!Resources->remainingMicroseconds())
+    return failure(text::ModuleTimeout);
   auto Backend =
       createExecutionBackend(Options.Backend,
                              X64 ? ExecutionContract::CheckedUserX64
@@ -102,10 +102,6 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
   if (auto E = Backend->CPU->writeRegister(
           X64 ? CPURegister::X64GSBase : CPURegister::AArch64X18, {TEB, 0}))
     return std::move(E);
-  auto Budget = ExecutionBudget::create(Options.Limits);
-  if (!Budget)
-    return Budget.takeError();
-  std::shared_ptr<ExecutionBudget> Resources(std::move(*Budget));
   auto Session = ExecutionSession::create(std::move(Backend->CPU), Resources);
   if (!Session)
     return Session.takeError();
@@ -116,7 +112,8 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
                        Backend->Kind, Backend->Reason};
   Result.Entry = Loaded->Entry;
   Result.InitializersEnabled = true;
-  Services OS(CPU, **Space, *Loaded, *Env, Options, Result);
+  Services OS(CPU, **Space, *Loaded, *Env, Options, Result, Virtual,
+              Program->Identities);
   enum class Phase { Attach, Entry, Detach };
   Phase Current = Phase::Attach;
   size_t Callback = 0;
@@ -296,7 +293,7 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
       continue;
     }
     const Import *Import = nullptr;
-    for (const auto &I : Loaded->Imports)
+    for (const auto &I : Program->Gates)
       if (I.Gate == Request->PC) {
         Import = &I;
         break;

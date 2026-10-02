@@ -76,6 +76,13 @@ namespace windows_fixture {
 #undef NEVERD_WINDOWS_FIXTURE_TEXT
 #undef NEVERD_WINDOWS_FIXTURE_VALUE
 } // namespace windows_fixture
+namespace module_fixture {
+#define NEVERD_MODULE_VALUE(Name, Value) constexpr uint64_t Name = Value;
+#define NEVERD_MODULE_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "fixtures/WindowsModuleCases.def"
+#undef NEVERD_MODULE_TEXT
+#undef NEVERD_MODULE_VALUE
+} // namespace module_fixture
 std::string takeString(const char *Value) {
   if (!Value)
     return {};
@@ -179,6 +186,63 @@ TEST_F(ProcessPublic, WindowsPE64RunsThroughSDKAndCLIWithoutAnalysisState) {
     EXPECT_EQ(Result.getAsObject()->getString(field::Stdout),
               llvm::toHex(std::string(windows_fixture::Message) +
                               windows_fixture::Detached,
+                          true));
+    ASSERT_NE(Result.getAsObject()->getObject(field::Windows), nullptr);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+    const auto Command = test::shellQuote(NEVERD_PROCESS_CLI) + " " +
+                         process_cli::Command + " " + test::shellQuote(Path) +
+                         " --" + process_cli::ProfileOption + "=" +
+                         WindowsPE64 + " --" + process_cli::OptionsOption +
+                         "=" + test::shellQuote(Options) +
+                         test::redirectStdout(Output) + test::silenceStderr();
+    EXPECT_EQ(test::systemExitCode(test::runShellCommand(Command)),
+              process_cli::GuestFailure);
+    auto Buffer = llvm::MemoryBuffer::getFile(Output);
+    ASSERT_TRUE(bool(Buffer));
+    EXPECT_EQ(llvm::cantFail(llvm::json::parse((*Buffer)->getBuffer())),
+              Result);
+  }
+#endif
+}
+
+TEST_F(ProcessPublic, WindowsStartupDLLsUseTheSameCatalogueThroughSDKAndCLI) {
+#ifndef NEVERD_WINDOWS_MODULE_FIXTURE_DIR
+  GTEST_SKIP() << module_fixture::MissingTools;
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  for (const auto *File :
+       {module_fixture::X64Dir, module_fixture::AArch64Dir}) {
+    SCOPED_TRACE(File);
+    Path = (std::filesystem::path(NEVERD_WINDOWS_MODULE_FIXTURE_DIR) / File /
+            module_fixture::ProgramFile)
+               .string();
+    llvm::json::Object Request;
+    Request[field::Backend] = emulation::execution::Unicorn;
+    llvm::json::Array Modules;
+    for (const char *Name :
+         {module_fixture::LeafFile, module_fixture::MiddleFile})
+      Modules.push_back(llvm::json::Object{
+          {field::Name, Name},
+          {field::Path,
+           (std::filesystem::path(NEVERD_WINDOWS_MODULE_FIXTURE_DIR) / File /
+            Name)
+               .string()}});
+    Request[field::Windows] =
+        llvm::json::Object{{field::Modules, std::move(Modules)}};
+    auto Options = jsonText(std::move(Request));
+    auto Text = takeString(neverd_emulate_process_json(
+        Session, Path.c_str(), WindowsPE64, Options.c_str()));
+    ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+    auto Result = llvm::cantFail(llvm::json::parse(Text));
+    EXPECT_EQ(Result.getAsObject()->getInteger(field::ExitStatus),
+              module_fixture::ExitStatus);
+    EXPECT_EQ(Result.getAsObject()->getString(field::Stdout),
+              llvm::toHex(std::string(module_fixture::Message) +
+                              module_fixture::Detached,
                           true));
     ASSERT_NE(Result.getAsObject()->getObject(field::Windows), nullptr);
     EXPECT_EQ(neverd_session_is_loaded(Session), 0);

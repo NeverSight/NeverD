@@ -6,6 +6,7 @@
 #include "neverd/emulation/ProcessReport.h"
 
 #include "ProcessAndroidJSON.h"
+#include "ProcessWindowsJSON.h"
 
 #include "neverd/emulation/ProcessReportFields.h"
 
@@ -50,6 +51,13 @@ llvm::Expected<ProcessOptions> processOptionsFromJSON(llvm::StringRef Text) {
   ProcessOptions Options;
   for (const auto &[Key, V] : *Object) {
     const llvm::StringRef Name = Key;
+    if (Name == field::Windows) {
+      auto Windows = windowsOptionsFromJSON(V);
+      if (!Windows)
+        return Windows.takeError();
+      Options.Windows = std::move(*Windows);
+      continue;
+    }
     if (Name == field::Android) {
       auto Native = androidOptionsFromJSON(V);
       if (!Native)

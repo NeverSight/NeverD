@@ -66,10 +66,18 @@ void visitFunctionFragments(const BinaryImage &Image, std::optional<va_t> Owner,
                             Visitor Visit) {
   const auto &Functions = Image.ExceptionMetadata.Functions;
   std::set<va_t> Primaries;
-  for (const auto &Function : Functions)
-    if (Function.Kind == RuntimeFunctionKind::Primary &&
-        (!Owner || Function.CodeRange.Begin == *Owner))
-      Primaries.insert(Function.CodeRange.Begin);
+  for (const auto &Function : Functions) {
+    if (Function.Kind != RuntimeFunctionKind::Primary ||
+        (Owner && Function.CodeRange.Begin != *Owner))
+      continue;
+    Primaries.insert(Function.CodeRange.Begin);
+    // An unwind chain can pass through other chained records before it
+    // reaches its primary record; the chain resolution records each fragment
+    // on the primary that governs it.
+    for (const ExceptionAddressRange &Range : Function.FragmentRanges)
+      if (Range.Begin < Range.End)
+        Visit(Function.CodeRange.Begin, Range);
+  }
   if (Primaries.empty())
     return;
   for (const auto &Fragment : Functions) {

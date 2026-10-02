@@ -1,0 +1,11 @@
+//===- WindowsProcessOptions.def - Explicit guest module limits ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_WINDOWS_OPTION_LIMIT
+NEVERD_WINDOWS_OPTION_LIMIT(Modules, 64)
+NEVERD_WINDOWS_OPTION_LIMIT(NameBytes, 256)
+NEVERD_WINDOWS_OPTION_LIMIT(MetadataRecords, 65536)
+NEVERD_WINDOWS_OPTION_LIMIT(MetadataBytes, 64 * 1024 * 1024)
+#endif

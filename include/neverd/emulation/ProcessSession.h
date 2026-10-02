@@ -10,6 +10,7 @@
 #include "neverd/emulation/ExecutionBackend.h"
 #include "neverd/emulation/ExecutionBudget.h"
 #include "neverd/emulation/ExecutionExit.h"
+#include "neverd/emulation/WindowsProcessOptions.h"
 
 #include <array>
 #include <filesystem>
@@ -47,6 +48,7 @@ struct ProcessOptions {
   /// Explicit guest environment; no host environment is inherited.
   std::vector<std::string> Environment;
   std::optional<AndroidNativeOptions> Android;
+  std::optional<WindowsProcessOptions> Windows;
 };
 
 struct ProcessServiceEvent {

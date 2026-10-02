@@ -243,7 +243,8 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition,
         (void)Value(S.CallExpr);
       if (S.Kind == StmtKind::Assign)
         Values[varKey(S.Dst->Var)] = Value(S.Val);
-      if (S.Kind == StmtKind::Block) {
+      // No test statement raises an exception: a __try runs its body.
+      if (S.Kind == StmtKind::Block || S.Kind == StmtKind::SEHTry) {
         auto R = Run(S.Body);
         if (R.Return || R.Target || R.Break || R.Continue)
           return R;
@@ -6607,6 +6608,46 @@ TEST(HighControlFlowSemantics, BlockEndingAnArmMovesToItsOnlyJump) {
   EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
   for (uint64_t X : {0, 1, 2})
     EXPECT_EQ(execute(F, X), std::optional<uint64_t>(Expected(X)));
+}
+
+TEST(HighControlFlowSemantics, CaseRegionHoldingATryMovesIntoItsCase) {
+  // switch (x) { case 1: goto L; } return 8;
+  // L: __try { v = 3; } __except (...) { v = 4; } return v;
+  // Only the case enters L, so the region moves into it whole: its __try is
+  // a complete statement, and the same handler guards it wherever it stands.
+  HighStmt Try;
+  Try.Kind = StmtKind::SEHTry;
+  Try.Addr = 0x1020;
+  Try.Body = {assign(0x1020, 1, 3)};
+  HighEHClause Except;
+  Except.Kind = HighEHClauseKind::SEHExcept;
+  Except.HandlerVA = 0x1040;
+  Try.EHClauses = {Except};
+  Try.EHClauseBodies = {{assign(0x1040, 1, 4)}};
+  HighStmt Dispatch;
+  Dispatch.Kind = StmtKind::Switch;
+  Dispatch.Addr = 0x1000;
+  Dispatch.SwitchExpr = local(0);
+  SwitchCase One;
+  One.Value = 1;
+  One.Body = {jump(0x1004, 0x1020)};
+  Dispatch.Cases = {One};
+  HighFunc F;
+  F.Body = {Dispatch, result(0x1010, HighExpr::makeConst(8, 8)), Try,
+            result(0x1030, local(1))};
+  for (uint64_t X : {0, 1})
+    ASSERT_EQ(execute(F, X), std::optional<uint64_t>(X == 1 ? 3 : 8));
+  for (int Round = 0; Round < 4 && reduceSingleUseGotos(F.Body, true); ++Round)
+    ;
+  EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
+  ASSERT_EQ(F.Body.front().Kind, StmtKind::Switch);
+  ASSERT_EQ(F.Body.front().Cases.size(), 1u);
+  const auto &Case = F.Body.front().Cases.front().Body;
+  EXPECT_TRUE(std::any_of(Case.begin(), Case.end(), [](const HighStmt &S) {
+    return S.Kind == StmtKind::SEHTry;
+  }));
+  for (uint64_t X : {0, 1})
+    EXPECT_EQ(execute(F, X), std::optional<uint64_t>(X == 1 ? 3 : 8));
 }
 
 TEST(HighControlFlowSemantics, UnreachableCleanupDropsCodeAfterAnEndlessLoop) {

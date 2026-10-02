@@ -952,7 +952,9 @@ super 呼び出しの証明は狭い戻り値の未定義パディングを維�
 
 UIButton の `contentEdgeInsets`、`imageEdgeInsets`、`titleEdgeInsets` の getter/setter は、32 バイトの `UIEdgeInsets` を保持します。上・左・下・右の double は arm64 の d0–d3 で渡されます。デバイスとシミュレータの完全な SDK 宣言が一致し、Apple Clang でも六つのエンコーディングを独立に再現しています。レシーバーの検索では UIButton の無名カテゴリと UIButton → UIControl → UIView の継承関係を保持します。実行時宣言の競合、別のレシーバー、クラスメソッド、不正な提供ライブラリ、対応する証拠のないアーキテクチャは引き続き未対応です。
 
-`windows-pe64-v1` は限定された Windows x64/ARM64 コンソールプロセスを追加します。PE ロード、PEB/TEB、静的・動的 TLS、起動・終了コールバック、名前付き Win32 API モデルを備えます。CPU 層を独立して使用し、ドライバーエミュレーションは不要です。DLL/CRT ロード、GUI、ユーザーモード SEH、スレッド、汎用 Windows 互換性は未完成です。
+`windows-pe64-v1` は PEB/TEB、EXE TLS、名前付き Win32 API、明示的で非循環の起動 DLL グラフを備えた有界 Windows x64/ARM64 コンソールプロセスに対応します。DLL は名前／序数によるコード・データのインポート、DIR64 再配置、実際のローダーリストに対応します。DLL 入口／TLS、動的ロード、転送エクスポート、CRT/GUI、ユーザー SEH、スレッドは未完成です。ARM64 KVM/WHP のネイティブ実行証拠も未取得です。
+
+`readPEProgramExports` が元のエクスポートと読み取り範囲、`WindowsProcessModules` が依存グラフとプロセス共通の提供元／名前 API ゲートを所有します。`VirtualMemory` は全イメージを事前予約し、`AddressSpace` がページと権限を管理します。PEB/LDR は実イメージのみを示し、初期化リストは DLL の依存順です。`GetModuleHandleW` は NULL または ASCII 基本名に対応し、大文字小文字を無視し、拡張子なしでは `.dll` を追加します。パス、非 ASCII、末尾の点は未対応です。未検出はエラー 126、成功時は LastError を保持します。API モデルはインストール済み DLL ではありません。
 
 Windows 仮想メモリに `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` と現在のプロセスの `FlushInstructionCache` を追加しました。OS 層が予約領域を所有し、コミット済みページ、権限、物理記憶域は `AddressSpace` が一元管理します。動的コードの書き換え、アクセス違反、メモリ予算の再利用をテストします。
 

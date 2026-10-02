@@ -119,11 +119,13 @@ include(AndroidFixtures.cmake)
 add_neverd_unittest(NeverDWindowsProcessTests
   WindowsProcessTests.cpp
   WindowsProcessMemoryTests.cpp
+  WindowsModuleTests.cpp
   TIMEOUT 30
   LINK_COMPONENTS EmulationProcess)
 target_include_directories(NeverDWindowsProcessTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/emulation)
 include(WindowsProcessFixtures.cmake)
+include(WindowsModuleFixtures.cmake)
 
 add_neverd_unittest(NeverDExecutionBudgetTests
   ExecutionBudgetTests.cpp

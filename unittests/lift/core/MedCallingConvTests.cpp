@@ -2644,6 +2644,66 @@ TEST(MedTypePass, ByteResultOverUndefinedEntryRegisterIsOneByte) {
   EXPECT_EQ(Func.ReturnType->Size, 1u);
 }
 
+TEST(MedTypePass, MaskedByteMergeOverUndefinedEntryRegisterIsOneByte) {
+  // `sete al; ret` merges the byte as `(RAX & ~0xFF) | zext(ZF)`.
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  const MedVar EntryRAX = reg(1, 0, 8, TRI.IntReturnReg, TheArch);
+  addLiveIn(Block, EntryRAX);
+  MedVar ZF;
+  ZF.Kind = MedVar::Flag;
+  ZF.Id = 2;
+  ZF.Size = 1;
+  ZF.RegOff = x86reg::ZF;
+  ZF.TheArch = TheArch;
+  Block.Ops.push_back(binary(NdOp::INT_EQUAL, ZF,
+                             reg(3, 0, 8, x86reg::RCX, TheArch),
+                             MedVar::makeConst(0, 8)));
+  const MedVar Kept = temp(10, 0, 8, TheArch);
+  Block.Ops.push_back(binary(NdOp::INT_AND, Kept, EntryRAX,
+                             MedVar::makeConst(~uint64_t{0xff}, 8)));
+  const MedVar Byte = temp(11, 0, 8, TheArch);
+  Block.Ops.push_back(unary(NdOp::INT_ZEXT, Byte, ZF));
+  const MedVar Merged = temp(12, 0, 8, TheArch);
+  Block.Ops.push_back(binary(NdOp::INT_OR, Merged, Kept, Byte));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Merged);
+  Block.Ops.push_back(Return);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Func.ReturnType->Size, 1u);
+}
+
+TEST(MedTypePass, FirstRegisterDefinitionAtVersionZeroIsDefined) {
+  // R9 is not live in, so its first definition takes SSA version 0, as an
+  // entry value does; `mov al, r9b` still returns a defined byte.
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  const MedVar EntryRAX = reg(1, 0, 8, TRI.IntReturnReg, TheArch);
+  addLiveIn(Block, EntryRAX);
+  const MedVar R9B = reg(2, 0, 1, x86reg::R9, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, R9B, MedVar::makeConst(0, 1)));
+  pushByteMerge(Block, EntryRAX, R9B, 10, TheArch);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Func.ReturnType->Size, 1u);
+}
+
 TEST(MedTypePass, ByteResultOverDefinedRegisterKeepsItsWidth) {
   // `mov rax, [rcx]; mov al, 1; ret` defines every byte of RAX.
   constexpr Arch TheArch = Arch::X64;

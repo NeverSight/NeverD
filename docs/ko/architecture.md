@@ -929,7 +929,9 @@ super 호출 증명은 좁은 반환값의 정의되지 않은 패딩을 유지�
 
 UIButton의 `contentEdgeInsets`, `imageEdgeInsets`, `titleEdgeInsets` getter/setter는 32바이트 `UIEdgeInsets` 레코드를 보존합니다. 위, 왼쪽, 아래, 오른쪽의 double 값은 arm64에서 d0–d3로 전달됩니다. 전체 기기 및 시뮬레이터 SDK 선언이 일치하며 Apple Clang으로 여섯 인코딩을 독립적으로 재현합니다. 수신자 조회는 UIButton의 익명 카테고리와 UIButton → UIControl → UIView 상속 관계를 유지합니다. 런타임 선언 충돌, 다른 수신자, 클래스 메서드, 잘못된 제공 라이브러리, 일치하는 근거가 없는 아키텍처는 계속 지원하지 않습니다.
 
-`windows-pe64-v1`은 제한된 Windows x64/ARM64 콘솔 프로세스를 추가합니다. PE 로딩, PEB/TEB, 정적·동적 TLS, 시작·종료 콜백과 이름 기반 Win32 API 모델을 제공합니다. 드라이버 에뮬레이션 없이 CPU 계층을 사용합니다. DLL/CRT 로딩, GUI, 사용자 모드 SEH, 스레드와 일반 Windows 호환성은 아직 미완성입니다.
+`windows-pe64-v1`은 PEB/TEB, EXE TLS, 명명된 Win32 API, 명시적인 비순환 시작 DLL 그래프를 갖춘 제한된 Windows x64/ARM64 콘솔 프로세스를 지원합니다. DLL의 이름/서수 코드·데이터 가져오기, DIR64 재배치, 실제 로더 목록을 지원합니다. DLL 진입점/TLS, 동적 로딩, 전달된 내보내기, CRT/GUI, 사용자 SEH와 스레드는 미완성입니다. 네이티브 ARM64 KVM/WHP 실행 증거도 아직 없습니다.
+
+`readPEProgramExports`는 원본 내보내기와 읽기 범위를, `WindowsProcessModules`는 그래프와 프로세스 공통 제공자/이름 API 게이트를 소유합니다. `VirtualMemory`가 모든 이미지를 먼저 예약하고 `AddressSpace`가 페이지와 권한을 관리합니다. PEB/LDR에는 실제 이미지만 있으며 초기화 목록은 DLL 의존 순서입니다. `GetModuleHandleW`는 NULL 또는 ASCII 기본 이름을 받으며 대소문자를 무시하고 확장자가 없으면 `.dll`을 붙입니다. 경로, 비 ASCII 조회, 끝의 점 규칙은 미지원입니다. 없는 이름은 오류 126, 성공은 LastError를 유지합니다. API 모델은 설치된 DLL이 아닙니다.
 
 Windows 가상 메모리는 `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery`와 현재 프로세스의 `FlushInstructionCache`를 지원합니다. OS 계층은 예약 영역을 소유하고 `AddressSpace`는 커밋된 페이지, 권한, 실제 저장 공간을 관리합니다. 테스트는 동적 코드 수정, 접근 오류, 메모리 한도 재사용을 검증합니다.
 

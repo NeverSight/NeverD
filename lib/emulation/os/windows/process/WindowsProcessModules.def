@@ -1,0 +1,33 @@
+//===- WindowsProcessModules.def - Startup module policy ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_WINDOWS_PROCESS_VALUE
+NEVERD_WINDOWS_PROCESS_VALUE(ImportOrdinalFlag, UINT64_C(1) << 63)
+NEVERD_WINDOWS_PROCESS_VALUE(ImportOrdinalMask, 0xffff)
+NEVERD_WINDOWS_PROCESS_VALUE(ModuleStride, 0x120)
+NEVERD_WINDOWS_PROCESS_VALUE(ModuleInitLink, 0x20)
+NEVERD_WINDOWS_PROCESS_VALUE(ASCIIUpperBound, 127)
+#endif
+#ifdef NEVERD_WINDOWS_PROCESS_TEXT
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleName,
+                            "invalid or duplicate guest module basename: ")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleMissing,
+                            "startup module is not explicitly supplied: ")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleCycle, "cyclic startup module dependencies: ")
+NEVERD_WINDOWS_PROCESS_TEXT(
+    ModuleISA, "startup module architecture differs from the executable")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleBudget,
+                            "startup module preparation budget exceeded")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleTimeout,
+                            "startup module preparation deadline exceeded")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleInit,
+                            "DLL entry points and DLL TLS are not supported")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleForwarder,
+                            "forwarded guest exports are not supported")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleExport, "missing or unmapped guest export: ")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleFixup,
+                            "base relocation overlaps linker metadata")
+NEVERD_WINDOWS_PROCESS_TEXT(DLLExtension, ".dll")
+#endif

@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
+<!-- i18n-source: d157cf302643e879be2748919ad949d2979c1d36798e295ee566f247834396f4 -->
 
 <div align="center">
 
@@ -117,7 +117,7 @@ Die Rekonstruktion hängt von unterstützten Codemustern ab; Umfang und Grenzen 
 
 Die CPU-Ausführung trennt ISA-Zulassung, Gastspeicher, Backend-Transport und Gast-OS-Richtlinien. `NEVERD_ENABLE_CPU_EMULATION` aktiviert die x64/ARM64-CPU-Schicht; `NEVERD_ENABLE_DRIVER_EMULATION` ergänzt die begrenzte x64-Windows-WDM/KMDF-Umgebung. `linux-elf64-v1` führt unterstützte Linux-ELF-Prozesse aus. Siehe [CPU-Ausführung](cpu-execution.md), [Gastprozess-Emulation](process-emulation.md) und [Emulation von Windows-Treibern](driver-emulation.md).
 
-`windows-pe64-v1` ergänzt begrenzte Windows-Konsolenprozesse für x64/ARM64: PE-Laden, PEB/TEB, statisches und dynamisches TLS, Start-/Ende-Callbacks und benannte Win32-API-Modelle. Es nutzt die CPU-Schicht ohne Treiberemulation; DLL-/CRT-Laden, GUI, Benutzer-SEH, Threads und allgemeine Windows-Kompatibilität bleiben unvollständig.
+`windows-pe64-v1` unterstützt begrenzte Windows-x64/ARM64-Konsolenprozesse mit PEB/TEB, EXE-TLS, benannten Win32-APIs und expliziten azyklischen Start-DLL-Graphen. DLLs unterstützen Code-/Datenimporte nach Name oder Ordinal, DIR64-Rebasing und echte Loader-Listeneinträge. DLL-Einstieg/TLS, dynamisches Laden, weitergeleitete Exports, CRT/GUI, Benutzer-SEH und Threads sind noch offen; native ARM64-KVM/WHP-Belege fehlen weiterhin.
 
 Der virtuelle Windows-Speicher ergänzt `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` und `FlushInstructionCache` für den aktuellen Prozess. Die OS-Schicht verwaltet Reservierungen; `AddressSpace` bleibt maßgeblich für zugesicherte Seiten, Zugriffsrechte und deren Speicher. Tests prüfen Codeänderungen, Zugriffsfehler und die Wiederverwendung des Speicherbudgets.
 

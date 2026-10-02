@@ -7,6 +7,8 @@
 
 #include "neverd/emulation/CPU.h"
 
+#include "llvm/ADT/StringExtras.h"
+
 #include <algorithm>
 
 namespace neverd::emulation::windows_process {
@@ -258,12 +260,38 @@ Services::invoke(const Service &S, const NativeCallEvent &Event) {
       return std::move(E);
     return Value(1);
   }
-  case API::GetModuleHandleW:
+  case API::GetModuleHandleW: {
     if (!A[0])
       return Value(Loaded.Base);
-    // Module names beyond the sole mapped image require a real module model;
-    // never invent handles to the named API provider families.
+    std::string Name;
+    for (uint64_t I = 0; I < MaxName; ++I) {
+      if (A[0] >= UserLimit || I * WideSize + WideSize > UserLimit - A[0])
+        return failure(text::Access);
+      auto Accessible = access(A[0] + I * WideSize, WideSize, Read);
+      if (!Accessible)
+        return Accessible.takeError();
+      if (!*Accessible)
+        return failure(text::Access);
+      auto C = CPU.readInteger(A[0] + I * WideSize, WideSize);
+      if (!C)
+        return C.takeError();
+      if (!*C) {
+        if (Name.empty() || Name.back() == '.')
+          return unsupported(S);
+        if (!llvm::StringRef(Name).contains('.'))
+          Name += text::DLLExtension;
+        for (const auto &M : Modules)
+          if (llvm::StringRef(Name).equals_insensitive(M.Name))
+            return Value(M.Base);
+        return WinError(ErrorModuleNotFound);
+      }
+      if (*C > ASCIIUpperBound || !(llvm::isAlnum(char(*C)) || *C == '_' ||
+                                    *C == '-' || *C == '.' || *C == ' '))
+        return unsupported(S);
+      Name += char(*C);
+    }
     return unsupported(S);
+  }
   }
   return failure(text::Service);
 }

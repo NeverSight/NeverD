@@ -880,7 +880,9 @@ super 呼叫證明保留窄回傳值的未定義填補位元並檢查每個參�
 
 UIButton 的 `contentEdgeInsets`、`imageEdgeInsets` 和 `titleEdgeInsets` 讀寫方法保留完整的 32 位元組 `UIEdgeInsets`：上、左、下、右四個 double 在 arm64 上由 d0–d3 傳遞。完整的裝置與模擬器 SDK 宣告一致，Apple Clang 獨立重現全部六種編碼。接收者查找保留 UIButton 匿名分類及 UIButton → UIControl → UIView 繼承關係。執行階段宣告衝突、其他接收者、類別方法、錯誤提供程式庫及缺少相符證據的架構仍不受支援。
 
-`windows-pe64-v1` 新增有界 Windows x64/ARM64 主控台程序：PE 載入、PEB/TEB、靜態與動態 TLS、啟動／結束回呼及具名 Win32 API 模型。它獨立使用 CPU 層，不需啟用驅動程式模擬；DLL/CRT 載入、GUI、使用者態 SEH、執行緒及通用 Windows 相容性仍待完成。
+`windows-pe64-v1` 支援有界 Windows x64/ARM64 主控台程序，包括 PEB/TEB、EXE TLS、具名 Win32 API 與明確無環啟動 DLL 圖。客體 DLL 支援名稱／序號程式碼及資料匯入、DIR64 重定位及真實載入器串列身分。DLL 進入點／TLS、動態載入、轉送匯出、CRT／GUI、使用者 SEH 與執行緒仍待完成；原生 ARM64 KVM/WHP 證據仍缺。
+
+`readPEProgramExports` 擁有原始匯出身分與有界中繼資料讀取範圍；`WindowsProcessModules` 擁有模組圖和全程序精確提供者／名稱 API 跳板。`VirtualMemory` 在映射前登記全部映像，`AddressSpace` 管理頁面及權限。PEB/LDR 僅列真實映像，初始化串列依相依順序排列 DLL。`GetModuleHandleW` 接受 NULL 或 ASCII 基本名稱，不分大小寫，無副檔名時補 `.dll`；路徑、非 ASCII 查詢及結尾點規則仍不支援。找不到名稱回傳錯誤 126，成功保留 LastError。API 模型不是已安裝系統 DLL。
 
 Windows 虛擬記憶體新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` 及目前行程的 `FlushInstructionCache`。OS 層管理保留區域，`AddressSpace` 統一管理已認可頁面、權限和實體儲存。測試涵蓋動態程式碼改寫、存取錯誤和記憶體額度回收。
 

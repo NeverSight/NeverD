@@ -31,6 +31,14 @@ class Reader {
 public:
   llvm::ArrayRef<uint8_t> Raw;
   std::vector<Section> Sections;
+  ImageReadBudget &Budget;
+  mutable std::vector<PEMetadataRange> Metadata;
+  bool record() const {
+    if (!Budget.Records)
+      return false;
+    --Budget.Records;
+    return true;
+  }
   template <typename T> bool copy(uint64_t Offset, T &Out) const {
     if (Offset > Raw.size() || sizeof(T) > Raw.size() - Offset)
       return false;
@@ -39,6 +47,15 @@ public:
   }
   llvm::Expected<llvm::ArrayRef<uint8_t>> bytes(uint64_t RVA,
                                                 uint64_t Size) const {
+    if (Size > Budget.MetadataBytes)
+      return failure(text::ModuleBudget);
+    Budget.MetadataBytes -= Size;
+    if (!Metadata.empty() && RVA >= Metadata.back().RVA &&
+        RVA <= Metadata.back().RVA + Metadata.back().Size)
+      Metadata.back().Size =
+          std::max(Metadata.back().Size, RVA + Size - Metadata.back().RVA);
+    else
+      Metadata.push_back({RVA, Size});
     for (const auto &S : Sections) {
       const uint64_t Start = S.Header.VirtualAddress;
       if (RVA < Start || RVA - Start >= S.Header.VirtualSize)
@@ -79,7 +96,8 @@ public:
     return failure(text::Imports);
   }
 };
-llvm::Error readImports(const Reader &R, const data_directory &D, Image &Out) {
+llvm::Error readImports(const Reader &R, const data_directory &D, Image &Out,
+                        bool GuestImports) {
   if (!D.Size)
     return llvm::Error::success();
   auto Data = R.bytes(D.RelativeVirtualAddress, D.Size);
@@ -104,8 +122,11 @@ llvm::Error readImports(const Reader &R, const data_directory &D, Image &Out) {
     auto Module = R.name(Entry.NameRVA);
     if (!Module)
       return Module.takeError();
-    if (!findProvider(*Module))
+    if (!R.record())
+      return failure(text::ModuleBudget);
+    if (!GuestImports && !findProvider(*Module))
       return failure(text::Import + *Module);
+    Out.Dependencies.push_back(llvm::StringRef(*Module).lower());
     const uint64_t Lookup = Entry.ImportLookupTableRVA
                                 ? uint32_t(Entry.ImportLookupTableRVA)
                                 : uint32_t(Entry.ImportAddressTableRVA);
@@ -128,22 +149,34 @@ llvm::Error readImports(const Reader &R, const data_directory &D, Image &Out) {
         End = true;
         break;
       }
-      if (NameRVA > UINT32_MAX || Out.Imports.size() == MaxImports ||
-          !Slots.insert(Slot).second)
+      if (Out.Imports.size() == MaxImports || !Slots.insert(Slot).second)
         return failure(text::Imports);
-      auto Hint = R.bytes(NameRVA, sizeof(uint16_t));
-      if (!Hint)
-        return Hint.takeError();
-      auto Name = R.name(NameRVA + sizeof(uint16_t));
-      if (!Name)
-        return Name.takeError();
-      const auto *Target = findService(*Module, *Name);
-      if (!Target)
+      if (!R.record())
+        return failure(text::ModuleBudget);
+      std::string Name;
+      std::optional<uint16_t> Ordinal;
+      if (NameRVA & ImportOrdinalFlag) {
+        if (NameRVA & ~(ImportOrdinalFlag | ImportOrdinalMask))
+          return failure(text::Imports);
+        Ordinal = NameRVA & ImportOrdinalMask;
+      } else {
+        if (NameRVA > UINT32_MAX)
+          return failure(text::Imports);
+        auto Hint = R.bytes(NameRVA, sizeof(uint16_t));
+        if (!Hint)
+          return Hint.takeError();
+        auto SymbolName = R.name(NameRVA + sizeof(uint16_t));
+        if (!SymbolName)
+          return SymbolName.takeError();
+        Name = std::move(*SymbolName);
+      }
+      const auto *Target = Ordinal ? nullptr : findService(*Module, Name);
+      if ((!GuestImports || findProvider(*Module)) && !Target)
         return failure(text::Import + *Module +
-                       llvm::Twine(text::ImportSeparator) + *Name);
-      Out.Imports.push_back(
-          {Out.Base + Slot, Target, llvm::StringRef(*Module).lower(),
-           GateBase + (Out.Imports.size() + FirstImportGate) * GateStride});
+                       llvm::Twine(text::ImportSeparator) + Name);
+      Out.Imports.push_back({Out.Base + Slot, Target,
+                             llvm::StringRef(*Module).lower(), 0,
+                             std::move(Name), Ordinal});
     }
     if (!End)
       return failure(text::Imports);
@@ -218,19 +251,23 @@ llvm::Error readTLS(const Reader &R, const data_directory &D, Image &Out) {
   }
   return failure(text::TLS);
 }
-} // namespace
-
-llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
-                                uint64_t MemoryLimit) {
+llvm::Expected<Image> readImage(const std::filesystem::path &Path,
+                                ImageReadBudget &Budget, bool DLL,
+                                bool GuestImports) {
   std::error_code EC;
   const uint64_t FileSize = std::filesystem::file_size(Path, EC);
-  if (EC || FileSize > MemoryLimit)
+  if (EC || FileSize > Budget.FileBytes)
     return failure(text::Image);
   auto Buffer = llvm::MemoryBuffer::getFile(Path.string());
   if (!Buffer)
     return llvm::errorCodeToError(Buffer.getError());
+  if ((*Buffer)->getBufferSize() != FileSize)
+    return failure(text::Image);
+  Budget.FileBytes -= FileSize;
   Reader R{{reinterpret_cast<const uint8_t *>((*Buffer)->getBufferStart()),
             (*Buffer)->getBufferSize()},
+           {},
+           Budget,
            {}};
   dos_header DOS;
   coff_file_header COFF;
@@ -257,9 +294,10 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
   if ((COFF.Machine != llvm::COFF::IMAGE_FILE_MACHINE_AMD64 &&
        COFF.Machine != llvm::COFF::IMAGE_FILE_MACHINE_ARM64) ||
       !(COFF.Characteristics & llvm::COFF::IMAGE_FILE_EXECUTABLE_IMAGE) ||
-      (COFF.Characteristics &
-       (llvm::COFF::IMAGE_FILE_DLL | llvm::COFF::IMAGE_FILE_SYSTEM)) ||
-      PE.Subsystem != llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI ||
+      bool(COFF.Characteristics & llvm::COFF::IMAGE_FILE_DLL) != DLL ||
+      (COFF.Characteristics & llvm::COFF::IMAGE_FILE_SYSTEM) ||
+      (PE.Subsystem != llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI &&
+       (!DLL || PE.Subsystem != llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_GUI)) ||
       PE.LoaderFlags || PE.Win32VersionValue ||
       (PE.DLLCharacteristics & llvm::COFF::IMAGE_DLL_CHARACTERISTICS_GUARD_CF))
     return failure(text::Image);
@@ -269,7 +307,7 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
       PE.FileAlignment > MaxFileAlignment ||
       PE.FileAlignment > PE.SectionAlignment || Base < ImageAlignment ||
       Base % ImageAlignment || Base >= UserLimit || !Size ||
-      Size > UserLimit - Base || Size > MemoryLimit ||
+      Size > UserLimit - Base || Size > Budget.MappedBytes ||
       Size % PE.SectionAlignment || !PE.SizeOfHeaders ||
       PE.SizeOfHeaders % PE.FileAlignment || PE.SizeOfHeaders > R.Raw.size() ||
       pages(PE.SizeOfHeaders) > Size || !COFF.NumberOfSections ||
@@ -278,7 +316,11 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
   Image Out{COFF.Machine == llvm::COFF::IMAGE_FILE_MACHINE_AMD64
                 ? GuestArchitecture::X64
                 : GuestArchitecture::AArch64,
-            Base, Size, Base + PE.AddressOfEntryPoint};
+            Base, Size,
+            PE.AddressOfEntryPoint ? Base + PE.AddressOfEntryPoint : 0};
+  Budget.MappedBytes -= Size;
+  if (DLL && PE.AddressOfEntryPoint)
+    return failure(text::ModuleInit);
   uint64_t Table = OptionalOffset + COFF.SizeOfOptionalHeader;
   if (Table > PE.SizeOfHeaders ||
       uint64_t(COFF.NumberOfSections) * sizeof(coff_section) >
@@ -286,6 +328,8 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
     return failure(text::Headers);
   uint64_t Previous = pages(PE.SizeOfHeaders);
   for (unsigned I = 0; I < COFF.NumberOfSections; ++I) {
+    if (!R.record())
+      return failure(text::ModuleBudget);
     coff_section S;
     if (!R.copy(Table + I * sizeof(S), S))
       return failure(text::Headers);
@@ -325,14 +369,16 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
     Out.Regions.push_back(std::move(Region));
     Previous = S.VirtualAddress + Span;
   }
-  if ((Out.Architecture == GuestArchitecture::AArch64 &&
-       PE.AddressOfEntryPoint % DWordSize) ||
-      !R.accessible(PE.AddressOfEntryPoint, 1,
-                    llvm::COFF::IMAGE_SCN_MEM_EXECUTE))
-    return failure(text::Image);
-  auto Entry = R.bytes(PE.AddressOfEntryPoint, 1);
-  if (!Entry)
-    return Entry.takeError();
+  if (!DLL) {
+    if ((Out.Architecture == GuestArchitecture::AArch64 &&
+         PE.AddressOfEntryPoint % DWordSize) ||
+        !R.accessible(PE.AddressOfEntryPoint, 1,
+                      llvm::COFF::IMAGE_SCN_MEM_EXECUTE))
+      return failure(text::Image);
+    auto Entry = R.bytes(PE.AddressOfEntryPoint, 1);
+    if (!Entry)
+      return Entry.takeError();
+  }
   std::array<data_directory, MaxDirectories> Directories{};
   for (unsigned I = 0; I < PE.NumberOfRvaAndSize; ++I) {
     auto &D = Directories[I];
@@ -353,6 +399,8 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
         return failure(text::Metadata);
       continue;
     }
+    if (DLL && I == llvm::COFF::TLS_TABLE)
+      return failure(text::ModuleInit);
     auto Data = R.bytes(D.RelativeVirtualAddress, D.Size);
     if (!Data)
       return Data.takeError();
@@ -384,6 +432,8 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
       }
     }
     if (I == llvm::COFF::BASE_RELOCATION_TABLE) {
+      Out.Relocatable =
+          !(COFF.Characteristics & llvm::COFF::IMAGE_FILE_RELOCS_STRIPPED);
       uint64_t Offset = 0;
       std::set<uint64_t> Targets;
       while (Offset < Data->size()) {
@@ -395,6 +445,8 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
             B.BlockSize > Data->size() - Offset || B.PageRVA % PageSize)
           return failure(text::Metadata);
         for (uint64_t J = sizeof(B); J < B.BlockSize; J += sizeof(uint16_t)) {
+          if (!R.record())
+            return failure(text::ModuleBudget);
           const auto E =
               llvm::support::endian::read16le(Data->data() + Offset + J);
           const auto Type = E >> RelocationTypeShift;
@@ -410,15 +462,46 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
                *std::prev(Next) + PointerSize > Target))
             return failure(text::Metadata);
           Targets.insert(Target);
+          Out.Relocations.push_back(Target);
         }
         Offset += B.BlockSize;
       }
     }
   }
-  if (auto E = readImports(R, Directories[llvm::COFF::IMPORT_TABLE], Out))
+  if (auto E = readImports(R, Directories[llvm::COFF::IMPORT_TABLE], Out,
+                           GuestImports))
     return std::move(E);
   if (auto E = readTLS(R, Directories[llvm::COFF::TLS_TABLE], Out))
     return std::move(E);
+  auto Exports = readPEProgramExports(
+      R.Raw, {Budget.MetadataBytes, Budget.Records, MaxName});
+  if (!Exports)
+    return Exports.takeError();
+  Budget.MetadataBytes -= Exports->BytesRead;
+  Budget.Records -= Exports->RecordsRead;
+  Out.Exports = std::move(*Exports);
+  for (const auto &Export : Out.Exports.Entries) {
+    if (Export.Kind == PEExportKind::Forwarder)
+      return failure(text::ModuleForwarder);
+    if (Export.Kind == PEExportKind::Address && !R.accessible(Export.RVA, 1, 0))
+      return failure(text::ModuleExport);
+  }
+  if (DLL) {
+    R.Metadata.insert(R.Metadata.end(), Out.Exports.Metadata.begin(),
+                      Out.Exports.Metadata.end());
+    std::sort(R.Metadata.begin(), R.Metadata.end(),
+              [](const auto &A, const auto &B) { return A.RVA < B.RVA; });
+    std::sort(Out.Relocations.begin(), Out.Relocations.end());
+    size_t Index = 0;
+    for (uint64_t Target : Out.Relocations) {
+      while (Index < R.Metadata.size() &&
+             R.Metadata[Index].RVA + R.Metadata[Index].Size <= Target)
+        ++Index;
+      if (Index < R.Metadata.size() &&
+          R.Metadata[Index].RVA < Target + PointerSize)
+        return failure(text::ModuleFixup);
+    }
+  }
   // Execution admission is stricter than analysis. Keep the repository's
   // loader authoritative for the image/segment/import identities and use the
   // original bytes, never analysis-time pointer fixups, for guest execution.
@@ -443,7 +526,8 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
     if (std::none_of(Decoded->Imports.begin(), Decoded->Imports.end(),
                      [&](const auto &I) {
                        return I.IATAddr == Import.Slot &&
-                              I.Name == Import.Target->Name &&
+                              (Import.Ordinal ? I.Ordinal == *Import.Ordinal
+                                              : I.Name == Import.Name) &&
                               llvm::StringRef(I.Module).lower() ==
                                   Import.Module;
                      }))
@@ -453,5 +537,15 @@ llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
   std::copy_n(R.Raw.begin(), PE.SizeOfHeaders, Headers.Bytes.begin());
   Out.Regions.insert(Out.Regions.begin(), std::move(Headers));
   return Out;
+}
+} // namespace
+llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
+                                uint64_t MemoryLimit) {
+  ImageReadBudget Budget{MemoryLimit, MemoryLimit};
+  return readImage(Path, Budget, false, false);
+}
+llvm::Expected<Image> loadProgramImage(const std::filesystem::path &Path,
+                                       ImageReadBudget &Budget, bool DLL) {
+  return readImage(Path, Budget, DLL, true);
 }
 } // namespace neverd::emulation::windows_process
