@@ -104,6 +104,13 @@ public:
   /// fail-closed default used by \c step(const LowOp&).
   StepResult step(const LowOp &Op, const SymCallEffect *CallEffect);
 
+  /// A preservation contract applies to this STORE occurrence only. Other
+  /// opcodes execute normally and leave its status Invalid. Malformed STORE
+  /// contracts and budget failures are unmodelled. The descriptor records the
+  /// exact preservation status and charged work.
+  StepResult step(const LowOp &Op, const SymCallEffect *CallEffect,
+                  SymStorePreservation *Preservation);
+
   /// Read one operand through the same width, space, and memory semantics used
   /// by \c step.  This may materialise an untouched symbolic input in \c State.
   /// Concrete shadow execution uses it instead of duplicating NdVar semantics.
@@ -175,7 +182,7 @@ private:
   StepResult stepUnary(const LowOp &Op);
   StepResult stepBoolean(const LowOp &Op);
   StepResult stepBits(const LowOp &Op);
-  StepResult stepMemory(const LowOp &Op);
+  StepResult stepMemory(const LowOp &Op, SymStorePreservation *Preservation);
   StepResult stepControl(const LowOp &Op, const SymCallEffect *CallEffect);
   StepResult stepX87Intrinsic(const LowOp &Op);
   StepResult unmodelled(const LowOp &Op);

@@ -69,6 +69,17 @@ constexpr uint32_t kByteBits = 8;
 /// its addresses becomes a region of its own instead.
 constexpr uint32_t kMaxAddressBits = 64;
 
+bool validBankWrite(const SymContext &Ctx, uint64_t Offset, SymRef Value) {
+  if (!Value)
+    return false;
+  const uint32_t Width = Ctx.width(Value);
+  if (!Width || Width % kByteBits)
+    return false;
+  const uint32_t Bytes = Width / kByteBits;
+  return Bytes <= std::numeric_limits<uint16_t>::max() &&
+         Offset <= std::numeric_limits<uint64_t>::max() - (Bytes - 1);
+}
+
 std::string byteName(llvm::StringRef Prefix, uint64_t Offset) {
   return (llvm::Twine(Prefix) + "$" + llvm::Twine(Offset)).str();
 }
@@ -182,15 +193,10 @@ SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
 }
 
 bool SymState::writeBank(Bank &B, uint64_t Offset, SymRef Value) {
-  if (!Value.isValid())
+  if (!validBankWrite(*Ctx, Offset, Value))
     return false;
   const uint32_t Width = Ctx->width(Value);
-  if (Width == 0 || Width % kByteBits != 0)
-    return false;
   const uint32_t ByteCount = Width / kByteBits;
-  if (ByteCount > std::numeric_limits<uint16_t>::max() ||
-      Offset > std::numeric_limits<uint64_t>::max() - (ByteCount - 1))
-    return false;
   const uint16_t Bytes = static_cast<uint16_t>(ByteCount);
 
   for (uint16_t I = 0; I < Bytes; ++I) {
@@ -393,6 +399,54 @@ bool SymState::store(SymRef Addr, SymRef Value) {
   forgetRegions(Where.Base);
   MemoryClobbered = true;
   return false;
+}
+
+bool SymState::store(SymRef Addr, SymRef Value,
+                     SymStorePreservation &Preservation) {
+  Preservation.WorkUsed = 0;
+  Preservation.Status = SymStorePreservationStatus::Invalid;
+  if (!Addr || Ctx->width(Addr) != 64 || !Preservation.Base ||
+      Ctx->width(Preservation.Base) != 64 || Ctx->isConst(Preservation.Base) ||
+      Preservation.Begin >= Preservation.End)
+    return false;
+  const Location Where = locate(Addr);
+  if (Where.Base == Preservation.Base ||
+      !validBankWrite(*Ctx, Where.Offset, Value))
+    return false;
+
+  const auto Charge = [&](uint64_t Count) {
+    if (Count > Preservation.MaxWork - Preservation.WorkUsed) {
+      Preservation.Status = SymStorePreservationStatus::BudgetExceeded;
+      return false;
+    }
+    Preservation.WorkUsed += Count;
+    return true;
+  };
+  llvm::SmallVector<std::pair<uint64_t, SymRef>, 32> Saved;
+  auto Found = Regions.find(Preservation.Base.index());
+  if (Found != Regions.end()) {
+    const uint64_t Begin = static_cast<uint64_t>(Preservation.Begin);
+    const uint64_t Size = static_cast<uint64_t>(Preservation.End) - Begin;
+    for (const auto &[Offset, Byte] : Found->second.Bytes) {
+      if (!Charge(1))
+        return false;
+      if (Offset - Begin < Size) {
+        if (!Charge(2))
+          return false;
+        Saved.emplace_back(Offset, Byte);
+      }
+    }
+  }
+
+  const bool Absolute = store(Addr, Value);
+  // Restore only known bytes. The real STORE owns the new epochs, unknown
+  // defaults, other banks and provenance; rolling back a whole bank would
+  // incorrectly reintroduce untouched entry-memory identities outside bounds.
+  if (Found != Regions.end())
+    for (const auto &[Offset, Byte] : Saved)
+      Found->second.Bytes.emplace(Offset, Byte);
+  Preservation.Status = SymStorePreservationStatus::Applied;
+  return Absolute;
 }
 
 //===----------------------------------------------------------------------===//

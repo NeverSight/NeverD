@@ -1219,3 +1219,5 @@ Regressionen zur Zustandserfassung: `NeverDUnicornStateTransferTests`, `NeverDUn
 Der virtuelle Windows-Speicher ergänzt `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` und `FlushInstructionCache` für den aktuellen Prozess. Die OS-Schicht verwaltet Reservierungen; `AddressSpace` bleibt maßgeblich für zugesicherte Seiten, Zugriffsrechte und deren Speicher. Tests prüfen Codeänderungen, Zugriffsfehler und die Wiederverwendung des Speicherbudgets.
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
+
+Regressionen prüfen exakte und zu kleine Budgets, Teilwörter, beide Byteordnungen, unberührte Speicheridentitäten, vollständige affine Slotgrenzen, spätes Überschreiben und Standardinvalidierung. C API/CLI prüfen v6-Kompatibilität und ungültige Bereiche. HighC und LLVMC laufen mit O0/O2 und prüfen Rückgabe, Speicher, Stack und erhaltenen Zustand; dies ist kein natives Äquivalenzzertifikat.

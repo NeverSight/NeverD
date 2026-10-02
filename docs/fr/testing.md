@@ -1218,3 +1218,5 @@ Régressions de capture : `NeverDUnicornStateTransferTests`, `NeverDUnicornMachi
 La mémoire virtuelle Windows ajoute `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` et `FlushInstructionCache` pour le processus courant. La couche OS possède les réservations ; `AddressSpace` reste la référence pour les pages validées, les permissions et leur stockage. Les tests couvrent la réécriture de code, les défauts d’accès et la réutilisation du budget mémoire.
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
+
+Les régressions couvrent budgets exacts ou insuffisants, mots partiels, deux ordres d’octets, identité de mémoire intacte, bornes des sauvegardes affines, écrasements par prédécesseurs tardifs et invalidation par défaut. C API/CLI vérifient la compatibilité v6 et les domaines invalides. HighC et LLVMC exécutés en O0/O2 contrôlent retour, mémoire, pile et état préservé, sans constituer un certificat d’équivalence native.

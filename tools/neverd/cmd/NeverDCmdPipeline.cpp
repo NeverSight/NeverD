@@ -441,6 +441,7 @@ int runDecompile(neverd_session_t Sess) {
        VMChainTransfers.getNumOccurrences() ||
        VMEntryFrame.getNumOccurrences() ||
        VMEntryAlignment.getNumOccurrences() ||
+       VMExternalStoresDisjointFrame.getNumOccurrences() ||
        VMMaxSymbolicNodes.getNumOccurrences() ||
        VMNoControlDiscovery.getNumOccurrences())) {
     WithColor::error() << "VM recovery options require --devirtualize\n";
@@ -491,6 +492,12 @@ int runDecompile(neverd_session_t Sess) {
     // The shared entry-domain validator owns power-of-two/residue validity.
   }
   int64_t EntryFrameBegin = 0, EntryFrameEnd = 0;
+  if (VMExternalStoresDisjointFrame &&
+      (!VMMachineState || !VMEntryFrame.getNumOccurrences())) {
+    WithColor::error() << "--vm-external-stores-disjoint-frame requires "
+                          "--vm-machine-state and --vm-entry-frame\n";
+    return 1;
+  }
   if (VMEntryFrame.getNumOccurrences()) {
     if (!VMMachineState) {
       WithColor::error() << "--vm-entry-frame requires --vm-machine-state\n";
@@ -556,11 +563,14 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v5 ExtendedRecovery{};
-      ExtendedRecovery.max_symbolic_nodes = MaxSymbolicNodes;
-      ExtendedRecovery.entry_frame_alignment = EntryAlignment;
-      ExtendedRecovery.entry_frame_residue = EntryResidue;
-      auto &Recovery = ExtendedRecovery.base;
+      neverd_devirtualize_options_v6 ExtendedRecovery{};
+      if (VMExternalStoresDisjointFrame)
+        ExtendedRecovery.flags |=
+            NEVERD_DEVIRTUALIZE_V6_EXTERNAL_STORES_DISJOINT_ENTRY_FRAME;
+      ExtendedRecovery.base.max_symbolic_nodes = MaxSymbolicNodes;
+      ExtendedRecovery.base.entry_frame_alignment = EntryAlignment;
+      ExtendedRecovery.base.entry_frame_residue = EntryResidue;
+      auto &Recovery = ExtendedRecovery.base.base;
       auto &Base = Recovery.base.base.base;
       Base.struct_size = sizeof(ExtendedRecovery);
       Recovery.base.base.max_control_refinements = MaxRefinements;
@@ -584,9 +594,9 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source = VMMachineState ? neverd_devirtualize_machine_source_v5(
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v6(
                                     Sess, Entry, &ExtendedRecovery, &Report)
-                              : neverd_devirtualize_source_v5(
+                              : neverd_devirtualize_source_v6(
                                     Sess, Entry, &ExtendedRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;

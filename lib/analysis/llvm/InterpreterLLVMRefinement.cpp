@@ -54,6 +54,14 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     const InterpreterLLVMRefinementPlans &Plans, LowIRRefinementWitness Witness,
     const InterpreterLLVMRefinementLimits &Limits) {
   InterpreterLLVMRefinementResult Result;
+  if (Options.ExternalStoresDisjointEntryFrame) {
+    Result.Stage = InterpreterLLVMRefinementStage::Native;
+    Result.Native.Proof.Status = LowIRRefinementStatus::Unsupported;
+    Result.Diagnostic = "native proof does not support an external-store "
+                        "frame separation domain";
+    Result.Native.Proof.Diagnostic = Result.Diagnostic;
+    return Result;
+  }
   if (Options.EntryFrameAlignment) {
     Result.Stage = InterpreterLLVMRefinementStage::Native;
     Result.Native.Proof.Status = LowIRRefinementStatus::Unsupported;

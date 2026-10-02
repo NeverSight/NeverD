@@ -429,6 +429,11 @@ cl::opt<std::string> VMEntryAlignment(
     "vm-entry-alignment",
     cl::desc("Checked entry-RSP congruence for machine-state recovery"),
     cl::value_desc("alignment:residue"), cl::sub(DecompileCmd));
+cl::opt<bool> VMExternalStoresDisjointFrame(
+    "vm-external-stores-disjoint-frame",
+    cl::desc(
+        "Assume external STORE extents avoid --vm-entry-frame (unchecked)"),
+    cl::init(false), cl::sub(DecompileCmd));
 cl::opt<bool> VMNoControlDiscovery(
     "vm-no-control-discovery",
     cl::desc("Disable automatic recovery control-state discovery"),

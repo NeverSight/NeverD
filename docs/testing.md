@@ -2104,3 +2104,5 @@ and WHP cells may be unavailable on the host; report their skips separately.
 Windows virtual memory adds `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` and current-process `FlushInstructionCache`. The OS layer owns reservations; `AddressSpace` remains the authority for committed pages, permissions and backing. Tests cover dynamic code rewriting, access faults and memory-budget reuse.
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
+
+External-store separation regressions cover exact/short budgets, partial words, both byte orders, untouched-memory identity, complete affine-spill boundaries, late predecessor overwrites and default invalidation. Public C API/CLI checks cover v6 layout compatibility and invalid domains. HighC and LLVMC outputs execute at O0/O2 with return, memory, stack and preserved-state checks; these tests are not a native equivalence certificate.

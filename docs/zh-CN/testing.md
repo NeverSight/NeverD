@@ -1011,3 +1011,5 @@ checked Unicorn 使用 `MachineRunControl`：ARM64 维护、来宾执行和完�
 Windows 虚拟内存新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` 及当前进程的 `FlushInstructionCache`。OS 层管理预留区域，`AddressSpace` 统一管理已提交页面、权限和物理存储。测试覆盖动态代码改写、访问故障和内存额度回收。
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
+
+外部写入分离回归覆盖精确及不足预算、部分字、大／小端、未触及内存的身份、完整仿射槽边界、晚到前驱覆盖和默认失效。公开 C API／CLI 检查 v6 布局兼容性和无效域。HighC、LLVMC 输出均在 O0／O2 下检查返回值、内存、栈及保留状态；这些测试不等于原生等价证书。

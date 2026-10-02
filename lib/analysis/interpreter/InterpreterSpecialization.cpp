@@ -2169,6 +2169,7 @@ bool Specializer::evaluate(int Id) {
       LowOp Evaluated = Original;
       bool OutputUnsafe = false;
       bool ExactFrameAddress = false;
+      std::optional<SymStorePreservation> StorePreservation;
       for (unsigned J = 0; J < Original.NumInputs; ++J)
         OutputUnsafe |= unsafeOrigin(Original.Inputs[J], Origins);
       if (FrameRoot &&
@@ -2187,6 +2188,21 @@ bool Specializer::evaluate(int Id) {
               NdVar::tmp(FrameAddressTemp, 8);
         }
         if (Original.Opcode == NdOp::STORE) {
+          if (!Displacement && Options.ExternalStoresDisjointEntryFrame &&
+              !unsafeOrigin(*Memory.Address, Origins)) {
+            const auto &Bounds = *Options.EntryFrameBounds;
+            StorePreservation =
+                SymStorePreservation{FrameRoot, Bounds.Begin, Bounds.End};
+          }
+          const auto InPreservedFrame = [&](uint64_t Offset, unsigned Bytes) {
+            if (!StorePreservation)
+              return false;
+            const uint64_t Begin =
+                static_cast<uint64_t>(StorePreservation->Begin);
+            const uint64_t Size =
+                static_cast<uint64_t>(StorePreservation->End) - Begin;
+            return Bytes <= Size && Offset - Begin <= Size - Bytes;
+          };
           if (Displacement) {
             for (auto It = Frame.AffineValues.begin();
                  It != Frame.AffineValues.end();) {
@@ -2211,8 +2227,19 @@ bool Specializer::evaluate(int Id) {
               if (Failed)
                 return false;
             }
-          } else {
+          } else if (!StorePreservation) {
             Frame.AffineValues.clear();
+          } else {
+            for (auto It = Frame.AffineValues.begin();
+                 It != Frame.AffineValues.end();) {
+              if (++Result.EvaluatedOperations > Options.MaxOperations)
+                return fail(SpecializationStatus::BudgetExceeded,
+                            "frame preservation metadata budget exhausted");
+              if (!InPreservedFrame(It->first, 8))
+                It = Frame.AffineValues.erase(It);
+              else
+                ++It;
+            }
           }
           if (Options.RequireRestoredFrameAtReturn) {
             if (Displacement) {
@@ -2242,8 +2269,19 @@ bool Specializer::evaluate(int Id) {
               else
                 Origins.ExternalFrameBytes.insert(Offset);
             }
-          } else if (ValueUnsafe) {
+          } else if (ValueUnsafe && !StorePreservation) {
             Origins.ExternalFrameBytes.clear();
+          } else if (ValueUnsafe) {
+            for (auto It = Origins.ExternalFrameBytes.begin();
+                 It != Origins.ExternalFrameBytes.end();) {
+              if (++Result.EvaluatedOperations > Options.MaxOperations)
+                return fail(SpecializationStatus::BudgetExceeded,
+                            "frame preservation provenance budget exhausted");
+              if (!InPreservedFrame(*It, 1))
+                It = Origins.ExternalFrameBytes.erase(It);
+              else
+                ++It;
+            }
           }
           // An unknown write of external-origin bytes may change known frame
           // values, but cannot turn already-external bytes into root pointers.
@@ -2389,7 +2427,18 @@ bool Specializer::evaluate(int Id) {
           OutputUnsafe = true;
         }
       } else {
-        Flow = Exec.step(FoldedImmutableRead ? Residual : Evaluated);
+        if (StorePreservation)
+          StorePreservation->MaxWork =
+              Options.MaxOperations - Result.EvaluatedOperations;
+        Flow = Exec.step(FoldedImmutableRead ? Residual : Evaluated, nullptr,
+                         StorePreservation ? &*StorePreservation : nullptr);
+        if (StorePreservation) {
+          Result.EvaluatedOperations += StorePreservation->WorkUsed;
+          if (StorePreservation->Status ==
+              SymStorePreservationStatus::BudgetExceeded)
+            return fail(SpecializationStatus::BudgetExceeded,
+                        "frame preservation byte budget exhausted");
+        }
       }
       if (Flow == StepResult::Unmodelled ||
           Exec.opaqueOperationCount() != BeforeOpaque)
@@ -2859,6 +2908,15 @@ SpecializationResult Specializer::run() {
        Options.EntryFrameBounds->Begin >= Options.EntryFrameBounds->End)) {
     fail(SpecializationStatus::InvalidInput,
          "entry frame bounds require a root and a nonempty range");
+    return std::move(Result);
+  }
+  if (Options.ExternalStoresDisjointEntryFrame &&
+      (!Options.ExplicitMachineState || !Options.EntryFrameBounds ||
+       !Options.FrameBaseRegister ||
+       Options.FrameBaseRegister->Offset != x86reg::RSP)) {
+    fail(SpecializationStatus::InvalidInput,
+         "external-store frame separation requires explicit machine state, "
+         "an RSP frame root and entry frame bounds");
     return std::move(Result);
   }
   if (Options.RequireRestoredFrameAtReturn && !Options.FrameBaseRegister) {

@@ -1103,3 +1103,5 @@ checked Unicorn は `MachineRunControl` を使い、ARM64 の保守、ゲスト�
 Windows 仮想メモリに `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` と現在のプロセスの `FlushInstructionCache` を追加しました。OS 層が予約領域を所有し、コミット済みページ、権限、物理記憶域は `AddressSpace` が一元管理します。動的コードの書き換え、アクセス違反、メモリ予算の再利用をテストします。
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
+
+分離契約の回帰テストは、厳密・不足予算、部分ワード、両エンディアン、未アクセスメモリの同一性、アフィン保存領域の境界、遅れて到着する先行辺の上書き、既定の無効化を検証します。C API／CLI は v6 の互換性と無効ドメインを検査します。HighC と LLVMC を O0／O2 で実行し、戻り値、メモリ、スタック、保存状態を確認しますが、ネイティブ等価証明ではありません。

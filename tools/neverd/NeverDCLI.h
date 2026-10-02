@@ -194,6 +194,7 @@ extern llvm::cl::opt<std::string> VMMaxQueries;
 extern llvm::cl::opt<std::string> VMChainTransfers;
 extern llvm::cl::opt<std::string> VMEntryFrame;
 extern llvm::cl::opt<std::string> VMEntryAlignment;
+extern llvm::cl::opt<bool> VMExternalStoresDisjointFrame;
 extern llvm::cl::opt<std::string> VMMaxSymbolicNodes;
 extern llvm::cl::opt<bool> VMNoControlDiscovery;
 extern llvm::cl::opt<uint64_t> VMMaxOperations;

@@ -1210,6 +1210,82 @@ TEST(NativeStackSpecialization, UncertifiedCallsStillFailClosed) {
   EXPECT_TRUE(Result.Residual.Blocks.empty());
 }
 
+TEST(NativeStackSpecialization, ExternalStoreSeparationRetainsNestedReturn) {
+  StackProvider P;
+  P.nativeCall(0x100, 0x200);
+  P.nativeReturn(0x101);
+  P.add(0x200, {operation(NdOp::STORE, {}, {r(8), c(7)}),
+                operation(NdOp::LOAD, r(0), {r(8)})});
+  P.nativeReturn(0x201);
+  auto Options = stackOptions();
+  Options.ExplicitMachineState = true;
+  Options.EntryFrameBounds = SpecializationEntryFrameBounds{-8, 8};
+  Options.ExternalStoresDisjointEntryFrame = true;
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    Options.ByteOrder = Order;
+    auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    auto Run = execute(Result.Residual, 0x20000, 0, Order);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, 7u);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+    Options.MaxOperations = Result.EvaluatedOperations;
+    EXPECT_TRUE(specializeInterpreter(P, {0x100}, Options).complete());
+    --Options.MaxOperations;
+    auto Short = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded);
+    EXPECT_TRUE(Short.Residual.Blocks.empty());
+    Options.MaxOperations = 262144;
+  }
+  for (int64_t Begin : {-7, 0}) {
+    Options.EntryFrameBounds->Begin = Begin;
+    auto Partial = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_FALSE(Partial.complete());
+    EXPECT_TRUE(Partial.Residual.Blocks.empty());
+  }
+}
+
+TEST(NativeStackSpecialization, StoreSeparationDoesNotHideActualFrameWrites) {
+  StackProvider P;
+  P.nativeCall(0x100, 0x200);
+  P.add(0x200, {operation(NdOp::STORE, {}, {r(8), c(7)}),
+                operation(NdOp::STORE, {}, {r(32), c(0x300)})});
+  P.nativeReturn(0x201);
+  P.add(0x300, {operation(NdOp::COPY, r(0), {c(71)})});
+  P.nativeReturn(0x301);
+  auto Options = stackOptions();
+  Options.ExplicitMachineState = true;
+  Options.EntryFrameBounds = SpecializationEntryFrameBounds{-16, 8};
+  Options.ExternalStoresDisjointEntryFrame = true;
+  auto Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  auto Run = execute(Result.Residual, 0x20000);
+  ASSERT_TRUE(Run);
+  EXPECT_EQ(Run->Value, 71u);
+  EXPECT_EQ(Run->Stack, 0x10000u);
+  P.add(0x200, {operation(NdOp::INT_ADD, r(40), {r(32), r(8)}),
+                operation(NdOp::STORE, {}, {r(40), c(7)})});
+  auto Unknown = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_FALSE(Unknown.complete());
+  EXPECT_TRUE(Unknown.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, StoreSeparationRequiresExplicitFrameDomain) {
+  StackProvider P;
+  P.nativeReturn(0x100);
+  auto Options = stackOptions();
+  Options.ExternalStoresDisjointEntryFrame = true;
+  EXPECT_EQ(specializeInterpreter(P, {0x100}, Options).Status,
+            SpecializationStatus::InvalidInput);
+  Options.ExplicitMachineState = true;
+  EXPECT_EQ(specializeInterpreter(P, {0x100}, Options).Status,
+            SpecializationStatus::InvalidInput);
+  Options.EntryFrameBounds = SpecializationEntryFrameBounds{-8, 8};
+  Options.FrameBaseRegister->Offset = 40;
+  EXPECT_EQ(specializeInterpreter(P, {0x100}, Options).Status,
+            SpecializationStatus::InvalidInput);
+}
+
 TEST(NativeStackSpecialization, RecursiveStackGrowthIsBounded) {
   StackProvider P;
   P.nativeCall(0x100, 0x100);
@@ -1293,6 +1369,59 @@ TEST(NativeStackSpecialization, ConditionalOverwriteInvalidatesJoinedSpill) {
   P.add(0x300, {operation(NdOp::LOAD, r(56), {r(48)}),
                 operation(NdOp::STORE, {}, {r(56), c(29)}), ret()});
   auto Result = specializeInterpreter(P, {0x100}, stackOptions());
+  EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, StoreSeparationNeedsWholeAffineSpill) {
+  StackProvider P;
+  P.add(0x100, {operation(NdOp::INT_SUB, r(40), {r(32), c(48)}),
+                operation(NdOp::INT_SUB, r(48), {r(32), c(16)}),
+                operation(NdOp::STORE, {}, {r(48), r(40)}),
+                operation(NdOp::STORE, {}, {r(8), c(17)}), branch(0x110)});
+  P.add(0x110, {operation(NdOp::LOAD, r(56), {r(48)}),
+                operation(NdOp::STORE, {}, {r(56), c(29)}),
+                operation(NdOp::LOAD, r(0), {r(40)})});
+  P.nativeReturn(0x111);
+  auto Options = stackOptions();
+  Options.ExplicitMachineState = true;
+  Options.ExternalStoresDisjointEntryFrame = true;
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    Options.ByteOrder = Order;
+    Options.EntryFrameBounds = SpecializationEntryFrameBounds{-16, -8};
+    auto Full = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Full.complete()) << Full.Diagnostic;
+    auto Run = execute(Full.Residual, 0x20000, 0, Order);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, 29u);
+    for (auto Bounds : {SpecializationEntryFrameBounds{-15, -8}, {-16, -9}}) {
+      Options.EntryFrameBounds = Bounds;
+      auto Partial = specializeInterpreter(P, {0x100}, Options);
+      EXPECT_FALSE(Partial.complete());
+      EXPECT_TRUE(Partial.Residual.Blocks.empty());
+    }
+  }
+}
+
+TEST(NativeStackSpecialization,
+     StoreSeparationDoesNotRetainLateOverwrittenSpill) {
+  StackProvider P;
+  P.add(0x100, {operation(NdOp::INT_SUB, r(40), {r(32), c(48)}),
+                operation(NdOp::INT_SUB, r(48), {r(32), c(16)}),
+                operation(NdOp::STORE, {}, {r(48), r(40)}),
+                operation(NdOp::COND_BR, {}, {NdVar::cst(0x200, 8), r(16)})});
+  P.add(0x101, {branch(0x102)});
+  P.add(0x102, {branch(0x103)});
+  P.add(0x103, {operation(NdOp::STORE, {}, {r(48), c(0, 1)}), branch(0x300)});
+  P.add(0x200, {operation(NdOp::STORE, {}, {r(8), c(17)}), branch(0x300)});
+  P.add(0x300, {operation(NdOp::LOAD, r(56), {r(48)}),
+                operation(NdOp::STORE, {}, {r(56), c(29)})});
+  P.nativeReturn(0x301);
+  auto Options = stackOptions();
+  Options.ExplicitMachineState = true;
+  Options.EntryFrameBounds = SpecializationEntryFrameBounds{-48, 8};
+  Options.ExternalStoresDisjointEntryFrame = true;
+  auto Result = specializeInterpreter(P, {0x100}, Options);
   EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported);
   EXPECT_TRUE(Result.Residual.Blocks.empty());
 }

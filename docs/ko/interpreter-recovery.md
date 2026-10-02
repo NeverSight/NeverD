@@ -89,6 +89,10 @@ v5 C API `neverd_devirtualize_source_v5()`와 `neverd_devirtualize_machine_sourc
 
 `--vm-max-symbolic-nodes=N`과 v5 `max_symbolic_nodes`는 노드별 기호 DAG 예산을 지정합니다(기본 262144). CLI는 양의 32비트 십진수를 요구하고 C의 0은 기본값을 선택합니다. 두 소스 ABI에 같은 한도가 적용되며 `maxSymbolicNodes`에 유효 예산을 기록합니다. 예산 증가는 의미적 가정이나 증명을 추가하지 않습니다.
 
+`--vm-external-stores-disjoint-frame`은 기계 상태 복원에 명시적이며 런타임에 검사하지 않는 전제를 추가합니다. 외부 STORE의 전체 범위가 `--vm-entry-frame`과 겹치지 않아야 하며 그 범위 안의 기존 사실만 유지합니다. LOAD나 외부 포인터 간 별칭은 제한하지 않고 기본 동작은 보수적으로 유지됩니다. 네이티브 증명 API는 이 도메인을 거부합니다.
+
+v6 API `neverd_devirtualize_source_v6()`와 `neverd_devirtualize_machine_source_v6()`는 변경 없는 v5 옵션을 포함합니다. `neverd_devirtualize_options_v6`를 0으로 초기화하고 `base.base.base.base.base.struct_size`를 전체 크기로 설정합니다. 기계 상태 소스와 v4 진입 프레임 경계를 함께 사용할 때만 `flags`에서 `NEVERD_DEVIRTUALIZE_V6_EXTERNAL_STORES_DISJOINT_ENTRY_FRAME`을 켭니다. 일반 소스는 이 플래그를 거부합니다. v1–v5는 확장을, v6는 미래의 꼬리를 무시합니다. 보고서의 `externalStoresDisjointEntryFrame`과 생성 C는 검사하지 않는 계약을 명시합니다. 프레임에서 파생되거나 출처가 불명인 쓰기에는 예외를 적용하지 않습니다. 완전한 아핀 포인터 저장 슬롯은 보호 범위에 전부 포함되어야 합니다. 기존 사실의 검사·저장·복원은 공유 연산 예산을 소비하며 소진되면 C를 내보내지 않습니다.
+
 제어 및 가드 정밀도 개선을 선택적 프레임 분할 재시도보다 우선하며 필요한 추가 분할은 유지합니다. 나머지별 고정점을 순서대로 계산하지만 모든 허용 나머지가 완료되어야 결과를 공개합니다. 명시적 정렬 영역과 분할 영역의 교집합을 사용하고 실제 나머지를 비교합니다. 컨텍스트, 연산, 노드 및 솔버 예산은 재시도 간 공유하며 한도를 유지합니다.
 
 JSON 보고서에는 `discoverControlState`, `maxControlRefinements`, `maxDiscoveryVisits`, `discoveredControlFields`, `discoveredContextFields`, `controlRefinements`, `discoveryVisits`가 추가되어 활성화 상태, 제한 및 분석 작업량을 기록합니다. 필드를 찾았다는 사실만으로 복원 성공이 입증되지는 않습니다.

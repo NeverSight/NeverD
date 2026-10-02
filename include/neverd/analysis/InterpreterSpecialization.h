@@ -155,6 +155,12 @@ struct SpecializationOptions {
   /// control slot. Frame-derived or unknown-origin addresses are never
   /// exempted by this precondition.
   bool ExternalStoresPreserveEntryReturnSlot = false;
+  /// Unchecked source precondition: every external-origin STORE's entire
+  /// extent is disjoint from EntryFrameBounds. Requires explicit machine state
+  /// and an RSP frame root. This does not constrain external LOADs or aliasing
+  /// between external pointers. Frame-derived/unknown-origin stores retain
+  /// normal alias invalidation. Native proof APIs currently reject this domain.
+  bool ExternalStoresDisjointEntryFrame = false;
   /// Physical-register preconditions supplied by the caller, not values
   /// inferred from a run. Instruction-local lifter temporaries are not ABI
   /// inputs and cannot be bound here.

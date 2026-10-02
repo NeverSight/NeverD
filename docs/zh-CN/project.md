@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: e7bdee48b054323c037edae924587fa25ea795161fa7eebefb45c5fb2dba27c3 -->
+<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
 
 <div align="center">
 
@@ -51,6 +51,8 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 恢复还提供 `--vm-chain-transfers=N`（默认 0）和 `--vm-no-control-discovery`。串接在已证明唯一目标的控制转移之间保留符号关联；达到上限后回到普通 CFG 边界。机器状态恢复可通过 `--vm-entry-frame=begin:end` 声明未经运行时检查、不会回绕的入口 RSP 偏移范围。精确数值前提会写入生成的 C 和报告；它不授予内存访问权限，也不构成等价证明。
 
 机器状态恢复支持用 `--vm-entry-alignment=A:R` 声明并检查入口 RSP 同余域。`A` 必须是正的二次幂，且 `R < A`。其他入口在客体访存或状态写入前返回状态 2。根地址高位仍自由，默认不假定对齐；此选项不提供原生等价认证。
+
+`--vm-external-stores-disjoint-frame` 为机器状态恢复添加显式、未经运行时检查的前提：每次外部 STORE 的完整范围必须避开 `--vm-entry-frame`。这种写入只保留该区间内已有的事实，不约束 LOAD 或外部指针之间的别名；默认行为仍保守。原生证明 API 拒绝此域。
 
 超过 SSA 构建限制的大型恢复函数可通过 `--llvm` 使用有界的标量可变存储契约。入口输入、循环携带值和较早读取的语义得到保留。不支持的隐式状态、向量寄存器参数、映像重定位、歧义存储和畸形控制流会明确失败；HighC 拒绝此回退路径。源码输出仍遵循现有机器状态契约，不新增等价证明证书。
 

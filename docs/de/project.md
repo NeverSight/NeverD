@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: e7bdee48b054323c037edae924587fa25ea795161fa7eebefb45c5fb2dba27c3 -->
+<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
 
 <div align="center">
 
@@ -51,6 +51,8 @@ Wiederherstellungsbudgets sind explizit: `--vm-max-fields`, `--vm-max-refinement
 Die Wiederherstellung bietet auch `--vm-chain-transfers=N` (Standard 0) und `--vm-no-control-discovery`. Verkettung erhält symbolische Korrelationen über Transfers mit bewiesenem Einzelziel; am Limit gelten wieder normale CFG-Grenzen. Maschinenzustandswiederherstellung kann mit `--vm-entry-frame=begin:end` ungeprüfte, nicht umlaufende Offsets zum Eintritts-RSP angeben. Die genaue numerische Vorbedingung bleibt im erzeugten C und Bericht; sie erlaubt keine Speicherzugriffe und beweist keine Äquivalenz.
 
 Die Wiederherstellung mit Maschinenzustand akzeptiert `--vm-entry-alignment=A:R` als ausdrücklich geprüften Bereich des anfänglichen RSP. `A` muss eine positive Zweierpotenz sein und `R < A` gelten. Andere Werte liefern Status 2 vor Gastzugriffen oder Zustandsänderungen. Hohe Adressbits bleiben frei; standardmäßig wird keine Ausrichtung angenommen. Die Option zertifiziert keine native Äquivalenz.
+
+`--vm-external-stores-disjoint-frame` ergänzt eine ausdrückliche, ungeprüfte Voraussetzung: Der vollständige Bereich jedes externen STORE muss `--vm-entry-frame` meiden. Nur vorhandene Fakten innerhalb dieses Bereichs bleiben erhalten. LOADs und Aliase zwischen externen Zeigern werden nicht eingeschränkt; der Standard bleibt konservativ. Native Beweis-APIs lehnen diesen Bereich ab.
 
 Große rekonstruierte Funktionen oberhalb der SSA-Aufbaugrenze können mit `--llvm` einen begrenzten Vertrag für veränderlichen skalaren Speicher nutzen. Eingangswerte, schleifengetragene Werte und frühere Lesezugriffe behalten ihre Bedeutung. Nicht unterstützter impliziter Zustand, Vektorregisterparameter, Image-Relokation, mehrdeutiger Speicher und fehlerhafter Kontrollfluss führen zu klaren Fehlern; HighC lehnt diesen Ersatzpfad ab. Die Ausgabe folgt weiterhin dem bestehenden Maschinenzustandsvertrag und liefert kein zusätzliches Äquivalenzzertifikat.
 

@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: e7bdee48b054323c037edae924587fa25ea795161fa7eebefb45c5fb2dba27c3 -->
+<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
 
 <div align="center">
 
@@ -51,6 +51,8 @@ CLI、整合方與 AI 智慧體透過 **純 C API** 使用同一個引擎 **`lib
 恢復也提供 `--vm-chain-transfers=N`（預設 0）和 `--vm-no-control-discovery`。串接在已證明唯一目標的控制轉移之間保留符號關聯；達到上限後回到普通 CFG 邊界。機器狀態恢復可透過 `--vm-entry-frame=begin:end` 宣告未經執行時檢查、不會回繞的入口 RSP 偏移範圍。精確數值前提會寫入產生的 C 和報告；它不授予記憶體存取權限，也不構成等價證明。
 
 機器狀態恢復支援以 `--vm-entry-alignment=A:R` 宣告並檢查入口 RSP 同餘域。`A` 必須是正的二次冪，且 `R < A`。其他入口在客體記憶體存取或狀態寫入前回傳狀態 2。根位址高位仍自由，預設不假定對齊；此選項不提供原生等價認證。
+
+`--vm-external-stores-disjoint-frame` 為機器狀態恢復加入顯式、未經執行期檢查的前提：每次外部 STORE 的完整範圍必須避開 `--vm-entry-frame`。這種寫入只保留該區間內已有的事實，不約束 LOAD 或外部指標之間的別名；預設行為仍保守。原生證明 API 拒絕此域。
 
 超過 SSA 建構限制的大型恢復函式可透過 `--llvm` 使用有界的純量可變儲存契約。入口輸入、迴圈攜帶值和較早讀取的語意得到保留。不支援的隱含狀態、向量暫存器參數、映像重定位、歧義儲存和畸形控制流程會明確失敗；HighC 拒絕此回退路徑。原始碼輸出仍遵循既有機器狀態契約，不新增等價證明憑證。
 

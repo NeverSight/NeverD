@@ -31,4 +31,14 @@ generic_recovery_bounds:
   leaq 17(%rdi), %rax
   ret
 .size generic_recovery_bounds,.-generic_recovery_bounds
+.globl generic_recovery_external_store
+.type generic_recovery_external_store,@function
+generic_recovery_external_store:
+  call .Lexternal_store_callee
+  ret
+.Lexternal_store_callee:
+  movq %rdx, (%rcx)
+  movq (%rcx), %rax
+  ret
+.size generic_recovery_external_store,.-generic_recovery_external_store
 .section .note.GNU-stack,"",@progbits

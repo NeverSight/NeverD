@@ -55,6 +55,8 @@ Recovery also exposes `--vm-chain-transfers=N` (default 0) and `--vm-no-control-
 
 Machine-state recovery accepts `--vm-entry-alignment=A:R` as an explicit, checked entry-RSP domain. `A` must be a positive power of two and `R < A`. Other roots return status 2 before guest accesses or state writes. High root bits remain free; defaults assume no alignment. This option does not provide native equivalence certification.
 
+`--vm-external-stores-disjoint-frame` adds an explicit, unchecked precondition for machine-state recovery: every external STORE extent must avoid `--vm-entry-frame`. Only existing facts inside that range survive such writes. It does not constrain LOADs or aliasing between external pointers; the default remains conservative. Native proof APIs reject this domain.
+
 Large recovered functions that exceed the SSA construction limit can use `--llvm` through a bounded scalar mutable-storage contract. Entry inputs, loop-carried values and earlier reads retain their meaning. Unsupported implicit state, vector-register parameters, image relocation, ambiguous storage and malformed control fail explicitly; HighC rejects this fallback. Source output still uses the existing machine-state contract and adds no equivalence certificate.
 
 The separate C++ loop-proof API infers bounded invariants and lexicographic ranks for nested loops, then rechecks native-to-LowIR refinement. See the [recovery guide](docs/interpreter-recovery.md); it does not certify emitted C.

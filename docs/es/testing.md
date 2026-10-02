@@ -1204,3 +1204,5 @@ Regresiones de captura: `NeverDUnicornStateTransferTests`, `NeverDUnicornMachine
 La memoria virtual de Windows incorpora `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` y `FlushInstructionCache` para el proceso actual. La capa OS administra las reservas; `AddressSpace` mantiene la autoridad sobre páginas confirmadas, permisos y almacenamiento. Las pruebas cubren cambios de código, fallos de acceso y reutilización del presupuesto de memoria.
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
+
+Las regresiones cubren presupuestos exactos e insuficientes, palabras parciales, ambos órdenes de bytes, identidad de memoria intacta, límites afines completos, sobrescrituras de predecesores tardíos e invalidación predeterminada. C API/CLI comprueban compatibilidad v6 y dominios inválidos. HighC y LLVMC ejecutados en O0/O2 verifican retorno, memoria, pila y estado preservado, sin certificar equivalencia nativa.

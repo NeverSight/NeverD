@@ -896,6 +896,11 @@ TEST_F(DevirtualizationSourceTest, CLIRejectsMalformedEntryAndChainOptions) {
   for (const char *Value : {"0", "-1", "+1", "0x10", "4294967296", "1junk"})
     Reject({"--devirtualize", std::string("--vm-max-symbolic-nodes=") + Value});
   Reject({"--vm-max-symbolic-nodes=262144"});
+  Reject({"--vm-external-stores-disjoint-frame"});
+  Reject({"--vm-external-stores-disjoint-frame=false"});
+  Reject({"--devirtualize", "--vm-external-stores-disjoint-frame"});
+  Reject({"--devirtualize", "--vm-machine-state",
+          "--vm-external-stores-disjoint-frame"});
 }
 
 TEST_F(DevirtualizationSourceTest,
@@ -935,6 +940,84 @@ TEST_F(DevirtualizationSourceTest,
     EXPECT_EQ(Bounds->getInteger("begin"), INT64_MIN);
     EXPECT_NE(readSource(Source).find("[-9223372036854775808,8)"),
               std::string::npos);
+  }
+}
+
+TEST_F(DevirtualizationSourceTest, CLIStoreSeparationKeepsEffectsAndReturn) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "public recovery execution requires clang";
+  const auto Binary = tmpFile("generic-store-separation.elf");
+  const auto Compiled = buildFixture(Binary, "generic_recovery_contract.S");
+  ASSERT_TRUE(Compiled.ok()) << Compiled.err;
+  for (bool LLVM : {false, true}) {
+    const auto Source =
+        tmpFile(LLVM ? "separation-llvm.c" : "separation-high.c");
+    const auto Report = tmpFile("separation.json");
+    std::vector<std::string> Args{"decompile",
+                                  Binary.string(),
+                                  "--func",
+                                  "generic_recovery_external_store",
+                                  "--devirtualize",
+                                  "--vm-machine-state",
+                                  "--vm-chain-transfers=64",
+                                  "--vm-entry-frame=-8:8",
+                                  "--recovery-report=" + Report.string(),
+                                  "-o",
+                                  Source.string()};
+    if (LLVM)
+      Args.push_back("--llvm");
+    EXPECT_FALSE(exec(ndBin(), Args).ok());
+    EXPECT_FALSE(fs::exists(Source));
+    Args.push_back("--vm-external-stores-disjoint-frame");
+    const auto Recovered = exec(ndBin(), Args);
+    ASSERT_TRUE(Recovered.ok()) << Recovered.err;
+    auto Parsed = llvm::json::parse(readSource(Report));
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(
+        Parsed->getAsObject()->getBoolean("externalStoresDisjointEntryFrame"),
+        true);
+    EXPECT_NE(readSource(Source).find("Unchecked external-STORE precondition"),
+              std::string::npos);
+    const auto Harness = tmpFile("separation-runtime.c");
+    std::ofstream(Harness) << readSource(Source) << R"C(
+#include <stdint.h>
+#include <string.h>
+int main(void) {
+  _Alignas(32) uint8_t frames[2][256];
+  uint64_t buffer[3], state[17], before[17];
+  for (unsigned f = 0; f < 2; ++f) {
+    for (unsigned test = 0; test < 32; ++test) {
+      memset(frames, 0x5a, sizeof frames);
+      buffer[0] = 31; buffer[1] = 0; buffer[2] = 71;
+      for (unsigned i = 0; i < 17; ++i) state[i] = 300 + i + test;
+      state[1] = (uint64_t)(uintptr_t)&buffer[1];
+      state[2] = UINT64_MAX - test * UINT64_C(0x123456781);
+      state[4] = (uint64_t)(uintptr_t)(frames[f] + 128);
+      state[16] = 2;
+      memcpy(before, state, sizeof state);
+      if (generic_recovery_external_store((uint8_t *)state)) return 1;
+      if (state[0] != before[2] || buffer[1] != before[2]) return 2;
+      for (unsigned i = 1; i < 17; ++i) if (state[i] != before[i]) return 3;
+      if (buffer[0] != 31 || buffer[2] != 71) return 4;
+      for (unsigned frame = 0; frame < 2; ++frame)
+        for (unsigned i = 0; i < 256; ++i)
+          if ((frame != f || i < 120 || i >= 128) && frames[frame][i] != 0x5a)
+            return 5;
+    }
+  }
+  return 0;
+}
+)C";
+    std::ofstream(tmpFile("immintrin.h")).close();
+    for (const char *Optimization : {"-O0", "-O2"}) {
+      const auto Program = tmpFile("separation-runtime");
+      const auto Built =
+          exec(NEVERD_TEST_CLANG, {"-std=c11", Optimization, Harness.string(),
+                                   "-o", Program.string()});
+      ASSERT_TRUE(Built.ok()) << Built.err;
+      const auto Ran = exec(Program.string(), {});
+      EXPECT_TRUE(Ran.ok()) << Ran.err << " exit " << Ran.exitCode;
+    }
   }
 }
 

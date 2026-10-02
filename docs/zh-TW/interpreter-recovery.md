@@ -89,6 +89,10 @@ v5 C API `neverd_devirtualize_source_v5()` 與 `neverd_devirtualize_machine_sour
 
 `--vm-max-symbolic-nodes=N` 與 v5 `max_symbolic_nodes` 提供每節點符號 DAG 預算，預設 262144。CLI 要求正的 32 位十進位整數，C 中零表示預設值。兩種原始碼 ABI 使用相同限制，報告的 `maxSymbolicNodes` 記錄有效預算；提高預算不增加語義前提或證明。
 
+`--vm-external-stores-disjoint-frame` 為機器狀態恢復加入顯式、未經執行期檢查的前提：每次外部 STORE 的完整範圍必須避開 `--vm-entry-frame`。這種寫入只保留該區間內已有的事實，不約束 LOAD 或外部指標之間的別名；預設行為仍保守。原生證明 API 拒絕此域。
+
+v6 API `neverd_devirtualize_source_v6()` 與 `neverd_devirtualize_machine_source_v6()` 嵌入未改變的 v5 選項。將 `neverd_devirtualize_options_v6` 清零，把 `base.base.base.base.base.struct_size` 設為完整大小，僅在使用機器狀態原始碼及 v4 入口框架邊界時，在 `flags` 啟用 `NEVERD_DEVIRTUALIZE_V6_EXTERNAL_STORES_DISJOINT_ENTRY_FRAME`。一般原始碼拒絕此旗標。v1–v5 忽略擴充，v6 忽略未來尾部。報告記錄 `externalStoresDisjointEntryFrame` 和未經檢查的契約，產生的 C 寫明相同前提。框架衍生或來源未知的寫入沒有豁免；完整仿射指標槽必須全部位於保護範圍內。掃描、儲存和恢復已有事實消耗共用操作預算，耗盡時不發布 C。
+
 控制與守衛精度細化優先於可選框架分區重試，必要的更細分區仍可使用。恢復先完成一個餘數的不動點，再開始下一個，但只有全部允許餘數完成後才發布結果。顯式入口對齊與分區域取交集，分派比較實際餘數。上下文、操作、節點及求解器預算仍有界，且在重試之間共用。
 
 JSON 報告新增 `discoverControlState`、`maxControlRefinements`、`maxDiscoveryVisits`、`discoveredControlFields`、`discoveredContextFields`、`controlRefinements` 與 `discoveryVisits`，記錄啟用行為、上限與分析工作量。探索到欄位本身不代表還原成功。

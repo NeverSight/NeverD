@@ -72,6 +72,27 @@ struct SymConstantRegionByte {
   uint8_t Value = 0;
 };
 
+enum class SymStorePreservationStatus : uint8_t {
+  Invalid,
+  Applied,
+  BudgetExceeded,
+};
+
+/// Caller-supplied nonalias contract for one STORE: its complete byte extent
+/// is disjoint from [Base + Begin, Base + End), with nonwrapping physical
+/// bounds. This is an assumption, not a pointer-separation proof. Only already
+/// materialised bytes of this exact symbolic base can survive invalidation.
+/// Work counts inspecting, saving and restoring bytes; budget failure applies
+/// no store or preservation. Never reuse this descriptor as a global policy.
+struct SymStorePreservation {
+  SymRef Base;
+  int64_t Begin = 0;
+  int64_t End = 0;
+  uint64_t MaxWork = 0;
+  uint64_t WorkUsed = 0;
+  SymStorePreservationStatus Status = SymStorePreservationStatus::Invalid;
+};
+
 /// The state is a regular value: copying one is what forking a path is, so it
 /// has to sit in a container and be assigned like anything else.  A copy is a
 /// handful of maps of small integers, which is cheap enough that nothing more
@@ -115,6 +136,13 @@ public:
   /// unrepresentable writes also return false and conservatively clobber
   /// memory instead of publishing a partial update.
   bool store(SymRef Addr, SymRef Value);
+
+  /// Apply one valid 64-bit-address STORE under an explicit preservation
+  /// contract. As with store(), false can denote a successful symbolic write;
+  /// inspect Preservation.Status for success. Invalid contracts and budget
+  /// exhaustion leave state unchanged. Stores to the protected base itself
+  /// are rejected; they must use normal byte-overlap semantics instead.
+  bool store(SymRef Addr, SymRef Value, SymStorePreservation &Preservation);
 
   /// What a load that could not be resolved was reading.
   struct LoadOrigin {

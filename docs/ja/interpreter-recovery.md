@@ -89,6 +89,10 @@ v5 C API の `neverd_devirtualize_source_v5()` と `neverd_devirtualize_machine_
 
 `--vm-max-symbolic-nodes=N` と v5 の `max_symbolic_nodes` はノード単位のシンボリック DAG 予算を指定します（既定 262144）。CLI は正の 32 ビット十進整数を要求し、C のゼロは既定値を選びます。両ソース ABI に同じ制限が適用され、`maxSymbolicNodes` に実効値を記録します。増額は意味論上の仮定や証明を追加しません。
 
+`--vm-external-stores-disjoint-frame` は機械状態の復元に、実行時に検査しない明示的前提を追加します。外部 STORE の全範囲は `--vm-entry-frame` と重なってはなりません。その範囲内の既存の事実だけを保持します。LOAD や外部ポインタ間の別名関係には制約を加えず、既定の処理は保守的です。ネイティブ証明 API はこのドメインを拒否します。
+
+v6 API `neverd_devirtualize_source_v6()` と `neverd_devirtualize_machine_source_v6()` は変更のない v5 オプションを内包します。`neverd_devirtualize_options_v6` をゼロ初期化し、`base.base.base.base.base.struct_size` に全体サイズを設定します。機械状態ソースと v4 の入口フレーム境界を使用する場合に限り、`flags` の `NEVERD_DEVIRTUALIZE_V6_EXTERNAL_STORES_DISJOINT_ENTRY_FRAME` を有効にします。通常ソースはこのフラグを拒否します。v1–v5 は拡張を、v6 は将来の末尾を無視します。レポートの `externalStoresDisjointEntryFrame` と生成 C は未検査の契約を明示します。フレーム由来または出所不明の書き込みは対象外です。完全なアフィンポインタの保存領域は全体が保護範囲に収まる必要があります。既存の事実の走査・保存・復元は共有操作予算を消費し、枯渇時は C を公開しません。
+
 制御状態とガードの精度改善を、任意のフレーム分割の再試行より優先します。必要な細分化は引き続き利用できます。各剰余の不動点を順番に計算しますが、結果公開には許可された全剰余の完了が必要です。入口整列条件と分割領域の共通部分を使い、分岐は実際の剰余を比較します。コンテキスト、操作、ノード、ソルバーの予算は再試行を通じて共有されます。
 
 JSON レポートには `discoverControlState`、`maxControlRefinements`、`maxDiscoveryVisits`、`discoveredControlFields`、`discoveredContextFields`、`controlRefinements`、`discoveryVisits` が追加され、有効な動作、上限、解析作業量を記録します。フィールドの検出だけでは復元成功を証明しません。

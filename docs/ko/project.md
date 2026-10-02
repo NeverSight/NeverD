@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: e7bdee48b054323c037edae924587fa25ea795161fa7eebefb45c5fb2dba27c3 -->
+<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
 
 <div align="center">
 
@@ -51,6 +51,8 @@ input format, host contract와 제한은 [EVM 가이드](evm.md)와 [Solana SBF 
 복원은 `--vm-chain-transfers=N`(기본값 0)과 `--vm-no-control-discovery`도 제공합니다. 연결은 단일 대상이 증명된 제어 전송 사이의 기호 상관관계를 보존하며 한도에 도달하면 일반 CFG 경계로 돌아갑니다. 기계 상태 복원은 `--vm-entry-frame=begin:end`로 실행 시 검사하지 않는 비래핑 진입 RSP 오프셋 범위를 선언할 수 있습니다. 정확한 숫자 전제는 생성 C와 보고서에 남으며 메모리 접근 권한이나 동등성 증명을 제공하지 않습니다.
 
 머신 상태 복원은 `--vm-entry-alignment=A:R`로 진입 RSP 합동 조건을 명시하고 실행 시 검사합니다. `A`는 양의 2의 거듭제곱이며 `R < A`여야 합니다. 다른 진입 값은 게스트 메모리 접근이나 상태 쓰기 전에 상태 2를 반환합니다. 주소 상위 비트는 자유롭고 기본값은 정렬을 가정하지 않습니다. 이 옵션은 네이티브 동등성 인증을 제공하지 않습니다.
+
+`--vm-external-stores-disjoint-frame`은 기계 상태 복원에 명시적이며 런타임에 검사하지 않는 전제를 추가합니다. 외부 STORE의 전체 범위가 `--vm-entry-frame`과 겹치지 않아야 하며 그 범위 안의 기존 사실만 유지합니다. LOAD나 외부 포인터 간 별칭은 제한하지 않고 기본 동작은 보수적으로 유지됩니다. 네이티브 증명 API는 이 도메인을 거부합니다.
 
 SSA 구성 한도를 넘는 큰 복원 함수는 `--llvm`을 통해 제한된 스칼라 가변 저장소 계약을 사용할 수 있습니다. 진입 입력, 루프에서 전달되는 값, 앞선 읽기의 의미를 보존합니다. 지원하지 않는 암시적 상태, 벡터 레지스터 매개변수, 이미지 재배치, 모호한 저장소와 잘못된 제어 흐름은 명시적으로 실패하며 HighC는 이 대체 경로를 거부합니다. 소스 출력은 기존 기계 상태 계약을 따르며 동등성 인증서를 추가하지 않습니다.
 

@@ -451,6 +451,7 @@ binaryExecutionDigest(const BinaryImage &Image,
   Number(Options.ExplicitMachineState);
   Number(Options.NormalNonfaultingExecution);
   Number(Options.X64CetDisabled);
+  Number(Options.ExternalStoresDisjointEntryFrame);
   Number(Options.EntryFrameAlignment.has_value());
   if (Options.EntryFrameAlignment) {
     Number(Options.EntryFrameAlignment->Alignment);
@@ -565,6 +566,10 @@ prepareBinaryRelation(const BinaryImage &Image,
   if (Options.EntryFrameAlignment)
     return Fail(Status::Unsupported,
                 "native proof does not support an entry alignment domain");
+  if (Options.ExternalStoresDisjointEntryFrame)
+    return Fail(Status::Unsupported,
+                "native proof does not support an external-store frame "
+                "separation domain");
   if (Options.EntryFrameBounds &&
       (Options.EntryFrameBounds->Begin >= Options.EntryFrameBounds->End ||
        Options.EntryFrameBounds->Begin != Contract.Frame->Begin ||

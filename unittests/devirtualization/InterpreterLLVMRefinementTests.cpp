@@ -104,6 +104,19 @@ TEST(InterpreterLLVMRefinement, CompleteProofBindsMandatoryObservations) {
   EXPECT_TRUE(C.LLVM.Contract.Frame->ExcludedAddressRanges.empty());
 }
 
+TEST(InterpreterLLVMRefinement, StoreSeparationCannotCertifyAnUnboundDomain) {
+  Program P({0xb8, 7, 0, 0, 0, 0xc3});
+  P.Options.EntryFrameBounds =
+      SpecializationEntryFrameBounds{P.Frame.Begin, P.Frame.End};
+  P.Options.ExternalStoresDisjointEntryFrame = true;
+  const auto R = P.recover();
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  const auto Proof = P.check(R.Residual, constantResult());
+  rejected(Proof, Stage::Native);
+  EXPECT_EQ(Proof.Native.Proof.Status, Status::Unsupported);
+  EXPECT_NE(Proof.Diagnostic.find("frame separation"), std::string::npos);
+}
+
 TEST(InterpreterLLVMRefinement, ExactTextAndSelectedFunctionAreBound) {
   Program P({0xc3});
   const auto R = P.recover();

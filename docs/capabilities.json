@@ -11409,7 +11409,8 @@
         "Input-dependent addresses and joint decoder states require exhaustive finite proofs within budgets; unbounded schemes remain unsupported.",
         "Explicit CLI and v3 C API field, refinement and solver-query budgets retain defaults of 16, 16 and 4096. Larger limits permit additional work without changing semantic assumptions; exhaustion publishes no source.",
         "Ordinary source-frame relocation requires external LOAD/STORE ranges disjoint from native and reconstructed private frame storage. Machine-state source preserves numeric guest addresses and requires their original runtime mappings. Undefined flags influencing control, addresses, or defined outputs need an independent noninterference proof, which the recovery report does not provide.",
-        "PE recovery requires a full image-wide relocation and exception metadata load. Structurally incomplete directories refuse recovery; reached exception handlers require the explicit normal-execution profile. Source recovery does not certify binary replacement."
+        "PE recovery requires a full image-wide relocation and exception metadata load. Structurally incomplete directories refuse recovery; reached exception handlers require the explicit normal-execution profile. Source recovery does not certify binary replacement.",
+        "External-store frame separation is an explicit unchecked caller precondition for machine-state recovery with entry-frame bounds; native proof APIs reject this domain."
       ],
       "tests": [
         {
@@ -11674,42 +11675,60 @@
           "target": "NeverDInterpreterSpecializationTests",
           "source": "unittests/devirtualization/MemoryCallSpecializationTests.cpp",
           "filter": "MemoryCallSpecialization.TargetLoadPrecedesPushToTheSameGuestSlot",
-          "platforms": ["darwin", "linux", "windows"]
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         },
         {
           "runner": "gtest",
           "target": "NeverDInterpreterSpecializationTests",
           "source": "unittests/devirtualization/MemoryCallSpecializationTests.cpp",
           "filter": "MemoryCallSpecialization.PrefixCannotIntroduceAnotherMemoryRead",
-          "platforms": ["darwin", "linux", "windows"]
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         },
         {
           "runner": "gtest",
           "target": "NeverDLiftTests",
           "source": "unittests/lift/core/X64MemoryCallTargetTests.cpp",
           "filter": "X64MemoryCallTarget.ExplicitModeLoadsRipSlotWithoutChangingDefaultLift",
-          "platforms": ["darwin", "linux", "windows"]
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         },
         {
           "runner": "gtest",
           "target": "NeverDInterpreterMachineStateTests",
           "source": "unittests/devirtualization/MachineMemoryCallSourceTests.cpp",
           "filter": "*/MemoryCallRoundTripTest.CapturesMemoryTargetBeforeExactNativeStackEffects/*",
-          "platforms": ["linux"]
+          "platforms": [
+            "linux"
+          ]
         },
         {
           "runner": "gtest",
           "target": "NeverDInterpreterMachineStateTests",
           "source": "unittests/devirtualization/MachineMemoryCallSourceTests.cpp",
           "filter": "MachineMemoryCallSourceTest.UnknownOrInvalidMemoryTargetsNeverPublish",
-          "platforms": ["linux"]
+          "platforms": [
+            "linux"
+          ]
         },
         {
           "runner": "gtest",
           "target": "NeverDInterpreterMachineStateTests",
           "source": "unittests/devirtualization/MachineMemoryCallSourceTests.cpp",
           "filter": "MachineMemoryCallSourceTest.MachineSourceUsesOriginalWritableMappingsThroughBothRoutes",
-          "platforms": ["linux"]
+          "platforms": [
+            "linux"
+          ]
         },
         {
           "runner": "gtest",
@@ -11754,6 +11773,50 @@
             "linux",
             "windows"
           ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSymbolicTests",
+          "source": "unittests/symbolic/SymStorePreservationTests.cpp",
+          "filter": "SymStorePreservation.RetainsOnlyKnownBytesAndKeepsPostStoreEpochs",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterSpecializationTests",
+          "source": "unittests/devirtualization/NativeStackSpecializationTests.cpp",
+          "filter": "NativeStackSpecialization.StoreSeparationNeedsWholeAffineSpill",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDevirtualizationSourceTests",
+          "source": "unittests/devirtualization/DevirtualizationSourceTests.cpp",
+          "filter": "DevirtualizationSourceTest.CLIStoreSeparationKeepsEffectsAndReturn",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSessionCAPITests",
+          "source": "unittests/SessionCAPITests.cpp",
+          "filter": "SessionCAPITest.InterpreterRecoveryV6ChecksSeparationAndPreservesLayouts",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         }
       ],
       "public_surfaces": {
@@ -11764,10 +11827,12 @@
           "neverd_devirtualize_machine_source_v2",
           "neverd_devirtualize_source_v3",
           "neverd_devirtualize_machine_source_v3",
-        "neverd_devirtualize_source_v4",
-        "neverd_devirtualize_machine_source_v4",
-        "neverd_devirtualize_source_v5",
-        "neverd_devirtualize_machine_source_v5"
+          "neverd_devirtualize_source_v4",
+          "neverd_devirtualize_machine_source_v4",
+          "neverd_devirtualize_source_v5",
+          "neverd_devirtualize_machine_source_v5",
+          "neverd_devirtualize_source_v6",
+          "neverd_devirtualize_machine_source_v6"
         ],
         "python": [],
         "cli": [
@@ -11782,11 +11847,12 @@
           "neverd decompile --vm-max-refinements",
           "neverd decompile --vm-max-fields",
           "neverd decompile --vm-max-queries",
-        "neverd decompile --vm-chain-transfers",
-        "neverd decompile --vm-entry-frame",
-        "neverd decompile --vm-entry-alignment",
-        "neverd decompile --vm-max-symbolic-nodes",
-        "neverd decompile --vm-no-control-discovery"
+          "neverd decompile --vm-chain-transfers",
+          "neverd decompile --vm-entry-frame",
+          "neverd decompile --vm-entry-alignment",
+          "neverd decompile --vm-external-stores-disjoint-frame",
+          "neverd decompile --vm-max-symbolic-nodes",
+          "neverd decompile --vm-no-control-discovery"
         ],
         "json": []
       }

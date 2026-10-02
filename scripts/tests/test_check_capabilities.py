@@ -3259,7 +3259,9 @@ class RepositoryCapabilityTests(unittest.TestCase):
                       "neverd_devirtualize_source_v4",
                       "neverd_devirtualize_machine_source_v4",
                       "neverd_devirtualize_source_v5",
-                      "neverd_devirtualize_machine_source_v5"],
+                      "neverd_devirtualize_machine_source_v5",
+                      "neverd_devirtualize_source_v6",
+                      "neverd_devirtualize_machine_source_v6"],
                 "python": [],
                 "cli": [
                     "neverd decompile --devirtualize",
@@ -3276,6 +3278,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd decompile --vm-chain-transfers",
                     "neverd decompile --vm-entry-frame",
                     "neverd decompile --vm-entry-alignment",
+                    "neverd decompile --vm-external-stores-disjoint-frame",
                     "neverd decompile --vm-max-symbolic-nodes",
                     "neverd decompile --vm-no-control-discovery",
                 ],

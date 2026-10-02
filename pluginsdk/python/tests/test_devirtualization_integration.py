@@ -31,6 +31,7 @@ class DevirtualizationIntegrationTests(unittest.TestCase):
             (3, abi.NeverDDevirtualizeOptionsV3()),
             (4, abi.NeverDDevirtualizeOptionsV4()),
             (5, abi.NeverDDevirtualizeOptionsV5()),
+            (6, abi.NeverDDevirtualizeOptionsV6()),
         ):
             if version == 1:
                 options.struct_size = ctypes.sizeof(options)
@@ -48,10 +49,14 @@ class DevirtualizationIntegrationTests(unittest.TestCase):
                 options.base.base.base.struct_size = ctypes.sizeof(options)
                 options.flags = 4
                 expected_error = "invalid devirtualize v4 flags"
-            else:
+            elif version == 5:
                 options.base.base.base.base.struct_size = ctypes.sizeof(options)
                 options.entry_frame_residue = 1
                 expected_error = "entry residue requires an alignment"
+            else:
+                options.base.base.base.base.base.struct_size = ctypes.sizeof(options)
+                options.flags = 2
+                expected_error = "invalid devirtualize v6 flags"
             for prefix, source_abi in (
                 ("source", "ordinary-source"),
                 ("machine_source", "x64-machine-state-v1"),

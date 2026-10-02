@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: e7bdee48b054323c037edae924587fa25ea795161fa7eebefb45c5fb2dba27c3 -->
+<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
 
 <div align="center">
 
@@ -51,6 +51,8 @@ Les budgets de récupération sont explicites : `--vm-max-fields`, `--vm-max-ref
 La récupération expose aussi `--vm-chain-transfers=N` (0 par défaut) et `--vm-no-control-discovery`. Le chaînage conserve les corrélations symboliques entre transferts dont la cible unique est prouvée ; sa limite revient aux frontières CFG ordinaires. Le mode état machine accepte des offsets d’entrée RSP sans bouclage, non vérifiés à l’exécution, via `--vm-entry-frame=begin:end`. La prémisse numérique exacte accompagne le C et le rapport, sans autoriser d’accès mémoire ni prouver l’équivalence.
 
 La récupération en état machine accepte `--vm-entry-alignment=A:R` comme domaine explicite et vérifié du RSP initial. `A` doit être une puissance de deux positive et `R < A`. Les autres valeurs renvoient le statut 2 avant tout accès invité ou écriture d’état. Les bits hauts restent libres et aucun alignement n’est supposé par défaut. Cette option ne certifie pas l’équivalence native.
+
+`--vm-external-stores-disjoint-frame` ajoute une précondition explicite, non vérifiée à l’exécution : chaque écriture STORE externe doit éviter entièrement `--vm-entry-frame`. Seuls les faits déjà connus dans cette plage sont conservés. Aucune contrainte ne porte sur LOAD ou sur les alias entre pointeurs externes ; le comportement par défaut reste conservateur. Les API de preuve native refusent ce domaine.
 
 Les grandes fonctions récupérées qui dépassent la limite de construction SSA peuvent utiliser `--llvm` avec un contrat borné de stockage scalaire mutable. Les entrées, les valeurs portées par les boucles et les lectures antérieures conservent leur sens. Les états implicites non pris en charge, paramètres en registres vectoriels, relocalisations, stockages ambigus et contrôles mal formés échouent explicitement ; HighC refuse ce repli. La sortie reste soumise au contrat existant de l’état machine, sans certificat d’équivalence supplémentaire.
 

@@ -1093,3 +1093,5 @@ checked Unicorn은 `MachineRunControl`을 사용하며 ARM64 유지보수, 게�
 Windows 가상 메모리는 `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery`와 현재 프로세스의 `FlushInstructionCache`를 지원합니다. OS 계층은 예약 영역을 소유하고 `AddressSpace`는 커밋된 페이지, 권한, 실제 저장 공간을 관리합니다. 테스트는 동적 코드 수정, 접근 오류, 메모리 한도 재사용을 검증합니다.
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
+
+분리 회귀 검사는 정확하거나 부족한 예산, 부분 워드, 양쪽 바이트 순서, 미접근 메모리 식별자, 완전한 아핀 슬롯 경계, 늦은 선행 경로의 덮어쓰기 및 기본 무효화를 다룹니다. C API/CLI는 v6 호환성과 무효 도메인을 검사합니다. HighC·LLVMC 출력을 O0/O2에서 실행하여 반환값, 메모리, 스택, 보존 상태를 확인하지만 네이티브 동등성 인증은 아닙니다.

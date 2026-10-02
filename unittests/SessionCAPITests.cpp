@@ -931,6 +931,85 @@ TEST_F(SessionCAPITest, InterpreterRecoveryV4PreservesOldAndFutureLayouts) {
   }
 }
 
+TEST_F(SessionCAPITest,
+       InterpreterRecoveryV6ChecksSeparationAndPreservesLayouts) {
+  const auto Input = write("recovery-separation.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v6, flags),
+            sizeof(neverd_devirtualize_options_v5));
+  for (auto Recover :
+       {neverd_devirtualize_source_v6, neverd_devirtualize_machine_source_v6}) {
+    size_t SizeOnly = sizeof(size_t);
+    neverd_devirtualize_options_v6 Partial{};
+    Partial.base.base.base.base.base.struct_size = sizeof(Partial) - 1;
+    for (const auto *O :
+         {reinterpret_cast<const neverd_devirtualize_options_v6 *>(&SizeOnly),
+          static_cast<const neverd_devirtualize_options_v6 *>(&Partial)}) {
+      const char *Report = nullptr;
+      EXPECT_EQ(Recover(Session, Entry, O, &Report), nullptr);
+      EXPECT_NE(takeString(Report).find("complete v6 structure"),
+                std::string::npos);
+    }
+    EXPECT_FALSE(takeString(Recover(Session, Entry, nullptr, nullptr)).empty());
+    const char *Report = "previous";
+    EXPECT_EQ(Recover(nullptr, Entry, nullptr, &Report), nullptr);
+    EXPECT_EQ(Report, nullptr);
+  }
+  for (bool LLVM : {false, true}) {
+    struct Future {
+      neverd_devirtualize_options_v6 Options;
+      uint64_t Opaque;
+    } F{};
+    auto &O = F.Options;
+    O.base.base.base.base.base.struct_size = sizeof(F);
+    O.base.base.base.base.base.use_llvm = LLVM;
+    F.Opaque = UINT64_MAX;
+    O.flags = NEVERD_DEVIRTUALIZE_V6_EXTERNAL_STORES_DISJOINT_ENTRY_FRAME;
+    EXPECT_EQ(
+        neverd_devirtualize_machine_source_v6(Session, Entry, &O, nullptr),
+        nullptr);
+    O.base.base.flags = NEVERD_DEVIRTUALIZE_V4_HAS_ENTRY_FRAME_BOUNDS;
+    O.base.base.entry_frame_begin = -32;
+    O.base.base.entry_frame_end = 8;
+    const char *Report = nullptr;
+    const auto Source = takeString(
+        neverd_devirtualize_machine_source_v6(Session, Entry, &O, &Report));
+    ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+    auto Parsed = llvm::json::parse(takeString(Report));
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(
+        Parsed->getAsObject()->getBoolean("externalStoresDisjointEntryFrame"),
+        true);
+    EXPECT_NE(Source.find("Unchecked external-STORE precondition"),
+              std::string::npos);
+    EXPECT_EQ(neverd_devirtualize_source_v6(Session, Entry, &O, nullptr),
+              nullptr);
+    O.flags = 2;
+    EXPECT_EQ(
+        neverd_devirtualize_machine_source_v6(Session, Entry, &O, nullptr),
+        nullptr);
+    O.base.base.flags = 0;
+    O.base.base.entry_frame_begin = O.base.base.entry_frame_end = 0;
+    const auto CheckOld = [&](auto Recover, const auto *Options) {
+      const char *OldReport = nullptr;
+      EXPECT_FALSE(
+          takeString(Recover(Session, Entry, Options, &OldReport)).empty());
+      auto Old = llvm::json::parse(takeString(OldReport));
+      ASSERT_TRUE(bool(Old));
+      EXPECT_EQ(
+          Old->getAsObject()->getBoolean("externalStoresDisjointEntryFrame"),
+          false);
+    };
+    CheckOld(neverd_devirtualize_machine_source_v1,
+             &O.base.base.base.base.base);
+    CheckOld(neverd_devirtualize_machine_source_v2, &O.base.base.base.base);
+    CheckOld(neverd_devirtualize_machine_source_v3, &O.base.base.base);
+    CheckOld(neverd_devirtualize_machine_source_v4, &O.base.base);
+    CheckOld(neverd_devirtualize_machine_source_v5, &O.base);
+  }
+}
+
 TEST_F(SessionCAPITest, InterpreterRecoveryV5ChecksDomainAndPreservesLayouts) {
   const auto Input = write("recovery-congruence.elf", makeNativeELF(false));
   ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);

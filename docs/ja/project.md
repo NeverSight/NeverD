@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: e7bdee48b054323c037edae924587fa25ea795161fa7eebefb45c5fb2dba27c3 -->
+<!-- i18n-source: 826aa66a4b07aee78f67638fb98159a69d7886c21769e56b6a0d6196a1437b63 -->
 
 <div align="center">
 
@@ -51,6 +51,8 @@ input format、host contract、制限は [EVM ガイド](evm.md)と [Solana SBF 
 復元では `--vm-chain-transfers=N`（既定値 0）と `--vm-no-control-discovery` も指定できます。連鎖は単一ターゲットが証明された制御転送間で記号的な相関を保持し、上限で通常の CFG 境界に戻ります。マシン状態復元では `--vm-entry-frame=begin:end` で、実行時には検査しない非ラップの入口 RSP オフセット範囲を宣言できます。正確な数値前提は生成 C とレポートに残り、メモリアクセスや等価性の証明を与えません。
 
 マシン状態の復元では `--vm-entry-alignment=A:R` により入口 RSP の合同条件を明示し、実行時に検査できます。`A` は正の 2 の累乗、`R < A` が必要です。他の入口はゲストメモリアクセスや状態書き込みの前にステータス 2 を返します。アドレス上位ビットは自由で、既定では整列を仮定しません。これはネイティブ等価性の認証ではありません。
+
+`--vm-external-stores-disjoint-frame` は機械状態の復元に、実行時に検査しない明示的前提を追加します。外部 STORE の全範囲は `--vm-entry-frame` と重なってはなりません。その範囲内の既存の事実だけを保持します。LOAD や外部ポインタ間の別名関係には制約を加えず、既定の処理は保守的です。ネイティブ証明 API はこのドメインを拒否します。
 
 SSA 構築の上限を超える大規模な復元関数は、`--llvm` で有界なスカラー可変ストレージ契約を使用できます。入口の入力、ループで引き継ぐ値、過去の読み取りの意味を保持します。未対応の暗黙状態、ベクトルレジスター引数、イメージ再配置、曖昧なストレージ、不正な制御フローは明示的に失敗し、HighC はこの代替経路を拒否します。ソース出力は既存のマシン状態契約に従い、等価性証明書は追加しません。
 

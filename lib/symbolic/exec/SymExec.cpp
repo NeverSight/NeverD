@@ -604,7 +604,8 @@ StepResult SymExec::stepBits(const LowOp &Op) {
   }
 }
 
-StepResult SymExec::stepMemory(const LowOp &Op) {
+StepResult SymExec::stepMemory(const LowOp &Op,
+                               SymStorePreservation *Preservation) {
   // A segment offset is not a process address.  Symbolic state has no
   // architecture register for an FS/GS base, so fail closed instead of
   // manufacturing a load/store at the unbased numeric offset.  Concrete
@@ -662,7 +663,15 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
     return unmodelled(Op);
   SymRef Addr = read(*Memory.Address);
   SymRef Value = read(*Memory.StoredValue);
-  if (!State.store(Addr, Value)) {
+  const bool Absolute = Preservation ? State.store(Addr, Value, *Preservation)
+                                     : State.store(Addr, Value);
+  if (Preservation &&
+      Preservation->Status != SymStorePreservationStatus::Applied) {
+    State.clobberMemory();
+    ++MemoryHavocs;
+    return unmodelled(Op);
+  }
+  if (!Absolute) {
     ++Unmodelled;
     ++MemoryHavocs;
   }
@@ -759,6 +768,17 @@ StepResult SymExec::stepControl(const LowOp &Op,
 StepResult SymExec::step(const LowOp &Op) { return step(Op, nullptr); }
 
 StepResult SymExec::step(const LowOp &Op, const SymCallEffect *CallEffect) {
+  return step(Op, CallEffect, nullptr);
+}
+
+StepResult SymExec::step(const LowOp &Op, const SymCallEffect *CallEffect,
+                         SymStorePreservation *Preservation) {
+  if (Preservation) {
+    Preservation->Status = SymStorePreservationStatus::Invalid;
+    Preservation->WorkUsed = 0;
+    if (Op.Opcode != NdOp::STORE)
+      return step(Op, CallEffect);
+  }
   switch (Op.Opcode) {
   case NdOp::INT_ADD:
   case NdOp::INT_SUB:
@@ -826,7 +846,7 @@ StepResult SymExec::step(const LowOp &Op, const SymCallEffect *CallEffect) {
   case NdOp::ATOMIC_XCHG:
   case NdOp::ATOMIC_ADD:
   case NdOp::ATOMIC_CMPXCHG:
-    return stepMemory(Op);
+    return stepMemory(Op, Preservation);
 
   case NdOp::BRANCH:
   case NdOp::COND_BR:

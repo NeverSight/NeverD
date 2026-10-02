@@ -635,6 +635,24 @@ class NeverDDevirtualizeOptionsV5(ctypes.Structure):
     ]
 
 
+class DevirtualizeFlagsV6(IntFlag):
+    EXTERNAL_STORES_DISJOINT_ENTRY_FRAME = 1
+
+
+class NeverDDevirtualizeOptionsV6(ctypes.Structure):
+    """v5 prefix plus an unchecked external-STORE/frame separation contract.
+
+    Set ``base.base.base.base.base.struct_size`` to the complete size. The flag
+    requires machine-state source and v4 entry-frame bounds. Each external
+    STORE extent must avoid those bounds; no runtime alias check is added.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV5),
+        ("flags", ctypes.c_uint32),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -757,6 +775,9 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_devirtualize_options_v5 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV5
+    ),
+    "const neverd_devirtualize_options_v6 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV6
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -1591,10 +1612,24 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_devirtualize_source_v6",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v6 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_devirtualize_machine_source_v5",
     "const char *",
     ["neverd_session_t", "neverd_va_t",
      "const neverd_devirtualize_options_v5 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v6",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v6 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare("neverd_version", "const char *", [], ownership=Ownership.OWNED_STRING)
@@ -1618,6 +1653,8 @@ __all__ = [
     "NeverDDevirtualizeOptionsV3",
     "NeverDDevirtualizeOptionsV4",
     "NeverDDevirtualizeOptionsV5",
+    "NeverDDevirtualizeOptionsV6",
+    "DevirtualizeFlagsV6",
     "DevirtualizeFlagsV4",
     "NeverDPlugin",
     "NeverDOptimizeLLVMOptions",
