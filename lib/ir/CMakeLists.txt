@@ -6,6 +6,7 @@ add_subdirectory(high)
 add_neverd_component_library(NeverDIR
   NdTypes.cpp
   SourceABI.cpp
+  low/SourceFrameAnalysis.cpp
   TargetRegInfo.cpp
   TargetRegInfoAArch64.cpp
   TargetRegInfoARM.cpp
