@@ -276,6 +276,17 @@ struct SourceCallTypeHint {
   };
   /// Identity only; source publication repeats the complete current proof.
   std::optional<FunctionParameterCallEvidence> FunctionParameterCall;
+  struct ImmutableNativeCallEvidence {
+    va_t FunctionEntry = 0;
+    SourceCallOccurrenceKey Site;
+    va_t Slot = 0;
+    va_t Target = 0;
+    bool operator==(const ImmutableNativeCallEvidence &) const = default;
+  };
+  /// Original indirect occurrence and immutable code slot identity only.
+  /// Publication repeats the current LowIR and independently audited callee
+  /// ABI proof; this receipt alone never authorizes a direct source call.
+  std::optional<ImmutableNativeCallEvidence> ImmutableNativeCall;
   enum class SwiftValueWitnessKind {
     Destroy,
     InitializeWithCopy,

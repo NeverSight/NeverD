@@ -78,6 +78,21 @@ class ProcessIntegrationTests(unittest.TestCase):
         self.assertEqual(len(result["android"]["trace"]), result["instructions"])
         self.assertFalse(result["android"]["trace_truncated"])
         self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+        options = json.dumps({"backend": "unicorn", "android": {
+            "entry_symbol": "dynamic_lookup",
+            "libraries": {"libfixture.so": ["strlen"]},
+        }})
+        result = session.emulate_process(str(Path(fixtures) / "relr.so"),
+                                         "android-aarch64-api28-v1", options)
+        self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
+        self.assertEqual(int(result["return_value"], 16), 4)
+        lookup = next(e for e in result["android"]["native_calls"] if e["name"] == "dlsym")
+        call = next(e for e in result["android"]["native_calls"] if e["name"] == "strlen")
+        self.assertEqual(lookup["symbol"], "strlen")
+        self.assertEqual(lookup["library"], "libfixture.so")
+        self.assertEqual(call["library"], "libfixture.so")
+        self.assertEqual(call["pc"], lookup["result"])
+        self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
 
 
 if __name__ == "__main__":

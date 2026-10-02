@@ -313,7 +313,7 @@ NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "--with-drivers")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "WDKDriverFixtures.def")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "build_wdk_driver_fixtures.py")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "DriverNativeOutcomes.def")
-NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "150 CPU + 224 WHP + 4 SEH = 378")
+NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "164 CPU + 224 WHP + 4 SEH = 392")
 NEVERD_EMULATION_DOC_TOKEN(Project, "FOP/FIP/FDP")
 NEVERD_EMULATION_DOC_TOKEN(X64Startup, "FOP/FIP/FDP")
 #endif
@@ -394,4 +394,23 @@ NEVERD_EMULATION_DOC_PATH(X64StringComparison, "docs/{locale}/testing.md")
 NEVERD_EMULATION_DOC_TOKEN(X64StringComparison, "X64StringComparisonTests.cpp")
 NEVERD_EMULATION_DOC_TOKEN(X64StringComparison, "CMPS/SCAS")
 NEVERD_EMULATION_DOC_TOKEN(X64StringComparison, "REPE/REPNE")
+#endif
+
+#ifdef NEVERD_EMULATION_DOC_PATH
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "README.md")
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "docs/{locale}/project.md")
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "docs/architecture.md")
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "docs/{locale}/architecture.md")
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "docs/testing.md")
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "docs/{locale}/testing.md")
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "docs/process-emulation.md")
+NEVERD_EMULATION_DOC_PATH(WindowsMemory, "docs/{locale}/process-emulation.md")
+#endif
+#ifdef NEVERD_EMULATION_DOC_TOKEN
+NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "VirtualAlloc")
+NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "VirtualFree")
+NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "VirtualProtect")
+NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "VirtualQuery")
+NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "FlushInstructionCache")
+NEVERD_EMULATION_DOC_TOKEN(WindowsMemory, "AddressSpace")
 #endif

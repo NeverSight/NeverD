@@ -97,3 +97,87 @@ u64 stack_failure(void) {
 extern volatile unsigned char __sF[];
 u64 stdio_identity(void) { return (u64)__sF != 0; }
 u64 stdio_content(void) { return __sF[0]; }
+
+extern void *dlopen(const char *, int);
+extern void *dlsym(void *, const char *);
+extern int dlclose(void *);
+extern char *dlerror(void);
+typedef u64 (*length_fn)(const char *);
+
+u64 dynamic_lookup(void) {
+  void *h = dlopen("libfixture.so", 2);
+  if (!h)
+    return 100;
+  length_fn length = (length_fn)dlsym(h, "strlen");
+  if (!length)
+    return 101;
+  u64 result = length("four");
+  if (dlclose(h))
+    return 102;
+  return result;
+}
+u64 dynamic_lifecycle(void) {
+  *__errno() = 77;
+  if (dlerror() || dlopen("libfixture.so", 6) || !dlerror() || dlerror())
+    return 1;
+  void *a = dlopen("libfixture.so", 1);
+  void *b = dlopen("libfixture.so", 2);
+  void *c = dlopen("libfixture.so", 6);
+  if (!a || a != b || a != c)
+    return 2;
+  if (dlsym(a, "missing_export"))
+    return 3;
+  length_fn length = (length_fn)dlsym(a, "strlen");
+  if (!length || !dlerror() || dlerror() ||
+      dlsym(b, "strlen") != (void *)length)
+    return 4;
+  if (dlclose(a) || dlclose(b) || length("ok") != 2 || dlclose(c))
+    return 5;
+  if (dlsym(a, "strlen") || !dlerror() || dlerror() || dlclose(a) != -1 ||
+      !dlerror())
+    return 6;
+  void *d = dlopen("libfixture.so", 2);
+  if (!d || d == a || dlsym(a, "strlen") || !dlerror() || !dlsym(d, "strlen"))
+    return 7;
+  if (dlclose(d) || dlopen("missing.so", 2))
+    return 8;
+  const char *error = dlerror();
+  if (!error || strlen(error) == 0 || dlerror() || *__errno() != 77)
+    return 9;
+  u64 tp;
+  __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+  if (dlsym(a, 0) || *(u64 *)(tp + 48) == 0)
+    return 10;
+  if ((u64)dlerror() == 0 || *(u64 *)(tp + 48) != 0 || dlerror())
+    return 11;
+  return 0;
+}
+u64 dynamic_unknown(void) {
+  void *h = dlopen("libfixture.so", 2);
+  length_fn function = (length_fn)dlsym(h, "unmodeled_fixture_export");
+  return function("input");
+}
+u64 dynamic_closed(void) {
+  void *h = dlopen("libfixture.so", 2);
+  length_fn function = (length_fn)dlsym(h, "strlen");
+  dlclose(h);
+  return function("input");
+}
+u64 dynamic_scope(u64 scope) { return (u64)dlsym((void *)scope, "strlen"); }
+u64 dynamic_open(u64 name, u64 flags) {
+  return (u64)dlopen((const char *)name, (int)flags);
+}
+u64 dynamic_bad_name(void) {
+  return (u64)dlsym(dlopen("libfixture.so", 2), (const char *)1);
+}
+u64 dynamic_providers(void) {
+  void *a = dlopen("libfixture.so", 2);
+  void *b = dlopen("libother.so", 2);
+  length_fn first = (length_fn)dlsym(a, "strlen");
+  length_fn second = (length_fn)dlsym(b, "strlen");
+  if (!first || !second || first == second)
+    return 1;
+  if (dlsym(a, "only_in_other") || !dlerror() || !dlsym(b, "only_in_other"))
+    return 2;
+  return first("ab") + second("cde");
+}

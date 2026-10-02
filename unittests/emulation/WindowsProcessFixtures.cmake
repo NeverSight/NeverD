@@ -47,6 +47,7 @@ foreach(_arch X64 AArch64)
       "/machine:${_machine}" /base:0x140000000 /include:_tls_used /timestamp:0
       "${_base}.obj" "${_base}-kernel32.lib" "${_base}-ntdll.lib" "/out:${_base}.exe"
     DEPENDS fixtures/windows_process.c fixtures/WindowsProcessCases.def
+      fixtures/WindowsMemoryCases.def fixtures/WindowsMemoryFixture.inc
       "${_windows_fixture_dir}/kernel32.def" "${_windows_fixture_dir}/ntdll.def"
     VERBATIM)
   list(APPEND _windows_outputs "${_base}.exe")

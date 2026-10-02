@@ -235,6 +235,27 @@ TEST(MedCallingConvValueFlow, StopsAtRealTransformation) {
   EXPECT_EQ(findFirstUseSize(Func, ParamReg, TRI), 4);
 }
 
+TEST(MedCallingConvValueFlow, RenamedEntryCopyKeepsIncomingReads) {
+  // A register also live into an SEH handler root gets a renamed entry copy
+  // (`COPY RCX.1 = RCX`), and copy propagation leaves the body reading the
+  // incoming value.
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  uint64_t ParamReg = TRI.IntParamRegs.front();
+  MedVar LiveIn = reg(1, 0, 8, ParamReg, TheArch);
+  MedVar NarrowInput = LiveIn;
+  NarrowInput.Size = 4;
+
+  MedFunc Func;
+  Func.Blocks.resize(1);
+  Func.Blocks[0].Ops.push_back(
+      unary(NdOp::COPY, reg(1, 1, 8, ParamReg, TheArch), LiveIn));
+  Func.Blocks[0].Ops.push_back(binary(NdOp::INT_ADD, temp(10, 0, 4, TheArch),
+                                      NarrowInput, MedVar::makeConst(1, 4)));
+
+  EXPECT_EQ(findFirstUseSize(Func, ParamReg, TRI), 4);
+}
+
 TEST(MedCallingConvValueFlow, LoadAddressUsesPointerWidth) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);

@@ -20,6 +20,8 @@ inline constexpr uint64_t StdioAddress = TLSAddress - PageSize;
 inline constexpr uint64_t ThunkBase = TLSAddress + PageSize;
 inline constexpr uint64_t ErrnoAddress = TLSAddress + 2 * 8;
 inline constexpr uint64_t GuardAddress = TLSAddress + 5 * 8;
+inline constexpr uint64_t LinkerErrorAddress = TLSAddress + 0x200;
+inline constexpr uint64_t LinkerErrorSlot = TLSAddress + 6 * 8;
 inline constexpr uint64_t StackGuard = 0x91ab62e5347c2800;
 inline constexpr uint16_t ModelTrap = 0x4e44;
 inline constexpr uint64_t ReturnPC = ThunkBase;
@@ -31,6 +33,8 @@ struct LinkedImage {
   uint64_t Entry, InitialBreak;
   std::vector<uint64_t> Constructors;
   std::map<uint64_t, std::string> Imports;
+  std::map<uint64_t, std::string> DynamicProviders;
+  std::map<std::string, std::map<std::string, uint64_t>> Libraries;
 };
 llvm::Expected<LinkedImage> loadImage(AddressSpace &Space,
                                       const BinaryImage &Image,
@@ -40,11 +44,11 @@ public:
   Bionic(ExecutionBackend &CPU, linux_model::LinuxMemory &Memory,
          const linux_model::ProcessLayout &Layout,
          const ProcessOptions &Options, ProcessResult &Result,
-         ExecutionBudget &Budget)
+         ExecutionBudget &Budget, const LinkedImage &Linked)
       : CPU(CPU), Memory(Memory), Layout(Layout), Options(Options),
-        Result(Result), Budget(Budget) {}
+        Result(Result), Budget(Budget), Linked(Linked) {}
   bool timedOut() const { return Expired; }
-  llvm::Expected<std::optional<uint64_t>> invoke(const NativeCallEvent &Call);
+  llvm::Expected<std::optional<uint64_t>> invoke(NativeCallEvent &Call);
 
 private:
   ExecutionBackend &CPU;
@@ -53,7 +57,14 @@ private:
   const ProcessOptions &Options;
   ProcessResult &Result;
   ExecutionBudget &Budget;
+  const LinkedImage &Linked;
   bool Expired = false;
+  struct LibraryState {
+    uint64_t Handle = 0, References = 0;
+  };
+  std::map<std::string, LibraryState> OpenLibraries;
+  std::map<uint64_t, std::string> Handles;
+  uint64_t NextHandle = 1;
   struct Allocation {
     uint64_t Size, MappedSize;
   };
@@ -64,6 +75,9 @@ private:
   llvm::Expected<uint64_t> allocate(uint64_t Size);
   llvm::Error release(uint64_t Address);
   llvm::Error setErrno(uint32_t Value);
+  llvm::Expected<uint64_t> linkerError(llvm::StringRef Message,
+                                       uint64_t ReturnValue = 0);
+  llvm::Expected<std::optional<uint64_t>> dlfcn(NativeCallEvent &Call);
 };
 llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
                                         const ProcessOptions &Options);

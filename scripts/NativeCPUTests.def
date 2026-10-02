@@ -493,3 +493,48 @@ NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "ExplicitBackends/WindowsProcess.NTDLLNamedExitHasExplicitProviderEvidence/"
     "WhpX64")
 #endif
+
+#ifdef NEVERD_NATIVE_CPU_REQUIRED_TEST
+// Windows private memory semantics must execute on WHP.
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsProcess.VirtualMemoryReserveCommitProtectDecommitAndRelease/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsProcess.VirtualMemoryRoundingAndReservationBoundariesAreAtomic/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsProcess.VirtualQueryReportsOwnedMappingsAndValidatesOutputs/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsProcess.VirtualMemoryExecutesRewrittenCodeAfterProtectionChanges/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsProcess.VirtualProtectObservesAliasedOutputPermissions/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsProcess.VirtualMemoryTopDownPlacementHonorsSparseReservations/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "WindowsProcess.VirtualMemoryReclaimsBackingAcrossLiveCPUResumptions/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsProcess.ReservedPagesRemainInaccessible/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsProcess.NoAccessPagesRejectGuestStores/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsProcess.ReadOnlyPagesRejectGuestStores/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsProcess.DecommittedPagesRejectGuestStores/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsProcess.ReleasedPagesRejectGuestStores/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsProcess.NonExecutablePagesRejectGuestInstructions/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsProcess.GuardPagesRequireExplicitExceptionSupport/"
+    "WhpX64")
+#endif

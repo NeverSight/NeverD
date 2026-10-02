@@ -5,6 +5,8 @@
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_EMULATION_WINDOWS_PROCESS_H
 #define NEVERD_EMULATION_WINDOWS_PROCESS_H
+#include "WindowsProcessMemory.h"
+
 #include "neverd/emulation/AddressSpace.h"
 #include "neverd/emulation/IntegerABI.h"
 #include "neverd/emulation/ProcessSession.h"
@@ -89,7 +91,7 @@ public:
            const Environment &Environment, const ProcessOptions &Options,
            ProcessResult &Result)
       : CPU(CPU), Memory(Memory), Loaded(Image), Env(Environment),
-        Options(Options), Result(Result) {}
+        Options(Options), Result(Result), Virtual(Memory, Image, Options) {}
   llvm::Expected<std::optional<uint64_t>> invoke(const Service &Service,
                                                  const NativeCallEvent &Event);
 
@@ -99,12 +101,15 @@ private:
   llvm::Expected<bool> access(uint64_t Address, uint64_t Size, unsigned Rights);
   llvm::Expected<std::optional<uint64_t>> heap(const Service &,
                                                const NativeCallEvent &);
+  llvm::Expected<std::optional<uint64_t>> memory(const Service &,
+                                                 const NativeCallEvent &);
   ExecutionBackend &CPU;
   AddressSpace &Memory;
   const Image &Loaded;
   const Environment &Env;
   const ProcessOptions &Options;
   ProcessResult &Result;
+  VirtualMemory Virtual;
   std::bitset<value::DynamicTLSCount> TLSSlots;
   struct Allocation {
     uint64_t Size, MappedSize;

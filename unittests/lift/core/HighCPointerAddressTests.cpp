@@ -41387,6 +41387,64 @@ TEST(HighCPointerAddresses, PopfRestoresSystemFlags) {
   expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
 }
 
+TEST(HighCPointerAddresses, PushfOfUndefinedFlagsIsTheMachineFlags) {
+  // No instruction sets a flag before either `pushfq`, so the machine holds
+  // every bit each one saves: both images are __readeflags() itself.  The
+  // second PUSHF, on one arm of a jrcxz, reuses the lifter's temporaries.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x9c,       // pushfq
+                                     0x58,       // pop rax
+                                     0xe3, 0x02, // jrcxz done
+                                     0x9c,       // pushfq
+                                     0x58,       // pop rax
+                                     0xc3};      // done: ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  const size_t First = HighC.find("__readeflags()");
+  ASSERT_NE(First, std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__readeflags()", First + 1), std::string::npos)
+      << HighC;
+  EXPECT_EQ(HighC.find("/* unknown"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("<<"), std::string::npos) << HighC;
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(LLVMC.find("/* unknown"), std::string::npos) << LLVMC;
+  expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
+}
+
+TEST(HighCPointerAddresses, PushfKeepsTheFlagsACompareSets) {
+  // cmp sets the status flags the C translation computes itself, so the
+  // image merges them over the machine flags rather than reading them back.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x39, 0xd1, // cmp ecx, edx
+                                     0x9c,       // pushfq
+                                     0x58,       // pop rax
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("__readeflags()"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("arg1"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("/* unknown"), std::string::npos) << HighC;
+  expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
+}
+
+TEST(HighCPointerAddresses, BranchOnAnEntryFlagStaysUnknown) {
+  // A jb before any flag is set reads the caller's CF, an input outside the
+  // calling convention, so it still fails clearly; the PUSHF on the other
+  // path saves the machine flags.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x72, 0x03, // jb skip
+                                     0x9c,       // pushfq
+                                     0x58,       // pop rax
+                                     0xc3,       // ret
+                                     0x31, 0xc0, // skip: xor eax, eax
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("__readeflags()"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("/* unknown register */"), std::string::npos) << HighC;
+}
+
 TEST(HighCPointerAddresses,
      GotoTargetKeepsItsLabelWhenItsFramePointerWriteIsFolded) {
   // RtlUnicodeStringCat: a cold block after the return only sets EBP to a

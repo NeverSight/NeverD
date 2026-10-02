@@ -1028,6 +1028,23 @@ bool objcSelectorStubMatches(const BinaryImage &Image, va_t Address,
          Target->Selector == Selector;
 }
 
+std::optional<SourceCallTypeHint>
+objcSelectorStubSourceCallHint(const BinaryImage &Image, va_t Address) {
+  if (!objcSelectorStubPreservesNonvolatileRegisters(Image, Address))
+    return std::nullopt;
+  const auto Target = veneer(Image, Address);
+  const auto Signature = objcSelectorSourceTypeHint(Image, Target->Selector);
+  if (!Signature)
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Hint.TargetAddress = Address;
+  Hint.SelectorReferenceAddress = Target->SelectorSlot;
+  Hint.Selector = Target->Selector;
+  Hint.Signature = *Signature;
+  return Hint;
+}
+
 std::optional<ObjCArgumentTailCall>
 objcArgumentTailCall(const BinaryImage &Image, va_t Address) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||

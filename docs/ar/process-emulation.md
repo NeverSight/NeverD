@@ -82,6 +82,14 @@ output = bytes.fromhex(report["stdout_hex"])
 
 يضيف `windows-pe64-v1` عمليات وحدة تحكم Windows محدودة لـx64/ARM64: تحميل PE وPEB/TEB وTLS ثابت وديناميكي واستدعاءات بدء وإنهاء ونماذج Win32 مسماة. يستخدم طبقة CPU مستقلاً عن محاكاة برامج التشغيل؛ ولا يزال تحميل DLL/CRT وGUI وSEH المستخدم والخيوط والتوافق العام مع Windows غير مكتمل.
 
+تضيف الذاكرة الافتراضية في Windows دعم `VirtualAlloc` و`VirtualFree` و`VirtualProtect` و`VirtualQuery` و`FlushInstructionCache` للعملية الحالية. تدير طبقة OS الحجوزات، وتبقى `AddressSpace` المرجع للصفحات الملتزم بها والصلاحيات والتخزين الفعلي. تشمل الاختبارات تعديل الشيفرة وأخطاء الوصول وإعادة استخدام ميزانية الذاكرة.
+
+تدعم التخصيصات الخاصة `MEM_RESERVE` و`MEM_COMMIT` و`MEM_DECOMMIT` و`MEM_RELEASE` و`MEM_TOP_DOWN`، بمحاذاة حجز 64 KiB وصفحات 4 KiB. الحجز وحده لا يستهلك RAM الضيف. تحافظ إعادة الالتزام على البيانات وتحدّث الصلاحيات، ويلغي فك الالتزام تخزين كل صفحة. يمنع فحص النطاق كاملاً وتجهيز التخصيص مسبقاً التغييرات الجزئية عند الأخطاء العادية. يعيد الاستعلام بنية x64/ARM64 بحجم 48 بايت ويجمع الصفحات التالية ضمن التخصيص نفسه فقط. تشمل سياسة المواضع الصورة والبيئة والكومة ومداخل API وحدود المكدس؛ وتتفق هوية تخصيص المكدس مع TEB. إذا جعل استدعاء `VirtualProtect` الناجح موضع إخراج الصلاحيات السابقة للقراءة فقط، تبقى الصلاحيات الجديدة سارية وتظل بايتات الإخراج دون تغيير، ويعيد الاستدعاء النجاح. يعيد فشل تعديل صلاحيات نطاق يحتوي صفحات غير ملتزم بها `ERROR_INVALID_ADDRESS`، ويكتب `PAGE_NOACCESS` في ناتج الصلاحيات السابقة دون تغيير صلاحيات الصفحات.
+
+الصلاحيات المدعومة هي `PAGE_NOACCESS` و`PAGE_READONLY` و`PAGE_READWRITE` و`PAGE_EXECUTE_READ` و`PAGE_EXECUTE_READWRITE`. تبقى صفحات الحراسة والتنفيذ فقط والنسخ عند الكتابة وسمات التخزين المؤقت والصفحات الكبيرة وreset/write-watch/العناصر النائبة وتعديل خرائط وقت التشغيل المملوكة للنموذج غير مدعومة صراحةً. يمكن فك الالتزام أو التحرير للتخصيصات الافتراضية الخاصة فقط. لا تضيف هذه الميزة توزيع استثناءات المستخدم أو إثبات تنفيذ أصلي على عتاد ARM64.
+
+[VirtualAlloc](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc), [VirtualFree](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualfree), [VirtualProtect](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualprotect), [VirtualQuery](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualquery), [MEMORY_BASIC_INFORMATION](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-memory_basic_information).
+
 ```bash
 neverd emulate guest.exe --profile=windows-pe64-v1 \
   --options='{"backend":"auto","arguments":["guest.exe","argument"],"environment":["MODE=test"]}'
@@ -94,6 +102,8 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 يحدد `WindowsProcessServices.def` واجهات `ExitProcess` و`RtlExitUserProcess` ومقابض الإخراج و`WriteFile` المتزامن وLastError ومعرفات ومقابض العملية/الخيط الوهمية و`GetCommandLineW` وتخصيص/تحرير/حجم الكومة وTLS الديناميكي وNULL `GetModuleHandleW`. تُحل الأسماء الدقيقة من `kernel32.dll` و`kernelbase.dll` و`ntdll.dll` فقط. لا تختار syscall المباشرة أو بوابات الاستدعاء المزيفة نماذج API. الكومة مملوكة للعملية وتُستعاد عند التحرير؛ يحتفظ الإخراج بالبايتات الثنائية. تُفصل أخطاء Win32 عن الإدخال/الإخراج غير المتزامن واستثناءات المستخدم غير المدعومة. تراعي المؤشرات المتداخلة تصفير عداد الإكمال الأولي وعنوان العودة الفعلي.
 
 يحفظ `windows.native_calls` اسم الوحدة/الدالة والمعاملات العددية المعلنة والنتيجة القابلة لـNULL دون اختراع أرقام NT. يختبر `NeverDWindowsProcessTests` ملفات PE فعلية وTLS المترجم وتغيير الاستدعاءات والكومة والتداخل والبيانات التالفة والصلاحيات والميزانيات؛ ويختبر `NeverDProcessPublicTests` واجهتي CLI/C ABI. تشغّل CI Windows ملف EXE نفسه مباشرةً كمرجع مستقل وتفرض اختبارات WHP. وما زال إثبات التنفيذ الأصلي ARM64 يتطلب جهازاً مناسباً.
+
+عندما يكون مخزن الإدخال المؤقت غير فارغ وغير قابل للقراءة، تُرجع `WriteFile` الخطأ `ERROR_INVALID_USER_BUFFER` (1784)، وتصفّر عدد البايتات المكتوبة ولا تُخرج أي بايتات.
 
 [PE/COFF](https://learn.microsoft.com/windows/win32/debug/pe-format), [ARM64 ABI](https://learn.microsoft.com/cpp/build/arm64-windows-abi-conventions), [WriteFile](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-writefile), [TLS](https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-tlsgetvalue), [Wine 10.0 loader](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/ntdll/loader.c).
 

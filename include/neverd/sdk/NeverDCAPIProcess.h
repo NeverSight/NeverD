@@ -26,7 +26,8 @@ enum {
 /// Limits must be positive integers; arguments/environment are string arrays.
 /// Android uses an "android" object instead: entry_symbol or entry_address,
 /// scalar arguments, load_bias, properties, memory, read_memory, initialize,
-/// and trace_limit. See docs/android-native-emulation.md for the wire format.
+/// trace_limit, and an explicit libraries/symbols catalogue.
+/// See docs/android-native-emulation.md for the wire format.
 /// Unknown fields, invalid values, unavailable backends and unsupported image
 /// layouts fail before entry. The host environment is never inherited.
 ///

@@ -4,6 +4,7 @@
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
+#include "neverd/ir/low/SourceFrameEffects.h"
 #include "neverd/ir/low/SourceRegisterCopy.h"
 #include "neverd/ir/med/MedIR.h"
 
@@ -16,7 +17,7 @@ namespace neverd {
 
 using NativeSourceCallKey = SourceCallOccurrenceKey;
 
-struct NativeSourceCallContract {
+struct NativeSourceCallContract : SourceFrameEffects {
   const SourceFunctionTypeHint *Signature = nullptr;
   // Mutually exclusive with Signature. The caller must freshly authenticate
   // this exact occurrence against the original image and LowIR.
@@ -31,14 +32,6 @@ struct NativeSourceCallContract {
   };
   TerminationKind Termination = TerminationKind::None;
   bool terminates() const { return Termination != TerminationKind::None; }
-  // Parameter indexes whose exact private-frame address is borrowed
-  // synchronously and read-only by an independently known call contract.
-  std::map<size_t, size_t> ReadOnlyFrameParameters;
-  // Parameter indexes whose exact private-frame address is borrowed
-  // synchronously and overwritten within this bounded extent. The proof
-  // invalidates overlapping spill bytes after the call, so writable scratch
-  // storage cannot masquerade as restored incoming machine state.
-  std::map<size_t, size_t> WritableFrameParameters;
 };
 
 using NativeSourceCalls =
@@ -82,9 +75,10 @@ bool restoresNativeSourceState(
 /// identities and private-frame escape checks, including completely written
 /// outgoing scalar stack arguments, but do not require a nonexistent return
 /// to restore state. Branches, returns and exceptional edges remain rejected.
-bool observesTerminalNativeSourceState(
-    const LowFunc &Function, Arch Architecture, const NativeSourceCalls &Calls,
-    std::set<uint64_t> &UsedEntryRegisters);
+bool observesTerminalNativeSourceState(const LowFunc &Function,
+                                       Arch Architecture,
+                                       const NativeSourceCalls &Calls,
+                                       std::set<uint64_t> &UsedEntryRegisters);
 
 /// Prove the narrower frameless tail-call shape without requiring a synthetic
 /// frame reconstruction. The function may not write any preserved, frame,

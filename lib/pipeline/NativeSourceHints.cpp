@@ -13,11 +13,15 @@
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/MachO/ImmutableNativeCalls.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
+#include "neverd/loader/ObjC/ObjCContextCallEffects.h"
+#include "neverd/loader/Swift/SwiftAccessEffects.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
+#include "neverd/loader/Swift/SwiftValueBufferEffects.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include <algorithm>
@@ -35,24 +39,33 @@ boundNativeBooleanCallees(const MedFunc &Caller) {
   std::set<va_t> ConflictingNativeCallees;
   for (const auto &Block : Caller.Blocks)
     for (const auto &Op : Block.Ops) {
-      if (!Op.SourceCallHint || Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
-          !Op.Inputs[0].isConst() ||
+      if (!Op.SourceCallHint || Op.NumInputs < 1)
+        continue;
+      const auto &Binding = *Op.SourceCallHint;
+      const bool Direct = Op.Opcode == NdOp::CALL && Op.Inputs[0].isConst() &&
+                          !Binding.ImmutableNativeCall &&
+                          Binding.TargetAddress == Op.Inputs[0].ConstVal;
+      const bool Immutable =
+          Op.Opcode == NdOp::INDIR_CALL && !Op.Inputs[0].isConst() &&
+          isImmutableNativeCallHint(Binding, Caller.Entry,
+                                    Binding.Signature.Architecture) &&
+          Binding.ImmutableNativeCall->Site.Instruction == Op.Addr &&
+          Binding.ImmutableNativeCall->Site.Sequence == Op.OriginSeq;
+      if ((!Direct && !Immutable) ||
           Op.SourceCallHint->CallKind != SourceCallTypeHint::Kind::Native ||
           Op.SourceCallHint->FunctionParameterCall ||
-          Op.SourceCallHint->AddressedFunctionABI ||
-          Op.SourceCallHint->TargetAddress != Op.Inputs[0].ConstVal ||
-          Op.DoesNotReturn ||
-          ConflictingNativeCallees.count(Op.Inputs[0].ConstVal))
+          Op.SourceCallHint->AddressedFunctionABI || Op.DoesNotReturn ||
+          ConflictingNativeCallees.count(Binding.TargetAddress))
         continue;
       if (Op.NumInputs !=
           sourceABIParameters(Op.SourceCallHint->Signature).size() + 1)
         continue;
-      auto [It, Inserted] = NativeCallees.emplace(Op.Inputs[0].ConstVal,
+      auto [It, Inserted] = NativeCallees.emplace(Binding.TargetAddress,
                                                   Op.SourceCallHint->Signature);
       if (!Inserted &&
           !equalSourceABIs(It->second, Op.SourceCallHint->Signature)) {
         NativeCallees.erase(It);
-        ConflictingNativeCallees.insert(Op.Inputs[0].ConstVal);
+        ConflictingNativeCallees.insert(Binding.TargetAddress);
       }
     }
   return NativeCallees;
@@ -402,6 +415,7 @@ bool hasNativeSourceStateContract(
   }
   std::optional<std::map<va_t, SourceCallTypeHint>> CurrentCallBindings;
   std::optional<std::map<va_t, SourceCallTypeHint>> CurrentBlockBindings;
+  std::optional<std::map<va_t, SourceCallTypeHint>> CurrentImmutableBindings;
   std::vector<SwiftBooleanProjection> BooleanProjections;
   if (EntrySignature) {
     bool HasBoolean = false;
@@ -427,6 +441,9 @@ bool hasNativeSourceStateContract(
           !Op.SourceCallHint)
         return false;
       const auto &Binding = *Op.SourceCallHint;
+      if (Binding.ImmutableNativeCall &&
+          !isImmutableNativeCallHint(Binding, Med.Entry, Image.Arch))
+        return false;
       using Kind = SourceCallTypeHint::Kind;
       const bool StaticRuntime =
           Op.Inputs[0].isConst() &&
@@ -445,7 +462,8 @@ bool hasNativeSourceStateContract(
                SourceFunctionTypeHint::OriginKind::ObjCSDK) &&
           Binding.Signature.HasExplicitABI;
       const bool StaticNative =
-          Op.Inputs[0].isConst() && Binding.CallKind == Kind::Native &&
+          !Binding.ImmutableNativeCall && Op.Inputs[0].isConst() &&
+          Binding.CallKind == Kind::Native &&
           Binding.TargetAddress == Op.Inputs[0].ConstVal &&
           Binding.TargetAddress != Med.Entry &&
           Image.isCodeAddress(Binding.TargetAddress) &&
@@ -455,6 +473,23 @@ bool hasNativeSourceStateContract(
       const bool CertifiedNative = Binding.TargetAddress != Med.Entry &&
                                    !TerminalContext &&
                                    certifiedNativeCallee(Image, Op, Callees);
+      const bool ImmutableNative = [&] {
+        if (TerminalContext || Op.Opcode != NdOp::INDIR_CALL ||
+            Op.Inputs[0].isConst() || Op.DoesNotReturn ||
+            !isImmutableNativeCallHint(Binding, Med.Entry, Image.Arch) ||
+            Op.NumInputs != sourceABIParameters(Binding.Signature).size() + 1 ||
+            Binding.ImmutableNativeCall->Site.Instruction != Op.Addr ||
+            Binding.ImmutableNativeCall->Site.Sequence != Op.OriginSeq)
+          return false;
+        if (!CurrentImmutableBindings)
+          CurrentImmutableBindings = buildImmutableNativeCallHints(
+              Image, *Low, boundNativeBooleanCallees(Med));
+        const auto Current = CurrentImmutableBindings->find(Op.Addr);
+        return Current != CurrentImmutableBindings->end() &&
+               Current->second.ImmutableNativeCall ==
+                   Binding.ImmutableNativeCall &&
+               equalSourceABIs(Current->second.Signature, Binding.Signature);
+      }();
       const bool DynamicWitness =
           Op.Opcode == NdOp::INDIR_CALL && !Op.Inputs[0].isConst() &&
           isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
@@ -512,19 +547,47 @@ bool hasNativeSourceStateContract(
       }();
       NativeSourceCallContract Contract;
       Contract.Signature = &Binding.Signature;
+      if (StaticNative &&
+          isSwiftValueBufferProjection(Image, Binding.TargetAddress)) {
+        const SourceCallOccurrenceKey Site{Op.Addr, Op.OriginSeq, Op.Opcode,
+                                           Op.Inputs[0].ConstVal};
+        const auto Effects =
+            swiftValueBufferCallEffects(Image, *Low, Site, Binding.Signature);
+        if (!Effects || Binding.DoesNotReturn || Op.DoesNotReturn ||
+            Op.PreservesCallerSaved)
+          return false;
+        static_cast<SourceFrameEffects &>(Contract) = *Effects;
+      }
+      if ((StaticNative || ImmutableNative) &&
+          isObjCContextProjection(Image, Binding.TargetAddress)) {
+        const SourceCallOccurrenceKey Site{
+            Op.Addr, Op.OriginSeq, Op.Opcode,
+            Op.Inputs[0].isConst() ? std::optional<va_t>(Op.Inputs[0].ConstVal)
+                                   : std::nullopt};
+        const auto NativeCallees = boundNativeBooleanCallees(Med);
+        const auto Effects = objcContextCallEffects(
+            Image, *Low, Site, Binding.Signature, &NativeCallees);
+        if (!Effects || Binding.DoesNotReturn || Op.DoesNotReturn ||
+            Op.PreservesCallerSaved)
+          return false;
+        static_cast<SourceFrameEffects &>(Contract) = *Effects;
+      }
       if (StaticMessage && Binding.CallKind == Kind::ObjCSuper2)
         Contract.ReadOnlyFrameParameters.emplace(0, 16);
-      // These exact libswiftCore imports may borrow bounded private-frame
-      // storage. swift_beginAccess writes its three-word ValueBuffer and
-      // swift_endAccess may update that same private scratch record;
-      // Hasher's 72-byte value is written through x8, then passed inout to
-      // String.hash and _finalize. Independently authenticate the current
-      // import and ABI before invalidating those frame bytes. A borrow may
-      // neither escape nor overlap a saved register.
       if (StaticRuntime && Binding.CallKind == Kind::SwiftRuntimeCall &&
           (Binding.TargetName == "swift_beginAccess" ||
-           Binding.TargetName == "swift_endAccess" ||
-           Binding.TargetName == "$ss6HasherV5_seedABSi_tcfC" ||
+           Binding.TargetName == "swift_endAccess")) {
+        const SourceCallOccurrenceKey Site{Op.Addr, Op.OriginSeq, Op.Opcode,
+                                           Op.Inputs[0].ConstVal};
+        const auto Effects = swiftAccessCallEffects(Image, *Low, Site, Binding);
+        if (!Effects || Op.DoesNotReturn || Op.PreservesCallerSaved)
+          return false;
+        static_cast<SourceFrameEffects &>(Contract) = *Effects;
+      }
+      // Hasher's 72-byte value is written through x8, then passed inout to
+      // String.hash and _finalize. Revalidate its current import and ABI.
+      if (StaticRuntime && Binding.CallKind == Kind::SwiftRuntimeCall &&
+          (Binding.TargetName == "$ss6HasherV5_seedABSi_tcfC" ||
            Binding.TargetName == "$sSS4hash4intoys6HasherVz_tF" ||
            Binding.TargetName == "$ss6HasherV9_finalizeSiyF") &&
           Binding.TargetAddress && Image.Bits == Bitness::Bits64) {
@@ -538,12 +601,8 @@ bool hasNativeSourceStateContract(
             Expected->TargetName == Binding.TargetName &&
             Expected->DoesNotReturn == Binding.DoesNotReturn &&
             equalSourceABIs(Expected->Signature, Binding.Signature)) {
-          if (Binding.TargetName == "swift_beginAccess")
-            Contract.WritableFrameParameters.emplace(1, 3 * sizeof(uint64_t));
-          else if (Binding.TargetName == "swift_endAccess")
-            Contract.WritableFrameParameters.emplace(0, 3 * sizeof(uint64_t));
-          else if (Image.Arch == Arch::AArch64 &&
-                   !Binding.Signature.Parameters.empty()) {
+          if (Image.Arch == Arch::AArch64 &&
+              !Binding.Signature.Parameters.empty()) {
             const auto &Buffer = Binding.Signature.Parameters[0];
             if (Binding.TargetName == "$ss6HasherV5_seedABSi_tcfC" &&
                 Binding.Signature.Parameters.size() == 2 &&
@@ -625,7 +684,7 @@ bool hasNativeSourceStateContract(
       }
       if ((!StaticRuntime && !StaticNative && !CertifiedNative &&
            !StaticBoolean && !StaticMessage && !DynamicWitness &&
-           !DynamicVoidBlock) ||
+           !DynamicVoidBlock && !ImmutableNative) ||
           (Binding.DoesNotReturn && !Contract.terminates()) ||
           !Binding.Signature.ReturnType || !Image.isCodeAddress(Op.Addr) ||
           !Calls
@@ -1347,7 +1406,8 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     return Reject("native mutable stack parameters require range recovery");
   }
 
-  bool HasReturn = false;
+  bool HasReturn = false, RequiresImmutableCallProof = false;
+  bool RequiresFrameEffectProof = false;
   for (const auto &Block : Med.Blocks) {
     if (!Block.ExceptionalSuccs.empty() || !Block.ExceptionalPreds.empty())
       return Reject("native exception-dependent parameters are unsupported");
@@ -1360,6 +1420,20 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
           !hasNativeScalarIntrinsicEvidence(Op, Image.Arch))
         return Reject("native intrinsic requires explicit scalar ABI evidence");
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        if (Op.NumInputs && Op.Inputs[0].isConst())
+          RequiresFrameEffectProof |=
+              isSwiftValueBufferProjection(Image, Op.Inputs[0].ConstVal) ||
+              isObjCContextProjection(Image, Op.Inputs[0].ConstVal) ||
+              isSwiftAccessCallTarget(Image, Op.Inputs[0].ConstVal);
+        RequiresFrameEffectProof |=
+            Op.SourceCallHint &&
+            (Op.SourceCallHint->TargetName == "swift_beginAccess" ||
+             Op.SourceCallHint->TargetName == "swift_endAccess");
+        RequiresImmutableCallProof |=
+            Op.SourceCallHint &&
+            (Op.SourceCallHint->ImmutableNativeCall ||
+             (Op.Opcode == NdOp::INDIR_CALL &&
+              Op.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native));
         std::string Error;
         if (!Op.SourceCallHint ||
             !validateSourceABI(Op.SourceCallHint->Signature, Error) ||
@@ -1452,10 +1526,19 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
            {SourceABICarrierKind::IntegerRegister, Register, 0, 8}});
   if (!validateSourceABI(Hint, Diagnostic))
     return std::nullopt;
-  if (!Med.RegisterCopyProjections.empty() &&
+  // A defined scalar result alone authenticates neither an indirect native
+  // target nor a borrowed-frame effect. Revalidate the original
+  // occurrence even when return inference did not need the frame proof.
+  if ((RequiresImmutableCallProof || RequiresFrameEffectProof ||
+       !Med.RegisterCopyProjections.empty()) &&
       !hasNativeSourceStateContract(Image, Low, Med, false, nullptr, false,
                                     CalleeContracts, &Hint))
-    return Reject("projected register copies do not restore native call state");
+    return Reject(
+        RequiresImmutableCallProof
+            ? "immutable native calls lack current machine state proof"
+        : RequiresFrameEffectProof
+            ? "borrowed frame effect lacks current machine state proof"
+            : "projected register copies do not restore native call state");
   auto Exact = compilerRTPlatformVersionContract(Image, Med, Hint, Diagnostic);
   if (Exact.Recognized)
     return Exact.Signature;

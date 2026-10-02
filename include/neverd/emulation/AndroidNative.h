@@ -28,6 +28,7 @@ struct NativeMemorySnapshot {
   uint64_t Address;
   std::vector<uint8_t> Bytes;
 };
+
 /// Android 9 / API 28, little-endian AArch64, one native thread. Function
 /// arguments are AAPCS64 scalar register/stack values, not process argv.
 /// Explicit inputs never inherit host properties, files, or environment.
@@ -45,6 +46,10 @@ struct AndroidNativeOptions {
   bool Initialize = true;
   /// Retain this many admitted instruction PCs. Zero disables tracing.
   uint64_t TraceLimit = 0;
+  /// Exact library names and available function names for the local dlfcn
+  /// model. No host files are loaded. Calling an unmodeled function still
+  /// stops.
+  std::map<std::string, std::vector<std::string>> Libraries;
 };
 } // namespace neverd::emulation
 #endif

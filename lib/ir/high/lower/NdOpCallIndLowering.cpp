@@ -17,6 +17,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/ImmutableNativeCalls.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -232,9 +233,8 @@ void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
     // A bound Swift virtual call must use the target loaded before the
     // intervening retain/release effects; reloading its table slot here can
     // change both dispatch and the order of observable memory operations.
-    if (CurOp.SourceCallHint &&
-        CurOp.SourceCallHint->CallKind ==
-            SourceCallTypeHint::Kind::SwiftVirtual) {
+    if (CurOp.SourceCallHint && CurOp.SourceCallHint->CallKind ==
+                                    SourceCallTypeHint::Kind::SwiftVirtual) {
       Call->IndirectTarget = TargetExpr;
     } else {
       ExprPtr Callee = TargetExpr;
@@ -253,6 +253,20 @@ void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
     // A bound void call has no output SSA value, but its expression still
     // carries the authenticated result type rather than a guessed X0 value.
     Call->Type = sourceCallResultType(CurOp);
+    if (isImmutableNativeCallHint(*CurOp.SourceCallHint, Func.Entry,
+                                  TargetArch) &&
+        CurOp.SourceCallHint->ImmutableNativeCall->Site.Instruction ==
+            CurOp.Addr &&
+        CurOp.SourceCallHint->ImmutableNativeCall->Site.Sequence ==
+            CurOp.OriginSeq) {
+      // Only the immutable, nonvolatile target load is projected away. Keep
+      // the machine INDIR_CALL in MedIR and its original occurrence receipt;
+      // source publication independently rebuilds that proof and callee ABI.
+      Call->IsIndirectCall = false;
+      Call->IndirectParamIdx = -1;
+      Call->IndirectTarget.reset();
+      Call->CallTarget.clear();
+    }
   }
   if (CurOp.Output.Id >= 0 && CurOp.Output.Size > 0) {
     Call->Type = sourceCallResultType(CurOp);

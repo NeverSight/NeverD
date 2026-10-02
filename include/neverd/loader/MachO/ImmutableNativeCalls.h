@@ -9,13 +9,9 @@ namespace neverd {
 struct BinaryImage;
 struct LowFunc;
 
-struct ImmutableNativeCallTarget {
-  va_t FunctionEntry = 0;
-  SourceCallOccurrenceKey Site;
-  va_t Slot = 0;
-  va_t Target = 0;
-  bool operator==(const ImmutableNativeCallTarget &) const = default;
-};
+struct HighExpr;
+using ImmutableNativeCallTarget =
+    SourceCallTypeHint::ImmutableNativeCallEvidence;
 
 /// Prove original ARM64 BLR targets loaded from exact immutable chained code
 /// pointer slots. The bounded same-block trace validates the instructions that
@@ -26,5 +22,18 @@ struct ImmutableNativeCallTarget {
 std::map<va_t, ImmutableNativeCallTarget> immutableNativeCallTargets(
     const BinaryImage &Image, const LowFunc &Function,
     const std::map<va_t, SourceFunctionTypeHint> *NativeCallees = nullptr);
+/// Attach only a complete current NativeAnalysis scalar ABI to the same
+/// target proof. No callee ABI is inferred from a symbol or pointer slot.
+std::map<va_t, SourceCallTypeHint> buildImmutableNativeCallHints(
+    const BinaryImage &Image, const LowFunc &Function,
+    const std::map<va_t, SourceFunctionTypeHint> &NativeCallees);
+
+/// Receipt and declaration shape only, never machine authentication.
+bool isImmutableNativeCallHint(const SourceCallTypeHint &Hint,
+                               va_t FunctionEntry, Arch Architecture);
+/// The logical source call has no residual machine target evaluation. The
+/// original indirect occurrence remains in LowIR/MedIR and in the receipt.
+bool isImmutableNativeSourceCall(const HighExpr &Expression, va_t FunctionEntry,
+                                 Arch Architecture);
 } // namespace neverd
 #endif

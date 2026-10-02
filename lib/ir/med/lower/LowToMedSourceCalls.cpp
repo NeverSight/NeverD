@@ -6,6 +6,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/CFunctionParameterCalls.h"
+#include "neverd/loader/MachO/ImmutableNativeCalls.h"
 #include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/Swift/SwiftValueWitnessCalls.h"
@@ -107,6 +108,15 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
     auto FunctionPointers = buildCFunctionParameterCallHints(
         *Image, Low, *EntrySignature, SourceCalleeTypeHints);
     for (auto &[Address, Hint] : FunctionPointers) {
+      const auto [It, Inserted] = Hints.emplace(Address, std::move(Hint));
+      if (!Inserted)
+        Hints.erase(It);
+    }
+  }
+  if (Image && SourceCalleeTypeHints) {
+    auto NativeHints =
+        buildImmutableNativeCallHints(*Image, Low, *SourceCalleeTypeHints);
+    for (auto &[Address, Hint] : NativeHints) {
       const auto [It, Inserted] = Hints.emplace(Address, std::move(Hint));
       if (!Inserted)
         Hints.erase(It);
@@ -230,6 +240,14 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
       std::string Diagnostic;
       if (!Hint || Hint->Signature.Architecture != TargetArch ||
           !validateSourceABI(Hint->Signature, Diagnostic)) {
+        Ops.push_back(std::move(Op));
+        continue;
+      }
+      if (Hint->ImmutableNativeCall &&
+          (!isImmutableNativeCallHint(*Hint, Low.Entry, TargetArch) ||
+           Op.Opcode != NdOp::INDIR_CALL || Op.Inputs[0].isConst() ||
+           Hint->ImmutableNativeCall->Site.Instruction != Op.Addr ||
+           Hint->ImmutableNativeCall->Site.Sequence != Op.OriginSeq)) {
         Ops.push_back(std::move(Op));
         continue;
       }

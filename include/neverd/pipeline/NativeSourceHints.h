@@ -43,8 +43,10 @@ struct NativeSourceCalleeContracts {
 };
 
 /// Collect exact native call ABIs already bound in one MedIR caller. This is
-/// physical input evidence for the Boolean difference proof, not a source-body
-/// certificate. Conflicting or incomplete bindings contribute no target.
+/// physical input evidence for the Boolean difference and immutable-target
+/// proofs, not a source-body certificate. Indirect receipts retain their
+/// original occurrence and still require the separate current LowIR proof.
+/// Conflicting or incomplete bindings contribute no target.
 std::map<va_t, SourceFunctionTypeHint>
 boundNativeBooleanCallees(const MedFunc &Caller);
 

@@ -100,11 +100,134 @@ llvm::Error Bionic::release(uint64_t Address) {
   Allocations.erase(I);
   return llvm::Error::success();
 }
-llvm::Expected<std::optional<uint64_t>>
-Bionic::invoke(const NativeCallEvent &Call) {
+llvm::Expected<uint64_t> Bionic::linkerError(llvm::StringRef Message,
+                                             uint64_t ReturnValue) {
+  // A fixed guest buffer, separate from errno, TLS ABI slots and constructor
+  // argv/envp. A later error may replace its contents; dlerror consumes it
+  // once.
+  if (Message.size() >= 1024)
+    return failure("dynamic linker error exceeds its guest buffer");
+  std::vector<uint8_t> Bytes(Message.bytes_begin(), Message.bytes_end());
+  Bytes.push_back(0);
+  if (auto E = access(LinkerErrorAddress, Bytes.size(), Write))
+    return std::move(E);
+  if (auto E = CPU.write(LinkerErrorAddress, Bytes))
+    return std::move(E);
+  uint8_t Pointer[8];
+  llvm::support::endian::write64le(Pointer, LinkerErrorAddress);
+  if (auto E = access(LinkerErrorSlot, sizeof(Pointer), Write))
+    return std::move(E);
+  if (auto E = CPU.write(LinkerErrorSlot, Pointer))
+    return std::move(E);
+  return ReturnValue;
+}
+llvm::Expected<std::optional<uint64_t>> Bionic::dlfcn(NativeCallEvent &Call) {
+  const auto &A = Call.Arguments;
+  auto Value = [](uint64_t V) { return std::optional<uint64_t>(V); };
+  auto Error = [&](llvm::StringRef Message,
+                   uint64_t V = 0) -> llvm::Expected<std::optional<uint64_t>> {
+    auto R = linkerError(Message, V);
+    if (!R)
+      return R.takeError();
+    return Value(*R);
+  };
+  auto Unsupported =
+      [&](llvm::StringRef Detail) -> llvm::Expected<std::optional<uint64_t>> {
+    Result.Stop = ProcessStopReason::UnsupportedService;
+    Result.Diagnostic = "unmodeled Android dynamic linking: " + Detail.str();
+    return std::optional<uint64_t>();
+  };
+  if (Call.Name == "dlerror") {
+    uint8_t Pointer[8], Empty[8]{};
+    if (auto E = access(LinkerErrorSlot, sizeof(Pointer), Read | Write))
+      return std::move(E);
+    if (auto E = CPU.read(LinkerErrorSlot, Pointer))
+      return std::move(E);
+    uint64_t Address = llvm::support::endian::read64le(Pointer);
+    if (auto E = CPU.write(LinkerErrorSlot, Empty))
+      return std::move(E);
+    return Value(Address);
+  }
+  if (Call.Name == "dlopen") {
+    if (!A[0])
+      return Unsupported("dlopen(NULL) requires a process-wide symbol scope");
+    auto Library = string(A[0]);
+    if (!Library)
+      return Library.takeError();
+    if (Library->size() > 1024)
+      return failure("dynamic library name exceeds the model limit");
+    Call.Library = *Library;
+    // API 28 LP64 flags. Scope promotion and NODELETE need a fuller loader.
+    uint32_t Flags = static_cast<uint32_t>(A[1]);
+    if ((Flags & ~7u) || ((Flags & 3u) != 1 && (Flags & 3u) != 2))
+      return Unsupported("only LAZY/NOW with optional NOLOAD are modeled");
+    if (!Linked.Libraries.count(*Library))
+      return Error("library is absent from the explicit local catalogue");
+    auto &State = OpenLibraries[*Library];
+    if (!State.References && (Flags & 4u))
+      return Error("library is not open (NOLOAD)");
+    if (!State.References) {
+      if (NextHandle > UINT64_MAX - 2)
+        return failure("dynamic library handle space exhausted");
+      State.Handle = NextHandle;
+      NextHandle += 2;
+      Handles.emplace(State.Handle, *Library);
+    }
+    if (State.References == UINT64_MAX)
+      return failure("dynamic library reference count overflow");
+    ++State.References;
+    return Value(State.Handle);
+  }
+  if (Call.Name == "dlsym") {
+    if (!A[1])
+      return Error("dynamic symbol name is null");
+    auto Symbol = string(A[1]);
+    if (!Symbol)
+      return Symbol.takeError();
+    if (Symbol->size() > 1024)
+      return failure("dynamic symbol name exceeds the model limit");
+    Call.Symbol = *Symbol;
+    if (!A[0] || A[0] == UINT64_MAX)
+      return Unsupported(
+          "RTLD_DEFAULT / RTLD_NEXT require ordered process scopes");
+    auto Handle = Handles.find(A[0]);
+    if (Handle == Handles.end())
+      return Error("invalid or closed dynamic library handle");
+    Call.Library = Handle->second;
+    const auto &Symbols = Linked.Libraries.at(Handle->second);
+    auto I = Symbols.find(*Symbol);
+    if (I == Symbols.end())
+      return Error("symbol is absent from the explicit library catalogue");
+    return Value(I->second);
+  }
+  if (Call.Name == "dlclose") {
+    auto Handle = Handles.find(A[0]);
+    if (Handle == Handles.end())
+      return Error("invalid or closed dynamic library handle", UINT64_MAX);
+    Call.Library = Handle->second;
+    auto &State = OpenLibraries.at(Handle->second);
+    if (!--State.References)
+      Handles.erase(Handle);
+    return Value(0);
+  }
+  return failure("invalid dlfcn model dispatch");
+}
+llvm::Expected<std::optional<uint64_t>> Bionic::invoke(NativeCallEvent &Call) {
   llvm::StringRef Name(Call.Name);
   const auto &A = Call.Arguments;
   auto Value = [](uint64_t V) { return std::optional<uint64_t>(V); };
+  if (!Call.Library.empty()) {
+    auto I = OpenLibraries.find(Call.Library);
+    if (I == OpenLibraries.end() || !I->second.References) {
+      Result.Stop = ProcessStopReason::UnsupportedService;
+      Result.Diagnostic =
+          "call through an inactive dynamic library: " + Call.Library;
+      return std::optional<uint64_t>();
+    }
+  }
+  if (Name == "dlopen" || Name == "dlsym" || Name == "dlclose" ||
+      Name == "dlerror")
+    return dlfcn(Call);
   if (Name == "__errno")
     return Value(ErrnoAddress);
   if (Name == "android_get_device_api_level")

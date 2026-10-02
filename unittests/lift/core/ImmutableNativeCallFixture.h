@@ -19,7 +19,7 @@ constexpr va_t Entry = 0x1000, Veneer = 0x1100, Target = 0x1200;
 constexpr va_t Table = 0x3000, Slot = Table + 0x28, Call = Entry + 28;
 struct Fixture {
   BinaryImage Image = runtime_function_address_test::image(Arch::AArch64);
-  SourceFunctionTypeHint Signature;
+  SourceFunctionTypeHint Signature, EntrySignature;
   llvm::LLVMContext Context;
   PipelineResult Result;
 
@@ -88,7 +88,31 @@ struct Fixture {
     Options.EmitDumpOutput = false;
     Options.OnlyFunctionEntries = {Entry, Veneer, Target};
     Options.SourceTypeHints.emplace(Target, Signature);
+    if (EntrySignature.ReturnType)
+      Options.SourceTypeHints.emplace(Entry, EntrySignature);
     Result = Pipeline().run(Image, Context, Options);
+  }
+  void bindCaller() {
+    EntrySignature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    EntrySignature.ReturnType = NdType::makeInt(8, false);
+    EntrySignature.Parameters = {
+        {"object", NdType::makePtr(NdType::makeVoid())}};
+    std::string Error;
+    if (!assignDarwinScalarSourceABI(EntrySignature, Arch::AArch64, Error))
+      throw std::runtime_error(Error);
+    run();
+  }
+  HighFunc *high() {
+    for (auto &Function : Result.HighFuncs)
+      if (Function.Entry == Entry)
+        return &Function;
+    return nullptr;
+  }
+  MedFunc *med() {
+    for (auto &Function : Result.MedFuncs)
+      if (Function.Entry == Entry)
+        return &Function;
+    return nullptr;
   }
   const LowFunc *low() const {
     for (const auto &Function : Result.LowFuncs)

@@ -88,6 +88,25 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
           return invalid(Name);
         Out.Properties.emplace(Key.str(), std::move(*S));
       }
+    } else if (Name == field::Libraries) {
+      const auto *Libraries = V.getAsObject();
+      if (!Libraries)
+        return invalid(Name);
+      for (const auto &[Library, Entry] : *Libraries) {
+        const auto *Symbols = Entry.getAsArray();
+        if (!Symbols || llvm::StringRef(Library).empty() ||
+            llvm::StringRef(Library).contains('\0'))
+          return invalid(Name);
+        auto &Names = Out.Libraries[Library.str()];
+        for (const auto &Symbol : *Symbols) {
+          auto S = string(Symbol, Name);
+          if (!S)
+            return S.takeError();
+          if (S->empty() || llvm::is_contained(Names, *S))
+            return invalid(Name);
+          Names.push_back(std::move(*S));
+        }
+      }
     } else if (Name == field::Memory || Name == field::ReadMemory) {
       const auto *A = V.getAsArray();
       if (!A)
@@ -134,12 +153,17 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
     llvm::json::Array Args;
     for (uint64_t A : Event.Arguments)
       Args.push_back(bits(A));
-    Calls.push_back(llvm::json::Object{
+    llvm::json::Object Call{
         {field::PC, bits(Event.PC)},
         {field::Name, Event.Name},
         {field::Arguments, std::move(Args)},
         {field::Result,
-         Event.Result ? llvm::json::Value(bits(*Event.Result)) : nullptr}});
+         Event.Result ? llvm::json::Value(bits(*Event.Result)) : nullptr}};
+    if (!Event.Library.empty())
+      Call[field::Library] = Event.Library;
+    if (!Event.Symbol.empty())
+      Call[field::Symbol] = Event.Symbol;
+    Calls.push_back(std::move(Call));
   }
   for (uint64_t PC : Result.Trace)
     Trace.push_back(bits(PC));

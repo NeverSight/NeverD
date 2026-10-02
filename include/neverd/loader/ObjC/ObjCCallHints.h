@@ -27,6 +27,11 @@ bool objcSelectorStubMatches(const BinaryImage &Image, va_t Address,
                              va_t SelectorReferenceAddress,
                              llvm::StringRef Selector);
 
+/// Authenticate a strong selector stub and the complete selector-wide agreed
+/// declaration. This is a dispatch/ABI fact, not a receiver or effect proof.
+std::optional<SourceCallTypeHint>
+objcSelectorStubSourceCallHint(const BinaryImage &Image, va_t Address);
+
 struct ObjCArgumentTailCall {
   va_t SelectorStub = 0;
   uint64_t SourceRegister = 0;

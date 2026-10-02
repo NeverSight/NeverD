@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: 977da6a83263a7724c07bc956b3895de292a3e9dac8341103507a0ebbbd55cb7 -->
+<!-- i18n-source: e7bdee48b054323c037edae924587fa25ea795161fa7eebefb45c5fb2dba27c3 -->
 
 <div align="center" dir="rtl">
 
@@ -114,6 +114,8 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 يفصل تنفيذ المعالج بين قبول ISA وذاكرة الضيف ونقل المحرك وسياسة نظام الضيف. يتيح `NEVERD_ENABLE_CPU_EMULATION` طبقة x64/ARM64، ويضيف `NEVERD_ENABLE_DRIVER_EMULATION` بيئة Windows WDM/KMDF x64 المحدودة. يشغّل `linux-elf64-v1` عمليات Linux ELF المدعومة. انظر [تنفيذ المعالج](cpu-execution.md) و[محاكاة عمليات الضيف](process-emulation.md) و[محاكاة برامج تشغيل Windows](driver-emulation.md).
 
 يضيف `windows-pe64-v1` عمليات وحدة تحكم Windows محدودة لـx64/ARM64: تحميل PE وPEB/TEB وTLS ثابت وديناميكي واستدعاءات بدء وإنهاء ونماذج Win32 مسماة. يستخدم طبقة CPU مستقلاً عن محاكاة برامج التشغيل؛ ولا يزال تحميل DLL/CRT وGUI وSEH المستخدم والخيوط والتوافق العام مع Windows غير مكتمل.
+
+تضيف الذاكرة الافتراضية في Windows دعم `VirtualAlloc` و`VirtualFree` و`VirtualProtect` و`VirtualQuery` و`FlushInstructionCache` للعملية الحالية. تدير طبقة OS الحجوزات، وتبقى `AddressSpace` المرجع للصفحات الملتزم بها والصلاحيات والتخزين الفعلي. تشمل الاختبارات تعديل الشيفرة وأخطاء الوصول وإعادة استخدام ميزانية الذاكرة.
 
 يدعم `driver-strict` / `checked-x64-v1` كلاً من KVM على مضيف Linux x64 المطابق وWHP على Windows x64 المطابق؛ يختار `auto` هذا النقل الأصلي، وتستخدم ISA المختلفة Unicorn. يحتفظ Unicorn الصريح وAPI V1 السابق بالملف البرمجي المحمول. يتحقق التنفيذ الأصلي من العناوين القانونية والآثار قبل الدخول؛ ويفشل العتاد غير المتاح دون تراجع. التعليمات وسلوك OS غير المدعومين أخطاء صريحة. تجتاز CI الأصلية على Windows x64 مع تعطيل Unicorn جميع الفحوص الإلزامية البالغ عددها 359:‏ 131 فحص CPU و224 نتيجة لبرامج التشغيل من 26 صورة مدمجة و46 صورة WDK و40 حالة سيناريو عند العناوين المفضلة والمعاد تموضعها، إضافة إلى أربعة فحوص لحدود SEH ([`9d4c130c`](https://github.com/NeverSight/NeverD/actions/runs/36981864458)). لا تزال أدلة التشغيل الأصلي ARM64 ناقصة، ولا تثبت هذه القدرة توافق أي برنامج تشغيل أو Android/Darwin.
 

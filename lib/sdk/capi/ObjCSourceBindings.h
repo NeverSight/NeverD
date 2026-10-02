@@ -187,7 +187,7 @@ inline bool plainNativeBinding(const SourceCallTypeHint &Binding) {
          !Binding.SelectorArgumentStorageUse &&
          !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
          !Binding.ImmutablePointerSlot && !Binding.AddressedFunctionABI &&
-         !Binding.FunctionParameterCall;
+         !Binding.FunctionParameterCall && !Binding.ImmutableNativeCall;
 }
 
 inline std::optional<SourceCallTypeHint>
@@ -223,6 +223,7 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
                                   const SourceCallTypeHint &Expected) {
   return Binding.CallKind == Expected.CallKind &&
          Binding.FunctionParameterCall == Expected.FunctionParameterCall &&
+         Binding.ImmutableNativeCall == Expected.ImmutableNativeCall &&
          Binding.DoesNotReturn == Expected.DoesNotReturn &&
          Binding.WeakImport == Expected.WeakImport &&
          Binding.ReturnedArgument == Expected.ReturnedArgument &&
@@ -8123,6 +8124,8 @@ inline bool objcSourceCallBound(
       Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return false;
   const auto &Binding = *Expression.SourceCallHint;
+  if (Binding.ImmutableNativeCall)
+    return false; // Requires the current pipeline and caller/callee proof.
   // A proved two-instruction argument bridge has the same dynamic message
   // semantics as its selector stub. Normalize only for declaration validation;
   // the published call retains the physical saved-register argument location.

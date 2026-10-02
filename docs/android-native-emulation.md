@@ -91,6 +91,9 @@ The supported Bionic subset is:
 - `__system_property_get`, backed only by the explicit property dictionary.
   Missing properties return length zero and write NUL; values must fit 91 bytes
   plus NUL. Host properties are never inherited.
+- `dlopen`, `dlsym`, `dlclose`, `dlerror`, using an explicit local catalogue
+  described below. Function availability and implementation are separate:
+  an available symbol whose call is unmodeled still stops explicitly.
 - `write`, `mmap`/`mmap64`, `mprotect`, `munmap`, delegated to the shared Linux
   service implementation. Bionic wrappers translate negative kernel error
   values to -1 and thread-local errno; raw `svc #0` preserves negative errno
@@ -108,6 +111,51 @@ These ABI choices are based on the pinned AOSP Android 9 definitions:
 [`__errno`](https://android.googlesource.com/platform/bionic/+/refs/tags/android-9.0.0_r1/libc/bionic/__errno.cpp),
 and [system property declarations](https://android.googlesource.com/platform/bionic/+/refs/tags/android-9.0.0_r1/libc/include/sys/system_properties.h).
 The model is independently implemented; these sources specify the ABI.
+
+### Explicit dynamic symbol catalogue
+
+Supply exact library names and their available function symbols in the native
+options. The same object works through C, CLI and Python:
+
+```json
+{"android": {
+  "entry_symbol": "inspect_buffer",
+  "libraries": {"libc.so": ["strlen", "memcmp"]}
+}}
+```
+
+`dlopen("libc.so", RTLD_NOW)` now obtains an opaque guest handle. A subsequent
+`dlsym(handle, "strlen")` returns a named guest trap that dispatches to the
+existing bounded Bionic model. `android.native_calls` records the requested
+`library` and `symbol` on the lookup, its returned address, and the same address
+and provider on the later named call. Two providers have distinct traps even
+when their function names agree. These addresses and handles are local model
+identities, not host addresses or recovered original device addresses.
+
+The catalogue defaults to empty. Library names match exactly, with no filesystem
+search, dependency loading, aliases, constructors or host `dlopen`/`dlsym`.
+There are at most 256 libraries and 4096 total function entries, with nonempty,
+NUL-free names no longer than 1024 bytes and no duplicate functions per library.
+Only functions are represented; data symbols and symbol versions need a fuller
+linker model.
+
+Supported flags are LP64 `RTLD_LAZY` (1) or `RTLD_NOW` (2), optionally with
+`RTLD_NOLOAD` (4). Repeated opens share a live handle and increment its reference
+count. The last close invalidates that handle; a later open receives a new one.
+Calls through a provider's trap while that provider is closed stop explicitly.
+Missing libraries/symbols, closed or invalid handles, and a null symbol name
+return a lookup error. `dlerror()` consumes the pending guest error pointer in
+API 28 TLS slot 6 once; successful lookups do not clear an earlier error, and
+`errno` is independent. Error message wording belongs to the model.
+
+`dlopen(NULL)`, `RTLD_DEFAULT`, `RTLD_NEXT`, `RTLD_GLOBAL`, `RTLD_NODELETE`,
+Android linker namespaces and `android_dlopen_ext` remain unsupported. They
+stop with a diagnostic rather than selecting a guessed process-wide scope.
+Existing ELF import binding is unchanged by the catalogue.
+
+ABI references: Android 9 [`dlfcn.h`](https://android.googlesource.com/platform/bionic/+/refs/tags/android-9.0.0_r1/libc/include/dlfcn.h),
+[`dlsym`/`dlclose`](https://android.googlesource.com/platform/bionic/+/refs/tags/android-9.0.0_r1/linker/linker.cpp),
+and [`dlerror`](https://android.googlesource.com/platform/bionic/+/refs/tags/android-9.0.0_r1/linker/dlfcn.cpp).
 
 ## Evidence and limits
 

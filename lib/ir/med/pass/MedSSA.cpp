@@ -41,9 +41,13 @@ namespace {
 /// decoded instructions. FrameSize is storage sizing, not this proof.  A frame
 /// register leaves that SP unchanged: the unwinder restores it as a
 /// nonvolatile, and it is certified only as UWOP_SET_FPREG describes it.
-uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
-                                  va_t Handler, const TargetRegInfo &TRI,
-                                  bool OrdinaryEntry) {
+/// A frame-register function may also move SP after its prologue (alloca)
+/// outside the protected range; its frame is then established from the
+/// frame register, and the handler resumes with the SP the range holds,
+/// which no protected block may write.  That case returns nullopt.
+std::optional<uint64_t>
+proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med, va_t Handler,
+                         const TargetRegInfo &TRI, bool OrdinaryEntry) {
   auto Fail = [](const char *Why) -> void {
     throw LowToMedConversionError(
         std::string("Windows SEH establisher frame: ") + Why);
@@ -95,6 +99,7 @@ uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
   // resumes it with the SP of its own protected scope, so when its flow
   // reaches this scope, that scope joins the certificate as well.
   std::vector<bool> Relevant(N, false);
+  std::vector<bool> ProtectedBlock(N, false);
   std::vector<int> Work;
   auto AddProtectedBlocks = [&](va_t ScopeHandler) {
     const size_t Before = Work.size();
@@ -109,8 +114,10 @@ uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
         Fail("protected scope overlaps an incomplete prologue");
       for (size_t B = 0; B < N; ++B)
         if (Low.Blocks[B].StartAddr < Range->End &&
-            Low.Blocks[B].EndAddr > Range->Begin)
+            Low.Blocks[B].EndAddr > Range->Begin) {
           Work.push_back(static_cast<int>(B));
+          ProtectedBlock[B] = true;
+        }
     }
     return Work.size() != Before;
   };
@@ -164,6 +171,8 @@ uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
   std::optional<uint32_t> SetFramePointerOffset;
   uint32_t PreviousOffset = EH.PrologueSize;
   uint64_t FrameBytes = 0;
+  // SP moves outside the protected range after a frame-register prologue.
+  bool DynamicSP = false;
   for (const UnwindOperation &Op : EH.UnwindOperations) {
     // A version 2 epilog descriptor locates an epilog for the unwinder. It
     // is not a prologue action and its offset is not a prologue position;
@@ -282,6 +291,12 @@ uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
         }
         if (!OverlapsSP(Op.Output))
           continue;
+        const bool AfterPrologue =
+            B != 0 || Boundary.Address + Boundary.Size > PrologueEnd;
+        if (HasFrameRegister && AfterPrologue && !ProtectedBlock[B]) {
+          DynamicSP = true;
+          continue;
+        }
         if (B != 0 || Boundary.Address + Boundary.Size > PrologueEnd ||
             Op.Opcode != NdOp::INT_SUB || Op.Output.Size != 8 ||
             Op.Output.Offset != TRI.StackPointer || Op.NumInputs != 2 ||
@@ -309,6 +324,11 @@ uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
         if (!Relevant[B] || Op.Addr < Low.Blocks[B].StartAddr ||
             Op.Addr >= Low.Blocks[B].EndAddr)
           continue;
+        if (HasFrameRegister && !ProtectedBlock[B] &&
+            (B != 0 || Op.Addr >= PrologueEnd)) {
+          DynamicSP = true;
+          continue;
+        }
         if (Op.Addr >= PrologueEnd || Op.Opcode != NdOp::INT_SUB ||
             Op.Output.Size != 8 || Op.NumInputs != 2 ||
             Op.Inputs[0].Kind != MedVar::Reg ||
@@ -325,6 +345,12 @@ uint64_t proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med,
     Fail("converted prologue disagrees with decoded SP effects");
   if (ExpectedAdjustments != ActualAdjustments)
     Fail("decoded prologue disagrees with unwind allocation");
+  // Ordinary flow into a shared handler is not proven to bring the SP the
+  // dispatcher resumes with once SP moves on the way in.
+  if (DynamicSP && OrdinaryEntry)
+    Fail("SP moves before a handler that ordinary flow also enters");
+  if (DynamicSP)
+    return std::nullopt;
   return FrameBytes;
 }
 
@@ -696,11 +722,18 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   std::map<int, std::vector<int>> SEHProtected;
   std::set<int> SEHTrackedIds;
   std::set<int> SEHHandlerRoots;
+  // Handler roots of a frame-register function that moves SP after its
+  // prologue: they resume with the SP live throughout the protected range.
+  std::set<int> SEHProtectedSPRoots;
   // The calling convention's callee-saved registers, which the unwinder
   // restores as well. The stack pointer has its own frame proof.
   auto IsNonvolatile = [&](const MedVar &V) {
     return V.Kind == MedVar::Reg && V.Size != 0 &&
            !TRI.isStackPointer(V.RegOff) && fullyPreserved(V.RegOff, V.Size);
+  };
+  auto IsFullStackPointer = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer &&
+           V.Size == TRI.PointerSize;
   };
 
   // Step 0: Insert implicit definitions for live-in variables in the entry
@@ -822,9 +855,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
                                      /*OrdinaryEntry=*/true);
             continue;
           }
-          SEHFrameOffsets[B] =
-              proveSEHEstablisherFrame(Low, Func, Func.Blocks[B].StartAddr, TRI,
-                                       /*OrdinaryEntry=*/false);
+          if (std::optional<uint64_t> FrameBytes = proveSEHEstablisherFrame(
+                  Low, Func, Func.Blocks[B].StartAddr, TRI,
+                  /*OrdinaryEntry=*/false))
+            SEHFrameOffsets[B] = *FrameBytes;
+          else
+            SEHProtectedSPRoots.insert(B);
         }
       }
     }
@@ -854,7 +890,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           SEHProtected[Root] = std::move(Protected);
           for (int Id : LiveIn[Root])
             if (auto V = VarOfId.find(Id);
-                V != VarOfId.end() && IsNonvolatile(V->second))
+                V != VarOfId.end() &&
+                (IsNonvolatile(V->second) || (SEHProtectedSPRoots.count(Root) &&
+                                              IsFullStackPointer(V->second))))
               SEHTrackedIds.insert(Id);
         }
       }
@@ -1181,7 +1219,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       if (Seed.Opcode != NdOp::COPY || Seed.NumInputs != 1)
         continue;
       MedVar &In = Seed.Inputs[0];
-      if (!IsNonvolatile(In) || In.Id != Seed.Output.Id || In.SSAVer != 0)
+      const bool ProtectedSP =
+          SEHProtectedSPRoots.count(Root) && IsFullStackPointer(In);
+      if ((!IsNonvolatile(In) && !ProtectedSP) || In.Id != Seed.Output.Id ||
+          In.SSAVer != 0)
         continue;
       // Written in the range, the value at the fault is not known.
       if (WrittenInRange(In)) {

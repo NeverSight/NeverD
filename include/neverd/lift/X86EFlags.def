@@ -1,0 +1,20 @@
+//===- X86EFlags.def - Modelled flags in the EFLAGS image -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// NEVERD_X86_EFLAGS_BIT(Flag, Bit): a flag the lifter models as a register
+// (x86reg::Flag) and its bit position in the architectural EFLAGS image.
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_X86_EFLAGS_BIT
+NEVERD_X86_EFLAGS_BIT(CF, 0)
+NEVERD_X86_EFLAGS_BIT(PF, 2)
+NEVERD_X86_EFLAGS_BIT(AF, 4)
+NEVERD_X86_EFLAGS_BIT(ZF, 6)
+NEVERD_X86_EFLAGS_BIT(SF, 7)
+NEVERD_X86_EFLAGS_BIT(DF, 10)
+NEVERD_X86_EFLAGS_BIT(OF, 11)
+#undef NEVERD_X86_EFLAGS_BIT
+#endif

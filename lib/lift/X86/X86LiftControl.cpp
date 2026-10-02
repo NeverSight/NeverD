@@ -1557,18 +1557,16 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     NdVar Rsp = NdVar::reg(x86reg::RSP, PtrSize);
     bool Push = (InsnId == X86_INS_PUSHF || InsnId == X86_INS_PUSHFD ||
                  InsnId == X86_INS_PUSHFQ);
-    // Modelled EFLAGS bits at their architectural positions.  System flags
-    // (TF/IF/IOPL/AC/ID/...) are not modelled as registers: PUSHF reads them
-    // from the machine (Pushf) and POPF writes them back (Popf), so e.g. a
-    // `pushfq; cli; ...; popfq` interrupt-state restore stays visible.
-    const std::pair<uint64_t, unsigned> FlagBits[] = {
-        {x86reg::CF, 0}, {x86reg::PF, 2},  {x86reg::AF, 4}, {x86reg::ZF, 6},
-        {x86reg::SF, 7}, {x86reg::DF, 10}, {x86reg::OF, 11}};
+    // Modelled EFLAGS bits sit at their architectural positions
+    // (x86reg::EFlagsBits).  System flags (TF/IF/IOPL/AC/ID/...) are not
+    // modelled as registers: PUSHF reads them from the machine (Pushf) and
+    // POPF writes them back (Popf), so e.g. a `pushfq; cli; ...; popfq`
+    // interrupt-state restore stays visible.
     if (Push) {
       // Take the unmodelled bits from the machine and merge the modelled
       // flags into their positions.
       uint64_t ModelledMask = 0;
-      for (auto [Fl, Bit] : FlagBits)
+      for (auto [Fl, Bit] : x86reg::EFlagsBits)
         ModelledMask |= uint64_t{1} << Bit;
       const uint64_t SizeMask =
           FlagSize == 8 ? ~uint64_t{0} : (uint64_t{1} << (FlagSize * 8)) - 1;
@@ -1577,7 +1575,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       NdVar Eflags = S.makeTemp(FlagSize);
       S.emit(NdOp::INT_AND, Eflags,
              {Machine, NdVar::scalar(~ModelledMask & SizeMask, FlagSize)});
-      for (auto [Fl, Bit] : FlagBits) {
+      for (auto [Fl, Bit] : x86reg::EFlagsBits) {
         NdVar Z = S.makeTemp(FlagSize);
         S.emit(NdOp::INT_ZEXT, Z, {NdVar::reg(Fl, 1)});
         NdVar Sh = S.makeTemp(FlagSize);
@@ -1593,7 +1591,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       NdVar Val = S.makeTemp(FlagSize);
       S.emit(NdOp::LOAD, Val, {Rsp});
       S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(FlagSize, PtrSize)});
-      for (auto [Fl, Bit] : FlagBits) {
+      for (auto [Fl, Bit] : x86reg::EFlagsBits) {
         NdVar Sh = S.makeTemp(FlagSize);
         S.emit(NdOp::INT_RIGHT, Sh, {Val, NdVar::scalar(Bit, FlagSize)});
         NdVar Bitv = S.makeTemp(FlagSize);

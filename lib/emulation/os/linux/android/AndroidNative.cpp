@@ -10,6 +10,8 @@
 #include "neverd/emulation/ExecutionSession.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 
+#include <set>
+
 namespace neverd::emulation::android_model {
 llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
                                         const ProcessOptions &Options) {
@@ -48,6 +50,25 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
         Value.find('\0') != std::string::npos || Value.size() >= 92 ||
         Name.size() > Options.MemoryLimit)
       return failure("invalid Android property name or value");
+  uint64_t SymbolCount = 0, CatalogBytes = 0;
+  if (Native.Libraries.size() > 256)
+    return failure("too many modeled Android libraries");
+  for (const auto &[Library, Symbols] : Native.Libraries) {
+    if (Library.empty() || Library.size() > 1024 ||
+        Library.find('\0') != std::string::npos)
+      return failure("invalid modeled Android library name");
+    CatalogBytes += Library.size();
+    std::set<std::string> Unique;
+    for (const auto &Symbol : Symbols) {
+      if (++SymbolCount > 4096 || Symbol.empty() || Symbol.size() > 1024 ||
+          Symbol.find('\0') != std::string::npos ||
+          !Unique.insert(Symbol).second)
+        return failure("invalid or excessive modeled Android symbols");
+      CatalogBytes += Symbol.size();
+    }
+  }
+  if (CatalogBytes > Options.MemoryLimit)
+    return failure("Android symbol catalogue exceeds memory limit");
   ELFLoader Loader;
   auto Image = Loader.load(Path);
   if (!Image)
@@ -130,7 +151,7 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   auto &CPU = (*Session)->cpu();
   linux_model::LinuxMemory Memory(**Space, Layout, Linked->InitialBreak,
                                   Options);
-  Bionic LibC(CPU, Memory, Layout, Options, Result, *Resources);
+  Bionic LibC(CPU, Memory, Layout, Options, Result, *Resources, *Linked);
   size_t NextConstructor = 0;
   bool MainCall = false;
   auto Prepare = [&]() -> llvm::Error {
@@ -218,6 +239,9 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
     auto Import = Linked->Imports.find(Request->PC);
     if (Request->Immediate == ModelTrap && Import != Linked->Imports.end()) {
       NativeCallEvent Event{Request->PC, Import->second};
+      auto Provider = Linked->DynamicProviders.find(Request->PC);
+      if (Provider != Linked->DynamicProviders.end())
+        Event.Library = Provider->second;
       bool Failed = false;
       for (size_t I = 0; I < Event.Arguments.size(); ++I) {
         auto V = CPU.readRegister(Calls->info().Arguments[I]);
@@ -231,7 +255,7 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
       if (Failed)
         break;
       Result.NativeCalls.push_back(Event);
-      auto Value = LibC.invoke(Event);
+      auto Value = LibC.invoke(Result.NativeCalls.back());
       if (!Value) {
         RuntimeFailure(Value.takeError());
         if (LibC.timedOut())

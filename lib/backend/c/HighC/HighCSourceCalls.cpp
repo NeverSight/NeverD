@@ -6,6 +6,7 @@
 #include "neverd/libc/LibCObjC.h"
 #include "neverd/loader/MachO/CFunctionParameterCalls.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/MachO/ImmutableNativeCalls.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -131,6 +132,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       E.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       E.MemoryOrdering != NdMemoryOrdering::None)
     return bad("incompatible operation effects");
+  if (Hint.ImmutableNativeCall &&
+      (!CurrentFunc ||
+       !isImmutableNativeSourceCall(E, CurrentFunc->Entry, Opts.TheArch)))
+    return bad("invalid immutable native call binding");
   if (Hint.BooleanResult && Hint.CallKind != Kind::SwiftBooleanProjection)
     return bad("Boolean projection belongs to another binding kind");
   if (Hint.FunctionParameterCall &&
@@ -915,6 +920,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Name = "neverd_darwin_" + Hint.TargetName;
     const auto *Definition =
         Runtime ? nullptr : sourceCallDefinition(Hint, Name);
+    if (Hint.ImmutableNativeCall &&
+        (!Definition || !Definition->SourceTypeHint ||
+         !equalSourceABIs(*Definition->SourceTypeHint, Signature)))
+      return bad("immutable native call has no matching source definition");
     if (!Runtime && Hint.TargetAddress && !Definition &&
         DefinedFuncs.count(Name))
       return bad("native target address disagrees with the source definition");

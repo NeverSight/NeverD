@@ -326,6 +326,11 @@ private:
 void modelCallWideIntReturn(MedFunc &Func, Arch TheArch,
                             const std::set<va_t> *ForceI64Callees = nullptr);
 
+/// Take each x86 PUSHF image bit whose modelled flag no instruction defined
+/// since its root was entered, or since an unmodelled effect left it, from
+/// the machine flags the PUSHF read.  Runs on SSA MedIR.
+void foldMachineFlagsIntoPushfImages(MedFunc &Func);
+
 /// Verify MedFunc structural invariants.  Returns true if OK in every build
 /// mode so pipeline completeness reports cannot silently skip malformed IR.
 bool verifyMedFunc(const MedFunc &Func, const char *PassName);

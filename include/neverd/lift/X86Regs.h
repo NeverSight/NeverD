@@ -54,6 +54,16 @@ constexpr uint64_t SF = 204;
 constexpr uint64_t OF = 205;
 constexpr uint64_t DF = 206;
 
+/// A modelled flag and its bit position in the architectural EFLAGS image.
+struct EFlagsBit {
+  uint64_t Flag;
+  unsigned Bit;
+};
+inline constexpr EFlagsBit EFlagsBits[] = {
+#define NEVERD_X86_EFLAGS_BIT(Flag, Bit) {Flag, Bit},
+#include "neverd/lift/X86EFlags.def"
+};
+
 /// Vector registers.  Every slot owns the complete architectural ZMM register;
 /// XMMn and YMMn are its low 16 and 32 bytes.  EVEX exposes 32 registers in
 /// 64-bit mode, so adjacent slots must be 64 bytes apart even when an

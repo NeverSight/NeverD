@@ -161,7 +161,8 @@ bool isCFunctionParameterCallHint(const SourceCallTypeHint &Hint,
                                   va_t FunctionEntry, Arch Architecture) {
   if (Architecture != Arch::AArch64 ||
       Hint.CallKind != SourceCallTypeHint::Kind::CFunctionParameterCall ||
-      !Hint.FunctionParameterCall || !FunctionEntry || FunctionEntry % 4 ||
+      !Hint.FunctionParameterCall || Hint.ImmutableNativeCall ||
+      !FunctionEntry || FunctionEntry % 4 ||
       Hint.FunctionParameterCall->FunctionEntry != FunctionEntry ||
       !Hint.FunctionParameterCall->Site.Instruction ||
       Hint.FunctionParameterCall->Site.Instruction % 4 ||

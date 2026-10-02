@@ -49,6 +49,28 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch);
 void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
                     BinaryFormat Fmt);
 
+namespace {
+
+/// True for an entry-block self-copy of \p RegOff, which declares the
+/// register's incoming value.  The copy takes a new version (`COPY R8.1 =
+/// R8`) when the register is also live into another root, such as an SEH
+/// handler, and copy propagation then leaves later reads on the incoming
+/// value; both name the parameter.
+bool isEntryLiveInCopy(const MedOp &Op, uint64_t RegOff) {
+  return Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+         Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff &&
+         Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].Id == Op.Output.Id &&
+         Op.Inputs[0].SSAVer == 0;
+}
+
+/// True for an entry live-in copy whose output is a new version, so the
+/// incoming value it reads is a separate SSA value with uses of its own.
+bool isRenamedEntryLiveInCopy(const MedOp &Op, uint64_t RegOff) {
+  return isEntryLiveInCopy(Op, RegOff) && Op.Output.SSAVer != 0;
+}
+
+} // namespace
+
 namespace med_calling_conv_detail {
 ValueKey valueKey(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer}; }
 
@@ -131,12 +153,11 @@ uint16_t findFirstUseSize(const MedFunc &Func, uint64_t ParamRegOff,
   for (const MedOp &Op : Func.Blocks.front().Ops) {
     if (Op.Opcode != NdOp::COPY)
       break;
-    if (Op.Output.Kind != MedVar::Reg || Op.Output.RegOff != ParamRegOff ||
-        Op.NumInputs < 1 || Op.Inputs[0].Kind != MedVar::Reg ||
-        Op.Inputs[0].Id != Op.Output.Id ||
-        Op.Inputs[0].SSAVer != Op.Output.SSAVer)
+    if (!isEntryLiveInCopy(Op, ParamRegOff))
       continue;
     Seed(Op.Output);
+    if (isRenamedEntryLiveInCopy(Op, ParamRegOff))
+      Seed(Op.Inputs[0]);
   }
   if (LiveInWidths.empty())
     return 0;
@@ -274,8 +295,11 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
     if (Op.Opcode != NdOp::COPY || Op.NumInputs < 1)
       continue;
     if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == ParamRegOff &&
-        Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].Id == Op.Output.Id)
+        Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].Id == Op.Output.Id) {
       Seeds.push_back(Op.Output);
+      if (isRenamedEntryLiveInCopy(Op, ParamRegOff))
+        Seeds.push_back(Op.Inputs[0]);
+    }
   }
   if (Seeds.empty())
     return false; // no identifiable live-in value: keep existing behavior
@@ -551,8 +575,11 @@ bool incomingBytesReachUse(const MedFunc &Func, uint64_t RegOff) {
     if (Op.Opcode != NdOp::COPY)
       break;
     if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff &&
-        Op.NumInputs >= 1 && Op.Inputs[0].Id == Op.Output.Id)
+        Op.NumInputs >= 1 && Op.Inputs[0].Id == Op.Output.Id) {
       Add(Op.Output, ~uint64_t{0});
+      if (isRenamedEntryLiveInCopy(Op, RegOff))
+        Add(Op.Inputs[0], ~uint64_t{0});
+    }
   }
   if (Work.empty())
     return true; // no identifiable live-in: keep it
@@ -770,10 +797,7 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
     for (const MedOp &Op : Func.Blocks.front().Ops) {
       if (Op.Opcode != NdOp::COPY)
         break;
-      if (Op.Output.Kind != MedVar::Reg || Op.Output.RegOff != PR ||
-          Op.NumInputs < 1 || Op.Inputs[0].Kind != MedVar::Reg ||
-          Op.Inputs[0].Id != Op.Output.Id ||
-          Op.Inputs[0].SSAVer != Op.Output.SSAVer)
+      if (!isEntryLiveInCopy(Op, PR))
         continue;
       if (!Marker || Op.Output.Size == BestSize)
         Marker = &Op.Output;

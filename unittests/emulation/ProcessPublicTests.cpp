@@ -204,30 +204,51 @@ TEST_F(ProcessPublic, AndroidNativeFunctionReturnsThroughSDKAndCLI) {
 #else
   Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) / "android.so")
              .string();
-  const std::string Request =
-      R"({"backend":"unicorn","android":{"entry_symbol":"add_arguments","arguments":[1,2,3,4,5,6,7,8,9,10],"trace_limit":4096}})";
-  auto Text = takeString(neverd_emulate_process_json(
-      Session, Path.c_str(), AndroidNativeAArch64, Request.c_str()));
-  ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
-  auto Parsed = llvm::cantFail(llvm::json::parse(Text));
-  EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop), "returned");
-  EXPECT_EQ(Parsed.getAsObject()->getString(field::ReturnValue), "192");
-  EXPECT_EQ(neverd_session_is_loaded(Session), 0);
-  llvm::SmallString<128> Directory;
-  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
-  const std::filesystem::path Root(Directory.str().str());
-  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
-  const auto Output = (Root / OutputFile).string();
-  const auto Command = test::shellQuote(NEVERD_PROCESS_CLI) + " emulate " +
-                       test::shellQuote(Path) +
-                       " --profile=" + AndroidNativeAArch64 +
-                       " --options=" + test::shellQuote(Request) +
-                       test::redirectStdout(Output) + test::silenceStderr();
-  EXPECT_EQ(test::systemExitCode(test::runShellCommand(Command)),
-            process_cli::Success);
-  auto Buffer = llvm::MemoryBuffer::getFile(Output);
-  ASSERT_TRUE(bool(Buffer));
-  EXPECT_EQ(llvm::cantFail(llvm::json::parse((*Buffer)->getBuffer())), Parsed);
+  for (
+      const auto &[Request, Expected] :
+      std::vector<std::pair<std::string, std::string>>{
+          {R"({"backend":"unicorn","android":{"entry_symbol":"add_arguments","arguments":[1,2,3,4,5,6,7,8,9,10],"trace_limit":4096}})",
+           "192"},
+          {R"({"backend":"unicorn","android":{"entry_symbol":"dynamic_lookup","libraries":{"libfixture.so":["strlen"]}}})",
+           "4"}}) {
+    auto Text = takeString(neverd_emulate_process_json(
+        Session, Path.c_str(), AndroidNativeAArch64, Request.c_str()));
+    ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+    auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+    EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop), "returned");
+    EXPECT_EQ(Parsed.getAsObject()->getString(field::ReturnValue), Expected);
+    if (Expected == "4") {
+      bool NamedLookup = false;
+      const auto *Android = Parsed.getAsObject()->getObject(field::Android);
+      ASSERT_NE(Android, nullptr);
+      for (const auto &Event : *Android->getArray(field::NativeCalls)) {
+        const auto *E = Event.getAsObject();
+        if (E->getString(field::Name) == "dlsym") {
+          EXPECT_EQ(E->getString(field::Library), "libfixture.so");
+          EXPECT_EQ(E->getString(field::Symbol), "strlen");
+          NamedLookup = true;
+        }
+      }
+      EXPECT_TRUE(NamedLookup);
+    }
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+    llvm::SmallString<128> Directory;
+    ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+    const std::filesystem::path Root(Directory.str().str());
+    auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+    const auto Output = (Root / OutputFile).string();
+    const auto Command = test::shellQuote(NEVERD_PROCESS_CLI) + " emulate " +
+                         test::shellQuote(Path) +
+                         " --profile=" + AndroidNativeAArch64 +
+                         " --options=" + test::shellQuote(Request) +
+                         test::redirectStdout(Output) + test::silenceStderr();
+    EXPECT_EQ(test::systemExitCode(test::runShellCommand(Command)),
+              process_cli::Success);
+    auto Buffer = llvm::MemoryBuffer::getFile(Output);
+    ASSERT_TRUE(bool(Buffer));
+    EXPECT_EQ(llvm::cantFail(llvm::json::parse((*Buffer)->getBuffer())),
+              Parsed);
+  }
 #endif
 }
 

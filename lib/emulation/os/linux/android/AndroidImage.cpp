@@ -137,6 +137,17 @@ llvm::Expected<LinkedImage> loadImage(AddressSpace &Space,
     if (auto E = put64(Space, *Dest, *Base + Addend))
       return std::move(E);
   }
+  // Each explicit provider gets its own named traps. This is a catalogue of
+  // modeled functions, never a request to load a library from the host.
+  for (const auto &[Library, Names] : Native.Libraries) {
+    auto &Symbols = Out.Libraries[Library];
+    for (const auto &Name : Names) {
+      uint64_t PC = ThunkBase + 8 * (Out.Imports.size() + 1);
+      Out.Imports.emplace(PC, Name);
+      Out.DynamicProviders.emplace(PC, Library);
+      Symbols.emplace(Name, PC);
+    }
+  }
   for (const auto &Region : Plan->Regions)
     if (auto E = Space.protect(Region.Address, Region.Bytes.size(),
                                Region.Permissions))
@@ -166,11 +177,11 @@ llvm::Expected<LinkedImage> loadImage(AddressSpace &Space,
   if (auto E = put64(Space, GuardAddress, StackGuard))
     return std::move(E);
   uint64_t ThunkSize =
-      ((Imported.size() + 1) * 8 + PageSize - 1) & ~(PageSize - 1);
+      ((Out.Imports.size() + 1) * 8 + PageSize - 1) & ~(PageSize - 1);
   if (auto E = Space.map(ThunkBase, ThunkSize, Read | Write))
     return std::move(E);
   std::vector<uint8_t> Bytes(ThunkSize, 0);
-  for (size_t I = 0; I <= Imported.size(); ++I) {
+  for (size_t I = 0; I <= Out.Imports.size(); ++I) {
     llvm::support::endian::write32le(Bytes.data() + I * 8,
                                      0xd4000001 | (uint32_t(ModelTrap) << 5));
     llvm::support::endian::write32le(Bytes.data() + I * 8 + 4,

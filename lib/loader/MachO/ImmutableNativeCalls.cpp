@@ -5,6 +5,7 @@
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/HighIR.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinImportVeneer.h"
@@ -342,5 +343,121 @@ std::map<va_t, ImmutableNativeCallTarget> immutableNativeCallTargets(
     }
   }
   return Remaining ? Result : std::map<va_t, ImmutableNativeCallTarget>{};
+}
+namespace {
+bool scalarCarrier(const TypeRef &Type, bool AllowVoid = false) {
+  return Type &&
+         ((AllowVoid && Type->Kind == NdTypeKind::Void) ||
+          (Type->Kind == NdTypeKind::Int &&
+           (Type->Size == 1 || Type->Size == 2 || Type->Size == 4 ||
+            Type->Size == 8)) ||
+          (Type->Kind == NdTypeKind::Ptr && Type->Size == 8 && Type->Pointee) ||
+          (Type->Kind == NdTypeKind::Float &&
+           (Type->Size == 4 || Type->Size == 8)));
+}
+} // namespace
+
+bool isImmutableNativeCallHint(const SourceCallTypeHint &Hint,
+                               va_t FunctionEntry, Arch Architecture) {
+  if (Architecture != Arch::AArch64 || !FunctionEntry || FunctionEntry % 4 ||
+      Hint.CallKind != SourceCallTypeHint::Kind::Native ||
+      !Hint.ImmutableNativeCall || Hint.FunctionParameterCall ||
+      !Hint.TargetAddress || Hint.TargetAddress == FunctionEntry ||
+      Hint.TargetAddress % 4 || !Hint.TargetName.empty() ||
+      Hint.BooleanResult || Hint.ValueWitness || Hint.Virtual ||
+      Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
+      Hint.RuntimeObjCResultType || !Hint.Selector.empty() ||
+      !Hint.OwnerClass.empty() || Hint.SelectorReferenceAddress ||
+      !Hint.BorrowedByteInputs.empty() ||
+      !Hint.SwiftStaticStringInputs.empty() ||
+      !Hint.CanonicalBooleanInputs.empty() || !Hint.SwiftStringInputs.empty() ||
+      Hint.Format || Hint.NilTerminated || Hint.SwiftTypeMetadata ||
+      Hint.Receiver || Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
+      Hint.SelectorArgumentTypeUse || Hint.SelectorForwardingUse ||
+      Hint.SelectorArgumentStorageUse || Hint.ObjCIndirectResultStorage ||
+      Hint.ByteCount || Hint.ImmutablePointerSlot || Hint.AddressedFunctionABI)
+    return false;
+  const auto &Proof = *Hint.ImmutableNativeCall;
+  const auto &ABI = Hint.Signature;
+  std::string Error;
+  return Proof.FunctionEntry == FunctionEntry && Proof.Site.Instruction &&
+         Proof.Site.Instruction % 4 == 0 && Proof.Site.Sequence == 1 &&
+         Proof.Site.Opcode == NdOp::INDIR_CALL && !Proof.Site.StaticTarget &&
+         Proof.Slot && Proof.Slot % 8 == 0 &&
+         Proof.Target == Hint.TargetAddress &&
+         ABI.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+         ABI.HasExplicitABI && ABI.Architecture == Architecture &&
+         validateSourceABI(ABI, Error) && scalarCarrier(ABI.ReturnType, true) &&
+         ABI.ReturnComponents.empty() && ABI.Parameters.size() <= 64 &&
+         std::all_of(ABI.Parameters.begin(), ABI.Parameters.end(),
+                     [](const SourceParameterTypeHint &P) {
+                       return scalarCarrier(P.Type) && P.Components.empty();
+                     });
+}
+
+std::map<va_t, SourceCallTypeHint> buildImmutableNativeCallHints(
+    const BinaryImage &Image, const LowFunc &Function,
+    const std::map<va_t, SourceFunctionTypeHint> &NativeCallees) {
+  std::map<va_t, SourceCallTypeHint> Result;
+  if (NativeCallees.empty() || Function.Blocks.size() > 4096)
+    return Result;
+  // Most source-bound functions have no indirect call. Avoid rebuilding
+  // instruction-boundary indexes for those functions on every inference round.
+  size_t Remaining = 262144;
+  bool HasIndirect = false;
+  for (const auto &Block : Function.Blocks) {
+    if (Block.Ops.size() > Remaining)
+      return Result;
+    Remaining -= Block.Ops.size();
+    HasIndirect =
+        std::any_of(Block.Ops.begin(), Block.Ops.end(), [](const LowOp &Op) {
+          return Op.Opcode == NdOp::INDIR_CALL;
+        });
+    if (HasIndirect)
+      break;
+  }
+  if (!HasIndirect)
+    return Result;
+  for (const auto &[Address, Target] :
+       immutableNativeCallTargets(Image, Function, &NativeCallees)) {
+    const auto Callee = NativeCallees.find(Target.Target);
+    if (Callee == NativeCallees.end())
+      continue;
+    SourceCallTypeHint Hint;
+    Hint.ImmutableNativeCall = Target;
+    Hint.TargetAddress = Target.Target;
+    Hint.Signature = Callee->second;
+    if (isImmutableNativeCallHint(Hint, Function.Entry, Image.Arch))
+      Result.emplace(Address, std::move(Hint));
+  }
+  return Result;
+}
+
+bool isImmutableNativeSourceCall(const HighExpr &Expression, va_t FunctionEntry,
+                                 Arch Architecture) {
+  if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
+      !isImmutableNativeCallHint(*Expression.SourceCallHint, FunctionEntry,
+                                 Architecture) ||
+      Expression.IsIndirectCall || Expression.IndirectTarget ||
+      Expression.IndirectParamIdx != -1 || !Expression.CallTarget.empty() ||
+      Expression.CallAddr != Expression.SourceCallHint->TargetAddress ||
+      Expression.IntrinsicId != Intrinsic::None ||
+      !Expression.IntrinsicOutputs.empty() ||
+      Expression.MemoryOrdering != NdMemoryOrdering::None ||
+      Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return false;
+  const auto &ABI = Expression.SourceCallHint->Signature;
+  if (!scalarCarrier(Expression.Type, true) ||
+      Expression.Type->Size != ABI.ReturnType->Size ||
+      (Expression.Type->Kind == NdTypeKind::Void) !=
+          (ABI.ReturnType->Kind == NdTypeKind::Void) ||
+      Expression.Operands.size() != ABI.Parameters.size())
+    return false;
+  for (size_t I = 0; I < Expression.Operands.size(); ++I)
+    if (!Expression.Operands[I] ||
+        !scalarCarrier(Expression.Operands[I]->Type) ||
+        Expression.Operands[I]->Type->Size != ABI.Parameters[I].Type->Size)
+      return false;
+  return true;
 }
 } // namespace neverd

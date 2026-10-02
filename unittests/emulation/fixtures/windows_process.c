@@ -82,14 +82,39 @@ static void require(int OK) {
   if (!OK)
     ExitProcess(Failure);
 }
+#include "WindowsMemoryFixture.inc"
 static char mode(void) {
   WCHAR *Line = GetCommandLineW();
   unsigned N = 0;
   while (Line[N])
     ++N;
-  if (N && Line[N - 1] == '"')
+  // Windows launchers may append delimiters after the final argument.
+  while (N && (Line[N - 1] == ' ' || Line[N - 1] == '\t'))
     --N;
-  return N ? (char)Line[N - 1] : 'n';
+  const int Quoted = N && Line[N - 1] == '"';
+  if (Quoted)
+    --N;
+  require(N != 0);
+  unsigned Start = N - 1;
+  if (Quoted) {
+    require(Start && Line[Start - 1] == '"');
+    --Start;
+  }
+  require(Start && (Line[Start - 1] == ' ' || Line[Start - 1] == '\t'));
+  static const char *const Modes[] = {
+      Normal,        Returned,    Loop,     InitLoop,    Fault,
+      Privileged,    Unknown,     Errors,   Unsupported, BadOutput,
+      AliasedOutput, TLSMutation, TailExit, ForgedGate,  ReentrantExit,
+      ReturnSlot,    NativeExit,
+#define NEVERD_WINDOWS_FIXTURE_TEXT(Name, Text) Name,
+#include "WindowsMemoryCases.def"
+#undef NEVERD_WINDOWS_FIXTURE_TEXT
+  };
+  for (unsigned I = 0; I < sizeof(Modes) / sizeof(Modes[0]); ++I)
+    if (Line[N - 1] == (unsigned char)Modes[I][0])
+      return Modes[I][0];
+  require(0);
+  return 0;
 }
 __declspec(thread) DWORD ThreadValue = TLSSeed;
 __declspec(thread) DWORD ThreadZero;
@@ -193,6 +218,7 @@ DWORD entry(void) {
   require(HeapSize(Heap, 0, Bytes) >= HeapBytes);
   Bytes[HeapBytes - 1] = 1;
   require(HeapFree(Heap, 0, Bytes));
+  memoryScenario(Mode);
   if (Mode == 't')
     tailExit();
   if (Mode == 'g')
@@ -219,10 +245,20 @@ DWORD entry(void) {
   if (Mode == 'v')
     overwriteReturn(GetStdHandle(StdoutSelector), Message, 1, &Written, 0);
   if (Mode == 'e') {
-    require(!WriteFile(GetStdHandle(StdoutSelector), (void *)(ULONG_PTR)1, 8,
-                       &Written, 0));
-    require(Written == 0 && GetLastError() == NoAccess);
-    require(TlsGetValue((DWORD)-1) == 0 && GetLastError() == InvalidParameter);
+    const int Success = WriteFile(GetStdHandle(StdoutSelector),
+                                  (void *)(ULONG_PTR)1, 8, &Written, 0);
+    const DWORD WriteError = GetLastError();
+    const ULONG_PTR TLSValue = (ULONG_PTR)TlsGetValue((DWORD)-1);
+    const DWORD TLSError = GetLastError();
+    if (Success || Written || WriteError != InvalidUserBuffer || TLSValue ||
+        TLSError != InvalidParameter) {
+      const ULONG_PTR Observed[] = {(DWORD)Success, Written, WriteError,
+                                    TLSValue, TLSError};
+      DWORD Reported;
+      WriteFile(GetStdHandle(StderrSelector), Observed, sizeof(Observed),
+                &Reported, 0);
+      require(0);
+    }
   }
   if (Mode == 'b')
     WriteFile(GetStdHandle(StdoutSelector), Message, 1, (void *)(ULONG_PTR)1,

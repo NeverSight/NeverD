@@ -306,6 +306,90 @@ TEST_P(AndroidNative, RejectsMalformedOriginalDynamicTables) {
   EXPECT_FALSE(bool(Bad));
   llvm::consumeError(Bad.takeError());
 }
+TEST_P(AndroidNative, DynamicLookupUsesOnlyExplicitGuestSymbols) {
+  returned(run("dynamic_lookup"), 100);
+  Options.Android->Libraries["libfixture.so"] = {"strlen"};
+  auto R = run("dynamic_lookup");
+  returned(R, 4);
+  auto Lookup = llvm::find_if(R.NativeCalls,
+                              [](const auto &E) { return E.Name == "dlsym"; });
+  ASSERT_NE(Lookup, R.NativeCalls.end());
+  EXPECT_EQ(Lookup->Library, "libfixture.so");
+  EXPECT_EQ(Lookup->Symbol, "strlen");
+  ASSERT_TRUE(Lookup->Result);
+  auto Call = llvm::find_if(R.NativeCalls,
+                            [](const auto &E) { return E.Name == "strlen"; });
+  ASSERT_NE(Call, R.NativeCalls.end());
+  EXPECT_EQ(Call->PC, *Lookup->Result);
+  EXPECT_EQ(Call->Library, "libfixture.so");
+  EXPECT_EQ(Call->Result, 4);
+  auto Report = llvm::json::parse(processResultJSON(R));
+  ASSERT_TRUE(bool(Report)) << llvm::toString(Report.takeError());
+  const auto *Android = Report->getAsObject()->getObject("android");
+  ASSERT_NE(Android, nullptr);
+  bool Named = false;
+  for (const auto &V : *Android->getArray("native_calls")) {
+    const auto *E = V.getAsObject();
+    if (E->getString("name") == "dlsym") {
+      EXPECT_EQ(E->getString("library"), "libfixture.so");
+      EXPECT_EQ(E->getString("symbol"), "strlen");
+      Named = true;
+    }
+  }
+  EXPECT_TRUE(Named);
+}
+TEST_P(AndroidNative, DynamicHandlesFailuresAndConsumeOnceErrors) {
+  Options.Android->Libraries["libfixture.so"] = {"strlen"};
+  returned(run("dynamic_lifecycle"), 0);
+}
+TEST_P(AndroidNative, DynamicProvidersKeepSeparateSymbolNamespaces) {
+  Options.Android->Libraries["libfixture.so"] = {"strlen"};
+  Options.Android->Libraries["libother.so"] = {"strlen", "only_in_other"};
+  returned(run("dynamic_providers"), 5);
+}
+TEST_P(AndroidNative, DynamicUnknownAndClosedFunctionsStopWithTheirNames) {
+  Options.Android->Libraries["libfixture.so"] = {"strlen",
+                                                 "unmodeled_fixture_export"};
+  auto R = run("dynamic_unknown");
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R.Diagnostic.find("unmodeled_fixture_export"), std::string::npos);
+  ASSERT_FALSE(R.NativeCalls.empty());
+  EXPECT_EQ(R.NativeCalls.back().Name, "unmodeled_fixture_export");
+  EXPECT_EQ(R.NativeCalls.back().Library, "libfixture.so");
+  EXPECT_FALSE(R.NativeCalls.back().Result);
+  R = run("dynamic_closed");
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R.Diagnostic.find("inactive dynamic library"), std::string::npos);
+  EXPECT_EQ(R.NativeCalls.back().Name, "strlen");
+}
+TEST_P(AndroidNative, DynamicScopesAndInvalidPointersAreNotGuessed) {
+  Options.Android->Libraries["libfixture.so"] = {"strlen"};
+  for (uint64_t Scope : {uint64_t(0), UINT64_MAX}) {
+    auto R = run("dynamic_scope", {Scope});
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(R.Diagnostic.find("process scopes"), std::string::npos);
+  }
+  auto R = run("dynamic_open", {0, 2});
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  R = run("dynamic_open", {1, 2});
+  EXPECT_NE(R.Stop, ProcessStopReason::Returned);
+  EXPECT_NE(R.Diagnostic.find("invalid guest pointer"), std::string::npos);
+  R = run("dynamic_bad_name");
+  EXPECT_NE(R.Stop, ProcessStopReason::Returned);
+  EXPECT_NE(R.Diagnostic.find("invalid guest pointer"), std::string::npos);
+}
+TEST_P(AndroidNative, DynamicCatalogueRejectsMalformedCppInputs) {
+  for (const auto &Names : std::vector<std::vector<std::string>>{
+           {""}, {"strlen", "strlen"}, {std::string("bad\0name", 8)}}) {
+    Options.Android->EntrySymbol = "dynamic_lookup";
+    Options.Android->Libraries["libfixture.so"] = Names;
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    EXPECT_FALSE(bool(R));
+    EXPECT_NE(llvm::toString(R.takeError()).find("modeled Android symbols"),
+              std::string::npos);
+  }
+}
 INSTANTIATE_TEST_SUITE_P(Relocations, AndroidNative,
                          testing::Values("none", "android", "relr"));
 TEST(AndroidOptions, StrictWireTypesAndProfiles) {
@@ -314,17 +398,25 @@ TEST(AndroidOptions, StrictWireTypesAndProfiles) {
       {R"({"android":{"typo":1}})", R"({"android":{"arguments":[-1]}})",
        R"({"android":{"entry_address":"0xzz"}})",
        R"({"android":{"memory":[{"address":4096,"size":4096,"bytes_hex":"gg"}]}})",
-       R"({"android":{"read_memory":[{"address":4096,"size":8,"executable":true}]}})"}) {
+       R"({"android":{"read_memory":[{"address":4096,"size":8,"executable":true}]}})",
+       R"({"android":{"libraries":[]}})",
+       R"({"android":{"libraries":{"x":1}}})",
+       R"({"android":{"libraries":{"x":["a","a"]}}})",
+       R"({"android":{"libraries":{"x":[""]}}})",
+       R"({"android":{"libraries":{"x":["bad\u0000name"]}}})",
+       R"({"android":{"libraries":{"":[]}}})"}) {
     auto O = processOptionsFromJSON(Text);
     EXPECT_FALSE(bool(O)) << Text;
     llvm::consumeError(O.takeError());
   }
   auto O = processOptionsFromJSON(
-      R"({"android":{"entry_address":"0x1000","arguments":["0xffffffffffffffff",0],"initialize":false,"trace_limit":0}})");
+      R"({"android":{"entry_address":"0x1000","arguments":["0xffffffffffffffff",0],"initialize":false,"trace_limit":0,"libraries":{"libfixture.so":["strlen"]}}})");
   ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
   ASSERT_TRUE(O->Android);
   EXPECT_EQ(O->Android->Arguments[0], UINT64_MAX);
   EXPECT_EQ(O->Android->EntryAddress, 4096);
+  EXPECT_EQ(O->Android->Libraries.at("libfixture.so"),
+            std::vector<std::string>{"strlen"});
   auto Bad = emulateProcess("missing", ProcessProfile::LinuxELF64, *O);
   EXPECT_FALSE(bool(Bad));
   EXPECT_NE(llvm::toString(Bad.takeError()).find("Android"), std::string::npos);

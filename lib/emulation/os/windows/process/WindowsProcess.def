@@ -3,11 +3,12 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "WindowsProcessMemory.def"
 // Values describe this versioned model, not a complete Windows installation.
 #ifdef NEVERD_WINDOWS_PROCESS_VALUE
 NEVERD_WINDOWS_PROCESS_VALUE(PageSize, 0x1000)
 NEVERD_WINDOWS_PROCESS_VALUE(ImageAlignment, 0x10000)
-NEVERD_WINDOWS_PROCESS_VALUE(UserLimit, 0x0000800000000000)
+NEVERD_WINDOWS_PROCESS_VALUE(UserLimit, 0x00007fffffff0000)
 NEVERD_WINDOWS_PROCESS_VALUE(MaxDirectories, 16)
 NEVERD_WINDOWS_PROCESS_VALUE(MaxSections, 96)
 NEVERD_WINDOWS_PROCESS_VALUE(MaxImports, 4096)
@@ -54,7 +55,7 @@ NEVERD_WINDOWS_PROCESS_VALUE(ErrorSuccess, 0)
 NEVERD_WINDOWS_PROCESS_VALUE(ErrorInvalidHandle, 6)
 NEVERD_WINDOWS_PROCESS_VALUE(ErrorNotEnoughMemory, 8)
 NEVERD_WINDOWS_PROCESS_VALUE(ErrorInvalidParameter, 87)
-NEVERD_WINDOWS_PROCESS_VALUE(ErrorNoAccess, 998)
+NEVERD_WINDOWS_PROCESS_VALUE(ErrorInvalidUserBuffer, 1784)
 NEVERD_WINDOWS_PROCESS_VALUE(ErrorModuleNotFound, 126)
 NEVERD_WINDOWS_PROCESS_VALUE(HeapZeroMemory, 8)
 NEVERD_WINDOWS_PROCESS_VALUE(HeapNoSerialize, 1)

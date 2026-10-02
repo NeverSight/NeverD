@@ -593,6 +593,89 @@ std::optional<MedVar> storedValueAt(const MedFunc &F, va_t Addr) {
   return std::nullopt;
 }
 
+// push rbp; sub rsp,64; lea rbp,[rsp+64]; sub rsp,rcx; jmp next;
+// next: mov dword [rbp-4],1; mov [rsp+32],ecx (protected); nop; jmp join.
+// The handler stores [rbp-4] to [rsp+32] too; the join leaves through
+// lea rsp,[rbp].
+BinaryImage makeDynamicFramePointerSEHImage() {
+  BinaryImage Img = makeFramePointerSEHFrameImage();
+  Segment &Text = Img.Segments.front();
+  Text.Data.assign(Text.Size, 0xcc);
+  const uint8_t Body[] = {0x55, 0x48, 0x83, 0xec, 0x40, 0x48, 0x8d, 0x6c,
+                          0x24, 0x40, 0x48, 0x29, 0xcc, 0xeb, 0,    0xc7,
+                          0x45, 0xfc, 1,    0,    0,    0,    0x89, 0x4c,
+                          0x24, 0x20, 0x90, 0xeb, 0x13};
+  std::copy(std::begin(Body), std::end(Body), Text.Data.begin());
+  const uint8_t Handler[] = {0x8b, 0x45, 0xfc, 0x89, 0x44, 0x24, 0x20, 0xeb, 7};
+  std::copy(std::begin(Handler), std::end(Handler), Text.Data.begin() + 0x20);
+  const uint8_t Join[] = {0x8b, 0x45, 0xfc, 0x48, 0x8d, 0x65, 0, 0x5d, 0xc3};
+  std::copy(std::begin(Join), std::end(Join), Text.Data.begin() + 0x30);
+  Img.ExceptionMetadata.Functions.front().SEH->Scopes.front().GuardedRange = {
+      Img.Entry + 0x16, Img.Entry + 0x1a};
+  Img.ExceptionMetadata.rebuildIndex();
+  return Img;
+}
+
+// The value the `[rsp+disp]` store at Addr adds its displacement to.
+std::optional<MedVar> storeAddressBase(const MedFunc &F, va_t Addr) {
+  for (const MedBlock &B : F.Blocks)
+    for (const MedOp &Op : B.Ops) {
+      if (Op.Opcode != NdOp::STORE || Op.Addr != Addr || Op.NumInputs < 2)
+        continue;
+      const MedVar Address = sourceValue(F, Op.Inputs[0]);
+      for (const MedBlock &DefBlock : F.Blocks)
+        for (const MedOp &Def : DefBlock.Ops)
+          if (Def.Opcode == NdOp::INT_ADD && Def.NumInputs == 2 &&
+              Def.Output.Kind == Address.Kind && Def.Output.Id == Address.Id &&
+              Def.Output.SSAVer == Address.SSAVer && Def.Inputs[1].isConst())
+            return sourceValue(F, Def.Inputs[0]);
+      return std::nullopt;
+    }
+  return std::nullopt;
+}
+
+TEST(MedSEHEstablisherFrame, DynamicFramePointerHandlerResumesWithTheRangeSP) {
+  // An alloca after a frame-pointer prologue moves SP before the __try.  The
+  // unwinder resumes the __except body with the faulting point's SP, which
+  // the protected range never moves, and restores RBP as a nonvolatile.
+  auto Img = makeDynamicFramePointerSEHImage();
+  auto Low = decodeFixedSEHFrame(Img);
+  auto Med = LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::COFF);
+  ASSERT_TRUE(verifyMedFunc(Med, "seh-dynamic-frame-pointer"));
+  std::set<va_t> Seen;
+  const std::set<va_t> Expected = {Img.Entry + 0x0f, Img.Entry + 0x20,
+                                   Img.Entry + 0x30};
+  for (const MedBlock &B : Med.Blocks)
+    for (const MedOp &Op : B.Ops)
+      if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+          Expected.count(Op.Addr)) {
+        ASSERT_GT(Op.NumInputs, 0u);
+        EXPECT_EQ(entrySPOffset(Med, Op.Inputs[0]), -12) << Op.Addr;
+        Seen.insert(Op.Addr);
+      }
+  EXPECT_EQ(Seen, Expected);
+  auto RangeBase = storeAddressBase(Med, Img.Entry + 0x16);
+  auto HandlerBase = storeAddressBase(Med, Img.Entry + 0x23);
+  ASSERT_TRUE(RangeBase);
+  ASSERT_TRUE(HandlerBase);
+  EXPECT_EQ(RangeBase->Kind, MedVar::Reg) << RangeBase->display();
+  EXPECT_EQ(HandlerBase->Id, RangeBase->Id) << HandlerBase->display();
+  EXPECT_EQ(HandlerBase->SSAVer, RangeBase->SSAVer) << HandlerBase->display();
+  // The alloca leaves that SP at no fixed offset from the entry SP.
+  EXPECT_FALSE(entrySPOffset(Med, *RangeBase));
+}
+
+TEST(MedSEHEstablisherFrame, RejectsADynamicSPWriteInAProtectedBlock) {
+  // An alloca in a block the scope covers can leave the faulting point more
+  // than one SP.
+  auto Img = makeDynamicFramePointerSEHImage();
+  auto Low = decodeFixedSEHFrame(Img);
+  Low.ExceptionMetadata->SEH->Scopes.front().GuardedRange = {Img.Entry + 0x0a,
+                                                             Img.Entry + 0x1a};
+  EXPECT_THROW(LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::COFF),
+               LowToMedConversionError);
+}
+
 TEST(MedSEHHandlerEntry, EAXHoldsTheExceptionCode) {
   auto Img = makeSEHHandlerRegisterImage();
   auto Low = decodeFixedSEHFrame(Img);
@@ -723,6 +806,27 @@ BinaryImage makeSharedHandlerImage() {
 }
 
 } // namespace
+
+TEST(MedSEHHandlerEntry, ArgumentLiveIntoTheHandlerStaysAParameter) {
+  // mov [rsp+40],rdx before the protected nop; the handler stores rdx too.
+  // rdx is then live into both roots, so its entry copy takes a new SSA
+  // version, yet it is still the incoming second argument.
+  auto Img = makeFixedSEHFrameImage();
+  auto &Data = Img.Segments.front().Data;
+  const uint8_t Normal[] = {0x48, 0x89, 0x54, 0x24, 0x28, 0x90, 0x90, 0x90};
+  std::copy(std::begin(Normal), std::end(Normal), Data.begin() + 8);
+  const uint8_t Handler[] = {0x48, 0x89, 0x54, 0x24, 0x30, 0x90, 0x90,
+                             0x90, 0x90, 0x90, 0x90, 0xeb, 3};
+  std::copy(std::begin(Handler), std::end(Handler), Data.begin() + 0x20);
+  auto Low = decodeFixedSEHFrame(Img);
+  auto Med = LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::COFF);
+  ASSERT_TRUE(verifyMedFunc(Med, "seh-handler-argument"));
+  auto Param =
+      std::find_if(Med.Params.begin(), Med.Params.end(),
+                   [](const MedVar &P) { return P.RegOff == x86reg::RDX; });
+  ASSERT_NE(Param, Med.Params.end());
+  EXPECT_GE(Param->Id, 0) << "rdx is a placeholder, not the read argument";
+}
 
 TEST(MedSEHHandlerEntry, NonvolatileRegisterWrittenInTheRangeIsUnspecified) {
   // mov rdi,rcx inside the protected range; the handler stores rdi. Where

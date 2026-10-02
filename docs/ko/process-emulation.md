@@ -82,6 +82,14 @@ x64 `arch_prctl`은 `ARCH_SET_FS`, `ARCH_GET_FS`, `ARCH_SET_GS`, `ARCH_GET_GS`�
 
 `windows-pe64-v1`은 제한된 Windows x64/ARM64 콘솔 프로세스를 추가합니다. PE 로딩, PEB/TEB, 정적·동적 TLS, 시작·종료 콜백과 이름 기반 Win32 API 모델을 제공합니다. 드라이버 에뮬레이션 없이 CPU 계층을 사용합니다. DLL/CRT 로딩, GUI, 사용자 모드 SEH, 스레드와 일반 Windows 호환성은 아직 미완성입니다.
 
+Windows 가상 메모리는 `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery`와 현재 프로세스의 `FlushInstructionCache`를 지원합니다. OS 계층은 예약 영역을 소유하고 `AddressSpace`는 커밋된 페이지, 권한, 실제 저장 공간을 관리합니다. 테스트는 동적 코드 수정, 접근 오류, 메모리 한도 재사용을 검증합니다.
+
+전용 할당은 `MEM_RESERVE`, `MEM_COMMIT`, `MEM_DECOMMIT`, `MEM_RELEASE`, `MEM_TOP_DOWN`을 지원하며 예약 정렬은 64 KiB, 페이지는 4 KiB입니다. 예약만으로는 게스트 RAM을 사용하지 않습니다. 재커밋은 데이터를 보존하며 권한을 갱신하고 커밋 해제는 각 페이지의 저장 공간을 반환합니다. 전체 범위 검증과 사전 할당으로 일반적인 실패 시 일부만 변경되는 일을 방지합니다. 조회는 48바이트 x64/ARM64 메모리 정보 구조를 반환하고 동일한 할당 안에서만 이후 영역을 합칩니다. 초기 이미지, 환경, 힙 영역, API 진입점, 스택 경계도 배치에 반영하며 스택 할당 식별은 TEB와 일치합니다. 성공한 `VirtualProtect`가 이전 권한의 출력 위치를 읽기 전용으로 바꾸면 새 권한은 유지되고 출력 내용은 바뀌지 않으며 호출은 성공을 반환합니다. 커밋되지 않은 페이지를 포함한 범위의 권한 변경은 `ERROR_INVALID_ADDRESS`를 반환하고 이전 권한 출력에 `PAGE_NOACCESS`를 기록하며 페이지 권한은 변경하지 않습니다.
+
+지원 권한은 `PAGE_NOACCESS`, `PAGE_READONLY`, `PAGE_READWRITE`, `PAGE_EXECUTE_READ`, `PAGE_EXECUTE_READWRITE`입니다. 가드 페이지, 실행 전용, 쓰기 시 복사 정책, 캐시 수식자, 대형 페이지, reset/write-watch/자리 표시자 및 모델이 소유한 런타임 매핑 변경은 명시적으로 거부합니다. 전용 가상 할당만 커밋 해제하거나 해제할 수 있습니다. 사용자 예외 전달이나 ARM64 네이티브 하드웨어 검증은 포함하지 않습니다.
+
+[VirtualAlloc](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc), [VirtualFree](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualfree), [VirtualProtect](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualprotect), [VirtualQuery](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualquery), [MEMORY_BASIC_INFORMATION](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-memory_basic_information).
+
 ```bash
 neverd emulate guest.exe --profile=windows-pe64-v1 \
   --options='{"backend":"auto","arguments":["guest.exe","argument"],"environment":["MODE=test"]}'
@@ -94,6 +102,8 @@ x64 GS와 ARM64 x18은 TEB를 가리키며 스택 경계, self, PID/TID, PEB, �
 정확한 API는 `WindowsProcessServices.def`에 있습니다. `ExitProcess`, `RtlExitUserProcess`, 표준 출력 핸들과 동기 `WriteFile`, LastError, 프로세스/스레드 ID와 의사 핸들, `GetCommandLineW`, 힙 할당/해제/크기, 동적 TLS, NULL `GetModuleHandleW`를 지원합니다. `kernel32.dll`, `kernelbase.dll`, `ntdll.dll`의 정확한 이름만 해석합니다. 직접 syscall과 위조 콜백 게이트는 API를 선택하지 못합니다. 힙 소유권과 회수, 이진 출력, API 오류와 미지원 비동기 I/O·사용자 예외를 구분합니다. 포인터 별칭도 완료 수 초기 0과 실제 반환 주소 변경을 반영합니다.
 
 `windows.native_calls`는 모듈/함수명, 선언된 스칼라 인수, nullable 결과를 기록하며 NT syscall 번호를 만들지 않습니다. `NeverDWindowsProcessTests`는 실제 PE, 컴파일러 TLS, 콜백 변경, 힙, 별칭, 잘못된 메타데이터, 권한과 예산을 검증합니다. `NeverDProcessPublicTests`는 CLI/C ABI를 검증합니다. Windows CI는 같은 EXE를 직접 실행해 독립 비교하고 WHP 검사도 필수입니다. 네이티브 ARM64 실행 증거에는 해당 머신이 필요합니다.
+
+비어 있지 않은 입력 버퍼를 읽을 수 없으면 `WriteFile`은 `ERROR_INVALID_USER_BUFFER`(1784)를 반환하고, 기록한 바이트 수를 0으로 설정하며 아무 바이트도 출력하지 않습니다.
 
 [PE/COFF](https://learn.microsoft.com/windows/win32/debug/pe-format), [ARM64 ABI](https://learn.microsoft.com/cpp/build/arm64-windows-abi-conventions), [WriteFile](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-writefile), [TLS](https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-tlsgetvalue), [Wine 10.0 loader](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/ntdll/loader.c).
 

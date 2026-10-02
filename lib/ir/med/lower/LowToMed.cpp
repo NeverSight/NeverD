@@ -844,6 +844,11 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     buildSsa(Func, Low);
     debugVerifyMedFunc(Func, "buildSsa");
 
+    if (TargetArch == Arch::X86 || TargetArch == Arch::X64) {
+      foldMachineFlagsIntoPushfImages(Func);
+      debugVerifyMedFunc(Func, "foldMachineFlagsIntoPushfImages");
+    }
+
     // Model a call's floating-point/vector return (x86-64 returns it in XMM0, a
     // caller-saved vector register the lifter did not model the call as
     // defining). Done before copy propagation so a post-call read of the result
