@@ -66,10 +66,8 @@ context keys. Complete 64-bit register values or spilled pointers proved equal
 to the entry frame root plus an exact displacement can also distinguish these
 contexts. The key retains the displacement, not a guessed numeric invocation
 address. Partial or potentially aliasing writes invalidate the pointer fact.
-This refinement does not partition multivalue tuples into new edges or emit
-extra guest-memory reads: a finite-value proof alone does not establish that an
-added load is safe. Dynamic or unbounded memory-dependent state may therefore
-still stop recovery within the configured limits.
+
+After ordinary discovery stalls, recovery may partition one existing register context field per non-entry native cursor and instruction mode. Its incoming domain must be complete, varying and cover all declared field bits. Every actual predecessor independently proves its current complete domain, compares the live physical field and reprojects each case. Later predecessors and widened nodes are checked again; chaining stops at nominated entries. Comparisons have synthetic provenance and share node, operation, context, query and refinement budgets. Partial masks, undefined flags and frame-only fields do not qualify. No guest-memory read or caller assumption is added. Incomplete domains retain the conservative edge, and publication still requires every reachable case to finish.
 
 Conditional guards may nominate dependencies for bounded refinement before the
 final control proof. When an imprecise join exposes an unsupported successor,

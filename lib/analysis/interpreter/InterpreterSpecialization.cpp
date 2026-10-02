@@ -591,6 +591,10 @@ struct ControlRefinement {
   // Optional business values may nominate wider masks than a real stack use;
   // try smaller cases first instead of imposing their maximum on every root.
   std::set<uint32_t> CandidateFrameMasks;
+  // Precision requests only: a complete fresh edge proof must establish the
+  // cases. Physical ranges survive control-field renumbering across retries.
+  std::map<std::pair<va_t, InstructionMode>, SymRegisterRange>
+      RegisterPartitions;
   bool BudgetExceeded = false;
   bool PrecisionFailure = false;
 };
@@ -663,6 +667,8 @@ public:
 
   SpecializationResult run();
   SpecializationResult closeProducerDemands(SpecializationResult Previous);
+  SpecializationResult refineRegisterPartition(SpecializationResult Previous,
+                                               bool &Changed);
 
 private:
   bool fail(SpecializationStatus Status, std::string Message) {
@@ -704,7 +710,8 @@ private:
                    SpecializationCursor Successor, Projection &Out,
                    bool &Reachable);
   int addDispatchNode(const LowInstructionBoundary &Origin, const NdVar &Target,
-                      uint64_t Value, int Taken, int Other);
+                      uint64_t Value, int Taken, int Other,
+                      bool Synthetic = false);
   bool lowerImmutableRead(const LowOp &Original,
                           llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Values,
                           std::vector<LowOp> &Ops);
@@ -1609,7 +1616,7 @@ bool Specializer::addFrameDispatch(llvm::ArrayRef<int> Entries) {
 
 int Specializer::addDispatchNode(const LowInstructionBoundary &Origin,
                                  const NdVar &Target, uint64_t Value, int Taken,
-                                 int Other) {
+                                 int Other, bool Synthetic) {
   if (Refinement.CreatedNodes >= Options.MaxNodes) {
     fail(SpecializationStatus::BudgetExceeded,
          "finite dispatch node budget exhausted");
@@ -1634,7 +1641,7 @@ int Specializer::addDispatchNode(const LowInstructionBoundary &Origin,
   Branch.addInput(Compare.Output);
   New.Block.Ops.push_back(Branch);
   New.Block.Succs = {Taken, Other};
-  New.Slices.push_back({Origin, 0, 2});
+  New.Slices.push_back({Origin, 0, 2, Synthetic});
   const int Id = static_cast<int>(Nodes.size());
   ++Refinement.CreatedNodes;
   Nodes.push_back(std::move(New));
@@ -1680,12 +1687,12 @@ bool Specializer::emitTargets(Node &Draft,
   }
 
   const SymRef Path = Exec.pathPredicate();
-  const auto edge = [&](SpecializationCursor Cursor, SymRef Guard,
-                        std::optional<uint64_t> KnownTarget) -> int {
+  const auto projectCase = [&](SpecializationCursor Cursor, SymRef Predicate,
+                               std::optional<uint64_t> KnownTarget) -> int {
     Projection EdgeState;
     bool Reachable = true;
-    if (!projectEdge(State, FrameRoot, Origins, Frame, Ctx.mkAnd(Path, Guard),
-                     Cursor, EdgeState, Reachable))
+    if (!projectEdge(State, FrameRoot, Origins, Frame, Predicate, Cursor,
+                     EdgeState, Reachable))
       return -1;
     if (!Reachable)
       return -2;
@@ -1710,7 +1717,61 @@ bool Specializer::emitTargets(Node &Draft,
       // of these scalar bytes; treating that root as external would let a
       // subsequent non-affine address bypass the return-slot write guard.
     }
-    const int Next = enqueue(Cursor, EdgeState);
+    return enqueue(Cursor, EdgeState);
+  };
+  const auto edge = [&](SpecializationCursor Cursor, SymRef Guard,
+                        std::optional<uint64_t> KnownTarget) -> int {
+    const SymRef Predicate = Ctx.mkAnd(Path, Guard);
+    const auto Partition =
+        Refinement.RegisterPartitions.find({Cursor.Address, Cursor.Mode});
+    int Next = -1;
+    if (Partition != Refinement.RegisterPartitions.end()) {
+      const auto &Range = Partition->second;
+      const SymRef Value =
+          State.read(SymSpace::Register, Range.Offset, Range.Bytes);
+      // A failed node only nominated this range. Each actual predecessor,
+      // including a later one, must prove its own complete domain under its
+      // current path and transfer guard. Never reuse old values or formulas.
+      const auto Domain =
+          enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
+      if (Failed)
+        return -1;
+      if (Domain.Status == FiniteValueStatus::Complete) {
+        std::vector<std::pair<uint64_t, int>> Cases;
+        for (const auto &Tuple : Domain.Tuples) {
+          if (++Result.EvaluatedOperations > Options.MaxOperations) {
+            fail(SpecializationStatus::BudgetExceeded,
+                 "register-case projection budget exhausted");
+            return -1;
+          }
+          const SymRef Case = Ctx.mkAnd(
+              Predicate,
+              Ctx.mkEq(Value, Ctx.mkConst(Ctx.width(Value), Tuple[0])));
+          const int Id = projectCase(Cursor, Case, KnownTarget);
+          if (Id == -1)
+            return -1;
+          if (Id >= 0)
+            Cases.emplace_back(Tuple[0], Id);
+        }
+        Next = Cases.empty() ? -2 : Cases.back().second;
+        for (size_t I = Cases.size(); I > 1; --I) {
+          // Read the retained physical register after the original transfer's
+          // effects. The last arm is exhaustive within this edge's domain.
+          // These guards are not additional native instruction occurrences.
+          Next = addDispatchNode(
+              Instruction.Origin, NdVar::reg(Range.Offset, Range.Bytes),
+              Cases[I - 2].first, Cases[I - 2].second, Next, true);
+          if (Next < 0)
+            return -1;
+        }
+      } else {
+        // Incomplete domains do not authorize a partial dispatch. Keep the
+        // ordinary conservative edge; its successor still has to finish.
+        Next = projectCase(Cursor, Predicate, KnownTarget);
+      }
+    } else {
+      Next = projectCase(Cursor, Predicate, KnownTarget);
+    }
     if (Next >= 0)
       Draft.Transfers.push_back(Cursor);
     return Next;
@@ -2525,6 +2586,10 @@ bool Specializer::evaluate(int Id) {
           ChainedSuccessor = uniqueSuccessor(Instruction, Flow, Exec, Ctx);
           if (Failed)
             return false;
+          if (ChainedSuccessor &&
+              Refinement.RegisterPartitions.count(
+                  {ChainedSuccessor->Address, ChainedSuccessor->Mode}))
+            ChainedSuccessor.reset();
         }
         if (ChainedSuccessor) {
           if (!admitDestination(*ChainedSuccessor))
@@ -2590,6 +2655,91 @@ void Specializer::schedulePredecessors(SpecializationCursor Cursor) {
     if (QueuedDemands.insert(Id).second)
       DemandQueue.push_back(Id);
   }
+}
+
+SpecializationResult
+Specializer::refineRegisterPartition(SpecializationResult Previous,
+                                     bool &Changed) {
+  Result = std::move(Previous);
+  Changed = false;
+  if (FailureNode < 0)
+    return std::move(Result);
+  const auto &Incoming = Nodes[FailureNode].Incoming;
+  const auto Cursor = Nodes[FailureNode].Key.Cursor;
+  // Entry seeds have no predecessor at which to test a live control value.
+  // A request can separate one physical range per destination; further lost
+  // correlations remain conservative instead of causing identical retries.
+  if (Cursor == Entry ||
+      Refinement.RegisterPartitions.count({Cursor.Address, Cursor.Mode}))
+    return std::move(Result);
+  const auto Work = [&]() {
+    if (++Result.EvaluatedOperations > Options.MaxOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "register-case nomination budget exhausted");
+    return true;
+  };
+  std::optional<SymRegisterRange> Candidate;
+  bool CandidateAddressesMemory = false;
+  const auto &Relation = Incoming.Controls;
+  for (size_t I = 0; I < Relation.Fields.size(); ++I) {
+    if (!Work())
+      return std::move(Result);
+    const uint32_t Field = Relation.Fields[I];
+    if (Field >= Options.ControlRegisters.size())
+      continue;
+    const auto &Range = Options.ControlRegisters[Field];
+    if (Relation.Masks[I] !=
+        llvm::APInt::getLowBitsSet(64, Range.Bytes * 8).getZExtValue())
+      continue;
+    bool Context = Field < ManualRegisters;
+    for (const auto &Other : Refinement.ContextRegisters) {
+      if (!Work())
+        return std::move(Result);
+      Context |= Range.Offset == Other.Offset && Range.Bytes == Other.Bytes;
+    }
+    if (!Context)
+      continue;
+    bool Defined = true;
+    for (uint16_t B = 0; B < Range.Bytes; ++B) {
+      if (!Work())
+        return std::move(Result);
+      Defined &= !Incoming.Origins.UndefinedFlags.count(Range.Offset + B);
+    }
+    if (!Defined)
+      continue;
+    bool Varying = false;
+    for (const auto &Tuple : Relation.Tuples) {
+      if (!Work())
+        return std::move(Result);
+      Varying |= Tuple[I] != Relation.Tuples.front()[I];
+    }
+    if (!Varying)
+      continue;
+    bool AddressesMemory = false;
+    for (const auto &Other : Refinement.AddressRegisters) {
+      if (!Work())
+        return std::move(Result);
+      AddressesMemory |= Range.Offset - Other.Offset < Other.Bytes ||
+                         Other.Offset - Range.Offset < Range.Bytes;
+    }
+    if (!Candidate || (AddressesMemory && !CandidateAddressesMemory)) {
+      Candidate = Range;
+      CandidateAddressesMemory = AddressesMemory;
+    }
+  }
+  if (Candidate) {
+    if (Result.ControlRefinements >= Options.MaxControlRefinements) {
+      fail(SpecializationStatus::BudgetExceeded,
+           "register-case refinement budget exhausted");
+      return std::move(Result);
+    }
+    Refinement.RegisterPartitions.emplace(
+        std::make_pair(Cursor.Address, Cursor.Mode), *Candidate);
+    ++Result.ControlRefinements;
+    Refinement.PrecisionFailure = false;
+    Changed = true;
+  }
+  return std::move(Result);
 }
 
 SpecializationResult
@@ -3196,6 +3346,12 @@ specializeInterpreter(SpecializationProvider &Provider,
       return Result;
     }
     if (!HasCandidates) {
+      bool Partitioned = false;
+      Result = Attempt.refineRegisterPartition(std::move(Result), Partitioned);
+      if (Partitioned)
+        continue;
+      if (Result.Status == SpecializationStatus::BudgetExceeded)
+        return Result;
       // Frame masks are optional precision nominations gathered throughout
       // the attempted graph. A business value can nominate a wide mask with
       // no bearing on the failed address, transfer or guard. Give actual

@@ -41,4 +41,25 @@ generic_recovery_external_store:
   movq (%rcx), %rax
   ret
 .size generic_recovery_external_store,.-generic_recovery_external_store
+
+.globl generic_recovery_register_cases
+.type generic_recovery_register_cases,@function
+generic_recovery_register_cases:
+  movl $16, %eax
+  movl $32, %edx
+  testb $1, %cl
+  cmovzq %rdx, %rax
+  testb $4, %cl
+  jnz .Lregister_case_store
+  movl $48, %eax
+  movl $64, %edx
+  testb $1, %cl
+  cmovzq %rdx, %rax
+  jmp .Lregister_case_store
+.Lregister_case_store:
+  movq %rsp, %r8
+  subq %rax, %r8
+  movb $90, (%r8)
+  ret
+.size generic_recovery_register_cases,.-generic_recovery_register_cases
 .section .note.GNU-stack,"",@progbits

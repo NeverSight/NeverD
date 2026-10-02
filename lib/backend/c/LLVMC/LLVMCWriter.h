@@ -374,7 +374,8 @@ public:
                           const llvm::BasicBlock *Target,
                           const llvm::BasicBlock *Pred);
   void writeCondTrueEdge(const llvm::BasicBlock *From,
-                         const llvm::BasicBlock *Then, int Indent);
+                         const llvm::BasicBlock *Then, int Indent,
+                         bool AllowFallthrough = true);
   void writeInvertedFalseSkip(const llvm::BasicBlock *From,
                               const llvm::BasicBlock *Else, int Indent);
   /// Inverted skip whose inner false edge is one assign and whose true

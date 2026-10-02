@@ -1021,6 +1021,79 @@ int main(void) {
   }
 }
 
+TEST_F(DevirtualizationSourceTest, CLIRegisterCasesCoverEveryMemoryEffect) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "public recovery execution requires clang";
+  const auto Binary = tmpFile("generic-register-cases.elf");
+  ASSERT_TRUE(buildFixture(Binary, "generic_recovery_contract.S").ok());
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM ? "LLVMC" : "HighC");
+    const auto Source = tmpFile(LLVM ? "cases-llvm.c" : "cases-high.c");
+    std::vector<std::string> Args{"decompile",
+                                  Binary.string(),
+                                  "--func",
+                                  "generic_recovery_register_cases",
+                                  "--devirtualize",
+                                  "--vm-machine-state",
+                                  "--vm-control=rax",
+                                  "--vm-chain-transfers=64",
+                                  "--vm-entry-frame=-64:8",
+                                  "-o",
+                                  Source.string()};
+    if (LLVM)
+      Args.push_back("--llvm");
+    const auto Recovered = exec(ndBin(), Args);
+    ASSERT_TRUE(Recovered.ok()) << Recovered.err;
+    const auto Harness = tmpFile("cases-runtime.c");
+    std::ofstream(Harness) << readSource(Source) << R"C(
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
+int main(void) {
+  _Alignas(32) uint8_t frames[2][256];
+  uint64_t state[17], before[17];
+  for (unsigned f = 0; f < 2; ++f) {
+    for (unsigned test = 0; test < 64; ++test) {
+      memset(frames, 0x65, sizeof frames);
+      for (unsigned i = 0; i < 17; ++i)
+        state[i] = UINT64_MAX - (test + i) * UINT64_C(0x102030405);
+      state[1] = (test & 7) | ((uint64_t)test << 32);
+      state[4] = (uint64_t)(uintptr_t)(frames[f] + 128);
+      state[16] = 2;
+      memcpy(before, state, sizeof state);
+      unsigned offset = (test & 4 ? 0 : 32) + (test & 1 ? 16 : 32);
+      if (generic_recovery_register_cases((uint8_t *)state)) return 1;
+      if (state[0] != offset || state[2] != (test & 4 ? 32 : 64) ||
+          state[8] != before[4] - offset) {
+        fprintf(stderr, "case %u: result %llu, scratch %llu, offset %llu; expected %u\n",
+                test, (unsigned long long)state[0], (unsigned long long)state[2],
+                (unsigned long long)(before[4] - state[8]), offset);
+        return 2;
+      }
+      for (unsigned i = 1; i < 16; ++i)
+        if (i != 2 && i != 8 && state[i] != before[i]) return 3;
+      for (unsigned frame = 0; frame < 2; ++frame)
+        for (unsigned i = 0; i < 256; ++i)
+          if (frames[frame][i] !=
+              (frame == f && i == 128 - offset ? 90 : 0x65)) return 4;
+    }
+  }
+  return 0;
+}
+)C";
+    std::ofstream(tmpFile("immintrin.h")).close();
+    for (const char *Optimization : {"-O0", "-O2"}) {
+      const auto Program = tmpFile("cases-runtime");
+      const auto Built =
+          exec(NEVERD_TEST_CLANG, {"-std=c11", Optimization, Harness.string(),
+                                   "-o", Program.string()});
+      ASSERT_TRUE(Built.ok()) << Built.err;
+      const auto Ran = exec(Program.string(), {});
+      EXPECT_TRUE(Ran.ok()) << Ran.err << " exit " << Ran.exitCode;
+    }
+  }
+}
+
 TEST_F(DevirtualizationSourceTest, CLIChecksEntryAlignmentBeforeStateCommit) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "public recovery execution requires clang";

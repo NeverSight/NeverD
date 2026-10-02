@@ -2858,7 +2858,10 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     if (const llvm::BasicBlock *Body = elseBodyFallsIntoNext(From, Else)) {
       emitIndent(Indent);
       OS << "if (" << condStr(Br->getCondition()) << ") {\n";
-      writeCondTrueEdge(From, Then, Indent + 1);
+      // The false body's statements will be moved before the layout's next
+      // block. The true edge must jump past them even when its join was that
+      // next block in the original layout.
+      writeCondTrueEdge(From, Then, Indent + 1, false);
       emitIndent(Indent);
       OS << "}\n";
       for (llvm::Instruction &BodyInst :
@@ -5079,9 +5082,11 @@ void LLVMCWriter::writeInvertedFalseSkip(const llvm::BasicBlock *From,
 }
 
 void LLVMCWriter::writeCondTrueEdge(const llvm::BasicBlock *From,
-                                    const llvm::BasicBlock *Then, int Indent) {
+                                    const llvm::BasicBlock *Then, int Indent,
+                                    bool AllowFallthrough) {
   auto FallsIntoNext = [&](const llvm::BasicBlock *Succ) {
-    return joinPrintsNext(From, Succ) && !cursorForExitsAt(Succ);
+    return AllowFallthrough && joinPrintsNext(From, Succ) &&
+           !cursorForExitsAt(Succ);
   };
   const llvm::BasicBlock *Body = straightLineTrueArm(From, Then, true);
   if (!Body) {

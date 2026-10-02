@@ -192,6 +192,259 @@ execute(const LowFunc &Function, uint64_t Input = 0, uint64_t Flag = 0,
   return std::nullopt;
 }
 
+StackProvider selectedFrameOffset() {
+  StackProvider P;
+  P.add(0x100,
+        {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+         operation(NdOp::SELECT, r(16), {r(24), c(16), c(32)}), branch(0x200)});
+  P.add(0x200, {operation(NdOp::INT_SUB, r(40), {r(32), r(16)}),
+                operation(NdOp::STORE, {}, {r(40), c(0x5a)}),
+                operation(NdOp::LOAD, r(0), {r(40)})});
+  P.nativeReturn(0x201);
+  return P;
+}
+
+SpecializationOptions registerCaseOptions() {
+  auto Options = stackOptions();
+  Options.ControlRegisters = {{16, 8}};
+  Options.DiscoverControlState = true;
+  return Options;
+}
+
+TEST(NativeStackSpecialization, RegisterCasesSeparateFiniteFrameOffsets) {
+  auto P = selectedFrameOffset();
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    auto Options = registerCaseOptions();
+    Options.ByteOrder = Order;
+    auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    EXPECT_GT(Result.ControlRefinements, 0u);
+    for (uint64_t Base : {uint64_t{0x10000}, uint64_t{0x123456781000}})
+      for (uint64_t Input : {0, 1, 7, 18}) {
+        // Observe the low-valued byte in either guest byte order.
+        const int64_t Lane = Order == llvm::endianness::little ? 0 : 7;
+        const auto Run = execute(Result.Residual, Input, 0, Order, Base,
+                                 {-16 + Lane, -32 + Lane});
+        ASSERT_TRUE(Run);
+        EXPECT_EQ(Run->Value, 0x5au);
+        EXPECT_EQ(Run->Stack, Base);
+        EXPECT_EQ(Run->Memory, (Input & 1 ? std::vector<uint8_t>{0x5a, 66}
+                                          : std::vector<uint8_t>{65, 0x5a}));
+      }
+    // Only the original transfer and the two original case bodies have
+    // native origins. A case comparison is a synthetic routing operation.
+    unsigned EntryOrigins = 0;
+    for (const auto &Origin : Result.Origins)
+      EntryOrigins += Origin.NativeInstruction.Address == 0x100;
+    EXPECT_EQ(EntryOrigins, 1u);
+  }
+}
+
+TEST(NativeStackSpecialization,
+     RegisterCasesRequireDiscoveryAndCompleteDomain) {
+  auto P = selectedFrameOffset();
+  for (bool Discovery : {false, true}) {
+    auto Options = registerCaseOptions();
+    Options.DiscoverControlState = Discovery;
+    if (Discovery)
+      Options.MaxControlTuples = 1;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_FALSE(Result.complete());
+    EXPECT_TRUE(Result.Residual.Blocks.empty());
+    EXPECT_TRUE(Result.Origins.empty());
+  }
+}
+
+StackProvider lateRegisterCases(bool Unbounded = false) {
+  auto P = selectedFrameOffset();
+  P.add(0x100, {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+                operation(NdOp::SELECT, r(16), {r(24), c(16), c(32)}),
+                operation(NdOp::INT_AND, r(24), {r(8), c(4)}),
+                operation(NdOp::COND_BR, {}, {NdVar::cst(0x200, 8), r(24)})});
+  if (Unbounded)
+    P.add(0x101, {operation(NdOp::COPY, r(16), {r(8)}), branch(0x200)});
+  else
+    P.add(0x101, {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+                  operation(NdOp::SELECT, r(16), {r(24), c(48), c(64)}),
+                  branch(0x200)});
+  return P;
+}
+
+TEST(NativeStackSpecialization, RegisterCasesReproveLateOverwrittenControls) {
+  for (uint32_t Chaining : {0, 64}) {
+    auto P = lateRegisterCases();
+    auto Options = registerCaseOptions();
+    Options.MaxChainedTransfers = Chaining;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    for (uint64_t Input = 0; Input != 8; ++Input) {
+      const auto Run =
+          execute(Result.Residual, Input, 0, llvm::endianness::little, 0x10000,
+                  {-16, -32, -48, -64});
+      ASSERT_TRUE(Run);
+      std::vector<uint8_t> Expected{65, 66, 67, 68};
+      Expected[(Input & 4 ? 0 : 2) + (Input & 1 ? 0 : 1)] = 0x5a;
+      EXPECT_EQ(Run->Memory, Expected);
+      EXPECT_EQ(Run->Value, 0x5au);
+    }
+  }
+}
+
+TEST(NativeStackSpecialization, RegisterCasesNeverDropAnIncompleteLaterEdge) {
+  auto P = lateRegisterCases(true);
+  const auto Result = specializeInterpreter(P, {0x100}, registerCaseOptions());
+  EXPECT_FALSE(Result.complete());
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+  EXPECT_TRUE(Result.Origins.empty());
+}
+
+TEST(NativeStackSpecialization, RegisterCasesRetainNativeCallAndReturnEffects) {
+  auto P = selectedFrameOffset();
+  P.Code[0x300] = P.Code[0x200];
+  P.Code[0x300].Origin.Address = 0x300;
+  P.Code[0x300].Fallthrough = {0x301};
+  for (auto &Op : P.Code[0x300].Ops)
+    Op.Addr = 0x300;
+  P.nativeReturn(0x301);
+  P.nativeCall(0x200, 0x300);
+  const auto Result = specializeInterpreter(P, {0x100}, registerCaseOptions());
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  for (uint64_t Input : {0, 1}) {
+    const auto Run = execute(Result.Residual, Input, 0,
+                             llvm::endianness::little, 0x10000, {-24, -40});
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, 0x5au);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+    EXPECT_EQ(Run->Memory, (Input & 1 ? std::vector<uint8_t>{0x5a, 66}
+                                      : std::vector<uint8_t>{65, 0x5a}));
+  }
+}
+
+TEST(NativeStackSpecialization, RegisterCasesShareRecoveryBudgets) {
+  auto P = selectedFrameOffset();
+  const auto Good = specializeInterpreter(P, {0x100}, registerCaseOptions());
+  ASSERT_TRUE(Good.complete()) << Good.Diagnostic;
+  for (unsigned Kind = 0; Kind != 6; ++Kind) {
+    auto Options = registerCaseOptions();
+    if (Kind == 0)
+      Options.MaxOperations = Good.EvaluatedOperations;
+    if (Kind == 1)
+      Options.MaxNodeEvaluations = Good.NodeEvaluations;
+    if (Kind == 2)
+      Options.MaxSolverQueries = Good.SolverQueries;
+    if (Kind == 3)
+      Options.MaxControlRefinements = Good.ControlRefinements;
+    if (Kind == 4)
+      Options.MaxContextsPerAddress = 2;
+    if (Kind == 5)
+      Options.MaxNodes = Good.Contexts + 1; // One synthetic case comparison.
+    const auto Exact = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Exact.complete()) << Kind << ": " << Exact.Diagnostic;
+    if (Kind == 0)
+      --Options.MaxOperations;
+    if (Kind == 1)
+      --Options.MaxNodeEvaluations;
+    if (Kind == 2)
+      --Options.MaxSolverQueries;
+    if (Kind == 3)
+      --Options.MaxControlRefinements;
+    if (Kind == 4)
+      --Options.MaxContextsPerAddress;
+    if (Kind == 5)
+      --Options.MaxNodes;
+    const auto Short = specializeInterpreter(P, {0x100}, Options);
+    EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded)
+        << Kind << ": " << Short.Diagnostic;
+    EXPECT_TRUE(Short.Residual.Blocks.empty());
+  }
+}
+
+TEST(NativeStackSpecialization,
+     RegisterCasesRebuildWidenedPredecessorDispatch) {
+  for (bool Corrupt : {false, true}) {
+    auto P = selectedFrameOffset();
+    P.add(0x100, {operation(NdOp::INT_AND, r(24), {r(8), c(4)}),
+                  operation(NdOp::COND_BR, {}, {NdVar::cst(0x300, 8), r(24)})});
+    P.add(0x300, {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+                  operation(NdOp::SELECT, r(16), {r(24), c(16), c(32)}),
+                  branch(0x400)});
+    P.add(0x101, {branch(0x102)});
+    P.add(0x102,
+          {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+           operation(NdOp::SELECT, r(16), {r(24), c(Corrupt ? 0 : 48), c(64)}),
+           branch(0x400)});
+    P.add(0x400, {branch(0x200)});
+    const auto Result =
+        specializeInterpreter(P, {0x100}, registerCaseOptions());
+    if (Corrupt) {
+      EXPECT_FALSE(Result.complete());
+      EXPECT_TRUE(Result.Residual.Blocks.empty());
+      EXPECT_TRUE(Result.Origins.empty());
+      continue;
+    }
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    for (uint64_t Input = 0; Input != 8; ++Input) {
+      const auto Run =
+          execute(Result.Residual, Input, 0, llvm::endianness::little, 0x10000,
+                  {-16, -32, -48, -64});
+      ASSERT_TRUE(Run);
+      std::vector<uint8_t> Expected{65, 66, 67, 68};
+      Expected[(Input & 4 ? 0 : 2) + (Input & 1 ? 0 : 1)] = 0x5a;
+      EXPECT_EQ(Run->Memory, Expected);
+    }
+  }
+}
+
+TEST(NativeStackSpecialization, RegisterCasesDispatchAfterInternalReturnPop) {
+  auto P = selectedFrameOffset();
+  P.Code[0x101] = P.Code[0x200];
+  P.Code[0x101].Origin.Address = 0x101;
+  P.Code[0x101].Fallthrough = {0x102};
+  for (auto &Op : P.Code[0x101].Ops)
+    Op.Addr = 0x101;
+  P.nativeReturn(0x102);
+  P.nativeCall(0x100, 0x300);
+  P.add(0x300, {operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+                operation(NdOp::SELECT, r(16), {r(24), c(16), c(32)})});
+  P.nativeReturn(0x301);
+  const auto Result = specializeInterpreter(P, {0x100}, registerCaseOptions());
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  for (uint64_t Input : {0, 1}) {
+    const auto Run = execute(Result.Residual, Input, 0,
+                             llvm::endianness::little, 0x10000, {-16, -32});
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+    EXPECT_EQ(Run->Memory, (Input & 1 ? std::vector<uint8_t>{0x5a, 66}
+                                      : std::vector<uint8_t>{65, 0x5a}));
+  }
+}
+
+TEST(NativeStackSpecialization,
+     RegisterCasesKeepUnboundedOverlappingHighBytes) {
+  auto P = selectedFrameOffset();
+  P.add(0x100, {operation(NdOp::COPY, r(16), {r(8)}),
+                operation(NdOp::INT_AND, r(24), {r(8), c(1)}),
+                operation(NdOp::SELECT, r(16, 1), {r(24), c(16, 1), c(32, 1)}),
+                branch(0x200)});
+  P.add(0x200, {operation(NdOp::INT_ZEXT, r(48), {r(16, 1)}),
+                operation(NdOp::INT_SUB, r(40), {r(32), r(48)}),
+                operation(NdOp::STORE, {}, {r(40), c(0x5a)}),
+                operation(NdOp::COPY, r(0), {r(16)})});
+  auto Options = registerCaseOptions();
+  Options.ControlRegisters = {{16, 1}, {16, 8}};
+  const auto Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  for (uint64_t Input :
+       {UINT64_C(0), UINT64_C(1), UINT64_C(0x1234567809), UINT64_MAX - 1}) {
+    const auto Run = execute(Result.Residual, Input, 0,
+                             llvm::endianness::little, 0x10000, {-16, -32});
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, (Input & ~UINT64_C(255)) | (Input & 1 ? 16 : 32));
+    EXPECT_EQ(Run->Memory, (Input & 1 ? std::vector<uint8_t>{0x5a, 66}
+                                      : std::vector<uint8_t>{65, 0x5a}));
+  }
+}
+
 StackProvider guardedAlignedSpill(bool Corrupt = false) {
   StackProvider P;
   P.add(0x100,

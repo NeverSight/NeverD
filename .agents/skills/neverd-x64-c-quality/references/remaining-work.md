@@ -67,6 +67,12 @@ analysis and comparison output belong outside the repository.
   reach that common sink after `__except`, including optimized PHI copies; a
   separate scalar global at the interior image address is no longer expected.
 
+## Closed control-flow regressions
+
+- LLVMC keeps the true-arm exit when the false body moves ahead of a shared
+  join. The LLVM fixture executes PHI and memory effects at O0/O2; a native
+  four-case recovery fixture exercises the same structure through both C routes.
+
 ## Established rules
 
 - HighC owns structured `__try` / `__except` / `__finally` and source-like

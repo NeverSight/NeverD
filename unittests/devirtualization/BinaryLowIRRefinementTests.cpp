@@ -85,6 +85,52 @@ TEST(BinaryLowIRRefinement, ActualResidualAndOriginalBytesAreBound) {
   EXPECT_EQ(Good.Certificate->Instructions[0].NativeBytes[1], 7);
 }
 
+TEST(BinaryLowIRRefinement, RegisterCaseDispatchChecksBothNativeControlCases) {
+  // mov eax,16; mov edx,32; test cl,1; cmovz rax,rdx; jmp body;
+  // body: mov r8,rsp; sub r8,rax; mov byte ptr [r8],90; ret.
+  Program P({0xb8, 16,   0,    0,    0,    0xba, 32,   0,    0,  0,
+             0xf6, 0xc1, 1,    0x48, 0x0f, 0x44, 0xc2, 0xeb, 0,  0x49,
+             0x89, 0xe0, 0x49, 0x29, 0xc0, 0x41, 0xc6, 0,    90, 0xc3});
+  P.Options.ControlRegisters = {{x86reg::RAX, 8}};
+  P.Options.DiscoverControlState = true;
+  auto Recovery = P.recover();
+  ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
+  EXPECT_GT(Recovery.ControlRefinements, 0u);
+  // The native memory checker currently requires a unique frame offset at
+  // every access. Bind each selector separately here; the recovery above
+  // and source runtime regression keep the selector unconstrained.
+  for (uint64_t Input : {0, 1}) {
+    P.Options.EntryConstants = {{NdVar::reg(x86reg::RCX, 8), Input}};
+    P.Contract.EntryConstants = {{NdVar::reg(x86reg::RCX, 8), Input}};
+    const auto Good = P.check(Recovery.Residual);
+    ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+    EXPECT_TRUE(Good.Certificate->Relation.Contract.ObserveWrittenFrameBytes);
+  }
+  // A deliberately misrouted case must be rejected by the independent
+  // native comparison, even if the residual graph itself remains well formed.
+  bool Changed = false;
+  for (auto &Block : Recovery.Residual.Blocks)
+    for (auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INT_EQUAL && Op.Inputs[0].isReg() &&
+          Op.Inputs[0].Offset == x86reg::RAX && Op.Inputs[0].Size == 8 &&
+          Op.Inputs[1].isConst()) {
+        ++Op.Inputs[1].Offset;
+        Changed = true;
+      }
+  ASSERT_TRUE(Changed);
+  bool Rejected = false;
+  for (uint64_t Input : {0, 1}) {
+    P.Options.EntryConstants = {{NdVar::reg(x86reg::RCX, 8), Input}};
+    P.Contract.EntryConstants = {{NdVar::reg(x86reg::RCX, 8), Input}};
+    const auto Bad = P.check(Recovery.Residual);
+    if (Bad.Proof.Status == Status::Different) {
+      refused(Bad, Status::Different);
+      Rejected = true;
+    }
+  }
+  EXPECT_TRUE(Rejected);
+}
+
 TEST(BinaryLowIRRefinement, OverlappingEntriesKeepBothFeasibleBranchResults) {
   for (uint8_t Branch : {0x74, 0x75}) {
     // TEST ECX,ECX; JZ/JNZ second_mov; MOV EAX,0x7b8; RET; RET.

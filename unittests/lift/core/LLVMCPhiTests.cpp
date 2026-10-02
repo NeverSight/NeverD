@@ -234,7 +234,63 @@ int main(void) {
   }
   return 0;
 }
+
 )");
+}
+
+TEST(LLVMCValues, MovedFalseArmCannotRunAfterAnInlinedTrueArm) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("moved-false-arm", Context);
+  llvm::IRBuilder<> B(Context);
+  auto *I64 = B.getInt64Ty();
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(I64, {B.getPtrTy(), I64}, false),
+      llvm::GlobalValue::ExternalLinkage, "choose_effect", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  // Both arm bodies appear after the join in LLVM layout. Printing the false
+  // body before the join must not make it a continuation of the true arm.
+  auto *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  auto *Then = llvm::BasicBlock::Create(Context, "then", Function);
+  auto *Else = llvm::BasicBlock::Create(Context, "else", Function);
+  B.SetInsertPoint(Entry);
+  auto *Seed = B.CreateLoad(I64, Function->getArg(0));
+  B.CreateCondBr(B.CreateICmpNE(Function->getArg(1), B.getInt64(0)), Then,
+                 Else);
+  B.SetInsertPoint(Then);
+  auto *Count = B.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, Seed);
+  B.CreateStore(Count, Function->getArg(0));
+  auto *TrueValue = B.CreateAdd(Count, B.getInt64(7));
+  B.CreateBr(Join);
+  B.SetInsertPoint(Else);
+  auto *Product = B.CreateMul(Seed, B.getInt64(3));
+  B.CreateStore(Product, Function->getArg(0));
+  auto *FalseValue = B.CreateAdd(Product, B.getInt64(13));
+  B.CreateBr(Join);
+  B.SetInsertPoint(Join);
+  auto *Result = B.CreatePHI(I64, 2, "result");
+  Result->addIncoming(TrueValue, Then);
+  Result->addIncoming(FalseValue, Else);
+  B.CreateRet(Result);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Output, Options));
+  Source += R"(
+int main(void) {
+  for (uint64_t seed = 0; seed < 256; ++seed)
+    for (uint64_t flag = 0; flag < 2; ++flag) {
+      uint64_t value = seed;
+      uint64_t expected = flag ? __builtin_popcountll(seed) : seed * 3;
+      if (choose_effect(&value, flag) != expected + (flag ? 7 : 13)) return 1;
+      if (value != expected) return 2;
+    }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
 }
 
 TEST(LLVMCValues, BranchAndSwitchPhiCopiesFollowSelectedEdges) {
