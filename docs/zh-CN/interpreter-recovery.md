@@ -83,6 +83,14 @@ neverd_free_string(source);
 neverd_free_string(report);
 ```
 
+机器状态恢复支持用 `--vm-entry-alignment=A:R` 声明并检查入口 RSP 同余域。`A` 必须是正的二次幂，且 `R < A`。其他入口在客体访存或状态写入前返回状态 2。根地址高位仍自由，默认不假定对齐；此选项不提供原生等价认证。
+
+v5 C API `neverd_devirtualize_source_v5()` 和 `neverd_devirtualize_machine_source_v5()` 在 v4 上增加 `entry_frame_alignment`、`entry_frame_residue`。将 `neverd_devirtualize_options_v5` 清零，并把 `base.base.base.base.struct_size` 设为完整大小。对齐值为零表示关闭，此时余数也必须为零；非零对齐只允许机器状态 API 使用。v1–v4 忽略新尾部，v5 忽略未来尾部。报告的 `entryFrameAlignment` 与生成 C 记录同一受检查条件。无效对齐优先于无效入口标志，且保持全部状态字不变。已有数值帧范围仍不做运行时检查。C++ 裸残余图调用者必须自行保证声明的 RSP 域；源码与模型包装器共用检查生成器。原生证明 API 在其契约能绑定该域之前明确拒绝此选项。
+
+`--vm-max-symbolic-nodes=N` 和 v5 `max_symbolic_nodes` 暴露每节点符号 DAG 预算，默认 262144。CLI 要求正的 32 位十进制整数，C 中零表示默认值。两个源码 ABI 使用同一限制，报告的 `maxSymbolicNodes` 记录有效预算；提高预算不增加语义前提或证明。
+
+控制和守卫精度细化优先于可选帧分区重试，必要的更细分区仍可使用。恢复先完成一个余数的不动点，再开始下一个，但只有全部允许余数完成后才发布结果。显式入口对齐与分区域取交集，分派比较实际余数。上下文、操作、节点和求解器预算仍有界，并在各次重试间共享。
+
 JSON 报告新增 `discoverControlState`、`maxControlRefinements`、`maxDiscoveryVisits`、`discoveredControlFields`、`discoveredContextFields`、`controlRefinements` 和 `discoveryVisits`，分别记录启用行为、上限和分析工作量。发现字段本身不等于恢复成功。
 
 如果条件将地址依赖缩窄为字节片段，细化还会把包含该片段、已跟踪的完整八字节直接地址字段列为上下文候选。原有窄字段及其生产者位掩码保持不变，不提升无关的宽字段。常量和相对入口的偏移仍须证明，所有上下文共享现有上限。

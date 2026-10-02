@@ -17,6 +17,7 @@
 
 #include <initializer_list>
 #include <limits>
+#include <map>
 #include <utility>
 
 namespace neverd::analysis {
@@ -201,6 +202,96 @@ struct InstructionWriter {
   }
 };
 
+llvm::Error addEntryAlignmentGuard(LowFunc &Function, uint64_t Parameter,
+                                   bool StateRegisters,
+                                   InterpreterEntryAlignment Alignment) {
+  // Move the predecessor-free original anchor out of the entry address. Its
+  // operations still execute only on the accepted edge. Do not insert a
+  // sticky check in the body: an invalid root must never reach guest memory.
+  auto &Body = Function.Blocks.front();
+  uint64_t Fresh = 0;
+  for (const auto &B : Function.Blocks)
+    Fresh = std::max(Fresh, B.EndAddr);
+  const uint64_t Span = Body.EndAddr - Body.StartAddr;
+  if (!Span || Fresh >= InvalidVA || Span > InvalidVA - Fresh ||
+      InvalidVA - Fresh - Span < 3 ||
+      Function.Blocks.size() >
+          static_cast<size_t>(std::numeric_limits<int>::max() - 2))
+    return invalid("machine source alignment guard address space exhausted");
+  ++Fresh;
+  const uint64_t Delta = Fresh - Body.StartAddr;
+  Body.StartAddr += Delta;
+  Body.EndAddr += Delta;
+  for (auto &Boundary : Body.InstructionBoundaries)
+    Boundary.Address += Delta;
+  for (auto &Op : Body.Ops)
+    Op.Addr += Delta;
+  const uint64_t RejectAddress = Body.EndAddr;
+  std::map<int, int> IDs;
+  for (size_t I = 0; I != Function.Blocks.size(); ++I)
+    if (!IDs.emplace(Function.Blocks[I].Id, static_cast<int>(I + 2)).second)
+      return invalid("machine source has duplicate block identities");
+  for (auto &B : Function.Blocks) {
+    B.Id = IDs.at(B.Id);
+    for (auto *Edges : {&B.Preds, &B.Succs})
+      for (auto &Id : *Edges) {
+        const auto At = IDs.find(Id);
+        if (At == IDs.end())
+          return invalid("machine source has an unknown block identity");
+        Id = At->second;
+      }
+  }
+  Body.Preds = {0};
+  const auto Finish = [](LowBlock &B, LowInstructionControl Control,
+                         LowInstructionControlFlag Flags, uint64_t Target = 0) {
+    LowInstructionBoundary Boundary;
+    Boundary.Address = B.StartAddr;
+    Boundary.Size = 1;
+    Boundary.OpCount = B.Ops.size();
+    Boundary.Control = Control;
+    Boundary.ControlFlags = Flags;
+    Boundary.Immediate = Target;
+    B.InstructionBoundaries.push_back(Boundary);
+    for (size_t I = 0; I != B.Ops.size(); ++I)
+      B.Ops[I].Seq = static_cast<int>(I);
+  };
+  LowBlock Guard;
+  Guard.Id = 0;
+  Guard.StartAddr = Function.Entry;
+  Guard.EndAddr = Function.Entry + 1;
+  Guard.Succs = {1, 2};
+  InstructionWriter Check{Guard.Ops, Guard.StartAddr, StateRegisters};
+  if (!StateRegisters)
+    Check.emit(NdOp::COPY, NdVar::reg(StatePointer, 8),
+               {NdVar::reg(Parameter, 8)});
+  const auto Root = Check.temporary();
+  Check.load(Root, x86reg::RSP);
+  const auto Low = Check.temporary();
+  Check.emit(NdOp::INT_AND, Low, {Root, scalar(Alignment.Alignment - 1)});
+  const auto Rejected = Check.temporary(1);
+  Check.emit(NdOp::INT_NOTEQUAL, Rejected, {Low, scalar(Alignment.Residue)});
+  Check.emit(NdOp::COND_BR, {}, {NdVar::cst(RejectAddress, 8), Rejected});
+  Finish(Guard, LowInstructionControl::Branch,
+         LowInstructionControlFlag::Branch |
+             LowInstructionControlFlag::Conditional,
+         RejectAddress);
+  LowBlock Reject;
+  Reject.Id = 1;
+  Reject.StartAddr = RejectAddress;
+  Reject.EndAddr = RejectAddress + 1;
+  Reject.Preds = {0};
+  InstructionWriter Exit{Reject.Ops, Reject.StartAddr, StateRegisters};
+  if (!StateRegisters)
+    Exit.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, 8), {scalar(2)});
+  Exit.emit(NdOp::RETURN, {},
+            {StateRegisters ? scalar(2) : NdVar::reg(x86reg::RAX, 8)});
+  Finish(Reject, LowInstructionControl::Return,
+         LowInstructionControlFlag::Return);
+  Function.Blocks.insert(Function.Blocks.begin(), std::move(Reject));
+  Function.Blocks.insert(Function.Blocks.begin(), std::move(Guard));
+  return llvm::Error::success();
+}
+
 } // namespace
 
 llvm::Error validateInterpreterMachineStateX64V1(
@@ -213,8 +304,10 @@ llvm::Error validateInterpreterMachineStateX64V1(
 
 static llvm::Expected<InterpreterMachineSource>
 buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
-                   InterpreterMachineStateProfile Profile,
-                   bool StateRegisters) {
+                   InterpreterMachineStateProfile Profile, bool StateRegisters,
+                   std::optional<InterpreterEntryAlignment> EntryAlignment) {
+  if (EntryAlignment && !EntryAlignment->valid())
+    return invalid("invalid machine source entry alignment");
   if (Profile != InterpreterMachineStateProfile::UserX64NoFaultV1)
     return invalid("unsupported interpreter machine-state profile");
   if (SourceFormat != BinaryFormat::ELF && SourceFormat != BinaryFormat::COFF &&
@@ -392,6 +485,10 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
   }
   if (!HasReturn)
     return invalid("machine source has no ordinary return boundary");
+  if (EntryAlignment)
+    if (auto Error = addEntryAlignmentGuard(Result.Function, ParameterRegister,
+                                            StateRegisters, *EntryAlignment))
+      return std::move(Error);
   if (auto Error = validateLowInstructionBoundaries(
           Result.Function, LowInstructionBoundaryRequirement::Required))
     return std::move(Error);
@@ -419,13 +516,30 @@ llvm::Expected<InterpreterMachineSource>
 wrapInterpreterMachineStateX64(const LowFunc &Residual,
                                BinaryFormat SourceFormat,
                                InterpreterMachineStateProfile Profile) {
-  return buildMachineSource(Residual, SourceFormat, Profile, false);
+  return wrapInterpreterMachineStateX64(Residual, SourceFormat, Profile,
+                                        std::nullopt);
 }
 
 llvm::Expected<InterpreterMachineStateModel>
 modelInterpreterMachineStateX64(const LowFunc &Residual,
                                 InterpreterMachineStateProfile Profile,
                                 uint64_t MaxOperations) {
+  return modelInterpreterMachineStateX64(Residual, Profile, MaxOperations,
+                                         std::nullopt);
+}
+
+llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineStateX64(
+    const LowFunc &Residual, BinaryFormat SourceFormat,
+    InterpreterMachineStateProfile Profile,
+    std::optional<InterpreterEntryAlignment> EntryAlignment) {
+  return buildMachineSource(Residual, SourceFormat, Profile, false,
+                            EntryAlignment);
+}
+
+llvm::Expected<InterpreterMachineStateModel> modelInterpreterMachineStateX64(
+    const LowFunc &Residual, InterpreterMachineStateProfile Profile,
+    uint64_t MaxOperations,
+    std::optional<InterpreterEntryAlignment> EntryAlignment) {
   uint64_t Remaining = MaxOperations;
   const auto Charge = [&](uint64_t Count) {
     if (Count > Remaining)
@@ -443,8 +557,8 @@ modelInterpreterMachineStateX64(const LowFunc &Residual,
         !Charge(B.ExceptionalPreds.size()) ||
         !Charge(B.ExceptionalSuccs.size()))
       return invalid("machine-state model input budget exhausted");
-  auto Generated =
-      buildMachineSource(Residual, BinaryFormat::ELF, Profile, true);
+  auto Generated = buildMachineSource(Residual, BinaryFormat::ELF, Profile,
+                                      true, EntryAlignment);
   if (!Generated)
     return Generated.takeError();
   InterpreterMachineStateModel Result;

@@ -83,6 +83,14 @@ neverd_free_string(source);
 neverd_free_string(report);
 ```
 
+マシン状態の復元では `--vm-entry-alignment=A:R` により入口 RSP の合同条件を明示し、実行時に検査できます。`A` は正の 2 の累乗、`R < A` が必要です。他の入口はゲストメモリアクセスや状態書き込みの前にステータス 2 を返します。アドレス上位ビットは自由で、既定では整列を仮定しません。これはネイティブ等価性の認証ではありません。
+
+v5 C API の `neverd_devirtualize_source_v5()` と `neverd_devirtualize_machine_source_v5()` は v4 に `entry_frame_alignment` と `entry_frame_residue` を追加します。`neverd_devirtualize_options_v5` をゼロ初期化し、`base.base.base.base.struct_size` に構造体全体のサイズを設定します。整列値 0 は無効化を意味し、剰余も 0 が必要です。非ゼロの整列指定はマシン状態 API のみが受け付けます。v1–v4 は新しい末尾を、v5 は将来の末尾を無視します。レポートの `entryFrameAlignment` と生成 C は同じ検査条件を記録します。整列違反の拒否は入口フラグ違反より先で、状態は変更されません。既存の数値フレーム範囲は引き続き未検査です。C++ の残余グラフ利用者は RSP 条件を自ら保証する必要があります。ソースとモデルは同じガード生成器を使い、ネイティブ証明 API は契約にこの領域を結び付けられるまで指定を拒否します。
+
+`--vm-max-symbolic-nodes=N` と v5 の `max_symbolic_nodes` はノード単位のシンボリック DAG 予算を指定します（既定 262144）。CLI は正の 32 ビット十進整数を要求し、C のゼロは既定値を選びます。両ソース ABI に同じ制限が適用され、`maxSymbolicNodes` に実効値を記録します。増額は意味論上の仮定や証明を追加しません。
+
+制御状態とガードの精度改善を、任意のフレーム分割の再試行より優先します。必要な細分化は引き続き利用できます。各剰余の不動点を順番に計算しますが、結果公開には許可された全剰余の完了が必要です。入口整列条件と分割領域の共通部分を使い、分岐は実際の剰余を比較します。コンテキスト、操作、ノード、ソルバーの予算は再試行を通じて共有されます。
+
 JSON レポートには `discoverControlState`、`maxControlRefinements`、`maxDiscoveryVisits`、`discoveredControlFields`、`discoveredContextFields`、`controlRefinements`、`discoveryVisits` が追加され、有効な動作、上限、解析作業量を記録します。フィールドの検出だけでは復元成功を証明しません。
 
 条件によってアドレス依存がバイト部分に狭まる場合、細分化は、その部分を包含する追跡済みの完全な8バイトの直接アドレスフィールドもコンテキスト候補に保持します。元の狭いフィールドと生成元ビットマスクは変更せず、無関係な広いフィールドは昇格しません。定数と入口相対オフセットには引き続き証明が必要で、全コンテキストは既存の上限を共有します。

@@ -70,6 +70,17 @@ TEST(InterpreterLLVMRefinement, TransferChainsProveRepeatedNativeCalls) {
   }
 }
 
+TEST(InterpreterLLVMRefinement, EntryAlignmentCannotCertifyAnUnboundDomain) {
+  Program P({0xb8, 7, 0, 0, 0, 0xc3});
+  P.Options.EntryFrameAlignment = InterpreterEntryAlignment{16, 3};
+  const auto R = P.recover();
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  const auto Proof = P.check(R.Residual, constantResult());
+  rejected(Proof, Stage::Native);
+  EXPECT_EQ(Proof.Native.Proof.Status, Status::Unsupported);
+  EXPECT_NE(Proof.Diagnostic.find("entry alignment"), std::string::npos);
+}
+
 TEST(InterpreterLLVMRefinement, CompleteProofBindsMandatoryObservations) {
   Program P({0xb8, 7, 0, 0, 0, 0xc3}); // mov eax,7; ret.
   const auto R = P.recover();

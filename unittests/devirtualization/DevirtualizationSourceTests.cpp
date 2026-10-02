@@ -887,6 +887,15 @@ TEST_F(DevirtualizationSourceTest, CLIRejectsMalformedEntryAndChainOptions) {
         "--vm-no-control-discovery", "--vm-no-control-discovery=false"})
     Reject({Option});
   Reject({"--devirtualize", "--vm-entry-frame=-16:8"});
+  for (const char *Value : {"", "0:0", "3:0", "8:8", "8:-1", "8:1:2",
+                            "4294967296:0", "16:", ":0", "+16:0", "0x10:0"})
+    Reject({"--devirtualize", "--vm-machine-state",
+            std::string("--vm-entry-alignment=") + Value});
+  Reject({"--vm-entry-alignment=16:3"});
+  Reject({"--devirtualize", "--vm-entry-alignment=16:3"});
+  for (const char *Value : {"0", "-1", "+1", "0x10", "4294967296", "1junk"})
+    Reject({"--devirtualize", std::string("--vm-max-symbolic-nodes=") + Value});
+  Reject({"--vm-max-symbolic-nodes=262144"});
 }
 
 TEST_F(DevirtualizationSourceTest,
@@ -926,6 +935,74 @@ TEST_F(DevirtualizationSourceTest,
     EXPECT_EQ(Bounds->getInteger("begin"), INT64_MIN);
     EXPECT_NE(readSource(Source).find("[-9223372036854775808,8)"),
               std::string::npos);
+  }
+}
+
+TEST_F(DevirtualizationSourceTest, CLIChecksEntryAlignmentBeforeStateCommit) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "public recovery execution requires clang";
+  const auto Binary = tmpFile("generic-entry-alignment.elf");
+  const auto Compiled = buildFixture(Binary, "generic_recovery_contract.S");
+  ASSERT_TRUE(Compiled.ok()) << Compiled.err;
+  for (bool LLVM : {false, true}) {
+    const auto Source = tmpFile(LLVM ? "alignment-llvm.c" : "alignment-high.c");
+    const auto Report = tmpFile("alignment.json");
+    std::vector<std::string> Args{"decompile",
+                                  Binary.string(),
+                                  "--func",
+                                  "generic_recovery_chain",
+                                  "--devirtualize",
+                                  "--vm-machine-state",
+                                  "--vm-chain-transfers=64",
+                                  "--vm-entry-alignment=16:3",
+                                  "--vm-max-symbolic-nodes=1048576",
+                                  "--recovery-report=" + Report.string(),
+                                  "-o",
+                                  Source.string()};
+    if (LLVM)
+      Args.push_back("--llvm");
+    const auto Recovered = exec(ndBin(), Args);
+    ASSERT_TRUE(Recovered.ok()) << Recovered.err;
+    auto Parsed = llvm::json::parse(readSource(Report));
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(Parsed->getAsObject()->getBoolean("complete"), true);
+    EXPECT_EQ(Parsed->getAsObject()->getInteger("maxSymbolicNodes"), 1048576);
+    const auto *Domain =
+        Parsed->getAsObject()->getObject("entryFrameAlignment");
+    ASSERT_NE(Domain, nullptr);
+    EXPECT_EQ(Domain->getInteger("alignment"), 16);
+    EXPECT_EQ(Domain->getInteger("residue"), 3);
+    const auto Harness = tmpFile("alignment-runtime.c");
+    std::ofstream(Harness) << readSource(Source) << R"C(
+#include <stdint.h>
+#include <string.h>
+int main(void) {
+  _Alignas(32) uint8_t frame[64] = {0};
+  uint64_t state[17], before[17];
+  for (unsigned residue = 0; residue < 16; ++residue) {
+    for (unsigned i = 0; i < 17; ++i) state[i] = 300 + i;
+    state[4] = residue == 3 ? (uint64_t)(uintptr_t)(frame + 19) : residue;
+    state[16] = 2;
+    memcpy(before, state, sizeof state);
+    uint64_t status = generic_recovery_chain((uint8_t *)state);
+    if (residue == 3) {
+      if (status || state[0] != before[7] + 17 || state[4] != before[4]) return 1;
+    } else if (status != 2 || memcmp(before, state, sizeof state)) return 2;
+    for (unsigned i = 0; i < sizeof frame; ++i) if (frame[i]) return 3;
+  }
+  return 0;
+}
+)C";
+    std::ofstream(tmpFile("immintrin.h")).close();
+    for (const char *Optimization : {"-O0", "-O2"}) {
+      const auto Program = tmpFile("alignment-runtime");
+      const auto Built =
+          exec(NEVERD_TEST_CLANG, {"-std=c11", Optimization, Harness.string(),
+                                   "-o", Program.string()});
+      ASSERT_TRUE(Built.ok()) << Built.err;
+      const auto Ran = exec(Program.string(), {});
+      EXPECT_TRUE(Ran.ok()) << Ran.err << " exit " << Ran.exitCode;
+    }
   }
 }
 

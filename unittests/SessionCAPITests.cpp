@@ -931,6 +931,96 @@ TEST_F(SessionCAPITest, InterpreterRecoveryV4PreservesOldAndFutureLayouts) {
   }
 }
 
+TEST_F(SessionCAPITest, InterpreterRecoveryV5ChecksDomainAndPreservesLayouts) {
+  const auto Input = write("recovery-congruence.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v5, entry_frame_alignment),
+            sizeof(neverd_devirtualize_options_v4));
+  for (auto Recover :
+       {neverd_devirtualize_source_v5, neverd_devirtualize_machine_source_v5}) {
+    size_t SizeOnly = sizeof(size_t);
+    neverd_devirtualize_options_v5 Partial{};
+    Partial.base.base.base.base.struct_size = sizeof(Partial) - 1;
+    for (const auto *O :
+         {reinterpret_cast<const neverd_devirtualize_options_v5 *>(&SizeOnly),
+          static_cast<const neverd_devirtualize_options_v5 *>(&Partial)}) {
+      const char *Report = nullptr;
+      EXPECT_EQ(Recover(Session, Entry, O, &Report), nullptr);
+      EXPECT_NE(takeString(Report).find("complete v5 structure"),
+                std::string::npos);
+    }
+    EXPECT_FALSE(takeString(Recover(Session, Entry, nullptr, nullptr)).empty());
+    const char *Report = "previous";
+    EXPECT_EQ(Recover(nullptr, Entry, nullptr, &Report), nullptr);
+    EXPECT_EQ(Report, nullptr);
+  }
+  for (bool LLVM : {false, true}) {
+    struct Future {
+      neverd_devirtualize_options_v5 Options;
+      uint64_t Opaque;
+    } F{};
+    auto &O = F.Options;
+    O.base.base.base.base.struct_size = sizeof(F);
+    O.base.base.base.base.use_llvm = LLVM;
+    F.Opaque = UINT64_MAX;
+    for (auto [Alignment, Residue] :
+         {std::pair{16u, 3u}, {1u, 0u}, {0x80000000u, 0x7fffffffu}}) {
+      O.entry_frame_alignment = Alignment;
+      O.entry_frame_residue = Residue;
+      const char *Report = nullptr;
+      const auto Source = takeString(
+          neverd_devirtualize_machine_source_v5(Session, Entry, &O, &Report));
+      ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+      auto Parsed = llvm::json::parse(takeString(Report));
+      ASSERT_TRUE(bool(Parsed));
+      const auto *Domain =
+          Parsed->getAsObject()->getObject("entryFrameAlignment");
+      ASSERT_NE(Domain, nullptr);
+      EXPECT_EQ(Domain->getInteger("alignment"), Alignment);
+      EXPECT_EQ(Domain->getInteger("residue"), Residue);
+      EXPECT_NE(Source.find("Checked entry RSP modulo"), std::string::npos);
+      EXPECT_EQ(neverd_devirtualize_source_v5(Session, Entry, &O, nullptr),
+                nullptr);
+    }
+    for (auto [Alignment, Residue] :
+         {std::pair{0u, 1u}, {3u, 0u}, {8u, 8u}, {8u, 9u}}) {
+      O.entry_frame_alignment = Alignment;
+      O.entry_frame_residue = Residue;
+      EXPECT_EQ(
+          neverd_devirtualize_machine_source_v5(Session, Entry, &O, nullptr),
+          nullptr);
+    }
+    // Old entry points ignore even an invalid v5 tail.
+    const auto CheckOld = [&](auto Recover, const auto *Options) {
+      const char *Report = nullptr;
+      ASSERT_FALSE(
+          takeString(Recover(Session, Entry, Options, &Report)).empty());
+      auto Parsed = llvm::json::parse(takeString(Report));
+      ASSERT_TRUE(bool(Parsed));
+      EXPECT_TRUE(Parsed->getAsObject()
+                      ->get("entryFrameAlignment")
+                      ->getAsNull()
+                      .has_value());
+    };
+    CheckOld(neverd_devirtualize_machine_source_v1, &O.base.base.base.base);
+    CheckOld(neverd_devirtualize_machine_source_v2, &O.base.base.base);
+    CheckOld(neverd_devirtualize_machine_source_v3, &O.base.base);
+    CheckOld(neverd_devirtualize_machine_source_v4, &O.base);
+    O.entry_frame_alignment = O.entry_frame_residue = 0;
+    O.max_symbolic_nodes = 1;
+    const char *Report = nullptr;
+    EXPECT_EQ(
+        neverd_devirtualize_machine_source_v5(Session, Entry, &O, &Report),
+        nullptr);
+    auto Parsed = llvm::json::parse(takeString(Report));
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(Parsed->getAsObject()->getInteger("maxSymbolicNodes"), 1);
+    EXPECT_EQ(Parsed->getAsObject()->getString("status"), "budget-exceeded");
+    CheckOld(neverd_devirtualize_machine_source_v4, &O.base);
+  }
+}
+
 TEST_F(SessionCAPITest, InterpreterRecoveryV4PublishesUncheckedBoundsInSource) {
   const auto Input = write("recovery-v4-domain.elf", makeNativeELF(false));
   ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);

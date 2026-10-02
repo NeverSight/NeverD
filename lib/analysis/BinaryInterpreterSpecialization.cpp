@@ -451,6 +451,11 @@ binaryExecutionDigest(const BinaryImage &Image,
   Number(Options.ExplicitMachineState);
   Number(Options.NormalNonfaultingExecution);
   Number(Options.X64CetDisabled);
+  Number(Options.EntryFrameAlignment.has_value());
+  if (Options.EntryFrameAlignment) {
+    Number(Options.EntryFrameAlignment->Alignment);
+    Number(Options.EntryFrameAlignment->Residue);
+  }
   Number(Options.EntryFrameBounds.has_value());
   if (Options.EntryFrameBounds) {
     Number(static_cast<uint64_t>(Options.EntryFrameBounds->Begin));
@@ -557,6 +562,9 @@ prepareBinaryRelation(const BinaryImage &Image,
     return Fail(
         Status::Invalid,
         "binary proof requires an accessible entry RSP frame and return slot");
+  if (Options.EntryFrameAlignment)
+    return Fail(Status::Unsupported,
+                "native proof does not support an entry alignment domain");
   if (Options.EntryFrameBounds &&
       (Options.EntryFrameBounds->Begin >= Options.EntryFrameBounds->End ||
        Options.EntryFrameBounds->Begin != Contract.Frame->Begin ||

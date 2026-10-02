@@ -11710,6 +11710,50 @@
           "source": "unittests/devirtualization/MachineMemoryCallSourceTests.cpp",
           "filter": "MachineMemoryCallSourceTest.MachineSourceUsesOriginalWritableMappingsThroughBothRoutes",
           "platforms": ["linux"]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterSpecializationTests",
+          "source": "unittests/devirtualization/NativeStackSpecializationTests.cpp",
+          "filter": "NativeStackSpecialization.ExplicitAlignmentIntersectsFinerPartitions",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLowIRRefinementTests",
+          "source": "unittests/devirtualization/InterpreterMachineStateModelTests.cpp",
+          "filter": "InterpreterMachineStateModel.AlignmentGuardPreservesRejectedState",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDInterpreterMachineStateTests",
+          "source": "unittests/devirtualization/InterpreterMachineStateTests.cpp",
+          "filter": "InterpreterMachineSourceTest.AlignmentRejectsBeforeGuestOrStateWrites",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDevirtualizationSourceTests",
+          "source": "unittests/devirtualization/DevirtualizationSourceTests.cpp",
+          "filter": "DevirtualizationSourceTest.CLIChecksEntryAlignmentBeforeStateCommit",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         }
       ],
       "public_surfaces": {
@@ -11721,7 +11765,9 @@
           "neverd_devirtualize_source_v3",
           "neverd_devirtualize_machine_source_v3",
         "neverd_devirtualize_source_v4",
-        "neverd_devirtualize_machine_source_v4"
+        "neverd_devirtualize_machine_source_v4",
+        "neverd_devirtualize_source_v5",
+        "neverd_devirtualize_machine_source_v5"
         ],
         "python": [],
         "cli": [
@@ -11738,6 +11784,8 @@
           "neverd decompile --vm-max-queries",
         "neverd decompile --vm-chain-transfers",
         "neverd decompile --vm-entry-frame",
+        "neverd decompile --vm-entry-alignment",
+        "neverd decompile --vm-max-symbolic-nodes",
         "neverd decompile --vm-no-control-discovery"
         ],
         "json": []

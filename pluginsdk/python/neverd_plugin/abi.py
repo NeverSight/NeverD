@@ -617,6 +617,24 @@ class NeverDDevirtualizeOptionsV4(ctypes.Structure):
     ]
 
 
+class NeverDDevirtualizeOptionsV5(ctypes.Structure):
+    """v4 prefix plus checked RSP alignment/residue (machine-state API only).
+
+    Set ``base.base.base.base.struct_size`` to the complete size. Zero alignment
+    means absent and requires zero residue. Otherwise alignment is a power of
+    two, with residue smaller than alignment. Rejected roots return status 2
+    before guest accesses or state writes. ``max_symbolic_nodes`` selects the
+    per-node symbolic DAG budget; zero retains 262144.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV4),
+        ("entry_frame_alignment", ctypes.c_uint32),
+        ("entry_frame_residue", ctypes.c_uint32),
+        ("max_symbolic_nodes", ctypes.c_uint32),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -736,6 +754,9 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_devirtualize_options_v4 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV4
+    ),
+    "const neverd_devirtualize_options_v5 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV5
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -1561,6 +1582,21 @@ _declare(
      "const neverd_devirtualize_options_v4 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
+
+_declare(
+    "neverd_devirtualize_source_v5",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v5 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v5",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v5 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_version", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_project_name", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_version_number", "const char *", [], ownership=Ownership.OWNED_STRING)
@@ -1581,6 +1617,7 @@ __all__ = [
     "NeverDDevirtualizeOptionsV2",
     "NeverDDevirtualizeOptionsV3",
     "NeverDDevirtualizeOptionsV4",
+    "NeverDDevirtualizeOptionsV5",
     "DevirtualizeFlagsV4",
     "NeverDPlugin",
     "NeverDOptimizeLLVMOptions",

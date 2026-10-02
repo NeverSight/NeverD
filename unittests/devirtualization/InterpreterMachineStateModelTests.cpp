@@ -125,6 +125,41 @@ TEST(InterpreterMachineStateModel, RawEntryAndStatusAreDistinctFromGuestRAX) {
   expect(*Model, Reference.Function, contract(false), Status::Different);
 }
 
+TEST(InterpreterMachineStateModel, AlignmentGuardPreservesRejectedState) {
+  Program Residual, Reference;
+  Residual.instruction({op(NdOp::COPY, r(0), {n(37)})});
+  Residual.finish();
+  auto Model = modelInterpreterMachineStateX64(
+      Residual.Function, InterpreterMachineStateProfile::UserX64NoFaultV1,
+      65536, InterpreterEntryAlignment{16, 3});
+  ASSERT_TRUE(bool(Model)) << llvm::toString(Model.takeError());
+  uint64_t Operations = 0;
+  for (const auto &B : Model->Function.Blocks)
+    Operations += B.Ops.size();
+  auto Exact = modelInterpreterMachineStateX64(
+      Residual.Function, InterpreterMachineStateProfile::UserX64NoFaultV1,
+      Operations, InterpreterEntryAlignment{16, 3});
+  ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+  auto Short = modelInterpreterMachineStateX64(
+      Residual.Function, InterpreterMachineStateProfile::UserX64NoFaultV1,
+      Operations - 1, InterpreterEntryAlignment{16, 3});
+  ASSERT_FALSE(bool(Short));
+  llvm::consumeError(Short.takeError());
+  Reference.Function.Blocks.front().Succs = {2, 1};
+  Reference.instruction({op(NdOp::INT_AND, t(0), {r(32), n(15)}),
+                         op(NdOp::INT_NOTEQUAL, t(8, 1), {t(0), n(3)}),
+                         op(NdOp::COND_BR, {}, {n(0x300), t(8, 1)})});
+  Reference.block(1, 0x200);
+  Reference.instruction({op(NdOp::COPY, r(0), {n(37)})});
+  Reference.finish(n(0));
+  Reference.block(2, 0x300);
+  Reference.finish(n(2));
+  Reference.edges();
+  expect(*Model, Reference.Function, contract());
+  Reference.Function.Blocks.back().Ops.back().Inputs[0] = n(0);
+  expect(*Model, Reference.Function, contract(), Status::Different);
+}
+
 TEST(InterpreterMachineStateModel, EveryStateWordIsAnObservableOutput) {
   Program Residual;
   Residual.finish();

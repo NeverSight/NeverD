@@ -299,6 +299,98 @@ TEST(NativeStackSpecialization, OptionalWideMaskDoesNotForceStackPartition) {
   EXPECT_EQ(Run->Value, 7 + 2 * 3 + 64 + 7);
 }
 
+TEST(NativeStackSpecialization, ExplicitAlignmentIntersectsFinerPartitions) {
+  auto P = alignedSpillLoop(32);
+  for (uint32_t Residue : {0, 1, 3}) {
+    auto O = stackOptions();
+    O.ExplicitMachineState = true;
+    O.EntryFrameAlignment = InterpreterEntryAlignment{4, Residue};
+    O.MaxContextsPerAddress = 8;
+    const auto R = specializeInterpreter(P, {0x100}, O);
+    ASSERT_TRUE(R.complete()) << R.Diagnostic;
+    for (uint64_t Base : {uint64_t{0x10000}, uint64_t{0x123456781000}})
+      for (uint64_t Low = Residue; Low < 32; Low += 4)
+        for (uint64_t Input : {0, 1, 13}) {
+          const auto Run = execute(R.Residual, Input, 0,
+                                   llvm::endianness::little, Base + Low);
+          ASSERT_TRUE(Run);
+          EXPECT_EQ(Run->Value, 7 + 2 * Input + 64 + Low);
+          EXPECT_EQ(Run->Stack, Base + Low);
+        }
+    O.MaxOperations = R.EvaluatedOperations;
+    O.MaxSolverQueries = R.SolverQueries;
+    EXPECT_TRUE(specializeInterpreter(P, {0x100}, O).complete());
+    --O.MaxOperations;
+    const auto Short = specializeInterpreter(P, {0x100}, O);
+    EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded);
+    EXPECT_TRUE(Short.Residual.Blocks.empty());
+    O = stackOptions();
+    O.MaxContextsPerAddress = 8;
+    EXPECT_FALSE(specializeInterpreter(P, {0x100}, O).complete());
+  }
+}
+
+TEST(NativeStackSpecialization, EntryAlignmentDoesNotDropAllowedFailures) {
+  for (uint32_t Bad : {0, 15}) {
+    auto P = alignedSpillLoop(16);
+    P.add(0x300,
+          {operation(NdOp::COPY, r(0), {c(7)}),
+           operation(NdOp::COPY, r(80), {r(8)}),
+           operation(NdOp::INT_EQUAL, r(96, 1), {r(88), c(64 + Bad)}),
+           operation(NdOp::COND_BR, {}, {NdVar::cst(0xdead, 8), r(96, 1)})});
+    auto O = stackOptions();
+    O.ExplicitMachineState = true;
+    O.EntryFrameAlignment = InterpreterEntryAlignment{2, 1 - (Bad & 1)};
+    ASSERT_TRUE(specializeInterpreter(P, {0x100}, O).complete());
+    O.EntryFrameAlignment->Residue = Bad & 1;
+    const auto BadDomain = specializeInterpreter(P, {0x100}, O);
+    EXPECT_FALSE(BadDomain.complete());
+    EXPECT_TRUE(BadDomain.Residual.Blocks.empty());
+    EXPECT_TRUE(BadDomain.Origins.empty());
+    EXPECT_TRUE(BadDomain.Reads.empty());
+  }
+}
+
+TEST(NativeStackSpecialization, EntryAlignmentRequiresAnExplicitValidDomain) {
+  StackProvider P;
+  P.nativeReturn(0x100);
+  for (auto Domain :
+       {InterpreterEntryAlignment{0, 0}, {3, 0}, {8, 8}, {8, 9}}) {
+    auto O = stackOptions();
+    O.ExplicitMachineState = true;
+    O.EntryFrameAlignment = Domain;
+    EXPECT_EQ(specializeInterpreter(P, {0x100}, O).Status,
+              SpecializationStatus::InvalidInput);
+  }
+  auto O = stackOptions();
+  O.EntryFrameAlignment = InterpreterEntryAlignment{16, 3};
+  EXPECT_EQ(specializeInterpreter(P, {0x100}, O).Status,
+            SpecializationStatus::InvalidInput);
+  O.ExplicitMachineState = true;
+  O.FrameBaseRegister = SymRegisterRange{x86reg::RBP, 8};
+  EXPECT_EQ(specializeInterpreter(P, {0x100}, O).Status,
+            SpecializationStatus::InvalidInput);
+  O.FrameBaseRegister.reset();
+  EXPECT_EQ(specializeInterpreter(P, {0x100}, O).Status,
+            SpecializationStatus::InvalidInput);
+}
+
+TEST(NativeStackSpecialization, EveryAlignmentCaseMustFinishBeforePublication) {
+  for (uint64_t BadResidue : {0, 15}) {
+    auto P = alignedSpillLoop(16);
+    P.add(0x300,
+          {operation(NdOp::COPY, r(0), {c(7)}),
+           operation(NdOp::COPY, r(80), {r(8)}),
+           operation(NdOp::INT_EQUAL, r(96, 1), {r(88), c(64 + BadResidue)}),
+           operation(NdOp::COND_BR, {}, {NdVar::cst(0xdead, 8), r(96, 1)})});
+    const auto Result = specializeInterpreter(P, {0x100}, stackOptions());
+    EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported);
+    EXPECT_TRUE(Result.Residual.Blocks.empty());
+    EXPECT_TRUE(Result.Origins.empty());
+    EXPECT_TRUE(Result.Reads.empty());
+  }
+}
+
 TEST(NativeStackSpecialization, NecessaryPartitionUpgradeRetainsEarlierWork) {
   auto P = alignedSpillLoop(32);
   P.add(0x100, {operation(NdOp::COPY, r(48), {r(32)}),
@@ -601,6 +693,87 @@ TEST(NativeStackSpecialization, AutomaticContextsPreserveRelativeFrameCursors) {
   }
 }
 
+TEST(NativeStackSpecialization,
+     AddressRefinementPrecedesUnrelatedFramePartitions) {
+  for (bool Spilled : {false, true})
+    for (uint64_t Alignment : {256, 65536}) {
+      SCOPED_TRACE(Spilled);
+      SCOPED_TRACE(Alignment);
+      auto P = frameCursor(Spilled);
+      P.add(0xff, {operation(NdOp::INT_AND, r(112),
+                             {r(32), c(uint64_t{0} - Alignment)}),
+                   branch(0x100)});
+      auto Options = stackOptions();
+      Options.DiscoverControlState = true;
+      // The smaller incidental mask fits, the larger one does not. Neither
+      // supplies the missing relation between successive cursor values.
+      Options.MaxContextsPerAddress = 512;
+      const auto Baseline = specializeInterpreter(P, {0x100}, Options);
+      ASSERT_TRUE(Baseline.complete()) << Baseline.Diagnostic;
+      const auto Result = specializeInterpreter(P, {0xff}, Options);
+      ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+      EXPECT_EQ(Result.ControlRefinements, Baseline.ControlRefinements);
+      for (uint64_t Base : {uint64_t{0x10007}, uint64_t{0x123456781003}})
+        for (uint64_t Input : {uint64_t{0}, uint64_t{71}, UINT64_MAX}) {
+          const auto Run = execute(Result.Residual, Input, 0,
+                                   llvm::endianness::little, Base);
+          ASSERT_TRUE(Run);
+          EXPECT_EQ(Run->Value, Input);
+          EXPECT_EQ(Run->Stack, Base);
+        }
+    }
+}
+
+TEST(NativeStackSpecialization,
+     ControlRefinementRetainsNecessaryFrameFallback) {
+  auto P = frameCursor(true);
+  P.add(0xff, {operation(NdOp::COPY, r(104), {r(32)}),
+               operation(NdOp::INT_AND, r(32), {r(32), c(uint64_t{0} - 16)}),
+               operation(NdOp::INT_SUB, r(32), {r(32), c(64)}), branch(0x100)});
+  P.add(0x205, {operation(NdOp::COPY, r(32), {r(104)})});
+  P.nativeReturn(0x206);
+  auto Options = stackOptions();
+  Options.DiscoverControlState = true;
+  Options.MaxControlFields = 64;
+  Options.MaxControlRefinements = 64;
+  Options.MaxDiscoveryVisits = 1048576;
+  Options.MaxSolverQueries = 65536;
+  const auto Good = specializeInterpreter(P, {0xff}, Options);
+  ASSERT_TRUE(Good.complete()) << Good.Diagnostic;
+  EXPECT_GT(Good.DiscoveredControlFields, 0u);
+  EXPECT_GT(Good.ControlRefinements, 1u);
+  for (uint64_t Base : {uint64_t{0x10000}, uint64_t{0x123456781000}})
+    for (uint64_t Low = 0; Low != 16; ++Low)
+      for (uint64_t Input : {uint64_t{0}, uint64_t{71}, UINT64_MAX}) {
+        const auto Run = execute(Good.Residual, Input, 0,
+                                 llvm::endianness::little, Base + Low);
+        ASSERT_TRUE(Run);
+        EXPECT_EQ(Run->Value, Input);
+        EXPECT_EQ(Run->Stack, Base + Low);
+      }
+  for (unsigned Kind = 0; Kind != 3; ++Kind) {
+    auto Exact = Options;
+    if (Kind == 0)
+      Exact.MaxOperations = Good.EvaluatedOperations;
+    if (Kind == 1)
+      Exact.MaxSolverQueries = Good.SolverQueries;
+    if (Kind == 2)
+      Exact.MaxControlRefinements = Good.ControlRefinements;
+    ASSERT_TRUE(specializeInterpreter(P, {0xff}, Exact).complete()) << Kind;
+    if (Kind == 0)
+      --Exact.MaxOperations;
+    if (Kind == 1)
+      --Exact.MaxSolverQueries;
+    if (Kind == 2)
+      --Exact.MaxControlRefinements;
+    const auto Failed = specializeInterpreter(P, {0xff}, Exact);
+    EXPECT_EQ(Failed.Status, SpecializationStatus::BudgetExceeded) << Kind;
+    EXPECT_TRUE(Failed.Residual.Blocks.empty());
+    EXPECT_TRUE(Failed.Origins.empty());
+    EXPECT_TRUE(Failed.Reads.empty());
+  }
+}
+
 StackProvider guardedPointerJoin(bool Spilled) {
   StackProvider P;
   P.add(0x100,
@@ -890,6 +1063,29 @@ TEST(NativeStackSpecialization, RefinesGuardsBeforeRejectingAnUnsupportedPath) {
   EXPECT_TRUE(Limited.Residual.Blocks.empty());
 }
 
+TEST(NativeStackSpecialization,
+     GuardRefinementPrecedesUnrelatedFramePartitions) {
+  for (uint64_t Alignment : {256, 65536}) {
+    auto P = guardedDecoder(false);
+    P.add(0xff, {operation(NdOp::INT_AND, r(112),
+                           {r(32), c(uint64_t{0} - Alignment)}),
+                 branch(0x100)});
+    auto Options = stackOptions();
+    Options.DiscoverControlState = true;
+    Options.MaxContextsPerAddress = 512;
+    const auto Baseline = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Baseline.complete()) << Baseline.Diagnostic;
+    const auto Result = specializeInterpreter(P, {0xff}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    EXPECT_EQ(Result.ControlRefinements, Baseline.ControlRefinements);
+    for (uint64_t Input : {uint64_t{0}, uint64_t{42}, UINT64_MAX}) {
+      const auto Run = execute(Result.Residual, Input);
+      ASSERT_TRUE(Run);
+      EXPECT_EQ(Run->Value, Input + 17);
+    }
+  }
+}
+
 TEST(NativeStackSpecialization, ReachableUnsupportedGuardIsNeverAssumedAway) {
   auto P = guardedDecoder(true);
   auto Options = stackOptions();
@@ -897,6 +1093,19 @@ TEST(NativeStackSpecialization, ReachableUnsupportedGuardIsNeverAssumedAway) {
   auto Result = specializeInterpreter(P, {0x100}, Options);
   EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported);
   EXPECT_TRUE(Result.Residual.Blocks.empty());
+}
+
+TEST(NativeStackSpecialization, IncidentalFrameMaskCannotHideUnsupportedGuard) {
+  auto P = guardedDecoder(true);
+  P.add(0xff, {operation(NdOp::INT_AND, r(112), {r(32), c(uint64_t{0} - 16)}),
+               branch(0x100)});
+  auto Options = stackOptions();
+  Options.DiscoverControlState = true;
+  const auto Result = specializeInterpreter(P, {0xff}, Options);
+  EXPECT_EQ(Result.Status, SpecializationStatus::Unsupported);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+  EXPECT_TRUE(Result.Origins.empty());
+  EXPECT_TRUE(Result.Reads.empty());
 }
 
 TEST(NativeStackSpecialization, GuardDiscoveryExhaustionPublishesNothing) {

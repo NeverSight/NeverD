@@ -7,6 +7,7 @@
 #ifndef NEVERD_ANALYSIS_INTERPRETERMACHINESTATE_H
 #define NEVERD_ANALYSIS_INTERPRETERMACHINESTATE_H
 
+#include "neverd/analysis/InterpreterEntryAlignment.h"
 #include "neverd/analysis/InterpreterMachineStateProfile.h"
 #include "neverd/analysis/LowIRUndefinedIndependence.h"
 #include "neverd/ir/SourceTypeHint.h"
@@ -16,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <type_traits>
 
 namespace neverd::analysis {
@@ -42,7 +44,7 @@ validateInterpreterMachineStateX64V1(const InterpreterMachineStateX64V1 &State);
 struct InterpreterMachineSource {
   LowFunc Function;
   /// One state pointer parameter and an unsigned 64-bit status: zero means
-  /// success; nonzero means the execution violated the flag profile. Invalid
+  /// success; nonzero means a flag-profile or entry-domain violation. Invalid
   /// executions may have guest memory effects; no rollback is promised and
   /// their output state does not certify guest semantics.
   SourceFunctionTypeHint SourceABI;
@@ -53,6 +55,8 @@ struct InterpreterMachineSource {
 /// register identities are relocated, so a guest RSP never becomes a compiler
 /// private host frame. Guest constants become raw numeric values; source
 /// emission must not supply an image for rebasing guest memory accesses.
+/// Optional EntryAlignment checks entry RSP before guest accesses or state
+/// writes. A rejected alignment returns status 2 with the state unchanged.
 /// Ordinary scalar LowIR remains owned by LowToMed and its
 /// existing source backends; this wrapper does not evaluate those operations.
 ///
@@ -70,6 +74,10 @@ llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineStateX64(
     const LowFunc &Residual, BinaryFormat SourceFormat = BinaryFormat::ELF,
     InterpreterMachineStateProfile Profile =
         InterpreterMachineStateProfile::UserX64NoFaultV1);
+llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineStateX64(
+    const LowFunc &Residual, BinaryFormat SourceFormat,
+    InterpreterMachineStateProfile Profile,
+    std::optional<InterpreterEntryAlignment> EntryAlignment);
 
 /// Analysis model of the same source wrapper. Register bytes [0, 136) hold the
 /// state object's input and output bytes in InterpreterMachineStateX64V1 order.
@@ -98,6 +106,10 @@ llvm::Expected<InterpreterMachineStateModel> modelInterpreterMachineStateX64(
     InterpreterMachineStateProfile Profile =
         InterpreterMachineStateProfile::UserX64NoFaultV1,
     uint64_t MaxOperations = 65536);
+llvm::Expected<InterpreterMachineStateModel> modelInterpreterMachineStateX64(
+    const LowFunc &Residual, InterpreterMachineStateProfile Profile,
+    uint64_t MaxOperations,
+    std::optional<InterpreterEntryAlignment> EntryAlignment);
 
 } // namespace neverd::analysis
 

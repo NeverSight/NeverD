@@ -1564,9 +1564,12 @@ int Specializer::enqueue(SpecializationCursor Cursor,
 }
 
 bool Specializer::addFrameDispatch(llvm::ArrayRef<int> Entries) {
-  // Every residue is present. The final arm is therefore a proved complement,
-  // not an omitted case or a sampled default. High root bits remain free.
-  if (Entries.size() != uint64_t{Refinement.FrameMask} + 1 || Entries.empty())
+  // Every residue in the declared entry domain is present. The final arm is
+  // a proved complement within that domain. High root bits remain free.
+  const uint64_t Stride =
+      Options.EntryFrameAlignment ? Options.EntryFrameAlignment->Alignment : 1;
+  if (Entries.size() != (uint64_t{Refinement.FrameMask} + 1) / Stride ||
+      Entries.empty())
     return fail(SpecializationStatus::InvalidInput,
                 "incomplete entry-frame partition");
   EntryNode = Entries.back();
@@ -1587,7 +1590,7 @@ bool Specializer::addFrameDispatch(llvm::ArrayRef<int> Entries) {
     Compare.Opcode = NdOp::INT_EQUAL;
     Compare.Output = NdVar::tmp(DispatchTemp, 1);
     Compare.addInput(Mask.Output);
-    Compare.addInput(NdVar::scalar(I - 1, 8));
+    Compare.addInput(NdVar::scalar(Nodes[Entries[I - 1]].Key.FrameResidue, 8));
     New.Block.Ops.push_back(Compare);
     LowOp Branch;
     Branch.Opcode = NdOp::COND_BR;
@@ -2842,6 +2845,15 @@ SpecializationResult Specializer::run() {
          "frame root must name one complete 64-bit register");
     return std::move(Result);
   }
+  if (Options.EntryFrameAlignment &&
+      (!Options.ExplicitMachineState || !Options.FrameBaseRegister ||
+       Options.FrameBaseRegister->Offset != x86reg::RSP ||
+       !Options.EntryFrameAlignment->valid())) {
+    fail(SpecializationStatus::InvalidInput,
+         "entry alignment requires explicit machine state, an RSP frame root, "
+         "and a power-of-two alignment with a smaller residue");
+    return std::move(Result);
+  }
   if (Options.EntryFrameBounds &&
       (!Options.FrameBaseRegister ||
        Options.EntryFrameBounds->Begin >= Options.EntryFrameBounds->End)) {
@@ -2909,7 +2921,18 @@ SpecializationResult Specializer::run() {
   std::vector<int> Entries;
   const auto InitialProjection =
       project(Initial, FrameRoot, AffineCandidates, InitialOrigins, {});
-  for (uint64_t Residue = 0; Residue <= Refinement.FrameMask; ++Residue) {
+  const uint64_t FirstResidue =
+      Options.EntryFrameAlignment ? Options.EntryFrameAlignment->Residue : 0;
+  const uint64_t Stride =
+      Options.EntryFrameAlignment ? Options.EntryFrameAlignment->Alignment : 1;
+  if ((uint64_t{Refinement.FrameMask} + 1) / Stride >
+      Options.MaxContextsPerAddress) {
+    fail(SpecializationStatus::BudgetExceeded,
+         "entry-frame partition budget exhausted");
+    return std::move(Result);
+  }
+  for (uint64_t Residue = FirstResidue; Residue <= Refinement.FrameMask;
+       Residue += Stride) {
     auto Incoming = InitialProjection;
     Incoming.FrameResidue = static_cast<uint32_t>(Residue);
     Entries.push_back(enqueue(Entry, Incoming));
@@ -2918,7 +2941,18 @@ SpecializationResult Specializer::run() {
   }
   if (!Failed)
     addFrameDispatch(Entries);
-  while (!Failed && !Pending.empty()) {
+  // Residues have disjoint context keys. Finish one case's fixed point before
+  // starting the next, so a precision failure does not first repeat the same
+  // prefix in every case. All entry nodes and dispatch arms already exist;
+  // dependency closure can still traverse the complete attempted graph, and
+  // publication still requires every case under the same cumulative budgets.
+  std::deque<int> EntryPending;
+  EntryPending.swap(Pending);
+  while (!Failed && (!Pending.empty() || !EntryPending.empty())) {
+    if (Pending.empty()) {
+      Pending.push_back(EntryPending.front());
+      EntryPending.pop_front();
+    }
     const int Id = Pending.front();
     Pending.pop_front();
     Nodes[Id].Pending = false;
@@ -2950,6 +2984,8 @@ specializeInterpreter(SpecializationProvider &Provider,
                       const SpecializationOptions &Options) {
   SpecializationOptions Effective = Options;
   ControlRefinement Refinement(Options.MaxSymbolicNodes);
+  if (Options.EntryFrameAlignment && Options.EntryFrameAlignment->valid())
+    Refinement.FrameMask = Options.EntryFrameAlignment->Alignment - 1;
   SpecializationResult Result;
   for (;;) {
     Refinement.DeferredProducerDemands.clear();
@@ -2959,28 +2995,37 @@ specializeInterpreter(SpecializationProvider &Provider,
         Options.ControlFrameSlots.size(), Refinement, std::move(Result));
     Result = Attempt.run();
     Result.DiscoveryVisits = Refinement.Visits;
-    const auto NextFrameMask =
-        Refinement.CandidateFrameMasks.upper_bound(Refinement.FrameMask);
-    if (!Result.complete() &&
-        (Result.Status == SpecializationStatus::Unsupported ||
-         Result.Status == SpecializationStatus::UnresolvedControl) &&
-        NextFrameMask != Refinement.CandidateFrameMasks.end()) {
-      if (*NextFrameMask >= Options.MaxContextsPerAddress ||
+    const auto TryFramePartition = [&]() {
+      const auto NextFrameMask =
+          Refinement.CandidateFrameMasks.upper_bound(Refinement.FrameMask);
+      if (Result.complete() ||
+          (Result.Status != SpecializationStatus::Unsupported &&
+           Result.Status != SpecializationStatus::UnresolvedControl) ||
+          NextFrameMask == Refinement.CandidateFrameMasks.end())
+        return false;
+      const uint64_t Stride = Options.EntryFrameAlignment
+                                  ? Options.EntryFrameAlignment->Alignment
+                                  : 1;
+      if ((uint64_t{*NextFrameMask} + 1) / Stride >
+              Options.MaxContextsPerAddress ||
           Result.ControlRefinements >= Options.MaxControlRefinements) {
         Result.Status = SpecializationStatus::BudgetExceeded;
         Result.Diagnostic = "entry-frame partition budget exhausted";
-        return Result;
+        return false;
       }
       Refinement.FrameMask = *NextFrameMask;
       ++Result.ControlRefinements;
       // The same node, operation, evaluation, query and proof-cache ledgers
       // cover the failed attempt and every residue of the complete retry.
-      continue;
-    }
+      return true;
+    };
     if (Result.complete() || !Options.DiscoverControlState ||
         (Result.Status != SpecializationStatus::UnresolvedControl &&
-         !Refinement.PrecisionFailure))
+         !Refinement.PrecisionFailure)) {
+      if (TryFramePartition())
+        continue;
       return Result;
+    }
     bool HasCandidates = !Refinement.Registers.empty() ||
                          !Refinement.Slots.empty() ||
                          !Refinement.PendingContextRegisters.empty() ||
@@ -3092,8 +3137,18 @@ specializeInterpreter(SpecializationProvider &Provider,
       Result.Diagnostic = "control-state discovery/refinement budget exhausted";
       return Result;
     }
-    if (!HasCandidates)
+    if (!HasCandidates) {
+      // Frame masks are optional precision nominations gathered throughout
+      // the attempted graph. A business value can nominate a wide mask with
+      // no bearing on the failed address, transfer or guard. Give actual
+      // control dependencies their bounded retry before partitioning every
+      // entry residue (or rejecting an incidental over-budget candidate).
+      // Retain the nominations: an aligned pointer may have lost its root
+      // relation at an earlier projection before the required use fails.
+      if (TryFramePartition())
+        continue;
       return Result;
+    }
     Result = Attempt.closeProducerDemands(std::move(Result));
     if (Result.Status == SpecializationStatus::BudgetExceeded ||
         Result.Status == SpecializationStatus::InvalidInput)

@@ -83,6 +83,14 @@ neverd_free_string(source);
 neverd_free_string(report);
 ```
 
+머신 상태 복원은 `--vm-entry-alignment=A:R`로 진입 RSP 합동 조건을 명시하고 실행 시 검사합니다. `A`는 양의 2의 거듭제곱이며 `R < A`여야 합니다. 다른 진입 값은 게스트 메모리 접근이나 상태 쓰기 전에 상태 2를 반환합니다. 주소 상위 비트는 자유롭고 기본값은 정렬을 가정하지 않습니다. 이 옵션은 네이티브 동등성 인증을 제공하지 않습니다.
+
+v5 C API `neverd_devirtualize_source_v5()`와 `neverd_devirtualize_machine_source_v5()`는 v4에 `entry_frame_alignment`, `entry_frame_residue`를 추가합니다. `neverd_devirtualize_options_v5`를 0으로 초기화하고 `base.base.base.base.struct_size`를 전체 크기로 설정합니다. 정렬값 0은 비활성화를 뜻하며 나머지도 0이어야 합니다. 0이 아닌 정렬은 머신 상태 API에서만 허용됩니다. v1–v4는 새 후행 필드를, v5는 미래 후행 필드를 무시합니다. 보고서의 `entryFrameAlignment`와 생성 C는 같은 검사 조건을 기록합니다. 잘못된 정렬은 잘못된 진입 플래그보다 먼저 거부되며 모든 상태 워드를 보존합니다. 기존 숫자 프레임 범위는 여전히 실행 시 검사하지 않습니다. C++ 잔여 그래프 호출자는 RSP 영역을 직접 보장해야 합니다. 소스와 모델 래퍼는 검사 생성기를 공유하며 네이티브 증명 API는 계약에 해당 영역을 연결할 수 있을 때까지 거부합니다.
+
+`--vm-max-symbolic-nodes=N`과 v5 `max_symbolic_nodes`는 노드별 기호 DAG 예산을 지정합니다(기본 262144). CLI는 양의 32비트 십진수를 요구하고 C의 0은 기본값을 선택합니다. 두 소스 ABI에 같은 한도가 적용되며 `maxSymbolicNodes`에 유효 예산을 기록합니다. 예산 증가는 의미적 가정이나 증명을 추가하지 않습니다.
+
+제어 및 가드 정밀도 개선을 선택적 프레임 분할 재시도보다 우선하며 필요한 추가 분할은 유지합니다. 나머지별 고정점을 순서대로 계산하지만 모든 허용 나머지가 완료되어야 결과를 공개합니다. 명시적 정렬 영역과 분할 영역의 교집합을 사용하고 실제 나머지를 비교합니다. 컨텍스트, 연산, 노드 및 솔버 예산은 재시도 간 공유하며 한도를 유지합니다.
+
 JSON 보고서에는 `discoverControlState`, `maxControlRefinements`, `maxDiscoveryVisits`, `discoveredControlFields`, `discoveredContextFields`, `controlRefinements`, `discoveryVisits`가 추가되어 활성화 상태, 제한 및 분석 작업량을 기록합니다. 필드를 찾았다는 사실만으로 복원 성공이 입증되지는 않습니다.
 
 조건에 의해 주소 의존성이 바이트 조각으로 좁아지면, 정밀화는 해당 조각을 포함하는 이미 추적 중인 완전한 8바이트 직접 주소 필드도 문맥 후보로 유지합니다. 기존의 좁은 필드와 생성자 비트 마스크는 그대로 두며, 관련 없는 넓은 필드는 승격하지 않습니다. 상수와 진입점 상대 오프셋은 여전히 증명이 필요하고 모든 문맥은 기존 한도를 공유합니다.

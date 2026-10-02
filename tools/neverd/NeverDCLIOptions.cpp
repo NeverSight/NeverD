@@ -421,6 +421,14 @@ cl::opt<std::string> VMEntryFrame(
     cl::desc(
         "Unchecked nonwrapping entry-RSP offsets for machine-state recovery"),
     cl::value_desc("begin:end"), cl::sub(DecompileCmd));
+cl::opt<std::string> VMMaxSymbolicNodes(
+    "vm-max-symbolic-nodes",
+    cl::desc("Per-node recovery symbolic DAG budget (default: 262144)"),
+    cl::value_desc("count"), cl::init("262144"), cl::sub(DecompileCmd));
+cl::opt<std::string> VMEntryAlignment(
+    "vm-entry-alignment",
+    cl::desc("Checked entry-RSP congruence for machine-state recovery"),
+    cl::value_desc("alignment:residue"), cl::sub(DecompileCmd));
 cl::opt<bool> VMNoControlDiscovery(
     "vm-no-control-discovery",
     cl::desc("Disable automatic recovery control-state discovery"),

@@ -318,8 +318,10 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       return Result;
     }
     if (Opts.InterpreterSpecialization->ExplicitMachineState) {
-      auto Wrapped = analysis::wrapInterpreterMachineStateX64(Recovery.Residual,
-                                                              Img.Format);
+      auto Wrapped = analysis::wrapInterpreterMachineStateX64(
+          Recovery.Residual, Img.Format,
+          analysis::InterpreterMachineStateProfile::UserX64NoFaultV1,
+          Opts.InterpreterSpecialization->EntryFrameAlignment);
       if (!Wrapped) {
         Result.Error =
             "machine-state recovery: " + llvm::toString(Wrapped.takeError());

@@ -7,6 +7,7 @@
 #ifndef NEVERD_ANALYSIS_INTERPRETERSPECIALIZATION_H
 #define NEVERD_ANALYSIS_INTERPRETERSPECIALIZATION_H
 
+#include "neverd/analysis/InterpreterEntryAlignment.h"
 #include "neverd/analysis/InterpreterMachineStateProfile.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
@@ -134,6 +135,12 @@ struct SpecializationOptions {
   /// Requires FrameBaseRegister. Native proof APIs require the same bounds in
   /// their explicit frame contract. Absence keeps the full modular root domain.
   std::optional<SpecializationEntryFrameBounds> EntryFrameBounds;
+  /// Optional congruence domain for the entry frame root. Requires explicit
+  /// machine state and an RSP FrameBaseRegister. Raw residual consumers enforce
+  /// it; machine source rejects other roots before guest effects. Native proof
+  /// APIs currently reject this option, since their contract has no such
+  /// domain.
+  std::optional<InterpreterEntryAlignment> EntryFrameAlignment;
   /// Context hints only: missing bytes remain unknown. Other frame facts join
   /// by intersection, so changing spilled business values do not unroll loops.
   std::vector<SpecializationFrameSlot> ControlFrameSlots;

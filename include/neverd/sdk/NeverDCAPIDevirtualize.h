@@ -99,6 +99,24 @@ typedef struct neverd_devirtualize_options_v4 {
   int64_t entry_frame_end;
 } neverd_devirtualize_options_v4;
 
+/// Version 5 adds checked entry-RSP alignment for machine-state source only
+/// and a per-node symbolic-DAG budget. max_symbolic_nodes == 0 retains the
+/// default of 262144; other values set a positive resource limit, not a
+/// premise. Zero the structure and set base.base.base.base.struct_size to its
+/// size. entry_frame_alignment == 0 leaves the domain unrestricted and requires
+/// entry_frame_residue == 0. Otherwise alignment must be a power of two and
+/// residue smaller than alignment. Generated source returns status 2 before
+/// guest accesses or state writes when entry RSP modulo alignment != residue.
+/// Accepted roots retain unconstrained high bits. No memory or native-proof
+/// guarantee is added. v1/v2/v3/v4 ignore this extension; v5 ignores future
+/// tails.
+typedef struct neverd_devirtualize_options_v5 {
+  neverd_devirtualize_options_v4 base;
+  uint32_t entry_frame_alignment;
+  uint32_t entry_frame_residue;
+  uint32_t max_symbolic_nodes;
+} neverd_devirtualize_options_v5;
+
 /// Return recovered C only when all reachable control targets are resolved.
 /// The contract fixes mapped image bytes and permissions, excludes concurrent
 /// mutation and calls, and does not certify binary patching or unwind behavior.
@@ -182,6 +200,15 @@ neverd_devirtualize_source_v4(neverd_session_t Session, neverd_va_t Entry,
 NEVERD_API const char *neverd_devirtualize_machine_source_v4(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v4 *Options, const char **Report);
+
+/// Contracts and ownership match v4. Ordinary source rejects entry alignment.
+NEVERD_API const char *
+neverd_devirtualize_source_v5(neverd_session_t Session, neverd_va_t Entry,
+                              const neverd_devirtualize_options_v5 *Options,
+                              const char **Report);
+NEVERD_API const char *neverd_devirtualize_machine_source_v5(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v5 *Options, const char **Report);
 
 #ifdef __cplusplus
 }

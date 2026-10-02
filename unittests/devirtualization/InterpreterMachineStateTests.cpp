@@ -69,10 +69,14 @@ LowFunc function(std::initializer_list<std::vector<LowOp>> Instructions) {
 
 class InterpreterMachineSourceTest : public NeverDLiftTest {
 protected:
-  void roundTrip(const LowFunc &Function, llvm::StringRef Harness,
-                 llvm::StringRef Preamble = {},
-                 const BinaryImage *ConversionImage = nullptr) {
-    auto Wrapped = wrapInterpreterMachineStateX64(Function);
+  void
+  roundTrip(const LowFunc &Function, llvm::StringRef Harness,
+            llvm::StringRef Preamble = {},
+            const BinaryImage *ConversionImage = nullptr,
+            std::optional<InterpreterEntryAlignment> Alignment = std::nullopt) {
+    auto Wrapped = wrapInterpreterMachineStateX64(
+        Function, BinaryFormat::ELF,
+        InterpreterMachineStateProfile::UserX64NoFaultV1, Alignment);
     ASSERT_TRUE(static_cast<bool>(Wrapped))
         << llvm::toString(Wrapped.takeError());
     for (bool LLVM : {false, true}) {
@@ -136,6 +140,44 @@ protected:
     }
   }
 };
+
+TEST_F(InterpreterMachineSourceTest, AlignmentRejectsBeforeGuestOrStateWrites) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "machine source execution requires clang";
+  const auto RSP = NdVar::reg(x86reg::RSP, 8);
+  const auto RAX = NdVar::reg(x86reg::RAX, 8);
+  const auto F =
+      function({{operation(NdOp::STORE, {}, {RSP, NdVar::scalar(90, 1)})},
+                {operation(NdOp::COPY, RAX, {NdVar::scalar(37, 8)})},
+                {operation(NdOp::RETURN, {}, {RAX})}});
+  roundTrip(F, R"C(
+#include <stdint.h>
+#include <string.h>
+int main(void) {
+  _Alignas(32) uint8_t memory[32] = {0};
+  uint64_t state[17], before[17];
+  for (unsigned residue = 0; residue < 16; ++residue) {
+    for (unsigned i = 0; i < 17; ++i) state[i] = i * 137 + 59;
+    state[16] = residue == 3 ? 2 : 0; // Alignment rejection precedes bad flags.
+    /* Every rejected root is inaccessible, even for a one-byte store. */
+    state[4] = residue == 3 ? (uint64_t)(uintptr_t)(memory + 3) : residue;
+    memcpy(before, state, sizeof state);
+    uint64_t result = generic_machine_source(MACHINE_ARG(state));
+    if (residue != 3) {
+      if (result != 2 || memcmp(before, state, sizeof state)) return 1;
+    } else {
+      before[0] = 37;
+      if (result || memcmp(before, state, sizeof state)) return 2;
+      if (memory[3] != 90) return 3;
+    }
+    for (unsigned i = 0; i < 32; ++i)
+      if (i != 3 && memory[i]) return 4;
+  }
+  return 0;
+}
+)C",
+            {}, nullptr, InterpreterEntryAlignment{16, 3});
+}
 
 TEST(InterpreterMachineStateTest, RejectsUnsupportedEntryFlagsAndProfiles) {
   InterpreterMachineStateX64V1 State;

@@ -440,6 +440,8 @@ int runDecompile(neverd_session_t Sess) {
        VMMaxFields.getNumOccurrences() || VMMaxQueries.getNumOccurrences() ||
        VMChainTransfers.getNumOccurrences() ||
        VMEntryFrame.getNumOccurrences() ||
+       VMEntryAlignment.getNumOccurrences() ||
+       VMMaxSymbolicNodes.getNumOccurrences() ||
        VMNoControlDiscovery.getNumOccurrences())) {
     WithColor::error() << "VM recovery options require --devirtualize\n";
     return 1;
@@ -449,7 +451,7 @@ int runDecompile(neverd_session_t Sess) {
     return 1;
   }
   uint32_t MaxRefinements = 0, MaxFields = 0, MaxQueries = 0,
-           ChainTransfers = 0;
+           ChainTransfers = 0, MaxSymbolicNodes = 0;
   const auto ParseCount = [](StringRef Text, StringRef Option, uint32_t &Value,
                              bool AllowZero = false) {
     if (Text.empty() ||
@@ -468,9 +470,25 @@ int runDecompile(neverd_session_t Sess) {
                    MaxRefinements) ||
        !ParseCount(VMMaxFields.getValue(), "--vm-max-fields", MaxFields) ||
        !ParseCount(VMMaxQueries.getValue(), "--vm-max-queries", MaxQueries) ||
+       !ParseCount(VMMaxSymbolicNodes.getValue(), "--vm-max-symbolic-nodes",
+                   MaxSymbolicNodes) ||
        !ParseCount(VMChainTransfers.getValue(), "--vm-chain-transfers",
                    ChainTransfers, true))) {
     return 1;
+  }
+  uint32_t EntryAlignment = 0, EntryResidue = 0;
+  if (VMEntryAlignment.getNumOccurrences()) {
+    if (!VMMachineState) {
+      WithColor::error()
+          << "--vm-entry-alignment requires --vm-machine-state\n";
+      return 1;
+    }
+    const auto Parts = StringRef(VMEntryAlignment.getValue()).split(':');
+    if (!ParseCount(Parts.first, "--vm-entry-alignment", EntryAlignment) ||
+        !ParseCount(Parts.second, "--vm-entry-alignment residue", EntryResidue,
+                    true))
+      return 1;
+    // The shared entry-domain validator owns power-of-two/residue validity.
   }
   int64_t EntryFrameBegin = 0, EntryFrameEnd = 0;
   if (VMEntryFrame.getNumOccurrences()) {
@@ -538,9 +556,13 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v4 Recovery{};
+      neverd_devirtualize_options_v5 ExtendedRecovery{};
+      ExtendedRecovery.max_symbolic_nodes = MaxSymbolicNodes;
+      ExtendedRecovery.entry_frame_alignment = EntryAlignment;
+      ExtendedRecovery.entry_frame_residue = EntryResidue;
+      auto &Recovery = ExtendedRecovery.base;
       auto &Base = Recovery.base.base.base;
-      Base.struct_size = sizeof(Recovery);
+      Base.struct_size = sizeof(ExtendedRecovery);
       Recovery.base.base.max_control_refinements = MaxRefinements;
       Recovery.base.max_control_fields = MaxFields;
       Recovery.base.max_solver_queries = MaxQueries;
@@ -562,11 +584,10 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source =
-          VMMachineState
-              ? neverd_devirtualize_machine_source_v4(Sess, Entry, &Recovery,
-                                                      &Report)
-              : neverd_devirtualize_source_v4(Sess, Entry, &Recovery, &Report);
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v5(
+                                    Sess, Entry, &ExtendedRecovery, &Report)
+                              : neverd_devirtualize_source_v5(
+                                    Sess, Entry, &ExtendedRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;
         raw_fd_ostream OS(VMRecoveryReport, EC);

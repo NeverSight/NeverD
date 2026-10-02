@@ -125,7 +125,7 @@ std::optional<MedMutableSourcePlan>
 analyzeMedMutableSource(const MedFunc &F, Arch Architecture,
                         std::string *Error) {
   const auto Fail =
-      [&](const char *Reason) -> std::optional<MedMutableSourcePlan> {
+      [&](const std::string &Reason) -> std::optional<MedMutableSourcePlan> {
     if (Error)
       *Error = Reason;
     return std::nullopt;
@@ -213,9 +213,16 @@ analyzeMedMutableSource(const MedFunc &F, Arch Architecture,
   bool HasReturn = false;
   // Bound every adjacency list before any reverse-edge scan can visit it.
   for (const auto &B : F.Blocks) {
-    if (B.Ops.size() > RemainingOps || B.Succs.size() > 2 ||
-        B.Preds.size() > MaxBlocks)
-      return Fail("mutable source block metadata exceeds its budget");
+    if (B.Ops.size() > RemainingOps)
+      return Fail("mutable source operation budget exhausted: block " +
+                  std::to_string(B.Id) + " needs " +
+                  std::to_string(B.Ops.size()) + " operations with " +
+                  std::to_string(RemainingOps) + " remaining");
+    if (B.Succs.size() > 2 || B.Preds.size() > MaxBlocks)
+      return Fail("mutable source CFG metadata exceeds its budget: block " +
+                  std::to_string(B.Id) + " has " +
+                  std::to_string(B.Succs.size()) + " successors and " +
+                  std::to_string(B.Preds.size()) + " predecessors");
     RemainingOps -= B.Ops.size();
   }
   for (size_t BI = 0; BI < F.Blocks.size(); ++BI) {

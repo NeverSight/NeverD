@@ -54,6 +54,14 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     const InterpreterLLVMRefinementPlans &Plans, LowIRRefinementWitness Witness,
     const InterpreterLLVMRefinementLimits &Limits) {
   InterpreterLLVMRefinementResult Result;
+  if (Options.EntryFrameAlignment) {
+    Result.Stage = InterpreterLLVMRefinementStage::Native;
+    Result.Native.Proof.Status = LowIRRefinementStatus::Unsupported;
+    Result.Diagnostic =
+        "native proof does not support an entry alignment domain";
+    Result.Native.Proof.Diagnostic = Result.Diagnostic;
+    return Result;
+  }
   if (!Options.ExplicitMachineState || !Options.NormalNonfaultingExecution ||
       !Options.X64CetDisabled ||
       Options.X64FlagsProfile !=

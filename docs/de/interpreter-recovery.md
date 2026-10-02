@@ -101,6 +101,14 @@ neverd_free_string(source);
 neverd_free_string(report);
 ```
 
+Die Wiederherstellung mit Maschinenzustand akzeptiert `--vm-entry-alignment=A:R` als ausdrücklich geprüften Bereich des anfänglichen RSP. `A` muss eine positive Zweierpotenz sein und `R < A` gelten. Andere Werte liefern Status 2 vor Gastzugriffen oder Zustandsänderungen. Hohe Adressbits bleiben frei; standardmäßig wird keine Ausrichtung angenommen. Die Option zertifiziert keine native Äquivalenz.
+
+Die C-APIs v5 `neverd_devirtualize_source_v5()` und `neverd_devirtualize_machine_source_v5()` ergänzen v4 um `entry_frame_alignment` und `entry_frame_residue`. `neverd_devirtualize_options_v5` mit null initialisieren und die volle Größe in `base.base.base.base.struct_size` setzen. Ausrichtung null deaktiviert die Option und verlangt Rest null; andere Werte sind nur in der Maschinenzustands-API erlaubt. v1–v4 ignorieren den neuen Anhang, v5 zukünftige Anhänge. `entryFrameAlignment` und erzeugtes C dokumentieren dieselbe Prüfung. Eine ungültige Ausrichtung wird vor ungültigen Eingangsflags abgewiesen; alle Zustandswörter bleiben erhalten. Numerische Frame-Grenzen bleiben ungeprüft. C++-Nutzer des Restgraphen müssen den RSP-Bereich selbst gewährleisten. Quelltext und Modell teilen denselben Prüfungs-Generator; native Beweis-APIs lehnen den Bereich ab, bis ihr Vertrag ihn binden kann.
+
+`--vm-max-symbolic-nodes=N` und v5 `max_symbolic_nodes` setzen das Budget des symbolischen DAG pro Knoten (Standard 262144). Die CLI verlangt eine positive dezimale 32-Bit-Zahl; null in C wählt den Standard. Beide Quelltext-ABIs verwenden dieselbe Grenze, die `maxSymbolicNodes` dokumentiert. Ein höheres Budget liefert keine semantische Annahme oder Beweisgarantie.
+
+Kontroll- und Guard-Verfeinerungen gehen optionalen Frame-Partitionen voraus; nötige feinere Partitionen bleiben möglich. Jeder Rest erreicht zunächst seinen Fixpunkt. Veröffentlicht wird erst nach Abschluss aller erlaubten Reste. Die ausdrückliche Ausrichtung schneidet den Partitionsbereich ein; die Verzweigung vergleicht tatsächliche Reste. Kontext-, Operations-, Knoten- und Solver-Budgets bleiben begrenzt und werden über Wiederholungen geteilt.
+
 Der JSON-Bericht ergänzt `discoverControlState`, `maxControlRefinements`, `maxDiscoveryVisits`, `discoveredControlFields`, `discoveredContextFields`, `controlRefinements` und `discoveryVisits` für Aktivierung, Grenzen und Analyseaufwand. Die Erkennung von Feldern allein beweist keine erfolgreiche Wiederherstellung.
 
 Verengt eine Bedingung eine Adressabhängigkeit auf einen Byteausschnitt, behält die Verfeinerung auch bereits verfolgte, umschließende direkte Adressfelder von acht Byte als Kontextkandidaten bei. Das schmale Feld und die Bitmaske seines Erzeugers bleiben unverändert; unbeteiligte breite Felder werden nicht hochgestuft. Konstanten und Offsets relativ zum Eintritt erfordern weiterhin einen Beweis; alle Kontexte teilen sich die bestehenden Grenzen.

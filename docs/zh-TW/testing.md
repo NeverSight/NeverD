@@ -129,6 +129,8 @@ build-release/bin/NeverDLowIRRefinementTests
 
 `FrameOffsets.*`、`NativeStackSpecialization.*` 與 `OriginalBinaryUndefinedIndependence.*` 檢查 2/4/8/16/32 位元組對齊的全部餘數、自由高位、跨呼叫儲存、倒數迴圈、別名破壞、錯誤分派、無關大遮罩、必要分區升級及恰好／少一次預算。獨立原生控制檢查帶分支約束的對齊、內部無符號返回清理、錯誤清理量與帶前綴返回。這些測試不表示分區迴圈已具備自動原生至 LLVM 的完整證明。
 
+入口對齊回歸涵蓋更細分區、全部允許餘數、不同高位根位址、最後案例失敗，以及精確與少一預算。兩個 C 後端均在 O0/O2 下以不可存取的被拒客體位址及無效旗標驗證：狀態 2 必須保留全部狀態位元組。模型細化檢查相同拒絕語義；C/Python 測試涵蓋 v5 配置、所有權及舊版與未來尾部。原生證明控制明確拒絕未綁定的對齊域。
+
 `StringTransfer.*` 與重複搬移迴歸檢查重疊、零次數、暫存變數隔離、容量／預算限制及指標失效。`MachineStringSourceTests.cpp` 針對四種寬度與兩個方向，將原生執行及兩條 C 路徑的 O0/O2 結果與獨立的全部暫存器、旗標及堆疊參考結果比較。
 
 `ControlDiscovery.*` 與 `NativeStackSpecialization.*` 涵蓋根位址低位元條件、高位元和完整根相依、不完整遍歷、恰好足夠及不足的遍歷預算，以及有限不可變位址證據的保留。
