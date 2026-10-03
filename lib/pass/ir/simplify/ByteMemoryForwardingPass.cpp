@@ -20,6 +20,7 @@
 #include "llvm/IR/Operator.h"
 
 #include <algorithm>
+#include <deque>
 #include <map>
 #include <optional>
 
@@ -167,6 +168,169 @@ numericAddress(llvm::Value *Pointer, const llvm::DataLayout &DL,
     // never strip masks, truncation, extension or address-space casts.
     return NumericAddress{Value, std::move(Offset)};
   }
+}
+
+// Bottom means an unresolved cyclic definition, not an arbitrary value. A
+// later conflicting predecessor moves the fact to Top and invalidates every
+// dependent relation before any address is rewritten.
+struct AffineAddress {
+  enum Kind { Bottom, Exact, Top } State = Bottom;
+  llvm::Value *Root = nullptr;
+  llvm::APInt Offset{1, 0};
+
+  bool operator==(const AffineAddress &) const = default;
+
+  static AffineAddress unknown() { return {Top, nullptr, llvm::APInt(1, 0)}; }
+  static AffineAddress exact(llvm::Value *Root, llvm::APInt Offset) {
+    return {Exact, Root, std::move(Offset)};
+  }
+};
+
+AffineAddress join(AffineAddress A, AffineAddress B) {
+  if (A.State == AffineAddress::Bottom)
+    return B;
+  if (B.State == AffineAddress::Bottom)
+    return A;
+  return A == B ? A : AffineAddress::unknown();
+}
+
+// Recover only address algebra here. No store or path fact crosses a block.
+// In particular an entry relation alone cannot authorize a cyclic rewrite.
+bool canonicalizeNumericAddresses(llvm::Function &F,
+                                  const ByteMemoryForwardingOptions &Options,
+                                  ByteMemoryForwardingResult &Result) {
+  const auto &DL = F.getParent()->getDataLayout();
+  const unsigned Width = DL.getPointerSizeInBits(0);
+  if ((Width != 32 && Width != 64) || Width != DL.getIndexSizeInBits(0))
+    return true;
+  const auto Step = [&](uint64_t Count = 1) {
+    return charge(Result.AddressSteps, Count, Options.MaxAddressSteps, Result);
+  };
+  const auto Eligible = [&](llvm::Type *T) {
+    return T->isIntegerTy(Width) ||
+           (T->isPointerTy() && !T->getPointerAddressSpace() &&
+            !DL.isNonIntegralPointerType(T));
+  };
+  llvm::DenseMap<llvm::Value *, AffineAddress> Facts;
+  std::deque<llvm::Instruction *> Work;
+  llvm::SmallPtrSet<llvm::Instruction *, 32> Queued;
+  const auto Enqueue = [&](llvm::Instruction *I) {
+    if (Eligible(I->getType()) && Queued.insert(I).second)
+      Work.push_back(I);
+  };
+  const auto Read = [&](llvm::Value *V) {
+    if (!Eligible(V->getType()) || llvm::isa<llvm::UndefValue>(V))
+      return AffineAddress::unknown();
+    if (auto *C = llvm::dyn_cast<llvm::ConstantInt>(V))
+      return AffineAddress::exact(nullptr, C->getValue());
+    if (llvm::isa<llvm::Instruction>(V))
+      return Facts.lookup(V);
+    return AffineAddress::exact(V, llvm::APInt(Width, 0));
+  };
+  for (auto &BB : F)
+    for (auto &I : BB) {
+      if (!Step())
+        return false;
+      Enqueue(&I);
+    }
+  while (!Work.empty()) {
+    if (!Step())
+      return false;
+    auto *I = Work.front();
+    Work.pop_front();
+    Queued.erase(I);
+    AffineAddress Next = AffineAddress::exact(I, llvm::APInt(Width, 0));
+    if (auto *Phi = llvm::dyn_cast<llvm::PHINode>(I)) {
+      Next = {};
+      for (llvm::Value *V : Phi->incoming_values()) {
+        if (!Step())
+          return false;
+        Next = join(Next, Read(V));
+      }
+    } else if (auto *Select = llvm::dyn_cast<llvm::SelectInst>(I)) {
+      if (!Step(2))
+        return false;
+      Next = join(Read(Select->getTrueValue()), Read(Select->getFalseValue()));
+    } else if (llvm::isa<llvm::IntToPtrInst>(I)) {
+      Next = Read(I->getOperand(0));
+    } else if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(I)) {
+      if (!Step(GEP->getNumIndices()))
+        return false;
+      llvm::APInt Delta(Width, 0);
+      if (GEP->accumulateConstantOffset(DL, Delta)) {
+        Next = Read(GEP->getPointerOperand());
+        if (Next.State == AffineAddress::Exact)
+          Next.Offset += Delta;
+      }
+    } else if (auto *Binary = llvm::dyn_cast<llvm::BinaryOperator>(I)) {
+      auto *K = llvm::dyn_cast<llvm::ConstantInt>(Binary->getOperand(1));
+      llvm::Value *V = Binary->getOperand(0);
+      if (Binary->getOpcode() == llvm::Instruction::Add && !K) {
+        K = llvm::dyn_cast<llvm::ConstantInt>(V);
+        V = Binary->getOperand(1);
+      }
+      if (K && (Binary->getOpcode() == llvm::Instruction::Add ||
+                Binary->getOpcode() == llvm::Instruction::Sub)) {
+        Next = Read(V);
+        if (Next.State == AffineAddress::Exact)
+          Next.Offset += Binary->getOpcode() == llvm::Instruction::Add
+                             ? K->getValue()
+                             : -K->getValue();
+      }
+    }
+    // Casts losing bits, freeze and other operations retain their own root.
+    // Do not expose optimistic facts until the entire worklist has converged.
+    Next = join(Facts.lookup(I), std::move(Next));
+    if (Next == Facts.lookup(I))
+      continue;
+    Facts[I] = std::move(Next);
+    for (llvm::User *U : I->users()) {
+      if (!Step())
+        return false;
+      if (auto *User = llvm::dyn_cast<llvm::Instruction>(U))
+        Enqueue(User);
+    }
+  }
+  for (auto &BB : F)
+    for (auto &I : BB) {
+      if (!Step())
+        return false;
+      auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I);
+      auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I);
+      if ((!Load && !Store) || (Load && !Load->isSimple()) ||
+          (Store && !Store->isSimple()))
+        continue;
+      llvm::Value *P =
+          Load ? Load->getPointerOperand() : Store->getPointerOperand();
+      const auto A = Read(P);
+      if (A.State != AffineAddress::Exact || !A.Root ||
+          !A.Root->getType()->isIntegerTy(Width))
+        continue;
+      // An entry value is evaluated once before every reachable loop. Do not
+      // equate separate dynamic executions of a loop-local opaque operation.
+      const auto *RootInst = llvm::dyn_cast<llvm::Instruction>(A.Root);
+      if (!llvm::isa<llvm::Argument>(A.Root) &&
+          (!RootInst || RootInst->getParent() != &F.getEntryBlock()))
+        continue;
+      auto Existing = numericAddress(P, DL, Options, Result);
+      if (Result.BudgetExhausted)
+        return false;
+      if (Existing && Existing->Root == A.Root && Existing->Offset == A.Offset)
+        continue;
+      if (!charge(Result.NewInstructions, 1 + !A.Offset.isZero(),
+                  Options.MaxNewInstructions, Result))
+        return false;
+      llvm::IRBuilder<llvm::NoFolder> Builder(&I);
+      llvm::Value *Address = A.Root;
+      if (!A.Offset.isZero())
+        Address = Builder.CreateAdd(
+            Address, llvm::ConstantInt::get(Address->getType(), A.Offset),
+            "numeric.address");
+      Address = Builder.CreateIntToPtr(Address, P->getType());
+      I.setOperand(Load ? 0 : 1, Address);
+      ++Result.CanonicalizedAddresses;
+    }
+  return true;
 }
 
 // Two scans keep forwarding facts separate from dead-store candidates. The
@@ -448,6 +612,7 @@ ByteMemoryForwardingPass::forward(llvm::Function &F,
     }
   }
   if (Options.SimplifyNumericMemory && !Result.BudgetExhausted &&
+      canonicalizeNumericAddresses(F, Options, Result) &&
       simplifyNumericMemory(F, Options, Result, false))
     simplifyNumericMemory(F, Options, Result, true);
   return Result;
@@ -457,7 +622,8 @@ llvm::PreservedAnalyses
 ByteMemoryForwardingPass::run(llvm::Function &F,
                               llvm::FunctionAnalysisManager &) {
   const auto Result = forward(F, Options);
-  return Result.ForwardedLoads || Result.RemovedStores
+  return Result.ForwardedLoads || Result.RemovedStores ||
+                 Result.CanonicalizedAddresses
              ? llvm::PreservedAnalyses::none()
              : llvm::PreservedAnalyses::all();
 }
