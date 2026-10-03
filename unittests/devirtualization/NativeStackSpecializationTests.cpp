@@ -1385,6 +1385,37 @@ TEST(NativeStackSpecialization, RefinesFiniteDispatchBeforeUnsupportedArm) {
     }
 }
 
+TEST(NativeStackSpecialization, FiniteGuardsDoNotPreemptExistingRefinement) {
+  auto P = guardedDecoder(false);
+  // A runtime dispatch before the decoder has a large, irrelevant selector
+  // expression. Its four valid arms converge before the native phase guard.
+  // Only that guard needs refinement; eagerly walking the selector would
+  // consume the discovery budget before the useful dependency is inspected.
+  P.add(0x10, {operation(NdOp::COPY, r(56), {r(8)})});
+  for (va_t Address = 0x11; Address != 0x91; ++Address)
+    P.add(Address, {operation(NdOp::INT_MULT, r(56), {r(56), c(3)}),
+                    operation(NdOp::INT_XOR, r(56), {r(56), r(8)})});
+  P.add(0x91, {operation(NdOp::INT_AND, r(56), {r(56), c(3)}),
+               operation(NdOp::INT_MULT, r(56), {r(56), c(0x100)}),
+               operation(NdOp::INT_ADD, r(56), {r(56), c(0x800)}),
+               operation(NdOp::INDIR_BR, {}, {r(56)})});
+  for (va_t Address : {0x800, 0x900, 0xa00, 0xb00})
+    P.add(Address, {branch(0x100)});
+  auto O = stackOptions();
+  O.DiscoverControlState = true;
+  O.MaxDiscoveryVisits = 256;
+  const auto R = specializeInterpreter(P, {0x10}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_GT(R.ControlRefinements, 0u);
+  EXPECT_LT(R.DiscoveryVisits, O.MaxDiscoveryVisits);
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{42}, UINT64_MAX}) {
+    const auto Run = execute(R.Residual, Input);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, Input + 17);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+  }
+}
+
 TEST(NativeStackSpecialization,
      FiniteDispatchCannotHideReachableUnsupportedArm) {
   for (bool Spilled : {false, true})
@@ -1472,6 +1503,32 @@ TEST(NativeStackSpecialization, ExhaustedGuardKeepsDeferredProducerRefinement) {
   auto O = stackOptions();
   O.ControlRegisters = {{16, 8}};
   O.DiscoverControlState = true;
+  const auto R = specializeInterpreter(P, {0x100}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{42}, UINT64_MAX}) {
+    const auto Run = execute(R.Residual, Input);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, Input + 17);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+  }
+}
+
+TEST(NativeStackSpecialization, DeferredProducerFitsRefinementBudget) {
+  auto P = finiteDispatchDecoder(false);
+  // The first failure needs the phase field: without the mask its target
+  // domain is not finite. A deferred producer then needs the input bit across
+  // the XOR to retain the cancellation. Both refinements must fit the budget
+  // without spending another retry on optional finite-guard collection.
+  P.add(0x201, {operation(NdOp::INT_MULT, r(24), {r(16), c(0x100)}),
+                operation(NdOp::INT_ADD, r(24), {r(24), c(0x400)}),
+                operation(NdOp::INDIR_BR, {}, {r(24)})});
+  P.add(0x400, {operation(NdOp::INT_AND, r(16), {r(8), c(1)}), branch(0x450)});
+  P.add(0x450, {operation(NdOp::INT_AND, r(56), {r(8), c(1)}),
+                operation(NdOp::INT_XOR, r(16), {r(16), r(56)}),
+                operation(NdOp::INT_ADD, r(16), {r(16), c(1)}), branch(0x200)});
+  auto O = stackOptions();
+  O.DiscoverControlState = true;
+  O.MaxControlRefinements = 2;
   const auto R = specializeInterpreter(P, {0x100}, O);
   ASSERT_TRUE(R.complete()) << R.Diagnostic;
   for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{42}, UINT64_MAX}) {

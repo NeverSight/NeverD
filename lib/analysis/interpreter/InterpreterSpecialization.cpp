@@ -586,6 +586,9 @@ struct ControlRefinement {
       RegisterPartitions;
   bool BudgetExceeded = false;
   bool PrecisionFailure = false;
+  // Finite dispatch is already a valid abstraction. Walk its optional guard
+  // dependencies only after the existing precision mechanisms have stalled.
+  bool DiscoverFiniteGuards = false;
 };
 
 template <class Field>
@@ -706,6 +709,7 @@ public:
   SpecializationResult refineRegisterPartition(SpecializationResult Previous,
                                                bool &Changed);
   void refineFailureGuards();
+  bool sawFiniteDispatch() const { return SawFiniteDispatch; }
   SpecializationResult refineTargetContexts(SpecializationResult Previous,
                                             bool &Changed);
 
@@ -776,6 +780,7 @@ private:
   bool Failed = false;
   int FailureNode = -1;
   bool SawUndecidedGuard = false;
+  bool SawFiniteDispatch = false;
   va_t FailureCursor = InvalidVA;
   SpecializationCursor DemandCursor;
   std::set<uint64_t> AffineCandidates;
@@ -2008,9 +2013,12 @@ bool Specializer::emitTargets(Node &Draft,
     // conditional branch, so a later failure can nominate guard refinement.
     // The finite proof and each edge predicate still authorize the graph;
     // these deferred demands neither prune an arm nor bind its target value.
-    SawUndecidedGuard |= Options.DiscoverControlState;
-    discover(State, TargetValue, FrameRoot, ControlDemand::DeferredGuard);
-    Draft.ConditionalGuard = true;
+    SawFiniteDispatch = true;
+    if (Refinement.DiscoverFiniteGuards) {
+      SawUndecidedGuard |= Options.DiscoverControlState;
+      discover(State, TargetValue, FrameRoot, ControlDemand::DeferredGuard);
+      Draft.ConditionalGuard = true;
+    }
   }
   int Head = Destinations.back().second;
   // Dispatch reads the retained target operand. No expression mentioning an
@@ -3509,6 +3517,23 @@ specializeInterpreter(SpecializationProvider &Provider,
         Options.ControlFrameSlots.size(), Refinement, std::move(Result));
     Result = Attempt.run();
     Result.DiscoveryVisits = Refinement.Visits;
+    const auto TryFiniteGuards = [&]() {
+      if (!Options.DiscoverControlState || Refinement.DiscoverFiniteGuards ||
+          Refinement.BudgetExceeded || !Attempt.sawFiniteDispatch() ||
+          (Result.Status != SpecializationStatus::Unsupported &&
+           Result.Status != SpecializationStatus::UnresolvedControl))
+        return false;
+      if (Result.ControlRefinements >= Options.MaxControlRefinements) {
+        Result.Status = SpecializationStatus::BudgetExceeded;
+        Result.Diagnostic = "finite-guard refinement budget exhausted";
+        return false;
+      }
+      Refinement.DiscoverFiniteGuards = true;
+      ++Result.ControlRefinements;
+      // The fresh attempt shares all work ledgers and must re-prove every
+      // edge. Enabling dependency collection introduces no semantic fact.
+      return true;
+    };
     const auto TryFramePartition = [&]() {
       const auto NextFrameMask =
           Refinement.CandidateFrameMasks.upper_bound(Refinement.FrameMask);
@@ -3535,7 +3560,9 @@ specializeInterpreter(SpecializationProvider &Provider,
     };
     if (Result.complete() || !Options.DiscoverControlState ||
         (Result.Status != SpecializationStatus::UnresolvedControl &&
-         !Refinement.PrecisionFailure)) {
+         !Refinement.PrecisionFailure &&
+         !(Result.Status == SpecializationStatus::Unsupported &&
+           Attempt.sawFiniteDispatch()))) {
       if (TryFramePartition())
         continue;
       return Result;
@@ -3674,6 +3701,8 @@ specializeInterpreter(SpecializationProvider &Provider,
         return Result;
       Result = Attempt.refineTargetContexts(std::move(Result), Partitioned);
       if (Partitioned)
+        continue;
+      if (TryFiniteGuards())
         continue;
       return Result;
     }
