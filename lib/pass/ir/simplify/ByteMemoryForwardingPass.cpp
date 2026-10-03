@@ -14,6 +14,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/NoFolder.h"
@@ -23,6 +24,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <set>
 
 namespace neverd {
 namespace {
@@ -194,7 +196,118 @@ AffineAddress join(AffineAddress A, AffineAddress B) {
   return A == B ? A : AffineAddress::unknown();
 }
 
-// Recover only address algebra here. No store or path fact crosses a block.
+// A dominating masked equality can turn a bitwise address operation into an
+// exact modular displacement. The proof belongs to the operation's execution
+// point, not to all uses of the input or to a guessed entry alignment.
+bool collectGuardedDisplacements(
+    llvm::Function &F, const ByteMemoryForwardingOptions &Options,
+    ByteMemoryForwardingResult &Result,
+    llvm::DenseMap<llvm::Instruction *, llvm::APInt> &Deltas) {
+  const auto Step = [&](uint64_t Count = 1) {
+    return charge(Result.AddressSteps, Count, Options.MaxAddressSteps, Result);
+  };
+  struct Guard {
+    llvm::BranchInst *Branch;
+    unsigned Successor;
+    llvm::APInt Mask;
+    llvm::APInt Bits;
+    uint64_t Predecessors;
+  };
+  const unsigned Width = F.getParent()->getDataLayout().getPointerSizeInBits(0);
+  llvm::DenseMap<llvm::Value *, llvm::SmallVector<Guard, 2>> Guards;
+  for (auto &BB : F) {
+    if (!Step(1 + BB.getTerminator()->getNumSuccessors()))
+      return false;
+    auto *Branch = llvm::dyn_cast<llvm::BranchInst>(BB.getTerminator());
+    if (!Branch || !Branch->isConditional() ||
+        Branch->getSuccessor(0) == Branch->getSuccessor(1))
+      continue;
+    auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(Branch->getCondition());
+    if (!Cmp || !Cmp->isEquality() ||
+        !Cmp->getOperand(0)->getType()->isIntegerTy(Width))
+      continue;
+    auto *Expected = llvm::dyn_cast<llvm::ConstantInt>(Cmp->getOperand(1));
+    auto *And = llvm::dyn_cast<llvm::BinaryOperator>(Cmp->getOperand(0));
+    if (!Expected || !And || And->getOpcode() != llvm::Instruction::And)
+      continue;
+    auto *Mask = llvm::dyn_cast<llvm::ConstantInt>(And->getOperand(1));
+    llvm::Value *Input = And->getOperand(0);
+    if (!Mask) {
+      Mask = llvm::dyn_cast<llvm::ConstantInt>(Input);
+      Input = And->getOperand(1);
+    }
+    if (!Mask || !(Expected->getValue() & ~Mask->getValue()).isZero())
+      continue;
+    const unsigned Successor = Cmp->getPredicate() == llvm::ICmpInst::ICMP_NE;
+    uint64_t Predecessors = 0;
+    for (auto *Pred : llvm::predecessors(Branch->getSuccessor(Successor))) {
+      (void)Pred;
+      if (!Step())
+        return false;
+      ++Predecessors;
+    }
+    Guards[Input].push_back({Branch, Successor, Mask->getValue(),
+                             Expected->getValue(), Predecessors});
+  }
+  if (Guards.empty())
+    return true;
+  // Graph vertices and edges were charged before constructing this analysis.
+  llvm::DominatorTree DT(F);
+  for (auto &BB : F)
+    for (auto &I : BB) {
+      if (!Step())
+        return false;
+      auto *Binary = llvm::dyn_cast<llvm::BinaryOperator>(&I);
+      if (!Binary || !Binary->getType()->isIntegerTy(Width) ||
+          !DT.isReachableFromEntry(&BB))
+        continue;
+      unsigned Op = Binary->getOpcode();
+      if (Op != llvm::Instruction::And && Op != llvm::Instruction::Or &&
+          Op != llvm::Instruction::Xor)
+        continue;
+      auto *K = llvm::dyn_cast<llvm::ConstantInt>(Binary->getOperand(1));
+      llvm::Value *V = Binary->getOperand(0);
+      if (!K) {
+        K = llvm::dyn_cast<llvm::ConstantInt>(V);
+        V = Binary->getOperand(1);
+      }
+      if (!K)
+        continue;
+      auto Found = Guards.find(V);
+      if (Found == Guards.end())
+        continue;
+      const llvm::APInt Changed =
+          Op == llvm::Instruction::And ? ~K->getValue() : K->getValue();
+      llvm::APInt Known(Changed.getBitWidth(), 0), Bits(Known);
+      for (const auto &G : Found->second) {
+        // Edge dominance may inspect all predecessors of the selected target.
+        if (!Step(1 + G.Predecessors))
+          return false;
+        if (!DT.dominates(
+                llvm::BasicBlockEdge(G.Branch->getParent(),
+                                     G.Branch->getSuccessor(G.Successor)),
+                &BB))
+          continue;
+        if (!((Bits ^ G.Bits) & Known & G.Mask).isZero()) {
+          Known.clearAllBits();
+          break;
+        }
+        Known |= G.Mask;
+        Bits |= G.Bits;
+      }
+      if (!(Changed & ~Known).isZero())
+        continue;
+      llvm::APInt Delta(Changed.getBitWidth(), 0);
+      if (Op != llvm::Instruction::And)
+        Delta += Changed & ~Bits;
+      if (Op != llvm::Instruction::Or)
+        Delta -= Changed & Bits;
+      Deltas[&I] = std::move(Delta);
+    }
+  return true;
+}
+
+// Recover address algebra only. Memory contents never cross a block.
 // In particular an entry relation alone cannot authorize a cyclic rewrite.
 bool canonicalizeNumericAddresses(llvm::Function &F,
                                   const ByteMemoryForwardingOptions &Options,
@@ -211,6 +324,9 @@ bool canonicalizeNumericAddresses(llvm::Function &F,
            (T->isPointerTy() && !T->getPointerAddressSpace() &&
             !DL.isNonIntegralPointerType(T));
   };
+  llvm::DenseMap<llvm::Instruction *, llvm::APInt> GuardedDeltas;
+  if (!collectGuardedDisplacements(F, Options, Result, GuardedDeltas))
+    return false;
   llvm::DenseMap<llvm::Value *, AffineAddress> Facts;
   std::deque<llvm::Instruction *> Work;
   llvm::SmallPtrSet<llvm::Instruction *, 32> Queued;
@@ -265,7 +381,7 @@ bool canonicalizeNumericAddresses(llvm::Function &F,
     } else if (auto *Binary = llvm::dyn_cast<llvm::BinaryOperator>(I)) {
       auto *K = llvm::dyn_cast<llvm::ConstantInt>(Binary->getOperand(1));
       llvm::Value *V = Binary->getOperand(0);
-      if (Binary->getOpcode() == llvm::Instruction::Add && !K) {
+      if (Binary->isCommutative() && !K) {
         K = llvm::dyn_cast<llvm::ConstantInt>(V);
         V = Binary->getOperand(1);
       }
@@ -276,6 +392,10 @@ bool canonicalizeNumericAddresses(llvm::Function &F,
           Next.Offset += Binary->getOpcode() == llvm::Instruction::Add
                              ? K->getValue()
                              : -K->getValue();
+      } else if (auto G = GuardedDeltas.find(I); G != GuardedDeltas.end()) {
+        Next = Read(V);
+        if (Next.State == AffineAddress::Exact)
+          Next.Offset += G->second;
       }
     }
     // Casts losing bits, freeze and other operations retain their own root.
@@ -333,12 +453,9 @@ bool canonicalizeNumericAddresses(llvm::Function &F,
   return true;
 }
 
-// Two scans keep forwarding facts separate from dead-store candidates. The
-// second scan sees only the reads that really survived the first scan,
-// including reads retained because of a budget or unsupported coercion.
-bool simplifyNumericMemory(llvm::Function &F,
-                           const ByteMemoryForwardingOptions &Options,
-                           ByteMemoryForwardingResult &Result, bool Delete) {
+bool forwardNumericMemory(llvm::Function &F,
+                          const ByteMemoryForwardingOptions &Options,
+                          ByteMemoryForwardingResult &Result) {
   const auto &DL = F.getParent()->getDataLayout();
   for (auto &BB : F) {
     llvm::Value *Root = nullptr;
@@ -358,9 +475,9 @@ bool simplifyNumericMemory(llvm::Function &F,
         return false;
       auto *Store = llvm::dyn_cast<llvm::StoreInst>(I);
       auto *Load = llvm::dyn_cast<llvm::LoadInst>(I);
-      if (!Store && (!Load || Delete)) {
+      if (!Store && !Load) {
         if (llvm::isa<llvm::CallBase, llvm::FenceInst>(I) || I->mayThrow() ||
-            I->mayWriteToMemory() || (Delete && I->mayReadFromMemory()))
+            I->mayWriteToMemory())
           Clear();
         continue;
       }
@@ -390,34 +507,6 @@ bool simplifyNumericMemory(llvm::Function &F,
         if (Root != A->Root)
           Clear();
         Root = A->Root;
-        llvm::SmallPtrSet<llvm::StoreInst *, 16> Seen;
-        for (unsigned J = 0; J != *Width; ++J) {
-          if (!Step())
-            return false;
-          auto At = Bytes.find(Offset(J));
-          if (!Delete || At == Bytes.end())
-            continue;
-          const StoredByte Old = At->second;
-          if (!Seen.insert(Old.Writer).second)
-            continue;
-          const unsigned OldWidth =
-              *scalarBytes(Old.Writer->getValueOperand()->getType());
-          const llvm::APInt Start = A->Offset + J - Old.Index;
-          const llvm::APInt Delta = Start - A->Offset;
-          if (OldWidth > *Width || Delta.ugt(*Width - OldWidth))
-            continue;
-          // At most sixteen cached bytes belong to any one writer. Charge
-          // each lookup, including those already replaced by another store.
-          for (unsigned K = 0; K != OldWidth; ++K) {
-            if (!Step())
-              return false;
-            auto Part = Bytes.find((Start + K).getZExtValue());
-            if (Part != Bytes.end() && Part->second.Writer == Old.Writer)
-              Bytes.erase(Part);
-          }
-          Old.Writer->eraseFromParent();
-          ++Result.RemovedStores;
-        }
         for (unsigned J = 0; J != *Width; ++J) {
           if (!Step())
             return false;
@@ -476,6 +565,100 @@ bool simplifyNumericMemory(llvm::Function &F,
       Load->replaceAllUsesWith(Value);
       Load->eraseFromParent();
       ++Result.ForwardedLoads;
+    }
+  }
+  return true;
+}
+
+// Analyze observations after forwarding, so retained reads (including an
+// unsupported coercion) still protect the bytes they see. A reverse scan
+// records bytes overwritten before any subsequent observation. This permits
+// several smaller stores to kill one larger store without ever partially
+// deleting a writer whose other bytes remain observable.
+bool deleteNumericStores(llvm::Function &F,
+                         const ByteMemoryForwardingOptions &Options,
+                         ByteMemoryForwardingResult &Result) {
+  const auto &DL = F.getParent()->getDataLayout();
+  const auto Step = [&](uint64_t Count = 1) {
+    return charge(Result.MemorySteps, Count, Options.MaxMemorySteps, Result);
+  };
+  for (auto &BB : F) {
+    llvm::Value *Root = nullptr;
+    // Offsets are modular bitvectors, including zero and all sentinel values.
+    std::set<uint64_t> Overwritten;
+    const auto Clear = [&] {
+      Root = nullptr;
+      Overwritten.clear();
+    };
+    for (auto It = BB.end(); It != BB.begin();) {
+      llvm::Instruction *I = &*--It;
+      if (!charge(Result.Instructions, 1, Options.MaxInstructions, Result))
+        return false;
+      auto *Store = llvm::dyn_cast<llvm::StoreInst>(I);
+      auto *Load = llvm::dyn_cast<llvm::LoadInst>(I);
+      if (!Store && !Load) {
+        if (llvm::isa<llvm::CallBase, llvm::FenceInst>(I) || I->mayThrow() ||
+            I->mayReadOrWriteMemory())
+          Clear();
+        continue;
+      }
+      auto Width = scalarBytes(Store ? Store->getValueOperand()->getType()
+                                     : Load->getType());
+      if (!Width || (Store && !Store->isSimple()) ||
+          (Load && !Load->isSimple())) {
+        Clear();
+        continue;
+      }
+      auto A = numericAddress(Store ? Store->getPointerOperand()
+                                    : Load->getPointerOperand(),
+                              DL, Options, Result);
+      if (Result.BudgetExhausted)
+        return false;
+      if (!A) {
+        Clear();
+        continue;
+      }
+      // Different SSA roots may alias. Neither the integer representation nor
+      // a disjoint displacement proves independence from an unrelated root.
+      if (Root != A->Root)
+        Clear();
+      Root = A->Root;
+      const auto Offset = [&](unsigned Index) {
+        return (A->Offset + Index).getZExtValue();
+      };
+      if (Load) {
+        for (unsigned J = 0; J != *Width; ++J) {
+          if (!Step())
+            return false;
+          Overwritten.erase(Offset(J));
+        }
+        continue;
+      }
+      bool Dead = true;
+      for (unsigned J = 0; J != *Width; ++J) {
+        if (!Step())
+          return false;
+        Dead &= Overwritten.contains(Offset(J));
+      }
+      if (Dead) {
+        // No IR is changed until every byte of this writer has been checked.
+        It = Store->eraseFromParent();
+        ++Result.RemovedStores;
+        continue;
+      }
+      for (unsigned J = 0; J != *Width; ++J) {
+        if (!Step())
+          return false;
+        const uint64_t Key = Offset(J);
+        if (!Overwritten.contains(Key) &&
+            Overwritten.size() >= Options.MaxTrackedBytes) {
+          Result.BudgetExhausted = true;
+          return false;
+        }
+        Overwritten.insert(Key);
+      }
+      Result.PeakTrackedBytes =
+          std::max(Result.PeakTrackedBytes, uint64_t(Overwritten.size()));
     }
   }
   return true;
@@ -613,8 +796,8 @@ ByteMemoryForwardingPass::forward(llvm::Function &F,
   }
   if (Options.SimplifyNumericMemory && !Result.BudgetExhausted &&
       canonicalizeNumericAddresses(F, Options, Result) &&
-      simplifyNumericMemory(F, Options, Result, false))
-    simplifyNumericMemory(F, Options, Result, true);
+      forwardNumericMemory(F, Options, Result))
+    deleteNumericStores(F, Options, Result);
   return Result;
 }
 

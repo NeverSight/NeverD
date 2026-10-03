@@ -802,6 +802,186 @@ TEST(ByteMemoryForwarding, NumericPointerPhiAndSelectKeepEveryIncomingEdge) {
   }
 }
 
+std::string guardedNumericAddress(unsigned Bits, llvm::StringRef Op, int Mask,
+                                  int Delta, llvm::StringRef Predicate = "eq",
+                                  llvm::StringRef Input = "%root",
+                                  unsigned GuardMask = 15) {
+  const std::string T = "i" + std::to_string(Bits);
+  return "define i64 @f(" + T + " %root, " + T + R"( %other, i64 %x) {
+    %bits = and )" +
+         T + " " + Input.str() + ", " + std::to_string(GuardMask) + R"(
+    %ok = icmp )" +
+         Predicate.str() + " " + T + R"( %bits, 8
+    br i1 %ok, label %body, label %exit
+  body:
+    %masked = )" +
+         Op.str() + " " + T + " %root, " + std::to_string(Mask) + R"(
+    %shifted = add )" +
+         T + " %root, " + std::to_string(Delta) + R"(
+    %p = inttoptr )" +
+         T + R"( %shifted to ptr
+    %q = inttoptr )" +
+         T + R"( %masked to ptr
+    store i64 %x, ptr %p, align 1
+    %seen = load i64, ptr %q, align 1
+    ret i64 %seen
+  exit:
+    ret i64 0
+  })";
+}
+
+TEST(ByteMemoryForwarding, NumericBitwiseDisplacementsNeedDominatingGuards) {
+  struct Operation {
+    const char *Name;
+    int Mask;
+    int Delta;
+  };
+  for (auto Op : {Operation{"and", -16, -8}, Operation{"or", 3, 3},
+                  Operation{"xor", 15, -1}}) {
+    for (unsigned Bits : {32u, 64u}) {
+      for (bool Little : {false, true}) {
+        llvm::LLVMContext C;
+        auto M =
+            parse(C, guardedNumericAddress(Bits, Op.Name, Op.Mask, Op.Delta),
+                  (Little ? "e-p:" : "E-p:") + std::to_string(Bits) + ":" +
+                      std::to_string(Bits));
+        ASSERT_TRUE(M);
+        auto &F = *M->getFunction("f");
+        auto R = forward(F, numericOptions());
+        EXPECT_EQ(R.CanonicalizedAddresses, 1u) << print(F);
+        EXPECT_EQ(R.ForwardedLoads, 1u) << print(F);
+        EXPECT_EQ(count<llvm::LoadInst>(F), 0u);
+      }
+    }
+  }
+}
+
+TEST(ByteMemoryForwarding, NumericAddressGuardsDoNotEscapeTheirScope) {
+  for (auto Body : {
+           guardedNumericAddress(64, "and", -16, -8, "ne"),
+           guardedNumericAddress(64, "and", -16, -8, "eq", "%other"),
+           guardedNumericAddress(64, "and", -16, -8, "eq", "%root", 7),
+           guardedNumericAddress(64, "and", -32, -8),
+       }) {
+    llvm::LLVMContext C;
+    auto M = parse(C, Body);
+    ASSERT_TRUE(M);
+    auto &F = *M->getFunction("f");
+    auto R = forward(F, numericOptions());
+    EXPECT_EQ(R.CanonicalizedAddresses, 0u) << print(F);
+    EXPECT_EQ(R.ForwardedLoads, 0u);
+  }
+  // Both outcomes reach the join; the equality edge does not dominate it.
+  std::string Body = guardedNumericAddress(64, "and", -16, -8);
+  const std::string Old = "label %body, label %exit\n  body:";
+  Body.replace(Body.find(Old), Old.size(),
+               "label %left, label %right\n"
+               "  left: br label %body\n  right: br label %body\n  body:");
+  llvm::LLVMContext C;
+  auto M = parse(C, Body);
+  ASSERT_TRUE(M);
+  EXPECT_EQ(forward(*M->getFunction("f"), numericOptions()).ForwardedLoads, 0u);
+}
+
+TEST(ByteMemoryForwarding, NumericGuardDiscoveryHasFiniteAtomicProofWork) {
+  const auto Body = guardedNumericAddress(64, "and", -16, -8);
+  llvm::LLVMContext C;
+  auto M = parse(C, Body);
+  ASSERT_TRUE(M);
+  auto Golden = forward(*M->getFunction("f"), numericOptions());
+  ASSERT_EQ(Golden.ForwardedLoads, 1u);
+  for (uint64_t Limit = 0; Limit <= Golden.AddressSteps; ++Limit) {
+    llvm::LLVMContext Local;
+    auto Copy = parse(Local, Body);
+    ASSERT_TRUE(Copy);
+    auto Options = numericOptions();
+    Options.MaxAddressSteps = Limit;
+    auto R = forward(*Copy->getFunction("f"), Options);
+    EXPECT_LE(R.AddressSteps, Limit);
+    EXPECT_EQ(R.BudgetExhausted, Limit < Golden.AddressSteps);
+    if (Limit < 6)
+      EXPECT_EQ(R.CanonicalizedAddresses, 0u);
+  }
+}
+
+TEST(ByteMemoryForwarding, NumericGuardedRuntimePreservesBothOutcomesAndBytes) {
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    llvm::LLVMContext C;
+    const char *Ops[] = {"and", "or", "xor"};
+    const int Masks[] = {-16, 3, 15}, Deltas[] = {-8, 3, -1};
+    auto M = parse(
+        C, guardedNumericAddress(64, Ops[Mode], Masks[Mode], Deltas[Mode]));
+    ASSERT_TRUE(M);
+    llvm::ValueToValueMapTy Map;
+    auto *Copy = llvm::CloneFunction(M->getFunction("f"), Map);
+    Copy->setName("forwarded");
+    ASSERT_EQ(forward(*Copy, numericOptions()).ForwardedLoads, 1u);
+#ifdef NEVERD_TEST_CLANG
+    const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+    auto Program = llvm::sys::findProgramByName("clang");
+    ASSERT_TRUE(bool(Program));
+    const std::string Compiler = *Program;
+#endif
+    llvm::SmallString<128> IR, Source, Binary, Error;
+    ASSERT_FALSE(
+        llvm::sys::fs::createTemporaryFile("neverd-address-guard", "ll", IR));
+    llvm::FileRemover RemoveIR(IR);
+    ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-address-guard", "c",
+                                                    Source));
+    llvm::FileRemover RemoveSource(Source);
+    ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-address-guard",
+                                                    "exe", Binary));
+    llvm::FileRemover RemoveBinary(Binary);
+    ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-address-guard",
+                                                    "err", Error));
+    llvm::FileRemover RemoveError(Error);
+    std::error_code EC;
+    {
+      llvm::raw_fd_ostream OS(IR, EC);
+      ASSERT_FALSE(EC);
+      M->print(OS, nullptr);
+    }
+    {
+      llvm::raw_fd_ostream OS(Source, EC);
+      ASSERT_FALSE(EC);
+      OS << "#define DELTA " << Deltas[Mode] << R"(
+#include <stdint.h>
+#include <string.h>
+extern uint64_t f(uintptr_t, uintptr_t, uint64_t);
+extern uint64_t forwarded(uintptr_t, uintptr_t, uint64_t);
+int main(void) {
+  uint64_t random = UINT64_C(0x643abcdef1872359);
+  for (unsigned k = 0; k != 4096; ++k) {
+    random ^= random << 13; random ^= random >> 7; random ^= random << 17;
+    uint64_t x = k == 0 ? 0 : k == 1 ? UINT64_MAX : random;
+    _Alignas(16) unsigned char a[64], b[64], expected[64];
+    for (unsigned j = 0; j != 64; ++j) a[j] = b[j] = expected[j] = k + 11*j;
+    unsigned residue = k % 16;
+    uint64_t answer = residue == 8 ? x : 0;
+    if (residue == 8) memcpy(expected + 24 + DELTA, &x, 8);
+    if (f((uintptr_t)(a+16+residue), 0, x) != answer ||
+        forwarded((uintptr_t)(b+16+residue), 0, x) != answer) return 1;
+    if (memcmp(a, expected, 64) || memcmp(b, expected, 64)) return 2;
+  }
+  return 0;
+})";
+    }
+    for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
+      const std::optional<llvm::StringRef> Redirects[] = {
+          std::nullopt, std::nullopt, Error.str()};
+      int Exit = llvm::sys::ExecuteAndWait(
+          Compiler, {Compiler, Optimization, IR, Source, "-o", Binary},
+          std::nullopt, Redirects, 30);
+      auto Errors = llvm::MemoryBuffer::getFile(Error);
+      ASSERT_EQ(Exit, 0) << (Errors ? (*Errors)->getBuffer().str() : "");
+      EXPECT_EQ(llvm::sys::ExecuteAndWait(Binary, {Binary}, std::nullopt,
+                                          Redirects, 30),
+                0);
+    }
+  }
+}
+
 TEST(ByteMemoryForwarding, NumericLoopDoesNotAssumeUndefinedOrFrozenEdges) {
   for (llvm::StringRef Back : {"undef", "poison", "%frozen"}) {
     llvm::LLVMContext C;
@@ -1076,6 +1256,85 @@ TEST(ByteMemoryForwarding, NumericPartialOverwriteAcrossModularOriginStays) {
   }
 }
 
+TEST(ByteMemoryForwarding, NumericDisjointReadKeepsOverwriteEvidence) {
+  for (unsigned Bits : {32u, 64u}) {
+    for (bool Little : {false, true}) {
+      llvm::LLVMContext C;
+      const std::string T = "i" + std::to_string(Bits);
+      auto M = parse(C,
+                     "define i32 @f(" + T + R"( %root, i64 %x) {
+        %a = sub )" + T + R"( %root, 4
+        %p = inttoptr )" +
+                         T + R"( %a to ptr
+        %b = add )" + T + R"( %root, 4
+        %q = inttoptr )" +
+                         T + R"( %b to ptr
+        store i64 %x, ptr %p, align 1
+        %seen = load i32, ptr %q, align 1
+        store i64 19, ptr %p, align 1
+        ret i32 %seen
+      })",
+                     (Little ? "e-p:" : "E-p:") + std::to_string(Bits) + ":" +
+                         std::to_string(Bits));
+      ASSERT_TRUE(M);
+      auto &F = *M->getFunction("f");
+      auto R = forward(F, numericOptions());
+      EXPECT_EQ(R.ForwardedLoads, 0u);
+      EXPECT_EQ(R.RemovedStores, 1u) << print(F);
+      EXPECT_EQ(count<llvm::LoadInst>(F), 1u);
+    }
+  }
+}
+
+TEST(ByteMemoryForwarding, NumericSeveralWritesCanKillOneEarlierStore) {
+  for (bool Little : {false, true}) {
+    for (bool Complete : {false, true}) {
+      llvm::LLVMContext C;
+      auto M = parse(C,
+                     R"(
+        define void @f(i64 %root, i64 %x) {
+          %a = sub i64 %root, 4
+          %p = inttoptr i64 %a to ptr
+          %q = inttoptr i64 %root to ptr
+          store i64 %x, ptr %p, align 1
+          store i32 11, ptr %p, align 1
+          store )" + std::string(Complete ? "i32" : "i16") +
+                         R"( 23, ptr %q, align 1
+          ret void
+        })",
+                     Little ? "e-p:64:64" : "E-p:64:64");
+      ASSERT_TRUE(M);
+      auto &F = *M->getFunction("f");
+      EXPECT_EQ(forward(F, numericOptions()).RemovedStores, Complete ? 1u : 0u)
+          << print(F);
+    }
+  }
+}
+
+TEST(ByteMemoryForwarding, NumericPartialObservationKeepsTheWholeWriter) {
+  // The surviving read contains one byte from the first store and one byte
+  // from outside it. A later overwrite must not erase the observed writer.
+  for (int ReadOffset : {-1, 7}) {
+    llvm::LLVMContext C;
+    auto M = parse(C, R"(
+      define i16 @f(i64 %root, i64 %x) {
+        %p = inttoptr i64 %root to ptr
+        %a = add i64 %root, )" +
+                          std::to_string(ReadOffset) + R"(
+        %q = inttoptr i64 %a to ptr
+        store i64 %x, ptr %p, align 1
+        %seen = load i16, ptr %q, align 1
+        store i64 19, ptr %p, align 1
+        ret i16 %seen
+      })");
+    ASSERT_TRUE(M);
+    auto &F = *M->getFunction("f");
+    auto R = forward(F, numericOptions());
+    EXPECT_EQ(R.ForwardedLoads, 0u);
+    EXPECT_EQ(R.RemovedStores, 0u) << print(F);
+  }
+}
+
 TEST(ByteMemoryForwarding, NumericUnknownObservationsPreventDeletion) {
   for (llvm::StringRef Barrier :
        {"%seen = load i8, ptr %other", "store i8 9, ptr %other",
@@ -1225,6 +1484,9 @@ TEST(ByteMemoryForwarding, NumericRuntimeChecksReturnAndEntireAliasedBuffer) {
       %p = inttoptr i64 %back to ptr
       %q = inttoptr i64 %root to ptr
       store i64 99, ptr %p, align 1
+      %far = add i64 %root, 12
+      %farptr = inttoptr i64 %far to ptr
+      %farvalue = load i32, ptr %farptr, align 1
       store i64 %x, ptr %p, align 1
       %early = load i32, ptr %p, align 1
       store i8 29, ptr %q, align 1
@@ -1235,11 +1497,23 @@ TEST(ByteMemoryForwarding, NumericRuntimeChecksReturnAndEntireAliasedBuffer) {
       %observed = load i8, ptr %p, align 1
       %final = add i64 %x, 1
       store i64 %final, ptr %p, align 1
+      %tail = add i64 %root, 16
+      %tailptr = inttoptr i64 %tail to ptr
+      %upper = add i64 %root, 20
+      %upperptr = inttoptr i64 %upper to ptr
+      store i64 %x, ptr %tailptr, align 1
+      %lo = trunc i64 %final to i32
+      %shift = lshr i64 %final, 32
+      %hi = trunc i64 %shift to i32
+      store i32 %lo, ptr %tailptr, align 1
+      store i32 %hi, ptr %upperptr, align 1
       %a = zext i32 %early to i64
       %b = zext i16 %slice to i64
       %c = zext i8 %observed to i64
       %ab = xor i64 %a, %b
-      %result = xor i64 %ab, %c
+      %abc = xor i64 %ab, %c
+      %d = zext i32 %farvalue to i64
+      %result = xor i64 %abc, %d
       ret i64 %result
     })");
     ASSERT_TRUE(M);
@@ -1249,7 +1523,7 @@ TEST(ByteMemoryForwarding, NumericRuntimeChecksReturnAndEntireAliasedBuffer) {
     if (Mode == 0) {
       auto R = forward(*Rewritten, numericOptions());
       EXPECT_EQ(R.ForwardedLoads, 1u);
-      EXPECT_EQ(R.RemovedStores, 1u);
+      EXPECT_EQ(R.RemovedStores, 2u);
     } else {
       Pipeline::OptimizationOptions Options;
       Options.Strength =
@@ -1301,11 +1575,13 @@ int main(void) {
     unsigned alias = k % 32;
     unsigned char a[32], b[32], expected[32];
     for (unsigned j = 0; j != 32; ++j) a[j] = b[j] = expected[j] = (k + j * 7);
+    uint32_t farvalue = 0;
+    for (unsigned j = 0; j != 4; ++j) farvalue |= (uint32_t)expected[20+j] << (8*j);
     uint64_t middle = x ^ UINT64_C(81985529216486895);
     unsigned observed = alias == 6 ? 73 : (unsigned char)middle;
     expected[alias] = 73;
-    uint64_t answer = (uint32_t)x ^ (29u | ((x >> 16) & 65280u)) ^ observed;
-    for (unsigned j = 0; j != 8; ++j) expected[6+j] = (unsigned char)((x+1) >> (8*j));
+    uint64_t answer = (uint32_t)x ^ (29u | ((x >> 16) & 65280u)) ^ observed ^ farvalue;
+    for (unsigned j = 0; j != 8; ++j) expected[6+j] = expected[24+j] = (unsigned char)((x+1) >> (8*j));
     if (mix(a+8, (uintptr_t)(a+alias), x) != answer || forwarded(b+8, (uintptr_t)(b+alias), x) != answer)
       return 1;
     if (memcmp(a, expected, 32) || memcmp(b, expected, 32)) return 2;
