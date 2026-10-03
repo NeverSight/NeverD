@@ -999,16 +999,19 @@ TEST_F(DevirtualizationSourceTest, CLIRejectsMalformedEntryAndChainOptions) {
     EXPECT_FALSE(Result.ok());
     EXPECT_FALSE(fs::exists(Source));
   };
-  for (const char *Value : {"", "-1", "4294967296", "1junk", "+1", "0x10"})
+  for (const char *Value : {"", "-1", "4294967296", "1junk", "+1", "0x10"}) {
     Reject({"--devirtualize", std::string("--vm-chain-transfers=") + Value});
+    Reject({"--devirtualize", std::string("--vm-chain-visits=") + Value});
+  }
   for (const char *Value :
        {"", "-16", "-16:", ":8", "8:8", "8:7", "+1:8", "0x10:32", "1:8:9",
         "-9223372036854775809:8", "-16:9223372036854775808"})
     Reject({"--devirtualize", "--vm-machine-state",
             std::string("--vm-entry-frame=") + Value});
   for (const char *Option :
-       {"--vm-chain-transfers=0", "--vm-entry-frame=-16:8",
-        "--vm-no-control-discovery", "--vm-no-control-discovery=false"})
+       {"--vm-chain-transfers=0", "--vm-chain-visits=0",
+        "--vm-entry-frame=-16:8", "--vm-no-control-discovery",
+        "--vm-no-control-discovery=false"})
     Reject({Option});
   Reject({"--devirtualize", "--vm-entry-frame=-16:8"});
   for (const char *Value : {"", "0:0", "3:0", "8:8", "8:-1", "8:1:2",
@@ -1025,6 +1028,96 @@ TEST_F(DevirtualizationSourceTest, CLIRejectsMalformedEntryAndChainOptions) {
   Reject({"--devirtualize", "--vm-external-stores-disjoint-frame"});
   Reject({"--devirtualize", "--vm-machine-state",
           "--vm-external-stores-disjoint-frame"});
+}
+
+TEST_F(DevirtualizationSourceTest, CLIDestinationVisitsKeepRepeatedRelations) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "public recovery chain checks require clang";
+  const auto Binary = tmpFile("generic-destination-visits.elf");
+  ASSERT_TRUE(buildFixture(Binary, "generic_recovery_contract.S").ok());
+  for (bool Machine : {false, true})
+    for (bool LLVM : {false, true})
+      for (unsigned Case = 0; Case != 6; ++Case) {
+        const uint32_t Visits = Case == 0   ? 0
+                                : Case == 1 ? 1
+                                : Case == 3 ? UINT32_MAX
+                                            : 2;
+        const bool Legacy = Case == 4;
+        const bool Chain = Case != 5;
+        const bool Complete = Chain && !Legacy && Visits != 1;
+        const auto Stem = std::to_string(Machine) + std::to_string(LLVM) +
+                          std::to_string(Case);
+        SCOPED_TRACE(Stem);
+        const auto Source = tmpFile("visits-" + Stem + ".c");
+        const auto Report = tmpFile("visits-" + Stem + ".json");
+        std::vector<std::string> Args{
+            "decompile",
+            Binary.string(),
+            "--func",
+            "generic_recovery_repeat",
+            "--devirtualize",
+            "--vm-no-control-discovery",
+            std::string("--vm-chain-transfers=") + (Chain ? "16" : "0"),
+            "--vm-chain-visits=" + std::to_string(Visits),
+            "--recovery-report=" + Report.string(),
+            "-o",
+            Source.string()};
+        if (Legacy)
+          Args.push_back("--vm-chain-stop-at-repeat");
+        if (Machine)
+          Args.push_back("--vm-machine-state");
+        if (LLVM)
+          Args.push_back("--llvm");
+        const auto Recovered = exec(ndBin(), Args);
+        EXPECT_EQ(Recovered.ok(), Complete) << Recovered.err;
+        EXPECT_EQ(fs::exists(Source), Complete);
+        auto JSON = llvm::json::parse(readSource(Report));
+        ASSERT_TRUE(bool(JSON));
+        const auto *Object = JSON->getAsObject();
+        ASSERT_NE(Object, nullptr);
+        EXPECT_EQ(Object->getBoolean("complete"), Complete);
+        EXPECT_EQ(Object->getInteger("maxChainedVisitsPerDestination"), Visits);
+        EXPECT_EQ(Object->getInteger("effectiveChainedVisitsPerDestination"),
+                  Chain ? Legacy ? 1 : Visits : 0);
+        if (!Complete) {
+          EXPECT_EQ(Object->getInteger("residualBlocks"), 0);
+          continue;
+        }
+        const auto Harness = tmpFile("visits-" + Stem + "-run.c");
+        std::ofstream OS(Harness);
+        OS << readSource(Source) << R"C(
+#include <stdint.h>
+int main(void) {
+  uint64_t x = UINT64_MAX;
+  for (unsigned i = 0; i != 1024; ++i) {
+)C";
+        if (Machine)
+          OS << "    uint64_t state[17] = {0};\n"
+                "    state[4] = 0x10000; state[7] = x; state[16] = 2;\n"
+                "    if (generic_recovery_repeat((uint8_t *)state) != 0 ||\n"
+                "        state[0] != x + 17 || state[4] != 0x10000) return "
+                "1;\n";
+        else
+          OS << "    if ((uint64_t)generic_recovery_repeat(x) != x + 17) "
+                "return 1;\n";
+        OS << "    x = x * UINT64_C(6364136223846793005) + 1;\n"
+              "  }\n  return 0;\n}\n";
+        OS.close();
+        std::ofstream(tmpFile("immintrin.h")).close();
+        for (const char *Level : {"-O0", "-O2"}) {
+          const auto Program = tmpFile("visits-" + Stem + "-run" +
+                                       neverd::test::executableSuffix());
+          const auto Built =
+              exec(NEVERD_TEST_CLANG,
+                   {"-std=c11", Level, "-Werror=return-type",
+                    "-Werror=implicit-function-declaration",
+                    "-fsanitize=undefined", "-fsanitize-trap=undefined", "-I",
+                    tmp().string(), Harness.string(), "-o", Program.string()});
+          ASSERT_TRUE(Built.ok()) << Built.err;
+          const auto Ran = exec(Program.string(), {});
+          EXPECT_TRUE(Ran.ok()) << Ran.err << " exit " << Ran.exitCode;
+        }
+      }
 }
 
 TEST_F(DevirtualizationSourceTest,

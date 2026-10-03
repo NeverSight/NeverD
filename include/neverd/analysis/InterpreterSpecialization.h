@@ -215,6 +215,20 @@ struct SpecializationOptions {
   uint64_t MaxSolverPropagations = 1000000;
   uint64_t MaxSolverWatchVisits = 10000000;
   uint64_t MaxSymbolicNodes = 262144;
+  /// Optional per-(address, mode) visit cap within an ordinary chain. Count its
+  /// initial cursor and chained transfer destinations, not sequential
+  /// fallthrough. Zero adds no cap. The legacy stop-at-repeat option
+  /// takes precedence and still permits only one visit. Reaching either this
+  /// cap or MaxChainedTransfers uses normal edge projection, never truncation.
+  /// Dependency replay follows committed occurrences without applying the cap.
+  uint32_t MaxChainedVisitsPerDestination = 0;
+
+  uint32_t chainedVisitLimit() const {
+    if (!MaxChainedTransfers)
+      return 0;
+    return StopChainingAtRepeatedDestination ? 1
+                                             : MaxChainedVisitsPerDestination;
+  }
 };
 
 enum class SpecializationStatus : uint8_t {

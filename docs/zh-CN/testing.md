@@ -1045,3 +1045,5 @@ Windows 虚拟内存新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
 
 外部写入分离回归覆盖精确及不足预算、部分字、大／小端、未触及内存的身份、完整仿射槽边界、晚到前驱覆盖和默认失效。公开 C API／CLI 检查 v6 布局兼容性和无效域。HighC、LLVMC 输出均在 O0／O2 下检查返回值、内存、栈及保留状态；这些测试不等于原生等价证书。
+
+有限分派回归覆盖寄存器及帧内阶段、两种端序、确实可达的非法分支、后到前驱、耗尽的内层条件和相邻发现预算。目标次数测试覆盖算术关联、嵌套循环、解码模式、顺序落入计数、总工作上限及旧标志优先级。CLI 在 O0/O2 下执行两种 C 路线和源码 ABI；C/Python v8 测试检查布局、非法字段与未来尾部忽略规则。

@@ -441,6 +441,7 @@ int runDecompile(neverd_session_t Sess) {
        VMMaxEvaluations.getNumOccurrences() ||
        VMMaxDiscoveryVisits.getNumOccurrences() ||
        VMChainTransfers.getNumOccurrences() ||
+       VMChainVisits.getNumOccurrences() ||
        VMChainStopAtRepeat.getNumOccurrences() ||
        VMEntryFrame.getNumOccurrences() ||
        VMEntryAlignment.getNumOccurrences() ||
@@ -456,7 +457,7 @@ int runDecompile(neverd_session_t Sess) {
   }
   uint32_t MaxRefinements = 0, MaxFields = 0, MaxQueries = 0,
            ChainTransfers = 0, MaxSymbolicNodes = 0, MaxEvaluations = 0,
-           MaxDiscoveryVisits = 0;
+           MaxDiscoveryVisits = 0, ChainVisits = 0;
   const auto ParseCount = [](StringRef Text, StringRef Option, uint32_t &Value,
                              bool AllowZero = false) {
     if (Text.empty() ||
@@ -482,7 +483,9 @@ int runDecompile(neverd_session_t Sess) {
        !ParseCount(VMMaxSymbolicNodes.getValue(), "--vm-max-symbolic-nodes",
                    MaxSymbolicNodes) ||
        !ParseCount(VMChainTransfers.getValue(), "--vm-chain-transfers",
-                   ChainTransfers, true))) {
+                   ChainTransfers, true) ||
+       !ParseCount(VMChainVisits.getValue(), "--vm-chain-visits", ChainVisits,
+                   true))) {
     return 1;
   }
   uint32_t EntryAlignment = 0, EntryResidue = 0;
@@ -571,7 +574,9 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v7 ExtendedRecovery{};
+      neverd_devirtualize_options_v8 ChainRecovery{};
+      ChainRecovery.max_chained_visits_per_destination = ChainVisits;
+      auto &ExtendedRecovery = ChainRecovery.base;
       ExtendedRecovery.max_node_evaluations = MaxEvaluations;
       ExtendedRecovery.max_discovery_visits = MaxDiscoveryVisits;
       if (VMChainStopAtRepeat)
@@ -584,7 +589,7 @@ int runDecompile(neverd_session_t Sess) {
       ExtendedRecovery.base.base.entry_frame_residue = EntryResidue;
       auto &Recovery = ExtendedRecovery.base.base.base;
       auto &Base = Recovery.base.base.base;
-      Base.struct_size = sizeof(ExtendedRecovery);
+      Base.struct_size = sizeof(ChainRecovery);
       Recovery.base.base.max_control_refinements = MaxRefinements;
       Recovery.base.max_control_fields = MaxFields;
       Recovery.base.max_solver_queries = MaxQueries;
@@ -606,10 +611,10 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source = VMMachineState ? neverd_devirtualize_machine_source_v7(
-                                    Sess, Entry, &ExtendedRecovery, &Report)
-                              : neverd_devirtualize_source_v7(
-                                    Sess, Entry, &ExtendedRecovery, &Report);
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v8(
+                                    Sess, Entry, &ChainRecovery, &Report)
+                              : neverd_devirtualize_source_v8(
+                                    Sess, Entry, &ChainRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;
         raw_fd_ostream OS(VMRecoveryReport, EC);

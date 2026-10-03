@@ -337,6 +337,7 @@ def check_devirtualization_abi(errors: list[str]) -> None:
         "neverd_devirtualize_options_v4": abi.NeverDDevirtualizeOptionsV4,
         "neverd_devirtualize_options_v5": abi.NeverDDevirtualizeOptionsV5,
         "neverd_devirtualize_options_v6": abi.NeverDDevirtualizeOptionsV6,
+        "neverd_devirtualize_options_v7": abi.NeverDDevirtualizeOptionsV7,
         "size_t": ctypes.c_size_t,
         "int": ctypes.c_int,
         "int64_t": ctypes.c_int64,
@@ -357,6 +358,7 @@ def check_devirtualization_abi(errors: list[str]) -> None:
         ("neverd_devirtualize_options_v5", abi.NeverDDevirtualizeOptionsV5),
         ("neverd_devirtualize_options_v6", abi.NeverDDevirtualizeOptionsV6),
         ("neverd_devirtualize_options_v7", abi.NeverDDevirtualizeOptionsV7),
+        ("neverd_devirtualize_options_v8", abi.NeverDDevirtualizeOptionsV8),
     ):
         native = parse_c_struct_layout(source, name)
         expected = tuple((field, native_ctypes.get(kind)) for field, kind in native)

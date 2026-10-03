@@ -1127,3 +1127,5 @@ Windows 가상 메모리는 `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `Vi
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
 
 분리 회귀 검사는 정확하거나 부족한 예산, 부분 워드, 양쪽 바이트 순서, 미접근 메모리 식별자, 완전한 아핀 슬롯 경계, 늦은 선행 경로의 덮어쓰기 및 기본 무효화를 다룹니다. C API/CLI는 v6 호환성과 무효 도메인을 검사합니다. HighC·LLVMC 출력을 O0/O2에서 실행하여 반환값, 메모리, 스택, 보존 상태를 확인하지만 네이티브 동등성 인증은 아닙니다.
+
+유한 분기 회귀는 레지스터·프레임 상태, 양쪽 바이트 순서, 실제 도달 가능한 잘못된 경로, 늦게 도착한 선행 경로, 소진된 내부 조건과 인접 탐색 한도를 검사합니다. 방문 한도 테스트는 산술 상관관계, 중첩 루프, 디코드 모드, fallthrough 계수, 전체 작업 한도와 기존 플래그 우선순위를 다룹니다. CLI는 두 C 경로와 소스 ABI를 O0/O2로 실행하고, C/Python v8은 레이아웃·잘못된 필드·미래 꼬리 무시를 검사합니다.

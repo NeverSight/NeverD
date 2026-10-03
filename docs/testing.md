@@ -2156,3 +2156,5 @@ a matching macOS host ISA; x64 driver execution on Apple Silicon continues to
 use Unicorn. The existing ISA and OS contracts remain authoritative. See
 [HVF ownership, signing and hardware tests](macos-hvf.md). ARM64 hardware
 evidence and Intel runtime coverage are reported separately.
+
+Finite-dispatch regressions cover register and frame phases, both byte orders, reachable invalid arms, later predecessors, exhausted inner guards and adjacent discovery limits. Destination-cap tests cover retained arithmetic correlations, nested loops, decode modes, fallthrough counting, total work limits and legacy precedence. CLI tests execute both C routes and source ABIs at O0/O2; C/Python v8 tests check layouts, invalid fields and ignored future tails.

@@ -1049,6 +1049,135 @@ TEST_F(SessionCAPITest,
 }
 
 TEST_F(SessionCAPITest,
+       InterpreterRecoveryV8KeepsDestinationCapsAndOlderTailsSeparate) {
+  const auto Input = write("recovery-chain-visits.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v8,
+                     max_chained_visits_per_destination),
+            sizeof(neverd_devirtualize_options_v7));
+  EXPECT_EQ(offsetof(neverd_devirtualize_options_v8, reserved),
+            sizeof(neverd_devirtualize_options_v7) + sizeof(uint32_t));
+  for (auto Recover :
+       {neverd_devirtualize_source_v8, neverd_devirtualize_machine_source_v8}) {
+    size_t SizeOnly = sizeof(size_t);
+    neverd_devirtualize_options_v8 Partial{};
+    Partial.base.base.base.base.base.base.base.struct_size =
+        sizeof(Partial) - 1;
+    for (const auto *O :
+         {reinterpret_cast<const neverd_devirtualize_options_v8 *>(&SizeOnly),
+          static_cast<const neverd_devirtualize_options_v8 *>(&Partial)}) {
+      const char *Report = nullptr;
+      EXPECT_EQ(Recover(Session, Entry, O, &Report), nullptr);
+      EXPECT_NE(takeString(Report).find("complete v8 structure"),
+                std::string::npos);
+    }
+    const char *NullReport = "previous";
+    EXPECT_EQ(Recover(nullptr, Entry, nullptr, &NullReport), nullptr);
+    EXPECT_EQ(NullReport, nullptr);
+    const char *DefaultReport = nullptr;
+    EXPECT_FALSE(
+        takeString(Recover(Session, Entry, nullptr, &DefaultReport)).empty());
+    auto Default = llvm::json::parse(takeString(DefaultReport));
+    ASSERT_TRUE(bool(Default));
+    EXPECT_EQ(
+        Default->getAsObject()->getInteger("maxChainedVisitsPerDestination"),
+        0);
+    EXPECT_EQ(Default->getAsObject()->getInteger(
+                  "effectiveChainedVisitsPerDestination"),
+              0);
+    for (bool LLVM : {false, true})
+      for (bool Chain : {false, true})
+        for (bool Legacy : {false, true})
+          for (uint32_t Visits : {0u, 1u, 2u, UINT32_MAX}) {
+            struct Future {
+              neverd_devirtualize_options_v8 Options;
+              uint64_t Opaque;
+            } F{};
+            auto &O = F.Options;
+            auto &Base = O.base.base.base.base.base.base.base;
+            Base.struct_size = sizeof(F);
+            Base.use_llvm = LLVM;
+            F.Opaque = UINT64_MAX;
+            O.max_chained_visits_per_destination = Visits;
+            O.base.flags =
+                Legacy ? NEVERD_DEVIRTUALIZE_V7_STOP_CHAIN_AT_REPEAT : 0;
+            O.base.base.base.base.max_chained_transfers = Chain ? 8 : 0;
+            const char *Report = nullptr;
+            ASSERT_FALSE(
+                takeString(Recover(Session, Entry, &O, &Report)).empty())
+                << takeString(neverd_last_error(Session));
+            auto Parsed = llvm::json::parse(takeString(Report));
+            ASSERT_TRUE(bool(Parsed));
+            EXPECT_EQ(Parsed->getAsObject()->getInteger(
+                          "maxChainedVisitsPerDestination"),
+                      Visits);
+            EXPECT_EQ(Parsed->getAsObject()->getInteger(
+                          "effectiveChainedVisitsPerDestination"),
+                      Chain ? Legacy ? 1 : Visits : 0);
+            EXPECT_EQ(Parsed->getAsObject()->getBoolean(
+                          "stopChainingAtRepeatedDestination"),
+                      Legacy);
+          }
+    for (unsigned Bad = 0; Bad != 8; ++Bad) {
+      neverd_devirtualize_options_v8 O{};
+      O.base.base.base.base.base.base.base.struct_size = sizeof(O);
+      if (Bad == 0)
+        O.reserved = 1;
+      else if (Bad == 1)
+        O.base.flags = UINT32_MAX;
+      else if (Bad == 2)
+        O.base.base.flags = UINT32_MAX;
+      else if (Bad == 3)
+        O.base.base.base.entry_frame_residue = 1;
+      else if (Bad == 4)
+        O.base.base.base.base.flags = UINT32_MAX;
+      else if (Bad == 5)
+        O.base.base.base.base.base.reserved = 1;
+      else if (Bad == 6)
+        O.base.base.base.base.base.base.reserved = 1;
+      else
+        O.base.base.base.base.base.base.base.reserved = 1;
+      EXPECT_EQ(Recover(Session, Entry, &O, nullptr), nullptr);
+    }
+  }
+  neverd_devirtualize_options_v8 Future{};
+  Future.base.base.base.base.base.base.base.struct_size = sizeof(Future);
+  Future.max_chained_visits_per_destination = UINT32_MAX;
+  Future.reserved = UINT32_MAX;
+  const auto CheckOld = [&](auto Recover, const auto *Options) {
+    const char *Report = nullptr;
+    ASSERT_FALSE(takeString(Recover(Session, Entry, Options, &Report)).empty());
+    auto Parsed = llvm::json::parse(takeString(Report));
+    ASSERT_TRUE(bool(Parsed));
+    EXPECT_EQ(
+        Parsed->getAsObject()->getInteger("maxChainedVisitsPerDestination"), 0);
+    EXPECT_EQ(Parsed->getAsObject()->getInteger(
+                  "effectiveChainedVisitsPerDestination"),
+              0);
+  };
+  CheckOld(neverd_devirtualize_source_v1,
+           &Future.base.base.base.base.base.base.base);
+  CheckOld(neverd_devirtualize_machine_source_v1,
+           &Future.base.base.base.base.base.base.base);
+  CheckOld(neverd_devirtualize_source_v2,
+           &Future.base.base.base.base.base.base);
+  CheckOld(neverd_devirtualize_machine_source_v2,
+           &Future.base.base.base.base.base.base);
+  CheckOld(neverd_devirtualize_source_v3, &Future.base.base.base.base.base);
+  CheckOld(neverd_devirtualize_machine_source_v3,
+           &Future.base.base.base.base.base);
+  CheckOld(neverd_devirtualize_source_v4, &Future.base.base.base.base);
+  CheckOld(neverd_devirtualize_machine_source_v4, &Future.base.base.base.base);
+  CheckOld(neverd_devirtualize_source_v5, &Future.base.base.base);
+  CheckOld(neverd_devirtualize_machine_source_v5, &Future.base.base.base);
+  CheckOld(neverd_devirtualize_source_v6, &Future.base.base);
+  CheckOld(neverd_devirtualize_machine_source_v6, &Future.base.base);
+  CheckOld(neverd_devirtualize_source_v7, &Future.base);
+  CheckOld(neverd_devirtualize_machine_source_v7, &Future.base);
+}
+
+TEST_F(SessionCAPITest,
        InterpreterRecoveryV6ChecksSeparationAndPreservesLayouts) {
   const auto Input = write("recovery-separation.elf", makeNativeELF(false));
   ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);

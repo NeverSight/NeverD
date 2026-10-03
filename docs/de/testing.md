@@ -1253,3 +1253,5 @@ Der virtuelle Windows-Speicher ergänzt `VirtualAlloc`, `VirtualFree`, `VirtualP
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
 
 Regressionen prüfen exakte und zu kleine Budgets, Teilwörter, beide Byteordnungen, unberührte Speicheridentitäten, vollständige affine Slotgrenzen, spätes Überschreiben und Standardinvalidierung. C API/CLI prüfen v6-Kompatibilität und ungültige Bereiche. HighC und LLVMC laufen mit O0/O2 und prüfen Rückgabe, Speicher, Stack und erhaltenen Zustand; dies ist kein natives Äquivalenzzertifikat.
+
+Regressionen prüfen Register- und Rahmenphasen, beide Bytefolgen, erreichbare ungültige Arme, spätere Vorgänger, ausgeschöpfte innere Guards und benachbarte Suchgrenzen. Besuchsgrenzen-Tests prüfen arithmetische Beziehungen, verschachtelte Schleifen, Dekodiermodi, sequenzielle Übergänge, Gesamtbudget und Legacy-Vorrang. Der CLI führt beide C-Wege und Quell-ABIs mit O0/O2 aus; C/Python v8 prüfen Layouts, ungültige Felder und ignorierte zukünftige Endfelder.

@@ -232,6 +232,73 @@ TEST(InterpreterTransferChain, RepeatedDestinationOptInCanLoseCorrelation) {
   EXPECT_TRUE(Cut.Residual.Blocks.empty());
   EXPECT_TRUE(Cut.Origins.empty());
   EXPECT_TRUE(Cut.Reads.empty());
+  O.MaxChainedVisitsPerDestination = 4;
+  EXPECT_EQ(specializeInterpreter(P, {Entry}, O).Status,
+            SpecializationStatus::UnresolvedControl);
+  O.StopChainingAtRepeatedDestination = false;
+  O.MaxChainedVisitsPerDestination = 1;
+  EXPECT_EQ(specializeInterpreter(P, {Entry}, O).Status,
+            SpecializationStatus::UnresolvedControl);
+  for (uint32_t Visits : {0u, 2u, 4u, UINT32_MAX}) {
+    SCOPED_TRACE(Visits);
+    O.MaxChainedVisitsPerDestination = Visits;
+    const auto Kept = specializeInterpreter(P, {Entry}, O);
+    ASSERT_TRUE(Kept.complete()) << Kept.Diagnostic;
+    for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{37}, UINT64_MAX})
+      EXPECT_EQ(execute(Kept.Residual, Input), Input + 17);
+  }
+}
+
+TEST(InterpreterTransferChain, VisitCapCountsTransferredDestinations) {
+  Program P;
+  const auto Flag = NdVar::reg(48, 1);
+  P.add(Entry, {op(NdOp::COPY, r(0), {r(8)}), op(NdOp::COPY, r(16), {c(2)})});
+  P.add(Entry + 1, {op(NdOp::INT_ADD, r(0), {r(0), c(3)}),
+                    op(NdOp::INT_SUB, r(16), {r(16), c(1)}), jump(Middle)});
+  P.add(Middle,
+        {op(NdOp::INT_NOTEQUAL, Flag, {r(16), c(0)}),
+         op(NdOp::COND_BR, {}, {NdVar::cst(Entry + 1, 8), Flag})},
+        Exit);
+  P.add(Exit, {ret()});
+  for (bool Legacy : {false, true}) {
+    SCOPED_TRACE(Legacy);
+    SpecializationOptions O;
+    O.MaxChainedTransfers = 128;
+    O.StopChainingAtRepeatedDestination = Legacy;
+    O.MaxChainedVisitsPerDestination = Legacy ? 4 : 1;
+    const auto R = specializeInterpreter(P, {Entry}, O);
+    ASSERT_TRUE(R.complete()) << R.Diagnostic;
+    ASSERT_GE(R.Residual.Blocks.size(), 2u);
+    // Entry+1 was first reached by fallthrough. Its first transfer visit is
+    // still in the entry chain; the next transfer to Middle ends that chain.
+    EXPECT_EQ(R.Residual.Blocks[1].InstructionBoundaries.size(), 4u);
+    for (uint64_t Input : {uint64_t{0}, uint64_t{37}, UINT64_MAX})
+      EXPECT_EQ(execute(R.Residual, Input), Input + 6);
+  }
+}
+
+TEST(InterpreterTransferChain, VisitCapRetainsNestedLoopsAndWorkLimits) {
+  for (bool Nested : {false, true})
+    for (uint32_t Visits : {1u, 2u, 4u, UINT32_MAX}) {
+      SCOPED_TRACE(Nested);
+      SCOPED_TRACE(Visits);
+      auto P = countedLoop(Nested);
+      SpecializationOptions O;
+      O.MaxChainedTransfers = 128;
+      O.MaxChainedVisitsPerDestination = Visits;
+      const auto R = specializeInterpreter(P, {Entry}, O);
+      ASSERT_TRUE(R.complete()) << R.Diagnostic;
+      for (uint64_t Input : {uint64_t{0}, uint64_t{37}, UINT64_MAX})
+        EXPECT_EQ(execute(R.Residual, Input), Input + (Nested ? 84 : 96));
+      O.MaxOperations = R.EvaluatedOperations;
+      EXPECT_TRUE(specializeInterpreter(P, {Entry}, O).complete());
+      --O.MaxOperations;
+      const auto Short = specializeInterpreter(P, {Entry}, O);
+      EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded);
+      EXPECT_TRUE(Short.Residual.Blocks.empty());
+      EXPECT_TRUE(Short.Origins.empty());
+      EXPECT_TRUE(Short.Reads.empty());
+    }
 }
 
 TEST(InterpreterTransferChain, RepeatedDestinationIncludesDecodeMode) {
@@ -258,7 +325,7 @@ TEST(InterpreterTransferChain, RepeatedDestinationIncludesDecodeMode) {
     }
   SpecializationOptions O;
   O.MaxChainedTransfers = 3;
-  O.StopChainingAtRepeatedDestination = true;
+  O.MaxChainedVisitsPerDestination = 1;
   const auto R = specializeInterpreter(P, {Entry, InstructionMode::ARM}, O);
   ASSERT_TRUE(R.complete()) << R.Diagnostic;
   ASSERT_EQ(R.Origins.size(), 3U);
@@ -268,6 +335,13 @@ TEST(InterpreterTransferChain, RepeatedDestinationIncludesDecodeMode) {
             R.Origins[1].NativeInstruction.Address);
   for (uint64_t Input : {uint64_t{0}, uint64_t{37}, UINT64_MAX})
     EXPECT_EQ(execute(R.Residual, Input), Input + 17);
+  O.StopChainingAtRepeatedDestination = true;
+  O.MaxChainedVisitsPerDestination = 4;
+  const auto Legacy =
+      specializeInterpreter(P, {Entry, InstructionMode::ARM}, O);
+  ASSERT_TRUE(Legacy.complete()) << Legacy.Diagnostic;
+  EXPECT_EQ(Legacy.Origins.size(), R.Origins.size());
+  EXPECT_EQ(execute(Legacy.Residual, UINT64_MAX), UINT64_MAX + 17);
 }
 
 TEST(InterpreterTransferChain, RepeatOptionHasNoEffectWithoutChaining) {
@@ -277,6 +351,7 @@ TEST(InterpreterTransferChain, RepeatOptionHasNoEffectWithoutChaining) {
     const auto Default = specializeInterpreter(P, {Entry}, O);
     ASSERT_TRUE(Default.complete()) << Default.Diagnostic;
     O.StopChainingAtRepeatedDestination = true;
+    O.MaxChainedVisitsPerDestination = 4;
     const auto Enabled = specializeInterpreter(P, {Entry}, O);
     ASSERT_TRUE(Enabled.complete()) << Enabled.Diagnostic;
     EXPECT_EQ(Default.EvaluatedOperations, Enabled.EvaluatedOperations);

@@ -194,6 +194,7 @@ extern llvm::cl::opt<std::string> VMMaxQueries;
 extern llvm::cl::opt<std::string> VMMaxEvaluations;
 extern llvm::cl::opt<std::string> VMMaxDiscoveryVisits;
 extern llvm::cl::opt<std::string> VMChainTransfers;
+extern llvm::cl::opt<std::string> VMChainVisits;
 extern llvm::cl::opt<bool> VMChainStopAtRepeat;
 extern llvm::cl::opt<std::string> VMEntryFrame;
 extern llvm::cl::opt<std::string> VMEntryAlignment;

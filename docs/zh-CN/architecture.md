@@ -995,3 +995,5 @@ Combine 的精确强导入 `Publisher.sink(receiveValue:)` 重载在 `Failure ==
 不可变 Swift 静态标量对象只有在有界结构化存储声明与当前完整对象范围一致时，才能保留一个重建后的地址身份。支持名义类型及非泛型扩展上下文；Darwin arm64/x86_64 上，冻结的 `CoreGraphics.CGFloat` 声明确认对象为 8 字节（[Apple ABI 说明](https://developer.apple.com/documentation/corefoundation/cgfloat-swift.struct/nativetype)），另由四个 macOS/Mac Catalyst 编译目标独立核验。`SwiftMetadata` 统一负责声明和唯一不可变存储证明，源码绑定及发布复用该证明。可变、重叠、带重定位、部分、TLS、泛型或有歧义的对象仍不恢复。对齐的字节辅助存储保留完整位型和共享地址，不据此推导访问器 ABI、帧借用或 noescape 权限。
 
 无显式参数的原生 Swift 类方法由 loader 与 C API 共用完整 ABI 声明所有者。`NativeSwiftSelf` 接收者事实要求当前入口声明、匹配的类元数据，以及全部机器指令和 CFG 边的规范重提升；复制、破坏和合流沿用既有寄存器/字节分析。对于 ObjC 编码为空的对象字段，`SwiftMetadata` 独立核对有界 kind-7 反射记录、完整字段类型、类及父类描述符、ObjC ivar、偏移向量和精确字段偏移符号。生成代码仍动态读取 ivar 偏移，不用初始字节冻结继承布局。发布时重新构建当前 LowIR 提示，验证完整 ABI、已接受的审计、规范 HighIR 参数、精确的源级 self/字段路径和唯一求值。歧义记录、部分值、路径冲突、存储变化或陈旧凭据均被拒绝。本改动不增加间接聚合参数 ABI、帧借用、noescape 或纯函数权限；`CALayer.setTransform:` 仍需独立证明完整的 128 字节参数 ABI。O0/O2 对照使用原始 ARM64 与原样生成 C、真实 ObjC/CALayer 调用、变化的运行时字段偏移及 nil 字段值。
+
+有限多目标间接分派也保留延后处理的条件依赖：合流后的目标集合即使有限，仍可能包含不可行分支。失败后的反向搜索会跳过无法新增字段、上下文或生产者需求位的条件，继续寻找有用的外层条件。候选选择和激活使用同一规则及发现预算。这些候选不会删除边；发布结果仍须重新证明完整可达图。

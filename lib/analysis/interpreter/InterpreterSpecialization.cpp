@@ -642,6 +642,53 @@ size_t canonicalControlCount(const SpecializationOptions &Options,
              .size();
 }
 
+enum class GuardFieldAction { None, Add, PromoteContext };
+struct GuardRefinementRequest {
+  GuardFieldAction FieldAction;
+  uint64_t ProducerBits;
+
+  bool useful() const {
+    return FieldAction != GuardFieldAction::None || ProducerBits;
+  }
+};
+
+// Selection and activation must agree about whether a guard can request new
+// precision. Otherwise an exhausted inner dispatch can permanently hide the
+// outer guard that would exclude its whole unsupported arm.
+GuardRefinementRequest guardRefinementRequest(
+    const ProducerDemand &Demand, const DeferredProducerDemand &Carrier,
+    const SpecializationOptions &Options, const ControlRefinement &Refinement,
+    size_t ManualRegisters, size_t ManualSlots) {
+  const auto Classify = [&](const auto &Existing, const auto &Contexts,
+                            size_t ManualCount, const auto &Field) {
+    const auto Same = [&](const auto &Other) {
+      return Field.Offset == Other.Offset && Field.Bytes == Other.Bytes;
+    };
+    if (std::none_of(Existing.begin(), Existing.end(), Same))
+      return GuardFieldAction::Add;
+    if (std::none_of(Existing.begin(), Existing.begin() + ManualCount, Same) &&
+        std::none_of(Contexts.begin(), Contexts.end(), Same))
+      return GuardFieldAction::PromoteContext;
+    return GuardFieldAction::None;
+  };
+  const auto Action =
+      std::get<2>(Demand)
+          ? Classify(
+                Options.ControlRegisters, Refinement.ContextRegisters,
+                ManualRegisters,
+                SymRegisterRange{Carrier.CarrierOffset, Carrier.CarrierBytes})
+          : Classify(Options.ControlFrameSlots, Refinement.ContextSlots,
+                     ManualSlots,
+                     SpecializationFrameSlot{
+                         static_cast<int64_t>(Carrier.CarrierOffset),
+                         Carrier.CarrierBytes});
+  const auto Known = Refinement.ProducerDemands.find(Demand);
+  return {Action,
+          Carrier.DemandedBits &
+              ~(Known == Refinement.ProducerDemands.end() ? uint64_t{0}
+                                                          : Known->second)};
+}
+
 class Specializer {
 public:
   Specializer(SpecializationProvider &Provider, SpecializationCursor Entry,
@@ -1955,6 +2002,16 @@ bool Specializer::emitTargets(Node &Draft,
   if (Destinations.empty())
     return fail(SpecializationStatus::InvalidInput,
                 "indirect context has no satisfiable successor");
+  if (Destinations.size() > 1) {
+    // A finite domain can still contain spurious arms after a join loses a
+    // decoder relation. Retain the dispatch dependencies just as for a native
+    // conditional branch, so a later failure can nominate guard refinement.
+    // The finite proof and each edge predicate still authorize the graph;
+    // these deferred demands neither prune an arm nor bind its target value.
+    SawUndecidedGuard |= Options.DiscoverControlState;
+    discover(State, TargetValue, FrameRoot, ControlDemand::DeferredGuard);
+    Draft.ConditionalGuard = true;
+  }
   int Head = Destinations.back().second;
   // Dispatch reads the retained target operand. No expression mentioning an
   // old or overwritten physical register is re-serialized into the program.
@@ -2043,9 +2100,10 @@ bool Specializer::evaluate(int Id) {
   SpecializationCursor Cursor = Draft.Key.Cursor;
   bool Finished = false;
   uint32_t ChainedTransfers = 0;
-  std::set<std::pair<va_t, InstructionMode>> ChainedDestinations;
-  if (Options.StopChainingAtRepeatedDestination && !ReplayingDemands)
-    ChainedDestinations.emplace(Cursor.Address, Cursor.Mode);
+  const uint32_t ChainedVisitLimit = Options.chainedVisitLimit();
+  std::map<std::pair<va_t, InstructionMode>, uint32_t> ChainedDestinations;
+  if (ChainedVisitLimit && !ReplayingDemands)
+    ChainedDestinations[{Cursor.Address, Cursor.Mode}] = 1;
   while (!Finished) {
     std::optional<SpecializationCursor> ChainedSuccessor;
     FailureCursor = Cursor.Address;
@@ -2693,14 +2751,19 @@ bool Specializer::evaluate(int Id) {
               Refinement.RegisterPartitions.count(
                   {ChainedSuccessor->Address, ChainedSuccessor->Mode}))
             ChainedSuccessor.reset();
-          // Repeated destinations use ordinary edge projection. This bounds
-          // local unrolling without eliding any instruction or successor.
-          // Candidate-demand replay above must retain committed occurrences.
-          if (ChainedSuccessor && Options.StopChainingAtRepeatedDestination &&
-              !ChainedDestinations
-                   .emplace(ChainedSuccessor->Address, ChainedSuccessor->Mode)
-                   .second)
-            ChainedSuccessor.reset();
+          // Cap repeated destinations with ordinary edge projection, without
+          // eliding instructions or successors. A cap above one can retain
+          // relations through short repeated handlers. Check before increment
+          // so UINT32_MAX remains a valid bound. Demand replay above follows
+          // the committed occurrences rather than applying this policy again.
+          if (ChainedSuccessor && ChainedVisitLimit) {
+            auto &Visits = ChainedDestinations[{ChainedSuccessor->Address,
+                                                ChainedSuccessor->Mode}];
+            if (Visits >= ChainedVisitLimit)
+              ChainedSuccessor.reset();
+            else
+              ++Visits;
+          }
         }
         if (ChainedSuccessor) {
           if (!admitDestination(*ChainedSuccessor))
@@ -3193,6 +3256,15 @@ void Specializer::refineFailureGuards() {
     ++Refinement.Visits;
     return true;
   };
+  std::set<std::pair<va_t, InstructionMode>> RefinableGuards;
+  for (const auto &[Demand, Carrier] : Refinement.DeferredGuardDemands) {
+    if (!ChargeVisit())
+      return;
+    if (guardRefinementRequest(Demand, Carrier, Options, Refinement,
+                               ManualRegisters, ManualSlots)
+            .useful())
+      RefinableGuards.emplace(std::get<0>(Demand), std::get<1>(Demand));
+  }
   std::vector<std::vector<int>> Predecessors(Nodes.size());
   for (size_t I = 0; I < Nodes.size(); ++I)
     for (int Next : Nodes[I].Block.Succs) {
@@ -3213,7 +3285,9 @@ void Specializer::refineFailureGuards() {
         if (Seen[Parent])
           continue;
         Seen[Parent] = true;
-        if (Nodes[Parent].ConditionalGuard)
+        const auto &Cursor = Nodes[Parent].Key.Cursor;
+        if (Nodes[Parent].ConditionalGuard &&
+            RefinableGuards.count({Cursor.Address, Cursor.Mode}))
           Guards.emplace(Nodes[Parent].Key.Cursor.Address,
                          Nodes[Parent].Key.Cursor.Mode);
         else
@@ -3469,42 +3543,32 @@ specializeInterpreter(SpecializationProvider &Provider,
     const auto ActivateGuardDemands = [&]() {
       for (const auto &[Demand, Carrier] : Refinement.DeferredGuardDemands) {
         const auto &[Offset, Bytes, Bits] = Carrier;
-        const auto Add = [&](auto &Pending, const auto &Existing,
-                             const auto &Contexts, auto &PendingContexts,
-                             size_t ManualCount, const auto &Field) {
+        const auto Request = guardRefinementRequest(
+            Demand, Carrier, Effective, Refinement,
+            Options.ControlRegisters.size(), Options.ControlFrameSlots.size());
+        const auto Add = [&](auto &Pending, auto &PendingContexts,
+                             const auto &Field) {
           const auto Same = [&](const auto &Other) {
             return Field.Offset == Other.Offset && Field.Bytes == Other.Bytes;
           };
-          if (std::none_of(Existing.begin(), Existing.end(), Same)) {
-            if (std::none_of(Pending.begin(), Pending.end(), Same)) {
-              Pending.push_back(Field);
-              HasCandidates = true;
-            }
-          } else if (std::none_of(Existing.begin(),
-                                  Existing.begin() + ManualCount, Same) &&
-                     std::none_of(Contexts.begin(), Contexts.end(), Same) &&
-                     std::none_of(PendingContexts.begin(),
-                                  PendingContexts.end(), Same)) {
-            // Relations get the first attempt. Repeated imprecision can
-            // separate only proven constants/relative pointers in this field.
-            PendingContexts.push_back(Field);
+          if (Request.FieldAction == GuardFieldAction::None)
+            return;
+          auto &Destination = Request.FieldAction == GuardFieldAction::Add
+                                  ? Pending
+                                  : PendingContexts;
+          if (std::none_of(Destination.begin(), Destination.end(), Same)) {
+            Destination.push_back(Field);
             HasCandidates = true;
           }
         };
         if (std::get<2>(Demand))
-          Add(Refinement.Registers, Effective.ControlRegisters,
-              Refinement.ContextRegisters, Refinement.PendingContextRegisters,
-              Options.ControlRegisters.size(), SymRegisterRange{Offset, Bytes});
+          Add(Refinement.Registers, Refinement.PendingContextRegisters,
+              SymRegisterRange{Offset, Bytes});
         else
-          Add(Refinement.Slots, Effective.ControlFrameSlots,
-              Refinement.ContextSlots, Refinement.PendingContextSlots,
-              Options.ControlFrameSlots.size(),
+          Add(Refinement.Slots, Refinement.PendingContextSlots,
               SpecializationFrameSlot{static_cast<int64_t>(Offset), Bytes});
-        const auto At = Refinement.ProducerDemands.find(Demand);
-        const uint64_t NewBits =
-            Bits & ~(At == Refinement.ProducerDemands.end() ? 0 : At->second);
-        if (NewBits) {
-          Refinement.PendingProducerDemands[Demand] |= NewBits;
+        if (Request.ProducerBits) {
+          Refinement.PendingProducerDemands[Demand] |= Request.ProducerBits;
           HasCandidates = true;
         }
         const uint64_t RawCount = Effective.ControlRegisters.size() +

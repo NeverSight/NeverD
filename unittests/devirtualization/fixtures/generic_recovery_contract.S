@@ -17,6 +17,27 @@ generic_recovery_chain:
   ret
 .size generic_recovery_chain,.-generic_recovery_chain
 
+.globl generic_recovery_repeat
+.type generic_recovery_repeat,@function
+generic_recovery_repeat:
+  movq %rdi, %r10
+  xorq $90, %r10
+  movl $2, %edx
+  jmp .Lrepeat_body
+.Lrepeat_body:
+  xorq $1, %r10
+  decl %edx
+  jne .Lrepeat_body
+  xorq %rdi, %r10
+  leaq .Lrepeat_exit(%rip), %r11
+  subq $90, %r11
+  addq %r10, %r11
+  jmp *%r11
+.Lrepeat_exit:
+  leaq 17(%rdi), %rax
+  ret
+.size generic_recovery_repeat,.-generic_recovery_repeat
+
 .globl generic_recovery_bounds
 .type generic_recovery_bounds,@function
 generic_recovery_bounds:

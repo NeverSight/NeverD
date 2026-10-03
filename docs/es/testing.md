@@ -1238,3 +1238,5 @@ La memoria virtual de Windows incorpora `VirtualAlloc`, `VirtualFree`, `VirtualP
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
 
 Las regresiones cubren presupuestos exactos e insuficientes, palabras parciales, ambos órdenes de bytes, identidad de memoria intacta, límites afines completos, sobrescrituras de predecesores tardíos e invalidación predeterminada. C API/CLI comprueban compatibilidad v6 y dominios inválidos. HighC y LLVMC ejecutados en O0/O2 verifican retorno, memoria, pila y estado preservado, sin certificar equivalencia nativa.
+
+Las regresiones cubren fases en registro y marco, ambos órdenes de bytes, ramas inválidas alcanzables, predecesores tardíos, guardas interiores agotadas y límites de descubrimiento adyacentes. Los límites de visitas se prueban con correlaciones aritméticas, bucles anidados, modos, pasos secuenciales, trabajo total y prioridad anterior. El CLI ejecuta ambas rutas C y ABI fuente a O0/O2; C/Python v8 comprueban disposición, campos inválidos y colas futuras ignoradas.

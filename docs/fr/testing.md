@@ -1252,3 +1252,5 @@ La mémoire virtuelle Windows ajoute `VirtualAlloc`, `VirtualFree`, `VirtualProt
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
 
 Les régressions couvrent budgets exacts ou insuffisants, mots partiels, deux ordres d’octets, identité de mémoire intacte, bornes des sauvegardes affines, écrasements par prédécesseurs tardifs et invalidation par défaut. C API/CLI vérifient la compatibilité v6 et les domaines invalides. HighC et LLVMC exécutés en O0/O2 contrôlent retour, mémoire, pile et état préservé, sans constituer un certificat d’équivalence native.
+
+Les régressions couvrent phases en registre et en pile, deux boutismes, branches invalides accessibles, prédécesseurs tardifs, gardes internes épuisées et limites de découverte adjacentes. Les tests de visites couvrent corrélations arithmétiques, boucles imbriquées, modes, passages séquentiels, budget total et priorité historique. Le CLI exécute les deux chemins C et ABI source à O0/O2 ; C/Python v8 vérifient dispositions, champs invalides et extensions futures ignorées.

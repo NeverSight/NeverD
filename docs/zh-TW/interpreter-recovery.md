@@ -101,6 +101,10 @@ v7 API `neverd_devirtualize_source_v7()` 和 `neverd_devirtualize_machine_source
 
 v7 的 `flags` 也接受 `NEVERD_DEVIRTUALIZE_V7_STOP_CHAIN_AT_REPEAT`（Python：`DevirtualizeFlagsV7.STOP_CHAIN_AT_REPEAT`），CLI 對應 `--vm-chain-stop-at-repeat`。它在一般的已證明單一目標轉移鏈再次到達相同原生位址及解碼模式前結束鏈，回到一般邊投影。這可減少迴圈展開，但可能遺失解析後續控制流程所需的關聯，使原本成功的還原遭到拒絕。旗標預設為零；鏈長上限為零時此選項無效果。相依重播仍依已提交的指令出現順序進行。兩種原始碼 ABI 都回報 `stopChainingAtRepeatedDestination`；未知 v7 旗標會被拒絕。此策略不增加語義前提，也不允許發布未解析控制流程。
 
+`--vm-chain-visits=N` 為鏈內每個原生位址與解碼模式增加非負 32 位次數上限。它計數初始位置及串接轉移的目標，不計循序落入的指令。零表示不增加此上限；`--vm-chain-stop-at-repeat` 仍優先施加一次上限。總鏈長為零時，兩項控制都不生效。v8 C API 使用 `neverd_devirtualize_options_v8`：清零結構，把 `base.base.base.base.base.base.base.struct_size` 設為完整大小，再設定 `max_chained_visits_per_destination`；`reserved` 必須為零。v1–v7 忽略此擴充，v8 忽略未來尾部。Python 提供 `NeverDDevirtualizeOptionsV8`。報告保留 `maxChainedVisitsPerDestination` 與 `effectiveChainedVisitsPerDestination`。此選項要求 `--devirtualize`，僅調整分析精度與工作量，不增加語義前提。
+
+有限多目標間接分派也保留延後處理的條件相依：合流後的目標集合即使有限，仍可能包含不可行分支。失敗後的反向搜尋會略過無法新增欄位、上下文或產生者需求位元的條件，繼續尋找有用的外層條件。候選選擇與啟用使用同一規則及探索預算。這些候選不會刪除邊；發布結果仍須重新證明完整可達圖。
+
 控制與守衛精度細化優先於可選框架分區重試，必要的更細分區仍可使用。恢復先完成一個餘數的不動點，再開始下一個，但只有全部允許餘數完成後才發布結果。顯式入口對齊與分區域取交集，分派比較實際餘數。上下文、操作、節點及求解器預算仍有界，且在重試之間共用。
 
 無法解析的間接目標可能源於守衛條件的精度丟失。直接目標與延後生產者細化不再增加候選後，恢復會檢查能夠到達失敗位置的最近未決守衛。候選選擇與重試共用探索和細化預算。只有新一輪完整證明才能排除分支；確實可達的未知目標仍須失敗，且不發布殘餘程式碼或證明見證。

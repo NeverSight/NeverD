@@ -279,7 +279,8 @@ static const char *devirtualizeSource(
     const neverd_devirtualize_options_v4 *EntryOptions = nullptr,
     const neverd_devirtualize_options_v5 *AlignmentOptions = nullptr,
     const neverd_devirtualize_options_v6 *SeparationOptions = nullptr,
-    const neverd_devirtualize_options_v7 *WorkOptions = nullptr) {
+    const neverd_devirtualize_options_v7 *WorkOptions = nullptr,
+    const neverd_devirtualize_options_v8 *ChainOptions = nullptr) {
   if (Report)
     *Report = nullptr;
   auto *S = toSession(Session);
@@ -329,7 +330,8 @@ static const char *devirtualizeSource(
           "disjoint from "
           "guest memory; fixed original mappings; little-endian 64-bit host";
     if (Options) {
-      const size_t RequiredSize = WorkOptions ? sizeof(*WorkOptions)
+      const size_t RequiredSize = ChainOptions  ? sizeof(*ChainOptions)
+                                  : WorkOptions ? sizeof(*WorkOptions)
                                   : SeparationOptions
                                       ? sizeof(*SeparationOptions)
                                   : AlignmentOptions ? sizeof(*AlignmentOptions)
@@ -339,7 +341,9 @@ static const char *devirtualizeSource(
                                                      : sizeof(*Options);
       if (Options->struct_size < RequiredSize)
         return Fail(
-            WorkOptions
+            ChainOptions
+                ? "devirtualize options do not cover the complete v8 structure"
+            : WorkOptions
                 ? "devirtualize options do not cover the complete v7 structure"
             : SeparationOptions
                 ? "devirtualize options do not cover the complete v6 structure"
@@ -355,6 +359,12 @@ static const char *devirtualizeSource(
                   "structure");
       // Older entry points may receive arbitrary future tails. Inspect each
       // extension only through its matching API, after checking its full size.
+      if (ChainOptions) {
+        if (ChainOptions->reserved)
+          return Fail("invalid devirtualize v8 reserved field");
+        Config.MaxChainedVisitsPerDestination =
+            ChainOptions->max_chained_visits_per_destination;
+      }
       if (WorkOptions) {
         constexpr uint32_t KnownFlags =
             NEVERD_DEVIRTUALIZE_V7_STOP_CHAIN_AT_REPEAT;
@@ -514,6 +524,10 @@ static const char *devirtualizeSource(
     Evidence["maxChainedTransfers"] = Config.MaxChainedTransfers;
     Evidence["stopChainingAtRepeatedDestination"] =
         Config.StopChainingAtRepeatedDestination;
+    Evidence["maxChainedVisitsPerDestination"] =
+        Config.MaxChainedVisitsPerDestination;
+    Evidence["effectiveChainedVisitsPerDestination"] =
+        Config.chainedVisitLimit();
     if (Config.EntryFrameBounds)
       Evidence["entryFrameBounds"] = llvm::json::Object{
           {"begin", Config.EntryFrameBounds->Begin},
@@ -827,6 +841,35 @@ extern "C" const char *neverd_devirtualize_machine_source_v7(
   return devirtualizeSource(
       Session, Entry,
       Options ? &Options->base.base.base.base.base.base : nullptr, Report, true,
+      Options ? &Options->base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base : nullptr,
+      Options ? &Options->base.base.base : nullptr,
+      Options ? &Options->base.base : nullptr,
+      Options ? &Options->base : nullptr, Options);
+}
+
+extern "C" const char *
+neverd_devirtualize_source_v8(neverd_session_t Session, neverd_va_t Entry,
+                              const neverd_devirtualize_options_v8 *Options,
+                              const char **Report) {
+  return devirtualizeSource(
+      Session, Entry,
+      Options ? &Options->base.base.base.base.base.base.base : nullptr, Report,
+      false, Options ? &Options->base.base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base.base : nullptr,
+      Options ? &Options->base.base.base.base : nullptr,
+      Options ? &Options->base.base.base : nullptr,
+      Options ? &Options->base.base : nullptr,
+      Options ? &Options->base : nullptr, Options);
+}
+
+extern "C" const char *neverd_devirtualize_machine_source_v8(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v8 *Options, const char **Report) {
+  return devirtualizeSource(
+      Session, Entry,
+      Options ? &Options->base.base.base.base.base.base.base : nullptr, Report,
+      true, Options ? &Options->base.base.base.base.base.base : nullptr,
       Options ? &Options->base.base.base.base.base : nullptr,
       Options ? &Options->base.base.base.base : nullptr,
       Options ? &Options->base.base.base : nullptr,

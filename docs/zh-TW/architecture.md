@@ -935,3 +935,5 @@ Combine 的精確強匯入 `Publisher.sink(receiveValue:)` 多載在 `Failure ==
 不可變 Swift 靜態純量物件只有在有界結構化儲存宣告與目前完整物件範圍一致時，才能保留一個重建後的位址身分。支援名義型別及非泛型擴充上下文；Darwin arm64/x86_64 上，凍結的 `CoreGraphics.CGFloat` 宣告確認物件為 8 位元組（[Apple ABI 說明](https://developer.apple.com/documentation/corefoundation/cgfloat-swift.struct/nativetype)），另由四個 macOS/Mac Catalyst 編譯目標獨立核驗。`SwiftMetadata` 統一負責宣告和唯一不可變儲存證明，原始碼繫結及發布重用該證明。可變、重疊、帶重定位、部分、TLS、泛型或有歧義的物件仍不恢復。對齊的位元組輔助儲存保留完整位元模式和共用位址，不據此推導存取器 ABI、框架借用或 noescape 權限。
 
 無顯式參數的原生 Swift 類別方法由 loader 與 C API 共用完整 ABI 宣告所有者。`NativeSwiftSelf` 接收者事實要求目前入口宣告、匹配的類別中繼資料，以及全部機器指令和 CFG 邊的規範重提升；複製、破壞和合流沿用既有暫存器/位元組分析。對於 ObjC 編碼為空的物件欄位，`SwiftMetadata` 獨立核對有界 kind-7 反射記錄、完整欄位型別、類別及父類別描述符、ObjC ivar、偏移向量和精確欄位偏移符號。產生程式仍動態讀取 ivar 偏移，不用初始位元組凍結繼承配置。發佈時重新建立目前 LowIR 提示，驗證完整 ABI、已接受的稽核、規範 HighIR 引數、精確的原始碼 self/欄位路徑和唯一求值。歧義記錄、部分值、路徑衝突、儲存變化或過時憑據均遭拒絕。本變更不增加間接聚合引數 ABI、框架借用、noescape 或純函式權限；`CALayer.setTransform:` 仍需獨立證明完整的 128 位元組引數 ABI。O0/O2 對照使用原始 ARM64 與原樣產生的 C、真實 ObjC/CALayer 呼叫、變動的執行期欄位偏移及 nil 欄位值。
+
+有限多目標間接分派也保留延後處理的條件相依：合流後的目標集合即使有限，仍可能包含不可行分支。失敗後的反向搜尋會略過無法新增欄位、上下文或產生者需求位元的條件，繼續尋找有用的外層條件。候選選擇與啟用使用同一規則及探索預算。這些候選不會刪除邊；發布結果仍須重新證明完整可達圖。

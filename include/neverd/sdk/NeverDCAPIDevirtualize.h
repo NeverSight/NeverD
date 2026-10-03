@@ -154,6 +154,23 @@ typedef struct neverd_devirtualize_options_v7 {
   uint32_t flags;
 } neverd_devirtualize_options_v7;
 
+/// Version 8 adds a per-(address, decode mode) visit cap within an ordinary
+/// proved-singleton chain. Count its initial cursor and chained transfer
+/// destinations, not sequential fallthrough. Zero adds no cap;
+/// positive values fall back to normal edge projection at the cap. The v7
+/// STOP_CHAIN_AT_REPEAT flag remains a stricter one-visit cap when both are
+/// set. The total transfer and work budgets still apply; a zero chain limit
+/// makes both destination controls inactive. Dependency replay preserves
+/// committed occurrences. This changes precision/work, not semantic premises.
+/// Zero-initialize and set base.base.base.base.base.base.base.struct_size to
+/// the full size. reserved and all inherited reserved fields must be zero.
+/// v1-v7 ignore this extension; v8 ignores future tails.
+typedef struct neverd_devirtualize_options_v8 {
+  neverd_devirtualize_options_v7 base;
+  uint32_t max_chained_visits_per_destination;
+  uint32_t reserved;
+} neverd_devirtualize_options_v8;
+
 /// Return recovered C only when all reachable control targets are resolved.
 /// The contract fixes mapped image bytes and permissions, excludes concurrent
 /// mutation and calls, and does not certify binary patching or unwind behavior.
@@ -264,6 +281,16 @@ neverd_devirtualize_source_v7(neverd_session_t Session, neverd_va_t Entry,
 NEVERD_API const char *neverd_devirtualize_machine_source_v7(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v7 *Options, const char **Report);
+
+/// Contracts and ownership match v7. Reports retain configured and effective
+/// destination visit caps, including the precedence of the legacy v7 flag.
+NEVERD_API const char *
+neverd_devirtualize_source_v8(neverd_session_t Session, neverd_va_t Entry,
+                              const neverd_devirtualize_options_v8 *Options,
+                              const char **Report);
+NEVERD_API const char *neverd_devirtualize_machine_source_v8(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v8 *Options, const char **Report);
 
 #ifdef __cplusplus
 }
