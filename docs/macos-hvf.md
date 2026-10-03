@@ -144,8 +144,9 @@ It uploads transport results and the state inventory before execution, then
 preserves the isolated CR8 result before the complete CPU gate.
 Artifacts include the run attempt so reruns retain their own evidence.
 Full-inventory compilation has its own step and log. `test_parallel` selects
-four CTest processes by default or one for a serialized comparison, while
-compilation remains parallel. The result summary records the selected value,
+four CTest processes by default or one for a serialized comparison. Hosted
+Intel full/Darwin method execution is always serial; compilation remains
+parallel. The result summary records actual execution concurrency,
 host OS/kernel description and logical CPU count.
 It can also run locally with `--require-hvf --hvf-transport-only` on
 `scripts/run_native_cpu_ci.py`. `validation=probe` runs only the VM/vCPU
@@ -313,13 +314,52 @@ returned no CPU result after more than thirty minutes and was cancelled.
 Its completed job still provided no downloadable execution log. The build
 artifact's SHA-256 was verified; this is not full CPU acceptance. The
 [independent Darwin gate](https://github.com/NeverSight/NeverD/actions/runs/37097301977)
-at `4cbb729389df9485c9a9699c63c0be3a48862794` separately requires all 26 native
-Intel workloads. A temporary
+at `4cbb729389df9485c9a9699c63c0be3a48862794` ended with GitHub's explicit
+"hosted runner lost communication" annotation. Its transport and build
+checkpoints were verified, but no final execution log was available. This
+does not identify the underlying cause or establish Darwin acceptance. The
 [per-owner diagnosis](https://github.com/NeverSight/NeverD/actions/runs/37098336208)
-records each complete CPU owner's inventory, CTest exit code and XML before
-continuing. Both ongoing runs use serialized tests; the emulation implementation
-and tests match the successful focused runs. Neither has yet returned complete
-acceptance evidence.
+was cancelled after its FP step stopped returning results.
+
+The subsequent [FP method run](https://github.com/NeverSight/NeverD/actions/runs/37101437752)
+at clean source `3e01cda5c43908506bdb112ddacda02525854a9f` completed all 71
+registrations: 35 passed, none failed and 36 skipped. All twelve native HVF
+cases passed, including full physical FP state, every TOP, logical CPU
+switching and the live initialization probe. Standard host XRSTOR passed;
+compacted XRSTOR was unavailable on this runner. The aggregate artifact was
+SHA-256 verified and all original XML identities reconciled. This covers the
+entire FP owner, not the other nineteen CPU owners.
+
+Hosted Intel full and Darwin validation now use `--execution-methods`. CTest
+still supplies every registered command and identity; each GoogleTest method
+runs in one process with all of its registered parameters, flags, environment
+and working directory. The mode rejects unsupported CTest properties rather
+than ignoring fixtures or resource contracts. Each child has an aggregate
+deadline capped at 120 seconds, followed by bounded process-group retirement;
+individual parameter timeouts are not separately enforced inside GoogleTest.
+Raw XML, logs, exit status and the exact CTest-name mapping are retained. The
+normal inventory, required-native and missing-result gates remain mandatory.
+The summary identifies `execution=gtest-methods` and serial execution, and
+never labels it a CTest execution result. Self-hosted validation continues to
+use CTest's per-case processes and timeouts. Temporary diagnostic workflows
+and helpers have been removed.
+
+At clean source `d5864c055116a687546320e4acf0788ef4a4e735`, the updated
+ARM64 full inventory (including the latest Windows process environment work)
+completed 6,842 registrations across twenty owners: 849 passed, none failed
+and 5,993 skipped; all sixteen required native tests passed. The independent
+Darwin inventory passed all 39 native workloads (65 passed, 221 skipped).
+Evidence is in `build-hvf-native/hvf-method-clean-full-evidence/` and
+`build-hvf-native/hvf-method-clean-darwin-evidence/`. The
+[Intel full run](https://github.com/NeverSight/NeverD/actions/runs/37103182936)
+uses this same source and remains pending.
+
+Before committing this runner change, its 67 infrastructure checks passed.
+The current ARM64 inventory executed all 6,809 registrations across twenty
+owners: 845 passed, none failed and 5,964 skipped, including all sixteen
+required native tests. A separate Darwin run passed all 39 native workloads
+(65 passed, 221 skipped). These pre-commit results correctly record dirty
+source; clean-source reruns are recorded separately.
 
 After integrating the subsequent `dev` changes, clean source
 `f4bf8dde5cbc33d18ce053cb0722a54047e5a2d0` again passed all twelve ARM64

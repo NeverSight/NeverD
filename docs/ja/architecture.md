@@ -972,6 +972,8 @@ UIButton の `contentEdgeInsets`、`imageEdgeInsets`、`titleEdgeInsets` の get
 
 `WindowsProcessLoader` は `windows.modules` の ASCII DLL ベース名をロードし、明示参照、共有依存関係、起動モジュールの保持を管理します。転送の反復照会で余分な参照は増えません。再ロードでは同じカタログ枠に新しい常駐世代を割り当てます。TLS と `DllMain` は同じ CPU 上で中断 API のスタックフレームより下に実行し、レジスター復元はゲストのメモリー書き込みを保ち、現在の戻り先を使用します。動的 attach/detach の予約ポインターはゼロです。明示的ロード中の attach 失敗はクリーンアップ後にエラー 1114 を返し、成功済みの独立した入れ子ロードは保持します。アンロードはイメージと TLS を解放し、再ロードは元の内容から始まります。モデル外のローダーリストや TLS ポインター変更は明示的に拒否します。ファイル、イメージ、メタデータ予算は失敗や再ロードでも累積します。API 提供元に架空 DLL ハンドルはありません。ファイルシステム検索、非 ASCII パス、`LoadLibraryEx` フラグ、循環インポート、初期化／アンロード中の同一モジュールへの再入状態変更は未対応です。
 
+`GetEnvironmentVariableW`, `SetEnvironmentVariableW`, `GetEnvironmentStringsW`, `FreeEnvironmentStringsW`, `ExpandEnvironmentStringsW` は PEB プロセスパラメーター内の実際のゲスト環境ブロックを共有します。名前は大文字小文字を区別しない ASCII、値は UTF-16 です。変更前に入力、容量、書き込み権限を検証します。スナップショットは後続の変更から独立し、解放時にゲストメモリを回収します。モデルのブロック上限は 64 KiB で、文字列と展開処理には境界と実行期限の検査があります。不明なポインター所有権、不正なブロック、ANSI コードページ、展開バッファーの重複は未対応です。`WindowsEnvironmentTests.cpp` は利用可能なバックエンドで独自の x64/ARM64 フィクスチャを比較し、CI では独立したネイティブ Windows オラクルを必須とします。
+
 Windows 仮想メモリに `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` と現在のプロセスの `FlushInstructionCache` を追加しました。OS 層が予約領域を所有し、コミット済みページ、権限、物理記憶域は `AddressSpace` が一元管理します。動的コードの書き換え、アクセス違反、メモリ予算の再利用をテストします。
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).

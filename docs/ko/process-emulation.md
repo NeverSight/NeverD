@@ -107,6 +107,8 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 
 `WindowsProcessLoader`는 `windows.modules`의 ASCII DLL 기본 이름을 로드하며 명시적 참조, 공유 의존성과 시작 모듈 유지를 관리합니다. 전달 조회를 반복해도 참조가 추가되지 않습니다. 다시 로드할 때 카탈로그 슬롯에 새 상주 세대를 부여합니다. TLS와 `DllMain`은 같은 CPU에서 중단된 API 프레임 아래에서 실행되며 레지스터 복원은 게스트 메모리 쓰기를 보존하고 현재 반환 주소를 사용합니다. 동적 attach/detach 예약 포인터는 0입니다. 명시적 로드 중 attach 실패는 정리 후 오류 1114를 반환하되 성공한 독립 중첩 로드는 유지합니다. 언로드는 이미지 매핑과 TLS를 해제하고 재로드는 원본 내용을 복원합니다. 모델 밖에서 로더 목록이나 TLS 포인터를 바꾸면 명시적으로 실패합니다. 파일·이미지·메타데이터 작업 예산은 실패와 재로드에도 누적됩니다. API 제공자에 가짜 DLL 핸들은 없습니다. 파일 시스템 검색, 비 ASCII 경로, `LoadLibraryEx` 플래그, 순환 가져오기, 초기화 또는 언로드 중인 같은 모듈의 재진입 상태 전환은 지원하지 않습니다.
 
+`GetEnvironmentVariableW`, `SetEnvironmentVariableW`, `GetEnvironmentStringsW`, `FreeEnvironmentStringsW`, `ExpandEnvironmentStringsW` 는 PEB 프로세스 매개변수의 실제 게스트 환경 블록을 공유합니다. 이름은 대소문자를 구분하지 않는 ASCII이며 값은 UTF-16입니다. 변경 전에 입력, 용량, 쓰기 가능한 메모리를 검증합니다. 스냅샷은 이후 변경과 독립적이며 해제하면 게스트 메모리를 회수합니다. 모델의 블록 한도는 64 KiB이고 문자열과 확장에는 크기 및 실행 기한 검사가 적용됩니다. 알 수 없는 포인터 소유권, 잘못된 블록, ANSI 코드 페이지, 확장 버퍼 중첩은 지원하지 않습니다. `WindowsEnvironmentTests.cpp`는 사용 가능한 백엔드에서 자체 x64/ARM64 픽스처를 비교하며 CI는 독립적인 네이티브 Windows 오라클을 필수로 실행합니다.
+
 동적 해제 콜백 전에 모듈은 초기화 목록에서 빠지지만, 매핑·이름 조회·로드/메모리 목록 소속은 콜백 중에도 유지됩니다. 진입점 반환의 네이티브 비교는 시스템 작업 스레드와 별개로 초기 스레드를 관찰합니다.
 
 `WindowsDynamicTests.cpp`는 원본 x64/ARM64 DLL과 EXE를 독립 네이티브 Windows 관측과 비교하여 참조 수, 공유 의존성, 중첩 로드, attach 실패 정리, 전달 조회, 프로세스 종료, 진입점 없는 DLL, 재로드 시 새 TLS를 확인합니다. 추가 회귀는 변경된 로더 메타데이터와 해제된 코드 포인터를 거부하고 누적 준비 예산과 중단 API의 미완료 결과를 보장합니다. Windows CI는 원본 기준 실행과 WHP 사례를 필수로 요구합니다. 교차 컴파일과 Unicorn ARM64는 네이티브 ARM64 실행 증거가 아닙니다.

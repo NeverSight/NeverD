@@ -159,6 +159,8 @@ jobs:
             scripts.tests.test_ci_configuration \
             scripts.tests.test_audit_ci_test_inventory \
             scripts.tests.test_audit_ci_test_results \
+            scripts.tests.test_run_native_cpu_ci \
+            scripts.tests.test_run_native_cpu_methods \
             scripts.tests.test_first_fatal_snapshots \
             scripts.tests.test_neverd_bench_harness \
             scripts.tests.test_audit_evm_opcode_metadata \

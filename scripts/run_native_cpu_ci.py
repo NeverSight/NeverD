@@ -17,9 +17,11 @@ import xml.etree.ElementTree as ET
 if __package__:
     from .audit_ci_test_inventory import parse_inventory
     from .audit_ci_test_results import OUTCOME_NAMES, parse_junit
+    from .run_native_cpu_methods import run_methods
 else:
     from audit_ci_test_inventory import parse_inventory
     from audit_ci_test_results import OUTCOME_NAMES, parse_junit
+    from run_native_cpu_methods import run_methods
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,6 +141,7 @@ def run(
     with_drivers: bool = False, require_hvf: bool = False,
     darwin_backend: str | None = None,
     hvf_transport_only: bool = False,
+    execution_methods: bool = False,
 ) -> int:
     if hvf_transport_only and not require_hvf:
         raise ValueError("HVF transport profile requires --require-hvf")
@@ -203,14 +206,18 @@ def run(
         environment["NEVERD_REQUIRE_HVF"] = "1"
     if require_whp or darwin_backend == "whp":
         environment["NEVERD_REQUIRE_NATIVE_WHP"] = "1"
-    result = subprocess.run([
-        *base, "--no-tests=error", "--parallel", str(parallel),
-        "--output-on-failure", "--output-junit", str(junit),
-        "--test-output-size-passed", output_limits[0],
-        "--test-output-size-failed", output_limits[0],
-        "--output-log", str(evidence / "ctest.log"),
-    ], env=environment)
-    cases = parse_junit(ET.parse(junit).getroot())
+    if execution_methods:
+        cases, execution_status = run_methods(json.loads(inventory), evidence, environment)
+    else:
+        result = subprocess.run([
+            *base, "--no-tests=error", "--parallel", str(parallel),
+            "--output-on-failure", "--output-junit", str(junit),
+            "--test-output-size-passed", output_limits[0],
+            "--test-output-size-failed", output_limits[0],
+            "--output-log", str(evidence / "ctest.log"),
+        ], env=environment)
+        cases = parse_junit(ET.parse(junit).getroot())
+        execution_status = result.returncode
     counts = Counter(case.outcome for case in cases)
     expected, actual = set(tests), {case.test for case in cases}
     required_unexecuted = [
@@ -231,7 +238,8 @@ def run(
             "version": platform.version(),
         },
         "logical_cpus": os.cpu_count(),
-        "parallel": parallel,
+        "parallel": 1 if execution_methods else parallel,
+        "execution": "gtest-methods" if execution_methods else "ctest",
         "owners": owners,
         "registered": len(tests),
         "total": len(cases),
@@ -247,14 +255,15 @@ def run(
         "required_native_names": sorted(required),
         "required_native_missing": sorted(required_missing),
         "required_native_unexecuted": required_unexecuted,
-        "ctest_status": result.returncode,
+        "ctest_status": None if execution_methods else execution_status,
+        "execution_status": execution_status,
     }
     (evidence / "summary.json").write_text(
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(summary), flush=True)
     return int(bool(
-        result.returncode or counts["failed"] or counts["disabled"]
+        execution_status or counts["failed"] or counts["disabled"]
         or counts["not_run"] or expected != actual or len(cases) != len(tests)
         or (required_hardware and required_unexecuted)
     ))
@@ -272,6 +281,8 @@ def main() -> int:
     parser.add_argument("--require-darwin-backend", choices=("hvf", "kvm", "whp"),
                         help="require every native Darwin workload on the host ISA")
     parser.add_argument("--with-drivers", action="store_true")
+    parser.add_argument("--execution-methods", action="store_true",
+                        help="execute the full CTest inventory in serial, bounded GoogleTest method processes")
     args = parser.parse_args()
     if args.parallel < 1:
         parser.error("parallel jobs must be positive")
@@ -280,6 +291,7 @@ def main() -> int:
         args.require_whp, args.with_drivers, args.require_hvf,
         args.require_darwin_backend,
         args.hvf_transport_only,
+        args.execution_methods,
     )
 
 

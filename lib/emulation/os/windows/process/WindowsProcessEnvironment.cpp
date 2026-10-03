@@ -139,6 +139,12 @@ llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
   auto EnvAddress = Store(EnvironmentBlock);
   if (!EnvAddress)
     return EnvAddress.takeError();
+  // Keep a bounded mutable block separate from subsequent module names. The
+  // serialized guest block is the authority for all environment APIs.
+  if (EnvironmentCapacity > EnvironmentEnd - *EnvAddress)
+    return failure(text::Strings);
+  Out.Variables = *EnvAddress;
+  Cursor = *EnvAddress + EnvironmentCapacity;
   auto Unicode = [&](uint64_t Address, uint64_t Buffer,
                      size_t Length) -> llvm::Error {
     if (auto E = Memory.writeInteger(Address + UnicodeLength, Length * WideSize,

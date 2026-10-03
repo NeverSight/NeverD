@@ -74,6 +74,9 @@ Services::heap(const Service &S, const NativeCallEvent &Event) {
   if (Flags & ~Allowed)
     return unsupported(S);
   auto Found = Allocations.find(A[2]);
+  if (S.Kind != API::HeapAlloc && Found != Allocations.end() &&
+      Found->second.EnvironmentSnapshot)
+    return unsupported(S);
   if (S.Kind == API::HeapSize)
     return std::optional<uint64_t>(
         Found == Allocations.end() ? UINT64_MAX : Found->second.Size);
@@ -87,9 +90,14 @@ Services::heap(const Service &S, const NativeCallEvent &Event) {
     Allocations.erase(Found);
     return std::optional<uint64_t>(1);
   }
-  const uint64_t Size = A[2];
+  auto Address = allocateHeap(A[2]);
+  if (!Address)
+    return Address.takeError();
+  return std::optional<uint64_t>(*Address);
+}
+llvm::Expected<uint64_t> Services::allocateHeap(uint64_t Size, bool Snapshot) {
   if (Size > Options.MemoryLimit || Size > UINT64_MAX - PageSize)
-    return std::optional<uint64_t>(0);
+    return 0;
   const uint64_t Mapped =
       (std::max<uint64_t>(Size, 1) + PageSize - 1) & ~(PageSize - 1);
   uint64_t Address = HeapBase;
@@ -100,7 +108,7 @@ Services::heap(const Service &S, const NativeCallEvent &Event) {
   }
   if (Address >= HeapLimit || Mapped > HeapLimit - Address ||
       Mapped > Options.MemoryLimit - Memory.mappedBytes())
-    return std::optional<uint64_t>(0);
+    return 0;
   if (auto E = Memory.map(Address, Mapped, Read | Write | UserAccessible)) {
     bool Exhausted = false;
     E = llvm::handleErrors(
@@ -108,12 +116,12 @@ Services::heap(const Service &S, const NativeCallEvent &Event) {
     if (E)
       return std::move(E);
     if (Exhausted)
-      return std::optional<uint64_t>(0);
+      return 0;
   }
-  Allocations.emplace(Address, Allocation{Size, Mapped});
+  Allocations.emplace(Address, Allocation{Size, Mapped, Snapshot});
   // Fresh guest backing is zero-filled. With no HEAP_ZERO_MEMORY flag its
   // contents are unspecified; the model's deterministic zeroes are permitted.
-  return std::optional<uint64_t>(Address);
+  return Address;
 }
 llvm::Expected<ServiceOutcome> Services::invoke(const Service &S,
                                                 const NativeCallEvent &Event) {
@@ -161,6 +169,12 @@ llvm::Expected<ServiceOutcome> Services::invoke(const Service &S,
     return Value(CurrentThread);
   case API::GetCommandLineW:
     return Value(Env.CommandLine);
+  case API::GetEnvironmentVariableW:
+  case API::SetEnvironmentVariableW:
+  case API::GetEnvironmentStringsW:
+  case API::FreeEnvironmentStringsW:
+  case API::ExpandEnvironmentStringsW:
+    return Wrap(environment(S, Event));
   case API::GetProcessHeap:
     return Value(HeapHandle);
   case API::VirtualAlloc:

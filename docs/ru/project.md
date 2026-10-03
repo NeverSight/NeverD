@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7d9f0c7d3909a8c17cb367decf40b703e1928de2a57b8a83453ce6efb0f0b6c4 -->
+<!-- i18n-source: 7d465e53d8b02df92cfd1d84c9817ee79377e7094f58b046232e3ea5523fe1e5 -->
 
 <div align="center">
 
@@ -117,6 +117,8 @@ C11 и безопасный стабильный Rust. См. [декомпиля
 Выполнение CPU разделяет допуск ISA, гостевую память, транспорт бэкенда и политику гостевой ОС. `NEVERD_ENABLE_CPU_EMULATION` включает слой CPU x64/ARM64; `NEVERD_ENABLE_DRIVER_EMULATION` добавляет ограниченную среду Windows WDM/KMDF x64. `linux-elf64-v1` выполняет поддерживаемые процессы Linux ELF. См. [Выполнение CPU](cpu-execution.md), [Эмуляция гостевых процессов](process-emulation.md) и [Эмуляция драйверов Windows](driver-emulation.md).
 
 `windows-pe64-v1` поддерживает ограниченные консольные процессы Windows x64/ARM64 с PEB/TEB, статическим и динамическим TLS, `DllMain`, именованными Win32 API и явно заданными ациклическими графами DLL. Поддерживаются импорты кода/данных по имени и ординалу, DIR64, перенаправленные экспорты и реальные списки загрузчика. `LoadLibraryA` / `LoadLibraryW`, `FreeLibrary` и `GetProcAddress` используют настроенный каталог. CRT/GUI, пользовательский SEH, потоки и общая совместимость с Windows не завершены; нативных свидетельств ARM64 KVM/WHP пока нет.
+
+`GetEnvironmentVariableW`, `SetEnvironmentVariableW`, `GetEnvironmentStringsW`, `FreeEnvironmentStringsW`, `ExpandEnvironmentStringsW` используют текущий блок окружения гостя из параметров процесса PEB. Имена ASCII сравниваются без учёта регистра; значения представлены в UTF-16. Перед изменением проверяются входные данные, ёмкость и права записи. Снимки не зависят от последующих изменений и освобождают гостевую память. Модель ограничивает блок 64 KiB; строки и подстановка ограничены по размеру и проверяют срок выполнения. Неизвестная принадлежность указателей, некорректные блоки, кодовые страницы ANSI и перекрывающиеся буферы подстановки не поддерживаются. `WindowsEnvironmentTests.cpp` сравнивает оригинальные фикстуры x64/ARM64 на доступных бэкендах; CI требует независимый нативный оракул Windows.
 
 Виртуальная память Windows поддерживает `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` и `FlushInstructionCache` для текущего процесса. Уровень ОС управляет резервированием; `AddressSpace` остаётся единственным владельцем отображений подтверждённых страниц, прав доступа и физической памяти. Тесты проверяют изменение кода, ошибки доступа и повторное использование лимита памяти.
 

@@ -7,6 +7,7 @@ add_neverd_component_library(NeverDEmulationWindowsProcess
   WindowsProcessLifetime.cpp
   WindowsProcessLoader.cpp
   WindowsProcessEnvironment.cpp
+  WindowsProcessVariables.cpp
   WindowsProcessServices.cpp
   WindowsProcessMemory.cpp
   LINK_COMPONENTS Loader EmulationRuntime EmulationABI

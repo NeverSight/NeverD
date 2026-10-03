@@ -212,6 +212,15 @@ workloads executed. Evidence is in
 Darwin owner; it does not claim a new complete CPU gate for unrelated Windows
 process changes merged in the meantime.
 
+The later clean-source method run at
+`d5864c055116a687546320e4acf0788ef4a4e735` again passed all 39 ARM64 Darwin
+workloads (65 passed, 221 skipped), with all 286 CTest identities reconciled
+against original GoogleTest XML. The full twenty-owner run at that source
+passed 849 cases, failed none and skipped 5,993 across all 6,842 registrations.
+Its sixteen native requirements all passed. These runs include the subsequent
+Windows environment changes and explicitly record method-level process
+isolation. Evidence is in `build-hvf-native/hvf-method-clean-{full,darwin}-evidence/`.
+
 Earlier integration checks exercised all five platform/ISA combinations through
 the Python SDK. The packaged engine matched 18 no-Unicorn CLI reports across
 all three ARM64 profiles, and the bundle passed dependency/signature checks for

@@ -1,0 +1,161 @@
+//===- WindowsEnvironmentCases.def - Original environment observations ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_ENV_VALUE
+NEVERD_ENV_VALUE(ExitStatus, 37)
+NEVERD_ENV_VALUE(FailureStatus, 89)
+NEVERD_ENV_VALUE(LastErrorSeed, 0x345)
+NEVERD_ENV_VALUE(StdoutSelector, 0xfffffff5)
+NEVERD_ENV_VALUE(StderrSelector, 0xfffffff4)
+NEVERD_ENV_VALUE(TebPEB, 0x60)
+NEVERD_ENV_VALUE(PebParameters, 0x20)
+NEVERD_ENV_VALUE(ParamsEnvironment, 0x80)
+NEVERD_ENV_VALUE(BufferUnits, 256)
+NEVERD_ENV_VALUE(ModePrefix, '!')
+NEVERD_ENV_VALUE(NativeTimeoutSeconds, 10)
+NEVERD_ENV_VALUE(InstructionLimit, 500000)
+NEVERD_ENV_VALUE(RepeatCount, 80)
+NEVERD_ENV_VALUE(PageSize, 0x1000)
+NEVERD_ENV_VALUE(ReserveCommit, 0x3000)
+NEVERD_ENV_VALUE(ReadWrite, 4)
+NEVERD_ENV_VALUE(ReadOnly, 2)
+#endif
+#ifdef NEVERD_ENV_TEXT
+NEVERD_ENV_TEXT(ProgramFile, "environment.exe")
+NEVERD_ENV_TEXT(X64Dir, "X64")
+NEVERD_ENV_TEXT(AArch64Dir, "AArch64")
+NEVERD_ENV_TEXT(TempPrefix, "neverd-process-environment")
+NEVERD_ENV_TEXT(StdoutFile, "stdout.bin")
+NEVERD_ENV_TEXT(StderrFile, "stderr.bin")
+NEVERD_ENV_TEXT(NativeOnly, "requires native Windows x64")
+NEVERD_ENV_TEXT(MissingTools,
+                "requires Clang and lld-link environment fixtures")
+NEVERD_ENV_TEXT(ObservationLabel, "Environment observations: ")
+NEVERD_ENV_TEXT(InitialVariable, "NEVERD_ENV_INITIAL=initial")
+NEVERD_ENV_TEXT(BadPointer, "!P")
+NEVERD_ENV_TEXT(BadBlock, "!B")
+NEVERD_ENV_TEXT(BadOutput, "!O")
+NEVERD_ENV_TEXT(DoubleFree, "!D")
+NEVERD_ENV_TEXT(NonASCII, "!U")
+NEVERD_ENV_TEXT(Overlap, "!A")
+#endif
+#ifdef NEVERD_ENV_WIDE
+NEVERD_ENV_WIDE(Primary, u"NEVERD_ENV_CASE")
+NEVERD_ENV_WIDE(Lower, u"neverd_env_case")
+NEVERD_ENV_WIDE(Other, u"NEVERD_ENV_OTHER")
+NEVERD_ENV_WIDE(Absent, u"NEVERD_ENV_ABSENT")
+NEVERD_ENV_WIDE(Initial, u"NEVERD_ENV_INITIAL")
+NEVERD_ENV_WIDE(First, u"Alpha")
+NEVERD_ENV_WIDE(Second, u"\u6c34\xd83d\xde03")
+NEVERD_ENV_WIDE(Empty, u"")
+NEVERD_ENV_WIDE(Invalid, u"A=B")
+NEVERD_ENV_WIDE(UnicodeName, u"\u6c34")
+NEVERD_ENV_WIDE(Indirect, u"%NEVERD_ENV_CASE%")
+NEVERD_ENV_WIDE(
+    Expansion,
+    u"%neverd_env_case%/%NEVERD_ENV_OTHER%/%NEVERD_ENV_ABSENT%/%%/tail%")
+#endif
+#ifdef NEVERD_ENV_CASE
+NEVERD_ENV_CASE(Query, "!Q")
+NEVERD_ENV_CASE(Mutation, "!M")
+NEVERD_ENV_CASE(Expansion, "!E")
+NEVERD_ENV_CASE(Reclaim, "!R")
+NEVERD_ENV_CASE(Initial, "!I")
+#endif
+#ifdef NEVERD_ENV_API
+NEVERD_ENV_API(ExitProcess)
+NEVERD_ENV_API(GetCommandLineW)
+NEVERD_ENV_API(GetStdHandle)
+NEVERD_ENV_API(WriteFile)
+NEVERD_ENV_API(GetLastError)
+NEVERD_ENV_API(SetLastError)
+NEVERD_ENV_API(GetEnvironmentVariableW)
+NEVERD_ENV_API(SetEnvironmentVariableW)
+NEVERD_ENV_API(GetEnvironmentStringsW)
+NEVERD_ENV_API(FreeEnvironmentStringsW)
+NEVERD_ENV_API(ExpandEnvironmentStringsW)
+NEVERD_ENV_API(VirtualAlloc)
+NEVERD_ENV_API(VirtualProtect)
+#endif
+#ifdef NEVERD_ENV_BUILD
+NEVERD_ENV_BUILD(OutputDirectory, "windows-environment-fixtures")
+NEVERD_ENV_BUILD(X64Target, "x86_64-pc-windows-msvc")
+NEVERD_ENV_BUILD(AArch64Target, "aarch64-pc-windows-msvc")
+NEVERD_ENV_BUILD(X64Machine, "x64")
+NEVERD_ENV_BUILD(AArch64Machine, "arm64")
+NEVERD_ENV_BUILD(ProgramEntry, "entry")
+NEVERD_ENV_BUILD(ProgramBase, "0x140000000")
+NEVERD_ENV_BUILD(ProviderFile, "kernel32.dll")
+#endif
+#ifdef NEVERD_ENV_ASM
+#if defined(_M_X64) || defined(__x86_64__)
+NEVERD_ENV_ASM(ReadTEB, "movq %%gs:0x30, %0")
+#else
+NEVERD_ENV_ASM(ReadTEB, "mov %0, x18")
+#endif
+#endif
+
+#ifdef NEVERD_ENV_EXPECTED
+NEVERD_ENV_EXPECTED(
+    "!Q", "01000000450300000600000045030000060000004503000005000000450300004100"
+          "6C007000680061000000010000004503000001000000450300000000000045030000"
+          "0000010000004503000000000000CB00000001000000450300000000000057000000"
+          "000000005700000000000000CB00000000000000CB00000000000000CB000000")
+NEVERD_ENV_EXPECTED("!M",
+                    "41006C00700068006100000001000000346C3DD803DE0000346C3DD803"
+                    "DE0000346C3DD803DE000001000000450300000100000045030000")
+NEVERD_ENV_EXPECTED(
+    "!E", "35000000450300003500000045030000350000004503000041006C00700068006100"
+          "2F0025004E00450056004500520044005F0045004E0056005F004300410053004500"
+          "25002F0025004E00450056004500520044005F0045004E0056005F00410042005300"
+          "45004E00540025002F00250025002F007400610069006C0025000000010000004503"
+          "000000000400000045030000346C3DD803DE0000")
+NEVERD_ENV_EXPECTED("!R", "5200")
+NEVERD_ENV_EXPECTED("!I", "070000004503000069006E0069007400690061006C000000")
+#endif
+#ifdef NEVERD_ENV_VALUE
+NEVERD_ENV_VALUE(LimitedMemory, 0xc0000)
+NEVERD_ENV_VALUE(LimitedStack, 0x10000)
+#endif
+#ifdef NEVERD_ENV_TEXT
+NEVERD_ENV_TEXT(ReclaimArgument, "!R")
+#endif
+
+#ifdef NEVERD_ENV_MODE
+NEVERD_ENV_MODE(QueryMode, 'Q')
+NEVERD_ENV_MODE(MutationMode, 'M')
+NEVERD_ENV_MODE(ExpansionMode, 'E')
+NEVERD_ENV_MODE(ReclaimMode, 'R')
+NEVERD_ENV_MODE(InitialMode, 'I')
+NEVERD_ENV_MODE(BadPointerMode, 'P')
+NEVERD_ENV_MODE(BadBlockMode, 'B')
+NEVERD_ENV_MODE(BadOutputMode, 'O')
+NEVERD_ENV_MODE(DoubleFreeMode, 'D')
+NEVERD_ENV_MODE(NonASCIIMode, 'U')
+NEVERD_ENV_MODE(OverlapMode, 'A')
+#endif
+
+#ifdef NEVERD_ENV_VALUE
+NEVERD_ENV_VALUE(DirectValueUnits, 32000)
+NEVERD_ENV_VALUE(DirectTailUnits, 1000)
+NEVERD_ENV_VALUE(ScratchSize, 0x20000)
+NEVERD_ENV_VALUE(DirectGrowthUnits, 6000)
+NEVERD_ENV_VALUE(DirectOversizeUnits, 32766)
+#endif
+#ifdef NEVERD_ENV_WIDE
+NEVERD_ENV_WIDE(DirectName, u"NEVERD_ENV_GROWTH")
+NEVERD_ENV_WIDE(DirectExpansion, u"%NEVERD_ENV_GROWTH%")
+#endif
+
+#ifdef NEVERD_ENV_TEXT
+NEVERD_ENV_TEXT(NullSet, "!N")
+NEVERD_ENV_TEXT(ExceptionLabel, "Environment exception: ")
+#endif
+#ifdef NEVERD_ENV_MODE
+NEVERD_ENV_MODE(NullSetMode, 'N')
+#endif
+#ifdef NEVERD_ENV_VALUE
+NEVERD_ENV_VALUE(AccessViolationStatus, 0xc0000005)
+#endif

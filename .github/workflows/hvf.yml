@@ -14,7 +14,7 @@ on:
         default: full
         options: [full, darwin, transport, probe]
       test_parallel:
-        description: Concurrent test processes (compilation remains parallel)
+        description: CTest concurrency (hosted Intel full/Darwin methods are serial)
         type: choice
         default: '4'
         options: ['4', '1']
@@ -34,6 +34,9 @@ jobs:
       HVF_TEST_PARALLEL: ${{ inputs.test_parallel || '4' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify native evidence collection contracts
+        if: inputs.validation != 'probe'
+        run: python3 -m unittest scripts.tests.test_run_native_cpu_ci scripts.tests.test_run_native_cpu_methods -q
       - name: Require native VM and vCPU availability before the transport gate
         shell: bash
         env:
@@ -196,14 +199,28 @@ jobs:
           if-no-files-found: warn
       - name: Require actual host execution and record every result
         if: inputs.validation == 'full'
+        env:
+          HVF_EXECUTION_METHODS: ${{ inputs.runner == 'hosted-intel' && '--execution-methods' || '' }}
         run: >-
           python3 scripts/run_native_cpu_ci.py --build build-hvf
           --evidence build-hvf/native-evidence --parallel "$HVF_TEST_PARALLEL" --require-hvf
+          $HVF_EXECUTION_METHODS
+      - name: Preserve CPU evidence before the Darwin workload gate
+        if: always() && inputs.validation == 'full'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hvf-cpu-${{ matrix.arch }}-attempt-${{ github.run_attempt }}
+          path: build-hvf/native-evidence/
+          if-no-files-found: warn
       - name: Require every native Darwin workload
         if: inputs.validation == 'full' || inputs.validation == 'darwin'
+        env:
+          HVF_EXECUTION_METHODS: ${{ inputs.runner == 'hosted-intel' && '--execution-methods' || '' }}
         run: >-
           python3 scripts/run_native_cpu_ci.py --build build-hvf
           --evidence build-hvf/darwin-evidence --parallel "$HVF_TEST_PARALLEL" --require-darwin-backend hvf
+          $HVF_EXECUTION_METHODS
       - name: Preserve hardware evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

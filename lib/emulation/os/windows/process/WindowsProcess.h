@@ -93,6 +93,7 @@ struct ImageReadBudget {
 };
 struct Environment {
   uint64_t CommandLine;
+  uint64_t Variables = 0;
   std::u16string ImageName;
   uint64_t StringCursor = 0;
   std::map<size_t, uint64_t> ModuleNames;
@@ -143,6 +144,10 @@ private:
   llvm::Expected<bool> access(uint64_t Address, uint64_t Size, unsigned Rights);
   llvm::Expected<std::optional<uint64_t>> heap(const Service &,
                                                const NativeCallEvent &);
+  llvm::Expected<std::optional<uint64_t>> environment(const Service &,
+                                                      const NativeCallEvent &);
+  llvm::Expected<std::u16string> readWide(uint64_t Address, uint64_t Limit);
+  llvm::Error writeWide(uint64_t Address, const std::u16string &Text);
   llvm::Expected<std::optional<uint64_t>> memory(const Service &,
                                                  const NativeCallEvent &);
   ExecutionBackend &CPU;
@@ -157,7 +162,9 @@ private:
   std::bitset<value::DynamicTLSCount> TLSSlots;
   struct Allocation {
     uint64_t Size, MappedSize;
+    bool EnvironmentSnapshot = false;
   };
+  llvm::Expected<uint64_t> allocateHeap(uint64_t Size, bool Snapshot = false);
   std::map<uint64_t, Allocation> Allocations;
 };
 } // namespace neverd::emulation::windows_process

@@ -599,3 +599,23 @@ NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "ExplicitBackends/WindowsDynamic.SharedBudgetsDoNotCompleteSuspendedCalls/"
     "WhpX64")
 #endif
+
+#ifdef NEVERD_NATIVE_CPU_REQUIRED_TEST
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "WindowsEnvironmentNative.RunsOriginalEnvironmentExecutable")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/WindowsEnvironment.ExecutesOriginalEnvironmentScenarios/WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/"
+    "WindowsEnvironment.RejectsInvalidStatePointersAndUnsupportedSemantics/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/WindowsEnvironment.SnapshotReleaseReclaimsLimitedGuestMemory/"
+    "WhpX64")
+#endif
+
+#ifdef NEVERD_NATIVE_CPU_REQUIRED_TEST
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/WindowsEnvironment.ValidatesUpdatesBeforePublishingGuestBytes/"
+    "WhpX64")
+#endif

@@ -64,7 +64,8 @@ class NativeCPUEvidenceTests(unittest.TestCase):
         })
 
     def run_evidence(self, with_drivers=False, require_hvf=False,
-                     host_architecture="arm64", darwin_backend=None, hvf_transport_only=False):
+                     host_architecture="arm64", darwin_backend=None, hvf_transport_only=False,
+                     execution_methods=False):
         with (
             mock.patch.object(native, "ROOT", self.root),
             mock.patch.object(native.platform, "machine", return_value=host_architecture),
@@ -79,6 +80,7 @@ class NativeCPUEvidenceTests(unittest.TestCase):
                 with_drivers=with_drivers, require_hvf=require_hvf,
                 darwin_backend=darwin_backend,
                 hvf_transport_only=hvf_transport_only,
+                execution_methods=execution_methods,
             )
 
     def add_drivers(self):
@@ -128,6 +130,22 @@ class NativeCPUEvidenceTests(unittest.TestCase):
         self.assertEqual(self.run_evidence(), 0)
         self.assertEqual(self.summary()["owners"], ["Owner"])
         self.assertFalse(self.summary()["with_drivers"])
+
+    def test_method_execution_uses_the_same_missing_and_native_skip_gate(self):
+        from scripts.audit_ci_test_results import TestOutcome
+        for reported, outcome, child_status, expected in (
+            (self.records, "passed", 0, 0),
+            (self.records[:-1], "passed", 0, 1),
+            (self.records, "skipped", 0, 1),
+            (self.records, "passed", 1, 1),
+        ):
+            cases = [TestOutcome(record, outcome) for record in reported]
+            with self.subTest(outcome=outcome, count=len(reported), status=child_status), \
+                    mock.patch.object(native, "run_methods", return_value=(cases, child_status)):
+                self.assertEqual(self.run_evidence(execution_methods=True), expected)
+                self.assertEqual(self.summary()["execution"], "gtest-methods")
+                self.assertEqual(self.summary()["parallel"], 1)
+                self.assertIsNone(self.summary()["ctest_status"])
 
     def test_bounded_native_observations_are_retained_for_both_outcomes(self):
         self.assertEqual(self.run_evidence(), 0)

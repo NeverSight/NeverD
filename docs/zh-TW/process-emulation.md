@@ -107,6 +107,8 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 
 `WindowsProcessLoader` 從 `windows.modules` 載入 ASCII DLL 基底名稱，統一管理明確參考、共用相依與啟動模組保留。重複查詢轉送匯出不會增加額外參考。模組目錄槽位在重新載入時使用新的駐留世代。TLS 與 `DllMain` 在同一 CPU 上、暫停 API 的堆疊框架下方執行；還原暫存器保留客體記憶體寫入，並使用即時返回位址。動態附加／分離的保留指標為零。顯式載入期間的附加失敗在清理後回傳錯誤 1114，並保留已成功的獨立巢狀載入。卸載釋放映像映射與 TLS，重新載入恢復原始映像內容。模型之外對載入器串列或 TLS 指標的修改會明確失敗。失敗與重新載入皆不會重設檔案、映像及中繼資料工作額度。API 提供者沒有虛構 DLL 控制代碼。檔案系統搜尋、非 ASCII 路徑、`LoadLibraryEx` 旗標、循環匯入及正在初始化或卸載之同一模組的重入轉換仍不支援。
 
+`GetEnvironmentVariableW`, `SetEnvironmentVariableW`, `GetEnvironmentStringsW`, `FreeEnvironmentStringsW`, `ExpandEnvironmentStringsW` 共用 PEB 程序參數中的即時客體環境區塊。名稱限 ASCII 且忽略大小寫，值為 UTF-16。修改前驗證輸入、容量及可寫記憶體。快照不受後續修改影響，釋放時回收客體記憶體。模型的環境區塊上限為 64 KiB；字串與展開操作有明確邊界並檢查工作負載期限。未知指標歸屬、格式錯誤的環境區塊、ANSI 字碼頁及展開緩衝區重疊仍不支援。`WindowsEnvironmentTests.cpp` 在可用後端比較原創 x64/ARM64 範例，CI 必須執行獨立的原生 Windows 對照。
+
 動態卸載回呼開始前，模組已退出初始化串列；其映射、名稱查詢及載入／記憶體串列成員身分在回呼期間仍然有效。入口返回的原生對照單獨觀察初始執行緒，不將系統工作執行緒的存活時間當作入口返回時間。
 
 `WindowsDynamicTests.cpp` 使用原始 x64/ARM64 DLL 與 EXE，比對獨立原生 Windows 觀測，涵蓋參考計數、共用相依、巢狀載入、附加失敗清理、轉送查詢、程序退出、無入口 DLL 及重新載入時的 TLS 初始化。額外回歸拒絕遭修改的載入器中繼資料與失效程式碼指標，保持累計準備額度，並確保中斷 API 的結果仍未完成。Windows CI 強制執行原生對照與 WHP 案例；交叉編譯及 Unicorn ARM64 不代表原生 ARM64 執行驗證。

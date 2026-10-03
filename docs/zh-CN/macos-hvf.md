@@ -141,8 +141,8 @@ Intel 工作流还会在完整依赖构建前构建 `NeverDX64ExceptionTests`，
 完整异常/状态套件由最终 CPU 门禁执行，前置不再重复整组检查。
 transport 结果与状态测试清单在执行前上传，CR8 独立结果在完整 CPU 门禁前另行保存；
 产物名称包含运行次数，重跑会保留各次证据。
-完整目标构建有独立步骤和日志；`test_parallel` 默认使用 4 个测试进程，也可选择 1
-做串行对照，编译仍并行进行。结果摘要记录实际选择的并发数、宿主 OS/内核描述和逻辑 CPU 数。
+完整目标构建有独立步骤和日志；`test_parallel` 为 CTest 默认选择 4 个进程，也可选择 1。
+托管 Intel 的完整 CPU/Darwin 方法级执行固定串行，编译仍并行进行。结果摘要记录实际选择的并发数、宿主 OS/内核描述和逻辑 CPU 数。
 
 干净源码 `e2a91ff057df563eb19183a045a3ad6446cb9af1` 的
 [Intel 检查点任务](https://github.com/NeverSight/NeverD/actions/runs/37090528761)
@@ -172,10 +172,36 @@ TLS/权限、CR8、取消，以及宿主修改、故障和停止前后的完整 
 这只能证明编译成功，不能作为完整 CPU 验收。
 另由 `4cbb729389df9485c9a9699c63c0be3a48862794` 的
 [独立 Darwin 门禁](https://github.com/NeverSight/NeverD/actions/runs/37097301977)
-要求 Intel 的全部 26 个原生工作负载通过。另有临时
-[逐目标诊断](https://github.com/NeverSight/NeverD/actions/runs/37098336208)，
-每个完整 CPU 目标结束后立即保存清单、CTest 退出码和 XML，再继续下一组。
-两轮均为串行测试，模拟实现和测试与上述专项一致；目前尚未回传完整验收结果。
+最终收到 GitHub 明确的 runner 失联报告；transport 和构建产物已验证，但没有最终执行日志，
+不能据此判断根因或宣称 Darwin 验收通过。
+[逐目标诊断](https://github.com/NeverSight/NeverD/actions/runs/37098336208)在 FP 阶段不再返回结果后取消。
+
+随后干净源码 `3e01cda5c43908506bdb112ddacda02525854a9f` 的
+[浮点方法级专项](https://github.com/NeverSight/NeverD/actions/runs/37101437752)
+完整覆盖 71 个注册用例：35 通过、0 失败、36 跳过。12 个 HVF 原生项全部通过，
+涵盖全部物理浮点状态、每种 TOP、逻辑 CPU 切换和实际初始化探针。
+宿主标准 XRSTOR 通过；该 runner 不支持紧凑 XRSTOR。产物 SHA-256 与原始 XML 清单均已核对。
+这证明整个浮点目标通过，不能代替其余 19 个 CPU 目标。
+
+托管 Intel 的完整及 Darwin 验收现使用 `--execution-methods`：从 CTest 读取所有注册命令和身份，
+每个 GoogleTest 方法以独立进程执行全部参数，保留标志、环境和工作目录；遇到未知 CTest 属性直接失败。
+每个方法的总时限不超过 120 秒，超时后对进程组作有界回收；方法内不再分别应用逐参数的 CTest 时限。
+保留原始 XML、日志、进程状态及 CTest 名称映射，继续强制检查原生必需项、漏跑和重复结果。
+摘要明确记录 `execution=gtest-methods` 和串行执行，不冒充 CTest 执行结果。
+自托管验收继续使用 CTest 的逐用例进程及时限；临时诊断工作流和脚本已移除。
+
+干净源码 `d5864c055116a687546320e4acf0788ef4a4e735` 已进一步通过当前 ARM64
+完整清单：包含最新 Windows 进程环境改动，20 个目标共 6,842 项，849 通过、
+0 失败、5,993 跳过，16 个必需项全部通过。Darwin 独立清单为 65 通过、221 跳过，
+39 个原生工作负载全通过。证据保留于 `build-hvf-native/hvf-method-clean-full-evidence/`
+及 `build-hvf-native/hvf-method-clean-darwin-evidence/`。
+[当前 Intel 完整任务](https://github.com/NeverSight/NeverD/actions/runs/37103182936)
+使用相同源码，仍待结果。
+
+该验收工具的 67 项检查通过。提交前 ARM64 已跑完当前 20 个目标、6,809 个注册用例：
+845 通过、0 失败、5,964 跳过，16 个原生必需项全部通过；独立 Darwin 验收 65 通过、221 跳过，
+39 个原生工作负载全部通过。这些提交前产物如实标记为工作树有修改，干净源码复跑结果另行记录。
+
 
 同步后续 `dev` 改动后，干净源码 `f4bf8dde5cbc33d18ce053cb0722a54047e5a2d0`
 再次通过 ARM64 transport 全部 12 项，无跳过；独立 Darwin 门禁 65 项通过、0 失败、
