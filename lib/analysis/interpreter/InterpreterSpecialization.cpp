@@ -3273,6 +3273,7 @@ void Specializer::refineFailureGuards() {
       Predecessors[Next].push_back(static_cast<int>(I));
     }
   std::set<std::pair<va_t, InstructionMode>> Guards;
+  bool SawReachableGuard = false;
   std::vector<bool> Seen(Nodes.size(), false);
   std::vector<int> Frontier{FailureNode};
   Seen[FailureNode] = true;
@@ -3286,6 +3287,7 @@ void Specializer::refineFailureGuards() {
           continue;
         Seen[Parent] = true;
         const auto &Cursor = Nodes[Parent].Key.Cursor;
+        SawReachableGuard |= Nodes[Parent].ConditionalGuard;
         if (Nodes[Parent].ConditionalGuard &&
             RefinableGuards.count({Cursor.Address, Cursor.Mode}))
           Guards.emplace(Nodes[Parent].Key.Cursor.Address,
@@ -3298,7 +3300,10 @@ void Specializer::refineFailureGuards() {
   std::erase_if(Refinement.DeferredGuardDemands, [&](const auto &Entry) {
     return !Guards.count({std::get<0>(Entry.first), std::get<1>(Entry.first)});
   });
-  Refinement.PrecisionFailure |= !Refinement.DeferredGuardDemands.empty();
+  // Exhausting guard nominations does not settle the failure. Other deferred
+  // producers or register-case refinement may still recover the relation.
+  // Preserve that eligibility while allowing the guard search to move outwards.
+  Refinement.PrecisionFailure |= SawReachableGuard;
 }
 
 SpecializationResult Specializer::run() {

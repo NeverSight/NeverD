@@ -1460,6 +1460,28 @@ TEST(NativeStackSpecialization, FiniteDispatchDoesNotHideOuterGuardRefinement) {
   }
 }
 
+TEST(NativeStackSpecialization, ExhaustedGuardKeepsDeferredProducerRefinement) {
+  auto P = finiteDispatchDecoder(false);
+  // The next phase is one for every input, but the cancellation crosses a
+  // projection. Once the phase guard's own demands are exhausted, a finite
+  // producer still needs its independent input bit to retain the relation.
+  P.add(0x400, {operation(NdOp::INT_AND, r(16), {r(8), c(1)}), branch(0x450)});
+  P.add(0x450, {operation(NdOp::INT_AND, r(56), {r(8), c(1)}),
+                operation(NdOp::INT_XOR, r(16), {r(16), r(56)}),
+                operation(NdOp::INT_ADD, r(16), {r(16), c(1)}), branch(0x200)});
+  auto O = stackOptions();
+  O.ControlRegisters = {{16, 8}};
+  O.DiscoverControlState = true;
+  const auto R = specializeInterpreter(P, {0x100}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{42}, UINT64_MAX}) {
+    const auto Run = execute(R.Residual, Input);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, Input + 17);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+  }
+}
+
 TEST(NativeStackSpecialization,
      RefinesGuardsBeforeRejectingAnUnresolvedTarget) {
   auto P = guardedDecoder(false);
