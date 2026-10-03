@@ -20,6 +20,7 @@
 #include "llvm/IR/Operator.h"
 
 #include <algorithm>
+#include <map>
 #include <optional>
 
 namespace neverd {
@@ -105,6 +106,215 @@ bool needsSnapshot(llvm::Value *Value, llvm::StoreInst *Store) {
   if (!llvm::isa<llvm::ConstantInt, llvm::Argument, llvm::FreezeInst>(Value))
     return true;
   return !llvm::isGuaranteedNotToBeUndefOrPoison(Value, nullptr, Store);
+}
+
+struct NumericAddress {
+  llvm::Value *Root;
+  llvm::APInt Offset;
+};
+
+std::optional<NumericAddress>
+numericAddress(llvm::Value *Pointer, const llvm::DataLayout &DL,
+               const ByteMemoryForwardingOptions &Options,
+               ByteMemoryForwardingResult &Result) {
+  if (Pointer->getType()->getPointerAddressSpace() != 0 ||
+      DL.isNonIntegralPointerType(Pointer->getType()))
+    return std::nullopt;
+  const unsigned Width = DL.getPointerSizeInBits(0);
+  if ((Width != 32 && Width != 64) || Width != DL.getIndexSizeInBits(0))
+    return std::nullopt;
+  llvm::APInt Offset(Width, 0);
+  for (;;) {
+    if (!charge(Result.AddressSteps, 1, Options.MaxAddressSteps, Result))
+      return std::nullopt;
+    auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Pointer);
+    if (!GEP)
+      break;
+    if (!charge(Result.AddressSteps, GEP->getNumIndices(),
+                Options.MaxAddressSteps, Result))
+      return std::nullopt;
+    llvm::APInt Delta(Width, 0);
+    if (!GEP->accumulateConstantOffset(DL, Delta))
+      return std::nullopt;
+    Offset += Delta;
+    Pointer = GEP->getPointerOperand();
+  }
+  auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Pointer);
+  if (!Cast || !Cast->getOperand(0)->getType()->isIntegerTy(Width))
+    return std::nullopt;
+  llvm::Value *Value = Cast->getOperand(0);
+  for (;;) {
+    if (!charge(Result.AddressSteps, 1, Options.MaxAddressSteps, Result))
+      return std::nullopt;
+    auto *Binary = llvm::dyn_cast<llvm::BinaryOperator>(Value);
+    if (Binary && (Binary->getOpcode() == llvm::Instruction::Add ||
+                   Binary->getOpcode() == llvm::Instruction::Sub)) {
+      llvm::Value *Next = Binary->getOperand(0);
+      auto *Constant = llvm::dyn_cast<llvm::ConstantInt>(Binary->getOperand(1));
+      if (!Constant && Binary->getOpcode() == llvm::Instruction::Add) {
+        Constant = llvm::dyn_cast<llvm::ConstantInt>(Next);
+        Next = Binary->getOperand(1);
+      }
+      if (Constant) {
+        Offset += Binary->getOpcode() == llvm::Instruction::Add
+                      ? Constant->getValue()
+                      : -Constant->getValue();
+        Value = Next;
+        continue;
+      }
+    }
+    // Preserve every other operation as an exact SSA root. In particular,
+    // never strip masks, truncation, extension or address-space casts.
+    return NumericAddress{Value, std::move(Offset)};
+  }
+}
+
+// Two scans keep forwarding facts separate from dead-store candidates. The
+// second scan sees only the reads that really survived the first scan,
+// including reads retained because of a budget or unsupported coercion.
+bool simplifyNumericMemory(llvm::Function &F,
+                           const ByteMemoryForwardingOptions &Options,
+                           ByteMemoryForwardingResult &Result, bool Delete) {
+  const auto &DL = F.getParent()->getDataLayout();
+  for (auto &BB : F) {
+    llvm::Value *Root = nullptr;
+    // Every modular offset is valid, including DenseMap's integral sentinel
+    // keys (-1 and -2). An ordered map keeps these addresses distinct.
+    std::map<uint64_t, StoredByte> Bytes;
+    const auto Clear = [&] {
+      Root = nullptr;
+      Bytes.clear();
+    };
+    const auto Step = [&](uint64_t Count = 1) {
+      return charge(Result.MemorySteps, Count, Options.MaxMemorySteps, Result);
+    };
+    for (auto It = BB.begin(); It != BB.end();) {
+      llvm::Instruction *I = &*It++;
+      if (!charge(Result.Instructions, 1, Options.MaxInstructions, Result))
+        return false;
+      auto *Store = llvm::dyn_cast<llvm::StoreInst>(I);
+      auto *Load = llvm::dyn_cast<llvm::LoadInst>(I);
+      if (!Store && (!Load || Delete)) {
+        if (llvm::isa<llvm::CallBase, llvm::FenceInst>(I) || I->mayThrow() ||
+            I->mayWriteToMemory() || (Delete && I->mayReadFromMemory()))
+          Clear();
+        continue;
+      }
+      auto Width = scalarBytes(Store ? Store->getValueOperand()->getType()
+                                     : Load->getType());
+      if (!Width || (Store && !Store->isSimple()) ||
+          (Load && !Load->isSimple())) {
+        if (Store || (Load && !Load->isSimple()))
+          Clear();
+        continue;
+      }
+      auto A = numericAddress(Store ? Store->getPointerOperand()
+                                    : Load->getPointerOperand(),
+                              DL, Options, Result);
+      if (Result.BudgetExhausted)
+        return false;
+      if (!A) {
+        if (Store)
+          Clear();
+        continue;
+      }
+      const auto Offset = [&](unsigned Index) {
+        return (A->Offset + Index).getZExtValue();
+      };
+      if (Store) {
+        // Different roots, including numeric vs alloca pointers, are MayAlias.
+        if (Root != A->Root)
+          Clear();
+        Root = A->Root;
+        llvm::SmallPtrSet<llvm::StoreInst *, 16> Seen;
+        for (unsigned J = 0; J != *Width; ++J) {
+          if (!Step())
+            return false;
+          auto At = Bytes.find(Offset(J));
+          if (!Delete || At == Bytes.end())
+            continue;
+          const StoredByte Old = At->second;
+          if (!Seen.insert(Old.Writer).second)
+            continue;
+          const unsigned OldWidth =
+              *scalarBytes(Old.Writer->getValueOperand()->getType());
+          const llvm::APInt Start = A->Offset + J - Old.Index;
+          const llvm::APInt Delta = Start - A->Offset;
+          if (OldWidth > *Width || Delta.ugt(*Width - OldWidth))
+            continue;
+          // At most sixteen cached bytes belong to any one writer. Charge
+          // each lookup, including those already replaced by another store.
+          for (unsigned K = 0; K != OldWidth; ++K) {
+            if (!Step())
+              return false;
+            auto Part = Bytes.find((Start + K).getZExtValue());
+            if (Part != Bytes.end() && Part->second.Writer == Old.Writer)
+              Bytes.erase(Part);
+          }
+          Old.Writer->eraseFromParent();
+          ++Result.RemovedStores;
+        }
+        for (unsigned J = 0; J != *Width; ++J) {
+          if (!Step())
+            return false;
+          const uint64_t Key = Offset(J);
+          if (!Bytes.contains(Key) && Bytes.size() >= Options.MaxTrackedBytes) {
+            Result.BudgetExhausted = true;
+            return false;
+          }
+          Bytes[Key] = {Store, J};
+        }
+        Result.PeakTrackedBytes =
+            std::max(Result.PeakTrackedBytes, uint64_t(Bytes.size()));
+        continue;
+      }
+      if (Root != A->Root)
+        continue;
+      std::optional<StoredByte> First;
+      bool Complete = true;
+      for (unsigned J = 0; J != *Width; ++J) {
+        if (!Step())
+          return false;
+        auto At = Bytes.find(Offset(J));
+        if (At == Bytes.end() ||
+            (First && (At->second.Writer != First->Writer ||
+                       At->second.Index != First->Index + J))) {
+          Complete = false;
+          break;
+        }
+        if (!First)
+          First = At->second;
+      }
+      if (!Complete)
+        continue;
+      llvm::Value *Value = First->Writer->getValueOperand();
+      const unsigned StoredWidth = *scalarBytes(Value->getType());
+      const unsigned Shift =
+          8 * (DL.isLittleEndian() ? First->Index
+                                   : StoredWidth - *Width - First->Index);
+      for (const llvm::Use &Use : Load->uses()) {
+        (void)Use;
+        if (!charge(Result.UseSteps, 2, Options.MaxUseSteps, Result))
+          return false;
+      }
+      if (!charge(Result.NewInstructions,
+                  unsigned(Shift != 0) +
+                      unsigned(Value->getType() != Load->getType()),
+                  Options.MaxNewInstructions, Result))
+        return false;
+      // One writer, used once: ordinary LLVM store-to-load coercion. No
+      // byte composition and no additional choices of undef/poison values.
+      llvm::IRBuilder<llvm::NoFolder> Builder(Load);
+      if (Shift)
+        Value = Builder.CreateLShr(Value, Shift);
+      if (Value->getType() != Load->getType())
+        Value = Builder.CreateTrunc(Value, Load->getType());
+      Load->replaceAllUsesWith(Value);
+      Load->eraseFromParent();
+      ++Result.ForwardedLoads;
+    }
+  }
+  return true;
 }
 
 } // namespace
@@ -237,14 +447,19 @@ ByteMemoryForwardingPass::forward(llvm::Function &F,
       ++Result.ForwardedLoads;
     }
   }
+  if (Options.SimplifyNumericMemory && !Result.BudgetExhausted &&
+      simplifyNumericMemory(F, Options, Result, false))
+    simplifyNumericMemory(F, Options, Result, true);
   return Result;
 }
 
 llvm::PreservedAnalyses
 ByteMemoryForwardingPass::run(llvm::Function &F,
                               llvm::FunctionAnalysisManager &) {
-  return forward(F, Options).ForwardedLoads ? llvm::PreservedAnalyses::none()
-                                            : llvm::PreservedAnalyses::all();
+  const auto Result = forward(F, Options);
+  return Result.ForwardedLoads || Result.RemovedStores
+             ? llvm::PreservedAnalyses::none()
+             : llvm::PreservedAnalyses::all();
 }
 
 } // namespace neverd

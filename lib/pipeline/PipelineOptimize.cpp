@@ -114,6 +114,9 @@ SemanticFixedPointPass::run(llvm::Function &F,
                             llvm::FunctionAnalysisManager &FAM) {
   llvm::FunctionPassManager Canonicalize;
   Canonicalize.addPass(llvm::InstCombinePass());
+  ByteMemoryForwardingOptions MemoryOptions;
+  MemoryOptions.SimplifyNumericMemory = true;
+  Canonicalize.addPass(ByteMemoryForwardingPass(MemoryOptions));
 
   FunctionOptimizationResult Result = driveSemanticConvergence(
       MaxRounds,
