@@ -84,7 +84,7 @@ x64 的 `arch_prctl` 支持 `ARCH_SET_FS`、`ARCH_GET_FS`、`ARCH_SET_GS` 和 `A
 
 ## Windows PE64 配置
 
-`windows-pe64-v1` 支持有界 Windows x64/ARM64 控制台进程，包括 PEB/TEB、模块 TLS 和启动 `DllMain`、具名 Win32 API 和显式无环启动 DLL 图。客户 DLL 支持按名称／序号导入代码及数据、DIR64 重定位和真实加载器链表身份。动态加载、CRT／GUI、用户态 SEH 和线程仍待完成；原生 ARM64 KVM/WHP 证据仍缺失。 支持有界转发导出，以及针对已驻留客户映像的 `GetProcAddress`。
+`windows-pe64-v1` 支持有界 Windows x64/ARM64 控制台进程，包括 PEB/TEB、静态和动态 TLS、`DllMain`、具名 Win32 API 和显式无环 DLL 图。客户模块支持按名称／序号导入代码及数据、DIR64 重定位、转发导出和真实加载器链表身份。`LoadLibraryA`／`LoadLibraryW`、`FreeLibrary` 和 `GetProcAddress` 使用配置的模块目录。CRT／GUI、用户态 SEH、线程和通用 Windows 应用兼容性仍待完成；原生 ARM64 KVM/WHP 证据仍缺失。
 
 Windows 虚拟内存新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` 及当前进程的 `FlushInstructionCache`。OS 层管理预留区域，`AddressSpace` 统一管理已提交页面、权限和物理存储。测试覆盖动态代码改写、访问故障和内存额度回收。
 
@@ -99,7 +99,7 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
   --options='{"backend":"auto","arguments":["guest.exe","argument"],"environment":["MODE=test"]}'
 ```
 
-单线程配置将 PE32+ EXE 保持在首选基址，接收可带入口及静态 TLS 的显式 DLL。`WindowsProcessOptions::Modules` 或 JSON `windows.modules` 通过 `name`、`path` 提供最多 64 个客户模块基本名及主机输入路径，不搜索或执行主机 DLL。ASCII 名称不区分大小写；重复名称和覆盖系统 API 提供方均拒绝，只读取可达文件。按名称／序号导入的函数和数据绑定实际映射导出；导出空洞、缺失符号、循环、绑定／延迟导入和未支持的加载配置／CFG 明确失败。可重定位 DLL 遇到地址冲突时应用 DIR64；固定地址冲突和写入链接元数据的重定位在创建 CPU 前失败。
+单线程配置将 PE32+ EXE 保持在首选基址，接收可带入口及静态 TLS 的显式 DLL。`WindowsProcessOptions::Modules` 或 JSON `windows.modules` 通过 `name`、`path` 提供最多 64 个客户模块基本名及主机输入路径，不搜索或执行主机 DLL。ASCII 名称不区分大小写；重复名称和覆盖系统 API 提供方均拒绝，只读取可达文件。按名称／序号导入的函数和数据绑定实际映射导出；导出空洞、缺失符号、循环、绑定／延迟导入和未支持的加载配置／CFG 明确失败。可重定位 DLL 遇到地址冲突时应用 DIR64；固定地址冲突和写入链接元数据的重定位在发布受影响映像前失败。
 
 `readPEProgramExports` 拥有原始导出身份及有界元数据读取范围；`WindowsProcessModules` 拥有客户模块图和进程统一的精确提供方／名称 API 跳板。`VirtualMemory` 在映射前登记所有映像，`AddressSpace` 管理页面及权限。PEB/LDR 仅列出真实映像，初始化链表保留加载器登记顺序，并与按依赖计算的挂接调用顺序分别维护。`GetModuleHandleW` 接受 NULL 或 ASCII 基本名，不区分大小写，无扩展名时补 `.dll`；路径、非 ASCII 查询及末尾点规则仍不支持。名称缺失返回错误 126，成功保持 LastError。API 模型不等同于已安装的系统 DLL。
 
@@ -107,7 +107,15 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 
 `WindowsProcessLifetime` 在同一个 CPU 和执行预算下，按依赖顺序执行 DLL TLS 回调及 `DllMain`，随后执行 EXE TLS 和入口。每个模块都有独立 TLS 索引及对齐的数据块，从完成重定位和导入绑定的映像复制，共享 64 KiB 空间。TLS 保留参数为零，启动／进程退出的 `DllMain` 接收不透明非空值。显式进程退出按加载器链表的逆序分离已完成初始化的 DLL，再执行 EXE TLS 退出回调，即使 EXE 初始化尚未运行。启动 `DllMain(FALSE)` 以 `0xc0000142` 退出，不发送分离通知。故障和预算耗尽不伪造清理。带客户 DLL 的 PE 入口返回涉及尚未支持的线程终止，明确停止。非零 `SizeOfZeroFill` 仍不支持；实际 TLS 模板中的零初始化字节受支持。 无入口 DLL 接收 TLS 挂接通知，但不接收进程分离通知。
 
-`WindowsProcessExports` 为静态导入和 `GetProcAddress` 共用名称／序号解析，覆盖代码、数据、别名及链式转发。只有实际引用的启动转发才引入目录中的模块和初始化依赖，未使用的转发不加载文件。运行时可查询已驻留映像，包括在 `DllMain` 内；需要加载其他模块时明确停止。导出名称区分大小写；名称缺失返回 NULL／错误 127，直接查询缺失序号（包括空洞）返回 NULL／错误 182，查询参数为空指针返回错误 87，成功保留 LastError。未知模块句柄仍不支持。有界 API 清单按精确提供方／名称一次性保留调用入口。解析检查每个查询映像的实时 PE 头和导出元数据，拒绝修改或不可读字节，转发链最多 64 项，并共享准备阶段剩余的元数据额度及执行截止时间。这不包含 `LoadLibrary`／`FreeLibrary` 或实时改写导出表。 转发到空洞时返回目标映像基址并保留 LastError；转发到零序号返回错误 87。返回基址是数据地址，不授予映像头执行权限。
+`WindowsProcessExports` 为静态导入和 `GetProcAddress` 共用名称／序号解析，覆盖代码、数据、别名及链式转发。 只有实际引用的启动转发才引入目录中的模块和初始化依赖，未使用的转发不加载文件。 导出名称区分大小写；名称缺失返回 NULL／错误 127，直接查询缺失序号（包括空洞）返回 NULL／错误 182，查询参数为空指针返回错误 87，成功保留 LastError。 未知模块句柄仍不支持。 有界 API 清单按精确提供方／名称一次性保留调用入口。 解析检查每个查询映像的实时 PE 头和导出元数据，拒绝修改或不可读字节，转发链最多 64 项，并共享准备阶段剩余的元数据额度及执行截止时间。 转发到空洞时返回目标映像基址并保留 LastError；转发到零序号返回错误 87。 返回基址是数据地址，不授予映像头执行权限。 运行时转发可以加载配置目录中的模块，并在返回查询结果前完成初始化。仍不支持实时改写导出表。
+
+`WindowsProcessLoader` 从 `windows.modules` 加载 ASCII DLL 基名，统一管理显式引用、共享依赖和启动模块保留。重复查询转发导出不会增加额外引用。模块目录槽位在重载时使用新的驻留代次。TLS 和 `DllMain` 在同一 CPU 上、被暂停 API 的栈帧下方执行；恢复寄存器保留客户内存写入，并使用实时返回地址。动态附加／分离的保留指针为零。显式加载期间的附加失败在清理后返回错误 1114，同时保留已成功的独立嵌套加载。卸载释放映像映射和 TLS，重载恢复原始映像内容。模型之外对加载器链表或 TLS 指针的修改会明确失败。失败和重载都不会重置文件、映像与元数据工作额度。API 提供方没有伪造的 DLL 句柄。文件系统搜索、非 ASCII 路径、`LoadLibraryEx` 标志、循环导入及正在初始化或卸载的同一模块的重入转换仍不支持。
+
+动态卸载回调开始前，模块已退出初始化链表；其映射、名称查询及加载／内存链表成员身份在回调期间仍然有效。入口返回的原生对照单独观察初始线程，不将系统工作线程的存活时间当作入口返回时间。
+
+`WindowsDynamicTests.cpp` 使用原始 x64/ARM64 DLL 和 EXE，对照独立原生 Windows 观测，覆盖引用计数、共享依赖、嵌套加载、附加失败清理、转发查询、进程退出、无入口 DLL 以及重载时重新初始化 TLS。额外回归拒绝被修改的加载器元数据和失效代码指针，保持累计准备额度，并确保被中断 API 的结果仍未完成。Windows CI 强制执行原生对照和 WHP 用例；交叉编译与 Unicorn ARM64 不代表原生 ARM64 已执行验证。
+
+`GetProcAddress` 转发链任何位置缺失库均返回错误 127；显式 `LoadLibrary` 加载目录中缺失的模块返回 126。原生对照和各可用后端都断言全部 41 个已声明加载场景；在 Windows 上，每种 DLL 变体都会重复 16 次验证全部卸载后从入口返回。 `GetProcAddress` 转发目标的初始化失败也在清理后返回 127。进程分离回调保留退出调用方的栈内容。
 
 `WindowsExportTests.cpp` 使用原始 x64/ARM64 DLL 和 EXE，验证转发的代码／数据／序号调用、别名、初始化期间查询、重定位、大小写敏感的缺失项、LastError、循环及非驻留目标、无效指针，以及成功查询后的元数据修改。同一 EXE 具有独立原生 Windows 对照；原生 CI 强制执行 WHP 用例。C ABI／CLI 测试对比完整报告。原生 ARM64 硬件证据仍待补齐。 有导出表和无导出表的 EXE 变体覆盖两种依赖图、PEB 链表顺序、退出通知顺序，以及名称／序号／空指针的错误码。
 
@@ -117,9 +125,9 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 {"windows":{"modules":[{"name":"middle.dll","path":"inputs/middle.dll"},{"name":"leaf.dll","path":"inputs/leaf.dll"}]}}
 ```
 
-x64 的 GS、ARM64 的 x18 指向 TEB。支持栈边界、自指针、PID/TID、PEB、进程参数、LastError 和 TLS。输入严格按 UTF-8 解码为 UTF-16，argv 按 Microsoft CRT 规则加引号。环境变量名限 ASCII，拒绝忽略大小写后的重名；值可为 Unicode，排序后以双 NUL 结束，不继承主机环境或文件系统。静态 TLS 复制模板、清零 BSS 并写入 32 位索引；动态 TLS 使用独立 TEB 槽位。启动和退出按顺序读取实时回调表，所有指令与具名调用共享截止时间和资源额度。正常进程退出运行退出回调。入口返回仅在没有客户 DLL 时受支持；退出回调中的递归退出明确停止。
+x64 的 GS、ARM64 的 x18 指向 TEB。 支持栈边界、自指针、PID/TID、PEB、进程参数、LastError 和 TLS。 输入严格按 UTF-8 解码为 UTF-16，argv 按 Microsoft CRT 规则加引号。 环境变量名限 ASCII，拒绝忽略大小写后的重名；值可为 Unicode，排序后以双 NUL 结束，不继承主机环境或文件系统。 静态 TLS 复制模板、清零 BSS 并写入 32 位索引；动态 TLS 使用独立 TEB 槽位。 启动和退出按顺序读取实时回调表，所有指令与具名调用共享截止时间和资源额度。 正常进程退出运行退出回调。 入口返回只支持当前没有驻留客户 DLL 的情况；进程退出清理期间再次调用 `ExitProcess` 仍不支持。
 
-精确 API 清单由 `WindowsProcessServices.def` 管理：`ExitProcess`、`RtlExitUserProcess`、标准输出句柄及同步 `WriteFile`、LastError、进程／线程标识与伪句柄、`GetCommandLineW`、进程堆分配／释放／大小、动态 TLS，以及 `GetModuleHandleW` / `GetProcAddress`。提供方限定为 `kernel32.dll`、`kernelbase.dll`、`ntdll.dll` 并精确匹配导出名。直接 syscall 或伪造回调入口不能选择 API 模型。堆由进程拥有并在释放时回收；输出保留二进制字节，Win32 参数错误与不支持的异步 I/O、用户异常分开处理。指针别名会观察到完成计数的初始清零和实际返回地址的变化。
+精确 API 清单由 `WindowsProcessServices.def` 管理：`ExitProcess`、`RtlExitUserProcess`、标准输出句柄及同步 `WriteFile`、LastError、进程／线程标识与伪句柄、`GetCommandLineW`、进程堆分配／释放／大小、动态 TLS，以及 `LoadLibraryA` / `LoadLibraryW` / `FreeLibrary` / `GetModuleHandleW` / `GetProcAddress`。提供方限定为 `kernel32.dll`、`kernelbase.dll`、`ntdll.dll` 并精确匹配导出名。直接 syscall 或伪造回调入口不能选择 API 模型。堆由进程拥有并在释放时回收；输出保留二进制字节，Win32 参数错误与不支持的异步 I/O、用户异常分开处理。指针别名会观察到完成计数的初始清零和实际返回地址的变化。
 
 `windows.native_calls` 报告保留 DLL／函数名、声明的标量参数及可空返回位值，不伪造 NT syscall 编号。`NeverDWindowsProcessTests` 覆盖真实 x64/ARM64 PE 启动、编译器 TLS、回调修改、堆／LastError、别名、畸形元数据、权限故障和预算；`NeverDProcessPublicTests` 验证 CLI/C ABI。Windows CI 直接运行相同 EXE 作为独立行为对照，并要求 WHP 用例通过；原生 ARM64 运行证据仍需要对应机器。
 

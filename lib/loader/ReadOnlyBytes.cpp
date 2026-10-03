@@ -130,6 +130,16 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
 }
 
 std::optional<std::vector<uint8_t>>
+readInitialImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
+  if (!supportedImage(Image) || !Size || Size > 1024 * 1024)
+    return std::nullopt;
+  const auto *Bytes = mappedBytes(Image, Address, Size, false);
+  if (!Bytes || hasConflictingFixups(Image, Address, Size, false))
+    return std::nullopt;
+  return std::vector<uint8_t>(Bytes, Bytes + Size);
+}
+
+std::optional<std::vector<uint8_t>>
 readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   if (!supportedImmutableCodeImage(Image) || !Size || Size > 1024 * 1024)
     return std::nullopt;

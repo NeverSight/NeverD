@@ -2,6 +2,7 @@
 #define NEVERD_SDK_CAPI_SOURCESWIFTWITNESSFRAMEPROJECTION_H
 
 #include "ObjCNativeCurrentFunction.h"
+#include "SourceExpressionIdentity.h"
 
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/pipeline/NativeSourceHints.h"
@@ -79,57 +80,6 @@ inline std::optional<Calls> calls(const HighFunc &Function) {
                             : std::nullopt;
 }
 
-inline bool sameValue(const HighExpr &A, const HighExpr &B, size_t &Budget,
-                      unsigned Depth = 0) {
-  if (!Budget || Depth == 128)
-    return false;
-  --Budget;
-  if (A.Kind != B.Kind || A.Op != B.Op || !equalSourceTypes(A.Type, B.Type) ||
-      A.MemoryOrdering != B.MemoryOrdering ||
-      A.MemoryAddressSpace != B.MemoryAddressSpace ||
-      A.Operands.size() != B.Operands.size() ||
-      bool(A.IndirectTarget) != bool(B.IndirectTarget))
-    return false;
-  switch (A.Kind) {
-  case ExprKind::Var:
-    if (A.Var != B.Var)
-      return false;
-    break;
-  case ExprKind::Const:
-    if (A.ConstVal != B.ConstVal || A.ConstProvenance != B.ConstProvenance ||
-        A.AddressOwnerVA != B.AddressOwnerVA)
-      return false;
-    break;
-  case ExprKind::Call:
-    if (A.CallAddr != B.CallAddr || A.CallTarget != B.CallTarget ||
-        A.IsIndirectCall != B.IsIndirectCall ||
-        A.IndirectParamIdx != B.IndirectParamIdx ||
-        A.IntrinsicId != B.IntrinsicId ||
-        A.IntrinsicOutputs != B.IntrinsicOutputs ||
-        A.SourceCallHint != B.SourceCallHint)
-      return false;
-    break;
-  case ExprKind::Cast:
-    if (!equalSourceTypes(A.CastTo, B.CastTo))
-      return false;
-    break;
-  case ExprKind::Field:
-    if (A.ConstVal != B.ConstVal)
-      return false;
-    break;
-  case ExprKind::Undef:
-    return false;
-  default:
-    break;
-  }
-  for (size_t I = 0; I < A.Operands.size(); ++I)
-    if (!A.Operands[I] || !B.Operands[I] ||
-        !sameValue(*A.Operands[I], *B.Operands[I], Budget, Depth + 1))
-      return false;
-  return !A.IndirectTarget ||
-         sameValue(*A.IndirectTarget, *B.IndirectTarget, Budget, Depth + 1);
-}
-
 inline bool sameCalls(const Calls &Expected, const Calls &Actual) {
   if (Expected.size() != Actual.size())
     return false;
@@ -145,11 +95,13 @@ inline bool sameCalls(const Calls &Expected, const Calls &Actual) {
         !equalSourceABIs(E->SourceCallHint->Signature,
                          A.SourceCallHint->Signature) ||
         E->Operands.size() != A.Operands.size() ||
-        !sameValue(*E->IndirectTarget, *A.IndirectTarget, Budget))
+        !sameSourceExpressionIdentity(*E->IndirectTarget, *A.IndirectTarget,
+                                      Budget))
       return false;
     for (size_t I = 0; I < E->Operands.size(); ++I)
       if (!E->Operands[I] || !A.Operands[I] ||
-          !sameValue(*E->Operands[I], *A.Operands[I], Budget))
+          !sameSourceExpressionIdentity(*E->Operands[I], *A.Operands[I],
+                                        Budget))
         return false;
   }
   return true;

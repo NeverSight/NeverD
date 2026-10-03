@@ -131,6 +131,7 @@ add_neverd_unittest(NeverDLiftTests
   core/HighSSADefinitionTests.cpp
   core/HighSourceRangeTests.cpp
   core/ObjCCallHintTests.cpp
+  core/SwiftFieldReceiverTests.cpp
   core/ObjCScrollViewCallTests.cpp
   core/ObjCViewControllerCallTests.cpp
   core/ObjCIOSSDKCallTests.cpp
@@ -1036,6 +1037,7 @@ add_neverd_unittest(NeverDObjCSourceCallTests
   core/ObjCStorageTests.cpp
   core/ObjCBlocksTests.cpp
   core/ObjCCallHintTests.cpp
+  core/SwiftFieldReceiverTests.cpp
   core/ObjCScrollViewCallTests.cpp
   core/ObjCViewControllerCallTests.cpp
   core/ObjCIOSSDKCallTests.cpp

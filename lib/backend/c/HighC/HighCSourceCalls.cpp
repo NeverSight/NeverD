@@ -506,6 +506,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeConstantObject ||
       Hint.CallKind == Kind::RuntimeBorrowedBytes ||
       Hint.CallKind == Kind::RuntimeReadOnlyBytes ||
+      Hint.CallKind == Kind::RuntimeSwiftScalarStorageAddress ||
       Hint.CallKind == Kind::RuntimeCStringStorage ||
       Hint.CallKind == Kind::RuntimeConstantObjectTable ||
       Hint.CallKind == Kind::DarwinRuntimeGlobalAddress ||
@@ -587,7 +588,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         return bad("unknown concrete block class");
       Value = Name.str();
     } else if (Hint.CallKind == Kind::RuntimeBorrowedBytes ||
-               Hint.CallKind == Kind::RuntimeReadOnlyBytes) {
+               Hint.CallKind == Kind::RuntimeReadOnlyBytes ||
+               Hint.CallKind == Kind::RuntimeSwiftScalarStorageAddress) {
       if (!Hint.TargetAddress ||
           Hint.ByteCount > limits::kMaxSourceCallBorrowedBytes)
         return bad("borrowed bytes have no bounded source extent");

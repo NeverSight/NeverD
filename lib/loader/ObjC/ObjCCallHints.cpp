@@ -2,7 +2,9 @@
 
 #include "../MachO/DarwinRuntimeImport.h"
 #include "../MachO/DarwinSourceDeclarations.h"
+#include "../MachO/ImmutableNativeFrame.h"
 #include "../MachO/SourceLocalCall.h"
+#include "../Swift/SwiftMangledClassMethodABI.h"
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -1181,6 +1183,21 @@ std::map<va_t, SourceCallTypeHint> buildObjCSourceCallHints(
     if (const auto Receiver = objcMethodReceiverTypeHint(Image, Function.Entry))
       EntryFacts.Values.emplace(key(NdVar::reg(TRI.IntParamRegs[0], 8)),
                                 Value{Value::Kind::Receiver, 0, {}, *Receiver});
+    // The native entry is not an Objective-C wrapper. Its complete current
+    // declaration supplies swiftself; canonical lifting authenticates all
+    // bytes and CFG edges before the shared receiver facts can use that root.
+    if (const auto Receiver =
+            objcNativeSwiftSelfTypeHint(Image, Function.Entry)) {
+      size_t Budget = 262144;
+      const auto Signature =
+          swiftMangledZeroArgClassMethodSourceABI(Image, Function.Entry);
+      if (Signature &&
+          immutableNativeFrameMachineMatches(Image, Function, Budget))
+        EntryFacts.Values.emplace(
+            key(NdVar::reg(Signature->Parameters[0].Location.RegisterOffset,
+                           8)),
+            Value{Value::Kind::Receiver, 0, {}, *Receiver});
+    }
     if (const auto Signature = objcMethodSourceTypeHint(Image, Function.Entry))
       for (size_t Index = 0; Index < Signature->Parameters.size(); ++Index) {
         const auto &Parameter = Signature->Parameters[Index];
@@ -2773,8 +2790,21 @@ std::map<va_t, SourceCallTypeHint> buildObjCSourceCallHints(
   }
   for (auto &Block : Bindings)
     for (auto &[Address, Hint] : Block)
-      if (CallOccurrences[Address] == 1)
+      if (CallOccurrences[Address] == 1) {
+        if (Hint.Receiver &&
+            Hint.Receiver->Origin ==
+                ObjCReceiverTypeHint::OriginKind::NativeSwiftSelf) {
+          for (const auto &B : Function.Blocks)
+            for (const auto &Op : B.Ops)
+              if (Op.Addr == Address && Op.Opcode == NdOp::CALL &&
+                  Op.NumInputs == 1 && Op.Inputs[0].isConst())
+                Hint.NativeSwiftReceiver = SourceCallOccurrenceKey{
+                    Op.Addr, Op.Seq, Op.Opcode, Op.Inputs[0].Offset};
+          if (!Hint.NativeSwiftReceiver)
+            continue;
+        }
         Result.emplace(Address, std::move(Hint));
+      }
   return Result;
 }
 } // namespace neverd

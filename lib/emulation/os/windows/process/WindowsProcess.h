@@ -94,6 +94,13 @@ struct ImageReadBudget {
 struct Environment {
   uint64_t CommandLine;
   std::u16string ImageName;
+  uint64_t StringCursor = 0;
+  std::map<size_t, uint64_t> ModuleNames;
+  struct TLSAllocation {
+    uint64_t Index, Address, Size;
+  };
+  std::map<size_t, TLSAllocation> TLS;
+  std::map<uint64_t, std::vector<uint8_t>> LoaderMetadata;
 };
 llvm::Expected<Image> loadImage(const std::filesystem::path &Path,
                                 uint64_t MemoryLimit);
@@ -104,6 +111,20 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
                                          const ProcessOptions &Options);
 
 struct Program;
+struct LoaderRequest {
+  enum class Kind { Load, Free, Export };
+  Kind Operation;
+  uint64_t Module = 0;
+  std::string Name;
+  std::optional<uint16_t> Ordinal;
+};
+struct ServiceOutcome {
+  std::optional<uint64_t> Value;
+  std::optional<LoaderRequest> Request;
+  explicit ServiceOutcome(std::optional<uint64_t> Value) : Value(Value) {}
+  explicit ServiceOutcome(LoaderRequest Request)
+      : Request(std::move(Request)) {}
+};
 class Services final {
 public:
   Services(ExecutionBackend &CPU, AddressSpace &Memory, const Image &Image,
@@ -113,8 +134,8 @@ public:
       : CPU(CPU), Memory(Memory), Loaded(Image), Env(Environment),
         Options(Options), Result(Result), Virtual(Virtual), Modules(Program),
         Budget(Budget) {}
-  llvm::Expected<std::optional<uint64_t>> invoke(const Service &Service,
-                                                 const NativeCallEvent &Event);
+  llvm::Expected<ServiceOutcome> invoke(const Service &Service,
+                                        const NativeCallEvent &Event);
 
 private:
   std::optional<uint64_t> unsupported(const Service &Service);

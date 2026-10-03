@@ -12123,6 +12123,290 @@ TEST(ObjCSourceBindings, NamedWritableAggregateFieldsShareOneRebuiltStorage) {
             (std::map<va_t, uint64_t>{{Base, 8}}));
 }
 
+TEST(ObjCSourceBindings, SwiftImmutableScalarStoragePreservesCompleteIdentity) {
+  constexpr va_t Address = 0x1040;
+  constexpr const char *Name =
+      "_$sSo7CALayerC12StorageProofE13sourcePadding12CoreGraphics7CGFloatVvpZ";
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.MachOTwoLevelNamespace = true;
+  F.Image.Symbols.push_back({Name, Address, 0, false});
+  llvm::support::endian::write64le(F.Image.Segments[0].Data.data() + 0x40,
+                                   UINT64_C(0x40ad4c4000000000));
+  auto AddressValue =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
+  F.Function.ReturnType = NdType::makePtr(NdType::makeVoid());
+  F.Function.Body[0].RetVal = AddressValue;
+  const auto Storage = swiftImmutableScalarStorage(F.Image, Address);
+  ASSERT_TRUE(Storage);
+  EXPECT_EQ(Storage->SymbolName, Name);
+  EXPECT_EQ(Storage->ByteCount, 8U);
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_TRUE(Result.Function.Body[0].RetVal->SourceCallHint);
+  EXPECT_EQ(Result.BorrowedBytes, (std::set<BorrowedByteRange>{{Address, 8}}));
+  EXPECT_TRUE(
+      objcSourceCallBound(*Result.Function.Body[0].RetVal, F.Image, {}));
+  EXPECT_EQ(F.Function.Body[0].RetVal, AddressValue);
+  EXPECT_EQ(AddressValue->Kind, ExprKind::Const);
+}
+
+namespace {
+Fixture swiftScalarStorageFixture() {
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.MachOTwoLevelNamespace = true;
+  F.Image.Symbols.push_back(
+      {"_$sSo7CALayerC12StorageProofE13sourcePadding12CoreGraphics7CGFloatVvpZ",
+       0x1040, 0, false});
+  llvm::support::endian::write64le(F.Image.Segments[0].Data.data() + 0x40,
+                                   UINT64_C(0x40ad4c4000000000));
+  F.Function.ReturnType = NdType::makePtr(NdType::makeVoid());
+  F.Function.Body[0].RetVal =
+      HighExpr::makeConst(0x1040, 8, ConstantAddressProvenance::DataAddress);
+  return F;
+}
+} // namespace
+
+TEST(ObjCSourceBindings, SwiftScalarStorageNeedsCompleteStructuredDeclaration) {
+  const std::vector<std::pair<std::string, unsigned>> Cases = {
+      {"_$sSo7CALayerC12StorageProofE13sourcePadding12CoreGraphics7CGFloatVvpZ",
+       8},
+      {"_$s4Test3BoxC7enabledSbvpZ", 1},
+      {"_$s4Test3BoxV5valueSfvpZ", 4},
+      {"_$s4Test3BoxO5values6UInt16VvpZ", 2},
+      {"_$sSo7CALayerC12StorageProofE5valueSivpZ", 8},
+      {"_$s4Test3BoxC5valueSdvpZ", 8},
+      {"_$s4Test3BoxC5valueSdvp", 0},
+      {"_$s4Test3BoxC5valueSdvgZ", 0},
+      {"_$s4Test3BoxC5valueSdvau", 0},
+      {"_$s4Test3BoxC5valueSdvMZ", 0},
+      {"_$s4Test3BoxC5valueSSvpZ", 0},
+      {"_$s4Test3BoxC5valueSdSgvpZ", 0},
+      {"_$s4Test3BoxC5value12CoreGraphics7CGFloatCvpZ", 0},
+      {"_$s4Test3BoxC5value12CoreGraphics7CGPointVvpZ", 0},
+      {"_$s4Test3BoxC5value4Fake7CGFloatVvpZ", 0},
+      {"_$s4Test3BoxC5value14CoreFoundation7CGFloatVvpZ", 0},
+      {"_$s4Test3BoxC5valueSdvpZsuffix", 0},
+      {std::string(8001, 's'), 0}};
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const auto &[Name, Width] : Cases) {
+      SCOPED_TRACE(Name);
+      auto F = swiftScalarStorageFixture();
+      F.Image.Arch = Architecture;
+      F.Image.Symbols[0].Name = Name;
+      const auto Storage = swiftImmutableScalarStorage(F.Image, 0x1040);
+      EXPECT_EQ(Storage ? Storage->ByteCount : 0, Width);
+    }
+}
+
+TEST(ObjCSourceBindings, SwiftScalarStorageRejectsAmbiguousOrMutableImage) {
+  for (unsigned Mutation = 0; Mutation < 32; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = swiftScalarStorageFixture();
+    auto &I = F.Image;
+    va_t Address = 0x1040;
+    switch (Mutation) {
+    case 0:
+      I.Format = BinaryFormat::ELF;
+      break;
+    case 1:
+      I.Format = BinaryFormat::COFF;
+      break;
+    case 2:
+      I.Bits = Bitness::Bits32;
+      break;
+    case 3:
+      I.Arch = Arch::ARM;
+      break;
+    case 4:
+      I.IsRelocatable = true;
+      break;
+    case 5:
+      I.MachOTwoLevelNamespace = false;
+      break;
+    case 6:
+      I.MachOChainedFixupsAmbiguous = true;
+      break;
+    case 7:
+      I.Symbols.clear();
+      break;
+    case 8:
+      I.Symbols[0].IsFunc = true;
+      break;
+    case 9:
+      I.Symbols[0].Size = 4;
+      break;
+    case 10:
+      I.Symbols[0].Size = 16;
+      break;
+    case 11:
+      I.Symbols.push_back(I.Symbols[0]);
+      break;
+    case 12:
+      I.Symbols.push_back({"other", 0x1044, 0, false});
+      break;
+    case 13:
+      I.Symbols.push_back({"other", 0x1044, 0, true});
+      break;
+    case 14:
+      I.Symbols.push_back({"other", 0x1038, 16, false});
+      break;
+    case 15:
+      I.Symbols.push_back({I.Symbols[0].Name, 0x1050, 0, false});
+      break;
+    case 16:
+      I.Sections[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      break;
+    case 17:
+      I.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      break;
+    case 18:
+      I.Sections[0].FileSz = 0x44;
+      break;
+    case 19:
+      I.Segments[0].FileSz = 0x44;
+      break;
+    case 20:
+      I.Sections.push_back(I.Sections[0]);
+      break;
+    case 21:
+      I.Segments.push_back(I.Segments[0]);
+      break;
+    case 22:
+      I.Sections[0].Type = llvm::MachO::S_THREAD_LOCAL_REGULAR;
+      break;
+    case 23:
+      I.DataPtrRelocSlots.insert(0x1040);
+      break;
+    case 24:
+      I.CodePtrRelocSlots.insert(0x1040);
+      break;
+    case 25:
+      I.ImportPtrSlots[0x1040] = "external";
+      break;
+    case 26:
+      I.DataPtrRelocSlots.insert(0x103c);
+      break;
+    case 27:
+      I.DataPtrRelocSlots.insert(0x1044);
+      break;
+    case 28:
+      llvm::support::endian::write64le(I.Segments[0].Data.data() + 0x40,
+                                       0x1020);
+      break;
+    case 29:
+      Address = I.Symbols[0].Addr = 0x1041;
+      break;
+    case 30:
+      I.Sections[0].FileOff = 1;
+      break;
+    case 31:
+      I.RuntimeFunctionAddrs.insert(0x1044);
+      break;
+    }
+    EXPECT_FALSE(swiftImmutableScalarStorage(I, Address));
+  }
+}
+
+TEST(ObjCSourceBindings, SwiftScalarStoragePublicationRevalidatesCurrentProof) {
+  auto F = swiftScalarStorageFixture();
+  auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  const auto &Original = *Result.Function.Body[0].RetVal;
+  ASSERT_TRUE(Original.SourceCallHint);
+  for (unsigned Mutation = 0; Mutation < 23; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto I = F.Image;
+    auto E = Original;
+    auto Mutable = std::make_shared<SourceCallTypeHint>(*E.SourceCallHint);
+    E.SourceCallHint = Mutable;
+    auto &H = *Mutable;
+    switch (Mutation) {
+    case 0:
+      I.Symbols[0].Name = "unknown";
+      break;
+    case 1:
+      I.Symbols[0].Size = 4;
+      break;
+    case 2:
+      I.DataPtrRelocSlots.insert(0x1040);
+      break;
+    case 3:
+      I.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      break;
+    case 4:
+      H.TargetAddress += 8;
+      break;
+    case 5:
+      H.TargetName += "stale";
+      break;
+    case 6:
+      H.ByteCount = 4;
+      break;
+    case 7:
+      H.ByteCount = 16;
+      break;
+    case 8:
+      H.Signature.ReturnLocation.ValueBytes = 4;
+      break;
+    case 9:
+      H.Signature.ReturnLocation.RegisterOffset += 8;
+      break;
+    case 10:
+      H.Signature.ReturnType = NdType::makeInt(8);
+      break;
+    case 11:
+      H.OwnerClass = "CALayer";
+      break;
+    case 12:
+      H.Selector = "sourcePadding";
+      break;
+    case 13:
+      H.SelectorReferenceAddress = 0x1080;
+      break;
+    case 14:
+      H.WeakImport = true;
+      break;
+    case 15:
+      E.Operands.push_back(HighExpr::makeConst(0, 8));
+      break;
+    case 16:
+      E.CallAddr = 0x2000;
+      break;
+    case 17:
+      E.CallTarget = "forged";
+      break;
+    case 18:
+      E.IsIndirectCall = true;
+      break;
+    case 19:
+      E.MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 20:
+      E.Type = NdType::makeFloat(8);
+      break;
+    case 21:
+      E.Type = NdType::makeInt(4);
+      break;
+    case 22:
+      H.CallKind = SourceCallTypeHint::Kind::RuntimeReadOnlyBytes;
+      H.TargetName.clear();
+      break;
+    }
+    EXPECT_FALSE(objcSourceCallBound(E, I, {}));
+  }
+  std::set<std::string> Helpers;
+  const auto Text =
+      renderBorrowedByteHelpers(F.Image, Result.BorrowedBytes, Helpers);
+  EXPECT_NE(Text.find("_Alignas(16)"), std::string::npos);
+  EXPECT_EQ(Helpers.size(), 1U);
+  auto Stale = F.Image;
+  Stale.DataPtrRelocSlots.insert(0x1040);
+  EXPECT_THROW(renderBorrowedByteHelpers(Stale, Result.BorrowedBytes, Helpers),
+               std::runtime_error);
+}
+
 TEST(ObjCSourceBindings,
      SwiftBeginAccessUsesTypedOrMemoryAccessProvedLocalStorage) {
   Fixture F;

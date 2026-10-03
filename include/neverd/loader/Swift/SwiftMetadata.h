@@ -38,5 +38,31 @@ swiftStaticScalarStorageWidth(llvm::StringRef MangledSymbol);
 /// the structured mangling; unrelated globals are not inferred from a suffix.
 std::optional<uint64_t>
 swiftPrivateScalarStorageWidth(llvm::StringRef MangledSymbol);
+
+/// A complete immutable scalar object, identified by a bounded Swift static
+/// storage declaration. This is a byte extent and address identity, not an
+/// accessor ABI or permission to borrow arbitrary caller memory.
+struct SwiftImmutableScalarStorage {
+  std::string SymbolName;
+  uint32_t ByteCount = 0;
+};
+std::optional<SwiftImmutableScalarStorage>
+swiftImmutableScalarStorage(const BinaryImage &Image, va_t Address);
+
+/// Declared identity of a non-generic Swift class in Objective-C metadata.
+/// This does not reconstruct its instance layout or freeze live offsets.
+struct SwiftObjCClassIdentity {
+  std::string Module, Name, RuntimeName;
+  va_t Metadata = 0, Descriptor = 0;
+};
+std::optional<SwiftObjCClassIdentity>
+swiftObjCClassIdentity(const BinaryImage &Image, va_t Metadata);
+
+/// A separately authenticated Swift reflection field whose Objective-C type
+/// string is empty. The exact ivar/offset symbol/vector must agree; callers
+/// still load the runtime offset and prove the receiver's class provenance.
+std::optional<std::string> swiftObjCStoredFieldClass(const BinaryImage &Image,
+                                                     llvm::StringRef ClassName,
+                                                     va_t OffsetSlot);
 } // namespace neverd
 #endif

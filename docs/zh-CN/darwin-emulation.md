@@ -89,6 +89,11 @@ Apple M4 Max / macOS 15.6.1，Release 构建，源码为
 各平台的线程入口、超长写入错误顺序及格式化换行后的测试清单解析。
 原生清单、结果核对和 CI 脚本的 106 项回归通过；能力、文档、来源及格式检查也通过。
 
+后续同步 `dev` 后，干净源码 `f4bf8dde5cbc33d18ce053cb0722a54047e5a2d0`
+再次通过独立 ARM64 Darwin 门禁：65 项通过、0 失败、221 项跳过，39 个必需原生
+工作负载全部执行。证据位于 `build-hvf-native/hvf-final-dev-darwin-evidence/`。
+这次复跑验证 Darwin 目标，不代表同期合入的其他 Windows 进程改动已经通过新的完整 CPU 门禁。
+
 较早的集成验证已覆盖五种平台/架构的 Python SDK 调用；包内引擎与关闭 Unicorn 的
 CLI 在三种 ARM64 平台的 18 个场景中报告一致。桌面包通过 186 个 Mach-O 的依赖、
 签名和 Cocoa 启动检查。同时关闭 HVF 与 Unicorn 的配置通过 38 项检查、跳过 231 项

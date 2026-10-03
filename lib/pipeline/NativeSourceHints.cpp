@@ -2,6 +2,7 @@
 
 #include "../loader/Swift/SwiftBooleanProjection.h"
 #include "../loader/Swift/SwiftBooleanSourceBinding.h"
+#include "../loader/Swift/SwiftMangledClassMethodABI.h"
 #include "NativeSourceFloatingReturn.h"
 #include "NativeSourceIntegerPrefixReturn.h"
 #include "NativeSourcePreservation.h"
@@ -33,6 +34,77 @@
 #include <tuple>
 
 namespace neverd {
+
+bool validateNativeSwiftReceiverBindings(const BinaryImage &Image,
+                                         const LowFunc *Low,
+                                         const MedFunc &Med) {
+  bool Marked = false;
+  size_t Budget = 100000;
+  for (const auto &B : Med.Blocks)
+    for (const auto &Op : B.Ops) {
+      if (!Budget--)
+        return false;
+      Marked |= Op.SourceCallHint &&
+                (Op.SourceCallHint->NativeSwiftReceiver ||
+                 (Op.SourceCallHint->Receiver &&
+                  Op.SourceCallHint->Receiver->Origin ==
+                      ObjCReceiverTypeHint::OriginKind::NativeSwiftSelf));
+    }
+  const auto Declaration =
+      swiftMangledZeroArgClassMethodSourceABI(Image, Med.Entry);
+  if (!Marked && !Declaration)
+    return true;
+  if (!Low || Low->Entry != Med.Entry)
+    return !Marked;
+  const auto Current = buildObjCSourceCallHints(Image, *Low);
+  std::set<va_t> Required, Seen;
+  for (const auto &[Site, B] : Current)
+    if (B.NativeSwiftReceiver)
+      Required.insert(Site);
+  if (!Marked && Required.empty())
+    return true;
+  if (!Declaration || !Med.SourceTypeHint ||
+      !equalSourceABIs(*Declaration, *Med.SourceTypeHint) ||
+      !Med.SourceParametersBound)
+    return false;
+  for (const auto &B : Med.Blocks)
+    for (const auto &Op : B.Ops) {
+      if (!Budget--)
+        return false;
+      if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+        continue;
+      const auto C = Current.find(Op.Addr);
+      const bool Native =
+          Op.SourceCallHint &&
+          (Op.SourceCallHint->NativeSwiftReceiver ||
+           (Op.SourceCallHint->Receiver &&
+            Op.SourceCallHint->Receiver->Origin ==
+                ObjCReceiverTypeHint::OriginKind::NativeSwiftSelf));
+      if (!Native && !Required.count(Op.Addr))
+        continue;
+      if (!Native || C == Current.end() || !C->second.NativeSwiftReceiver ||
+          Op.SourceCallHint->NativeSwiftReceiver !=
+              C->second.NativeSwiftReceiver ||
+          Op.SourceCallHint->Receiver != C->second.Receiver ||
+          Op.SourceCallHint->Selector != C->second.Selector ||
+          Op.SourceCallHint->TargetAddress != C->second.TargetAddress ||
+          !equalSourceABIs(Op.SourceCallHint->Signature, C->second.Signature) ||
+          Op.Opcode != NdOp::CALL ||
+          Op.OriginSeq != C->second.NativeSwiftReceiver->Sequence ||
+          Op.NumInputs != sourceABIParameters(C->second.Signature).size() + 1 ||
+          !Op.Inputs[0].isConst() ||
+          Op.Inputs[0].ConstVal !=
+              C->second.NativeSwiftReceiver->StaticTarget ||
+          Op.DoesNotReturn || Op.PreservesCallerSaved ||
+          !Seen.insert(Op.Addr).second)
+        return false;
+      const auto Parameters = sourceABIParameters(C->second.Signature);
+      for (size_t I = 0; I < Parameters.size(); ++I)
+        if (Op.Inputs[I + 1].Size != Parameters[I].Location.ValueBytes)
+          return false;
+    }
+  return Seen == Required;
+}
 
 bool validateSwiftWitnessFrameBindings(const BinaryImage &Image,
                                        const LowFunc *Low, const MedFunc &Med) {
@@ -458,7 +530,8 @@ bool hasNativeSourceStateContract(
       Low->Blocks.size() > 16384)
     return false;
   NativeSourceCalls Calls;
-  if (!validateSwiftWitnessFrameBindings(Image, Low, Med))
+  if (!validateSwiftWitnessFrameBindings(Image, Low, Med) ||
+      !validateNativeSwiftReceiverBindings(Image, Low, Med))
     return false;
   if (!validateSourceRegisterCopies(Image, *Low, Med.RegisterCopyProjections) ||
       (TerminalContext && !Med.RegisterCopyProjections.empty()))
@@ -1311,6 +1384,8 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     return Reject("source register-copy proof is no longer valid");
   if (!validateSwiftWitnessFrameBindings(Image, Low, Med))
     return Reject("Swift witness frame proof is no longer valid");
+  if (!validateNativeSwiftReceiverBindings(Image, Low, Med))
+    return Reject("native Swift receiver proof is no longer valid");
   if (Image.Format != BinaryFormat::MachO || Image.Bits != Bitness::Bits64 ||
       Image.IsRelocatable ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||

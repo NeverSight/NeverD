@@ -32,9 +32,11 @@ public:
   VirtualMemory(AddressSpace &Space, const ProcessOptions &Options);
   VirtualMemory(AddressSpace &Space, const Image &Image,
                 const ProcessOptions &Options);
-  /// Reserve image identity before any image mappings or CPU are exposed.
+  /// Reserve image identity before publishing its mappings at a stopped
+  /// boundary.
   llvm::Expected<uint64_t> reserveImage(uint64_t Preferred, uint64_t Size,
                                         bool Relocatable);
+  llvm::Error releaseImage(uint64_t Base);
   llvm::Expected<MemoryResult> allocate(uint64_t Address, uint64_t Size,
                                         uint32_t Type, uint32_t Protection);
   llvm::Expected<MemoryResult> free(uint64_t Address, uint64_t Size,

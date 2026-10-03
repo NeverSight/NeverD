@@ -1,0 +1,15 @@
+//===- WindowsNativeTestSupport.def - Native oracle constants ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifdef NEVERD_NATIVE_TEST_VALUE
+NEVERD_NATIVE_TEST_VALUE(NativeCleanupStatus, 0)
+NEVERD_NATIVE_TEST_VALUE(MillisecondsPerSecond, 1000)
+#endif
+#ifdef NEVERD_NATIVE_TEST_TEXT
+NEVERD_NATIVE_TEST_TEXT(NullDevice, "NUL")
+NEVERD_NATIVE_TEST_TEXT(
+    NativeThreadTimeout,
+    "native initial thread did not terminate before deadline")
+#endif

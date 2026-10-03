@@ -9,10 +9,15 @@ on:
         default: self-hosted
         options: [self-hosted, hosted-intel]
       validation:
-        description: Full validation, transport tests, or VM/vCPU availability only
+        description: Full validation, Darwin workloads, transport tests, or availability only
         type: choice
         default: full
-        options: [full, transport, probe, state-isolation]
+        options: [full, darwin, transport, probe]
+      test_parallel:
+        description: Concurrent test processes (compilation remains parallel)
+        type: choice
+        default: '4'
+        options: ['4', '1']
 permissions:
   contents: read
 jobs:
@@ -26,6 +31,7 @@ jobs:
     timeout-minutes: 180
     env:
       SCCACHE_GHA_ENABLED: 'true'
+      HVF_TEST_PARALLEL: ${{ inputs.test_parallel || '4' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Require native VM and vCPU availability before the transport gate
@@ -67,13 +73,13 @@ jobs:
         with:
           version: 'v0.16.0'
       - name: Install hosted fixture tools
-        if: inputs.runner == 'hosted-intel' && inputs.validation == 'full'
+        if: inputs.runner == 'hosted-intel' && (inputs.validation == 'full' || inputs.validation == 'darwin')
         run: |
           brew install llvm lld
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
       - name: Verify fixture tools
-        if: inputs.validation == 'full'
+        if: inputs.validation == 'full' || inputs.validation == 'darwin'
         run: |
           for tool in cmake ninja python3 clang ld.lld lld-link ld64.lld codesign; do
             command -v "$tool"
@@ -125,7 +131,7 @@ jobs:
         run: >-
           python3 scripts/run_native_cpu_ci.py --build build-hvf
           --evidence build-hvf/transport-evidence
-          --parallel ${{ inputs.validation == 'state-isolation' && '1' || '4' }}
+          --parallel "$HVF_TEST_PARALLEL"
           --require-hvf --hvf-transport-only 2>&1 | tee build-hvf/transport-run.log
       - name: Build and inventory Intel state and exception tests
         if: matrix.arch == 'X64' && inputs.validation != 'probe'
@@ -136,7 +142,7 @@ jobs:
           cmake --build build-hvf --target NeverDX64ExceptionTests --parallel 4 2>&1 | tee build-hvf/state-evidence/build.log
           ctest --test-dir build-hvf/unittests/emulation -L '^NeverDX64ExceptionTests$' --show-only=json-v1 > build-hvf/state-evidence/inventory.json
       - name: Preserve transport and compilation before architectural execution
-        if: always() && inputs.validation != 'probe' && inputs.validation != 'state-isolation'
+        if: always() && inputs.validation != 'probe'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hvf-transport-${{ matrix.arch }}-attempt-${{ github.run_attempt }}
@@ -154,57 +160,50 @@ jobs:
         run: |
           ctest --test-dir build-hvf/unittests/emulation -R '^NativeTransports/X64StateTransition[.]CR8ReadsEveryGPRAndPreservesUserPrivilegeFaults/hvf$' --no-tests=error --output-on-failure --output-junit "$PWD/build-hvf/state-evidence/cr8.xml" --output-log "$PWD/build-hvf/state-evidence/cr8.log"
       - name: Preserve isolated Intel state result
-        if: always() && matrix.arch == 'X64' && inputs.validation != 'probe' && inputs.validation != 'state-isolation'
+        if: always() && matrix.arch == 'X64' && inputs.validation != 'probe'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hvf-cr8-X64-attempt-${{ github.run_attempt }}
           path: build-hvf/state-evidence/cr8.*
           if-no-files-found: warn
-      - name: Require the complete Intel state and exception suite
-        if: matrix.arch == 'X64' && inputs.validation != 'probe' && inputs.validation != 'state-isolation'
-        timeout-minutes: 10
+      - name: Build the requested native inventory
+        if: inputs.validation == 'full' || inputs.validation == 'darwin'
         shell: bash
         env:
-          NEVERD_REQUIRE_HVF: '1'
+          NATIVE_VALIDATION: ${{ inputs.validation }}
         run: |
-          ctest --test-dir build-hvf/unittests/emulation -L '^NeverDX64ExceptionTests$' --no-tests=error --parallel 4 --output-on-failure --output-junit "$PWD/build-hvf/state-evidence/results.xml" --output-log "$PWD/build-hvf/state-evidence/ctest.log"
-      # Temporary diagnostic profile: distinguish native state, raw faults and
-      # public CPU division from simultaneous CTest process creation. Finish all
-      # groups before the final upload; earlier checkpoints already exist.
-      - name: Isolate Intel state transitions in one process
-        if: matrix.arch == 'X64' && inputs.validation == 'state-isolation'
-        timeout-minutes: 3
-        shell: bash
-        env:
-          NEVERD_REQUIRE_HVF: '1'
-        run: |
-          build-hvf/bin/NeverDX64ExceptionTests --gtest_filter='NativeTransports/X64StateTransition.*' --gtest_output=xml:build-hvf/state-evidence/state.xml 2>&1 | tee build-hvf/state-evidence/state.log
-      - name: Isolate Intel raw faults in one process
-        if: matrix.arch == 'X64' && inputs.validation == 'state-isolation'
-        timeout-minutes: 3
-        shell: bash
-        env:
-          NEVERD_REQUIRE_HVF: '1'
-        run: |
-          build-hvf/bin/NeverDX64ExceptionTests --gtest_filter='NativeTransports/X64ExceptionTransport.*' --gtest_output=xml:build-hvf/state-evidence/faults.xml 2>&1 | tee build-hvf/state-evidence/faults.log
-      - name: Isolate Intel public division in one process
-        if: matrix.arch == 'X64' && inputs.validation == 'state-isolation'
-        timeout-minutes: 3
-        shell: bash
-        env:
-          NEVERD_REQUIRE_HVF: '1'
-        run: |
-          build-hvf/bin/NeverDX64ExceptionTests --gtest_filter='*X64Division.*' --gtest_output=xml:build-hvf/state-evidence/division.xml 2>&1 | tee build-hvf/state-evidence/division.log
+          python3 - <<'PYBUILD' 2>&1 | tee build-hvf/native-build.log
+          from pathlib import Path
+          import os
+          import platform
+          import subprocess
+          from scripts.run_native_cpu_ci import darwin_inventory, hvf_inventory
+          if os.environ["NATIVE_VALIDATION"] == "darwin":
+              owners, _ = darwin_inventory(Path.cwd(), "hvf", platform.machine())
+          else:
+              owners, _ = hvf_inventory(Path.cwd(), platform.machine())
+          subprocess.run(["cmake", "--build", "build-hvf", "--config", "Release",
+                          "--target", *owners, "--parallel", "4"], check=True)
+          PYBUILD
+      - name: Preserve the full build before native execution
+        if: always() && (inputs.validation == 'full' || inputs.validation == 'darwin')
+        timeout-minutes: 2
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hvf-build-${{ matrix.arch }}-attempt-${{ github.run_attempt }}
+          path: build-hvf/native-build.log
+          if-no-files-found: warn
       - name: Require actual host execution and record every result
         if: inputs.validation == 'full'
         run: >-
           python3 scripts/run_native_cpu_ci.py --build build-hvf
-          --evidence build-hvf/native-evidence --parallel 4 --require-hvf
+          --evidence build-hvf/native-evidence --parallel "$HVF_TEST_PARALLEL" --require-hvf
       - name: Require every native Darwin workload
-        if: inputs.validation == 'full'
+        if: inputs.validation == 'full' || inputs.validation == 'darwin'
         run: >-
           python3 scripts/run_native_cpu_ci.py --build build-hvf
-          --evidence build-hvf/darwin-evidence --parallel 4 --require-darwin-backend hvf
+          --evidence build-hvf/darwin-evidence --parallel "$HVF_TEST_PARALLEL" --require-darwin-backend hvf
       - name: Preserve hardware evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -215,6 +214,8 @@ jobs:
             build-hvf/transport-*.log
             build-hvf/transport-evidence/
             build-hvf/state-evidence/
+            build-hvf/native-build.log
             build-hvf/native-evidence/
             build-hvf/darwin-evidence/
+            build-hvf/unittests/emulation/Testing/Temporary/LastTest*.log*
           if-no-files-found: warn

@@ -1442,6 +1442,9 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     }
 
     std::vector<std::vector<HighStmt>> ClauseBodies(ClauseTargets.size());
+    // Where a handler block that runs off its end continued: the statement
+    // after it.  As a clause body it continues after the try statement.
+    std::vector<std::optional<va_t>> ClauseFallTo(ClauseTargets.size());
     for (size_t ClauseIndex = 0; ClauseIndex < ClauseTargets.size();
          ++ClauseIndex) {
       std::optional<va_t> Target = ClauseTargets[ClauseIndex];
@@ -1453,10 +1456,27 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
         continue;
       size_t HandlerAt = 0;
       std::vector<HighStmt> HandlerBody;
-      if (!extractAddressSlice(Func.Body, *HandlerRange, EH.CodeRange,
-                               HandlerBody, HandlerAt,
-                               /*IncludeFunctionEdgeUnknown=*/false))
+      std::vector<HighStmt> *HandlerHost = nullptr;
+      if (!extractAddressSlice(
+              Func.Body, *HandlerRange, EH.CodeRange, HandlerBody, HandlerAt,
+              /*IncludeFunctionEdgeUnknown=*/false, &HandlerHost))
         continue;
+      if (!HandlerBody.empty() && !highStmtEndsItsBlock(HandlerBody.back())) {
+        const va_t Next = HandlerHost && HandlerAt < HandlerHost->size()
+                              ? (*HandlerHost)[HandlerAt].Addr
+                              : 0;
+        if (Next == 0 || Next == InvalidVA) {
+          // Without the statement it ran into, the clause could not keep
+          // that path: leave the handler where it is, entered by a jump.
+          if (HandlerHost)
+            HandlerHost->insert(HandlerHost->begin() +
+                                    static_cast<ptrdiff_t>(HandlerAt),
+                                std::make_move_iterator(HandlerBody.begin()),
+                                std::make_move_iterator(HandlerBody.end()));
+          continue;
+        }
+        ClauseFallTo[ClauseIndex] = Next;
+      }
       ClauseBodies[ClauseIndex] = std::move(HandlerBody);
     }
 
@@ -1468,8 +1488,40 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
           return &Stmt;
       return nullptr;
     };
-    if (HighStmt *InsertedTry = FindInsertedTry())
+    if (HighStmt *InsertedTry = FindInsertedTry()) {
       InsertedTry->EHClauseBodies = std::move(ClauseBodies);
+      // A clause that runs off its end continues after the try statement,
+      // which need not be where its handler block ran on to.  What runs next
+      // is the following statement, past empty anchors, or the target of the
+      // jump that statement is.
+      std::set<va_t> AfterTry;
+      for (size_t K = 0; K < Host->size(); ++K) {
+        if (&(*Host)[K] != InsertedTry)
+          continue;
+        for (size_t M = K + 1; M < Host->size(); ++M) {
+          const HighStmt &Next = (*Host)[M];
+          AfterTry.insert(Next.Addr);
+          if (Next.Kind == StmtKind::Goto)
+            AfterTry.insert(Next.GotoTarget);
+          const bool EmptyAnchor =
+              Next.Kind == StmtKind::Nop ||
+              (Next.Kind == StmtKind::Block && Next.Body.empty());
+          if (!EmptyAnchor)
+            break;
+        }
+        break;
+      }
+      AfterTry.erase(0);
+      AfterTry.erase(InvalidVA);
+      for (size_t C = 0; C < ClauseFallTo.size(); ++C) {
+        if (!ClauseFallTo[C] || AfterTry.count(*ClauseFallTo[C]))
+          continue;
+        HighStmt Jump;
+        Jump.Kind = StmtKind::Goto;
+        Jump.GotoTarget = *ClauseFallTo[C];
+        InsertedTry->EHClauseBodies[C].push_back(std::move(Jump));
+      }
+    }
 
     // Filter thunks live in the same function as x86 registration EH but are
     // called only by the personality.  Drop them from the C body; the except

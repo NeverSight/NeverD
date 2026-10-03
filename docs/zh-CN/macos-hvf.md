@@ -27,9 +27,14 @@ GitHub 的 `macos-15-intel`。两种方式都先编译、签名并运行 `script
 宿主拒绝 HVF 就在此处失败，不能用 runner 名称推断硬件可用。
 CPU 门禁通过后，还必须执行本机架构的全部 Darwin 工作负载。
 
+GitHub 的[宿主策略](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners)
+把 runner 内的嵌套虚拟化列为实验性用途，不保证稳定性、性能或兼容性。
+因此需保留专用原生 Mac 的持续验收路径；这条平台限制不能直接说明某次停滞的根因。
+
 工作流会先构建只依赖 LLVM Support 和解码器的 `NeverDHvfTests`，验证原生指令执行，
 再构建完整进程测试的依赖。`validation=transport` 可单独运行这一诊断；默认 `full`
-仍要求完整 CPU 和 Darwin 两道门禁。小范围检查复用完整清单中的 HVF 必需项，并在
+仍要求完整 CPU 和 Darwin 两道门禁。`validation=darwin` 只构建进程测试所需目标，
+可独立要求本机架构的全部 Darwin 工作负载通过。小范围检查复用完整清单中的 HVF 必需项，并在
 摘要中标记 `hvf_transport_only=true`，不能当作完整 CPU/进程验收。
 本地脚本对应参数为 `--require-hvf --hvf-transport-only`。
 `validation=probe` 只检查 VM/vCPU 可用性，无需 LLVM，不能作为指令执行或
@@ -49,7 +54,7 @@ NeverD 传输层正确性的证据。
 | 同时关闭测试与 Unicorn | CLI 构建成功，HVF 初始化与 ARM64 ELF 进程执行通过 |
 | 打包和硬件验收脚本单元测试 | 分别 10 项和 17 项通过 |
 | 实际进程和签名检查 | 原生/自动选择成功；异架构报告 `host_isa_mismatch`；缺少 entitlement 报告 `device_access`；独立 worker 与完整桌面包签名检查通过 |
-| Intel 分支 | 后端源文件通过 macOS x86-64 交叉编译；原生 Intel 门禁已暴露初始化及入口失败，尚未通过执行验收（见下文） |
+| Intel 分支 | 原生 transport 及 253 项异常/状态/除法检查通过；完整 CPU 与 Darwin 门禁仍待结果（见下文） |
 
 格式检查使用仓库指定的 clang-format 22.1.2；文档检查覆盖 231 个文件和 10 个语言目录。能力清单与 Python SDK 审计通过，CI 验收脚本相关的 92 项测试通过。
 
@@ -124,16 +129,20 @@ VM 指令错误 12 在成功执行前后同样存在，不能将这个残留值�
 [原生 transport 门禁](https://github.com/NeverSight/NeverD/actions/runs/37086427775)
 已达到 10/10 项通过、零跳过。独立单进程与取消检查也通过，三种中断模式
 重试前后的 RFLAGS 均为 `0x202`，下载产物的 SHA-256 已与 GitHub 元数据核对。
-完整 Intel CPU/Darwin 验收仍待完成；`9319c880d` 的完整任务包含 14 个必需项及
-100 次中断/恢复重复检查。停滞或取消的任务不作为成功证据。
+完整 Intel CPU/Darwin 验收仍待完成；`9319c880d` 的完整任务通过了 100 次中断恢复
+和 transport，但合并的构建/执行阶段超过 100 分钟没有返回完整结果，已请求取消。
+14 个必需项仍需完整门禁确认。停滞或取消的任务不作为成功证据。
 临时指令探针、API 拦截器和阶段日志已从交付源码清理，持续验收由实际测试负责。
 
 干净源码 `9319c880d78e93f5cb8a7a9360778084934de258` 的 ARM64 transport 再次
 达到 12/12 项通过、零跳过；原生死循环中断与复跑也通过 100 次重复，无失败或跳过。
 
-Intel 工作流还会在完整依赖构建前执行 `NeverDX64ExceptionTests`，提前验证 CR8 状态与处理器异常。
-transport 结果与状态测试清单在执行前上传，CR8 独立结果在整组测试前另行保存；
+Intel 工作流还会在完整依赖构建前构建 `NeverDX64ExceptionTests`，提前验证 CR8 状态与权限异常。
+完整异常/状态套件由最终 CPU 门禁执行，前置不再重复整组检查。
+transport 结果与状态测试清单在执行前上传，CR8 独立结果在完整 CPU 门禁前另行保存；
 产物名称包含运行次数，重跑会保留各次证据。
+完整目标构建有独立步骤和日志；`test_parallel` 默认使用 4 个测试进程，也可选择 1
+做串行对照，编译仍并行进行。结果摘要记录实际选择的并发数、宿主 OS/内核描述和逻辑 CPU 数。
 
 干净源码 `e2a91ff057df563eb19183a045a3ad6446cb9af1` 的
 [Intel 检查点任务](https://github.com/NeverSight/NeverD/actions/runs/37090528761)
@@ -141,3 +150,36 @@ transport 结果与状态测试清单在执行前上传，CR8 独立结果在整
 独立 CR8 回归也通过，涵盖 16 个目标寄存器、CPL3 权限异常、resume flag 行为和完整状态保留。
 其 JUnit 与 transport 产物均已下载并核对 SHA-256。状态目标成功编译、注册 952 项；
 这些检查点尚不能证明整组测试已经完成。
+
+干净源码 `5251cc68591dc343c954c8b7a9b57fa5cb9190e8` 的
+[状态切换组](https://github.com/NeverSight/NeverD/actions/runs/37091386132)
+在单个进程中通过了全部 5 项 HVF 检查，10 项其他后端用例跳过。已核对的产物覆盖
+TLS/权限、CR8、取消，以及宿主修改、故障和停止前后的完整 x87/SSE 状态。
+该任务随后停在产物上传；另一轮串行 transport 与状态测试通过后，硬件异常组没有返回结果。
+这些现象尚不能定位具体指令失败，也不能证明是测试进程并发缺陷。
+后续独立结果如下；完整 CPU/Darwin 门禁仍单独验收。
+
+干净源码 `908a830e6e3f1bbae6bc7ed7e534f3b13aeb1c1e` 的两个专项均已成功结束：
+[硬件异常专项](https://github.com/NeverSight/NeverD/actions/runs/37094333371)
+通过全部 120 项原生异常检查，覆盖十种异常及两种权限级、重复恢复、映射变化和私有异常入口完整性。
+[除法专项](https://github.com/NeverSight/NeverD/actions/runs/37094335126)
+通过全部 128 项原生公开 CPU 检查，覆盖正常结果、终止异常、显式恢复和观察者停止。
+两轮都通过了 5 项状态切换、10 项 transport 和 100 次中断恢复；这些共用检查不能重复计数。
+两个产物均已下载、核对 SHA-256 并检查逐项 XML。临时隔离工作流入口与步骤已清理。
+[完整 Intel 门禁](https://github.com/NeverSight/NeverD/actions/runs/37095689345)
+使用 `4c6a12b913123d0555f067035527fe29f856f3b9`，20 个目标均已编译成功，
+构建产物 SHA-256 已核对；CPU 阶段超过 30 分钟没有结果后已取消，结束后仍无可下载日志。
+这只能证明编译成功，不能作为完整 CPU 验收。
+另由 `4cbb729389df9485c9a9699c63c0be3a48862794` 的
+[独立 Darwin 门禁](https://github.com/NeverSight/NeverD/actions/runs/37097301977)
+要求 Intel 的全部 26 个原生工作负载通过。另有临时
+[逐目标诊断](https://github.com/NeverSight/NeverD/actions/runs/37098336208)，
+每个完整 CPU 目标结束后立即保存清单、CTest 退出码和 XML，再继续下一组。
+两轮均为串行测试，模拟实现和测试与上述专项一致；目前尚未回传完整验收结果。
+
+同步后续 `dev` 改动后，干净源码 `f4bf8dde5cbc33d18ce053cb0722a54047e5a2d0`
+再次通过 ARM64 transport 全部 12 项，无跳过；独立 Darwin 门禁 65 项通过、0 失败、
+221 项不适用用例跳过，39 个必需原生工作负载全部执行。
+新增宿主和并发元数据已在 Apple Silicon 与 Intel 的真实 transport 产物中核对。
+本机证据位于 `build-hvf-native/hvf-final-dev-transport-evidence/` 和
+`build-hvf-native/hvf-final-dev-darwin-evidence/`。

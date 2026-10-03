@@ -49,7 +49,8 @@ inline bool objcSourceCallBound(
     const std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>>
         *BlockParameterReceivers = nullptr,
     const std::map<va_t, std::map<uint64_t, ObjCReceiverTypeHint>>
-        *BlockCaptureReceivers = nullptr);
+        *BlockCaptureReceivers = nullptr,
+    bool NativeSwiftReceiverProved = false);
 
 struct ObjCSourceBindingResult {
   HighFunc Function;
@@ -181,9 +182,9 @@ inline bool plainNativeBinding(const SourceCallTypeHint &Binding) {
          Binding.CanonicalBooleanInputs.empty() &&
          Binding.SwiftStringInputs.empty() && !Binding.Format &&
          !Binding.NilTerminated && !Binding.SwiftTypeMetadata &&
-         !Binding.Receiver && !Binding.SelectorResultUse &&
-         !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
-         !Binding.SelectorForwardingUse &&
+         !Binding.Receiver && !Binding.NativeSwiftReceiver &&
+         !Binding.SelectorResultUse && !Binding.SelectorResultTypeUse &&
+         !Binding.SelectorArgumentTypeUse && !Binding.SelectorForwardingUse &&
          !Binding.SelectorArgumentStorageUse &&
          !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
          !Binding.ImmutablePointerSlot && !Binding.AddressedFunctionABI &&
@@ -4619,6 +4620,19 @@ swiftInlineStringPairArrayHint(const BinaryImage &Image, va_t Address) {
 }
 
 inline std::optional<SourceCallTypeHint>
+swiftImmutableScalarStorageHint(const BinaryImage &Image, va_t Address) {
+  const auto Storage = swiftImmutableScalarStorage(Image, Address);
+  auto Hint = Storage
+                  ? borrowedByteSourceHint(Image, {Address, Storage->ByteCount})
+                  : std::nullopt;
+  if (Hint) {
+    Hint->CallKind = SourceCallTypeHint::Kind::RuntimeSwiftScalarStorageAddress;
+    Hint->TargetName = Storage->SymbolName;
+  }
+  return Hint;
+}
+
+inline std::optional<SourceCallTypeHint>
 swiftPrivateScalarStorageHint(const BinaryImage &Image, va_t Address) {
   const auto *Symbol = uniqueWritableDataSymbol(Image, Address, 1);
   const auto Width =
@@ -6752,6 +6766,26 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         (Original->ConstProvenance == ConstantAddressProvenance::DataAddress ||
          Original->ConstProvenance == ConstantAddressProvenance::Address) &&
         !NumericOperand && !MemoryAddress) {
+      if (Original->Operands.empty() &&
+          Original->IntrinsicId == Intrinsic::None &&
+          Original->IntrinsicOutputs.empty() &&
+          Original->MemoryOrdering == NdMemoryOrdering::None &&
+          Original->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          (Original->Type->Kind == NdTypeKind::Int ||
+           Original->Type->Kind == NdTypeKind::Ptr) &&
+          (Original->AddressOwnerVA == InvalidVA ||
+           Original->AddressOwnerVA == Original->ConstVal)) {
+        if (auto Storage =
+                swiftImmutableScalarStorageHint(Image, Original->ConstVal)) {
+          *Expression = *HighExpr::makeCall({}, 0, {});
+          Expression->Type = Original->Type;
+          Result.BorrowedBytes.insert(
+              {Storage->TargetAddress, Storage->ByteCount});
+          Expression->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Storage));
+          return Expression;
+        }
+      }
       if (auto Storage =
               swiftPrivateScalarStorageHint(Image, Original->ConstVal)) {
         *Expression = *HighExpr::makeCall({}, 0, {});
@@ -8293,7 +8327,8 @@ inline bool objcSourceCallBound(
     const std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>>
         *BlockParameterReceivers,
     const std::map<va_t, std::map<uint64_t, ObjCReceiverTypeHint>>
-        *BlockCaptureReceivers) {
+        *BlockCaptureReceivers,
+    bool NativeSwiftReceiverProved) {
   using namespace objc_binding_detail;
   if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
       Expression.IntrinsicId != Intrinsic::None ||
@@ -8301,6 +8336,14 @@ inline bool objcSourceCallBound(
       Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return false;
   const auto &Binding = *Expression.SourceCallHint;
+  const bool NativeReceiver =
+      Binding.Receiver && Binding.Receiver->Origin ==
+                              ObjCReceiverTypeHint::OriginKind::NativeSwiftSelf;
+  if ((Binding.NativeSwiftReceiver || NativeReceiver) &&
+      (!NativeSwiftReceiverProved || !Binding.NativeSwiftReceiver ||
+       !NativeReceiver ||
+       Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage))
+    return false;
   if (Binding.SwiftWitnessUndefDescriptor) {
     if (!ContainingFunction ||
         !swiftWitnessUndefDescriptor(*ContainingFunction, Expression, Image,
@@ -8603,6 +8646,25 @@ inline bool objcSourceCallBound(
            Binding.SwiftStringInputs.empty() &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
+  if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftScalarStorageAddress) {
+    const auto Expected =
+        swiftImmutableScalarStorageHint(Image, Binding.TargetAddress);
+    auto Plain = Binding;
+    Plain.CallKind = SourceCallTypeHint::Kind::Native;
+    Plain.ByteCount = 0;
+    return Expected && plainNativeBinding(Plain) &&
+           Binding.TargetName == Expected->TargetName &&
+           Binding.ByteCount == Expected->ByteCount && Expression.Type &&
+           Expression.Type->Size == 8 &&
+           (Expression.Type->Kind == NdTypeKind::Int ||
+            Expression.Type->Kind == NdTypeKind::Ptr) &&
+           !Expression.IsIndirectCall && !Expression.CallAddr &&
+           Expression.CallTarget.empty() && Expression.Operands.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeReadOnlyBytes &&
       (!ReadOnlyHelpers || !ReadOnlyHelpers->count(&Expression) ||
        Expression.IsIndirectCall || Expression.CallAddr ||

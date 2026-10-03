@@ -9,14 +9,33 @@
 
 namespace neverd::emulation::windows_process {
 using namespace value;
-Lifetime::Lifetime(const windows_process::Program &Program)
-    : Program(Program), States(Program.Modules.size()) {
+Lifetime::Lifetime(windows_process::Program &Program) : Program(Program) {
   for (size_t I : Program.AttachOrder) {
-    Pending.push_back({I, CallKind::TLS, DLLProcessAttach});
-    Pending.push_back({I, CallKind::DLL, DLLProcessAttach});
+    Program.Modules[I].State = ModuleState::Initializing;
+    Pending.push_back({moduleRef(Program, I), CallKind::TLS, DLLProcessAttach});
+    Pending.push_back({moduleRef(Program, I), CallKind::DLL, DLLProcessAttach});
   }
-  Pending.push_back({0, CallKind::TLS, DLLProcessAttach});
-  Pending.push_back({0, CallKind::Entry, 0});
+  Pending.push_back({moduleRef(Program, 0), CallKind::TLS, DLLProcessAttach});
+  Pending.push_back({moduleRef(Program, 0), CallKind::Entry, 0});
+}
+Lifetime::Lifetime(windows_process::Program &Program, Mode Kind,
+                   llvm::ArrayRef<ModuleRef> Order,
+                   std::optional<ModuleRef> Failed)
+    : Program(Program), Kind(Kind) {
+  for (auto Ref : Order) {
+    auto &M = Program.Modules[Ref.Index];
+    if (Kind == Mode::Load) {
+      M.State = ModuleState::Initializing;
+      Pending.push_back({Ref, CallKind::TLS, DLLProcessAttach});
+      Pending.push_back({Ref, CallKind::DLL, DLLProcessAttach});
+    } else {
+      M.State = ModuleState::Detaching;
+      if (M.Attached || Failed == Ref) {
+        Pending.push_back({Ref, CallKind::TLS, DLLProcessDetach});
+        Pending.push_back({Ref, CallKind::DLL, DLLProcessDetach});
+      }
+    }
+  }
 }
 void Lifetime::advance() {
   ++Position;
@@ -29,7 +48,14 @@ Lifetime::next(ExecutionBackend &CPU) {
     return failure(text::Lifetime);
   while (Position < Pending.size()) {
     const auto &N = Pending[Position];
-    const auto &M = Program.Modules[N.Module].Loaded;
+    if (!current(Program, N.Module))
+      return failure(text::Lifetime);
+    auto &Module = Program.Modules[N.Module.Index];
+    const auto &M = Module.Loaded;
+    // Once detach begins, ExitProcess from this callback must not notify the
+    // same DLL again. Later DLLs remain attached until their own turn.
+    if (detaching())
+      Module.Attached = false;
     uint64_t Target = M.Entry;
     if (N.Kind == CallKind::TLS) {
       if (!CallbackArray) {
@@ -68,27 +94,33 @@ Lifetime::next(ExecutionBackend &CPU) {
           if (!*Executable)
             return failure(text::TLS);
           ++Callback;
-          if (!Detaching)
-            States[N.Module] = ModuleState::TLS;
+          if (!detaching())
+            Module.State = ModuleState::Initializing;
         }
       }
     }
     if (!Target) {
       // A no-entry DLL receives startup TLS, but native process teardown
       // does not notify it. Only successful entry return completes attach.
+      if (N.Kind == CallKind::DLL && !detaching())
+        Module.State = ModuleState::Ready;
       advance();
       continue;
     }
     Running = true;
     if (N.Kind == CallKind::Entry)
       return std::optional<Call>({N.Kind, M.Entry, ReturnGate, {PEB}});
-    if (N.Kind == CallKind::DLL && !Detaching)
-      States[N.Module] = ModuleState::Entry;
+    if (N.Kind == CallKind::DLL && !detaching())
+      Module.State = ModuleState::Initializing;
     return std::optional<Call>(
         {N.Kind,
          Target,
-         Detaching ? DetachReturnGate : AttachReturnGate,
-         {M.Base, N.Reason, N.Kind == CallKind::TLS ? 0 : StartupReserved}});
+         detaching() ? DetachReturnGate : AttachReturnGate,
+         {M.Base, N.Reason,
+          N.Kind == CallKind::TLS ||
+                  (Kind != Mode::Startup && Kind != Mode::Exit)
+              ? 0
+              : StartupReserved}});
   }
   return std::optional<Call>();
 }
@@ -97,27 +129,38 @@ llvm::Error Lifetime::returned(uint64_t Value) {
     return failure(text::Lifetime);
   Running = false;
   const auto N = Pending[Position];
+  if (!current(Program, N.Module))
+    return failure(text::Lifetime);
+  auto &M = Program.Modules[N.Module.Index];
   if (N.Kind == CallKind::TLS)
     return llvm::Error::success();
   advance();
   if (N.Kind == CallKind::Entry) {
-    if (Program.Modules.size() != 1)
+    if (llvm::any_of(llvm::drop_begin(Program.Modules), resident))
       return failure(text::EntryThreadExit);
     return beginExit(uint32_t(Value), false);
   }
-  if (!Detaching) {
-    if (!uint32_t(Value))
-      return beginExit(StatusDLLInitFailed, true);
-    States[N.Module] = ModuleState::Attached;
-  }
+  if (!detaching()) {
+    if (!uint32_t(Value)) {
+      if (Kind == Mode::Startup)
+        return beginExit(StatusDLLInitFailed, true);
+      Failed = N.Module;
+      Pending.clear();
+      Position = 0;
+      return llvm::Error::success();
+    }
+    M.Attached = true;
+    M.State = ModuleState::Ready;
+  } else
+    M.Attached = false;
   return llvm::Error::success();
 }
 llvm::Error Lifetime::exit(uint32_t Status) { return beginExit(Status, false); }
 llvm::Error Lifetime::beginExit(uint32_t Status, bool InitializationFailed) {
-  if (Detaching)
+  if (Kind == Mode::Exit)
     return failure(text::ReentrantExit);
   ExitStatus = Status;
-  Detaching = true;
+  Kind = Mode::Exit;
   Running = false;
   Position = 0;
   Callback = 0;
@@ -129,12 +172,14 @@ llvm::Error Lifetime::beginExit(uint32_t Status, bool InitializationFailed) {
     return llvm::Error::success();
   for (auto I = Program.LoaderInitializationOrder.rbegin();
        I != Program.LoaderInitializationOrder.rend(); ++I) {
-    if (States[*I] != ModuleState::Attached)
+    if (!resident(Program.Modules[*I]) || !Program.Modules[*I].Attached)
       continue;
-    Pending.push_back({*I, CallKind::TLS, DLLProcessDetach});
-    Pending.push_back({*I, CallKind::DLL, DLLProcessDetach});
+    Pending.push_back(
+        {moduleRef(Program, *I), CallKind::TLS, DLLProcessDetach});
+    Pending.push_back(
+        {moduleRef(Program, *I), CallKind::DLL, DLLProcessDetach});
   }
-  Pending.push_back({0, CallKind::TLS, DLLProcessDetach});
+  Pending.push_back({moduleRef(Program, 0), CallKind::TLS, DLLProcessDetach});
   return llvm::Error::success();
 }
 } // namespace neverd::emulation::windows_process

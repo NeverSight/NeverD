@@ -80,7 +80,7 @@ descriptor 1 と 2 は仮想 byte sink です。`write` は読取可能な user 
 
 ## Windows PE64 プロファイル
 
-`windows-pe64-v1` は PEB/TEB、モジュール TLS と起動時の `DllMain`、名前付き Win32 API、明示的で非循環の起動 DLL グラフを備えた有界 Windows x64/ARM64 コンソールプロセスに対応します。DLL は名前／序数によるコード・データのインポート、DIR64 再配置、実際のローダーリストに対応します。動的ロード、CRT/GUI、ユーザー SEH、スレッドは未完成です。ARM64 KVM/WHP のネイティブ実行証拠も未取得です。 有界の転送エクスポートと、常駐ゲストイメージの `GetProcAddress` に対応します。
+`windows-pe64-v1` は PEB/TEB、静的・動的 TLS、`DllMain`、名前付き Win32 API、明示的な非循環 DLL グラフを持つ有界 Windows x64/ARM64 コンソールプロセスに対応します。ゲストモジュールは名前／序数によるコード・データのインポート、DIR64 再配置、転送エクスポートと実際のローダーリスト識別子を扱います。`LoadLibraryA` / `LoadLibraryW`、`FreeLibrary`、`GetProcAddress` は設定済みモジュールカタログを使用します。CRT/GUI、ユーザー SEH、スレッド、一般的な Windows アプリ互換性は未完成で、ネイティブ ARM64 KVM/WHP の証拠も未取得です。
 
 Windows 仮想メモリに `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` と現在のプロセスの `FlushInstructionCache` を追加しました。OS 層が予約領域を所有し、コミット済みページ、権限、物理記憶域は `AddressSpace` が一元管理します。動的コードの書き換え、アクセス違反、メモリ予算の再利用をテストします。
 
@@ -95,7 +95,7 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
   --options='{"backend":"auto","arguments":["guest.exe","argument"],"environment":["MODE=test"]}'
 ```
 
-単一スレッドの PE32+ EXE は推奨ベースを維持し、任意の入口と静的 TLS を持つ明示的な DLL を受け入れます。`WindowsProcessOptions::Modules` または JSON `windows.modules` の `name` と `path` で最大 64 個のゲスト基本名とホスト入力を指定します。ホスト DLL の探索・実行はありません。ASCII 名は大文字小文字を区別せず、重複とシステム API 提供元の上書きを拒否し、到達可能なファイルだけを読みます。名前／序数の関数・データを実際のエクスポートに結び付けます。欠番、未定義、循環、bound/delay import、未対応の load configuration/CFG は失敗します。可動 DLL の衝突には DIR64 を適用し、固定衝突やリンク用メタデータへの再配置書込みは CPU 作成前に拒否します。
+単一スレッドの PE32+ EXE は推奨ベースを維持し、任意の入口と静的 TLS を持つ明示的な DLL を受け入れます。`WindowsProcessOptions::Modules` または JSON `windows.modules` の `name` と `path` で最大 64 個のゲスト基本名とホスト入力を指定します。ホスト DLL の探索・実行はありません。ASCII 名は大文字小文字を区別せず、重複とシステム API 提供元の上書きを拒否し、到達可能なファイルだけを読みます。名前／序数の関数・データを実際のエクスポートに結び付けます。欠番、未定義、循環、bound/delay import、未対応の load configuration/CFG は失敗します。可動 DLL の衝突には DIR64 を適用し、固定衝突やリンク用メタデータへの再配置書込みは 対象イメージを公開する前に拒否します。
 
 `readPEProgramExports` が元のエクスポートと読み取り範囲、`WindowsProcessModules` が依存グラフとプロセス共通の提供元／名前 API ゲートを所有します。`VirtualMemory` は全イメージを事前予約し、`AddressSpace` がページと権限を管理します。PEB/LDR は実イメージのみを示し、初期化リストはローダーへの登録順です。登録順と依存関係に基づく attach 呼び出し順を別々に保持します。`GetModuleHandleW` は NULL または ASCII 基本名に対応し、大文字小文字を無視し、拡張子なしでは `.dll` を追加します。パス、非 ASCII、末尾の点は未対応です。未検出はエラー 126、成功時は LastError を保持します。API モデルはインストール済み DLL ではありません。
 
@@ -103,7 +103,15 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 
 `WindowsProcessLifetime` は同じ CPU と実行予算で依存順に DLL TLS コールバック、`DllMain`、続いて EXE TLS と入口を実行します。各モジュールに独立した TLS インデックスと整列済み領域を割り当て、再配置・リンク済みイメージから共有 64 KiB 領域へコピーします。TLS の予約引数はゼロ、起動／プロセス終了時の `DllMain` は不透明な非 NULL 値です。明示的なプロセス終了は初期化完了 DLL をローダーリストの逆順に切り離し、その後 EXE TLS を呼びます。EXE 初期化前でも同様です。起動時の `DllMain(FALSE)` は detach 通知なしで `0xc0000142` 終了します。障害や予算切れは後処理を捏造しません。ゲスト DLL がある PE 入口の return は未対応のスレッド終了を必要とするため明示停止します。非ゼロの `SizeOfZeroFill` は未対応ですが、実際の TLS テンプレート内のゼロ初期化バイトは対応します。 入口なし DLL は TLS attach を受けますが、プロセス detach 通知は受けません。
 
-`WindowsProcessExports` は静的インポートと `GetProcAddress` で名前／序数の解決を共有し、コード、データ、別名、連鎖転送を扱います。実際に参照する起動時の転送だけがカタログのモジュールと初期化依存関係を追加し、未使用の転送はファイルを読みません。実行時は `DllMain` 内も含め常駐イメージを照会できますが、別モジュールのロードが必要なら明示停止します。名前は大小文字を区別し、名前がなければ NULL／エラー 127、直接照会で序数がなければ穴を含め NULL／エラー 182、照会引数が NULL ならエラー 87、成功時は LastError を保持します。未知のモジュールハンドルは未対応です。有界 API 登録から提供元／名前ごとの入口を一度だけ確保します。各イメージの現在の PE ヘッダーとエクスポートメタデータを検査し、変更や読み取り不能を拒否します。連鎖は最大 64 項で、準備段階の残りのメタデータ予算と実行期限を共有します。`LoadLibrary`／`FreeLibrary` や動的なエクスポート表書き換えには対応しません。 穴への転送は対象イメージのベースを返し LastError を保持します。序数ゼロへの転送はエラー 87 です。ベースはデータアドレスであり、イメージヘッダーの実行権限は与えません。
+`WindowsProcessExports` は静的インポートと `GetProcAddress` で名前／序数の解決を共有し、コード、データ、別名、連鎖転送を扱います。 実際に参照する起動時の転送だけがカタログのモジュールと初期化依存関係を追加し、未使用の転送はファイルを読みません。 名前は大小文字を区別し、名前がなければ NULL／エラー 127、直接照会で序数がなければ穴を含め NULL／エラー 182、照会引数が NULL ならエラー 87、成功時は LastError を保持します。 未知のモジュールハンドルは未対応です。 有界 API 登録から提供元／名前ごとの入口を一度だけ確保します。 各イメージの現在の PE ヘッダーとエクスポートメタデータを検査し、変更や読み取り不能を拒否します。 連鎖は最大 64 項で、準備段階の残りのメタデータ予算と実行期限を共有します。 穴への転送は対象イメージのベースを返し LastError を保持します。 序数ゼロへの転送はエラー 87 です。 ベースはデータアドレスであり、イメージヘッダーの実行権限は与えません。 実行時の転送は設定カタログのモジュールをロードし、初期化完了後に照会結果を返せます。実行中のエクスポート表変更は未対応です。
+
+`WindowsProcessLoader` は `windows.modules` の ASCII DLL ベース名をロードし、明示参照、共有依存関係、起動モジュールの保持を管理します。転送の反復照会で余分な参照は増えません。再ロードでは同じカタログ枠に新しい常駐世代を割り当てます。TLS と `DllMain` は同じ CPU 上で中断 API のスタックフレームより下に実行し、レジスター復元はゲストのメモリー書き込みを保ち、現在の戻り先を使用します。動的 attach/detach の予約ポインターはゼロです。明示的ロード中の attach 失敗はクリーンアップ後にエラー 1114 を返し、成功済みの独立した入れ子ロードは保持します。アンロードはイメージと TLS を解放し、再ロードは元の内容から始まります。モデル外のローダーリストや TLS ポインター変更は明示的に拒否します。ファイル、イメージ、メタデータ予算は失敗や再ロードでも累積します。API 提供元に架空 DLL ハンドルはありません。ファイルシステム検索、非 ASCII パス、`LoadLibraryEx` フラグ、循環インポート、初期化／アンロード中の同一モジュールへの再入状態変更は未対応です。
+
+動的アンロードのコールバック前にモジュールを初期化リストから外しますが、マッピング、名前検索、ロード／メモリリストへの所属はコールバック中も維持します。入口の復帰を調べるネイティブ比較では、システムワーカースレッドとは独立して初期スレッドを観測します。
+
+`WindowsDynamicTests.cpp` は元の x64/ARM64 DLL と EXE を独立したネイティブ Windows 観測と比較し、参照数、共有依存、入れ子ロード、attach 失敗時の清掃、転送照会、プロセス終了、入口なし DLL、再ロード時の TLS 初期化を確認します。追加回帰はローダー改変と無効なコードポインターを拒否し、累積準備予算と中断 API の未完了結果を確認します。Windows CI は原生オラクルと WHP ケースを必須にします。クロスコンパイルと Unicorn ARM64 はネイティブ ARM64 実行の証拠ではありません。
+
+`GetProcAddress` の転送チェーンでライブラリが欠けるとエラー 127 を返し、明示的な `LoadLibrary` でカタログにないモジュールを指定すると 126 を返します。ネイティブ比較と各利用可能バックエンドは宣言済みの全 41 シナリオを検証します。Windows では DLL の各バリアントについて、全 DLL をアンロードした後の入口復帰を 16 回確認します。 `GetProcAddress` の転送先の初期化に失敗した場合も、クリーンアップ後に 127 を返します。プロセス終了の detach コールバックは終了を呼び出した側のスタック内容を保持します。
 
 `WindowsExportTests.cpp` は元の x64/ARM64 DLL と EXE で、転送コード／データ／序数呼び出し、別名、初期化中の照会、再配置、大小文字を区別する欠落、LastError、循環・非常駐ターゲット、不正ポインター、成功した照会後のメタデータ変更を検証します。同じ EXE をネイティブ Windows の独立オラクルで実行し、ネイティブ CI は WHP ケースを必須とします。C ABI／CLI は完全なレポートを比較します。ARM64 ネイティブ実機の証拠は未取得です。 エクスポート表の有無を変えた EXE で、両依存グラフ、PEB リスト順、detach 順、名前／序数／NULL のエラーコードを確認します。
 
@@ -113,9 +121,9 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 {"windows":{"modules":[{"name":"middle.dll","path":"inputs/middle.dll"},{"name":"leaf.dll","path":"inputs/leaf.dll"}]}}
 ```
 
-x64 GS と ARM64 x18 は TEB を指し、スタック範囲、自身、PID/TID、PEB、プロセスパラメーター、LastError、TLS を提供します。UTF-8 を厳密に UTF-16 へ変換し、argv は Microsoft CRT 規則で引用します。環境名は ASCII、大小文字を無視した重複は拒否し、値は Unicode 可、整列した環境は二重 NUL で終端します。ホスト環境やファイルシステムは継承しません。静的 TLS はテンプレートとゼロ BSS、32 ビット索引を設定し、動的 TLS は別の TEB スロットを使います。起動・終了は変更後の回呼表を順に読み、期限と予算を共有します。通常のプロセス終了は終了回呼を実行します。入口の return はゲスト DLL がない場合のみ対応し、終了回呼中の再帰終了は明示停止です。
+x64 GS と ARM64 x18 は TEB を指し、スタック範囲、自身、PID/TID、PEB、プロセスパラメーター、LastError、TLS を提供します。 UTF-8 を厳密に UTF-16 へ変換し、argv は Microsoft CRT 規則で引用します。 環境名は ASCII、大小文字を無視した重複は拒否し、値は Unicode 可、整列した環境は二重 NUL で終端します。 ホスト環境やファイルシステムは継承しません。 静的 TLS はテンプレートとゼロ BSS、32 ビット索引を設定し、動的 TLS は別の TEB スロットを使います。 起動・終了は変更後の回呼表を順に読み、期限と予算を共有します。 通常のプロセス終了は終了回呼を実行します。 入口からの return は常駐ゲスト DLL がない場合だけに対応し、プロセス終了処理中の二度目の `ExitProcess` は未対応です。
 
-正確な API は `WindowsProcessServices.def` にあります。`ExitProcess`、`RtlExitUserProcess`、標準出力ハンドルと同期 `WriteFile`、LastError、プロセス・スレッド ID と疑似ハンドル、`GetCommandLineW`、ヒープ確保・解放・サイズ、動的 TLS、`GetModuleHandleW` / `GetProcAddress` を扱います。`kernel32.dll`、`kernelbase.dll`、`ntdll.dll` の正確な名前だけを解決します。直接 syscall や偽の回呼ゲートでは API を選べません。ヒープの所有権と回収、バイナリー出力、API エラーと非同期 I/O・ユーザー例外の未対応を区別します。別名ポインターでも完了数の初期ゼロ化と実際の戻り先変更を反映します。
+正確な API は `WindowsProcessServices.def` にあります。`ExitProcess`、`RtlExitUserProcess`、標準出力ハンドルと同期 `WriteFile`、LastError、プロセス・スレッド ID と疑似ハンドル、`GetCommandLineW`、ヒープ確保・解放・サイズ、動的 TLS、`LoadLibraryA` / `LoadLibraryW` / `FreeLibrary` / `GetModuleHandleW` / `GetProcAddress` を扱います。`kernel32.dll`、`kernelbase.dll`、`ntdll.dll` の正確な名前だけを解決します。直接 syscall や偽の回呼ゲートでは API を選べません。ヒープの所有権と回収、バイナリー出力、API エラーと非同期 I/O・ユーザー例外の未対応を区別します。別名ポインターでも完了数の初期ゼロ化と実際の戻り先変更を反映します。
 
 `windows.native_calls` はモジュール・関数名、宣言されたスカラー引数、nullable な結果を記録し、NT syscall 番号を捏造しません。`NeverDWindowsProcessTests` は実 PE、コンパイラー TLS、回呼変更、ヒープ、別名、不正メタデータ、権限、予算を検証し、`NeverDProcessPublicTests` は CLI/C ABI を検証します。Windows CI は同じ EXE を直接実行して独立比較し、WHP テストも必須です。ネイティブ ARM64 の実行証拠には対応マシンが必要です。
 

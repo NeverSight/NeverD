@@ -131,9 +131,14 @@ TEST_P(WindowsExports, QueriesCodeDataOrdinalsAliasesAndForwarders) {
         EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
       }
 }
-TEST_P(WindowsExports, RefusesRuntimeLoadsCyclesAndInvalidOrdinalForwarders) {
+TEST_P(WindowsExports, RejectsMissingModulesCyclesAndInvalidOrdinalForwarders) {
+  auto Missing = run(UnusedArgument);
+  ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+  EXPECT_EQ(Missing->Stop, ProcessStopReason::Exited) << Missing->Diagnostic;
+  EXPECT_EQ(Missing->ExitStatus, ExitStatus);
+  EXPECT_EQ(Missing->StandardOutput, std::string(AttachTrace) + DetachTrace);
+  EXPECT_TRUE(Missing->StandardError.empty());
   const std::pair<const char *, const char *> Cases[] = {
-      {UnusedArgument, win::text::ForwarderLoad},
       {CycleArgument, win::text::ForwarderCycle},
       {BadOrdinalArgument, win::text::ModuleForwarder}};
   for (const auto &[Argument, Diagnostic] : Cases) {
@@ -284,7 +289,9 @@ TEST(WindowsExportResolution,
      BoundsAcyclicChainsWithoutConfusingSelfForwarding) {
   win::Program P;
   P.Identities.push_back({LeafFile, 0, 0, 0});
+  P.Slots.emplace(LeafFile, 0);
   win::Module M;
+  M.State = win::ModuleState::Ready;
   M.Loaded.Base = PageSize;
   for (uint32_t I = 1; I <= ForwarderLimit + 1; ++I) {
     M.Ordinals.emplace(I, M.Loaded.Exports.Entries.size());

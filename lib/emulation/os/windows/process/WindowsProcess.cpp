@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "../../../runtime/RuntimeValues.h"
-#include "WindowsProcessLifetime.h"
+#include "WindowsProcessLoader.h"
 
 #include "neverd/emulation/ExecutionSession.h"
 
@@ -81,6 +81,8 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
       if (auto E = (*Space)->protect(Region.Address, Region.Bytes.size(),
                                      Region.Permissions))
         return std::move(E);
+  for (auto &M : Program->Modules)
+    M.State = ModuleState::Ready;
   auto ABI = IntegerABI::get(X64 ? IntegerCallingConvention::Win64
                                  : IntegerCallingConvention::AAPCS64);
   if (!ABI)
@@ -110,25 +112,95 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
   Services OS(CPU, **Space, *Loaded, *Env, Options, Result, Virtual, *Program,
               *Resources);
   Lifetime Life(*Program);
+  Loader Modules(*Program, Virtual, **Space, *Env, CPU, *Resources);
   std::optional<Lifetime::Call> Active;
   uint64_t ExpectedSP = 0, ExpectedGate = 0;
+  uint64_t RootStackPointer = StackTop;
+  struct Continuation {
+    Loader::Operation Operation;
+    std::unique_ptr<BackendContext> Context;
+    uint64_t StackPointer, ExpectedSP, ExpectedGate;
+    size_t Event;
+    std::optional<Lifetime::Call> Active;
+  };
+  std::vector<Continuation> Pending;
+  auto Validate = [&](uint64_t Address, uint64_t Size,
+                      unsigned Rights) -> llvm::Error {
+    auto Access = CPU.canAccess(Address, Size, Rights | UserAccessible);
+    if (!Access)
+      return Access.takeError();
+    return *Access ? llvm::Error::success() : failure(text::Return);
+  };
+  auto Return = [&](uint64_t StackPointer, size_t Event,
+                    uint64_t Value) -> llvm::Error {
+    Result.NativeCalls[Event].Result = Value;
+    // Guest callbacks and API outputs may alter the live return slot. CPU
+    // restoration preserves memory writes and precedes the ARM64 LR read.
+    if (X64)
+      if (auto E = Validate(StackPointer, PointerSize, Read))
+        return E;
+    auto ReturnPC = ABI->readReturnAddress(CPU, StackPointer);
+    if (!ReturnPC)
+      return ReturnPC.takeError();
+    if (auto E = Validate(*ReturnPC, 1, Execute))
+      return E;
+    auto ReturnSP = ABI->returnStackPointer(StackPointer);
+    if (!ReturnSP)
+      return ReturnSP.takeError();
+    if (auto E = CPU.writeRegister(ABI->info().Result, {Value, 0}))
+      return E;
+    if (auto E = CPU.writeRegister(ABI->info().StackPointer, {*ReturnSP, 0}))
+      return E;
+    Result.PC = *ReturnPC;
+    return CPU.writeRegister(PCRegister, {Result.PC, 0});
+  };
+  auto CurrentLife = [&]() -> Lifetime & {
+    return Pending.empty() ? Life : *Pending.back().Operation.Notifications;
+  };
   auto Prepare = [&]() -> llvm::Expected<bool> {
-    auto Next = Life.next(CPU);
-    if (!Next)
-      return Next.takeError();
-    Active = std::move(*Next);
-    if (!Active)
-      return false;
-    Result.PC = Active->PC;
-    ExpectedGate = Active->ReturnGate;
-    auto Frame = ABI->prepareCall(CPU, StackBase, Options.StackSize,
-                                  ExpectedGate, Active->Arguments);
-    if (!Frame)
-      return Frame.takeError();
-    ExpectedSP = Frame->ReturnStackPointer;
-    if (auto E = CPU.writeRegister(PCRegister, {Result.PC, 0}))
-      return std::move(E);
-    return true;
+    while (true) {
+      auto Next = CurrentLife().next(CPU);
+      if (!Next)
+        return Next.takeError();
+      Active = std::move(*Next);
+      if (Active) {
+        const uint64_t Top =
+            (Pending.empty() ? RootStackPointer : Pending.back().StackPointer) &
+            ~(ABI->info().StackAlignment - 1);
+        if (Top <= StackBase || Top > StackTop)
+          return failure(text::Return);
+        Result.PC = Active->PC;
+        ExpectedGate = Active->ReturnGate;
+        auto Frame = ABI->prepareCall(CPU, StackBase, Top - StackBase,
+                                      ExpectedGate, Active->Arguments);
+        if (!Frame)
+          return Frame.takeError();
+        ExpectedSP = Frame->ReturnStackPointer;
+        if (auto E = CPU.writeRegister(PCRegister, {Result.PC, 0}))
+          return std::move(E);
+        return true;
+      }
+      if (Pending.empty())
+        return false;
+      auto &C = Pending.back();
+      if (auto E = Modules.complete(C.Operation))
+        return std::move(E);
+      if (C.Operation.Notifications)
+        continue;
+      if (auto E = CPU.restoreContext(*C.Context))
+        return std::move(E);
+      if (C.Operation.Error)
+        if (auto E = CPU.writeInteger(TEB + TebLastError, C.Operation.Error,
+                                      DWordSize))
+          return std::move(E);
+      if (auto E = Return(C.StackPointer, C.Event, C.Operation.Value))
+        return std::move(E);
+      Active = std::move(C.Active);
+      ExpectedSP = C.ExpectedSP;
+      ExpectedGate = C.ExpectedGate;
+      Pending.pop_back();
+      return true;
+    }
   };
   auto Prepared = Prepare();
   if (!Prepared)
@@ -204,7 +276,7 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
       }
       if (Active->Kind == Lifetime::CallKind::Entry)
         Result.ReturnValue = (*V)[0];
-      if (auto E = Life.returned((*V)[0])) {
+      if (auto E = CurrentLife().returned((*V)[0])) {
         Failed(std::move(E));
         break;
       }
@@ -237,13 +309,6 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
     }
     // User accessibility is an OS call-boundary requirement in addition to
     // the ABI's generic trusted-memory checks. Preflight before API effects.
-    auto Validate = [&](uint64_t Address, uint64_t Size,
-                        unsigned Rights) -> llvm::Error {
-      auto Access = CPU.canAccess(Address, Size, Rights | UserAccessible);
-      if (!Access)
-        return Access.takeError();
-      return *Access ? llvm::Error::success() : failure(text::Return);
-    };
     if (Import->Target->Returns && X64)
       if (auto E = Validate(StackPointer, PointerSize, Read)) {
         Failed(std::move(E));
@@ -276,17 +341,56 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
     }
     if (Invalid)
       break;
+    const size_t EventIndex = Result.NativeCalls.size();
     Result.NativeCalls.push_back(Event);
     auto V = OS.invoke(*Import->Target, Event);
     if (!V) {
       Failed(V.takeError());
       break;
     }
-    if (!*V) {
+    if (V->Request) {
+      if (Pending.size() >= MaxLoaderDepth) {
+        Failed(failure(text::ModuleBudget));
+        break;
+      }
+      auto Operation = Modules.begin(*V->Request);
+      if (!Operation) {
+        Failed(Operation.takeError());
+        break;
+      }
+      if (Operation->Notifications) {
+        auto Context = CPU.saveContext();
+        if (!Context) {
+          Failed(Context.takeError());
+          break;
+        }
+        Pending.push_back({std::move(*Operation), std::move(*Context),
+                           StackPointer, ExpectedSP, ExpectedGate, EventIndex,
+                           std::move(Active)});
+        auto More = Prepare();
+        if (!More) {
+          Failed(More.takeError());
+          break;
+        }
+        continue;
+      }
+      if (Operation->Error)
+        if (auto E = CPU.writeInteger(TEB + TebLastError, Operation->Error,
+                                      DWordSize)) {
+          Failed(std::move(E));
+          break;
+        }
+      V->Value = Operation->Value;
+    }
+    if (!V->Value) {
       if (Result.Stop != ProcessStopReason::Exited)
         break;
       const uint32_t Status = *Result.ExitStatus;
       Result.ExitStatus.reset();
+      Pending.clear();
+      // Process-detach callbacks may still observe the exiting caller's
+      // frame. Abandon its continuation without overwriting that storage.
+      RootStackPointer = StackPointer;
       if (auto E = Life.exit(Status)) {
         Failed(std::move(E));
         break;
@@ -301,33 +405,7 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
       Complete();
       break;
     }
-    Result.NativeCalls.back().Result = **V;
-    // Consume the live return slot after the API, which may have legally
-    // written through an aliased output pointer into the caller's stack.
-    auto ReturnPC = ABI->readReturnAddress(CPU, StackPointer);
-    if (!ReturnPC) {
-      Failed(ReturnPC.takeError());
-      break;
-    }
-    if (auto E = Validate(*ReturnPC, 1, Execute)) {
-      Failed(std::move(E));
-      break;
-    }
-    auto ReturnSP = ABI->returnStackPointer(StackPointer);
-    if (!ReturnSP) {
-      Failed(ReturnSP.takeError());
-      break;
-    }
-    if (auto E = CPU.writeRegister(ABI->info().Result, {**V, 0})) {
-      Failed(std::move(E));
-      break;
-    }
-    if (auto E = CPU.writeRegister(ABI->info().StackPointer, {*ReturnSP, 0})) {
-      Failed(std::move(E));
-      break;
-    }
-    Result.PC = *ReturnPC;
-    if (auto E = CPU.writeRegister(PCRegister, {Result.PC, 0})) {
+    if (auto E = Return(StackPointer, EventIndex, *V->Value)) {
       Failed(std::move(E));
       break;
     }

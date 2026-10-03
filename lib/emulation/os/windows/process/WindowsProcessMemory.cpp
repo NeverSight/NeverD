@@ -102,6 +102,15 @@ llvm::Expected<uint64_t> VirtualMemory::reserveImage(uint64_t Preferred,
                                         Owner::Image});
   return Preferred;
 }
+llvm::Error VirtualMemory::releaseImage(uint64_t Base) {
+  auto I = Ranges.find(Base);
+  if (I == Ranges.end() || I->second.Kind != Owner::Image)
+    return failure(text::Layout);
+  if (auto E = decommit(Base, I->second.Size))
+    return E;
+  Ranges.erase(I);
+  return llvm::Error::success();
+}
 VirtualMemory::Reservations::iterator
 VirtualMemory::containing(uint64_t Address, uint64_t Size) {
   auto I = Ranges.upper_bound(Address);

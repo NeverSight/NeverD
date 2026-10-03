@@ -24,6 +24,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <set>
+#include <string>
 
 namespace neverd {
 void narrowSourceConcatLocals(HighFunc &Function);
@@ -2639,11 +2641,16 @@ TEST(SourceABI, PhysicalParameterReadsKeepUnknownBytesAcrossPhiEdges) {
       Join.Ops = {Operation(NdOp::STORE, {}, {Parameter(2), Phi.Output}),
                   Operation(NdOp::RETURN, {}, {})};
       const auto High = MedToHighConverter().convert(Function, Architecture);
-      unsigned PhiCopies = 0, UnknownEdges = 0, Stores = 0;
+      unsigned PhiCopies = 0, UnknownEdges = 0;
+      // A small return tail may be copied to each jump into it; count each
+      // distinct store once.
+      std::set<std::string> Stores;
       walkStmts(High.Body, [&](const HighStmt &Statement) {
         if (Statement.Kind == StmtKind::Store) {
-          ++Stores;
-          ASSERT_TRUE(Statement.StoreVal && Statement.StoreVal->Type);
+          ASSERT_TRUE(Statement.StoreAddr && Statement.StoreVal &&
+                      Statement.StoreVal->Type);
+          Stores.insert(Statement.StoreAddr->str() + " = " +
+                        Statement.StoreVal->str());
           EXPECT_EQ(Statement.StoreVal->Type->Size, 8U);
         }
         if (!Statement.IsPhiCopy)
@@ -2662,7 +2669,7 @@ TEST(SourceABI, PhysicalParameterReadsKeepUnknownBytesAcrossPhiEdges) {
         Visit(Visit, Statement.Val);
       });
       EXPECT_EQ(PhiCopies, 2U);
-      EXPECT_EQ(Stores, 1U);
+      EXPECT_EQ(Stores.size(), 1U);
       EXPECT_GT(UnknownEdges, 0U);
     }
 }
@@ -2742,12 +2749,19 @@ TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
       Join.Ops.push_back(Operation(NdOp::RETURN, {}, {}));
       auto High = MedToHighConverter().convert(Function, Architecture);
       narrowSourceConcatLocals(High);
-      unsigned PhiCopies = 0, UnknownEdges = 0, Stores = 0, FullStores = 0;
+      unsigned PhiCopies = 0, UnknownEdges = 0;
+      // A small return tail may be copied to each jump into it; count each
+      // distinct store once.
+      std::set<std::string> Stores, FullStores;
       walkStmts(High.Body, [&](const HighStmt &Statement) {
         if (Statement.Kind == StmtKind::Store) {
-          ++Stores;
-          ASSERT_TRUE(Statement.StoreVal && Statement.StoreVal->Type);
-          FullStores += Statement.StoreVal->Type->Size == 8U;
+          ASSERT_TRUE(Statement.StoreAddr && Statement.StoreVal &&
+                      Statement.StoreVal->Type);
+          const std::string Text =
+              Statement.StoreAddr->str() + " = " + Statement.StoreVal->str();
+          Stores.insert(Text);
+          if (Statement.StoreVal->Type->Size == 8U)
+            FullStores.insert(Text);
           EXPECT_TRUE(Statement.StoreVal->Type->Size == 4U ||
                       (FullWidthRead && Statement.StoreVal->Type->Size == 8U));
         }
@@ -2767,8 +2781,8 @@ TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
         Visit(Visit, Statement.Val);
       });
       EXPECT_EQ(PhiCopies, 2U);
-      EXPECT_EQ(Stores, FullWidthRead ? 2U : 1U);
-      EXPECT_EQ(FullStores, FullWidthRead ? 1U : 0U);
+      EXPECT_EQ(Stores.size(), FullWidthRead ? 2U : 1U);
+      EXPECT_EQ(FullStores.size(), FullWidthRead ? 1U : 0U);
       EXPECT_EQ(UnknownEdges, FullWidthRead ? 2U : 0U);
     }
 }

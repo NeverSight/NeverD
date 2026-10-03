@@ -5,8 +5,6 @@
 //===----------------------------------------------------------------------===//
 #ifdef NEVERD_LIFETIME_VALUE
 NEVERD_LIFETIME_VALUE(ShortInstructions, 8)
-NEVERD_LIFETIME_VALUE(NativeCleanupStatus, 0)
-NEVERD_LIFETIME_VALUE(MillisecondsPerSecond, 1000)
 NEVERD_LIFETIME_VALUE(NativeReturnRepetitions, 64)
 NEVERD_LIFETIME_VALUE(FaultMode, 'g')
 NEVERD_LIFETIME_VALUE(FaultAddress, 1)
@@ -64,9 +62,6 @@ NEVERD_LIFETIME_TEXT(ReturnedProcessTrace,
                      "LT10\nLD11\nMT10\nMD11\nET10\nEE00\nMT30\nMD30\nLT30\nLD3"
                      "0\nET30\nMD01\nLD01\n")
 NEVERD_LIFETIME_TEXT(NoEntryTrace, "LT10\nMT10\nET10\nEE00\nET00\n")
-NEVERD_LIFETIME_TEXT(NullDevice, "NUL")
-NEVERD_LIFETIME_TEXT(NativeThreadTimeout,
-                     "native initial thread did not terminate before deadline")
 NEVERD_LIFETIME_TEXT(NoEntryDirectory, "noentry")
 NEVERD_LIFETIME_TEXT(InvalidTLSFile, "invalid-tls.dll")
 NEVERD_LIFETIME_TEXT(FaultArgument, "/g")

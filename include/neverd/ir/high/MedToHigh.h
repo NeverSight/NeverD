@@ -118,6 +118,9 @@ bool sinkJoinDefaultsLate(HighFunc &Func);
 /// `if (a) {..} else { ..; jump; X: S.. }` followed by `if (c) goto X;`
 /// becomes `while (c) { S.. }` in place of the test.
 bool loopifyTrailingArmBodies(std::vector<HighStmt> &Body);
+/// `if (c) { A; X: B } else { C; goto X; }` (or the mirror image) becomes
+/// `if (c) { A } else { C }` followed by B.
+bool hoistSharedArmTails(std::vector<HighStmt> &Body);
 
 /// Emit a label-per-block goto/return skeleton.  Used when structuring would
 /// exceed SSA limits, or when conversion fails and identity alone would leave

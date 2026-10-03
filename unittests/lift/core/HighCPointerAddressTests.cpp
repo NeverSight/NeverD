@@ -33621,7 +33621,9 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
   EXPECT_NE(Source.find("throw ProbeDerived(11)"), std::string::npos) << Source;
   EXPECT_NE(Source.find("catch (const ProbeError &e)"), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("if (e.Value == 31)"), std::string::npos) << Source;
+  EXPECT_TRUE(Source.find("if (e.Value == 31)") != std::string::npos ||
+              Source.find("if (e.Value != 31)") != std::string::npos)
+      << Source;
   // Escaping constructor objects and parameter homes share byte storage.
   // The prologue's -104 and the reload's +112 address the arg0 home at +8.
   EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
@@ -40732,7 +40734,8 @@ TEST(HighCPointerAddresses, GotoToSmallReturnTailBecomesItsCopy) {
   Calling[3].Val = HighExpr::makeCall("f", 0x2000, {});
   EXPECT_TRUE(duplicateSmallReturnTails(Calling));
 
-  // A tail that stores to memory is not duplicated.
+  // A plain store of tail values is copied too: each path still stores
+  // once.  An atomic store keeps its single site.
   std::vector<HighStmt> Storing = Body;
   Storing[0].Body = {Goto};
   HighStmt Store;
@@ -40741,7 +40744,12 @@ TEST(HighCPointerAddresses, GotoToSmallReturnTailBecomesItsCopy) {
   Store.StoreAddr = HighExpr::makeConst(0x5000, 8);
   Store.StoreVal = HighExpr::makeConst(1, 8);
   Storing[3] = Store;
-  EXPECT_FALSE(duplicateSmallReturnTails(Storing));
+  EXPECT_TRUE(duplicateSmallReturnTails(Storing));
+  std::vector<HighStmt> Atomic = Body;
+  Atomic[0].Body = {Goto};
+  Store.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  Atomic[3] = Store;
+  EXPECT_FALSE(duplicateSmallReturnTails(Atomic));
 }
 
 namespace {

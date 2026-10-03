@@ -551,7 +551,7 @@ NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "WindowsExports.QueriesCodeDataOrdinalsAliasesAndForwarders/WhpX64")
 NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "ExplicitBackends/"
-    "WindowsExports.RefusesRuntimeLoadsCyclesAndInvalidOrdinalForwarders/"
+    "WindowsExports.RejectsMissingModulesCyclesAndInvalidOrdinalForwarders/"
     "WhpX64")
 NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "ExplicitBackends/"
@@ -580,5 +580,22 @@ NEVERD_NATIVE_CPU_REQUIRED_TEST(
 NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "ExplicitBackends/"
     "WindowsModules.LinksRelocatedDLLCodeDataOrdinalAPIsAndExecutableTLS/"
+    "WhpX64")
+#endif
+
+#ifdef NEVERD_NATIVE_CPU_REQUIRED_TEST
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "WindowsDynamicOracle.NativeWindowsLoadsAndUnloadsOriginalImages")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "WindowsDynamicLink."
+    "FailedPreparationReleasesReservationsWithoutRefundingWork")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsDynamic.ExecutesOriginalRuntimeLoaderScenarios/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsDynamic.RejectsInvalidLoaderStateAndRetiredCode/"
+    "WhpX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/WindowsDynamic.SharedBudgetsDoNotCompleteSuspendedCalls/"
     "WhpX64")
 #endif

@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: b7a4aaf4bcd1796186c3567b9a45c65b994477daaf193d6f8502333fca4d305b -->
+<!-- i18n-source: 7d9f0c7d3909a8c17cb367decf40b703e1928de2a57b8a83453ce6efb0f0b6c4 -->
 
 <div align="center">
 
@@ -116,7 +116,7 @@ C11 и безопасный стабильный Rust. См. [декомпиля
 
 Выполнение CPU разделяет допуск ISA, гостевую память, транспорт бэкенда и политику гостевой ОС. `NEVERD_ENABLE_CPU_EMULATION` включает слой CPU x64/ARM64; `NEVERD_ENABLE_DRIVER_EMULATION` добавляет ограниченную среду Windows WDM/KMDF x64. `linux-elf64-v1` выполняет поддерживаемые процессы Linux ELF. См. [Выполнение CPU](cpu-execution.md), [Эмуляция гостевых процессов](process-emulation.md) и [Эмуляция драйверов Windows](driver-emulation.md).
 
-`windows-pe64-v1` поддерживает ограниченные консольные процессы Windows x64/ARM64 с PEB/TEB, TLS модулей и начальным `DllMain`, именованными Win32 API и явными ациклическими графами стартовых DLL. DLL поддерживают импорт кода/данных по имени или ординалу, DIR64-перебазирование и реальные записи загрузчика. Динамическая загрузка, CRT/GUI, пользовательский SEH и потоки ещё не завершены; нативных доказательств ARM64 KVM/WHP пока нет. Поддерживаются ограниченные перенаправления экспортов и `GetProcAddress` для резидентных гостевых образов.
+`windows-pe64-v1` поддерживает ограниченные консольные процессы Windows x64/ARM64 с PEB/TEB, статическим и динамическим TLS, `DllMain`, именованными Win32 API и явно заданными ациклическими графами DLL. Поддерживаются импорты кода/данных по имени и ординалу, DIR64, перенаправленные экспорты и реальные списки загрузчика. `LoadLibraryA` / `LoadLibraryW`, `FreeLibrary` и `GetProcAddress` используют настроенный каталог. CRT/GUI, пользовательский SEH, потоки и общая совместимость с Windows не завершены; нативных свидетельств ARM64 KVM/WHP пока нет.
 
 Виртуальная память Windows поддерживает `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `VirtualQuery` и `FlushInstructionCache` для текущего процесса. Уровень ОС управляет резервированием; `AddressSpace` остаётся единственным владельцем отображений подтверждённых страниц, прав доступа и физической памяти. Тесты проверяют изменение кода, ошибки доступа и повторное использование лимита памяти.
 

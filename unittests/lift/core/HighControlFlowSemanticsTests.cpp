@@ -4500,8 +4500,10 @@ TEST(HighControlFlowSemantics, JumpTableSuccessorsKeepCallsStoresAndPhiEdges) {
           }
         });
       });
-      EXPECT_EQ(Stores, 2U);
-      EXPECT_EQ(Calls, 2U);
+      // A successor's tail may be copied to each case that jumps to it, and
+      // every copy keeps its store and its call.
+      EXPECT_GE(Stores, 2U);
+      EXPECT_EQ(Calls, Stores);
       EXPECT_TRUE(buildHighSourceFlowGraph(High).Diagnostics.Complete);
       for (unsigned Selector : {0U, 1U, 2U}) {
         SCOPED_TRACE(Selector);
@@ -6648,6 +6650,144 @@ TEST(HighControlFlowSemantics, CaseRegionHoldingATryMovesIntoItsCase) {
   }));
   for (uint64_t X : {0, 1})
     EXPECT_EQ(execute(F, X), std::optional<uint64_t>(X == 1 ? 3 : 8));
+}
+
+TEST(HighControlFlowSemantics, ArmThatAlwaysLeavesForTheFollowTakesTheRest) {
+  // v = 9; if (x) { v = 0;
+  //   if (x & 2) { switch (x) { case 3: v = 1; goto L; default: goto L; } }
+  //   v = 2; }
+  // L: return v;  -- the switch leaves only for L, so `v = 2` runs only when
+  // `x & 2` fails: it becomes the else, and the jumps to L become breaks.
+  HighStmt Dispatch;
+  Dispatch.Kind = StmtKind::Switch;
+  Dispatch.Addr = 0x1010;
+  Dispatch.SwitchExpr = local(0);
+  SwitchCase Three;
+  Three.Value = 3;
+  Three.Body = {assign(0x1014, 1, 1), jump(0x1018, 0x1040)};
+  Dispatch.Cases = {Three};
+  Dispatch.DefaultBody = {jump(0x101c, 0x1040)};
+  HighStmt Inner;
+  Inner.Kind = StmtKind::If;
+  Inner.Addr = 0x1008;
+  Inner.Cond =
+      HighExpr::makeBinop(NdOp::INT_AND, local(0), HighExpr::makeConst(2, 8));
+  Inner.Body = {Dispatch};
+  HighStmt Outer;
+  Outer.Kind = StmtKind::If;
+  Outer.Addr = 0x1000;
+  Outer.Cond = local(0);
+  Outer.Body = {assign(0x1004, 1, 0), Inner, assign(0x1020, 1, 2)};
+  HighFunc F;
+  F.Body = {assign(0x0ff8, 1, 9), Outer, result(0x1040, local(1))};
+  const uint64_t Inputs[] = {0, 1, 2, 3, 6};
+  const uint64_t Results[] = {9, 2, 0, 1, 0};
+  for (size_t I = 0; I < 5; ++I)
+    ASSERT_EQ(execute(F, Inputs[I]), Results[I]) << Inputs[I];
+  for (int Round = 0; Round < 4 && breakToTheLoopFollow(F.Body); ++Round)
+    ;
+  EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
+  ASSERT_EQ(F.Body[1].Body.size(), 2u);
+  EXPECT_EQ(F.Body[1].Body[1].Kind, StmtKind::IfElse);
+  for (size_t I = 0; I < 5; ++I)
+    EXPECT_EQ(execute(F, Inputs[I]), Results[I]) << Inputs[I];
+}
+
+TEST(HighControlFlowSemantics, ReturnTailWithAStoreIsCopiedToEachJump) {
+  // if (x == 1) goto T; if (x == 2) goto T; return 5;
+  // T: *(0x5000) = x + 10; return *(0x5000);  -- each path runs the store
+  // once, so each jump can run its own copy of the tail.
+  auto Equals = [](va_t Address, uint64_t Value) {
+    HighStmt S;
+    S.Kind = StmtKind::If;
+    S.Addr = Address;
+    S.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                 HighExpr::makeConst(Value, 8));
+    S.Body = {jump(Address, 0x1020)};
+    return S;
+  };
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.Addr = 0x1020;
+  Store.StoreAddr = HighExpr::makeConst(0x5000, 8);
+  Store.StoreVal =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(0), HighExpr::makeConst(10, 8));
+  HighFunc F;
+  F.Body = {Equals(0x1000, 1), Equals(0x1008, 2),
+            result(0x1010, HighExpr::makeConst(5, 8)), Store,
+            result(0x1024, HighExpr::makeLoad(HighExpr::makeConst(0x5000, 8),
+                                              NdType::makeInt(8)))};
+  const uint64_t Inputs[] = {0, 1, 2, 3};
+  const uint64_t Results[] = {5, 11, 12, 5};
+  for (size_t I = 0; I < 4; ++I)
+    ASSERT_EQ(execute(F, Inputs[I]), Results[I]) << Inputs[I];
+  EXPECT_TRUE(duplicateSmallReturnTails(F.Body));
+  EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
+  for (size_t I = 0; I < 4; ++I)
+    EXPECT_EQ(execute(F, Inputs[I]), Results[I]) << Inputs[I];
+}
+
+TEST(HighControlFlowSemantics, ArmJumpingIntoTheOtherArmsTailSharesIt) {
+  // v = 0; if (x & 1) { v = 1; X: v = v + 10; } else { v = 2; goto X; }
+  // return v;  -- both arms finish with `v = v + 10`, which then runs after
+  // the if/else.
+  auto Add = assign(0x1008, 1, 0);
+  Add.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(10, 8));
+  HighStmt Split;
+  Split.Kind = StmtKind::IfElse;
+  Split.Addr = 0x1000;
+  Split.Cond =
+      HighExpr::makeBinop(NdOp::INT_AND, local(0), HighExpr::makeConst(1, 8));
+  Split.Body = {assign(0x1004, 1, 1), Add};
+  Split.ElseBody = {assign(0x100c, 1, 2), jump(0x1010, 0x1008)};
+  HighFunc F;
+  F.Body = {assign(0x0ff8, 1, 0), Split, result(0x1020, local(1))};
+  // The interpreter resolves only top-level targets, so the jump into the
+  // then arm runs only once the tail has moved.
+  ASSERT_EQ(execute(F, 1), std::optional<uint64_t>(11));
+  EXPECT_TRUE(hoistSharedArmTails(F.Body));
+  EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
+  ASSERT_EQ(F.Body.size(), 4u);
+  EXPECT_EQ(F.Body[2].Addr, 0x1008u);
+  for (uint64_t X : {1, 2, 3, 4})
+    EXPECT_EQ(execute(F, X), std::optional<uint64_t>(X & 1 ? 11 : 12)) << X;
+}
+
+TEST(HighControlFlowSemantics, HoistedTailKeepsTheLabelItsJumpCarried) {
+  // v = 0; if (x & 1) { if (x & 2) goto Y; v = 1; X: v = v + 10; }
+  // else { Y: goto X; }  return v;  -- the else arm's jump is itself the
+  // target of a jump in the then arm, so its label stays behind as an
+  // empty anchor.
+  auto Add = assign(0x1008, 1, 0);
+  Add.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(10, 8));
+  HighStmt ToY;
+  ToY.Kind = StmtKind::If;
+  ToY.Addr = 0x1002;
+  ToY.Cond =
+      HighExpr::makeBinop(NdOp::INT_AND, local(0), HighExpr::makeConst(2, 8));
+  ToY.Body = {jump(0x1002, 0x1010)};
+  HighStmt Split;
+  Split.Kind = StmtKind::IfElse;
+  Split.Addr = 0x1000;
+  Split.Cond =
+      HighExpr::makeBinop(NdOp::INT_AND, local(0), HighExpr::makeConst(1, 8));
+  Split.Body = {ToY, assign(0x1004, 1, 1), Add};
+  Split.ElseBody = {jump(0x1010, 0x1008)};
+  HighFunc F;
+  F.Body = {assign(0x0ff8, 1, 0), Split, result(0x1020, local(1))};
+  EXPECT_TRUE(hoistSharedArmTails(F.Body));
+  ASSERT_EQ(F.Body.size(), 4u);
+  EXPECT_EQ(F.Body[2].Addr, 0x1008u);
+  ASSERT_EQ(F.Body[1].ElseBody.size(), 1u);
+  EXPECT_EQ(F.Body[1].ElseBody[0].Kind, StmtKind::Block);
+  EXPECT_EQ(F.Body[1].ElseBody[0].Addr, 0x1010u);
+  EXPECT_EQ(countKind(F, StmtKind::Goto), 1u);
+  // The interpreter resolves only top-level targets: run the paths that do
+  // not take the jump into the else arm.
+  EXPECT_EQ(execute(F, 1), std::optional<uint64_t>(11));
+  EXPECT_EQ(execute(F, 2), std::optional<uint64_t>(10));
 }
 
 TEST(HighControlFlowSemantics, UnreachableCleanupDropsCodeAfterAnEndlessLoop) {

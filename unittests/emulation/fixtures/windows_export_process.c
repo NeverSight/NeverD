@@ -108,9 +108,11 @@ DWORD entry(void) {
     output(Message, sizeof(Message) - 1);
     ExitProcess(ExitStatus);
   }
-  if (Mode == UnusedArgument[0])
-    GetProcAddress(Bridge, UnusedName);
-  else if (Mode == CycleArgument[0])
+  if (Mode == UnusedArgument[0]) {
+    CHECK(!GetProcAddress(Bridge, UnusedName));
+    CHECK(GetLastError() == ProcedureMissing);
+    ExitProcess(ExitStatus);
+  } else if (Mode == CycleArgument[0])
     GetProcAddress(Bridge, CycleName);
   else if (Mode == BadOrdinalArgument[0])
     GetProcAddress(Bridge, BadOrdinalName);

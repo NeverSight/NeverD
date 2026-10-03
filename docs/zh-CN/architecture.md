@@ -950,13 +950,15 @@ super 调用证明保留窄返回值的未定义填充位并检查每个参数�
 
 UIButton 的 `contentEdgeInsets`、`imageEdgeInsets` 和 `titleEdgeInsets` 读写方法保留完整的 32 字节 `UIEdgeInsets`：上、左、下、右四个 double 在 arm64 上由 d0–d3 传递。完整的设备与模拟器 SDK 声明一致，Apple Clang 独立复现全部六种编码。接收者查找保留 UIButton 匿名分类及 UIButton → UIControl → UIView 继承关系。运行时声明冲突、其他接收者、类方法、错误提供库及缺少匹配证据的架构仍不受支持。
 
-`windows-pe64-v1` 支持有界 Windows x64/ARM64 控制台进程，包括 PEB/TEB、模块 TLS 和启动 `DllMain`、具名 Win32 API 和显式无环启动 DLL 图。客户 DLL 支持按名称／序号导入代码及数据、DIR64 重定位和真实加载器链表身份。动态加载、CRT／GUI、用户态 SEH 和线程仍待完成；原生 ARM64 KVM/WHP 证据仍缺失。 支持有界转发导出，以及针对已驻留客户映像的 `GetProcAddress`。
+`windows-pe64-v1` 支持有界 Windows x64/ARM64 控制台进程，包括 PEB/TEB、静态和动态 TLS、`DllMain`、具名 Win32 API 和显式无环 DLL 图。客户模块支持按名称／序号导入代码及数据、DIR64 重定位、转发导出和真实加载器链表身份。`LoadLibraryA`／`LoadLibraryW`、`FreeLibrary` 和 `GetProcAddress` 使用配置的模块目录。CRT／GUI、用户态 SEH、线程和通用 Windows 应用兼容性仍待完成；原生 ARM64 KVM/WHP 证据仍缺失。
 
 `readPEProgramExports` 拥有原始导出身份及有界元数据读取范围；`WindowsProcessModules` 拥有客户模块图和进程统一的精确提供方／名称 API 跳板。`VirtualMemory` 在映射前登记所有映像，`AddressSpace` 管理页面及权限。PEB/LDR 仅列出真实映像，初始化链表保留加载器登记顺序，并与按依赖计算的挂接调用顺序分别维护。`GetModuleHandleW` 接受 NULL 或 ASCII 基本名，不区分大小写，无扩展名时补 `.dll`；路径、非 ASCII 查询及末尾点规则仍不支持。名称缺失返回错误 126，成功保持 LastError。API 模型不等同于已安装的系统 DLL。
 
 `WindowsProcessLifetime` 在同一个 CPU 和执行预算下，按依赖顺序执行 DLL TLS 回调及 `DllMain`，随后执行 EXE TLS 和入口。每个模块都有独立 TLS 索引及对齐的数据块，从完成重定位和导入绑定的映像复制，共享 64 KiB 空间。TLS 保留参数为零，启动／进程退出的 `DllMain` 接收不透明非空值。显式进程退出按加载器链表的逆序分离已完成初始化的 DLL，再执行 EXE TLS 退出回调，即使 EXE 初始化尚未运行。启动 `DllMain(FALSE)` 以 `0xc0000142` 退出，不发送分离通知。故障和预算耗尽不伪造清理。带客户 DLL 的 PE 入口返回涉及尚未支持的线程终止，明确停止。非零 `SizeOfZeroFill` 仍不支持；实际 TLS 模板中的零初始化字节受支持。 无入口 DLL 接收 TLS 挂接通知，但不接收进程分离通知。
 
-`WindowsProcessExports` 为静态导入和 `GetProcAddress` 共用名称／序号解析，覆盖代码、数据、别名及链式转发。只有实际引用的启动转发才引入目录中的模块和初始化依赖，未使用的转发不加载文件。运行时可查询已驻留映像，包括在 `DllMain` 内；需要加载其他模块时明确停止。导出名称区分大小写；名称缺失返回 NULL／错误 127，直接查询缺失序号（包括空洞）返回 NULL／错误 182，查询参数为空指针返回错误 87，成功保留 LastError。未知模块句柄仍不支持。有界 API 清单按精确提供方／名称一次性保留调用入口。解析检查每个查询映像的实时 PE 头和导出元数据，拒绝修改或不可读字节，转发链最多 64 项，并共享准备阶段剩余的元数据额度及执行截止时间。这不包含 `LoadLibrary`／`FreeLibrary` 或实时改写导出表。 转发到空洞时返回目标映像基址并保留 LastError；转发到零序号返回错误 87。返回基址是数据地址，不授予映像头执行权限。
+`WindowsProcessExports` 为静态导入和 `GetProcAddress` 共用名称／序号解析，覆盖代码、数据、别名及链式转发。 只有实际引用的启动转发才引入目录中的模块和初始化依赖，未使用的转发不加载文件。 导出名称区分大小写；名称缺失返回 NULL／错误 127，直接查询缺失序号（包括空洞）返回 NULL／错误 182，查询参数为空指针返回错误 87，成功保留 LastError。 未知模块句柄仍不支持。 有界 API 清单按精确提供方／名称一次性保留调用入口。 解析检查每个查询映像的实时 PE 头和导出元数据，拒绝修改或不可读字节，转发链最多 64 项，并共享准备阶段剩余的元数据额度及执行截止时间。 转发到空洞时返回目标映像基址并保留 LastError；转发到零序号返回错误 87。 返回基址是数据地址，不授予映像头执行权限。 运行时转发可以加载配置目录中的模块，并在返回查询结果前完成初始化。仍不支持实时改写导出表。
+
+`WindowsProcessLoader` 从 `windows.modules` 加载 ASCII DLL 基名，统一管理显式引用、共享依赖和启动模块保留。重复查询转发导出不会增加额外引用。模块目录槽位在重载时使用新的驻留代次。TLS 和 `DllMain` 在同一 CPU 上、被暂停 API 的栈帧下方执行；恢复寄存器保留客户内存写入，并使用实时返回地址。动态附加／分离的保留指针为零。显式加载期间的附加失败在清理后返回错误 1114，同时保留已成功的独立嵌套加载。卸载释放映像映射和 TLS，重载恢复原始映像内容。模型之外对加载器链表或 TLS 指针的修改会明确失败。失败和重载都不会重置文件、映像与元数据工作额度。API 提供方没有伪造的 DLL 句柄。文件系统搜索、非 ASCII 路径、`LoadLibraryEx` 标志、循环导入及正在初始化或卸载的同一模块的重入转换仍不支持。
 
 Windows 虚拟内存新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` 及当前进程的 `FlushInstructionCache`。OS 层管理预留区域，`AddressSpace` 统一管理已提交页面、权限和物理存储。测试覆盖动态代码改写、访问故障和内存额度回收。
 
@@ -989,3 +991,7 @@ CoreText 的 `CTFontGetSize` 和 `CTFramesetterCreateWithAttributedString` 使�
 Combine 的精确强导入 `CurrentValueSubject` 初始化构造器使用 Swift 6.1.2 在 ARM64 和 x86-64 macOS、Mac Catalyst 上观测到的 ABI。被消费的不透明值地址使用普通参数寄存器，已分配的实例使用 `swiftself`，指针结果使用整数返回寄存器。发布时重新核验提供方与完整 ABI。该声明不推断泛型值布局，也不授予私有帧借用效果。
 
 Combine 的精确强导入 `Publisher.sink(receiveValue:)` 重载在 `Failure == Never` 时传递五个指针载体：闭包代码和上下文、Publisher 元数据和见证表，以及通过 `swiftself` 传递的不透明 Publisher 地址；返回 `AnyCancellable` 指针。`AnyCancellable.store(in: Set<AnyCancellable>)` 接收可变 Set 地址和通过 `swiftself` 传递的对象，返回 void。两项声明均依据 Swift 6.1.2 在 ARM64 和 x86-64 macOS、Mac Catalyst 上的编译器证据，发布时重新核验当前提供方和完整 ABI。这些声明不推断泛型布局、闭包生命周期或私有帧借用效果。
+
+不可变 Swift 静态标量对象只有在有界结构化存储声明与当前完整对象范围一致时，才能保留一个重建后的地址身份。支持名义类型及非泛型扩展上下文；Darwin arm64/x86_64 上，冻结的 `CoreGraphics.CGFloat` 声明确认对象为 8 字节（[Apple ABI 说明](https://developer.apple.com/documentation/corefoundation/cgfloat-swift.struct/nativetype)），另由四个 macOS/Mac Catalyst 编译目标独立核验。`SwiftMetadata` 统一负责声明和唯一不可变存储证明，源码绑定及发布复用该证明。可变、重叠、带重定位、部分、TLS、泛型或有歧义的对象仍不恢复。对齐的字节辅助存储保留完整位型和共享地址，不据此推导访问器 ABI、帧借用或 noescape 权限。
+
+无显式参数的原生 Swift 类方法由 loader 与 C API 共用完整 ABI 声明所有者。`NativeSwiftSelf` 接收者事实要求当前入口声明、匹配的类元数据，以及全部机器指令和 CFG 边的规范重提升；复制、破坏和合流沿用既有寄存器/字节分析。对于 ObjC 编码为空的对象字段，`SwiftMetadata` 独立核对有界 kind-7 反射记录、完整字段类型、类及父类描述符、ObjC ivar、偏移向量和精确字段偏移符号。生成代码仍动态读取 ivar 偏移，不用初始字节冻结继承布局。发布时重新构建当前 LowIR 提示，验证完整 ABI、已接受的审计、规范 HighIR 参数、精确的源级 self/字段路径和唯一求值。歧义记录、部分值、路径冲突、存储变化或陈旧凭据均被拒绝。本改动不增加间接聚合参数 ABI、帧借用、noescape 或纯函数权限；`CALayer.setTransform:` 仍需独立证明完整的 128 字节参数 ABI。O0/O2 对照使用原始 ARM64 与原样生成 C、真实 ObjC/CALayer 调用、变化的运行时字段偏移及 nil 字段值。

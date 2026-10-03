@@ -364,6 +364,10 @@ llvm::Expected<Image> readImage(const std::filesystem::path &Path,
                 : GuestArchitecture::AArch64,
             Base, Size,
             PE.AddressOfEntryPoint ? Base + PE.AddressOfEntryPoint : 0};
+  // RELOCS_STRIPPED forbids rebasing. An image with no absolute fixups
+  // need not have a relocation directory at all.
+  Out.Relocatable =
+      !(COFF.Characteristics & llvm::COFF::IMAGE_FILE_RELOCS_STRIPPED);
   Budget.MappedBytes -= Size;
   uint64_t Table = OptionalOffset + COFF.SizeOfOptionalHeader;
   if (Table > PE.SizeOfHeaders ||
@@ -480,8 +484,6 @@ llvm::Expected<Image> readImage(const std::filesystem::path &Path,
       }
     }
     if (I == llvm::COFF::BASE_RELOCATION_TABLE) {
-      Out.Relocatable =
-          !(COFF.Characteristics & llvm::COFF::IMAGE_FILE_RELOCS_STRIPPED);
       uint64_t Offset = 0;
       std::set<uint64_t> Targets;
       while (Offset < Data->size()) {

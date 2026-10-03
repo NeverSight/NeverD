@@ -926,7 +926,9 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
         } else if (Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeBorrowedBytes ||
                    Hint.CallKind ==
-                       SourceCallTypeHint::Kind::RuntimeReadOnlyBytes) {
+                       SourceCallTypeHint::Kind::RuntimeReadOnlyBytes ||
+                   Hint.CallKind == SourceCallTypeHint::Kind::
+                                        RuntimeSwiftScalarStorageAddress) {
           if (Hint.TargetAddress)
             SourceObjectAddressHelpers.insert(
                 "neverd_borrowed_bytes_" +

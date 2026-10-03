@@ -10,6 +10,9 @@
 namespace neverd {
 struct BinaryImage;
 
+std::optional<ObjCReceiverTypeHint>
+objcNativeSwiftSelfTypeHint(const BinaryImage &Image, va_t Entry);
+
 /// Merge every known declaration for a dynamically dispatched selector.
 /// Runtime declarations and applicable framework declarations must agree;
 /// unsupported or variadic declarations veto the source call signature.

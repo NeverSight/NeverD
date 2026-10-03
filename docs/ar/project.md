@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: b7a4aaf4bcd1796186c3567b9a45c65b994477daaf193d6f8502333fca4d305b -->
+<!-- i18n-source: 7d9f0c7d3909a8c17cb367decf40b703e1928de2a57b8a83453ce6efb0f0b6c4 -->
 
 <div align="center" dir="rtl">
 
@@ -115,7 +115,7 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 
 يفصل تنفيذ المعالج بين قبول ISA وذاكرة الضيف ونقل المحرك وسياسة نظام الضيف. يتيح `NEVERD_ENABLE_CPU_EMULATION` طبقة x64/ARM64، ويضيف `NEVERD_ENABLE_DRIVER_EMULATION` بيئة Windows WDM/KMDF x64 المحدودة. يشغّل `linux-elf64-v1` عمليات Linux ELF المدعومة. انظر [تنفيذ المعالج](cpu-execution.md) و[محاكاة عمليات الضيف](process-emulation.md) و[محاكاة برامج تشغيل Windows](driver-emulation.md).
 
-يدعم `windows-pe64-v1` عمليات Windows x64/ARM64 محدودة لوحدة التحكم مع PEB/TEB وTLS للوحدات و`DllMain` عند البدء وواجهات Win32 مسماة ورسوم DLL بدء صريحة بلا دورات. تدعم DLL استيراد الشيفرة والبيانات بالاسم أو الرقم وإعادة التموضع DIR64 وهويات حقيقية بقوائم المحمّل. ما زالت التحميل الديناميكي وCRT/GUI وSEH المستخدم والخيوط غير مكتملة؛ وتغيب أدلة ARM64 KVM/WHP الأصلية. تُدعم إحالات التصدير المحدودة و`GetProcAddress` للصور الضيفة المقيمة.
+يدعم `windows-pe64-v1` عمليات طرفية محدودة لـWindows x64/ARM64 مع PEB/TEB وTLS ثابت وديناميكي و`DllMain` وواجهات Win32 مسماة ورسوم DLL صريحة بلا دورات. تدعم الوحدات استيراد الشيفرة والبيانات بالاسم أو الرقم وDIR64 والتصدير المحال وهويات قوائم المحمّل الفعلية. تستخدم `LoadLibraryA` / `LoadLibraryW` و`FreeLibrary` و`GetProcAddress` دليل الوحدات المضبوط. ما زالت CRT/GUI وSEH للمستخدم والخيوط والتوافق العام مع Windows غير مكتملة، وكذلك أدلة ARM64 الأصلية لـKVM/WHP.
 
 تضيف الذاكرة الافتراضية في Windows دعم `VirtualAlloc` و`VirtualFree` و`VirtualProtect` و`VirtualQuery` و`FlushInstructionCache` للعملية الحالية. تدير طبقة OS الحجوزات، وتبقى `AddressSpace` المرجع للصفحات الملتزم بها والصلاحيات والتخزين الفعلي. تشمل الاختبارات تعديل الشيفرة وأخطاء الوصول وإعادة استخدام ميزانية الذاكرة.
 

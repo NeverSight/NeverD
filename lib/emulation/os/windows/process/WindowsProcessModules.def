@@ -28,10 +28,8 @@ NEVERD_WINDOWS_PROCESS_TEXT(ModuleMissing,
 NEVERD_WINDOWS_PROCESS_TEXT(ModuleCycle, "cyclic startup module dependencies: ")
 NEVERD_WINDOWS_PROCESS_TEXT(
     ModuleISA, "startup module architecture differs from the executable")
-NEVERD_WINDOWS_PROCESS_TEXT(ModuleBudget,
-                            "startup module preparation budget exceeded")
-NEVERD_WINDOWS_PROCESS_TEXT(ModuleTimeout,
-                            "startup module preparation deadline exceeded")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleBudget, "module work budget exceeded")
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleTimeout, "module operation deadline exceeded")
 NEVERD_WINDOWS_PROCESS_TEXT(ModuleTLSBudget,
                             "aggregate static TLS capacity exceeded")
 NEVERD_WINDOWS_PROCESS_TEXT(TLSZeroFill,
@@ -44,12 +42,28 @@ NEVERD_WINDOWS_PROCESS_TEXT(ForwarderLoad,
                             "export query requires dynamic module loading: ")
 NEVERD_WINDOWS_PROCESS_TEXT(ExportChanged,
                             "runtime export metadata was modified")
-NEVERD_WINDOWS_PROCESS_TEXT(ExportBudget,
-                            "export resolution metadata budget exceeded")
+NEVERD_WINDOWS_PROCESS_TEXT(ExportBudget, "module metadata budget exceeded")
 NEVERD_WINDOWS_PROCESS_TEXT(ForwarderSeparator, ".")
 NEVERD_WINDOWS_PROCESS_TEXT(ForwarderOrdinal, "#")
 NEVERD_WINDOWS_PROCESS_TEXT(ModuleExport, "missing or unmapped guest export: ")
 NEVERD_WINDOWS_PROCESS_TEXT(ModuleFixup,
                             "base relocation overlaps linker metadata")
 NEVERD_WINDOWS_PROCESS_TEXT(DLLExtension, ".dll")
+#endif
+
+#ifdef NEVERD_WINDOWS_PROCESS_TEXT
+NEVERD_WINDOWS_PROCESS_TEXT(ModuleLoadFailed, "guest module load failed: ")
+NEVERD_WINDOWS_PROCESS_TEXT(
+    LoaderChanged, "guest loader metadata was modified or inaccessible")
+NEVERD_WINDOWS_PROCESS_TEXT(LoaderReentrant,
+                            "unsupported reentrant module state transition")
+#endif
+#ifdef NEVERD_WINDOWS_PROCESS_VALUE
+NEVERD_WINDOWS_PROCESS_VALUE(ErrorDLLInitFailed, 1114)
+NEVERD_WINDOWS_PROCESS_VALUE(MaxLoaderDepth, 64)
+#endif
+
+#ifdef NEVERD_WINDOWS_PROCESS_TEXT
+NEVERD_WINDOWS_PROCESS_TEXT(LoaderProvider,
+                            "API model provider has no loadable guest image")
 #endif

@@ -11,6 +11,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <set>
 
 namespace neverd::emulation::windows_process {
 namespace {
@@ -46,7 +47,7 @@ std::u16string quote(const std::u16string &Input) {
 } // namespace
 
 llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
-                                               const Program &Program,
+                                               Program &Program,
                                                const ProcessOptions &Options) {
   if (Program.Modules.empty() ||
       Program.Modules.size() != Program.Identities.size())
@@ -113,7 +114,9 @@ llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
   if (auto E =
           Memory.map(TEB, EnvironmentEnd - TEB, Read | Write | UserAccessible))
     return std::move(E);
-  uint64_t Cursor = ModuleEntry + Modules.size() * ModuleStride;
+  Environment Out{};
+  uint64_t Cursor =
+      ModuleEntry + (windows_process_limits::Modules + 1) * ModuleStride;
   auto Store = [&](const std::u16string &Text) -> llvm::Expected<uint64_t> {
     const uint64_t Size = (Text.size() + 1) * WideSize;
     if (Size > EnvironmentEnd - Cursor)
@@ -185,6 +188,7 @@ llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
     auto Address = I ? Store(*Text) : llvm::Expected<uint64_t>(*ImageAddress);
     if (!Address)
       return Address.takeError();
+    Out.ModuleNames.emplace(I, *Address);
     for (const auto &F : {Field{Node + ModuleBase, M.Base},
                           Field{Node + ModuleEntryPoint, M.Entry},
                           Field{Node + ModuleImageSize, M.Size, DWordSize}})
@@ -228,8 +232,8 @@ llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
                        Command.size()))
     return std::move(E);
   uint64_t TLSCursor = TLSData, TLSCount = 0;
-  for (const auto &Module : Program.Modules) {
-    const auto &M = Module.Loaded;
+  for (size_t I = 0; I < Program.Modules.size(); ++I) {
+    const auto &M = Program.Modules[I].Loaded;
     if (!M.TLSIndex)
       continue;
     TLSCursor = (TLSCursor + M.TLSAlignment - 1) & ~(M.TLSAlignment - 1);
@@ -253,9 +257,240 @@ llvm::Expected<Environment> prepareEnvironment(AddressSpace &Memory,
       return std::move(E);
     if (auto E = Memory.write(TLSCursor, Bytes))
       return std::move(E);
+    Out.TLS.emplace(I, Environment::TLSAllocation{TLSCount, TLSCursor, Size});
     ++TLSCount;
     TLSCursor += Size;
   }
-  return Environment{*CommandAddress, std::move(*Name)};
+  Out.CommandLine = *CommandAddress;
+  Out.ImageName = std::move(*Name);
+  Out.StringCursor = Cursor;
+  for (const auto &[Address, Size] :
+       {std::pair{TEB + TebPEB, PointerSize},
+        std::pair{PEB + PebLdr, PointerSize},
+        std::pair{PEB + PebImageBase, PointerSize}, std::pair{Ldr, LdrSize},
+        std::pair{ModuleEntry,
+                  (windows_process_limits::Modules + 1) * ModuleStride}}) {
+    auto &Bytes = Out.LoaderMetadata[Address];
+    Bytes.resize(Size);
+    if (auto E = Memory.read(Address, Bytes))
+      return std::move(E);
+  }
+  for (const auto &[Index, Address] : Out.ModuleNames) {
+    auto Name = utf16(Program.Identities[Index].Name);
+    if (!Name)
+      return Name.takeError();
+    auto &Bytes = Out.LoaderMetadata[Address];
+    Bytes.resize((Name->size() + 1) * WideSize);
+    if (auto E = Memory.read(Address, Bytes))
+      return std::move(E);
+  }
+  return Out;
+}
+namespace {
+llvm::Error validateEnvironment(AddressSpace &Memory, Program &Program,
+                                const Environment &Env,
+                                const ExecutionBudget &Budget) {
+  auto Charge = [&](uint64_t Size) -> llvm::Error {
+    if (!Budget.remainingMicroseconds())
+      return failure(text::ModuleTimeout);
+    if (Size > Program.Reads.MetadataBytes)
+      return failure(text::ExportBudget);
+    Program.Reads.MetadataBytes -= Size;
+    return llvm::Error::success();
+  };
+  for (const auto &[Address, Expected] : Env.LoaderMetadata) {
+    if (auto E = Charge(Expected.size()))
+      return E;
+    std::vector<uint8_t> Actual(Expected.size());
+    if (auto E = Memory.read(Address, Actual))
+      return E;
+    if (Actual != Expected)
+      return failure(text::LoaderChanged);
+  }
+  if (auto E = Charge(PointerSize))
+    return E;
+  auto Vector = Memory.readInteger(TEB + TebTLSVector, PointerSize);
+  if (!Vector)
+    return Vector.takeError();
+  if (*Vector != TLSVector)
+    return failure(text::LoaderChanged);
+  for (const auto &[Index, Block] : Env.TLS) {
+    if (auto E = Charge(PointerSize + DWordSize))
+      return E;
+    auto Value =
+        Memory.readInteger(TLSVector + Block.Index * PointerSize, PointerSize);
+    if (!Value)
+      return Value.takeError();
+    if (*Value != Block.Address)
+      return failure(text::LoaderChanged);
+    auto TLSIndex =
+        Memory.readInteger(Program.Modules[Index].Loaded.TLSIndex, DWordSize);
+    if (!TLSIndex)
+      return TLSIndex.takeError();
+    if (*TLSIndex != Block.Index)
+      return failure(text::LoaderChanged);
+  }
+  return llvm::Error::success();
+}
+llvm::Error snapshotEnvironment(AddressSpace &Memory, Environment &Env) {
+  for (auto &[Address, Bytes] : Env.LoaderMetadata)
+    if (auto E = Memory.read(Address, Bytes))
+      return E;
+  return llvm::Error::success();
+}
+} // namespace
+llvm::Error releaseModuleEnvironment(AddressSpace &Memory, Program &Program,
+                                     Environment &Env,
+                                     llvm::ArrayRef<ModuleRef> Modules,
+                                     const ExecutionBudget &Budget) {
+  if (auto E = validateEnvironment(Memory, Program, Env, Budget))
+    return E;
+  for (auto Ref : Modules) {
+    if (!current(Program, Ref))
+      return failure(text::Lifetime);
+    auto I = Env.TLS.find(Ref.Index);
+    if (I == Env.TLS.end())
+      continue;
+    if (auto E = Memory.writeInteger(TLSVector + I->second.Index * PointerSize,
+                                     0, PointerSize))
+      return E;
+    std::vector<uint8_t> Zero(I->second.Size);
+    if (auto E = Memory.write(I->second.Address, Zero))
+      return E;
+    Env.TLS.erase(I);
+  }
+  return llvm::Error::success();
+}
+llvm::Error updateEnvironment(AddressSpace &Memory, Program &Program,
+                              Environment &Env, const ExecutionBudget &Budget) {
+  if (auto E = validateEnvironment(Memory, Program, Env, Budget))
+    return E;
+  for (size_t I = 0; I < Program.Modules.size(); ++I) {
+    const auto &Module = Program.Modules[I];
+    const auto &M = Module.Loaded;
+    const uint64_t Node = ModuleEntry + I * ModuleStride;
+    if (!resident(Module)) {
+      std::vector<uint8_t> Zero(ModuleStride);
+      if (auto E = Memory.write(Node, Zero))
+        return E;
+      continue;
+    }
+    auto Name = utf16(Program.Identities[I].Name);
+    if (!Name)
+      return Name.takeError();
+    if (!Env.ModuleNames.contains(I)) {
+      const uint64_t Size = (Name->size() + 1) * WideSize;
+      if (Size > EnvironmentEnd - Env.StringCursor)
+        return failure(text::Strings);
+      std::vector<uint8_t> Bytes(Size);
+      for (size_t N = 0; N < Name->size(); ++N)
+        llvm::support::endian::write16le(Bytes.data() + N * WideSize,
+                                         (*Name)[N]);
+      if (auto E = Memory.write(Env.StringCursor, Bytes))
+        return E;
+      Env.ModuleNames.emplace(I, Env.StringCursor);
+      Env.LoaderMetadata.emplace(Env.StringCursor, Bytes);
+      Env.StringCursor += Size;
+    }
+    for (const auto &[Offset, Value] :
+         {std::pair{ModuleBase, M.Base}, std::pair{ModuleEntryPoint, M.Entry}})
+      if (auto E = Memory.writeInteger(Node + Offset, Value, PointerSize))
+        return E;
+    if (auto E = Memory.writeInteger(Node + ModuleImageSize, M.Size, DWordSize))
+      return E;
+    for (uint64_t Offset : {ModuleFullName, ModuleBaseName}) {
+      if (auto E = Memory.writeInteger(Node + Offset + UnicodeLength,
+                                       Name->size() * WideSize, WideSize))
+        return E;
+      if (auto E = Memory.writeInteger(Node + Offset + UnicodeMaximumLength,
+                                       (Name->size() + 1) * WideSize, WideSize))
+        return E;
+      if (auto E = Memory.writeInteger(Node + Offset + UnicodeBuffer,
+                                       Env.ModuleNames.at(I), PointerSize))
+        return E;
+    }
+    if (!M.TLSIndex || Env.TLS.contains(I))
+      continue;
+    std::vector<Environment::TLSAllocation> Blocks;
+    std::set<uint64_t> Indices;
+    for (const auto &[Owner, Block] : Env.TLS) {
+      Blocks.push_back(Block);
+      Indices.insert(Block.Index);
+    }
+    llvm::sort(Blocks, [](const auto &A, const auto &B) {
+      return A.Address < B.Address;
+    });
+    const uint64_t Size = std::max(M.TLSSize, PointerSize);
+    uint64_t Address = TLSData;
+    auto Align = [&] {
+      Address = (Address + M.TLSAlignment - 1) & ~(M.TLSAlignment - 1);
+    };
+    Align();
+    for (const auto &Block : Blocks) {
+      if (Address <= Block.Address && Size <= Block.Address - Address)
+        break;
+      Address = Block.Address + Block.Size;
+      Align();
+    }
+    uint64_t Index = 0;
+    while (Indices.contains(Index))
+      ++Index;
+    if (Address > TLSData + TLSCapacity ||
+        Size > TLSData + TLSCapacity - Address ||
+        (Index + 1) * PointerSize > TLSData - TLSVector)
+      return failure(text::ModuleTLSBudget);
+    std::vector<uint8_t> Bytes(Size);
+    if (M.TLSTemplateSize)
+      if (auto E = Memory.read(
+              M.TLSTemplate,
+              llvm::MutableArrayRef(Bytes).take_front(M.TLSTemplateSize)))
+        return E;
+    if (auto E = Memory.write(Address, Bytes))
+      return E;
+    if (auto E = Memory.writeInteger(M.TLSIndex, Index, DWordSize))
+      return E;
+    if (auto E = Memory.writeInteger(TLSVector + Index * PointerSize, Address,
+                                     PointerSize))
+      return E;
+    Env.TLS.emplace(I, Environment::TLSAllocation{Index, Address, Size});
+  }
+  auto Link = [&](uint64_t Head, uint64_t Offset,
+                  llvm::ArrayRef<size_t> Order) -> llvm::Error {
+    uint64_t Previous = Head;
+    for (size_t I : Order) {
+      const uint64_t Node = ModuleEntry + I * ModuleStride + Offset;
+      if (auto E = Memory.writeInteger(Previous, Node, PointerSize))
+        return E;
+      if (auto E =
+              Memory.writeInteger(Node + PointerSize, Previous, PointerSize))
+        return E;
+      Previous = Node;
+    }
+    if (auto E = Memory.writeInteger(Previous, Head, PointerSize))
+      return E;
+    return Memory.writeInteger(Head + PointerSize, Previous, PointerSize);
+  };
+  // Generation order is load order even when a retired catalogue slot is
+  // reused.
+  std::vector<size_t> Order;
+  for (size_t I = 0; I < Program.Modules.size(); ++I)
+    if (resident(Program.Modules[I]))
+      Order.push_back(I);
+  llvm::sort(Order, [&](size_t A, size_t B) {
+    return Program.Modules[A].Generation < Program.Modules[B].Generation;
+  });
+  if (auto E = Link(Ldr + LdrLoadList, 0, Order))
+    return E;
+  if (auto E = Link(Ldr + LdrMemoryList, ModuleMemoryLink, Order))
+    return E;
+  // Native FreeLibrary removes this membership before detach callbacks, while
+  // the image remains mapped and visible through the other lists and lookup.
+  std::vector<size_t> InitOrder;
+  for (size_t I : Program.LoaderInitializationOrder)
+    if (Program.Modules[I].State != ModuleState::Detaching)
+      InitOrder.push_back(I);
+  if (auto E = Link(Ldr + LdrInitList, ModuleInitLink, InitOrder))
+    return E;
+  return snapshotEnvironment(Memory, Env);
 }
 } // namespace neverd::emulation::windows_process

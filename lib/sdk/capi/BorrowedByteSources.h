@@ -46,8 +46,9 @@ renderBorrowedByteHelpers(const BinaryImage &Image,
           "borrowed byte range no longer has immutable storage");
     const auto Name = borrowedByteHelperName(Range);
     SharedFunctions.insert(Name);
-    Source += "\nuintptr_t " + Name +
-              "(void) {\n  static const unsigned char bytes[] = { ";
+    Source +=
+        "\nuintptr_t " + Name +
+        "(void) {\n  _Alignas(16) static const unsigned char bytes[] = { ";
     for (auto Byte : *Bytes)
       Source += std::to_string(Byte) + ", ";
     Source += "0 };\n  return (uintptr_t)bytes;\n}\n";

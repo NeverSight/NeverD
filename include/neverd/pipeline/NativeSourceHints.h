@@ -57,6 +57,12 @@ boundNativeBooleanCallees(const MedFunc &Caller);
 bool validateSwiftWitnessFrameBindings(const BinaryImage &Image,
                                        const LowFunc *Low, const MedFunc &Med);
 
+/// Revalidate native Swift receiver occurrences against the current complete
+/// entry declaration and loader-owned machine/CFG provenance.
+bool validateNativeSwiftReceiverBindings(const BinaryImage &Image,
+                                         const LowFunc *Low,
+                                         const MedFunc &Med);
+
 /// Exact direct call targets followed by an observed full-word read of the
 /// second integer return register in the same block. This is a demand, not a
 /// callee ABI proof. Calls, intrinsics and overlapping writes end the scan.

@@ -123,17 +123,30 @@ establish virtualization support. After the CPU gate, the workflow also
 requires every matching Darwin workload. Dedicated runners are not assumed
 to be provisioned.
 
+GitHub describes nested virtualization on hosted runners as experimental and
+does not guarantee its stability, performance or compatibility. See its
+[hosted-runner policy](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
+Keep a dedicated native Mac path for repeatable acceptance. This platform
+limitation does not identify the cause of an individual stalled run.
+
 The workflow first builds `NeverDHvfTests`, whose dependency boundary is LLVM
 Support and the decoder, and requires native instruction execution before the
 full process/LLVM dependency build. `validation=transport` stops after this
 diagnostic profile; `full` remains the default and also requires both complete
-gates. The transport profile reuses the full inventory's HVF requirements and
+gates. `validation=darwin` builds the Darwin owner and requires every matching
+native workload independently of the complete CPU gate. The transport profile
+reuses the full inventory's HVF requirements and
 records `hvf_transport_only=true`; it is not full CPU/process acceptance.
-On Intel, the workflow additionally runs `NeverDX64ExceptionTests` before the
-large dependency build, including the CR8 state regression and processor faults.
+On Intel, the workflow additionally builds `NeverDX64ExceptionTests` and runs
+its CR8 state/privilege regression before the large dependency build. The full
+CPU gate owns the complete state/exception suite, without a duplicate preflight.
 It uploads transport results and the state inventory before execution, then
-preserves the isolated CR8 result before running the complete state suite.
+preserves the isolated CR8 result before the complete CPU gate.
 Artifacts include the run attempt so reruns retain their own evidence.
+Full-inventory compilation has its own step and log. `test_parallel` selects
+four CTest processes by default or one for a serialized comparison, while
+compilation remains parallel. The result summary records the selected value,
+host OS/kernel description and logical CPU count.
 It can also run locally with `--require-hvf --hvf-transport-only` on
 `scripts/run_native_cpu_ci.py`. `validation=probe` runs only the VM/vCPU
 availability check without LLVM; it cannot establish instruction execution
@@ -251,9 +264,12 @@ required cases with zero skips. Separate one-process and cancellation checks
 also passed; all three interruption modes retained RFLAGS `0x202` through retry.
 The artifact SHA-256 was verified against GitHub metadata. This establishes
 transport recovery, not yet the complete Intel CPU and Darwin profiles.
-The full gate at `9319c880d` is running with all fourteen Intel requirements
-and 100 interruption/recovery repetitions. Stalled and cancelled runs are not
-acceptance evidence. Temporary instruction probes, API interposers and phase
+The full gate at `9319c880d` passed 100 interruption/recovery repetitions and
+transport, but did not return complete CPU/Darwin results; cancellation was
+requested after more than 100 minutes in its combined build/test step. The
+complete gate still needs all fourteen Intel requirements and broader CPU
+coverage to finish successfully. Stalled and
+cancelled runs are not acceptance evidence. Temporary instruction probes, API interposers and phase
 tracing are removed; actual NeverD tests own ongoing acceptance.
 
 At clean source `9319c880d78e93f5cb8a7a9360778084934de258`, the ARM64 transport
@@ -268,6 +284,51 @@ CPL3 protection faults, resume-flag behavior and complete state preservation.
 Its separate JUnit result and the transport artifact were downloaded and their
 SHA-256 digests verified. The state owner compiled and registered 952 cases;
 these checkpoints do not establish completion of that larger suite.
+
+At clean source `5251cc68591dc343c954c8b7a9b57fa5cb9190e8`, the
+[state-transition family](https://github.com/NeverSight/NeverD/actions/runs/37091386132)
+passed all five HVF cases in one process, with ten foreign-transport cases
+skipped. Its verified artifact covers TLS/privilege, CR8, cancellation and
+complete x87/SSE state across host changes, faults and stops. The job later
+stopped reporting during artifact upload. A subsequent serialized transport
+and state run reached the raw exception group without returning its result.
+These observations do not identify a particular instruction failure or prove
+a test-process concurrency defect. Later isolated results are recorded below;
+the complete CPU/Darwin gate remains separate.
+
+At clean source `908a830e6e3f1bbae6bc7ed7e534f3b13aeb1c1e`, both focused jobs
+completed successfully. The [raw-fault job](https://github.com/NeverSight/NeverD/actions/runs/37094333371)
+passed all 120 native exception cases, covering ten fault types at both
+privilege levels, repeated recovery, mapping changes and private-gateway
+integrity. The [division job](https://github.com/NeverSight/NeverD/actions/runs/37094335126)
+passed all 128 native public-CPU division cases, including normal results,
+terminal traps, explicit recovery and observer stops. Each also passed all five
+state-transition cases, ten transport cases and 100 interruption/recovery
+repetitions. Shared checks overlap and must not be added as independent cases.
+Both artifacts were downloaded, SHA-256 verified and their individual XML
+results inspected. Temporary isolation workflow inputs and steps are removed.
+The [complete Intel gate](https://github.com/NeverSight/NeverD/actions/runs/37095689345)
+at `4c6a12b913123d0555f067035527fe29f856f3b9` compiled all twenty owners, but
+returned no CPU result after more than thirty minutes and was cancelled.
+Its completed job still provided no downloadable execution log. The build
+artifact's SHA-256 was verified; this is not full CPU acceptance. The
+[independent Darwin gate](https://github.com/NeverSight/NeverD/actions/runs/37097301977)
+at `4cbb729389df9485c9a9699c63c0be3a48862794` separately requires all 26 native
+Intel workloads. A temporary
+[per-owner diagnosis](https://github.com/NeverSight/NeverD/actions/runs/37098336208)
+records each complete CPU owner's inventory, CTest exit code and XML before
+continuing. Both ongoing runs use serialized tests; the emulation implementation
+and tests match the successful focused runs. Neither has yet returned complete
+acceptance evidence.
+
+After integrating the subsequent `dev` changes, clean source
+`f4bf8dde5cbc33d18ce053cb0722a54047e5a2d0` again passed all twelve ARM64
+transport cases with no skips. The independent Darwin gate passed 65 checks,
+failed none and skipped 221 inapplicable cases; all 39 required native workloads
+executed. The new host/parallel summary fields were also verified in actual
+Apple Silicon and Intel transport artifacts. Local evidence is in
+`build-hvf-native/hvf-final-dev-transport-evidence/` and
+`build-hvf-native/hvf-final-dev-darwin-evidence/`.
 
 The subsequent integration pass repaired the test SDK's missing
 `neverd_session_set_load_progress` and made the shared worker test client wait

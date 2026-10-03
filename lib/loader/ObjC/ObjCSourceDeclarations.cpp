@@ -1,5 +1,6 @@
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
 
+#include "../Swift/SwiftMangledClassMethodABI.h"
 #include "ObjCReceiverDeclarations.h"
 
 #include "neverd/ir/SourceABI.h"
@@ -7,6 +8,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
+#include "neverd/loader/Swift/SwiftMetadata.h"
 
 #include <algorithm>
 #include <array>
@@ -1567,6 +1569,32 @@ objcBlockParameterReceiverTypeHint(const BinaryImage &Image, va_t Invoke,
   return Result;
 }
 
+std::optional<ObjCReceiverTypeHint>
+objcNativeSwiftSelfTypeHint(const BinaryImage &Image, va_t Entry) {
+  const auto Declaration =
+      swiftMangledZeroArgClassMethodDeclaration(Image, Entry);
+  if (!Declaration || llvm::any_of(Image.ObjCMethods, [&](const auto &M) {
+        return M.Implementation == Entry;
+      }))
+    return std::nullopt;
+  const std::string RuntimeName =
+      "_TtC" + std::to_string(Declaration->Module.size()) +
+      Declaration->Module + std::to_string(Declaration->ClassName.size()) +
+      Declaration->ClassName;
+  for (const auto &Class : Image.ObjCClasses) {
+    if (Class.Name != RuntimeName)
+      continue;
+    const auto Identity = swiftObjCClassIdentity(Image, Class.Address);
+    if (!Identity || Identity->Module != Declaration->Module ||
+        Identity->Name != Declaration->ClassName)
+      return std::nullopt;
+    return ObjCReceiverTypeHint{
+        ObjCReceiverTypeHint::OriginKind::NativeSwiftSelf, Entry, RuntimeName,
+        false};
+  }
+  return std::nullopt;
+}
+
 namespace {
 bool validReceiverRoot(const BinaryImage &Image,
                        const ObjCReceiverTypeHint &Receiver) {
@@ -1603,6 +1631,8 @@ bool validReceiverRoot(const BinaryImage &Image,
                      ObjCReceiverTypeHint::OriginKind::Merged &&
                  Alternative.Origin !=
                      ObjCReceiverTypeHint::OriginKind::BlockParameter &&
+                 Alternative.Origin !=
+                     ObjCReceiverTypeHint::OriginKind::NativeSwiftSelf &&
                  Alternative.Alternatives.empty() &&
                  !Alternative.BlockCaptureOffset &&
                  Alternative.Steps.size() + Receiver.Steps.size() <= 8;
@@ -1613,6 +1643,12 @@ bool validReceiverRoot(const BinaryImage &Image,
            std::adjacent_find(Receiver.Alternatives.begin(),
                               Receiver.Alternatives.end()) ==
                Receiver.Alternatives.end();
+  case ObjCReceiverTypeHint::OriginKind::NativeSwiftSelf: {
+    if (Receiver.IsClassMethod || !Receiver.OutParameters.empty())
+      return false;
+    const auto Expected = objcNativeSwiftSelfTypeHint(Image, Receiver.Address);
+    return Expected && Expected->ClassName == Receiver.ClassName;
+  }
   case ObjCReceiverTypeHint::OriginKind::MethodEntry: {
     if (!Receiver.OutParameters.empty())
       return false;
@@ -1726,7 +1762,8 @@ const ObjCIvar *receiverIvar(const BinaryImage &Image, std::string ClassName,
           Ref->second.Name != Ivar.Name ||
           Ref->second.ClassName != Class->Name ||
           (RequireObject && !objcEncodedObjectClass(Ivar.TypeEncoding) &&
-           !objcEncodedObjectProtocol(Ivar.TypeEncoding)))
+           !objcEncodedObjectProtocol(Ivar.TypeEncoding) &&
+           !swiftObjCStoredFieldClass(Image, Class->Name, Ivar.OffsetAddress)))
         return nullptr;
       Result = &Ivar;
     }
@@ -1837,7 +1874,13 @@ std::optional<ReceiverType> receiverType(const BinaryImage &Image,
         Image.ObjCSourceReferences.at(Access.OffsetSlot).Size !=
             Access.OffsetWidth)
       return std::nullopt;
-    const auto ClassName = objcEncodedObjectClass(Ivar->TypeEncoding);
+    auto ClassName = objcEncodedObjectClass(Ivar->TypeEncoding);
+    if (!ClassName && !Access.ByteOffset && Ivar->TypeEncoding.empty()) {
+      const auto Ref = Image.ObjCSourceReferences.find(Ivar->OffsetAddress);
+      if (Ref != Image.ObjCSourceReferences.end())
+        ClassName = swiftObjCStoredFieldClass(Image, Ref->second.ClassName,
+                                              Ivar->OffsetAddress);
+    }
     const auto ProtocolName = objcEncodedObjectProtocol(Ivar->TypeEncoding);
     if ((!ClassName && !ProtocolName) || (ClassName && ProtocolName))
       return std::nullopt;

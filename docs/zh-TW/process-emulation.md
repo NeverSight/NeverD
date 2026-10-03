@@ -80,7 +80,7 @@ x64 的 `arch_prctl` 支援 `ARCH_SET_FS`、`ARCH_GET_FS`、`ARCH_SET_GS`、`ARC
 
 ## Windows PE64 設定檔
 
-`windows-pe64-v1` 支援有界 Windows x64/ARM64 主控台程序，包括 PEB/TEB、模組 TLS 與啟動 `DllMain`、具名 Win32 API 與明確無環啟動 DLL 圖。客體 DLL 支援名稱／序號程式碼及資料匯入、DIR64 重定位及真實載入器串列身分。動態載入、CRT／GUI、使用者 SEH 與執行緒仍待完成；原生 ARM64 KVM/WHP 證據仍缺。 支援有界轉送匯出，以及針對已駐留客體映像的 `GetProcAddress`。
+`windows-pe64-v1` 支援有界 Windows x64/ARM64 主控台程序，包括 PEB/TEB、靜態與動態 TLS、`DllMain`、具名 Win32 API 和明確的無環 DLL 圖。客體模組支援依名稱／序號匯入程式碼與資料、DIR64 重定位、轉送匯出及真實載入器串列身分。`LoadLibraryA`／`LoadLibraryW`、`FreeLibrary` 和 `GetProcAddress` 使用設定的模組目錄。CRT／GUI、使用者態 SEH、執行緒及通用 Windows 應用程式相容性仍待完成；原生 ARM64 KVM/WHP 證據仍缺失。
 
 Windows 虛擬記憶體新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`、`VirtualQuery` 及目前行程的 `FlushInstructionCache`。OS 層管理保留區域，`AddressSpace` 統一管理已認可頁面、權限和實體儲存。測試涵蓋動態程式碼改寫、存取錯誤和記憶體額度回收。
 
@@ -95,7 +95,7 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
   --options='{"backend":"auto","arguments":["guest.exe","argument"],"environment":["MODE=test"]}'
 ```
 
-單執行緒設定將 PE32+ EXE 保持在偏好基址，接受可含進入點及靜態 TLS 的明確 DLL。`WindowsProcessOptions::Modules` 或 JSON `windows.modules` 以 `name`、`path` 提供最多 64 個客體基本名稱與主機輸入路徑，不搜尋或執行主機 DLL。ASCII 名稱不分大小寫；拒絕重複名稱及覆寫系統 API 提供者，只讀取可達檔案。名稱／序號函式與資料匯入繫結實際映射匯出；空洞、缺少符號、循環、繫結／延遲匯入及未支援的載入設定／CFG 明確失敗。可移動 DLL 衝突時套用 DIR64；固定衝突及寫入連結中繼資料的重定位在建立 CPU 前失敗。
+單執行緒設定將 PE32+ EXE 保持在偏好基址，接受可含進入點及靜態 TLS 的明確 DLL。`WindowsProcessOptions::Modules` 或 JSON `windows.modules` 以 `name`、`path` 提供最多 64 個客體基本名稱與主機輸入路徑，不搜尋或執行主機 DLL。ASCII 名稱不分大小寫；拒絕重複名稱及覆寫系統 API 提供者，只讀取可達檔案。名稱／序號函式與資料匯入繫結實際映射匯出；空洞、缺少符號、循環、繫結／延遲匯入及未支援的載入設定／CFG 明確失敗。可移動 DLL 衝突時套用 DIR64；固定衝突及寫入連結中繼資料的重定位在發布受影響映像前失敗。
 
 `readPEProgramExports` 擁有原始匯出身分與有界中繼資料讀取範圍；`WindowsProcessModules` 擁有模組圖和全程序精確提供者／名稱 API 跳板。`VirtualMemory` 在映射前登記全部映像，`AddressSpace` 管理頁面及權限。PEB/LDR 僅列真實映像，初始化串列保留載入器登記順序，並與依相依關係計算的掛接呼叫順序分別維護。`GetModuleHandleW` 接受 NULL 或 ASCII 基本名稱，不分大小寫，無副檔名時補 `.dll`；路徑、非 ASCII 查詢及結尾點規則仍不支援。找不到名稱回傳錯誤 126，成功保留 LastError。API 模型不是已安裝系統 DLL。
 
@@ -103,7 +103,15 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 
 `WindowsProcessLifetime` 在相同 CPU 與執行預算下，依相依順序執行 DLL TLS 回呼及 `DllMain`，再執行 EXE TLS 與進入點。各模組具有獨立 TLS 索引與對齊區塊，從完成重定位和匯入繫結的映像複製，共用 64 KiB 空間。TLS 保留參數為零，啟動／程序結束的 `DllMain` 接收不透明非空值。明確程序結束依載入器串列的反向順序分離已完成初始化的 DLL，再執行 EXE TLS 結束回呼，即使 EXE 初始化尚未執行。啟動 `DllMain(FALSE)` 以 `0xc0000142` 結束，不發送分離通知。故障和預算耗盡不捏造清理。含客體 DLL 的 PE 進入點返回需要尚未支援的執行緒終止，因此明確停止。非零 `SizeOfZeroFill` 仍不支援；實際 TLS 範本中的零初始化位元組受支援。 無進入點 DLL 接收 TLS 掛接通知，但不接收程序分離通知。
 
-`WindowsProcessExports` 為靜態匯入和 `GetProcAddress` 共用名稱／序號解析，涵蓋程式碼、資料、別名與鏈式轉送。只有實際引用的啟動轉送會引入目錄模組及初始化相依；未使用的轉送不載入檔案。執行期間可查詢已駐留映像，包括在 `DllMain` 內；需要載入其他模組時明確停止。匯出名稱區分大小寫；名稱缺失回傳 NULL／錯誤 127，直接查詢缺失序號（含空洞）回傳 NULL／錯誤 182，查詢參數為空指標回傳錯誤 87，成功保留 LastError。未知模組控制代碼仍不支援。有界 API 清單依精確提供者／名稱一次保留呼叫入口。解析檢查每個映像的即時 PE 標頭與匯出中繼資料，拒絕修改或不可讀位元組，轉送鏈最多 64 項，並共用準備階段剩餘中繼資料額度及執行期限。這不包含 `LoadLibrary`／`FreeLibrary` 或即時改寫匯出表。 轉送到空洞時回傳目標映像基址並保留 LastError；轉送到零序號回傳錯誤 87。回傳基址是資料位址，不授予映像標頭執行權限。
+`WindowsProcessExports` 為靜態匯入和 `GetProcAddress` 共用名稱／序號解析，涵蓋程式碼、資料、別名與鏈式轉送。 只有實際引用的啟動轉送會引入目錄模組及初始化相依；未使用的轉送不載入檔案。 匯出名稱區分大小寫；名稱缺失回傳 NULL／錯誤 127，直接查詢缺失序號（含空洞）回傳 NULL／錯誤 182，查詢參數為空指標回傳錯誤 87，成功保留 LastError。 未知模組控制代碼仍不支援。 有界 API 清單依精確提供者／名稱一次保留呼叫入口。 解析檢查每個映像的即時 PE 標頭與匯出中繼資料，拒絕修改或不可讀位元組，轉送鏈最多 64 項，並共用準備階段剩餘中繼資料額度及執行期限。 轉送到空洞時回傳目標映像基址並保留 LastError；轉送到零序號回傳錯誤 87。 回傳基址是資料位址，不授予映像標頭執行權限。 執行期轉送可載入設定目錄中的模組，並在回傳查詢結果前完成初始化。仍不支援即時改寫匯出表。
+
+`WindowsProcessLoader` 從 `windows.modules` 載入 ASCII DLL 基底名稱，統一管理明確參考、共用相依與啟動模組保留。重複查詢轉送匯出不會增加額外參考。模組目錄槽位在重新載入時使用新的駐留世代。TLS 與 `DllMain` 在同一 CPU 上、暫停 API 的堆疊框架下方執行；還原暫存器保留客體記憶體寫入，並使用即時返回位址。動態附加／分離的保留指標為零。顯式載入期間的附加失敗在清理後回傳錯誤 1114，並保留已成功的獨立巢狀載入。卸載釋放映像映射與 TLS，重新載入恢復原始映像內容。模型之外對載入器串列或 TLS 指標的修改會明確失敗。失敗與重新載入皆不會重設檔案、映像及中繼資料工作額度。API 提供者沒有虛構 DLL 控制代碼。檔案系統搜尋、非 ASCII 路徑、`LoadLibraryEx` 旗標、循環匯入及正在初始化或卸載之同一模組的重入轉換仍不支援。
+
+動態卸載回呼開始前，模組已退出初始化串列；其映射、名稱查詢及載入／記憶體串列成員身分在回呼期間仍然有效。入口返回的原生對照單獨觀察初始執行緒，不將系統工作執行緒的存活時間當作入口返回時間。
+
+`WindowsDynamicTests.cpp` 使用原始 x64/ARM64 DLL 與 EXE，比對獨立原生 Windows 觀測，涵蓋參考計數、共用相依、巢狀載入、附加失敗清理、轉送查詢、程序退出、無入口 DLL 及重新載入時的 TLS 初始化。額外回歸拒絕遭修改的載入器中繼資料與失效程式碼指標，保持累計準備額度，並確保中斷 API 的結果仍未完成。Windows CI 強制執行原生對照與 WHP 案例；交叉編譯及 Unicorn ARM64 不代表原生 ARM64 執行驗證。
+
+`GetProcAddress` 轉發鏈任一位置缺少程式庫皆傳回錯誤 127；顯式 `LoadLibrary` 載入目錄中缺少的模組傳回 126。原生對照與各可用後端均斷言全部 41 個已宣告載入情境；Windows 上每種 DLL 變體都重複 16 次驗證全部卸載後從入口返回。 `GetProcAddress` 轉發目標初始化失敗也在清理後回傳 127。行程分離回呼保留退出呼叫端的堆疊內容。
 
 `WindowsExportTests.cpp` 使用原始 x64/ARM64 DLL 與 EXE，驗證轉送的程式碼／資料／序號呼叫、別名、初始化查詢、重定位、大小寫敏感的缺失項、LastError、循環與非駐留目標、無效指標，以及成功查詢後的中繼資料修改。同一 EXE 有獨立原生 Windows 對照；原生 CI 強制執行 WHP 案例。C ABI／CLI 測試比對完整報告。原生 ARM64 硬體證據仍待補齊。 具有及不具有匯出表的 EXE 變體涵蓋兩種相依圖、PEB 串列順序、結束通知順序，以及名稱／序號／空指標的錯誤碼。
 
@@ -113,9 +121,9 @@ neverd emulate guest.exe --profile=windows-pe64-v1 \
 {"windows":{"modules":[{"name":"middle.dll","path":"inputs/middle.dll"},{"name":"leaf.dll","path":"inputs/leaf.dll"}]}}
 ```
 
-x64 GS、ARM64 x18 指向 TEB，提供堆疊邊界、自指標、PID/TID、PEB、程序參數、LastError 與 TLS。嚴格將 UTF-8 轉為 UTF-16，argv 依 Microsoft CRT 規則加引號。環境名稱限 ASCII，拒絕不分大小寫的重複名稱；值可為 Unicode，排序後以雙 NUL 結尾，不繼承主機環境或檔案系統。靜態 TLS 複製範本、清零 BSS、寫入 32 位索引；動態 TLS 使用獨立 TEB 槽位。啟動／結束依序讀取即時回呼表，共用截止時間及資源額度。正常程序結束會執行結束回呼。進入點返回僅在沒有客體 DLL 時支援；結束回呼內遞迴退出會明確停止。
+x64 GS、ARM64 x18 指向 TEB，提供堆疊邊界、自指標、PID/TID、PEB、程序參數、LastError 與 TLS。 嚴格將 UTF-8 轉為 UTF-16，argv 依 Microsoft CRT 規則加引號。 環境名稱限 ASCII，拒絕不分大小寫的重複名稱；值可為 Unicode，排序後以雙 NUL 結尾，不繼承主機環境或檔案系統。 靜態 TLS 複製範本、清零 BSS、寫入 32 位索引；動態 TLS 使用獨立 TEB 槽位。 啟動／結束依序讀取即時回呼表，共用截止時間及資源額度。 正常程序結束會執行結束回呼。 入口返回僅支援目前沒有駐留客體 DLL 的情況；程序退出清理期間再次呼叫 `ExitProcess` 仍不支援。
 
-`WindowsProcessServices.def` 管理完整 API 清單：`ExitProcess`、`RtlExitUserProcess`、標準輸出控制代碼與同步 `WriteFile`、LastError、程序／執行緒識別與虛擬控制代碼、`GetCommandLineW`、程序堆配置／釋放／大小、動態 TLS、`GetModuleHandleW` / `GetProcAddress`。提供者限 `kernel32.dll`、`kernelbase.dll`、`ntdll.dll` 並精確匹配匯出名稱。直接 syscall 與偽造回呼入口無法選擇 API。堆有程序所有權並於釋放時回收；輸出保留二進位資料，API 參數錯誤、非同步 I/O 與使用者例外限制分開處理。別名指標會看到完成計數的初始清零與實際返回位址變更。
+`WindowsProcessServices.def` 管理完整 API 清單：`ExitProcess`、`RtlExitUserProcess`、標準輸出控制代碼與同步 `WriteFile`、LastError、程序／執行緒識別與虛擬控制代碼、`GetCommandLineW`、程序堆配置／釋放／大小、動態 TLS、`LoadLibraryA` / `LoadLibraryW` / `FreeLibrary` / `GetModuleHandleW` / `GetProcAddress`。提供者限 `kernel32.dll`、`kernelbase.dll`、`ntdll.dll` 並精確匹配匯出名稱。直接 syscall 與偽造回呼入口無法選擇 API。堆有程序所有權並於釋放時回收；輸出保留二進位資料，API 參數錯誤、非同步 I/O 與使用者例外限制分開處理。別名指標會看到完成計數的初始清零與實際返回位址變更。
 
 `windows.native_calls` 保留 DLL／函式名稱、宣告的純量參數及可空結果，不假造 NT syscall 編號。`NeverDWindowsProcessTests` 驗證真實 PE、編譯器 TLS、回呼修改、堆／LastError、別名、畸形資料、權限與預算；`NeverDProcessPublicTests` 驗證 CLI/C ABI。Windows CI 直接執行相同 EXE 作獨立對照，並要求 WHP 測試通過；原生 ARM64 執行證據仍需對應機器。
 

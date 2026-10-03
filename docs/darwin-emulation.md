@@ -204,6 +204,14 @@ platform, oversized-write error ordering and formatted native-case inventories.
 The native inventory/result/CI regression suite passed 106 tests. Capability,
 localized-documentation, provenance and formatting checks also passed.
 
+After later `dev` integration, clean source
+`f4bf8dde5cbc33d18ce053cb0722a54047e5a2d0` repeated the independent ARM64
+Darwin gate: 65 passed, zero failed, 221 skipped and all 39 required native
+workloads executed. Evidence is in
+`build-hvf-native/hvf-final-dev-darwin-evidence/`. This rerun validates the
+Darwin owner; it does not claim a new complete CPU gate for unrelated Windows
+process changes merged in the meantime.
+
 Earlier integration checks exercised all five platform/ISA combinations through
 the Python SDK. The packaged engine matched 18 no-Unicorn CLI reports across
 all three ARM64 profiles, and the bundle passed dependency/signature checks for
