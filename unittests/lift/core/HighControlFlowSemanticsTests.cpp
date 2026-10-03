@@ -6954,3 +6954,133 @@ TEST(HighControlFlowSemantics, PlainBlocksSpliceIntoTheirList) {
   EXPECT_EQ(F.Body[2].Addr, 0x1010u);
   EXPECT_EQ(execute(F, 0), std::optional<uint64_t>(2));
 }
+
+TEST(HighControlFlowSemantics, MachineCallReceiptsKeepOneSharedTailOccurrence) {
+  // Source evidence authenticates one native occurrence. Mutually exclusive
+  // source copies still need a new proof; a tail pass cannot clone a receipt.
+  for (unsigned Receipt = 0; Receipt < 7; ++Receipt)
+    for (bool Assigned : {false, true})
+      for (bool Nested : {false, true})
+        for (bool JumpTail : {false, true}) {
+          SCOPED_TRACE(Receipt);
+          SCOPED_TRACE(Assigned);
+          SCOPED_TRACE(Nested);
+          SCOPED_TRACE(JumpTail);
+          auto Hint = std::make_shared<SourceCallTypeHint>();
+          switch (Receipt) {
+          case 0:
+            Hint->BooleanResult.emplace();
+            break;
+          case 1:
+            Hint->FunctionParameterCall.emplace();
+            break;
+          case 2:
+            Hint->ImmutableNativeCall.emplace();
+            break;
+          case 3:
+            Hint->SwiftWitnessFrame.emplace();
+            break;
+          case 4:
+            Hint->Virtual.emplace();
+            break;
+          case 5:
+            Hint->NativeSwiftReceiver.emplace();
+            break;
+          case 6:
+            break; // A declaration alone may be copied.
+          }
+          auto Call = HighExpr::makeCall("callback", 0x2000, {local(0)});
+          Call->SourceCallHint = Hint;
+          HighStmt Invocation;
+          Invocation.Addr = 0x1024;
+          if (Assigned) {
+            Invocation.Kind = StmtKind::Assign;
+            Invocation.Dst = local(1);
+            Invocation.Val = Call;
+          } else {
+            Invocation.Kind = StmtKind::Call;
+            Invocation.CallExpr = Call;
+          }
+          HighStmt Store;
+          Store.Kind = StmtKind::Store;
+          Store.Addr = 0x1020;
+          Store.StoreAddr = HighExpr::makeConst(0x5000, 8);
+          Store.StoreVal = local(0);
+          std::vector<HighStmt> Tail{Store, Invocation};
+          if (Nested) {
+            HighStmt Block;
+            Block.Kind = StmtKind::Block;
+            Block.Addr = 0x1020;
+            Block.Body = std::move(Tail);
+            Tail = {Block};
+          }
+          HighFunc F;
+          F.Body = {conditional(0x1000, 0x1020), conditional(0x1004, 0x1020),
+                    result(0x1008, HighExpr::makeConst(5, 8))};
+          F.Body.insert(F.Body.end(), Tail.begin(), Tail.end());
+          F.Body.push_back(JumpTail ? jump(0x1028, 0x1040)
+                                    : result(0x1028, local(0)));
+          if (JumpTail)
+            F.Body.push_back(result(0x1040, local(0)));
+          if (JumpTail)
+            duplicateSmallJumpTails(F.Body);
+          else
+            duplicateSmallReturnTails(F.Body);
+          size_t Evaluations = 0;
+          walkStmts(F.Body, [&](const HighStmt &S) {
+            forEachExpr(S, [&](const ExprPtr &E) {
+              if (E && E->SourceCallHint == Hint)
+                ++Evaluations;
+            });
+          });
+          if (Receipt == 6)
+            EXPECT_GT(Evaluations, 1U);
+          else {
+            EXPECT_EQ(Evaluations, 1U);
+            EXPECT_GT(countKind(F, StmtKind::Goto), 0U);
+          }
+        }
+}
+
+TEST(HighControlFlowSemantics, NestedExitKeepsOneCallReceiptInSkippedTail) {
+  for (bool Bound : {false, true})
+    for (bool NestedExpression : {false, true}) {
+      SCOPED_TRACE(Bound);
+      SCOPED_TRACE(NestedExpression);
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      if (Bound)
+        Hint->FunctionParameterCall.emplace();
+      auto Call = HighExpr::makeCall("callback", 0x2000, {local(0)});
+      Call->SourceCallHint = Hint;
+      HighStmt Invoke = assign(0x1020, 1, 0);
+      Invoke.Val = NestedExpression
+                       ? HighExpr::makeBinop(NdOp::INT_ADD, Call,
+                                             HighExpr::makeConst(7, 8))
+                       : Call;
+      HighStmt Early = conditional(0x0ff8, 0x1030);
+      HighStmt Inner = conditional(0x1008, 0x1030);
+      HighStmt Outer;
+      Outer.Kind = StmtKind::If;
+      Outer.Addr = 0x1000;
+      Outer.Cond = local(0);
+      Outer.Body = {Inner, assign(0x1014, 1, 10)};
+      HighFunc F;
+      F.Body = {assign(0x0ff0, 1, 0), Early, Outer, Invoke,
+                result(0x1030, local(1))};
+      for (int Round = 0; Round < 4 && reduceSingleUseGotos(F.Body, true);
+           ++Round)
+        ;
+      size_t Evaluations = 0;
+      std::function<void(const ExprPtr &)> Count = [&](const ExprPtr &E) {
+        if (!E)
+          return;
+        Evaluations += E->SourceCallHint == Hint;
+        E->forEachChildExpr(Count);
+      };
+      walkStmts(F.Body, [&](const HighStmt &S) { forEachExpr(S, Count); });
+      if (Bound)
+        EXPECT_EQ(Evaluations, 1U);
+      else
+        EXPECT_GT(Evaluations, 1U);
+    }
+}

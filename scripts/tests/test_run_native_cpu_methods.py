@@ -95,6 +95,40 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.document["tests"][1]["properties"][1]["value"] = ["NEVERD_SIGNATURE_CACHE=on"]
         self.assertEqual(len(methods.method_inventory(self.document)), 2)
 
+    def wrapped_document(self):
+        document = copy.deepcopy(self.document)
+        for test in document["tests"]:
+            binary, test_filter, _ = test["command"]
+            test["command"] = [str(self.root / "cmake"), "-D", "TEST_EXECUTABLE=" + binary,
+                               "-D", "TEST_EXECUTOR=", "-D",
+                               "TEST_FILTER=" + test_filter.removeprefix("--gtest_filter="),
+                               "-D", "TEST_XML_OUTPUT=", "-D", "TEST_EXTRA_ARGS=", "-P",
+                               str(self.root / "Modules/GoogleTest/LaunchTest.cmake")]
+            test["properties"].append({"name": "DEF_SOURCE_LINE", "value": "source.cpp:71"})
+        return document
+
+    def test_cmake_43_launcher_has_the_same_exact_identity_and_execution_contract(self):
+        self.assertEqual(methods.method_inventory(self.document),
+                         methods.method_inventory(self.wrapped_document()))
+
+    def test_cmake_launchers_and_extra_arguments_cannot_be_silently_dropped(self):
+        for key in ("TEST_EXECUTOR", "TEST_EXTRA_ARGS", "TEST_XML_OUTPUT"):
+            document = self.wrapped_document()
+            command = document["tests"][0]["command"]
+            command[command.index(key + "=")] = key + "=must-preserve"
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "launcher configuration"):
+                methods.method_inventory(document)
+
+    def test_duplicate_launcher_fields_and_custom_scripts_are_rejected(self):
+        document = self.wrapped_document()
+        document["tests"][0]["command"][-1] = str(self.root / "CustomLaunchTest.cmake")
+        with self.assertRaisesRegex(ValueError, "unsupported GoogleTest command"):
+            methods.method_inventory(document)
+        document = self.wrapped_document()
+        document["tests"][0]["command"][8] = "TEST_EXTRA_ARGS="
+        with self.assertRaisesRegex(ValueError, "launcher configuration"):
+            methods.method_inventory(document)
+
     @unittest.skipUnless(os.name == "posix", "requires POSIX process groups")
     def test_timeout_retires_a_real_child_and_preserves_status(self):
         evidence = self.root / "timeout"

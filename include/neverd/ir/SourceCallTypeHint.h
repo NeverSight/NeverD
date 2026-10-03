@@ -521,6 +521,15 @@ struct SourceCallTypeHint {
   /// Revalidate the complete slot and pool against the current image.
   va_t ImmutablePointerSlot = 0;
   std::optional<SourceFunctionTypeHint> AddressedFunctionABI;
+
+  /// These receipts bind one original machine call to one source evaluation.
+  /// A transformation may move that evaluation, but cannot duplicate the
+  /// receipt, even onto mutually exclusive paths. Publication still repeats
+  /// each owner's current proof; this predicate grants no source permission.
+  bool requiresUniqueSourceOccurrence() const {
+    return BooleanResult || FunctionParameterCall || ImmutableNativeCall ||
+           SwiftWitnessFrame || Virtual || NativeSwiftReceiver;
+  }
 };
 
 } // namespace neverd

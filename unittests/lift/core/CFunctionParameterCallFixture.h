@@ -29,7 +29,8 @@ struct Fixture {
     llvm::support::endian::write32le(Image.Segments[0].Data.data() + Index * 4,
                                      Value);
   }
-  Fixture(bool Diamond = false, bool SameCallback = true) {
+  Fixture(bool Diamond = false, bool SameCallback = true,
+          bool SharedStoreTail = false) {
     Image.Entry = Entry;
     Segment Text;
     Text.VA = Entry;
@@ -58,6 +59,17 @@ struct Fixture {
       Words.push_back(0x9400003b);
     Words.insert(Words.end(),
                  {0xaa1403e0, 0xd63f0260, 0xa9417bfd, 0xa8c253f3, 0xd65f03c0});
+    if (SharedStoreTail) {
+      // Three paths write different first words and converge on one store,
+      // callback and return. The callback proof belongs to this one BLR.
+      Words = {0xa9be53f3, 0xa9017bf5, 0xaa0003f3, 0xaa0103f4, 0xb40000a2,
+               0xb40000e3, 0xd2800168, 0xf9000268, 0x14000006, 0xd28002c8,
+               0xf9000268, 0x14000003, 0xd2800428, 0xf9000268, 0xf900067f,
+               0xaa1303e0, 0xd63f0280, 0xa9417bf5, 0xa8c253f3, 0xd65f03c0};
+      Image.Symbols[0].Name = "_shared_tail_callback";
+      Image.Symbols[0].Size = Words.size() * 4;
+      CallAddress = Entry + 64;
+    }
     for (unsigned I = 0; I < std::size(Words); ++I)
       word(I, Words[I]);
     word((Veneer - Entry) / 4, 0xb0000010);
@@ -69,7 +81,10 @@ struct Fixture {
     Signature.Parameters = {{"value", Pointer},
                             {"callback", NdType::makePtr(NdType::makeFunc(
                                              NdType::makeVoid(), {Pointer}))}};
-    if (Diamond)
+    if (SharedStoreTail) {
+      Signature.Parameters.push_back({"first", NdType::makeInt(8, false)});
+      Signature.Parameters.push_back({"second", NdType::makeInt(8, false)});
+    } else if (Diamond)
       Signature.Parameters.push_back({"branch", NdType::makeInt(8, false)});
     std::string Error;
     if (!assignDarwinScalarSourceABI(Signature, Arch::AArch64, Error))

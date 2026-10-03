@@ -563,6 +563,29 @@ static bool isTailValue(const HighExpr &E, unsigned Depth = 0) {
   }
 }
 
+static bool hasUniqueCallOccurrence(const ExprPtr &Expression) {
+  if (!Expression)
+    return false;
+  if (Expression->SourceCallHint &&
+      Expression->SourceCallHint->requiresUniqueSourceOccurrence())
+    return true;
+  bool Found = false;
+  Expression->forEachChildExpr(
+      [&](const ExprPtr &Child) { Found |= hasUniqueCallOccurrence(Child); });
+  return Found;
+}
+
+// A call declaration can be copied along exclusive paths. Evidence naming
+// one native occurrence cannot: its publication owner still requires one
+// source evaluation, including after both return-tail and jump-tail copying.
+static bool isDuplicableTailCall(const HighExpr &Call) {
+  return Call.Kind == ExprKind::Call && Call.IntrinsicOutputs.empty() &&
+         (!Call.SourceCallHint ||
+          !Call.SourceCallHint->requiresUniqueSourceOccurrence()) &&
+         std::all_of(Call.Operands.begin(), Call.Operands.end(),
+                     [](const ExprPtr &Op) { return Op && isTailValue(*Op); });
+}
+
 /// Number of statements in \p S that a tail may copy to each jump into it:
 /// assignments of tail values, and calls and plain stores of them, which each
 /// path still runs exactly once (or a block of only such statements and
@@ -586,18 +609,13 @@ static std::optional<size_t> pureAssignCount(const HighStmt &S,
       return 1;
     // One call (or single-result intrinsic) whose arguments are tail
     // values: each path still runs exactly one copy of it.
-    if (S.Val->Kind == ExprKind::Call && S.Val->IntrinsicOutputs.empty() &&
-        std::all_of(S.Val->Operands.begin(), S.Val->Operands.end(),
-                    [](const ExprPtr &Op) { return Op && isTailValue(*Op); }))
+    if (isDuplicableTailCall(*S.Val))
       return 1;
     return std::nullopt;
   }
   if (S.Kind == StmtKind::Call) {
     const HighExpr *Call = S.CallExpr.get();
-    if (Call && Call->Kind == ExprKind::Call &&
-        Call->IntrinsicOutputs.empty() &&
-        std::all_of(Call->Operands.begin(), Call->Operands.end(),
-                    [](const ExprPtr &Op) { return Op && isTailValue(*Op); }))
+    if (Call && isDuplicableTailCall(*Call))
       return 1;
     return std::nullopt;
   }
@@ -1026,7 +1044,6 @@ static bool hasLooseBreakOrContinue(const std::vector<HighStmt> &Stmts,
   }
   return false;
 }
-
 
 /// True when \p Stmts contains a continue that would restart a loop wrapped
 /// around it. Only a nested loop owns a continue.
@@ -2095,55 +2112,53 @@ bool hoistSharedArmTails(std::vector<HighStmt> &Body) {
         return K;
     return 0;
   };
-  std::function<void(std::vector<HighStmt> &)> Visit =
-      [&](std::vector<HighStmt> &L) {
-        for (size_t I = 0; I < L.size(); ++I) {
-          HighStmt &S = L[I];
-          Visit(S.Body);
-          Visit(S.ElseBody);
-          for (SwitchCase &C : S.Cases)
-            Visit(C.Body);
-          Visit(S.DefaultBody);
-          for (auto &ClauseBody : S.EHClauseBodies)
-            Visit(ClauseBody);
-          if (S.Kind != StmtKind::IfElse || S.Body.empty() ||
-              S.ElseBody.empty())
-            continue;
-          // `if (c) { A; X: B } else { C; goto X; }`: both arms finish with
-          // B, which then runs after the if/else instead.
-          for (bool ThenOwns : {true, false}) {
-            std::vector<HighStmt> &Owner = ThenOwns ? S.Body : S.ElseBody;
-            std::vector<HighStmt> &Other = ThenOwns ? S.ElseBody : S.Body;
-            if (Other.empty() || Other.back().Kind != StmtKind::Goto)
-              continue;
-            const size_t K = SuffixAt(Owner, Other.back().GotoTarget);
-            if (K == 0)
-              continue;
-            std::vector<HighStmt> Suffix(
-                std::make_move_iterator(Owner.begin() + K),
-                std::make_move_iterator(Owner.end()));
-            Owner.erase(Owner.begin() + K, Owner.end());
-            HighStmt &Jump = Other.back();
-            if (Jump.Addr != 0 && Jump.Addr != InvalidVA &&
-                Entered.count(Jump.Addr) &&
-                (Other.size() == 1 || Other[Other.size() - 2].Addr != Jump.Addr)) {
-              HighStmt Anchor;
-              Anchor.Kind = StmtKind::Block;
-              Anchor.Addr = Jump.Addr;
-              Jump = std::move(Anchor);
-            } else {
-              Other.pop_back();
-            }
-            L.insert(L.begin() + I + 1, std::make_move_iterator(Suffix.begin()),
-                     std::make_move_iterator(Suffix.end()));
-            Changed = true;
-            break;
-          }
-          HighStmt &T = L[I];
-          if (T.Kind == StmtKind::IfElse && T.ElseBody.empty())
-            T.Kind = StmtKind::If;
+  std::function<void(std::vector<HighStmt> &)> Visit = [&](std::vector<HighStmt>
+                                                               &L) {
+    for (size_t I = 0; I < L.size(); ++I) {
+      HighStmt &S = L[I];
+      Visit(S.Body);
+      Visit(S.ElseBody);
+      for (SwitchCase &C : S.Cases)
+        Visit(C.Body);
+      Visit(S.DefaultBody);
+      for (auto &ClauseBody : S.EHClauseBodies)
+        Visit(ClauseBody);
+      if (S.Kind != StmtKind::IfElse || S.Body.empty() || S.ElseBody.empty())
+        continue;
+      // `if (c) { A; X: B } else { C; goto X; }`: both arms finish with
+      // B, which then runs after the if/else instead.
+      for (bool ThenOwns : {true, false}) {
+        std::vector<HighStmt> &Owner = ThenOwns ? S.Body : S.ElseBody;
+        std::vector<HighStmt> &Other = ThenOwns ? S.ElseBody : S.Body;
+        if (Other.empty() || Other.back().Kind != StmtKind::Goto)
+          continue;
+        const size_t K = SuffixAt(Owner, Other.back().GotoTarget);
+        if (K == 0)
+          continue;
+        std::vector<HighStmt> Suffix(std::make_move_iterator(Owner.begin() + K),
+                                     std::make_move_iterator(Owner.end()));
+        Owner.erase(Owner.begin() + K, Owner.end());
+        HighStmt &Jump = Other.back();
+        if (Jump.Addr != 0 && Jump.Addr != InvalidVA &&
+            Entered.count(Jump.Addr) &&
+            (Other.size() == 1 || Other[Other.size() - 2].Addr != Jump.Addr)) {
+          HighStmt Anchor;
+          Anchor.Kind = StmtKind::Block;
+          Anchor.Addr = Jump.Addr;
+          Jump = std::move(Anchor);
+        } else {
+          Other.pop_back();
         }
-      };
+        L.insert(L.begin() + I + 1, std::make_move_iterator(Suffix.begin()),
+                 std::make_move_iterator(Suffix.end()));
+        Changed = true;
+        break;
+      }
+      HighStmt &T = L[I];
+      if (T.Kind == StmtKind::IfElse && T.ElseBody.empty())
+        T.Kind = StmtKind::If;
+    }
+  };
   Visit(Body);
   return Changed;
 }
@@ -2510,6 +2525,12 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
         S.Kind == StmtKind::SEHTry || S.Kind == StmtKind::CxxTry ||
         S.Kind == StmtKind::ItaniumTry || S.Kind == StmtKind::Break ||
         S.Kind == StmtKind::Continue)
+      return true;
+    bool UniqueCall = false;
+    forEachExpr(S, [&](const ExprPtr &Expression) {
+      UniqueCall |= hasUniqueCallOccurrence(Expression);
+    });
+    if (UniqueCall)
       return true;
     for (const auto *List : {&S.Body, &S.ElseBody})
       for (const HighStmt &T : *List)

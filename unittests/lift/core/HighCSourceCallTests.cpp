@@ -987,6 +987,50 @@ int main(void) {
             std::string::npos);
 }
 
+TEST(HighCSourceCalls, SharedStoreTailPreservesOneDynamicCallback) {
+  using namespace c_function_parameter_test;
+  Fixture F(false, true, true);
+  ASSERT_TRUE(F.Result.Success) << F.Result.Error;
+  ASSERT_TRUE(F.high());
+  const auto Source = emit({*F.high()}, true, Arch::AArch64);
+  ASSERT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+  const auto Program = Source + R"(
+static unsigned calls, failed;
+static void callback_a(void *p) {
+  uint64_t *words = p;
+  failed |= words[1] != 0;
+  words[1] = words[0] + 7;
+  ++calls;
+}
+static void callback_b(void *p) {
+  uint64_t *words = p;
+  failed |= words[1] != 0;
+  words[1] = words[0] ^ UINT64_C(0xd182e394f5061728);
+  ++calls;
+}
+int main(void) {
+  for (unsigned i = 0; i != 2048; ++i) {
+    uint64_t words[] = {UINT64_C(0x1234567887654321), 99, 101,
+                        UINT64_C(0xabcdef0123456789)};
+    uint64_t first = (i & 3) ? UINT64_C(0x8000000000000000) + i : 0;
+    uint64_t second = (i & 4) ? UINT64_MAX - i : 0;
+    uint64_t expected = !first ? 22 : !second ? 33 : 11;
+    unsigned before = calls;
+    shared_tail_callback(words + 1, (i & 1) ? callback_a : callback_b,
+                         first, second);
+    if (calls != before + 1 || failed || words[1] != expected ||
+        words[2] != ((i & 1) ? expected + 7 :
+                     expected ^ UINT64_C(0xd182e394f5061728)) ||
+        words[0] != UINT64_C(0x1234567887654321) ||
+        words[3] != UINT64_C(0xabcdef0123456789)) return 1;
+  }
+  return 0;
+}
+)";
+  compileAndRun(Program, {"-O0", "-Werror"});
+  compileAndRun(Program, {"-O2", "-Werror"});
+}
+
 TEST(HighCSourceCalls, DeclaresOpaqueBlockObjectPointerUsedByHelpers) {
   const auto Opaque =
       NdType::makePtr(NdType::makeNamedRecord("_Block_object", 8));

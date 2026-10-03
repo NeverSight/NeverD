@@ -23,6 +23,32 @@ else:
     from audit_ci_test_results import TestOutcome
 
 
+def google_test_command(command):
+    # CMake 4.3+ launches discovered GoogleTests through LaunchTest.cmake.
+    # Only its plain native form is equivalent to our direct invocation:
+    # https://github.com/Kitware/CMake/blob/v4.3.0/Modules/GoogleTest/LaunchTest.cmake
+    if (len(command) == 13 and Path(command[0]).name == "cmake"
+            and command[-2] == "-P"
+            and Path(command[-1]).parts[-3:] == ("Modules", "GoogleTest", "LaunchTest.cmake")
+            and command[1:11:2] == ["-D"] * 5):
+        fields = [value.partition("=") for value in command[2:11:2]]
+        variables = {name: value for name, _, value in fields}
+        required = {"TEST_EXECUTABLE", "TEST_EXECUTOR", "TEST_FILTER",
+                    "TEST_XML_OUTPUT", "TEST_EXTRA_ARGS"}
+        if (set(variables) != required or any(separator != "=" for _, separator, _ in fields)
+                or any(variables[name] for name in
+                       ("TEST_EXECUTOR", "TEST_XML_OUTPUT", "TEST_EXTRA_ARGS"))):
+            raise ValueError("unsupported CMake GoogleTest launcher configuration")
+        command = [variables["TEST_EXECUTABLE"],
+                   "--gtest_filter=" + variables["TEST_FILTER"],
+                   "--gtest_also_run_disabled_tests"]
+    if (len(command) != 3 or not Path(command[0]).is_absolute()
+            or not command[1].startswith("--gtest_filter=")
+            or command[2] != "--gtest_also_run_disabled_tests"):
+        raise ValueError("unsupported GoogleTest command")
+    return command
+
+
 def method_inventory(document):
     records = parse_inventory(document)
     if len(set(records)) != len(records):
@@ -31,11 +57,7 @@ def method_inventory(document):
     allowed = {"ENVIRONMENT", "LABELS", "SKIP_REGULAR_EXPRESSION",
                "TIMEOUT", "WORKING_DIRECTORY"}
     for raw, record in zip(document["tests"], records, strict=True):
-        command = raw.get("command", [])
-        if (len(command) != 3 or not Path(command[0]).is_absolute()
-                or not command[1].startswith("--gtest_filter=")
-                or command[2] != "--gtest_also_run_disabled_tests"):
-            raise ValueError("unsupported GoogleTest command: " + record.name)
+        command = google_test_command(raw.get("command", []))
         name = command[1].removeprefix("--gtest_filter=")
         if not re.fullmatch(r"[A-Za-z0-9_./]+\.[A-Za-z0-9_/]+", name):
             raise ValueError("GoogleTest filter must name one exact case")
@@ -44,8 +66,16 @@ def method_inventory(document):
             raise ValueError("duplicate GoogleTest command identity")
         identities.add(identity)
         properties = {p["name"]: p["value"] for p in raw["properties"]}
-        if set(properties) != allowed or len(properties) != len(raw["properties"]):
-            raise ValueError("unsupported or duplicate CTest properties: " + record.name)
+        if len(properties) != len(raw["properties"]):
+            raise ValueError("duplicate CTest properties: " + record.name)
+        # CMake 4.3 discovery also publishes the diagnostic source location.
+        # This metadata changes neither the command nor its execution policy.
+        if "DEF_SOURCE_LINE" in properties:
+            source = properties.pop("DEF_SOURCE_LINE")
+            if not isinstance(source, str) or not re.fullmatch(r".+:[1-9][0-9]*", source):
+                raise ValueError("invalid CTest definition source location")
+        if set(properties) != allowed:
+            raise ValueError("unsupported CTest properties: " + record.name)
         if properties["SKIP_REGULAR_EXPRESSION"] != [r"\[  SKIPPED \]"]:
             raise ValueError("unsupported CTest skip policy")
         timeout = properties["TIMEOUT"]

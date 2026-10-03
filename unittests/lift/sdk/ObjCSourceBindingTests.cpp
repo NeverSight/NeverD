@@ -1550,6 +1550,54 @@ TEST(ObjCSourceBindings, CFunctionParameterCallRepeatsTheCurrentMachineProof) {
   }
 }
 
+TEST(ObjCSourceBindings, SharedStoreTailKeepsItsUniqueCallbackProof) {
+  using namespace c_function_parameter_test;
+  Fixture F(false, true, true);
+  ASSERT_TRUE(F.Result.Success) << F.Result.Error;
+  ASSERT_TRUE(F.high());
+  unsigned MedCalls = 0;
+  for (const auto &Function : F.Result.MedFuncs)
+    if (Function.Entry == Entry)
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.SourceCallHint && Op.SourceCallHint->FunctionParameterCall) {
+            ++MedCalls;
+            EXPECT_EQ(Op.Addr, F.CallAddress);
+          }
+  EXPECT_EQ(MedCalls, 1U);
+  std::vector<ExprPtr> Calls;
+  walkStmts(F.high()->Body, [&](const HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (E && E->SourceCallHint && E->SourceCallHint->FunctionParameterCall)
+        Calls.push_back(E);
+    });
+  });
+  ASSERT_EQ(Calls.size(), 1U);
+  EXPECT_TRUE(objCCFunctionParameterSourceCallBound(*Calls[0], F.Image,
+                                                    F.Result, *F.high()));
+  for (unsigned Case = 0; Case < 3; ++Case) {
+    SCOPED_TRACE(Case);
+    auto Function = *F.high();
+    auto Call = std::make_shared<HighExpr>(*Calls[0]);
+    if (Case == 1) {
+      auto Hint = *Call->SourceCallHint;
+      ++Hint.FunctionParameterCall->Site.Instruction;
+      Call->SourceCallHint = std::make_shared<const SourceCallTypeHint>(Hint);
+    } else if (Case == 2) {
+      Call->IndirectTarget = std::make_shared<HighExpr>(*Call->IndirectTarget);
+      ++Call->IndirectTarget->Var.Id;
+    }
+    HighStmt Extra;
+    Extra.Kind = StmtKind::Call;
+    Extra.CallExpr = Call;
+    // Copying either the same shared expression or a changed receipt/target
+    // must still fail publication; the tail fix does not weaken this gate.
+    Function.Body.push_back(Extra);
+    EXPECT_FALSE(objCCFunctionParameterSourceCallBound(*Call, F.Image, F.Result,
+                                                       Function));
+  }
+}
+
 TEST(ObjCSourceBindings, RuntimeCFunctionAddressRetainsImportIdentityAndType) {
   using namespace runtime_function_address_test;
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
