@@ -1106,7 +1106,72 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
   Placeholders Pool(Ctx, Reserved);
   Abstraction Out;
   llvm::DenseMap<uint32_t, SymRef> Rewritten;
-  llvm::DenseMap<uint32_t, SymRef> MaskInputs;
+  llvm::DenseMap<uint32_t, SymRef> HiddenInputs;
+  auto Hide = [&](SymRef R) {
+    auto It = HiddenInputs.find(R.index());
+    if (It != HiddenInputs.end())
+      return It->second;
+    SymRef V = Pool.take(Ctx.width(R));
+    HiddenInputs[R.index()] = V;
+    Out.Hidden.emplace(V.index(), R);
+    return V;
+  };
+
+  // Zero extension commutes with AND/OR/XOR, but not with narrow arithmetic.
+  // Measure the widened bitwise view over shared opaque widened leaves. This
+  // preserves relations after the DAG builders contract zero extensions,
+  // without moving a narrow carry or complement into the wider word.
+  AffineResources WidenResources(Budget, MaxBytes);
+  llvm::DenseMap<uint64_t, SymRef> Widened;
+  auto WidenBitwise = [&](auto &&Self, SymRef R, unsigned Width,
+                          unsigned Depth) -> std::optional<SymRef> {
+    if (Depth >= 32 || !WidenResources.charge(1))
+      return std::nullopt;
+    const uint64_t Key = (uint64_t{Width} << 32) | R.index();
+    if (auto It = Widened.find(Key); It != Widened.end())
+      return It->second;
+    if (!WidenResources.charge(1, 128))
+      return std::nullopt;
+    const auto Op = Ctx.op(R);
+    SymRef Value;
+    if (!isBitwise(Op)) {
+      if (!WidenResources.array((size_t{Width} + 63) / 64, sizeof(uint64_t)))
+        return std::nullopt;
+      Value = Hide(Ctx.mkZExt(R, Width));
+    } else if (Op == SymOp::Not) {
+      auto Inner = Self(Self, Ctx.operand(R, 0), Width, Depth + 1);
+      if (!Inner ||
+          !WidenResources.array((size_t{Width} + 63) / 64, sizeof(uint64_t)))
+        return std::nullopt;
+      // A narrow complement flips only its original bits after widening.
+      auto Mask = Ctx.mkConst(llvm::APInt::getLowBitsSet(Width, Ctx.width(R)));
+      SymRef Operands[] = {*Inner, Hide(Mask)};
+      if (!chargeAffineNode(Ctx, SymOp::Xor, Operands, WidenResources))
+        return std::nullopt;
+      Value = Ctx.mkXor(Operands);
+    } else {
+      if (!WidenResources.array(Ctx.numOperands(R), 2 * sizeof(SymRef)))
+        return std::nullopt;
+      auto Source = Ctx.operands(R);
+      llvm::SmallVector<SymRef, 8> Operands(Source.begin(), Source.end());
+      for (SymRef &Operand : Operands) {
+        auto Wide = Self(Self, Operand, Width, Depth + 1);
+        if (!Wide)
+          return std::nullopt;
+        Operand = *Wide;
+      }
+      if (!chargeAffineNode(Ctx, Op, Operands, WidenResources))
+        return std::nullopt;
+      if (Op == SymOp::And)
+        Value = Ctx.mkAnd(Operands);
+      else if (Op == SymOp::Or)
+        Value = Ctx.mkOr(Operands);
+      else
+        Value = Ctx.mkXor(Operands);
+    }
+    Widened[Key] = Value;
+    return Value;
+  };
 
   for (uint32_t Index : Order) {
     SymRef R(Index);
@@ -1115,11 +1180,18 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
         Rewritten[Index] = R;
         continue;
       }
+      if (Ctx.op(R) == SymOp::ZExt) {
+        SymRef Inner = Ctx.operand(R, 0);
+        const auto Op = Ctx.op(Inner);
+        if (isBitwise(Op))
+          if (auto Wide = WidenBitwise(WidenBitwise, Inner, Ctx.width(R), 0)) {
+            Rewritten[Index] = *Wide;
+            continue;
+          }
+      }
       // One placeholder per distinct subterm, so a term the obfuscator
       // repeated stays recognisably the same term.
-      SymRef V = Pool.take(Ctx.width(R));
-      Rewritten[Index] = V;
-      Out.Hidden.emplace(V.index(), R);
+      Rewritten[Index] = Hide(R);
       continue;
     }
 
@@ -1139,13 +1211,7 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
         continue;
       }
 
-      auto It = MaskInputs.find(C.index());
-      if (It == MaskInputs.end()) {
-        SymRef V = Pool.take(Ctx.width(C));
-        It = MaskInputs.insert({C.index(), V}).first;
-        Out.Hidden.emplace(V.index(), C);
-      }
-      NewOps.push_back(It->second);
+      NewOps.push_back(Hide(C));
     }
 
     // Spend the complement identity where it buys linearity and nowhere else:

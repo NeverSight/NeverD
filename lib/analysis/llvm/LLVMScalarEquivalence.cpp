@@ -7,13 +7,14 @@
 #include "neverd/analysis/LLVMScalarEquivalence.h"
 
 #include "neverd/symbolic/SymExec.h"
+#include "neverd/symbolic/SymKnownBits.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Errc.h"
 
-#include <limits>
+#include <algorithm>
 #include <set>
 
 namespace neverd::analysis {
@@ -51,16 +52,27 @@ class Executor {
   const LLVMScalarEquivalenceLimits &Limits;
   llvm::DenseMap<uint32_t, unsigned> Variables;
   llvm::DenseMap<uint32_t, Ref> Folded;
+  sym::SymKnownBits BitFacts;
   unsigned InputVariables;
 
   std::optional<llvm::APInt> constantWindow(Ref R, unsigned Low,
                                             unsigned Width) {
     Work.spend();
-    const unsigned Available = static_cast<unsigned>(std::min<uint64_t>(
-        Work.Remaining, std::numeric_limits<unsigned>::max()));
+    const unsigned Available = static_cast<unsigned>(
+        std::min<uint64_t>(Work.Remaining, sym::SymKnownBits::MaxQueryWork));
     unsigned Remaining = Available;
     auto K = C.constantWindow(R, Low, Width, Remaining);
+    if (!K && Width && Low <= C.width(R) && Width <= C.width(R) - Low) {
+      if (auto Facts = BitFacts.query(R, Remaining)) {
+        auto Slice = Facts->extractBits(Width, Low);
+        if (Slice.isConstant())
+          K = Slice.One;
+      }
+    }
     Work.spend(Available - Remaining);
+    // The final value comparison has no later traversal to detect exhaustion.
+    if (!K && !Work.Remaining)
+      Work.spend();
     return K;
   }
 
@@ -213,10 +225,19 @@ class Executor {
   }
 
 public:
+  bool sameValue(Ref A, Ref B) {
+    if (A == B)
+      return true;
+    auto Equality = C.mkEq(A, B);
+    checkNodes();
+    auto K = constantWindow(Equality, 0, 1);
+    return K && K->isOne();
+  }
+
   Executor(sym::SymContext &Context, Budget &Budget,
            const LLVMScalarEquivalenceLimits &Limits,
            llvm::ArrayRef<Ref> Inputs)
-      : C(Context), Work(Budget), Limits(Limits),
+      : C(Context), Work(Budget), Limits(Limits), BitFacts(Context),
         InputVariables(Context.numVars()) {
     for (unsigned N = 0; N < Inputs.size(); ++N)
       Variables[C.varId(Inputs[N])] = N;
@@ -382,7 +403,7 @@ checkLLVMScalarEquivalence(const llvm::Function &Original,
           break;
         }
         Work.spend();
-        if (!L.Value || !R.Value || L.Value != R.Value)
+        if (!L.Value || !R.Value || !Exec.sameValue(L.Value, R.Value))
           throw Failure{Status::Unproved,
                         "symbolic returns differ or remain unproved"};
         ++Result.CompletedPartitions;

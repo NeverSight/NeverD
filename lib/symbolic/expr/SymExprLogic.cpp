@@ -24,6 +24,36 @@
 #include <limits>
 
 namespace neverd::symbolic {
+namespace {
+
+// Keep the zero-filled high bits outside the bitwise operation. Only AND may
+// discard high constant bits; OR and XOR must retain every set constant bit.
+SymRef contractZeroExtensions(SymContext &C, SymOp Op,
+                              llvm::ArrayRef<SymRef> Rest,
+                              const llvm::APInt &Constant) {
+  if (C.op(Rest.front()) != SymOp::ZExt)
+    return {};
+  const unsigned Width = C.width(C.operand(Rest.front(), 0));
+  if (Op != SymOp::And && Constant.getActiveBits() > Width)
+    return {};
+  for (auto R : Rest)
+    if (C.op(R) != SymOp::ZExt || C.width(C.operand(R, 0)) != Width)
+      return {};
+  llvm::SmallVector<SymRef, 8> Narrow;
+  for (auto R : Rest)
+    Narrow.push_back(C.operand(R, 0));
+  Narrow.push_back(C.mkConst(Constant.trunc(Width)));
+  SymRef Value;
+  if (Op == SymOp::And)
+    Value = C.mkAnd(Narrow);
+  else if (Op == SymOp::Or)
+    Value = C.mkOr(Narrow);
+  else
+    Value = C.mkXor(Narrow);
+  return C.mkZExt(Value, Constant.getBitWidth());
+}
+
+} // namespace
 
 /// Shared shape for And/Or/Xor: flatten the nested same-operator operands,
 /// fold the constants into one, then let the caller apply the operator's own
@@ -99,6 +129,9 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
 
   if (Rest.empty())
     return mkConst(Acc);
+
+  if (auto Narrow = contractZeroExtensions(*this, SymOp::And, Rest, Acc))
+    return Narrow;
 
   if (W == 1)
     if (SymRef Predicate =
@@ -212,6 +245,9 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
   if (Rest.empty())
     return mkConst(Acc);
 
+  if (auto Narrow = contractZeroExtensions(*this, SymOp::Or, Rest, Acc))
+    return Narrow;
+
   if (W == 1)
     if (SymRef Predicate =
             detail::recoverObservedComparison(*this, SymOp::Or, Rest, Acc))
@@ -285,6 +321,9 @@ SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
 
   if (Rest.empty())
     return mkConst(Acc);
+
+  if (auto Narrow = contractZeroExtensions(*this, SymOp::Xor, Rest, Acc))
+    return Narrow;
 
   if (W == 1 || !isVar(Rest[0]))
     if (SymRef Predicate =
@@ -422,6 +461,10 @@ SymRef SymContext::mkLShr(SymRef A, SymRef B) {
       if (SymRef Predicate = detail::recoverSignComparison(*this, A))
         return mkZExt(Predicate, W);
   }
+  // Retain the entire count: truncating it to the narrow value width would
+  // turn a large, zero-producing shift into a small one.
+  if (op(A) == SymOp::ZExt)
+    return mkZExt(mkLShr(operand(A, 0), B), W);
   if (isConstZero(A))
     return mkZero(W);
   return intern(SymOp::LShr, W, {A, B}, 0);

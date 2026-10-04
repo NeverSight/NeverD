@@ -12,6 +12,7 @@ add_neverd_component_library(NeverDSymbolic
   expr/SymExprMask.cpp
   expr/SymExprStruct.cpp
   expr/SymExprWalk.cpp
+  expr/SymKnownBits.cpp
   mba/SymBitwise.cpp
   mba/SymMBA.cpp
   mba/SymMBAMaskPartition.cpp
