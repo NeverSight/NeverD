@@ -5,11 +5,47 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {once} = require('node:events');
+const {spawnSync} = require('node:child_process');
 const {setTimeout: delay} = require('node:timers/promises');
 const {startCommand, testEnvironment} = require('../hvf-intel-diagnostic/run.cjs');
-const {readProgress, observeRecovery, commandGroup, finishUpload, LIMIT, MAX_PROGRESS} = require('./run.cjs');
+const {uploadInvocation, readProgress, observeRecovery, commandGroup, finishUpload, LIMIT, MAX_PROGRESS} = require('./run.cjs');
 const NAME = 'HvfExecutor.NativeIntelCancellationAndCompletionFailureAllowRetry';
 const environment = testEnvironment(process.env);
+
+test('actual action input key selects uploader mode and rejects inherited Node options without mutation', () => {
+  const parent = {PATH: '/usr/bin', INPUT_EXPERIMENT: 'recovery-vcpu-recreate'};
+  const before = {...parent}, native = testEnvironment(parent);
+  for (const mode of ['default', 'jitless']) {
+    const invocation = uploadInvocation('/pinned/dist/upload/index.js', {...parent, 'INPUT_UPLOAD-RUNTIME': mode});
+    assert.equal(invocation.scope, 'recovery-plan-and-progress-children');
+    assert.equal(invocation.node_options_present, false);
+    assert.deepEqual(invocation.arguments, [...(mode === 'jitless' ? ['--jitless'] : []),
+      '/pinned/dist/upload/index.js']);
+    for (const options of ['', '--jitless', '--require=/untrusted.cjs'])
+      assert.throws(() => uploadInvocation('/entry.js', {...parent, 'INPUT_UPLOAD-RUNTIME': mode, NODE_OPTIONS: options}),
+        /NODE_OPTIONS/);
+  }
+  assert.throws(() => uploadInvocation('/entry.js', {...parent, 'INPUT_UPLOAD-RUNTIME': '--eval'}), /unknown uploader runtime/);
+  assert.equal(uploadInvocation('/entry.js', parent).mode, 'default');
+  assert.equal(uploadInvocation('/entry.js', {...parent, INPUT_UPLOAD_RUNTIME: 'jitless'}).mode, 'default');
+  assert.deepEqual(parent, before);
+  assert.deepEqual(testEnvironment(parent), native);
+});
+
+test('actual uploader child receives only its selected runtime flag', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hvf-uploader-runtime-'));
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  const entry = path.join(directory, 'record.cjs'), parentArgs = [...process.execArgv];
+  fs.writeFileSync(entry, 'process.stdout.write(JSON.stringify(process.execArgv));');
+  for (const mode of ['default', 'jitless']) {
+    const invocation = uploadInvocation(entry, {'INPUT_UPLOAD-RUNTIME': mode});
+    const result = spawnSync(invocation.executable, invocation.arguments,
+      {env: environment, encoding: 'utf8', timeout: 10000});
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), mode === 'jitless' ? ['--jitless'] : []);
+    assert.deepEqual(process.execArgv, parentArgs);
+  }
+});
 const round = n => `Repeating all tests (iteration ${n}) . . .\n[ RUN      ] ${NAME}\n[       OK ] ${NAME} (150 ms)\n[  PASSED  ] 1 test.\n`;
 const plan = {native_name: NAME, command: [process.execPath], commit: 'a'.repeat(40), controller_commit: 'b'.repeat(40)};
 const collectIdentity = async () => ({verified: true});
@@ -163,6 +199,7 @@ test('uploader exit failures and fatal signals retain distinct process evidence'
     const data = JSON.parse(fs.readFileSync(record));
     assert.equal(data.pid, operation.child.pid);
     assert.equal(data.executable, process.execPath);
+    assert.deepEqual(data.arguments, ['-e', script]);
     assert.equal(data.exit_status, exit);
     assert.equal(data.signal, signal);
     assert.equal(data.termination_reason, null);
@@ -177,6 +214,7 @@ test('uploader deadline is preserved even when command completion rejects', asyn
   await assert.rejects(finishUpload(operation, record, 'timeout'), /deadline/);
   const data = JSON.parse(fs.readFileSync(record));
   assert.equal(data.termination_reason, 'deadline');
+  assert.deepEqual(data.arguments, ['-e', 'setInterval(() => {}, 1000)']);
   assert.equal(data.pid, operation.child.pid);
   assert.ok(data.completed_at);
 });

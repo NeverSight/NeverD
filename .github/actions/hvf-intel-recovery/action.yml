@@ -13,6 +13,9 @@ inputs:
   upload-action:
     description: Separate checkout of the pinned official upload-artifact action
     required: true
+  upload-runtime:
+    description: default or jitless for controller plan/progress upload children only
+    default: default
   repetitions:
     description: Original one-process repetition count, 100 or 1000
     default: '1000'

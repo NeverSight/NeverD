@@ -13,6 +13,18 @@ const LIMIT = 1024 * 1024;
 const MAX_PROGRESS = 42;
 const save = (file, data) => fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', {flag: 'wx'});
 
+function uploadInvocation(entryPoint, environment) {
+  const mode = environment['INPUT_UPLOAD-RUNTIME'] || 'default';
+  if (!['default', 'jitless'].includes(mode)) throw new Error('unknown uploader runtime');
+  if (Object.hasOwn(environment, 'NODE_OPTIONS'))
+    throw new Error('controlled uploader requires NODE_OPTIONS to be absent');
+  return {kind: 'hvf-uploader-runtime-contract',
+    scope: 'recovery-plan-and-progress-children', mode,
+    executable: process.execPath,
+    arguments: [...(mode === 'jitless' ? ['--jitless'] : []), entryPoint],
+    node_options_present: false, parent_exec_argv: [...process.execArgv]};
+}
+
 function progress(log, name) {
   let current = 0, stage = '', completed = 0, runs = 0, oks = 0;
   for (const line of log.split('\n')) {
@@ -160,7 +172,7 @@ async function finishUpload(operation, record, suffix) {
     // outcome before cancelling the guest, rather than misattributing the
     // missing native result to a hypervisor failure.
     save(record, {...operation.result, pid: operation.child.pid ?? null, parent_pid: process.pid,
-      executable: process.execPath});
+      executable: operation.child.spawnfile, arguments: operation.child.spawnargs.slice(1)});
   }
 }
 
@@ -176,6 +188,7 @@ async function main() {
   };
   const source = path.resolve(input('source')), evidence = path.resolve(input('evidence'));
   const uploader = path.resolve(input('upload-action'));
+  const invocation = uploadInvocation(path.join(uploader, 'dist/upload/index.js'), process.env);
   const helper = path.resolve(__dirname, '../../../scripts/diagnose_hvf_recovery.py');
   const environment = testEnvironment(process.env);
   const revision = spawnSync('git', ['-C', uploader, 'rev-parse', 'HEAD'],
@@ -195,6 +208,7 @@ async function main() {
   if (await preparation.completion !== 0) throw new Error('recovery preparation failed');
   const plan = JSON.parse(fs.readFileSync(path.join(evidence, 'plan.json'), 'utf8'));
   save(path.join(evidence, 'observer-runtime.json'), captureRuntime());
+  save(path.join(evidence, 'uploader-runtime.json'), invocation);
   save(path.join(evidence, 'host-start.json'), await captureHostState(evidence, environment, group.signal));
   const uploads = path.join(evidence, 'uploads');
   fs.mkdirSync(uploads);
@@ -204,14 +218,14 @@ async function main() {
       'INPUT_IF-NO-FILES-FOUND': 'error', 'INPUT_RETENTION-DAYS': '7',
       'INPUT_COMPRESSION-LEVEL': '6', INPUT_OVERWRITE: 'false',
       'INPUT_INCLUDE-HIDDEN-FILES': 'false', INPUT_ARCHIVE: 'true'};
-    const operation = group.start(process.execPath, [path.join(uploader, 'dist/upload/index.js')],
+    const operation = group.start(invocation.executable, invocation.arguments,
       uploadEnvironment, {timeoutMs: 120000});
     await finishUpload(operation, path.join(uploads, `${suffix}.json`), suffix);
   };
   // Seal the pre-execution plan separately; its directory never becomes live.
   const prepared = path.join(evidence, 'prepared');
   fs.mkdirSync(prepared);
-  for (const name of ['plan.json', 'inventory.json', 'host-start.json', 'observer-runtime.json']) {
+  for (const name of ['plan.json', 'inventory.json', 'host-start.json', 'observer-runtime.json', 'uploader-runtime.json']) {
     fs.copyFileSync(path.join(evidence, name), path.join(prepared, name), fs.constants.COPYFILE_EXCL);
   }
   await upload(prepared, 'plan');
@@ -228,5 +242,5 @@ async function main() {
   if (group.signal.aborted) throw new Error('recovery diagnosis interrupted during final collection');
 }
 
-module.exports = {progress, readProgress, observeRecovery, commandGroup, finishUpload, LIMIT, MAX_PROGRESS};
+module.exports = {uploadInvocation, progress, readProgress, observeRecovery, commandGroup, finishUpload, LIMIT, MAX_PROGRESS};
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
