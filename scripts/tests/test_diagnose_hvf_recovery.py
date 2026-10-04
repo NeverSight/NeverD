@@ -286,8 +286,9 @@ class RecoveryContractTests(unittest.TestCase):
             self.assertEqual(contract["command"][1], "--gtest_filter=" + native_filter)
             environment = {"NEVERD_REQUIRE_HVF": "1", "NEVERD_HVF_INTEL_PROBE": "1"}
             recreate_owner = experiment == "instruction-owner-recreate"
-            recreate_vm = experiment in ("instruction-vm-recreate", "recovery-vm-recreate", "recovery-vm-no-host-kick")
-            recreate = recreate_owner or recreate_vm or experiment in ("instruction-vcpu-recreate", "recovery-vcpu-recreate")
+            recreate_vm = experiment in ("instruction-vm-recreate", "recovery-vm-recreate", "recovery-vm-no-host-kick", "finite-vm-recreate")
+            recreate = recreate_owner or recreate_vm or experiment in ("instruction-vcpu-recreate", "recovery-vcpu-recreate", "finite-vcpu-recreate")
+            finite_lifecycle = experiment in ("finite-vcpu-recreate", "finite-vm-recreate")
             reuse = recreate or experiment in ("instruction-reuse", "recovery-reuse")
             if reuse:
                 environment["NEVERD_HVF_INTEL_REUSE_EXECUTOR"] = "1"
@@ -304,10 +305,10 @@ class RecoveryContractTests(unittest.TestCase):
             self.assertEqual(contract["vcpu_generations"], 101 if recreate and not recovery_recreate else None)
             self.assertEqual(contract["vcpu_boundary_generations"], 101 if recovery_recreate else None)
             self.assertEqual(contract["vm_recreate"], recreate_vm)
-            self.assertEqual(contract["vm_generations"], 101 if recreate_vm else None)
+            self.assertEqual(contract["vm_generations"], 101 if recreate_vm else 1 if finite_lifecycle else None)
             controls = experiment == "owner-failure-controls"
             self.assertEqual(contract["owner_recreate"], recreate_owner)
-            self.assertEqual(contract["owner_generations"], 101 if recreate_owner else None)
+            self.assertEqual(contract["owner_generations"], 101 if recreate_owner else 1 if finite_lifecycle else None)
             self.assertEqual(contract["owner_failure_controls"], controls)
             self.assertEqual(contract["expected_fault_checks"], 300 if controls else None)
             self.assertEqual(contract["native_execution"], experiment != "lifecycle" and not controls)
@@ -318,6 +319,44 @@ class RecoveryContractTests(unittest.TestCase):
         self.assertEqual(original["native_name"], NAME)
         self.assertEqual(original["native_requirements"], {"NEVERD_REQUIRE_HVF": "1"})
         self.assertTrue(original["required_for_acceptance"])
+
+    def test_finite_lifecycle_keeps_one_body_and_requires_separate_observations(self):
+        name = 'HvfIntelProbe.FiniteDeadline'
+        self.add_probe(name)
+        for vm in (False, True):
+            mode = 'finite-vm-recreate' if vm else 'finite-vcpu-recreate'
+            self.evidence = self.build / mode
+            plan = self.prepare(1000, mode)
+            self.assertEqual(plan['native_name'], name)
+            self.assertEqual(plan['command'][1:], ['--gtest_filter=' + name,
+                '--gtest_repeat=1000', '--gtest_break_on_failure'])
+            self.assertEqual(plan['timeout_seconds'], 600)
+            self.assertEqual(plan['vcpu_generations'], 1001)
+            self.assertIsNone(plan['vcpu_boundary_generations'])
+            self.assertEqual(plan['vm_generations'], 1001 if vm else 1)
+            self.assertEqual(plan['owner_generations'], 1)
+            self.assertFalse(plan['owner_recreate'] or plan['required_for_acceptance'])
+            self.assertTrue(plan['native_execution'] and plan['guest_execution'])
+            expected = dict(NEVERD_REQUIRE_HVF='1', NEVERD_HVF_INTEL_PROBE='1',
+                NEVERD_HVF_INTEL_REUSE_EXECUTOR='1', NEVERD_HVF_INTEL_RECREATE_VCPU='1')
+            if vm:
+                expected['NEVERD_HVF_INTEL_RECREATE_VM'] = '1'
+            self.assertEqual(plan['native_requirements'], expected)
+            self.assertTrue(plan['finite_observation_audit_required'])
+            self.assertEqual(plan['finite_slice_ns'], 5000000)
+            self.assertEqual(plan['finite_witness_loop_budget_ns'], 2000000000)
+            self.assertEqual(plan['finite_witness_loop_max_calls'], 4096)
+            self.assertEqual(plan['finite_mtf_observations_per_iteration'], 2)
+            text = ''.join(iteration(i, name, True, True, vm) for i in range(1, 1001)) + retirement(1000)
+            parse = lambda value: diagnostic.read_repetitions(value, name, 1000, True, True, vm)
+            self.assertIsNone(parse(text)['error'])
+            for bad in (text.replace(retirement(1000), ''),
+                        text.replace(lifecycle_marker('vcpu_destroy_end', 7), '', 1),
+                        text.replace('owner=42', 'owner=43', 1)):
+                self.assertIsNotNone(parse(bad)['error'])
+            # The opposite reset mode cannot satisfy the sealed lifecycle.
+            wrong = ''.join(iteration(i, name, True, True, not vm) for i in range(1, 1001)) + retirement(1000)
+            self.assertIsNotNone(parse(wrong)['error'])
 
     def test_parent_probe_environment_cannot_change_selected_experiment(self):
         name = diagnostic.EXPERIMENTS["instruction"]

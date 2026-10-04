@@ -37,6 +37,8 @@ EXPERIMENTS = {
     "recovery-vm-recreate": "HvfExecutor.NativeIntelCancellationAndCompletionFailureAllowRetry",
     "recovery-vm-no-host-kick": "HvfIntelRecoveryProbe.WithoutHostKick",
     "finite-deadline": "HvfIntelProbe.FiniteDeadline",
+    "finite-vcpu-recreate": "HvfIntelProbe.FiniteDeadline",
+    "finite-vm-recreate": "HvfIntelProbe.FiniteDeadline",
 }
 
 
@@ -46,12 +48,13 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
     recovery = experiment in ("recovery", "recovery-reuse", "recovery-vcpu-recreate", "recovery-vm-recreate")
     kick_control = experiment == "recovery-vm-no-host-kick"
     recovery_workload = recovery or kick_control
+    finite_lifecycle = experiment in ("finite-vcpu-recreate", "finite-vm-recreate")
     owner_controls = experiment == "owner-failure-controls"
     if owner_controls and repetitions != 100:
         raise ValueError("owner failure controls require 100 repetitions")
     recreate_owner = experiment == "instruction-owner-recreate"
-    recreate_vm = kick_control or experiment in ("instruction-vm-recreate", "recovery-vm-recreate")
-    recreate = recreate_owner or recreate_vm or experiment in ("instruction-vcpu-recreate", "recovery-vcpu-recreate")
+    recreate_vm = kick_control or experiment in ("instruction-vm-recreate", "recovery-vm-recreate", "finite-vm-recreate")
+    recreate = recreate_owner or recreate_vm or experiment in ("instruction-vcpu-recreate", "recovery-vcpu-recreate", "finite-vcpu-recreate")
     reuse = recreate or experiment in ("instruction-reuse", "recovery-reuse")
     methods = runner.method_inventory(document)
     selected = [(key, expected) for key, expected in methods.items()
@@ -84,7 +87,7 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
         "guest_execution": guest,
         "native_hvf_calls": True,
         "owner_recreate": recreate_owner,
-        "owner_generations": repetitions + 1 if recreate_owner else None,
+        "owner_generations": repetitions + 1 if recreate_owner else 1 if finite_lifecycle else None,
         "owner_failure_controls": owner_controls,
         "expected_fault_checks": 3 * repetitions if owner_controls else None,
         "required_for_acceptance": experiment == "recovery",
@@ -95,7 +98,7 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
         "vcpu_generations": repetitions + 1 if recreate and not recovery_workload else None,
         "vcpu_boundary_generations": repetitions + 1 if recreate and recovery_workload else None,
         "vm_recreate": recreate_vm,
-        "vm_generations": repetitions + 1 if recreate_vm else None,
+        "vm_generations": repetitions + 1 if recreate_vm else 1 if finite_lifecycle else None,
         "native_name": name, "required_ctest_name": record.name,
         "command": [str(binary), "--gtest_filter=" + native_filter,
                     f"--gtest_repeat={repetitions}", "--gtest_break_on_failure"],
@@ -105,6 +108,13 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
     }
     if kick_control:
         contract.update(unsolicited_host_kick=False, expected_host_kick_omissions=repetitions)
+    if finite_lifecycle:
+        # A native repetition/lifecycle result is still partial evidence. The
+        # separate transcript audit must also reconcile every raw finite call.
+        contract.update(finite_observation_audit_required=True, finite_slice_ns=5000000,
+                        finite_witness_loop_budget_ns=2000000000,
+                        finite_witness_loop_max_calls=4096,
+                        finite_mtf_observations_per_iteration=2)
     return contract
 
 
