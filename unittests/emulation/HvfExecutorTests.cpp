@@ -256,6 +256,7 @@ protected:
   std::unique_ptr<MemoryProjection> Memory;
   std::shared_ptr<hvf::Executor> Host;
 #if defined(__x86_64__)
+  void checkIntelRecovery(bool WithHostKick);
   RetainedExecutor *Retained = nullptr;
   void TearDown() override {
     if (Retained && Retained->RecreateOwner)
@@ -933,7 +934,7 @@ TEST_F(HvfIntelProbe, FiniteDeadline) {
   probePhase("finite_retirement");
 }
 
-TEST_F(HvfExecutor, NativeIntelCancellationAndCompletionFailureAllowRetry) {
+void HvfExecutor::checkIntelRecovery(bool WithHostKick) {
   auto Created = createHvfX64Machine(*Memory);
   ASSERT_TRUE(bool(Created)) << llvm::toString(Created.takeError());
   auto Machine = std::move(*Created);
@@ -966,6 +967,7 @@ TEST_F(HvfExecutor, NativeIntelCancellationAndCompletionFailureAllowRetry) {
     auto Ready = Entered.get_future();
     std::optional<hvf::Cpu> InterruptCPU;
     std::thread Stopper;
+    bool HostKickOmitted = false;
     if (Kind != Deadline)
       Stopper = std::thread([&] {
         Ready.wait();
@@ -973,7 +975,10 @@ TEST_F(HvfExecutor, NativeIntelCancellationAndCompletionFailureAllowRetry) {
           std::this_thread::sleep_for(std::chrono::milliseconds(5));
           // An unsolicited host kick cannot complete or fail the busy guest.
           // The same entry must continue until the later requested stop.
-          EXPECT_EQ(hv_vcpu_interrupt(&*InterruptCPU, 1), HV_SUCCESS);
+          if (WithHostKick)
+            EXPECT_EQ(hv_vcpu_interrupt(&*InterruptCPU, 1), HV_SUCCESS);
+          else
+            HostKickOmitted = true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         Stop = true;
@@ -1028,6 +1033,14 @@ TEST_F(HvfExecutor, NativeIntelCancellationAndCompletionFailureAllowRetry) {
       Entered.set_value();
     if (Stopper.joinable())
       Stopper.join();
+    if (!WithHostKick && Kind == HostInterrupt) {
+      EXPECT_TRUE(HostKickOmitted);
+      // Emit after joining, outside the timed helper/native cancellation path.
+      if (HostKickOmitted) {
+        llvm::outs() << "INTEL_RECOVERY host_kick=omitted\n";
+        llvm::outs().flush();
+      }
+    }
     const bool Interrupted = E.isA<MachineInterruptedError>();
     const auto Failure = llvm::toString(std::move(E));
     EXPECT_TRUE(NativeReturned)
@@ -1055,6 +1068,27 @@ TEST_F(HvfExecutor, NativeIntelCancellationAndCompletionFailureAllowRetry) {
   ASSERT_EQ(llvm::toString(Prepare(RetryPC)), "");
   EXPECT_EQ(State.reg(X64Register::PC), RetryPC + 1);
   EXPECT_EQ(State.reg(X64Register::AX), 0x12345678u);
+}
+
+TEST_F(HvfExecutor, NativeIntelCancellationAndCompletionFailureAllowRetry) {
+  checkIntelRecovery(true);
+}
+
+class HvfIntelRecoveryProbe : public HvfExecutor {
+  void SetUp() override {
+    if (!probeFlag("NEVERD_HVF_INTEL_PROBE"))
+      GTEST_SKIP() << "explicit Intel diagnostic experiment required";
+    // Validate the exact lifecycle control before acquiring any native Host.
+    ASSERT_TRUE(probeFlag("NEVERD_HVF_INTEL_REUSE_EXECUTOR"));
+    ASSERT_TRUE(probeFlag("NEVERD_HVF_INTEL_RECREATE_VCPU"));
+    ASSERT_TRUE(probeFlag("NEVERD_HVF_INTEL_RECREATE_VM"));
+    ASSERT_FALSE(probeFlag("NEVERD_HVF_INTEL_RECREATE_OWNER"));
+    HvfExecutor::SetUp();
+  }
+};
+
+TEST_F(HvfIntelRecoveryProbe, WithoutHostKick) {
+  checkIntelRecovery(false);
 }
 
 TEST_F(HvfExecutor, IntelGuestStoreWitnessStopsAndRetries) {
