@@ -1,86 +1,82 @@
 name: Native host setup
-
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/native-host-probe.yml'
-      - 'scripts/probe_native_host.*'
-      - 'scripts/prepare_kvm_ci.py'
-      - 'scripts/NativeHostProbe.def'
-      - 'scripts/tests/test_probe_native_host.py'
-      - 'lib/emulation/backends/kvm/KvmProtocol.def'
-      - 'lib/emulation/backends/whp/WhpProtocol.def'
-  push:
-    branches: [dev]
-    paths:
-      - '.github/workflows/native-host-probe.yml'
-      - 'scripts/probe_native_host.*'
-      - 'scripts/prepare_kvm_ci.py'
-      - 'scripts/NativeHostProbe.def'
-      - 'scripts/tests/test_probe_native_host.py'
-      - 'lib/emulation/backends/kvm/KvmProtocol.def'
-      - 'lib/emulation/backends/whp/WhpProtocol.def'
-
 permissions:
   contents: read
-
-concurrency:
-  group: native-host-setup-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   probe:
-    name: ${{ matrix.backend }} ${{ matrix.arch }} setup
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - backend: kvm
-            arch: X64
-            runner: ubuntu-24.04
-          - backend: kvm
-            arch: ARM64
-            runner: ubuntu-24.04-arm
-          - backend: whp
-            arch: X64
-            runner: windows-latest
-            msvc: x64
-          - backend: whp
-            arch: ARM64
-            runner: windows-11-arm
-            msvc: arm64
+    name: Temporary Windows alignment owner verification
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 32
+          submodules: false
+      - name: Initialize pinned dependency
+        shell: bash
+        run: git submodule update --init --depth 1 third_party/capstone
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: 'v0.16.0'
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: Enable native Windows compiler
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Install native build tooling
+        shell: pwsh
+        run: choco install ninja --yes --no-progress
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
-          arch: ${{ matrix.msvc }}
-      - name: Verify evidence classification
-        run: python -m unittest scripts.tests.test_probe_native_host -v
-      - name: Prepare current hosted account KVM access
-        if: runner.os == 'Linux'
-        run: python scripts/prepare_kvm_ci.py --output build-native-host-probe/device-access.json
-      - name: Probe actual VM and vCPU setup
-        run: >-
-          python scripts/probe_native_host.py
-          --backend ${{ matrix.backend }} --arch ${{ matrix.arch }}
-          --output build-native-host-probe
-      - name: Preserve setup and availability evidence
+          arch: x64
+      - name: Configure original native profile
+        shell: bash
+        run: |
+          cmake -S . -B build-alignment-probe -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DBUILD_TESTING=ON -DNEVERD_BUILD_SHARED=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=OFF -DNEVERD_ENABLE_CPU_EMULATION=ON \
+            -DNEVERD_ENABLE_DRIVER_EMULATION=ON -DNEVERD_EMULATION_BACKEND_UNICORN=OFF \
+            -DNEVERD_LLVM_PREBUILT=ON
+          cmake --build build-alignment-probe --target NeverDWindowsProcessTests --parallel 4 --verbose > build-alignment-probe/build.txt 2>&1
+      - name: Observe identical PE through native launch boundaries
+        shell: python
+        run: |
+          import hashlib, json, pathlib, platform, shutil, subprocess
+          root = pathlib.Path.cwd()
+          out = root / 'build-alignment-probe'
+          exe = out / 'unittests/emulation/windows-exception-fixtures/X64/alignment-exceptions.exe'
+          owner = out / 'bin/NeverDWindowsProcessTests.exe'
+          report = {'source': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'platform': platform.platform(), 'fixture_sha256': hashlib.sha256(exe.read_bytes()).hexdigest(), 'owner_sha256': hashlib.sha256(owner.read_bytes()).hexdigest(), 'observations': []}
+          (out / 'cpu.txt').write_text(subprocess.check_output(['powershell', '-NoProfile', '-Command', 'Get-CimInstance Win32_Processor | Select-Object Name,Manufacturer,ProcessorId | Format-List'], text=True))
+          (out / 'disassembly.txt').write_text(subprocess.check_output([shutil.which('llvm-objdump'), '-dr', str(exe)], text=True))
+          for trial in range(5):
+              for kind in ('pipe', 'file', 'owner'):
+                  args = [str(owner), '--gtest_filter=WindowsAlignmentNative.RunsOriginalFaultAndRetryExecutable'] if kind == 'owner' else [str(exe)]
+                  if kind == 'file':
+                      stdout, stderr = out / 'fixture-stdout.bin', out / 'fixture-stderr.bin'
+                      with stdout.open('wb') as o, stderr.open('wb') as e:
+                          result = subprocess.run(args, stdout=o, stderr=e, timeout=60)
+                      output, error = stdout.read_bytes(), stderr.read_bytes()
+                  else:
+                      result = subprocess.run(args, capture_output=True, timeout=60)
+                      output, error = result.stdout, result.stderr
+                  report['observations'].append({'kind': kind, 'trial': trial, 'exit': result.returncode, 'stdout': output.decode(errors='replace') if kind == 'owner' else '', 'stdout_size': len(output), 'stdout_sha256': hashlib.sha256(output).hexdigest(), 'counts': output[-12:].hex() if kind != 'owner' else '', 'stderr': error.hex()})
+                  (out / 'observations.json').write_text(json.dumps(report, indent=2) + '\n')
+                  print(kind, trial, result.returncode, len(output), error)
+                  assert result.returncode == (0 if kind == 'owner' else 47), report['observations'][-1]
+      - name: Preserve bounded observations
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: native-host-${{ matrix.backend }}-${{ matrix.arch }}
+          name: alignment-fault-observations
           path: |
-            build-native-host-probe/summary.json
-            build-native-host-probe/device-access.json
-            build-native-host-probe/*.stdout
-            build-native-host-probe/*.stderr
+            build-alignment-probe/observations.json
+            build-alignment-probe/cpu.txt
+            build-alignment-probe/build.txt
+            build-alignment-probe/disassembly.txt
+            build-alignment-probe/CMakeCache.txt
           if-no-files-found: error
           retention-days: 14
