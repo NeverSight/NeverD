@@ -15,17 +15,18 @@ const environment = testEnvironment(process.env);
 test('actual action input key selects uploader mode and rejects inherited Node options without mutation', () => {
   const parent = {PATH: '/usr/bin', INPUT_EXPERIMENT: 'recovery-vcpu-recreate'};
   const before = {...parent}, native = testEnvironment(parent);
-  for (const mode of ['default', 'jitless']) {
+  for (const mode of ['default', 'js-interpreter']) {
     const invocation = uploadInvocation('/pinned/dist/upload/index.js', {...parent, 'INPUT_UPLOAD-RUNTIME': mode});
     assert.equal(invocation.scope, 'recovery-plan-and-progress-children');
     assert.equal(invocation.node_options_present, false);
-    assert.deepEqual(invocation.arguments, [...(mode === 'jitless' ? ['--jitless'] : []),
+    assert.deepEqual(invocation.arguments, [...(mode === 'js-interpreter' ? ['--no-turbofan', '--no-maglev', '--no-sparkplug'] : []),
       '/pinned/dist/upload/index.js']);
     for (const options of ['', '--jitless', '--require=/untrusted.cjs'])
       assert.throws(() => uploadInvocation('/entry.js', {...parent, 'INPUT_UPLOAD-RUNTIME': mode, NODE_OPTIONS: options}),
         /NODE_OPTIONS/);
   }
   assert.throws(() => uploadInvocation('/entry.js', {...parent, 'INPUT_UPLOAD-RUNTIME': '--eval'}), /unknown uploader runtime/);
+  assert.throws(() => uploadInvocation('/entry.js', {...parent, 'INPUT_UPLOAD-RUNTIME': 'jitless'}), /unknown uploader runtime/);
   assert.equal(uploadInvocation('/entry.js', parent).mode, 'default');
   assert.equal(uploadInvocation('/entry.js', {...parent, INPUT_UPLOAD_RUNTIME: 'jitless'}).mode, 'default');
   assert.deepEqual(parent, before);
@@ -37,13 +38,38 @@ test('actual uploader child receives only its selected runtime flag', t => {
   t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
   const entry = path.join(directory, 'record.cjs'), parentArgs = [...process.execArgv];
   fs.writeFileSync(entry, 'process.stdout.write(JSON.stringify(process.execArgv));');
-  for (const mode of ['default', 'jitless']) {
+  for (const mode of ['default', 'js-interpreter']) {
     const invocation = uploadInvocation(entry, {'INPUT_UPLOAD-RUNTIME': mode});
     const result = spawnSync(invocation.executable, invocation.arguments,
       {env: environment, encoding: 'utf8', timeout: 10000});
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), mode === 'jitless' ? ['--jitless'] : []);
+    assert.deepEqual(JSON.parse(result.stdout), mode === 'js-interpreter' ? ['--no-turbofan', '--no-maglev', '--no-sparkplug'] : []);
     assert.deepEqual(process.execArgv, parentArgs);
+  }
+});
+
+test('uploader runtime retains WebAssembly and real local HTTP parsing', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hvf-uploader-http-'));
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  const entry = path.join(directory, 'fetch.cjs');
+  fs.writeFileSync(entry, `const assert = require('node:assert/strict');
+    const server = require('node:http').createServer((request, response) => response.end('wasm-http-ok'));
+    server.listen(0, '127.0.0.1', async () => {
+      try {
+        assert.equal(typeof WebAssembly.compile, 'function');
+        const result = await fetch('http://127.0.0.1:' + server.address().port,
+          {signal: AbortSignal.timeout(2000)});
+        assert.equal(await result.text(), 'wasm-http-ok');
+        process.stdout.write('wasm-http-ok');
+      } catch (error) { console.error(error); process.exitCode = 1; }
+      finally { server.close(); server.closeAllConnections(); }
+    });`);
+  for (const mode of ['default', 'js-interpreter']) {
+    const invocation = uploadInvocation(entry, {'INPUT_UPLOAD-RUNTIME': mode});
+    const result = spawnSync(invocation.executable, invocation.arguments,
+      {env: environment, encoding: 'utf8', timeout: 10000});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'wasm-http-ok');
   }
 });
 const round = n => `Repeating all tests (iteration ${n}) . . .\n[ RUN      ] ${NAME}\n[       OK ] ${NAME} (150 ms)\n[  PASSED  ] 1 test.\n`;

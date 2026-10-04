@@ -15,13 +15,13 @@ const save = (file, data) => fs.writeFileSync(file, JSON.stringify(data, null, 2
 
 function uploadInvocation(entryPoint, environment) {
   const mode = environment['INPUT_UPLOAD-RUNTIME'] || 'default';
-  if (!['default', 'jitless'].includes(mode)) throw new Error('unknown uploader runtime');
+  if (!['default', 'js-interpreter'].includes(mode)) throw new Error('unknown uploader runtime');
   if (Object.hasOwn(environment, 'NODE_OPTIONS'))
     throw new Error('controlled uploader requires NODE_OPTIONS to be absent');
   return {kind: 'hvf-uploader-runtime-contract',
     scope: 'recovery-plan-and-progress-children', mode,
     executable: process.execPath,
-    arguments: [...(mode === 'jitless' ? ['--jitless'] : []), entryPoint],
+    arguments: [...(mode === 'js-interpreter' ? ['--no-turbofan', '--no-maglev', '--no-sparkplug'] : []), entryPoint],
     node_options_present: false, parent_exec_argv: [...process.execArgv]};
 }
 
