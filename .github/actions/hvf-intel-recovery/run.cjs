@@ -199,7 +199,7 @@ async function main() {
   const attempt = process.env.GITHUB_RUN_ATTEMPT, repetitions = input('repetitions');
   if (!/^\d+$/.test(attempt || '') || !['100', '1000'].includes(repetitions)) throw new Error('invalid recovery inputs');
   const experiment = process.env.INPUT_EXPERIMENT || 'recovery';
-  if (!['recovery', 'lifecycle', 'instruction', 'instruction-reuse', 'instruction-vcpu-recreate', 'instruction-vm-recreate', 'instruction-owner-recreate', 'owner-failure-controls', 'recovery-reuse', 'recovery-vcpu-recreate', 'recovery-vm-recreate', 'finite-deadline'].includes(experiment)) {
+  if (!['recovery', 'lifecycle', 'instruction', 'instruction-reuse', 'instruction-vcpu-recreate', 'instruction-vm-recreate', 'instruction-owner-recreate', 'owner-failure-controls', 'recovery-reuse', 'recovery-vcpu-recreate', 'recovery-vm-recreate', 'recovery-vm-no-host-kick', 'finite-deadline'].includes(experiment)) {
     throw new Error('unknown Intel experiment');
   }
   const common = ['--source', source, '--evidence', evidence];

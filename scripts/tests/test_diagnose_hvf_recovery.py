@@ -35,8 +35,10 @@ def retirement(number, owner=False):
 
 
 def iteration(number, name=NAME, reuse=False, recreate=False, recreate_vm=False,
-              recreate_owner=False, controls=False):
+              recreate_owner=False, controls=False, omit_kick=False):
     marker = "INTEL_PROBE phase=executor_retained\n" if reuse else ""
+    if omit_kick:
+        marker += "INTEL_RECOVERY host_kick=omitted\n"
     if recreate_owner:
         marker += owner_marker("replacement_parked", number + 1)
         marker += "".join(owner_marker(phase, number) for phase in (
@@ -59,6 +61,28 @@ def iteration(number, name=NAME, reuse=False, recreate=False, recreate_vm=False,
 
 
 class RecoveryLogTests(unittest.TestCase):
+    def test_host_kick_control_requires_one_witness_before_each_vm_reset(self):
+        name = diagnostic.EXPERIMENTS['recovery-vm-no-host-kick']
+        log = ''.join(iteration(i, name, True, True, True, omit_kick=True)
+                      for i in range(1, 101)) + retirement(100)
+        parse = lambda text: diagnostic.read_repetitions(
+            text, name, 100, True, True, True, host_kick_omitted=True)
+        self.assertIsNone(parse(log)['error'])
+        witness = 'INTEL_RECOVERY host_kick=omitted\n'
+        start = lifecycle_marker('vcpu_destroy_begin', 1)
+        retained = 'INTEL_PROBE phase=executor_retained\n'
+        changes = (log.replace(witness, '', 1), log.replace(witness, witness * 2, 1),
+                   log.replace(witness + start, start + witness, 1),
+                   log.replace(retained + witness, witness + retained, 1),
+                   log.replace(witness, 'INTEL_RECOVERY host_kick=issued\n', 1),
+                   log.replace(retirement(100), ''), witness + log, log + witness)
+        for changed in changes:
+            self.assertIsNotNone(parse(changed)['error'])
+        # The original test cannot pass by accidentally selecting the control.
+        self.assertIsNotNone(diagnostic.read_repetitions(log, name, 100, True, True, True)['error'])
+        with self.assertRaises(ValueError):
+            diagnostic.read_repetitions(log, NAME, 100, True, True, True, host_kick_omitted=True)
+
     def test_owner_handoff_requires_join_lease_generations_and_actual_final_owner(self):
         log = "".join(iteration(i, reuse=True, recreate=True, recreate_owner=True)
                       for i in range(1, 101)) + retirement(100, owner=True)
@@ -262,7 +286,7 @@ class RecoveryContractTests(unittest.TestCase):
             self.assertEqual(contract["command"][1], "--gtest_filter=" + native_filter)
             environment = {"NEVERD_REQUIRE_HVF": "1", "NEVERD_HVF_INTEL_PROBE": "1"}
             recreate_owner = experiment == "instruction-owner-recreate"
-            recreate_vm = experiment in ("instruction-vm-recreate", "recovery-vm-recreate")
+            recreate_vm = experiment in ("instruction-vm-recreate", "recovery-vm-recreate", "recovery-vm-no-host-kick")
             recreate = recreate_owner or recreate_vm or experiment in ("instruction-vcpu-recreate", "recovery-vcpu-recreate")
             reuse = recreate or experiment in ("instruction-reuse", "recovery-reuse")
             if reuse:
@@ -276,7 +300,7 @@ class RecoveryContractTests(unittest.TestCase):
             self.assertEqual(contract["native_requirements"], environment)
             self.assertEqual(contract["executor_reuse"], reuse)
             self.assertEqual(contract["vcpu_recreate"], recreate)
-            recovery_recreate = experiment in ("recovery-vcpu-recreate", "recovery-vm-recreate")
+            recovery_recreate = experiment in ("recovery-vcpu-recreate", "recovery-vm-recreate", "recovery-vm-no-host-kick")
             self.assertEqual(contract["vcpu_generations"], 101 if recreate and not recovery_recreate else None)
             self.assertEqual(contract["vcpu_boundary_generations"], 101 if recovery_recreate else None)
             self.assertEqual(contract["vm_recreate"], recreate_vm)
@@ -408,6 +432,30 @@ class RecoveryContractTests(unittest.TestCase):
         result = json.loads((self.evidence / "result.json").read_text())
         self.assertFalse(result["passed"])
         self.assertIn("missing executor reuse marker", result["repetitions"]["error"])
+
+    def test_no_host_kick_probe_requires_exact_inventory_and_runtime_witness(self):
+        mode = 'recovery-vm-no-host-kick'
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            self.prepare(experiment=mode)
+        name = diagnostic.EXPERIMENTS[mode]
+        self.add_probe(name)
+        plan = self.prepare(experiment=mode)
+        self.assertFalse(plan['required_for_acceptance'])
+        self.assertFalse(plan['unsolicited_host_kick'])
+        self.assertEqual(plan['expected_host_kick_omissions'], 100)
+        self.assertEqual(plan['command'][1], '--gtest_filter=' + name)
+        self.assertTrue(plan['vm_recreate'] and plan['vcpu_recreate'] and plan['executor_reuse'])
+        self.assertEqual(plan['vcpu_boundary_generations'], 101)
+        self.assertIsNone(plan['vcpu_generations'])
+        self.assertEqual(plan['timeout_seconds'], 180)
+        # Renaming old successful recovery output cannot forge the new probe.
+        log = ''.join(iteration(i, name, True, True, True) for i in range(1, 101)) + retirement(100)
+        self.binary.write_text(f'#!{sys.executable}\nprint({log!r}, end="", flush=True)\n')
+        self.binary.chmod(0o755)
+        self.assertEqual(diagnostic.execute(self.root, self.evidence), 1)
+        result = json.loads((self.evidence / 'result.json').read_text())
+        self.assertFalse(result['passed'])
+        self.assertIn('missing host-kick omission', result['repetitions']['error'])
 
     def test_experiment_missing_owner_or_unknown_mode_is_rejected(self):
         for mode in ("lifecycle", "instruction", "finite-deadline", "arbitrary"):

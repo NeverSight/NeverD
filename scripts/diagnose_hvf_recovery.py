@@ -35,6 +35,7 @@ EXPERIMENTS = {
     "recovery-reuse": "HvfExecutor.NativeIntelCancellationAndCompletionFailureAllowRetry",
     "recovery-vcpu-recreate": "HvfExecutor.NativeIntelCancellationAndCompletionFailureAllowRetry",
     "recovery-vm-recreate": "HvfExecutor.NativeIntelCancellationAndCompletionFailureAllowRetry",
+    "recovery-vm-no-host-kick": "HvfIntelRecoveryProbe.WithoutHostKick",
     "finite-deadline": "HvfIntelProbe.FiniteDeadline",
 }
 
@@ -43,11 +44,13 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
     if experiment not in ("recovery", *EXPERIMENTS):
         raise ValueError("unknown Intel experiment")
     recovery = experiment in ("recovery", "recovery-reuse", "recovery-vcpu-recreate", "recovery-vm-recreate")
+    kick_control = experiment == "recovery-vm-no-host-kick"
+    recovery_workload = recovery or kick_control
     owner_controls = experiment == "owner-failure-controls"
     if owner_controls and repetitions != 100:
         raise ValueError("owner failure controls require 100 repetitions")
     recreate_owner = experiment == "instruction-owner-recreate"
-    recreate_vm = experiment in ("instruction-vm-recreate", "recovery-vm-recreate")
+    recreate_vm = kick_control or experiment in ("instruction-vm-recreate", "recovery-vm-recreate")
     recreate = recreate_owner or recreate_vm or experiment in ("instruction-vcpu-recreate", "recovery-vcpu-recreate")
     reuse = recreate or experiment in ("instruction-reuse", "recovery-reuse")
     methods = runner.method_inventory(document)
@@ -75,7 +78,7 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
     if recreate_owner:
         environment["NEVERD_HVF_INTEL_RECREATE_OWNER"] = "1"
     guest = experiment not in ("lifecycle", "owner-failure-controls")
-    return {
+    contract = {
         "experiment": experiment,
         "native_execution": guest,
         "guest_execution": guest,
@@ -89,8 +92,8 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
         "vcpu_recreate": recreate,
         # Recovery recreates vCPUs inside the test too. Lifecycle markers count
         # only fixture boundaries, so they cannot establish its total creations.
-        "vcpu_generations": repetitions + 1 if recreate and not recovery else None,
-        "vcpu_boundary_generations": repetitions + 1 if recreate and recovery else None,
+        "vcpu_generations": repetitions + 1 if recreate and not recovery_workload else None,
+        "vcpu_boundary_generations": repetitions + 1 if recreate and recovery_workload else None,
         "vm_recreate": recreate_vm,
         "vm_generations": repetitions + 1 if recreate_vm else None,
         "native_name": name, "required_ctest_name": record.name,
@@ -100,6 +103,9 @@ def recovery_contract(source, build, document, required, runner, repetitions, ex
         "timeout_seconds": repetition_budget(repetitions),
         "native_requirements": environment,
     }
+    if kick_control:
+        contract.update(unsolicited_host_kick=False, expected_host_kick_omissions=repetitions)
+    return contract
 
 
 def prepare(source, build, evidence, repetitions, experiment="recovery"):
@@ -146,7 +152,8 @@ OWNER_CONTROLS = tuple((case, phase) for case in ("replacement", "old_destroy", 
 
 
 def read_repetitions(log, name, repetitions, executor_reuse=False, vcpu_recreate=False,
-                     vm_recreate=False, owner_recreate=False, owner_failure_controls=False):
+                     vm_recreate=False, owner_recreate=False, owner_failure_controls=False,
+                     host_kick_omitted=False):
     """Require every complete iteration in order; totals or overwritten XML cannot prove this."""
     if (vcpu_recreate and not executor_reuse) or (vm_recreate and not vcpu_recreate):
         raise ValueError("VM recreation requires vCPU recreation and retained Executor")
@@ -154,9 +161,13 @@ def read_repetitions(log, name, repetitions, executor_reuse=False, vcpu_recreate
         raise ValueError("owner recreation requires vCPU recreation and a retained VM")
     if owner_failure_controls and (executor_reuse or vcpu_recreate or vm_recreate or owner_recreate):
         raise ValueError("failure controls require independent Executors")
+    if host_kick_omitted and (not vm_recreate or owner_recreate or owner_failure_controls
+                             or name != EXPERIMENTS['recovery-vm-no-host-kick']):
+        raise ValueError("host-kick control requires the exact VM-recreation probe")
     completed, started, stage = 0, 0, "iteration"
     error = None
     retained = False
+    omitted = False
     owner, next_owner, lifecycle, retired, controls = 0, 0, 0, 0, 0
     phases = ("vcpu_destroy_begin", "vcpu_destroy_end", "vcpu_create_begin", "vcpu_create_end")
     if vm_recreate:
@@ -176,6 +187,7 @@ def read_repetitions(log, name, repetitions, executor_reuse=False, vcpu_recreate
             started += 1
             stage = "run"
             retained = False
+            omitted = False
             lifecycle = 0
             controls = 0
             next_owner = 0
@@ -189,6 +201,12 @@ def read_repetitions(log, name, repetitions, executor_reuse=False, vcpu_recreate
                 error = "unexpected or duplicate executor reuse marker"
                 break
             retained = True
+        elif line.startswith("INTEL_RECOVERY"):
+            if (not host_kick_omitted or line != "INTEL_RECOVERY host_kick=omitted"
+                    or stage != "ok" or not retained or lifecycle or omitted):
+                error = "unexpected, duplicate or misplaced host-kick omission"
+                break
+            omitted = True
         elif line.startswith("INTEL_HANDOFF_CONTROL"):
             event = re.fullmatch(r"INTEL_HANDOFF_CONTROL case=([a-z_]+) phase=([a-z_]+)", line)
             if (not owner_failure_controls or stage != "ok" or not event
@@ -236,6 +254,9 @@ def read_repetitions(log, name, repetitions, executor_reuse=False, vcpu_recreate
                 error = "unexpected owner lifecycle or retirement event"
                 break
         elif line.startswith("INTEL_LIFECYCLE"):
+            if host_kick_omitted and stage == "ok" and not omitted:
+                error = "missing host-kick omission before VM recreation"
+                break
             event = re.fullmatch(r"INTEL_LIFECYCLE phase=([a-z_]+) generation=([0-9]+) owner=([0-9]+)", line)
             if owner_recreate or not vcpu_recreate or not executor_reuse or not event or int(event[3]) == 0:
                 error = "unexpected or malformed lifecycle marker"
@@ -262,6 +283,9 @@ def read_repetitions(log, name, repetitions, executor_reuse=False, vcpu_recreate
                 break
             if executor_reuse and not retained:
                 error = "missing executor reuse marker"
+                break
+            if host_kick_omitted and not omitted:
+                error = "missing host-kick omission evidence"
                 break
             if vcpu_recreate and lifecycle != len(phases):
                 error = ("missing owner recreation evidence" if owner_recreate else
@@ -317,7 +341,8 @@ def execute(source, evidence):
     repeats = read_repetitions((evidence / "execution/output.log").read_text(),
                               contract["native_name"], contract["repetitions"],
                               contract["executor_reuse"], contract["vcpu_recreate"], contract["vm_recreate"],
-                              contract["owner_recreate"], contract["owner_failure_controls"])
+                              contract["owner_recreate"], contract["owner_failure_controls"],
+                              contract.get("expected_host_kick_omissions", 0) == contract["repetitions"])
     retirement = json.loads((evidence / "retirement.json").read_text())
     success = (not repeats["error"] and status["status"] == 0 and not status["timed_out"]
                and status["child_retired"] and len(retirement) == 1
