@@ -12,6 +12,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 
+#include <array>
 #include <map>
 #include <optional>
 
@@ -79,9 +80,27 @@ protected:
   }
 
 /// One packed fixture on one backend. A whole stub runs in each case, so the
-/// cases are separate tests with separate time limits.
-class UnpackFixture
-    : public testing::TestWithParam<std::tuple<Backend, Fixture>> {};
+/// cases are separate tests with separate time limits. The pair is one value
+/// whose printed form is a single token with no spaces or parentheses, so
+/// every CMake test-discovery version registers the same case name.
+struct BackendFixture {
+  Backend Transport;
+  Fixture F;
+};
+constexpr std::array<BackendFixture, std::size(Backends) * std::size(Fixtures)>
+    backendFixtures = [] {
+      std::array<BackendFixture, std::size(Backends) * std::size(Fixtures)>
+          Cases{};
+      size_t At = 0;
+      for (const auto &B : Backends)
+        for (const auto &F : Fixtures)
+          Cases[At++] = {B, F};
+      return Cases;
+    }();
+void PrintTo(const BackendFixture &C, std::ostream *OS) {
+  *OS << C.Transport.Name << FixtureSeparator << C.F.Name;
+}
+class UnpackFixture : public testing::TestWithParam<BackendFixture> {};
 
 std::set<Image::Import> runtimeImports(const UnpackResult &Result) {
   std::set<Image::Import> Out;
@@ -93,6 +112,7 @@ std::set<Image::Import> runtimeImports(const UnpackResult &Result) {
 
 TEST_P(UnpackFixture, RecoversEntrySectionsAndImports) {
   const auto &[Transport, F] = GetParam();
+  (void)Transport;
   auto Result = unpackOn(Transport.Kind, F.Packed);
   if (!Result) {
     if (!HasFailure())
@@ -130,12 +150,10 @@ TEST_P(UnpackFixture, RecoversEntrySectionsAndImports) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Backends, UnpackFixture,
-                         testing::Combine(testing::ValuesIn(Backends),
-                                          testing::ValuesIn(Fixtures)),
+                         testing::ValuesIn(backendFixtures),
                          [](const auto &Info) {
-                           return std::string(std::get<0>(Info.param).Name) +
-                                  FixtureSeparator +
-                                  std::get<1>(Info.param).Name;
+                           return std::string(Info.param.Transport.Name) +
+                                  FixtureSeparator + Info.param.F.Name;
                          });
 
 TEST_P(Unpack, RecoveredImageRunsExactlyLikeTheOriginal) {
