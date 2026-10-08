@@ -3,11 +3,13 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
-import sys
+import platform
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "observations"
 OUT.mkdir(exist_ok=True)
+(OUT / "platform.json").write_text(json.dumps(dict(platform=platform.platform(),
+                                                version=platform.version()), indent=2) + "\n")
 CLANG = shutil.which("clang")
 LINK = shutil.which("lld-link")
 if not CLANG or not LINK:
@@ -17,7 +19,6 @@ FLAGS = ["--target=x86_64-pc-windows-msvc", "-std=c11", "-ffreestanding",
          "-fno-slp-vectorize", "-O1", "-c", str(ROOT / "probe.c")]
 subprocess.run([CLANG, *FLAGS, "-DPROBE_DLL", "-o", str(OUT / "input.obj")],
                check=True)
-subprocess.run([CLANG, *FLAGS, "-o", str(OUT / "host.obj")], check=True)
 apis = ["LoadLibraryExA", "FreeLibrary", "VirtualQuery", "ReadProcessMemory",
         "GetCurrentProcess", "GetLastError", "GetStdHandle", "WriteFile",
         "ExitProcess"]
@@ -25,10 +26,13 @@ apis = ["LoadLibraryExA", "FreeLibrary", "VirtualQuery", "ReadProcessMemory",
                                 "\n".join(apis) + "\n")
 subprocess.run([LINK, "/lib", "/machine:x64", "/def:" + str(OUT / "kernel.def"),
                 "/out:" + str(OUT / "kernel.lib")], check=True)
-subprocess.run([LINK, "/nodefaultlib", "/subsystem:console", "/machine:x64",
-                "/entry:hostEntry", str(OUT / "host.obj"),
-                str(OUT / "kernel.lib"), "/out:" + str(OUT / "host.exe")],
-               check=True)
+for mode, load_flags in [("native", 0), ("native-unresolved", 1)]:
+    subprocess.run([CLANG, *FLAGS, "-DPROBE_LOAD_FLAGS=" + str(load_flags),
+                    "-o", str(OUT / (mode + ".obj"))], check=True)
+    subprocess.run([LINK, "/nodefaultlib", "/subsystem:console", "/machine:x64",
+                    "/entry:hostEntry", str(OUT / (mode + ".obj")),
+                    str(OUT / "kernel.lib"), "/out:" + str(OUT / (mode + ".exe"))],
+                   check=True)
 cases = [
     ("page-full", 4096, 512, 8192, 8192),
     ("page-raw-tail", 4096, 512, 0x100, 8192),
@@ -65,23 +69,26 @@ for name, section_align, file_align, virtual_size, raw_size in cases:
             metadata.append(dict(case=name + ".dll", section_alignment=section_align,
                                  file_alignment=file_align, virtual_size=virtual_size,
                                  raw_size=raw_size, rva=rva, file_offset=offset,
-                                 file_marker=data[offset + 4096]))
+                                 file_markers={hex(i): data[offset + i] for i in [0x100, 0xfff, 0x1000, 0x1fff]}))
             break
     else:
         raise RuntimeError("missing probe section")
     path.write_bytes(data)
 (OUT / "cases.json").write_text(json.dumps(metadata, indent=2) + "\n")
-run = subprocess.run([str(OUT / "host.exe")], cwd=OUT, text=True,
-                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
-(OUT / "native.log").write_text(run.stdout)
-print(run.stdout)
-records = []
-for line in run.stdout.splitlines():
-    record = {}
-    for field in line.split():
-        key, value = field.split("=", 1)
-        record[key] = int(value, 16) if value.startswith("0x") else value
-    records.append(record)
-(OUT / "native.json").write_text(json.dumps(records, indent=2) + "\n")
-if run.returncode or len(records) != len(cases) * 8:
-    raise SystemExit("native probe did not report every case")
+for mode in ["native", "native-unresolved"]:
+    run = subprocess.run([str(OUT / (mode + ".exe"))], cwd=OUT, text=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    (OUT / (mode + ".log")).write_text(run.stdout)
+    print(mode + ":")
+    print(run.stdout)
+    records = []
+    for line in run.stdout.splitlines():
+        record = {}
+        for field in line.split():
+            key, value = field.split("=", 1)
+            record[key] = int(value, 16) if value.startswith("0x") else value
+        records.append(record)
+    (OUT / (mode + ".json")).write_text(json.dumps(records, indent=2) + "\n")
+    reported = [record["case"] for record in records if "loaded" in record]
+    if run.returncode or set(reported) != {case[0] + ".dll" for case in cases}:
+        raise SystemExit(mode + " probe did not report every case")

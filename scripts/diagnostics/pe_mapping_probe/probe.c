@@ -4,9 +4,13 @@ typedef unsigned char U8;
 
 #if defined(PROBE_DLL)
 #pragma section(".probe", read, write)
-__declspec(allocate(".probe")) volatile U8 ProbeData[8192] = {[4096] = 0x7b};
+__declspec(allocate(".probe")) volatile U8 ProbeData[8192] = {
+    [0x100] = 0x4a, [0xfff] = 0x5c, [0x1000] = 0x7b, [0x1fff] = 0x6d};
 int dllEntry(void *Base, U32 Reason, void *Reserved) { return 1; }
 #else
+#ifndef PROBE_LOAD_FLAGS
+#define PROBE_LOAD_FLAGS 0
+#endif
 __declspec(dllimport) void *LoadLibraryExA(const char *, void *, U32);
 __declspec(dllimport) int FreeLibrary(void *);
 __declspec(dllimport) U64 VirtualQuery(const void *, void *, U64);
@@ -60,7 +64,7 @@ void hostEntry(void) {
   static const U32 Offsets[] = {0,      0x100,  0xfff, 0x1000,
                                 0x1fff, 0x2000, 0xffff};
   for (U32 Case = 0; Case != sizeof(Cases) / sizeof(Cases[0]); ++Case) {
-    U8 *Base = LoadLibraryExA(Cases[Case], 0, 1);
+    U8 *Base = LoadLibraryExA(Cases[Case], 0, PROBE_LOAD_FLAGS);
     text("case=");
     text(Cases[Case]);
     text(" ");
