@@ -1,6 +1,6 @@
 **語言**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
+<!-- i18n-source: beada521ead13ba6e6bdc5afba4445233c9085f4104db03507b5cfca85048443 -->
 
 [← 文件索引](README.md)
 
@@ -756,8 +756,16 @@ readlink(58)使用有符號低32位count，readlinkat(473)保留完整size_t；�
 
 目前連結表持有實際名稱、父物件及原始位元組。既有末端名稱回傳 EEXIST17；懸空連結後已消耗的尾斜線可使建立發生於其目標名稱，舊連結不變。展開空目標回傳 ENOENT2；readlink 讀取空目標回傳0，正容量也不存取輸出指標，但仍先檢查計數、路徑與類型。
 
-名稱/NUL與目標僅計費一次，共用256項、16 MiB配額。拒絕不發布節點、不改變父目錄、不消耗 FD或普通檔案 inode。新連結完整中繼資料明確未知，不沿用普通檔案 CreationPolicy 或重用名稱的舊觀察；成功建立使父目錄 stat/快照未知。刪除或替換目標後，舊 FD/CWD/映射保留原物件。rmdir 與目錄替換會檢查連結子項；移動或 SWAP 任一側包含連結時在作用前停止。連結自身 unlink/rename、硬連結、ACL與可變初始連結目錄仍未支援；別名不轉移實際父目錄授權。
+名稱/NUL與目標僅計費一次，共用256項、16 MiB配額。拒絕不發布節點、不改變父目錄、不消耗 FD或普通檔案 inode。新連結完整中繼資料明確未知，不沿用普通檔案 CreationPolicy 或重用名稱的舊觀察；成功建立使父目錄 stat/快照未知。刪除或替換目標後，舊 FD/CWD/映射保留原物件。rmdir 與目錄替換會檢查連結子項；移動或 SWAP 任一側包含連結時在作用前停止。連結自身 rename、硬連結、ACL與可變初始連結目錄仍未支援；別名不轉移實際父目錄授權。
 
 原生 ARM64 macOS 的150項記錄保留四項觀察器失敗；獨立10項補充只核對實際新目標與空連結邊界，不改寫舊結果。無 SDK 的 `symbolic-link-creation` 程式檢查兩個入口、原始位元組與緩衝邊界、父物件、替換檔案及舊 FD/映射全部10位元組；不證明實體 iOS、原生 Intel 或完整 OS相容性。
 
 [XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).
+
+## 刪除執行時建立的符號連結
+
+`unlink(10)` 與 `unlinkat(472)` 可刪除實際父目錄已授權修改的執行時連結；初始固定連結仍受保護。裸 `AT_SYMLINK_NOFOLLOW_ANY` 保留末端連結，允許刪除懸空、循環及空目標連結；中間或尾斜線要求展開時回傳 ELOOP62。無此旗標時由統一解析器選擇實際節點：`a → b → target` 中刪除 `a/` 會刪除 `b`，保留 `a` 與最終目標。既有旗標、路徑及 dirfd 錯誤順序不變。
+
+成功刪除立即退還一個動態項目及目前路徑/NUL/原始目標位元組費用，只使實際父目錄的完整 stat/列舉觀察失效，不消耗 FD 或建立 inode。目標內容、修改策略、舊描述符與共用游標、CWD、映射租約保留原物件；重用名稱不恢復舊連結。拒絕不改變模型狀態或退款。執行時建立連結的完整中繼資料仍未知。連結改名及仍含連結的子樹移動/SWAP 仍不支援。
+
+獨立 ARM64 macOS 原生參考於原五秒期限內記錄40例：28次成功刪除、12次原生錯誤及17次重複刪除 ENOENT，並檢查 FD/CWD/私有映射。這不是客體、實體 iOS 或原生 Intel 驗收；`symbolic-link-unlink` 與公開 API 用例另行驗證。

@@ -1,6 +1,6 @@
 **언어**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
+<!-- i18n-source: beada521ead13ba6e6bdc5afba4445233c9085f4104db03507b5cfca85048443 -->
 
 [← 문서 목록](README.md)
 
@@ -756,8 +756,16 @@ readlink(58)는 부호 있는 하위32비트count, readlinkat(473)는 전체size
 
 현재 링크 표가 실제 이름, 부모와 대상 바이트를 보유합니다. 기존 말단은 EEXIST17입니다. 소모한 마지막 슬래시는 dangling 링크의 실제 대상 이름에서 생성을 허용하며 기존 링크는 바뀌지 않습니다. 빈 대상 확장은 ENOENT2입니다. 빈 대상 readlink는 양의 용량에서도 출력 포인터에 접근하지 않고0을 반환하지만 count/경로/유형을 먼저 검사합니다.
 
-이름/NUL과 대상은 한 번만 계산하며256항목/16 MiB를 공유합니다. 거부는 노드, 부모, FD, 일반 파일 inode를 바꾸지 않습니다. 새 링크의 전체 메타데이터는 알 수 없으며 일반 파일 CreationPolicy나 재사용 이름의 이전 관측을 상속하지 않습니다. 생성 후 부모 stat/스냅샷은 알 수 없습니다. 대상 삭제/교체 후에도 FD/CWD/매핑은 원래 객체를 유지합니다. rmdir와 디렉터리 교체는 링크 자식을 검사합니다. 이동/SWAP 양쪽 중 링크가 있는 쪽이 있으면 효과 전에 중지합니다. 링크 자체 unlink/rename, 하드 링크, ACL, 가변 초기 링크 목록은 미지원이며 별칭은 실제 부모의 권한을 옮기지 않습니다.
+이름/NUL과 대상은 한 번만 계산하며256항목/16 MiB를 공유합니다. 거부는 노드, 부모, FD, 일반 파일 inode를 바꾸지 않습니다. 새 링크의 전체 메타데이터는 알 수 없으며 일반 파일 CreationPolicy나 재사용 이름의 이전 관측을 상속하지 않습니다. 생성 후 부모 stat/스냅샷은 알 수 없습니다. 대상 삭제/교체 후에도 FD/CWD/매핑은 원래 객체를 유지합니다. rmdir와 디렉터리 교체는 링크 자식을 검사합니다. 이동/SWAP 양쪽 중 링크가 있는 쪽이 있으면 효과 전에 중지합니다. 링크 자체 rename, 하드 링크, ACL, 가변 초기 링크 목록은 미지원이며 별칭은 실제 부모의 권한을 옮기지 않습니다.
 
 ARM64 macOS의150개 원시 기록은 관측기 실패4개를 유지하며 별도10개로 실제 새 대상과 빈 링크 경계를 확인합니다. SDK 없는 `symbolic-link-creation`은 두 진입점, 대상/버퍼 경계, 부모, 교체 파일 및 기존 FD/매핑10바이트 전체를 확인합니다. 물리 iOS, 네이티브 Intel, 전체 OS 호환성 증거는 아닙니다.
 
 [XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).
+
+## 런타임에 만든 심볼릭 링크 삭제
+
+`unlink(10)`과 `unlinkat(472)`는 실제 부모에 변경 권한이 있는 런타임 링크를 삭제합니다. 초기 고정 링크는 계속 보호됩니다. 단독 `AT_SYMLINK_NOFOLLOW_ANY`는 마지막 링크를 유지하므로 끊긴 대상, 순환 또는 빈 대상도 삭제할 수 있습니다. 중간 경로나 끝 슬래시의 확장이 필요하면 ELOOP62입니다. 플래그 없이 `a → b → target`의 `a/`를 삭제하면 `b`만 삭제하고 `a`와 최종 대상을 유지합니다. 기존 플래그·경로·dirfd 오류 순서는 같습니다.
+
+성공하면 동적 항목 하나와 현재 경로/NUL/대상 바이트 비용을 한 번 반환하고 실제 부모의 전체 stat/열거 관측만 무효화합니다. 빈 FD나 생성 inode는 필요 없습니다. 대상 내용·변경 정책·설명자·공유 커서·CWD·매핑은 원래 객체를 유지합니다. 이름 재사용은 이전 링크를 복원하지 않으며 거부는 상태나 비용을 바꾸지 않습니다. 실행 중 생성된 링크의 전체 메타데이터는 여전히 알 수 없습니다. 링크 이름 변경과 링크가 남은 하위 트리 이동/SWAP은 미지원입니다.
+
+독립 ARM64 macOS 40개 관측은 기존 5초 제한에서 삭제 성공28개, 오류12개, 재삭제 ENOENT17개와 FD/CWD/비공개 매핑 보존을 기록했습니다. 게스트·실제 iOS·Intel 검증은 아닙니다. `symbolic-link-unlink` 및 공개 API 검사는 별도입니다.

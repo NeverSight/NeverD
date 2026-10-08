@@ -1122,8 +1122,22 @@ DarwinFiles::unlink(uint64_t Path, uint32_t DirectoryFD, ProcessResult &Result,
     return returned(*Error, true);
   if (File.Type == Kind::Directory)
     return returned(OperationNotPermitted, true);
-  if (File.Type == Kind::SymbolicLink)
-    return unsupported(Result, diagnostic::SymbolicLinkMutation);
+  if (File.Type == Kind::SymbolicLink) {
+    const auto &Link = File.Link;
+    if (Link->Protected)
+      return unsupported(Result, diagnostic::SymbolicLinkMutation);
+    if (!Link->Parent->Mutable)
+      return unsupported(Result, diagnostic::DirectoryNotMutable);
+    if (auto E = prepareMutation())
+      return std::move(E);
+    // No descriptor or mapping owns the link itself. Its opaque target and
+    // the current path charge are released with this namespace entry.
+    const uint64_t Charge = Link->Path.size() + 1 + Link->bytes().size();
+    Links.erase(Link->Path);
+    *StorageUsed -= Charge;
+    Link->Parent->Changed = true;
+    return returned(0);
+  }
   const auto Parent = parentPath(File.Path);
   if (!mutableDirectory(Parent))
     return unsupported(Result, diagnostic::DirectoryNotMutable);

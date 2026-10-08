@@ -1,6 +1,6 @@
 **Idiomas**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
+<!-- i18n-source: beada521ead13ba6e6bdc5afba4445233c9085f4104db03507b5cfca85048443 -->
 
 [← Índice de documentación](README.md)
 
@@ -754,8 +754,16 @@ Los60 controles adicionales ARM64 macOS DELETE/RENAME conservan buffers stat com
 
 La tabla actual posee nombre real, padre y bytes. Un terminal existente devuelve EEXIST17. Las barras finales consumidas pueden seguir un enlace colgante y crear en su objetivo, sin cambiar el enlace anterior. Expandir un objetivo vacío da ENOENT2. Readlink vacío devuelve0 sin acceder al puntero de salida incluso con capacidad positiva, tras verificar count/ruta/tipo.
 
-Nombre/NUL y objetivo se cobran una vez en las256 entradas/16 MiB compartidos. Un rechazo no cambia nodo, padre, FD ni inodo de creación de archivo. Los metadatos completos nuevos son desconocidos; no heredan CreationPolicy de archivo ni observaciones de nombres reutilizados. Stat/instantánea del padre pasan a desconocidos tras crear. FD/CWD/mapas conservan objetos antiguos tras borrar/sustituir el objetivo. Rmdir y sustitución de directorios detectan hijos enlace. Mover/SWAP con enlaces en cualquiera de los lados que se mueve se detiene antes de efectos. Unlink/rename del enlace, enlaces duros, ACL y catálogos iniciales mutables quedan pendientes; un alias no transfiere autoridad al padre real.
+Nombre/NUL y objetivo se cobran una vez en las256 entradas/16 MiB compartidos. Un rechazo no cambia nodo, padre, FD ni inodo de creación de archivo. Los metadatos completos nuevos son desconocidos; no heredan CreationPolicy de archivo ni observaciones de nombres reutilizados. Stat/instantánea del padre pasan a desconocidos tras crear. FD/CWD/mapas conservan objetos antiguos tras borrar/sustituir el objetivo. Rmdir y sustitución de directorios detectan hijos enlace. Mover/SWAP con enlaces en cualquiera de los lados que se mueve se detiene antes de efectos. Rename del enlace, enlaces duros, ACL y catálogos iniciales mutables quedan pendientes; un alias no transfiere autoridad al padre real.
 
 Los150 registros ARM64 macOS conservan cuatro fallos de observador; diez controles separados verifican el objeto nuevo real y límites vacíos. El programa sin SDK `symbolic-link-creation` verifica ambas entradas, bytes/buffers, padres, sustitución y los diez bytes completos de FD/mapas anteriores. No demuestra iOS físico, Intel nativo o compatibilidad completa.
 
 [XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).
+
+## Eliminar enlaces simbólicos creados en ejecución
+
+`unlink(10)` y `unlinkat(472)` eliminan enlaces creados en ejecución cuando el padre real autoriza cambios; los enlaces iniciales fijos siguen protegidos. `AT_SYMLINK_NOFOLLOW_ANY` por sí solo conserva el enlace final y permite eliminarlo, incluso con destino ausente, cíclico o vacío. Una expansión intermedia o por barra final devuelve ELOOP62. Sin esa opción, eliminar `a/` en `a → b → target` borra solo `b`, conservando `a` y el destino final. Se mantiene el orden de errores de opciones, ruta y dirfd.
+
+El éxito devuelve una entrada dinámica y el coste actual de ruta/NUL/destino una sola vez, e invalida únicamente las observaciones completas stat/enumeración del padre real. No necesita FD libre ni inodo de creación. Datos, política de modificación, descripciones abiertas, cursores compartidos, CWD y mapas conservan sus objetos. Reutilizar el nombre no restaura el enlace; el rechazo no cambia estado ni presupuesto. Los metadatos completos de enlaces creados en ejecución siguen siendo desconocidos. Rename del enlace y mover/SWAP subárboles que aún contienen enlaces siguen sin admitirse.
+
+Las 40 observaciones ARM64 macOS independientes registran 28 eliminaciones, 12 errores, 17 ENOENT al repetir y conservación de FD/CWD/mapas privados con el mismo límite de cinco segundos. No certifican huéspedes, iOS físico ni Intel nativo. `symbolic-link-unlink` y los casos API públicos comprueban los límites por separado.

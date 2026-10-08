@@ -1,6 +1,6 @@
 **Langues**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
+<!-- i18n-source: beada521ead13ba6e6bdc5afba4445233c9085f4104db03507b5cfca85048443 -->
 
 [← Index de la documentation](README.md)
 
@@ -754,8 +754,16 @@ Les appels bruts `symlink(57)` et `symlinkat(474)` créent des liens locaux au p
 
 La table courante détient le nom réel, le parent et les octets. Un terminal existant donne EEXIST17. Les séparateurs finaux consommés peuvent suivre un lien pendant et créer à son nom cible, sans changer le lien initial. Développer une cible vide donne ENOENT2. Readlink d’une cible vide renvoie0 sans toucher la sortie, même avec une capacité positive, après validation du count/chemin/type.
 
-Nom/NUL et cible sont comptés une seule fois dans les256 entrées/16 MiB communs. Un refus ne change ni nœud, ni parent, ni FD, ni inode de création de fichier. Les métadonnées complètes du nouveau lien restent inconnues : pas d’héritage de CreationPolicy de fichier ni d’une ancienne observation au nom réutilisé. Le stat/instantané parent devient inconnu après création. FD/CWD/mappings conservent leurs objets après suppression/remplacement de cible. Rmdir et remplacement de répertoire détectent les enfants liens. Un déplacement/SWAP contenant un lien sur l’un des côtés s’arrête avant effets. Unlink/rename du lien, liens durs, ACL et catalogues initiaux mutables restent exclus ; un alias ne transfère aucune autorisation du parent réel.
+Nom/NUL et cible sont comptés une seule fois dans les256 entrées/16 MiB communs. Un refus ne change ni nœud, ni parent, ni FD, ni inode de création de fichier. Les métadonnées complètes du nouveau lien restent inconnues : pas d’héritage de CreationPolicy de fichier ni d’une ancienne observation au nom réutilisé. Le stat/instantané parent devient inconnu après création. FD/CWD/mappings conservent leurs objets après suppression/remplacement de cible. Rmdir et remplacement de répertoire détectent les enfants liens. Un déplacement/SWAP contenant un lien sur l’un des côtés s’arrête avant effets. Rename du lien, liens durs, ACL et catalogues initiaux mutables restent exclus ; un alias ne transfère aucune autorisation du parent réel.
 
 Les150 observations ARM64 macOS conservent quatre erreurs d’observateur ; dix contrôles séparés vérifient la vraie cible et les limites du lien vide. Le programme sans SDK `symbolic-link-creation` vérifie les deux entrées, octets/tampons, parents, remplacement et dix octets complets des anciens FD/mappings. Cela ne prouve pas iOS physique, Intel natif ou un OS complet.
 
 [XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).
+
+## Suppression des liens symboliques créés à l’exécution
+
+`unlink(10)` et `unlinkat(472)` suppriment un lien créé à l’exécution si son parent réel autorise la modification ; les liens initiaux fixes restent protégés. `AT_SYMLINK_NOFOLLOW_ANY` seul conserve le lien final et permet sa suppression, même avec une cible absente, cyclique ou vide. Une expansion intermédiaire ou due au séparateur final donne ELOOP62. Sans ce drapeau, supprimer `a/` dans `a → b → target` retire seulement `b`, en conservant `a` et la cible finale. L’ordre existant des erreurs de drapeaux, chemin et dirfd reste applicable.
+
+Le succès rembourse une seule entrée dynamique et son chemin/NUL/cible courants ; seules les observations stat/énumération complètes du parent réel sont invalidées. Aucun FD libre ni inode de création n’est requis. Données, politique de modification, descriptions ouvertes, curseurs partagés, CWD et mappings gardent leurs objets. Réutiliser le nom ne restaure pas l’ancien lien ; un refus ne modifie ni état ni budget. Les métadonnées complètes des liens créés à l’exécution restent inconnues. Le renommage des liens et le déplacement/SWAP de sous-arbres contenant encore des liens restent exclus.
+
+Les 40 observations ARM64 macOS indépendantes enregistrent, avec le délai inchangé de cinq secondes, 28 suppressions, 12 erreurs, 17 ENOENT après une seconde suppression et la conservation des FD/CWD/mappings privés. Elles ne valident pas les invités, iOS physique ou Intel natif. `symbolic-link-unlink` et les cas API publics vérifient séparément ces limites.

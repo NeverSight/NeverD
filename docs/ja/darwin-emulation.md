@@ -1,6 +1,6 @@
 **言語**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
+<!-- i18n-source: beada521ead13ba6e6bdc5afba4445233c9085f4104db03507b5cfca85048443 -->
 
 [← ドキュメント一覧](README.md)
 
@@ -756,8 +756,16 @@ readlink(58)は符号付き下位32ビットcount、readlinkat(473)は完全なs
 
 現在のリンク表が実際の名前、親、対象バイトを保持します。既存末端はEEXIST17。ダングリングリンクの消費済み末尾スラッシュは対象名での作成を許し、元リンクは変わりません。空対象の展開はENOENT2。空対象のreadlinkは正の容量でも出力ポインタに触れず0を返しますが、count/パス/型の検査は先に行います。
 
-名前/NULと対象を一度だけ課金し、256エントリ/16 MiBを共有します。拒否はノード、親、FD、通常ファイルinodeに影響しません。新リンクの完全メタデータは未知で、通常ファイルCreationPolicyや再利用名の古い観察を引き継ぎません。作成後の親stat/スナップショットは未知です。対象を削除・置換してもFD/CWD/マッピングは元の物体を保持します。rmdirとディレクトリ置換はリンク子を検出します。移動/SWAPのどちらかにリンクがあれば作用前に停止します。リンク自身のunlink/rename、ハードリンク、ACL、可変初期リンク一覧は未対応。別名は実際の親の権限を移しません。
+名前/NULと対象を一度だけ課金し、256エントリ/16 MiBを共有します。拒否はノード、親、FD、通常ファイルinodeに影響しません。新リンクの完全メタデータは未知で、通常ファイルCreationPolicyや再利用名の古い観察を引き継ぎません。作成後の親stat/スナップショットは未知です。対象を削除・置換してもFD/CWD/マッピングは元の物体を保持します。rmdirとディレクトリ置換はリンク子を検出します。移動/SWAPのどちらかにリンクがあれば作用前に停止します。リンク自身のrename、ハードリンク、ACL、可変初期リンク一覧は未対応。別名は実際の親の権限を移しません。
 
 ARM64 macOSの150件の原生記録は4件の観察器失敗を保持し、別の10件で実際の新対象と空リンク境界を確認します。SDK不要の `symbolic-link-creation` は両入口、対象/バッファ境界、親、置換ファイル、旧FD/マッピングの全10バイトを確認します。物理iOS、原生Intel、完全OS互換の証明ではありません。
 
 [XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).
+
+## 実行時に作成したシンボリックリンクの削除
+
+`unlink(10)` と `unlinkat(472)` は実際の親に変更権限がある実行時リンクを削除します。初期の固定リンクは保護されたままです。裸の `AT_SYMLINK_NOFOLLOW_ANY` は末端リンクを保持し、欠落・循環・空の対象でも削除できます。中間や末尾スラッシュで展開が必要なら ELOOP62 です。フラグなしの `a → b → target` で `a/` を削除すると、`b` のみ消え、`a` と最終対象は残ります。既存のフラグ・パス・dirfd エラー順序を保持します。
+
+成功時は動的1項目と現在のパス/NUL/対象バイト分を一度だけ返却し、実際の親の完全な stat/列挙観察を無効にします。FDや生成inodeは不要です。対象の内容・変更ポリシー・記述子・共有カーソル・CWD・マッピングは元の物体を保持します。名前再利用で旧リンクは復活せず、拒否は状態や予算を変えません。実行時に作成したリンクの完全なメタデータは引き続き不明です。リンクの改名、リンクを含む子ツリーの移動/SWAP は未対応です。
+
+ARM64 macOS の独立40例は元の5秒期限で28削除成功、12エラー、17回の再削除 ENOENT と FD/CWD/私有マッピングを記録しました。客体・実機iOS・Intelの検証ではありません。`symbolic-link-unlink` と公開APIの検査は別に行います。

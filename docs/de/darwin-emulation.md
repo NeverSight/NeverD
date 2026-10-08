@@ -1,6 +1,6 @@
 **Sprachen**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
+<!-- i18n-source: beada521ead13ba6e6bdc5afba4445233c9085f4104db03507b5cfca85048443 -->
 
 [← Dokumentationsübersicht](README.md)
 
@@ -754,8 +754,16 @@ Rohe `symlink(57)` und `symlinkat(474)` erzeugen prozesslokale Links in freigege
 
 Die aktuelle Linktabelle hält tatsächlichen Namen, Elternobjekt und Zielbytes. Bestehende Endnamen ergeben EEXIST17. Verbrauchte End-Slashes können einem hängenden Link folgen und an dessen Zielnamen erzeugen; der alte Link bleibt unverändert. Ein leeres Ziel expandiert mit ENOENT2. Readlink liefert dafür0 ohne Zugriff auf den Ausgabepointer, auch bei positiver Kapazität; Count/Pfad/Typ werden zuerst geprüft.
 
-Name/NUL und Ziel werden einmal im gemeinsamen256-Einträge/16-MiB-Budget berechnet. Ablehnung verändert weder Knoten noch Eltern, FD oder regulären Erzeugungs-Inode. Neue vollständige Linkmetadaten bleiben unbekannt und erben weder Datei-CreationPolicy noch alte Beobachtungen wiederverwendeter Namen. Elternstat/Snapshot werden nach Erzeugung unbekannt. FD/CWD/Mapping behalten alte Objekte bei Zielentfernung/Ersetzung. Rmdir und Verzeichnisersetzung erkennen Linkkinder. Verschieben/SWAP mit Links auf einer bewegten Seite stoppt vor Effekten. Link-unlink/rename, harte Links, ACL und veränderbare initiale Linkkataloge bleiben offen; Aliase übertragen keine Freigabe des tatsächlichen Elternobjekts.
+Name/NUL und Ziel werden einmal im gemeinsamen256-Einträge/16-MiB-Budget berechnet. Ablehnung verändert weder Knoten noch Eltern, FD oder regulären Erzeugungs-Inode. Neue vollständige Linkmetadaten bleiben unbekannt und erben weder Datei-CreationPolicy noch alte Beobachtungen wiederverwendeter Namen. Elternstat/Snapshot werden nach Erzeugung unbekannt. FD/CWD/Mapping behalten alte Objekte bei Zielentfernung/Ersetzung. Rmdir und Verzeichnisersetzung erkennen Linkkinder. Verschieben/SWAP mit Links auf einer bewegten Seite stoppt vor Effekten. Link-rename, harte Links, ACL und veränderbare initiale Linkkataloge bleiben offen; Aliase übertragen keine Freigabe des tatsächlichen Elternobjekts.
 
 Die150 nativen ARM64-macOS-Fälle behalten vier Beobachterfehler; zehn zusätzliche Fälle prüfen tatsächliche neue Ziele und leere Links. Das SDK-freie `symbolic-link-creation` prüft beide Aufrufe, Bytes/Puffer, Eltern, Ersetzung und alle zehn alten FD/Mapping-Bytes. Physisches iOS, natives Intel und vollständige OS-Kompatibilität sind damit nicht belegt.
 
 [XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).
+
+## Laufzeit-Symbolverknüpfungen entfernen
+
+`unlink(10)` und `unlinkat(472)` entfernen zur Laufzeit erzeugte Links mit Änderungsfreigabe am tatsächlichen Elternobjekt. Initiale feste Links bleiben geschützt. Ein bloßes `AT_SYMLINK_NOFOLLOW_ANY` behält den letzten Link bei und erlaubt dessen Entfernung, auch bei fehlendem, zyklischem oder leerem Ziel. Nötige Zwischen- oder Endslash-Auflösung liefert ELOOP62. Ohne dieses Flag entfernt `a/` bei `a → b → target` nur `b`; `a` und das endgültige Ziel bleiben. Die bisherige Fehlerreihenfolge für Flags, Pfade und dirfd gilt weiter.
+
+Erfolg erstattet einmal einen dynamischen Eintrag sowie aktuellen Pfad/NUL/Zielbytes und verwirft nur die vollständigen stat/Verzeichnisbeobachtungen des tatsächlichen Elternobjekts. Freier FD und Erzeugungs-Inode sind unnötig. Zieldaten, Änderungsrichtlinie, offene Beschreibungen, gemeinsame Cursor, CWD und Mappings behalten ihre Objekte. Namenswiederverwendung belebt den alten Link nicht; Ablehnung verändert weder Modellzustand noch Budget. Vollständige Metadaten zur Laufzeit erzeugter Links bleiben unbekannt. Link-rename und Verschieben/SWAP noch linkhaltiger Teilbäume bleiben ununterstützt.
+
+Die unabhängigen 40 ARM64-macOS-Beobachtungen erfassen unter derselben Fünfsekundenfrist 28 erfolgreiche Entfernungen, 12 Fehler, 17 erneute ENOENT und erhaltene FD/CWD/private Mappings. Sie belegen keine Gast-, physische iOS- oder native Intel-Abnahme. `symbolic-link-unlink` und öffentliche API-Fälle prüfen die Grenzen separat.
