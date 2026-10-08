@@ -455,8 +455,17 @@ void DarwinFiles::initializeNamespace() {
       Node->Policy = &Policy->second;
     Nodes.emplace(Path, std::move(Node));
   }
-  for (const auto &[Path, Target] : Options->SymbolicLinks)
-    initialDirectoryNode(parentPath(Path));
+  for (const auto &[Path, Target] : Options->SymbolicLinks) {
+    auto Node = std::make_shared<LinkNode>();
+    Node->Initial = Target;
+    Node->Path = Path;
+    Node->Parent = initialDirectoryNode(parentPath(Path));
+    Node->Protected = true;
+    const auto Metadata = Options->Metadata.find(Path);
+    if (Metadata != Options->Metadata.end())
+      Node->Metadata = &Metadata->second;
+    Links.emplace(Path, std::move(Node));
+  }
   NamespaceReady = true;
   if (Options->WorkingDirectory)
     CurrentDirectory = Directories.at(*Options->WorkingDirectory);
@@ -525,8 +534,14 @@ DarwinFiles::initialDirectoryNode(const std::string &Path) {
   return Node;
 }
 
-uint32_t DarwinFiles::dynamicDirectoryEntries() const {
-  return llvm::count_if(
+uint32_t DarwinFiles::dynamicEntries() const {
+  // FixedEntries already includes every initial link and directory. Only
+  // created links consume additional entries; files retain their orphan charge.
+  return Nodes.size() + Unlinked.size() +
+         llvm::count_if(
+             Links,
+             [](const auto &Entry) { return !Entry.second->Protected; }) +
+         llvm::count_if(
              Directories,
              [](const auto &Entry) { return Entry.second->Created; }) +
          llvm::count_if(UnlinkedDirectories,
@@ -781,11 +796,11 @@ DarwinFiles::resolvePath(uint64_t Address, uint32_t DirectoryFD,
         Prefix += '/';
       Prefix.append(Part.data(), Part.size());
       auto ChildDirectory = directoryNode(Prefix);
-      const auto Link = Options->SymbolicLinks.find(Prefix);
-      Type = Nodes.contains(Prefix)                 ? PathKind::File
-             : ChildDirectory                       ? PathKind::Directory
-             : Link != Options->SymbolicLinks.end() ? PathKind::SymbolicLink
-                                                    : PathKind::Missing;
+      const auto Link = this->Links.find(Prefix);
+      Type = Nodes.contains(Prefix)      ? PathKind::File
+             : ChildDirectory            ? PathKind::Directory
+             : Link != this->Links.end() ? PathKind::SymbolicLink
+                                         : PathKind::Missing;
       if (Type == PathKind::SymbolicLink &&
           (Links.FollowFinal || Index + 1 < Parts.size())) {
         if (Links.NoExpansion || Expansions++ >= MaxSymbolicLinks)
@@ -801,9 +816,13 @@ DarwinFiles::resolvePath(uint64_t Address, uint32_t DirectoryFD,
           Suffix = Suffix.drop_front();
         if (Suffix == "/")
           Suffix = {};
+        const auto Bytes = Link->second->bytes();
+        // XNU rejects an empty link at the expansion boundary, before adding
+        // any suffix. Retaining the terminal object still permits readlink.
+        if (Bytes.empty())
+          return uint32_t(NoEntry);
         const llvm::StringRef Target(
-            reinterpret_cast<const char *>(Link->second.data()),
-            Link->second.size());
+            reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
         if (Target.size() + Suffix.size() + 1 > limits::Path)
           return uint32_t(NameTooLong);
         Path = (Target + Suffix).str();
@@ -844,9 +863,8 @@ DarwinFiles::resolvePath(uint64_t Address, uint32_t DirectoryFD,
       File.File = Nodes.at(File.Path);
       File.Metadata = nullptr;
     } else if (Type == PathKind::SymbolicLink) {
-      File.Input = Options->SymbolicLinks.at(File.Path);
-      const auto M = Options->Metadata.find(File.Path);
-      File.Metadata = M == Options->Metadata.end() ? nullptr : &M->second;
+      File.Link = this->Links.at(File.Path);
+      File.Metadata = File.Link->Metadata;
     } else {
       File.Directory = std::move(Directory);
     }
@@ -939,15 +957,61 @@ DarwinFiles::readLink(uint64_t Path, uint64_t Address, uint64_t Size,
   const auto &Link = std::get<Description>(*Resolved);
   if (Link.Type != Kind::SymbolicLink)
     return returned(InvalidArgument, true);
-  if (!Size)
+  // Empty targets perform no copy, even with a nonzero count and a bad
+  // output pointer. Count/path/kind checks still precede this native boundary.
+  if (!Size || Link.bytes().empty())
     return returned(0);
   const auto Bytes =
-      Link.Input.take_front(std::min<uint64_t>(Size, Link.Input.size()));
+      Link.bytes().take_front(std::min<uint64_t>(Size, Link.bytes().size()));
   auto Copied =
       copyout(Address, Bytes, diagnostic::SymbolicLinkPartialOutput, Result);
   if (Copied && *Copied && !(**Copied).Error)
     (**Copied).Value = Bytes.size();
   return Copied;
+}
+
+llvm::Expected<std::optional<ServiceResult>>
+DarwinFiles::makeSymbolicLink(uint64_t Target, uint64_t Path,
+                              uint32_t DirectoryFD, ProcessResult &Result) {
+  // copyinstr(target) precedes destination nameiat, including its dirfd and
+  // existence checks. Targets are opaque bytes, not catalogue path inputs.
+  auto Imported = readPath(Target);
+  if (!Imported)
+    return Imported.takeError();
+  if (auto *Error = std::get_if<uint32_t>(&*Imported))
+    return returned(*Error, true);
+  auto Resolved =
+      resolvePath(Path, DirectoryFD, LookupMode::CreateFile, {false, false});
+  if (!Resolved)
+    return Resolved.takeError();
+  if (auto *Error = std::get_if<uint32_t>(&*Resolved))
+    return returned(*Error, true);
+  if (auto *Reason = std::get_if<const char *>(&*Resolved))
+    return unsupported(Result, *Reason);
+  const auto &File = std::get<Description>(*Resolved);
+  if (File.Type != Kind::Missing)
+    return returned(FileExists, true);
+  auto Parent = directoryNode(parentPath(File.Path));
+  if (!Parent->Mutable)
+    return unsupported(Result, diagnostic::DirectoryNotMutable);
+  if (auto E = prepareMutation())
+    return std::move(E);
+  const auto &Bytes = std::get<std::string>(*Imported);
+  const uint64_t Charge = File.Path.size() + 1 + Bytes.size();
+  if (File.Path.size() >= limits::Path ||
+      FixedEntries + dynamicEntries() >= limits::Files ||
+      Charge > limits::Bytes - *StorageUsed)
+    return unsupported(Result, diagnostic::SymbolicLinkCreationLimit);
+  auto Node = std::make_shared<LinkNode>();
+  Node->CreatedTarget.emplace(Bytes.begin(), Bytes.end());
+  Node->Path = File.Path;
+  Node->Parent = Parent;
+  // The regular-file CreationPolicy does not establish link metadata or an
+  // inode. Reused names never inherit an old Options.Metadata observation.
+  Links.emplace(File.Path, std::move(Node));
+  *StorageUsed += Charge;
+  Parent->Changed = true;
+  return returned(0);
 }
 
 llvm::Expected<std::optional<ServiceResult>>
@@ -971,9 +1035,7 @@ DarwinFiles::makeDirectory(uint64_t Path, uint32_t DirectoryFD,
     return std::move(E);
   const uint64_t Charge = File.Path.size() + 1;
   if (File.Path.size() >= limits::Path ||
-      FixedEntries + Nodes.size() + Unlinked.size() +
-              dynamicDirectoryEntries() >=
-          limits::Files ||
+      FixedEntries + dynamicEntries() >= limits::Files ||
       Charge > limits::Bytes - *StorageUsed)
     return unsupported(Result, diagnostic::DirectoryCreationLimit);
   auto Node = std::make_shared<DirectoryNode>();
@@ -1023,10 +1085,13 @@ DarwinFiles::removeDirectory(uint64_t Path, uint32_t DirectoryFD,
   const auto Prefix = File.Path + '/';
   const auto ChildFile = Nodes.lower_bound(Prefix);
   const auto ChildDirectory = Directories.lower_bound(Prefix);
+  const auto ChildLink = Links.lower_bound(Prefix);
   if ((ChildFile != Nodes.end() &&
        llvm::StringRef(ChildFile->first).starts_with(Prefix)) ||
       (ChildDirectory != Directories.end() &&
-       llvm::StringRef(ChildDirectory->first).starts_with(Prefix)))
+       llvm::StringRef(ChildDirectory->first).starts_with(Prefix)) ||
+      (ChildLink != Links.end() &&
+       llvm::StringRef(ChildLink->first).starts_with(Prefix)))
     return returned(DirectoryNotEmpty, true);
   if (!mutableDirectory(File.Directory->Parent->Path))
     return unsupported(Result, diagnostic::DirectoryNotMutable);
@@ -1282,12 +1347,22 @@ DarwinFiles::renameSubtrees(Description &Source, Description &Target,
     const auto Prefix = Target.Path + '/';
     const auto File = Nodes.lower_bound(Prefix);
     const auto Directory = Directories.lower_bound(Prefix);
+    const auto Link = Links.lower_bound(Prefix);
     if ((File != Nodes.end() &&
          llvm::StringRef(File->first).starts_with(Prefix)) ||
         (Directory != Directories.end() &&
-         llvm::StringRef(Directory->first).starts_with(Prefix)))
+         llvm::StringRef(Directory->first).starts_with(Prefix)) ||
+        (Link != Links.end() &&
+         llvm::StringRef(Link->first).starts_with(Prefix)))
       return returned(DirectoryNotEmpty, true);
   }
+  // This bounded transaction currently plans file/directory rekeys only.
+  // A link on either moving side must be refused before reclamation or effects.
+  if (llvm::any_of(Links, [&](const auto &Entry) {
+        return Descendant(Entry.second->Parent, Source.Directory) ||
+               (Swap && Descendant(Entry.second->Parent, Target.Directory));
+      }))
+    return unsupported(Result, diagnostic::SymbolicLinkDirectoryMove);
   // Reclaim before transaction references are collected. A held orphan file
   // or directory retains its original parent, including an empty target.
   if (auto E = prepareMutation())
@@ -1462,9 +1537,7 @@ DarwinFiles::create(Description &File, uint32_t Mode, ProcessResult &Result) {
     return std::move(E);
   const uint64_t Charge = File.Path.size() + 1;
   if (File.Path.size() >= limits::Path ||
-      FixedEntries + Nodes.size() + Unlinked.size() +
-              dynamicDirectoryEntries() >=
-          limits::Files ||
+      FixedEntries + dynamicEntries() >= limits::Files ||
       Charge > limits::Bytes - *StorageUsed)
     return unsupported(Result, diagnostic::FileCreationLimit);
   if (Options->CreationPolicy && !NextCreatedInode)
@@ -1660,6 +1733,10 @@ DarwinFiles::handle(ServiceKind Service, const ProcessServiceEvent &Event,
     CurrentUmask = A[0] & 07777;
     return returned(Previous);
   }
+  if (Service == ServiceKind::Symlink)
+    return makeSymbolicLink(A[0], A[1], AtCurrentDirectory, Result);
+  if (Service == ServiceKind::SymlinkAt)
+    return makeSymbolicLink(A[0], A[2], uint32_t(A[1]), Result);
   if (Service == ServiceKind::ReadLink)
     return readLink(A[0], A[1], uint32_t(A[2]), AtCurrentDirectory, Result);
   if (Service == ServiceKind::ReadLinkAt)

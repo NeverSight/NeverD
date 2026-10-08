@@ -1487,6 +1487,24 @@ TEST_P(DarwinProcess, ExplicitProfileCannotBeReplacedByHostPlatform) {
   ASSERT_FALSE(bool(Wrong));
   llvm::consumeError(Wrong.takeError());
 }
+TEST_P(DarwinProcess, RuntimeLinksCreateOpaqueTargetsAndRetainObjects) {
+  Options.DarwinFiles = darwin_test::mixedSymbolicLinkOptions();
+  Options.Arguments[2] = "/work/data";
+  auto Result = run("symbolic-link-creation");
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, ProcessStopReason::Exited) << Result->Diagnostic;
+  EXPECT_EQ(Result->ExitStatus, 37);
+  EXPECT_EQ(Result->StandardOutput, "b");
+  EXPECT_TRUE(Result->StandardError.empty());
+  EXPECT_EQ(Result->SelectedBackend, GetParam().Backend);
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  for (auto Number : {57u, 474u, 58u, 473u, 465u, 472u, 475u, 197u, 73u})
+    EXPECT_TRUE(llvm::any_of(Result->Services, [&](const auto &Event) {
+      return Event.Number == Class + Number && Event.Error == false;
+    })) << Number;
+}
+
 INSTANTIATE_TEST_SUITE_P(Transports, DarwinProcess,
                          testing::ValuesIn(profiles()),
                          [](const testing::TestParamInfo<Profile> &P) {

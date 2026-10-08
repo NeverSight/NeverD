@@ -93,4 +93,5 @@ NEVERD_NATIVE_DARWIN_CASE(
 NEVERD_NATIVE_DARWIN_CASE(
     SymbolicLinksPreserveRawTargetsMetadataAndNoFollowPolicies)
 NEVERD_NATIVE_DARWIN_CASE(FixedLinksObserveMutableTargetsAndRetainOldObjects)
+NEVERD_NATIVE_DARWIN_CASE(RuntimeLinksCreateOpaqueTargetsAndRetainObjects)
 #endif

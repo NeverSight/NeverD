@@ -1,6 +1,6 @@
 **Langues**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: fab8f746a3afad0cc7aeaee21f82d848bf0bad20c33a1f8140b1f3c821e75281 -->
+<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
 
 [← Index de la documentation](README.md)
 
@@ -738,7 +738,7 @@ stat64/open/access/truncate/chdir suivent le lien final; lstat64/readlink le gar
 
 readlink(58) utilise count signé bas32, readlinkat(473) le size_t entier; retourint. Au-delà deINT32_MAX: EINVAL22 avant chemin/FD. Copie min(count,longueur), sansNUL; seul ce préfixe est vérifié. Taille0 vérifie chemin/type puis ignore la sortie. Non-lienEINVAL22, aucun octet accessibleEFAULT14; préfixe partiellement accessible: arrêt avant copie. Les erreurs de transport/budget mémoire se propagent.
 
-Les noms des liens et leurs octets cibles restent fixes. MutableDirectories ne peut être la racine ni un ancêtre par composante d’un lien fixe ; /work ne contient pas /workspace/link. Des domaines mutables séparés peuvent contenir les cibles créées, déplacées, supprimées ou remplacées pendant l’exécution. Les contrôles de parent, montage, alias, flags, support SWAP et création restent applicables ; les nouveaux inodes doivent dépasser tous ceux des métadonnées/instantanés, liens protégés inclus. WritableFiles/MutationPolicies fixes peuvent modifier le fichier cible. Unlink/rename d’un lien retenu s’arrêtent avant effet. Liens dynamiques/durs, ACL et espace mutable restent exclus. La sonde ARM64 macOS a passé189 observations/115 tampons complets sous la limite initiale5s; pas une preuve d’iOS physique/Intel HVF/OS complet.
+Les noms des liens et leurs octets cibles restent fixes. MutableDirectories ne peut être la racine ni un ancêtre par composante d’un lien fixe ; /work ne contient pas /workspace/link. Des domaines mutables séparés peuvent contenir les cibles créées, déplacées, supprimées ou remplacées pendant l’exécution. Les contrôles de parent, montage, alias, flags, support SWAP et création restent applicables ; les nouveaux inodes doivent dépasser tous ceux des métadonnées/instantanés, liens protégés inclus. WritableFiles/MutationPolicies fixes peuvent modifier le fichier cible. Unlink/rename d’un lien retenu s’arrêtent avant effet. La création pendant l’exécution est décrite ci-dessous ; liens durs, ACL et catalogues initiaux mutables restent exclus. La sonde ARM64 macOS a passé189 observations/115 tampons complets sous la limite initiale5s; pas une preuve d’iOS physique/Intel HVF/OS complet.
 
 Les 60 contrôles ARM64 macOS DELETE/RENAME supplémentaires conservent les tampons stat complets, l’espace de noms avant/après et les identités FD/CWD sous la limite initiale de5s. Les barres finales peuvent développer un lien fixe et modifier sa cible ; NOFOLLOW_ANY refuse le développement requis avec ELOOP. symbolic-link-mutations, sans SDK, vérifie création, cible absente, déplacement/suppression/remplacement, parents CWD conservés et les10 octets originaux du fichier avant fermeture des FD, puis les10 octets du mapping après fermeture. Ces observations ne prouvent pas iOS physique ou Intel natif.
 
@@ -747,3 +747,15 @@ Les 60 contrôles ARM64 macOS DELETE/RENAME supplémentaires conservent les tamp
 ```
 
 [XNU namei](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c), [XNU readlink / AT](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU open authorization](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_subr.c).
+
+## Création de liens symboliques pendant l’exécution
+
+Les appels bruts `symlink(57)` et `symlinkat(474)` créent des liens locaux au processus dans les répertoires mutables autorisés, avec un retour int. Le dirfd utilise ses32 bits faibles ; une destination absolue ignore le FD. La cible est importée avant la destination, jusqu’au premier NUL :0..1023 octets opaques, y compris cible vide, non-UTF8, points et séparateurs répétés.1024 octets sans NUL donnent ENAMETOOLONG63 ; une faute antérieure donne EFAULT14. Les cibles JSON initiales restent limitées à1..1023 octets.
+
+La table courante détient le nom réel, le parent et les octets. Un terminal existant donne EEXIST17. Les séparateurs finaux consommés peuvent suivre un lien pendant et créer à son nom cible, sans changer le lien initial. Développer une cible vide donne ENOENT2. Readlink d’une cible vide renvoie0 sans toucher la sortie, même avec une capacité positive, après validation du count/chemin/type.
+
+Nom/NUL et cible sont comptés une seule fois dans les256 entrées/16 MiB communs. Un refus ne change ni nœud, ni parent, ni FD, ni inode de création de fichier. Les métadonnées complètes du nouveau lien restent inconnues : pas d’héritage de CreationPolicy de fichier ni d’une ancienne observation au nom réutilisé. Le stat/instantané parent devient inconnu après création. FD/CWD/mappings conservent leurs objets après suppression/remplacement de cible. Rmdir et remplacement de répertoire détectent les enfants liens. Un déplacement/SWAP contenant un lien sur l’un des côtés s’arrête avant effets. Unlink/rename du lien, liens durs, ACL et catalogues initiaux mutables restent exclus ; un alias ne transfère aucune autorisation du parent réel.
+
+Les150 observations ARM64 macOS conservent quatre erreurs d’observateur ; dix contrôles séparés vérifient la vraie cible et les limites du lien vide. Le programme sans SDK `symbolic-link-creation` vérifie les deux entrées, octets/tampons, parents, remplacement et dix octets complets des anciens FD/mappings. Cela ne prouve pas iOS physique, Intel natif ou un OS complet.
+
+[XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).

@@ -12765,7 +12765,7 @@
         "External libraries, fixups, initialization/TLS, encrypted payloads, arm64e/PAC and unmodeled image contracts fail explicitly. No dyld linking, Objective-C/Swift runtime, Foundation/UIKit, AMFI, full application compatibility or native iOS-host HVF support is claimed.",
         "The complete regular input file, including unmapped metadata and trailing bytes, must fit memory_limit before parsing or copying. Reads use a bounded private snapshot; embedded-NUL paths, short reads and file-size changes are rejected. Host filesystem I/O has no hard wall-clock guarantee.",
         "Each available matching native backend is tested separately. Cross-ISA software execution and compilation cannot establish Intel HVF, Linux KVM or Windows WHP runtime coverage.",
-        "Fixed initial symbolic_links with raw target_hex share bounded guest namei, readlink/readlinkat and own metadata/snapshot admission.32 expansions and terminator-inclusive1024-byte paths are enforced. Mutable directory names cannot contain fixed link names; separate mutable domains may contain targets created, moved, deleted or replaced at runtime. Existing grants and metadata policy apply; resolved FDs/CWD/mapping leases retain object ownership. Dynamic/hard links, ACL enforcement and mutable link namespaces remain unsupported. Native ARM64 macOS observations do not establish physical iOS acceptance."
+        "Fixed initial symbolic_links with raw target_hex share bounded guest namei, readlink/readlinkat and own metadata/snapshot admission.32 expansions and terminator-inclusive1024-byte paths are enforced. Mutable directory names cannot contain fixed link names; separate mutable domains may contain targets created, moved, deleted or replaced at runtime. Existing grants and metadata policy apply; resolved FDs/CWD/mapping leases retain object ownership. Raw symlink57/symlinkat474 create bounded process-local links in admitted mutable parents with target-first import, empty-target readlink/follow boundaries and shared budgets. Created-link complete metadata stays unknown; inode policy and resolved object ownership are preserved. Rmdir/replacement detect link children; moving/SWAP either subtree containing links and direct link unlink/rename remain explicit unsupported. Hard links, ACL enforcement and mutable initial-link catalogues remain unsupported. Native ARM64 macOS observations do not establish physical iOS acceptance."
       ],
       "tests": [
         {
@@ -12837,6 +12837,94 @@
           "target": "NeverDDarwinProcessTests",
           "source": "unittests/emulation/DarwinProcessTests.cpp",
           "filter": "*/DarwinProcess.SymbolicLinksPreserveRawTargetsMetadataAndNoFollowPolicies/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.RuntimeLinksCreateOpaqueTargetsAndRetainObjects/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.RuntimeLinksPreserveOpaqueTargetsAndEmptyCopyBoundaries/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.RuntimeLinksImportTargetBeforeDestinationAndOnlyThroughNUL/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.RuntimeLinksRetainTerminalEntriesAndExpandConsumedSlashes/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.RuntimeLinksDoNotReuseOldMetadataOrConsumeFileInodes/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.RuntimeLinksUseHeldParentsAndRefuseTwoSidedSubtreeMoves/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.RuntimeLinksCannotTransferProtectedNamespaceGrants/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.RuntimeLinksShareExactEntryAndStorageLimitsWithoutEffects/*",
           "platforms": [
             "darwin",
             "linux",

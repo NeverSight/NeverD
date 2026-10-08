@@ -117,6 +117,17 @@ private:
       return CurrentMetadata ? &*CurrentMetadata : InitialMetadata;
     }
   };
+  struct LinkNode {
+    llvm::ArrayRef<uint8_t> Initial;
+    std::optional<std::vector<uint8_t>> CreatedTarget;
+    const DarwinFileMetadata *Metadata = nullptr;
+    std::string Path;
+    std::shared_ptr<DirectoryNode> Parent;
+    bool Protected = false;
+    llvm::ArrayRef<uint8_t> bytes() const {
+      return CreatedTarget ? llvm::ArrayRef<uint8_t>(*CreatedTarget) : Initial;
+    }
+  };
   struct Description {
     Kind Type;
     llvm::ArrayRef<uint8_t> Input;
@@ -128,8 +139,9 @@ private:
     Terminal FinalComponent = Terminal::Ordinary;
     std::shared_ptr<DirectoryNode> Directory;
     bool FinalParentUnlinked = false;
+    std::shared_ptr<LinkNode> Link;
     llvm::ArrayRef<uint8_t> bytes() const {
-      return File ? File->bytes() : Input;
+      return File ? File->bytes() : Link ? Link->bytes() : Input;
     }
   };
   struct Descriptor {
@@ -151,6 +163,7 @@ private:
   const uint32_t EffectiveUID;
   std::map<uint32_t, Descriptor> Descriptors;
   std::map<std::string, std::shared_ptr<Contents>> Nodes;
+  std::map<std::string, std::shared_ptr<LinkNode>> Links;
   std::vector<std::shared_ptr<Contents>> Unlinked;
   std::map<std::string, std::shared_ptr<DirectoryNode>> Directories;
   std::vector<std::shared_ptr<DirectoryNode>> UnlinkedDirectories;
@@ -168,7 +181,7 @@ private:
   void reclaimUnlinked();
   std::shared_ptr<DirectoryNode> directoryNode(const std::string &Path);
   std::shared_ptr<DirectoryNode> initialDirectoryNode(const std::string &Path);
-  uint32_t dynamicDirectoryEntries() const;
+  uint32_t dynamicEntries() const;
   bool mutableDirectory(const std::string &Path) const;
   std::optional<DirectoryIdentity> directoryIdentity(const std::string &Path);
   llvm::Expected<Pathname> readPath(uint64_t Address);
@@ -193,6 +206,9 @@ private:
   llvm::Expected<std::optional<ServiceResult>>
   readLink(uint64_t Path, uint64_t Address, uint64_t Size, uint32_t DirectoryFD,
            ProcessResult &Result);
+  llvm::Expected<std::optional<ServiceResult>>
+  makeSymbolicLink(uint64_t Target, uint64_t Path, uint32_t DirectoryFD,
+                   ProcessResult &Result);
   static std::optional<uint32_t> rootRemovalError(const Description &File);
   llvm::Expected<std::optional<ServiceResult>> unlink(uint64_t Path,
                                                       uint32_t DirectoryFD,

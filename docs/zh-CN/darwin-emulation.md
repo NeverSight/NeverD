@@ -1,6 +1,6 @@
 **语言**: [English](../darwin-emulation.md) | [简体中文](darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: fab8f746a3afad0cc7aeaee21f82d848bf0bad20c33a1f8140b1f3c821e75281 -->
+<!-- i18n-source: 52b5ff4800afeaa1e0b3590fdc055f5815f1f4021addb237f50b7cd5082991b0 -->
 
 [← 文档索引](README.md)
 
@@ -842,7 +842,7 @@ stat64、普通 open/access/truncate/chdir 跟随末端链接；lstat64/readlink
 
 readlink(58) 使用有符号低32位 count；readlinkat(473) 保留完整 size_t。两者返回 int，超过 INT32_MAX 先于路径/FD返回 EINVAL22。仅复制 min(count,目标长度) 字节，不补 NUL，只预检实际前缀。零长度仍验证路径和链接类型，随后忽略输出指针；非链接 EINVAL22，全不可写 EFAULT14，部分可写在复制前明确停止，传输与内存预算错误原样传播。
 
-固定链接名称与原始目标字节保持不变。MutableDirectories 不能为根或任何固定链接名称的路径分段祖先；/work 不包含 /workspace/link。独立可变目录可容纳链接目标，包括运行期间创建、移动、删除和替换的名称。现有父目录、挂载、别名、标志、交换授权与创建策略校验仍适用；新建 inode 必须大于所有元数据/快照 inode，包括受保护链接。 固定名称 WritableFiles/MutationPolicies 仍可改变最终普通文件。保留链接的 unlink/rename 在效果前明确停止。动态链接、硬链接、ACL权限和可变链接命名空间仍不支持。独立 ARM64 macOS 探针在原五秒期限内通过189观察、115完整缓冲检查；这不能单独证明物理 iOS、Intel HVF 或完整 OS兼容。
+固定链接名称与原始目标字节保持不变。MutableDirectories 不能为根或任何固定链接名称的路径分段祖先；/work 不包含 /workspace/link。独立可变目录可容纳链接目标，包括运行期间创建、移动、删除和替换的名称。现有父目录、挂载、别名、标志、交换授权与创建策略校验仍适用；新建 inode 必须大于所有元数据/快照 inode，包括受保护链接。 固定名称 WritableFiles/MutationPolicies 仍可改变最终普通文件。保留链接的 unlink/rename 在效果前明确停止。运行时链接创建见下节；硬链接、ACL权限及可变初始链接目录仍不支持。独立 ARM64 macOS 探针在原五秒期限内通过189观察、115完整缓冲检查；这不能单独证明物理 iOS、Intel HVF 或完整 OS兼容。
 
 新增 60 项 ARM64 macOS DELETE/RENAME 原生矩阵在原五秒期限内记录完整 stat 缓冲、变更前后命名空间及保留 FD/CWD 身份。尾部斜杠可展开固定链接并改变实际目标；NOFOLLOW_ANY 拒绝必要展开并返回 ELOOP。无 SDK 的 symbolic-link-mutations 程序还检查创建、悬空目标、改名/删除/替换、保留 CWD 父对象，以及关闭描述符前全部原始 10 个文件字节和关闭后仍保留的全部 10 个映射字节。这些宿主观察不证明物理 iOS 或原生 Intel 覆盖。
 
@@ -851,3 +851,15 @@ readlink(58) 使用有符号低32位 count；readlinkat(473) 保留完整 size_t
 ```
 
 [XNU namei](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c), [XNU readlink / AT](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU open authorization](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_subr.c).
+
+## 运行时创建符号链接
+
+原始 `symlink(57)` 和 `symlinkat(474)` 可在获准修改的目录内创建进程本地链接，返回 int；目录 FD 仅取低32位，绝对目标名称忽略 FD。先导入链接目标，再检查目标名称及 FD；首个 NUL 截断0..1023个原始字节，允许空、非 UTF-8、点和重复斜杠。1024字节无 NUL 返回 ENAMETOOLONG63，之前不可读的字节返回 EFAULT14。初始 JSON 链接仍要求1..1023字节。
+
+当前链接表持有实际名称、父对象和原始字节。已有末端名称返回 EEXIST17；悬空链接后已消耗的尾斜杠可使创建发生在其目标名称上，旧链接不变。展开空目标返回 ENOENT2；readlink 读取空目标返回0，即使容量为正也不访问输出指针，但仍先检查计数、路径及类型。
+
+名称/NUL和目标字节仅计费一次，共用256条目、16 MiB配额。拒绝不会发布节点、改变父目录或消耗 FD/普通文件 inode。新链接完整元数据明确未知，不能从普通文件 CreationPolicy 或被复用名称的旧观察推导；成功创建使父目录 stat/快照未知。目标删除或替换后，旧 FD/CWD/映射仍持有原对象。rmdir 和目录替换会检测链接子项；移动或 SWAP 的任一侧包含链接时在效果前停止。链接自身 unlink/rename、硬链接、ACL权限及可变初始链接目录仍未支持；别名不会转移实际父目录的授权。
+
+原生 ARM64 macOS 的150项记录保留了四项观察器失败；独立10项补充只验证实际新目标和空链接边界，不改写旧结果。无 SDK 的 `symbolic-link-creation` 程序检查两个入口、原始字节与缓冲边界、父对象、替换文件，以及旧 FD/映射的全部10字节；这些原生参考不证明物理 iOS、原生 Intel 或完整 OS兼容。
+
+[XNU symlink / symlinkat](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_syscalls.c), [XNU empty-link expansion](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/vfs/vfs_lookup.c).

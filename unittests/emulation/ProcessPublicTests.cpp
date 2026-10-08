@@ -460,8 +460,8 @@ std::vector<DarwinPublicCase> darwinPublicCases() {
           std::pair{"mach-time", "68"},
           std::pair{"mach-timebase-values",
                     emulation::darwin_test::TimebaseHex},
-          std::pair{"mach-clock-values",
-                    emulation::darwin_test::MachClockHex}}) {
+          std::pair{"mach-clock-values", emulation::darwin_test::MachClockHex},
+          std::pair{"symbolic-link-creation", "62"}}) {
       const bool X64 = llvm::StringRef(File).ends_with("x86_64");
       if (X64 && llvm::StringRef(Mode) == "mach-clock-values")
         continue;
@@ -652,7 +652,8 @@ TEST_P(DarwinInputsPublic, InputsAndMachReturnsAgreeAcrossSDKAndCLI) {
       D.getAsObject()->erase(field::DirectoryContents);
     Options = llvm::formatv("{0}", Input).str();
   }
-  if (ModeName == "symbolic-link-mutations") {
+  if (ModeName == "symbolic-link-mutations" ||
+      ModeName == "symbolic-link-creation") {
     auto Input = llvm::cantFail(llvm::json::parse(Options));
     auto M =
         llvm::cantFail(llvm::json::parse(emulation::darwin_test::MetadataJSON));

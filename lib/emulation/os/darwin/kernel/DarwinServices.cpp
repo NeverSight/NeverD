@@ -154,6 +154,8 @@ dispatchService(ServiceKind Kind, ExecutionBackend &CPU, DarwinMemory &Memory,
   case ServiceKind::Ftruncate:
   case ServiceKind::Read:
   case ServiceKind::Pread:
+  case ServiceKind::Symlink:
+  case ServiceKind::SymlinkAt:
   case ServiceKind::ReadLink:
   case ServiceKind::ReadLinkAt:
   case ServiceKind::Open:

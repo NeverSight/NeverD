@@ -73,7 +73,7 @@ class DarwinKernelReferenceTests(unittest.TestCase):
                 self.assertTrue((path.parent / "cycle").is_symlink())
                 self.assertEqual((path.parent / "dirlink").readlink(), Path("empty"))
                 self.assertFalse((path.parent / "dangling").exists())
-            elif command[1] == "symbolic-link-mutations":
+            elif command[1] in ("symbolic-link-mutations", "symbolic-link-creation"):
                 catalogue = path.parent.parent
                 self.assertEqual({item.name for item in catalogue.iterdir()}, {"static", "work"})
                 self.assertEqual({item.name for item in path.parent.iterdir()}, {"data"})
@@ -89,11 +89,13 @@ class DarwinKernelReferenceTests(unittest.TestCase):
             results = reference.execute_cases(Path("native"),
                 [("directory-entries", 37, b""), ("symbolic-links", 37, b""),
                  ("symbolic-link-mutations", 37, b""),
+                 ("symbolic-link-creation", 37, b""),
                  ("directory-entries", 37, b"")])
         self.assertTrue(all(result["passed"] for result in results))
-        self.assertEqual(roots[0], roots[3])
+        self.assertEqual(roots[0], roots[4])
         self.assertNotEqual(roots[0], roots[1])
         self.assertNotIn(roots[2], roots[:2])
+        self.assertNotIn(roots[3], roots[:3])
         self.assertTrue(all(not path.exists() for path in roots))
 
     def test_native_file_cases_receive_real_isolated_input_bytes(self):

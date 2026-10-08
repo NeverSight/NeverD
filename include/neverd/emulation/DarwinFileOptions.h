@@ -131,8 +131,10 @@ struct DarwinFileOptions {
   /// Newly created files have writable contents; new directories inherit
   /// namespace mutation authority. Existing objects retain their separate
   /// grants. Namespace changes invalidate the parent's metadata and snapshot.
-  /// New directory metadata stays unknown. Removed directories retain their
-  /// object and original parent while held by directory FDs, CWD or children.
+  /// New directory and runtime-created symbolic-link metadata stay unknown.
+  /// Link creation leaves the regular-file inode policy unchanged.
+  /// Removed directories retain their object and original parent while held
+  /// by directory FDs, CWD or children.
   /// Regular-file rename may cross these created descendants of one initial
   /// directory object. Distinct initial parents need explicit mount knowledge;
   /// matching Device observations do not grant cross-parent rename.

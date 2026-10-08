@@ -613,7 +613,8 @@ class ProcessIntegrationTests(unittest.TestCase):
                                            ("mach-time", b"h"),
                                            ("mach-timebase-values", bytes.fromhex("674523f1795634e2")),
                                            ("mach-clock-values", bytes.fromhex(
-                                               "1032547698badcfeffffffffffffffff"))):
+                                               "1032547698badcfeffffffffffffffff")),
+                                           ("symbolic-link-creation", b"b")):
                         if architecture == "x86_64" and mode == "mach-clock-values":
                             continue
                         file_options = json.dumps({
@@ -793,7 +794,7 @@ class ProcessIntegrationTests(unittest.TestCase):
                             for directory in files["directories"]:
                                 directory.pop("contents", None)
                             file_options = json.dumps(symbolic_options)
-                        if mode == "symbolic-link-mutations":
+                        if mode in ("symbolic-link-mutations", "symbolic-link-creation"):
                             mixed_options = json.loads(file_options)
                             original = mixed_options["darwin_files"]["files"][0]
                             metadata = dict(original["metadata"], flags=0, link_count=1)

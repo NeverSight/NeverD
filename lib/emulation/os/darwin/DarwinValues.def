@@ -179,6 +179,8 @@ NEVERD_DARWIN_SERVICE(UnlinkAt, 472, Int)
 NEVERD_DARWIN_SERVICE(Munmap, 73, Int)
 NEVERD_DARWIN_SERVICE(Mprotect, 74, Int)
 NEVERD_DARWIN_SERVICE(Mmap, 197, Wide)
+NEVERD_DARWIN_SERVICE(Symlink, 57, Int)
+NEVERD_DARWIN_SERVICE(SymlinkAt, 474, Int)
 #endif
 
 // Positive trap indices. ARM64 encodes their negative low-32-bit value;
@@ -310,6 +312,12 @@ NEVERD_DARWIN_DIAGNOSTIC(
 NEVERD_DARWIN_DIAGNOSTIC(
     SymbolicLinkPartialOutput,
     "Darwin symbolic link target output is partially writable")
+NEVERD_DARWIN_DIAGNOSTIC(
+    SymbolicLinkCreationLimit,
+    "Darwin symbolic link creation exceeds catalogue limits")
+NEVERD_DARWIN_DIAGNOSTIC(
+    SymbolicLinkDirectoryMove,
+    "Darwin directory movement containing symbolic links is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(FileOptionPath,
                          "invalid or conflicting Darwin catalogue path")
 NEVERD_DARWIN_DIAGNOSTIC(FileAccessPermissions,

@@ -47,14 +47,15 @@ def native_architecture(expected: str) -> str:
 def execute_cases(program: Path, cases: list[tuple[str, int, bytes]]) -> list[dict]:
     with (tempfile.TemporaryDirectory(prefix="neverd-darwin-files-") as directory,
           tempfile.TemporaryDirectory(prefix="neverd-darwin-links-") as links,
-          tempfile.TemporaryDirectory(prefix="neverd-darwin-mixed-links-") as mixed):
+          tempfile.TemporaryDirectory(prefix="neverd-darwin-mixed-links-") as mixed,
+          tempfile.TemporaryDirectory(prefix="neverd-darwin-created-links-") as created):
         input_file = Path(directory) / "data"
         (Path(directory) / "empty").mkdir()
-        return _execute_cases(program, cases, input_file, Path(links), Path(mixed))
+        return _execute_cases(program, cases, input_file, Path(links), Path(mixed), Path(created))
 
 
 def _execute_cases(program: Path, cases: list[tuple[str, int, bytes]], input_file: Path,
-                   symbolic_root: Path, mixed_root: Path) -> list[dict]:
+                   symbolic_root: Path, mixed_root: Path, created_root: Path) -> list[dict]:
     results = []
     for mode, status, output in cases:
         case_input = input_file
@@ -67,8 +68,8 @@ def _execute_cases(program: Path, cases: list[tuple[str, int, bytes]], input_fil
                                  ("dirlink", "empty")):
                 (catalogue / name).symlink_to(target)
             case_input = catalogue / "data"
-        if mode == "symbolic-link-mutations":
-            catalogue = mixed_root / "catalogue"
+        if mode in ("symbolic-link-mutations", "symbolic-link-creation"):
+            catalogue = (mixed_root if mode == "symbolic-link-mutations" else created_root) / "catalogue"
             (catalogue / "static").mkdir(parents=True)
             (catalogue / "work").mkdir()
             for name, target in (("alias", "../work"), ("data-link", "../work/data"),
