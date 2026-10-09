@@ -168,8 +168,7 @@ HighFunc predecessorReturnCarrier() {
   ExplicitReturn.addInput(ReturnCarrier);
   OtherReturn.Ops.push_back(ExplicitReturn);
 
-  F.Blocks = {std::move(Entry), std::move(FastReturn),
-              std::move(OtherReturn)};
+  F.Blocks = {std::move(Entry), std::move(FastReturn), std::move(OtherReturn)};
   inferMedTypes(F, Architecture);
   EXPECT_TRUE(F.SourceParametersBound);
   return MedToHighConverter().convert(F, Architecture);
@@ -394,5 +393,85 @@ TEST(SourceCallReturns, BareReturnUsesOnlyPredecessorsCarrierDefinition) {
   ASSERT_TRUE(HighCEmitter().emit({predecessorReturnCarrier()}, OS, Options));
   EXPECT_NE(Source.find("return v1_0;"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("return;"), std::string::npos) << Source;
+}
+
+TEST(SourceCallReturns, BareReturnOfAZeroExtendingWriteIsTheWholeRegister) {
+  // `add w0, w8, #14` zero-extends into x0, and the w0 view a loop reads
+  // again follows it. A `long` result returned by a bare `ret` is x0, whose
+  // upper half is zero, not the 32-bit view widened by its sign.
+  constexpr Arch Architecture = Arch::AArch64;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  auto Word = [&](int Id, uint64_t Register, int Version) {
+    MedVar V = regValue(Id, Register, Version, Architecture);
+    V.Size = 4;
+    return V;
+  };
+  const MedVar Loaded = Word(2, 8 * 8, 1);
+  const MedVar Sum = Word(4, TRI.IntReturnReg, 2);
+  const MedVar Whole = regValue(1, TRI.IntReturnReg, 3, Architecture);
+  const MedVar View = Word(4, TRI.IntReturnReg, 3);
+
+  MedFunc F;
+  F.Name = "zero_extended_result";
+  F.Entry = 0x1000;
+  MedBlock Body;
+  Body.Id = 0;
+  Body.StartAddr = 0x1000;
+  Body.EndAddr = 0x100c;
+  Body.Succs = {1};
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = 0x1000;
+  Load.Output = Loaded;
+  Load.addInput(MedVar::makeConst(0x4000, 8));
+  Body.Ops.push_back(Load);
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Addr = 0x1004;
+  Add.Output = Sum;
+  Add.addInput(Loaded);
+  Add.addInput(MedVar::makeConst(14, 4));
+  Body.Ops.push_back(Add);
+  MedOp Extend;
+  Extend.Opcode = NdOp::INT_ZEXT;
+  Extend.Addr = 0x1004;
+  Extend.Output = Whole;
+  Extend.addInput(Sum);
+  Body.Ops.push_back(Extend);
+  MedOp Slice;
+  Slice.Opcode = NdOp::SUBBYTES;
+  Slice.Addr = 0x1008;
+  Slice.Output = View;
+  Slice.addInput(Whole);
+  Slice.addInput(MedVar::makeConst(0, 4));
+  Body.Ops.push_back(Slice);
+
+  MedBlock Exit;
+  Exit.Id = 1;
+  Exit.StartAddr = 0x100c;
+  Exit.EndAddr = 0x1010;
+  Exit.Preds = {0};
+  MedOp BareReturn;
+  BareReturn.Opcode = NdOp::RETURN;
+  BareReturn.Addr = 0x100c;
+  BareReturn.addInput(regValue(5, 240, 0, Architecture));
+  Exit.Ops.push_back(BareReturn);
+
+  F.Blocks = {std::move(Body), std::move(Exit)};
+  inferMedTypes(F, Architecture);
+  ASSERT_TRUE(F.ReturnType);
+  ASSERT_EQ(F.ReturnType->Size, 8u);
+  HighFunc H = MedToHighConverter().convert(F, Architecture);
+
+  const HighExpr *Returned = nullptr;
+  walkStmts(H.Body, [&](HighStmt &S) {
+    if (S.Kind == StmtKind::Return && S.RetVal)
+      Returned = S.RetVal.get();
+  });
+  ASSERT_NE(Returned, nullptr);
+  ASSERT_TRUE(Returned->Type);
+  EXPECT_EQ(Returned->Type->Size, 8u);
+  EXPECT_EQ(Returned->Kind, ExprKind::UnaryOp);
+  EXPECT_EQ(Returned->Op, NdOp::INT_ZEXT);
 }
 } // namespace

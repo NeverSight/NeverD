@@ -69,6 +69,53 @@ static bool isTrapFreeFloatOp(NdOp Op) {
   }
 }
 
+/// Integer arithmetic, logic and comparison of two operands: none reads
+/// memory or traps.  Division and remainder trap on a zero divisor.
+static bool isTrapFreeIntegerBinOp(NdOp Op) {
+  switch (Op) {
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_MULT:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_LEFT:
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR:
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::BOOL_AND:
+  case NdOp::BOOL_OR:
+  case NdOp::BOOL_XOR:
+  case NdOp::INT_CARRY:
+  case NdOp::INT_SOVF:
+  case NdOp::INT_SBOR:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// The integer operations of one operand that cannot trap.
+static bool isTrapFreeIntegerUnaryOp(NdOp Op) {
+  switch (Op) {
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_NEGATE:
+  case NdOp::INT_NOT:
+  case NdOp::INT_NEG2:
+  case NdOp::BOOL_NOT:
+  case NdOp::POPCOUNT:
+    return true;
+  default:
+    return false;
+  }
+}
+
 // Only remove or slice values whose evaluation cannot read memory, trap or
 // call another function. Unknown bits may be discarded only when their exact
 // bytes have no reads; this never supplies a replacement bit value.
@@ -111,8 +158,9 @@ bool discardableIntegerValue(const ExprPtr &Root, size_t &Budget) {
           E->Operands[0]->Type->Kind != NdTypeKind::Int)
         return false;
       if (E->Kind == ExprKind::UnaryOp &&
-          ((E->Op != NdOp::INT_ZEXT && E->Op != NdOp::INT_SEXT) ||
-           E->Type->Size < E->Operands[0]->Type->Size))
+          (!isTrapFreeIntegerUnaryOp(E->Op) ||
+           ((E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT) &&
+            E->Type->Size < E->Operands[0]->Type->Size)))
         return false;
       break;
     case ExprKind::BinOp:
@@ -135,7 +183,7 @@ bool discardableIntegerValue(const ExprPtr &Root, size_t &Budget) {
             E->Type->Size >
                 E->Operands[0]->Type->Size - E->Operands[1]->ConstVal)
           return false;
-      } else {
+      } else if (!isTrapFreeIntegerBinOp(E->Op)) {
         return false;
       }
       break;
@@ -176,51 +224,16 @@ bool harmlessIntegerValue(const ExprPtr &Root, size_t &Budget) {
     case ExprKind::BitCast:
       break;
     case ExprKind::UnaryOp:
-      switch (E->Op) {
-      case NdOp::INT_ZEXT:
-      case NdOp::INT_SEXT:
-      case NdOp::INT_NEGATE:
-      case NdOp::INT_NOT:
-      case NdOp::INT_NEG2:
-      case NdOp::BOOL_NOT:
-      case NdOp::POPCOUNT:
-        break;
-      default:
+      if (!isTrapFreeIntegerUnaryOp(E->Op))
         return false;
-      }
       break;
     case ExprKind::BinOp:
-      switch (E->Op) {
-      case NdOp::INT_ADD:
-      case NdOp::INT_SUB:
-      case NdOp::INT_MULT:
-      case NdOp::INT_AND:
-      case NdOp::INT_OR:
-      case NdOp::INT_XOR:
-      case NdOp::INT_LEFT:
-      case NdOp::INT_RIGHT:
-      case NdOp::INT_ASHR:
-      case NdOp::INT_EQUAL:
-      case NdOp::INT_NOTEQUAL:
-      case NdOp::INT_LESS:
-      case NdOp::INT_LESSEQUAL:
-      case NdOp::INT_SLESS:
-      case NdOp::INT_SLESSEQUAL:
-      case NdOp::BOOL_AND:
-      case NdOp::BOOL_OR:
-      case NdOp::BOOL_XOR:
-      case NdOp::CONCAT:
-      case NdOp::SELECT:
-      case NdOp::INT_CARRY:
-      case NdOp::INT_SOVF:
-      case NdOp::INT_SBOR:
-        break;
-      case NdOp::SUBBYTES:
+      if (E->Op == NdOp::SUBBYTES) {
         if (E->Operands.size() != 2 || !E->Operands[1] ||
             E->Operands[1]->Kind != ExprKind::Const)
           return false;
-        break;
-      default:
+      } else if (E->Op != NdOp::CONCAT && E->Op != NdOp::SELECT &&
+                 !isTrapFreeIntegerBinOp(E->Op)) {
         return false;
       }
       break;

@@ -43,7 +43,13 @@ static bool isFloatProducer(NdOp Opc) {
          Opc == NdOp::FLOAT_ROUND || Opc == NdOp::FLOAT_MIN ||
          Opc == NdOp::FLOAT_MAX || Opc == NdOp::FLOAT_MINNUM ||
          Opc == NdOp::FLOAT_MAXNUM || Opc == NdOp::FLOAT_FLOAT2FLOAT ||
-         Opc == NdOp::FLOAT_INT2FLOAT;
+         Opc == NdOp::FLOAT_INT2FLOAT || Opc == NdOp::FLOAT_UINT2FLOAT ||
+         Opc == NdOp::FLOAT_ROUNDEVEN;
+}
+
+static bool isFloatCompare(NdOp Opc) {
+  return Opc == NdOp::FLOAT_EQUAL || Opc == NdOp::FLOAT_NOTEQUAL ||
+         Opc == NdOp::FLOAT_LESS || Opc == NdOp::FLOAT_LESSEQUAL;
 }
 
 // The byte size of the scalar floating-point value a write to the FP return
@@ -74,6 +80,22 @@ fpReturnElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
     return Def->Output.Size <= 4 ? 4 : 8;
   if (Def->Opcode == NdOp::CONCAT && Def->NumInputs >= 2)
     return fpReturnElemSize(Defs, Def->Inputs[1], Depth + 1); // low lane
+  // A choice between floating-point values: minsd/maxsd select one of the
+  // two operands a floating-point compare ordered.
+  if (Def->Opcode == NdOp::SELECT && Def->NumInputs == 3) {
+    const uint16_t Chosen =
+        std::max(fpReturnElemSize(Defs, Def->Inputs[1], Depth + 1),
+                 fpReturnElemSize(Defs, Def->Inputs[2], Depth + 1));
+    if (Chosen)
+      return Chosen;
+    const MedVar &Cond = Def->Inputs[0];
+    const auto CondDef =
+        Cond.isConst() ? Defs.end() : Defs.find({Cond.Id, Cond.SSAVer});
+    if (CondDef != Defs.end() && isFloatCompare(CondDef->second->Opcode) &&
+        (Def->Output.Size == 4 || Def->Output.Size == 8))
+      return Def->Output.Size;
+    return 0;
+  }
   if ((Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::SUBBYTES) &&
       Def->NumInputs >= 1)
     return fpReturnElemSize(Defs, Def->Inputs[0], Depth + 1);
@@ -527,6 +549,89 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
   const MedOp *BestInt = nullptr;
   uint16_t BestIntPhiWidth = 0;
 
+  // The value \p V is a view of: through copies, extensions and the low
+  // slice of a wider register.
+  auto ViewRoot = [&](MedVar V) {
+    for (int D = 0; D < 16 && !V.isConst(); ++D) {
+      const auto It = Defs.find({V.Id, V.SSAVer});
+      if (It == Defs.end())
+        break;
+      const MedOp &Op = *It->second;
+      const bool View =
+          (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
+           Op.Opcode == NdOp::INT_SEXT) &&
+          Op.NumInputs == 1;
+      const bool LowSlice = Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+                            Op.Inputs[1].isConst() &&
+                            Op.Inputs[1].ConstVal == 0;
+      if (!View && !LowSlice)
+        break;
+      V = Op.Inputs[0];
+    }
+    return std::pair{V.Id, V.SSAVer};
+  };
+  // The values a conditional branch decides on: the operands of the
+  // comparisons its condition combines.  A loop's counter is one; it is
+  // rarely the result when the function also computes a floating value.
+  std::set<std::pair<int, int>> BranchTested;
+  for (const auto &Blk : Func.Blocks)
+    for (const auto &Op : Blk.Ops) {
+      if (Op.Opcode != NdOp::COND_BR || Op.NumInputs < 2)
+        continue;
+      std::vector<MedVar> Pending{Op.Inputs[1]};
+      for (int Steps = 0; !Pending.empty() && Steps < 16; ++Steps) {
+        const MedVar V = Pending.back();
+        Pending.pop_back();
+        if (V.isConst())
+          continue;
+        const auto It = Defs.find({V.Id, V.SSAVer});
+        if (It == Defs.end())
+          continue;
+        const MedOp &Def = *It->second;
+        switch (Def.Opcode) {
+        case NdOp::BOOL_NOT:
+        case NdOp::BOOL_AND:
+        case NdOp::BOOL_OR:
+        case NdOp::BOOL_XOR:
+        case NdOp::COPY:
+        case NdOp::INT_ZEXT:
+          for (uint8_t I = 0; I < Def.NumInputs; ++I)
+            Pending.push_back(Def.Inputs[I]);
+          break;
+        case NdOp::INT_EQUAL:
+        case NdOp::INT_NOTEQUAL:
+        case NdOp::INT_LESS:
+        case NdOp::INT_SLESS:
+        case NdOp::INT_LESSEQUAL:
+        case NdOp::INT_SLESSEQUAL:
+        case NdOp::FLOAT_EQUAL:
+        case NdOp::FLOAT_NOTEQUAL:
+        case NdOp::FLOAT_LESS:
+        case NdOp::FLOAT_LESSEQUAL:
+          for (uint8_t I = 0; I < Def.NumInputs; ++I)
+            if (!Def.Inputs[I].isConst())
+              BranchTested.insert(ViewRoot(Def.Inputs[I]));
+          break;
+        default:
+          break;
+        }
+      }
+    }
+  auto TestedByBranch = [&](const MedOp *Write) {
+    return Write && BranchTested.count(ViewRoot(Write->Output));
+  };
+  // The values an operation other than a merge or a return reads.  A result
+  // the function computes is read by nothing else before it returns.
+  std::set<std::pair<int, int>> ReadInBody;
+  for (const auto &Blk : Func.Blocks)
+    for (const auto &Op : Blk.Ops)
+      if (Op.Opcode != NdOp::RETURN)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (!Op.Inputs[I].isConst())
+            ReadInBody.insert({Op.Inputs[I].Id, Op.Inputs[I].SSAVer});
+  auto OnlyReturned = [&](const MedOp *Write) {
+    return Write && !ReadInBody.count({Write->Output.Id, Write->Output.SSAVer});
+  };
   for (const auto &Blk : Func.Blocks) {
     for (auto Rit = Blk.Ops.rbegin(); Rit != Blk.Ops.rend(); ++Rit) {
       if (Rit->Opcode != NdOp::RETURN)
@@ -547,21 +652,55 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
       bool FloatViaPhi = false;
       const MedOp *FPRegWriteOp =
           nullptr; // closest FP-return-reg write (any op)
+      // An integer write before the RETURN's own block decides between an
+      // integer and a floating result, but not the integer's width: a loop
+      // that computes a `long` in a zero-extending 32-bit write returns all
+      // of the register.
+      const MedOp *EarlierInt = nullptr;
 
       int Dist = 0;
-      for (auto Rit2 = Rit + 1; Rit2 != Blk.Ops.rend(); ++Rit2, ++Dist) {
+      // A RETURN alone in its block reads the values written before it: a
+      // loop's exit block holds only `ret`.  Follow single predecessors.
+      const MedBlock *ScanBlk = &Blk;
+      auto ScanFrom = Rit + 1;
+      for (int Hops = 0;; ++Hops) {
+        if (ScanFrom == ScanBlk->Ops.rend()) {
+          const bool Found = IntDist >= 0 || FPRegWriteOp || FirstFloat;
+          if (Found || Hops >= 4 || !ScanBlk->Phis.empty() ||
+              ScanBlk->Preds.size() != 1 || !ScanBlk->ExceptionalPreds.empty())
+            break;
+          const int Pred = ScanBlk->Preds.front();
+          if (Pred < 0 || Pred >= static_cast<int>(Func.Blocks.size()) ||
+              &Func.Blocks[Pred] == &Blk)
+            break;
+          ScanBlk = &Func.Blocks[Pred];
+          ScanFrom = ScanBlk->Ops.rbegin();
+          continue;
+        }
+        const auto Rit2 = ScanFrom++;
+        const int OpDist = Dist++;
         if (Rit2->Output.Kind != MedVar::Reg || Rit2->Output.Size == 0)
           continue;
 
         if (Rit2->Output.RegOff == TRI.IntReturnReg &&
             Rit2->Opcode != NdOp::SUBBYTES &&
-            !(FilterRestore && isReturnRegRestore(Defs, Blk, *Rit2, TRI))) {
+            !(FilterRestore &&
+              isReturnRegRestore(Defs, *ScanBlk, *Rit2, TRI))) {
           if (IntDist < 0)
-            IntDist = Dist;
-          if (!WidestInt || Rit2->Output.Size > WidestInt->Output.Size)
+            IntDist = OpDist;
+          if (ScanBlk != &Blk) {
+            if (!EarlierInt)
+              EarlierInt = &*Rit2;
+          } else if (!WidestInt || Rit2->Output.Size > WidestInt->Output.Size) {
             WidestInt = &*Rit2;
+          }
         }
 
+        // The x87 stack may be popped between an earlier block's write and
+        // the RETURN (an integer function's cleanup `fstp`), so only the
+        // RETURN's own block shows which x87 slot holds a result.
+        if (ScanBlk != &Blk && TRI.isX87ReturnReg(Rit2->Output.RegOff))
+          continue;
         const bool IsFPRegReturn =
             TRI.hasFPReturnReg() && Rit2->Output.RegOff == TRI.FPReturnReg;
         // The x87 TOP rotates, so the physical slot carrying the logical ST0
@@ -580,7 +719,7 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
             if (E) {
               FirstFloat = &*Rit2;
               FloatElem = E;
-              FloatDist = Dist;
+              FloatDist = OpDist;
               FirstFloatViaX87 = IsX87Return;
             }
           }
@@ -652,6 +791,18 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
 
       bool UseFloat = (FirstFloat || FloatViaPhi || FloatFallbackElem) &&
                       (IntDist < 0 || FloatDist <= IntDist);
+      // When both registers hold a value, the one a branch decides on is
+      // the loop's control value, and the other the result: computed, and
+      // read by nothing but the loop's merge.
+      const MedOp *IntWrite = WidestInt ? WidestInt : EarlierInt;
+      if (FirstFloat && IntWrite) {
+        const bool IntTested = TestedByBranch(IntWrite);
+        const bool FloatTested = TestedByBranch(FirstFloat);
+        if (IntTested && !FloatTested && OnlyReturned(FirstFloat))
+          UseFloat = true;
+        else if (FloatTested && !IntTested && OnlyReturned(IntWrite))
+          UseFloat = false;
+      }
       if (UseFloat) {
         AnyFloat = true;
         ReturnViaX87 |= FirstFloatViaX87;
@@ -812,9 +963,14 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
     const auto &MP = Func.Params[PI];
     MedTypedParam TP;
     TP.Name = "arg" + std::to_string(PI);
+    const auto Scalar = MP.RegOff == kNoParamReg
+                            ? Func.FPParamScalarBytes.end()
+                            : Func.FPParamScalarBytes.find(MP.RegOff);
     if (PtrParameters.count(PI) && !SegmentOffsetParameters.count(PI) &&
         !TRI.isFrameOrLinkReg(MP.RegOff))
       TP.Type = NdType::makePtr();
+    else if (Scalar != Func.FPParamScalarBytes.end())
+      TP.Type = NdType::makeFloat(Scalar->second);
     else
       TP.Type = NdType::makeInt(MP.Size);
     Func.TypedParams.push_back(TP);

@@ -377,6 +377,10 @@ struct MedFunc {
   std::vector<MedReturnReg> MultiReturn;
 
   std::vector<MedTypedParam> TypedParams;
+  /// The width (4 or 8 bytes) of the scalar each floating-point argument
+  /// register parameter carries in its low lane, by register offset, when
+  /// the function reads no other byte of it: a float or double, no vector.
+  std::map<uint64_t, uint16_t> FPParamScalarBytes;
   std::vector<MedTypedLocal> TypedLocals;
   std::vector<MedCallInfo> CallInfos;
 

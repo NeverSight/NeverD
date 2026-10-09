@@ -1142,6 +1142,22 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
                PointerArgumentOperands.insert(Function).second) {
       PointerArgument = Function;
     }
+    // A floating parameter of the callee's prototype takes the bits.
+    TypeRef FloatParam = Defined && I < Defined->Params.size()
+                             ? Defined->Params[I].Type
+                             : nullptr;
+    if (!FloatParam && Prototype && I < Prototype->ParamCount) {
+      if (Prototype->Params[I] == "double")
+        FloatParam = NdType::makeFloat(sizeof(double));
+      else if (Prototype->Params[I] == "float")
+        FloatParam = NdType::makeFloat(sizeof(float));
+    }
+    if (const auto Float = floatArgumentText(*Op, FloatParam)) {
+      if (PointerArgument)
+        PointerArgumentOperands.erase(PointerArgument);
+      S += *Float;
+      continue;
+    }
     std::string Arg = exprStr(Imm ? *Imm : *Op);
     if (PointerArgument)
       PointerArgumentOperands.erase(PointerArgument);
@@ -1533,6 +1549,17 @@ TypeRef HighCWriter::knownCallReturnType(const HighExpr &E) const {
     return msvcSyntheticReturn(Msvc->ReturnKind);
   if (const auto Callee = debugCallee(E))
     return Callee->ReturnType;
+  // A function this unit defines returns the type its definition prints.
+  if (const auto Defined = DefinedFunctionsByIdentifier.find(Name);
+      Defined != DefinedFunctionsByIdentifier.end() && Defined->second)
+    return Defined->second->ReturnType;
+  // A C library routine returns the floating type its declaration names.
+  if (const libc::LibCPrototype *Prototype = calleePrototype(E)) {
+    if (Prototype->Return == "double")
+      return NdType::makeFloat(sizeof(double));
+    if (Prototype->Return == "float")
+      return NdType::makeFloat(sizeof(float));
+  }
   return {};
 }
 
@@ -2068,8 +2095,23 @@ TypeRef HighCWriter::expectedDebugCallArgType(const FunctionSym &FS,
   return nullptr;
 }
 
+std::optional<std::string>
+HighCWriter::floatArgumentText(const HighExpr &Arg, const TypeRef &Expected) {
+  if (!Expected || Expected->Kind != NdTypeKind::Float ||
+      (Expected->Size != sizeof(float) && Expected->Size != sizeof(double)) ||
+      !Arg.Type || Arg.Type->Kind != NdTypeKind::Int ||
+      Arg.Type->Size < Expected->Size)
+    return std::nullopt;
+  // A register's integer bits are the argument's bits: C would convert
+  // their value instead.
+  return "__builtin_bit_cast(" + typeToC(Expected) + ", " +
+         integerView(Arg, NdType::makeInt(Expected->Size, false), 0) + ")";
+}
+
 std::string HighCWriter::exprStrAsTypedArg(const HighExpr &E,
                                            const TypeRef &Expected) {
+  if (const auto Float = floatArgumentText(E, Expected))
+    return *Float;
   // C converts an integer argument by the signedness of its own type, so an
   // extension to a wider parameter cannot pass its narrower source unless
   // that source extends the same way.
@@ -3860,6 +3902,18 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
                           E.Type->IsSigned)
                    ? "(" + typeToC(E.Type) + ")(uintptr_t)" + Text
                    : PointerInteger("(uintptr_t)" + Text);
+    // A floating result returns in the low lane of a register the HighIR
+    // reads as integer bits: the C reads those bits, not the value converted
+    // to an integer.  The lane's other bytes are unspecified after a call.
+    if (&E != StatementCall && (!E.Type || E.Type->Kind == NdTypeKind::Int))
+      if (const TypeRef Return = knownCallReturnType(E);
+          Return && Return->Kind == NdTypeKind::Float &&
+          (Return->Size == sizeof(float) || Return->Size == sizeof(double)))
+        return typedText(E,
+                         "__builtin_bit_cast(" +
+                             typeToC(NdType::makeInt(Return->Size, false)) +
+                             ", " + Text + ")",
+                         Return->Size, false);
     // `callee(...)` has the return type its declaration prints.
     if (const TypeRef Return = knownCallReturnType(E); isPlainInteger(Return)) {
       const std::string Prefix = callIdentifier(E) + "(";

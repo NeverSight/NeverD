@@ -43581,6 +43581,40 @@ TEST(HighCPointerAddresses, AnX87StoreWritesItsTenBytes) {
                   42 + 0x3FFF);
 }
 
+TEST(HighCPointerAddresses, AScalarFloatArgumentIsADoubleParameter) {
+  // Win64 `double f(double x) { return x + x; }`: xmm0's low lane is the
+  // argument.  A `double` parameter takes it in xmm0, as the machine did;
+  // an `__int128` would take two integer registers instead.
+  constexpr va_t Entry = 0x140001000;
+  const std::string HighC = highcOnlyFunction(
+      makeCodeFixture(Entry, {0xf2, 0x0f, 0x58, 0xc0, // addsd xmm0, xmm0
+                              0xc3}),
+      Entry);
+  EXPECT_NE(HighC.find("double sub_140001000(double arg0)"), std::string::npos)
+      << HighC;
+  compileAndRunCallOrdering("#include <stdint.h>\n" + HighC +
+                            "\nint main(void) { return "
+                            "sub_140001000(1.5) != 3.0; }\n");
+}
+
+TEST(HighCPointerAddresses, AnIntegerConvertedIntoXMM0IsNoParameter) {
+  // Win64 `double f(int a, double b) { return a * b; }`: `cvtsi2sd xmm0,
+  // ecx` writes the result's low lane over an xmm0 that holds no argument,
+  // and xmm1 is the second, a double.
+  constexpr va_t Entry = 0x140001000;
+  const std::string HighC = highcOnlyFunction(
+      makeCodeFixture(Entry, {0xf2, 0x0f, 0x2a, 0xc1, // cvtsi2sd xmm0, ecx
+                              0xf2, 0x0f, 0x59, 0xc1, // mulsd xmm0, xmm1
+                              0xc3}),
+      Entry);
+  EXPECT_NE(HighC.find("double sub_140001000(int32_t arg0, double arg1)"),
+            std::string::npos)
+      << HighC;
+  compileAndRunCallOrdering("#include <stdint.h>\n" + HighC +
+                            "\nint main(void) { return "
+                            "sub_140001000(3, 2.5) != 7.5; }\n");
+}
+
 TEST(HighCPointerAddresses, AStackArgumentIsNotARegisterArgumentOfTheSameId) {
   // Nine ARM32 arguments: r0-r3 and five stack slots.  The ninth, at
   // [sp, #16], has parameter id 8, the id r0's parameter carries too;

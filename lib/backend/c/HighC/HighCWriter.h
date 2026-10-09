@@ -373,6 +373,10 @@ public:
   std::string intrinsicOperandStr(const HighExpr &E);
   /// Cast / zext / `SUBBYTES` 0 of a Var/Phi. Not add/sub/mul, Call, or Load.
   bool isIntegerViewOfScalar(const HighExpr &E) const;
+  /// \p Arg passed to a parameter of floating type \p Expected, when its
+  /// integer bits carry the value.
+  std::optional<std::string> floatArgumentText(const HighExpr &Arg,
+                                               const TypeRef &Expected);
   std::string exprStrAsTypedArg(const HighExpr &E, const TypeRef &Expected);
   bool looksLikeHiddenSretOperand(const HighExpr *Op) const;
   bool debugExternUsesHiddenSret(const FunctionSym &FS,

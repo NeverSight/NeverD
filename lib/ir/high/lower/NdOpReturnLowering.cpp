@@ -68,6 +68,20 @@ ExprPtr unchangedDeclaredReturnParameter(const MedFunc &Med,
   return nullptr;
 }
 
+/// A SUBBYTES that re-views the low bytes of the register it writes (`w0`
+/// from `x0` after `add w0`, kept for a loop that reads w0 again) is a view
+/// of the register's value, not its definition: a result wider than the view
+/// is the register it was taken from.
+bool isRegisterLowView(const MedOp &Op) {
+  return Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 1 &&
+         Op.Inputs[0].Kind == MedVar::Reg &&
+         isSameRegisterLowSlice(Op.Output.RegOff, Op.Output.Size,
+                                Op.Inputs[0].RegOff, Op.Inputs[0].Size,
+                                Op.NumInputs < 2 || !Op.Inputs[1].isConst()
+                                    ? 0
+                                    : Op.Inputs[1].ConstVal);
+}
+
 const MedBlock *onlyPredecessor(const MedFunc &Med, const MedBlock &Block) {
   if (Block.Preds.size() != 1)
     return nullptr;
@@ -191,7 +205,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       if (RIt->Opcode == NdOp::RETURN)
         continue;
       if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
-          RIt->Output.RegOff == ReturnReg) {
+          RIt->Output.RegOff == ReturnReg && !isRegisterLowView(*RIt)) {
         // Calls and memory reads materialize once. Other definitions can be
         // followed to their right-hand side so a register-only COPY need not
         // become a source variable with no emitted assignment.
@@ -223,7 +237,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
          Pred = onlyPredecessor(Med, *Pred)) {
       for (auto RIt = Pred->Ops.rbegin(); RIt != Pred->Ops.rend(); ++RIt) {
         if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0 ||
-            RIt->Output.RegOff != ReturnReg)
+            RIt->Output.RegOff != ReturnReg || isRegisterLowView(*RIt))
           continue;
         RetVal = ValueFromDefinition(*RIt);
         break;
