@@ -47,6 +47,10 @@ static volatile U64 ObservedPhysicalPage;
 static volatile U64 ObservedCounter, ObservedFrequency;
 static volatile U32 ObservedCPUID[4];
 __attribute__((used)) static const U32 ChangedMXCSR = 0x3f80;
+// This live absolute pointer requires DIR64 relocation before the stub runs.
+// The payload itself retains relative code references while it is encrypted.
+__attribute__((used)) static NTSTATUS (*volatile EntryPointer)(
+    DRIVER_OBJECT *, UNICODE_STRING *) = DriverEntry;
 
 __attribute__((noinline, used)) static void unpack_bytes(DRIVER_OBJECT *Driver,
                                                          UNICODE_STRING *Path) {
@@ -143,5 +147,5 @@ packed_entry(DRIVER_OBJECT *Driver, UNICODE_STRING *Path) {
                    "4: cmpl $9, Packed(%rip)\n\t"
                    "jne 5f\n\t"
                    "ldmxcsr ChangedMXCSR(%rip)\n\t"
-                   "5: jmp DriverEntry");
+                   "5: jmpq *EntryPointer(%rip)");
 }

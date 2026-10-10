@@ -99,8 +99,10 @@ protected:
     D.Backend = GetParam().Kind;
     D.Contract = ExecutionContract::CheckedX64;
     D.Unload = true;
-    if (Options.Driver)
+    if (Options.Driver) {
       D.CPUID = Options.Driver->CPUID;
+      D.LoadAddress = Options.Driver->LoadAddress;
+    }
     D.Requests.push_back({DriverRequestKind::Create});
     DriverRequest IO;
     IO.ControlCode = 0x222000;
@@ -268,18 +270,34 @@ TEST_P(UnpackDriver,
 }
 
 TEST_P(UnpackDriver, DynamicKernelExportIdentitySurvivesRebinding) {
-  auto Result = unpackFile(packed(4), Options);
-  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
-      << unpackResultJSON(*Result);
-  EXPECT_TRUE(std::any_of(
-      Result->Imports.begin(), Result->Imports.end(), [](const auto &I) {
-        return I.Module == "ntoskrnl.exe" && I.Name == "IofCompleteRequest" &&
-               I.Origin == ImportOrigin::Runtime;
-      }));
-  const auto Output = Scratch / "dynamic.sys";
-  test::writeFile(Output, Result->Image);
-  checkLifecycle(Output);
+  for (uint64_t Base :
+       {Original.Base, uint64_t(0x190000000), uint64_t(0xfffff80140000000)}) {
+    SCOPED_TRACE(Base);
+    Options.Driver.emplace();
+    Options.Driver->LoadAddress = Base;
+    const auto Input = packed(4);
+    checkLifecycle(Input);
+    ASSERT_FALSE(HasFatalFailure());
+    auto Result = unpackFile(Input, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+        << unpackResultJSON(*Result);
+    EXPECT_EQ(Result->ImageBase, Base);
+    EXPECT_EQ(Result->EntryRVA, Original.Entry);
+    EXPECT_EQ(test::readImage(Result->Image).Base, Base);
+    EXPECT_TRUE(std::any_of(
+        Result->Imports.begin(), Result->Imports.end(), [](const auto &I) {
+          return I.Module == "ntoskrnl.exe" && I.Name == "IofCompleteRequest" &&
+                 I.Origin == ImportOrigin::Runtime;
+        }));
+    const auto Output = Scratch / "dynamic.sys";
+    test::writeFile(Output, Result->Image);
+    // Let the output select its own preferred base. It remains a fixed image;
+    // a caller-provided rebase must not hide an incorrect reconstructed header.
+    Options.Driver->LoadAddress = 0;
+    checkLifecycle(Output);
+    ASSERT_FALSE(HasFatalFailure());
+  }
 }
 
 TEST_P(UnpackDriver, UserRuntimeInputsAndRestorationAreRejected) {

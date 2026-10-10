@@ -7,7 +7,8 @@ add_custom_command(OUTPUT "${_unpack_driver_image}" "${_unpack_driver_object}"
     "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/driver_unpack.c"
     -o "${_unpack_driver_object}"
   COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /entry:DriverEntry
-    /subsystem:native /driver /nodefaultlib /fixed /base:0x180000000
+    /subsystem:native /driver /nodefaultlib /fixed:no /dynamicbase
+    /base:0x180000000
     /noimplib /timestamp:0 /release /section:.prog,ERW /merge:.data=.drvstat
     "/out:${_unpack_driver_image}" "${_unpack_driver_object}"
     "${_driver_import_lib}"
