@@ -1,3 +1,14 @@
+//===- Asar.h - Bounded ASAR archive extraction ------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded ASAR archive extraction.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Artifact.h"

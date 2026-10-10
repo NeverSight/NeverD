@@ -1,7 +1,18 @@
+//===- BunContainer.h - Bun native container locations -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bun native container locations.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Bun.h"
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 namespace neverd::web::bun_detail {
 struct Range {

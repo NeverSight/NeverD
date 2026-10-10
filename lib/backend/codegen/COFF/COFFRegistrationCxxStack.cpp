@@ -16,11 +16,12 @@ namespace neverd::coff_registration {
 static llvm::Error bindCatchStack(CxxIRControlProof &Proof,
                                   const MedFunc &Source,
                                   const llvm::Function &Function,
-                                  uint32_t Index) {
-  auto &Catch = Proof.Catches[Index];
+                                  X86RegistrationCatchIdentity Identity) {
+  auto &Catch = Proof.Catches.at(Identity);
   const auto &EH = *Source.ExceptionMetadata;
   const bool PrivateStack = EH.Registration->hasCxxCallbackStack();
-  const va_t Callback = EH.Cxx->TryBlocks[0].Handlers[Index].HandlerVA;
+  const va_t Callback =
+      EH.Cxx->TryBlocks[Identity.first].Handlers[Identity.second].HandlerVA;
   size_t Work = 0;
   unsigned Expected = 0;
   for (const auto &Block : Source.Blocks)
@@ -41,10 +42,11 @@ static llvm::Error bindCatchStack(CxxIRControlProof &Proof,
               I.getMetadata(windows_eh_md::RegistrationCatchStackAttachment)) {
         const auto Owner = metadataInteger(*MD, 1, 64);
         if (PrivateStack && Owner && *Owner != Callback &&
-            llvm::any_of(EH.Cxx->TryBlocks[0].Handlers,
-                         [&](const auto &Handler) {
-                           return Handler.HandlerVA == *Owner;
-                         }))
+            llvm::any_of(EH.Cxx->TryBlocks, [&](const auto &Try) {
+              return llvm::any_of(Try.Handlers, [&](const auto &Handler) {
+                return Handler.HandlerVA == *Owner;
+              });
+            }))
           continue;
         Stack = llvm::dyn_cast<llvm::AllocaInst>(&I);
         if (!PrivateStack || Catch.Stack || !Stack ||
@@ -61,7 +63,7 @@ static llvm::Error bindCatchStack(CxxIRControlProof &Proof,
       if (I.getMetadata(windows_eh_md::RegistrationRootAttachment)) {
         if (PrivateStack && &Block != Catch.Pad->getParent() &&
             llvm::any_of(Proof.Catches, [&](const auto &Other) {
-              return Other.Pad->getParent() == &Block;
+              return Other.second.Pad->getParent() == &Block;
             }))
           continue;
         const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I);
@@ -126,8 +128,8 @@ static llvm::Error bindCatchStack(CxxIRControlProof &Proof,
 
 llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
                               const llvm::Function &Function) {
-  for (uint32_t Index = 0; Index < Proof.Catches.size(); ++Index)
-    if (auto Error = bindCatchStack(Proof, Source, Function, Index))
+  for (const auto &[Identity, Catch] : Proof.Catches)
+    if (auto Error = bindCatchStack(Proof, Source, Function, Identity))
       return Error;
   return llvm::Error::success();
 }

@@ -1,3 +1,14 @@
+//===- HTMLModules.cpp - Inline module file candidates -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Inline module file candidates.
+///
+//===----------------------------------------------------------------------===//
+
 #include "HTMLFiles.h"
 #include "HTMLImportMaps.h"
 

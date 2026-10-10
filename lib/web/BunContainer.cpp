@@ -1,3 +1,14 @@
+//===- BunContainer.cpp - Bun native container locations ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bun native container locations.
+///
+//===----------------------------------------------------------------------===//
+
 #include "BunContainer.h"
 
 #include <algorithm>

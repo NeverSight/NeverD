@@ -1041,6 +1041,7 @@ add_neverd_unittest(NeverDJumpTableTests
   core/AffineFrameStateTests.cpp
   core/ResolverGraphCacheTests.cpp
   core/ResolverLaneViewTests.cpp
+  core/JumpTableCountLaneTests.cpp
   core/IndirectTailFrameTests.cpp
   core/JumpTableEnhancedTests.cpp
   core/JumpTableFiniteSelectorTests.cpp
@@ -1277,6 +1278,7 @@ target_link_libraries(NeverDLiftTests PRIVATE
 
 add_neverd_unittest(NeverDWindowsEHMetadataEncoderTests
   eh/WindowsEHMetadataEncoderTests.cpp
+  eh/RegistrationCxxUnwindTests.cpp
 
   LINK_COMPONENTS
   WindowsEHMetadata
@@ -1326,6 +1328,8 @@ add_neverd_unittest(NeverDWindowsRegistrationRealignedTests
   eh/WindowsRegistrationRealignedTests.cpp
   eh/WindowsRegistrationRealignedNativeTests.cpp
   eh/WindowsRegistrationMultipleCatchTests.cpp
+  eh/WindowsRegistrationNestedTryTests.cpp
+  eh/RegistrationNestedTryTestUtils.cpp
   eh/RegistrationMultipleCatchTestUtils.cpp
   eh/WindowsRegistrationFixedTests.cpp
   eh/WindowsRegistrationDirectNativeTests.cpp
@@ -2236,6 +2240,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_lost_published.s
   x86_64/test_jumptable_target_ownership.s
   x86_64/test_jumptable_selector_occurrence.s
+  x86_64/test_jumptable_count_lane.s
   x86_64/test_jumptable_mask_equal_bound.s
   x86_64/test_jumptable_field_reload.s
   x86_64/test_module_address_owner_induction.s

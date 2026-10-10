@@ -1,3 +1,14 @@
+//===- SessionView.cpp - Source display view lifecycle -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source display view lifecycle.
+///
+//===----------------------------------------------------------------------===//
+
 #include "SessionInternal.h"
 
 #include <algorithm>

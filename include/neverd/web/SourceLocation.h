@@ -1,3 +1,14 @@
+//===- SourceLocation.h - Source coordinate conversion -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source coordinate conversion.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <compare>

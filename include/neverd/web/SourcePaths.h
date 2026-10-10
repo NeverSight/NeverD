@@ -1,3 +1,14 @@
+//===- SourcePaths.h - Captured source path candidates -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured source path candidates.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/SourceOrigins.h"

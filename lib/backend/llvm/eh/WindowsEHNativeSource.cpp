@@ -7,6 +7,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/X86RegistrationCxxUnwind.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -196,12 +197,7 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
 
   if (Cxx.TryBlocks.size() > std::numeric_limits<uint32_t>::max())
     return WindowsEHNativeSourceReason::InvalidCxxTryBlock;
-  // One try dispatch with ordered catch clauses is currently lowered. Keep
-  // this projection authoritative for the emitter, IR replay and tables.
-  if (Registration &&
-      (Cxx.UnwindMap.size() > 128 || Cxx.TryBlocks.size() != 1 ||
-       Cxx.TryBlocks[0].TryLow != 0 ||
-       Cxx.TryBlocks[0].CatchHigh != Cxx.TryBlocks[0].TryHigh + 1))
+  if (Registration && !projectX86RegistrationCxxUnwind(Cxx))
     return WindowsEHNativeSourceReason::InvalidCxxTryBlock;
   auto StateAt = [&](va_t Address) {
     int32_t State = -1;

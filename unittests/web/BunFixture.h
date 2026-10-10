@@ -1,3 +1,14 @@
+//===- BunFixture.h - Qualified Bun graph extraction test fixtures -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Qualified Bun graph extraction test fixtures.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <array>

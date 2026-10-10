@@ -1,5 +1,4 @@
-//===- X86RegistrationCatch.h - PE32 catch object projection -----*- C++
-//-*-===//
+//===- X86RegistrationCatch.h -----------------------------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -11,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -18,6 +18,9 @@ struct ExceptionFunction;
 struct MedFunc;
 struct RegistrationStateAnalysis;
 struct X86RegistrationFrameLayout;
+
+/// Original FuncInfo try and clause indices identify a runtime invocation.
+using X86RegistrationCatchIdentity = std::pair<uint32_t, uint32_t>;
 
 struct X86RegistrationCatchHome {
   uint32_t Offset = 0;
@@ -43,7 +46,7 @@ projectX86RegistrationCatch(const ExceptionFunction &EH,
 
 /// Partition the normal CFG by runtime catch entry. A block shared by distinct
 /// invocations needs cloning before native lowering and has no unique owner.
-std::optional<std::map<int, uint32_t>>
+std::optional<std::map<int, X86RegistrationCatchIdentity>>
 projectX86RegistrationCatchBlocks(const MedFunc &Function);
 } // namespace neverd
 

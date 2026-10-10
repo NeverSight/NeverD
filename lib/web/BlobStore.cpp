@@ -1,7 +1,18 @@
+//===- BlobStore.cpp - Private immutable blob storage ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Private immutable blob storage.
+///
+//===----------------------------------------------------------------------===//
+
 #include "BlobStore.h"
 
+#include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
-#include "neverd/web/Session.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"

@@ -1,3 +1,14 @@
+//===- Record.cpp - Pinned Bun fixture recording -----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Pinned Bun fixture recording.
+///
+//===----------------------------------------------------------------------===//
+
 // Development-only corpus recorder. Never linked into NeverD or called by
 // tests. It reads fixed compiler outputs; it never invokes a compiler or
 // executes input. The independent field reads preserve golden input bytes.

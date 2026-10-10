@@ -388,6 +388,13 @@ validation. `Bun` owns the shared graph records, flags and module decoding;
 transport capability lists and extraction results use the same profile builder.
 Adding a target container does not change source semantics or imply native
 machine-code/bytecode decompilation.
+`packages/PackageReader` owns versioned Node metadata and captured placement
+evidence; `packages/PackageDiff` compares its model without transport concerns.
+`SessionPackages` owns revision-bound caches, fixed metadata pages and
+comparisons. Missing evidence, conflicting declarations and unresolved runtime
+semantics remain distinct. All adapters consume these same results.
+`web/Error.h` owns fixed diagnostics independently of `Session`; artifact
+readers and semantic algorithms do not depend on the session API to fail.
 `SourceNavigation` owns syntax containment and lexical links; `SessionAnchor`
 joins source coordinates, original storage and committed display views. Bun
 source range conversion uses the same decoder as source extraction. Compressed

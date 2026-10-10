@@ -374,10 +374,10 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
         }),
         line="",
         reason=(
-            "Reviewed historical GUI benchmark report, removed from public "
-            "sources by the listed cleanup commit. Only the exact added and "
-            "deleted path lines are covered by digests; current files and "
-            "future commits retain the full source-provenance checks."
+            "The published GUI linear-copy report was removed from tracked "
+            "sources with the other local performance artifacts. Review binds "
+            "only the exact path-line digests in its original publication and "
+            "deletion commits; current and future text remains fully checked."
         ),
         line_sha256=frozenset({
             "00870df07891e305ba7fad70012faf7bba817c7ec27288e433e4eac2e54b2e19",

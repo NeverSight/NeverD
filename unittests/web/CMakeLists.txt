@@ -1,5 +1,6 @@
 add_neverd_unittest(NeverDWebArtifactTests
   ArtifactTests.cpp
+  PackageTests.cpp
   AsarTests.cpp
   ElectronManifestTests.cpp
   HTMLTests.cpp
@@ -58,6 +59,7 @@ if(TARGET neverd_shared)
     "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
   add_neverd_unittest(NeverDWebSDKTests
     SDKTests.cpp
+    PackageSDKTests.cpp
     AsarSDKTests.cpp
     ElectronSDKTests.cpp
     HTMLSDKTests.cpp

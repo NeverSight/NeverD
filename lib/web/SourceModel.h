@@ -1,3 +1,14 @@
+//===- SourceModel.h - Validated JavaScript source models --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Validated JavaScript source models.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Source.h"

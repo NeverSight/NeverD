@@ -31,7 +31,7 @@ NeverD 在加载、提升、反编译和二进制重写的全过程中携带 Win
 | `__GSHandlerCheck_SEH/EH/EH4` | 包装后的 personality 与经检查的 GS cookie 来源 | 基础语言图加 wrapper 注释 | 仅分析；拒绝修改涉及的函数，不做降级 |
 | x86 registration-chain SEH3 | 经检查的 scope 图、实际 FS:[0] 操作、callback root 与基于 CFG 的 try-level 状态集合 | 可规约且无歧义的区域生成显式 EH 节点；其他状态保留原生注释 | 对下文固定栈帧、caller-cleanup 的已证明子集支持原生 PE32 重建 |
 | x86 registration-chain SEH4 | 经检查的 cookie 表达式、编码 scope 指针与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文已认证的直接栈帧子集支持原生 PE32 重建，包含 EH/GS cookie 初始化 |
-| x86 registration-chain C++ EH | 绝对指针 FuncInfo、cleanup/对象契约与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文经过证明的单 try、标量或无绑定对象 catch 子集执行原生 PE32 重建 |
+| x86 registration-chain C++ EH | 绝对指针 FuncInfo、cleanup/对象契约与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文经过证明的同步 try、标量或无绑定对象 catch 子集执行原生 PE32 重建 |
 
 畸形记录绝不会按普通完整记录处理。部分解码记录仍可用于检查，但不能授权生成原生
 元数据。如果 ARM xdata header 仍能证明一个有界可执行 fragment 范围，而后续 unwind
@@ -161,7 +161,7 @@ record 推导生成 cookie 偏移，包括运行时的虚拟帧基址；安装�
 预编译包会拒绝原生安装。EH4 还要求 `LLVM_NEVERD_X86_REGISTRATION_COOKIES`，
 GS 初始化还要求 `LLVM_NEVERD_X86_REGISTRATION_GS`。
 
-x86 C++ 原生重建目前支持一个同步 try 下的有序多个 catch，源 unwind state 最多 128 个。
+x86 C++ 原生重建支持同步父函数内的有序 catch，最多 64 个 try 和 128 个源 unwind state。
 catch 可以按值或引用绑定经过检查的标量，也可以没有局部对象，或采用 `catch(...)`。
 无绑定对象的 typed catch 保留准确的 RTTI 和 adjectives；catch-all 保留空 RTTI 和原生
 catch-all adjective。没有对象 home 仍要求完整的源证明，且不得存在运行时对象访问；
@@ -182,9 +182,13 @@ SavedESP 将其地址存入父帧。安装器重放源契约，并独立核验�
 
 每条 catch 分别绑定自己的 catchpad、对象 home、临时栈和精确 continuation；分派顺序
 必须与源 HandlerMap 一致。其他 catch 的对象初始化或临时栈不能供当前 catch 使用。
-共享 callback block、多个或嵌套 try 上下文仍被拒绝。对于一个同步 try，HighIR 可以
-依据完整调用及状态证明，合并被运行时恢复块隔开的不返回分支；不能因此为异步异常
-或原先未保护的调用添加 handler。C/C++ 输出保留原生对象位置和读取时的临时值，
+父函数中的 try 可以互不相交或嵌套，每个 catch 边界必须紧随其保护状态区间。
+共享的源图投影检查完整的由内到外搜索链；安装器独立核验各 try 的保护状态集合、
+实际 HandlerMap、搜索顺序和 unwind 边。共享 callback、catch 内的 try，以及需要
+向外层 try 发起二次搜索的抛异常 catch 仍被拒绝。
+HighIR 依据完整调用及状态证明，合并被运行时恢复块隔开的同步不返回分支；catch
+返回后不同状态的合流不会把恢复代码纳入保护区。内层 try 保留独立核验的回调正文
+及精确 continuation，不能因此为异步异常或原先未保护的调用添加 handler。C/C++ 输出保留原生对象位置和读取时的临时值，
 不把可变 catch 对象猜成可以随处替换的不可变源表达式。
 
 LLVM 重新发射物理 registration、需要时才存在的 catch home、有序 cleanup dispatch、
@@ -198,7 +202,10 @@ LLVM 重新发射物理 registration、需要时才存在的 catch home、有序
 LLVM 固定帧及重新对齐帧使用编译器生成的父函数，固定帧覆盖短立即数及完整宽度的
 栈分配。多 catch 样本在同一函数中组合有符号按值、无符号引用与 catch-all，检查
 三条恢复路径、引用写回和四种调用者栈布局，并覆盖两种安装模式及强制重定位。
-所有样本均链接捕获的 MSVC CRT 库；CI 在 Windows
+新增 Clang `-O0`/`-O1` 样本覆盖内层引用 catch、外层按值和 catch-all 搜索、
+三条 continuation、反向对照及强制重定位。`-O0` loader 还检查相邻的 ESP 到 EAX
+保存序列与 personality 跳板的四条参数读取；篡改这些字节、IR 分派边或生成的
+try/unwind 行必须拒绝重建。所有样本均链接捕获的 MSVC CRT 库；CI 在 Windows
 上重放完全相同的 PE 文件。其他 try/catch 图、未经证明的对象类型或入口 ABI、
 未经证明的动态帧，
 以及 GS 或异步 C++ 仍保留分析信息，并拒绝原生安装。

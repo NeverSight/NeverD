@@ -11,6 +11,7 @@
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/backend/llvm/X86RegistrationCxxUnwind.h"
 #include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -51,7 +52,9 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR(
         "source C++ graph has no complete native control projection");
   const auto &Cxx = *Source.Cxx;
-  const auto &Try = Cxx.TryBlocks[0];
+  const auto UnwindGraph = projectX86RegistrationCxxUnwind(Cxx);
+  if (!UnwindGraph)
+    return rejectIR("C++ source unwind destinations are incomplete");
   const auto *Module = Function.getParent();
   const auto *Marker = Function.getMetadata(windows_eh_md::NativeAttachment);
   const auto *Kind =
@@ -141,7 +144,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   std::map<va_t, int> BlockAt;
   for (const auto &State : States.Blocks)
     if (State.Reached) {
-      if (State.Unknown || State.Levels.size() > 1 ||
+      if (State.Unknown ||
           !StateByBlock.emplace(State.BlockId, &State).second ||
           !BlockAt.emplace(State.Range.Begin, State.BlockId).second ||
           !Result.Segments.count(State.BlockId))
@@ -209,36 +212,48 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ frame has no runtime escape");
   if (auto Error = bindCxxCatches(Result, Med, Function, *Layout))
     return std::move(Error);
-  const auto *Switch = Result.Catches.front().Pad->getCatchSwitch();
   auto BundleIs = [](const llvm::CallBase &Call, const llvm::Value *Pad) {
     auto Bundle = Call.getOperandBundle("funclet");
     return Pad ? Bundle && Bundle->Inputs.size() == 1 &&
                      Bundle->Inputs[0].get() == Pad
                : !Bundle;
   };
-  std::function<const llvm::BasicBlock *(int32_t)> UnwindAt =
-      [&](int32_t State) -> const llvm::BasicBlock * {
-    if (State < Try.TryLow || State > Try.TryHigh)
+  auto UnwindAt = [&](int32_t State) -> const llvm::BasicBlock * {
+    if (State < 0 || uint32_t(State) >= UnwindGraph->size())
       return nullptr;
-    if (State == Try.TryLow)
-      return Switch->getParent();
-    if (Cxx.UnwindMap[State].ActionVA)
-      return Result.Cleanups.count(State)
-                 ? Result.Cleanups.at(State)->getParent()
+    const auto &Target = (*UnwindGraph)[State];
+    switch (Target.TargetKind) {
+    case X86RegistrationCxxUnwindTarget::Kind::Caller:
+      return nullptr;
+    case X86RegistrationCxxUnwindTarget::Kind::Try:
+      return Result.Catches.at({Target.Index, 0})
+          .Pad->getCatchSwitch()
+          ->getParent();
+    case X86RegistrationCxxUnwindTarget::Kind::Cleanup:
+      return Result.Cleanups.count(Target.Index)
+                 ? Result.Cleanups.at(Target.Index)->getParent()
                  : nullptr;
-    return UnwindAt(Cxx.UnwindMap[State].ToState);
+    }
+    llvm_unreachable("invalid checked unwind destination");
   };
+  for (uint32_t Index = 0; Index < Cxx.TryBlocks.size(); ++Index) {
+    const auto &Try = Cxx.TryBlocks[Index];
+    const auto *Switch = Result.Catches.at({Index, 0}).Pad->getCatchSwitch();
+    if (Switch->getUnwindDest() != UnwindAt(Cxx.UnwindMap[Try.TryLow].ToState))
+      return rejectIR(
+          "C++ catch dispatch changed its enclosing search context");
+  }
   std::set<const llvm::Instruction *> ExpectedAnchors;
   const auto &Dispatch = Anchors[Role::RegionDispatch];
   if (Dispatch.size() != Result.Catches.size())
     return rejectIR("C++ catch dispatch anchor set is incomplete");
-  std::set<uint32_t> Clauses;
+  std::set<X86RegistrationCatchIdentity> Clauses;
   for (const auto &[Anchor, P] : Dispatch) {
-    if (P.Region || P.Clause >= Result.Catches.size() ||
-        !Clauses.insert(P.Clause).second)
+    const X86RegistrationCatchIdentity Identity{P.Region, P.Clause};
+    if (!Result.Catches.count(Identity) || !Clauses.insert(Identity).second)
       return rejectIR("C++ catch dispatch has no unique clause identity");
-    const auto &Handler = Try.Handlers[P.Clause];
-    const auto *Pad = Result.Catches[P.Clause].Pad;
+    const auto &Handler = Cxx.TryBlocks[P.Region].Handlers[P.Clause];
+    const auto *Pad = Result.Catches.at(Identity).Pad;
     if (P.SourceVA != Handler.HandlerVA ||
         P.AuxVA != Handler.TypeDescriptorVA || P.Flags != Handler.Adjectives ||
         next(*Pad) != Anchor || !BundleIs(*Anchor, Pad))
@@ -306,10 +321,21 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     if (!StateByBlock.count(BlockId))
       return rejectIR("C++ call moved outside a reached source block");
     const auto &State = *StateByBlock.at(BlockId);
+    if (State.Levels.size() > 1)
+      return rejectIR("C++ source call has ambiguous dispatch states");
     const int32_t Level = State.Levels.empty() ? -1 : State.Levels[0];
-    const auto *Unwind =
-        State.CxxMinimumTryLevel <= Try.TryLow ? UnwindAt(Level) : nullptr;
+    const bool HasTry = llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
+      return State.CxxMinimumTryLevel <= Try.TryLow && Level >= Try.TryLow &&
+             Level <= Try.TryHigh;
+    });
+    const auto *Unwind = HasTry ? UnwindAt(Level) : nullptr;
     const auto &Contract = States.CalleeContracts[Effect.CalleeIndex];
+    if (State.CallbackOnly && Effect.DoesNotReturn &&
+        llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
+          return Try.TryLow < State.CxxMinimumTryLevel && Level >= Try.TryLow &&
+                 Level <= Try.TryHigh;
+        }))
+      return rejectIR("C++ throwing catch needs a secondary search context");
     if (Unwind) {
       ++Protected;
       const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Call);
@@ -379,15 +405,16 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     if (!Restored)
       return Restored.takeError();
     const auto *Return = *Restored;
-    if (Resume->TryIndex || Resume->CatchIndex >= Result.Catches.size() ||
-        P.AuxVA != Resume->TargetVA ||
+    const X86RegistrationCatchIdentity Identity{Resume->TryIndex,
+                                                Resume->CatchIndex};
+    if (!Result.Catches.count(Identity) || P.AuxVA != Resume->TargetVA ||
         P.Flags != uint32_t(Resume->SavedStackOffset) ||
         !BlockAt.count(Resume->TargetVA) || !Return ||
-        Return->getCatchPad() != Result.Catches[Resume->CatchIndex].Pad ||
+        Return->getCatchPad() != Result.Catches.at(Identity).Pad ||
         Return->getSuccessor() !=
             Result.Segments.at(BlockAt.at(Resume->TargetVA))
                 .Enter->getParent() ||
-        !BundleIs(*Anchor, Result.Catches[Resume->CatchIndex].Pad) ||
+        !BundleIs(*Anchor, Result.Catches.at(Identity).Pad) ||
         !Returns.insert(Return).second)
       return rejectIR("C++ catch changed its checked runtime continuation");
     ExpectedAnchors.insert(Anchor);

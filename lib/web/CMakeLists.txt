@@ -1,5 +1,8 @@
 add_neverd_component_library(NeverDWeb
   ArtifactStore.cpp
+  packages/PackageReader.cpp
+  packages/PackageDiff.cpp
+  SessionPackages.cpp
   HTML.cpp
   HTMLReferences.cpp
   HTMLLinks.cpp

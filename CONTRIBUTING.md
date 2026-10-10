@@ -129,6 +129,13 @@ clang-format -i path/to/changed.cpp path/to/changed.h
 git diff --check
 ```
 
+New C++ source and header files start with the LLVM-style filename/purpose
+banner, `NeverD Decompiler`, and a Doxygen `\file` description, as in
+`lib/debug/PDBLoader.cpp`. Preserve third-party copyright and license notices.
+Keep core models/readers independent of session state and transport adapters;
+place subsystem algorithms in an owning directory rather than duplicating
+semantics in CLI, SDK or worker code.
+
 Do not run a repository-wide reformat for a focused fix. Follow the surrounding
 file's naming and decomposition patterns, keep platform-specific behavior at
 the relevant loader/lifter/backend boundary, and avoid exposing internal C++

@@ -1,8 +1,19 @@
+//===- SourceModules.cpp - JavaScript module declarations --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript module declarations.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/SourceModules.h"
 
 #include "SourceModel.h"
 
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 #include <algorithm>
 #include <map>

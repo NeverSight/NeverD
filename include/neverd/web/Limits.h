@@ -1,3 +1,14 @@
+//===- Limits.h - Offline analysis resource limits ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Offline analysis resource limits.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <cstdint>

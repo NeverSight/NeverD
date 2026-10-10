@@ -1,3 +1,14 @@
+//===- SourceRecovery.h - Verified readable source recovery ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Verified readable source recovery.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Source.h"

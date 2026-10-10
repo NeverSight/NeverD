@@ -1,4 +1,14 @@
-//===- NeverDCAPIWeb.h - Offline web artifact analysis -----------*- C -*-===//
+//===- NeverDCAPIWeb.h - Offline web analysis C interface --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Offline web analysis C interface.
+///
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_SDK_CAPI_WEB_H
 #define NEVERD_SDK_CAPI_WEB_H
 
@@ -22,6 +32,33 @@ NEVERD_API void neverd_web_session_destroy(neverd_web_session_t Session);
 /// Null means allocation failure. Errors use schema_version/status/error.code;
 /// no untrusted source text or input name is included in ordinary diagnostics.
 NEVERD_API const char *neverd_web_capabilities_json(void);
+
+/// Inspect selected package.json or npm lock v1/v2/v3 metadata and exact
+/// supplied members. InputKind is "package-json" or "npm-lock". No install,
+/// registry resolution, execution, version-satisfaction or integrity
+/// verification.
+NEVERD_API const char *neverd_web_packages_analyze_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
+    const char *InputKind, size_t InputKindSize);
+/// RecordKind: packages/dependencies/scripts/entries/files. Limit is 1..512.
+/// Metadata values, script bodies, package names and registry URLs stay
+/// private.
+NEVERD_API const char *neverd_web_package_records_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *AnalysisID, size_t AnalysisIDSize,
+    const char *RecordKind, size_t RecordKindSize, uint64_t Offset,
+    uint64_t Limit);
+/// Compare two analyses in the same immutable revision. Absence in supplied
+/// evidence does not prove deletion or a change in another platform's release.
+NEVERD_API const char *neverd_web_packages_compare_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *BeforeID, size_t BeforeIDSize,
+    const char *AfterID, size_t AfterIDSize);
+NEVERD_API const char *neverd_web_package_diff_records_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *DiffID, size_t DiffIDSize, uint64_t Offset,
+    uint64_t Limit);
 
 /// Explicitly disclose an extracted Bun container and all retained regions to
 /// a NEW local directory, using generated filenames. Also writes decoded JS

@@ -1,5 +1,16 @@
+//===- HTMLReferences.cpp - HTML character references ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// HTML character references.
+///
+//===----------------------------------------------------------------------===//
+
+#include "neverd/web/Error.h"
 #include "neverd/web/HTML.h"
-#include "neverd/web/Session.h"
 
 #include <algorithm>
 #include <iterator>

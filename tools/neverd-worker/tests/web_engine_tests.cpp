@@ -1,3 +1,14 @@
+//===- web_engine_tests.cpp - Offline analysis worker regressions ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Offline analysis worker regressions.
+///
+//===----------------------------------------------------------------------===//
+
 #include "../../../unittests/web/AsarEnvelopeFixture.h"
 #include "../../../unittests/web/BunFixture.h"
 #include "../../../unittests/web/BunSourceMapFixture.h"
@@ -1269,6 +1280,87 @@ int main(int argc, char **argv) {
                          htmlProject);
     check(reply["error"]["code"] == "invalid_request",
           "Worker accepted HTML execution field");
+    const auto packageRoot = fixture.root / "packages";
+    fs::create_directories(packageRoot / "before");
+    fs::create_directories(packageRoot / "after");
+    std::ofstream(packageRoot / "before/package.json")
+        << R"({"name":"SECRET_WEB_PACKAGE","version":"1","scripts":{"postinstall":"SECRET_WEB_COMMAND"},"dependencies":{"SECRET_WEB_DEP":"1"}})";
+    std::ofstream(packageRoot / "after/package.json")
+        << R"({"name":"SECRET_WEB_PACKAGE","version":"2","optionalDependencies":{"SECRET_WEB_DEP":"2"}})";
+    const Json packagePreview{{"schema_version", 1},
+                              {"path", packageRoot.string()}};
+    preview = web.execute("web_import_preview", packagePreview);
+    const auto packageCommit = web.execute(
+        "web_import_commit",
+        {{"schema_version", 1}, {"preview_token", preview["preview_token"]}});
+    reply = process.call("web_import_preview", packagePreview, htmlRevision,
+                         htmlProject);
+    reply = process.call("web_import_commit",
+                         {{"schema_version", 1},
+                          {"preview_token", reply["payload"]["preview_token"]}},
+                         htmlRevision, htmlProject);
+    check(reply["payload"] == packageCommit,
+          "Package import differs through transport");
+    const auto packageRevision = packageCommit["revision"].get<std::string>();
+    const auto packageProject = packageCommit["project_id"].get<std::string>();
+    const auto packageArtifacts =
+        web.execute("web_artifacts", {{"schema_version", 1},
+                                      {"revision", packageRevision},
+                                      {"offset", 0},
+                                      {"limit", 512}});
+    std::vector<std::string> packageIDs;
+    for (const auto index : {4U, 2U}) {
+      Json request{
+          {"schema_version", 1},
+          {"revision", packageRevision},
+          {"artifact_id", packageArtifacts["items"][index]["artifact_id"]},
+          {"input_kind", "package-json"}};
+      const auto direct = web.execute("web_packages_analyze", request);
+      reply = process.call("web_packages_analyze", request, packageRevision,
+                           packageProject);
+      check(reply["payload"] == direct &&
+                reply.dump().find("SECRET_WEB") == std::string::npos,
+            "Package analysis differs or exposes metadata");
+      const auto id = direct["package_analysis_id"].get<std::string>();
+      packageIDs.push_back(id);
+      for (const auto *kind :
+           {"packages", "dependencies", "scripts", "entries", "files"}) {
+        const Json page{{"schema_version", 1}, {"revision", packageRevision},
+                        {"analysis_id", id},   {"record_kind", kind},
+                        {"offset", 0},         {"limit", 512}};
+        const auto records = web.execute("web_package_records", page);
+        reply = process.call("web_package_records", page, packageRevision,
+                             packageProject);
+        check(reply["payload"] == records &&
+                  reply.dump().find("SECRET_WEB") == std::string::npos,
+              "Package records differ or expose declarations");
+      }
+      request["execute"] = true;
+      reply = process.call("web_packages_analyze", request, packageRevision,
+                           packageProject);
+      check(reply["error"]["code"] == "invalid_request",
+            "Package analysis accepted execution field");
+    }
+    const Json compare{{"schema_version", 1},
+                       {"revision", packageRevision},
+                       {"before_id", packageIDs[0]},
+                       {"after_id", packageIDs[1]}};
+    const auto diff = web.execute("web_packages_compare", compare);
+    reply = process.call("web_packages_compare", compare, packageRevision,
+                         packageProject);
+    check(reply["payload"] == diff && diff["change_count"] > 0,
+          "Package diff differs through transport");
+    const Json changes{{"schema_version", 1},
+                       {"revision", packageRevision},
+                       {"diff_id", diff["package_diff_id"]},
+                       {"offset", 0},
+                       {"limit", 512}};
+    const auto directChanges = web.execute("web_package_diff_records", changes);
+    reply = process.call("web_package_diff_records", changes, packageRevision,
+                         packageProject);
+    check(reply["payload"] == directChanges &&
+              reply.dump().find("SECRET_WEB") == std::string::npos,
+          "Package diff records differ or expose private values");
     process.stop();
     std::ifstream errors(fixture.root / "stderr");
     const std::string diagnostics{std::istreambuf_iterator<char>(errors), {}};

@@ -1,3 +1,14 @@
+//===- BunSourceMap.h - Bun serialized source maps ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bun serialized source maps.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Bun.h"

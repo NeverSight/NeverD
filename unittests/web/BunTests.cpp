@@ -1,3 +1,14 @@
+//===- BunTests.cpp - Qualified Bun graph extraction tests -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Qualified Bun graph extraction tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "BunFixture.h"
 #include "Internal.h"
 #include "gtest/gtest.h"

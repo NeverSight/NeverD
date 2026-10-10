@@ -1,3 +1,14 @@
+//===- SessionAnchor.cpp - Source and storage anchor queries -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source and storage anchor queries.
+///
+//===----------------------------------------------------------------------===//
+
 #include "SessionInternal.h"
 
 namespace neverd::web {

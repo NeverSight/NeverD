@@ -20,6 +20,8 @@ JavaScript, package, desktop and protocol work remains in progress; see the
 
 ```console
 neverd web capabilities
+neverd web packages ./package-lock.json npm-lock
+neverd web packages ./package.json package-json
 neverd web bun-export ./standalone-elf ./new-recovery-directory
 neverd web inspect ./input-directory
 neverd web source ./bundle.js script
@@ -70,6 +72,12 @@ Hermes parser/AST subset. There is no JavaScript VM, target evaluation, package
 installation, plugin loading, subprocess analyzer or automatic network/file
 resolution. Input bytes are data, including `eval`, `require`, imports,
 source-map references and executable configuration files.
+
+The [package evidence profile](web-package-profile.md) adds explicitly selected
+npm v1/v2/v3 lockfile and manifest inspection, bounded graph pages and comparisons
+of two supplied roots. Placement candidates, integrity declarations, missing
+evidence and version/platform uncertainty remain separate; it neither installs
+packages nor issues a benignness verdict.
 
 Bun extraction is explicitly selected and follows
 [versioned layouts](web-bun-profile.md). Module/region pages preserve original

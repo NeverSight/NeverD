@@ -1,3 +1,14 @@
+//===- ElectronSelection.h - Shared Electron evidence selection --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared Electron evidence selection.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/ElectronIPC.h"

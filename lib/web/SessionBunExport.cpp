@@ -1,3 +1,14 @@
+//===- SessionBunExport.cpp - Verified Bun recovery export -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Verified Bun recovery export.
+///
+//===----------------------------------------------------------------------===//
+
 #include "ExportDirectory.h"
 #include "RecoveryParser.h"
 #include "SessionInternal.h"

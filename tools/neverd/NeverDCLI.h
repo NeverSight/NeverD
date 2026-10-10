@@ -209,6 +209,7 @@ extern llvm::cl::SubCommand MobileCmd;
 extern llvm::cl::SubCommand WebCmd;
 extern llvm::cl::list<std::string> WebArguments;
 int runWeb();
+int runWebPackages();
 
 extern llvm::cl::opt<bool> Devirtualize;
 extern llvm::cl::list<std::string> VMControlRegisters;

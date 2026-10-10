@@ -1436,8 +1436,19 @@ resolverSlice(const ResolverValue &Input, uint16_t Offset, uint16_t Size,
     if (CurrentOffset == 0 && Node->Input &&
         (Node->K == ResolverValueExpr::Kind::ZeroExtend ||
          Node->K == ResolverValueExpr::Kind::SignExtend) &&
-        Size == Node->Input->Size)
-      return remember(Node, CurrentOffset, Node->Input);
+        Size >= Node->Input->Size) {
+      // A low slice through nested extensions keeps only the requested
+      // width. This also preserves a count's byte-sized result when a 32-bit
+      // architectural write has widened that result all the way to 64 bits.
+      ResolverValue Result =
+          Size == Node->Input->Size
+              ? Node->Input
+              : resolverExtend(Node->Input, Size,
+                               Node->K == ResolverValueExpr::Kind::SignExtend,
+                               consume, AnalysisIncomplete);
+      return Result ? remember(Node, CurrentOffset, std::move(Result))
+                    : ResolverValue{};
+    }
     if (Node->K == ResolverValueExpr::Kind::Slice && Node->Input) {
       const uint32_t CombinedOffset =
           uint32_t(Node->SliceOffset) + CurrentOffset;
@@ -7010,12 +7021,27 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                             ConstantAddressProvenance::Scalar,
                                             InvalidVA, consumeEvidence);
         }
-        if (!Full && !Dependencies.empty())
+        if (!Full && !Dependencies.empty()) {
+          // Scalar bit counts are in [0, input bits], including a zero input.
+          // Keep the producer occurrence and dependencies, with its known-zero
+          // high bytes represented by an explicit extension. This lets a byte
+          // guard authenticate the full-width index without symbolically
+          // expanding the count. Check declared operand widths, not fallback
+          // roots: an opaque malformed input may have borrowed Output.Size.
+          const bool ByteCount =
+              (Def.Opcode == NdOp::POPCOUNT || Def.Opcode == NdOp::LZCOUNT) &&
+              Def.NumInputs == 1 && Def.Inputs[0].Size != 0 &&
+              Def.Inputs[0].Size <= sizeof(uint64_t) && Def.Output.Size > 1 &&
+              Def.Output.Size <= sizeof(uint64_t);
           Full =
-              namedResolverTransform(Def.Output.Size, "T",
+              namedResolverTransform(ByteCount ? 1 : Def.Output.Size, "T",
                                      {static_cast<unsigned>(Def.Opcode),
                                       Def.Addr, static_cast<uint64_t>(Def.Seq)},
                                      std::move(Dependencies), Def.Opcode);
+          if (ByteCount)
+            Full = resolverExtend(Full, Def.Output.Size, false, consumeEvidence,
+                                  &EvidenceBudgetExhausted);
+        }
       }
       if (!Full)
         Full = namedResolverRoot(Def.Output.Size, "D",

@@ -1,3 +1,14 @@
+//===- ElectronEntryTests.cpp - Electron Entry tests -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Electron Entry tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/ElectronEntries.h"

@@ -1,3 +1,15 @@
+//===- AvailabilityTests.cpp - Offline analysis availability tests
+//---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Compiled and omitted offline analysis API contracts.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/sdk/NeverDCAPIWeb.h"
@@ -39,6 +51,10 @@ TEST(WebAvailability, CapabilitiesReflectCompiledBackendAndParser) {
   EXPECT_TRUE(Has("bun_extract"));
   EXPECT_TRUE(Has("bun_records"));
   EXPECT_TRUE(Has("bun_export"));
+  EXPECT_TRUE(Has("packages_analyze"));
+  EXPECT_TRUE(Has("package_records"));
+  EXPECT_TRUE(Has("packages_compare"));
+  EXPECT_TRUE(Has("package_diff_records"));
   bool ASARAvailable = false;
   const auto *Analysis = Object->getArray("analysis");
   ASSERT_NE(Analysis, nullptr);
@@ -95,6 +111,14 @@ TEST(WebAvailability, AllPublicEntryPointsRemainAvailableWhenBackendIsOmitted) {
   neverd_session_t NativeOutput = reinterpret_cast<void *>(uintptr_t(1));
   for (const auto *Owned :
        {neverd_web_metadata_json(nullptr),
+        neverd_web_packages_analyze_json(nullptr, nullptr, 0, nullptr, 0,
+                                         nullptr, 0),
+        neverd_web_package_records_json(nullptr, nullptr, 0, nullptr, 0,
+                                        nullptr, 0, 0, 1),
+        neverd_web_packages_compare_json(nullptr, nullptr, 0, nullptr, 0,
+                                         nullptr, 0),
+        neverd_web_package_diff_records_json(nullptr, nullptr, 0, nullptr, 0, 0,
+                                             1),
         neverd_web_electron_manifest_analyze_json(nullptr, nullptr, 0, nullptr,
                                                   0),
         neverd_web_electron_source_analyze_json(nullptr, nullptr, 0, nullptr,

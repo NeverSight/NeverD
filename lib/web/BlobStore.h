@@ -1,3 +1,14 @@
+//===- BlobStore.h - Private immutable blob storage --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Private immutable blob storage.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Blob.h"

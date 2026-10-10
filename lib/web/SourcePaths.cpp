@@ -1,3 +1,14 @@
+//===- SourcePaths.cpp - Captured source path candidates ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured source path candidates.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/SourcePaths.h"
 
 #include "Internal.h"

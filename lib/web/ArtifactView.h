@@ -1,3 +1,14 @@
+//===- ArtifactView.h - Immutable occurrence selection -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Immutable occurrence selection.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 #include "neverd/web/Blob.h"
 

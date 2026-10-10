@@ -1,3 +1,14 @@
+//===- HTMLSDKTests.cpp - Captured HTML script evidence tests ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured HTML script evidence tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "AsarFixture.h"
 #include "gtest/gtest.h"
 

@@ -1,3 +1,14 @@
+//===- WebEngine.cpp - Offline analysis worker adapter -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Offline analysis worker adapter.
+///
+//===----------------------------------------------------------------------===//
+
 #include "WebEngine.h"
 
 #include <algorithm>
@@ -44,6 +55,10 @@ struct API {
   WEB_API(neverd_web_artifacts_json)
   WEB_API(neverd_web_bun_extract_json)
   WEB_API(neverd_web_bun_records_json)
+  WEB_API(neverd_web_packages_analyze_json)
+  WEB_API(neverd_web_package_records_json)
+  WEB_API(neverd_web_packages_compare_json)
+  WEB_API(neverd_web_package_diff_records_json)
   WEB_API(neverd_web_asar_extract_json)
   WEB_API(neverd_web_electron_manifest_analyze_json)
   WEB_API(neverd_web_electron_source_analyze_json)
@@ -260,6 +275,56 @@ Json WebEngine::execute(const std::string &operation, const Json &p) {
     if (!query)
       throw Error("capability_unavailable", "Native handoff is unavailable");
     return result(query(native_));
+  }
+  if (operation == "web_packages_analyze") {
+    fields(p, {"revision", "artifact_id", "input_kind"});
+    if (!api().neverd_web_packages_analyze_json)
+      throw Error("capability_unavailable", "Package evidence is unavailable");
+    const auto revision = required(p, "revision", 20);
+    const auto id = required(p, "artifact_id", 64);
+    const auto kind = required(p, "input_kind", 32);
+    auto value = result(api().neverd_web_packages_analyze_json(
+        session_, revision.data(), revision.size(), id.data(), id.size(),
+        kind.data(), kind.size()));
+    analysisState_ = "partial";
+    return value;
+  }
+  if (operation == "web_package_records") {
+    fields(p, {"revision", "analysis_id", "record_kind", "offset", "limit"});
+    if (!api().neverd_web_package_records_json)
+      throw Error("capability_unavailable", "Package evidence is unavailable");
+    const auto revision = required(p, "revision", 20);
+    const auto id = required(p, "analysis_id", 64);
+    const auto kind = required(p, "record_kind", 32);
+    return result(api().neverd_web_package_records_json(
+        session_, revision.data(), revision.size(), id.data(), id.size(),
+        kind.data(), kind.size(),
+        sizeField(p, "offset", 0, std::numeric_limits<size_t>::max()),
+        sizeField(p, "limit", 128, 512)));
+  }
+  if (operation == "web_packages_compare") {
+    fields(p, {"revision", "before_id", "after_id"});
+    if (!api().neverd_web_packages_compare_json)
+      throw Error("capability_unavailable",
+                  "Package comparison is unavailable");
+    const auto revision = required(p, "revision", 20);
+    const auto before = required(p, "before_id", 64),
+               after = required(p, "after_id", 64);
+    return result(api().neverd_web_packages_compare_json(
+        session_, revision.data(), revision.size(), before.data(),
+        before.size(), after.data(), after.size()));
+  }
+  if (operation == "web_package_diff_records") {
+    fields(p, {"revision", "diff_id", "offset", "limit"});
+    if (!api().neverd_web_package_diff_records_json)
+      throw Error("capability_unavailable",
+                  "Package comparison is unavailable");
+    const auto revision = required(p, "revision", 20);
+    const auto id = required(p, "diff_id", 64);
+    return result(api().neverd_web_package_diff_records_json(
+        session_, revision.data(), revision.size(), id.data(), id.size(),
+        sizeField(p, "offset", 0, std::numeric_limits<size_t>::max()),
+        sizeField(p, "limit", 128, 512)));
   }
   if (operation == "web_electron_manifest_analyze" ||
       operation == "web_electron_source_analyze") {

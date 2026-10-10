@@ -99,6 +99,7 @@ add_neverd_tool(neverd
   cmd/NeverDCmdConcolic.cpp
   cmd/NeverDCmdMobile.cpp
   cmd/NeverDCmdWeb.cpp
+  cmd/NeverDCmdWebPackages.cpp
 
   LINK_LIBS
   neverd_shared

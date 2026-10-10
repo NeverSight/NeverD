@@ -1,3 +1,14 @@
+//===- ArtifactView.cpp - Immutable occurrence selection ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Immutable occurrence selection.
+///
+//===----------------------------------------------------------------------===//
+
 #include "ArtifactView.h"
 
 #include "SessionInternal.h"

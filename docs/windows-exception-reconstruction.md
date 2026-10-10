@@ -36,7 +36,7 @@ Analysis support does not imply native reconstruction support.
 | `__GSHandlerCheck_SEH/EH/EH4` | Wrapped personality plus checked GS cookie provenance | Base-language graph and wrapper annotation | Analysis only; a touched function is rejected rather than downgraded |
 | x86 registration-chain SEH3 | Checked scope graph, actual FS:[0] administration, callback roots and CFG-derived reaching try levels | Reducible, unambiguous regions become explicit EH nodes; other state flow retains native annotations | Native PE32 reconstruction for the checked fixed-frame, caller-cleanup subset below |
 | x86 registration-chain SEH4 | Checked cookie expressions, encoded scope pointer and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the authenticated direct-frame subset below, including initialized EH/GS cookies |
-| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked single-try scalar or unbound catch subset below |
+| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked synchronous try and scalar or unbound catch subset below |
 
 Malformed records are never treated as ordinary complete records. A partially
 decoded record remains useful for inspection, but cannot authorize native
@@ -227,7 +227,7 @@ EH4 also requires `LLVM_NEVERD_X86_REGISTRATION_COOKIES`; GS initialization
 requires `LLVM_NEVERD_X86_REGISTRATION_GS`. The older published r3 package
 rejects native installation.
 
-Native x86 C++ reconstruction currently supports one synchronous try with
+Native x86 C++ reconstruction supports synchronous parent try groups with
 ordered catches, with at most 128 source unwind states. A catch may bind a checked scalar
 by value or reference, omit its local object, or be `catch(...)`. An unbound
 typed catch retains its exact RTTI and adjectives; catch-all retains null RTTI
@@ -261,9 +261,17 @@ A frame-layout descriptor alone cannot authorize reconstruction.
 Each clause retains its own catchpad, object home, scratch stack and exact
 continuation. Dispatch order must match the source HandlerMap. A sibling catch
 cannot borrow another clause's implicit object initialization or callback stack.
-Shared callback blocks and multiple or nested try contexts remain rejected.
-HighIR can gather terminal branches of one synchronous try even when runtime
-resume blocks interrupt their address order. It requires complete call and
+Parent try groups may be disjoint or nested, with at most 64 tries and 128
+source states. Each catch boundary must immediately follow its protected state
+interval. The shared source projection proves the complete inner-to-outer
+search chain; independent installation checks preserve every try's protected
+state set, emitted HandlerMap, search order and unwind edges. Shared callbacks,
+a try inside a catch, and a throwing catch requiring secondary search through
+an enclosing try remain rejected.
+HighIR can gather terminal branches of synchronous tries even when runtime
+resume blocks interrupt their address order or merge different post-catch
+states. An inner try stays intact with independently checked callback bodies
+and exact continuation targets. It requires complete call and
 state receipts; asynchronous faults and unprotected calls cannot acquire a new
 handler through this projection. C and C++ output retain explicit native object
 homes and load snapshots instead of assuming a mutable catch object is an
@@ -287,7 +295,12 @@ coverage includes both short and full-width stack allocations. Ordered-catch
 fixtures combine signed value, unsigned reference and catch-all clauses in one
 function and check all three continuations and reference writes across four
 caller stack layouts. Both installation modes and forced rebasing participate
-in the same-file runtime matrix. All fixtures
+in the same-file runtime matrix. Additional Clang `-O0` and `-O1` fixtures
+exercise inner reference catches, outer value/catch-all search, all three
+continuations, negative controls and forced rebasing. The `-O0` loader proof
+also checks the exact adjacent ESP-to-EAX save and the personality thunk's four
+argument reads. Mutating those bytes, an IR dispatch edge or generated try and
+unwind rows must reject reconstruction. All fixtures
 link the captured MSVC CRT libraries. The CI replay executes the identical PE files on Windows. Other
 try/catch graphs, unproved object types or entry ABIs, unproved dynamic frames
 and GS or asynchronous C++ remain available for analysis and are rejected for

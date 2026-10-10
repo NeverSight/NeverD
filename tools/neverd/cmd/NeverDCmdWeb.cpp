@@ -1,3 +1,14 @@
+//===- NeverDCmdWeb.cpp - Offline web analysis commands ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Offline web analysis commands.
+///
+//===----------------------------------------------------------------------===//
+
 #include "../NeverDCLI.h"
 
 #include "neverd/sdk/NeverDCAPIWeb.h"
@@ -31,6 +42,9 @@ std::optional<llvm::json::Value> result(const char *Owned) {
 } // namespace
 
 int runWeb() {
+  if (!WebArguments.empty() &&
+      (WebArguments[0] == "packages" || WebArguments[0] == "package-diff"))
+    return runWebPackages();
   const auto Decimal = [&](size_t I, uint64_t &Value) {
     if (I >= WebArguments.size())
       return false;

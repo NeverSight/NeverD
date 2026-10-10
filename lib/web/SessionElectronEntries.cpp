@@ -1,3 +1,14 @@
+//===- SessionElectronEntries.cpp - Electron entry publication ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Electron entry publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "ElectronSelection.h"
 #include "SessionInternal.h"
 

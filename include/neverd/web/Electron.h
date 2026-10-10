@@ -1,3 +1,14 @@
+//===- Electron.h - Electron manifest evidence -------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Electron manifest evidence.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/SourceOrigins.h"

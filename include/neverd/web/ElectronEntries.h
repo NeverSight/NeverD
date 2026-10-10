@@ -1,3 +1,14 @@
+//===- ElectronEntries.h - Captured Electron entry candidates ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured Electron entry candidates.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/ElectronIPC.h"
