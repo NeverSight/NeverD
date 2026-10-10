@@ -1057,6 +1057,7 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
           auto Timestamp = ExecutionTime();
           if (!Timestamp)
             return Timestamp.takeError();
+          Kernel.recordUnpackClockRead();
           if (auto E = CPU.setReg(X64Register::AX, uint32_t(*Timestamp)))
             return E;
           if (auto E = CPU.setReg(X64Register::DX, *Timestamp >> 32))

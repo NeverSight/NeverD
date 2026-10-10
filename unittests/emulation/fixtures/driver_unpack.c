@@ -44,6 +44,7 @@ static const UNICODE_STRING *volatile RetainedPath;
 static UNICODE_STRING RoutineName;
 static void *volatile Resolved[2];
 static volatile U64 ObservedPhysicalPage;
+static volatile U64 ObservedCounter, ObservedFrequency;
 __attribute__((used)) static const U32 ChangedMXCSR = 0x3f80;
 
 __attribute__((noinline, used)) static void unpack_bytes(DRIVER_OBJECT *Driver,
@@ -75,6 +76,21 @@ __attribute__((noinline, used)) static void unpack_bytes(DRIVER_OBJECT *Driver,
       __builtin_trap();
     KeSetSystemAffinityThread(Mask);
     KeRevertToUserAffinityThread();
+  }
+  if (Packed.Mode == 16) {
+    typedef U64 (*CounterFunction)(U64 *);
+    RtlInitUnicodeString(&RoutineName, L"KeQueryPerformanceCounter");
+    const CounterFunction Counter =
+        (CounterFunction)MmGetSystemRoutineAddress(&RoutineName);
+    ObservedCounter = Counter((U64 *)&ObservedFrequency);
+  }
+  if (Packed.Mode == 17 || Packed.Mode == 18) {
+    U32 Low, High;
+    if (Packed.Mode == 17)
+      __asm__ volatile("rdtsc" : "=a"(Low), "=d"(High));
+    else
+      __asm__ volatile("rdtscp" : "=a"(Low), "=d"(High) : : "rcx");
+    ObservedCounter = ((U64)High << 32) | Low;
   }
   if (Packed.Mode == 1)
     RetainedPool = ExAllocatePoolWithTag(0, 32, 0x44564e55);

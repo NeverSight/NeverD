@@ -153,10 +153,10 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
 }
 
 TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
-  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15}) {
+  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15, 16, 17, 18}) {
     SCOPED_TRACE(Mode);
     const auto Input = packed(Mode);
-    if (Mode == 15) {
+    if (Mode >= 15) {
       checkLifecycle(Input);
       ASSERT_FALSE(HasFatalFailure());
     }

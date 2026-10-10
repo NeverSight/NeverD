@@ -14,7 +14,7 @@ El contenedor determina cómo se valida y reconstruye un archivo, el conjunto de
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | observación en ejecución |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | observación en ejecución |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v99`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
 
 Las DLL PE32+ se identifican por `IMAGE_FILE_DLL`. Un EXE invitado modelado llama a `LoadLibraryA` y después a `FreeLibrary` mediante el ciclo ordinario de dependencias, TLS y `DllMain`. La entrada DLL aceptada es su llamada de asociación al proceso; no se inventan argumentos para exportaciones arbitrarias. Se conservan nombres, ordinales, alias, datos y reenvíos. Los punteros a exportaciones propias permanecen internos, sin autoimportaciones. La misma regla cubre las direcciones devueltas por helpers: un resultado interno retira las pruebas anteriores de reparación de importaciones para ese sitio.
 
@@ -29,6 +29,8 @@ La recuperación comprueba argumentos de entrada, marco de retorno y espacio res
 Con `backend: "unicorn"` y `execution_contract: "driver-strict"`, la recuperación de controladores x64 usa decodificación de instrucciones en estado detenido y vigilancia de escrituras RAM completadas entre alias físicos. Este contrato usa la semántica de instrucciones de Unicorn; `checked-x64-v1` comprueba su admisión antes de ejecutarlas.
 
 Los MDL temporales de páginas de imagen del cargador dejan de añadir una dependencia de recuperación cuando se desmapean todos los alias, se liberan todos los bloqueos y se liberan todos los descriptores. Este contrato admite alias en modo kernel con caché sin dirección solicitada. Los MDL activos, otros tipos de propiedad o mapeo y las lecturas del invitado de identidades físicas PFN siguen siendo dependencias; también cuentan las lecturas de servicios modelados de copia, movimiento y comparación.
+
+Las lecturas del reloj mediante `KeQueryPerformanceCounter`, `RDTSC` o `RDTSCP` conservan una dependencia explícita de recuperación del controlador. No existe un contrato para revincular los valores capturados del contador y su frecuencia a un nuevo entorno del núcleo. La recuperación predeterminada devuelve `unsupported_state`; `snapshot_only` conserva el diagnóstico.
 
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'

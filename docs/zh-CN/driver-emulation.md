@@ -468,7 +468,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v99`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v100`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 
@@ -594,5 +594,7 @@ CPU0 显式抢占、虚拟时钟语义及当前边界见[驱动调度](driver-sc
 `KeQueryPerformanceCounter` 返回调度器共享的 100 ns 时钟值，固定频率为每秒 10,000,000 次。可选输出指针经过完整八字节写入权限及对象生命周期检查。调用支持所有有效 x64 IRQL。协作模式只在已有调度边界推进时间；指令时钟模式沿用配置的计时方式。读取计数器不会创建第二个时钟或自行推进时间。这是确定性的执行配置，不是宿主硬件测量。独立编译的运行时样本在原始及重定位地址上检查静态／动态身份、频率与单调性，并由原生 CPU 后端执行。
 
 `RDTSC` 与 `RDTSCP` 和 `KeQueryPerformanceCounter` 共用 10 MHz 调度时钟。`RDTSCP` 在 ECX 中返回单个模型处理器的编号零。EAX/EDX（以及 RDTSCP 的 ECX）清零高 32 位，其他寄存器和标志保持不变。协作模式下读取不推进时间；显式指令调度模式在计入本条已获准指令后读取时间，结果不依赖时间片长度。溢出在写入寄存器结果之前停止，指令预算和观察器停止仍然有效。此配置不测量宿主 TSC 频率，也不暴露宿主处理器身份；MSR 访问、RDPMC 和其他未建模 CPU 查询仍不支持。
+
+通过 `KeQueryPerformanceCounter`、`RDTSC` 或 `RDTSCP` 读取时钟会保留明确的驱动恢复依赖。捕获的计数器和频率值尚无面向新内核环境的重绑定契约。默认恢复返回 `unsupported_state`；`snapshot_only` 保留此诊断。
 
 `KernelModuleImages` 根据 `KernelExportRegistry` 生成可读的 PE 头和导出表；静态导入、动态查找和模块枚举共享同一组地址。提供者代码保持不透明，清单描述的是模拟环境，而非宿主内核。两个输出都在写入前检查，包括池内存生命周期与重叠。Nt 查询要求已知的内核 previous-mode；Zw 查询采用内核调用契约。完整模块查询会保留明确的恢复依赖，即使其缓冲区已释放；提供者映像指针也按借用状态跟踪。`KernelExportTests.cpp` 检查 PE 解析、权限、ABI 字段、写入拒绝和恢复依赖；原创编译运行时夹具在 CPU 后端遍历这些导出表。

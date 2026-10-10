@@ -12,7 +12,7 @@ The container selects how a file is validated and rebuilt, the instruction set s
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v99`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL inputs are selected by `IMAGE_FILE_DLL`. A modeled guest EXE calls `LoadLibraryA`, then `FreeLibrary`, using the ordinary dependency, TLS and `DllMain` lifecycle. The accepted DLL entry is its process-attach invocation; arbitrary exports are not called with invented arguments. Export names, ordinals, aliases, data and forwarders remain in the rebuilt DLL. Pointers to its own exports remain internal pointers rather than self-imports. This also covers helper-returned addresses: an internal result withdraws earlier import-repair evidence for that site.
 
@@ -27,6 +27,8 @@ Recovery checks the incoming driver arguments, return/shadow frame, nonvolatile 
 With `backend: "unicorn"` and `execution_contract: "driver-strict"`, x64 driver recovery uses stopped instruction decoding and committed RAM write watches across physical aliases. This contract uses Unicorn's instruction semantics; `checked-x64-v1` provides checked instruction admission.
 
 Temporary MDLs over loader-owned image pages no longer add a recovery dependency after every alias is unmapped, every lock is released and every descriptor is freed. This contract admits kernel-mode cached aliases without a requested address. Live MDLs, other ownership or mapping kinds, and guest reads of physical PFN identities remain dependencies; reads by modeled copy, move and compare services count too.
+
+Clock reads through `KeQueryPerformanceCounter`, `RDTSC`, or `RDTSCP` retain an explicit driver recovery dependency. Captured counter and frequency values have no rebinding contract for a fresh kernel environment. Default recovery reports `unsupported_state`; `snapshot_only` retains the diagnostic.
 
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'

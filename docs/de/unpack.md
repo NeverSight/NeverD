@@ -14,7 +14,7 @@ Der Container bestimmt, wie eine Datei validiert und neu aufgebaut wird, der Bef
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | Laufzeitbeobachtung |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | Laufzeitbeobachtung |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v99`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
 
 PE32+-DLLs werden anhand von `IMAGE_FILE_DLL` erkannt. Eine modellierte Gast-EXE ruft `LoadLibraryA` und anschließend `FreeLibrary` über den normalen Lebenszyklus von Abhängigkeiten, TLS und `DllMain` auf. Der akzeptierte DLL-Eintritt ist ihr Prozess-Anfügeaufruf; Argumente beliebiger Exporte werden nicht erfunden. Namen, Ordinale, Aliase, Daten und Weiterleitungen bleiben erhalten. Zeiger auf eigene Exporte bleiben intern und erzeugen keine Selbstimporte. Das gilt auch für von Hilfsroutinen zurückgegebene Adressen: Ein internes Ergebnis widerruft frühere Import-Reparaturnachweise für diese Stelle.
 
@@ -29,6 +29,8 @@ Die Wiederherstellung prüft Eingangsargumente, Rückkehr- und Schattenrahmen, n
 Mit `backend: "unicorn"` und `execution_contract: "driver-strict"` nutzt die Wiederherstellung von x64-Treibern die Befehlsdekodierung im angehaltenen Zustand und die Beobachtung abgeschlossener RAM-Schreibzugriffe über physische Aliase. Dieser Vertrag verwendet Unicorns Befehlssemantik; `checked-x64-v1` prüft die Zulässigkeit vor der Ausführung.
 
 Temporäre MDLs für loader-eigene Abbildseiten erzeugen keine zusätzliche Wiederherstellungsabhängigkeit mehr, sobald alle Aliase aufgehoben, alle Sperren gelöst und alle Deskriptoren freigegeben sind. Dieser Vertrag erlaubt gecachte Kernelmodus-Aliase ohne angeforderte Adresse. Lebende MDLs, andere Eigentums- oder Mappingarten und Gastzugriffe auf physische PFN-Identitäten bleiben Abhängigkeiten; auch Lesezugriffe modellierter Kopier-, Verschiebe- und Vergleichsdienste zählen.
+
+Uhrabfragen über `KeQueryPerformanceCounter`, `RDTSC` oder `RDTSCP` behalten eine explizite Abhängigkeit der Treiberwiederherstellung. Für erfasste Zähler- und Frequenzwerte besteht kein Vertrag zur Neubindung an eine frische Kernelumgebung. Die Standardwiederherstellung meldet `unsupported_state`; `snapshot_only` behält die Diagnose bei.
 
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'

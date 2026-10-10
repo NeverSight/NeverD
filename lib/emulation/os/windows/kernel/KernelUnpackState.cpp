@@ -8,6 +8,12 @@
 #include "WindowsKernelLayout.h"
 
 namespace neverd::emulation {
+void KernelModel::recordUnpackClockRead() {
+  // Captured profile time cannot be rebound to a fresh kernel clock. API and
+  // CPU reads share this dependency even when no output pointer was supplied.
+  UnpackOpaqueEffects = true;
+}
+
 bool KernelModel::unpackImageMDLCall(KernelAPIKind Kind,
                                      llvm::ArrayRef<uint64_t> A) const {
   if (Kind == KernelAPIKind::IoAllocateMdl)
