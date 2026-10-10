@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 运行时观察 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 运行时观察 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v97`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 输入由 `IMAGE_FILE_DLL` 标识。建模的来宾 EXE 调用 `LoadLibraryA`、`FreeLibrary`，复用普通依赖、TLS 与 `DllMain` 生命周期。DLL 默认入口是其进程附加调用；不会为任意导出猜测参数。重建保留导出名称、序号、别名、数据及转发器；指向自身导出的指针保持为内部指针，不生成自身导入。辅助例程返回的地址也遵循此规则：内部结果会撤销该位置先前的导入修复证据。
 
@@ -25,6 +25,10 @@ PE32+ DLL 输入由 `IMAGE_FILE_DLL` 标识。建模的来宾 EXE 调用 `LoadLi
 驱动 UNPACK 关闭逐写报告记录，保留内存校验和恢复观察器。事件预算统计 API 调用，指令和时间限制仍然生效。
 
 恢复同时检查驱动入口参数、返回／影子栈帧、非易失寄存器、方向标志、浮点控制和内核对象所有权。遗留池、借用的内核指针、被修改的加载器对象或未计入的内核副作用返回 `unsupported_state`；显式 `snapshot_only` 保留诊断。内核状态尚无 `restore_runtime` 实现。导入重建使用内核导出身份，校验原始导出表并重新计算 PE 校验和。固定基址产物不代表已通过 Windows 内核加载、签名验证或未执行驱动路径的验收。
+
+使用 `backend: "unicorn"` 和 `execution_contract: "driver-strict"` 时，x64 驱动恢复支持停止态指令解码，以及跨物理别名的已提交 RAM 写入监视。此契约使用 Unicorn 的指令语义；`checked-x64-v1` 提供执行前的指令准入检查。
+
+加载器拥有的镜像页上，临时 MDL 的全部别名解除、全部锁释放且全部描述符释放后，不再额外阻止恢复。此契约允许未指定地址的内核态缓存别名。存活 MDL、其他所有权或映射类型，以及来宾对物理 PFN 身份的读取仍保留恢复依赖；建模的复制、移动和比较服务读取也计入。
 
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'

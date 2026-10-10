@@ -1,5 +1,6 @@
 LIBRARY ntoskrnl.exe
 EXPORTS
+  RtlCopyMemory
   ZwOpenKey
   ZwCreateKey
   ZwQueryValueKey

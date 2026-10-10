@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 執行期觀察 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 執行期觀察 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v97`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 輸入由 `IMAGE_FILE_DLL` 識別。建模的來賓 EXE 呼叫 `LoadLibraryA`、`FreeLibrary`，沿用一般相依、TLS 與 `DllMain` 生命週期。DLL 預設入口是其程序附加呼叫；不替任意匯出猜測參數。重建保留匯出名稱、序號、別名、資料及轉送器；指向自身匯出的指標保持為內部指標，不產生自身匯入。輔助常式傳回的位址也遵循此規則：內部結果會撤銷該位置先前的匯入修復證據。
 
@@ -25,6 +25,10 @@ PE32+ DLL 輸入由 `IMAGE_FILE_DLL` 識別。建模的來賓 EXE 呼叫 `LoadLi
 驅動程式 UNPACK 關閉逐筆寫入報告，保留記憶體驗證和還原觀察器。事件預算計算 API 呼叫，指令和時間限制仍然生效。
 
 恢復會檢查入口參數、返回／影子堆疊框架、非揮發性暫存器、方向旗標、浮點控制與核心物件所有權。殘留記憶體池、借用核心指標、已修改的載入器物件或未計入的核心效果會回傳 `unsupported_state`；明確的 `snapshot_only` 保留診斷。核心狀態尚無 `restore_runtime` 實作。匯入重建使用核心匯出身分，驗證原始匯出表並重算 PE 檢查碼。固定基底產物不代表已通過 Windows 核心載入、簽章驗證或未執行路徑的驗收。
+
+使用 `backend: "unicorn"` 和 `execution_contract: "driver-strict"` 時，x64 驅動程式恢復支援停止狀態的指令解碼，以及跨實體別名的已提交 RAM 寫入監視。此契約使用 Unicorn 的指令語義；`checked-x64-v1` 提供執行前的指令准入檢查。
+
+載入器擁有的映像頁上，暫時 MDL 的全部別名解除、全部鎖釋放且全部描述元釋放後，不再額外阻止還原。此契約允許未指定位址的核心模式快取別名。存活 MDL、其他所有權或對映類型，以及客體對實體 PFN 身分的讀取仍保留還原相依性；模型化的複製、移動和比較服務讀取也計入。
 
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'

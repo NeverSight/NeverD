@@ -164,7 +164,14 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
         } else {
           Other[0] = 0x62;
           Other[Length - 1] = 0x84;
+          // The mapped first/last pages include image bytes outside the
+          // descriptor's logical buffer; the descriptor remains unchanged.
+          Other[-1] = 0x93;
+          Other[Length] = 0xa5;
           if (Views[I][17] != 0x62 || Views[I][Length + 16] != 0x84)
+            Status = StatusInvalidParameter;
+          if (Views[I][16] != 0x93 || Views[I][Length + 17] != 0xa5 ||
+              Temporary->ByteCount != Length)
             Status = StatusInvalidParameter;
         }
         if (Other)

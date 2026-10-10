@@ -153,7 +153,7 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
 }
 
 TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
-  for (unsigned Mode : {1, 2, 3, 10}) {
+  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14}) {
     SCOPED_TRACE(Mode);
     const auto Input = packed(Mode);
     auto Result = unpackFile(Input, Options);
@@ -173,6 +173,38 @@ TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
     EXPECT_EQ(Bytes->Outcome, UnpackOutcome::Snapshot) << Bytes->Diagnostic;
     EXPECT_FALSE(Bytes->Image.empty());
     EXPECT_FALSE(Bytes->Diagnostic.empty());
+    if (GetParam().Kind == ExecutionBackendKind::Unicorn && Mode >= 12) {
+      auto Strict = Options;
+      Strict.Process.Contract = ExecutionContract::Legacy;
+      auto Legacy = unpackFile(Input, Strict);
+      ASSERT_TRUE(bool(Legacy)) << llvm::toString(Legacy.takeError());
+      EXPECT_EQ(Legacy->Outcome, UnpackOutcome::UnsupportedState)
+          << Legacy->Diagnostic;
+      EXPECT_TRUE(Legacy->RuntimeState.HasAdditionalDependencies);
+    }
+  }
+}
+
+TEST_P(UnpackDriver, RecoversAfterReleasingTransientImageMDLs) {
+  const auto Input = packed(11);
+  checkLifecycle(Input);
+  ASSERT_FALSE(HasFatalFailure());
+  auto Result = unpackFile(Input, Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked) << Result->Diagnostic;
+  EXPECT_EQ(Result->EntryRVA, Original.Entry);
+  EXPECT_FALSE(Result->RuntimeState.HasAdditionalDependencies);
+  const auto Output = Scratch / "released-mdl.sys";
+  test::writeFile(Output, Result->Image);
+  checkLifecycle(Output);
+  if (GetParam().Kind == ExecutionBackendKind::Unicorn) {
+    auto Strict = Options;
+    Strict.Process.Contract = ExecutionContract::Legacy;
+    auto Legacy = unpackFile(Input, Strict);
+    ASSERT_TRUE(bool(Legacy)) << llvm::toString(Legacy.takeError());
+    ASSERT_EQ(Legacy->Outcome, UnpackOutcome::Unpacked) << Legacy->Diagnostic;
+    EXPECT_EQ(Legacy->EntryRVA, Result->EntryRVA);
+    EXPECT_EQ(Legacy->Image, Result->Image);
   }
 }
 
@@ -337,6 +369,12 @@ TEST_P(UnpackDriver, SchedulingSlicesPreserveInvocationAndTransferIdentity) {
       << WithoutWriteLog->Diagnostic;
   EXPECT_EQ(WithoutWriteLog->EntryRVA, Unscheduled->EntryRVA);
   EXPECT_EQ(WithoutWriteLog->Image, Unscheduled->Image);
+  FewEvents.Process.Contract = ExecutionContract::Legacy;
+  auto Legacy = unpackFile(Input, FewEvents);
+  ASSERT_TRUE(bool(Legacy)) << llvm::toString(Legacy.takeError());
+  ASSERT_EQ(Legacy->Outcome, UnpackOutcome::Unpacked) << Legacy->Diagnostic;
+  EXPECT_EQ(Legacy->EntryRVA, Unscheduled->EntryRVA);
+  EXPECT_EQ(Legacy->Image, Unscheduled->Image);
 }
 
 TEST_P(UnpackDriver, ObserverFailuresAreAPIErrors) {
