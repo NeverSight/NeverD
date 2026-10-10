@@ -1633,6 +1633,7 @@ add_neverd_unittest(NeverDNativePointerRelocationBoundaryTests
 
   LINK_COMPONENTS
   Support
+  BackendLLVM
 )
 
 target_compile_definitions(NeverDNativePointerRelocationBoundaryTests PRIVATE

@@ -829,7 +829,7 @@ std::string relocCalleeName(const BinaryImage &Img, va_t InsnAddr) {
 static MedVar argRegSourceValue(const MedOp &Op) {
   if (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1)
     return Op.Inputs[0];
-  if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 2 &&
+  if (Op.Opcode == NdOp::SUBBYTES && Op.OriginSeq < 0 && Op.NumInputs >= 2 &&
       Op.Inputs[1].isConst() && Op.Inputs[1].ConstVal == 0 &&
       Op.Inputs[0].Kind == MedVar::Reg &&
       Op.Inputs[0].RegOff == Op.Output.RegOff &&
@@ -838,15 +838,11 @@ static MedVar argRegSourceValue(const MedOp &Op) {
   return Op.Output;
 }
 
-// argRegSourceValue with block context: resolves a low-half sub-register sync
-// whose source is a *temporary* (`SUBBYTES Wn = subpiece(t, 0)`, not the
-// `subpiece(Xn, 0)` of the register itself that argRegSourceValue already
-// widens) to the full-width value of a paired full-register write of the same
-// source (`COPY Xn = t`) appearing just before it in the block.  The backward
-// register scan meets the 32-bit sync before the 64-bit write, so without this
-// a pointer written whole to an argument register and then synced to its 32-bit
-// view -- a FILE* loaded into x1 right before an external `fputs` -- would be
-// recovered as the truncated low 32 bits, yielding a wild pointer at run time.
+// Resolve synthetic low-register observations back to the whole argument
+// written by the same machine instruction. Multiple sibling aliases may
+// intervene, but a real partial write, another instruction, or a call ends
+// the proof. Source identity includes constant provenance and owner as well
+// as the exact register/temporary SSA occurrence.
 MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
                                 const TargetRegInfo &TRI,
                                 const IntegerArgumentLayout &Layout) {
@@ -857,25 +853,43 @@ MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
   // already resolved by argRegSourceValue.
   if (Op.Opcode != NdOp::SUBBYTES || Op.NumInputs < 2 ||
       !Op.Inputs[1].isConst() || Op.Inputs[1].ConstVal != 0 ||
-      Op.Inputs[0].isConst() || Op.Output.Kind != MedVar::Reg ||
+      Op.Output.Kind != MedVar::Reg ||
       (Op.Inputs[0].Kind == MedVar::Reg &&
        Op.Inputs[0].RegOff == Op.Output.RegOff))
     return Base;
   const MedVar &Src = Op.Inputs[0];
+  auto sameSource = [&](const MedVar &Candidate) {
+    return sameAddressValue(Candidate, Src) &&
+           (!Src.isConst() || (Candidate.ConstVal == Src.ConstVal &&
+                               Candidate.Provenance == Src.Provenance &&
+                               Candidate.AddressOwnerVA == Src.AddressOwnerVA));
+  };
   const int ArgIdx = Layout.registerIndex(Op.Output.RegOff);
+  if (Op.OriginSeq >= 0 || Src.Size <= Op.Output.Size || ArgIdx < 0)
+    return Base;
+  const uint64_t Register = Layout.Registers[ArgIdx];
   for (int K = J - 1; K >= 0; --K) {
     const MedOp &W = Blk.Ops[K];
-    if (W.Output.Kind != MedVar::Reg ||
-        Layout.registerIndex(W.Output.RegOff) != ArgIdx)
+    if (W.Addr != Op.Addr || isAbiRecoveryBarrier(W))
+      break;
+    if (W.Output.Kind != MedVar::Reg || W.Output.Size == 0)
       continue;
-    // The nearest earlier write to this same argument register: when it is a
-    // wider write of the same source value, it is the full-width definition the
-    // sub-register sync mirrors.
-    if (W.Output.Size > Op.Output.Size && W.NumInputs >= 1 &&
-        !W.Inputs[0].isConst() && W.Inputs[0].Kind == Src.Kind &&
-        W.Inputs[0].Id == Src.Id && W.Inputs[0].SSAVer == Src.SSAVer)
-      return argRegSourceValue(W);
-    break; // only the nearest earlier write to this register is the pair
+    const bool Overlaps = W.Output.RegOff < Register + TRI.FullRegWidth &&
+                          W.Output.RegOff + W.Output.Size > Register;
+    if (!Overlaps)
+      continue;
+    // Several synthetic aliases can follow the same full-register write.
+    // They are observations, not successive writes of narrower arguments.
+    if (W.Opcode == NdOp::SUBBYTES && W.OriginSeq < 0 && W.NumInputs == 2 &&
+        W.Output.RegOff == Register && W.Output.Size < Src.Size &&
+        W.Inputs[1].isConst() && W.Inputs[1].ConstVal == 0 &&
+        sameSource(W.Inputs[0]))
+      continue;
+    if (W.Opcode == NdOp::COPY && W.Output.RegOff == Register &&
+        W.Output.Size == Src.Size && W.NumInputs == 1 &&
+        sameSource(W.Inputs[0]))
+      return Src;
+    break;
   }
   return Base;
 }

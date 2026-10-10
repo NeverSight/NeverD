@@ -7,6 +7,7 @@
 #include "NeverDLiftFixture.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/PointerRelocation.h"
@@ -17,10 +18,13 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -67,6 +71,238 @@ protected:
     }
   }
 };
+
+TEST_F(NativePointerRelocationBoundary,
+       BoundedRuntimeOffsetsAndNullableCallbacksExecute) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "native execution requires Linux x86-64";
+#else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "native LLVM execution requires Clang";
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits64;
+  Segment Data;
+  Data.Name = ".rodata";
+  Data.VA = 0x4000;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(64);
+  Data.Size = Data.FileSz = Data.Data.size();
+  const uint64_t Target = 0x4020;
+  std::memcpy(Data.Data.data(), &Target, sizeof(Target));
+  for (unsigned I = 0; I != 32; ++I)
+    Data.Data[32 + I] = static_cast<uint8_t>(0x40 + I);
+  Image.Segments.push_back(Data);
+  Image.DataPtrRelocSlots.insert(0x4000);
+  Image.DataPtrRelocTargetOwners[0x4000] = 0x4000;
+  Image.RelocDataAddrs = {0x4000, 0x4020};
+  auto var = [](int Id, uint16_t Size = 8) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = Arch::X64;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+  auto num = [](uint64_t N, uint16_t Size = 8) {
+    return MedVar::makeConst(N, Size, ConstantAddressProvenance::Scalar);
+  };
+  auto make = [&](const char *Name, va_t Entry, unsigned Params,
+                  unsigned Blocks) {
+    MedFunc F;
+    F.Name = Name;
+    F.Entry = Entry;
+    F.ReturnType = NdType::makeInt(8);
+    for (unsigned I = 0; I != Params; ++I) {
+      MedVar P = var(I);
+      P.Kind = MedVar::Param;
+      P.RegOff = kNoParamReg;
+      F.Params.push_back(P);
+    }
+    F.Blocks.resize(Blocks);
+    for (unsigned I = 0; I != Blocks; ++I) {
+      F.Blocks[I].Id = I;
+      F.Blocks[I].StartAddr = Entry + I * 0x40;
+      F.Blocks[I].EndAddr = Entry + (I + 1) * 0x40;
+    }
+    return F;
+  };
+  auto append = [&](MedFunc &F, unsigned B, NdOp Code, MedVar Out,
+                    std::initializer_list<MedVar> Inputs) {
+    MedOp Op;
+    Op.Opcode = Code;
+    Op.Output = Out;
+    Op.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+    for (const MedVar &V : Inputs)
+      Op.addInput(V);
+    F.Blocks[B].Ops.push_back(Op);
+  };
+  auto branch = [&](MedFunc &F, MedVar Cond) {
+    F.Blocks[0].Succs = {1, 2};
+    F.Blocks[1].Preds = F.Blocks[2].Preds = {0};
+    append(F, 0, NdOp::COND_BR, {}, {num(F.Blocks[2].StartAddr), Cond});
+    append(F, 2, NdOp::RETURN, {}, {num(0)});
+  };
+  const MedVar Base =
+      MedVar::makeConst(0x4020, 8, ConstantAddressProvenance::DataAddress);
+  MedFunc Mask = make("masked_word", 0x100, 1, 1);
+  append(Mask, 0, NdOp::LOAD, var(10), {Mask.Params[0]});
+  append(Mask, 0, NdOp::INT_AND, var(11), {var(10), num(15)});
+  append(Mask, 0, NdOp::INT_ADD, var(12), {Base, var(11)});
+  append(Mask, 0, NdOp::LOAD, var(13, 1), {var(12)});
+  append(Mask, 0, NdOp::RETURN, {}, {var(13, 1)});
+
+  MedFunc Guard = make("guarded_word", 0x200, 1, 3);
+  append(Guard, 0, NdOp::LOAD, var(10), {Guard.Params[0]});
+  append(Guard, 0, NdOp::INT_SUB, var(11), {var(10), num(1)});
+  append(Guard, 0, NdOp::INT_LESS, var(12, 1), {num(5), var(11)});
+  branch(Guard, var(12, 1));
+  append(Guard, 1, NdOp::INT_MULT, var(13), {var(11), num(4)});
+  append(Guard, 1, NdOp::INT_ADD, var(14), {Base, var(13)});
+  append(Guard, 1, NdOp::LOAD, var(15, 1), {var(14)});
+  append(Guard, 1, NdOp::RETURN, {}, {var(15, 1)});
+
+  MedFunc Select = make("selected_pointer", 0x300, 2, 1);
+  append(Select, 0, NdOp::SELECT, var(10),
+         {Select.Params[1], Select.Params[0],
+          MedVar::makeConst(0x4020, 8, ConstantAddressProvenance::Address)});
+  append(Select, 0, NdOp::LOAD, var(11, 1), {var(10)});
+  append(Select, 0, NdOp::RETURN, {}, {var(11, 1)});
+
+  MedFunc Callback = make("nullable_callback", 0x500, 1, 3);
+  append(Callback, 0, NdOp::CALL, var(10), {num(0x800)});
+  MedCallInfo Factory;
+  Factory.BlockId = Factory.OpIdx = 0;
+  Factory.TargetAddr = 0x800;
+  Factory.TargetName = "get_runtime_callback";
+  Callback.CallInfos.push_back(Factory);
+  append(Callback, 0, NdOp::SELECT, var(11),
+         {Callback.Params[0], var(10), num(0)});
+  append(Callback, 0, NdOp::INT_EQUAL, var(12, 1), {var(11), num(0)});
+  branch(Callback, var(12, 1));
+  append(Callback, 1, NdOp::INDIR_CALL, var(13), {var(11)});
+  append(Callback, 1, NdOp::RETURN, {}, {var(13)});
+  // Execute a descending callable table with non-code sentinels on both
+  // sides. The accumulated digits distinguish order as well as call count.
+  Segment Code;
+  Code.Name = ".text";
+  Code.VA = 0x100;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Data.resize(0xf00);
+  Code.Size = Code.FileSz = Code.Data.size();
+  Image.Segments.push_back(Code);
+  Segment Table;
+  Table.Name = ".ctors";
+  Table.VA = 0x5000;
+  Table.Flags = SegmentFlags::Readable;
+  Table.Data.resize(5 * 8, 0xff);
+  Table.Size = Table.FileSz = Table.Data.size();
+  std::vector<MedFunc> Functions{Mask, Guard, Select, Callback};
+  for (unsigned I = 1; I <= 3; ++I) {
+    const uint64_t VA = 0xa00 + I * 0x40;
+    std::memcpy(Table.Data.data() + I * 8, &VA, sizeof(VA));
+    Image.CodePtrRelocSlots.insert(Table.VA + I * 8);
+    Image.CodeRefTargets.insert(VA);
+    MedFunc F = make(("digit_" + std::to_string(I)).c_str(), VA, 0, 1);
+    append(F, 0, NdOp::RETURN, {}, {num(I)});
+    Functions.push_back(std::move(F));
+  }
+  Image.Segments.push_back(Table);
+  Image.RelocDataAddrs.insert(Table.VA);
+  Section TableSection;
+  TableSection.Name = Table.Name;
+  TableSection.VA = Table.VA;
+  TableSection.Size = TableSection.FileSz = Table.Size;
+  TableSection.Flags = Table.Flags;
+  Image.Sections.push_back(TableSection);
+  MedFunc Countdown = make("countdown_callbacks", 0x900, 0, 3);
+  Countdown.Blocks[0].Succs = {1};
+  Countdown.Blocks[1].Preds = {0, 1};
+  Countdown.Blocks[1].Succs = {2, 1};
+  Countdown.Blocks[2].Preds = {1};
+  Countdown.Blocks[1].Phis.push_back({var(0), {{0, num(3)}, {1, var(1)}}});
+  Countdown.Blocks[1].Phis.push_back({var(2), {{0, num(0)}, {1, var(3)}}});
+  append(Countdown, 0, NdOp::BRANCH, {}, {num(0x940)});
+  append(Countdown, 1, NdOp::INT_MULT, var(4), {var(0), num(8)});
+  append(
+      Countdown, 1, NdOp::INT_ADD, var(5),
+      {MedVar::makeConst(Table.VA, 8, ConstantAddressProvenance::DataAddress),
+       var(4)});
+  append(Countdown, 1, NdOp::LOAD, var(6), {var(5)});
+  append(Countdown, 1, NdOp::INDIR_CALL, var(7), {var(6)});
+  append(Countdown, 1, NdOp::INT_MULT, var(8), {var(2), num(10)});
+  append(Countdown, 1, NdOp::INT_ADD, var(3), {var(8), var(7)});
+  append(Countdown, 1, NdOp::INT_SUB, var(1), {var(0), num(1)});
+  append(Countdown, 1, NdOp::INT_NOTEQUAL, var(9, 1), {var(0), num(1)});
+  append(Countdown, 1, NdOp::COND_BR, {}, {num(0x940), var(9, 1)});
+  append(Countdown, 2, NdOp::RETURN, {}, {var(3)});
+  Functions.push_back(std::move(Countdown));
+
+  MedFunc Fallback = make("runtime_or_lifted_callback", 0xc00, 1, 1);
+  append(Fallback, 0, NdOp::CALL, var(10), {num(0x800)});
+  Fallback.CallInfos.push_back(Factory);
+  append(Fallback, 0, NdOp::SELECT, var(11),
+         {Fallback.Params[0], var(10),
+          MedVar::makeConst(0xa40, 8, ConstantAddressProvenance::CodeAddress)});
+  append(Fallback, 0, NdOp::INDIR_CALL, var(12), {var(11)});
+  append(Fallback, 0, NdOp::RETURN, {}, {var(12)});
+  Functions.push_back(std::move(Fallback));
+  llvm::LLVMContext Context;
+  auto Module =
+      MedLLVMEmitter().emit(Functions, Context, "runtime-pointer-values",
+                            Arch::X64, {}, &Image, BinaryFormat::ELF);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  const fs::path IR = tmpFile("runtime-pointers.ll");
+  const fs::path Harness = tmpFile("runtime-pointers.c");
+  const fs::path Binary = tmpFile("runtime-pointers");
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(IR.string(), EC);
+  ASSERT_FALSE(EC);
+  Module->print(OS, nullptr);
+  OS.close();
+  std::ofstream C(Harness);
+  C << R"(
+#include <stdint.h>
+extern uint64_t masked_word(const uint64_t *);
+extern uint64_t guarded_word(const uint64_t *);
+extern uint64_t selected_pointer(const unsigned char *, uint64_t);
+extern uint64_t nullable_callback(uint64_t);
+extern uint64_t countdown_callbacks(void);
+extern uint64_t runtime_or_lifted_callback(uint64_t);
+static unsigned calls;
+static uint64_t callback(void) { ++calls; return 73; }
+uint64_t get_runtime_callback(void) { return (uintptr_t)&callback; }
+int main(void) {
+  unsigned char byte = 0xe7;
+  for (uint64_t i = 0; i != 1024; ++i) {
+    const uint64_t word = i < 16 ? i : UINT64_MAX - i;
+    if (masked_word(&word) != 0x40 + (word & 15)) return 1;
+    const uint64_t expected = word >= 1 && word <= 6 ? 0x40 + 4 * (word - 1) : 0;
+    if (guarded_word(&word) != expected) return 2;
+    if (selected_pointer(&byte, i & 1) != ((i & 1) ? byte : 0x40)) return 3;
+    if (nullable_callback(i & 1) != ((i & 1) ? 73 : 0)) return 4;
+    if (calls != (i + 1) / 2) return 5;
+  }
+  if (countdown_callbacks() != 321) return 6;
+  if (runtime_or_lifted_callback(0) != 1 || calls != 512) return 7;
+  if (runtime_or_lifted_callback(1) != 73 || calls != 513) return 8;
+  return 0;
+}
+)";
+  C.close();
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    auto Compiled =
+        exec(NEVERD_TEST_CLANG, {Optimization, IR.string(), Harness.string(),
+                                 "-o", Binary.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    auto Ran = exec(Binary.string(), {});
+    EXPECT_EQ(Ran.exitCode, 0) << Ran.err << Optimization;
+  }
+#endif
+}
 
 TEST_F(NativePointerRelocationBoundary,
        SharedClassifierSeparatesDataSlotsFromCodeImmediates) {

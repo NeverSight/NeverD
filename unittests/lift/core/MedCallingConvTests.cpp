@@ -85,6 +85,108 @@ void addLiveIn(MedBlock &Entry, const MedVar &LiveIn) {
   Entry.Ops.push_back(unary(NdOp::COPY, LiveIn, LiveIn));
 }
 
+TEST(MedCallABI, SyntheticSubregisterViewsPreserveTheReachingWholeArgument) {
+  enum class Case {
+    Siblings,
+    TempSource,
+    ConstantSource,
+    ChangedConstant,
+    ActualSlice,
+    NewInstruction,
+    DifferentSource,
+    PartialWrite,
+    Barrier
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (Case C :
+           {Case::Siblings, Case::TempSource, Case::ConstantSource,
+            Case::ChangedConstant, Case::ActualSlice, Case::NewInstruction,
+            Case::DifferentSource, Case::PartialWrite, Case::Barrier}) {
+        SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                     std::to_string(static_cast<int>(Format)) + "/" +
+                     std::to_string(static_cast<int>(C)));
+        const auto &TRI = getTargetRegInfo(A);
+        const auto Layout = TRI.integerArgumentLayout(Format);
+        ASSERT_FALSE(Layout.Registers.empty());
+        const uint64_t ArgReg = Layout.Registers.front();
+        const uint16_t Width = TRI.FullRegWidth;
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Format = Format;
+        Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Name = "alias_argument";
+        F.ReturnType = NdType::makeInt(Width);
+        MedVar Source = reg(200, 1, Width, TRI.CalleeSaveRegs.back(), A);
+        if (C == Case::TempSource)
+          Source = temp(200, 1, Width, A);
+        if (C == Case::ConstantSource || C == Case::ChangedConstant)
+          Source = MedVar::makeConst(0x4020, Width,
+                                     ConstantAddressProvenance::DataAddress);
+        MedVar Full = reg(201, 1, Width, ArgReg, A);
+        MedBlock B;
+        B.Id = 0;
+        B.StartAddr = F.Entry;
+        B.EndAddr = F.Entry + 16;
+        B.Ops.push_back(unary(NdOp::COPY, Full, Source));
+        B.Ops.back().Addr = F.Entry;
+        B.Ops.back().OriginSeq = 0;
+        if (C == Case::Barrier) {
+          MedOp O;
+          O.Opcode = NdOp::CALL;
+          O.Addr = F.Entry;
+          O.addInput(MedVar::makeConst(0x3000, Width));
+          B.Ops.push_back(O);
+        }
+        if (C == Case::PartialWrite) {
+          MedVar Byte = reg(210, 1, 1, ArgReg + 1, A);
+          B.Ops.push_back(unary(NdOp::COPY, Byte, MedVar::makeConst(7, 1)));
+          B.Ops.back().Addr = F.Entry;
+          B.Ops.back().OriginSeq = 1;
+        }
+        for (uint16_t Size = 1; Size < Width; Size *= 2) {
+          MedVar Alias = reg(220 + Size, 1, Size, ArgReg, A);
+          MedVar Input = Source;
+          if (C == Case::DifferentSource && Size == 1)
+            ++Input.SSAVer;
+          if (C == Case::ChangedConstant && Size == 1)
+            ++Input.ConstVal;
+          B.Ops.push_back(
+              binary(NdOp::SUBBYTES, Alias, Input, MedVar::makeConst(0, 4)));
+          B.Ops.back().Addr = F.Entry + (C == Case::NewInstruction ? 4 : 0);
+          B.Ops.back().OriginSeq = C == Case::ActualSlice ? 2 : -1;
+        }
+        MedOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.Output = temp(250, 1, Width, A);
+        Call.Addr = F.Entry + 8;
+        Call.addInput(MedVar::makeConst(0x2000, Width));
+        B.Ops.push_back(Call);
+        F.Blocks.push_back(B);
+        std::map<va_t, int> RegArity{{0x2000, 1}}, TotalArity{{0x2000, 1}};
+        recoverCallAbi(F, A, {{0x2000, "callee"}}, &Image, &RegArity,
+                       &TotalArity);
+        ASSERT_FALSE(F.CallInfos.empty());
+        const auto &CI = F.CallInfos.back();
+        ASSERT_EQ(CI.TargetAddr, 0x2000u);
+        ASSERT_EQ(CI.Args.size(), 1u);
+        EXPECT_EQ(CI.Args.front().Size, C == Case::Siblings ||
+                                                C == Case::TempSource ||
+                                                C == Case::ConstantSource
+                                            ? Width
+                                            : Width / 2);
+        if (C == Case::Siblings || C == Case::TempSource ||
+            C == Case::ConstantSource) {
+          EXPECT_EQ(CI.Args.front().Kind, Source.Kind);
+          EXPECT_EQ(CI.Args.front().Id, Source.Id);
+          EXPECT_EQ(CI.Args.front().SSAVer, Source.SSAVer);
+        }
+      }
+}
+
 TEST(MedCallingConvValueFlow, FPInputsFollowOnlyAuthenticatedCallPrefixes) {
   constexpr auto A = Arch::AArch64;
   const auto &TRI = getTargetRegInfo(A);
