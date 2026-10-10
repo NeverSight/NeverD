@@ -12,12 +12,14 @@
 #ifndef NEVERD_EMULATION_WINDOWS_X64EXECUTIONPOLICY_H
 #define NEVERD_EMULATION_WINDOWS_X64EXECUTIONPOLICY_H
 
+#include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/Registers.h"
 #include "neverd/emulation/X64BranchModel.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
+#include <array>
 #include <capstone/capstone.h>
 #include <cstdint>
 #include <optional>
@@ -53,6 +55,17 @@ public:
   llvm::Error validate(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC);
 
 private:
+  llvm::Expected<std::optional<Action>>
+  inspectUncached(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC);
+  struct Inspection {
+    uint64_t PC = 0;
+    std::array<uint8_t, profile::MaxInstructionSize> Bytes{};
+    uint8_t Size = 0;
+    std::optional<Action> Result;
+  };
+  // Only pure decode decisions are memoized. The caller still validates and
+  // fetches the complete live instruction before every inspection.
+  std::array<Inspection, 1024> Inspections{};
   csh Handle = 0;
 };
 
