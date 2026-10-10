@@ -187,6 +187,86 @@ TEST(MedCallABI, SyntheticSubregisterViewsPreserveTheReachingWholeArgument) {
       }
 }
 
+TEST(MedCallingConvValueFlow, VectorParameterBanksRespectTheImageABI) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      const auto &TRI = getTargetRegInfo(A);
+      MedFunc F;
+      F.Entry = 0x1000;
+      F.Blocks.resize(1);
+      auto &B = F.Blocks.front();
+      B.Id = 0;
+      B.StartAddr = F.Entry;
+      std::map<std::pair<uint64_t, uint16_t>, int> Vars;
+      for (unsigned I = 0; I != 10; ++I) {
+        const auto V =
+            reg(100 + I, 0, 16, TRI.VecRegBase + I * TRI.VecRegStride, A);
+        addLiveIn(B, V);
+        Vars[{V.RegOff, V.Size}] = V.Id;
+      }
+      // Reading every incoming vector exposes the bank boundary. Win64's
+      // prologue saves of XMM6/XMM7 are not additional parameter slots;
+      // those same registers remain genuine arguments under SysV.
+      for (unsigned I = 0; I != 10; ++I) {
+        const auto V =
+            reg(100 + I, 0, 16, TRI.VecRegBase + I * TRI.VecRegStride, A);
+        B.Ops.push_back(
+            binary(NdOp::STORE, {},
+                   MedVar::makeConst(0x4000 + 16 * I, TRI.PointerSize), V));
+      }
+      detectXMMParams(F, B, TRI, Vars, A, Format);
+      const unsigned Expected =
+          A == Arch::X64 && Format == BinaryFormat::COFF ? 4 : 8;
+      ASSERT_EQ(F.Params.size(), Expected);
+      for (unsigned I = 0; I != Expected; ++I)
+        EXPECT_EQ(F.Params[I].RegOff, TRI.VecRegBase + I * TRI.VecRegStride);
+    }
+}
+
+TEST(MedABIPass, IndirectFPSetupUsesOnlyTheTargetArgumentBank) {
+  for (Arch A : {Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      const auto &TRI = getTargetRegInfo(A);
+      BinaryImage Image;
+      Image.Arch = A;
+      Image.Format = Format;
+      Image.Bits = TRI.PointerSize == 8 ? Bitness::Bits64 : Bitness::Bits32;
+      MedFunc F;
+      F.Entry = 0x1000;
+      F.CC = *callingConventionOf(A, Format);
+      F.Blocks.resize(1);
+      auto &B = F.Blocks.front();
+      B.Id = 0;
+      B.StartAddr = F.Entry;
+      for (unsigned I = 0; I != 10; ++I) {
+        const auto V =
+            reg(100 + I, 1, 8, TRI.VecRegBase + I * TRI.VecRegStride, A);
+        auto Op = unary(NdOp::COPY, V, MedVar::makeConst(I + 1, 8));
+        Op.Addr = F.Entry + 4 * I;
+        B.Ops.push_back(Op);
+      }
+      MedOp Call;
+      Call.Opcode = NdOp::INDIR_CALL;
+      Call.Addr = F.Entry + 40;
+      Call.addInput(temp(200, 1, TRI.PointerSize, A));
+      B.Ops.push_back(Call);
+      recoverCallAbi(F, A, {}, &Image);
+      ASSERT_EQ(F.CallInfos.size(), 1u);
+      const auto &Args = F.CallInfos.front().Args;
+      const unsigned Expected =
+          A == Arch::X64 && Format == BinaryFormat::COFF ? 4 : 8;
+      ASSERT_EQ(Args.size(), Expected);
+      for (unsigned I = 0; I != Expected; ++I)
+        EXPECT_EQ(Args[I].RegOff, TRI.VecRegBase + I * TRI.VecRegStride);
+    }
+}
+
 TEST(MedCallingConvValueFlow, FPInputsFollowOnlyAuthenticatedCallPrefixes) {
   constexpr auto A = Arch::AArch64;
   const auto &TRI = getTargetRegInfo(A);

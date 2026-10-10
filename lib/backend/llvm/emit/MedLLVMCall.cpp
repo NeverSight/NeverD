@@ -927,7 +927,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // overflow ones share the FP register file with the in-register ones, so
     // the leading FP arguments (assembled FP-register-first, then stack) fill
     // the registers and only the surplus spills.
-    const int NumFPRegs = static_cast<int>(ITRI.FPParamRegs.size());
+    const int NumFPRegs =
+        static_cast<int>(ITRI.floatingParamRegs(TargetFormat).size());
     int FPSeen = 0;
     // A variadic indirect call (Darwin AArch64, marked by VarArgFixedCount):
     // every variadic argument -- FP included -- is passed on the stack, none

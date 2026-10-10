@@ -632,7 +632,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     // takes its register ABI type so LLVM's calling-convention lowering assigns
     // it to the FP register file; declaring it an integer would route it
     // through the integer registers instead.
-    if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff)) {
+    if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff, TargetFormat)) {
       ParamTypes.push_back(fpAbiType(P.Size));
       continue;
     }

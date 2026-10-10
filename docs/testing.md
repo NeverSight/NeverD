@@ -247,6 +247,16 @@ Native execution requires an x64 host and Clang; the in-process SSE oracle
 additionally requires GCC/Clang. Skips on other hosts are explicit.
 This suite does not establish packed FP, VEX or x87 state coverage.
 
+`MedCallingConvValueFlow.VectorParameterBanksRespectTheImageABI` checks entry
+vector arguments for x86, x64, ARM and AArch64 across ELF, COFF and Mach-O.
+`MedABIPass.IndirectFPSetupUsesOnlyTheTargetArgumentBank` checks the outgoing
+bank on x64, ARM and AArch64. Win64 admits four floating slots while the other
+tested banks retain eight. `Win64CallContract.SavedXmmRegistersDoNotShiftTheFifthParameter`
+lifts a raw five-integer kernel that saves XMM6/XMM7 with optimization enabled
+and disabled, then executes its LLVM-derived C at O0/O2 with UB traps for
+1,024 independent argument tuples. This checks host C execution, not native
+execution of every source architecture.
+
 `NeverDX86RdSspAccuracyTests` checks every x86/x64 encoded GPR destination,
 full-width disabled preservation, enabled concrete SSP reads, flags, unknown
 state, call/mutator invalidation, malformed descriptors in both strict modes,

@@ -12,10 +12,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -214,6 +216,63 @@ TEST(Win64CallContract, LLVMImportCallKeepsUnwrittenLeadingArgument) {
           EXPECT_EQ(Second->getZExtValue(), 0x12345u);
         }
     EXPECT_EQ(Calls, 1u);
+  }
+}
+
+TEST(Win64CallContract, SavedXmmRegistersDoNotShiftTheFifthParameter) {
+  // Sum five integer arguments while saving/restoring nonvolatile XMM6/7.
+  // The save slots are frame state, never extra parameters between R9 and
+  // the incoming stack argument.
+  const std::vector<uint8_t> Code{
+      0x48, 0x83, 0xEC, 0x48,       // sub rsp,72
+      0x0F, 0x29, 0x74, 0x24, 0x20, // movaps [rsp+32],xmm6
+      0x0F, 0x29, 0x7C, 0x24, 0x30, // movaps [rsp+48],xmm7
+      0x66, 0x0F, 0xEF, 0xF6,       // pxor xmm6,xmm6
+      0x66, 0x0F, 0xEF, 0xFF,       // pxor xmm7,xmm7
+      0x48, 0x8B, 0x44, 0x24, 0x70, // mov rax,[rsp+112]
+      0x48, 0x01, 0xC8,             // add rax,rcx
+      0x48, 0x01, 0xD0,             // add rax,rdx
+      0x4C, 0x01, 0xC0,             // add rax,r8
+      0x4C, 0x01, 0xC8,             // add rax,r9
+      0x0F, 0x28, 0x74, 0x24, 0x20, // movaps xmm6,[rsp+32]
+      0x0F, 0x28, 0x7C, 0x24, 0x30, // movaps xmm7,[rsp+48]
+      0x48, 0x83, 0xC4, 0x48, 0xC3};
+  const auto Image = makeImage(Code, {{Text, "sum_five"}}, {});
+  for (bool NoOpt : {true, false}) {
+    SCOPED_TRACE(NoOpt);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = true;
+    Options.SourceProjection = true;
+    Options.NoOpt = NoOpt;
+    Options.OnlyFunctionEntries = {Text};
+    const auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_NE(Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    auto *Function = Result.LlvmModule->getFunction("sum_five");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_EQ(Function->arg_size(), 5u);
+    for (const auto &Argument : Function->args())
+      EXPECT_TRUE(Argument.getType()->isIntegerTy(64));
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, {}));
+    const std::string Driver = R"(
+int main(void) {
+  for (uint64_t i = 0; i != 1024; ++i) {
+    uint64_t a = i * UINT64_C(0x9e3779b97f4a7c15);
+    uint64_t b = ~a, c = i << 32, d = i * i, e = (i + 1) << 40;
+    if (sum_five(a, b, c, d, e) != a + b + c + d + e) return 1;
+  }
+  return 0;
+}
+)";
+    for (llvm::StringRef Optimization : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Source + Driver,
+          {Optimization, "-fsanitize=undefined", "-fsanitize-trap=all"});
   }
 }
 

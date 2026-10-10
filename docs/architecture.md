@@ -1065,6 +1065,16 @@ For Win64 calls LowToMed publishes those argument registers as CALL inputs.
 SSA then sees a caller's pass-through argument, and HighC passes exactly the
 arguments the callee reads. Stack arguments follow the 32-byte home area.
 
+`TargetRegInfo::floatingParamRegs(format)` owns the default ABI's floating
+argument bank. Entry recovery, outgoing call recovery, module propagation and
+LLVM emission use the same query. Win64 has four positional floating slots
+(XMM0-XMM3); saving XMM6/XMM7 must not create parameters or move the fifth
+integer argument away from its stack slot. SysV x64 retains XMM0-XMM7, and the
+ARM/AArch64 banks retain their architecture-specific lanes. Physical vector
+classification for intermediate values is separate from parameter membership.
+This follows Microsoft's [x64 calling convention](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention)
+and does not infer a custom calling convention from nonvolatile-register saves.
+
 Additional callee CFGs are admitted in deterministic breadth-first order.
 Parallel batches retain at most 32 bodies and use at most four independent
 decoders when symbol extents predict enough work; serial runs retain eight

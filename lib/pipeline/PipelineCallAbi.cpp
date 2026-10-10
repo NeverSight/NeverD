@@ -143,7 +143,8 @@ int callRegisterArity(const MedFunc &Func, int MaxRegisterIndex) {
 /// CalleeFPArity for intra-module callees (e.g. `mkD2`) before recoverCallAbi
 /// runs, so a tail-call struct-return forwarder (`fwdD2`) can recover its
 /// forwarded d0/d1 live-ins (KnownFPCallee gate in recoverCallAbi).
-int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
+int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI,
+                           BinaryFormat Format) {
   if (MF.Blocks.empty())
     return 0;
   int Count = 0;
@@ -151,7 +152,7 @@ int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
     if (O.Opcode == NdOp::COPY && O.NumInputs >= 1 &&
         O.Inputs[0].Kind == MedVar::Reg &&
         O.Inputs[0].RegOff == O.Output.RegOff &&
-        TRI.isFPArgReg(O.Output.RegOff))
+        TRI.isFPArgReg(O.Output.RegOff, Format))
       ++Count;
     else if (O.Opcode == NdOp::COPY && TRI.isLinkRegister(O.Output.RegOff))
       continue;
@@ -228,7 +229,8 @@ void propagateForwardedCallArities(
     for (const auto &P : Probe.Params) {
       if (IRR != 0 && P.RegOff == IRR)
         continue;
-      if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff)) {
+      if (P.RegOff != kNoParamReg &&
+          TRI.isFPArgReg(P.RegOff, Img.abiFormat())) {
         FPRegs.push_back(P.RegOff);
       } else if (P.RegOff != kNoParamReg) {
         const int ArgIdx = ProbeLayout.registerIndex(P.RegOff);
@@ -314,6 +316,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     SignatureBodies.push_back(&F);
   {
     const auto &TRI = getTargetRegInfo(Img.Arch);
+    const auto FPParamRegs = TRI.floatingParamRegs(Img.abiFormat());
     // Internal x86/x86-64 scalar float/double, AArch64, and ARM hard-float
     // calls return through XMM0/V0/D0.  External i386 cdecl calls are excluded
     // by recoverCallAbi's relocation/import gates; x86 long double uses x87.
@@ -342,7 +345,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
           // Hidden indirect-result (sret) pointer (AArch64 x8): not an ordinary
           // integer/FP/stack argument; recorded separately.
           HasSret = true;
-        } else if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff)) {
+        } else if (P.RegOff != kNoParamReg &&
+                   TRI.isFPArgReg(P.RegOff, Img.abiFormat())) {
           // Floating-point/vector argument register: counted separately.
           FPRegs.push_back(P.RegOff);
         } else if (P.RegOff != kNoParamReg) {
@@ -377,10 +381,9 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
       // Without this, tail-call struct-return forwarders (`fwdD2`) miss the
       // KnownFPCallee gate and pass 0.0 for forwarded d0/d1.
       if (FpArity == 0) {
-        FpArity = countEntryLiveInFPArgs(MF, TRI);
+        FpArity = countEntryLiveInFPArgs(MF, TRI, Img.abiFormat());
         if (FpArity > 0)
-          FPRegs.assign(TRI.FPParamRegs.begin(),
-                        TRI.FPParamRegs.begin() + FpArity);
+          FPRegs.assign(FPParamRegs.begin(), FPParamRegs.begin() + FpArity);
       }
       CalleeFPArity[MF.Entry] = FpArity;
       CalleeFPRegs[MF.Entry] = std::move(FPRegs);
@@ -408,10 +411,11 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   // FP arguments is left untouched.
   {
     const auto &TRI = getTargetRegInfo(Img.Arch);
+    const auto FPParamRegs = TRI.floatingParamRegs(Img.abiFormat());
     std::map<va_t, const MedFunc *> ByEntry;
     for (const MedFunc *MF : SignatureBodies)
       ByEntry[MF->Entry] = MF;
-    if (!TRI.FPParamRegs.empty())
+    if (!FPParamRegs.empty())
       for (auto &MF : Result.MedFuncs) {
         // Only a pure forwarder, which has no parameters of its own recovered
         // yet (its incoming arguments flow straight into the tail call).
@@ -462,11 +466,11 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
           IntArgs = CalleeRegArity[Target]; // g's integer-argument count
           FpArgs = CalleeFPArity[Target];   // g's FP-argument count
           if (FpArgs == 0) {
-            FpArgs = countEntryLiveInFPArgs(*G, TRI);
+            FpArgs = countEntryLiveInFPArgs(*G, TRI, Img.abiFormat());
             if (FpArgs > 0) {
               CalleeFPArity[Target] = FpArgs;
               CalleeFPRegs[Target] = std::vector<uint64_t>(
-                  TRI.FPParamRegs.begin(), TRI.FPParamRegs.begin() + FpArgs);
+                  FPParamRegs.begin(), FPParamRegs.begin() + FpArgs);
             }
           }
           if (G->ReturnType && G->ReturnType->Kind == NdTypeKind::Float &&
@@ -475,8 +479,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         }
         if (IntArgs <= 0 && FpArgs <= 0 && FpRetSize == 0)
           continue; // nothing to inherit
-        int NFp =
-            std::min<int>(FpArgs, static_cast<int>(TRI.FPParamRegs.size()));
+        int NFp = std::min<int>(FpArgs, static_cast<int>(FPParamRegs.size()));
         const auto IntegerRegs =
             TRI.integerArgumentLayout(MF.CC == CallingConv::Win64).Registers;
         int NInt = std::min<int>(IntArgs, static_cast<int>(IntegerRegs.size()));
@@ -500,7 +503,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         };
         bool AllLiveIn = true;
         for (int K = 0; K < NFp && AllLiveIn; ++K)
-          if (regWrittenInF(TRI.FPParamRegs[K]))
+          if (regWrittenInF(FPParamRegs[K]))
             AllLiveIn = false;
         for (int K = 0; K < NInt && AllLiveIn; ++K)
           if (regWrittenInF(IntegerRegs[K]))
@@ -510,7 +513,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         if (NFp > 0) {
           CalleeFPArity[MF.Entry] = NFp;
           CalleeFPRegs[MF.Entry] = std::vector<uint64_t>(
-              TRI.FPParamRegs.begin(), TRI.FPParamRegs.begin() + NFp);
+              FPParamRegs.begin(), FPParamRegs.begin() + NFp);
         }
         if (NInt > 0) {
           CalleeRegArity[MF.Entry] = NInt;

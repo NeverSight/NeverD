@@ -439,6 +439,7 @@ void recoverCallAbi(
   const auto &TRI = getTargetRegInfo(TheArch);
   const AbiSpillContext SpillContext{Func, TRI, FrameLocalLeafCallees};
   const BinaryFormat Fmt = Img ? Img->abiFormat() : BinaryFormat::Unknown;
+  const auto FPParamRegs = TRI.floatingParamRegs(Fmt);
   const CallArgumentConvention *Convention =
       callArgumentConvention(TheArch, Fmt);
   const AbiCallPolicy *Policy = abiCallPolicy(TheArch, Fmt);
@@ -1782,7 +1783,7 @@ void recoverCallAbi(
       // the real variadic arguments so the callee reads the wrong slots
       // (printf("p[%d]=%.3f", i, v) then prints "p[0]=0.000").
       std::vector<MedVar> FoundFP;
-      if (RegArgsApply && !TRI.FPParamRegs.empty() && DarwinVarArgBase < 0 &&
+      if (RegArgsApply && !FPParamRegs.empty() && DarwinVarArgBase < 0 &&
           !CoreRegisterFloats) {
         // The FP-argument registers to probe, in ABI order.  Default to the
         // architecture's FP parameter registers (XMM0-7 / V0-7 / ARM D0-7); for
@@ -1790,8 +1791,7 @@ void recoverCallAbi(
         // so an ARM `float`-argument callee is recovered at s0,s1,.. (not
         // d0,d1) — the high-half S registers (s1=0x104) alias no D-register
         // slot.
-        std::vector<uint64_t> FPRegs(TRI.FPParamRegs.begin(),
-                                     TRI.FPParamRegs.end());
+        std::vector<uint64_t> FPRegs(FPParamRegs.begin(), FPParamRegs.end());
         if (!CI.IsIndirect && !IsRelocExtern && CalleeFPRegs) {
           auto RIt = CalleeFPRegs->find(CI.TargetAddr);
           if (RIt != CalleeFPRegs->end() && !RIt->second.empty())
@@ -1927,9 +1927,9 @@ void recoverCallAbi(
       // int+FP overflow) leaves the run empty, falling back to the 8-byte-slot
       // model below.  The covered slots are cleared so that model does not also
       // emit them.
-      if (CI.IsIndirect && !FPStackByOff.empty() && !TRI.FPParamRegs.empty() &&
+      if (CI.IsIndirect && !FPStackByOff.empty() && !FPParamRegs.empty() &&
           static_cast<int>(FoundFP.size()) ==
-              static_cast<int>(TRI.FPParamRegs.size())) {
+              static_cast<int>(FPParamRegs.size())) {
         const int NumRegArgSlots = static_cast<int>(IntParamRegs.size());
         const int SlotSize = TRI.PointerSize;
         int64_t Next = 0;
@@ -2388,7 +2388,7 @@ void recoverCallAbi(
     std::set<uint64_t> ExistingFP;
     for (const auto &P : Func.Params)
       if (P.RegOff != kNoParamReg)
-        for (uint64_t FR : TRI.FPParamRegs)
+        for (uint64_t FR : FPParamRegs)
           if (P.RegOff == FR) {
             ExistingFP.insert(P.RegOff);
             break;
