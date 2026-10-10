@@ -81,6 +81,122 @@ TEST(WebSource, ExplicitSourceTypeControlsModuleAndReturnSyntax) {
   EXPECT_EQ(inspect("with (obj) {}").ParseStatus, "parsed");
 }
 
+TEST(WebSource, AsyncArrowRestParametersKeepParserOwnedLocations) {
+  const std::string Text =
+      "const f=async (x, ... /* rest */ args)=>async(...more)=>args;";
+  const auto Result = inspect(Text, "module");
+  ASSERT_EQ(Result.ParseStatus, "parsed");
+  size_t RestCount = 0;
+  for (const auto &N : Result.Nodes) {
+    ASSERT_LE(N.Start, N.End);
+    ASSERT_LE(N.End, Text.size());
+    if (N.Kind != "RestElement")
+      continue;
+    const auto Spelling = Text.substr(N.Start, N.End - N.Start);
+    EXPECT_TRUE(Spelling == "... /* rest */ args" || Spelling == "...more");
+    ++RestCount;
+  }
+  EXPECT_EQ(RestCount, 2);
+  // A source-location fix must not relax the parameter grammar.
+  for (const auto Invalid : {"async (...rest, x)=>x", "async (...rest,)=>x",
+                             "async (...rest /*comment*/,)=>x"})
+    EXPECT_NE(inspect(Invalid, "module").ParseStatus, "parsed") << Invalid;
+  EXPECT_EQ(inspect("async(...rest,)", "module").ParseStatus, "parsed");
+  EXPECT_EQ(
+      inspect("const f=async(... /* , */ rest)=>rest", "module").ParseStatus,
+      "parsed");
+}
+
+TEST(WebSource, ResourceDeclarationsKeepKindsAndOriginalLocations) {
+  const std::string Text =
+      "using /*sync*/ first = get(), second = null;"
+      "await /*async*/ using third = await get();"
+      "async function f(){for(await using item of items){use(item)}"
+      "for await(using item of items){use(item)}"
+      "for(using once=get();test();step()){use(once)}}";
+  const auto S = inspect(Text, "module");
+  ASSERT_EQ(S.ParseStatus, "parsed");
+  ASSERT_EQ(S.LexemeStatus, "ok");
+  size_t Sync = 0, Async = 0;
+  for (const auto &N : S.Nodes) {
+    ASSERT_LE(N.Start, N.End);
+    ASSERT_LE(N.End, Text.size());
+    if (N.Kind != "VariableDeclaration")
+      continue;
+    ASSERT_NE(N.text("kind"), nullptr);
+    const auto Spelling = Text.substr(N.Start, N.End - N.Start);
+    if (*N.text("kind") == u"using") {
+      EXPECT_TRUE(Spelling.starts_with("using"));
+      ++Sync;
+    } else {
+      EXPECT_EQ(*N.text("kind"), u"await using");
+      EXPECT_TRUE(Spelling.starts_with("await"));
+      ++Async;
+    }
+  }
+  EXPECT_EQ(Sync, 3);
+  EXPECT_EQ(Async, 2);
+}
+
+TEST(WebSource, ResourceGrammarDistinguishesContextsAndOrdinaryIdentifiers) {
+  for (const auto Text :
+       {"{using x=null;}", "function f(){using x=null;}",
+        "class C {static {using x=null;}}", "for(using x=null;false;){}",
+        "for(using x of values){}", "for(using of values){}", "using[x]=value;",
+        "let using; using = 1; using(x); using: while(false){break using;}",
+        "function f(){using await=null;using yield=null;}", "using\nvalue=1;",
+        "using/*\n*/value=1;", "using\xE2\x80\xA8value=1;",
+        "async function f(){await using; await using\nvalue=1;}",
+        "async function f(){for await(await using x of values){}}"}) {
+    const auto S = inspect(Text);
+    EXPECT_EQ(S.ParseStatus, "parsed") << Text;
+    EXPECT_EQ(S.LexemeStatus, "ok") << Text;
+  }
+  EXPECT_EQ(inspect("using x=null;", "commonjs").ParseStatus, "parsed");
+  EXPECT_EQ(inspect("using x=null;", "module").ParseStatus, "parsed");
+  EXPECT_EQ(inspect("await using x=null;", "module").ParseStatus, "parsed");
+  EXPECT_EQ(inspect("await value;", "module").ParseStatus, "parsed");
+  EXPECT_NE(inspect("using x=null;", "script").ParseStatus, "parsed");
+  EXPECT_NE(inspect("await using x=null;", "commonjs").ParseStatus, "parsed");
+}
+
+TEST(WebSource, MalformedResourceDeclarationsPublishNoPartialModel) {
+  for (const auto Text : {"using x;",
+                          "using x=null,y;",
+                          "using x=null,x=null;",
+                          "using let=null;",
+                          "using {x}=value;",
+                          "using x=null,[y]=value;",
+                          "using x=null,{y}=value;",
+                          "using x=null,;",
+                          "us\\u0069ng x=null;",
+                          "await us\\u0069ng x=null;",
+                          "aw\\u0061it using x=null;",
+                          "await\nusing x=null;",
+                          "await/*\n*/using x=null;",
+                          "if(true)using x=null;",
+                          "label:using x=null;",
+                          "export using x=null;",
+                          "export await using x=null;",
+                          "function f(){await using x=null;}",
+                          "class C {static {await using x=null;}}",
+                          "for(using x in values){}",
+                          "for(using x=null in values){}",
+                          "for(using x=null of values){}",
+                          "for(using x,y of values){}",
+                          "for(using of of values){}",
+                          "for(using x;;){}",
+                          "for(await using x in values){}",
+                          "for(await using x;;){}",
+                          "for(using\nx of values){}",
+                          "for(await\nusing x of values){}"}) {
+    const auto S = inspect(Text, "module");
+    EXPECT_NE(S.ParseStatus, "parsed") << Text;
+    EXPECT_TRUE(S.Nodes.empty()) << Text;
+    EXPECT_FALSE(S.Diagnostics.empty()) << Text;
+  }
+}
+
 TEST(WebSource, MalformedAndUnsupportedSyntaxDoesNotPublishPartialNodes) {
   for (const auto Text : {"let = ;", "function {", "const a: number = 1;",
                           "const a = <div/>;", "throw\n1;", "break;"}) {

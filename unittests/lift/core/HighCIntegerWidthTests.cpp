@@ -16,6 +16,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -1266,6 +1267,25 @@ static std::optional<std::string> compileForTarget(const std::string &Source,
     return std::string("cannot create temporary files");
   llvm::FileRemover RemoveSource(SourcePath);
   llvm::FileRemover RemoveError(ErrorPath);
+  // Target-independent declarations let this syntax check use Clang's
+  // freestanding headers without requiring a target C library sysroot.
+  llvm::SmallString<128> IncludeDirectory;
+  if (llvm::sys::fs::createUniqueDirectory("neverd-target-headers",
+                                           IncludeDirectory))
+    return std::string("cannot create target headers");
+  llvm::FileRemover RemoveDirectory(IncludeDirectory);
+  llvm::SmallString<128> StringHeader(IncludeDirectory);
+  llvm::sys::path::append(StringHeader, "string.h");
+  llvm::FileRemover RemoveHeader(StringHeader);
+  {
+    std::error_code EC;
+    llvm::raw_fd_ostream OS(StringHeader, EC);
+    if (EC)
+      return EC.message();
+    OS << "#include <stddef.h>\n"
+          "void *memcpy(void *, const void *, size_t);\n"
+          "void *memset(void *, int, size_t);\n";
+  }
   {
     std::error_code EC;
     llvm::raw_fd_ostream OS(SourcePath, EC);
@@ -1275,8 +1295,8 @@ static std::optional<std::string> compileForTarget(const std::string &Source,
   }
   const std::string Target = ("--target=" + Triple).str();
   llvm::SmallVector<llvm::StringRef, 8> Arguments{
-      Compiler,         "-std=gnu17",    Target,
-      "-ffreestanding", "-fsyntax-only", SourcePath};
+      Compiler,        "-std=gnu17", Target,           "-ffreestanding",
+      "-fsyntax-only", "-I",         IncludeDirectory, SourcePath};
   std::optional<llvm::StringRef> Redirects[] = {std::nullopt, ErrorPath.str(),
                                                 ErrorPath.str()};
   if (llvm::sys::ExecuteAndWait(Compiler, Arguments, std::nullopt, Redirects) ==

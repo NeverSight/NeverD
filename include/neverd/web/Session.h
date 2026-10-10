@@ -66,6 +66,11 @@ public:
                           std::string_view SelectionID) const;
   std::string extractBun(std::string_view ExpectedRevision,
                          std::string_view ArtifactID);
+  /// Explicit local raw disclosure into a new directory. Fixed output names;
+  /// captured names are manifest data only. Never overwrites or executes.
+  std::string exportBun(std::string_view ExpectedRevision,
+                        std::string_view ExtractionID,
+                        std::string_view OutputDirectory);
   std::string bunRecords(std::string_view ExpectedRevision,
                          std::string_view ExtractionID,
                          std::string_view RecordKind, uint64_t Offset,

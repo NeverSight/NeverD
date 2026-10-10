@@ -103,6 +103,8 @@ Les régressions de phase initiale couvrent deux ou trois boucles successives r�
 
 `LLVMGuestAlignment.*` compare chargements et écritures à des oracles indépendants de mémoire par octets : domaines alignés ou non, bits hauts d’adresse libres, alignement par défaut analysé, largeurs partielles, accès inutilisés ou écrasés, branches inaccessibles et budgets de construction exacts ou insuffisants d’une unité. `InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises` vérifie les écritures natives sur pile, les congruences d’entrée correspondantes et les effets source modifiés par deux nouvelles vérifications de relation.
 
+`LLVMByteSwap*`, `LLVMScalarByteSwap.*` et `InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises` utilisent des références indépendantes par copie d’octets et décalage/masque pour vérifier les octets supérieurs, les valeurs entre blocs, le poison, les contrats d’appel et les budgets exacts ou réduits d’une unité, calculés indépendamment. Les cas Clang O1/O2 exigent des intrinsics réels ; les petits cas natifs d’échange/BSWAP vérifient deux prémisses nouvelles et refusent les valeurs erronées ou l’absence de remise à zéro de la moitié supérieure.
+
 `NeverDLLVMScalarEquivalenceTests` vérifie les domaines complets des boucles, zéro itération, les échanges PHI simultanés, switch, les bits hauts d’entrée, les contre-exemples de dernière partition, les mises à jour supplémentaires produisant poison, les plages de retour, les contrats non pris en charge et les budgets exacts, insuffisants d’une unité ou nuls. Des oracles indépendants de largeur double et de débordement couvrent les extrémités funnel et les produits contraints à chaque largeur admise ; du C indépendant à boucles imbriquées en O1/O2 vérifie le profil d’entrée compilateur. La suite du modèle d’état vérifie aussi les extrémités. `SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings` vérifie la comptabilité cumulée et les plafonds locaux inchangés.
 
 `LLVMScalarDecision.*` couvre les obligations profondes de décalage exact et d’extension, les branches constantes, les deux arêtes de retour, les bits de données hauts conservés, les opérations indéfinies tardives, la non-terminaison, les modifications après vérification et les budgets exacts, courts ou locaux. `LLVMScalarDecisionCompiled.DeepOneAndTwoBackedgeOracles` compare des récurrences indépendantes à une ou deux arêtes de retour avec un oracle C non signé à O0/O2 sur 32 768 appels. Il s’agit de tests du modèle scalaire, pas d’une couverture de l’ABI native ou de la récupération d’un binaire entier.
@@ -1367,7 +1369,7 @@ La validation KVM exige l’annulation d’un véritable vCPU sans sortie sponta
 
 Avec `native_cpu_only=true`, `native_driver_tests=true` active `NeverDNativeDriverTests` sans Unicorn. Avant la configuration, `build_wdk_driver_fixtures.py` vérifie le SHA-256 intégral des paquets Microsoft officiels WDK/SDK 10.0.26100.6584 et reconstruit 48 images de pilotes normales/CFG/DBG depuis les sources originales. `WDKDriverFixtures.def` déclare les paquets, les arguments de compilation et d’édition de liens et les associations des fixtures. Les fichiers Microsoft non modifiés et leurs licences restent dans les répertoires locaux de compilation/cache ; la CI ne publie que les métadonnées et journaux de compilation. Le manifeste conserve versions des outils, commandes, empreintes des sources/en-têtes et empreintes des images produites.
 
-`NativeDriverTests.def` exige 230 résultats WHP pour les 115 charges de `DriverBuiltinImages.def` et `DriverBackendParityCases.def` : 27 images intégrées, 48 images WDK et 40 scénarios de requêtes, aux adresses initiales et relocalisées. L’inventaire obligatoire complet est `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`. Les 30 contrôles d’ensembles d’attente comprennent seize cas de modèle portables et quatorze cas de pilotes natifs originaux. `run_native_cpu_ci.py --with-drivers` conserve les identités exactes et preuves JUnit avec Unicorn désactivé. Tout fixture requis absent ou ignoré fait échouer cette validation facultative ; les builds ordinaires gardent les fixtures externes facultatifs. Les images fixes conservent leur rejet de relocalisation attendu. L’exécution native de guests ARM64 reste non vérifiée.
+`NativeDriverTests.def` exige 230 résultats WHP pour les 115 charges de `DriverBuiltinImages.def` et `DriverBackendParityCases.def` : 27 images intégrées, 48 images WDK et 40 scénarios de requêtes, aux adresses initiales et relocalisées. L’inventaire obligatoire complet est `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 4 image memory checks = 5451`. Les 30 contrôles d’ensembles d’attente comprennent seize cas de modèle portables et quatorze cas de pilotes natifs originaux. `run_native_cpu_ci.py --with-drivers` conserve les identités exactes et preuves JUnit avec Unicorn désactivé. Tout fixture requis absent ou ignoré fait échouer cette validation facultative ; les builds ordinaires gardent les fixtures externes facultatifs. Les images fixes conservent leur rejet de relocalisation attendu. L’exécution native de guests ARM64 reste non vérifiée.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` injecte expiration, arrêt et combinaison des deux avant deux instructions initiales distinctes. Le test vérifie la phase exacte, la durée de vie du message possédé, le type et les causes de l’erreur, une échéance inchangée et la libération de la mémoire. Les vrais échecs de transport et les divergences d’état restent distincts. Le budget de validation initiale x64 native est `5 s` ; les échéances invitées et marges de pas unique restent inchangées.
 
@@ -1739,6 +1741,33 @@ La fixture MainActor vérifie le flux complet des métadonnées fixes et de la t
 `ZeroTimeoutPollRetainsReadinessAndOrderedCopies` vérifie les appels bruts O0/O2 des huit GKI : descripteurs vivants, négatifs ou fermés, doublons, réduction des arguments, ordre délai/masque, timespec nulle en lecture seule, import complet avant sélection et conservation des premiers `revents` lors d’une faute ultérieure. `ZeroTimeoutPollKeepsUnobservedBoundaries` maintient les limites inconnues du noyau, des ressources, masques, attentes et disponibilités. `ReleasedGKIZeroTimeoutPollSharesRawAndBionicResults` vérifie sous Android la table commune et errno dans six profils de compactage.
 
 ## Attributs de répertoire groupés bornés
+
+bulk-attributes vérifie groupes complets, ensemble noms/types, gardes des octets inutilisés, low32 FD, mots bitmap, erreurs natives, dup, open indépendants, EOF et rewind zéro. Modes littéral/inconnu uniquement virtuels. Les modèles couvrent aussi stat complet, invalidation, noms NFD/255 octets, alias entrée/sortie, erreurs de transport/budget, déplacements/SWAP/suppression/réutilisation et droits explicites. Inventaire requis :65 cas par plateforme,195 ARM64 et130 Intel. Seul ARM64 HVF correspondant est vérifié localement. native5s, guest/Python5,000,000us/quantum1024 et public10s sont inchangés.
+
+## Liens physiques Darwin bornés
+
+link suit la cible symbolique finale ; linkat flags=0 choisit le lien lui-même, AT_SYMLINK_FOLLOW sa cible. Seuls low32 0/0x40 sont admis ; les autres bits bas donnent EINVAL avant import. Recherche source et EPERM des répertoires précèdent la destination ; une destination existante donne EEXIST. La destination exige le droit de mutation et le même domaine de montage explicitement établi. Alias initiaux et conflits connus de périphérique, mode ou flags restent exclus.
+
+Un alias ne consomme que l’entrée et le chemin/NUL, sans nouvel inode. Octets, droits d’attributs, validité des métadonnées et baux de mapping appartiennent à l’objet partagé. Les politiques explicites actualisent compte de liens et ctime ; sans elles, stat complet reste inconnu. Les attributs invalident stat, le contenu invalide les observations d’attributs. Descriptions et derniers mappings conservent les coûts retirés ; seul un coût immédiatement libérable est crédité. Les sous-arbres utilisent identité et parent exacts ; les alias externes restent en place et les cibles relatives utilisent le parent sélectionné.
+
+Après plusieurs noms, F_GETPATH/ATTR_CMN_NAME restent non pris en charge même avec un ou zéro nom ; aucun modèle général de cache APFS. bulk NAME utilise l’entrée réelle, rename/SWAP du même objet conserve les deux noms. Casse EXCL, O_SYMLINK, Intel HVF, iOS physique, ACL, mappings cohérents/signaux EOF, dyld, Mach IPC, threads et frameworks complets restent des lacunes. Seul ce contrat étend les exclusions précédentes.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+65 mandatory workloads per platform / ARM64 195 / Intel 130
+```
 
 bulk-attributes vérifie groupes complets, ensemble noms/types, gardes des octets inutilisés, low32 FD, mots bitmap, erreurs natives, dup, open indépendants, EOF et rewind zéro. Modes littéral/inconnu uniquement virtuels. Les modèles couvrent aussi stat complet, invalidation, noms NFD/255 octets, alias entrée/sortie, erreurs de transport/budget, déplacements/SWAP/suppression/réutilisation et droits explicites. Inventaire requis :63 cas par plateforme,189 ARM64 et126 Intel. Seul ARM64 HVF correspondant est vérifié localement. native5s, guest/Python5,000,000us/quantum1024 et public10s sont inchangés.
 

@@ -38,6 +38,7 @@ TEST(WebAvailability, CapabilitiesReflectCompiledBackendAndParser) {
   EXPECT_TRUE(Has("source_map_analyze"));
   EXPECT_TRUE(Has("bun_extract"));
   EXPECT_TRUE(Has("bun_records"));
+  EXPECT_TRUE(Has("bun_export"));
   bool ASARAvailable = false;
   const auto *Analysis = Object->getArray("analysis");
   ASSERT_NE(Analysis, nullptr);
@@ -132,6 +133,7 @@ TEST(WebAvailability, AllPublicEntryPointsRemainAvailableWhenBackendIsOmitted) {
         neverd_web_source_view_chunk_json(nullptr, nullptr, 0, nullptr, 0, 0,
                                           1),
         neverd_web_bun_extract_json(nullptr, nullptr, 0, nullptr, 0),
+        neverd_web_bun_export_json(nullptr, nullptr, 0, nullptr, 0, nullptr, 0),
         neverd_web_bun_records_json(nullptr, nullptr, 0, nullptr, 0, nullptr, 0,
                                     0, 1),
         neverd_web_import_preview_json(nullptr, nullptr, 0, nullptr, 0),

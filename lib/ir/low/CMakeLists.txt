@@ -20,6 +20,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateLocalUnwind.cpp
   X86/RegistrationStateOccurrences.cpp
   X86/RegistrationStateRealignment.cpp
+  X86/RegistrationStateInstallation.cpp
   X86/RegistrationStateResult.cpp
   X86/RegistrationStateTransfer.cpp
   X86/RegistrationStateUnwind.cpp

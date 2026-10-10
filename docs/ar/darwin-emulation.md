@@ -1,6 +1,6 @@
 **اللغات**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](darwin-emulation.md)
 
-<!-- i18n-source: aa19cf02d09c66c62cfde94ee71c93b210f3d92165151c58778e1e91ec0df607 -->
+<!-- i18n-source: 1939e117643388dff149085b992e1ad646feefca63b630abec9b09122e15c2f1 -->
 
 [← فهرس الوثائق](README.md)
 
@@ -67,7 +67,7 @@ neverd emulate guest.macho --profile=ios-macho64-v1 \
 
 يسمح الخيار المنطقي الصارم `"writable":true` أو `DarwinFileOptions::WritableFiles` بتعديل داخل العملية. الغياب أو false يبقي القراءة فقط، والصلاحية المجهولة توقف الخدمة. لا تتغير ملفات المضيف أو المدخلات الأصلية. تتشارك write(4/397) وpwrite(154/415) وtruncate(200) وftruncate(201) وO_TRUNC المحتوى؛ لكل open موضع مستقل ويتشارك dup الموضع والحالة، وتبقى البيانات بعد آخر close. يملأ التوسع بالأصفار ويحفظ الاقتطاع المواضع، حتى O_RDONLY|O_TRUNC.
 
-يغير F_SETFL فقط O_APPEND ويحفظ نمط الوصول وclose-on-exec وFWASWRITTEN. يظهر F_GETFL البت 0x10000 بعد نقل بايتات فعلية، بما في ذلك pwrite والإخراج الملتقط. يتجاهل pwrite وضع append ويحفظ الموضع. يُفحص INT_MAX قبل FD؛ يعيد pwrite عند -1 الخطأ EINVAL قبل ذلك. يعيد INT64_MAX الخطأ EFBIG قبل حالة الطول الصفري، ويُختصر الطول قبل اختيار EOF.
+يغير F_SETFL فقط O_APPEND|O_NONBLOCK بعد التحويل الأصلي ويحفظ نمط الوصول وclose-on-exec وFWASWRITTEN. يظهر F_GETFL البت 0x10000 بعد نقل بايتات فعلية، بما في ذلك pwrite والإخراج الملتقط. يتجاهل pwrite وضع append ويحفظ الموضع. يُفحص INT_MAX قبل FD؛ يعيد pwrite عند -1 الخطأ EINVAL قبل ذلك. يعيد INT64_MAX الخطأ EFBIG قبل حالة الطول الصفري، ويُختصر الطول قبل اختيار EOF.
 
 يضع ftruncate الناجح علامة FWASWRITTEN على وصف الفتح المستدعي ونسخ dup حتى مع ثبات الحجم. يضع O_TRUNC العلامة على الوصف الجديد، حتى O_RDONLY؛ ولا يغير truncate بالمسار أعلام الأوصاف الموجودة.
 
@@ -922,3 +922,120 @@ Sources: [XNU bulk ABI](https://raw.githubusercontent.com/apple-oss-distribution
 تختبر xattr-mutations / xattr-mutations-values / xattr-mutations-unsupported ضوابط أصلية للتنفيذ الأصلي/الضيف، وبايتات افتراضية حرفية مستقلة، وتوقفًا بسبب غياب الإذن يحافظ على الناتج السابق. تحققت تهيئة ARM64 الخاصة من726 استدعاء raw/SDK، وملاحظات محمية كاملة بحجم544 بايت، وصفحات كاملة قابلة للقراءة. تبقى native5s/compile120s/drain1s/reap1s وguest/Python5,000,000us/quantum1024 وpublic10s دون تغيير. لا يزال Intel الأصلي وiOS الفعلي وdyld وMach IPC والخيوط/الإشارات وبيئات Objective-C/Swift وأطر العمل الكاملة غير متحقق منها أو غير مكتملة.
 
 مراجع ABI الأولية: [تصريحات استدعاءات XNU](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/syscalls.master)، [تعريفات xattr](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/sys/xattr.h). الشيفرة والمجسّات أصلية؛ لم تُنسخ تطبيقات Apple.
+
+## روابط Darwin الصلبة المحدودة
+
+يتبع link الهدف الرمزي الأخير؛ يختار linkat مع flags=0 كائن الرابط نفسه، ومع AT_SYMLINK_FOLLOW الهدف. يقبل low32 0/0x40 فقط، وتعيد البتات الدنيا الأخرى EINVAL قبل الاستيراد. يسبق بحث المصدر وEPERM للدليل استيراد الوجهة، وتعيد الوجهة الموجودة EEXIST. تلزم صلاحية تعديل الوجهة ونطاق تركيب واحد مثبت صراحة. تبقى الأسماء البديلة الأولية وتعارضات الجهاز أو النمط أو الأعلام غير مدعومة.
+
+يستهلك الاسم البديل مدخلاً ومساراً/NUL فقط دون inode جديد. يمتلك الكائن المشترك البيانات وصلاحيات السمات وصلاحية البيانات الوصفية وعقود الخرائط. تحدّث السياسات الصريحة عدد الروابط وctime؛ دونها يبقى stat الكامل مجهولاً. تعديل السمات يبطل stat وتعديل المحتوى يبطل مشاهدات السمات. تحتفظ الأوصاف وآخر الخرائط بتكلفة الأسماء المحذوفة، ولا تخصم الاستبدالات إلا تكلفة قابلة للتحرير فوراً. تختار الأشجار الفرعية الهوية والأب الدقيقين؛ تبقى الأسماء الخارجية ثابتة وتستخدم الأهداف النسبية الأب المختار.
+
+تبقى F_GETPATH/ATTR_CMN_NAME غير مدعومة بعد تعدد الأسماء حتى عند بقاء اسم واحد أو صفر؛ لا ندّعي نموذجاً عاماً لذاكرة APFS. يستخدم bulk NAME المدخل الحقيقي ويحفظ rename/SWAP للكائن نفسه الاسمين. تبقى EXCL وحالة الأحرف وIntel HVF وiOS الفعلي وACL واتساق الخرائط/إشارات EOF وdyld وMach IPC والخيوط والأطر الكاملة فجوات مستقلة. يوسّع هذا العقد الاستثناءات السابقة داخل حدوده فقط.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## واصفات O_SYMLINK المحدودة
+
+يحتفظ O_SYMLINK=0x00200000 بكائن الرابط الرمزي الأخير، بما في ذلك الرابط المقطوع أو الدوري، للقراءة أو الكتابة أو كليهما. لا يمنح صلاحية كتابة محتوى الهدف. يظل O_CREAT يتبع الهدف، مع أولوية ELOOP لـ NOFOLLOW وEEXIST للإنشاء الحصري وENOTDIR عند O_DIRECTORY للرابط المحتفظ به. تستخدم المكونات الوسيطة والشرطة النهائية المحلل وحدود NOFOLLOW_ANY الحالية. يستثني F_GETFL بت الاختيار.
+
+تحتفظ الأوصاف بكائني LinkNode وNameIdentity الفعليين. يشارك dup الأعلام والمؤشر، أما open المستقل فله وصف منفصل. لا يغير نقل الاسم أو حذفه أو إعادة استخدامه أو حذف الأب هوية الكائن المحتفظ به. يستخدم F_GETPATH وATTR_CMN_NAME الاسم الوحيد المحدد. وجود عدة أسماء سابقاً يمنع استنتاج اسم vnode دائماً، حتى بعد حذفها كلها. تبقى الحجوزات الأولية ثابتة؛ تنتظر الأسماء والأهداف والإدخالات وزيادة السمات الديناميكية آخر مالك فعلي. لا يمكن احتساب آخر اسم بديل كتخفيض كلفة الاستبدال بينما الكائن أو الاسم ما زال محتفظاً به.
+
+لا يعرض I/O نص هدف الرابط كمحتوى ملف. بعد فحوص الاستيراد القياسي/المتجهي والوصول والعدد الحالية، تعيد الإزاحة السالبة EINVAL. تعيد القراءة عند INT64_MAX صفراً والكتابة EFBIG؛ تعيد الإزاحات الأخرى المسموحة EPERM حتى للطول الصفري وقبل APPEND أو الوصول إلى البيانات. تبقى قواعد الإزاحة السالبة المبكرة لـ pwrite/pwritev كما هي. تعيد DATA/HOLE قيمة ENXIO للمواقع غير السالبة وEINVAL للسالبة دون تغيير المؤشر.
+
+لا تضبط ftruncate غير السالبة للوصف القابل للكتابة وopen TRUNC المسموحة إلا WasWritten. تبقى بايتات الهدف وstat الكامل وxattrs والمؤشر والميزانية وinode دون تغيير. تعيد القراءة فقط أو الطول السالب EINVAL. تغير F_SETFL المسموحة APPEND|NONBLOCK ثم تعيد ENOTTY25؛ يشاهد dup التغيير ولا يشاهده open المستقل. تتوقف الوسائط المجهولة قبل التأثير.
+
+تعمل fpathconf الثابتة وfgetattrlist وصلاحيات FD-xattr العادية المعلنة بشكل مستقل على كائن الرابط. يعيد FD الدليل النسبي وfchdir قيمة ENOTDIR. لا يعيد truncate صلاحية stat التي أبطلتها تعديلات السمات. يصل mmap القديم private/shared والمحاذى وغير التنفيذي إلى رفض EINVAL حسب نوع الرابط دون mapping أو lease. تبقى حدود shared العادي والأعلام المجهولة والحماية التنفيذية وغيرها دون تغيير. تغطي ضوابط mmap الأصلية18 حالة فقط بطول16384 وإزاحة0 وحماية1/2/3.
+
+تقارن التحضيرات الأصلية ARM64 جميع144 بايتاً المحمية لـ stat في15 حالة truncate، وإزاحات/أعداد I/O القصوى وsparse seek وتأثيرات F_SETFL الفاشلة. ينفذ البرنامج المشترك بلا SDK عند O0/O1/O2 ويقارن المسار الفعلي لـ FD الأب. تقارن المسارات الافتراضية قيمة stat/type مستقلة أو ترفض الأسماء المتعددة بوضوح مع الاحتفاظ بالمخرجات. تبقى Intel HVF الأصلية وiOS الفعلي وACL/الصلاحيات وEOF/الإشارات المربوطة وdyld وMach IPC والخيوط وبيئات التشغيل/frameworks الكاملة غير متحققة أو غير مكتملة.
+
+المصدر الأساسي للتفسير: [حدود mmap في إصدار XNU المطابق](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/kern_mman.c). التنفيذ والمجسات أصلية ولا تنسخ تنفيذ Apple.
+
+```text
+O_SYMLINK=0x00200000; ENOTTY=25
+open O_RDONLY|O_SYMLINK|O_TRUNC: WasWritten only
+LinkNode, NameIdentity, HadMultipleNames, DetachedNames
+INT64_MAX read=0 / write=EFBIG; other admitted offsets=EPERM
+SEEK_DATA/SEEK_HOLE nonnegative=ENXIO / negative=EINVAL
+F_SETFL: APPEND|NONBLOCK effect before ENOTTY; dup shares / independent open separate
+symbolic-descriptors
+symbolic-descriptors-values
+symbolic-descriptors-name-unsupported
+SymbolicDescriptor*, SymbolicDescriptorsRetainObjectsAndNativeErrorOrder
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 transport parameters / 15 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## حالة محدودة للوصفات غير الحاجبة
+
+تسمح الملفات العادية والمجلدات وفتح O_SYMLINK بـ O_NONBLOCK=4، وتحفظه F_GETFL. يشترك dup في الحالة والمؤشر، وتحتفظ الفتحات المستقلة بأوصافها. تبقى قواعد الوصول وclose-on-exec وWasWritten والبيانات الوصفية والبايتات والمؤشر سارية. يحفظ stdin المحدود المصرح به EOF وترتيب أخطاء المؤشر؛ والمدخل المحذوف مجهول. يحفظ التقاط الإخراج أخطاء النسخ والميزانية المشتركة.
+
+تفحص F_SETFL وسائط low32 المسموحة قبل التأثير، وتضيف واحداً حسب تحويل أعلام open الأصلي، ثم تغير APPEND|NONBLOCK فقط. تُهمل high32؛ ولا تمنح بتات الوصول وWasWritten المدخلة صلاحية أو تختلق كتابة. تختار القيم الأصلية المستقلة3/7/11/15 الحالات4/8/12/0. تغير الأوصاف الرمزية الحالة قبل ENOTTY25. تتوقف الأعلام المجهولة مثل ASYNC0x40 قبل التأثير.
+
+تضم التحضيرات الأصلية ARM64 macOS عدد122 ملاحظة:16 طلباً لكل تركيب صالح للكائن والوصول، وdup محتفظاً به وفتحاً مستقلاً والمسح والكتابة الفعلية وCLOEXEC لكل FD. يقارن البرنامج المشترك بلا SDK عند O0/O1/O2 البايتات والحالة والمؤشر وABI BSD الخام carry/errno. يتحقق الضيف وC/CLI وPython أيضاً من الرفض المجهول؛ ويلزم التنفيذ الفعلي لملفات ARM64 HVF الثلاثة. لا يضيف انتظار الجاهزية أو الأنابيب أو الشبكة أو kqueue أو إشارات غير متزامنة أو I/O المضيف. تبقى سياسة O_EVTONLY غير مدعومة؛ وIntel HVF الأصلي وiOS الفعلي والبيئة الكاملة غير متحققة أو غير مكتملة.
+
+```text
+O_NONBLOCK=4; F_SETFL raw low32 mask=0x1000f
+requests3/7/11/15 -> APPEND|NONBLOCK status4/8/12/0
+nonblocking-descriptors / nonblocking-flags-unsupported
+Nonblocking*, NonblockingDescriptorsKeepNativeControlState
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+8 model cases / 20 transport parameters / 10 public cases / 5 Python profiles
+67 mandatory workloads per platform / ARM64 201 / Intel 134
+```
+
+## ملاحظات getentropy صريحة ومحدودة
+
+يستخدم BSD getentropy500 الخام قائمة مرتبة `DarwinSystemOptions::EntropyReads`، وحقل JSON هو `darwin_system.entropy_reads`. السجلات سلاسل سداسية غير فارغة بطول زوجي: حتى256 سجلًا، كل منها1..256 بايت. هذه حدود النموذج؛ يبقى حد نقل JSON عند65536 بايت. الحذف يعني مجهولًا، و`[]` يعني نفادًا صريحًا. يتحقق الإدخال الأصلي وJSON قبل تغيير الصورة أو الخلفية؛ ترفض ملفات OS الأخرى خيارات Darwin.
+
+يفحص الطول64 بت كاملًا أولًا: أكبر من256 يرجع EINVAL22 دون وصول أو استهلاك؛ الصفر ينجح لكل مؤشر دون بيانات. يقبل الطلب غير الصفري بعد ذلك السجل التالي بطول مطابق تمامًا. الغياب والنفاد وعدم المطابقة توقف UnsupportedService قبل الآثار حتى مع عنوان غير صالح؛ هذا ترتيب قبول الإعادة. النجاح أو EFAULT14 لوجهة غير قابلة للكتابة بالكامل يستهلك سجلًا واحدًا. الوجهة القابلة للكتابة جزئيًا ترفض قبل النسخ أو تحريك المؤشر؛ أخطاء النقل لا تحركه. فشل سجلات الإرجاع لاحقًا يبقي الآثار المكتملة. كل تشغيل يبدأ من السجل الأول حتى عند إعادة استخدام الخيارات.
+
+يمتلك DarwinEntropy مؤشرًا مستقلًا لكل تشغيل وتظل البايتات ثابتة. يتولى BSD وreturnService الحاليان كلا ISA وعلم الحمل والسجلات الثانوية. يغطي البرنامج دون SDK خمسة ملفات ضيف وثلاثة ARM64 HVF؛ لا تدخل البايتات الثابتة قائمة RNG الأصلية الحتمية. تغطي فحوص ARM64 O0/O1/O2 عدد594 نداء؛ عدد بايتات الحارس المتغيرة ليس طول النسخ الدقيق. لا يوفر RNG المضيف أو جودة تشفير أو /dev/random أو استيرادات libc أو frameworks. يظل Intel HVF وiOS الفعلي والتوافق الكامل مع OS غير متحقق أو غير مكتمل.
+
+```text
+BSD getentropy500 / DarwinEntropy / EntropyReads / darwin_system.entropy_reads
+full64 size>256 -> EINVAL22; zero ->0; whole EFAULT14 consumes one record
+1..256 bytes per record / at most256 records / JSON transport65536 bytes
+entropy-replay / entropy-missing / entropy-exhausted / entropy-mismatch / entropy-partial
+15 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+68 mandatory workloads per platform / ARM64 204 / Intel 136
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU getentropy ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [XNU generation/copyout boundary](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/dev/random/randomdev.c).
+
+## هوية صريحة للخيط الحالي
+
+يقرأ BSD thread_selfid372 الرصد الاختياري الثابت `DarwinSystemOptions::ThreadID` / JSON `darwin_system.thread_id`. كل نمط uint64 بما فيه الصفر معروف؛ يؤدي الحذف إلى UnsupportedService. تحفظ السلاسل العشرية64 بت، وتقتصر أرقام JSON على الأعداد الصحيحة الدقيقة حتى2^53-1. لا تستنتج الهوية من المضيف أو PID أو منفذ Mach. يتجاهل النداء بلا معاملات الحوامل الستة ولا يصل إلى الذاكرة. يحتفظ تحليل low32 القائم برقم النداء الخام الكامل في الأحداث؛ تحفظ طبقة إرجاع BSD القيمة64 بت وتمسح carry وRDX/X1. صيغ Mach غير مدعومة.
+
+تحافظ عمليات التنفيذ المتكررة على الرصد وتبقى الخيارات المنفصلة مستقلة. لا يخصص ذلك معرفات أو يضمن تفردها أو ينشئ هوية أحداث المجدول، ولا ينفذ دورة حياة الخيوط أو pthread أو TLS أو Mach IPC. تحفظ مجسات ARM64 الأصلية O0/O1/O2 عدد24 نداءً تقارن النتيجة بمعرف pthread الحالي من SDK مع معاملات عشوائية والبتات العليا للرقم. يقارن البرنامج الأصلي المشترك العلاقات داخل عملية واحدة فقط؛ تستبعد بايتات المعرف الصريحة من القائمة الأصلية الحتمية. يظل Intel HVF وiOS الفعلي والتوافق الكامل غير متحقق أو غير مكتمل.
+
+```text
+BSD thread_selfid372 / Wide / ThreadID / darwin_system.thread_id
+known uint64 including0 / missing -> UnsupportedService / no memory
+full64 return / low32 resolution / carry clear / RDX-X1 zero / raw event number
+thread-identity / thread-identity-value / thread-identity-missing
+4 model cases / 20 transport parameters / 16 public cases / 5 Python profiles
+69 mandatory workloads per platform / ARM64 207 / Intel 138 unverified
+original ARM64 O0/O1/O2 probes24 / native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU thread_selfid ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [libpthread current-thread owner](https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_support.c).

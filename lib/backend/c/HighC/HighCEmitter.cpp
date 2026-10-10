@@ -484,7 +484,9 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     if (!Seen.insert(&E).second)
       return;
     if (HideEHRuntimeMemory &&
-        E.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
+        E.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
+        !(E.Kind == ExprKind::Call &&
+          E.IntrinsicId == Intrinsic::X86FPRoundMemoryState))
       return;
     CollectWideType(E.Type);
     CollectWideType(E.CastTo);

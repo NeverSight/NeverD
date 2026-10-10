@@ -19,9 +19,10 @@ using namespace value;
 void DarwinFiles::forEachDirectoryChild(
     const DirectoryNode &Node,
     llvm::function_ref<void(const DirectoryEntryIdentity &)> Visit) const {
-  auto Children = [&](const auto &Table, uint8_t Type, auto Metadata) {
+  auto Children = [&](const auto &Table, uint8_t Type, auto Parent,
+                      auto Metadata) {
     for (const auto &[Path, Child] : Table) {
-      if (Child->Parent.get() != &Node)
+      if (Parent(*Child).get() != &Node)
         continue;
       const auto *M = Metadata(*Child);
       Visit({llvm::StringRef(Path).rsplit('/').second, Type,
@@ -30,14 +31,24 @@ void DarwinFiles::forEachDirectoryChild(
   };
   // Inode identity does not change when complete stat becomes unknown. Never
   // expose another stale metadata field through this membership projection.
-  Children(Nodes, 8, [](const Contents &File) { return File.metadata(); });
-  Children(Links, 10, [](const LinkNode &Link) {
+  auto EntryParent = [](const auto &Entry) -> const auto & {
+    return Entry.Name->Parent;
+  };
+  Children(Nodes, 8, EntryParent,
+           [](const FileEntry &Entry) { return Entry.Object->metadata(); });
+  Children(Links, 10, EntryParent, [](const LinkEntry &Entry) {
+    const auto &Link = *Entry.Object;
     return Link.CurrentMetadata ? &*Link.CurrentMetadata : Link.Metadata;
   });
-  Children(Directories, 4, [](const DirectoryNode &Directory) {
-    return Directory.CurrentMetadata ? &*Directory.CurrentMetadata
-                                     : Directory.Metadata;
-  });
+  Children(
+      Directories, 4,
+      [](const DirectoryNode &Directory) -> const auto & {
+        return Directory.Parent;
+      },
+      [](const DirectoryNode &Directory) {
+        return Directory.CurrentMetadata ? &*Directory.CurrentMetadata
+                                         : Directory.Metadata;
+      });
 }
 
 std::optional<DarwinDirectoryContents>
@@ -270,18 +281,21 @@ DarwinFiles::bulkAttributes(uint32_t FD, uint64_t Input, uint64_t Address,
     const auto &Path = Paths[Next];
     Description Child{Kind::File};
     if (auto I = Nodes.find(Path); I != Nodes.end()) {
-      Child.File = I->second;
-      Child.Metadata = I->second->metadata();
+      Child.File = I->second->Object;
+      Child.Name = I->second->Name;
+      Child.Metadata = Child.File->metadata();
     } else if (auto I = Links.find(Path); I != Links.end()) {
       Child.Type = Kind::SymbolicLink;
-      Child.Link = I->second;
-      Child.Metadata = I->second->Metadata;
+      Child.Link = I->second->Object;
+      Child.Name = I->second->Name;
+      Child.Metadata = Child.Link->Metadata;
     } else {
       Child.Type = Kind::Directory;
       Child.Directory = Directories.at(Path);
       Child.Metadata = Child.Directory->Metadata;
     }
-    auto Built = attributeRecord(Child, Mask);
+    auto Built =
+        attributeRecord(Child, Mask, llvm::StringRef(Path).rsplit('/').second);
     if (auto *Reason = std::get_if<const char *>(&Built))
       return Unsupported(*Reason);
     auto Record = std::move(std::get<std::vector<uint8_t>>(Built));

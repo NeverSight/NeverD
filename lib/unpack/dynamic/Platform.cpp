@@ -62,6 +62,9 @@ observeImage(const std::filesystem::path &Path, const InputImage &Image,
     Driver.InstructionLimit = P.Limits.Instructions;
     Driver.MemoryLimit = P.MemoryLimit;
     Driver.EventLimit = P.Limits.Events;
+    // Recovery observes committed memory changes directly. Retaining a second
+    // per-write report would consume the budget before an entry is reached.
+    Driver.TraceMemoryWrites = false;
     Driver.TimeoutMilliseconds = P.Limits.TimeoutMicroseconds / 1000 +
                                  (P.Limits.TimeoutMicroseconds % 1000 != 0);
     Driver.ReportBackendSelection = true;

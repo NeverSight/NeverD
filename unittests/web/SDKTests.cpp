@@ -332,6 +332,88 @@ TEST_F(WebSDK, BunSerializedMapsRetainPrivateSourcesAndUnverifiedAssociation) {
             0);
 }
 
+TEST_F(WebSDK, BunExportPreservesCapturedBytesAndRefusesExistingDestinations) {
+  const neverd::web::test::BunFixture F(true, "map", "asset", true);
+  write(F.Bytes);
+  ASSERT_EQ(field(commit(preview()), "revision"), "1");
+  const auto E = field(bun("1", rootID("1")), "extraction_id");
+  auto Export = [&](std::string_view Revision, const fs::path &Destination) {
+    const auto D = Destination.string();
+    return take(neverd_web_bun_export_json(Session, Revision.data(),
+                                           Revision.size(), E.data(), E.size(),
+                                           D.data(), D.size()));
+  };
+  auto Read = [](const fs::path &P) {
+    std::ifstream F(P, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(F), {});
+  };
+  const auto Destination = Root / "recovered";
+  EXPECT_EQ(errorCode(Export("2", Destination)), "stale_revision");
+  EXPECT_FALSE(fs::exists(Destination));
+  write("replaced after capture");
+  const auto R = Export("1", Destination);
+  ASSERT_EQ(field(R, "status"), "ok");
+  EXPECT_EQ(R.getAsObject()->getInteger("source_count"), 2);
+  EXPECT_EQ(R.getAsObject()->getInteger("unavailable_source_count"), 0);
+  EXPECT_EQ(Read(Destination / "original.bin"), F.Bytes);
+  EXPECT_EQ(Read(Destination / "m00000.js"),
+            "export const secret = 'BUN_SOURCE_CANARY';");
+  EXPECT_EQ(Read(Destination / "m00001.js"), "export const x = '中文🌱';");
+#if NEVERD_TEST_WEB_JAVASCRIPT
+  EXPECT_EQ(R.getAsObject()->getInteger("readable_source_count"), 2);
+  EXPECT_FALSE(Read(Destination / "m00000.readable.js").empty());
+#endif
+  EXPECT_NE(Read(Destination / "index.html").find("default-src 'none'"),
+            std::string::npos);
+  const auto ManifestText = Read(Destination / "manifest.json");
+  EXPECT_FALSE(fs::exists(Destination / "manifest.pending"));
+  auto Manifest = llvm::json::parse(ManifestText);
+  ASSERT_TRUE(bool(Manifest));
+  for (const auto &Region : *Manifest->getAsObject()->getArray("regions")) {
+    const auto Offset = std::stoull(field(Region, "original_offset"));
+    const auto Size = std::stoull(field(Region, "bytes"));
+    EXPECT_EQ(Read(Destination / field(Region, "file")),
+              F.Bytes.substr(Offset, Size));
+  }
+  EXPECT_EQ(errorCode(Export("1", Destination)), "export_destination_exists");
+  EXPECT_EQ(Read(Destination / "manifest.json"), ManifestText);
+  EXPECT_FALSE(fs::exists(Root / "opaque.asset"));
+  fs::create_directory_symlink(Destination, Root / "linked-output");
+  EXPECT_EQ(errorCode(Export("1", Root / "linked-output")),
+            "export_destination_exists");
+  const auto Reply = llvm::formatv("{0}", R).str();
+  EXPECT_EQ(Reply.find("CANARY"), std::string::npos);
+  EXPECT_EQ(Reply.find("bunfs"), std::string::npos);
+  ASSERT_EQ(field(commit(preview()), "revision"), "2");
+  EXPECT_EQ(errorCode(Export("2", Root / "stale")), "unknown_bun_extraction");
+  EXPECT_FALSE(fs::exists(Root / "stale"));
+}
+
+#ifdef NEVERD_WEB_TEST_CLI
+TEST_F(WebSDK, CLIBunExportWorksWithNoExternalTools) {
+  write(neverd::web::test::BunFixture{}.Bytes);
+  const auto Destination = (Root / "cli-export").string();
+  const auto Output = (Root / "stdout").string();
+  const auto Errors = (Root / "stderr").string();
+  const llvm::StringRef Args[] = {NEVERD_WEB_TEST_CLI, "web", "bun-export",
+                                  Path, Destination};
+  const llvm::StringRef Environment[] = {"PATH=/neverd-no-external-tools",
+                                         "TMPDIR=/private/tmp"};
+  const std::optional<llvm::StringRef> Redirects[] = {std::nullopt, Output,
+                                                      Errors};
+  std::string LaunchError;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(NEVERD_WEB_TEST_CLI, Args, Environment,
+                                      Redirects, 20, 0, &LaunchError),
+            0)
+      << LaunchError;
+  EXPECT_TRUE(fs::exists(fs::path(Destination) / "manifest.json"));
+  EXPECT_TRUE(fs::exists(fs::path(Destination) / "m00000.js"));
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(NEVERD_WEB_TEST_CLI, Args, Environment,
+                                      Redirects, 20, 0, &LaunchError),
+            1);
+}
+#endif
+
 TEST_F(WebSDK, BunExtractionIsImmutablePagedAndSourceAnchored) {
   const neverd::web::test::BunFixture F;
   write(F.Bytes);

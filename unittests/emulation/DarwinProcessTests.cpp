@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "DarwinEntropyTestData.h"
 #include "DarwinFileTestData.h"
 #include "DarwinSystemTestData.h"
 #include "DarwinTestImage.h"
@@ -80,6 +81,145 @@ protected:
     return emulateProcess(Path, GetParam().OS, Options);
   }
 };
+TEST_P(DarwinProcess, ThreadIdentityPreservesExplicitBitsAndIndependentRuns) {
+  Options.InstructionQuantum = 1024;
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  const auto check = [&](const ProcessResult &R, uint64_t ID) {
+    EXPECT_EQ(R.Stop, ProcessStopReason::Exited) << R.Diagnostic;
+    EXPECT_EQ(R.ExitStatus, 37);
+    EXPECT_TRUE(R.StandardError.empty());
+    EXPECT_EQ(R.SelectedBackend, GetParam().Backend);
+    std::vector<const ProcessServiceEvent *> Calls;
+    for (const auto &E : R.Services)
+      if (uint32_t(E.Number) == Class + 372)
+        Calls.push_back(&E);
+    ASSERT_EQ(Calls.size(), 10u);
+    for (unsigned I = 0; I != 10; ++I) {
+      EXPECT_EQ(Calls[I]->Result, ID);
+      EXPECT_EQ(Calls[I]->Error, false);
+      EXPECT_FALSE(Calls[I]->ThreadID);
+      const uint64_t Prefix = I < 4   ? 0
+                              : I < 7 ? 0x1234567800000000ULL
+                                      : 0xffffffff00000000ULL;
+      EXPECT_EQ(Calls[I]->Number, Prefix | (Class + 372));
+    }
+    EXPECT_EQ(Calls.front()->Arguments[0], UINT64_MAX);
+    EXPECT_EQ(Calls.front()->Arguments[1], 0x8000000000000000ULL);
+    EXPECT_EQ(Calls.front()->Arguments[2], 0x1122334455667788ULL);
+    EXPECT_EQ(Calls.front()->Arguments[3], 1u);
+    EXPECT_EQ(Calls.front()->Arguments[4], UINT64_MAX);
+    EXPECT_EQ(Calls.front()->Arguments[5], 0x123456789abcdef0ULL);
+  };
+  Options.DarwinSystem = darwin_test::threadIdentityOptions();
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("thread-identity");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    check(*R, 0xfedcba9876543210ULL);
+    EXPECT_EQ(R->StandardOutput, "T");
+  }
+  struct Sample {
+    uint64_t ID;
+    const char *Hex;
+  };
+  for (const auto &S :
+       {Sample{0, "0000000000000000"}, Sample{1, "0100000000000000"},
+        Sample{0x100000001ULL, "0100000001000000"},
+        Sample{0x8000000000000000ULL, "0000000000000080"},
+        Sample{UINT64_MAX, "ffffffffffffffff"}}) {
+    SCOPED_TRACE(S.ID);
+    Options.DarwinSystem->ThreadID = S.ID;
+    for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+      auto R = run("thread-identity-value");
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      check(*R, S.ID);
+      EXPECT_EQ(R->StandardOutput, llvm::fromHex(S.Hex));
+      EXPECT_EQ(Options.DarwinSystem->ThreadID, S.ID);
+    }
+  }
+  auto Independent = Options;
+  Independent.DarwinSystem->ThreadID = 0xfedcba9876543210ULL;
+  auto R = emulateProcess(Path, GetParam().OS, Independent);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  check(*R, 0xfedcba9876543210ULL);
+  EXPECT_EQ(R->StandardOutput, llvm::fromHex(darwin_test::ThreadIdentityHex));
+  EXPECT_EQ(Options.DarwinSystem->ThreadID, UINT64_MAX);
+  for (bool Present : {false, true}) {
+    Options.DarwinSystem.reset();
+    if (Present)
+      Options.DarwinSystem.emplace();
+    auto Missing = run("thread-identity-missing");
+    ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+    EXPECT_EQ(Missing->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(Missing->Diagnostic,
+              "Darwin current-thread identity observation is not configured");
+    EXPECT_EQ(Missing->StandardOutput, "!");
+    ASSERT_EQ(Missing->Services.size(), 2u);
+    EXPECT_EQ(Missing->Services.back().Number, Class + 372);
+    EXPECT_FALSE(Missing->Services.back().Result);
+    EXPECT_FALSE(Missing->Services.back().Error);
+    EXPECT_FALSE(Missing->Services.back().ThreadID);
+  }
+}
+
+TEST_P(DarwinProcess, EntropyReplayKeepsBytesFaultOrderAndFreshRunLifetime) {
+  Options.InstructionQuantum = 1024;
+  Options.DarwinSystem = darwin_test::entropyReplayOptions();
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("entropy-replay");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+    EXPECT_EQ(R->ExitStatus, 37);
+    EXPECT_EQ(R->StandardOutput, "R");
+    EXPECT_TRUE(R->StandardError.empty());
+    EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+    std::vector<const ProcessServiceEvent *> Calls;
+    for (const auto &E : R->Services)
+      if (E.Number == Class + 500)
+        Calls.push_back(&E);
+    ASSERT_EQ(Calls.size(), 28u);
+    for (unsigned I = 0; I != 24; ++I) {
+      const bool Zero = I % 6 == 0;
+      EXPECT_EQ(Calls[I]->Arguments[1] == 0, Zero);
+      EXPECT_EQ(Calls[I]->Result, Zero ? 0 : 22);
+      EXPECT_EQ(Calls[I]->Error, !Zero);
+    }
+    EXPECT_EQ(Calls[24]->Arguments[0], 0u);
+    EXPECT_EQ(Calls[24]->Result, 14u);
+    EXPECT_EQ(Calls[24]->Error, true);
+    for (unsigned I = 25; I != 28; ++I) {
+      EXPECT_EQ(Calls[I]->Result, 0u);
+      EXPECT_EQ(Calls[I]->Error, false);
+    }
+  }
+  for (const auto &[Mode, Diagnostic] :
+       {std::pair{"entropy-missing",
+                  "Darwin entropy observations are not configured"},
+        std::pair{"entropy-exhausted",
+                  "Darwin entropy observations are exhausted"},
+        std::pair{
+            "entropy-mismatch",
+            "Darwin entropy observation length does not match the request"},
+        std::pair{"entropy-partial",
+                  "Darwin partial entropy output is unsupported"}}) {
+    Options.DarwinSystem = darwin_test::entropyReplayOptions();
+    if (llvm::StringRef(Mode) == "entropy-missing")
+      Options.DarwinSystem->EntropyReads.reset();
+    if (llvm::StringRef(Mode) == "entropy-exhausted")
+      Options.DarwinSystem->EntropyReads->resize(1);
+    auto R = run(Mode);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic, Diagnostic);
+    EXPECT_EQ(R->StandardOutput, "!");
+    EXPECT_EQ(R->Services.back().Number, Class + 500);
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+}
+
 TEST_P(DarwinProcess, StartupDataBSSCarryAndBinaryOutput) {
   auto Result = run("normal");
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
@@ -497,6 +637,106 @@ TEST_P(DarwinProcess, CommonAttributesPreserveRecordAndDescriptorState) {
     }
   }
 }
+TEST_P(DarwinProcess, NonblockingDescriptorsKeepNativeControlState) {
+  Options.DarwinFiles = darwin_test::nonblockingDescriptorOptions();
+  Options.Arguments[2] = "/data";
+  Options.InstructionQuantum = 1024;
+  Options.Limits.TimeoutMicroseconds = 5000000;
+  for (const char *Mode :
+       {"nonblocking-descriptors", "nonblocking-flags-unsupported"}) {
+    SCOPED_TRACE(Mode);
+    auto Result = run(Mode);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    const bool Unknown = llvm::StringRef(Mode).ends_with("-unsupported");
+    ASSERT_EQ(Result->Stop, Unknown ? ProcessStopReason::UnsupportedService
+                                    : ProcessStopReason::Exited)
+        << Result->Diagnostic;
+    EXPECT_EQ(Result->StandardOutput, "N");
+    EXPECT_TRUE(Result->StandardError.empty());
+    if (Unknown) {
+      EXPECT_EQ(Result->Diagnostic, "unsupported Darwin fcntl command");
+      ASSERT_FALSE(Result->Services.empty());
+      const auto &Last = Result->Services.back();
+      EXPECT_EQ(uint32_t(Last.Number) & 0x00ffffff, 92u);
+      EXPECT_FALSE(Last.Result);
+      EXPECT_FALSE(Last.Error);
+    } else
+      EXPECT_EQ(Result->ExitStatus, 37);
+  }
+}
+
+TEST_P(DarwinProcess, SymbolicDescriptorsRetainObjectsAndNativeErrorOrder) {
+  Options.DarwinFiles = darwin_test::symbolicDescriptorOptions();
+  Options.Arguments[2] = "/data";
+  Options.InstructionQuantum = 1024;
+  Options.Limits.TimeoutMicroseconds = 5000000;
+  for (const char *Mode :
+       {"symbolic-descriptors", "symbolic-descriptors-values",
+        "symbolic-descriptors-name-unsupported"}) {
+    SCOPED_TRACE(Mode);
+    auto Result = run(Mode);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    const bool Unknown = llvm::StringRef(Mode).ends_with("-unsupported");
+    ASSERT_EQ(Result->Stop, Unknown ? ProcessStopReason::UnsupportedService
+                                    : ProcessStopReason::Exited)
+        << Result->Diagnostic << "; instructions=" << Result->Instructions
+        << "; services=" << Result->Services.size();
+    EXPECT_EQ(llvm::toHex(Result->StandardOutput, true),
+              llvm::StringRef(Mode) == "symbolic-descriptors-values"
+                  ? darwin_test::SymbolicDescriptorHex
+                  : "53");
+    EXPECT_TRUE(Result->StandardError.empty());
+    ASSERT_FALSE(Result->Services.empty());
+    if (Unknown) {
+      EXPECT_EQ(Result->Diagnostic,
+                "Darwin multiple-name vnode observations are unsupported");
+      const auto &Last = Result->Services.back();
+      EXPECT_EQ(uint32_t(Last.Number) & 0x00ffffff, 92u);
+      EXPECT_FALSE(Last.Result);
+      EXPECT_FALSE(Last.Error);
+    } else {
+      EXPECT_EQ(Result->ExitStatus, 37);
+    }
+  }
+}
+
+TEST_P(DarwinProcess, HardLinksShareObjectsAndRetainExplicitNameBoundary) {
+  Options.DarwinFiles = darwin_test::hardLinksOptions();
+  Options.Arguments[2] = "/data";
+  Options.InstructionQuantum = 1024;
+  Options.Limits.TimeoutMicroseconds = 5000000;
+  for (const char *Mode :
+       {"hard-links", "hard-links-values", "hard-links-name-unsupported",
+        "hard-links-attributes-unsupported"}) {
+    SCOPED_TRACE(Mode);
+    auto Result = run(Mode);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    const bool Unknown = llvm::StringRef(Mode).ends_with("-unsupported");
+    ASSERT_EQ(Result->Stop, Unknown ? ProcessStopReason::UnsupportedService
+                                    : ProcessStopReason::Exited)
+        << Result->Diagnostic << "; instructions=" << Result->Instructions
+        << "; services=" << Result->Services.size();
+    EXPECT_EQ(llvm::toHex(Result->StandardOutput, true),
+              llvm::StringRef(Mode) == "hard-links-values"
+                  ? darwin_test::HardLinksHex
+                  : "48");
+    EXPECT_TRUE(Result->StandardError.empty());
+    ASSERT_FALSE(Result->Services.empty());
+    if (Unknown) {
+      EXPECT_EQ(Result->Diagnostic,
+                "Darwin multiple-name vnode observations are unsupported");
+      const auto &Last = Result->Services.back();
+      EXPECT_EQ(uint32_t(Last.Number) & 0x00ffffff,
+                llvm::StringRef(Mode) == "hard-links-name-unsupported" ? 92u
+                                                                       : 228u);
+      EXPECT_FALSE(Last.Result);
+      EXPECT_FALSE(Last.Error);
+    } else {
+      EXPECT_EQ(Result->ExitStatus, 37);
+    }
+  }
+}
+
 TEST_P(DarwinProcess, XattrMutationsPreserveInputAuthorityAndObjectLifetime) {
   Options.DarwinFiles = darwin_test::xattrMutationsOptions();
   Options.Arguments[2] = "/data";

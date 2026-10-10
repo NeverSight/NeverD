@@ -177,7 +177,7 @@ bool RegistrationStateSolver::projectFrameObject(
             ? Chain.RealignedFrame->SavedParentFrameOffset
             : int64_t(*Chain.RegistrationOffset) - (KnownCxx ? 4 : 0);
     if (Begin < *SP || Begin < -int64_t(limits::kMaxRegistrationEHStateWork) ||
-        End > 0 ||
+        End > (KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0) ||
         (Begin < int64_t(*Chain.TryLevelOffset) + 4 && Administration < End) ||
         !charge(size_t(End - Begin) + State.Frame.cellCount()))
       return false;

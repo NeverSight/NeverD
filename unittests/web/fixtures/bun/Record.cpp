@@ -47,7 +47,7 @@ void write(const std::string &Path, std::string_view Bytes) {
 int main(int Argc, char **Argv) {
   try {
     if (Argc != 3)
-      throw std::runtime_error("usage: record full.elf output-prefix");
+      throw std::runtime_error("usage: record full.elf output-prefix|--probe");
     std::ifstream F(Argv[1], std::ios::binary | std::ios::ate);
     if (!F || F.tellg() < 64 || F.tellg() > 256 * 1024 * 1024)
       throw std::runtime_error("fixture input");
@@ -70,9 +70,24 @@ int main(int Argc, char **Argv) {
         throw std::runtime_error("duplicate");
       const auto At = read(B, S + 24, 8);
       const auto Graph = part(B, At + 8, read(B, At, 8));
-      write(std::string(Argv[2]) + ".graph.bin", Graph);
       const auto Footer = Graph.size() - 48;
       const auto Table = read(Graph, Footer + 8, 4);
+      if (std::string_view(Argv[2]) == "--probe") {
+        llvm::outs() << llvm::json::Value(llvm::json::Object{
+                            {"full_elf_sha256", hash(B)},
+                            {"graph_offset", At + 8},
+                            {"graph_size", Graph.size()},
+                            {"byte_count", read(Graph, Footer, 8)},
+                            {"module_table_offset", Table},
+                            {"module_table_bytes", read(Graph, Footer + 12, 4)},
+                            {"entry_point", read(Graph, Footer + 16, 4)},
+                            {"args_offset", read(Graph, Footer + 20, 4)},
+                            {"args_bytes", read(Graph, Footer + 24, 4)},
+                            {"flags", read(Graph, Footer + 28, 4)}})
+                     << '\n';
+        continue;
+      }
+      write(std::string(Argv[2]) + ".graph.bin", Graph);
       const auto Modules = read(Graph, Footer + 12, 4) / 52;
       llvm::json::Array Records;
       for (uint64_t M = 0; M < Modules; ++M) {

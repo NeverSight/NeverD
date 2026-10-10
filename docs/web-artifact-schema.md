@@ -2,8 +2,9 @@
 
 `lib/web` owns this schema, identity construction and publication rules.
 CLI/SDK adapters must not reconstruct identities or infer additional analysis
-claims. This schema currently describes metadata inspection; findings,
-transform receipts, exports and observations will need explicit additions.
+claims. This schema describes metadata inspection and explicit local Bun
+evidence export; findings, transform receipts and observations require separate
+contracts.
 
 ## Identity and immutable evidence
 
@@ -106,6 +107,34 @@ complete source semantics, map provenance or whole-project analysis.
 | `association_status/association_kind: container_assertion` | A Bun module record names this map and generated source; provenance is still unverified |
 | `mapping_coverage: retained_mapped_anchors_only` | Bun discarded unmapped boundaries; preceding anchors cannot establish intervening mapping scope |
 | `checked_scope: returned_anchors` | Position checks cover returned anchors only |
+
+## Explicit local Bun export
+
+`bun-local-evidence-export-v1` returns counts, hashes, the selected layout
+profile, entry index and fixed verification claims. `status:ok` means export
+completed; `unavailable_source_count`, `parsed_source_count` and
+`readable_source_count` independently describe projections and parser coverage.
+It never means that original TypeScript or native code has been recovered.
+`readable_source_profile` is null when the parser is disabled.
+
+The explicitly requested local `manifest.json` contains raw virtual names,
+generated relative filenames, exact original offsets and storage hashes, plus
+separate decoded/readable hashes. `source_status:decoded_exact` describes the
+strict encoding projection; `source_status:asset` retains opaque data.
+Other fixed source failure codes retain raw storage without a substitute JS
+file. `readable_status:verified_same_parser_tree` means whitespace insertion
+passed a comparison of the retained parser trees. A parser failure preserves
+`parse_status` and bounded `parse_diagnostics` with fixed codes and
+`original_utf8_byte_offset` as a decimal string or null. Those offsets belong
+to decoded original JS, not the native container or the readable file.
+
+The local manifest and HTML index are deliberate raw disclosure and are not
+ordinary metadata-only responses. Original virtual names never select output
+paths. The index escapes names, executes no script and records its own hash
+in the manifest. A manifest hash in the API response binds the exact completed
+manifest bytes; it does not authenticate publisher signatures.
+
+## Private metadata policy
 
 `metadata-only-v1` excludes raw member names, identifiers, literals, URLs,
 source roots and contents from ordinary metadata operations. `name_redacted` records

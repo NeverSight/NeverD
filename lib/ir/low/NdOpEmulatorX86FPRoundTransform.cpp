@@ -187,6 +187,11 @@ bool NdOpEmulator::executeX86FPRoundTransform(const LowOp &Op) {
   if ((Immediate & 8U) != 0)
     Raised &= ~(1U << 5);
   if (!SuppressExceptions) {
+    // An unmasked invalid operand faults before the instruction's precision
+    // stage, even when another packed lane is inexact. Preserve earlier
+    // sticky PE, but do not publish a newly raised PE for this instruction.
+    if ((Raised & 1U) && !(MXCSR & (1U << 7)))
+      Raised &= ~(1U << 5);
     MXCSR |= Raised;
     if (hasUnmaskedException(MXCSR, Raised))
       return false;

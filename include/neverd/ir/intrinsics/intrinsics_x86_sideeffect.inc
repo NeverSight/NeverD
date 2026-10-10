@@ -181,6 +181,8 @@ SIDEEFFECT(Intrinsic::X86FPCvtToIntState);
 SIDEEFFECT(Intrinsic::X86FPTruncToIntState);
 SIDEEFFECT(Intrinsic::X86FPConvert);
 SIDEEFFECT(Intrinsic::X86FPRoundTransform);
+SIDEEFFECT(Intrinsic::X86FPRoundState);
+SIDEEFFECT(Intrinsic::X86FPRoundMemoryState);
 SIDEEFFECT(Intrinsic::X86FPExtract);
 SIDEEFFECT(Intrinsic::X86FPRange);
 SIDEEFFECT(Intrinsic::X86FPFixup);

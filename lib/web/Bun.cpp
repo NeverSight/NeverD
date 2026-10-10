@@ -220,7 +220,6 @@ public:
     Out.ArtifactID = Input.ID;
     Out.GraphOffset = Graph.Offset;
     Out.GraphSize = Graph.Size;
-    Out.ID = identity("bun-extraction", {Input.ID, Input.BlobHash, BunProfile});
   }
 
   BunExtraction run() {
@@ -236,9 +235,13 @@ public:
     Out.Flags = number(Footer, 28, 4);
     constexpr uint32_t RequiredFlags =
         (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8);
-    if ((Out.Flags & ~uint32_t(0x7ff)) ||
+    if ((Out.Flags & ~uint32_t(0x1fff)) ||
         (Out.Flags & RequiredFlags) != RequiredFlags)
       throw Error("bun_unsupported_graph_flags");
+    Out.Profile = (Out.Flags & ((1 << 11) | (1 << 12))) ? BunPrelinkedProfile
+                                                        : BunProfile;
+    Out.ID =
+        identity("bun-extraction", {Input.ID, Input.BlobHash, Out.Profile});
     within(Modules, DataSize);
     if (!Modules.Size || Modules.Size % 52)
       throw Error("bun_invalid_module_table");
@@ -315,6 +318,30 @@ public:
       throw Error("bun_invalid_startup_count");
     if (Out.Flags & (1 << 9))
       SharedTable("module_info_string_table", false);
+    // 71d0d439 adds these records after the module-info table. The linked
+    // payload flag (bit 13) changes cache aliasing and is not admitted here.
+    if (Out.Flags & (1 << 11)) {
+      SharedTable("prelinked_module_graph", true);
+      within({At, 4}, DataSize);
+      const auto Files = R.integer(At, 4);
+      At += 4;
+      if (Files > Count)
+        throw Error("bun_invalid_prelinked_files");
+      within({At, Files * 4}, DataSize);
+      std::set<uint32_t> Seen;
+      for (uint64_t I = 0; I < Files; ++I) {
+        const auto File = R.integer(At + I * 4, 4);
+        if (File >= Count || !Seen.insert(File).second)
+          throw Error("bun_invalid_prelinked_files");
+      }
+      At += Files * 4;
+    }
+    if (Out.Flags & (1 << 12)) {
+      // Preserve build-time runtime defaults as opaque graph metadata. They
+      // cannot configure the host or change the source decoder's semantics.
+      within({At, 8}, DataSize);
+      At += 8;
+    }
     // The fixed StringBuilder writes a terminator even for empty argv.
     within(Args, DataSize);
     if (Args.Offset != At || Args.end() + 1 != DataSize ||
@@ -374,14 +401,27 @@ BunSourceRange decodeSource(const BunExtraction &E, const BunModule &M,
   if (M.SourceArtifactID.empty() || M.Contents >= E.Regions.size())
     throw Error("bun_source_unavailable");
   const auto &Content = E.Regions[M.Contents].Content;
-  const auto Budget = std::min(MaxBytes, MaxBlobReadBytes / 2);
+  const auto Budget = std::min(MaxBytes, MaxBunDecodedSourceBytes);
   if (M.Encoding > 2)
     throw Error("bun_invalid_source_unicode");
   if (Query && (Query->Offset > Budget || Query->Size > Budget - Query->Offset))
     throw Error("invalid_source_position");
   if (Content.size() > Budget * (M.Encoding == 2 ? 2 : 1))
     throw Error("source_byte_budget_exceeded");
-  const auto Raw = Content.read(0, Content.size());
+  // Raw storage stays in the immutable spool. Export can decode a large
+  // module without lifting the separate parser or Blob materialization caps.
+  std::string Chunk;
+  uint64_t ChunkAt = 0, Cursor = 0;
+  auto Byte = [&]() -> uint32_t {
+    if (Cursor >= Content.size())
+      throw Error("bun_invalid_source_unicode");
+    if (Chunk.empty() || Cursor - ChunkAt == Chunk.size()) {
+      ChunkAt = Cursor;
+      Chunk = Content.read(
+          Cursor, std::min(BlobTransferBytes, Content.size() - Cursor));
+    }
+    return uint8_t(Chunk[size_t(Cursor++ - ChunkAt)]);
+  };
   BunSourceRange Projection;
   auto &Result = Projection.Text;
   std::optional<uint64_t> Begin, End;
@@ -394,9 +434,13 @@ BunSourceRange decodeSource(const BunExtraction &E, const BunModule &M,
       End = RawOffset;
   };
   if (!M.Encoding) {
-    if (!validUtf8(Raw))
+    for (uint64_t At = 0; At < Content.size();) {
+      const auto N = std::min(BlobTransferBytes, Content.size() - At);
+      Result += Content.read(At, N);
+      At += N;
+    }
+    if (!validUtf8(Result))
       throw Error("bun_invalid_source_unicode");
-    Result = Raw;
     if (Query) {
       Begin = Query->Offset;
       End = Query->end();
@@ -417,28 +461,24 @@ BunSourceRange decodeSource(const BunExtraction &E, const BunModule &M,
           Result.push_back(char(0x80 | ((C >> (6 * (I - 1))) & 0x3f)));
       }
     };
-    for (size_t I = 0; I < Raw.size();) {
-      Mark(I);
-      uint32_t C = uint8_t(Raw[I++]);
+    while (Cursor < Content.size()) {
+      Mark(Cursor);
+      uint32_t C = Byte();
       if (M.Encoding == 2) {
-        if (I == Raw.size())
-          throw Error("bun_invalid_source_unicode");
-        C |= uint32_t(uint8_t(Raw[I++])) << 8;
+        C |= Byte() << 8;
         if (C >= 0xd800 && C <= 0xdbff) {
-          if (Raw.size() - I < 2)
-            throw Error("bun_invalid_source_unicode");
-          const auto Low = number(Raw, I, 2);
+          uint32_t Low = Byte();
+          Low |= Byte() << 8;
           if (Low < 0xdc00 || Low > 0xdfff)
             throw Error("bun_invalid_source_unicode");
           C = 0x10000 + ((C - 0xd800) << 10) + (Low - 0xdc00);
-          I += 2;
         } else if (C >= 0xdc00 && C <= 0xdfff) {
           throw Error("bun_invalid_source_unicode");
         }
       }
       Append(C);
     }
-    Mark(Raw.size());
+    Mark(Content.size());
   }
   if (Query) {
     if (!Begin || !End || !sourceByteBoundary(Result, Query->Offset) ||

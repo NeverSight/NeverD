@@ -63,6 +63,40 @@ TEST(WebBindings, ShadowingHoistingAndReferencesHaveStableIdentities) {
     EXPECT_EQ(A.Bindings.References[I].ID, Again.Bindings.References[I].ID);
 }
 
+TEST(WebBindings,
+     ResourcesAreImmutableLexicalBindingsWithCorrectLoopLifetimes) {
+  const Analysis A(
+      "using outer=null; {outer; using outer=resource; outer=other;} outer;"
+      "async function f(){await using x=get();x;"
+      "for(await using each of items){each;}"
+      "for(using once=get();test();step()){once;}}",
+      "module");
+  ASSERT_EQ(A.Syntax.ParseStatus, "parsed");
+  ASSERT_EQ(A.Bindings.Status, "ok");
+  const auto Outer = A.references(u"outer");
+  ASSERT_EQ(Outer.size(), 3);
+  EXPECT_EQ(Outer[0]->Binding, Outer[1]->Binding);
+  EXPECT_NE(Outer[0]->Binding, Outer[2]->Binding);
+  EXPECT_EQ(Outer[1]->Access, "write");
+  for (const auto Name : {u"outer", u"x", u"each", u"once"}) {
+    const auto Bindings = A.named(Name);
+    ASSERT_FALSE(Bindings.empty());
+    for (const auto *B : Bindings) {
+      EXPECT_TRUE(B->Immutable);
+      EXPECT_TRUE(B->HasTemporalDeadZone);
+      EXPECT_TRUE(B->Kind == "using" || B->Kind == "await using");
+    }
+  }
+  const auto Each = A.named(u"each"), Once = A.named(u"once");
+  ASSERT_EQ(Each.size(), 1);
+  ASSERT_EQ(Once.size(), 1);
+  EXPECT_TRUE(A.Bindings.Scopes[Each.front()->Scope].PerIteration);
+  EXPECT_FALSE(A.Bindings.Scopes[Once.front()->Scope].PerIteration);
+  const Analysis Conflict("{using x=null; let x;}");
+  EXPECT_EQ(Conflict.Bindings.Status, "partial");
+  EXPECT_TRUE(Conflict.diagnostic("conflicting_declaration"));
+}
+
 TEST(WebBindings, PropertyNamesLabelsAndPrivateNamesAreNotVariableReads) {
   const Analysis A(R"JS(
     const value = 1, key = 'x';

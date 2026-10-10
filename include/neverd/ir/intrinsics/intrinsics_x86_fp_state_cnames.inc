@@ -6,3 +6,5 @@ C(Intrinsic::X86FPMulState, "neverd_x86_fp_mul_state");
 C(Intrinsic::X86FPDivState, "neverd_x86_fp_div_state");
 C(Intrinsic::X86FPCvtToIntState, "neverd_x86_fp_cvt_to_int_state");
 C(Intrinsic::X86FPTruncToIntState, "neverd_x86_fp_trunc_to_int_state");
+C(Intrinsic::X86FPRoundState, "neverd_x86_fp_round_state");
+C(Intrinsic::X86FPRoundMemoryState, "neverd_x86_fp_round_memory_state");

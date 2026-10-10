@@ -20,7 +20,86 @@ namespace neverd {
 using X86FPStateCHelperNames =
     std::map<std::pair<Intrinsic, unsigned>, std::string>;
 
+inline std::string x86FPStateRawCType(unsigned Bytes) {
+  return Bytes <= 8 ? "uint" + std::to_string(Bytes * 8) + "_t"
+                    : "unsigned _BitInt(" + std::to_string(Bytes * 8) + ")";
+}
+
+inline std::string x86FPRoundStateCHelperName(Intrinsic Id, unsigned Layout) {
+  std::string Name = std::string("neverd_x86_") +
+                     x86FPRoundStateMnemonic(Layout) + "_bits" +
+                     std::to_string(x86FPStateSourceBytes(Layout) * 8) +
+                     "_imm" + std::to_string(x86FPRoundStateImmediate(Layout));
+  if (Id == Intrinsic::X86FPRoundMemoryState) {
+    const auto Space = x86FPRoundStateAddressSpace(Layout);
+    Name += Space == NdMemoryAddressSpace::X86FS   ? "_memory_fs"
+            : Space == NdMemoryAddressSpace::X86GS ? "_memory_gs"
+                                                   : "_memory";
+  }
+  return Name;
+}
+
+/// Both C routes use the same instruction completion scope. The immediate is
+/// part of the helper identity so it remains an assembler constant at -O0.
+template <typename Stream>
+inline void
+writeX86FPRoundStateCHelper(Stream &OS, Intrinsic Id, unsigned Layout,
+                            const std::string &Name, bool StateAddress) {
+  const unsigned Bytes = x86FPStateSourceBytes(Layout);
+  const unsigned Control = x86FPRoundStateControl(Layout);
+  const bool Scalar = x86FPRoundStateIsScalar(Control);
+  const bool Memory = Id == Intrinsic::X86FPRoundMemoryState;
+  const auto Space = x86FPRoundStateAddressSpace(Layout);
+  const auto Raw = x86FPStateRawCType(Bytes);
+  const auto Result = StateAddress ? Raw : x86FPStateRawCType(Bytes + 4);
+  OS << "/* ROUND numerical bits and MXCSR, with one instruction completion. "
+        "*/\n"
+     << "static inline ";
+  if (Bytes == 32 || (Control & 8))
+    OS << "__attribute__((target(\"avx\"))) ";
+  OS << Result << " " << Name << "("
+     << (Memory ? "void *address" : Raw + " bits") << ", "
+     << (StateAddress ? "void *state_address" : "uint32_t state") << ") {\n";
+  if (StateAddress)
+    OS << "    uint32_t state;\n"
+       << "    __builtin_memcpy(&state, state_address, 4);\n";
+  OS << "    ";
+  if (Scalar)
+    OS << (x86FPRoundStateElementBytes(Control) == 8 ? "double" : "float");
+  else
+    OS << "typedef "
+       << (x86FPRoundStateElementBytes(Control) == 8 ? "double" : "float")
+       << " round_vector __attribute__((vector_size(" << Bytes << ")));\n"
+       << "    round_vector";
+  OS << (Memory ? " rounded;\n" : " value, rounded;\n") << "    " << Raw
+     << " result;\n";
+  if (!Memory)
+    OS << "    __builtin_memcpy(&value, &bits, " << Bytes << ");\n";
+  OS << "    __asm__ volatile(\"ldmxcsr %1\\n\\t"
+     << x86FPRoundStateMnemonic(Layout) << " $"
+     << x86FPRoundStateImmediate(Layout) << ",";
+  if (Memory) {
+    OS << (Space == NdMemoryAddressSpace::X86FS   ? "%%fs:"
+           : Space == NdMemoryAddressSpace::X86GS ? "%%gs:"
+                                                  : "")
+       << "(%2)";
+  } else
+    OS << "%2";
+  OS << ",%0\\n\\tstmxcsr %1\"\n"
+     << "        : \"=&x\"(rounded), \"+m\"(state) : "
+     << (Memory ? "\"r\"(address)" : "\"x\"(value)") << " : \"memory\");\n"
+     << "    __builtin_memcpy(&result, &rounded, " << Bytes << ");\n";
+  if (StateAddress)
+    OS << "    __builtin_memcpy(state_address, &state, 4);\n"
+       << "    return result;\n}\n\n";
+  else
+    OS << "    return (" << Result << ")result | ((" << Result << ")state << "
+       << Bytes * 8 << ");\n}\n\n";
+}
+
 inline std::string x86FPScalarValueCHelper(Intrinsic Id, unsigned Bytes) {
+  if (isX86FPRoundStateIntrinsic(Id))
+    return x86FPRoundStateCHelperName(Id, Bytes) + "_value";
   if (isX86FPConversionStateIntrinsic(Id))
     return std::string("neverd_x86_") +
            x86FPStateConversionMnemonic(Id, x86FPStateSourceBytes(Bytes)) +
@@ -35,6 +114,10 @@ inline void writeX86FPScalarValueCHelpers(Stream &OS,
                                           const X86FPStateCHelperNames &Used) {
   for (const auto &[Shape, Name] : Used) {
     const auto [Id, Bytes] = Shape;
+    if (isX86FPRoundStateIntrinsic(Id)) {
+      writeX86FPRoundStateCHelper(OS, Id, Bytes, Name, true);
+      continue;
+    }
     if (isX86FPConversionStateIntrinsic(Id)) {
       const unsigned SourceBytes = x86FPStateSourceBytes(Bytes);
       const unsigned DestinationBytes = x86FPStateDestinationBytes(Id, Bytes);
@@ -79,6 +162,8 @@ inline void writeX86FPScalarValueCHelpers(Stream &OS,
 }
 
 inline std::string x86FPStateCHelper(Intrinsic Id, unsigned ScalarBytes) {
+  if (isX86FPRoundStateIntrinsic(Id))
+    return x86FPRoundStateCHelperName(Id, ScalarBytes);
   if (isX86FPConversionStateIntrinsic(Id))
     return std::string(intrinsicCName(Id)) + "_f" +
            std::to_string(x86FPStateSourceBytes(ScalarBytes) * 8) + "_i" +
@@ -93,6 +178,10 @@ inline void writeX86FPStateCHelpers(llvm::raw_ostream &OS,
                                     const X86FPStateCHelperNames &Used) {
   for (const auto &[Shape, Name] : Used) {
     const auto [Id, Bytes] = Shape;
+    if (isX86FPRoundStateIntrinsic(Id)) {
+      writeX86FPRoundStateCHelper(OS, Id, Bytes, Name, false);
+      continue;
+    }
     if (Id == Intrinsic::X86ReadMXCSR) {
       OS << "static inline uint32_t " << Name << "(void) {\n"
          << "    uint32_t state;\n"

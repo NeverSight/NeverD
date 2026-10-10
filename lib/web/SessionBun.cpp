@@ -9,7 +9,7 @@ llvm::json::Object summary(const BunExtraction &E, uint64_t Revision) {
       {"revision", std::to_string(Revision)},
       {"extraction_id", E.ID},
       {"artifact_id", E.ArtifactID},
-      {"profile", std::string(BunProfile)},
+      {"profile", E.Profile},
       {"layout_status", "compatible"},
       {"producer_version_verified", false},
       {"graph_offset", std::to_string(E.GraphOffset)},

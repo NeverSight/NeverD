@@ -1,5 +1,6 @@
 #include "HermesLexemes.h"
 #include "HermesModel.h"
+#include "RecoveryParser.h"
 #include "hermes/AST/Context.h"
 #include "hermes/AST/ESTree.h"
 #include "hermes/AST/SemValidate.h"
@@ -40,20 +41,22 @@ struct Diagnostics {
 
 } // namespace
 
-SourceAnalysis inspectJavaScript(std::string_view ArtifactID,
-                                 std::string_view Bytes,
-                                 std::string_view SourceType) {
+static SourceAnalysis inspect(std::string_view ArtifactID,
+                              std::string_view Bytes,
+                              std::string_view SourceType, bool Recovery) {
   if (SourceType != "script" && SourceType != "module" &&
       SourceType != "commonjs")
     throw Error("unsupported_source_type");
-  if (Bytes.size() > MaxJavaScriptBytes)
+  if (Bytes.size() > (Recovery ? MaxRecoverySourceBytes : MaxJavaScriptBytes))
     throw Error("source_byte_budget_exceeded");
   SourceAnalysis Result;
   Result.ArtifactID = ArtifactID;
   Result.BlobHash = sha256(Bytes);
   Result.SourceType = SourceType;
   Result.ID = identity("source-unit", {ArtifactID, Result.BlobHash,
-                                       JavaScriptParserProfile, SourceType});
+                                       Recovery ? JavaScriptRecoveryProfile
+                                                : JavaScriptParserProfile,
+                                       SourceType});
   Result.ParseStatus = "invalid_syntax";
   // The embedded numeric-literal converter assumes nearest rounding. Do not
   // silently inherit another host thread's floating-point mode or change it.
@@ -67,7 +70,8 @@ SourceAnalysis inspectJavaScript(std::string_view ArtifactID,
     Result.Diagnostics.push_back({"unsupported_encoding", -1});
     return Result;
   }
-  ParserBudget Budget;
+  ParserBudget Budget(Recovery ? ParserBudget::Profile::Recovery
+                               : ParserBudget::Profile::Interactive);
   auto Buffer = llvh::MemoryBuffer::getMemBufferCopy(
       llvh::StringRef(Bytes.data(), Bytes.size()), "source");
   const auto *Base = Buffer->getBufferStart();
@@ -92,7 +96,10 @@ SourceAnalysis inspectJavaScript(std::string_view ArtifactID,
   hermes::sem::SemContext Semantics;
   if (!hermes::sem::validateASTForParser(Context, Semantics, *Program))
     return Result;
-  hermes_model::Collector Nodes(Result, Base, Bytes.size());
+  hermes_model::Collector Nodes(
+      Result, Base, Bytes.size(),
+      Recovery ? MaxRecoveryNodes : MaxJavaScriptNodes,
+      Recovery ? MaxRecoveryStringUnits : MaxJavaScriptStringUnits);
   try {
     Nodes.collect(*Program, UINT32_MAX, SourceType == "module");
   } catch (const Error &E) {
@@ -103,13 +110,54 @@ SourceAnalysis inspectJavaScript(std::string_view ArtifactID,
   }
   Result.CommentCount = Parser.getStoredComments().size();
   try {
-    hermes_model::collectLexemes(Result, Parser, Base, Bytes);
+    hermes_model::collectLexemes(Result, Parser, Base, Bytes,
+                                 Recovery ? MaxRecoveryLexemes
+                                          : MaxJavaScriptLexemes);
   } catch (const Error &E) {
     Result.Lexemes.clear();
     Result.LexemeStatus = E.what();
   }
+  // The pinned parser first reads async-arrow parameters as call arguments,
+  // where a trailing comma after spread is legal. Reinterpretation must reject
+  // that comma for rest bindings. Use only parser-owned nodes and lexemes,
+  // including comment boundaries, never a textual heuristic over source.
+  for (const auto &N : Result.Nodes) {
+    if (N.Kind != "RestElement")
+      continue;
+    if (Result.LexemeStatus != "ok") {
+      Result.ParseStatus = "unsupported";
+      Result.Diagnostics.push_back({"rest_syntax_check_unavailable", -1});
+      Result.Nodes.clear();
+      return Result;
+    }
+    auto Next = std::lower_bound(
+        Result.Lexemes.begin(), Result.Lexemes.end(), N.End,
+        [](const SourceLexeme &L, uint64_t End) { return L.Start < End; });
+    while (Next != Result.Lexemes.end() && Next->Kind == "comment")
+      ++Next;
+    if (Next != Result.Lexemes.end() && Next->Syntax == ",") {
+      Result.Diagnostics.push_back(
+          {"rest_trailing_comma", int64_t(Next->Start)});
+      Result.Nodes.clear();
+      Result.Lexemes.clear();
+      Result.LexemeStatus = "not_available";
+      return Result;
+    }
+  }
   Result.ParseStatus = "parsed";
   return Result;
+}
+
+SourceAnalysis inspectJavaScript(std::string_view ArtifactID,
+                                 std::string_view Bytes,
+                                 std::string_view SourceType) {
+  return inspect(ArtifactID, Bytes, SourceType, false);
+}
+
+SourceAnalysis inspectRecoveryJavaScript(std::string_view ArtifactID,
+                                         std::string_view Bytes,
+                                         std::string_view SourceType) {
+  return inspect(ArtifactID, Bytes, SourceType, true);
 }
 
 } // namespace neverd::web

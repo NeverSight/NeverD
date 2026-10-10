@@ -58,7 +58,7 @@ TEST(WindowsRegistrationHighCallback, InputPE32BindsCurrentCallbackRoots) {
   ASSERT_TRUE(bool(Image));
   const auto It =
       llvm::find_if(Image->ExceptionMetadata.Functions, [](const auto &EH) {
-        return EH.Registration && EH.Registration->RealignedFrame;
+        return EH.Registration && EH.Registration->hasCxxCallbackStack();
       });
   ASSERT_NE(It, Image->ExceptionMetadata.Functions.end());
   ASSERT_TRUE(It->Cxx);
@@ -312,7 +312,7 @@ TEST(WindowsRegistrationHighCallback, InputPE32CollectsTheWholeCallbackCFG) {
   ASSERT_TRUE(bool(Image));
   const auto It =
       llvm::find_if(Image->ExceptionMetadata.Functions, [](const auto &EH) {
-        return EH.Registration && EH.Registration->RealignedFrame;
+        return EH.Registration && EH.Registration->hasCxxCallbackStack();
       });
   ASSERT_NE(It, Image->ExceptionMetadata.Functions.end());
   const va_t Catch = It->Cxx->TryBlocks[0].Handlers[0].HandlerVA;

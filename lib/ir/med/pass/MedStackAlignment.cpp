@@ -10,6 +10,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86RegistrationFrame.h"
 
 #include <cstdint>
 #include <limits>
@@ -192,8 +193,12 @@ private:
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           Op.IntrinsicOutputs.empty()) {
         if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None) {
-          if (Architecture == Arch::X86 && Format == BinaryFormat::COFF)
-            Result = registrationRootEntryStackOffset(Op);
+          if (Architecture == Arch::X86 && Format == BinaryFormat::COFF) {
+            const auto Coordinate = registrationRootFrameCoordinate(Func, Op);
+            if (Coordinate && Coordinate->Alignment == 1)
+              Result =
+                  int64_t(Coordinate->EntryOffset) + Coordinate->AlignedOffset;
+          }
         } else if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
           Result = resolve(Op.Inputs[0], Depth + 1);
         else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&

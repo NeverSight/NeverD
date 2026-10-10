@@ -7,17 +7,21 @@ namespace {
 thread_local ParserBudget *Active = nullptr;
 }
 
-ParserBudget::ParserBudget()
+ParserBudget::ParserBudget(Profile Selected)
     : Previous(Active),
-      Deadline(std::chrono::steady_clock::now() + std::chrono::seconds(5)) {
+      Deadline(std::chrono::steady_clock::now() +
+               std::chrono::seconds(Selected == Profile::Recovery ? 30 : 5)) {
+  if (Selected == Profile::Recovery) {
+    MaxBytes = 256 * 1024 * 1024;
+    MaxWork = 1600000;
+  }
   Active = this;
 }
 
 ParserBudget::~ParserBudget() { Active = Previous; }
 
 void ParserBudget::charge(size_t Count) {
-  constexpr uint64_t MaxBytes = 32 * 1024 * 1024;
-  if (Count > MaxBytes - Bytes || ++Work > 200000)
+  if (Count > MaxBytes - Bytes || ++Work > MaxWork)
     throw Error("parser_budget_exceeded");
   Bytes += Count;
   if ((Work & 63) == 0 && std::chrono::steady_clock::now() > Deadline)

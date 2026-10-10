@@ -556,6 +556,33 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
   if (Op.NumInputs < 1 || !Op.Inputs[0].isConst())
     return false;
   const Intrinsic Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (Id == Intrinsic::CetRdSsp) {
+    if (!x86ShadowStackReadShapeIsValid(
+            x86ShadowStackReadLowShape(Op, Img.Arch)) ||
+        !X86CurrentPrivilegeLevel || !X86ShadowStackEnabled ||
+        X86ShadowStackPrivilegeLevel != X86CurrentPrivilegeLevel)
+      return false;
+    if (*X86ShadowStackEnabled) {
+      if (!X86ShadowStackPointer)
+        return false;
+      writeOutput(Op.Output, Op.Inputs[2].Offset == 4
+                                 ? uint32_t(*X86ShadowStackPointer)
+                                 : *X86ShadowStackPointer);
+    } else {
+      const NdVar &Old = Op.Inputs[1];
+      if (!Old.isConst() && !Registers.contains(Old.Offset))
+        return false;
+      writeOutput(Op.Output, readOperand(Old));
+    }
+    return true;
+  }
+  if (Id == Intrinsic::CetIncSsp || Id == Intrinsic::CetRstorssp ||
+      Id == Intrinsic::CetSaveprevssp || Id == Intrinsic::CetSetssbsy ||
+      Id == Intrinsic::CetClrssbsy) {
+    X86ShadowStackEnabled.reset();
+    X86ShadowStackPointer.reset();
+    return false;
+  }
   if (!MXCSRKnown &&
       (Id == Intrinsic::Stmxcsr || Id == Intrinsic::F16CConvert ||
        Id == Intrinsic::X86ApproxFloat || Id == Intrinsic::X86FPArith ||
@@ -687,21 +714,9 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       return false;
     }
 
-    const auto IsCanonical = [&](uint64_t Address) {
-      const unsigned Bits = *X86LinearAddressBits;
-      const uint64_t LowMask = (UINT64_C(1) << Bits) - 1;
-      const uint64_t HighMask = ~LowMask;
-      const bool Sign = ((Address >> (Bits - 1)) & 1) != 0;
-      return (Address & HighMask) == (Sign ? HighMask : 0);
-    };
-    const auto IsCanonicalRange = [&](uint64_t Address, uint64_t Size) {
-      return Size != 0 && Size - 1 <= UINT64_MAX - Address &&
-             IsCanonical(Address) && IsCanonical(Address + Size - 1);
-    };
-
     const auto SourceAddress =
         resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
-    if (!SourceAddress || !IsCanonicalRange(*SourceAddress, 64))
+    if (!SourceAddress || !isX86CanonicalMemoryRange(*SourceAddress, 64))
       return false;
     const auto Command = loadMemoryBytes(*SourceAddress, 64);
     if (!Command)
@@ -717,7 +732,8 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       return false;
 
     const uint64_t PortalAddress = readOperand(Op.Inputs[2]);
-    if ((PortalAddress & 63) != 0 || !IsCanonicalRange(PortalAddress, 64))
+    if ((PortalAddress & 63) != 0 ||
+        !isX86CanonicalMemoryRange(PortalAddress, 64))
       return false;
     for (uint64_t Offset = 0; Offset != 64; ++Offset) {
       const Segment *Mapped = Img.getSegmentFor(PortalAddress + Offset);

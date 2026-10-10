@@ -244,7 +244,7 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
         if (Address.Constant == uint32_t{0} && Width == 4 && AtEnd &&
             Op.Addr == Chain.ChainInstallVA &&
             Stored.Offset == Chain.RegistrationOffset && After.Uninstalled &&
-            !After.Installed && realignedInstallationReady(After.Frame)) {
+            !After.Installed && registrationInstallationReady(After.Frame)) {
           After.Levels = {*Chain.SeededTryLevel};
           After.Unknown = false;
           After.Uninstalled = false;
@@ -267,9 +267,9 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
           After.Installed = After.Uninstalled = true;
         }
       } else if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-        if (Chain.RealignedFrame && !After.Installed && After.Uninstalled &&
-            Address.Offset == Chain.TryLevelOffset && Width == 4 &&
-            Stored.Constant == uint32_t(*Chain.SeededTryLevel)) {
+        if (Chain.hasCxxCallbackStack() && !After.Installed &&
+            After.Uninstalled && Address.Offset == Chain.TryLevelOffset &&
+            Width == 4 && Stored.Constant == uint32_t(*Chain.SeededTryLevel)) {
           const auto Observation = Stores.find(Op.Addr);
           if (Observation != Stores.end() && Observation->second.Width == 4 &&
               Observation->second.Level == *Chain.SeededTryLevel)
@@ -511,7 +511,7 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       Continued.Frame.store(SavedSlot, 4,
                             FrameValue::frame(CatchReturn->SavedStackOffset));
       Continued.RuntimeObject.store(SavedSlot, 4, {});
-      if (Chain.RealignedFrame) {
+      if (Chain.hasCxxCallbackStack()) {
         Continued.Frame.leaveCallback();
         // The CRT's call frame does not promise the callback's general
         // registers at its continuation. The restore block rebuilds them.
@@ -521,7 +521,7 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
         Continued.Frame.OtherRegistersMayBeFrame = true;
       }
       Continued.Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
-          FrameValue::frame(0);
+          FrameValue::frame(*Chain.cxxRuntimeFrameOffset());
       Continued.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
           FrameValue::frame(CatchReturn->SavedStackOffset);
       merge(Resume->second, Continued);

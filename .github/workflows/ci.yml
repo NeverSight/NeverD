@@ -1873,8 +1873,9 @@ jobs:
     name: Native CPU (${{ inputs.native_cpu_backend == 'kvm' && 'Linux x64 KVM' || 'Windows x64 WHP' }})
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.native_cpu_only && !inputs.native_arm64_only && !inputs.windows_eh_only }}
     runs-on: ${{ inputs.native_cpu_backend == 'kvm' && 'ubuntu-24.04' || 'windows-latest' }}
-    # Include a cold build and the full native instruction/driver inventory.
-    timeout-minutes: 60
+    # A cold Windows build plus the full driver inventory can exceed one hour.
+    # Per-test execution deadlines remain independently bounded.
+    timeout-minutes: 90
     env:
       NEVERD_NATIVE_CPU_BACKEND: ${{ inputs.native_cpu_backend }}
       NEVERD_NATIVE_DRIVER_TESTS: ${{ inputs.native_driver_tests && 'ON' || 'OFF' }}
@@ -2185,7 +2186,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=40 \
             install --yes --no-install-recommends lld wine wine32:i386
       - name: Verify runtime evidence admission
-        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_windows_registration_libraries -v
+        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_check_windows_registration_multiple_catch scripts.tests.test_windows_registration_libraries -v
       - name: Fetch genuine MSVC C++ source inputs
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         uses: actions/download-artifact@v4
@@ -2306,6 +2307,17 @@ jobs:
             --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
             --output build-windows-eh/evidence/realigned-rewrite \
             --wine-prefix "$RUNNER_TEMP/neverd-wine32"
+      - name: Reconstruct ordered value, reference and catch-all clauses
+        if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
+        run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
+          python scripts/check_windows_registration_multiple_catch.py \
+            --test-binary build-windows-eh/bin/NeverDWindowsRegistrationRealignedTests \
+            --patch-binary build-windows-eh/bin/neverd \
+            --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
+            --output build-windows-eh/evidence/multiple-catch-rewrite
       - name: Execute strict generated EH4 and GS cookie contracts
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         run: |
@@ -2434,6 +2446,10 @@ jobs:
       - name: Replay identical realigned source reconstructions with the Windows CRT
         if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
         run: python scripts/replay_windows_registration_realigned_rewrite.py --evidence-root build-windows-eh/evidence/realigned-rewrite --output build-windows-eh/native-realigned-rewrite-replay.json
+      - name: Replay identical ordered catch reconstructions with the Windows CRT
+        if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
+        run: python scripts/replay_windows_registration_multiple_catch.py --evidence-root build-windows-eh/evidence/multiple-catch-rewrite --output build-windows-eh/native-multiple-catch-replay.json
+
       - name: Preserve native loader evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -2445,6 +2461,7 @@ jobs:
             build-windows-eh/native-cxx-snapshot-replay.json
             build-windows-eh/native-realigned-replay.json
             build-windows-eh/native-realigned-rewrite-replay.json
+            build-windows-eh/native-multiple-catch-replay.json
             build-windows-eh/runtime-diagnostics.json
             build-windows-eh/cxx-original/
           if-no-files-found: error

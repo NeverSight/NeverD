@@ -163,6 +163,44 @@ bool NdOpEmulator::setMemoryAddressSpaceBase(NdMemoryAddressSpace AddressSpace,
   return false;
 }
 
+bool NdOpEmulator::setX86LinearAddressBits(uint8_t LinearAddressBits) {
+  if (Img.Arch != Arch::X64 ||
+      (LinearAddressBits != 48 && LinearAddressBits != 57))
+    return false;
+  X86LinearAddressBits = LinearAddressBits;
+  return true;
+}
+
+bool NdOpEmulator::isX86CanonicalMemoryRange(uint64_t Address,
+                                             uint64_t Size) const {
+  if (!Size || Size - 1 > UINT64_MAX - Address)
+    return false;
+  if (Img.Arch == Arch::X86)
+    return Address + Size - 1 <= UINT32_MAX;
+  if (Img.Arch != Arch::X64 || !X86LinearAddressBits)
+    return false;
+  const unsigned Bits = *X86LinearAddressBits;
+  const uint64_t HighMask = ~((UINT64_C(1) << Bits) - 1);
+  const auto IsCanonical = [&](uint64_t Value) {
+    return (Value & HighMask) == (((Value >> (Bits - 1)) & 1) ? HighMask : 0);
+  };
+  return IsCanonical(Address) && IsCanonical(Address + Size - 1);
+}
+
+bool NdOpEmulator::setX86ShadowStackContext(uint8_t CurrentPrivilegeLevel,
+                                            bool Enabled,
+                                            std::optional<uint64_t> SSP) {
+  if ((Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+      CurrentPrivilegeLevel > 3 ||
+      (Img.Arch == Arch::X86 && SSP && *SSP > UINT32_MAX))
+    return false;
+  X86CurrentPrivilegeLevel = CurrentPrivilegeLevel;
+  X86ShadowStackPrivilegeLevel = CurrentPrivilegeLevel;
+  X86ShadowStackEnabled = Enabled;
+  X86ShadowStackPointer = SSP;
+  return true;
+}
+
 bool NdOpEmulator::setX86EnqueueContext(uint8_t CurrentPrivilegeLevel,
                                         uint32_t IA32Pasid,
                                         uint8_t LinearAddressBits) {
@@ -394,6 +432,8 @@ void NdOpEmulator::clobberVolatileRegisters() {
   // An unknown callee may change MXCSR status. Do not publish the stale word
   // as an authenticated input to an explicit FP state operation.
   MXCSRKnown = false;
+  X86ShadowStackEnabled.reset();
+  X86ShadowStackPointer.reset();
   for (auto It = Registers.begin(); It != Registers.end();) {
     // The stack pointer, frame pointer, and callee-saved registers (declared by
     // the caller) survive a call by ABI; every other register (caller-saved
@@ -446,6 +486,8 @@ bool NdOpEmulator::step(const LowOp &Op) {
               Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
         return false;
       switch (Id) {
+      case Intrinsic::X86FPRoundMemoryState:
+        return executeX86ScalarFPState(Op);
       case Intrinsic::MaskedLoadB:
       case Intrinsic::MaskedLoadW:
       case Intrinsic::MaskedLoadD:
@@ -527,6 +569,10 @@ bool NdOpEmulator::step(const LowOp &Op) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
       if (isX86FPStateIntrinsic(Id))
         return executeX86ScalarFPState(Op);
+      if (Id == Intrinsic::CetRdSsp || Id == Intrinsic::CetIncSsp ||
+          Id == Intrinsic::CetRstorssp || Id == Intrinsic::CetSaveprevssp ||
+          Id == Intrinsic::CetSetssbsy || Id == Intrinsic::CetClrssbsy)
+        return executeIntrinsic(Op);
       if (Id == Intrinsic::X87Fprem || Id == Intrinsic::X87Fprem1 ||
           Id == Intrinsic::X87ReadStatus || Id == Intrinsic::X87Fninit ||
           Id == Intrinsic::X87Fnclex || Id == Intrinsic::X87Wait ||

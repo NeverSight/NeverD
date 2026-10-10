@@ -6,6 +6,8 @@
 
 #include "LLVMInterpreterModelInternal.h"
 
+#include <array>
+
 namespace neverd::analysis::llvm_model {
 void Builder::requireEqual(LowBlock &Out, NdVar A, NdVar B) {
   auto Bad = local(1);
@@ -102,15 +104,16 @@ bool Builder::emitScalar(LowBlock &Out, const llvm::Instruction &I) {
     auto ID =
         Callee ? Callee->getIntrinsicID() : llvm::Intrinsic::not_intrinsic;
     bool Pop = ID == llvm::Intrinsic::ctpop,
+         Swap = ID == llvm::Intrinsic::bswap,
          Add = ID == llvm::Intrinsic::sadd_with_overflow,
          Sub = ID == llvm::Intrinsic::ssub_with_overflow,
          Funnel = ID == llvm::Intrinsic::fshl || ID == llvm::Intrinsic::fshr,
          Assume = ID == llvm::Intrinsic::assume;
     if (!Callee || !Callee->isDeclaration() ||
-        (!Pop && !Add && !Sub && !Funnel && !Assume) ||
-        Call->arg_size() != (Funnel          ? 3U
-                             : Pop || Assume ? 1U
-                                             : 2U) ||
+        (!Pop && !Swap && !Add && !Sub && !Funnel && !Assume) ||
+        Call->arg_size() != (Funnel                  ? 3U
+                             : Pop || Swap || Assume ? 1U
+                                                     : 2U) ||
         !Call->getArgOperand(0)->getType()->isIntegerTy() ||
         (Assume ? (!Call->getArgOperand(0)->getType()->isIntegerTy(1) ||
                    !Call->getType()->isVoidTy())
@@ -161,6 +164,27 @@ bool Builder::emitScalar(LowBlock &Out, const llvm::Instruction &I) {
         emit(Out, op(NdOp::INT_EQUAL, Zero, {Count, num(0, A.Size)}));
         emit(Out, op(NdOp::SELECT, value(&I), {Zero, Left ? A : B, Joined}));
       }
+    } else if (Swap) {
+      auto *Type = Call->getArgOperand(0)->getType();
+      if (Call->getType() != Type ||
+          !(Type->isIntegerTy(16) || Type->isIntegerTy(32) ||
+            Type->isIntegerTy(64)))
+        fail("unsupported bswap type");
+      auto Source = value(Call->getArgOperand(0));
+      std::array<NdVar, 8> Pieces;
+      for (unsigned N = 0; N < Source.Size; ++N) {
+        Pieces[N] = local(1);
+        emit(Out, op(NdOp::SUBBYTES, Pieces[N], {Source, num(N)}));
+      }
+      // Lower input bytes become higher output bytes. Balanced joins keep
+      // every intermediate width within the existing scalar word domain.
+      for (unsigned Width = 1; Width < Source.Size; Width *= 2)
+        for (unsigned N = 0; N < Source.Size / (2 * Width); ++N) {
+          auto Joined = 2 * Width == Source.Size ? value(&I) : local(2 * Width);
+          emit(Out,
+               op(NdOp::CONCAT, Joined, {Pieces[2 * N], Pieces[2 * N + 1]}));
+          Pieces[N] = Joined;
+        }
     } else if (Pop) {
       if (Call->getType() != Call->getArgOperand(0)->getType())
         fail("invalid ctpop type");

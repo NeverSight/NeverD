@@ -326,6 +326,17 @@ TEST_P(UnpackDriver, SchedulingSlicesPreserveInvocationAndTransferIdentity) {
   EXPECT_EQ(Result->EntryRVA, Unscheduled->EntryRVA);
   EXPECT_EQ(Result->Transfers.size(), Unscheduled->Transfers.size());
   EXPECT_EQ(Result->Image, Unscheduled->Image);
+  // Raw write logs are not an input to recovery. A small API-event budget must
+  // still observe the many decoder writes that produce the recovered entry.
+  auto FewEvents = Options;
+  FewEvents.Process.Limits.Events = 1;
+  auto WithoutWriteLog = unpackFile(Input, FewEvents);
+  ASSERT_TRUE(bool(WithoutWriteLog))
+      << llvm::toString(WithoutWriteLog.takeError());
+  ASSERT_EQ(WithoutWriteLog->Outcome, UnpackOutcome::Unpacked)
+      << WithoutWriteLog->Diagnostic;
+  EXPECT_EQ(WithoutWriteLog->EntryRVA, Unscheduled->EntryRVA);
+  EXPECT_EQ(WithoutWriteLog->Image, Unscheduled->Image);
 }
 
 TEST_P(UnpackDriver, ObserverFailuresAreAPIErrors) {

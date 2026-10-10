@@ -15,6 +15,7 @@
 
 #include "X86LiftDetail.h"
 
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86Lifter.h"
 
@@ -419,13 +420,49 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emitIntrinsic(Intrinsic::CetIncSsp);
     break;
   case X86_INS_RDSSPD:
-  case X86_INS_RDSSPQ:
-    S.emitIntrinsic(Intrinsic::CetRdSsp);
-    if (X86.op_count >= 1) {
-      NdVar Dst = L.operandWrite(X86.operands[0]);
-      S.emit(NdOp::COPY, Dst, {S.makeTemp(Dst.Size)});
+  case X86_INS_RDSSPQ: {
+    const auto Refuse = [&]() -> bool {
+      throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
+    };
+    const bool X64 = L.targetArch() == Arch::X64;
+    const unsigned Width = InsnId == X86_INS_RDSSPQ ? 8 : 4;
+    if ((L.targetArch() != Arch::X86 && !X64) || Insn->size == 0 ||
+        Insn->size > 15 || (!X64 && Width == 8) || X86.op_count != 1 ||
+        X86.operands[0].type != X86_OP_REG || X86.operands[0].size != Width)
+      return Refuse();
+    size_t Offset = 0;
+    bool Repeat = false;
+    uint8_t Rex = 0;
+    while (Offset < Insn->size) {
+      const uint8_t Byte = Insn->bytes[Offset];
+      if (Byte == 0xf3) {
+        Repeat = true;
+        Rex = 0;
+      } else if (Byte == 0x26 || Byte == 0x2e || Byte == 0x36 || Byte == 0x3e ||
+                 Byte == 0x64 || Byte == 0x65 || Byte == 0x66 || Byte == 0x67) {
+        Rex = 0;
+      } else if (X64 && (Byte & 0xf0) == 0x40) {
+        Rex = Byte;
+      } else {
+        break;
+      }
+      ++Offset;
     }
+    if (!Repeat || Offset + 3 != Insn->size || Insn->bytes[Offset] != 0x0f ||
+        Insn->bytes[Offset + 1] != 0x1e ||
+        (Insn->bytes[Offset + 2] & 0xf8) != 0xc8 ||
+        Width != (X64 && (Rex & 8) ? 8U : 4U))
+      return Refuse();
+    const unsigned Register =
+        (Insn->bytes[Offset + 2] & 7) | ((Rex & 1) ? 8 : 0);
+    const RegInfo Reg =
+        mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
+    if (Reg.Offset != x86reg::generalReg(Register) || Reg.Size != Width)
+      return Refuse();
+    const NdVar Full = NdVar::reg(Reg.Offset, X64 ? 8 : 4);
+    S.emitIntrinsic(Intrinsic::CetRdSsp, Full, {Full, NdVar::cst(Width, 1)});
     break;
+  }
   case X86_INS_SAVEPREVSSP:
     S.emitIntrinsic(Intrinsic::CetSaveprevssp);
     break;

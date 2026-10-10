@@ -195,6 +195,11 @@ void analyzeStoreForwarding(LLVMCAnalysisState &State, llvm::Function &Fn) {
   std::set<const llvm::Value *> DeadCheckVisited;
   std::function<bool(const llvm::Value *)> AllUsersDead =
       [&](const llvm::Value *V) -> bool {
+    // The eliminated LOAD contributes a virtual live use of its replacement.
+    // Preserve that use while walking through an inlined expression too;
+    // protecting only the root in the outer loop can drop materialized inputs.
+    if (FwdTargets.count(V))
+      return false;
     if (!DeadCheckVisited.insert(V).second)
       return true;
     for (auto *User : V->users()) {

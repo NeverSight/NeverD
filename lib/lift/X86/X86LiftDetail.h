@@ -160,7 +160,8 @@ bool validateCanonicalVex3RegisterTail(
 bool validateCanonicalScalarConversionTail(
     const cs_insn *Insn, const cs_x86 &X86, size_t TailOffset,
     uint8_t SegmentPrefix, bool Is64Bit, uint16_t AddressSize,
-    unsigned BaseExtension, unsigned IndexExtension, const cs_x86_op &Operand);
+    unsigned BaseExtension, unsigned IndexExtension, const cs_x86_op &Operand,
+    size_t TrailingBytes = 0);
 
 /// Load an EVEX vector memory source under a compact K-register mask.  Full
 /// tuples fault-suppress each inactive lane.  Broadcast tuples perform at most

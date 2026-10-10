@@ -17,6 +17,7 @@
 #include "neverd/ir/NdOps.h"
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/ir/X86FPState.h"
+#include "neverd/ir/X86ShadowStack.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/loader/ExceptionInfo.h"
 
@@ -225,7 +226,34 @@ struct LowOp {
   }
 };
 
+inline X86ShadowStackReadShape x86ShadowStackReadLowShape(const LowOp &Op,
+                                                          Arch TargetArch) {
+  return {.TargetArch = TargetArch,
+          .MemoryOrdering = Op.MemoryOrdering,
+          .MemoryAddressSpace = Op.MemoryAddressSpace,
+          .NumInputs = Op.NumInputs,
+          .IdIsConst = Op.NumInputs && Op.Inputs[0].isConst() &&
+                       Op.Inputs[0].Offset == unsigned(Intrinsic::CetRdSsp),
+          .IdSize = Op.NumInputs ? Op.Inputs[0].Size : 0U,
+          .OutputIsWritable = Op.Output.isReg() || Op.Output.isTemp(),
+          .OutputSize = Op.Output.Size,
+          .OldIsScalar = Op.NumInputs > 1 &&
+                         (Op.Inputs[1].isReg() || Op.Inputs[1].isTemp() ||
+                          Op.Inputs[1].isConst()),
+          .OldSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : 0U,
+          .WidthIsConst = Op.NumInputs > 2 && Op.Inputs[2].isConst(),
+          .WidthSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U,
+          .ReadWidth = Op.NumInputs > 2 ? Op.Inputs[2].Offset : 0U};
+}
+
 inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
+  const bool Memory =
+      Op.NumInputs && Op.Inputs[0].isConst() &&
+      Op.Inputs[0].Offset == unsigned(Intrinsic::X86FPRoundMemoryState);
+  const bool Round =
+      Op.NumInputs && Op.Inputs[0].isConst() &&
+      isX86FPRoundStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
+  const unsigned ControlIndex = Memory ? 2 : 1;
   const bool Conversion = Op.NumInputs && Op.Inputs[0].isConst() &&
                           isX86FPConversionStateIntrinsic(
                               static_cast<Intrinsic>(Op.Inputs[0].Offset));
@@ -244,11 +272,23 @@ inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
           .OperandsAreScalar = Scalar,
           .LeftSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : 0U,
           .RightSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U,
-          .StateSize = Conversion ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
-                                  : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
+          .StateSize = Round ? (Op.NumInputs > 4 ? Op.Inputs[4].Size : 0U)
+                       : Conversion
+                           ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
+                           : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
           .DestinationIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
           .DestinationSelectorSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
-          .DestinationBytes = Op.NumInputs > 3 ? Op.Inputs[3].Offset : 0U};
+          .DestinationBytes = Op.NumInputs > 3 ? Op.Inputs[3].Offset : 0U,
+          .ControlIsConst =
+              Op.NumInputs > ControlIndex && Op.Inputs[ControlIndex].isConst(),
+          .ControlSize =
+              Op.NumInputs > ControlIndex ? Op.Inputs[ControlIndex].Size : 0U,
+          .Control =
+              Op.NumInputs > ControlIndex ? Op.Inputs[ControlIndex].Offset : 0U,
+          .ImmediateIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
+          .ImmediateSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
+          .Immediate = Op.NumInputs > 3 ? Op.Inputs[3].Offset : 0U,
+          .AddressIsScalar = Op.NumInputs > 1 && Scalar};
 }
 
 inline ApxAtomicIntrinsicShape apxAtomicLowShape(const LowOp &Op,

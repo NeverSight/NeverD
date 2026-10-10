@@ -621,9 +621,10 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     int AddIdx = budgetedReachingDefIdx(I - 1, AddrV);
     if (!Complete)
       return false;
-    int AddressCopyDepth = 0;
-    for (; AddIdx >= 0 && AddressCopyDepth < limits::kMaxQuasiCopyDepth;
-         ++AddressCopyDepth) {
+    // Each lookup starts before the previous definition. This is a linear
+    // walk through a finite prefix, not recursive expression expansion; its
+    // existing work charges bound even a long chain of address copies.
+    while (AddIdx >= 0) {
       if (!consumeWork())
         return false;
       const LowOp &Forwarder = Ops[AddIdx];
@@ -641,16 +642,6 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (!Complete)
         return false;
     }
-    if (AddressCopyDepth == limits::kMaxQuasiCopyDepth && AddIdx >= 0 &&
-        Ops[AddIdx].NumInputs >= 1 &&
-        (Ops[AddIdx].Inputs[0].isReg() || Ops[AddIdx].Inputs[0].isTemp()) &&
-        (Ops[AddIdx].Opcode == NdOp::COPY ||
-         (Ops[AddIdx].Opcode == NdOp::INT_ZEXT &&
-          Ops[AddIdx].Inputs[0].Size == Img.getPointerSize() &&
-          Ops[AddIdx].Output.Size >= Ops[AddIdx].Inputs[0].Size))) {
-      Complete = false;
-      return false;
-    }
     if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
         Ops[AddIdx].NumInputs < 2)
       continue;
@@ -665,23 +656,14 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       int BDef = budgetedReachingDefIdx(AddIdx - 1, BaseV);
       if (!Complete)
         return false;
-      int BaseCopyDepth = 0;
-      for (; BDef >= 0 && Ops[BDef].Opcode == NdOp::COPY &&
+      while (BDef >= 0 && Ops[BDef].Opcode == NdOp::COPY &&
              Ops[BDef].NumInputs >= 1 &&
-             (Ops[BDef].Inputs[0].isReg() || Ops[BDef].Inputs[0].isTemp()) &&
-             BaseCopyDepth < limits::kMaxQuasiCopyDepth;
-           ++BaseCopyDepth) {
+             (Ops[BDef].Inputs[0].isReg() || Ops[BDef].Inputs[0].isTemp())) {
         if (!consumeWork())
           return false;
         BDef = budgetedReachingDefIdx(BDef - 1, Ops[BDef].Inputs[0]);
         if (!Complete)
           return false;
-      }
-      if (BaseCopyDepth == limits::kMaxQuasiCopyDepth && BDef >= 0 &&
-          Ops[BDef].Opcode == NdOp::COPY && Ops[BDef].NumInputs >= 1 &&
-          (Ops[BDef].Inputs[0].isReg() || Ops[BDef].Inputs[0].isTemp())) {
-        Complete = false;
-        return false;
       }
       if (BDef < 0)
         continue;

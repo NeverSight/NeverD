@@ -68,11 +68,13 @@ inline std::string bunELF(std::string Graph) {
 struct BunFixture {
   std::string Graph;
   uint64_t Table = 0, Footer = 0;
+  uint64_t PrelinkedRecord = 0;
   std::string Bytes;
   explicit BunFixture(bool Rich = true,
                       std::string_view MapBytes = "OPAQUE_MAP_CANARY",
                       std::string_view AssetBytes =
-                          std::string_view("\0\xff\r\nASSET_CANARY", 16)) {
+                          std::string_view("\0\xff\r\nASSET_CANARY", 16),
+                      bool Prelinked = false) {
     using Pointer = std::pair<uint32_t, uint32_t>;
     auto Add = [&](std::string_view Text, unsigned Nuls = 0) -> Pointer {
       Pointer P{uint32_t(Graph.size()), uint32_t(Text.size())};
@@ -90,6 +92,7 @@ struct BunFixture {
     const auto Builtin = Rich ? Aligned("BUILTIN_CANARY") : Pointer{};
     const auto Strings = Rich ? Aligned("SHARED_CACHE_CANARY") : Pointer{};
     const auto InfoStrings = Rich ? Add("INFO_STRINGS_CANARY") : Pointer{};
+    const auto GraphLink = Prelinked ? Aligned("PRELINKED_CANARY") : Pointer{};
     const auto Map = Rich ? Add(MapBytes) : Pointer{};
     const auto Code = Add("export const secret = 'BUN_SOURCE_CANARY';", 1);
     while (Graph.size() & 1)
@@ -144,6 +147,16 @@ struct BunFixture {
       U32(InfoStrings.first);
       U32(InfoStrings.second);
     }
+    if (Prelinked) {
+      PrelinkedRecord = Graph.size();
+      U32(GraphLink.first);
+      U32(GraphLink.second);
+      U32(2);
+      U32(0);
+      U32(1);
+      U32(2);
+      U32(0x3f800000);
+    }
     const auto Args = Add("--fixture-canary", 1);
     Footer = Graph.size();
     Graph.resize(Footer + 32);
@@ -153,7 +166,8 @@ struct BunFixture {
     put(Graph, Footer + 16, 0, 4);
     put(Graph, Footer + 20, Args.first, 4);
     put(Graph, Footer + 24, Args.second, 4);
-    put(Graph, Footer + 28, Rich ? 0x3f0 : 0x170, 4);
+    put(Graph, Footer + 28, (Rich ? 0x3f0 : 0x170) | (Prelinked ? 0x1800 : 0),
+        4);
     Graph += "\n---- Bun! ----\n";
     Bytes = bunELF(Graph);
   }

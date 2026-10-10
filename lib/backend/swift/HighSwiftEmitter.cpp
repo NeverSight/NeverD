@@ -505,12 +505,16 @@ class Writer {
   }
 
   std::string call(const ExprPtr &E, unsigned Depth, bool Statement = false) {
+    if (E && E->IntrinsicId == Intrinsic::CetRdSsp)
+      throw Unsupported(
+          "Swift shadow stack reads require a caller-scoped contract");
     if (E && E->Kind == ExprKind::Call &&
         isX86FPStateIntrinsic(E->IntrinsicId)) {
       const auto Shape = x86FPStateHighShape(*E, Arch::Unknown);
       if (E->IsIndirectCall || E->IndirectTarget || E->SourceCallHint ||
           E->DoesNotReturn || !x86FPStateShapeIsValid(E->IntrinsicId, Shape) ||
           isX86FPConversionStateIntrinsic(E->IntrinsicId) ||
+          isX86FPRoundStateIntrinsic(E->IntrinsicId) ||
           (Statement && x86FPStateReturnsValue(E->IntrinsicId)) ||
           (!Statement && !x86FPStateReturnsValue(E->IntrinsicId)))
         throw Unsupported("unsupported Swift x86 floating-point state shape");

@@ -33,6 +33,7 @@
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/LLVMX86FPStateAsm.h"
+#include "neverd/backend/llvm/LLVMX86ShadowStackAsm.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -299,8 +300,16 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                                Opts.ScalarPointers)
                    .empty();
         if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst)) {
+          if (classifyX86ShadowStackReadAsm(*CI)) {
+            const unsigned Word = CI->getType()->getIntegerBitWidth() / 8;
+            if ((Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64) ||
+                Word != (Opts.TheArch == Arch::X64 ? 8U : 4U))
+              llvm::report_fatal_error(
+                  "shadow stack read target/type mismatch");
+          }
           if (auto Shape = classifyX86FPStateAsm(*CI);
               Shape && (isX86ScalarFPStateIntrinsic(Shape->first) ||
+                        isX86FPRoundStateIntrinsic(Shape->first) ||
                         isX86FPConversionStateIntrinsic(Shape->first))) {
             if (Opts.TheArch == Arch::X86 &&
                 isX86FPConversionStateIntrinsic(Shape->first) &&
@@ -315,6 +324,11 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
           }
           if (const auto *Asm =
                   llvm::dyn_cast<llvm::InlineAsm>(CI->getCalledOperand())) {
+            if (Asm->getAsmString().starts_with("pushf") ||
+                Asm->getAsmString() == "pushq $0\n\tpopfq" ||
+                Asm->getAsmString() == "pushl $0\n\tpopfl")
+              Headers.insert(Opts.Format == BinaryFormat::COFF ? "intrin.h"
+                                                               : "x86intrin.h");
             if ((Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&
                 (Asm->getAsmString() == "ldmxcsr ($0)" ||
                  Asm->getAsmString() == "stmxcsr ($0)"))
@@ -1030,7 +1044,7 @@ static void lowerPackedVectorBitcasts(llvm::Module &Mod) {
     const unsigned ScalarBits = Scalar->getPrimitiveSizeInBits();
     const unsigned Count = Vector->getNumElements();
     const unsigned Bits = Vector->getElementType()->getPrimitiveSizeInBits();
-    if (ScalarBits > 128 || uint64_t(Count) * Bits != ScalarBits)
+    if (ScalarBits > 512 || uint64_t(Count) * Bits != ScalarBits)
       continue;
     auto *Integer = llvm::IntegerType::get(Mod.getContext(), ScalarBits);
     auto *LaneInteger = llvm::IntegerType::get(Mod.getContext(), Bits);
@@ -1137,6 +1151,10 @@ static bool isCVectorBoundarySignature(const llvm::FunctionType *Type) {
 
 static bool isCVectorBoundaryInstruction(const llvm::Instruction &Inst,
                                          Arch TheArch) {
+  if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst))
+    if (const auto Shape = classifyX86FPStateAsm(*Call);
+        Shape && isX86FPRoundStateIntrinsic(Shape->first))
+      return TheArch == Arch::X86 || TheArch == Arch::X64;
   auto IsLocalType = [](llvm::Type *Type) {
     return isCVectorType(Type) || !containsVectorType(Type);
   };

@@ -95,7 +95,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   using I = Intrinsic;
   auto IC = static_cast<I>(IntrCode);
 
-  if (isX86FPStateIntrinsic(IC)) {
+  if (IC == I::CetRdSsp || isX86FPStateIntrinsic(IC)) {
     if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
       llvm::report_fatal_error("x86 FP state requires an x86 target");
     return emitX86IntrinsicValue(Op, IC, Builder);

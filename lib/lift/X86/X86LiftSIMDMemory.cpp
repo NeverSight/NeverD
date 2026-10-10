@@ -228,15 +228,16 @@ NdVar repeatLowElement(X86Lifter::LiftState &S, NdVar Source,
 bool validateCanonicalScalarConversionTail(
     const cs_insn *Insn, const cs_x86 &X86, size_t TailOffset,
     uint8_t SegmentPrefix, bool Is64Bit, uint16_t AddressSize,
-    unsigned BaseExtension, unsigned IndexExtension, const cs_x86_op &Operand) {
+    unsigned BaseExtension, unsigned IndexExtension, const cs_x86_op &Operand,
+    size_t TrailingBytes) {
   if (X86.addr_size != AddressSize || X86.prefix[1] != SegmentPrefix)
     return false;
   if (Operand.type == X86_OP_REG)
     return validateCanonicalVectorRegisterTail(Insn, X86, X86.modrm, TailOffset,
-                                               0);
+                                               TrailingBytes);
   return validateCanonicalVectorMemoryTail(
       Insn, X86, TailOffset, X86.modrm, SegmentPrefix, Is64Bit, AddressSize,
-      BaseExtension, IndexExtension, 1, Operand, 0);
+      BaseExtension, IndexExtension, 1, Operand, TrailingBytes);
 }
 
 bool parseCanonicalEvexEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,

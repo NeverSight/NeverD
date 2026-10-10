@@ -5,6 +5,10 @@ They do not turn the architecture design's proposed P0 targets into accepted
 performance guarantees. The viewport executable is a small independent harness,
 not the production workbench.
 
+Keep machine-local reports, raw traces and timing summaries in ignored
+`build-bench/` or `results/` directories. Commit reusable harnesses and regression
+tests; do not upload local measurement reports to the repository.
+
 ## Large-function pseudocode latency
 
 Measure fixed function entries in fresh worker processes, retaining the first
@@ -54,17 +58,6 @@ checks the loaded engine path and rejects changed source hashes within the
 sequence. It does not include the GUI's own response cache or snapshot restore.
 Run both frozen and current worker/engine pairs; a faster revisit is not evidence
 of a faster first decompilation.
-
-The [2026-10-09 Rust investigation](results/linux-x86_64-20261009-rust-pseudocode.md)
-retains a measured original-engine control, one-/four-thread repetitions,
-complete source hashes and the remaining gap to IDA.
-The [second pass](results/linux-x86_64-20261009-rust-pseudocode-round2.md)
-adds alternating engine comparisons on fixed performance cores, register/index
-allocation improvements, and more parallel callee proof batches.
-The [third pass](results/linux-x86_64-20261010-rust-pseudocode-round3.md)
-measures shared SSA stack-offset proofs, exact-input graph reuse and completed
-source-document retention, with fresh IDA measurements and separate revisit
-latency.
 
 Generate versioned fixture descriptors:
 
@@ -146,124 +139,7 @@ additional hard process deadline covers blocked GUI initialization.
 Schema 1 and 2 reports measured the earlier Qt Quick workbench; keep them as
 historical evidence rather than comparing them quantitatively with schema 3.
 
-### Historical Window2 GUI validation: macOS arm64, 2026-09-10
-
-The [published startup summary](results/macos-arm64-20260910-gui-startup-summary.json)
-retains all eight measured GUI reports and the discarded warmup report, including
-their original milestones, Qt/backend/DPI/viewport details, fixture and build
-hashes. It is a redacted public summary, not the complete local evidence: process
-arguments, diagnostic logs, personal paths and host-specific environment values
-are omitted. Hashes identify the retained local evidence files.
-
-This Release validation build enabled `BUILD_TESTING`, included the application
-test probes and linked Qt Test; it is not the probe-free distribution
-configuration. It ran on macOS 15.6.1 arm64 with Qt 6.11.1, Cocoa, Metal on a
-separate render thread, a 1500×950 window and device pixel ratio 2. The runner
-passed a controlled environment with `QT_QPA_PLATFORM=cocoa` and `C.UTF-8`
-locale, without overriding the rendering backend, render loop or scale. After
-one discarded warmup, eight fresh process launches analyzed the same benign
-536-byte named-function ELF with temporary default settings and warm caches.
-
-| Measured milestone or phase | p50 | p95 / p99 |
-|---|---:|---:|
-| First Qt frame | 407.528 ms | 593.003 ms |
-| First useful Qt frame, with instructions and representation synchronized | 527.610 ms | 758.660 ms |
-| GUI MCP construction phase | 0.117 ms | 0.149 ms |
-
-The MCP phase is `mcp_created_ms - services_started_ms`, about 0.12 ms at p50.
-The separate `QCoreApplication` constructor probe completed three fresh process
-samples per case: MCP construction p50 was 0.176 ms and the empty
-`QSslConfiguration` control was 133.556 ms. Its raw constructor samples are in
-the same public summary. These are separate measurements from the earlier
-`QGuiApplication` experiment below.
-
-The complete isolated GUI/worker CTest suite passed **20/20, with zero skips**;
-the native Cocoa analysis probe also passed and captured the real C, LowIR and
-CFG views. Source hashes stayed unchanged throughout the validation window;
-GUI, worker, engine and test executable hashes stayed unchanged after the
-build. This validates the earlier Workbench facade against the private SDK
-whose library SHA-256 begins `e0a838dd1b70`, not the finalized SDK build whose
-hash begins `72`. The later PaneController integration is covered separately by the final
-Window8 record below.
-
-The GUI and worker versions, environment and system load differed from earlier
-exploratory runs. Build and test activity preceded these samples, and background
-load was not instrumented. The total timing difference cannot be attributed
-entirely to deferred TLS initialization. This eight-sample run establishes no
-cold-cache result, hardware presentation timestamp, large-image performance,
-cross-platform guarantee or world ranking.
-
-### Final Window8 GUI validation: Qt 6.11.1, macOS arm64, 2026-09-10
-
-The [final startup summary](results/macos-arm64-20260910-gui-startup-final-summary.json)
-records the final integrated GUI with the finalized shared SDK, full
-artifact/fixture SHA-256 values, all eight measured reports and the discarded
-warmup. It is a redacted public summary; complete local logs and process
-environment are not reproduced. The historical Window2 summary remains intact.
-
-| Measured milestone | p50 | p95 / p99 |
-|---|---:|---:|
-| First Qt frame | 388.427 ms | 422.217 ms |
-| First useful Qt frame | 517.180 ms | 548.225 ms |
-
-This Release build enables BUILD_TESTING and includes application probes and Qt
-Test. It passed 22/22 CTest tests with zero failures/skips, 31 required child PASS
-records and all 12 validation steps, including four separate Cocoa checks:
-docking, shortcuts, named-ELF analysis and stripped-ELF analysis. Source,
-dependency and post-build artifact hashes remained stable. Startup used macOS
-15.6.1 arm64, Qt 6.11.1, Cocoa/Metal on a separate render thread, 1500×950 and
-DPR 2, with temporary default settings.
-
-One warmup preceded eight fresh process samples of the benign 536-byte named
-ARM64 ELF. Caches were warm, milestones begin at main() entry after dynamic
-loading, and frameSwapped is not hardware presentation. With eight samples,
-nearest-rank p95/p99 equal the maximum. These results do not characterize a
-probe-free distribution package, large images, a world ranking or a speedup
-attributable to one change.
-
-### Separate Window7 Qt 6.8.3 validation
-
-The same frozen source and shared SDK passed 22/22 CTest tests, zero
-failures/skips, 31 required child PASS records and all 12 steps, including the
-four Cocoa checks, with source/dependency and built artifacts unchanged.
-The [final summary](results/macos-arm64-20260910-gui-startup-final-summary.json)
-includes a separate Qt 6.8.3 qualification with its own 8+1 raw reports and
-artifact hashes.
-
-| Measured milestone | p50 | p95 / p99 |
-|---|---:|---:|
-| First Qt frame | 373.776 ms | 408.116 ms |
-| First useful Qt frame | 497.921 ms | 542.860 ms |
-
-The same fixture, viewport, warm-cache and probe-build limitations apply.
-These are independent small-sample observations; their differences do not
-establish a Qt-version performance improvement. The four added main/floating,
-editable/read-only focus variants passed both final suites without a recorded
-pre-fix run of those new cases.
-
-### Earlier constructor investigation
-
-An exploratory macOS/Qt 6.11.1 phase profile found about 289 ms in the MCP
-client constructor. An isolated native probe then measured each member in fresh
-processes, after `QGuiApplication` initialization (three samples per case):
-
-| Constructor or control | Median constructor time |
-|---|---:|
-| MCP client | 243.921 ms |
-| `QNetworkAccessManager` | 0.122 ms |
-| Empty `QSslConfiguration` | 246.628 ms |
-| `QProcess` | 0.009 ms |
-| MCP after constructing `QNetworkAccessManager` | 248.067 ms |
-| MCP after constructing `QSslConfiguration` | 0.211 ms |
-
-The controls identify eager SSL configuration construction as the dominant cost
-on this machine. The client now constructs that configuration when the user
-explicitly connects HTTP, using the same Qt default configuration and additive
-CA certificate handling. The network manager remains unchanged. These are
-constructor measurements; they do not establish an end-to-end GUI speedup, a
-different platform's behavior, or a hardware presentation result. The rejected
-experiment moving worker launch ahead of QML load had no observed median benefit
-in its separate eight-sample native runs, so the original ordering is retained.
+### Constructor measurements
 
 For repeatable constructor comparisons across source revisions, build the small
 optional probe against the real MCP client:
@@ -282,8 +158,7 @@ child processes and retain raw constructor times, preinitialization times,
 diagnostics, and executable/client-source hashes. Save one report per revision;
 there are no pass/fail timing thresholds. Without `--output`, JSON goes to stdout,
 so samples are not written into the source tree. This standalone probe uses
-`QCoreApplication`; the earlier exploratory table used `QGuiApplication` before
-timing. Keep those environments distinct when comparing absolute timings.
+`QCoreApplication`; record the application environment when comparing timings.
 
 ## Production GUI interaction
 
@@ -303,28 +178,6 @@ The report keeps nearest-rank p50/p95/p99, maximum and mean per phase, and the
 result or failure of every sampled function. Like the startup benchmark it uses
 temporary settings and a fresh layout. `--interaction-benchmark-timeout`
 defaults to 600000 ms.
-
-Recorded on 2026-10-07: Linux x86-64, Intel Core i9-13900H, Qt 6.8.3, Xvfb
-through the xcb plugin (software rendering, not native presentation). Times
-are milliseconds, p50 / p95.
-
-| Phase | t.elf (12 functions) | libQt6Xml (776) | ntoskrnl.exe (26 349) |
-| --- | --- | --- | --- |
-| Scroll, first pass | 2.3 / 2.9 | 2.7 / 5.3 | 2.4 / 5.3 |
-| Scroll, again | 1.7 / 2.7 | 2.4 / 5.1 | 2.4 / 5.3 |
-| Jump, first | 8.8 / 10.1 | 22.9 / 40.0 | 25.1 / 35.4 |
-| Jump, again | 8.6 / 9.3 | 10.9 / 15.0 | 13.6 / 17.9 |
-| Graph, first | 5.5 / 11.0 | 12.6 / 77.8 | 177 / 447 |
-| Graph, again | 5.6 / 16.4 | 11.6 / 72.2 | 187 / 426 |
-| Pseudocode, first | 6.4 / 7.8 | 16.3 / 89.6 | 203 / 460 |
-| Pseudocode, again | 3.0 / 5.5 | 10.0 / 13.7 | 9.1 / 94.8 |
-
-The worker lays out a graph in 1-13 ms; a graph of a function seen for the
-first time waits for that function's analysis, mostly its LowIR lift. The
-worker now keeps the last 64 laid-out graphs: on ntoskrnl revisiting a graph
-then took 5.0 / 12.9 ms instead of 187 / 426 ms. The two sampled ntoskrnl
-"functions" without a graph ("function not found") are text inside `.text`
-that function discovery took for code.
 
 ## Against IDA
 
@@ -372,37 +225,6 @@ Both keep every raw sample beside nearest-rank percentiles. OS file caches
 stay warm, and other activity on the machine is not controlled: the GUI
 runner records the load average.
 
-Recorded on 2026-10-09 on Linux x86-64 (Intel Core i9-13900H, 20 threads,
-shared with other work: load average 40 to 50), NeverD at 96e29352d against
-IDA 9.4 with its decompiler; three samples per binary, each decompiling the
-same 100 functions both found (up to 100). Times are p50 unless named.
-
-| Binary | Functions (NeverD / IDA) | Browsable (NeverD / IDA) | Analysis complete | F5 p50 | F5 p95 | F5 max |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| xxd (23 KB) | 46 / 111 | 18 ms / 259 ms | 49 ms / 410 ms | 4 / 1 ms | 52 / 33 ms | 2.4 / 2.6 s |
-| libQt6Xml (0.2 MB) | 718 / 940 | 60 / 312 ms | 125 ms / 1.7 s | 9 / 5 ms | 48 / 37 ms | 114 / 76 ms |
-| libzstd (0.8 MB) | 938 / 864 | 49 / 362 ms | 198 ms / 6.5 s | 49 / 20 ms | 8.1 / 0.9 s | 68.6 / 2.0 s |
-| libsqlite3 (1.5 MB) | 2858 / 2977 | 90 / 492 ms | 271 ms / 15.7 s | 50 / 14 ms | 30.6 / 0.2 s | 61.0 / 8.2 s |
-| libcrypto (6.1 MB) | 13519 / 12562 | 511 ms / 2.1 s | 1.6 / 55.9 s | 142 / 8 ms | 13.2 / 0.1 s | 15.6 / 0.5 s |
-
-The windows, from launch, on Xvfb (three launches after one warm-up):
-
-| Binary | NeverD first frame | NeverD listing of the file | IDA window with the file | IDA auto-analysis done |
-| --- | ---: | ---: | ---: | ---: |
-| xxd | 327 ms | 540 ms | 1.16 s | 1.31 s |
-| libQt6Xml | 334 ms | 545 ms | 1.38 s | 2.85 s |
-| libzstd | 303 ms | 482 ms | 1.23 s | 8.96 s |
-| libsqlite3 | 412 ms | 648 ms | 1.94 s | 19.81 s |
-| libcrypto | 301 ms | 836 ms | 2.98 s | 54.69 s |
-
-The workbench shows a file two to four times sooner than IDA and has its
-references complete ten to thirty-five times sooner, because it decompiles a
-function when F5 asks for it rather than analyzing the whole program first.
-That moves the cost to F5: IDA's decompiler runs on a finished analysis and
-answers faster, most of all on large functions, where the workbench's
-MedIR-to-HighIR clean-up dominates (the p95 and maximum columns). IDA counts
-PLT and import thunks as functions; the workbench lists them as thunks.
-
 ## Synthetic viewport harness
 
 Build and run the Qt harness independently:
@@ -440,46 +262,18 @@ GPU execution time. Offscreen frame intervals cannot establish display targets.
 RSS is whole-process resident memory, excluding a concurrent worker, plugins,
 private/PSS attribution and GPU allocations.
 
-## Recorded exploratory macOS run
-
-The checked-in `results/` reports were measured on the available macOS arm64
-machine using Qt 6.11.1 and Release builds. They are one exploratory run, not a
-cross-platform or statistically stabilized acceptance result. Native Cocoa used
-Metal on a separate render thread; the offscreen run used software rendering on
-the GUI thread.
-
-| Native Metal scenario | Qt frame interval p95 | Model update p95 | Peak row delegates / graph scene nodes | Ending GUI RSS |
-|---|---:|---:|---:|---:|
-| 100k sparse functions | 17.045 ms | 1.024 ms | 33 / 0 | 105.55 MiB |
-| 1M sparse functions | 17.259 ms | 0.943 ms | 33 / 0 | 106.53 MiB |
-| 10M logical text lines | 17.327 ms | 1.543 ms | 41 / 0 | 109.05 MiB |
-| 1k graph overview | 17.516 ms | 0.032 ms | 0 / 168 | 109.27 MiB |
-| 10k graph overview | 17.411 ms | 0.039 ms | 0 / 168 | 109.36 MiB |
-
-The graph had at most 56 visible graph nodes; the 168 scene nodes include their
-overview rectangles and outgoing edge rectangles. Native p95 frame intervals in
-this run exceed the design's proposed 16.7 ms threshold. Object counts stayed
-bounded as logical cardinalities increased, but this does not establish the
-full workbench's scrolling, text selection, docking or large real-image budget.
-
-The warmed tiny-EVM worker report observed operation round-trip p95 from about
-0.051 ms to 0.104 ms. This measures a small result through local pipes, with
-analysis already complete; it does not predict 100 MB/1 GB/5 GB image analysis or
-uncached viewport latency.
-
 ## ADR evidence still required
 
 The workbench now uses Qt Widgets with custom-painted analysis views and the
-same C ABI worker; the earlier Qt Quick measurements above are historical. The
-viewport harness measures the Qt Quick prototype only. Neither justifies a
-framework comparison or final performance sign-off. Before P0 acceptance:
+same C ABI worker. The viewport harness measures the Qt Quick prototype only
+and does not establish production performance. Before P0 acceptance:
 
 - Freeze hardware, OS/driver, Qt version, viewport, DPI, font and rendering loop
   on Windows x64, Linux x64 and macOS arm64; repeat runs and retain raw results.
 - Measure real PE/ELF/Mach-O end-to-end fixtures at the intended size bands,
   including first analysis and process-tree memory. Report EVM/SBF separately.
-- Capture actual displayed frame timing, GPU time and dropped frames; investigate
-  the native 17 ms p95 result against the proposed 16.7 ms goal.
+- Capture actual displayed frame timing, GPU time and dropped frames against
+  the proposed 16.7 ms goal.
 - Measure cached/uncached input-to-display jumps, real keyboard/IME and text
   selection, and interaction while the engine performs useful background work.
 - Exercise general CFG layout/full text/LOD, docking, floating windows, high DPI

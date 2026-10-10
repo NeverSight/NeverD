@@ -7,6 +7,7 @@
 
 #include "../../../core/ExecutionDeadline.h"
 #include "../../../runtime/RuntimeValues.h"
+#include "../kernel/DarwinEntropy.h"
 #include "../kernel/DarwinFiles.h"
 #include "../kernel/DarwinMemory.h"
 #include "../kernel/DarwinSystem.h"
@@ -122,6 +123,7 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
   DarwinMemory Memory(**Space, Image->Memory, Options);
   DarwinFiles Files(CPU, Options.DarwinFiles, Options.OutputLimit,
                     credentialID(ServiceKind::GetEUID, Options.DarwinSystem));
+  DarwinEntropy Entropy(Options.DarwinSystem);
   ProcessResult Result{Profile.Profile, Image->Architecture, Backend->Kind,
                        Backend->Reason};
   Result.Entry = Result.PC = Image->Plan.Entry;
@@ -198,7 +200,8 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
       break;
     }
     Result.Services.push_back(*Event);
-    auto Returned = handleService(CPU, Memory, Files, *Event, Options, Result);
+    auto Returned =
+        handleService(CPU, Memory, Files, Entropy, *Event, Options, Result);
     if (!Returned) {
       RuntimeFailure(Returned.takeError());
       break;

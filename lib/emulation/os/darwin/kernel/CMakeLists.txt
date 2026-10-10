@@ -8,6 +8,7 @@ add_neverd_component_library(NeverDEmulationDarwinKernel
   DarwinUserMemory.cpp
   DarwinTime.cpp
   DarwinSystem.cpp
+  DarwinEntropy.cpp
   LINK_COMPONENTS EmulationCore
   LLVM_COMPONENTS Support)
 if(WIN32)

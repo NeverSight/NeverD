@@ -89,6 +89,13 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_snapshot_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
     set_tests_properties(NeverDWorkerAnalysisSnapshot PROPERTIES TIMEOUT 30)
+    if(APPLE)
+      # The worker records canonical paths. The fixture compares that path to
+      # its temporary input; avoid macOS's /var and /tmp symlink aliases.
+      file(REAL_PATH "/tmp" _worker_canonical_tmp)
+      set_tests_properties(NeverDWorkerAnalysisSnapshot PROPERTIES
+        ENVIRONMENT "TMPDIR=${_worker_canonical_tmp}")
+    endif()
     set_tests_properties(NeverDWorkerTransport PROPERTIES TIMEOUT 40)
     add_test(NAME NeverDWorkerSourceCache
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_cache_test.py"

@@ -44,7 +44,8 @@ detectTargetFeaturesX86(const std::set<std::string> &Names) {
   bool SSSE3 = Has("ssse3"),
        SSE41 = Has("sse41") || Has("llvm.round") || Has("llvm.floor") ||
                Has("llvm.ceil") || Has("llvm.trunc") || Has("llvm.rint") ||
-               Has("llvm.nearbyint") || Has("sse42.crc32"),
+               Has("llvm.nearbyint") || Has("sse42.crc32") || Has("roundss") ||
+               Has("roundsd") || Has("roundps") || Has("roundpd"),
        SSE42 = Has("sse42") || Has("sse42.crc32");
   bool SSE3 = Has("sse3") || SSSE3 || SSE41 || SSE42 || AES;
   SSSE3 = SSSE3 || SSE41 || SSE42;
@@ -59,8 +60,8 @@ detectTargetFeaturesX86(const std::set<std::string> &Names) {
   // +avx.  Half arithmetic itself stays in float, so conversion support alone
   // (no native fp16 ALU) suffices.
   bool Half = Has(kUsesHalfMarker);
-  bool AVX2 = Has("avx2"),
-       AVX = Has("avx") || AVX2 || Has("avx512") || FMA || Half;
+  bool AVX2 = Has("avx2"), AVX = Has("avx") || AVX2 || Has("avx512") ||
+                                 Has("vround") || FMA || Half;
 
   std::string F = "+sse,+sse2,+cx16";
   if (SSE3)

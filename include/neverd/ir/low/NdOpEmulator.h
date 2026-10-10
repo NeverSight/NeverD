@@ -103,6 +103,11 @@ public:
   bool setMemoryAddressSpaceBase(NdMemoryAddressSpace AddressSpace,
                                  uint64_t Base);
 
+  /// Authenticate the x86-64 canonical linear-address width before an owned
+  /// architectural memory operation. Mapping a byte does not prove that its
+  /// address is canonical. This configuration survives reset().
+  bool setX86LinearAddressBits(uint8_t LinearAddressBits);
+
   /// Configure the architectural state required before ENQCMD/ENQCMDS may
   /// read their 64-byte source.  Without an explicit context those
   /// instructions fail closed: a BinaryImage cannot authenticate a current
@@ -111,6 +116,13 @@ public:
   /// emulator configuration, this survives reset().
   bool setX86EnqueueContext(uint8_t CurrentPrivilegeLevel, uint32_t IA32Pasid,
                             uint8_t LinearAddressBits);
+
+  /// Authenticate current-CPL shadow stack enablement and, when enabled, SSP.
+  /// Missing enablement or SSP refuses RDSSP. Unknown calls and CET mutators
+  /// invalidate this snapshot; callers must authenticate it again afterward.
+  /// Like other configured architectural context, this survives reset().
+  bool setX86ShadowStackContext(uint8_t CurrentPrivilegeLevel, bool Enabled,
+                                std::optional<uint64_t> SSP = std::nullopt);
 
   /// Declare the registers that survive a call by ABI (the stack pointer, frame
   /// pointer, and callee-saved registers) and, by doing so, allow the emulator
@@ -203,6 +215,9 @@ private:
   std::vector<LoadRecord> LoadLog;
   std::map<NdMemoryAddressSpace, uint64_t> MemoryAddressSpaceBases;
   std::optional<uint8_t> X86CurrentPrivilegeLevel;
+  std::optional<uint8_t> X86ShadowStackPrivilegeLevel;
+  std::optional<bool> X86ShadowStackEnabled;
+  std::optional<uint64_t> X86ShadowStackPointer;
   std::optional<uint32_t> X86IA32Pasid;
   std::optional<uint8_t> X86LinearAddressBits;
   bool StepOverCalls = false;
@@ -217,6 +232,7 @@ private:
   std::vector<uint8_t> readOperandBytes(const NdVar &Operand) const;
   std::optional<uint64_t> resolveMemoryAddress(const LowOp &Op,
                                                uint64_t Offset) const;
+  bool isX86CanonicalMemoryRange(uint64_t Address, uint64_t Size) const;
   void writeOutput(const NdVar &Output, uint64_t Value);
   void writeOutputBytes(const NdVar &Output, llvm::ArrayRef<uint8_t> Value);
   std::optional<std::vector<uint8_t>> loadMemoryBytes(uint64_t Addr,

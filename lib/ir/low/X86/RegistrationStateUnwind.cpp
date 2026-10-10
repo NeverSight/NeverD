@@ -67,11 +67,12 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before) {
           Effect.ActionState = uint32_t(Walk);
           Effect.CleanupIndex = Contract->second;
           Effect.StackOffset = *SP;
-          Valid &= projectFrameObject(Before, C.ObjectFrameOffset, SP,
-                                      C.Leaf.ECXReads, Effect.FrameReads, true);
-          Valid &=
-              projectFrameObject(Before, C.ObjectFrameOffset, SP,
-                                 C.Leaf.ECXWrites, Effect.FrameWrites, false);
+          const auto Offset = Chain.cxxSourceFrameOffset(C.ObjectFrameOffset);
+          Valid &= Offset &&
+                   projectFrameObject(Before, *Offset, SP, C.Leaf.ECXReads,
+                                      Effect.FrameReads, true) &&
+                   projectFrameObject(Before, *Offset, SP, C.Leaf.ECXWrites,
+                                      Effect.FrameWrites, false);
           if (Valid && charge(C.Leaf.ImageReads.size()))
             for (const auto &Read : C.Leaf.ImageReads)
               ImageReads.emplace(Read.Begin, Read.End);

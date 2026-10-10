@@ -49,7 +49,9 @@ void proveDirectRegistrationLayout(const BinaryImage &Img,
                                    const InstallSite &Site,
                                    RegistrationChainInfo &Chain) {
   const bool IsCxx = Site.Identity.CxxFuncInfoVA != 0;
-  if (IsCxx && proveRealignedCxxRegistrationLayout(Img, Site, Chain))
+  if (IsCxx &&
+      (proveRealignedCxxRegistrationLayout(Img, Site, Chain) ||
+       registration_detail::proveFixedCxxRegistrationLayout(Img, Site, Chain)))
     return;
   const size_t Size = IsCxx ? 24 : 29;
   const uint8_t *P = Img.readVA(Site.Range.Begin, Size);

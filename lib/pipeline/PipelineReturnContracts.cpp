@@ -425,6 +425,7 @@ private:
                                ? static_cast<Intrinsic>(Op.Inputs[0].ConstVal)
                                : Intrinsic::None;
       Paths.push_back(Id != Intrinsic::None && Id != Intrinsic::DebugService &&
+                              Id != Intrinsic::CetRdSsp &&
                               !x86FPStateReturnsValue(Id) &&
                               (isSideeffectIntrinsic(Id) || !intrinsicCName(Id))
                           ? ReturnedValue::Undefined

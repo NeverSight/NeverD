@@ -11,12 +11,12 @@
 namespace neverd::web::hermes_model {
 inline void collectLexemes(SourceAnalysis &Source,
                            const hermes::parser::JSParser &Parser,
-                           const char *Base, std::string_view Bytes) {
+                           const char *Base, std::string_view Bytes,
+                           uint64_t Limit = MaxJavaScriptLexemes) {
   using TK = hermes::parser::TokenKind;
   const auto Tokens = Parser.getStoredTokens();
   const auto Comments = Parser.getStoredComments();
-  if (Tokens.size() > MaxJavaScriptLexemes ||
-      Comments.size() > MaxJavaScriptLexemes - Tokens.size())
+  if (Tokens.size() > Limit || Comments.size() > Limit - Tokens.size())
     throw Error("source_lexeme_budget_exceeded");
   const auto Begin = reinterpret_cast<uintptr_t>(Base);
   auto Span = [&](auto Range) {

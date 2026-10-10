@@ -366,6 +366,22 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="tools/neverd-gui/benchmarks/results/linux-x86_64-20261010-rust-pseudocode-round4.json",
+        rule="private-path",
+        commits=frozenset({"8bf008bdedc5fb59bbe043e7185a0d91c2b1b567"}),
+        line="",
+        reason=(
+            "Reviewed deletion of the benchmark's local SDK compiler path. "
+            "The cleanup changed only that path; all measurements and binary "
+            "hashes are unchanged. The exact historical line digest avoids "
+            "republishing the removed prefix and permits no current or future "
+            "occurrence."
+        ),
+        line_sha256=frozenset({
+            "f1965d87619623cafc0db93fb92f69f0c75563edca54be2304e562bcae0cca49",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/benchmarks/2026-10-05-arm64-hvf-completion-atomic.json",
         rule="private-path",
         commits=frozenset({

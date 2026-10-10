@@ -4,7 +4,7 @@ The `neverd web` command and independent C API inspect admitted files without
 executing them. The current implementation provides immutable artifact
 inventory, JavaScript syntax and lexical-binding queries, bounded primitive
 values, conservative effect metadata, module evidence, qualified bundle partitions,
-reviewed source views and source-map decoding. A fixed Bun ELF profile preserves source, asset,
+reviewed source views and source-map decoding. Versioned Bun ELF profiles preserve source, asset,
 map and cache ranges and feeds decoded source into the same analysis API.
 The ASAR reader admits packed members and explicitly associated captured
 unpacked files, with shared source/map/native selection and integrity checks.
@@ -20,6 +20,7 @@ JavaScript, package, desktop and protocol work remains in progress; see the
 
 ```console
 neverd web capabilities
+neverd web bun-export ./standalone-elf ./new-recovery-directory
 neverd web inspect ./input-directory
 neverd web source ./bundle.js script
 neverd web source ./entry.mjs module
@@ -58,7 +59,11 @@ identities, hashes, sizes, syntax kinds and positions. Paths, identifiers,
 literal values, map URLs and embedded source text are omitted under
 `metadata-only-v1`. The explicit `view` command instead emits a structural
 display projection: target names, values and comments are replaced with labels.
-It does not emit executable transformed JavaScript. Raw export is still pending.
+It does not emit executable transformed JavaScript. The separate `bun-export`
+command explicitly discloses raw source and names to a new local directory;
+its console response remains metadata-only. It writes exact captured bytes,
+strictly decoded JS, verified readable copies where supported, a manifest and
+an inert HTML index. See [local Bun export](web-bun-profile.md#local-evidence-export).
 
 All new analysis and adapter code is C++. JavaScript parsing embeds a pinned
 Hermes parser/AST subset. There is no JavaScript VM, target evaluation, package
@@ -66,8 +71,8 @@ installation, plugin loading, subprocess analyzer or automatic network/file
 resolution. Input bytes are data, including `eval`, `require`, imports,
 source-map references and executable configuration files.
 
-Bun extraction is explicitly selected and follows one
-[versioned layout](web-bun-profile.md). Module/region pages preserve original
+Bun extraction is explicitly selected and follows
+[versioned layouts](web-bun-profile.md). Module/region pages preserve original
 container offsets and hashes; derived source IDs select strict UTF-8 decoding
 for `source_analyze`. The profile does not authenticate the compiler version.
 Bun serialized maps use the existing map API on explicit request, with a
@@ -75,7 +80,8 @@ bounded native Zstd decoder. Their retained anchors, compressed ranges and
 decoded-source identities remain separate. The producer's lost names/unmapped
 boundaries are reported explicitly; JSC caches remain opaque. The original
 container and native asset members can be selected for the explicit native
-handoff described below. Raw export and other Bun platforms remain pending.
+handoff described below. Raw export is available through the CLI and C API;
+the worker does not expose filesystem export. Other Bun platforms remain pending.
 
 ## SDK lifecycle
 

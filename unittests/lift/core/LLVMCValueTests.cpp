@@ -93,6 +93,48 @@ void compileAndRun(const std::string &Source,
   ASSERT_EQ(Result, 0) << Error << '\n' << Source;
 }
 
+TEST(LLVMCValues, DeepForwardedBitAssemblyRetainsEveryDefinition) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("forwarded-packed-bits", Context);
+  Module.setDataLayout("e-p:64:64");
+  Module.setTargetTriple(llvm::Triple(llvm::sys::getDefaultTargetTriple()));
+  auto *I64 = llvm::Type::getInt64Ty(Context);
+  auto *Fn = llvm::Function::Create(llvm::FunctionType::get(I64, {I64}, false),
+                                    llvm::GlobalValue::ExternalLinkage,
+                                    "forwarded_bits", Module);
+  llvm::IRBuilder<llvm::NoFolder> B(
+      llvm::BasicBlock::Create(Context, "entry", Fn));
+  auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 152),
+                               nullptr, "frame");
+  auto *Base = B.CreatePtrToInt(
+      B.CreateGEP(B.getInt8Ty(), Frame, B.getInt64(72)), I64, "rsp_init");
+  auto *Slot = B.CreateIntToPtr(B.CreateSub(Base, B.getInt64(8)), B.getPtrTy());
+  llvm::Value *Packed = B.getInt64(0);
+  for (unsigned Bit = 0; Bit < 64; ++Bit) {
+    auto *Value = B.CreateAnd(B.CreateLShr(Fn->getArg(0), B.getInt64(Bit)),
+                              B.getInt64(1));
+    auto *Shifted = B.CreateShl(Value, B.getInt64(Bit));
+    auto *Selected = B.CreateSelect(B.getTrue(), Shifted, B.getInt64(0));
+    Packed = B.CreateOr(Packed, Selected);
+  }
+  B.CreateStore(Packed, Slot);
+  B.CreateRet(B.CreateLoad(I64, Slot));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  const std::string Driver = R"(
+int main(void) {
+  const uint64_t inputs[] = {0, 1, UINT64_MAX, UINT64_C(0x1234567887654321), UINT64_C(1) << 63};
+  for (unsigned i = 0; i < 5; ++i)
+    if (forwarded_bits(inputs[i]) != inputs[i]) return 1;
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source + Driver, Optimization, {}, true);
+}
+
 TEST(LLVMCValues, ArrayResultsKeepBothWordsAcrossExternalCalls) {
   llvm::LLVMContext Context;
   llvm::Module Module("array-result", Context);

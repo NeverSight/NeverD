@@ -189,6 +189,12 @@ actual warm hits, identical cold/warm budget consumption and a fresh successful
 proof when the same address belongs to a different valid image. Truncated
 instruction streams remain unretained.
 
+The concurrent graph tests hold a builder at a real prover callback and observe
+registered waiters before releasing it. They check one construction for matching
+inputs, independent proof budgets, exception and incomplete-lift wakeups,
+different contexts, and reentrant callbacks across threads and caches. These
+overlaps are coordinated by conditions rather than assumed from timing.
+
 `X86_32_X87FPU.NativeAndLiftedCallLoopsReturnTheIndependentSum` compares native
 machine bytes, generated LLVM, HighC and a separately generated C caller linked
 to native callees. Linux x64 hosts execute both i386 and x64, default/NoOpt
@@ -241,6 +247,16 @@ Native execution requires an x64 host and Clang; the in-process SSE oracle
 additionally requires GCC/Clang. Skips on other hosts are explicit.
 This suite does not establish packed FP, VEX or x87 state coverage.
 
+`NeverDX86RdSspAccuracyTests` checks every x86/x64 encoded GPR destination,
+full-width disabled preservation, enabled concrete SSP reads, flags, unknown
+state, call/mutator invalidation, malformed descriptors in both strict modes,
+Med/High shapes and owned LLVM assembly. Native x64 tests authenticate disabled
+CET inside the executing child and compare original bytes against Codegen
+default/NoOpt and HighC/LLVMC default/NoOpt at C O0/O2, including RSP and typed
+pointer returns. Enabled native guest recompilation is outside this coverage.
+The standalone LLVMC frame/value controls retain materialized dependencies of
+forwarded expressions and execute deep bit assembly with UB traps.
+
 `HighSwiftEmitter` checks typed scalar SSE transports, malformed shapes,
 definite local assignment, bounded 96-bit slices and module-wide helper names.
 Generated Swift executes at Onone/O with rounding, DAZ/FTZ, sticky status,
@@ -292,7 +308,23 @@ cmake --build build-release --target NeverDX86FPStateAccuracyTests --parallel 4
 ctest --test-dir build-release -L '^NeverDX86FPStateAccuracyTests$' --output-on-failure
 cmake --build build-release --target NeverDX86FPConversionAccuracyTests --parallel 4
 ctest --test-dir build-release -L '^NeverDX86FPConversionAccuracyTests$' --output-on-failure
+cmake --build build-release --target NeverDX86FPRoundAccuracyTests --parallel 4
+ctest --test-dir build-release -L '^NeverDX86FPRoundAccuracyTests$' --output-on-failure
 ```
+
+`NeverDX86FPRoundAccuracyTests` compares original legacy/VEX scalar and packed
+ROUND bytes with actual SDK Codegen and HighC/LLVMC at default/NoOpt and O0/O2.
+Directed controls cover all immediate rounding selectors, ignored high bits,
+precision suppression, sticky flags, DAZ/FTZ, NaN payloads, scalar return ABI,
+upper lanes, dead numerical results and mixed invalid/inexact lane priority.
+Memory probes retain the actual instruction access for aligned, unaligned,
+protected-page and cross-page sources. Complete-source failure must not publish
+numerical output or add FP flags. Low/Med/High and owned assembly controls
+check malformed shapes, address spaces and typed numerical provenance. Software
+FS controls cover resolved alignment and i386 offset truncation; native GS
+source probes require Windows/Linux and FS probes require Linux. Native ROUND
+requires x64 SSE4.1; VEX probes additionally require AVX. These directed tests
+do not certify EVEX/SAE, unavailable-feature faults or general x87 state.
 
 ## x86 invalid encodings and instruction boundaries
 
@@ -345,6 +377,31 @@ compiler outputs; that case explicitly skips without the corpus. The tests
 never build or execute their inputs. SDK/CLI/worker tests verify decoded source
 identities and an unusable external-tool PATH. See the
 [profile](web-bun-profile.md) and [corpus recipe](../unittests/web/fixtures/bun/README.md).
+
+`WebBun.ClaudeCode21296FullContainerWhenSupplied` checks an independently
+downloaded official Linux x64 artifact when `NEVERD_CLAUDE_CODE_21296_ELF` is
+set. It pins the original SHA-256/size, extended layout, module/region counts,
+entry index and all decoded source totals. No target code is redistributed or
+downloaded by tests. Missing evidence is an explicit skip. Synthetic extension
+tests cover malformed prelinked indices, counts, aliases and alignment.
+`WebSourceRecovery` checks comments/literals/ASI, reparse equality, large-input
+recovery without raising interactive budgets and invalid-source refusal.
+Async-rest source spans and illegal trailing commas have parser regressions.
+Resource-declaration tests cover contextual keywords, line terminators,
+initialization, loops, source types, immutable lexical bindings and conservative
+disposal effects. With the same official-artifact environment variable,
+`WebSourceRecovery.ClaudeCode21296AllJavaScriptWhenSupplied` checks all 2,345
+modules for reparse-verified readability and preservation of every original
+byte in order; it never executes the target. Allow several minutes on a busy
+host. The worker's C++ code-edit regression includes 9,000 long comment rows,
+real asm linkage and fake linkage inside comments. Existing source-cache
+transport checks exercise cache reuse and byte-budget eviction without raising
+their response deadlines.
+`WebSDK.BunExport*` and `WebSDK.CLIBunExport*` check captured-byte preservation,
+all region contents, raw/readable/index output, stale revisions, destination
+and symlink refusal, metadata canaries and an unusable external-tool PATH.
+The full practical command and result boundary are in the
+[Claude Code qualification](web-claude-code-qualification.md).
 
 ASAR cases in `NeverDWebArtifactTests` combine fixed upstream writer archives
 and an independent original member with C++-constructed malformed inputs.
@@ -723,6 +780,12 @@ budgets at every small-fixture boundary, ordered mixed results and feasible
 masks, all query fields, proof limits and graph-independent relocation context.
 Incomplete proofs and oversized records cannot be retained; count and byte
 limits are checked independently.
+The long-predecessor guard fixture separates a shallow comparison from its
+value's CFG history. It checks 128 table slots reaching four exact case targets,
+unrelated guards and partial-register changes, while retaining the independent
+deep-syntax refusal. The cache case checks rejection beyond the expanded value
+depth, that a complete expanded-depth answer cannot satisfy a default-depth
+query, and that repeated expanded queries preserve results and work charges.
 `PipelineOutcome.ParallelCalleeFrontiersPreserveEveryRegisterSummary` compares
 serial and parallel summaries across two 40-function callee frontiers.
 
@@ -731,6 +794,12 @@ caching across widths, high-byte registers, architectures, temporary values
 and deliberate cache collisions. Shuffled architectural views must retain
 their cold-query answers after eviction; value and frame proofs remain outside
 this fixed-size cache.
+
+The two-table linear-copy cases cover more than sixteen address/base copies,
+partial address clobbers and exhausted shared evidence. Both C routes, including
+optimized and unoptimized LLVMC, execute every byte selector and four table-select
+inputs at O0/O2 with undefined-behavior traps against the fixture formula.
+The existing deep selector-copy refusals remain covered independently.
 
 `NeverDJumpTableTests` groups the existing enhanced and proposal fixed-point
 regressions with independent AArch64 and x64 finite-selector fixtures. The new
@@ -961,9 +1030,11 @@ Leading-phase regressions cover two and three sequential loops reusing one count
 
 `InterpreterMachineStateModel.*` in `NeverDLowIRRefinementTests` uses independent LowIR examples to check raw entry flags, status versus guest RAX, all 17 state words, partial register lanes, packed flags, sticky dynamic rejection, guest frame writes, both branch arms and cyclic inference followed by a fresh proof. Wrong outputs, lost status, changed memory, stale instruction records, malformed inputs and exhausted generation budgets must fail. Existing machine-source tests also exercise both C routes at O0/O2; model tests alone do not certify compiled C.
 
-`NeverDLLVMInterpreterModelTests` checks independently written LLVM against full-state LowIR oracles: widths, parallel PHIs, switches, guest memory, separate status, poison guards, intrinsic ranges, rejected contracts and all four construction budgets. It checks a complete arbitrary-word countdown proof and rejects changed status. Independently written C compiled at O1/O2 must match the same observations. These tests validate the admitted model; automatic invariant discovery and compiler correctness remain separate obligations. Variable-shift cases cover all four widths, masked and branch-bounded counts, boundary and oversized counts, no-wrap/exact flags, strict poison rejection and compiled C at O1/O2.
+`NeverDLLVMInterpreterModelTests` checks independently written LLVM against full-state LowIR oracles: widths, parallel PHIs, switches, guest memory, separate status, poison guards, intrinsic ranges, rejected contracts and all four construction budgets. Constant state GEPs retain 8/16/32/64-bit element allocation strides, chained negative offsets and complete byte observations; wrapped scaling, object escapes, dynamic indices and guest-pointer GEPs remain refused. It checks a complete arbitrary-word countdown proof and rejects changed status. Independently written C compiled at O1/O2 must match the same observations. These tests validate the admitted model; automatic invariant discovery and compiler correctness remain separate obligations. Variable-shift cases cover all four widths, masked and branch-bounded counts, boundary and oversized counts, no-wrap/exact flags, strict poison rejection and compiled C at O1/O2.
 
 `LLVMGuestAlignment.*` compares loads and stores with independent byte-memory oracles: aligned and misaligned domains, free high address bits, parsed default alignment, partial widths, unused or overwritten accesses, unreachable branches and exact/one-short construction budgets. `InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises` checks native stack stores, matching entry congruences and altered source effects through both fresh relations.
+
+`LLVMByteSwap*`, `LLVMScalarByteSwap.*` and `InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises` check independent byte-copy and shift/mask oracles, preserved upper bytes, cross-block values, retained poison, strict call contracts and independently counted exact/one-short budgets. Clang O1/O2 fixtures require actual byte-swap intrinsics; small native byte-exchange/BSWAP fixtures check both fresh premises and reject changed values or lost upper-word clearing.
 
 `NeverDLLVMScalarEquivalenceTests` checks complete loop domains, zero iterations, simultaneous PHI swaps, switches, high input bits, last-partition counterexamples, poison-producing extra updates, return ranges, unsupported contracts and exact/short/zero budgets. Independent double-width and overflow oracles cover funnel endpoints and guarded products at every admitted word width; independent nested-loop C at O1/O2 checks the compiler input profile. The state-model suite also checks funnel endpoints. `SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings` checks shared query accounting and unchanged local limits.
 
@@ -2621,17 +2692,31 @@ This is generated-frame analysis/runtime evidence, not source reconstruction.
 `check_windows_registration_realigned_rewrite.py` separately emits aligned
 value/reference, unbound value/reference and catch-all parents. Independent
 assembly fixtures use the canonical direct MSVC EBP frame for the unbound forms.
-Catch-all also executes with an unsigned throw. The runner lifts real PE32
+LLVM fixed-frame parents cover all five forms, unsigned catch-all and a larger
+allocation requiring an imm32 stack adjustment. Their additional proof checks
+exact prologue fields, paired chain registers, displaced runtime roots, callback
+EBP restoration and saved-register separation.
+Catch-all also executes with an unsigned throw. Four additional direct-frame
+profiles cover value/reference/catch-all with parent and catch argument writes,
+and catch-all with read-only arguments. Their assembly caller checks both
+physical argument words after return, with four signed input pairs and stack
+layouts. The runner lifts real PE32
 instructions and reconstructs
 through the public patcher and both CLI modes. Pass `--test-binary`,
 `--patch-binary`, `--runtime-libs` and `--output`. Every source and control
-requires source reconstruction; aligned profiles additionally require both
-callback HighIR checks. Runtime probes
+requires source reconstruction; LLVM fixed and aligned profiles additionally
+require both callback HighIR checks. Displaced fixed frames also require the source-coordinate
+and prologue mutation checks. Runtime probes
 use four caller stack layouts to check the catch value, reference effect,
 caller PC and restored FS chain.
-All twenty source/control profiles and four installation routes execute at two
-forced bases (160 executions). CLI bytes must equal the checked public output;
+All forty-two source/control profiles and four installation routes execute at two
+forced bases (336 executions). CLI bytes must equal the checked public output;
 the throw caller must lie in that output's recovered generated owner.
+Incoming-frame tests also verify transactional rollback and reject unobserved
+entry words, register ABI attributes, missing/changed access receipts, wrong
+physical offsets, frame-depth changes, hidden slot writes, unindexed caller
+memory operations and private-frame pointer leaks. Replay requires the source
+read/write counts and both executed entry/rollback checks.
 Twelve frame/stack edits plus eight continuation edits reject independently,
 including valid control receipts with uninitialized scratch reads, accesses
 after catch return and callback pointers outside the SavedESP bridge.
@@ -2643,7 +2728,7 @@ The separate layout tests cover all supported alignments, source residues,
 signed displacement bounds and under-aligned allocations.
 `replay_windows_registration_realigned_rewrite.py` authenticates the source,
 objects, IR, checked installation receipts, executed tests and exact PE matrix
-before native Windows executes those same 160 files. It does not relink them.
+before native Windows executes those same 336 files. It does not relink them.
 Real MSVC directory-size64/declared-size192 load-configs must remain supported
 with complete section bounds.
 Final generic PE validation also checks valid and invalid CF/EH continuation
@@ -2658,6 +2743,20 @@ Set `NEVERD_REGISTRATION_OUTPUT_CXX_PE32` to save the manual transaction's EXE;
 `NEVERD_REGISTRATION_OUTPUT_CXX_PRODUCT_PE32` and
 `NEVERD_REGISTRATION_OUTPUT_CXX_COLLISION_PE32` save the public variants.
 Structural success is not runtime evidence.
+
+`check_windows_registration_multiple_catch.py` uses the same test binary and
+captured CRT libraries for ordered value/reference/catch-all clauses. Its fixed
+and aligned compiler parents each have a wrong-result control. The 32-image
+matrix checks three throws with four caller stack layouts per execution,
+including both CLI patch modes and forced relocation. The source test also
+rejects reordered pads, cross-clause homes/stacks/continuations, malformed
+emitted tables and incomplete HighIR scope proofs. Public C/C++ output must
+retain all callback bodies and resume labels; C receives a syntax check.
+`replay_windows_registration_multiple_catch.py` validates exact source/object,
+IR, installation, decompilation and PE identities before replaying the same
+files on Windows. Its Python admission suite rejects incomplete, stale or
+substituted evidence.
+
 
 The focused Windows EH workflow first builds and executes genuine MSVC x86
 value/reference source fixtures on Windows, then transfers those exact inputs
@@ -3436,7 +3535,7 @@ The KVM gate requires real non-exiting vCPU cancellation and 48 state-transfer o
 
 With `native_cpu_only=true`, `native_driver_tests=true` enables `NeverDNativeDriverTests` without Unicorn. Before configuring, `build_wdk_driver_fixtures.py` verifies the complete SHA-256 of the official Microsoft WDK/SDK 10.0.26100.6584 packages and rebuilds 48 original normal/CFG/DBG driver images. `WDKDriverFixtures.def` owns package identities, compiler/linker arguments and fixture bindings. Unmodified Microsoft inputs and their licenses remain in the local build/cache directories; CI uploads only build metadata and logs. The manifest records tool versions, commands, source/header hashes and output image hashes.
 
-`NativeDriverTests.def` requires 230 WHP outcomes from all 115 workloads in `DriverBuiltinImages.def` and `DriverBackendParityCases.def`: 27 built-in images, 48 WDK images and 40 request scenarios, each at original and rebased addresses. The complete mandatory inventory is `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`. The 30 wait-set checks comprise sixteen portable model cases and fourteen original native driver cases. `run_native_cpu_ci.py --with-drivers` retains exact inventory/JUnit evidence with Unicorn disabled. Missing or skipped required fixtures fail the opt-in gate; ordinary builds keep external fixtures optional. Fixed images retain their expected rebase rejection. ARM64 native guest execution remains unverified.
+`NativeDriverTests.def` requires 230 WHP outcomes from all 115 workloads in `DriverBuiltinImages.def` and `DriverBackendParityCases.def`: 27 built-in images, 48 WDK images and 40 request scenarios, each at original and rebased addresses. The complete mandatory inventory is `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 4 image memory checks = 5451`. The 30 wait-set checks comprise sixteen portable model cases and fourteen original native driver cases. `run_native_cpu_ci.py --with-drivers` retains exact inventory/JUnit evidence with Unicorn disabled. Missing or skipped required fixtures fail the opt-in gate; ordinary builds keep external fixtures optional. Fixed images retain their expected rebase rejection. ARM64 native guest execution remains unverified.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` injects deadline, stop and combined interruptions before two different startup instructions. It checks the exact phase diagnostic, owned message lifetime, preserved error type and cause bits, one unchanged deadline across steps and released memory ownership. Existing real transport failures and state mismatches remain distinct. The native x64 startup validation budget is `5 s`; ordinary guest deadlines and single-step allowances are unchanged.
 
@@ -4140,7 +4239,7 @@ See [released GKI contracts](android-gki-kernels.md).
 
 ## Bounded bulk directory attributes
 
-The bulk-attributes workload checks whole groups, name/type membership, guarded unused bytes, low32 FD, bitmap words, native errors, dup/shared progress, independent opens, cached EOF and zero rewind. Literal and unknown modes are virtual-only. Model tests also cover full stat, invalidation, NFD/255-byte names, request/output aliasing, transport/budget failures, held moves/SWAP/removal/reuse and explicit authorization. Required native inventory is 63 workloads per platform: 189 matching ARM64 cases and 126 Intel cases. Only matching ARM64 HVF execution is locally verified. Native5s, guest/Python5,000,000us/quantum1024 and public10s remain unchanged.
+The bulk-attributes workload checks whole groups, name/type membership, guarded unused bytes, low32 FD, bitmap words, native errors, dup/shared progress, independent opens, cached EOF and zero rewind. Literal and unknown modes are virtual-only. Model tests also cover full stat, invalidation, NFD/255-byte names, request/output aliasing, transport/budget failures, held moves/SWAP/removal/reuse and explicit authorization. Required native inventory is 65 workloads per platform: 195 matching ARM64 cases and 130 Intel cases. Only matching ARM64 HVF execution is locally verified. Native5s, guest/Python5,000,000us/quantum1024 and public10s remain unchanged.
 
 
 ## Darwin ordinary attribute mutations
@@ -4150,7 +4249,3 @@ The bulk-attributes workload checks whole groups, name/type membership, guarded 
 `MaterializedRuntimePreservesOwnedObjectsOnNativeWindows` checks original modeled execution, restoration, section permissions and original/restored native Windows execution. It covers private-heap reallocation/free, encoded interior pointers, FLS callback rearming, recursive locks, LastError and reserved/committed/protected virtual pages. `MaterializationRequiresKnownSupportedState` rejects absent version inputs and dynamic TLS. `RuntimeRestorationHasTheSameCAPIAndCLIContract` compares exact bytes and reports. Linux construction checks and Wine observations do not replace native Windows lifecycle evidence.
 
 `NeverDUnpackDriverTests` covers packed DriverEntry recovery, static/dynamic kernel imports, retained kernel resources, entry ABI/control state, malformed exports, scheduling, request/unload lifecycle, C API/CLI parity and PE checksums. The native driver inventory requires matching KVM/WHP cases; Windows also checks ImageHlp. This does not certify a native kernel load. See [unpacking](unpack.md).
-
-## Native opaque-state checks
-
-`X86PreservedState.*` checks fresh scalar forms, exact bank aliases, strict reset behavior and stale byte/span/version refusal. `OriginalBinaryUndefinedIndependence.*Opaque*` covers branches, internal callees, exhaustive indirect targets, exact profiles and independently decoded metadata exact/one-short budgets. `BinaryLowIR*.*Opaque*` covers selected versus arbitrary undefined choices, multiple inductive sources, late rank/budget refusal, true-entry scalar preservation and a later-source byte change with identical LowIR but a changed execution digest. `NativeUndefinedIndependence.*Opaque*` and `NativeStackControl.*FreshMemoryCall*` check grouped interiors, boundaries before cuts, stale records and target evaluation before stack mutation. Rebuild affected metadata consumers, including `NeverDInterpreterLLVMRefinementTests`; report sanitizer and compiled-fault coverage separately from ordinary test results.

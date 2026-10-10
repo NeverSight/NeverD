@@ -500,6 +500,178 @@ class ProcessIntegrationTests(unittest.TestCase):
         self.assertIsNone(result["android"]["native_calls"][-1]["result"])
         self.assertIn("no explicit linux_time input", result["diagnostic"])
 
+    def test_darwin_thread_identity_preserves_full_bits_and_independent_runs(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import NeverDError, Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+        reason = "Darwin current-thread identity observation is not configured"
+        samples = ((0, b"\x00" * 8),
+                   (4294967297, bytes.fromhex("0100000001000000")),
+                   ("9223372036854775808", bytes.fromhex("0000000000000080")),
+                   ("18364758544493064720", bytes.fromhex("1032547698badcfe")),
+                   ("18446744073709551615", b"\xff" * 8))
+        for profile, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                      ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                      ("ios-simulator", "arm64")):
+            path = str((Path(fixtures) / f"{profile}-{architecture}").resolve(strict=True))
+            name = f"{profile}-macho64-v1"
+            x64 = architecture == "x86_64"
+            numbers = ["2000174" if x64 else "174"] * 4 + [
+                "1234567802000174" if x64 else "1234567800000174"] * 3 + [
+                "ffffffff02000174" if x64 else "ffffffff00000174"] * 3
+            options = {"backend": "unicorn", "instruction_quantum": 1024,
+                       "timeout_microseconds": 5000000,
+                       "arguments": ["guest", "thread-identity-value"]}
+            for wire, expected in samples:
+                options["darwin_system"] = {"thread_id": wire}
+                request = json.dumps(options)
+                previous = None
+                for repeat in range(2):
+                    with self.subTest(profile=name, architecture=architecture, thread_id=wire, repeat=repeat):
+                        result = session.emulate_process(path, name, request)
+                        self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                        self.assertEqual(result["exit_status"], 37)
+                        self.assertEqual(bytes.fromhex(result["stdout_hex"]), expected)
+                        self.assertEqual(result["stderr_hex"], "")
+                        self.assertEqual(len(result["services"]), 11)
+                        write = result["services"][-1]
+                        self.assertEqual(write["number"], "2000004" if x64 else "4")
+                        self.assertEqual(write["arguments"][0], "1")
+                        self.assertEqual(write["arguments"][2], "8")
+                        self.assertEqual(write["result"], "8")
+                        self.assertFalse(write["error"])
+                        calls = result["services"][:10]
+                        self.assertEqual([call["number"] for call in calls], numbers)
+                        self.assertEqual([call["result"] for call in calls], [f"{int(wire):x}"] * 10)
+                        self.assertEqual([call["error"] for call in calls], [False] * 10)
+                        self.assertEqual(calls[0]["arguments"], ["ffffffffffffffff", "8000000000000000",
+                                         "1122334455667788", "1", "ffffffffffffffff", "123456789abcdef0"])
+                        for call in calls:
+                            self.assertNotIn("thread_id", call)
+                        if previous is not None:
+                            self.assertEqual(result, previous)
+                        previous = result
+                        self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+            options["arguments"][1] = "thread-identity"
+            options["darwin_system"] = {"thread_id": "18364758544493064720"}
+            result = session.emulate_process(path, name, json.dumps(options))
+            self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+            self.assertEqual(bytes.fromhex(result["stdout_hex"]), b"T")
+            options["arguments"][1] = "thread-identity-missing"
+            for present in (False, True):
+                options.pop("darwin_system", None)
+                if present:
+                    options["darwin_system"] = {}
+                result = session.emulate_process(path, name, json.dumps(options))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["diagnostic"], reason)
+                self.assertEqual(bytes.fromhex(result["stdout_hex"]), b"!")
+                self.assertEqual(len(result["services"]), 2)
+                self.assertEqual(result["services"][-1]["number"], "2000174" if x64 else "174")
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+                self.assertNotIn("thread_id", result["services"][-1])
+            for bad in (None, True, False, {}, [], -1, 1.5, 9007199254740992,
+                        "", "-1", "1.5", "0x10", "x", "18446744073709551616", "1\x00"):
+                options["darwin_system"] = {"thread_id": bad}
+                with self.assertRaises(NeverDError) as caught:
+                    session.emulate_process(path, name, json.dumps(options))
+                self.assertIn("thread_id", str(caught.exception))
+                self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
+    def test_darwin_entropy_replay_preserves_bytes_errors_and_fresh_runs(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import NeverDError, Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+        observations = ["deadbeef", "00ff80a5", "7f", bytes(range(256)).hex()]
+        reasons = {
+            "entropy-missing": "Darwin entropy observations are not configured",
+            "entropy-exhausted": "Darwin entropy observations are exhausted",
+            "entropy-mismatch": "Darwin entropy observation length does not match the request",
+            "entropy-partial": "Darwin partial entropy output is unsupported",
+        }
+        for profile, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                      ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                      ("ios-simulator", "arm64")):
+            path = str((Path(fixtures) / f"{profile}-{architecture}").resolve(strict=True))
+            name = f"{profile}-macho64-v1"
+            number = "20001f4" if architecture == "x86_64" else "1f4"
+            options = {"backend": "unicorn", "instruction_quantum": 1024,
+                       "timeout_microseconds": 5000000,
+                       "arguments": ["guest", "entropy-replay"],
+                       "darwin_system": {"entropy_reads": observations}}
+            request = json.dumps(options)
+            previous = None
+            for repeat in range(2):
+                with self.subTest(profile=name, architecture=architecture, repeat=repeat):
+                    result = session.emulate_process(path, name, request)
+                    self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                    self.assertEqual(result["exit_status"], 37)
+                    self.assertEqual(bytes.fromhex(result["stdout_hex"]), b"R")
+                    self.assertEqual(result["stderr_hex"], "")
+                    calls = [e for e in result["services"] if e["number"] == number]
+                    self.assertEqual(len(calls), 28)
+                    self.assertEqual([e["result"] for e in calls],
+                                     ["0" if i % 6 == 0 else "16" for i in range(24)]
+                                     + ["e", "0", "0", "0"])
+                    self.assertEqual([e["error"] for e in calls],
+                                     [i % 6 != 0 for i in range(24)] + [True, False, False, False])
+                    if previous is not None:
+                        self.assertEqual(result, previous)
+                    previous = result
+                    self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+            for mode, reason in reasons.items():
+                with self.subTest(profile=name, architecture=architecture, mode=mode):
+                    options["arguments"][1] = mode
+                    options["darwin_system"] = {} if mode == "entropy-missing" else {
+                        "entropy_reads": observations[:1] if mode == "entropy-exhausted" else observations}
+                    result = session.emulate_process(path, name, json.dumps(options))
+                    self.assertEqual(result["stop_reason"], "unsupported_service")
+                    self.assertEqual(result["diagnostic"], reason)
+                    self.assertEqual(bytes.fromhex(result["stdout_hex"]), b"!")
+                    self.assertEqual(result["services"][-1]["number"], number)
+                    self.assertIsNone(result["services"][-1]["result"])
+                    self.assertNotIn("error", result["services"][-1])
+            options["arguments"][1] = "entropy-missing"
+            options["darwin_system"] = {"entropy_reads": []}
+            result = session.emulate_process(path, name, json.dumps(options))
+            self.assertEqual(result["diagnostic"], reasons["entropy-exhausted"])
+            for invalid in (None, True, {}, [None], [""], ["0"], ["gg"],
+                            ["00\x00"], ["00" * 257], ["00"] * 257):
+                options["darwin_system"] = {"entropy_reads": invalid}
+                with self.assertRaises(NeverDError) as caught:
+                    session.emulate_process(path, name, json.dumps(options))
+                self.assertIn("entropy_reads", str(caught.exception))
+                self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
     def test_darwin_profiles_preserve_bsd_errors_and_platform_identity(self) -> None:
         library = os.environ.get("NEVERD_TEST_LIBNEVERD")
         fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
@@ -540,6 +712,21 @@ class ProcessIntegrationTests(unittest.TestCase):
                                            ("extended-attributes", b"X"),
                                            ("extended-attributes-values", bytes.fromhex("00ff410080420a757365722e6e65766572642e6265746100757365722e6e65766572642e616c70686100757365722e6e65766572642e656d70747900")),
                                            ("extended-attributes-unsupported", b"X"),
+                                           ("symbolic-descriptors", b"S"),
+                                           ("nonblocking-descriptors", b"N"),
+                                           ("nonblocking-flags-unsupported", b"N"),
+                                           ("symbolic-descriptors-values", bytes.fromhex(
+                                               "85ffffffe8a101001132547698badcfee803000098badcfe0000000000000000"
+                                               "edffffffffffffffb168de3a00000000edffffffffffffffb168de3a00000000"
+                                               "edffffffffffffffb168de3a00000000edffffffffffffffb168de3a00000000"
+                                               "040000000000000001000000000000000020000000000000efcdab8900000000"
+                                               "000000000000000000000000000000000800000005000000"
+                                               )),
+                                           ("symbolic-descriptors-name-unsupported", b"S"),
+                                           ("hard-links", b"H"),
+                                           ("hard-links-values", bytes.fromhex("51313233343536373839")),
+                                           ("hard-links-name-unsupported", b"H"),
+                                           ("hard-links-attributes-unsupported", b"H"),
                                            ("xattr-mutations", b"V"),
                                            ("xattr-mutations-values", bytes.fromhex("00ff410080420a757365722e6e65766572642e6265746100")),
                                            ("xattr-mutations-unsupported", b"V"),
@@ -1270,6 +1457,275 @@ class ProcessIntegrationTests(unittest.TestCase):
                                                    {"path": "/cycle", "target_hex": "6379636c65", "mutable": True}],
                                 "working_directory": "/"}
                             file_options = json.dumps(query_options)
+                        unknown_nonblocking = mode == "nonblocking-flags-unsupported"
+                        if mode.startswith("nonblocking-"):
+                            query_options = json.loads(file_options)
+                            query_options["instruction_quantum"] = 1024
+                            query_options["timeout_microseconds"] = 5_000_000
+                            query_options["darwin_files"] = {
+                                "files": [{"path": "/data", "bytes_hex": "30313233343536373839", "writable": True}],
+                                "directories": [{"path": "/"}],
+                                "symbolic_links": [{"path": "/fd-nonblock", "target_hex": "64617461"}],
+                                "working_directory": "/"}
+                            file_options = json.dumps(query_options)
+                        if mode.startswith("symbolic-descriptors"):
+                            query_options = json.loads(file_options)
+                            query_options["instruction_quantum"] = 1024
+                            query_options["timeout_microseconds"] = 5_000_000
+                            query_options["darwin_files"] = json.loads(r'''
+{
+  "files": [
+    {
+      "path": "/data",
+      "bytes_hex": "30313233343536373839"
+    }
+  ],
+  "directories": [
+    {
+      "path": "/",
+      "mutable": true,
+      "metadata": {
+        "device": -123,
+        "inode": 41,
+        "mode": 16877,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      }
+    }
+  ],
+  "creation_policy": {
+    "first_inode": "18364758544493064721",
+    "block_size": 8192,
+    "generation": 2309737967,
+    "creation_time": {
+      "seconds": -19,
+      "nanoseconds": 987654321
+    },
+    "mutation_policy": {
+      "allocation_unit": 4096,
+      "mutation_time": {
+        "seconds": -7,
+        "nanoseconds": 123456789
+      }
+    },
+    "namespace_policy": {
+      "symbolic_link_allocation_unit": 512,
+      "directory_entry_size": 32,
+      "directory_blocks": 7
+    }
+  },
+  "umask": 23,
+  "working_directory": "/",
+  "symbolic_links": [
+    {
+      "path": "/fd-attrs",
+      "target_hex": "64617461",
+      "mutable": true,
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    }
+  ]
+}
+''')
+                            file_options = json.dumps(query_options)
+                        unknown_hard_link_name = mode in ("symbolic-descriptors-name-unsupported", "hard-links-name-unsupported", "hard-links-attributes-unsupported")
+                        if mode.startswith("hard-links"):
+                            query_options = json.loads(file_options)
+                            query_options["instruction_quantum"] = 1024
+                            query_options["timeout_microseconds"] = 5_000_000
+                            query_options["darwin_files"] = json.loads(r'''
+{
+  "files": [
+    {
+      "path": "/data",
+      "bytes_hex": "30313233343536373839",
+      "writable": true,
+      "metadata": {
+        "device": -123,
+        "inode": "18364758544493064720",
+        "mode": 33188,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 10,
+        "block_size": 4096,
+        "blocks": 8,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      },
+      "mutation_policy": {
+        "allocation_unit": 4096,
+        "mutation_time": {
+          "seconds": -7,
+          "nanoseconds": 123456789
+        }
+      },
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    },
+    {
+      "path": "/attributes",
+      "bytes_hex": "78",
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    }
+  ],
+  "directories": [
+    {
+      "path": "/",
+      "mutable": true,
+      "metadata": {
+        "device": -123,
+        "inode": 41,
+        "mode": 16877,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      }
+    },
+    {
+      "path": "/empty"
+    }
+  ],
+  "symbolic_links": [
+    {
+      "path": "/alias",
+      "target_hex": "64617461",
+      "mutable": true,
+      "metadata": {
+        "device": -123,
+        "inode": 57,
+        "mode": 41471,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 4,
+        "block_size": 4096,
+        "blocks": 8,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      },
+      "mutation_policy": {
+        "mutation_time": {
+          "seconds": -13,
+          "nanoseconds": 456
+        }
+      },
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    },
+    {
+      "path": "/dangling",
+      "target_hex": "6d697373696e67",
+      "mutable": true
+    },
+    {
+      "path": "/cycle",
+      "target_hex": "6379636c65",
+      "mutable": true
+    }
+  ],
+  "creation_policy": {
+    "first_inode": "18364758544493064721",
+    "block_size": 8192,
+    "generation": 2309737967,
+    "creation_time": {
+      "seconds": -19,
+      "nanoseconds": 987654321
+    },
+    "mutation_policy": {
+      "allocation_unit": 4096,
+      "mutation_time": {
+        "seconds": -7,
+        "nanoseconds": 123456789
+      }
+    },
+    "namespace_policy": {
+      "symbolic_link_allocation_unit": 512,
+      "directory_entry_size": 32,
+      "directory_blocks": 7
+    }
+  },
+  "umask": 23,
+  "working_directory": "/"
+}
+''')
+                            file_options = json.dumps(query_options)
                         unknown_xattr_mutation = mode == "xattr-mutations-unsupported"
                         if mode.startswith("xattr-mutations"):
                             query_options = json.loads(file_options)
@@ -1358,7 +1814,7 @@ class ProcessIntegrationTests(unittest.TestCase):
 }
 ''')
                             file_options = json.dumps(query_options)
-                        incomplete = protected_link or unknown_pathconf or unknown_attributes or unknown_xattrs or unknown_names or unknown_bulk or unknown_xattr_mutation
+                        incomplete = protected_link or unknown_pathconf or unknown_attributes or unknown_xattrs or unknown_names or unknown_bulk or unknown_xattr_mutation or unknown_hard_link_name or unknown_nonblocking
                         result = session.emulate_process(path, f"{profile}-macho64-v1", file_options)
                         self.assertEqual(result["stop_reason"],
                                          "unsupported_service" if incomplete else "exited",
@@ -1366,6 +1822,19 @@ class ProcessIntegrationTests(unittest.TestCase):
                         self.assertEqual(result["exit_status"], None if incomplete else 37, mode)
                         self.assertEqual(bytes.fromhex(result["stdout_hex"]), expected)
                         self.assertEqual(result["stderr_hex"], "")
+                        if unknown_nonblocking:
+                            self.assertEqual(result["diagnostic"], "unsupported Darwin fcntl command")
+                            self.assertEqual(result["services"][-1]["number"],
+                                             "200005c" if architecture == "x86_64" else "5c")
+                            self.assertIsNone(result["services"][-1]["result"])
+                            self.assertNotIn("error", result["services"][-1])
+                        if unknown_hard_link_name:
+                            self.assertEqual(result["diagnostic"], "Darwin multiple-name vnode observations are unsupported")
+                            last = result["services"][-1]
+                            number = "5c" if mode in ("hard-links-name-unsupported", "symbolic-descriptors-name-unsupported") else "e4"
+                            self.assertEqual(last["number"], "20000" + number if architecture == "x86_64" else number)
+                            self.assertIsNone(last["result"])
+                            self.assertNotIn("error", last)
                         if unknown_bulk:
                             self.assertEqual(result["diagnostic"],
                                              "Darwin selected file attributes are not modeled")

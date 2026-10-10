@@ -460,7 +460,9 @@ struct MemModel {
       --Remaining;
 
       bool Result = false;
-      if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
+      if (detail::isAuthenticatedNonFrameEntryRegister(F, Current, SP, FP)) {
+        Result = false;
+      } else if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
         const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
         if (!hasCompletePhiIncoming(It->second.first, Phi)) {
           Incomplete = true;
@@ -640,7 +642,9 @@ struct MemModel {
       --Remaining;
 
       bool Result = false;
-      if (V.Kind == MedVar::Reg && (V.RegOff == SP || V.RegOff == FP)) {
+      if (detail::isAuthenticatedNonFrameEntryRegister(F, V, SP, FP)) {
+        Result = false;
+      } else if (V.Kind == MedVar::Reg && (V.RegOff == SP || V.RegOff == FP)) {
         Result = true;
       } else if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
         const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];

@@ -91,6 +91,69 @@ void checkGolden(const BunExtraction &E, const llvm::json::Value &Expected) {
 }
 
 #ifndef _WIN32
+TEST_F(WebBun, SourceDecoderStreamsLargeStorageAndCrossChunkSurrogates) {
+  BunExtraction E;
+  BunModule M;
+  M.SourceArtifactID = "source";
+  M.Contents = 0;
+  M.Encoding = 1;
+  std::string Large(5 * 1024 * 1024, 'a');
+  Large.back() = char(0xe9);
+  BunRegion R;
+  R.Content = input(Large).Content;
+  E.Regions.push_back(R);
+  const auto Text = bunSourceBytes(E, M, MaxBunDecodedSourceBytes);
+  EXPECT_EQ(Text.size(), Large.size() + 1);
+  EXPECT_TRUE(Text.ends_with("é"));
+  EXPECT_THROW(bunSourceBytes(E, M, 1024 * 1024), Error);
+  std::string UTF16;
+  for (unsigned I = 0; I < 32767; ++I)
+    UTF16.append("a\0", 2);
+  UTF16.append("\x3d\xd8\x00\xde", 4);
+  E.Regions[0].Content = input(UTF16).Content;
+  M.Encoding = 2;
+  const auto Unicode = bunSourceBytes(E, M, 1024 * 1024);
+  EXPECT_EQ(Unicode, std::string(32767, 'a') + "😀");
+  const auto Anchor = bunSourceRange(E, M, 32767, 4, 1024 * 1024);
+  EXPECT_EQ(Anchor.Offset, 65534);
+  EXPECT_EQ(Anchor.Size, 4);
+  UTF16.pop_back();
+  E.Regions[0].Content = input(UTF16).Content;
+  EXPECT_THROW(bunSourceBytes(E, M, 1024 * 1024), Error);
+}
+
+TEST_F(WebBun, PrelinkedGraphAndRuntimeMetadataHaveTheirOwnLayoutProfile) {
+  const BunFixture F(true, "map", "asset", true);
+  const auto E = extractBun(input(F.Bytes));
+  EXPECT_EQ(E.Profile, BunPrelinkedProfile);
+  EXPECT_EQ(E.Modules.size(), 3);
+  EXPECT_EQ(bunSourceBytes(E, E.Modules[0], 1024),
+            "export const secret = 'BUN_SOURCE_CANARY';");
+  const auto R =
+      std::find_if(E.Regions.begin(), E.Regions.end(), [](const auto &V) {
+        return V.Kind == "prelinked_module_graph";
+      });
+  ASSERT_NE(R, E.Regions.end());
+  EXPECT_EQ(R->Content.read(0, R->Content.size()), "PRELINKED_CANARY");
+  EXPECT_EQ(extractBun(input(BunFixture{}.Bytes)).Profile, BunProfile);
+}
+
+TEST_F(WebBun, PrelinkedIndicesPointersAndUnknownCacheAliasingFailClosed) {
+  const BunFixture F(true, "map", "asset", true);
+  auto Mutate = [&](uint64_t At, uint64_t Value, const char *Code) {
+    auto B = F.Bytes;
+    put(B, 4104 + At, Value, 4);
+    refuse(B, Code);
+  };
+  Mutate(F.PrelinkedRecord + 8, 4, "bun_invalid_prelinked_files");
+  Mutate(F.PrelinkedRecord + 12, 3, "bun_invalid_prelinked_files");
+  Mutate(F.PrelinkedRecord + 16, 0, "bun_invalid_prelinked_files");
+  Mutate(F.PrelinkedRecord + 4, 0, "bun_empty_shared_table");
+  Mutate(F.PrelinkedRecord, get(F.Graph, F.PrelinkedRecord, 4) + 1,
+         "bun_invalid_bytecode_alignment");
+  Mutate(F.Footer + 28, 0x3bf0, "bun_unsupported_graph_flags");
+}
+
 TEST_F(WebBun, PreservedCompilerGraphsMatchIndependentGoldenMemberRanges) {
   for (const auto Name :
        {"plain", "unicode", "utf16", "asset-map", "cache-map"}) {
@@ -132,6 +195,43 @@ TEST_F(WebBun, FullCompilerContainersMatchRecordedGoldenHashesWhenSupplied) {
     EXPECT_EQ(E.GraphOffset, std::stoull(field(Expected, "graph_offset")));
     checkGolden(E, Expected);
   }
+}
+
+TEST_F(WebBun, ClaudeCode21296FullContainerWhenSupplied) {
+  const auto *Path = std::getenv("NEVERD_CLAUDE_CODE_21296_ELF");
+  if (!Path)
+    GTEST_SKIP() << "Optional official Claude Code 2.1.296 linux-x64 artifact "
+                    "not supplied; no target code is redistributed";
+  const auto Snapshot = capture(Path, Limits{});
+  ASSERT_EQ(Snapshot.Artifacts.size(), 1);
+  const auto &Original = Snapshot.Artifacts.front();
+  ASSERT_EQ(Original.Content.size(), 257068216);
+  // Official HTTPS release manifest, captured 2026-10-10. This is an exact
+  // artifact qualification, not verification of its publisher signature.
+  ASSERT_EQ(Original.BlobHash,
+            "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de");
+  const auto E = extractBun(Original);
+  ASSERT_EQ(E.Profile, BunPrelinkedProfile);
+  ASSERT_EQ(E.Modules.size(), 2589);
+  EXPECT_EQ(E.Regions.size(), 10005);
+  EXPECT_EQ(E.EntryPoint, 6);
+  EXPECT_EQ(E.StartupCount, 7);
+  EXPECT_EQ(E.GraphOffset, 89120776);
+  uint64_t Sources = 0, Bytes = 0, Maps = 0, Caches = 0;
+  for (const auto &M : E.Modules) {
+    Maps += M.SourceMap != NoBunIndex;
+    Caches += M.Bytecode != NoBunIndex;
+    if (!M.SourceArtifactID.empty()) {
+      ++Sources;
+      const auto Source = bunSourceBytes(E, M, MaxBunDecodedSourceBytes);
+      EXPECT_TRUE(validUtf8(Source));
+      Bytes += Source.size();
+    }
+  }
+  EXPECT_EQ(Sources, 2345);
+  EXPECT_EQ(Bytes, 44768763);
+  EXPECT_EQ(Maps, 0);
+  EXPECT_EQ(Caches, 2343);
 }
 
 TEST_F(WebBun, SourceAssetsMapsAndCachesRetainOriginalRangesAndHashes) {

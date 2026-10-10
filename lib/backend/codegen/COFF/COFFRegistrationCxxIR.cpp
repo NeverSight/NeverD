@@ -11,8 +11,8 @@
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
-#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -52,7 +52,6 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         "source C++ graph has no complete native control projection");
   const auto &Cxx = *Source.Cxx;
   const auto &Try = Cxx.TryBlocks[0];
-  const auto &Handler = Try.Handlers[0];
   const auto *Module = Function.getParent();
   const auto *Marker = Function.getMetadata(windows_eh_md::NativeAttachment);
   const auto *Kind =
@@ -110,13 +109,9 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       !States.CallFrameEffectsComplete || !States.CleanupFrameEffectsComplete ||
       !States.CxxContinuationsComplete || !States.CxxCatchObjectsComplete ||
       !States.RuntimeObjectAccessesComplete || !States.ImageReadsComplete ||
-      !States.IncomingFrameAccessesComplete ||
-      !States.IncomingFrameAccesses.empty())
+      !States.IncomingFrameAccessesComplete)
     return rejectIR("replayed C++ registration effects are incomplete");
-  const auto Coordinate =
-      Source.Registration->RealignedFrame
-          ? realignedRegistrationFrameCoordinate(Source, &States)
-          : std::optional(RegistrationFrameCoordinate{-4, 1, 0});
+  const auto Coordinate = cxxRegistrationFrameCoordinate(Source, &States);
   const auto Size = Frame->Slot->getAllocationSize(Module->getDataLayout());
   const auto Layout = Coordinate && Size && !Size->isScalable()
                           ? projectX86RegistrationFrame(
@@ -125,25 +120,19 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
                           : std::nullopt;
   if (!Layout)
     return rejectIR("C++ source frame lost its physical coordinate projection");
-  const auto CatchPlan = projectX86RegistrationCatch(Source, States, *Layout);
-  if (!CatchPlan)
-    return rejectIR("C++ source catch has no checked object projection");
-  Result.CatchHome = CatchPlan->Home;
   Frame->Establisher = Layout->Establisher;
   Result.Frame = *Frame;
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   auto Med = Converter.convert(Result.Source, Arch::X86, BinaryFormat::COFF);
-  const auto &TRI = getTargetRegInfo(Arch::X86);
-  if (Med.Params.size() != Function.arg_size() || Med.Params.size() > 1 ||
-      (Med.Params.empty()
-           ? Function.getCallingConv() != llvm::CallingConv::C
-           : (Function.getCallingConv() != llvm::CallingConv::X86_ThisCall ||
-              Med.Params[0].RegOff != TRI.IntParamRegs[0] ||
-              Med.Params[0].Size != 4 ||
-              !Function.getArg(0)->getType()->isIntegerTy(32))))
+  const auto EntryABI = getX86RegistrationCxxEntryABI(Med, Function);
+  if (!EntryABI || Function.getCallingConv() != *EntryABI)
     return rejectIR("C++ parent changed its physical entry ABI");
   const std::array<const llvm::Function *, 1> Functions = {&Function};
+  std::set<const llvm::Instruction *> IncomingSetup;
+  if (auto Error = validateIncomingCallerFrame(
+          Function, Med, Functions, Result.IncomingAccesses, IncomingSetup))
+    return std::move(Error);
   auto Segments = validateSourceSegments(Function, Med, {}, Functions, true);
   if (!Segments)
     return Segments.takeError();
@@ -159,15 +148,13 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         return rejectIR(
             "C++ source block state has no exact execution segment");
     }
-  if (StateByBlock.size() != Result.Segments.size() ||
-      !BlockAt.count(Handler.HandlerVA))
+  if (StateByBlock.size() != Result.Segments.size())
     return rejectIR("C++ execution segments lost a reached source block");
   std::map<Role, std::vector<std::pair<const llvm::CallInst *,
                                        coff_native_eh::NativeEHProvenance>>>
       Anchors;
   std::set<const llvm::BasicBlock *> CompilerBlocks;
   CompilerBlocks.insert(&Function.getEntryBlock());
-  const llvm::CatchSwitchInst *Switch = nullptr;
   const llvm::IntrinsicInst *Escape = nullptr;
   std::set<const llvm::CallBase *> ActualCalls;
   for (const auto &Block : Function)
@@ -185,27 +172,20 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I)) {
         if (Intrinsic->getIntrinsicID() == llvm::Intrinsic::localescape) {
           if (Escape || &Block != &Function.getEntryBlock() ||
-              Intrinsic->arg_size() != 1 ||
-              Intrinsic->getArgOperand(0) != Frame->Slot)
+              Intrinsic->arg_size() !=
+                  1 + unsigned(!Result.IncomingAccesses.empty()) ||
+              Intrinsic->getArgOperand(0) != Frame->Slot ||
+              (Intrinsic->arg_size() == 2 &&
+               (!llvm::isa<llvm::AllocaInst>(Intrinsic->getArgOperand(1)) ||
+                !llvm::cast<llvm::AllocaInst>(Intrinsic->getArgOperand(1))
+                     ->getMetadata(
+                         windows_eh_md::RegistrationCallerFrameAttachment))))
             return rejectIR("C++ frame lost its unique whole-frame escape");
           Escape = Intrinsic;
         }
       } else if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
         ActualCalls.insert(Call);
-      if (const auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&I)) {
-        const auto Token = windows_eh_semantics::getCxxCatchSemanticToken(
-            Source, Arch::X86, 0, 0);
-        if (Result.Catch || !Token || !exactSemanticToken(*Pad, *Token) ||
-            Pad->arg_size() != 3 ||
-            integer(Pad->getArgOperand(1), 32) != Handler.Adjectives)
-          return rejectIR("C++ catch lost its exact source row or adjectives");
-        Result.Catch = Pad;
-      } else if (const auto *Candidate =
-                     llvm::dyn_cast<llvm::CatchSwitchInst>(&I)) {
-        if (Switch)
-          return rejectIR(
-              "C++ source catch has multiple runtime dispatch contexts");
-        Switch = Candidate;
+      if (llvm::isa<llvm::CatchSwitchInst>(I)) {
         CompilerBlocks.insert(&Block);
       } else if (const auto *Pad = llvm::dyn_cast<llvm::CleanupPadInst>(&I)) {
         std::optional<uint32_t> State;
@@ -225,37 +205,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
                            llvm::IndirectBrInst, llvm::CallBrInst>(I))
         return rejectIR("C++ IR contains an unproved execution transfer");
     }
-  if (!Escape || !Result.Catch || !Switch ||
-      Result.Catch->getCatchSwitch() != Switch ||
-      Switch->getNumHandlers() != 1 ||
-      *Switch->handler_begin() != Result.Catch->getParent() ||
-      !Switch->unwindsToCaller() ||
-      Switch->getParentPad() !=
-          llvm::ConstantTokenNone::get(Function.getContext()) ||
-      Result.Catch->getParent() !=
-          Result.Segments.at(BlockAt.at(Handler.HandlerVA)).Enter->getParent())
-    return rejectIR(
-        "C++ dispatch changed its source handler entry or unwind context");
-  const auto *Type = llvm::dyn_cast<llvm::GlobalVariable>(
-      Result.Catch->getArgOperand(0)->stripPointerCasts());
-  auto CatchObject = llvm::getRewriteWinX86CxxCatchFrameObject(*Result.Catch);
-  if (!CatchObject)
-    return CatchObject.takeError();
-  const bool MatchingType =
-      Handler.TypeDescriptorVA
-          ? Type && Type->isDeclaration() && Type->hasExternalLinkage() &&
-                Type->getName() == makeNdDataSymbol(Handler.TypeDescriptorVA)
-          : llvm::isa<llvm::ConstantPointerNull>(
-                Result.Catch->getArgOperand(0));
-  const bool MatchingHome =
-      Result.CatchHome
-          ? CatchObject->Frame == Frame->Slot &&
-                CatchObject->Offset == Result.CatchHome->Offset &&
-                CatchObject->Size == Result.CatchHome->slotSize()
-          : !CatchObject->Frame && !CatchObject->Offset && !CatchObject->Size;
-  if (!MatchingType || !MatchingHome)
-    return rejectIR(
-        "C++ catch changed its RTTI or checked runtime object home");
+  if (!Escape)
+    return rejectIR("C++ frame has no runtime escape");
+  if (auto Error = bindCxxCatches(Result, Med, Function, *Layout))
+    return std::move(Error);
+  const auto *Switch = Result.Catches.front().Pad->getCatchSwitch();
   auto BundleIs = [](const llvm::CallBase &Call, const llvm::Value *Pad) {
     auto Bundle = Call.getOperandBundle("funclet");
     return Pad ? Bundle && Bundle->Inputs.size() == 1 &&
@@ -276,15 +230,21 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   };
   std::set<const llvm::Instruction *> ExpectedAnchors;
   const auto &Dispatch = Anchors[Role::RegionDispatch];
-  if (Dispatch.size() != 1 ||
-      Dispatch[0].second.SourceVA != Handler.HandlerVA ||
-      Dispatch[0].second.Region || Dispatch[0].second.Clause ||
-      Dispatch[0].second.AuxVA != Handler.TypeDescriptorVA ||
-      Dispatch[0].second.Flags != Handler.Adjectives ||
-      next(*Result.Catch) != Dispatch[0].first ||
-      !BundleIs(*Dispatch[0].first, Result.Catch))
-    return rejectIR("C++ catch dispatch anchor changed");
-  ExpectedAnchors.insert(Dispatch[0].first);
+  if (Dispatch.size() != Result.Catches.size())
+    return rejectIR("C++ catch dispatch anchor set is incomplete");
+  std::set<uint32_t> Clauses;
+  for (const auto &[Anchor, P] : Dispatch) {
+    if (P.Region || P.Clause >= Result.Catches.size() ||
+        !Clauses.insert(P.Clause).second)
+      return rejectIR("C++ catch dispatch has no unique clause identity");
+    const auto &Handler = Try.Handlers[P.Clause];
+    const auto *Pad = Result.Catches[P.Clause].Pad;
+    if (P.SourceVA != Handler.HandlerVA ||
+        P.AuxVA != Handler.TypeDescriptorVA || P.Flags != Handler.Adjectives ||
+        next(*Pad) != Anchor || !BundleIs(*Anchor, Pad))
+      return rejectIR("C++ catch dispatch anchor changed");
+    ExpectedAnchors.insert(Anchor);
+  }
   const auto &CleanupAnchors = Anchors[Role::RegistrationCallback];
   if (CleanupAnchors.size() != Result.Cleanups.size() ||
       Result.Cleanups.size() != States.CleanupContracts.size())
@@ -317,8 +277,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         !BundleIs(*Anchor, Pad) || !BundleIs(*Borrow, Pad))
       return rejectIR("C++ cleanup changed its action or outer unwind edge");
     ExpectedAnchors.insert(Anchor);
-    Result.Calls.emplace(
-        Borrow, CxxIRCall{Contract.Leaf, Contract.ObjectFrameOffset, true});
+    const auto Offset =
+        Source.Registration->cxxSourceFrameOffset(Contract.ObjectFrameOffset);
+    if (!Offset)
+      return rejectIR("C++ cleanup object has no checked source coordinate");
+    Result.Calls.emplace(Borrow, CxxIRCall{Contract.Leaf, *Offset, true});
   }
   std::map<std::pair<va_t, uint32_t>, const llvm::CallBase *> CallsAt;
   for (const auto *Call : ActualCalls)
@@ -364,7 +327,10 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       ExpectedAnchors.insert(Anchor);
     } else if (!llvm::isa<llvm::CallInst>(Call))
       return rejectIR("unprotected C++ call gained an unproved unwind context");
-    if (!BundleIs(*Call, State.CallbackOnly ? Result.Catch : nullptr) ||
+    if (!BundleIs(*Call,
+                  State.CallbackOnly
+                      ? Result.Catches[Result.SourceCatchOwners.at(BlockId)].Pad
+                      : nullptr) ||
         !Result.Calls
              .emplace(Call, CxxIRCall{Contract, Effect.ECXFrameOffset, false})
              .second)
@@ -407,19 +373,22 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         Resume = &Candidate;
     if (!Resume)
       return rejectIR("C++ catch lost its checked runtime continuation");
-    auto Restored =
-        validateCxxContinuationRestore(*Anchor, Result.Frame, *Resume);
+    auto Restored = validateCxxContinuationRestore(
+        *Anchor, Result.Frame, *Source.Registration->RegistrationOffset - 4,
+        *Resume);
     if (!Restored)
       return Restored.takeError();
     const auto *Return = *Restored;
-    if (Resume->TryIndex || Resume->CatchIndex || P.AuxVA != Resume->TargetVA ||
+    if (Resume->TryIndex || Resume->CatchIndex >= Result.Catches.size() ||
+        P.AuxVA != Resume->TargetVA ||
         P.Flags != uint32_t(Resume->SavedStackOffset) ||
         !BlockAt.count(Resume->TargetVA) || !Return ||
-        Return->getCatchPad() != Result.Catch ||
+        Return->getCatchPad() != Result.Catches[Resume->CatchIndex].Pad ||
         Return->getSuccessor() !=
             Result.Segments.at(BlockAt.at(Resume->TargetVA))
                 .Enter->getParent() ||
-        !BundleIs(*Anchor, Result.Catch) || !Returns.insert(Return).second)
+        !BundleIs(*Anchor, Result.Catches[Resume->CatchIndex].Pad) ||
+        !Returns.insert(Return).second)
       return rejectIR("C++ catch changed its checked runtime continuation");
     ExpectedAnchors.insert(Anchor);
   }
@@ -511,7 +480,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       if (Expected != Actual || StateByBlock.at(Id)->CallbackOnly &&
                                     llvm::isa<llvm::ReturnInst>(Term))
         return rejectIR(
-            "C++ normal execution changed its checked source edges");
+            "C++ normal execution changed its checked source edges in block " +
+            llvm::Twine(Id));
     }
   }
   const auto *Entry = llvm::dyn_cast<llvm::UncondBrInst>(

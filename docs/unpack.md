@@ -12,13 +12,15 @@ The container selects how a file is validated and rebuilt, the instruction set s
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v92`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL inputs are selected by `IMAGE_FILE_DLL`. A modeled guest EXE calls `LoadLibraryA`, then `FreeLibrary`, using the ordinary dependency, TLS and `DllMain` lifecycle. The accepted DLL entry is its process-attach invocation; arbitrary exports are not called with invented arguments. Export names, ordinals, aliases, data and forwarders remain in the rebuilt DLL. Pointers to its own exports remain internal pointers rather than self-imports. This also covers helper-returned addresses: an internal result withdraws earlier import-repair evidence for that site.
 
 ## Windows x64 drivers
 
 With `NEVERD_ENABLE_DRIVER_EMULATION=ON`, native-subsystem x64 PE images (`.sys`) run through the driver environment. `DriverEntry` owns entry provenance; dispatch and unload callbacks cannot become its default recovered entry. The optional `driver` object accepts the [driver scenario](driver-emulation.md), including service name, registry, requests and scheduling. Common backend, contract and resource limits still apply. User-process arguments, environment and PEB inputs are rejected.
+
+Driver UNPACK disables per-write report retention while keeping memory validation and recovery observers active. Its event budget counts API calls; the instruction and time limits still apply.
 
 Recovery checks the incoming driver arguments, return/shadow frame, nonvolatile registers, direction flag and floating-point controls, together with kernel object ownership. Retained pools, borrowed kernel pointers, changed loader objects or unaccounted kernel effects return `unsupported_state`; explicit `snapshot_only` keeps their diagnostics. Kernel state has no `restore_runtime` materializer. Import rebuilding uses kernel export identities, validates original exports and recomputes the PE checksum. The fixed-base result does not establish a Windows kernel load, signature validity or execution of unreached driver paths.
 

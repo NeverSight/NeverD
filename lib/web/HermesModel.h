@@ -51,7 +51,7 @@ class Collector {
   SourceAnalysis &Result;
   const char *Base;
   size_t Size;
-  uint64_t RemainingUnits = MaxJavaScriptStringUnits;
+  uint64_t RemainingUnits, NodeLimit;
 
   void field(uint32_t Parent, const char *Name, AST::NodePtr Child, bool Strict,
              unsigned Depth) {
@@ -137,13 +137,18 @@ class Collector {
   }
 
 public:
-  Collector(SourceAnalysis &Result, const char *Base, size_t Size)
-      : Result(Result), Base(Base), Size(Size) {}
+  Collector(SourceAnalysis &Result, const char *Base, size_t Size,
+            uint64_t NodeLimit = MaxJavaScriptNodes,
+            uint64_t StringLimit = MaxJavaScriptStringUnits)
+      : Result(Result), Base(Base), Size(Size), RemainingUnits(StringLimit),
+        NodeLimit(NodeLimit) {}
 
   uint32_t collect(AST::Node *Node, uint32_t Parent = UINT32_MAX,
                    bool Strict = false, unsigned Depth = 0) {
-    if (Result.Nodes.size() >= MaxJavaScriptNodes || Depth >= 256)
+    if (Result.Nodes.size() >= NodeLimit)
       throw Error("syntax_inventory_budget_exceeded");
+    if (Depth >= 256)
+      throw Error("syntax_inventory_depth_exceeded");
     if (Result.SourceType != "module" &&
         (llvh::isa<AST::ImportDeclarationNode>(Node) ||
          llvh::isa<AST::ExportNamedDeclarationNode>(Node) ||

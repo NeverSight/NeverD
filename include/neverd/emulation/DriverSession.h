@@ -109,6 +109,9 @@ struct DriverOptions {
   uint64_t InstructionLimit = profile::DefaultInstructionLimit;
   uint64_t MemoryLimit = profile::DefaultMemoryLimit;
   uint64_t EventLimit = profile::DefaultEventLimit;
+  /// Retain attempted guest writes as budgeted report events. Disabling this
+  /// leaves memory validation and execution observers active.
+  bool TraceMemoryWrites = true;
   uint64_t TimeoutMilliseconds = profile::DefaultTimeoutMilliseconds;
   std::string ServiceName = profile::DefaultServiceName;
   /// Zero selects the preferred PE image base.

@@ -14,13 +14,15 @@ Il contenitore determina come un file viene validato e ricostruito, il set di is
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | osservazione durante l’esecuzione |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | osservazione durante l’esecuzione |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v92`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
 
 Gli input DLL PE32+ sono identificati da `IMAGE_FILE_DLL`. Un EXE guest modellato chiama `LoadLibraryA` e poi `FreeLibrary`, usando il normale ciclo di dipendenze, TLS e `DllMain`. L’ingresso DLL accettato è la chiamata di collegamento al processo; non si inventano argomenti per export arbitrari. Nomi, ordinali, alias, dati e inoltri sono conservati. I puntatori agli export propri rimangono interni, senza autoimportazioni. La stessa regola vale per gli indirizzi restituiti dagli helper: un risultato interno revoca le prove precedenti di riparazione degli import per quel sito.
 
 ## Driver Windows x64
 
 Con `NEVERD_ENABLE_DRIVER_EMULATION=ON`, le immagini PE x64 del sottosistema native (`.sys`) usano l’ambiente driver. `DriverEntry` fornisce la provenienza dell’ingresso; i callback di dispatch e scaricamento non diventano l’ingresso recuperato predefinito. L’oggetto facoltativo `driver` accetta lo [scenario driver](driver-emulation.md), inclusi servizio, registro, richieste e pianificazione. Restano validi backend, contratto e limiti comuni; argomenti, ambiente e PEB dei processi utente sono rifiutati.
+
+UNPACK dei driver disattiva la registrazione delle singole scritture e mantiene la convalida della memoria e gli osservatori di ripristino. Il budget degli eventi conta le chiamate API; i limiti di istruzioni e tempo restano validi.
 
 Il recupero verifica argomenti iniziali, frame di ritorno e spazio riservato, registri non volatili, flag di direzione, controlli floating point e proprietà degli oggetti kernel. Pool conservati, puntatori presi in prestito, oggetti del loader modificati o effetti non contabilizzati producono `unsupported_state`; `snapshot_only` conserva la diagnostica. Non esiste un materializzatore `restore_runtime` per lo stato kernel. Gli import usano le identità degli export kernel; gli export originali vengono validati e il checksum PE ricalcolato. Il risultato a base fissa non dimostra caricamento nel kernel Windows, validità della firma o esecuzione dei percorsi non raggiunti.
 

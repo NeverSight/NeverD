@@ -38,14 +38,31 @@ FORMS = {
     "unnamed-reference": "UnnamedReference", "catch-all": "CatchAll",
     "unnamed-value-fixed": "UnnamedValueFixed",
     "unnamed-reference-fixed": "UnnamedReferenceFixed", "catch-all-fixed": "CatchAllFixed",
+    "value-llvm-fixed": "ValueLLVMFixed",
+    "value-large-llvm-fixed": "ValueLargeLLVMFixed",
+    "reference-llvm-fixed": "ReferenceLLVMFixed",
+    "unnamed-value-llvm-fixed": "UnnamedValueLLVMFixed",
+    "unnamed-reference-llvm-fixed": "UnnamedReferenceLLVMFixed",
+    "catch-all-llvm-fixed": "CatchAllLLVMFixed",
+    "value-incoming-fixed": "ValueIncomingFixed",
+    "reference-incoming-fixed": "ReferenceIncomingFixed",
+    "catch-all-incoming-fixed": "CatchAllIncomingFixed",
+    "catch-all-incoming-readonly-fixed": "CatchAllIncomingReadOnlyFixed",
 }
-KINDS = (*FORMS, "catch-all-unsigned", "catch-all-unsigned-fixed")
+KINDS = (*FORMS, "catch-all-unsigned", "catch-all-unsigned-fixed",
+         "catch-all-unsigned-llvm-fixed")
 CASES = (*KINDS, *(kind + "-control" for kind in KINDS))
 OBSERVATION = re.compile(r"CALLBACK ([0-9A-F]{8}) ([0-9A-F]{8}) ([0-9A-F]{8}) ([0-9A-F]{8}) ([0-9A-F]{8})\r?\n")
 
 
+def source_frame(case: str) -> str:
+    if "-llvm-fixed" in case:
+        return "fixed-displaced"
+    return "direct" if case.removesuffix("-control").endswith("-fixed") else "realigned"
+
+
 def proof_count(case: str) -> int:
-    return 1 if case.removesuffix("-control").endswith("-fixed") else 3
+    return {"direct": 1, "realigned": 3, "fixed-displaced": 4}[source_frame(case)]
 
 
 def file_digest(path: Path) -> str:
@@ -60,8 +77,11 @@ def validate_installation(original: PE32, generated: PE32, receipt: dict, case: 
             receipt.get("source_image_sha256") != hashlib.sha256(original.data).hexdigest() or \
             receipt.get("image_sha256") != hashlib.sha256(generated.data).hexdigest():
         raise ValueError("realigned installation lost its proved image identity")
-    if receipt.get("source_frame") != ("direct" if proof_count(case) == 1 else "realigned"):
+    if receipt.get("source_frame") != source_frame(case):
         raise ValueError("source receipt lost its expected frame coordinate")
+    if (receipt.get("incoming_reads"), receipt.get("incoming_writes")) != \
+            ((3, 0 if "-readonly" in case else 2) if "-incoming" in case else (0, 0)):
+        raise ValueError("source receipt lost its exact caller argument accesses")
     entry = original.entry(b"callback_parent")
     if entry != receipt["source_begin"] or generated.entry(b"callback_parent") != entry:
         raise ValueError("realigned installation changed the exported entry")
@@ -142,6 +162,14 @@ def main() -> int:
              "--gtest_output=xml:" + str(out / "catch-projection.xml")])
         if require_test_result(out / "catch-projection.xml") != 1:
             raise ValueError("catch projection proof test missing")
+        run([test, "--gtest_filter=WindowsRegistrationIncoming.*",
+             "--gtest_output=xml:" + str(out / "incoming-projection.xml")])
+        if require_test_result(out / "incoming-projection.xml") != 2:
+            raise ValueError("caller argument entry/rollback proof tests missing")
+        run([test, "--gtest_filter=WindowsRegistrationFixed.RuntimeOffsetsRequireTheCompleteLayout",
+             "--gtest_output=xml:" + str(out / "fixed-projection.xml")])
+        if require_test_result(out / "fixed-projection.xml") != 1:
+            raise ValueError("fixed runtime coordinate proof test missing")
         for kind, test_name in FORMS.items():
             run([test, "--gtest_filter=WindowsRegistrationRealignedNative.Emits" + test_name + "Callback",
                  "--gtest_output=xml:" + str(out / (kind + "-emit.xml"))],
@@ -157,7 +185,9 @@ def main() -> int:
             case.mkdir(exist_ok=True)
             run([compiler, "--target=i686-pc-windows-msvc", "-fms-extensions", "-fexceptions",
                  "-fcxx-exceptions", "-fno-omit-frame-pointer", "-O1",
-                 "-DREFERENCE_CATCH=" + str(int(kind == "reference")),
+                 "-DREFERENCE_CATCH=" + str(int(kind.startswith("reference"))),
+                 "-DINCOMING_READ_ONLY=" + str(int("-readonly" in kind)),
+                 "-DINCOMING_FRAME=" + str(int("-incoming" in kind)),
                  "-DUNSIGNED_THROW=" + str(int("-unsigned" in kind)),
                  "-DEXPECTED_RESULT=" + ("8" if name.endswith("-control") else "7"),
                  "-c", SOURCE, "-o", case / "driver.obj"])
@@ -167,9 +197,11 @@ def main() -> int:
                  "/fixed:no", "/dynamicbase:no", "/out:" + str(original),
                  case / "driver.obj", out / (object_kind + ".obj"), *libraries])
             checks = "WindowsRegistrationRealignedNative.InputPE32ReconstructsTheSourceFrame"
-            if proof_count(name) == 3:
+            if proof_count(name) >= 3:
                 checks += (":WindowsRegistrationHighCallback.InputPE32BindsCurrentCallbackRoots:"
                            "WindowsRegistrationHighCallback.InputPE32CollectsTheWholeCallbackCFG")
+            if source_frame(name) == "fixed-displaced":
+                checks += ":WindowsRegistrationFixed.InputPE32ProvesDisplacedFrame"
             run([test, "--gtest_filter=" + checks,
                  "--gtest_output=xml:" + str(case / "rewrite.xml")],
                 {"NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32": str(original),

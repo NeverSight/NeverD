@@ -33,6 +33,15 @@ inline constexpr char SystemHex[] =
     "4e6576657244207669727475616c206b65726e656c0056343200"
     "7669727475616c3634005669727475616c4d6f64656c0007000000"
     "1032547698badcfe";
+inline DarwinSystemOptions threadIdentityOptions() {
+  DarwinSystemOptions O;
+  O.ThreadID = 0xfedcba9876543210ULL;
+  return O;
+}
+inline constexpr char ThreadIdentityJSON[] =
+    R"({"thread_id":"18364758544493064720"})";
+// Independent little-endian complete uint64 observation.
+inline constexpr char ThreadIdentityHex[] = "1032547698badcfe";
 inline DarwinSystemOptions hostNameOptions() {
   DarwinSystemOptions O;
   O.HostName = "abcd";

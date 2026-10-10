@@ -126,13 +126,14 @@ class Resolver {
       New.Name = Name;
       New.Kind = Kind;
       New.Implicit = I == None;
-      New.Immutable = Kind == "const" || Kind == "import" ||
+      New.Immutable = Kind == "const" || Kind == "using" ||
+                      Kind == "await using" || Kind == "import" ||
                       Kind == "function_name" || Kind == "class_name" ||
                       (Kind == "arguments" && Result.Scopes[S].Strict);
-      New.HasTemporalDeadZone = Kind == "let" || Kind == "const" ||
-                                Kind == "class" || Kind == "class_name" ||
-                                Kind == "parameter" ||
-                                Kind == "catch_parameter" || Kind == "import";
+      New.HasTemporalDeadZone =
+          Kind == "let" || Kind == "const" || Kind == "using" ||
+          Kind == "await using" || Kind == "class" || Kind == "class_name" ||
+          Kind == "parameter" || Kind == "catch_parameter" || Kind == "import";
       const auto Ordinal = std::to_string(B);
       New.ID = identity("source-binding",
                         {Result.ID, Result.Scopes[S].ID, Kind, Ordinal});
@@ -324,7 +325,8 @@ class Resolver {
       statements(I, Inner);
     } else if (K == "VariableDeclaration") {
       const auto *Kind = N.text("kind");
-      if (!Kind || (*Kind != u"var" && *Kind != u"let" && *Kind != u"const"))
+      if (!Kind || (*Kind != u"var" && *Kind != u"let" && *Kind != u"const" &&
+                    *Kind != u"using" && *Kind != u"await using"))
         throw Error("unsupported_declaration_kind");
       const std::string KindText(Kind->begin(), Kind->end());
       const auto Destination =

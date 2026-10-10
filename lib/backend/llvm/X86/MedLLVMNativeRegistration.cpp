@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../eh/MedLLVMEHHelpers.h"
+#include "MedLLVMRegistrationIncoming.h"
 #include "MedLLVMRegistrationSEHProof.h"
 
 #include "neverd/Limits.h"
@@ -285,38 +286,13 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
     Regions.push_back(R);
   }
 
-  using IncomingKey = std::pair<va_t, int>;
-  std::map<IncomingKey, const RegistrationIncomingFrameAccess *> Incoming;
-  for (const auto &Block : Func.Blocks)
-    for (const auto &Op : Block.Ops)
-      if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE)
-        if (const auto *Found =
-                States.incomingFrameAccess(Op.Addr, Op.OriginSeq)) {
-          const auto &Access = *Found;
-          auto I = RegistrationIncomingIR.find({Access.Address, Access.OpSeq});
-          auto *Load = I != RegistrationIncomingIR.end()
-                           ? llvm::dyn_cast_or_null<llvm::LoadInst>(I->second)
-                           : nullptr;
-          auto *Store = I != RegistrationIncomingIR.end()
-                            ? llvm::dyn_cast_or_null<llvm::StoreInst>(I->second)
-                            : nullptr;
-          if (!Incoming
-                   .emplace(IncomingKey{Access.Address, Access.OpSeq}, &Access)
-                   .second ||
-              Access.Offset < 4 || Access.Width == 0 ||
-              int64_t(Access.Offset) + Access.Width > INT32_MAX ||
-              (Access.Write ? !Store || Store->isAtomic()
-                            : !Load || Load->isAtomic()) ||
-              (Access.Write && IsFrame(Op.Inputs[1])))
-            return false;
-          auto *Type = Access.Write ? Store->getValueOperand()->getType()
-                                    : Load->getType();
-          auto Size = Mod->getDataLayout().getTypeStoreSize(Type);
-          if (Size.isScalable() || Size.getFixedValue() != Access.Width)
-            return false;
-        }
-  if (Incoming.size() != RegistrationIncomingIR.size())
+  const auto Incoming = x86_registration::prepareIncomingFrame(
+      Func, Parent, RegistrationIncomingIR);
+  if (!Incoming)
     return false;
+  for (const auto &Bound : *Incoming)
+    if (Bound.Access->Write && IsFrame(Bound.Source->Inputs[1]))
+      return false;
 
   auto SourceProof = x86_registration::getCheckedSEHSourceOperations(
       Func, OriginalBlockMap, RegistrationMemoryIR, CallSiteAddrs);
@@ -445,81 +421,13 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
       SourceAnchors.push_back(Anchor);
     }
   }
-  std::vector<llvm::Instruction *> IncomingSetup;
-  struct IncomingOriginal {
-    llvm::Value *Pointer;
-    llvm::MDNode *Marker;
-    bool Volatile;
-  };
-  std::map<llvm::Instruction *, IncomingOriginal> OriginalIncomingPointers;
-  llvm::Function *PreviousFrameAddress =
-      Mod->getFunction("llvm.frameaddress.p0");
-  if (!Incoming.empty()) {
-    llvm::IRBuilder<> Entry(Parent.getEntryBlock().getTerminator());
-    auto *Slot = Entry.CreateAlloca(Entry.getPtrTy(), nullptr,
-                                    "registration.caller.frame");
-    IncomingSetup.push_back(Slot);
-    Slot->setMetadata(
-        windows_eh_md::RegistrationCallerFrameAttachment,
-        llvm::MDNode::get(*Ctx,
-                          {med_llvm_eh::mdUInt(*Ctx, EH.CodeRange.Begin, 64)}));
-    auto *Frame = Entry.CreateCall(
-        llvm::Intrinsic::getOrInsertDeclaration(
-            Mod, llvm::Intrinsic::frameaddress, {Entry.getPtrTy()}),
-        {Entry.getInt32(0)});
-    IncomingSetup.push_back(Frame);
-    IncomingSetup.push_back(Entry.CreateStore(Frame, Slot));
-    for (const auto &[Key, Access] : Incoming) {
-      auto *Instruction = RegistrationIncomingIR.at(Key);
-      auto *Load = llvm::dyn_cast<llvm::LoadInst>(Instruction);
-      auto *Store = llvm::dyn_cast<llvm::StoreInst>(Instruction);
-      llvm::IRBuilder<> B(Instruction);
-      auto *Base = B.CreateLoad(B.getPtrTy(), Slot, "registration.caller.base");
-      IncomingSetup.push_back(Base);
-      auto *Pointer = llvm::cast<llvm::Instruction>(
-          B.CreateGEP(B.getInt8Ty(), Base, B.getInt32(Access->Offset),
-                      "registration.incoming"));
-      IncomingSetup.push_back(Pointer);
-      OriginalIncomingPointers.emplace(
-          Instruction,
-          IncomingOriginal{
-              Load ? Load->getPointerOperand() : Store->getPointerOperand(),
-              Instruction->getMetadata(
-                  windows_eh_md::RegistrationIncomingFrameAttachment),
-              Load ? Load->isVolatile() : Store->isVolatile()});
-      if (Load)
-        Load->setVolatile(true);
-      else
-        Store->setVolatile(true);
-      Instruction->setOperand(Load ? 0 : 1, Pointer);
-      Instruction->setMetadata(
-          windows_eh_md::RegistrationIncomingFrameAttachment,
-          llvm::MDNode::get(*Ctx,
-                            {med_llvm_eh::mdUInt(*Ctx, EH.CodeRange.Begin, 64),
-                             med_llvm_eh::mdUInt(*Ctx, Access->Address, 64),
-                             med_llvm_eh::mdUInt(*Ctx, Access->OpSeq, 32),
-                             med_llvm_eh::mdUInt(*Ctx, Access->Offset, 32),
-                             med_llvm_eh::mdUInt(*Ctx, Access->Width, 16),
-                             med_llvm_eh::mdUInt(*Ctx, Access->Write, 1)}));
-    }
-  }
+  x86_registration::IncomingFrameProjection IncomingProjection(
+      Parent, EH.CodeRange.Begin, *Incoming);
   auto Outlined = outlineX86RegistrationCallbacks(Parent, Requests);
   if (!Outlined) {
     const std::string Detail = llvm::toString(Outlined.takeError());
     LLVM_DEBUG(llvm::dbgs() << Detail << '\n');
-    for (const auto &[Instruction, Original] : OriginalIncomingPointers) {
-      if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(Instruction))
-        Load->setVolatile(Original.Volatile);
-      else
-        llvm::cast<llvm::StoreInst>(Instruction)
-            ->setVolatile(Original.Volatile);
-      Instruction->setOperand(llvm::isa<llvm::LoadInst>(Instruction) ? 0 : 1,
-                              Original.Pointer);
-      Instruction->setMetadata(
-          windows_eh_md::RegistrationIncomingFrameAttachment, Original.Marker);
-    }
-    for (auto *Instruction : llvm::reverse(IncomingSetup))
-      Instruction->eraseFromParent();
+    IncomingProjection.rollback();
     for (const auto &Original : SourceOriginals) {
       Original.Instruction->setMetadata(
           windows_eh_md::RegistrationOperationAttachment, Original.Marker);
@@ -532,10 +440,6 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
       Anchor->eraseFromParent();
     if (!PreviousSideEffect && SideEffect->use_empty())
       SideEffect->eraseFromParent();
-    if (!PreviousFrameAddress)
-      if (auto *FrameAddress = Mod->getFunction("llvm.frameaddress.p0");
-          FrameAddress && FrameAddress->use_empty())
-        FrameAddress->eraseFromParent();
     Parent.setPersonalityFn(nullptr);
     if (!Previous)
       Personality->eraseFromParent();
@@ -543,6 +447,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
   }
 
   // Commit. All source occurrences, callbacks and control edges are closed.
+  IncomingProjection.commit();
   if (EH4 && !Mod->getNamedValue("__security_cookie"))
     new llvm::GlobalVariable(*Mod, llvm::Type::getInt32Ty(*Ctx), false,
                              llvm::GlobalValue::ExternalLinkage, nullptr,

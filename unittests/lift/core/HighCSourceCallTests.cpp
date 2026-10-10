@@ -84,7 +84,8 @@ SourceCallTypeHint native(llvm::StringRef Name, TypeRef Return,
 std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true,
                  Arch Architecture = Arch::X64,
                  CEmitterOptions::ScalarPointerSpelling Spelling =
-                     CEmitterOptions::ScalarPointerSpelling::StandardTypes) {
+                     CEmitterOptions::ScalarPointerSpelling::StandardTypes,
+                 DebugContext *Debug = nullptr) {
   std::string Result;
   llvm::raw_string_ostream OS(Result);
   CEmitterOptions Options;
@@ -95,7 +96,7 @@ std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true,
   Options.Format = BinaryFormat::MachO;
   Options.EmitIncludes = Includes;
   Options.EmitComments = false;
-  EXPECT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  EXPECT_TRUE(HighCEmitter().emit(Functions, OS, Options, Debug));
   return Result;
 }
 
@@ -2477,6 +2478,315 @@ int main(void) {
     if (round_trip_8(b[i]) != b[i]) return 2;
   return 0;
 })");
+}
+
+namespace {
+enum class FloatingCarrierBoundary {
+  EntryReturn,
+  ExtendedEntryReturn,
+  BitCast,
+  Argument
+};
+
+class FloatingCarrierDebug : public NullDebugContext {
+  bool IntegerReturn;
+
+public:
+  explicit FloatingCarrierDebug(bool IntegerReturn)
+      : IntegerReturn(IntegerReturn) {}
+  std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+    if (Address != 0x2004 && Address != 0x2008)
+      return std::nullopt;
+    const auto Width = Address - 0x2000;
+    FunctionSym Function;
+    Function.Name = "_carrier_provider_" + std::to_string(Width);
+    Function.Addr = Address;
+    Function.CallConv = DebugCallConv::Cdecl;
+    Function.ReturnType = IntegerReturn ? NdType::makeInt(Width, false)
+                                        : NdType::makeFloat(Width);
+    Function.Params.emplace_back("value", NdType::makeFloat(Width));
+    Function.Params.emplace_back("count",
+                                 NdType::makePtr(NdType::makeInt(8, false)));
+    return Function;
+  }
+  bool hasInfo() const override { return true; }
+};
+
+std::vector<HighFunc> floatingCarrierFunctions(unsigned Width,
+                                               FloatingCarrierBoundary Boundary,
+                                               va_t ProviderAddress = 0) {
+  const auto Bits = NdType::makeInt(Width, false);
+  const auto Float = NdType::makeFloat(Width);
+  const auto Count = NdType::makeInt(8, false);
+  const auto Pointer = NdType::makePtr(Count);
+  const std::string Suffix = std::to_string(Width);
+  const std::string Provider = "_carrier_provider_" + Suffix;
+  auto Hint = native(Provider, Float, {Float, Pointer});
+  Hint.TargetAddress = ProviderAddress;
+  auto Value = [&] {
+    return call(Hint, Bits, {parameter(0, Bits), parameter(1, Pointer)});
+  };
+  ExprPtr Result = Value();
+  if (Boundary == FloatingCarrierBoundary::ExtendedEntryReturn) {
+    auto Extended = std::make_shared<HighExpr>();
+    Extended->Kind = ExprKind::UnaryOp;
+    Extended->Op = NdOp::INT_SEXT;
+    Extended->Type = NdType::makeInt(Width * 2, false);
+    Extended->Operands = {Result};
+    Result = Extended;
+  } else if (Boundary == FloatingCarrierBoundary::BitCast)
+    Result = HighExpr::makeBitCast(Result, Float);
+  else if (Boundary == FloatingCarrierBoundary::Argument) {
+    Result = HighExpr::makeCall("_carrier_sink_" + Suffix, 0, {Result});
+    Result->Type = Float;
+  }
+  auto Subject =
+      returning("carrier_subject_" + Suffix, Result, {Bits, Pointer});
+  Subject.SourceTypeHint =
+      native(Subject.Name, Float, {Bits, Pointer}).Signature;
+  auto Raw = returning("carrier_raw_" + Suffix, Value(), {Bits, Pointer});
+  auto Cast = std::make_shared<HighExpr>();
+  Cast->Kind = ExprKind::Cast;
+  Cast->Type = Cast->CastTo = Float;
+  Cast->Operands = {Value()};
+  auto Numeric = returning("carrier_numeric_" + Suffix, Cast, {Bits, Pointer});
+  auto Typed =
+      returning("carrier_typed_" + Suffix,
+                call(Hint, Float, {parameter(0, Float), parameter(1, Pointer)}),
+                {Float, Pointer});
+  auto Helper = returning(Provider, parameter(0, Float), {Float, Pointer});
+  Helper.Entry = ProviderAddress;
+  Helper.SourceTypeHint = Hint.Signature;
+  HighStmt Increment;
+  Increment.Kind = StmtKind::Store;
+  Increment.StoreAddr = parameter(1, Pointer);
+  Increment.StoreVal = HighExpr::makeBinop(
+      NdOp::INT_ADD, HighExpr::makeLoad(parameter(1, Pointer), Count),
+      HighExpr::makeConst(1, 8));
+  Helper.Body.insert(Helper.Body.begin(), Increment);
+  auto Sink =
+      returning("_carrier_sink_" + Suffix, parameter(0, Float), {Float});
+  return {Subject, Raw, Numeric, Typed, Helper, Sink};
+}
+
+void checkFloatingCarrierBoundary(FloatingCarrierBoundary Boundary) {
+  const std::string Harness = R"(
+int main(void) {
+  const uint32_t a[] = {0,0x80000000U,1,0x007fffffU,0x00800000U,
+    0x3fa00000U,0xbfa00000U,0x7fc00042U,0xffc00042U,0x7f800000U,0xff800000U};
+  const uint64_t b[] = {0,0x8000000000000000ULL,1,0x000fffffffffffffULL,
+    0x0010000000000000ULL,0x3ff4000000000000ULL,0xbff4000000000000ULL,
+    0x7ff8000000000042ULL,0xfff8000000000042ULL,0x7ff0000000000000ULL,
+    0xfff0000000000000ULL};
+  for (unsigned i=0; i<sizeof(a)/sizeof(a[0]); ++i) {
+    struct { uint64_t head, calls, tail; } s = {0x1234,0,0x5678};
+    uint32_t bits;
+    float value = carrier_subject_4(a[i],&s.calls);
+    __builtin_memcpy(&bits,&value,4);
+    if (bits!=a[i] || s.calls!=1) return 1;
+    if (carrier_raw_4(a[i],&s.calls)!=a[i] || s.calls!=2) return 2;
+    if (carrier_numeric_4(a[i],&s.calls)!=(float)a[i] || s.calls!=3) return 3;
+    __builtin_memcpy(&value,&a[i],4);
+    value = carrier_typed_4(value,&s.calls);
+    __builtin_memcpy(&bits,&value,4);
+    if (bits!=a[i] || s.calls!=4 || s.head!=0x1234 || s.tail!=0x5678) return 4;
+  }
+  for (unsigned i=0; i<sizeof(b)/sizeof(b[0]); ++i) {
+    struct { uint64_t head, calls, tail; } s = {0x1234,0,0x5678};
+    uint64_t bits;
+    double value = carrier_subject_8(b[i],&s.calls);
+    __builtin_memcpy(&bits,&value,8);
+    if (bits!=b[i] || s.calls!=1) return 5;
+    if (carrier_raw_8(b[i],&s.calls)!=b[i] || s.calls!=2) return 6;
+    if (carrier_numeric_8(b[i],&s.calls)!=(double)b[i] || s.calls!=3) return 7;
+    __builtin_memcpy(&value,&b[i],8);
+    value = carrier_typed_8(value,&s.calls);
+    __builtin_memcpy(&bits,&value,8);
+    if (bits!=b[i] || s.calls!=4 || s.head!=0x1234 || s.tail!=0x5678) return 8;
+  }
+  return 0;
+})";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    auto Functions = floatingCarrierFunctions(4, Boundary);
+    const auto Double = floatingCarrierFunctions(8, Boundary);
+    Functions.insert(Functions.end(), Double.begin(), Double.end());
+    const auto Source = emit(Functions, true, Architecture);
+    EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+    ASSERT_NO_FATAL_FAILURE(compileAndRun(Source + Harness));
+  }
+}
+} // namespace
+
+TEST(HighCSourceCalls, SourceBoundFloatingReturnsPreserveBitsAndEffects) {
+  checkFloatingCarrierBoundary(FloatingCarrierBoundary::EntryReturn);
+}
+
+TEST(HighCSourceCalls,
+     SourceBoundFloatingExtendedReturnsPreserveBitsAndEffects) {
+  checkFloatingCarrierBoundary(FloatingCarrierBoundary::ExtendedEntryReturn);
+}
+
+TEST(HighCSourceCalls, SourceBoundFloatingBitCastsPreserveBitsAndEffects) {
+  checkFloatingCarrierBoundary(FloatingCarrierBoundary::BitCast);
+}
+
+TEST(HighCSourceCalls, SourceBoundFloatingArgumentsPreserveBitsAndEffects) {
+  checkFloatingCarrierBoundary(FloatingCarrierBoundary::Argument);
+}
+
+TEST(HighCSourceCalls, FloatingArgumentsPreserveBitCastsAndNumericConversions) {
+  FloatingCarrierDebug Debug(false);
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    for (bool HasDebug : {false, true}) {
+      SCOPED_TRACE(HasDebug);
+      std::vector<HighFunc> Functions;
+      for (unsigned Width : {4, 8}) {
+        const auto Bits = NdType::makeInt(Width, false);
+        const auto Float = NdType::makeFloat(Width);
+        const auto Pointer = NdType::makePtr(NdType::makeInt(8, false));
+        const auto Address = 0x2000 + Width;
+        auto Helpers = floatingCarrierFunctions(
+            Width, FloatingCarrierBoundary::EntryReturn, Address);
+        Functions.push_back(Helpers[4]);
+        for (bool Numeric : {false, true}) {
+          auto Value = HighExpr::makeBitCast(parameter(0, Bits), Float);
+          if (Numeric) {
+            Value->Kind = ExprKind::Cast;
+            Value->CastTo = Float;
+          }
+          auto Call = HighExpr::makeCall(Helpers[4].Name, Address,
+                                         {Value, parameter(1, Pointer)});
+          Call->Type = Float;
+          Functions.push_back(
+              returning(std::string(Numeric ? "numeric_arg_" : "bit_arg_") +
+                            std::to_string(Width),
+                        Call, {Bits, Pointer}));
+        }
+      }
+      compileAndRun(emit(Functions, true, Architecture,
+                         CEmitterOptions::ScalarPointerSpelling::StandardTypes,
+                         HasDebug ? &Debug : nullptr) +
+                    R"(
+int main(void) {
+  const uint32_t a[] = {0,0x80000000U,1,0x007fffffU,0x00800000U,
+    0x3fa00000U,0xbfa00000U,0x7fc00042U,0xffc00042U,0x7f800000U,0xff800000U};
+  const uint64_t b[] = {0,0x8000000000000000ULL,1,0x000fffffffffffffULL,
+    0x0010000000000000ULL,0x3ff4000000000000ULL,0xbff4000000000000ULL,
+    0x7ff8000000000042ULL,0xfff8000000000042ULL,0x7ff0000000000000ULL,
+    0xfff0000000000000ULL};
+  for (unsigned i=0; i<sizeof(a)/sizeof(a[0]); ++i) {
+    struct { uint64_t head, calls, tail; } s = {0x1234,0,0x5678};
+    float value=bit_arg_4(a[i],&s.calls);
+    uint32_t bits; __builtin_memcpy(&bits,&value,4);
+    if(bits!=a[i] || s.calls!=1) return 1;
+    if(numeric_arg_4(a[i],&s.calls)!=(float)a[i] || s.calls!=2) return 2;
+    if(s.head!=0x1234 || s.tail!=0x5678) return 3;
+  }
+  for (unsigned i=0; i<sizeof(b)/sizeof(b[0]); ++i) {
+    struct { uint64_t head, calls, tail; } s = {0x1234,0,0x5678};
+    double value=bit_arg_8(b[i],&s.calls);
+    uint64_t bits; __builtin_memcpy(&bits,&value,8);
+    if(bits!=b[i] || s.calls!=1) return 4;
+    if(numeric_arg_8(b[i],&s.calls)!=(double)b[i] || s.calls!=2) return 5;
+    if(s.head!=0x1234 || s.tail!=0x5678) return 6;
+  }
+  return 0;
+})");
+    }
+  }
+}
+
+TEST(HighCSourceCalls,
+     SourceBoundFloatingDeclarationsOverrideConflictingDebugReturns) {
+  FloatingCarrierDebug Debug(true);
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    std::vector<HighFunc> Functions;
+    for (unsigned Width : {4, 8}) {
+      const auto Bits = NdType::makeInt(Width, false);
+      const auto Float = NdType::makeFloat(Width);
+      const auto Pointer = NdType::makePtr(NdType::makeInt(8, false));
+      const auto Address = 0x2000 + Width;
+      auto Typed = floatingCarrierFunctions(
+          Width, FloatingCarrierBoundary::ExtendedEntryReturn, Address);
+      Functions.insert(Functions.end(), Typed.begin(), Typed.end());
+      auto Ordinary = HighExpr::makeCall(
+          "_carrier_provider_" + std::to_string(Width), Address,
+          {HighExpr::makeBitCast(parameter(0, Bits), Float),
+           parameter(1, Pointer)});
+      Ordinary->Type = Bits;
+      Functions.push_back(returning("carrier_ordinary_" + std::to_string(Width),
+                                    Ordinary, {Bits, Pointer}));
+    }
+    const auto Source =
+        emit(Functions, true, Architecture,
+             CEmitterOptions::ScalarPointerSpelling::StandardTypes, &Debug);
+    EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+    compileAndRun(Source + R"(
+int main(void) {
+  const uint32_t a[] = {0,0x80000000U,1,0x007fffffU,0x00800000U,
+    0x3fa00000U,0xbfa00000U,0x7fc00042U,0xffc00042U,0x7f800000U,0xff800000U};
+  const uint64_t b[] = {0,0x8000000000000000ULL,1,0x000fffffffffffffULL,
+    0x0010000000000000ULL,0x3ff4000000000000ULL,0xbff4000000000000ULL,
+    0x7ff8000000000042ULL,0xfff8000000000042ULL,0x7ff0000000000000ULL,
+    0xfff0000000000000ULL};
+  for (unsigned i=0; i<sizeof(a)/sizeof(a[0]); ++i) {
+    struct { uint64_t head, calls, tail; } s = {0x1234,0,0x5678};
+    float value = carrier_subject_4(a[i],&s.calls);
+    uint32_t bits; __builtin_memcpy(&bits,&value,4);
+    if(bits!=a[i] || s.calls!=1) return 1;
+    if(carrier_ordinary_4(a[i],&s.calls)!=a[i] || s.calls!=2) return 2;
+    if(s.head!=0x1234 || s.tail!=0x5678) return 3;
+  }
+  for (unsigned i=0; i<sizeof(b)/sizeof(b[0]); ++i) {
+    struct { uint64_t head, calls, tail; } s = {0x1234,0,0x5678};
+    double value = carrier_subject_8(b[i],&s.calls);
+    uint64_t bits; __builtin_memcpy(&bits,&value,8);
+    if(bits!=b[i] || s.calls!=1) return 4;
+    if(carrier_ordinary_8(b[i],&s.calls)!=b[i] || s.calls!=2) return 5;
+    if(s.head!=0x1234 || s.tail!=0x5678) return 6;
+  }
+  return 0;
+})");
+  }
+}
+
+TEST(HighCSourceCalls,
+     SourceBoundFloatingResultsRejectInvalidCarriersAndTypes) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    for (unsigned Width : {4, 8}) {
+      SCOPED_TRACE(Width);
+      const auto Float = NdType::makeFloat(Width);
+      const auto Bits = NdType::makeInt(Width, false);
+      const auto Hint = native("_carrier_checked", Float, {});
+      const auto Provider = returning(
+          Hint.TargetName,
+          HighExpr::makeBitCast(HighExpr::makeConst(0, Width), Float));
+      for (const auto &Carrier :
+           {TypeRef{}, NdType::makeInt(Width == 4 ? 8 : 4, false),
+            NdType::makePtr(NdType::makeVoid())}) {
+        auto Subject = returning("carrier_invalid", call(Hint, Carrier));
+        Subject.ReturnType = Float;
+        Subject.SourceTypeHint = native(Subject.Name, Float, {}).Signature;
+        EXPECT_NE(
+            emit({Subject, Provider}, true, Architecture)
+                .find("result carrier disagrees with the source declaration"),
+            std::string::npos);
+      }
+      auto First = returning("carrier_first", call(Hint, Bits));
+      First.SourceTypeHint = native(First.Name, Float, {}).Signature;
+      auto Other = Hint;
+      Other.Signature.ReturnType = NdType::makeFloat(Width == 4 ? 8 : 4);
+      auto Second = returning("carrier_second", call(Other, Bits));
+      Second.SourceTypeHint = native(Second.Name, Float, {}).Signature;
+      EXPECT_NE(emit({First, Second, Provider}, true, Architecture)
+                    .find("conflicting native declarations"),
+                std::string::npos);
+    }
+  }
 }
 
 TEST(HighCSourceCalls, FloatingCallCarriersRemainBitsAtSourceBoundaries) {

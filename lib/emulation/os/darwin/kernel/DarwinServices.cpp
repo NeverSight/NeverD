@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "DarwinEntropy.h"
 #include "DarwinFiles.h"
 #include "DarwinMemory.h"
 #include "DarwinSystem.h"
@@ -113,9 +114,12 @@ llvm::Error returnService(ExecutionBackend &CPU, const ServiceRequest &Request,
 namespace {
 llvm::Expected<std::optional<ServiceResult>>
 dispatchService(ServiceKind Kind, ExecutionBackend &CPU, DarwinMemory &Memory,
-                DarwinFiles &Files, const ProcessServiceEvent &Event,
-                const ProcessOptions &Options, ProcessResult &Result) {
+                DarwinFiles &Files, DarwinEntropy &Entropy,
+                const ProcessServiceEvent &Event, const ProcessOptions &Options,
+                ProcessResult &Result) {
   switch (Kind) {
+  case ServiceKind::GetEntropy:
+    return Entropy.handle(CPU, Event, Result);
   case ServiceKind::Sysctl:
   case ServiceKind::SysctlByName:
   case ServiceKind::GetRlimit:
@@ -125,6 +129,7 @@ dispatchService(ServiceKind Kind, ExecutionBackend &CPU, DarwinMemory &Memory,
   case ServiceKind::GetPgrp:
   case ServiceKind::GetPGID:
   case ServiceKind::GetSID:
+  case ServiceKind::ThreadSelfID:
   case ServiceKind::IsSetUGID:
   case ServiceKind::GetLogin:
   case ServiceKind::GetPriority:
@@ -155,6 +160,8 @@ dispatchService(ServiceKind Kind, ExecutionBackend &CPU, DarwinMemory &Memory,
   case ServiceKind::Read:
   case ServiceKind::Pread:
   case ServiceKind::Symlink:
+  case ServiceKind::Link:
+  case ServiceKind::LinkAt:
   case ServiceKind::SymlinkAt:
   case ServiceKind::ReadLink:
   case ServiceKind::ReadLinkAt:
@@ -213,8 +220,8 @@ dispatchService(ServiceKind Kind, ExecutionBackend &CPU, DarwinMemory &Memory,
 
 llvm::Expected<std::optional<ServiceResult>>
 handleService(ExecutionBackend &CPU, DarwinMemory &Memory, DarwinFiles &Files,
-              const ProcessServiceEvent &Event, const ProcessOptions &Options,
-              ProcessResult &Result) {
+              DarwinEntropy &Entropy, const ProcessServiceEvent &Event,
+              const ProcessOptions &Options, ProcessResult &Result) {
   const auto Binding = resolveService(CPU.architecture(), Event.Number);
   if (!Binding) {
     Result.Stop = ProcessStopReason::UnsupportedService;
@@ -222,8 +229,8 @@ handleService(ExecutionBackend &CPU, DarwinMemory &Memory, DarwinFiles &Files,
         llvm::formatv(diagnostic::UnsupportedService, Event.Number).str();
     return std::optional<ServiceResult>();
   }
-  auto Returned = dispatchService(Binding->Kind, CPU, Memory, Files, Event,
-                                  Options, Result);
+  auto Returned = dispatchService(Binding->Kind, CPU, Memory, Files, Entropy,
+                                  Event, Options, Result);
   if (Returned && *Returned)
     (**Returned).Convention = Binding->Convention;
   return Returned;

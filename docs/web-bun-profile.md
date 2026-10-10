@@ -1,10 +1,15 @@
-# Bun standalone extraction profile
+# Bun standalone extraction profiles
 
 `bun-1.4.2-linux-x64-elf-v1` is a C++ offline reader for the layout emitted by
 Bun 1.4.2's Linux x64 compiler target. Invoke `neverd web bun FILE`, or call
 `neverd_web_bun_extract_json` on an admitted original artifact. Pages use
 `neverd_web_bun_records_json` with `modules` or `regions`. The worker exposes
 the corresponding `web_bun_extract` and `web_bun_records` operations.
+
+`bun-71d0d439-prelinked-linux-x64-elf-v1` additionally admits the prelinked graph
+and runtime-options extensions observed in the official Claude Code 2.1.296
+Linux x64 artifact. Selection follows validated graph flags, not the filename.
+The baseline profile and its extraction identities are unchanged.
 
 This is a selected layout profile, not authentication of the producer or its
 version. Its response always reports `producer_version_verified:false`.
@@ -27,6 +32,16 @@ the commit referenced by the `bun-v1.4.2` tag and release:
 The reader is a NeverD C++ implementation of these data formats. No Bun Rust
 code, Bun runtime or JavaScriptCore library is linked. The upstream license
 statement is preserved under [LICENSES/bun](../LICENSES/bun/LICENSE.md).
+
+The extension layout is pinned to Bun revision
+[`71d0d439973bb327e57ff90032bfb72ba30c34ef`](https://github.com/oven-sh/bun/blob/71d0d439973bb327e57ff90032bfb72ba30c34ef/src/standalone_graph/StandaloneModuleGraph.rs).
+Flag 11 adds a 128-byte-aligned opaque prelinked blob and a bounded table of
+unique module indices after the earlier graph tables. Flag 12 adds an opaque
+eight-byte runtime-options record. Counts, ranges, alignment and overlap are
+validated before publication; runtime options never configure the host.
+Flag 13's linked-bytecode layout is a different unsupported contract and fails
+with `bun_unsupported_graph_flags`. This reader does not authenticate the Bun
+version that built an otherwise compatible artifact.
 
 ## Admission and evidence
 
@@ -65,6 +80,61 @@ gaps are covered by the original artifact hash rather than separate regions.
 Names, source, compile arguments and cache bytes are absent from ordinary
 JSON output. Virtual `/$bunfs/` keys are opaque evidence, never host paths;
 even a stored `..` segment cannot cause a filesystem lookup or export.
+
+## Local evidence export
+
+`neverd web bun-export FILE NEW_DIRECTORY` uses
+`neverd_web_bun_export_json(session, revision, extraction_id, output_directory)`
+with the normal C API length arguments. `SessionBunExport` consumes the already
+captured original and validated extraction; CLI code does not extract bytes.
+This is explicit local raw disclosure, including names and any embedded secrets,
+and grants no network-upload permission. The worker has no export operation.
+
+The C++ POSIX writer creates a private directory and uses generated ordinal
+filenames with exclusive no-follow writes. Existing destinations, including
+symlinks, are refused. Virtual member names occur only as manifest data and
+HTML-escaped index labels, never filesystem paths. `original.bin` retains the
+whole original; `rNNNNN.bin` retains each exact region; `mNNNNN.js` contains
+strictly decoded UTF-8 source. Storage hashes/offsets remain distinct from
+decoded hashes. Every output is reread and SHA-256 checked. `manifest.json` is
+published without replacing an existing file only after it is verified;
+failed exports may leave a partial directory or `manifest.pending`. No crash
+durability guarantee is made. Output is bounded by 1 GiB and 40,000 files.
+
+The shared decoder streams stored Latin-1/UTF-16LE in 64 KiB chunks, including
+surrogate pairs across chunk boundaries. Explicit export permits at most
+64 MiB decoded source per module. Interactive parser limits remain unchanged.
+Unsupported projections preserve raw bytes and report a failure code; an empty
+substitute is never written.
+
+When the embedded parser is enabled, the separate sequential recovery profile
+`hermes-602befee-recovery-js-v2` admits at most 32 MiB of source, 2,000,000 nodes,
+2,000,000 lexemes, 16,777,216 decoded UTF-16 code units, a 256 MiB parser arena and
+1,600,000 work units with a cooperative 30-second check. It does not enlarge
+interactive caches or claim a process-wide memory/CPU bound. This uses the
+same parser and semantic admission, including the async-rest source-location
+fix and parser-token check for forbidden rest trailing commas. The ordinary
+parser profile is now `hermes-602befee-js-v3`.
+
+`mNNNNN.readable.js` only inserts whitespace at parser-owned token boundaries.
+All original bytes, including comments and licenses, remain in order. Before
+publication NeverD reparses the candidate and compares node kinds, strictness,
+child roles/ordinals and complete retained attribute values. The status is
+`verified_same_parser_tree`, not a runtime equivalence proof: source text
+reflection and source positions necessarily change. Failed parsing, budgets or
+tree mismatches produce no readable file and retain diagnostic codes and
+original UTF-8 offsets in the manifest. The private C++ parser extension retains
+explicit resource-management declarations (`using` / `await using`); see the
+[resource-management profile](web-resource-management-profile.md).
+
+The index contains no JavaScript and declares `default-src 'none'`. Export
+does not run target code, install packages, invoke a formatter or restore
+deleted names, comments, types, original TypeScript modules or native/JSC
+machine code. Raw maps and caches remain preserved regions. See the
+[Claude Code qualification](web-claude-code-qualification.md) for a full real
+artifact run and its measured recovery boundary.
+
+## Source and native consumers
 
 A JavaScript module also has a distinct `source_artifact_id`. The existing
 source API can decode Latin-1 or UTF-16LE into strict UTF-8, or validate stored

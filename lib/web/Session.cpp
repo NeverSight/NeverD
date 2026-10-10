@@ -1,4 +1,5 @@
 #include "PathPolicy.h"
+#include "RecoveryParser.h"
 #include "SessionInternal.h"
 
 #include "neverd/web/Source.h"
@@ -48,7 +49,8 @@ std::string Session::capabilities() {
       "import_preview",      "import_commit",      "metadata",
       "artifacts",           "source_map_analyze", "source_map_sources",
       "source_map_segments", "bun_extract",        "bun_records",
-      "native_open",         "native_metadata",    "native_analyze"};
+      "bun_export",          "native_open",        "native_metadata",
+      "native_analyze"};
   llvm::json::Array Analyses{
       llvm::json::Object{{"kind", "source_map_metadata"},
                          {"profile", std::string(SourceMapProfile)},
@@ -122,6 +124,8 @@ std::string Session::capabilities() {
   Analyses.emplace_back(llvm::json::Object{
       {"kind", "bun_standalone_extraction"},
       {"profile", std::string(BunProfile)},
+      {"profiles", llvm::json::Array{std::string(BunProfile),
+                                     std::string(BunPrelinkedProfile)}},
       {"max_modules", MaxBunModules},
       {"max_builtins", MaxBunBuiltins},
       {"max_private_name_bytes", std::to_string(MaxBunNameBytes)},
@@ -132,6 +136,26 @@ std::string Session::capabilities() {
       {"source_map_decoding",
        bunSourceMapAvailable() ? "available_on_request" : "zstd_unavailable"},
       {"bytecode_decoding", "opaque"}});
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "bun_local_export"},
+      {"profile", "bun-local-evidence-export-v1"},
+      {"destination", "new_private_directory"},
+      {"filename_policy", "generated_ordinals"},
+      {"raw_local_disclosure", true},
+      {"executes_input", false},
+      {"max_output_bytes", "1073741824"},
+      {"max_files", 40000},
+      {"max_decoded_source_bytes", std::to_string(MaxBunDecodedSourceBytes)},
+#ifdef NEVERD_ENABLE_WEB_JAVASCRIPT
+      {"readable_source_available", true},
+      {"readable_source_profile", std::string(JavaScriptRecoveryProfile)},
+      {"max_recovery_parse_bytes", std::to_string(MaxRecoverySourceBytes)},
+#else
+      {"readable_source_available", false},
+      {"readable_source_profile", nullptr},
+      {"max_recovery_parse_bytes", nullptr},
+#endif
+      {"verification", "all_exported_files_reread_sha256_matches"}});
   if (bunSourceMapAvailable())
     Analyses.emplace_back(llvm::json::Object{
         {"kind", "bun_serialized_source_map"},

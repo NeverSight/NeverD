@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -195,11 +196,11 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
 
   if (Cxx.TryBlocks.size() > std::numeric_limits<uint32_t>::max())
     return WindowsEHNativeSourceReason::InvalidCxxTryBlock;
-  // One physical runtime context is currently lowered. Keep this source
-  // projection authoritative for the emitter, IR replay and table consumer.
+  // One try dispatch with ordered catch clauses is currently lowered. Keep
+  // this projection authoritative for the emitter, IR replay and tables.
   if (Registration &&
       (Cxx.UnwindMap.size() > 128 || Cxx.TryBlocks.size() != 1 ||
-       Cxx.TryBlocks[0].TryLow != 0 || Cxx.TryBlocks[0].Handlers.size() != 1 ||
+       Cxx.TryBlocks[0].TryLow != 0 ||
        Cxx.TryBlocks[0].CatchHigh != Cxx.TryBlocks[0].TryHigh + 1))
     return WindowsEHNativeSourceReason::InvalidCxxTryBlock;
   auto StateAt = [&](va_t Address) {
@@ -211,6 +212,7 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
     }
     return State;
   };
+  std::set<va_t> RegistrationHandlers;
   for (const CxxTryBlock &Try : Cxx.TryBlocks) {
     if (Try.Handlers.empty() ||
         Try.Handlers.size() > std::numeric_limits<uint32_t>::max())
@@ -226,7 +228,9 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
                  : Catch.CatchObjectOffset != 0 || Catch.Adjectives != 0x40))))
         return WindowsEHNativeSourceReason::UnsupportedCxxHandlerFrameState;
       if (Catch.HandlerVA == 0 || Catch.HandlerVA == EH.CodeRange.Begin ||
-          !EH.CodeRange.contains(Catch.HandlerVA))
+          !EH.CodeRange.contains(Catch.HandlerVA) ||
+          (Registration &&
+           !RegistrationHandlers.insert(Catch.HandlerVA).second))
         return WindowsEHNativeSourceReason::InvalidCxxHandler;
       const int32_t HandlerState = StateAt(Catch.HandlerVA);
       if (!Registration &&
@@ -623,9 +627,8 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
     if (!EH.PersonalityVA || Chain.HandlerVA != EH.PersonalityVA ||
         !Chain.ScopeTableVA || Chain.ScopeTableVA != EH.HandlerDataVA ||
         Chain.ScopeTableVA != EH.Cxx->NativeFuncInfoVA ||
-        Chain.RegistrationOffset != -12 || Chain.TryLevelOffset != -4 ||
-        Chain.SeededTryLevel != -1 || Chain.HasSecurityCookies ||
-        !Chain.Scopes.empty() ||
+        !Chain.cxxRuntimeFrameOffset() || Chain.SeededTryLevel != -1 ||
+        Chain.HasSecurityCookies || !Chain.Scopes.empty() ||
         Chain.TryLevelStores.size() > limits::kMaxRegistrationEHRecords ||
         !EH.CodeRange.contains(Chain.ChainInstallVA))
       return reject(Model,

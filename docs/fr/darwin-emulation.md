@@ -1,6 +1,6 @@
 **Langues**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: aa19cf02d09c66c62cfde94ee71c93b210f3d92165151c58778e1e91ec0df607 -->
+<!-- i18n-source: 1939e117643388dff149085b992e1ad646feefca63b630abec9b09122e15c2f1 -->
 
 [← Index de la documentation](README.md)
 
@@ -67,7 +67,7 @@ Vérification Release du 2026-10-05 : 381 inscriptions, 177 réussites, 204 igno
 
 Le booléen strict `"writable":true` ou `DarwinFileOptions::WritableFiles` autorise les modifications locales au processus. Absent/false conserve la lecture seule ; une autorisation inconnue arrête le service. Aucun fichier hôte ni octet initial fourni n’est modifié. write(4/397), pwrite(154/415), truncate(200), ftruncate(201) et O_TRUNC partagent le contenu ; open garde une position indépendante, dup partage position et état, et le contenu survit au dernier close. L’extension remplit de zéros ; la troncature conserve les positions, même avec O_RDONLY|O_TRUNC.
 
-F_SETFL ne modifie que O_APPEND et conserve accès, close-on-exec et FWASWRITTEN. F_GETFL expose 0x10000 après un transfert non vide, y compris pwrite et la sortie capturée. pwrite ignore append et conserve la position. INT_MAX est vérifié avant FD ; pwrite à -1 donne EINVAL encore plus tôt. INT64_MAX donne EFBIG avant le cas vide ; la longueur est réduite avant de choisir EOF.
+F_SETFL ne modifie que O_APPEND|O_NONBLOCK après conversion native et conserve accès, close-on-exec et FWASWRITTEN. F_GETFL expose 0x10000 après un transfert non vide, y compris pwrite et la sortie capturée. pwrite ignore append et conserve la position. INT_MAX est vérifié avant FD ; pwrite à -1 donne EINVAL encore plus tôt. INT64_MAX donne EFBIG avant le cas vide ; la longueur est réduite avant de choisir EOF.
 
 ftruncate réussi, même sans changement de taille, marque FWASWRITTEN sur la description appelée et ses dup. O_TRUNC marque la nouvelle description, même O_RDONLY ; truncate par chemin ne marque aucune description existante.
 
@@ -922,3 +922,120 @@ L’ABI utilise low32 FD/options/position et full64 size. Les vérifications pr�
 xattr-mutations / xattr-mutations-values / xattr-mutations-unsupported vérifient des contrôles natifs/invités originaux, des octets virtuels littéraux indépendants et un arrêt faute d’autorisation conservant la sortie précédente. La préparation privée ARM64 a vérifié726 appels raw/SDK, des observations protégées complètes de544 octets et les pages lisibles complètes. native5s/compile120s/drain1s/reap1s, guest/Python5,000,000us/quantum1024 et public10s sont inchangés. Intel natif, iOS physique, dyld, Mach IPC, threads/signaux, environnements Objective-C/Swift et frameworks complets restent non vérifiés ou incomplets.
 
 Références ABI primaires : [déclarations des appels système XNU](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/syscalls.master), [définitions xattr](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/sys/xattr.h). Code et sondes originaux ; aucune copie de l’implémentation Apple.
+
+## Liens physiques Darwin bornés
+
+link suit la cible symbolique finale ; linkat flags=0 choisit le lien lui-même, AT_SYMLINK_FOLLOW sa cible. Seuls low32 0/0x40 sont admis ; les autres bits bas donnent EINVAL avant import. Recherche source et EPERM des répertoires précèdent la destination ; une destination existante donne EEXIST. La destination exige le droit de mutation et le même domaine de montage explicitement établi. Alias initiaux et conflits connus de périphérique, mode ou flags restent exclus.
+
+Un alias ne consomme que l’entrée et le chemin/NUL, sans nouvel inode. Octets, droits d’attributs, validité des métadonnées et baux de mapping appartiennent à l’objet partagé. Les politiques explicites actualisent compte de liens et ctime ; sans elles, stat complet reste inconnu. Les attributs invalident stat, le contenu invalide les observations d’attributs. Descriptions et derniers mappings conservent les coûts retirés ; seul un coût immédiatement libérable est crédité. Les sous-arbres utilisent identité et parent exacts ; les alias externes restent en place et les cibles relatives utilisent le parent sélectionné.
+
+Après plusieurs noms, F_GETPATH/ATTR_CMN_NAME restent non pris en charge même avec un ou zéro nom ; aucun modèle général de cache APFS. bulk NAME utilise l’entrée réelle, rename/SWAP du même objet conserve les deux noms. Casse EXCL, Intel HVF, iOS physique, ACL, mappings cohérents/signaux EOF, dyld, Mach IPC, threads et frameworks complets restent des lacunes. Seul ce contrat étend les exclusions précédentes.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## Descripteurs O_SYMLINK bornés
+
+O_SYMLINK=0x00200000 conserve le dernier lien symbolique, même cassé ou cyclique, en lecture, écriture ou lecture/écriture. Il ne donne aucun droit d'écriture sur la cible. O_CREAT suit encore la cible; NOFOLLOW garde la priorité ELOOP, la création exclusive EEXIST, et O_DIRECTORY renvoie ENOTDIR pour le lien conservé. Les composants intermédiaires et les barres finales utilisent le résolveur et NOFOLLOW_ANY existants. F_GETFL omet le bit de sélection.
+
+LinkNode et NameIdentity sont les objets réels retenus. Dup partage les indicateurs et le curseur; les ouvertures indépendantes ont leur propre description. Renommage, suppression, réutilisation du nom ou suppression du parent ne remplacent pas l'objet détenu. F_GETPATH/ATTR_CMN_NAME utilisent le nom sélectionné unique; un historique de noms multiples interdit définitivement l'inférence vnode, même après leur suppression. Les réservations initiales restent fixes; noms, cibles, entrées et croissance d'attributs dynamiques attendent le dernier propriétaire réel. Le remplacement ne peut déduire un dernier alias encore détenu.
+
+Les E/S n'exposent jamais la chaîne cible comme contenu. Après les contrôles existants d'import scalaire/vectoriel, d'accès et de nombre, un décalage négatif donne EINVAL. À INT64_MAX, la lecture renvoie zéro et l'écriture EFBIG; les autres décalages admis donnent EPERM, y compris pour une longueur nulle, avant APPEND ou accès aux données. Les contrôles négatifs précoces pwrite/pwritev restent inchangés. DATA/HOLE donne ENXIO aux positions non négatives, EINVAL aux négatives, sans déplacer le curseur.
+
+ftruncate non négatif sur une description inscriptible et open TRUNC admis ne positionnent que WasWritten: cible, stat complet, xattrs, curseur, budget et inode ne changent pas. Lecture seule ou longueur négative donne EINVAL. F_SETFL admis modifie APPEND|NONBLOCK puis renvoie ENOTTY25; dup observe l'effet, une ouverture indépendante non. Les arguments inconnus arrêtent avant effets.
+
+fpathconf fixe, fgetattrlist et les droits ordinaires FD-xattr déclarés séparément concernent le lien. FD de répertoire relatif et fchdir donnent ENOTDIR. truncate ne restaure pas le stat invalidé par une mutation d'attributs. Les mmap historiques private/shared alignés et non exécutables atteignent EINVAL par le type symbolique, sans mapping ni bail. Shared ordinaire, indicateurs inconnus, exécution et autres frontières non prises en charge sont préservés. Les18 contrôles natifs couvrent seulement length16384, offset0, protection1/2/3.
+
+La préparation ARM64 originale compare les144 octets de stat protégés pour15 troncatures, les décalages/nombres extrêmes, seek creux et effets F_SETFL échoués. Le programme commun sans SDK s'exécute à O0/O1/O2 et compare le chemin réel du parent détenu. Les routes virtuelles comparent un littéral stat/type indépendant ou refusent explicitement les noms multiples en conservant la sortie. Intel HVF natif, iOS physique, ACL/permissions, EOF/signaux mappés, dyld, Mach IPC, threads et environnements/frameworks complets restent non vérifiés ou incomplets.
+
+Source d'interprétation: [frontière mmap XNU correspondante](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/kern_mman.c). Code et sondes originaux; aucune implémentation Apple copiée.
+
+```text
+O_SYMLINK=0x00200000; ENOTTY=25
+open O_RDONLY|O_SYMLINK|O_TRUNC: WasWritten only
+LinkNode, NameIdentity, HadMultipleNames, DetachedNames
+INT64_MAX read=0 / write=EFBIG; other admitted offsets=EPERM
+SEEK_DATA/SEEK_HOLE nonnegative=ENXIO / negative=EINVAL
+F_SETFL: APPEND|NONBLOCK effect before ENOTTY; dup shares / independent open separate
+symbolic-descriptors
+symbolic-descriptors-values
+symbolic-descriptors-name-unsupported
+SymbolicDescriptor*, SymbolicDescriptorsRetainObjectsAndNativeErrorOrder
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 transport parameters / 15 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## État non bloquant borné des descripteurs
+
+O_NONBLOCK=4 est admis pour les ouvertures de fichiers ordinaires, répertoires et O_SYMLINK, puis conservé par F_GETFL. Dup partage état et curseur; les ouvertures indépendantes gardent leurs descriptions. Les règles existantes d'accès, close-on-exec, WasWritten, métadonnées, octets et curseur restent applicables. Le stdin fini déclaré conserve EOF et ordre des erreurs de pointeur; son omission reste inconnue. La capture conserve erreurs de copie et budget partagé.
+
+F_SETFL valide les arguments low32 avant effet, ajoute un selon la conversion native des flags open, puis modifie seulement APPEND|NONBLOCK. High32 est ignoré; accès et WasWritten d'entrée ne créent ni autorisation ni écriture. Les contrôles natifs littéraux3/7/11/15 sélectionnent4/8/12/0. Les descriptions symboliques changent d'état avant ENOTTY25. Les flags inconnus, dont ASYNC0x40, arrêtent avant effet.
+
+La préparation ARM64 macOS originale contient122 observations:16 requêtes par combinaison valide objet/accès, dup conservé, open indépendant, effacement, écritures réelles et CLOEXEC par FD. Le programme commun sans SDK compare à O0/O1/O2 octets, état, curseur et ABI BSD brut carry/errno. Invité, C/CLI et Python vérifient aussi le refus des flags inconnus; les trois profils ARM64 HVF doivent réellement s'exécuter. Pas d'attente de disponibilité, pipes, réseau, kqueue, signaux asynchrones ou I/O hôte. La politique O_EVTONLY reste non prise en charge; Intel HVF natif, iOS physique et environnement complet restent non vérifiés ou incomplets.
+
+```text
+O_NONBLOCK=4; F_SETFL raw low32 mask=0x1000f
+requests3/7/11/15 -> APPEND|NONBLOCK status4/8/12/0
+nonblocking-descriptors / nonblocking-flags-unsupported
+Nonblocking*, NonblockingDescriptorsKeepNativeControlState
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+8 model cases / 20 transport parameters / 10 public cases / 5 Python profiles
+67 mandatory workloads per platform / ARM64 201 / Intel 134
+```
+
+## Observations getentropy explicites et finies
+
+Le BSD brut getentropy500 utilise la file ordonnée `DarwinSystemOptions::EntropyReads`, avec le champ JSON `darwin_system.entropy_reads`. Chaque chaîne hexadécimale est non vide et de longueur paire : au plus256 enregistrements de1..256 octets. Ce sont des limites du modèle ; le transport JSON conserve65536 octets. Une omission reste inconnue ; `[]` est explicitement épuisé. La validation native/JSON précède toute mutation de l’image ou du backend ; les autres profils OS refusent ces options.
+
+La longueur64 bits est examinée en premier : au-delà de256, EINVAL22 sans accès ni consommation ; zéro réussit pour tout pointeur sans entrée. Une demande non nulle admet ensuite le prochain enregistrement de longueur exacte. Absence, épuisement ou désaccord arrêtent UnsupportedService avant les effets, même pour une mauvaise adresse : cet ordre est celui de l’admission du rejeu. Succès ou EFAULT14 entièrement inaccessible consomme un enregistrement. Une destination partiellement accessible est refusée avant copie ou progression ; les erreurs de transport ne progressent pas. Une erreur ultérieure des registres de retour conserve les effets terminés. Chaque exécution recommence au premier enregistrement, même avec les mêmes options.
+
+DarwinEntropy possède le curseur de chaque exécution ; les octets restent immuables. Le BSD et returnService existants possèdent les deux ISA, la retenue et les registres secondaires. Le programme sans SDK couvre5 profils invités et3 ARM64 HVF. Ses octets fixes ne rejoignent pas l’inventaire RNG natif déterministe. Les sondes ARM64 O0/O1/O2 couvrent594 appels ; le nombre d’octets modifiés n’est pas une longueur de copie exacte. Aucun RNG hôte, qualité cryptographique, /dev/random, import libc ou framework. Intel HVF, iOS physique et compatibilité OS complète restent non vérifiés ou incomplets.
+
+```text
+BSD getentropy500 / DarwinEntropy / EntropyReads / darwin_system.entropy_reads
+full64 size>256 -> EINVAL22; zero ->0; whole EFAULT14 consumes one record
+1..256 bytes per record / at most256 records / JSON transport65536 bytes
+entropy-replay / entropy-missing / entropy-exhausted / entropy-mismatch / entropy-partial
+15 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+68 mandatory workloads per platform / ARM64 204 / Intel 136
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU getentropy ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [XNU generation/copyout boundary](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/dev/random/randomdev.c).
+
+## Identité explicite du thread courant
+
+BSD thread_selfid372 lit l’observation immuable facultative `DarwinSystemOptions::ThreadID` / JSON `darwin_system.thread_id`. Toute valeur uint64, zéro compris, est connue; l’absence arrête UnsupportedService. Les chaînes décimales conservent64 bits; les nombres JSON exigent un entier exact au plus2^53-1. Aucun ID n’est déduit de l’hôte, du PID ou d’un port Mach. Cet appel sans arguments ignore les six registres d’arguments et n’accède pas à la mémoire. La résolution existante sur32 bits préserve le numéro brut complet dans les événements; le retour BSD conserve64 bits et efface carry et RDX/X1. Les formes Mach restent non prises en charge.
+
+Les exécutions répétées conservent l’observation et les options distinctes restent indépendantes. Cela n’alloue aucun ID, ne garantit aucune unicité et ne crée aucune identité d’événement du planificateur, ni cycle de vie pthread, TLS ou Mach IPC. Les sondes ARM64 originales O0/O1/O2 conservent24 appels comparant le résultat au SDK pthread courant, avec arguments arbitraires et bits hauts du numéro. Le programme natif commun compare uniquement des relations dans un même processus; les octets d’ID fournis sont exclus de l’inventaire natif déterministe. Intel HVF, iOS physique et la compatibilité OS complète restent non vérifiés ou incomplets.
+
+```text
+BSD thread_selfid372 / Wide / ThreadID / darwin_system.thread_id
+known uint64 including0 / missing -> UnsupportedService / no memory
+full64 return / low32 resolution / carry clear / RDX-X1 zero / raw event number
+thread-identity / thread-identity-value / thread-identity-missing
+4 model cases / 20 transport parameters / 16 public cases / 5 Python profiles
+69 mandatory workloads per platform / ARM64 207 / Intel 138 unverified
+original ARM64 O0/O1/O2 probes24 / native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU thread_selfid ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [libpthread current-thread owner](https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_support.c).

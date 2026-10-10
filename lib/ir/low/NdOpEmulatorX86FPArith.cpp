@@ -1,5 +1,6 @@
 //===- NdOpEmulatorX86FPArith.cpp - Exact x86 SIMD FP arithmetic --------===//
 
+#include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 
@@ -580,6 +581,79 @@ bool NdOpEmulator::executeX86ScalarFPState(const LowOp &Op) {
     for (unsigned Index = 0; Index < 4; ++Index)
       Result[DestinationBytes + Index] =
           static_cast<uint8_t>(MXCSR >> (Index * 8));
+    writeOutputBytes(Op.Output, Result);
+    return true;
+  }
+  if (isX86FPRoundStateIntrinsic(Id)) {
+    const bool Memory = Id == Intrinsic::X86FPRoundMemoryState;
+    const unsigned Bytes = Memory ? Op.Output.Size - 4 : Op.Inputs[2].Size;
+    const unsigned Control = Op.Inputs[Memory ? 2 : 1].Offset;
+    const auto State = readOperand(Op.Inputs[4]);
+    if ((State & ~UINT64_C(0xffff)) != 0)
+      return false;
+    NdOpEmulator Evaluation(Img);
+    Evaluation.setStrictMode(true);
+    Evaluation.setMXCSR(static_cast<uint32_t>(State));
+    std::vector<uint8_t> Source;
+    if (Memory) {
+      // An unknown architectural address context is a refusal, not a fault
+      // prediction based on the image or a permissive external memory reader.
+      if ((Img.Arch == Arch::X64 && !X86LinearAddressBits) ||
+          (Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+          (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+           !MemoryAddressSpaceBases.contains(Op.MemoryAddressSpace)))
+        return false;
+      // Match the native scope on memory faults: the authenticated incoming
+      // CSR is installed before the instruction accesses its source.
+      setMXCSR(static_cast<uint32_t>(State));
+      const uint64_t Offset = Img.Arch == Arch::X86
+                                  ? uint32_t(readOperand(Op.Inputs[1]))
+                                  : readOperand(Op.Inputs[1]);
+      const auto Address = resolveMemoryAddress(Op, Offset);
+      if (!Address || !isX86CanonicalMemoryRange(*Address, Bytes) ||
+          (!x86FPRoundStateIsScalar(Control) && !(Control & 8) &&
+           (*Address & 15)))
+        return false;
+      // A write-back cache supplies values, never source-access permission.
+      // Check every mapped byte before allowing cached data to satisfy a load.
+      for (unsigned Index = 0; Index < Bytes; ++Index) {
+        const uint64_t ByteAddress = *Address + Index;
+        const Segment *Mapped = Img.getSegmentFor(ByteAddress);
+        if (!Mapped || !Mapped->isReadable() || ByteAddress < Mapped->VA ||
+            ByteAddress - Mapped->VA >= Mapped->Size)
+          return false;
+      }
+      const auto Loaded = loadMemoryBytes(*Address, Bytes);
+      if (!Loaded)
+        return false;
+      Source = *Loaded;
+      if (CollectLoads &&
+          static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+        LoadLog.push_back({*Address, static_cast<uint16_t>(Bytes)});
+    } else
+      Source = readOperandBytes(Op.Inputs[2]);
+    const unsigned VectorBytes = std::max(Bytes, 16U);
+    Source.resize(VectorBytes, 0);
+    Evaluation.writeOutputBytes(NdVar::tmp(1, VectorBytes), Source);
+    LowOp Round;
+    Round.Opcode = NdOp::INTRINSIC;
+    Round.Output = NdVar::tmp(0, VectorBytes);
+    Round.addInput(
+        NdVar::cst(static_cast<unsigned>(Intrinsic::X86FPRoundTransform), 2));
+    // Memory bit 3 selects VEX packed addressing; it is not EVEX SAE.
+    Round.addInput(NdVar::cst(Control & 6, 1));
+    Round.addInput(NdVar::tmp(1, VectorBytes));
+    // Legacy/VEX ROUND ignores bits 7:4; they are not a RNDSCALE scale.
+    Round.addInput(NdVar::cst(Op.Inputs[3].Offset & 15, 1));
+    Round.addInput(NdVar::cst(0xff, 1));
+    const bool Complete = Evaluation.executeX86FPRoundTransform(Round);
+    setMXCSR(Evaluation.getMXCSR());
+    if (!Complete)
+      return false;
+    auto Result = Evaluation.readOperandBytes(Round.Output);
+    Result.resize(Bytes + 4);
+    for (unsigned Index = 0; Index < 4; ++Index)
+      Result[Bytes + Index] = static_cast<uint8_t>(MXCSR >> (Index * 8));
     writeOutputBytes(Op.Output, Result);
     return true;
   }

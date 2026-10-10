@@ -23,6 +23,16 @@ NEVERD_API void neverd_web_session_destroy(neverd_web_session_t Session);
 /// no untrusted source text or input name is included in ordinary diagnostics.
 NEVERD_API const char *neverd_web_capabilities_json(void);
 
+/// Explicitly disclose an extracted Bun container and all retained regions to
+/// a NEW local directory, using generated filenames. Also writes decoded JS
+/// where available and a manifest last. Existing destinations are refused.
+/// This is a local export request, not an authorization for network upload.
+/// Ordinary return JSON contains only counts, hashes and fixed diagnostics.
+NEVERD_API const char *neverd_web_bun_export_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ExtractionID, size_t ExtractionIDSize,
+    const char *OutputDirectory, size_t OutputDirectorySize);
+
 /// Analyze a caller-selected manifest within its captured occurrence namespace.
 /// Metadata only; main entry links are exact-file candidates, not runtime
 /// resolution. Available ASAR members are valid selections. No host lookup.

@@ -3,6 +3,7 @@
 #include "neverd/web/ElectronIPC.h"
 #include "neverd/web/Session.h"
 
+#include <algorithm>
 #include <memory>
 
 namespace {

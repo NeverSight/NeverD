@@ -1511,6 +1511,68 @@ jt_identity_guard_wide_ancestor:
         retq
         .size   jt_identity_guard_wide_ancestor, .-jt_identity_guard_wide_ancestor
 
+// A shallow non-copy guard bounds (index XOR 1) before a long CFG chain.
+// Its 128-value domain exceeds the 64-value fallback; recovery needs the precise
+// guard DAG and the dispatch must reach its original index occurrence.
+// Value-history and syntax depth are distinct; this is hand-written code.
+        .macro  GUARD_PREDECESSOR_CHAIN Name, Count, GuardRegister, Clobber=0
+        .text
+        .globl  \Name
+        .type   \Name,@function
+\Name:
+        movl    %edi, %r10d
+        movl    %esi, %r11d
+        movl    \GuardRegister, %eax
+        xorl    $1, %eax
+        cmpl    $128, %eax
+        jae     .L\Name\()_default
+        .rept   \Count
+        jmp     1f
+1:
+        .endr
+        .if     \Clobber
+        movb    %sil, %r10b
+        .endif
+        // Keep the canonical zero-extension/index use after the long path.
+        movl    %r10d, %r10d
+        leaq    .L\Name\()_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.L\Name\()_case0:
+        movl    $5100, %eax
+        retq
+.L\Name\()_case1:
+        movl    $5101, %eax
+        retq
+.L\Name\()_case2:
+        movl    $5102, %eax
+        retq
+.L\Name\()_case3:
+        movl    $5103, %eax
+        retq
+.L\Name\()_default:
+        movl    $5199, %eax
+        retq
+        .size   \Name, .-\Name
+        .section .rodata,"a",@progbits
+        .p2align 2
+.L\Name\()_table:
+        .rept   32
+        .long   .L\Name\()_case0-.L\Name\()_table
+        .long   .L\Name\()_case1-.L\Name\()_table
+        .long   .L\Name\()_case2-.L\Name\()_table
+        .long   .L\Name\()_case3-.L\Name\()_table
+        .endr
+        .long   0
+        .endm
+
+        GUARD_PREDECESSOR_CHAIN jt_identity_guard_long_predecessors, 80, %r10d
+        GUARD_PREDECESSOR_CHAIN jt_identity_guard_unrelated_predecessors, 80, %r11d
+        GUARD_PREDECESSOR_CHAIN jt_identity_guard_changed_low_byte, 80, %r10d, 1
+        .purgem GUARD_PREDECESSOR_CHAIN
+        .text
+
 // A long non-value-preserving syntax chain exceeds the explicit expression
 // depth ceiling before SAT construction.  Exhaustion is a failed certificate,
 // so the relocation run must not rescue the table and the analysis must not

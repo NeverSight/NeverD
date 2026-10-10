@@ -429,10 +429,10 @@ public:
   /// value; null where a view drops bytes.
   const HighExpr *floatBitsSource(const HighExpr &Bits,
                                   const TypeRef &Float) const;
-  /// The call whose result \p Bits are (floatBitsSource), when it returns
-  /// \p Float; else null.
-  const HighExpr *floatCallResult(const HighExpr &Bits,
-                                  const TypeRef &Float) const;
+  /// The call whose result \p Bits are (floatBitsSource), rendered as
+  /// \p Float when its known return and actual carrier allow it; else nullopt.
+  std::optional<std::string> floatCallResultText(const HighExpr &Bits,
+                                                 const TypeRef &Float);
   /// The value of type \p Float whose bits \p Bits are (floatBitsSource), or
   /// null.
   const HighExpr *floatBitsValue(const HighExpr &Bits,

@@ -494,4 +494,24 @@ TEST(LLVMCFrameMemory, ObservableCarrierReadKeepsItsValueProducer) {
         0u);
   }
 }
+TEST(LLVMCFrameMemory, ForwardedExpressionKeepsItsMaterializedInputsLive) {
+  FrameFixture F;
+  auto *Input = F.B.CreateZExt(F.Fn->getArg(0), F.B.getInt32Ty());
+  auto *Materialized = F.B.CreateAdd(Input, F.B.getInt32(17));
+  auto *InlineRoot = F.B.CreateOr(Materialized, F.B.getInt32(64));
+  const auto Slot = F.address(F.Base, -8);
+  const auto Store = F.B.CreateStore(InlineRoot, Slot);
+  const auto Reload = F.B.CreateLoad(F.B.getInt32Ty(), Slot);
+  F.B.CreateRet(Reload);
+  LLVMCAnalysisState State;
+  State.Inlinable.insert(llvm::cast<llvm::Instruction>(InlineRoot));
+  analyzeDeadFrameStores(State, *F.Fn);
+  analyzeStoreForwarding(State, *F.Fn);
+  ASSERT_TRUE(State.ForwardedLoads.contains(Reload));
+  ASSERT_EQ(State.ForwardedLoads.at(Reload), InlineRoot);
+  EXPECT_TRUE(State.DeadFrameStores.count(Store));
+  EXPECT_TRUE(State.DeadFrameStores.count(Reload));
+  EXPECT_FALSE(
+      State.DeadFrameStores.count(llvm::cast<llvm::Instruction>(Materialized)));
+}
 } // namespace

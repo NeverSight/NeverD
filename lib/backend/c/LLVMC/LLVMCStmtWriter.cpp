@@ -22,6 +22,7 @@
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/LLVMX86FPStateAsm.h"
+#include "neverd/backend/llvm/LLVMX86ShadowStackAsm.h"
 #include "neverd/backend/llvm/LLVMX86X87StateAsm.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/loader/BinaryImage.h"
@@ -3833,6 +3834,26 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   if (!IA)
     return false;
 
+  if (auto Width = classifyX86ShadowStackReadAsm(Call)) {
+    const unsigned Word = Call.getType()->getIntegerBitWidth() / 8;
+    if ((Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64) ||
+        Word != (Opts.TheArch == Arch::X64 ? 8U : 4U))
+      llvm::report_fatal_error("shadow stack read target/type mismatch");
+    const std::string Temp = Call.use_empty() ? freshVar("nd_ssp_value") : Name;
+    emitIndent(Indent);
+    if (Call.use_empty())
+      OS << "uint" << Word * 8 << "_t ";
+    OS << Temp << " = " << integerPointerOperandStr(Call.getArgOperand(0))
+       << ";\n";
+    emitIndent(Indent);
+    OS << "__asm__ volatile(\""
+       << (*Width == 8 ? "rdsspq %0"
+           : Word == 8 ? "rdsspd %k0"
+                       : "rdsspd %0")
+       << "\" : \"+r\"(" << Temp << ") :: \"memory\");\n";
+    return true;
+  }
+
   if (auto Shape = classifyX86FPStateAsm(Call)) {
     if (Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64)
       llvm::report_fatal_error("x86 FP state C projection requires x86");
@@ -3846,8 +3867,8 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       return true;
     }
     const auto BitcastInput = [&](unsigned Index) {
-      return "__builtin_bit_cast(uint" +
-             std::to_string(x86FPStateSourceBytes(Bytes) * 8) + "_t, " +
+      return "__builtin_bit_cast(" +
+             x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ", " +
              valueStr(Call.getArgOperand(Index)) + ")";
     };
     const auto Helper = FPStateHelperNames.find(*Shape);
@@ -3859,6 +3880,21 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
                                      valueStr(Call.getArgOperand(1)) + ")";
       if (!Call.use_empty())
         OS << Name << " = " << Expression << ";\n";
+      else
+        OS << "(void)" << Expression << ";\n";
+      return true;
+    }
+    if (isX86FPRoundStateIntrinsic(Id)) {
+      const std::string Source =
+          Id == Intrinsic::X86FPRoundMemoryState
+              ? "(void*)(uintptr_t)(" + valueStr(Call.getArgOperand(0)) + ")"
+              : BitcastInput(0);
+      const std::string Expression = Helper->second + "(" + Source +
+                                     ", (void*)" +
+                                     valueStr(Call.getArgOperand(1)) + ")";
+      if (!Call.use_empty())
+        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Call.getType())
+           << ", " << Expression << ");\n";
       else
         OS << "(void)" << Expression << ";\n";
       return true;
@@ -3875,6 +3911,8 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   }
 
   std::string AsmStr = IA->getAsmString().str();
+  if (llvm::StringRef(AsmStr).contains("rdssp"))
+    llvm::report_fatal_error("unowned shadow stack read C projection");
   if (AsmStr.empty())
     return false;
 

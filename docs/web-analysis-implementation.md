@@ -1047,3 +1047,78 @@ The five epics remain open. This increment qualifies captured import-map
 candidates locally; package graphs/diffs, passive observations, other desktop
 and native JS formats, semantic rewrites, C++ MCP and cross-host distribution
 still need their planned implementation and evidence.
+
+## Claude Code standalone practical recovery — 2026-10-10
+
+The official Claude Code 2.1.296 Linux x64 artifact drove the next implementation
+increment. NeverD first refused its new Bun graph flags, then exposed a large
+source materialization ceiling and nine async-rest parser-location failures.
+The fixes remain in the shared C++ owners: a versioned prelinked graph profile,
+streaming Unicode conversion, explicit local export and a separate sequential
+readability profile with reparse/tree comparison. The parser keeps exact
+source locations and rejects the newly exposed illegal rest trailing comma.
+
+NeverD exported all 2,345 JS modules (44,768,763 UTF-8 bytes), 244 assets and
+10,005 exact regions, with a full original and per-file read-back hash checks.
+At that checkpoint, 2,303 modules had verified readable copies; 42 preserved raw
+source and parser
+diagnostics, including confirmed unsupported resource-management syntax. The
+artifact contains no source maps. Original TypeScript, erased names/types and
+native/JSC decompilation are not claimed. A repeated run with an unusable
+external-tool PATH produced the identical completion-manifest hash.
+
+The full web suite registered 284 cases: 277 passed and seven skipped (six
+need LLVM Zstd, one requires ASAR disabled). Both full Bun corpora were supplied.
+The five C++ worker suites passed. A broader worker run hit a SourceCache
+timeout against the separately built mock and a macOS temporary-path alias
+assumption. Canonical `TMPDIR=/private/tmp` made AnalysisSnapshot pass.
+SourceCache passed one retry after rebuilding the mock but timed out again
+after dev integration, including a serial retry. That separate mock-worker
+large-source test remains an explicit validation limitation; its server does
+not link the changed web backend. No worker source was modified.
+Logs use `/tmp/neverd-claude-{full-web-tests,worker-verified,worker-canonical-path}.log`.
+
+Integration with `dev` at `6543c4935` rebuilt the native dependencies and repeated
+all 284 web cases with the same 277 passes and seven skips. C API availability
+passed, with the backend-omission-only case skipped. A separate C++ probe compiled
+the actual C API translation unit without the web feature and checked that the
+new export entry point returns `capability_unavailable`. The export owner and
+session translation units also compiled without the JS parser; this is not a
+claim of a complete parser-disabled build. The integration logs are
+`/tmp/neverd-claude-dev-{build,web,worker,api,source-cache}.log`.
+
+Input hash, official provenance, reproducible commands, measured recovery
+counts and precise limitations are recorded in
+[the qualification](web-claude-code-qualification.md). Proprietary input and
+recovered code remain outside the repository. This increment supplies practical
+evidence for #714/#718; it does not close the five epics.
+
+## Complete shipped-JavaScript recovery — 2026-10-11
+
+The remaining 42 syntax failures are resolved. The private C++ Hermes extension
+retains `using` and `await using` kinds, original ranges and lexer newline state.
+Lexical binding and conservative disposal effects use the same retained model;
+resource declarations are never rewritten as ordinary constants. Grammar and
+consumer checks are described in the
+[resource-management profile](web-resource-management-profile.md).
+
+Once the large module parsed, its 1,165,398 nodes exceeded the old recovery cap.
+The separate offline profile now admits two million nodes; the interactive
+limits remain unchanged. NeverD exported and reparse-verified all **2,345** JS
+modules with **zero** parse, readability or projection failures. The completed
+directory has 14,698 files and 615,294,413 bytes. An optional C++ regression
+repeats recovery and original-byte preservation across every module of the
+hash-pinned official artifact. The target still has zero source maps; erased
+TypeScript and original repository structure are not claimed.
+
+All 291 web cases completed with 284 passes, seven explicit capability/config
+skips and zero failures, including the full 2,345-module C++ recovery regression.
+
+The former SourceCache timeout is also resolved: C++ profiling isolated
+whole-document regex scans over long comments. Worker decoration now uses its
+comment/literal-aware tokens for asm linkage and anchored image-marker checks.
+The 9,000-row regression and existing cache transport tests pass without
+relaxing their deadlines. A canonical macOS fixture temporary path removes the
+snapshot alias assumption. Expanded native worker checks retain the separate
+libc++ fixture mismatch and one address-mapping failure that passed on retry,
+as documented in the [qualification](web-claude-code-qualification.md).

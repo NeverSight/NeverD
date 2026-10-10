@@ -1089,6 +1089,9 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       }
     }
   }
+  // Value reconstruction crosses CFG predecessors as well as expression
+  // definitions. Use the expanded graph-walk limit; local guard syntax keeps
+  // its separate depth bound and every query retains the shared work budget.
   if (!AliasQueries.empty()) {
     bool AliasProofComplete = false;
     const std::vector<bool> AliasResults = tableValuesMatchAtUses(
@@ -1096,7 +1099,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
         /*CandidateBranchesSharingTargets=*/nullptr,
         /*QueryUnsignedFeasibleMasks=*/nullptr,
-        /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
+        limits::kMaxJumpTableExpandedResolverDepth, CertifiedEdgeOverrides);
     if (!AliasProofComplete || AliasResults.size() != AliasQueries.size()) {
       Info.IncompleteGuardDomain = true;
       return false;
@@ -1409,7 +1412,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
         /*CandidateBranchesSharingTargets=*/nullptr,
         /*QueryUnsignedFeasibleMasks=*/nullptr,
-        /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
+        limits::kMaxJumpTableExpandedResolverDepth, CertifiedEdgeOverrides);
   if (ProofResults.size() != ProofQueries.size() ||
       ProofQueryComplete.size() != ProofQueries.size()) {
     if (SawControllingGuard)

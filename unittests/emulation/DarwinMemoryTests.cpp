@@ -71,6 +71,63 @@ protected:
     return FD.Value;
   }
 };
+TEST_P(DarwinMemoryTest, SymbolicDescriptorsRefuseNativePrivateAndSharedModes) {
+  Options.DarwinFiles.emplace();
+  Options.DarwinFiles->SymbolicLinks["/alias"] = {'d', 'a', 't', 'a'};
+  const auto Scratch = allocate(Page);
+  const uint8_t Path[] = {'/', 'a', 'l', 'i', 'a', 's', 0};
+  llvm::cantFail(Space->write(Scratch, Path));
+  const auto Mapped = Space->mappedBytes();
+  const auto Allocated = Space->physicalMemory()->allocatedBytes();
+  for (uint64_t Access = 0; Access != 3; ++Access) {
+    const auto FD = fileCall(ServiceKind::Open, {Scratch, 0x200000 | Access});
+    ASSERT_FALSE(FD.Error);
+    for (uint64_t Protection : {1, 2, 3})
+      for (uint64_t Flags : {1, 2}) {
+        auto Reply =
+            call(ServiceKind::Mmap, {0, 16384, Protection, Flags, FD.Value, 0});
+        EXPECT_TRUE(Reply.Error);
+        EXPECT_EQ(Reply.Value, 22u);
+        EXPECT_EQ(Space->mappedBytes(), Mapped);
+        EXPECT_EQ(Space->physicalMemory()->allocatedBytes(), Allocated);
+      }
+    EXPECT_FALSE(fileCall(ServiceKind::Close, {FD.Value}).Error);
+  }
+}
+
+TEST_P(DarwinMemoryTest, SymbolicSharedAdmissionKeepsUnknownMappingBoundaries) {
+  Options.DarwinFiles.emplace();
+  Options.DarwinFiles->Files["/data"] = {'d', 'a', 't', 'a'};
+  Options.DarwinFiles->SymbolicLinks["/alias"] = {'d', 'a', 't', 'a'};
+  const auto Scratch = allocate(Page);
+  const uint8_t Path[] = {'/', 'a', 'l', 'i', 'a', 's', 0};
+  llvm::cantFail(Space->write(Scratch, Path));
+  const auto FD = fileCall(ServiceKind::Open, {Scratch, 0x200000});
+  ASSERT_FALSE(FD.Error);
+  const auto Mapped = Space->mappedBytes();
+  for (std::array<uint64_t, 6> Args :
+       {std::array<uint64_t, 6>{0, Page, 4, 1, FD.Value, 0},
+        {0, Page, 1, 0x1001, FD.Value, 0},
+        {0, Page, 1, 3, FD.Value, 0},
+        {0, Page, 1, 1, FD.Value, 1},
+        {0, Page, 1, 1, 99, 0}}) {
+    EXPECT_EQ(call(ServiceKind::Mmap, Args).Value, UINT64_MAX);
+    EXPECT_EQ(Result.Diagnostic, diagnostic::MemoryMode);
+    EXPECT_EQ(Space->mappedBytes(), Mapped);
+  }
+  const uint8_t RegularPath[] = {'/', 'd', 'a', 't', 'a', 0};
+  llvm::cantFail(Space->write(Scratch, RegularPath));
+  const auto Opened = fileCall(ServiceKind::Open, {Scratch});
+  ASSERT_FALSE(Opened.Error);
+  const auto Regular = Opened.Value;
+  EXPECT_EQ(call(ServiceKind::Mmap, {0, Page, 1, 1, Regular, 0}).Value,
+            UINT64_MAX);
+  EXPECT_EQ(Result.Diagnostic, diagnostic::MemoryMode);
+  auto Zero = call(ServiceKind::Mmap, {0, 0, 1, 2, FD.Value, 0});
+  EXPECT_TRUE(Zero.Error);
+  EXPECT_EQ(Zero.Value, 22u);
+}
+
 TEST_P(DarwinMemoryTest,
        FileMutationWaitsForAllMappedRangesAfterDescriptorClose) {
   Options.DarwinFiles.emplace();

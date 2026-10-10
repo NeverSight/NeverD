@@ -97,6 +97,8 @@ v4 測試固定前綴大小與填充，拒絕截斷配置和未知旗標，保�
 
 `LLVMGuestAlignment.*` 將載入和儲存與獨立位元組記憶體參考實作比較，涵蓋正確和錯誤的對齊域、自由高位址位元、解析後的預設對齊、部分寬度、未使用或被覆寫的存取、不可達分支及恰好/少一單位的建構預算。`InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises` 透過兩次新鮮關係檢查驗證原生堆疊儲存、相符的入口同餘條件和遭改寫的原始碼效果。
 
+`LLVMByteSwap*`、`LLVMScalarByteSwap.*` 和 `InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises` 以獨立位元組複製及位移／遮罩參照檢查高位元組保留、跨區塊值、poison 保留、嚴格呼叫契約與獨立計數的精確／少一預算。Clang O1/O2 測試必須包含實際交換 intrinsic；小型原生位元組交換／BSWAP 測試檢查雙方的新證明，並拒絕錯誤值或遺漏高半字清零。
+
 `NeverDLLVMScalarEquivalenceTests` 涵蓋完整迴圈域、零次迴圈、PHI 同時交換、switch、高位輸入、最後分區反例、產生 poison 的額外更新、回傳範圍、不支援的契約，以及精確、少一單位及零預算。獨立雙寬與溢位參考實作涵蓋各支援字寬的漏斗位移端點及帶溢位約束的乘法；獨立巢狀迴圈 C 於 O1/O2 檢查編譯器輸入形態。狀態模型測試也檢查漏斗位移端點。`SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings` 檢查累計查詢計費與不變的局部上限。
 
 `LLVMScalarDecision.*` 涵蓋深層精確位移/擴展約束、常數分支決策、兩條迴圈回邊、保留高資料位元、末端未定義操作、不終止、已檢查函式的後續修改，以及精確/少一/局部預算。`LLVMScalarDecisionCompiled.DeepOneAndTwoBackedgeOracles` 將獨立撰寫的單回邊和雙回邊遞推與無號 C oracle 在 O0/O2 下比較，共 32,768 次呼叫。這些是純量模型檢查，不代表原生 ABI 或完整二進位還原涵蓋。
@@ -1198,7 +1200,7 @@ KVM 驗收要求真實且不主動退出的 vCPU 取消，以及 `KvmStateTransf
 
 在 `native_cpu_only=true` 時，設定 `native_driver_tests=true` 可啟用不依賴 Unicorn 的 `NeverDNativeDriverTests`。設定前，`build_wdk_driver_fixtures.py` 驗證微軟官方 WDK/SDK 10.0.26100.6584 套件的完整 SHA-256，並從原始程式碼重建 48 個一般、CFG 或 DBG 驅動程式映像。`WDKDriverFixtures.def` 統一定義套件身分、編譯與連結參數及範例繫結。未修改的微軟檔案與授權保留在本機建置或快取目錄；CI 僅上傳建置中繼資料與記錄。清單記錄工具版本、命令、原始碼與標頭摘要及輸出映像摘要。
 
-`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 與 `DriverBackendParityCases.def` 中全部 115 個負載產生 230 項 WHP 結果：27 個內建映像、48 個 WDK 映像及 40 個要求情境，各涵蓋原始與重定位位址。完整必測清單為 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`。30 項等待集合檢查包含十六項可攜模型測試及十四項原創原生驅動測試。`run_native_cpu_ci.py --with-drivers` 在停用 Unicorn 時保留精確清單與 JUnit 證據；必要範例遺失或略過會使此選用驗收失敗，一般建置仍可不提供外部範例。固定位址映像保留預期的重定位拒絕。ARM64 原生客體執行仍未驗證。
+`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 與 `DriverBackendParityCases.def` 中全部 115 個負載產生 230 項 WHP 結果：27 個內建映像、48 個 WDK 映像及 40 個要求情境，各涵蓋原始與重定位位址。完整必測清單為 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 4 image memory checks = 5451`。30 項等待集合檢查包含十六項可攜模型測試及十四項原創原生驅動測試。`run_native_cpu_ci.py --with-drivers` 在停用 Unicorn 時保留精確清單與 JUnit 證據；必要範例遺失或略過會使此選用驗收失敗，一般建置仍可不提供外部範例。固定位址映像保留預期的重定位拒絕。ARM64 原生客體執行仍未驗證。
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` 在兩條不同啟動指令前注入逾時、停止及兩者同時發生的中斷，檢查精確階段診斷、訊息自行持有的生命週期、錯誤類型和原因位元、步驟間不變的統一截止時間及記憶體占用釋放。既有真實傳輸失敗與狀態不符仍分別處理。原生 x64 啟動驗證預算為 `5 s`；一般客體截止時間及單步寬限不變。
 
@@ -1570,6 +1572,33 @@ MainActor 測試資料檢查完整的固定中繼資料與靜態表流程，拒�
 `ZeroTimeoutPollRetainsReadinessAndOrderedCopies` 覆蓋八個 GKI 分支的 O0／O2 原始呼叫，檢查存活／負數／已關閉描述符、重複計數、引數收窄、超時／掩碼順序、只讀零 timespec、全部元資料先於就緒，以及後續故障保留較早 `revents`。`ZeroTimeoutPollKeepsUnobservedBoundaries` 保留核心、限額、掩碼、等待和就緒狀態的未知邊界。Android 的 `ReleasedGKIZeroTimeoutPollSharesRawAndBionicResults` 在六種打包配置中複驗共享表和 errno 所有權。
 
 ## 有界目錄批次屬性
+
+bulk-attributes 檢查完整組、名稱/型別集合、未使用位元組保護區、low32 FD、bitmap 字、原生錯誤、dup 共用進度、獨立 open、快取 EOF 與零 rewind。字面值與未知模式僅用於虛擬環境。模型另涵蓋完整 stat、失效、NFD/255位元組名稱、輸入/輸出別名、傳輸/預算失敗、移動/SWAP/刪除/重用及明確授權。每個平台必需65個工作負載：ARM64 為195例，Intel 為130例；本地僅驗證匹配的 ARM64 HVF。native5s、guest/Python5,000,000us/quantum1024、public10s 不變。
+
+## 有界 Darwin 硬連結
+
+原始 link 跟隨最終符號連結目標；linkat 的 flags=0 連結符號連結物件本身，AT_SYMLINK_FOLLOW 跟隨目標。僅接受 low32 的 0/0x40，其餘低位在匯入前回傳 EINVAL。來源查找與目錄 EPERM 先於目標匯入；已存在目標回傳 EEXIST。目標父目錄需修改授權且雙方須屬明確建立的同一掛載域。初始身分別名及已知裝置/模式/旗標衝突仍不支援。
+
+別名只消耗名稱項目及路徑/NUL 費用，不消耗新 inode；位元組、屬性授權及映射租約由共享物件持有。既有明確策略更新連結數與 ctime；缺少策略時完整 stat 未知。屬性修改使完整 stat 失效，內容修改使屬性觀察失效。描述物件及最後映射保留刪除名稱的費用；替換只抵扣可立即釋放的費用。子樹依確切身分及父目錄移動，樹外別名留在原位；相對符號目標使用所選項目的父目錄。
+
+曾有多個名稱的物件，即使剩一個或零個名稱，F_GETPATH/ATTR_CMN_NAME 仍不支援；APFS 快取尚無通用模型。批量 NAME 來自實際項目，相同物件的普通重新命名/SWAP 保留雙方。EXCL 大小寫、O_SYMLINK、原生 Intel HVF、實體 iOS、ACL、映射一致性/EOF 訊號、dyld、Mach IPC、執行緒與完整框架仍是缺口。本節僅在上述契約內擴展前文限制。
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+65 mandatory workloads per platform / ARM64 195 / Intel 130
+```
 
 bulk-attributes 檢查完整組、名稱/型別集合、未使用位元組保護區、low32 FD、bitmap 字、原生錯誤、dup 共用進度、獨立 open、快取 EOF 與零 rewind。字面值與未知模式僅用於虛擬環境。模型另涵蓋完整 stat、失效、NFD/255位元組名稱、輸入/輸出別名、傳輸/預算失敗、移動/SWAP/刪除/重用及明確授權。每個平台必需63個工作負載：ARM64 為189例，Intel 為126例；本地僅驗證匹配的 ARM64 HVF。native5s、guest/Python5,000,000us/quantum1024、public10s 不變。
 

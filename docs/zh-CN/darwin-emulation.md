@@ -1,6 +1,6 @@
 **语言**: [English](../darwin-emulation.md) | [简体中文](darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: aa19cf02d09c66c62cfde94ee71c93b210f3d92165151c58778e1e91ec0df607 -->
+<!-- i18n-source: 1939e117643388dff149085b992e1ad646feefca63b630abec9b09122e15c2f1 -->
 
 [← 文档索引](README.md)
 
@@ -75,7 +75,7 @@ Python SDK 也通过真实共享库执行五种平台/架构组合。
 
 每个文件可用严格布尔值 `"writable":true` 显式允许进程内修改；C++ 使用 `DarwinFileOptions::WritableFiles`。省略或 false 保持只读，未知写授权明确停止，不访问宿主或修改输入选项。write(4/397)、pwrite(154/415)、truncate(200)、ftruncate(201) 和 O_TRUNC 共用文件节点；独立 open 共享字节但游标独立，dup 共享游标与状态，最后 close 后重开仍保留内容。增长补零，截断不移动游标，O_RDONLY|O_TRUNC 也截断。
 
-F_SETFL 只改变 O_APPEND，保留访问模式、close-on-exec 和 FWASWRITTEN；F_GETFL 在实际传输非零字节后暴露 0x10000，包括 pwrite 和输出捕获。pwrite 忽略 append、不移动游标。超 INT_MAX 的长度在 FD 检查前返回 EINVAL，pwrite 偏移 -1 更早返回 EINVAL；INT64_MAX 偏移在零写前返回 EFBIG，长度先裁剪再选择追加位置。
+F_SETFL 按原生标志转换只改变 O_APPEND|O_NONBLOCK，保留访问模式、close-on-exec 和 FWASWRITTEN；F_GETFL 在实际传输非零字节后暴露 0x10000，包括 pwrite 和输出捕获。pwrite 忽略 append、不移动游标。超 INT_MAX 的长度在 FD 检查前返回 EINVAL，pwrite 偏移 -1 更早返回 EINVAL；INT64_MAX 偏移在零写前返回 EFBIG，长度先裁剪再选择追加位置。
 
 成功的 ftruncate（包括大小不变）也为调用描述及其 dup 设置 FWASWRITTEN；O_TRUNC 为新描述设置，包括 O_RDONLY。按路径 truncate 不改变已有描述的标志。
 
@@ -1028,3 +1028,120 @@ setxattr(236)、fsetxattr(237)、removexattr(238) 和 fremovexattr(239) 使用�
 xattr-mutations / xattr-mutations-values / xattr-mutations-unsupported 使用原创原生/客体对照、独立虚拟字节字面值，以及保留已有输出的缺少授权停止用例。ARM64 私有准备验证了726次 raw/SDK 调用、完整544字节保护区观察及完整可读页。native5s/compile120s/drain1s/reap1s、guest/Python5,000,000us/quantum1024、public10s 均不变。原生 Intel、iOS 真机、dyld、Mach IPC、线程/信号、Objective-C/Swift 运行时及完整框架仍未验证或未完成。
 
 主要 ABI 参考：[XNU 系统调用声明](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/syscalls.master)、[xattr 定义](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/sys/xattr.h)。实现与探针均为原创，未复制 Apple 实现。
+
+## 有界 Darwin 硬链接
+
+原始 link 跟随最终符号链接目标；linkat 的 flags=0 链接符号链接对象本身，AT_SYMLINK_FOLLOW 跟随目标。仅接受 low32 的 0/0x40，其余低位在导入前返回 EINVAL。源路径导入、查找和目录 EPERM 先于目标导入；已存在目标返回 EEXIST。目标实际父目录需要修改授权，且双方必须属于明确建立的同一挂载域；源父目录不要求可修改。已知设备冲突、标志、特殊模式和初始身份别名仍不支持，输入元数据不会合并独立的初始对象。
+
+新增别名只消耗一个名称条目及路径/NUL 费用，不消耗新 inode，也不重复计费对象字节或属性。内容与属性授权、元数据有效性和映射租约属于共享对象。链接数与 ctime 使用现有显式元数据策略；缺少策略时，修改后的完整 stat 保持未知。修改扩展属性使完整 stat 失效，修改内容使普通属性观察失效。删除名称后，描述对象保留名称费用，最后一个名称及对象费用也由仅存的映射租约保留；替换只能抵扣可立即释放的费用。子树移动/SWAP 按确切身份及实际父目录选择条目，树外别名不移动，相对符号链接目标从所选条目的父目录解析。
+
+对象一旦拥有过多个名称，即使只剩一个或零个名称，F_GETPATH 与 vnode ATTR_CMN_NAME 仍明确不支持。ARM64 原生控制显示 APFS 名称观察依赖查找历史，路径与名称缓存行为也不同，尚不能声明通用缓存模型。目录批量 NAME 直接来自实际条目。相同对象的普通重命名/SWAP 保留双方条目，大小写不敏感 EXCL 仍超出当前契约。原生 Intel HVF、实体 iOS、权限/ACL、映射一致性及 EOF 信号、dyld、Mach IPC、线程和完整框架仍是独立缺口。本节仅在上述范围内扩展前文的硬链接限制。
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## 有界 O_SYMLINK 描述符
+
+O_SYMLINK=0x00200000 在只读、只写和读写模式下保留最终符号链接对象，包括悬空或循环链接；它不授予目标内容写权限。O_CREAT 仍跟随最终目标；NOFOLLOW 保持 ELOOP 优先顺序，独占创建保持 EEXIST，O_DIRECTORY 对保留的链接返回 ENOTDIR。必需的中间路径或末尾斜杠展开沿用现有解析器和 NOFOLLOW_ANY 边界。F_GETFL 不返回对象选择位。
+
+描述对象共用实际 LinkNode 和所选 NameIdentity。dup 共享状态标志和游标，独立 open 使用各自的描述对象。链接被重命名、删除、名称复用或父目录删除后，已有 FD 仍保留原对象。唯一名称的 F_GETPATH 和 ATTR_CMN_NAME 使用保留的所选名称；一旦有过多个名称，即使全部删除，vnode 名称推断仍明确不支持。初始固定费用始终预留，动态名称、目标、条目和属性增量等待实际最后所有者释放。另一描述对象仍保留对象或所选名称时，替换不能抵扣最后别名的费用。
+
+符号描述符 I/O 不把原始目标字符串当作文件内容。现有标量/向量导入、访问模式和数量检查完成后，负偏移返回 EINVAL；INT64_MAX 处读取返回零，其余允许的偏移返回 EPERM，包括零长度请求。INT64_MAX 处写入返回 EFBIG，其余允许偏移在零长度成功、APPEND 或载荷访问前返回 EPERM。已有 pwrite/pwritev 负偏移的早期检查仍是唯一依据。DATA/HOLE seek 对非负位置返回 ENXIO，负位置返回 EINVAL，游标不变。
+
+只写/读写描述对象的非负 ftruncate 以及允许的 open TRUNC 只设置 WasWritten 状态，不改变目标字节、完整 stat、扩展属性、游标、存储准入或 inode 分配。只读 ftruncate 和负长度返回 EINVAL。F_SETFL 的允许参数先改变 APPEND|NONBLOCK，再返回 ENOTTY25；dup 可观察变化，独立打开不受影响。未知参数在产生效果前停止。
+
+固定 fpathconf、fgetattrlist 及独立声明的普通 FD 扩展属性授权作用于符号对象。相对目录 FD 查找和 fchdir 返回 ENOTDIR。属性修改仍使 stat 失效，截断不会恢复元数据。旧式、偏移对齐、非可执行的 private/shared mmap 选择到达符号对象类型的 EINVAL 拒绝，不创建映射或租约。普通 shared 映射、未知标志、执行权限及其他现有不支持边界保持不变。原生映射对照只覆盖 length16384、offset0、protection1/2/3，并未验证所有 mmap 变体。
+
+原创 ARM64 准备对15项截断及隔离的对象选择保留完整144字节 stat 和保护区比较。O0/O2 观察还覆盖标量/向量的极端偏移和数量、稀疏 seek、18项映射拒绝及失败 F_SETFL 的副作用。无 SDK 共用程序另以 O0/O1/O2 编译，比较描述符实际父目录路径，避免原生临时目录拼写别名。虚拟模式比较独立的完整 stat/type 字面值，或在多名称查询时明确停止并保留输出。原生 Intel HVF、iOS 真机、ACL/权限执行、映射 EOF/信号一致性、dyld、Mach IPC、线程和完整运行时/框架仍未验证或未完成。
+
+主要解释依据：[对应版本 XNU 映射边界](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/kern_mman.c)。实现与探针均为原创，未复制 Apple 实现。
+
+```text
+O_SYMLINK=0x00200000; ENOTTY=25
+open O_RDONLY|O_SYMLINK|O_TRUNC: WasWritten only
+LinkNode, NameIdentity, HadMultipleNames, DetachedNames
+INT64_MAX read=0 / write=EFBIG; other admitted offsets=EPERM
+SEEK_DATA/SEEK_HOLE nonnegative=ENXIO / negative=EINVAL
+F_SETFL: APPEND|NONBLOCK effect before ENOTTY; dup shares / independent open separate
+symbolic-descriptors
+symbolic-descriptors-values
+symbolic-descriptors-name-unsupported
+SymbolicDescriptor*, SymbolicDescriptorsRetainObjectsAndNativeErrorOrder
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 transport parameters / 15 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## 有界的非阻塞描述符状态
+
+普通文件、目录及 O_SYMLINK 打开允许 O_NONBLOCK=4，F_GETFL 保留该状态。dup 共享状态与游标，独立打开保留各自的描述。既有访问模式、close-on-exec、WasWritten、元数据、字节和游标规则继续生效。显式有限标准输入保留 EOF 与指针错误顺序；省略输入仍表示未知。输出捕获保留复制错误及共享输出预算。
+
+F_SETFL 在产生效果前检查低32位允许参数，再按原生打开标志转换加一，只改变 APPEND|NONBLOCK。高32位忽略；访问及输入 WasWritten 位不能授予权限或伪造写入。原生字面控制中，参数3/7/11/15分别选择状态4/8/12/0。符号描述先提交状态变化，再返回 ENOTTY25。ASYNC0x40 等未知标志在效果前明确停止。
+
+原创 ARM64 macOS 准备记录122项观察，包括每个有效对象/访问组合的16项低位请求、保留的 dup、独立打开、清除状态、实际写入及每个 FD 的 CLOEXEC。无 SDK 共用程序以 O0/O1/O2 执行，比较字节、状态、游标和原始 BSD carry/errno ABI。来宾、C/CLI 和 Python 路径也要求未知标志拒绝，三个 ARM64 HVF profile 均必须实际执行。这里不实现就绪等待、管道、网络、kqueue、异步信号或宿主 I/O。O_EVTONLY 进程策略仍未支持；原生 Intel HVF、iOS 真机和完整 macOS/iOS 环境仍未验证或未完成。
+
+```text
+O_NONBLOCK=4; F_SETFL raw low32 mask=0x1000f
+requests3/7/11/15 -> APPEND|NONBLOCK status4/8/12/0
+nonblocking-descriptors / nonblocking-flags-unsupported
+Nonblocking*, NonblockingDescriptorsKeepNativeControlState
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+8 model cases / 20 transport parameters / 10 public cases / 5 Python profiles
+67 mandatory workloads per platform / ARM64 201 / Intel 134
+```
+
+## 显式有限 getentropy 观测
+
+原始 BSD getentropy500 使用有序 `DarwinSystemOptions::EntropyReads` 观测队列，JSON 字段为 `darwin_system.entropy_reads`。每条必须是非空、偶数长度的十六进制字符串；最多256条，每条1..256字节。这是有限模型的限制；已有65536字节 JSON 传输上限不变。省略表示未知，`[]` 表示明确耗尽。原生选项与 JSON 在加载镜像或修改后端之前严格校验，其他 OS 配置拒绝 Darwin 选项。
+
+先检查完整64位长度：超过256返回 EINVAL22，不访问内存或消费记录；零长度对任何指针都成功，不需要观测。非零请求先准入下一条长度完全匹配的记录，再执行复制。缺少、耗尽或长度不匹配均在任何效果前以 UnsupportedService 停止，包括无效地址；这是回放准入顺序。完整复制成功或目标完全不可写的 EFAULT14 消费恰好一条。部分可写目标在复制和推进游标前拒绝；内存传输错误保持错误且不推进。之后返回寄存器失败不会撤销已完成的复制或消费。同一组选项重复执行也从首条记录开始。
+
+每次执行的 DarwinEntropy 独立持有游标，输入字节不变；已有 BSD 分发和 returnService 统一负责两种 ISA、进位及次级寄存器。无 SDK 回放程序检查零及非 UTF-8 字节、哨兵、完整错误和拒绝路径，覆盖五种客体及三种 ARM64 HVF 配置；固定回放字节不加入原生确定性 RNG 清单。原始 ARM64 O0/O1/O2 探针共594次调用；哨兵发生变化的字节数不等于准确复制长度。未提供宿主随机源、密码学质量、/dev/random、libc 导入或框架；Intel HVF、iOS 真机及完整 OS 兼容性仍未验证或未完成。
+
+```text
+BSD getentropy500 / DarwinEntropy / EntropyReads / darwin_system.entropy_reads
+full64 size>256 -> EINVAL22; zero ->0; whole EFAULT14 consumes one record
+1..256 bytes per record / at most256 records / JSON transport65536 bytes
+entropy-replay / entropy-missing / entropy-exhausted / entropy-mismatch / entropy-partial
+15 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+68 mandatory workloads per platform / ARM64 204 / Intel 136
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU getentropy ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [XNU generation/copyout boundary](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/dev/random/randomdev.c).
+
+## 显式当前线程身份
+
+原始 BSD thread_selfid372 读取不可变的可选 `DarwinSystemOptions::ThreadID`，JSON 字段为 `darwin_system.thread_id`。所有 uint64 位模式（包括零）均是已知观测；省略时以 UnsupportedService 停止。十进制字符串保留全部64位，数值 JSON 仅接受不超过2^53-1的精确整数。不会从宿主、PID 或 Mach 端口推断 ID。无参数调用忽略六个参数载体，不访问内存；已有低32位系统调用解析保留事件中的完整原始编号，统一 BSD 返回层保留完整64位结果并清除 carry 和 RDX/X1。Mach 编号形式仍不支持。
+
+重复执行保留输入观测，不同选项互相独立；不分配 ID、不保证唯一性、不写入调度事件身份，也不实现线程生命周期、pthread、TLS 或 Mach IPC。原始 ARM64 O0/O1/O2 探针保留24次调用，与 SDK 当前 pthread ID 比较，并检查任意参数及编号高32位。原生通用程序仅比较同一进程内的关系；显式 ID 字节不加入确定性原生参考清单。Intel HVF、iOS 真机和完整 OS 兼容性仍未验证或未完成。
+
+```text
+BSD thread_selfid372 / Wide / ThreadID / darwin_system.thread_id
+known uint64 including0 / missing -> UnsupportedService / no memory
+full64 return / low32 resolution / carry clear / RDX-X1 zero / raw event number
+thread-identity / thread-identity-value / thread-identity-missing
+4 model cases / 20 transport parameters / 16 public cases / 5 Python profiles
+69 mandatory workloads per platform / ARM64 207 / Intel 138 unverified
+original ARM64 O0/O1/O2 probes24 / native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU thread_selfid ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [libpthread current-thread owner](https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_support.c).

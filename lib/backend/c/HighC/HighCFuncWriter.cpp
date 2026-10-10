@@ -5138,6 +5138,11 @@ void HighCWriter::nameCxxCatchObjects(const HighFunc &Func) {
   OpenCatchObjects.clear();
   if (!Opts.StructuredExceptionSyntax)
     return;
+  // Registration callbacks keep source-proved object homes and load snapshots
+  // in the parent frame. A display alias is not a proof that a reference's
+  // pointee remains unchanged, or that its first field is named `Value`.
+  if (Func.ExceptionMetadata && Func.ExceptionMetadata->Registration)
+    return;
   auto nameTaken = [&](const std::string &Name) {
     if (Name.empty())
       return true;

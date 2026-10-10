@@ -420,6 +420,21 @@ const char *neverd_web_asar_records_json(neverd_web_session_t Session,
 #endif
 }
 
+const char *neverd_web_bun_export_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ExtractionID, size_t ExtractionIDSize,
+    const char *OutputDirectory, size_t OutputDirectorySize) {
+#ifdef NEVERD_ENABLE_WEB_ANALYSIS
+  return invoke(Session, [&](auto &S) {
+    return S.exportBun(buffer(ExpectedRevision, RevisionSize, 20),
+                       buffer(ExtractionID, ExtractionIDSize, 64),
+                       buffer(OutputDirectory, OutputDirectorySize, 32768));
+  });
+#else
+  return unavailable();
+#endif
+}
+
 const char *neverd_web_bun_extract_json(neverd_web_session_t Session,
                                         const char *ExpectedRevision,
                                         size_t RevisionSize,

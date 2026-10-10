@@ -20,13 +20,25 @@ void Builder::pointerProjections() {
         const llvm::Value *Base = nullptr;
         int64_t Delta = 0;
         if (auto *G = llvm::dyn_cast<llvm::GetElementPtrInst>(&I)) {
-          llvm::APInt O(64, 0);
-          if (!G->getSourceElementType()->isIntegerTy(8) ||
+          auto *Element = G->getSourceElementType();
+          if (!(Element->isIntegerTy(8) || Element->isIntegerTy(16) ||
+                Element->isIntegerTy(32) || Element->isIntegerTy(64)) ||
               G->getNumIndices() != 1 || G->getPointerAddressSpace() != 0 ||
               !G->getOperand(1)->getType()->isIntegerTy(64))
             fail("unsupported typed pointer projection");
-          if (!G->accumulateConstantOffset(F.getParent()->getDataLayout(), O))
+          auto *Index = llvm::dyn_cast<llvm::ConstantInt>(G->getOperand(1));
+          if (!Index)
             continue;
+          const auto Stride =
+              F.getParent()->getDataLayout().getTypeAllocSize(Element);
+          // Preserve the element's allocation stride, including ABI padding.
+          // A wrapped index must not disguise a poison/out-of-object GEP as
+          // an ordinary byte offset into the declared state object.
+          bool Overflow = false;
+          const auto O = Index->getValue().smul_ov(
+              llvm::APInt(64, Stride.getFixedValue()), Overflow);
+          if (Overflow)
+            fail("state GEP offset overflow");
           Base = G->getPointerOperand();
           Delta = O.getSExtValue();
           if (G->hasNoUnsignedWrap() && Delta < 0)

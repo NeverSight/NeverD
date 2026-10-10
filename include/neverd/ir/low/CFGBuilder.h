@@ -652,7 +652,16 @@ class X87CallGraphCache;
 /// operation, including explicit projection exclusions of complete CFGs.
 /// Replace the cache when image bytes/metadata or borrowed analysis indexes
 /// change.
+/// Registered callback owners (including a target index's name resolver) must
+/// not directly or indirectly wait for x87 graph construction in any cache on
+/// another thread during a CFG build. Waiting requires each nonnull callback
+/// owner to match its exact registered identity. Unregistered callbacks retain
+/// independent, nonwaiting construction. Synchronous nested graph construction
+/// never waits on another cache.
 std::shared_ptr<X87CallGraphCache> createX87CallGraphCache();
+std::shared_ptr<X87CallGraphCache> createX87CallGraphCache(
+    const NoReturnCalleeProver *NonReentrantProver,
+    const libc::NoReturnTargetIndex *NonReentrantTargets = nullptr);
 
 class CFGBuilder {
   friend class X87CallEffectIndex;
@@ -1016,6 +1025,8 @@ private:
   friend struct detail::ResolverGraphCacheTestAccess;
   friend struct detail::X87CallGraphCacheTestAccess;
   std::array<size_t, 3> x87CallGraphCacheStatsForTesting() const;
+  std::array<size_t, 5> x87CallGraphFlightStatsForTesting() const;
+  bool waitForX87CallGraphWaitersForTesting(size_t Count) const;
   std::optional<int> x87CallEffectForTesting(const BinaryImage &Image,
                                              va_t Entry, size_t &Remaining,
                                              unsigned Depth = 0);

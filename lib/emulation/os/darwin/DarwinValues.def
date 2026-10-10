@@ -33,6 +33,7 @@ NEVERD_DARWIN_VALUE(ArgumentListTooLong, 7)
 NEVERD_DARWIN_VALUE(NotDirectory, 20)
 NEVERD_DARWIN_VALUE(IsDirectory, 21)
 NEVERD_DARWIN_VALUE(TooManyFiles, 24)
+NEVERD_DARWIN_VALUE(NotTerminal, 25)
 NEVERD_DARWIN_VALUE(IllegalSeek, 29)
 NEVERD_DARWIN_VALUE(SeekHole, 3)
 NEVERD_DARWIN_VALUE(SeekData, 4)
@@ -50,11 +51,13 @@ NEVERD_DARWIN_VALUE(MaxSymbolicLinks, 32)
 NEVERD_DARWIN_VALUE(Overflow, 84)
 NEVERD_DARWIN_VALUE(OpenCloseOnExec, 0x01000000)
 NEVERD_DARWIN_VALUE(OpenDirectory, 0x00100000)
+NEVERD_DARWIN_VALUE(OpenSymbolic, 0x00200000)
 NEVERD_DARWIN_VALUE(OpenNoFollow, 0x100)
 NEVERD_DARWIN_VALUE(OpenNoFollowAny, 0x20000000)
 NEVERD_DARWIN_VALUE(OpenAccessMask, 3)
 NEVERD_DARWIN_VALUE(OpenWriteOnly, 1)
 NEVERD_DARWIN_VALUE(OpenReadWrite, 2)
+NEVERD_DARWIN_VALUE(OpenNonBlocking, 4)
 NEVERD_DARWIN_VALUE(OpenAppend, 8)
 NEVERD_DARWIN_VALUE(OpenTruncate, 0x400)
 NEVERD_DARWIN_VALUE(OpenCreate, 0x200)
@@ -65,6 +68,7 @@ NEVERD_DARWIN_VALUE(FileRestrictedFlags, 0x60006)
 NEVERD_DARWIN_VALUE(AtCurrentDirectory, 0xfffffffe)
 NEVERD_DARWIN_VALUE(AtEffectiveAccess, 0x10)
 NEVERD_DARWIN_VALUE(AtNoFollow, 0x20)
+NEVERD_DARWIN_VALUE(AtFollow, 0x40)
 NEVERD_DARWIN_VALUE(AccessPermissionMask, 0x003ffe07)
 NEVERD_DARWIN_VALUE(AtRealDevice, 0x200)
 NEVERD_DARWIN_VALUE(AtFDOnly, 0x400)
@@ -114,6 +118,8 @@ NEVERD_DARWIN_VALUE(InvalidArgument, 22)
 NEVERD_DARWIN_VALUE(NoMemory, 12)
 NEVERD_DARWIN_VALUE(PermissionDenied, 13)
 NEVERD_DARWIN_VALUE(ResultTooLarge, 34)
+NEVERD_DARWIN_VALUE(EntropyReadLimit, 256)
+NEVERD_DARWIN_VALUE(EntropyReplayLimit, 256)
 NEVERD_DARWIN_VALUE(SystemStringLimit, 1024)
 NEVERD_DARWIN_VALUE(HostNameLimit, 256)
 NEVERD_DARWIN_VALUE(LoginNameSize, 255)
@@ -133,6 +139,7 @@ NEVERD_DARWIN_VALUE(ResourceLimitCount, 9)
 NEVERD_DARWIN_VALUE(ResourceLimitNoFile, 8)
 NEVERD_DARWIN_VALUE(ResourceLimitPosixFlag, 0x1000)
 NEVERD_DARWIN_VALUE(ResourceLimitInfinity, 0x7fffffffffffffffULL)
+NEVERD_DARWIN_VALUE(MapShared, 0x1)
 NEVERD_DARWIN_VALUE(MapPrivate, 0x2)
 NEVERD_DARWIN_VALUE(MapAnonymous, 0x1000)
 NEVERD_DARWIN_VALUE(MapUnix03, 0x40000)
@@ -146,6 +153,8 @@ NEVERD_DARWIN_TEXT(DyldPath, "/usr/lib/dyld")
 NEVERD_DARWIN_TEXT(ExecutablePathPrefix, "executable_path=")
 #endif
 #ifdef NEVERD_DARWIN_SERVICE
+NEVERD_DARWIN_SERVICE(Link, 9, Int)
+NEVERD_DARWIN_SERVICE(LinkAt, 471, Int)
 NEVERD_DARWIN_SERVICE(Exit, 1, None)
 NEVERD_DARWIN_SERVICE(Read, 3, Wide)
 NEVERD_DARWIN_SERVICE(Write, 4, Wide)
@@ -181,6 +190,7 @@ NEVERD_DARWIN_SERVICE(GetGroups, 79, Int)
 NEVERD_DARWIN_SERVICE(GetPgrp, 81, Int)
 NEVERD_DARWIN_SERVICE(GetPGID, 151, Int)
 NEVERD_DARWIN_SERVICE(GetSID, 310, Int)
+NEVERD_DARWIN_SERVICE(ThreadSelfID, 372, Wide)
 NEVERD_DARWIN_SERVICE(IsSetUGID, 327, Int)
 NEVERD_DARWIN_SERVICE(GetDTableSize, 89, Int)
 NEVERD_DARWIN_SERVICE(GetPriority, 100, Int)
@@ -214,6 +224,7 @@ NEVERD_DARWIN_SERVICE(Lstat64, 340, Int)
 NEVERD_DARWIN_SERVICE(GetDirEntries64, 344, Wide)
 NEVERD_DARWIN_SERVICE(GetTimeOfDay, 116, Int)
 NEVERD_DARWIN_SERVICE(GetRusage, 117, Int)
+NEVERD_DARWIN_SERVICE(GetEntropy, 500, Int)
 NEVERD_DARWIN_SERVICE(OpenAt, 463, Int)
 NEVERD_DARWIN_SERVICE(FstatAt64, 470, Int)
 NEVERD_DARWIN_SERVICE(UnlinkAt, 472, Int)
@@ -272,6 +283,9 @@ NEVERD_DARWIN_DIAGNOSTIC(ProcessGroupObservation,
                          "Darwin process group observation is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(ProcessSessionObservation,
                          "Darwin process session observation is not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    ThreadIDObservation,
+    "Darwin current-thread identity observation is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(ProcessTaintObservation,
                          "Darwin process taint observation is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(
@@ -321,6 +335,18 @@ NEVERD_DARWIN_DIAGNOSTIC(SystemPrivilegedWrite,
                          "Darwin privileged system write is not modeled")
 NEVERD_DARWIN_DIAGNOSTIC(ResourceUsageObservation,
                          "Darwin resource usage observation is not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    EntropyOption,
+    "Darwin entropy requires at most 256 records of 1..256 bytes")
+NEVERD_DARWIN_DIAGNOSTIC(EntropyObservation,
+                         "Darwin entropy observations are not configured")
+NEVERD_DARWIN_DIAGNOSTIC(EntropyExhausted,
+                         "Darwin entropy observations are exhausted")
+NEVERD_DARWIN_DIAGNOSTIC(
+    EntropyLength,
+    "Darwin entropy observation length does not match the request")
+NEVERD_DARWIN_DIAGNOSTIC(EntropyPartialOutput,
+                         "Darwin partial entropy output is unsupported")
 NEVERD_DARWIN_DIAGNOSTIC(ResourceUsagePartialOutput,
                          "Darwin resource usage output is partially writable")
 NEVERD_DARWIN_DIAGNOSTIC(
@@ -436,6 +462,12 @@ NEVERD_DARWIN_DIAGNOSTIC(
     "Darwin namespace metadata flags or special permissions are unsupported")
 NEVERD_DARWIN_DIAGNOSTIC(
     NamespaceAlias, "Darwin mutable namespace identity aliases are unsupported")
+NEVERD_DARWIN_DIAGNOSTIC(
+    HardLinkSource, "Darwin hard-link source identity is not uniquely declared")
+NEVERD_DARWIN_DIAGNOSTIC(HardLinkLimit,
+                         "Darwin hard-link namespace limit exceeded")
+NEVERD_DARWIN_DIAGNOSTIC(
+    HardLinkName, "Darwin multiple-name vnode observations are unsupported")
 NEVERD_DARWIN_DIAGNOSTIC(UnlinkFlags, "unsupported Darwin unlinkat flags")
 NEVERD_DARWIN_DIAGNOSTIC(RenameFlags, "unsupported Darwin rename flags")
 NEVERD_DARWIN_DIAGNOSTIC(

@@ -193,9 +193,11 @@ int runWeb() {
                       HTMLSource ||
                       (WebArguments.size() == 3 && WebArguments[0] == "source");
   const bool BunMap = WebArguments.size() == 3 && WebArguments[0] == "bun-map";
+  const bool BunExport =
+      WebArguments.size() == 3 && WebArguments[0] == "bun-export";
   const bool Map = BunMap || AsarMap ||
                    (WebArguments.size() == 2 && WebArguments[0] == "map");
-  const bool Bun = BunMap || BunSource || BunNative ||
+  const bool Bun = BunMap || BunSource || BunNative || BunExport ||
                    (WebArguments.size() == 2 && WebArguments[0] == "bun");
   uint64_t BunModule = 0;
   if ((BunMap || BunSource || BunNative) &&
@@ -227,7 +229,8 @@ int runWeb() {
            "source|bindings|semantics|modules|bundles|view|navigate <file> "
            "<script|module|commonjs> "
            "| map|bun "
-           "<file> | bun-map <file> <module-index> | "
+           "<file> | bun-export <file> <new-output-directory> | "
+           "bun-map <file> <module-index> | "
            "anchor <file> <script|module|commonjs> <byte-offset> "
            "<byte-length> | bun-view|bun-navigate <file> <module-index> "
            "<source-type> | "
@@ -364,6 +367,17 @@ int runWeb() {
           Summary->getAsObject()->getString("extraction_id");
       if (!Extraction)
         return 1;
+      if (BunExport) {
+        const auto &Directory = WebArguments[2];
+        auto Export = result(neverd_web_bun_export_json(
+            Session.Handle, Revision->data(), Revision->size(),
+            Extraction->data(), Extraction->size(), Directory.data(),
+            Directory.size()));
+        if (!Export)
+          return 1;
+        llvm::outs() << *Export << '\n';
+        return 0;
+      }
       if (BunMap || BunSource || BunNative) {
         auto Module = result(neverd_web_bun_records_json(
             Session.Handle, Revision->data(), Revision->size(),

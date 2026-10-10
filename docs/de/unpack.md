@@ -14,13 +14,15 @@ Der Container bestimmt, wie eine Datei validiert und neu aufgebaut wird, der Bef
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | Laufzeitbeobachtung |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | Laufzeitbeobachtung |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v92`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
 
 PE32+-DLLs werden anhand von `IMAGE_FILE_DLL` erkannt. Eine modellierte Gast-EXE ruft `LoadLibraryA` und anschließend `FreeLibrary` über den normalen Lebenszyklus von Abhängigkeiten, TLS und `DllMain` auf. Der akzeptierte DLL-Eintritt ist ihr Prozess-Anfügeaufruf; Argumente beliebiger Exporte werden nicht erfunden. Namen, Ordinale, Aliase, Daten und Weiterleitungen bleiben erhalten. Zeiger auf eigene Exporte bleiben intern und erzeugen keine Selbstimporte. Das gilt auch für von Hilfsroutinen zurückgegebene Adressen: Ein internes Ergebnis widerruft frühere Import-Reparaturnachweise für diese Stelle.
 
 ## Windows-x64-Treiber
 
 Mit `NEVERD_ENABLE_DRIVER_EMULATION=ON` laufen x64-PE-Abbilder des native-Subsystems (`.sys`) in der Treiberumgebung. `DriverEntry` liefert die Herkunft des Einstiegspunkts; Dispatch- und Entlade-Callbacks werden nicht zum standardmäßigen Wiederherstellungseinstieg. Das optionale Objekt `driver` akzeptiert das [Treiberszenario](driver-emulation.md) mit Dienstname, Registrierung, Anforderungen und Ablaufplanung. Gemeinsames Backend, Ausführungsvertrag und Ressourcenlimits gelten weiterhin. Argumente, Umgebung und PEB eines Benutzerprozesses werden abgelehnt.
+
+Treiber-UNPACK speichert keine einzelnen Schreibereignisse, behält aber Speicherprüfungen und Wiederherstellungsbeobachter bei. Das Ereignisbudget zählt API-Aufrufe; Befehls- und Zeitlimits gelten weiterhin.
 
 Die Wiederherstellung prüft Eingangsargumente, Rückkehr- und Schattenrahmen, nichtflüchtige Register, Richtungsflag, Gleitkommasteuerung und Kernelobjektbesitz. Verbleibende Pools, geliehene Kernelzeiger, geänderte Loaderobjekte oder nicht erfasste Kerneleffekte ergeben `unsupported_state`; explizites `snapshot_only` erhält die Diagnose. Für Kernelzustand gibt es kein `restore_runtime`. Imports werden anhand der Kernelexportidentitäten rekonstruiert, ursprüngliche Exporte validiert und die PE-Prüfsumme neu berechnet. Das Ergebnis mit fester Basis belegt weder das Laden im Windows-Kernel noch Signaturgültigkeit oder nicht ausgeführte Pfade.
 
