@@ -44,6 +44,8 @@ add_neverd_component_library(NeverDIRLow
   FuncDetectorAArch64.cpp
   IndirectTailFrame.cpp
   X86/RegistrationCalleeABI.cpp
+  X86/RegistrationThrowABI.cpp
+  X86/RegistrationThrowImportABI.cpp
   X86/RegistrationCalleeFrame.cpp
   X86/RegistrationCalleeIndex.cpp
   X86/RegistrationCallerABI.cpp

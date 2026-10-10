@@ -22,10 +22,15 @@ struct RegistrationObjectExtent {
 };
 
 /// A checked original callee's contract. A returning leaf may borrow ECX;
-/// a private scalar-throw helper terminates without borrowing the parent.
+/// a private throw/rethrow helper terminates without borrowing the parent.
 /// This is source evidence, not a compiler or native installation receipt.
 struct RegistrationCalleeFrameContract {
-  enum class Kind : uint8_t { Leaf, PrivateThrow } CalleeKind = Kind::Leaf;
+  enum class Kind : uint8_t {
+    Leaf,
+    PrivateThrow,
+    PrivateRethrow,
+    RuntimeRethrow
+  } CalleeKind = Kind::Leaf;
   va_t Target = InvalidVA;
   uint32_t StackPopBytes = 0;
   bool DoesNotReturn = false;
@@ -39,6 +44,14 @@ struct RegistrationCalleeFrameContract {
   /// Complete executed instruction extents of original code this contract
   /// preserves, including a private throw's authenticated import thunk.
   std::vector<ExceptionAddressRange> CodeRanges;
+
+  bool isThrow() const {
+    return CalleeKind == Kind::PrivateThrow || isRethrow();
+  }
+  bool isRethrow() const {
+    return CalleeKind == Kind::PrivateRethrow || isRuntimeRethrow();
+  }
+  bool isRuntimeRethrow() const { return CalleeKind == Kind::RuntimeRethrow; }
 };
 
 /// One exact source call with a proved stack and bounded, initialized object

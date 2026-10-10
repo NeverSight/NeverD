@@ -60,6 +60,18 @@ std::optional<RegistrationCleanupRelayABI>
 getCheckedX86RegistrationCleanupRelayABI(const BinaryImage &Image, va_t Target,
                                          size_t *CumulativeWork = nullptr);
 
+/// The exact two-argument stdcall runtime import and its transparent jump stub.
+/// This proves an entry ABI only; a rethrow occurrence must also prove two null
+/// arguments and an active catch in the source state solver.
+struct RegistrationThrowImportABI {
+  va_t Target = InvalidVA;
+  va_t IATVA = InvalidVA;
+};
+
+std::optional<RegistrationThrowImportABI>
+getCheckedX86RegistrationThrowImportABI(const BinaryImage &Image, va_t Target,
+                                        size_t *CumulativeWork = nullptr);
+
 struct RegistrationThrowCalleeABI {
   va_t Target = InvalidVA;
   va_t ImportVA = InvalidVA;
@@ -68,6 +80,9 @@ struct RegistrationThrowCalleeABI {
   va_t ThrowCallEndVA = InvalidVA;
   int ThrowOpSeq = -1;
   int32_t ObjectOffset = 0;
+  /// Exactly two null arguments reuse the active CRT exception. No new object
+  /// or ThrowInfo is supplied, and the caller must prove an active catch.
+  bool IsRethrow = false;
   coff_loader::X86SimpleCxxThrowInfo ThrowInfo;
   std::vector<ExceptionAddressRange> ImageReads;
   std::vector<ExceptionAddressRange> ImageWrites;
@@ -75,8 +90,8 @@ struct RegistrationThrowCalleeABI {
   std::vector<ExceptionAddressRange> CodeRanges;
 };
 
-/// Prove a closed PE32 helper that initializes a private scalar object and
-/// terminates through the exact VCRUNTIME140 _CxxThrowException import. The
+/// Prove a closed PE32 helper that initializes a private scalar object or
+/// rethrows, then terminates through the exact VCRUNTIME140 import. The
 /// original helper is preserved; no source frame pointer may escape except
 /// its checked object argument and an observable real caller PC.
 std::optional<RegistrationThrowCalleeABI>

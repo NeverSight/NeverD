@@ -8,7 +8,6 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
-#include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -38,25 +37,6 @@ bool chargeCalleeWork(size_t &Work, size_t Amount) {
   }
   Work += Amount;
   return true;
-}
-
-} // namespace neverd::registration_abi
-
-namespace neverd {
-namespace {
-using registration_abi::callerPCIsNotReadBack;
-using registration_abi::chargeCalleeWork;
-using registration_abi::hasPrivateCallerFrame;
-using registration_abi::ImageFrameEffects;
-
-template <typename Set, typename Vector>
-void copyExtents(const Set &From, Vector &To) {
-  for (const auto &[Begin, End] : From) {
-    if (!To.empty() && Begin <= To.back().End)
-      To.back().End = std::max(To.back().End, End);
-    else
-      To.push_back({Begin, End});
-  }
 }
 
 bool chargeDecodedCallee(size_t &Work, const LowFunc &Function) {
@@ -91,6 +71,18 @@ bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
     return Range.contains(Function.Entry);
   });
 }
+
+} // namespace neverd::registration_abi
+
+namespace neverd {
+namespace {
+using registration_abi::callerPCIsNotReadBack;
+using registration_abi::chargeCalleeWork;
+using registration_abi::chargeDecodedCallee;
+using registration_abi::collectCalleeCodeRanges;
+using registration_abi::copyExtents;
+using registration_abi::hasPrivateCallerFrame;
+using registration_abi::ImageFrameEffects;
 
 } // namespace
 
@@ -137,108 +129,6 @@ getCheckedX86RegistrationLeafCalleeABI(const BinaryImage &Image, va_t Target,
     return std::nullopt;
   copyExtents(Effects.ECXReads, Result.ECXReads);
   copyExtents(Effects.ECXWrites, Result.ECXWrites);
-  copyExtents(Effects.Reads, Result.ImageReads);
-  copyExtents(Effects.Writes, Result.ImageWrites);
-  copyExtents(Effects.CallerPCWrites, Result.CallerPCWrites);
-  return Result;
-}
-
-std::optional<RegistrationThrowCalleeABI>
-getCheckedX86RegistrationThrowCalleeABI(const BinaryImage &Image, va_t Target,
-                                        size_t *CumulativeWork) {
-  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
-      Image.Format != BinaryFormat::COFF || Target > UINT32_MAX ||
-      !Image.isCodeAddress(Target) ||
-      Image.ExceptionMetadata.findFunction(Target))
-    return std::nullopt;
-  size_t LocalWork = 0;
-  size_t &Work = CumulativeWork ? *CumulativeWork : LocalWork;
-  if (!chargeCalleeWork(Work, 1))
-    return std::nullopt;
-  Decoder Decoder;
-  if (!Decoder.init(Image))
-    return std::nullopt;
-  CFGBuilder Builder;
-  const LowFunc Callee = Builder.build(Image, Decoder, Target, "abi-throw");
-  if (!chargeDecodedCallee(Work, Callee) || Callee.CalleePopBytes ||
-      !Callee.hasCompleteLiftCoverage() || Callee.Blocks.empty() ||
-      Callee.ExceptionMetadata || !lowFunctionNeverReturns(Callee, Arch::X86))
-    return std::nullopt;
-  RegistrationThrowCalleeABI Result;
-  Result.Target = Target;
-  unsigned Calls = 0;
-  for (const auto &Block : Callee.Blocks) {
-    bool ThrowAtExit = false;
-    for (const auto &Op : Block.Ops) {
-      if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
-        continue;
-      if (++Calls != 1 || Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
-          !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 || Op.Seq < 0)
-        return std::nullopt;
-      const auto *Import = Image.findImportStubAt(Op.Inputs[0].Offset);
-      if (!Import || Import->Name != "_CxxThrowException" ||
-          (!llvm::StringRef(Import->Module)
-                .equals_insensitive("vcruntime140.dll") &&
-           !llvm::StringRef(Import->Module)
-                .equals_insensitive("vcruntime140d.dll")) ||
-          !Import->IATAddr || !Image.readVA(Import->IATAddr, 4))
-        return std::nullopt;
-      const auto Boundary =
-          llvm::find_if(Block.InstructionBoundaries,
-                        [&](const auto &B) { return B.Address == Op.Addr; });
-      if (Boundary == Block.InstructionBoundaries.end() ||
-          Boundary->Control != LowInstructionControl::Call ||
-          !hasLowInstructionControlFlag(Boundary->ControlFlags,
-                                        LowInstructionControlFlag::NoReturn) ||
-          hasLowInstructionControlFlag(
-              Boundary->ControlFlags, LowInstructionControlFlag::Conditional) ||
-          Op.Addr + Boundary->Size != Block.EndAddr)
-        return std::nullopt;
-      Result.ImportVA = Op.Inputs[0].Offset;
-      Result.ImportIATVA = Import->IATAddr;
-      Result.ThrowCallVA = Op.Addr;
-      Result.ThrowCallEndVA = Op.Addr + Boundary->Size;
-      Result.ThrowOpSeq = Op.Seq;
-      ThrowAtExit = true;
-    }
-    if (Block.Succs.empty() && !ThrowAtExit)
-      return std::nullopt;
-  }
-  if (Calls != 1)
-    return std::nullopt;
-  ImageFrameEffects Effects;
-  if (!hasPrivateCallerFrame(Callee, Image, Work, Effects, false, &Result) ||
-      Result.ThrowInfo.Address == InvalidVA || !callerPCIsNotReadBack(Effects))
-    return std::nullopt;
-  const auto &Info = Result.ThrowInfo;
-  if (Effects.Writes.size() > (limits::kMaxRegistrationEHStateWork - Work) /
-                                  (Info.ReadOnlyRanges.size() + 1))
-    return std::nullopt;
-  Work += Effects.Writes.size() * (Info.ReadOnlyRanges.size() + 1);
-  for (const auto &[Begin, End] : Effects.Writes) {
-    const ExceptionAddressRange Write{Begin, End};
-    if (Write.overlaps(Info.TypeDescriptorRange))
-      return std::nullopt;
-    for (const auto &Range : Info.ReadOnlyRanges)
-      if (Write.overlaps(Range))
-        return std::nullopt;
-  }
-  if (!collectCalleeCodeRanges(Callee, Image, Work, Result.CodeRanges) ||
-      !chargeCalleeWork(Work, 1))
-    return std::nullopt;
-  // The original helper calls this exact EAX-preserving import stub. Keeping
-  // the helper alone cannot authorize an entry patch that changes its tail.
-  const auto *Stub = Image.readVA(Result.ImportVA, 6);
-  if (Result.ImportVA > uint64_t(UINT32_MAX) - 5 ||
-      !Image.isCodeAddress(Result.ImportVA) || !Stub || Stub[0] != 0xff ||
-      Stub[1] != 0x25 || readLE<uint32_t>(Stub + 2) != Result.ImportIATVA)
-    return std::nullopt;
-  std::set<std::pair<va_t, va_t>> Code;
-  for (const auto &Range : Result.CodeRanges)
-    Code.emplace(Range.Begin, Range.End);
-  Code.emplace(Result.ImportVA, Result.ImportVA + 6);
-  Result.CodeRanges.clear();
-  copyExtents(Code, Result.CodeRanges);
   copyExtents(Effects.Reads, Result.ImageReads);
   copyExtents(Effects.Writes, Result.ImageWrites);
   copyExtents(Effects.CallerPCWrites, Result.CallerPCWrites);

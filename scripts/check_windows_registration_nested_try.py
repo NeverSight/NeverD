@@ -30,21 +30,28 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_nested_try_driver.cpp"
 EMITTER = ROOT / "unittests/lift/eh/WindowsRegistrationNestedTryTests.cpp"
 PROOF = ROOT / "unittests/lift/eh/RegistrationNestedTryTestUtils.cpp"
+RETHROW_PROOF = ROOT / "unittests/lift/eh/RegistrationRethrowTestUtils.cpp"
 FORMS = {prefix + "-" + mode + "-llvm-fixed": "-" + mode.upper()
-         for prefix in ("nested", "secondary") for mode in ("o0", "o1")}
+         for prefix in ("nested", "secondary", "rethrow", "inline-rethrow") for mode in ("o0", "o1")}
 CASES = tuple(name + suffix for name in FORMS for suffix in ("", "-control"))
 
 
 def observe(path, case, route, receipt, launcher, env, timeout):
-    secondary = case.startswith("secondary-")
-    if receipt.get("secondary_search") is not secondary:
+    inline = case.startswith("inline-rethrow-")
+    rethrow = case.startswith("rethrow-") or inline
+    secondary = case.startswith("secondary-") or rethrow
+    if receipt.get("secondary_search") is not secondary or \
+            receipt.get("rethrow_search") is not rethrow or \
+            receipt.get("inline_rethrow") is not inline:
         raise ValueError("nested source proof has the wrong catch search context")
-    expected = (17, 17, 39, 7, 7, 39, 1, 12) if secondary else (17, 28, 39, 7, 18, 39, 1, 12)
+    expected = ((39, 28, 39, 39, 18, 39, 1, 12) if rethrow else
+                (17, 17, 39, 7, 7, 39, 1, 12) if secondary else
+                (17, 28, 39, 7, 18, 39, 1, 12))
     return observe_catches(path, case, route, receipt, launcher, env, timeout,
                            expected_values=expected)
 
 
-def validate_decompilation(text: str, language: str) -> None:
+def validate_decompilation(text: str, language: str, inline: bool = False) -> None:
     if "highir.structured_regions=2, fallback_regions=0" not in text or \
             text.count("= __neverd_x86_callback_esp(0x") != 3:
         raise ValueError("nested decompilation lost a language region or callback")
@@ -53,6 +60,8 @@ def validate_decompilation(text: str, language: str) -> None:
     if language == "cpp" and (text.count("catch (") != 3 or
                                len(re.findall(r"\btry \{", text)) != 2 or ".Value" in text):
         raise ValueError("nested C++ output lost a try or invented an object field")
+    if inline and language == "cpp" and len(re.findall(r"\bthrow;", text)) != 1:
+        raise ValueError("direct rethrow lost its current exception")
     if len(set(re.findall(r"goto L_([0-9A-F]+);", text))) < 3:
         raise ValueError("nested output lost runtime continuation targets")
 
@@ -95,6 +104,7 @@ def main() -> int:
         runtime, report["catch_search_runtime"] = load_runtime(args.runtime_libs.resolve())
         report["source_sha256"], report["emitter_sha256"] = file_digest(SOURCE), file_digest(EMITTER)
         report["proof_sha256"] = file_digest(PROOF)
+        report["rethrow_proof_sha256"] = file_digest(RETHROW_PROOF)
         test, patch = args.test_binary.resolve(), args.patch_binary.resolve()
         for kind, optimization in FORMS.items():
             for control in (False, True):
@@ -102,11 +112,16 @@ def main() -> int:
                 case = out / name
                 case.mkdir(exist_ok=True)
                 shutil.copyfile(runtime, case / NAME)
-                secondary = kind.startswith("secondary-")
+                inline = kind.startswith("inline-rethrow-")
+                rethrow = kind.startswith("rethrow-") or inline
+                secondary = kind.startswith("secondary-") or rethrow
+                first = (39 if rethrow else 17) + int(control)
                 run([compiler, "--target=i686-pc-windows-msvc", "-fms-extensions", "-fexceptions",
                      "-fcxx-exceptions", "-fno-omit-frame-pointer", optimization,
-                     *(["-DSECONDARY_SEARCH"] if secondary else []),
-                     "-DEXPECTED_FIRST=" + ("18" if control else "17"), "-c", SOURCE,
+                     *(["-DINLINE_RETHROW_SEARCH"] if inline else []),
+                     *(["-DRETHROW_SEARCH"] if rethrow else
+                       ["-DSECONDARY_SEARCH"] if secondary else []),
+                     "-DEXPECTED_FIRST=" + str(first), "-c", SOURCE,
                      "-o", case / "driver.obj"])
                 original, product = case / "original.exe", case / "product.exe"
                 run([linker, "/entry:mainCRTStartup", "/nodefaultlib", "/machine:x86", "/subsystem:console",
@@ -117,7 +132,7 @@ def main() -> int:
                 if initial.get("exit_code") != int(control):
                     raise ValueError("original nested fixture failed")
                 run([test, "--gtest_filter=WindowsRegistrationNestedTry.InputPE32Reconstructs" +
-                     ("SecondarySearch" if secondary else "NestedSearch"),
+                     ("InlineRethrow" if inline else "Rethrow" if rethrow else "SecondarySearch" if secondary else "NestedSearch"),
                      "--gtest_output=xml:" + str(case / "rewrite.xml")],
                     {"NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32": str(original),
                      "NEVERD_REGISTRATION_REALIGNED_OUTPUT_PE32": str(product),
@@ -142,7 +157,7 @@ def main() -> int:
                     run([patch, "decompile", original,
                          "--func=" + hex(receipt["base"] + receipt["source_begin"]),
                          "--language=" + language, "-o", source])
-                    validate_decompilation(source.read_text(), language)
+                    validate_decompilation(source.read_text(), language, inline)
                     if language == "c":
                         run([compiler, "-x", "c", "-std=c11", "-fsyntax-only",
                              "-Werror=implicit-function-declaration", source])

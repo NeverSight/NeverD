@@ -2681,8 +2681,9 @@ substituted evidence.
 and `-O1` parents and links the captured CRT libraries. Inner reference catches
 and outer value/catch-all clauses exercise all three continuations under four
 caller stack layouts, including a new throw inside the inner catch. The
-64-image source/control matrix covers both CLI patch
-modes and forced rebasing. The C++ test rejects changed prologue saves,
+128-image source/control matrix covers ordinary searches, secondary throws and
+true helper and direct rethrows through both CLI patch modes and forced rebasing.
+The C++ test rejects changed prologue saves,
 personality argument reads, search edges, handler order, continuation ownership,
 and emitted try/unwind state rows. Secondary-search mutations also reject
 searching the exited inner try or losing the active catch token. HighIR must
@@ -2692,6 +2693,15 @@ x86 redistributable DLL alongside the link libraries. Each image runs with
 that exact app-local runtime, with a native-only Wine override, and replay
 authenticates its provider and digest. A missing or changed runtime fails;
 Wine's built-in catch-guard behavior cannot silently replace the Windows CRT.
+Rethrow cases modify an unsigned object in the inner reference catch and require
+the outer reference catch to observe that same modified value. ABI tests reject
+partially null arguments, borrowed or unknown pointers and changed runtime
+imports. State tests require a live catch and reject invented new-object fields,
+missing initialization and callback arguments that overlap the runtime return PC.
+Direct-call tests change each current MedIR argument and verifier-clean LLVM
+arguments, parameter attributes, calling convention, target and noreturn
+properties. HighC requires
+both null runtime arguments before rendering a bare `throw;`.
 `RegistrationCxxUnwind` tests nested, disjoint, three-level and cleanup search
 graphs. `replay_windows_registration_nested_try.py` authenticates the source,
 rejection tests, compiler objects, IR, decompilation and installed PE bytes

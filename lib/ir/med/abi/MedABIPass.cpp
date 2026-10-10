@@ -18,6 +18,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedCallConvention.h"
+#include "neverd/ir/med/X86RegistrationCall.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/object/SectionNames.h"
@@ -736,6 +737,18 @@ void recoverCallAbi(
             std::min(CalleeArgs, static_cast<int>(IntParamRegs.size()));
       }
 
+      // A checked direct PE32 rethrow takes exactly two stack words. Its
+      // source call receipt owns that ABI even without a symbol-name map;
+      // current SSA stores still own the values recovered below.
+      const auto Registration = TheArch == Arch::X86
+                                    ? registrationCallABI(Func, Blk, Op)
+                                    : std::nullopt;
+      const bool RuntimeRethrow = Registration && Registration->RuntimeRethrow;
+      if (RuntimeRethrow) {
+        CalleeRegArgs = 0;
+        CalleeArgs = 2;
+      }
+
       // Apple/Darwin AArch64 passes EVERY variadic argument on the stack
       // (unlike AAPCS64/Linux, which fills x0-x7 first).  For a known-variadic
       // libc callee (the printf/scanf family, ...) the outgoing stores at
@@ -824,10 +837,12 @@ void recoverCallAbi(
           IsDirectImport && Img && Convention &&
           !(Convention->ImportsMayTakeRegisterArguments &&
             Convention->ImportsMayTakeRegisterArguments(*Img));
-      const bool StackOnlyCall = RegparmOnly && !CI.IsIndirect &&
-                                 ((CalleeRegArgs == 0 && CalleeArgs > 0) ||
-                                  IsRelocExtern || StackOnlyImport);
-      const bool RegArgsApply = !(RegparmOnly && CI.IsIndirect);
+      const bool StackOnlyCall =
+          RuntimeRethrow || (RegparmOnly && !CI.IsIndirect &&
+                             ((CalleeRegArgs == 0 && CalleeArgs > 0) ||
+                              IsRelocExtern || StackOnlyImport));
+      const bool RegArgsApply =
+          !RuntimeRethrow && !(RegparmOnly && CI.IsIndirect);
       // A stack-only call takes no integer register argument; its floating
       // arguments are another question (an internal function taking only
       // XMM arguments has no integer register argument).
@@ -1977,7 +1992,8 @@ void recoverCallAbi(
       // only exactly that shape fills gaps there, so ordinary calls keep the
       // strict first-gap cutoff and their register/stack lane classification.
       bool LeadingGap = false;
-      if (Policy && Policy->LeadingStackGapIsUnusedArgument && !CI.IsIndirect &&
+      if (!RuntimeRethrow && Policy &&
+          Policy->LeadingStackGapIsUnusedArgument && !CI.IsIndirect &&
           CalleeArgs >= 0 && MaxArgs > 0 && !FoundMask[0])
         for (int K = 1; K < MaxArgs; ++K)
           if (FoundMask[K]) {
@@ -1992,7 +2008,7 @@ void recoverCallAbi(
       // but no trailing argument is invented.  A reliable callee arity (>0; a
       // not-yet-promoted forwarder still reports 0 at this point) additionally
       // drops a stray lane recovered above the real argument list.
-      int AssembleEnd = MaxArgs;
+      int AssembleEnd = RuntimeRethrow ? 2 : MaxArgs;
       if (FillGaps) {
         int LastFound = -1;
         for (int K = 0; K < MaxArgs; ++K)
