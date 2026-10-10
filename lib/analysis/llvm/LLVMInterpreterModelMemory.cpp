@@ -81,6 +81,16 @@ NdVar Builder::stateSlot(const llvm::Value *Pointer, unsigned Bytes,
     fail("unproved state alignment");
   return rvar(Off, Bytes);
 }
+void Builder::requireGuestAlignment(LowBlock &Out, NdVar Address,
+                                    uint64_t Align) {
+  if (Align == 1)
+    return;
+  // LLVM alignment is an obligation on every reached address, not an entry
+  // assumption or permission to access bytes beyond this load/store.
+  auto Residue = local(8);
+  emit(Out, op(NdOp::INT_AND, Residue, {Address, num(Align - 1)}));
+  requireEqual(Out, Residue, num(0));
+}
 bool Builder::emitMemory(LowBlock &Out, const llvm::Instruction &I) {
   if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I)) {
     if (Load->isAtomic() || Load->isVolatile() ||
@@ -91,9 +101,9 @@ bool Builder::emitMemory(LowBlock &Out, const llvm::Instruction &I) {
                    {stateSlot(Load->getPointerOperand(), bytes(I.getType()),
                               Load->getAlign().value())}));
     else {
-      if (Load->getAlign().value() != 1)
-        fail("unproved guest alignment");
-      emit(Out, op(NdOp::LOAD, value(&I), {value(Load->getPointerOperand())}));
+      auto Address = value(Load->getPointerOperand());
+      requireGuestAlignment(Out, Address, Load->getAlign().value());
+      emit(Out, op(NdOp::LOAD, value(&I), {Address}));
     }
     return true;
   }
@@ -107,11 +117,10 @@ bool Builder::emitMemory(LowBlock &Out, const llvm::Instruction &I) {
                              Store->getAlign().value()),
                    {value(Store->getValueOperand())}));
     else {
-      if (Store->getAlign().value() != 1)
-        fail("unproved guest alignment");
-      emit(Out, op(NdOp::STORE, {},
-                   {value(Store->getPointerOperand()),
-                    value(Store->getValueOperand())}));
+      auto Address = value(Store->getPointerOperand());
+      requireGuestAlignment(Out, Address, Store->getAlign().value());
+      emit(Out,
+           op(NdOp::STORE, {}, {Address, value(Store->getValueOperand())}));
     }
     return true;
   }

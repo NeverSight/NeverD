@@ -59,6 +59,31 @@ KernelExportRegistry::canonicalImportModule(llvm::StringRef Module) {
   return std::nullopt;
 }
 
+std::optional<uint64_t>
+KernelExportRegistry::moduleBase(llvm::StringRef Module) {
+  const auto Canonical = canonicalImportModule(Module);
+  if (!Canonical)
+    return std::nullopt;
+  unsigned Index = *Canonical == KernelProvider ? 0
+                   : *Canonical == HALProvider  ? 1
+                                                : 2;
+  return profile::KernelModuleBase + Index * profile::KernelModuleStride;
+}
+
+bool KernelExportRegistry::overlapsThunk(uint64_t Address, uint64_t Size) {
+  const auto Overlaps = [&](uint64_t Base) {
+    return Size && Address < Base + profile::ThunkSize &&
+           (Address >= Base || Size > Base - Address);
+  };
+  if (Overlaps(profile::ThunkBase))
+    return true;
+  for (unsigned I = 0; I < profile::KernelModuleCount; ++I)
+    if (Overlaps(profile::KernelModuleBase + I * profile::KernelModuleStride +
+                 profile::KernelModuleCodeRVA))
+      return true;
+  return false;
+}
+
 llvm::Error KernelExportRegistry::initialize(const DriverOptions &Options) {
   if (Initialized)
     return invalid("kernel export registry is already initialized");
@@ -112,8 +137,14 @@ llvm::Expected<uint64_t> KernelExportRegistry::insert(llvm::StringRef Module,
     return I->second;
   if (Exports.size() >= profile::ThunkSize / profile::ThunkStride - 1)
     return invalid("kernel export table exhausted its thunk capacity");
-  const uint64_t Address =
-      profile::ThunkBase + Exports.size() * profile::ThunkStride;
+  uint64_t Base = profile::ThunkBase;
+  if (Kind == ExportKind::ModuleExport) {
+    const auto Image = moduleBase(Module);
+    if (!Image)
+      return invalid("kernel export has no module image identity");
+    Base = *Image + profile::KernelModuleCodeRVA;
+  }
+  const uint64_t Address = Base + Exports.size() * profile::ThunkStride;
   Names.emplace(std::move(Key), Address);
   Exports.emplace(Address,
                   Export{Name.str(), Module.str(), Address, Kind, Binding});

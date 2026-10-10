@@ -2473,9 +2473,9 @@ static ResolverResult mergeResolverResults(
 
 } // namespace
 
-// Reuse only the pure graph-construction result, never a value proof or a
-// fixed-point stage. Every graph input is compared by value; proposal history,
-// one-shot test hooks and solver limits continue through their original paths.
+// Reuse an immutable proof graph and bounded, complete value-query batches.
+// Every graph input is compared by value. Batch reuse additionally binds all
+// query inputs and proof modes, and pays its original complete work charge.
 struct CFGBuilder::ResolverGraphCache {
   struct StorageOwner {
     va_t Branch;
@@ -2493,6 +2493,199 @@ struct CFGBuilder::ResolverGraphCache {
   std::vector<StorageOwner> Owners;
   size_t Work;
   ResolverFlowGraph Graph;
+
+  // Image bytes and loader metadata do not change within buildOnce; it resets
+  // this cache before another build. C++ const alone does not establish that
+  // contract (VerifiedFunctionEntries is mutable during earlier discovery).
+  // The occurrence inventories, unlike image metadata, can change between
+  // proposal rounds and must be frozen and compared in full.
+  struct ValueContext {
+    const BinaryImage *Image;
+    Arch Architecture;
+    InstructionMode Mode;
+    BinaryFormat Format;
+    BinaryFormat ABI;
+    uint32_t PointerSize;
+    va_t Entry;
+    std::vector<RelocatedInstructionAddressOccurrence> Addresses;
+    std::vector<RelocatedInstructionScalarModelOccurrence> ScalarModels;
+  };
+  struct ValueBatch {
+    std::vector<JumpTableValueQuery> Queries;
+    uint32_t Depth;
+    size_t MatchBudget;
+    std::optional<size_t> FiniteSymbolBudget;
+    bool QueryCompletion;
+    bool FeasibleMasks;
+    std::vector<bool> Results;
+    std::vector<uint64_t> Masks;
+    size_t Work;
+    size_t Bytes;
+
+    bool matches(const std::vector<JumpTableValueQuery> &Input,
+                 uint32_t InputDepth, size_t InputMatchBudget,
+                 std::optional<size_t> InputFiniteSymbolBudget,
+                 bool InputQueryCompletion, bool InputFeasibleMasks) const {
+      return Depth == InputDepth && MatchBudget == InputMatchBudget &&
+             FiniteSymbolBudget == InputFiniteSymbolBudget &&
+             QueryCompletion == InputQueryCompletion &&
+             FeasibleMasks == InputFeasibleMasks && Queries == Input;
+    }
+  };
+  static constexpr size_t MaxValueBatches = 64;
+  static constexpr size_t MaxValueBytes = 8 * 1024 * 1024;
+  mutable std::optional<ValueContext> QueryContext;
+  mutable std::list<ValueBatch> ValueBatches;
+  mutable size_t ValueBytes = 0;
+  mutable size_t ValueHits = 0;
+
+  static bool accountValueBytes(size_t &Bytes, size_t Count, size_t Size) {
+    if (Bytes > MaxValueBytes || Count > (MaxValueBytes - Bytes) / Size)
+      return false;
+    Bytes += Count * Size;
+    return true;
+  }
+
+  template <typename T>
+  static bool accountValueVector(size_t &Bytes, const std::vector<T> &Values,
+                                 bool Capacity) {
+    const size_t Count = Capacity ? Values.capacity() : Values.size();
+    // Include conservative allocation overhead. For vector<bool>, counting
+    // one byte per capacity bit deliberately overestimates its packed storage.
+    return !Count || (accountValueBytes(Bytes, 8, sizeof(void *)) &&
+                      accountValueBytes(Bytes, Count, sizeof(T)));
+  }
+
+  static std::optional<size_t> valueContextBytes(
+      const std::vector<RelocatedInstructionAddressOccurrence> &Addresses,
+      const std::vector<RelocatedInstructionScalarModelOccurrence> &Models,
+      bool Capacity) {
+    size_t Bytes = sizeof(ValueContext);
+    if (!accountValueVector(Bytes, Addresses, Capacity) ||
+        !accountValueVector(Bytes, Models, Capacity))
+      return std::nullopt;
+    for (const auto &Occurrence : Addresses)
+      if (!accountValueVector(Bytes, Occurrence.ArithmeticProof, Capacity))
+        return std::nullopt;
+    return Bytes;
+  }
+
+  static std::optional<size_t>
+  valueBatchBytes(const std::vector<JumpTableValueQuery> &Queries,
+                  const std::vector<bool> &Results,
+                  const std::vector<uint64_t> *Masks, bool Capacity) {
+    size_t Bytes = sizeof(ValueBatch) + 8 * sizeof(void *);
+    if (!accountValueVector(Bytes, Queries, Capacity) ||
+        !accountValueVector(Bytes, Results, Capacity) ||
+        (Masks && !accountValueVector(Bytes, *Masks, Capacity)))
+      return std::nullopt;
+    for (const auto &Query : Queries)
+      if (!accountValueVector(Bytes, Query.Alternatives, Capacity) ||
+          !accountValueVector(Bytes, Query.AlternativeFrameValueOffsets,
+                              Capacity) ||
+          !accountValueVector(Bytes, Query.AuthenticatedFrameStoreWriters,
+                              Capacity) ||
+          !accountValueVector(Bytes, Query.AuthenticatedFrameMemcpyWriters,
+                              Capacity))
+        return std::nullopt;
+    return Bytes;
+  }
+
+  bool valueContextMatches(const CFGBuilder &B) const {
+    return QueryContext && QueryContext->Image == B.CurrentImg &&
+           QueryContext->Architecture == B.CurrentImg->Arch &&
+           QueryContext->Mode == B.CurrentImg->Mode &&
+           QueryContext->Format == B.CurrentImg->Format &&
+           QueryContext->ABI == B.CurrentImg->abiFormat() &&
+           QueryContext->PointerSize == B.CurrentImg->getPointerSize() &&
+           QueryContext->Entry == B.CurrentFuncEntry &&
+           QueryContext->Addresses ==
+               B.RelocatedInstructionAddressOccurrences &&
+           QueryContext->ScalarModels ==
+               B.RelocatedInstructionScalarModelOccurrences;
+  }
+
+  void clearValueBatches() const {
+    ValueBatches.clear();
+    QueryContext.reset();
+    ValueBytes = 0;
+  }
+
+  const ValueBatch *
+  findValueBatch(const CFGBuilder &B,
+                 const std::vector<JumpTableValueQuery> &Queries,
+                 uint32_t Depth, size_t MatchBudget, bool QueryCompletion,
+                 bool FeasibleMasks, size_t RemainingWork) const {
+    if (!valueContextMatches(B)) {
+      clearValueBatches();
+      return nullptr;
+    }
+    for (auto It = ValueBatches.begin(); It != ValueBatches.end(); ++It)
+      if (It->Work <= RemainingWork &&
+          It->matches(Queries, Depth, MatchBudget,
+                      B.FiniteSetSymbolEvidenceBudgetForTesting,
+                      QueryCompletion, FeasibleMasks)) {
+        ValueBatches.splice(ValueBatches.begin(), ValueBatches, It);
+        ++ValueHits;
+        return &ValueBatches.front();
+      }
+    return nullptr;
+  }
+
+  void rememberValueBatch(const CFGBuilder &B,
+                          const std::vector<JumpTableValueQuery> &Queries,
+                          uint32_t Depth, size_t MatchBudget,
+                          bool QueryCompletion,
+                          const std::vector<bool> &Results,
+                          const std::vector<uint64_t> *Masks,
+                          size_t ColdWork) const {
+    const auto EstimatedContext =
+        valueContextBytes(B.RelocatedInstructionAddressOccurrences,
+                          B.RelocatedInstructionScalarModelOccurrences, false);
+    const auto EstimatedBatch = valueBatchBytes(Queries, Results, Masks, false);
+    if (!EstimatedContext || !EstimatedBatch ||
+        *EstimatedBatch > MaxValueBytes - *EstimatedContext)
+      return;
+    if (!valueContextMatches(B)) {
+      clearValueBatches();
+      ValueContext Context{B.CurrentImg,
+                           B.CurrentImg->Arch,
+                           B.CurrentImg->Mode,
+                           B.CurrentImg->Format,
+                           B.CurrentImg->abiFormat(),
+                           B.CurrentImg->getPointerSize(),
+                           B.CurrentFuncEntry,
+                           B.RelocatedInstructionAddressOccurrences,
+                           B.RelocatedInstructionScalarModelOccurrences};
+      const auto Bytes =
+          valueContextBytes(Context.Addresses, Context.ScalarModels, true);
+      if (!Bytes)
+        return;
+      QueryContext = std::move(Context);
+      ValueBytes = *Bytes;
+    }
+    ValueBatch Batch{Queries,         Depth,
+                     MatchBudget,     B.FiniteSetSymbolEvidenceBudgetForTesting,
+                     QueryCompletion, Masks != nullptr,
+                     Results,         Masks ? *Masks : std::vector<uint64_t>{},
+                     ColdWork,        0};
+    const auto Bytes =
+        valueBatchBytes(Batch.Queries, Batch.Results, &Batch.Masks, true);
+    const auto ContextBytes = valueContextBytes(
+        QueryContext->Addresses, QueryContext->ScalarModels, true);
+    if (!Bytes || !ContextBytes || *Bytes > MaxValueBytes - *ContextBytes)
+      return;
+    Batch.Bytes = *Bytes;
+    // LRU eviction is deterministic for the ordered stream of query batches.
+    while (!ValueBatches.empty() &&
+           (ValueBatches.size() >= MaxValueBatches ||
+            Batch.Bytes > MaxValueBytes - ValueBytes)) {
+      ValueBytes -= ValueBatches.back().Bytes;
+      ValueBatches.pop_back();
+    }
+    ValueBatches.push_front(std::move(Batch));
+    ValueBytes += *Bytes;
+  }
 
   static bool sameOp(const LowOp &A, const LowOp &B) {
     return A.Opcode == B.Opcode && A.MemoryOrdering == B.MemoryOrdering &&
@@ -2624,6 +2817,15 @@ struct CFGBuilder::ResolverGraphCache {
     return true;
   }
 };
+
+std::array<size_t, 3>
+CFGBuilder::resolverValueQueryCacheStatsForTesting() const {
+  if (!CachedResolverGraph)
+    return {};
+  return {CachedResolverGraph->ValueHits,
+          CachedResolverGraph->ValueBatches.size(),
+          CachedResolverGraph->ValueBytes};
+}
 
 //===----------------------------------------------------------------------===//
 // sliceBackForTableBase — backward data-flow slicing
@@ -4486,8 +4688,39 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   const ResolverFlowGraph &Graph =
       ReusedGraph ? ReusedGraph->Graph : *FreshGraph;
   // A cache hit pays the full cold graph charge, including storage ownership.
-  // Resource-incomplete graphs never enter the cache. Value analysis below is
-  // always replayed and may independently report analysis-incomplete.
+  // Resource-incomplete graphs never enter the cache. Reuse a complete value
+  // batch only after every ordinary graph/output charge, and only when the
+  // remaining allowance can pay its full cold value-analysis charge. A smaller
+  // allowance takes the normal path to preserve partial exhaustion behavior.
+  const size_t DefaultMatchEvidenceLimit =
+      ActiveJumpTableConsumerAudit
+          ? limits::kMaxJumpTableConsumerAuditMatchEvidenceWork
+          : limits::kMaxJumpTableValueMatchEvidenceWork;
+  const size_t InitialMatchBudget =
+      GraphWorkBudget
+          ? (LocalMatchEvidenceLimit != 0 ? LocalMatchEvidenceLimit
+                                          : DefaultMatchEvidenceLimit)
+          : limits::kMaxJumpTableEntries;
+  const size_t ValueWorkBefore = GraphWorkBudget ? *GraphWorkBudget : 0;
+  if (ReusedGraph && GraphWorkBudget)
+    if (const auto *Batch = ReusedGraph->findValueBatch(
+            *this, Queries, MaxResolverDepth, InitialMatchBudget,
+            QueryAnalysisComplete != nullptr,
+            QueryUnsignedFeasibleMasks != nullptr, *GraphWorkBudget)) {
+      *GraphWorkBudget -= Batch->Work;
+      Results = Batch->Results;
+      if (QueryAnalysisComplete)
+        std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
+                  true);
+      if (QueryUnsignedFeasibleMasks)
+        *QueryUnsignedFeasibleMasks = Batch->Masks;
+      if (AnalysisComplete)
+        *AnalysisComplete = true;
+      return Results;
+    }
+  // Pointer-named opaque values and merges have allocation-dependent lengths,
+  // hence allocation-dependent evidence charges. Do not cache those batches.
+  bool UsedPointerSymbol = false;
   // Graph construction is only the first half of one evidence query.  Keep
   // charging the same candidate-local account while reconstructing frame,
   // memory and value state, and while matching/symbolizing the resulting DAG.
@@ -6990,14 +7223,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // deliberately shared across the batch; exhaustion fails remaining queries
   // closed rather than turning attacker-controlled graph size into unbounded
   // analysis work.
-  const size_t DefaultMatchEvidenceLimit =
-      ActiveJumpTableConsumerAudit
-          ? limits::kMaxJumpTableConsumerAuditMatchEvidenceWork
-          : limits::kMaxJumpTableValueMatchEvidenceWork;
-  size_t MatchBudget = GraphWorkBudget ? (LocalMatchEvidenceLimit != 0
-                                              ? LocalMatchEvidenceLimit
-                                              : DefaultMatchEvidenceLimit)
-                                       : limits::kMaxJumpTableEntries;
+  size_t MatchBudget = InitialMatchBudget;
   bool MatchBudgetExhausted = false;
   bool SymbolBudgetExhausted = false;
   auto consumeMatchWork = [&](size_t Amount = 1) {
@@ -7185,6 +7411,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     auto unknown = [&](const ResolverValue &Node) -> symbolic::SymRef {
       if (!Node->Root.empty())
         return unknownNamed(Node->Root, uint32_t(Node->Size) * 8u);
+      UsedPointerSymbol = true;
       constexpr size_t OpaqueNameWork = 32;
       // Pay both the local dynamic string construction and its eventual
       // cleanup before the first allocation.  unknownNamed independently
@@ -7543,6 +7770,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             }
             MergeRoot = Node->Root;
           } else {
+            UsedPointerSymbol = true;
             constexpr size_t AnonymousMergeNameWork = 32;
             if (!consumeSymbolProduct(AnonymousMergeNameWork, 2)) {
               Result = {};
@@ -8644,6 +8872,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   }
   if (AnalysisComplete)
     *AnalysisComplete = Complete;
+  if (Complete && !EvidenceBudgetExhausted && !MatchBudgetExhausted &&
+      !SymbolBudgetExhausted && !UsedPointerSymbol && ReusedGraph &&
+      GraphWorkBudget)
+    ReusedGraph->rememberValueBatch(
+        *this, Queries, MaxResolverDepth, InitialMatchBudget,
+        QueryAnalysisComplete != nullptr, Results, QueryUnsignedFeasibleMasks,
+        ValueWorkBefore - *GraphWorkBudget);
   return Results;
 }
 

@@ -40,6 +40,9 @@ LowIRIndependenceContract llvmInterpreterMachineStateContract();
 /// Guarded arithmetic emits sticky definedness obligations. These require
 /// every executed admitted operation to be non-poison, a conservative
 /// restriction even when a later select or dead use could mask poison.
+/// Guest load/store alignment also emits a per-access definedness obligation;
+/// it never restricts the entry domain or grants additional accessible bytes.
+/// State-object accesses retain their separate eight-byte alignment contract.
 /// Variable shifts preserve the full unsigned count and guard it against the
 /// source width; no-wrap and exact flags add their own obligations.
 /// An initializes parameter contract is admitted only for in-object byte

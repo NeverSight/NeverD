@@ -37,6 +37,8 @@ NEVERD_KERNEL_IRQL_API(ExRaiseDatatypeMisalignment, Passive)
 NEVERD_KERNEL_IRQL_API(ProbeForRead, APC)
 NEVERD_KERNEL_IRQL_API(ProbeForWrite, APC)
 NEVERD_KERNEL_IRQL_API(ExGetPreviousMode, Any)
+NEVERD_KERNEL_IRQL_API(NtQuerySystemInformation, Passive)
+NEVERD_KERNEL_IRQL_API(ZwQuerySystemInformation, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetrequestorprocessid
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid
 NEVERD_KERNEL_IRQL_API(IoGetRequestorProcessId, Dispatch)

@@ -107,6 +107,7 @@
           "neverd_plugins_term",
           "neverd_pointer_at",
           "neverd_pointer_refs_json",
+          "neverd_prepare_function",
           "neverd_project_name",
           "neverd_proof_status_name",
           "neverd_read_bytes",
@@ -205,6 +206,56 @@
           "neverd_xrefs_from_json",
           "neverd_xrefs_scan",
           "neverd_xrefs_to_json"
+        ]
+      },
+      {
+        "owner": "web-analysis",
+        "reason": "Bounded offline web inspection is qualified separately in docs/web-analysis.md and its format profiles; these declarations do not claim native lifting or execution coverage in this ledger.",
+        "names": [
+          "neverd_web_artifacts_json",
+          "neverd_web_asar_extract_json",
+          "neverd_web_asar_records_json",
+          "neverd_web_bun_extract_json",
+          "neverd_web_bun_records_json",
+          "neverd_web_capabilities_json",
+          "neverd_web_electron_entries_analyze_json",
+          "neverd_web_electron_entry_records_json",
+          "neverd_web_electron_ipc_analyze_json",
+          "neverd_web_electron_ipc_records_json",
+          "neverd_web_electron_manifest_analyze_json",
+          "neverd_web_electron_source_analyze_json",
+          "neverd_web_electron_source_records_json",
+          "neverd_web_html_analyze_json",
+          "neverd_web_html_records_json",
+          "neverd_web_import_commit_json",
+          "neverd_web_import_preview_json",
+          "neverd_web_metadata_json",
+          "neverd_web_native_analyze_json",
+          "neverd_web_native_metadata_json",
+          "neverd_web_native_open_json",
+          "neverd_web_session_create",
+          "neverd_web_session_destroy",
+          "neverd_web_source_analyze_json",
+          "neverd_web_source_anchor_json",
+          "neverd_web_source_binding_records_json",
+          "neverd_web_source_bindings_analyze_json",
+          "neverd_web_source_bundle_records_json",
+          "neverd_web_source_bundles_analyze_json",
+          "neverd_web_source_map_analyze_json",
+          "neverd_web_source_map_lookup_json",
+          "neverd_web_source_map_segments_json",
+          "neverd_web_source_map_sources_json",
+          "neverd_web_source_module_records_json",
+          "neverd_web_source_modules_analyze_json",
+          "neverd_web_source_navigation_analyze_json",
+          "neverd_web_source_navigation_records_json",
+          "neverd_web_source_nodes_json",
+          "neverd_web_source_semantic_records_json",
+          "neverd_web_source_semantics_analyze_json",
+          "neverd_web_source_view_chunk_json",
+          "neverd_web_source_view_commit_json",
+          "neverd_web_source_view_preview_json",
+          "neverd_web_source_view_records_json"
         ]
       }
     ],
@@ -885,6 +936,13 @@
         "names": [
           "neverd mobile --internal-ios-worker"
         ]
+      },
+      {
+        "owner": "web-analysis",
+        "reason": "Bounded offline web inspection is qualified separately in docs/web-analysis.md and its format profiles; these declarations do not claim native lifting or execution coverage in this ledger.",
+        "names": [
+          "neverd web"
+        ]
       }
     ],
     "json": [
@@ -931,6 +989,54 @@
           "neverd_unwind_frame_json",
           "neverd_xrefs_from_json",
           "neverd_xrefs_to_json"
+        ]
+      },
+      {
+        "owner": "web-analysis",
+        "reason": "Bounded offline web inspection is qualified separately in docs/web-analysis.md and its format profiles; these declarations do not claim native lifting or execution coverage in this ledger.",
+        "names": [
+          "neverd_web_artifacts_json",
+          "neverd_web_asar_extract_json",
+          "neverd_web_asar_records_json",
+          "neverd_web_bun_extract_json",
+          "neverd_web_bun_records_json",
+          "neverd_web_capabilities_json",
+          "neverd_web_electron_entries_analyze_json",
+          "neverd_web_electron_entry_records_json",
+          "neverd_web_electron_ipc_analyze_json",
+          "neverd_web_electron_ipc_records_json",
+          "neverd_web_electron_manifest_analyze_json",
+          "neverd_web_electron_source_analyze_json",
+          "neverd_web_electron_source_records_json",
+          "neverd_web_html_analyze_json",
+          "neverd_web_html_records_json",
+          "neverd_web_import_commit_json",
+          "neverd_web_import_preview_json",
+          "neverd_web_metadata_json",
+          "neverd_web_native_analyze_json",
+          "neverd_web_native_metadata_json",
+          "neverd_web_native_open_json",
+          "neverd_web_source_analyze_json",
+          "neverd_web_source_anchor_json",
+          "neverd_web_source_binding_records_json",
+          "neverd_web_source_bindings_analyze_json",
+          "neverd_web_source_bundle_records_json",
+          "neverd_web_source_bundles_analyze_json",
+          "neverd_web_source_map_analyze_json",
+          "neverd_web_source_map_lookup_json",
+          "neverd_web_source_map_segments_json",
+          "neverd_web_source_map_sources_json",
+          "neverd_web_source_module_records_json",
+          "neverd_web_source_modules_analyze_json",
+          "neverd_web_source_navigation_analyze_json",
+          "neverd_web_source_navigation_records_json",
+          "neverd_web_source_nodes_json",
+          "neverd_web_source_semantic_records_json",
+          "neverd_web_source_semantics_analyze_json",
+          "neverd_web_source_view_chunk_json",
+          "neverd_web_source_view_commit_json",
+          "neverd_web_source_view_preview_json",
+          "neverd_web_source_view_records_json"
         ]
       }
     ],

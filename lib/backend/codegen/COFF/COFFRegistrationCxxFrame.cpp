@@ -20,13 +20,14 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
   if (!Proof)
     return Proof.takeError();
   const auto &States = *Proof->Source.RegistrationStates;
-  const auto &Object = States.CxxCatchObjects[0];
   coff_registration::RegistrationCxxFrameContract Contract;
   Contract.Image = &Image;
   Contract.Catch = Proof->Catch;
-  Contract.HomeOffset = int64_t(Proof->Frame.Establisher) + Object.FrameOffset;
-  Contract.ObjectSize = Object.ObjectSize;
-  Contract.Reference = Object.Reference;
+  if (const auto &Home = Proof->CatchHome) {
+    Contract.HomeOffset = Home->Offset;
+    Contract.ObjectSize = Home->ObjectSize;
+    Contract.Reference = Home->Reference;
+  }
   Contract.CallbackStack = Proof->CallbackStack;
   Contract.CallbackBlocks = Proof->CallbackBlocks;
   Contract.SavedStackOffset = int64_t(Proof->Frame.Establisher) - 16;

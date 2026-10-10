@@ -74,6 +74,8 @@ __declspec(dllimport) U8 *ExAllocatePool2(U64, U64, U32);
 __declspec(dllimport) void ExFreePoolWithTag(void *, U32);
 __declspec(dllimport) MDL *IoAllocateMdl(void *, U32, U8, U8, IRP *);
 __declspec(dllimport) void IoFreeMdl(MDL *);
+__declspec(dllimport) void MmProbeAndLockPages(MDL *, U32, U32);
+__declspec(dllimport) void MmUnlockPages(MDL *);
 __declspec(dllimport) void MmBuildMdlForNonPagedPool(MDL *);
 __declspec(dllimport) void *MmMapLockedPagesSpecifyCache(MDL *, U32, U32,
                                                          void *, U32, U32);
@@ -91,6 +93,7 @@ static U8 *Pool;
 static MDL *Descriptor;
 static volatile U64 Observed;
 static U8 LeakDescriptor;
+static U8 ImageBuffer[8192];
 
 static U8 *SystemAddress(MDL *Mdl, U32 Priority) {
   if (Mdl->MdlFlags & 5)
@@ -134,6 +137,34 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
       Temporary = IoAllocateMdl(Local, sizeof(Local), 0, 0, 0);
       IoFreeMdl(Temporary); // Allocating a descriptor does not probe its bytes.
       Temporary = IoAllocateMdl((void *)0x12345678, 64, 0, 0, 0);
+      IoFreeMdl(Temporary);
+      Temporary = IoAllocateMdl((void *)0x12345001, 0x300000, 0, 0, 0);
+      if (!Temporary || Temporary->ByteCount != 0x300000 ||
+          Temporary->ByteOffset != 1 ||
+          Temporary->Size != sizeof(MDL) + 769 * sizeof(U64))
+        Status = StatusInvalidParameter;
+      if (Temporary)
+        IoFreeMdl(Temporary);
+      ImageBuffer[17] = 0x51;
+      ImageBuffer[4112] = 0x73;
+      Temporary = IoAllocateMdl(ImageBuffer + 17, 4096, 0, 0, 0);
+      if (!Temporary) {
+        Status = StatusInvalidParameter;
+        break;
+      }
+      MmProbeAndLockPages(Temporary, 0, 1);
+      Other = SystemAddress(Temporary, 0x40000010U);
+      if (!Other || Other[0] != 0x51 || Other[4095] != 0x73) {
+        Status = StatusInvalidParameter;
+      } else {
+        Other[0] = 0x62;
+        Other[4095] = 0x84;
+        if (ImageBuffer[17] != 0x62 || ImageBuffer[4112] != 0x84)
+          Status = StatusInvalidParameter;
+      }
+      if (Other)
+        MmUnmapLockedPages(Other, Temporary);
+      MmUnlockPages(Temporary);
       IoFreeMdl(Temporary);
       break;
     case 3:
@@ -243,7 +274,7 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Ignored, IRP *Request) {
       IoFreeMdl((MDL *)Pool);
       break;
     case 30:
-      IoAllocateMdl(Pool, 0x100001, 0, 0, 0);
+      IoAllocateMdl(Pool, 0x2000000, 0, 0, 0);
       break;
     case MdlAppendChain: {
       MDL *First = IoAllocateMdl(Pool, 16, 0, 0, Request);

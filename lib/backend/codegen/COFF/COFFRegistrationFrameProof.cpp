@@ -79,7 +79,9 @@ llvm::Error validateFramePrivacy(
                                      *const_cast<llvm::Function *>(Function)));
   if (Cxx) {
     if (!Cxx->Image || !Cxx->Catch || Cxx->Catch->getFunction() != &Parent ||
-        !LogicalFrame || !Cxx->ObjectSize || Cxx->HomeOffset < 0)
+        !LogicalFrame || Cxx->HomeOffset < 0 ||
+        (!Cxx->ObjectSize &&
+         (Cxx->HomeOffset || Cxx->Reference || !Cxx->RuntimeAccesses.empty())))
       return Reject("incomplete runtime object/frame contract");
     Dominators.try_emplace(&Parent,
                            std::make_unique<llvm::DominatorTree>(
@@ -752,9 +754,10 @@ llvm::Error validateFramePrivacy(
                 return Reject("callee initialization exceeds its work budget");
         }
       }
-    Writes.emplace(Cxx->Catch,
-                   std::make_pair(Cell{LogicalFrame, Cxx->HomeOffset},
-                                  Cxx->Reference ? 4 : Cxx->ObjectSize));
+    if (Cxx->ObjectSize)
+      Writes.emplace(Cxx->Catch,
+                     std::make_pair(Cell{LogicalFrame, Cxx->HomeOffset},
+                                    Cxx->Reference ? 4 : Cxx->ObjectSize));
     std::map<Cell, unsigned> Indices;
     for (Cell Byte : Bytes)
       Indices.emplace(Byte, Indices.size());

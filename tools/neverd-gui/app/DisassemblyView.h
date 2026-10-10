@@ -77,6 +77,7 @@ private:
   std::size_t historyIndex_ = 0;
   bool restoring_ = false;
   bool graphAfterJump_ = false;
+  QMetaObject::Connection graphNavigation_;
 };
 
 } // namespace neverd::gui

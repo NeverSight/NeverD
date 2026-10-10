@@ -492,6 +492,96 @@ private slots:
     QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
   }
 
+  void graphRefreshKeepsLatestRequestedAddress_data() {
+    QTest::addColumn<QString>("refresh");
+    QTest::newRow("navigate-during-refresh") << QStringLiteral("navigate");
+    QTest::newRow("keyboard-during-refresh") << QStringLiteral("keyboard");
+    QTest::newRow("mouse-during-refresh") << QStringLiteral("mouse");
+    QTest::newRow("generation-during-load") << QStringLiteral("generation");
+    QTest::newRow("revision-during-load") << QStringLiteral("revision");
+  }
+
+  void graphJumpDuringFunctionResolutionKeepsLatestAddress() {
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("code-edits-mapped.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    const Address first = Base + 0x140;
+    const Address second = Base + 0x180;
+    const Address target = first + 2;
+    assembly->navigate(first);
+    QTRY_COMPARE(assembly->currentFunction(), std::optional<Address>(first));
+    assembly->setGraphMode(true);
+    QTRY_VERIFY(assembly->graphMode() && assembly->graph()->loaded());
+
+    // Another function first resolves through the listing. A new jump within
+    // the visible graph supersedes that still-pending resolution as well.
+    assembly->navigate(second);
+    QVERIFY(assembly->listing()->jumpPending());
+    assembly->navigate(target);
+    QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+    QTRY_VERIFY(!assembly->listing()->jumpPending());
+    QTRY_VERIFY(assembly->graph()->loaded());
+    QCOMPARE(assembly->currentFunction(), std::optional<Address>(first));
+    QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+    QCOMPARE(assembly->listing()->currentAddress(),
+             std::optional<Address>(target));
+  }
+
+  void graphRefreshKeepsLatestRequestedAddress() {
+    QFETCH(QString, refresh);
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("code-edits-mapped.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    const Address first = Base + 0x140;
+    const Address second = Base + 0x180;
+    assembly->navigate(first);
+    QTRY_COMPARE(assembly->currentFunction(), std::optional<Address>(first));
+    assembly->setGraphMode(true);
+    QTRY_VERIFY(assembly->graphMode() && assembly->graph()->loaded());
+    auto *graph = assembly->graph();
+    QSignalSpy status(graph, &GraphView::statusChanged);
+    Address target;
+    if (refresh != QLatin1String("generation") &&
+        refresh != QLatin1String("revision")) {
+      target = first + 2;
+      // A refresh retains its current nodes, so navigation can succeed before
+      // the replacement layout arrives. That layout must retain the new row.
+      graph->showFunction(first, first);
+      if (refresh == QLatin1String("navigate")) {
+        assembly->navigate(target);
+      } else if (refresh == QLatin1String("keyboard")) {
+        QTest::keyClick(graph, Qt::Key_Down);
+        QTest::keyClick(graph, Qt::Key_Down);
+      } else {
+        QVERIFY(graph->nodes().size() > 2);
+        graph->centerOn(graph->nodes().at(2).box.center());
+        QTest::mouseClick(graph, Qt::LeftButton, {},
+                          QPoint(graph->width() / 2, graph->height() / 2));
+      }
+      QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+    } else {
+      target = second + 2;
+      graph->showFunction(second, target);
+      QVERIFY(!graph->currentAddress());
+      // Background discovery or edits can refresh a function whose graph has
+      // not arrived. Preserve the requested instruction across that refresh.
+      if (refresh == QLatin1String("generation"))
+        emit bench.session.generationChanged();
+      else
+        emit bench.session.revisionChanged();
+    }
+    QTRY_VERIFY(!status.isEmpty() &&
+                status.back().front().toString().isEmpty());
+    QVERIFY(graph->loaded());
+    QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+  }
+
   void tabFromAssemblyWaitsForPagesAndUnfoldsTarget() {
     QTemporaryDir directory;
     Workbench bench;

@@ -29,7 +29,7 @@ class RealignedCallbackEvidenceTests(unittest.TestCase):
         struct.pack_into("<I", data, 0x210, 0x401000)
         struct.pack_into("<IIHH", data, 0x400, 0x1000, 12, 0x3010, 0)
         (root / "frame.obj").write_bytes(b"test object")
-        (root / "emit.xml").write_text('<testsuites tests="2"/>')
+        (root / "emit.xml").write_text('<testsuites tests="3"/>')
         capture = {"schema": 1, "evidence": "generated-realigned-callback-analysis",
                    "source_sha256": hashlib.sha256(runner.SOURCE.read_bytes()).hexdigest(),
                    "object_sha256": hashlib.sha256(b"test object").hexdigest(),
@@ -48,10 +48,60 @@ class RealignedCallbackEvidenceTests(unittest.TestCase):
             record = {"image": name, "expected_exit": expected,
                       "sha256": runner.image_digest(path)}
             if not expected:
-                record["analysis_tests"] = 1
-                (root / (Path(name).stem + ".xml")).write_text('<testsuites tests="1"/>')
+                record["analysis_tests"] = 3
+                (root / (Path(name).stem + ".xml")).write_text('<testsuites tests="3"/>')
+                record["decompilation"] = {}
+                for language in ("c", "cpp"):
+                    source = root / (Path(name).stem + ".decompiled." + language)
+                    source.write_text(self.output(language))
+                    record["decompilation"][language] = {
+                        "source": source.name,
+                        "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                        "syntax_checked": language == "c"}
             capture["images"].append(record)
         return capture
+
+    @staticmethod
+    def output(language):
+        return ("/* highir.structured_regions=1, fallback_regions=0 */\n"
+                "v1 = __neverd_x86_callback_esp(0x401000u, 0x401100u);\n"
+                "callback_increment(((frame_base - 16) & mask) - 576);\n" +
+                ("/* Native x86 callback @ 0x401100 */\ngoto L_x86_eh_after_0;\n"
+                 if language == "c" else "catch (...) {}\n"))
+
+    def test_public_output_preserves_the_callback_and_exact_call_arity(self):
+        for language in ("c", "cpp"):
+            text = self.output(language)
+            runner.validate_decompilation(text, language)
+            for before, after in (("regions=1", "regions=0"),
+                                  ("__neverd_x86_callback_esp", "unknown"),
+                                  (" - 576);", " - 576, saved_ebp);"),
+                                  ("Native x86 callback @", "unknown"),
+                                  ("catch (...)", "unknown")):
+                if before not in text:
+                    continue
+                with self.subTest(language=language, before=before), self.assertRaises(ValueError):
+                    runner.validate_decompilation(text.replace(before, after), language)
+
+    def test_replay_requires_unchanged_public_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            for mutation in range(5):
+                changed = copy.deepcopy(capture)
+                outputs = changed["images"][0]["decompilation"]
+                if mutation == 0:
+                    outputs.pop("cpp")
+                if mutation == 1:
+                    outputs["c"]["syntax_checked"] = False
+                if mutation == 2:
+                    outputs["c"]["sha256"] = "stale"
+                if mutation == 3:
+                    outputs["c"]["source"] = "../probe.decompiled.c"
+                if mutation == 4:
+                    (root / outputs["cpp"]["source"]).write_text("changed")
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    replay.validate_capture(root, changed)
 
     def test_replay_authenticates_bases_files_and_the_control_matrix(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -91,11 +141,11 @@ class RealignedCallbackEvidenceTests(unittest.TestCase):
             root = Path(directory)
             capture = self.capture(root)
             (root / "probe.xml").write_text(
-                '<testsuites tests="1"><testcase><skipped/></testcase></testsuites>')
+                '<testsuites tests="3"><testcase><skipped/></testcase></testsuites>')
             with self.assertRaises(ValueError):
                 replay.validate_capture(root, capture)
-            (root / "probe.xml").write_text('<testsuites tests="1"/>')
-            for count in (0, 1, 3):
+            (root / "probe.xml").write_text('<testsuites tests="3"/>')
+            for count in (0, 1, 2, 4):
                 (root / "emit.xml").write_text(f'<testsuites tests="{count}"/>')
                 with self.subTest(count=count), self.assertRaises(ValueError):
                     replay.validate_capture(root, capture)

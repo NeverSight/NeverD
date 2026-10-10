@@ -29,6 +29,27 @@ std::map<uint64_t, uint64_t> KernelModel::unpackAllocations() const {
       Out.emplace(Address, Size);
   for (const auto &[Address, Allocation] : Allocations)
     Out[Address] = Allocation.Size;
+  // PE metadata is readable even without a module-list call. A pointer into a
+  // modeled provider remains borrowed state; never treat the input image as
+  // such a dependency, since that is the image being recovered.
+  for (size_t I = 0; I + 1 < LoadedModules.size(); ++I) {
+    const auto &Module = LoadedModules[I];
+    uint64_t Begin = Module.Base;
+    const uint64_t End = Module.Base + Module.Size;
+    // Exact named exports have a separate import-rebinding contract. Excluding
+    // only those values preserves ordinary import cells while still exposing
+    // retained module bases, metadata and interior service-body pointers.
+    for (auto It = Exports->entries().lower_bound(Begin);
+         It != Exports->entries().end() && It->first < End; ++It) {
+      if (It->second.Kind != KernelExportRegistry::ExportKind::ModuleExport)
+        continue;
+      if (It->first > Begin)
+        Out.emplace(Begin, It->first - Begin);
+      Begin = It->first + 1;
+    }
+    if (Begin < End)
+      Out.emplace(Begin, End - Begin);
+  }
   return Out;
 }
 

@@ -4644,7 +4644,8 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
 void HighCWriter::hideX86SehRegistration(const HighFunc &Func) {
   // `_except_handler3` saves FS:[0] into a frame slot and restores it on
   // exit. The FS load/store already hide; the slot copies must not print.
-  if (Opts.TheArch != Arch::X86 || !Func.ExceptionMetadata)
+  if (Opts.TheArch != Arch::X86 || !Func.ExceptionMetadata ||
+      preservesRegistrationMemory(Func))
     return;
 
   struct Scalar {

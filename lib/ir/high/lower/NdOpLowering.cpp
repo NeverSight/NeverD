@@ -72,6 +72,8 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
   bool FeedsPhi = PhiArgVars.count(Key) > 0;
   bool HasMemoryEffect =
       CurOp.Opcode == NdOp::LOAD ||
+      CurOp.RegistrationRoot ==
+          MedOp::RegistrationRootKind::CallbackStackPointer ||
       CurOp.MemoryOrdering != NdMemoryOrdering::None ||
       CurOp.MemoryAddressSpace != NdMemoryAddressSpace::Default;
   if (!MultiUse && !IsCallResult && !FeedsPhi && !HasMemoryEffect)
@@ -81,6 +83,7 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
   S.Addr = CurOp.Addr;
   S.Dst = HighExpr::makeVar(CurOp.Output);
   S.Val = medOpToExpr(CurOp);
+  S.KeepsName = S.Val && S.Val->Kind == ExprKind::EntryRegister;
   Func.Body.push_back(std::move(S));
 }
 

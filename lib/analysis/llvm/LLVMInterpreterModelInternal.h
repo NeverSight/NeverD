@@ -99,6 +99,7 @@ class Builder {
   void pointerProjections();
   bool blockLocal(const llvm::Instruction &I);
   NdVar stateSlot(const llvm::Value *Pointer, unsigned Bytes, uint64_t Align);
+  void requireGuestAlignment(LowBlock &Out, NdVar Address, uint64_t Align);
   void requireEqual(LowBlock &Out, NdVar A, NdVar B);
   void requireRange(LowBlock &Out, NdVar Value,
                     const llvm::ConstantRange &Range);

@@ -108,6 +108,8 @@ Objective-C 接收物件事實區分方法入口的 self 與確定的類別參�
 
 `NeverDLLVMInterpreterModel` 負責獨立、有界的純量 LLVM 匯入，使用相同原始狀態 ABI。`modelLLVMInterpreterMachineStateX64` 保留真實狀態碼回傳，並產生明確的語義有效性檢查。`llvmInterpreterMachineStateContract` 提供完整觀察項與零監視位元組保持義務；入口域、記憶體及完整證明由呼叫方負責。LLVM 匯入不改變一般提升或原始碼發布，也不證明編譯器。
 
+LLVM 匯入器將每次實際執行的 guest load/store 中大於一的對齊要求，轉為針對其真實 64 位元位址的累積語義有效性義務。存取寬度及記憶體效果不變；遮罩、比較和累積操作使用既有建構預算。文字省略對齊時採用解析後的 ABI 對齊；`align 1` 不產生檢查。這不會增加入口假設或可存取位元組。狀態物件存取仍遵守獨立的八位元組對齊契約，atomic/volatile 存取仍不受支援。
+
 `modelLLVMScalarFunction` 重用相同匯入器，接受純 `noundef` 整數參數與整數回傳值（`i1/i8/i16/i32/i64`）。共用模型處理漏斗位移的端點，並以雙倍位寬乘積檢查乘法溢位約束。`checkLLVMScalarEquivalence` 透過 `SymExec` 執行兩份模型，找出控制輸入位元，窮盡其全部組合，其餘位元保持符號化。每個回傳值必須相同，每項已執行操作必須有定義；分區、路徑、節點及累計工作預算限制查詢。`SymContext::constantWindow` 提供累計查詢計費，同時保留既有單次查詢上限。拒絕結果不允許改寫。此唯讀 C++ 查詢不改變預設原始碼輸出，也不提供持久化的原生 ABI 或編譯器證明。
 
 `projectLLVMScalarResult` 透過結構或陣列的 `insertvalue` 包裝複製明確指定的整數回傳欄位及位元視窗。它保留所有參數、控制流程、純量運算、註記和 `assume` 呼叫，僅移除無用的聚合包裝，再交由共用純量模型驗證。建構與建模預算分開；不支援的契約或預算耗盡時不發布模組，也不修改輸入。狀態碼、值及保留狀態的每個必要觀察項仍須完整證明；選取欄位不建立入口、框架或原生 ABI 契約。

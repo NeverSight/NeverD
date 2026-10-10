@@ -10,6 +10,7 @@ add_neverd_component_library(NeverDLLVMFloatConvertLowering
 
 add_neverd_component_library(NeverDWindowsRegistrationFrame
   X86/RegistrationFrameLayout.cpp
+  X86/RegistrationCatch.cpp
   X86/WindowsRegistrationABI.cpp
   X86/WindowsRegistrationCallbackPlan.cpp
   X86/WindowsRegistrationCallbackStack.cpp

@@ -62,6 +62,7 @@ DisassemblyView::DisassemblyView(Session &session, const AddressSpace &space,
       updateStatus();
   });
   connect(&session_, &Session::unloaded, this, [this] {
+    disconnect(graphNavigation_);
     history_.clear();
     historyIndex_ = 0;
     status_->clear();
@@ -76,6 +77,7 @@ bool DisassemblyView::graphMode() const {
 void DisassemblyView::setGraphMode(bool graph) {
   if (graph == graphMode())
     return;
+  disconnect(graphNavigation_);
   if (graph) {
     // A jump still loading decides the function: switch once it lands.
     if (listing_->jumpPending()) {
@@ -133,6 +135,7 @@ void DisassemblyView::remember(Address address) {
 
 void DisassemblyView::navigate(Address address, bool record,
                                std::optional<Address> from) {
+  disconnect(graphNavigation_);
   if (record) {
     // Record where we were, then where we go, so Esc returns here.
     if (const auto current = from ? from : currentAddress()) {
@@ -144,18 +147,21 @@ void DisassemblyView::navigate(Address address, bool record,
   if (graphMode()) {
     if (!graph_->setCursorAddress(address)) {
       // Another function: follow it in the graph if it is code.
+      graphNavigation_ = connect(
+          listing_, &ListingView::locationChanged, this,
+          [this, address](Address) {
+            if (const auto function = listing_->currentFunction())
+              graph_->showFunction(*function, address);
+            else
+              setGraphMode(false);
+          },
+          Qt::SingleShotConnection);
       listing_->jumpTo(address);
-      QMetaObject::Connection *once = new QMetaObject::Connection;
-      *once = connect(listing_, &ListingView::locationChanged, this,
-                      [this, once, address](Address) {
-                        disconnect(*once);
-                        delete once;
-                        if (const auto function = listing_->currentFunction())
-                          graph_->showFunction(*function, address);
-                        else
-                          setGraphMode(false);
-                      });
     } else {
+      // Supersede any older function lookup, including the hidden listing's
+      // selection, when the new address is already present in this graph.
+      if (listing_->jumpPending())
+        listing_->jumpTo(address);
       emit locationChanged(address);
     }
   } else {

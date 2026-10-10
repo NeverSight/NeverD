@@ -386,8 +386,7 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
     if (ProcessorReadAdmitted && Size == PointerSize &&
         Address == ProcessorEnvironmentBase + windows::GSCurrentThreadOffset)
       return;
-    if (Address < ThunkBase + ThunkSize &&
-        (Address >= ThunkBase || Size > ThunkBase - Address)) {
+    if (KernelExportRegistry::overlapsThunk(Address, Size)) {
       Stop(DriverStopReason::UnsupportedAPI, session_diagnostic::ImportRead);
       return;
     }
@@ -546,7 +545,7 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
         Export &&
         Export->Kind == KernelExportRegistry::ExportKind::ProviderFunction;
     if (!CPU.executable(PC) ||
-        ((PC >= ThunkBase && PC < ThunkBase + ThunkSize) && !ProviderCallback))
+        (KernelExportRegistry::overlapsThunk(PC) && !ProviderCallback))
       return failure(session_diagnostic::CallbackCode);
     if (Arguments.size() > MaxCallbackArguments)
       return failure(session_diagnostic::CallbackArguments);

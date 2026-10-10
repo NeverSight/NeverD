@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconstruct realigned PE32 value/reference catches and execute each route."""
+"""Reconstruct PE32 bound/unbound catches in fixed and realigned source frames."""
 from __future__ import annotations
 
 import argparse
@@ -30,17 +30,29 @@ else:
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_realigned_rewrite_driver.cpp"
 EMITTER = ROOT / "unittests/lift/eh/WindowsRegistrationRealignedNativeTests.cpp"
+DIRECT_EMITTER = ROOT / "unittests/lift/eh/WindowsRegistrationDirectNativeTests.cpp"
 BASES = (0x400000, 0x18000000)
 ROUTES = ("original", "product", "cli-section", "cli-inplace")
-CASES = ("value", "reference", "value-control", "reference-control")
+FORMS = {
+    "value": "Value", "reference": "Reference", "unnamed-value": "UnnamedValue",
+    "unnamed-reference": "UnnamedReference", "catch-all": "CatchAll",
+    "unnamed-value-fixed": "UnnamedValueFixed",
+    "unnamed-reference-fixed": "UnnamedReferenceFixed", "catch-all-fixed": "CatchAllFixed",
+}
+KINDS = (*FORMS, "catch-all-unsigned", "catch-all-unsigned-fixed")
+CASES = (*KINDS, *(kind + "-control" for kind in KINDS))
 OBSERVATION = re.compile(r"CALLBACK ([0-9A-F]{8}) ([0-9A-F]{8}) ([0-9A-F]{8}) ([0-9A-F]{8}) ([0-9A-F]{8})\r?\n")
+
+
+def proof_count(case: str) -> int:
+    return 1 if case.removesuffix("-control").endswith("-fixed") else 3
 
 
 def file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def validate_installation(original: PE32, generated: PE32, receipt: dict) -> None:
+def validate_installation(original: PE32, generated: PE32, receipt: dict, case: str) -> None:
     if receipt.get("schema") != 1 or \
             receipt.get("evidence") != "checked-realigned-source-reconstruction" or \
             receipt.get("base") != BASES[0] or original.base != BASES[0] or \
@@ -48,6 +60,8 @@ def validate_installation(original: PE32, generated: PE32, receipt: dict) -> Non
             receipt.get("source_image_sha256") != hashlib.sha256(original.data).hexdigest() or \
             receipt.get("image_sha256") != hashlib.sha256(generated.data).hexdigest():
         raise ValueError("realigned installation lost its proved image identity")
+    if receipt.get("source_frame") != ("direct" if proof_count(case) == 1 else "realigned"):
+        raise ValueError("source receipt lost its expected frame coordinate")
     entry = original.entry(b"callback_parent")
     if entry != receipt["source_begin"] or generated.entry(b"callback_parent") != entry:
         raise ValueError("realigned installation changed the exported entry")
@@ -122,39 +136,51 @@ def main() -> int:
         libraries, report["runtime_libraries"] = load_libraries(args.runtime_libs.resolve())
         report["source_sha256"] = file_digest(SOURCE)
         report["emitter_sha256"] = file_digest(EMITTER)
+        report["direct_emitter_sha256"] = file_digest(DIRECT_EMITTER)
         test, patch = args.test_binary.resolve(), args.patch_binary.resolve()
-        for kind in ("value", "reference"):
-            run([test, "--gtest_filter=WindowsRegistrationRealignedNative.Emits" + kind.title() + "Callback",
+        run([test, "--gtest_filter=WindowsRegistrationCatch.*",
+             "--gtest_output=xml:" + str(out / "catch-projection.xml")])
+        if require_test_result(out / "catch-projection.xml") != 1:
+            raise ValueError("catch projection proof test missing")
+        for kind, test_name in FORMS.items():
+            run([test, "--gtest_filter=WindowsRegistrationRealignedNative.Emits" + test_name + "Callback",
                  "--gtest_output=xml:" + str(out / (kind + "-emit.xml"))],
                 {"NEVERD_REGISTRATION_REALIGNED_OBJECT": str(out / (kind + ".obj"))})
             if require_test_result(out / (kind + "-emit.xml")) != 1:
                 raise ValueError("realigned emission test missing")
         report["objects"] = {kind: file_digest(out / (kind + ".obj"))
-                             for kind in ("value", "reference")}
+                             for kind in FORMS}
         for name in CASES:
-            kind = name.split("-")[0]
+            kind = name.removesuffix("-control")
+            object_kind = kind.replace("-unsigned", "")
             case = out / name
             case.mkdir(exist_ok=True)
             run([compiler, "--target=i686-pc-windows-msvc", "-fms-extensions", "-fexceptions",
                  "-fcxx-exceptions", "-fno-omit-frame-pointer", "-O1",
                  "-DREFERENCE_CATCH=" + str(int(kind == "reference")),
+                 "-DUNSIGNED_THROW=" + str(int("-unsigned" in kind)),
                  "-DEXPECTED_RESULT=" + ("8" if name.endswith("-control") else "7"),
                  "-c", SOURCE, "-o", case / "driver.obj"])
             original = case / "original.exe"
             product = case / "product.exe"
             run([linker, "/entry:mainCRTStartup", "/nodefaultlib", "/machine:x86", "/subsystem:console",
                  "/fixed:no", "/dynamicbase:no", "/out:" + str(original),
-                 case / "driver.obj", out / (kind + ".obj"), *libraries])
-            run([test, "--gtest_filter=WindowsRegistrationRealignedNative.InputPE32ReconstructsTheSourceFrame",
+                 case / "driver.obj", out / (object_kind + ".obj"), *libraries])
+            checks = "WindowsRegistrationRealignedNative.InputPE32ReconstructsTheSourceFrame"
+            if proof_count(name) == 3:
+                checks += (":WindowsRegistrationHighCallback.InputPE32BindsCurrentCallbackRoots:"
+                           "WindowsRegistrationHighCallback.InputPE32CollectsTheWholeCallbackCFG")
+            run([test, "--gtest_filter=" + checks,
                  "--gtest_output=xml:" + str(case / "rewrite.xml")],
                 {"NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32": str(original),
+                 "NEVERD_REGISTRATION_REALIGNED_PE32": str(original),
                  "NEVERD_REGISTRATION_REALIGNED_OUTPUT_PE32": str(product),
                  "NEVERD_REGISTRATION_REALIGNED_RECEIPT": str(case / "contract.json"),
                  "NEVERD_REGISTRATION_OUTPUT_IR": str(case / "source.ll")})
-            if require_test_result(case / "rewrite.xml") != 1:
-                raise ValueError("realigned reconstruction test missing")
+            if require_test_result(case / "rewrite.xml") != proof_count(name):
+                raise ValueError("realigned reconstruction or HighIR callback test missing")
             receipt = json.loads((case / "contract.json").read_text())
-            validate_installation(PE32(original.read_bytes()), PE32(product.read_bytes()), receipt)
+            validate_installation(PE32(original.read_bytes()), PE32(product.read_bytes()), receipt, name)
             for mode in ("section", "inplace"):
                 run([patch, "patch", original, "--from-ir=" + str(case / "source.ll"),
                      "--mode=" + mode, "--no-opt", "-o", case / ("cli-" + mode + ".exe")])

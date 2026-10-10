@@ -55,21 +55,22 @@ GraphView::GraphView(Session &session, QWidget *parent)
     updateMetrics();
     // Node sizes depend on the font: lay the graph out again.
     if (before != lineHeight_ && function_)
-      showFunction(*function_, currentAddress());
+      showFunction(*function_, pendingCursor_);
     update();
   });
   connect(&session_, &Session::revisionChanged, this, [this] {
     if (function_)
-      showFunction(*function_, currentAddress());
+      showFunction(*function_, pendingCursor_);
   });
   connect(&session_, &Session::generationChanged, this, [this] {
     if (function_)
-      showFunction(*function_, currentAddress());
+      showFunction(*function_, pendingCursor_);
   });
   connect(&session_, &Session::unloaded, this, [this] {
     nodes_.clear();
     edges_.clear();
     function_.reset();
+    pendingCursor_.reset();
     waiting_ = false;
     update();
     emit viewChanged();
@@ -307,6 +308,7 @@ bool GraphView::setCursorAddress(Address address) {
     cursorNode_ = n;
     cursorRow_ = best;
     cursorColumn_ = 0;
+    pendingCursor_ = address;
     ensureCursorVisible();
     update();
     return true;
@@ -377,8 +379,10 @@ void GraphView::moveCursor(int node, int row) {
   cursorRow_ =
       std::clamp(row, 0, std::max(0, int(nodes_[node].rows.size()) - 1));
   ensureCursorVisible();
-  if (const auto address = currentAddress())
+  if (const auto address = currentAddress()) {
+    pendingCursor_ = address;
     emit locationChanged(*address);
+  }
   update();
 }
 
@@ -591,8 +595,10 @@ void GraphView::mousePressEvent(QMouseEvent *event) {
       if (event->button() == Qt::LeftButton)
         highlight_ = nodes_[node].rows[row].styled.tokenAt(cursorColumn_);
     }
-    if (const auto address = currentAddress())
+    if (const auto address = currentAddress()) {
+      pendingCursor_ = address;
       emit locationChanged(*address);
+    }
     update();
   }
 }

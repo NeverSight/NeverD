@@ -166,22 +166,40 @@ getCheckedCOFFRegistrationCxxTableReceipt(const llvm::Function &Function,
     return Object.takeError();
   const auto *Type = llvm::dyn_cast<llvm::GlobalVariable>(
       Pad->getArgOperand(0)->stripPointerCasts());
-  if (!Type || !Type->isDeclaration() || !Type->hasExternalLinkage() ||
-      !Object->Frame || Word(HandlerMap) != Catch.Adjectives ||
-      Word(HandlerMap + 4) != Catch.TypeDescriptorVA ||
-      int32_t(Word(HandlerMap + 8)) != Layout.Frame[0] + Layout.Frame[2] ||
-      Layout.Frame[2] != Object->Offset || Layout.Frame[3] != Object->Size)
-    return rejectCxx("catch row changed its type or object subfield");
-  const auto Size =
-      Object->Frame->getAllocationSize(Function.getParent()->getDataLayout());
-  if (!Size || Size->isScalable() ||
-      Size->getFixedValue() != uint64_t(Layout.Frame[1]))
-    return rejectCxx("catch row changed its whole-frame allocation");
-  llvm::SmallString<64> TypeSymbol;
-  llvm::Mangler Mangler;
-  Mangler.getNameWithPrefix(TypeSymbol, Type, false);
-  if (!Pointer(HandlerMap + 4, TypeSymbol, Catch.TypeDescriptorVA))
-    return rejectCxx("typed catch lost the original RTTI pointer identity");
+  if (Word(HandlerMap) != Catch.Adjectives ||
+      Word(HandlerMap + 4) != Catch.TypeDescriptorVA)
+    return rejectCxx("catch row changed its type or adjectives");
+  const auto *Section = coff_registration::sectionAt(Compiled, HandlerMap, 16,
+                                                     SectionKind::ReadOnlyData);
+  if (!Section)
+    return rejectCxx("catch row has no unique table extent");
+  if (Catch.CatchObjectOffset) {
+    if (!Object->Frame ||
+        int32_t(Word(HandlerMap + 8)) != Layout.Frame[0] + Layout.Frame[2] ||
+        Layout.Frame[2] != Object->Offset || Layout.Frame[3] != Object->Size)
+      return rejectCxx("catch row changed its object subfield");
+    const auto Size =
+        Object->Frame->getAllocationSize(Function.getParent()->getDataLayout());
+    if (!Size || Size->isScalable() ||
+        Size->getFixedValue() != uint64_t(Layout.Frame[1]))
+      return rejectCxx("catch row changed its whole-frame allocation");
+  } else if (Object->Frame || Object->Offset || Object->Size ||
+             Layout.Frame != std::array<int64_t, 4>{} || Word(HandlerMap + 8) ||
+             !coff_registration::hasNoFixup(*Section, HandlerMap + 8, 4)) {
+    return rejectCxx("unbound catch acquired an object home");
+  }
+  if (Catch.TypeDescriptorVA) {
+    if (!Type || !Type->isDeclaration() || !Type->hasExternalLinkage())
+      return rejectCxx("typed catch lost its external RTTI declaration");
+    llvm::SmallString<64> TypeSymbol;
+    llvm::Mangler Mangler;
+    Mangler.getNameWithPrefix(TypeSymbol, Type, false);
+    if (!Pointer(HandlerMap + 4, TypeSymbol, Catch.TypeDescriptorVA))
+      return rejectCxx("typed catch lost the original RTTI pointer identity");
+  } else if (!llvm::isa<llvm::ConstantPointerNull>(Pad->getArgOperand(0)) ||
+             !coff_registration::hasNoFixup(*Section, HandlerMap + 4, 4)) {
+    return rejectCxx("catch-all acquired a typed RTTI pointer");
+  }
   auto &Mapping = Receipt.SourceToGeneratedStates;
   Mapping.emplace(-1, -1);
   Mapping.emplace(Try.TryLow, TryLow);

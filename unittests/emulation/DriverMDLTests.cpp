@@ -161,8 +161,9 @@ TEST(DriverMDL, MalformedChainsAndOriginalDirectReplacementFailExplicitly) {
 }
 
 TEST(DriverMDL, InvalidBufferLengthsFailExplicitly) {
-  for (unsigned Action : {25u, 26u, 30u})
+  for (unsigned Action : {25u, 26u})
     expectRejected(Action, "nonempty, nonoverflowing");
+  expectRejected(30, "16-bit size");
 }
 
 TEST(DriverMDL, UnloadDetectsLeakedDescriptorEvenAfterBackingPoolIsFreed) {

@@ -25,6 +25,8 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -463,10 +465,9 @@ codeRangesMatching(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
                    Pred Live,
                    const RegistrationStateAnalysis *Registration = nullptr) {
   if (EH.Registration) {
-    // Runtime coordinates and catch resumption do not yet project the full
-    // realigned callback body, including its private stack, into a clause.
-    // Keep its handler and continuation annotations until that proof exists.
-    if (!Registration || EH.Registration->RealignedFrame)
+    if (!Registration ||
+        (EH.Registration->RealignedFrame &&
+         !realignedRegistrationFrameCoordinate(EH, Registration)))
       return {};
     auto Ranges = registrationRangesWhere(*Registration, Live);
     return Ranges ? std::move(*Ranges) : std::vector<ExceptionAddressRange>{};
@@ -631,6 +632,13 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
   const CxxExceptionInfo &Cxx = *EH.Cxx;
   for (uint32_t TryIndex = 0; TryIndex < Cxx.TryBlocks.size(); ++TryIndex) {
     const CxxTryBlock &Try = Cxx.TryBlocks[TryIndex];
+    if (EH.Registration && EH.Registration->RealignedFrame &&
+        llvm::any_of(Try.Handlers, [&](const auto &Catch) {
+          return !registrationCallbackRegion(Med, Catch.HandlerVA);
+        })) {
+      ++Rejected;
+      continue;
+    }
     auto Ranges =
         codeRangesForStates(EH, Cxx, Try.TryLow, Try.TryHigh, Registration);
     const bool SplitRegistration = EH.Registration && Ranges.size() > 1;
@@ -722,6 +730,12 @@ void addCxxCleanupOnlyCandidates(const ExceptionFunction &EH,
     const CxxUnwindAction &Action = Cxx.UnwindMap[State];
     if (Action.ActionVA == 0 || coveredByTry(State))
       continue;
+    // A cleanup needs its own entry/return ABI proof before it can supply a
+    // realigned clause body. Catch projection does not establish that ABI.
+    if (EH.Registration && EH.Registration->RealignedFrame) {
+      ++Rejected;
+      continue;
+    }
     std::vector<ExceptionAddressRange> Ranges =
         codeRangesForStates(EH, Cxx, State, State, Registration);
     if (Ranges.size() != 1 || !Ranges.front().isValid()) {
@@ -1314,13 +1328,14 @@ std::optional<va_t> windowsClauseBodyTarget(const HighEHClause &Clause) {
   return std::nullopt;
 }
 
-/// The native block at \p Target when it can leave the function body: one
-/// block that only the exception dispatcher enters.  It may not overlap a
+/// The native body at \p Target when it can leave the function body: a
+/// checked registration callback CFG, or a single block entered only by the
+/// exception dispatcher. It may not overlap a
 /// guarded range, except that with \p TryRange (the Windows SEH try the block
 /// becomes a clause body of) every SEH range must hold both the block and the
 /// try, or neither: a clause body is guarded by the trys around its statement,
 /// so the block keeps exactly the protection it had.
-std::optional<ExceptionAddressRange>
+std::optional<AddressSet>
 uniqueHandlerBlockRange(const MedFunc &Med, const ExceptionFunction &EH,
                         va_t Target,
                         const std::vector<RegionCandidate> &ProtectedRegions,
@@ -1328,42 +1343,59 @@ uniqueHandlerBlockRange(const MedFunc &Med, const ExceptionFunction &EH,
   if (Target == 0 || Target == InvalidVA)
     return std::nullopt;
 
-  const MedBlock *Match = nullptr;
-  for (const MedBlock &Block : Med.Blocks) {
-    if (Target < Block.StartAddr || Target >= Block.EndAddr)
-      continue;
-    if (Match && Match != &Block)
+  std::optional<RegistrationCallbackRegion> Callback;
+  if (EH.Registration && EH.Cxx)
+    Callback = registrationCallbackRegion(Med, Target);
+  std::vector<ExceptionAddressRange> Ranges;
+  if (Callback) {
+    Ranges = std::move(Callback->Ranges);
+  } else {
+    if (EH.Registration && EH.Registration->RealignedFrame)
       return std::nullopt;
-    Match = &Block;
-  }
-  // Normal flow may share the handler's code (RtlGuardIsValidStackPointer
-  // falls into its `xor eax, eax`).  Moving that block into the __except
-  // body would take it away from the ordinary path.
-  if (!Match || !Match->Preds.empty())
-    return std::nullopt;
+    const MedBlock *Match = nullptr;
+    for (const MedBlock &Block : Med.Blocks) {
+      if (Target < Block.StartAddr || Target >= Block.EndAddr)
+        continue;
+      if (Match && Match != &Block)
+        return std::nullopt;
+      Match = &Block;
+    }
+    // Normal flow may share the handler's code (RtlGuardIsValidStackPointer
+    // falls into its `xor eax, eax`).  Moving that block into the __except
+    // body would take it away from the ordinary path.
+    if (!Match || !Match->Preds.empty())
+      return std::nullopt;
 
-  ExceptionAddressRange Range{Match->StartAddr, Match->EndAddr};
-  if (!Range.isValid() || !EH.ownsCode(Range))
-    return std::nullopt;
-  for (const RegionCandidate &Candidate : ProtectedRegions) {
-    const bool SameGuard = TryRange && Candidate.Kind == StmtKind::SEHTry &&
-                           Candidate.Cover.empty();
-    // The try's own range and its split parts hold its body, never a clause.
-    const bool AroundTry = SameGuard && Candidate.Range.contains(*TryRange) &&
-                           (Candidate.Range.Begin != TryRange->Begin ||
-                            Candidate.Range.End != TryRange->End);
-    const bool HasRegistrationParts =
-        EH.Registration && Candidate.Kind == StmtKind::CxxTry &&
-        Candidate.HasTryStates && !Candidate.Cover.empty();
-    const bool Overlaps =
-        !HasRegistrationParts
-            ? Range.overlaps(Candidate.Range)
-            : llvm::any_of(Candidate.Cover,
-                           [&](const auto &P) { return Range.overlaps(P); });
-    if (AroundTry ? !Candidate.Range.contains(Range) : Overlaps)
-      return std::nullopt;
+    Ranges.push_back({Match->StartAddr, Match->EndAddr});
   }
-  return Range;
+  for (const auto &Range : Ranges) {
+    if (!Range.isValid() || !EH.ownsCode(Range))
+      return std::nullopt;
+    for (const RegionCandidate &Candidate : ProtectedRegions) {
+      const bool SameGuard = TryRange && Candidate.Kind == StmtKind::SEHTry &&
+                             Candidate.Cover.empty();
+      // The try's own range and its split parts hold its body, never a clause.
+      const bool AroundTry = SameGuard && Candidate.Range.contains(*TryRange) &&
+                             (Candidate.Range.Begin != TryRange->Begin ||
+                              Candidate.Range.End != TryRange->End);
+      const bool HasRegistrationParts =
+          EH.Registration && Candidate.Kind == StmtKind::CxxTry &&
+          Candidate.HasTryStates && !Candidate.Cover.empty();
+      const bool Overlaps =
+          !HasRegistrationParts
+              ? Range.overlaps(Candidate.Range)
+              : llvm::any_of(Candidate.Cover,
+                             [&](const auto &P) { return Range.overlaps(P); });
+      if (AroundTry ? !Candidate.Range.contains(Range) : Overlaps)
+        return std::nullopt;
+    }
+  }
+  if (!Callback)
+    return AddressSet(Ranges.front());
+  const ExceptionAddressRange Span{Ranges.front().Begin, Ranges.back().End};
+  AddressSet Result(Span, std::move(Ranges));
+  Result.SplitScope = true;
+  return Result;
 }
 
 /// Whether \p S is a plain statement with no address.  Nothing jumps to it,
@@ -1631,6 +1663,10 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     const bool SplitRegistrationCxx =
         EH.Registration && Candidate.Kind == StmtKind::CxxTry &&
         Candidate.HasTryStates && !Candidate.Cover.empty();
+    const bool SeparateRegistrationCxx =
+        SplitRegistrationCxx ||
+        (EH.Registration && EH.Registration->RealignedFrame &&
+         Candidate.Kind == StmtKind::CxxTry);
     std::optional<std::vector<HighStmt>> OriginalBody;
     bool RegionInstalled = false;
     auto RestoreBody = llvm::scope_exit([&] {
@@ -1639,7 +1675,7 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     });
     std::vector<std::vector<HighStmt>> SeparatedBodies(
         Candidate.Clauses.size());
-    if (SplitRegistrationCxx) {
+    if (SeparateRegistrationCxx) {
       bool Exhausted = SplitCopyBudget == 0;
       if (!Exhausted)
         walkStmts(Func.Body, [&](const HighStmt &) {
@@ -1669,6 +1705,20 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
             !highStmtEndsItsBlock(SeparatedBodies[C].back())) {
           Complete = false;
           break;
+        }
+        // A closed native CFG is not enough if earlier structuring scattered
+        // its statements into several lists. Move the complete callback from
+        // its actual entry, or restore the original function transactionally.
+        if (EH.Registration->RealignedFrame) {
+          bool Left = SeparatedBodies[C].front().Addr != Clause.HandlerVA;
+          walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+            Left |= Stmt.Addr != 0 && Stmt.Addr != InvalidVA &&
+                    Range->contains(Stmt.Addr);
+          });
+          if (Left) {
+            Complete = false;
+            break;
+          }
         }
       }
       if (!Complete) {
@@ -1863,10 +1913,9 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
       std::optional<va_t> Target = ClauseTargets[ClauseIndex];
       if (!Target || WindowsTargetUses[*Target] - JoinedParts != 1)
         continue;
-      std::optional<ExceptionAddressRange> HandlerRange =
-          uniqueHandlerBlockRange(
-              Med, EH, *Target, Candidates,
-              Candidate.Kind == StmtKind::SEHTry ? &Candidate.Range : nullptr);
+      const auto HandlerRange = uniqueHandlerBlockRange(
+          Med, EH, *Target, Candidates,
+          Candidate.Kind == StmtKind::SEHTry ? &Candidate.Range : nullptr);
       if (!HandlerRange)
         continue;
       size_t HandlerAt = 0;
@@ -1967,9 +2016,8 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
             Clause.FilterOrActionVA == 0 ||
             Clause.FilterOrActionVA == Clause.HandlerVA)
           continue;
-        std::optional<ExceptionAddressRange> FilterRange =
-            uniqueHandlerBlockRange(Med, EH, Clause.FilterOrActionVA,
-                                    Candidates);
+        const auto FilterRange = uniqueHandlerBlockRange(
+            Med, EH, Clause.FilterOrActionVA, Candidates);
         if (!FilterRange)
           continue;
         size_t FilterAt = 0;

@@ -295,6 +295,14 @@ class Allowance:
 
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
+        path="LICENSES/bun/LICENSE.md",
+        rule="provenance-phrase",
+        reason=(
+            "Verbatim upstream license credits link to the original project; "
+            "the required notice is not a NeverD implementation claim."
+        ),
+    ),
+    Allowance(
         path="include/neverd/sbf/solana/SBFAnchorNames.def",
         rule="foreign-project",
         reason=(

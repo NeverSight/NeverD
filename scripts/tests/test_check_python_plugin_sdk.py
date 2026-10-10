@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,11 @@ class PythonPluginSDKAuditTests(unittest.TestCase):
         source = (audit.ROOT / "lib" / "sdk" / "CMakeLists.txt").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("copy_directory", source)
+        # Dependency notice trees are copied verbatim. SDK package sources must
+        # still use the explicit file lists below so caches cannot be shipped.
+        directory_sources = re.findall(r'\bcopy_directory\s+("[^"]*"|\S+)', source)
+        for directory in directory_sources:
+            self.assertRegex(directory, r'^"\$\{CMAKE_SOURCE_DIR\}/LICENSES/[^"\r\n]+"$')
         self.assertIn("$<TARGET_FILE_DIR:neverd_shared>/sdk", source)
         self.assertNotIn("${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk", source)
         for staged_path in (

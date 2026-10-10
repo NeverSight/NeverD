@@ -69,6 +69,22 @@ inline bool absolutePointer(const CompiledFixupReference &Fixup) {
          !Fixup.Symbol.empty() && Fixup.SubtractSymbol.empty();
 }
 
+/// A literal table field must remain literal after PE rebasing as well.
+inline bool hasNoFixup(const CompiledSection &Section, uint64_t VA,
+                       uint64_t Size) {
+  if (VA < Section.VA || !rangeInBounds(VA - Section.VA, Size, Section.Size))
+    return false;
+  for (const auto &Fixup : Section.FixupReferences) {
+    const uint64_t Width =
+        Fixup.BitWidth ? (uint64_t(Fixup.BitWidth) + 7) / 8 : 8;
+    if (!rangeInBounds(Fixup.Offset, Width, Section.Size) ||
+        (Fixup.Offset < VA - Section.VA + Size &&
+         VA - Section.VA < Fixup.Offset + Width))
+      return false;
+  }
+  return true;
+}
+
 inline bool exactPointerFixup(const CompiledSection &Section, uint64_t VA,
                               llvm::StringRef Symbol, uint64_t Target) {
   const CompiledFixupReference *Found = nullptr;

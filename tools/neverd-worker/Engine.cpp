@@ -869,11 +869,27 @@ void Engine::prepareFunction(std::uint64_t address) {
     analyze();
     return;
   }
-  // neverd_decompile() restricts the session pipeline to this entry and
-  // replaces a previous restriction; IR, CFG and LLVM views then read it.
-  (void)ownedString(neverd_decompile(session_, address));
-  preparedFunction_ = address;
+  // A failed switch may have already discarded the preceding pipeline.
+  // Never leave its old address marked prepared after the call fails.
+  preparedFunction_.reset();
   textKey_.clear();
+  // Preparation shares the decompiler's entry/handler checks but emits no
+  // discarded PlainC text before the requested source, IR or CFG view.
+  using PrepareFunction = int (*)(neverd_session_t, neverd_va_t);
+  static const auto prepare =
+      engineSymbol<PrepareFunction>("neverd_prepare_function");
+  if (prepare) {
+    if (!prepare(session_, address)) {
+      const auto message = error();
+      throw Error("analysis_failed",
+                  message.empty() ? "Function analysis failed" : message);
+    }
+  } else {
+    // Older engines expose preparation through their decompiler alone.
+    // Preserve its behavior: an unavailable source need not mean missing IR.
+    (void)ownedString(neverd_decompile(session_, address));
+  }
+  preparedFunction_ = address;
 }
 Listing &Engine::newListing() {
   listing_ = std::make_unique<Listing>(session_);

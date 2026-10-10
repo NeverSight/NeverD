@@ -61,6 +61,7 @@ public:
 
 namespace detail {
 struct ResolverGraphCacheTestAccess;
+struct X87CallGraphCacheTestAccess;
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
 using I386GOTOFFAmbiguityReplayKey = std::tuple<va_t, va_t, int, int, va_t>;
@@ -646,9 +647,16 @@ private:
 } // namespace detail
 
 class X87CallEffectIndex;
+class X87CallGraphCache;
+/// Share bounded immutable x87 graph facts during one unchanged-image
+/// operation, including explicit projection exclusions of complete CFGs.
+/// Replace the cache when image bytes/metadata or borrowed analysis indexes
+/// change.
+std::shared_ptr<X87CallGraphCache> createX87CallGraphCache();
 
 class CFGBuilder {
   friend class X87CallEffectIndex;
+  friend class X87CallGraphCache;
 
 public:
   /// Build CFG for a single function starting at EntryAddr.
@@ -714,6 +722,14 @@ public:
   /// metadata.
   void setExecutableCodeOwnerIndex(const ExecutableCodeOwnerIndex *Index) {
     ExecutableCodeOwners = Index;
+  }
+  /// Reuse x87 machine graphs and deterministic projection exclusions across
+  /// builders of one immutable image.
+  /// Proof traversal and its budgets remain private to each builder. Borrowed
+  /// index identities and complete entry/protection inventories bind each
+  /// graph.
+  void setX87CallGraphCache(std::shared_ptr<X87CallGraphCache> Cache) {
+    SharedX87CallGraphs = std::move(Cache);
   }
   /// Provide exception-metadata-proven continuation addresses owned by the
   /// function passed to build().  These are intentionally owner-scoped rather
@@ -992,10 +1008,16 @@ public:
 
 private:
   friend struct detail::ResolverGraphCacheTestAccess;
+  friend struct detail::X87CallGraphCacheTestAccess;
+  std::array<size_t, 3> x87CallGraphCacheStatsForTesting() const;
+  std::optional<int> x87CallEffectForTesting(const BinaryImage &Image,
+                                             va_t Entry, size_t &Remaining,
+                                             unsigned Depth = 0);
   struct ResolverGraphCache;
   // One immutable, size-bounded graph. The incomplete type keeps proof-graph
   // implementation and arena ownership inside the resolver translation unit.
   mutable std::shared_ptr<const ResolverGraphCache> CachedResolverGraph;
+  std::array<size_t, 3> resolverValueQueryCacheStatsForTesting() const;
 
   struct InsnRecord {
     va_t Addr;
@@ -1065,6 +1087,7 @@ private:
   void fixupFpuStack(LowFunc &Func);
   bool SkipX87StackFixup = false;
   std::shared_ptr<X87CallEffectIndex> X87CallEffects;
+  std::shared_ptr<X87CallGraphCache> SharedX87CallGraphs;
 
   /// Whether \p Target is the entry of a *different* known function — i.e. an
   /// unconditional direct branch to it is a tail call, not intra-function flow.
@@ -1304,6 +1327,8 @@ private:
     /// Fold pure, exactly sized scalar AND/OR/SHL nodes while proving a
     /// constant at this use. Other relations retain producer identity.
     bool FoldScalarConstantOps = false;
+
+    bool operator==(const JumpTableValueQuery &) const = default;
   };
 
   struct JumpTableFrameAddressUse {

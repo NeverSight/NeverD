@@ -1313,6 +1313,7 @@ add_neverd_unittest(NeverDNativeDriverTests
   NO_PRETTY_VALUES
   DriverNativeExecutionTests.cpp
   DriverTimestampTests.cpp
+  DriverImageMemoryTests.cpp
   DriverSchedulingTests.cpp
   DriverThreadPriorityTests.cpp
   DriverMutexThreadTests.cpp

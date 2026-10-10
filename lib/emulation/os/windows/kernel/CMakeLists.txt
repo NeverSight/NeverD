@@ -1,5 +1,7 @@
 target_sources(NeverDEmulation PRIVATE
   KernelExportRegistry.cpp
+  KernelModuleImages.cpp
+  KernelSystemInformation.cpp
   KernelException.cpp
   KernelFramework.cpp
   KernelFrameworkDispatch.cpp

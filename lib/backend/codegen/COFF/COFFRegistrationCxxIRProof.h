@@ -8,6 +8,7 @@
 #define NEVERD_COFFREGISTRATIONCXXIRPROOF_H
 #include "COFFRegistrationIRProof.h"
 
+#include "neverd/backend/llvm/X86RegistrationCatch.h"
 #include "neverd/ir/low/LowIR.h"
 
 namespace neverd {
@@ -26,6 +27,7 @@ struct CxxIRControlProof {
   LowFunc Source;
   RegistrationFrame Frame;
   const llvm::CatchPadInst *Catch = nullptr;
+  std::optional<X86RegistrationCatchHome> CatchHome;
   const llvm::AllocaInst *CallbackStack = nullptr;
   std::set<const llvm::BasicBlock *> CallbackBlocks;
   std::map<int, SourceSegment> Segments;

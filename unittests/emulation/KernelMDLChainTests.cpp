@@ -522,6 +522,38 @@ TEST_F(KernelMDLChain, KernelPoolLocksPreserveResidencyAndRejectEarlyFree) {
   call("ExFreePoolWithTag", {Paged, 0});
 }
 
+TEST_F(KernelMDLChain, MetadataCapacityIsIndependentOfTheDescribedBuffer) {
+  constexpr uint64_t Buffer = 0x180000123;
+  constexpr uint32_t Length = 3 * profile::KernelArenaSize;
+  // Allocation describes a range without probing, mapping or copying it.
+  EXPECT_FALSE(take(Memory->canAccess(Buffer, Length, Read)));
+  const auto MDL = call("IoAllocateMdl", {Buffer, Length, 0, 0, 0});
+  ASSERT_NE(MDL, 0u);
+  const uint64_t Pages =
+      ((Buffer & (profile::PageSize - 1)) + Length + profile::PageSize - 1) /
+      profile::PageSize;
+  EXPECT_EQ(get(MDL + MDLSizeOffset, 2),
+            MDLSize + Pages * profile::PointerSize);
+  EXPECT_EQ(get(MDL + MDLByteCountOffset, 4), Length);
+  EXPECT_EQ(get(MDL + MDLByteOffsetOffset, 4), 0x123u);
+  EXPECT_FALSE(take(Memory->canAccess(Buffer, Length, Read)));
+  rejected(Model->validateGuestAccess(MDL + MDLSize, 8, false), "unbuilt");
+  call("IoFreeMdl", {MDL});
+}
+
+TEST_F(KernelMDLChain, DescriptorCapacityIncludesAnUnalignedLastPage) {
+  constexpr uint64_t Capacity = (UINT16_MAX - MDLSize) / profile::PointerSize;
+  constexpr uint64_t Length = Capacity * profile::PageSize;
+  const auto MDL = call("IoAllocateMdl", {0, Length, 0, 0, 0});
+  ASSERT_NE(MDL, 0u);
+  EXPECT_EQ(get(MDL + MDLSizeOffset, 2),
+            MDLSize + Capacity * profile::PointerSize);
+  call("IoFreeMdl", {MDL});
+  rejected(Model->call("IoAllocateMdl", {1, Length, 0, 0, 0}), "16-bit size");
+  rejected(Model->call("IoAllocateMdl", {0, Length + 1, 0, 0, 0}),
+           "16-bit size");
+}
+
 TEST_F(KernelMDLChain,
        KernelProbeFaultAndReadLockKeepDescriptorAndAccessContract) {
   const auto Paged =
@@ -1330,6 +1362,164 @@ TEST_F(KernelMDLChain, NativeInvalidPageAccessFailsBeforeAllocatingRequest) {
   complete(IRP);
   success(Model->recordDispatchReturn(IRP, StatusSuccess));
   success(Model->finalizeRequest(IRP));
+}
+class KernelImageMDL : public KernelMDLChain {
+protected:
+  uint64_t ImageBase = 0;
+
+  void initializeImage(uint64_t Base, bool Gap = false) {
+    Model.reset();
+    Memory = take(UnicornBackend::create(8 * 1024 * 1024));
+    ASSERT_TRUE(Memory);
+    Result = DriverResult{};
+    ImageBase = Base;
+    DriverImage Image;
+    Image.Base = Base;
+    Image.Entry = Base + (Gap ? 4 : 2) * profile::PageSize;
+    Image.Size = (Gap ? 5 : 3) * profile::PageSize;
+    for (unsigned I = 0; I != 3; ++I) {
+      DriverImageRegion Region;
+      Region.Address = Base + (Gap && I == 2 ? 4 : I) * profile::PageSize;
+      Region.Permissions = Read | (I == 1 ? Write : I == 2 ? Execute : 0);
+      Region.Bytes.assign(profile::PageSize, 0x31 + I);
+      success(Memory->map(Region.Address, Region.Bytes.size(), Read | Write));
+      success(Memory->write(Region.Address, Region.Bytes));
+      success(Memory->protect(Region.Address, Region.Bytes.size(),
+                              Region.Permissions));
+      Image.Regions.push_back(std::move(Region));
+    }
+    Model = std::make_unique<KernelModel>(*Memory, Result);
+    success(Model->initialize(Image, DriverOptions{}));
+    success(Model->captureUnpackBaseline());
+  }
+  void SetUp() override { initializeImage(0x180000000); }
+};
+
+TEST_F(KernelImageMDL, ReadAliasesSharePagesWithoutChangingImageProtections) {
+  const auto Address = ImageBase + profile::PageSize - 4;
+  const auto MDL =
+      call("IoAllocateMdl", {Address, profile::PageSize + 8, 0, 0, 0});
+  const auto Other = call("IoAllocateMdl", {Address + 4, 16, 0, 0, 0});
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
+  call("MmProbeAndLockPages", {Other, KernelMode, IoReadAccess});
+  EXPECT_EQ(get(MDL + MDLSize + profile::PointerSize), get(Other + MDLSize));
+  const auto Alias = call("MmGetSystemAddressForMdlSafe",
+                          {MDL, NormalPagePriority | MdlMappingNoExecute});
+  ASSERT_NE(Alias, 0u);
+  EXPECT_EQ(get(Alias, 1), 0x31u);
+  EXPECT_EQ(get(Alias + 4, 1), 0x32u);
+  EXPECT_EQ(get(Alias + 4 + profile::PageSize, 1), 0x33u);
+  put(Address + 4, 0x59, 1);
+  EXPECT_EQ(get(Alias + 4, 1), 0x59u);
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Write)));
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Execute)));
+  EXPECT_FALSE(take(Memory->canAccess(ImageBase, 1, Write)));
+  rejected(Model->call("MmProtectMdlSystemAddress", {MDL, PageReadWrite}),
+           "write-access contract");
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  call("MmUnlockPages", {MDL});
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+  call("IoFreeMdl", {MDL});
+  // An overlapping independent lock remains usable after the first unlock.
+  const auto OtherAlias =
+      call("MmGetSystemAddressForMdlSafe", {Other, NormalPagePriority});
+  EXPECT_EQ(get(OtherAlias, 1), 0x59u);
+  call("MmUnlockPages", {Other});
+  call("IoFreeMdl", {Other});
+  // MDL and physical-address effects retain the existing recovery refusal.
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+}
+
+TEST_F(KernelImageMDL, WriteAliasesModifyTheExistingImageAndReleaseTheirView) {
+  const auto Address = ImageBase + profile::PageSize + 0x10;
+  const auto MDL = call("IoAllocateMdl", {Address, 16, 0, 0, 0});
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoModifyAccess});
+  const auto Alias = call("MmGetSystemAddressForMdlSafe",
+                          {MDL, NormalPagePriority | MdlMappingNoExecute});
+  ASSERT_NE(Alias, 0u);
+  EXPECT_NE(Alias, Address);
+  put(Alias, 0x123456789abcdef0);
+  EXPECT_EQ(get(Address), 0x123456789abcdef0u);
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Execute)));
+  rejected(Model->call("IoFreeMdl", {MDL}), "MmUnlockPages");
+  call("MmUnlockPages", {MDL});
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+  EXPECT_EQ(get(Address), 0x123456789abcdef0u);
+  call("IoFreeMdl", {MDL});
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+}
+
+TEST_F(KernelImageMDL, FailedWriteProbePreservesTheDescriptorAndPermissions) {
+  const auto MDL = call("IoAllocateMdl", {ImageBase, 32, 0, 0, 0});
+  std::vector<uint8_t> Before(get(MDL + MDLSizeOffset, 2));
+  success(Memory->read(MDL, Before));
+  auto Locked =
+      Model->call("MmProbeAndLockPages", {MDL, KernelMode, IoWriteAccess});
+  ASSERT_FALSE(bool(Locked));
+  auto Error = Locked.takeError();
+  EXPECT_TRUE(Error.isA<KernelGuestException>());
+  llvm::consumeError(std::move(Error));
+  std::vector<uint8_t> After(Before.size());
+  success(Memory->read(MDL, After));
+  EXPECT_EQ(After, Before);
+  EXPECT_FALSE(take(Memory->canAccess(ImageBase, 1, Write)));
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
+  call("MmUnlockPages", {MDL});
+  call("IoFreeMdl", {MDL});
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+}
+
+TEST_F(KernelImageMDL, ImageOwnershipIsIndependentOfTheUserAddressHeuristic) {
+  initializeImage(0x20000000);
+  const auto MDL =
+      call("IoAllocateMdl", {ImageBase + profile::PageSize, 16, 0, 0, 0});
+  rejected(Model->call("MmProbeAndLockPages", {MDL, UserMode, IoReadAccess}),
+           "requesting process");
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoWriteAccess});
+  call("MmUnlockPages", {MDL});
+  call("IoFreeMdl", {MDL});
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+}
+
+TEST_F(KernelImageMDL, MappedHolesAndOutsideBytesDoNotAcquireImageOwnership) {
+  initializeImage(0x180000000, true);
+  success(Memory->map(ImageBase + 2 * profile::PageSize, 2 * profile::PageSize,
+                      Read | Write));
+  success(Memory->map(ImageBase + 5 * profile::PageSize, profile::PageSize,
+                      Read | Write));
+  for (const auto &[Address, Length] :
+       std::array<std::pair<uint64_t, uint64_t>, 3>{
+           {{ImageBase + 2 * profile::PageSize, 16},
+            {ImageBase + profile::PageSize, 2 * profile::PageSize},
+            {ImageBase + 5 * profile::PageSize - 8, 16}}}) {
+    const auto MDL = call("IoAllocateMdl", {Address, Length, 0, 0, 0});
+    rejected(
+        Model->call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess}),
+        "kernel page locking");
+    EXPECT_EQ(get(MDL + MDLFlagsOffset, 2), 0u);
+    call("IoFreeMdl", {MDL});
+  }
+  const auto MDL =
+      call("IoAllocateMdl", {ImageBase + 4 * profile::PageSize, 16, 0, 0, 0});
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
+  call("MmUnlockPages", {MDL});
+  call("IoFreeMdl", {MDL});
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+}
+
+TEST_F(KernelImageMDL, ImageLockingRequiresPageableIRQLAndAnUnbuiltDescriptor) {
+  const auto MDL = call("IoAllocateMdl", {ImageBase, 16, 0, 0, 0});
+  Model->enterExecution(profile::StackBase);
+  const auto Previous = call("KfRaiseIrql", {scheduler::DispatchLevel});
+  rejected(Model->call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess}),
+           "IRQL <= APC_LEVEL");
+  call("KeLowerIrql", {Previous});
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
+  rejected(Model->call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess}),
+           "unbuilt");
+  call("MmUnlockPages", {MDL});
+  call("IoFreeMdl", {MDL});
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
 }
 } // namespace
 } // namespace neverd::emulation

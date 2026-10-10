@@ -15,13 +15,13 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_realigned_rewrite import (
-        BASES, CASES, EMITTER, ROUTES, SOURCE, PE32, file_digest, observe,
-        require_test_result, validate_installation)
+        BASES, CASES, DIRECT_EMITTER, EMITTER, FORMS, ROUTES, SOURCE, PE32, file_digest, observe,
+        proof_count, require_test_result, validate_installation)
     from .windows_registration_libraries import validate_manifest
 else:
     from check_windows_registration_realigned_rewrite import (
-        BASES, CASES, EMITTER, ROUTES, SOURCE, PE32, file_digest, observe,
-        require_test_result, validate_installation)
+        BASES, CASES, DIRECT_EMITTER, EMITTER, FORMS, ROUTES, SOURCE, PE32, file_digest, observe,
+        proof_count, require_test_result, validate_installation)
     from windows_registration_libraries import validate_manifest
 
 
@@ -29,11 +29,14 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
     if capture.get("schema") != 1 or capture.get("passed") is not True or \
             capture.get("evidence") != "realigned-source-reconstruction" or \
             capture.get("source_sha256") != file_digest(SOURCE) or \
-            capture.get("emitter_sha256") != file_digest(EMITTER):
+            capture.get("emitter_sha256") != file_digest(EMITTER) or \
+            capture.get("direct_emitter_sha256") != file_digest(DIRECT_EMITTER):
         raise ValueError("realigned reconstruction capture has no current source identity")
     validate_manifest(capture.get("runtime_libraries", {}))
+    if require_test_result(root / "catch-projection.xml") != 1:
+        raise ValueError("catch projection proof test changed")
     objects = capture.get("objects", {})
-    if set(objects) != {"value", "reference"}:
+    if set(objects) != set(FORMS):
         raise ValueError("realigned object matrix is incomplete")
     for kind, digest in objects.items():
         if digest != file_digest(root / (kind + ".obj")) or \
@@ -50,12 +53,12 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
         parent = root / name
         if case.get("contract_sha256") != file_digest(parent / "contract.json") or \
                 case.get("ir_sha256") != file_digest(parent / "source.ll") or \
-                require_test_result(parent / "rewrite.xml") != 1:
+                require_test_result(parent / "rewrite.xml") != proof_count(name):
             raise ValueError("realigned source reconstruction proof changed")
         receipt = json.loads((parent / "contract.json").read_text())
         original = PE32((parent / "original.exe").read_bytes())
         product = PE32((parent / "product.exe").read_bytes())
-        validate_installation(original, product, receipt)
+        validate_installation(original, product, receipt, name)
         records = case.get("images", [])
         if len(records) != len(expected) or \
                 {(r.get("image"), r.get("route"), r.get("base")) for r in records} != expected:

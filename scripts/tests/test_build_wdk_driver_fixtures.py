@@ -236,15 +236,25 @@ class WDKDriverFixtureTests(unittest.TestCase):
         }
         self.assertTrue(timestamp_required)
         self.assertTrue(timestamp_required <= required)
+        image_source = (source.parent / "DriverImageMemoryTests.cpp").read_text()
+        image_required = {
+            f"Native/DriverImageMemory.{name}/whp_{contract}"
+            for name in re.findall(r"TEST_P\(DriverImageMemory,\s*(\w+)\)",
+                                   image_source)
+            for contract in ("driver", "checked")
+        }
+        self.assertTrue(image_required)
+        self.assertTrue(image_required <= required)
         self.assertEqual(len(required), len(cpu_required) + 2 * len(names)
                          + len(seh_required) + len(scheduling_required)
                          + len(wait_required) + len(unpack_required)
-                         + len(timestamp_required))
+                         + len(timestamp_required) + len(image_required))
         formula = (f"{len(cpu_required)} CPU + {2 * len(names)} WHP + "
                    f"{len(seh_required)} SEH + {len(scheduling_required)} scheduling "
                    f"+ {len(wait_required)} wait sets "
                    f"+ {len(unpack_required)} driver UNPACK "
-                   f"+ {len(timestamp_required)} clock reads = {len(required)}")
+                   f"+ {len(timestamp_required)} clock reads "
+                   f"+ {len(image_required)} image MDLs = {len(required)}")
         definitions = (fixtures.ROOT / "scripts/EmulationDocumentation.def")
         tokens = i18n.emulation_document_tokens(definitions.read_text(encoding="utf-8"))
         self.assertIn(formula, tokens["NativeDriverCI"])

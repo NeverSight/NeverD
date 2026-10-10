@@ -1,4 +1,5 @@
-// Runtime oracle for source reconstruction of aligned value/reference catches.
+// Runtime oracle for source reconstruction of aligned bound and unbound
+// catches.
 extern "C" __declspec(dllimport) __declspec(noreturn) void __stdcall
 ExitProcess(unsigned);
 extern "C" __declspec(dllimport) void *__stdcall GetStdHandle(unsigned);
@@ -14,7 +15,11 @@ __declspec(dllexport) volatile unsigned callback_caller = 0;
 __declspec(dllexport) volatile unsigned callback_caught = 0;
 __declspec(dllexport) __declspec(noinline) void callback_throw() {
   callback_caller = reinterpret_cast<unsigned>(_ReturnAddress());
+#if UNSIGNED_THROW
+  throw 7u;
+#else
   throw 7;
+#endif
 }
 int callback_parent();
 }

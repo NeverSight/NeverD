@@ -1,6 +1,6 @@
 **Sprachen**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 88b72dd8f373ee05729ab1db29a51d3837d123853880c232431f70eade967be3 -->
+<!-- i18n-source: 6241c9252ec89317b9c488c7e2b6b8c7bd60329dfdd734df27e1a7a7139b1eff -->
 
 [← NeverD-Projekt](project.md)
 
@@ -17,6 +17,11 @@ Englische Anleitungen liegen direkt unter `docs/`. Übersetzungen sind in `ar/`,
 | [README (Deutsch)](project.md) | Überblick, Schnellstart, Build, SDK, CLI |
 | [Mitwirken](CONTRIBUTING.md) | Entwicklungsumgebung, Build-Profile, Ablauf, Stil und PR-Anforderungen |
 | [Architektur](architecture.md) | IR-Pfade, Komponentengrenzen, striktes Lifting, Supporttiefe und Änderungsorte |
+| [Offline-Webanalyse (Englisch)](../web-analysis.md) | C++-Prüfung von Artefakten, Quellen, Bindungen und Maps, Metadatenrichtlinie, SDK und aktueller Prüfumfang |
+| [Profil für eigenständige Bun-Programme (Englisch)](../web-bun-profile.md) | Feste ELF-Extraktion, ursprüngliche Evidenzbereiche, Quelldecodierung und Herkunft festgelegter Testdateien |
+| [ASAR-Extraktionsprofil (Englisch)](../web-asar-profile.md) | Zuordnung interner und externer Erfassungen, Integritätszustände, Nutzer der Archiveinträge und native Unicode-Abhängigkeit |
+| [Electron-Evidenzprofil (Englisch)](../web-electron-profile.md) | Erfasste Einstiegspfade, Manifest- und Quellumfang, Fenster- und Bridge-Evidenz sowie mögliche IPC-Kanäle |
+| [HTML-Quellprofil (Englisch)](../web-html-profile.md) | Begrenztes C++-Skriptinventar, erfasste lokale Referenzen und ursprüngliche Inline-Quellanker |
 | [Tests](testing.md) | Testsuiten, generierte Fixtures, Unicorn-Roundtrips und inkrementelle Befehle |
 | [Desktop-Arbeitsplatz (Englisch)](../gui.md) | Klassische Disassembler-Aufteilung, separater Worker, Projektdatenbanken, Lokalisierung und MCP-Verbindungen |
 | [Bibliothekserkennung (Englisch)](../library-recognition.md) | Belegte STL-, ATL/MFC-, COM- und libc-Identitäten, Profile und umkehrbares Einklappen von C-Code |

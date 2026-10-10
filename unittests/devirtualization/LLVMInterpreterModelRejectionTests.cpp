@@ -64,8 +64,6 @@ TEST_F(LLVMModel, PointerEscapesAndUnprovedMemoryModesAreRefused) {
       "store volatile i64 3, ptr %state\nret i64 0",
       "%x = load atomic i64, ptr %state monotonic, align 8\nret i64 %x",
       "store atomic i64 3, ptr %state monotonic, align 8\nret i64 0",
-      "%x = load i64, ptr %state\n%p = inttoptr i64 %x to ptr\n%y = load i64, "
-      "ptr %p, align 8\nret i64 %y",
       "%x = load i64, ptr %state\n%p = inttoptr i64 %x to ptr\n%q = "
       "getelementptr i8, ptr %p, i64 1\nret i64 0",
       "%x = icmp eq ptr %state, %state\nret i64 0"};

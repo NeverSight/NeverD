@@ -125,6 +125,16 @@ protected:
   }
 };
 
+TEST_F(KernelRuntime, ModuleQueryWithoutAnInventoryStopsBeforeWriting) {
+  Model->enterExecution(profile::StackBase);
+  check(Memory->writeInteger(Scratch, UINT64_MAX, 8));
+  for (const char *Name :
+       {"NtQuerySystemInformation", "ZwQuerySystemInformation"})
+    EXPECT_NE(failure(Name, {11, 0, 0, Scratch}).find("unavailable"),
+              std::string::npos);
+  EXPECT_EQ(integer(Scratch), UINT64_MAX);
+}
+
 TEST_F(KernelRuntime, Pool2ZeroesAndPreservesTaggedLifetime) {
   const uint64_t Pointer = invoke("ExAllocatePool2", {0x40, 47, Tag});
   ASSERT_NE(Pointer, 0u);
@@ -441,6 +451,7 @@ TEST(KernelRuntimeExecution, CompiledDriverUsesDynamicPoolAndWin64Varargs) {
   unsigned DebugCalls = 0;
   unsigned AllocateCalls = 0;
   unsigned LegacyCalls = 0;
+  unsigned ModuleQueries = 0;
   unsigned CounterCalls = 0;
   for (const auto &Call : Result->Calls) {
     if (Call.Name == "DbgPrint") {
@@ -466,12 +477,20 @@ TEST(KernelRuntimeExecution, CompiledDriverUsesDynamicPoolAndWin64Varargs) {
       EXPECT_EQ(Call.Arguments.size(), 2u);
       ASSERT_TRUE(Call.Result);
       EXPECT_NE(*Call.Result, 0u);
+    } else if (Call.Name == "NtQuerySystemInformation" ||
+               Call.Name == "ZwQuerySystemInformation") {
+      ++ModuleQueries;
+      ASSERT_EQ(Call.Arguments.size(), 4u);
+      EXPECT_EQ(Call.Arguments[0], 11u);
+      ASSERT_TRUE(Call.Result);
+      EXPECT_EQ(uint32_t(*Call.Result), Call.Arguments[2] ? 0u : 0xc0000004u);
     } else if (Call.Name == "ExAllocatePool2")
       ++AllocateCalls;
   }
   EXPECT_EQ(DebugCalls, 2u);
   EXPECT_EQ(AllocateCalls, 1u);
-  EXPECT_EQ(LegacyCalls, 2u);
+  EXPECT_EQ(LegacyCalls, 3u);
+  EXPECT_EQ(ModuleQueries, 3u);
   EXPECT_EQ(CounterCalls, 3u);
 }
 } // namespace

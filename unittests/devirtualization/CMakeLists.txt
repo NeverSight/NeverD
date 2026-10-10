@@ -64,6 +64,7 @@ add_neverd_unittest(NeverDLLVMInterpreterModelTests
   LLVMInterpreterModelTests.cpp
   LLVMInterpreterModelCompileTests.cpp
   LLVMInterpreterModelGuardTests.cpp
+  LLVMInterpreterModelAlignmentTests.cpp
   LLVMInterpreterModelInitializationTests.cpp
   LLVMInterpreterModelLoopTests.cpp
   LLVMInterpreterModelRejectionTests.cpp
@@ -131,6 +132,7 @@ add_neverd_unittest(NeverDInterpreterLLVMRefinementTests
   InterpreterLLVMRefinementTests.cpp
   InterpreterLLVMRefinementPreservationTests.cpp
   InterpreterLLVMRefinementCollectionTests.cpp
+  InterpreterLLVMRefinementAlignmentTests.cpp
   InterpreterLLVMRefinementLoopTests.cpp
   InterpreterLLVMRefinementCompileTests.cpp
   LINK_COMPONENTS InterpreterLLVMRefinement

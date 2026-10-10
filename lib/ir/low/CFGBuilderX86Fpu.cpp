@@ -32,7 +32,11 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/SymbolDecoration.h"
 
+#include <algorithm>
+#include <list>
+#include <llvm/Support/SaveAndRestore.h>
 #include <map>
+#include <mutex>
 #include <queue>
 #include <set>
 #include <utility>
@@ -121,28 +125,221 @@ std::vector<LowOp> lowerX87Examine(const LowOp &Exam, bool Empty,
 
 } // namespace
 
+// Only this compact projection is shared: callers retain independent active
+// sets, recursion depths, proof allowances and completed effect answers.
+struct X87CallGraphStep {
+  int Delta = 0;
+  uint8_t Reads = 0;
+  uint8_t Writes = 0;
+  std::optional<va_t> Callee;
+  bool Unknown = false;
+};
+struct X87CallGraphBlock {
+  std::vector<X87CallGraphStep> Steps;
+  std::vector<int> Successors;
+  bool Returns = false;
+  bool Stops = false;
+};
+struct X87CallGraph {
+  enum class ProjectionRejection : uint8_t {
+    None,
+    ExceptionalEdges,
+    MissingTerminator,
+  };
+  std::vector<X87CallGraphBlock> Blocks;
+  size_t Cost = 0;
+  bool Complete = false;
+  ProjectionRejection Rejection = ProjectionRejection::None;
+};
+
+class X87CallGraphCache {
+  friend class X87CallEffectIndex;
+  friend class CFGBuilder;
+  struct Context {
+    const BinaryImage *Image;
+    Arch Architecture;
+    InstructionMode Mode;
+    Bitness Bits;
+    BinaryFormat Format;
+    BinaryFormat ABI;
+    const libc::NoReturnTargetIndex *NoReturnTargets;
+    const NoReturnCalleeProver *NoReturnCallees;
+    unsigned NoReturnDepth;
+    const detail::AbsoluteRelocationRootIndex *RelocationRoots;
+    const ExecutableCodeOwnerIndex *CodeOwners;
+    std::optional<std::vector<va_t>> Entries;
+    std::optional<std::vector<va_t>> ProtectedSlots;
+    std::optional<std::vector<va_t>> UnsafeBranches;
+  };
+  struct Entry {
+    va_t Address;
+    std::shared_ptr<const X87CallGraph> Value;
+    size_t Bytes;
+  };
+  static constexpr size_t MaxGraphs = 128;
+  static constexpr size_t MaxBytes = 8 * 1024 * 1024;
+  std::mutex Mutex;
+  std::optional<Context> Inputs;
+  std::list<Entry> Graphs;
+  size_t RetainedBytes = 0;
+  size_t Hits = 0;
+
+  static bool account(size_t &Bytes, size_t Count, size_t Width) {
+    if (Bytes > MaxBytes || Count > (MaxBytes - Bytes) / Width)
+      return false;
+    Bytes += Count * Width;
+    return true;
+  }
+  static bool accountAllocation(size_t &Bytes, size_t Count, size_t Width) {
+    return !Count ||
+           (account(Bytes, 8, sizeof(void *)) && account(Bytes, Count, Width));
+  }
+  static bool sameSet(const std::optional<std::vector<va_t>> &Frozen,
+                      const std::set<va_t> *Live) {
+    return Frozen.has_value() == (Live != nullptr) &&
+           (!Live ||
+            (Frozen->size() == Live->size() &&
+             std::equal(Frozen->begin(), Frozen->end(), Live->begin())));
+  }
+  bool matches(const CFGBuilder &B) const {
+    return Inputs && Inputs->Image == B.CurrentImg &&
+           Inputs->Architecture == B.CurrentImg->Arch &&
+           Inputs->Mode == B.CurrentImg->Mode &&
+           Inputs->Bits == B.CurrentImg->Bits &&
+           Inputs->Format == B.CurrentImg->Format &&
+           Inputs->ABI == B.CurrentImg->abiFormat() &&
+           Inputs->NoReturnTargets == B.NoReturnTargets &&
+           Inputs->NoReturnCallees == B.NoReturnCallees &&
+           Inputs->NoReturnDepth == B.NoReturnCalleeDepth + 1 &&
+           Inputs->RelocationRoots == B.AbsoluteRelocationRoots &&
+           Inputs->CodeOwners == B.ExecutableCodeOwners &&
+           sameSet(Inputs->Entries, B.KnownFuncEntries) &&
+           sameSet(Inputs->ProtectedSlots,
+                   B.ProtectedJumpTableRelocationSlots) &&
+           sameSet(Inputs->UnsafeBranches, B.UnsafeJumpTableBranches);
+  }
+  static std::optional<size_t> graphBytes(const X87CallGraph &Graph) {
+    size_t Bytes = sizeof(Entry) + sizeof(X87CallGraph) + 16 * sizeof(void *);
+    if (!accountAllocation(Bytes, Graph.Blocks.capacity(),
+                           sizeof(X87CallGraphBlock)))
+      return std::nullopt;
+    for (const auto &Block : Graph.Blocks)
+      if (!accountAllocation(Bytes, Block.Steps.capacity(),
+                             sizeof(X87CallGraphStep)) ||
+          !accountAllocation(Bytes, Block.Successors.capacity(), sizeof(int)))
+        return std::nullopt;
+    return Bytes;
+  }
+  static std::optional<std::vector<va_t>> freeze(const std::set<va_t> *Values) {
+    if (!Values)
+      return std::nullopt;
+    return std::vector<va_t>(Values->begin(), Values->end());
+  }
+  static std::optional<size_t> contextBytes(const Context &C) {
+    size_t Bytes = sizeof(Context);
+    for (const auto *Values :
+         {&C.Entries, &C.ProtectedSlots, &C.UnsafeBranches})
+      if (*Values &&
+          !accountAllocation(Bytes, (*Values)->capacity(), sizeof(va_t)))
+        return std::nullopt;
+    return Bytes;
+  }
+  std::shared_ptr<const X87CallGraph> find(const CFGBuilder &B, va_t Address) {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (!matches(B))
+      return {};
+    for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
+      if (It->Address == Address) {
+        Graphs.splice(Graphs.begin(), Graphs, It);
+        ++Hits;
+        return Graphs.front().Value;
+      }
+    return {};
+  }
+  std::shared_ptr<const X87CallGraph>
+  publish(const CFGBuilder &B, va_t Address,
+          std::shared_ptr<const X87CallGraph> Graph) {
+    if (!Graph->Complete &&
+        Graph->Rejection == X87CallGraph::ProjectionRejection::None)
+      return Graph;
+    const auto Bytes = graphBytes(*Graph);
+    if (!Bytes)
+      return Graph;
+    // Bound context copies before allocation, then account their actual
+    // capacities before publication. The limit is retained payload, not RSS
+    // of in-flight builds or graphs still used by an active private index.
+    size_t Estimated = sizeof(Context);
+    for (const auto *Values :
+         {B.KnownFuncEntries, B.ProtectedJumpTableRelocationSlots,
+          B.UnsafeJumpTableBranches})
+      if (Values && !accountAllocation(Estimated, Values->size(), sizeof(va_t)))
+        return Graph;
+    if (*Bytes > MaxBytes - Estimated)
+      return Graph;
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (!matches(B)) {
+      Context Next{B.CurrentImg,
+                   B.CurrentImg->Arch,
+                   B.CurrentImg->Mode,
+                   B.CurrentImg->Bits,
+                   B.CurrentImg->Format,
+                   B.CurrentImg->abiFormat(),
+                   B.NoReturnTargets,
+                   B.NoReturnCallees,
+                   B.NoReturnCalleeDepth + 1,
+                   B.AbsoluteRelocationRoots,
+                   B.ExecutableCodeOwners,
+                   freeze(B.KnownFuncEntries),
+                   freeze(B.ProtectedJumpTableRelocationSlots),
+                   freeze(B.UnsafeJumpTableBranches)};
+      const auto NextBytes = contextBytes(Next);
+      if (!NextBytes || *Bytes > MaxBytes - *NextBytes)
+        return Graph;
+      Graphs.clear();
+      Inputs = std::move(Next);
+      RetainedBytes = *NextBytes;
+    }
+    const auto InputBytes = contextBytes(*Inputs);
+    if (!InputBytes || *Bytes > MaxBytes - *InputBytes)
+      return Graph;
+    // Another worker may have published while this worker built outside the
+    // lock. Use its identical immutable projection without waiting on builds.
+    for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
+      if (It->Address == Address) {
+        Graphs.splice(Graphs.begin(), Graphs, It);
+        return Graphs.front().Value;
+      }
+    while (!Graphs.empty() &&
+           (Graphs.size() >= MaxGraphs || *Bytes > MaxBytes - RetainedBytes)) {
+      RetainedBytes -= Graphs.back().Bytes;
+      Graphs.pop_back();
+    }
+    Graphs.push_front({Address, Graph, *Bytes});
+    RetainedBytes += *Bytes;
+    return Graph;
+  }
+};
+
+std::shared_ptr<X87CallGraphCache> createX87CallGraphCache() {
+  return std::make_shared<X87CallGraphCache>();
+}
+
+std::array<size_t, 3> CFGBuilder::x87CallGraphCacheStatsForTesting() const {
+  if (!SharedX87CallGraphs)
+    return {};
+  std::lock_guard<std::mutex> Lock(SharedX87CallGraphs->Mutex);
+  return {SharedX87CallGraphs->Hits, SharedX87CallGraphs->Graphs.size(),
+          SharedX87CallGraphs->RetainedBytes};
+}
+
 /// The index lives for one CFG build of an unchanged image. Its cached local
 /// graphs contain machine facts, not answers obtained under a caller's budget.
 /// Each query pays for its complete call closure and every dataflow transfer.
 class X87CallEffectIndex {
-  struct Step {
-    int Delta = 0;
-    uint8_t Reads = 0;
-    uint8_t Writes = 0;
-    std::optional<va_t> Callee;
-    bool Unknown = false;
-  };
-  struct Block {
-    std::vector<Step> Steps;
-    std::vector<int> Successors;
-    bool Returns = false;
-    bool Stops = false;
-  };
-  struct Graph {
-    std::vector<Block> Blocks;
-    size_t Cost = 0;
-    bool Complete = false;
-  };
+  friend class CFGBuilder;
+  using Step = X87CallGraphStep;
+  using Block = X87CallGraphBlock;
+  using Graph = X87CallGraph;
   struct Query {
     size_t Remaining = limits::kMaxX87CallProofWork;
     std::set<va_t> Charged, Active;
@@ -158,7 +355,7 @@ class X87CallEffectIndex {
   };
   const CFGBuilder &Settings;
   const BinaryImage &Image;
-  std::map<va_t, Graph> Graphs;
+  std::map<va_t, std::shared_ptr<const Graph>> Graphs;
   std::map<va_t, std::optional<int>> Answers;
 
   std::optional<int> importEffect(llvm::StringRef Name) const {
@@ -227,9 +424,16 @@ class X87CallEffectIndex {
   }
 
   const Graph &graph(va_t Entry) {
-    auto [It, Fresh] = Graphs.try_emplace(Entry);
-    Graph &G = It->second;
-    if (!Fresh || !Image.hasExecutableCodeOwnerAt(Entry))
+    if (const auto It = Graphs.find(Entry); It != Graphs.end())
+      return *It->second;
+    const bool HasCodeOwner = Image.hasExecutableCodeOwnerAt(Entry);
+    if (HasCodeOwner && Settings.SharedX87CallGraphs)
+      if (auto Shared = Settings.SharedX87CallGraphs->find(Settings, Entry))
+        return *Graphs.emplace(Entry, std::move(Shared)).first->second;
+    auto Built = std::make_shared<Graph>();
+    const auto It = Graphs.emplace(Entry, Built).first;
+    Graph &G = *Built;
+    if (!HasCodeOwner)
       return G;
     Decoder Dec;
     if (!Dec.init(Image))
@@ -249,14 +453,27 @@ class X87CallEffectIndex {
     if (!F.hasCompleteInstructionLift() || !F.TruncatedPathAddresses.empty() ||
         F.Blocks.empty() || F.Blocks.front().StartAddr != Entry)
       return G;
+    auto RejectProjection =
+        [&](Graph::ProjectionRejection Reason) -> const Graph & {
+      // These two exclusions are immutable facts of a completely lifted CFG,
+      // not failures of a caller's proof allowance. Retain only an empty
+      // refusal marker; prove() still rejects !Complete before charging Cost.
+      G = Graph{};
+      G.Rejection = Reason;
+      if (Settings.SharedX87CallGraphs)
+        It->second =
+            Settings.SharedX87CallGraphs->publish(Settings, Entry, Built);
+      return *It->second;
+    };
     G.Blocks.resize(F.Blocks.size());
     for (size_t I = 0; I < F.Blocks.size(); ++I) {
       const LowBlock &Source = F.Blocks[I];
       Block &B = G.Blocks[I];
       if (Source.Id != static_cast<int>(I) ||
-          Source.InstructionBoundaries.empty() ||
-          !Source.ExceptionalSuccs.empty() || !Source.ExceptionalPreds.empty())
+          Source.InstructionBoundaries.empty())
         return G;
+      if (!Source.ExceptionalSuccs.empty() || !Source.ExceptionalPreds.empty())
+        return RejectProjection(Graph::ProjectionRejection::ExceptionalEdges);
       G.Cost += 1 + Source.Ops.size() + Source.Succs.size();
       if (G.Cost > limits::kMaxX87CallProofWork)
         return G;
@@ -321,10 +538,13 @@ class X87CallEffectIndex {
           B.Steps.push_back(S);
       }
       if (B.Successors.empty() && !B.Returns && !B.Stops)
-        return G;
+        return RejectProjection(Graph::ProjectionRejection::MissingTerminator);
     }
     G.Complete = true;
-    return G;
+    if (Settings.SharedX87CallGraphs)
+      It->second =
+          Settings.SharedX87CallGraphs->publish(Settings, Entry, Built);
+    return *It->second;
   }
 
   std::optional<int> prove(va_t Entry, unsigned Depth, Query &Q) {
@@ -439,6 +659,19 @@ public:
     return Result;
   }
 };
+
+std::optional<int> CFGBuilder::x87CallEffectForTesting(const BinaryImage &Image,
+                                                       va_t Entry,
+                                                       size_t &Remaining,
+                                                       unsigned Depth) {
+  llvm::SaveAndRestore<const BinaryImage *> Restore(CurrentImg, &Image);
+  X87CallEffectIndex Index(*this);
+  X87CallEffectIndex::Query Q;
+  Q.Remaining = Remaining;
+  const auto Result = Index.prove(Entry, Depth, Q);
+  Remaining = Q.Remaining;
+  return Result;
+}
 
 void CFGBuilder::fixupFpuStack(LowFunc &Func) {
   if (SkipX87StackFixup)

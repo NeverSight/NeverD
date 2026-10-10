@@ -97,6 +97,8 @@ v4 테스트는 접두 구조의 크기와 패딩, 잘린 구조와 알 수 없�
 
 `NeverDLLVMInterpreterModelTests`는 독립 LLVM을 전체 상태 LowIR 기준과 비교하여 비트 폭, 병렬 PHI, switch, 게스트 메모리, 별도 상태, poison 조건, 내장 함수 범위, 거부 계약과 네 가지 구성 예산을 검사합니다. 임의 워드 카운트다운의 완전한 증명을 검사하고 변조된 상태를 거부합니다. 독립 C의 O1/O2 컴파일 결과도 같은 관찰 계약을 만족해야 합니다. 지원 모델을 검증하는 테스트이며 자동 불변식 발견과 컴파일러 정확성은 별도 의무입니다. 가변 시프트 사례는 네 가지 비트 폭, 마스크나 분기로 제한한 시프트 양, 경계값과 범위 초과 값, 오버플로 금지 및 정확성 플래그, 엄격한 poison 거부, O1/O2로 컴파일한 C를 검증합니다.
 
+`LLVMGuestAlignment.*`는 로드와 스토어를 독립적인 바이트 메모리 기준과 비교하여 정렬 및 비정렬 도메인, 자유로운 주소 상위 비트, 파싱된 기본 정렬, 부분 폭, 미사용 또는 덮어쓴 접근, 도달 불가능한 분기와 정확한/한 단위 부족 구성 예산을 검사합니다. `InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises`는 두 관계를 새로 검사하여 네이티브 스택 저장, 일치하는 진입 합동 조건과 변경된 소스 효과를 검증합니다.
+
 `NeverDLLVMScalarEquivalenceTests`는 전체 루프 입력 영역, 0회 반복, PHI 동시 교환, switch, 상위 입력 비트, 마지막 분할의 반례, poison을 만드는 추가 갱신, 반환 범위, 미지원 계약 및 정확한·한 단위 부족·0 예산을 검사합니다. 독립적인 두 배 폭·오버플로 기준 구현이 지원하는 각 폭의 funnel 끝점과 제약된 곱셈을 검사하며 독립 중첩 루프 C의 O1/O2 출력이 컴파일러 입력 형태를 확인합니다. 상태 모델 테스트도 끝점을 검사합니다. `SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings`는 누적 계산과 기존 개별 한도를 검사합니다.
 
 `LLVMScalarDecision.*`는 깊은 exact 시프트·확장 조건, 상수 분기, 두 루프 역방향 간선, 보존된 상위 데이터 비트, 마지막 미정의 연산, 비종료, 검사한 함수의 수정, 정확한 예산·한 단위 부족·지역 한도를 검사합니다. `LLVMScalarDecisionCompiled.DeepOneAndTwoBackedgeOracles`는 독립적으로 작성한 역방향 간선 하나와 두 개의 점화식을 부호 없는 C 오라클과 O0/O2에서 총 32,768회 비교합니다. 이는 스칼라 모델 검사이며 네이티브 ABI나 전체 바이너리 복원 범위를 뜻하지 않습니다.
@@ -1240,7 +1242,7 @@ KVM 검증은 스스로 종료하지 않는 실제 vCPU의 취소와 `KvmStateTr
 
 `native_cpu_only=true`와 `native_driver_tests=true`를 지정하면 Unicorn 없이 `NeverDNativeDriverTests`를 활성화합니다. 구성 전에 `build_wdk_driver_fixtures.py`가 공식 Microsoft WDK/SDK 10.0.26100.6584 패키지 전체의 SHA-256을 검증하고 원본 소스에서 일반/CFG/DBG 드라이버 이미지 48개를 다시 빌드합니다. `WDKDriverFixtures.def`는 패키지 식별자, 컴파일러·링커 인수와 픽스처 연결을 선언합니다. 수정하지 않은 Microsoft 파일과 라이선스는 로컬 빌드/캐시 디렉터리에 보관하며 CI는 빌드 메타데이터와 로그만 업로드합니다. 매니페스트에는 도구 버전, 명령, 소스·헤더 해시와 출력 이미지 해시를 기록합니다.
 
-`NativeDriverTests.def`는 `DriverBuiltinImages.def`와 `DriverBackendParityCases.def`의 115개 작업 전체에서 WHP 결과 230개를 요구합니다. 기본 이미지 27개, WDK 이미지 48개와 요청 시나리오 40개를 원본 및 재배치 주소에서 실행합니다. 전체 필수 목록은 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads = 5447`입니다. 대기 집합 검사 30개는 이식 가능한 모델 사례 16개와 독자적인 네이티브 드라이버 사례 14개입니다. `run_native_cpu_ci.py --with-drivers`는 Unicorn을 끄고 정확한 목록과 JUnit 증거를 보존합니다. 필수 픽스처 누락이나 건너뛰기는 선택형 게이트를 실패시키며, 일반 빌드에서는 외부 픽스처가 선택 사항입니다. 고정 이미지의 예상 재배치 거부는 유지됩니다. ARM64 네이티브 게스트 실행은 아직 검증되지 않았습니다.
+`NativeDriverTests.def`는 `DriverBuiltinImages.def`와 `DriverBackendParityCases.def`의 115개 작업 전체에서 WHP 결과 230개를 요구합니다. 기본 이미지 27개, WDK 이미지 48개와 요청 시나리오 40개를 원본 및 재배치 주소에서 실행합니다. 전체 필수 목록은 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`입니다. 대기 집합 검사 30개는 이식 가능한 모델 사례 16개와 독자적인 네이티브 드라이버 사례 14개입니다. `run_native_cpu_ci.py --with-drivers`는 Unicorn을 끄고 정확한 목록과 JUnit 증거를 보존합니다. 필수 픽스처 누락이나 건너뛰기는 선택형 게이트를 실패시키며, 일반 빌드에서는 외부 픽스처가 선택 사항입니다. 고정 이미지의 예상 재배치 거부는 유지됩니다. ARM64 네이티브 게스트 실행은 아직 검증되지 않았습니다.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease`는 서로 다른 시작 명령 두 개 앞에서 기한 만료, 중지, 두 원인의 동시 중단을 주입합니다. 정확한 단계 진단, 메시지 소유 수명, 오류 타입과 원인 비트, 단계 간 동일한 기한, 메모리 소유권 해제를 검사합니다. 실제 전송 실패와 상태 불일치는 계속 구분합니다. 네이티브 x64 시작 검증 예산은 `5 s`이며 일반 게스트 기한과 단일 단계 유예는 유지됩니다.
 

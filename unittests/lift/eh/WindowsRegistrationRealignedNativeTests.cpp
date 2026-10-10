@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "RegistrationCxxCatchTestUtils.h"
 #include "RegistrationCxxContinuationTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -38,7 +39,12 @@ using namespace neverd;
 
 namespace {
 #ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
-void emitTypedCallback(bool Reference) {
+enum class CatchForm { Value, Reference, UnnamedValue, UnnamedReference, All };
+
+void emitCallback(CatchForm Form) {
+  const bool Bound = Form == CatchForm::Value || Form == CatchForm::Reference;
+  const bool Reference =
+      Form == CatchForm::Reference || Form == CatchForm::UnnamedReference;
   llvm::LLVMContext Context;
   llvm::Module Module("typed-realigned-parent", Context);
   Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
@@ -78,23 +84,34 @@ void emitTypedCallback(bool Reference) {
       B.CreateCatchSwitch(llvm::ConstantTokenNone::get(Context), nullptr, 1);
   Switch->addHandler(Catch);
   B.SetInsertPoint(Catch);
-  auto *Type = new llvm::GlobalVariable(Module, B.getInt8Ty(), false,
-                                        llvm::GlobalValue::ExternalLinkage,
-                                        nullptr, "??_R0H@8");
-  auto *Pad =
-      B.CreateCatchPad(Switch, {Type, B.getInt32(Reference ? 8 : 0), Frame});
-  Pad->setMetadata(
-      llvm::RewriteWinX86CxxCatchObjectAttachment,
-      llvm::MDNode::get(Context,
-                        {llvm::ConstantAsMetadata::get(B.getInt32(1)),
-                         llvm::ConstantAsMetadata::get(B.getInt32(16)),
-                         llvm::ConstantAsMetadata::get(B.getInt32(4))}));
-  llvm::Value *Address =
-      Reference ? B.CreateLoad(B.getPtrTy(), Object) : Object;
-  auto *Value = B.CreateLoad(B.getInt32Ty(), Address);
-  llvm::Value *Caught = Value;
-  if (Reference)
-    B.CreateStore(Caught = B.CreateAdd(Value, B.getInt32(11)), Address);
+  auto *Null = llvm::ConstantPointerNull::get(B.getPtrTy());
+  llvm::Constant *Type = Null;
+  if (Form != CatchForm::All)
+    Type = new llvm::GlobalVariable(Module, B.getInt8Ty(), false,
+                                    llvm::GlobalValue::ExternalLinkage, nullptr,
+                                    "??_R0H@8");
+  auto *Pad = B.CreateCatchPad(
+      Switch, {Type,
+               B.getInt32(Form == CatchForm::All ? 64
+                          : Reference            ? 8
+                                                 : 0),
+               Bound ? static_cast<llvm::Value *>(Frame) : Null});
+  if (Bound)
+    Pad->setMetadata(
+        llvm::RewriteWinX86CxxCatchObjectAttachment,
+        llvm::MDNode::get(Context,
+                          {llvm::ConstantAsMetadata::get(B.getInt32(1)),
+                           llvm::ConstantAsMetadata::get(B.getInt32(16)),
+                           llvm::ConstantAsMetadata::get(B.getInt32(4))}));
+  llvm::Value *Value = B.getInt32(7), *Caught = Value;
+  if (Bound) {
+    llvm::Value *Address =
+        Reference ? B.CreateLoad(B.getPtrTy(), Object) : Object;
+    Value = B.CreateLoad(B.getInt32Ty(), Address);
+    Caught = Value;
+    if (Reference)
+      B.CreateStore(Caught = B.CreateAdd(Value, B.getInt32(11)), Address);
+  }
   auto *Observation = new llvm::GlobalVariable(
       Module, B.getInt32Ty(), false, llvm::GlobalValue::ExternalLinkage,
       nullptr, "callback_caught");
@@ -118,11 +135,23 @@ void emitTypedCallback(bool Reference) {
 }
 
 TEST(WindowsRegistrationRealignedNative, EmitsValueCallback) {
-  emitTypedCallback(false);
+  emitCallback(CatchForm::Value);
 }
 
 TEST(WindowsRegistrationRealignedNative, EmitsReferenceCallback) {
-  emitTypedCallback(true);
+  emitCallback(CatchForm::Reference);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsUnnamedValueCallback) {
+  emitCallback(CatchForm::UnnamedValue);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsUnnamedReferenceCallback) {
+  emitCallback(CatchForm::UnnamedReference);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsCatchAllCallback) {
+  emitCallback(CatchForm::All);
 }
 
 void checkFrameEdits(const llvm::Function &Parent,
@@ -248,9 +277,8 @@ TEST(WindowsRegistrationRealignedNative, InputPE32ReconstructsTheSourceFrame) {
   auto Image = COFFLoader().load(Path);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   const auto It =
-      llvm::find_if(Image->ExceptionMetadata.Functions, [](const auto &EH) {
-        return EH.Registration && EH.Registration->RealignedFrame && EH.Cxx;
-      });
+      llvm::find_if(Image->ExceptionMetadata.Functions,
+                    [](const auto &EH) { return EH.Registration && EH.Cxx; });
   ASSERT_NE(It, Image->ExceptionMetadata.Functions.end());
   const auto &EH = *It;
   Decoder Decode;
@@ -265,7 +293,10 @@ TEST(WindowsRegistrationRealignedNative, InputPE32ReconstructsTheSourceFrame) {
   ASSERT_TRUE(States.CxxContinuationsComplete);
   ASSERT_TRUE(States.CxxCatchObjectsComplete);
   ASSERT_TRUE(States.RuntimeObjectAccessesComplete);
-  ASSERT_EQ(States.CxxCatchObjects.size(), 1u);
+  ASSERT_EQ(EH.Cxx->TryBlocks.size(), 1u);
+  ASSERT_EQ(EH.Cxx->TryBlocks[0].Handlers.size(), 1u);
+  ASSERT_EQ(States.CxxCatchObjects.size(),
+            EH.Cxx->TryBlocks[0].Handlers[0].CatchObjectOffset ? 1u : 0u);
   ASSERT_TRUE(hasCallerCleanupRegistrationABI(Low, *Image));
   LowToMedConverter Converter;
   Converter.setBinaryImage(&*Image);
@@ -288,7 +319,9 @@ TEST(WindowsRegistrationRealignedNative, InputPE32ReconstructsTheSourceFrame) {
   ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
   auto Proof = validateCOFFRegistrationCxxIR(*Parent, EH, *Image);
   ASSERT_FALSE(bool(Proof)) << llvm::toString(std::move(Proof));
-  checkFrameEdits(*Parent, EH, *Image);
+  registration_test::checkUnboundCxxCatchEdits(*Parent, EH, *Image);
+  if (EH.Registration->RealignedFrame)
+    checkFrameEdits(*Parent, EH, *Image);
   registration_test::checkCxxContinuationEdits(*Parent, EH, *Image);
   if (const auto *Output =
           std::getenv("NEVERD_REGISTRATION_REALIGNED_OUTPUT_PE32")) {
@@ -313,8 +346,9 @@ TEST(WindowsRegistrationRealignedNative, InputPE32ReconstructsTheSourceFrame) {
         });
     ASSERT_NE(Generated, Reloaded->ExceptionMetadata.Functions.end());
     ASSERT_EQ(Generated->ParseStatus, ExceptionParseStatus::Complete);
-    ASSERT_TRUE(Generated->Registration &&
-                Generated->Registration->RealignedFrame);
+    ASSERT_TRUE(Generated->Registration);
+    if (EH.Registration->RealignedFrame)
+      ASSERT_TRUE(Generated->Registration->RealignedFrame);
     if (const auto *Receipt =
             std::getenv("NEVERD_REGISTRATION_REALIGNED_RECEIPT")) {
       auto Digest = [](const char *File) {
@@ -329,6 +363,8 @@ TEST(WindowsRegistrationRealignedNative, InputPE32ReconstructsTheSourceFrame) {
       llvm::json::Object Record{
           {"schema", 1},
           {"evidence", "checked-realigned-source-reconstruction"},
+          {"source_frame",
+           EH.Registration->RealignedFrame ? "realigned" : "direct"},
           {"source_image_sha256", Digest(Path)},
           {"image_sha256", Digest(Output)},
           {"base", Image->Base},

@@ -52,6 +52,10 @@ public:
   /// Returned names have static storage. Loader validation shares this policy.
   static std::optional<llvm::StringRef>
   canonicalImportModule(llvm::StringRef Module);
+  /// Stable image identity shared by PE exports and module enumeration.
+  static std::optional<uint64_t> moduleBase(llvm::StringRef Module);
+  /// Service bodies are opaque, including unused addresses in their gates.
+  static bool overlapsThunk(uint64_t Address, uint64_t Size = 1);
 
   llvm::Error initialize(const DriverOptions &Options);
   llvm::Expected<uint64_t> bindImport(const DriverImport &Import);

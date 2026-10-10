@@ -153,7 +153,7 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
 }
 
 TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
-  for (unsigned Mode : {1, 2, 3}) {
+  for (unsigned Mode : {1, 2, 3, 10}) {
     SCOPED_TRACE(Mode);
     const auto Input = packed(Mode);
     auto Result = unpackFile(Input, Options);
@@ -162,7 +162,7 @@ TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
         << Result->Diagnostic;
     EXPECT_TRUE(Result->Image.empty());
     EXPECT_FALSE(Result->Diagnostic.empty());
-    if (Mode == 3)
+    if (Mode == 3 || Mode == 10)
       EXPECT_GT(Result->RuntimeState.PossibleHeapReferences, 0u);
     else
       EXPECT_TRUE(Result->RuntimeState.HasAdditionalDependencies);

@@ -325,6 +325,7 @@ ExprPtr MedToHighConverter::inlineableDefinition(VarKey Key) const {
   auto It = DefExpr.find(Key);
   if (It == DefExpr.end() || !It->second ||
       It->second->Kind == ExprKind::Call ||
+      It->second->Kind == ExprKind::EntryRegister ||
       It->second->MemoryOrdering != NdMemoryOrdering::None ||
       It->second->MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return nullptr;
@@ -1198,7 +1199,10 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   // Catch returns enter the parent through edges absent from its ordinary
   // CFG. Publish those edges before control-flow cleanup can discard or move
   // their target statements; the funclet bodies are attached module-wide.
-  const bool EarlyCxxRegions = !Func.CxxContinuationTargets.empty();
+  const bool EarlyCxxRegions =
+      !Func.CxxContinuationTargets.empty() ||
+      (Med.ExceptionMetadata && Med.ExceptionMetadata->Registration &&
+       Med.ExceptionMetadata->Registration->RealignedFrame);
   Func.ReturnType =
       Med.ReturnType ? Med.ReturnType : NdType::makeInt(inferReturnSize(Med));
   const auto &ReturnTRI = getTargetRegInfo(TargetArch);

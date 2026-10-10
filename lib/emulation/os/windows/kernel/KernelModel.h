@@ -18,6 +18,7 @@
 #include "KernelGuestCall.h"
 #include "KernelInterrupts.h"
 #include "KernelMMIO.h"
+#include "KernelModuleImages.h"
 #include "KernelPoFx.h"
 #include "KernelRegistry.h"
 #include "KernelRemoveLocks.h"
@@ -796,6 +797,12 @@ private:
   llvm::Error freeWorkItem(uint64_t Address);
   llvm::Error updateDeviceReferences(uint64_t Device);
   llvm::Expected<uint64_t> resolveRoutine(uint64_t Address);
+  llvm::Expected<uint64_t> querySystemInformation(llvm::ArrayRef<uint64_t> Args,
+                                                  bool Trusted);
+  std::vector<KernelLoadedModule> LoadedModules;
+  // Only loader-owned mapped spans, excluding image holes. Physical backing is
+  // registered lazily when a permitted image range is first locked.
+  std::map<uint64_t, uint64_t> ImageRAM;
   uint64_t DriverObject = 0;
   uint64_t RegistryPath = 0;
   uint64_t DriverExtension = 0;

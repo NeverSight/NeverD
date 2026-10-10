@@ -111,8 +111,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       !States.CxxContinuationsComplete || !States.CxxCatchObjectsComplete ||
       !States.RuntimeObjectAccessesComplete || !States.ImageReadsComplete ||
       !States.IncomingFrameAccessesComplete ||
-      !States.IncomingFrameAccesses.empty() ||
-      States.CxxCatchObjects.size() != 1)
+      !States.IncomingFrameAccesses.empty())
     return rejectIR("replayed C++ registration effects are incomplete");
   const auto Coordinate =
       Source.Registration->RealignedFrame
@@ -126,6 +125,10 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
                           : std::nullopt;
   if (!Layout)
     return rejectIR("C++ source frame lost its physical coordinate projection");
+  const auto CatchPlan = projectX86RegistrationCatch(Source, States, *Layout);
+  if (!CatchPlan)
+    return rejectIR("C++ source catch has no checked object projection");
+  Result.CatchHome = CatchPlan->Home;
   Frame->Establisher = Layout->Establisher;
   Result.Frame = *Frame;
   LowToMedConverter Converter;
@@ -193,10 +196,9 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         const auto Token = windows_eh_semantics::getCxxCatchSemanticToken(
             Source, Arch::X86, 0, 0);
         if (Result.Catch || !Token || !exactSemanticToken(*Pad, *Token) ||
-            Pad->arg_size() != 3 || Pad->getArgOperand(2) != Frame->Slot ||
+            Pad->arg_size() != 3 ||
             integer(Pad->getArgOperand(1), 32) != Handler.Adjectives)
-          return rejectIR(
-              "C++ catch lost its exact source row or shared frame");
+          return rejectIR("C++ catch lost its exact source row or adjectives");
         Result.Catch = Pad;
       } else if (const auto *Candidate =
                      llvm::dyn_cast<llvm::CatchSwitchInst>(&I)) {
@@ -236,15 +238,22 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         "C++ dispatch changed its source handler entry or unwind context");
   const auto *Type = llvm::dyn_cast<llvm::GlobalVariable>(
       Result.Catch->getArgOperand(0)->stripPointerCasts());
-  const auto &Object = States.CxxCatchObjects[0];
   auto CatchObject = llvm::getRewriteWinX86CxxCatchFrameObject(*Result.Catch);
   if (!CatchObject)
     return CatchObject.takeError();
-  if (!Type || !Type->isDeclaration() || !Type->hasExternalLinkage() ||
-      Type->getName() != makeNdDataSymbol(Handler.TypeDescriptorVA) ||
-      CatchObject->Frame != Frame->Slot ||
-      CatchObject->Offset != int64_t(Frame->Establisher) + Object.FrameOffset ||
-      CatchObject->Size != (Object.Reference ? 4 : Object.ObjectSize))
+  const bool MatchingType =
+      Handler.TypeDescriptorVA
+          ? Type && Type->isDeclaration() && Type->hasExternalLinkage() &&
+                Type->getName() == makeNdDataSymbol(Handler.TypeDescriptorVA)
+          : llvm::isa<llvm::ConstantPointerNull>(
+                Result.Catch->getArgOperand(0));
+  const bool MatchingHome =
+      Result.CatchHome
+          ? CatchObject->Frame == Frame->Slot &&
+                CatchObject->Offset == Result.CatchHome->Offset &&
+                CatchObject->Size == Result.CatchHome->slotSize()
+          : !CatchObject->Frame && !CatchObject->Offset && !CatchObject->Size;
+  if (!MatchingType || !MatchingHome)
     return rejectIR(
         "C++ catch changed its RTTI or checked runtime object home");
   auto BundleIs = [](const llvm::CallBase &Call, const llvm::Value *Pad) {

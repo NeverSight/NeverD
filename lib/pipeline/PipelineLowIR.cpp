@@ -43,6 +43,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -3253,7 +3254,9 @@ void computeCallRegisterEffects(
     const libc::NoReturnTargetIndex &NoReturnTargets,
     const NoReturnCalleeProver &NoReturnCallees,
     const detail::AbsoluteRelocationRootIndex &AbsoluteRelocationRoots,
-    const ExecutableCodeOwnerIndex *CodeOwnerIndex, PipelineResult &Result) {
+    const ExecutableCodeOwnerIndex *CodeOwnerIndex,
+    const std::shared_ptr<X87CallGraphCache> &X87Graphs,
+    PipelineResult &Result) {
   if (Img.Arch != Arch::X64) {
     // Where an import takes every argument on the stack (i386: regparm is
     // for internal calls only), there are no register summaries, but a
@@ -3324,10 +3327,14 @@ void computeCallRegisterEffects(
         Pending.emplace_back(Callee, Img.getFunctionNameAt(Callee));
       }
     }
-    // Keep at most eight completed bodies and four active CFG builders alive.
-    // Tiny batches stay serial. Table/stack proofs can dominate bodies only
-    // a few KiB long, so medium batches can also use independent decoders.
-    constexpr size_t BatchSize = 8;
+    // Give parallel workers enough admitted bodies to overlap costly callees
+    // across the old eight-body barriers. Publication remains in Pending
+    // order, and the next breadth-first frontier is still discovered only
+    // after this one finishes. Retain at most 32 bodies and four active CFG
+    // builders; a serial run keeps its smaller eight-body working set.
+    const size_t BatchSize = workerThreadCount() > 1 ? 32 : 8;
+    // Table/stack proofs can dominate bodies only a few KiB long, so medium
+    // batches can also use independent decoders; tiny batches stay serial.
     constexpr uint64_t MinParallelBytes = 4096;
     for (size_t Begin = 0; Begin < Pending.size(); Begin += BatchSize) {
       const size_t Count = std::min(BatchSize, Pending.size() - Begin);
@@ -3356,6 +3363,7 @@ void computeCallRegisterEffects(
             ExtraCFG.setNoReturnCalleeProver(&NoReturnCallees);
             ExtraCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
             ExtraCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
+            ExtraCFG.setX87CallGraphCache(X87Graphs);
             for (size_t I; (I = Claim()) < N;) {
               const auto &[Entry, Name] = Pending[Begin + I];
               Bodies[I] = ExtraCFG.build(Img, ExtraDec, Entry, Name);
@@ -3506,6 +3514,10 @@ void Pipeline::buildLowIR(
   const InternalNoReturnIndex NoReturnCallees(
       Img, &FuncEntries, &NoReturnTargets, &AbsoluteRelocationRoots,
       CodeOwnerIndex);
+  // Share immutable x87 graph facts only inside this image analysis.
+  // Context keys snapshot the changing CFG protection sets; the immutable
+  // indexes above outlive every worker and every graph retained here.
+  auto X87Graphs = createX87CallGraphCache();
 
   // Decode cost tracks a function's instruction count, which is unknown before
   // the recursive-descent build runs.  Candidates are address-sorted, so the
@@ -3532,6 +3544,7 @@ void Pipeline::buildLowIR(
     LocalCFG.setNoReturnCalleeProver(&NoReturnCallees);
     LocalCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
     LocalCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
+    LocalCFG.setX87CallGraphCache(X87Graphs);
     for (size_t I; (I = Claim()) < N;) {
       AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                  Candidates[I].second);
@@ -3587,6 +3600,7 @@ void Pipeline::buildLowIR(
       LocalCFG.setNoReturnCalleeProver(&NoReturnCallees);
       LocalCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
       LocalCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
+      LocalCFG.setX87CallGraphCache(X87Graphs);
       LocalCFG.setProtectedJumpTableRelocationSlots(&ProtectedRelocationSlots);
       LocalCFG.setUnsafeJumpTableBranches(&UnsafeJumpTableBranches);
       LocalCFG.setPreservePotentialJumpTableBranches(
@@ -3873,9 +3887,14 @@ void Pipeline::buildLowIR(
   // code identities.  Keeping publication after both fixed points prevents a
   // provisional producer or withdrawn continuation from becoming stale
   // image-global evidence.
+  bool PublishedCodeRefs = false;
   for (const LowFunc &Function : AllLow)
     for (va_t Ref : Function.CodeRefTargets)
-      Img.CodeRefTargets.insert(Ref);
+      PublishedCodeRefs |= Img.CodeRefTargets.insert(Ref).second;
+  // Newly published image facts can change a callee's address provenance.
+  // Extra-callee analysis begins a fresh cache lifetime after such a change.
+  if (PublishedCodeRefs)
+    X87Graphs = createX87CallGraphCache();
 
   size_t FuncCount = 0;
   for (size_t I = 0; I < Total; ++I) {
@@ -3929,7 +3948,8 @@ void Pipeline::buildLowIR(
   }
 
   computeCallRegisterEffects(Img, FuncEntries, NoReturnTargets, NoReturnCallees,
-                             AbsoluteRelocationRoots, CodeOwnerIndex, Result);
+                             AbsoluteRelocationRoots, CodeOwnerIndex, X87Graphs,
+                             Result);
 }
 
 } // namespace neverd

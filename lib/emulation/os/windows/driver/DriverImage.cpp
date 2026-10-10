@@ -771,6 +771,9 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
                   profile::ProcessorEnvironmentBase + profile::PageSize},
         std::pair{profile::StackBase, profile::StackBase + profile::StackSize},
         std::pair{profile::ThunkBase, profile::ThunkBase + profile::ThunkSize},
+        std::pair{profile::KernelModuleBase,
+                  profile::KernelModuleBase +
+                      profile::KernelModuleCount * profile::KernelModuleStride},
         std::pair{profile::CallbackStackBase,
                   profile::CallbackStackBase +
                       profile::MaxConcurrentCallbacks *
@@ -987,6 +990,7 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   }
 
   DriverImage Image;
+  Image.Name = Path.filename().string();
   Image.Base = ActualBase;
   Image.PreferredBase = Loaded->Base;
   Image.Entry = ActualBase + (Loaded->Entry - Base);

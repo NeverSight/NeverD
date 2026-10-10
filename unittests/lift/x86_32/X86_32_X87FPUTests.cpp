@@ -12,7 +12,25 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
+#include <barrier>
+#include <future>
 #include <set>
+
+namespace neverd::detail {
+struct X87CallGraphCacheTestAccess {
+  static std::array<size_t, 3> stats(const CFGBuilder &Builder) {
+    return Builder.x87CallGraphCacheStatsForTesting();
+  }
+  static std::pair<std::optional<int>, size_t>
+  query(CFGBuilder &Builder, const BinaryImage &Image, va_t Entry,
+        size_t Budget = limits::kMaxX87CallProofWork, unsigned Depth = 0) {
+    const auto Effect =
+        Builder.x87CallEffectForTesting(Image, Entry, Budget, Depth);
+    return {Effect, Budget};
+  }
+};
+} // namespace neverd::detail
 
 class X86_32_X87FPU : public NeverDLiftTest {};
 
@@ -497,6 +515,376 @@ TEST(X87CallStack, IncompleteCallClosureCannotAcquireAnEffect) {
     EXPECT_EQ(hasX87CallDefinition(Low),
               Count == limits::kMaxX87CallProofDepth);
   }
+}
+
+TEST(X87CallGraphCache, IndependentBuildersRetainTheSameCallAndReturnIR) {
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    BinaryImage Image = x87CallLoopImage(Architecture, BinaryFormat::ELF);
+    const std::set<va_t> Entries{0x1000, 0x1100, 0x1200};
+    auto Cache = createX87CallGraphCache();
+    std::array<CFGBuilder, 3> Builders;
+    std::array<std::string, 3> Dumps;
+    size_t ColdHits = 0;
+    for (size_t I = 0; I != Builders.size(); ++I) {
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Image));
+      CFGBuilder &Builder = Builders[I];
+      Builder.setKnownFuncEntries(&Entries);
+      if (I)
+        Builder.setX87CallGraphCache(Cache);
+      const LowFunc Low = Builder.build(Image, Dec, 0x1000, "x87_call_loop");
+      ASSERT_TRUE(Low.hasCompleteInstructionLift());
+      EXPECT_TRUE(hasX87CallDefinition(Low));
+      llvm::raw_string_ostream OS(Dumps[I]);
+      Pipeline::dumpLowIR({Low}, OS);
+      if (I == 1) {
+        const auto Stats = detail::X87CallGraphCacheTestAccess::stats(Builder);
+        EXPECT_GT(Stats[1], 0u);
+        ColdHits = Stats[0];
+      }
+    }
+    EXPECT_EQ(Dumps[0], Dumps[1]);
+    EXPECT_EQ(Dumps[0], Dumps[2]);
+    EXPECT_GT(detail::X87CallGraphCacheTestAccess::stats(Builders[2])[0],
+              ColdHits);
+  }
+}
+
+TEST(X87CallGraphCache, WarmGraphsReplayEveryProofBudgetExactly) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  const std::set<va_t> Entries{0x1000, 0x1100, 0x1200};
+  auto Cache = createX87CallGraphCache();
+  CFGBuilder Seed;
+  Seed.setKnownFuncEntries(&Entries);
+  Seed.setX87CallGraphCache(Cache);
+  constexpr size_t FullBudget = 4096;
+  const auto Complete = Access::query(Seed, Image, 0x1100, FullBudget);
+  ASSERT_EQ(Complete.first, std::optional<int>(-1));
+  const size_t Cost = FullBudget - Complete.second;
+  ASSERT_GT(Cost, 0u);
+  ASSERT_LT(Cost, 512u);
+  for (size_t Budget = 0; Budget <= Cost + 2; ++Budget) {
+    SCOPED_TRACE(Budget);
+    CFGBuilder Cold, Warm;
+    Cold.setKnownFuncEntries(&Entries);
+    Warm.setKnownFuncEntries(&Entries);
+    Warm.setX87CallGraphCache(Cache);
+    // Reaching the same answer is insufficient: skipping the cached graph's
+    // work would change the point where an incomplete proof becomes complete.
+    EXPECT_EQ(Access::query(Warm, Image, 0x1100, Budget),
+              Access::query(Cold, Image, 0x1100, Budget));
+  }
+  EXPECT_GT(Access::stats(Seed)[0], 0u);
+}
+
+TEST(X87CallGraphCache, AnIncompleteProofDoesNotPoisonAnotherDepth) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  auto Cache = createX87CallGraphCache();
+  CFGBuilder Shallow;
+  Shallow.setX87CallGraphCache(Cache);
+  const auto Incomplete =
+      Access::query(Shallow, Image, 0x1100, limits::kMaxX87CallProofWork,
+                    limits::kMaxX87CallProofDepth - 1);
+  EXPECT_FALSE(Incomplete.first);
+  ASSERT_GT(Access::stats(Shallow)[1], 0u);
+  CFGBuilder Full, Cold;
+  Full.setX87CallGraphCache(Cache);
+  const auto Complete = Access::query(Full, Image, 0x1100);
+  EXPECT_EQ(Complete.first, std::optional<int>(-1));
+  EXPECT_EQ(Complete, Access::query(Cold, Image, 0x1100));
+  EXPECT_GT(Access::stats(Full)[0], 0u);
+  // Conversely, the earlier successful answer must not grant extra depth.
+  CFGBuilder ShallowAgain;
+  ShallowAgain.setX87CallGraphCache(Cache);
+  EXPECT_EQ(Access::query(ShallowAgain, Image, 0x1100,
+                          limits::kMaxX87CallProofWork,
+                          limits::kMaxX87CallProofDepth - 1),
+            Incomplete);
+}
+
+TEST(X87CallGraphCache, ChangedBuildContextsCannotHitThePreviousGraph) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  struct ReturningProver final : NoReturnCalleeProver {
+    bool neverReturns(va_t, unsigned) const override { return false; }
+  } FirstProver, OtherProver;
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+    BinaryImage OtherImage = x87CallLoopImage(Arch::X86, BinaryFormat::ELF, 5);
+    std::set<va_t> Entries{0x1000, 0x1100, 0x1200}, Protected, Unsafe;
+    auto Cache = createX87CallGraphCache();
+    unsigned Depth = 0;
+    const NoReturnCalleeProver *Prover = &FirstProver;
+    const auto Configure = [&](CFGBuilder &Builder) {
+      Builder.setKnownFuncEntries(&Entries);
+      Builder.setProtectedJumpTableRelocationSlots(&Protected);
+      Builder.setUnsafeJumpTableBranches(&Unsafe);
+      Builder.setNoReturnCalleeProver(Prover, Depth);
+    };
+    CFGBuilder Seed;
+    Configure(Seed);
+    Seed.setX87CallGraphCache(Cache);
+    ASSERT_EQ(Access::query(Seed, Image, 0x1200).first, std::optional<int>(-1));
+    const auto Before = Access::stats(Seed);
+    const BinaryImage *CurrentImage = &Image;
+    if (Mutation == 0)
+      Depth = 1;
+    else if (Mutation == 1)
+      Entries.insert(0x1250); // Same pointer and new contents.
+    else if (Mutation == 2)
+      Protected.insert(0x1210);
+    else if (Mutation == 3)
+      Unsafe.insert(0x1220);
+    else if (Mutation == 4)
+      CurrentImage = &OtherImage; // Same VA, different floating stack effect.
+    else if (Mutation == 5)
+      Prover = &OtherProver;
+    CFGBuilder Warm, Cold;
+    Configure(Warm);
+    Configure(Cold);
+    for (CFGBuilder *Builder : {&Warm, &Cold}) {
+      if (Mutation == 6)
+        Builder->setKnownFuncEntries(nullptr);
+      else if (Mutation == 7)
+        Builder->setProtectedJumpTableRelocationSlots(nullptr);
+      else if (Mutation == 8)
+        Builder->setUnsafeJumpTableBranches(nullptr);
+    }
+    Warm.setX87CallGraphCache(Cache);
+    const auto Actual = Access::query(Warm, *CurrentImage, 0x1200);
+    EXPECT_EQ(Actual, Access::query(Cold, *CurrentImage, 0x1200));
+    EXPECT_EQ(Actual.first, std::optional<int>(Mutation == 4 ? 0 : -1));
+    EXPECT_EQ(Access::stats(Warm)[0], Before[0]);
+  }
+}
+
+BinaryImage x87RejectedGraphImage(Arch Architecture, bool Exceptional) {
+  BinaryImage Image;
+  Image.Arch = Architecture;
+  Image.Bits = Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Entry = 0x1200;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Image.Entry;
+  Text.Size = 0x20;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  Text.Data[0] = Exceptional ? 0xd9 : 0xff;
+  Text.Data[1] = Exceptional ? 0xe8 : 0xe0; // fld1 or jmp eax/rax
+  Text.Data[2] = 0xc3;
+  if (Exceptional) {
+    Text.Data[0x10] = 0xd9;
+    Text.Data[0x11] = 0xe8;
+    Text.Data[0x12] = 0xc3;
+    ExceptionFunction EH;
+    EH.CodeRange = {Image.Entry, Image.Entry + Text.Size};
+    EH.Encoding = ExceptionEncoding::DwarfFDE;
+    EH.Personality = ExceptionPersonality::GxxPersonalityV0;
+    EH.Itanium.emplace();
+    ItaniumCallSite Site;
+    Site.GuardedRange = {Image.Entry, Image.Entry + 2};
+    Site.LandingPadVA = Image.Entry + 0x10;
+    EH.Itanium->CallSites.push_back(Site);
+    Image.ExceptionMetadata.Functions.push_back(std::move(EH));
+    Image.ExceptionMetadata.rebuildIndex();
+  }
+  Image.Symbols.push_back(Symbol::makeFunc(Image.Entry, Text.Size));
+  Image.KnownCodeRanges.emplace_back(Image.Entry, Image.Entry + Text.Size);
+  Image.Segments.push_back(std::move(Text));
+  return Image;
+}
+
+TEST(X87CallGraphCache, ImmutableProjectionRejectionsReplayBudgetsExactly) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  for (Arch Architecture : {Arch::X86, Arch::X64})
+    for (bool Exceptional : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Architecture));
+      SCOPED_TRACE(Exceptional);
+      BinaryImage Image = x87RejectedGraphImage(Architecture, Exceptional);
+      // Preserve an unresolved dispatch instead of granting it an indirect
+      // tail-call classification. This is an ordinary CFG policy input.
+      const std::set<va_t> Unsafe{Image.Entry};
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Image));
+      CFGBuilder Shape;
+      Shape.setUnsafeJumpTableBranches(&Unsafe);
+      const LowFunc Low = Shape.build(Image, Dec, Image.Entry);
+      ASSERT_TRUE(Low.hasCompleteInstructionLift());
+      ASSERT_TRUE(Low.TruncatedPathAddresses.empty());
+      ASSERT_FALSE(Low.Blocks.empty());
+      if (Exceptional) {
+        ASSERT_FALSE(Low.Blocks.front().ExceptionalSuccs.empty());
+      } else {
+        ASSERT_EQ(Low.Blocks.size(), 1u);
+        ASSERT_TRUE(Low.Blocks.front().Succs.empty());
+        ASSERT_FALSE(Low.Blocks.front().Ops.empty());
+        ASSERT_EQ(Low.Blocks.front().Ops.back().Opcode, NdOp::INDIR_BR);
+      }
+
+      auto Cache = createX87CallGraphCache();
+      CFGBuilder Seed;
+      Seed.setUnsafeJumpTableBranches(&Unsafe);
+      Seed.setX87CallGraphCache(Cache);
+      const auto Rejected = Access::query(Seed, Image, Image.Entry);
+      EXPECT_FALSE(Rejected.first);
+      EXPECT_EQ(Rejected.second, limits::kMaxX87CallProofWork - 1);
+      ASSERT_EQ(Access::stats(Seed)[1], 1u);
+      for (size_t Budget :
+           {size_t(0), size_t(1), size_t(2), size_t(3), size_t(8), size_t(64),
+            size_t(limits::kMaxX87CallProofWork)}) {
+        SCOPED_TRACE(Budget);
+        CFGBuilder Cold, Warm;
+        Cold.setUnsafeJumpTableBranches(&Unsafe);
+        Warm.setUnsafeJumpTableBranches(&Unsafe);
+        Warm.setX87CallGraphCache(Cache);
+        const auto Before = Access::stats(Warm);
+        const auto Actual = Access::query(Warm, Image, Image.Entry, Budget);
+        EXPECT_EQ(Actual, Access::query(Cold, Image, Image.Entry, Budget));
+        EXPECT_FALSE(Actual.first);
+        EXPECT_EQ(Actual.second, Budget ? Budget - 1 : 0);
+        EXPECT_EQ(Access::stats(Warm)[0], Before[0] + (Budget != 0));
+        EXPECT_EQ(Access::stats(Warm)[1], 1u);
+      }
+    }
+}
+
+TEST(X87CallGraphCache, RejectionMarkersCannotSurviveChangedBuildContexts) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  for (bool Exceptional : {false, true})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(Exceptional);
+      SCOPED_TRACE(Mutation);
+      BinaryImage Image = x87RejectedGraphImage(Arch::X86, Exceptional);
+      BinaryImage Valid = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+      std::set<va_t> Entries{0x1200}, Protected, Unsafe{0x1200};
+      unsigned Depth = 0;
+      auto Configure = [&](CFGBuilder &Builder) {
+        Builder.setKnownFuncEntries(&Entries);
+        Builder.setProtectedJumpTableRelocationSlots(&Protected);
+        Builder.setUnsafeJumpTableBranches(&Unsafe);
+        Builder.setNoReturnCalleeProver(nullptr, Depth);
+      };
+      auto Cache = createX87CallGraphCache();
+      CFGBuilder Seed;
+      Configure(Seed);
+      Seed.setX87CallGraphCache(Cache);
+      ASSERT_FALSE(Access::query(Seed, Image, Image.Entry).first);
+      ASSERT_EQ(Access::stats(Seed)[1], 1u);
+      const auto Before = Access::stats(Seed);
+      const BinaryImage *CurrentImage = &Image;
+      if (Mutation == 0)
+        Entries.insert(0x1218);
+      else if (Mutation == 1)
+        Protected.insert(0x1218);
+      else if (Mutation == 2)
+        Unsafe.insert(0x1218);
+      else if (Mutation == 3)
+        Depth = 1;
+      else
+        CurrentImage = &Valid;
+      CFGBuilder Cold, Warm;
+      Configure(Cold);
+      Configure(Warm);
+      Warm.setX87CallGraphCache(Cache);
+      const auto Actual = Access::query(Warm, *CurrentImage, 0x1200);
+      EXPECT_EQ(Actual, Access::query(Cold, *CurrentImage, 0x1200));
+      EXPECT_EQ(Actual.first,
+                Mutation == 4 ? std::optional<int>(-1) : std::nullopt);
+      EXPECT_EQ(Access::stats(Warm)[0], Before[0]);
+    }
+}
+
+TEST(X87CallGraphCache, IncompleteInstructionGraphsAreNeverRetained) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  // The executable section ends halfway through FLD1. Ownership of the entry
+  // does not turn a truncated instruction stream into a complete local graph.
+  Image.Segments[0].Size = 0x201;
+  Image.Segments[0].Data.resize(0x201);
+  auto Cache = createX87CallGraphCache();
+  for (unsigned I = 0; I != 2; ++I) {
+    CFGBuilder Builder;
+    Builder.setX87CallGraphCache(Cache);
+    EXPECT_FALSE(Access::query(Builder, Image, 0x1200).first);
+    EXPECT_EQ(Access::stats(Builder)[0], 0u);
+    EXPECT_EQ(Access::stats(Builder)[1], 0u);
+  }
+}
+
+TEST(X87CallGraphCache, ConcurrentBuildersKeepIndependentProofState) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  const std::set<va_t> Entries{0x1000, 0x1100, 0x1200};
+  CFGBuilder Cold;
+  Cold.setKnownFuncEntries(&Entries);
+  const auto Expected = Access::query(Cold, Image, 0x1100);
+  ASSERT_EQ(Expected.first, std::optional<int>(-1));
+  auto Cache = createX87CallGraphCache();
+  std::barrier Start(4);
+  std::vector<std::future<bool>> Workers;
+  for (unsigned I = 0; I != 4; ++I)
+    Workers.push_back(std::async(std::launch::async, [&] {
+      Start.arrive_and_wait();
+      for (unsigned J = 0; J != 8; ++J) {
+        CFGBuilder Builder;
+        Builder.setKnownFuncEntries(&Entries);
+        Builder.setX87CallGraphCache(Cache);
+        if (Access::query(Builder, Image, 0x1100) != Expected)
+          return false;
+      }
+      return true;
+    }));
+  for (auto &Worker : Workers)
+    EXPECT_TRUE(Worker.get());
+  CFGBuilder Observer;
+  Observer.setX87CallGraphCache(Cache);
+  const auto Stats = Access::stats(Observer);
+  EXPECT_GT(Stats[0], 0u);
+  EXPECT_LE(Stats[1], 128u);
+  EXPECT_LE(Stats[2], 8u * 1024 * 1024);
+}
+
+TEST(X87CallGraphCache, EvictionBoundsRetentionWithoutChangingResults) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  constexpr unsigned Count = 140;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  auto &Text = Image.Segments[0];
+  Text.Size = Count * 16;
+  Text.Data.assign(Text.Size, 0xcc);
+  Image.Symbols.clear();
+  Image.KnownCodeRanges.clear();
+  std::set<va_t> Entries;
+  for (unsigned I = 0; I != Count; ++I) {
+    const va_t Address = Text.VA + I * 16;
+    Text.Data[I * 16] = 0xd9;
+    Text.Data[I * 16 + 1] = 0xe8;
+    Text.Data[I * 16 + 2] = 0xc3;
+    Entries.insert(Address);
+    Image.Symbols.push_back(Symbol::makeFunc(Address, 3));
+    Image.KnownCodeRanges.emplace_back(Address, Address + 3);
+  }
+  CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&Entries);
+  Builder.setX87CallGraphCache(createX87CallGraphCache());
+  for (va_t Address : Entries) {
+    ASSERT_EQ(Access::query(Builder, Image, Address).first,
+              std::optional<int>(-1));
+    const auto Stats = Access::stats(Builder);
+    EXPECT_LE(Stats[1], 128u);
+    EXPECT_LE(Stats[2], 8u * 1024 * 1024);
+  }
+  const auto Before = Access::stats(Builder);
+  EXPECT_EQ(Before[1], 128u);
+  EXPECT_EQ(Access::query(Builder, Image, *Entries.begin()).first,
+            std::optional<int>(-1));
+  EXPECT_EQ(Access::stats(Builder)[0], Before[0]); // Oldest graph was evicted.
+  EXPECT_EQ(Access::query(Builder, Image, *Entries.rbegin()).first,
+            std::optional<int>(-1));
+  EXPECT_EQ(Access::stats(Builder)[0], Before[0] + 1);
 }
 
 TEST_F(X86_32_X87FPU, NativeAndLiftedCallLoopsReturnTheIndependentSum) {

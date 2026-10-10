@@ -51,6 +51,13 @@ NEVERD_DRIVER_PROFILE(GuardDispatchThunk, GuardThunkBase + 16)
 NEVERD_DRIVER_PROFILE(ThunkBase, 0x72000000)
 NEVERD_DRIVER_PROFILE(ThunkSize, 0x10000)
 NEVERD_DRIVER_PROFILE(ThunkStride, 16)
+// Readable PE identities for kernel/HAL/loader exports. The function bodies
+// remain opaque service gates, separate from callback-table thunks.
+NEVERD_DRIVER_PROFILE(KernelModuleBase, 0x86000000)
+NEVERD_DRIVER_PROFILE(KernelModuleStride, 0x400000)
+NEVERD_DRIVER_PROFILE(KernelModuleCount, 3)
+NEVERD_DRIVER_PROFILE(KernelModuleCodeRVA, PageSize)
+NEVERD_DRIVER_PROFILE(KernelModuleExportRVA, KernelModuleCodeRVA + ThunkSize)
 NEVERD_DRIVER_PROFILE(StackAlignment, 16)
 NEVERD_DRIVER_PROFILE(PointerSize, 8)
 NEVERD_DRIVER_PROFILE(MaxAPIArguments, 11)

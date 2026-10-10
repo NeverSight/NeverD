@@ -36,7 +36,7 @@ Analysis support does not imply native reconstruction support.
 | `__GSHandlerCheck_SEH/EH/EH4` | Wrapped personality plus checked GS cookie provenance | Base-language graph and wrapper annotation | Analysis only; a touched function is rejected rather than downgraded |
 | x86 registration-chain SEH3 | Checked scope graph, actual FS:[0] administration, callback roots and CFG-derived reaching try levels | Reducible, unambiguous regions become explicit EH nodes; other state flow retains native annotations | Native PE32 reconstruction for the checked fixed-frame, caller-cleanup subset below |
 | x86 registration-chain SEH4 | Checked cookie expressions, encoded scope pointer and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the authenticated direct-frame subset below, including initialized EH/GS cookies |
-| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked single-try scalar-catch subset below |
+| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked single-try scalar or unbound catch subset below |
 
 Malformed records are never treated as ordinary complete records. A partially
 decoded record remains useful for inspection, but cannot authorize native
@@ -114,9 +114,19 @@ root definitions; HighIR and LLVM express the aligned parent coordinate from
 the original entry ESP without inventing a constant stack displacement. Exact
 no-return call receipts remove ordinary fallthrough before SSA while preserving
 exceptional entries. HighIR restores the captured SavedESP through that same
-aligned coordinate before transferring to a checked continuation. It keeps
-handler and continuation annotations; full structured callback lowering remains
-unsupported. Native reconstruction supports the checked scalar-catch subset
+aligned coordinate before transferring to a checked continuation. A checked
+runtime-only catch CFG becomes an explicit clause, including its private ESP
+input and the complete callback body. The input is captured at callback entry;
+HighC names it with an explicit runtime-ABI intrinsic in its analysis view.
+Explicit C retains the callback as a labelled native entry in the parent,
+skipped by ordinary fallthrough; C++ pseudocode includes it in the catch clause.
+Neither view implements a standalone exception dispatcher. Checked helper calls
+use their retained callee ABI and current SSA arguments, so callback spills do
+not become extra call arguments. Explicit FS accesses remain visible when
+aligned, byte-addressed registration stores depend on them.
+Ordinary incoming edges, incomplete roots, changed return receipts or a body
+that cannot move as one region retain handler and continuation annotations.
+Native reconstruction supports the checked scalar and unbound catch subset
 below, including its separate invocation stack.
 An unproven continuation or conflicting return retains annotations and
 withdraws native authority. These facts remain separate from the source
@@ -125,7 +135,9 @@ Only callback-pointer fields authenticated by the FuncInfo parser are excluded
 from ordinary indirect-entry discovery. Another reference to the same target
 retains its independent ordinary-entry role. MedIR gives runtime-only catch and
 cleanup roots the established parent EBP, keeps their private callback ESP
-unknown, and gives a checked continuation its saved parent ESP. Stack-offset
+distinct, and gives a checked continuation its saved parent ESP. The checked
+catch projection captures its own ESP; a cleanup still needs its own callback
+ABI proof before its body can be embedded. Stack-offset
 proofs, HighIR and LLVM use the same coordinates. Malformed root carriers and
 conflicting saved-stack values cannot acquire those guarantees.
 Structured catches keep an explicit transfer to the checked continuation;
@@ -207,8 +219,13 @@ EH4 also requires `LLVM_NEVERD_X86_REGISTRATION_COOKIES`; GS initialization
 requires `LLVM_NEVERD_X86_REGISTRATION_GS`. The older published r3 package
 rejects native installation.
 
-Native x86 C++ reconstruction currently supports one synchronous typed try and
-one scalar catch, by value or reference, with at most 128 source unwind states.
+Native x86 C++ reconstruction currently supports one synchronous try and one
+catch, with at most 128 source unwind states. A catch may bind a checked scalar
+by value or reference, omit its local object, or be `catch(...)`. An unbound
+typed catch retains its exact RTTI and adjectives; catch-all retains null RTTI
+and its native catch-all adjective. An absent object home requires complete
+source proofs with no runtime-object accesses. It cannot supply an implicit
+initialization write to the recovered parent frame.
 The source uses a checked direct MSVC registration frame or the bounded LLVM
 ESI-anchored aligned frame, with `FuncInfo` magic `0x19930522` and no GS wrapper.
 Every preserved call, throw type and cleanup relay needs an independently
@@ -224,16 +241,21 @@ the source contract and independently checks actual LLVM alignment, bounds,
 initialization at every catch entry, callback lifetime and the final writeback.
 A frame-layout descriptor alone cannot authorize reconstruction.
 
-LLVM recreates the physical registration, typed catch home, ordered cleanup
-dispatch, complete FuncInfo and private handler. Public installation requires
+LLVM recreates the physical registration, an object home only when required,
+ordered cleanup dispatch, complete FuncInfo and private handler. The installer
+checks that absent object/RTTI fields are literal zero with no overlapping
+fixup, so rebasing cannot turn them into pointers. Public installation requires
 `LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS`,
 `LLVM_NEVERD_X86_CXX_FUNCTION_RECEIPTS` and
 `LLVM_NEVERD_X86_CXX_HANDLER_RECEIPTS`, then independently replays edited IR and
 checks actual emitted code, tables, SafeSEH and all absolute relocations. Entry
 patches may not overwrite preserved helper or CRT instructions. The current
-runtime fixtures prove integer value/reference catches and nested destruction
-under Wine and the Windows CRT, including forced relocation. Other try/catch
-graphs, unproved object types, incoming stack arguments, unproved dynamic frames
+runtime fixtures cover integer value/reference catches, unbound typed catches,
+catch-all with signed and unsigned throws, and nested destruction, including
+forced relocation. Fixed MSVC-style frames use an independent assembly fixture;
+realigned frames use compiler-generated parents. Both link the captured MSVC
+CRT libraries. The CI replay executes the identical PE files on Windows. Other
+try/catch graphs, unproved object types, incoming stack arguments, unproved dynamic frames
 and GS or asynchronous C++ remain available for analysis and are rejected for
 native installation.
 

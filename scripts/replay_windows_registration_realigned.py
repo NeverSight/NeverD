@@ -15,12 +15,12 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_eh import image_digest, run_image
-    from .check_windows_registration_realigned import SOURCE, require_test_result
+    from .check_windows_registration_realigned import SOURCE, require_test_result, validate_decompilation
     from .check_windows_registration_rewrite import PE32
     from .windows_registration_libraries import validate_manifest
 else:
     from check_windows_registration_eh import image_digest, run_image
-    from check_windows_registration_realigned import SOURCE, require_test_result
+    from check_windows_registration_realigned import SOURCE, require_test_result, validate_decompilation
     from check_windows_registration_rewrite import PE32
     from windows_registration_libraries import validate_manifest
 
@@ -30,7 +30,7 @@ IMAGES = {"probe.exe": 0, "probe-rebased.exe": 0,
 
 def validate_capture(root: Path, capture: dict) -> None:
     validate_manifest(capture.get("runtime_libraries", {}))
-    if require_test_result(root / "emit.xml") != 2:
+    if require_test_result(root / "emit.xml") != 3:
         raise ValueError("realigned emission/root identity evidence is missing")
     if capture.get("schema") != 1 or \
             capture.get("evidence") != "generated-realigned-callback-analysis" or \
@@ -46,9 +46,19 @@ def validate_capture(root: Path, capture: dict) -> None:
                 record.get("sha256") != image_digest(root / name):
             raise ValueError("realigned callback image or expected result changed")
         if IMAGES[name] == 0:
-            if record.get("analysis_tests") != 1 or \
-                    require_test_result(root / (Path(name).stem + ".xml")) != 1:
+            if record.get("analysis_tests") != 3 or \
+                    require_test_result(root / (Path(name).stem + ".xml")) != 3:
                 raise ValueError("realigned callback analysis evidence is missing")
+            outputs = record.get("decompilation", {})
+            if set(outputs) != {"c", "cpp"}:
+                raise ValueError("realigned callback public output evidence is missing")
+            for language, output in outputs.items():
+                source = Path(name).stem + ".decompiled." + language
+                if output.get("source") != source or \
+                        output.get("sha256") != hashlib.sha256((root / source).read_bytes()).hexdigest() or \
+                        output.get("syntax_checked") is not (language == "c"):
+                    raise ValueError("realigned callback public output evidence changed")
+                validate_decompilation((root / source).read_text(), language)
     for name in ("probe", "wrong-result"):
         original = PE32((root / (name + ".exe")).read_bytes())
         if original.base != 0x400000 or \

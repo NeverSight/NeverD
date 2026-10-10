@@ -38,6 +38,8 @@ __attribute__((noinline, used)) static void unpack_bytes(DRIVER_OBJECT *Driver,
     Driver->MajorFunction[0] = (void *)DriverEntry;
   else if (Packed.Mode == 3)
     RetainedPath = Path;
+  else if (Packed.Mode == 10)
+    RetainedPool = (void *)((U64)IofCompleteRequest + 1);
   else if (Packed.Mode == 4) {
     RtlInitUnicodeString(&RoutineName, L"IofCompleteRequest");
     Resolved[0] = MmGetSystemRoutineAddress(&RoutineName);

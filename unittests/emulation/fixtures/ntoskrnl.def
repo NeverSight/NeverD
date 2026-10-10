@@ -9,6 +9,8 @@ EXPORTS
   ZwClose
   RtlInitUnicodeString
   ExAllocatePool
+  NtQuerySystemInformation
+  ZwQuerySystemInformation
   ExAllocatePoolWithTag
   ExFreePoolWithTag
   IoCreateDevice
@@ -44,6 +46,8 @@ EXPORTS
   ZwOpenFile
   MmMapLockedPagesSpecifyCache
   MmUnmapLockedPages
+  MmProbeAndLockPages
+  MmUnlockPages
   IoAllocateMdl
   IoFreeMdl
   MmBuildMdlForNonPagedPool

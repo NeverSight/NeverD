@@ -384,6 +384,8 @@ std::vector<ExprPtr>
 MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                     va_t ResolvedSlot) {
   const auto &Ops = CurBlock.Ops;
+  if (auto Registration = collectRegistrationCallArgs(CurBlock, CallIdx))
+    return std::move(*Registration);
   // A call whose inputs are every argument it passes (a formatted call)
   // passes exactly those: a floating one as its bits' value, an integer one
   // that carries an address as that address.

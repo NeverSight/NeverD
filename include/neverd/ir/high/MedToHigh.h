@@ -357,6 +357,11 @@ private:
   std::vector<ExprPtr> collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                        va_t ResolvedSlot = 0);
 
+  /// Exact arguments of a retained PE32 leaf/throw ABI, from the current SSA
+  /// register values. Nullopt leaves unbound callees to ordinary recovery.
+  std::optional<std::vector<ExprPtr>>
+  collectRegistrationCallArgs(const MedBlock &Block, size_t CallIdx);
+
   /// Resolve the SSA variable of register \p RegOff reaching the ENTRY of
   /// \p B (its live-in value: a PHI in B, else the single reaching definition
   /// walked back through predecessors).  Used to recover a register call

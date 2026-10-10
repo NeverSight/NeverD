@@ -137,6 +137,13 @@ public:
   void writeMemoryHelpers();
   void writeX64SyscallHelper();
   void writeX64WindowsSyscallHelper();
+  // X86/HighCRegistration.cpp: explicit runtime ABI inputs in the EH view.
+  void writeRegistrationEntryDeclarations(const std::vector<HighFunc> &Funcs);
+  std::string registrationEntryExpression(const HighExpr &E) const;
+  static bool preservesRegistrationMemory(const HighFunc &Func);
+  bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
+  void writeEmbeddedRegistrationCallbacks(const HighStmt &Stmt, int Indent);
+  unsigned RegistrationRegionNumber = 0;
   struct MemoryLoadDestination {
     std::string Name;
     bool Written = false;

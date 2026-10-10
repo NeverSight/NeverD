@@ -45,6 +45,7 @@ def run(executable):
         ok(client, "open", {"path": str(binary), "analysis": False})
         first = source(client)
         assert first["fixture_prepares"] == 1 and first["fixture_pages"] == 1
+        assert first["fixture_renders"] == 0, first
         second = source(client, B)
         assert second["fixture_prepares"] == 2
         reused(source(client), first)
@@ -64,6 +65,7 @@ def run(executable):
         reused(source(client), first)
         explicit_c = source(client, representation="c")
         assert explicit_c["representation"] == "c"
+        assert explicit_c["fixture_renders"] == 0, explicit_c
         assert explicit_c["fixture_pages"] > first["fixture_pages"]
         reused(source(client), first)
 
@@ -149,6 +151,25 @@ def run(executable):
         assert rebuilt["fixture_prepares"] > large["fixture_prepares"], rebuilt
         assert rebuilt["fixture_pages"] > large["fixture_pages"], rebuilt
         assert rebuilt["text"] == large["text"]
+
+        # Switching pipelines can fail after discarding the preceding IR.
+        # A graph request for A must really prepare A again; B then retries
+        # successfully instead of being remembered as already prepared.
+        fail_binary = root / "source-cache-prepare-fail.bin"
+        fail_binary.write_bytes(b"prepare failure fixture")
+        retry = clients.enter_context(Client(executable))
+        ok(retry, "open", {"path": str(fail_binary), "analysis": False})
+        prepared_a = source(retry)
+        assert prepared_a["fixture_prepares"] == 1
+        failure = retry.call("decompile", {"address": B,
+                                            "representation": "source"})
+        assert failure["status"] == "error", failure
+        assert "fixture preparation failed" in str(failure), failure
+        ok(retry, "cfg", {"address": A})
+        prepared_b = source(retry, B)
+        assert prepared_b["fixture_prepares"] == 4, prepared_b
+        assert prepared_b["fixture_renders"] == 0, prepared_b
+        reused(source(retry), prepared_a)
 
         # VM preparation advances the worker revision and rebuilds aliases.
         # Cache the finished document under that new context on its first

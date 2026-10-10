@@ -7,6 +7,7 @@
 #include "neverd/ir/high/X86RegistrationFrame.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
 
 namespace neverd {
@@ -45,6 +46,13 @@ ExprPtr x86RegistrationFrameAddress(const RegistrationFrameCoordinate &Frame,
 }
 
 ExprPtr lowerX86RegistrationRoot(const MedFunc &Func, const MedOp &Op) {
+  if (isRegistrationCallbackStackRoot(Func, Op)) {
+    auto Value = HighExpr::makeVar(Op.Output, NdType::makeInt(4, false));
+    Value->Kind = ExprKind::EntryRegister;
+    Value->EntryFunctionVA = Func.Entry;
+    Value->EntryVA = Op.Addr;
+    return Value;
+  }
   const auto Coordinate = registrationRootFrameCoordinate(Func, Op);
   if (!Coordinate)
     return HighExpr::makeUndef(Op.Output.Size);

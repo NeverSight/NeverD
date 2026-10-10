@@ -63,6 +63,8 @@ llvm::Expected<uint64_t> KernelModel::call(
   case KernelAPIKind::ExAllocatePool:
   case KernelAPIKind::ExAllocatePoolWithTag:
   case KernelAPIKind::ExAllocatePool2:
+  case KernelAPIKind::NtQuerySystemInformation:
+  case KernelAPIKind::ZwQuerySystemInformation:
   case KernelAPIKind::ExFreePool:
   case KernelAPIKind::ExFreePoolWithTag:
     break;
@@ -127,6 +129,10 @@ llvm::Expected<uint64_t> KernelModel::call(
     auto Context = executionProcessContext();
     return uint64_t(Context ? Context->PreviousMode : KernelMode);
   }
+  case KernelAPIKind::NtQuerySystemInformation:
+  case KernelAPIKind::ZwQuerySystemInformation:
+    return querySystemInformation(
+        A, Kind == KernelAPIKind::ZwQuerySystemInformation);
   case KernelAPIKind::PsGetCurrentProcessId:
     if (auto Context = executionProcessContext())
       return uint64_t(Context->CreatingProcessID);

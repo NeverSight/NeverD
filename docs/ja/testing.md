@@ -98,6 +98,8 @@ v4 テストはプレフィックスのサイズとパディング、切り詰�
 
 `NeverDLLVMInterpreterModelTests` は独自 LLVM を全状態 LowIR 参照実装と比較し、ビット幅、並列 PHI、switch、ゲストメモリ、独立ステータス、poison ガード、組み込み関数の値域、拒否契約、四つの構築予算を検証します。任意ワードのカウントダウンを完全に証明し、変更されたステータスを拒否します。独自 C の O1/O2 コンパイル結果も同じ観測契約を満たす必要があります。これは対応モデルの検証であり、自動不変条件発見とコンパイラーの正しさは別の義務です。 可変シフトのケースは四つのビット幅、マスクや分岐で制限したシフト量、境界値と範囲外の値、オーバーフロー禁止と正確性フラグ、厳格な poison 拒否、O1/O2 でコンパイルした C を検証します。
 
+`LLVMGuestAlignment.*` はロードとストアを独立したバイトメモリ参照実装と比較し、整列・非整列の領域、自由なアドレス上位ビット、解析された既定アラインメント、部分幅、未使用・上書きされたアクセス、到達不能な分岐、ちょうど十分・1 単位不足の構築予算を検証します。`InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises` は両関係を新たに検査し、ネイティブのスタックストア、入口合同条件の一致、ソース効果の改変を確認します。
+
 `NeverDLLVMScalarEquivalenceTests` は完全なループ入力領域、ゼロ回反復、PHI の同時交換、switch、入力の上位ビット、最後の分割での反例、poison を生む追加更新、戻り値範囲、未対応契約、ちょうど・1不足・ゼロの予算を検査します。独立した倍幅・オーバーフローの参照実装が各対応幅のファネル端点と制約付き乗算を検査し、独立した入れ子ループ C の O1/O2 出力がコンパイラー入力形態を確認します。状態モデルのスイートも端点を検査します。`SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings` は累積計測と従来の局所上限を確認します。
 
 `LLVMScalarDecision.*` は深い exact シフトと拡張の制約、定数分岐、二つのループ後退辺、高位データビット、末尾の未定義操作、非停止、検査済み関数の変更、厳密・一つ不足・局所予算を検査します。`LLVMScalarDecisionCompiled.DeepOneAndTwoBackedgeOracles` は独立作成の単一・二重後退辺の漸化式を符号なし C オラクルと O0/O2 で比較し、合計 32,768 回呼び出します。これはスカラーモデルの検査であり、ネイティブ ABI やバイナリ全体の復元範囲を示すものではありません。
@@ -1250,7 +1252,7 @@ KVM の判定には、実際に自発終了しない vCPU のキャンセルと�
 
 `native_cpu_only=true` と `native_driver_tests=true` を指定すると、Unicorn なしで `NeverDNativeDriverTests` を有効にします。構成前に `build_wdk_driver_fixtures.py` が Microsoft 公式 WDK/SDK 10.0.26100.6584 パッケージ全体の SHA-256 を検証し、元のソースから通常版・CFG 版・DBG 版のドライバーイメージを計 48 個構築します。`WDKDriverFixtures.def` がパッケージ識別子、コンパイラーとリンカーの引数、フィクスチャの対応を定義します。変更していない Microsoft のファイルとライセンスはローカルのビルド／キャッシュ内に保持し、CI はビルドメタデータとログだけをアップロードします。マニフェストにはツールのバージョン、コマンド、ソースとヘッダーのハッシュ、出力イメージのハッシュを記録します。
 
-`NativeDriverTests.def` は `DriverBuiltinImages.def` と `DriverBackendParityCases.def` の全 115 ワークロードから 230 件の WHP 結果を要求します。内訳は組み込み 27、WDK 48 イメージ、要求シナリオ 40 件で、それぞれ元と再配置先のアドレスを使います。必須項目全体は `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads = 5447`。待機集合の 30 件は移植可能なモデル 16 件と独自ネイティブドライバー 14 件です。`run_native_cpu_ci.py --with-drivers` は Unicorn を無効にして正確な一覧と JUnit 証拠を保存します。必須フィクスチャの欠落やスキップは選択式ゲートを失敗させ、通常のビルドでは外部フィクスチャを省略できます。固定イメージの再配置拒否は期待結果のままです。ARM64 のネイティブゲスト実行は未検証です。
+`NativeDriverTests.def` は `DriverBuiltinImages.def` と `DriverBackendParityCases.def` の全 115 ワークロードから 230 件の WHP 結果を要求します。内訳は組み込み 27、WDK 48 イメージ、要求シナリオ 40 件で、それぞれ元と再配置先のアドレスを使います。必須項目全体は `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`。待機集合の 30 件は移植可能なモデル 16 件と独自ネイティブドライバー 14 件です。`run_native_cpu_ci.py --with-drivers` は Unicorn を無効にして正確な一覧と JUnit 証拠を保存します。必須フィクスチャの欠落やスキップは選択式ゲートを失敗させ、通常のビルドでは外部フィクスチャを省略できます。固定イメージの再配置拒否は期待結果のままです。ARM64 のネイティブゲスト実行は未検証です。
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` は起動中の異なる2命令の前で期限切れ、停止、両方の中断を注入します。正確な段階診断、メッセージの所有寿命、エラー型と原因ビット、手順間で変わらない単一の期限、メモリ所有権の解放を検査します。実際の転送失敗と状態不一致は引き続き区別します。ネイティブ x64 起動検証の予算は `5 s` で、通常のゲスト期限と単一ステップ猶予は変更しません。
 

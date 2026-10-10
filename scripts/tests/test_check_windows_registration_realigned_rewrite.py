@@ -40,11 +40,13 @@ class RealignedRewriteEvidenceTests(unittest.TestCase):
         struct.pack_into("<IIHH", data, 0x500, 0x1000, 12, 0x3050, 0)
         capture = {"schema": 1, "evidence": "realigned-source-reconstruction", "passed": True,
                    "source_sha256": runner.file_digest(runner.SOURCE),
-                   "emitter_sha256": runner.file_digest(runner.EMITTER), "objects": {},
+                   "emitter_sha256": runner.file_digest(runner.EMITTER),
+                   "direct_emitter_sha256": runner.file_digest(runner.DIRECT_EMITTER), "objects": {},
                    "runtime_libraries": {"schema": 1, "architecture": "x86", "toolset": "14.51",
                                          "files": [{"name": n, "sha256": "a" * 64}
                                                    for n in libraries.LIBRARIES]}, "cases": []}
-        for kind in ("value", "reference"):
+        (root / "catch-projection.xml").write_text('<testsuites tests="1"/>')
+        for kind in runner.FORMS:
             (root / (kind + ".obj")).write_bytes(kind.encode())
             (root / (kind + "-emit.xml")).write_text('<testsuites tests="1"/>')
             capture["objects"][kind] = runner.file_digest(root / (kind + ".obj"))
@@ -57,13 +59,14 @@ class RealignedRewriteEvidenceTests(unittest.TestCase):
             product[0x200] = 0xe9
             struct.pack_into("<i", product, 0x201, 0x2000 - 0x1005)
             receipt = {"schema": 1, "evidence": "checked-realigned-source-reconstruction",
+                       "source_frame": "direct" if runner.proof_count(name) == 1 else "realigned",
                        "base": runner.BASES[0], "source_begin": 0x1000, "source_end": 0x1040,
                        "generated_begin": 0x2000, "generated_end": 0x2080,
                        "source_image_sha256": hashlib.sha256(original).hexdigest(),
                        "image_sha256": hashlib.sha256(product).hexdigest()}
             (case / "contract.json").write_text(json.dumps(receipt))
             (case / "source.ll").write_text("test IR")
-            (case / "rewrite.xml").write_text('<testsuites tests="1"/>')
+            (case / "rewrite.xml").write_text(f'<testsuites tests="{runner.proof_count(name)}"/>')
             record = {"case": name, "images": [],
                       "contract_sha256": runner.file_digest(case / "contract.json"),
                       "ir_sha256": runner.file_digest(case / "source.ll")}
@@ -82,8 +85,8 @@ class RealignedRewriteEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = self.capture(root)
-            self.assertEqual(len(replay.validate_capture(root, capture)), 32)
-            for mutation in range(11):
+            self.assertEqual(len(replay.validate_capture(root, capture)), 160)
+            for mutation in range(12):
                 changed = copy.deepcopy(capture)
                 case = changed["cases"][0]
                 if mutation == 0:
@@ -108,6 +111,8 @@ class RealignedRewriteEvidenceTests(unittest.TestCase):
                     case["contract_sha256"] = "stale"
                 elif mutation == 10:
                     case["ir_sha256"] = "stale"
+                elif mutation == 11:
+                    changed["direct_emitter_sha256"] = "stale"
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     replay.validate_capture(root, changed)
             path = root / "value/cli-section-rebased.exe"
@@ -123,11 +128,39 @@ class RealignedRewriteEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = self.capture(root)
-            for xml in ('<testsuites tests="0"/>', '<testsuites tests="1" failures="1"/>',
-                        '<testsuites tests="1"><testcase><skipped/></testcase></testsuites>'):
+            for xml in ('<testsuites tests="0"/>', '<testsuites tests="1"/>',
+                        '<testsuites tests="2"/>', '<testsuites tests="4"/>',
+                        '<testsuites tests="3" failures="1"/>',
+                        '<testsuites tests="3"><testcase><skipped/></testcase></testsuites>'):
                 (root / "value/rewrite.xml").write_text(xml)
                 with self.subTest(xml=xml), self.assertRaises(ValueError):
                     replay.validate_capture(root, capture)
+
+    def test_requires_fixed_frame_and_shared_proof_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            for path in (root / "catch-projection.xml", root / "catch-all-fixed/rewrite.xml"):
+                for xml in ('<testsuites tests="0"/>', '<testsuites tests="2"/>',
+                            '<testsuites tests="1" failures="1"/>',
+                            '<testsuites tests="1"><testcase><skipped/></testcase></testsuites>'):
+                    path.write_text(xml)
+                    with self.subTest(path=path, xml=xml), self.assertRaises(ValueError):
+                        replay.validate_capture(root, capture)
+                path.write_text('<testsuites tests="1"/>')
+
+    def test_rejects_changed_source_frame_even_with_updated_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            record = next(c for c in capture["cases"] if c["case"] == "catch-all-fixed")
+            path = root / record["case"] / "contract.json"
+            contract = json.loads(path.read_text())
+            contract["source_frame"] = "realigned"
+            path.write_text(json.dumps(contract))
+            record["contract_sha256"] = runner.file_digest(path)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
 
     def test_runtime_requires_value_chain_iterations_and_exact_caller(self):
         with tempfile.TemporaryDirectory() as directory:

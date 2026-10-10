@@ -51,6 +51,8 @@ struct RegistrationCxxFrameContract {
   const BinaryImage *Image = nullptr;
   const llvm::CatchPadInst *Catch = nullptr;
   int64_t HomeOffset = 0;
+  /// Zero means no bound object, so dispatch initializes no frame bytes.
+  /// HomeOffset, Reference and RuntimeAccesses must then also be empty.
   uint32_t ObjectSize = 0;
   bool Reference = false;
   const llvm::AllocaInst *CallbackStack = nullptr;

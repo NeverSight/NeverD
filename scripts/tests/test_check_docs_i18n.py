@@ -335,9 +335,11 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     def test_readme_index_order_matches_english(self) -> None:
         path = Path("docs/zh-CN/README.md")
         text = path.read_text(encoding="utf-8")
-        first = next(line for line in text.splitlines() if "](architecture.md)" in line)
-        second = next(line for line in text.splitlines() if "](testing.md)" in line)
-        self.assert_readme_rejected(path, text.replace(first + "\n" + second, second + "\n" + first), "link order")
+        lines = text.splitlines(keepends=True)
+        first = next(i for i, line in enumerate(lines) if "](architecture.md)" in line)
+        second = next(i for i, line in enumerate(lines) if "](testing.md)" in line)
+        lines[first], lines[second] = lines[second], lines[first]
+        self.assert_readme_rejected(path, "".join(lines), "link order")
 
     def test_readme_body_cannot_link_another_locale(self) -> None:
         path = Path("docs/zh-CN/project.md")

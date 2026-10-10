@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 88b72dd8f373ee05729ab1db29a51d3837d123853880c232431f70eade967be3 -->
+<!-- i18n-source: 6241c9252ec89317b9c488c7e2b6b8c7bd60329dfdd734df27e1a7a7139b1eff -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -17,6 +17,11 @@
 | [프로젝트 설명（한국어）](project.md) | 개요, 빠른 시작, 빌드, SDK, CLI |
 | [기여 가이드](CONTRIBUTING.md) | 개발 환경, 빌드 프로필, 워크플로, 스타일, PR 요구 사항 |
 | [아키텍처](architecture.md) | IR 경로, 구성 요소 경계, strict lifting, 지원 깊이, 수정 위치 |
+| [오프라인 Web 분석 (영문)](../web-analysis.md) | C++ 산출물·소스·바인딩·맵 검사, 메타데이터 정책, SDK 및 현재 검증 범위 |
+| [Bun 독립 실행 파일 프로필 (영문)](../web-bun-profile.md) | 고정 ELF 추출, 원본 증거 범위, 소스 디코딩 및 고정 테스트 자료의 출처 |
+| [ASAR 추출 프로필 (영문)](../web-asar-profile.md) | 내부·외부 파일 캡처 연결, 무결성 상태, 멤버 소비자 및 네이티브 Unicode 의존성 |
+| [Electron 증거 프로필 (영문)](../web-electron-profile.md) | 캡처한 진입 경로, 매니페스트·소스 범위, 창·브리지 증거 및 IPC 채널 후보 |
+| [HTML 소스 프로필 (영문)](../web-html-profile.md) | 유한 범위의 C++ 스크립트 목록, 캡처한 로컬 참조 및 원본 인라인 소스 앵커 |
 | [테스트](testing.md) | 테스트 스위트, 생성 fixture, Unicorn 왕복, 증분 명령 |
 | [데스크톱 워크벤치 (영문)](../gui.md) | 고전적인 디스어셈블러 레이아웃, 별도 작업 프로세스, 프로젝트 데이터베이스, 현지화와 MCP 연결 |
 | [라이브러리 인식 (영문)](../library-recognition.md) | 근거에 따른 STL, ATL/MFC, COM, libc 식별, 프로필 및 복원 가능한 C 코드 접기 |

@@ -33,14 +33,29 @@ llvm::Error mdlError(const llvm::Twine &Message) {
 uint64_t pageBase(uint64_t Address) {
   return Address & ~(profile::PageSize - 1);
 }
-} // namespace
 
-llvm::Expected<uint64_t>
-KernelModel::createMDLRecord(uint64_t Address, uint32_t Size, uint16_t Flags) {
+llvm::Expected<uint64_t> mdlRecordSize(uint64_t Address, uint32_t Size) {
+  if (!Size || Size > UINT64_MAX - Address)
+    return mdlError("MDL requires a nonempty, nonoverflowing buffer");
   const uint64_t Offset = Address & (profile::PageSize - 1);
   const uint64_t Pages =
       (Offset + Size + profile::PageSize - 1) / profile::PageSize;
   const uint64_t RecordSize = MDLSize + Pages * profile::PointerSize;
+  // Descriptor storage is independent of the described allocation. Keep the
+  // bounded public Size field exact; larger descriptor layouts are unsupported.
+  if (RecordSize > UINT16_MAX)
+    return mdlError("MDL PFN descriptor exceeds its modeled 16-bit size field");
+  return RecordSize;
+}
+} // namespace
+
+llvm::Expected<uint64_t>
+KernelModel::createMDLRecord(uint64_t Address, uint32_t Size, uint16_t Flags) {
+  auto Extent = mdlRecordSize(Address, Size);
+  if (!Extent)
+    return Extent.takeError();
+  const uint64_t RecordSize = *Extent;
+  const uint64_t Offset = Address & (profile::PageSize - 1);
   const uint64_t Start =
       (NextAllocation + PoolAlignment - 1) & ~(PoolAlignment - 1);
   if (Start > AllocationEnd || RecordSize > AllocationEnd - Start)
@@ -95,9 +110,9 @@ llvm::Expected<uint64_t> KernelModel::allocateMDL(llvm::ArrayRef<uint64_t> A) {
       return mdlError("IoAllocateMdl requires a writable MDL chain link");
   }
   const uint32_t Size = static_cast<uint32_t>(A[1]);
-  if (!Size || Size > profile::KernelArenaSize || Size > UINT64_MAX - A[0])
-    return mdlError("IoAllocateMdl requires a nonempty, nonoverflowing buffer "
-                    "bounded by the model arena size");
+  auto Extent = mdlRecordSize(A[0], Size);
+  if (!Extent)
+    return Extent.takeError();
   auto Record = createMDLRecord(A[0], Size, 0);
   if (!Record)
     return Record.takeError();
@@ -106,10 +121,7 @@ llvm::Expected<uint64_t> KernelModel::allocateMDL(llvm::ArrayRef<uint64_t> A) {
   LockedMdl State;
   State.Owner = LockedMdl::Ownership::Driver;
   State.Address = *Record;
-  const uint64_t Offset = A[0] & (profile::PageSize - 1);
-  State.Size =
-      MDLSize + ((Offset + Size + profile::PageSize - 1) / profile::PageSize) *
-                    profile::PointerSize;
+  State.Size = *Extent;
   State.Buffer = A[0];
   State.OriginalAddress = A[0];
   State.BackingAddress = A[0];
@@ -276,7 +288,15 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     return mdlError(
         "MmProbeAndLockPages requires a supported mode and lock operation");
   auto &State = It->second;
-  const bool UserRange = State.OriginalAddress < profile::UserProbeLimit;
+  auto Image = ImageRAM.upper_bound(State.OriginalAddress);
+  if (Image != ImageRAM.begin())
+    --Image;
+  const bool ImageRange =
+      Image != ImageRAM.end() && State.OriginalAddress >= Image->first &&
+      State.OriginalAddress - Image->first < Image->second &&
+      State.ByteCount <= Image->second - (State.OriginalAddress - Image->first);
+  const bool UserRange =
+      State.OriginalAddress < profile::UserProbeLimit && !ImageRange;
   auto Range = [&]() -> llvm::Expected<UserMemoryRange> {
     if (Mode == UserMode || UserRange) {
       if (CurrentIRQL > APCLevel ||
@@ -286,16 +306,26 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
       return resolveUserMemoryRange(State.OriginalAddress, State.ByteCount,
                                     Operation != IoReadAccess);
     }
-    auto Pool = Allocations.upper_bound(State.OriginalAddress);
-    if (Pool == Allocations.begin())
-      return mdlError("kernel page locking requires a live pool allocation");
-    --Pool;
-    const uint64_t Offset = State.OriginalAddress - Pool->first;
-    if (Offset >= Pool->second.Size ||
-        State.ByteCount > Pool->second.Size - Offset)
-      return mdlError("kernel page locking requires its complete range inside "
-                      "one live pool allocation");
-    if (!Pool->second.NonPaged && CurrentIRQL > APCLevel)
+    uint64_t Start = 0;
+    bool Pageable = true;
+    if (ImageRange) {
+      Start = Image->first;
+    } else {
+      auto Pool = Allocations.upper_bound(State.OriginalAddress);
+      if (Pool == Allocations.begin())
+        return mdlError("kernel page locking requires a live pool allocation "
+                        "or loader-owned image range");
+      --Pool;
+      const uint64_t Offset = State.OriginalAddress - Pool->first;
+      if (Offset >= Pool->second.Size ||
+          State.ByteCount > Pool->second.Size - Offset)
+        return mdlError(
+            "kernel page locking requires its complete range inside "
+            "one live pool allocation or loader-owned image span");
+      Start = Pool->first;
+      Pageable = !Pool->second.NonPaged;
+    }
+    if (Pageable && CurrentIRQL > APCLevel)
       return mdlError(
           "pageable kernel page locking requires IRQL <= APC_LEVEL");
     const unsigned Permissions = Read | (Operation != IoReadAccess ? Write : 0);
@@ -306,10 +336,14 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     if (!*Accessible)
       return llvm::make_error<KernelGuestException>(
           exceptions::StatusAccessViolation);
+    if (ImageRange && !Physical.find(Start))
+      if (auto E = Physical.registerRegion(Start, Start, Image->second))
+        return E;
     auto Owner = Physical.ownerForRange(State.OriginalAddress, State.ByteCount);
     if (!Owner)
       return Owner.takeError();
-    return UserMemoryRange{*Owner, Offset, State.OriginalAddress};
+    return UserMemoryRange{*Owner, State.OriginalAddress - Start,
+                           State.OriginalAddress};
   }();
   if (!Range)
     return Range.takeError();

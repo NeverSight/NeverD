@@ -55,6 +55,7 @@ bool containsNonMovableEffect(const ExprPtr &E) {
       continue;
     if (Current->Kind == ExprKind::Load || Current->Kind == ExprKind::Store ||
         Current->Kind == ExprKind::Call ||
+        Current->Kind == ExprKind::EntryRegister ||
         Current->IntrinsicId != Intrinsic::None ||
         Current->Op == NdOp::ATOMIC_ADD || Current->Op == NdOp::ATOMIC_XCHG ||
         Current->Op == NdOp::ATOMIC_CMPXCHG ||

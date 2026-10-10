@@ -16,6 +16,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -264,6 +265,11 @@ TEST(WindowsRegistrationRealigned, InputPE32RecoversTheCallbackContract) {
         if (Op.RegistrationRoot ==
             MedOp::RegistrationRootKind::CallbackStackPointer) {
           EXPECT_FALSE(registrationRootFrameCoordinate(Med, Op));
+          EXPECT_TRUE(isRegistrationCallbackStackRoot(Med, Op));
+          const auto Root = lowerX86RegistrationRoot(Med, Op);
+          ASSERT_EQ(Root->Kind, ExprKind::EntryRegister);
+          EXPECT_EQ(Root->EntryVA, Catch);
+          EXPECT_EQ(Root->EntryFunctionVA, Med.Entry);
           continue;
         }
         ASSERT_TRUE(registrationRootFrameCoordinate(Med, Op));
@@ -331,12 +337,21 @@ TEST(WindowsRegistrationRealigned, InputPE32RecoversTheCallbackContract) {
                     MedOp::RegistrationRootKind::RealignedFramePointer);
   }
   const auto High = MedToHighConverter().convert(Med, Arch::X86);
-  EXPECT_EQ(High.StructuredExceptionRegions, 0u);
-  EXPECT_GT(High.UnstructuredExceptionRegions, 0u);
-  ASSERT_EQ(High.Body.size(), 1u);
-  EXPECT_FALSE(High.Body.front().EHIsReducible);
-  ASSERT_EQ(High.Body.front().EHClauses.size(), 1u);
-  EXPECT_EQ(High.Body.front().EHClauses[0].ContinuationVAs,
+  EXPECT_TRUE(registrationCallbackRegion(Med, Catch));
+  EXPECT_EQ(High.StructuredExceptionRegions, 1u);
+  EXPECT_EQ(High.UnstructuredExceptionRegions, 0u);
+  const HighStmt *Try = nullptr;
+  walkStmts(High.Body, [&](const HighStmt &Stmt) {
+    if (Stmt.Kind == StmtKind::CxxTry && Stmt.EHIsReducible) {
+      EXPECT_EQ(Try, nullptr);
+      Try = &Stmt;
+    }
+  });
+  ASSERT_NE(Try, nullptr);
+  ASSERT_EQ(Try->EHClauses.size(), 1u);
+  ASSERT_EQ(Try->EHClauseBodies.size(), 1u);
+  EXPECT_FALSE(Try->EHClauseBodies[0].empty());
+  EXPECT_EQ(Try->EHClauses[0].ContinuationVAs,
             (std::vector<va_t>{State.CxxContinuations[0].TargetVA}));
   const auto &Resume = State.CxxContinuations[0];
   unsigned Restores = 0;
@@ -360,7 +375,7 @@ TEST(WindowsRegistrationRealigned, InputPE32RecoversTheCallbackContract) {
     }
   });
   EXPECT_EQ(Restores, 1u);
-  const auto &Body = High.Body.front().Body;
+  const auto &Body = Try->EHClauseBodies[0];
   const auto Restore = llvm::find_if(Body, [&](const auto &Stmt) {
     return Stmt.Kind == StmtKind::Store && Stmt.Addr == Resume.Address;
   });
@@ -404,9 +419,10 @@ TEST(WindowsRegistrationRealigned, InputPE32RecoversTheCallbackContract) {
     });
   }
 
-  // Source callback analysis does not grant a new native frame/ABI model.
-  EXPECT_FALSE(classifyWindowsEHNativeSource(EH, Arch::X86, BinaryFormat::COFF)
-                   .canPatchOutput());
+  // Catch-all classification permits lowering; independent control and frame
+  // proofs still decide whether a particular function can be installed.
+  EXPECT_TRUE(classifyWindowsEHNativeSource(EH, Arch::X86, BinaryFormat::COFF)
+                  .canPatchOutput());
 
   auto Change = [](BinaryImage &Img, va_t Address, uint8_t Byte) {
     for (auto &Segment : Img.Segments)

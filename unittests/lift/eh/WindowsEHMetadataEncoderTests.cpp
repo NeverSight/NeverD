@@ -1315,7 +1315,7 @@ TEST(WindowsEHNativeSource, PE32CxxOutputNeedsCompleteCompilerReceipts) {
       Changed.Cxx->UnwindMap[1].ObjectOffset = -4;
       break;
     case 16:
-      Changed.Cxx->TryBlocks[0].Handlers[0].CatchObjectOffset = 0;
+      Changed.Cxx->TryBlocks[0].Handlers[0].CatchObjectOffset = 4;
       break;
     case 17:
       Changed.Cxx->TryBlocks[0].Handlers[0].Adjectives = 0x40;
@@ -1366,6 +1366,43 @@ TEST(WindowsEHNativeSource, PE32CxxOutputNeedsCompleteCompilerReceipts) {
     EXPECT_FALSE(
         classifyWindowsEHNativeSource(Changed, Arch::X86, BinaryFormat::COFF)
             .canPatchOutput());
+  }
+}
+
+TEST(WindowsEHNativeSource, PE32UnboundCatchKeepsTypeAndObjectStateDistinct) {
+  auto Source = makeRegistrationCxxDigestSource();
+  Source.Registration->HandlerVA = Source.PersonalityVA;
+  Source.Cxx->IsSynchronous = true;
+  for (auto &Action : Source.Cxx->UnwindMap)
+    Action.Kind = CxxUnwindAction::ActionKind::None;
+  auto &Catch = Source.Cxx->TryBlocks[0].Handlers[0];
+  Catch.CatchObjectOffset = 0;
+  for (uint32_t Adjectives : {0u, 8u, 64u}) {
+    Catch.Adjectives = Adjectives;
+    if (Adjectives == 64)
+      Catch.TypeDescriptorVA = 0;
+    const auto Checked =
+        classifyWindowsEHNativeSource(Source, Arch::X86, BinaryFormat::COFF,
+                                      WindowsEHNativeCapability::IRLowering);
+#ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
+    EXPECT_TRUE(Checked.canLowerNativeIR());
+#else
+    EXPECT_FALSE(Checked.canLowerNativeIR());
+#endif
+    for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+      auto Changed = Source;
+      auto &Bad = Changed.Cxx->TryBlocks[0].Handlers[0];
+      if (Mutation == 0)
+        Bad.CatchObjectOffset = 4;
+      else if (Mutation == 1)
+        Bad.TypeDescriptorVA = Adjectives == 64 ? 0x403000 : 0;
+      else
+        Bad.Adjectives = 32;
+      EXPECT_FALSE(
+          classifyWindowsEHNativeSource(Changed, Arch::X86, BinaryFormat::COFF,
+                                        WindowsEHNativeCapability::IRLowering)
+              .canLowerNativeIR());
+    }
   }
 }
 
