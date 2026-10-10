@@ -9,33 +9,6 @@
 #include "neverd/lift/X86Regs.h"
 
 namespace neverd::registration_state {
-namespace {
-bool hasNullRethrowArguments(const FrameState &Frame,
-                             const std::set<int32_t> &Initialized,
-                             int32_t RegistrationOffset) {
-  const auto &SP = Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
-  FrameValue Object, Table;
-  if (SP.CallbackAddress) {
-    if (!Frame.callbackMemoryIsPrivate(*SP.CallbackAddress, 8, true))
-      return false;
-    Object = Frame.loadCallback(SP.CallbackAddress->Offset, 4);
-    Table = Frame.loadCallback(SP.CallbackAddress->Offset + 4, 4);
-  } else if (SP.Offset) {
-    // The argument words must fit below the parent's SavedESP and node.
-    if (int64_t(*SP.Offset) + 8 > int64_t(RegistrationOffset) - 4)
-      return false;
-    for (int64_t Byte = *SP.Offset; Byte < int64_t(*SP.Offset) + 8; ++Byte)
-      if (!Initialized.count(int32_t(Byte)))
-        return false;
-    Object = Frame.load(*SP.Offset, 4);
-    Table = Frame.load(*SP.Offset + 4, 4);
-  } else
-    return false;
-  return Object.Constant == 0 && Table.Constant == 0 && !Object.MayBeFrame &&
-         !Table.MayBeFrame;
-}
-} // namespace
-
 std::optional<RegistrationStateSolver::CallTransfer>
 RegistrationStateSolver::transferCall(size_t I, Domain &After,
                                       const LowOp &Op) {
@@ -61,13 +34,16 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After,
     const auto &Contract = Result.CalleeContracts[Callee->second];
     // A rethrow carries the CRT's current exception, not an initialized new
     // object. It is valid only in a proved live catch invocation.
-    if (Contract.isRethrow())
+    if (Contract.isRuntimeThrow()) {
+      Effect.RuntimeThrow =
+          runtimeThrowArguments(After, Contract, Effect.FrameReads);
+      Valid = Effect.RuntimeThrow.has_value();
+    }
+    if (Contract.isRethrow() ||
+        (Effect.RuntimeThrow && Effect.RuntimeThrow->isRethrow()))
       Valid &= KnownCxx && !After.Parent && After.Callback &&
                !After.OtherCallback && After.CxxCatchStacks.size() == 1 &&
                !After.CxxCatchStacks.begin()->empty();
-    if (Valid && Contract.isRuntimeRethrow())
-      Valid = hasNullRethrowArguments(After.Frame, After.InitializedFrameBytes,
-                                      *Chain.RegistrationOffset);
     Effect.Address = Op.Addr;
     Effect.EndAddress =
         Boundary->second.second.Address + Boundary->second.second.Size;

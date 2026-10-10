@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,11 @@ bool isExecutableAddress(const BinaryImage &Img, va_t Address);
 /// space, so a corrupt operand cannot fabricate an in-image target.
 std::optional<va_t> addSignedOffset(va_t Base, int64_t Displacement);
 
+/// Disprove a padding-derived boundary using uninterrupted decoded callback
+/// instructions. A control transfer or exhausted budget retains the boundary.
+bool callbackFallsThroughBoundary(const BinaryImage &Img, va_t Entry,
+                                  va_t Boundary, size_t &Work);
+
 template <typename T>
 std::optional<T> readScalar(const BinaryImage &Img, va_t Address) {
   const uint8_t *P = Img.readVA(Address, sizeof(T));
@@ -61,14 +67,18 @@ std::optional<T> readScalar(const BinaryImage &Img, va_t Address) {
 /// and could not take part in CFG or structuring.
 class FunctionRangeMap {
 public:
-  explicit FunctionRangeMap(const BinaryImage &Img) {
+  explicit FunctionRangeMap(const BinaryImage &Img)
+      : Guesses(Img.boundaryGuessFunctionStarts()) {
     // PE export entries and the image entry are format-owned boundaries even
     // when no COFF symbol table or preceding padding made them discoverable.
     for (const Export &Entry : Img.Exports)
-      if (isExecutableAddress(Img, Entry.Addr))
+      if (isExecutableAddress(Img, Entry.Addr)) {
         Starts.push_back(Entry.Addr);
+        Guesses.erase(Entry.Addr);
+      }
     if (isExecutableAddress(Img, Img.Entry))
       Starts.push_back(Img.Entry);
+    Guesses.erase(Img.Entry);
     for (const Symbol &Sym : Img.Symbols) {
       if (!Sym.IsFunc || !isExecutableAddress(Img, Sym.Addr))
         continue;
@@ -103,12 +113,20 @@ public:
 
   /// The function containing \p Address, bounded by the next function start
   /// and by the end of the executable segment it lives in.
-  std::optional<ExceptionAddressRange> find(const BinaryImage &Img,
-                                            va_t Address) const {
+  std::optional<ExceptionAddressRange>
+  find(const BinaryImage &Img, va_t Address,
+       bool TableOwnedCallback = false) const {
     auto It = std::upper_bound(Starts.begin(), Starts.end(), Address);
     if (It == Starts.begin())
       return std::nullopt;
     va_t Begin = *std::prev(It);
+    // A padding guess cannot truncate a callback's proved straight-line
+    // instructions. Keep guesses after control transfers or undecodable bytes,
+    // as well as every stated symbol, export and other confirmed boundary.
+    if (TableOwnedCallback)
+      while (It != Starts.end() && Guesses.count(*It) &&
+             callbackFallsThroughBoundary(Img, Address, *It, CallbackWork))
+        ++It;
     const Segment *Seg = Img.getSegmentFor(Begin);
     if (!Seg || !Seg->isExecutable())
       return std::nullopt;
@@ -124,6 +142,8 @@ public:
 
 private:
   std::vector<va_t> Starts;
+  std::set<va_t> Guesses;
+  mutable size_t CallbackWork = 0;
 };
 
 /// The image's SafeSEH handler table, when the load configuration published

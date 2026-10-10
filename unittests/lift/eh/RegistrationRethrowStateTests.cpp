@@ -60,7 +60,7 @@ TEST(RegistrationState, DirectRethrowRequiresBothInitializedNullWords) {
     SCOPED_TRACE(Mutation);
     auto F = makeCxxCatchContinuation();
     RegistrationCalleeFrameContract Contract;
-    Contract.CalleeKind = RegistrationCalleeFrameContract::Kind::RuntimeRethrow;
+    Contract.CalleeKind = RegistrationCalleeFrameContract::Kind::RuntimeThrow;
     Contract.Target = 0x2100;
     Contract.DoesNotReturn = true;
     auto &Block = F.Blocks[Mutation == 6 ? 2 : 5];
@@ -131,7 +131,7 @@ TEST(RegistrationState, DirectRethrowUsesTheActiveCallbackArgumentStack) {
            {NdVar::tmp(900, 4), NdVar::cst(Mutation == 2, 4)});
     emitOp(Block, 0x1109, NdOp::CALL, {}, {NdVar::cst(0x2100, 4)});
     RegistrationCalleeFrameContract Contract;
-    Contract.CalleeKind = RegistrationCalleeFrameContract::Kind::RuntimeRethrow;
+    Contract.CalleeKind = RegistrationCalleeFrameContract::Kind::RuntimeThrow;
     Contract.Target = 0x2100;
     Contract.DoesNotReturn = true;
     const std::vector Contracts{Contract};

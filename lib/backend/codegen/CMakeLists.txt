@@ -19,6 +19,7 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationCxxContinuation.cpp
   COFF/COFFRegistrationCxxStack.cpp
   COFF/COFFRegistrationCxxFrame.cpp
+  COFF/COFFRegistrationCxxThrow.cpp
   COFF/COFFRegistrationIRProof.cpp
   CodeGen.cpp
   CodeGenAArch64.cpp

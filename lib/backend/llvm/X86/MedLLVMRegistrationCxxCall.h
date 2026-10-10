@@ -12,6 +12,7 @@
 #include "llvm/IR/CallingConv.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 
 namespace llvm {
@@ -27,7 +28,8 @@ struct RegistrationCxxCallABI {
   llvm::FunctionType *Type = nullptr;
   llvm::CallingConv::ID Convention = llvm::CallingConv::C;
   bool BorrowsECX = false;
-  bool RuntimeRethrow = false;
+  bool RuntimeThrow = false;
+  uint64_t ThrowInfoVA = 0;
 };
 std::optional<RegistrationCxxCallABI> getCheckedRegistrationCxxCallABI(
     const BinaryImage &Image, const RegistrationCalleeFrameContract &Contract,

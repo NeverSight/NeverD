@@ -351,7 +351,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
                       ? Result.Catches[Result.SourceCatchOwners.at(BlockId)].Pad
                       : nullptr) ||
         !Result.Calls
-             .emplace(Call, CxxIRCall{Contract, Effect.ECXFrameOffset, false})
+             .emplace(Call, CxxIRCall{Contract, Effect.ECXFrameOffset, false,
+                                      Effect.RuntimeThrow})
              .second)
       return rejectIR("C++ call changed its runtime funclet context");
   }
@@ -361,12 +362,12 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     const auto *Callee = Call->getCalledFunction();
     const bool Throw = Receipt.Contract.isThrow();
     const bool Borrow = Receipt.ObjectFrameOffset.has_value();
-    const bool RuntimeRethrow = Receipt.Contract.isRuntimeRethrow();
-    if (!Callee || !Callee->isDeclaration() || !Callee->hasExternalLinkage() ||
+    const bool RuntimeThrow = Receipt.Contract.isRuntimeThrow();
+    if (RuntimeThrow != Receipt.RuntimeThrow.has_value() || !Callee ||
+        !Callee->isDeclaration() || !Callee->hasExternalLinkage() ||
         Callee->isVarArg() || Call->isInlineAsm() || Call->isTailCall() ||
-        Call->arg_size() != (RuntimeRethrow ? 2u : unsigned(Borrow)) ||
-        Call->getCallingConv() != (RuntimeRethrow
-                                       ? llvm::CallingConv::X86_StdCall
+        Call->arg_size() != (RuntimeThrow ? 2u : unsigned(Borrow)) ||
+        Call->getCallingConv() != (RuntimeThrow ? llvm::CallingConv::X86_StdCall
                                    : Borrow ? llvm::CallingConv::X86_ThisCall
                                             : llvm::CallingConv::C) ||
         Call->getCallingConv() != Callee->getCallingConv() ||
@@ -378,17 +379,33 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         (Receipt.Cleanup && !Call->doesNotThrow()) ||
         (!Receipt.Cleanup && Call->doesNotThrow()))
       return rejectIR("C++ preserved callee changed its physical call ABI");
-    if (RuntimeRethrow)
+    if (RuntimeThrow) {
+      // The runtime reads the object, changes thread-local exception state,
+      // and may unwind. Optimizer promises such as memory(none) are not part
+      // of this ABI even when the signature and arguments still match.
+      auto RuntimeAttributes = [](const llvm::AttributeList &Attributes) {
+        return llvm::all_of(Attributes.getFnAttrs(), [](llvm::Attribute A) {
+          return A.isEnumAttribute() &&
+                 A.getKindAsEnum() == llvm::Attribute::NoReturn;
+        });
+      };
+      if (!RuntimeAttributes(Call->getAttributes()) ||
+          !RuntimeAttributes(Callee->getAttributes()))
+        return rejectIR("C++ throw changed its runtime effects");
       for (unsigned Index = 0; Index != 2; ++Index) {
         const auto *Null = llvm::dyn_cast<llvm::ConstantPointerNull>(
             Call->getArgOperand(Index));
         // Even with the same stdcall convention and null values, inreg can
         // change the physical argument locations and nonnull can introduce UB.
-        if (!Null || Null->getType()->getPointerAddressSpace() != 0 ||
+        if (!Call->getArgOperand(Index)->getType()->isPointerTy() ||
+            Call->getArgOperand(Index)->getType()->getPointerAddressSpace() !=
+                0 ||
+            (Receipt.RuntimeThrow->isRethrow() && !Null) ||
             Call->getAttributes().getParamAttrs(Index).hasAttributes() ||
             Callee->getAttributes().getParamAttrs(Index).hasAttributes())
-          return rejectIR("C++ rethrow changed its runtime argument contract");
+          return rejectIR("C++ throw changed its runtime argument contract");
       }
+    }
     auto Target = rewrite_source::getOriginalVA(*Callee);
     if (!Target)
       return Target.takeError();

@@ -63,13 +63,10 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
           coff_registration::RegistrationFrameBorrow{
               int64_t(Proof->Frame.Establisher) + *Checked.ObjectFrameOffset,
               Checked.Contract.ECXReads, Checked.Contract.ECXWrites});
-    if (Checked.Contract.isRuntimeRethrow()) {
-      const auto Import = getCheckedX86RegistrationThrowImportABI(
-          Image, Checked.Contract.Target, &Work);
-      if (!Import)
-        return coff_registration::rejectIR(
-            "C++ direct rethrow lost its original runtime ABI");
-      Immutable.push_back({Import->IATVA, Import->IATVA + 4});
+    if (Checked.Contract.isRuntimeThrow()) {
+      if (auto Error = coff_registration::bindCxxRuntimeThrow(
+              *Proof, *Call, Checked, Image, Contract, Immutable, Work))
+        return Error;
     } else if (Checked.Contract.isThrow()) {
       auto Throw = getCheckedX86RegistrationThrowCalleeABI(
           Image, Checked.Contract.Target, &Work);

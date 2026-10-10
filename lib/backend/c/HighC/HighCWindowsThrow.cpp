@@ -4,9 +4,12 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Retain runtime arguments unless they prove the Windows rethrow spelling.
+/// Render checked scalar values and rethrows while retaining unknown CRT calls.
 //===----------------------------------------------------------------------===//
 #include "HighCWriter.h"
+
+#include "neverd/ir/high/MsvcTypeName.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 namespace neverd {
 namespace {
@@ -27,6 +30,31 @@ bool isNullThrowArgument(const HighExpr *Value) {
 }
 } // namespace
 
+TypeRef HighCWriter::cxxScalarThrowType(const HighExpr &ThrowCall) const {
+  if (!Opts.Image || ThrowCall.Operands.size() != 2 || !ThrowCall.Operands[0] ||
+      !ThrowCall.Operands[1])
+    return nullptr;
+  const auto Address = constAddress(*ThrowCall.Operands[1]);
+  const auto Info =
+      Address
+          ? coff_loader::getCheckedX86SimpleCxxThrowInfo(*Opts.Image, *Address)
+          : std::nullopt;
+  if (!Info)
+    return nullptr;
+  const auto Size = Info->TypeDescriptorRange.End - Info->TypeDescriptorVA - 9;
+  const auto *Bytes = Opts.Image->readVA(Info->TypeDescriptorVA + 8, Size);
+  if (!Bytes)
+    return nullptr;
+  const llvm::StringRef Name(reinterpret_cast<const char *>(Bytes), Size);
+  const auto Type = msvc_type_name::fundamental(Name);
+  if (!Type || Info->ObjectSize != Type->Size)
+    return nullptr;
+  auto Result = Type->Floating ? NdType::makeFloat(Type->Size)
+                               : NdType::makeInt(Type->Size, Type->Signed);
+  Result->SourceName = Type->Spelling.str();
+  return Result;
+}
+
 void HighCWriter::writeCxxThrowExpr(const HighStmt &Stmt,
                                     const HighExpr &ThrowCall) {
   const bool NullObject = !ThrowCall.Operands.empty() &&
@@ -35,6 +63,19 @@ void HighCWriter::writeCxxThrowExpr(const HighStmt &Stmt,
                        isNullThrowArgument(ThrowCall.Operands[1].get());
   if (!Opts.StructuredExceptionSyntax || ThrowCall.Operands.empty() ||
       (NullObject && !Rethrow)) {
+    OS << exprStr(ThrowCall);
+    return;
+  }
+  if (!NullObject)
+    if (auto Type = cxxScalarThrowType(ThrowCall)) {
+      // Read the current object bytes, including floating-point bits, rather
+      // than treating its address as the value or inventing a constructor.
+      OS << "throw (" << Type->SourceName << ")"
+         << memoryLoadExpr(Type, addrStr(*ThrowCall.Operands[0]));
+      return;
+    }
+  if (Opts.Image && Opts.Image->Arch == Arch::X86 && !Rethrow &&
+      !CxxThrowPrints.count(&Stmt)) {
     OS << exprStr(ThrowCall);
     return;
   }

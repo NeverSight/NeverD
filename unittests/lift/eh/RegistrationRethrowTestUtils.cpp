@@ -58,12 +58,11 @@ TEST(RegistrationRethrowHighC, BareThrowRequiresTwoNullRuntimeArguments) {
   }
 }
 
-void checkRuntimeRethrowEdits(const MedFunc &Med, const llvm::Function &Parent,
-                              const BinaryImage &Image) {
+void checkRuntimeThrowEdits(const MedFunc &Med, const llvm::Function &Parent,
+                            const BinaryImage &Image) {
   const auto &States = *Med.RegistrationStates;
-  const auto Callee = llvm::find_if(States.CalleeContracts, [](const auto &C) {
-    return C.isRuntimeRethrow();
-  });
+  const auto Callee = llvm::find_if(
+      States.CalleeContracts, [](const auto &C) { return C.isRuntimeThrow(); });
   ASSERT_NE(Callee, States.CalleeContracts.end());
   for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -74,8 +73,8 @@ void checkRuntimeRethrowEdits(const MedFunc &Med, const llvm::Function &Parent,
       for (auto &I : Block)
         if (auto *Candidate = llvm::dyn_cast<llvm::CallBase>(&I))
           if (const auto *Target = Candidate->getCalledFunction();
-              Target &&
-              Target->getName().starts_with("__nd_registration_rethrow_")) {
+              Target && Target->getName().starts_with(
+                            "__nd_registration_runtime_throw_")) {
             ASSERT_FALSE(Call);
             Call = Candidate;
           }

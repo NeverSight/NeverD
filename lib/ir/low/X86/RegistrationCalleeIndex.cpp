@@ -38,7 +38,7 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
               getCheckedX86RegistrationThrowImportABI(Image, Target, &Work)) {
         Contract.emplace();
         Contract->CalleeKind =
-            RegistrationCalleeFrameContract::Kind::RuntimeRethrow;
+            RegistrationCalleeFrameContract::Kind::RuntimeThrow;
         Contract->Target = Target;
         Contract->DoesNotReturn = true;
         Contract->CodeRanges.push_back({Target, Target + 6});
@@ -85,6 +85,18 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
         return std::nullopt;
       Result.push_back(Contract);
     }
+  }
+  if (llvm::any_of(Result, [](const auto &C) { return C.isRuntimeThrow(); })) {
+    auto Infos = registration_abi::collectRegistrationRuntimeThrowInfos(
+        Function, Image, Work);
+    if (!Infos)
+      return std::nullopt;
+    for (auto &Contract : Result)
+      if (Contract.isRuntimeThrow()) {
+        if (!chargeCalleeWork(Work, Infos->size()))
+          return std::nullopt;
+        Contract.RuntimeThrowInfos = *Infos;
+      }
   }
   return Result;
 }

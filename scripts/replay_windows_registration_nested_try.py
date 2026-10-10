@@ -15,14 +15,16 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_nested_try import (
-        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, ROUTES, SOURCE, PE32, file_digest, observe,
-        require_test_result, validate_installation, validate_decompilation)
+        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, ROUTES, SOURCE, PE32, file_digest, observe,
+        require_test_result, validate_installation, validate_decompilation,
+        validate_search_context)
     from .windows_registration_libraries import validate_manifest
     from .windows_registration_runtime import validate_runtime
 else:
     from check_windows_registration_nested_try import (
-        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, ROUTES, SOURCE, PE32, file_digest, observe,
-        require_test_result, validate_installation, validate_decompilation)
+        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, ROUTES, SOURCE, PE32, file_digest, observe,
+        require_test_result, validate_installation, validate_decompilation,
+        validate_search_context)
     from windows_registration_libraries import validate_manifest
     from windows_registration_runtime import validate_runtime
 
@@ -35,7 +37,8 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
         raise ValueError("nested try reconstruction capture has no current source identity")
     validate_manifest(capture.get("runtime_libraries", {}))
     if capture.get("proof_sha256") != file_digest(PROOF) or \
-            capture.get("rethrow_proof_sha256") != file_digest(RETHROW_PROOF):
+            capture.get("rethrow_proof_sha256") != file_digest(RETHROW_PROOF) or \
+            capture.get("direct_proof_sha256") != file_digest(DIRECT_PROOF):
         raise ValueError("nested try rejection checks changed")
     cases = capture.get("cases", [])
     if len(cases) != len(CASES) or {c.get("case") for c in cases} != set(CASES):
@@ -53,12 +56,8 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
                 require_test_result(parent / "rewrite.xml") != 1:
             raise ValueError("nested try source reconstruction proof changed")
         receipt = json.loads((parent / "contract.json").read_text())
-        inline = name.startswith("inline-rethrow-")
-        rethrow = name.startswith("rethrow-") or inline
-        if receipt.get("secondary_search") is not (name.startswith("secondary-") or rethrow) or \
-                receipt.get("rethrow_search") is not rethrow or \
-                receipt.get("inline_rethrow") is not inline:
-            raise ValueError("nested try proof changed its catch search context")
+        context = validate_search_context(receipt, name)
+        inline, direct = context["inline_rethrow"], context["direct_throw"]
         original = PE32((parent / "original.exe").read_bytes())
         product = PE32((parent / "product.exe").read_bytes())
         validate_installation(original, product, receipt, name)
@@ -69,7 +68,7 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
             path = parent / ("decompiled." + language)
             if file_digest(path) != digest:
                 raise ValueError("nested try decompilation changed")
-            validate_decompilation(path.read_text(), language, inline)
+            validate_decompilation(path.read_text(), language, inline, direct)
         records = case.get("images", [])
         if len(records) != len(expected) or \
                 {(r.get("image"), r.get("route"), r.get("base")) for r in records} != expected:

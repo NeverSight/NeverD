@@ -5001,6 +5001,8 @@ void HighCWriter::foldCxxThrowConstructors(const HighFunc &Func) {
       if (!Call)
         continue;
       if (isMsvcCxxThrowCallName(Call->CallTarget)) {
+        if (cxxScalarThrowType(*Call))
+          continue;
         if (Call->Operands.size() < 2 || !Call->Operands[0] ||
             !Call->Operands[1])
           continue;
@@ -5016,6 +5018,8 @@ void HighCWriter::foldCxxThrowConstructors(const HighFunc &Func) {
         if (!ThrowInfo)
           continue;
         std::string Type = readMsvcThrowInfoFirstType(*Opts.Image, *ThrowInfo);
+        if (Type.empty())
+          continue;
         Type = cNamedTypeSpelling(Type);
         if (Type.empty() || !isCxxThrowTypeIdent(Type))
           continue;

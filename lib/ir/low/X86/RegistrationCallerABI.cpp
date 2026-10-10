@@ -109,10 +109,11 @@ bool hasCallerCleanupRegistrationABI(
             Call->CalleeIndex < States->CalleeContracts.size()
                 ? &States->CalleeContracts[Call->CalleeIndex]
                 : nullptr;
-        if (Contract && Contract->isRuntimeRethrow()) {
+        if (Contract && Contract->isRuntimeThrow()) {
           // A noreturn CRT dispatch has no return cleanup. Its two stack
-          // arguments and active catch are owned by the source call proof.
-          if (!Call->DoesNotReturn || Contract->Target != Call->Target ||
+          // arguments and object or active catch are owned by the source proof.
+          if (!Call->DoesNotReturn || !Call->RuntimeThrow ||
+              Contract->Target != Call->Target ||
               !getCheckedX86RegistrationThrowImportABI(Image, Call->Target,
                                                        &Work))
             return false;

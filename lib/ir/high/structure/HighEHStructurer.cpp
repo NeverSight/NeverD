@@ -25,6 +25,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/high/MsvcTypeName.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
@@ -89,6 +90,8 @@ std::string readMSVCTypeDescriptorName(const BinaryImage *Img,
   }
   if (Name.empty())
     return {};
+  if (const auto Type = msvc_type_name::fundamental(Name))
+    return Type->Spelling.str();
   if (const std::string Spelling = msvcRttiTypeSpelling(Name);
       !Spelling.empty())
     return Spelling;

@@ -130,8 +130,8 @@ TEST(RegistrationRethrowABI, DirectRuntimeEntryRequiresExactImportStorage) {
     const auto Contracts = Index.contracts(Caller);
     ASSERT_TRUE(Contracts);
     ASSERT_EQ(Contracts->size(), 1u);
-    EXPECT_TRUE(Contracts->front().isRuntimeRethrow());
-    EXPECT_TRUE(Contracts->front().isRethrow());
+    EXPECT_TRUE(Contracts->front().isRuntimeThrow());
+    EXPECT_FALSE(Contracts->front().isRethrow());
     EXPECT_EQ(Contracts->front().ThrownTypeVA, 0u);
   }
 }

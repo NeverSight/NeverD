@@ -44,6 +44,7 @@ std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,
     return std::nullopt;
   const auto &Callee = State.CalleeContracts[Effect->CalleeIndex];
   if (Callee.Target != Effect->Target || Callee.StackPopBytes ||
+      Callee.isRuntimeThrow() != Effect->RuntimeThrow.has_value() ||
       Callee.DoesNotReturn != Effect->DoesNotReturn)
     return std::nullopt;
   const bool Borrow = !Callee.ECXReads.empty() || !Callee.ECXWrites.empty();
@@ -67,7 +68,7 @@ std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,
       Found = true;
     }
   return Found ? std::optional(
-                     RegistrationCallABI{Borrow, Callee.isRuntimeRethrow()})
+                     RegistrationCallABI{Borrow, Callee.isRuntimeThrow()})
                : std::nullopt;
 }
 

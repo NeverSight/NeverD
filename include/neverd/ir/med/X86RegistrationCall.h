@@ -16,7 +16,7 @@ namespace neverd {
 /// the callee, not the current values supplied by the caller.
 struct RegistrationCallABI {
   bool BorrowsECX = false;
-  bool RuntimeRethrow = false;
+  bool RuntimeThrow = false;
 };
 
 /// Bind the retained LowIR callee contract to this exact surviving CALL.

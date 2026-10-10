@@ -2277,7 +2277,7 @@ jobs:
           build-windows-eh/bin/NeverDWindowsEHMetadataEncoderTests --gtest_output=xml:build-windows-eh/evidence/metadata.xml
           build-windows-eh/bin/NeverDCOFFExceptionPatchTests --gtest_output=xml:build-windows-eh/evidence/planner.xml
           build-windows-eh/bin/NeverDWindowsRegistrationRealignedTests \
-            --gtest_filter=RegistrationRethrowHighC.* \
+            --gtest_filter=RegistrationRethrowHighC.*:RegistrationThrowHighC.* \
             --gtest_output=xml:build-windows-eh/evidence/rethrow-source.xml
       - name: Execute generated x86 callback frames with real exceptions
         run: |
@@ -2321,7 +2321,7 @@ jobs:
             --patch-binary build-windows-eh/bin/neverd \
             --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
             --output build-windows-eh/evidence/multiple-catch-rewrite
-      - name: Reconstruct nested x86 try, secondary throws and rethrows
+      - name: Reconstruct nested x86 tries, direct scalar throws and rethrows
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         env:
           WINEARCH: win32

@@ -34,6 +34,10 @@ void copyExtents(const Set &From, Vector &To) {
   }
 }
 
+std::optional<std::vector<RegistrationRuntimeThrowInfo>>
+collectRegistrationRuntimeThrowInfos(const LowFunc &Function,
+                                     const BinaryImage &Image, size_t &Work);
+
 bool chargeDecodedCallee(size_t &Work, const LowFunc &Function);
 bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
                              size_t &Work,

@@ -16,6 +16,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
+#include "neverd/ir/high/MsvcTypeName.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -52,6 +53,8 @@ bool isCIdentifier(llvm::StringRef Name) {
 }
 
 bool isCxxTypeSpelling(llvm::StringRef Name) {
+  if (msvc_type_name::isFundamentalSpelling(Name))
+    return true;
   while (!Name.empty()) {
     const size_t Sep = Name.find("::");
     const llvm::StringRef Part =

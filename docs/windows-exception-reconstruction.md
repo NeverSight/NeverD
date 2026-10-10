@@ -282,14 +282,28 @@ object initialization. A direct rethrow additionally proves both initialized
 null argument words in the current source stack coordinate. Native lowering
 emits the CRT's two-pointer x86 stdcall ABI; independent installation checks
 reject changed arguments, calling conventions or catch context.
+Direct scalar throws use the same CRT entry ABI, with a separate contract for
+each call occurrence. The actual table argument must select a checked immutable
+ThrowInfo and the object must occupy initialized, pointer-free bytes in the
+parent frame or the active callback's private stack. Candidate type tables alone
+do not authorize a call. Current LLVM object arguments are retained; installation
+independently checks their address, lifetime and initialization, the exact original
+table identity and its relocation. A function can use this entry for different
+scalar types and for a rethrow without conflating those operations.
+Runtime parameter attributes and optimizer effect promises are independently
+checked; adding `inreg`, `nonnull` or `memory(none)` cannot change the CRT ABI.
+For checked fundamental types, C++ output reads the current object bytes with
+the exact type, including floating-point bits. Unknown types retain the runtime
+call instead of inventing a value or default constructor.
 Shared callbacks and a try inside a catch remain rejected.
 HighIR can gather terminal branches of synchronous tries even when runtime
 resume blocks interrupt their address order or merge different post-catch
 states. An inner try stays intact with independently checked callback bodies
 and exact continuation targets. It requires complete call and
-state receipts; asynchronous faults and unprotected calls cannot acquire a new
-handler through this projection. C and C++ output retain explicit native object
-homes and load snapshots instead of assuming a mutable catch object is an
+state receipts. Checked returning leaves contain no calls or C++ throws and can
+precede the first state store; unknown calls, unprotected throws and asynchronous
+faults cannot acquire a new handler through this projection. C and C++ output
+retain explicit native object homes and load snapshots instead of assuming a mutable catch object is an
 immutable source expression.
 
 LLVM recreates the physical registration, an object home only when required,

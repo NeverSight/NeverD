@@ -605,14 +605,36 @@ llvm::Error validateFramePrivacy(
             if (Cxx) {
               const auto Borrow = Cxx->Borrows.find(Call);
               if (Borrow != Cxx->Borrows.end()) {
-                const auto Where = Call->arg_size() == 1
+                const auto &Checked = Borrow->second;
+                const auto *Root = Checked.Root ? Checked.Root : LogicalFrame;
+                const bool Throw = Checked.ThrowInfoVA != 0;
+                const auto Where = Call->arg_size() == (Throw ? 2u : 1u)
                                        ? Locate(Call->getArgOperand(0), 0)
                                        : std::nullopt;
-                if (!Where || Where->Root != LogicalFrame ||
-                    Where->Offset != Borrow->second.Offset ||
-                    Call->getCallingConv() != llvm::CallingConv::X86_ThisCall)
+                if (!Where || Where->Root != Root ||
+                    Where->Offset != Checked.Offset ||
+                    Call->getCallingConv() !=
+                        (Throw ? llvm::CallingConv::X86_StdCall
+                               : llvm::CallingConv::X86_ThisCall) ||
+                    (CallbackStacks.count(Root) &&
+                     CallbackStacks.at(Root) != Catch))
                   return Reject(
                       "callee borrow changed its source frame object");
+                if (Throw) {
+                  const auto Table = Locate(Call->getArgOperand(1), 0);
+                  const auto *Global =
+                      Table ? llvm::dyn_cast<llvm::GlobalVariable>(Table->Root)
+                            : nullptr;
+                  const auto Base = Global
+                                        ? parseNdDataSymbol(Global->getName())
+                                        : std::nullopt;
+                  if (!Table || !Base || *Base > UINT32_MAX ||
+                      int64_t(*Base) + Table->Offset !=
+                          int64_t(Checked.ThrowInfoVA) ||
+                      !CheckImageAccess(*Table, 16, false))
+                    return Reject(
+                        "direct throw changed its original ThrowInfo");
+                }
                 for (const auto *Effects :
                      {&Borrow->second.Reads, &Borrow->second.Writes})
                   for (const auto &Effect : *Effects) {
@@ -782,9 +804,11 @@ llvm::Error validateFramePrivacy(
           const auto Borrow = Cxx->Borrows.find(Call);
           if (Borrow != Cxx->Borrows.end())
             for (const auto &Read : Borrow->second.Reads)
-              if (!Require(Call,
-                           {LogicalFrame, Borrow->second.Offset + Read.Begin},
-                           uint64_t(int64_t(Read.End) - Read.Begin)))
+              if (!Require(
+                      Call,
+                      {Borrow->second.Root ? Borrow->second.Root : LogicalFrame,
+                       Borrow->second.Offset + Read.Begin},
+                      uint64_t(int64_t(Read.End) - Read.Begin)))
                 return Reject("callee initialization exceeds its work budget");
         }
       }

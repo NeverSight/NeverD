@@ -259,13 +259,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       const bool Throw = Contract.isThrow();
       const auto ABI = med_llvm_eh::getCheckedRegistrationCxxCallABI(
           *Img, Contract, *Effect, *Call, Work);
-      if (!ABI)
+      if (!ABI || (ABI->ThrowInfoVA &&
+                   !med_llvm_eh::canMaterializeExternalDataDeclaration(
+                       *Mod, makeNdDataSymbol(ABI->ThrowInfoVA), I8, true)))
         return false;
       const auto Name =
-          CalleeName(Effect->Target, ABI->RuntimeRethrow ? "rethrow"
-                                     : Throw             ? "throw"
-                                     : ABI->BorrowsECX   ? "ecx"
-                                                         : "leaf");
+          CalleeName(Effect->Target, ABI->RuntimeThrow ? "runtime_throw"
+                                     : Throw           ? "throw"
+                                     : ABI->BorrowsECX ? "ecx"
+                                                       : "leaf");
       if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
                                                                   ABI->Type))
         return false;
@@ -548,8 +550,22 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     if (Plan.Throw)
       Callee->addFnAttr(llvm::Attribute::NoReturn);
     llvm::SmallVector<llvm::Value *, 2> Args;
-    if (Plan.ABI.RuntimeRethrow)
-      Args.assign(2, llvm::ConstantPointerNull::get(Ptr));
+    if (Plan.ABI.RuntimeThrow) {
+      if (Plan.ABI.ThrowInfoVA) {
+        auto *Object = Old->getArgOperand(0);
+        Args.push_back(Object->getType()->isPointerTy()
+                           ? Object
+                           : B.CreateIntToPtr(Object, Ptr));
+        const auto Name = makeNdDataSymbol(Plan.ABI.ThrowInfoVA);
+        auto *Table = Mod->getNamedGlobal(Name);
+        if (!Table)
+          Table = new llvm::GlobalVariable(*Mod, I8, true,
+                                           llvm::GlobalValue::ExternalLinkage,
+                                           nullptr, Name);
+        Args.push_back(Table);
+      } else
+        Args.assign(2, llvm::ConstantPointerNull::get(Ptr));
+    }
     if (Plan.ABI.BorrowsECX)
       Args.push_back(B.CreateInBoundsGEP(
           I8, FrameAlloca,

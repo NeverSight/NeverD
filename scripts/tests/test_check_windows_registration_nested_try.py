@@ -21,6 +21,7 @@ class NestedTryEvidenceTests(unittest.TestCase):
         result["evidence"] = "nested-try-source-reconstruction"
         result["proof_sha256"] = runner.file_digest(runner.PROOF)
         result["rethrow_proof_sha256"] = runner.file_digest(runner.RETHROW_PROOF)
+        result["direct_proof_sha256"] = runner.file_digest(runner.DIRECT_PROOF)
         source = root / "runtime/x86/Microsoft.VC143.CRT" / runtime.NAME
         source.parent.mkdir(parents=True)
         source.write_bytes(runtime_fixture())
@@ -31,10 +32,7 @@ class NestedTryEvidenceTests(unittest.TestCase):
             (parent / runtime.NAME).write_bytes(runtime_fixture())
             receipt_path = parent / "contract.json"
             receipt = json.loads(receipt_path.read_text())
-            receipt["inline_rethrow"] = case["case"].startswith("inline-rethrow-")
-            receipt["rethrow_search"] = case["case"].startswith("rethrow-") or receipt["inline_rethrow"]
-            receipt["secondary_search"] = (case["case"].startswith("secondary-") or
-                                            receipt["rethrow_search"])
+            receipt.update(runner.search_context(case["case"]))
             receipt_path.write_text(json.dumps(receipt))
             case["contract_sha256"] = runner.file_digest(receipt_path)
             (parent / "driver.obj").write_bytes(case["case"].encode())
@@ -49,6 +47,8 @@ class NestedTryEvidenceTests(unittest.TestCase):
                     text += "try { try {\n"
                     if receipt["inline_rethrow"]:
                         text += "throw;\n"
+                    if receipt["direct_throw"]:
+                        text += "throw (int)value; throw (unsigned int)value; throw (float)value;\n"
                 source = parent / ("decompiled." + language)
                 source.write_text(text)
                 case["decompilation"][language] = runner.file_digest(source)
@@ -58,8 +58,8 @@ class NestedTryEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = self.capture(root)
-            self.assertEqual(len(replay.validate_capture(root, capture)), 128)
-            for mutation in range(18):
+            self.assertEqual(len(replay.validate_capture(root, capture)), 224)
+            for mutation in range(19):
                 changed = copy.deepcopy(capture)
                 case = changed["cases"][0]
                 if mutation == 0:
@@ -96,8 +96,10 @@ class NestedTryEvidenceTests(unittest.TestCase):
                     changed.pop("catch_search_runtime")
                 elif mutation == 16:
                     changed["catch_search_runtime"]["sha256"] = "a" * 64
-                else:
+                elif mutation == 17:
                     changed["rethrow_proof_sha256"] = "stale"
+                else:
+                    changed["direct_proof_sha256"] = "stale"
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     replay.validate_capture(root, changed)
             runtime_path = root / runner.CASES[0] / runtime.NAME
@@ -156,6 +158,27 @@ class NestedTryEvidenceTests(unittest.TestCase):
             case["contract_sha256"] = runner.file_digest(path)
             source = root / case["case"] / "decompiled.cpp"
             source.write_text(source.read_text().replace("throw;", "throw 18;"))
+            case["decompilation"]["cpp"] = runner.file_digest(source)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
+
+    def test_direct_throw_cannot_lose_its_source_objects_or_output_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            case = next(c for c in capture["cases"] if c["case"].startswith("direct-nested-"))
+            path = root / case["case"] / "contract.json"
+            receipt = json.loads(path.read_text())
+            receipt["direct_throw"] = False
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
+            receipt["direct_throw"] = True
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            source = root / case["case"] / "decompiled.cpp"
+            source.write_text(source.read_text().replace("throw (unsigned int)value;", "throw;"))
             case["decompilation"]["cpp"] = runner.file_digest(source)
             with self.assertRaises(ValueError):
                 replay.validate_capture(root, capture)

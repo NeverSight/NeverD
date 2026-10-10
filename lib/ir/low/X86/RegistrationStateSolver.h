@@ -77,6 +77,10 @@ private:
   bool callbackCanReturn(const Domain &State) const;
   std::optional<int32_t> parentStackOffset(const Domain &State) const;
   bool initializeContracts();
+  std::optional<RegistrationRuntimeThrow>
+  runtimeThrowArguments(const Domain &State,
+                        const RegistrationCalleeFrameContract &Callee,
+                        std::vector<RegistrationObjectExtent> &Reads);
   void initializeCookies();
   void collectOccurrences();
   void seedEntries();

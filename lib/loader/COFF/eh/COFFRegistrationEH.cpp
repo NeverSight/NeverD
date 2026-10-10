@@ -241,7 +241,7 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
           if (!registration_detail::isExecutableAddress(Img, Addr) ||
               Addr < F.CodeRange.Begin || Addr > F.CodeRange.End)
             continue;
-          auto Range = Functions.find(Img, Addr);
+          auto Range = Functions.find(Img, Addr, /*TableOwnedCallback=*/true);
           if (!Range || Range->Begin < F.CodeRange.Begin)
             continue;
           if (Range->End > F.CodeRange.End) {
