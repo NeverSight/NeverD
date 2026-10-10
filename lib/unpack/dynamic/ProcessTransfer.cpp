@@ -423,6 +423,8 @@ TransferObserver::watched(ProcessView &Process, uint64_t PC) {
     Observed.RuntimeState.AdditionalStateInventoryKnown = true;
     Observed.RuntimeState.HasAdditionalDependencies =
         Observed.OwnedState->hasAdditionalDependencies();
+    Observed.RuntimeState.AdditionalDependencyReasons =
+        Observed.OwnedState->additionalDependencyReasons();
   }
   if (CaptureRuntime)
     Observed.Modules = Process.modules();

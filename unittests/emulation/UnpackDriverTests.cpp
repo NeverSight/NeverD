@@ -146,6 +146,7 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
   EXPECT_TRUE(Result->Transfers.back().ProgramInvocation);
   EXPECT_TRUE(Result->RuntimeState.AdditionalStateInventoryKnown);
   EXPECT_FALSE(Result->RuntimeState.HasAdditionalDependencies);
+  EXPECT_TRUE(Result->RuntimeState.AdditionalDependencyReasons.empty());
   const auto Rebuilt = test::readImage(Result->Image);
   EXPECT_EQ(Rebuilt.Entry, Original.Entry);
   for (const auto &I : Rebuilt.Imports)
@@ -156,14 +157,14 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
 }
 
 TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
-  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15, 16, 17, 18, 19}) {
+  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20}) {
     SCOPED_TRACE(Mode);
     if (Mode == 19) {
       Options.Driver.emplace();
       Options.Driver->CPUID = {{0, std::nullopt, {1, 2, 3, 4}}};
     }
     const auto Input = packed(Mode);
-    if (Mode >= 15) {
+    if (Mode >= 15 && Mode <= 19) {
       checkLifecycle(Input);
       ASSERT_FALSE(HasFatalFailure());
     }
@@ -177,6 +178,24 @@ TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
       EXPECT_GT(Result->RuntimeState.PossibleHeapReferences, 0u);
     else
       EXPECT_TRUE(Result->RuntimeState.HasAdditionalDependencies);
+    const auto &Reasons = Result->RuntimeState.AdditionalDependencyReasons;
+    auto HasReason = [&](llvm::StringRef Reason) {
+      EXPECT_NE(std::find(Reasons.begin(), Reasons.end(), Reason),
+                Reasons.end());
+    };
+    if (Mode == 20) {
+      HasReason("live kernel pool allocations");
+      HasReason("changed kernel loader objects");
+    } else if (Mode == 1)
+      HasReason("live kernel pool allocations");
+    else if (Mode == 2)
+      HasReason("changed kernel loader objects");
+    else if (Mode == 12)
+      HasReason("live kernel MDLs");
+    else if (Mode == 13 || Mode == 14)
+      HasReason("observed kernel MDL physical identity");
+    else if (Mode >= 15)
+      HasReason("unreconstructed kernel or environment effects");
     auto Snapshot = Options;
     Snapshot.SnapshotOnly = true;
     auto Bytes = unpackFile(Input, Snapshot);
@@ -184,6 +203,17 @@ TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
     EXPECT_EQ(Bytes->Outcome, UnpackOutcome::Snapshot) << Bytes->Diagnostic;
     EXPECT_FALSE(Bytes->Image.empty());
     EXPECT_FALSE(Bytes->Diagnostic.empty());
+    EXPECT_EQ(Bytes->RuntimeState.AdditionalDependencyReasons, Reasons);
+    auto Report = llvm::json::parse(unpackResultJSON(*Bytes));
+    ASSERT_TRUE(bool(Report)) << llvm::toString(Report.takeError());
+    const auto *State = Report->getAsObject()->getObject("runtime_state");
+    ASSERT_NE(State, nullptr);
+    const auto *ReportedReasons =
+        State->getArray("additional_dependency_reasons");
+    ASSERT_NE(ReportedReasons, nullptr);
+    ASSERT_EQ(ReportedReasons->size(), Reasons.size());
+    for (size_t I = 0; I < Reasons.size(); ++I)
+      EXPECT_EQ((*ReportedReasons)[I].getAsString(), Reasons[I]);
     if (GetParam().Kind == ExecutionBackendKind::Unicorn && Mode >= 12) {
       auto Strict = Options;
       Strict.Process.Contract = ExecutionContract::Legacy;
@@ -206,6 +236,7 @@ TEST_P(UnpackDriver, RecoversAfterReleasingTransientImageMDLs) {
       << unpackResultJSON(*Result);
   EXPECT_EQ(Result->EntryRVA, Original.Entry);
   EXPECT_FALSE(Result->RuntimeState.HasAdditionalDependencies);
+  EXPECT_TRUE(Result->RuntimeState.AdditionalDependencyReasons.empty());
   const auto Output = Scratch / "released-mdl.sys";
   test::writeFile(Output, Result->Image);
   checkLifecycle(Output);
@@ -229,6 +260,9 @@ TEST_P(UnpackDriver,
     EXPECT_EQ(Result->Outcome, UnpackOutcome::UnsupportedState)
         << Result->Diagnostic;
     EXPECT_TRUE(Result->RuntimeState.HasAdditionalDependencies);
+    EXPECT_EQ(
+        Result->RuntimeState.AdditionalDependencyReasons,
+        (std::vector<std::string>{"changed DriverEntry invocation context"}));
     EXPECT_TRUE(Result->Image.empty());
   }
 }

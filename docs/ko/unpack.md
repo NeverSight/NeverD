@@ -32,6 +32,8 @@ PE32+ DLL 입력은 `IMAGE_FILE_DLL`로 식별합니다. 모델링된 게스트 
 
 `KeQueryPerformanceCounter`, `RDTSC`, `RDTSCP`를 통한 시계 읽기는 명시적인 드라이버 복구 의존성을 유지합니다. 캡처한 카운터와 주파수 값을 새 커널 환경에 다시 연결하는 계약은 아직 없습니다. 기본 복구는 `unsupported_state`를 반환하며 `snapshot_only`는 진단을 유지합니다.
 
+`runtime_state.additional_dependency_reasons`는 유지 중인 풀이나 MDL, 변경된 로더 객체, 커널 부작용, 진입 호출 컨텍스트 변경 등 드라이버 모델이 관찰한 이유를 나열합니다. 기본 거부와 명시적 스냅샷은 같은 이유를 보존합니다. 빈 목록은 `has_additional_dependencies`를 무효화하거나 복원 계약을 입증하지 않습니다.
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

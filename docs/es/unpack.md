@@ -32,6 +32,8 @@ Los MDL temporales de páginas de imagen del cargador dejan de añadir una depen
 
 Las lecturas del reloj mediante `KeQueryPerformanceCounter`, `RDTSC` o `RDTSCP` conservan una dependencia explícita de recuperación del controlador. No existe un contrato para revincular los valores capturados del contador y su frecuencia a un nuevo entorno del núcleo. La recuperación predeterminada devuelve `unsupported_state`; `snapshot_only` conserva el diagnóstico.
 
+`runtime_state.additional_dependency_reasons` enumera los motivos observados por el modelo del controlador: pools o MDL activos, objetos del cargador modificados, efectos del kernel y cambios en el contexto de la llamada de entrada. El rechazo predeterminado y las instantáneas explícitas conservan los mismos motivos. Una lista vacía no anula `has_additional_dependencies` ni demuestra un contrato de restauración.
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

@@ -1425,7 +1425,7 @@ TEST_F(KernelImageMDL, ReadAliasesSharePagesWithoutChangingImageProtections) {
   EXPECT_FALSE(take(Memory->canAccess(ImageBase, 1, Write)));
   rejected(Model->call("MmProtectMdlSystemAddress", {MDL, PageReadWrite}),
            "write-access contract");
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->unpackDependencies()).empty());
   call("MmUnlockPages", {MDL});
   EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
   call("IoFreeMdl", {MDL});
@@ -1437,7 +1437,7 @@ TEST_F(KernelImageMDL, ReadAliasesSharePagesWithoutChangingImageProtections) {
   call("IoFreeMdl", {Other});
   // The test's host-side PFN inspection is not a guest observation. All
   // temporary image descriptors and mappings have now retired.
-  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
+  EXPECT_TRUE(take(Model->unpackDependencies()).empty());
 }
 
 TEST_F(KernelImageMDL, WriteAliasesModifyTheExistingImageAndReleaseTheirView) {
@@ -1456,13 +1456,13 @@ TEST_F(KernelImageMDL, WriteAliasesModifyTheExistingImageAndReleaseTheirView) {
   EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
   EXPECT_EQ(get(Address), 0x123456789abcdef0u);
   call("IoFreeMdl", {MDL});
-  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
+  EXPECT_TRUE(take(Model->unpackDependencies()).empty());
 }
 
 TEST_F(KernelImageMDL, RecoveryWaitsForDescriptorAndMappingRetirement) {
   const auto Address = ImageBase + profile::PageSize + 0x10;
   const auto MDL = call("IoAllocateMdl", {Address, 16, 0, 0, 0});
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->unpackDependencies()).empty());
   call("MmProbeAndLockPages", {MDL, KernelMode, IoWriteAccess});
   const auto Alias = call("MmMapLockedPagesSpecifyCache",
                           {MDL, KernelMode, MmCached, 0, 0,
@@ -1471,11 +1471,11 @@ TEST_F(KernelImageMDL, RecoveryWaitsForDescriptorAndMappingRetirement) {
   // Logical range fields contain no model physical identity.
   success(Model->validateGuestAccess(MDL + MDLByteCountOffset, 8, false));
   call("MmUnmapLockedPages", {Alias, MDL});
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->unpackDependencies()).empty());
   call("MmUnlockPages", {MDL});
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->unpackDependencies()).empty());
   call("IoFreeMdl", {MDL});
-  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
+  EXPECT_TRUE(take(Model->unpackDependencies()).empty());
 }
 
 TEST_F(KernelImageMDL, PhysicalIdentityReadsRemainDependenciesAfterRelease) {
@@ -1495,7 +1495,7 @@ TEST_F(KernelImageMDL, PhysicalIdentityReadsRemainDependenciesAfterRelease) {
       call("RtlCompareMemory", {Address, MDL + MDLSize, 8});
     call("MmUnlockPages", {MDL});
     call("IoFreeMdl", {MDL});
-    EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+    EXPECT_FALSE(take(Model->unpackDependencies()).empty());
   }
 }
 
@@ -1605,7 +1605,7 @@ TEST_F(KernelImageMDL, UnreadableImageProbePreservesDescriptorAndPermissions) {
   call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
   call("MmUnlockPages", {MDL});
   call("IoFreeMdl", {MDL});
-  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
+  EXPECT_TRUE(take(Model->unpackDependencies()).empty());
 }
 
 TEST_F(KernelImageMDL, ImageOwnershipIsIndependentOfTheUserAddressHeuristic) {
@@ -1617,7 +1617,7 @@ TEST_F(KernelImageMDL, ImageOwnershipIsIndependentOfTheUserAddressHeuristic) {
   call("MmProbeAndLockPages", {MDL, KernelMode, IoWriteAccess});
   call("MmUnlockPages", {MDL});
   call("IoFreeMdl", {MDL});
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->unpackDependencies()).empty());
 }
 
 TEST_F(KernelImageMDL, LargeImageLocksAreIndependentOfThePoolArenaSize) {
@@ -1666,7 +1666,7 @@ TEST_F(KernelImageMDL, MappedHolesAndOutsideBytesDoNotAcquireImageOwnership) {
   call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
   call("MmUnlockPages", {MDL});
   call("IoFreeMdl", {MDL});
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->unpackDependencies()).empty());
 }
 
 TEST_F(KernelImageMDL, ImageLockingRequiresPageableIRQLAndAnUnbuiltDescriptor) {
@@ -1681,7 +1681,7 @@ TEST_F(KernelImageMDL, ImageLockingRequiresPageableIRQLAndAnUnbuiltDescriptor) {
            "unbuilt");
   call("MmUnlockPages", {MDL});
   call("IoFreeMdl", {MDL});
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->unpackDependencies()).empty());
 }
 } // namespace
 } // namespace neverd::emulation

@@ -30,6 +30,8 @@ Temporary MDLs over loader-owned image pages no longer add a recovery dependency
 
 Clock reads through `KeQueryPerformanceCounter`, `RDTSC`, or `RDTSCP` retain an explicit driver recovery dependency. Captured counter and frequency values have no rebinding contract for a fresh kernel environment. Default recovery reports `unsupported_state`; `snapshot_only` retains the diagnostic.
 
+`runtime_state.additional_dependency_reasons` lists the driver model’s observed reasons, including live pools or MDLs, changed loader objects, kernel effects and a changed entry invocation context. Default refusal and explicit snapshots retain the same reasons. An empty list does not override `has_additional_dependencies` or establish a restoration contract.
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

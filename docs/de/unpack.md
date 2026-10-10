@@ -32,6 +32,8 @@ Temporäre MDLs für loader-eigene Abbildseiten erzeugen keine zusätzliche Wied
 
 Uhrabfragen über `KeQueryPerformanceCounter`, `RDTSC` oder `RDTSCP` behalten eine explizite Abhängigkeit der Treiberwiederherstellung. Für erfasste Zähler- und Frequenzwerte besteht kein Vertrag zur Neubindung an eine frische Kernelumgebung. Die Standardwiederherstellung meldet `unsupported_state`; `snapshot_only` behält die Diagnose bei.
 
+`runtime_state.additional_dependency_reasons` nennt die vom Treibermodell beobachteten Gründe, etwa aktive Pools oder MDLs, geänderte Loader-Objekte, Kernel-Effekte und einen geänderten Aufrufkontext am Einstieg. Die standardmäßige Ablehnung und explizite Snapshots behalten dieselben Gründe bei. Eine leere Liste setzt `has_additional_dependencies` nicht außer Kraft und belegt keinen Wiederherstellungsvertrag.
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

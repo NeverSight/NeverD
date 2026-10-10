@@ -101,7 +101,10 @@ __attribute__((noinline, used)) static void unpack_bytes(DRIVER_OBJECT *Driver,
     ObservedCPUID[2] = C;
     ObservedCPUID[3] = D;
   }
-  if (Packed.Mode == 1)
+  if (Packed.Mode == 20) {
+    RetainedPool = ExAllocatePoolWithTag(0, 32, 0x44564e55);
+    Driver->MajorFunction[0] = (void *)DriverEntry;
+  } else if (Packed.Mode == 1)
     RetainedPool = ExAllocatePoolWithTag(0, 32, 0x44564e55);
   else if (Packed.Mode == 2)
     Driver->MajorFunction[0] = (void *)DriverEntry;

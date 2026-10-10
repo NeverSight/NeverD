@@ -133,6 +133,10 @@ struct UnpackRuntimeState {
   /// Other profile-owned resources cannot be inferred from integer matches.
   bool AdditionalStateInventoryKnown = false;
   bool HasAdditionalDependencies = false;
+  /// Diagnostic explanations supplied by the OS owner. These are not pointer
+  /// provenance or a reconstruction recipe; the dependency flag remains the
+  /// authority when a profile does not provide individual explanations.
+  std::vector<std::string> AdditionalDependencyReasons;
   bool HeapInventoryKnown = false;
   uint64_t PossibleHeapReferences = 0;
   /// Direct model service calls witnessed during entry and import discovery.

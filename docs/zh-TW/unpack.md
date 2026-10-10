@@ -32,6 +32,8 @@ PE32+ DLL 輸入由 `IMAGE_FILE_DLL` 識別。建模的來賓 EXE 呼叫 `LoadLi
 
 透過 `KeQueryPerformanceCounter`、`RDTSC` 或 `RDTSCP` 讀取時鐘會保留明確的驅動程式恢復相依性。擷取的計數器與頻率值尚無面向新核心環境的重新繫結契約。預設恢復傳回 `unsupported_state`；`snapshot_only` 保留此診斷。
 
+`runtime_state.additional_dependency_reasons` 列出驅動模型觀察到的原因，包括存活的池或 MDL、被修改的載入器物件、核心副作用及入口呼叫上下文變化。預設拒絕與明確快照保留相同原因。空清單不會覆寫 `has_additional_dependencies`，也不證明存在恢復契約。
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

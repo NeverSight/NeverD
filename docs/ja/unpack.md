@@ -32,6 +32,8 @@ PE32+ DLL 入力は `IMAGE_FILE_DLL` で識別します。モデル化された�
 
 `KeQueryPerformanceCounter`、`RDTSC`、`RDTSCP` によるクロック読み取りは、ドライバー復元の明示的な依存関係を保持します。取得したカウンター値と周波数を新しいカーネル環境に再対応付けする契約はありません。既定の復元は `unsupported_state` を返し、`snapshot_only` は診断を保持します。
 
+`runtime_state.additional_dependency_reasons` は、存続中のプールや MDL、変更されたローダーオブジェクト、カーネルの副作用、入口呼び出しコンテキストの変更など、ドライバーモデルが観測した理由を列挙します。既定の拒否と明示的なスナップショットは同じ理由を保持します。空のリストは `has_additional_dependencies` を上書きせず、復元契約を証明するものでもありません。
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

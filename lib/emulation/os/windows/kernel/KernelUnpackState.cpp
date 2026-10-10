@@ -80,24 +80,46 @@ std::map<uint64_t, uint64_t> KernelModel::unpackAllocations() const {
   return Out;
 }
 
-llvm::Expected<bool> KernelModel::hasUnpackDependencies() const {
+llvm::Expected<std::vector<std::string>>
+KernelModel::unpackDependencies() const {
   if (!UnpackBaseline)
     return llvm::createStringError("kernel recovery has no ownership baseline");
-  if (UnpackOpaqueEffects || UnpackMDLIdentityRead || !MDLs.empty() ||
-      !Allocations.empty() || EntryFinished || CurrentIRQL || Unloading)
-    return true;
+  std::vector<std::string> Reasons;
+  if (UnpackOpaqueEffects)
+    Reasons.emplace_back("unreconstructed kernel or environment effects");
+  if (UnpackMDLIdentityRead)
+    Reasons.emplace_back("observed kernel MDL physical identity");
+  if (!MDLs.empty())
+    Reasons.emplace_back("live kernel MDLs");
+  if (!Allocations.empty())
+    Reasons.emplace_back("live kernel pool allocations");
+  if (EntryFinished)
+    Reasons.emplace_back("DriverEntry has already returned");
+  if (CurrentIRQL)
+    Reasons.emplace_back("raised kernel IRQL");
+  if (Unloading)
+    Reasons.emplace_back("driver unload is in progress");
   for (const auto &[Address, Size] : ArenaAllocations)
-    if (!UnpackBaseline->count(Address) && !FreedRanges.count(Address))
-      return true;
+    if (!UnpackBaseline->count(Address) && !FreedRanges.count(Address)) {
+      Reasons.emplace_back("retained kernel object allocations");
+      break;
+    }
+  bool Released = false, Changed = false;
   for (const auto &[Address, Before] : *UnpackBaseline) {
-    if (FreedRanges.count(Address))
-      return true;
+    if (FreedRanges.count(Address)) {
+      Released = true;
+      continue;
+    }
     std::vector<uint8_t> Now(Before.size());
     if (auto E = Memory.snapshotBacking(Address, Now))
       return std::move(E);
     if (Now != Before)
-      return true;
+      Changed = true;
   }
-  return false;
+  if (Released)
+    Reasons.emplace_back("released kernel loader objects");
+  if (Changed)
+    Reasons.emplace_back("changed kernel loader objects");
+  return Reasons;
 }
 } // namespace neverd::emulation

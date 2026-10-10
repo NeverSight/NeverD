@@ -32,6 +32,8 @@ Gli MDL temporanei sulle pagine immagine del loader non aggiungono più una dipe
 
 Le letture del clock tramite `KeQueryPerformanceCounter`, `RDTSC` o `RDTSCP` mantengono una dipendenza esplicita per il ripristino del driver. I valori acquisiti del contatore e della frequenza non hanno un contratto di riassociazione a un nuovo ambiente kernel. Il ripristino predefinito restituisce `unsupported_state`; `snapshot_only` conserva la diagnosi.
 
+`runtime_state.additional_dependency_reasons` elenca i motivi osservati dal modello del driver: pool o MDL attivi, oggetti del caricatore modificati, effetti del kernel e modifiche al contesto della chiamata di ingresso. Il rifiuto predefinito e gli snapshot espliciti conservano gli stessi motivi. Un elenco vuoto non annulla `has_additional_dependencies` e non dimostra un contratto di ripristino.
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

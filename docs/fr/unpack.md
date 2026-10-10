@@ -32,6 +32,8 @@ Les MDL temporaires des pages d’image appartenant au chargeur ne créent plus 
 
 Les lectures d’horloge via `KeQueryPerformanceCounter`, `RDTSC` ou `RDTSCP` conservent une dépendance explicite de restauration du pilote. Les valeurs capturées du compteur et de sa fréquence n’ont aucun contrat de réassociation à un nouvel environnement noyau. La restauration par défaut renvoie `unsupported_state` ; `snapshot_only` conserve le diagnostic.
 
+`runtime_state.additional_dependency_reasons` énumère les raisons observées par le modèle du pilote : pools ou MDL actifs, objets du chargeur modifiés, effets du noyau et contexte d’appel d’entrée modifié. Le refus par défaut et les instantanés explicites conservent les mêmes raisons. Une liste vide ne remplace pas `has_additional_dependencies` et ne prouve aucun contrat de restauration.
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

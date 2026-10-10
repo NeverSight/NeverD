@@ -32,6 +32,8 @@
 
 تحتفظ قراءة الساعة عبر `KeQueryPerformanceCounter` أو `RDTSC` أو `RDTSCP` باعتماد صريح لاستعادة برنامج التشغيل. لا يوجد عقد لإعادة ربط قيم العداد والتردد الملتقطة ببيئة نواة جديدة. تعيد الاستعادة الافتراضية `unsupported_state`، ويحتفظ `snapshot_only` بالتشخيص.
 
+يسرد `runtime_state.additional_dependency_reasons` الأسباب التي رصدها نموذج برنامج التشغيل، ومنها تجمعات الذاكرة أو MDL النشطة، وكائنات المحمّل المعدّلة، وتأثيرات النواة، وتغيّر سياق استدعاء نقطة الدخول. يحتفظ الرفض الافتراضي واللقطات الصريحة بالأسباب نفسها. لا تلغي القائمة الفارغة `has_additional_dependencies` ولا تثبت وجود عقد للاستعادة.
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```

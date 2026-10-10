@@ -32,6 +32,8 @@ PE32+ DLL 输入由 `IMAGE_FILE_DLL` 标识。建模的来宾 EXE 调用 `LoadLi
 
 通过 `KeQueryPerformanceCounter`、`RDTSC` 或 `RDTSCP` 读取时钟会保留明确的驱动恢复依赖。捕获的计数器和频率值尚无面向新内核环境的重绑定契约。默认恢复返回 `unsupported_state`；`snapshot_only` 保留此诊断。
 
+`runtime_state.additional_dependency_reasons` 列出驱动模型观察到的原因，包括存活的池或 MDL、被修改的加载器对象、内核副作用及入口调用上下文变化。默认拒绝与显式快照保留相同原因。空列表不会覆盖 `has_additional_dependencies`，也不证明存在恢复契约。
+
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
 ```
