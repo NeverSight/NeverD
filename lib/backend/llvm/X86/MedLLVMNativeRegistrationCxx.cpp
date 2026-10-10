@@ -22,6 +22,7 @@
 #include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/ExceptionInfo.h"
 
@@ -163,7 +164,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   };
   struct CleanupPlan {
     const RegistrationCleanupFrameContract *Contract;
-    std::string Name;
+    std::vector<std::string> Names;
     std::optional<llvm::mc_rewrite::RewriteWinEHSemanticToken> Token;
   };
   std::vector<Operation> Operations;
@@ -318,25 +319,37 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     const auto Relay =
         getCheckedX86RegistrationCleanupRelayABI(*Img, Action.ActionVA, &Work);
     if (!Contract || !Relay || Contract->RelayTarget != Action.ActionVA ||
-        Contract->ObjectFrameOffset != Relay->ObjectFrameOffset ||
-        !EH.Registration->cxxSourceFrameOffset(Contract->ObjectFrameOffset) ||
-        Contract->Leaf.Target != Relay->Leaf.Target ||
-        !Relay->Leaf.CallerPCWrites.empty())
+        Contract->Calls.empty() ||
+        Contract->Calls.size() != Relay->Calls.size())
       return false;
-    const auto Name = CalleeName(Relay->Leaf.Target, "cleanup.ecx");
-    if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
-                                                                CleanupType))
-      return false;
+    std::vector<std::string> Names;
+    for (size_t I = 0; I < Contract->Calls.size(); ++I) {
+      const auto &Call = Contract->Calls[I];
+      const auto &Fresh = Relay->Calls[I];
+      if (Call.ObjectFrameOffset != Fresh.ObjectFrameOffset ||
+          !EH.Registration->cxxSourceFrameOffset(Call.ObjectFrameOffset) ||
+          Call.Leaf.Target != Fresh.Leaf.Target ||
+          !Fresh.Leaf.CallerPCWrites.empty())
+        return false;
+      auto Name = CalleeName(Fresh.Leaf.Target, "cleanup.ecx");
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
+                                                                  CleanupType))
+        return false;
+      Names.push_back(std::move(Name));
+    }
     const auto Token =
         windows_eh_semantics::getCxxCleanupSemanticToken(EH, Arch::X86, State);
 #ifdef LLVM_NEVERD_X86_CXX_FUNCTION_RECEIPTS
     if (!Token)
       return false;
 #endif
-    Cleanups.emplace(State, CleanupPlan{Contract, Name, Token});
+    Cleanups.emplace(State, CleanupPlan{Contract, std::move(Names), Token});
   }
+  const auto CleanupParents = registrationCleanupParents(Func);
+  if (!CleanupParents)
+    return false;
   for (const auto &Plan : Calls) {
-    if (Plan.State->Levels.empty() || Plan.State->CallbackOnly)
+    if (Plan.State->Levels.empty())
       continue;
     const auto Level = Plan.State->Levels[0];
     int32_t Walk = Level;
@@ -522,20 +535,24 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       llvm_unreachable("prevalidated C++ cleanup semantic token rejected");
     med_llvm_eh::emitWindowsEHProvenanceAnchor(
         B, Model, Role::RegistrationCallback, EH.CodeRange.Begin,
-        Action.ActionVA, State, 0, Cleanup, Plan.Contract->Leaf.Target, 1);
-    auto *Callee = llvm::cast<llvm::Function>(
-        Mod->getOrInsertFunction(Plan.Name, CleanupType).getCallee());
-    Callee->setCallingConv(llvm::CallingConv::X86_ThisCall);
-    rewrite_source::setOriginalVA(*Callee, Plan.Contract->Leaf.Target);
-    auto *Address =
-        B.CreateInBoundsGEP(I8, FrameAlloca,
-                            B.getInt32(Layout->Establisher +
-                                       *EH.Registration->cxxSourceFrameOffset(
-                                           Plan.Contract->ObjectFrameOffset)));
-    auto *Call = B.CreateCall(Callee, {Address},
-                              {llvm::OperandBundleDef("funclet", Cleanup)});
-    Call->setCallingConv(llvm::CallingConv::X86_ThisCall);
-    Call->setDoesNotThrow();
+        Action.ActionVA, State, 0, Cleanup,
+        Plan.Contract->Calls.front().Leaf.Target, 1);
+    for (size_t I = 0; I < Plan.Contract->Calls.size(); ++I) {
+      const auto &Borrow = Plan.Contract->Calls[I];
+      auto *Callee = llvm::cast<llvm::Function>(
+          Mod->getOrInsertFunction(Plan.Names[I], CleanupType).getCallee());
+      Callee->setCallingConv(llvm::CallingConv::X86_ThisCall);
+      rewrite_source::setOriginalVA(*Callee, Borrow.Leaf.Target);
+      auto *Address =
+          B.CreateInBoundsGEP(I8, FrameAlloca,
+                              B.getInt32(Layout->Establisher +
+                                         *EH.Registration->cxxSourceFrameOffset(
+                                             Borrow.ObjectFrameOffset)));
+      auto *Call = B.CreateCall(Callee, {Address},
+                                {llvm::OperandBundleDef("funclet", Cleanup)});
+      Call->setCallingConv(llvm::CallingConv::X86_ThisCall);
+      Call->setDoesNotThrow();
+    }
     B.CreateCleanupRet(Cleanup, Outer);
     Unwinds.emplace(State, Block);
     return Block;
@@ -635,6 +652,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     CallSiteAddrs.erase(Old);
     Old->eraseFromParent();
   }
+  for (const auto &[State, Block] : Unwinds)
+    if (const auto &Owner = CleanupParents->at(State))
+      llvm::cast<llvm::CleanupPadInst>(&*Block->getFirstNonPHIIt())
+          ->setParentPad(Catches.at(*Owner).Pad);
   for (const auto &[Return, Resume] : Resumes) {
     const auto *Stack =
         Resume->SavedCallbackVA

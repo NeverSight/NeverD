@@ -31,6 +31,8 @@ void writeSourceReceipt(const char *Input, const char *Output,
   const auto *Receipt = std::getenv("NEVERD_REGISTRATION_REALIGNED_RECEIPT");
   if (!Receipt)
     return;
+  if (!Context.get("catch_cleanup"))
+    Context["catch_cleanup"] = false;
   auto Digest = [](const char *File) {
     auto Buffer = llvm::MemoryBuffer::getFile(File);
     EXPECT_TRUE(bool(Buffer));

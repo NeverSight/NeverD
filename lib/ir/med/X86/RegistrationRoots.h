@@ -32,6 +32,7 @@ public:
                   std::optional<std::pair<va_t, int32_t>> RestoredSP) const;
 
 private:
+  void removeUnreachedBlocks(MedFunc &Func) const;
   const LowFunc &Low;
   bool HasSEHFrame = false;
   bool HasCxxFrame = false;

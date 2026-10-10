@@ -1,5 +1,4 @@
-//===- RegistrationABI.h - Checked PE32 registration call ABI -----*- C++
-//-*-===//
+//===- RegistrationABI.h - PE32 registration call ABI ---------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -46,14 +45,18 @@ std::optional<RegistrationLeafCalleeABI>
 getCheckedX86RegistrationLeafCalleeABI(const BinaryImage &Image, va_t Target,
                                        size_t *CumulativeWork = nullptr);
 
-/// A checked MSVC cleanup relay borrows its object from the establisher EBP
-/// and tail-jumps to a separately checked leaf. The parent still proves this
-/// object's bounds, initialization and separation at every unwind dispatch.
+struct RegistrationCleanupCallABI {
+  int32_t ObjectFrameOffset = 0;
+  RegistrationLeafCalleeABI Leaf;
+};
+
+/// A checked cleanup relay derives each ECX object from the establisher EBP.
+/// It tail-jumps to one leaf or saves/restores runtime EBP around an ordered
+/// sequence of leaf calls. The parent must prove every borrow at dispatch.
 struct RegistrationCleanupRelayABI {
   va_t Target = InvalidVA;
   va_t EndAddress = InvalidVA;
-  int32_t ObjectFrameOffset = 0;
-  RegistrationLeafCalleeABI Leaf;
+  std::vector<RegistrationCleanupCallABI> Calls;
 };
 
 std::optional<RegistrationCleanupRelayABI>

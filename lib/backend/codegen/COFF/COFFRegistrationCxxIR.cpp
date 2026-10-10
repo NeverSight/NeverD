@@ -17,6 +17,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
@@ -199,8 +200,6 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
             State = Index;
         }
         if (!State || !Result.Cleanups.emplace(*State, Pad).second ||
-            Pad->getParentPad() !=
-                llvm::ConstantTokenNone::get(Function.getContext()) ||
             Pad->arg_size())
           return rejectIR("C++ cleanup lost its source action identity");
         CompilerBlocks.insert(&Block);
@@ -217,6 +216,9 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   const auto CatchParents = projectX86RegistrationCatchParents(Med);
   if (!CatchParents)
     return rejectIR("C++ continuation lost its parent invocation");
+  const auto CleanupParents = registrationCleanupParents(Med);
+  if (!CleanupParents)
+    return rejectIR("C++ cleanup lost its parent invocation");
   auto BundleIs = [](const llvm::CallBase &Call, const llvm::Value *Pad) {
     auto Bundle = Call.getOperandBundle("funclet");
     return Pad ? Bundle && Bundle->Inputs.size() == 1 &&
@@ -274,34 +276,42 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     if (Found == Result.Cleanups.end())
       return rejectIR("C++ source cleanup was omitted");
     const auto *Pad = Found->second;
+    const auto &Owner = CleanupParents->at(Contract.ActionState);
+    const llvm::Value *ParentPad =
+        Owner ? static_cast<const llvm::Value *>(Result.Catches.at(*Owner).Pad)
+              : llvm::ConstantTokenNone::get(Function.getContext());
+    if (Pad->getParentPad() != ParentPad)
+      return rejectIR("C++ cleanup changed its active catch invocation");
     const auto *Return = llvm::dyn_cast<llvm::CleanupReturnInst>(
         Pad->getParent()->getTerminator());
-    const llvm::CallBase *Borrow = nullptr;
+    std::vector<const llvm::CallBase *> Borrows;
     for (const auto &I : *Pad->getParent())
       if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
-          Call && !llvm::isa<llvm::IntrinsicInst>(Call)) {
-        if (Borrow)
-          return rejectIR("C++ cleanup has an extra callee");
-        Borrow = Call;
-      }
+          Call && !llvm::isa<llvm::IntrinsicInst>(Call))
+        Borrows.push_back(Call);
+    if (Borrows.empty() || Borrows.size() != Contract.Calls.size())
+      return rejectIR("C++ cleanup changed its ordered call count");
     const auto *Anchor = llvm::dyn_cast_or_null<llvm::CallInst>(next(*Pad));
     const auto P = Anchor ? coff_native_eh::parseNativeEHProvenance(*Anchor)
                           : std::nullopt;
     if (!Return || Return->getCleanupPad() != Pad ||
         Return->getUnwindDest() !=
             UnwindAt(Cxx.UnwindMap[Contract.ActionState].ToState) ||
-        !Borrow || !P || P->Role != Role::RegistrationCallback ||
+        !P || P->Role != Role::RegistrationCallback ||
         P->SourceVA != Contract.RelayTarget ||
         P->Region != Contract.ActionState || P->Clause ||
-        P->AuxVA != Contract.Leaf.Target || P->Flags != 1 ||
-        !BundleIs(*Anchor, Pad) || !BundleIs(*Borrow, Pad))
+        P->AuxVA != Contract.Calls.front().Leaf.Target || P->Flags != 1 ||
+        !BundleIs(*Anchor, Pad))
       return rejectIR("C++ cleanup changed its action or outer unwind edge");
     ExpectedAnchors.insert(Anchor);
-    const auto Offset =
-        Source.Registration->cxxSourceFrameOffset(Contract.ObjectFrameOffset);
-    if (!Offset)
-      return rejectIR("C++ cleanup object has no checked source coordinate");
-    Result.Calls.emplace(Borrow, CxxIRCall{Contract.Leaf, *Offset, true});
+    for (size_t I = 0; I < Borrows.size(); ++I) {
+      const auto &Call = Contract.Calls[I];
+      const auto Offset =
+          Source.Registration->cxxSourceFrameOffset(Call.ObjectFrameOffset);
+      if (!Offset || !BundleIs(*Borrows[I], Pad))
+        return rejectIR("C++ cleanup object has no checked source coordinate");
+      Result.Calls.emplace(Borrows[I], CxxIRCall{Call.Leaf, *Offset, true});
+    }
   }
   std::map<std::pair<va_t, uint32_t>, const llvm::CallBase *> CallsAt;
   for (const auto *Call : ActualCalls)
@@ -384,19 +394,12 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         (Receipt.Cleanup && !Call->doesNotThrow()) ||
         (!Receipt.Cleanup && Call->doesNotThrow()))
       return rejectIR("C++ preserved callee changed its physical call ABI");
+    if (!hasExactCxxCallAttributes(*Call, Receipt))
+      return rejectIR("C++ preserved callee changed its proved effects");
     if (RuntimeThrow) {
       // The runtime reads the object, changes thread-local exception state,
       // and may unwind. Optimizer promises such as memory(none) are not part
       // of this ABI even when the signature and arguments still match.
-      auto RuntimeAttributes = [](const llvm::AttributeList &Attributes) {
-        return llvm::all_of(Attributes.getFnAttrs(), [](llvm::Attribute A) {
-          return A.isEnumAttribute() &&
-                 A.getKindAsEnum() == llvm::Attribute::NoReturn;
-        });
-      };
-      if (!RuntimeAttributes(Call->getAttributes()) ||
-          !RuntimeAttributes(Callee->getAttributes()))
-        return rejectIR("C++ throw changed its runtime effects");
       for (unsigned Index = 0; Index != 2; ++Index) {
         const auto *Null = llvm::dyn_cast<llvm::ConstantPointerNull>(
             Call->getArgOperand(Index));

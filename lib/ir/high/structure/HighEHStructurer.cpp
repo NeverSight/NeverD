@@ -18,6 +18,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "CxxCleanupScope.h"
 #include "HighCFSimplifyDetail.h"
 #include "X86RegistrationTry.h"
 
@@ -695,23 +696,9 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
       Candidate.Clauses.push_back(std::move(Clause));
     }
     for (int32_t State = Try.TryLow; State <= Try.TryHigh; ++State) {
-      if (State < 0 || State >= static_cast<int32_t>(Cxx.UnwindMap.size()))
-        continue;
-      bool OwnedByInner = false;
-      for (const CxxTryBlock &Other : Cxx.TryBlocks) {
-        if (Other.TryLow == Try.TryLow && Other.TryHigh == Try.TryHigh)
-          continue;
-        if (Other.TryLow >= Try.TryLow && Other.TryHigh <= Try.TryHigh &&
-            State >= Other.TryLow && State <= Other.TryHigh) {
-          OwnedByInner = true;
-          break;
-        }
-      }
-      if (OwnedByInner)
+      if (!cxxTryOwnsCleanup(Cxx, TryIndex, State))
         continue;
       const CxxUnwindAction &Action = Cxx.UnwindMap[State];
-      if (Action.ActionVA == 0)
-        continue;
       HighEHClause Clause;
       Clause.Kind = HighEHClauseKind::CxxCleanup;
       Clause.FilterOrActionVA = Action.ActionVA;

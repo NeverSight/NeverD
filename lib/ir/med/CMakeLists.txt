@@ -4,8 +4,10 @@ add_neverd_component_library(NeverDIRMed
   X86/RegistrationFrame.cpp
   X86/RegistrationCallback.cpp
   X86/RegistrationCatchContext.cpp
+  X86/RegistrationCleanupContext.cpp
   X86/RegistrationCall.cpp
   X86/RegistrationRoots.cpp
+  X86/RegistrationReachability.cpp
   abi/MedABIPass.cpp
   abi/MedABIPassI386.cpp
   abi/MedABIPassSupport.cpp

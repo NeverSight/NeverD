@@ -92,14 +92,17 @@ struct RegistrationCallFrameEffect {
   bool operator==(const RegistrationCallFrameEffect &) const = default;
 };
 
-/// A source unwind-map action with an authenticated EBP-to-ECX relay and
-/// returning leaf. It grants no object borrow until the state solver checks
-/// all dispatch predecessors against the allocated, initialized parent frame.
+struct RegistrationCleanupCallContract {
+  int32_t ObjectFrameOffset = 0;
+  RegistrationCalleeFrameContract Leaf;
+};
+
+/// One unwind-map action's ordered leaf calls. Every dispatch predecessor
+/// must prove each borrow against the allocated, initialized parent frame.
 struct RegistrationCleanupFrameContract {
   uint32_t ActionState = 0;
   va_t RelayTarget = InvalidVA;
-  int32_t ObjectFrameOffset = 0;
-  RegistrationCalleeFrameContract Leaf;
+  std::vector<RegistrationCleanupCallContract> Calls;
 };
 
 struct RegistrationCleanupFrameEffect {

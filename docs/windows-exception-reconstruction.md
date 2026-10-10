@@ -304,8 +304,14 @@ outer context are restored. MedIR owns callback membership and nesting for
 both source and native consumers. LLVM catchswitch parents and resumed stack
 definitions must match that proof. The installer independently checks each
 resume seed's parent, target, offset, allocation, dominance and SavedESP
-writeback. This nested reference projection requires action-free unwind maps;
-general object lifetimes and shared callbacks remain unsupported.
+writeback. Checked cleanup relays may run while the outer reference stays live.
+The source solver requires every object borrow to be initialized and excludes
+cleanup writes overlapping the saved reference. Native cleanup pads retain
+their active parent catch and exact ordered calls, including multiple
+local objects destroyed by one compiler-combined action. Missing,
+reordered or redirected calls, changed effect attributes and skipped unwind
+edges reject installation. General object lifetimes and shared callbacks remain
+unsupported.
 HighIR can gather terminal branches of synchronous tries even when runtime
 resume blocks interrupt their address order or merge different post-catch
 states. An inner try stays intact with independently checked callback bodies
@@ -339,6 +345,9 @@ exercise inner reference catches, outer value/catch-all search, all three
 continuations, secondary throws and both helper and direct rethrows from a
 catch. A further three-try/four-catch fixture throws inside a reference catch,
 modifies the outer object from the inner catch, then resumes the outer catch.
+Its cleanup variant constructs two local objects and independently records
+reverse-order destruction. Clang O0 retains two actions; O1 combines their
+calls in one action. Both forms require the same ordered runtime trace.
 Negative controls and forced rebasing cover each profile. The matrix uses the captured
 Microsoft x86 CRT DLL, including under Wine. Wine's built-in CRT is not the
 authority for catch-guard stack restoration;
@@ -353,6 +362,11 @@ and GS or asynchronous C++ remain available for analysis and are rejected for
 native installation.
 
 ## IR contract
+
+Canonical Windows EH metadata schema 11 and semantic-token schema 2 bind the
+primary code range and every disjoint callback range. Previously saved LLVM IR
+must be lifted again before native reconstruction; older receipts cannot
+authenticate the expanded ownership contract.
 
 Exception metadata is attached at every representation level without changing
 the meaning of the ordinary CFG:

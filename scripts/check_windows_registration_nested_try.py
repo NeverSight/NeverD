@@ -34,9 +34,11 @@ RETHROW_PROOF = ROOT / "unittests/lift/eh/RegistrationRethrowTestUtils.cpp"
 DIRECT_PROOF = ROOT / "unittests/lift/eh/RegistrationDirectThrowTestUtils.cpp"
 CATCH_PROOF = ROOT / "unittests/lift/eh/WindowsRegistrationCatchContextTests.cpp"
 RECEIPT_PROOF = ROOT / "unittests/lift/eh/RegistrationSourceReceiptTestUtils.cpp"
+CLEANUP_PROOF = ROOT / "unittests/lift/eh/RegistrationCleanupTestUtils.cpp"
 FORMS = {prefix + "-" + mode + "-llvm-fixed": "-" + mode.upper()
          for prefix in ("nested", "secondary", "rethrow", "inline-rethrow",
-                        "direct-nested", "direct-secondary", "direct-rethrow", "catch-try")
+                        "direct-nested", "direct-secondary", "direct-rethrow", "catch-try",
+                        "catch-cleanup")
          for mode in ("o0", "o1")}
 CASES = tuple(name + suffix for name in FORMS for suffix in ("", "-control"))
 
@@ -45,14 +47,15 @@ def search_context(case):
     family, separator, mode = case.removesuffix("-control").removesuffix("-llvm-fixed").rpartition("-")
     if not separator or mode not in ("o0", "o1") or family not in (
             "nested", "secondary", "rethrow", "inline-rethrow", "direct-nested",
-            "direct-secondary", "direct-rethrow", "catch-try"):
+            "direct-secondary", "direct-rethrow", "catch-try", "catch-cleanup"):
         raise ValueError("unknown nested throw profile")
     rethrow = family in ("rethrow", "inline-rethrow", "direct-rethrow")
     return {"secondary_search": rethrow or family in ("secondary", "direct-secondary"),
             "rethrow_search": rethrow,
             "inline_rethrow": family in ("inline-rethrow", "direct-rethrow"),
             "direct_throw": family.startswith("direct-"),
-            "catch_try": family == "catch-try"}
+            "catch_try": family in ("catch-try", "catch-cleanup"),
+            "catch_cleanup": family == "catch-cleanup"}
 
 
 def validate_search_context(receipt, case):
@@ -69,11 +72,13 @@ def observe(path, case, route, receipt, launcher, env, timeout):
                 (17, 17, 39, 7, 7, 39, 1, 12) if secondary else
                 (17, 28, 39, 7, 18, 39, 1, 12))
     return observe_catches(path, case, route, receipt, launcher, env, timeout,
-                           expected_values=expected)
+                           expected_values=expected,
+                           expected_cleanup=(0, 53, 0) if context["catch_cleanup"] else None)
 
 
 def validate_decompilation(text: str, language: str, inline: bool = False,
-                           direct: bool = False, catch_try: bool = False) -> None:
+                           direct: bool = False, catch_try: bool = False,
+                           cleanup_actions: int = 0) -> None:
     regions, callbacks = (3, 4) if catch_try else (2, 3)
     if f"highir.structured_regions={regions}, fallback_regions=0" not in text or \
             text.count("= __neverd_x86_callback_esp(0x") != callbacks:
@@ -90,6 +95,15 @@ def validate_decompilation(text: str, language: str, inline: bool = False,
         raise ValueError("direct typed throw output lost its arguments")
     if len(set(re.findall(r"goto L_([0-9A-F]+);", text))) < callbacks:
         raise ValueError("nested output lost runtime continuation targets")
+    if cleanup_actions:
+        pattern = (r"Native x86 cleanup @ 0x([1-9A-F][0-9A-F]*); state=(\d+), "
+                   r"to-state=-?\d+, object-offset=-?\d+" if language == "cpp" else
+                   r"\* cleanup @ 0x0, action @ 0x([1-9A-F][0-9A-F]*), "
+                   r"type descriptor @ 0x0, state=(\d+),")
+        actions = re.findall(pattern, text)
+        if len(actions) != cleanup_actions or len(set(actions)) != cleanup_actions or \
+                "__unwind" in text:
+            raise ValueError("nested cleanup output lost a native action")
 
 
 def main() -> int:
@@ -134,6 +148,7 @@ def main() -> int:
         report["direct_proof_sha256"] = file_digest(DIRECT_PROOF)
         report["catch_proof_sha256"] = file_digest(CATCH_PROOF)
         report["receipt_proof_sha256"] = file_digest(RECEIPT_PROOF)
+        report["cleanup_proof_sha256"] = file_digest(CLEANUP_PROOF)
         test, patch = args.test_binary.resolve(), args.patch_binary.resolve()
         for kind, optimization in FORMS.items():
             for control in (False, True):
@@ -146,11 +161,14 @@ def main() -> int:
                     context["inline_rethrow"], context["rethrow_search"],
                     context["secondary_search"], context["direct_throw"])
                 catch_try = context["catch_try"]
-                first = (39 if rethrow else 17) + int(control)
+                cleanup = context["catch_cleanup"]
+                first = (39 if rethrow else 17) + int(control and not cleanup)
                 run([compiler, "--target=i686-pc-windows-msvc", "-fms-extensions", "-fexceptions",
                      "-fcxx-exceptions", "-fno-omit-frame-pointer", optimization,
                      *(["-DDIRECT_TYPED_THROW"] if direct else []),
                      *(["-DCATCH_TRY"] if catch_try else []),
+                     *(["-DCATCH_CLEANUP", "-DEXPECTED_CLEANUP=" + str(35 if control else 53)]
+                       if cleanup else []),
                      *(["-DINLINE_RETHROW_SEARCH"] if inline else []),
                      *(["-DRETHROW_SEARCH"] if rethrow else
                        ["-DSECONDARY_SEARCH"] if secondary else []),
@@ -196,7 +214,8 @@ def main() -> int:
                     run([patch, "decompile", original,
                          "--func=" + hex(receipt["base"] + receipt["source_begin"]),
                          "--language=" + language, "-o", source])
-                    validate_decompilation(source.read_text(), language, inline, direct, catch_try)
+                    validate_decompilation(source.read_text(), language, inline, direct, catch_try,
+                                           (2 if optimization == "-O0" else 1) if cleanup else 0)
                     if language == "c":
                         run([compiler, "-x", "c", "-std=c11", "-fsyntax-only",
                              "-Werror=implicit-function-declaration", source])

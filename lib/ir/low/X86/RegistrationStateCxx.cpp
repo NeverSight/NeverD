@@ -46,9 +46,9 @@ void RegistrationStateSolver::recordCatchReturn(
       !After.Levels.empty() && Op.Seq >= 0 && Op.NumInputs == 1 &&
       Op.Inputs[0].Size == 4 && &Op == &Block.Ops.back() &&
       Block.Succs.empty() && Target.Constant && !Target.MayBeFrame &&
-      EH.CodeRange.contains(*Target.Constant) &&
-      *Target.Constant != Function.Entry && (SavedParent || SavedCallback) &&
-      Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
+      EH.ownsCode(*Target.Constant) && *Target.Constant != Function.Entry &&
+      (SavedParent || SavedCallback) && Boundary != Boundaries.end() &&
+      Boundary->second.first == Block.Id &&
       Boundary->second.second.Control == LowInstructionControl::Return &&
       Boundary->second.second.Immediate.value_or(0) == 0 &&
       Op.Addr + Boundary->second.second.Size == Block.EndAddr;

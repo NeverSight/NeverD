@@ -24,6 +24,7 @@ class NestedTryEvidenceTests(unittest.TestCase):
         result["direct_proof_sha256"] = runner.file_digest(runner.DIRECT_PROOF)
         result["catch_proof_sha256"] = runner.file_digest(runner.CATCH_PROOF)
         result["receipt_proof_sha256"] = runner.file_digest(runner.RECEIPT_PROOF)
+        result["cleanup_proof_sha256"] = runner.file_digest(runner.CLEANUP_PROOF)
         source = root / "runtime/x86/Microsoft.VC143.CRT" / runtime.NAME
         source.parent.mkdir(parents=True)
         source.write_bytes(runtime_fixture())
@@ -52,6 +53,12 @@ class NestedTryEvidenceTests(unittest.TestCase):
                         text += "throw;\n"
                     if receipt["direct_throw"]:
                         text += "throw (int)value; throw (unsigned int)value; throw (float)value;\n"
+                if receipt["catch_cleanup"]:
+                    for index in range(2 if "-o0-" in case["case"] else 1):
+                        text += (f"/* Native x86 cleanup @ 0x401{index}00; state={index}, "
+                                 "to-state=-1, object-offset=0 */\n" if language == "cpp" else
+                                 f" * cleanup @ 0x0, action @ 0x401{index}00, "
+                                 f"type descriptor @ 0x0, state={index}, catch-object offset=0\n")
                 source = parent / ("decompiled." + language)
                 source.write_text(text)
                 case["decompilation"][language] = runner.file_digest(source)
@@ -61,8 +68,8 @@ class NestedTryEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = self.capture(root)
-            self.assertEqual(len(replay.validate_capture(root, capture)), 256)
-            for mutation in range(21):
+            self.assertEqual(len(replay.validate_capture(root, capture)), 288)
+            for mutation in range(22):
                 changed = copy.deepcopy(capture)
                 case = changed["cases"][0]
                 if mutation == 0:
@@ -105,8 +112,10 @@ class NestedTryEvidenceTests(unittest.TestCase):
                     changed["direct_proof_sha256"] = "stale"
                 elif mutation == 19:
                     changed["catch_proof_sha256"] = "stale"
-                else:
+                elif mutation == 20:
                     changed["receipt_proof_sha256"] = "stale"
+                else:
+                    changed["cleanup_proof_sha256"] = "stale"
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     replay.validate_capture(root, changed)
             runtime_path = root / runner.CASES[0] / runtime.NAME
@@ -147,6 +156,24 @@ class NestedTryEvidenceTests(unittest.TestCase):
             case["contract_sha256"] = runner.file_digest(path)
             with self.assertRaises(ValueError):
                 replay.validate_capture(root, capture)
+
+    def test_cleanup_decompilation_keeps_every_native_action(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            case = next(c for c in capture["cases"] if c["case"].startswith("catch-cleanup-o0-"))
+            for language in ("c", "cpp"):
+                source = root / case["case"] / ("decompiled." + language)
+                original = source.read_text()
+                for changed in (original.replace("state=0", "missing=0"),
+                                original.replace("401100", "401000").replace("state=1", "state=0"),
+                                original + "__unwind {}\n"):
+                    source.write_text(changed)
+                    case["decompilation"][language] = runner.file_digest(source)
+                    with self.subTest(language=language, source=changed), self.assertRaises(ValueError):
+                        replay.validate_capture(root, capture)
+                source.write_text(original)
+                case["decompilation"][language] = runner.file_digest(source)
 
     def test_inline_rethrow_requires_its_argument_proof_and_spelling(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -235,6 +262,19 @@ class NestedTryEvidenceTests(unittest.TestCase):
                 case["decompilation"]["cpp"] = runner.file_digest(source)
                 with self.subTest(text=text), self.assertRaises(ValueError):
                     replay.validate_capture(root, capture)
+
+    def test_cleanup_receipt_cannot_drop_its_destruction_oracle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            case = next(c for c in capture["cases"] if c["case"].startswith("catch-cleanup-"))
+            path = root / case["case"] / "contract.json"
+            receipt = json.loads(path.read_text())
+            receipt["catch_cleanup"] = False
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,43 @@
 #include "RegistrationStateSolver.h"
 
 namespace neverd::registration_state {
+void RegistrationStateSolver::preserveCxxRuntimeCells(Domain &Root,
+                                                      const Domain &Source) {
+  std::vector<std::pair<int64_t, int64_t>> Writes;
+  for (uint32_t State = 0; State < EH.Cxx->UnwindMap.size(); ++State) {
+    if (!charge(1))
+      return;
+    if (!EH.Cxx->UnwindMap[State].ActionVA)
+      continue;
+    const auto Found = CleanupIndices.find(State);
+    if (Found == CleanupIndices.end())
+      return;
+    const auto &Contract = Result.CleanupContracts[Found->second];
+    for (const auto &Call : Contract.Calls) {
+      const auto Offset = Chain.cxxSourceFrameOffset(Call.ObjectFrameOffset);
+      if (!Offset || !charge(Call.Leaf.ECXWrites.size() + 1))
+        return;
+      for (const auto &Write : Call.Leaf.ECXWrites)
+        Writes.emplace_back(int64_t(*Offset) + Write.Begin,
+                            int64_t(*Offset) + Write.End);
+    }
+  }
+  // A retained outer exception remains alive during a nested catch. Its
+  // aliases survive only when every authenticated cleanup leaves all four
+  // bytes intact. Unknown callbacks and ended invocations retain only taint.
+  for (const auto &[Offset, Value] : Source.RuntimeObject.Cells) {
+    if (!charge(Writes.size() + 1))
+      return;
+    if (Value.ExceptionObject &&
+        runtimeObjectIsLive(Source, *Value.ExceptionObject) &&
+        runtimeObjectIsLive(Root, *Value.ExceptionObject) &&
+        llvm::none_of(Writes, [&](const auto &Write) {
+          return Write.first < int64_t(Offset) + 4 && Offset < Write.second;
+        }))
+      Root.RuntimeObject.Cells[Offset] = Value;
+  }
+}
+
 bool RegistrationStateSolver::runtimeObjectIsLive(
     const Domain &State, std::pair<uint32_t, uint32_t> Identity) {
   if (State.Parent || State.OtherCallback || State.CxxCatchStacks.empty())

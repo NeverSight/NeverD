@@ -129,24 +129,28 @@ RegistrationCallCalleeIndex::cleanupContracts(const LowFunc &Function) {
     if (!It->second)
       continue;
     const auto &Relay = *It->second;
-    const auto &Leaf = Relay.Leaf;
-    if (!chargeCalleeWork(
-            Work, Leaf.ECXReads.size() + Leaf.ECXWrites.size() +
-                      Leaf.ImageReads.size() + Leaf.ImageWrites.size() +
-                      Leaf.CallerPCWrites.size() + Leaf.CodeRanges.size() + 1))
-      return std::nullopt;
     RegistrationCleanupFrameContract Contract;
     Contract.ActionState = State;
     Contract.RelayTarget = Relay.Target;
-    Contract.ObjectFrameOffset = Relay.ObjectFrameOffset;
-    Contract.Leaf.Target = Leaf.Target;
-    Contract.Leaf.StackPopBytes = Leaf.StackPopBytes;
-    Contract.Leaf.ECXReads = Leaf.ECXReads;
-    Contract.Leaf.ECXWrites = Leaf.ECXWrites;
-    Contract.Leaf.ImageReads = Leaf.ImageReads;
-    Contract.Leaf.ImageWrites = Leaf.ImageWrites;
-    Contract.Leaf.CallerPCWrites = Leaf.CallerPCWrites;
-    Contract.Leaf.CodeRanges = Leaf.CodeRanges;
+    for (const auto &Call : Relay.Calls) {
+      const auto &Leaf = Call.Leaf;
+      if (!chargeCalleeWork(Work, Leaf.ECXReads.size() + Leaf.ECXWrites.size() +
+                                      Leaf.ImageReads.size() +
+                                      Leaf.ImageWrites.size() +
+                                      Leaf.CallerPCWrites.size() +
+                                      Leaf.CodeRanges.size() + 1))
+        return std::nullopt;
+      auto &Borrow = Contract.Calls.emplace_back();
+      Borrow.ObjectFrameOffset = Call.ObjectFrameOffset;
+      Borrow.Leaf.Target = Leaf.Target;
+      Borrow.Leaf.StackPopBytes = Leaf.StackPopBytes;
+      Borrow.Leaf.ECXReads = Leaf.ECXReads;
+      Borrow.Leaf.ECXWrites = Leaf.ECXWrites;
+      Borrow.Leaf.ImageReads = Leaf.ImageReads;
+      Borrow.Leaf.ImageWrites = Leaf.ImageWrites;
+      Borrow.Leaf.CallerPCWrites = Leaf.CallerPCWrites;
+      Borrow.Leaf.CodeRanges = Leaf.CodeRanges;
+    }
     Result.push_back(std::move(Contract));
   }
   return Result;

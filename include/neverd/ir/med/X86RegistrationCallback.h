@@ -20,6 +20,12 @@ registrationCatchBlocks(const MedFunc &Function);
 std::optional<std::vector<std::optional<RegistrationCatchIdentity>>>
 registrationCatchParents(const MedFunc &Function);
 
+/// The live catch containing each cleanup action, proved at every dispatch
+/// that can execute it. A cleanup reached in conflicting invocations needs
+/// separate native funclets and has no unique projection here.
+std::optional<std::map<uint32_t, std::optional<RegistrationCatchIdentity>>>
+registrationCleanupParents(const MedFunc &Function);
+
 struct RegistrationCallbackStackCoordinate {
   va_t Entry = InvalidVA;
   int32_t Offset = 0;

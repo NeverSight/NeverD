@@ -6,6 +6,7 @@
 /// \file
 /// Reconstruct a compiler-generated try inside a live reference catch.
 //===----------------------------------------------------------------------===//
+#include "RegistrationCleanupTestUtils.h"
 #include "RegistrationSourceReceiptTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -46,6 +47,9 @@ TEST(WindowsRegistrationCatchContext, InputPE32RestoresTheOuterReferenceCatch) {
                     [](const auto &EH) { return EH.Registration && EH.Cxx; });
   ASSERT_NE(Found, Image->ExceptionMetadata.Functions.end());
   const auto &EH = *Found;
+  const bool Cleanup = llvm::any_of(EH.Cxx->UnwindMap, [](const auto &Action) {
+    return Action.ActionVA != 0;
+  });
   ASSERT_EQ(EH.Cxx->TryBlocks.size(), 3u);
   Decoder Decode;
   ASSERT_TRUE(Decode.init(*Image));
@@ -68,6 +72,8 @@ TEST(WindowsRegistrationCatchContext, InputPE32RestoresTheOuterReferenceCatch) {
     return B.CxxCatchStacks.size() == 1 && B.CxxCatchStacks[0].size() == 2;
   }));
   ASSERT_TRUE(hasCallerCleanupRegistrationABI(Low, *Image));
+  if (Cleanup)
+    registration_test::checkCatchCleanupReachability(Low, *Image);
   LowToMedConverter Converter;
   Converter.setBinaryImage(&*Image);
   auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
@@ -142,6 +148,8 @@ TEST(WindowsRegistrationCatchContext, InputPE32RestoresTheOuterReferenceCatch) {
   ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
   auto Proof = validateCOFFRegistrationCxxIR(*Function, EH, *Image);
   ASSERT_FALSE(bool(Proof)) << llvm::toString(std::move(Proof));
+  if (Cleanup)
+    registration_test::checkCatchCleanupEdits(Med, *Function, *Image);
   for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Changed = llvm::CloneModule(*Module);
@@ -225,7 +233,8 @@ TEST(WindowsRegistrationCatchContext, InputPE32RestoresTheOuterReferenceCatch) {
                            {"rethrow_search", false},
                            {"inline_rethrow", false},
                            {"direct_throw", false},
-                           {"catch_try", true}});
+                           {"catch_try", true},
+                           {"catch_cleanup", Cleanup}});
   }
 #else
   GTEST_SKIP() << "LLVM PE32 C++ catch subfields unavailable";

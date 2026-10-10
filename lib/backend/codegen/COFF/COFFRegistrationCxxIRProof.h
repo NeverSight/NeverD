@@ -21,6 +21,8 @@ struct CxxIRCall {
   bool Cleanup = false;
   std::optional<RegistrationRuntimeThrow> RuntimeThrow;
 };
+bool hasExactCxxCallAttributes(const llvm::CallBase &Call,
+                               const CxxIRCall &Receipt);
 struct CxxIRCatch {
   const llvm::CatchPadInst *Pad = nullptr;
   std::optional<X86RegistrationCatchHome> Home;

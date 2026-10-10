@@ -812,7 +812,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       for (const auto &Contract : States.CalleeContracts)
         Complete &= Preserve(Contract);
       for (const auto &Contract : States.CleanupContracts)
-        Complete &= Preserve(Contract.Leaf);
+        for (const auto &Call : Contract.Calls)
+          Complete &= Preserve(Call.Leaf);
       if (!Complete) {
         llvm::WithColor::error() << "med_llvm_emitter: malformed preserved "
                                     "registration image footprint\n";

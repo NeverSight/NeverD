@@ -269,14 +269,18 @@ bool hasCallerCleanupRegistrationABI(
         return false;
       const auto Relay = getCheckedX86RegistrationCleanupRelayABI(
           Image, Action.ActionVA, &Work);
-      if (!Relay || !Relay->Leaf.CallerPCWrites.empty() ||
-          !chargeCalleeWork(Work, Relay->Leaf.ImageReads.size() +
-                                      Relay->Leaf.ImageWrites.size()))
+      if (!Relay)
         return false;
-      for (const auto &Read : Relay->Leaf.ImageReads)
-        Effects.Reads.emplace(Read.Begin, Read.End);
-      for (const auto &Write : Relay->Leaf.ImageWrites)
-        Effects.Writes.emplace(Write.Begin, Write.End);
+      for (const auto &Call : Relay->Calls) {
+        if (!Call.Leaf.CallerPCWrites.empty() ||
+            !chargeCalleeWork(Work, Call.Leaf.ImageReads.size() +
+                                        Call.Leaf.ImageWrites.size() + 1))
+          return false;
+        for (const auto &Read : Call.Leaf.ImageReads)
+          Effects.Reads.emplace(Read.Begin, Read.End);
+        for (const auto &Write : Call.Leaf.ImageWrites)
+          Effects.Writes.emplace(Write.Begin, Write.End);
+      }
     }
     if (Ranges->size() &&
         Effects.Writes.size() >

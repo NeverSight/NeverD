@@ -17,13 +17,15 @@ RegistrationStateSolver::parentStackOffset(const Domain &State) const {
       State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
   if (SP.Offset)
     return SP.Offset;
-  if (!Chain.hasCxxCallbackStack() || !SP.CallbackAddress ||
-      SP.CallbackAddress->Entry != State.Frame.CallbackEntry ||
-      SP.CallbackAddress->Offset > 0 ||
-      SP.CallbackAddress->Offset <
-          -int64_t(limits::kMaxRegistrationEHStateWork) ||
-      State.Parent || !State.Callback || State.OtherCallback ||
+  if (State.Parent || !State.Callback || State.OtherCallback ||
       State.CxxCatchStacks.size() != 1 || State.CxxCatchStacks.begin()->empty())
+    return std::nullopt;
+  if (Chain.hasCxxCallbackStack() &&
+      (!SP.CallbackAddress ||
+       SP.CallbackAddress->Entry != State.Frame.CallbackEntry ||
+       SP.CallbackAddress->Offset > 0 ||
+       SP.CallbackAddress->Offset <
+           -int64_t(limits::kMaxRegistrationEHStateWork)))
     return std::nullopt;
   // Callback allocation cannot release parent locals. SavedESP may already
   // name this private stack; only the CRT's pre-dispatch snapshot bounds the

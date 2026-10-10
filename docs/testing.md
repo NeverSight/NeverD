@@ -2712,8 +2712,9 @@ substituted evidence.
 and `-O1` parents and links the captured CRT libraries. Inner reference catches
 and outer value/catch-all clauses exercise all three continuations under four
 caller stack layouts, including a new throw inside the inner catch. The
-256-image source/control matrix covers ordinary searches, secondary throws,
-true helper and direct rethrows, and a try inside a live reference catch through
+288-image source/control matrix covers ordinary searches, secondary throws,
+true helper and direct rethrows, and a try with or without local cleanups inside
+a live reference catch through
 both CLI patch modes and forced rebasing.
 The C++ test rejects changed prologue saves,
 personality argument reads, search edges, handler order, continuation ownership,
@@ -2726,7 +2727,16 @@ updates the still-live outer reference, then resumes the suspended outer stack.
 suspended owners, and verifier-clean edits to resume values, source identities,
 offsets and required memory properties. State tests separately distinguish
 outer/inner object sizes, ended lifetimes and unbalanced private stacks.
-Replay binds the added proof and shared receipt writer to their current digests.
+The cleanup variant independently records two destructors in reverse construction
+order (`53`). Clang O0 uses two unwind actions; O1 combines two calls into one
+action. The wrong-order control expects `35` and must fail while retaining the
+actual `53` trace. Each caller layout checks all three choices and resets the
+trace. Thirteen verifier-clean edits reject missing, reordered, redirected or
+misattributed calls, changed optimizer promises, skipped actions and forged
+callback chunks. ABI tests bind every relay instruction and reject changed
+frame adjustments, calls, returns, fixups and work exhaustion. State tests check
+every borrow in a combined action and partial writes overlapping live references.
+Replay binds the cleanup proof and shared receipt writer to their current digests.
 `windows_registration_runtime.py` captures the selected MSVC
 x86 redistributable DLL alongside the link libraries. Each image runs with
 that exact app-local runtime, with a native-only Wine override, and replay

@@ -101,7 +101,6 @@ bool RegistrationStateSolver::initializeContracts() {
       return false;
     }
     for (const auto &Cleanup : *Cleanups) {
-      const auto &Leaf = Cleanup.Leaf;
       if (!charge(1) || Cleanup.ActionState >= EH.Cxx->UnwindMap.size() ||
           EH.Cxx->UnwindMap[Cleanup.ActionState].Kind !=
               CxxUnwindAction::ActionKind::Direct ||
@@ -109,18 +108,27 @@ bool RegistrationStateSolver::initializeContracts() {
           Cleanup.RelayTarget !=
               EH.Cxx->UnwindMap[Cleanup.ActionState].ActionVA ||
           !Cleanup.RelayTarget || Cleanup.RelayTarget > UINT32_MAX ||
-          !Leaf.Target || Leaf.Target > UINT32_MAX ||
-          Leaf.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf ||
-          Leaf.StackPopBytes || Leaf.DoesNotReturn || Leaf.ThrownTypeVA ||
-          Leaf.ThrownObjectSize || !Leaf.RuntimeThrowInfos.empty() ||
-          !Leaf.CallerPCWrites.empty() || !validObjects(Leaf.ECXReads) ||
-          !validObjects(Leaf.ECXWrites) || !validImageRanges(Leaf.ImageReads) ||
-          !validImageRanges(Leaf.ImageWrites) ||
+          Cleanup.Calls.empty() ||
+          Cleanup.Calls.size() > limits::kMaxRegistrationEHRecords ||
           !CleanupIndices.emplace(Cleanup.ActionState, CleanupIndices.size())
                .second) {
         Result.Diagnostics.push_back(
             "registration cleanup contract is invalid");
         return false;
+      }
+      for (const auto &Call : Cleanup.Calls) {
+        const auto &Leaf = Call.Leaf;
+        if (!charge(1) || !Leaf.Target || Leaf.Target > UINT32_MAX ||
+            Leaf.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf ||
+            Leaf.StackPopBytes || Leaf.DoesNotReturn || Leaf.ThrownTypeVA ||
+            Leaf.ThrownObjectSize || !Leaf.RuntimeThrowInfos.empty() ||
+            !Leaf.CallerPCWrites.empty() || !validObjects(Leaf.ECXReads) ||
+            !validObjects(Leaf.ECXWrites) ||
+            !validImageRanges(Leaf.ImageReads) ||
+            !validImageRanges(Leaf.ImageWrites)) {
+          Result.Diagnostics.push_back("registration cleanup call is invalid");
+          return false;
+        }
       }
     }
     Result.CleanupContracts = *Cleanups;

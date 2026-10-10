@@ -216,47 +216,19 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
                "recoverable table");
     }
 
-    // MSVC labels adjacent SEH callbacks and C++ catches as functions. Grow
-    // the inferred body through those table-owned entries so their runtime
-    // roots are decoded, stopping at the next unrelated function. Out-of-line
-    // cleanup relays retain their independently checked establisher ABI.
-    {
-      std::set<va_t> Thunks;
-      for (const RegistrationScopeRecord &Scope : Chain.Scopes) {
-        if (Scope.FilterVA)
-          Thunks.insert(Scope.FilterVA);
-        if (Scope.HandlerVA)
-          Thunks.insert(Scope.HandlerVA);
-      }
-      if (F.Cxx)
-        for (const CxxTryBlock &Try : F.Cxx->TryBlocks)
-          for (const CxxCatchHandler &Catch : Try.Handlers)
-            if (Catch.HandlerVA)
-              Thunks.insert(Catch.HandlerVA);
-      bool Grew = true;
-      for (unsigned Guard = 0;
-           Grew && Guard < limits::kMaxRegistrationEHFixedPoint; ++Guard) {
-        Grew = false;
-        for (va_t Addr : Thunks) {
-          if (!registration_detail::isExecutableAddress(Img, Addr) ||
-              Addr < F.CodeRange.Begin || Addr > F.CodeRange.End)
-            continue;
-          auto Range = Functions.find(Img, Addr, /*TableOwnedCallback=*/true);
-          if (!Range || Range->Begin < F.CodeRange.Begin)
-            continue;
-          if (Range->End > F.CodeRange.End) {
-            F.CodeRange.End = Range->End;
-            Grew = true;
-          }
-        }
-      }
-    }
+    registration_detail::recoverRegistrationCallbackRanges(F, Img, Functions,
+                                                           Chain);
 
     proveDirectRegistrationLayout(Img, Site, Chain);
     if (Chain.SeededTryLevel)
       recoverTryLevelStores(Img, F.CodeRange, *Chain.SeededTryLevel,
                             F.Cxx ? F.Cxx->MaxState : Chain.Scopes.size(),
                             Chain);
+    if (Chain.SeededTryLevel)
+      for (const auto &Fragment : F.FragmentRanges)
+        recoverTryLevelStores(Img, Fragment, *Chain.SeededTryLevel,
+                              F.Cxx ? F.Cxx->MaxState : Chain.Scopes.size(),
+                              Chain);
 
     F.Registration = std::move(Chain);
     // Registration personalities and language tables were resolved together

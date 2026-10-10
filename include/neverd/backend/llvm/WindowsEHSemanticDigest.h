@@ -28,7 +28,7 @@ struct ExceptionFunction;
 namespace windows_eh_semantics {
 
 /// Canonical byte-stream schema used before SHA-256 domain separation.
-inline constexpr uint32_t SemanticDigestSchemaVersion = 1;
+inline constexpr uint32_t SemanticDigestSchemaVersion = 2;
 
 /// Return the source-issued identity for one native SEH scope.  The digest
 /// covers the complete ordered scope graph; Region identifies \p ScopeIndex

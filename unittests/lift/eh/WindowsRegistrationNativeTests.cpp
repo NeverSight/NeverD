@@ -429,6 +429,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
         if (parseNdCodePtrSymbol(Global.getName()) ==
             Loaded
                 ->getSegmentFor(Low.RegistrationStates->CleanupContracts[0]
+                                    .Calls[0]
                                     .Leaf.ImageWrites[0]
                                     .Begin)
                 ->VA) {
@@ -505,7 +506,8 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
       for (const auto &Contract : Low.RegistrationStates->CalleeContracts)
         Shared |= Observed(Contract);
       for (const auto &Contract : Low.RegistrationStates->CleanupContracts)
-        Shared |= Observed(Contract.Leaf);
+        for (const auto &Call : Contract.Calls)
+          Shared |= Observed(Call.Leaf);
       if (!Shared)
         continue;
       ++SharedRoots;
@@ -517,7 +519,8 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
   CheckSharedImageRoots(*Module);
   ASSERT_FALSE(Low.RegistrationStates->CleanupContracts.empty());
   auto HelperLow = CFGBuilder().build(
-      *Loaded, Decoder, Low.RegistrationStates->CleanupContracts[0].Leaf.Target,
+      *Loaded, Decoder,
+      Low.RegistrationStates->CleanupContracts[0].Calls[0].Leaf.Target,
       "registration_image_identity_first");
   auto Helper = Converter.convert(HelperLow, Arch::X86, BinaryFormat::COFF);
   inferMedTypes(Helper, Arch::X86);
@@ -1700,21 +1703,31 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     EXPECT_TRUE(Installed->Reached);
     EXPECT_TRUE(Installed->CanDispatch);
     EXPECT_FALSE(Installed->Unknown);
-    // Ordinary coordinate transfer does not prove the generated catch's
-    // distinct runtime restore and continuation protocol.
-    EXPECT_FALSE(ReliftStates.CxxContinuationsComplete);
-    // These generated cleanup funclets share the recovered function range.
-    // Frame coordinates alone do not establish their source unwind contract.
+    // Callback ranges exclude the generated cleanup entries. Catch resumption
+    // is recoverable, while these compiler funclets still need their own ABI
+    // proof before a second native reconstruction is possible.
+    EXPECT_TRUE(ReliftStates.CxxContinuationsComplete);
+    EXPECT_FALSE(ReliftStates.CleanupFrameEffectsComplete);
     const auto GeneratedSource = classifyWindowsEHNativeSource(
         *GeneratedGraph, Arch::X86, BinaryFormat::COFF);
-    EXPECT_FALSE(GeneratedSource.canPatchOutput());
-    EXPECT_EQ(GeneratedSource.Reason,
-              WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
-    EXPECT_TRUE(
-        llvm::any_of(GeneratedGraph->Cxx->UnwindMap, [&](const auto &Action) {
-          return Action.ActionVA &&
-                 GeneratedGraph->CodeRange.contains(Action.ActionVA);
-        }));
+    EXPECT_TRUE(GeneratedSource.canPatchOutput());
+    for (const auto &Action : GeneratedGraph->Cxx->UnwindMap)
+      if (Action.ActionVA)
+        EXPECT_FALSE(GeneratedGraph->ownsCode(Action.ActionVA));
+    LowToMedConverter ReliftConverter;
+    ReliftConverter.setBinaryImage(&*Reloaded);
+    auto ReliftMed =
+        ReliftConverter.convert(Relift, Arch::X86, BinaryFormat::COFF);
+    llvm::LLVMContext ReliftContext;
+    MedLLVMEmitter ReliftEmitter;
+    auto ReliftModule = ReliftEmitter.emit(
+        {ReliftMed}, ReliftContext, "generated-cleanup-analysis", Arch::X86, {},
+        &*Reloaded, BinaryFormat::COFF);
+    if (ReliftModule) {
+      ASSERT_TRUE(ReliftModule->getFunction(ReliftMed.Name));
+      EXPECT_FALSE(ReliftModule->getFunction(ReliftMed.Name)
+                       ->getMetadata(windows_eh_md::NativeAttachment));
+    }
     for (unsigned Byte : {3u, 8u, 16u, 17u, 23u, 39u, 62u}) {
       SCOPED_TRACE(Byte);
       BinaryImage Disproved = *Reloaded;

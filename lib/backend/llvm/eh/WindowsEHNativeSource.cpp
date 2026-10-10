@@ -29,6 +29,20 @@ reject(WindowsEHNativeSourceModel Model, WindowsEHNativeSourceReason Reason,
   return {Model, Reason, Capability};
 }
 
+bool hasValidRegistrationCodeRanges(const ExceptionFunction &EH) {
+  if (!EH.CodeRange.isValid() || EH.CodeRange.End > uint64_t(UINT32_MAX) + 1 ||
+      EH.FragmentRanges.size() > limits::kMaxRegistrationEHRecords)
+    return false;
+  va_t PreviousEnd = 0;
+  for (const auto &Range : EH.FragmentRanges) {
+    if (!Range.isValid() || Range.End > uint64_t(UINT32_MAX) + 1 ||
+        Range.Begin < PreviousEnd || Range.overlaps(EH.CodeRange))
+      return false;
+    PreviousEnd = Range.End;
+  }
+  return true;
+}
+
 bool hasConsistentDecodeProvenance(const ExceptionFunction &EH) {
   if (!EH.DecodeProvenance)
     return true;
@@ -188,7 +202,7 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
              : !Registration ||
                    Action.Kind != CxxUnwindAction::ActionKind::Direct ||
                    Action.ActionVA > UINT32_MAX ||
-                   EH.CodeRange.contains(Action.ActionVA)))
+                   EH.ownsCode(Action.ActionVA)))
       return WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction;
 
   for (const CxxIPState &IP : Cxx.IPMap)
@@ -224,7 +238,8 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
                  : Catch.CatchObjectOffset != 0 || Catch.Adjectives != 0x40))))
         return WindowsEHNativeSourceReason::UnsupportedCxxHandlerFrameState;
       if (Catch.HandlerVA == 0 || Catch.HandlerVA == EH.CodeRange.Begin ||
-          !EH.CodeRange.contains(Catch.HandlerVA) ||
+          !(Registration ? EH.ownsCode(Catch.HandlerVA)
+                         : EH.CodeRange.contains(Catch.HandlerVA)) ||
           (Registration &&
            !RegistrationHandlers.insert(Catch.HandlerVA).second))
         return WindowsEHNativeSourceReason::InvalidCxxHandler;
@@ -527,7 +542,7 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       return reject(Model,
                     WindowsEHNativeSourceReason::NonPrimaryRuntimeFunction,
                     Capability);
-    if (!EH.CodeRange.isValid())
+    if (!hasValidRegistrationCodeRanges(EH))
       return reject(Model, WindowsEHNativeSourceReason::InvalidCodeRange,
                     Capability);
     if (EH.ParseStatus != ExceptionParseStatus::Complete)
@@ -569,9 +584,9 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       const RegistrationScopeRecord &Scope = Chain.Scopes[I];
       if ((Scope.EnclosingLevel != Sentinel &&
            (Scope.EnclosingLevel < 0 || uint32_t(Scope.EnclosingLevel) >= I)) ||
-          !EH.CodeRange.contains(Scope.HandlerVA) ||
+          !EH.ownsCode(Scope.HandlerVA) ||
           Scope.IsFinally != (Scope.FilterVA == 0) ||
-          (!Scope.IsFinally && !EH.CodeRange.contains(Scope.FilterVA)))
+          (!Scope.IsFinally && !EH.ownsCode(Scope.FilterVA)))
         return reject(Model, WindowsEHNativeSourceReason::InvalidSEHScope,
                       Capability);
     }
@@ -603,7 +618,7 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       return reject(Model,
                     WindowsEHNativeSourceReason::NonPrimaryRuntimeFunction,
                     Capability);
-    if (!EH.CodeRange.isValid() || EH.CodeRange.End > uint64_t(UINT32_MAX) + 1)
+    if (!hasValidRegistrationCodeRanges(EH))
       return reject(Model, WindowsEHNativeSourceReason::InvalidCodeRange,
                     Capability);
     if (EH.ParseStatus != ExceptionParseStatus::Complete)

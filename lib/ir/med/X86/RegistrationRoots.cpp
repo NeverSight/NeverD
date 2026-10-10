@@ -46,12 +46,12 @@ RegistrationRoots::RegistrationRoots(const LowFunc &Low, Arch Architecture,
       State->CxxContinuations.size() > limits::kMaxRegistrationEHRecords)
     return;
   for (const auto &Resume : State->CxxContinuations) {
-    const bool Valid = EH.CodeRange.contains(Resume.TargetVA) &&
-                       (Resume.SavedCallbackVA
-                            ? EH.CodeRange.contains(Resume.SavedCallbackVA) &&
-                                  Resume.SavedStackOffset <= 0
-                            : Resume.SavedStackOffset <=
-                                  int64_t(*Chain.RegistrationOffset) - 4);
+    const bool Valid =
+        EH.ownsCode(Resume.TargetVA) &&
+        (Resume.SavedCallbackVA ? EH.ownsCode(Resume.SavedCallbackVA) &&
+                                      Resume.SavedStackOffset <= 0
+                                : Resume.SavedStackOffset <=
+                                      int64_t(*Chain.RegistrationOffset) - 4);
     const auto Coordinate =
         std::make_pair(Resume.SavedCallbackVA, Resume.SavedStackOffset);
     auto [It, New] = RestoredStacks.emplace(Resume.TargetVA, Coordinate);
@@ -104,6 +104,7 @@ void RegistrationRoots::disconnectNoReturnFallthroughs(MedFunc &Func) const {
       break;
     }
   }
+  removeUnreachedBlocks(Func);
 }
 
 bool RegistrationRoots::isCxxHandler(const MedBlock &Block) const {

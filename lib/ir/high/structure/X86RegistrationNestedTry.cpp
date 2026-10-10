@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CxxCleanupScope.h"
 #include "HighCFSimplifyDetail.h"
 #include "X86RegistrationTry.h"
 
@@ -33,12 +34,34 @@ bool checkNestedRegistrationTry(const HighStmt &Stmt, const MedFunc &Med,
         Try.Handlers.front().HandlerVA != Stmt.EHClauses.front().HandlerVA)
       continue;
     if (Inner || Try.TryLow <= TryLow || Try.CatchHigh > TryHigh ||
-        Try.Handlers.size() != Stmt.EHClauses.size())
+        Try.Handlers.size() > Stmt.EHClauses.size())
       return false;
     Inner = &Try;
     TryIndex = I;
   }
   if (!Inner)
+    return false;
+  const auto &Cxx = *Med.ExceptionMetadata->Cxx;
+  size_t ClauseIndex = Inner->Handlers.size();
+  for (int32_t State = Inner->TryLow; State <= Inner->TryHigh; ++State) {
+    Work += Cxx.TryBlocks.size() + 1;
+    if (Work > limits::kMaxRegistrationEHStateWork)
+      return false;
+    if (!cxxTryOwnsCleanup(Cxx, TryIndex, State))
+      continue;
+    if (ClauseIndex >= Stmt.EHClauses.size())
+      return false;
+    const auto &Clause = Stmt.EHClauses[ClauseIndex];
+    const auto &Action = Cxx.UnwindMap[State];
+    if (Clause.Kind != HighEHClauseKind::CxxCleanup || Clause.State != State ||
+        Clause.FilterOrActionVA != Action.ActionVA ||
+        Clause.UnwindActionKind != Action.Kind ||
+        Clause.UnwindObjectOffset != Action.ObjectOffset ||
+        !Stmt.EHClauseBodies[ClauseIndex].empty())
+      return false;
+    ++ClauseIndex;
+  }
+  if (ClauseIndex != Stmt.EHClauses.size())
     return false;
   size_t Operations = 0;
   for (const auto &Block : Med.Blocks) {
@@ -46,7 +69,7 @@ bool checkNestedRegistrationTry(const HighStmt &Stmt, const MedFunc &Med,
       return false;
     Operations += Block.Ops.size();
   }
-  for (uint32_t I = 0; I < Stmt.EHClauses.size(); ++I) {
+  for (uint32_t I = 0; I < Inner->Handlers.size(); ++I) {
     const auto &Clause = Stmt.EHClauses[I];
     const auto &Handler = Inner->Handlers[I];
     const auto &Body = Stmt.EHClauseBodies[I];

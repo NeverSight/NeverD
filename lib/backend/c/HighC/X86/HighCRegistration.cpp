@@ -16,6 +16,31 @@
 
 namespace neverd {
 
+bool HighCWriter::writeRegistrationCleanup(const HighStmt &Stmt, size_t I,
+                                           int Indent) {
+  if (Opts.TheArch != Arch::X86 || !CurrentFunc ||
+      !CurrentFunc->ExceptionMetadata ||
+      !CurrentFunc->ExceptionMetadata->Registration ||
+      !CurrentFunc->ExceptionMetadata->Cxx || I >= Stmt.EHClauses.size() ||
+      I >= Stmt.EHClauseBodies.size() || !Stmt.EHClauseBodies[I].empty())
+    return false;
+  const auto &Clause = Stmt.EHClauses[I];
+  const auto &Actions = CurrentFunc->ExceptionMetadata->Cxx->UnwindMap;
+  if (Clause.Kind != HighEHClauseKind::CxxCleanup || Clause.State < 0 ||
+      size_t(Clause.State) >= Actions.size() || !Clause.FilterOrActionVA ||
+      Actions[Clause.State].ActionVA != Clause.FilterOrActionVA)
+    return false;
+  // This out-of-line relay retains its native frame ABI. An empty lexical
+  // __unwind body would hide the executable action and invent source syntax.
+  OS << '\n';
+  emitIndent(Indent);
+  OS << "/* Native x86 cleanup @ 0x" << llvm::utohexstr(Clause.FilterOrActionVA)
+     << "; state=" << Clause.State
+     << ", to-state=" << Actions[Clause.State].ToState
+     << ", object-offset=" << Clause.UnwindObjectOffset << " */\n";
+  return true;
+}
+
 bool HighCWriter::preservesRegistrationMemory(const HighFunc &Func) {
   // Named affine stack slots can hide a complete FS:[0] link/unlink chain.
   // An aligned frame still uses explicit byte addresses: keep its FS reads

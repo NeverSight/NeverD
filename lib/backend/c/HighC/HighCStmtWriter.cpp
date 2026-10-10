@@ -1322,6 +1322,8 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
       const HighEHClause &Clause = Stmt.EHClauses[I];
       if (Clause.Kind == HighEHClauseKind::CxxCleanup) {
+        if (writeRegistrationCleanup(Stmt, I, Indent))
+          continue;
         OS << "\n";
         emitIndent(Indent);
         OS << "__unwind {\n";
@@ -1712,6 +1714,8 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
         for (size_t C = 0; C < Try.EHClauses.size(); ++C) {
           const HighEHClause &Clause = Try.EHClauses[C];
           if (Clause.Kind == HighEHClauseKind::CxxCleanup) {
+            if (writeRegistrationCleanup(Try, C, Indent))
+              continue;
             OS << "\n";
             emitIndent(Indent);
             OS << "__unwind {\n";
@@ -1883,6 +1887,8 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
         for (size_t C = 0; C < Try.EHClauses.size(); ++C) {
           const HighEHClause &Clause = Try.EHClauses[C];
           if (Clause.Kind == HighEHClauseKind::CxxCleanup) {
+            if (writeRegistrationCleanup(Try, C, Indent))
+              continue;
             OS << "\n";
             emitIndent(Indent);
             OS << "__unwind {\n";

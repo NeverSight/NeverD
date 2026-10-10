@@ -52,12 +52,20 @@ def validate_decompilation(text: str, language: str) -> None:
 
 def observe(path: Path, case: str, route: str, receipt: dict,
             launcher: list[str], env: dict[str, str], timeout: float,
-            *, expected_values: tuple = (17, 28, 39, 7, 18, 39, 1, 12)) -> dict:
+            *, expected_values: tuple = (17, 28, 39, 7, 18, 39, 1, 12),
+            expected_cleanup: tuple | None = None) -> dict:
     image = PE32(path.read_bytes())
     if image.base not in BASES or image.u16(image.optional + 70) & 0x40:
         raise ValueError("multiple-catch probe has no forced base")
     result = run_image(path, launcher, env, timeout)
-    match = OBSERVATION.fullmatch(result.get("stdout", ""))
+    output = result.get("stdout", "")
+    if expected_cleanup is not None:
+        output, separator, cleanup = output.rpartition("CLEANUP ")
+        matched = re.fullmatch(r"([0-9A-F]{8}) ([0-9A-F]{8}) ([0-9A-F]{8})\r?\n", cleanup)
+        if not separator or not matched or \
+                tuple(int(v, 16) for v in matched.groups()) != expected_cleanup:
+            raise ValueError("catch cleanup order or count differs")
+    match = OBSERVATION.fullmatch(output)
     if result.get("exit_code") != int(case.endswith("-control")) or not match:
         raise ValueError("multiple-catch runtime or negative control failed")
     values = [int(v, 16) for v in match.groups()]

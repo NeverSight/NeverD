@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_nested_try import (
-        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, CATCH_PROOF, RECEIPT_PROOF,
+        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, CATCH_PROOF, RECEIPT_PROOF, CLEANUP_PROOF,
         ROUTES, SOURCE, PE32, file_digest, observe,
         require_test_result, validate_installation, validate_decompilation,
         validate_search_context)
@@ -23,7 +23,7 @@ if __package__:
     from .windows_registration_runtime import validate_runtime
 else:
     from check_windows_registration_nested_try import (
-        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, CATCH_PROOF, RECEIPT_PROOF,
+        BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, CATCH_PROOF, RECEIPT_PROOF, CLEANUP_PROOF,
         ROUTES, SOURCE, PE32, file_digest, observe,
         require_test_result, validate_installation, validate_decompilation,
         validate_search_context)
@@ -42,7 +42,8 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
             capture.get("rethrow_proof_sha256") != file_digest(RETHROW_PROOF) or \
             capture.get("direct_proof_sha256") != file_digest(DIRECT_PROOF) or \
             capture.get("catch_proof_sha256") != file_digest(CATCH_PROOF) or \
-            capture.get("receipt_proof_sha256") != file_digest(RECEIPT_PROOF):
+            capture.get("receipt_proof_sha256") != file_digest(RECEIPT_PROOF) or \
+            capture.get("cleanup_proof_sha256") != file_digest(CLEANUP_PROOF):
         raise ValueError("nested try rejection checks changed")
     cases = capture.get("cases", [])
     if len(cases) != len(CASES) or {c.get("case") for c in cases} != set(CASES):
@@ -72,7 +73,8 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
             path = parent / ("decompiled." + language)
             if file_digest(path) != digest:
                 raise ValueError("nested try decompilation changed")
-            validate_decompilation(path.read_text(), language, inline, direct, context["catch_try"])
+            validate_decompilation(path.read_text(), language, inline, direct, context["catch_try"],
+                                   (2 if "-o0-" in name else 1) if context["catch_cleanup"] else 0)
         records = case.get("images", [])
         if len(records) != len(expected) or \
                 {(r.get("image"), r.get("route"), r.get("base")) for r in records} != expected:

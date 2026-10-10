@@ -39,8 +39,8 @@ namespace {
 
 using namespace neverd;
 
-constexpr llvm::StringLiteral RichSchemaV10Fingerprint(
-    "0b12a8fe4539dc42ae5f89f8623d251ec83d70ba2db4494f19d7805349655078");
+constexpr llvm::StringLiteral RichSchemaV11Fingerprint(
+    "25996483e06e5ab8e939f472e8f996aa4c945797a0447213546f7239085493d3");
 
 ExceptionFunction makeRichExceptionFunction() {
   ExceptionFunction EH;
@@ -332,7 +332,7 @@ std::string fingerprintDigest(const llvm::Metadata &Metadata) {
   return llvm::toHex(llvm::ArrayRef<uint8_t>(Digest), /*LowerCase=*/true);
 }
 
-TEST(WindowsEHMetadataEncoder, PreservesSchemaV10Projection) {
+TEST(WindowsEHMetadataEncoder, PreservesSchemaV11Projection) {
   const ExceptionFunction EH = makeRichExceptionFunction();
   llvm::LLVMContext Context;
   llvm::MDNode *Payload =
@@ -356,7 +356,7 @@ TEST(WindowsEHMetadataEncoder, PreservesSchemaV10Projection) {
   EXPECT_EQ(
       metadataInteger(*Scope, windows_eh_md::SEHScopeNormalizedFilterVA, 64),
       EH.SEH->Scopes.front().NormalizedFilterVA);
-  EXPECT_EQ(fingerprintDigest(*Payload), RichSchemaV10Fingerprint);
+  EXPECT_EQ(fingerprintDigest(*Payload), RichSchemaV11Fingerprint);
 }
 
 TEST(WindowsEHMetadataEncoder, PreservesCompleteX86RegistrationChain) {
@@ -683,7 +683,7 @@ TEST(WindowsEHMetadataEncoder, BitcodeRoundTripRemainsCanonical) {
 
   EXPECT_EQ(RoundTripPayload,
             windows_eh_md::getCanonicalFunctionMetadata(RoundTripContext, EH));
-  EXPECT_EQ(fingerprintDigest(*RoundTripPayload), RichSchemaV10Fingerprint);
+  EXPECT_EQ(fingerprintDigest(*RoundTripPayload), RichSchemaV11Fingerprint);
 }
 
 TEST(WindowsEHNativeSource, AcceptsOnlyTheExactSupportedCOFFSourceModels) {
@@ -1048,10 +1048,10 @@ TEST(WindowsEHSemanticDigest, UsesVersionedLittleEndianSHA256Words) {
       EH, Arch::X64, /*ScopeIndex=*/0);
   ASSERT_TRUE(Token.has_value());
   const std::array<uint64_t, 4> Expected{
-      0x676768c26eeaeb60ULL, 0xd96201b404074e2cULL, 0x4eda5ea04edcb1ffULL,
-      0x973ed61af6d399a1ULL};
+      0x8fa57ffec2f01c17ULL, 0x16040cc6b9b9909dULL, 0xc6d43dfd1b9ffe71ULL,
+      0x9d89c7ad492ac770ULL};
   EXPECT_EQ(Token->Digest, Expected);
-  EXPECT_EQ(windows_eh_semantics::SemanticDigestSchemaVersion, 1u);
+  EXPECT_EQ(windows_eh_semantics::SemanticDigestSchemaVersion, 2u);
 }
 
 TEST(WindowsEHSemanticDigest, RegistrationStateStoreWidthsBindTheSourceToken) {

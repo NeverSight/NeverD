@@ -544,13 +544,13 @@ TEST(RegistrationCallABI, ChecksMSVCParentFrameCleanupRelays) {
       ASSERT_TRUE(P);
       EXPECT_EQ(P->Target, CleanupRelayImage::RelayVA);
       EXPECT_EQ(P->EndAddress, CleanupRelayImage::RelayVA + (Wide ? 11 : 8));
-      EXPECT_EQ(P->ObjectFrameOffset, Offset);
-      EXPECT_EQ(P->Leaf.Target, CleanupRelayImage::LeafVA);
-      EXPECT_EQ(P->Leaf.StackPopBytes, 0u);
-      ASSERT_EQ(P->Leaf.ECXReads.size(), 1u);
-      EXPECT_EQ(P->Leaf.ECXReads[0].Begin, 0);
-      EXPECT_EQ(P->Leaf.ECXReads[0].End, 4);
-      EXPECT_TRUE(P->Leaf.ECXWrites.empty());
+      EXPECT_EQ(P->Calls[0].ObjectFrameOffset, Offset);
+      EXPECT_EQ(P->Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
+      EXPECT_EQ(P->Calls[0].Leaf.StackPopBytes, 0u);
+      ASSERT_EQ(P->Calls[0].Leaf.ECXReads.size(), 1u);
+      EXPECT_EQ(P->Calls[0].Leaf.ECXReads[0].Begin, 0);
+      EXPECT_EQ(P->Calls[0].Leaf.ECXReads[0].End, 4);
+      EXPECT_TRUE(P->Calls[0].Leaf.ECXWrites.empty());
     }
 }
 
@@ -636,7 +636,7 @@ TEST(RegistrationCallABI, UsesPE32RelativeBranchWrapWithoutWrappingStorage) {
       getCheckedX86RegistrationCleanupRelayABI(F.Image, Relay.VA, &Work);
   ASSERT_TRUE(P);
   EXPECT_EQ(P->EndAddress, uint64_t(UINT32_MAX) + 1);
-  EXPECT_EQ(P->Leaf.Target, CleanupRelayImage::LeafVA);
+  EXPECT_EQ(P->Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
   EXPECT_GT(Work, 8u);
   auto &Last = F.Image.Segments.back();
   ++Last.VA;
@@ -662,9 +662,10 @@ TEST(RegistrationCallABI, MemoizesCleanupRelaysWithoutGrantingAFrameBorrow) {
   const auto &C = Contracts->front();
   EXPECT_EQ(C.ActionState, 1u);
   EXPECT_EQ(C.RelayTarget, CleanupRelayImage::RelayVA);
-  EXPECT_EQ(C.ObjectFrameOffset, -24);
-  EXPECT_EQ(C.Leaf.Target, CleanupRelayImage::LeafVA);
-  EXPECT_EQ(C.Leaf.ECXReads, (std::vector<RegistrationObjectExtent>{{0, 4}}));
+  EXPECT_EQ(C.Calls[0].ObjectFrameOffset, -24);
+  EXPECT_EQ(C.Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
+  EXPECT_EQ(C.Calls[0].Leaf.ECXReads,
+            (std::vector<RegistrationObjectExtent>{{0, 4}}));
   EXPECT_EQ(Index.cleanupContracts(Parent)->size(), 1u);
   F.Image.Segments[0].Data[0] = 0x90;
   RegistrationCallCalleeIndex NextImage(F.Image);
@@ -1064,7 +1065,7 @@ TEST(RegistrationCallABI, PhysicalScalarReturnNeedsMoreThanFramePrivacy) {
   const auto Relay = getCheckedX86RegistrationCleanupRelayABI(
       F.Image, CleanupRelayImage::RelayVA);
   ASSERT_TRUE(Relay);
-  EXPECT_TRUE(Relay->Leaf.HasIndependentScalarReturn);
+  EXPECT_TRUE(Relay->Calls[0].Leaf.HasIndependentScalarReturn);
 }
 
 TEST(RegistrationCallABI, PhysicalReturnRejectsCallerPCAndMixedPredecessors) {

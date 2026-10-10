@@ -146,6 +146,13 @@ private:
   mutable size_t CallbackWork = 0;
 };
 
+/// Recover table-owned callback chunks without claiming intervening cleanup
+/// relays or unrelated functions as part of the registration body.
+void recoverRegistrationCallbackRanges(ExceptionFunction &F,
+                                       const BinaryImage &Img,
+                                       const FunctionRangeMap &Functions,
+                                       const RegistrationChainInfo &Chain);
+
 /// The image's SafeSEH handler table, when the load configuration published
 /// one.  It is the authority on which addresses the loader will accept as
 /// exception handlers, so a scan hit whose handler is absent from a non-empty

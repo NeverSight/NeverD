@@ -134,4 +134,40 @@ TEST(RegistrationCatchContext, RejectsWrongObjectBoundsAndExitedLifetimes) {
     EXPECT_TRUE(Result.RuntimeObjectAccesses.empty());
   }
 }
+
+TEST(RegistrationCatchContext, RetainsOnlyAliasesUntouchedByCleanupWrites) {
+  const auto Calls = throws();
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = makeNestedReferenceCatches();
+    F.ExceptionMetadata->Cxx->UnwindMap[2] = {
+        1, 0x4000, CxxUnwindAction::ActionKind::Direct};
+    std::vector<RegistrationCleanupFrameContract> Cleanups(1);
+    auto &Cleanup = Cleanups[0];
+    Cleanup.ActionState = 2;
+    Cleanup.RelayTarget = 0x4000;
+    Cleanup.Calls.emplace_back();
+    Cleanup.Calls[0].ObjectFrameOffset = -28;
+    Cleanup.Calls[0].Leaf.Target = 0x4100;
+    // The outer reference lives at -24. Even a single-byte write destroys
+    // its exact identity; writes to the preceding scalar leave it live.
+    Cleanup.Calls[0].Leaf.ECXWrites = {{0, 4}};
+    if (Mutation == 1)
+      Cleanup.Calls[0].Leaf.ECXWrites = {{4, 5}};
+    if (Mutation == 2)
+      Cleanup.Calls[0].Leaf.ECXWrites = {{7, 8}};
+    if (Mutation == 3)
+      Cleanups.clear();
+    const auto Result = analyzeRegistrationStates(F, 0, 0, &Calls, &Cleanups);
+    if (Mutation == 0) {
+      ASSERT_TRUE(Result.Complete)
+          << (Result.Diagnostics.empty() ? "" : Result.Diagnostics.front());
+      EXPECT_TRUE(Result.RuntimeObjectAccessesComplete);
+      EXPECT_TRUE(Result.CleanupFrameEffectsComplete);
+      EXPECT_EQ(Result.RuntimeObjectAccesses.size(), 3u);
+    } else {
+      EXPECT_FALSE(Result.RuntimeObjectAccessesComplete);
+    }
+  }
+}
 } // namespace

@@ -120,18 +120,7 @@ void RegistrationStateSolver::dispatch(
       return;
     if (!enterCxxCatch(Root, Source, CxxCatch->first, CxxCatch->second))
       return;
-    // A nested scalar catch does not destroy the exception of a retained
-    // outer guard. Preserve exact aliases only while that invocation is live;
-    // cleanup calls still invalidate them until their writes are projected.
-    if (!charge(EH.Cxx->UnwindMap.size()))
-      return;
-    if (llvm::none_of(EH.Cxx->UnwindMap,
-                      [](const auto &Action) { return Action.ActionVA != 0; }))
-      for (const auto &[Offset, Value] : Source.RuntimeObject.Cells)
-        if (Value.ExceptionObject && *Value.ExceptionObject != *CxxCatch &&
-            runtimeObjectIsLive(Source, *Value.ExceptionObject) &&
-            runtimeObjectIsLive(Root, *Value.ExceptionObject))
-          Root.RuntimeObject.Cells[Offset] = Value;
+    preserveCxxRuntimeCells(Root, Source);
     if (CheckRuntimeObjects) {
       const auto Object = CatchObjects.find(*CxxCatch);
       const auto &Catch =

@@ -250,11 +250,12 @@ The same frame transfer separately reports whether every ordinary leaf return
 computes a 32-bit scalar independently of incoming registers, borrowed pointers
 and the caller PC. Frame privacy can admit an unobserved entry-EAX return;
 that weaker fact cannot choose a physical scalar call declaration.
-The same ABI owner authenticates immutable MSVC cleanup relays that derive
-ECX from the establisher EBP and tail-jump to a checked leaf. PE32 relative
-branches wrap at the architectural width; instruction storage does not wrap.
-This relay describes an object offset, without granting a parent-frame borrow
-at an unwind dispatch. The shared immutable-code reader verifies unique
+`RegistrationCleanupABI` authenticates immutable MSVC tail-jump relays and
+Clang relays that save EBP, adjust the source frame and call one or more checked
+leaves before restoring EBP. The ordered call list retains every ECX object
+offset, including multiple destructors combined into one unwind action. PE32
+relative branches wrap at the architectural width; instruction storage does
+not wrap. Each invocation still needs a parent-frame borrow at dispatch. The shared immutable-code reader verifies unique
 file-backed PE32 storage without pointer fixups before decoding the relay.
 The COFF loader separately owns bounded scalar ThrowInfo decoding and its
 immutable CatchableType graph. The call ABI owner binds that graph to an exact
@@ -293,8 +294,19 @@ private frame spills preserve that identity without treating it as an image or
 parent-frame pointer. Exact typed access receipts require the active catch
 context, bounded scalar reads/writes and complete source occurrences. Partial
 spills, pointer escape and use after catch return discard runtime authority.
-Adjacent table-owned catch labels extend the parent code range; cleanup relays
-retain their separate ABI and ordinary-entry conflicts remain explicit.
+`COFFRegistrationEHRange` recovers contiguous and disjoint table-owned callback
+chunks without claiming intervening cleanup relays. Canonical metadata schema
+11 and semantic-token schema 2 bind all code ranges. Cleanup relays retain their
+separate ABI and ordinary-entry conflicts remain explicit.
+`RegistrationReachability` removes only exact source-proven dead blocks before
+SSA, after authenticating no-return fallthrough removal. Independent entries,
+incomplete state or live incoming edges prevent that removal. This keeps an
+unreachable normal destructor tail from polluting a resumed callback's SSA.
+`RegistrationCleanupContext` binds each action to its still-active catch;
+LLVM and COFF use the same source projection. The independent installation
+proof checks each generated cleanup call in order, its object address, effects
+and outer unwind edge. Nested catches retain outer exception-object aliases
+only when every checked cleanup write is disjoint from the entire alias cell.
 These call facts remain separate from a compiler or installation receipt.
 For PE32 C++, the loader authenticates the original FuncInfo-loading handler
 thunk separately from the CRT dispatch entry. Its shared immutable-code reader
