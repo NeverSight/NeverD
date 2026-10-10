@@ -222,6 +222,48 @@ TEST(RegistrationCallABI, StackCleanupIncludesCheckedNestedImportCleanup) {
   }
 }
 
+TEST(RegistrationCallABI, NestedReturningStackProofIsBoundedAndNonCircular) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports.clear();
+    auto &Text = F.Image.Segments[0];
+    const unsigned Count = Mutation == 3 ? 32 : Mutation == 4 ? 33 : 3;
+    Text.Data.assign(Count * 0x20, 0xcc);
+    for (unsigned I = 0; I != Count; ++I) {
+      const size_t Offset = I * 0x20;
+      size_t Return = Offset;
+      if (I + 1 != Count || Mutation == 2) {
+        // Each wrapper pushes one argument, calls its child, and relies on
+        // the child's independently proved `ret 4` to restore entry ESP.
+        Text.Data[Offset] = 0x6a;
+        Text.Data[Offset + 1] = 0;
+        Text.Data[Offset + 2] = 0xe8;
+        const size_t Target = I + 1 == Count ? 0 : Offset + 0x20;
+        writeLE<uint32_t>(Text.Data.data() + Offset + 3,
+                          uint32_t(Target - (Offset + 7)));
+        Return += 7;
+      }
+      Text.Data[Return] = 0xc2;
+      Text.Data[Return + 1] = Mutation == 1 && I + 1 == Count ? 8 : 4;
+      Text.Data[Return + 2] = 0;
+      F.Image.Symbols.push_back(Symbol::makeFunc(Text.VA + Offset, 0x20));
+    }
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    size_t Work = Mutation == 5 ? limits::kMaxRegistrationEHStateWork - 20 : 0;
+    const auto Pop = getCheckedX86CalleeStackPop(F.Image, Text.VA, &Work);
+    EXPECT_EQ(Pop, Mutation == 0 || Mutation == 3 ? std::optional<uint32_t>{4}
+                                                  : std::nullopt);
+    EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
+  }
+}
+
 TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
   for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
     SCOPED_TRACE(Mutation);

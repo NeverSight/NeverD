@@ -2379,6 +2379,9 @@ alignment, disagreeing return pops, missing restoration, volatile anchors,
 memory-only saved pointers, far/tail returns, writable code, wrong targets and
 exhausted work. `StackCleanupIncludesCheckedNestedImportCleanup` verifies
 provider and exact-slot identity before a nested stdcall can balance its caller.
+`NestedReturningStackProofIsBoundedAndNonCircular` checks multi-level callee
+cleanup, mismatched pops, recursive dependencies, the depth boundary and shared
+work exhaustion. It does not admit dispatcher-entered parent returns.
 `StackCleanupDoesNotGrantMemoryBorrowAuthority` checks exact
 direct/indirect target identity, registration-overlapping pops and duplicate
 contracts while retaining the independent call-frame refusal.
