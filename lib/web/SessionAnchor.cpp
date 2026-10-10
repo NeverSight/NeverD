@@ -51,6 +51,7 @@ std::string Session::sourceAnchor(std::string_view Revision,
     const auto &R = Extraction->Regions[Module->Contents];
     Storage = llvm::json::Object{
         {"kind", "bun_source_member"},
+        {"byte_offset_basis", "selected_bun_container"},
         {"container_artifact_id", Extraction->ArtifactID},
         {"extraction_id", Extraction->ID},
         {"module_id", Module->ID},
@@ -67,17 +68,28 @@ std::string Session::sourceAnchor(std::string_view Revision,
         {"mapping",
          Module->Encoding ? "unicode_boundary_conversion" : "byte_identity"},
         {"producer_version_verified", false}};
+    if (auto Container = State->artifactView(Extraction->ArtifactID))
+      Storage["container_origin"] = std::move(Container->Origin);
   } else {
     Bytes = State->sourceBytes(S.ArtifactID, MaxJavaScriptBytes,
                                "source_byte_budget_exceeded");
     if (auto Direct = State->artifactView(S.ArtifactID)) {
       Storage = std::move(Direct->Origin);
       Storage["blob_sha256"] = Direct->BlobHash;
-      Storage["mapping"] = "byte_identity";
-      Storage["member_byte_offset"] = std::to_string(Direct->StorageOffset);
-      Storage["member_byte_length"] = std::to_string(Direct->Content.size());
-      Storage["byte_offset"] = std::to_string(Direct->StorageOffset + Offset);
-      Storage["byte_length"] = std::to_string(Length);
+      if (Direct->DirectStorage) {
+        Storage["mapping"] = "byte_identity";
+        Storage["member_byte_offset"] = std::to_string(Direct->StorageOffset);
+        Storage["member_byte_length"] = std::to_string(Direct->Content.size());
+        Storage["byte_offset"] = std::to_string(Direct->StorageOffset + Offset);
+        Storage["byte_length"] = std::to_string(Length);
+      } else {
+        Storage["mapping"] = "containing_compressed_frame";
+        Storage["byte_offset"] = nullptr;
+        Storage["byte_length"] = nullptr;
+        Storage["expanded_byte_offset"] =
+            std::to_string(Direct->StorageOffset + Offset);
+        Storage["expanded_byte_length"] = std::to_string(Length);
+      }
     }
     if (Storage.empty())
       for (const auto &[ID, Map] : State->Maps)

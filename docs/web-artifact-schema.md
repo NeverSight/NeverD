@@ -3,10 +3,22 @@
 `lib/web` owns this schema, identity construction and publication rules.
 CLI/SDK adapters must not reconstruct identities or infer additional analysis
 claims. This schema describes metadata inspection and explicit local Bun
-evidence export; findings, transform receipts and observations require separate
-contracts.
+evidence export and the bounded passive observation contract described below.
+General findings and transform receipts still require separate contracts.
 
 ## Identity and immutable evidence
+
+Passive interface records use the [versioned interface profile](web-interface-profile.md).
+HAR preview/commit is distinct from original artifact capture. Preview tokens
+bind the immutable artifact/hash, revision, policy and preview sequence; only
+committed captures can publish observation pages or participate in comparison.
+Public observation IDs never contain vendor IDs or private endpoint hashes.
+One-to-many pairs retain both evidence classes, the exact method/origin/path
+rule and ignored fields. A pair never upgrades static inference to observed
+source execution. Reimport revokes pending tokens, analyses and comparisons.
+HAR/source/correlation caches each admit four results, with one pending HAR
+preview and pages limited to 128 records. Ordinary output has no raw URL,
+query/cookie/header value, body, vendor field or unrecognized target name.
 
 Hashes are lowercase hexadecimal SHA-256. A blob hash covers exact bytes.
 An occurrence/artifact ID also identifies its provenance: identical bytes
@@ -28,6 +40,10 @@ Domain labels and field order are defined in
 | Snapshot/project | Sorted admitted tree, member bytes and kinds |
 | Artifact occurrence | Snapshot/provenance, relative member identity and blob |
 | Source unit | Artifact occurrence, parser-input blob hash (raw or explicit decoded projection), parser profile, explicit source type |
+| HAR capture | Artifact occurrence, original bytes SHA-256 and HAR profile |
+| HAR observation / request / response | Capture and entry ordinal, then observation ID and side-specific domain |
+| Source interface | Source/binding/value analysis IDs and profile, then call node ID and fixed kind |
+| Interface correlation / pair | Selected source-interface and committed capture IDs plus rule profile; each pair adds both public occurrence IDs |
 | Bun extraction | Original artifact occurrence/hash and explicit layout profile |
 | Bun region | Extraction ID (already bound to the full original hash), region ordinal/kind and original offset/size; separate raw range hash retained |
 | Bun module | Extraction ID and module-table ordinal |
@@ -377,8 +393,10 @@ later edits to the selected host file.
 POSIX host and `unavailable` on Windows. Storage location, descriptors and spool
 offsets never affect content/occurrence IDs. `limits.max_blob_read_bytes`,
 `capture_buffer_bytes` and `max_session_spool_bytes` are decimal strings; the
-last bounds original-byte storage for one session's published and pending
-captures only. A blob slice retains its owner's lifetime, while its range is
+last conservatively bounds one session's published and pending original
+captures plus retained and pending expanded package streams (1.5 GiB).
+Independent native sessions can retain prior captured storage. A blob slice
+retains its owner's lifetime, while its range is
 checked with subtraction before allocation or offset arithmetic. No API returns
 a live view of an input file or exposes a raw blob-read operation.
 
@@ -387,3 +405,32 @@ no silent truncation. JSON structural preflight bounds depth, nodes, strings
 and bytes before DOM creation, and rejects decoded duplicate object keys.
 The current POSIX reader rejects links, special files, unsafe names and detected
 changes. It does not yet provide export-path normalization or Windows admission.
+
+## Package archives and original integrity
+
+`package_archive_extract` takes an explicit original `artifact_id` and `format`
+(`tar` or `tgz`). `package_archive_records` takes its `archive_id` and a bounded
+page. IDs bind the original occurrence/hash, format/profile and member ordinal.
+Paths and link targets are private; symbolic/hard links return `metadata_only`,
+with no hash or consumer bytes. Regular members expose independent byte hashes,
+expanded offsets and the original offset only for direct tar storage.
+
+Shared source/native origins retain `storage_artifact_id`,
+`container_artifact_id`, `byte_offset_basis` and nested container origins as
+needed. For a Bun asset inside tar, `container_byte_offset` is relative to the
+selected Bun member, while `byte_offset` refers to `storage_artifact_id`.
+For gzip, expanded coordinates and the original containing frame remain
+separate; source anchors have no fabricated original compressed byte offset.
+Local Bun export retains `original_origin` in its completion manifest.
+
+`package_integrity_verify` selects a captured original and a declaration.
+Without `package_id`, `declaration_id` names a registry JSON artifact containing
+`dist.integrity`. With `package_id` it names an existing npm-lock analysis and
+one package instance. Results bind both artifact hashes, the declaration
+selection, byte domain, fixed outcome, strongest algorithm and candidate count.
+`bytes_match_declaration` is true only on a digest match;
+`authenticates_publisher` and `provenance_verified` remain false and
+`safety_verdict` remains `not_assessed`. Raw declaration text is not returned.
+See the [profiles](web-package-archive-profile.md) for exact limits, refusal
+states and supported encodings. A successful import revokes all these cached
+selections and results.

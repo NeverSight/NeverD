@@ -210,6 +210,9 @@ extern llvm::cl::SubCommand WebCmd;
 extern llvm::cl::list<std::string> WebArguments;
 int runWeb();
 int runWebPackages();
+int runWebArchive();
+int runWebIntegrity();
+int runWebInterfaces();
 
 extern llvm::cl::opt<bool> Devirtualize;
 extern llvm::cl::list<std::string> VMControlRegisters;
