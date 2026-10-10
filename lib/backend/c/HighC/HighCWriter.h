@@ -203,6 +203,7 @@ public:
   void writeStmt(const HighStmt &Stmt, int Indent);
   void writeStmtImpl(const HighStmt &Stmt, int Indent);
   void writeCxxThrowExpr(const HighStmt &Stmt, const HighExpr &ThrowCall);
+  TypeRef cxxScalarThrowType(const HighExpr &ThrowCall) const;
   void writeCExceptionRegion(const HighStmt &Stmt, int Indent);
   void writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
                   size_t End = static_cast<size_t>(-1));

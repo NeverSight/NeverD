@@ -19,6 +19,7 @@ struct CxxIRCall {
   RegistrationCalleeFrameContract Contract;
   std::optional<int32_t> ObjectFrameOffset;
   bool Cleanup = false;
+  std::optional<RegistrationRuntimeThrow> RuntimeThrow;
 };
 struct CxxIRCatch {
   const llvm::CatchPadInst *Pad = nullptr;
@@ -41,6 +42,15 @@ struct CxxIRControlProof {
   std::set<const llvm::Instruction *> IncomingAccesses;
   std::vector<ExceptionAddressRange> CallerPCWrites;
 };
+struct RegistrationCxxFrameContract;
+llvm::Error bindCxxRuntimeThrow(const CxxIRControlProof &Proof,
+                                const llvm::CallBase &Call,
+                                const CxxIRCall &Checked,
+                                const BinaryImage &Image,
+                                RegistrationCxxFrameContract &Contract,
+                                std::vector<ExceptionAddressRange> &Immutable,
+                                size_t &Work);
+
 llvm::Expected<const llvm::CatchReturnInst *> validateCxxContinuationRestore(
     const llvm::Instruction &Anchor, const RegistrationFrame &Frame,
     int32_t SavedStackSlot, const RegistrationCxxContinuation &Resume);

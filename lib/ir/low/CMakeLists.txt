@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateInstallation.cpp
   X86/RegistrationStateResult.cpp
   X86/RegistrationStateSearch.cpp
+  X86/RegistrationStateThrow.cpp
   X86/RegistrationStateTransfer.cpp
   X86/RegistrationStateUnwind.cpp
   X86/RegistrationFrame.cpp
@@ -44,6 +45,9 @@ add_neverd_component_library(NeverDIRLow
   FuncDetectorAArch64.cpp
   IndirectTailFrame.cpp
   X86/RegistrationCalleeABI.cpp
+  X86/RegistrationThrowABI.cpp
+  X86/RegistrationThrowImportABI.cpp
+  X86/RegistrationRuntimeThrowInfo.cpp
   X86/RegistrationCalleeFrame.cpp
   X86/RegistrationCalleeIndex.cpp
   X86/RegistrationCallerABI.cpp

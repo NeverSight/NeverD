@@ -13,6 +13,12 @@ extern "C" {
 __declspec(dllexport) volatile unsigned callback_caller = 0;
 __declspec(dllexport) volatile unsigned callback_caught = 0;
 __declspec(dllexport) volatile unsigned callback_choice = 0;
+#ifdef DIRECT_TYPED_THROW
+__declspec(dllexport) __declspec(noinline) int callback_mark() {
+  callback_caller = reinterpret_cast<unsigned>(_ReturnAddress());
+  return 7;
+}
+#endif
 __declspec(dllexport) __declspec(noinline) void callback_throw_int() {
   callback_caller = reinterpret_cast<unsigned>(_ReturnAddress());
   throw 7;
@@ -25,27 +31,65 @@ __declspec(dllexport) __declspec(noinline) void callback_throw_float() {
   callback_caller = reinterpret_cast<unsigned>(_ReturnAddress());
   throw 7.0f;
 }
+#if defined(RETHROW_SEARCH) && !defined(INLINE_RETHROW_SEARCH)
+__declspec(dllexport) __declspec(noinline) void callback_rethrow() {
+  callback_caller = reinterpret_cast<unsigned>(_ReturnAddress());
+  throw;
+}
+#endif
 __declspec(dllexport) int callback_parent();
 }
 
 extern "C" __declspec(dllexport) __declspec(noinline) int callback_parent() {
   try {
     try {
+#ifdef DIRECT_TYPED_THROW
+      if (callback_choice == 0) {
+        callback_mark();
+        throw 7;
+      }
+      if (callback_choice == 1) {
+        callback_mark();
+        throw 7u;
+      }
+      callback_mark();
+      throw 7.0f;
+#else
       if (callback_choice == 0)
         callback_throw_int();
       if (callback_choice == 1)
         callback_throw_unsigned();
       callback_throw_float();
+#endif
     } catch (unsigned &Value) {
-#ifdef SECONDARY_SEARCH
-      if (Value == 7)
+#ifdef RETHROW_SEARCH
+      if (Value == 7) {
+        Value += 11;
+#ifdef INLINE_RETHROW_SEARCH
+        throw;
+#else
+        callback_rethrow();
+#endif
+      }
+#elif defined(SECONDARY_SEARCH)
+      if (Value == 7) {
+#ifdef DIRECT_TYPED_THROW
+        callback_mark();
+        throw 7;
+#else
         callback_throw_int();
+#endif
+      }
 #endif
       Value += 11;
       callback_caught = Value;
       return Value + 10;
     }
+#ifdef RETHROW_SEARCH
+  } catch (unsigned &Value) {
+#else
   } catch (int Value) {
+#endif
     callback_caught = Value;
     return Value + 10;
   } catch (...) {
@@ -68,12 +112,19 @@ template <unsigned Padding> __declspec(noinline) int call_with_padding() {
 }
 
 #ifndef EXPECTED_FIRST
+#ifdef RETHROW_SEARCH
+#define EXPECTED_FIRST 39
+#else
 #define EXPECTED_FIRST 17
+#endif
 #endif
 extern "C" __declspec(noreturn) void mainCRTStartup() {
   bool Passed = true;
   unsigned Values[3] = {}, Caught[3] = {}, Callers[3] = {}, Iterations = 0;
-#ifdef SECONDARY_SEARCH
+#ifdef RETHROW_SEARCH
+  const unsigned Expected[] = {EXPECTED_FIRST, 28, 39};
+  const unsigned ExpectedCaught[] = {39, 18, 39};
+#elif defined(SECONDARY_SEARCH)
   const unsigned Expected[] = {EXPECTED_FIRST, 17, 39};
   const unsigned ExpectedCaught[] = {7, 7, 39};
 #else

@@ -363,6 +363,50 @@ TEST(RegistrationCallABI, BindsTheMemoizedContractToOneBuildImage) {
   EXPECT_TRUE(Changed->empty());
 }
 
+TEST(RegistrationCallABI, RuntimeThrowTypesBelongToTheCurrentCaller) {
+  for (bool Reverse : {false, true}) {
+    ThrowImage F;
+    LowFunc Caller;
+    Caller.Blocks.resize(1);
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.addInput(NdVar::cst(ThrowImage::ImportVA, 4));
+    Caller.Blocks[0].Ops.push_back(Call);
+    auto Typed = Caller;
+    LowOp Table;
+    Table.Opcode = NdOp::COPY;
+    Table.addInput(NdVar::cst(ThrowImage::TableVA, 4));
+    Typed.Blocks[0].Ops.push_back(Table);
+    RegistrationCallCalleeIndex Index(F.Image);
+    auto Check = [&](bool WithType) {
+      const auto Contracts = Index.contracts(WithType ? Typed : Caller);
+      ASSERT_TRUE(Contracts);
+      ASSERT_EQ(Contracts->size(), 1u);
+      const auto &Contract = Contracts->front();
+      ASSERT_TRUE(Contract.isRuntimeThrow());
+      ASSERT_EQ(Contract.RuntimeThrowInfos.size(), unsigned(WithType));
+      if (WithType) {
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].Address, ThrowImage::TableVA);
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].TypeDescriptorVA,
+                  ThrowImage::DataVA);
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].ObjectSize, 4u);
+      }
+    };
+    Check(Reverse);
+    Check(!Reverse);
+    Check(Reverse);
+    auto Malformed = Typed;
+    Malformed.Blocks[0].Ops.back().NumInputs = 255;
+    EXPECT_FALSE(Index.contracts(Malformed));
+    F.tableWord(0x44, 0);
+    RegistrationCallCalleeIndex ChangedIndex(F.Image);
+    auto Changed = ChangedIndex.contracts(Typed);
+    ASSERT_TRUE(Changed);
+    ASSERT_EQ(Changed->size(), 1u);
+    EXPECT_TRUE(Changed->front().RuntimeThrowInfos.empty());
+  }
+}
+
 TEST(RegistrationCallABI, ScopeExtentKeepsTheFormatHeaderAndPE32Bounds) {
   for (bool EH4 : {false, true}) {
     ExceptionFunction F;

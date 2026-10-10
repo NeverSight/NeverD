@@ -16,6 +16,7 @@ add_neverd_component_library(NeverDBackendC
   HighC/HighCSourceNames.cpp
   HighC/HighCFuncWriter.cpp
   HighC/HighCStmtWriter.cpp
+  HighC/HighCWindowsThrow.cpp
   HighC/X86/HighCRegistration.cpp
   LLVMC/LLVMCEmitter.cpp
   LLVMC/LLVMCExprWriter.cpp

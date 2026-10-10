@@ -100,23 +100,25 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
       if (Work > limits::kMaxRegistrationEHStateWork)
         return std::nullopt;
       // Extending a synchronous language scope over its branch and frame
-      // setup is valid only if every ordinary call already has that scope.
-      // In particular, never bring an unprotected call or an EHa memory fault
-      // under a new handler merely because the addresses surround the try.
-      if (!registrationCallABI(Med, Block, Op) || !Op.DoesNotReturn ||
+      // setup is valid when each throw already has that scope. A checked
+      // returning leaf has no calls or C++ throws, so synchronous EH permits
+      // its placement before the compiler's first state store. Unknown calls
+      // and asynchronous memory faults cannot use this exception.
+      if (!registrationCallABI(Med, Block, Op) ||
           !llvm::any_of(State.Blocks,
                         [&](const auto &S) {
                           return S.Reached && !S.CallbackOnly && !S.Unknown &&
                                  S.Range.contains(Op.Addr) &&
                                  !S.Levels.empty() &&
                                  llvm::all_of(S.Levels, [&](int32_t Level) {
-                                   return Level >= Try.TryLow &&
-                                          Level <= Try.TryHigh;
+                                   return !Op.DoesNotReturn ||
+                                          (Level >= Try.TryLow &&
+                                           Level <= Try.TryHigh);
                                  });
                         }) ||
           !Calls.insert(Op.Addr).second)
         return std::nullopt;
-      Terminal = true;
+      Terminal = Op.DoesNotReturn;
     }
     if (Terminal != Block.Succs.empty())
       return std::nullopt;

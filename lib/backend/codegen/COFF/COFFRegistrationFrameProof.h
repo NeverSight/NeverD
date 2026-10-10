@@ -38,6 +38,11 @@ struct RegistrationFrameBorrow {
   int64_t Offset = 0;
   std::vector<RegistrationObjectExtent> Reads;
   std::vector<RegistrationObjectExtent> Writes;
+  /// Null selects the parent's logical frame. A callback borrow names its
+  /// independently authenticated private stack allocation.
+  const llvm::AllocaInst *Root = nullptr;
+  /// Nonzero selects the two-pointer stdcall CRT ABI and exact table identity.
+  va_t ThrowInfoVA = 0;
 };
 struct RegistrationRuntimeAccess {
   int32_t Offset = 0;

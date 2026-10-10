@@ -252,6 +252,19 @@ immutable CatchableType graph. The call ABI owner binds that graph to an exact
 CRT import and a fully initialized private exception object, retaining real
 caller-PC observations and rejecting metadata mutation. This still describes
 a preserved helper, rather than authorizing a rewritten parent.
+The separate x86 throw-import ABI owner authenticates the runtime, IAT and
+transparent jump stub for both helpers and direct calls. The source state
+solver admits a direct rethrow only with a live catch and two initialized null
+words in its actual argument-stack coordinate. The LLVM call adapter checks
+current arguments before projecting the two-pointer stdcall ABI. COFF control
+and frame consumers independently replay the source and generated call contract.
+For direct scalar throws the import owns only the physical ABI. A bounded,
+immutable ThrowInfo catalogue supplies candidates; each current source call
+selects its actual table and proves initialized scalar storage in the parent or
+active callback stack. The receipt retains that occurrence and coordinate.
+Native lowering preserves the current object expression, and the shared LLVM
+frame validator checks its exact storage, initialization and original table
+identity before installation.
 One CFG construction memoizes these callee proofs under a shared budget that
 also charges failed attempts. Registration-state analysis projects each exact
 source call into the caller's allocated frame, intersects byte initialization
