@@ -34,6 +34,43 @@ public:
   /// Revalidate the selected input before atomically publishing the preview.
   std::string commit(std::string_view Token);
   std::string metadata() const;
+  std::string previewStream(std::string_view ExpectedRevision,
+                            std::string_view ArtifactID,
+                            std::string_view Profile);
+  std::string commitStream(std::string_view ExpectedRevision,
+                           std::string_view PreviewToken);
+  std::string streamRecords(std::string_view ExpectedRevision,
+                            std::string_view CaptureID, uint64_t Offset,
+                            uint64_t Limit) const;
+  std::string previewHAR(std::string_view ExpectedRevision,
+                         std::string_view ArtifactID);
+  std::string commitHAR(std::string_view ExpectedRevision,
+                        std::string_view PreviewToken);
+  std::string harRecords(std::string_view ExpectedRevision,
+                         std::string_view CaptureID, uint64_t Offset,
+                         uint64_t Limit) const;
+  std::string analyzeInterfaces(std::string_view ExpectedRevision,
+                                std::string_view SourceID);
+  std::string interfaceRecords(std::string_view ExpectedRevision,
+                               std::string_view AnalysisID, uint64_t Offset,
+                               uint64_t Limit) const;
+  std::string compareInterfaces(std::string_view ExpectedRevision,
+                                std::string_view AnalysisID,
+                                std::string_view CaptureID);
+  std::string interfaceCorrelationRecords(std::string_view ExpectedRevision,
+                                          std::string_view CorrelationID,
+                                          uint64_t Offset,
+                                          uint64_t Limit) const;
+  std::string extractPackageArchive(std::string_view ExpectedRevision,
+                                    std::string_view ArtifactID,
+                                    std::string_view Format);
+  std::string verifyPackageIntegrity(std::string_view ExpectedRevision,
+                                     std::string_view ArtifactID,
+                                     std::string_view DeclarationID,
+                                     std::string_view PackageID);
+  std::string packageArchiveRecords(std::string_view ExpectedRevision,
+                                    std::string_view ArchiveID, uint64_t Offset,
+                                    uint64_t Limit) const;
   std::string analyzePackages(std::string_view ExpectedRevision,
                               std::string_view ArtifactID,
                               std::string_view InputKind);

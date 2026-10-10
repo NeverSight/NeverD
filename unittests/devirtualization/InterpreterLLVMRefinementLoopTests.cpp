@@ -225,6 +225,31 @@ TEST(InterpreterLLVMRefinement, PreservationRestoresEntryAcrossLoopCutpoints) {
   EXPECT_GT(Good.Native.Proof.RankingChecks, 0U);
   EXPECT_GT(Good.LLVM.RankingChecks, 0U);
 
+  // The public search must discover the source relation without the manual
+  // cut address or rank binding above. The composite checker then prepares
+  // fresh models and rechecks both premises with the same preservation.
+  LowIRLoopAlignmentLimits Search;
+  Search.MaxRankPairingAttempts = 32;
+  const auto Automatic = inferAndCheckLowIRLoopRefinement(
+      Models->Residual.Function, Models->Residual.Instructions,
+      Models->LLVM.Function, Models->Contract,
+      LowIRRefinementWitness::LiftedBits, Search);
+  ASSERT_TRUE(Automatic.proved())
+      << Automatic.Diagnostic << ": " << Automatic.LastCandidateDiagnostic;
+  EXPECT_GT(Automatic.RankPairingAttempts, 0U);
+  Plans.LLVM = Automatic.Refinement.Certificate->LoopPlan;
+  const auto Composed = P.check(R.Residual, IR, {}, Plans, "model", Required);
+  ASSERT_TRUE(Composed.proved()) << Composed.Diagnostic;
+  const auto &Observed = Composed.Certificate->LLVM.Contract.ReturnRegisters;
+  ASSERT_EQ(Observed.size(), 18U);
+  for (unsigned I = 0; I != 17; ++I) {
+    EXPECT_EQ(Observed[I].Offset, 8U * I);
+    EXPECT_EQ(Observed[I].Bytes, 8U);
+  }
+  EXPECT_EQ(Observed.back().Offset, LLVMInterpreterDefinednessOffset);
+  EXPECT_EQ(Observed.back().Bytes, 1U);
+  EXPECT_TRUE(Composed.Certificate->Native.Relation.NativePreservation);
+
   auto Changed = IR;
   Changed.replace(Changed.find("ret i64 0"), 9,
                   "%ran = icmp ne i64 %initial, 0\n"

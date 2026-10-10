@@ -58,10 +58,8 @@ std::string Session::exportBun(std::string_view ExpectedRevision,
   if (Found == State->BunExtractions.end())
     throw Error("unknown_bun_extraction");
   const auto &E = Found->second;
-  const auto Original = std::find_if(
-      State->Published.Artifacts.begin(), State->Published.Artifacts.end(),
-      [&](const auto &A) { return A.ID == E.ArtifactID; });
-  if (Original == State->Published.Artifacts.end())
+  const auto Original = State->artifactView(E.ArtifactID);
+  if (!Original)
     throw Error("unknown_artifact");
   ExportDirectory Output(OutputDirectory);
   Output.write("original.bin", Original->Content, Original->BlobHash);
@@ -183,6 +181,7 @@ std::string Session::exportBun(std::string_view ExpectedRevision,
       {"architecture", E.Architecture},
       {"extraction_id", E.ID},
       {"original_sha256", Original->BlobHash},
+      {"original_origin", llvm::json::Object(Original->Origin)},
       {"original_bytes", std::to_string(Original->Content.size())},
       {"module_count", E.Modules.size()},
       {"region_count", E.Regions.size()},

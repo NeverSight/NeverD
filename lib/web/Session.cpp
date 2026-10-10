@@ -71,6 +71,85 @@ std::string Session::capabilities() {
                          {"max_cached_map_segments", 200000},
                          {"resolves_external_references", false}}};
   Operations.emplace_back("electron_manifest_analyze");
+  for (const auto *Name : {"stream_preview", "stream_commit", "stream_records"})
+    Operations.emplace_back(Name);
+  llvm::json::Array StreamProfiles;
+  for (const auto Profile : streamProfiles())
+    StreamProfiles.emplace_back(std::string(Profile));
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "passive_streams"},
+      {"profiles", std::move(StreamProfiles)},
+      {"redaction_policy", std::string(StreamRedactionPolicy)},
+      {"max_bytes", std::to_string(MaxStreamBytes)},
+      {"max_fragment_bytes", MaxStreamFragmentBytes},
+      {"max_records", MaxStreamRecords},
+      {"max_json_nodes", MaxStreamJSONWork},
+      {"max_json_depth", 32},
+      {"max_private_id_bytes", MaxStreamPrivateBytes},
+      {"max_cached_captures", 4},
+      {"max_pending_previews", 1},
+      {"explicit_preview_required", true},
+      {"protocol_auto_detection", false},
+      {"network_access", false},
+      {"executes_input", false}});
+  for (const auto *Name : {"har_preview", "har_commit", "har_records"})
+    Operations.emplace_back(Name);
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "har_observations"},
+      {"profile", std::string(HARProfile)},
+      {"redaction_policy", std::string(InterfaceRedactionPolicy)},
+      {"explicit_preview_required", true},
+      {"max_bytes", std::to_string(MaxHARBytes)},
+      {"max_records", MaxInterfaceRecords},
+      {"max_fields", MaxInterfaceFields},
+      {"max_url_bytes", MaxInterfaceURLBytes},
+      {"max_steps", MaxInterfaceSteps},
+      {"max_private_url_bytes", MaxInterfacePrivateBytes},
+      {"max_cached", 4},
+      {"max_page_records", 128},
+      {"network_access", false},
+      {"executes_input", false}});
+#ifdef NEVERD_ENABLE_WEB_JAVASCRIPT
+  for (const auto *Name :
+       {"interfaces_analyze", "interface_records", "interfaces_compare",
+        "interface_correlation_records"})
+    Operations.emplace_back(Name);
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "source_interfaces"},
+      {"profile", std::string(SourceInterfaceProfile)},
+      {"correlation_profile", std::string(InterfaceCorrelationProfile)},
+      {"max_records", MaxInterfaceRecords},
+      {"max_pairs", MaxInterfacePairs},
+      {"max_steps", MaxInterfaceSteps},
+      {"max_cached", 4},
+      {"max_cached_correlations", 4},
+      {"intrinsic_verified", false},
+      {"websocket_correlation", false}});
+#endif
+  Operations.emplace_back("package_archive_extract");
+  Operations.emplace_back("package_archive_records");
+  Operations.emplace_back("package_integrity_verify");
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "package_integrity"},
+      {"profile", std::string(PackageIntegrityProfile)},
+      {"available", true},
+      {"algorithms", llvm::json::Array{"sha1", "sha256", "sha384", "sha512"}},
+      {"byte_domain", "selected_original_artifact"},
+      {"max_cached_verifications", 16},
+      {"authenticates_publisher", false}});
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "package_archive"},
+      {"profile", std::string(PackageArchiveProfile)},
+      {"available", packageArchiveAvailable()},
+      {"gzip_available", packageGzipAvailable()},
+      {"max_expanded_bytes", std::to_string(MaxPackageArchiveBytes)},
+      {"max_cached_expanded_bytes", std::to_string(MaxPackageArchiveBytes)},
+      {"max_file_bytes", std::to_string(MaxPackageArchiveFileBytes)},
+      {"max_members", MaxPackageArchiveMembers},
+      {"max_cached", 4},
+      {"recursive_archives", false},
+      {"follows_links", false},
+      {"executes_input", false}});
   for (const auto *Name : {"packages_analyze", "package_records",
                            "packages_compare", "package_diff_records"})
     Operations.emplace_back(Name);
@@ -359,7 +438,8 @@ std::string Session::capabilities() {
            {"max_blob_read_bytes", std::to_string(MaxBlobReadBytes)},
            {"capture_buffer_bytes", std::to_string(BlobTransferBytes)},
            {"max_session_spool_bytes",
-            std::to_string(2 * Limits::HardInputBytes)},
+            std::to_string(2 * Limits::HardInputBytes +
+                           MaxPackageArchiveBytes)},
            {"max_page_entries", 512}}}});
 }
 
@@ -432,6 +512,17 @@ std::string Session::commit(std::string_view Token) {
   State->ElectronIPCs.clear();
   State->ElectronEntryAnalyses.clear();
   State->PackageAnalyses.clear();
+  State->PackageArchives.clear();
+  State->PackageIntegrity.clear();
+  State->HARCaptures.clear();
+  State->StreamCaptures.clear();
+  State->PendingStream.reset();
+  State->StreamPreviewToken.clear();
+  State->PendingHAR.reset();
+  State->HARPreviewToken.clear();
+  State->InterfaceSources.clear();
+  State->InterfaceCorrelations.clear();
+  State->CachedArchiveBytes = 0;
   State->PackageDiffs.clear();
   State->HTMLDocuments.clear();
   State->CachedNodes = 0;
@@ -472,6 +563,10 @@ std::string Session::metadata() const {
       {"electron_entries_count", State->ElectronEntryAnalyses.size()},
       {"source_map_count", State->Maps.size()},
       {"source_view_count", State->SourceViews.size()},
+      {"har_capture_count", State->HARCaptures.size()},
+      {"stream_capture_count", State->StreamCaptures.size()},
+      {"interface_analysis_count", State->InterfaceSources.size()},
+      {"interface_correlation_count", State->InterfaceCorrelations.size()},
       {"redaction_policy", "metadata-only-v1"}});
 }
 

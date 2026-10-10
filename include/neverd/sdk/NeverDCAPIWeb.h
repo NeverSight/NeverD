@@ -33,6 +33,85 @@ NEVERD_API void neverd_web_session_destroy(neverd_web_session_t Session);
 /// no untrusted source text or input name is included in ordinary diagnostics.
 NEVERD_API const char *neverd_web_capabilities_json(void);
 
+/// Explicit passive transcript profile, followed by redaction preview/commit.
+/// Every dispatched current-revision preview revokes its previous token;
+/// every same-revision commit attempt consumes it. No records before commit.
+NEVERD_API const char *neverd_web_stream_preview_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
+    const char *Profile, size_t ProfileSize);
+NEVERD_API const char *neverd_web_stream_commit_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *PreviewToken, size_t PreviewTokenSize);
+NEVERD_API const char *neverd_web_stream_records_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *CaptureID, size_t CaptureIDSize,
+    uint64_t Offset, uint64_t Limit);
+
+/// Preview metadata-only redaction before publishing HAR observations. The
+/// token binds the immutable artifact/hash, revision, policy and preview.
+/// Every dispatched current-revision preview revokes the previous token.
+/// Commit consumes it.
+NEVERD_API const char *neverd_web_har_preview_json(neverd_web_session_t Session,
+                                                   const char *ExpectedRevision,
+                                                   size_t RevisionSize,
+                                                   const char *ArtifactID,
+                                                   size_t ArtifactIDSize);
+NEVERD_API const char *neverd_web_har_commit_json(neverd_web_session_t Session,
+                                                  const char *ExpectedRevision,
+                                                  size_t RevisionSize,
+                                                  const char *PreviewToken,
+                                                  size_t PreviewTokenSize);
+/// Only committed capture IDs are readable. Limit is 1..128. URLs, unknown
+/// names, header/cookie/query values, bodies and vendor fields stay excluded.
+NEVERD_API const char *
+neverd_web_har_records_json(neverd_web_session_t Session,
+                            const char *ExpectedRevision, size_t RevisionSize,
+                            const char *CaptureID, size_t CaptureIDSize,
+                            uint64_t Offset, uint64_t Limit);
+/// Direct external fetch/WebSocket syntax is inferred evidence, not proof of
+/// intrinsic identity, reachability or execution. No source text is returned.
+NEVERD_API const char *neverd_web_interfaces_analyze_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *SourceID, size_t SourceIDSize);
+NEVERD_API const char *neverd_web_interface_records_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *AnalysisID, size_t AnalysisIDSize,
+    uint64_t Offset, uint64_t Limit);
+/// Explicit source and committed capture selections only. Matching method,
+/// origin and path produces candidate pairs, never an execution claim.
+NEVERD_API const char *neverd_web_interfaces_compare_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *AnalysisID, size_t AnalysisIDSize,
+    const char *CaptureID, size_t CaptureIDSize);
+NEVERD_API const char *neverd_web_interface_correlation_records_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *CorrelationID, size_t CorrelationIDSize,
+    uint64_t Offset, uint64_t Limit);
+
+/// Verify a caller-selected captured ORIGINAL against one captured declaration.
+/// Empty PackageID selects DeclarationID as a registry JSON artifact and reads
+/// dist.integrity. Otherwise DeclarationID selects an existing npm-lock
+/// analysis and PackageID one package instance. No filename/URL association is
+/// inferred. A matching digest authenticates neither publisher nor behavior.
+NEVERD_API const char *neverd_web_package_integrity_verify_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
+    const char *DeclarationID, size_t DeclarationIDSize, const char *PackageID,
+    size_t PackageIDSize);
+
+/// Explicit tar/tgz profile; captured originals only, no recursive extraction.
+NEVERD_API const char *neverd_web_package_archive_extract_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
+    const char *Format, size_t FormatSize);
+/// Link entries never supply bytes. Expanded offsets are distinct from the
+/// original compressed archive. Limit is 1..512; names remain private.
+NEVERD_API const char *neverd_web_package_archive_records_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArchiveID, size_t ArchiveIDSize,
+    uint64_t Offset, uint64_t Limit);
+
 /// Inspect selected package.json or npm lock v1/v2/v3 metadata and exact
 /// supplied members. InputKind is "package-json" or "npm-lock". No install,
 /// registry resolution, execution, version-satisfaction or integrity

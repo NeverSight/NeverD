@@ -396,6 +396,12 @@ struct LowIRLoopAlignmentLimits {
   uint32_t MaxCandidateAttempts = 33;
   uint32_t MaxPairingAttempts = 128;
   uint32_t MaxCuts = 3;
+  /// Optional direct-rank and rank-plus-frame proposals after each failed
+  /// ordinary pairing. Zero disables them without changing legacy search.
+  /// Each policy consumes this and MaxPairingAttempts before construction,
+  /// including ineligible or duplicate proposals. Exhaustion skips optional
+  /// work but allows later ordinary attempts within the remaining budgets.
+  uint32_t MaxRankPairingAttempts = 0;
 };
 
 enum class LowIRLoopAlignmentStatus : uint8_t {
@@ -417,6 +423,7 @@ struct LowIRLoopAlignmentResult {
   uint64_t SearchWork = 0;
   uint32_t CandidateAttempts = 0;
   uint32_t PairingAttempts = 0;
+  uint32_t RankPairingAttempts = 0;
 
   bool proved() const {
     return Status == LowIRLoopAlignmentStatus::Proved && Refinement.proved();
@@ -433,8 +440,11 @@ struct LowIRLoopAlignmentResult {
 /// Then try individual cyclic candidate entries against available original
 /// plans. Cut permutations are lazy; this does not enumerate every feedback
 /// set or rank family. Standalone default inference is unchanged.
-/// Only same-width frame inputs at identical offsets are proposed equal.
-/// Register renaming, different layouts and affine relations remain explicit
+/// By default, only same-width frame inputs at identical offsets are proposed
+/// equal. MaxRankPairingAttempts additionally matches direct Original inputs
+/// at corresponding rank-tuple positions, alone and with compatible frame
+/// bindings. Constant/expression ranks and width conversions are not matched.
+/// Duplicate binding sets are skipped; affine relations remain explicit
 /// pairing tasks. All proposals go through pairLowIRLoopRefinementPlans and
 /// the complete checkLowIRLoopRefinement with the supplied audited records.
 /// A failed proposal never proves inequivalence. Per-attempt exhaustion may

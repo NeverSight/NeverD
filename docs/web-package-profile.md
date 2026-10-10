@@ -16,7 +16,7 @@ contract independent of the session layer.
 
 The caller selects a metadata occurrence and its input kind. A directory input
 also supplies exact sibling/descendant evidence; a standalone JSON input has
-no implicit directory inventory. Available ASAR members can be selected through
+no implicit directory inventory. Available ASAR and tar/tgz members can be selected through
 the same session API. Other package manifests within `node_modules` are
 installation instances only at a complete package root, including scoped names;
 example/test manifests nested inside an installed package are ordinary files.
@@ -67,9 +67,12 @@ Version and platform alignment remain analyst responsibilities.
 
 SRI metadata is classified as missing, malformed, unsupported or
 declared-unverified. A legacy Git commit is a separate unverified declaration.
-No archive integrity, publisher signature, provenance, advisory freshness,
-reachability, benignness or exploitability is established by this increment.
-Tarball input, source behavior findings, external evidence imports, analyst
+Explicit original tar/tgz admission and original-artifact SRI verification have
+their own [archive/integrity profile](web-package-archive-profile.md). Graph
+pages retain declarations; a separate verification binds the selected package
+declaration to a captured original. Publisher signatures, provenance, advisory
+freshness, reachability, benignness and exploitability remain unverified.
+Source behavior findings, external evidence imports, analyst
 dispositions, readable reports and the C++ MCP surface remain pending.
 
 ## Surfaces and limits

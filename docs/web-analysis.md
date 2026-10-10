@@ -1,5 +1,15 @@
 # Offline web analysis
 
+Explicitly selected SSE, JSONL, JSON-RPC/MCP-shape and diagnostic-log inputs
+use `neverd web stream-preview` and receipt-bound `stream-import`.
+See the [stream profiles](web-stream-profile.md) for framing, redaction,
+recorded-context joins and limitations.
+
+Passive HAR/source interface commands and their explicit redaction preview
+workflow are documented in the [interface profile](web-interface-profile.md).
+Use `neverd web har-preview` before hash-bound `har-import` or
+`interface-correlate`; `neverd web interfaces` supports source-only candidates.
+
 The `neverd web` command and independent C API inspect admitted files without
 executing them. The current implementation provides immutable artifact
 inventory, JavaScript syntax and lexical-binding queries, bounded primitive
@@ -22,6 +32,7 @@ JavaScript, package, desktop and protocol work remains in progress; see the
 neverd web capabilities
 neverd web packages ./package-lock.json npm-lock
 neverd web packages ./package.json package-json
+neverd web archive ./package.tgz tgz
 neverd web bun-export ./standalone-elf ./new-recovery-directory
 neverd web inspect ./input-directory
 neverd web source ./bundle.js script
@@ -78,6 +89,11 @@ npm v1/v2/v3 lockfile and manifest inspection, bounded graph pages and compariso
 of two supplied roots. Placement candidates, integrity declarations, missing
 evidence and version/platform uncertainty remain separate; it neither installs
 packages nor issues a benignness verdict.
+The [archive and integrity profiles](web-package-archive-profile.md) admit
+bounded tar/local-PAX/single-gzip members and compare explicitly selected
+original artifacts with captured registry or npm-lock SRI declarations.
+Source, package, Bun and native consumers share the immutable member selection.
+SHA equality, archive validity and publisher authenticity are separate claims.
 
 Bun extraction is explicitly selected and follows
 [versioned layouts](web-bun-profile.md). Module/region pages preserve original
