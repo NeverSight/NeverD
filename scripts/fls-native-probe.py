@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import ctypes
 import json
 import platform
 import shutil
@@ -32,18 +33,31 @@ meta['compiler_version'] = subprocess.check_output([compiler, '--version'], text
 meta['binary_sha256'] = hashlib.sha256((out / 'probe.exe').read_bytes()).hexdigest()
 (out / 'build.json').write_text(json.dumps(meta, indent=2) + '\n')
 rows = []
+ctypes.windll.kernel32.SetErrorMode(0x8003)
 for mode in ['F', 'N', 'E', 'S', 'G', 'R']:
     for repeat in range(2):
         start = time.monotonic()
-        q = subprocess.run([str(out / 'probe.exe'), '!' + mode], stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, timeout=15)
-        assert len(q.stdout) % 64 == 0
-        records = [list(struct.unpack('<8Q', q.stdout[i:i+64])) for i in range(0, len(q.stdout), 64)]
+        timed_out = False
+        stdout_path = out / (mode + '-' + str(repeat) + '.stdout')
+        stderr_path = out / (mode + '-' + str(repeat) + '.stderr')
+        with stdout_path.open('wb') as stdout, stderr_path.open('wb') as stderr:
+            try:
+                q = subprocess.run([str(out / 'probe.exe'), '!' + mode], stdout=stdout,
+                                   stderr=stderr, timeout=15)
+                code = q.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                code = None
+        raw = stdout_path.read_bytes()
+        errors = stderr_path.read_bytes()
+        assert len(raw) % 64 == 0
+        records = [list(struct.unpack('<8Q', raw[i:i+64])) for i in range(0, len(raw), 64)]
         readable = [dict(mode=chr(a[0]), tag=chr(a[1]), values=a[2:]) for a in records]
-        row = dict(mode=mode, repeat=repeat, exit_code=q.returncode,
-                   seconds=round(time.monotonic()-start, 3), stdout_hex=q.stdout.hex(),
-                   stderr_hex=q.stderr.hex(), records=readable)
+        row = dict(mode=mode, repeat=repeat, exit_code=code, timed_out=timed_out,
+                   seconds=round(time.monotonic()-start, 3), stdout_hex=raw.hex(),
+                   stderr_hex=errors.hex(), records=readable, inherited_error_mode=0x8003)
         rows.append(row)
         print(json.dumps(row), flush=True)
+        (out / 'partial-observations.json').write_text(json.dumps(rows, indent=2) + '\n')
 (out / 'observations.json').write_text(json.dumps(rows, indent=2) + '\n')
 assert all(row['exit_code'] == 43 and not row['stderr_hex'] for row in rows)

@@ -11,8 +11,12 @@ __declspec(dllimport) void *GetStdHandle(U32);
 __declspec(dllimport) int WriteFile(void *, const void *, U32, U32 *, void *);
 __declspec(dllimport) const char *GetCommandLineA(void);
 __declspec(dllimport) void ExitProcess(U32);
+__declspec(dllimport) int TerminateProcess(void *, U32);
 static U32 Mode, Primary, Peer, Added = 0xffffffffU;
+static U32 Records;
 static void record(U32 Tag, U64 A, U64 B, U64 C, U64 D, U64 E, U64 F) {
+  if (++Records > 128)
+    TerminateProcess((void *)(U64)-1, 94);
   U64 Words[] = {Mode, Tag, A, B, C, D, E, F};
   U32 Written;
   WriteFile(GetStdHandle((U32)-11), Words, sizeof(Words), &Written, 0);
