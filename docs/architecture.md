@@ -254,6 +254,12 @@ source call. CFG construction splits the ordinary continuation at this state
 transition. Each traversed finally gets a bounded callback-stack analysis with
 the parent's established EBP, and every returning path must preserve the
 runtime fields and invocation stack before its frame effects can be joined.
+SEH filter and finally entries share the private invocation-stack coordinate
+used by C++ catches. A finally may save registers and allocate locals below
+its runtime return PC; loads require initialized bytes in the current
+allocation, and releasing stack storage invalidates its saved identities.
+Only established parent addresses can modify parent locals, so a callback
+stack pointer cannot escape there or alias a parent slot at the same offset.
 The runtime advances the try level before invoking each finally, as described
 by [Wine's independent CRT implementation](https://github.com/wine-mirror/wine/blob/master/dlls/msvcrt/except_i386.c).
 Unknown callback calls, runtime-field writes and nonlocal callback exits still

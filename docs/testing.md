@@ -2540,6 +2540,15 @@ clobbers, nonlocal stack changes, return pops, conditional exits, trailing
 return effects, atomic writes and all-path joins with agreeing or conflicting
 finally effects. It retains the
 independent memory/native-output refusal.
+`LocalFinallyOwnsOnlyItsAllocatedCallbackStack` checks a saved parent EBP,
+a private callback frame, restoration and an observable parent-local write.
+Negative cases cover uninitialized and partial spills, reads below the
+allocation or at the runtime return PC, freed/reallocated storage, an
+unbalanced return, partial EBP restoration, runtime-slot writes, escaping
+callback pointers and opaque calls. `LocalUnwindSplitsCurrentMachineStateAtCall`
+also decodes the corresponding PE32 push/frame/pop sequence and mutated
+return-stack, return-PC, frame-register and pointer-escape cases. These checks
+do not admit nonlocal finally exits or infer a native memory-borrow contract.
 The native call target checks cumulative failed-proof budgets and fresh-image
 callee indices.
 Catch-return tests require the pre-dispatch SavedESP snapshot to survive catch

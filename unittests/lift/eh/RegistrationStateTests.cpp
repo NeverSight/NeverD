@@ -1152,6 +1152,116 @@ TEST(RegistrationState, LocalUnwindRetiresLevelsAfterCheckedFinallyEffects) {
   }
 }
 
+TEST(RegistrationState, LocalFinallyOwnsOnlyItsAllocatedCallbackStack) {
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = makeBranchingFrame();
+    auto &Chain = *F.ExceptionMetadata->Registration;
+    Chain.Scopes = {{-1, 0, 0x1800, true}};
+    F.Blocks.resize(7);
+    auto &Setup = F.Blocks[4];
+    Setup.Id = 4;
+    Setup.StartAddr = 0x1080;
+    Setup.EndAddr = 0x1088;
+    emitOp(Setup, 0x1080, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(32, 4)});
+    emitOp(Setup, 0x1083, NdOp::INT_ADD, NdVar::reg(x86reg::RCX, 4),
+           {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-24), 4)});
+    emitOp(Setup, 0x1086, NdOp::STORE, {},
+           {NdVar::reg(x86reg::RCX, 4), NdVar::reg(x86reg::RSP, 4)});
+    Setup.InstructionBoundaries = {
+        {0x1080, 3, 0, 1}, {0x1083, 3, 1, 1}, {0x1086, 2, 2, 1}};
+    F.Blocks[0].Succs = {4};
+    Setup.Succs = {1};
+    F.Blocks[1].Succs = {5};
+    auto &Call = F.Blocks[5];
+    Call.Id = 5;
+    Call.StartAddr = 0x1100;
+    Call.EndAddr = 0x110b;
+    Call.Succs = {2};
+    emitOp(Call, 0x1100, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+    emitOp(Call, 0x1100, NdOp::STORE, {},
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(UINT32_MAX, 4)});
+    emitOp(Call, 0x1102, NdOp::INT_ADD, NdVar::reg(x86reg::RDX, 4),
+           {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-16), 4)});
+    emitOp(Call, 0x1105, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+    emitOp(Call, 0x1105, NdOp::STORE, {},
+           {NdVar::reg(x86reg::RSP, 4), NdVar::reg(x86reg::RDX, 4)});
+    emitOp(Call, 0x1106, NdOp::CALL, {}, {NdVar::cst(0x2100, 4)});
+    Call.InstructionBoundaries = {{0x1100, 2, 0, 2},
+                                  {0x1102, 3, 2, 1},
+                                  {0x1105, 1, 3, 2},
+                                  {0x1106, 5, 5, 1}};
+    Call.InstructionBoundaries.back().Control = LowInstructionControl::Call;
+
+    auto &Finally = F.Blocks[6];
+    Finally.Id = 6;
+    Finally.StartAddr = 0x1800;
+    // Each operation gets an exact source occurrence, including the return.
+    va_t Address = Finally.StartAddr;
+    auto Emit = [&](NdOp Opcode, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      const size_t First = Finally.Ops.size();
+      emitOp(Finally, Address, Opcode, Output, Inputs);
+      Finally.InstructionBoundaries.push_back({Address++, 1, First, 1});
+    };
+    const auto SP = NdVar::reg(x86reg::RSP, 4);
+    const auto BP = NdVar::reg(x86reg::RBP, 4);
+    const auto Saved = NdVar::reg(x86reg::RSI, 4);
+    // Save the parent's EBP in this invocation, use a private frame pointer,
+    // then recover EBP before touching a parent local. Neither stack's -4
+    // slot may be mistaken for the other's storage.
+    Emit(NdOp::INT_SUB, SP, {SP, NdVar::cst(4, 4)});
+    if (Mutation != 1)
+      Emit(NdOp::STORE, {},
+           {SP, Mutation == 4 ? NdVar::reg(x86reg::RBP, 2) : BP});
+    Emit(NdOp::COPY, Saved, {SP});
+    Emit(NdOp::COPY, BP, {SP});
+    Emit(NdOp::INT_SUB, SP, {SP, NdVar::cst(8, 4)});
+    if (Mutation == 2 || Mutation == 3)
+      Emit(NdOp::INT_ADD, Saved,
+           {Saved, NdVar::cst(Mutation == 2 ? uint32_t(-12) : 4, 4)});
+    if (Mutation == 5) {
+      // Release and reallocate the same bytes: their old initialization and
+      // saved-register identity no longer belong to the new allocation.
+      Emit(NdOp::INT_ADD, SP, {SP, NdVar::cst(12, 4)});
+      Emit(NdOp::INT_SUB, SP, {SP, NdVar::cst(12, 4)});
+    }
+    Emit(NdOp::LOAD, Mutation == 7 ? NdVar::reg(x86reg::RBP, 2) : BP, {Saved});
+    Emit(NdOp::INT_ADD, Saved,
+         {BP, NdVar::cst(uint32_t(Mutation == 8 ? -24 : -28), 4)});
+    Emit(NdOp::STORE, {}, {Saved, Mutation == 9 ? SP : BP});
+    if (Mutation == 10)
+      Emit(NdOp::CALL, {}, {NdVar::cst(0x2200, 4)});
+    Emit(NdOp::INT_ADD, SP, {SP, NdVar::cst(Mutation == 6 ? 8 : 12, 4)});
+    Emit(NdOp::RETURN, {}, {});
+    Finally.InstructionBoundaries.back().Control =
+        LowInstructionControl::Return;
+    Finally.EndAddr = Address;
+    emitOp(F.Blocks[2], 0x1020, NdOp::INT_ADD, NdVar::tmp(0, 4),
+           {BP, NdVar::cst(uint32_t(-28), 4)});
+    emitOp(F.Blocks[2], 0x1020, NdOp::LOAD, NdVar::reg(x86reg::RAX, 4),
+           {NdVar::tmp(0, 4)});
+    const int ReadSeq = F.Blocks[2].Ops.back().Seq;
+    const std::vector<RegistrationLocalUnwindContract> Calls{{0x2100, false}};
+    const auto A =
+        analyzeRegistrationStates(F, 0, 0, nullptr, nullptr, nullptr, &Calls);
+    EXPECT_EQ(A.Complete, Mutation == 0);
+    EXPECT_FALSE(A.CallFrameEffectsComplete);
+    if (Mutation == 0) {
+      EXPECT_TRUE(A.CallbackStatesComplete);
+      ASSERT_EQ(A.Blocks[2].Levels, std::vector<int32_t>{-1});
+      const auto Written = llvm::find_if(A.FrameValues, [&](const auto &Value) {
+        return Value.Address == 0x1020 && Value.OpSeq == ReadSeq;
+      });
+      ASSERT_NE(Written, A.FrameValues.end());
+      EXPECT_EQ(Written->EstablishedFrameOffset, 0);
+    }
+  }
+}
+
 TEST(RegistrationState, FreedOrOpaqueFrameBytesCannotAuthorizeObjectReads) {
   for (bool Opaque : {false, true}) {
     auto F = makeCxxObjectCall();

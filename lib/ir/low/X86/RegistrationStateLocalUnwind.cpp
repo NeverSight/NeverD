@@ -87,10 +87,19 @@ bool RegistrationStateSolver::runLocalFinally(va_t Target, FrameState &Parent) {
             (Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE))
           return false;
         const auto Address = Transfer.read(*Memory.Address);
-        if (!Address.Offset || *Address.Offset < *ParentSP ||
-            int64_t(*Address.Offset) + Memory.AccessSize > 0)
+        if (Address.CallbackAddress) {
+          if (!State.callbackMemoryIsPrivate(*Address.CallbackAddress,
+                                             Memory.AccessSize,
+                                             Op.Opcode == NdOp::LOAD))
+            return false;
+          if (Op.Opcode == NdOp::STORE)
+            State.storeCallback(Address.CallbackAddress->Offset,
+                                Memory.AccessSize,
+                                Transfer.read(*Memory.StoredValue));
+        } else if (!Address.Offset || *Address.Offset < *ParentSP ||
+                   int64_t(*Address.Offset) + Memory.AccessSize > 0) {
           return false;
-        if (Op.Opcode == NdOp::STORE) {
+        } else if (Op.Opcode == NdOp::STORE) {
           // The runtime owns SavedESP, exception pointers and the complete
           // registration record. A finally that can change them needs a
           // separate nonlocal-transition proof, not an ordinary return fact.
@@ -105,10 +114,15 @@ bool RegistrationStateSolver::runLocalFinally(va_t Target, FrameState &Parent) {
       }
       Transfer.write(Op, Transfer.evaluate(Op, true));
       if (Op.Output.isReg() && Op.Output.Offset < x86reg::RSP + 4 &&
-          x86reg::RSP < Op.Output.Offset + Op.Output.Size &&
-          !State.Registers[x86reg::RSP / x86reg::GeneralRegStride]
-               .CallbackAddress)
-        return false;
+          x86reg::RSP < Op.Output.Offset + Op.Output.Size) {
+        const auto SP = State.Registers[x86reg::RSP / x86reg::GeneralRegStride]
+                            .CallbackAddress;
+        if (!SP || SP->Entry != Target || SP->Offset > 0 ||
+            !charge(State.CallbackCells.size() +
+                    State.InitializedCallbackBytes.size()))
+          return false;
+        State.trimCallbackCells();
+      }
     }
     if (HasReturn) {
       if (!Block.Succs.empty())

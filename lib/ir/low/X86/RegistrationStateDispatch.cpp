@@ -111,7 +111,10 @@ void RegistrationStateSolver::dispatch(
       FrameValue::frame(KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0);
   Root.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].MayBeFrame =
       true;
-  if (Chain.hasCxxCallbackStack() && CxxCatch) {
+  // SEH filters/finally handlers are called by the runtime with an invocation
+  // stack distinct from the established parent EBP. Their push/pop spills
+  // have the same allocation and initialization rules as C++ catch stacks.
+  if ((Chain.hasCxxCallbackStack() && CxxCatch) || (!KnownCxx && Callback)) {
     if (!charge(Root.Frame.cellCount() + 8))
       return;
     Root.Frame.enterCallback(Address);

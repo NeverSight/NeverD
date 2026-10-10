@@ -474,7 +474,7 @@ TEST(RegistrationCallABI, SEHReturningStackUsesCompleteParentFrameEvidence) {
 }
 
 TEST(RegistrationCallABI, LocalUnwindSplitsCurrentMachineStateAtCall) {
-  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
     SCOPED_TRACE(Mutation);
     ThrowImage F;
     F.Image.Imports[0].Name = "_local_unwind2";
@@ -497,6 +497,28 @@ TEST(RegistrationCallABI, LocalUnwindSplitsCurrentMachineStateAtCall) {
     std::copy(Entry.begin(), Entry.end(), Text.Data.begin());
     const std::vector<uint8_t> Finally{0xc7, 0x45, 0xe4, 7, 0, 0, 0, 0xc3};
     std::copy(Finally.begin(), Finally.end(), Text.Data.begin() + 0x50);
+    if (Mutation >= 3) {
+      std::vector<uint8_t> WithPrivateFrame{
+          0x55, 0x8b, 0xec,                  // push ebp; mov ebp,esp
+          0x83, 0xec, 8,                     // sub esp,8
+          0x8b, 0x4d, 0,                     // mov ecx,[ebp]: parent's EBP
+          0xc7, 0x41, 0xe4, 7,    0,   0, 0, // mov dword [ecx-28],7
+          0x83, 0xc4, 8,    0x5d, 0xc3};     // add esp,8; pop ebp; ret
+      if (Mutation == 4)
+        WithPrivateFrame[18] = 4; // wrong return stack
+      if (Mutation == 5)
+        WithPrivateFrame[8] = 4; // read the runtime return PC
+      if (Mutation == 6)
+        WithPrivateFrame[19] = 0x58; // pop eax: EBP not restored
+      if (Mutation == 7) {
+        WithPrivateFrame.erase(WithPrivateFrame.begin() + 9,
+                               WithPrivateFrame.begin() + 16);
+        WithPrivateFrame.insert(WithPrivateFrame.begin() + 9,
+                                {0x89, 0x61, 0xe4}); // escape callback ESP
+      }
+      std::copy(WithPrivateFrame.begin(), WithPrivateFrame.end(),
+                Text.Data.begin() + 0x50);
+    }
     const std::vector<uint8_t> Epilogue{
         0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0, 0, 0, 0, 0x8b, 0xe5, 0x5d, 0xc3};
     std::copy(Epilogue.begin(), Epilogue.end(), Text.Data.begin() + 0x70);
@@ -540,14 +562,17 @@ TEST(RegistrationCallABI, LocalUnwindSplitsCurrentMachineStateAtCall) {
     ASSERT_TRUE(Low.hasCompleteLiftCoverage());
     ASSERT_TRUE(Low.RegistrationStates);
     const auto &States = *Low.RegistrationStates;
-    EXPECT_EQ(States.Complete, Mutation == 0);
-    EXPECT_EQ(States.RegistrationLifetimeComplete, Mutation == 0);
+    const bool Valid = Mutation == 0 || Mutation == 3;
+    EXPECT_EQ(States.Complete, Valid);
+    EXPECT_EQ(States.RegistrationLifetimeComplete, Valid);
+    if (Valid)
+      EXPECT_TRUE(States.CallbackStatesComplete);
     EXPECT_FALSE(States.CallFrameEffectsComplete);
     bool SawContinuation = false;
     for (const auto &State : States.Blocks)
       if (State.Range.Begin == Text.VA + 0x3c) {
         SawContinuation = true;
-        if (Mutation == 0)
+        if (Valid)
           EXPECT_EQ(State.Levels, std::vector<int32_t>{-1});
       }
     EXPECT_TRUE(SawContinuation);
