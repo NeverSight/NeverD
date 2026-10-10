@@ -73,7 +73,8 @@ bool RegistrationStateSolver::initialize() {
   }
   if (!Chain.RegistrationOffset || !Chain.TryLevelOffset ||
       !Chain.SeededTryLevel || !Chain.ChainInstallVA ||
-      Chain.TryLevelStores.empty()) {
+      Chain.TryLevelStores.empty() ||
+      (KnownCxx && !Chain.cxxRuntimeFrameOffset())) {
     Result.Diagnostics.push_back(
         "registration frame and state slot are not proven");
     return false;

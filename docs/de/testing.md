@@ -103,6 +103,8 @@ Regressionen der vorderen Phase prüfen zwei und drei aufeinanderfolgende Schlei
 
 `LLVMGuestAlignment.*` vergleicht Laden und Speichern mit unabhängigen Byte-Speicherreferenzen: ausgerichtete und falsch ausgerichtete Domänen, freie hohe Adressbits, geparste Standardausrichtung, Teilbreiten, ungenutzte oder überschriebene Zugriffe, unerreichbare Zweige und exakte sowie um eins zu kleine Konstruktionsbudgets. `InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises` prüft native Stack-Schreibzugriffe, passende Eingangskongruenzen und geänderte Quelleffekte durch zwei neu geprüfte Relationen.
 
+`LLVMByteSwap*`, `LLVMScalarByteSwap.*` und `InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises` prüfen unabhängige Bytekopier- und Schiebe/Masken-Referenzen, obere Bytes, blockübergreifende Werte, Poison, Aufrufverträge sowie unabhängig gezählte exakte und um eins zu kleine Budgets. Clang-O1/O2-Fälle müssen echte Intrinsics enthalten; kleine native Austausch-/BSWAP-Fälle prüfen beide Prämissen neu und lehnen falsche Werte oder fehlendes Nullsetzen des oberen Wortes ab.
+
 `NeverDLLVMScalarEquivalenceTests` prüft vollständige Schleifendomänen, null Iterationen, gleichzeitige PHI-Tausche, switch, hohe Eingabebits, Gegenbeispiele in der letzten Partition, zusätzliche poison-erzeugende Updates, Rückgabebereiche, nicht unterstützte Verträge sowie exakte, um eins zu kleine und Nullbudgets. Unabhängige Referenzen für doppelte Breite und Überlauf prüfen Funnel-Endpunkte und bewachte Produkte aller unterstützten Wortbreiten; unabhängig geschriebene verschachtelte C-Schleifen bei O1/O2 prüfen das Compiler-Eingabeprofil. Die Zustandsmodellsuite prüft ebenfalls die Endpunkte. `SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings` prüft kumulative Abrechnung und unveränderte lokale Limits.
 
 `LLVMScalarDecision.*` prüft tiefe Exact-Shift-/Erweiterungsbedingungen, konstante Verzweigungen, beide Schleifenrückkanten, erhaltene hohe Datenbits, späte undefinierte Operationen, Nichtterminierung, Änderungen nach einer Prüfung sowie exakte, um eins zu kleine und lokale Budgets. `LLVMScalarDecisionCompiled.DeepOneAndTwoBackedgeOracles` vergleicht unabhängig verfasste Rekurrenzen mit einer oder zwei Rückkanten bei O0/O2 in 32.768 Aufrufen mit einem vorzeichenlosen C-Orakel. Das sind Prüfungen des Skalarmodells, keine Abdeckung der nativen ABI oder der Wiederherstellung ganzer Binärdateien.
@@ -1740,6 +1742,33 @@ Die MainActor-Fixture prüft den vollständigen Ablauf für feste Metadaten und 
 `ZeroTimeoutPollRetainsReadinessAndOrderedCopies` prüft O0/O2-Rohaufrufe für acht GKI-Versionen: lebende, negative und geschlossene Deskriptoren, Duplikatzählung, Argumentverengung, Zeitlimit-/Maskenreihenfolge, schreibgeschützte Null-timespecs, vollständigen Metadatenimport vor Bereitschaft sowie frühere `revents` bei späteren Schreibfehlern. `ZeroTimeoutPollKeepsUnobservedBoundaries` erhält unbekannte Kernel, Grenzen, Masken, Warte- und Bereitschaftszustände. Androids `ReleasedGKIZeroTimeoutPollSharesRawAndBionicResults` prüft gemeinsame Tabelle und errno-Besitz in sechs Verpackungsprofilen.
 
 ## Begrenzte Verzeichnisattribute in Gruppen
+
+bulk-attributes prüft ganze Gruppen, Namen/Typen als Menge, Schutz unbenutzter Bytes, low32 FD, bitmap-Wörter, native Fehler, dup, unabhängige open, EOF und Null-rewind. Literal-/Unbekannt-Modi sind nur virtuell. Modelle decken vollständiges stat, Invalidierung, NFD/255-Byte-Namen, Ein-/Ausgabealias, Transport-/Budgetfehler, Verschieben/SWAP/Entfernen/Wiederverwenden und explizite Rechte ab. Pflichtinventar:65 Fälle pro Plattform,195 ARM64 und130 Intel. Lokal wurde nur passendes ARM64 HVF geprüft. native5s, guest/Python5,000,000us/quantum1024 und public10s bleiben gleich.
+
+## Begrenzte Darwin-Hardlinks
+
+link folgt dem letzten symbolischen Ziel; linkat mit flags=0 wählt das Linkobjekt, AT_SYMLINK_FOLLOW das Ziel. Nur low32 0/0x40 sind zulässig, andere niedrige Bits liefern EINVAL vor dem Import. Quellensuche und Verzeichnis-EPERM gehen dem Zielimport voraus; vorhandene Ziele liefern EEXIST. Das Ziel benötigt Änderungsrecht und dieselbe ausdrücklich festgelegte Mount-Domäne. Anfängliche Identitätsaliasse sowie bekannte Geräte-, Modus- und Flag-Konflikte bleiben unzulässig.
+
+Ein Alias kostet nur Eintrag und Pfad/NUL, keinen neuen inode. Bytes, Attributrechte, Metadatengültigkeit und Mapping-Leases gehören dem gemeinsamen Objekt. Explizite Richtlinien aktualisieren Linkzahl und ctime; ohne sie bleibt vollständiges stat unbekannt. Attributänderungen invalidieren stat, Inhaltsänderungen Attributbeobachtungen. Gehaltene Beschreibungen und letzte Mappings behalten Namenskosten; Ersetzung verrechnet nur sofort freigebbare Kosten. Teilbäume wählen genaue Identitäten und Eltern; externe Aliasnamen bleiben stehen, relative symbolische Ziele verwenden den gewählten Eintragselternteil.
+
+F_GETPATH/ATTR_CMN_NAME bleiben nach mehreren Namen auch bei einem oder keinem Namen unzulässig; kein allgemeines APFS-Cachemodell wird behauptet. bulk NAME stammt vom tatsächlichen Eintrag; gewöhnliches rename/SWAP desselben Objekts behält beide Namen. EXCL-Großschreibung, O_SYMLINK, Intel HVF, physisches iOS, ACL, kohärente Mappings/EOF-Signale, dyld, Mach IPC, Threads und vollständige Frameworks bleiben Lücken. Frühere Ausschlüsse werden nur innerhalb dieses Vertrags erweitert.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+65 mandatory workloads per platform / ARM64 195 / Intel 130
+```
 
 bulk-attributes prüft ganze Gruppen, Namen/Typen als Menge, Schutz unbenutzter Bytes, low32 FD, bitmap-Wörter, native Fehler, dup, unabhängige open, EOF und Null-rewind. Literal-/Unbekannt-Modi sind nur virtuell. Modelle decken vollständiges stat, Invalidierung, NFD/255-Byte-Namen, Ein-/Ausgabealias, Transport-/Budgetfehler, Verschieben/SWAP/Entfernen/Wiederverwenden und explizite Rechte ab. Pflichtinventar:63 Fälle pro Plattform,189 ARM64 und126 Intel. Lokal wurde nur passendes ARM64 HVF geprüft. native5s, guest/Python5,000,000us/quantum1024 und public10s bleiben gleich.
 

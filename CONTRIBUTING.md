@@ -138,6 +138,10 @@ Markdown should be concise and source-verifiable. Use relative links for files
 inside the repository, and update documentation in the same pull request when
 CLI behavior, public APIs, support claims, build flags, or test commands change.
 
+Keep machine-local performance reports, raw traces and timing summaries in
+ignored build or benchmark-results directories. Commit reusable measurement
+tools and regression tests, not local benchmark reports or copied result tables.
+
 ## Run tests
 
 Run all registered tests through the aggregate target:

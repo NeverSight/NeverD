@@ -121,11 +121,13 @@ std::string Session::capabilities() {
       {"executes_input", false},
       {"companion_file_discovery", false},
       {"resource_domain", "native_loader_and_pipeline"}});
+  llvm::json::Array BunProfiles;
+  for (const auto &P : bunProfiles())
+    BunProfiles.emplace_back(P);
   Analyses.emplace_back(llvm::json::Object{
       {"kind", "bun_standalone_extraction"},
       {"profile", std::string(BunProfile)},
-      {"profiles", llvm::json::Array{std::string(BunProfile),
-                                     std::string(BunPrelinkedProfile)}},
+      {"profiles", std::move(BunProfiles)},
       {"max_modules", MaxBunModules},
       {"max_builtins", MaxBunBuiltins},
       {"max_private_name_bytes", std::to_string(MaxBunNameBytes)},

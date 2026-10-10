@@ -6,6 +6,7 @@
 
 #include "RegistrationCxxCatchTestUtils.h"
 #include "RegistrationCxxContinuationTestUtils.h"
+#include "RegistrationCxxIncomingTestUtils.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
@@ -41,7 +42,7 @@ namespace {
 #ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
 enum class CatchForm { Value, Reference, UnnamedValue, UnnamedReference, All };
 
-void emitCallback(CatchForm Form) {
+void emitCallback(CatchForm Form, bool Fixed = false, unsigned Bytes = 64) {
   const bool Bound = Form == CatchForm::Value || Form == CatchForm::Reference;
   const bool Reference =
       Form == CatchForm::Reference || Form == CatchForm::UnnamedReference;
@@ -68,8 +69,8 @@ void emitCallback(CatchForm Form) {
        *Dispatch = Block("dispatch"), *Catch = Block("catch"),
        *Resume = Block("resume");
   B.SetInsertPoint(Entry);
-  auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 64));
-  Frame->setAlignment(llvm::Align(64));
+  auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), Bytes));
+  Frame->setAlignment(llvm::Align(Fixed ? 4 : 64));
   auto *Object = B.CreateInBoundsGEP(B.getInt8Ty(), Frame, B.getInt32(16));
   B.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
                    &Module, llvm::Intrinsic::localescape),
@@ -154,6 +155,31 @@ TEST(WindowsRegistrationRealignedNative, EmitsCatchAllCallback) {
   emitCallback(CatchForm::All);
 }
 
+TEST(WindowsRegistrationRealignedNative, EmitsValueLLVMFixedCallback) {
+  emitCallback(CatchForm::Value, true);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsValueLargeLLVMFixedCallback) {
+  emitCallback(CatchForm::Value, true, 512);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsReferenceLLVMFixedCallback) {
+  emitCallback(CatchForm::Reference, true);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsUnnamedValueLLVMFixedCallback) {
+  emitCallback(CatchForm::UnnamedValue, true);
+}
+
+TEST(WindowsRegistrationRealignedNative,
+     EmitsUnnamedReferenceLLVMFixedCallback) {
+  emitCallback(CatchForm::UnnamedReference, true);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsCatchAllLLVMFixedCallback) {
+  emitCallback(CatchForm::All, true);
+}
+
 void checkFrameEdits(const llvm::Function &Parent,
                      const ExceptionFunction &Source,
                      const BinaryImage &Image) {
@@ -170,6 +196,9 @@ void checkFrameEdits(const llvm::Function &Parent,
                          "changed alignment mask",
                          "opaque callback pointer in parent"};
   for (unsigned Mutation = 0; Mutation != std::size(Names); ++Mutation) {
+    if (!Source.Registration->RealignedFrame &&
+        (Mutation == 0 || Mutation == 10))
+      continue;
     SCOPED_TRACE(Names[Mutation]);
     auto Module = llvm::CloneModule(*Parent.getParent());
     auto *Function = Module->getFunction(Parent.getName());
@@ -193,7 +222,9 @@ void checkFrameEdits(const llvm::Function &Parent,
         if (!Mask && I.getOpcode() == llvm::Instruction::And)
           Mask = llvm::cast<llvm::BinaryOperator>(&I);
       }
-    ASSERT_TRUE(Frame && Stack && Seed && Pad && Return && Mask);
+    ASSERT_TRUE(Frame && Stack && Seed && Pad && Return);
+    if (Source.Registration->RealignedFrame)
+      ASSERT_TRUE(Mask);
     llvm::IRBuilder<> B(Pad->getNextNode()->getNextNode());
     const auto Size = Stack->getAllocationSize(Module->getDataLayout());
     ASSERT_TRUE(Size);
@@ -320,7 +351,8 @@ TEST(WindowsRegistrationRealignedNative, InputPE32ReconstructsTheSourceFrame) {
   auto Proof = validateCOFFRegistrationCxxIR(*Parent, EH, *Image);
   ASSERT_FALSE(bool(Proof)) << llvm::toString(std::move(Proof));
   registration_test::checkUnboundCxxCatchEdits(*Parent, EH, *Image);
-  if (EH.Registration->RealignedFrame)
+  registration_test::checkCxxIncomingEdits(*Parent, EH, *Image);
+  if (EH.Registration->hasCxxCallbackStack())
     checkFrameEdits(*Parent, EH, *Image);
   registration_test::checkCxxContinuationEdits(*Parent, EH, *Image);
   if (const auto *Output =
@@ -361,10 +393,18 @@ TEST(WindowsRegistrationRealignedNative, InputPE32ReconstructsTheSourceFrame) {
                            true);
       };
       llvm::json::Object Record{
+          {"incoming_reads",
+           llvm::count_if(States.IncomingFrameAccesses,
+                          [](const auto &A) { return !A.Write; })},
+          {"incoming_writes",
+           llvm::count_if(States.IncomingFrameAccesses,
+                          [](const auto &A) { return A.Write; })},
           {"schema", 1},
           {"evidence", "checked-realigned-source-reconstruction"},
-          {"source_frame",
-           EH.Registration->RealignedFrame ? "realigned" : "direct"},
+          {"source_frame", EH.Registration->RealignedFrame ? "realigned"
+                           : EH.Registration->hasCxxCallbackStack()
+                               ? "fixed-displaced"
+                               : "direct"},
           {"source_image_sha256", Digest(Path)},
           {"image_sha256", Digest(Output)},
           {"base", Image->Base},

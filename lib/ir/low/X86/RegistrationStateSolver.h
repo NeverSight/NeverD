@@ -71,8 +71,8 @@ private:
   bool validateRealignedLayout();
   bool realignedMemoryIsDisjoint(const FrameValue &Address,
                                  uint16_t Width) const;
-  bool realignedInstallationReady(const FrameState &Frame) const;
-  bool realignedCatchCanReturn(const Domain &State) const;
+  bool registrationInstallationReady(const FrameState &Frame) const;
+  bool callbackCanReturn(const Domain &State) const;
   std::optional<int32_t> parentStackOffset(const Domain &State) const;
   bool initializeContracts();
   void initializeCookies();

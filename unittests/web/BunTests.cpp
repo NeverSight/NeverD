@@ -91,6 +91,180 @@ void checkGolden(const BunExtraction &E, const llvm::json::Value &Expected) {
 }
 
 #ifndef _WIN32
+TEST_F(WebBun, AllQualifiedContainersRetainGraphAndMemberEvidence) {
+  for (const bool ARM64 : {false, true}) {
+    for (const bool Prelinked : {false, true}) {
+      const BunFixture F(true, "map", "asset", Prelinked);
+      for (const auto *Format : {"elf", "macho", "pe"}) {
+        SCOPED_TRACE(std::string(Format) + (ARM64 ? " arm64" : " x64"));
+        const std::string Platform = std::string_view(Format) == "elf" ? "linux"
+                                     : std::string_view(Format) == "macho"
+                                         ? "macos"
+                                         : "windows";
+        const auto Graph =
+            Platform == "windows" ? windowsGraph(F.Graph) : F.Graph;
+        const auto Bytes = Platform == "linux" ? bunELF(Graph, ARM64 ? 183 : 62)
+                           : Platform == "macos" ? bunMachO(Graph, ARM64)
+                                                 : bunPE(Graph, ARM64);
+        const auto A = input(Bytes);
+        const auto E = extractBun(A);
+        EXPECT_EQ(E.ID, extractBun(A).ID);
+        EXPECT_EQ(E.ContainerFormat, Format);
+        EXPECT_EQ(E.Platform, Platform);
+        EXPECT_EQ(E.Architecture, ARM64 ? "arm64" : "x64");
+        EXPECT_EQ(
+            E.Profile,
+            std::string(Prelinked ? "bun-71d0d439-prelinked-" : "bun-1.4.2-") +
+                Platform + (ARM64 ? "-arm64-" : "-x64-") + Format + "-v1");
+        ASSERT_EQ(E.Modules.size(), 3);
+        EXPECT_EQ(bunSourceBytes(E, E.Modules[1], 1024),
+                  "export const x = '中文🌱';");
+        EXPECT_EQ(Bytes.substr(E.GraphOffset, E.GraphSize), Graph);
+        for (const auto &R : E.Regions) {
+          EXPECT_EQ(R.BlobHash, sha256(std::string_view(Bytes).substr(
+                                    R.Offset, R.Content.size())));
+          EXPECT_EQ(R.Content.read(0, R.Content.size()),
+                    Bytes.substr(R.Offset, R.Content.size()));
+        }
+      }
+    }
+  }
+}
+
+TEST_F(WebBun, MachORejectsMalformedCommandsMappingsAndPadding) {
+  const BunFixture F;
+  const auto Original = bunMachO(F.Graph, true);
+  auto Mutate = [&](uint64_t At, uint64_t Value, unsigned Width,
+                    const char *Code) {
+    auto Bytes = Original;
+    put(Bytes, At, Value, Width);
+    refuse(Bytes, Code);
+  };
+  Mutate(0, 0xbebafeca, 4, "bun_unsupported_container");
+  Mutate(4, 12, 4, "bun_unsupported_container");
+  Mutate(8, 2, 4, "bun_unsupported_container");
+  Mutate(16, 4097, 4, "bun_unsupported_macho_commands");
+  Mutate(36, 0, 4, "bun_invalid_macho_command");
+  Mutate(36, 156, 4, "bun_invalid_macho_command");
+  Mutate(36, 160, 4, "bun_invalid_macho_sections");
+  Mutate(96, 4097, 4, "bun_invalid_macho_sections");
+  Mutate(92, 7, 4, "bun_invalid_macho_segment");
+  Mutate(72, UINT64_MAX, 8, "bun_range_out_of_bounds");
+  Mutate(136, 0, 8, "bun_invalid_macho_section");
+  Mutate(152, 16385, 4, "bun_ambiguous_load_mapping");
+  Mutate(168, 0, 4, "bun_invalid_macho_section");
+  Mutate(192, 2, 4, "bun_unsupported_macho_platform");
+  Mutate(204, UINT32_MAX, 4, "bun_invalid_macho_command");
+  Mutate(144, F.Graph.size() + 9, 8, "bun_invalid_graph_header");
+  Mutate(16384, F.Graph.size() + 1, 8, "bun_invalid_graph_header");
+  Mutate(Original.size() - 1, 1, 1, "bun_invalid_section_padding");
+  auto Alias = Original;
+  Alias.replace(184, 152, Original.substr(32, 152));
+  put(Alias, 16, 2, 4);
+  put(Alias, 20, 304, 4);
+  refuse(Alias, "bun_duplicate_section");
+  Alias[192] = 'X';
+  Alias[256] = 'X';
+  refuse(Alias, "bun_ambiguous_load_mapping");
+  for (const auto N : {64U, 151U, 16388U})
+    EXPECT_THROW(extractBun(input(Original.substr(0, N))), Error);
+}
+
+TEST_F(WebBun, MachOTypedCommandsCannotAliasGraphOrMisidentifyPlatform) {
+  const BunFixture F;
+  const auto Original = bunMachO(F.Graph, true);
+  auto Append = [&](uint64_t Command, uint64_t Size) {
+    auto B = Original;
+    put(B, 16, 3, 4);
+    put(B, 20, 176 + Size, 4);
+    put(B, 208, Command, 4);
+    put(B, 212, Size, 4);
+    return B;
+  };
+  for (auto Command :
+       {0x2U, 0xbU, 0x22U, 0x1dU, 0x26U, 0x29U, 0x80000033U, 0x80000034U,
+        0x80000028U, 0x31U, 0x32U, 0x24U, 0x1bU, 0xeU, 0xcU})
+    refuse(Append(Command, 8), "bun_invalid_macho_command");
+  refuse(Append(0xdeadbeef, 8), "bun_unsupported_macho_command");
+  for (auto Command : {0x1dU, 0x26U, 0x29U, 0x80000033U, 0x80000034U}) {
+    auto B = Append(Command, 16);
+    put(B, 216, 16384, 4);
+    put(B, 220, 8, 4);
+    refuse(B, "bun_ambiguous_load_mapping");
+    put(B, 216, B.size(), 4);
+    refuse(B, "bun_range_out_of_bounds");
+  }
+  auto Symbols = Append(0x2, 24);
+  put(Symbols, 216, 16384, 4);
+  put(Symbols, 220, 1, 4);
+  refuse(Symbols, "bun_ambiguous_load_mapping");
+  auto Entry = Append(0x80000028, 24);
+  put(Entry, 216, 16384, 8);
+  refuse(Entry, "bun_ambiguous_load_mapping");
+  auto Duplicate = Append(0x32, 24);
+  put(Duplicate, 216, 1, 4);
+  refuse(Duplicate, "bun_unsupported_macho_platform");
+  refuse(Append(0x24, 16), "bun_unsupported_macho_platform");
+  auto Missing = Original;
+  put(Missing, 16, 1, 4);
+  put(Missing, 20, 152, 4);
+  refuse(Missing, "bun_unsupported_macho_platform");
+  auto Legacy = Original;
+  put(Legacy, 20, 168, 4);
+  put(Legacy, 184, 0x24, 4);
+  put(Legacy, 188, 16, 4);
+  EXPECT_EQ(extractBun(input(Legacy)).Platform, "macos");
+  for (auto Command : {0x25U, 0x2fU, 0x30U}) {
+    put(Legacy, 184, Command, 4);
+    refuse(Legacy, "bun_unsupported_macho_platform");
+  }
+  auto Dylib = Append(0xc, 32);
+  put(Dylib, 216, 24, 4);
+  Dylib.replace(232, 8, "bad-path");
+  refuse(Dylib, "bun_invalid_macho_command");
+  Dylib[239] = '\0';
+  EXPECT_EQ(extractBun(input(Dylib)).Platform, "macos");
+}
+
+TEST_F(WebBun, PERejectsMalformedHeadersAliasesDirectoriesAndPadding) {
+  const BunFixture F;
+  const auto Original = bunPE(windowsGraph(F.Graph), false);
+  auto Mutate = [&](uint64_t At, uint64_t Value, unsigned Width,
+                    const char *Code) {
+    auto Bytes = Original;
+    put(Bytes, At, Value, Width);
+    refuse(Bytes, Code);
+  };
+  Mutate(60, UINT32_MAX, 4, "bun_range_out_of_bounds");
+  Mutate(132, 0x14c, 2, "bun_unsupported_container");
+  Mutate(134, 97, 2, "bun_unsupported_pe_sections");
+  Mutate(152, 0x10b, 2, "bun_unsupported_container");
+  Mutate(188, 3, 4, "bun_invalid_pe_headers");
+  Mutate(212, 256, 4, "bun_invalid_pe_headers");
+  Mutate(260, 17, 4, "bun_invalid_pe_headers");
+  Mutate(404, 0, 4, "bun_invalid_pe_section");
+  Mutate(404, 0xfffff000, 4, "bun_range_out_of_bounds");
+  Mutate(412, 0, 4, "bun_invalid_pe_section");
+  Mutate(428, 0xe0000040, 4, "bun_invalid_pe_section");
+  Mutate(512, F.Graph.size() + 1, 8, "bun_invalid_graph_header");
+  Mutate(Original.size() - 1, 1, 1, "bun_invalid_section_padding");
+  auto Alias = Original;
+  put(Alias, 134, 2, 2);
+  Alias.replace(432, 40, Original.substr(392, 40));
+  refuse(Alias, "bun_duplicate_section");
+  Alias[432] = 'X';
+  refuse(Alias, "bun_ambiguous_load_mapping");
+  for (const auto I : {0U, 4U}) {
+    Alias = Original;
+    put(Alias, 264 + I * 8, I == 4 ? 512 : 4096, 4);
+    put(Alias, 268 + I * 8, 8, 4);
+    refuse(Alias, "bun_ambiguous_load_mapping");
+  }
+  refuse(bunPE(F.Graph, false), "bun_invalid_module_name");
+  for (const auto N : {64U, 239U, 516U})
+    EXPECT_THROW(extractBun(input(Original.substr(0, N))), Error);
+}
+
 TEST_F(WebBun, SourceDecoderStreamsLargeStorageAndCrossChunkSurrogates) {
   BunExtraction E;
   BunModule M;
@@ -197,6 +371,102 @@ TEST_F(WebBun, FullCompilerContainersMatchRecordedGoldenHashesWhenSupplied) {
   }
 }
 
+struct CrossTarget {
+  const char *Name, *Format, *Platform, *Architecture;
+};
+constexpr CrossTarget CrossTargets[] = {
+    {"linux-arm64", "elf", "linux", "arm64"},
+    {"macos-x64", "macho", "macos", "x64"},
+    {"macos-arm64", "macho", "macos", "arm64"},
+    {"windows-x64", "pe", "windows", "x64"},
+    {"windows-arm64", "pe", "windows", "arm64"}};
+
+TEST_F(WebBun, CrossPlatformCompilerGraphsMatchIndependentGoldenMemberRanges) {
+  for (const auto &T : CrossTargets)
+    for (const char *Variant : {"plain", "utf16", "asset-map", "cache-map"}) {
+      const auto Name = std::string("cross/") + T.Name + "-" + Variant;
+      SCOPED_TRACE(Name);
+      const auto Expected = manifest(Name);
+      const auto Graph = fixture(Name + ".graph.bin");
+      ASSERT_EQ(sha256(Graph), field(Expected, "graph_sha256"));
+      const bool ARM64 = std::string_view(T.Architecture) == "arm64";
+      const auto Bytes =
+          std::string_view(T.Format) == "elf"     ? bunELF(Graph, 183)
+          : std::string_view(T.Format) == "macho" ? bunMachO(Graph, ARM64)
+                                                  : bunPE(Graph, ARM64);
+      const auto E = extractBun(input(Bytes));
+      checkGolden(E, Expected);
+      EXPECT_EQ(E.Platform, T.Platform);
+      EXPECT_EQ(E.Architecture, T.Architecture);
+      for (const auto &M : E.Modules)
+        if (!M.SourceArtifactID.empty())
+          EXPECT_FALSE(bunSourceBytes(E, M, 1024 * 1024).empty());
+      if (std::string_view(Variant) == "utf16") {
+        ASSERT_EQ(E.Modules[0].Encoding, 2);
+        EXPECT_NE(bunSourceBytes(E, E.Modules[0], 1024).find("中文 🌱"),
+                  std::string::npos);
+      }
+    }
+}
+
+TEST_F(WebBun, CrossPlatformFullCompilerContainersWhenSupplied) {
+  const auto *Directory = std::getenv("NEVERD_BUN_142_CROSS_CORPUS");
+  if (!Directory)
+    GTEST_SKIP() << "Full cross-platform Bun compiler corpus not supplied";
+  for (const auto &T : CrossTargets)
+    for (const char *Variant : {"plain", "utf16", "asset-map", "cache-map"}) {
+      const auto Name = std::string(T.Name) + "-" + Variant;
+      SCOPED_TRACE(Name);
+      const auto Expected = manifest("cross/" + Name);
+      const auto Path =
+          std::filesystem::path(Directory) /
+          (Name + (std::string_view(T.Format) == "pe" ? ".exe" : ""));
+      const auto Snapshot = capture(Path.string(), Limits{});
+      ASSERT_EQ(Snapshot.Artifacts.size(), 1);
+      const auto &A = Snapshot.Artifacts.front();
+      ASSERT_EQ(A.BlobHash, field(Expected, "full_container_sha256"));
+      ASSERT_EQ(A.Content.size(),
+                std::stoull(field(Expected, "full_container_size")));
+      const auto E = extractBun(A);
+      EXPECT_EQ(E.GraphOffset, std::stoull(field(Expected, "graph_offset")));
+      EXPECT_EQ(E.GraphSize, std::stoull(field(Expected, "graph_size")));
+      EXPECT_EQ(E.ContainerFormat, T.Format);
+      EXPECT_EQ(E.Platform, T.Platform);
+      EXPECT_EQ(E.Architecture, T.Architecture);
+      checkGolden(E, Expected);
+      if (std::string_view(T.Format) == "macho" &&
+          std::string_view(Variant) == "plain") {
+        std::string Bytes;
+        Bytes.reserve(A.Content.size());
+        for (uint64_t At = 0; At < A.Content.size();) {
+          const auto Size =
+              std::min<uint64_t>(MaxBlobReadBytes, A.Content.size() - At);
+          Bytes += A.Content.read(At, Size);
+          At += Size;
+        }
+        uint64_t At = 32;
+        unsigned Checked = 0;
+        for (uint64_t I = 0; I < get(Bytes, 16, 4); ++I) {
+          const auto Command = get(Bytes, At, 4);
+          if (Command == 0x32) {
+            auto OtherPlatform = Bytes;
+            put(OtherPlatform, At + 8, 2, 4);
+            refuse(OtherPlatform, "bun_unsupported_macho_platform");
+            ++Checked;
+          } else if (Command == 0x1d || Command == 0x80000034) {
+            auto Alias = Bytes;
+            put(Alias, At + 8, E.GraphOffset, 4);
+            put(Alias, At + 12, 1, 4);
+            refuse(Alias, "bun_ambiguous_load_mapping");
+            ++Checked;
+          }
+          At += get(Bytes, At + 4, 4);
+        }
+        EXPECT_EQ(Checked, 3);
+      }
+    }
+}
+
 TEST_F(WebBun, ClaudeCode21296FullContainerWhenSupplied) {
   const auto *Path = std::getenv("NEVERD_CLAUDE_CODE_21296_ELF");
   if (!Path)
@@ -296,7 +566,7 @@ TEST_F(WebBun, ELFMappingAndContainerBoundsAreRequired) {
     refuse(B, Code);
   };
   Mutate(4, 1, 1, "bun_unsupported_container");
-  Mutate(18, 183, 2, "bun_unsupported_container");
+  Mutate(18, 40, 2, "bun_unsupported_container");
   Mutate(40, UINT64_MAX, 8, "bun_range_out_of_bounds");
   Mutate(60, 0xffff, 2, "bun_unsupported_elf_tables");
   Mutate(68, 5, 4, "bun_ambiguous_load_mapping");

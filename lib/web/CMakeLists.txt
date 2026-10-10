@@ -16,6 +16,7 @@ add_neverd_component_library(NeverDWeb
   PathPolicy.cpp
   BlobStore.cpp
   Bun.cpp
+  BunContainer.cpp
   BunSourceMap.cpp
   SessionBun.cpp
   SessionBunExport.cpp

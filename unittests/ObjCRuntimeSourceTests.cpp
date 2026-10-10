@@ -1142,14 +1142,44 @@ void verifyRuntime(bool Chained,
                                  : (SwiftOnce || DispatchOnce) ? 3U
                                  : MutableConstants            ? 3U
                                                                : 0U);
-  if (DiagnosticReports)
+  if (CStringStorage) {
+    // Immutable pointer slots may fold directly to their referent. The byte
+    // pool and NSString must retain one shared backing graph in either form.
+    ASSERT_EQ(CStringNames.size(), 1U);
+    const auto &Pool = *CStringNames.begin();
+    unsigned ConstantStringObjects = 0;
+    std::set<unsigned> PointerOffsets;
+    for (const auto &[Name, Definition] : IdentityHelpers) {
+      if (Name == Pool)
+        continue;
+      if (llvm::StringRef(Name).starts_with("neverd_objc_constant_string_")) {
+        ++ConstantStringObjects;
+        EXPECT_NE(Definition.find(Pool + "() + 0"), std::string::npos)
+            << Definition;
+      } else if (llvm::StringRef(Name).starts_with("neverd_cstring_pointer_")) {
+        bool Matched = false;
+        for (unsigned Offset : {0U, 8U})
+          if (Definition.find("return " + Pool + "() + " +
+                              std::to_string(Offset) + ";") !=
+              std::string::npos) {
+            EXPECT_TRUE(PointerOffsets.insert(Offset).second) << Definition;
+            Matched = true;
+          }
+        EXPECT_TRUE(Matched) << Definition;
+      } else {
+        ADD_FAILURE() << "unexpected C string identity helper: " << Name;
+      }
+    }
+    EXPECT_EQ(ConstantStringObjects, 1U);
+    EXPECT_EQ(IdentityHelpers.size(),
+              1U + ConstantStringObjects + PointerOffsets.size());
+  } else if (DiagnosticReports)
     EXPECT_FALSE(IdentityHelpers.empty());
   else
     EXPECT_EQ(IdentityHelpers.size(), (Associations       ? 0U
                                        : ConstantObjects  ? 13U
                                        : ConstantStrings  ? 7U
                                        : MutableConstants ? 1U
-                                       : CStringStorage   ? 3U
                                        : Foundation       ? 6U
                                        : SwiftLiterals    ? 2U
                                        : StoredStrings    ? 4U

@@ -36,10 +36,7 @@ bool hasCallbackContract(const MedFunc &Func) {
       State.Blocks.size() > limits::kMaxRegistrationEHRecords ||
       State.CxxContinuations.size() > limits::kMaxRegistrationEHRecords)
     return false;
-  return EH.Registration->RealignedFrame
-             ? realignedRegistrationFrameCoordinate(EH, &State).has_value()
-             : EH.Registration->RegistrationOffset == -12 &&
-                   EH.Registration->TryLevelOffset == -4;
+  return cxxRegistrationFrameCoordinate(EH, &State).has_value();
 }
 
 std::optional<std::pair<uint32_t, uint32_t>>

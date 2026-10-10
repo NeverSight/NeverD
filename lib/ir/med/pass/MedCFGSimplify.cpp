@@ -35,11 +35,22 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
               Image->Mode));
   }
 
+  // Native registration reconstruction replays exact source intervals and
+  // their ordinary edges. Retain every reached interval until that replay;
+  // jump threading cannot silently discard its source occurrence receipt.
+  std::set<std::pair<va_t, va_t>> RegistrationIntervals;
+  if (Func.RegistrationStates)
+    for (const auto &State : Func.RegistrationStates->Blocks)
+      if (State.Reached)
+        RegistrationIntervals.emplace(State.Range.Begin, State.Range.End);
+
   bool Changed = true;
   while (Changed) {
     Changed = false;
     for (int I = 0; I < static_cast<int>(Func.Blocks.size()); ++I) {
       auto &Blk = Func.Blocks[I];
+      if (RegistrationIntervals.count({Blk.StartAddr, Blk.EndAddr}))
+        continue;
       if (Blk.Succs.size() != 1)
         continue;
       // Exception edges name the exact block where native unwinding transfers
@@ -137,7 +148,8 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
   std::vector<MedBlock> NewBlocks;
   std::map<int, int> OldToNew;
   for (auto &Blk : Func.Blocks) {
-    if (Blk.Ops.empty() && Blk.Phis.empty() && Blk.Id != 0)
+    if (Blk.Ops.empty() && Blk.Phis.empty() && Blk.Id != 0 &&
+        !RegistrationIntervals.count({Blk.StartAddr, Blk.EndAddr}))
       continue;
     int NewId = static_cast<int>(NewBlocks.size());
     OldToNew[Blk.Id] = NewId;

@@ -148,11 +148,13 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
               Op.Addr);
         else if ((Op.RegistrationRoot ==
                       MedOp::RegistrationRootKind::RealignedFramePointer ||
+                  Op.RegistrationRoot ==
+                      MedOp::RegistrationRootKind::DisplacedFramePointer ||
                   Op.RegistrationRoot == MedOp::RegistrationRootKind::
                                              RealignedRestoredStackPointer) &&
                  !registrationRootFrameCoordinate(Func, Op))
-          Err("realigned registration root has no checked source coordinate",
-              Blk.Id, Op.Addr);
+          Err("registration root has no checked source coordinate", Blk.Id,
+              Op.Addr);
       } else if (Op.RegistrationStackOffset != 0)
         Err("restored stack offset has no registration runtime root", Blk.Id,
             Op.Addr);

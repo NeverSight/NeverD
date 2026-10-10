@@ -17,7 +17,7 @@ RegistrationStateSolver::parentStackOffset(const Domain &State) const {
       State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
   if (SP.Offset)
     return SP.Offset;
-  if (!Chain.RealignedFrame || !SP.CallbackAddress ||
+  if (!Chain.hasCxxCallbackStack() || !SP.CallbackAddress ||
       SP.CallbackAddress->Entry != State.Frame.CallbackEntry ||
       SP.CallbackAddress->Offset > 0 ||
       SP.CallbackAddress->Offset <
@@ -32,9 +32,8 @@ RegistrationStateSolver::parentStackOffset(const Domain &State) const {
   return State.CxxCatchStacks.begin()->back().SavedStackOffset;
 }
 
-bool RegistrationStateSolver::realignedCatchCanReturn(
-    const Domain &State) const {
-  if (!Chain.RealignedFrame)
+bool RegistrationStateSolver::callbackCanReturn(const Domain &State) const {
+  if (!Chain.hasCxxCallbackStack())
     return true;
   if (State.CxxCatchStacks.size() != 1 ||
       State.CxxCatchStacks.begin()->size() != 1)
@@ -48,9 +47,11 @@ bool RegistrationStateSolver::realignedCatchCanReturn(
       Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].CallbackAddress;
   return Frame.CallbackEntry == Entry && SP && SP->Entry == Entry &&
          SP->Offset == 0 &&
-         Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride].Offset == 0 &&
-         Frame.load(Chain.RealignedFrame->SavedParentFrameOffset, 4)
-                 .EntryOffset == 0;
+         Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride].Offset ==
+             Chain.cxxRuntimeFrameOffset() &&
+         (!Chain.RealignedFrame ||
+          Frame.load(Chain.RealignedFrame->SavedParentFrameOffset, 4)
+                  .EntryOffset == 0);
 }
 
 } // namespace neverd::registration_state

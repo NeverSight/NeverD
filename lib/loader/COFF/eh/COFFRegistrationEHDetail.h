@@ -205,6 +205,10 @@ struct InstallSite {
   ExceptionAddressRange Range;
 };
 
+bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
+                                     const InstallSite &Site,
+                                     RegistrationChainInfo &Chain);
+
 bool proveRealignedCxxRegistrationLayout(const BinaryImage &Img,
                                          const InstallSite &Site,
                                          RegistrationChainInfo &Chain);

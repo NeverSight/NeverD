@@ -266,9 +266,15 @@ DarwinMemory::handle(ServiceKind Kind, const ProcessServiceEvent &E,
   const bool IsMap = Kind == ServiceKind::Mmap;
   const bool HasProtection = IsMap || Kind == ServiceKind::Mprotect;
   const auto Flags = E.Arguments[3] & ~uint64_t(MapUnix03);
+  // A known symbolic vnode rejects mapping before the pager/access checks.
+  // Admit only the existing aligned, non-executable argument prefix so that
+  // SHARED can reach that same refusal without enabling shared file mappings.
+  const bool SymbolicShared =
+      IsMap && Flags == MapShared && !(E.Arguments[5] % PageSize) &&
+      Files.symbolicLinkDescriptor(uint32_t(E.Arguments[4]));
   if ((HasProtection && (E.Arguments[2] & ~uint64_t(7))) ||
-      (IsMap &&
-       (Flags != MapPrivate && Flags != (MapPrivate | MapAnonymous))) ||
+      (IsMap && (Flags != MapPrivate && Flags != (MapPrivate | MapAnonymous) &&
+                 !SymbolicShared)) ||
       (IsMap && (Flags & MapAnonymous) &&
        (uint32_t(E.Arguments[4]) != UINT32_MAX || E.Arguments[5])) ||
       (HasProtection && (E.Arguments[2] & ProtExecute)) ||

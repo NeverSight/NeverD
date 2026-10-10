@@ -1,6 +1,6 @@
 **언어**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: aa19cf02d09c66c62cfde94ee71c93b210f3d92165151c58778e1e91ec0df607 -->
+<!-- i18n-source: 1939e117643388dff149085b992e1ad646feefca63b630abec9b09122e15c2f1 -->
 
 [← 문서 목록](README.md)
 
@@ -67,7 +67,7 @@ BSD 호출에서 ARM64는 X16, X0–X5와 `svc #0x80`을 사용하고 x64는 BSD
 
 엄격한 불리언 `"writable":true` 또는 C++ `DarwinFileOptions::WritableFiles`로 프로세스 내 변경을 명시합니다. 생략/false는 읽기 전용이며 알 수 없는 권한은 중지합니다. 호스트나 입력 옵션을 바꾸지 않습니다. write(4/397), pwrite(154/415), truncate(200), ftruncate(201), O_TRUNC는 내용 노드를 공유합니다. 별도 open의 위치는 독립적이고 dup은 위치와 상태를 공유하며 마지막 close 뒤에도 내용이 남습니다. 확장은 0으로 채우고 절단은 위치를 보존하며 O_RDONLY|O_TRUNC도 절단합니다.
 
-F_SETFL은 O_APPEND만 바꾸고 접근 모드, close-on-exec, FWASWRITTEN을 보존합니다. 실제 비영 바이트 전송 뒤 F_GETFL에 0x10000이 나타나며 pwrite와 출력 캡처도 포함합니다. pwrite는 append를 무시하고 위치를 유지합니다. INT_MAX 길이 검사는 FD보다 앞서고 pwrite의 -1은 더 먼저 EINVAL입니다. INT64_MAX는 길이 0보다 먼저 EFBIG이며 길이를 제한한 뒤 EOF를 선택합니다.
+F_SETFL은 원시 플래그 변환 후 O_APPEND|O_NONBLOCK만 바꾸고 접근 모드, close-on-exec, FWASWRITTEN을 보존합니다. 실제 비영 바이트 전송 뒤 F_GETFL에 0x10000이 나타나며 pwrite와 출력 캡처도 포함합니다. pwrite는 append를 무시하고 위치를 유지합니다. INT_MAX 길이 검사는 FD보다 앞서고 pwrite의 -1은 더 먼저 EINVAL입니다. INT64_MAX는 길이 0보다 먼저 EFBIG이며 길이를 제한한 뒤 EOF를 선택합니다.
 
 성공한 ftruncate는 크기가 같아도 호출 open 설명과 dup에 FWASWRITTEN을 설정합니다. O_TRUNC는 O_RDONLY를 포함해 새 설명에 설정하며 경로 truncate는 기존 설명의 플래그를 바꾸지 않습니다.
 
@@ -924,3 +924,120 @@ setxattr(236), fsetxattr(237), removexattr(238), fremovexattr(239)는 초기 객
 xattr-mutations / xattr-mutations-values / xattr-mutations-unsupported는 직접 작성한 네이티브/게스트 대조, 독립적인 가상 바이트 리터럴, 기존 출력을 유지하는 허가 부족 중단을 검사합니다. ARM64 비공개 준비는726회 raw/SDK 호출, 전체544바이트 보호 영역 관측 및 읽을 수 있는 전체 페이지를 확인했습니다. native5s/compile120s/drain1s/reap1s, guest/Python5,000,000us/quantum1024, public10s는 그대로입니다. 네이티브 Intel, 실제 iOS 기기, dyld, Mach IPC, 스레드/신호, Objective-C/Swift 런타임 및 전체 프레임워크는 아직 검증되지 않았거나 미완성입니다.
 
 주요 ABI 자료: [XNU 시스템 호출 선언](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/syscalls.master), [xattr 정의](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/sys/xattr.h). 코드와 프로브는 직접 작성했으며 Apple 구현을 복사하지 않았습니다.
+
+## 범위가 제한된 Darwin 하드 링크
+
+link는 마지막 심볼릭 링크 대상을 따라가며 linkat flags=0은 링크 객체, AT_SYMLINK_FOLLOW는 대상을 선택한다. low32 0/0x40만 허용하고 나머지 하위 비트는 입력 전에 EINVAL이다. 소스 조회와 디렉터리 EPERM이 대상 입력보다 먼저이며 기존 대상은 EEXIST다. 대상 수정 권한과 명시된 같은 마운트 영역이 필요하다. 초기 식별 별칭과 알려진 장치/모드/플래그 충돌은 미지원이다.
+
+별칭은 항목 및 경로/NUL 비용만 추가하고 새 inode를 소비하지 않는다. 바이트, 속성 권한, 메타데이터 유효성과 매핑 임대는 공유 객체가 소유한다. 명시 정책이 링크 수와 ctime을 갱신하며 정책이 없으면 전체 stat는 미지다. 속성 변경은 stat를, 내용 변경은 속성 관찰을 무효화한다. 설명 및 마지막 매핑이 삭제 이름의 비용을 유지하며 교체는 즉시 해제 가능한 비용만 공제한다. 하위 트리는 정확한 식별과 부모로 이동하고 외부 별칭은 유지한다. 상대 심볼릭 대상은 선택 항목의 부모를 사용한다.
+
+여러 이름을 가졌던 객체의 F_GETPATH/ATTR_CMN_NAME은 한 개 또는 0개가 남아도 미지원이다. APFS 캐시 모델을 일반화하지 않는다. bulk NAME은 실제 항목을 사용하며 같은 객체의 일반 rename/SWAP는 두 이름을 유지한다. EXCL 대소문자, Intel HVF, 실제 iOS, ACL, 매핑 일관성/EOF 신호, dyld, Mach IPC, 스레드 및 전체 프레임워크는 별도 과제다. 이 계약 범위에서만 이전 제외를 확장한다.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## 제한된 O_SYMLINK 설명자
+
+O_SYMLINK=0x00200000은 읽기 전용, 쓰기 전용, 읽기/쓰기에서 마지막 심볼릭 링크 자체를 보존하며 끊어진 링크와 순환 링크도 포함합니다. 대상 내용의 쓰기 권한은 부여하지 않습니다. O_CREAT는 마지막 대상을 따라가고 NOFOLLOW의 ELOOP, 독점 생성의 EEXIST, 보존된 링크에 대한 O_DIRECTORY의 ENOTDIR 순서를 유지합니다. 중간 또는 끝 슬래시 확장은 기존 해석기와 NOFOLLOW_ANY를 따르며 F_GETFL은 선택 비트를 제외합니다.
+
+실제 LinkNode와 선택한 NameIdentity를 보존합니다. dup은 상태 플래그와 커서를 공유하고 독립 open은 별도 설명을 사용합니다. 이름 변경, 삭제, 이름 재사용, 부모 삭제 후에도 기존 객체가 유지됩니다. 단일 이름의 F_GETPATH/ATTR_CMN_NAME은 선택한 보존 이름을 사용합니다. 여러 이름을 가졌던 객체는 이름을 모두 삭제해도 vnode 이름 추론을 거부합니다. 초기 예약은 고정이며 동적 이름, 대상, 항목, 속성 증가 비용은 마지막 소유자까지 유지됩니다. 다른 설명자가 객체나 선택한 이름을 보존하면 마지막 별칭을 교체 비용에서 공제할 수 없습니다.
+
+I/O는 대상 문자열을 파일 내용으로 노출하지 않습니다. 기존 스칼라/벡터 가져오기, 접근, 개수 검사 후 음수 오프셋은 EINVAL입니다. INT64_MAX 읽기는 0, 다른 허용 오프셋은 길이 0을 포함해 EPERM입니다. INT64_MAX 쓰기는 EFBIG, 나머지는 길이 0 성공, APPEND, 데이터 접근 전에 EPERM입니다. pwrite/pwritev의 기존 조기 음수 규칙을 유지합니다. DATA/HOLE seek은 음수가 아니면 ENXIO, 음수면 EINVAL이며 커서는 그대로입니다.
+
+쓰기 전용/읽기·쓰기의 음수가 아닌 ftruncate와 허용 open TRUNC는 WasWritten만 설정하며 대상 바이트, 전체 stat, 속성, 커서, 저장 예산, inode를 변경하지 않습니다. 읽기 전용 또는 음수 길이는 EINVAL입니다. 허용 F_SETFL은 APPEND|NONBLOCK를 변경한 후 ENOTTY25를 반환하고 dup에 반영됩니다. 알 수 없는 인수는 효과 전에 중지합니다.
+
+고정 fpathconf, fgetattrlist, 독립 선언된 일반 FD 속성 권한은 심볼릭 객체에 적용됩니다. 상대 디렉터리 FD와 fchdir는 ENOTDIR입니다. 속성 변경으로 무효화된 stat을 truncate가 복구하지 않습니다. 정렬된 비실행 레거시 private/shared mmap은 객체 종류에서 EINVAL로 거부되며 매핑이나 임대를 만들지 않습니다. 일반 shared 매핑, 알 수 없는 플래그, 실행 보호 등 기존 미지원 경계는 유지됩니다. 네이티브 mmap은 length16384, offset0, protection1/2/3의18개 조합만 검증합니다.
+
+독자 ARM64 준비는15개 truncate의 전체144바이트 stat, 극단 오프셋/개수 I/O, 희소 seek, 실패 F_SETFL 효과를 확인합니다. SDK 없는 공통 프로그램은 O0/O1/O2에서 실행하고 실제 부모 설명자 경로를 비교합니다. 가상 경로는 독립 stat/type 리터럴 또는 기존 출력을 보존하는 다중 이름 거부를 검증합니다. Intel HVF, 실제 iOS, ACL/권한, 매핑 EOF/신호, dyld, Mach IPC, 스레드, 전체 런타임/프레임워크는 미검증 또는 미완성입니다.
+
+일차 해석 자료: [동일 버전 XNU 매핑 경계](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/kern_mman.c). 구현과 탐침은 독자 작성하며 Apple 구현을 복사하지 않습니다.
+
+```text
+O_SYMLINK=0x00200000; ENOTTY=25
+open O_RDONLY|O_SYMLINK|O_TRUNC: WasWritten only
+LinkNode, NameIdentity, HadMultipleNames, DetachedNames
+INT64_MAX read=0 / write=EFBIG; other admitted offsets=EPERM
+SEEK_DATA/SEEK_HOLE nonnegative=ENXIO / negative=EINVAL
+F_SETFL: APPEND|NONBLOCK effect before ENOTTY; dup shares / independent open separate
+symbolic-descriptors
+symbolic-descriptors-values
+symbolic-descriptors-name-unsupported
+SymbolicDescriptor*, SymbolicDescriptorsRetainObjectsAndNativeErrorOrder
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 transport parameters / 15 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## 제한된 비차단 설명자 상태
+
+일반 파일, 디렉터리, O_SYMLINK open은 O_NONBLOCK=4를 허용하며 F_GETFL이 이를 보존합니다. dup은 상태와 위치를 공유하고 독립 open은 별도 설명을 유지합니다. 접근, close-on-exec, WasWritten, 메타데이터, 바이트, 위치의 기존 규칙이 적용됩니다. 명시한 유한 stdin은 EOF와 포인터 오류 순서를 유지하고 생략 입력은 미지 상태입니다. 출력 캡처는 복사 오류와 공유 예산을 유지합니다.
+
+F_SETFL은 효과 전에 허용 low32 인수를 검사하고 원시 open 플래그 변환으로 1을 더한 뒤 APPEND|NONBLOCK만 변경합니다. high32는 무시하며 접근 및 입력 WasWritten 비트로 권한이나 쓰기 이력을 만들지 않습니다. 독립 원시 관찰에서 요청3/7/11/15는 상태4/8/12/0을 선택합니다. 심볼릭 설명은 상태 변경 후 ENOTTY25를 반환합니다. ASYNC0x40 등 미지 플래그는 효과 전에 중지합니다.
+
+독자 ARM64 macOS 준비의122개 관찰은 유효 객체/접근 조합별16개 요청, 유지 dup, 독립 open, 상태 해제, 실제 쓰기 및 FD별 CLOEXEC를 포함합니다. SDK 없는 공통 프로그램은 O0/O1/O2에서 바이트, 상태, 위치와 원시 BSD carry/errno ABI를 비교합니다. 게스트, C/CLI, Python도 미지 플래그 거부를 검증하며 ARM64 HVF 세 profile의 실제 실행이 필수입니다. 준비 상태 대기, 파이프, 네트워크, kqueue, 비동기 신호나 호스트 I/O는 추가하지 않습니다. O_EVTONLY 프로세스 정책은 미지원이며 Intel HVF, 실제 iOS, 전체 macOS/iOS 환경은 미검증 또는 미완성입니다.
+
+```text
+O_NONBLOCK=4; F_SETFL raw low32 mask=0x1000f
+requests3/7/11/15 -> APPEND|NONBLOCK status4/8/12/0
+nonblocking-descriptors / nonblocking-flags-unsupported
+Nonblocking*, NonblockingDescriptorsKeepNativeControlState
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+8 model cases / 20 transport parameters / 10 public cases / 5 Python profiles
+67 mandatory workloads per platform / ARM64 201 / Intel 134
+```
+
+## 명시적인 유한 getentropy 관측
+
+원시 BSD getentropy500은 순서가 있는 `DarwinSystemOptions::EntropyReads`를 사용하며 JSON 필드는 `darwin_system.entropy_reads`입니다. 비어 있지 않은 짝수 길이 16진수 문자열을 최대256개, 각1..256바이트로 제공합니다. 모델 한도이며 기존65536바이트 JSON 전송 한도는 유지합니다. 생략은 알 수 없음, `[]`는 명시적 소진입니다. 이미지나 백엔드 변경 전에 입력을 검증하며 다른 OS 프로필은 Darwin 옵션을 거부합니다.
+
+전체64비트 길이를 먼저 확인합니다. 256 초과는 메모리 접근이나 소비 없이 EINVAL22, 길이0은 모든 포인터에 대해 입력 없이 성공합니다. 비영 요청은 다음 기록의 정확한 길이를 먼저 승인합니다. 누락·소진·불일치는 잘못된 주소에서도 효과 전 UnsupportedService로 멈춥니다. 이는 재생 승인 순서입니다. 성공 또는 완전히 쓸 수 없는 EFAULT14는 한 기록을 소비합니다. 일부만 쓸 수 있는 대상은 복사 및 커서 변경 전에 거부하며 전송 오류는 커서를 진행하지 않습니다. 이후 반환 레지스터 실패는 완료된 효과를 유지합니다. 같은 옵션을 재사용해도 매 실행은 첫 기록에서 시작합니다.
+
+매 실행의 DarwinEntropy가 독립 커서를 소유하고 입력 바이트는 불변입니다. 기존 BSD 분배와 returnService가 양쪽 ISA, 캐리와 보조 레지스터를 담당합니다. SDK 없는 재생은5개 게스트와3개 ARM64 HVF 프로필을 검증하며 고정 바이트는 원시 결정적 RNG 목록에 넣지 않습니다. ARM64 O0/O1/O2 탐침은594회 호출이며 센티널 변화 수는 정확한 복사 길이가 아닙니다. 호스트 난수, 암호학적 품질, /dev/random, libc 가져오기와 프레임워크는 제공하지 않습니다. Intel HVF·물리 iOS·완전한 OS 호환성은 미검증 또는 미완료입니다。
+
+```text
+BSD getentropy500 / DarwinEntropy / EntropyReads / darwin_system.entropy_reads
+full64 size>256 -> EINVAL22; zero ->0; whole EFAULT14 consumes one record
+1..256 bytes per record / at most256 records / JSON transport65536 bytes
+entropy-replay / entropy-missing / entropy-exhausted / entropy-mismatch / entropy-partial
+15 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+68 mandatory workloads per platform / ARM64 204 / Intel 136
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU getentropy ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [XNU generation/copyout boundary](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/dev/random/randomdev.c).
+
+## 명시적인 현재 스레드 식별자
+
+BSD thread_selfid372는 변경되지 않는 선택적 `DarwinSystemOptions::ThreadID` / JSON `darwin_system.thread_id`를 읽습니다. 0을 포함한 모든 uint64 비트 패턴은 알려진 관측이며, 생략하면 UnsupportedService로 중단합니다. 십진 문자열은64비트를 보존하고 JSON 숫자는2^53-1 이하의 정확한 정수만 허용합니다. 호스트, PID 또는 Mach 포트에서 ID를 추정하지 않습니다. 인자 없는 호출은 여섯 전달값을 무시하고 메모리에 접근하지 않습니다. 기존 하위32비트 해석은 이벤트의 원래 전체 번호를 보존하며 BSD 반환 계층은64비트 값과 carry 및 RDX/X1 초기화를 담당합니다. Mach 번호 형식은 지원하지 않습니다.
+
+반복 실행은 입력 관측을 유지하며 서로 다른 옵션은 독립적입니다. ID 할당, 유일성, 스케줄러 이벤트의 식별, 스레드 생명주기, pthread, TLS, Mach IPC를 제공하지 않습니다. ARM64 O0/O1/O2 원본 프로브24회는 SDK의 현재 pthread ID, 임의 인자와 번호 상위32비트를 비교합니다. 공통 네이티브 프로그램은 같은 프로세스 내부 관계만 비교하며 고정 ID 바이트는 결정적 네이티브 참조 목록에서 제외합니다. Intel HVF, 실제 iOS 기기 및 완전한 OS 호환성은 검증되지 않았거나 미완성입니다.
+
+```text
+BSD thread_selfid372 / Wide / ThreadID / darwin_system.thread_id
+known uint64 including0 / missing -> UnsupportedService / no memory
+full64 return / low32 resolution / carry clear / RDX-X1 zero / raw event number
+thread-identity / thread-identity-value / thread-identity-missing
+4 model cases / 20 transport parameters / 16 public cases / 5 Python profiles
+69 mandatory workloads per platform / ARM64 207 / Intel 138 unverified
+original ARM64 O0/O1/O2 probes24 / native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU thread_selfid ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [libpthread current-thread owner](https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_support.c).

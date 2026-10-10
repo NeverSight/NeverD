@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include <algorithm>
@@ -60,6 +61,46 @@ struct ResolverGraphCacheTestAccess {
       B.Insns.emplace(Address, std::move(R));
       B.BlockStarts.insert(Address);
     }
+  }
+
+  static Query seedPredecessorLane(CFGBuilder &B, const BinaryImage &Image,
+                                   unsigned Length) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    const auto Lane = NdVar::reg(0, 8);
+    for (unsigned I = 0; I <= Length; ++I) {
+      const va_t Address = 0x100 + I;
+      CFGBuilder::InsnRecord R{};
+      R.Addr = Address;
+      R.Size = 1;
+      LowOp Op;
+      Op.Addr = Address;
+      if (I == 0) {
+        Op.Opcode = NdOp::COPY;
+        Op.Output = Lane;
+        Op.addInput(NdVar::cst(7, 8));
+      } else if (I == Length) {
+        R.IsRet = true;
+        Op.Opcode = NdOp::RETURN;
+        Op.addInput(Lane);
+      } else {
+        R.IsBranch = true;
+        R.BranchTarget = Address + 1;
+        Op.Opcode = NdOp::BRANCH;
+        Op.addInput(NdVar::cst(Address + 1, 8));
+      }
+      R.Ops.push_back(Op);
+      B.Insns.emplace(Address, std::move(R));
+      B.BlockStarts.insert(Address);
+    }
+    Query Q;
+    Q.Candidate = Lane;
+    Q.UseAddr = 0x100 + Length;
+    Q.UseSeq = 0;
+    Q.Alternatives = {{NdVar::cst(7, 8), InvalidVA, -1, false}};
+    return Q;
   }
 
   static Answer query(CFGBuilder &B, size_t Budget = 1000000,
@@ -313,6 +354,36 @@ TEST(ResolverGraphCache, ResourceFailureAndAnalysisIncompleteAreDistinct) {
   EXPECT_TRUE(Complete.Complete);
   EXPECT_EQ(Complete.Values, (std::vector<bool>{true}));
   EXPECT_EQ(Access::token(B), Graph);
+}
+
+TEST(ResolverValueQueryCache, ExpandedValueDepthKeepsTheDefaultGuardCap) {
+  const auto Image = image();
+  for (unsigned Length : {80u, 160u}) {
+    SCOPED_TRACE(Length);
+    CFGBuilder Builder;
+    const auto Query = Access::seedPredecessorLane(Builder, Image, Length);
+    const auto Default = Access::batch(Builder, {Query});
+    EXPECT_FALSE(Default.Complete);
+    EXPECT_EQ(Default.QueryComplete, (std::vector<bool>{false}));
+    EXPECT_EQ(Default.Values, (std::vector<bool>{false}));
+    EXPECT_GT(Default.Remaining, 0u); // Depth, not aggregate work exhaustion.
+    const auto Expanded = Access::batch(
+        Builder, {Query}, 1000000, limits::kMaxJumpTableExpandedResolverDepth);
+    EXPECT_EQ(Expanded.Complete, Length == 80);
+    EXPECT_EQ(Expanded.QueryComplete, (std::vector<bool>{Length == 80}));
+    EXPECT_EQ(Expanded.Values, (std::vector<bool>{Length == 80}));
+    EXPECT_GT(Expanded.Remaining, 0u);
+    if (Length == 80) {
+      const auto Hits = Access::stats(Builder)[0];
+      EXPECT_EQ(Access::batch(Builder, {Query}, 1000000,
+                              limits::kMaxJumpTableExpandedResolverDepth),
+                Expanded);
+      EXPECT_EQ(Access::stats(Builder)[0], Hits + 1);
+    }
+    // A successful expanded query cannot turn a later default-depth request
+    // into evidence, including when both requests use the same graph cache.
+    EXPECT_EQ(Access::batch(Builder, {Query}), Default);
+  }
 }
 
 TEST(ResolverValueQueryCache, ReplaysOrderedResultsAndEveryBudgetBoundary) {

@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 std::string_view part(std::string_view B, uint64_t O, uint64_t N) {
@@ -42,12 +43,59 @@ void write(const std::string &Path, std::string_view Bytes) {
   if (!F.good())
     throw std::runtime_error("write");
 }
+
+// Independent golden recorder: field reads are deliberately separate from
+// NeverD's admission logic. Inputs are pinned development compiler outputs.
+std::vector<uint64_t> sections(std::string_view B) {
+  std::vector<uint64_t> Result;
+  if (part(B, 0, 4) == "\177ELF") {
+    const auto SH = read(B, 40, 8), Count = read(B, 60, 2);
+    const auto NamesAt = SH + read(B, 62, 2) * 64;
+    const auto Names =
+        part(B, read(B, NamesAt + 24, 8), read(B, NamesAt + 32, 8));
+    for (uint64_t I = 0; I < Count; ++I) {
+      const auto S = SH + I * 64, N = read(B, S, 4);
+      if (N + 5 <= Names.size() &&
+          Names.substr(N, 5) == std::string_view(".bun\0", 5))
+        Result.push_back(read(B, S + 24, 8));
+    }
+  } else if (read(B, 0, 4) == 0xfeedfacf) {
+    uint64_t At = 32;
+    const auto Count = read(B, 16, 4);
+    for (uint64_t I = 0; I < Count; ++I) {
+      const auto Length = read(B, At + 4, 4);
+      part(B, At, Length);
+      if (read(B, At, 4) == 0x19 &&
+          part(B, At + 8, 6) == std::string_view("__BUN\0", 6)) {
+        const auto N = read(B, At + 64, 4);
+        for (uint64_t J = 0; J < N; ++J) {
+          const auto S = At + 72 + J * 80;
+          if (part(B, S, 6) == std::string_view("__bun\0", 6))
+            Result.push_back(read(B, S + 48, 4));
+        }
+      }
+      if (Length < 8)
+        throw std::runtime_error("command length");
+      At += Length;
+    }
+  } else if (part(B, 0, 2) == "MZ") {
+    const auto PE = read(B, 60, 4), Count = read(B, PE + 6, 2);
+    const auto SH = PE + 24 + read(B, PE + 20, 2);
+    for (uint64_t I = 0; I < Count; ++I) {
+      const auto S = SH + I * 40;
+      if (part(B, S, 8) == std::string_view(".bun\0\0\0\0", 8))
+        Result.push_back(read(B, S + 20, 4));
+    }
+  }
+  return Result;
+}
 } // namespace
 
 int main(int Argc, char **Argv) {
   try {
-    if (Argc != 3)
-      throw std::runtime_error("usage: record full.elf output-prefix|--probe");
+    if (Argc != 3 && Argc != 4)
+      throw std::runtime_error(
+          "usage: record container output-prefix|--probe [target]");
     std::ifstream F(Argv[1], std::ios::binary | std::ios::ate);
     if (!F || F.tellg() < 64 || F.tellg() > 256 * 1024 * 1024)
       throw std::runtime_error("fixture input");
@@ -56,19 +104,13 @@ int main(int Argc, char **Argv) {
     F.read(B.data(), B.size());
     if (!F.good())
       throw std::runtime_error("read");
-    const auto SH = read(B, 40, 8), Count = read(B, 60, 2);
-    const auto NamesAt = SH + read(B, 62, 2) * 64;
-    const auto Names =
-        part(B, read(B, NamesAt + 24, 8), read(B, NamesAt + 32, 8));
+    const auto Headers = sections(B);
+    if (Headers.size() != 1)
+      throw std::runtime_error("missing or duplicate graph section");
     unsigned Matches = 0;
-    for (uint64_t I = 0; I < Count; ++I) {
-      const auto S = SH + I * 64, N = read(B, S, 4);
-      if (N + 5 > Names.size() ||
-          Names.substr(N, 5) != std::string_view(".bun\0", 5))
-        continue;
+    for (const auto At : Headers) {
       if (++Matches != 1)
         throw std::runtime_error("duplicate");
-      const auto At = read(B, S + 24, 8);
       const auto Graph = part(B, At + 8, read(B, At, 8));
       const auto Footer = Graph.size() - 48;
       const auto Table = read(Graph, Footer + 8, 4);
@@ -112,9 +154,9 @@ int main(int Argc, char **Argv) {
           {"producer", "Bun"},
           {"producer_version", "1.4.2"},
           {"producer_commit", "744846f844374847c902b5e7fd59b4342a51ef99"},
-          {"target", "bun-linux-x64-baseline"},
-          {"full_elf_sha256", hash(B)},
-          {"full_elf_size", std::to_string(B.size())},
+          {"target", Argc == 4 ? Argv[3] : "bun-linux-x64-baseline"},
+          {"full_container_sha256", hash(B)},
+          {"full_container_size", std::to_string(B.size())},
           {"graph_offset", std::to_string(At + 8)},
           {"graph_size", std::to_string(Graph.size())},
           {"graph_sha256", hash(Graph)},
@@ -122,6 +164,10 @@ int main(int Argc, char **Argv) {
           {"preserved_fixture",
            "exact_graph_only_native_runtime_not_redistributed"},
           {"modules", std::move(Records)}};
+      if (Argc == 3) {
+        Manifest["full_elf_sha256"] = hash(B);
+        Manifest["full_elf_size"] = std::to_string(B.size());
+      }
       std::string JSON;
       llvm::raw_string_ostream OS(JSON);
       OS << llvm::json::Value(std::move(Manifest)) << '\n';

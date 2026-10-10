@@ -2933,6 +2933,128 @@ TEST(AllocLifetime, InitializedLocalStackLoadIsClean) {
   EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
 }
 
+TEST(AllocLifetime, CanonicalIncomingRegisterDoesNotEscapeInitializedStack) {
+  constexpr uint64_t Incoming = 0x3000;
+  for (bool Marked : {false, true}) {
+    SCOPED_TRACE(Marked);
+    FB B("f", 0x100);
+    const int Block = B.block();
+    B.F.Blocks[Block].StartAddr = B.F.Entry;
+    if (Marked)
+      B.op(Block, NdOp::COPY, mkReg(Incoming, 0), {mkReg(Incoming, 0)});
+    B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+         {mkReg(kSP, 0), MedVar::makeConst(8, 8)});
+    B.op(Block, NdOp::STORE, MedVar{},
+         {mkReg(kSP, 1), MedVar::makeConst(0x1234, 8)});
+    B.call(Block, "opaque_external", MedVar{}, {mkReg(Incoming, 0)});
+    B.op(Block, NdOp::LOAD, temp(11), {mkReg(kSP, 1)}, 0x408);
+    B.ret(Block, {});
+
+    const auto Findings = audit({B.F}, nullptr, /*StackRegs=*/true,
+                                /*IncludeStackReads=*/true);
+    EXPECT_FALSE(has(Findings, VulnClass::UninitializedRead));
+  }
+}
+
+TEST(AllocLifetime, IncomingMarkerCannotHideCyclesFrameEscapesOrPartialWrites) {
+  constexpr uint64_t Incoming = 0x3000;
+  for (const std::string Scenario :
+       {"late-self-copy", "conflicting-definition", "frame-argument",
+        "partial-write", "deep-incoming", "cyclic-argument", "incomplete-phi",
+        "mixed-frame-phi"}) {
+    SCOPED_TRACE(Scenario);
+    for (bool HeapSpill : {false, true}) {
+      SCOPED_TRACE(HeapSpill);
+      FB B("f", 0x100);
+      const int Block = B.block();
+      B.F.Blocks[Block].StartAddr = B.F.Entry;
+      if (Scenario != "late-self-copy")
+        B.op(Block, NdOp::COPY, mkReg(Incoming, 0), {mkReg(Incoming, 0)});
+      B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+           {mkReg(kSP, 0), MedVar::makeConst(8, 8)});
+      if (HeapSpill)
+        B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+      B.op(Block, NdOp::STORE, MedVar{},
+           {mkReg(kSP, 1), HeapSpill ? temp(1) : MedVar::makeConst(0x1234, 8)});
+      if (Scenario == "late-self-copy")
+        B.op(Block, NdOp::COPY, mkReg(Incoming, 0), {mkReg(Incoming, 0)});
+      if (Scenario == "conflicting-definition")
+        B.op(Block, NdOp::COPY, mkReg(Incoming, 0), {mkReg(kSP, 1)});
+      MedVar Argument =
+          Scenario == "frame-argument" ? mkReg(kSP, 1) : mkReg(Incoming, 0);
+      int CallBlock = Block;
+      if (Scenario == "deep-incoming") {
+        for (int I = 0; I < 65; ++I) {
+          const MedVar Next = temp(100 + I);
+          B.op(Block, NdOp::COPY, Next, {Argument});
+          Argument = Next;
+        }
+      } else if (Scenario == "cyclic-argument") {
+        B.op(Block, NdOp::COPY, temp(50), {temp(51)});
+        B.op(Block, NdOp::COPY, temp(51), {temp(50)});
+        Argument = temp(50);
+      } else if (Scenario == "incomplete-phi" ||
+                 Scenario == "mixed-frame-phi") {
+        const int Left = B.block(), Right = B.block(), Join = B.block();
+        B.succ(Block, Left);
+        B.succ(Block, Right);
+        B.succ(Left, Join);
+        B.succ(Right, Join);
+        PhiNode Phi;
+        Phi.Output = temp(50);
+        Phi.Args = {{Left, Argument}};
+        if (Scenario == "mixed-frame-phi")
+          Phi.Args.emplace_back(Right, mkReg(kSP, 1));
+        B.F.Blocks[Join].Phis.push_back(std::move(Phi));
+        Argument = temp(50);
+        CallBlock = Join;
+      }
+      B.call(CallBlock, "opaque_external", MedVar{}, {Argument});
+      if (Scenario == "partial-write")
+        B.op(CallBlock, NdOp::STORE, MedVar{},
+             {mkReg(kSP, 1), MedVar::makeConst(7, 4)});
+      B.op(CallBlock, NdOp::LOAD, temp(11), {mkReg(kSP, 1)}, 0x408);
+      if (HeapSpill)
+        B.call(CallBlock, "free", MedVar{}, {temp(11)});
+      B.ret(CallBlock, {});
+
+      const auto Findings = audit({B.F}, nullptr, /*StackRegs=*/true,
+                                  /*IncludeStackReads=*/!HeapSpill);
+      if (HeapSpill) {
+        EXPECT_TRUE(has(Findings, VulnClass::HeapLeak));
+      } else {
+        const Finding *Read = find(Findings, VulnClass::UninitializedRead);
+        ASSERT_NE(Read, nullptr);
+        EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+      }
+    }
+  }
+}
+
+TEST(AllocLifetime, IncomingRegisterKeepsHeapSpillAcrossAnOpaqueCall) {
+  constexpr uint64_t Incoming = 0x3000;
+  for (bool Marked : {false, true}) {
+    SCOPED_TRACE(Marked);
+    FB B("f", 0x100);
+    const int Block = B.block();
+    B.F.Blocks[Block].StartAddr = B.F.Entry;
+    if (Marked)
+      B.op(Block, NdOp::COPY, mkReg(Incoming, 0), {mkReg(Incoming, 0)});
+    B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+         {mkReg(kSP, 0), MedVar::makeConst(8, 8)});
+    B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.op(Block, NdOp::STORE, MedVar{}, {mkReg(kSP, 1), temp(1)});
+    B.call(Block, "opaque_external", MedVar{}, {mkReg(Incoming, 0)});
+    B.op(Block, NdOp::LOAD, temp(2), {mkReg(kSP, 1)});
+    B.call(Block, "free", MedVar{}, {temp(2)});
+    B.ret(Block, {});
+
+    const auto Findings = audit({B.F}, nullptr, /*StackRegs=*/true);
+    EXPECT_FALSE(has(Findings, VulnClass::HeapLeak));
+    EXPECT_FALSE(has(Findings, VulnClass::UseAfterFree));
+  }
+}
+
 TEST(AllocLifetime, DeepForwardedUninitializedStackLoadIsReported) {
   FB B("f", 0x100);
   int b0 = B.block();

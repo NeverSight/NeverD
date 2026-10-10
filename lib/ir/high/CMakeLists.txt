@@ -37,6 +37,7 @@ add_neverd_component_library(NeverDIRHigh
   structure/HighCFSimplify.cpp
   structure/HighCFSimplifyIfElse.cpp
   structure/HighEHStructurer.cpp
+  structure/X86RegistrationTry.cpp
   structure/HighIfChainToSwitch.cpp
   structure/HighLoopRecovery.cpp
 

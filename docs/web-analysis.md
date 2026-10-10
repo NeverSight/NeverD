@@ -4,7 +4,7 @@ The `neverd web` command and independent C API inspect admitted files without
 executing them. The current implementation provides immutable artifact
 inventory, JavaScript syntax and lexical-binding queries, bounded primitive
 values, conservative effect metadata, module evidence, qualified bundle partitions,
-reviewed source views and source-map decoding. Versioned Bun ELF profiles preserve source, asset,
+reviewed source views and source-map decoding. Versioned Bun ELF/Mach-O/PE profiles preserve source, asset,
 map and cache ranges and feeds decoded source into the same analysis API.
 The ASAR reader admits packed members and explicitly associated captured
 unpacked files, with shared source/map/native selection and integrity checks.
@@ -81,7 +81,9 @@ decoded-source identities remain separate. The producer's lost names/unmapped
 boundaries are reported explicitly; JSC caches remain opaque. The original
 container and native asset members can be selected for the explicit native
 handoff described below. Raw export is available through the CLI and C API;
-the worker does not expose filesystem export. Other Bun platforms remain pending.
+the worker does not expose filesystem export. Bun input profiles cover Linux,
+macOS and Windows on x64/ARM64; the [matrix](web-bun-profile.md) distinguishes
+input formats from host qualification and remaining unsupported layouts.
 
 ## SDK lifecycle
 

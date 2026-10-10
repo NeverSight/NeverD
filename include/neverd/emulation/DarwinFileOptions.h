@@ -65,7 +65,8 @@ struct DarwinFileMetadata {
 /// Writes allocate touched units; truncate growth creates holes and shrinking
 /// drops whole units beyond EOF. A retained partial unit stays allocated.
 /// Successful byte mutations use this fixed mtime/ctime; unlink uses it for
-/// ctime and changes link_count to zero. Other metadata is preserved.
+/// ctime and projects link_count from the remaining names, including zero.
+/// Other metadata is preserved.
 /// Requires complete initial metadata, ordinary permissions, flags=0 and
 /// link_count=1.
 struct DarwinFileMutationPolicy {

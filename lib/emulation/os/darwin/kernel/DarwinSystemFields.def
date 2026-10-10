@@ -34,4 +34,5 @@ NEVERD_DARWIN_PROCESS_FIELD(SessionID, SystemSessionID)
 NEVERD_DARWIN_PROCESS_FIELD(ProcessTainted, SystemProcessTainted)
 NEVERD_DARWIN_PROCESS_FIELD(LoginNameBytes, SystemLoginNameHex)
 NEVERD_DARWIN_PROCESS_FIELD(ProcessNice, SystemProcessNice)
+NEVERD_DARWIN_PROCESS_FIELD(ThreadID, ThreadID)
 #endif

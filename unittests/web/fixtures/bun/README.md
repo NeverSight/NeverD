@@ -1,5 +1,8 @@
 # Bun 1.4.2 fixed corpus
 
+The [cross-container corpus](cross/README.md) extends this Linux x64 baseline
+with complete Linux ARM64, macOS x64/ARM64 and Windows x64/ARM64 inputs.
+
 These inert inputs were authored for NeverD. The `*.graph.bin` files are exact
 graph ranges from real compiler outputs, captured on 2026-10-10. They contain
 source/asset/map/cache data and possible Bun-generated JavaScript scaffolding,

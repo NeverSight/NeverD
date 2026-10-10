@@ -198,6 +198,8 @@ struct MedOp {
     /// Their non-affine coordinates come from the checked LowIR contract.
     RealignedFramePointer,
     RealignedRestoredStackPointer,
+    /// Runtime EBP below source EBP in a checked fixed C++ frame.
+    DisplacedFramePointer,
   };
   NdOp Opcode = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;

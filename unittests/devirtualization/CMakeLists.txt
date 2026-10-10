@@ -74,6 +74,7 @@ add_neverd_unittest(NeverDLLVMInterpreterModelTests
   LLVMInterpreterModelCompileTests.cpp
   LLVMInterpreterModelGuardTests.cpp
   LLVMInterpreterModelAlignmentTests.cpp
+  LLVMInterpreterModelBswapTests.cpp
   LLVMInterpreterModelInitializationTests.cpp
   LLVMInterpreterModelLoopTests.cpp
   LLVMInterpreterModelRejectionTests.cpp
@@ -91,6 +92,7 @@ target_compile_definitions(NeverDLLVMInterpreterModelTests PRIVATE
 add_neverd_unittest(NeverDLLVMScalarEquivalenceTests
   LLVMScalarAssumeTests.cpp
   LLVMScalarEquivalenceTests.cpp
+  LLVMScalarBswapTests.cpp
   LLVMScalarDecisionTests.cpp
   LLVMScalarDemandTests.cpp
   LLVMScalarModelTests.cpp
@@ -142,6 +144,7 @@ add_neverd_unittest(NeverDInterpreterLLVMRefinementTests
   InterpreterLLVMRefinementPreservationTests.cpp
   InterpreterLLVMRefinementCollectionTests.cpp
   InterpreterLLVMRefinementAlignmentTests.cpp
+  InterpreterLLVMRefinementBswapTests.cpp
   InterpreterLLVMRefinementLoopTests.cpp
   InterpreterLLVMRefinementCompileTests.cpp
   LINK_COMPONENTS InterpreterLLVMRefinement

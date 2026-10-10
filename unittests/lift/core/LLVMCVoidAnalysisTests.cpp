@@ -12,6 +12,7 @@
 #include "neverd/backend/llvm/LLVMX86FPStateAsm.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -26,7 +27,8 @@
 
 namespace {
 
-void compileAndRun(const std::string &Source) {
+void compileAndRun(const std::string &Source,
+                   llvm::ArrayRef<llvm::StringRef> TargetFlags = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -52,15 +54,15 @@ void compileAndRun(const std::string &Source) {
   }
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
-  const llvm::SmallVector<llvm::StringRef, 12> Arguments{
-      Compiler,
-      "-std=c11",
-      "-O2",
-      "-Werror=uninitialized",
-      "-Werror=return-type",
-      SourcePath,
-      "-o",
-      BinaryPath};
+  llvm::SmallVector<llvm::StringRef, 12> Arguments{Compiler,
+                                                   "-std=c11",
+                                                   "-O2",
+                                                   "-Werror=uninitialized",
+                                                   "-Werror=return-type",
+                                                   SourcePath,
+                                                   "-o",
+                                                   BinaryPath};
+  Arguments.append(TargetFlags.begin(), TargetFlags.end());
   std::string Error;
   int Result = llvm::sys::ExecuteAndWait(Compiler, Arguments, std::nullopt,
                                          Redirects, 30, 0, &Error);
@@ -397,6 +399,12 @@ TEST(LLVMCVoidAnalysis, WholeModuleCollectsFPHelpersFromWindowsMetadataBodies) {
   CEmitterOptions Options;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options));
+  llvm::SmallVector<llvm::StringRef, 2> TargetFlags;
+#if defined(__APPLE__) && defined(__aarch64__)
+  // Apple Silicon runs this masked SSE control through Rosetta. Native Intel
+  // and unmasked SSE exception behavior remain unverified.
+  TargetFlags = {"-arch", "x86_64"};
+#endif
   compileAndRun(Source + R"(
 int main(void) {
   uint32_t initial, state = 0x1f80;
@@ -405,7 +413,8 @@ int main(void) {
   __asm__ volatile("ldmxcsr %0" :: "m"(initial));
   return value != 3.75 || state != 0x1f80;
 }
-)");
+)",
+                TargetFlags);
 }
 
 } // namespace

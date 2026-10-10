@@ -4335,23 +4335,42 @@ TEST_F(SessionCAPITest, TLSDescriptorCallsShowAsCallsThroughTheDescriptor) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "builds an x86-64 ELF shared object";
 #else
-  if (llvm::StringRef(NEVERD_RUNTIME_FIXTURE_COMPILER).empty())
-    GTEST_SKIP() << "needs a GNU-style host C compiler";
-  // Under the GNU2 dialect, code reaches a thread-local variable by calling
-  // the resolver the dynamic linker writes into its TLS descriptor.
-  const auto Source = write("tls.c", "__thread int counter;\n"
-                                     "int bump(int by) {\n"
-                                     "  counter += by;\n"
-                                     "  return counter;\n"
-                                     "}\n");
+  ASSERT_FALSE(llvm::StringRef(NEVERD_RUNTIME_FIXTURE_COMPILER).empty())
+      << "needs a GNU-style host compiler";
+  // Exercise the actual GNU TLS descriptor call without requiring the
+  // compiler driver's optional GNU2 C dialect. The descriptor resolver gives
+  // the counter's offset from the thread pointer; bump adds its int argument.
+  const auto Source = write("tls.s", R"(.text
+.globl bump
+.type bump,@function
+bump:
+  pushq %rdi
+  leaq counter@TLSDESC(%rip), %rax
+  call *counter@TLSCALL(%rax)
+  movq %rax, %rdx
+  popq %rdi
+  movl %fs:(%rdx), %eax
+  addl %edi, %eax
+  movl %eax, %fs:(%rdx)
+  retq
+.size bump,.-bump
+.section .tbss,"awT",@nobits
+.p2align 2
+.globl counter
+.type counter,@tls_object
+counter:
+  .zero 4
+.size counter,4
+.section .note.GNU-stack,"",@progbits
+)");
   const std::string Library = (Directory / "libtls.so").string();
   std::string Message;
-  if (llvm::sys::ExecuteAndWait(NEVERD_RUNTIME_FIXTURE_COMPILER,
-                                {NEVERD_RUNTIME_FIXTURE_COMPILER, "-O1",
-                                 "-fPIC", "-shared", "-mtls-dialect=gnu2",
-                                 Source, "-o", Library},
-                                std::nullopt, {}, 60, 0, &Message) != 0)
-    GTEST_SKIP() << "the compiler has no GNU2 TLS dialect: " << Message;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(NEVERD_RUNTIME_FIXTURE_COMPILER,
+                                      {NEVERD_RUNTIME_FIXTURE_COMPILER, "-fPIC",
+                                       "-shared", Source, "-o", Library},
+                                      std::nullopt, {}, 60, 0, &Message),
+            0)
+      << Message;
   ASSERT_EQ(neverd_session_load(Session, Library.c_str()), 1)
       << takeString(neverd_last_error(Session));
   const int Bump = neverd_func_find_by_name(Session, "bump");

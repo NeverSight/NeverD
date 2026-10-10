@@ -18,7 +18,7 @@ bool MedToHighConverter::lowerX86RegistrationCatchReturn(
   if (TargetArch != Arch::X86 || !Med.ExceptionMetadata ||
       Med.ExceptionMetadata->Encoding != ExceptionEncoding::X86CxxFuncInfo ||
       !Med.ExceptionMetadata->Registration ||
-      Med.ExceptionMetadata->Registration->RegistrationOffset != -12 ||
+      !Med.ExceptionMetadata->Registration->cxxRuntimeFrameOffset() ||
       !Med.ExceptionMetadata->Cxx || !Med.RegistrationStates ||
       !Med.RegistrationStates->CxxContinuationsComplete ||
       CurOp.NumInputs != 1 || CurOp.Inputs[0].Size != 4 || CurOp.OriginSeq < 0)
@@ -26,7 +26,8 @@ bool MedToHighConverter::lowerX86RegistrationCatchReturn(
   const auto *Resume =
       Med.RegistrationStates->cxxContinuation(CurOp.Addr, CurOp.OriginSeq);
   if (!Resume || Resume->EndAddress != CurBlock.EndAddr ||
-      Resume->SavedStackOffset > -16 ||
+      Resume->SavedStackOffset >
+          *Med.ExceptionMetadata->Registration->RegistrationOffset - 4 ||
       !std::any_of(Med.Blocks.begin(), Med.Blocks.end(),
                    [&](const auto &Block) {
                      return Block.StartAddr == Resume->TargetVA;
@@ -39,16 +40,17 @@ bool MedToHighConverter::lowerX86RegistrationCatchReturn(
   // The catch may have overwritten both EBP and SavedESP. Use the same
   // entry-relative source coordinate as its runtime roots, including any
   // proved alignment, rather than observing those live callback values.
-  RegistrationFrameCoordinate Frame{-4, 1, 0};
-  if (Med.ExceptionMetadata->Registration->RealignedFrame) {
-    const auto Realigned = realignedRegistrationFrameCoordinate(
-        *Med.ExceptionMetadata, &*Med.RegistrationStates);
-    if (!Realigned || Med.Entry != Med.ExceptionMetadata->CodeRange.Begin)
-      return false;
-    Frame = *Realigned;
-  }
-  auto Slot = x86RegistrationFrameAddress(Frame, -16);
-  auto Saved = x86RegistrationFrameAddress(Frame, Resume->SavedStackOffset);
+  // An authenticated direct-frame return remains a runtime transfer even if
+  // other state flow prevents structuring the surrounding region.
+  const auto Frame = Med.ExceptionMetadata->Registration->hasCxxCallbackStack()
+                         ? cxxRegistrationFrameCoordinate(
+                               *Med.ExceptionMetadata, &*Med.RegistrationStates)
+                         : std::optional(RegistrationFrameCoordinate{-4, 1, 0});
+  if (!Frame || Med.Entry != Med.ExceptionMetadata->CodeRange.Begin)
+    return false;
+  auto Slot = x86RegistrationFrameAddress(
+      *Frame, *Med.ExceptionMetadata->Registration->RegistrationOffset - 4);
+  auto Saved = x86RegistrationFrameAddress(*Frame, Resume->SavedStackOffset);
   if (!Slot || !Saved)
     return false;
   HighStmt Restore;

@@ -46,6 +46,8 @@ if(NEVERD_ENABLE_WEB_JAVASCRIPT)
   )
   target_compile_definitions(NeverDWebSourceTests PRIVATE
     NEVERD_WEB_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+  set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/RecoveryTestProperties.cmake")
 endif()
 if(TARGET neverd_shared)
   add_neverd_unittest(NeverDWebNativeTests

@@ -171,6 +171,13 @@ llvm::Error validateSystemOptions(const DarwinSystemOptions &Options) {
     if (*Usage && ((**Usage).UserMicroseconds >= 1000000 ||
                    (**Usage).SystemMicroseconds >= 1000000))
       return failure(diagnostic::ResourceUsageOption);
+  if (Options.EntropyReads) {
+    if (Options.EntropyReads->size() > EntropyReplayLimit)
+      return failure(diagnostic::EntropyOption);
+    for (const auto &Read : *Options.EntropyReads)
+      if (Read.empty() || Read.size() > EntropyReadLimit)
+        return failure(diagnostic::EntropyOption);
+  }
   return llvm::Error::success();
 }
 
@@ -252,6 +259,10 @@ systemService(GuestMemory &Memory, uint64_t PageSize, ServiceKind Kind,
     return Options && Options->SessionID
                ? returned(*Options->SessionID)
                : unsupported(Result, diagnostic::ProcessSessionObservation);
+  case ServiceKind::ThreadSelfID:
+    return Options && Options->ThreadID
+               ? returned(*Options->ThreadID)
+               : unsupported(Result, diagnostic::ThreadIDObservation);
   case ServiceKind::IsSetUGID:
     return Options && Options->ProcessTainted
                ? returned(*Options->ProcessTainted)

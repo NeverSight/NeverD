@@ -59,6 +59,12 @@ DarwinFiles::read(Description &File, llvm::ArrayRef<Buffer> Buffers,
     return returned(InvalidArgument, true);
   if (File.Type == Kind::Directory)
     return returned(IsDirectory, true);
+  // The vnode prefix clips a request at the maximum signed offset before
+  // invoking symbolic-link I/O. Other offsets never expose target bytes,
+  // including zero-length requests and offsets beyond the target's length.
+  if (File.Type == Kind::SymbolicLink)
+    return returned(Offset == INT64_MAX ? 0 : OperationNotPermitted,
+                    Offset != INT64_MAX);
   if (Count && File.Type == Kind::Input &&
       (!Options || !Options->StandardInput))
     return unsupported(Result, diagnostic::FileInput);
@@ -88,7 +94,7 @@ llvm::Expected<std::optional<ServiceResult>>
 DarwinFiles::write(Description &File, llvm::ArrayRef<Buffer> Buffers,
                    uint64_t Count, uint64_t Offset, bool Positioned,
                    ProcessResult &Result) {
-  if (File.Type != Kind::File)
+  if (File.Type != Kind::File && File.Type != Kind::SymbolicLink)
     return returned(IllegalSeek, true);
   if (Offset > INT64_MAX)
     return returned(InvalidArgument, true);
@@ -96,6 +102,8 @@ DarwinFiles::write(Description &File, llvm::ArrayRef<Buffer> Buffers,
   // EOF. Repeating this decision for each vector would admit excess bytes.
   if (Offset == INT64_MAX)
     return returned(FileTooLarge, true);
+  if (File.Type == Kind::SymbolicLink)
+    return returned(OperationNotPermitted, true);
   Count = std::min(Count, uint64_t(INT64_MAX) - Offset);
   if (!Count)
     return returned(0);

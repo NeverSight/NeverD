@@ -99,6 +99,8 @@ v4 테스트는 접두 구조의 크기와 패딩, 잘린 구조와 알 수 없�
 
 `LLVMGuestAlignment.*`는 로드와 스토어를 독립적인 바이트 메모리 기준과 비교하여 정렬 및 비정렬 도메인, 자유로운 주소 상위 비트, 파싱된 기본 정렬, 부분 폭, 미사용 또는 덮어쓴 접근, 도달 불가능한 분기와 정확한/한 단위 부족 구성 예산을 검사합니다. `InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises`는 두 관계를 새로 검사하여 네이티브 스택 저장, 일치하는 진입 합동 조건과 변경된 소스 효과를 검증합니다.
 
+`LLVMByteSwap*`, `LLVMScalarByteSwap.*`, `InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises`는 독립적인 바이트 복사 및 시프트/마스크 기준으로 상위 바이트 보존, 블록 간 값, poison, 호출 계약과 독립 계산한 정확/한 단위 부족 예산을 확인합니다. Clang O1/O2 예제는 실제 교환 intrinsic을 요구합니다. 작은 네이티브 교환/BSWAP 예제는 양쪽을 새로 증명하고 잘못된 값이나 상위 워드 초기화 누락을 거부합니다.
+
 `NeverDLLVMScalarEquivalenceTests`는 전체 루프 입력 영역, 0회 반복, PHI 동시 교환, switch, 상위 입력 비트, 마지막 분할의 반례, poison을 만드는 추가 갱신, 반환 범위, 미지원 계약 및 정확한·한 단위 부족·0 예산을 검사합니다. 독립적인 두 배 폭·오버플로 기준 구현이 지원하는 각 폭의 funnel 끝점과 제약된 곱셈을 검사하며 독립 중첩 루프 C의 O1/O2 출력이 컴파일러 입력 형태를 확인합니다. 상태 모델 테스트도 끝점을 검사합니다. `SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings`는 누적 계산과 기존 개별 한도를 검사합니다.
 
 `LLVMScalarDecision.*`는 깊은 exact 시프트·확장 조건, 상수 분기, 두 루프 역방향 간선, 보존된 상위 데이터 비트, 마지막 미정의 연산, 비종료, 검사한 함수의 수정, 정확한 예산·한 단위 부족·지역 한도를 검사합니다. `LLVMScalarDecisionCompiled.DeepOneAndTwoBackedgeOracles`는 독립적으로 작성한 역방향 간선 하나와 두 개의 점화식을 부호 없는 C 오라클과 O0/O2에서 총 32,768회 비교합니다. 이는 스칼라 모델 검사이며 네이티브 ABI나 전체 바이너리 복원 범위를 뜻하지 않습니다.
@@ -1614,6 +1616,33 @@ MainActor 픽스처는 고정 메타데이터와 정적 테이블의 전체 흐�
 `ZeroTimeoutPollRetainsReadinessAndOrderedCopies`는 여덟 버전의 O0／O2 원시 호출에서 생존·음수·닫힌 설명자, 중복 개수, 인수 축소, 시간 제한／마스크 순서, 읽기 전용 0 timespec, 모든 메타데이터의 선행 반입 및 후속 오류에 유지되는 `revents`를 검증합니다. `ZeroTimeoutPollKeepsUnobservedBoundaries`는 미관측 커널, 한도, 마스크, 대기 및 준비 상태 경계를 유지합니다. Android의 `ReleasedGKIZeroTimeoutPollSharesRawAndBionicResults`는 여섯 패킹 프로필에서 공유 표와 errno 소유권을 확인합니다.
 
 ## 제한된 디렉터리 일괄 속성
+
+bulk-attributes는 완전한 그룹, 이름/종류 집합, 미사용 바이트 보호, low32 FD, bitmap 워드, 네이티브 오류, dup 공유 진행, 독립 open, EOF와 0 rewind를 검사한다. 리터럴/미지원 모드는 가상 전용이다. 모델은 전체 stat와 무효화, NFD/255바이트 이름, 입출력 별칭, 전송/예산 실패, 이동/SWAP/삭제/재사용, 명시 권한도 검사한다. 필수 목록은 플랫폼별65개로 ARM64는195개, Intel은130개다. 로컬에서는 일치하는 ARM64 HVF만 검증했다. native5s, guest/Python5,000,000us/quantum1024, public10s는 그대로다.
+
+## 범위가 제한된 Darwin 하드 링크
+
+link는 마지막 심볼릭 링크 대상을 따라가며 linkat flags=0은 링크 객체, AT_SYMLINK_FOLLOW는 대상을 선택한다. low32 0/0x40만 허용하고 나머지 하위 비트는 입력 전에 EINVAL이다. 소스 조회와 디렉터리 EPERM이 대상 입력보다 먼저이며 기존 대상은 EEXIST다. 대상 수정 권한과 명시된 같은 마운트 영역이 필요하다. 초기 식별 별칭과 알려진 장치/모드/플래그 충돌은 미지원이다.
+
+별칭은 항목 및 경로/NUL 비용만 추가하고 새 inode를 소비하지 않는다. 바이트, 속성 권한, 메타데이터 유효성과 매핑 임대는 공유 객체가 소유한다. 명시 정책이 링크 수와 ctime을 갱신하며 정책이 없으면 전체 stat는 미지다. 속성 변경은 stat를, 내용 변경은 속성 관찰을 무효화한다. 설명 및 마지막 매핑이 삭제 이름의 비용을 유지하며 교체는 즉시 해제 가능한 비용만 공제한다. 하위 트리는 정확한 식별과 부모로 이동하고 외부 별칭은 유지한다. 상대 심볼릭 대상은 선택 항목의 부모를 사용한다.
+
+여러 이름을 가졌던 객체의 F_GETPATH/ATTR_CMN_NAME은 한 개 또는 0개가 남아도 미지원이다. APFS 캐시 모델을 일반화하지 않는다. bulk NAME은 실제 항목을 사용하며 같은 객체의 일반 rename/SWAP는 두 이름을 유지한다. EXCL 대소문자, O_SYMLINK, Intel HVF, 실제 iOS, ACL, 매핑 일관성/EOF 신호, dyld, Mach IPC, 스레드 및 전체 프레임워크는 별도 과제다. 이 계약 범위에서만 이전 제외를 확장한다.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+65 mandatory workloads per platform / ARM64 195 / Intel 130
+```
 
 bulk-attributes는 완전한 그룹, 이름/종류 집합, 미사용 바이트 보호, low32 FD, bitmap 워드, 네이티브 오류, dup 공유 진행, 독립 open, EOF와 0 rewind를 검사한다. 리터럴/미지원 모드는 가상 전용이다. 모델은 전체 stat와 무효화, NFD/255바이트 이름, 입출력 별칭, 전송/예산 실패, 이동/SWAP/삭제/재사용, 명시 권한도 검사한다. 필수 목록은 플랫폼별63개로 ARM64는189개, Intel은126개다. 로컬에서는 일치하는 ARM64 HVF만 검증했다. native5s, guest/Python5,000,000us/quantum1024, public10s는 그대로다.
 

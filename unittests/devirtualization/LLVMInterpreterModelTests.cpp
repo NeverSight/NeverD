@@ -52,6 +52,46 @@ TEST_F(LLVMModel, IntegerPointerProjectionsRetainExactByteOffsets) {
   expect(Oracle({op(NdOp::COPY, r(24, 4), {n(123, 4)})}));
 }
 
+TEST_F(LLVMModel, TypedStateProjectionsPreserveIndependentByteOffsets) {
+  for (auto [Type, Offset] :
+       {std::pair{"i8", 4U}, {"i16", 8U}, {"i32", 16U}, {"i64", 32U}})
+    for (const char *Flags : {"", "inbounds ", "nuw ", "nusw "}) {
+      SCOPED_TRACE(std::string(Type) + Flags);
+      parse("%p = getelementptr " + std::string(Flags) + Type +
+            ", ptr %state, i64 4\n%x = load i64, ptr %p, align 1\n"
+            "%y = xor i64 %x, 413\nstore i64 %y, ptr %p, align 1\nret i64 0");
+      ASSERT_TRUE(Module);
+      expect(Oracle({op(NdOp::INT_XOR, r(Offset), {r(Offset), n(413)})}));
+    }
+  // The formerly refused unused word projection has no observable effect.
+  parse("%p = getelementptr i64, ptr %state, i64 1\nret i64 0");
+  ASSERT_TRUE(Module);
+  expect(Oracle());
+}
+
+TEST_F(LLVMModel, TypedStateProjectionsUseLayoutAllocationStride) {
+  parse("%p = getelementptr inbounds i64, ptr %state, i64 2\n"
+        "%x = load i64, ptr %p, align 1\n%y = xor i64 %x, 413\n"
+        "store i64 %y, ptr %p, align 1\nret i64 0");
+  ASSERT_TRUE(Module);
+  Module->setDataLayout("e-p:64:64-i64:128");
+  expect(Oracle({op(NdOp::INT_XOR, r(32), {r(32), n(413)})}));
+}
+
+TEST_F(LLVMModel, ChainedTypedStateProjectionsRetainNegativeOffsets) {
+  for (const char *Flags : {"", "inbounds ", "nusw "}) {
+    SCOPED_TRACE(Flags);
+    parse("%p = getelementptr inbounds i64, ptr %state, i64 4\n"
+          "%q = getelementptr " +
+          std::string(Flags) +
+          "i16, ptr %p, i64 -3\n"
+          "%r = getelementptr i32, ptr %q, i64 1\n"
+          "store i32 123, ptr %r, align 1\nret i64 0");
+    ASSERT_TRUE(Module);
+    expect(Oracle({op(NdOp::COPY, r(30, 4), {n(123, 4)})}));
+  }
+}
+
 TEST_F(LLVMModel, ArithmeticAndComparisonsPreserveBitWidths) {
   const std::pair<const char *, NdOp> Operations[] = {
       {"add", NdOp::INT_ADD},  {"sub", NdOp::INT_SUB},

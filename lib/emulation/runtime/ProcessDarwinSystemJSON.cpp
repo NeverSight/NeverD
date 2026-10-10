@@ -166,6 +166,28 @@ darwinSystemOptionsFromJSON(const llvm::json::Value &Value) {
       }
       continue;
     }
+    if (Name == field::SystemEntropyReads) {
+      const auto *Reads = V.getAsArray();
+      if (!Reads || Reads->size() > darwin_model::value::EntropyReplayLimit)
+        return invalid(Name);
+      Out.EntropyReads.emplace();
+      for (const auto &Read : *Reads) {
+        auto Hex = Read.getAsString();
+        if (!Hex || Hex->empty() || Hex->size() % 2 ||
+            Hex->size() / 2 > darwin_model::value::EntropyReadLimit)
+          return invalid(Name);
+        std::vector<uint8_t> Bytes(Hex->size() / 2);
+        for (size_t I = 0; I != Bytes.size(); ++I) {
+          const unsigned High = llvm::hexDigitValue((*Hex)[2 * I]);
+          const unsigned Low = llvm::hexDigitValue((*Hex)[2 * I + 1]);
+          if (High >= 16 || Low >= 16)
+            return invalid(Name);
+          Bytes[I] = uint8_t(High * 16 + Low);
+        }
+        Out.EntropyReads->push_back(std::move(Bytes));
+      }
+      continue;
+    }
 #define NEVERD_DARWIN_SYSTEM_FIELD(Member, Field, NativeName, Root, Leaf)      \
   if (Name == field::Field) {                                                  \
     if (!parse(V, Out.Member))                                                 \
