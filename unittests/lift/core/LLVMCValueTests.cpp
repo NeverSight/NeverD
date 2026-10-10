@@ -1614,61 +1614,78 @@ TEST(LLVMCValues, ConstantsWiderThanTheCarrierAreRejected) {
 }
 
 TEST(LLVMCValues, WideConstantsPreserveEveryStoredByte) {
-  for (unsigned Bits : {256u, 512u}) {
-    SCOPED_TRACE(Bits);
-    llvm::LLVMContext Context;
-    llvm::Module Module("wide-constant-bytes", Context);
-    Module.setDataLayout("e-p:64:64");
-    auto *Signature =
-        llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
-                                {llvm::PointerType::getUnqual(Context)}, false);
-    auto *Function = llvm::Function::Create(
-        Signature, llvm::GlobalValue::ExternalLinkage, "wide_store", Module);
-    llvm::IRBuilder<> Builder(
-        llvm::BasicBlock::Create(Context, "entry", Function));
-    llvm::APInt Value(Bits, 0);
-    for (unsigned Byte = 0; Byte < Bits / 8; ++Byte)
-      Value |= llvm::APInt(Bits, (Byte * 37 + 17) & 255) << (Byte * 8);
-    auto *Store = Builder.CreateStore(llvm::ConstantInt::get(Context, Value),
-                                      Function->getArg(0));
-    Store->setAlignment(llvm::Align(1));
-    Builder.CreateRetVoid();
-    auto *CopySignature = llvm::FunctionType::get(
-        Builder.getVoidTy(), {Builder.getPtrTy(), Builder.getPtrTy()}, false);
-    auto *Copy = llvm::Function::Create(
-        CopySignature, llvm::GlobalValue::ExternalLinkage, "wide_copy", Module);
-    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Copy));
-    auto *Loaded = Builder.CreateLoad(llvm::IntegerType::get(Context, Bits),
-                                      Copy->getArg(0));
-    Loaded->setAlignment(llvm::Align(1));
-    Builder.CreateStore(Loaded, Copy->getArg(1))->setAlignment(llvm::Align(1));
-    Builder.CreateRetVoid();
-    std::string Source;
-    llvm::raw_string_ostream Out(Source);
-    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
-    const std::string Main = R"(
+  for (bool LittleEndian : {true, false})
+    for (unsigned Bits :
+         {129u, 136u, 159u, 192u, 224u, 255u, 256u, 257u, 384u, 511u, 512u}) {
+      SCOPED_TRACE(Bits);
+      SCOPED_TRACE(LittleEndian);
+      llvm::LLVMContext Context;
+      llvm::Module Module("wide-constant-bytes", Context);
+      Module.setDataLayout(LittleEndian ? "e-p:64:64" : "E-p:64:64");
+      auto *Signature = llvm::FunctionType::get(
+          llvm::Type::getVoidTy(Context),
+          {llvm::PointerType::getUnqual(Context)}, false);
+      auto *Function = llvm::Function::Create(
+          Signature, llvm::GlobalValue::ExternalLinkage, "wide_store", Module);
+      llvm::IRBuilder<> Builder(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      llvm::APInt Value(Bits, 0);
+      const unsigned Bytes = (Bits + 7) / 8;
+      for (unsigned Byte = 0; Byte < Bytes; ++Byte)
+        Value |= llvm::APInt(Bits, (Byte * 37 + 17) & 255) << (Byte * 8);
+      auto *Store = Builder.CreateStore(llvm::ConstantInt::get(Context, Value),
+                                        Function->getArg(0));
+      Store->setAlignment(llvm::Align(1));
+      Builder.CreateRetVoid();
+      auto *CopySignature = llvm::FunctionType::get(
+          Builder.getVoidTy(), {Builder.getPtrTy(), Builder.getPtrTy()}, false);
+      auto *Copy = llvm::Function::Create(CopySignature,
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          "wide_copy", Module);
+      Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Copy));
+      auto *Loaded = Builder.CreateLoad(llvm::IntegerType::get(Context, Bits),
+                                        Copy->getArg(0));
+      Loaded->setAlignment(llvm::Align(1));
+      Builder.CreateStore(Loaded, Copy->getArg(1))
+          ->setAlignment(llvm::Align(1));
+      Builder.CreateRetVoid();
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+      const std::string Main =
+          R"(
 int main(void) {
   unsigned char bytes[66];
   for (unsigned i = 0; i < 66; ++i) bytes[i] = 0xA5;
   wide_store(bytes + 1);
   for (unsigned i = 0; i < 66; ++i) {
+    unsigned byte_index = )" +
+          std::to_string(LittleEndian) + R"( ? i - 1 : )" +
+          std::to_string(Bytes) + R"( - i;
     unsigned char expected = i > 0 && i <= )" +
-                             std::to_string(Bits / 8) +
-                             R"( ? ((i - 1) * 37 + 17) & 255 : 0xA5;
-    if (bytes[i] != expected) return 1;
+          std::to_string(Bytes) +
+          R"( ? (byte_index * 37 + 17) & 255 : 0xA5;
+    unsigned mask = i == )" +
+          std::to_string(LittleEndian ? Bytes : 1) + R"( ? )" +
+          std::to_string(Bits % 8 ? (1u << (Bits % 8)) - 1 : 255) + R"( : 255;
+    if ((bytes[i] & mask) != (expected & mask)) return 1;
   }
   unsigned char copy[66];
   for (unsigned i = 0; i < 66; ++i) copy[i] = 0xA5;
   bytes[1] ^= 0xFF;
   wide_copy(bytes + 1, copy + 1);
-  for (unsigned i = 0; i < 66; ++i)
-    if (bytes[i] != copy[i]) return 2;
+  for (unsigned i = 0; i < 66; ++i) {
+    unsigned mask = i == )" +
+          std::to_string(LittleEndian ? Bytes : 1) + R"( ? )" +
+          std::to_string(Bits % 8 ? (1u << (Bits % 8)) - 1 : 255) + R"( : 255;
+    if ((bytes[i] & mask) != (copy[i] & mask)) return 2;
+  }
   return 0;
 }
 )";
-    for (llvm::StringRef Optimization : {"-O0", "-O2"})
-      compileAndRun(Source + Main, Optimization, {}, true);
-  }
+      for (llvm::StringRef Optimization : {"-O0", "-O2"})
+        compileAndRun(Source + Main, Optimization, {}, true);
+    }
 }
 
 TEST(LLVMCValues, GlobalByteViewsUseObjectAddresses) {

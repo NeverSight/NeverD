@@ -1905,6 +1905,11 @@ offsets, including nested aggregates and signed dynamic indices. Ordinary raw
 scalar accesses with insufficient alignment use Clang/GCC `aligned(1)`,
 `may_alias` scalar types by default (`CEmitterOptions::UseUnalignedPointers`),
 and exact-width byte copies for other widths or when that option is cleared.
+Ordinary raw wide-integer accesses (129-512 bits) assemble and disassemble
+unsigned bytes using the LLVM data layout's byte order. They access exactly
+the LLVM store size even when the C `_BitInt` carrier contains padding, and
+evaluate the address and stored value once. This also keeps an unaligned
+access independent of the carrier's natural C alignment.
 Integer comparisons share one LLVMC rendering rule across inline expressions,
 assigned results, and inverted branches. Operands retain their LLVM bit width
 before C integer promotion, and signed predicates interpret that width's sign

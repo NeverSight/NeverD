@@ -378,9 +378,13 @@ retains forward-referenced storage and function providers while excluding
 unrelated globals. `HighCPointerAddresses.ExceptTailUsesOnlyItsPrintedContinuation`
 checks except fallthrough, live intervening effects and finally transfers;
 the x86 SEH probe also checks shared result-slot identity after frame projection.
-`LLVMCValues.WideConstantsPreserveEveryStoredByte` executes unaligned i256/i512
-loads and stores at O0/O2 with undefined-behavior traps, checking every byte and
-the surrounding sentinels. Widths beyond the supported C carrier fail explicitly.
+`LLVMCValues.WideConstantsPreserveEveryStoredByte` executes unaligned loads and
+stores at eleven widths from i129 through i512, including i224/i384 and partial
+final bytes, for both LLVM byte orders at O0/O2 with undefined-behavior traps.
+It checks every meaningful bit and the surrounding sentinels. Only unused bits
+of a final partial byte are excluded, as permitted by the
+[LLVM store semantics](https://llvm.org/docs/LangRef.html#store-instruction).
+Widths beyond the supported C carrier fail explicitly.
 
 ```sh
 cmake --build build-release --target NeverDCMemoryCopyTests \

@@ -3527,12 +3527,16 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
       (!Store || !Store->isSimple() || Store->getPointerAddressSpace() != 0))
     return false;
   auto *Type = Load ? Load->getType() : Store->getValueOperand()->getType();
-  // These carriers have exact C object representations. Partial-width
-  // integers and x87 have their separate exact-byte paths.
+  // Native carriers have exact C object representations. Wider _BitInt
+  // carriers can contain padding: transfer the LLVM store size and byte
+  // order, never the C object's representation. The x87 memory image has
+  // its own exact-byte path.
+  const bool WideInteger = Type->isIntegerTy() &&
+                           Type->getIntegerBitWidth() > 128 &&
+                           Type->getIntegerBitWidth() <= 512;
   const bool Integer = Type->isIntegerTy(8) || Type->isIntegerTy(16) ||
                        Type->isIntegerTy(32) || Type->isIntegerTy(64) ||
-                       Type->isIntegerTy(128) || Type->isIntegerTy(256) ||
-                       Type->isIntegerTy(512);
+                       Type->isIntegerTy(128) || WideInteger;
   if (!Integer && !Type->isFloatTy() && !Type->isDoubleTy() &&
       !Type->isHalfTy() && !Type->isBFloatTy() && !Type->isPointerTy())
     return false;
@@ -3572,6 +3576,38 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
     Pointer = "&" + Pointer;
   }
   emitIndent(Indent);
+  if (WideInteger) {
+    const auto Carrier = typeToCLLVM(Type);
+    const auto AddressName = freshVar("wide_address");
+    const auto Index = freshVar("wide_byte");
+    const auto Value = Load ? getName(Load) : freshVar("wide_value");
+    OS << "{ " << (Load ? "const " : "") << "uint8_t *" << AddressName << " = ("
+       << (Load ? "const " : "") << "uint8_t *)(" << Pointer << ");\n";
+    emitIndent(Indent + 1);
+    if (Load)
+      OS << Value << " = 0;\n";
+    else
+      OS << Carrier << " " << Value << " = "
+         << integerPointerOperandStr(Store->getValueOperand()) << ";\n";
+    emitIndent(Indent + 1);
+    OS << "for (unsigned " << Index << " = 0; " << Index << " < "
+       << Size.getFixedValue() << "; ++" << Index << ")\n";
+    const std::string ByteIndex =
+        Layout.isLittleEndian()
+            ? Index
+            : "(" + std::to_string(Size.getFixedValue() - 1) + " - " + Index +
+                  ")";
+    emitIndent(Indent + 2);
+    if (Load)
+      OS << Value << " |= (" << Carrier << ")" << AddressName << "[" << Index
+         << "] << (8 * " << ByteIndex << ");\n";
+    else
+      OS << AddressName << "[" << Index << "] = (uint8_t)(" << Value
+         << " >> (8 * " << ByteIndex << "));\n";
+    emitIndent(Indent);
+    OS << "}\n";
+    return true;
+  }
   if (UnalignedTypesWritten) {
     if (auto Alias = c_memory::alias(typeToCLLVM(Type), Opts.ScalarPointers);
         !Alias.empty()) {
