@@ -104,8 +104,7 @@ void RegistrationStateSolver::dispatch(
   Root.Frame.EntryCells = Source.Frame.EntryCells;
   Root.InitializedFrameBytes = Source.InitializedFrameBytes;
   Root.RuntimeObject.Cells = Source.RuntimeObject.Cells;
-  for (auto &[Offset, Value] : Root.RuntimeObject.Cells)
-    Value = registration_state::join(Value, {});
+  Root.RuntimeObject.forgetCellValues();
   Root.Frame.Cells[*Chain.TryLevelOffset] =
       FrameValue::constant(uint32_t(Level));
   Root.Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
@@ -178,13 +177,19 @@ void RegistrationStateSolver::dispatch(
     // Unwinding and catch-object construction may change local objects.
     // Keep only frame taint for their old values. Runtime administration is
     // separate: the link word and SavedESP remain owned by the EH frame.
-    for (auto &[Offset, Value] : Root.Frame.Cells)
+    for (auto It = Root.Frame.Cells.begin(); It != Root.Frame.Cells.end();) {
+      const auto Offset = It->first;
       if (Offset != *Chain.RegistrationOffset &&
           int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
           Offset != *Chain.TryLevelOffset &&
           (!Chain.RealignedFrame ||
            Offset != Chain.RealignedFrame->SavedParentFrameOffset))
-        Value = registration_state::join(Value, {});
+        It->second = registration_state::join(It->second, {});
+      if (It->second == FrameValue{})
+        It = Root.Frame.Cells.erase(It);
+      else
+        ++It;
+    }
   }
   Root.Installed = true;
   Root.CanDispatch = !SearchFilter;

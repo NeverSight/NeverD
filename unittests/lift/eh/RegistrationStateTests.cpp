@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationFrame.h"
 #include "RegistrationStateTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -18,6 +19,63 @@ namespace {
 
 using namespace neverd;
 using namespace neverd::registration_test;
+
+TEST(RegistrationState, DeadFrameValuesDoNotAccumulateAcrossJoins) {
+  using registration_state::FrameState;
+  using registration_state::FrameValue;
+  for (unsigned Space = 0; Space != 3; ++Space) {
+    for (bool OpaqueCall : {false, true}) {
+      SCOPED_TRACE(Space);
+      SCOPED_TRACE(OpaqueCall);
+      FrameState State;
+      auto Store = [&](FrameState &S, int32_t Offset, uint16_t Width,
+                       FrameValue Value) {
+        if (Space == 0)
+          S.store(Offset, Width, Value);
+        else if (Space == 1)
+          S.storeEntry(Offset, Width, Value);
+        else
+          S.storeCallback(Offset, Width, Value);
+      };
+      auto Load = [&](int32_t Offset, uint16_t Width) {
+        return Space == 0   ? State.load(Offset, Width)
+               : Space == 1 ? State.loadEntry(Offset, Width)
+                            : State.loadCallback(Offset, Width);
+      };
+      // Every join invalidates a distinct scalar spill. The surviving frame
+      // pointer is a may fact: neither a missing predecessor store nor a
+      // partial overwrite may clear its provenance.
+      Store(State, -8, 4, FrameValue::frame(-32));
+      for (int32_t I = 0; I != 1024; ++I) {
+        const int32_t Offset = -16 - 4 * I;
+        Store(State, Offset, 4, FrameValue::constant(uint32_t(I)));
+        if (OpaqueCall)
+          State.forgetCellValues();
+        else
+          State.merge(FrameState{});
+        EXPECT_EQ(Load(Offset, 4), FrameValue{});
+        EXPECT_TRUE(Load(-8, 4).MayBeFrame);
+        EXPECT_FALSE(Load(-8, 4).Offset);
+        EXPECT_EQ(State.Cells.size() + State.EntryCells.size() +
+                      State.CallbackCells.size(),
+                  1u);
+      }
+      Store(State, -7, 1, FrameValue::constant(0));
+      EXPECT_TRUE(Load(-8, 4).MayBeFrame);
+      EXPECT_TRUE(Load(-6, 1).MayBeFrame);
+      EXPECT_FALSE(Load(-4, 4).MayBeFrame);
+      Store(State, -8, 4, FrameValue::constant(17));
+      EXPECT_EQ(Load(-8, 4), FrameValue::constant(17));
+      FrameState OtherPath;
+      Store(OtherPath, -7, 4, FrameValue::frame(-32));
+      State.merge(OtherPath);
+      // The invalidated exact scalar cell must not hide overlapping pointer
+      // bytes that reach this load through the other predecessor.
+      EXPECT_TRUE(Load(-8, 4).MayBeFrame);
+      EXPECT_FALSE(Load(-8, 4).Constant);
+    }
+  }
+}
 
 LowFunc makeCookieFrame(bool GS = false) {
   auto F = makeBranchingFrame();
