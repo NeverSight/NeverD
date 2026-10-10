@@ -1,5 +1,10 @@
 # Offline web analysis
 
+Explicitly selected SSE, JSONL, JSON-RPC/MCP-shape and diagnostic-log inputs
+use `neverd web stream-preview` and receipt-bound `stream-import`.
+See the [stream profiles](web-stream-profile.md) for framing, redaction,
+recorded-context joins and limitations.
+
 Passive HAR/source interface commands and their explicit redaction preview
 workflow are documented in the [interface profile](web-interface-profile.md).
 Use `neverd web har-preview` before hash-bound `har-import` or

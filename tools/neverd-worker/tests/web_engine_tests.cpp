@@ -1573,6 +1573,68 @@ int main(int argc, char **argv) {
         check(reply["payload"] == records, "Correlation records differ");
       }
     }
+    {
+      const auto streamRoot = fixture.root / "streams";
+      fs::create_directory(streamRoot);
+      std::ofstream(streamRoot / "a.jsonl")
+          << R"({"session":"SECRET_WEB","direction":"client_to_server","timestamp":"SECRET_WEB","message":{"jsonrpc":"2.0","id":"SECRET_WEB","method":"SECRET_WEB","params":{"SECRET_WEB":"SECRET_WEB"}}})"
+          << '\n'
+          << R"({"session":"SECRET_WEB","direction":"server_to_client","message":{"jsonrpc":"2.0","id":"SECRET_WEB","result":"SECRET_WEB"}})"
+          << '\n';
+      const auto before = web.revision(), projectBefore = web.projectId();
+      const Json input{{"schema_version", 1}, {"path", streamRoot.string()}};
+      const auto p = web.execute("web_import_preview", input);
+      const auto c = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", p["preview_token"]}});
+      reply = process.call("web_import_preview", input, before, projectBefore);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       before, projectBefore);
+      check(reply["payload"] == c, "Stream input differs");
+      const auto revision = web.revision(), project = web.projectId();
+      const auto items = web.execute(
+          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+      const Json previewArgs{{"schema_version", 1},
+                             {"revision", revision},
+                             {"artifact_id", items["items"][1]["artifact_id"]},
+                             {"profile", "recorded-jsonrpc-2.0-jsonl-v1"}};
+      const auto redaction = web.execute("web_stream_preview", previewArgs);
+      reply =
+          process.call("web_stream_preview", previewArgs, revision, project);
+      check(reply["payload"] == redaction &&
+                redaction["publication_status"] == "preview" &&
+                redaction["recorded_pair_candidates"] == 1 &&
+                reply.dump().find("SECRET_WEB") == std::string::npos,
+            "Stream preview differs or exposes input");
+      const Json page{{"schema_version", 1},
+                      {"revision", revision},
+                      {"capture_id", redaction["stream_capture_id"]}};
+      reply = process.call("web_stream_records", page, revision, project);
+      check(reply["error"]["code"] == "stream_capture_not_committed",
+            "Stream observations escaped preview gate");
+      const Json acceptance{{"schema_version", 1},
+                            {"revision", revision},
+                            {"preview_token", redaction["preview_token"]}};
+      const auto accepted = web.execute("web_stream_commit", acceptance);
+      reply = process.call("web_stream_commit", acceptance, revision, project);
+      check(reply["payload"] == accepted, "Stream commit differs");
+      const auto records = web.execute("web_stream_records", page);
+      reply = process.call("web_stream_records", page, revision, project);
+      check(reply["payload"] == records &&
+                records["items"][0]["peer_record_id"] ==
+                    records["items"][1]["record_id"] &&
+                records["protocol_negotiation_verified"] == false &&
+                reply.dump().find("SECRET_WEB") == std::string::npos,
+            "Stream pages differ or expose values");
+      auto invalid = previewArgs;
+      invalid["replay"] = true;
+      reply = process.call("web_stream_preview", invalid, revision, project);
+      check(reply["error"]["code"] == "invalid_request",
+            "Stream transport accepted a replay flag");
+    }
     process.stop();
     std::ifstream errors(fixture.root / "stderr");
     const std::string diagnostics{std::istreambuf_iterator<char>(errors), {}};

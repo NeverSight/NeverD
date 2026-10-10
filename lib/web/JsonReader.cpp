@@ -190,6 +190,7 @@ class Preflight {
   }
 
 public:
+  uint64_t nodes() const { return Nodes; }
   Preflight(std::string_view Bytes, const JsonLimits &Limits)
       : Bytes(Bytes), Limits(Limits) {}
   void check() {
@@ -202,12 +203,24 @@ public:
 } // namespace
 
 llvm::json::Value parseBoundedJSON(std::string_view Bytes,
-                                   const JsonLimits &Limits) {
+                                   const JsonLimits &Limits,
+                                   uint64_t *ConsumedNodes) {
+  if (ConsumedNodes)
+    *ConsumedNodes = 0;
   if (Bytes.size() > Limits.MaxBytes)
     throw Error("json_byte_budget_exceeded");
   if (!validUtf8(Bytes))
     throw Error("invalid_json_encoding");
-  Preflight(Bytes, Limits).check();
+  Preflight Admission(Bytes, Limits);
+  try {
+    Admission.check();
+  } catch (...) {
+    if (ConsumedNodes)
+      *ConsumedNodes = Admission.nodes();
+    throw;
+  }
+  if (ConsumedNodes)
+    *ConsumedNodes = Admission.nodes();
   auto Parsed = llvm::json::parse(llvm::StringRef(Bytes));
   if (!Parsed) {
     llvm::consumeError(Parsed.takeError());

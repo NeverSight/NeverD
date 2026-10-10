@@ -34,6 +34,7 @@
 #include "neverd/web/SourceModules.h"
 #include "neverd/web/SourceNavigation.h"
 #include "neverd/web/SourceView.h"
+#include "neverd/web/Streams.h"
 
 #include <map>
 #include <mutex>
@@ -73,6 +74,10 @@ struct Session::Impl {
   std::map<std::string, PackageArchive> PackageArchives;
   std::map<std::string, PackageIntegrityResult> PackageIntegrity;
   std::map<std::string, HARCapture> HARCaptures;
+  std::map<std::string, StreamCapture> StreamCaptures;
+  std::optional<StreamCapture> PendingStream;
+  std::string StreamPreviewToken;
+  uint64_t StreamPreviewSequence = 0;
   std::optional<HARCapture> PendingHAR;
   std::string HARPreviewToken;
   uint64_t HARPreviewSequence = 0;
@@ -109,7 +114,8 @@ struct Session::Impl {
                    AsarExtractions.empty() && ElectronManifests.empty() &&
                    HTMLDocuments.empty() && PackageAnalyses.empty() &&
                    PackageArchives.empty() && PackageIntegrity.empty() &&
-                   HARCaptures.empty() && InterfaceSources.empty()
+                   HARCaptures.empty() && InterfaceSources.empty() &&
+                   StreamCaptures.empty()
                ? "not_analyzed"
                : "partial";
   }

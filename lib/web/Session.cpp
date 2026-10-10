@@ -71,6 +71,27 @@ std::string Session::capabilities() {
                          {"max_cached_map_segments", 200000},
                          {"resolves_external_references", false}}};
   Operations.emplace_back("electron_manifest_analyze");
+  for (const auto *Name : {"stream_preview", "stream_commit", "stream_records"})
+    Operations.emplace_back(Name);
+  llvm::json::Array StreamProfiles;
+  for (const auto Profile : streamProfiles())
+    StreamProfiles.emplace_back(std::string(Profile));
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "passive_streams"},
+      {"profiles", std::move(StreamProfiles)},
+      {"redaction_policy", std::string(StreamRedactionPolicy)},
+      {"max_bytes", std::to_string(MaxStreamBytes)},
+      {"max_fragment_bytes", MaxStreamFragmentBytes},
+      {"max_records", MaxStreamRecords},
+      {"max_json_nodes", MaxStreamJSONWork},
+      {"max_json_depth", 32},
+      {"max_private_id_bytes", MaxStreamPrivateBytes},
+      {"max_cached_captures", 4},
+      {"max_pending_previews", 1},
+      {"explicit_preview_required", true},
+      {"protocol_auto_detection", false},
+      {"network_access", false},
+      {"executes_input", false}});
   for (const auto *Name : {"har_preview", "har_commit", "har_records"})
     Operations.emplace_back(Name);
   Analyses.emplace_back(llvm::json::Object{
@@ -494,6 +515,9 @@ std::string Session::commit(std::string_view Token) {
   State->PackageArchives.clear();
   State->PackageIntegrity.clear();
   State->HARCaptures.clear();
+  State->StreamCaptures.clear();
+  State->PendingStream.reset();
+  State->StreamPreviewToken.clear();
   State->PendingHAR.reset();
   State->HARPreviewToken.clear();
   State->InterfaceSources.clear();
@@ -540,6 +564,7 @@ std::string Session::metadata() const {
       {"source_map_count", State->Maps.size()},
       {"source_view_count", State->SourceViews.size()},
       {"har_capture_count", State->HARCaptures.size()},
+      {"stream_capture_count", State->StreamCaptures.size()},
       {"interface_analysis_count", State->InterfaceSources.size()},
       {"interface_correlation_count", State->InterfaceCorrelations.size()},
       {"redaction_policy", "metadata-only-v1"}});

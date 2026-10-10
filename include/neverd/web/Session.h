@@ -34,6 +34,14 @@ public:
   /// Revalidate the selected input before atomically publishing the preview.
   std::string commit(std::string_view Token);
   std::string metadata() const;
+  std::string previewStream(std::string_view ExpectedRevision,
+                            std::string_view ArtifactID,
+                            std::string_view Profile);
+  std::string commitStream(std::string_view ExpectedRevision,
+                           std::string_view PreviewToken);
+  std::string streamRecords(std::string_view ExpectedRevision,
+                            std::string_view CaptureID, uint64_t Offset,
+                            uint64_t Limit) const;
   std::string previewHAR(std::string_view ExpectedRevision,
                          std::string_view ArtifactID);
   std::string commitHAR(std::string_view ExpectedRevision,

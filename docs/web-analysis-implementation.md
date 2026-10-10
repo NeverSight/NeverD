@@ -45,7 +45,7 @@ their existing scope; no Python support for web APIs is claimed.
 | P4C package graph/diff | Versioned npm graph/diff, bounded tar/local-PAX/single-gzip members, original SRI and shared source/Bun/native consumers implemented; two official Claude Code npm packages qualify original digest and payload evidence | Source behavior, advisory/provenance, dispositions, readable reports and broader archive/host profiles remain |
 | P4D passive interfaces/HAR | Native HAR preview/commit, direct fetch/WebSocket source candidates and explicit method/origin/path comparison implemented | XHR/wrappers, response/transformation tracing, reviewed displays, schema exports and broader qualification remain |
 | P5 reversible source projections | Reviewed display projection and original/projected ranges implemented; semantic transforms pending | Per-pass receipts, local semantic preconditions, undo and refusal tests |
-| P6 stream/log consumers | Pending | SSE/JSONL/JSON-RPC/MCP versioned records, truncation and canary tests |
+| P6 stream/log consumers | Native versioned SSE/JSONL/JSON-RPC/MCP-shape/log readers, recorded-ID candidates and preview/commit implemented | Real supplied transcript/source correlation, broader framing/host qualification and C++ MCP transport remain |
 | P7 Tauri/Wails/Node-family | Pending | Actual asset extraction and bridge/native links for each named profile |
 | P8 C++ MCP, optional presentation, distribution | Pending | No external executable/script dependency, bounded outputs and shipped notices |
 | P9 full acceptance audit | Pending | Issue-by-issue fixture and cross-platform evidence, documented gaps |
@@ -186,6 +186,40 @@ disabled, both ABI cases and four generic worker cases passed, while the web
 worker case explicitly skipped. Both feature switches are restored. Formatting
 and whitespace checks passed. #717 remains partial: broader source request
 flow, response/transformation evidence, schema export and stream adapters remain.
+
+## Passive stream and protocol records — 2026-10-11
+
+Six explicit native C++ profiles now cover JSONL, SSE, JSON-RPC object shapes,
+MCP 2025-06-18 stdio base-message shapes, recorded envelopes and diagnostic
+lines. Core framing, protocol classification and recorded-ID candidates have
+separate owners under `lib/web/streams`; session/SDK/CLI/worker publish only
+metadata after redaction preview/commit. Receipts bind original hash, profile
+and policy, so changing interpretation requires a matching preview. No real
+Claude Code transcript was supplied or invented; source-to-stream correlation
+remains unimplemented. See the [stream profiles](web-stream-profile.md).
+
+Independent review added original-token numeric ID checks, whole-capture
+coverage-gap refusal, shared JSON node accounting including failed records,
+and separate exact-decimal integrality for JSON-RPC error codes. Private
+session/ID strings exist only during inspection; joins borrow that storage
+instead of duplicating it. Default pages exclude payloads, log text, custom
+names, recorded IDs, sessions and timestamps.
+
+After merging dev through `a40f1c633`, the restored macOS arm64 Release run
+exercised 390 owning web cases: 383 passed and seven explicitly skipped
+(six unavailable LLVM Zstd map cases and the inapplicable ASAR-policy omission
+case). The full optional Bun/Claude/npm corpus remained enabled, including
+all 2,345 recovered Claude Code JavaScript modules. Enabled API availability,
+all five selected C++ worker regressions and the repository capability manifest
+check passed. The new three public APIs have explicit ledger ownership.
+
+With only JS disabled, all 22 stream/SDK/shared-JSON cases and five worker
+cases passed. With the entire backend disabled, both ABI cases and four
+generic worker cases passed; the web worker case explicitly skipped. Both
+feature switches are restored. Scoped LLVM formatting and whitespace checks
+passed. These results qualify the supplied input profiles on this host,
+not full MCP transport/schema conformance, authenticated sessions, other
+hosts or completion of the five epics.
 
 ## Original npm archives and SRI — 2026-10-11
 

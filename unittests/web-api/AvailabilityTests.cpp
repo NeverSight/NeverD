@@ -57,7 +57,8 @@ TEST(WebAvailability, CapabilitiesReflectCompiledBackendAndParser) {
   EXPECT_TRUE(Has("package_archive_extract"));
   EXPECT_TRUE(Has("package_archive_records"));
   EXPECT_TRUE(Has("package_integrity_verify"));
-  for (const auto Op : {"har_preview", "har_commit", "har_records"})
+  for (const auto Op : {"har_preview", "har_commit", "har_records",
+                        "stream_preview", "stream_commit", "stream_records"})
     EXPECT_TRUE(Has(Op));
   for (const auto Op : {"interfaces_analyze", "interface_records",
                         "interfaces_compare", "interface_correlation_records"})
@@ -133,6 +134,10 @@ TEST(WebAvailability, AllPublicEntryPointsRemainAvailableWhenBackendIsOmitted) {
   neverd_session_t NativeOutput = reinterpret_cast<void *>(uintptr_t(1));
   for (const auto *Owned :
        {neverd_web_metadata_json(nullptr),
+        neverd_web_stream_preview_json(nullptr, nullptr, 0, nullptr, 0, nullptr,
+                                       0),
+        neverd_web_stream_commit_json(nullptr, nullptr, 0, nullptr, 0),
+        neverd_web_stream_records_json(nullptr, nullptr, 0, nullptr, 0, 0, 1),
         neverd_web_har_preview_json(nullptr, nullptr, 0, nullptr, 0),
         neverd_web_har_commit_json(nullptr, nullptr, 0, nullptr, 0),
         neverd_web_har_records_json(nullptr, nullptr, 0, nullptr, 0, 0, 1),

@@ -159,8 +159,11 @@ shadowing/eval, prototype/method/credential exclusions and fanout refusal.
 CLI and framed worker checks use an unusable external-tool PATH.
 
 This does not complete #717. XHR/request wrappers, response and transformation
-tracing, schema exports, reviewed endpoint displays, SSE/JSONL/JSON-RPC/MCP/log
-adapters, C++ MCP transport and broader host qualification remain required.
+tracing, schema exports, reviewed endpoint displays, C++ MCP transport and
+broader host qualification remain required. Separately selected
+[SSE/JSONL/JSON-RPC/MCP-shape/log adapters](web-stream-profile.md) now provide
+passive framing and recorded-context candidates; source-to-stream correlation
+remains unsupported.
 No Claude Code traffic or transcript is invented.
 
 With the optional `NEVERD_CLAUDE_CODE_21296_ELF` input, a C++ regression

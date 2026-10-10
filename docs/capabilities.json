@@ -270,7 +270,10 @@
           "neverd_web_source_view_chunk_json",
           "neverd_web_source_view_commit_json",
           "neverd_web_source_view_preview_json",
-          "neverd_web_source_view_records_json"
+          "neverd_web_source_view_records_json",
+          "neverd_web_stream_commit_json",
+          "neverd_web_stream_preview_json",
+          "neverd_web_stream_records_json"
         ]
       }
     ],
@@ -1066,7 +1069,10 @@
           "neverd_web_source_view_chunk_json",
           "neverd_web_source_view_commit_json",
           "neverd_web_source_view_preview_json",
-          "neverd_web_source_view_records_json"
+          "neverd_web_source_view_records_json",
+          "neverd_web_stream_commit_json",
+          "neverd_web_stream_preview_json",
+          "neverd_web_stream_records_json"
         ]
       }
     ],

@@ -47,6 +47,9 @@ int runWeb() {
        WebArguments[0] == "interfaces" ||
        WebArguments[0] == "interface-correlate"))
     return runWebInterfaces();
+  if (!WebArguments.empty() && (WebArguments[0] == "stream-preview" ||
+                                WebArguments[0] == "stream-import"))
+    return runWebStreams();
   if (!WebArguments.empty() && WebArguments[0] == "integrity")
     return runWebIntegrity();
   if (!WebArguments.empty() &&

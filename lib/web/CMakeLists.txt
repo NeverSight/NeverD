@@ -9,6 +9,10 @@ add_neverd_component_library(NeverDWeb
   interfaces/HAR.cpp
   interfaces/Correlation.cpp
   SessionInterfaces.cpp
+  streams/Framing.cpp
+  streams/Records.cpp
+  streams/Relations.cpp
+  SessionStreams.cpp
   SessionPackages.cpp
   SessionPackageArchive.cpp
   SessionPackageIntegrity.cpp

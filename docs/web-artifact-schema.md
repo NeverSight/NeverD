@@ -8,6 +8,17 @@ General findings and transform receipts still require separate contracts.
 
 ## Identity and immutable evidence
 
+Passive streams use [explicit versioned profiles](web-stream-profile.md).
+Capture IDs bind artifact occurrence, original byte hash, interpretation and
+redaction policy; record IDs add occurrence ordinal. Byte spans cover original
+framing. Arbitrary method/event names, payloads, log lines, recorded IDs, sessions
+and timestamps stay private. A separate preview/commit gate admits at most four
+captures and one pending capture per revision, with pages capped at 128 records.
+CLI receipts bind hash/profile/policy; changing interpretation requires another
+receipt. Recorded session/typed-ID/direction/order joins stay candidates, and
+any protocol coverage gap refuses all links. No transcript proves negotiation,
+capture authenticity, source execution or a complete server protocol.
+
 Passive interface records use the [versioned interface profile](web-interface-profile.md).
 HAR preview/commit is distinct from original artifact capture. Preview tokens
 bind the immutable artifact/hash, revision, policy and preview sequence; only

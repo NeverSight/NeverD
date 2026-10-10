@@ -360,6 +360,14 @@ ctest --test-dir build-release \
 
 ## Offline web analysis
 
+`WebStreams.*` covers explicit JSONL/SSE/JSON-RPC/MCP/log profiles, byte spans,
+EOF limits, duplicate/missing context, original numeric tokens and aggregate
+JSON work including failures. `WebStreamSDK.*` and `NeverDWorkerWeb` cover
+preview gates, profile/hash/policy receipts, redaction canaries, cache/revision
+revocation and transport parity. Run the owning web directory after changing
+shared JSON admission or session boundaries; readers remain enabled without JS.
+See the [stream profiles](web-stream-profile.md).
+
 `WebInterfaces.*` and `WebSourceInterfaces.*` cover passive HAR admission,
 fixed redaction classifications, missing/malformed fields, source anchors,
 shadowing/eval, options inheritance, method normalization, credential and
@@ -1065,6 +1073,8 @@ Shared-header and shared-latch regressions cover zero-extended 32-bit and full 6
 `LowIRLoopPlanPairing.*` in the same target checks renamed registers, different arithmetic bodies, side-specific prefix snapshots, retained predicates, shared frame inputs, nested cut coverage and fresh proof budgets. Missing relations, incorrect writes, malformed temporary bindings, incomplete pairings and exhausted metadata limits must not establish a certificate.
 
 `LowIRLoopAlignment.*` checks independently authored ordinary and rotated frame-counter loops: both default self-plans prove individually, their first pairing fails, and another candidate cut proves the relation. Regressions cover multiple-cut permutations, wrong results and frame writes, missing/stale original records, explicit undefined witnesses, nondecreasing/wrapping counters, malformed graphs, cumulative failed-attempt queries, exact total budgets and exhausted search limits. Every refusal must lack a certificate. Additional cases cover separate reset/progress phases, equivalent relocated exit guards requiring cross-family pairing, shared caching without repeated inference, and combined metadata exhaustion. A trailing independent cycle checks complete feedback coverage with an explicit 16384-query inference limit. Empty and duplicate families use no symbolic queries; too few cuts refuse. Exact and one-short global budgets, wrong results, missing progress, original evidence and undefined witnesses remain checked. Filtered-family regressions cover neutral arithmetic diamonds, local versus boundary-only joins, and a reachable join that can be bypassed to an exit or loop boundary. They check a filtered candidate even when the original filtered family is duplicate, reuse of a filtered plan before a later broad attempt, exact/one-short/zero `MaxCutSelectionWork`, cumulative failed `CutSelectionWork`, and no symbolic inference after global graph work is exhausted. Complete cycle coverage is checked for both branch families; the diamond relation uses explicit inference and proof query limits.
+
+`LowIRLoopAlignment.DirectRanks*` should check renamed register/frame carriers, compatible frame unions, conflicts at either binding endpoint, and conservative refusal of constant or expression ranks and actual 8-byte versus 4-byte frame inputs. The accounting oracle must derive optional scan, comparison and metadata costs from the public self-plans before testing exact and one-short limits, rather than copying the successful search's total. Duplicate proposals must consume attempts and work without new checker queries; exhausting the optional cap must still allow a later ordinary pairing to prove. Wrong results, frame or preserved-state changes, missing progress, and stale original evidence must remain rejected with complete observations and the selected witness intact. `InterpreterLLVMRefinement.PreservationRestoresEntryAcrossLoopCutpoints` should discover the source plan through public search without manual cut addresses or rank bindings, then prepare fresh models and recheck both native and LLVM premises in the composite checker. These requirements do not assert a test-run result or ordinary ABI certification.
 
 Partial-counter regressions cover frame and register lanes, both directions, low/interior/high positions, unusual widths, both byte orders and three-byte represented frame words. They check delayed lane discovery, preserved-bit mutations, nonprogress and unguarded wrap, invalid additional entries, exact/short inference budgets, and existing single-cut search.
 
