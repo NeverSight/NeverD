@@ -63,7 +63,7 @@ KernelModel::queryPerformanceCounter(uint64_t FrequencyAddress) {
             Memory.writeInteger(FrequencyAddress, Frequency, sizeof(uint64_t)))
       return E;
   }
-  recordUnpackClockRead();
+  recordUnpackEnvironmentRead();
   return Scheduler.now100ns();
 }
 

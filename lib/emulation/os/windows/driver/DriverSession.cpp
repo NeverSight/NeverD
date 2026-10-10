@@ -20,6 +20,7 @@
 #include "../kernel/KernelExportRegistry.h"
 #include "../kernel/KernelModel.h"
 #include "../kernel/WindowsKernelLayout.h"
+#include "DriverCPUID.h"
 #include "DriverImage.h"
 #include "DriverObservation.h"
 #include "DriverScenario.h"
@@ -1047,6 +1048,30 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
       if (PendingEnvironmentRead) {
         const auto &Action = PendingEnvironmentRead->Request;
         if (Action.Source ==
+            WindowsX64ExecutionPolicy::Action::Kind::ReadCPUID) {
+          auto Leaf = CPU.reg(X64Register::AX);
+          if (!Leaf)
+            return Leaf.takeError();
+          auto Subleaf = CPU.reg(X64Register::CX);
+          if (!Subleaf)
+            return Subleaf.takeError();
+          auto Values = driver_cpuid::query(Options.CPUID, uint32_t(*Leaf),
+                                            uint32_t(*Subleaf));
+          if (!Values) {
+            Stop(DriverStopReason::UnsupportedInstruction,
+                 llvm::toString(Values.takeError()));
+            break;
+          }
+          Kernel.recordUnpackEnvironmentRead();
+          constexpr X64Register Outputs[] = {X64Register::AX, X64Register::BX,
+                                             X64Register::CX, X64Register::DX};
+          for (unsigned I = 0; I < Values->size(); ++I)
+            if (auto E = CPU.setReg(Outputs[I], (*Values)[I]))
+              return E;
+          NextPC = PendingEnvironmentRead->NextPC;
+          continue;
+        }
+        if (Action.Source ==
                 WindowsX64ExecutionPolicy::Action::Kind::ReadTimestamp ||
             Action.Source == WindowsX64ExecutionPolicy::Action::Kind::
                                  ReadTimestampAndProcessor) {
@@ -1057,7 +1082,7 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
           auto Timestamp = ExecutionTime();
           if (!Timestamp)
             return Timestamp.takeError();
-          Kernel.recordUnpackClockRead();
+          Kernel.recordUnpackEnvironmentRead();
           if (auto E = CPU.setReg(X64Register::AX, uint32_t(*Timestamp)))
             return E;
           if (auto E = CPU.setReg(X64Register::DX, *Timestamp >> 32))

@@ -61,6 +61,24 @@ TEST(DriverBranchPolicy, RelativeExtentsFollowTheSelectedCPUModel) {
 #undef NEVERD_BRANCH_POLICY
 }
 
+TEST_F(DriverExecutionPolicy, CPUIDRequiresAnEnvironmentAction) {
+  for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0xa2},
+                            std::vector<uint8_t>{0x48, 0x0f, 0xa2}}) {
+    auto Action = Policy.inspect(Bytes, 0x1000);
+    ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+    ASSERT_TRUE(*Action);
+    EXPECT_EQ((**Action).Source,
+              WindowsX64ExecutionPolicy::Action::Kind::ReadCPUID);
+    EXPECT_FALSE((**Action).Destination);
+  }
+  for (const auto &Bytes : {std::vector<uint8_t>{0xf0, 0x0f, 0xa2},
+                            std::vector<uint8_t>{0x0f, 0xa2, 0x90}}) {
+    auto Rejected = Policy.inspect(Bytes, 0x1000);
+    ASSERT_FALSE(bool(Rejected));
+    llvm::consumeError(Rejected.takeError());
+  }
+}
+
 TEST_F(DriverExecutionPolicy, RejectsFSAndGSImplicitXLATMemory) {
   rejectsThreadAccess({0x64, 0xd7});
   rejectsThreadAccess({0x65, 0xd7});

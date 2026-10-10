@@ -474,7 +474,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v100` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v101` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 
@@ -594,6 +594,8 @@ CPU0 の明示的プリエンプション、仮想時計と制約は[ドライ�
 `KeQueryPerformanceCounter` は共有スケジューラー時刻を 100 ns 単位で返し、周波数は毎秒 10,000,000 回に固定されます。省略可能な出力ポインターでは、8 バイト全体の書き込み権限とオブジェクト寿命を検査します。有効なすべての x64 IRQL で呼び出せます。協調モードは既存のスケジューリング境界でのみ時刻を進め、命令クロックモードは設定済みの計時を維持します。読み取り自体は別の時計を作らず、時刻も進めません。これは決定的なプロファイルであり、ホストハードウェアの測定ではありません。独立コンパイルした実行時フィクスチャは、ネイティブ CPU バックエンドで優先アドレスと再配置アドレスにおける静的／動的識別、周波数、単調性を確認します。
 
 `RDTSC` と `RDTSCP` は `KeQueryPerformanceCounter` と同じ 10 MHz のスケジューラ時計を読みます。`RDTSCP` の ECX は単一のモデルプロセッサを示すゼロです。EAX/EDX（RDTSCP では ECX も）の上位 32 ビットをゼロにし、他のレジスタとフラグは維持します。協調実行では読み取りによって時間は進みません。明示的な命令スケジューリングでは、その命令の計上後の時刻を読み、量子の長さには依存しません。オーバーフローは結果の書き込み前に停止し、命令予算と観測停止も有効です。ホストの TSC 周波数やプロセッサ識別情報は公開しません。MSR アクセス、RDPMC、その他の未モデル化 CPU 問い合わせは未対応です。
+
+任意の `cpuid` は最大 64 件の CPU クエリー結果を宣言します。各レコードには符号なし 32 ビット整数の `leaf`、`eax`、`ebx`、`ecx`、`edx` が必要です。任意の `subleaf` は入力 ECX を制限し、省略時はその leaf の全サブリーフに一致します。重複・重なりは実行前に拒否します。CPUID は入力 EAX/ECX の下位 32 ビットを使用し、4 個の出力レジスターをゼロ拡張して、フラグと他のレジスターを保持します。未宣言のクエリーは出力前に leaf/subleaf の診断で停止します。`configuration.cpuid` は宣言を保持します。これは明示的な環境入力であり、ホストへの問い合わせや命令対応の保証ではありません。使用時はドライバー UNPACK の依存関係と明示的スナップショットの診断が残ります。
 
 `KeQueryPerformanceCounter`、`RDTSC`、`RDTSCP` によるクロック読み取りは、ドライバー復元の明示的な依存関係を保持します。取得したカウンター値と周波数を新しいカーネル環境に再対応付けする契約はありません。既定の復元は `unsupported_state` を返し、`snapshot_only` は診断を保持します。
 

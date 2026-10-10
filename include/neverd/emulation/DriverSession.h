@@ -96,6 +96,14 @@ struct DriverRequest {
   std::vector<DriverUserPointer> UserPointers;
 };
 
+/// One explicitly supplied CPUID observation. An absent Subleaf matches every
+/// input ECX for this leaf; overlapping declarations are rejected.
+struct DriverCPUID {
+  uint32_t Leaf = 0;
+  std::optional<uint32_t> Subleaf;
+  std::array<uint32_t, 4> Registers{}; // EAX, EBX, ECX, EDX.
+};
+
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
 /// or explicit instruction-driven preemptive scheduling, dispatcher waits,
 /// and DPC execution at modeled IRQLs.
@@ -112,6 +120,9 @@ struct DriverOptions {
   /// Retain attempted guest writes as budgeted report events. Disabling this
   /// leaves memory validation and execution observers active.
   bool TraceMemoryWrites = true;
+  /// Explicit CPU environment inputs, never inferred from the host processor.
+  /// A missing leaf/subleaf stops before publishing any CPUID register result.
+  std::vector<DriverCPUID> CPUID;
   uint64_t TimeoutMilliseconds = profile::DefaultTimeoutMilliseconds;
   std::string ServiceName = profile::DefaultServiceName;
   /// Zero selects the preferred PE image base.

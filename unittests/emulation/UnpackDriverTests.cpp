@@ -99,6 +99,8 @@ protected:
     D.Backend = GetParam().Kind;
     D.Contract = ExecutionContract::CheckedX64;
     D.Unload = true;
+    if (Options.Driver)
+      D.CPUID = Options.Driver->CPUID;
     D.Requests.push_back({DriverRequestKind::Create});
     DriverRequest IO;
     IO.ControlCode = 0x222000;
@@ -153,8 +155,12 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
 }
 
 TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
-  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15, 16, 17, 18}) {
+  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15, 16, 17, 18, 19}) {
     SCOPED_TRACE(Mode);
+    if (Mode == 19) {
+      Options.Driver.emplace();
+      Options.Driver->CPUID = {{0, std::nullopt, {1, 2, 3, 4}}};
+    }
     const auto Input = packed(Mode);
     if (Mode >= 15) {
       checkLifecycle(Input);

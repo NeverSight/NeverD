@@ -37,6 +37,7 @@ NEVERD_DRIVER_PROFILE(ProcessorEnvironmentBase,
 // The deterministic scheduler owns one processor in group zero.
 NEVERD_DRIVER_PROFILE(ProcessorNumber, 0)
 NEVERD_DRIVER_PROFILE(ActiveProcessorMask, 1ull << ProcessorNumber)
+NEVERD_DRIVER_PROFILE(MaxCPUIDEntries, 64)
 NEVERD_DRIVER_PROFILE(WorkItemTokenSize, 16)
 NEVERD_DRIVER_PROFILE(ProcessTokenSize, 16)
 NEVERD_DRIVER_PROFILE(DelayedWorkQueue, 1)

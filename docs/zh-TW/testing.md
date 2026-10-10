@@ -1200,7 +1200,7 @@ KVM 驗收要求真實且不主動退出的 vCPU 取消，以及 `KvmStateTransf
 
 在 `native_cpu_only=true` 時，設定 `native_driver_tests=true` 可啟用不依賴 Unicorn 的 `NeverDNativeDriverTests`。設定前，`build_wdk_driver_fixtures.py` 驗證微軟官方 WDK/SDK 10.0.26100.6584 套件的完整 SHA-256，並從原始程式碼重建 48 個一般、CFG 或 DBG 驅動程式映像。`WDKDriverFixtures.def` 統一定義套件身分、編譯與連結參數及範例繫結。未修改的微軟檔案與授權保留在本機建置或快取目錄；CI 僅上傳建置中繼資料與記錄。清單記錄工具版本、命令、原始碼與標頭摘要及輸出映像摘要。
 
-`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 與 `DriverBackendParityCases.def` 中全部 115 個負載產生 230 項 WHP 結果：27 個內建映像、48 個 WDK 映像及 40 個要求情境，各涵蓋原始與重定位位址。完整必測清單為 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 12 driver UNPACK + 6 clock reads + 4 image memory checks = 5452`。30 項等待集合檢查包含十六項可攜模型測試及十四項原創原生驅動測試。`run_native_cpu_ci.py --with-drivers` 在停用 Unicorn 時保留精確清單與 JUnit 證據；必要範例遺失或略過會使此選用驗收失敗，一般建置仍可不提供外部範例。固定位址映像保留預期的重定位拒絕。ARM64 原生客體執行仍未驗證。
+`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 與 `DriverBackendParityCases.def` 中全部 115 個負載產生 230 項 WHP 結果：27 個內建映像、48 個 WDK 映像及 40 個要求情境，各涵蓋原始與重定位位址。完整必測清單為 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 12 driver UNPACK + 6 clock reads + 4 image memory checks + 6 CPUID = 5458`。30 項等待集合檢查包含十六項可攜模型測試及十四項原創原生驅動測試。`run_native_cpu_ci.py --with-drivers` 在停用 Unicorn 時保留精確清單與 JUnit 證據；必要範例遺失或略過會使此選用驗收失敗，一般建置仍可不提供外部範例。固定位址映像保留預期的重定位拒絕。ARM64 原生客體執行仍未驗證。
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` 在兩條不同啟動指令前注入逾時、停止及兩者同時發生的中斷，檢查精確階段診斷、訊息自行持有的生命週期、錯誤類型和原因位元、步驟間不變的統一截止時間及記憶體占用釋放。既有真實傳輸失敗與狀態不符仍分別處理。原生 x64 啟動驗證預算為 `5 s`；一般客體截止時間及單步寬限不變。
 

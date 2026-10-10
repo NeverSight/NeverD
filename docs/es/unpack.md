@@ -14,7 +14,7 @@ El contenedor determina cómo se valida y reconstruye un archivo, el conjunto de
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | observación en ejecución |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | observación en ejecución |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v101`](driver-emulation.md) | `DriverEntry` |
 
 Las DLL PE32+ se identifican por `IMAGE_FILE_DLL`. Un EXE invitado modelado llama a `LoadLibraryA` y después a `FreeLibrary` mediante el ciclo ordinario de dependencias, TLS y `DllMain`. La entrada DLL aceptada es su llamada de asociación al proceso; no se inventan argumentos para exportaciones arbitrarias. Se conservan nombres, ordinales, alias, datos y reenvíos. Los punteros a exportaciones propias permanecen internos, sin autoimportaciones. La misma regla cubre las direcciones devueltas por helpers: un resultado interno retira las pruebas anteriores de reparación de importaciones para ese sitio.
 

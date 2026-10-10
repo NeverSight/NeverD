@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "DriverCPUID.h"
 #include "DriverSchedulingJSON.h"
 
 #include "neverd/emulation/DriverReportFields.h"
@@ -754,6 +755,7 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::MemoryLimit, Result.Configuration.MemoryLimit},
       {field::EventLimit, Result.Configuration.EventLimit},
       {field::TraceMemoryWrites, Result.Configuration.TraceMemoryWrites},
+      {field::CPUID, driver_cpuid::toJSON(Result.Configuration.CPUID)},
       {field::TimeoutMilliseconds, Result.Configuration.TimeoutMilliseconds},
       {field::LoadAddress, Address(Result.Configuration.LoadAddress)},
       {field::Unload, Result.Configuration.Unload},

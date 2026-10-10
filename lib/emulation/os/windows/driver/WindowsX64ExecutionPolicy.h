@@ -36,6 +36,7 @@ public:
     enum class Kind {
       ReadIRQL,
       ReadCurrentThread,
+      ReadCPUID,
       ReadTimestamp,
       ReadTimestampAndProcessor
     };

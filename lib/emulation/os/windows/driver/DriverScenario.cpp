@@ -12,6 +12,7 @@
 #include "DriverScenario.h"
 
 #include "../kernel/WindowsKernelLayout.h"
+#include "DriverCPUID.h"
 #include "DriverSchedulingJSON.h"
 
 #include "neverd/emulation/DriverReportFields.h"
@@ -2067,6 +2068,8 @@ llvm::Error validateDriverUserMemory(const DriverRequest &Request) {
 }
 
 llvm::Error validateDriverScenario(const DriverOptions &Options) {
+  if (auto E = driver_cpuid::validate(Options.CPUID))
+    return E;
   if (Options.Scheduling)
     if (auto E = validateDriverScheduling(*Options.Scheduling))
       return E;
@@ -2469,6 +2472,12 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
     if (!Boolean)
       return invalid("trace_memory_writes must be boolean");
     Base.TraceMemoryWrites = *Boolean;
+  }
+  if (const auto *CPUID = Object->get(CPUIDField)) {
+    auto Parsed = driver_cpuid::parse(*CPUID);
+    if (!Parsed)
+      return Parsed.takeError();
+    Base.CPUID = std::move(*Parsed);
   }
   if (const auto *Unload = Object->get(UnloadField)) {
     auto Boolean = Unload->getAsBoolean();

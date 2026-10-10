@@ -66,6 +66,11 @@ WindowsX64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
     return failure(std::string(policy::Rejected) + Insn->mnemonic);
   };
   const cs_x86 &X86 = Insn->detail->x86;
+  if (Insn->id == X86_INS_CPUID) {
+    if (X86.prefix[0] == X86_PREFIX_LOCK || X86.op_count)
+      return Rejected();
+    return std::optional<Action>{{Action::Kind::ReadCPUID, std::nullopt}};
+  }
   if (Insn->id == X86_INS_RDTSC || Insn->id == X86_INS_RDTSCP) {
     if (X86.prefix[0] == X86_PREFIX_LOCK || X86.op_count)
       return Rejected();

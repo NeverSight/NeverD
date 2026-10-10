@@ -18,6 +18,65 @@
 namespace neverd::emulation {
 namespace {
 
+TEST(DriverScenario, CPUIDDeclarationsRoundTripAndCanBeCleared) {
+  auto Parsed = driverOptionsFromScenarioJSON(R"({"cpuid":[
+    {"leaf":0,"eax":1,"ebx":2,"ecx":3,"edx":4294967295},
+    {"leaf":7,"subleaf":3,"eax":4,"ebx":5,"ecx":6,"edx":7}]})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->CPUID.size(), 2u);
+  EXPECT_FALSE(Parsed->CPUID[0].Subleaf);
+  EXPECT_EQ(Parsed->CPUID[0].Registers[3], UINT32_MAX);
+  EXPECT_EQ(Parsed->CPUID[1].Subleaf, 3u);
+  auto Inherited = driverOptionsFromScenarioJSON("{}", *Parsed);
+  ASSERT_TRUE(bool(Inherited));
+  ASSERT_EQ(Inherited->CPUID.size(), 2u);
+  DriverResult Run;
+  Run.Configuration = *Inherited;
+  auto JSON = llvm::json::parse(driverResultJSON(Run));
+  ASSERT_TRUE(bool(JSON));
+  const auto *Configuration = JSON->getAsObject()->getObject("configuration");
+  ASSERT_NE(Configuration, nullptr);
+  const auto *Entries = Configuration->getArray("cpuid");
+  ASSERT_NE(Entries, nullptr);
+  ASSERT_EQ(Entries->size(), 2u);
+  EXPECT_FALSE((*Entries)[0].getAsObject()->get("subleaf"));
+  EXPECT_EQ((*Entries)[0].getAsObject()->getInteger("edx"), UINT32_MAX);
+  EXPECT_EQ((*Entries)[1].getAsObject()->getInteger("subleaf"), 3);
+  auto Cleared = driverOptionsFromScenarioJSON(R"({"cpuid":[]})", *Inherited);
+  ASSERT_TRUE(bool(Cleared));
+  EXPECT_TRUE(Cleared->CPUID.empty());
+}
+
+TEST(DriverScenario, CPUIDDeclarationsRejectMalformedAndOverlappingInputs) {
+  for (
+      const char *JSON :
+      {R"({"cpuid":null})", R"({"cpuid":1})", R"({"cpuid":[null]})",
+       R"({"cpuid":[{"leaf":0,"eax":0,"ebx":0,"ecx":0}]})",
+       R"({"cpuid":[{"leaf":0,"eax":-1,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":4294967296,"eax":0,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":0,"subleaf":null,"eax":0,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":0,"subleaf":false,"eax":0,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":0,"extra":1,"eax":0,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":0,"eax":0,"eax":1,"ebx":0,"ecx":0,"edx":0}]})",
+       R"({"cpuid":[{"leaf":0,"eax":0,"ebx":0,"ecx":0,"edx":0},
+                      {"leaf":0,"subleaf":1,"eax":0,"ebx":0,"ecx":0,"edx":0}]})"}) {
+    auto Rejected = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Rejected)) << JSON;
+    llvm::consumeError(Rejected.takeError());
+  }
+  for (const std::vector<DriverCPUID> Entries :
+       {std::vector<DriverCPUID>{{0, 3, {}}, {0, 3, {}}},
+        std::vector<DriverCPUID>{{0, 3, {}}, {0, std::nullopt, {}}},
+        std::vector<DriverCPUID>(profile::MaxCPUIDEntries + 1)}) {
+    DriverOptions Options;
+    Options.CPUID = Entries;
+    auto Run = emulateDriver("absent.sys", Options);
+    ASSERT_FALSE(bool(Run));
+    EXPECT_NE(llvm::toString(Run.takeError()).find("driver cpuid:"),
+              std::string::npos);
+  }
+}
+
 TEST(DriverScenario, WriteTraceSelectionIsExplicitAndRoundTrips) {
   auto Parsed =
       driverOptionsFromScenarioJSON(R"({"trace_memory_writes":false})");

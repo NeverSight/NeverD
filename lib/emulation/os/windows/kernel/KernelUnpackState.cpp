@@ -8,9 +8,9 @@
 #include "WindowsKernelLayout.h"
 
 namespace neverd::emulation {
-void KernelModel::recordUnpackClockRead() {
-  // Captured profile time cannot be rebound to a fresh kernel clock. API and
-  // CPU reads share this dependency even when no output pointer was supplied.
+void KernelModel::recordUnpackEnvironmentRead() {
+  // Observed CPU identity and time cannot be rebound to a fresh kernel.
+  // API and instruction reads share this dependency independently of storage.
   UnpackOpaqueEffects = true;
 }
 

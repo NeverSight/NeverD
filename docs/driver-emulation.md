@@ -1000,7 +1000,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v100`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v101`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -1203,6 +1203,8 @@ Explicit CPU0 preemption, clock semantics and current limits are described in [d
 `KeQueryPerformanceCounter` returns the shared scheduler time in 100 ns ticks with a fixed frequency of 10,000,000 ticks per second. Its optional output pointer is checked for the complete eight-byte write and object lifetime. The call is available at every valid x64 IRQL. Cooperative mode advances time only at existing scheduling boundaries; instruction-clock mode retains its configured timing. Counter reads never create a second clock or advance time themselves. This is a deterministic profile, not a measurement of host hardware. The independently compiled runtime fixture checks static/dynamic identity, frequency and monotonicity at preferred and rebased addresses on native CPU backends.
 
 `RDTSC` and `RDTSCP` read the same 10 MHz scheduler clock as `KeQueryPerformanceCounter`. `RDTSCP` returns zero in ECX for the single modeled processor. EAX/EDX (and ECX for RDTSCP) zero their upper halves; other registers and flags are preserved. Cooperative reads do not advance time. With explicit instruction scheduling, the read observes time after its own admitted instruction is charged, independently of the quantum. Overflow stops before publishing register results. Instruction limits and observer stops still apply. This profile does not measure host TSC frequency or expose host processor identity; MSR access, RDPMC and other unmodeled CPU queries remain unsupported.
+
+Optional `cpuid` declares up to 64 CPU query results. Each record requires unsigned 32-bit integer fields `leaf`, `eax`, `ebx`, `ecx` and `edx`; optional `subleaf` restricts input ECX, while omission matches every subleaf of that leaf. Duplicate or overlapping records are rejected before execution. CPUID uses the low 32 bits of input EAX/ECX, zero-extends all four result registers and preserves flags and other registers. Undeclared queries stop with their leaf/subleaf diagnostic before publishing results. `configuration.cpuid` retains the declarations. These are explicit environment inputs, not host queries or a guarantee of instruction support. Their use retains a driver UNPACK dependency; explicit snapshots keep that diagnostic.
 
 Clock reads through `KeQueryPerformanceCounter`, `RDTSC`, or `RDTSCP` retain an explicit driver recovery dependency. Captured counter and frequency values have no rebinding contract for a fresh kernel environment. Default recovery reports `unsupported_state`; `snapshot_only` retains the diagnostic.
 
