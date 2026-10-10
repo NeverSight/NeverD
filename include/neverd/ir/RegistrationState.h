@@ -238,7 +238,8 @@ struct RegistrationStateAnalysis {
 RegistrationStateAnalysis analyzeRegistrationStates(
     const LowFunc &Function, va_t SecurityCookieVA = 0, va_t CookieCheckVA = 0,
     const std::vector<RegistrationCalleeFrameContract> *Callees = nullptr,
-    const std::vector<RegistrationCleanupFrameContract> *Cleanups = nullptr);
+    const std::vector<RegistrationCleanupFrameContract> *Cleanups = nullptr,
+    const std::vector<RegistrationCalleeStackContract> *Stacks = nullptr);
 
 /// Return exact address intervals only if every reaching state agrees about
 /// membership. An ambiguous join cannot be flattened into a lexical try range.

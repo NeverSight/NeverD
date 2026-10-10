@@ -97,6 +97,137 @@ struct ThrowImage {
 };
 } // namespace
 
+TEST(RegistrationCallABI, StackCleanupRequiresEveryRestoredNearReturn) {
+  auto MapText = [](BinaryImage &Image) {
+    auto &Text = Image.Segments[0];
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    Image.Sections = {Code};
+  };
+  struct Case {
+    std::vector<uint8_t> Code;
+    std::optional<uint32_t> Pop;
+  };
+  const Case Cases[] = {
+      {{0xc3}, 0},
+      {{0xc2, 8, 0}, 8},
+      // A nested opaque call loses ESP, recovered explicitly through EBP.
+      {{0x55, 0x8b, 0xec, 0x83, 0xec, 8, 0xff, 0xd0, 0x8b, 0xe5, 0x5d, 0xc3},
+       0},
+      // A different nonvolatile anchor also survives dynamic alignment.
+      {{0x53, 0x8b, 0xdc, 0x83, 0xe4, 0xf0, 0xff, 0xd0, 0x8b, 0xe3, 0x5b, 0xc2,
+        8, 0},
+       8},
+      // Both branches return with the same stack cleanup.
+      {{0x85, 0xc0, 0x74, 3, 0xc2, 8, 0, 0xc2, 8, 0}, 8},
+      // Maximum RET pop alone cannot establish either of these functions.
+      {{0x85, 0xc0, 0x74, 3, 0xc2, 8, 0, 0xc3}, std::nullopt},
+      {{0x85, 0xc0, 0x74, 3, 0xc2, 8, 0, 0x83, 0xec, 4, 0xc2, 8, 0},
+       std::nullopt},
+      {{0xff, 0xd0, 0xc3}, std::nullopt},
+      // A caller-clobbered register is not a restoration anchor.
+      {{0x8b, 0xc4, 0xff, 0xd1, 0x8b, 0xe0, 0xc3}, std::nullopt},
+      {{0x83, 0xec, 4, 0xc3}, std::nullopt},
+      {{0x5c, 0xc3}, std::nullopt},
+      {{0xff, 0xe0}, std::nullopt},
+      {{0xcb}, std::nullopt},
+      // Memory alone cannot recover a stack identity in this domain.
+      {{0x89, 0x64, 0x24, 0xfc, 0x8b, 0x64, 0x24, 0xfc, 0xc3}, std::nullopt},
+  };
+  for (unsigned I = 0; I != std::size(Cases); ++I) {
+    SCOPED_TRACE(I);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    Text.Data = Cases[I].Code;
+    MapText(F.Image);
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA), Cases[I].Pop);
+  }
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    Text.Data = {0xc3};
+    MapText(F.Image);
+    if (Mutation == 0)
+      Text.Flags = Text.Flags | SegmentFlags::Writable;
+    if (Mutation == 1)
+      F.Image.Format = BinaryFormat::ELF;
+    if (Mutation == 2)
+      F.Image.Arch = Arch::X64;
+    if (Mutation == 3)
+      F.Image.Bits = Bitness::Bits64;
+    size_t Work = Mutation == 4 ? limits::kMaxRegistrationEHStateWork : 0;
+    EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, Text.VA, &Work));
+  }
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    Text.Data = {0x55, 0x8b, 0xec, 0xff, 0x15, 0x30, 0x40,
+                 0x40, 0,    0x8b, 0xe5, 0x5d, 0xc3};
+    MapText(F.Image);
+    // This must remain an opaque returning call, not the fixture's
+    // _CxxThrowException import, whose no-return contract ends the CFG.
+    F.Image.Imports.clear();
+    F.Image.BaseRelocations = {{Text.VA + 5, 3}};
+    if (Mutation == 1)
+      F.Image.BaseRelocations[0].Type = 10;
+    if (Mutation == 2)
+      F.Image.BaseRelocations[0].Address = Text.VA + 3;
+    if (Mutation == 3)
+      F.Image.BaseRelocations.push_back(F.Image.BaseRelocations[0]);
+    if (Mutation == 4)
+      F.Image.Segments.push_back(Text);
+    EXPECT_EQ(
+        getCheckedX86CalleeStackPop(F.Image, ThrowImage::TextVA).has_value(),
+        Mutation == 0);
+  }
+}
+
+TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports[0].Name = "RaiseException";
+    F.Image.Imports[0].Module = "KERNEL32.dll";
+    ASSERT_TRUE(
+        F.Image.recordImportStorageSlot(ThrowImage::IATVA, "RaiseException", 0,
+                                        ImportStorageEvidence::PointerTable));
+    LowFunc Caller;
+    Caller.Blocks.resize(1);
+    LowOp Call;
+    Call.Opcode = NdOp::INDIR_CALL;
+    Call.addInput(NdVar::cst(ThrowImage::IATVA, 4));
+    Caller.Blocks[0].Ops = {Call};
+    if (Mutation == 1)
+      F.Image.Imports[0].Module = "custom.dll";
+    if (Mutation == 2)
+      F.Image.Imports[0].Name = "OtherException";
+    if (Mutation == 3) {
+      F.Image.Imports.push_back(F.Image.Imports[0]);
+      F.Image.Imports[1].Module = "custom.dll";
+    }
+    if (Mutation == 4)
+      F.Image.ConflictingImportStorageSlots.insert(ThrowImage::IATVA);
+    if (Mutation == 5)
+      Caller.Blocks[0].Ops[0].Opcode = NdOp::CALL;
+    if (Mutation == 6)
+      Caller.Blocks[0].Ops[0].Inputs[0].Size = 8;
+    RegistrationCallCalleeIndex Index(F.Image);
+    const auto Contracts = Index.stackContracts(Caller);
+    ASSERT_TRUE(Contracts);
+    ASSERT_EQ(Contracts->size(), Mutation == 0 ? 1u : 0u);
+    if (!Contracts->empty()) {
+      EXPECT_EQ(Contracts->front().StackPopBytes, 16u);
+      EXPECT_TRUE(Contracts->front().Indirect);
+    }
+  }
+}
+
 TEST(RegistrationCallABI, ChecksImmutableSimpleThrowInfo) {
   for (unsigned Mutation = 0; Mutation != 26; ++Mutation) {
     SCOPED_TRACE(Mutation);

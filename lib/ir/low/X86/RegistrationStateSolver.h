@@ -63,7 +63,8 @@ public:
   RegistrationStateSolver(
       const LowFunc &Function, va_t SecurityCookieVA, va_t CookieCheckVA,
       const std::vector<RegistrationCalleeFrameContract> *Callees,
-      const std::vector<RegistrationCleanupFrameContract> *Cleanups);
+      const std::vector<RegistrationCleanupFrameContract> *Cleanups,
+      const std::vector<RegistrationCalleeStackContract> *Stacks);
   RegistrationStateAnalysis run();
 
 private:
@@ -122,6 +123,7 @@ private:
   va_t CookieCheckVA;
   const std::vector<RegistrationCalleeFrameContract> *Callees;
   const std::vector<RegistrationCleanupFrameContract> *Cleanups;
+  const std::vector<RegistrationCalleeStackContract> *Stacks;
   const bool KnownCxx;
   const bool EH4;
   const bool CheckCalls;
@@ -147,6 +149,7 @@ private:
   std::map<std::pair<va_t, int>, FrameValue> FrameValues;
 
   std::map<va_t, uint32_t> CalleeIndices;
+  std::map<std::pair<va_t, bool>, uint32_t> StackPops;
   std::map<uint32_t, uint32_t> CleanupIndices;
   bool CompleteCalls;
   bool CompleteCleanups;

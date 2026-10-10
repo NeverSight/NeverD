@@ -506,6 +506,44 @@ TEST(RegistrationState, ProjectsTheInitializedObjectAtTheExactSourceCall) {
   EXPECT_EQ(A.ImageReads.front().Begin, 0x3000u);
 }
 
+TEST(RegistrationState, StackCleanupDoesNotGrantMemoryBorrowAuthority) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = makeBranchingFrame();
+    LowBlock Call;
+    Call.Id = 4;
+    Call.StartAddr = 0x1100;
+    Call.EndAddr = 0x1109;
+    Call.Succs = {1, 2};
+    Call.InstructionBoundaries = {{0x1100, 5}, {0x1105, 3}, {0x1108, 1}};
+    Call.InstructionBoundaries[0].Control = LowInstructionControl::Call;
+    emitOp(Call, 0x1100, NdOp::CALL, {}, {NdVar::cst(0x2100, 4)});
+    emitOp(Call, 0x1105, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+    emitOp(Call, 0x1108, NdOp::STORE, {},
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(7, 4)});
+    F.Blocks[0].Succs = {4};
+    F.Blocks.push_back(std::move(Call));
+    std::vector<RegistrationCalleeStackContract> Stacks{{0x2100, 0, false}};
+    if (Mutation == 1)
+      Stacks.clear();
+    if (Mutation == 2)
+      Stacks[0].Indirect = true;
+    if (Mutation == 3)
+      Stacks[0].Target = 0x2200;
+    if (Mutation == 4)
+      Stacks[0].StackPopBytes = 4;
+    if (Mutation == 5)
+      Stacks.push_back(Stacks[0]);
+    const auto A =
+        analyzeRegistrationStates(F, 0, 0, nullptr, nullptr, &Stacks);
+    EXPECT_EQ(A.Complete, Mutation == 0);
+    EXPECT_FALSE(A.CallFrameEffectsComplete);
+    EXPECT_TRUE(A.CallFrameEffects.empty());
+    EXPECT_TRUE(A.CalleeContracts.empty());
+  }
+}
+
 namespace {
 LowFunc makeCxxObjectCleanup() {
   auto F = makeCxxObjectCall();

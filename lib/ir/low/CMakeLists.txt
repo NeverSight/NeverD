@@ -44,6 +44,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationCalleeABI.cpp
   X86/RegistrationCalleeFrame.cpp
   X86/RegistrationCalleeIndex.cpp
+  X86/RegistrationCalleeStack.cpp
   X86/RegistrationCallerABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp

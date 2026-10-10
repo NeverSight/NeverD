@@ -19,6 +19,30 @@
 
 namespace neverd::registration_abi {
 
+std::optional<uint32_t>
+checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF)
+    return std::nullopt;
+  const auto *Import = Image.findImportAt(Target);
+  if (!Import || Import->Name != "RaiseException" ||
+      (!llvm::StringRef(Import->Module).equals_insensitive("kernel32.dll") &&
+       !llvm::StringRef(Import->Module).equals_insensitive("kernelbase.dll")) ||
+      !Image.isValidImportStorageSlot(Import->IATAddr, Import->Name))
+    return std::nullopt;
+  for (const auto &Other : Image.Imports)
+    if (Other.IATAddr == Import->IATAddr &&
+        (Other.Name != Import->Name ||
+         !llvm::StringRef(Other.Module).equals_insensitive(Import->Module)))
+      return std::nullopt;
+  const auto Storage = Image.collectImportStorageSlot(Import->IATAddr);
+  const auto Slot = Storage.Slots.find(Import->IATAddr);
+  if (Storage.Conflicts.count(Import->IATAddr) || Slot == Storage.Slots.end() ||
+      Slot->second.Name != Import->Name || Slot->second.Addend)
+    return std::nullopt;
+  return 16;
+}
+
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects) {
   auto Read = Effects.Reads.begin();
   for (const auto &[Begin, End] : Effects.CallerPCWrites) {

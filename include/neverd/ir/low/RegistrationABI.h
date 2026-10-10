@@ -20,6 +20,14 @@ namespace neverd {
 struct BinaryImage;
 struct LowFunc;
 
+/// Prove the entry ESP is restored at every ordinary near return and that
+/// all return-pop immediates agree. Nested calls invalidate ESP; an explicit
+/// restoration from an ABI-preserved register can recover it. No memory
+/// value survives this proof, and no memory-effect authority is granted.
+std::optional<uint32_t>
+getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
+                            size_t *CumulativeWork = nullptr);
+
 /// A leaf's two separate address domains: its private invocation frame and
 /// the bounded object borrowed through entry ECX. Object offsets are relative
 /// to that object, never invented image addresses or private stack offsets.
@@ -94,12 +102,15 @@ public:
   contracts(const LowFunc &Function);
   std::optional<std::vector<RegistrationCleanupFrameContract>>
   cleanupContracts(const LowFunc &Function);
+  std::optional<std::vector<RegistrationCalleeStackContract>>
+  stackContracts(const LowFunc &Function);
 
 private:
   const BinaryImage &Image;
   size_t Work = 0;
   std::map<va_t, std::optional<RegistrationCalleeFrameContract>> Cache;
   std::map<va_t, std::optional<RegistrationCleanupRelayABI>> CleanupCache;
+  std::map<va_t, std::optional<uint32_t>> StackCache;
 };
 
 /// Native registration lowering currently emits caller-cleanup calls. Require
