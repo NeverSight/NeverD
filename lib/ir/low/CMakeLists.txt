@@ -13,6 +13,8 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationState.cpp
   X86/RegistrationStateCalls.cpp
   X86/RegistrationStateCxx.cpp
+  X86/RegistrationStateObject.cpp
+  X86/RegistrationStateResume.cpp
   X86/RegistrationStateCallback.cpp
   X86/RegistrationStateContracts.cpp
   X86/RegistrationStateCookies.cpp

@@ -110,8 +110,11 @@ bool checkNestedRegistrationTry(const HighStmt &Stmt, const MedFunc &Med,
       const va_t Address = Child.Addr && Child.Addr != InvalidVA ? Child.Addr
                            : Child.Kind == StmtKind::Goto ? Child.GotoTarget
                                                           : 0;
+      const bool Nested =
+          !Child.EHClauses.empty() || !Child.EHClauseBodies.empty();
       if (++Work > limits::kMaxRegistrationEHStateWork || !Owns(Address) ||
-          !Child.EHClauses.empty() || !Child.EHClauseBodies.empty() ||
+          (Nested && !checkNestedRegistrationTry(Child, Med, Inner->TryHigh + 1,
+                                                 Inner->CatchHigh, Work)) ||
           Child.Kind == StmtKind::Return || Child.Kind == StmtKind::Break ||
           Child.Kind == StmtKind::Continue)
         return false;

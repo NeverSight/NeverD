@@ -29,7 +29,9 @@ record、語言表與防護表彼此一致時，NeverD 才允許重寫。
 | `__CxxFrameHandler3` | unwind map、try map、catch、catch-object/frame offset、continuation 與 IP-to-state map | 可規約狀態區間變成明確 C++ HighIR，並帶 C 相容型別註解 | 對下文所述嚴格受限且 verifier-clean 的子集執行原生 x64 重建 |
 | `__CxxFrameHandler4` | 有界變長解碼到共用 C++ graph，包括 action kind 與 object offset | 同一 HighIR graph 並保留 FH4 來源 | 僅分析；拒絕修改涉及的函式 |
 | `__GSHandlerCheck_SEH/EH/EH4` | 包裝後的 personality 與經檢查的 GS cookie 來源 | 基礎語言 graph 加 wrapper 註解 | 僅分析；拒絕修改涉及的函式，不做降級 |
-| x86 registration-chain EH | 與表格驅動 EH 明確區分 | 不支援形式的註解 | 不重建 |
+| x86 registration-chain EH | 經檢查的 SEH 鏈與 C++ 圖 | 保留 callback 身分的 HighIR 區域 | 對已證明的子集執行 PE32 重建；參見詳細契約 |
+
+純量引用 `catch` 內的 `try` 可保留仍存活的外層例外物件，並恢復其私有堆疊。共享 callback 與通用物件生命週期仍不屬於原生重建子集。 [PE32 C++](../windows-exception-reconstruction.md).
 
 畸形 record 絕不會當成一般完整 record。部分解碼 record 仍可用於檢查，但不能授權產生
 原生 metadata。如果 ARM xdata header 仍可證明有界可執行 fragment 範圍，而後續

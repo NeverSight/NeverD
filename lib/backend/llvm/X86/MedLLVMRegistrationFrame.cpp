@@ -36,7 +36,10 @@ llvm::Value *emitX86RegistrationRoot(const MedFunc &Func, const MedOp &Op,
   if (!hasValidRegistrationRootShape(Op) || !EntrySP ||
       !EntrySP->getType()->isIntegerTy(32))
     throw std::invalid_argument("invalid PE32 registration runtime root");
-  if (Op.RegistrationRoot == MedOp::RegistrationRootKind::CallbackStackPointer)
+  if (Op.RegistrationRoot ==
+          MedOp::RegistrationRootKind::CallbackStackPointer ||
+      Op.RegistrationRoot ==
+          MedOp::RegistrationRootKind::RestoredCallbackStackPointer)
     return EntrySP;
   const auto Coordinate = registrationRootFrameCoordinate(Func, Op);
   if (!Coordinate)

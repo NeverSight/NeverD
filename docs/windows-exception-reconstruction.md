@@ -110,7 +110,7 @@ LLVM materialize it in the recovered source frame. The installer independently
 checks the writeback's address, value and order against fresh source analysis.
 A missing pre-dispatch snapshot still cannot be invented by a catch write.
 For a checked realigned frame, LowIR separately models the callback's private
-stack, initialized spill cells and restored entry EBP. A non-nested catch can
+stack, initialized spill cells and restored entry EBP. A catch can
 resume only after balancing its private ESP and recovering runtime EBP. Checked
 calls may borrow initialized parent objects using the captured parent stack
 bound; the saved entry EBP remains protected. MedIR preserves distinct runtime
@@ -265,9 +265,10 @@ A frame-layout descriptor alone cannot authorize reconstruction.
 Each clause retains its own catchpad, object home, scratch stack and exact
 continuation. Dispatch order must match the source HandlerMap. A sibling catch
 cannot borrow another clause's implicit object initialization or callback stack.
-Parent try groups may be disjoint or nested, with at most 64 tries and 128
-source states. Each catch boundary must immediately follow its protected state
-interval. The shared source projection proves the complete inner-to-outer
+Try groups may be disjoint, nested in a parent try, or nested inside a checked
+catch, with at most 64 tries and 128 source states. Catch entry immediately
+follows the protected state interval; its catch interval may contain further
+tries. The shared source projection proves the complete inner-to-outer
 search chain; independent installation checks preserve every try's protected
 state set, emitted HandlerMap, search order and unwind edges. A checked private
 throw inside a catch can continue the search through an enclosing parent try.
@@ -295,7 +296,16 @@ checked; adding `inreg`, `nonnull` or `memory(none)` cannot change the CRT ABI.
 For checked fundamental types, C++ output reads the current object bytes with
 the exact type, including floating-point bits. Unknown types retain the runtime
 call instead of inventing a value or default constructor.
-Shared callbacks and a try inside a catch remain rejected.
+For a try inside a catch, LowIR retains the suspended invocation's private
+stack cells and initialized bytes. The inner catch may access a still-live
+outer scalar reference object; it must not access an exited object or borrow
+another invocation's bounds. On return, the exact saved callback ESP and
+outer context are restored. MedIR owns callback membership and nesting for
+both source and native consumers. LLVM catchswitch parents and resumed stack
+definitions must match that proof. The installer independently checks each
+resume seed's parent, target, offset, allocation, dominance and SavedESP
+writeback. This nested reference projection requires action-free unwind maps;
+general object lifetimes and shared callbacks remain unsupported.
 HighIR can gather terminal branches of synchronous tries even when runtime
 resume blocks interrupt their address order or merge different post-catch
 states. An inner try stays intact with independently checked callback bodies
@@ -327,7 +337,9 @@ caller stack layouts. Both installation modes and forced rebasing participate
 in the same-file runtime matrix. Additional Clang `-O0` and `-O1` fixtures
 exercise inner reference catches, outer value/catch-all search, all three
 continuations, secondary throws and both helper and direct rethrows from a
-catch, negative controls and forced rebasing. The matrix uses the captured
+catch. A further three-try/four-catch fixture throws inside a reference catch,
+modifies the outer object from the inner catch, then resumes the outer catch.
+Negative controls and forced rebasing cover each profile. The matrix uses the captured
 Microsoft x86 CRT DLL, including under Wine. Wine's built-in CRT is not the
 authority for catch-guard stack restoration;
 the same original and reconstructed files are also replayed on Windows.

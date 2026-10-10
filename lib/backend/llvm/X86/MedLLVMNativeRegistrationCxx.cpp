@@ -83,7 +83,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   if (!Layout)
     return false;
   const auto CatchOwners = projectX86RegistrationCatchBlocks(Func);
-  if (!CatchOwners)
+  const auto CatchParents = projectX86RegistrationCatchParents(Func);
+  if (!CatchOwners || !CatchParents)
     return false;
   std::map<X86RegistrationCatchIdentity, RegistrationCxxCatchPlan> Catches;
   for (uint32_t Region = 0; Region < Cxx.TryBlocks.size(); ++Region)
@@ -230,8 +231,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
                                          Resume->CatchIndex} !=
                 CatchOwners->at(Block.Id) ||
             !BlocksAt.count(Resume->TargetVA) ||
-            Resume->SavedStackOffset > -16 ||
-            !Layout->runtimeOffset(Resume->SavedStackOffset, 0) ||
+            (Resume->SavedCallbackVA
+                 ? Resume->SavedStackOffset > 0
+                 : Resume->SavedStackOffset > -16 ||
+                       !Layout->runtimeOffset(Resume->SavedStackOffset, 0)) ||
             FrameEntrySPOffset > INT32_MAX ||
             !Resumes.emplace(Return, Resume).second)
           return false;
@@ -408,13 +411,23 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
           Stores.push_back(llvm::cast<llvm::StoreInst>(Event.IR));
       const std::vector<llvm::BasicBlock *> Body(Catch.Blocks.begin(),
                                                  Catch.Blocks.end());
-      auto Plan = prepareRegistrationCxxStack(*SourceBlock, *Catch.Handler,
-                                              Body, VarAllocs, Stores);
+      auto Plan =
+          prepareRegistrationCxxStack(Func, *SourceBlock, *Catch.Handler, Body,
+                                      VarAllocs, Stores, OriginalBlockMap);
       if (!Plan) {
         llvm::consumeError(Plan.takeError());
         return false;
       }
       Catch.Stack = *Plan;
+    }
+
+  for (const auto &[Return, Resume] : Resumes)
+    if (Resume->SavedCallbackVA) {
+      const auto Parent = (*CatchParents)[Resume->TryIndex];
+      if (!Parent || !Catches.at(*Parent).Stack ||
+          int64_t(Catches.at(*Parent).Stack->Bytes) + Resume->SavedStackOffset <
+              0)
+        return false;
     }
 
   const auto Incoming = x86_registration::prepareIncomingFrame(
@@ -531,7 +544,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   for (const auto &Try : Cxx.TryBlocks)
     OuterUnwinds.push_back(UnwindAt(Cxx.UnwindMap[Try.TryLow].ToState));
   emitRegistrationCxxCatches(EH, Catches, Dispatches, OuterUnwinds,
-                             *FrameAlloca, Parent);
+                             *CatchParents, *FrameAlloca, Parent);
   auto ProtectedCall = [&](const RegistrationBlockState &State) {
     if (State.Levels.empty())
       return false;
@@ -622,12 +635,19 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     CallSiteAddrs.erase(Old);
     Old->eraseFromParent();
   }
-  for (const auto &[Return, Resume] : Resumes)
+  for (const auto &[Return, Resume] : Resumes) {
+    const auto *Stack =
+        Resume->SavedCallbackVA
+            ? &*Catches.at(*(*CatchParents)[Resume->TryIndex]).Stack
+            : nullptr;
     emitRegistrationCxxContinuation(
         *Return, *FrameAlloca, Layout->Establisher,
         *EH.Registration->RegistrationOffset - 4,
         *Catches.at({Resume->TryIndex, Resume->CatchIndex}).Pad,
-        *BlocksAt.at(Resume->TargetVA), EH.CodeRange.Begin, *Resume);
+        *BlocksAt.at(Resume->TargetVA), EH.CodeRange.Begin, *Resume,
+        Stack ? *Stack->Allocation : *FrameAlloca,
+        Stack ? Stack->Bytes : Layout->Establisher);
+  }
   for (const auto &Access : States.ChainAccesses) {
     auto *I = RegistrationChainIR.at({Access.Address, Access.OpSeq});
     llvm::IRBuilder<> B(I);

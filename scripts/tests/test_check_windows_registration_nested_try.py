@@ -22,6 +22,8 @@ class NestedTryEvidenceTests(unittest.TestCase):
         result["proof_sha256"] = runner.file_digest(runner.PROOF)
         result["rethrow_proof_sha256"] = runner.file_digest(runner.RETHROW_PROOF)
         result["direct_proof_sha256"] = runner.file_digest(runner.DIRECT_PROOF)
+        result["catch_proof_sha256"] = runner.file_digest(runner.CATCH_PROOF)
+        result["receipt_proof_sha256"] = runner.file_digest(runner.RECEIPT_PROOF)
         source = root / "runtime/x86/Microsoft.VC143.CRT" / runtime.NAME
         source.parent.mkdir(parents=True)
         source.write_bytes(runtime_fixture())
@@ -39,12 +41,13 @@ class NestedTryEvidenceTests(unittest.TestCase):
             case["object_sha256"] = runner.file_digest(parent / "driver.obj")
             case["decompilation"] = {}
             for language in ("c", "cpp"):
-                text = "highir.structured_regions=2, fallback_regions=0\n"
-                for index in range(3):
+                regions, callbacks = (3, 4) if receipt["catch_try"] else (2, 3)
+                text = f"highir.structured_regions={regions}, fallback_regions=0\n"
+                for index in range(callbacks):
                     text += f"= __neverd_x86_callback_esp(0x{index:X}); goto L_{index:X};\n"
                     text += "Native x86 callback @\n" if language == "c" else "catch (\n"
                 if language == "cpp":
-                    text += "try { try {\n"
+                    text += "try { " * regions + "\n"
                     if receipt["inline_rethrow"]:
                         text += "throw;\n"
                     if receipt["direct_throw"]:
@@ -58,8 +61,8 @@ class NestedTryEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = self.capture(root)
-            self.assertEqual(len(replay.validate_capture(root, capture)), 224)
-            for mutation in range(19):
+            self.assertEqual(len(replay.validate_capture(root, capture)), 256)
+            for mutation in range(21):
                 changed = copy.deepcopy(capture)
                 case = changed["cases"][0]
                 if mutation == 0:
@@ -98,8 +101,12 @@ class NestedTryEvidenceTests(unittest.TestCase):
                     changed["catch_search_runtime"]["sha256"] = "a" * 64
                 elif mutation == 17:
                     changed["rethrow_proof_sha256"] = "stale"
-                else:
+                elif mutation == 18:
                     changed["direct_proof_sha256"] = "stale"
+                elif mutation == 19:
+                    changed["catch_proof_sha256"] = "stale"
+                else:
+                    changed["receipt_proof_sha256"] = "stale"
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     replay.validate_capture(root, changed)
             runtime_path = root / runner.CASES[0] / runtime.NAME
@@ -200,6 +207,32 @@ class NestedTryEvidenceTests(unittest.TestCase):
             for text in variants:
                 path.write_text(text)
                 case["decompilation"]["cpp"] = runner.file_digest(path)
+                with self.subTest(text=text), self.assertRaises(ValueError):
+                    replay.validate_capture(root, capture)
+
+    def test_catch_try_cannot_be_substituted_with_an_ordinary_nested_search(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            case = next(c for c in capture["cases"] if c["case"].startswith("catch-try-"))
+            path = root / case["case"] / "contract.json"
+            receipt = json.loads(path.read_text())
+            receipt["catch_try"] = False
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
+            receipt["catch_try"] = True
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            source = root / case["case"] / "decompiled.cpp"
+            original = source.read_text()
+            for text in (original.replace("regions=3", "regions=2"),
+                         original.replace("try {", "", 1),
+                         original.replace("catch (", "", 1),
+                         original.replace("goto L_3;", "")):
+                source.write_text(text)
+                case["decompilation"]["cpp"] = runner.file_digest(source)
                 with self.subTest(text=text), self.assertRaises(ValueError):
                     replay.validate_capture(root, capture)
 

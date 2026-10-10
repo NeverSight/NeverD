@@ -58,41 +58,64 @@ catchIdentity(const CxxExceptionInfo &Cxx, va_t Entry) {
 
 } // namespace
 
-bool isRegistrationCallbackStackRoot(const MedFunc &Func, const MedOp &Op) {
+std::optional<RegistrationCallbackStackCoordinate>
+registrationCallbackStackCoordinate(const MedFunc &Func, const MedOp &Op) {
+  const bool Restored =
+      Op.RegistrationRoot ==
+      MedOp::RegistrationRootKind::RestoredCallbackStackPointer;
   if (!hasCallbackContract(Func) ||
-      Op.RegistrationRoot !=
-          MedOp::RegistrationRootKind::CallbackStackPointer ||
+      (!Restored && Op.RegistrationRoot !=
+                        MedOp::RegistrationRootKind::CallbackStackPointer) ||
       !hasValidRegistrationRootShape(Op) || Op.Dead || Op.Output.Id < 0 ||
-      Op.Output.SSAVer <= 0 ||
-      !catchIdentity(*Func.ExceptionMetadata->Cxx, Op.Addr))
-    return false;
+      Op.Output.SSAVer <= 0)
+    return std::nullopt;
+  va_t Entry = Restored ? InvalidVA : Op.Addr;
+  if (Restored)
+    for (const auto &Resume : Func.RegistrationStates->CxxContinuations)
+      if (Resume.TargetVA == Op.Addr) {
+        if (!Resume.SavedCallbackVA ||
+            Resume.SavedStackOffset != Op.RegistrationStackOffset ||
+            (Entry != InvalidVA && Entry != Resume.SavedCallbackVA))
+          return std::nullopt;
+        Entry = Resume.SavedCallbackVA;
+      }
+  if (!catchIdentity(*Func.ExceptionMetadata->Cxx, Entry))
+    return std::nullopt;
   bool Found = false;
   size_t Work = 0;
   for (const auto &Block : Func.Blocks) {
     for (const auto &Other : Block.Ops) {
       if (++Work > limits::kMaxRegistrationEHStateWork)
-        return false;
+        return std::nullopt;
       if (Other.Output.Id != Op.Output.Id ||
           Other.Output.SSAVer != Op.Output.SSAVer)
         continue;
       if (&Other != &Op || Found || Block.StartAddr != Op.Addr ||
-          !Block.Preds.empty() || Block.ExceptionalPreds.empty() ||
-          !llvm::all_of(Block.ExceptionalPreds, [&](const auto &Edge) {
-            return Edge.Kind == ExceptionalEdgeKind::CxxCatch &&
-                   Edge.TargetVA == Op.Addr;
-          }))
-        return false;
+          !Block.Preds.empty() ||
+          (!Restored &&
+           (Block.ExceptionalPreds.empty() ||
+            !llvm::all_of(Block.ExceptionalPreds, [&](const auto &Edge) {
+              return Edge.Kind == ExceptionalEdgeKind::CxxCatch &&
+                     Edge.TargetVA == Op.Addr;
+            }))))
+        return std::nullopt;
       Found = true;
     }
     for (const auto &Phi : Block.Phis) {
       if (++Work > limits::kMaxRegistrationEHStateWork)
-        return false;
+        return std::nullopt;
       if (Phi.Output.Id == Op.Output.Id &&
           Phi.Output.SSAVer == Op.Output.SSAVer)
-        return false;
+        return std::nullopt;
     }
   }
-  return Found;
+  return Found ? std::optional(RegistrationCallbackStackCoordinate{
+                     Entry, Op.RegistrationStackOffset})
+               : std::nullopt;
+}
+
+bool isRegistrationCallbackStackRoot(const MedFunc &Func, const MedOp &Op) {
+  return registrationCallbackStackCoordinate(Func, Op).has_value();
 }
 
 std::optional<RegistrationCallbackRegion>
@@ -139,8 +162,23 @@ registrationCallbackRegion(const MedFunc &Func, va_t Entry) {
   if (Stacks != 1 || Frames != 1)
     return std::nullopt;
 
+  const auto Owners = registrationCatchBlocks(Func);
+  if (!Owners)
+    return std::nullopt;
   std::set<int> Reached;
   std::vector<int> Worklist{Root->Id};
+  std::set<int> Resumed;
+  for (const auto &Return : State.CxxContinuations)
+    if (Return.SavedCallbackVA == Entry) {
+      const auto Target = llvm::find_if(Func.Blocks, [&](const auto &Block) {
+        return Block.StartAddr == Return.TargetVA;
+      });
+      if (Target == Func.Blocks.end() || !Owners->count(Target->Id) ||
+          Owners->at(Target->Id) != *Identity)
+        return std::nullopt;
+      Worklist.push_back(Target->Id);
+      Resumed.insert(Target->Id);
+    }
   size_t Work = 0;
   RegistrationCallbackRegion Region;
   while (!Worklist.empty()) {
@@ -159,8 +197,10 @@ registrationCallbackRegion(const MedFunc &Func, va_t Entry) {
     const ExceptionAddressRange Range{Block.StartAddr, Block.EndAddr};
     if (!Range.isValid() || !EH.ownsCode(Range) || !Fact.Reached ||
         Fact.Unknown || !Fact.CallbackOnly || Fact.Range.Begin != Range.Begin ||
-        Fact.Range.End != Range.End ||
-        (ID != Root->Id && !Block.ExceptionalPreds.empty()))
+        Fact.Range.End != Range.End || !Owners->count(ID) ||
+        Owners->at(ID) != *Identity ||
+        (ID != Root->Id && !Resumed.count(ID) &&
+         !Block.ExceptionalPreds.empty()))
       return std::nullopt;
     Region.Ranges.push_back(Range);
     bool Exit = false;

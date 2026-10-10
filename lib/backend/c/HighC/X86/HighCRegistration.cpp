@@ -12,6 +12,8 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <set>
+
 namespace neverd {
 
 bool HighCWriter::preservesRegistrationMemory(const HighFunc &Func) {
@@ -33,12 +35,17 @@ bool HighCWriter::isEmbeddedRegistrationCallback(const HighStmt &Stmt,
       Stmt.EHClauses[I].Kind != HighEHClauseKind::CxxCatch ||
       Stmt.EHClauseBodies[I].empty())
     return false;
-  const auto &Entry = Stmt.EHClauseBodies[I].front();
-  return Entry.Kind == StmtKind::Assign && Entry.Val &&
-         Entry.Val->Kind == ExprKind::EntryRegister &&
-         Entry.Val->EntryFunctionVA == CurrentFunc->Entry &&
-         Entry.Val->EntryVA == Stmt.EHClauses[I].HandlerVA &&
-         Entry.Addr == Entry.Val->EntryVA;
+  const auto *Entry = &Stmt.EHClauseBodies[I].front();
+  // The callback's first instruction may itself enter a protected region.
+  // Only descend through unconditional try bodies, never a branch or a
+  // nested handler whose runtime entry belongs to another invocation.
+  while (Entry->Kind == StmtKind::CxxTry && !Entry->Body.empty())
+    Entry = &Entry->Body.front();
+  return Entry->Kind == StmtKind::Assign && Entry->Val &&
+         Entry->Val->Kind == ExprKind::EntryRegister &&
+         Entry->Val->EntryFunctionVA == CurrentFunc->Entry &&
+         Entry->Val->EntryVA == Stmt.EHClauses[I].HandlerVA &&
+         Entry->Addr == Entry->Val->EntryVA;
 }
 
 void HighCWriter::writeEmbeddedRegistrationCallbacks(const HighStmt &Stmt,
@@ -90,7 +97,29 @@ std::string HighCWriter::registrationEntryExpression(const HighExpr &E) const {
 void HighCWriter::writeRegistrationEntryDeclarations(
     const std::vector<HighFunc> &Funcs) {
   bool Used = false;
-  for (const auto &Func : Funcs)
+  for (const auto &Func : Funcs) {
+    // Resuming an outer catch reuses its original invocation's ESP. Bind
+    // every such expression to the retained callback entry definition;
+    // a continuation must not manufacture a new runtime invocation.
+    std::set<va_t> Entries;
+    walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+      if (Stmt.Kind != StmtKind::Assign || !Stmt.Val ||
+          Stmt.Val->Kind != ExprKind::EntryRegister ||
+          Stmt.Addr != Stmt.Val->EntryVA)
+        return;
+      const auto &Entry = *Stmt.Val;
+      if (Entry.EntryFunctionVA != Func.Entry || !Func.ExceptionMetadata ||
+          !Func.ExceptionMetadata->Registration ||
+          !Func.ExceptionMetadata->Cxx || !Entries.insert(Entry.EntryVA).second)
+        llvm::report_fatal_error(
+            "runtime register has no unique callback entry");
+      unsigned Owners = 0;
+      for (const auto &Try : Func.ExceptionMetadata->Cxx->TryBlocks)
+        for (const auto &Catch : Try.Handlers)
+          Owners += Catch.HandlerVA == Entry.EntryVA;
+      if (Owners != 1)
+        llvm::report_fatal_error("runtime register has no unique catch owner");
+    });
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
       HighExprSet Seen;
       std::vector<ExprPtr> Work;
@@ -101,11 +130,7 @@ void HighCWriter::writeRegistrationEntryDeclarations(
         if (!E || !Seen.insert(E.get()).second)
           continue;
         if (E->Kind == ExprKind::EntryRegister) {
-          if (E->EntryFunctionVA != Func.Entry || Stmt.Addr != E->EntryVA ||
-              Stmt.Kind != StmtKind::Assign || Stmt.Val != E ||
-              !Func.ExceptionMetadata ||
-              !Func.ExceptionMetadata->Registration ||
-              !Func.ExceptionMetadata->Cxx)
+          if (E->EntryFunctionVA != Func.Entry || !Entries.count(E->EntryVA))
             llvm::report_fatal_error(
                 "runtime register lost its callback entry");
           registrationEntryExpression(*E);
@@ -115,6 +140,7 @@ void HighCWriter::writeRegistrationEntryDeclarations(
             [&](const ExprPtr &Child) { Work.push_back(Child); });
       }
     });
+  }
   if (Used)
     OS << "/* EH view intrinsic: ESP supplied by the runtime at this callback "
           "entry.\n"

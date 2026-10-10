@@ -39,6 +39,7 @@ struct CxxIRControlProof {
   std::map<uint32_t, const llvm::CleanupPadInst *> Cleanups;
   std::map<const llvm::CallBase *, CxxIRCall> Calls;
   std::set<const llvm::Instruction *> ChainReads;
+  std::set<const llvm::StoreInst *> SavedStackRestores;
   std::set<const llvm::Instruction *> IncomingAccesses;
   std::vector<ExceptionAddressRange> CallerPCWrites;
 };
@@ -53,11 +54,15 @@ llvm::Error bindCxxRuntimeThrow(const CxxIRControlProof &Proof,
 
 llvm::Expected<const llvm::CatchReturnInst *> validateCxxContinuationRestore(
     const llvm::Instruction &Anchor, const RegistrationFrame &Frame,
-    int32_t SavedStackSlot, const RegistrationCxxContinuation &Resume);
+    int32_t SavedStackSlot, const RegistrationCxxContinuation &Resume,
+    const llvm::AllocaInst *SavedCallbackStack = nullptr);
 
 llvm::Error bindCxxCatches(CxxIRControlProof &Proof, const MedFunc &Source,
                            const llvm::Function &Function,
                            const X86RegistrationFrameLayout &Layout);
+
+llvm::Error bindCxxCatchResumes(CxxIRControlProof &Proof, const MedFunc &Source,
+                                const llvm::Function &Function);
 
 llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
                               const llvm::Function &Function);

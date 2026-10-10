@@ -15,7 +15,8 @@ namespace neverd {
 void emitRegistrationCxxContinuation(
     llvm::ReturnInst &Return, llvm::AllocaInst &Frame, uint64_t Establisher,
     int32_t SavedStackSlot, llvm::CatchPadInst &Pad, llvm::BasicBlock &Target,
-    va_t FunctionVA, const RegistrationCxxContinuation &Resume) {
+    va_t FunctionVA, const RegistrationCxxContinuation &Resume,
+    llvm::AllocaInst &SavedFrame, uint64_t SavedBase) {
   llvm::IRBuilder<> B(&Return);
   med_llvm_eh::emitWindowsEHProvenanceAnchor(
       B, windows_eh_md::NativeProvenanceModel::X86RegistrationCxx,
@@ -24,8 +25,9 @@ void emitRegistrationCxxContinuation(
       uint32_t(Resume.SavedStackOffset));
   auto *Slot = B.CreateInBoundsGEP(B.getInt8Ty(), &Frame,
                                    B.getInt32(Establisher + SavedStackSlot));
-  auto *Saved = B.CreateInBoundsGEP(
-      B.getInt8Ty(), &Frame, B.getInt32(Establisher + Resume.SavedStackOffset));
+  auto *Saved =
+      B.CreateInBoundsGEP(B.getInt8Ty(), &SavedFrame,
+                          B.getInt32(SavedBase + Resume.SavedStackOffset));
   auto *Restore = B.CreateStore(B.CreatePtrToInt(Saved, B.getInt32Ty()), Slot);
   Restore->setAlignment(llvm::Align(1));
   Restore->setVolatile(true);

@@ -56,6 +56,11 @@ struct RegistrationBlockState {
   /// Consumers require the complete state/lifetime proof before pruning.
   bool Reached = false;
   std::vector<RegistrationCxxSearch> CxxSearches;
+  /// Possible live catch invocations, outermost first. Snapshot differences
+  /// with the same invocation identities collapse here; the LowIR solver
+  /// still keeps their frame facts separate. Native projection requires a
+  /// unique stack and checks every ordinary and runtime continuation edge.
+  std::vector<std::vector<std::pair<uint32_t, uint32_t>>> CxxCatchStacks;
 };
 
 /// A PE32 C++ catch returns a continuation code pointer to the runtime. This
@@ -75,6 +80,9 @@ struct RegistrationCxxContinuation {
   /// LowIR and MedIR retain this implicit memory effect on the exact RETURN;
   /// HighIR and native LLVM lowering must materialize it in the source frame.
   int32_t SavedStackOffset = 0;
+  /// A nonzero callback entry makes SavedStackOffset relative to that
+  /// suspended invocation's stack, rather than the parent establisher.
+  va_t SavedCallbackVA = 0;
   bool operator==(const RegistrationCxxContinuation &) const = default;
 };
 

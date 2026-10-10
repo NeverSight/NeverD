@@ -26,6 +26,21 @@ struct CxxCatchContext {
   /// The CRT captures SavedESP before entering a catch and restores that
   /// snapshot on return or guard unwind, even if the catch rewrites the slot.
   std::optional<int32_t> SavedStackOffset;
+  std::optional<CallbackFrameAddress> SavedCallback;
+  std::optional<va_t> SuspendedCallback;
+  std::optional<int32_t> SuspendedStackOffset;
+  std::map<int32_t, FrameValue> SuspendedCells;
+  std::set<int32_t> SuspendedInitializedBytes;
+  size_t cellCount() const {
+    return 1 + SuspendedCells.size() + SuspendedInitializedBytes.size();
+  }
+  FrameValue savedStack() const {
+    if (SavedCallback)
+      return FrameValue::callbackFrame(SavedCallback->Entry,
+                                       SavedCallback->Offset);
+    return SavedStackOffset ? FrameValue::frame(*SavedStackOffset)
+                            : FrameValue{{}, {}, false, true};
+  }
   auto operator<=>(const CxxCatchContext &) const = default;
 };
 
@@ -33,7 +48,6 @@ struct Domain {
   std::set<int32_t> Levels;
   FrameState Frame;
   FrameState RuntimeObject;
-  std::optional<RegistrationCxxCatchObject> RuntimeIdentity;
   std::set<int32_t> InitializedFrameBytes;
   bool Reached = false;
   bool Unknown = false;
@@ -45,6 +59,13 @@ struct Domain {
   bool Uninstalled = false;
   bool Installed = false;
   bool CanDispatch = false;
+  size_t catchCellCount() const {
+    size_t Count = 0;
+    for (const auto &Stack : CxxCatchStacks)
+      for (const auto &Context : Stack)
+        Count += Context.cellCount();
+    return Count;
+  }
 };
 
 struct BlockFacts {
@@ -95,9 +116,13 @@ private:
   recordCatchReturn(size_t I, const Domain &After, const LowOp &Op,
                     const FrameTransfer &Transfer,
                     std::optional<RegistrationCxxContinuation> &CatchReturn);
+  void resumeCxxCatch(const Domain &After,
+                      const RegistrationCxxContinuation &Return);
   bool recordRuntimeMemory(size_t I, Domain &After, const LowOp &Op,
                            const FrameTransfer &Transfer,
                            const FrameTransfer &RuntimeTransfer);
+  bool runtimeObjectIsLive(const Domain &State,
+                           std::pair<uint32_t, uint32_t> Identity);
   bool transferBlock(size_t I);
   void dispatchBlock(size_t I, const Domain &Before);
   std::vector<RegistrationCxxSearch> cxxSearches(size_t I, const Domain &State);

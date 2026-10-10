@@ -147,6 +147,15 @@ It publishes every possible catch-search target and the exited guard count.
 Secondary search through a parent try removes the exited invocations and
 restores their captured stack snapshot. CFG construction and native call
 lowering consume that result rather than filtering by the first guard alone.
+`RegistrationStateResume` restores suspended callback cells and initialized
+bytes for a try inside a catch; `RegistrationStateObject` binds each exception
+pointer to an identity present in every reaching live catch stack. MedIR's
+`RegistrationCatchContext` owns current block membership and catch parents.
+HighIR and LLVM consume that same projection. `COFFRegistrationCxxResume`
+independently binds edited resume seeds to freshly checked source coordinates;
+`COFFRegistrationCxxLifetime` follows checked catchpad ancestry for outer
+reference objects. A restored callback ESP is a distinct MedIR root, retaining
+its original invocation rather than becoming a new parent-frame address.
 The captured pre-dispatch SavedESP owns the catch-return writeback even when
 catch code changes the cell. That effect remains bound to the exact RETURN in
 LowIR and MedIR. Dedicated x86 HighIR and LLVM continuation lowering restore

@@ -7,6 +7,7 @@
 #include "RegistrationDirectThrowTestUtils.h"
 #include "RegistrationNestedTryTestUtils.h"
 #include "RegistrationRethrowTestUtils.h"
+#include "RegistrationSourceReceiptTestUtils.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
@@ -30,10 +31,6 @@
 #include "llvm/IR/WinEHFrame.h"
 #endif
 #include "llvm/Support/Endian.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/JSON.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -241,46 +238,13 @@ void reconstructNestedSearch(bool Secondary, bool Rethrow = false,
     ASSERT_EQ(Generated->Cxx->TryBlocks[1].Handlers.size(), 2u);
     if (EH.Registration->RealignedFrame)
       ASSERT_TRUE(Generated->Registration->RealignedFrame);
-    if (const auto *Receipt =
-            std::getenv("NEVERD_REGISTRATION_REALIGNED_RECEIPT")) {
-      auto Digest = [](const char *File) {
-        auto Buffer = llvm::MemoryBuffer::getFile(File);
-        EXPECT_TRUE(bool(Buffer));
-        if (!Buffer)
-          return std::string();
-        return llvm::toHex(llvm::SHA256::hash(llvm::arrayRefFromStringRef(
-                               (*Buffer)->getBuffer())),
-                           true);
-      };
-      llvm::json::Object Record{
-          {"incoming_reads",
-           llvm::count_if(States.IncomingFrameAccesses,
-                          [](const auto &A) { return !A.Write; })},
-          {"incoming_writes",
-           llvm::count_if(States.IncomingFrameAccesses,
-                          [](const auto &A) { return A.Write; })},
-          {"schema", 1},
-          {"secondary_search", Secondary},
-          {"rethrow_search", Rethrow},
-          {"inline_rethrow", InlineRethrow},
-          {"direct_throw", DirectThrow},
-          {"evidence", "checked-realigned-source-reconstruction"},
-          {"source_frame", EH.Registration->RealignedFrame ? "realigned"
-                           : EH.Registration->hasCxxCallbackStack()
-                               ? "fixed-displaced"
-                               : "direct"},
-          {"source_image_sha256", Digest(Path)},
-          {"image_sha256", Digest(Output)},
-          {"base", Image->Base},
-          {"source_begin", EH.CodeRange.Begin - Image->Base},
-          {"source_end", EH.CodeRange.End - Image->Base},
-          {"generated_begin", Generated->CodeRange.Begin - Image->Base},
-          {"generated_end", Generated->CodeRange.End - Image->Base}};
-      std::error_code Error;
-      llvm::raw_fd_ostream Out(Receipt, Error);
-      ASSERT_FALSE(Error) << Error.message();
-      Out << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Record)));
-    }
+    registration_test::writeSourceReceipt(
+        Path, Output, *Image, EH, States, *Generated,
+        llvm::json::Object{{"secondary_search", Secondary},
+                           {"rethrow_search", Rethrow},
+                           {"inline_rethrow", InlineRethrow},
+                           {"direct_throw", DirectThrow},
+                           {"catch_try", false}});
   }
 }
 

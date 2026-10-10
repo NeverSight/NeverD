@@ -33,7 +33,9 @@ Il supporto di analisi non implica la ricostruzione nativa.
 | `__CxxFrameHandler3` | Unwind/try map, catch, offset object/frame, continuation e IP-to-state | Intervalli riducibili come C++ HighIR con annotazioni di tipo compatibili C | Ricostruzione x64 del subset stretto e verifier-clean descritto sotto |
 | `__CxxFrameHandler4` | Decodifica variabile limitata nel grafo C++ comune | Stesso HighIR con provenienza FH4 | Solo analisi; funzione toccata rifiutata |
 | `__GSHandlerCheck_SEH/EH/EH4` | Personality avvolta e provenienza GS cookie verificata | Grafo base e annotazione wrapper | Solo analisi; rifiuto senza downgrade |
-| EH x86 registration-chain | Distinto dall’EH tabellare | Annotazione di forma non supportata | Non ricostruito |
+| EH x86 a catena di registrazione | Catene SEH e grafi C++ verificati | Regioni HighIR con identità dei callback conservata | Ricostruzione PE32 del sottoinsieme verificato; vedere il contratto dettagliato |
+
+Un `try` dentro un `catch` di riferimento scalare può conservare l’oggetto esterno vivo e ripristinarne lo stack privato. I callback condivisi e la gestione generale della durata degli oggetti restano esclusi dal sottoinsieme nativo. [PE32 C++](../windows-exception-reconstruction.md).
 
 Un record malformed non è mai completo. Una decodifica partial resta utile per
 l’ispezione ma non autorizza la generazione nativa. Se un header xdata ARM prova

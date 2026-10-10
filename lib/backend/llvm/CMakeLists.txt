@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
 
   LINK_COMPONENTS
   IR
+  IRMed
 )
 
 add_neverd_component_library(NeverDBackendLLVM

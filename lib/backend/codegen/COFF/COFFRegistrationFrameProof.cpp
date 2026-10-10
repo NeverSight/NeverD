@@ -265,11 +265,12 @@ llvm::Error validateFramePrivacy(
     if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Value)) {
       auto Slot = Locate(Load->getPointerOperand(), Depth + 1);
       const auto *Catch = CatchAt(*Load);
-      if (Catch && Catch->Reference && Slot && Slot->Root == LogicalFrame &&
-          Slot->Offset == Catch->HomeOffset &&
-          Load->getType()->isIntegerTy(32) && !Load->isAtomic() &&
-          Dominators.at(&Parent)->dominates(Catch->Catch, Load))
-        return Cell{Catch->Catch, 0};
+      const auto *Home = Slot && Slot->Root == LogicalFrame
+                             ? activeCxxReferenceHome(Cxx, Catch, Slot->Offset)
+                             : nullptr;
+      if (Home && Load->getType()->isIntegerTy(32) && !Load->isAtomic() &&
+          Dominators.at(&Parent)->dominates(Home->Catch, Load))
+        return Cell{Home->Catch, 0};
       if (!Slot || !llvm::isa<llvm::AllocaInst>(Slot->Root))
         return std::nullopt;
       std::vector<
@@ -406,14 +407,15 @@ llvm::Error validateFramePrivacy(
                   "runtime object read lost its checked pointer identity");
             if (Cxx && Where && RuntimeObjects.count(Where->Root)) {
               const auto Access = Cxx->RuntimeAccesses.find(Load);
-              if (!Catch || Catch->Catch != Where->Root ||
+              const auto *Owner = RuntimeObjects.at(Where->Root);
+              if (!Catch || !isActiveCxxCatch(Owner->Catch, Catch->Catch) ||
                   Access == Cxx->RuntimeAccesses.end() ||
                   Access->second.Catch != Where->Root || Access->second.Write ||
                   Where->Offset != Access->second.Offset || Where->Offset < 0 ||
                   Size(Load->getType()) != Access->second.Width ||
                   uint64_t(Where->Offset) + Access->second.Width >
-                      Catch->ObjectSize ||
-                  !Dominators.at(&Parent)->dominates(Catch->Catch, Load))
+                      Owner->ObjectSize ||
+                  !Dominators.at(&Parent)->dominates(Owner->Catch, Load))
                 return Reject("runtime object read changed its checked domain");
               continue;
             }
@@ -479,9 +481,10 @@ llvm::Error validateFramePrivacy(
               if (Bridge != ExceptionBridges.end() &&
                   !Dominators.at(Function)->dominates(Bridge->second, Load))
                 return Reject();
-              if (Catch && Catch->Reference &&
-                  Where->Offset == Catch->HomeOffset &&
-                  Dominators.at(&Parent)->dominates(Catch->Catch, Load)) {
+              const auto *Home =
+                  activeCxxReferenceHome(Cxx, Catch, Where->Offset);
+              if (Home &&
+                  Dominators.at(&Parent)->dominates(Home->Catch, Load)) {
                 if (!Load->getType()->isIntegerTy(32))
                   return Reject("runtime reference home changed width");
                 Changed |= Addresses.insert(Load).second;
@@ -509,13 +512,17 @@ llvm::Error validateFramePrivacy(
                 return Reject("unproved pointer stored in the source frame");
               for (const auto &Address : {Where, Stored})
                 if (Address && CallbackStacks.count(Address->Root) &&
-                    CallbackStacks.at(Address->Root) != Catch)
+                    CallbackStacks.at(Address->Root) != Catch &&
+                    !(Cxx->SavedStackRestores.count(Store) && Catch &&
+                      isActiveCxxCatch(CallbackStacks.at(Address->Root)->Catch,
+                                       Catch->Catch)))
                   return Reject("callback stack write outlived its invocation");
               if (Stored && CallbackStacks.count(Stored->Root) && Where &&
                   Where->Root == LogicalFrame &&
                   (Where->Offset != Cxx->SavedStackOffset || Bytes != 4 ||
-                   !I.getMetadata(
-                       windows_eh_md::RegistrationOperationAttachment)))
+                   (!I.getMetadata(
+                        windows_eh_md::RegistrationOperationAttachment) &&
+                    !Cxx->SavedStackRestores.count(Store))))
                 return Reject("callback stack escaped its SavedESP bridge");
             }
             if (Cxx && Where && llvm::isa<llvm::GlobalVariable>(Where->Root) &&
@@ -528,25 +535,26 @@ llvm::Error validateFramePrivacy(
                   "runtime object write lost its checked pointer identity");
             if (Cxx && Where && RuntimeObjects.count(Where->Root)) {
               const auto Access = Cxx->RuntimeAccesses.find(Store);
-              if (!Catch || Catch->Catch != Where->Root ||
+              const auto *Owner = RuntimeObjects.at(Where->Root);
+              if (!Catch || !isActiveCxxCatch(Owner->Catch, Catch->Catch) ||
                   Access == Cxx->RuntimeAccesses.end() ||
                   Access->second.Catch != Where->Root ||
                   !Access->second.Write ||
                   Where->Offset != Access->second.Offset || Where->Offset < 0 ||
                   Bytes != Access->second.Width ||
                   uint64_t(Where->Offset) + Access->second.Width >
-                      Catch->ObjectSize ||
-                  !Dominators.at(&Parent)->dominates(Catch->Catch, Store) ||
+                      Owner->ObjectSize ||
+                  !Dominators.at(&Parent)->dominates(Owner->Catch, Store) ||
                   IsAddress(Store->getValueOperand()))
                 return Reject(
                     "runtime object write changed its checked domain");
               continue;
             }
-            if (Catch && Catch->Reference && Where &&
-                Where->Root == LogicalFrame &&
-                Where->Offset < Catch->HomeOffset + 4 &&
-                Catch->HomeOffset < Where->Offset + int64_t(Bytes) &&
-                Dominators.at(&Parent)->dominates(Catch->Catch, Store))
+            const auto *Home =
+                Where && Where->Root == LogicalFrame
+                    ? activeCxxReferenceHome(Cxx, Catch, Where->Offset, Bytes)
+                    : nullptr;
+            if (Home && Dominators.at(&Parent)->dominates(Home->Catch, Store))
               return Reject("runtime reference home was overwritten");
             if (!ImmutableImageRanges.empty() &&
                 !IncomingAccesses.count(Store) &&
@@ -656,13 +664,14 @@ llvm::Error validateFramePrivacy(
                           return Reject("callee reads a pointer from its "
                                         "scalar object borrow");
                       }
-                    if (Catch && Catch->Reference &&
-                        Effects == &Borrow->second.Writes &&
-                        Access.Offset < Catch->HomeOffset + 4 &&
-                        Catch->HomeOffset < Access.Offset +
-                                                int64_t(Effect.End) -
-                                                Effect.Begin &&
-                        Dominators.at(&Parent)->dominates(Catch->Catch, Call))
+                    const auto *Home =
+                        Effects == &Borrow->second.Writes
+                            ? activeCxxReferenceHome(
+                                  Cxx, Catch, Access.Offset,
+                                  uint64_t(int64_t(Effect.End) - Effect.Begin))
+                            : nullptr;
+                    if (Home &&
+                        Dominators.at(&Parent)->dominates(Home->Catch, Call))
                       return Reject(
                           "callee overwrites the runtime reference home");
                   }

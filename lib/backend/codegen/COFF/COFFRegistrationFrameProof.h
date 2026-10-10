@@ -66,11 +66,20 @@ struct RegistrationCxxCatchFrameContract {
 struct RegistrationCxxFrameContract {
   const BinaryImage *Image = nullptr;
   std::vector<RegistrationCxxCatchFrameContract> Catches;
+  std::set<const llvm::StoreInst *> SavedStackRestores;
   int64_t SavedStackOffset = 0;
   std::map<const llvm::CallBase *, RegistrationFrameBorrow> Borrows;
   std::map<const llvm::Instruction *, RegistrationRuntimeAccess>
       RuntimeAccesses;
 };
+
+/// Membership follows the already checked funclet parent chain.
+bool isActiveCxxCatch(const llvm::CatchPadInst *Owner,
+                      const llvm::CatchPadInst *Current);
+const RegistrationCxxCatchFrameContract *
+activeCxxReferenceHome(const RegistrationCxxFrameContract *Contract,
+                       const RegistrationCxxCatchFrameContract *Current,
+                       int64_t Offset, uint64_t Size = 0);
 
 /// Recheck the actual post-edit LLVM use closure. Source LowIR privacy alone
 /// cannot authenticate a later STORE, call argument or callback-frame edit.

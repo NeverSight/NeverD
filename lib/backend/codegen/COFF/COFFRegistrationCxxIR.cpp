@@ -212,6 +212,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ frame has no runtime escape");
   if (auto Error = bindCxxCatches(Result, Med, Function, *Layout))
     return std::move(Error);
+  if (auto Error = bindCxxCatchStack(Result, Med, Function))
+    return std::move(Error);
+  const auto CatchParents = projectX86RegistrationCatchParents(Med);
+  if (!CatchParents)
+    return rejectIR("C++ continuation lost its parent invocation");
   auto BundleIs = [](const llvm::CallBase &Call, const llvm::Value *Pad) {
     auto Bundle = Call.getOperandBundle("funclet");
     return Pad ? Bundle && Bundle->Inputs.size() == 1 &&
@@ -422,9 +427,16 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         Resume = &Candidate;
     if (!Resume)
       return rejectIR("C++ catch lost its checked runtime continuation");
+    const llvm::AllocaInst *Suspended = nullptr;
+    if (Resume->SavedCallbackVA) {
+      const auto Parent = (*CatchParents)[Resume->TryIndex];
+      if (!Parent || !Result.Catches.at(*Parent).Stack)
+        return rejectIR("C++ continuation lost its suspended catch");
+      Suspended = Result.Catches.at(*Parent).Stack;
+    }
     auto Restored = validateCxxContinuationRestore(
         *Anchor, Result.Frame, *Source.Registration->RegistrationOffset - 4,
-        *Resume);
+        *Resume, Suspended);
     if (!Restored)
       return Restored.takeError();
     const auto *Return = *Restored;
@@ -440,6 +452,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         !BundleIs(*Anchor, Result.Catches.at(Identity).Pad) ||
         !Returns.insert(Return).second)
       return rejectIR("C++ catch changed its checked runtime continuation");
+    Result.SavedStackRestores.insert(
+        llvm::cast<llvm::StoreInst>(Return->getPrevNode()));
     ExpectedAnchors.insert(Anchor);
   }
   if (Returns.size() != States.CxxContinuations.size())
@@ -560,8 +574,6 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       metadataInteger(*Contract, exception_rewrite::SkippedLandingPads, 64) !=
           0)
     return rejectIR("C++ native contract counters changed");
-  if (auto Error = bindCxxCatchStack(Result, Med, Function))
-    return std::move(Error);
   return Result;
 #endif
 }

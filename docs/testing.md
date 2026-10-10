@@ -2712,14 +2712,22 @@ substituted evidence.
 and `-O1` parents and links the captured CRT libraries. Inner reference catches
 and outer value/catch-all clauses exercise all three continuations under four
 caller stack layouts, including a new throw inside the inner catch. The
-224-image source/control matrix covers ordinary searches, secondary throws and
-true helper and direct rethrows through both CLI patch modes and forced rebasing.
+256-image source/control matrix covers ordinary searches, secondary throws,
+true helper and direct rethrows, and a try inside a live reference catch through
+both CLI patch modes and forced rebasing.
 The C++ test rejects changed prologue saves,
 personality argument reads, search edges, handler order, continuation ownership,
 and emitted try/unwind state rows. Secondary-search mutations also reject
 searching the exited inner try or losing the active catch token. HighIR must
-contain both nested tries and all three callback bodies; C and C++ output receive
-syntax checks. `windows_registration_runtime.py` captures the selected MSVC
+contain every try and callback body; C and C++ output receive syntax checks.
+The catch-internal profile has three tries and four catches. Its inner catch
+updates the still-live outer reference, then resumes the suspended outer stack.
+`WindowsRegistrationCatchContext` rejects changed catch ancestry, missing
+suspended owners, and verifier-clean edits to resume values, source identities,
+offsets and required memory properties. State tests separately distinguish
+outer/inner object sizes, ended lifetimes and unbalanced private stacks.
+Replay binds the added proof and shared receipt writer to their current digests.
+`windows_registration_runtime.py` captures the selected MSVC
 x86 redistributable DLL alongside the link libraries. Each image runs with
 that exact app-local runtime, with a native-only Wine override, and replay
 authenticates its provider and digest. A missing or changed runtime fails;

@@ -81,7 +81,15 @@ extern "C" __declspec(dllexport) __declspec(noinline) int callback_parent() {
 #endif
       }
 #endif
+#ifdef CATCH_TRY
+      try {
+        callback_throw_int();
+      } catch (int Inner) {
+        Value += Inner + 4;
+      }
+#else
       Value += 11;
+#endif
       callback_caught = Value;
       return Value + 10;
     }

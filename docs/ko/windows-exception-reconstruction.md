@@ -29,7 +29,9 @@ record, 언어 테이블, guard table의 일관성을 증명할 수 없는 재�
 | `__CxxFrameHandler3` | unwind/try map, catch, catch-object/frame offset, continuation, IP-to-state map | reducible state interval을 명시적 C++ HighIR 및 C 호환 형식 주석으로 변환 | 아래의 좁은 verifier-clean subset에 대해 네이티브 x64 재구성 |
 | `__CxxFrameHandler4` | action kind/object offset를 포함한 bounded variable-length decode | FH4 provenance를 가진 공통 HighIR graph | 분석 전용. 대상 함수 변경 거부 |
 | `__GSHandlerCheck_SEH/EH/EH4` | wrapped personality와 검사된 GS cookie provenance | base language graph와 wrapper 주석 | 분석 전용. downgrade 없이 대상 함수 변경 거부 |
-| x86 registration-chain EH | table-based EH와 구분 | unsupported-form 주석 | 재구성하지 않음 |
+| x86 registration-chain EH | 검증된 SEH 체인 및 C++ 그래프 | callback 식별자를 유지하는 HighIR 영역 | 증명된 부분 집합의 PE32 재구성. 자세한 계약 참조 |
+
+스칼라 참조 `catch` 내부의 `try`는 살아 있는 외부 예외 객체를 유지하고 전용 스택을 복원할 수 있습니다. 공유 callback과 일반적인 객체 수명은 아직 네이티브 재구성 범위에 포함되지 않습니다. [PE32 C++](../windows-exception-reconstruction.md).
 
 Malformed record를 완전한 일반 record로 취급하지 않습니다. partial decode는 조사에 쓸 수 있지만
 네이티브 metadata 생성을 허가하지 않습니다. ARM xdata header가 bounded executable fragment

@@ -32,7 +32,9 @@ Analyse-Support bedeutet nicht automatisch native Rekonstruktion.
 | `__CxxFrameHandler3` | Unwind-/Try-Maps, Catches, Objekt-/Frame-Offsets, Fortsetzungen und IP-to-State | Reduzierbare Intervalle als C++ HighIR mit C-kompatiblen Typannotationen | Native x64-Rekonstruktion des unten beschriebenen engen verifier-clean Subsets |
 | `__CxxFrameHandler4` | Begrenztes variables Decoding in den gemeinsamen C++-Graphen | Gleicher HighIR-Graph mit FH4-Provenienz | Nur Analyse; berührte Funktion wird abgelehnt |
 | `__GSHandlerCheck_SEH/EH/EH4` | Wrapped Personality und geprüfte GS-Cookie-Provenienz | Basissprachgraph plus Wrapper-Annotation | Nur Analyse; Ablehnung ohne Downgrade |
-| x86 registration-chain EH | Getrennt von tabellenbasiertem EH | Unsupported-Form-Annotation | Keine Rekonstruktion |
+| x86 Registration-Chain-EH | Geprüfte SEH-Ketten und C++-Graphen | HighIR-Regionen mit erhaltener Callback-Identität | PE32-Rekonstruktion der nachgewiesenen Teilmenge; siehe Detailvertrag |
+
+Ein `try` innerhalb eines skalaren Referenz-`catch` kann das äußere lebende Objekt erhalten und dessen privaten Stack wiederherstellen. Gemeinsame Callbacks und allgemeine Objektlebenszeiten bleiben außerhalb der nativen Teilmenge. [PE32 C++](../windows-exception-reconstruction.md).
 
 Malformed Records gelten nie als vollständig. Partial Decoding bleibt zur
 Inspektion nutzbar, berechtigt aber nicht zur nativen Generierung. Beweist ein

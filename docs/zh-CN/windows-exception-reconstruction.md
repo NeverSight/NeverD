@@ -182,7 +182,8 @@ SavedESP 将其地址存入父帧。安装器重放源契约，并独立核验�
 
 每条 catch 分别绑定自己的 catchpad、对象 home、临时栈和精确 continuation；分派顺序
 必须与源 HandlerMap 一致。其他 catch 的对象初始化或临时栈不能供当前 catch 使用。
-父函数中的 try 可以互不相交或嵌套，每个 catch 边界必须紧随其保护状态区间。
+try 可以互不相交、嵌套于父 try，或嵌套在经过证明的 catch 中。catch 入口状态紧随
+保护区间，其 catch 状态区间可以包含更多 try；最多支持 64 个 try 和 128 个源状态。
 共享的源图投影检查完整的由内到外搜索链；安装器独立核验各 try 的保护状态集合、
 实际 HandlerMap、搜索顺序和 unwind 边。catch 中经过证明的私有 throw 可以向父函数
 的外层 try 发起二次搜索；invoke 保留当前 catch token，并指向外层分派节点。
@@ -201,7 +202,12 @@ LLVM 对象参数，安装器独立检查对象地址、生命周期、初始化
 安装器还检查运行时参数属性和优化器效果声明，拒绝新增 `inreg`、`nonnull` 或
 `memory(none)`。已检查基本类型的 C++ 输出按准确类型读取当前对象字节，包括浮点
 位模式；未知类型保留运行时调用，不猜测值或默认构造函数。
-共享 callback 和 catch 内的 try 仍被拒绝。
+catch 内含 try 时，LowIR 保存外层回调的私有栈内容和已初始化字节。内层 catch 可以
+读写仍然存活的外层标量引用对象，但不能使用已经退出的对象或其他回调的对象边界。
+内层返回时恢复准确的 callback ESP 和外层上下文。MedIR 统一拥有回调块归属与嵌套
+关系；LLVM catchswitch 的父节点及恢复栈定义必须与它一致。安装器独立检查恢复入口、
+目标、偏移、栈分配、支配关系和 SavedESP 写回。此嵌套引用投影要求 unwind map
+不含 action；通用对象生命周期和共享 callback 仍未完成。
 二次搜索运行矩阵使用捕获的微软 x86 CRT DLL，在 Wine 下也强制加载这份原生 DLL；
 其来源与哈希绑定到验证记录，Windows CI 复跑相同的原始和重建文件。
 CRT 缺失或字节变化会使验证失败，不能用 Wine 内置 CRT 的 guard 恢复行为代替。
@@ -224,7 +230,9 @@ LLVM 固定帧及重新对齐帧使用编译器生成的父函数，固定帧覆
 栈分配。多 catch 样本在同一函数中组合有符号按值、无符号引用与 catch-all，检查
 三条恢复路径、引用写回和四种调用者栈布局，并覆盖两种安装模式及强制重定位。
 新增 Clang `-O0`/`-O1` 样本覆盖内层引用 catch、外层按值和 catch-all 搜索、
-三条 continuation、反向对照及强制重定位。`-O0` loader 还检查相邻的 ESP 到 EAX
+三条 continuation、反向对照及强制重定位。另有三个 try、四个 catch 的样本在引用
+catch 内再次抛出，由内层 catch 修改外层对象，然后恢复外层 catch 的执行。
+`-O0` loader 还检查相邻的 ESP 到 EAX
 保存序列与 personality 跳板的四条参数读取；篡改这些字节、IR 分派边或生成的
 try/unwind 行必须拒绝重建。所有样本均链接捕获的 MSVC CRT 库；CI 在 Windows
 上重放完全相同的 PE 文件。其他 try/catch 图、未经证明的对象类型或入口 ABI、

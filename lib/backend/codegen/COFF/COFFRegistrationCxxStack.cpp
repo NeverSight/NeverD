@@ -60,7 +60,10 @@ static llvm::Error bindCatchStack(CxxIRControlProof &Proof,
           return rejectIR("C++ callback stack lost its invocation identity");
         Catch.Stack = Stack;
       }
-      if (I.getMetadata(windows_eh_md::RegistrationRootAttachment)) {
+      if (const auto *RootMD =
+              I.getMetadata(windows_eh_md::RegistrationRootAttachment)) {
+        if (metadataInteger(*RootMD, 0, 8) == 2)
+          continue;
         if (PrivateStack && &Block != Catch.Pad->getParent() &&
             llvm::any_of(Proof.Catches, [&](const auto &Other) {
               return Other.second.Pad->getParent() == &Block;
@@ -131,7 +134,7 @@ llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
   for (const auto &[Identity, Catch] : Proof.Catches)
     if (auto Error = bindCatchStack(Proof, Source, Function, Identity))
       return Error;
-  return llvm::Error::success();
+  return bindCxxCatchResumes(Proof, Source, Function);
 }
 
 } // namespace neverd::coff_registration
