@@ -14708,9 +14708,20 @@ TEST(LLVMCodePointerInvariantBoundary,
     llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
         (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
     ASSERT_NE(Mirror, nullptr);
-    std::set<const llvm::Value *> Seen;
-    EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
-                                              Mirror, Seen));
+    EXPECT_EQ(Calls.front()->getCalledFunction(),
+              Module->getFunction(Callee.Name));
+    // Exact immutable identity permits a direct call, but the source table
+    // observation remains. Unmarked and data slots above still fail closed.
+    bool ObservedMirror = false;
+    for (const auto &Block : *EmittedCaller)
+      for (const auto &Inst : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+          std::set<const llvm::Value *> Seen;
+          ObservedMirror |= Load->isVolatile() &&
+                            valueReferencesSpecificGlobal(
+                                Load->getPointerOperand(), Mirror, Seen);
+        }
+    EXPECT_TRUE(ObservedMirror);
   }
 }
 
@@ -19453,6 +19464,138 @@ TEST(LLVMCodePointerInvariantBoundary,
       std::set<const llvm::Value *> SeenIntegers;
       EXPECT_FALSE(valueReferencesInteger(CalledOperand, CodeVA, SeenIntegers));
     }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     ExactIndirectTargetsReuseTheirRecoveredCallSignature) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (unsigned Mode = 0; Mode != 6; ++Mode) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(Mode); // Address, immutable slot, mutable slot, atomic,
+                            // missing arg, observed void result.
+        const auto Width = getTargetRegInfo(TargetArch).PointerSize;
+        const va_t Rebase = Width == 4 ? TextVA - 0x10000 : 0;
+        const va_t TargetVA = CodeVA - Rebase;
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        for (auto &Segment : Image.Segments)
+          Segment.VA -= Rebase;
+        for (auto &Section : Image.Sections)
+          Section.VA -= Rebase;
+        Image.CodePtrRelocSlots = {DataVA + 8 - Rebase};
+        Image.DataPtrRelocSlots.clear();
+        auto &Storage = Image.Segments[1];
+        std::fill(Storage.Data.begin(), Storage.Data.end(), 0);
+        if (Width == 4)
+          writeObject(Storage.Data, 8, uint32_t(TargetVA));
+        else
+          writeObject(Storage.Data, 8, TargetVA);
+        if (Mode == 2) {
+          Storage.Name = Format == BinaryFormat::MachO ? "__DATA" : ".data";
+          Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+          auto &Section = Image.Sections.back();
+          Section.Name = Format == BinaryFormat::MachO ? "__data" : ".data";
+          Section.SegmentName = Storage.Name;
+          Section.Flags = Storage.Flags;
+        }
+        MedFunc Caller =
+            Mode == 0 ? makeExactAddressIndirectCaller(TargetArch)
+                      : makeExactMixedPointerSlotIndirectCaller(TargetArch, 8);
+        Caller.Entry -= Rebase;
+        for (auto &Block : Caller.Blocks) {
+          Block.StartAddr -= Rebase;
+          Block.EndAddr -= Rebase;
+          for (auto &Op : Block.Ops) {
+            Op.Addr -= Rebase;
+            for (auto &Input : Op.Inputs)
+              if (Input.isConst())
+                Input.ConstVal -= Rebase;
+          }
+        }
+        if (Mode == 3)
+          Caller.Blocks[0].Ops[1].MemoryOrdering = NdMemoryOrdering::Acquire;
+        if (Mode == 5) {
+          MedVar Result = Caller.Blocks[0].Ops[1].Output;
+          Result.Id = 300;
+          Caller.Blocks[0].Ops[2].Output = Result;
+          Caller.Blocks[0].Ops.back().addInput(Result);
+          Caller.ReturnType = NdType::makeInt(Width);
+        }
+        MedFunc Callee = makeReturnFunction("exact_signature_callee", TargetVA);
+        for (unsigned I = 0; I != 2; ++I) {
+          MedVar P;
+          P.Kind = MedVar::Param;
+          P.TheArch = TargetArch;
+          P.Id = I;
+          P.Size = I == 0 ? Width : 4;
+          P.RegOff = kNoParamReg;
+          Callee.Params.push_back(P);
+        }
+        MedCallInfo Call;
+        Call.BlockId = 0;
+        Call.OpIdx = Mode == 0 ? 1 : 2;
+        Call.IsIndirect = true;
+        for (unsigned I = 0; I != 4; ++I)
+          Call.Args.push_back(MedVar::makeConst(
+              19 + I, Width, ConstantAddressProvenance::Scalar));
+        if (Mode == 4)
+          Call.Args.resize(1);
+        Caller.CallInfos.push_back(Call);
+        llvm::LLVMContext Context;
+        if (Mode == 4)
+          testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                            "exact-indirect-signature",
+                                            TargetArch, {}, &Image, Format);
+        if (Mode == 4) {
+          const auto Diagnostic = testing::internal::GetCapturedStderr();
+          EXPECT_EQ(Module, nullptr);
+          EXPECT_NE(Diagnostic.find("lacks recovered arguments"),
+                    std::string::npos)
+              << Diagnostic;
+          continue;
+        }
+        ASSERT_NE(Module, nullptr);
+        expectValidModule(*Module);
+        auto *Definition = Module->getFunction(Callee.Name);
+        auto *Function = Module->getFunction(Caller.Name);
+        ASSERT_NE(Definition, nullptr);
+        ASSERT_NE(Function, nullptr);
+        const auto Calls = callsIn(*Function);
+        ASSERT_EQ(Calls.size(), 1u);
+        if (Mode < 2 || Mode == 5) {
+          std::string IR;
+          llvm::raw_string_ostream IRStream(IR);
+          Module->print(IRStream, nullptr);
+          EXPECT_EQ(Calls[0]->getCalledFunction(), Definition) << IR;
+          EXPECT_EQ(Calls[0]->getFunctionType(), Definition->getFunctionType());
+          EXPECT_EQ(Calls[0]->arg_size(), 2u);
+          EXPECT_TRUE(Calls[0]->getArgOperand(1)->getType()->isIntegerTy(32));
+          if (Mode == 5) {
+            bool UnknownResult = false;
+            for (const auto &Block : *Function)
+              for (const auto &Inst : Block)
+                if (const auto *Freeze =
+                        llvm::dyn_cast<llvm::FreezeInst>(&Inst))
+                  UnknownResult |=
+                      llvm::isa<llvm::UndefValue>(Freeze->getOperand(0)) &&
+                      Freeze->getType()->isIntegerTy(Width * 8);
+            EXPECT_TRUE(UnknownResult);
+          }
+        } else {
+          EXPECT_EQ(Calls[0]->getCalledFunction(), nullptr);
+          EXPECT_EQ(Calls[0]->arg_size(), 4u);
+          bool KeptLoad = false;
+          for (const auto &Block : *Function)
+            for (const auto &Inst : Block)
+              if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+                KeptLoad |= Mode == 2 || Load->isAtomic();
+          EXPECT_TRUE(KeptLoad);
+        }
+      }
 }
 
 TEST(LLVMCodePointerInvariantBoundary,

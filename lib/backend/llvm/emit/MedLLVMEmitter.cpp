@@ -745,6 +745,13 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   Ctx = &LCtx;
   auto Mod_ = std::make_unique<llvm::Module>(ModName, LCtx);
   Mod = Mod_.get();
+  if (const char *Triple = llvmEmitTriple(TheArch, Fmt)) {
+    Mod_->setTargetTriple(llvm::Triple(Triple));
+    // Address folding, aggregate layout and C projection run before native
+    // codegen. They need the same target layout on every architecture/format,
+    // not LLVM's generic default until a TargetMachine happens to be created.
+    Mod_->setDataLayout(Mod_->getTargetTriple().computeDataLayout());
+  }
   Img = Img_;
   ImportStorageSnapshotImage = nullptr;
   EffectiveImportStorageSlots.clear();
@@ -989,14 +996,6 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     if (!VetoedSuppression.count(Slot))
       ModuleSuppressibleJumpTableRelocationSlots.insert(Slot);
 
-  const char *Triple = llvmEmitTriple(TheArch, Fmt);
-  if (Triple) {
-    Mod_->setTargetTriple(llvm::Triple(Triple));
-    // Registration callbacks recover pointer-sized cells before target
-    // codegen creates a TargetMachine. Use LLVM's target layout here too.
-    if (TheArch == Arch::X86 && Fmt == BinaryFormat::COFF)
-      Mod_->setDataLayout(Mod_->getTargetTriple().computeDataLayout());
-  }
   if (Fmt == BinaryFormat::COFF && Img) {
     uint32_t GuardFlags = Img->DynInfo.GuardFlags;
     if ((GuardFlags & uint32_t(llvm::COFF::GuardFlags::CF_INSTRUMENTED)) != 0)

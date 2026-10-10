@@ -23,12 +23,15 @@
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/safety/CountedWriteSemantics.h"
+#include "neverd/support/Diagnostic.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-call"
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/Loads.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 
@@ -38,6 +41,56 @@
 #include <vector>
 
 namespace neverd {
+
+namespace {
+llvm::Function *constantCallTarget(llvm::Value *Value,
+                                   const llvm::DataLayout &Layout,
+                                   unsigned PointerBits) {
+  // A source indirect call can already name one rebuilt function, directly
+  // or through immutable relocation storage. Reuse that function's recovered
+  // signature before emitting the call. Otherwise the generic register
+  // signature can survive as an opaque-pointer call with extra parameters
+  // even after LLVM folds the pointer to the function itself.
+  for (unsigned Depth = 0; Value && Depth != 8; ++Depth) {
+    if (auto *Function = llvm::dyn_cast<llvm::Function>(Value))
+      return Function;
+    if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(Value)) {
+      if (Load->isAtomic())
+        return nullptr;
+      if (auto *Pointer =
+              llvm::dyn_cast<llvm::Constant>(Load->getPointerOperand())) {
+        // The emitter marks image loads volatile to retain their observation.
+        // An immutable private mirror still fixes their value. Keep the load
+        // itself; only its call target gains the already-proved identity.
+        Value = llvm::ConstantFoldLoadFromConstPtr(Pointer, Load->getType(),
+                                                   Layout);
+      } else if (Load->isSimple() &&
+                 llvm::isa<llvm::AllocaInst>(Load->getPointerOperand())) {
+        // Before promotion, MedIR SSA values use local allocas. Use LLVM's
+        // bounded store-to-load proof, not an arbitrary defining store.
+        auto From = Load->getIterator();
+        Value =
+            llvm::FindAvailableLoadedValue(Load, Load->getParent(), From, 32);
+      } else
+        return nullptr;
+      continue;
+    }
+    const auto *Cast = llvm::dyn_cast<llvm::Operator>(Value);
+    if (!Cast || (Cast->getOpcode() != llvm::Instruction::PtrToInt &&
+                  Cast->getOpcode() != llvm::Instruction::IntToPtr &&
+                  Cast->getOpcode() != llvm::Instruction::BitCast))
+      return nullptr;
+    llvm::Type *Integer = Cast->getOpcode() == llvm::Instruction::PtrToInt
+                              ? Cast->getType()
+                              : Cast->getOperand(0)->getType();
+    if (Cast->getOpcode() != llvm::Instruction::BitCast &&
+        !Integer->isIntegerTy(PointerBits))
+      return nullptr;
+    Value = Cast->getOperand(0);
+  }
+  return nullptr;
+}
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // CALL / INDIR_CALL -- direct and indirect call lowering
@@ -582,7 +635,19 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
   }
 
-  if (Callee && CallAddr > 1 && Callee->isDeclaration()) {
+  if (!Callee && Target) {
+    Callee = constantCallTarget(Target, Mod->getDataLayout(),
+                                getTargetRegInfo(TargetArch).PointerSize * 8);
+    if (Callee && Args.size() < Callee->arg_size()) {
+      syncError() << "med_llvm_emitter: resolved indirect call to "
+                  << Callee->getName() << " lacks recovered arguments\n";
+      FatalCodePointerResolution = true;
+      return;
+    }
+  }
+
+  if (Op.Opcode == NdOp::CALL && Callee && CallAddr > 1 &&
+      Callee->isDeclaration()) {
     auto VAOr = rewrite_source::getOriginalVA(*Callee);
     if (VAOr && !*VAOr)
       rewrite_source::setOriginalVA(*Callee, CallAddr);
@@ -677,7 +742,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       auto *PadTy = CalleeTy->getParamType(CoercedArgs.size());
       CoercedArgs.push_back(llvm::Constant::getNullValue(PadTy));
     }
-    Result = Builder.CreateCall(Callee, CoercedArgs, "call");
+    auto *Call =
+        Builder.CreateCall(Callee, CoercedArgs,
+                           CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
+    Call->setCallingConv(Callee->getCallingConv());
+    Result = Call;
   } else {
     // Indirect call: the callee is unknown, so its LLVM signature is rebuilt
     // from the recovered register classes.  A target with a separate FP
@@ -888,6 +957,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
 
   if (Op.Output.Size > 0) {
+    // A void source callee does not define its machine return register.
+    // Keep a consumed register value explicitly unknown, never a void SSA
+    // operand or an invented zero.
+    if (Result && Result->getType()->isVoidTy())
+      Result = Builder.CreateFreeze(
+          llvm::UndefValue::get(sizeToType(Op.Output.Size)),
+          "void_call_result_unknown");
     // A scalar float/double returned through the x87 stack (i386 st0) is held
     // in the 80-bit ST register as the widened FP value, not raw bits: fp-
     // extend it to x86_fp80 so the caller's `fstp` conversion (FLOAT2FLOAT

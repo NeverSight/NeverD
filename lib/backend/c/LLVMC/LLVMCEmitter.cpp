@@ -215,32 +215,49 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
       OS << " __attribute__((weak))";
     OS << ";\n";
   }
-  if (!OnlyFunction) {
-    writeGlobals(Mod);
-    writeForwardDecls(Mod);
-    writeImportCalleeDecls(Mod);
-    OS << "\n";
-  } else {
+  auto WriteFunctions = [&] {
+    for (auto &Fn : Mod) {
+      if (Fn.isDeclaration())
+        continue;
+      if (OnlyFunction && &Fn != OnlyFunction)
+        continue;
+      auto Event = SourceRecorder ? SourceRecorder->function(Fn) : std::nullopt;
+      if (SourceRecorder)
+        OS << SourceRecorder->definition(Fn);
+      if (Event)
+        OS << SourceRecorder->begin(*Event);
+      writeFunction(Fn);
+      if (Event)
+        OS << SourceRecorder->end(*Event);
+      OS << "\n";
+    }
+  };
+  if (OnlyFunction) {
     writeReferencedImageObjects(*OnlyFunction);
     writeForwardDecls(Mod);
     writeImportCalleeDecls(Mod);
+    WriteFunctions();
+    return;
   }
 
-  for (auto &Fn : Mod) {
-    if (Fn.isDeclaration())
-      continue;
-    if (OnlyFunction && &Fn != OnlyFunction)
-      continue;
-    auto Event = SourceRecorder ? SourceRecorder->function(Fn) : std::nullopt;
-    if (SourceRecorder)
-      OS << SourceRecorder->definition(Fn);
-    if (Event)
-      OS << SourceRecorder->begin(*Event);
-    writeFunction(Fn);
-    if (Event)
-      OS << SourceRecorder->end(*Event);
-    OS << "\n";
+  // A global initializer can reference any definition, including a later
+  // one. Render each body once and retain its actual C prototype instead of
+  // guessing that the LLVM type matches an inferred-void or debug projection.
+  std::string Functions;
+  llvm::raw_string_ostream FunctionsOS(Functions);
+  {
+    struct RestoreOutput {
+      LLVMCOut &Out;
+      llvm::raw_ostream *Original;
+      ~RestoreOutput() { Out.retarget(Original); }
+    } Restore{OS, &OS.stream()};
+    OS.retarget(&FunctionsOS);
+    WriteFunctions();
   }
+  writeForwardDecls(Mod);
+  writeGlobals(Mod);
+  writeImportCalleeDecls(Mod);
+  OS << "\n" << Functions;
 }
 
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
@@ -862,8 +879,7 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
       // including scalar calls and definitions whose bodies are not emitted.
       if (&Fn == OnlyFunction || !usedInFunction(Fn, *OnlyFunction))
         continue;
-    } else if (!Fn.isDeclaration() && !Opts.PreserveLLVMFunctionTypes)
-      continue;
+    }
     if (Fn.isIntrinsic())
       continue;
     if (!OnlyFunction && GuardAnalysisOnlyFunctions &&
@@ -881,6 +897,16 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
       continue;
 
     std::string Name = functionIdentifier(Fn);
+
+    if (!OnlyFunction && !Fn.isDeclaration()) {
+      if (auto It = DefinitionDeclarations.find(&Fn);
+          It != DefinitionDeclarations.end()) {
+        OS << It->second << ";\n";
+        continue;
+      }
+      if (!Opts.PreserveLLVMFunctionTypes)
+        continue;
+    }
 
     if (libc::isKnownFunction(Name))
       continue;

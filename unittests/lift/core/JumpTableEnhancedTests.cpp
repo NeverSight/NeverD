@@ -7906,24 +7906,28 @@ TEST_F(JTE_X86_64, MaskDomainCannotTrustCallablePhysicalPrefix) {
 }
 
 TEST_F(JTE_X86_64, NonContiguousMaskPreservesPhysicalSlotCoordinates) {
-  auto R = liftToLLVMIR(maskEqualBoundObj());
+  auto R = liftToLLVMIRUnopt(maskEqualBoundObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
   std::string Body =
       llvmFunctionBody(R.out, "jt_identity_mask_equal_bound_coordinate");
   ASSERT_FALSE(Body.empty()) << R.out;
-  const size_t Case2 = Body.find("i32 2, label %");
+  const size_t Case2 = Body.find("i64 2, label %");
   ASSERT_NE(Case2, std::string::npos) << Body;
   const size_t BlockBegin = Body.find('%', Case2);
   const size_t BlockEnd = Body.find_first_of(" \r\n", BlockBegin);
   ASSERT_NE(BlockBegin, std::string::npos) << Body;
   ASSERT_NE(BlockEnd, std::string::npos) << Body;
-  const std::string Case2Block = Body.substr(BlockBegin, BlockEnd - BlockBegin);
-  EXPECT_NE(Body.find("[ 3302, " + Case2Block + " ]"), std::string::npos)
+  const std::string Case2Block =
+      Body.substr(BlockBegin + 1, BlockEnd - BlockBegin - 1);
+  const size_t Label = Body.find("\n" + Case2Block + ":");
+  ASSERT_NE(Label, std::string::npos) << Body;
+  const std::string CaseBody =
+      Body.substr(Label, Body.find("\n\n", Label + 1) - Label);
+  EXPECT_NE(CaseBody.find("trunc i64 3302 to i32"), std::string::npos)
       << "selector 2 must route to physical slot 2, not compressed slot 1:\n"
-      << Body;
-  EXPECT_EQ(Body.find("[ 3301, " + Case2Block + " ]"), std::string::npos)
-      << Body;
-  EXPECT_EQ(Body.find("i32 60, label"), std::string::npos) << Body;
+      << CaseBody;
+  EXPECT_EQ(CaseBody.find("3301"), std::string::npos) << CaseBody;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 60)) << Body;
 }
 
 TEST_F(JTE_X86_64, SparseMaskDoesNotOwnIndependentRelocationGap) {
@@ -8773,36 +8777,28 @@ static fs::path twoLevelObj() {
 TEST_F(JTE_X86_64, TwoLevelAllStagesSucceed) { verifyAllStages(twoLevelObj()); }
 
 TEST_F(JTE_X86_64, TwoLevelDispatchesOnRealVariable) {
-  auto R = liftToLLVMIR(twoLevelObj());
+  // Inspect recovery before LLVM may replace a constant-result switch with
+  // an equivalent lookup table using the target's data layout.
+  auto R = liftToLLVMIRUnopt(twoLevelObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
-  // The switch must be on the 32-bit source variable, not the 8-bit index-table
-  // load value (which would collapse the case set to the address-table size and
-  // dispatch on a value the program never compares).
-  EXPECT_TRUE(R.contains("switch i32"))
-      << "Expected the two-level table to dispatch on the 32-bit switch "
-         "variable:\n"
-      << R.out;
-  EXPECT_FALSE(R.contains("switch i8"))
-      << "Two-level table must not dispatch on the intermediate index byte:\n"
-      << R.out;
+  // A pointer-width extension may remain before optimization. Follow its
+  // definition to the original argument and reject an index-table load.
+  const auto Body = llvmFunctionBody(R.out, "twolevel_abs");
+  const auto Selector = llvmSwitchConditionToken(Body);
+  ASSERT_TRUE(Selector) << Body;
+  EXPECT_TRUE(llvmSSAValueDependsOn(Body, *Selector, "%arg0")) << Body;
+  EXPECT_FALSE(llvmSSAValueDependencyContains(Body, *Selector, "load", ""))
+      << Body;
 }
 
 TEST_F(JTE_X86_64, TwoLevelRecoversAllCases) {
-  auto R = liftToLLVMIR(twoLevelObj());
+  auto R = liftToLLVMIRUnopt(twoLevelObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
-  // idxtab has 21 entries (switch values 0..20), so a faithful recovery emits a
-  // case per in-range value rather than only the 5 distinct address-table
-  // targets.  Count switch case-label lines ("    i32 <n>, label ...").
-  size_t Cases = 0;
-  for (std::string::size_type P = R.out.find("i32 ", 0); P != std::string::npos;
-       P = R.out.find("i32 ", P + 1))
-    if (R.out.find(", label", P) != std::string::npos &&
-        R.out.find(", label", P) < R.out.find('\n', P))
-      ++Cases;
-  EXPECT_GE(Cases, 10u)
-      << "Expected many recovered case labels (one per switch value), got "
-      << Cases << ":\n"
-      << R.out;
+  // All original selector values, rather than only five address-table slots.
+  const auto Body = llvmFunctionBody(R.out, "twolevel_abs");
+  for (unsigned I = 0; I != 21; ++I)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, I)) << I << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 21)) << Body;
 }
 
 TEST_F(JTE_X86_64, TwoLevelNoVerifierErrors) {

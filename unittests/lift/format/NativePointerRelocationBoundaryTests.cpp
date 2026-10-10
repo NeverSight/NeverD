@@ -7,6 +7,7 @@
 #include "NeverDLiftFixture.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -71,6 +72,113 @@ protected:
     }
   }
 };
+
+TEST_F(NativePointerRelocationBoundary,
+       TargetAggregateLayoutCompilesAcrossArchitecturesAndFormats) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target C layout validation requires Clang";
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit({}, Context, "target-layout", Target,
+                                          {}, nullptr, Format);
+      ASSERT_NE(Module, nullptr);
+      const std::string Triple = Module->getTargetTriple().str();
+      SCOPED_TRACE(Triple);
+      EXPECT_EQ(Module->getDataLayout().getPointerSize(),
+                Target == Arch::X86 || Target == Arch::ARM ? 4u : 8u);
+      auto *Wide = llvm::Type::getInt64Ty(Context);
+      auto *Byte = llvm::Type::getInt8Ty(Context);
+      auto *Record = llvm::StructType::get(Context, {Wide, Byte});
+      new llvm::GlobalVariable(
+          *Module, Record, true, llvm::GlobalValue::ExternalLinkage,
+          llvm::ConstantStruct::get(Record, {llvm::ConstantInt::get(Wide, 11),
+                                             llvm::ConstantInt::get(Byte, 3)}),
+          "layout_record");
+      const fs::path Source = tmpFile("layout-" + Triple + ".c");
+      std::error_code EC;
+      llvm::raw_fd_ostream OS(Source.string(), EC);
+      ASSERT_FALSE(EC);
+      CEmitterOptions Options;
+      Options.TheArch = Target;
+      Options.Format = Format;
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+      OS.close();
+      // Clang's independent C target layout must satisfy the size/offset
+      // assertions generated from the LLVM module, without host headers.
+      auto Compiled =
+          exec(NEVERD_TEST_CLANG, {"--target=" + Triple, "-ffreestanding",
+                                   "-fsyntax-only", Source.string()});
+      EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       OptimizedSwitchTablesPreservePhysicalAndTwoLevelSelectors) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "native selector execution requires Linux x86-64";
+#else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "native selector execution requires Clang";
+  for (bool TwoLevel : {false, true}) {
+    SCOPED_TRACE(TwoLevel);
+    const fs::path Object =
+        fixture(TwoLevel ? "test_twolevel_switch.o"
+                         : "test_jumptable_mask_equal_bound.o");
+    ASSERT_TRUE(fs::exists(Object));
+    const fs::path Harness = tmpFile("selector.c");
+    {
+      std::ofstream C(Harness);
+      C << "__asm__(\".text\\n.globl neverd_test_start\\n"
+           "neverd_test_start:\\ncall selector_test\\nmov %eax,%edi\\n"
+           "mov $60,%eax\\nsyscall\\n\");\n";
+      if (TwoLevel)
+        C << "extern int twolevel_abs(unsigned);\n"
+             "int selector_test(void) {\n"
+             "static const unsigned char m[21] = "
+             "{0,1,2,0,1,3,2,0,1,4,0,1,2,3,4,0,1,2,3,4,0};\n"
+             "for (unsigned i=0; i<1024; ++i)\n"
+             "if (twolevel_abs(i) != (i<21 ? 100*(1+m[i]) : -1)) return 1;\n"
+             "return twolevel_abs(~0u) != -1; }\n";
+      else
+        C << "extern int jt_identity_mask_equal_bound_coordinate(unsigned);\n"
+             "int selector_test(void) {\n"
+             "for (unsigned i=0; i<1024; ++i)\n"
+             "if (jt_identity_mask_equal_bound_coordinate(i) != "
+             "3300+(i&30)) return 1; return 0; }\n";
+    }
+    auto Check = [&](const fs::path &Input) {
+      for (const char *Optimization : {"-O0", "-O2"}) {
+        SCOPED_TRACE(Optimization);
+        const fs::path Program = tmpFile("selector-test");
+        const auto Compiled =
+            exec(NEVERD_TEST_CLANG,
+                 {Optimization, "-fno-stack-protector", "-no-pie", "-nostdlib",
+                  "-Wl,-e,neverd_test_start", Input.string(), Harness.string(),
+                  "-o", Program.string()});
+        ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+        const auto Executed = exec(Program.string(), {});
+        EXPECT_EQ(Executed.exitCode, 0) << Executed.err;
+      }
+    };
+    Check(Object);
+    for (bool NoOpt : {true, false}) {
+      SCOPED_TRACE(NoOpt);
+      const auto Lifted = liftToLLVMIR(Object, "", NoOpt);
+      ASSERT_EQ(Lifted.exitCode, 0) << Lifted.err;
+      const size_t Begin = Lifted.out.find("; ModuleID");
+      ASSERT_NE(Begin, std::string::npos);
+      const fs::path LLVM = tmpFile("selector.ll");
+      {
+        std::ofstream OS(LLVM);
+        OS << std::string_view(Lifted.out).substr(Begin);
+      }
+      Check(LLVM);
+    }
+  }
+#endif
+}
 
 TEST_F(NativePointerRelocationBoundary,
        BoundedRuntimeOffsetsAndNullableCallbacksExecute) {
@@ -249,6 +357,38 @@ TEST_F(NativePointerRelocationBoundary,
   append(Fallback, 0, NdOp::INDIR_CALL, var(12), {var(11)});
   append(Fallback, 0, NdOp::RETURN, {}, {var(12)});
   Functions.push_back(std::move(Fallback));
+  MedFunc Sum = make("exact_signature_sum", 0xd00, 2, 1);
+  Sum.Params[1].Size = 4;
+  append(Sum, 0, NdOp::INT_ZEXT, var(10), {Sum.Params[1]});
+  append(Sum, 0, NdOp::INT_ADD, var(11), {Sum.Params[0], var(10)});
+  append(Sum, 0, NdOp::RETURN, {}, {var(11)});
+  Functions.push_back(std::move(Sum));
+  Segment ExactTable;
+  ExactTable.Name = ".rodata";
+  ExactTable.VA = 0x6000;
+  ExactTable.Flags = SegmentFlags::Readable;
+  ExactTable.Size = ExactTable.FileSz = 8;
+  ExactTable.Data.resize(8);
+  const uint64_t SumVA = 0xd00;
+  std::memcpy(ExactTable.Data.data(), &SumVA, 8);
+  Image.Segments.push_back(ExactTable);
+  Image.CodePtrRelocSlots.insert(ExactTable.VA);
+  Image.CodeRefTargets.insert(SumVA);
+  MedFunc Exact = make("exact_signature_callback", 0xd40, 1, 1);
+  append(Exact, 0, NdOp::LOAD, var(10),
+         {MedVar::makeConst(ExactTable.VA, 8,
+                            ConstantAddressProvenance::DataAddress)});
+  append(Exact, 0, NdOp::INDIR_CALL, var(11), {var(10)});
+  append(Exact, 0, NdOp::RETURN, {}, {var(11)});
+  MedCallInfo ExactCall;
+  ExactCall.BlockId = 0;
+  ExactCall.OpIdx = 1;
+  ExactCall.IsIndirect = true;
+  // The original caller prepares surplus registers and the full register
+  // containing a narrow parameter. The recovered callee owns their meaning.
+  ExactCall.Args = {Exact.Params[0], num(0x123400000017ULL), num(99), num(100)};
+  Exact.CallInfos.push_back(ExactCall);
+  Functions.push_back(std::move(Exact));
   llvm::LLVMContext Context;
   auto Module =
       MedLLVMEmitter().emit(Functions, Context, "runtime-pointer-values",
@@ -272,6 +412,7 @@ extern uint64_t selected_pointer(const unsigned char *, uint64_t);
 extern uint64_t nullable_callback(uint64_t);
 extern uint64_t countdown_callbacks(void);
 extern uint64_t runtime_or_lifted_callback(uint64_t);
+extern uint64_t exact_signature_callback(uint64_t);
 static unsigned calls;
 static uint64_t callback(void) { ++calls; return 73; }
 uint64_t get_runtime_callback(void) { return (uintptr_t)&callback; }
@@ -285,6 +426,7 @@ int main(void) {
     if (selected_pointer(&byte, i & 1) != ((i & 1) ? byte : 0x40)) return 3;
     if (nullable_callback(i & 1) != ((i & 1) ? 73 : 0)) return 4;
     if (calls != (i + 1) / 2) return 5;
+    if (exact_signature_callback(i) != i + 23) return 9;
   }
   if (countdown_callbacks() != 321) return 6;
   if (runtime_or_lifted_callback(0) != 1 || calls != 512) return 7;
@@ -293,14 +435,29 @@ int main(void) {
 }
 )";
   C.close();
-  for (const char *Optimization : {"-O0", "-O2"}) {
-    auto Compiled =
-        exec(NEVERD_TEST_CLANG, {Optimization, IR.string(), Harness.string(),
-                                 "-o", Binary.string()});
-    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
-    auto Ran = exec(Binary.string(), {});
-    EXPECT_EQ(Ran.exitCode, 0) << Ran.err << Optimization;
+  std::vector<fs::path> Inputs{IR};
+  for (bool Preserve : {false, true}) {
+    const fs::path Source = tmpFile(Preserve ? "runtime-pointers-exact.c"
+                                             : "runtime-pointers-lifted.c");
+    llvm::raw_fd_ostream SourceOS(Source.string(), EC);
+    ASSERT_FALSE(EC);
+    CEmitterOptions COptions;
+    COptions.TheArch = Arch::X64;
+    COptions.Format = BinaryFormat::ELF;
+    COptions.PreserveLLVMFunctionTypes = Preserve;
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, SourceOS, COptions));
+    SourceOS.close();
+    Inputs.push_back(Source);
   }
+  for (const auto &Input : Inputs)
+    for (const char *Optimization : {"-O0", "-O2"}) {
+      auto Compiled =
+          exec(NEVERD_TEST_CLANG, {Optimization, Input.string(),
+                                   Harness.string(), "-o", Binary.string()});
+      ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+      auto Ran = exec(Binary.string(), {});
+      EXPECT_EQ(Ran.exitCode, 0) << Ran.err << Optimization;
+    }
 #endif
 }
 

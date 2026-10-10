@@ -189,9 +189,11 @@ TEST_P(MachOI386Pipeline, CompletesLiftAndDecompilation) {
   ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
   EXPECT_NE(LLVM.out.find("@i386_add"), std::string::npos);
   EXPECT_NE(LLVM.out.find("@i386_global_address"), std::string::npos);
+  const std::string IndexType =
+      "i" + std::to_string(ImgOrErr->getPointerSize() * 8);
   auto HasGlobalReference = [&](llvm::StringRef Name, va_t Address) {
     if (LLVM.out.find(Name.str()) != std::string::npos ||
-        LLVM.out.find("i64 " + std::to_string(Address) + " to ptr") !=
+        LLVM.out.find(IndexType + " " + std::to_string(Address) + " to ptr") !=
             std::string::npos)
       return true;
     const Segment *Seg = ImgOrErr->getSegmentFor(Address);
@@ -202,8 +204,8 @@ TEST_P(MachOI386Pipeline, CompletesLiftAndDecompilation) {
       return false;
     uint64_t Offset = Address - Seg->VA;
     return Offset == 0 ||
-           LLVM.out.find(Mirror + ", i64 " + std::to_string(Offset)) !=
-               std::string::npos;
+           LLVM.out.find(Mirror + ", " + IndexType + " " +
+                         std::to_string(Offset)) != std::string::npos;
   };
   EXPECT_TRUE(HasGlobalReference("_global_value", Global->Addr));
   EXPECT_TRUE(HasGlobalReference("_local_bias", Local->Addr));

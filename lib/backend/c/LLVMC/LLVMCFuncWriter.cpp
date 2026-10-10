@@ -8694,21 +8694,26 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         InferredVoid ? "void" : typeToCLLVM(FuncTy->getReturnType());
     if (std::string Ty = IndirectReturnTypeStr(); !Ty.empty())
       RetStr = std::move(Ty);
-    OS << RetStr << " " << FName << "(";
+    std::string Signature;
+    llvm::raw_string_ostream SignatureOS(Signature);
+    SignatureOS << RetStr << " " << FName << "(";
 
     unsigned ParamIdx = 0;
     for (auto &Arg : Fn.args()) {
       if (ParamIdx > 0)
-        OS << ", ";
-      OS << ParamTypeStr(Arg, ParamIdx) << " " << BindParam(Arg, ParamIdx);
+        SignatureOS << ", ";
+      SignatureOS << ParamTypeStr(Arg, ParamIdx) << " "
+                  << BindParam(Arg, ParamIdx);
       ++ParamIdx;
     }
     if (Fn.isVarArg() && ParamIdx != 0) {
       if (ParamIdx > 0)
-        OS << ", ";
-      OS << "...";
+        SignatureOS << ", ";
+      SignatureOS << "...";
     }
-    OS << ") {\n";
+    SignatureOS << ")";
+    DefinitionDeclarations[&Fn] = Signature;
+    OS << Signature << " {\n";
   } else {
     unsigned ParamIdx = 0;
     for (auto &Arg : Fn.args()) {

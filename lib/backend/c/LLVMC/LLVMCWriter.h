@@ -675,6 +675,9 @@ public:
   CProjectionIdentifierAllocator GlobalIdentifierAllocator;
   std::map<std::pair<Intrinsic, unsigned>, std::string> FPStateHelperNames;
   std::map<const llvm::Function *, std::string> FunctionIdentifiers;
+  /// Exact projected prototypes captured while rendering definitions. They
+  /// include source presentation choices such as inferred void and sret.
+  std::map<const llvm::Function *, std::string> DefinitionDeclarations;
   std::map<const llvm::GlobalVariable *, std::string> ExternalDataIdentifiers;
   /// The C name each function's symbol spells, for its definition's comment.
   std::map<const llvm::Function *, std::string> FunctionSymbolNames;
