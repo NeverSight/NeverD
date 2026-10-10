@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 运行时观察 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 运行时观察 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v98`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v99`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 输入由 `IMAGE_FILE_DLL` 标识。建模的来宾 EXE 调用 `LoadLibraryA`、`FreeLibrary`，复用普通依赖、TLS 与 `DllMain` 生命周期。DLL 默认入口是其进程附加调用；不会为任意导出猜测参数。重建保留导出名称、序号、别名、数据及转发器；指向自身导出的指针保持为内部指针，不生成自身导入。辅助例程返回的地址也遵循此规则：内部结果会撤销该位置先前的导入修复证据。
 

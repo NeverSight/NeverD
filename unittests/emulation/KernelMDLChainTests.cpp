@@ -1368,7 +1368,9 @@ protected:
   uint64_t ImageBase = 0;
 
   void initializeImage(uint64_t Base, bool Gap = false,
-                       uint64_t DataSize = profile::PageSize) {
+                       uint64_t DataSize = profile::PageSize,
+                       uint64_t KnownHeaderBytes = profile::PageSize,
+                       uint64_t KnownHeaderOffset = 0) {
     Model.reset();
     Memory = take(UnicornBackend::create(2 * DataSize + 8 * 1024 * 1024));
     ASSERT_TRUE(Memory);
@@ -1387,6 +1389,12 @@ protected:
       success(Memory->write(Region.Address, Region.Bytes));
       success(Memory->protect(Region.Address, Region.Bytes.size(),
                               Region.Permissions));
+      if (I == 0) {
+        Region.Address += KnownHeaderOffset;
+        Region.Bytes.erase(Region.Bytes.begin(),
+                           Region.Bytes.begin() + KnownHeaderOffset);
+        Region.Bytes.resize(KnownHeaderBytes);
+      }
       Image.Regions.push_back(std::move(Region));
     }
     Model = std::make_unique<KernelModel>(*Memory, Result);
@@ -1517,6 +1525,32 @@ TEST_F(KernelImageMDL, ImageAliasesExposeCompleteDescribedPages) {
   EXPECT_FALSE(take(Memory->canAccess(Base, 1, Read)));
   EXPECT_FALSE(take(Memory->canAccess(Base + 2 * Page - 1, 1, Read)));
   call("IoFreeMdl", {MDL});
+}
+
+TEST_F(KernelImageMDL, PartialPageOwnershipDoesNotAdmitUnownedPadding) {
+  for (uint64_t Offset : {0, 5}) {
+    SCOPED_TRACE(Offset);
+    initializeImage(0x180000000, false, profile::PageSize, 17, Offset);
+    const auto Begin = ImageBase + Offset;
+    const auto MDL = call("IoAllocateMdl", {Begin + 4, 4, 0, 0, 0});
+    call("MmProbeAndLockPages", {MDL, KernelMode, IoWriteAccess});
+    const auto Alias = call("MmGetSystemAddressForMdlSafe",
+                            {MDL, NormalPagePriority | MdlMappingNoExecute});
+    ASSERT_NE(Alias, 0u);
+    const auto AliasBegin = Alias - 4;
+    // Only 17 bytes belong to the image; the remaining already mapped page
+    // is deliberately outside loader ownership on both ends.
+    success(Model->validateGuestAccess(AliasBegin, 17, false));
+    put(AliasBegin + 16, 0x59, 1);
+    EXPECT_EQ(get(Begin + 16, 1), 0x59u);
+    if (Offset)
+      rejected(Model->validateGuestAccess(AliasBegin - 1, 1, false), "MDL");
+    rejected(Model->validateGuestAccess(AliasBegin + 17, 1, false), "MDL");
+    rejected(Model->validateGuestAccess(AliasBegin + 16, 2, false), "MDL");
+    rejected(Model->validateGuestAccess(AliasBegin + 17, 1, true), "MDL");
+    call("MmUnlockPages", {MDL});
+    call("IoFreeMdl", {MDL});
+  }
 }
 
 TEST_F(KernelImageMDL, WritableAliasesKeepReadOnlyImageViewsProtected) {

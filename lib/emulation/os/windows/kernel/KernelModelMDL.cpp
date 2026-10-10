@@ -1145,16 +1145,24 @@ llvm::Error KernelModel::validateMDLAccess(uint64_t Address, uint32_t Size,
       continue;
     if (!State.Mapped)
       return mdlError("guest access to an unmapped MDL system buffer");
-    // Image ownership supplies the complete mapped physical pages, including
-    // bytes before ByteOffset and after ByteCount. Those fields describe the
-    // MDL's logical buffer, not subpage CPU protections. Object-backed owners
-    // retain their bounded model contract for otherwise unmodeled padding.
-    const bool CompleteImagePages = ImageRAM.count(State.Pool) != 0;
-    const uint64_t Begin = CompleteImagePages ? Base : State.Buffer;
-    const uint64_t Limit = CompleteImagePages ? Base + State.AllocationSize
-                                              : State.Buffer + State.ByteCount;
+    // Image ownership admits known bytes before ByteOffset and after
+    // ByteCount. Intersect the physical pages with the actual owned span;
+    // an incomplete page must not turn unrelated padding into image data.
+    // Object-backed owners retain their bounded logical-buffer contract.
+    const auto Image = ImageRAM.find(State.Pool);
+    uint64_t Begin = State.Buffer;
+    uint64_t Limit = State.Buffer + State.ByteCount;
+    if (Image != ImageRAM.end()) {
+      const auto Offset = State.OriginalAddress - Image->first;
+      const auto PageOffset = State.OriginalAddress & (profile::PageSize - 1);
+      Begin -= std::min(Offset, PageOffset);
+      Limit = State.Buffer + std::min(Image->second - Offset,
+                                      State.AllocationSize - PageOffset);
+    }
     if (Address < Begin || End > Limit)
-      return mdlError("guest access exceeds the MDL byte range");
+      return mdlError(Image != ImageRAM.end()
+                          ? "guest access exceeds the MDL image backing range"
+                          : "guest access exceeds the MDL byte range");
     if (IsWrite) {
       auto Writable = Memory.canAccess(Address, Size, Write);
       if (!Writable)
