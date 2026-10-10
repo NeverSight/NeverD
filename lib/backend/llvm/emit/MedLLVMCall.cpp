@@ -125,7 +125,8 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources) {
   for (auto *Call : Calls) {
     auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
         constantCallIdentity(Call->getCalledOperand(), Layout, PointerBits));
-    if (!Target || Call->getFunctionType() == Target->getFunctionType())
+    if (!Target || (Call->getFunctionType() == Target->getFunctionType() &&
+                    Call->getCallingConv() == Target->getCallingConv()))
       continue;
     auto Refuse = [&](llvm::StringRef Reason) {
       syncError() << "med_llvm_emitter: resolved call in "
@@ -215,10 +216,10 @@ bool validateResolvedLLVMCallSignatures(llvm::Module &Module) {
           if (auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
                   constantCallIdentity(Call->getCalledOperand(), Layout,
                                        Layout.getPointerSizeInBits()));
-              Target && Call->getFunctionType() != Target->getFunctionType()) {
+              Target && (Call->getFunctionType() != Target->getFunctionType() ||
+                         Call->getCallingConv() != Target->getCallingConv())) {
             syncError() << "med_llvm_emitter: resolved call in "
-                        << Function.getName()
-                        << " disagrees with the signature of "
+                        << Function.getName() << " disagrees with the ABI of "
                         << Target->getName() << "\n";
             return false;
           }

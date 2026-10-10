@@ -804,6 +804,35 @@ TEST(PipelineOutcome,
   EXPECT_EQ(Extend->getType(), I64);
 }
 
+TEST(PipelineOutcome, ResolvedCallConventionMustAgreeEvenWhenTypesMatch) {
+  for (bool CalleePops : {false, true}) {
+    SCOPED_TRACE(CalleePops);
+    llvm::LLVMContext C;
+    auto Module = shardModule(C, "caller");
+    Module->setDataLayout("e-p:32:32");
+    auto *Type = llvm::FunctionType::get(llvm::Type::getInt32Ty(C),
+                                         {llvm::Type::getInt32Ty(C)}, false);
+    auto *Target = llvm::Function::Create(
+        Type, llvm::GlobalValue::ExternalLinkage, "callee", *Module);
+    Target->setCallingConv(CalleePops ? llvm::CallingConv::X86_StdCall
+                                      : llvm::CallingConv::C);
+    llvm::IRBuilder<> B(
+        Module->getFunction("caller")->getEntryBlock().getTerminator());
+    auto *Call = B.CreateCall(Type, Target, {B.getInt32(42)});
+    Call->setCallingConv(CalleePops ? llvm::CallingConv::C
+                                    : llvm::CallingConv::X86_StdCall);
+    // The types match and the verifier accepts the call, but x86 caller and
+    // callee disagree about who pops the argument. Do not publish that ABI.
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    testing::internal::CaptureStderr();
+    EXPECT_FALSE(validateResolvedLLVMCallSignatures(*Module));
+    EXPECT_FALSE(normalizeResolvedLLVMCalls(*Module));
+    const auto Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_NE(Diagnostic.find("calling convention"), std::string::npos)
+        << Diagnostic;
+  }
+}
+
 TEST(PipelineOutcome,
      SuccessfulShardsLinkInCallerContextAndRestoreSourceOrder) {
   for (bool NoOpt : {false, true}) {

@@ -2384,7 +2384,8 @@ inputs through LLVM and both C modes at O0/O2 on Linux x64. Pipeline outcome
 tests reconcile late exact targets and reject missing arguments after shard
 linking even when the LLVM verifier accepts each input module. A narrow-return
 case checks scalar bit preservation, source identity and obsolete range
-metadata.
+metadata. Same-type calls with conflicting caller/callee stack-cleanup
+conventions are refused even when the LLVM verifier accepts them.
 `TargetAggregateLayoutCompilesAcrossArchitecturesAndFormats` checks each
 target's pointer width and compiles LLVM-derived record size/offset assertions
 with Clang for all twelve target/format combinations, without host headers.

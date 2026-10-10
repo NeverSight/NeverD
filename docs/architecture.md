@@ -137,8 +137,8 @@ register aliases and shard order do not choose different declarations.
 linking, drops surplus fixed arguments and adapts integer/pointer carriers.
 Missing arguments, incompatible observed results and musttail changes fail
 clearly. It preserves source observations and discards obsolete return-type
-metadata, then checks the resulting call types; opaque-pointer verifier
-acceptance alone is insufficient.
+metadata, then checks the resulting call types and calling conventions;
+opaque-pointer verifier acceptance alone is insufficient.
 
 Debug record names provide C spelling independently of by-value layout.
 Win64 class-return projection is target-specific; a DWARF name on another

@@ -21,7 +21,7 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module,
                                 LLVMSourceMap *Sources = nullptr);
 /// Check identities after deferred import placeholders have been promoted.
 /// Opaque pointers otherwise let a mismatched direct call pass LLVM's verifier.
-/// This read-only check also applies after optimization and shard linking.
+/// Check both the type and calling convention after optimization and linking.
 /// An inconsistent resolved target emits a diagnostic and returns false.
 bool validateResolvedLLVMCallSignatures(llvm::Module &Module);
 } // namespace neverd
