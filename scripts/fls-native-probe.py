@@ -34,7 +34,7 @@ meta['binary_sha256'] = hashlib.sha256((out / 'probe.exe').read_bytes()).hexdige
 (out / 'build.json').write_text(json.dumps(meta, indent=2) + '\n')
 rows = []
 ctypes.windll.kernel32.SetErrorMode(0x8003)
-for mode in ['F', 'N', 'E', 'S', 'G', 'R']:
+for mode in ['F', 'N', 'E', 'S', 'G', 'R', 'H', 'T']:
     for repeat in range(2):
         start = time.monotonic()
         timed_out = False

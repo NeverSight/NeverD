@@ -13,7 +13,7 @@ __declspec(dllimport) const char *GetCommandLineA(void);
 __declspec(dllimport) void ExitProcess(U32);
 __declspec(dllimport) int TerminateProcess(void *, U32);
 static U32 Mode, Primary, Peer, Added = 0xffffffffU;
-static U32 Records;
+static U32 Records, ParentCalls;
 static void record(U32 Tag, U64 A, U64 B, U64 C, U64 D, U64 E, U64 F) {
   if (++Records > 128)
     TerminateProcess((void *)(U64)-1, 94);
@@ -35,10 +35,13 @@ static void child(void *Value) {
     sample('a', Added);
 }
 static void parent(void *Value) {
+  ++ParentCalls;
   record('C', Primary, (U64)Value, 0, 0, 0, 0);
   sample('B', Primary);
   SetLastError(1234);
-  int Set = FlsSetValue(Primary, (void *)99);
+  int Set = FlsSetValue(Primary, (Mode == 'F' || Mode == 'N') && ParentCalls > 1
+                                     ? 0
+                                     : (void *)99);
   U32 Error = GetLastError();
   record('W', Primary, Set, Error, 0, 0, 0);
   sample('V', Primary);
@@ -87,8 +90,17 @@ int entry(void) {
       Mode = (U32)P[1];
   Primary = FlsAlloc(parent);
   Peer = FlsAlloc(child);
+  if (Mode == 'H' || Mode == 'T') {
+    U32 Tail = FlsAlloc(child);
+    int FreePeer = FlsFree(Peer);
+    int FreeTail = Mode == 'T' ? FlsFree(Tail) : 0;
+    record('h', Tail, FreePeer, FreeTail, 0, 0, 0);
+  }
   int SetPrimary = FlsSetValue(Primary, (void *)7);
-  int SetPeer = FlsSetValue(Peer, Mode == 'E' || Mode == 'R' ? (void *)9 : 0);
+  int SetPeer =
+      (Mode == 'H' || Mode == 'T')
+          ? 0
+          : FlsSetValue(Peer, Mode == 'E' || Mode == 'R' ? (void *)9 : 0);
   record('I', Primary, Peer, SetPrimary, SetPeer, 0, 0);
   if (Mode == 'F' || Mode == 'N') {
     int Free = FlsFree(Primary);
