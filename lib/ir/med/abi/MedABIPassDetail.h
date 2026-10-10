@@ -77,6 +77,11 @@ struct AbiCallContext {
   llvm::function_ref<std::optional<int64_t>(const MedVar &)> CallStackOffset;
 };
 
+/// Outgoing scalar stores that agree along every predecessor path
+/// to a call. Unknown writes, calls, independent entries and cycles stop the
+/// proof. Offsets are relative to the call's SP, using its exact SSA basis.
+std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C);
+
 /// The steps of call-ABI recovery that belong to one calling convention,
 /// each optional.  A convention defines its policy in its own file
 /// (MedABIPassWin64.cpp, MedABIPassI386.cpp) and abiCallPolicy() lists it;
@@ -85,12 +90,6 @@ struct AbiCallPolicy {
   Arch TheArch = Arch::Unknown;
   /// The image format, or Unknown for every format of the architecture.
   BinaryFormat Format = BinaryFormat::Unknown;
-  /// For a call first in its block: whether the end of a predecessor stores
-  /// its stack arguments, and whether one lands at the call's stack pointer.
-  void (*ScanPredecessorStackArgs)(const AbiCallContext &C, bool &HasStackArg,
-                                   bool &HasStackArgAtCallSP) = nullptr;
-  /// For a call first in its block: take those stores as its stack arguments.
-  void (*TakePredecessorStackArgs)(AbiCallContext &C) = nullptr;
   /// For a direct call: recover the first argument when an earlier call in
   /// the block clobbered its register.  \p Arg0FromInBlock says whether the
   /// block wrote it after that call.

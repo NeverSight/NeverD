@@ -2128,6 +2128,114 @@ TEST(MedABIPass, X86CdeclRecoversStackAddressesDefinedInPredecessor) {
   EXPECT_EQ(Func.CallInfos[0].Args[2].ConstVal, 33u);
 }
 
+TEST(MedABIPass, SplitStackArgumentSetupRequiresEveryIncomingPath) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (unsigned Mode = 0; Mode != 12; ++Mode) {
+        SCOPED_TRACE(static_cast<int>(A));
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(Mode);
+        const auto &TRI = getTargetRegInfo(A);
+        const auto Layout = TRI.integerArgumentLayout(Format);
+        const auto Word = TRI.PointerSize;
+        const int RegisterCount = A == Arch::X86 ? 0 : Layout.Registers.size();
+        constexpr va_t Target = 0x2000;
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Name = "split_outgoing_setup";
+        F.Blocks.resize(4);
+        for (int I = 0; I < 4; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = F.Entry + I * 16;
+          F.Blocks[I].EndAddr = F.Entry + (I + 1) * 16;
+        }
+        F.Blocks[0].Succs = {1, 2};
+        F.Blocks[1].Preds = F.Blocks[2].Preds = {0};
+        F.Blocks[1].Succs = F.Blocks[2].Succs = {3};
+        F.Blocks[3].Preds = {1, 2};
+        auto &Entry = F.Blocks[0];
+        const auto SP = reg(10, 0, Word, TRI.StackPointer, A);
+        addLiveIn(Entry, SP);
+        const auto Slot = temp(20, 1, Word, A);
+        Entry.Ops.push_back(
+            binary(NdOp::INT_ADD, Slot, SP,
+                   MedVar::makeConst(Layout.CallStackBase, Word)));
+        for (int I = 0; I < RegisterCount; ++I)
+          Entry.Ops.push_back(
+              unary(NdOp::COPY, reg(30 + I, 1, Word, Layout.Registers[I], A),
+                    MedVar::makeConst(100 + I, Word)));
+        auto Store = [&](int Block, MedVar Address, MedVar Value) {
+          MedOp Op;
+          Op.Opcode = NdOp::STORE;
+          Op.addInput(Address);
+          Op.addInput(Value);
+          F.Blocks[Block].Ops.push_back(Op);
+        };
+        const auto Value =
+            MedVar::makeConst(91, Word, ConstantAddressProvenance::Scalar);
+        if (Mode == 1 || Mode == 2 || Mode == 3 || Mode == 9) {
+          Store(1, Slot, Value);
+          if (Mode != 3) {
+            auto Other = Value;
+            if (Mode == 2)
+              ++Other.ConstVal;
+            if (Mode == 9)
+              Other.Provenance = ConstantAddressProvenance::DataAddress;
+            Store(2, Slot, Other);
+          }
+        } else {
+          Store(0, Slot, Value);
+        }
+        if (Mode == 4) {
+          const auto Interior = temp(21, 1, Word, A);
+          F.Blocks[2].Ops.push_back(binary(NdOp::INT_ADD, Interior, Slot,
+                                           MedVar::makeConst(1, Word)));
+          Store(2, Interior, MedVar::makeConst(0, 1));
+        }
+        if (Mode == 5) {
+          MedOp Opaque;
+          Opaque.Opcode = NdOp::CALL;
+          Opaque.addInput(MedVar::makeConst(0x3000, Word));
+          F.Blocks[2].Ops.push_back(Opaque);
+        }
+        if (Mode == 6)
+          F.ModuleAnalysisRoots.insert(F.Blocks[3].StartAddr);
+        if (Mode == 10)
+          F.ModuleAnalysisRoots.insert(F.Blocks[1].StartAddr + 1);
+        if (Mode == 7) {
+          ExceptionalEdge Edge;
+          Edge.BlockId = 0;
+          F.Blocks[3].ExceptionalPreds.push_back(Edge);
+        }
+        if (Mode == 8)
+          Store(2, reg(90, 0, Word, TRI.IntReturnReg, A), Value);
+        MedOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.addInput(MedVar::makeConst(Target, Word));
+        F.Blocks[3].Ops.push_back(Call);
+        if (Mode == 11)
+          std::swap(F.Blocks[0], F.Blocks[1]);
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Bits = Word == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        Image.Format = Format;
+        const std::map<va_t, std::string> Names{{Target, "stack_consumer"}};
+        std::map<va_t, int> RegArity{{Target, RegisterCount}};
+        std::map<va_t, int> TotalArity{{Target, RegisterCount + 1}};
+        recoverCallAbi(F, A, Names, &Image, &RegArity, &TotalArity);
+        const auto CI = std::find_if(
+            F.CallInfos.begin(), F.CallInfos.end(),
+            [&](const MedCallInfo &Info) { return Info.TargetAddr == Target; });
+        ASSERT_NE(CI, F.CallInfos.end());
+        const bool Recovered = CI->Args.size() > size_t(RegisterCount) &&
+                               CI->Args[RegisterCount].isConst() &&
+                               CI->Args[RegisterCount].ConstVal == 91 &&
+                               CI->Args[RegisterCount].Size == Word;
+        EXPECT_EQ(Recovered, Mode <= 1 || Mode == 11);
+      }
+}
+
 TEST(MedABIPass, X86CdeclRejectsConflictingPredecessorStackOffsets) {
   constexpr Arch TheArch = Arch::X86;
   constexpr va_t Callee = 0x2000;

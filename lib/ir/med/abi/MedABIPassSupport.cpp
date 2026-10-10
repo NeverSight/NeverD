@@ -16,6 +16,7 @@
 #include "MedABIPassDetail.h"
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/libc/LibCNames.h"
@@ -47,6 +48,119 @@ bool isAbiRecoveryBarrier(const MedOp &Op) {
   if (static_cast<uint64_t>(Id) != Op.Inputs[0].ConstVal)
     return true;
   return !x86FPStateShapeIsValid(Id, x86FPStateMedShape(Op));
+}
+
+std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C) {
+  using Stores = std::map<int64_t, MedVar>;
+  const int64_t Word = C.Layout.SlotBytes;
+  const int64_t Base = C.Layout.CallStackBase;
+  if (Word <= 0 || C.MaxArgs <= 0 || Base < 0)
+    return {};
+  const int64_t Limit = Base + Word * C.MaxArgs;
+  // A per-call bound also limits path duplication in diamonds. Exhaustion
+  // publishes no partial predecessor proof.
+  size_t Remaining = limits::kMaxCallSetupStackProofWork;
+  std::map<int, const MedBlock *> Blocks;
+  for (const MedBlock &B : C.Func.Blocks)
+    if (!Blocks.emplace(B.Id, &B).second)
+      return {};
+  std::set<int> Active;
+  auto same = [](const MedVar &A, const MedVar &B) {
+    return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer &&
+           A.Size == B.Size && A.RegOff == B.RegOff && A.TheArch == B.TheArch &&
+           A.Provenance == B.Provenance &&
+           A.AddressOwnerVA == B.AddressOwnerVA && A.RenameTag == B.RenameTag;
+  };
+  std::function<Stores(const MedBlock &, size_t, unsigned)> Visit =
+      [&](const MedBlock &B, size_t End, unsigned Depth) -> Stores {
+    const auto Root = C.Func.ModuleAnalysisRoots.lower_bound(B.StartAddr);
+    const bool Independent = Root != C.Func.ModuleAnalysisRoots.end() &&
+                             (*Root == B.StartAddr || *Root < B.EndAddr);
+    // A root inside an unsplit block could bypass any earlier local store.
+    if (Independent && *Root != B.StartAddr)
+      return {};
+    if (!Remaining || End > B.Ops.size() ||
+        Depth >= limits::kCallArgStoreAddressDepth ||
+        !Active.insert(B.Id).second)
+      return {};
+    --Remaining;
+    Stores Local;
+    std::set<int64_t> Overwritten;
+    bool Inherit = true;
+    for (size_t I = End; I > 0; --I) {
+      if (!Remaining) {
+        Inherit = false;
+        break;
+      }
+      --Remaining;
+      const MedOp &Op = B.Ops[I - 1];
+      if (isAbiRecoveryBarrier(Op) || Op.Opcode == NdOp::ATOMIC_XCHG ||
+          Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
+          Op.MemoryOrdering != NdMemoryOrdering::None) {
+        Inherit = false;
+        break;
+      }
+      if (Op.Opcode != NdOp::STORE)
+        continue;
+      const auto Offset =
+          Op.NumInputs == 2 ? C.CallStackOffset(Op.Inputs[0]) : std::nullopt;
+      if (!Offset || !Op.Inputs[1].Size ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+          *Offset > INT64_MAX - Op.Inputs[1].Size) {
+        Inherit = false; // A may-alias write hides all earlier stores.
+        break;
+      }
+      const int64_t StoreEnd = *Offset + Op.Inputs[1].Size;
+      for (int64_t Slot = Base; Slot < Limit; Slot += Word) {
+        if (*Offset >= Slot + Word || StoreEnd <= Slot ||
+            !Overwritten.insert(Slot).second)
+          continue;
+        // An aligned scalar keeps its actual width (a Win64 int store is
+        // four bytes in an eight-byte slot). Never complete its upper bytes
+        // from another store or reinterpret an interior byte as a new slot.
+        if (*Offset == Slot && Op.Inputs[1].Size <= Word &&
+            (Op.Inputs[1].Size & (Op.Inputs[1].Size - 1)) == 0 &&
+            !(Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0 &&
+              C.TRI.isCalleeSaveReg(Op.Inputs[1].RegOff)))
+          Local.emplace(Slot, Op.Inputs[1]);
+      }
+    }
+    Stores Common;
+    if (Inherit && !Independent && B.ExceptionalPreds.empty() &&
+        !B.Preds.empty() && B.StartAddr != C.Func.Entry) {
+      bool First = true;
+      std::set<int> Preds;
+      for (int Id : B.Preds) {
+        const auto P = Blocks.find(Id);
+        if (!Remaining || !Preds.insert(Id).second || P == Blocks.end() ||
+            std::count(P->second->Succs.begin(), P->second->Succs.end(),
+                       B.Id) != 1) {
+          Common.clear();
+          break;
+        }
+        --Remaining;
+        Stores Incoming = Visit(*P->second, P->second->Ops.size(), Depth + 1);
+        if (First) {
+          Common = std::move(Incoming);
+          First = false;
+        } else {
+          std::erase_if(Common, [&](const auto &Item) {
+            const auto Other = Incoming.find(Item.first);
+            return Other == Incoming.end() || !same(Item.second, Other->second);
+          });
+        }
+        if (Common.empty())
+          break;
+      }
+    }
+    for (int64_t Slot : Overwritten)
+      Common.erase(Slot);
+    Common.insert(Local.begin(), Local.end());
+    Active.erase(B.Id);
+    return Common;
+  };
+  Stores Result = Visit(C.Blk, C.CallIdx, 0);
+  return Remaining ? Result : Stores{};
 }
 
 // Address = Base + Offset modulo the original address width. Offset owns the

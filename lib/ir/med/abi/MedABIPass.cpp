@@ -975,10 +975,15 @@ void recoverCallAbi(
               HasStackArgAtCallSP = true;
           }
       }
-      // A call first in its block can have its stack arguments stored at the
-      // end of a predecessor (MSVC sets them before an EH state change).
-      if (OI == 0 && Policy && Policy->ScanPredecessorStackArgs)
-        Policy->ScanPredecessorStackArgs(Ctx, HasStackArg, HasStackArgAtCallSP);
+      // A branch or EH boundary may split the setup from the call on any
+      // architecture. Keep only stores agreed upon by every incoming path.
+      const auto ReachingStackStores = callSetupStackStores(Ctx);
+      for (const auto &[Offset, Value] : ReachingStackStores) {
+        HasStackArg = true;
+        if (Offset == CallLayout.CallStackBase &&
+            !(Value.Kind == MedVar::Reg && TRI.isFrameOrLinkReg(Value.RegOff)))
+          HasStackArgAtCallSP = true;
+      }
       const int NumIntParamRegs = static_cast<int>(IntParamRegs.size());
 
       // With positional slots a stack argument (`[rsp+20h]` on Win64) proves
@@ -1452,8 +1457,20 @@ void recoverCallAbi(
         }
       }
 
-      if (OI == 0 && Policy && Policy->TakePredecessorStackArgs)
-        Policy->TakePredecessorStackArgs(Ctx);
+      const int ReachingStackBase = StackAfterUsedRegisters ? FirstStackSlot
+                                    : DarwinVarArgBase >= 0
+                                        ? DarwinVarArgBase
+                                        : static_cast<int>(IntParamRegs.size());
+      for (const auto &[Offset, Value] : ReachingStackStores) {
+        const int64_t Slot =
+            ReachingStackBase +
+            (Offset - CallLayout.CallStackBase) / CallLayout.SlotBytes;
+        if (Slot < 0 || Slot >= MaxArgs || FoundMask[Slot])
+          continue;
+        Found[Slot] = Value;
+        FoundMask[Slot] = true;
+        FromStackScan[Slot] = true;
+      }
 
       // Pack two AAPCS64-packed sub-8-byte integer stack arguments into one
       // 8-byte slot value (Apple arm64 places e.g. `int a8@[sp+0], a9@[sp+4]`
