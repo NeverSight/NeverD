@@ -34,6 +34,17 @@
 namespace neverd {
 
 namespace {
+TypeRef debugParameterCarrier(TypeRef Type, Arch Architecture,
+                              BinaryFormat Format) {
+  // An indirect source parameter needs only a record declaration. Decide
+  // its physical carrier before requiring a complete by-value C layout.
+  if (isMsvcClassValueReturn(Type, Architecture, Format))
+    return NdType::makePtr(Type);
+  if (!Type || !hasCValueLayout(Type))
+    return NdType::makeInt(pointerBytes(Architecture), false);
+  return Type;
+}
+
 /// A load through an access pointer, `(*(_QWORD *)p)`, without its
 /// parentheses where no unary or postfix operator applies to it: the
 /// dereference is itself a unary expression.
@@ -2185,10 +2196,8 @@ TypeRef HighCWriter::expectedDebugCallArgType(const FunctionSym &FS,
   auto Declared = [&](size_t Param) -> TypeRef {
     if (Param >= FS.Params.size())
       return nullptr;
-    const TypeRef &Ty = FS.Params[Param].second;
-    if (Ty && !hasCValueLayout(cDisplayType(Ty)))
-      return NdType::makeInt(pointerBytes(Opts.TheArch), false);
-    return Ty;
+    return debugParameterCarrier(cDisplayType(FS.Params[Param].second),
+                                 Opts.TheArch, Opts.Format);
   };
   if (Member) {
     if (Index == 0)
@@ -2609,17 +2618,7 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
     if (Msvc && Msvc->ArityKind == MsvcArityKind::Fixed &&
         Emitted >= Msvc->MaxArgs)
       return;
-    Ty = cDisplayType(Ty);
-    if (!Ty)
-      Ty = NdType::makeInt(8);
-    // A parameter whose type C cannot spell is the register it travels in.
-    if (!hasCValueLayout(Ty))
-      Ty = NdType::makeInt(pointerBytes(Opts.TheArch), false);
-    // MSVC x64 passes a named class through a hidden pointer. The PDB
-    // still records the class. Enums stay in a register.
-    if (Opts.TheArch == Arch::X64 &&
-        isMsvcClassValueReturn(Ty, Opts.TheArch, Opts.Format))
-      Ty = NdType::makePtr(Ty);
+    Ty = debugParameterCarrier(cDisplayType(Ty), Opts.TheArch, Opts.Format);
     if (Name.empty())
       Name = "arg" + std::to_string(Emitted);
     if (Emitted++)

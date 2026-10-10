@@ -3720,6 +3720,7 @@ TEST(HighCPointerAddresses, TypedCallPeelsWidenedImmediate) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4184,6 +4185,7 @@ TEST(HighCPointerAddresses, NamedClassReturnIsIndirectResult) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4238,6 +4240,7 @@ TEST(HighCPointerAddresses, MemberSretKeepsThisInRcx) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4327,6 +4330,7 @@ TEST(HighCPointerAddresses, DebugCalleePointerArgsOmitIntegerView) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4562,6 +4566,7 @@ TEST(HighCPointerAddresses, MemberSretCallKeepsLiveInThis) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options, &Dbg));
@@ -4726,6 +4731,7 @@ TEST(HighCPointerAddresses, MemberSretCallRecoversUnwrittenLiveInThis) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options, &Dbg));
@@ -6189,6 +6195,7 @@ TEST(HighCPointerAddresses, ClassByValueStringArgTakesPointer) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -6539,6 +6546,7 @@ TEST(HighCPointerAddresses, CallResultTempUsesDebugReturnType) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -7416,6 +7424,7 @@ TEST(HighCPointerAddresses, CollidingSretPointerStillPrintsAssignedEnumerator) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -7941,6 +7950,7 @@ TEST(HighCPointerAddresses, PointerClassReturnIsIndirectResult) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -8029,6 +8039,7 @@ TEST(HighCPointerAddresses, PointerClassReturnKeepsObservedSretOperand) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -8077,6 +8088,7 @@ TEST(HighCPointerAddresses, StaticPointerClassGetterIgnoresLiveIntegerParam) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -8277,6 +8289,7 @@ TEST(HighCPointerAddresses, ForwardNamedClassReturnIsIndirectResult) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -21103,6 +21116,9 @@ TEST(HighCPointerAddresses, CleanupFuncletFrameSlotLoadForwardsIntoDtor) {
       Var.Type->FieldDisplayNames = {"m_pszData"};
       Var.Type->FieldDisplayOffsets = {0};
       Var.Type->FieldDisplayTypes = {NdType::makePtr()};
+      Var.Type->Fields = Var.Type->FieldDisplayTypes;
+      Var.Type->FieldOffsets = Var.Type->FieldDisplayOffsets;
+      Var.Type->Alignment = 8;
       Var.StackOffset = Disp;
       return Var;
     }
@@ -22598,6 +22614,7 @@ TEST(HighCPointerAddresses, CollidingDebugStemsKeepRicherPrototype) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -23378,6 +23395,7 @@ TEST(HighCPointerAddresses, Win64MemberCallUsesRewrittenRcxNotSret) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options, &Dbg));
@@ -23521,6 +23539,7 @@ TEST(HighCPointerAddresses, FrameHomeDoesNotReuseParamName) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -36203,6 +36222,7 @@ TEST(LLVMCPointerAddresses, IndirectCallPrintsLoadedCalleePlusOffset) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.EmitIncludes = false;
   ASSERT_TRUE(
       LLVMCEmitter().emit(Module, OS, Options, &Dbg, nullptr, Function));
@@ -38642,6 +38662,7 @@ TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.EmitIncludes = false;
   ASSERT_TRUE(
       LLVMCEmitter().emit(Module, OS, Options, &Dbg, nullptr, Function));
@@ -40757,6 +40778,7 @@ TEST(LLVMCPointerAddresses, StaticPointerClassGetterOmitsLiveIntegerOperand) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.EmitIncludes = false;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(
