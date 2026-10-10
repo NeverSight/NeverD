@@ -75,6 +75,7 @@ private:
                                  uint16_t Width) const;
   bool registrationInstallationReady(const FrameState &Frame) const;
   bool callbackCanReturn(const Domain &State) const;
+  bool callbackReturnInstruction(size_t I, const LowOp &Op) const;
   std::optional<int32_t> parentStackOffset(const Domain &State) const;
   bool initializeContracts();
   void initializeCookies();

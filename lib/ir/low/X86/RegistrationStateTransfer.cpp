@@ -72,6 +72,9 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
         RuntimeValue = {};
     }
     recordCatchReturn(I, After, Op, Transfer, CatchReturn);
+    if (!KnownCxx && After.Callback && Op.Opcode == NdOp::RETURN &&
+        (!callbackCanReturn(After) || !callbackReturnInstruction(I, Op)))
+      Invalidate();
     if (Op.Seq >= 0 && Op.Output.Size != 0 && Value.MayBeFrame) {
       if (!charge(1))
         break;

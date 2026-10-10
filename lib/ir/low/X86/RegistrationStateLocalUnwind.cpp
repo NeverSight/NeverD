@@ -56,20 +56,8 @@ bool RegistrationStateSolver::runLocalFinally(va_t Target, FrameState &Parent) {
         return false;
       Transfer.beginInstruction(Op.Addr);
       if (Op.Opcode == NdOp::RETURN) {
-        const auto Boundary = Boundaries.find(Op.Addr);
-        if (Boundary == Boundaries.end() ||
-            Boundary->second.first != Block.Id ||
-            Boundary->second.second.Control != LowInstructionControl::Return ||
-            hasLowInstructionControlFlag(
-                Boundary->second.second.ControlFlags,
-                LowInstructionControlFlag::Conditional) ||
-            Boundary->second.second.Address + Boundary->second.second.Size !=
-                Block.EndAddr ||
-            OpIndex + 1 != Block.Ops.size() ||
-            Boundary->second.second.Immediate.value_or(0) != 0 ||
-            State.Registers[x86reg::RSP / x86reg::GeneralRegStride] !=
-                FrameValue::callbackFrame(Target, 0) ||
-            State.Registers[x86reg::RBP / x86reg::GeneralRegStride].Offset != 0)
+        if (!callbackReturnInstruction(I, Op) ||
+            State.CallbackEntry != Target || !State.callbackStackIsRestored(0))
           return false;
         if (!Returned)
           Returned = State;
@@ -88,7 +76,8 @@ bool RegistrationStateSolver::runLocalFinally(va_t Target, FrameState &Parent) {
           return false;
         const auto Address = Transfer.read(*Memory.Address);
         if (Address.CallbackAddress) {
-          if (!State.callbackMemoryIsPrivate(*Address.CallbackAddress,
+          if (!charge(Memory.AccessSize) ||
+              !State.callbackMemoryIsPrivate(*Address.CallbackAddress,
                                              Memory.AccessSize,
                                              Op.Opcode == NdOp::LOAD))
             return false;

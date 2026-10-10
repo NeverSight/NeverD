@@ -53,6 +53,15 @@ bool FrameState::callbackMemoryIsPrivate(const CallbackFrameAddress &Address,
   return true;
 }
 
+bool FrameState::callbackStackIsRestored(int32_t ParentFrameOffset) const {
+  const auto &SP =
+      Registers[x86reg::RSP / x86reg::GeneralRegStride].CallbackAddress;
+  return CallbackEntry && SP && SP->Entry == *CallbackEntry &&
+         SP->Offset == 0 &&
+         Registers[x86reg::RBP / x86reg::GeneralRegStride].Offset ==
+             ParentFrameOffset;
+}
+
 void FrameState::trimCallbackCells() {
   const auto &SP =
       Registers[x86reg::RSP / x86reg::GeneralRegStride].CallbackAddress;

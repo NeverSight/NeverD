@@ -1262,6 +1262,63 @@ TEST(RegistrationState, LocalFinallyOwnsOnlyItsAllocatedCallbackStack) {
   }
 }
 
+TEST(RegistrationState, SEHCallbacksMustReturnToTheirCurrentInvocation) {
+  for (bool EH4 : {false, true}) {
+    for (bool Finally : {false, true}) {
+      for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+        SCOPED_TRACE(EH4);
+        SCOPED_TRACE(Finally);
+        SCOPED_TRACE(Mutation);
+        auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
+        auto &Scope = F.ExceptionMetadata->Registration->Scopes.front();
+        Scope.FilterVA = Finally ? 0 : 0x1800;
+        Scope.HandlerVA = Finally ? 0x1800 : 0x1900;
+        Scope.IsFinally = Finally;
+        LowBlock Callback;
+        Callback.Id = F.Blocks.size();
+        Callback.StartAddr = 0x1800;
+        emitOp(Callback, 0x1800, NdOp::COPY, NdVar::reg(x86reg::RAX, 4),
+               {NdVar::cst(1, 4)});
+        if (Mutation == 1)
+          emitOp(Callback, 0x1800, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+                 {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+        if (Mutation == 2)
+          emitOp(Callback, 0x1800, NdOp::COPY, NdVar::reg(x86reg::RBP, 4),
+                 {NdVar::reg(x86reg::RSP, 4)});
+        const size_t Prefix = Callback.Ops.size();
+        emitOp(Callback, 0x1801, NdOp::RETURN, {}, {});
+        if (Mutation == 7)
+          Callback.Ops.back().Seq = -1;
+        if (Mutation == 5)
+          emitOp(Callback, 0x1801, NdOp::COPY, NdVar::reg(x86reg::RAX, 4),
+                 {NdVar::cst(2, 4)});
+        Callback.InstructionBoundaries = {
+            {0x1800, 1, 0, Prefix},
+            {0x1801, 1, Prefix, Callback.Ops.size() - Prefix}};
+        auto &Return = Callback.InstructionBoundaries.back();
+        Return.Control = Mutation == 8 ? LowInstructionControl::Call
+                                       : LowInstructionControl::Return;
+        if (Mutation == 3)
+          Return.Immediate = 4;
+        if (Mutation == 4)
+          Return.ControlFlags = LowInstructionControlFlag::Conditional;
+        if (Mutation == 6)
+          Callback.InstructionBoundaries.pop_back();
+        Callback.EndAddr = 0x1802;
+        const size_t CallbackIndex = F.Blocks.size();
+        F.Blocks.push_back(std::move(Callback));
+        const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0);
+        EXPECT_TRUE(A.Complete);
+        EXPECT_EQ(A.CallbackStatesComplete, Mutation == 0);
+        ASSERT_GT(A.Blocks.size(), CallbackIndex);
+        EXPECT_TRUE(A.Blocks[CallbackIndex].Reached);
+        EXPECT_TRUE(A.Blocks[CallbackIndex].CallbackOnly);
+        EXPECT_EQ(A.Blocks[CallbackIndex].Unknown, Mutation != 0);
+      }
+    }
+  }
+}
+
 TEST(RegistrationState, FreedOrOpaqueFrameBytesCannotAuthorizeObjectReads) {
   for (bool Opaque : {false, true}) {
     auto F = makeCxxObjectCall();

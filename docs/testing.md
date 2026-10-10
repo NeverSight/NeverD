@@ -2549,6 +2549,11 @@ callback pointers and opaque calls. `LocalUnwindSplitsCurrentMachineStateAtCall`
 also decodes the corresponding PE32 push/frame/pop sequence and mutated
 return-stack, return-PC, frame-register and pointer-escape cases. These checks
 do not admit nonlocal finally exits or infer a native memory-borrow contract.
+`SEHCallbacksMustReturnToTheirCurrentInvocation` covers filters and finally
+handlers under EH3 and EH4: restored and unbalanced stacks, changed EBP,
+return-pop immediates, conditional returns, trailing effects and missing or
+mismatched instruction identities. The C++ catch-return suite applies the
+same unconditional-return rule before publishing a continuation.
 The native call target checks cumulative failed-proof budgets and fresh-image
 callee indices.
 Catch-return tests require the pre-dispatch SavedESP snapshot to survive catch
