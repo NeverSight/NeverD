@@ -1427,8 +1427,9 @@ TEST_F(KernelImageMDL, ReadAliasesSharePagesWithoutChangingImageProtections) {
   EXPECT_EQ(get(OtherAlias, 1), 0x59u);
   call("MmUnlockPages", {Other});
   call("IoFreeMdl", {Other});
-  // MDL and physical-address effects retain the existing recovery refusal.
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  // The test's host-side PFN inspection is not a guest observation. All
+  // temporary image descriptors and mappings have now retired.
+  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
 }
 
 TEST_F(KernelImageMDL, WriteAliasesModifyTheExistingImageAndReleaseTheirView) {
@@ -1447,7 +1448,47 @@ TEST_F(KernelImageMDL, WriteAliasesModifyTheExistingImageAndReleaseTheirView) {
   EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
   EXPECT_EQ(get(Address), 0x123456789abcdef0u);
   call("IoFreeMdl", {MDL});
+  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
+}
+
+TEST_F(KernelImageMDL, RecoveryWaitsForDescriptorAndMappingRetirement) {
+  const auto Address = ImageBase + profile::PageSize + 0x10;
+  const auto MDL = call("IoAllocateMdl", {Address, 16, 0, 0, 0});
   EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoWriteAccess});
+  const auto Alias = call("MmMapLockedPagesSpecifyCache",
+                          {MDL, KernelMode, MmCached, 0, 0,
+                           NormalPagePriority | MdlMappingNoExecute});
+  ASSERT_NE(Alias, 0u);
+  // Logical range fields contain no model physical identity.
+  success(Model->validateGuestAccess(MDL + MDLByteCountOffset, 8, false));
+  call("MmUnmapLockedPages", {Alias, MDL});
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  call("MmUnlockPages", {MDL});
+  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  call("IoFreeMdl", {MDL});
+  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
+}
+
+TEST_F(KernelImageMDL, PhysicalIdentityReadsRemainDependenciesAfterRelease) {
+  for (unsigned Operation = 0; Operation != 4; ++Operation) {
+    SCOPED_TRACE(Operation);
+    initializeImage(0x180000000);
+    const auto Address = ImageBase + profile::PageSize + 0x10;
+    const auto MDL = call("IoAllocateMdl", {Address, 16, 0, 0, 0});
+    call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
+    if (Operation == 0)
+      success(Model->validateGuestAccess(MDL + MDLSize, 8, false));
+    else if (Operation == 1)
+      call("RtlCopyMemory", {Address, MDL + MDLSize, 8});
+    else if (Operation == 2)
+      call("RtlMoveMemory", {Address, MDL + MDLSize, 8});
+    else
+      call("RtlCompareMemory", {Address, MDL + MDLSize, 8});
+    call("MmUnlockPages", {MDL});
+    call("IoFreeMdl", {MDL});
+    EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  }
 }
 
 TEST_F(KernelImageMDL, ImageAliasesExposeCompleteDescribedPages) {
@@ -1530,7 +1571,7 @@ TEST_F(KernelImageMDL, UnreadableImageProbePreservesDescriptorAndPermissions) {
   call("MmProbeAndLockPages", {MDL, KernelMode, IoReadAccess});
   call("MmUnlockPages", {MDL});
   call("IoFreeMdl", {MDL});
-  EXPECT_TRUE(take(Model->hasUnpackDependencies()));
+  EXPECT_FALSE(take(Model->hasUnpackDependencies()));
 }
 
 TEST_F(KernelImageMDL, ImageOwnershipIsIndependentOfTheUserAddressHeuristic) {

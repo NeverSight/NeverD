@@ -49,6 +49,18 @@ llvm::Expected<uint64_t> mdlRecordSize(uint64_t Address, uint32_t Size) {
 }
 } // namespace
 
+std::optional<uint64_t> KernelModel::imageOwnerForRange(uint64_t Address,
+                                                        uint64_t Size) const {
+  auto It = ImageRAM.upper_bound(Address);
+  if (It == ImageRAM.begin())
+    return std::nullopt;
+  --It;
+  const uint64_t Offset = Address - It->first;
+  if (Offset >= It->second || Size > It->second - Offset)
+    return std::nullopt;
+  return It->first;
+}
+
 llvm::Expected<uint64_t>
 KernelModel::createMDLRecord(uint64_t Address, uint32_t Size, uint16_t Flags) {
   auto Extent = mdlRecordSize(Address, Size);
@@ -288,13 +300,9 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     return mdlError(
         "MmProbeAndLockPages requires a supported mode and lock operation");
   auto &State = It->second;
-  auto Image = ImageRAM.upper_bound(State.OriginalAddress);
-  if (Image != ImageRAM.begin())
-    --Image;
-  const bool ImageRange =
-      Image != ImageRAM.end() && State.OriginalAddress >= Image->first &&
-      State.OriginalAddress - Image->first < Image->second &&
-      State.ByteCount <= Image->second - (State.OriginalAddress - Image->first);
+  const auto ImageOwner =
+      imageOwnerForRange(State.OriginalAddress, State.ByteCount);
+  const bool ImageRange = ImageOwner.has_value();
   const bool UserRange =
       State.OriginalAddress < profile::UserProbeLimit && !ImageRange;
   auto Range = [&]() -> llvm::Expected<UserMemoryRange> {
@@ -309,7 +317,7 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     uint64_t Start = 0;
     bool Pageable = true;
     if (ImageRange) {
-      Start = Image->first;
+      Start = *ImageOwner;
     } else {
       auto Pool = Allocations.upper_bound(State.OriginalAddress);
       if (Pool == Allocations.begin())
@@ -342,7 +350,7 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
       return llvm::make_error<KernelGuestException>(
           exceptions::StatusAccessViolation);
     if (ImageRange && !Physical.find(Start))
-      if (auto E = Physical.registerRegion(Start, Start, Image->second))
+      if (auto E = Physical.registerRegion(Start, Start, ImageRAM.at(Start)))
         return E;
     auto Owner = Physical.ownerForRange(State.OriginalAddress, State.ByteCount);
     if (!Owner)
@@ -1115,6 +1123,8 @@ llvm::Error KernelModel::validateMDLAccess(uint64_t Address, uint32_t Size,
             profile::PageSize;
         if (Last > MDLSize + Pages * profile::PointerSize)
           return mdlError("MDL physical PFN read exceeds its described pages");
+        if (UnpackBaseline)
+          UnpackMDLIdentityRead = true;
       }
     }
     // Driver MDLs describe an existing allocation; neither their byte range

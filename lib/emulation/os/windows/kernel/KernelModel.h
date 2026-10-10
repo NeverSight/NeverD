@@ -803,12 +803,19 @@ private:
   // Only loader-owned mapped spans, excluding image holes. Physical backing is
   // registered lazily when a permitted image range is first locked.
   std::map<uint64_t, uint64_t> ImageRAM;
+  std::optional<uint64_t> imageOwnerForRange(uint64_t Address,
+                                             uint64_t Size) const;
+  bool unpackImageMDLCall(KernelAPIKind Kind,
+                          llvm::ArrayRef<uint64_t> Arguments) const;
   uint64_t DriverObject = 0;
   uint64_t RegistryPath = 0;
   uint64_t DriverExtension = 0;
   bool EntryFinished = false;
   std::optional<std::map<uint64_t, std::vector<uint8_t>>> UnpackBaseline;
   bool UnpackOpaqueEffects = false;
+  // Admission conservatively records reads that can expose model PFNs,
+  // including reads performed by modeled copy/compare services.
+  mutable bool UnpackMDLIdentityRead = false;
   uint64_t NextAllocation = 0;
   uint64_t AllocationEnd = 0;
   struct PoolAllocation {

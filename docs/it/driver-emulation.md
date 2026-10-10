@@ -409,7 +409,7 @@ Il modello API iniziale ha intenzionalmente un contratto limitato:
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`; svolgimento con arresto/ripresa e rilascio di IRP/MDL/buffer solo al limite finale |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Operazioni limitate sui buffer guest, al massimo 1 MiB per chiamata; le API di copia senza sovrapposizione rifiutano le sovrapposizioni |
 
-`MmProbeAndLockPages` accetta in `KernelMode` un intervallo contiguo dell’immagine del driver posseduto dal loader, a IRQL <= APC_LEVEL. Le pagine devono essere leggibili e rispettare la quota fisica. Lo storage è già privato e residente: `IoWriteAccess` e `IoModifyAccess` consentono alias MDL scrivibili anche se la vista originale è di sola lettura; `IoReadAccess` mantiene un alias di sola lettura. Le protezioni originali restano invariate. Sono esclusi buchi e mapping estranei; la proprietà identifica anche immagini sotto il limite degli indirizzi utente. Occorre sbloccare e liberare il descrittore. Le chiamate MDL mantengono la dipendenza di ripristino UNPACK; l’accesso modellato non certifica un ripristino portabile.
+`MmProbeAndLockPages` accetta in `KernelMode` un intervallo contiguo dell’immagine del driver posseduto dal loader, a IRQL <= APC_LEVEL. Le pagine devono essere leggibili e rispettare la quota fisica. Lo storage è già privato e residente: `IoWriteAccess` e `IoModifyAccess` consentono alias MDL scrivibili anche se la vista originale è di sola lettura; `IoReadAccess` mantiene un alias di sola lettura. Le protezioni originali restano invariate. Sono esclusi buchi e mapping estranei; la proprietà identifica anche immagini sotto il limite degli indirizzi utente. Occorre sbloccare e liberare il descrittore. Gli MDL temporanei sulle pagine immagine del loader non aggiungono più una dipendenza di ripristino dopo la rimozione di tutti gli alias, il rilascio di tutti i blocchi e la liberazione di tutti i descrittori. Il contratto ammette alias kernel con cache senza indirizzo richiesto. Gli MDL ancora attivi, altri tipi di proprietà o mapping e le letture guest delle identità fisiche PFN restano dipendenze; contano anche le letture dei servizi modellati di copia, spostamento e confronto.
 
 `KernelDispatcher` interpreta `Count`, `Limit` e `Adjustment` del semaforo come `LONG` con segno a 32 bit, `Level` del mutex come `ULONG` a 32 bit e `Wait` come `BOOLEAN` a 8 bit, ignorando i bit di registro non definiti secondo l’[ABI Windows x64](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170). I valori non validi nella larghezza definita e gli overflow del semaforo vengono rifiutati prima di modificare lo stato dell’oggetto.
 
@@ -675,7 +675,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v96`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v97`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra

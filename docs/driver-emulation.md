@@ -579,7 +579,7 @@ The initial API model deliberately has a finite contract:
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`; executes completion unwinding, supports stopped/resumed completion and retires IRP/MDL/buffer storage only at its terminal boundary |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Bounded guest buffer operations, at most 1 MiB per call; non-overlapping copy APIs reject overlaps |
 
-`MmProbeAndLockPages` accepts `KernelMode` ranges within one contiguous loader-owned span of the input driver image at IRQL <= APC_LEVEL. Image pages must be readable and use the existing physical-page quota. The model already owns private resident image backing: `IoWriteAccess` and `IoModifyAccess` permit writable MDL aliases even when the original image view is read-only; `IoReadAccess` retains a read-only alias contract. Original image protections stay unchanged. Image holes and unrelated mappings are excluded, and ownership also identifies images below the user-address cutoff. Locks require unlock and descriptor release. MDL calls retain the existing UNPACK recovery dependency; modeled image access alone does not certify portable driver restoration.
+`MmProbeAndLockPages` accepts `KernelMode` ranges within one contiguous loader-owned span of the input driver image at IRQL <= APC_LEVEL. Image pages must be readable and use the existing physical-page quota. The model already owns private resident image backing: `IoWriteAccess` and `IoModifyAccess` permit writable MDL aliases even when the original image view is read-only; `IoReadAccess` retains a read-only alias contract. Original image protections stay unchanged. Image holes and unrelated mappings are excluded, and ownership also identifies images below the user-address cutoff. Locks require unlock and descriptor release. Temporary MDLs over loader-owned image pages no longer add a recovery dependency after every alias is unmapped, every lock is released and every descriptor is freed. This contract admits kernel-mode cached aliases without a requested address. Live MDLs, other ownership or mapping kinds, and guest reads of physical PFN identities remain dependencies; reads by modeled copy, move and compare services count too.
 
 `KernelDispatcher` decodes semaphore `Count`, `Limit` and `Adjustment` as signed 32-bit `LONG`, mutex `Level` as 32-bit `ULONG`, and `Wait` as 8-bit `BOOLEAN`, ignoring undefined register bits under the [Windows x64 ABI](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170). Invalid low-width values and semaphore overflow fail before object state changes.
 
@@ -999,7 +999,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v96`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v97`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

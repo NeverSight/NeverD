@@ -50,7 +50,7 @@ llvm::Expected<uint64_t> KernelModel::call(
     return modelError("unknown API or incorrect argument count: " + Name);
   const auto Kind = API->Kind;
   // Only these contracts have effects entirely accounted for by captured
-  // bytes, pool ownership and the export registry. Every other call retains
+  // bytes, resource lifetimes and the export registry. Every other call retains
   // an explicit dependency until its kernel lifetime has a recovery contract.
   switch (Kind) {
   case KernelAPIKind::MmGetSystemRoutineAddress:
@@ -67,6 +67,20 @@ llvm::Expected<uint64_t> KernelModel::call(
   case KernelAPIKind::ZwQuerySystemInformation:
   case KernelAPIKind::ExFreePool:
   case KernelAPIKind::ExFreePoolWithTag:
+    break;
+  case KernelAPIKind::IoAllocateMdl:
+  case KernelAPIKind::IoFreeMdl:
+  case KernelAPIKind::MmProbeAndLockPages:
+  case KernelAPIKind::MmUnlockPages:
+  case KernelAPIKind::MmGetSystemAddressForMdlSafe:
+  case KernelAPIKind::MmMapLockedPagesSpecifyCache:
+  case KernelAPIKind::MmUnmapLockedPages:
+  case KernelAPIKind::MmProtectMdlSystemAddress:
+    // Complete image pages already belong to the recovered file. Their
+    // temporary metadata, locks and aliases must all retire before capture;
+    // reads of model physical identities retain a separate dependency.
+    if (!unpackImageMDLCall(Kind, A))
+      UnpackOpaqueEffects = true;
     break;
   default:
     UnpackOpaqueEffects = true;

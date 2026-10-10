@@ -411,7 +411,7 @@ El modelo inicial de API tiene deliberadamente un contrato limitado:
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`; desenrollado con detención/reanudación, retirando IRP/MDL/búferes solo en el límite final |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Operaciones acotadas sobre búferes del invitado, como máximo 1 MiB por llamada; las API de copia sin solapamiento rechazan los solapamientos |
 
-`MmProbeAndLockPages` admite en `KernelMode` un intervalo continuo de la imagen del controlador propiedad del cargador, con IRQL <= APC_LEVEL. Las páginas deben ser legibles y respetar la cuota física. Su almacenamiento ya es privado y residente: `IoWriteAccess` e `IoModifyAccess` permiten alias MDL escribibles aunque la vista original sea de solo lectura; `IoReadAccess` conserva un alias de solo lectura. Las protecciones originales no cambian. Se excluyen huecos y mapeos ajenos; la propiedad identifica también imágenes bajo el límite de direcciones de usuario. Hay que desbloquear y liberar el descriptor. Las llamadas MDL conservan la dependencia de restauración UNPACK; el acceso modelado no certifica una restauración portable.
+`MmProbeAndLockPages` admite en `KernelMode` un intervalo continuo de la imagen del controlador propiedad del cargador, con IRQL <= APC_LEVEL. Las páginas deben ser legibles y respetar la cuota física. Su almacenamiento ya es privado y residente: `IoWriteAccess` e `IoModifyAccess` permiten alias MDL escribibles aunque la vista original sea de solo lectura; `IoReadAccess` conserva un alias de solo lectura. Las protecciones originales no cambian. Se excluyen huecos y mapeos ajenos; la propiedad identifica también imágenes bajo el límite de direcciones de usuario. Hay que desbloquear y liberar el descriptor. Los MDL temporales de páginas de imagen del cargador dejan de añadir una dependencia de recuperación cuando se desmapean todos los alias, se liberan todos los bloqueos y se liberan todos los descriptores. Este contrato admite alias en modo kernel con caché sin dirección solicitada. Los MDL activos, otros tipos de propiedad o mapeo y las lecturas del invitado de identidades físicas PFN siguen siendo dependencias; también cuentan las lecturas de servicios modelados de copia, movimiento y comparación.
 
 `KernelDispatcher` interpreta `Count`, `Limit` y `Adjustment` del semáforo como `LONG` de 32 bits con signo, `Level` del mutex como `ULONG` de 32 bits y `Wait` como `BOOLEAN` de 8 bits, ignorando los bits de registro indefinidos según la [ABI de Windows x64](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170). Los valores no válidos dentro del ancho definido y el desbordamiento del semáforo se rechazan antes de modificar el estado del objeto.
 
@@ -685,7 +685,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v96`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v97`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
