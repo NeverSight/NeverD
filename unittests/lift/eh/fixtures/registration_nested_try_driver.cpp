@@ -25,6 +25,12 @@ __declspec(dllexport) __declspec(noinline) void callback_throw_float() {
   callback_caller = reinterpret_cast<unsigned>(_ReturnAddress());
   throw 7.0f;
 }
+#if defined(RETHROW_SEARCH) && !defined(INLINE_RETHROW_SEARCH)
+__declspec(dllexport) __declspec(noinline) void callback_rethrow() {
+  callback_caller = reinterpret_cast<unsigned>(_ReturnAddress());
+  throw;
+}
+#endif
 __declspec(dllexport) int callback_parent();
 }
 
@@ -37,11 +43,28 @@ extern "C" __declspec(dllexport) __declspec(noinline) int callback_parent() {
         callback_throw_unsigned();
       callback_throw_float();
     } catch (unsigned &Value) {
+#ifdef RETHROW_SEARCH
+      if (Value == 7) {
+        Value += 11;
+#ifdef INLINE_RETHROW_SEARCH
+        throw;
+#else
+        callback_rethrow();
+#endif
+      }
+#elif defined(SECONDARY_SEARCH)
+      if (Value == 7)
+        callback_throw_int();
+#endif
       Value += 11;
       callback_caught = Value;
       return Value + 10;
     }
+#ifdef RETHROW_SEARCH
+  } catch (unsigned &Value) {
+#else
   } catch (int Value) {
+#endif
     callback_caught = Value;
     return Value + 10;
   } catch (...) {
@@ -64,13 +87,25 @@ template <unsigned Padding> __declspec(noinline) int call_with_padding() {
 }
 
 #ifndef EXPECTED_FIRST
+#ifdef RETHROW_SEARCH
+#define EXPECTED_FIRST 39
+#else
 #define EXPECTED_FIRST 17
+#endif
 #endif
 extern "C" __declspec(noreturn) void mainCRTStartup() {
   bool Passed = true;
   unsigned Values[3] = {}, Caught[3] = {}, Callers[3] = {}, Iterations = 0;
+#ifdef RETHROW_SEARCH
+  const unsigned Expected[] = {EXPECTED_FIRST, 28, 39};
+  const unsigned ExpectedCaught[] = {39, 18, 39};
+#elif defined(SECONDARY_SEARCH)
+  const unsigned Expected[] = {EXPECTED_FIRST, 17, 39};
+  const unsigned ExpectedCaught[] = {7, 7, 39};
+#else
   const unsigned Expected[] = {EXPECTED_FIRST, 28, 39};
   const unsigned ExpectedCaught[] = {7, 18, 39};
+#endif
   const auto Chain = __readfsdword(0);
   for (unsigned Round = 0; Round != 4; ++Round)
     for (unsigned Choice = 0; Choice != 3; ++Choice) {

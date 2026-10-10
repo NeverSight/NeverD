@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../eh/MedLLVMEHHelpers.h"
+#include "MedLLVMRegistrationCxxCall.h"
 #include "MedLLVMRegistrationCxxCatch.h"
 #include "MedLLVMRegistrationCxxContinuation.h"
 #include "MedLLVMRegistrationCxxStack.h"
@@ -155,7 +156,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     const RegistrationCallFrameEffect *Effect;
     const RegistrationBlockState *State;
     bool Throw;
-    bool Borrow;
+    med_llvm_eh::RegistrationCxxCallABI ABI;
     X86RegistrationCatchIdentity CatchIdentity;
     std::string Name;
   };
@@ -174,9 +175,6 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   auto *I32 = llvm::Type::getInt32Ty(*Ctx);
   auto *Void = llvm::Type::getVoidTy(*Ctx);
   auto *Ptr = llvm::PointerType::get(*Ctx, 0);
-  auto *ThrowType = llvm::FunctionType::get(Void, false);
-  auto *BorrowType = llvm::FunctionType::get(I32, {Ptr}, false);
-  auto *LeafType = llvm::FunctionType::get(I32, false);
   auto *CleanupType = llvm::FunctionType::get(Void, {Ptr}, false);
   auto *PersonalityType = llvm::FunctionType::get(I32, {}, true);
   auto CalleeName = [](va_t Target, llvm::StringRef ABI) {
@@ -258,53 +256,21 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
           Op.Inputs[0].ConstVal != Effect->Target || Effect->StackPopBytes)
         return false;
       const auto &Contract = States.CalleeContracts[Effect->CalleeIndex];
-      const bool Throw = Contract.CalleeKind ==
-                         RegistrationCalleeFrameContract::Kind::PrivateThrow;
-      bool Borrow = false;
-      if (Contract.Target != Effect->Target ||
-          Contract.DoesNotReturn != Effect->DoesNotReturn)
+      const bool Throw = Contract.isThrow();
+      const auto ABI = med_llvm_eh::getCheckedRegistrationCxxCallABI(
+          *Img, Contract, *Effect, *Call, Work);
+      if (!ABI)
         return false;
-      if (Throw) {
-        // A throwing catch inside an enclosing try needs the CRT's secondary
-        // catch-search context. It is not the parent's ordinary dispatch.
-        if (State->CallbackOnly &&
-            llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-              return Try.TryLow < State->CxxMinimumTryLevel &&
-                     llvm::any_of(
-                         State->Levels,
-                         [&](int32_t Level) {
-                           return Level >= Try.TryLow && Level <= Try.TryHigh;
-                         });
-            }))
-          return false;
-        const auto Proof = getCheckedX86RegistrationThrowCalleeABI(
-            *Img, Effect->Target, &Work);
-        if (!Proof || !Effect->DoesNotReturn || Effect->ECXFrameOffset ||
-            !Call->use_empty())
-          return false;
-      } else {
-        const auto Proof =
-            getCheckedX86RegistrationLeafCalleeABI(*Img, Effect->Target, &Work);
-        if (!Proof || !Proof->HasIndependentScalarReturn ||
-            Proof->StackPopBytes || Effect->DoesNotReturn ||
-            (!Call->getType()->isIntegerTy(32) &&
-             !Call->getType()->isIntegerTy(64)))
-          return false;
-        Borrow = !Proof->ECXReads.empty() || !Proof->ECXWrites.empty();
-        if (Borrow != Effect->ECXFrameOffset.has_value())
-          return false;
-      }
-      const auto Name = CalleeName(Effect->Target, Throw    ? "throw"
-                                                   : Borrow ? "ecx"
-                                                            : "leaf");
-      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
-              *Mod, Name,
-              Throw    ? ThrowType
-              : Borrow ? BorrowType
-                       : LeafType))
+      const auto Name =
+          CalleeName(Effect->Target, ABI->RuntimeRethrow ? "rethrow"
+                                     : Throw             ? "throw"
+                                     : ABI->BorrowsECX   ? "ecx"
+                                                         : "leaf");
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
+                                                                  ABI->Type))
         return false;
       Calls.push_back(
-          {Call, Effect, State, Throw, Borrow,
+          {Call, Effect, State, Throw, *ABI,
            State->CallbackOnly
                ? CatchOwners->at(Block.Id)
                : X86RegistrationCatchIdentity{UINT32_MAX, UINT32_MAX},
@@ -568,26 +534,23 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     if (State.Levels.empty())
       return false;
     const int32_t Level = State.Levels.front();
-    return llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-      return State.CxxMinimumTryLevel <= Try.TryLow && Level >= Try.TryLow &&
-             Level <= Try.TryHigh;
+    return llvm::any_of(State.CxxSearches, [&](const auto &Search) {
+      return Search.Level == Level;
     });
   };
   for (const auto &Plan : Calls) {
     auto *Old = Plan.Call;
     llvm::IRBuilder<> B(Old);
     auto *Callee = llvm::cast<llvm::Function>(
-        Mod->getOrInsertFunction(Plan.Name, Plan.Throw    ? ThrowType
-                                            : Plan.Borrow ? BorrowType
-                                                          : LeafType)
-            .getCallee());
-    Callee->setCallingConv(Plan.Borrow ? llvm::CallingConv::X86_ThisCall
-                                       : llvm::CallingConv::C);
+        Mod->getOrInsertFunction(Plan.Name, Plan.ABI.Type).getCallee());
+    Callee->setCallingConv(Plan.ABI.Convention);
     rewrite_source::setOriginalVA(*Callee, Plan.Effect->Target);
     if (Plan.Throw)
       Callee->addFnAttr(llvm::Attribute::NoReturn);
-    llvm::SmallVector<llvm::Value *, 1> Args;
-    if (Plan.Borrow)
+    llvm::SmallVector<llvm::Value *, 2> Args;
+    if (Plan.ABI.RuntimeRethrow)
+      Args.assign(2, llvm::ConstantPointerNull::get(Ptr));
+    if (Plan.ABI.BorrowsECX)
       Args.push_back(B.CreateInBoundsGEP(
           I8, FrameAlloca,
           B.getInt32(Layout->Establisher + *Plan.Effect->ECXFrameOffset)));

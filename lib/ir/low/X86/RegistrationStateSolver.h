@@ -24,7 +24,7 @@ struct CxxCatchContext {
   uint32_t TryIndex = 0;
   uint32_t CatchIndex = 0;
   /// The CRT captures SavedESP before entering a catch and restores that
-  /// snapshot on return, even if the catch writes another value to the slot.
+  /// snapshot on return or guard unwind, even if the catch rewrites the slot.
   std::optional<int32_t> SavedStackOffset;
   auto operator<=>(const CxxCatchContext &) const = default;
 };
@@ -55,6 +55,8 @@ struct BlockFacts {
 };
 
 int32_t cxxMinimumTryLevel(const Domain &State, const CxxExceptionInfo &Cxx);
+size_t retainedCxxCatchDepth(const Domain::CatchStack &Stack,
+                             const CxxExceptionInfo &Cxx, uint32_t TryIndex);
 
 /// One bounded fixed-point analysis. Ordinary transfers and exceptional roots
 /// share the same frame lattice, source occurrences and cumulative work limit.
@@ -94,6 +96,9 @@ private:
                            const FrameTransfer &RuntimeTransfer);
   bool transferBlock(size_t I);
   void dispatchBlock(size_t I, const Domain &Before);
+  std::vector<RegistrationCxxSearch> cxxSearches(size_t I, const Domain &State);
+  bool enterCxxCatch(Domain &Root, const Domain &Source, uint32_t TryIndex,
+                     uint32_t CatchIndex);
   RegistrationStateAnalysis finish();
 
   bool charge(size_t Amount);

@@ -1297,6 +1297,8 @@ add_neverd_unittest(NeverDRegistrationStateTests
   eh/RegistrationStateTests.cpp
   eh/RegistrationStateTestUtils.cpp
   eh/RegistrationCxxContinuationTests.cpp
+  eh/RegistrationCxxSearchTests.cpp
+  eh/RegistrationRethrowStateTests.cpp
   eh/RegistrationRealignedStateTests.cpp
   eh/RegistrationRealignedTestUtils.cpp
   eh/RegistrationCallbackStateTests.cpp
@@ -1330,6 +1332,7 @@ add_neverd_unittest(NeverDWindowsRegistrationRealignedTests
   eh/WindowsRegistrationMultipleCatchTests.cpp
   eh/WindowsRegistrationNestedTryTests.cpp
   eh/RegistrationNestedTryTestUtils.cpp
+  eh/RegistrationRethrowTestUtils.cpp
   eh/RegistrationMultipleCatchTestUtils.cpp
   eh/WindowsRegistrationFixedTests.cpp
   eh/WindowsRegistrationDirectNativeTests.cpp
@@ -1350,6 +1353,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/WindowsRegistrationNativeTests.cpp
   eh/RegistrationCxxContinuationTestUtils.cpp
   eh/RegistrationCallTests.cpp
+  eh/RegistrationRethrowTests.cpp
 
   LINK_COMPONENTS
   BackendLLVM

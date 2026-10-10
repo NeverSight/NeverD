@@ -63,17 +63,26 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
           coff_registration::RegistrationFrameBorrow{
               int64_t(Proof->Frame.Establisher) + *Checked.ObjectFrameOffset,
               Checked.Contract.ECXReads, Checked.Contract.ECXWrites});
-    if (Checked.Contract.CalleeKind ==
-        RegistrationCalleeFrameContract::Kind::PrivateThrow) {
+    if (Checked.Contract.isRuntimeRethrow()) {
+      const auto Import = getCheckedX86RegistrationThrowImportABI(
+          Image, Checked.Contract.Target, &Work);
+      if (!Import)
+        return coff_registration::rejectIR(
+            "C++ direct rethrow lost its original runtime ABI");
+      Immutable.push_back({Import->IATVA, Import->IATVA + 4});
+    } else if (Checked.Contract.isThrow()) {
       auto Throw = getCheckedX86RegistrationThrowCalleeABI(
           Image, Checked.Contract.Target, &Work);
-      if (!Throw)
+      if (!Throw || Throw->IsRethrow != Checked.Contract.isRethrow())
         return coff_registration::rejectIR(
             "C++ private throw lost its original runtime ABI");
       Immutable.push_back({Throw->ImportIATVA, Throw->ImportIATVA + 4});
-      Immutable.insert(Immutable.end(), Throw->ThrowInfo.ReadOnlyRanges.begin(),
-                       Throw->ThrowInfo.ReadOnlyRanges.end());
-      Immutable.push_back(Throw->ThrowInfo.TypeDescriptorRange);
+      if (!Throw->IsRethrow) {
+        Immutable.insert(Immutable.end(),
+                         Throw->ThrowInfo.ReadOnlyRanges.begin(),
+                         Throw->ThrowInfo.ReadOnlyRanges.end());
+        Immutable.push_back(Throw->ThrowInfo.TypeDescriptorRange);
+      }
     }
   }
   std::map<std::pair<va_t, uint32_t>, const llvm::Instruction *> Operations;

@@ -143,6 +143,10 @@ installation or follow removal. The call ABI consumer prunes only with complete
 state/lifetime/call proofs, current block identities and exact call receipts.
 For PE32 C++ catches, that analysis also owns the runtime catch-context stack,
 its nested-search minimum and exact returned continuation and SavedESP facts.
+It publishes every possible catch-search target and the exited guard count.
+Secondary search through a parent try removes the exited invocations and
+restores their captured stack snapshot. CFG construction and native call
+lowering consume that result rather than filtering by the first guard alone.
 The captured pre-dispatch SavedESP owns the catch-return writeback even when
 catch code changes the cell. That effect remains bound to the exact RETURN in
 LowIR and MedIR. Dedicated x86 HighIR and LLVM continuation lowering restore
@@ -248,6 +252,12 @@ immutable CatchableType graph. The call ABI owner binds that graph to an exact
 CRT import and a fully initialized private exception object, retaining real
 caller-PC observations and rejecting metadata mutation. This still describes
 a preserved helper, rather than authorizing a rewritten parent.
+The separate x86 throw-import ABI owner authenticates the runtime, IAT and
+transparent jump stub for both helpers and direct calls. The source state
+solver admits a direct rethrow only with a live catch and two initialized null
+words in its actual argument-stack coordinate. The LLVM call adapter checks
+current arguments before projecting the two-pointer stdcall ABI. COFF control
+and frame consumers independently replay the source and generated call contract.
 One CFG construction memoizes these callee proofs under a shared budget that
 also charges failed attempts. Registration-state analysis projects each exact
 source call into the caller's allocated frame, intersects byte initialization

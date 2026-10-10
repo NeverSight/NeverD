@@ -433,6 +433,10 @@ bool extractAddressSlice(std::vector<HighStmt> &Statements,
 }
 
 struct RegionCandidate {
+  /// This PE32 scope depends on the closed terminal-component proof. A failed
+  /// extraction may not fall back to address containment that ignores the
+  /// search context of an already structured inner catch.
+  bool TerminalRegistration = false;
   StmtKind Kind = StmtKind::SEHTry;
   ExceptionAddressRange Range;
   std::vector<ExceptionAddressRange> Cover;
@@ -668,6 +672,7 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
     RegionCandidate Candidate;
     Candidate.Kind = StmtKind::CxxTry;
     Candidate.Range = Range;
+    Candidate.TerminalRegistration = TerminalRegistration;
     if (SplitRegistration)
       Candidate.Cover = std::move(Ranges);
     Candidate.NativeRegionCount = 1;
@@ -1786,6 +1791,10 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
                                        InsertAt);
     if (TerminalRegistration)
       Host = &Func.Body;
+    if (Candidate.TerminalRegistration && !TerminalRegistration) {
+      Rejected += Candidate.NativeRegionCount;
+      continue;
+    }
     if ((!Host &&
          !extractAddressSlice(Func.Body, ProtectedAddresses, EH.CodeRange,
                               ProtectedBody, InsertAt,

@@ -20,6 +20,14 @@ MedToHighConverter::collectRegistrationCallArgs(const MedBlock &Block,
   if (!ABI)
     return std::nullopt;
   std::vector<ExprPtr> Args;
+  if (ABI->RuntimeRethrow) {
+    const auto *Call = CurMed->findCall(Block.Id, CallIdx);
+    if (!Call || Call->Args.size() != 2)
+      return std::nullopt;
+    for (const auto &Argument : Call->Args)
+      Args.push_back(medvarToExpr(Argument));
+    return Args;
+  }
   if (!ABI->BorrowsECX)
     return Args;
 

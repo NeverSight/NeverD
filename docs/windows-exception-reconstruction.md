@@ -94,9 +94,13 @@ derived facts separately from the authenticated loader descriptor. HighIR
 requires every reaching state to agree about region membership before emitting
 a structured region. Unknown transitions retain annotations rather than
 inventing an IP-to-state map.
-C++ catches have a separate runtime context: nested exception search starts
-above the active try block, and a catch returns a continuation code pointer to
-the runtime. LowIR requires an exact decoded return and saved stack value,
+C++ catches have a separate runtime context. The active catch guard first
+searches tries inside that catch; an unmatched exception continues through
+enclosing guards and the parent registration. LowIR records each possible
+search target and the number of exited catch guards. Selecting an enclosing
+try discards those invocations and restores their captured SavedESP before
+entering its catch. A catch returns a continuation code pointer to the runtime.
+LowIR requires an exact decoded return and saved stack value,
 decodes the target within the same function, and replays the restored context.
 Each active catch retains the saved-stack snapshot taken before runtime
 dispatch. A direct-frame catch may overwrite SavedESP: the continuation
@@ -265,9 +269,20 @@ Parent try groups may be disjoint or nested, with at most 64 tries and 128
 source states. Each catch boundary must immediately follow its protected state
 interval. The shared source projection proves the complete inner-to-outer
 search chain; independent installation checks preserve every try's protected
-state set, emitted HandlerMap, search order and unwind edges. Shared callbacks,
-a try inside a catch, and a throwing catch requiring secondary search through
-an enclosing try remain rejected.
+state set, emitted HandlerMap, search order and unwind edges. A checked private
+throw inside a catch can continue the search through an enclosing parent try.
+Its invoke retains the active catch token and targets the outer dispatch;
+independent IR validation replays that transfer and its restored stack.
+Private rethrow helpers are distinguished from helpers constructing a new
+exception. The helper must pass two known null arguments to the authenticated
+CRT import, and its source caller must have a proved live catch invocation.
+The runtime retains the current exception's type and object, including changes
+made through a reference catch. A rethrow supplies no new ThrowInfo or implicit
+object initialization. A direct rethrow additionally proves both initialized
+null argument words in the current source stack coordinate. Native lowering
+emits the CRT's two-pointer x86 stdcall ABI; independent installation checks
+reject changed arguments, calling conventions or catch context.
+Shared callbacks and a try inside a catch remain rejected.
 HighIR can gather terminal branches of synchronous tries even when runtime
 resume blocks interrupt their address order or merge different post-catch
 states. An inner try stays intact with independently checked callback bodies
@@ -297,8 +312,13 @@ function and check all three continuations and reference writes across four
 caller stack layouts. Both installation modes and forced rebasing participate
 in the same-file runtime matrix. Additional Clang `-O0` and `-O1` fixtures
 exercise inner reference catches, outer value/catch-all search, all three
-continuations, negative controls and forced rebasing. The `-O0` loader proof
-also checks the exact adjacent ESP-to-EAX save and the personality thunk's four
+continuations, secondary throws and both helper and direct rethrows from a
+catch, negative controls and forced rebasing. The matrix uses the captured
+Microsoft x86 CRT DLL, including under Wine. Wine's built-in CRT is not the
+authority for catch-guard stack restoration;
+the same original and reconstructed files are also replayed on Windows.
+Runtime bytes and provider identity are bound into the evidence. The `-O0`
+loader proof also checks the exact adjacent ESP-to-EAX save and the personality thunk's four
 argument reads. Mutating those bytes, an IR dispatch edge or generated try and
 unwind rows must reject reconstruction. All fixtures
 link the captured MSVC CRT libraries. The CI replay executes the identical PE files on Windows. Other

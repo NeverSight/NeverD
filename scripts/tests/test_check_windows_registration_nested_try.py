@@ -8,6 +8,8 @@ from unittest.mock import patch
 from scripts import check_windows_registration_nested_try as runner
 from scripts import replay_windows_registration_nested_try as replay
 from scripts.tests import test_check_windows_registration_realigned_rewrite as fixtures
+from scripts.tests.test_windows_registration_runtime import runtime_fixture
+from scripts import windows_registration_runtime as runtime
 
 
 class NestedTryEvidenceTests(unittest.TestCase):
@@ -18,8 +20,23 @@ class NestedTryEvidenceTests(unittest.TestCase):
             result = fixtures.RealignedRewriteEvidenceTests().capture(root)
         result["evidence"] = "nested-try-source-reconstruction"
         result["proof_sha256"] = runner.file_digest(runner.PROOF)
+        result["rethrow_proof_sha256"] = runner.file_digest(runner.RETHROW_PROOF)
+        source = root / "runtime/x86/Microsoft.VC143.CRT" / runtime.NAME
+        source.parent.mkdir(parents=True)
+        source.write_bytes(runtime_fixture())
+        result["catch_search_runtime"] = runtime.capture_runtime(
+            root / "runtime", root / "runtime", "14.44")
         for case in result["cases"]:
             parent = root / case["case"]
+            (parent / runtime.NAME).write_bytes(runtime_fixture())
+            receipt_path = parent / "contract.json"
+            receipt = json.loads(receipt_path.read_text())
+            receipt["inline_rethrow"] = case["case"].startswith("inline-rethrow-")
+            receipt["rethrow_search"] = case["case"].startswith("rethrow-") or receipt["inline_rethrow"]
+            receipt["secondary_search"] = (case["case"].startswith("secondary-") or
+                                            receipt["rethrow_search"])
+            receipt_path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(receipt_path)
             (parent / "driver.obj").write_bytes(case["case"].encode())
             case["object_sha256"] = runner.file_digest(parent / "driver.obj")
             case["decompilation"] = {}
@@ -30,6 +47,8 @@ class NestedTryEvidenceTests(unittest.TestCase):
                     text += "Native x86 callback @\n" if language == "c" else "catch (\n"
                 if language == "cpp":
                     text += "try { try {\n"
+                    if receipt["inline_rethrow"]:
+                        text += "throw;\n"
                 source = parent / ("decompiled." + language)
                 source.write_text(text)
                 case["decompilation"][language] = runner.file_digest(source)
@@ -39,8 +58,8 @@ class NestedTryEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = self.capture(root)
-            self.assertEqual(len(replay.validate_capture(root, capture)), 32)
-            for mutation in range(15):
+            self.assertEqual(len(replay.validate_capture(root, capture)), 128)
+            for mutation in range(18):
                 changed = copy.deepcopy(capture)
                 case = changed["cases"][0]
                 if mutation == 0:
@@ -71,10 +90,21 @@ class NestedTryEvidenceTests(unittest.TestCase):
                     case["ir_sha256"] = "stale"
                 elif mutation == 13:
                     case["decompilation"].pop("cpp")
-                else:
+                elif mutation == 14:
                     changed["runtime_libraries"]["architecture"] = "x64"
+                elif mutation == 15:
+                    changed.pop("catch_search_runtime")
+                elif mutation == 16:
+                    changed["catch_search_runtime"]["sha256"] = "a" * 64
+                else:
+                    changed["rethrow_proof_sha256"] = "stale"
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     replay.validate_capture(root, changed)
+            runtime_path = root / runner.CASES[0] / runtime.NAME
+            runtime_path.write_bytes(runtime_fixture() + b"changed")
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
+            runtime_path.write_bytes(runtime_fixture())
             path = root / runner.CASES[0] / "cli-inplace-rebased.exe"
             data = bytearray(path.read_bytes())
             data[0x680] ^= 1
@@ -95,6 +125,40 @@ class NestedTryEvidenceTests(unittest.TestCase):
                 path.write_text(xml)
                 with self.subTest(xml=xml), self.assertRaises(ValueError):
                     replay.validate_capture(root, capture)
+
+    def test_rethrow_cannot_be_substituted_with_a_new_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            case = next(c for c in capture["cases"] if c["case"].startswith("rethrow-"))
+            path = root / case["case"] / "contract.json"
+            receipt = json.loads(path.read_text())
+            receipt["rethrow_search"] = False
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
+
+    def test_inline_rethrow_requires_its_argument_proof_and_spelling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root)
+            case = next(c for c in capture["cases"] if c["case"].startswith("inline-rethrow-"))
+            path = root / case["case"] / "contract.json"
+            receipt = json.loads(path.read_text())
+            receipt["inline_rethrow"] = False
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
+            receipt["inline_rethrow"] = True
+            path.write_text(json.dumps(receipt))
+            case["contract_sha256"] = runner.file_digest(path)
+            source = root / case["case"] / "decompiled.cpp"
+            source.write_text(source.read_text().replace("throw;", "throw 18;"))
+            case["decompilation"]["cpp"] = runner.file_digest(source)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
 
     def test_decompilation_keeps_both_tries_and_all_callback_returns(self):
         with tempfile.TemporaryDirectory() as directory:

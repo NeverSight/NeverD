@@ -124,25 +124,8 @@ void RegistrationStateSolver::dispatch(
   if (CxxCatch) {
     if (!charge(Source.Frame.cellCount() + 1))
       return;
-    CxxCatchContext Context{CxxCatch->first, CxxCatch->second, {}};
-    const int64_t SavedSlot = int64_t(*Chain.RegistrationOffset) - 4;
-    if (SavedSlot >= INT32_MIN)
-      Context.SavedStackOffset =
-          Source.Frame.load(int32_t(SavedSlot), 4).Offset;
-    if (Source.Parent && !Source.Callback)
-      Root.CxxCatchStacks.insert({Context});
-    else if (!Source.Parent && Source.Callback && !Source.OtherCallback &&
-             !Source.CxxCatchStacks.empty()) {
-      for (auto Stack : Source.CxxCatchStacks) {
-        if (!charge(Stack.size() + 1))
-          return;
-        Stack.push_back(Context);
-        Root.CxxCatchStacks.insert(std::move(Stack));
-      }
-    } else {
-      Root.CxxCatchStacks.insert({Context});
-      Root.Unknown = true;
-    }
+    if (!enterCxxCatch(Root, Source, CxxCatch->first, CxxCatch->second))
+      return;
     if (CheckRuntimeObjects) {
       const auto Object = CatchObjects.find(*CxxCatch);
       const auto &Catch =
@@ -153,7 +136,7 @@ void RegistrationStateSolver::dispatch(
         const auto &C = Object->second;
         const uint16_t SlotBytes = C.Reference ? 4 : uint16_t(C.ObjectSize);
         const auto SP =
-            Source.Frame.load(*Chain.RegistrationOffset - 4, 4).Offset;
+            Root.Frame.load(*Chain.RegistrationOffset - 4, 4).Offset;
         const auto Offset = Chain.cxxSourceFrameOffset(C.FrameOffset);
         const int64_t End = int64_t(Offset.value_or(0)) + SlotBytes;
         if (!SP || !Offset || Source.Unknown || Unknown || *Offset < *SP ||

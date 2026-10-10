@@ -34,8 +34,16 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
       if (Cache.size() == 256)
         return std::nullopt;
       std::optional<RegistrationCalleeFrameContract> Contract;
-      if (auto Leaf =
-              getCheckedX86RegistrationLeafCalleeABI(Image, Target, &Work)) {
+      if (auto Import =
+              getCheckedX86RegistrationThrowImportABI(Image, Target, &Work)) {
+        Contract.emplace();
+        Contract->CalleeKind =
+            RegistrationCalleeFrameContract::Kind::RuntimeRethrow;
+        Contract->Target = Target;
+        Contract->DoesNotReturn = true;
+        Contract->CodeRanges.push_back({Target, Target + 6});
+      } else if (auto Leaf = getCheckedX86RegistrationLeafCalleeABI(
+                     Image, Target, &Work)) {
         Contract.emplace();
         Contract->Target = Target;
         Contract->ECXReads = std::move(Leaf->ECXReads);
@@ -48,11 +56,15 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
                      Image, Target, &Work)) {
         Contract.emplace();
         Contract->CalleeKind =
-            RegistrationCalleeFrameContract::Kind::PrivateThrow;
+            Throw->IsRethrow
+                ? RegistrationCalleeFrameContract::Kind::PrivateRethrow
+                : RegistrationCalleeFrameContract::Kind::PrivateThrow;
         Contract->Target = Target;
         Contract->DoesNotReturn = true;
-        Contract->ThrownTypeVA = Throw->ThrowInfo.TypeDescriptorVA;
-        Contract->ThrownObjectSize = Throw->ThrowInfo.ObjectSize;
+        if (!Throw->IsRethrow) {
+          Contract->ThrownTypeVA = Throw->ThrowInfo.TypeDescriptorVA;
+          Contract->ThrownObjectSize = Throw->ThrowInfo.ObjectSize;
+        }
         Contract->ImageReads = std::move(Throw->ImageReads);
         Contract->ImageWrites = std::move(Throw->ImageWrites);
         Contract->CallerPCWrites = std::move(Throw->CallerPCWrites);

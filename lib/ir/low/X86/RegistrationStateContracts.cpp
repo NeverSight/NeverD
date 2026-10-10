@@ -23,17 +23,17 @@ bool RegistrationStateSolver::initializeContracts() {
     for (const auto &Callee : *Callees) {
       const bool Leaf =
           Callee.CalleeKind == RegistrationCalleeFrameContract::Kind::Leaf;
-      const bool Throw = Callee.CalleeKind ==
-                         RegistrationCalleeFrameContract::Kind::PrivateThrow;
+      const bool Throw = Callee.isThrow();
       if (!charge(1) || !Callee.Target || Callee.Target > UINT32_MAX ||
           Callee.StackPopBytes || (!Leaf && !Throw) ||
           Callee.DoesNotReturn != Throw ||
-          (Leaf && (Callee.ThrownTypeVA || Callee.ThrownObjectSize)) ||
-          (Throw &&
+          ((Leaf || Callee.isRethrow()) &&
+           (Callee.ThrownTypeVA || Callee.ThrownObjectSize)) ||
+          (Throw && (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty())) ||
+          (Throw && !Callee.isRethrow() &&
            (!Callee.ThrownTypeVA || Callee.ThrownTypeVA > UINT32_MAX ||
             !Callee.ThrownObjectSize ||
-            Callee.ThrownObjectSize > limits::kMaxRegistrationEHStateWork ||
-            !Callee.ECXReads.empty() || !Callee.ECXWrites.empty())) ||
+            Callee.ThrownObjectSize > limits::kMaxRegistrationEHStateWork)) ||
           !validObjects(Callee.ECXReads) || !validObjects(Callee.ECXWrites) ||
           !validImageRanges(Callee.ImageReads) ||
           !validImageRanges(Callee.ImageWrites) ||

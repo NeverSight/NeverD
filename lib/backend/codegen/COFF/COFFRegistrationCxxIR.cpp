@@ -324,18 +324,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     if (State.Levels.size() > 1)
       return rejectIR("C++ source call has ambiguous dispatch states");
     const int32_t Level = State.Levels.empty() ? -1 : State.Levels[0];
-    const bool HasTry = llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-      return State.CxxMinimumTryLevel <= Try.TryLow && Level >= Try.TryLow &&
-             Level <= Try.TryHigh;
-    });
+    const bool HasTry =
+        llvm::any_of(State.CxxSearches,
+                     [&](const auto &Search) { return Search.Level == Level; });
     const auto *Unwind = HasTry ? UnwindAt(Level) : nullptr;
     const auto &Contract = States.CalleeContracts[Effect.CalleeIndex];
-    if (State.CallbackOnly && Effect.DoesNotReturn &&
-        llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-          return Try.TryLow < State.CxxMinimumTryLevel && Level >= Try.TryLow &&
-                 Level <= Try.TryHigh;
-        }))
-      return rejectIR("C++ throwing catch needs a secondary search context");
     if (Unwind) {
       ++Protected;
       const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Call);
@@ -366,14 +359,16 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ IR gained an unproved external call");
   for (const auto &[Call, Receipt] : Result.Calls) {
     const auto *Callee = Call->getCalledFunction();
-    const bool Throw = Receipt.Contract.CalleeKind ==
-                       RegistrationCalleeFrameContract::Kind::PrivateThrow;
+    const bool Throw = Receipt.Contract.isThrow();
     const bool Borrow = Receipt.ObjectFrameOffset.has_value();
+    const bool RuntimeRethrow = Receipt.Contract.isRuntimeRethrow();
     if (!Callee || !Callee->isDeclaration() || !Callee->hasExternalLinkage() ||
         Callee->isVarArg() || Call->isInlineAsm() || Call->isTailCall() ||
-        Call->arg_size() != unsigned(Borrow) ||
-        Call->getCallingConv() !=
-            (Borrow ? llvm::CallingConv::X86_ThisCall : llvm::CallingConv::C) ||
+        Call->arg_size() != (RuntimeRethrow ? 2u : unsigned(Borrow)) ||
+        Call->getCallingConv() != (RuntimeRethrow
+                                       ? llvm::CallingConv::X86_StdCall
+                                   : Borrow ? llvm::CallingConv::X86_ThisCall
+                                            : llvm::CallingConv::C) ||
         Call->getCallingConv() != Callee->getCallingConv() ||
         Call->getFunctionType() != Callee->getFunctionType() ||
         (Borrow && !Call->getArgOperand(0)->getType()->isPointerTy()) ||
@@ -383,6 +378,17 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         (Receipt.Cleanup && !Call->doesNotThrow()) ||
         (!Receipt.Cleanup && Call->doesNotThrow()))
       return rejectIR("C++ preserved callee changed its physical call ABI");
+    if (RuntimeRethrow)
+      for (unsigned Index = 0; Index != 2; ++Index) {
+        const auto *Null = llvm::dyn_cast<llvm::ConstantPointerNull>(
+            Call->getArgOperand(Index));
+        // Even with the same stdcall convention and null values, inreg can
+        // change the physical argument locations and nonnull can introduce UB.
+        if (!Null || Null->getType()->getPointerAddressSpace() != 0 ||
+            Call->getAttributes().getParamAttrs(Index).hasAttributes() ||
+            Callee->getAttributes().getParamAttrs(Index).hasAttributes())
+          return rejectIR("C++ rethrow changed its runtime argument contract");
+      }
     auto Target = rewrite_source::getOriginalVA(*Callee);
     if (!Target)
       return Target.takeError();

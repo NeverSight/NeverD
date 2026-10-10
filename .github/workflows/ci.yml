@@ -2186,7 +2186,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=40 \
             install --yes --no-install-recommends lld wine wine32:i386
       - name: Verify runtime evidence admission
-        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_check_windows_registration_multiple_catch scripts.tests.test_check_windows_registration_nested_try scripts.tests.test_windows_registration_libraries -v
+        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_check_windows_registration_multiple_catch scripts.tests.test_check_windows_registration_nested_try scripts.tests.test_windows_registration_libraries scripts.tests.test_windows_registration_runtime -v
       - name: Fetch genuine MSVC C++ source inputs
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         uses: actions/download-artifact@v4
@@ -2276,6 +2276,9 @@ jobs:
           build-windows-eh/bin/NeverDWindowsRegistrationFrameTests --gtest_output=xml:build-windows-eh/evidence/frame.xml
           build-windows-eh/bin/NeverDWindowsEHMetadataEncoderTests --gtest_output=xml:build-windows-eh/evidence/metadata.xml
           build-windows-eh/bin/NeverDCOFFExceptionPatchTests --gtest_output=xml:build-windows-eh/evidence/planner.xml
+          build-windows-eh/bin/NeverDWindowsRegistrationRealignedTests \
+            --gtest_filter=RegistrationRethrowHighC.* \
+            --gtest_output=xml:build-windows-eh/evidence/rethrow-source.xml
       - name: Execute generated x86 callback frames with real exceptions
         run: |
           python scripts/check_windows_registration_frame.py \
@@ -2318,9 +2321,12 @@ jobs:
             --patch-binary build-windows-eh/bin/neverd \
             --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
             --output build-windows-eh/evidence/multiple-catch-rewrite
-      - name: Reconstruct compiler-generated nested x86 try searches
+      - name: Reconstruct nested x86 try, secondary throws and rethrows
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
         run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
           python scripts/check_windows_registration_nested_try.py \
             --test-binary build-windows-eh/bin/NeverDWindowsRegistrationRealignedTests \
             --patch-binary build-windows-eh/bin/neverd \
@@ -2374,7 +2380,7 @@ jobs:
           from pathlib import Path
           import xml.etree.ElementTree as ET
           root = Path('build-windows-eh/evidence')
-          for name in ('state', 'registration', 'stack', 'noreturn', 'frame', 'metadata', 'planner', 'ir-pe', 'corpus'):
+          for name in ('state', 'registration', 'stack', 'noreturn', 'frame', 'metadata', 'planner', 'rethrow-source', 'ir-pe', 'corpus'):
               result = ET.parse(root / (name + '.xml')).getroot()
               assert int(result.get('tests', '0')) > 0, name
               assert not result.findall('.//skipped'), name

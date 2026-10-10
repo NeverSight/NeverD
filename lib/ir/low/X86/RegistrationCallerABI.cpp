@@ -103,6 +103,22 @@ bool hasCallerCleanupRegistrationABI(
             for (const auto &State : Function.RegistrationStates->Blocks)
               if (State.BlockId == Block.Id && State.CallbackOnly)
                 return false;
+      if (UseReachability) {
+        const auto *Call = States->callFrameEffect(Op.Addr, Op.Seq);
+        const auto *Contract =
+            Call->CalleeIndex < States->CalleeContracts.size()
+                ? &States->CalleeContracts[Call->CalleeIndex]
+                : nullptr;
+        if (Contract && Contract->isRuntimeRethrow()) {
+          // A noreturn CRT dispatch has no return cleanup. Its two stack
+          // arguments and active catch are owned by the source call proof.
+          if (!Call->DoesNotReturn || Contract->Target != Call->Target ||
+              !getCheckedX86RegistrationThrowImportABI(Image, Call->Target,
+                                                       &Work))
+            return false;
+          continue;
+        }
+      }
       Targets.insert(Op.Inputs[0].Offset);
       if (Targets.size() > 256)
         return false;
