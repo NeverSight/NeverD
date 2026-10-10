@@ -3720,15 +3720,22 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
   using RecurrenceKey = std::tuple<AddressProvenanceVarKey, int, bool>;
   std::map<RecurrenceKey, RecurrencePathProof> RecurrenceMemo;
   uint64_t CycleVisits = 0;
+  // Backtrack one active path. Copying a tree of all ancestors for every
+  // recursive edge makes a bounded proof spend most of its time allocating
+  // and freeing path nodes on large, reconvergent SSA graphs.
+  std::set<Key> Active;
+  struct LeavePath {
+    std::set<Key> &Active;
+    Key Node;
+    ~LeavePath() { Active.erase(Node); }
+  };
   std::function<RecurrencePathProof(
       const MedVar &, const MedVar &,
-      const std::optional<PureReadOnlyBaseIdentity> &, int, std::set<Key>,
-      bool)>
+      const std::optional<PureReadOnlyBaseIdentity> &, int, bool)>
       proveRecurrence =
           [&](const MedVar &Start, const MedVar &Target,
               const std::optional<PureReadOnlyBaseIdentity> &ExpectedBase,
-              int Depth, std::set<Key> Seen,
-              bool DirectPhiConstant) -> RecurrencePathProof {
+              int Depth, bool DirectPhiConstant) -> RecurrencePathProof {
     if (Depth == 0)
       RecurrenceMemo.clear();
     if (!consume() || Depth > 32)
@@ -3754,10 +3761,12 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
       // another feasible arm, and every selectable arm must preserve the
       // pointer.  This admits nested identity PHIs such as outer <- inner <-
       // outer while still rejecting an unanchored cycle or a scalar/reset arm.
-      if (!Seen.insert(keyOf(Start)).second) {
+      const Key Node = keyOf(Start);
+      if (!Active.insert(Node).second) {
         ++CycleVisits;
         return {true, false};
       }
+      const LeavePath Leave{Active, Node};
 
       if (const PhiNode *Nested = lookupPhi(Start)) {
         bool SawFeasible = false;
@@ -3774,7 +3783,7 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
           }
           SawFeasible = true;
           RecurrencePathProof Arm =
-              proveRecurrence(NestedArg, Target, ExpectedBase, Depth + 1, Seen,
+              proveRecurrence(NestedArg, Target, ExpectedBase, Depth + 1,
                               /*DirectPhiConstant=*/NestedArg.isConst());
           AllPreserve &= Arm.PreservesPointer;
           ReachesTarget |= Arm.ReachesExactTarget;
@@ -3787,7 +3796,6 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         return {};
       if (auto Forwarded = pointerPreservingInput(*Def))
         return proveRecurrence(*Forwarded, Target, ExpectedBase, Depth + 1,
-                               Seen,
                                /*DirectPhiConstant=*/false);
       if (Def->Opcode == NdOp::LOAD) {
         std::vector<MedVar> Sources;
@@ -3797,7 +3805,7 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         bool ReachesTarget = false;
         for (const MedVar &Source : Sources) {
           RecurrencePathProof SourceProof =
-              proveRecurrence(Source, Target, ExpectedBase, Depth + 1, Seen,
+              proveRecurrence(Source, Target, ExpectedBase, Depth + 1,
                               /*DirectPhiConstant=*/false);
           AllPreserve &= SourceProof.PreservesPointer;
           ReachesTarget |= SourceProof.ReachesExactTarget;
@@ -3814,11 +3822,11 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         RecurrencePathProof Right;
         if (canCarry(Def->Inputs[0]))
           Left = proveRecurrence(Def->Inputs[0], Target, ExpectedBase,
-                                 Depth + 1, Seen, /*DirectPhiConstant=*/false);
+                                 Depth + 1, /*DirectPhiConstant=*/false);
         if (canCarry(Def->Inputs[1]))
-          Right = proveRecurrence(Def->Inputs[1], Target, ExpectedBase,
-                                  Depth + 1, Seen,
-                                  /*DirectPhiConstant=*/false);
+          Right =
+              proveRecurrence(Def->Inputs[1], Target, ExpectedBase, Depth + 1,
+                              /*DirectPhiConstant=*/false);
         const bool ReachesTarget =
             Left.ReachesExactTarget || Right.ReachesExactTarget;
         if (Left.PreservesPointer == Right.PreservesPointer)
@@ -3835,11 +3843,11 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         RecurrencePathProof Right;
         if (canCarry(Def->Inputs[0]))
           Left = proveRecurrence(Def->Inputs[0], Target, ExpectedBase,
-                                 Depth + 1, Seen, /*DirectPhiConstant=*/false);
+                                 Depth + 1, /*DirectPhiConstant=*/false);
         if (canCarry(Def->Inputs[1]))
-          Right = proveRecurrence(Def->Inputs[1], Target, ExpectedBase,
-                                  Depth + 1, Seen,
-                                  /*DirectPhiConstant=*/false);
+          Right =
+              proveRecurrence(Def->Inputs[1], Target, ExpectedBase, Depth + 1,
+                              /*DirectPhiConstant=*/false);
         const bool ReachesTarget =
             Left.ReachesExactTarget || Right.ReachesExactTarget;
         const bool StableOffset =
@@ -3851,12 +3859,12 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         return {Preserves, ReachesTarget};
       }
       if (selectPreservesPointerValues(*Def)) {
-        RecurrencePathProof TrueArm = proveRecurrence(
-            Def->Inputs[1], Target, ExpectedBase, Depth + 1, Seen,
-            /*DirectPhiConstant=*/false);
-        RecurrencePathProof FalseArm = proveRecurrence(
-            Def->Inputs[2], Target, ExpectedBase, Depth + 1, Seen,
-            /*DirectPhiConstant=*/false);
+        RecurrencePathProof TrueArm =
+            proveRecurrence(Def->Inputs[1], Target, ExpectedBase, Depth + 1,
+                            /*DirectPhiConstant=*/false);
+        RecurrencePathProof FalseArm =
+            proveRecurrence(Def->Inputs[2], Target, ExpectedBase, Depth + 1,
+                            /*DirectPhiConstant=*/false);
         return {TrueArm.PreservesPointer && FalseArm.PreservesPointer,
                 TrueArm.ReachesExactTarget || FalseArm.ReachesExactTarget};
       }
@@ -3865,10 +3873,10 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         if (!isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
           return {};
         RecurrencePathProof TrueArm =
-            proveRecurrence(ArmT, Target, ExpectedBase, Depth + 1, Seen,
+            proveRecurrence(ArmT, Target, ExpectedBase, Depth + 1,
                             /*DirectPhiConstant=*/false);
         RecurrencePathProof FalseArm =
-            proveRecurrence(ArmF, Target, ExpectedBase, Depth + 1, Seen,
+            proveRecurrence(ArmF, Target, ExpectedBase, Depth + 1,
                             /*DirectPhiConstant=*/false);
         return {TrueArm.PreservesPointer && FalseArm.PreservesPointer,
                 TrueArm.ReachesExactTarget || FalseArm.ReachesExactTarget};
@@ -3884,13 +3892,13 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
   const std::optional<PureReadOnlyBaseIdentity> NoExpectedBase;
   auto reachesExact = [&](const MedVar &Start, const MedVar &Target) {
     RecurrencePathProof Proof =
-        proveRecurrence(Start, Target, NoExpectedBase, /*Depth=*/0, {},
+        proveRecurrence(Start, Target, NoExpectedBase, /*Depth=*/0,
                         /*DirectPhiConstant=*/Start.isConst());
     return Proof.PreservesPointer && Proof.ReachesExactTarget;
   };
 
   RecurrencePathProof ExactProof =
-      proveRecurrence(Arg, Phi.Output, NoExpectedBase, /*Depth=*/0, {},
+      proveRecurrence(Arg, Phi.Output, NoExpectedBase, /*Depth=*/0,
                       /*DirectPhiConstant=*/Arg.isConst());
   if (!Exhausted && ExactProof.PreservesPointer &&
       ExactProof.ReachesExactTarget)
@@ -3914,7 +3922,7 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         break;
       }
       RecurrencePathProof Shape =
-          proveRecurrence(InitArg, Phi.Output, NoExpectedBase, /*Depth=*/0, {},
+          proveRecurrence(InitArg, Phi.Output, NoExpectedBase, /*Depth=*/0,
                           /*DirectPhiConstant=*/InitArg.isConst());
       if (Shape.ReachesExactTarget)
         continue;
@@ -3928,7 +3936,7 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
     }
     if (InitializersValid && ExpectedBase) {
       RecurrencePathProof Rematerialized =
-          proveRecurrence(Arg, Phi.Output, ExpectedBase, /*Depth=*/0, {},
+          proveRecurrence(Arg, Phi.Output, ExpectedBase, /*Depth=*/0,
                           /*DirectPhiConstant=*/Arg.isConst());
       if (!Exhausted && Rematerialized.PreservesPointer &&
           Rematerialized.ReachesExactTarget)
