@@ -108,6 +108,20 @@ sequence. `LowIR -> MedIR` is shared. Structured decompilation then uses
 `MedIR -> LLVM IR` route. In particular, patch and lift modes deliberately skip
 HighIR.
 
+Call setup split across ordinary blocks is proved by the shared MedIR ABI
+pass. It intersects exact stack-store identities across every predecessor,
+stops at calls, aliasing writes and independent or exceptional roots, and
+publishes nothing after exhausting its work budget. Selecting one function
+does not change its local callees' argument order: bounded, complete callee
+bodies can supply ABI evidence without becoming output definitions. Register
+pair return evidence is also consumed by HighIR, so a packed call result and
+its definition retain both integer carriers.
+
+Debug record names provide C spelling independently of by-value layout.
+Win64 class-return projection is target-specific; a DWARF name on another
+platform cannot create a hidden result parameter. Runtime-language detection
+uses exported names as well as symbols and imports.
+
 Windows registration-chain EH has separate source and generated contracts.
 The COFF loader owns the checked SEH/FuncInfo records. LowIR's
 `analyzeRegistrationStates` owns reaching levels, callback roots and chain

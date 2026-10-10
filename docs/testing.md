@@ -2102,6 +2102,22 @@ constructor order against independent C observations at O0/O2. Immutable
 scan tests additionally check lossless address carriers and folding a scan's
 exit count into successor PHI operands.
 
+`MedABIPass.SplitStackArgumentSetupRequiresEveryIncomingPath` checks all twelve
+architecture/format cells, block-order changes, conflicting or missing stores,
+partial overwrites, opaque calls, aliases, provenance and independent/EH roots.
+`I386CallContract.SelectingTheCallerPreservesTheCalleeArgumentContract` compares
+selected and whole-function output, cdecl and register arguments, direct and
+forwarding callees, HighIR and LLVM, and default/NoOpt in all three formats.
+Runtime stack-probe audits require the exact platform and stated name evidence.
+
+`X86_64_DebugRecords.RecordsCCannotSpellKeepMachineTypes` compiles and executes
+the generated C at O0/O2: opaque record pointers retain their names, by-value
+arguments keep their carriers, and the callee returns both words used by its
+caller. `RegistrationState.DeadFrameValuesDoNotAccumulateAcrossJoins` checks
+bounded sparse state and overlapping pointer taint in all three frame spaces.
+`LanguageRuntimeDetection.ExportsProvideTheSameLanguageEvidenceAsSymbols`
+checks exact runtime names, C++ decorations and Rust prefixes in exports.
+
 `MedCxxContinuationFrame` verifies that catch and normal paths address the same
 local, rejects inconsistent unwind/stack effects and ordinary roots, and checks
 the public MSVC nested catch's parameter count and resume labels. The broader
