@@ -174,6 +174,8 @@ READ／WRITE／IOCTL 可声明 `interrupt_events`，每项指定 `after_100ns`�
 
 `KeFlushIoBuffers` 验证有效的已锁定／非分页 MDL。模型平台具有缓存一致性，因此 ReadOperation 和 DmaOperation 的任意取值均无需额外缓存副本；此调用不释放 DMA 所有权，也不替代 FlushAdapterBuffers。[通道场景](../examples/driver-dma-channel-scenario.json)运行原创 `driver_wdm_dma_channel.c`，执行两次 MapTransfer、一个跨页设备事务、独立声明的 IRQ/DPC、整体刷新及确切寄存器释放。真实普通／CFG 镜像使用 `NEVERD_WDM_DMA_CHANNEL_FIXTURE` 和 `NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE`。
 
+由加载器拥有的镜像区间支持的系统 MDL 别名会映射所描述的完整 4 KiB 页。`ByteOffset` 和 `ByteCount` 仍表示逻辑缓冲区范围，并不是页内 CPU 权限边界。范围之外的镜像字节与原始视图共享，保护和解除映射则作用于完整映射。对象存储仍保留模型对填充区的范围限制。
+
 `KernelPhysicalMemory` 为现有 RAM 分配最多 16384 个、每页 4096 字节的模型物理页身份。CPU 虚拟地址、物理页身份和设备逻辑地址彼此区分。已构建 MDL 的 PFN 数组以只读方式暴露这些共享身份，未构建描述符没有可用 PFN。相邻小分配可以共享 PFN，但字节范围和生命周期仍独立。公共缓冲区、池和请求缓冲区使用 `GuestMemory` 已有的同一份字节，不增加 DMA 数据副本。有效 SG 映射固定确切数据范围及描述符；完成、池／MDL 释放和拆除在退休存储前拒绝尚存依赖。解除直接 MDL 映射只撤销 CPU 系统映射，DMA 仍可访问锁定的底层 RAM。`DmaWritable` 将写锁定契约与 CPU 映射权限分开记录：设备写入要求直接 READ／OUT_DIRECT 或可写非分页存储；WRITE／IN_DIRECT 不会因为 CPU 映射可写就取得该许可。
 
 `GetScatterGatherList` 按 MDL 原始范围验证 CurrentVa／Length，并在现有底层 RAM 上生成逻辑页片段。映射寄存器可用时，真实的四参数 void `AdapterListControl` 在 API 返回前内嵌执行；否则接纳过程保留数据／描述符，并为 PDO 的 FIFO 预留回调，直到资源释放。此范围没有 StartIo 所有权，因此回调第二个 IRP 参数为 NULL。回调返回不会释放映射。`PutScatterGatherList` 可以在回调内执行；Put 后驱动可以完成请求并释放最后一个适配器，而回调续接和设备引用持续到返回。有效 SG 映射期间，CPU 必须先 Put 才能访问数据；仍在等待映射寄存器的回调尚未把字节交给设备独占。释放公共缓冲区必须匹配原适配器、长度、逻辑地址和 CPU 地址。逻辑地址在整个会话中永不复用，重启也不例外。缺少真实生产者的资源等待会明确停滞，不虚构完成或截止时间。
@@ -465,7 +467,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v95`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v96`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 

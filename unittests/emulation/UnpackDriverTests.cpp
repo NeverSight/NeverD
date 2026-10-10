@@ -337,6 +337,12 @@ TEST_P(UnpackDriver, SchedulingSlicesPreserveInvocationAndTransferIdentity) {
       << WithoutWriteLog->Diagnostic;
   EXPECT_EQ(WithoutWriteLog->EntryRVA, Unscheduled->EntryRVA);
   EXPECT_EQ(WithoutWriteLog->Image, Unscheduled->Image);
+  FewEvents.Process.Contract = ExecutionContract::Legacy;
+  auto Legacy = unpackFile(Input, FewEvents);
+  ASSERT_TRUE(bool(Legacy)) << llvm::toString(Legacy.takeError());
+  ASSERT_EQ(Legacy->Outcome, UnpackOutcome::Unpacked) << Legacy->Diagnostic;
+  EXPECT_EQ(Legacy->EntryRVA, Unscheduled->EntryRVA);
+  EXPECT_EQ(Legacy->Image, Unscheduled->Image);
 }
 
 TEST_P(UnpackDriver, ObserverFailuresAreAPIErrors) {

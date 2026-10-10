@@ -1450,6 +1450,34 @@ TEST_F(KernelImageMDL, WriteAliasesModifyTheExistingImageAndReleaseTheirView) {
   EXPECT_TRUE(take(Model->hasUnpackDependencies()));
 }
 
+TEST_F(KernelImageMDL, ImageAliasesExposeCompleteDescribedPages) {
+  constexpr uint64_t Page = profile::PageSize;
+  const auto Address = ImageBase + Page - 7;
+  const auto MDL = call("IoAllocateMdl", {Address, 11, 0, 0, 0});
+  call("MmProbeAndLockPages", {MDL, KernelMode, IoWriteAccess});
+  const auto Alias = call("MmGetSystemAddressForMdlSafe",
+                          {MDL, NormalPagePriority | MdlMappingNoExecute});
+  const auto Base = Alias & ~(Page - 1);
+  ASSERT_NE(Alias, 0u);
+  EXPECT_EQ(Alias - Base, Page - 7);
+  success(Model->validateGuestAccess(Base, 2 * Page, false));
+  for (const auto Offset : {uint64_t(0), Page - 8, Page + 4, 2 * Page - 1}) {
+    put(Base + Offset, 0x79, 1);
+    EXPECT_EQ(get(ImageBase + Offset, 1), 0x79u);
+  }
+  EXPECT_EQ(get(MDL + MDLByteCountOffset, 4), 11u);
+  EXPECT_EQ(get(MDL + MDLByteOffsetOffset, 4), Page - 7);
+  EXPECT_FALSE(take(Memory->canAccess(Base - 1, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(Base + 2 * Page, 1, Read)));
+  call("MmProtectMdlSystemAddress", {MDL, PageReadOnly});
+  EXPECT_FALSE(take(Memory->canAccess(Base, 2 * Page, Write)));
+  rejected(Model->validateGuestAccess(Base, 1, true), "read-only protection");
+  call("MmUnlockPages", {MDL});
+  EXPECT_FALSE(take(Memory->canAccess(Base, 1, Read)));
+  EXPECT_FALSE(take(Memory->canAccess(Base + 2 * Page - 1, 1, Read)));
+  call("IoFreeMdl", {MDL});
+}
+
 TEST_F(KernelImageMDL, WritableAliasesKeepReadOnlyImageViewsProtected) {
   for (const auto Operation : {IoWriteAccess, IoModifyAccess}) {
     SCOPED_TRACE(Operation);
