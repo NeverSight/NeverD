@@ -31115,6 +31115,44 @@ TEST(HighCPointerAddresses, TryExitToNextStatementKeepsCodeAfterTry) {
   EXPECT_NE(Source.find("L_140001080:"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, ExceptTailUsesOnlyItsPrintedContinuation) {
+  for (unsigned Variant : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Variant);
+    const va_t Next = 0x140001050;
+    HighFunc Func;
+    Func.Name = "except_tail";
+    Func.Entry = 0x140001000;
+    Func.ReturnType = NdType::makeVoid();
+    auto Try = exceptTry(
+        {callStmt("Probe", 0x140002000, {})},
+        {callStmt("Recover", 0x140002100, {}), gotoStmt(0x14000104E, Next)});
+    if (Variant == 2) {
+      Try.EHClauses.front().Kind = HighEHClauseKind::SEHFinally;
+      Try.EHClauses.front().FilterOrActionVA = 0x14000104C;
+    }
+    Func.Body.push_back(std::move(Try));
+    if (Variant == 1)
+      Func.Body.push_back(callStmt("Intervening", 0x140002300, {}));
+    if (Variant == 3) {
+      HighStmt Anchor;
+      Anchor.Kind = StmtKind::Block;
+      Anchor.Addr = 0x14000104F;
+      Func.Body.push_back(std::move(Anchor));
+    }
+    auto Work = callStmt("Work", 0x140002200, {});
+    Work.Addr = Next;
+    Func.Body.push_back(std::move(Work));
+    const std::string Source = emitFunctions({Func});
+    EXPECT_EQ(Source.find("goto L_140001050;") != std::string::npos,
+              Variant == 1 || Variant == 2)
+        << Source;
+    if (Variant == 1 || Variant == 2)
+      EXPECT_NE(Source.find("L_140001050:"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("Work();"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("Recover();"), std::string::npos) << Source;
+  }
+}
+
 TEST(HighCPointerAddresses, ExceptArmCapturesTheExceptionCode) {
   // A handler that stores its exception code reads the value captured at the
   // top of the __except arm, where GetExceptionCode() is valid.

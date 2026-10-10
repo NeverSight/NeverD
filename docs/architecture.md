@@ -1880,6 +1880,16 @@ including storage reached through opaque pointers; unrelated globals do not
 expand the selected function's scope. The exact AArch64
 BFMMLA intrinsic retains native float/bfloat lanes and emits the ACLE operation;
 its matrix arithmetic is not approximated with scalar multiply/add.
+
+Selected LLVMC output follows actual constant references from its body through
+global initializers. This closure includes optimizer-created lookup tables and
+function-address providers, without following an unselected function's body.
+Storage and provider declarations precede initializers, and image objects use
+the same declarations without duplicate backing arrays. HighC clause-exit
+elision uses final statement visibility: an except tail may fall through to
+its exact printed continuation, while intervening effects and finally exits
+retain their transfers.
+
 Inline and materialized LLVM GEP expressions share data-layout-derived byte
 offsets, including nested aggregates and signed dynamic indices. Ordinary raw
 scalar accesses with insufficient alignment use Clang/GCC `aligned(1)`,

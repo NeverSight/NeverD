@@ -128,17 +128,22 @@ bool isNoReturnCallStmt(const HighStmt &Stmt) {
 
 using TryExitTest = llvm::function_ref<bool(const HighStmt &)>;
 
+bool hasFallthroughExceptClause(const HighStmt &Stmt) {
+  return Stmt.Kind == StmtKind::SEHTry && Stmt.EHIsReducible &&
+         Stmt.EHClauses.size() == 1 && Stmt.EHClauseBodies.size() == 1 &&
+         Stmt.EHClauses.front().Kind == HighEHClauseKind::SEHExcept;
+}
+
 /// End of the statements a try body prints.  A trailing goto that only falls
 /// through to the code after the try is left out (\p LeftOut).  Goto-target
 /// collection, the try writer and the exit analysis all use this, so a goto
 /// that is not printed never counts as an exit and never registers a label.
-size_t printedTryBodyEnd(const HighCAnalysisState &State, TryExitTest LeftOut,
+size_t printedTryBodyEnd(TryExitTest Hidden, TryExitTest LeftOut,
                          const std::vector<HighStmt> &Body) {
   size_t End = Body.size();
   while (End > 0) {
     const HighStmt &Last = Body[End - 1];
-    if (State.DeadStmts.count(&Last) || Last.Kind == StmtKind::Nop ||
-        LeftOut(Last)) {
+    if (Hidden(Last) || LeftOut(Last)) {
       --End;
       continue;
     }
@@ -147,33 +152,38 @@ size_t printedTryBodyEnd(const HighCAnalysisState &State, TryExitTest LeftOut,
   return End;
 }
 
-bool stmtsAlwaysExit(const HighCAnalysisState &State, TryExitTest LeftOut,
+bool stmtsAlwaysExit(TryExitTest Hidden, TryExitTest LeftOut,
                      const std::vector<HighStmt> &Stmts, size_t End);
 
-bool stmtAlwaysExit(const HighCAnalysisState &State, TryExitTest LeftOut,
+bool stmtAlwaysExit(TryExitTest Hidden, TryExitTest LeftOut,
                     const HighStmt &Stmt) {
-  if (State.DeadStmts.count(&Stmt))
+  if (Hidden(Stmt))
     return false;
   switch (Stmt.Kind) {
   case StmtKind::Return:
   case StmtKind::Goto:
     return true;
   case StmtKind::IfElse:
-    return stmtsAlwaysExit(State, LeftOut, Stmt.Body, Stmt.Body.size()) &&
-           stmtsAlwaysExit(State, LeftOut, Stmt.ElseBody, Stmt.ElseBody.size());
+    return stmtsAlwaysExit(Hidden, LeftOut, Stmt.Body, Stmt.Body.size()) &&
+           stmtsAlwaysExit(Hidden, LeftOut, Stmt.ElseBody,
+                           Stmt.ElseBody.size());
   case StmtKind::SEHTry:
   case StmtKind::CxxTry:
   case StmtKind::ItaniumTry:
     // Without its trailing goto, the printed body falls through to the next
     // statement.
-    if (!stmtsAlwaysExit(State, LeftOut, Stmt.Body,
-                         printedTryBodyEnd(State, LeftOut, Stmt.Body)))
+    if (!stmtsAlwaysExit(Hidden, LeftOut, Stmt.Body,
+                         printedTryBodyEnd(Hidden, LeftOut, Stmt.Body)))
       return false;
     if (Stmt.EHClauseBodies.empty())
       return true;
-    for (const auto &ClauseBody : Stmt.EHClauseBodies)
-      if (!stmtsAlwaysExit(State, LeftOut, ClauseBody, ClauseBody.size()))
+    for (const auto &ClauseBody : Stmt.EHClauseBodies) {
+      if (!stmtsAlwaysExit(Hidden, LeftOut, ClauseBody,
+                           hasFallthroughExceptClause(Stmt)
+                               ? printedTryBodyEnd(Hidden, LeftOut, ClauseBody)
+                               : ClauseBody.size()))
         return false;
+    }
     return true;
   default:
     return isNoReturnCallStmt(Stmt);
@@ -200,13 +210,13 @@ const HighExpr *returnedCall(const HighExpr &E) {
   return nullptr;
 }
 
-bool stmtsAlwaysExit(const HighCAnalysisState &State, TryExitTest LeftOut,
+bool stmtsAlwaysExit(TryExitTest Hidden, TryExitTest LeftOut,
                      const std::vector<HighStmt> &Stmts, size_t End) {
   for (size_t I = End; I > 0; --I) {
     const HighStmt &Stmt = Stmts[I - 1];
-    if (State.DeadStmts.count(&Stmt) || Stmt.Kind == StmtKind::Nop)
+    if (Hidden(Stmt))
       continue;
-    return stmtAlwaysExit(State, LeftOut, Stmt);
+    return stmtAlwaysExit(Hidden, LeftOut, Stmt);
   }
   return false;
 }
@@ -1315,7 +1325,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       {
         const bool SavedHandler = InEHClauseBody;
         InEHClauseBody = true;
-        writeStmtsIsolated(Stmt.EHClauseBodies.front(), Indent + 1);
+        writeTryBody(Stmt.EHClauseBodies.front(), Indent + 1);
         InEHClauseBody = SavedHandler;
       }
       if (Stmt.EHClauseBodies.front().empty()) {
@@ -2268,7 +2278,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
     AfterNoReturn =
         isNoReturnCallStmt(S) ||
         stmtAlwaysExit(
-            Analysis,
+            [this](const HighStmt &Stmt) { return stmtHiddenFromC(Stmt); },
             [this](const HighStmt &Exit) { return isFallthroughTryExit(Exit); },
             S);
   }
@@ -2298,7 +2308,7 @@ void HighCWriter::writeTryBodyUnisolated(const std::vector<HighStmt> &Stmts,
   writeStmts(
       Stmts, Indent,
       printedTryBodyEnd(
-          Analysis,
+          [this](const HighStmt &Stmt) { return stmtHiddenFromC(Stmt); },
           [this](const HighStmt &Exit) { return isFallthroughTryExit(Exit); },
           Stmts));
 }
@@ -2326,8 +2336,7 @@ HighCWriter::fallthroughAddresses(const std::vector<HighStmt> &Stmts,
       Addresses.push_back(Next.Addr);
     if (Next.Kind == StmtKind::While && Next.LoopHeaderAddr != 0)
       Addresses.push_back(Next.LoopHeaderAddr);
-    if (Next.Kind == StmtKind::Nop || Analysis.DeadStmts.count(&Next) ||
-        (Next.Kind == StmtKind::Block && Next.Body.empty()))
+    if (stmtHiddenFromC(Next))
       continue;
     return Addresses;
   }
@@ -2372,14 +2381,14 @@ void HighCWriter::decideTryExits(const std::vector<HighStmt> &Stmts,
     const bool IsTry = S.Kind == StmtKind::SEHTry ||
                        S.Kind == StmtKind::CxxTry ||
                        S.Kind == StmtKind::ItaniumTry;
-    if (IsTry) {
+    auto RecordExits = [&](const std::vector<HighStmt> &Body) {
       // The first goto of the trailing run is the one that runs.  It can be
       // left out only when it lands where the try falls through anyway; a
       // copy of it anywhere else that cannot stays printed with its label.
       std::vector<const HighStmt *> Run;
-      for (size_t K = S.Body.size(); K > 0; --K) {
-        const HighStmt &Last = S.Body[K - 1];
-        if (Last.Kind == StmtKind::Nop || Analysis.DeadStmts.count(&Last))
+      for (size_t K = Body.size(); K > 0; --K) {
+        const HighStmt &Last = Body[K - 1];
+        if (stmtHiddenFromC(Last))
           continue;
         if (Last.Kind != StmtKind::Goto || isLabelAddress(Last.Addr))
           break;
@@ -2390,7 +2399,13 @@ void HighCWriter::decideTryExits(const std::vector<HighStmt> &Stmts,
       for (const HighStmt *Exit : Run)
         (FallsThrough ? FallthroughTryExits : Kept)
             .insert({Exit->Addr, Exit->GotoTarget});
-    }
+    };
+    if (IsTry)
+      RecordExits(S.Body);
+    // An except clause resumes after its try. A finally clause can also run
+    // during unwinding, so its explicit transfers cannot borrow that exit.
+    if (hasFallthroughExceptClause(S))
+      RecordExits(S.EHClauseBodies.front());
     // A loop body ends by returning to its header; other arms end where
     // their statement does.
     std::vector<va_t> BodyEnd = Next;
@@ -3503,13 +3518,15 @@ void HighCWriter::hideUnusedFrameSlotWrites(const HighFunc &Func) {
 void HighCWriter::collectGotoTargets(const std::vector<HighStmt> &Stmts,
                                      bool TryBody) {
   // A try body's trailing goto that is not printed needs no label.
-  const size_t End = TryBody ? printedTryBodyEnd(
-                                   Analysis,
-                                   [this](const HighStmt &Exit) {
-                                     return isFallthroughTryExit(Exit);
-                                   },
-                                   Stmts)
-                             : Stmts.size();
+  const size_t End =
+      TryBody
+          ? printedTryBodyEnd(
+                [this](const HighStmt &Stmt) { return stmtHiddenFromC(Stmt); },
+                [this](const HighStmt &Exit) {
+                  return isFallthroughTryExit(Exit);
+                },
+                Stmts)
+          : Stmts.size();
   for (size_t I = 0; I < Stmts.size(); ++I) {
     const HighStmt &S = Stmts[I];
     if (S.Kind == StmtKind::Goto && I < End && S.GotoTarget != 0 &&
@@ -3523,8 +3540,8 @@ void HighCWriter::collectGotoTargets(const std::vector<HighStmt> &Stmts,
     for (auto &C : S.Cases)
       collectGotoTargets(C.Body, false);
     collectGotoTargets(S.DefaultBody, false);
-    for (auto &ClauseBody : S.EHClauseBodies)
-      collectGotoTargets(ClauseBody, false);
+    for (const auto &ClauseBody : S.EHClauseBodies)
+      collectGotoTargets(ClauseBody, hasFallthroughExceptClause(S));
   }
 }
 

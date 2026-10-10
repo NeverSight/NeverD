@@ -3531,7 +3531,8 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
   // integers and x87 have their separate exact-byte paths.
   const bool Integer = Type->isIntegerTy(8) || Type->isIntegerTy(16) ||
                        Type->isIntegerTy(32) || Type->isIntegerTy(64) ||
-                       Type->isIntegerTy(128);
+                       Type->isIntegerTy(128) || Type->isIntegerTy(256) ||
+                       Type->isIntegerTy(512);
   if (!Integer && !Type->isFloatTy() && !Type->isDoubleTy() &&
       !Type->isHalfTy() && !Type->isBFloatTy() && !Type->isPointerTy())
     return false;

@@ -6259,6 +6259,17 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   for (const auto &Name : ParamNames)
     MemoryIdentifiers.allocate(Name);
 
+  // Frame projection can hide an ordinary-edge PHI copy after a try. Settle
+  // clause exits against the statements that will actually be printed, while
+  // retaining all previously required labels as conservative entry evidence.
+  FallthroughTryExits.clear();
+  {
+    std::set<std::pair<va_t, va_t>> Kept;
+    decideTryExits(Func.Body, {}, Kept);
+    for (const auto &Exit : Kept)
+      FallthroughTryExits.erase(Exit);
+  }
+  collectGotoTargets(Func.Body);
   // Render the body first: a name the declaration pass expected to be
   // forwarded or dead may still be printed, and it must be declared.
   std::string Body;

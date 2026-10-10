@@ -359,6 +359,19 @@ checks with `UseUnalignedPointers`. `HighCIntegerWidths.*`,
 `HighCPointerAddresses.*`, `HighCStoreForwarding.*`, `LLVMCValues.*`, and the
 frame-memory, atomic and segmented-memory suites cover the surrounding paths.
 
+`LLVMCValues.SelectedFunctionKeeps*SynthesizedTableStorage` compiles and executes
+selected lookup-table output at O0/O2 for x86, x64, ARM and AArch64 source
+profiles across ELF, COFF and Mach-O. Execution uses host scalar C for 64-bit
+layouts and freestanding i386 C for 32-bit layouts on Linux x86 hosts; other
+hosts explicitly skip the i386 execution test. Initializer-dependency coverage
+retains forward-referenced storage and function providers while excluding
+unrelated globals. `HighCPointerAddresses.ExceptTailUsesOnlyItsPrintedContinuation`
+checks except fallthrough, live intervening effects and finally transfers;
+the x86 SEH probe also checks shared result-slot identity after frame projection.
+`LLVMCValues.WideConstantsPreserveEveryStoredByte` executes unaligned i256/i512
+loads and stores at O0/O2 with undefined-behavior traps, checking every byte and
+the surrounding sentinels. Widths beyond the supported C carrier fail explicitly.
+
 ```sh
 cmake --build build-release --target NeverDCMemoryCopyTests \
   NeverDLLVMCValueTests NeverDLLVMCFrameMemoryTests \
