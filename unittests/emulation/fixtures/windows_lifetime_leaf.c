@@ -13,7 +13,7 @@ __declspec(dllimport) void *HeapAlloc(void *, DWORD, ULONG_PTR);
 __declspec(dllimport) int HeapFree(void *, DWORD, void *);
 __declspec(dllimport) void *LoadLibraryA(const char *);
 __declspec(dllimport) int FreeLibrary(void *);
-static DWORD FLSIndex, FLSChild;
+static DWORD FLSIndex, FLSChild, FLSAdded;
 static void *FLSModule;
 __declspec(dllexport) void PrepareFLSUnload(void) {
   FLSModule = LoadLibraryA("life-cleanup.dll");
@@ -32,9 +32,10 @@ static void flsChild(void *Value) {
 static void flsCleanup(void *Value) {
   CHECK(Value == (void *)Seed && FlsGetValue(FLSIndex) == Value);
   CHECK(FlsSetValue(FLSIndex, (void *)(Seed + 1)));
-  FLSChild = FlsAlloc((void *)flsChild);
-  CHECK(FLSChild != 0xffffffffU && FLSChild != FLSIndex);
   CHECK(FlsSetValue(FLSChild, (void *)(Seed + 2)));
+  FLSAdded = FlsAlloc((void *)flsChild);
+  CHECK(FLSAdded != 0xffffffffU && FLSAdded > FLSChild);
+  CHECK(FlsSetValue(FLSAdded, (void *)(Seed + 3)));
   trace(LeafRole, FLSKind, 0, 0);
   if (FLSModule)
     CHECK(FreeLibrary(FLSModule));
@@ -61,6 +62,8 @@ int dllEntry(void *Image, DWORD Reason, void *Reserved) {
     if (mode() == FLSExitMode || mode() == FLSUnloadMode) {
       FLSIndex = FlsAlloc((void *)flsCleanup);
       CHECK(FLSIndex != 0xffffffffU && FlsSetValue(FLSIndex, (void *)Seed));
+      FLSChild = FlsAlloc((void *)flsChild);
+      CHECK(FLSChild != 0xffffffffU && FLSChild > FLSIndex);
     }
     if (mode() == ExitLeafEntryMode)
       ExitProcess(ExitStatus);
@@ -69,8 +72,10 @@ int dllEntry(void *Image, DWORD Reason, void *Reserved) {
   if (Reason == DetachReason &&
       (mode() == FLSExitMode || mode() == FLSUnloadMode)) {
     CHECK(!FlsGetValue(FLSIndex) && !FlsGetValue(FLSChild));
+    CHECK(FlsGetValue(FLSAdded) == (void *)(Seed + 3));
     CHECK(FlsSetValue(FLSIndex, 0) && FlsSetValue(FLSChild, 0));
-    CHECK(FlsFree(FLSIndex) && FlsFree(FLSChild));
+    CHECK(FlsSetValue(FLSAdded, 0));
+    CHECK(FlsFree(FLSIndex) && FlsFree(FLSChild) && FlsFree(FLSAdded));
   }
   return 0;
 }

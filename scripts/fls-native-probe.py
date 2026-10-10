@@ -61,3 +61,31 @@ for mode in ['F', 'N', 'E', 'S', 'G', 'R', 'H', 'T']:
         (out / 'partial-observations.json').write_text(json.dumps(rows, indent=2) + '\n')
 (out / 'observations.json').write_text(json.dumps(rows, indent=2) + '\n')
 assert all(row['exit_code'] == 43 and not row['stderr_hex'] for row in rows)
+
+# Run the independent production exit fixture before waiting for an engine build.
+system_source = root / 'unittests/emulation/fixtures/windows_system.c'
+system_commands = [
+    [compiler, '--target=x86_64-pc-windows-msvc', '-std=c11', '-ffreestanding',
+     '-fno-builtin', '-fno-stack-protector', '-fno-vectorize', '-fno-slp-vectorize',
+     '-O1', '-c', str(system_source), '-o', str(out / 'system.obj')],
+    [linker, '/nodefaultlib', '/entry:entry', '/subsystem:console', '/machine:x64',
+     '/base:0x140000000', '/timestamp:0', str(out / 'system.obj'), 'kernel32.lib',
+     '/out:' + str(out / 'system.exe')],
+]
+for index, argv in enumerate(system_commands):
+    q = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    (out / ('system-build-' + str(index) + '.log')).write_bytes(q.stdout)
+    q.check_returncode()
+system_rows = []
+for mode in ['f', 'r', 'u', 'g', 't']:
+    for repeat in range(2):
+        q = subprocess.run([str(out / 'system.exe'), '!' + mode],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        expected = b''.join(struct.pack('<II', tag, ord(mode)) for tag in [1, 2, 3])
+        system_rows.append(dict(mode=mode, repeat=repeat, exit_code=q.returncode,
+                                stdout_hex=q.stdout.hex(), stderr_hex=q.stderr.hex(),
+                                expected_hex=expected.hex()))
+(out / 'system-observations.json').write_text(json.dumps(dict(
+    commands=system_commands, results=system_rows), indent=2) + '\n')
+assert all(r['exit_code'] == 43 and not r['stderr_hex'] and
+           r['stdout_hex'] == r['expected_hex'] for r in system_rows)

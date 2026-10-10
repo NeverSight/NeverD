@@ -13,7 +13,7 @@ __declspec(dllimport) void *FlsGetValue(U32);
 __declspec(dllimport) int FlsSetValue(U32, void *);
 static U32 DynamicSlot;
 static volatile U64 FLSCallbackValue;
-static U32 FLSCallbackMode, FLSCallbackFailure;
+static U32 FLSCallbackMode, FLSCallbackFailure, FLSCallbackCount;
 static volatile U64 NestedFLSCallbackValue;
 
 static void cleanupNestedFLS(void *Value) {
@@ -29,13 +29,23 @@ static void cleanupNestedFLS(void *Value) {
 }
 static void cleanupFLS(void *Value) {
   FLSCallbackValue = (U64)Value;
+  ++FLSCallbackCount;
+  FLSCallbackFailure |= FlsGetValue(DynamicSlot) != 0;
+  if (FLSCallbackMode == RearmedFLSCallbackMode ||
+      FLSCallbackMode == EndlessFLSCallbackMode) {
+    FLSCallbackFailure |= (U64)Value != InitializeResult + FLSCallbackCount - 1;
+    const int Again = FLSCallbackCount < FLSRearmCount ||
+                      FLSCallbackMode == EndlessFLSCallbackMode;
+    FLSCallbackFailure |=
+        !FlsSetValue(DynamicSlot, Again ? (void *)((U64)Value + 1) : 0);
+    return;
+  }
   if (FLSCallbackMode == RecursiveFLSCallbackMode) {
     FlsFree(DynamicSlot);
     return;
   }
   if (FLSCallbackMode != NestedFLSCallbackMode)
     return;
-  FLSCallbackFailure |= FlsGetValue(DynamicSlot) != Value;
   FLSCallbackFailure |= !FlsSetValue(DynamicSlot, 0);
   U32 Nested = FlsAlloc((void *)cleanupNestedFLS);
   if (Nested == 0xffffffffU || Nested == DynamicSlot ||
@@ -46,7 +56,7 @@ static void cleanupFLS(void *Value) {
   FLSCallbackValue += NestedFLSCallbackValue;
 }
 static int callbackFLSMode(U32 Mode) {
-  return Mode >= FreedFLSCallbackMode && Mode <= RecursiveFLSCallbackMode;
+  return Mode >= FreedFLSCallbackMode && Mode <= EndlessFLSCallbackMode;
 }
 
 static int dynamicMode(U32 Mode) {
@@ -114,6 +124,9 @@ static void prepareDynamicState(U32 Mode) {
   }
 }
 static int validDynamicState(U32 Mode) {
+  if (Mode == RearmedFLSCallbackMode)
+    return !FLSCallbackFailure && FLSCallbackCount == FLSRearmCount &&
+           FLSCallbackValue == InitializeResult + FLSRearmCount - 1;
   if (callbackFLSMode(Mode))
     return !FLSCallbackFailure &&
            FLSCallbackValue ==

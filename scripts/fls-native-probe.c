@@ -15,7 +15,7 @@ __declspec(dllimport) int TerminateProcess(void *, U32);
 static U32 Mode, Primary, Peer, Added = 0xffffffffU;
 static U32 Records, ParentCalls;
 static void record(U32 Tag, U64 A, U64 B, U64 C, U64 D, U64 E, U64 F) {
-  if (++Records > 128)
+  if (++Records > 512)
     TerminateProcess((void *)(U64)-1, 94);
   U64 Words[] = {Mode, Tag, A, B, C, D, E, F};
   U32 Written;
@@ -39,7 +39,8 @@ static void parent(void *Value) {
   record('C', Primary, (U64)Value, 0, 0, 0, 0);
   sample('B', Primary);
   SetLastError(1234);
-  int Set = FlsSetValue(Primary, (Mode == 'F' || Mode == 'N') && ParentCalls > 1
+  int Set = FlsSetValue(Primary, (Mode == 'F' || Mode == 'N') &&
+                                         ParentCalls >= (Mode == 'F' ? 80 : 2)
                                      ? 0
                                      : (void *)99);
   U32 Error = GetLastError();
