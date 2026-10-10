@@ -234,9 +234,11 @@ protected:
                 {"decompile", "--llvm", "-o", Out.string(), Binary.string()});
   }
 
-  RunResult decompileToHighC(const fs::path &Binary) {
+  RunResult decompileToHighC(const fs::path &Binary,
+                             const char *Language = "c") {
     auto Out = tmpFile("decompiled_high.c");
-    return exec(ndBin(), {"decompile", "-o", Out.string(), Binary.string()});
+    return exec(ndBin(), {"decompile", "--language", Language, "-o",
+                          Out.string(), Binary.string()});
   }
 
   RunResult patchBinary(const fs::path &Binary) {
