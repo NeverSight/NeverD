@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 실행 중 관찰 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 실행 중 관찰 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 입력은 `IMAGE_FILE_DLL`로 식별합니다. 모델링된 게스트 EXE가 `LoadLibraryA`, `FreeLibrary`를 호출하며 일반 의존성, TLS, `DllMain` 수명주기를 사용합니다. DLL 기본 진입점은 프로세스 연결 호출입니다. 임의의 내보내기 함수 인수를 추측하지 않습니다. 이름, 서수, 별칭, 데이터, 전달 내보내기를 보존하며 자체 내보내기 포인터는 자체 가져오기로 변환하지 않습니다. 헬퍼가 반환한 주소에도 같은 규칙을 적용합니다. 내부 주소가 반환되면 해당 위치의 이전 가져오기 복구 증거를 철회합니다.
 
@@ -25,6 +25,12 @@ PE32+ DLL 입력은 `IMAGE_FILE_DLL`로 식별합니다. 모델링된 게스트 
 드라이버 UNPACK은 개별 쓰기 보고서 저장을 끄고 메모리 검증과 복원 관찰자를 유지합니다. 이벤트 예산은 API 호출을 계산하며 명령어 및 시간 제한도 적용됩니다.
 
 복구는 진입 인수, 반환 및 섀도 스택 프레임, 비휘발성 레지스터, 방향 플래그, 부동소수점 제어와 커널 객체 소유권을 검사합니다. 남은 풀, 빌린 커널 포인터, 변경된 로더 객체 또는 추적되지 않은 커널 효과는 `unsupported_state`가 되며 명시적 `snapshot_only`는 진단을 보존합니다. 커널 상태용 `restore_runtime`은 없습니다. 커널 내보내기 식별자로 가져오기를 재구성하고 원래 내보내기를 검증하며 PE 체크섬을 다시 계산합니다. 고정 주소 결과는 Windows 커널 로드, 서명 유효성 또는 실행되지 않은 경로를 검증하지 않습니다.
+
+`backend: "unicorn"`과 `execution_contract: "driver-strict"`를 지정하면 x64 드라이버 복구는 정지 상태의 명령어 디코딩과 물리 별칭 간의 완료된 RAM 쓰기 감시를 사용합니다. 이 계약은 Unicorn의 명령어 의미를 사용하며 `checked-x64-v1`은 실행 전 명령어 허용 검사를 제공합니다.
+
+로더 소유 이미지 페이지의 임시 MDL은 모든 별칭 매핑과 잠금을 해제하고 모든 설명자를 해제하면 추가 복원 의존성을 남기지 않습니다. 이 계약은 요청 주소가 없는 커널 모드 캐시 별칭을 허용합니다. 살아 있는 MDL, 다른 소유권이나 매핑 유형, 게스트의 물리 PFN 식별값 읽기는 의존성으로 남으며 모델링된 복사·이동·비교 서비스의 읽기도 포함합니다.
+
+`KeQueryPerformanceCounter`, `RDTSC`, `RDTSCP`를 통한 시계 읽기는 명시적인 드라이버 복구 의존성을 유지합니다. 캡처한 카운터와 주파수 값을 새 커널 환경에 다시 연결하는 계약은 아직 없습니다. 기본 복구는 `unsupported_state`를 반환하며 `snapshot_only`는 진단을 유지합니다.
 
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'

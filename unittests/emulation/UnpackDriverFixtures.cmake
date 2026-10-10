@@ -8,11 +8,14 @@ add_custom_command(OUTPUT "${_unpack_driver_image}" "${_unpack_driver_object}"
     -o "${_unpack_driver_object}"
   COMMAND "${NEVERD_DRIVER_LLD_LINK}" /machine:x64 /entry:DriverEntry
     /subsystem:native /driver /nodefaultlib /fixed /base:0x180000000
-    /noimplib /timestamp:0 /release /section:.prog,ERW
+    /noimplib /timestamp:0 /release /section:.prog,ERW /merge:.data=.drvstat
     "/out:${_unpack_driver_image}" "${_unpack_driver_object}"
     "${_driver_import_lib}"
   DEPENDS fixtures/driver_unpack.c fixtures/driver_io.c "${_driver_import_lib}"
   VERBATIM)
+# Use the full eight-byte state-section name: zero-padded ".data" followed by
+# a 0x70-byte BSS extent spells an unaligned modeled object address in the PE
+# header. The positive fixture must not trigger that conservative state guard.
 add_custom_target(NeverDUnpackDriverFixtures DEPENDS "${_unpack_driver_image}")
 add_neverd_unittest(NeverDUnpackDriverTests
   UnpackDriverTests.cpp

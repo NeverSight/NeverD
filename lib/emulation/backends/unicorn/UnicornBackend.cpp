@@ -12,6 +12,7 @@
 #include "UnicornBackend.h"
 
 #include "../../arch/x86_64/X64FPState.h"
+#include "../../arch/x86_64/X64Machine.h"
 #include "../../core/ExecutionDeadline.h"
 #include "../../core/ExecutionDiagnostics.h"
 #include "../../core/ExecutionExitBuilder.h"
@@ -27,6 +28,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <capstone/capstone.h>
 #include <exception>
 #include <iterator>
 #include <map>
@@ -89,6 +91,10 @@ struct UnicornBackend::Impl {
   std::weak_ptr<AddressSpace> ProjectedSpace;
   uint64_t Generation = 0;
   BackendHooks Hooks;
+  csh Decoder = 0;
+  cs_insn *Decoded = nullptr;
+  bool HasWriteWatches = false, PendingWriteWatch = false;
+  uc_hook WriteWatchHook = 0;
   std::vector<uc_hook> HookHandles;
   std::optional<BackendFault> FirstFault;
   std::optional<BackendFault> RecoverableFault;
@@ -104,6 +110,10 @@ struct UnicornBackend::Impl {
   std::string MMIOFailure;
 
   ~Impl() {
+    if (Decoded)
+      cs_free(Decoded, 1);
+    if (Decoder)
+      cs_close(&Decoder);
     if (Engine)
       uc_close(Engine);
   }
@@ -331,6 +341,15 @@ struct UnicornBackend::Impl {
     auto &S = *static_cast<Impl *>(Opaque);
     S.InstructionPC = Address;
     S.invoke([&] {
+      // Only a completed RAM store arms this notification: a pre-store hook
+      // can be followed by a self-modifying-code retry at the same PC.
+      // Publish at the next instruction boundary, before admitting it. A
+      // fault or service request before this boundary keeps exit priority.
+      if (std::exchange(S.PendingWriteWatch, false) && S.Hooks.MemoryWritten) {
+        S.Hooks.MemoryWritten();
+        if (S.effectsStopped() || S.RecoverableFault)
+          return;
+      }
       if (S.Hooks.Instruction)
         S.Hooks.Instruction(Address, Size);
       if (S.Architecture != GuestArchitecture::AArch64 || S.effectsStopped() ||
@@ -381,6 +400,29 @@ struct UnicornBackend::Impl {
       if (S.Architecture == GuestArchitecture::AArch64 && Size > 0 &&
           !S.effectsStopped() && !S.RecoverableFault)
         observeUnicornRAMWrite(*S.Memory, Address, Size);
+    });
+  }
+  static void written(uc_engine *, uc_mem_type, uint64_t Address, int Size,
+                      int64_t, void *Opaque) {
+    auto &S = *static_cast<Impl *>(Opaque);
+    S.invoke([&] {
+      if (S.HasWriteWatches && Size > 0 && !S.effectsStopped() &&
+          !S.RecoverableFault) {
+        // Resolve aliases through the shared physical mapping authority.
+        uint64_t At = Address, Remaining = uint64_t(Size);
+        while (Remaining) {
+          const uint64_t Offset = At % memory::PageSize;
+          const uint64_t Count = std::min(Remaining, memory::PageSize - Offset);
+          auto Page = S.Memory->mappings().find(At - Offset);
+          if (Page != S.Memory->mappings().end() && !Page->second.IO)
+            S.PendingWriteWatch |=
+                S.Memory->writeWatched(Page->second.Physical + Offset, Count);
+          Remaining -= Count;
+          if (Count > UINT64_MAX - At)
+            break;
+          At += Count;
+        }
+      }
     });
   }
   static void read(uc_engine *, uc_mem_type, uint64_t Address, int Size,
@@ -851,6 +893,65 @@ llvm::Error UnicornBackend::restoreContext(const BackendContext &Context) {
   return llvm::Error::success();
 }
 
+llvm::Error UnicornBackend::setMemoryWriteWatches(
+    const std::vector<MemoryWriteWatch> &Watches) {
+  if (auto E = State->mutableState())
+    return E;
+  if (architecture() != GuestArchitecture::X64)
+    return ExecutionBackend::setMemoryWriteWatches(Watches);
+  for (const auto &W : Watches)
+    if (!W.Size || W.Size - 1 > UINT64_MAX - W.Address)
+      return diagnostic::error(diagnostic::WriteWatchRange);
+  if (!Watches.empty() && !State->WriteWatchHook) {
+    if (auto E = check(uc_hook_add(State->Engine, &State->WriteWatchHook,
+                                   UC_HOOK_MEM_WRITE_AFTER,
+                                   reinterpret_cast<void *>(Impl::written),
+                                   State.get(), 1, 0),
+                       unicornDiagnostic::InstallCPUHook))
+      return E;
+  } else if (Watches.empty() && State->WriteWatchHook) {
+    if (auto E = check(uc_hook_del(State->Engine, State->WriteWatchHook),
+                       unicornDiagnostic::InstallCPUHook))
+      return E;
+    State->WriteWatchHook = 0;
+  }
+  State->Memory->setWriteWatches(Watches);
+  State->HasWriteWatches = !Watches.empty();
+  return llvm::Error::success();
+}
+
+llvm::Expected<uint32_t> UnicornBackend::instructionSize(uint64_t Address) {
+  if (auto E = State->mutableState())
+    return std::move(E);
+  if (architecture() != GuestArchitecture::X64)
+    return ExecutionBackend::instructionSize(Address);
+  auto Lock = State->Memory->lock();
+  if (!Lock)
+    return Lock.takeError();
+  if (!State->Decoder &&
+      cs_open(CS_ARCH_X86, CS_MODE_64, &State->Decoder) != CS_ERR_OK)
+    return diagnostic::error(diagnostic::Decode);
+  if (!State->Decoded)
+    State->Decoded = cs_malloc(State->Decoder);
+  if (!State->Decoded)
+    return diagnostic::error(diagnostic::Decode);
+  std::array<uint8_t, x64::MaxInstructionBytes> Bytes;
+  size_t Count = Bytes.size();
+  if (Count - 1 > UINT64_MAX - Address)
+    Count = UINT64_MAX - Address + 1;
+  if (auto Failure = State->Memory->firstAccessFailure(Address, Count, Execute))
+    Count = Failure->Address - Address;
+  if (!Count)
+    return diagnostic::error(diagnostic::Decode);
+  if (auto E = State->Memory->read(
+          Address, llvm::MutableArrayRef(Bytes).take_front(Count), Execute))
+    return std::move(E);
+  const uint8_t *Input = Bytes.data();
+  if (!cs_disasm_iter(State->Decoder, &Input, &Count, &Address, State->Decoded))
+    return diagnostic::error(diagnostic::Decode);
+  return State->Decoded->size;
+}
+
 llvm::Error UnicornBackend::installHooks(BackendHooks Hooks) {
   if (auto E = State->mutableState())
     return E;
@@ -927,6 +1028,7 @@ llvm::Error UnicornBackend::runImpl(uint64_t PC, uint64_t TimeoutMicroseconds,
                      unicornDiagnostic::InvalidateCPUTranslations))
     return E;
   State->InstructionPC = PC;
+  State->PendingWriteWatch = false;
   State->Timeout = false;
   State->StopRequested = false;
   State->Running = true;

@@ -3,9 +3,36 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "KernelAPIKind.h"
 #include "KernelModel.h"
+#include "WindowsKernelLayout.h"
 
 namespace neverd::emulation {
+void KernelModel::recordUnpackClockRead() {
+  // Captured profile time cannot be rebound to a fresh kernel clock. API and
+  // CPU reads share this dependency even when no output pointer was supplied.
+  UnpackOpaqueEffects = true;
+}
+
+bool KernelModel::unpackImageMDLCall(KernelAPIKind Kind,
+                                     llvm::ArrayRef<uint64_t> A) const {
+  if (Kind == KernelAPIKind::IoAllocateMdl)
+    return !A[4] && imageOwnerForRange(A[0], uint32_t(A[1])).has_value();
+  const auto It =
+      MDLs.find(A[Kind == KernelAPIKind::MmUnmapLockedPages ? 1 : 0]);
+  if (It == MDLs.end() ||
+      (It->second.Owner != LockedMdl::Ownership::Driver &&
+       It->second.Owner != LockedMdl::Ownership::KernelLocked) ||
+      !imageOwnerForRange(It->second.OriginalAddress, It->second.ByteCount))
+    return false;
+  if (Kind == KernelAPIKind::MmProbeAndLockPages)
+    return uint8_t(A[1]) == windows::KernelMode;
+  if (Kind == KernelAPIKind::MmMapLockedPagesSpecifyCache)
+    return uint8_t(A[1]) == windows::KernelMode &&
+           uint32_t(A[2]) == windows::MmCached && !A[3];
+  return true;
+}
+
 llvm::Error KernelModel::captureUnpackBaseline() {
   if (!DriverObject || UnpackBaseline)
     return llvm::createStringError("kernel recovery baseline is not fresh");
@@ -56,8 +83,8 @@ std::map<uint64_t, uint64_t> KernelModel::unpackAllocations() const {
 llvm::Expected<bool> KernelModel::hasUnpackDependencies() const {
   if (!UnpackBaseline)
     return llvm::createStringError("kernel recovery has no ownership baseline");
-  if (UnpackOpaqueEffects || !Allocations.empty() || EntryFinished ||
-      CurrentIRQL || Unloading)
+  if (UnpackOpaqueEffects || UnpackMDLIdentityRead || !MDLs.empty() ||
+      !Allocations.empty() || EntryFinished || CurrentIRQL || Unloading)
     return true;
   for (const auto &[Address, Size] : ArenaAllocations)
     if (!UnpackBaseline->count(Address) && !FreedRanges.count(Address))

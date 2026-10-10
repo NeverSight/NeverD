@@ -80,6 +80,7 @@ target_include_directories(NeverDProjectionCacheTests PRIVATE
 
 add_neverd_unittest(NeverDMemoryLifecycleTests
   MemoryLifecycleTests.cpp
+  UnicornObservationTests.cpp
   TIMEOUT 15
   LINK_COMPONENTS EmulationCPU)
 

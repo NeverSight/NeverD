@@ -587,6 +587,26 @@ TEST_F(KernelExportLookup, ReturnsNullOnlyForDeclaredAbsenceOrAnEmptyName) {
   EXPECT_EQ(lookup(), 0u);
 }
 
+TEST_F(KernelExportLookup, HALCounterRetainsEnvironmentRecoveryDependency) {
+  check(Model->captureUnpackBaseline());
+  const auto HasDependencies = [&]() {
+    auto Value = Model->hasUnpackDependencies();
+    if (!Value) {
+      ADD_FAILURE() << llvm::toString(Value.takeError());
+      return true;
+    }
+    return *Value;
+  };
+  name(Scratch, Scratch + 32, "KeQueryPerformanceCounter");
+  const auto *Entry = Exports.lookup(lookup());
+  ASSERT_NE(Entry, nullptr);
+  EXPECT_EQ(Entry->Module, "hal.dll");
+  EXPECT_FALSE(HasDependencies());
+  // Even without an output pointer, this observes environment-specific time.
+  EXPECT_EQ(requireValue(Model->call(*Entry, {0}, nullptr)), 0u);
+  EXPECT_TRUE(HasDependencies());
+}
+
 TEST_F(KernelExportLookup, HALCounterSharesSchedulerTimeAndChecksOutputMemory) {
   name(Scratch, Scratch + 32, "KeQueryPerformanceCounter");
   const auto *Entry = Exports.lookup(lookup());

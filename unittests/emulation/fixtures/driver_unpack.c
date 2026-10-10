@@ -16,6 +16,23 @@ __attribute__((naked, used)) void ProgramStart(void) {
 
 __declspec(dllimport) void *ExAllocatePoolWithTag(U32, U64, U32);
 __declspec(dllimport) void *MmGetSystemRoutineAddress(const UNICODE_STRING *);
+__declspec(dllimport) void *IoAllocateMdl(void *, U32, U8, U8, void *);
+__declspec(dllimport) void MmProbeAndLockPages(void *, U8, U32);
+__declspec(dllimport) void *MmMapLockedPagesSpecifyCache(void *, U8, U32,
+                                                         void *, U32, U32);
+__declspec(dllimport) void MmUnmapLockedPages(void *, void *);
+__declspec(dllimport) void MmUnlockPages(void *);
+__declspec(dllimport) void IoFreeMdl(void *);
+__declspec(dllimport) void RtlCopyMemory(void *, const void *, U64);
+__declspec(dllimport) U64 KeQueryActiveProcessors(void);
+__declspec(dllimport) void KeSetSystemAffinityThread(U64);
+__declspec(dllimport) void KeRevertToUserAffinityThread(void);
+struct ImageMDL {
+  void *Next;
+  unsigned short Size, Flags;
+  void *Process, *MappedSystemVA, *StartVA;
+  U32 ByteCount, ByteOffset;
+};
 
 #pragma section(".pack", read, write)
 struct {
@@ -26,12 +43,55 @@ static void *volatile RetainedPool;
 static const UNICODE_STRING *volatile RetainedPath;
 static UNICODE_STRING RoutineName;
 static void *volatile Resolved[2];
+static volatile U64 ObservedPhysicalPage;
+static volatile U64 ObservedCounter, ObservedFrequency;
 __attribute__((used)) static const U32 ChangedMXCSR = 0x3f80;
 
 __attribute__((noinline, used)) static void unpack_bytes(DRIVER_OBJECT *Driver,
                                                          UNICODE_STRING *Path) {
+  volatile U8 *Destination = (volatile U8 *)ProgramStart;
+  void *MDL = 0, *Mapping = 0;
+  if (Packed.Mode >= 11 && Packed.Mode <= 14) {
+    MDL = IoAllocateMdl((void *)ProgramStart, Packed.Size, 0, 0, 0);
+    MmProbeAndLockPages(MDL, 0, 1);
+    Mapping = MmMapLockedPagesSpecifyCache(MDL, 0, 1, 0, 0, 0x40000010U);
+    Destination = (volatile U8 *)Mapping;
+    if (Packed.Mode == 13)
+      ObservedPhysicalPage =
+          *(volatile U64 *)((U8 *)MDL + sizeof(struct ImageMDL));
+    else if (Packed.Mode == 14)
+      RtlCopyMemory((void *)&ObservedPhysicalPage,
+                    (U8 *)MDL + sizeof(struct ImageMDL), sizeof(U64));
+  }
   for (U32 I = 0; I < Packed.Size; ++I)
-    ((volatile U8 *)ProgramStart)[I] = Packed.Bytes[I] ^ (U8)Packed.Key;
+    Destination[I] = Packed.Bytes[I] ^ (U8)Packed.Key;
+  if (MDL && Packed.Mode != 12) {
+    MmUnmapLockedPages(Mapping, MDL);
+    MmUnlockPages(MDL);
+    IoFreeMdl(MDL);
+  }
+  if (Packed.Mode == 15) {
+    const U64 Mask = KeQueryActiveProcessors();
+    if (Mask != 1)
+      __builtin_trap();
+    KeSetSystemAffinityThread(Mask);
+    KeRevertToUserAffinityThread();
+  }
+  if (Packed.Mode == 16) {
+    typedef U64 (*CounterFunction)(U64 *);
+    RtlInitUnicodeString(&RoutineName, L"KeQueryPerformanceCounter");
+    const CounterFunction Counter =
+        (CounterFunction)MmGetSystemRoutineAddress(&RoutineName);
+    ObservedCounter = Counter((U64 *)&ObservedFrequency);
+  }
+  if (Packed.Mode == 17 || Packed.Mode == 18) {
+    U32 Low, High;
+    if (Packed.Mode == 17)
+      __asm__ volatile("rdtsc" : "=a"(Low), "=d"(High));
+    else
+      __asm__ volatile("rdtscp" : "=a"(Low), "=d"(High) : : "rcx");
+    ObservedCounter = ((U64)High << 32) | Low;
+  }
   if (Packed.Mode == 1)
     RetainedPool = ExAllocatePoolWithTag(0, 32, 0x44564e55);
   else if (Packed.Mode == 2)
