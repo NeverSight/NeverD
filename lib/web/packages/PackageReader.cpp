@@ -13,6 +13,7 @@
 
 #include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
+#include "neverd/web/PackageIntegrity.h"
 #include "neverd/web/Packages.h"
 
 #include <algorithm>
@@ -128,58 +129,6 @@ std::string specKind(std::string_view V) {
     return "url_declaration";
   return "opaque_specification";
 }
-bool gitCommit(std::string_view V) {
-  return V.size() == 40 && V.find_first_not_of("0123456789abcdefABCDEF") ==
-                               std::string_view::npos;
-}
-std::string integrity(std::string_view Value, bool Git) {
-  if (Git && gitCommit(Value))
-    return "git_commit_declared_unverified";
-  if (Value.empty())
-    return "invalid";
-  bool Supported = false, Unsupported = false;
-  while (!Value.empty()) {
-    const auto Start = Value.find_first_not_of(" \t\r\n");
-    if (Start == std::string_view::npos)
-      break;
-    Value.remove_prefix(Start);
-    const auto End = Value.find_first_of(" \t\r\n");
-    const auto Token = Value.substr(0, End);
-    const auto Dash = Token.find('-');
-    if (Dash == 0 || Dash == std::string_view::npos)
-      return "invalid";
-    const auto Algorithm = Token.substr(0, Dash);
-    auto Encoded = Token.substr(Dash + 1);
-    if (Encoded.find('?') != std::string_view::npos)
-      return "unsupported_sri_options";
-    const uint64_t Length = Algorithm == "sha512"   ? 64
-                            : Algorithm == "sha384" ? 48
-                            : Algorithm == "sha256" ? 32
-                            : Algorithm == "sha1"   ? 20
-                                                    : 0;
-    constexpr std::string_view Alphabet =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    if (Encoded.empty() || Encoded.size() % 4)
-      return "invalid";
-    const auto Padding = Encoded.ends_with("==")  ? 2
-                         : Encoded.ends_with('=') ? 1
-                                                  : 0;
-    const auto Data = Encoded.substr(0, Encoded.size() - Padding);
-    if (Data.empty() ||
-        Data.find_first_not_of(Alphabet) != std::string_view::npos ||
-        (Padding && (Alphabet.find(Data.back()) & (Padding == 2 ? 15 : 3))) ||
-        (Length && Encoded.size() / 4 * 3 - Padding != Length))
-      return "invalid";
-    Supported |= Length != 0;
-    Unsupported |= Length == 0;
-    if (End == std::string_view::npos)
-      break;
-    Value.remove_prefix(End);
-  }
-  if (!Supported)
-    return Unsupported ? "unsupported_algorithm" : "invalid";
-  return "declared_unverified";
-}
 
 class PackageReader {
   PackageAnalysis A;
@@ -286,7 +235,8 @@ class PackageReader {
     if (const auto *V = O.get("integrity")) {
       if (const auto S = V->getAsString()) {
         P.Integrity = S->str();
-        P.IntegrityStatus = integrity(*P.Integrity, Git);
+        P.IntegrityStatus =
+            packageIntegrityDeclarationStatus(*P.Integrity, Git);
       } else {
         P.IntegrityStatus = "invalid";
       }

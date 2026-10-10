@@ -13,6 +13,7 @@
 #include "../../../unittests/web/BunFixture.h"
 #include "../../../unittests/web/BunSourceMapFixture.h"
 #include "../../../unittests/web/NativeFixture.h"
+#include "../../../unittests/web/PackageArchiveFixture.h"
 #include "WebEngine.h"
 
 #include <algorithm>
@@ -1287,6 +1288,9 @@ int main(int argc, char **argv) {
         << R"({"name":"SECRET_WEB_PACKAGE","version":"1","scripts":{"postinstall":"SECRET_WEB_COMMAND"},"dependencies":{"SECRET_WEB_DEP":"1"}})";
     std::ofstream(packageRoot / "after/package.json")
         << R"({"name":"SECRET_WEB_PACKAGE","version":"2","optionalDependencies":{"SECRET_WEB_DEP":"2"}})";
+    std::ofstream(packageRoot / "z.original") << "abc";
+    std::ofstream(packageRoot / "zz.registry")
+        << R"({"name":"SECRET_WEB","dist":{"integrity":"sha256-ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0="}})";
     const Json packagePreview{{"schema_version", 1},
                               {"path", packageRoot.string()}};
     preview = web.execute("web_import_preview", packagePreview);
@@ -1361,6 +1365,214 @@ int main(int argc, char **argv) {
     check(reply["payload"] == directChanges &&
               reply.dump().find("SECRET_WEB") == std::string::npos,
           "Package diff records differ or expose private values");
+    bool hasArchive = false, hasGzip = false;
+    const Json integrity{
+        {"schema_version", 1},
+        {"revision", packageRevision},
+        {"artifact_id", packageArtifacts["items"][5]["artifact_id"]},
+        {"declaration_id", packageArtifacts["items"][6]["artifact_id"]}};
+    const auto verified =
+        web.execute("web_package_integrity_verify", integrity);
+    reply = process.call("web_package_integrity_verify", integrity,
+                         packageRevision, packageProject);
+    check(reply["payload"] == verified &&
+              verified["integrity_status"] == "match" &&
+              verified["authenticates_publisher"] == false &&
+              verified["byte_domain"] == "selected_original_artifact",
+          "Worker changed integrity binding or claimed publisher identity");
+    auto invalidIntegrity = integrity;
+    invalidIntegrity["execute"] = true;
+    reply = process.call("web_package_integrity_verify", invalidIntegrity,
+                         packageRevision, packageProject);
+    check(reply["error"]["code"] == "invalid_request",
+          "Worker integrity accepted an execution flag");
+    for (const auto &a : caps["analysis"])
+      if (a["kind"] == "package_archive") {
+        hasArchive = a["available"];
+        hasGzip = a["gzip_available"];
+      }
+    if (hasArchive) {
+      using namespace neverd::web::test;
+      const auto tar =
+          finishTar(tarMember("package/package.json",
+                              R"({"name":"SECRET_WEB","main":"a.js"})") +
+                    tarMember("package/a.js", "export const SECRET_WEB=1;") +
+                    tarMember("package/link", "", '2', "../../SECRET_WEB"));
+      fixture.write(hasGzip ? storedGzip(tar) : tar);
+      const Json request{{"schema_version", 1}, {"path", fixture.path()}};
+      preview = web.execute("web_import_preview", request);
+      const auto committed = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", preview["preview_token"]}});
+      reply = process.call("web_import_preview", request, packageRevision,
+                           packageProject);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       packageRevision, packageProject);
+      check(reply["payload"] == committed, "Archive capture transport differs");
+      const auto revision = committed["revision"].get<std::string>();
+      const auto project = committed["project_id"].get<std::string>();
+      invalidIntegrity = integrity;
+      invalidIntegrity["revision"] = revision;
+      reply = process.call("web_package_integrity_verify", invalidIntegrity,
+                           revision, project);
+      check(reply["error"]["code"] == "integrity_original_not_captured",
+            "Worker rebound a prior integrity original after replacement");
+      const auto artifacts = web.execute(
+          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+      const Json extraction{
+          {"schema_version", 1},
+          {"revision", revision},
+          {"artifact_id", artifacts["items"][0]["artifact_id"]},
+          {"format", hasGzip ? "tgz" : "tar"}};
+      const auto archive =
+          web.execute("web_package_archive_extract", extraction);
+      reply = process.call("web_package_archive_extract", extraction, revision,
+                           project);
+      check(reply["payload"] == archive && archive["member_count"] == 3,
+            "Archive publication transport differs");
+      const Json records{{"schema_version", 1},
+                         {"revision", revision},
+                         {"archive_id", archive["archive_id"]}};
+      const auto members = web.execute("web_package_archive_records", records);
+      reply = process.call("web_package_archive_records", records, revision,
+                           project);
+      check(reply["payload"] == members &&
+                members["items"][2]["availability"] == "metadata_only",
+            "Archive member metadata or transport differs");
+      auto invalid = extraction;
+      invalid["execute"] = true;
+      rejects(
+          [&] { return web.execute("web_package_archive_extract", invalid); },
+          "invalid_request");
+      reply = process.call("web_package_archive_extract", invalid, revision,
+                           project);
+      check(reply["error"]["code"] == "invalid_request",
+            "Archive extraction accepted an execution flag");
+      invalid = records;
+      invalid["limit"] = 0;
+      reply = process.call("web_package_archive_records", invalid, revision,
+                           project);
+      check(reply["error"]["code"] == "invalid_page",
+            "Archive accepted zero page limit");
+      const Json graph{{"schema_version", 1},
+                       {"revision", revision},
+                       {"artifact_id", members["items"][0]["member_id"]},
+                       {"input_kind", "package-json"}};
+      const auto direct = web.execute("web_packages_analyze", graph);
+      reply = process.call("web_packages_analyze", graph, revision, project);
+      check(reply["payload"] == direct && direct["entry_count"] == 1,
+            "Archive package consumer differs");
+    }
+    {
+      const auto interfaceRoot = fixture.root / "interfaces";
+      fs::create_directory(interfaceRoot);
+      std::ofstream(interfaceRoot / "a.har") << R"({"log":{"version":"1.2",
+      "entries":[{"request":{"method":"GET",
+        "url":"https://SECRET_WEB/a?token=SECRET_WEB",
+        "headers":[{"name":"Authorization","value":"SECRET_WEB"}],
+        "postData":{"text":"SECRET_WEB"}},
+        "response":{"status":200,"content":{"text":"SECRET_WEB"}}}]}})";
+      std::ofstream(interfaceRoot / "b.js")
+          << "fetch('https://SECRET_WEB/a?token=SECRET_WEB');";
+      const auto beforeInterfaces = web.revision(),
+                 beforeProject = web.projectId();
+      const Json interfaceImport{{"schema_version", 1},
+                                 {"path", interfaceRoot.string()}};
+      preview = web.execute("web_import_preview", interfaceImport);
+      const auto interfaceCommit = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", preview["preview_token"]}});
+      reply = process.call("web_import_preview", interfaceImport,
+                           beforeInterfaces, beforeProject);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       beforeInterfaces, beforeProject);
+      check(reply["payload"] == interfaceCommit, "Interface import differs");
+      const auto interfaceRevision = web.revision(),
+                 interfaceProject = web.projectId();
+      const auto interfaceArtifacts =
+          web.execute("web_artifacts",
+                      {{"schema_version", 1}, {"revision", interfaceRevision}});
+      const Json harPreview{
+          {"schema_version", 1},
+          {"revision", interfaceRevision},
+          {"artifact_id", interfaceArtifacts["items"][1]["artifact_id"]}};
+      const auto redaction = web.execute("web_har_preview", harPreview);
+      reply = process.call("web_har_preview", harPreview, interfaceRevision,
+                           interfaceProject);
+      check(reply["payload"] == redaction &&
+                redaction["publication_status"] == "preview",
+            "HAR redaction preview differs");
+      const Json harPage{{"schema_version", 1},
+                         {"revision", interfaceRevision},
+                         {"capture_id", redaction["capture_id"]}};
+      reply = process.call("web_har_records", harPage, interfaceRevision,
+                           interfaceProject);
+      check(reply["error"]["code"] == "har_capture_not_committed",
+            "Worker published observations before redaction commit");
+      const Json acceptHAR{{"schema_version", 1},
+                           {"revision", interfaceRevision},
+                           {"preview_token", redaction["preview_token"]}};
+      const auto accepted = web.execute("web_har_commit", acceptHAR);
+      reply = process.call("web_har_commit", acceptHAR, interfaceRevision,
+                           interfaceProject);
+      check(reply["payload"] == accepted, "HAR commit differs");
+      const auto harRecords = web.execute("web_har_records", harPage);
+      reply = process.call("web_har_records", harPage, interfaceRevision,
+                           interfaceProject);
+      check(reply["payload"] == harRecords &&
+                reply.dump().find("SECRET_WEB") == std::string::npos,
+            "HAR transport differs or exposes private values");
+      auto invalidHAR = harPreview;
+      invalidHAR["replay"] = true;
+      reply = process.call("web_har_preview", invalidHAR, interfaceRevision,
+                           interfaceProject);
+      check(reply["error"]["code"] == "invalid_request",
+            "HAR accepted a replay flag");
+      if (hasBindings) {
+        const Json sourceRequest{
+            {"schema_version", 1},
+            {"revision", interfaceRevision},
+            {"artifact_id", interfaceArtifacts["items"][2]["artifact_id"]},
+            {"source_type", "module"}};
+        const auto source = web.execute("web_source_analyze", sourceRequest);
+        reply = process.call("web_source_analyze", sourceRequest,
+                             interfaceRevision, interfaceProject);
+        check(reply["payload"] == source, "Interface source differs");
+        const Json infer{{"schema_version", 1},
+                         {"revision", interfaceRevision},
+                         {"source_id", source["source_id"]}};
+        const auto analysis = web.execute("web_interfaces_analyze", infer);
+        reply = process.call("web_interfaces_analyze", infer, interfaceRevision,
+                             interfaceProject);
+        check(reply["payload"] == analysis && analysis["interface_count"] == 1,
+              "Static interfaces differ");
+        const Json compare{{"schema_version", 1},
+                           {"revision", interfaceRevision},
+                           {"analysis_id", analysis["interface_analysis_id"]},
+                           {"capture_id", accepted["capture_id"]}};
+        const auto correlation = web.execute("web_interfaces_compare", compare);
+        reply = process.call("web_interfaces_compare", compare,
+                             interfaceRevision, interfaceProject);
+        check(reply["payload"] == correlation &&
+                  correlation["pair_count"] == 1 &&
+                  correlation["source_execution_observed"] == false,
+              "Interface correlation differs or upgrades inference");
+        const Json pairs{{"schema_version", 1},
+                         {"revision", interfaceRevision},
+                         {"correlation_id", correlation["correlation_id"]}};
+        const auto records =
+            web.execute("web_interface_correlation_records", pairs);
+        reply = process.call("web_interface_correlation_records", pairs,
+                             interfaceRevision, interfaceProject);
+        check(reply["payload"] == records, "Correlation records differ");
+      }
+    }
     process.stop();
     std::ifstream errors(fixture.root / "stderr");
     const std::string diagnostics{std::istreambuf_iterator<char>(errors), {}};

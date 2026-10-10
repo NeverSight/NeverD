@@ -42,8 +42,8 @@ their existing scope; no Python support for web APIs is claimed.
 | P4A Bun extraction | ELF, thin Mach-O and PE x64/ARM64 extraction; decoded-source navigation/view/storage anchors, bounded serialized-map decoding and explicit native handoff; 25 full compiler images, Claude Code 2.1.296 and 20 extraction cases qualified | Other runtime/layout versions and independent SEA/pkg/nexe adapters remain; JSC caches stay opaque |
 | Shared native handoff | Nine native handoff tests and 65 existing Session C API tests passed; immutable-buffer loader, independent native SDK session and metadata-only CLI/worker entry points; parser/backend omission checked | Other hosts, explicit universal slices and bounded native pipeline work remain |
 | P4B desktop/VSIX extraction | C++ ASAR packed/unpacked extraction; Electron manifest entries, source-visible boundaries, scoped IPC comparison, captured preload/renderer files and HTML/import-map candidates implemented; qualification recorded below | External-source HTML contexts and full import closure, runtime/window routing, distribution detection, safe export, NW.js/VSIX and broader host/release qualification remain |
-| P4C package graph/diff | Versioned npm v1/v2/v3 graph, captured manifests, metadata-only SDK/CLI/worker and two-root evidence comparison implemented | Archive admission, integrity verification, source behavior, advisory/provenance, dispositions and readable reports remain |
-| P4D passive interfaces/HAR | Pending | Static-only, HAR-only, correlation, uncertainty and redaction tests |
+| P4C package graph/diff | Versioned npm graph/diff, bounded tar/local-PAX/single-gzip members, original SRI and shared source/Bun/native consumers implemented; two official Claude Code npm packages qualify original digest and payload evidence | Source behavior, advisory/provenance, dispositions, readable reports and broader archive/host profiles remain |
+| P4D passive interfaces/HAR | Native HAR preview/commit, direct fetch/WebSocket source candidates and explicit method/origin/path comparison implemented | XHR/wrappers, response/transformation tracing, reviewed displays, schema exports and broader qualification remain |
 | P5 reversible source projections | Reviewed display projection and original/projected ranges implemented; semantic transforms pending | Per-pass receipts, local semantic preconditions, undo and refusal tests |
 | P6 stream/log consumers | Pending | SSE/JSONL/JSON-RPC/MCP versioned records, truncation and canary tests |
 | P7 Tauri/Wails/Node-family | Pending | Actual asset extraction and bridge/native links for each named profile |
@@ -56,6 +56,9 @@ file with one close-on-exec descriptor per snapshot. Import streams and hashes
 internally. Admission is capped at 512 MiB aggregate / 256 MiB per original file,
 10,000 entries and depth 64. Preview retains only its candidate digest, so one
 session uses at most its published spool plus one pending capture (1 GiB).
+Archive expansion adds at most 512 MiB across retained and pending expanded
+streams, giving a conservative 1.5 GiB session spool bound. Independently held
+native sessions may retain prior immutable storage; this is not a global quota.
 This is not a global quota across arbitrary SDK sessions, nor a whole-process
 RSS bound. Source/map materialization remains limited to 1 MiB / 8 MiB.
 
@@ -148,13 +151,82 @@ declarations, two scripts and one bin declaration. Its 3,531 bytes have SHA-256
 This is a projection of supplied registry metadata, not inspection of an npm
 tarball or proof that its native binary matches the standalone distribution.
 No declared script ran and no dependency was resolved. Archive/hash comparison
-is the next package boundary; #715 remains partial.
+was the next package boundary at that checkpoint; the qualified archive/SRI
+increment below now supplies that comparison. #715 remains partial.
 
 The user-required LLVM filename/project/Doxygen headers now cover the web
 implementation and its C++ fixtures/adapters. Package algorithms have their
 own `lib/web/packages` directory. Fixed diagnostics moved to `web/Error.h`,
 removing the bottom-up dependency from readers/algorithms to the session API.
 The existing `Session.h` still includes that contract for source compatibility.
+
+## Passive interfaces and reviewed HAR — 2026-10-11
+
+Native C++ HAR preview/commit, direct fetch/WebSocket source candidates and
+explicit method/origin/path comparison now share SDK, CLI and worker results.
+Private URLs, header/cookie/query/body values and arbitrary names remain
+excluded from metadata. Tokens bind the immutable original and revision;
+the CLI requires an explicit hash/policy receipt. Candidate matches preserve
+separate source inference and imported-observation classes. Independent review
+corrected base-dependent URL coercion and missing URL-query/form preview counts.
+See the [interface profile](web-interface-profile.md).
+
+The restored macOS arm64 Release run exercised 373 owning web cases: 366
+passed and seven explicitly skipped (six unavailable LLVM Zstd map cases and
+the inapplicable ASAR-policy omission case). The original Bun/Claude/npm corpus
+remained enabled, including all 2,345 recovered JS modules and the new
+container-to-source interface check. That check locates one fetch in Claude
+module 1,897 at byte 65,473, length 52; its runtime URL/options remain unknown.
+No traffic was supplied or invented. Enabled API availability and all five
+selected C++ worker regressions passed.
+
+With only JS disabled, all 11 HAR/SDK cases and five worker cases passed;
+source-dependent APIs reported unavailable. With the entire web backend
+disabled, both ABI cases and four generic worker cases passed, while the web
+worker case explicitly skipped. Both feature switches are restored. Formatting
+and whitespace checks passed. #717 remains partial: broader source request
+flow, response/transformation evidence, schema export and stream adapters remain.
+
+## Original npm archives and SRI — 2026-10-11
+
+`PackageArchive` now admits bounded USTAR/local-PAX and single-gzip originals
+through native linked zlib, rejecting ambiguous names, unsupported extensions,
+bad checksums, trailing streams and expanded-budget excess before publication.
+Links remain unavailable metadata. Derived bytes use the shared private spool.
+Archive members enter package/source/HTML/Bun/native consumers through
+`ArtifactView` and the common member namespace. Original, expanded and nested
+container offsets remain distinct; review found and corrected a tar→Bun asset
+anchor ambiguity, covered by explicit tar and tgz regressions.
+
+`PackageIntegrity` owns one shared SRI declaration parser and verification over
+original bytes. Callers explicitly select captured registry metadata or a
+package instance in an admitted npm lock. The verifier uses the strongest
+supported algorithm, accepts any matching equal-strength candidate, and keeps
+missing/invalid/unsupported/Git/mismatch outcomes separate. SHA-384/512 have
+independent standard-vector and chunk-boundary coverage. Digest equality does
+not authenticate a publisher or establish a behavior verdict.
+
+NeverD admitted both official Claude Code 2.1.296 npm originals and matched
+their captured SHA-512 declarations. The 114,864,541-byte Linux x64 archive
+contains the exact 257,068,216-byte standalone image already qualified for
+2,589 Bun modules and 2,345 recovered JS modules. Original and member SHA-256
+values are pinned by optional C++ tests. Targets and lifecycle scripts never
+ran. See the [archive/integrity profile](web-package-archive-profile.md) and
+[real-artifact qualification](web-claude-code-qualification.md).
+
+After merging dev through `6db31ba1e`, the restored macOS arm64 Release
+configuration exercised 352 owning web cases: 345 passed and seven explicitly
+skipped (six unavailable LLVM Zstd map cases and the inapplicable ASAR-policy
+omission case). This includes both real npm originals, the full Bun corpus
+and all 2,345 Claude Code JavaScript modules. The compiled-capability case
+and all five selected C++ worker cases passed; the API backend-omission case
+was inapplicable and skipped. With JS and zlib disabled, 39 of 42 focused core
+and 10 of 11 SDK cases passed, with unavailable gzip cases explicitly skipped;
+both official original SRI checks still passed. With the entire backend
+disabled, both ABI availability cases and four generic worker cases passed,
+and the web worker case explicitly skipped. Web, JS and zlib support are
+restored. Formatting and whitespace checks passed. These are feature-owning
+checks, not a whole-repository or cross-host qualification.
 
 On 2026-10-11 the Bun container reader was separated from the shared graph
 decoder and qualified for Linux, macOS and Windows x64/ARM64 input images on

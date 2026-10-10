@@ -22,5 +22,6 @@ struct ArtifactView {
   std::string BlobHash;
   uint64_t StorageOffset = 0;
   llvm::json::Object Origin;
+  bool DirectStorage = true;
 };
 } // namespace neverd::web

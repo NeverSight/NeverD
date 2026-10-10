@@ -393,6 +393,21 @@ evidence; `packages/PackageDiff` compares its model without transport concerns.
 `SessionPackages` owns revision-bound caches, fixed metadata pages and
 comparisons. Missing evidence, conflicting declarations and unresolved runtime
 semantics remain distinct. All adapters consume these same results.
+`packages/PackageArchive` owns tar/local-PAX/single-gzip framing, complete-stream
+budgets and member admission; `BlobStore` supplies bounded private derived
+spools. `SessionPackageArchive` atomically publishes members after full validation.
+`packages/PackageIntegrity` owns shared SRI classification and original-byte
+comparison; `SessionPackageIntegrity` binds selected captured registry/lock
+declarations to selected original artifacts. Archive validation, byte equality,
+publisher authentication and behavior remain separate claims. See the
+[archive/integrity profile](web-package-archive-profile.md).
+`interfaces/Endpoint` owns private URL comparison keys and fixed public
+vocabularies. `interfaces/HAR` owns bounded capture admission;
+`interfaces/SourceInterfaces` consumes the shared syntax/binding/value models;
+`interfaces/Correlation` owns the explicit candidate join. `SessionInterfaces`
+owns redaction preview/commit, revision/cache lifetime and public metadata.
+Transports cannot publish uncommitted HAR observations or reinterpret a match
+as source execution. See the [passive interface profile](web-interface-profile.md).
 `web/Error.h` owns fixed diagnostics independently of `Session`; artifact
 readers and semantic algorithms do not depend on the session API to fail.
 `SourceNavigation` owns syntax containment and lexical links; `SessionAnchor`
@@ -416,7 +431,9 @@ bindings and `SourceEffects` owns conservative registration/disposal effects;
 formatting cannot remove or lower them. See the
 [resource-management profile](web-resource-management-profile.md).
 `ArtifactView` owns direct-byte selection and origins for original files, Bun
-assets and available ASAR members. Encoded Bun/map source keeps its dedicated
+assets and available ASAR or package archive members. Nested origins retain
+container-relative offsets separately from original/expanded storage offsets.
+Encoded Bun/map source keeps its dedicated
 decoder. `Asar` owns Pickle/JSON/member/integrity validation, while `PathPolicy`
 owns its pinned native Unicode collision policy. `SessionAsar` publishes bounded
 member pages and explicit captured unpacked associations. Source, anchors,

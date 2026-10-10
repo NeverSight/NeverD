@@ -41,7 +41,9 @@ Other hosts require separate evidence.
 | Captured HTML | `html-utf8-script-candidates-v1` | Script/base inventory, captured local URL candidates and inline raw-byte sources/anchors; DOM and runtime activation remain unverified. [Profile](web-html-profile.md) |
 | HTML inline module files | `html-inline-module-file-candidates-v2` | Literal requests use explicit document/base evidence and exact captured members; early captured maps add scoped/prefix/null rules and private URL candidates; browser activation/history and full closure remain pending |
 | HTML import maps | `import-map-url-evidence-v1`, embedded Ada 4.0.0 | Bounded C++ JSON/URL processing and metadata pages remain available without JS parsing; absolute key origins, later/interleaved maps and order-dependent JSON remain explicit HTML-profile refusals |
-| npm metadata and supplied-directory diff | `node-package-evidence-v1` | npm lock v1/v2/v3, hidden locks, captured manifests, unresolved/conditional placements, exact file hashes and evidence coverage comparisons; [profile](web-package-profile.md). Tarballs, integrity verification, behavior/advisory/provenance, dispositions and reports remain pending |
+| npm metadata and supplied-directory diff | `node-package-evidence-v1` | npm lock v1/v2/v3, hidden locks, captured manifests, unresolved/conditional placements, exact file hashes and evidence coverage comparisons; [profile](web-package-profile.md). Behavior/advisory/provenance, dispositions and reports remain pending |
+| Package archives and original SRI | `ustar-pax-single-gzip-v1`, `npm-original-sri-v1` | Native tar/local-PAX/single-gzip, metadata-only links, shared source/package/Bun/native consumers and explicit registry/lock declaration checks over original bytes. [Profile and limits](web-package-archive-profile.md). Recursive archives, full tar dialects and publisher authentication are unsupported |
+| Passive interface evidence | `har-1.2-metadata-v1`, `direct-fetch-websocket-syntax-v1`, `absolute-http-method-origin-path-v1` | HAR redaction preview/commit, fixed metadata and source-node links; explicit candidate joins preserve inference/observation classes. XHR/wrappers, dynamic URLs, WebSocket frames, stream/log adapters and protocol reconstruction remain unsupported. [Profile](web-interface-profile.md) |
 | Static interfaces/HAR/streams/MCP records | Pending | Passive-only parsing, redaction and observation/static separation required |
 | Tauri/Wails/SEA/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
 | C++ worker | `web_` operations in protocol 1.1 | Real framed-process, direct-query parity, web/native revision isolation and private-output checks passed locally |
@@ -100,6 +102,11 @@ closure remain outstanding.
 | One original file/member | 256 MiB |
 | Capture transfer buffer / one blob read | 64 KiB / 8 MiB |
 | Original spool bytes per session, including a pending capture | 1 GiB |
+| Archive expanded bytes across retained and pending streams per session | 512 MiB |
+| Total conservative original/expanded spool budget per web session | 1.5 GiB |
+| Package archive members / depth / cached archives | 10,000 / 64 / 4 |
+| Package archive PAX/name/prefix metadata | 8 MiB |
+| SRI declaration bytes / tokens / cached verifications | 64 KiB / 256 / 16 |
 | Original entries / directory depth | 10,000 / 64 |
 | JavaScript source / syntax nodes | 1 MiB / 100,000 |
 | Lexer tokens plus comments at admission / retained cached lexemes | 200,000 (including EOF) / 400,000 |

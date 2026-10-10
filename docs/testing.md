@@ -360,6 +360,27 @@ ctest --test-dir build-release \
 
 ## Offline web analysis
 
+`WebInterfaces.*` and `WebSourceInterfaces.*` cover passive HAR admission,
+fixed redaction classifications, missing/malformed fields, source anchors,
+shadowing/eval, options inheritance, method normalization, credential and
+WebSocket exclusions, exact origin/path candidate joins and fanout budgets.
+`WebInterfaceSDK.*` and `NeverDWorkerWeb` verify explicit preview/commit,
+hash-bound CLI receipts, revoked tokens/revisions, immutable capture bytes,
+cache limits, canary exclusion and direct/framed parity. Run the owning web
+directory after changes to these shared session boundaries. HAR remains
+available without the parser; source/interface comparison requires it.
+See the [interface profile](web-interface-profile.md).
+
+`WebPackageArchive.*`, `WebPackageIntegrity.*` and `WebPackageDigest.*` in
+`NeverDWebArtifactTests` cover bounded tar/PAX/gzip admission, shared storage,
+strongest SRI declarations, original compressed-byte scope and independent
+SHA-384/512 vectors. `WebPackageArchiveSDK.*`, `WebPackageIntegritySDK.*` and
+`NeverDWorkerWeb` cover consumer identity, nested coordinates, cache/revision
+revocation, native storage lifetime and offline CLI/transport parity. Optional
+hash-pinned official Claude Code npm artifacts are described in the
+[archive/integrity profile](web-package-archive-profile.md). Run the owning
+web directory and `WebBlobStore.*` when changing these shared storage paths.
+
 `WebPackages.*` in `NeverDWebArtifactTests` covers npm v1/v2/v3 placement,
 hidden locks, aliases/workspaces, optional/peer rules, declaration conflicts,
 field evidence coverage, two-root diffs and metadata budgets. The optional

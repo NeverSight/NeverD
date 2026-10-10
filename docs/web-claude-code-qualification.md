@@ -1,5 +1,45 @@
 # Claude Code 2.1.296: offline NeverD qualification
 
+## npm originals and standalone equality — 2026-10-11
+
+NeverD's C++ tar/gzip reader admitted the official
+[wrapper npm artifact](https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.296.tgz)
+and [Linux x64 npm artifact](https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.296.tgz).
+Both original compressed files matched SHA-512 declarations in their separately
+captured registry JSON responses through the C++ SRI verifier and CLI. No npm,
+tar, gunzip, Node, Bun runtime or target script was invoked.
+
+| Evidence | Bytes | SHA-256 |
+|---|---:|---|
+| Wrapper original tgz | 29,001 | `f6c375d51d4c22a7a850e185a0d7ddda85173f89dbbeb3262aa7971e3bd670b5` |
+| Wrapper registry JSON | 3,531 | `0fb79dc0c21d02fc14feeb7f9a86fa15ca3937598f9f3a6a03816bb15e7fa6e4` |
+| Linux x64 original tgz | 114,864,541 | `eef5a2e2b09a5e7d2ce784d1b3ba335ae7fc6c7f6256c802a0ebf2c21e4fd0e1` |
+| Linux x64 registry JSON | 2,560 | `2b5c7ee2ad1174d6e3abdb6bdce80684c3cec54d3ef3edad5fe2bf9c4c161db0` |
+| Native member, equal to standalone original | 257,068,216 | `24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de` |
+
+The wrapper expands to 194,560 tar bytes and seven regular members. Its actual
+captured `package.json` produces one package, eight optional dependency
+declarations, two scripts and one bin entry linked to a captured member. The
+Linux x64 package expands to 257,073,152 tar bytes and four regular members.
+The native member again produces 2,589 Bun modules. Its exact byte equality
+connects this npm distribution to the full standalone recovery documented below.
+It does not establish equality of any other platform's distribution.
+
+The pinned registry SRI strings are:
+
+```text
+wrapper: sha512-OX/k/rpcthMqnFKOWcpNcbiLsMKtAjLOpQNJHlYiDCFUznWCIwdRTyl/p9SdHVrsrzZuPMCNqZjnpakIni6upw==
+linux-x64: sha512-+m01urgelnI+VJxPaKPEK0wixgq42uZ8PeCaUk5tX/8YoDBvSmC/REVQG2jQfJAr8dxunpjJ600FvLrcj1WWTw==
+```
+
+The verifier hashes the original tgz, not the expanded stream or binary member.
+Registry/declaration association is explicitly selected evidence; matching SRI
+does not authenticate publisher identity or establish benignness. C++ optional
+tests and repeatable commands are in the
+[archive/integrity profile](web-package-archive-profile.md).
+
+## Standalone source recovery
+
 Updated on 2026-10-11 on macOS arm64, Release, using prebuilt NeverD LLVM
 23.0.0 r4. This is a real artifact extraction and source-recovery qualification,
 not a claim to reconstruct the publisher's original repository.

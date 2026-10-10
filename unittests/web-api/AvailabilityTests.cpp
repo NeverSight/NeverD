@@ -1,5 +1,4 @@
-//===- AvailabilityTests.cpp - Offline analysis availability tests
-//---------===//
+//===- AvailabilityTests.cpp - Offline analysis availability -----------===//
 //
 // NeverD Decompiler
 //
@@ -55,6 +54,14 @@ TEST(WebAvailability, CapabilitiesReflectCompiledBackendAndParser) {
   EXPECT_TRUE(Has("package_records"));
   EXPECT_TRUE(Has("packages_compare"));
   EXPECT_TRUE(Has("package_diff_records"));
+  EXPECT_TRUE(Has("package_archive_extract"));
+  EXPECT_TRUE(Has("package_archive_records"));
+  EXPECT_TRUE(Has("package_integrity_verify"));
+  for (const auto Op : {"har_preview", "har_commit", "har_records"})
+    EXPECT_TRUE(Has(Op));
+  for (const auto Op : {"interfaces_analyze", "interface_records",
+                        "interfaces_compare", "interface_correlation_records"})
+    EXPECT_EQ(Has(Op), bool(NEVERD_TEST_WEB_JS));
   bool ASARAvailable = false;
   const auto *Analysis = Object->getArray("analysis");
   ASSERT_NE(Analysis, nullptr);
@@ -92,6 +99,21 @@ TEST(WebAvailability, CapabilitiesReflectCompiledBackendAndParser) {
     EXPECT_EQ(Has(Op), bool(NEVERD_TEST_WEB_JS));
   const auto Session = neverd_web_session_create();
   ASSERT_NE(Session, nullptr);
+#if !NEVERD_TEST_WEB_JS
+  for (const auto *Owned :
+       {neverd_web_interfaces_analyze_json(Session, "1", 1, "source", 6),
+        neverd_web_interface_records_json(Session, "1", 1, "analysis", 8, 0, 1),
+        neverd_web_interfaces_compare_json(Session, "1", 1, "analysis", 8,
+                                           "capture", 7),
+        neverd_web_interface_correlation_records_json(
+            Session, "1", 1, "correlation", 11, 0, 1)}) {
+    const auto R = take(Owned);
+    ASSERT_NE(R.getAsObject(), nullptr);
+    ASSERT_NE(R.getAsObject()->getObject("error"), nullptr);
+    EXPECT_EQ(R.getAsObject()->getObject("error")->getString("code"),
+              "capability_unavailable");
+  }
+#endif
   neverd_web_session_destroy(Session);
 #else
   EXPECT_EQ(Object->getString("status"), "error");
@@ -111,6 +133,22 @@ TEST(WebAvailability, AllPublicEntryPointsRemainAvailableWhenBackendIsOmitted) {
   neverd_session_t NativeOutput = reinterpret_cast<void *>(uintptr_t(1));
   for (const auto *Owned :
        {neverd_web_metadata_json(nullptr),
+        neverd_web_har_preview_json(nullptr, nullptr, 0, nullptr, 0),
+        neverd_web_har_commit_json(nullptr, nullptr, 0, nullptr, 0),
+        neverd_web_har_records_json(nullptr, nullptr, 0, nullptr, 0, 0, 1),
+        neverd_web_interfaces_analyze_json(nullptr, nullptr, 0, nullptr, 0),
+        neverd_web_interface_records_json(nullptr, nullptr, 0, nullptr, 0, 0,
+                                          1),
+        neverd_web_interfaces_compare_json(nullptr, nullptr, 0, nullptr, 0,
+                                           nullptr, 0),
+        neverd_web_interface_correlation_records_json(nullptr, nullptr, 0,
+                                                      nullptr, 0, 0, 1),
+        neverd_web_package_integrity_verify_json(nullptr, nullptr, 0, nullptr,
+                                                 0, nullptr, 0, nullptr, 0),
+        neverd_web_package_archive_extract_json(nullptr, nullptr, 0, nullptr, 0,
+                                                nullptr, 0),
+        neverd_web_package_archive_records_json(nullptr, nullptr, 0, nullptr, 0,
+                                                0, 1),
         neverd_web_packages_analyze_json(nullptr, nullptr, 0, nullptr, 0,
                                          nullptr, 0),
         neverd_web_package_records_json(nullptr, nullptr, 0, nullptr, 0,

@@ -23,7 +23,7 @@ The source commit is a development tree, not an authenticated writer release.
 
 ## ICU archive path policy
 
-The optional ASAR reader links the native ICU4C 77.1 common/data libraries for
+The optional ASAR and package tar readers link native ICU4C 77.1 common/data libraries for
 NFC normalization and full case folding, with Unicode 16.0 runtime checks.
 The full upstream Unicode License V3 and bundled third-party notices are
 preserved in [`LICENSES/icu/LICENSE`](LICENSES/icu/LICENSE), matching
@@ -255,6 +255,12 @@ stage these notices with the library and SDK and install them under
 executed by this implementation.
 
 ## zlib
+
+Offline package gzip admission links the installed native zlib library when
+available, using only its in-process stream decoder and checksum validation.
+No zlib executable or upstream implementation source is copied into the web
+component. Gzip capability is unavailable when this dependency is omitted;
+plain tar and original SRI verification remain independent.
 
 Mobile ZIP extraction links zlib for DEFLATE and CRC-32. CMake uses an installed
 library when available, or builds the unchanged, hash-pinned zlib 1.3.2 source
