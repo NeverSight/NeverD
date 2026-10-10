@@ -1063,7 +1063,7 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
             return E;
           if (Action.Source == WindowsX64ExecutionPolicy::Action::Kind::
                                    ReadTimestampAndProcessor)
-            if (auto E = CPU.setReg(X64Register::CX, 0))
+            if (auto E = CPU.setReg(X64Register::CX, ProcessorNumber))
               return E;
           NextPC = PendingEnvironmentRead->NextPC;
           continue;

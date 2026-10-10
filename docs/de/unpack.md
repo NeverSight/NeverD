@@ -14,7 +14,7 @@ Der Container bestimmt, wie eine Datei validiert und neu aufgebaut wird, der Bef
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | Laufzeitbeobachtung |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | Laufzeitbeobachtung |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v97`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v98`](driver-emulation.md) | `DriverEntry` |
 
 PE32+-DLLs werden anhand von `IMAGE_FILE_DLL` erkannt. Eine modellierte Gast-EXE ruft `LoadLibraryA` und anschließend `FreeLibrary` über den normalen Lebenszyklus von Abhängigkeiten, TLS und `DllMain` auf. Der akzeptierte DLL-Eintritt ist ihr Prozess-Anfügeaufruf; Argumente beliebiger Exporte werden nicht erfunden. Namen, Ordinale, Aliase, Daten und Weiterleitungen bleiben erhalten. Zeiger auf eigene Exporte bleiben intern und erzeugen keine Selbstimporte. Das gilt auch für von Hilfsroutinen zurückgegebene Adressen: Ein internes Ergebnis widerruft frühere Import-Reparaturnachweise für diese Stelle.
 

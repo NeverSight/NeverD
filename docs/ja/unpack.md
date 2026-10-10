@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 実行時の観測 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 実行時の観測 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v97`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v98`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 入力は `IMAGE_FILE_DLL` で識別します。モデル化されたゲスト EXE が `LoadLibraryA`、`FreeLibrary` を呼び出し、通常の依存関係、TLS、`DllMain` のライフサイクルを使います。DLL の既定入口はプロセスアタッチ呼び出しです。任意のエクスポートの引数は推測しません。名前、序数、別名、データ、転送エクスポートを保持し、自身のエクスポートへのポインターは自己インポートに変換しません。ヘルパーが返すアドレスにも同じ規則を適用します。内部アドレスが返された場合、その位置で以前に得たインポート修復の証拠を撤回します。
 

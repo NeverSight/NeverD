@@ -153,9 +153,13 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
 }
 
 TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
-  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14}) {
+  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15}) {
     SCOPED_TRACE(Mode);
     const auto Input = packed(Mode);
+    if (Mode == 15) {
+      checkLifecycle(Input);
+      ASSERT_FALSE(HasFatalFailure());
+    }
     auto Result = unpackFile(Input, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     ASSERT_EQ(Result->Outcome, UnpackOutcome::UnsupportedState)

@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 실행 중 관찰 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 실행 중 관찰 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v97`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v98`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 입력은 `IMAGE_FILE_DLL`로 식별합니다. 모델링된 게스트 EXE가 `LoadLibraryA`, `FreeLibrary`를 호출하며 일반 의존성, TLS, `DllMain` 수명주기를 사용합니다. DLL 기본 진입점은 프로세스 연결 호출입니다. 임의의 내보내기 함수 인수를 추측하지 않습니다. 이름, 서수, 별칭, 데이터, 전달 내보내기를 보존하며 자체 내보내기 포인터는 자체 가져오기로 변환하지 않습니다. 헬퍼가 반환한 주소에도 같은 규칙을 적용합니다. 내부 주소가 반환되면 해당 위치의 이전 가져오기 복구 증거를 철회합니다.
 

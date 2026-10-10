@@ -566,6 +566,7 @@ The initial API model deliberately has a finite contract:
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Device-owned opaque work items; `DelayedWorkQueue` only, callbacks receive the device and context at `PASSIVE_LEVEL`; queued items cannot be freed |
 | `PsCreateSystemThread`, `PsTerminateSystemThread`, `ObReferenceObjectByHandle`, `ObfDereferenceObject`, `ZwClose` | Bounded system-process threads run at `PASSIVE_LEVEL` with a separate guest stack. Kernel handles and referenced opaque thread objects have independent lifetimes. Termination does not return to the guest, signals the thread object, and a normal start-routine return stops explicitly. NULL process/client IDs and NULL or kernel-handle-only object attributes are supported; APC delivery, process priority classes and typed object references are not. |
 | `KeSetPriorityThread`, `KeQueryPriorityThread` | Runtime priorities at `PASSIVE_LEVEL`; setters accept 1..31 and return the previous priority. The deterministic initial priority is 8. Known thread objects are required. Priority scheduling is enabled by `scheduling`; dynamic boosts and process priority classes remain unsupported. [driver-scheduling.md](driver-scheduling.md) |
+| `KeQueryActiveProcessors`, `KeSetSystemAffinityThread`, `KeRevertToUserAffinityThread` | One processor in group 0: `KeQueryActiveProcessors` returns mask `1` at any valid IRQL. The legacy affinity pair accepts mask `1` at IRQL <= DISPATCH_LEVEL, tracks logical-thread ownership across parked/nested calls, and requires restoration before the outer return. Other masks and unmatched restores fail explicitly. These environment-sensitive calls retain a UNPACK dependency. |
 | `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | Opaque DPC storage, four guest callback arguments, `DISPATCH_LEVEL`, duplicate/remove semantics and importance; target CPU0 only |
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Notification/synchronization timers; relative/absolute 100 ns deadlines, periodic milliseconds, rearm/cancel and signal queries in virtual time |
 | `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Notification/synchronization events with distinct signal consumption; `KeSetEvent` accepts Increment=0 and Wait=FALSE only |
@@ -999,7 +1000,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v97`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v98`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

@@ -1435,6 +1435,13 @@ NEVERD_EMULATION_DOC_TOKEN(DeferredLoading, "observeProcess")
 NEVERD_EMULATION_DOC_TOKEN(DeferredLoading, "ProcessObserver")
 NEVERD_EMULATION_DOC_TOKEN(DeferredLoading, "unpack.md")
 
+NEVERD_EMULATION_DOC_PATH(ProcessorAffinity, "docs/driver-emulation.md")
+NEVERD_EMULATION_DOC_PATH(ProcessorAffinity,
+                          "docs/{locale}/driver-emulation.md")
+NEVERD_EMULATION_DOC_TOKEN(ProcessorAffinity, "KeQueryActiveProcessors")
+NEVERD_EMULATION_DOC_TOKEN(ProcessorAffinity, "KeSetSystemAffinityThread")
+NEVERD_EMULATION_DOC_TOKEN(ProcessorAffinity, "KeRevertToUserAffinityThread")
+
 NEVERD_EMULATION_DOC_PATH(ThreadPriority, "docs/driver-scheduling.md")
 NEVERD_EMULATION_DOC_PATH(ThreadPriority, "docs/{locale}/driver-scheduling.md")
 NEVERD_EMULATION_DOC_PATH(ThreadPriority, "docs/driver-emulation.md")

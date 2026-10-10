@@ -741,6 +741,10 @@ private:
                                              bool Changing) const;
   llvm::Expected<uint64_t> queryThreadPriority(uint64_t Object) const;
   llvm::Expected<uint64_t> setThreadPriority(uint64_t Object, int32_t Priority);
+  // Canonical logical-thread ownership survives parked and nested executions.
+  std::set<uint64_t> SystemAffinityThreads;
+  llvm::Expected<uint64_t> setSystemAffinity(uint64_t Mask);
+  llvm::Expected<uint64_t> revertSystemAffinity();
   std::map<uint64_t, size_t> RemoveLockWaitReferences;
   llvm::Expected<uint64_t>
   initializeRemoveLock(llvm::ArrayRef<uint64_t> Arguments);

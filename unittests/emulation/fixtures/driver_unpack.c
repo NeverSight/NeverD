@@ -24,6 +24,9 @@ __declspec(dllimport) void MmUnmapLockedPages(void *, void *);
 __declspec(dllimport) void MmUnlockPages(void *);
 __declspec(dllimport) void IoFreeMdl(void *);
 __declspec(dllimport) void RtlCopyMemory(void *, const void *, U64);
+__declspec(dllimport) U64 KeQueryActiveProcessors(void);
+__declspec(dllimport) void KeSetSystemAffinityThread(U64);
+__declspec(dllimport) void KeRevertToUserAffinityThread(void);
 struct ImageMDL {
   void *Next;
   unsigned short Size, Flags;
@@ -65,6 +68,13 @@ __attribute__((noinline, used)) static void unpack_bytes(DRIVER_OBJECT *Driver,
     MmUnmapLockedPages(Mapping, MDL);
     MmUnlockPages(MDL);
     IoFreeMdl(MDL);
+  }
+  if (Packed.Mode == 15) {
+    const U64 Mask = KeQueryActiveProcessors();
+    if (Mask != 1)
+      __builtin_trap();
+    KeSetSystemAffinityThread(Mask);
+    KeRevertToUserAffinityThread();
   }
   if (Packed.Mode == 1)
     RetainedPool = ExAllocatePoolWithTag(0, 32, 0x44564e55);

@@ -1,4 +1,4 @@
-//===- KernelThreadAPIs.def - Thread priority API contracts ---------------===//
+//===- KernelThreadAPIs.def - Thread scheduling API contracts -------------===//
 //
 // NeverD Decompiler
 //
@@ -10,3 +10,11 @@ NEVERD_KERNEL_THREAD_API(KeQueryPriorityThread, 1, Passive,
                          queryThreadPriority(A[0]))
 NEVERD_KERNEL_THREAD_API(KeSetPriorityThread, 2, Passive,
                          setThreadPriority(A[0], int32_t(uint32_t(A[1]))))
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-kequeryactiveprocessors
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetsystemaffinitythread
+NEVERD_KERNEL_THREAD_API(KeQueryActiveProcessors, 0, Any,
+                         uint64_t(profile::ActiveProcessorMask))
+NEVERD_KERNEL_THREAD_API(KeSetSystemAffinityThread, 1, Dispatch,
+                         setSystemAffinity(A[0]))
+NEVERD_KERNEL_THREAD_API(KeRevertToUserAffinityThread, 0, Dispatch,
+                         revertSystemAffinity())
