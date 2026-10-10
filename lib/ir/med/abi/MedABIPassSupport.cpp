@@ -50,6 +50,60 @@ bool isAbiRecoveryBarrier(const MedOp &Op) {
   return !x86FPStateShapeIsValid(Id, x86FPStateMedShape(Op));
 }
 
+bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
+  if (C.Func.Blocks.empty() || C.CallIdx < 0)
+    return false;
+  size_t Remaining = limits::kMaxCallSetupStackProofWork;
+  std::map<int, const MedBlock *> Blocks;
+  for (const auto &B : C.Func.Blocks)
+    if (!Blocks.emplace(B.Id, &B).second)
+      return false;
+  std::vector<std::pair<const MedBlock *, size_t>> Work{
+      {&C.Blk, static_cast<size_t>(C.CallIdx)}};
+  std::set<int> Seen;
+  bool ReachedEntry = false;
+  while (!Work.empty()) {
+    auto [B, End] = Work.back();
+    Work.pop_back();
+    if (!Remaining-- || End > B->Ops.size() || !B->ExceptionalPreds.empty())
+      return false;
+    // Revisit the call block on a backedge: the entire previous iteration,
+    // including its calls, must preserve the incoming value as well.
+    if (End == B->Ops.size() && !Seen.insert(B->Id).second)
+      continue;
+    auto Root = C.Func.ModuleAnalysisRoots.lower_bound(B->StartAddr);
+    if (Root != C.Func.ModuleAnalysisRoots.end() &&
+        (*Root == B->StartAddr || *Root < B->EndAddr) && *Root != C.Func.Entry)
+      return false;
+    for (size_t I = 0; I < End; ++I) {
+      if (!Remaining--)
+        return false;
+      const auto &Op = B->Ops[I];
+      if (isAbiRecoveryBarrier(Op))
+        return false;
+      if (Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+          C.Layout.registerIndex(Op.Output.RegOff) == ArgIndex &&
+          !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+            Op.Inputs[0] == Op.Output))
+        return false;
+    }
+    if (B == &C.Func.Blocks.front()) {
+      ReachedEntry = true;
+      if (B->Preds.empty())
+        continue;
+    } else if (B->Preds.empty())
+      return false;
+    for (int Id : B->Preds) {
+      auto P = Blocks.find(Id);
+      if (P == Blocks.end() || std::count(P->second->Succs.begin(),
+                                          P->second->Succs.end(), B->Id) != 1)
+        return false;
+      Work.emplace_back(P->second, P->second->Ops.size());
+    }
+  }
+  return ReachedEntry;
+}
+
 std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C) {
   using Stores = std::map<int64_t, MedVar>;
   const int64_t Word = C.Layout.SlotBytes;

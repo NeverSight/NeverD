@@ -536,6 +536,29 @@ TEST_F(NativePointerRelocationBoundary,
   ExactCall.Args = {Exact.Params[0], num(0x123400000017ULL), num(99), num(100)};
   Exact.CallInfos.push_back(ExactCall);
   Functions.push_back(std::move(Exact));
+  Segment Imports;
+  Imports.Name = ".got";
+  Imports.VA = 0x7000;
+  Imports.Flags = SegmentFlags::Readable;
+  Imports.Size = Imports.FileSz = 16;
+  Imports.Data.resize(Imports.Size);
+  Image.Segments.push_back(Imports);
+  for (unsigned I = 0; I != 2; ++I) {
+    const va_t Slot = Imports.VA + I * 8;
+    ASSERT_TRUE(Image.recordImportStorageSlot(
+        Slot, I ? "labs" : "getpid", 0, ImportStorageEvidence::LoaderBind));
+    MedFunc F = make(I ? "import_argument" : "import_zero_args",
+                     0xe00 + I * 0x40, 1, 1);
+    append(F, 0, NdOp::INDIR_CALL, var(10),
+           {MedVar::makeConst(Slot, 8, ConstantAddressProvenance::Address)});
+    append(F, 0, NdOp::RETURN, {}, {var(10)});
+    MedCallInfo Call;
+    Call.BlockId = Call.OpIdx = 0;
+    Call.IsIndirect = true;
+    Call.Args = {F.Params[0], num(99)};
+    F.CallInfos.push_back(Call);
+    Functions.push_back(std::move(F));
+  }
   llvm::LLVMContext Context;
   auto Module =
       MedLLVMEmitter().emit(Functions, Context, "runtime-pointer-values",
@@ -553,6 +576,8 @@ TEST_F(NativePointerRelocationBoundary,
   std::ofstream C(Harness);
   C << R"(
 #include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
 extern uint64_t masked_word(const uint64_t *);
 extern uint64_t guarded_word(const uint64_t *);
 extern uint64_t selected_pointer(const unsigned char *, uint64_t);
@@ -560,6 +585,8 @@ extern uint64_t nullable_callback(uint64_t);
 extern uint64_t countdown_callbacks(void);
 extern uint64_t runtime_or_lifted_callback(uint64_t);
 extern uint64_t exact_signature_callback(uint64_t);
+extern uint64_t import_argument(uint64_t);
+extern uint64_t import_zero_args(uint64_t);
 static unsigned calls;
 static uint64_t callback(void) { ++calls; return 73; }
 uint64_t get_runtime_callback(void) { return (uintptr_t)&callback; }
@@ -574,6 +601,9 @@ int main(void) {
     if (nullable_callback(i & 1) != ((i & 1) ? 73 : 0)) return 4;
     if (calls != (i + 1) / 2) return 5;
     if (exact_signature_callback(i) != i + 23) return 9;
+    const long signed_value = (i & 1) ? -(long)(i << 33) : (long)(i << 33);
+    if (import_argument((uint64_t)signed_value) != (uint64_t)labs(signed_value)) return 10;
+    if (import_zero_args(i) != (uint64_t)getpid()) return 11;
   }
   if (countdown_callbacks() != 321) return 6;
   if (runtime_or_lifted_callback(0) != 1 || calls != 512) return 7;

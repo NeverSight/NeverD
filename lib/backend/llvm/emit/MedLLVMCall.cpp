@@ -13,6 +13,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
@@ -91,6 +92,138 @@ llvm::GlobalValue *constantCallIdentity(llvm::Value *Value,
   return nullptr;
 }
 } // namespace
+
+bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources) {
+  const auto &Layout = Module.getDataLayout();
+  const unsigned PointerBits = Layout.getPointerSizeInBits();
+  auto Compatible = [&](llvm::Type *From, llvm::Type *To) {
+    if (From == To)
+      return true;
+    if (From->isIntegerTy() && To->isIntegerTy())
+      return true;
+    auto PointerInteger = [&](llvm::Type *P, llvm::Type *I) {
+      return P->isPointerTy() && P->getPointerAddressSpace() == 0 &&
+             I->isIntegerTy(PointerBits);
+    };
+    return PointerInteger(From, To) || PointerInteger(To, From);
+  };
+  auto Convert = [](llvm::IRBuilder<> &B, llvm::Value *V, llvm::Type *T) {
+    if (V->getType() == T)
+      return V;
+    if (V->getType()->isPointerTy())
+      return B.CreatePtrToInt(V, T);
+    if (T->isPointerTy())
+      return B.CreateIntToPtr(V, T);
+    return B.CreateZExtOrTrunc(V, T);
+  };
+  std::vector<llvm::CallBase *> Calls;
+  for (auto &F : Module)
+    for (auto &B : F)
+      for (auto &I : B)
+        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
+          Calls.push_back(Call);
+  for (auto *Call : Calls) {
+    auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
+        constantCallIdentity(Call->getCalledOperand(), Layout, PointerBits));
+    if (!Target || Call->getFunctionType() == Target->getFunctionType())
+      continue;
+    auto Refuse = [&](llvm::StringRef Reason) {
+      syncError() << "med_llvm_emitter: resolved call in "
+                  << Call->getFunction()->getName() << " to "
+                  << Target->getName() << " " << Reason << "\n";
+      return false;
+    };
+    auto *Type = Target->getFunctionType();
+    const unsigned Fixed = Type->getNumParams();
+    if (Call->arg_size() < Fixed)
+      return Refuse("lacks recovered arguments");
+    auto *Ordinary = llvm::dyn_cast<llvm::CallInst>(Call);
+    auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Call);
+    if ((!Ordinary && !Invoke) || Call->isMustTailCall() ||
+        Call->getCallingConv() != Target->getCallingConv())
+      return Refuse("has an incompatible calling convention or control flow");
+    for (unsigned I = 0; I < Fixed; ++I)
+      if (!Compatible(Call->getArgOperand(I)->getType(), Type->getParamType(I)))
+        return Refuse("has incompatible argument carriers");
+    if (!Call->use_empty() &&
+        (!Compatible(Type->getReturnType(), Call->getType()) ||
+         (Invoke && Type->getReturnType() != Call->getType())))
+      return Refuse("has an incompatible observed result");
+
+    llvm::IRBuilder<> Builder(Call);
+    std::vector<llvm::Value *> Arguments;
+    llvm::SmallVector<llvm::AttributeSet> ParameterAttrs;
+    const unsigned Count = Type->isVarArg() ? Call->arg_size() : Fixed;
+    for (unsigned I = 0; I < Count; ++I) {
+      auto *Value = Call->getArgOperand(I);
+      auto *Wanted = I < Fixed ? Type->getParamType(I) : Value->getType();
+      ParameterAttrs.push_back(Value->getType() == Wanted
+                                   ? Call->getAttributes().getParamAttrs(I)
+                                   : llvm::AttributeSet{});
+      Arguments.push_back(Convert(Builder, Value, Wanted));
+    }
+    llvm::SmallVector<llvm::OperandBundleDef> Bundles;
+    Call->getOperandBundlesAsDefs(Bundles);
+    llvm::CallBase *Replacement;
+    if (Invoke)
+      Replacement =
+          Builder.CreateInvoke(Type, Target, Invoke->getNormalDest(),
+                               Invoke->getUnwindDest(), Arguments, Bundles);
+    else
+      Replacement = Builder.CreateCall(Type, Target, Arguments, Bundles);
+    Replacement->setCallingConv(Target->getCallingConv());
+    auto FnAttrs = Call->getAttributes().getFnAttrs();
+    if (Count != Call->arg_size())
+      FnAttrs = FnAttrs.removeAttribute(Module.getContext(),
+                                        llvm::Attribute::AllocSize);
+    Replacement->setAttributes(
+        llvm::AttributeList::get(Module.getContext(), FnAttrs,
+                                 Type->getReturnType() == Call->getType()
+                                     ? Call->getAttributes().getRetAttrs()
+                                     : llvm::AttributeSet{},
+                                 ParameterAttrs));
+    Replacement->copyMetadata(*Call);
+    if (Replacement->getType() != Call->getType())
+      for (unsigned Kind :
+           {llvm::LLVMContext::MD_range, llvm::LLVMContext::MD_nonnull,
+            llvm::LLVMContext::MD_align, llvm::LLVMContext::MD_dereferenceable,
+            llvm::LLVMContext::MD_dereferenceable_or_null})
+        Replacement->setMetadata(Kind, nullptr);
+    Replacement->setDebugLoc(Call->getDebugLoc());
+    if (!Replacement->getType()->isVoidTy())
+      Replacement->takeName(Call);
+    if (Ordinary && Replacement->getType() == Call->getType())
+      llvm::cast<llvm::CallInst>(Replacement)
+          ->setTailCallKind(Ordinary->getTailCallKind());
+    if (Sources)
+      for (auto &Observation : Sources->Observations)
+        if (Observation.Value == Call)
+          Observation.Value = Replacement;
+    if (!Call->use_empty())
+      Call->replaceAllUsesWith(Convert(Builder, Replacement, Call->getType()));
+    Call->eraseFromParent();
+  }
+  return true;
+}
+
+bool validateResolvedLLVMCallSignatures(llvm::Module &Module) {
+  const auto &Layout = Module.getDataLayout();
+  for (auto &Function : Module)
+    for (auto &Block : Function)
+      for (auto &Instruction : Block)
+        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+          if (auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
+                  constantCallIdentity(Call->getCalledOperand(), Layout,
+                                       Layout.getPointerSizeInBits()));
+              Target && Call->getFunctionType() != Target->getFunctionType()) {
+            syncError() << "med_llvm_emitter: resolved call in "
+                        << Function.getName()
+                        << " disagrees with the signature of "
+                        << Target->getName() << "\n";
+            return false;
+          }
+  return true;
+}
 
 //===----------------------------------------------------------------------===//
 // CALL / INDIR_CALL -- direct and indirect call lowering
@@ -300,8 +433,28 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (X87Result)
     DefaultRetTy = llvm::Type::getX86_FP80Ty(*Ctx);
 
-  // The symbol of the routine a direct call reaches.
+  llvm::GlobalValue *KnownTarget =
+      Target
+          ? constantCallIdentity(Target, Mod->getDataLayout(),
+                                 getTargetRegInfo(TargetArch).PointerSize * 8)
+          : nullptr;
+  std::string IndirectImportName;
+  if (KnownTarget && !llvm::isa<llvm::Function>(KnownTarget)) {
+    const auto It =
+        ImportedSymbolPlaceholders.find(KnownTarget->getName().str());
+    if (It != ImportedSymbolPlaceholders.end() && It->second == KnownTarget &&
+        (libc::libcArityForSymbol(It->first) ||
+         libc::varArgFixedCount(stripLeadingUnderscores(It->first))))
+      IndirectImportName = It->first;
+  }
+
+  // An exact immutable import identity uses the same ABI materializer as a
+  // direct call. It must not wait for some later body to promote the import's
+  // data placeholder into a Function: LLVM can fold that pointer after
+  // emission.
   auto calleeSymbol = [&]() -> std::string {
+    if (!IndirectImportName.empty())
+      return IndirectImportName;
     if (CI && !CI->TargetName.empty() &&
         !CI->TargetName.starts_with(kAutoFuncPrefix))
       return canonicalizeObjectCallee(CI->TargetName);
@@ -314,7 +467,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   };
   auto resolveCalleeName = [&]() -> std::string {
     std::string Name = calleeSymbol();
-    if (Img && CallAddr > 1 && !Name.empty())
+    if (IndirectImportName.empty() && Img && CallAddr > 1 && !Name.empty())
       if (auto Shadow =
               peImportShadowName(PEImportCNames, *Img, CallAddr, Name))
         return std::move(*Shadow);
@@ -372,8 +525,20 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
 
   llvm::Function *Callee = nullptr;
-  if (Op.Opcode == NdOp::CALL) {
+  if (Op.Opcode == NdOp::CALL || !IndirectImportName.empty()) {
     std::string CalleeName = resolveCalleeName();
+    if (!IndirectImportName.empty()) {
+      const auto Arity = libc::libcArityForSymbol(CalleeName);
+      const unsigned Required =
+          Arity ? Arity->IntArgs + Arity->FpArgs
+                : libc::varArgFixedCount(stripLeadingUnderscores(CalleeName));
+      if (Args.size() < Required) {
+        syncError() << "med_llvm_emitter: resolved indirect call to "
+                    << CalleeName << " lacks recovered arguments\n";
+        FatalCodePointerResolution = true;
+        return;
+      }
+    }
     if (!CalleeName.empty() && CallAddr == 0)
       CallAddr = 1; // force direct-call resolution below
     if (CallAddr != 0) {
@@ -503,11 +668,17 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                                    LongDoubleAsDouble || Arity->FpRetComplex);
         bool ArgsModelled = Arity && (Arity->FpArgs == 0 ||
                                       Arity->IntArgs == 0 || Arity->FpFirst);
-        bool IsPlainZeroArg = Arity && Arity->IntArgs == 0 &&
-                              Arity->FpArgs == 0 && !Arity->FpRet &&
-                              !Arity->FpRetLongDouble && !Arity->FpRetComplex;
-        if (IsPlainZeroArg) {
-          auto *FT = llvm::FunctionType::get(DefaultRetTy, false);
+        bool IsPlainInteger =
+            Arity && Arity->IntArgs >= 0 && Arity->FpArgs == 0 &&
+            !Arity->FpRet && !Arity->FpRetLongDouble && !Arity->FpRetComplex &&
+            !libc::isVaListConsumer(stripLeadingUnderscores(CalleeName));
+        if (IsPlainInteger && Args.size() >= size_t(Arity->IntArgs)) {
+          // Use one carrier width for this target, regardless of which call
+          // site or LLVM shard first observes a narrow register alias.
+          const std::vector<llvm::Type *> Parameters(
+              Arity->IntArgs,
+              sizeToType(getTargetRegInfo(TargetArch).PointerSize));
+          auto *FT = llvm::FunctionType::get(DefaultRetTy, Parameters, false);
           Callee = llvm::Function::Create(
               FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
           Callee->setCallingConv(llvm::CallingConv::C);
@@ -608,6 +779,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           ImportedPlaceholder->replaceAllUsesWith(Callee);
           ImportedPlaceholder->eraseFromParent();
           ImportedSymbolPlaceholders.erase(CalleeName);
+          if (!IndirectImportName.empty())
+            KnownTarget = Callee;
         } else {
           // Defensive only: every direct-call path above creates a callee, but
           // leave a valid canonical declaration if a future path declines.
@@ -617,18 +790,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
   }
 
-  llvm::GlobalValue *KnownTarget = nullptr;
-  if (!Callee && Target) {
-    KnownTarget =
-        constantCallIdentity(Target, Mod->getDataLayout(),
-                             getTargetRegInfo(TargetArch).PointerSize * 8);
+  if (!Callee && Target)
     Callee = llvm::dyn_cast_or_null<llvm::Function>(KnownTarget);
-    if (Callee && Args.size() < Callee->arg_size()) {
-      syncError() << "med_llvm_emitter: resolved indirect call to "
-                  << Callee->getName() << " lacks recovered arguments\n";
-      FatalCodePointerResolution = true;
-      return;
-    }
+  if (Target && Callee && Args.size() < Callee->arg_size()) {
+    syncError() << "med_llvm_emitter: resolved indirect call to "
+                << Callee->getName() << " lacks recovered arguments\n";
+    FatalCodePointerResolution = true;
+    return;
   }
 
   if (Op.Opcode == NdOp::CALL && Callee && CallAddr > 1 &&

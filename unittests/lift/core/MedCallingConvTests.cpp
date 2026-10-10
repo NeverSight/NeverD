@@ -878,6 +878,110 @@ TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
   EXPECT_EQ(Func.CallInfos[0].Args[1].RegOff, TRI.IntParamRegs[1]);
 }
 
+TEST(MedABIPass, ExactImportSlotsRecoverOnlyProvenIncomingRegisters) {
+  for (Arch A : {Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (unsigned Mode = 0; Mode != 10; ++Mode) {
+        SCOPED_TRACE(static_cast<unsigned>(A));
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(
+            Mode); // Forward, mixed setup, conflict, addend, name only,
+                   // conflicting directory, intervening call,
+                   // predecessor, clobbering predecessor, alternate root.
+        const auto &TRI = getTargetRegInfo(A);
+        const auto Layout = TRI.integerArgumentLayout(Format);
+        ASSERT_GE(Layout.Registers.size(), 2u);
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Bits = TRI.PointerSize == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        Image.Format = Format;
+        Segment Storage;
+        Storage.VA = 0x2000;
+        Storage.Size = Storage.FileSz = TRI.PointerSize;
+        Storage.Flags = SegmentFlags::Readable;
+        Storage.Data.resize(TRI.PointerSize);
+        Image.Segments.push_back(Storage);
+        const std::string Name =
+            Format == BinaryFormat::MachO ? "_popen" : "popen";
+        if (Mode != 4)
+          ASSERT_TRUE(
+              Image.recordImportStorageSlot(Storage.VA, Name, Mode == 3 ? 1 : 0,
+                                            ImportStorageEvidence::LoaderBind));
+        if (Mode == 2)
+          Image.ConflictingImportStorageSlots.insert(Storage.VA);
+        if (Mode == 5) {
+          Import Imp;
+          Imp.IATAddr = Storage.VA;
+          Imp.Name = "another_import";
+          Image.Imports.push_back(Imp);
+        }
+        MedFunc Func;
+        Func.Entry = 0x1000;
+        Func.Name = "forward_import";
+        MedBlock B;
+        B.Id = 0;
+        B.StartAddr = Func.Entry;
+        B.EndAddr = Func.Entry + 16;
+        if (Mode == 1)
+          B.Ops.push_back(unary(
+              NdOp::COPY, reg(2, 1, TRI.PointerSize, Layout.Registers[1], A),
+              MedVar::makeConst(7, TRI.PointerSize)));
+        if (Mode == 6) {
+          MedOp Opaque;
+          Opaque.Opcode = NdOp::CALL;
+          Opaque.addInput(MedVar::makeConst(0x3000, TRI.PointerSize));
+          B.Ops.push_back(Opaque);
+        }
+        MedOp Call;
+        Call.Opcode = NdOp::INDIR_CALL;
+        Call.Addr = Func.Entry + 8;
+        Call.addInput(MedVar::makeConst(Storage.VA, TRI.PointerSize,
+                                        ConstantAddressProvenance::Address));
+        B.Ops.push_back(Call);
+        if (Mode >= 7) {
+          MedBlock Entry;
+          Entry.Id = 0;
+          Entry.StartAddr = Func.Entry;
+          Entry.EndAddr = Func.Entry + 8;
+          Entry.Succs = {1};
+          if (Mode == 8) {
+            MedOp Opaque;
+            Opaque.Opcode = NdOp::CALL;
+            Opaque.addInput(MedVar::makeConst(0x3000, TRI.PointerSize));
+            Entry.Ops.push_back(Opaque);
+          }
+          B.Id = 1;
+          B.StartAddr = Func.Entry + 8;
+          B.Preds = {0};
+          Func.Blocks.push_back(Entry);
+          if (Mode == 9)
+            Func.ModuleAnalysisRoots.insert(B.StartAddr);
+        }
+        Func.Blocks.push_back(B);
+        recoverCallAbi(Func, A, {{Storage.VA, Name}}, &Image);
+        const auto &CI = Func.CallInfos.back();
+        if (Mode >= 2 && Mode != 7) {
+          EXPECT_TRUE(Func.Params.empty());
+          EXPECT_TRUE(CI.Args.empty());
+          continue;
+        }
+        ASSERT_EQ(CI.Args.size(), 2u);
+        EXPECT_TRUE(CI.IsIndirect);
+        EXPECT_EQ(CI.TargetName, Name);
+        ASSERT_EQ(Func.Params.size(), Mode == 1 ? 1u : 2u);
+        EXPECT_EQ(CI.Args[0].Kind, MedVar::Param);
+        EXPECT_EQ(CI.Args[0].RegOff, Layout.Registers[0]);
+        if (Mode == 1) {
+          EXPECT_TRUE(CI.Args[1].isConst());
+          EXPECT_EQ(CI.Args[1].ConstVal, 7u);
+        } else {
+          EXPECT_EQ(CI.Args[1].Kind, MedVar::Param);
+          EXPECT_EQ(CI.Args[1].RegOff, Layout.Registers[1]);
+        }
+      }
+}
+
 TEST(MedABIPass, I386TailJumpPassesItsIncomingStackSlots) {
   // `jmp callee` leaves on this function's entry stack: the callee reads its
   // arguments at 4(%esp) and 8(%esp), above the return address.  swapper

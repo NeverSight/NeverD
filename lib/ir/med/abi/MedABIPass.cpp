@@ -17,6 +17,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
@@ -648,6 +649,16 @@ void recoverCallAbi(
 
       const bool IsDirectImport =
           !CI.IsIndirect && Img && Img->findImportAt(CI.TargetAddr);
+      // LowIR canonicalizes an import-slot load to an exact indirect target.
+      // The import's ABI still applies: a forwarded incoming register need
+      // not have a setup write. Names alone do not prove this identity.
+      bool IsIndirectImport = false;
+      if (CI.IsIndirect && Img && Op.NumInputs && Op.Inputs[0].isConst())
+        if (std::string Name = importCalleeName(*Img, CI.TargetAddr);
+            !Name.empty()) {
+          CI.TargetName = std::move(Name);
+          IsIndirectImport = true;
+        }
 
       // An external placeholder collision, indirect call or import keeps its
       // existing output here (promoteFloatCallResult).
@@ -663,7 +674,7 @@ void recoverCallAbi(
           TargetSection && Img->isMachO() &&
           TargetSection->Name == section_names::macho::ObjCStubs;
       std::optional<libc::LibCArity> ExternalArity;
-      if (!CI.IsIndirect)
+      if (!CI.IsIndirect || IsIndirectImport)
         ExternalArity = libc::libcArityForSymbol(CI.TargetName);
 
       // The callee's integer register-argument count, if it is a known direct
@@ -1061,8 +1072,10 @@ void recoverCallAbi(
       // consecutive register slots from the value reaching the call across the
       // CFG.
       bool Arg0FromInBlock = FoundMask[0];
-      if (!CI.IsIndirect && IntRegArgsApply)
+      if ((!CI.IsIndirect || UseExternalArity) && IntRegArgsApply)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
+          if (UseExternalArity && K >= CalleeRegArgs)
+            break;
           if (FoundMask[K])
             continue;
           if (K > 0 && !FoundMask[K - 1])
@@ -1078,6 +1091,9 @@ void recoverCallAbi(
           auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K,
                                       IntegerLayout, AllowLiveIn, &FromLiveIn);
           if (!V)
+            break;
+          if (IsIndirectImport && (FromLiveIn || V->Kind == MedVar::Param) &&
+              !incomingArgumentReachesCall(Ctx, K))
             break;
           Found[K] = *V;
           FoundMask[K] = true;
@@ -1725,7 +1741,8 @@ void recoverCallAbi(
           if (Param.RegOff != kNoParamReg)
             ++CallerStackBase;
       }
-      if (IsTailJump && (!CI.IsIndirect || ImportStackArgs) &&
+      if (IsTailJump &&
+          (!CI.IsIndirect || ImportStackArgs || UseExternalArity) &&
           CalleeArgs > CalleeStackBase) {
         for (int K = CalleeStackBase; K < CalleeArgs && K < MaxArgs; ++K) {
           if (FoundMask[K])

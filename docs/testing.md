@@ -2301,6 +2301,19 @@ immutable table observations survive target resolution. The native pointer
 test compiles LLVM, default C and exact-type C at O0/O2 and checks the narrow
 argument's actual value after the indirect call. Function-address initializers
 also require declarations matching the emitted definitions before the tables.
+`ImportCallSignaturesDoNotDependOnFirstDirectCallOrder` adds 228 cases across
+those twelve cells: zero, integer, FP, variadic and va_list imports, both call
+orders, indirect-only use, narrow aliases and missing required arguments.
+The shared ABI test adds 90 register-forwarding cases across x64, ARM and
+AArch64, including local setup, predecessor flow, intervening calls, alternate
+roots and conflicting/addended/name-only import identities. A Win64 machine
+fixture checks the `_popen` incoming argument at both optimization settings.
+The native pointer oracle executes real `getpid` and `labs` imports with 1024
+inputs through LLVM and both C modes at O0/O2 on Linux x64. Pipeline outcome
+tests reconcile late exact targets and reject missing arguments after shard
+linking even when the LLVM verifier accepts each input module. A narrow-return
+case checks scalar bit preservation, source identity and obsolete range
+metadata.
 `TargetAggregateLayoutCompilesAcrossArchitecturesAndFormats` checks each
 target's pointer width and compiles LLVM-derived record size/offset assertions
 with Clang for all twelve target/format combinations, without host headers.

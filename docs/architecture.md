@@ -125,6 +125,21 @@ bodies can supply ABI evidence without becoming output definitions. Register
 pair return evidence is also consumed by HighIR, so a packed call result and
 its definition retain both integer carriers.
 
+Loader-authenticated import slots retain the same curated call ABI as direct
+import calls. Register argument recovery can expose an untouched incoming
+parameter only after every reaching path preserves it; intervening calls,
+independent roots and conflicting import storage cannot supply that proof.
+LLVM declaration materialization shares the direct-call ABI rules with exact
+immutable import targets, including FP, variadic and va_list signatures.
+Known integer parameters use the target's pointer-width carrier so narrow
+register aliases and shard order do not choose different declarations.
+`LLVMCallContract` reconciles exact targets revealed by optimization or shard
+linking, drops surplus fixed arguments and adapts integer/pointer carriers.
+Missing arguments, incompatible observed results and musttail changes fail
+clearly. It preserves source observations and discards obsolete return-type
+metadata, then checks the resulting call types; opaque-pointer verifier
+acceptance alone is insufficient.
+
 Debug record names provide C spelling independently of by-value layout.
 Win64 class-return projection is target-specific; a DWARF name on another
 platform cannot create a hidden result parameter. Runtime-language detection

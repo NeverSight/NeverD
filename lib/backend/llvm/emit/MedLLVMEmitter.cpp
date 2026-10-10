@@ -25,6 +25,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
@@ -1316,7 +1317,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
             language_eh_md::InternalCxxContinuationReturnAttachment, nullptr);
       }
 
-  if (FatalCodePointerResolution || FatalDataPointerResolution)
+  if (FatalCodePointerResolution || FatalDataPointerResolution ||
+      !normalizeResolvedLLVMCalls(*Mod_, SourceMap) ||
+      !validateResolvedLLVMCallSignatures(*Mod_))
     return nullptr;
 
   // Mark the producer schema independently of per-function attachments.  A

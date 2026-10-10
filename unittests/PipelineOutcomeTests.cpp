@@ -9,6 +9,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/llvm/LLVMCallContract.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -683,6 +685,123 @@ TEST(PipelineOutcome, MissingShardModuleHasAnOwnedDiagnostic) {
   EXPECT_FALSE(Result.LLVMVerifierFailed);
   EXPECT_EQ(Result.Error,
             "LLVM shard 1 emission failed: emitter returned no module");
+}
+
+TEST(PipelineOutcome, ResolvedSignaturesAreReconciledBeforeShardPublication) {
+  for (bool NoOpt : {false, true})
+    for (bool Deferred : {false, true})
+      for (bool Missing : {false, true}) {
+        SCOPED_TRACE(Missing);
+        SCOPED_TRACE(NoOpt);
+        SCOPED_TRACE(Deferred);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Result = PipelineTestPeer::runShards(
+            {}, Context, 2, 2, NoOpt,
+            [&](unsigned Shard, llvm::LLVMContext &C) {
+              PipelineTestPeer::LLVMEmissionResult E;
+              E.Module = shardModule(C, Shard ? "other" : "caller");
+              E.Module->setDataLayout("e-p:64:64");
+              auto *I64 = llvm::Type::getInt64Ty(C);
+              auto *Actual = llvm::FunctionType::get(
+                  I64, std::vector<llvm::Type *>(Missing ? 2 : 0, I64), false);
+              llvm::Value *Target = nullptr;
+              if (Shard == 1 || !Deferred)
+                Target = llvm::Function::Create(
+                    Actual, llvm::GlobalValue::ExternalLinkage, "late_import",
+                    *E.Module);
+              else
+                Target = new llvm::GlobalVariable(
+                    *E.Module, llvm::Type::getInt8Ty(C), false,
+                    llvm::GlobalValue::ExternalLinkage, nullptr, "late_import");
+              if (Shard == 1) {
+                auto *F = llvm::cast<llvm::Function>(Target);
+                llvm::IRBuilder<> Builder(
+                    llvm::BasicBlock::Create(C, "entry", F));
+                Builder.CreateRet(Builder.getInt64(42));
+              }
+              if (Shard == 0) {
+                auto *F = E.Module->getFunction("caller");
+                llvm::IRBuilder<> Builder(F->getEntryBlock().getTerminator());
+                auto *Wrong = llvm::FunctionType::get(I64, {I64}, false);
+                Builder.CreateCall(Wrong, Target, {Builder.getInt64(7)});
+              }
+              // Opaque pointers allow this semantic mismatch through LLVM's
+              // verifier; before linking, the deferred case has no Function.
+              EXPECT_FALSE(llvm::verifyModule(*E.Module, &llvm::errs()));
+              return E;
+            });
+        const auto Diagnostic = testing::internal::GetCapturedStderr();
+        if (Missing) {
+          EXPECT_EQ(Result.Module, nullptr);
+          EXPECT_NE(Result.Error.find("resolved call signature mismatch"),
+                    std::string::npos)
+              << Result.Error;
+          EXPECT_NE(Diagnostic.find("lacks recovered arguments"),
+                    std::string::npos)
+              << Diagnostic;
+        } else {
+          ASSERT_NE(Result.Module, nullptr) << Result.Error;
+          EXPECT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+          unsigned Calls = 0;
+          for (auto &B : *Result.Module->getFunction("caller"))
+            for (auto &I : B)
+              if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I)) {
+                ++Calls;
+                ASSERT_NE(Call->getCalledFunction(), nullptr);
+                EXPECT_EQ(Call->getFunctionType(),
+                          Call->getCalledFunction()->getFunctionType());
+                EXPECT_EQ(Call->arg_size(), 0u);
+              }
+          EXPECT_EQ(Calls, 1u);
+        }
+      }
+}
+
+TEST(PipelineOutcome,
+     LateCallNormalizationPreservesNarrowBitsAndSourceIdentity) {
+  llvm::LLVMContext C;
+  auto Module = shardModule(C, "unused");
+  Module->setDataLayout("e-p:64:64");
+  auto *I32 = llvm::Type::getInt32Ty(C);
+  auto *I64 = llvm::Type::getInt64Ty(C);
+  auto *TargetType = llvm::FunctionType::get(I32, {I32}, false);
+  auto *Target = llvm::Function::Create(
+      TargetType, llvm::GlobalValue::ExternalLinkage, "narrow", *Module);
+  auto *Caller = llvm::Function::Create(llvm::FunctionType::get(I64, false),
+                                        llvm::GlobalValue::ExternalLinkage,
+                                        "caller", *Module);
+  llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", Caller));
+  auto *Call =
+      B.CreateCall(llvm::FunctionType::get(I64, {I64, I64}, false), Target,
+                   {B.getInt64(0x123400000017ULL), B.getInt64(99)});
+  Call->setMetadata(
+      llvm::LLVMContext::MD_range,
+      llvm::MDNode::get(C, {llvm::ConstantAsMetadata::get(B.getInt64(0)),
+                            llvm::ConstantAsMetadata::get(B.getInt64(100))}));
+  B.CreateRet(Call);
+  LLVMSourceMap Sources;
+  Sources.Observations.push_back({0x1000, {0x1004, 0}, Call});
+  ASSERT_TRUE(normalizeResolvedLLVMCalls(*Module, &Sources));
+  EXPECT_TRUE(validateResolvedLLVMCallSignatures(*Module));
+  EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  auto *Normalized = llvm::dyn_cast_or_null<llvm::CallInst>(
+      static_cast<llvm::Value *>(Sources.Observations[0].Value));
+  ASSERT_NE(Normalized, nullptr);
+  EXPECT_EQ(Normalized->getCalledFunction(), Target);
+  ASSERT_EQ(Normalized->arg_size(), 1u);
+  auto *Argument =
+      llvm::dyn_cast<llvm::ConstantInt>(Normalized->getArgOperand(0));
+  ASSERT_NE(Argument, nullptr);
+  EXPECT_EQ(Argument->getZExtValue(), 23u);
+  EXPECT_EQ(Argument->getType(), I32);
+  EXPECT_EQ(Normalized->getMetadata(llvm::LLVMContext::MD_range), nullptr);
+  auto *Return =
+      llvm::cast<llvm::ReturnInst>(Caller->getEntryBlock().getTerminator());
+  auto *Extend = llvm::dyn_cast<llvm::ZExtInst>(Return->getReturnValue());
+  ASSERT_NE(Extend, nullptr);
+  EXPECT_EQ(Extend->getOperand(0), Normalized);
+  EXPECT_EQ(Extend->getType(), I64);
 }
 
 TEST(PipelineOutcome,

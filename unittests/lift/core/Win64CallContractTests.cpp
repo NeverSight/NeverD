@@ -19,7 +19,10 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstring>
@@ -166,6 +169,52 @@ TEST(Win64CallContract, ACallThroughTheImportSlotPassesTheCallersArguments) {
       std::string::npos)
       << Body;
   EXPECT_EQ(Body.find("unknown value"), std::string::npos) << Body;
+}
+
+TEST(Win64CallContract, LLVMImportCallKeepsUnwrittenLeadingArgument) {
+  // run_pipe(command): RCX is forwarded, only the second argument is set.
+  constexpr va_t Wrap = Text;
+  std::vector<uint8_t> Code(0x20, 0xCC);
+  put(Code, Wrap,
+      framed({{0xBA, 0x45, 0x23, 0x01, 0x00}, throughSlot(Wrap + 9, slot(0))}));
+  BinaryImage Img = makeImage(Code, {{Wrap, "wrap"}}, {"_popen"});
+  ASSERT_TRUE(Img.recordImportStorageSlot(slot(0), "_popen", 0,
+                                          ImportStorageEvidence::PointerTable));
+  for (bool NoOpt : {true, false}) {
+    SCOPED_TRACE(NoOpt);
+    llvm::LLVMContext Ctx;
+    PipelineOptions Opts;
+    Opts.EmitDumpOutput = false;
+    Opts.LiftMode = true;
+    Opts.SourceProjection = true;
+    Opts.NoOpt = NoOpt;
+    Opts.OnlyFunctionEntries = {Wrap};
+    auto Result = Pipeline().run(Img, Ctx, Opts);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_NE(Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    auto *Caller = Result.LlvmModule->getFunction("wrap");
+    auto *Callee = Result.LlvmModule->getFunction("_popen");
+    ASSERT_NE(Caller, nullptr);
+    ASSERT_NE(Callee, nullptr);
+    ASSERT_EQ(Caller->arg_size(), 1u);
+    ASSERT_EQ(Callee->arg_size(), 2u);
+    unsigned Calls = 0;
+    for (auto &Block : *Caller)
+      for (auto &Instruction : Block)
+        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+            Call && Call->getCalledFunction() == Callee) {
+          ++Calls;
+          EXPECT_EQ(Call->getFunctionType(), Callee->getFunctionType());
+          ASSERT_EQ(Call->arg_size(), 2u);
+          EXPECT_EQ(Call->getArgOperand(0), Caller->getArg(0));
+          auto *Second =
+              llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(1));
+          ASSERT_NE(Second, nullptr);
+          EXPECT_EQ(Second->getZExtValue(), 0x12345u);
+        }
+    EXPECT_EQ(Calls, 1u);
+  }
 }
 
 TEST(Win64CallContract, AThunkJumpingThroughTheSlotForwardsTheArguments) {

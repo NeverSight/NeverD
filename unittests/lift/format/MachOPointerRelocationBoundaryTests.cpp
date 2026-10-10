@@ -19467,6 +19467,132 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     ImportCallSignaturesDoNotDependOnFirstDirectCallOrder) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (unsigned Shape = 0; Shape != 5; ++Shape)
+        for (unsigned Order = 0; Order != 4; ++Order) {
+          SCOPED_TRACE(static_cast<unsigned>(A));
+          SCOPED_TRACE(formatTraceName(Format));
+          SCOPED_TRACE(Shape);
+          SCOPED_TRACE(Order);
+          const unsigned Width = getTargetRegInfo(A).PointerSize;
+          const std::string Name = Shape == 0   ? "rand"
+                                   : Shape == 1 ? "tolower"
+                                   : Shape == 2 ? "sqrt"
+                                   : Shape == 3 ? "snprintf"
+                                                : "vfprintf";
+          const unsigned Fixed = Shape == 0 ? 0 : Shape < 3 ? 1 : 3;
+          const bool Variadic = Shape == 3;
+          const bool Missing = Order == 3;
+          if (Missing && Fixed == 0)
+            continue;
+          const std::string ObjectName =
+              Format == BinaryFormat::MachO ? "_" + Name : Name;
+          BinaryImage Image;
+          Image.Arch = A;
+          Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+          Image.Format = Format;
+          Segment Code;
+          Code.VA = 0x1000;
+          Code.Size = Code.FileSz = 0x200;
+          Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+          Code.Data.assign(Code.Size, 0);
+          Image.Segments.push_back(Code);
+          Segment Data;
+          Data.VA = 0x2000;
+          Data.Size = Data.FileSz = Width;
+          Data.Flags = SegmentFlags::Readable;
+          Data.Data.assign(Width, 0);
+          Image.Segments.push_back(Data);
+          Import Import;
+          Import.Name = ObjectName;
+          Import.IATAddr = Data.VA;
+          Image.Imports.push_back(Import);
+          ASSERT_TRUE(Image.recordImportStub(0x1100, 0));
+          ASSERT_TRUE(Image.recordImportStorageSlot(
+              Data.VA, ObjectName, 0, ImportStorageEvidence::PointerTable));
+          auto Make = [&](bool Indirect) {
+            MedFunc F;
+            F.Entry = Indirect ? 0x1000 : 0x1020;
+            F.Name = Indirect ? "import_indirect_first" : "import_direct";
+            F.ReturnType = NdType::makeVoid();
+            MedBlock B;
+            B.Id = 0;
+            B.StartAddr = F.Entry;
+            B.EndAddr = F.Entry + 8;
+            MedOp Call;
+            Call.Opcode = Indirect ? NdOp::INDIR_CALL : NdOp::CALL;
+            Call.Addr = F.Entry;
+            Call.addInput(
+                MedVar::makeConst(Indirect ? Data.VA : 0x1100, Width,
+                                  ConstantAddressProvenance::Address));
+            B.Ops.push_back(Call);
+            MedOp Ret;
+            Ret.Opcode = NdOp::RETURN;
+            Ret.Addr = F.Entry + 4;
+            B.Ops.push_back(Ret);
+            F.Blocks.push_back(B);
+            MedCallInfo CI;
+            CI.BlockId = CI.OpIdx = 0;
+            CI.IsIndirect = Indirect;
+            if (!Indirect) {
+              CI.TargetAddr = 0x1100;
+              CI.TargetName = ObjectName;
+            }
+            const unsigned Count = Variadic   ? Fixed + 2
+                                   : Indirect ? Fixed + 2
+                                              : Fixed;
+            for (unsigned I = 0; I != Count; ++I)
+              CI.Args.push_back(
+                  MedVar::makeConst(7 + I, !Indirect && Shape == 1 ? 4 : Width,
+                                    ConstantAddressProvenance::Scalar));
+            if (Indirect && Missing)
+              CI.Args.resize(Fixed - 1);
+            F.CallInfos.push_back(CI);
+            return F;
+          };
+          std::vector<MedFunc> Functions{Make(true)};
+          if (Order == 1)
+            Functions.push_back(Make(false));
+          if (Order == 2)
+            Functions.insert(Functions.begin(), Make(false));
+          llvm::LLVMContext Context;
+          if (Missing)
+            testing::internal::CaptureStderr();
+          auto Module =
+              MedLLVMEmitter().emit(Functions, Context, "import-call-order", A,
+                                    {{0x1100, ObjectName}}, &Image, Format);
+          if (Missing) {
+            const auto Diagnostic = testing::internal::GetCapturedStderr();
+            EXPECT_EQ(Module, nullptr);
+            EXPECT_NE(Diagnostic.find("lacks recovered arguments"),
+                      std::string::npos)
+                << Diagnostic;
+            continue;
+          }
+          ASSERT_NE(Module, nullptr);
+          expectValidModule(*Module);
+          auto *Callee = Module->getFunction(Name);
+          ASSERT_NE(Callee, nullptr);
+          EXPECT_EQ(Module->getNamedGlobal(Name), nullptr);
+          EXPECT_EQ(Callee->arg_size(), Fixed);
+          EXPECT_EQ(Callee->isVarArg(), Variadic);
+          if (Shape == 1)
+            EXPECT_TRUE(Callee->getFunctionType()->getParamType(0)->isIntegerTy(
+                Width * 8));
+          for (const auto &F : Functions) {
+            const auto Calls = callsIn(*Module->getFunction(F.Name));
+            ASSERT_EQ(Calls.size(), 1u);
+            EXPECT_EQ(Calls[0]->getCalledFunction(), Callee);
+            EXPECT_EQ(Calls[0]->getFunctionType(), Callee->getFunctionType());
+            EXPECT_EQ(Calls[0]->arg_size(), Fixed + (Variadic ? 2 : 0));
+          }
+        }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      ExactIndirectTargetsReuseTheirRecoveredCallSignature) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (BinaryFormat Format :

@@ -82,6 +82,9 @@ struct AbiCallContext {
 /// proof. Offsets are relative to the call's SP, using its exact SSA basis.
 std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C);
 
+/// Every reaching path leaves this incoming argument register untouched.
+bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);
+
 /// The steps of call-ABI recovery that belong to one calling convention,
 /// each optional.  A convention defines its policy in its own file
 /// (MedABIPassWin64.cpp, MedABIPassI386.cpp) and abiCallPolicy() lists it;
