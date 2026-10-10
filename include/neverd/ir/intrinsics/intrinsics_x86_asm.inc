@@ -70,6 +70,7 @@ A(Intrinsic::Scasd,        "scasd");
 A(Intrinsic::Scasq,        "scasq");
 A(Intrinsic::Xlatb,        "xlatb");
 A(Intrinsic::X87Op,        "x87");
+A(Intrinsic::X87Fxam,      "fxam");
 A(Intrinsic::X87Fninit,    "fninit");
 A(Intrinsic::X87Fnclex,    "fnclex");
 A(Intrinsic::X87Wait,      "fwait");

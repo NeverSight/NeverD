@@ -369,3 +369,9 @@ DebugService,
 // on the stack.  The 48-byte result carries, in order, the returned RAX and
 // R11 and the volatile RDX, R8, R9 and R10.
 X64WindowsSyscall,
+
+// Append-only: FXAM before CFG x87-state resolution. Inputs are ST(0)'s
+// 80-bit payload and the previous status word. CFG construction proves the
+// physical slot's tag and lowers this to integer operations; an unknown tag
+// is an unsupported machine-state boundary, never an assumed nonempty slot.
+X87Fxam,

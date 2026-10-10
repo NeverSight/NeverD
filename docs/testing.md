@@ -161,6 +161,16 @@ pipelines and compiled O0/O2. Its binary80 sum retains bits below double
 precision, so a premature conversion cannot pass. These checks cover return
 transport and do not certify every x87 instruction, rounding mode or exception.
 
+`X87Examine` checks the all-path slot-tag and payload proof across x86/x64 in
+ELF, COFF and Mach-O, including branches, pops, independent entries and opaque
+calls. `X86_32_X87FPU.ExamineClassificationMatchesNativeExtendedEncodings`
+compares raw machine bytes with LLVM and HighC on 70 binary80 encodings,
+including unsupported encodings and the sign retained after FFREE. Linux x64
+hosts execute i386 and x64, occupied and empty slots, default/NoOpt pipelines
+and C/LLVM O0/O2. An unproven slot or retained payload remains unsupported;
+this does not establish floating-point exception delivery or environment
+restore coverage.
+
 `NeverDX64MemoryUpdateTests` also checks the SSE2 word transfers that Clang 21
 can emit for scalar structure comparisons. `X64WordLane` uses independent
 `PINSRW` and `PEXTRW` encodings across the available KVM, WHP, HVF and Unicorn
@@ -2061,6 +2071,15 @@ that cross from an ARM literal island into instructions in all three formats.
 role-neutral address leaves in PE, ELF and Mach-O. Native ELF/PE fixtures also
 require AArch64 ADRP/ADD and x64 LEA recurrences to resolve through the same
 table-address model.
+
+Pointer boundary tests also cover bounded countdown traversal, masked and
+guarded word offsets, nullable callback slots and runtime/native callback
+choices across the same twelve target/format cells. Refusal cases retain
+partial pointers, mismatched SSA guards, mutable tables and independent loop
+entries. Linux x64 native execution compares callback choice and descending
+constructor order against independent C observations at O0/O2. Immutable
+scan tests additionally check lossless address carriers and folding a scan's
+exit count into successor PHI operands.
 
 `MedCxxContinuationFrame` verifies that catch and normal paths address the same
 local, rejects inconsistent unwind/stack effects and ordinary roots, and checks

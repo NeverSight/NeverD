@@ -722,6 +722,14 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   // bodies. Validate mutable storage and metadata before any such traversal,
   // then reuse the same plan during emission.
   for (const auto &Func : Funcs) {
+    for (const auto &Block : Func.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].ConstVal == static_cast<uint64_t>(Intrinsic::X87Fxam))
+          throw std::runtime_error(
+              "FXAM requires a proven x87 slot tag and payload in " +
+              Func.Name);
     if (!Func.SkippedSSA)
       continue;
     if (Img_)

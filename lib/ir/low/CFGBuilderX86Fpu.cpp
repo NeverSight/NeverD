@@ -59,6 +59,66 @@ int demaskDelta(int D) {
   return D >= 4 ? D - 8 : D;
 }
 
+// FXAM classifies the encoding, not a rounded host floating-point value. Keep
+// its integer lowering in LowIR so LLVM, HighC and concrete execution share
+// the same condition-code semantics. Tag is an all-path CFG fact.
+std::vector<LowOp> lowerX87Examine(const LowOp &Exam, bool Empty,
+                                   uint64_t &NextTemp) {
+  std::vector<LowOp> Ops;
+  auto emit = [&](NdOp Code, unsigned Width,
+                  std::initializer_list<NdVar> Inputs) {
+    LowOp Op;
+    Op.Opcode = Code;
+    Op.Addr = Exam.Addr;
+    Op.Seq = Ops.size();
+    Op.Output = NdVar::tmp(NextTemp++, Width);
+    for (const auto &V : Inputs)
+      Op.addInput(V);
+    Ops.push_back(Op);
+    return Op.Output;
+  };
+  auto n = [](uint64_t Bits, unsigned Width = 2) {
+    return NdVar::scalar(Bits, Width);
+  };
+  const NdVar SignExponent = emit(NdOp::SUBBYTES, 2, {Exam.Inputs[1], n(8)});
+  const NdVar Sign =
+      emit(NdOp::INT_AND, 2,
+           {emit(NdOp::INT_RIGHT, 2, {SignExponent, n(6)}), n(0x200)});
+  NdVar Class = n(0x4100); // Empty: C3=1, C2=0, C0=1, with payload's sign.
+  if (!Empty) {
+    const NdVar Significand = emit(NdOp::SUBBYTES, 8, {Exam.Inputs[1], n(0)});
+    const NdVar Exponent = emit(NdOp::INT_AND, 2, {SignExponent, n(0x7fff)});
+    const NdVar IntegerBit =
+        emit(NdOp::INT_NOTEQUAL, 1,
+             {emit(NdOp::INT_AND, 8, {Significand, n(UINT64_C(1) << 63, 8)}),
+              n(0, 8)});
+    const NdVar FractionZero =
+        emit(NdOp::INT_EQUAL, 1,
+             {emit(NdOp::INT_AND, 8, {Significand, n(UINT64_MAX >> 1, 8)}),
+              n(0, 8)});
+    const NdVar ZeroOrDenormal =
+        emit(NdOp::SELECT, 2,
+             {emit(NdOp::INT_EQUAL, 1, {Significand, n(0, 8)}), n(0x4000),
+              n(0x4400)});
+    const NdVar InfinityOrNan =
+        emit(NdOp::SELECT, 2, {FractionZero, n(0x500), n(0x100)});
+    const NdVar FiniteOrSpecial =
+        emit(NdOp::SELECT, 2,
+             {emit(NdOp::INT_EQUAL, 1, {Exponent, n(0x7fff)}), InfinityOrNan,
+              n(0x400)});
+    const NdVar Supported =
+        emit(NdOp::SELECT, 2, {IntegerBit, FiniteOrSpecial, n(0)});
+    Class = emit(NdOp::SELECT, 2,
+                 {emit(NdOp::INT_EQUAL, 1, {Exponent, n(0)}), ZeroOrDenormal,
+                  Supported});
+  }
+  const NdVar OtherStatus = emit(NdOp::INT_AND, 2, {Exam.Inputs[2], n(0xb8ff)});
+  const NdVar Flags = emit(NdOp::INT_OR, 2, {Class, Sign});
+  emit(NdOp::INT_OR, 2, {OtherStatus, Flags});
+  Ops.back().Output = Exam.Output;
+  return Ops;
+}
+
 } // namespace
 
 /// The index lives for one CFG build of an unchanged image. Its cached local
@@ -151,6 +211,7 @@ class X87CallEffectIndex {
     case Intrinsic::X87Fxtractexp:
     case Intrinsic::X87Fnclex:
     case Intrinsic::X87ReadStatus:
+    case Intrinsic::X87Fxam:
     case Intrinsic::X87Wait:
     case Intrinsic::Pause:
     case Intrinsic::Cpuid:
@@ -392,6 +453,8 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
   const size_t N = Func.Blocks.size();
   std::vector<int> LiftedIn(N, 0), LiftedOut(N, 0), BlockDelta(N, 0);
   std::vector<bool> HasReset(N, false), HasFpu(N, false);
+  std::vector<std::map<va_t, uint8_t>> PoppedSlots(N);
+  bool HasExamine = false;
 
   for (size_t I = 0; I < N; ++I) {
     auto &Blk = Func.Blocks[I];
@@ -410,10 +473,21 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
         HasReset[I] = true;
         CallShift = 0;
       }
-      BlockDelta[I] += demaskDelta(Rec.FpuTopOut - Rec.FpuTopIn);
+      const int Delta = demaskDelta(Rec.FpuTopOut - Rec.FpuTopIn);
+      BlockDelta[I] += Delta;
+      const int InstructionTop = (Rec.FpuTopIn + CallShift) & 7;
+      bool RotateOnly = false;
       for (size_t O = Boundary.FirstOp;
            O < Boundary.FirstOp + Boundary.OpCount && O < Blk.Ops.size(); ++O) {
         LowOp &Op = Blk.Ops[O];
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst()) {
+          const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+          HasExamine |= Id == Intrinsic::X87Fxam;
+          if (Id == Intrinsic::X87Fxam)
+            UnsupportedInstructionAddresses.insert(Op.Addr);
+          RotateOnly |= Id == Intrinsic::X87Fincstp;
+        }
         rebaseStReg(Op.Output, CallShift);
         for (uint8_t K = 0; K < Op.NumInputs; ++K)
           rebaseStReg(Op.Inputs[K], CallShift);
@@ -439,6 +513,10 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
         Op.Output = NdVar::reg(x86reg::stReg((Rec.FpuTopIn + CallShift) & 7),
                                x86reg::FPURegSize);
       }
+      if (!RotateOnly && !Rec.FpuReset)
+        for (int K = 0; K < Delta; ++K)
+          PoppedSlots[I][Boundary.Address] |=
+              uint8_t(1u << ((InstructionTop + K) & 7));
       LiftedOut[I] = (Rec.FpuTopOut + CallShift) & 7;
     }
     for (auto &Op : Blk.Ops) {
@@ -482,7 +560,7 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
     return;
 
   // Normalized (0..7) exit TOP for block B entered at TOP T.  A reset block
-  // (FNINIT/FNCLEX) restarts from its lifted exit regardless of the entry.
+  // (FNINIT) restarts from its lifted exit regardless of the entry.
   auto exitTop = [&](int B, int T) {
     return (HasReset[B] ? LiftedOut[B] : (T + BlockDelta[B])) & 7;
   };
@@ -522,13 +600,209 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
       break;
     }
 
+  auto lowerExaminations = [&](const std::vector<std::pair<int, int>>
+                                   &Origins) {
+    if (!HasExamine)
+      return;
+    struct Tags {
+      uint8_t Full = 0, Empty = 0, Payload = 0;
+      bool operator==(const Tags &) const = default;
+    };
+    const size_t Count = Func.Blocks.size();
+    std::vector<std::optional<Tags>> Incoming(Count);
+    std::queue<int> Work;
+    size_t Budget = limits::kMaxX87CallProofWork;
+    auto seed = [&](int Id, Tags Value) {
+      if (Id < 0 || size_t(Id) >= Count)
+        return;
+      auto &Old = Incoming[Id];
+      const Tags Merged = Old ? Tags{uint8_t(Old->Full & Value.Full),
+                                     uint8_t(Old->Empty & Value.Empty),
+                                     uint8_t(Old->Payload & Value.Payload)}
+                              : Value;
+      if (!Old || *Old != Merged) {
+        Old = Merged;
+        Work.push(Id);
+      }
+    };
+    std::map<std::pair<int, size_t>, bool> ProvenTags;
+    auto transfer = [&](int Id, Tags State, bool Publish) {
+      const LowBlock &Block = Func.Blocks[Id];
+      const auto [Original, Offset] = Origins[Id];
+      auto makeFull = [&](unsigned Slot) {
+        State.Full |= uint8_t(1u << Slot);
+        State.Payload |= uint8_t(1u << Slot);
+        State.Empty &= uint8_t(~(1u << Slot));
+      };
+      auto makeEmpty = [&](unsigned Slot) {
+        State.Empty |= uint8_t(1u << Slot);
+        State.Full &= uint8_t(~(1u << Slot));
+      };
+      for (const auto &Boundary : Block.InstructionBoundaries) {
+        if (Boundary.OpCount >= Budget || Boundary.FirstOp > Block.Ops.size() ||
+            Boundary.OpCount > Block.Ops.size() - Boundary.FirstOp) {
+          Budget = 0;
+          return Tags{};
+        }
+        Budget -= 1 + Boundary.OpCount;
+        for (size_t O = Boundary.FirstOp;
+             O < Boundary.FirstOp + Boundary.OpCount; ++O) {
+          const LowOp &Op = Block.Ops[O];
+          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+            State = {}; // The return definition below can establish one slot.
+          if (Op.Opcode == NdOp::INTRINSIC) {
+            if (!Op.NumInputs || !Op.Inputs[0].isConst()) {
+              State = {};
+            } else {
+              const auto Kind = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+              if (Kind == Intrinsic::X87Fxam) {
+                if (Publish && Op.NumInputs == 3 && Op.Output.Size == 2 &&
+                    isStReg(Op.Inputs[1]) && Op.Inputs[1].Size == 10 &&
+                    Op.Inputs[2].Size == 2) {
+                  const unsigned Bit =
+                      1u << x86reg::stRegIndex(Op.Inputs[1].Offset);
+                  if ((State.Full & State.Payload) & Bit)
+                    ProvenTags[{Id, O}] = false;
+                  else if ((State.Empty & State.Payload) & Bit)
+                    ProvenTags[{Id, O}] = true;
+                }
+              } else if (Kind == Intrinsic::X87Fninit) {
+                // FNINIT empties tags without defining retained payload bits.
+                // FXAM still reads that payload's sign even for an empty slot.
+                State = {0, 0xff, State.Payload};
+              } else if (Kind == Intrinsic::X87Ffree && Op.NumInputs == 3 &&
+                         isStReg(Op.Inputs[1])) {
+                makeEmpty(x86reg::stRegIndex(Op.Inputs[1].Offset));
+              } else if (Kind != Intrinsic::X87Fincstp &&
+                         Kind != Intrinsic::X87Fnclex &&
+                         Kind != Intrinsic::X87Wait &&
+                         Kind != Intrinsic::X87ReadStatus) {
+                // Restores, resumable traps and unknown extensions may replace
+                // tags. A subsequent explicit definition can recover a slot.
+                State = {};
+              }
+            }
+          }
+          if (isStReg(Op.Output)) {
+            if (Op.Output.Size == x86reg::FPURegSize)
+              makeFull(x86reg::stRegIndex(Op.Output.Offset));
+            else
+              State = {}; // MMX/partial state is not a full x87 definition.
+          }
+        }
+        auto Pop = PoppedSlots[Original].find(Boundary.Address);
+        if (Pop != PoppedSlots[Original].end())
+          for (unsigned Slot = 0; Slot < 8; ++Slot)
+            if (Pop->second & (1u << Slot))
+              makeEmpty((Slot + Offset) & 7);
+      }
+      return State;
+    };
+    // Each tag bit has an independent gen/kill transfer. Summarize blocks
+    // once; replaying their instruction bodies at every loop meet spends the
+    // proof budget on unchanged instructions in large CRT formatters.
+    std::vector<Tags> Generated(Count), Preserved(Count);
+    for (size_t I = 0; I < Count && Budget; ++I) {
+      Generated[I] = transfer(I, {}, false);
+      const Tags All = transfer(I, {0xff, 0xff, 0xff}, false);
+      Preserved[I] = {uint8_t(All.Full & ~Generated[I].Full),
+                      uint8_t(All.Empty & ~Generated[I].Empty),
+                      uint8_t(All.Payload & ~Generated[I].Payload)};
+    }
+    for (const LowBlock &Block : Func.Blocks) {
+      auto rootWithin = [&](const std::set<va_t> &Roots) {
+        auto It = Roots.lower_bound(Block.StartAddr);
+        return It != Roots.end() &&
+               (*It == Block.StartAddr || *It < Block.EndAddr);
+      };
+      if (Block.StartAddr == Func.Entry || Block.Preds.empty() ||
+          !Block.ExceptionalPreds.empty() ||
+          rootWithin(Func.ModuleAnalysisRoots) ||
+          rootWithin(CurrentImg->CodeRefTargets))
+        seed(Block.Id, {});
+    }
+    auto solve = [&]() {
+      while (!Work.empty() && Budget) {
+        const int Id = Work.front();
+        Work.pop();
+        --Budget;
+        const Tags In = *Incoming[Id], Gen = Generated[Id],
+                   Keep = Preserved[Id];
+        const Tags Out{uint8_t(Gen.Full | (In.Full & Keep.Full)),
+                       uint8_t(Gen.Empty | (In.Empty & Keep.Empty)),
+                       uint8_t(Gen.Payload | (In.Payload & Keep.Payload))};
+        for (int Successor : Func.Blocks[Id].Succs)
+          seed(Successor, Out);
+        for (const auto &Edge : Func.Blocks[Id].ExceptionalSuccs)
+          seed(Edge.BlockId, {});
+      }
+    };
+    solve();
+    // A disconnected component has an independent unknown initial FPU state.
+    for (size_t I = 0; I < Count; ++I)
+      if (!Incoming[I])
+        seed(I, {});
+    solve();
+    if (Budget)
+      for (size_t I = 0; I < Count && Budget; ++I)
+        transfer(I, *Incoming[I], true);
+    if (!Budget)
+      ProvenTags.clear();
+    uint64_t NextTemp = 0;
+    for (const auto &B : Func.Blocks)
+      for (const LowOp &Op : B.Ops) {
+        if (Op.Output.isTemp())
+          NextTemp = std::max(NextTemp, Op.Output.Offset + 1);
+        for (unsigned K = 0; K < Op.NumInputs; ++K)
+          if (Op.Inputs[K].isTemp())
+            NextTemp = std::max(NextTemp, Op.Inputs[K].Offset + 1);
+      }
+    std::set<va_t> Expanded, Pending;
+    for (LowBlock &B : Func.Blocks) {
+      std::vector<LowOp> Rewritten;
+      std::vector<size_t> NewOffsets(B.Ops.size() + 1);
+      for (size_t O = 0; O < B.Ops.size(); ++O) {
+        NewOffsets[O] = Rewritten.size();
+        const LowOp &Op = B.Ops[O];
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::X87Fxam)) {
+          if (auto It = ProvenTags.find({B.Id, O}); It != ProvenTags.end()) {
+            auto Lowered = lowerX87Examine(Op, It->second, NextTemp);
+            Rewritten.insert(Rewritten.end(), Lowered.begin(), Lowered.end());
+            Expanded.insert(Op.Addr);
+            continue;
+          }
+          Pending.insert(Op.Addr);
+          UnsupportedInstructionAddresses.insert(Op.Addr);
+        }
+        Rewritten.push_back(Op);
+      }
+      NewOffsets[B.Ops.size()] = Rewritten.size();
+      for (auto &Boundary : B.InstructionBoundaries) {
+        if (Boundary.FirstOp > B.Ops.size() ||
+            Boundary.OpCount > B.Ops.size() - Boundary.FirstOp)
+          continue;
+        const auto End = Boundary.FirstOp + Boundary.OpCount;
+        Boundary.OpCount = NewOffsets[End] - NewOffsets[Boundary.FirstOp];
+        Boundary.FirstOp = NewOffsets[Boundary.FirstOp];
+      }
+      B.Ops = std::move(Rewritten);
+    }
+    for (va_t Address : Expanded)
+      if (!Pending.count(Address))
+        UnsupportedInstructionAddresses.erase(Address);
+  };
+
   if (!MultiTop) {
+    std::vector<std::pair<int, int>> Origins;
     // One TOP per block — re-base each block in place (the common case; a no-op
     // for offset 0, i.e. straight-line / stack-balanced code).
     for (size_t I = 0; I < N; ++I) {
+      const int Top = TopSets[I].empty() ? LiftedIn[I] : *TopSets[I].begin();
+      Origins.emplace_back(I, HasReset[I] ? 0 : (Top - LiftedIn[I]) & 7);
       if (TopSets[I].empty())
         continue;
-      const int Top = *TopSets[I].begin();
       int Offset = (Top - LiftedIn[I]) & 7;
       if (!HasReset[I] && HasFpu[I] && Offset != 0)
         for (auto &Op : Func.Blocks[I].Ops) {
@@ -538,6 +812,7 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
         }
       bindReturn(Func.Blocks[I], exitTop(static_cast<int>(I), Top));
     }
+    lowerExaminations(Origins);
     return;
   }
 
@@ -600,6 +875,10 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
       if (S >= 0 && S < static_cast<int>(NewBlocks.size()))
         NewBlocks[S].Preds.push_back(static_cast<int>(NI));
   Func.Blocks = std::move(NewBlocks);
+  std::vector<std::pair<int, int>> Origins;
+  for (const auto &[B, T] : States)
+    Origins.emplace_back(B, HasReset[B] ? 0 : (T - LiftedIn[B]) & 7);
+  lowerExaminations(Origins);
 }
 
 } // namespace neverd

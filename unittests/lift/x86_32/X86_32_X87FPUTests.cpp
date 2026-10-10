@@ -199,6 +199,189 @@ bool hasX87CallDefinition(const LowFunc &Function) {
   return false;
 }
 
+BinaryImage x87ExamineImage(Arch A, BinaryFormat Format,
+                            const std::vector<uint8_t> &Bytes) {
+  BinaryImage Image;
+  Image.Arch = A;
+  Image.Format = Format;
+  Image.Bits = A == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+  Image.Entry = 0x1000;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Image.Entry;
+  Text.Data = Bytes;
+  Text.Size = Text.FileSz = Bytes.size();
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.Segments.push_back(Text);
+  Symbol Sym = Symbol::makeFunc(Image.Entry, Bytes.size());
+  Sym.Name = "examine_value";
+  Image.Symbols.push_back(Sym);
+  Image.KnownCodeRanges.emplace_back(Image.Entry, Image.Entry + Bytes.size());
+  return Image;
+}
+
+TEST(X87Examine, TagProofSurvivesBranchesPopsAndExplicitInvalidation) {
+  const std::vector<std::vector<uint8_t>> Cases{
+      {0xd9, 0xe8, 0xd9, 0xe5},             // fld1; fxam
+      {0xd9, 0xe5},                         // unknown entry tag
+      {0xd9, 0xe8, 0xdd, 0xc0, 0xd9, 0xe5}, // ffree st0; empty
+      {0xd9, 0xe8, 0xeb, 0, 0xd9, 0xe5},    // successor inherits tag
+      {0xd9, 0xe8, 0xd9, 0xc0, 0xdd, 0xd8, 0xd9, 0xe5}, // dup/pop retains first
+      {0xdb, 0xe3, 0xd9, 0xe5},                         // fninit; empty
+      {0xd9, 0xe8, 0xe8, 0, 1, 0, 0, 0xd9, 0xe5},       // opaque call
+      {0xd9, 0xe8, 0xd9, 0xfe, 0xd9, 0xe5}, // fsin defines full slot
+      {0xd9, 0xe8, 0x85, 0xc0, 0x74, 2, 0xdd, 0xc0, 0xd9,
+       0xe5},                             // full/empty join
+      {0xd9, 0xe8, 0xeb, 0, 0xd9, 0xe5}}; // independent entry
+  for (Arch A : {Arch::X86, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (unsigned I = 0; I < Cases.size(); ++I) {
+        SCOPED_TRACE(static_cast<int>(A));
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(I);
+        auto Bytes = Cases[I];
+        Bytes.insert(Bytes.end(), {0xdf, 0xe0, 0x25, 0, 0x47, 0, 0, 0xc3});
+        auto Image = x87ExamineImage(A, Format, Bytes);
+        if (I == 9)
+          Image.CodeRefTargets.insert(0x1004);
+        Decoder Dec;
+        ASSERT_TRUE(Dec.init(Image));
+        CFGBuilder Builder;
+        auto Low = Builder.build(Image, Dec, Image.Entry, "examine_value");
+        const bool Supported = I != 1 && I != 5 && I != 6 && I != 8 && I != 9;
+        EXPECT_EQ(Low.hasCompleteInstructionLift(), Supported);
+        unsigned Pending = 0;
+        for (const auto &B : Low.Blocks)
+          for (const auto &Op : B.Ops)
+            if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                Op.Inputs[0].isConst() &&
+                Op.Inputs[0].Offset ==
+                    static_cast<uint64_t>(Intrinsic::X87Fxam))
+              ++Pending;
+        EXPECT_EQ(Pending == 0, Supported);
+      }
+}
+
+TEST_F(X86_32_X87FPU, ExamineClassificationMatchesNativeExtendedEncodings) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "requires Linux x86-64 and native i386 execution";
+#else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "requires Clang's x86 targets";
+  for (bool Empty : {false, true})
+    for (Arch A : {Arch::X86, Arch::X64}) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(Empty);
+      const std::string Target = A == Arch::X86 ? "--target=i386-linux-gnu"
+                                                : "--target=x86_64-linux-gnu";
+      std::vector<uint8_t> Bytes =
+          A == Arch::X86 ? std::vector<uint8_t>{0x8b, 0x44, 0x24, 4, 0xdb, 0x28}
+                         : std::vector<uint8_t>{0xdb, 0x2f};
+      // Empty slots retain the payload's sign, even after FFREE. Both paths
+      // restore TOP so successive native calls do not overflow the x87 stack.
+      if (Empty)
+        Bytes.insert(Bytes.end(), {0xdd, 0xc0});           // ffree st0
+      Bytes.insert(Bytes.end(), {0xd9, 0xe5, 0xdf, 0xe0}); // fxam; fnstsw ax
+      if (Empty)
+        Bytes.insert(Bytes.end(), {0xd9, 0xf7}); // fincstp
+      else
+        Bytes.insert(Bytes.end(), {0xdd, 0xd8}); // fstp st0
+      Bytes.insert(Bytes.end(), {0x25, 0, 0x47, 0, 0, 0xc3});
+      auto Image = x87ExamineImage(A, BinaryFormat::ELF, Bytes);
+      const auto NativePath = tmpFile("examine-native.s");
+      std::ofstream Native(NativePath);
+      Native << ".text\n.globl native_examine\nnative_examine:\n.byte ";
+      for (unsigned I = 0; I < Bytes.size(); ++I)
+        Native << (I ? "," : "") << unsigned(Bytes[I]);
+      Native << "\n.globl _start\n_start:\ncall test_main\n";
+      if (A == Arch::X86)
+        Native << "mov %eax,%ebx\nmov $1,%eax\nint $0x80\n";
+      else
+        Native << "mov %eax,%edi\nmov $60,%eax\nsyscall\n";
+      Native << ".section .note.GNU-stack,\"\",@progbits\n";
+      Native.close();
+      const auto HarnessPath = tmpFile("examine-harness.c");
+      std::ofstream(HarnessPath) << R"(
+#include <stdint.h>
+#include <stddef.h>
+void *memcpy(void *out, const void *in, size_t size) {
+  unsigned char *dst = out;
+  const unsigned char *src = in;
+  for (size_t i = 0; i < size; ++i) dst[i] = src[i];
+  return out;
+}
+void *memset(void *out, int value, size_t size) {
+  unsigned char *dst = out;
+  for (size_t i = 0; i < size; ++i) dst[i] = value;
+  return out;
+}
+struct __attribute__((packed)) Bits { uint64_t sig; uint16_t exponent; };
+extern unsigned native_examine(const struct Bits *);
+extern unsigned examine_value(const struct Bits *);
+int test_main(void) {
+  const uint64_t significands[] = {0, 1, UINT64_C(0x7fffffffffffffff),
+    UINT64_C(0x8000000000000000), UINT64_C(0x8000000000000001),
+    UINT64_C(0xc000000000000000), UINT64_MAX};
+  const unsigned exponents[] = {0, 1, 0x3fff, 0x7ffe, 0x7fff};
+  for (unsigned i = 0; i != 7; ++i)
+    for (unsigned j = 0; j != 5; ++j)
+      for (unsigned sign = 0; sign != 2; ++sign) {
+        const struct Bits value = {significands[i], exponents[j] | (sign << 15)};
+        const unsigned expected = native_examine(&value);
+        if (examine_value(&value) != expected) return 1 + i * 10 + j * 2 + sign;
+      }
+  return 0;
+}
+)";
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(NoOpt);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.LiftMode = true;
+        Options.NoOpt = NoOpt;
+        auto Lift = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Lift.Success) << Lift.Error;
+        ASSERT_NE(Lift.LlvmModule, nullptr);
+        ASSERT_FALSE(llvm::verifyModule(*Lift.LlvmModule, &llvm::errs()));
+        const auto IRPath = tmpFile("examine.ll");
+        std::string IR;
+        llvm::raw_string_ostream OS(IR);
+        Lift.LlvmModule->print(OS, nullptr);
+        std::ofstream(IRPath) << IR;
+        Options.LiftMode = false;
+        auto High = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(High.Success) << High.Error;
+        const auto CPath = tmpFile("examine.c");
+        CEmitterOptions Emit;
+        Emit.TheArch = A;
+        Emit.Format = BinaryFormat::ELF;
+        Emit.Image = &Image;
+        std::string C;
+        llvm::raw_string_ostream COS(C);
+        ASSERT_TRUE(HighCEmitter().emit(High.HighFuncs, COS, Emit));
+        std::ofstream(CPath) << C;
+        for (const auto &Source : {IRPath, CPath})
+          for (const std::string Opt : {"-O0", "-O2"}) {
+            SCOPED_TRACE(Source.string());
+            SCOPED_TRACE(Opt);
+            const auto Binary = tmpFile("examine-exec");
+            const auto Built =
+                exec(NEVERD_TEST_CLANG,
+                     {Target, Opt, "-ffreestanding", "-fno-strict-aliasing",
+                      "-fuse-ld=lld", "-nostdlib", "-static", "-no-pie",
+                      Source.string(), HarnessPath.string(),
+                      NativePath.string(), "-o", Binary.string()});
+            ASSERT_TRUE(Built.ok()) << Built.err << IR << C;
+            const auto Ran = exec(Binary.string(), {});
+            EXPECT_EQ(Ran.exitCode, 0) << Ran.err << IR << C;
+          }
+      }
+    }
+#endif
+}
+
 TEST(ImportCalleeTrace, RequiresTheUnchangedPointerAndInstructionTemporary) {
   for (Arch Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
     for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
