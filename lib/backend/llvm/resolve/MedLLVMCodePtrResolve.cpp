@@ -532,8 +532,8 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   // reassigned at runtime) must be a writable global so stores into a slot are
   // legal; read-only-after-relocation and rodata pointer tables stay constant
   // — their slots are never stored to.
-  bool SegWritable = Seg->isWritable() && !Seg->isExecutable() &&
-                     !section_names::isReadOnlyAfterRelocSectionName(Seg->Name);
+  bool SegWritable =
+      Seg->isWritable() && !Seg->isExecutable() && !isReadOnlyAfterReloc(Seg);
   auto *GV = new llvm::GlobalVariable(
       *Mod, StructTy, /*isConstant=*/!SegWritable, dataLinkage(),
       llvm::ConstantAggregateZero::get(StructTy), GlobalName);

@@ -181,6 +181,153 @@ TEST_F(NativePointerRelocationBoundary,
 }
 
 TEST_F(NativePointerRelocationBoundary,
+       NonlocalImportCallsPreserveLiveValuesAcrossBothReturns) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "native nonlocal-jump execution requires Linux x86-64";
+#else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "native LLVM execution requires Clang";
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Segment IAT;
+  IAT.Name = ".got";
+  IAT.VA = 0x4000;
+  IAT.Size = IAT.FileSz = 16;
+  IAT.Data.resize(16);
+  IAT.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  IAT.ReadOnlyAfterRelocations = true;
+  Image.Segments.push_back(IAT);
+  ASSERT_TRUE(Image.recordImportStorageSlot(0x4000, "_setjmp3", 0,
+                                            ImportStorageEvidence::LoaderBind));
+  ASSERT_TRUE(Image.recordImportStorageSlot(0x4008, "_longjmpex", 0,
+                                            ImportStorageEvidence::LoaderBind));
+  auto value = [](int Id, unsigned Size = 8) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = Arch::X64;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+  auto number = [](uint64_t N) {
+    return MedVar::makeConst(N, 8, ConstantAddressProvenance::Scalar);
+  };
+  std::vector<MedFunc> Functions;
+  for (bool RegisterCall : {false, true}) {
+    MedFunc F;
+    F.Name = RegisterCall ? "jump_via_register" : "jump_via_slot";
+    F.Entry = RegisterCall ? 0x2000 : 0x1000;
+    F.ReturnType = NdType::makeInt(8, false);
+    for (unsigned I = 0; I != 2; ++I) {
+      auto P = value(I);
+      P.Kind = MedVar::Param;
+      P.RegOff = kNoParamReg;
+      F.Params.push_back(P);
+    }
+    F.Blocks.resize(3);
+    for (unsigned I = 0; I != 3; ++I) {
+      auto &B = F.Blocks[I];
+      B.Id = I;
+      B.StartAddr = F.Entry + I * 0x40;
+      B.EndAddr = B.StartAddr + 0x40;
+      if (I)
+        B.Preds = {0};
+    }
+    F.Blocks[0].Succs = {1, 2};
+    auto append = [&](unsigned B, NdOp Opcode, MedVar Output,
+                      std::initializer_list<MedVar> Inputs) {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      Op.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+      for (auto Input : Inputs)
+        Op.addInput(Input);
+      F.Blocks[B].Ops.push_back(Op);
+    };
+    const auto Slot = MedVar::makeConst(0x4000, 8);
+    if (RegisterCall)
+      append(0, NdOp::LOAD, value(4), {Slot});
+    MedCallInfo Save;
+    Save.BlockId = 0;
+    Save.OpIdx = F.Blocks[0].Ops.size();
+    Save.IsIndirect = true;
+    Save.Args = {F.Params[0], number(0)};
+    F.CallInfos.push_back(Save);
+    append(0, NdOp::INDIR_CALL, value(2), {RegisterCall ? value(4) : Slot});
+    append(0, NdOp::INT_NOTEQUAL, value(3, 1), {value(2), number(0)});
+    append(0, NdOp::COND_BR, {},
+           {MedVar::makeConst(F.Blocks[2].StartAddr, 8), value(3, 1)});
+    MedCallInfo Jump;
+    Jump.BlockId = 1;
+    Jump.OpIdx = 0;
+    Jump.IsIndirect = true;
+    Jump.Args = {F.Params[0], number(7)};
+    F.CallInfos.push_back(Jump);
+    append(1, NdOp::INDIR_CALL, {}, {MedVar::makeConst(0x4008, 8)});
+    F.Blocks[1].Ops.back().DoesNotReturn = true;
+    append(2, NdOp::INT_MULT, value(5), {F.Params[1], number(13)});
+    append(2, NdOp::INT_ADD, value(6), {value(5), value(2)});
+    append(2, NdOp::RETURN, {}, {value(6)});
+    Functions.push_back(std::move(F));
+  }
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(Functions, Context, "nonlocal-imports",
+                                      Arch::X64, {}, &Image, BinaryFormat::ELF);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  unsigned ReturnsTwice = 0;
+  for (const auto &F : *Module)
+    for (const auto &B : F)
+      for (const auto &I : B)
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
+          ReturnsTwice += Call->hasFnAttr(llvm::Attribute::ReturnsTwice);
+  if (ReturnsTwice != 2)
+    Module->print(llvm::errs(), nullptr);
+  ASSERT_EQ(ReturnsTwice, 2u);
+  const auto IR = tmpFile("nonlocal-imports.ll");
+  const auto Harness = tmpFile("nonlocal-imports.c");
+  const auto Binary = tmpFile("nonlocal-imports");
+  std::error_code Error;
+  llvm::raw_fd_ostream IRStream(IR.string(), Error);
+  ASSERT_FALSE(Error);
+  Module->print(IRStream, nullptr);
+  IRStream.close();
+  std::ofstream C(Harness);
+  // Tail veneers preserve the lifted caller's actual return address and stack
+  // when adapting these CRT spellings to the host's independent jump runtime.
+  C << R"(
+#include <stdint.h>
+#include <setjmp.h>
+__asm__(".text\n.globl _setjmp3\n_setjmp3:\njmp _setjmp@PLT\n"
+        ".globl _longjmpex\n_longjmpex:\njmp longjmp@PLT\n");
+extern uint64_t jump_via_slot(void *, uint64_t);
+extern uint64_t jump_via_register(void *, uint64_t);
+int main(void) {
+  jmp_buf env;
+  for (uint64_t i = 0; i != 512; ++i) {
+    uint64_t x = (i * UINT64_C(0x9e3779b97f4a7c15)) ^ UINT64_C(0xcafef00d);
+    if (jump_via_slot(env, x) != x * 13 + 7) return 1;
+    if (jump_via_register(env, x) != x * 13 + 7) return 2;
+  }
+  return 0;
+}
+)";
+  C.close();
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    auto Compiled =
+        exec(NEVERD_TEST_CLANG, {Optimization, IR.string(), Harness.string(),
+                                 "-o", Binary.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    const auto Ran = exec(Binary.string(), {});
+    EXPECT_EQ(Ran.exitCode, 0) << Ran.err << Optimization;
+  }
+#endif
+}
+
+TEST_F(NativePointerRelocationBoundary,
        BoundedRuntimeOffsetsAndNullableCallbacksExecute) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "native execution requires Linux x86-64";

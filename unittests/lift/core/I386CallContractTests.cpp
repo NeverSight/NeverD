@@ -21,6 +21,7 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -110,6 +111,70 @@ std::string callIn(const BinaryImage &Img, const std::string &Callee) {
     return {};
   }
   return Source.substr(At, Source.find('\n', At) - At);
+}
+
+TEST(I386CallContract, WindowsNonlocalCallsRetainTheirControlFlowContract) {
+  for (const char *Name :
+       {"_setjmp3", "_setjmpex", "__intrinsic_setjmp", "__intrinsic_setjmpex",
+        "__mingw_setjmp", "_longjmpex", "__mingw_longjmp", "opaque_call"})
+    for (bool NoOpt : {false, true})
+      for (bool RegisterCall : {false, true}) {
+        SCOPED_TRACE(Name);
+        SCOPED_TRACE(NoOpt);
+        SCOPED_TRACE(RegisterCall);
+        const bool NoReturn =
+            std::string_view(Name).find("longjmp") != std::string_view::npos;
+        const bool ReturnsTwice =
+            !NoReturn && std::string_view(Name) != "opaque_call";
+        // Two initialized outgoing words, an import call, and an observable
+        // ordinary continuation. Only the longjmp entries cut that edge.
+        std::vector<uint8_t> Code{0x6a, 0, 0x6a, 0};
+        auto Call = callThroughSlot(slot(0));
+        if (RegisterCall) {
+          Call[0] = 0x8b; // mov ecx,[slot]; call ecx
+          Call[1] = 0x0d;
+          Call.insert(Call.end(), {0xff, 0xd1});
+        }
+        Code.insert(Code.end(), Call.begin(), Call.end());
+        const va_t Continuation = Text + Code.size();
+        Code.insert(Code.end(), {0x83, 0xc4, 8, 0xb8, 7, 0, 0, 0, 0xc3});
+        auto Image = makeImage(std::move(Code), {Name});
+        ASSERT_TRUE(Image.recordImportStorageSlot(
+            slot(0), Name, 0, ImportStorageEvidence::ImportDirectory));
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.LiftMode = Options.SourceProjection = true;
+        Options.NoOpt = NoOpt;
+        Options.OnlyFunctionEntries = {Text};
+        const auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_NE(Result.LlvmModule, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        bool SawContinuation = false;
+        for (const auto &Function : Result.LowFuncs)
+          for (const auto &Block : Function.Blocks)
+            for (const auto &Boundary : Block.InstructionBoundaries)
+              SawContinuation |= Boundary.Address == Continuation;
+        if (!RegisterCall)
+          EXPECT_EQ(SawContinuation, !NoReturn);
+        const llvm::CallBase *ObservedCall = nullptr;
+        for (const auto &Function : *Result.LlvmModule)
+          for (const auto &Block : Function)
+            for (const auto &Instruction : Block)
+              if (const auto *Call =
+                      llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+                if (const auto *Target = Call->getCalledFunction();
+                    Target && Target->isIntrinsic())
+                  continue;
+                ASSERT_EQ(ObservedCall, nullptr);
+                ObservedCall = Call;
+              }
+        ASSERT_NE(ObservedCall, nullptr);
+        EXPECT_EQ(ObservedCall->hasFnAttr(llvm::Attribute::NoReturn), NoReturn);
+        EXPECT_EQ(ObservedCall->hasFnAttr(llvm::Attribute::ReturnsTwice),
+                  ReturnsTwice);
+      }
 }
 
 TEST(I386CallContract, AThunkJumpingThroughTheSlotForwardsItsArguments) {

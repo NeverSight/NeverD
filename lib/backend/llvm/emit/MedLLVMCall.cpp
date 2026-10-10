@@ -43,17 +43,17 @@
 namespace neverd {
 
 namespace {
-llvm::Function *constantCallTarget(llvm::Value *Value,
-                                   const llvm::DataLayout &Layout,
-                                   unsigned PointerBits) {
+llvm::GlobalValue *constantCallIdentity(llvm::Value *Value,
+                                        const llvm::DataLayout &Layout,
+                                        unsigned PointerBits) {
   // A source indirect call can already name one rebuilt function, directly
   // or through immutable relocation storage. Reuse that function's recovered
   // signature before emitting the call. Otherwise the generic register
   // signature can survive as an opaque-pointer call with extra parameters
   // even after LLVM folds the pointer to the function itself.
   for (unsigned Depth = 0; Value && Depth != 8; ++Depth) {
-    if (auto *Function = llvm::dyn_cast<llvm::Function>(Value))
-      return Function;
+    if (auto *Global = llvm::dyn_cast<llvm::GlobalValue>(Value))
+      return Global;
     if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(Value)) {
       if (Load->isAtomic())
         return nullptr;
@@ -614,30 +614,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           ImportedPlaceholder->setName(CalleeName);
         }
       }
-
-      // setjmp/longjmp control-flow semantics.  setjmp may return twice
-      // (control re-enters the call site when a matching longjmp restores the
-      // saved context): without `returns_twice` the backend can leave a value
-      // live across the call in a caller-saved register that longjmp does not
-      // restore, so the longjmp-return path reads garbage. longjmp/abort/exit
-      // never return; `noreturn` lets the defensive dead `ret` after the call
-      // (emitted for the no-successor block) fold to `unreachable`.  The CFG
-      // builder uses the same isNoReturnFunction set to stop the
-      // fall-through, so the attribute can never contradict a genuinely
-      // reachable continuation.
-      if (Callee && !CalleeName.empty()) {
-        llvm::StringRef Bare = stripLeadingUnderscores(CalleeName);
-        if (libc::isReturnsTwiceFunction(Bare))
-          Callee->addFnAttr(llvm::Attribute::ReturnsTwice);
-        else if (libc::isNoReturnFunction(Bare))
-          Callee->addFnAttr(llvm::Attribute::NoReturn);
-      }
     }
   }
 
+  llvm::GlobalValue *KnownTarget = nullptr;
   if (!Callee && Target) {
-    Callee = constantCallTarget(Target, Mod->getDataLayout(),
-                                getTargetRegInfo(TargetArch).PointerSize * 8);
+    KnownTarget =
+        constantCallIdentity(Target, Mod->getDataLayout(),
+                             getTargetRegInfo(TargetArch).PointerSize * 8);
+    Callee = llvm::dyn_cast_or_null<llvm::Function>(KnownTarget);
     if (Callee && Args.size() < Callee->arg_size()) {
       syncError() << "med_llvm_emitter: resolved indirect call to "
                   << Callee->getName() << " lacks recovered arguments\n";
@@ -908,6 +893,29 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       else if (const Import *Imp = Img ? Img->findImportAt(Slot) : nullptr;
                Imp && Imp->IATAddr == Slot)
         Routine = Imp->Name;
+    }
+    if (Routine.empty() && KnownTarget) {
+      if (Callee && Callee->isDeclaration())
+        Routine = Callee->getName().str();
+      else if (auto It = ImportedSymbolPlaceholders.find(
+                   KnownTarget->getName().str());
+               It != ImportedSymbolPlaceholders.end() &&
+               It->second == KnownTarget)
+        Routine = It->first;
+    }
+    // The same runtime identity owns direct, IAT and register-carried calls.
+    // An imported symbol may still be an opaque global rather than a Function;
+    // attaching only declaration attributes silently loses returns-twice on
+    // those calls, allowing live values to be stranded in volatile registers.
+    std::optional<llvm::Attribute::AttrKind> ControlAttribute;
+    if (libc::isReturnsTwiceFunction(Routine))
+      ControlAttribute = llvm::Attribute::ReturnsTwice;
+    else if (libc::isNoReturnFunction(Routine))
+      ControlAttribute = llvm::Attribute::NoReturn;
+    if (ControlAttribute) {
+      Emitted->addFnAttr(*ControlAttribute);
+      if (Callee)
+        Callee->addFnAttr(*ControlAttribute);
     }
     const auto ReturnsValue = [&](llvm::StringRef Name) {
       return libc::libcReturnsValue(Name, TargetFormat).value_or(false);

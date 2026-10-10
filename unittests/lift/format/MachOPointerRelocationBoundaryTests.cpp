@@ -19471,11 +19471,11 @@ TEST(LLVMCodePointerInvariantBoundary,
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (BinaryFormat Format :
          {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
-      for (unsigned Mode = 0; Mode != 6; ++Mode) {
+      for (unsigned Mode = 0; Mode != 7; ++Mode) {
         SCOPED_TRACE(static_cast<unsigned>(TargetArch));
         SCOPED_TRACE(formatTraceName(Format));
         SCOPED_TRACE(Mode); // Address, immutable slot, mutable slot, atomic,
-                            // missing arg, observed void result.
+                            // missing arg, observed void result, loader RELRO.
         const auto Width = getTargetRegInfo(TargetArch).PointerSize;
         const va_t Rebase = Width == 4 ? TextVA - 0x10000 : 0;
         const va_t TargetVA = CodeVA - Rebase;
@@ -19493,13 +19493,14 @@ TEST(LLVMCodePointerInvariantBoundary,
           writeObject(Storage.Data, 8, uint32_t(TargetVA));
         else
           writeObject(Storage.Data, 8, TargetVA);
-        if (Mode == 2) {
+        if (Mode == 2 || Mode == 6) {
           Storage.Name = Format == BinaryFormat::MachO ? "__DATA" : ".data";
           Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
           auto &Section = Image.Sections.back();
           Section.Name = Format == BinaryFormat::MachO ? "__data" : ".data";
           Section.SegmentName = Storage.Name;
           Section.Flags = Storage.Flags;
+          Storage.ReadOnlyAfterRelocations = Mode == 6;
         }
         MedFunc Caller =
             Mode == 0 ? makeExactAddressIndirectCaller(TargetArch)
@@ -19566,7 +19567,7 @@ TEST(LLVMCodePointerInvariantBoundary,
         ASSERT_NE(Function, nullptr);
         const auto Calls = callsIn(*Function);
         ASSERT_EQ(Calls.size(), 1u);
-        if (Mode < 2 || Mode == 5) {
+        if (Mode < 2 || Mode == 5 || Mode == 6) {
           std::string IR;
           llvm::raw_string_ostream IRStream(IR);
           Module->print(IRStream, nullptr);
