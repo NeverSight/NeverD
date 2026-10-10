@@ -983,6 +983,175 @@ TEST(RegistrationState, CanonicalNoReturnKeepsExceptionalFlowWithoutBorrowing) {
   }
 }
 
+TEST(RegistrationState, LocalUnwindRetiresLevelsAfterCheckedFinallyEffects) {
+  for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = makeBranchingFrame();
+    auto &Chain = *F.ExceptionMetadata->Registration;
+    Chain.Scopes = {{-1, 0, 0x1800, true}};
+    if (Mutation == 10)
+      Chain.Scopes.front().EnclosingLevel = 0;
+    if (Mutation == 11)
+      Chain.Scopes.push_back({-1, 0, 0x1900, true});
+    F.Blocks.resize(7);
+    auto &Setup = F.Blocks[4];
+    Setup.Id = 4;
+    Setup.StartAddr = 0x1080;
+    Setup.EndAddr = 0x1088;
+    Setup.InstructionBoundaries = {
+        {0x1080, 3, 0, 1}, {0x1083, 3, 1, 1}, {0x1086, 2, 2, 1}};
+    emitOp(Setup, 0x1080, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(32, 4)});
+    emitOp(Setup, 0x1083, NdOp::INT_ADD, NdVar::reg(x86reg::RCX, 4),
+           {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-24), 4)});
+    emitOp(Setup, 0x1086, NdOp::STORE, {},
+           {NdVar::reg(x86reg::RCX, 4), NdVar::reg(x86reg::RSP, 4)});
+    F.Blocks[0].Succs = {4};
+    Setup.Succs = {1};
+    F.Blocks[1].Succs = {5};
+    auto &Call = F.Blocks[5];
+    Call.Id = 5;
+    Call.StartAddr = 0x1100;
+    Call.EndAddr = 0x110b;
+    Call.Succs = {2};
+    emitOp(Call, 0x1100, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+    const auto Level = Mutation == 3    ? NdVar::reg(x86reg::RAX, 4)
+                       : Mutation == 2  ? NdVar::cst(99, 4)
+                       : Mutation == 9  ? NdVar::cst(0, 4)
+                       : Mutation == 11 ? NdVar::cst(1, 4)
+                                        : NdVar::cst(UINT32_MAX, 4);
+    emitOp(Call, 0x1100, NdOp::STORE, {}, {NdVar::reg(x86reg::RSP, 4), Level});
+    emitOp(Call, 0x1102, NdOp::INT_ADD, NdVar::reg(x86reg::RDX, 4),
+           {NdVar::reg(x86reg::RBP, 4),
+            NdVar::cst(uint32_t(Mutation == 1 ? -12 : -16), 4)});
+    emitOp(Call, 0x1105, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+           {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+    emitOp(Call, 0x1105, NdOp::STORE, {},
+           {NdVar::reg(x86reg::RSP, 4), NdVar::reg(x86reg::RDX, 4)});
+    emitOp(Call, 0x1106, NdOp::CALL, {}, {NdVar::cst(0x2100, 4)});
+    Call.InstructionBoundaries = {{0x1100, 2, 0, 2},
+                                  {0x1102, 3, 2, 1},
+                                  {0x1105, 1, 3, 2},
+                                  {0x1106, 5, 5, 1}};
+    Call.InstructionBoundaries.back().Control = LowInstructionControl::Call;
+    if (Mutation == 7)
+      ++Call.EndAddr;
+    if (Mutation == 13)
+      Call.InstructionBoundaries.back().ControlFlags =
+          LowInstructionControlFlag::Conditional;
+    auto &Finally = F.Blocks[6];
+    Finally.Id = 6;
+    Finally.StartAddr = 0x1800;
+    Finally.EndAddr = 0x1807;
+    emitOp(Finally, 0x1800, NdOp::INT_ADD, NdVar::tmp(0, 4),
+           {NdVar::reg(x86reg::RBP, 4),
+            NdVar::cst(uint32_t(Mutation == 4 ? -24 : -28), 4)});
+    emitOp(Finally, 0x1800, NdOp::STORE, {},
+           {NdVar::tmp(0, 4), NdVar::reg(x86reg::RBP, 4)});
+    if (Mutation == 12) {
+      Finally.Ops.back().Opcode = NdOp::ATOMIC_XCHG;
+      Finally.Ops.back().Output = NdVar::tmp(1, 4);
+    }
+    if (Mutation == 16)
+      Finally.Ops.back().MemoryOrdering = NdMemoryOrdering::Relaxed;
+    if (Mutation == 5)
+      emitOp(Finally, 0x1800, NdOp::CALL, {}, {NdVar::cst(0x2200, 4)});
+    if (Mutation == 6)
+      emitOp(Finally, 0x1800, NdOp::COPY, NdVar::reg(x86reg::RSP, 4),
+             {NdVar::reg(x86reg::RBP, 4)});
+    const auto Count = Finally.Ops.size();
+    emitOp(Finally, 0x1806, NdOp::RETURN, {}, {});
+    Finally.InstructionBoundaries = {{0x1800, 6, 0, Count},
+                                     {0x1806, 1, Count, 1}};
+    Finally.InstructionBoundaries.back().Control =
+        LowInstructionControl::Return;
+    if (Mutation == 8)
+      Finally.InstructionBoundaries.back().Immediate = 4;
+    if (Mutation == 14)
+      Finally.InstructionBoundaries.back().ControlFlags =
+          LowInstructionControlFlag::Conditional;
+    if (Mutation == 15) {
+      emitOp(Finally, 0x1806, NdOp::COPY, NdVar::reg(x86reg::RSP, 4),
+             {NdVar::reg(x86reg::RBP, 4)});
+      ++Finally.InstructionBoundaries.back().OpCount;
+    }
+    if (Mutation >= 17) {
+      // Both successors return through this invocation. Join the actual
+      // effects, and refuse when even one path changes the return slot.
+      Finally.Ops.pop_back();
+      emitOp(Finally, 0x1806, NdOp::COND_BR, {},
+             {NdVar::cst(0x1820, 4), NdVar::reg(x86reg::ZF, 1)});
+      Finally.InstructionBoundaries.back().Control =
+          LowInstructionControl::Branch;
+      Finally.InstructionBoundaries.back().ControlFlags =
+          LowInstructionControlFlag::Conditional;
+      Finally.Succs = {7, 8};
+      for (unsigned Arm = 0; Arm != 2; ++Arm) {
+        LowBlock Exit;
+        Exit.Id = 7 + Arm;
+        Exit.StartAddr = 0x1810 + Arm * 0x10;
+        Exit.EndAddr = Exit.StartAddr + 4;
+        if (Arm && Mutation == 17)
+          emitOp(Exit, Exit.StartAddr, NdOp::INT_ADD,
+                 NdVar::reg(x86reg::RSP, 4),
+                 {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+        if (Arm && Mutation == 19) {
+          emitOp(Exit, Exit.StartAddr, NdOp::INT_ADD, NdVar::tmp(0, 4),
+                 {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-28), 4)});
+          emitOp(Exit, Exit.StartAddr, NdOp::STORE, {},
+                 {NdVar::tmp(0, 4), NdVar::cst(0, 4)});
+        }
+        const size_t Prefix = Exit.Ops.size();
+        emitOp(Exit, Exit.StartAddr + 3, NdOp::RETURN, {}, {});
+        Exit.InstructionBoundaries = {{Exit.StartAddr, 3, 0, Prefix},
+                                      {Exit.StartAddr + 3, 1, Prefix, 1}};
+        Exit.InstructionBoundaries.back().Control =
+            LowInstructionControl::Return;
+        F.Blocks.push_back(std::move(Exit));
+      }
+    }
+    emitOp(F.Blocks[2], 0x1020, NdOp::COPY, NdVar::reg(x86reg::RAX, 4),
+           {NdVar::reg(x86reg::RSP, 4)});
+    const auto ReadSeq = F.Blocks[2].Ops.back().Seq;
+    emitOp(F.Blocks[2], 0x1020, NdOp::INT_ADD, NdVar::tmp(0, 4),
+           {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-28), 4)});
+    emitOp(F.Blocks[2], 0x1020, NdOp::LOAD, NdVar::reg(x86reg::RCX, 4),
+           {NdVar::tmp(0, 4)});
+    const auto WrittenValueSeq = F.Blocks[2].Ops.back().Seq;
+    const std::vector<RegistrationLocalUnwindContract> Calls{{0x2100, false}};
+    const auto A =
+        analyzeRegistrationStates(F, 0, 0, nullptr, nullptr, nullptr, &Calls);
+    const bool Valid = Mutation == 0 || Mutation == 9 || Mutation >= 18;
+    EXPECT_EQ(A.Complete, Valid);
+    EXPECT_FALSE(A.CallFrameEffectsComplete);
+    EXPECT_TRUE(A.CallFrameEffects.empty());
+    if (Valid) {
+      ASSERT_EQ(A.Blocks[2].Levels.size(), 1u);
+      EXPECT_EQ(A.Blocks[2].Levels.front(), Mutation == 9 ? 0 : -1);
+      bool FoundSP = false;
+      bool FoundFinallyWrite = false;
+      for (const auto &Value : A.FrameValues)
+        if (Value.Address == 0x1020 && Value.OpSeq == ReadSeq) {
+          FoundSP = true;
+          EXPECT_EQ(Value.EstablishedFrameOffset, -56);
+        }
+      for (const auto &Value : A.FrameValues)
+        if (Value.Address == 0x1020 && Value.OpSeq == WrittenValueSeq) {
+          FoundFinallyWrite = true;
+          if (Mutation == 19)
+            EXPECT_FALSE(Value.EstablishedFrameOffset);
+          else
+            EXPECT_EQ(Value.EstablishedFrameOffset, 0);
+        }
+      EXPECT_TRUE(FoundSP);
+      // A zero-step unwind must not inherit the separately analyzed runtime
+      // callback's writes; a traversed finally must publish its actual effect.
+      EXPECT_EQ(FoundFinallyWrite, Mutation != 9);
+    }
+  }
+}
+
 TEST(RegistrationState, FreedOrOpaqueFrameBytesCannotAuthorizeObjectReads) {
   for (bool Opaque : {false, true}) {
     auto F = makeCxxObjectCall();

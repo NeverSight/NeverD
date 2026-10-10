@@ -2418,6 +2418,16 @@ conflicting predecessors and preserved catch resumption after a private throw.
 indirect canonical no-return calls without a callee memory contract, retaining
 catch dispatch/resumption and rejecting conditional, unmarked, mismatched or
 unbound instruction evidence.
+`LocalUnwindIdentityRequiresCurrentProviderAndVeneer` checks PE32 EH3 runtime
+identity across exact IAT and immutable jump forms, including wrong providers,
+conflicting slots, changed/writable code and other architectures or formats.
+`LocalUnwindRetiresLevelsAfterCheckedFinallyEffects` checks argument binding,
+zero-step unwinds, finally writes, preserved caller argument ESP, invalid or
+non-ancestor levels, cyclic scope tables, unknown callback calls, runtime-slot
+clobbers, nonlocal stack changes, return pops, conditional exits, trailing
+return effects, atomic writes and all-path joins with agreeing or conflicting
+finally effects. It retains the
+independent memory/native-output refusal.
 The native call target checks cumulative failed-proof budgets and fresh-image
 callee indices.
 Catch-return tests require the pre-dispatch SavedESP snapshot to survive catch

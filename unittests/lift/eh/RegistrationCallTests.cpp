@@ -305,6 +305,68 @@ TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
   }
 }
 
+TEST(RegistrationCallABI, LocalUnwindIdentityRequiresCurrentProviderAndVeneer) {
+  for (bool Indirect : {false, true}) {
+    for (unsigned Mutation = 0; Mutation != 14; ++Mutation) {
+      SCOPED_TRACE(Indirect);
+      SCOPED_TRACE(Mutation);
+      ThrowImage F;
+      F.Image.Imports[0].Name = "_local_unwind2";
+      ASSERT_TRUE(F.Image.recordImportStorageSlot(
+          ThrowImage::IATVA, "_local_unwind2", 0,
+          ImportStorageEvidence::PointerTable));
+      auto &Text = F.Image.Segments[0];
+      Text.FileSz = Text.Size;
+      Section Code;
+      Code.Name = ".text";
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      F.Image.Sections = {Code};
+      if (Mutation == 1)
+        F.Image.Imports[0].Module = "custom.dll";
+      if (Mutation == 2)
+        F.Image.Imports[0].Name = "_local_unwind4";
+      if (Mutation == 3) {
+        F.Image.Imports.push_back(F.Image.Imports[0]);
+        F.Image.Imports.back().Module = "custom.dll";
+      }
+      if (Mutation == 4)
+        F.Image.ConflictingImportStorageSlots.insert(ThrowImage::IATVA);
+      if (Mutation == 5)
+        Text.Data[0x81] = 0x15; // a call is not a transparent jump veneer
+      if (Mutation == 6)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      if (Mutation == 7)
+        F.Image.Arch = Arch::X64;
+      if (Mutation == 8)
+        F.Image.Format = BinaryFormat::ELF;
+      if (Mutation == 9)
+        F.Image.Imports[0].Module = "MSVCRT.dll";
+      if (Mutation == 10)
+        F.Image.Bits = Bitness::Bits64;
+      if (Mutation == 11)
+        F.Image.Arch = Arch::ARM;
+      if (Mutation == 12)
+        F.Image.Arch = Arch::AArch64;
+      if (Mutation == 13)
+        F.Image.Format = BinaryFormat::MachO;
+      const va_t Target = Indirect ? ThrowImage::IATVA : ThrowImage::ImportVA;
+      const auto Contract =
+          getCheckedX86LocalUnwindContract(F.Image, Target, Indirect);
+      EXPECT_EQ(Contract.has_value(),
+                Mutation == 0 || Mutation == 9 ||
+                    (Indirect && (Mutation == 5 || Mutation == 6)));
+      EXPECT_FALSE(
+          getCheckedX86LocalUnwindContract(F.Image, Target + 1, Indirect));
+      if (Contract) {
+        EXPECT_EQ(Contract->Target, Target);
+        EXPECT_EQ(Contract->Indirect, Indirect);
+      }
+    }
+  }
+}
+
 TEST(RegistrationCallABI, SEHReturningStackUsesCompleteParentFrameEvidence) {
   for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -408,6 +470,87 @@ TEST(RegistrationCallABI, SEHReturningStackUsesCompleteParentFrameEvidence) {
     F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
     EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA + 0x120),
               Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+  }
+}
+
+TEST(RegistrationCallABI, LocalUnwindSplitsCurrentMachineStateAtCall) {
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports[0].Name = "_local_unwind2";
+    ASSERT_TRUE(
+        F.Image.recordImportStorageSlot(ThrowImage::IATVA, "_local_unwind2", 0,
+                                        ImportStorageEvidence::PointerTable));
+    auto &Text = F.Image.Segments[0];
+    Text.Data.assign(0x101, 0xcc);
+    const std::vector<uint8_t>
+        Entry{0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0,    0x30,
+              0x40, 0,    0x68, 0,    0x11, 0x40, 0,    0x64,
+              0xa1, 0,    0,    0,    0,    0x50, 0x64, 0x89,
+              0x25, 0,    0,    0,    0,    0x83, 0xec, 0x20, // private frame
+              0x89, 0x65, 0xe8,                               // SavedESP
+              0xc7, 0x45, 0xe4, 0,    0,    0,    0,          // local = 0
+              0xc7, 0x45, 0xfc, 0,    0,    0,    0,          // enter scope 0
+              0x6a, 0xff, 0x8d, 0x45, 0xf0, 0x50, 0xe8, 0x54,
+              0,    0,    0, // _local_unwind2(frame, -1)
+              0x83, 0xc4, 8,    0x8b, 0x45, 0xe4, 0xeb, 0x2c};
+    std::copy(Entry.begin(), Entry.end(), Text.Data.begin());
+    const std::vector<uint8_t> Finally{0xc7, 0x45, 0xe4, 7, 0, 0, 0, 0xc3};
+    std::copy(Finally.begin(), Finally.end(), Text.Data.begin() + 0x50);
+    const std::vector<uint8_t> Epilogue{
+        0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0, 0, 0, 0, 0x8b, 0xe5, 0x5d, 0xc3};
+    std::copy(Epilogue.begin(), Epilogue.end(), Text.Data.begin() + 0x70);
+    Text.Data[0x90] = 0xff;
+    Text.Data[0x91] = 0x25;
+    writeLE<uint32_t>(Text.Data.data() + 0x92, ThrowImage::IATVA);
+    Text.Data[0x100] = 0xc3;
+    if (Mutation == 1)
+      Text.Data[0x35] = 0xf4; // wrong registration argument
+    if (Mutation == 2)
+      Text.Data[0x52] = 0xe8; // finally overwrites SavedESP
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    ExceptionFunction EH;
+    EH.CodeRange = {Text.VA, Text.VA + 0xa0};
+    EH.Personality = ExceptionPersonality::ExceptHandler3;
+    EH.Encoding = ExceptionEncoding::X86ScopeTableEH3;
+    auto &Chain = EH.Registration.emplace();
+    Chain.HandlerVA = Text.VA + 0x100;
+    Chain.ScopeTableVA = ThrowImage::TableVA;
+    Chain.SeededTryLevel = -1;
+    Chain.TryLevelOffset = -4;
+    Chain.RegistrationOffset = -16;
+    Chain.ChainInstallVA = Text.VA + 0x16;
+    Chain.ChainRemoveVA = Text.VA + 0x73;
+    Chain.Scopes = {{-1, 0, Text.VA + 0x50, true}};
+    Chain.TryLevelStores = {{Text.VA + 0x2a, Text.VA + 0x31, 0}};
+    F.tableWord(0, UINT32_MAX);
+    F.tableWord(4, 0);
+    F.tableWord(8, Text.VA + 0x50);
+    F.Image.ExceptionMetadata.Functions.push_back(EH);
+    F.Image.ExceptionMetadata.rebuildIndex();
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(F.Image));
+    const auto Low = CFGBuilder().build(F.Image, Dec, Text.VA);
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    ASSERT_TRUE(Low.RegistrationStates);
+    const auto &States = *Low.RegistrationStates;
+    EXPECT_EQ(States.Complete, Mutation == 0);
+    EXPECT_EQ(States.RegistrationLifetimeComplete, Mutation == 0);
+    EXPECT_FALSE(States.CallFrameEffectsComplete);
+    bool SawContinuation = false;
+    for (const auto &State : States.Blocks)
+      if (State.Range.Begin == Text.VA + 0x3c) {
+        SawContinuation = true;
+        if (Mutation == 0)
+          EXPECT_EQ(State.Levels, std::vector<int32_t>{-1});
+      }
+    EXPECT_TRUE(SawContinuation);
   }
 }
 

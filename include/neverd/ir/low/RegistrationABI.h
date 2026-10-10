@@ -31,6 +31,12 @@ std::optional<uint32_t>
 getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
                             size_t *CumulativeWork = nullptr);
 
+/// Authenticate the exact PE32 _local_unwind2 import or immutable IAT veneer.
+/// This identifies its runtime protocol, not its caller's frame or callbacks.
+std::optional<RegistrationLocalUnwindContract>
+getCheckedX86LocalUnwindContract(const BinaryImage &Image, va_t Target,
+                                 bool Indirect);
+
 /// A leaf's two separate address domains: its private invocation frame and
 /// the bounded object borrowed through entry ECX. Object offsets are relative
 /// to that object, never invented image addresses or private stack offsets.
@@ -113,6 +119,8 @@ public:
   cleanupContracts(const LowFunc &Function);
   std::optional<std::vector<RegistrationCalleeStackContract>>
   stackContracts(const LowFunc &Function);
+  std::optional<std::vector<RegistrationLocalUnwindContract>>
+  localUnwindContracts(const LowFunc &Function);
 
 private:
   const BinaryImage &Image;

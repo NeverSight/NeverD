@@ -130,6 +130,7 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
     std::optional<std::vector<RegistrationCalleeFrameContract>> Callees;
     std::optional<std::vector<RegistrationCleanupFrameContract>> Cleanups;
     std::optional<std::vector<RegistrationCalleeStackContract>> Stacks;
+    std::optional<std::vector<RegistrationLocalUnwindContract>> LocalUnwinds;
     const bool CheckCalls = CurrentImg && Metadata.Cxx.has_value();
     RegistrationCallCalleeIndex *CalleeIndex = nullptr;
     if (CurrentImg) {
@@ -143,6 +144,7 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
         CalleeIndex = RegistrationCallees.get();
       }
       Stacks = CalleeIndex->stackContracts(Func);
+      LocalUnwinds = CalleeIndex->localUnwindContracts(Func);
     }
     if (CheckCalls) {
       Callees = CalleeIndex->contracts(Func);
@@ -164,7 +166,12 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
             : 0,
         CookieCheckVA, CheckCalls && Callees ? &*Callees : nullptr,
         CheckCalls && Cleanups ? &*Cleanups : nullptr,
-        Stacks ? &*Stacks : nullptr);
+        Stacks ? &*Stacks : nullptr, LocalUnwinds ? &*LocalUnwinds : nullptr);
+    if (CurrentImg && !LocalUnwinds) {
+      Func.RegistrationStates->Complete = false;
+      Func.RegistrationStates->Diagnostics.push_back(
+          "registration runtime-call proof budget exhausted");
+    }
     if (CheckCalls && (!Callees || !Cleanups))
       Func.RegistrationStates->Diagnostics.push_back(
           "registration callee proof budget exhausted");

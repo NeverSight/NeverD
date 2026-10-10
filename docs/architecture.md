@@ -218,6 +218,18 @@ destinations after an ordinary no-return call.
 Registration-state transfer also consumes the exact unconditional no-return
 instruction boundary. Missing call-frame effects still refuse memory borrows,
 but cannot recreate that call's ordinary continuation or suppress its handlers.
+PE32 EH3 local unwinds have a separate runtime contract. Current strong
+`_local_unwind2` imports and immutable IAT veneers identify the protocol; the
+state solver binds its actual registration pointer and target level at the
+source call. CFG construction splits the ordinary continuation at this state
+transition. Each traversed finally gets a bounded callback-stack analysis with
+the parent's established EBP, and every returning path must preserve the
+runtime fields and invocation stack before its frame effects can be joined.
+The runtime advances the try level before invoking each finally, as described
+by [Wine's independent CRT implementation](https://github.com/wine-mirror/wine/blob/master/dlls/msvcrt/except_i386.c).
+Unknown callback calls, runtime-field writes and nonlocal callback exits still
+refuse this returning-path proof. These state facts grant no native call-frame
+or installation permission.
 MedIR distinguishes established parent EBP, private callback
 ESP and a continuation's checked saved ESP. Its shared root-shape and
 entry-stack-coordinate helpers are consumed by stack proofs, HighIR and LLVM;

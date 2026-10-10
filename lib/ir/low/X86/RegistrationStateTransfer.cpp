@@ -387,6 +387,8 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       if (NoReturnAtExit)
         NoReturnEnd = Call->EndAddress;
     }
+    if (auto SP = transferLocalUnwind(I, After, Op))
+      CallSP = *SP;
     // The CFG's exact instruction already owns the no-return decision.
     // A missing memory-borrow contract cannot create an ordinary return from
     // it. Keep transferCall's refusal and the exceptional dispatch below.

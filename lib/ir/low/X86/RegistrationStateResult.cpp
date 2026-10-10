@@ -15,6 +15,9 @@
 namespace neverd::registration_state {
 
 RegistrationStateAnalysis RegistrationStateSolver::finish() {
+  if (FailedLocalUnwind)
+    Result.Diagnostics.push_back(
+        "local-unwind frame arguments or finally effects are not proven");
   if (Exhausted) {
     Result.Diagnostics.push_back(
         "registration-state propagation budget exhausted");
