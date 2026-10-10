@@ -215,6 +215,9 @@ The LowIR no-return path proof lives in the low validation component, so call
 ABI checks do not depend on aggregate IR or MedIR. LowIR and MedIR consume the
 same architectural intrinsic-termination definition; both follow exceptional
 destinations after an ordinary no-return call.
+Registration-state transfer also consumes the exact unconditional no-return
+instruction boundary. Missing call-frame effects still refuse memory borrows,
+but cannot recreate that call's ordinary continuation or suppress its handlers.
 MedIR distinguishes established parent EBP, private callback
 ESP and a continuation's checked saved ESP. Its shared root-shape and
 entry-stack-coordinate helpers are consumed by stack proofs, HighIR and LLVM;
@@ -235,8 +238,15 @@ requires every return-pop immediate to agree. Checked nested callees compose
 through one cache and work budget, with no facts borrowed from an in-progress
 recursive proof. Unchecked nested calls forget ESP;
 explicit restoration through an ABI-preserved register can recover it. Memory
-loads do not acquire a saved-stack identity in this analysis. Already decoded
-interior finally calls use their ordinary subgraph, while the checked
+loads do not acquire a saved-stack identity in the ordinary-body analysis.
+SEH callees additionally require the complete shared registration
+state/lifetime proof to separate dispatcher returns and seed established EBP
+at except entries. The same independent register-only proof still checks
+every parent return; saved-stack memory identities do not survive opaque
+calls merely because registration state is complete. Nested CFG builds
+borrow the same callee index, so recursive dependencies cannot restart a
+fresh proof budget. Already decoded interior finally calls use their
+ordinary subgraph, while the checked
 RaiseException provider supplies its separate stdcall adjustment. These facts
 do not grant object borrows, memory-effect completeness or native EH authority;
 the existing call-frame and generated-code checks remain required.

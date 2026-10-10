@@ -131,15 +131,22 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
     std::optional<std::vector<RegistrationCleanupFrameContract>> Cleanups;
     std::optional<std::vector<RegistrationCalleeStackContract>> Stacks;
     const bool CheckCalls = CurrentImg && Metadata.Cxx.has_value();
+    RegistrationCallCalleeIndex *CalleeIndex = nullptr;
     if (CurrentImg) {
-      if (!RegistrationCallees)
-        RegistrationCallees =
-            std::make_shared<RegistrationCallCalleeIndex>(*CurrentImg);
-      Stacks = RegistrationCallees->stackContracts(Func);
+      if (BorrowedRegistrationCallees &&
+          BorrowedRegistrationCallees->ownsImage(*CurrentImg))
+        CalleeIndex = BorrowedRegistrationCallees;
+      else {
+        if (!RegistrationCallees)
+          RegistrationCallees =
+              std::make_shared<RegistrationCallCalleeIndex>(*CurrentImg);
+        CalleeIndex = RegistrationCallees.get();
+      }
+      Stacks = CalleeIndex->stackContracts(Func);
     }
     if (CheckCalls) {
-      Callees = RegistrationCallees->contracts(Func);
-      Cleanups = RegistrationCallees->cleanupContracts(Func);
+      Callees = CalleeIndex->contracts(Func);
+      Cleanups = CalleeIndex->cleanupContracts(Func);
     }
     va_t CookieCheckVA = 0;
     if (CurrentImg &&

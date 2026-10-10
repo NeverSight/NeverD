@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -301,6 +302,112 @@ TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
       EXPECT_EQ(Contracts->front().StackPopBytes, 16u);
       EXPECT_TRUE(Contracts->front().Indirect);
     }
+  }
+}
+
+TEST(RegistrationCallABI, SEHReturningStackUsesCompleteParentFrameEvidence) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports.clear();
+    auto &Text = F.Image.Segments[0];
+    Text.Data.assign(0x101, 0xcc);
+    const std::vector<uint8_t> Entry{
+        0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0,    0x30, 0x40, 0, // scope table
+        0x68, 0,    0x11, 0x40, 0, // language handler
+        0x64, 0xa1, 0,    0,    0,    0,    0x50, 0x64, 0x89, 0x25,
+        0,    0,    0,    0,                   // install FS:[0]
+        0xc7, 0x45, 0xfc, 0,    0,    0,    0, // enter scope
+        0xb8, 42,   0,    0,    0,    0xc7, 0x45, 0xfc, 0xff, 0xff,
+        0xff, 0xff, 0xeb, 0x3e}; // common parent epilogue
+    std::copy(Entry.begin(), Entry.end(), Text.Data.begin());
+    const std::vector<uint8_t> Filter{0xb8, 1, 0, 0, 0, 0xc3};
+    std::copy(Filter.begin(), Filter.end(), Text.Data.begin() + 0x50);
+    const std::vector<uint8_t> Handler{0xb8, 7, 0, 0, 0, 0xeb, 9};
+    std::copy(Handler.begin(), Handler.end(), Text.Data.begin() + 0x60);
+    const std::vector<uint8_t> Epilogue{
+        0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0, 0, 0, 0, 0x8b, 0xe5, 0x5d, 0xc3};
+    std::copy(Epilogue.begin(), Epilogue.end(), Text.Data.begin() + 0x70);
+    Text.Data[0x100] = 0xc3;
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    ExceptionFunction EH;
+    EH.CodeRange = {Text.VA, Text.VA + 0xa0};
+    EH.Personality = ExceptionPersonality::ExceptHandler3;
+    EH.Encoding = ExceptionEncoding::X86ScopeTableEH3;
+    auto &Chain = EH.Registration.emplace();
+    Chain.HandlerVA = Text.VA + 0x100;
+    Chain.ScopeTableVA = ThrowImage::TableVA;
+    Chain.SeededTryLevel = -1;
+    Chain.TryLevelOffset = -4;
+    Chain.RegistrationOffset = -16;
+    Chain.ChainInstallVA = Text.VA + 0x16;
+    Chain.ChainRemoveVA = Text.VA + 0x73;
+    Chain.Scopes = {{-1, Text.VA + 0x50, Text.VA + 0x60, false}};
+    Chain.TryLevelStores = {{Text.VA + 0x1d, Text.VA + 0x24, 0},
+                            {Text.VA + 0x29, Text.VA + 0x30, -1}};
+    if (Mutation == 1)
+      Text.Data[0x7a] = Text.Data[0x7b] = 0x90; // missing ESP restoration
+    if (Mutation == 2)
+      Text.Data[0x60] = 0xbd; // handler corrupts established EBP
+    if (Mutation == 3) {
+      Chain.Scopes.front().HandlerVA = Text.VA + 0x80;
+      std::copy(Epilogue.begin(), Epilogue.end(), Text.Data.begin() + 0x80);
+      Text.Data[0x8d] = 0xc2; // only the exceptional parent return pops four
+      Text.Data[0x8e] = 4;
+      Text.Data[0x8f] = 0;
+    }
+    if (Mutation == 4)
+      EH.ParseStatus = ExceptionParseStatus::Partial;
+    if (Mutation == 5)
+      Text.Flags = Text.Flags | SegmentFlags::Writable;
+    if (Mutation == 6)
+      Chain.ChainInstallVA += 1;
+    if (Mutation == 7) {
+      // Registration state is not a memory-preservation contract. An opaque
+      // helper overwrites the saved EBP that the epilogue loads into ESP.
+      const std::vector<uint8_t> OpaqueEpilogue{
+          0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0,    0,    0,    0,
+          0x83, 0xec, 4,    0x89, 0x6d, 0xec, 0x8d, 0x4d, 0xec, 0xe8,
+          0x78, 0,    0,    0,    0x8b, 0x65, 0xec, 0x5d, 0xc3};
+      std::copy(OpaqueEpilogue.begin(), OpaqueEpilogue.end(),
+                Text.Data.begin() + 0x70);
+      const std::vector<uint8_t> Writer{0xc7, 1, 0, 0, 0, 0, 0xc3};
+      Text.Data.resize(0x107);
+      std::copy(Writer.begin(), Writer.end(), Text.Data.begin() + 0x100);
+      Text.Size = Text.FileSz = Text.Data.size();
+      F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+    }
+    F.tableWord(0, UINT32_MAX);
+    F.tableWord(4, Chain.Scopes.front().FilterVA);
+    F.tableWord(8, Chain.Scopes.front().HandlerVA);
+    F.Image.ExceptionMetadata.Functions.push_back(EH);
+    F.Image.ExceptionMetadata.rebuildIndex();
+    if (Mutation == 0 || Mutation == 3 || Mutation == 7) {
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(F.Image));
+      const auto Low = CFGBuilder().build(F.Image, Dec, Text.VA);
+      ASSERT_TRUE(Low.RegistrationStates);
+      ASSERT_TRUE(Low.RegistrationStates->Complete);
+      ASSERT_TRUE(Low.RegistrationStates->RegistrationLifetimeComplete);
+    }
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+              Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+    // An outer ordinary helper must reuse the checked SEH result through
+    // nested CFG construction, without starting a separate callee closure.
+    Text.Data.resize(0x140, 0xcc);
+    Text.Data[0x120] = 0xe8;
+    writeLE<uint32_t>(Text.Data.data() + 0x121, uint32_t(-0x125));
+    Text.Data[0x125] = 0xc3;
+    Text.Size = Text.FileSz = Text.Data.size();
+    F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA + 0x120),
+              Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
   }
 }
 

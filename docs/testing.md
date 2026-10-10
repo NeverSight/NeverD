@@ -2381,7 +2381,12 @@ exhausted work. `StackCleanupIncludesCheckedNestedImportCleanup` verifies
 provider and exact-slot identity before a nested stdcall can balance its caller.
 `NestedReturningStackProofIsBoundedAndNonCircular` checks multi-level callee
 cleanup, mismatched pops, recursive dependencies, the depth boundary and shared
-work exhaustion. It does not admit dispatcher-entered parent returns.
+work exhaustion. It does not admit dispatcher-entered parent returns through
+an ordinary subgraph. `SEHReturningStackUsesCompleteParentFrameEvidence`
+separately checks complete registration state and lifetime, corrupted EBP,
+missing ESP restoration, incompatible ordinary/exceptional return pops,
+writable code, stale installation metadata and an opaque helper overwriting
+a saved stack value, both directly and through an outer helper.
 `StackCleanupDoesNotGrantMemoryBorrowAuthority` checks exact
 direct/indirect target identity, registration-overlapping pops and duplicate
 contracts while retaining the independent call-frame refusal.
@@ -2409,6 +2414,10 @@ their destructor footprints.
 The state target also checks source-call identity, initialized ECX object
 borrows, registration/SavedESP separation, partial stores, pointer taint,
 conflicting predecessors and preserved catch resumption after a private throw.
+`CanonicalNoReturnKeepsExceptionalFlowWithoutBorrowing` checks direct and
+indirect canonical no-return calls without a callee memory contract, retaining
+catch dispatch/resumption and rejecting conditional, unmarked, mismatched or
+unbound instruction evidence.
 The native call target checks cumulative failed-proof budgets and fresh-image
 callee indices.
 Catch-return tests require the pre-dispatch SavedESP snapshot to survive catch

@@ -7,6 +7,7 @@
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/lift/X86Regs.h"
 
 #include <algorithm>
@@ -385,6 +386,25 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       NoReturnAtExit = Call->DoesNotReturn;
       if (NoReturnAtExit)
         NoReturnEnd = Call->EndAddress;
+    }
+    // The CFG's exact instruction already owns the no-return decision.
+    // A missing memory-borrow contract cannot create an ordinary return from
+    // it. Keep transferCall's refusal and the exceptional dispatch below.
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+      const auto It = Boundaries.find(Op.Addr);
+      if (Op.Seq >= 0 && It != Boundaries.end() &&
+          It->second.first == Block.Id) {
+        const auto &Insn = It->second.second;
+        const size_t OpIndex = &Op - Block.Ops.data();
+        if (Insn.Control == LowInstructionControl::Call &&
+            isUnconditionalNoReturn(Insn) && OpIndex >= Insn.FirstOp &&
+            OpIndex - Insn.FirstOp < Insn.OpCount &&
+            Insn.FirstOp <= Block.Ops.size() &&
+            Insn.OpCount <= Block.Ops.size() - Insn.FirstOp) {
+          NoReturnAtExit = true;
+          NoReturnEnd = Insn.Address + Insn.Size;
+        }
+      }
     }
     // Stack balance alone does not discharge transferCall's memory, object
     // initialization or no-return obligations. Retain their refusal while

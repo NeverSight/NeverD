@@ -24,6 +24,18 @@ using registration_state::FrameState;
 using registration_state::FrameTransfer;
 using registration_state::FrameValue;
 
+std::optional<uint32_t> nearReturnPop(const BinaryImage &Image, va_t Address) {
+  const auto Byte = readImmutableCodeBytes(Image, Address, 1);
+  if (!Byte || ((*Byte)[0] != 0xc3 && (*Byte)[0] != 0xc2))
+    return std::nullopt;
+  if ((*Byte)[0] == 0xc3)
+    return 0;
+  const auto Encoding = readImmutableCodeBytes(Image, Address, 3);
+  if (!Encoding)
+    return std::nullopt;
+  return readLE<uint16_t>(Encoding->data() + 1);
+}
+
 bool hasImmutableInstruction(const BinaryImage &Image,
                              const LowInstructionBoundary &Boundary,
                              Decoder &Decoder) {
@@ -94,7 +106,8 @@ struct StackBody {
 
 std::optional<uint32_t>
 stackPopForBody(StackBody &Body, va_t Entry,
-                const std::function<std::optional<uint32_t>(va_t)> &NestedPop) {
+                const std::function<std::optional<uint32_t>(va_t)> &NestedPop,
+                const LowFunc *Registration = nullptr) {
   if (!Body.Valid || !Body.Entries.count(Entry))
     return std::nullopt;
   const auto &Image = Body.Image;
@@ -103,10 +116,35 @@ stackPopForBody(StackBody &Body, va_t Entry,
   const LowBlock *First = Blocks.at(Body.Entries.at(Entry));
   FrameState Initial;
   Initial.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
-      FrameValue::frame(0);
+      FrameValue::frame(Registration ? 4 : 0);
   std::map<int, FrameState> Incoming{{First->Id, Initial}};
   std::deque<int> Pending{First->Id};
   std::set<int> Queued{First->Id};
+  std::set<int> ParentBlocks;
+  if (Registration) {
+    for (const auto &State : Registration->RegistrationStates->Blocks)
+      if (State.Reached && !State.CallbackOnly)
+        ParentBlocks.insert(State.BlockId);
+    for (const auto &Scope :
+         Registration->ExceptionMetadata->Registration->Scopes) {
+      if (Scope.IsFinally)
+        continue;
+      const auto It = Body.Entries.find(Scope.HandlerVA);
+      if (It == Body.Entries.end() || !ParentBlocks.count(It->second))
+        continue;
+      // The SEH dispatcher restores established EBP for an except body.
+      // Its stack and memory values require independent evidence. In
+      // particular, a saved-SP reload cannot inherit an opaque call's
+      // unproved memory preservation through registration-state facts.
+      FrameState Handler;
+      Handler.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
+          FrameValue::frame(0);
+      auto [Root, New] = Incoming.emplace(It->second, Handler);
+      if ((New || Root->second.merge(Handler)) &&
+          Queued.insert(It->second).second)
+        Pending.push_back(It->second);
+    }
+  }
   std::optional<uint32_t> Pop;
   while (!Pending.empty()) {
     const int Id = Pending.front();
@@ -114,7 +152,7 @@ stackPopForBody(StackBody &Body, va_t Entry,
     Queued.erase(Id);
     FrameState State = Incoming.at(Id);
     const auto &Block = *Blocks.at(Id);
-    if (!Body.immutableBlock(Id))
+    if (!Body.immutableBlock(Id) || (Registration && !ParentBlocks.count(Id)))
       return std::nullopt;
     FrameTransfer Transfer(State, 0);
     for (const auto &Op : Block.Ops) {
@@ -125,21 +163,13 @@ stackPopForBody(StackBody &Body, va_t Entry,
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
       if (Op.Opcode == NdOp::RETURN) {
-        if (State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset != 0)
+        if (State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset !=
+            (Registration ? 4 : 0))
           return std::nullopt;
         // Authenticate each near return, including zero versus nonzero pop.
         // LowFunc::CalleePopBytes is only a maximum and cannot prove agreement.
-        const auto Byte = readImmutableCodeBytes(Image, Op.Addr, 1);
-        if (!Byte || ((*Byte)[0] != 0xc3 && (*Byte)[0] != 0xc2))
-          return std::nullopt;
-        uint32_t Bytes = 0;
-        if ((*Byte)[0] == 0xc2) {
-          const auto Encoding = readImmutableCodeBytes(Image, Op.Addr, 3);
-          if (!Encoding)
-            return std::nullopt;
-          Bytes = readLE<uint16_t>(Encoding->data() + 1);
-        }
-        if (Pop && *Pop != Bytes)
+        const auto Bytes = nearReturnPop(Image, Op.Addr);
+        if (!Bytes || (Pop && *Pop != *Bytes))
           return std::nullopt;
         Pop = Bytes;
       }
@@ -182,6 +212,10 @@ stackPopForBody(StackBody &Body, va_t Entry,
         Pending.push_back(Successor);
     }
   }
+  if (Registration)
+    for (int Id : ParentBlocks)
+      if (!Incoming.count(Id))
+        return std::nullopt;
   return Pop;
 }
 
@@ -190,18 +224,48 @@ bool isPE32(const BinaryImage &Image) {
          Image.Format == BinaryFormat::COFF;
 }
 
+std::optional<uint32_t> stackPopForRegistration(
+    StackBody &Body, const LowFunc &Function,
+    const std::function<std::optional<uint32_t>(va_t)> &NestedPop) {
+  const auto &EH = Function.ExceptionMetadata;
+  const auto &States = Function.RegistrationStates;
+  if (!Body.Valid || !EH || !EH->Registration || EH->Cxx ||
+      EH->Registration->RealignedFrame || !States || !States->Complete ||
+      !States->CallbackStatesComplete ||
+      !States->RegistrationLifetimeComplete || !States->ChainOperationsComplete)
+    return std::nullopt;
+  for (const auto &State : States->Blocks) {
+    if (!State.Reached)
+      continue;
+    if (!Body.Blocks.count(State.BlockId) || State.Unknown ||
+        !Body.immutableBlock(State.BlockId))
+      return std::nullopt;
+    const auto &Block = *Body.Blocks.at(State.BlockId);
+    if (State.Range.Begin != Block.StartAddr ||
+        State.Range.End != Block.EndAddr)
+      return std::nullopt;
+  }
+  // Runtime filter/finally returns pop a dispatcher invocation, not this
+  // function's caller. The complete state proof separates those paths; the
+  // independent register-only proof still owns every parent return's ESP.
+  return stackPopForBody(Body, Function.Entry, NestedPop, &Function);
+}
+
 class ReturningStackProof {
   const BinaryImage &Image;
   size_t &Work;
   std::map<va_t, std::optional<uint32_t>> &Cache;
+  RegistrationCallCalleeIndex &Owner;
+  unsigned &Depth;
   StackBody *Parent;
-  unsigned Depth = 0;
 
 public:
   ReturningStackProof(const BinaryImage &Image, size_t &Work,
                       std::map<va_t, std::optional<uint32_t>> &Cache,
+                      RegistrationCallCalleeIndex &Owner, unsigned &Depth,
                       StackBody *Parent = nullptr)
-      : Image(Image), Work(Work), Cache(Cache), Parent(Parent) {}
+      : Image(Image), Work(Work), Cache(Cache), Owner(Owner), Depth(Depth),
+        Parent(Parent) {}
 
   std::optional<uint32_t> prove(va_t Target) {
     if (!chargeCalleeWork(Work, 1))
@@ -215,6 +279,11 @@ public:
     if (Depth == 32 || Cache.size() == 256 || Target > UINT32_MAX ||
         !Image.isCodeAddress(Target))
       return std::nullopt;
+    if ((!Parent || !Parent->Entries.count(Target)))
+      if (const auto *EH = Image.ExceptionMetadata.findFunction(Target);
+          EH &&
+          (EH->Cxx || !EH->Registration || EH->Registration->RealignedFrame))
+        return std::nullopt;
     // In-progress entries carry no fact: recursion cannot certify itself.
     // Even failed nested bodies consume the same cumulative work allowance.
     auto It = Cache.emplace(Target, std::nullopt).first;
@@ -222,15 +291,16 @@ public:
     const auto Nested = [&](va_t Callee) { return prove(Callee); };
     if (Parent && Parent->Entries.count(Target)) {
       It->second = stackPopForBody(*Parent, Target, Nested);
-    } else if (!Image.ExceptionMetadata.findFunction(Target)) {
+    } else {
       Decoder Dec;
       if (Dec.init(Image)) {
         CFGBuilder Builder;
+        Builder.setRegistrationCalleeIndex(&Owner);
         const LowFunc Callee = Builder.build(Image, Dec, Target, "abi-stack");
-        if (!Callee.ExceptionMetadata) {
-          StackBody Body(Image, Callee, Work);
-          It->second = stackPopForBody(Body, Target, Nested);
-        }
+        StackBody Body(Image, Callee, Work);
+        It->second = Callee.ExceptionMetadata
+                         ? stackPopForRegistration(Body, Callee, Nested)
+                         : stackPopForBody(Body, Target, Nested);
       }
     }
     --Depth;
@@ -244,10 +314,14 @@ std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
                                                     size_t *CumulativeWork) {
   if (!isPE32(Image))
     return std::nullopt;
-  size_t LocalWork = 0;
-  size_t &Work = CumulativeWork ? *CumulativeWork : LocalWork;
-  std::map<va_t, std::optional<uint32_t>> Cache;
-  return ReturningStackProof(Image, Work, Cache).prove(Target);
+  return RegistrationCallCalleeIndex(Image, CumulativeWork).stackPop(Target);
+}
+
+std::optional<uint32_t> RegistrationCallCalleeIndex::stackPop(va_t Target) {
+  if (!isPE32(Image))
+    return std::nullopt;
+  return ReturningStackProof(Image, Work, StackCache, *this, StackDepth)
+      .prove(Target);
 }
 
 std::optional<std::vector<RegistrationCalleeStackContract>>
@@ -269,7 +343,8 @@ RegistrationCallCalleeIndex::stackContracts(const LowFunc &Function) {
   // One graph and immutable-instruction cache for all interior callback
   // entries. Each entry still gets an independent reaching-register proof.
   StackBody Parent(Image, Function, Work);
-  ReturningStackProof Proof(Image, Work, StackCache, &Parent);
+  ReturningStackProof Proof(Image, Work, StackCache, *this, StackDepth,
+                            &Parent);
   for (const auto &[Target, Indirect] : Targets) {
     if (Indirect) {
       // The registration runtime's existing provider contract. This gives

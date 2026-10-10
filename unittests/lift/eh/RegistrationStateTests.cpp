@@ -938,6 +938,51 @@ TEST(RegistrationState, PrivateThrowStopsOrdinaryFlowAndKeepsCatchResumption) {
   }
 }
 
+TEST(RegistrationState, CanonicalNoReturnKeepsExceptionalFlowWithoutBorrowing) {
+  for (bool Indirect : {false, true}) {
+    for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+      SCOPED_TRACE(Indirect);
+      SCOPED_TRACE(Mutation);
+      auto F = makeCxxObjectCall();
+      auto &Call = F.Blocks[7];
+      if (Indirect)
+        Call.Ops.front().Opcode = NdOp::INDIR_CALL;
+      auto &Insn = Call.InstructionBoundaries.front();
+      Insn.OpCount = 1;
+      Insn.ControlFlags = LowInstructionControlFlag::NoReturn;
+      if (Mutation == 1)
+        Insn.ControlFlags |= LowInstructionControlFlag::Conditional;
+      if (Mutation == 2)
+        Insn.ControlFlags = LowInstructionControlFlag::None;
+      if (Mutation == 3)
+        Insn.Control = LowInstructionControl::None;
+      if (Mutation == 4)
+        Insn.OpCount = 0;
+      if (Mutation == 5)
+        Call.Ops.front().Seq = -1;
+      const auto A = analyzeRegistrationStates(F);
+      ASSERT_TRUE(A.Complete);
+      EXPECT_TRUE(A.RegistrationLifetimeComplete);
+      EXPECT_FALSE(A.CallFrameEffectsComplete);
+      EXPECT_TRUE(A.CallFrameEffects.empty());
+      EXPECT_EQ(A.Blocks[2].Reached, Mutation != 0);
+      EXPECT_TRUE(A.Blocks[5].Reached);
+      EXPECT_TRUE(A.Blocks[5].CallbackOnly);
+      EXPECT_TRUE(A.Blocks[6].Reached);
+      ASSERT_EQ(A.CxxContinuations.size(), 1u);
+      EXPECT_EQ(A.CxxContinuations[0].TargetVA, 0x1900u);
+      // Requesting independent call-frame proofs still refuses the opaque
+      // callee; its canonical no-return edge does not authorize a borrow.
+      const std::vector<RegistrationCalleeFrameContract> Contracts;
+      const auto Checked = analyzeRegistrationStates(F, 0, 0, &Contracts);
+      EXPECT_FALSE(Checked.CallFrameEffectsComplete);
+      EXPECT_TRUE(Checked.CallFrameEffects.empty());
+      EXPECT_EQ(Checked.Blocks[2].Reached, Mutation != 0);
+      EXPECT_TRUE(Checked.Blocks[5].Reached);
+    }
+  }
+}
+
 TEST(RegistrationState, FreedOrOpaqueFrameBytesCannotAuthorizeObjectReads) {
   for (bool Opaque : {false, true}) {
     auto F = makeCxxObjectCall();
