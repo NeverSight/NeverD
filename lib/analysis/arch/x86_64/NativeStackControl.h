@@ -24,6 +24,13 @@ struct NativeStackExpansionReceipt {
   uint32_t Version = 1;
   LowInstructionBoundary OriginalBoundary;
   std::string OriginalOperationDigest;
+  /// V2 additionally binds a separately validated original bank fact and the
+  /// exact resulting span. It does not turn the transformed span into a new
+  /// architecture instruction or assume anything about the reached callee.
+  std::string PreservedStateDigest;
+  std::string ExpandedOperationDigest;
+  NativeReturnExpansion ReturnMode =
+      NativeReturnExpansion::OuterFunctionBoundary;
 };
 
 struct NativeStackExpansion {

@@ -77,6 +77,14 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
               "$<TARGET_FILE:neverd-worker-test-server>")
     set_tests_properties(NeverDWorkerAnalysisSnapshot PROPERTIES TIMEOUT 30)
     set_tests_properties(NeverDWorkerTransport PROPERTIES TIMEOUT 40)
+    add_test(NAME NeverDWorkerSourceCache
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_cache_test.py"
+              "$<TARGET_FILE:neverd-worker-test-server>")
+    set_tests_properties(NeverDWorkerSourceCache PROPERTIES TIMEOUT 40)
+    add_test(NAME NeverDWorkerMakeCode
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_code_test.py"
+              "$<TARGET_FILE:neverd-worker-test-server>")
+    set_tests_properties(NeverDWorkerMakeCode PROPERTIES TIMEOUT 40)
     add_test(NAME NeverDWorkerGraphTransport
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/graph_transport_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
@@ -87,6 +95,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
     set_tests_properties(NeverDWorkerHistoryContributions PROPERTIES TIMEOUT 40)
     option(NEVERD_WORKER_REAL_ENGINE_TESTS "Run smoke tests against the real engine" ON)
     if(NEVERD_WORKER_REAL_ENGINE_TESTS)
+      add_test(NAME NeverDWorkerNativeMakeCode
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_code_test.py"
+                "$<TARGET_FILE:neverd-worker>" --real)
+      set_tests_properties(NeverDWorkerNativeMakeCode PROPERTIES TIMEOUT 40)
       add_test(NAME NeverDWorkerRealEngine
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_engine_test.py"
                 "$<TARGET_FILE:neverd-worker>")

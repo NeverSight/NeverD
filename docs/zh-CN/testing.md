@@ -147,6 +147,8 @@ v4 测试固定前缀大小及填充，拒绝截断布局和未知标志，保�
 
 `NeverDInterpreterLLVMRefinementTests` 检查全新的原生到 LLVM 组合证明、精确文本／函数绑定、独立预算、完整观察项及刻意扩大的源码域。修改字节、残余程序、结果、标志、状态码、栈帧写入、poison 或错误／过期循环方案，都必须拒绝组合凭据。任意字长倒计数要求两段归纳前提；独立 C 用例在 O1/O2 编译后验证真实序列化 LLVM 输入。状态模型回归拒绝隐藏入口回边，对入口集合计费且不复制附属来源信息。
 
+`InterpreterLLVMRefinement.Preservation*` 覆盖局部／重叠范围、非法请求、独立计算的准备开销、两端相同的最终破坏、跨循环的入口保存／恢复、新鲜不透明状态证据及后期拒绝。`NeverDPEFixedImageTests` 也是 API 使用方，需要重新构建。未提供请求时的结果、计数与摘要另行对照基线。
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1528,3 +1530,7 @@ MainActor 测试数据检查完整的固定元数据与静态表流程，拒绝�
 ## 有界目录批量属性
 
 bulk-attributes 检查完整组、名称/类型集合、未使用字节保护区、low32 FD、bitmap 字、原生错误、dup 共享进度、独立 open、缓存 EOF 和零 rewind。字面值与未知模式仅用于虚拟环境。模型还覆盖完整 stat、失效、NFD/255字节名称、输入/输出别名、传输/预算失败、移动/SWAP/删除/复用及显式授权。每个平台必需63个工作负载：ARM64 为189例，Intel 为126例；本地仅验证匹配的 ARM64 HVF。native5s、guest/Python5,000,000us/quantum1024、public10s 不变。
+
+## 原生不透明状态检查
+
+`X86PreservedState.*` 检查新鲜标量形式、精确寄存器别名、严格重置及字节/操作段/版本陈旧拒绝。`OriginalBinaryUndefinedIndependence.*Opaque*` 覆盖分支、内部调用、完整间接目标、精确配置及独立解码的元数据预算恰好够用/少一单位边界。`BinaryLowIR*.*Opaque*` 覆盖选择见证与任意未定义选择、多归纳源、后期秩/预算拒绝、真实入口标量保持，以及 LowIR 不变但后续源段字节改变时执行摘要必须变化。`NativeUndefinedIndependence.*Opaque*` 和 `NativeStackControl.*FreshMemoryCall*` 检查分组内部、切点前边界、陈旧记录及栈修改前的目标求值。重建受影响的元数据消费者，包括 `NeverDInterpreterLLVMRefinementTests`；分别报告 sanitizer、编译故障注入与普通测试结果。

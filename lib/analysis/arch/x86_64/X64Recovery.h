@@ -20,6 +20,10 @@ bool runtimeFlagsIntrinsic(const LowOp &Op);
 bool isRetainedNativeTrap(const SpecializationInstruction &Insn);
 bool isCetDisabledProjection(const SpecializationInstruction &Insn);
 
+/// Reset and bind a separate bank fact only for the exact disabled-CET RDSSP
+/// projection accepted by the owner above. Never upgrades undefined coverage.
+bool bindCetDisabledPreservedState(SpecializationInstruction &Insn);
+
 } // namespace neverd::analysis::x64
 
 #endif

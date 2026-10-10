@@ -153,6 +153,8 @@ Geschützte Countdown-Tests prüfen den nächsten Versuch nach einem verworfenen
 
 `NeverDInterpreterLLVMRefinementTests` prüft neue Gesamtbeweise, exakte Text-/Funktionsbindung, unabhängige Budgets, vollständige Beobachtungen und größere Quellbereiche. Geänderte Bytes, Restprogramme, Ergebnisse, Flags, Status, Frame-Schreibzugriffe, Poison und falsche/veraltete Schleifenpläne müssen den Gesamtnachweis verhindern. Beliebige Wortzähler erfordern beide induktiven Voraussetzungen; unabhängige C-Beispiele mit O1/O2 prüfen tatsächlichen serialisierten LLVM-Input. Zustandsmodelltests lehnen versteckte Einstieg-Rückkanten ab und begrenzen Wurzeln ohne Kopie zusätzlicher Herkunftsdaten.
 
+`InterpreterLLVMRefinement.Preservation*` prüft Teilbereiche und Überlappungen, ungültige Anfragen, unabhängig berechneten Vorbereitungsaufwand, identische Endwertänderungen, Sicherung/Wiederherstellung von Eintrittswerten über Schleifen, neue opake Nachweise und späte Ablehnung. Auch den API-Verbraucher `NeverDPEFixedImageTests` neu bauen. Ergebnisse, Zähler und Digests bei ausgelassener Anfrage separat mit der Basis vergleichen.
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1736,3 +1738,7 @@ Die MainActor-Fixture prüft den vollständigen Ablauf für feste Metadaten und 
 ## Begrenzte Verzeichnisattribute in Gruppen
 
 bulk-attributes prüft ganze Gruppen, Namen/Typen als Menge, Schutz unbenutzter Bytes, low32 FD, bitmap-Wörter, native Fehler, dup, unabhängige open, EOF und Null-rewind. Literal-/Unbekannt-Modi sind nur virtuell. Modelle decken vollständiges stat, Invalidierung, NFD/255-Byte-Namen, Ein-/Ausgabealias, Transport-/Budgetfehler, Verschieben/SWAP/Entfernen/Wiederverwenden und explizite Rechte ab. Pflichtinventar:63 Fälle pro Plattform,189 ARM64 und126 Intel. Lokal wurde nur passendes ARM64 HVF geprüft. native5s, guest/Python5,000,000us/quantum1024 und public10s bleiben gleich.
+
+## Prüfungen opaker Zustände
+
+`X86PreservedState.*` prüft frische skalare Formen, genaue Aliase, striktes Zurücksetzen und Ablehnung veralteter Bytes/Folgen/Versionen. `OriginalBinaryUndefinedIndependence.*Opaque*` deckt Zweige, interne Aufrufe, vollständige indirekte Ziele, genaue Profile und unabhängig dekodierte exakte/um eins zu kleine Metadatenbudgets ab. `BinaryLowIR*.*Opaque*` prüft Zeugen gegenüber beliebigen undefinierten Entscheidungen, mehrere induktive Quellen, späte Rang-/Budgetfehler, skalare Erhaltung vom echten Eintritt und spätere Quellbytes mit identischem LowIR, aber verändertem Ausführungsdigest. `NativeUndefinedIndependence.*Opaque*` und `NativeStackControl.*FreshMemoryCall*` prüfen Gruppeninnere, Grenzen vor Schnittpunkten, veraltete Belege und Zielauswertung vor Stackänderung. Betroffene Verbraucher einschließlich `NeverDInterpreterLLVMRefinementTests` neu bauen; Sanitizer und kompilierte Fehlerinjektionen getrennt von normalen Tests berichten.

@@ -676,6 +676,38 @@ std::optional<Session::DataItem> parseDataItem(const Session &S, va_t Addr,
       return std::nullopt;
     }
     Item.Size = static_cast<uint64_t>(*Size);
+  } else if (*Kind == CodeItemKind) {
+    // The SDK owns instruction validation for both new definitions and
+    // persisted rows. Do not trust a size supplied by a frontend or sidecar.
+    const Segment *Seg = S.Img.getSegmentFor(Addr);
+    if (!Seg || !S.Img.isCodeAddress(Addr) || Addr < Seg->VA ||
+        Addr - Seg->VA >= Seg->Data.size()) {
+      Error = "code needs file-backed executable bytes";
+      return std::nullopt;
+    }
+    const size_t Offset = static_cast<size_t>(Addr - Seg->VA);
+    const size_t Available = static_cast<size_t>(
+        std::min<uint64_t>(Seg->Data.size() - Offset, Seg->Size - Offset));
+    Decoder Dec;
+    if (!Dec.init(S.Img) || !Dec.selectMode(S.Img, Addr)) {
+      Error = "unknown or conflicting native instruction mode";
+      return std::nullopt;
+    }
+    DecodedInsn Insn{};
+    const int Bytes = Dec.decodeOne(
+        Seg->Data.data() + Offset, std::min<size_t>(Available, 16), Addr, Insn);
+    if (Bytes <= 0 || !S.Img.isCodeRange(Addr, Bytes) ||
+        (S.Img.Arch == Arch::ARM &&
+         S.Img.instructionModeAt(Addr + Bytes - 1, Dec.currentMode()) !=
+             Dec.currentMode())) {
+      Error = "invalid or truncated instruction at " + vaHex(Addr);
+      return std::nullopt;
+    }
+    if (Size && *Size != Bytes) {
+      Error = "code size must match its decoded instruction";
+      return std::nullopt;
+    }
+    Item.Size = static_cast<uint64_t>(Bytes);
   } else {
     Error = "unknown data item kind '" + Item.Kind + "'";
     return std::nullopt;

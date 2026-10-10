@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/BinaryInterpreterSpecialization.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/lift/X86Regs.h"
 
 #include <algorithm>
@@ -2873,4 +2874,202 @@ TEST(BinaryLowIRRefinement, PartitionedCoverageKeepsAllNativeAndCandidateArms) {
     EXPECT_FALSE(Missing.Proof.Certificate);
   }
 }
+
+TEST(BinaryLowIRRefinement,
+     OpaquePreservationCannotUpgradeSelectedUndefinedChoices) {
+  // CMP establishes AF=0; XOR then leaves AF undefined. LiftedBits keeps the
+  // old zero and ZeroBits selects zero. Another architectural choice reaches
+  // the vector write through LAHF and TEST. Entry flags remain arbitrary.
+  Program P({0x39, 0xc0, 0x31, 0xc0, 0x9f, 0xf6, 0xc4, 0x10, 0x75, 1, 0xc3,
+             0x66, 0x0f, 0xef, 0xf6, 0xc3});
+  P.Contract.RetainUnauditedNativeBoundaries = true;
+  P.Contract.NativePreservedState = LowIRNativePreservationRequirement{
+      LowPreservedStateSet::LegacyIntegerOpaqueV1,
+      LowIRNativePreservationQuantifier::SelectedWitness};
+  // Recover an independently safe candidate. Ordinary specialization also
+  // visits the vector arm and cannot model its 128-bit operation. The native
+  // proof must establish that this arm is unreachable for each named witness.
+  auto Safe = P;
+  std::fill_n(Safe.Image.Segments.front().Data.begin() + 11, 4, 0x90);
+  const auto Recovery = Safe.recover();
+  ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
+  for (auto W : {Witness::LiftedBits, Witness::ZeroBits}) {
+    SCOPED_TRACE(static_cast<unsigned>(W));
+    const auto R = P.check(Recovery.Residual, W);
+    ASSERT_TRUE(R.proved()) << R.Proof.Diagnostic;
+    ASSERT_TRUE(R.Certificate->Relation.NativePreservation);
+    EXPECT_EQ(R.Certificate->Relation.NativePreservation->Quantifier,
+              LowIRNativePreservationQuantifier::SelectedWitness);
+    ASSERT_EQ(R.Certificate->Relation.NativeAuditBoundaries.size(), 1U);
+    EXPECT_EQ(
+        R.Certificate->Relation.NativeAuditBoundaries.front().Kind,
+        LowIRNativeAuditBoundaryKind::MissingUndefinedOutputsAndPreservedState);
+    P.Contract.NativePreservedState->Quantifier =
+        LowIRNativePreservationQuantifier::AllUndefinedChoices;
+    refused(P.check(Recovery.Residual, W), Status::Unsupported);
+    P.Contract.NativePreservedState->Quantifier =
+        LowIRNativePreservationQuantifier::SelectedWitness;
+  }
+  P.Contract.NativePreservedState->Quantifier =
+      LowIRNativePreservationQuantifier::AllUndefinedChoices;
+  const auto All =
+      checkBinaryUndefinedIndependence(P.Image, Entry, P.Options, P.Contract);
+  EXPECT_EQ(All.Proof.Status, LowIRIndependenceStatus::Dependent)
+      << All.Proof.Diagnostic;
+  EXPECT_FALSE(All.Certificate);
+  P.Contract.NativePreservedState->Quantifier =
+      LowIRNativePreservationQuantifier::SelectedWitness;
+  // The safe chosen branch was essential, not permission to execute PXOR.
+  P.Image.Segments.front().Data[8] = 0x74;
+  refused(P.check(Recovery.Residual), Status::Unsupported);
+}
+
+TEST(BinaryLowIRLoopInference, OpaquePreservationNeedsEveryInductiveSource) {
+  auto P = repeatedNativeContexts();
+  P.Contract.NativePreservedState = LowIRNativePreservationRequirement{
+      LowPreservedStateSet::LegacyIntegerOpaqueV1,
+      LowIRNativePreservationQuantifier::SelectedWitness};
+  const auto Recovery = P.recover();
+  ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
+  const auto R = inferAndCheckBinaryLowIRLoopRefinement(
+      P.Image, Entry, P.Options, Recovery, P.Contract);
+  ASSERT_TRUE(R.proved()) << R.Inference.Diagnostic
+                          << R.Refinement.Proof.Diagnostic;
+  ASSERT_GE(R.Inference.Plan->Cutpoints.size(), 2U);
+  ASSERT_TRUE(R.Refinement.Certificate->Relation.NativePreservation);
+  const auto &Proof = R.Refinement.Proof;
+  EXPECT_GT(Proof.LoopTransitions, 1U);
+  EXPECT_EQ(R.Refinement.Certificate->Relation.NativePreservation->Quantifier,
+            LowIRNativePreservationQuantifier::SelectedWitness);
+  EXPECT_EQ(R.Refinement.Certificate->Relation.NativePreservation->Instructions,
+            R.Refinement.Certificate->Relation.OriginalInstructions.size());
+  const auto Check = [&](const LowIRLoopRefinementPlan &Plan,
+                         const LowIRRefinementLimits &Limits = {}) {
+    return checkBinaryLowIRLoopRefinement(P.Image, Entry, P.Options,
+                                          Recovery.Residual, P.Contract, Plan,
+                                          Witness::LiftedBits, Limits);
+  };
+  const auto Again = Check(*R.Inference.Plan);
+  ASSERT_TRUE(Again.proved()) << Again.Proof.Diagnostic;
+  EXPECT_EQ(Again.Certificate->InputDigest,
+            R.Refinement.Certificate->InputDigest);
+  auto Bad = *R.Inference.Plan;
+  Bad.Cutpoints.back().Rank = {NdVar::scalar(0, 8)};
+  refused(Check(Bad), Status::Different);
+  LowIRRefinementLimits Short;
+  Short.Execution.MaxSolverQueries = Again.Proof.SolverQueries - 1;
+  refused(Check(*R.Inference.Plan, Short), Status::BudgetExceeded);
+  Short = {};
+  Short.Execution.MaxOperations = Again.Proof.Operations - 1;
+  refused(Check(*R.Inference.Plan, Short), Status::BudgetExceeded);
+  P.Contract.NativePreservedState->Quantifier =
+      LowIRNativePreservationQuantifier::AllUndefinedChoices;
+  refused(Check(*R.Inference.Plan), Status::Unsupported);
+}
+
+TEST(BinaryLowIRLoopRefinement,
+     OpaquePreservationBindsLaterSourceBytesWithIdenticalLowIR) {
+  // Two explicit source segments, with no instruction executed before the
+  // entry cut: NOP [RAX]; NOP [RAX]; RET. The second source alone changes
+  // below.
+  Program P({0x0f, 0x1f, 0x00, 0x0f, 0x1f, 0x00, 0xc3});
+  P.Contract.NativePreservedState = LowIRNativePreservationRequirement{
+      LowPreservedStateSet::LegacyIntegerOpaqueV1,
+      LowIRNativePreservationQuantifier::SelectedWitness};
+  Decoder D;
+  ASSERT_TRUE(D.init(Arch::X64));
+  const auto &Bytes = P.Image.Segments.front().Data;
+  LowFunc Candidate;
+  Candidate.Entry = Entry;
+  for (size_t Offset = 0; Offset != Bytes.size();) {
+    DecodedInsn I{};
+    ASSERT_GT(D.decodeOneForLift(Bytes.data() + Offset, Bytes.size() - Offset,
+                                 Entry + Offset, I),
+              0);
+    LowBlock B;
+    B.Id = Candidate.Blocks.size();
+    B.StartAddr = Entry + Offset;
+    B.EndAddr = B.StartAddr + I.Size;
+    D.liftToLow(I, B.Ops);
+    LowInstructionBoundary Origin;
+    Origin.Address = B.StartAddr;
+    Origin.Size = I.Size;
+    Origin.OpCount = B.Ops.size();
+    if (D.returnsToCaller(I).value_or(false)) {
+      Origin.Control = LowInstructionControl::Return;
+      Origin.ControlFlags = LowInstructionControlFlag::Return;
+    } else {
+      B.Succs.push_back(B.Id + 1);
+    }
+    B.InstructionBoundaries.push_back(Origin);
+    Candidate.Blocks.push_back(std::move(B));
+    Offset += I.Size;
+  }
+  LowIRLoopRefinementPlan Plan;
+  for (unsigned N = 0; N != 2; ++N) {
+    LowIRLoopCutpoint Cut;
+    Cut.OriginalAddress = Cut.CandidateAddress = Entry + 3 * N;
+    Cut.Rank = {NdVar::scalar(1 - N, 8)};
+    Plan.Cutpoints.push_back(Cut);
+  }
+  const auto Check = [&] {
+    return checkBinaryLowIRLoopRefinement(P.Image, Entry, P.Options, Candidate,
+                                          P.Contract, Plan);
+  };
+  const auto Good = Check();
+  ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+  ASSERT_TRUE(Good.Certificate->Relation.NativePreservation);
+  const auto &F = *Good.Certificate->Relation.NativePreservation;
+  EXPECT_EQ(F.Instructions, 3U);
+  EXPECT_EQ(F.Instructions,
+            Good.Certificate->Relation.OriginalInstructions.size());
+  // NOP [RCX] has exactly the same LowIR as NOP [RAX], but a different native
+  // byte binding. No other source segment or candidate operation changes.
+  P.Image.Segments.front().Data[5] = 0x01;
+  DecodedInsn Changed{};
+  ASSERT_EQ(D.decodeOneForLift(Bytes.data() + 3, 3, Entry + 3, Changed), 3);
+  std::vector<LowOp> ChangedOps;
+  D.liftToLow(Changed, ChangedOps);
+  EXPECT_EQ(lowUndefinedOperationDigest(ChangedOps),
+            lowUndefinedOperationDigest(Candidate.Blocks[1].Ops));
+  const auto Later = Check();
+  ASSERT_TRUE(Later.proved()) << Later.Proof.Diagnostic;
+  ASSERT_TRUE(Later.Certificate->Relation.NativePreservation);
+  EXPECT_EQ(Later.Certificate->Relation.NativePreservation->Instructions,
+            F.Instructions);
+  EXPECT_NE(Later.Certificate->Relation.NativePreservation->ExecutionDigest,
+            F.ExecutionDigest);
+}
+
+TEST(BinaryLowIRRefinement,
+     OpaqueFactDoesNotReplaceTrueEntryScalarPreservation) {
+  Program P({0x48, 0xff, 0xc3, 0xc3}); // inc rbx; ret.
+  P.Contract.NativePreservedState = LowIRNativePreservationRequirement{
+      LowPreservedStateSet::LegacyIntegerOpaqueV1,
+      LowIRNativePreservationQuantifier::SelectedWitness};
+  const auto Recovery = P.recover();
+  ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
+  ASSERT_TRUE(P.check(Recovery.Residual).proved());
+  P.Contract.PreservedRegisters.push_back({x86reg::RBX, 8});
+  refused(P.check(Recovery.Residual), Status::ContractViolation);
+}
+
+TEST(BinaryLowIRRefinement, StaticAPIsCannotAuthorizeOpaqueArchitecturalState) {
+  Program P({0xb8, 7, 0, 0, 0, 0xc3});
+  const auto Recovery = P.recover();
+  ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
+  P.Contract.NativePreservedState.emplace();
+  const auto Independence =
+      checkLowIRUndefinedIndependence(Recovery.Residual, {}, P.Contract);
+  EXPECT_EQ(Independence.Status, LowIRIndependenceStatus::Unsupported);
+  EXPECT_FALSE(Independence.Certificate);
+  EXPECT_NE(Independence.Diagnostic.find("native preservation"),
+            std::string::npos);
+  const auto Relation = checkLowIRRefinement(Recovery.Residual, {},
+                                             Recovery.Residual, P.Contract);
+  EXPECT_EQ(Relation.Status, Status::Unsupported);
+  EXPECT_FALSE(Relation.Certificate);
+  EXPECT_NE(Relation.Diagnostic.find("native preservation"), std::string::npos);
+}
+
 } // namespace

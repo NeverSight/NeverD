@@ -60,6 +60,7 @@ public:
 };
 
 namespace detail {
+struct ResolverGraphCacheTestAccess;
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
 using I386GOTOFFAmbiguityReplayKey = std::tuple<va_t, va_t, int, int, va_t>;
@@ -990,6 +991,12 @@ public:
   }
 
 private:
+  friend struct detail::ResolverGraphCacheTestAccess;
+  struct ResolverGraphCache;
+  // One immutable, size-bounded graph. The incomplete type keeps proof-graph
+  // implementation and arena ownership inside the resolver translation unit.
+  mutable std::shared_ptr<const ResolverGraphCache> CachedResolverGraph;
+
   struct InsnRecord {
     va_t Addr;
     uint16_t Size;
@@ -1700,6 +1707,9 @@ private:
 
     bool operator==(const JumpTableInfo &Other) const = default;
   };
+
+  static std::optional<JumpTableStorageRange> implicitJumpTableStorageRange(
+      const JumpTableInfo &Info, size_t TargetCount);
 
   /// Scratch-only assumptions for bounded joint finite table proofs.
   /// They are never published as prior role/storage certificates. EmptyEdges

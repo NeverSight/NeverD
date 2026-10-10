@@ -4095,7 +4095,8 @@ const MedOp *MedLLVMEmitter::memoryAddressSumDef(const MedVar &Address) const {
 
 std::optional<MedVar>
 MedLLVMEmitter::pointerPreservingInput(const MedOp &Op) const {
-  if (Op.NumInputs < 1 || Op.Output.Size == 0 || Op.Inputs[0].Size == 0)
+  if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None ||
+      Op.NumInputs < 1 || Op.Output.Size == 0 || Op.Inputs[0].Size == 0)
     return std::nullopt;
 
   const MedVar &Input = Op.Inputs[0];

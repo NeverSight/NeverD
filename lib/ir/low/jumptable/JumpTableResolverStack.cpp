@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "JumpTableResolverDetail.h"
+#include "../../AffineFrameState.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -64,16 +65,7 @@ std::optional<int64_t> stackSignedDelta(const NdVar &Value,
 
 std::optional<int64_t> stackCheckedOffset(int64_t Base, int64_t Delta,
                                           bool Subtract) {
-  constexpr int64_t Min = std::numeric_limits<int64_t>::min();
-  constexpr int64_t Max = std::numeric_limits<int64_t>::max();
-  if (!Subtract) {
-    if ((Delta > 0 && Base > Max - Delta) || (Delta < 0 && Base < Min - Delta))
-      return std::nullopt;
-    return Base + Delta;
-  }
-  if ((Delta > 0 && Base < Min + Delta) || (Delta < 0 && Base > Max + Delta))
-    return std::nullopt;
-  return Base - Delta;
+  return detail::checkedAffineOffset(Base, Delta, Subtract);
 }
 
 std::optional<va_t> checkedVAOffset(va_t Base, int64_t Delta) {

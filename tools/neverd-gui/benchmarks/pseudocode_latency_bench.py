@@ -82,7 +82,9 @@ def main():
     parser.add_argument("--engine", type=Path, required=True,
                         help="matching libneverd; its directory is prepended to the library path")
     parser.add_argument("--baseline-engine", type=Path,
-                        help="compare another engine with the same worker, alternating run order")
+                        help="compare another engine, alternating run order")
+    parser.add_argument("--baseline-worker", type=Path,
+                        help="worker paired with --baseline-engine (defaults to --worker)")
     parser.add_argument("--ida-python", type=Path)
     parser.add_argument("--entry", action="append", required=True,
                         type=lambda value: f"0x{int(value, 0):x}")
@@ -95,16 +97,21 @@ def main():
     args = parser.parse_args()
     if args.samples < 1 or args.threads < 1 or args.timeout <= 0:
         parser.error("samples, threads and timeout must be positive")
+    if args.baseline_worker and not args.baseline_engine:
+        parser.error("--baseline-worker requires --baseline-engine")
     worker, engine, binary = (path.resolve() for path in
                               (args.worker, args.engine, args.binary))
     if engine.name != "libneverd.so" or platform.system() != "Linux":
         parser.error("this controlled library-loading profile currently requires Linux/libneverd.so")
     engines = {"neverd": engine}
+    workers = {"neverd": worker}
     if args.baseline_engine:
         baseline = args.baseline_engine.resolve()
         if baseline.name != "libneverd.so":
             parser.error("--baseline-engine must name libneverd.so")
         engines["baseline"] = baseline
+        workers["baseline"] = (args.baseline_worker.resolve()
+                               if args.baseline_worker else worker)
     os.environ["NEVERD_THREADS"] = str(args.threads)
     os.environ["NEVERD_NATIVE_PHASES"] = "1"
     library_path = os.environ.get("LD_LIBRARY_PATH")
@@ -124,6 +131,7 @@ def main():
                   samples=[])
     if "baseline" in engines:
         report["baseline_engine_sha256"] = hashlib.sha256(engines["baseline"].read_bytes()).hexdigest()
+        report["baseline_worker_sha256"] = hashlib.sha256(workers["baseline"].read_bytes()).hexdigest()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="neverd-source-latency-") as directory:
         scratch = Path(directory)
@@ -140,7 +148,7 @@ def main():
                     os.environ["LD_LIBRARY_PATH"] = str(engines[name].parent) + (
                         os.pathsep + library_path if library_path else "")
                     load_before = os.getloadavg()
-                    row[name] = run_worker(worker, copy, entry, args.representation, args.timeout)
+                    row[name] = run_worker(workers[name], copy, entry, args.representation, args.timeout)
                     row[name].update(load_before=load_before, load_after=os.getloadavg())
                 if args.ida_python:
                     try:

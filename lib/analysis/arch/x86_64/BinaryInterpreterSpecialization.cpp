@@ -7,6 +7,7 @@
 #include "neverd/analysis/arch/x86_64/BinaryInterpreterSpecialization.h"
 
 #include "../../core/NativeUndefinedIndependence.h"
+#include "X64Recovery.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -57,6 +58,7 @@ class ImageProvider final : public SpecializationProvider {
   std::optional<PEFixedImageView> FixedPE;
   std::string FixedPEDiagnostic;
   bool FixedPEBudgetExceeded = false;
+  const bool PreserveOpaqueState;
 
   // Without authenticated fixed-image evidence, refuse loader-fixed bytes.
   // Width information is not normalized for every relocation kind, so inspect
@@ -96,8 +98,10 @@ class ImageProvider final : public SpecializationProvider {
   }
 
 public:
-  ImageProvider(const BinaryImage &Image, const SpecializationOptions &Options)
-      : Image(Image), Options(Options) {
+  ImageProvider(const BinaryImage &Image, const SpecializationOptions &Options,
+                bool PreserveOpaqueState = false)
+      : Image(Image), Options(Options),
+        PreserveOpaqueState(PreserveOpaqueState) {
     Decode.init(Arch::X64);
     Decode.setStrict(true);
     if (Image.Format == BinaryFormat::COFF && !Image.Raw.empty()) {
@@ -198,10 +202,13 @@ public:
       } else {
         if (Options.ExplicitMachineState && Options.X64CetDisabled)
           LoadedMemoryCall = Decode.liftX64MemoryCallToLow(
-              Insn, Result.Ops, &Result.UndefinedEffects);
+              Insn, Result.Ops, &Result.UndefinedEffects,
+              PreserveOpaqueState ? &Result.PreservedState : nullptr);
         if (!LoadedMemoryCall) {
           Result.UndefinedEffects = {};
-          Decode.liftToLow(Insn, Result.Ops, {}, {}, &Result.UndefinedEffects);
+          Decode.liftToLow(Insn, Result.Ops, {}, {}, &Result.UndefinedEffects,
+                           PreserveOpaqueState ? &Result.PreservedState
+                                               : nullptr);
         }
         if (Options.X64CetDisabled &&
             (Insn.Id == X86_INS_INCSSPD || Insn.Id == X86_INS_INCSSPQ))
@@ -306,6 +313,10 @@ public:
         B.ControlFlags |= LowInstructionControlFlag::Resumable;
     }
     Result.Fallthrough = {Cursor.Address + Insn.Size, Cursor.Mode};
+    if (PreserveOpaqueState &&
+        Result.ProfileProjection ==
+            InterpreterProfileProjection::CetDisabledReadShadowStackV1)
+      x64::bindCetDisabledPreservedState(Result);
     return Result;
   }
 
@@ -482,6 +493,10 @@ binaryExecutionDigest(const BinaryImage &Image,
     Number(Instruction.Origin.Immediate.has_value());
     Number(Instruction.Origin.Immediate.value_or(0));
     Hash.update(lowUndefinedOperationDigest(Instruction.Ops));
+    if (Instruction.PreservedState.Audit != LowPreservedStateAudit::Missing) {
+      Hash.update("neverd-original-native-preservation-v1");
+      Hash.update(lowPreservedStateDigest(Instruction.PreservedState));
+    }
     Hash.update(Instruction.UndefinedEffects.OperationDigest);
     const auto &Effects = Instruction.UndefinedEffects;
     Number(static_cast<unsigned>(Effects.Coverage));
@@ -642,7 +657,8 @@ checkBinaryUndefinedIndependence(const BinaryImage &Image, va_t Entry,
     Result.Proof = std::move(*Failure);
     return Result;
   }
-  ImageProvider Provider(Image, Options);
+  ImageProvider Provider(Image, Options,
+                         Effective.NativePreservedState.has_value());
   if (Provider.preparationFailed(Result.Proof))
     return Result;
   auto Checked = detail::checkNativeUndefinedIndependence(
@@ -699,7 +715,8 @@ static BinaryLowIRRefinementResult checkBinaryLowIRRefinementImpl(
     Result.Proof.Diagnostic = std::move(Failure->Diagnostic);
     return Result;
   }
-  ImageProvider Provider(Image, Options);
+  ImageProvider Provider(Image, Options,
+                         Effective.NativePreservedState.has_value());
   if (Provider.preparationFailed(Result.Proof))
     return Result;
   auto Checked = detail::checkNativeLowIRRefinement(
@@ -808,7 +825,8 @@ BinaryAutomaticLowIRRefinementResult inferAndCheckBinaryLowIRLoopRefinement(
            "loop inference has no uniquely mapped residual cutpoint origins");
     return Result;
   }
-  ImageProvider Provider(Image, Options);
+  ImageProvider Provider(Image, Options,
+                         Effective.NativePreservedState.has_value());
   if (Provider.preparationFailed(Result.Inference)) {
     Refuse(Result.Inference.Status, Result.Inference.Diagnostic);
     return Result;

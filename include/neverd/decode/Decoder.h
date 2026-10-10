@@ -15,6 +15,7 @@
 #define NEVERD_DECODE_DECODER_H
 
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/LowPreservedState.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -182,10 +183,14 @@ public:
   /// supported operand shapes, not raw-byte/detail authentication or complete
   /// equivalence of the lifted implementation. Non-complete records have no
   /// usable Effects; their diagnostic and operation binding remain available.
+  /// Optional PreservedState follows the same reset-before-attempt discipline
+  /// but carries an independent, closed x64 architectural bank audit. Neither
+  /// sidecar authenticates decoded metadata supplied by an untrusted caller.
   void liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
                  llvm::ArrayRef<RelocatedAddressOperand> Relocs = {},
                  llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs = {},
-                 LowInstructionUndefinedEffects *UndefinedEffects = nullptr);
+                 LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+                 LowInstructionPreservedState *PreservedState = nullptr);
 
   /// Explicit target-value projection for ordinary unsegmented x64 r/m64
   /// near CALL. Unlike the import-slot representation, this retains the
@@ -194,7 +199,8 @@ public:
   /// still the responsibility of the machine-state recovery contract.
   bool liftX64MemoryCallToLow(
       const DecodedInsn &Insn, std::vector<LowOp> &Ops,
-      LowInstructionUndefinedEffects *UndefinedEffects = nullptr);
+      LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+      LowInstructionPreservedState *PreservedState = nullptr);
 
   /// Exact scalar relocation operand consumed by the most recently lifted x86
   /// instruction, if any.  The occurrence is reset for every instruction.

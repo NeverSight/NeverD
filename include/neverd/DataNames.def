@@ -50,4 +50,6 @@ NEVERD_DATA_ITEM_NAME(UnknownNamePrefix, "unk_")
 NEVERD_DATA_ITEM_KIND(StringItemKind, "string")
 // Bytes shown as bytes, whatever analysis reads there.
 NEVERD_DATA_ITEM_KIND(UndefinedItemKind, "undefined")
+// One validated native instruction, independent of function creation.
+NEVERD_DATA_ITEM_KIND(CodeItemKind, "code")
 #undef NEVERD_DATA_ITEM_KIND

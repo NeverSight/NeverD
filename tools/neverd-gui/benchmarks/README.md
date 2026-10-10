@@ -30,12 +30,30 @@ not include Qt painting. IDA auto-analysis and decompilation are recorded
 separately; NeverD's first page includes IPC and source generation.
 
 Add `--baseline-engine /absolute/path/to/previous/libneverd.so` to compare two
-compatible engines with the same worker. Each engine receives its own fresh
+compatible engines with the same worker. When worker code also changes, add
+`--baseline-worker /absolute/path/to/previous/neverd-worker`; both worker hashes
+are recorded. Each engine receives its own fresh
 process and input copy. Successive repetitions alternate the order; the JSON
 records both source hashes, timings and host load before/after each run.
 On hybrid CPUs, run the driver under `taskset -c <cpu-list>` so both engines
 inherit the same set of cores. The report records the inherited CPU affinity;
 pinning does not reserve those cores or eliminate unrelated host activity.
+
+Measure return-to-function reuse separately from first decompilation:
+
+```sh
+taskset -c 0,2,4,6 python3 tools/neverd-gui/benchmarks/source_revisit_bench.py \
+  --worker build-gui/bin/neverd-worker --engine build/bin/libneverd.so \
+  --entry 0x19b24 --switch-entry 0x54174 --threads 4 \
+  --output build-bench/rust-revisit.json /absolute/path/to/rust-eh-fixture
+```
+
+This Linux profile reads every source page for A, A again, B, then A again in
+one worker. It disables background analysis as the GUI's analysis replicas do,
+checks the loaded engine path and rejects changed source hashes within the
+sequence. It does not include the GUI's own response cache or snapshot restore.
+Run both frozen and current worker/engine pairs; a faster revisit is not evidence
+of a faster first decompilation.
 
 The [2026-10-09 Rust investigation](results/linux-x86_64-20261009-rust-pseudocode.md)
 retains a measured original-engine control, one-/four-thread repetitions,
@@ -43,6 +61,10 @@ complete source hashes and the remaining gap to IDA.
 The [second pass](results/linux-x86_64-20261009-rust-pseudocode-round2.md)
 adds alternating engine comparisons on fixed performance cores, register/index
 allocation improvements, and more parallel callee proof batches.
+The [third pass](results/linux-x86_64-20261010-rust-pseudocode-round3.md)
+measures shared SSA stack-offset proofs, exact-input graph reuse and completed
+source-document retention, with fresh IDA measurements and separate revisit
+latency.
 
 Generate versioned fixture descriptors:
 

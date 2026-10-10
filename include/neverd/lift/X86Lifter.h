@@ -13,6 +13,7 @@
 #ifndef NEVERD_LIFT_X86LIFTER_H
 #define NEVERD_LIFT_X86LIFTER_H
 
+#include "neverd/ir/low/LowPreservedState.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
 #include "neverd/lift/X86Regs.h"
 
@@ -37,10 +38,14 @@ public:
   /// Optional metadata audits newly undefined outputs for supported forms;
   /// it does not authenticate decoded detail or prove the whole LowIR lift.
   /// Missing/Unsupported records contain no usable partial Effects.
+  /// PreservedState is a separate strict x64 bank audit, bound to the original
+  /// bytes and appended operation span. Failure or non-strict lifting resets
+  /// it to Missing; it never follows from undefined-output completeness.
   void lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
             llvm::ArrayRef<RelocatedAddressOperand> Relocs = {},
             llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs = {},
-            LowInstructionUndefinedEffects *UndefinedEffects = nullptr);
+            LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+            LowInstructionPreservedState *PreservedState = nullptr);
 
   /// Lift a certified ordinary x64 memory-indirect near CALL with an explicit
   /// target LOAD, including constant IAT/GOT slots. Physical stack effects are
@@ -48,7 +53,8 @@ public:
   /// address-size override and REX are accepted. On false, Ops is unchanged.
   bool
   liftX64MemoryCall(const cs_insn *Insn, std::vector<LowOp> &Ops,
-                    LowInstructionUndefinedEffects *UndefinedEffects = nullptr);
+                    LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+                    LowInstructionPreservedState *PreservedState = nullptr);
 
   void setStrict(bool S) { Strict = S; }
   bool isStrict() const { return Strict; }
@@ -263,7 +269,8 @@ private:
                 llvm::ArrayRef<RelocatedAddressOperand> Relocs,
                 llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
                 bool LoadMemoryCallTarget,
-                LowInstructionUndefinedEffects *UndefinedEffects);
+                LowInstructionUndefinedEffects *UndefinedEffects,
+                LowInstructionPreservedState *PreservedState);
   bool liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftControl(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftAtomic(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);

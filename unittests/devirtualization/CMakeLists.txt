@@ -129,6 +129,7 @@ target_compile_definitions(NeverDLLVMScalarInputProjectionTests PRIVATE
 
 add_neverd_unittest(NeverDInterpreterLLVMRefinementTests
   InterpreterLLVMRefinementTests.cpp
+  InterpreterLLVMRefinementPreservationTests.cpp
   InterpreterLLVMRefinementLoopTests.cpp
   InterpreterLLVMRefinementCompileTests.cpp
   LINK_COMPONENTS InterpreterLLVMRefinement

@@ -7,7 +7,9 @@
 #include "../../lib/analysis/core/NativeUndefinedIndependence.h"
 #include "gtest/gtest.h"
 
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/lift/X86Regs.h"
 
 #include "llvm/Support/Errc.h"
 
@@ -917,6 +919,146 @@ void copyInstruction(NativeProvider &P, va_t Address, NdVar Output,
   I.UndefinedEffects.OperationDigest = lowUndefinedOperationDigest(I.Ops);
   P.Instructions[Address] = std::move(I);
 }
+
+NativeProvider decodedPreservationProvider() {
+  NativeProvider P;
+  Decoder D;
+  EXPECT_TRUE(D.init(Arch::X64));
+  const std::vector<std::vector<uint8_t>> Bytes = {
+      {0xb8, 7, 0, 0, 0}, {0x90}, {0x48, 0x89, 0xc1}, {0xc3}};
+  va_t Address = 0x100;
+  for (const auto &Code : Bytes) {
+    DecodedInsn I{};
+    EXPECT_EQ(D.decodeOneForLift(Code.data(), Code.size(), Address, I),
+              static_cast<int>(Code.size()));
+    auto &N = P.Instructions[Address];
+    N.NativeBytes = Code;
+    D.resetX86FpuState();
+    D.liftToLow(I, N.Ops, {}, {}, &N.UndefinedEffects, &N.PreservedState);
+    N.Origin.Address = Address;
+    N.Origin.Size = Code.size();
+    N.Origin.OpCount = N.Ops.size();
+    N.Fallthrough.Address = Address + Code.size();
+    if (Code[0] == 0xc3) {
+      N.NativeStackControl = SpecializationNativeStackControl::Return;
+      N.Origin.Control = LowInstructionControl::Return;
+      N.Origin.ControlFlags = LowInstructionControlFlag::Return;
+    }
+    Address += Code.size();
+  }
+  return P;
+}
+
+TEST(NativeUndefinedIndependence,
+     OpaqueFactsAtEveryInteriorAndReturnAreRequired) {
+  auto C = contract();
+  C.NativePreservedState.emplace();
+  C.EntryConstants.clear(); // Keep the real entry stack symbolic.
+  auto P = decodedPreservationProvider();
+  const auto Good = detail::checkNativeUndefinedIndependence(P, {0x100}, C, {});
+  ASSERT_TRUE(Good.Proof.proved()) << Good.Proof.Diagnostic;
+  ASSERT_TRUE(Good.Proof.Certificate->NativePreservation);
+  EXPECT_EQ(Good.Proof.Certificate->NativePreservation->Instructions, 4U);
+  for (auto Address : {0x100U, 0x105U, 0x106U, 0x109U}) {
+    for (bool Retain : {false, true}) {
+      P = decodedPreservationProvider();
+      P.Instructions.at(Address).PreservedState = {};
+      C.RetainUnauditedNativeBoundaries = Retain;
+      const auto Bad =
+          detail::checkNativeUndefinedIndependence(P, {0x100}, C, {});
+      EXPECT_EQ(Bad.Proof.Status, LowIRIndependenceStatus::Unsupported)
+          << Bad.Proof.Diagnostic;
+      EXPECT_FALSE(Bad.Proof.Certificate);
+    }
+  }
+}
+
+TEST(NativeUndefinedIndependence,
+     OpaqueStaleFactsAreRejectedIndependentlyOfUndefinedEvidence) {
+  auto C = contract();
+  C.NativePreservedState.emplace();
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto P = decodedPreservationProvider();
+    auto &I = P.Instructions.at(0x106);
+    switch (Mutation) {
+    case 0:
+      ++I.PreservedState.SemanticsVersion;
+      break;
+    case 1:
+      ++I.PreservedState.OpCount;
+      break;
+    case 2:
+      I.NativeBytes.back() ^= 1;
+      break;
+    case 3:
+      I.Ops.front().Inputs[0] = NdVar::reg(x86reg::RDX, 8);
+      I.UndefinedEffects.OperationDigest = lowUndefinedOperationDigest(I.Ops);
+      break;
+    case 4:
+      I.PreservedState.Audit = LowPreservedStateAudit::Missing;
+      break;
+    case 5:
+      I.PreservedState.Audit =
+          LowPreservedStateAudit::CetDisabledReadShadowStackV1;
+      break;
+    }
+    const auto R = detail::checkNativeUndefinedIndependence(P, {0x100}, C, {});
+    EXPECT_EQ(R.Proof.Status, LowIRIndependenceStatus::Invalid)
+        << R.Proof.Diagnostic;
+    EXPECT_FALSE(R.Proof.Certificate);
+    EXPECT_NE(R.Proof.Diagnostic.find("preservation"), std::string::npos);
+  }
+}
+
+TEST(NativeUndefinedIndependence, OpaqueMissingFactCannotBeHiddenAtACutpoint) {
+  auto P = decodedPreservationProvider();
+  auto C = contract();
+  C.EntryConstants.clear();
+  C.RetainUnauditedNativeBoundaries = true;
+  C.NativePreservedState = LowIRNativePreservationRequirement{
+      LowPreservedStateSet::LegacyIntegerOpaqueV1,
+      LowIRNativePreservationQuantifier::SelectedWitness};
+  LowFunc Candidate;
+  Candidate.Entry = 0x100;
+  int Id = 0;
+  for (const auto &[Address, I] : P.Instructions) {
+    LowBlock B;
+    B.Id = Id++;
+    B.StartAddr = Address;
+    B.EndAddr = I.Fallthrough.Address;
+    B.Ops = I.Ops;
+    B.InstructionBoundaries = {I.Origin};
+    if (I.NativeStackControl != SpecializationNativeStackControl::Return)
+      B.Succs.push_back(Id);
+    Candidate.Blocks.push_back(std::move(B));
+  }
+  LowIRLoopCutpoint Cut;
+  Cut.OriginalAddress = Cut.CandidateAddress = 0x106;
+  Cut.UseEntryPrefix = true;
+  Cut.Rank = {NdVar::scalar(1, 8)};
+  LowIRLoopRefinementPlan Plan{{Cut}};
+  const auto Check = [&] {
+    return detail::checkNativeLowIRRefinement(
+        P, {0x100}, Candidate, C, LowIRRefinementWitness::LiftedBits, {},
+        &Plan);
+  };
+  const auto Good = Check();
+  ASSERT_TRUE(Good.Proof.proved()) << Good.Proof.Diagnostic;
+  ASSERT_TRUE(Good.Proof.Certificate->NativePreservation);
+  P.Instructions.at(0x106).PreservedState = {};
+  const auto Bad = Check();
+  EXPECT_EQ(Bad.Proof.Status, LowIRRefinementStatus::Unsupported)
+      << Bad.Proof.Diagnostic;
+  EXPECT_FALSE(Bad.Proof.Certificate);
+  EXPECT_EQ(Bad.Proof.InstructionAddress, 0x106U);
+  EXPECT_EQ(Bad.Proof.Diagnostic,
+            "feasible path reaches an unaudited native boundary");
+  EXPECT_EQ(Bad.Proof.OriginalCutpoints, 0U);
+  EXPECT_EQ(Bad.Proof.CandidateCutpoints, 0U);
+  EXPECT_EQ(Bad.Proof.LoopInitiations, 0U);
+}
+
 } // namespace
 
 TEST(NativeTraceBlocks, StraightLineChunksKeepInstructionAndOperationBudgets) {

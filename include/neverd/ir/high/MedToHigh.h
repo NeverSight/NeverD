@@ -28,6 +28,9 @@ namespace neverd {
 
 struct BinaryImage;
 struct CompareTreeSwitch;
+namespace detail {
+class HighEntryStackOffsets;
+}
 
 Intrinsic intrinsicId(const MedOp &Op);
 std::string intrinsicName(const MedOp &Op);
@@ -447,14 +450,9 @@ private:
   /// function).
   std::set<int64_t> LoadedEntrySlots;
   const MedFunc *LoadedEntrySlotsFor = nullptr;
-  /// Unique SSA definition of each (kind, id, version) in EntryOffsetDefsFor;
-  /// nullptr marks a value with more than one definition.
-  std::map<std::tuple<int, int, int>, const MedOp *> EntryOffsetDefs;
-  /// The PHIs among those definitions, likewise.
-  std::map<std::tuple<int, int, int>, const PhiNode *> EntryOffsetPhis;
-  /// The entry stack offset each PHI of EntryOffsetDefsFor resolved to, or
-  /// nullopt where its incoming values disagree.
-  std::map<const PhiNode *, std::optional<int64_t>> EntryOffsetPhiCache;
+  /// Definition index and complete frame-coordinate proofs for one immutable
+  /// conversion. A second conversion of the same MedFunc starts fresh.
+  std::shared_ptr<detail::HighEntryStackOffsets> EntryStackOffsets;
   const MedFunc *EntryOffsetDefsFor = nullptr;
   const BinaryImage *Image = nullptr;
   std::function<void(const MedOp &, const ExprPtr &)> ExpressionObserver;

@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CallArgCollectionDetail.h"
+#include "HighEntryStackOffsets.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -975,79 +976,12 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   Scan.OwnStackParam = OwnStackParam;
   // The single definition of \p V in this function, or null.
   auto UniqueDef = [&](const MedVar &V) { return uniqueMedDefinition(V); };
-  // The single PHI defining \p V in this function, or null.
-  auto UniquePhi = [&](const MedVar &V) -> const PhiNode * {
+  auto EntryOffsetOf = [&](const MedVar &V) -> std::optional<int64_t> {
     if (!CurMed)
-      return nullptr;
+      return std::nullopt;
     indexMedDefinitions();
-    auto PhiIt =
-        EntryOffsetPhis.find({static_cast<int>(V.Kind), V.Id, V.SSAVer});
-    return PhiIt == EntryOffsetPhis.end() ? nullptr : PhiIt->second;
+    return EntryStackOffsets->offset(V);
   };
-  // The offset each PHI being resolved is assumed to have: none while its
-  // incoming values are collected, then the one they agree on.
-  std::map<const PhiNode *, std::optional<int64_t>> AssumedPhiOffsets;
-  std::function<std::optional<int64_t>(const MedVar &, int)> EntryOffset =
-      [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
-    if (!CurMed || Depth > limits::kCallArgStoreAddressDepth)
-      return std::nullopt;
-    if (V.Kind == MedVar::Reg && V.RegOff == SpRegOff && V.SSAVer == 0)
-      return 0;
-    // A loop head's stack pointer is a PHI of the one the loop is entered
-    // with and of those its back edges carry, which equal it where the body
-    // pops what it pushes.  Assume the offset the values that do not depend
-    // on the PHI agree on, then require every incoming value to have it.
-    if (const PhiNode *Phi = UniquePhi(V)) {
-      if (auto It = AssumedPhiOffsets.find(Phi); It != AssumedPhiOffsets.end())
-        return It->second;
-      if (auto It = EntryOffsetPhiCache.find(Phi);
-          It != EntryOffsetPhiCache.end())
-        return It->second;
-      if (Phi->ExceptionalEntry || Phi->Args.empty())
-        return std::nullopt;
-      AssumedPhiOffsets.emplace(Phi, std::nullopt);
-      std::optional<int64_t> Offset;
-      bool Agree = true;
-      for (const auto &[Pred, In] : Phi->Args)
-        if (const auto InOffset = EntryOffset(In, Depth + 1)) {
-          Agree = Agree && (!Offset || *Offset == *InOffset);
-          Offset = InOffset;
-        }
-      if (!Agree)
-        Offset.reset();
-      if (Offset) {
-        AssumedPhiOffsets[Phi] = Offset;
-        for (const auto &[Pred, In] : Phi->Args)
-          if (EntryOffset(In, Depth + 1) != Offset) {
-            Offset.reset();
-            break;
-          }
-      }
-      AssumedPhiOffsets.erase(Phi);
-      // An offset found while an enclosing PHI is assumed holds only under
-      // that assumption.
-      if (AssumedPhiOffsets.empty())
-        EntryOffsetPhiCache.emplace(Phi, Offset);
-      return Offset;
-    }
-    const MedOp *Def = UniqueDef(V);
-    if (!Def || Def->NumInputs < 1)
-      return std::nullopt;
-    // i386 addresses reach memory zero-extended to the 8-byte VA model; a
-    // stack address does not wrap, so the offset is unchanged.
-    if (Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT)
-      return EntryOffset(Def->Inputs[0], Depth + 1);
-    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
-        Def->NumInputs == 2 && Def->Inputs[1].isConst()) {
-      auto Base = EntryOffset(Def->Inputs[0], Depth + 1);
-      if (!Base)
-        return std::nullopt;
-      const int64_t C = static_cast<int64_t>(Def->Inputs[1].ConstVal);
-      return Def->Opcode == NdOp::INT_ADD ? *Base + C : *Base - C;
-    }
-    return std::nullopt;
-  };
-  auto EntryOffsetOf = [&](const MedVar &V) { return EntryOffset(V, 0); };
   Scan.EntryOffsetOf = EntryOffsetOf;
   // An outgoing stack argument is placed by the stack pointer the call is
   // made with (CallArgCollectionX86.cpp): the last one its block defines, or

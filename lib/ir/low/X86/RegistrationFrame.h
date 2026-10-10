@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <set>
 
 namespace neverd {
 struct LowOp;
@@ -22,9 +23,18 @@ struct RegistrationRealignedFrame;
 
 namespace neverd::registration_state {
 
+/// A runtime callback owns a separate invocation stack. Its offsets cannot
+/// alias either source-frame coordinate, even at the same displacement.
+struct CallbackFrameAddress {
+  va_t Entry = InvalidVA;
+  int32_t Offset = 0;
+  bool operator==(const CallbackFrameAddress &) const = default;
+};
+
 /// Values in the PE32 address domain. Offset names the runtime establisher;
-/// EntryOffset names a separate pre-alignment EBP. Unknown values retain
-/// possible frame provenance when paths or arithmetic disagree.
+/// EntryOffset names the pre-alignment EBP; CallbackAddress names the active
+/// callback's private stack. Unknown values retain possible frame provenance
+/// when paths or arithmetic disagree.
 struct FrameValue {
   std::optional<int32_t> Offset;
   std::optional<uint32_t> Constant;
@@ -45,6 +55,7 @@ struct FrameValue {
   /// Entry EBP is independent of the realigned runtime establisher. It must
   /// never satisfy an Offset query, even when both displacements are zero.
   std::optional<int32_t> EntryOffset;
+  std::optional<CallbackFrameAddress> CallbackAddress;
 
   static FrameValue frame(int32_t Offset) { return {Offset, {}, false, true}; }
   static FrameValue entryFrame(int32_t Offset) {
@@ -55,6 +66,12 @@ struct FrameValue {
   }
   static FrameValue constant(uint32_t Value) {
     return {{}, Value, false, false};
+  }
+  static FrameValue callbackFrame(va_t Entry, int32_t Offset) {
+    FrameValue Result;
+    Result.MayBeFrame = true;
+    Result.CallbackAddress = {Entry, Offset};
+    return Result;
   }
   static FrameValue previousChain() { return {{}, {}, true, false}; }
   friend bool operator==(const FrameValue &, const FrameValue &) = default;
@@ -72,7 +89,13 @@ struct FrameState {
   bool OtherRegistersMayBeFrame = false;
   std::map<int32_t, FrameValue> Cells;
   std::map<int32_t, FrameValue> EntryCells;
-  size_t cellCount() const { return Cells.size() + EntryCells.size(); }
+  std::map<int32_t, FrameValue> CallbackCells;
+  std::set<int32_t> InitializedCallbackBytes;
+  std::optional<va_t> CallbackEntry;
+  size_t cellCount() const {
+    return Cells.size() + EntryCells.size() + CallbackCells.size() +
+           InitializedCallbackBytes.size();
+  }
 
   bool merge(const FrameState &Other);
   void forgetCellValues();
@@ -82,6 +105,15 @@ struct FrameState {
   FrameValue load(std::optional<int32_t> Offset, uint16_t Width) const;
   void storeEntry(int32_t Offset, uint16_t Width, const FrameValue &Value);
   FrameValue loadEntry(int32_t Offset, uint16_t Width) const;
+  void storeCallback(int32_t Offset, uint16_t Width, const FrameValue &Value);
+  FrameValue loadCallback(int32_t Offset, uint16_t Width) const;
+  /// Re-entering the same handler is a new invocation, not an alias of a
+  /// pointer retained from an earlier callback. Old pointers keep only taint.
+  void enterCallback(va_t Entry);
+  void leaveCallback();
+  bool callbackMemoryIsPrivate(const CallbackFrameAddress &Address,
+                               uint16_t Width, bool Read = false) const;
+  void trimCallbackCells();
 };
 
 /// One block transfer. Registers and frame cells survive instructions and CFG

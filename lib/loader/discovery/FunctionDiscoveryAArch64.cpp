@@ -24,7 +24,8 @@ namespace neverd {
 
 size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
                                const std::map<va_t, size_t> &Targets,
-                               std::set<va_t> &Existing) {
+                               std::set<va_t> &Existing,
+                               const ImportThunkCandidates &Candidates) {
   using namespace aarch64;
   const uint8_t *D = Seg.Data.data();
   const size_t N = Seg.Data.size();
@@ -79,7 +80,8 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
       Imm |= ~((1LL << (kADRP_ImmBits + 1)) - 1);
     const va_t StubVA = Seg.VA + I;
     const size_t ThunkSize = End - I;
-    if (!Img.isCodeRange(StubVA, ThunkSize))
+    if (!Img.isCodeRange(StubVA, ThunkSize) ||
+        !Candidates.allows(StubVA, ThunkSize))
       continue;
     const va_t AdrpVA = Seg.VA + At;
     va_t Page = (AdrpVA & kPageMask) + Imm;

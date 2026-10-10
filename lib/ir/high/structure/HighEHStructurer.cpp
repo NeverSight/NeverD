@@ -463,7 +463,10 @@ codeRangesMatching(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
                    Pred Live,
                    const RegistrationStateAnalysis *Registration = nullptr) {
   if (EH.Registration) {
-    if (!Registration)
+    // Runtime coordinates and catch resumption do not yet project the full
+    // realigned callback body, including its private stack, into a clause.
+    // Keep its handler and continuation annotations until that proof exists.
+    if (!Registration || EH.Registration->RealignedFrame)
       return {};
     auto Ranges = registrationRangesWhere(*Registration, Live);
     return Ranges ? std::move(*Ranges) : std::vector<ExceptionAddressRange>{};

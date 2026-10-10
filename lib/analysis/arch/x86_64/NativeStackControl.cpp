@@ -155,6 +155,21 @@ expandNativeStackControl(const SpecializationInstruction &Instruction,
         "native stack control has unknown undefined-effect coverage");
 
   NativeStackExpansion Result;
+  if (Instruction.PreservedState.Audit != LowPreservedStateAudit::Missing) {
+    if (Instruction.PreservedState.Audit !=
+            LowPreservedStateAudit::LegacyIntegerV1 ||
+        Instruction.ProfileProjection != InterpreterProfileProjection::None ||
+        !matchesLowPreservedState(Instruction.PreservedState,
+                                  Instruction.Origin, Instruction.NativeBytes,
+                                  Instruction.Ops))
+      return invalid("native stack control has stale preservation evidence");
+    Result.Receipt.Version = 2;
+    Result.Receipt.PreservedStateDigest =
+        lowPreservedStateDigest(Instruction.PreservedState);
+  } else if (Instruction.PreservedState != LowInstructionPreservedState{}) {
+    return invalid("native stack control has partial preservation evidence");
+  }
+  Result.Receipt.ReturnMode = ReturnMode;
   Result.Ops = Instruction.Ops;
   Result.Boundary = Instruction.Origin;
   Result.Receipt.OriginalBoundary = Instruction.Origin;
@@ -273,6 +288,8 @@ expandNativeStackControl(const SpecializationInstruction &Instruction,
   Result.UndefinedEffects.OpCount = Result.Ops.size();
   Result.UndefinedEffects.OperationDigest =
       lowUndefinedOperationDigest(Result.Ops);
+  Result.Receipt.ExpandedOperationDigest =
+      Result.UndefinedEffects.OperationDigest;
   return Result;
 }
 

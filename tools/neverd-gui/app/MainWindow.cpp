@@ -233,6 +233,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         if (auto *start = qobject_cast<QuickStartDialog *>(quickStart_.data()))
           start->showDropTarget(true);
       if (event->type() == QEvent::Drop) {
+        startupQuickStartPending_ = false;
         // Leave the native drop callback before opening or asking about
         // unsaved changes. The window owns the queued callback's lifetime.
         const QPointer<QDialog> start = quickStart ? quickStart_ : nullptr;
@@ -1036,7 +1037,8 @@ void MainWindow::connectActions() {
     on(id, [formatOperand, action] { formatOperand(action); });
   // Data items are the disassembly's; a pseudocode window keeps its keys.
   for (const auto &[id, action] :
-       {std::pair{ActionId::EditDefineData, QStringLiteral("data")},
+       {std::pair{ActionId::EditDefineCode, QStringLiteral("code")},
+        std::pair{ActionId::EditDefineData, QStringLiteral("data")},
         std::pair{ActionId::EditDefineString, QStringLiteral("string")},
         std::pair{ActionId::EditUndefine, QStringLiteral("undefine")}})
     on(id, [this, action] {
@@ -1303,9 +1305,11 @@ void MainWindow::updateActions() {
       ->setEnabled(functionEdits && function.has_value());
   const bool dataItems =
       location && !session_.readOnly() && session_.keepsDataItems();
-  for (const auto id : {ActionId::EditDefineData, ActionId::EditDefineString,
-                        ActionId::EditUndefine})
+  for (const auto id : {ActionId::EditDefineCode, ActionId::EditDefineData,
+                        ActionId::EditDefineString, ActionId::EditUndefine})
     actions_.action(id)->setEnabled(dataItems);
+  actions_.action(ActionId::EditDefineCode)
+      ->setEnabled(dataItems && !focusedCodeView());
   const bool operandFormats =
       location && !session_.readOnly() && session_.keepsOperandFormats();
   for (const auto id :
@@ -1374,9 +1378,13 @@ void MainWindow::updateStatusBar() {
 // Commands
 //===----------------------------------------------------------------------===//
 
-void MainWindow::openFile(const QString &path) { session_.open(path); }
+void MainWindow::openFile(const QString &path) {
+  startupQuickStartPending_ = false;
+  session_.open(path);
+}
 
 void MainWindow::openDialog() {
+  startupQuickStartPending_ = false;
   // The folder of the file the user opened, not of a working copy of it.
   const QString start = QFileInfo(session_.projectPath()).absolutePath();
   const auto path = QFileDialog::getOpenFileName(
@@ -1388,6 +1396,7 @@ void MainWindow::openDialog() {
 }
 
 void MainWindow::chooseLoader(const QString &path) {
+  startupQuickStartPending_ = false;
   // A project opens as it was saved, and an engine that cannot list its
   // loaders opens files as before.
   if (!session_.identifiesFiles() || ProjectDatabase::hasState(path)) {
@@ -2209,9 +2218,10 @@ void MainWindow::contextMenu(const QPoint &globalPosition) {
   for (const auto id :
        {ActionId::EditRename, ActionId::EditComment, ActionId::EditBookmark})
     menu.addAction(actions_.action(id));
-  for (const auto id : {ActionId::EditCreateFunction,
-                        ActionId::EditDeleteFunction, ActionId::EditDefineData,
-                        ActionId::EditDefineString, ActionId::EditUndefine})
+  for (const auto id :
+       {ActionId::EditCreateFunction, ActionId::EditDeleteFunction,
+        ActionId::EditDefineCode, ActionId::EditDefineData,
+        ActionId::EditDefineString, ActionId::EditUndefine})
     if (auto *action = actions_.action(id); action->isEnabled())
       menu.addAction(action);
   menu.addSeparator();
@@ -2286,7 +2296,20 @@ void MainWindow::cycleWindows(bool forward) {
   open[next]->widget()->setFocus(Qt::TabFocusReason);
 }
 
+void MainWindow::scheduleQuickStart() {
+  if (startupQuickStartPending_)
+    return;
+  startupQuickStartPending_ = true;
+  QTimer::singleShot(0, this, [this] {
+    if (!std::exchange(startupQuickStartPending_, false) || session_.loaded() ||
+        session_.opening() || quickStart_ || quitting_)
+      return;
+    showQuickStart();
+  });
+}
+
 void MainWindow::showQuickStart() {
+  startupQuickStartPending_ = false;
   QuickStartDialog dialog(this);
   quickStart_ = &dialog;
   if (dialog.exec() != QDialog::Accepted)

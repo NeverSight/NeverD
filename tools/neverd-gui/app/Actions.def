@@ -91,6 +91,10 @@ NEVERD_VIEW_ACTION(
     EditDeleteFunction, QT_TRANSLATE_NOOP("Actions", "&Delete function"), "",
     "function_delete",
     QT_TRANSLATE_NOOP("Actions", "Stop treating the current function as one"))
+NEVERD_VIEW_ACTION(
+    EditDefineCode, QT_TRANSLATE_NOOP("Actions", "&Code"), "C", "code_item",
+    QT_TRANSLATE_NOOP("Actions",
+                      "Define instructions from the current address"))
 NEVERD_VIEW_ACTION(EditDefineData, QT_TRANSLATE_NOOP("Actions", "&Data"), "D",
                    "data_item",
                    QT_TRANSLATE_NOOP("Actions",

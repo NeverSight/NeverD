@@ -346,15 +346,19 @@ void Decoder::setText(bool On) {
 void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
                         llvm::ArrayRef<RelocatedAddressOperand> Relocs,
                         llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
-                        LowInstructionUndefinedEffects *UndefinedEffects) {
+                        LowInstructionUndefinedEffects *UndefinedEffects,
+                        LowInstructionPreservedState *PreservedState) {
   const size_t OpsStart = Ops.size();
+  if (PreservedState)
+    *PreservedState = {};
   if (UndefinedEffects) {
     *UndefinedEffects = {};
     UndefinedEffects->Diagnostic =
         "architecture has no audited undefined-output contract";
   }
   if (X86) {
-    X86->lift(Insn.Raw, Ops, Relocs, ScalarRelocs, UndefinedEffects);
+    X86->lift(Insn.Raw, Ops, Relocs, ScalarRelocs, UndefinedEffects,
+              PreservedState);
   } else if (AArch64) {
     bool ScalarWideImmediate = false;
     if (Insn.Raw && Insn.Raw->size == 4) {
@@ -385,13 +389,17 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
 
 bool Decoder::liftX64MemoryCallToLow(
     const DecodedInsn &Insn, std::vector<LowOp> &Ops,
-    LowInstructionUndefinedEffects *UndefinedEffects) {
+    LowInstructionUndefinedEffects *UndefinedEffects,
+    LowInstructionPreservedState *PreservedState) {
+  if (PreservedState)
+    *PreservedState = {};
   if (UndefinedEffects) {
     *UndefinedEffects = {};
     UndefinedEffects->Diagnostic =
         "instruction has no audited x64 memory-call projection";
   }
-  return X86 && X86->liftX64MemoryCall(Insn.Raw, Ops, UndefinedEffects);
+  return X86 && X86->liftX64MemoryCall(Insn.Raw, Ops, UndefinedEffects,
+                                       PreservedState);
 }
 
 int Decoder::getX86FpuTop() const { return X86 ? X86->getFpuTop() : 0; }

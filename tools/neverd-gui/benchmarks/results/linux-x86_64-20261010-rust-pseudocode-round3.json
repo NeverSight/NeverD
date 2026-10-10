@@ -1,0 +1,1913 @@
+{
+  "schema": 1,
+  "control_commit": "42c166cc06208085c4368db1eb1940a9c9ca8e70",
+  "paired": {
+    "schema": 1,
+    "kind": "fresh-function-source-latency",
+    "platform": "Linux-7.0.0-34-generic-x86_64-with-glibc2.43",
+    "started_at": "2026-10-10T07:37:29.837462+00:00",
+    "logical_cpus": 20,
+    "threads": 4,
+    "cpu_affinity": [
+      0,
+      2,
+      4,
+      6
+    ],
+    "representation": "source",
+    "binary_sha256": "ff7b02957d3c10e9e6d409c62312d0ddcc261a9f69e3807be089ec319a53e538",
+    "worker_sha256": "8f55be1a682dc08c502f9f466834863eb997c65b61c2a4b46eb20f0c23badd9a",
+    "engine_sha256": "4a594872947e12fd120970cb81db4ea81b8d6c4f36330dabaac069e2228d2656",
+    "caveats": [
+      "Warm OS caches; each entry starts a fresh worker/database.",
+      "NeverD: first 256 source lines and all subsequent pages, including IPC.",
+      "IDA: fresh auto-analysis, then decompile() and complete text.",
+      "Wall-clock measurements include other host activity; load is recorded.",
+      "Source hashes check reproducibility, not semantic equivalence to the binary."
+    ],
+    "samples": [
+      {
+        "sample": 1,
+        "entry": "0x19b24",
+        "load_average": [
+          2.60693359375,
+          4.8193359375,
+          5.79736328125
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 7.888925028964877,
+          "open_ms": 38.562181987799704,
+          "functions_ms": 11.11683901399374,
+          "listing_ms": 44.78535708039999,
+          "first_page_ms": 20788.121861056425,
+          "status": "ok",
+          "complete_source_ms": 20819.43701405544,
+          "total_lines": 4637,
+          "source_bytes": 346651,
+          "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+          "peak_rss_bytes": 221855744,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=17996",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=218",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=921"
+          ],
+          "load_before": [
+            2.60693359375,
+            4.8193359375,
+            5.79736328125
+          ],
+          "load_after": [
+            3.3232421875,
+            4.8330078125,
+            5.78076171875
+          ]
+        },
+        "baseline": {
+          "startup_ms": 6.951729999855161,
+          "open_ms": 35.261591081507504,
+          "functions_ms": 11.887406930327415,
+          "listing_ms": 43.75863494351506,
+          "first_page_ms": 32085.100359050557,
+          "status": "ok",
+          "complete_source_ms": 32390.75745397713,
+          "total_lines": 4637,
+          "source_bytes": 346651,
+          "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+          "peak_rss_bytes": 200151040,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=24531",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=335",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=5238"
+          ],
+          "load_before": [
+            3.3232421875,
+            4.8330078125,
+            5.78076171875
+          ],
+          "load_after": [
+            6.904296875,
+            5.5,
+            5.96533203125
+          ]
+        },
+        "ida": {
+          "startup_ms": 196.8561930116266,
+          "analysis_ms": 4587.846006965265,
+          "functions": 634,
+          "decompile_ms": [
+            3375.525418901816
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170991616,
+          "process_ms": 8268.24523997493
+        }
+      },
+      {
+        "sample": 1,
+        "entry": "0x34901",
+        "load_average": [
+          7.392578125,
+          5.62451171875,
+          6.00341796875
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 8.165649021975696,
+          "open_ms": 36.898513906635344,
+          "functions_ms": 14.411553042009473,
+          "listing_ms": 43.33298106212169,
+          "first_page_ms": 13220.052618999034,
+          "status": "ok",
+          "complete_source_ms": 13279.678361024708,
+          "total_lines": 4134,
+          "source_bytes": 193935,
+          "source_sha256": "4a7b7f658085a27719097e5604a996e3b658ef5101595521455d28e40845180d",
+          "peak_rss_bytes": 170401792,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=11002",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=186",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=758"
+          ],
+          "load_before": [
+            7.392578125,
+            5.62451171875,
+            6.00341796875
+          ],
+          "load_after": [
+            8.173828125,
+            5.8876953125,
+            6.083984375
+          ]
+        },
+        "baseline": {
+          "startup_ms": 8.700573933310807,
+          "open_ms": 46.07631207909435,
+          "functions_ms": 16.95955905597657,
+          "listing_ms": 48.990654991939664,
+          "first_page_ms": 15469.860757002607,
+          "status": "ok",
+          "complete_source_ms": 15800.825066980906,
+          "total_lines": 4134,
+          "source_bytes": 193935,
+          "source_sha256": "4a7b7f658085a27719097e5604a996e3b658ef5101595521455d28e40845180d",
+          "peak_rss_bytes": 155127808,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=12775",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=259",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=1117"
+          ],
+          "load_before": [
+            8.173828125,
+            5.8876953125,
+            6.083984375
+          ],
+          "load_after": [
+            8.5849609375,
+            6.09033203125,
+            6.1474609375
+          ]
+        },
+        "ida": {
+          "startup_ms": 152.3660389939323,
+          "analysis_ms": 3562.4459070386365,
+          "functions": 634,
+          "decompile_ms": [
+            1564.3483659951016
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170967040,
+          "process_ms": 5369.029643945396
+        }
+      },
+      {
+        "sample": 1,
+        "entry": "0x309d0",
+        "load_average": [
+          8.85888671875,
+          6.1884765625,
+          6.17919921875
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 7.264330983161926,
+          "open_ms": 41.9304349925369,
+          "functions_ms": 16.78296097088605,
+          "listing_ms": 25.34817298874259,
+          "first_page_ms": 6621.904928004369,
+          "status": "ok",
+          "complete_source_ms": 6662.451512995176,
+          "total_lines": 3072,
+          "source_bytes": 146483,
+          "source_sha256": "44f5b0aac181b8b0fa5ef3655ccf58256212f3b703e870cae5b084f1a8b5cedd",
+          "peak_rss_bytes": 142434304,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=4673",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=169",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=788"
+          ],
+          "load_before": [
+            8.85888671875,
+            6.1884765625,
+            6.17919921875
+          ],
+          "load_after": [
+            9.3486328125,
+            6.38037109375,
+            6.2421875
+          ]
+        },
+        "baseline": {
+          "startup_ms": 8.821606985293329,
+          "open_ms": 42.30229591485113,
+          "functions_ms": 17.303638975135982,
+          "listing_ms": 25.687307002954185,
+          "first_page_ms": 8715.619699913077,
+          "status": "ok",
+          "complete_source_ms": 8884.11542691756,
+          "total_lines": 3072,
+          "source_bytes": 146483,
+          "source_sha256": "44f5b0aac181b8b0fa5ef3655ccf58256212f3b703e870cae5b084f1a8b5cedd",
+          "peak_rss_bytes": 133849088,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=6732",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=170",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=791"
+          ],
+          "load_before": [
+            9.3486328125,
+            6.38037109375,
+            6.2421875
+          ],
+          "load_after": [
+            9.3203125,
+            6.42431640625,
+            6.25732421875
+          ]
+        },
+        "ida": {
+          "startup_ms": 99.13581307046115,
+          "analysis_ms": 2972.986817942001,
+          "functions": 634,
+          "decompile_ms": [
+            752.2632799809799
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170835968,
+          "process_ms": 3901.2330399127677
+        }
+      },
+      {
+        "sample": 1,
+        "entry": "0x54174",
+        "load_average": [
+          9.455078125,
+          6.50048828125,
+          6.283203125
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 8.843204006552696,
+          "open_ms": 41.616979986429214,
+          "functions_ms": 16.927650896832347,
+          "listing_ms": 1.3280620332807302,
+          "first_page_ms": 8.16781201865524,
+          "status": "ok",
+          "complete_source_ms": 8.184892009012401,
+          "total_lines": 20,
+          "source_bytes": 543,
+          "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+          "peak_rss_bytes": 85827584,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=1",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=0"
+          ],
+          "load_before": [
+            9.455078125,
+            6.50048828125,
+            6.283203125
+          ],
+          "load_after": [
+            9.455078125,
+            6.50048828125,
+            6.283203125
+          ]
+        },
+        "baseline": {
+          "startup_ms": 7.925078039988875,
+          "open_ms": 40.9992600325495,
+          "functions_ms": 17.020285944454372,
+          "listing_ms": 1.2691429583355784,
+          "first_page_ms": 7.765189046040177,
+          "status": "ok",
+          "complete_source_ms": 7.782704080455005,
+          "total_lines": 20,
+          "source_bytes": 543,
+          "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+          "peak_rss_bytes": 84008960,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=1",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=0"
+          ],
+          "load_before": [
+            9.455078125,
+            6.50048828125,
+            6.283203125
+          ],
+          "load_after": [
+            9.455078125,
+            6.50048828125,
+            6.283203125
+          ]
+        },
+        "ida": {
+          "startup_ms": 152.02377503737807,
+          "analysis_ms": 3891.503097023815,
+          "functions": 634,
+          "decompile_ms": [
+            2.028640010394156
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170971136,
+          "process_ms": 4135.1723120315
+        }
+      },
+      {
+        "sample": 2,
+        "entry": "0x19b24",
+        "load_average": [
+          9.41845703125,
+          6.5419921875,
+          6.2978515625
+        ],
+        "engine_order": [
+          "baseline",
+          "neverd"
+        ],
+        "baseline": {
+          "startup_ms": 6.652823998592794,
+          "open_ms": 40.55943002458662,
+          "functions_ms": 16.952525009401143,
+          "listing_ms": 72.76493299286813,
+          "first_page_ms": 31113.121660077013,
+          "status": "ok",
+          "complete_source_ms": 31413.44094008673,
+          "total_lines": 4637,
+          "source_bytes": 346651,
+          "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+          "peak_rss_bytes": 197697536,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=25168",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=328",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=3833"
+          ],
+          "load_before": [
+            9.41845703125,
+            6.5419921875,
+            6.2978515625
+          ],
+          "load_after": [
+            9.80712890625,
+            6.90673828125,
+            6.427734375
+          ]
+        },
+        "neverd": {
+          "startup_ms": 9.195922990329564,
+          "open_ms": 42.195111978799105,
+          "functions_ms": 16.444594017229974,
+          "listing_ms": 70.89592097327113,
+          "first_page_ms": 21916.477817925625,
+          "status": "ok",
+          "complete_source_ms": 21945.78530592844,
+          "total_lines": 4637,
+          "source_bytes": 346651,
+          "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+          "peak_rss_bytes": 192118784,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=19114",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=221",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=915"
+          ],
+          "load_before": [
+            9.80712890625,
+            6.90673828125,
+            6.427734375
+          ],
+          "load_after": [
+            8.162109375,
+            6.76513671875,
+            6.39453125
+          ]
+        },
+        "ida": {
+          "startup_ms": 96.60321695264429,
+          "analysis_ms": 2921.2643570499495,
+          "functions": 634,
+          "decompile_ms": [
+            2915.6545579899102
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 171147264,
+          "process_ms": 6004.397618002258
+        }
+      },
+      {
+        "sample": 2,
+        "entry": "0x34901",
+        "load_average": [
+          7.82861328125,
+          6.71875,
+          6.38134765625
+        ],
+        "engine_order": [
+          "baseline",
+          "neverd"
+        ],
+        "baseline": {
+          "startup_ms": 6.124170962721109,
+          "open_ms": 28.06835190858692,
+          "functions_ms": 11.007394059561193,
+          "listing_ms": 31.476333970203996,
+          "first_page_ms": 13322.296067024581,
+          "status": "ok",
+          "complete_source_ms": 13553.344749030657,
+          "total_lines": 4134,
+          "source_bytes": 193935,
+          "source_sha256": "4a7b7f658085a27719097e5604a996e3b658ef5101595521455d28e40845180d",
+          "peak_rss_bytes": 151236608,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=11220",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=178",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=705"
+          ],
+          "load_before": [
+            7.82861328125,
+            6.71875,
+            6.38134765625
+          ],
+          "load_after": [
+            6.912109375,
+            6.56884765625,
+            6.33740234375
+          ]
+        },
+        "neverd": {
+          "startup_ms": 6.369295995682478,
+          "open_ms": 32.571096904575825,
+          "functions_ms": 11.466298019513488,
+          "listing_ms": 29.777075978927314,
+          "first_page_ms": 11898.180944030173,
+          "status": "ok",
+          "complete_source_ms": 11936.32375006564,
+          "total_lines": 4134,
+          "source_bytes": 193935,
+          "source_sha256": "4a7b7f658085a27719097e5604a996e3b658ef5101595521455d28e40845180d",
+          "peak_rss_bytes": 178728960,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=9821",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=177",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=703"
+          ],
+          "load_before": [
+            6.912109375,
+            6.56884765625,
+            6.33740234375
+          ],
+          "load_after": [
+            6.55029296875,
+            6.50048828125,
+            6.3173828125
+          ]
+        },
+        "ida": {
+          "startup_ms": 97.47970395255834,
+          "analysis_ms": 2933.0545840784907,
+          "functions": 634,
+          "decompile_ms": [
+            1402.6129099074751
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170770432,
+          "process_ms": 4504.161156946793
+        }
+      },
+      {
+        "sample": 2,
+        "entry": "0x309d0",
+        "load_average": [
+          6.345703125,
+          6.45849609375,
+          6.3046875
+        ],
+        "engine_order": [
+          "baseline",
+          "neverd"
+        ],
+        "baseline": {
+          "startup_ms": 6.4951220992952585,
+          "open_ms": 26.923327008262277,
+          "functions_ms": 10.937268962152302,
+          "listing_ms": 15.708660939708352,
+          "first_page_ms": 6531.774498987943,
+          "status": "ok",
+          "complete_source_ms": 6657.8436439158395,
+          "total_lines": 3072,
+          "source_bytes": 146483,
+          "source_sha256": "44f5b0aac181b8b0fa5ef3655ccf58256212f3b703e870cae5b084f1a8b5cedd",
+          "peak_rss_bytes": 133857280,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=5164",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=126",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=538"
+          ],
+          "load_before": [
+            6.345703125,
+            6.45849609375,
+            6.3046875
+          ],
+          "load_after": [
+            6.55859375,
+            6.5009765625,
+            6.3193359375
+          ]
+        },
+        "neverd": {
+          "startup_ms": 7.088974001817405,
+          "open_ms": 29.36671394854784,
+          "functions_ms": 14.669252093881369,
+          "listing_ms": 18.0661539779976,
+          "first_page_ms": 6118.257182999514,
+          "status": "ok",
+          "complete_source_ms": 6156.163401901722,
+          "total_lines": 3072,
+          "source_bytes": 146483,
+          "source_sha256": "44f5b0aac181b8b0fa5ef3655ccf58256212f3b703e870cae5b084f1a8b5cedd",
+          "peak_rss_bytes": 142508032,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=4129",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=171",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=801"
+          ],
+          "load_before": [
+            6.55859375,
+            6.5009765625,
+            6.3193359375
+          ],
+          "load_after": [
+            7.08837890625,
+            6.6162109375,
+            6.359375
+          ]
+        },
+        "ida": {
+          "startup_ms": 154.20390502549708,
+          "analysis_ms": 3109.5041080843657,
+          "functions": 634,
+          "decompile_ms": [
+            759.2178529594094
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170799104,
+          "process_ms": 4122.430331888609
+        }
+      },
+      {
+        "sample": 2,
+        "entry": "0x54174",
+        "load_average": [
+          7.16162109375,
+          6.6396484375,
+          6.36865234375
+        ],
+        "engine_order": [
+          "baseline",
+          "neverd"
+        ],
+        "baseline": {
+          "startup_ms": 7.129325065761805,
+          "open_ms": 37.009830004535615,
+          "functions_ms": 18.061532056890428,
+          "listing_ms": 1.326657016761601,
+          "first_page_ms": 7.91994493920356,
+          "status": "ok",
+          "complete_source_ms": 7.937904912978411,
+          "total_lines": 20,
+          "source_bytes": 543,
+          "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+          "peak_rss_bytes": 83996672,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=1",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=0"
+          ],
+          "load_before": [
+            7.16162109375,
+            6.6396484375,
+            6.36865234375
+          ],
+          "load_after": [
+            7.16162109375,
+            6.6396484375,
+            6.36865234375
+          ]
+        },
+        "neverd": {
+          "startup_ms": 7.009750930592418,
+          "open_ms": 35.36216891370714,
+          "functions_ms": 18.25833006296307,
+          "listing_ms": 1.1717219604179263,
+          "first_page_ms": 6.931083044037223,
+          "status": "ok",
+          "complete_source_ms": 6.949753034859896,
+          "total_lines": 20,
+          "source_bytes": 543,
+          "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+          "peak_rss_bytes": 85663744,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=0"
+          ],
+          "load_before": [
+            7.16162109375,
+            6.6396484375,
+            6.36865234375
+          ],
+          "load_after": [
+            7.16162109375,
+            6.6396484375,
+            6.36865234375
+          ]
+        },
+        "ida": {
+          "startup_ms": 114.68313192017376,
+          "analysis_ms": 3008.0314020160586,
+          "functions": 634,
+          "decompile_ms": [
+            2.139899996109307
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 171081728,
+          "process_ms": 3204.8411270370707
+        }
+      },
+      {
+        "sample": 3,
+        "entry": "0x19b24",
+        "load_average": [
+          7.16162109375,
+          6.6396484375,
+          6.36865234375
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 9.189529926516116,
+          "open_ms": 46.60380689892918,
+          "functions_ms": 16.73020306043327,
+          "listing_ms": 70.43121103197336,
+          "first_page_ms": 28000.017065904103,
+          "status": "ok",
+          "complete_source_ms": 28046.582747949287,
+          "total_lines": 4637,
+          "source_bytes": 346651,
+          "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+          "peak_rss_bytes": 201875456,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=24755",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=243",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=1127"
+          ],
+          "load_before": [
+            7.16162109375,
+            6.6396484375,
+            6.36865234375
+          ],
+          "load_after": [
+            8.43505859375,
+            6.982421875,
+            6.4912109375
+          ]
+        },
+        "baseline": {
+          "startup_ms": 6.212375010363758,
+          "open_ms": 35.6538319028914,
+          "functions_ms": 12.005375931039453,
+          "listing_ms": 73.9688309840858,
+          "first_page_ms": 31325.39099396672,
+          "status": "ok",
+          "complete_source_ms": 31670.89151998516,
+          "total_lines": 4637,
+          "source_bytes": 346651,
+          "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+          "peak_rss_bytes": 207441920,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=25232",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=242",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=3936"
+          ],
+          "load_before": [
+            8.43505859375,
+            6.982421875,
+            6.4912109375
+          ],
+          "load_after": [
+            10.36083984375,
+            7.5908203125,
+            6.71044921875
+          ]
+        },
+        "ida": {
+          "startup_ms": 159.76413199678063,
+          "analysis_ms": 4977.7357439743355,
+          "functions": 634,
+          "decompile_ms": [
+            3180.4942640010267
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170926080,
+          "process_ms": 8426.5489699319
+        }
+      },
+      {
+        "sample": 3,
+        "entry": "0x34901",
+        "load_average": [
+          10.61328125,
+          7.736328125,
+          6.767578125
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 8.952399017289281,
+          "open_ms": 31.09708591364324,
+          "functions_ms": 16.780723934061825,
+          "listing_ms": 49.592190072871745,
+          "first_page_ms": 14299.710385967046,
+          "status": "ok",
+          "complete_source_ms": 14356.027585919946,
+          "total_lines": 4134,
+          "source_bytes": 193935,
+          "source_sha256": "4a7b7f658085a27719097e5604a996e3b658ef5101595521455d28e40845180d",
+          "peak_rss_bytes": 178405376,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=12102",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=186",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=741"
+          ],
+          "load_before": [
+            10.61328125,
+            7.736328125,
+            6.767578125
+          ],
+          "load_after": [
+            10.822265625,
+            7.92822265625,
+            6.8466796875
+          ]
+        },
+        "baseline": {
+          "startup_ms": 8.2374979974702,
+          "open_ms": 45.781075954437256,
+          "functions_ms": 12.538267066702247,
+          "listing_ms": 32.514913007617,
+          "first_page_ms": 18667.411650996655,
+          "status": "ok",
+          "complete_source_ms": 18968.507898040116,
+          "total_lines": 4134,
+          "source_bytes": 193935,
+          "source_sha256": "4a7b7f658085a27719097e5604a996e3b658ef5101595521455d28e40845180d",
+          "peak_rss_bytes": 149004288,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=16398",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=187",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=771"
+          ],
+          "load_before": [
+            10.822265625,
+            7.92822265625,
+            6.8466796875
+          ],
+          "load_after": [
+            10.15087890625,
+            7.9658203125,
+            6.8828125
+          ]
+        },
+        "ida": {
+          "startup_ms": 150.3965719603002,
+          "analysis_ms": 5132.186092901975,
+          "functions": 634,
+          "decompile_ms": [
+            2006.4056169940159
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170938368,
+          "process_ms": 7379.594046040438
+        }
+      },
+      {
+        "sample": 3,
+        "entry": "0x309d0",
+        "load_average": [
+          9.978515625,
+          7.966796875,
+          6.88916015625
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 9.234584984369576,
+          "open_ms": 42.20998007804155,
+          "functions_ms": 17.13216200005263,
+          "listing_ms": 25.488620973192155,
+          "first_page_ms": 6640.568317961879,
+          "status": "ok",
+          "complete_source_ms": 6681.830464978702,
+          "total_lines": 3072,
+          "source_bytes": 146483,
+          "source_sha256": "44f5b0aac181b8b0fa5ef3655ccf58256212f3b703e870cae5b084f1a8b5cedd",
+          "peak_rss_bytes": 142458880,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=5134",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=172",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=654"
+          ],
+          "load_before": [
+            9.978515625,
+            7.966796875,
+            6.88916015625
+          ],
+          "load_after": [
+            9.81982421875,
+            7.9677734375,
+            6.8955078125
+          ]
+        },
+        "baseline": {
+          "startup_ms": 8.541221031919122,
+          "open_ms": 40.689487010240555,
+          "functions_ms": 16.747956979088485,
+          "listing_ms": 24.67169996816665,
+          "first_page_ms": 7738.162500085309,
+          "status": "ok",
+          "complete_source_ms": 7863.558022072539,
+          "total_lines": 3072,
+          "source_bytes": 146483,
+          "source_sha256": "44f5b0aac181b8b0fa5ef3655ccf58256212f3b703e870cae5b084f1a8b5cedd",
+          "peak_rss_bytes": 133955584,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=5972",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=172",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=808"
+          ],
+          "load_before": [
+            9.81982421875,
+            7.9677734375,
+            6.8955078125
+          ],
+          "load_after": [
+            9.61962890625,
+            7.986328125,
+            6.91357421875
+          ]
+        },
+        "ida": {
+          "startup_ms": 101.68756800703704,
+          "analysis_ms": 2991.788450977765,
+          "functions": 634,
+          "decompile_ms": [
+            758.6248340085149
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 171134976,
+          "process_ms": 3934.604524052702
+        }
+      },
+      {
+        "sample": 3,
+        "entry": "0x54174",
+        "load_average": [
+          9.48974609375,
+          7.98681640625,
+          6.91943359375
+        ],
+        "engine_order": [
+          "neverd",
+          "baseline"
+        ],
+        "neverd": {
+          "startup_ms": 9.160466957837343,
+          "open_ms": 46.34801100473851,
+          "functions_ms": 17.7505660103634,
+          "listing_ms": 2.324828994460404,
+          "first_page_ms": 8.63865704741329,
+          "status": "ok",
+          "complete_source_ms": 8.654211065731943,
+          "total_lines": 20,
+          "source_bytes": 543,
+          "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+          "peak_rss_bytes": 85741568,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=1",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=1"
+          ],
+          "load_before": [
+            9.48974609375,
+            7.98681640625,
+            6.91943359375
+          ],
+          "load_after": [
+            9.48974609375,
+            7.98681640625,
+            6.91943359375
+          ]
+        },
+        "baseline": {
+          "startup_ms": 8.078192011453211,
+          "open_ms": 46.259838971309364,
+          "functions_ms": 17.527385032735765,
+          "listing_ms": 1.383824972435832,
+          "first_page_ms": 8.04931705351919,
+          "status": "ok",
+          "complete_source_ms": 8.069789037108421,
+          "total_lines": 20,
+          "source_bytes": 543,
+          "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+          "peak_rss_bytes": 84082688,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=1",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=0"
+          ],
+          "load_before": [
+            9.48974609375,
+            7.98681640625,
+            6.91943359375
+          ],
+          "load_after": [
+            9.48974609375,
+            7.98681640625,
+            6.91943359375
+          ]
+        },
+        "ida": {
+          "startup_ms": 151.94954397156835,
+          "analysis_ms": 4403.037864947692,
+          "functions": 634,
+          "decompile_ms": [
+            2.1130270324647427
+          ],
+          "decompile_failures": [],
+          "peak_rss_bytes": 170987520,
+          "process_ms": 4648.077570949681
+        }
+      }
+    ],
+    "baseline_engine_sha256": "62818d593064914f1f5d023bbcbbb912deec1c5d5d8e8f11882e8e22beeabbbc",
+    "baseline_worker_sha256": "8a557497505c424162a1e97742f44849843acf0b7c7a67505621ceef6eb8b64f"
+  },
+  "medians": [
+    {
+      "entry": "0x19b24",
+      "baseline_complete_source_ms": 31670.89151998516,
+      "baseline_first_page_ms": 31325.39099396672,
+      "baseline_peak_rss_bytes": 200151040,
+      "baseline_low_ir_ms": 25168,
+      "baseline_med_ir_ms": 328,
+      "baseline_high_ir_ms": 3936,
+      "neverd_complete_source_ms": 21945.78530592844,
+      "neverd_first_page_ms": 21916.477817925625,
+      "neverd_peak_rss_bytes": 201875456,
+      "neverd_low_ir_ms": 19114,
+      "neverd_med_ir_ms": 221,
+      "neverd_high_ir_ms": 921,
+      "less_wait_percent": 30.706764941933905,
+      "ida_decompile_ms": 3180.4942640010267,
+      "ida_analysis_ms": 4587.846006965265
+    },
+    {
+      "entry": "0x34901",
+      "baseline_complete_source_ms": 15800.825066980906,
+      "baseline_first_page_ms": 15469.860757002607,
+      "baseline_peak_rss_bytes": 151236608,
+      "baseline_low_ir_ms": 12775,
+      "baseline_med_ir_ms": 187,
+      "baseline_high_ir_ms": 771,
+      "neverd_complete_source_ms": 13279.678361024708,
+      "neverd_first_page_ms": 13220.052618999034,
+      "neverd_peak_rss_bytes": 178405376,
+      "neverd_low_ir_ms": 11002,
+      "neverd_med_ir_ms": 186,
+      "neverd_high_ir_ms": 741,
+      "less_wait_percent": 15.955791518916673,
+      "ida_decompile_ms": 1564.3483659951016,
+      "ida_analysis_ms": 3562.4459070386365
+    },
+    {
+      "entry": "0x309d0",
+      "baseline_complete_source_ms": 7863.558022072539,
+      "baseline_first_page_ms": 7738.162500085309,
+      "baseline_peak_rss_bytes": 133857280,
+      "baseline_low_ir_ms": 5972,
+      "baseline_med_ir_ms": 170,
+      "baseline_high_ir_ms": 791,
+      "neverd_complete_source_ms": 6662.451512995176,
+      "neverd_first_page_ms": 6621.904928004369,
+      "neverd_peak_rss_bytes": 142458880,
+      "neverd_low_ir_ms": 4673,
+      "neverd_med_ir_ms": 171,
+      "neverd_high_ir_ms": 788,
+      "less_wait_percent": 15.2743389914073,
+      "ida_decompile_ms": 758.6248340085149,
+      "ida_analysis_ms": 2991.788450977765
+    },
+    {
+      "entry": "0x54174",
+      "baseline_complete_source_ms": 7.937904912978411,
+      "baseline_first_page_ms": 7.91994493920356,
+      "baseline_peak_rss_bytes": 84008960,
+      "baseline_low_ir_ms": 1,
+      "baseline_med_ir_ms": 0,
+      "baseline_high_ir_ms": 0,
+      "neverd_complete_source_ms": 8.184892009012401,
+      "neverd_first_page_ms": 8.16781201865524,
+      "neverd_peak_rss_bytes": 85741568,
+      "neverd_low_ir_ms": 1,
+      "neverd_med_ir_ms": 0,
+      "neverd_high_ir_ms": 0,
+      "less_wait_percent": -3.1114897286079746,
+      "ida_decompile_ms": 2.1130270324647427,
+      "ida_analysis_ms": 3891.503097023815
+    }
+  ],
+  "serial": {
+    "schema": 1,
+    "kind": "fresh-function-source-latency",
+    "platform": "Linux-7.0.0-34-generic-x86_64-with-glibc2.43",
+    "started_at": "2026-10-10T07:44:28.724489+00:00",
+    "logical_cpus": 20,
+    "threads": 1,
+    "cpu_affinity": [
+      0,
+      2,
+      4,
+      6
+    ],
+    "representation": "source",
+    "binary_sha256": "ff7b02957d3c10e9e6d409c62312d0ddcc261a9f69e3807be089ec319a53e538",
+    "worker_sha256": "8f55be1a682dc08c502f9f466834863eb997c65b61c2a4b46eb20f0c23badd9a",
+    "engine_sha256": "4a594872947e12fd120970cb81db4ea81b8d6c4f36330dabaac069e2228d2656",
+    "caveats": [
+      "Warm OS caches; each entry starts a fresh worker/database.",
+      "NeverD: first 256 source lines and all subsequent pages, including IPC.",
+      "IDA: fresh auto-analysis, then decompile() and complete text.",
+      "Wall-clock measurements include other host activity; load is recorded.",
+      "Source hashes check reproducibility, not semantic equivalence to the binary."
+    ],
+    "samples": [
+      {
+        "sample": 1,
+        "entry": "0x19b24",
+        "load_average": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ],
+        "engine_order": [
+          "neverd"
+        ],
+        "neverd": {
+          "startup_ms": 7.043731980957091,
+          "open_ms": 29.090048978105187,
+          "functions_ms": 11.78714307025075,
+          "listing_ms": 44.92236999794841,
+          "first_page_ms": 23559.901700005867,
+          "status": "ok",
+          "complete_source_ms": 23613.2725069765,
+          "total_lines": 4637,
+          "source_bytes": 346651,
+          "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+          "peak_rss_bytes": 192966656,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=20319",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=232",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=1078"
+          ],
+          "load_before": [
+            7.8974609375,
+            7.830078125,
+            6.93505859375
+          ],
+          "load_after": [
+            8.00439453125,
+            7.84716796875,
+            6.96337890625
+          ]
+        }
+      },
+      {
+        "sample": 1,
+        "entry": "0x34901",
+        "load_average": [
+          8.00439453125,
+          7.84716796875,
+          6.96337890625
+        ],
+        "engine_order": [
+          "neverd"
+        ],
+        "neverd": {
+          "startup_ms": 8.811437990516424,
+          "open_ms": 44.226652942597866,
+          "functions_ms": 17.000488936901093,
+          "listing_ms": 48.98539208807051,
+          "first_page_ms": 18975.27765110135,
+          "status": "ok",
+          "complete_source_ms": 19038.948161061853,
+          "total_lines": 4134,
+          "source_bytes": 193935,
+          "source_sha256": "4a7b7f658085a27719097e5604a996e3b658ef5101595521455d28e40845180d",
+          "peak_rss_bytes": 157888512,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=15693",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=259",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=1121"
+          ],
+          "load_before": [
+            8.00439453125,
+            7.84716796875,
+            6.96337890625
+          ],
+          "load_after": [
+            8.7421875,
+            8.01904296875,
+            7.0341796875
+          ]
+        }
+      },
+      {
+        "sample": 1,
+        "entry": "0x309d0",
+        "load_average": [
+          8.7421875,
+          8.01904296875,
+          7.0341796875
+        ],
+        "engine_order": [
+          "neverd"
+        ],
+        "neverd": {
+          "startup_ms": 8.880396955646574,
+          "open_ms": 44.277900946326554,
+          "functions_ms": 16.918712994083762,
+          "listing_ms": 25.114752002991736,
+          "first_page_ms": 9608.837951906025,
+          "status": "ok",
+          "complete_source_ms": 9649.921412928961,
+          "total_lines": 3072,
+          "source_bytes": 146483,
+          "source_sha256": "44f5b0aac181b8b0fa5ef3655ccf58256212f3b703e870cae5b084f1a8b5cedd",
+          "peak_rss_bytes": 145588224,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=7508",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=175",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=853"
+          ],
+          "load_before": [
+            8.7421875,
+            8.01904296875,
+            7.0341796875
+          ],
+          "load_after": [
+            9.0224609375,
+            8.1015625,
+            7.07177734375
+          ]
+        }
+      },
+      {
+        "sample": 1,
+        "entry": "0x54174",
+        "load_average": [
+          9.0224609375,
+          8.1015625,
+          7.07177734375
+        ],
+        "engine_order": [
+          "neverd"
+        ],
+        "neverd": {
+          "startup_ms": 8.888709009625018,
+          "open_ms": 44.97661499772221,
+          "functions_ms": 16.679384047165513,
+          "listing_ms": 1.2878909474238753,
+          "first_page_ms": 8.857826003804803,
+          "status": "ok",
+          "complete_source_ms": 8.875114028342068,
+          "total_lines": 20,
+          "source_bytes": 543,
+          "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+          "peak_rss_bytes": 87629824,
+          "phase_trace": [
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=1",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+            "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=0"
+          ],
+          "load_before": [
+            9.0224609375,
+            8.1015625,
+            7.07177734375
+          ],
+          "load_after": [
+            9.0224609375,
+            8.1015625,
+            7.07177734375
+          ]
+        }
+      }
+    ]
+  },
+  "revisit_control": {
+    "schema": 1,
+    "kind": "single-worker-source-revisit",
+    "started_at": "2026-10-10T07:14:07.047462+00:00",
+    "platform": "Linux-7.0.0-34-generic-x86_64-with-glibc2.43",
+    "threads": 4,
+    "cpu_affinity": [
+      0,
+      2,
+      4,
+      6
+    ],
+    "representation": "source",
+    "steps": [
+      {
+        "label": "A_first",
+        "entry": "0x19b24",
+        "load_before": [
+          3.81640625,
+          3.05419921875,
+          3.8544921875
+        ],
+        "first_page_ms": 25892.736212001182,
+        "complete_source_ms": 26146.77944709547,
+        "total_lines": 4637,
+        "source_bytes": 346651,
+        "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+        "load_after": [
+          3.34912109375,
+          3.01513671875,
+          3.81982421875
+        ]
+      },
+      {
+        "label": "A_repeat",
+        "entry": "0x19b24",
+        "load_before": [
+          3.34912109375,
+          3.01513671875,
+          3.81982421875
+        ],
+        "first_page_ms": 13.652476947754622,
+        "complete_source_ms": 253.48871992900968,
+        "total_lines": 4637,
+        "source_bytes": 346651,
+        "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+        "load_after": [
+          3.34912109375,
+          3.01513671875,
+          3.81982421875
+        ]
+      },
+      {
+        "label": "B_first",
+        "entry": "0x54174",
+        "load_before": [
+          3.34912109375,
+          3.01513671875,
+          3.81982421875
+        ],
+        "first_page_ms": 13.437417102977633,
+        "complete_source_ms": 13.449341058731079,
+        "total_lines": 20,
+        "source_bytes": 543,
+        "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+        "load_after": [
+          3.34912109375,
+          3.01513671875,
+          3.81982421875
+        ]
+      },
+      {
+        "label": "A_revisit",
+        "entry": "0x19b24",
+        "load_before": [
+          3.34912109375,
+          3.01513671875,
+          3.81982421875
+        ],
+        "first_page_ms": 26034.55748502165,
+        "complete_source_ms": 26290.76110199094,
+        "total_lines": 4637,
+        "source_bytes": 346651,
+        "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+        "load_after": [
+          3.4599609375,
+          3.05029296875,
+          3.80859375
+        ]
+      }
+    ],
+    "caveats": [
+      "Warm OS caches; one fresh worker and input copy.",
+      "Background analysis disabled as in GUI analysis replicas.",
+      "Includes full source paging and IPC, excludes Qt painting and GUI caches.",
+      "Host load is observed, not controlled.",
+      "Source hashes check reproducibility, not native semantic equivalence."
+    ],
+    "worker_sha256": "8a557497505c424162a1e97742f44849843acf0b7c7a67505621ceef6eb8b64f",
+    "engine_sha256": "62818d593064914f1f5d023bbcbbb912deec1c5d5d8e8f11882e8e22beeabbbc",
+    "binary_sha256": "ff7b02957d3c10e9e6d409c62312d0ddcc261a9f69e3807be089ec319a53e538",
+    "status": "ok",
+    "peak_rss_bytes": 226447360,
+    "phase_trace": [
+      "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=20500",
+      "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=222",
+      "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=3503",
+      "[neverd-pipeline-stage] invocation=2 stage=decoder event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=decoder event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=function_detection event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=function_detection event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=low_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=low_ir event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=candidate_cleanup event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=candidate_cleanup event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=med_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=med_ir event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=noreturn_verify event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=noreturn_verify event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=high_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=high_ir event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=decoder event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=decoder event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=function_detection event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=function_detection event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=low_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=low_ir event=completed elapsed_ms=20603",
+      "[neverd-pipeline-stage] invocation=3 stage=candidate_cleanup event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=candidate_cleanup event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=med_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=med_ir event=completed elapsed_ms=227",
+      "[neverd-pipeline-stage] invocation=3 stage=noreturn_verify event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=noreturn_verify event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=high_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=3 stage=high_ir event=completed elapsed_ms=3521"
+    ],
+    "loaded_requested_engine": true
+  },
+  "revisit_candidate": {
+    "schema": 1,
+    "kind": "single-worker-source-revisit",
+    "started_at": "2026-10-10T07:44:04.893588+00:00",
+    "platform": "Linux-7.0.0-34-generic-x86_64-with-glibc2.43",
+    "threads": 4,
+    "cpu_affinity": [
+      0,
+      2,
+      4,
+      6
+    ],
+    "representation": "source",
+    "steps": [
+      {
+        "label": "A_first",
+        "entry": "0x19b24",
+        "load_before": [
+          8.658203125,
+          7.94140625,
+          6.9443359375
+        ],
+        "first_page_ms": 23467.83337695524,
+        "complete_source_ms": 23497.4973249482,
+        "total_lines": 4637,
+        "source_bytes": 346651,
+        "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+        "load_after": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ]
+      },
+      {
+        "label": "A_repeat",
+        "entry": "0x19b24",
+        "load_before": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ],
+        "first_page_ms": 1.6584519762545824,
+        "complete_source_ms": 29.25152995157987,
+        "total_lines": 4637,
+        "source_bytes": 346651,
+        "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+        "load_after": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ]
+      },
+      {
+        "label": "B_first",
+        "entry": "0x54174",
+        "load_before": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ],
+        "first_page_ms": 8.36199801415205,
+        "complete_source_ms": 8.37821199093014,
+        "total_lines": 20,
+        "source_bytes": 543,
+        "source_sha256": "4a27564749b5c86fb21e1ed16d189630f6ee9a245aa249abd3869e219784b28d",
+        "load_after": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ]
+      },
+      {
+        "label": "A_revisit",
+        "entry": "0x19b24",
+        "load_before": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ],
+        "first_page_ms": 2.1215550368651748,
+        "complete_source_ms": 32.43797994218767,
+        "total_lines": 4637,
+        "source_bytes": 346651,
+        "source_sha256": "4b8d043c3600224151b52b8065748fa7c0c8da06387b5c57d4a6a3c294a051eb",
+        "load_after": [
+          7.8974609375,
+          7.830078125,
+          6.93505859375
+        ]
+      }
+    ],
+    "caveats": [
+      "Warm OS caches; one fresh worker and input copy.",
+      "Background analysis disabled as in GUI analysis replicas.",
+      "Includes full source paging and IPC, excludes Qt painting and GUI caches.",
+      "Host load is observed, not controlled.",
+      "Source hashes check reproducibility, not native semantic equivalence."
+    ],
+    "worker_sha256": "8f55be1a682dc08c502f9f466834863eb997c65b61c2a4b46eb20f0c23badd9a",
+    "engine_sha256": "4a594872947e12fd120970cb81db4ea81b8d6c4f36330dabaac069e2228d2656",
+    "binary_sha256": "ff7b02957d3c10e9e6d409c62312d0ddcc261a9f69e3807be089ec319a53e538",
+    "status": "ok",
+    "peak_rss_bytes": 204607488,
+    "phase_trace": [
+      "[neverd-pipeline-stage] invocation=1 stage=decoder event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=decoder event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=function_detection event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=function_detection event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=low_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=low_ir event=completed elapsed_ms=20551",
+      "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=candidate_cleanup event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=med_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=med_ir event=completed elapsed_ms=223",
+      "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=noreturn_verify event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=high_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=1 stage=high_ir event=completed elapsed_ms=985",
+      "[neverd-pipeline-stage] invocation=2 stage=decoder event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=decoder event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=function_detection event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=function_detection event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=low_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=low_ir event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=candidate_cleanup event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=candidate_cleanup event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=med_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=med_ir event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=noreturn_verify event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=noreturn_verify event=completed elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=high_ir event=begin elapsed_ms=0",
+      "[neverd-pipeline-stage] invocation=2 stage=high_ir event=completed elapsed_ms=0"
+    ],
+    "loaded_requested_engine": true
+  },
+  "tests": [
+    {
+      "target": "High control flow",
+      "passed": 382,
+      "skipped": []
+    },
+    {
+      "target": "Jump tables",
+      "passed": 398,
+      "skipped": []
+    },
+    {
+      "target": "C API",
+      "passed": 99,
+      "skipped": []
+    },
+    {
+      "target": "SysV ABI",
+      "passed": 23,
+      "skipped": []
+    },
+    {
+      "target": "Win64 ABI",
+      "passed": 9,
+      "skipped": []
+    },
+    {
+      "target": "i386 ABI",
+      "passed": 10,
+      "skipped": []
+    },
+    {
+      "target": "Source anchors",
+      "passed": 4,
+      "skipped": []
+    },
+    {
+      "target": "Source dialects",
+      "passed": 17,
+      "skipped": []
+    },
+    {
+      "target": "Language/EH metadata",
+      "passed": 253,
+      "skipped": [
+        "DumpRealBinary"
+      ]
+    }
+  ],
+  "gui_worker_ctest": {
+    "passed": 18,
+    "failed": 0,
+    "platform": "offscreen"
+  },
+  "real_worker_scripts": [
+    "real_engine_test",
+    "native_mapping_test",
+    "import_names_test",
+    "unicode_path_test",
+    "listing_data_test"
+  ],
+  "limitations": [
+    "No native GUI paint or manual scrolling timing.",
+    "Z3/native-emulation build profiles were not enabled.",
+    "Source hash equality is not proof of native binary semantics.",
+    "The linear depth certificate remains conservative for general multi-PHI cycles."
+  ]
+}

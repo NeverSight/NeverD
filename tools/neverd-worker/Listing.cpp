@@ -344,6 +344,7 @@ struct Item {
   int region = -1, function = -1;
   std::size_t index = 0;
   std::uint64_t alignment = 0;
+  bool userCode = false;
 };
 /// An item the listing lays out from what it knows besides the bytes: a
 /// named object as large as its symbol says, or data the code reads or
@@ -527,6 +528,7 @@ struct Listing::Impl {
     std::string kind, encoding;
   };
   std::map<std::uint64_t, UserItem> userItems;
+  std::map<std::uint64_t, Instruction> userInstructions;
   StringRefsFunction stringRefs = nullptr;
   SwitchesFunction switchesQuery = nullptr;
   DemangleFunction demangle = nullptr;
@@ -1344,6 +1346,7 @@ struct Listing::Impl {
   /// what the scan read in their bytes.
   void loadUserItems() {
     userItems.clear();
+    userInstructions.clear();
     if (!itemsQuery)
       return;
     if (const auto rows = takeJson(itemsQuery(session)); rows.is_array())
@@ -1935,9 +1938,14 @@ struct Listing::Impl {
       const auto &[start, row] = *user;
       const auto *string =
           row.kind == StringItemKind ? stringAt(start) : nullptr;
-      if (row.kind == UndefinedItemKind ||
-          (row.kind == StringItemKind &&
-           (!string || string->address != start))) {
+      if (row.kind == CodeItemKind) {
+        item.kind = ItemKind::Instruction;
+        item.start = start;
+        item.size = row.size;
+        item.userCode = true;
+      } else if (row.kind == UndefinedItemKind ||
+                 (row.kind == StringItemKind &&
+                  (!string || string->address != start))) {
         item.start = address;
       } else if (string) {
         item.kind = ItemKind::String;
@@ -2265,6 +2273,8 @@ struct Listing::Impl {
   AddressClass classOf(const Item &item) const {
     switch (item.kind) {
     case ItemKind::Instruction:
+      if (item.function < 0)
+        return AddressClass::Instruction;
       return functions[item.function].thunk     ? AddressClass::External
              : functions[item.function].library ? AddressClass::LibraryFunction
                                                 : AddressClass::RegularFunction;
@@ -2526,12 +2536,45 @@ struct Listing::Impl {
     return text;
   }
 
+  const Instruction &instructionOf(const Item &item) {
+    if (!item.userCode)
+      return decode(item.function).instructions[item.index];
+    // P can subsequently give this code a function. Reuse the matching
+    // instruction's tracked stack/frame facts once it has an owner.
+    if (item.function >= 0) {
+      const auto &body = decode(item.function);
+      const auto instruction = std::lower_bound(
+          body.instructions.begin(), body.instructions.end(), item.start,
+          [](const Instruction &i, std::uint64_t address) {
+            return i.address < address;
+          });
+      if (instruction != body.instructions.end() &&
+          instruction->address == item.start && instruction->size == item.size)
+        return *instruction;
+    }
+    auto it = userInstructions.find(item.start);
+    if (it == userInstructions.end()) {
+      auto instructions = disassemble(item.start, 1);
+      if (instructions.empty() || instructions.front().address != item.start ||
+          instructions.front().size != item.size)
+        throw Error("invalid_request", "Cannot decode the defined code at " +
+                                           hexAddress(item.start));
+      it = userInstructions.emplace(item.start, std::move(instructions.front()))
+               .first;
+    }
+    return it->second;
+  }
+
   void instructionLines(std::vector<Line> &out, const Item &item,
                         std::size_t base) {
-    const Function &function = functions[item.function];
-    const DecodedFunction &body = decode(item.function);
-    const Instruction &instruction = body.instructions[item.index];
-    if (item.start == function.entry) {
+    const Function standalone;
+    const DecodedFunction standaloneBody;
+    const Function &function =
+        item.function >= 0 ? functions[item.function] : standalone;
+    const DecodedFunction &body =
+        item.function >= 0 ? decode(item.function) : standaloneBody;
+    const Instruction &instruction = instructionOf(item);
+    if (item.function >= 0 && item.start == function.entry) {
       // Function header: a rule, the attribute block (each ends with a blank
       // line), exports and the proc line with references.
       addLine(out, item, item.start, "blank", {});
@@ -2595,7 +2638,8 @@ struct Listing::Impl {
         }
         addLine(out, item, item.start, "blank", {});
       }
-    } else if (body.labels.contains(item.start)) {
+    } else if (body.labels.contains(item.start) ||
+               (item.userCode && dataNames.contains(item.start))) {
       addLine(out, item, item.start, "blank", {});
       StyledText label = lead(base - NameColumnWidth);
       label.append(nameOf(item.start, NameUse::Transfer, {}).text,
@@ -2677,7 +2721,7 @@ struct Listing::Impl {
                    ListingRole::AutoComment);
       addLine(out, item, item.start, "comment", std::move(close));
     }
-    if (next >= body.end) {
+    if (item.function >= 0 && next >= body.end) {
       // The footer belongs to the last instruction.  Code that no function
       // owns, padding or data follows a rule; a function brings its own.
       StyledText end = lead(base - NameColumnWidth);
@@ -3299,9 +3343,9 @@ struct Listing::Impl {
       const auto item = itemAt(address);
       if (!item || item->kind != ItemKind::Instruction)
         return {};
-      const auto &body = decode(item->function);
-      text =
-          instructionText(body.instructions[item->index], 0, {}, &body).text();
+      const auto *body =
+          item->function >= 0 ? &decode(item->function) : nullptr;
+      text = instructionText(instructionOf(*item), 0, {}, body).text();
     } else {
       text = instructionText(single.front(), 0, {}).text();
     }
@@ -3356,7 +3400,7 @@ Listing::numberOperands(std::uint64_t address) {
   const auto item = d.itemAt(address);
   if (!item || item->kind != ItemKind::Instruction || item->start != address)
     return std::nullopt;
-  const auto &instruction = d.decode(item->function).instructions[item->index];
+  const auto &instruction = d.instructionOf(*item);
   return formattableOperands(instruction.operands, d.dialect);
 }
 
@@ -3621,8 +3665,7 @@ Json Listing::references(std::uint64_t address, const Json &payload) {
     std::vector<std::pair<std::uint64_t, RefKind>> refs;
     if (auto item = d.itemAt(address);
         item && item->kind == ItemKind::Instruction) {
-      const auto &instruction =
-          d.decode(item->function).instructions[item->index];
+      const auto &instruction = d.instructionOf(*item);
       if (instruction.target) {
         const auto kind = instruction.flow == Flow::Call   ? RefKind::Call
                           : instruction.flow == Flow::Jump ? RefKind::Jump

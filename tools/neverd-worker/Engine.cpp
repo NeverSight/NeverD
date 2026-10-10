@@ -288,6 +288,44 @@ constexpr std::int64_t MaxStringMinLength = 1024;
 constexpr std::size_t EnginePageLines = 2048;
 /// Text a renamed whole-function view may hold: the engine's source budget.
 constexpr std::size_t MaxNamedViewBytes = 32 * 1024 * 1024;
+constexpr std::size_t MaxNamedViewCacheBytes = 32 * 1024 * 1024;
+constexpr std::size_t MaxNamedViews = 8;
+
+/// Conservative retained-size accounting: include container capacity, string
+/// capacity and tree-node overhead, not just the serialized text's size. A
+/// value beyond the cache budget remains readable but is not retained.
+std::size_t namedViewJsonBytes(const Json &value, unsigned depth = 0) {
+  constexpr auto OverBudget = MaxNamedViewCacheBytes + 1;
+  if (depth > 64)
+    return OverBudget;
+  std::size_t bytes = sizeof(Json);
+  const auto add = [&](std::size_t count) {
+    bytes = count > MaxNamedViewCacheBytes - bytes ? OverBudget : bytes + count;
+    return bytes <= MaxNamedViewCacheBytes;
+  };
+  if (value.is_string()) {
+    if (!add(sizeof(Json::string_t)) ||
+        !add(value.get_ref<const Json::string_t &>().capacity() + 1))
+      return OverBudget;
+  } else if (value.is_array()) {
+    const auto &array = value.get_ref<const Json::array_t &>();
+    if (!add(sizeof(Json::array_t)) ||
+        array.capacity() > MaxNamedViewCacheBytes / sizeof(Json) ||
+        !add(array.capacity() * sizeof(Json)))
+      return OverBudget;
+    for (const auto &item : array)
+      if (!add(namedViewJsonBytes(item, depth + 1)))
+        return OverBudget;
+  } else if (value.is_object()) {
+    if (!add(sizeof(Json::object_t)))
+      return OverBudget;
+    for (const auto &[key, item] : value.items())
+      if (!add(sizeof(Json::object_t::value_type) + 4 * sizeof(void *)) ||
+          !add(key.capacity() + 1) || !add(namedViewJsonBytes(item, depth + 1)))
+        return OverBudget;
+  }
+  return bytes;
+}
 
 /// A page of \p items; a filter keeps the rows where one of \p searchFields
 /// contains it, ignoring the case of ASCII letters.
@@ -488,6 +526,7 @@ bool Engine::reloadOperandFormats() {
   return true;
 }
 void Engine::namesChanged() {
+  forgetNamedViews();
   graphs_.clear();
   if (listing_)
     listing_->namesChanged();
@@ -502,6 +541,7 @@ Json Engine::functionGraph(std::uint64_t address) {
   return backendJson(neverd_cfg_json(session_, address), true);
 }
 void Engine::commentsChanged() {
+  forgetNamedViews();
   graphs_.clear();
   textKey_.clear();
   textCache_.clear();
@@ -555,6 +595,7 @@ void Engine::functionsChanged() {
   invalidate();
 }
 void Engine::invalidate() {
+  forgetNamedViews();
   graphs_.clear();
   if (listing_)
     listing_->invalidate();
@@ -564,25 +605,52 @@ void Engine::invalidate() {
   functionOrderKey_.clear();
   functionOrder_.clear();
 }
-std::optional<Json> Engine::namedViewPage(std::uint64_t address,
-                                          const std::string &representation,
-                                          std::size_t offset,
-                                          std::size_t limit) {
+void Engine::forgetNamedViews() {
+  namedViews_.clear();
+  namedViewBytes_ = 0;
+}
+
+std::shared_ptr<const Engine::NamedView>
+Engine::namedView(std::uint64_t address, const std::string &representation) {
   const auto view = irViewFunction();
   if (!view)
-    return std::nullopt;
-  const auto &aliases = listing().functionAliases();
+    return nullptr;
   const bool sourceView = representation == "c" || representation == "llvmc" ||
                           representation == "source" ||
                           representation == "cpp" || representation == "rust" ||
                           representation == "go";
-  if (aliases.empty() && !sourceView)
-    return std::nullopt;
-  const auto key = hexAddress(address) + ":" + representation + ":" +
-                   std::to_string(revision_) + ":" +
-                   std::to_string(listing().generation());
-  if (namedViewKey_ != key) {
-    namedViewKey_.clear();
+  (void)listing().functionAliases();
+  const auto cacheKey = [&] {
+    const auto generation = listing().generation();
+    if (namedViewsRevision_ != revision_ ||
+        namedViewsListingGeneration_ != generation) {
+      forgetNamedViews();
+      namedViewsRevision_ = revision_;
+      namedViewsListingGeneration_ = generation;
+    }
+    return hexAddress(address) + ":" + representation + ":" +
+           std::to_string(revision_) + ":" + std::to_string(generation);
+  };
+  const auto lookupKey = cacheKey();
+  for (auto it = namedViews_.begin(); it != namedViews_.end(); ++it)
+    if ((*it)->key == lookupKey) {
+      namedViews_.splice(namedViews_.begin(), namedViews_, it);
+      return namedViews_.front();
+    }
+  // A hit answers from its finished document without pretending the mutable
+  // Session still holds this function. Graph/IR requests prepare it normally.
+  prepareFunction(address);
+  // Whole-program VM preparation can analyze(), invalidating the listing and
+  // advancing the revision. Rebuild aliases and stamp the prepared context;
+  // never keep an alias reference across that invalidation.
+  // Preparation may also discover this function and create its display
+  // alias. Decide whether an IR view needs renaming only after that step,
+  // so the first page and subsequent pages use the same presentation.
+  if (listing().functionAliases().empty() && !sourceView)
+    return nullptr;
+  const auto key = cacheKey();
+  auto document = std::make_shared<NamedView>();
+  {
     // The whole function, from as many engine pages as it fills: the engine
     // emits it once and pages it from there.
     Json full;
@@ -606,7 +674,7 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
           !page["text"].is_string() || !page.contains("rows") ||
           !page["rows"].is_array() ||
           page.value("offset", std::size_t{0}) != next)
-        return std::nullopt;
+        return nullptr;
       const bool complete = page.value("complete", false);
       const Json following = page.value("next_offset", Json());
       if (full.is_null()) {
@@ -629,7 +697,7 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
           following.get<std::size_t>() <= next ||
           full["text"].get_ref<const std::string &>().size() >
               MaxNamedViewBytes)
-        return std::nullopt;
+        return nullptr;
       next = following.get<std::size_t>();
     }
     full["complete"] = true;
@@ -656,8 +724,8 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
           });
     std::vector<std::pair<std::size_t, std::ptrdiff_t>> shift;
     if (!sourceView)
-      full["text"] =
-          renameIdentifiers(full["text"].get<std::string>(), aliases, shift);
+      full["text"] = renameIdentifiers(full["text"].get<std::string>(),
+                                       listing().functionAliases(), shift);
     const std::size_t base = full.value("byte_offset", std::size_t{0});
     if (auto regions = full.find("library_regions");
         regions != full.end() && regions->is_array())
@@ -689,15 +757,49 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
       (*prelude)["end_byte"] =
           base + shiftedOffset((*prelude)["end_byte"].get<std::size_t>() - base,
                                shift);
-    namedViewLines_.clear();
     const auto &text = full["text"].get_ref<const std::string &>();
-    namedViewLines_.push_back(0);
+    document->lines.push_back(0);
     for (std::size_t i = 0; i < text.size(); ++i)
       if (text[i] == '\n' && i + 1 < text.size())
-        namedViewLines_.push_back(i + 1);
-    namedView_ = std::move(full);
-    namedViewKey_ = key;
+        document->lines.push_back(i + 1);
+    document->value = std::move(full);
+    document->key = key;
+    // If resolving source names changed the listing while decorating this
+    // document, it remains usable for this response but is not reusable yet.
+    if (cacheKey() != key)
+      return document;
+    const auto jsonBytes = namedViewJsonBytes(document->value);
+    const auto overhead =
+        sizeof(NamedView) + 8 * sizeof(void *) + document->key.capacity() + 1;
+    if (jsonBytes <= MaxNamedViewCacheBytes &&
+        overhead <= MaxNamedViewCacheBytes - jsonBytes &&
+        document->lines.capacity() <=
+            (MaxNamedViewCacheBytes - jsonBytes - overhead) /
+                sizeof(std::size_t)) {
+      document->bytes = jsonBytes + overhead +
+                        document->lines.capacity() * sizeof(std::size_t);
+      while (!namedViews_.empty() &&
+             (namedViews_.size() >= MaxNamedViews ||
+              document->bytes > MaxNamedViewCacheBytes - namedViewBytes_)) {
+        namedViewBytes_ -= namedViews_.back()->bytes;
+        namedViews_.pop_back();
+      }
+      namedViews_.push_front(document);
+      namedViewBytes_ += document->bytes;
+    }
   }
+  return document;
+}
+
+std::optional<Json> Engine::namedViewPage(std::uint64_t address,
+                                          const std::string &representation,
+                                          std::size_t offset,
+                                          std::size_t limit) {
+  const auto document = namedView(address, representation);
+  if (!document)
+    return std::nullopt;
+  const auto &namedView_ = document->value;
+  const auto &namedViewLines_ = document->lines;
   const auto &text = namedView_["text"].get_ref<const std::string &>();
   const std::size_t total = text.empty() ? 0 : namedViewLines_.size();
   const auto start = std::min(offset, total);
@@ -707,10 +809,14 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
                              : text.size();
   const auto endByte =
       end < namedViewLines_.size() ? namedViewLines_[end] : text.size();
-  Json page = namedView_;
+  Json page = Json::object();
+  for (const auto &[field, value] : namedView_.items())
+    if (field != "text" && field != "rows" &&
+        !((field == "source_names" || field == "code_names") && value.is_array()))
+      page[field] = value;
   page["text"] = text.substr(startByte, endByte - startByte);
   Json rows = Json::array();
-  for (const auto &row : namedView_.value("rows", Json::array())) {
+  for (const auto &row : namedView_.at("rows")) {
     const auto line = row.value("line", std::size_t{0});
     if (line >= start && line < end)
       rows.push_back(row);
@@ -1648,11 +1754,11 @@ Json Engine::execute(const std::string &operation, const Json &p) {
     auto &store = history();
     const auto before = codeEditRow(address);
     const auto after = CodeEdits::change(before, p);
-    prepareFunction(address);
-    if (!namedViewPage(address, stringField(p, "representation"), 0, 1))
+    const auto document = namedView(address, stringField(p, "representation"));
+    if (!document)
       throw Error("unsupported",
                   "The engine does not expose editable source targets");
-    CodeEdits::validateChange(namedView_, p);
+    CodeEdits::validateChange(document->value, p);
     if (before == after)
       return {{"saved", false}, {"address", hexAddress(address)}};
     const auto checkpoint = store;
@@ -1938,16 +2044,64 @@ Json Engine::execute(const std::string &operation, const Json &p) {
     if (at.is_null())
       throw Error("invalid_request", "No image byte at " + hexAddress(address));
     const auto kind = at.at("kind").get<std::string>();
-    if (kind == "instruction")
+    if (kind == "instruction" && action == "code")
+      return {{"address", at.at("start")},
+              {"kind", CodeItemKind},
+              {"size", at.at("size")},
+              {"saved", false}};
+    if (kind == "instruction" &&
+        at.value("user", std::string()) != CodeItemKind)
       throw Error("invalid_request",
                   "Code belongs to its function; delete the function to "
                   "define data in its bytes");
     // The item the cursor is in is the one the action changes.
-    const auto start = parseAddress(at.at("start").get<std::string>());
+    const auto start = action == "code"
+                           ? address
+                           : parseAddress(at.at("start").get<std::string>());
     const auto user = at.value("user", std::string());
     Json row;
+    std::vector<std::pair<std::uint64_t, Json>> code;
     std::uint64_t size = 0;
-    if (action == "data") {
+    if (action == "code") {
+      using DisasmEx =
+          const char *(*)(neverd_session_t, neverd_va_t, int, unsigned);
+      const auto decode = engineSymbol<DisasmEx>("neverd_disasm_json_ex");
+      if (!decode)
+        throw Error("unsupported", "This engine cannot define native code");
+      // Decode one basic block without following its successors or inventing
+      // a function. Known instructions are a boundary, and unmodelled control
+      // flow never invites guessing what bytes follow it.
+      constexpr std::size_t MaxInstructions = 256;
+      auto cursor = start;
+      for (;;) {
+        if (!code.empty()) {
+          const auto next = listing().item(cursor);
+          if (next.is_null() || next.at("kind") == "instruction")
+            break;
+        }
+        if (code.size() == MaxInstructions)
+          throw Error("resource_limit",
+                      "Code definition exceeds 256 instructions");
+        const auto decoded =
+            backendJson(decode(session_, cursor, 1, NEVERD_DISASM_FLOW), true);
+        if (!decoded.is_array() || decoded.size() != 1 ||
+            parseAddress(decoded[0].at("addr").get<std::string>()) != cursor)
+          throw Error("invalid_request",
+                      "Invalid or truncated instruction at " +
+                          hexAddress(cursor));
+        const auto &instruction = decoded[0];
+        const auto bytes = instruction.at("size").get<std::uint64_t>();
+        if (!bytes || bytes > 16 ||
+            cursor > std::numeric_limits<std::uint64_t>::max() - bytes)
+          throw Error("invalid_request", "Invalid instruction size");
+        code.push_back({cursor, {{"kind", CodeItemKind}, {"size", bytes}}});
+        size += bytes;
+        cursor += bytes;
+        const auto flow = instruction.value("flow", std::string());
+        if (!flow.empty() && flow != "call" && flow != "icall")
+          break;
+      }
+    } else if (action == "data") {
       // The data carousel: byte, word, dword, qword, then byte again.
       static constexpr std::array<std::uint64_t, 4> Carousel = {1, 2, 4, 8};
       size = sizeField(p, "size", 0, 8);
@@ -1992,14 +2146,23 @@ Json Engine::execute(const std::string &operation, const Json &p) {
       row = {{"kind", UndefinedItemKind}, {"size", size}};
     } else {
       throw Error("invalid_request",
-                  "action is \"data\", \"string\" or \"undefine\"");
+                  "action is \"code\", \"data\", \"string\" or \"undefine\"");
     }
     auto &store = history();
     auto state = store.committedState();
     // The engine checks the item against the image and the other items;
     // undefined bytes it covers stay undefined around it.
-    if (items.set(session_, start, row.dump().c_str()) != 0)
-      throw Error("invalid_request", error());
+    if (code.empty())
+      code.push_back({start, std::move(row)});
+    try {
+      for (const auto &[entry, definition] : code)
+        if (items.set(session_, entry, definition.dump().c_str()) != 0)
+          throw Error("invalid_request", error());
+    } catch (...) {
+      (void)items.load(session_);
+      namesChanged();
+      throw;
+    }
     // One history step holds every row the edit changed, the item's first.
     std::map<std::uint64_t, std::pair<Json, Json>> changed;
     for (const auto &item : state.at("items"))
@@ -2032,7 +2195,7 @@ Json Engine::execute(const std::string &operation, const Json &p) {
     ++revision_;
     return {{"address", hexAddress(start)},
             {"kind", after.at("kind")},
-            {"size", after.at("size")},
+            {"size", action == "code" ? Json(size) : after.at("size")},
             {"saved", true}};
   }
   if (operation == "operand_format") {
@@ -2144,7 +2307,6 @@ Json Engine::execute(const std::string &operation, const Json &p) {
     const auto limit = sizeField(p, "limit", 512, 2048);
     if (!limit)
       throw Error("invalid_request", "limit must be at least 1");
-    prepareFunction(address);
     std::string mappingStatus = "unsupported_representation";
     // Why the engine offers no page, such as Rust asked of a C program.
     std::string reason;
@@ -2152,6 +2314,7 @@ Json Engine::execute(const std::string &operation, const Json &p) {
         representation == "c" || representation == "llvmc" || spelled) {
       if (auto named = namedViewPage(address, representation, offset, limit))
         return *named;
+      prepareFunction(address);
       if (const auto view = irViewFunction()) {
         auto result = backendJson(
             view(session_, address, representation.c_str(), offset, limit),
@@ -2180,6 +2343,7 @@ Json Engine::execute(const std::string &operation, const Json &p) {
                                  : error().empty()
                                      ? "This representation is unavailable"
                                      : error());
+    prepareFunction(address);
     const auto key = hexAddress(address) + ":" + representation;
     if (textKey_ != key) {
       textKey_.clear();

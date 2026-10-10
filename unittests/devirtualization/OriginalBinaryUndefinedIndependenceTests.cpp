@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/BinaryInterpreterSpecialization.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/lift/X86Regs.h"
 
 #include <algorithm>
@@ -2094,6 +2095,137 @@ TEST(OriginalBinaryUndefinedIndependence,
   EXPECT_EQ(R.Proof.Paths, 2u);
   Limits.MaxSolverQueries = R.Proof.SolverQueries - 1;
   expectRefusal(P, Status::BudgetExceeded, Limits);
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     OpaquePreservationIsExplicitAndComplete) {
+  Program P(
+      {0x83, 0xf9, 0, 0x74, 6, 0xb8, 7, 0, 0, 0, 0xc3, 0xb8, 8, 0, 0, 0, 0xc3});
+  const auto Baseline = P.check();
+  ASSERT_TRUE(Baseline.proved()) << Baseline.Proof.Diagnostic;
+  EXPECT_FALSE(Baseline.Certificate->LowIR.NativePreservation);
+  P.Contract.NativePreservedState.emplace();
+  const auto R = P.check();
+  ASSERT_TRUE(R.proved()) << R.Proof.Diagnostic;
+  ASSERT_TRUE(R.Certificate->LowIR.NativePreservation);
+  const auto &F = *R.Certificate->LowIR.NativePreservation;
+  EXPECT_EQ(F.Quantifier,
+            LowIRNativePreservationQuantifier::AllUndefinedChoices);
+  EXPECT_EQ(F.StateSet, LowPreservedStateSet::LegacyIntegerOpaqueV1);
+  EXPECT_EQ(F.Instructions, R.Proof.Instructions);
+  EXPECT_EQ(F.ExecutionDigest.size(), 64U);
+  EXPECT_EQ(R.Proof.Operations, Baseline.Proof.Operations);
+  EXPECT_EQ(R.Proof.SolverQueries, Baseline.Proof.SolverQueries);
+  EXPECT_EQ(R.Proof.Observations, Baseline.Proof.Observations);
+  EXPECT_EQ(R.Proof.Paths, 2U);
+  EXPECT_NE(R.Certificate->InputDigest, Baseline.Certificate->InputDigest);
+  for (const auto &I : R.Certificate->Instructions)
+    EXPECT_TRUE(matchesLowPreservedState(I.PreservedState, I.Origin,
+                                         I.NativeBytes, I.Ops));
+  LowIRIndependenceLimits Short;
+  Short.MaxOperations = R.Proof.Operations - 1;
+  expectRefusal(P, Status::BudgetExceeded, Short);
+  P.Contract.NativePreservedState->StateSet = LowPreservedStateSet::None;
+  expectRefusal(P, Status::Invalid);
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     OpaquePreservationChargesEveryNativeMetadataSpan) {
+  Program P({});
+  for (unsigned I = 0; I != 16; ++I)
+    P.append({0x90});
+  P.append({0xc3});
+  P.Contract.NativePreservedState.emplace();
+
+  // Derive the metadata cost independently from freshly decoded spans. This
+  // straight-line program stays below that ceiling during symbolic execution.
+  Decoder D;
+  ASSERT_TRUE(D.init(Arch::X64));
+  const auto &Bytes = P.Image.Segments.front().Data;
+  uint64_t Operations = 0, Instructions = 0;
+  for (size_t Offset = 0; Offset != Bytes.size();) {
+    DecodedInsn I{};
+    ASSERT_GT(D.decodeOneForLift(Bytes.data() + Offset, Bytes.size() - Offset,
+                                 Entry + Offset, I),
+              0);
+    std::vector<LowOp> Ops;
+    D.liftToLow(I, Ops);
+    Operations += Ops.size();
+    ++Instructions;
+    Offset += I.Size;
+  }
+  ASSERT_EQ(Instructions, 17U);
+  LowIRIndependenceLimits Exact;
+  Exact.MaxOperations = 2 * Operations + Instructions;
+  const auto Good = P.check(Exact);
+  ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+  EXPECT_LT(Good.Proof.Operations, Exact.MaxOperations);
+  --Exact.MaxOperations;
+  const auto Short = P.check(Exact);
+  EXPECT_EQ(Short.Proof.Status, Status::BudgetExceeded);
+  EXPECT_EQ(Short.Proof.Diagnostic,
+            "native preservation metadata budget exhausted");
+  EXPECT_FALSE(Short.Certificate);
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     OpaquePreservationTraversesInternalCallees) {
+  for (bool Indirect : {false, true}) {
+    auto P = skippedContinuation(Indirect);
+    P.Contract.NativePreservedState.emplace();
+    const auto R = P.check();
+    ASSERT_TRUE(R.proved()) << R.Proof.Diagnostic;
+    ASSERT_TRUE(R.Certificate->LowIR.NativePreservation);
+    EXPECT_EQ(R.Certificate->LowIR.NativePreservation->Instructions,
+              R.Proof.Instructions);
+  }
+  // CALL helper; RET; helper: PXOR XMM6,XMM6; RET.
+  Program Bad({0xe8, 1, 0, 0, 0, 0xc3, 0x66, 0x0f, 0xef, 0xf6, 0xc3});
+  Bad.Contract.NativePreservedState.emplace();
+  Bad.Contract.RetainUnauditedNativeBoundaries = true;
+  expectRefusal(Bad, Status::Unsupported);
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     OpaquePreservationKeepsProfileAuthoritySeparate) {
+  Program P({0xf3, 0x48, 0x0f, 0x1e, 0xc8, 0xc3});
+  P.flagsProfile();
+  P.Contract.NativePreservedState.emplace();
+  const auto R = P.check();
+  ASSERT_TRUE(R.proved()) << R.Proof.Diagnostic;
+  const auto &Read = R.Certificate->Instructions.front();
+  EXPECT_EQ(Read.PreservedState.Audit,
+            LowPreservedStateAudit::CetDisabledReadShadowStackV1);
+  EXPECT_EQ(Read.UndefinedEffects.Coverage, LowUndefinedCoverage::Missing);
+  ASSERT_TRUE(R.Certificate->LowIR.NativePreservation);
+  EXPECT_EQ(R.Certificate->LowIR.NativePreservation->Instructions, 2U);
+  P.Options.X64CetDisabled = false;
+  expectRefusal(P, Status::Unsupported);
+  Program Trap({0xf3, 0x48, 0x0f, 0xae, 0xe8, 0xc3});
+  Trap.flagsProfile();
+  Trap.Contract.NativePreservedState.emplace();
+  expectRefusal(Trap, Status::ContractViolation);
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     OpaquePreservationRequiresTheCompleteIndirectDestinationSet) {
+  // AND EDI,1; ADD EDI,0x1010; JMP RDI; padding; RET; RET.
+  Program P({0x83, 0xe7, 1, 0x81, 0xc7, 0x10, 0x10, 0, 0, 0xff, 0xe7, 0x90,
+             0x90, 0x90, 0x90, 0x90, 0xc3, 0xc3});
+  P.Contract.NativePreservedState.emplace();
+  P.Contract.RetainUnauditedNativeBoundaries = true;
+  LowIRIndependenceLimits Limits;
+  Limits.MaxIndirectTargets = 2;
+  const auto Good = P.check(Limits);
+  ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+  ASSERT_TRUE(Good.Certificate->LowIR.NativePreservation);
+  EXPECT_EQ(Good.Proof.Paths, 2U);
+  Limits.MaxIndirectTargets = 1;
+  expectRefusal(P, Status::BudgetExceeded, Limits);
+  P.Image.Segments.front().Data.pop_back();
+  P.append({0x66, 0x0f, 0xef, 0xf6, 0xc3}); // second: PXOR XMM6,XMM6; RET.
+  Limits.MaxIndirectTargets = 2;
+  expectRefusal(P, Status::Unsupported, Limits);
 }
 
 } // namespace

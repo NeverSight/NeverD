@@ -17,6 +17,22 @@ def native_elf(arm64, base):
     return header + segment + code, entry
 
 
+def paged_view(client, entry, stage):
+    text, rows, offset = "", [], 0
+    while True:
+        reply = client.call("decompile", {"address": hex(entry), "representation": stage,
+                                           "offset": offset, "limit": 2})
+        assert reply["status"] == "ok", reply
+        page = reply["payload"]
+        assert page["revision"] == reply["revision"] and page["project_id"] == reply["project_id"]
+        text += page["text"]
+        rows.extend(page["rows"])
+        if page["complete"]:
+            return text, rows
+        assert page["next_offset"] > offset
+        offset = page["next_offset"]
+
+
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-native-map-") as directory:
         for arm64 in (False, True):
@@ -46,19 +62,20 @@ def run(executable):
                     assert mapped, (stage, result)
                     assert all(set(row["addresses"]) <= instruction_addresses for row in mapped), (decoded, mapped)
                     assert all(address == address.lower() for row in mapped for address in row["addresses"])
-                    text, rows, offset = "", [], 0
-                    while True:
-                        reply = client.call("decompile", {"address": hex(entry), "representation": stage, "offset": offset, "limit": 2})
-                        assert reply["status"] == "ok", reply
-                        page = reply["payload"]
-                        assert page["revision"] == reply["revision"] and page["project_id"] == reply["project_id"]
-                        text += page["text"]
-                        rows.extend(page["rows"])
-                        if page["complete"]:
-                            break
-                        assert page["next_offset"] > offset
-                        offset = page["next_offset"]
-                    assert text == result["text"] and rows == result["rows"]
+                    text, rows = paged_view(client, entry, stage)
+                    assert text == result["text"] and rows == result["rows"], (stage, result["text"], text)
+                # Low above was the first request for an undiscovered entry.
+                # Give Med the same cold context, starting with a small page:
+                # preparing either IR may discover its workbench display name.
+                with Client(executable) as cold:
+                    fresh = cold.call("open", {"path": str(binary), "read_only": True})
+                    assert fresh["status"] == "ok", fresh
+                    assert fresh["payload"]["function_count"] == 0, fresh
+                    text, rows = paged_view(cold, entry, "med")
+                    reply = cold.call("decompile", {"address": hex(entry), "representation": "med", "limit": 2048})
+                    assert reply["status"] == "ok", reply
+                    full = reply["payload"]
+                    assert text == full["text"] and rows == full["rows"], ("cold med", full["text"], text)
                 # Function views prepare only their requested entry. The
                 # explicit whole-image pipeline publishes complete analysis.
                 analyzed = client.call("analyze")

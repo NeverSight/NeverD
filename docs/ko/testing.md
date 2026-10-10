@@ -149,6 +149,8 @@ v4 테스트는 접두 구조의 크기와 패딩, 잘린 구조와 알 수 없�
 
 `NeverDInterpreterLLVMRefinementTests`는 새로운 조합 증명, 정확한 텍스트/함수 바인딩, 독립 예산, 전체 관찰과 더 넓은 소스 영역을 검사합니다. 바이트, 잔여 코드, 결과, 플래그, 상태 코드, 프레임 쓰기, poison 및 잘못되거나 오래된 루프 계획은 조합 기록을 거부해야 합니다. 임의 워드 카운트다운에는 두 귀납 전제가 필요하며, 독립 C 예제의 O1/O2 컴파일은 실제 직렬화 LLVM 입력을 검증합니다. 상태 모델 회귀는 숨겨진 진입 역방향 간선을 거부하고 부수적인 출처 정보를 복사하지 않으면서 루트 예산을 검사합니다.
 
+`InterpreterLLVMRefinement.Preservation*`는 부분 및 겹침 범위, 잘못된 요청, 독립 계산한 준비 비용, 양쪽의 동일한 최종 손상, 루프를 통한 진입값 저장과 복원, 새로운 불투명 상태 증거 및 후반 거부를 검사합니다. API 사용자인 `NeverDPEFixedImageTests`도 다시 빌드합니다. 요청 생략 시 결과, 카운터 및 다이제스트는 별도로 기준선과 비교합니다.
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1610,3 +1612,7 @@ MainActor 픽스처는 고정 메타데이터와 정적 테이블의 전체 흐�
 ## 제한된 디렉터리 일괄 속성
 
 bulk-attributes는 완전한 그룹, 이름/종류 집합, 미사용 바이트 보호, low32 FD, bitmap 워드, 네이티브 오류, dup 공유 진행, 독립 open, EOF와 0 rewind를 검사한다. 리터럴/미지원 모드는 가상 전용이다. 모델은 전체 stat와 무효화, NFD/255바이트 이름, 입출력 별칭, 전송/예산 실패, 이동/SWAP/삭제/재사용, 명시 권한도 검사한다. 필수 목록은 플랫폼별63개로 ARM64는189개, Intel은126개다. 로컬에서는 일치하는 ARM64 HVF만 검증했다. native5s, guest/Python5,000,000us/quantum1024, public10s는 그대로다.
+
+## 불투명 상태 검사
+
+`X86PreservedState.*`는 새 스칼라 형식, 정확한 별칭, 엄격한 초기화, 오래된 바이트/연산 구간/버전 거부를 검사한다. `OriginalBinaryUndefinedIndependence.*Opaque*`는 분기, 내부 호출, 완전한 간접 대상, 정확한 프로필, 독립 디코딩으로 계산한 메타데이터 예산의 정확/1 부족 경계를 다룬다. `BinaryLowIR*.*Opaque*`는 증인과 임의 미정의 선택, 여러 귀납 소스, 후반 순위/예산 실패, 실제 진입 스칼라 보존, LowIR이 같은 후속 소스 바이트 변경의 실행 해시 변경을 검사한다. `NativeUndefinedIndependence.*Opaque*`와 `NativeStackControl.*FreshMemoryCall*`는 그룹 내부, 절단점 전 경계, 오래된 기록, 스택 변경 전 대상 평가를 검사한다. `NeverDInterpreterLLVMRefinementTests`를 포함한 영향받는 메타데이터 사용자를 재빌드하고, sanitizer 및 컴파일한 결함 주입 결과는 일반 테스트와 별도로 보고한다.

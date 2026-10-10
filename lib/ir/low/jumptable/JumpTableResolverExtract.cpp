@@ -33,6 +33,21 @@
 
 namespace neverd {
 
+std::optional<JumpTableStorageRange>
+CFGBuilder::implicitJumpTableStorageRange(const JumpTableInfo &Info,
+                                          size_t TargetCount) {
+  if (!Info.HasBaseAddr || Info.EntrySize == 0)
+    return std::nullopt;
+  uint64_t SlotCount = Info.MaxEntries;
+  if (SlotCount == 0)
+    SlotCount = !Info.EntryIndices.empty()
+                    ? static_cast<uint64_t>(Info.EntryIndices.back()) + 1
+                    : TargetCount;
+  return JumpTableStorageRange{
+      Info.BaseAddr, Info.EntrySize,
+      Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize, SlotCount};
+}
+
 std::optional<bool> CFGBuilder::resolvedJumpTableOwnsStorageAddress(
     va_t Address, const std::set<va_t> *ReachableInsnFilter,
     size_t *EvidenceBudget) const {
@@ -80,19 +95,13 @@ std::optional<bool> CFGBuilder::resolvedJumpTableOwnsStorageAddress(
       continue;
     }
 
-    if (!Info.HasBaseAddr || Info.EntrySize == 0)
+    const auto Range = implicitJumpTableStorageRange(
+        Info, Rec->second.JumpTableTargets.size());
+    if (!Range)
       continue;
-    uint64_t SlotCount = Info.MaxEntries;
-    if (SlotCount == 0)
-      SlotCount = !Info.EntryIndices.empty()
-                      ? static_cast<uint64_t>(Info.EntryIndices.back()) + 1
-                      : Rec->second.JumpTableTargets.size();
-    JumpTableStorageRange Range{
-        Info.BaseAddr, Info.EntrySize,
-        Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize, SlotCount};
     if (!consumeEvidence())
       return std::nullopt;
-    if (Range.ownsStorageAddress(Address))
+    if (Range->ownsStorageAddress(Address))
       return true;
   }
   return false;

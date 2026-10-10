@@ -152,6 +152,8 @@ I test del conto alla rovescia protetto coprono il nuovo tentativo dopo il rifiu
 
 `NeverDInterpreterLLVMRefinementTests` controlla nuove prove composte, legame esatto testo/funzione, budget indipendenti, osservazioni complete e domini sorgente più ampi. Byte, residui, risultati, flag, stato, scritture, poison e piani errati/obsoleti devono impedire l’attestazione composta. I contatori di parola arbitraria richiedono entrambe le premesse induttive; esempi C indipendenti compilati O1/O2 verificano LLVM serializzato effettivo. Le regressioni rifiutano ritorni nascosti all’ingresso e limitano le radici senza copiare provenienza accessoria.
 
+`InterpreterLLVMRefinement.Preservation*` copre intervalli parziali o sovrapposti, richieste errate, costo di preparazione calcolato indipendentemente, alterazioni finali identiche, salvataggio/ripristino dei valori iniziali attraverso i cicli, nuove prove opache e rifiuti tardivi. Ricostruire anche il consumatore API `NeverDPEFixedImageTests`. Confrontare separatamente risultati, contatori e digest senza richiesta con la base.
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1716,3 +1718,7 @@ La fixture MainActor verifica il flusso completo di metadati fissi e tabella sta
 ## Attributi di directory in gruppi limitati
 
 bulk-attributes verifica gruppi interi, insieme nomi/tipi, guardie dei byte inutilizzati, low32 FD, parole bitmap, errori nativi, dup, open indipendenti, EOF e rewind zero. Modalità letterale/sconosciuta solo virtuali. I modelli coprono stat completo, invalidazione, nomi NFD/255 byte, alias input/output, errori di trasporto/budget, spostamenti/SWAP/rimozione/riuso e diritti espliciti. Inventario richiesto:63 casi per piattaforma,189 ARM64 e126 Intel. Solo ARM64 HVF corrispondente è verificato localmente. native5s, guest/Python5,000,000us/quantum1024 e public10s invariati.
+
+## Verifiche dello stato opaco
+
+`X86PreservedState.*` verifica forme scalari nuove, alias esatti, azzeramento rigoroso e rifiuto di byte/sequenze/versioni obsolete. `OriginalBinaryUndefinedIndependence.*Opaque*` copre rami, chiamate interne, destinazioni indirette complete, profili esatti e budget di metadati esatti/meno uno calcolati con decodifica indipendente. `BinaryLowIR*.*Opaque*` copre testimoni rispetto a scelte indefinite arbitrarie, più sorgenti induttive, rifiuti tardivi di rango/budget, conservazione scalare dall’ingresso reale e byte di sorgenti successive con LowIR identico ma digest diverso. `NativeUndefinedIndependence.*Opaque*` e `NativeStackControl.*FreshMemoryCall*` controllano interni dei gruppi, limiti prima dei tagli, ricevute obsolete e destinazione valutata prima della modifica dello stack. Ricompilare i consumatori interessati, incluso `NeverDInterpreterLLVMRefinementTests`; riportare separatamente sanitizer, guasti compilati e test ordinari.

@@ -7,6 +7,7 @@
 #include "../../lib/analysis/arch/x86_64/NativeStackControl.h"
 #include "gtest/gtest.h"
 
+#include "neverd/decode/Decoder.h"
 #include "neverd/symbolic/SymExec.h"
 
 #include <limits>
@@ -385,6 +386,72 @@ TEST(NativeStackControl, RejectsDirectPrefixAndInvalidCleanupBoundaries) {
       Insn, Stack, Scratch, NativeReturnExpansion::OuterFunctionBoundary);
   ASSERT_FALSE(static_cast<bool>(Outer));
   EXPECT_FALSE(llvm::toString(Outer.takeError()).empty());
+}
+
+TEST(NativeStackControl, FreshMemoryCallBindsPreservationAndTargetBeforePush) {
+  Decoder D;
+  ASSERT_TRUE(D.init(Arch::X64));
+  SpecializationInstruction I;
+  I.NativeBytes = {0xff, 0x54, 0x24, 0xf8}; // call qword [rsp-8]
+  DecodedInsn Decoded{};
+  ASSERT_EQ(D.decodeOneForLift(I.NativeBytes.data(), I.NativeBytes.size(),
+                               0x100, Decoded),
+            4);
+  ASSERT_TRUE(D.liftX64MemoryCallToLow(Decoded, I.Ops, &I.UndefinedEffects,
+                                       &I.PreservedState));
+  I.Origin.Address = 0x100;
+  I.Origin.Size = 4;
+  I.Origin.OpCount = I.Ops.size();
+  I.Origin.Control = LowInstructionControl::Call;
+  I.Origin.ControlFlags =
+      LowInstructionControlFlag::Call | LowInstructionControlFlag::Indirect;
+  I.IsNativeCall = true;
+  I.NativeStackControl = SpecializationNativeStackControl::Call;
+  I.Fallthrough.Address = 0x104;
+  const auto Original = I.PreservedState;
+  auto R = expand(I);
+  ASSERT_TRUE(static_cast<bool>(R)) << llvm::toString(R.takeError());
+  EXPECT_EQ(R->Receipt.Version, 2U);
+  EXPECT_EQ(R->Receipt.PreservedStateDigest, lowPreservedStateDigest(Original));
+  EXPECT_EQ(R->Receipt.OriginalOperationDigest, Original.OperationDigest);
+  EXPECT_EQ(R->Receipt.ExpandedOperationDigest,
+            lowUndefinedOperationDigest(R->Ops));
+  EXPECT_EQ(I.PreservedState, Original);
+  EXPECT_FALSE(
+      matchesLowPreservedState(Original, R->Boundary, I.NativeBytes, R->Ops));
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymExec Exec(Ctx, State);
+  State.write(SymSpace::Register, Stack.Offset, Ctx.mkConst(64, 0x1000));
+  State.store(Ctx.mkConst(64, 0xff8), Ctx.mkConst(64, 0x400));
+  for (const auto &Op : R->Ops)
+    Exec.step(Op);
+  EXPECT_EQ(word(Ctx, Exec.branchTarget()), 0x400U);
+  EXPECT_EQ(word(Ctx, State.load(Ctx.mkConst(64, 0xff8), 8)), 0x104U);
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    auto Bad = I;
+    switch (Mutation) {
+    case 0:
+      ++Bad.PreservedState.SemanticsVersion;
+      break;
+    case 1:
+      Bad.NativeBytes.back() ^= 1;
+      break;
+    case 2:
+      ++Bad.Ops.front().Seq;
+      Bad.UndefinedEffects.OperationDigest =
+          lowUndefinedOperationDigest(Bad.Ops);
+      break;
+    case 3:
+      Bad.PreservedState.Audit = LowPreservedStateAudit::Missing;
+      break;
+    case 4:
+      Bad.ProfileProjection =
+          InterpreterProfileProjection::CetDisabledReadShadowStackV1;
+      break;
+    }
+    reject(Bad);
+  }
 }
 
 } // namespace

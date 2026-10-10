@@ -150,6 +150,8 @@ v4 テストはプレフィックスのサイズとパディング、切り詰�
 
 `NeverDInterpreterLLVMRefinementTests` は新規の合成証明、正確なテキスト／関数の結合、独立予算、全観測項目、広いソース領域を検証します。バイト、残余、結果、フラグ、ステータス、フレーム書込み、poison、誤った／古いループ案の変更は合成証明を拒否させます。任意ワード幅のカウントダウンは両帰納前提を要求し、独立 C 例の O1/O2 コンパイルは実際の LLVM テキストを検証します。状態モデルの回帰は隠れた入口後退辺を拒否し、付随する出自情報をコピーせずルートを予算計上します。
 
+`InterpreterLLVMRefinement.Preservation*` は部分範囲と重複、不正要求、独立計算した準備コスト、両側の同一破壊、ループをまたぐ入口値の保存と復元、新しい不透明状態の証拠、後段の拒否を検証します。API 利用側の `NeverDPEFixedImageTests` も再ビルドします。要求省略時の結果・カウンタ・ダイジェストは別途ベースラインと比較します。
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1620,3 +1622,7 @@ MainActor のフィクスチャは固定メタデータと静的テーブルの�
 ## 有界ディレクトリ一括属性
 
 bulk-attributes は完全なグループ、名前/型の集合、未使用バイトの保護、low32 FD、bitmap ワード、ネイティブエラー、dup、独立 open、EOF、ゼロ rewind を確認する。リテラル/未対応モードは仮想専用。モデルは完全な stat と無効化、NFD/255バイト名、入出力の別名、転送/予算エラー、移動/SWAP/削除/再使用、明示権限も確認する。必須在庫はプラットフォーム当たり63項目、ARM64 は189件、Intel は126件。本機で検証した実行は一致する ARM64 HVF のみ。native5s、guest/Python5,000,000us/quantum1024、public10s は不変。
+
+## 不透明状態の検査
+
+`X86PreservedState.*` は新しいスカラー形式、正確な別名、厳密リセット、古いバイト/操作列/バージョンの拒否を検査する。`OriginalBinaryUndefinedIndependence.*Opaque*` は分岐、内部呼び出し、完全な間接宛先、正確なプロファイル、独立デコードから算出したメタデータ予算の一致/1 不足を扱う。`BinaryLowIR*.*Opaque*` は証人と任意の未定義選択、複数の帰納ソース、後半の順位/予算失敗、真の入口スカラー保存、同一 LowIR の後続ソースバイト変更による実行ダイジェスト変更を検査する。`NativeUndefinedIndependence.*Opaque*` と `NativeStackControl.*FreshMemoryCall*` はグループ内部、切点前境界、古い記録、スタック変更前の宛先評価を扱う。`NeverDInterpreterLLVMRefinementTests` を含むメタデータ利用側を再ビルドし、sanitizer とコンパイル済み故障注入の結果は通常テストと分けて報告する。

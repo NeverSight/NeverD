@@ -153,6 +153,8 @@ Les tests de décompte gardé couvrent la reprise après rejet du modèle du cor
 
 `NeverDInterpreterLLVMRefinementTests` vérifie la composition nouvelle, la liaison texte/fonction exacte, les budgets indépendants, toutes les observations et le domaine source élargi. Des octets, résidus, résultats, drapeaux, statuts, écritures, poison ou plans faux/périmés doivent empêcher l’attestation composée. Le décompte sur un mot arbitraire exige les deux prémisses inductives ; des exemples C indépendants compilés en O1/O2 vérifient le LLVM sérialisé réel. Les régressions refusent les retours d’entrée cachés et bornent les racines sans copier la provenance accessoire.
 
+`InterpreterLLVMRefinement.Preservation*` couvre plages partielles ou superposées, requêtes invalides, coût de préparation calculé indépendamment, altérations finales identiques, sauvegarde/restauration des valeurs d’entrée à travers les boucles, preuves opaques nouvelles et refus tardifs. Reconstruire aussi le consommateur d’API `NeverDPEFixedImageTests`. Comparer séparément résultats, compteurs et résumés sans requête à la référence.
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1735,3 +1737,7 @@ La fixture MainActor vérifie le flux complet des métadonnées fixes et de la t
 ## Attributs de répertoire groupés bornés
 
 bulk-attributes vérifie groupes complets, ensemble noms/types, gardes des octets inutilisés, low32 FD, mots bitmap, erreurs natives, dup, open indépendants, EOF et rewind zéro. Modes littéral/inconnu uniquement virtuels. Les modèles couvrent aussi stat complet, invalidation, noms NFD/255 octets, alias entrée/sortie, erreurs de transport/budget, déplacements/SWAP/suppression/réutilisation et droits explicites. Inventaire requis :63 cas par plateforme,189 ARM64 et126 Intel. Seul ARM64 HVF correspondant est vérifié localement. native5s, guest/Python5,000,000us/quantum1024 et public10s sont inchangés.
+
+## Tests de l’état opaque
+
+`X86PreservedState.*` vérifie formes scalaires fraîches, alias exacts, réinitialisation stricte et refus des octets/séquences/versions périmés. `OriginalBinaryUndefinedIndependence.*Opaque*` couvre branches, appels internes, cibles indirectes exhaustives, profils exacts et budgets de métadonnées exacts/moins un calculés par décodage indépendant. `BinaryLowIR*.*Opaque*` couvre témoins et choix indéfinis arbitraires, sources inductives multiples, refus tardifs de rang/budget, préservation scalaire depuis l’entrée réelle et modification d’octets d’une source ultérieure à LowIR identique mais résumé différent. `NativeUndefinedIndependence.*Opaque*` et `NativeStackControl.*FreshMemoryCall*` vérifient intérieurs de groupes, frontières avant coupure, reçus périmés et cible évaluée avant mutation de pile. Reconstruire les consommateurs concernés, dont `NeverDInterpreterLLVMRefinementTests` ; rapporter séparément sanitizers, fautes compilées et tests ordinaires.

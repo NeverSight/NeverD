@@ -10,6 +10,7 @@
 #include "neverd/analysis/InterpreterEntryAlignment.h"
 #include "neverd/analysis/InterpreterMachineStateProfile.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/LowPreservedState.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
 #include "neverd/symbolic/SymState.h"
 
@@ -61,6 +62,8 @@ struct SpecializationInstruction {
   bool IsNativeCall = false;
   InterpreterProfileProjection ProfileProjection =
       InterpreterProfileProjection::None;
+  /// Optional separate architectural bank preservation evidence.
+  LowInstructionPreservedState PreservedState;
 };
 
 /// An exact non-faulting ordinary read whose bytes remain immutable throughout

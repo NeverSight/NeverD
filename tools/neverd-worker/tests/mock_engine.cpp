@@ -28,6 +28,9 @@ using neverd::worker::Json;
 using neverd::worker::parseAddress;
 namespace {
 constexpr std::uint64_t Base = 0xffff800012340000ULL;
+constexpr std::uint64_t CodeBase = Base + 0x2700;
+constexpr unsigned char CodeBytes[] = {0x90, 0x48, 0x83, 0xc4,
+                                       0x28, 0xc3, 0x0f};
 // A read-only data section of relocated pointers: slot i points to function
 // i + 1.
 constexpr std::uint64_t DataBase = Base + 0x3000, DataSlots = 8;
@@ -75,9 +78,27 @@ struct MockSession {
   /// The loader the next load reads with, and the one the image was read
   /// with, in neverd_session_set_load_options JSON; null reads the sidecar.
   Json requestedLoad, loadedWith = {{"loader", "auto"}};
+  /// Source-document tests distinguish page reuse from a fresh preparation,
+  /// and refuse graph/IR reads against a different restricted pipeline.
+  std::uint64_t preparedEntry = 0;
+  unsigned sourcePrepares = 0, sourcePages = 0;
+  bool wholeProgramPrepared = false;
+  bool sourceCacheVMFixture() const {
+    return path.ends_with("source-cache-evm.bin") ||
+           path.ends_with("source-cache-sbf.bin");
+  }
+  bool sourceCacheFixture() const {
+    return path.ends_with("source-cache.bin") ||
+           path.ends_with("source-cache-budget.bin") || sourceCacheVMFixture();
+  }
 };
 MockSession *session(neverd_session_t s) {
   return static_cast<MockSession *>(s);
+}
+std::uint64_t codeSize(neverd_session_t s) {
+  return session(s)->path.ends_with("make-code.bin")
+             ? CodeBase + sizeof(CodeBytes) - Base
+             : CodeSize;
 }
 const char *copy(std::string value) {
   char *result = static_cast<char *>(std::malloc(value.size() + 1));
@@ -143,7 +164,11 @@ int neverd_apply_signature_file(neverd_session_t s, const char *path) {
 int neverd_auto_apply_signatures(neverd_session_t s, const char *path) {
   return neverd_apply_signature_file(s, path);
 }
-int neverd_session_analyze(neverd_session_t) {
+int neverd_session_analyze(neverd_session_t s) {
+  if (session(s)->sourceCacheVMFixture()) {
+    session(s)->wholeProgramPrepared = true;
+    ++session(s)->sourcePrepares;
+  }
   std::puts("python-style print during analysis");
   std::fflush(stdout);
   std::this_thread::sleep_for(std::chrono::milliseconds(1800));
@@ -152,7 +177,11 @@ int neverd_session_analyze(neverd_session_t) {
 const char *neverd_session_file_path(neverd_session_t s) {
   return copy(session(s)->path);
 }
-const char *neverd_session_arch_name(neverd_session_t) {
+const char *neverd_session_arch_name(neverd_session_t s) {
+  if (session(s)->path.ends_with("source-cache-evm.bin"))
+    return copy("evm");
+  if (session(s)->path.ends_with("source-cache-sbf.bin"))
+    return copy("sbf");
   return copy("x86_64");
 }
 const char *neverd_session_format_name(neverd_session_t) { return copy("ELF"); }
@@ -298,7 +327,7 @@ int neverd_func_size(neverd_session_t s, int index) {
     return 16;
   const auto end = index + 1 < static_cast<int>(functions.size())
                        ? functions[index + 1]
-                       : Base + CodeSize;
+                       : Base + codeSize(s);
   return static_cast<int>(std::min<std::uint64_t>(16, end - functions[index]));
 }
 const char *neverd_func_name(neverd_session_t s, int index) {
@@ -356,6 +385,13 @@ const char *neverd_resolve_addr(neverd_session_t s, neverd_va_t address) {
 }
 int neverd_read_bytes(neverd_session_t, neverd_va_t address,
                       unsigned char *buffer, int size) {
+  if (size >= 0 && address >= CodeBase &&
+      address - CodeBase < sizeof(CodeBytes)) {
+    const auto available = static_cast<int>(
+        std::min<std::uint64_t>(size, CodeBase + sizeof(CodeBytes) - address));
+    std::copy_n(CodeBytes + (address - CodeBase), available, buffer);
+    return available;
+  }
   if (size >= 0 && address >= RodataBase && address - RodataBase < RodataSize) {
     // "\u4e2d\u6587" in UTF-8 at +0 and "Wide" in UTF-16LE at +8, zero filled.
     static constexpr unsigned char Rodata[RodataSize] = {
@@ -424,6 +460,28 @@ constexpr std::uint64_t JoinFunctionEntry = Base + 0x60;
 Json fixtureInstructions(neverd_va_t address, int count, bool flow,
                          bool stack) {
   Json result = Json::array();
+  if (address >= CodeBase && address < CodeBase + sizeof(CodeBytes)) {
+    for (int i = 0; i < count; ++i) {
+      const auto offset = address - CodeBase;
+      if (offset != 0 && offset != 1 && offset != 5)
+        break; // The last byte is a truncated x86 opcode.
+      const bool add = offset == 1, ret = offset == 5;
+      Json row{{"addr", hexAddress(address)},
+               {"size", add ? 4 : 1},
+               {"mnemonic", add   ? "add"
+                            : ret ? "ret"
+                                  : "nop"},
+               {"op_str", add ? "rsp, 0x28" : ""},
+               {"bytes", add   ? "4883c428"
+                         : ret ? "c3"
+                               : "90"}};
+      if (flow && ret)
+        row["flow"] = "ret";
+      result.push_back(std::move(row));
+      address += add ? 4 : 1;
+    }
+    return result;
+  }
   for (int i = 0; i < count && address >= Base && address + i - Base < 9600;
        ++i) {
     const auto at = address + i;
@@ -606,6 +664,10 @@ const char *neverd_unwind_frame_json(neverd_session_t, neverd_va_t address) {
   return copy("null");
 }
 const char *neverd_decompile(neverd_session_t s, neverd_va_t address) {
+  if (session(s)->sourceCacheFixture()) {
+    session(s)->preparedEntry = address;
+    ++session(s)->sourcePrepares;
+  }
   if (session(s)->path.ends_with("pseudocode-parallel.bin") &&
       (address == Base || address == Base + 16)) {
     std::printf("fixture parallel decompile %s started\n",
@@ -740,6 +802,61 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
                                 const char *representation, std::size_t offset,
                                 std::size_t limit) {
   session(s)->error.clear();
+  if (session(s)->sourceCacheFixture()) {
+    auto &state = *session(s);
+    if (!state.wholeProgramPrepared && state.preparedEntry != address) {
+      state.error = "fixture source read used another function's pipeline";
+      return nullptr;
+    }
+    ++state.sourcePages;
+    const bool large = state.path.ends_with("source-cache-budget.bin");
+    const std::size_t total = large ? 9000 : 4;
+    const auto first = std::min(offset, total);
+    const auto end = first + std::min(limit, total - first);
+    std::string text;
+    Json rows = Json::array();
+    const auto line = [&](std::size_t index) {
+      if (index == 0)
+        return "int function_" + std::to_string((address - Base) / 16) +
+               "(void) {\n";
+      if (index == 1)
+        return std::string("  int value = 1;\n");
+      if (index == 2)
+        return std::string("  return value;\n");
+      if (index == 3)
+        return std::string("}\n");
+      return "// " + std::string(512, 'x') + "\n";
+    };
+    std::size_t begin = 0;
+    for (std::size_t i = 0; i < first; ++i)
+      begin += line(i).size();
+    for (auto i = first; i < end; ++i) {
+      text += line(i);
+      rows.push_back(
+          {{"line", i},
+           {"object_id", "source:" + std::to_string(i)},
+           {"kind", "source"},
+           {"mapping_status", i == 2 ? "instruction_anchor" : "unmapped"},
+           {"addresses",
+            i == 2 ? Json::array({hexAddress(address + 2)}) : Json::array()}});
+    }
+    return copy(Json{{"schema_version", 1},
+                     {"address", hexAddress(address)},
+                     {"representation", representation},
+                     {"dialect", "c"},
+                     {"text", text},
+                     {"rows", rows},
+                     {"offset", first},
+                     {"byte_offset", begin},
+                     {"total_lines", total},
+                     {"complete", end == total},
+                     {"next_offset", end == total ? Json(nullptr) : Json(end)},
+                     {"library_regions", Json::array()},
+                     {"source_names", Json::array()},
+                     {"fixture_prepares", state.sourcePrepares},
+                     {"fixture_pages", state.sourcePages}}
+                    .dump());
+  }
   if (session(s)->path.ends_with("code-edits.bin") ||
       session(s)->path.ends_with("code-edits-cpp.bin") ||
       session(s)->path.ends_with("code-edits-mapped.bin") ||
@@ -1048,10 +1165,10 @@ const char *neverd_strings_json(neverd_session_t, int) {
                      {"length", 10}});
   return copy(items.dump());
 }
-const char *neverd_segments_json(neverd_session_t) {
+const char *neverd_segments_json(neverd_session_t s) {
   return copy(Json::array({{{"name", ".text"},
                             {"va", hexAddress(Base)},
-                            {"size", "0x2580"},
+                            {"size", hexAddress(codeSize(s))},
                             {"flags", "R-X"}},
                            {{"name", ".data.rel.ro"},
                             {"va", hexAddress(DataBase)},
@@ -1067,14 +1184,14 @@ const char *neverd_segments_json(neverd_session_t) {
                             {"flags", "RW-"}}})
                   .dump());
 }
-const char *neverd_sections_json(neverd_session_t) {
+const char *neverd_sections_json(neverd_session_t s) {
   // Spelled like the engine: numeric sizes and R/W/X flags.
   return copy(Json::array({{{"name", ".text"},
                             {"segment", ".text"},
                             {"va", hexAddress(Base)},
-                            {"size", 0x2580},
+                            {"size", codeSize(s)},
                             {"file_off", 0x1000},
-                            {"file_sz", 0x2580},
+                            {"file_sz", codeSize(s)},
                             {"alignment", 16},
                             {"flags", "R-X"}},
                            {{"name", ".data.rel.ro"},
@@ -1201,6 +1318,12 @@ const char *neverd_xrefs_from_json(neverd_session_t s, neverd_va_t address) {
 }
 const char *neverd_cfg_json(neverd_session_t s, neverd_va_t address) {
   session(s)->error.clear();
+  if (session(s)->sourceCacheFixture() &&
+      !session(s)->wholeProgramPrepared &&
+      session(s)->preparedEntry != address) {
+    session(s)->error = "fixture graph read used another function's pipeline";
+    return nullptr;
+  }
   Json nodes = Json::array(), edges = Json::array();
   const int count = address == Base + 2   ? 10000
                     : address == Base + 1 ? 501
@@ -1276,7 +1399,7 @@ int neverd_renames_load(neverd_session_t s) {
 // decides.
 int neverd_func_create(neverd_session_t s, neverd_va_t address) {
   auto &state = *session(s);
-  if (address < Base || address - Base >= CodeSize) {
+  if (address < Base || address - Base >= codeSize(s)) {
     state.error = hexAddress(address) + " is not in executable code";
     return -1;
   }
@@ -1331,6 +1454,16 @@ int neverd_item_set(neverd_session_t s, neverd_va_t address, const char *text) {
                          : kind == "dword" ? 4
                          : kind == "qword" ? 8
                                            : 0;
+    if (kind == "code") {
+      const auto instructions = fixtureInstructions(address, 1, false, false);
+      if (instructions.empty() ||
+          (row.contains("size") &&
+           row.at("size") != instructions.front().at("size"))) {
+        state.error = "invalid code definition";
+        return -1;
+      }
+      size = instructions.front().at("size").get<std::uint64_t>();
+    }
     if (!size && kind != "string" && kind != "undefined") {
       state.error = "unknown data item kind " + kind;
       return -1;

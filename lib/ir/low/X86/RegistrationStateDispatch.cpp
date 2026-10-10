@@ -112,6 +112,11 @@ void RegistrationStateSolver::dispatch(
       FrameValue::frame(0);
   Root.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].MayBeFrame =
       true;
+  if (Chain.RealignedFrame && CxxCatch) {
+    if (!charge(Root.Frame.cellCount() + 8))
+      return;
+    Root.Frame.enterCallback(Address);
+  }
   Root.Unknown = Unknown || Source.Unknown;
   Root.Parent = !Callback;
   Root.Callback = Callback;
@@ -176,7 +181,9 @@ void RegistrationStateSolver::dispatch(
     for (auto &[Offset, Value] : Root.Frame.Cells)
       if (Offset != *Chain.RegistrationOffset &&
           int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
-          Offset != *Chain.TryLevelOffset)
+          Offset != *Chain.TryLevelOffset &&
+          (!Chain.RealignedFrame ||
+           Offset != Chain.RealignedFrame->SavedParentFrameOffset))
         Value = registration_state::join(Value, {});
   }
   Root.Installed = true;

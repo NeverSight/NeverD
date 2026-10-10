@@ -7,6 +7,9 @@
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/SHA256.h"
+
 namespace neverd::analysis::x64 {
 /// The x64 lifter uses these exact shapes to read and restore the system
 /// portion of RFLAGS. The residual keeps both intrinsics. During analysis a
@@ -99,6 +102,30 @@ bool isCetDisabledProjection(const SpecializationInstruction &Insn) {
   }
   return Bytes[I] == 0x0f && Bytes[I + 1] == (Read ? 0x1e : 0xae) &&
          (Bytes[I + 2] & 0xf8) == (Read ? 0xc8 : 0xe8);
+}
+
+bool bindCetDisabledPreservedState(SpecializationInstruction &Insn) {
+  Insn.PreservedState = {};
+  if (Insn.ProfileProjection !=
+          InterpreterProfileProjection::CetDisabledReadShadowStackV1 ||
+      !isCetDisabledProjection(Insn))
+    return false;
+  auto &F = Insn.PreservedState;
+  F.Audit = LowPreservedStateAudit::CetDisabledReadShadowStackV1;
+  F.StateSet = LowPreservedStateSet::LegacyIntegerOpaqueV1;
+  F.SemanticsVersion = 1;
+  F.Architecture = Arch::X64;
+  F.Mode = Insn.Origin.Mode;
+  F.Address = Insn.Origin.Address;
+  F.Size = Insn.Origin.Size;
+  F.OpCount = Insn.Ops.size();
+  F.NativeBytesDigest = llvm::toHex(llvm::SHA256::hash(Insn.NativeBytes), true);
+  F.OperationDigest = lowUndefinedOperationDigest(Insn.Ops);
+  if (!matchesLowPreservedState(F, Insn.Origin, Insn.NativeBytes, Insn.Ops)) {
+    F = {};
+    return false;
+  }
+  return true;
 }
 
 } // namespace neverd::analysis::x64

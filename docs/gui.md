@@ -343,6 +343,7 @@ default (`#10` is decimal) and runs `g`, `x`, `n`, `c`, `d`, `f`, `graph`,
 | N | Rename the name under the cursor, or the address: a function at its entry, data, a label in code |
 | P | Create a function at the address (**Edit → Functions** also deletes the current one) |
 | D / A / U | Make data (again for the next size) / a string / bytes of the item |
+| C | Define native instructions from the selected byte through a basic block |
 | : or ; | Comment the address |
 | Alt+M / Ctrl+M | Mark a position / jump to a marked position |
 | Ctrl+P / Ctrl+L / Ctrl+S / Ctrl+E | Choose a function / name / segment / entry point |
@@ -557,13 +558,23 @@ as `sub_1234`. Names are kept in `<input>.neverd-renames.json`, which the
 command line reads and writes too (`neverd rename <input> --addr <address>
 --to <name>`, `--clear`).
 
+**Edit → Code** (C) defines native instructions from the selected byte through
+one basic block, ending at a branch, return, unmodelled control transfer or
+existing code. It uses the image's processor and instruction mode, validates
+every instruction and refuses truncated bytes or overlaps with other defined
+items. The bytes must be file-backed executable code. It does not create a
+function; P does that separately. One press is one undo/redo step, with the
+definitions kept in the item sidecar and `.nddb` database. Already defined code
+is unchanged. C belongs to the disassembly; source windows keep their keys.
+
 **Edit → Data** (D) makes the item under the cursor a value, and pressing it
 again cycles the value through byte, word, dword and qword; **Edit → String**
 (A) makes the string that starts there an item, read as the string scan reads
 one; **Edit → Undefine** (U) shows the item's bytes as bytes, whatever
 analysis reads in them. D or A inside undefined bytes takes just the bytes the
 new item needs and leaves the rest undefined, and each press is one step of
-undo history. Code belongs to its function and is never made data. The items
+undo history. Automatic code belongs to its function and cannot be made data
+without deleting that function; code defined with C can be replaced or undefined. The items
 are kept in `<input>.neverd-items.json`, which the command line reads and
 writes too (`neverd items <input> --data <address> --size 4`, `--string
 <address>`, `--undefine <address> --size <n>`, `--clear <address>`).

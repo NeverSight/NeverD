@@ -72,12 +72,14 @@ private:
   bool realignedMemoryIsDisjoint(const FrameValue &Address,
                                  uint16_t Width) const;
   bool realignedInstallationReady(const FrameState &Frame) const;
+  bool realignedCatchCanReturn(const Domain &State) const;
+  std::optional<int32_t> parentStackOffset(const Domain &State) const;
   bool initializeContracts();
   void initializeCookies();
   void collectOccurrences();
   void seedEntries();
   struct CallTransfer {
-    int32_t StackOffset;
+    FrameValue StackPointer;
     bool DoesNotReturn;
     va_t EndAddress;
   };

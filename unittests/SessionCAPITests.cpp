@@ -4643,6 +4643,44 @@ TEST_F(SessionCAPITest, UserDataItemsDefineBytesAndPersist) {
   EXPECT_EQ(neverd_item_clear(Session, Word), -1);
 }
 
+TEST_F(SessionCAPITest, UserCodeItemsValidateInstructionsAndPersist) {
+  for (bool Arm64 : {false, true}) {
+    SCOPED_TRACE(Arm64);
+    const std::string Tail =
+        Arm64 ? std::string("\x1f\x20\x03\xd5\xc0\x03\x5f\xd6\x0f", 9)
+              : std::string("\x90\x48\x83\xc4\x28\xc3\x0f", 7);
+    const auto Input = write(Arm64 ? "code-arm64.elf" : "code-x64.elf",
+                             makeNativeELF(Arm64, 0x400000, Tail));
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    const auto Start = neverd_session_entry_addr(Session) + (Arm64 ? 8 : 6);
+    const int FirstSize = Arm64 ? 4 : 1;
+    ASSERT_EQ(neverd_item_set(Session, Start, "{\"kind\":\"code\"}"), 0)
+        << takeString(neverd_last_error(Session));
+    auto Rows = llvm::json::parse(takeString(neverd_items_json(Session)));
+    ASSERT_TRUE(Rows && Rows->getAsArray());
+    ASSERT_EQ(Rows->getAsArray()->size(), 1u);
+    EXPECT_EQ(Rows->getAsArray()->front().getAsObject()->getInteger("size"),
+              FirstSize);
+    const auto Before = takeString(neverd_items_json(Session));
+    EXPECT_EQ(neverd_item_set(Session, Start, "{\"kind\":\"code\",\"size\":2}"),
+              -1);
+    EXPECT_EQ(neverd_item_set(Session, Start + Tail.size() - 1,
+                              "{\"kind\":\"code\"}"),
+              -1);
+    EXPECT_EQ(takeString(neverd_items_json(Session)), Before);
+    const auto Next = Start + FirstSize;
+    ASSERT_EQ(neverd_item_set(Session, Next, "{\"kind\":\"code\"}"), 0);
+    ASSERT_EQ(neverd_items_save(Session), 0);
+    const auto Saved = takeString(neverd_items_json(Session));
+    neverd_session_t Reopened = neverd_session_create();
+    ASSERT_EQ(neverd_session_load(Reopened, Input.c_str()), 1);
+    EXPECT_EQ(takeString(neverd_items_json(Reopened)), Saved);
+    neverd_session_destroy(Reopened);
+    // A code definition is presentation state, not a new function entry.
+    EXPECT_LT(neverd_func_find_by_addr(Session, Start), 0);
+  }
+}
+
 TEST_F(SessionCAPITest, SignatureJSONPreservesASCIINameAndMatchFields) {
   expectSignatureJSONName("ascii_function");
 }

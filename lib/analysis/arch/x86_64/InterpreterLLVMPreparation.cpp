@@ -16,6 +16,7 @@
 #include "llvm/Support/SourceMgr.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <set>
 
@@ -31,6 +32,57 @@ bool charge(uint64_t &Remaining, uint64_t Count) {
     return false;
   Remaining -= Count;
   return true;
+}
+
+llvm::Expected<InterpreterLLVMRefinementPreservation>
+normalizePreservation(const InterpreterLLVMRefinementPreservation &Request,
+                      uint64_t &Work) {
+  if (!charge(Work, Request.ModeledRegisters.size()) ||
+      (Request.NativeState && !charge(Work, 1)))
+    return invalid("LLVM proof preservation metadata budget exhausted");
+  InterpreterLLVMRefinementPreservation Result;
+  Result.NativeState = Request.NativeState;
+  Result.ModeledRegisters.push_back({x86reg::RSP, 8});
+  // Keep the omitted-request path's contract order and work unchanged.
+  if (Request.ModeledRegisters.empty())
+    return Result;
+  constexpr uint64_t GPRBytes = offsetof(InterpreterMachineStateX64V1, RFlags);
+  // Bound fixed coverage initialization and the complete output scan before
+  // either traversal. Every input byte and emitted range has its own charge.
+  if (!charge(Work, 2 * GPRBytes))
+    return invalid("LLVM proof preservation coverage budget exhausted");
+  std::array<bool, GPRBytes> Covered{};
+  for (const auto &Range : Request.ModeledRegisters) {
+    if (!Range.Bytes || Range.Offset >= GPRBytes ||
+        Range.Bytes > GPRBytes - Range.Offset)
+      return invalid("LLVM proof preservation requires nonempty modeled GPR "
+                     "ranges without wrapping");
+    if (!charge(Work, Range.Bytes))
+      return invalid("LLVM proof preservation byte budget exhausted");
+    for (uint64_t I = 0; I != Range.Bytes; ++I)
+      Covered[Range.Offset + I] = true;
+  }
+  // RSP is already required in full. Removing its redundant requested bytes
+  // cannot weaken that obligation. Other unions never bridge an uncovered byte.
+  for (uint64_t Word = 0; Word != GPRBytes; Word += 8) {
+    if (Word == x86reg::RSP)
+      continue;
+    uint64_t Byte = Word;
+    while (Byte != Word + 8) {
+      if (!Covered[Byte]) {
+        ++Byte;
+        continue;
+      }
+      const auto Begin = Byte;
+      while (Byte != Word + 8 && Covered[Byte])
+        ++Byte;
+      if (!charge(Work, 1))
+        return invalid("LLVM proof preservation output budget exhausted");
+      Result.ModeledRegisters.push_back(
+          {Begin, static_cast<uint16_t>(Byte - Begin)});
+    }
+  }
+  return Result;
 }
 
 llvm::Error canonicalEntry(InterpreterMachineStateModel &Model,
@@ -158,7 +210,8 @@ llvm::Expected<InterpreterLLVMRefinementModels>
 prepareInterpreterLLVMRefinement(
     const LowFunc &Residual, llvm::StringRef LLVMIR,
     llvm::StringRef FunctionName, const LowIRIndependenceFrame &Frame,
-    const InterpreterLLVMRefinementLimits &Limits) {
+    const InterpreterLLVMRefinementLimits &Limits,
+    const InterpreterLLVMRefinementPreservation &Preservation) {
   if (LLVMIR.empty() || FunctionName.empty())
     return invalid("LLVM proof requires IR text and a selected function");
   if (LLVMIR.size() > Limits.MaxIRBytes ||
@@ -183,6 +236,9 @@ prepareInterpreterLLVMRefinement(
   for (const auto &Range : Frame.ExcludedAddressRanges)
     if (Range.Begin >= Range.End)
       return invalid("LLVM proof frame exclusion is empty or wraps");
+  auto Required = normalizePreservation(Preservation, Work);
+  if (!Required)
+    return Required.takeError();
 
   // Hash and parse the same owned bytes, not a reprinted or normalized module.
   const std::string Text = LLVMIR.str(), Name = FunctionName.str();
@@ -215,7 +271,11 @@ prepareInterpreterLLVMRefinement(
   Result.LLVM = std::move(*Right);
   Result.Contract = llvmInterpreterMachineStateContract();
   Result.Contract.Frame = Frame;
-  Result.Contract.PreservedRegisters.push_back({32, 8});
+  Result.Preservation = std::move(*Required);
+  Result.Contract.PreservedRegisters.insert(
+      Result.Contract.PreservedRegisters.end(),
+      Result.Preservation.ModeledRegisters.begin(),
+      Result.Preservation.ModeledRegisters.end());
   Result.Contract.PreservedFrameRanges = {{0, 8}};
   llvm::SHA256 Hash;
   Hash.update(Text);

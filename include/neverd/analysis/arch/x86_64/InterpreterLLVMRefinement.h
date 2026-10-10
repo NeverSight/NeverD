@@ -28,10 +28,23 @@ struct InterpreterLLVMRefinementPlans {
   std::optional<LowIRLoopRefinementPlan> Native, LLVM;
 };
 
+/// Additional entry-state preservation obligations, never a success receipt.
+/// Modeled ranges cover only the 16 GPR words in InterpreterMachineStateX64V1.
+/// Nonempty ranges may span words; overlaps are unioned without adding bytes.
+/// Preparation splits the union at word boundaries and retains mandatory RSP.
+/// Opaque architectural state can be checked only by the fresh native premise.
+struct InterpreterLLVMRefinementPreservation {
+  std::vector<symbolic::SymRegisterRange> ModeledRegisters;
+  std::optional<LowIRNativePreservationRequirement> NativeState;
+};
+
 struct InterpreterLLVMRefinementModels {
   InterpreterMachineStateModel Residual, LLVM;
   LowIRIndependenceContract Contract;
   std::string LLVMIRDigest, FunctionName;
+  /// Effective normalized GPR obligations, including RSP. NativeState remains
+  /// a native request and is deliberately absent from the static Contract.
+  InterpreterLLVMRefinementPreservation Preservation;
 };
 
 /// Snapshot exact textual LLVM IR, select the named function and build fresh
@@ -45,11 +58,15 @@ struct InterpreterLLVMRefinementModels {
 /// Frame must be rooted at the raw RSP state word (offset 32, eight bytes).
 /// This API only prepares inputs for untrusted loop proposals; it proves
 /// nothing. Mutating returned models cannot change what the checker verifies.
+/// Additional preservation cannot replace any mandatory observation or entry
+/// condition. Range validation and normalization share MaxPreparationItems;
+/// the complete proofs retain their independent execution budgets.
 llvm::Expected<InterpreterLLVMRefinementModels>
 prepareInterpreterLLVMRefinement(
     const LowFunc &Residual, llvm::StringRef LLVMIR,
     llvm::StringRef FunctionName, const LowIRIndependenceFrame &Frame,
-    const InterpreterLLVMRefinementLimits &Limits = {});
+    const InterpreterLLVMRefinementLimits &Limits = {},
+    const InterpreterLLVMRefinementPreservation &Preservation = {});
 
 enum class InterpreterLLVMRefinementStage : uint8_t {
   Preparation,
@@ -91,6 +108,10 @@ struct InterpreterLLVMRefinementResult {
 /// relation covers arbitrary GPRs and canonical flags within the same caller
 /// frame, exclusions and optional entry congruence. Extra native restrictions
 /// cannot weaken the source relation. Plans never add entry assumptions.
+/// Additional modeled preservation applies to both premises. Native opaque
+/// preservation requires fresh instruction evidence and SelectedWitness;
+/// an AllUndefinedChoices request is refused. Both subreceipts bind their
+/// effective contracts; the composite digest binds those fresh identities.
 ///
 /// Requires the explicit normal, nonfaulting, CET-disabled UserX64NoFaultV1
 /// profile and its fixed immutable image. The result describes the chosen
@@ -109,7 +130,8 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     llvm::StringRef FunctionName, const LowIRIndependenceFrame &Frame,
     const InterpreterLLVMRefinementPlans &Plans = {},
     LowIRRefinementWitness Witness = LowIRRefinementWitness::LiftedBits,
-    const InterpreterLLVMRefinementLimits &Limits = {});
+    const InterpreterLLVMRefinementLimits &Limits = {},
+    const InterpreterLLVMRefinementPreservation &Preservation = {});
 
 } // namespace neverd::analysis
 #endif

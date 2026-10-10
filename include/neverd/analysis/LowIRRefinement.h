@@ -293,6 +293,9 @@ struct LowIRRefinementCertificate {
   /// Present only for inductive scopes. Binds the exact templates, predicates,
   /// projections and rankings that were checked, including their limits.
   std::optional<LowIRLoopRefinementPlan> LoopPlan;
+  /// Covers original native executions under Witness, never arbitrary
+  /// architecture-allowed undefined choices or candidate-native state.
+  std::optional<LowIRNativePreservationCertificate> NativePreservation;
 };
 
 struct LowIRRefinementResult {

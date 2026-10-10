@@ -92,10 +92,21 @@ private:
   Listing &newListing();
   std::string textKey_, textCache_;
   std::vector<std::size_t> textLines_;
-  /// One whole code view under workbench names, paged from memory.
-  std::string namedViewKey_;
-  Json namedView_;
-  std::vector<std::size_t> namedViewLines_;
+  /// A completed, self-contained view. It borrows no Session or IR state, so
+  /// another function may replace the restricted pipeline while this survives.
+  struct NamedView {
+    std::string key;
+    Json value;
+    std::vector<std::size_t> lines;
+    std::size_t bytes = 0;
+  };
+  /// Newest first, bounded by retained bytes as well as document count.
+  std::list<std::shared_ptr<const NamedView>> namedViews_;
+  std::size_t namedViewBytes_ = 0;
+  std::uint64_t namedViewsRevision_ = 0, namedViewsListingGeneration_ = 0;
+  void forgetNamedViews();
+  std::shared_ptr<const NamedView> namedView(std::uint64_t address,
+                                             const std::string &representation);
   std::optional<Json> namedViewPage(std::uint64_t address,
                                     const std::string &representation,
                                     std::size_t offset, std::size_t limit);

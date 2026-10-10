@@ -15,6 +15,7 @@
 #include "X86BitTestUndefined.h"
 #include "X86DoubleShiftUndefined.h"
 #include "X86LiftDetail.h"
+#include "X86OpaqueStateAudit.h"
 #include "X86ShiftUndefined.h"
 #include "X86XaddAudit.h"
 
@@ -22,7 +23,9 @@
 #include "neverd/ir/intrinsics/X86Interrupts.h"
 #include "neverd/support/ISAEncoding.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -511,12 +514,10 @@ bool writesWholeApxDestination(const cs_insn *Insn) {
          (P2 & x86::kEvexNewDataDestination) != 0;
 }
 
-// An explicit initial audit of legacy integer forms. This describes newly
-// arbitrary architectural outputs, not a proof of the whole instruction's
-// LowIR implementation. In particular, preserving a flag and computing one
-// from inputs both retain any arbitrary input dependencies. Do not infer this
-// coverage from Capstone's coarse eflags mask or the absence of flag writes.
-bool hasAuditedUndefinedOutputs(const cs_insn *Insn, Arch TargetArch) {
+// Shared strict legacy scalar form admission. Keep this form version closed:
+// extending a form requires separate undefined-output and opaque-bank audits.
+// Neither claim follows from absent LowIR writes or Capstone register masks.
+bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
   const cs_x86 &X86 = Insn->detail->x86;
   const bool Is64Bit = TargetArch == Arch::X64;
   if (Insn->size == 0 || Insn->size > 15 ||
@@ -758,13 +759,18 @@ bool hasAuditedUndefinedOutputs(const cs_insn *Insn, Arch TargetArch) {
 void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
                      llvm::ArrayRef<RelocatedAddressOperand> Relocs,
                      llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
-                     LowInstructionUndefinedEffects *UndefinedEffects) {
-  liftImpl(Insn, Ops, Relocs, ScalarRelocs, false, UndefinedEffects);
+                     LowInstructionUndefinedEffects *UndefinedEffects,
+                     LowInstructionPreservedState *PreservedState) {
+  liftImpl(Insn, Ops, Relocs, ScalarRelocs, false, UndefinedEffects,
+           PreservedState);
 }
 
 bool X86Lifter::liftX64MemoryCall(
     const cs_insn *Insn, std::vector<LowOp> &Ops,
-    LowInstructionUndefinedEffects *UndefinedEffects) {
+    LowInstructionUndefinedEffects *UndefinedEffects,
+    LowInstructionPreservedState *PreservedState) {
+  if (PreservedState)
+    *PreservedState = {};
   if (UndefinedEffects) {
     *UndefinedEffects = {};
     UndefinedEffects->Diagnostic =
@@ -793,7 +799,7 @@ bool X86Lifter::liftX64MemoryCall(
       X86.operands[0].mem.segment != X86_REG_INVALID ||
       X86.addr_size != (Address32 ? 4 : 8))
     return false;
-  liftImpl(Insn, Ops, {}, {}, true, UndefinedEffects);
+  liftImpl(Insn, Ops, {}, {}, true, UndefinedEffects, PreservedState);
   return true;
 }
 
@@ -801,7 +807,10 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                          llvm::ArrayRef<RelocatedAddressOperand> Relocs,
                          llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
                          bool LoadMemoryCallTarget,
-                         LowInstructionUndefinedEffects *UndefinedEffects) {
+                         LowInstructionUndefinedEffects *UndefinedEffects,
+                         LowInstructionPreservedState *PreservedState) {
+  if (PreservedState)
+    *PreservedState = {};
   if (UndefinedEffects) {
     *UndefinedEffects = {};
     UndefinedEffects->Diagnostic = "instruction lift did not complete";
@@ -1180,6 +1189,25 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
     }
   }
 
+  LowInstructionPreservedState PreservedDraft;
+  if (PreservedState && Handled && Strict && TargetArch == Arch::X64 &&
+      Ops.size() > S.OpsStart &&
+      hasAuditedLegacyIntegerForm(Insn, TargetArch) &&
+      opaqueaudit::hasLegacyIntegerBankAudit(Insn->id)) {
+    PreservedDraft.Audit = LowPreservedStateAudit::LegacyIntegerV1;
+    PreservedDraft.StateSet = LowPreservedStateSet::LegacyIntegerOpaqueV1;
+    PreservedDraft.SemanticsVersion = 1;
+    PreservedDraft.Architecture = Arch::X64;
+    PreservedDraft.Address = Insn->address;
+    PreservedDraft.Size = Insn->size;
+    PreservedDraft.OpCount = Ops.size() - S.OpsStart;
+    PreservedDraft.NativeBytesDigest = llvm::toHex(
+        llvm::SHA256::hash(llvm::ArrayRef<uint8_t>(Insn->bytes, Insn->size)),
+        true);
+    PreservedDraft.OperationDigest = lowUndefinedOperationDigest(
+        llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart));
+  }
+
   if (UndefinedEffects) {
     EffectsDraft.OpCount = Ops.size() - S.OpsStart;
     EffectsDraft.OperationDigest = lowUndefinedOperationDigest(
@@ -1217,7 +1245,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
       EffectsDraft.Diagnostic =
           "undefined-output coverage requires strict lifting";
     } else if (EffectsDraft.OpCount == 0 ||
-               !hasAuditedUndefinedOutputs(Insn, TargetArch)) {
+               !hasAuditedLegacyIntegerForm(Insn, TargetArch)) {
       EffectsDraft.Diagnostic =
           "instruction form has no complete undefined-output audit";
     } else if (!HasExpectedEffects) {
@@ -1230,6 +1258,8 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
       EffectsDraft.Effects.clear();
     *UndefinedEffects = std::move(EffectsDraft);
   }
+  if (PreservedState)
+    *PreservedState = std::move(PreservedDraft);
 }
 
 // ===----------------------------------------------------------------------===//

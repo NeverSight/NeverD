@@ -10,6 +10,7 @@
 
 #include "neverd/analysis/InterpreterEntryAlignment.h"
 #include "neverd/analysis/InterpreterMachineStateProfile.h"
+#include "neverd/ir/low/LowPreservedState.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
 #include "neverd/solver/BitVectorSolver.h"
 #include "neverd/symbolic/SymState.h"
@@ -63,6 +64,32 @@ struct LowIRIndependenceFrameRange {
   uint16_t Bytes = 0;
 };
 
+enum class LowIRNativePreservationQuantifier : uint8_t {
+  /// Every execution admitted by the refinement's named undefined witness.
+  /// Two selected-witness results cannot establish AllUndefinedChoices.
+  SelectedWitness,
+  AllUndefinedChoices,
+};
+
+struct LowIRNativePreservationRequirement {
+  LowPreservedStateSet StateSet = LowPreservedStateSet::LegacyIntegerOpaqueV1;
+  LowIRNativePreservationQuantifier Quantifier =
+      LowIRNativePreservationQuantifier::AllUndefinedChoices;
+};
+
+/// Original native execution only, not candidate LowIR or an ordinary ABI.
+/// Issued only after complete execution/relation checking. ExecutionDigest
+/// binds every checked original fact to its executed span, physical expansion
+/// and segment; Instructions counts executed visits, not collected entries.
+struct LowIRNativePreservationCertificate {
+  LowPreservedStateSet StateSet = LowPreservedStateSet::None;
+  uint32_t SemanticsVersion = 1;
+  LowIRNativePreservationQuantifier Quantifier =
+      LowIRNativePreservationQuantifier::SelectedWitness;
+  uint64_t Instructions = 0;
+  std::string ExecutionDigest;
+};
+
 struct LowIRIndependenceContract {
   /// Native-only opt-in. Initializes canonical shared entry flags and always
   /// observes final system flags, independently of ReturnRegisters and frame
@@ -101,6 +128,11 @@ struct LowIRIndependenceContract {
   /// both arms. Every inductive segment checks its entire domain. Static
   /// LowIR APIs without a native provider reject this option.
   bool DeferNativeConditionalEdges = false;
+  /// Native-only opt-in; absent preserves the existing contract. Strict finite
+  /// independence can cover all undefined choices. Selected refinement,
+  /// including induction, refuses an AllUndefinedChoices request. Static
+  /// LowIR cannot establish architectural effects omitted from its input.
+  std::optional<LowIRNativePreservationRequirement> NativePreservedState;
 };
 
 struct LowIRIndependenceLimits {
@@ -179,6 +211,8 @@ struct LowIRNativeProfileProjection {
 
 enum class LowIRNativeAuditBoundaryKind : uint8_t {
   MissingUndefinedOutputs = 1,
+  MissingPreservedState = 2,
+  MissingUndefinedOutputsAndPreservedState = 3,
 };
 
 /// A retained refusal boundary, never an assertion of instruction semantics.
@@ -207,6 +241,7 @@ struct LowIRIndependenceCertificate {
   std::vector<LowIRNativeFlagTransition> NativeFlagTransitions;
   std::vector<LowIRNativeProfileProjection> NativeProfileProjections;
   std::vector<LowIRNativeAuditBoundary> NativeAuditBoundaries;
+  std::optional<LowIRNativePreservationCertificate> NativePreservation;
 };
 
 struct LowIRIndependenceResult {

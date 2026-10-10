@@ -2473,6 +2473,158 @@ static ResolverResult mergeResolverResults(
 
 } // namespace
 
+// Reuse only the pure graph-construction result, never a value proof or a
+// fixed-point stage. Every graph input is compared by value; proposal history,
+// one-shot test hooks and solver limits continue through their original paths.
+struct CFGBuilder::ResolverGraphCache {
+  struct StorageOwner {
+    va_t Branch;
+    bool HasTargets;
+    std::vector<JumpTableStorageRange> Ranges;
+    std::optional<JumpTableStorageRange> ImplicitRange;
+  };
+
+  std::vector<std::vector<LowOp>> OwnedOps;
+  std::vector<std::vector<va_t>> OwnedTargets;
+  std::vector<ResolverInsnSnapshot> Snapshot;
+  std::set<va_t> BlockStarts;
+  std::set<va_t> Roots;
+  std::map<va_t, std::set<va_t>> ConditionalRoots;
+  std::vector<StorageOwner> Owners;
+  size_t Work;
+  ResolverFlowGraph Graph;
+
+  static bool sameOp(const LowOp &A, const LowOp &B) {
+    return A.Opcode == B.Opcode && A.MemoryOrdering == B.MemoryOrdering &&
+           A.MemoryAddressSpace == B.MemoryAddressSpace &&
+           A.Output == B.Output && A.NumInputs == B.NumInputs &&
+           A.Addr == B.Addr && A.Seq == B.Seq &&
+           std::equal(std::begin(A.Inputs), std::end(A.Inputs),
+                      std::begin(B.Inputs));
+  }
+
+  static bool sameInsn(const ResolverInsnSnapshot &A,
+                       const ResolverInsnSnapshot &B) {
+    return A.Addr == B.Addr && A.Size == B.Size && A.IsBranch == B.IsBranch &&
+           A.IsCond == B.IsCond && A.IsCall == B.IsCall && A.IsRet == B.IsRet &&
+           A.IsIndirect == B.IsIndirect &&
+           A.IsOpaqueTerminator == B.IsOpaqueTerminator &&
+           A.IsResumableTerminator == B.IsResumableTerminator &&
+           A.IsNoReturnCall == B.IsNoReturnCall &&
+           A.IsInstructionGuard == B.IsInstructionGuard &&
+           A.BranchTarget == B.BranchTarget &&
+           A.JumpTableTargets == B.JumpTableTargets &&
+           A.Ops.size() == B.Ops.size() &&
+           std::equal(A.Ops.begin(), A.Ops.end(), B.Ops.begin(), sameOp);
+  }
+
+  // Cap retained input payloads at 8 MiB, and cap graph vertices separately.
+  // A single builder retains at most one graph; oversized inputs use the
+  // established uncached path. This bound also limits cache-comparison work.
+  static bool canRetain(const CFGBuilder &B,
+                        const std::vector<ResolverInsnSnapshot> &Input,
+                        const std::set<va_t> &ProofRoots) {
+    if (Input.size() > 8192 || B.BlockStarts.size() > 8192 ||
+        B.ResolvedTableInfo.size() > 1024)
+      return false;
+    size_t Remaining = 8 * 1024 * 1024;
+    auto account = [&](size_t Count, size_t Size) {
+      if (Count > Remaining / Size)
+        return false;
+      Remaining -= Count * Size;
+      return true;
+    };
+    if (!account(Input.size(), sizeof(ResolverInsnSnapshot) +
+                                   sizeof(std::vector<LowOp>) +
+                                   sizeof(std::vector<va_t>)) ||
+        !account(B.BlockStarts.size(), 4 * sizeof(va_t)) ||
+        !account(ProofRoots.size(), 4 * sizeof(va_t)) ||
+        !account(B.DiscoveredCodeRefSources.size(), 8 * sizeof(va_t)) ||
+        !account(B.ResolvedTableInfo.size(), sizeof(StorageOwner)))
+      return false;
+    for (const auto &I : Input)
+      if (!account(I.Ops.size(), sizeof(LowOp)) ||
+          !account(I.JumpTableTargets.size(), sizeof(va_t)))
+        return false;
+    for (const auto &[Root, Sources] : B.DiscoveredCodeRefSources)
+      if (!account(Sources.size(), 4 * sizeof(va_t)))
+        return false;
+    for (const auto &[Branch, Info] : B.ResolvedTableInfo)
+      if (!account(Info.StorageRanges.size(), sizeof(JumpTableStorageRange)))
+        return false;
+    return true;
+  }
+
+  ResolverGraphCache(const CFGBuilder &B,
+                     std::vector<ResolverInsnSnapshot> &&Input,
+                     const std::set<va_t> &ProofRoots, size_t GraphWork,
+                     ResolverFlowGraph &&BuiltGraph)
+      : Snapshot(std::move(Input)), BlockStarts(B.BlockStarts),
+        Roots(ProofRoots), ConditionalRoots(B.DiscoveredCodeRefSources),
+        Work(GraphWork), Graph(std::move(BuiltGraph)) {
+    // Moving the snapshot vector preserves the addresses held by LastInsn.
+    // Freeze its borrowed payloads before any proposal can mutate or roll back
+    // the originating instruction map or an override vector.
+    OwnedOps.reserve(Snapshot.size());
+    OwnedTargets.reserve(Snapshot.size());
+    for (auto &I : Snapshot) {
+      OwnedOps.emplace_back(I.Ops.begin(), I.Ops.end());
+      OwnedTargets.emplace_back(I.JumpTableTargets.begin(),
+                                I.JumpTableTargets.end());
+      I.Ops = OwnedOps.back();
+      I.JumpTableTargets = OwnedTargets.back();
+    }
+    Owners.reserve(B.ResolvedTableInfo.size());
+    for (const auto &[Branch, Info] : B.ResolvedTableInfo) {
+      const auto Rec = B.Insns.find(Branch);
+      const bool HasTargets =
+          Rec != B.Insns.end() && !Rec->second.JumpTableTargets.empty();
+      StorageOwner Owner{Branch, HasTargets, {}, std::nullopt};
+      if (HasTargets) {
+        if (!Info.StorageRanges.empty())
+          Owner.Ranges = Info.StorageRanges;
+        else
+          Owner.ImplicitRange = implicitJumpTableStorageRange(
+              Info, Rec->second.JumpTableTargets.size());
+      }
+      Owners.push_back(std::move(Owner));
+    }
+  }
+
+  bool matches(const CFGBuilder &B,
+               const std::vector<ResolverInsnSnapshot> &Input,
+               const std::set<va_t> &ProofRoots) const {
+    if (BlockStarts != B.BlockStarts || Roots != ProofRoots ||
+        ConditionalRoots != B.DiscoveredCodeRefSources ||
+        Owners.size() != B.ResolvedTableInfo.size() ||
+        Snapshot.size() != Input.size() ||
+        !std::equal(Snapshot.begin(), Snapshot.end(), Input.begin(), sameInsn))
+      return false;
+    // The storage callback always receives the graph's active-owner filter.
+    // Preserve every visited map key (including absent/empty instructions),
+    // range order, and the implicit range: these determine both its result and
+    // its exact work charge. PublishedReachableInsns is not read on this path.
+    size_t I = 0;
+    for (const auto &[Branch, Info] : B.ResolvedTableInfo) {
+      const auto &Owner = Owners[I++];
+      const auto Rec = B.Insns.find(Branch);
+      const bool HasTargets =
+          Rec != B.Insns.end() && !Rec->second.JumpTableTargets.empty();
+      if (Owner.Branch != Branch || Owner.HasTargets != HasTargets)
+        return false;
+      if (!HasTargets)
+        continue;
+      if (Owner.Ranges != Info.StorageRanges)
+        return false;
+      if (Info.StorageRanges.empty() &&
+          Owner.ImplicitRange != implicitJumpTableStorageRange(
+                                     Info, Rec->second.JumpTableTargets.size()))
+        return false;
+    }
+    return true;
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // sliceBackForTableBase — backward data-flow slicing
 //===----------------------------------------------------------------------===//
@@ -4298,19 +4450,44 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                          ? *ActiveJumpTableProofRoots
                                          : PersistentCFGRoots;
   bool GraphComplete = false;
-  const ResolverFlowGraph Graph = buildResolverFlowGraph(
-      Snapshot, BlockStarts, ProofRoots, DiscoveredCodeRefSources,
-      [&](va_t Address, const std::set<va_t> *ActiveOwners) {
-        return resolvedJumpTableOwnsStorageAddress(Address, ActiveOwners,
-                                                   GraphWorkBudget);
-      },
-      GraphWorkBudget, &GraphComplete);
+  std::optional<ResolverFlowGraph> FreshGraph;
+  // Keep a local owner: a nested query may replace the builder's cache while
+  // this synchronous proof is still using its immutable graph.
+  std::shared_ptr<const ResolverGraphCache> ReusedGraph;
+  if (GraphWorkBudget && CachedResolverGraph &&
+      CachedResolverGraph->matches(*this, Snapshot, ProofRoots)) {
+    GraphComplete =
+        consumeResolverGraphWork(GraphWorkBudget, CachedResolverGraph->Work);
+    if (GraphComplete)
+      ReusedGraph = CachedResolverGraph;
+  } else {
+    const size_t Before = GraphWorkBudget ? *GraphWorkBudget : 0;
+    FreshGraph.emplace(buildResolverFlowGraph(
+        Snapshot, BlockStarts, ProofRoots, DiscoveredCodeRefSources,
+        [&](va_t Address, const std::set<va_t> *ActiveOwners) {
+          return resolvedJumpTableOwnsStorageAddress(Address, ActiveOwners,
+                                                     GraphWorkBudget);
+        },
+        GraphWorkBudget, &GraphComplete));
+    if (GraphComplete && GraphWorkBudget &&
+        ResolverGraphCache::canRetain(*this, Snapshot, ProofRoots)) {
+      ReusedGraph = std::make_shared<ResolverGraphCache>(
+          *this, std::move(Snapshot), ProofRoots, Before - *GraphWorkBudget,
+          std::move(*FreshGraph));
+      CachedResolverGraph = ReusedGraph;
+    }
+  }
   if (!GraphComplete) {
     if (QueryAnalysisComplete)
       std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
                 false);
     return Results;
   }
+  const ResolverFlowGraph &Graph =
+      ReusedGraph ? ReusedGraph->Graph : *FreshGraph;
+  // A cache hit pays the full cold graph charge, including storage ownership.
+  // Resource-incomplete graphs never enter the cache. Value analysis below is
+  // always replayed and may independently report analysis-incomplete.
   // Graph construction is only the first half of one evidence query.  Keep
   // charging the same candidate-local account while reconstructing frame,
   // memory and value state, and while matching/symbolizing the resulting DAG.

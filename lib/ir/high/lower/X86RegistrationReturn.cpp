@@ -4,8 +4,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/high/X86RegistrationFrame.h"
+#include "neverd/ir/med/X86RegistrationFrame.h"
 
 #include <algorithm>
 
@@ -17,7 +18,6 @@ bool MedToHighConverter::lowerX86RegistrationCatchReturn(
   if (TargetArch != Arch::X86 || !Med.ExceptionMetadata ||
       Med.ExceptionMetadata->Encoding != ExceptionEncoding::X86CxxFuncInfo ||
       !Med.ExceptionMetadata->Registration ||
-      Med.ExceptionMetadata->Registration->RealignedFrame ||
       Med.ExceptionMetadata->Registration->RegistrationOffset != -12 ||
       !Med.ExceptionMetadata->Cxx || !Med.RegistrationStates ||
       !Med.RegistrationStates->CxxContinuationsComplete ||
@@ -36,25 +36,26 @@ bool MedToHighConverter::lowerX86RegistrationCatchReturn(
   if (!Value || Value->Kind != ExprKind::Const ||
       Value->ConstVal != Resume->TargetVA)
     return false;
-  // Use entry-SP coordinates, as registration runtime roots do. The
-  // catch may have overwritten both EBP and the SavedESP cell.
-  MedVar EntrySP;
-  EntrySP.Kind = MedVar::Reg;
-  EntrySP.TheArch = Arch::X86;
-  EntrySP.RegOff = getTargetRegInfo(Arch::X86).StackPointer;
-  EntrySP.Size = 4;
-  auto FrameAddress = [&](int64_t Offset) {
-    return HighExpr::makeBinop(
-        NdOp::INT_SUB, HighExpr::makeVar(EntrySP),
-        HighExpr::makeConst(uint64_t(4 - Offset), 4,
-                            ConstantAddressProvenance::Scalar));
-  };
+  // The catch may have overwritten both EBP and SavedESP. Use the same
+  // entry-relative source coordinate as its runtime roots, including any
+  // proved alignment, rather than observing those live callback values.
+  RegistrationFrameCoordinate Frame{-4, 1, 0};
+  if (Med.ExceptionMetadata->Registration->RealignedFrame) {
+    const auto Realigned = realignedRegistrationFrameCoordinate(
+        *Med.ExceptionMetadata, &*Med.RegistrationStates);
+    if (!Realigned || Med.Entry != Med.ExceptionMetadata->CodeRange.Begin)
+      return false;
+    Frame = *Realigned;
+  }
+  auto Slot = x86RegistrationFrameAddress(Frame, -16);
+  auto Saved = x86RegistrationFrameAddress(Frame, Resume->SavedStackOffset);
+  if (!Slot || !Saved)
+    return false;
   HighStmt Restore;
   Restore.Kind = StmtKind::Store;
   Restore.Addr = CurOp.Addr;
-  Restore.StoreAddr = FrameAddress(
-      int64_t(*Med.ExceptionMetadata->Registration->RegistrationOffset) - 4);
-  Restore.StoreVal = FrameAddress(Resume->SavedStackOffset);
+  Restore.StoreAddr = std::move(Slot);
+  Restore.StoreVal = std::move(Saved);
   Func.Body.push_back(std::move(Restore));
   HighStmt Jump;
   Jump.Kind = StmtKind::Goto;

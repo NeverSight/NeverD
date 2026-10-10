@@ -49,7 +49,8 @@ bool readThumbMovImm16(const uint8_t *P, bool IsMovT, uint16_t &Imm) {
 
 size_t scanThumbImportThunks(BinaryImage &Img, const Segment &Seg,
                              const std::map<va_t, size_t> &Targets,
-                             std::set<va_t> &Existing) {
+                             std::set<va_t> &Existing,
+                             const ImportThunkCandidates &Candidates) {
   const uint8_t *D = Seg.Data.data();
   size_t N = Seg.Data.size();
   if (N < arm::kThumbImportThunkLen)
@@ -73,6 +74,7 @@ size_t scanThumbImportThunks(BinaryImage &Img, const Segment &Seg,
       continue;
     va_t ThunkVA = normalizeCodeAddress(Seg.VA + I, Img.Arch, Img.Mode);
     if (!Img.isCodeRange(ThunkVA, arm::kThumbImportThunkLen) ||
+        !Candidates.allows(ThunkVA, arm::kThumbImportThunkLen) ||
         Img.instructionModeAt(ThunkVA) != InstructionMode::Thumb ||
         Img.instructionModeAt(ThunkVA + arm::kThumbImportThunkLen - 1) !=
             InstructionMode::Thumb)
@@ -730,9 +732,10 @@ llvm::Error discoverARMReachableModes(BinaryImage &Img) {
 
 size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
                            const std::map<va_t, size_t> &Targets,
-                           std::set<va_t> &Existing) {
+                           std::set<va_t> &Existing,
+                           const ImportThunkCandidates &Candidates) {
   if (Img.Mode == InstructionMode::Thumb)
-    return scanThumbImportThunks(Img, Seg, Targets, Existing);
+    return scanThumbImportThunks(Img, Seg, Targets, Existing, Candidates);
 
   const uint8_t *D = Seg.Data.data();
   size_t N = Seg.Data.size();
@@ -751,6 +754,7 @@ size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
       continue;
     va_t InsnVA = Seg.VA + I;
     if (!Img.isCodeRange(InsnVA, arm::kLdrPCTrampLen) ||
+        !Candidates.allows(InsnVA, arm::kLdrPCTrampLen) ||
         Img.instructionModeAt(InsnVA) != InstructionMode::ARM)
       continue;
     Img.recordImportStub(InsnVA, TargetIt->second);
@@ -760,7 +764,7 @@ size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
     ++Added;
   }
   if (Img.Mode == InstructionMode::MixedARMThumb)
-    Added += scanThumbImportThunks(Img, Seg, Targets, Existing);
+    Added += scanThumbImportThunks(Img, Seg, Targets, Existing, Candidates);
   return Added;
 }
 

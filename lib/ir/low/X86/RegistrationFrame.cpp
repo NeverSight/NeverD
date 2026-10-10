@@ -120,11 +120,23 @@ bool FrameState::merge(const FrameState &Other) {
   OtherRegistersMayBeFrame |= Other.OtherRegistersMayBeFrame;
   Changed |= mergeCells(Cells, Other.Cells);
   Changed |= mergeCells(EntryCells, Other.EntryCells);
+  Changed |= mergeCells(CallbackCells, Other.CallbackCells);
+  for (auto It = InitializedCallbackBytes.begin();
+       It != InitializedCallbackBytes.end();)
+    if (!Other.InitializedCallbackBytes.count(*It)) {
+      It = InitializedCallbackBytes.erase(It);
+      Changed = true;
+    } else
+      ++It;
+  if (CallbackEntry != Other.CallbackEntry && CallbackEntry) {
+    CallbackEntry.reset();
+    Changed = true;
+  }
   return Changed;
 }
 
 void FrameState::forgetCellValues() {
-  for (auto *Space : {&Cells, &EntryCells})
+  for (auto *Space : {&Cells, &EntryCells, &CallbackCells})
     for (auto &[Offset, Value] : *Space)
       Value = join(Value, {});
 }
@@ -140,11 +152,24 @@ void FrameState::storeEntry(int32_t Offset, uint16_t Width,
 FrameValue FrameState::load(std::optional<int32_t> Offset,
                             uint16_t Width) const {
   auto Value = loadCell(Cells, Offset, Width);
-  return Offset ? Value
-                : join(Value, loadCell(EntryCells, std::nullopt, Width));
+  if (!Offset) {
+    Value = join(Value, loadCell(EntryCells, std::nullopt, Width));
+    Value = join(Value, loadCell(CallbackCells, std::nullopt, Width));
+  }
+  return Value;
 }
 FrameValue FrameState::loadEntry(int32_t Offset, uint16_t Width) const {
   return loadCell(EntryCells, Offset, Width);
+}
+
+void FrameState::storeCallback(int32_t Offset, uint16_t Width,
+                               const FrameValue &Value) {
+  storeCell(CallbackCells, Offset, Width, Value);
+  for (int64_t Byte = Offset; Byte < int64_t(Offset) + Width; ++Byte)
+    InitializedCallbackBytes.insert(int32_t(Byte));
+}
+FrameValue FrameState::loadCallback(int32_t Offset, uint16_t Width) const {
+  return loadCell(CallbackCells, Offset, Width);
 }
 
 void FrameTransfer::beginInstruction(va_t Address) {
@@ -217,10 +242,15 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       return Cookie;
     }
     if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-        Address.MayBeFrame)
+        Address.MayBeFrame) {
+      if (Address.CallbackAddress &&
+          Address.CallbackAddress->Entry == State.CallbackEntry)
+        return State.loadCallback(Address.CallbackAddress->Offset,
+                                  Op.Output.Size);
       return Address.EntryOffset && *Address.EntryOffset >= -12
                  ? State.loadEntry(*Address.EntryOffset, Op.Output.Size)
                  : State.load(Address.Offset, Op.Output.Size);
+    }
     return {};
   }
   if (auto RealignedValue = evaluateRealignment(Op))
@@ -257,6 +287,16 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       Op.NumInputs == 2) {
     const FrameValue Left = read(Op.Inputs[0]);
     const FrameValue Right = read(Op.Inputs[1]);
+    if (Left.CallbackAddress && Right.Constant)
+      return FrameValue::callbackFrame(
+          Left.CallbackAddress->Entry,
+          int32_t(uint32_t(Left.CallbackAddress->Offset) +
+                  (Op.Opcode == NdOp::INT_ADD ? *Right.Constant
+                                              : -*Right.Constant)));
+    if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.CallbackAddress)
+      return FrameValue::callbackFrame(
+          Right.CallbackAddress->Entry,
+          int32_t(*Left.Constant + uint32_t(Right.CallbackAddress->Offset)));
     if (Left.EntryOffset && Right.Constant)
       return FrameValue::entryFrame(static_cast<int32_t>(
           uint32_t(*Left.EntryOffset) +

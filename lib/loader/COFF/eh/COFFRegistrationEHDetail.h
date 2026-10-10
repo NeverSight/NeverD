@@ -205,6 +205,10 @@ struct InstallSite {
   ExceptionAddressRange Range;
 };
 
+bool proveRealignedCxxRegistrationLayout(const BinaryImage &Img,
+                                         const InstallSite &Site,
+                                         RegistrationChainInfo &Chain);
+
 std::vector<InstallSite> findInstallSites(const BinaryImage &Img,
                                           const FunctionRangeMap &Functions,
                                           const SafeSEHTable &SafeSEH);

@@ -121,6 +121,96 @@ TEST(FunctionDiscoveryAlignment, StartsIBTImportThunksAtTheirEndbr) {
   }
 }
 
+TEST(FunctionDiscoveryAlignment, ImportTailJumpsDoNotSplitKnownBodies) {
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    for (bool RawUnwind : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << int(Architecture) << RawUnwind);
+      constexpr va_t Base = 0x1000, Slot = 0x4000;
+      std::vector<uint8_t> Bytes(64, 0xcc);
+      // A branch skips an import tail jump to the same function's epilogue.
+      const uint8_t Head[] = {0x48, 0x83, 0xec, 0x28, 0x74, 0x07, 0x48};
+      std::copy(std::begin(Head), std::end(Head), Bytes.begin());
+      const auto Jump = [&](size_t Offset) {
+        Bytes[Offset] = 0xff;
+        Bytes[Offset + 1] = 0x25;
+        writeLE<uint32_t>(Bytes.data() + Offset + 2,
+                          Architecture == Arch::X64 ? Slot - (Base + Offset + 6)
+                                                    : Slot);
+      };
+      Jump(7);
+      const uint8_t Tail[] = {0x90, 0x48, 0x83, 0xc4, 0x28, 0xc3};
+      std::copy(std::begin(Tail), std::end(Tail), Bytes.begin() + 13);
+      Jump(32); // A real, separate import thunk still gets discovered.
+      BinaryImage Img;
+      Img.Base = Base;
+      Img.Arch = Architecture;
+      Img.Bits = Architecture == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+      Img.Format = BinaryFormat::COFF;
+      Img.Segments.push_back(executableSegment(Base, Bytes));
+      Img.Imports.push_back({"crt", "free", 0, Slot});
+      if (RawUnwind)
+        Img.COFFPDataRecords.push_back({0, 19, 0});
+      else
+        Img.Symbols.push_back(Symbol::makeFunc(Base, 19));
+      scanImportThunks(Img);
+      EXPECT_FALSE(Img.ImportStubIndices.count(Base + 7));
+      EXPECT_EQ(Img.findSymbolAt(Base + 7), nullptr);
+      ASSERT_TRUE(Img.ImportStubIndices.count(Base + 32));
+      ASSERT_NE(Img.findSymbolAt(Base + 32), nullptr);
+    }
+  }
+}
+
+TEST(FunctionDiscoveryAlignment, ArmImportPatternsRespectFunctionBodies) {
+  for (Arch Architecture : {Arch::ARM, Arch::AArch64}) {
+    for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+      SCOPED_TRACE(::testing::Message() << int(Architecture) << int(Format));
+      constexpr va_t Base = 0x1000, Slot = 0x4000;
+      std::vector<uint8_t> Bytes(64, 0);
+      const auto Veneer = [&](size_t Offset) {
+        if (Architecture == Arch::ARM) {
+          writeLE<uint32_t>(Bytes.data() + Offset,
+                            0xe51ff004); // ldr pc,[pc,#-4]
+          writeLE<uint32_t>(Bytes.data() + Offset + 4, Slot);
+        } else {
+          writeLE<uint32_t>(Bytes.data() + Offset,
+                            0xf0000010); // adrp x16,0x4000
+          writeLE<uint32_t>(Bytes.data() + Offset + 4,
+                            0xf9400210); // ldr x16,[x16]
+          writeLE<uint32_t>(Bytes.data() + Offset + 8, 0xd61f0200); // br x16
+        }
+      };
+      Veneer(4);
+      Veneer(32);
+      BinaryImage Img;
+      Img.Arch = Architecture;
+      Img.Mode = Architecture == Arch::ARM ? InstructionMode::ARM
+                                           : InstructionMode::Default;
+      Img.Format = Format;
+      Img.Segments.push_back(executableSegment(Base, Bytes));
+      Img.Symbols.push_back(Symbol::makeFunc(Base, 24));
+      Img.Imports.push_back({"extern", "free", 0, Slot});
+      scanImportThunks(Img);
+      EXPECT_FALSE(Img.ImportStubIndices.count(Base + 4));
+      EXPECT_EQ(Img.findSymbolAt(Base + 4), nullptr);
+      EXPECT_TRUE(Img.ImportStubIndices.count(Base + 32));
+    }
+  }
+}
+
+TEST(FunctionDiscoveryAlignment, KnownImportEntriesRemainCallable) {
+  const uint8_t Code[] = {0xff, 0x25, 0xfa, 0x2f, 0, 0};
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(executableSegment(0x1000, Code));
+  Img.Symbols.push_back(Symbol::makeFunc(0x1000, 6));
+  Img.Imports.push_back({"crt", "free", 0, 0x4000});
+  scanImportThunks(Img);
+  EXPECT_TRUE(Img.ImportStubIndices.count(0x1000));
+  EXPECT_EQ(Img.Symbols.size(), 1u);
+}
+
 TEST(FunctionDiscoveryAlignment, RegistersLoaderRunFunctions) {
   // sub rsp, 8; add rsp, 8; ret; ret; ret: initializers nothing in the image
   // calls, and the entry point.

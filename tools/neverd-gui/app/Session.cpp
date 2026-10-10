@@ -720,7 +720,11 @@ void Session::defineItem(Address address, const QString &action,
         const auto at = displayAddress(
             addressValue(result.value("address")).value_or(address));
         if (!result.value("saved").toBool())
-          emit message(tr("The bytes at %1 are already undefined").arg(at), 0);
+          emit message((action == QLatin1String("code")
+                            ? tr("An instruction is already defined at %1")
+                            : tr("The bytes at %1 are already undefined"))
+                           .arg(at),
+                       0);
         else if (action == QLatin1String("undefine"))
           emit message(tr("Undefined the item at %1").arg(at), 0);
         else

@@ -105,8 +105,19 @@ MedIR bind this implicit writeback to the exact catch return; HighIR and native
 LLVM materialize it in the recovered source frame. The installer independently
 checks the writeback's address, value and order against fresh source analysis.
 A missing pre-dispatch snapshot still cannot be invented by a catch write.
-Realigned callback stacks and their parent-frame restoration remain outside
-this direct-frame contract.
+For a checked realigned frame, LowIR separately models the callback's private
+stack, initialized spill cells and restored entry EBP. A non-nested catch can
+resume only after balancing its private ESP and recovering runtime EBP. Checked
+calls may borrow initialized parent objects using the captured parent stack
+bound; the saved entry EBP remains protected. MedIR preserves distinct runtime
+root definitions; HighIR and LLVM express the aligned parent coordinate from
+the original entry ESP without inventing a constant stack displacement. Exact
+no-return call receipts remove ordinary fallthrough before SSA while preserving
+exceptional entries. HighIR restores the captured SavedESP through that same
+aligned coordinate before transferring to a checked continuation. It keeps
+handler and continuation annotations; full
+structured callback lowering and native re-reconstruction of these realigned
+sources remain unsupported.
 An unproven continuation or conflicting return retains annotations and
 withdraws native authority. These facts remain separate from the source
 FuncInfo and from the parent's scalar return value.

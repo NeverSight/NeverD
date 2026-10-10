@@ -194,6 +194,10 @@ struct MedOp {
     EstablishedFramePointer,
     CallbackStackPointer,
     RestoredStackPointer,
+    /// Runtime establisher and restored ESP of a separately aligned frame.
+    /// Their non-affine coordinates come from the checked LowIR contract.
+    RealignedFramePointer,
+    RealignedRestoredStackPointer,
   };
   NdOp Opcode = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;

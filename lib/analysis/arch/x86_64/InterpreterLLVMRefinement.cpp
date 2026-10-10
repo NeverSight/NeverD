@@ -52,7 +52,8 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     const LowFunc &Residual, llvm::StringRef LLVMIR,
     llvm::StringRef FunctionName, const LowIRIndependenceFrame &Frame,
     const InterpreterLLVMRefinementPlans &Plans, LowIRRefinementWitness Witness,
-    const InterpreterLLVMRefinementLimits &Limits) {
+    const InterpreterLLVMRefinementLimits &Limits,
+    const InterpreterLLVMRefinementPreservation &Preservation) {
   InterpreterLLVMRefinementResult Result;
   if (Options.ExternalStoresDisjointEntryFrame) {
     Result.Stage = InterpreterLLVMRefinementStage::Native;
@@ -77,7 +78,7 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     return Result;
   }
   auto Models = prepareInterpreterLLVMRefinement(Residual, LLVMIR, FunctionName,
-                                                 Frame, Limits);
+                                                 Frame, Limits, Preservation);
   if (!Models) {
     Result.Diagnostic = llvm::toString(Models.takeError());
     return Result;
@@ -93,7 +94,8 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     (void)Bit;
     NativeContract.ReturnRegisters.push_back({Offset, 1});
   }
-  NativeContract.PreservedRegisters = {{x86reg::RSP, 8}};
+  NativeContract.PreservedRegisters = Models->Preservation.ModeledRegisters;
+  NativeContract.NativePreservedState = Models->Preservation.NativeState;
   NativeContract.PreservedFrameRanges = {{0, 8}};
 
   Result.Stage = InterpreterLLVMRefinementStage::Native;

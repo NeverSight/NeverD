@@ -102,6 +102,52 @@ void registerLoaderRunFunctions(BinaryImage &Img) {
                           << " loader-run functions\n");
 }
 
+ImportThunkCandidates::ImportThunkCandidates(const BinaryImage &Img) {
+  const auto Add = [&](va_t Start, va_t End) {
+    if (Start >= End || End == InvalidVA)
+      return;
+    Bodies.emplace_back(Start, End);
+  };
+  for (const auto &[Start, End] : Img.KnownCodeRanges)
+    Add(Start, End);
+  for (const Symbol &Sym : Img.Symbols) {
+    if (!Sym.IsFunc)
+      continue;
+    const va_t Start = normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode);
+    Entries.insert(Start);
+    if (Sym.Size && Sym.Size < InvalidVA - Start)
+      Add(Start, Start + Sym.Size);
+  }
+  // Restricted PE loads keep the other unwind ranges in their raw table.
+  for (const auto &Record : Img.COFFPDataRecords)
+    if (Record.BeginRVA < Record.EndRVA &&
+        Record.EndRVA < InvalidVA - Img.Base) {
+      Entries.insert(Img.Base + Record.BeginRVA);
+      Add(Img.Base + Record.BeginRVA, Img.Base + Record.EndRVA);
+    }
+  llvm::sort(Bodies);
+  size_t Count = 0;
+  for (const auto &Range : Bodies) {
+    if (Count && Range.first <= Bodies[Count - 1].second)
+      Bodies[Count - 1].second =
+          std::max(Bodies[Count - 1].second, Range.second);
+    else
+      Bodies[Count++] = Range;
+  }
+  Bodies.resize(Count);
+}
+
+bool ImportThunkCandidates::allows(va_t Start, uint64_t Size) const {
+  if (!Size || Size >= InvalidVA - Start)
+    return false;
+  if (Entries.count(Start))
+    return true;
+  const auto Next = std::lower_bound(
+      Bodies.begin(), Bodies.end(), Start + Size,
+      [](const auto &Range, va_t End) { return Range.first < End; });
+  return Next == Bodies.begin() || std::prev(Next)->second <= Start;
+}
+
 void scanImportThunks(BinaryImage &Img) {
   std::map<va_t, size_t> TargetImports;
   for (size_t I = 0; I < Img.Imports.size(); ++I)
@@ -111,6 +157,7 @@ void scanImportThunks(BinaryImage &Img) {
     return;
 
   auto Existing = Img.getSymbolAddresses();
+  const ImportThunkCandidates Candidates(Img);
   [[maybe_unused]] size_t Added = 0;
 
   for (const auto &Seg : Img.Segments) {
@@ -119,13 +166,16 @@ void scanImportThunks(BinaryImage &Img) {
     switch (Img.Arch) {
     case Arch::X64:
     case Arch::X86:
-      Added += scanImportThunksX86(Img, Seg, TargetImports, Existing);
+      Added +=
+          scanImportThunksX86(Img, Seg, TargetImports, Existing, Candidates);
       break;
     case Arch::AArch64:
-      Added += scanImportThunksAArch64(Img, Seg, TargetImports, Existing);
+      Added += scanImportThunksAArch64(Img, Seg, TargetImports, Existing,
+                                       Candidates);
       break;
     case Arch::ARM:
-      Added += scanImportThunksARM(Img, Seg, TargetImports, Existing);
+      Added +=
+          scanImportThunksARM(Img, Seg, TargetImports, Existing, Candidates);
       break;
     default:
       break;
