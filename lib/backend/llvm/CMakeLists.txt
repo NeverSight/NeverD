@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
 
   LINK_COMPONENTS
   IR
+  IRMed
 )
 
 add_neverd_component_library(NeverDBackendLLVM
@@ -58,6 +59,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMNativeRegistration.cpp
   X86/MedLLVMNativeRegistrationCxx.cpp
   X86/MedLLVMRegistrationCxxCatch.cpp
+  X86/MedLLVMRegistrationCxxCall.cpp
   emit/MedLLVMCall.cpp
   emit/MedLLVMEmitter.cpp
   emit/MedLLVMFloatEmitter.cpp

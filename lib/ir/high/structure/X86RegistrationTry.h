@@ -13,7 +13,8 @@
 namespace neverd {
 
 /// Exact ordinary CFG ranges for a closed synchronous component. All calls
-/// terminate and are protected by this try; runtime resumes are independent.
+/// are checked leaves or protected throws. Every ordinary path terminates;
+/// runtime resumes are independent.
 std::vector<ExceptionAddressRange>
 terminalRegistrationTryRanges(const MedFunc &Med, int32_t TryLow,
                               int32_t TryHigh);

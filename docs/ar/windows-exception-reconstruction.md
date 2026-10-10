@@ -31,7 +31,9 @@
 | `__CxxFrameHandler3` | Unwind/try maps وcatches وoffsets وcontinuations وIP-to-state | الفترات القابلة للاختزال كـC++ HighIR مع type annotations متوافقة مع C | إعادة بناء x64 للمجموعة الضيقة verifier-clean أدناه |
 | `__CxxFrameHandler4` | فك متغير محدود إلى رسم C++ المشترك | HighIR نفسه مع مصدر FH4 | تحليل فقط؛ تُرفض الدالة المتأثرة |
 | `__GSHandlerCheck_SEH/EH/EH4` | Personality مغلفة ومصدر GS cookie مفحوص | رسم اللغة الأساسي وannotation للwrapper | تحليل فقط؛ رفض بلا downgrade |
-| x86 registration-chain EH | منفصل عن EH الجدولي | Annotation لشكل غير مدعوم | لا يعاد بناؤه |
+| x86 registration-chain EH | سلاسل SEH ورسوم C++ بعد التحقق | مناطق HighIR مع الحفاظ على هوية callback | إعادة بناء PE32 للمجموعة المثبتة؛ راجع العقد التفصيلي |
+
+يمكن لـ `try` داخل `catch` لمرجع قياسي الحفاظ على كائن الاستثناء الخارجي الحي واستعادة مكدسه الخاص. ما زالت callbacks المشتركة ودورات حياة الكائنات العامة خارج مجموعة إعادة البناء الأصلية. [PE32 C++](../windows-exception-reconstruction.md).
 
 لا يُعامل record malformed كأنه كامل. يفيد الفك الجزئي في الفحص، لكنه لا يسمح
 بالتوليد الأصلي. إذا ظل header لـARM xdata يثبت نطاق fragment تنفيذيًا محدودًا

@@ -32,7 +32,9 @@ NeverD переносит табличные сведения об исключ�
 | `__CxxFrameHandler3` | Unwind/try maps, catches, offsets object/frame, continuations и IP-to-state | Сводимые интервалы как C++ HighIR с C-совместимыми type annotations | Нативная x64-реконструкция узкого verifier-clean подмножества ниже |
 | `__CxxFrameHandler4` | Ограниченное variable-length декодирование в общий C++-граф | Тот же HighIR с provenance FH4 | Только анализ; затронутая функция отклоняется |
 | `__GSHandlerCheck_SEH/EH/EH4` | Wrapped personality и проверенная provenance GS cookie | Базовый языковой граф и wrapper-аннотация | Только анализ; отказ без downgrade |
-| x86 registration-chain EH | Отделено от табличного EH | Аннотация неподдерживаемой формы | Не реконструируется |
+| x86 EH с цепочкой регистрации | Проверенные цепочки SEH и графы C++ | Регионы HighIR с сохранением идентичности callback | Реконструкция PE32 для доказанного подмножества; см. подробный контракт |
+
+`try` внутри `catch` скалярной ссылки может сохранять живой внешний объект и восстанавливать его отдельный стек. Общие callback и произвольные жизненные циклы объектов пока не входят в нативное подмножество. [PE32 C++](../windows-exception-reconstruction.md).
 
 Malformed record никогда не считается полным. Partial decode остаётся полезным
 для исследования, но не разрешает нативную генерацию. Если header xdata ARM всё

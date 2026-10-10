@@ -16,6 +16,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
+#include "neverd/ir/high/MsvcTypeName.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -52,6 +53,8 @@ bool isCIdentifier(llvm::StringRef Name) {
 }
 
 bool isCxxTypeSpelling(llvm::StringRef Name) {
+  if (msvc_type_name::isFundamentalSpelling(Name))
+    return true;
   while (!Name.empty()) {
     const size_t Sep = Name.find("::");
     const llvm::StringRef Part =
@@ -68,21 +71,6 @@ bool isCxxTypeSpelling(llvm::StringRef Name) {
 bool isCxxThrowExpr(const HighExpr *E) {
   return E && E->Kind == ExprKind::Call &&
          isMsvcCxxThrowCallName(E->CallTarget);
-}
-
-bool isCxxRethrowObject(const HighExpr *Obj) {
-  const HighExpr *Cur = Obj;
-  for (int Depth = 0; Cur && Depth < 8; ++Depth) {
-    if (Cur->Kind == ExprKind::Const)
-      return Cur->ConstVal == 0;
-    if ((Cur->Kind == ExprKind::Cast || Cur->Kind == ExprKind::UnaryOp) &&
-        !Cur->Operands.empty()) {
-      Cur = Cur->Operands[0].get();
-      continue;
-    }
-    break;
-  }
-  return !Obj;
 }
 
 bool isFastFailExpr(const HighExpr *E) { return E && isX86FastFailCall(*E); }
@@ -277,29 +265,6 @@ std::string HighCWriter::sehFilterValueText(const HighExpr &Value) {
     }
   }
   return exprStr(Value);
-}
-
-void HighCWriter::writeCxxThrowExpr(const HighStmt &Stmt,
-                                    const HighExpr &ThrowCall) {
-  if (!Opts.StructuredExceptionSyntax) {
-    OS << exprStr(ThrowCall);
-    return;
-  }
-  OS << "throw";
-  if (auto Printed = CxxThrowPrints.find(&Stmt);
-      Printed != CxxThrowPrints.end()) {
-    OS << " " << Printed->second.Type << "(";
-    for (size_t I = 0; I < Printed->second.Args.size(); ++I) {
-      if (I)
-        OS << ", ";
-      OS << exprStr(*Printed->second.Args[I]);
-    }
-    OS << ")";
-    return;
-  }
-  if (!ThrowCall.Operands.empty() && ThrowCall.Operands[0] &&
-      !isCxxRethrowObject(ThrowCall.Operands[0].get()))
-    OS << " " << exprStr(*ThrowCall.Operands[0]);
 }
 
 void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {

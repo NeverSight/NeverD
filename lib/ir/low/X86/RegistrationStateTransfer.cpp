@@ -25,9 +25,9 @@ bool overlaps(int32_t Offset, uint16_t Width, int32_t Slot,
 
 bool RegistrationStateSolver::transferBlock(size_t I) {
   const LowBlock &Block = Function.Blocks[I];
-  const Domain Before = Incoming[I];
-  if (!charge(Before.CxxCatchStacks.size() + 1))
+  if (!charge(Incoming[I].catchCellCount() + 1))
     return true;
+  const Domain Before = Incoming[I];
   Domain After = Before;
   FrameTransfer Transfer(
       After.Frame, *Chain.RegistrationOffset, EH4 ? SecurityCookieVA : 0,
@@ -447,42 +447,8 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       merge(It->second, After);
     }
   }
-  if (CatchReturn) {
-    const auto Resume = Entries.find(CatchReturn->TargetVA);
-    if (Resume != Entries.end()) {
-      if (!charge(After.Frame.cellCount() + After.RuntimeObject.cellCount() +
-                  2))
-        return true;
-      Domain Continued = After;
-      auto Stack = *Continued.CxxCatchStacks.begin();
-      Stack.pop_back();
-      Continued.Parent = Stack.empty();
-      Continued.Callback = !Stack.empty();
-      Continued.OtherCallback = false;
-      Continued.CxxCatchStacks.clear();
-      if (!Stack.empty())
-        Continued.CxxCatchStacks.insert(std::move(Stack));
-      Continued.RuntimeIdentity.reset();
-      const int32_t SavedSlot = *Chain.RegistrationOffset - 4;
-      Continued.Frame.store(SavedSlot, 4,
-                            FrameValue::frame(CatchReturn->SavedStackOffset));
-      Continued.RuntimeObject.store(SavedSlot, 4, {});
-      if (Chain.hasCxxCallbackStack()) {
-        Continued.Frame.leaveCallback();
-        // The CRT's call frame does not promise the callback's general
-        // registers at its continuation. The restore block rebuilds them.
-        for (auto &Register : Continued.Frame.Registers)
-          Register = {{}, {}, false, true};
-        Continued.Frame.OtherRegisterBytes.clear();
-        Continued.Frame.OtherRegistersMayBeFrame = true;
-      }
-      Continued.Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
-          FrameValue::frame(*Chain.cxxRuntimeFrameOffset());
-      Continued.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
-          FrameValue::frame(CatchReturn->SavedStackOffset);
-      merge(Resume->second, Continued);
-    }
-  }
+  if (CatchReturn)
+    resumeCxxCatch(After, *CatchReturn);
   dispatchBlock(I, Before);
   return true;
 }

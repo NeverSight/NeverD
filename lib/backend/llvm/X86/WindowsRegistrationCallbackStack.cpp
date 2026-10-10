@@ -42,7 +42,8 @@ llvm::Error checkPrivateStack(
     const std::map<llvm::StoreInst *, X86RegistrationRootKind> &Seeds,
     X86RegistrationCallbackFrame &Frame,
     std::set<llvm::AllocaInst *> &PrivateSlots, size_t &WorkUsed,
-    const std::set<llvm::StoreInst *> *SourceStores) {
+    const std::set<llvm::StoreInst *> *SourceStores,
+    llvm::ArrayRef<X86RegistrationCatchStackResume> Resumes) {
   std::map<llvm::Value *, int64_t> Offsets;
   std::vector<llvm::Value *> Work;
   struct ScratchAccess {
@@ -73,17 +74,20 @@ llvm::Error checkPrivateStack(
     if (Inserted)
       Work.push_back(Value);
   };
-  auto Loads = [&](llvm::AllocaInst *Slot) {
+  auto Loads = [&](llvm::AllocaInst *Slot, int32_t Offset) {
     for (llvm::User *User : Slot->users()) {
       if (!Charge(1))
         break;
       if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(User))
-        Add(Load, 0);
+        Add(Load, Offset);
     }
   };
   for (const auto &[Definition, Kind] : Seeds)
     if (Kind == X86RegistrationRootKind::StackPointer)
-      Loads(llvm::cast<llvm::AllocaInst>(Definition->getPointerOperand()));
+      Loads(llvm::cast<llvm::AllocaInst>(Definition->getPointerOperand()), 0);
+  for (const auto &Resume : Resumes)
+    Loads(llvm::cast<llvm::AllocaInst>(Resume.Seed->getPointerOperand()),
+          Resume.Offset);
   auto CheckAccess = [&](llvm::Type *Type, int64_t Offset, llvm::Align Align) {
     const llvm::TypeSize Size = Layout.getTypeStoreSize(Type);
     return !Size.isScalable() && Offset < 0 &&
@@ -264,6 +268,15 @@ llvm::Error checkPrivateStack(
     Pending.push_back(&Block);
     Queued.insert(&Block);
   }
+  std::map<llvm::BasicBlock *, std::set<llvm::BasicBlock *>> ResumeSources,
+      ResumeTargets;
+  for (const auto &Resume : Resumes)
+    for (auto *Source : Resume.Sources) {
+      if (!Charge(1))
+        return reject("catch stack resume edges exceed the work budget");
+      ResumeSources[Resume.Seed->getParent()].insert(Source);
+      ResumeTargets[Source].insert(Resume.Seed->getParent());
+    }
   while (!Pending.empty()) {
     if (!Charge(1))
       return reject(
@@ -291,7 +304,17 @@ llvm::Error checkPrivateStack(
             ++It;
         }
       }
+      for (auto *Source : ResumeSources[Block])
+        for (auto It = In.begin(); It != In.end();) {
+          if (!Charge(1))
+            return reject("catch stack resume cells exceed the work budget");
+          if (!Incoming[Source].count(*It))
+            It = In.erase(It);
+          else
+            ++It;
+        }
     }
+    const bool IncomingChanged = Incoming[Block] != In;
     if (!Charge(In.size()))
       return reject(
           "private callback scratch incoming copy exceeds the work budget");
@@ -306,6 +329,10 @@ llvm::Error checkPrivateStack(
     if (!Charge(In.size() + Outgoing[Block].size()))
       return reject(
           "private callback scratch comparison exceeds the work budget");
+    if (IncomingChanged)
+      for (auto *Target : ResumeTargets[Block])
+        if (Queued.insert(Target).second)
+          Pending.push_back(Target);
     if (Outgoing[Block] != In) {
       Outgoing[Block] = std::move(In);
       for (llvm::BasicBlock *Successor : llvm::successors(Block)) {

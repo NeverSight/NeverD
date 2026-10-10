@@ -25,6 +25,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/high/MsvcTypeName.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
@@ -89,6 +90,8 @@ std::string readMSVCTypeDescriptorName(const BinaryImage *Img,
   }
   if (Name.empty())
     return {};
+  if (const auto Type = msvc_type_name::fundamental(Name))
+    return Type->Spelling.str();
   if (const std::string Spelling = msvcRttiTypeSpelling(Name);
       !Spelling.empty())
     return Spelling;
@@ -1405,7 +1408,24 @@ uniqueHandlerBlockRange(const MedFunc &Med, const ExceptionFunction &EH,
               ? Range.overlaps(Candidate.Range)
               : llvm::any_of(Candidate.Cover,
                              [&](const auto &P) { return Range.overlaps(P); });
-      if (AroundTry ? !Candidate.Range.contains(Range) : Overlaps)
+      bool InsideCallback = false;
+      if (Overlaps && Callback && Candidate.HasTryStates) {
+        const auto Parents = registrationCatchParents(Med);
+        if (!Parents)
+          return std::nullopt;
+        for (uint32_t I = 0; I < EH.Cxx->TryBlocks.size(); ++I) {
+          const auto &Try = EH.Cxx->TryBlocks[I];
+          if (Try.TryLow == Candidate.TryLow &&
+              Try.TryHigh == Candidate.TryHigh && (*Parents)[I]) {
+            const auto Parent = *(*Parents)[I];
+            InsideCallback = EH.Cxx->TryBlocks[Parent.first]
+                                 .Handlers[Parent.second]
+                                 .HandlerVA == Target;
+          }
+        }
+      }
+      if (!InsideCallback &&
+          (AroundTry ? !Candidate.Range.contains(Range) : Overlaps))
         return std::nullopt;
     }
   }
@@ -1805,7 +1825,7 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     }
     // A try joined from split parts may start with a part's statements: its
     // entry, and the label it carries, is its first statement's address.
-    va_t Entry = TerminalRegistration ? Med.Entry : Candidate.Range.Begin;
+    va_t Entry = Candidate.Range.Begin;
     if (!NestedParts.empty())
       for (const HighStmt &S : ProtectedBody)
         if (S.Addr && S.Addr != InvalidVA) {

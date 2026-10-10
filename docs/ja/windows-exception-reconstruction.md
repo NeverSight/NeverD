@@ -31,7 +31,9 @@ NeverD は Windows のテーブルベース例外情報を、ロード、lift、
 | `__CxxFrameHandler3` | unwind/try map、catch、catch-object/frame offset、continuation、IP-to-state map | reducible state interval を明示的 C++ HighIR と C 互換型注釈に変換 | 後述する狭い verifier-clean subset のネイティブ x64 再構築 |
 | `__CxxFrameHandler4` | action kind と object offset を含む bounded variable-length decode | FH4 provenance を持つ共通 HighIR graph | 解析のみ。対象関数の変更を拒否 |
 | `__GSHandlerCheck_SEH/EH/EH4` | wrapped personality と検査済み GS cookie provenance | base language graph と wrapper 注釈 | 解析のみ。downgrade せず対象関数の変更を拒否 |
-| x86 registration-chain EH | table-based EH と区別 | unsupported-form 注釈 | 再構築しない |
+| x86 registration-chain EH | 検証済み SEH チェーンと C++ グラフ | callback の識別を保持する HighIR 領域 | 証明済み部分集合の PE32 再構築。詳細な契約を参照 |
+
+スカラー参照の `catch` 内にある `try` は、生存中の外側の例外オブジェクトと専用スタックの復元を保持できます。共有 callback と一般的なオブジェクト寿命は、まだネイティブ再構築の対象外です。 [PE32 C++](../windows-exception-reconstruction.md).
 
 Malformed record を完全な通常 record として扱うことはありません。partial decode は調査に
 使えますが、ネイティブ metadata 生成を許可しません。ARM xdata header から bounded な

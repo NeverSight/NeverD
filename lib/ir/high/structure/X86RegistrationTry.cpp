@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/X86RegistrationCall.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -47,6 +48,14 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
   if (NativeTry == EH.Cxx->TryBlocks.end())
     return std::nullopt;
   const auto &Try = *NativeTry;
+  const auto Parents = registrationCatchParents(Med);
+  if (!Parents)
+    return std::nullopt;
+  const auto Parent = (*Parents)[NativeTry - EH.Cxx->TryBlocks.begin()];
+  const va_t EntryVA =
+      Parent
+          ? EH.Cxx->TryBlocks[Parent->first].Handlers[Parent->second].HandlerVA
+          : Med.Entry;
   std::map<int, const MedBlock *> Blocks;
   TerminalRegistrationRegion Result;
   auto &Ranges = Result.Ranges;
@@ -62,7 +71,7 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
              .emplace(Block.StartAddr, std::make_pair(Block.EndAddr, Block.Id))
              .second)
       return std::nullopt;
-    if (Block.StartAddr == Med.Entry)
+    if (Block.StartAddr == EntryVA)
       Entry = Block.Id;
   }
   va_t End = 0;
@@ -83,7 +92,7 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
     if (!Ordinary.insert(Id).second)
       continue;
     const auto &Block = *Blocks.at(Id);
-    if (!Block.ExceptionalPreds.empty())
+    if (!Block.ExceptionalPreds.empty() && (!Parent || Id != Entry))
       return std::nullopt;
     bool Terminal = false;
     for (const auto &Op : Block.Ops) {
@@ -100,23 +109,29 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
       if (Work > limits::kMaxRegistrationEHStateWork)
         return std::nullopt;
       // Extending a synchronous language scope over its branch and frame
-      // setup is valid only if every ordinary call already has that scope.
-      // In particular, never bring an unprotected call or an EHa memory fault
-      // under a new handler merely because the addresses surround the try.
-      if (!registrationCallABI(Med, Block, Op) || !Op.DoesNotReturn ||
-          !llvm::any_of(State.Blocks,
-                        [&](const auto &S) {
-                          return S.Reached && !S.CallbackOnly && !S.Unknown &&
-                                 S.Range.contains(Op.Addr) &&
-                                 !S.Levels.empty() &&
-                                 llvm::all_of(S.Levels, [&](int32_t Level) {
-                                   return Level >= Try.TryLow &&
-                                          Level <= Try.TryHigh;
-                                 });
-                        }) ||
+      // setup is valid when each throw already has that scope. A checked
+      // returning leaf has no calls or C++ throws, so synchronous EH permits
+      // its placement before the compiler's first state store. Unknown calls
+      // and asynchronous memory faults cannot use this exception.
+      if (!registrationCallABI(Med, Block, Op) ||
+          !llvm::any_of(
+              State.Blocks,
+              [&](const auto &S) {
+                const bool Context =
+                    Parent ? S.CallbackOnly && S.CxxCatchStacks.size() == 1 &&
+                                 !S.CxxCatchStacks[0].empty() &&
+                                 S.CxxCatchStacks[0].back() == *Parent
+                           : !S.CallbackOnly;
+                return S.Reached && Context && !S.Unknown &&
+                       S.Range.contains(Op.Addr) && !S.Levels.empty() &&
+                       llvm::all_of(S.Levels, [&](int32_t Level) {
+                         return !Op.DoesNotReturn ||
+                                (Level >= Try.TryLow && Level <= Try.TryHigh);
+                       });
+              }) ||
           !Calls.insert(Op.Addr).second)
         return std::nullopt;
-      Terminal = true;
+      Terminal = Op.DoesNotReturn;
     }
     if (Terminal != Block.Succs.empty())
       return std::nullopt;

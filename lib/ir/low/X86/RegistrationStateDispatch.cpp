@@ -30,8 +30,7 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
               Source.Frame.OtherRegisterBytes.size() +
               Incoming[Target].Frame.cellCount() +
               Incoming[Target].Frame.OtherRegisterBytes.size() +
-              Source.CxxCatchStacks.size() +
-              Incoming[Target].CxxCatchStacks.size() +
+              Source.catchCellCount() + Incoming[Target].catchCellCount() +
               Source.RuntimeObject.cellCount() +
               Source.RuntimeObject.OtherRegisterBytes.size() +
               Incoming[Target].RuntimeObject.cellCount() +
@@ -50,11 +49,6 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
     Changed |= Before != Dest.Levels.size();
     Changed |= Dest.Frame.merge(Source.Frame);
     Changed |= Dest.RuntimeObject.merge(Source.RuntimeObject);
-    if (Dest.RuntimeIdentity != Source.RuntimeIdentity &&
-        Dest.RuntimeIdentity) {
-      Dest.RuntimeIdentity.reset();
-      Changed = true;
-    }
     for (auto It = Dest.InitializedFrameBytes.begin();
          It != Dest.InitializedFrameBytes.end();)
       if (!Source.InitializedFrameBytes.count(*It)) {
@@ -126,6 +120,18 @@ void RegistrationStateSolver::dispatch(
       return;
     if (!enterCxxCatch(Root, Source, CxxCatch->first, CxxCatch->second))
       return;
+    // A nested scalar catch does not destroy the exception of a retained
+    // outer guard. Preserve exact aliases only while that invocation is live;
+    // cleanup calls still invalidate them until their writes are projected.
+    if (!charge(EH.Cxx->UnwindMap.size()))
+      return;
+    if (llvm::none_of(EH.Cxx->UnwindMap,
+                      [](const auto &Action) { return Action.ActionVA != 0; }))
+      for (const auto &[Offset, Value] : Source.RuntimeObject.Cells)
+        if (Value.ExceptionObject && *Value.ExceptionObject != *CxxCatch &&
+            runtimeObjectIsLive(Source, *Value.ExceptionObject) &&
+            runtimeObjectIsLive(Root, *Value.ExceptionObject))
+          Root.RuntimeObject.Cells[Offset] = Value;
     if (CheckRuntimeObjects) {
       const auto Object = CatchObjects.find(*CxxCatch);
       const auto &Catch =
@@ -136,7 +142,9 @@ void RegistrationStateSolver::dispatch(
         const auto &C = Object->second;
         const uint16_t SlotBytes = C.Reference ? 4 : uint16_t(C.ObjectSize);
         const auto SP =
-            Root.Frame.load(*Chain.RegistrationOffset - 4, 4).Offset;
+            Root.CxxCatchStacks.size() == 1
+                ? Root.CxxCatchStacks.begin()->front().SavedStackOffset
+                : std::nullopt;
         const auto Offset = Chain.cxxSourceFrameOffset(C.FrameOffset);
         const int64_t End = int64_t(Offset.value_or(0)) + SlotBytes;
         if (!SP || !Offset || Source.Unknown || Unknown || *Offset < *SP ||
@@ -152,10 +160,9 @@ void RegistrationStateSolver::dispatch(
           for (int64_t Byte = *Offset; Byte < End; ++Byte)
             Root.InitializedFrameBytes.insert(int32_t(Byte));
           Root.RuntimeObject.store(*Offset, SlotBytes,
-                                   C.Reference ? FrameValue::frame(0)
+                                   C.Reference ? FrameValue::exceptionObject(
+                                                     C.TryIndex, C.CatchIndex)
                                                : FrameValue{});
-          if (C.Reference)
-            Root.RuntimeIdentity = C;
         }
       }
     }

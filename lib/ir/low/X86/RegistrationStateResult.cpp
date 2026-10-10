@@ -49,6 +49,20 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
           "registration-state output budget exhausted");
       return std::move(Result);
     }
+    std::set<std::vector<std::pair<uint32_t, uint32_t>>> CatchStacks;
+    for (const auto &Stack : State.CxxCatchStacks) {
+      if (!charge(Stack.size() + 1)) {
+        Result.Complete = Result.RegistrationLifetimeComplete = false;
+        Result.Blocks.clear();
+        Result.Diagnostics.push_back(
+            "registration catch output budget exhausted");
+        return std::move(Result);
+      }
+      std::vector<std::pair<uint32_t, uint32_t>> Identities;
+      for (const auto &Context : Stack)
+        Identities.emplace_back(Context.TryIndex, Context.CatchIndex);
+      CatchStacks.insert(std::move(Identities));
+    }
     Result.Blocks.push_back({Block.Id,
                              {Block.StartAddr, Block.EndAddr},
                              {Levels.begin(), Levels.end()},
@@ -57,7 +71,8 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
                              State.CanDispatch && State.Installed,
                              EH.Cxx ? cxxMinimumTryLevel(State, *EH.Cxx) : 0,
                              State.Reached,
-                             std::move(Searches)});
+                             std::move(Searches),
+                             {CatchStacks.begin(), CatchStacks.end()}});
     if (CallbackOnly && Unknown)
       Result.CallbackStatesComplete = false;
     if (!CallbackOnly && Unknown)

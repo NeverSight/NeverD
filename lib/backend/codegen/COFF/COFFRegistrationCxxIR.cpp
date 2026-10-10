@@ -212,6 +212,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ frame has no runtime escape");
   if (auto Error = bindCxxCatches(Result, Med, Function, *Layout))
     return std::move(Error);
+  if (auto Error = bindCxxCatchStack(Result, Med, Function))
+    return std::move(Error);
+  const auto CatchParents = projectX86RegistrationCatchParents(Med);
+  if (!CatchParents)
+    return rejectIR("C++ continuation lost its parent invocation");
   auto BundleIs = [](const llvm::CallBase &Call, const llvm::Value *Pad) {
     auto Bundle = Call.getOperandBundle("funclet");
     return Pad ? Bundle && Bundle->Inputs.size() == 1 &&
@@ -351,7 +356,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
                       ? Result.Catches[Result.SourceCatchOwners.at(BlockId)].Pad
                       : nullptr) ||
         !Result.Calls
-             .emplace(Call, CxxIRCall{Contract, Effect.ECXFrameOffset, false})
+             .emplace(Call, CxxIRCall{Contract, Effect.ECXFrameOffset, false,
+                                      Effect.RuntimeThrow})
              .second)
       return rejectIR("C++ call changed its runtime funclet context");
   }
@@ -359,14 +365,16 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ IR gained an unproved external call");
   for (const auto &[Call, Receipt] : Result.Calls) {
     const auto *Callee = Call->getCalledFunction();
-    const bool Throw = Receipt.Contract.CalleeKind ==
-                       RegistrationCalleeFrameContract::Kind::PrivateThrow;
+    const bool Throw = Receipt.Contract.isThrow();
     const bool Borrow = Receipt.ObjectFrameOffset.has_value();
-    if (!Callee || !Callee->isDeclaration() || !Callee->hasExternalLinkage() ||
+    const bool RuntimeThrow = Receipt.Contract.isRuntimeThrow();
+    if (RuntimeThrow != Receipt.RuntimeThrow.has_value() || !Callee ||
+        !Callee->isDeclaration() || !Callee->hasExternalLinkage() ||
         Callee->isVarArg() || Call->isInlineAsm() || Call->isTailCall() ||
-        Call->arg_size() != unsigned(Borrow) ||
-        Call->getCallingConv() !=
-            (Borrow ? llvm::CallingConv::X86_ThisCall : llvm::CallingConv::C) ||
+        Call->arg_size() != (RuntimeThrow ? 2u : unsigned(Borrow)) ||
+        Call->getCallingConv() != (RuntimeThrow ? llvm::CallingConv::X86_StdCall
+                                   : Borrow ? llvm::CallingConv::X86_ThisCall
+                                            : llvm::CallingConv::C) ||
         Call->getCallingConv() != Callee->getCallingConv() ||
         Call->getFunctionType() != Callee->getFunctionType() ||
         (Borrow && !Call->getArgOperand(0)->getType()->isPointerTy()) ||
@@ -376,6 +384,33 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         (Receipt.Cleanup && !Call->doesNotThrow()) ||
         (!Receipt.Cleanup && Call->doesNotThrow()))
       return rejectIR("C++ preserved callee changed its physical call ABI");
+    if (RuntimeThrow) {
+      // The runtime reads the object, changes thread-local exception state,
+      // and may unwind. Optimizer promises such as memory(none) are not part
+      // of this ABI even when the signature and arguments still match.
+      auto RuntimeAttributes = [](const llvm::AttributeList &Attributes) {
+        return llvm::all_of(Attributes.getFnAttrs(), [](llvm::Attribute A) {
+          return A.isEnumAttribute() &&
+                 A.getKindAsEnum() == llvm::Attribute::NoReturn;
+        });
+      };
+      if (!RuntimeAttributes(Call->getAttributes()) ||
+          !RuntimeAttributes(Callee->getAttributes()))
+        return rejectIR("C++ throw changed its runtime effects");
+      for (unsigned Index = 0; Index != 2; ++Index) {
+        const auto *Null = llvm::dyn_cast<llvm::ConstantPointerNull>(
+            Call->getArgOperand(Index));
+        // Even with the same stdcall convention and null values, inreg can
+        // change the physical argument locations and nonnull can introduce UB.
+        if (!Call->getArgOperand(Index)->getType()->isPointerTy() ||
+            Call->getArgOperand(Index)->getType()->getPointerAddressSpace() !=
+                0 ||
+            (Receipt.RuntimeThrow->isRethrow() && !Null) ||
+            Call->getAttributes().getParamAttrs(Index).hasAttributes() ||
+            Callee->getAttributes().getParamAttrs(Index).hasAttributes())
+          return rejectIR("C++ throw changed its runtime argument contract");
+      }
+    }
     auto Target = rewrite_source::getOriginalVA(*Callee);
     if (!Target)
       return Target.takeError();
@@ -392,9 +427,16 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         Resume = &Candidate;
     if (!Resume)
       return rejectIR("C++ catch lost its checked runtime continuation");
+    const llvm::AllocaInst *Suspended = nullptr;
+    if (Resume->SavedCallbackVA) {
+      const auto Parent = (*CatchParents)[Resume->TryIndex];
+      if (!Parent || !Result.Catches.at(*Parent).Stack)
+        return rejectIR("C++ continuation lost its suspended catch");
+      Suspended = Result.Catches.at(*Parent).Stack;
+    }
     auto Restored = validateCxxContinuationRestore(
         *Anchor, Result.Frame, *Source.Registration->RegistrationOffset - 4,
-        *Resume);
+        *Resume, Suspended);
     if (!Restored)
       return Restored.takeError();
     const auto *Return = *Restored;
@@ -410,6 +452,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         !BundleIs(*Anchor, Result.Catches.at(Identity).Pad) ||
         !Returns.insert(Return).second)
       return rejectIR("C++ catch changed its checked runtime continuation");
+    Result.SavedStackRestores.insert(
+        llvm::cast<llvm::StoreInst>(Return->getPrevNode()));
     ExpectedAnchors.insert(Anchor);
   }
   if (Returns.size() != States.CxxContinuations.size())
@@ -530,8 +574,6 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       metadataInteger(*Contract, exception_rewrite::SkippedLandingPads, 64) !=
           0)
     return rejectIR("C++ native contract counters changed");
-  if (auto Error = bindCxxCatchStack(Result, Med, Function))
-    return std::move(Error);
   return Result;
 #endif
 }

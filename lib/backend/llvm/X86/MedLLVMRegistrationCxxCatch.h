@@ -28,7 +28,8 @@ void emitRegistrationCxxCatches(
     const ExceptionFunction &EH,
     std::map<X86RegistrationCatchIdentity, RegistrationCxxCatchPlan> &Plans,
     llvm::ArrayRef<llvm::BasicBlock *> Dispatches,
-    llvm::ArrayRef<llvm::BasicBlock *> OuterUnwinds, llvm::AllocaInst &Frame,
-    llvm::Function &Parent);
+    llvm::ArrayRef<llvm::BasicBlock *> OuterUnwinds,
+    llvm::ArrayRef<std::optional<X86RegistrationCatchIdentity>> Parents,
+    llvm::AllocaInst &Frame, llvm::Function &Parent);
 } // namespace neverd
 #endif

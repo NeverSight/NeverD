@@ -304,13 +304,19 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
     if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.EntryOffset)
       return FrameValue::entryFrame(
           static_cast<int32_t>(*Left.Constant + uint32_t(*Right.EntryOffset)));
-    if (Left.Offset && Right.Constant)
-      return FrameValue::frame(static_cast<int32_t>(
+    if (Left.Offset && Right.Constant) {
+      auto Result = FrameValue::frame(static_cast<int32_t>(
           uint32_t(*Left.Offset) +
           (Op.Opcode == NdOp::INT_ADD ? *Right.Constant : -*Right.Constant)));
-    if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.Offset)
-      return FrameValue::frame(
+      Result.ExceptionObject = Left.ExceptionObject;
+      return Result;
+    }
+    if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.Offset) {
+      auto Result = FrameValue::frame(
           static_cast<int32_t>(*Left.Constant + uint32_t(*Right.Offset)));
+      Result.ExceptionObject = Right.ExceptionObject;
+      return Result;
+    }
     if (Left.Constant && Right.Constant)
       return FrameValue::constant(Op.Opcode == NdOp::INT_ADD
                                       ? *Left.Constant + *Right.Constant

@@ -19,8 +19,9 @@ void emitRegistrationCxxCatches(
     const ExceptionFunction &EH,
     std::map<X86RegistrationCatchIdentity, RegistrationCxxCatchPlan> &Plans,
     llvm::ArrayRef<llvm::BasicBlock *> Dispatches,
-    llvm::ArrayRef<llvm::BasicBlock *> OuterUnwinds, llvm::AllocaInst &Frame,
-    llvm::Function &Parent) {
+    llvm::ArrayRef<llvm::BasicBlock *> OuterUnwinds,
+    llvm::ArrayRef<std::optional<X86RegistrationCatchIdentity>> Parents,
+    llvm::AllocaInst &Frame, llvm::Function &Parent) {
 #ifndef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
   llvm_unreachable("native C++ catches require compiler subfield support");
 #else
@@ -72,6 +73,11 @@ void emitRegistrationCxxCatches(
                                  Catch.HandlerVA);
     }
   }
+  for (uint32_t Region = 0; Region < Parents.size(); ++Region)
+    if (const auto Parent = Parents[Region])
+      Plans.at({Region, 0})
+          .Pad->getCatchSwitch()
+          ->setParentPad(Plans.at(*Parent).Pad);
 #endif
 }
 } // namespace neverd

@@ -46,12 +46,17 @@ ExprPtr x86RegistrationFrameAddress(const RegistrationFrameCoordinate &Frame,
 }
 
 ExprPtr lowerX86RegistrationRoot(const MedFunc &Func, const MedOp &Op) {
-  if (isRegistrationCallbackStackRoot(Func, Op)) {
+  if (const auto Stack = registrationCallbackStackCoordinate(Func, Op)) {
     auto Value = HighExpr::makeVar(Op.Output, NdType::makeInt(4, false));
     Value->Kind = ExprKind::EntryRegister;
     Value->EntryFunctionVA = Func.Entry;
-    Value->EntryVA = Op.Addr;
-    return Value;
+    Value->EntryVA = Stack->Entry;
+    return Stack->Offset
+               ? HighExpr::makeBinop(
+                     NdOp::INT_SUB, Value,
+                     HighExpr::makeConst(-int64_t(Stack->Offset), 4,
+                                         ConstantAddressProvenance::Scalar))
+               : Value;
   }
   const auto Coordinate = registrationRootFrameCoordinate(Func, Op);
   if (!Coordinate)
