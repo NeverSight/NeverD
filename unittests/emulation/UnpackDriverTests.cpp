@@ -135,7 +135,8 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
   ASSERT_FALSE(HasFatalFailure());
   auto Result = unpackFile(Input, Options);
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked) << Result->Diagnostic;
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+      << unpackResultJSON(*Result);
   EXPECT_EQ(Result->Profile, profile::ReportProfile);
   EXPECT_EQ(Result->EntryRVA, Original.Entry);
   EXPECT_EQ(Result->ProcessStop, "observer");
@@ -195,7 +196,8 @@ TEST_P(UnpackDriver, RecoversAfterReleasingTransientImageMDLs) {
   ASSERT_FALSE(HasFatalFailure());
   auto Result = unpackFile(Input, Options);
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked) << Result->Diagnostic;
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+      << unpackResultJSON(*Result);
   EXPECT_EQ(Result->EntryRVA, Original.Entry);
   EXPECT_FALSE(Result->RuntimeState.HasAdditionalDependencies);
   const auto Output = Scratch / "released-mdl.sys";
@@ -228,7 +230,8 @@ TEST_P(UnpackDriver,
 TEST_P(UnpackDriver, DynamicKernelExportIdentitySurvivesRebinding) {
   auto Result = unpackFile(packed(4), Options);
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked) << Result->Diagnostic;
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+      << unpackResultJSON(*Result);
   EXPECT_TRUE(std::any_of(
       Result->Imports.begin(), Result->Imports.end(), [](const auto &I) {
         return I.Module == "ntoskrnl.exe" && I.Name == "IofCompleteRequest" &&
@@ -358,7 +361,8 @@ TEST_P(UnpackDriver, SchedulingSlicesPreserveInvocationAndTransferIdentity) {
   Scheduled.Driver->Scheduling = D.Scheduling;
   auto Result = unpackFile(Input, Scheduled);
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked) << Result->Diagnostic;
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+      << unpackResultJSON(*Result);
   EXPECT_EQ(Result->EntryRVA, Unscheduled->EntryRVA);
   EXPECT_EQ(Result->Transfers.size(), Unscheduled->Transfers.size());
   EXPECT_EQ(Result->Image, Unscheduled->Image);
