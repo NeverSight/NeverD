@@ -174,6 +174,8 @@ LLVM 模型負責驗證 `initializes` 參數契約，重用狀態指標投影，
 
 可選的 `InterpreterLLVMRefinementPreservation` 請求向兩段全新證明加入 GPR 位元組保存義務。準備層統一負責有預算的驗證、重疊聯集與按字分割；完整狀態、定義性與框架觀察項仍須保留。`NativeState` 只傳給原生檢查器，支援 `SelectedWitness`，拒絕 `AllUndefinedChoices`。子憑據綁定各自的有效契約；空請求維持原有預設行為。
 
+`InterpreterLLVMNativeCollection` 將兩項預設關閉的收集選項僅傳給全新原生證明。保留的稽核邊界必須在所選 witness 下不可達；延遲收集的分支仍須為每條可行路徑提供完整語義。原生憑據綁定這些選項，原始碼假設、觀察項和證明預算維持不變。
+
 恢復 C API v3 與 CLI 將明確的欄位、細化和求解查詢預算傳入共用特化器。轉接層先檢查結構大小與 reserved 欄位，再讀取擴充；v1/v2 配置和預設值保持穩定。提高預算僅改變允許的工作量，不改變執行契約或結果發布條件。
 
 恢復也提供 `--vm-chain-transfers=N`（預設 0）和 `--vm-no-control-discovery`。串接在已證明唯一目標的控制轉移之間保留符號關聯；達到上限後回到普通 CFG 邊界。機器狀態恢復可透過 `--vm-entry-frame=begin:end` 宣告未經執行時檢查、不會回繞的入口 RSP 偏移範圍。精確數值前提會寫入產生的 C 和報告；它不授予記憶體存取權限，也不構成等價證明。
@@ -1141,7 +1143,7 @@ Windows 虛擬記憶體新增 `VirtualAlloc`、`VirtualFree`、`VirtualProtect`�
 
 Windows 行程時間策略由 `os/windows/process/` 的 `WindowsProcessTime.cpp` 管理。`std::chrono` 區分主機實際時間與單調計數器，`WindowsProcess.def` 定義客體時間單位與有限等待上限；CPU 後端不承載 Windows 時間策略。
 
-`lib/unpack` 分四層恢復加殼鏡像。`core` 負責編排和格式註冊表。`format/pe` 驗證容器並重建觀察到的記憶體、導入和中繼資料；`PETLS.cpp` 根據載入器分配資訊及觀察到的回呼驗證替換的 TLS 記錄。不使用保護器註冊表或靜態外殼簽章選擇入口。`dynamic` 透過 `observeProcess` 觀察來賓行程：`Observation.def` 把每種容器與指令集對應到一個行程設定檔，並給出每種指令集的堆疊指標和指令視窗。新增一個目標只需一列表項和一個模組目錄，表中沒有對應列的輸入會被依名稱拒絕。`ExecutionSession` 負責執行監視；`ProcessObserver` 讀取已停止的行程並選擇下一個停止點，但不能改變來賓狀態。模擬層只知道 `defer_unmodeled`，它把未建模的匯入繫結到一旦執行就停止的不透明入口。參見[脫殼](unpack.md)。 延遲載入允許可執行回呼或入口目標位於零填充記憶體，由先前的初始化器產生程式碼。回呼陣列與 TLS 配置中繼資料仍須有經驗證的檔案內容；一般嚴格載入保留檔案覆蓋檢查。作業系統模型提供呼叫歸屬，並在準備呼叫或恢復暫停的呼叫者時通知觀察器。轉移監視在這些邊界重新設定，涵蓋回呼與產生的入口位於同一頁的情況。
+`lib/unpack` 按職責分層恢復加殼鏡像。`core` 負責編排和格式註冊表。`format/pe` 驗證容器並重建觀察到的記憶體、導入和中繼資料；`PETLS.cpp` 根據載入器分配資訊及觀察到的回呼驗證替換的 TLS 記錄。不使用保護器註冊表或靜態外殼簽章選擇入口。`dynamic` 透過 `observeProcess` 觀察來賓行程：`Observation.def` 把每種容器與指令集對應到一個行程設定檔，並給出每種指令集的堆疊指標和指令視窗。新增一個目標只需一列表項和一個模組目錄，表中沒有對應列的輸入會被依名稱拒絕。`ExecutionSession` 負責執行監視；`ProcessObserver` 讀取已停止的行程並選擇下一個停止點，但不能改變來賓狀態。模擬層只知道 `defer_unmodeled`，它把未建模的匯入繫結到一旦執行就停止的不透明入口。參見[脫殼](unpack.md)。 延遲載入允許可執行回呼或入口目標位於零填充記憶體，由先前的初始化器產生程式碼。回呼陣列與 TLS 配置中繼資料仍須有經驗證的檔案內容；一般嚴格載入保留檔案覆蓋檢查。作業系統模型提供呼叫歸屬，並在準備呼叫或恢復暫停的呼叫者時通知觀察器。轉移監視在這些邊界重新設定，涵蓋回呼與產生的入口位於同一頁的情況。
 
 `WindowsLibraryHost.cpp` 負責 DLL 宿主建構，Windows 載入器負責一般載入與卸載生命週期。`ProcessView::inputModule()` 區分觀察輸入與宿主 EXE，允許延後建立初始快照。`ProcessView::callFrame()` 透過 `IntegerABI` 讀取整數參數與返回事實；`dynamic/ProcessTransfer` 負責匹配返回位址與堆疊的完成證據。僅 `PETLS.cpp` 決定該證據是否完成程序附加回呼。
 
@@ -1414,6 +1416,14 @@ Objective-C 原始碼匯出器對完整原生單元與各方法單元同時關�
 DarwinFiles 負責共通屬性匯入、名稱/stat 有效性與紀錄編碼；DarwinDirectory 負責批次分組、明確物件授權與描述物件擁有的迭代/游標/EOF 狀態，與 getdirentries64 共用目前子項投影。dup 共用同一描述物件，零 seek 重設迭代契約。JSON 提供明確策略輸入，服務派送不推斷檔案系統觀察。
 
 復原的 DLL 入口與原始 PE 入口不同時，寫入器產生載入器通知配接器：程序附加進入選定入口，卸載與執行緒通知進入原始的可執行入口，以保留外層包裝函式的清理。原始入口不可用時重建失敗。報告的 `entry_rva` 仍表示選定的程式入口，PE 標頭可指向配接器。獨立包裝 DLL 測試在兩種模擬架構與原生 Windows 上檢查選定函式之外的清理。
+
+`ProcessView::runtimeState()` 傳遞不可變的 OS 自有狀態。`WindowsProcessState.cpp` 從權威所有者擷取資源識別、已提交記憶體及生命週期。`unpack/os/windows` 驗證並編譯初始化器；`format/pe/PERuntime.cpp` 負責配置與合併匯入、TLS 及展開中繼資料。通用觀察層不解讀 Windows 物件配置，也不以整數比對推測歸屬。
+
+`observeImage` 依 PE 執行域選擇處理程序或驅動環境。`observeDriver` 透過 `EmulationRuntime` 共用停止態 `ProcessObserver` 回呼；核心所有權與 DriverEntry ABI 檢查仍由驅動層負責。排程時間片保留呼叫身分。見[驅動脫殼](unpack.md)。
+
+`support/X86Addressing.h` 統一負責提升器與受檢執行器對普通 SIB 無索引標記的位寬判定：`EIZ` 僅在 32 位元位址下表示無索引，`RIZ` 僅在 64 位元位址下表示無索引；兩者均不能充當基底暫存器或 VSIB 向量索引。REX.X 選擇的 R12/R12D 仍是真實的縮放索引。`X64Address` 回歸在兩種權限級別比較原始處理器執行、記憶體存取觀察、取消與記憶體錯誤，`X86NoIndexAddress` 則保留嚴格提升與格式錯誤別名檢查。
+
+普通 RAM 的 `XCHG` 支援未對齊的 8/16/32/64 位元運算元，包含顯式 LOCK 前綴與隱式加鎖兩種形式。共用 RAM 交易保留入口有效位址、序列化發布結果，並捨棄取消或錯誤時的寫入；處理器執行原始交換指令。`X64Address` 涵蓋位址與暫存器重疊、部分暫存器寫入、快取列與頁面跨界、觀察回呼及缺頁錯誤。MMIO 交換仍要求提供者契約和自然對齊，其他 LOCK 指令系列沿用既有准入規則。
 
 ## 原生不透明狀態保持
 

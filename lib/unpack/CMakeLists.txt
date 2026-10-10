@@ -18,14 +18,24 @@ set(_unpack_sources
   format/pe/PEFormat.cpp
   format/pe/PEImage.cpp
   format/pe/PERebuild.cpp
+  format/pe/PERuntime.cpp
   format/pe/PETLS.cpp)
 set(_unpack_components Support)
 if(NEVERD_ENABLE_CPU_EMULATION OR NEVERD_ENABLE_DRIVER_EMULATION)
   list(APPEND _unpack_sources
     dynamic/Platform.cpp
     dynamic/ProcessImports.cpp
-    dynamic/ProcessTransfer.cpp)
+    dynamic/ProcessTransfer.cpp
+    dynamic/RuntimeState.cpp
+    os/windows/RuntimeState.cpp)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/os/windows/NativeRuntime.c")
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/os/windows/NativeRuntime.c" _runtime_source)
+  configure_file(os/windows/RuntimeSource.h.in RuntimeSource.h @ONLY)
   list(APPEND _unpack_components EmulationProcess)
+  if(NEVERD_ENABLE_DRIVER_EMULATION)
+    list(APPEND _unpack_components Emulation)
+  endif()
 endif()
 
 add_neverd_component_library(NeverDUnpack
@@ -35,7 +45,11 @@ add_neverd_component_library(NeverDUnpack
 
 if(NEVERD_ENABLE_CPU_EMULATION OR NEVERD_ENABLE_DRIVER_EMULATION)
   target_compile_definitions(NeverDUnpack PRIVATE NEVERD_UNPACK_EXECUTION=1)
+  target_include_directories(NeverDUnpack PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 if(WIN32)
   target_compile_definitions(NeverDUnpack PRIVATE NOMINMAX)
+endif()
+if(NEVERD_ENABLE_DRIVER_EMULATION)
+  target_compile_definitions(NeverDUnpack PRIVATE NEVERD_UNPACK_DRIVER_EXECUTION=1)
 endif()

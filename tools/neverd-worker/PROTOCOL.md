@@ -1,6 +1,7 @@
-# NeverD worker protocol 1.0
+# NeverD worker protocol 1.1
 
-`neverd-worker` is a local child process, owns one C ABI Session, and has no Qt
+`neverd-worker` is a local child process, owns a native C ABI Session and an
+independent optional web session, and has no Qt
 or LLVM linkage of its own. The GUI must launch the bundled worker by explicit
 path, continuously drain stdout and stderr, and validate `protocol_major` before
 opening a binary. It does not listen on a network port or execute target code.
@@ -9,7 +10,7 @@ opening a binary. It does not listen on a network port or execute target code.
 
 Each message is a **4-byte unsigned big-endian byte length**, followed by that
 many bytes of UTF-8 JSON. Length is 1 through 8 MiB. Input nesting is capped at
-64. Empty, truncated and oversized frames terminate the connection with a
+64. Decoded duplicate object keys are rejected. Empty, truncated and oversized frames terminate the connection with a
 `fatal` message; malformed JSON produces an error response and preserves framing.
 stdout is a protocol-only channel. Before Session creation, the worker duplicates
 the output handle and redirects ordinary stdout to stderr, including C stdio,
@@ -19,7 +20,7 @@ before `main` and must remain quiet, as with the existing linked CLI boundary.
 The first unsolicited message is:
 
 ```json
-{"type":"hello","protocol_major":1,"protocol_minor":0,"engine_version":"...","project_schema":1,"revision":"0","project_id":"","max_frame_bytes":8388608,"capabilities":["metadata","functions","disasm","bytes","decompile","cfg","xrefs","strings","analyze","resolve","annotations","annotation_set","rename","save","reload","segments","read_only","heartbeat","cancel"],"storage":"existing_json_sidecars"}
+{"type":"hello","protocol_major":1,"protocol_minor":1,"engine_version":"...","project_schema":1,"revision":"0","project_id":"","max_frame_bytes":8388608,"capabilities":["metadata","functions","disasm","bytes","decompile","cfg","xrefs","strings","analyze","resolve","annotations","annotation_set","rename","save","reload","segments","read_only","heartbeat","cancel"],"storage":"existing_json_sidecars","web":{"schema_version":1,"status":"error","error":{"code":"capability_unavailable"}}}
 ```
 
 `project_schema:1` refers to this sidecar adapter and versioned edit history, not
@@ -27,6 +28,11 @@ the proposed SQLite project format. No analysis cache is persisted. Edit history
 is bound to the input SHA-256 supplied by the public dashboard C API. The engine
 version must match the shipped engine. `hello` is also
 accepted as a request and returns this object in its response payload.
+The example shows an engine without web support. When available, `web` contains
+the actual web C API capability response plus `operation_prefix:"web_"` and
+`payload_schema_version:1`. A worker linked to an older engine remains usable
+for native requests; it resolves the optional web API only from the already
+loaded engine library.
 
 Requests:
 
@@ -151,6 +157,117 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `contribution_register` | `{path}`. Validates a local manifest completely before adding or replacing its namespace; returns the new contributions listing. Registration never executes a query or loads scripts/QML. |
 | `contribution_unregister` | `{namespace}`. Removes that namespace and returns the new listing. The built-in `neverd` namespace is reserved. |
 | `contribution_execute` | `{id,address?:hex}`. Executes that registered, whitelisted read-only query, replacing its exact `${address}` token with the supplied address or image entry. Returns `{contribution_id,operation,result}`. Arbitrary query/payload overrides are not supported. |
+
+## Offline web operations
+
+The shared JSON reader rejects duplicate decoded object keys through a bounded
+SAX preflight before normal DOM construction. It avoids DOM-filter callbacks,
+which can repeatedly scan large parent arrays in the pinned JSON library.
+The same admission applies to native frames and persisted history; the byte
+and depth limits remain unchanged.
+
+Web requests use the same framing, serialized executor and cancellation
+contract, with an operation prefixed by `web_`. They do not require an open
+binary. Every web payload requires `schema_version:1`; unknown fields are
+rejected. The payload is passed to the shared C API without independent
+parsing, extraction or semantic inference in the adapter.
+
+Responses carry `domain:"web"`. Envelope `project_id`, `revision`, and optional
+request guards belong to the web session for these operations. Native requests
+retain the native session's state. Successful web import does not change the
+native revision or dirty state. Web inspection has
+`analysis_state:"not_analyzed"|"partial"`, never the native `complete` claim.
+Heartbeat retains its native fields and adds
+`web:{revision,project_id}` for the published web snapshot.
+
+| Operation | Payload fields after `schema_version` |
+|---|---|
+| `web_capabilities` | None; returns actual compiled capabilities, including unavailable status |
+| `web_import_preview` | `path`, optional `options` object using the C API import schema |
+| `web_import_commit` | `preview_token` |
+| `web_metadata` | None |
+| `web_electron_manifest_analyze` | Exact `revision`, captured `artifact_id` (original file or available ASAR member); explicit manifest profile, exact admitted entry candidate, no runtime or framework verification |
+| `web_electron_source_analyze` | Exact `revision`, analyzed `source_id`; lexical module-origin candidates and source-visible window/IPC/bridge boundaries; requires the JS parser |
+| `web_electron_source_records` | Exact `revision`, `source_id`, optional `offset:0,limit:128`; exact source node/range links and fixed categories, private values omitted |
+| `web_electron_ipc_analyze` | Exact `revision`, analyzed `manifest_artifact_id`, `source_ids` array of 1–16 analyzed sources including the main candidate; explicit captured directory scope, private exact UTF-16 channel comparison, no runtime routing proof |
+| `web_electron_ipc_records` | Exact `revision`, `electron_ipc_id`, `record_kind:sources/channels/endpoints`, optional `offset:0,limit:128`; scope-bound IDs and candidate counts, no channel text/hash |
+| `web_electron_entries_analyze` | Exact `revision`, analyzed `manifest_artifact_id`, `source_ids` array of 1–16 analyzed sources including the main candidate; captured preload/renderer paths compared with exact available members, no runtime or HTML analysis |
+| `web_electron_entry_records` | Exact `revision`, `electron_entries_id`, `record_kind:sources/entries`, optional `offset:0,limit:128`; path evidence and optional target artifact/source IDs, private paths omitted |
+| `web_artifacts` | Exact `revision`, optional `offset:0,limit:128` |
+| `web_html_analyze` | Exact `revision`, captured `artifact_id`; UTF-8 script/base candidates, no DOM/fetch/execution; works without the JS parser |
+| `web_html_records` | Exact `revision`, `html_id`, `record_kind:scripts/bases`, optional `offset:0,limit:128`; original ranges and eligible source artifact IDs, private reference values omitted |
+| `web_asar_extract` | Exact `revision`, original `artifact_id`, optional captured `unpacked_directory_id`; no host companion lookup, member integrity/availability explicit |
+| `web_asar_records` | Exact `revision`, `extraction_id`, optional page fields; private names, actual storage identities/ranges, usable `member_id` selections |
+| `web_bun_extract` | Exact `revision`, original `artifact_id`; explicit fixed Bun ELF profile; no execution or producer authentication |
+| `web_bun_records` | Exact `revision`, `extraction_id`, `record_kind: modules/regions`, optional page fields; original offsets/hashes and private decoded source IDs |
+| `web_source_analyze` | Exact `revision`, `artifact_id`, explicit `source_type` |
+| `web_source_nodes` | Exact `revision`, `source_id`, optional page fields |
+| `web_source_bindings_analyze` | Exact `revision`, analyzed `source_id`; returns lexical-binding status and counts |
+| `web_source_binding_records` | Exact `revision`, `source_id`, `record_kind: scopes/bindings/declarations/references`, optional page fields |
+| `web_source_semantics_analyze` | Exact `revision`, `source_id`; returns bounded primitive/effect analysis status and counts |
+| `web_source_semantic_records` | Exact `revision`, `source_id`, optional page fields; private value kinds/status and immediate/deferred effect categories only |
+| `web_source_modules_analyze` | Exact `revision`, `source_id`; module inventory and admitted-file comparison; derived HTML inline sources retain explicit document/script/base context, without runtime resolution |
+| `web_source_module_records` | Exact `revision`, `source_id`, `record_kind: requests/imports/exports/attributes`, optional page fields; reported link profile/context and nullable URL presence flags, no specifier/name/path values |
+| `web_source_bundles_analyze` | Exact `revision`, `source_id`; fixed structural loader/table recovery, without execution or producer authentication |
+| `web_source_bundle_records` | Exact `revision`, `source_id`, `record_kind: bundles/modules/dependencies/regions`, optional page fields; original ranges and hashes, no module keys/source text |
+| `web_source_view_preview` | Exact `revision`, `source_id`, optional schema-1 `options` object; metadata only, default structural policy |
+| `web_source_view_commit` | Exact `revision`, `preview_token`; consumes the current preview attempt and publishes only a matching candidate |
+| `web_source_view_records` | Exact `revision`, `view_id`, optional page fields; metadata mapping original/projected regions, also available before commit |
+| `web_source_view_chunk` | Exact `revision`, committed `view_id`, canonical decimal-string `byte_offset`, optional integer `byte_limit:65536` (1–65536); UTF-8/CRLF-aligned inert text |
+| `web_source_navigation_analyze` | Exact `revision`, `source_id`; source containment index with explicit lexical/runtime uncertainty |
+| `web_source_navigation_records` | Exact `revision`, `source_id`, `record_kind: functions/calls/references`, optional page fields; source spans and identity links, no raw names |
+| `web_source_anchor` | Exact `revision`, `source_id`, canonical decimal-string `byte_offset` and `byte_length`, optional committed `view_id`; source/storage/display range metadata only |
+| `web_native_open` | Exact `revision`, `selection_id` for an admitted original, Bun asset or available ASAR member; opens one independent snapshot-backed native session and returns metadata only |
+| `web_native_metadata` / `web_native_analyze` | Exact `revision`, current `handoff_id`; query captured provenance/counts or explicitly run static native analysis; no target execution |
+| `web_source_map_analyze` | Exact `revision`, `artifact_id`; also accepts an available ASAR `member_id` or extracted Bun `source_map_region_id` when native Zstd support is available |
+| `web_source_map_sources` / `web_source_map_segments` | Exact `revision`, `map_id`, optional page fields |
+| `web_source_map_lookup` | Exact `revision`, `map_id`, `generated_source_id`, canonical decimal-string `byte_offset` |
+
+The web native handoff is distinct from the worker's ordinary native project.
+It has no host path, debug-companion discovery or sidecar persistence. Failed
+replacement leaves it usable; a successful web import or handoff replacement
+destroys the previous handle. `pipeline_status` describes the selected native
+pipeline only. Input bytes are capped at 256 MiB; native loader/pipeline resource
+contracts remain separate from JavaScript parser budgets. Universal Mach-O
+selection is unavailable. Other native APIs are not exposed through this table.
+
+Required payload revisions bind source/artifact queries even when the optional
+envelope guard is absent. Page limits are 1–512. Payloads preserve the backend's
+`page_complete`, map association status, coordinate validation and fixed
+diagnostic codes. Neither page completion nor valid map coordinates establish
+semantic completeness or producer provenance. The metadata policy omits target
+names, source text, URL references and literal values on ordinary metadata
+operations. Explicit source-view chunks use a structural display policy instead.
+Original regions require `locally_reviewed:true` and exact `reviewed_ranges` in
+the preview's options, followed by commit. This is a local caller assertion,
+not authorization for network/model disclosure. Replacing a source's policy
+revokes its prior view; import commit clears all projections. No export or
+semantic rewrite is implemented by these operations.
+Semantic results explicitly deny rewrite permission. An unavailable effect
+record is null rather than an empty list. These additive entry points are
+resolved optionally, so an older web-capable engine still supports its existing
+operations and reports the new ones unavailable.
+Module request candidates retain `runtime_target_verified: false`; dynamic
+imports and unverified require callees are never followed by the transport.
+Bundle partitions likewise retain original source identities and unverified
+runtime-target/producer status. An unmatched layout leaves the source unit intact.
+See the [web schema](../../docs/web-artifact-schema.md).
+
+`NeverDWorkerWeb` is a C++ adapter and framed-process test against the real
+engine. It compares published artifacts/maps with direct C API-backed queries,
+checks web/native revision isolation and runs the worker with an unusable
+external-tool `PATH`. Windows input is still unavailable; its web test returns
+the explicit CTest skip status until that reader is qualified.
+For a standalone worker using an imported engine, enable
+`NEVERD_WORKER_WEB_ENGINE_TESTS` only when that library exports the web C API;
+the ordinary worker itself continues to support older engines without it.
+
+Bun serialized maps reuse the map operations above. Responses preserve
+container/compressed/decoded evidence identities and explicitly report
+`retained_mapped_anchors_only`: Bun discarded symbol names and unmapped
+boundaries. A module association is an unverified `container_assertion`,
+not runtime/producer authentication. The worker forwards the backend's profile,
+fidelity, storage and redaction fields without reinterpreting them.
 
 ## IR and C source mapping
 

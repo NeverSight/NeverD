@@ -84,6 +84,7 @@ add_neverd_component_library(NeverDEmulationABI
 add_neverd_component_library(NeverDEmulationRuntime
   runtime/ExecutionBudget.cpp
   runtime/ExecutionSession.cpp
+  runtime/ProcessObserver.cpp
   LINK_COMPONENTS EmulationCPU
   LLVM_COMPONENTS Support)
 

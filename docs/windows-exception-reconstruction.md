@@ -115,9 +115,9 @@ the original entry ESP without inventing a constant stack displacement. Exact
 no-return call receipts remove ordinary fallthrough before SSA while preserving
 exceptional entries. HighIR restores the captured SavedESP through that same
 aligned coordinate before transferring to a checked continuation. It keeps
-handler and continuation annotations; full
-structured callback lowering and native re-reconstruction of these realigned
-sources remain unsupported.
+handler and continuation annotations; full structured callback lowering remains
+unsupported. Native reconstruction supports the checked scalar-catch subset
+below, including its separate invocation stack.
 An unproven continuation or conflicting return retains annotations and
 withdraws native authority. These facts remain separate from the source
 FuncInfo and from the parent's scalar return value.
@@ -209,12 +209,20 @@ rejects native installation.
 
 Native x86 C++ reconstruction currently supports one synchronous typed try and
 one scalar catch, by value or reference, with at most 128 source unwind states.
-The source uses the checked direct MSVC registration frame and
-`FuncInfo` magic `0x19930522`, without a GS wrapper. Every preserved call,
-throw type and cleanup relay needs an independently checked ABI. Source object
+The source uses a checked direct MSVC registration frame or the bounded LLVM
+ESI-anchored aligned frame, with `FuncInfo` magic `0x19930522` and no GS wrapper.
+Every preserved call, throw type and cleanup relay needs an independently
+checked ABI. Source object
 borrows must be bounded, initialized and separate from registration storage;
 reference accesses retain the CRT-provided object identity through catch return.
 Reads and writes must retain the original image storage identity.
+For an aligned source, the synthetic allocation proves the parent coordinate's
+alignment and extent. Catch objects, cleanup borrows and SavedESP writeback use
+that same projection. A catch has a separately bounded scratch allocation;
+its address may enter the parent only through SavedESP. Installation replays
+the source contract and independently checks actual LLVM alignment, bounds,
+initialization at every catch entry, callback lifetime and the final writeback.
+A frame-layout descriptor alone cannot authorize reconstruction.
 
 LLVM recreates the physical registration, typed catch home, ordered cleanup
 dispatch, complete FuncInfo and private handler. Public installation requires
@@ -225,9 +233,9 @@ checks actual emitted code, tables, SafeSEH and all absolute relocations. Entry
 patches may not overwrite preserved helper or CRT instructions. The current
 runtime fixtures prove integer value/reference catches and nested destruction
 under Wine and the Windows CRT, including forced relocation. Other try/catch
-graphs, unproved object types, incoming stack arguments, dynamic frames and GS
-or asynchronous C++ remain available for analysis and are rejected for native
-installation.
+graphs, unproved object types, incoming stack arguments, unproved dynamic frames
+and GS or asynchronous C++ remain available for analysis and are rejected for
+native installation.
 
 ## IR contract
 

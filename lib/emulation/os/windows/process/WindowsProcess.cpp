@@ -161,6 +161,10 @@ public:
   std::optional<uint64_t> nativeCallCount() const override {
     return Result.NativeCalls.size();
   }
+  llvm::Expected<std::shared_ptr<const ProcessRuntimeState>>
+  runtimeState(bool IncludeBacking) override {
+    return OS.runtimeState(IncludeBacking);
+  }
   bool watchedMemoryUnchanged() const override { return MemoryUnchanged; }
   void setWatchedMemoryUnchanged(bool Unchanged) {
     MemoryUnchanged = Unchanged;

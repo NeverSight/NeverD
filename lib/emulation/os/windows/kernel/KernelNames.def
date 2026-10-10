@@ -13,6 +13,7 @@
 NEVERD_KERNEL_NAME(DevicePrefix, "\\DEVICE\\")
 NEVERD_KERNEL_NAME(KernelProvider, "ntoskrnl.exe")
 NEVERD_KERNEL_NAME(KernelAliasProvider, "ntkrnlmp.exe")
+NEVERD_KERNEL_NAME(HALProvider, "hal.dll")
 NEVERD_KERNEL_NAME(FrameworkLoaderProvider, "wdfldr.sys")
 NEVERD_KERNEL_NAME(FrameworkProvider, "wdf01000.sys")
 NEVERD_KERNEL_NAME(DMAProvider, "dma-adapter")

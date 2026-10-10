@@ -46,6 +46,7 @@ target_sources(NeverDEmulation PRIVATE
   KernelModelFrameworkRequests.cpp
   KernelModelExports.cpp
   KernelModel.cpp
+  KernelUnpackState.cpp
   KernelCalls.cpp
   KernelIRPCalls.cpp
   KernelMDLCalls.cpp

@@ -1,0 +1,348 @@
+#include "BunFixture.h"
+#include "Internal.h"
+#include "gtest/gtest.h"
+
+#include "neverd/web/Bun.h"
+
+#include "llvm/Support/FileSystem.h"
+
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+
+namespace {
+using namespace neverd::web;
+using namespace neverd::web::test;
+class WebBun : public ::testing::Test {
+protected:
+  std::filesystem::path Root;
+  void SetUp() override {
+    llvm::SmallString<128> Directory;
+    ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-bun", Directory));
+    Root = Directory.str().str();
+  }
+  void TearDown() override {
+    std::error_code EC;
+    std::filesystem::remove_all(Root, EC);
+  }
+  Artifact input(std::string_view Bytes) {
+    const auto Path = Root / "input";
+    {
+      std::ofstream File(Path, std::ios::binary);
+      File.write(Bytes.data(), Bytes.size());
+      if (!File.good())
+        throw std::runtime_error("fixture write");
+    }
+    return capture(Path.string(), Limits{}).Artifacts.at(0);
+  }
+  void refuse(const std::string &Bytes, const char *Code) {
+    try {
+      (void)extractBun(input(Bytes));
+      FAIL() << "accepted " << Code;
+    } catch (const Error &E) {
+      EXPECT_STREQ(E.what(), Code);
+    }
+  }
+};
+
+std::string fixture(std::string_view Name) {
+  std::ifstream F(std::string(NEVERD_WEB_FIXTURE_DIR) + "/bun/" +
+                      std::string(Name),
+                  std::ios::binary);
+  if (!F)
+    throw std::runtime_error("missing corpus fixture");
+  return {std::istreambuf_iterator<char>(F), {}};
+}
+llvm::json::Value manifest(std::string_view Name) {
+  auto Parsed =
+      llvm::json::parse(fixture(std::string(Name) + ".manifest.json"));
+  if (!Parsed)
+    throw std::runtime_error("invalid corpus manifest");
+  return std::move(*Parsed);
+}
+std::string field(const llvm::json::Value &V, const char *Key) {
+  return V.getAsObject()->getString(Key)->str();
+}
+void checkGolden(const BunExtraction &E, const llvm::json::Value &Expected) {
+  const auto &Modules = *Expected.getAsObject()->getArray("modules");
+  ASSERT_EQ(E.Modules.size(), Modules.size());
+  for (size_t I = 0; I < E.Modules.size(); ++I) {
+    const auto &M = E.Modules[I];
+    const auto &R = *Modules[I].getAsObject()->getArray("ranges");
+    const std::array<uint32_t, 6> Actual{M.Name,       M.Contents,
+                                         M.SourceMap,  M.Bytecode,
+                                         M.ModuleInfo, M.BytecodeOrigin};
+    for (size_t P = 0; P < Actual.size(); ++P) {
+      const auto Size = std::stoull(field(R[P], "size"));
+      if (P > 1 && Size == 0) {
+        EXPECT_EQ(Actual[P], NoBunIndex);
+        continue;
+      }
+      ASSERT_LT(Actual[P], E.Regions.size());
+      const auto &V = E.Regions[Actual[P]];
+      EXPECT_EQ(V.Offset - E.GraphOffset, std::stoull(field(R[P], "offset")));
+      EXPECT_EQ(V.Content.size(), Size);
+      EXPECT_EQ(V.BlobHash, field(R[P], "sha256"));
+    }
+    EXPECT_EQ(M.Encoding, Modules[I].getAsObject()->getInteger("encoding"));
+    EXPECT_EQ(M.Format, Modules[I].getAsObject()->getInteger("format"));
+    EXPECT_EQ(M.Loader, Modules[I].getAsObject()->getInteger("loader"));
+  }
+}
+
+#ifndef _WIN32
+TEST_F(WebBun, PreservedCompilerGraphsMatchIndependentGoldenMemberRanges) {
+  for (const auto Name :
+       {"plain", "unicode", "utf16", "asset-map", "cache-map"}) {
+    SCOPED_TRACE(Name);
+    const auto Expected = manifest(Name);
+    const auto Graph = fixture(std::string(Name) + ".graph.bin");
+    ASSERT_EQ(sha256(Graph), field(Expected, "graph_sha256"));
+    // Only the graph bytes are original compiler output. This deliberately
+    // synthetic native wrapper cannot establish producer/version provenance.
+    const auto E = extractBun(input(bunELF(Graph)));
+    checkGolden(E, Expected);
+    for (const auto &M : E.Modules)
+      if (!M.SourceArtifactID.empty())
+        EXPECT_FALSE(bunSourceBytes(E, M, 1024 * 1024).empty());
+    if (std::string_view(Name) == "utf16") {
+      ASSERT_EQ(E.Modules[0].Encoding, 2);
+      EXPECT_NE(bunSourceBytes(E, E.Modules[0], 1024).find("中文 🌱"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST_F(WebBun, FullCompilerContainersMatchRecordedGoldenHashesWhenSupplied) {
+  const auto *Directory = std::getenv("NEVERD_BUN_142_CORPUS");
+  if (!Directory)
+    GTEST_SKIP() << "Full pinned compiler corpus not supplied; preserved graph "
+                    "checks remain independent";
+  for (const auto Name :
+       {"plain", "unicode", "utf16", "asset-map", "cache-map"}) {
+    SCOPED_TRACE(Name);
+    const auto Expected = manifest(Name);
+    const auto Path =
+        std::filesystem::path(Directory) / (std::string(Name) + ".elf");
+    const auto Snapshot = capture(Path.string(), Limits{});
+    ASSERT_EQ(Snapshot.Artifacts.size(), 1);
+    const auto &A = Snapshot.Artifacts[0];
+    ASSERT_EQ(A.BlobHash, field(Expected, "full_elf_sha256"));
+    const auto E = extractBun(A);
+    EXPECT_EQ(E.GraphOffset, std::stoull(field(Expected, "graph_offset")));
+    checkGolden(E, Expected);
+  }
+}
+
+TEST_F(WebBun, SourceAssetsMapsAndCachesRetainOriginalRangesAndHashes) {
+  const BunFixture F;
+  const auto Original = input(F.Bytes);
+  const auto E = extractBun(Original), Again = extractBun(Original);
+  ASSERT_EQ(E.Modules.size(), 3);
+  EXPECT_EQ(E.ID, Again.ID);
+  EXPECT_EQ(E.GraphOffset, 4104);
+  EXPECT_EQ(E.StartupCount, 2);
+  EXPECT_EQ(E.EntryPoint, 0);
+  for (const auto &R : E.Regions) {
+    EXPECT_EQ(R.BlobHash, sha256(std::string_view(F.Bytes).substr(
+                              R.Offset, R.Content.size())));
+    EXPECT_EQ(R.Content.read(0, R.Content.size()),
+              F.Bytes.substr(R.Offset, R.Content.size()));
+  }
+  const auto &M = E.Modules[0];
+  EXPECT_NE(M.ID, E.Regions[M.Contents].ID);
+  EXPECT_NE(M.SourceArtifactID, E.Regions[M.Contents].ID);
+  EXPECT_EQ(bunSourceBytes(E, M, 1024),
+            "export const secret = 'BUN_SOURCE_CANARY';");
+  EXPECT_EQ(bunSourceBytes(E, E.Modules[1], 1024),
+            "export const x = '中文🌱';");
+  EXPECT_TRUE(E.Modules[2].SourceArtifactID.empty());
+  EXPECT_NE(M.Bytecode, NoBunIndex);
+  EXPECT_NE(M.SourceMap, NoBunIndex);
+  EXPECT_NE(M.ModuleInfo, NoBunIndex);
+  EXPECT_NE(M.BytecodeOrigin, NoBunIndex);
+  std::filesystem::remove(Root / "input");
+  EXPECT_EQ(bunSourceBytes(E, M, 1024),
+            "export const secret = 'BUN_SOURCE_CANARY';");
+}
+
+TEST_F(WebBun, MalformedFooterAndUnknownLayoutDoNotProducePartialExtraction) {
+  const BunFixture F;
+  const auto At = 4104 + F.Footer;
+  auto Mutate = [&](uint64_t Offset, uint64_t Value, unsigned Width,
+                    const char *Code) {
+    auto B = F.Bytes;
+    put(B, Offset, Value, Width);
+    refuse(B, Code);
+  };
+  Mutate(4096, F.Graph.size() + 1, 8, "bun_invalid_graph_header");
+  Mutate(At, F.Footer - 1, 8, "bun_invalid_byte_count");
+  Mutate(At + 32, 0, 1, "bun_invalid_trailer");
+  Mutate(At + 28, 0x800003f0, 4, "bun_unsupported_graph_flags");
+  Mutate(At + 28, 0x3e0, 4, "bun_unsupported_graph_flags");
+  Mutate(At + 12, 157, 4, "bun_invalid_module_table");
+  Mutate(At + 16, 3, 4, "bun_invalid_entry_point");
+  Mutate(At + 20, 0xffffffff, 4, "bun_range_out_of_bounds");
+  Mutate(At + 8, 0xffffffff, 4, "bun_range_out_of_bounds");
+  Mutate(At + 24, 0xffffffff, 4, "bun_range_out_of_bounds");
+}
+
+TEST_F(WebBun, ELFMappingAndContainerBoundsAreRequired) {
+  const BunFixture F;
+  auto Mutate = [&](uint64_t Offset, uint64_t Value, unsigned Width,
+                    const char *Code) {
+    auto B = F.Bytes;
+    put(B, Offset, Value, Width);
+    refuse(B, Code);
+  };
+  Mutate(4, 1, 1, "bun_unsupported_container");
+  Mutate(18, 183, 2, "bun_unsupported_container");
+  Mutate(40, UINT64_MAX, 8, "bun_range_out_of_bounds");
+  Mutate(60, 0xffff, 2, "bun_unsupported_elf_tables");
+  Mutate(68, 5, 4, "bun_ambiguous_load_mapping");
+  Mutate(80, 0x800000, 8, "bun_ambiguous_load_mapping");
+  Mutate(96, UINT64_MAX, 8, "bun_range_out_of_bounds");
+  Mutate(104, UINT64_MAX, 8, "bun_range_out_of_bounds");
+  Mutate(112, 3, 8, "bun_invalid_load_segment");
+  const auto SH = get(F.Bytes, 40, 8);
+  Mutate(SH + 128 + 24, 128, 8, "bun_overlapping_section");
+  for (const auto N : {0U, 63U, 119U, 4100U})
+    EXPECT_THROW(extractBun(input(F.Bytes.substr(0, N))), Error);
+}
+
+TEST_F(WebBun, PointerAliasingTerminatorsEnumsAndNamesFailClosed) {
+  const BunFixture F;
+  const auto At = 4104 + F.Table;
+  auto Mutate = [&](uint64_t Offset, uint64_t Value, unsigned Width,
+                    const char *Code) {
+    auto B = F.Bytes;
+    put(B, Offset, Value, Width);
+    refuse(B, Code);
+  };
+  Mutate(At + 48, 3, 1, "bun_unsupported_module_encoding");
+  Mutate(At + 49, 255, 1, "bun_unsupported_module_encoding");
+  Mutate(At + 50, 0, 1, "bun_unsupported_module_encoding");
+  Mutate(At + 51, 2, 1, "bun_unsupported_module_encoding");
+  Mutate(At + 24, 121, 4, "bun_invalid_bytecode_alignment");
+  Mutate(At + 12, UINT32_MAX, 4, "bun_range_out_of_bounds");
+  const auto Name = get(F.Bytes, At, 4), NameSize = get(F.Bytes, At + 4, 4);
+  Mutate(4104 + Name + NameSize, 1, 1, "bun_missing_terminator");
+  Mutate(At + 4, 32769, 4, "bun_name_budget_exceeded");
+  auto Duplicate = F.Bytes;
+  put(Duplicate, At + 52, Name, 4);
+  put(Duplicate, At + 56, NameSize, 4);
+  refuse(Duplicate, "bun_invalid_module_name");
+  auto Alias = F.Bytes;
+  put(Alias, At + 32, get(Alias, At + 24, 4), 4);
+  refuse(Alias, "bun_overlapping_payloads");
+}
+
+TEST_F(WebBun, TextProjectionBudgetsAndUnpairedSurrogatesKeepRawEvidence) {
+  const BunFixture F(false);
+  const auto E = extractBun(input(F.Bytes));
+  EXPECT_THROW(bunSourceBytes(E, E.Modules[0], 1), Error);
+  const auto Good = bunSourceBytes(E, E.Modules[1], 1024);
+  EXPECT_EQ(bunSourceBytes(E, E.Modules[1], Good.size()), Good);
+  EXPECT_THROW(bunSourceBytes(E, E.Modules[1], Good.size() - 1), Error);
+  auto Bad = F.Bytes;
+  const auto Off = E.Regions[E.Modules[1].Contents].Offset;
+  put(Bad, Off, 0xd800, 2);
+  const auto Raw = extractBun(input(Bad));
+  EXPECT_THROW(bunSourceBytes(Raw, Raw.Modules[1], 1024), Error);
+  EXPECT_EQ(Raw.Regions[Raw.Modules[1].Contents].Content.read(0, 2),
+            std::string("\0\xd8", 2));
+  EXPECT_THROW(bunSourceBytes(E, E.Modules[2], 1024), Error);
+}
+
+TEST_F(WebBun, SourceRangesFollowUtf16ScalarsAndExcludeStorageTerminators) {
+  const BunFixture F;
+  const auto E = extractBun(input(F.Bytes));
+  const auto &M = E.Modules[1];
+  const auto &R = E.Regions[M.Contents];
+  const std::string Text = "export const x = '中文🌱';";
+  const auto CJK = Text.find("中"), Plant = Text.find("🌱");
+  const auto First = bunSourceRange(E, M, CJK, 3, Text.size());
+  EXPECT_EQ(First.Text, Text);
+  EXPECT_EQ(First.Offset, R.Offset + 2 * CJK);
+  EXPECT_EQ(First.Size, 2);
+  EXPECT_EQ(F.Bytes.substr(First.Offset, First.Size),
+            std::string("\x2d\x4e", 2));
+  const auto Pair = bunSourceRange(E, M, Plant, 4, Text.size());
+  EXPECT_EQ(Pair.Offset, R.Offset + 2 * CJK + 4);
+  EXPECT_EQ(Pair.Size, 4);
+  EXPECT_EQ(F.Bytes.substr(Pair.Offset, Pair.Size),
+            std::string("\x3c\xd8\x31\xdf", 4));
+  const auto Whole = bunSourceRange(E, M, 0, Text.size(), Text.size());
+  EXPECT_EQ(Whole.Offset, R.Offset);
+  EXPECT_EQ(Whole.Size, R.Content.size());
+  const auto EOFRange = bunSourceRange(E, M, Text.size(), 0, Text.size());
+  EXPECT_EQ(EOFRange.Offset, R.Offset + R.Content.size());
+  EXPECT_EQ(EOFRange.Size, 0);
+  EXPECT_THROW(bunSourceRange(E, M, CJK + 1, 0, Text.size()), Error);
+  EXPECT_THROW(bunSourceRange(E, M, Plant, 2, Text.size()), Error);
+  EXPECT_THROW(bunSourceRange(E, M, 0, Text.size() + 1, Text.size() + 1),
+               Error);
+  EXPECT_THROW(bunSourceRange(E, M, UINT64_MAX, 1, Text.size()), Error);
+  EXPECT_THROW(bunSourceRange(E, M, 1, UINT64_MAX, Text.size()), Error);
+  EXPECT_THROW(bunSourceRange(E, M, 0, 0, Text.size() - 1), Error);
+  EXPECT_THROW(bunSourceRange(E, E.Modules[2], 0, 0, 1024), Error);
+}
+
+TEST_F(WebBun, Latin1AndClientUtf8HaveDifferentStorageCoordinateRules) {
+  const BunFixture F;
+  const auto E = extractBun(input(F.Bytes));
+  const auto Base = E.Regions[E.Modules[0].Contents].Offset;
+  const auto At = std::string("export const secret = '").size();
+  auto Latin = F.Bytes;
+  Latin[Base + At] = char(0xe9);
+  const auto L = extractBun(input(Latin));
+  const auto Accent = bunSourceRange(L, L.Modules[0], At, 2, 1024);
+  EXPECT_EQ(Accent.Offset, Base + At);
+  EXPECT_EQ(Accent.Size, 1);
+  EXPECT_EQ(Accent.Text.substr(At, 2), "é");
+  EXPECT_EQ(bunSourceRange(L, L.Modules[0], At + 2, 1, 1024).Offset,
+            Base + At + 1);
+  EXPECT_THROW(bunSourceRange(L, L.Modules[0], At + 1, 0, 1024), Error);
+  auto UTF8 = F.Bytes;
+  UTF8.replace(Base + At, 3, "中");
+  UTF8.replace(Base, 7, " \r\n    ");
+  put(UTF8, 4104 + F.Table + 48, 0, 1);
+  put(UTF8, 4104 + F.Table + 51, 1, 1);
+  const auto U = extractBun(input(UTF8));
+  const auto Character = bunSourceRange(U, U.Modules[0], At, 3, 1024);
+  EXPECT_EQ(Character.Offset, Base + At);
+  EXPECT_EQ(Character.Size, 3);
+  EXPECT_EQ(Character.Text.substr(At, 3), "中");
+  EXPECT_THROW(bunSourceRange(U, U.Modules[0], At + 1, 1, 1024), Error);
+  EXPECT_THROW(bunSourceRange(U, U.Modules[0], 2, 0, 1024), Error);
+  const auto Newline = bunSourceRange(U, U.Modules[0], 1, 2, 1024);
+  EXPECT_EQ(Newline.Offset, Base + 1);
+  EXPECT_EQ(Newline.Size, 2);
+}
+
+TEST_F(WebBun, CountsAndAliasedNativeOwnersAreBoundedBeforeHashing) {
+  const BunFixture F;
+  auto Oversized = F.Graph.substr(0, F.Table);
+  Oversized.resize(F.Table + (MaxBunModules + 1) * 52 + 4);
+  const auto Footer = Oversized.size();
+  Oversized += F.Graph.substr(F.Footer);
+  put(Oversized, Footer, Footer, 8);
+  put(Oversized, Footer + 12, (MaxBunModules + 1) * 52, 4);
+  refuse(bunELF(Oversized), "bun_module_budget_exceeded");
+  auto ManyBuiltins = F.Bytes;
+  put(ManyBuiltins, 4104 + F.Table + 156 + 12, MaxBunBuiltins + 1, 4);
+  refuse(ManyBuiltins, "bun_builtin_budget_exceeded");
+  auto Alias = F.Bytes;
+  const auto SH = get(Alias, 40, 8);
+  Alias.replace(512, 16, Alias.substr(128, 16));
+  put(Alias, SH + 64 + 24, 512, 8);
+  Alias.replace(120, 56, Alias.substr(64, 56));
+  put(Alias, 56, 2, 2);
+  refuse(Alias, "bun_ambiguous_load_mapping");
+  auto Duplicate = F.Bytes;
+  Duplicate += F.Bytes.substr(SH + 128, 64);
+  put(Duplicate, 60, 4, 2);
+  refuse(Duplicate, "bun_duplicate_section");
+}
+#endif
+} // namespace

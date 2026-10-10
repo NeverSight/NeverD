@@ -20,6 +20,8 @@ llvm::Expected<uint64_t> rebuildEntry(const Image &In, const Capture &C,
                                       uint64_t MetadataRVA,
                                       std::vector<uint8_t> &Metadata) {
   using namespace llvm::support::endian;
+  if (In.domain() == ExecutionDomain::Kernel)
+    return C.EntryRVA;
   llvm::object::coff_file_header Header;
   std::memcpy(&Header, In.file().data() + In.headers().FileHeaderOffset,
               sizeof(Header));

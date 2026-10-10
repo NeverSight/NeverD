@@ -53,29 +53,6 @@ const char *processStopReasonName(ProcessStopReason Reason) {
   }
   llvm_unreachable(runtime::ProcessOutcome);
 }
-ProcessView::~ProcessView() = default;
-std::optional<ProcessModuleView> ProcessView::inputModule() {
-  for (const auto &Module : modules())
-    if (Module.Main)
-      return Module;
-  return std::nullopt;
-}
-llvm::Expected<uint32_t> ProcessView::instructionSize(uint64_t) {
-  return diagnostic::error(diagnostic::InstructionInspectionUnsupported);
-}
-ProcessObserver::~ProcessObserver() = default;
-llvm::Expected<std::optional<std::vector<ExecutionWatch>>>
-ProcessObserver::invoking(ProcessView &) {
-  return std::nullopt;
-}
-llvm::Expected<std::optional<std::vector<ExecutionWatch>>>
-ProcessObserver::resuming(ProcessView &) {
-  return std::nullopt;
-}
-llvm::Error ProcessObserver::exporting(ProcessView &, const ProcessExportView &,
-                                       std::optional<uint64_t>) {
-  return llvm::Error::success();
-}
 
 namespace {
 llvm::Expected<ProcessResult> runProfile(const std::filesystem::path &Path,

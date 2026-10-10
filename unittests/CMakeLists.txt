@@ -238,6 +238,12 @@ add_subdirectory(unpack)
 add_subdirectory(evm)
 add_subdirectory(loader)
 add_subdirectory(sbf)
+if(NEVERD_ENABLE_WEB_ANALYSIS)
+  add_subdirectory(web)
+endif()
+if(TARGET neverd_shared)
+  add_subdirectory(web-api)
+endif()
 add_subdirectory(plugin)
 
 # One-shot test runners (like NeverC's check-neverc): build deps, then invoke

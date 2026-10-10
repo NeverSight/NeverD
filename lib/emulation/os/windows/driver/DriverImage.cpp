@@ -17,7 +17,9 @@
 
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/GuestMemory.h"
+#include "neverd/loader/COFF/PEProgramExports.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/object/PELayout.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/COFF.h"
@@ -791,7 +793,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
     const uint64_t VirtualSize = Section->VirtualSize;
     const uint64_t RawSize = Section->SizeOfRawData;
     const uint64_t RawOffset = Section->PointerToRawData;
-    const uint64_t Span = pages(std::max(VirtualSize, RawSize));
+    const uint64_t Span =
+        getPEDriverSectionMappedSize(VirtualSize, RawSize, PageSize);
     if (!VirtualSize || RVA % SectionAlignment || RVA < LastEnd ||
         RVA >= Size || Span > Size - RVA ||
         (RawSize &&
@@ -842,7 +845,7 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
         Index == llvm::COFF::BOUND_IMPORT ||
         Index == llvm::COFF::CLR_RUNTIME_HEADER ||
         Index == llvm::COFF::ARCHITECTURE || Index == llvm::COFF::GLOBAL_PTR ||
-        Index == llvm::COFF::EXPORT_TABLE || Index == ReservedPEDirectory)
+        Index == ReservedPEDirectory)
       return invalid(image::UnsupportedLoaderDataDirectory +
                      llvm::Twine(Index));
     if (Index == llvm::COFF::CERTIFICATE_TABLE) {
@@ -887,6 +890,25 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
       }
     }
   }
+  // Export tables describe this image; they do not initialize guest state.
+  // Use the shared bounded decoder, then establish the driver's stricter
+  // mapping contract for every metadata read and direct (code or data) RVA.
+  auto Exports = readPEProgramExports(
+      llvm::ArrayRef<uint8_t>(BufferStart, (*Buffer)->getBufferSize()));
+  if (!Exports)
+    return Exports.takeError();
+  for (const auto &Range : Exports->Metadata) {
+    auto Bytes = fileBytes(Object, Sections, Range.RVA, Range.Size);
+    if (!Bytes)
+      return Bytes.takeError();
+  }
+  for (const auto &Export : Exports->Entries)
+    if (Export.Kind == PEExportKind::Address && Export.RVA >= HeadersSize &&
+        !std::any_of(Sections.begin(), Sections.end(), [&](const auto &S) {
+          return Export.RVA >= S.Header->VirtualAddress &&
+                 Export.RVA - S.Header->VirtualAddress < S.Span;
+        }))
+      return invalid(image::ExportAddressIsNotMapped);
   auto Imports = validateImports(Object, Sections, Base);
   if (!Imports)
     return Imports.takeError();

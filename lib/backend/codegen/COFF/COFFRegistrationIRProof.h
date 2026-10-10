@@ -87,6 +87,7 @@ validateIncomingCallerFrame(const llvm::Function &Parent, const MedFunc &Source,
 struct RegistrationFrame {
   const llvm::AllocaInst *Slot = nullptr;
   uint64_t EntrySP = 0;
+  uint64_t Establisher = 0;
 };
 
 inline std::optional<uint64_t> metadataInteger(const llvm::MDNode &Node,
@@ -118,7 +119,7 @@ registrationFrame(const llvm::Function &Parent,
         if (!Size || Size->isScalable() || *Entry > Size->getFixedValue() ||
             Size->getFixedValue() > UINT32_MAX)
           return rejectIR("native registration frame extent changed");
-        Frame = {Slot, *Entry};
+        Frame = {Slot, *Entry, *Entry - 4};
       }
   if (!Frame.Slot)
     return rejectIR("native registration frame has no compiler-owned identity");

@@ -42,6 +42,9 @@ public:
   virtual ~Loader() = default;
   virtual llvm::Expected<BinaryImage>
   load(const std::filesystem::path &Path) = 0;
+  /// Borrow immutable bytes for this call only. The resulting image owns its
+  /// data. Formats without a buffer reader reject this explicitly.
+  virtual llvm::Expected<BinaryImage> loadBuffer(llvm::MemoryBufferRef Buffer);
 
   /// Limit PE unwind/language materialization to these entries on the next
   /// load.  Empty means decode every runtime-function record.  Exclusive-end
@@ -70,27 +73,38 @@ protected:
   std::set<va_t> RestrictFunctionEntries;
   std::map<va_t, InstructionMode> ARMFunctionModes;
 
-  /// Read a file into a MemoryBuffer.  Copy raw bytes into \p Img.Raw unless
-  /// \p CopyRaw is false.  `--func` PE loads already keep section bytes in
-  /// Segment.Data; a second image-wide copy adds load time and memory use.
-  /// Returns the buffer or an error.  Shared by all format loaders.
+  /// File and buffer entry points share the same format parser.
   static llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
-  readFileInto(const std::filesystem::path &Path, BinaryImage &Img,
-               BinaryFormat Fmt, bool CopyRaw = true) {
+  readFileBuffer(const std::filesystem::path &Path, BinaryFormat Fmt) {
     auto BufOrErr = llvm::MemoryBuffer::getFile(pathToUTF8(Path));
     if (!BufOrErr)
       return llvm::make_error<llvm::StringError>(
           std::string(getFormatTag(Fmt)) + ": cannot open " + pathToUTF8(Path),
           llvm::inconvertibleErrorCode());
-    auto &Buf = *BufOrErr;
+    return std::move(*BufOrErr);
+  }
+
+  /// Restricted PE loads already retain section data and may omit Img.Raw.
+  static void initializeImage(llvm::MemoryBufferRef Buffer, BinaryImage &Img,
+                              BinaryFormat Fmt, bool CopyRaw = true) {
     Img.Format = Fmt;
     Img.InputFileSHA256 = sha256(llvm::ArrayRef<uint8_t>(
-        reinterpret_cast<const uint8_t *>(Buf->getBufferStart()),
-        Buf->getBufferSize()));
+        reinterpret_cast<const uint8_t *>(Buffer.getBufferStart()),
+        Buffer.getBufferSize()));
     if (CopyRaw)
-      Img.Raw.assign(reinterpret_cast<const uint8_t *>(Buf->getBufferStart()),
-                     reinterpret_cast<const uint8_t *>(Buf->getBufferEnd()));
-    return std::move(Buf);
+      Img.Raw.assign(reinterpret_cast<const uint8_t *>(Buffer.getBufferStart()),
+                     reinterpret_cast<const uint8_t *>(Buffer.getBufferEnd()));
+  }
+
+  /// Retain the existing protected helper for out-of-tree loader subclasses.
+  static llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
+  readFileInto(const std::filesystem::path &Path, BinaryImage &Img,
+               BinaryFormat Fmt, bool CopyRaw = true) {
+    auto Buffer = readFileBuffer(Path, Fmt);
+    if (!Buffer)
+      return Buffer.takeError();
+    initializeImage((*Buffer)->getMemBufferRef(), Img, Fmt, CopyRaw);
+    return std::move(*Buffer);
   }
 
 private:

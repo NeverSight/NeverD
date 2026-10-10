@@ -274,6 +274,9 @@ KernelModel::argumentCount(const KernelExportRegistry::Export &Export) {
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
       Export.Module == KernelProvider)
     return argumentCount(Export.Name);
+  if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
+      Export.Module == HALProvider)
+    return halArgumentCount(Export.Name);
   if (Export.Kind == KernelExportRegistry::ExportKind::DMAFunction)
     return dmaArgumentCount(Export.Name);
   if (Export.Kind == KernelExportRegistry::ExportKind::ProviderFunction)
@@ -288,6 +291,10 @@ llvm::Expected<uint64_t> KernelModel::call(
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
       Export.Module == KernelProvider)
     return call(Export.Name, Arguments, ReadArgument);
+  if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
+      Export.Module == HALProvider)
+    return callHAL(Export.Name, Arguments);
+  UnpackOpaqueEffects = true;
   if (Export.Kind == KernelExportRegistry::ExportKind::DMAFunction)
     return callDMAExport(Export, Arguments);
   if (Export.Kind == KernelExportRegistry::ExportKind::ProviderFunction)

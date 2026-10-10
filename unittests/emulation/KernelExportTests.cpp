@@ -158,9 +158,57 @@ TEST(KernelExports, CanonicalImportProvidersShareOneExplicitPolicy) {
     ASSERT_TRUE(Canonical);
     EXPECT_EQ(*Canonical, "wdfldr.sys");
   }
-  for (const char *Module : {"", "wdf01000.sys", "ntoskrnl", "hal.dll",
+  for (const char *Module : {"hal.dll", "HAL.DLL", "Hal.Dll"}) {
+    auto Canonical = KernelExportRegistry::canonicalImportModule(Module);
+    ASSERT_TRUE(Canonical);
+    EXPECT_EQ(*Canonical, "hal.dll");
+  }
+  for (const char *Module : {"", "wdf01000.sys", "ntoskrnl", "hal",
                              "path/ntoskrnl.exe", "ntoskrnl.exe "})
     EXPECT_FALSE(KernelExportRegistry::canonicalImportModule(Module));
+}
+
+TEST(KernelExports, HALStaticAndDynamicLookupRetainProviderIdentity) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const uint64_t Dynamic =
+      requireValue(Registry.resolve("KeQueryPerformanceCounter"));
+  ASSERT_NE(Dynamic, 0u);
+  EXPECT_EQ(requireValue(Registry.bindImport(
+                {0x1000, "HaL.DlL", "KeQueryPerformanceCounter"})),
+            Dynamic);
+  const auto *Entry = Registry.lookup(Dynamic);
+  ASSERT_NE(Entry, nullptr);
+  EXPECT_EQ(Entry->Module, "hal.dll");
+  EXPECT_EQ(KernelModel::argumentCount(*Entry), 1u);
+  const uint64_t Kernel = requireValue(Registry.bindImport(
+      {0x2000, "ntoskrnl.exe", "KeQueryPerformanceCounter"}));
+  EXPECT_NE(Kernel, Dynamic);
+  EXPECT_FALSE(KernelModel::argumentCount(*Registry.lookup(Kernel)));
+  EXPECT_NE(requireError(Registry.resolve("KeQueryPerformanceCounter"))
+                .find("ambiguous"),
+            std::string::npos);
+}
+
+TEST(KernelExports, HALAbsenceAndUnknownImportsDoNotInventSemantics) {
+  DriverOptions Options;
+  Options.KernelExports.emplace("KeQueryPerformanceCounter", false);
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize(Options)), "");
+  EXPECT_EQ(requireValue(Registry.resolve("KeQueryPerformanceCounter")), 0u);
+  EXPECT_NE(requireError(Registry.bindImport(
+                             {0x1000, "hal.dll", "KeQueryPerformanceCounter"}))
+                .find("explicitly absent"),
+            std::string::npos);
+  for (const char *Name :
+       {"UnknownHALRoutine", "DbgPrint", "keQueryPerformanceCounter"}) {
+    const uint64_t Address =
+        requireValue(Registry.bindImport({0x2000, "HAL.DLL", Name}));
+    ASSERT_NE(Address, 0u);
+    EXPECT_FALSE(KernelModel::argumentCount(*Registry.lookup(Address)));
+    if (llvm::StringRef(Name) != "DbgPrint")
+      EXPECT_EQ(requireValue(Registry.resolve(Name)), Address);
+  }
 }
 
 TEST(KernelExports, KernelAndLoaderSameSpellingHaveDistinctIdentities) {
@@ -468,6 +516,39 @@ TEST_F(KernelExportLookup, ReturnsNullOnlyForDeclaredAbsenceOrAnEmptyName) {
   EXPECT_NE(lookupError().find("unspecified"), std::string::npos);
   record(Scratch, 0, 0, 0);
   EXPECT_EQ(lookup(), 0u);
+}
+
+TEST_F(KernelExportLookup, HALCounterSharesSchedulerTimeAndChecksOutputMemory) {
+  name(Scratch, Scratch + 32, "KeQueryPerformanceCounter");
+  const auto *Entry = Exports.lookup(lookup());
+  ASSERT_NE(Entry, nullptr);
+  EXPECT_EQ(Entry->Module, "hal.dll");
+  const auto Counter = [&](uint64_t Frequency) {
+    return Model->call(*Entry, {Frequency}, nullptr);
+  };
+  constexpr uint64_t Frequency = Scratch + 256;
+  check(Memory->writeInteger(Frequency - 8, UINT64_MAX, 8));
+  check(Memory->writeInteger(Frequency + 8, UINT64_MAX, 8));
+  EXPECT_EQ(requireValue(Counter(Frequency)), 0u);
+  EXPECT_EQ(requireValue(Memory->readInteger(Frequency, 8)), 10000000u);
+  EXPECT_EQ(requireValue(Memory->readInteger(Frequency - 8, 8)), UINT64_MAX);
+  EXPECT_EQ(requireValue(Memory->readInteger(Frequency + 8, 8)), UINT64_MAX);
+  EXPECT_EQ(requireValue(Counter(0)), 0u);
+  check(Model->advanceExecutionTo100ns(12345));
+  EXPECT_EQ(requireValue(Counter(0)), 12345u);
+  Model->enterExecution(1);
+  for (unsigned IRQL = 0; IRQL <= 15; ++IRQL) {
+    SCOPED_TRACE(IRQL);
+    EXPECT_EQ(invoke("KfRaiseIrql", {IRQL}), 0u);
+    EXPECT_EQ(requireValue(Counter(Frequency)), 12345u);
+    invoke("KeLowerIrql", {0});
+  }
+  const uint64_t Pool = invoke("ExAllocatePoolWithTag", {512, 16, Tag});
+  invoke("ExFreePoolWithTag", {Pool, Tag});
+  EXPECT_NE(requireError(Counter(Pool)).find("freed"), std::string::npos);
+  EXPECT_NE(requireError(Model->call(*Entry, {}, nullptr)).find("arguments"),
+            std::string::npos);
+  EXPECT_EQ(Model->now100ns(), 12345u);
 }
 
 TEST_F(KernelExportLookup, DynamicLookupRemainsKernelOnlyAfterWDFBinding) {

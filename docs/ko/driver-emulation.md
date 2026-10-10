@@ -92,7 +92,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 콜백 시작 전에 작업 항목이 대기열에서 제거되므로 콜백은 자신의 작업 항목을 해제할 수 있습니다. 대기열 항목 해제, 중복 큐 삽입, 만료 객체 및 실행 가능한 게스트 메모리 밖의 콜백 주소는 명시적으로 실패합니다. 장치 참조는 콜백 반환까지 유지합니다. 언로드에는 모든 작업 항목 해제와 큐 작업 완료가 필요합니다. CPU 컨텍스트는 일반, SIMD, FPU 및 제어 상태를 저장하고 복원합니다. 게스트 메모리는 공유되며 장애가 난 CPU는 저장된 컨텍스트로 재개할 수 없습니다.
 파일 객체 또는 대기/실행 중인 작업 항목 참조가 남아 있으면 삭제를 연기합니다. 객체 영역이 소진되면 작업 항목 할당은 NULL을 반환합니다.
 
-시나리오에서 유효한 재배치 주소를 지정하지 않으면 이미지는 선호 베이스를 사용하며, native 서브시스템의 PE32+ x64 실행 파일이어야 합니다. import 제공자는 `ntoskrnl.exe`, `ntkrnlmp.exe` 또는 `WDFLDR.SYS`일 수 있습니다. 실행 로더는 검증된 x64 `DIR64` 베이스 재배치와 제한적인 security-cookie 로드 구성을 지원합니다. security cookie는 진입 래퍼 실행 전에 결정적인 게스트 값으로 초기화됩니다. 기타 모델링되지 않은 로드 구성 필드, TLS, 지연/바인딩 import, ordinal import, managed 이미지는 거부됩니다. 이미지에는 엄격한 범위 및 정렬 검사도 적용됩니다.
+시나리오에서 유효한 재배치 주소를 지정하지 않으면 이미지는 선호 베이스를 사용하며, native 서브시스템의 PE32+ x64 실행 파일이어야 합니다. import 제공자는 `ntoskrnl.exe`, `ntkrnlmp.exe`, `HAL.dll` 또는 `WDFLDR.SYS`일 수 있습니다. 실행 로더는 검증된 x64 `DIR64` 베이스 재배치와 제한적인 security-cookie 로드 구성을 지원합니다. security cookie는 진입 래퍼 실행 전에 결정적인 게스트 값으로 초기화됩니다. 기타 모델링되지 않은 로드 구성 필드, TLS, 지연/바인딩 import, ordinal import, managed 이미지는 거부됩니다. 이미지에는 엄격한 범위 및 정렬 검사도 적용됩니다.
 
 활성 Control Flow Guard(CFG)는 PE 플래그, 포인터 슬롯과 정렬된 실행 가능 대상 테이블을 검증합니다. check/dispatch 도우미는 선언된 이미지 진입점 또는 등록된 API 썽크만 허용하며 Win64 호출 상태를 보존하고 미선언 대상을 거부합니다. CFG가 활성화되지 않은 계측은 원래 게스트 대체 포인터를 유지합니다. 활성 XFG, 내보내기 억제 및 다른 미지원 보호 정책은 거부되며 실행 가능 메모리에 있다는 이유만으로 유효한 대상이 되지는 않습니다.
 
@@ -331,6 +331,7 @@ PnP FDO에서 `WdfDeviceInitSetDeviceType`은 지정한 32비트 유형을 WDM `
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | 사용자/시스템 매핑은 물리 페이지 캐시 속성과 각 권한을 유지하며 비페이지 풀 MDL은 안전 도우미로 원래 시스템 매핑을 재사용 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | 독립 또는 IRP 연결 비페이지 풀/사용자 MDL, 변경 가능한 체인 링크, 독립 잠금과 시스템 별칭. 할당량은 미지원 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 명시적인 세션 레지스트리, 핸들별 권한과 수명, 쿼리 버퍼 크기와 변경. 호스트 레지스트리에 접근하지 않음 |
+| `ExAllocatePool` | 기존 두 인수 인터페이스로 풀 유형 `0`, `1`, `512`의 데이터를 할당합니다. 정렬, 초기화되지 않은 바이트 모델, 크기/IRQL 검사를 공유하고 고갈 시 NULL을 반환합니다. `ExFreePool` 또는 태그가 0인 `ExFreePoolWithTag`로 해제하며 남은 할당은 커널 종속 상태로 유지됩니다. |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | 풀 유형 `0`, `1`, `512`의 데이터 할당. 크기/태그는 양수이며, 태그가 있는 해제는 일치해야 하고 주소를 재사용하지 않음 |
 | `IoCreateDevice`, `IoDeleteDevice` | 장치 유형 `0x22`, 특성 `0` 또는 `0x100`, 제한된 확장, ASCII `\Device\Name` 이름 |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | 동일 드라이버 연결. 이전 최상단을 반환하며 분리는 저장한 하위 장치를 받음. 위 토폴로지/수명 제한 적용 |
@@ -462,7 +463,7 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v86`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v89`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
 
 작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 
@@ -572,3 +573,11 @@ checked Unicorn은 `MachineRunControl`을 사용하며 ARM64 유지보수, 게�
 `RunDeadline::invoke`는 중지되었거나 기한이 지난 WHP 실행을 호스트 호출 전에 거부하고, 취소 중에도 실제 호스트 결과를 보존하며, 빌린 중지 토큰을 해제하기 전에 인터럽트 콜백의 종료를 확인합니다. KVM과 WHP는 실행 임대를 보유한 호출 스레드에서 완전히 캡처된 비공개 상태를 검증한 다음 동시에 도착한 중지나 기한을 분류합니다. 실제 호스트·캡처 실패와 인증된 x64 CPU 예외가 우선합니다. 일반 성공 상태는 취소 확인이 끝날 때까지 비공개로 유지하며, 확인된 중단은 추측적 CPU/RAM 효과를 버리고 재시도를 허용합니다. 준비, 네이티브 실행, 캡처는 하나의 스텝 유예를 공유합니다. 협력적 취소를 제공하지만 엄격한 실제 시간 상한은 보장하지 않습니다.
 
 CPU0 명시적 선점, 가상 시계 의미와 현재 한계는 [드라이버 스케줄링](driver-scheduling.md)을 참조하세요.
+
+## HAL 내보내기와 성능 카운터
+
+`HAL.dll`은 모듈 이름의 대소문자를 구분하지 않는 별도 가져오기 공급자입니다. 정적 가져오기와 `MmGetSystemRoutineAddress`는 커널과 HAL에서 대소문자를 구분하는 정확한 내보내기 식별을 공유하며, 유효한 식별이 충돌하면 거부합니다. `kernel_exports`는 알려진 HAL 루틴을 HAL 네임스페이스에서 재정의하고, 나머지 명시적 선언은 커널에 속합니다. 알 수 없는 HAL 가져오기는 지연 트랩을 유지하며, 이름이 같다는 이유만으로 커널 API 의미를 얻지 않습니다.
+
+`KeQueryPerformanceCounter`는 공유 스케줄러 시간을 100 ns 단위로 반환하며 주파수는 초당 10,000,000회로 고정됩니다. 선택적 출력 포인터에는 8바이트 전체 쓰기 권한과 객체 수명 검사가 적용됩니다. 모든 유효한 x64 IRQL에서 호출할 수 있습니다. 협력 모드는 기존 스케줄링 경계에서만 시간을 진행하며 명령어 시계 모드는 설정된 타이밍을 유지합니다. 읽기 자체는 별도 시계를 만들거나 시간을 진행하지 않습니다. 이는 결정적 프로필이며 호스트 하드웨어 측정이 아닙니다. 독립적으로 컴파일된 런타임 픽스처는 네이티브 CPU 백엔드의 기본 및 재배치 주소에서 정적／동적 식별, 주파수와 단조성을 검사합니다.
+
+`RDTSC`와 `RDTSCP`는 `KeQueryPerformanceCounter`와 동일한 10 MHz 스케줄러 시계를 읽습니다. `RDTSCP`는 단일 모델 프로세서를 나타내는 0을 ECX에 반환합니다. EAX/EDX와 RDTSCP의 ECX 상위 32비트는 0이 되며 다른 레지스터와 플래그는 유지됩니다. 협력 실행에서는 읽기가 시간을 진행시키지 않습니다. 명시적 명령 스케줄링에서는 해당 명령을 계산한 뒤 시간을 읽으므로 시간 할당량 길이에 의존하지 않습니다. 오버플로는 레지스터 결과를 쓰기 전에 중단되며 명령 예산과 관찰자 중단도 적용됩니다. 호스트 TSC 주파수나 프로세서 식별 정보는 노출하지 않습니다. MSR 접근, RDPMC 및 그 밖의 모델링하지 않은 CPU 조회는 계속 지원하지 않습니다.

@@ -91,6 +91,10 @@ chooseUniversalSlice(const llvm::object::MachOUniversalBinary &Universal);
 llvm::Expected<std::pair<std::unique_ptr<llvm::MemoryBuffer>,
                          std::unique_ptr<llvm::object::MachOObjectFile>>>
 openMachOFile(const std::filesystem::path &Path);
+/// Same slice-selection and parsing rules as openMachOFile. The caller owns
+/// Buffer for the complete lifetime of the returned object.
+llvm::Expected<std::unique_ptr<llvm::object::MachOObjectFile>>
+openMachOBuffer(llvm::MemoryBufferRef Buffer);
 
 /// Resolve the image entry from LC_MAIN, LC_UNIXTHREAD, or LC_THREAD.  LC_MAIN
 /// names the ordinary main function; thread-state entries are recorded as

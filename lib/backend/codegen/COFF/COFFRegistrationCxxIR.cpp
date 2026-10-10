@@ -11,10 +11,12 @@
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 #include "llvm/IR/CFG.h"
@@ -93,7 +95,6 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   auto Frame = registrationFrame(Function, Source);
   if (!Frame)
     return Frame.takeError();
-  Result.Frame = *Frame;
   Decoder Decoder;
   if (!Decoder.init(Image))
     return rejectIR("cannot replay C++ registration source analysis");
@@ -113,6 +114,20 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       !States.IncomingFrameAccesses.empty() ||
       States.CxxCatchObjects.size() != 1)
     return rejectIR("replayed C++ registration effects are incomplete");
+  const auto Coordinate =
+      Source.Registration->RealignedFrame
+          ? realignedRegistrationFrameCoordinate(Source, &States)
+          : std::optional(RegistrationFrameCoordinate{-4, 1, 0});
+  const auto Size = Frame->Slot->getAllocationSize(Module->getDataLayout());
+  const auto Layout = Coordinate && Size && !Size->isScalable()
+                          ? projectX86RegistrationFrame(
+                                *Coordinate, Size->getFixedValue(),
+                                Frame->EntrySP, Frame->Slot->getAlign().value())
+                          : std::nullopt;
+  if (!Layout)
+    return rejectIR("C++ source frame lost its physical coordinate projection");
+  Frame->Establisher = Layout->Establisher;
+  Result.Frame = *Frame;
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   auto Med = Converter.convert(Result.Source, Arch::X86, BinaryFormat::COFF);
@@ -228,7 +243,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   if (!Type || !Type->isDeclaration() || !Type->hasExternalLinkage() ||
       Type->getName() != makeNdDataSymbol(Handler.TypeDescriptorVA) ||
       CatchObject->Frame != Frame->Slot ||
-      CatchObject->Offset != int64_t(Frame->EntrySP) - 4 + Object.FrameOffset ||
+      CatchObject->Offset != int64_t(Frame->Establisher) + Object.FrameOffset ||
       CatchObject->Size != (Object.Reference ? 4 : Object.ObjectSize))
     return rejectIR(
         "C++ catch changed its RTTI or checked runtime object home");
@@ -516,6 +531,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       metadataInteger(*Contract, exception_rewrite::SkippedLandingPads, 64) !=
           0)
     return rejectIR("C++ native contract counters changed");
+  if (auto Error = bindCxxCatchStack(Result, Med, Function))
+    return std::move(Error);
   return Result;
 #endif
 }

@@ -28,6 +28,7 @@
 #include "LoadOptions.h"
 #include "NativeMobileSession.h"
 #include "NativePhaseTrace.h"
+#include "NativeSnapshotSession.h"
 #include "SessionImpl.h"
 
 #include "neverd/Common.h"
@@ -227,12 +228,16 @@ void neverd_session_destroy(neverd_session_t Sess) {
 namespace {
 int finishSessionLoad(neverd_session_t Sess, Session &S, BinaryImage Image,
                       std::filesystem::path Path,
-                      std::filesystem::path SanitizeSourcePath) {
+                      std::filesystem::path SanitizeSourcePath,
+                      std::optional<uint64_t> MemoryBytes = std::nullopt,
+                      std::string NativeProvenance = {}) {
   // Prepare the complete replacement before changing the current image, its
   // analysis, or the user's edits. An authoritative debug-file failure must
   // leave a previously loaded session usable.
   S.LoadProgressCb.report("image", 1, 1, "binary parsed");
-  auto Found = loadDebugInfo(Path, Image, S.DbgRequest, S.LoadProgressCb);
+  DebugInfoResult Found;
+  if (!MemoryBytes)
+    Found = loadDebugInfo(Path, Image, S.DbgRequest, S.LoadProgressCb);
   if (!Found.Error.empty()) {
     S.setError(Found.Error);
     return 0;
@@ -255,6 +260,8 @@ int finishSessionLoad(neverd_session_t Sess, Session &S, BinaryImage Image,
   S.Img = std::move(Image);
   S.FilePath = std::move(Path);
   S.SanitizeSourcePath = std::move(SanitizeSourcePath);
+  S.MemoryInputBytes = MemoryBytes;
+  S.WebNativeProvenance = std::move(NativeProvenance);
   S.Dbg = std::move(Found.Context);
   S.DbgKind = Found.Kind;
   S.DbgPath = std::move(Found.Path);
@@ -269,11 +276,13 @@ int finishSessionLoad(neverd_session_t Sess, Session &S, BinaryImage Image,
   S.ImageStrings.reset();
   S.resetFunctionsFromImage();
 
-  neverd_annotations_load(Sess);
-  neverd_renames_load(Sess);
-  neverd_functions_load(Sess);
-  neverd_items_load(Sess);
-  neverd_operand_formats_load(Sess);
+  if (!MemoryBytes) {
+    neverd_annotations_load(Sess);
+    neverd_renames_load(Sess);
+    neverd_functions_load(Sess);
+    neverd_items_load(Sess);
+    neverd_operand_formats_load(Sess);
+  }
 
   return 1;
 }
@@ -331,6 +340,17 @@ const char *neverd_identify_json(const char *Path) {
   }
   Root["rows"] = std::move(Rows);
   return dupStr(jsonToString(llvm::json::Value(std::move(Root))));
+}
+
+int neverd::sdk::loadNativeSnapshotSession(neverd_session_t Sess,
+                                           BinaryImage Image,
+                                           uint64_t InputBytes,
+                                           std::string Provenance) {
+  auto *S = toSession(Sess);
+  if (!S || S->Loaded || Image.Raw.size() != InputBytes || Provenance.empty())
+    return 0;
+  return finishSessionLoad(Sess, *S, std::move(Image), {}, {}, InputBytes,
+                           std::move(Provenance));
 }
 
 int neverd_session_load(neverd_session_t Sess, const char *Path) {
@@ -715,11 +735,7 @@ void neverd_free_string(const char *Str) { free(const_cast<char *>(Str)); }
 
 unsigned long long neverd_session_file_size(neverd_session_t Sess) {
   auto *S = toSession(Sess);
-  if (!S->Loaded)
-    return 0;
-  std::error_code EC;
-  auto Sz = std::filesystem::file_size(S->FilePath, EC);
-  return EC ? 0 : static_cast<unsigned long long>(Sz);
+  return S->inputFileSize();
 }
 
 neverd_va_t neverd_session_base_addr(neverd_session_t Sess) {

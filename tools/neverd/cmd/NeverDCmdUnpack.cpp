@@ -43,7 +43,8 @@ int runUnpack() {
     return unpack_cli::Error;
   }
   return Root->getString(text::OutcomeField) == text::UnpackedOutcome ||
-                 Root->getString(text::OutcomeField) == text::SnapshotOutcome
+                 Root->getString(text::OutcomeField) == text::SnapshotOutcome ||
+                 Root->getString(text::OutcomeField) == text::RestoredOutcome
              ? unpack_cli::Success
              : unpack_cli::Incomplete;
 }

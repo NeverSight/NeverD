@@ -115,6 +115,12 @@ std::vector<LoadCandidate> identifyFile(const std::filesystem::path &Path) {
   return Rows;
 }
 
+llvm::Expected<BinaryImage> Loader::loadBuffer(llvm::MemoryBufferRef) {
+  return llvm::make_error<llvm::StringError>(
+      "buffer loading is unavailable for this format",
+      llvm::inconvertibleErrorCode());
+}
+
 std::unique_ptr<Loader> Loader::create(BinaryFormat Format) {
   switch (Format) {
   case BinaryFormat::ELF:

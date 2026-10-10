@@ -38,6 +38,15 @@ struct InterpreterLLVMRefinementPreservation {
   std::optional<LowIRNativePreservationRequirement> NativeState;
 };
 
+/// Collection choices for the fresh native premise only. A retained boundary
+/// must be unreachable in every checked domain under the selected witness.
+/// Deferred edges still require complete semantics for every feasible path;
+/// an uncollected arm supplies no instruction-coverage evidence.
+struct InterpreterLLVMNativeCollection {
+  bool RetainUnauditedNativeBoundaries = false;
+  bool DeferNativeConditionalEdges = false;
+};
+
 struct InterpreterLLVMRefinementModels {
   InterpreterMachineStateModel Residual, LLVM;
   LowIRIndependenceContract Contract;
@@ -112,6 +121,8 @@ struct InterpreterLLVMRefinementResult {
 /// preservation requires fresh instruction evidence and SelectedWitness;
 /// an AllUndefinedChoices request is refused. Both subreceipts bind their
 /// effective contracts; the composite digest binds those fresh identities.
+/// Native collection choices affect only the fresh native contract; they do
+/// not grant source assumptions or change any observation or proof budget.
 ///
 /// Requires the explicit normal, nonfaulting, CET-disabled UserX64NoFaultV1
 /// profile and its fixed immutable image. The result describes the chosen
@@ -131,7 +142,8 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     const InterpreterLLVMRefinementPlans &Plans = {},
     LowIRRefinementWitness Witness = LowIRRefinementWitness::LiftedBits,
     const InterpreterLLVMRefinementLimits &Limits = {},
-    const InterpreterLLVMRefinementPreservation &Preservation = {});
+    const InterpreterLLVMRefinementPreservation &Preservation = {},
+    const InterpreterLLVMNativeCollection &Collection = {});
 
 } // namespace neverd::analysis
 #endif

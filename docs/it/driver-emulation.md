@@ -127,7 +127,7 @@ L’eliminazione viene rinviata finché restano oggetti file o riferimenti di la
 
 Le immagini usano la base preferita, salvo che uno scenario scelga un indirizzo
 di rilocazione valido, e devono essere eseguibili PE32+ x64 con sottosistema
-nativo. Le importazioni possono provenire da `ntoskrnl.exe`, `ntkrnlmp.exe` o `WDFLDR.SYS`.
+nativo. Le importazioni possono provenire da `ntoskrnl.exe`, `ntkrnlmp.exe`, `HAL.dll` o `WDFLDR.SYS`.
 Il loader di esecuzione supporta rilocazioni di base x64 `DIR64` validate e
 una configurazione di caricamento limitata per il cookie di sicurezza,
 inizializzato prima del wrapper di ingresso con un cookie guest deterministico.
@@ -375,6 +375,7 @@ Il modello API iniziale ha intenzionalmente un contratto limitato:
 | `KeSynchronizeExecution`, `KeAcquireInterruptSpinLock`, `KeReleaseInterruptSpinLock` | Vero callback BOOLEAN sotto il lock comune non ricorsivo, con IRQL di sincronizzazione almeno pari ai DIRQL; ripristino del contesto chiamante |
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Viste KernelMode/UserMode delle stesse pagine, cache ereditata e permessi indipendenti; i MDL non paginati riusano il mapping iniziale tramite la macro sicura |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | Descrittori di pool non paginato/utente autonomi o associati a IRP, collegamenti di catena modificabili, blocchi e alias di sistema indipendenti; senza quote |
+| `ExAllocatePool` | Allocazione storica a due argomenti per i tipi `0`, `1` e `512`; condivide allineamento, modello dei byte non inizializzati e controlli dimensione/IRQL, restituendo NULL all’esaurimento. Liberazione con `ExFreePool` o `ExFreePoolWithTag` con tag zero; le allocazioni conservate restano dipendenze del kernel. |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Allocazioni di dati per i tipi di pool `0`, `1` e `512`; dimensione/tag positivi, tag corrispondenti nelle liberazioni con tag, nessun riutilizzo degli indirizzi |
 | `IoCreateDevice`, `IoDeleteDevice` | Tipo di dispositivo `0x22`, caratteristiche `0` o `0x100`, estensioni limitate, nomi ASCII `\Device\Name` |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | Collegamento dello stesso driver; restituisce la cima precedente, lo scollegamento riceve il dispositivo inferiore salvato; limiti sopra indicati |
@@ -669,7 +670,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v86`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v89`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
@@ -831,3 +832,11 @@ Unicorn verificato usa `MachineRunControl`: un unico margine copre manutenzione 
 `RunDeadline::invoke` rifiuta un ingresso WHP già arrestato o scaduto prima della chiamata host, conserva il risultato host effettivo durante l'annullamento e conferma la fine dei callback di interruzione prima di rilasciare il token preso in prestito. KVM e WHP convalidano lo stato privato interamente acquisito sul thread chiamante titolare del diritto di esecuzione, prima di classificare un arresto o una scadenza simultanei. Gli errori effettivi dell'host o dell'acquisizione e le eccezioni CPU x64 autenticate mantengono la priorità. Uno stato ordinario riuscito rimane privato fino alla fine dei controlli di annullamento; un'interruzione confermata scarta gli effetti CPU/RAM speculativi e permette un nuovo tentativo. Preparazione, esecuzione nativa e acquisizione condividono una sola tolleranza per passo. Il controllo è cooperativo e non garantisce un limite rigido di tempo reale.
 
 Prelazione esplicita su CPU0, tempo virtuale e limiti sono descritti nello [scheduling dei driver](driver-scheduling.md).
+
+## Esportazioni HAL e contatore delle prestazioni
+
+`HAL.dll` è un fornitore separato con nome di modulo senza distinzione tra maiuscole e minuscole. Le importazioni statiche e `MmGetSystemRoutineAddress` condividono le identità esatte e sensibili alle maiuscole del kernel e di HAL; le identità attive in conflitto sono rifiutate. `kernel_exports` sostituisce le routine HAL note nel relativo spazio HAL; le altre dichiarazioni esplicite restano esportazioni del kernel. Le importazioni HAL sconosciute mantengono trappole differite e non acquisiscono un contratto del kernel soltanto per il nome.
+
+`KeQueryPerformanceCounter` restituisce il tempo condiviso dello scheduler in unità di 100 ns, con frequenza fissa di 10.000.000 al secondo. Il puntatore di uscita facoltativo viene verificato per la scrittura completa di otto byte e la durata dell’oggetto. Sono ammessi tutti gli IRQL x64 validi. La modalità cooperativa avanza soltanto ai confini esistenti; quella basata sulle istruzioni mantiene la configurazione. Una lettura non crea un secondo orologio né fa avanzare il tempo. Questo è un profilo deterministico, non una misura dell’hardware host. La fixture compilata indipendentemente verifica identità statica/dinamica, frequenza e monotonia agli indirizzi preferiti e rilocati sui backend CPU nativi.
+
+`RDTSC` e `RDTSCP` leggono lo stesso orologio a 10 MHz di `KeQueryPerformanceCounter`. `RDTSCP` restituisce zero in ECX per il singolo processore del modello. EAX/EDX e, per RDTSCP, ECX azzerano le metà superiori; gli altri registri e flag restano invariati. Le letture cooperative non fanno avanzare il tempo. Con la pianificazione esplicita delle istruzioni, la lettura osserva il tempo dopo il conteggio della propria istruzione, indipendentemente dal quanto. Un overflow arresta prima di pubblicare i registri; budget e arresti degli osservatori restano attivi. Il profilo non misura la frequenza TSC né l’identità del processore ospitante. Accessi MSR, RDPMC e altre interrogazioni CPU non modellate restano non supportati.

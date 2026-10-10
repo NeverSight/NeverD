@@ -1,5 +1,61 @@
 # Third-Party Notices
 
+## Ada URL parser
+
+Offline import-map analysis embeds the unchanged C++ Ada 4.0.0 URL parser at
+`b12a893a45809da8103bb4f1e2f6f5ee13f9100b`. NeverD selects its MIT license and
+preserves the Ada, included Ada IDNA and Unicode notices under
+[`LICENSES/ada`](LICENSES/ada/README.md). The build pins the archive hash and
+compiles source directly; no upstream generator, tool or JavaScript runtime
+is invoked. URLPattern and its regex backend are excluded.
+
+## ASAR format reference and preserved fixtures
+
+The independent C++ reader follows the Pickle, filesystem and integrity
+format written by `electron/asar` at commit
+`e4fb057678562b7b6170699a046d983ae6d31cb8`. Five unchanged test archives and one
+independent original member from that commit are retained as inert test data.
+No upstream JavaScript/TypeScript implementation or external ASAR executable
+is run or embedded. The original MIT notice is preserved in
+[`LICENSES/asar/LICENSE.md`](LICENSES/asar/LICENSE.md); exact paths and hashes
+are recorded in the [fixture manifest](unittests/web/fixtures/asar/README.md).
+The source commit is a development tree, not an authenticated writer release.
+
+## ICU archive path policy
+
+The optional ASAR reader links the native ICU4C 77.1 common/data libraries for
+NFC normalization and full case folding, with Unicode 16.0 runtime checks.
+The full upstream Unicode License V3 and bundled third-party notices are
+preserved in [`LICENSES/icu/LICENSE`](LICENSES/icu/LICENSE), matching
+[`release-77-1/LICENSE`](https://github.com/unicode-org/icu/blob/release-77-1/LICENSE).
+NeverD calls the library in process; no ICU command-line utility is invoked.
+ASAR and enabled ICU notices are staged beside libneverd and inside the SDK,
+and installed under `share/neverd/licenses`. ICU runtime packaging and other
+host qualification remain separate release requirements.
+
+## Hermes JavaScript parser
+
+The optional native JavaScript analysis feature embeds the parser, AST and
+support libraries from Meta Hermes at revision
+`602befee340da188ea1560cde7a9cc33e6b180dc`. It does not link the Hermes VM or
+invoke JavaScript tools. Primitive Number formatting also uses the embedded
+support/dtoa library. The archive is pinned by SHA-256
+`6c615757374850ccb99991c4536aaf86ac0973661b1ae18aac45d2ca85143153`.
+See the [upstream source](https://github.com/facebook/hermes/tree/602befee340da188ea1560cde7a9cc33e6b180dc)
+and preserved [license set](LICENSES/hermes).
+
+Hermes is Copyright (c) Meta Platforms, Inc. and affiliates, under the MIT
+license. Its LLVH and regular-expression support retain LLVM-derived licenses;
+its dtoa dependency retains David M. Gay and Lucent Technologies' notices.
+These libraries contain their original C/C++ sources. NeverD's new parser
+integration, analysis and adapter implementation is C++.
+
+`lib/web/hermes-overlay/hermes/Support/Allocator.h` preserves the upstream
+header and adds an allocation-budget hook, dated 2026-10-10. The custom CMake
+integration selects the parser dependency graph and excludes upstream VM,
+tool and test targets. Enabled builds stage the license set beside libneverd,
+inside the SDK and under the installed `share/neverd/licenses/hermes`.
+
 ## Z3
 
 The optional solver backend (`NEVERD_ENABLE_Z3`) uses Z3 under the MIT license.
@@ -137,6 +193,54 @@ Copyright (c) 2026 Packmad. The original MIT license is preserved in
 [LICENSES/FPREM-Anti-Emulation.txt](LICENSES/FPREM-Anti-Emulation.txt).
 The sequence was adapted into a callable C inline-assembly round-trip test
 on 2026-09-26.
+
+## webpack bundle profile and fixture
+
+The C++ bundle recognizer's fixed runtime shape and the inert documented
+CommonJS fixture use webpack material from commit
+`6c9f912af2dfbb3e0e1a2a3ecdc3881c96363432` (repository tag `v5.99.9`).
+Copyright JS Foundation and other contributors; MIT license preserved in
+[`LICENSES/webpack/LICENSE`](LICENSES/webpack/LICENSE).
+The original README and the fixture derivation/hashes are retained in
+`unittests/web/fixtures`. No webpack JavaScript implementation is executed or
+shipped as an analyzer. A repository tag does not authenticate the documented
+sample's actual producer version; that manifest field remains unknown.
+Enabled builds stage the license beside libneverd and in the SDK, and install
+it under `share/neverd/licenses/webpack`.
+
+## Bun layout reference and generated corpus
+
+The independent C++ Bun reader follows the ELF, standalone graph and serialized
+source-map data formats from `oven-sh/bun` commit
+`744846f844374847c902b5e7fd59b4342a51ef99` (`bun-v1.4.2`). The self-authored
+fixture graph data may contain JavaScript scaffolding emitted by that compiler.
+The upstream [LICENSE.md](LICENSES/bun/LICENSE.md), which states that Bun
+itself is MIT-licensed and lists its runtime dependencies, is preserved.
+No Bun runtime, Rust implementation or JavaScriptCore library is linked or
+redistributed by this feature. Full compiler-produced native fixtures remain
+outside the repository; the checked-in corpus preserves graph data only.
+See [the profile and pinned sources](docs/web-bun-profile.md) and
+[fixture provenance](unittests/web/fixtures/bun/README.md).
+Enabled web builds ship the reference notice beside the binaries, in the SDK
+and under `share/neverd/licenses/bun`, including parser-disabled builds.
+Serialized-source decoding uses the existing LLVM Support native Zstd backend,
+with an independent C++ envelope/budget preflight against the
+[Zstandard format](https://github.com/facebook/zstd/blob/v1.5.7/doc/zstd_compression_format.md).
+It does not incorporate a new Zstd implementation or call an external tool.
+
+## WHATWG HTML named character references
+
+`lib/web/HTMLNamedReferences.inc` incorporates the official WHATWG
+[named character reference dataset](https://html.spec.whatwg.org/entities.json),
+retrieved 2026-10-10, into a sorted C++ lookup table. The exact snapshot, hash
+and C++ transformation are documented in
+[`unittests/web/fixtures/html/README.md`](unittests/web/fixtures/html/README.md).
+Copyright © WHATWG (Apple, Google, Mozilla, Microsoft). The full upstream
+[license](LICENSES/whatwg/LICENSE) is retained: CC BY 4.0 for the work and
+BSD 3-Clause for portions incorporated into source code. Enabled web builds
+stage these notices with the library and SDK and install them under
+`share/neverd/licenses/whatwg`. No browser parser or target JavaScript is
+executed by this implementation.
 
 ## zlib
 

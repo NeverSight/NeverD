@@ -1,6 +1,7 @@
 # libneverd shared library — core engine for CLI, GUI, and plugins.
 # All NeverD frontends link this single shared library.
 set(NEVERD_SDK_SOURCES
+    capi/NeverDCAPIWeb.cpp
     capi/NeverDCAPIBytecode.cpp
     capi/NeverDCAPI.cpp
     capi/NeverDCAPICPU.cpp
@@ -52,6 +53,11 @@ if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
 endif()
 
 add_library(neverd_shared SHARED ${NEVERD_SDK_SOURCES})
+if(NEVERD_ENABLE_WEB_ANALYSIS)
+    target_link_libraries(neverd_shared PRIVATE NeverDWeb)
+    set_source_files_properties(capi/NeverDCAPIWeb.cpp PROPERTIES
+        COMPILE_DEFINITIONS NEVERD_ENABLE_WEB_ANALYSIS=1)
+endif()
 
 # The Objective-C source proof includes many bounded replay templates. Its
 # Release MSVC object can exceed standard COFF's section-count limit (C1128).
@@ -164,6 +170,7 @@ endif()
 # header so consumers can compile with `-I<libneverd_dir>/sdk` without reaching
 # back into the source tree, including with multi-configuration generators.
 set(NEVERD_SDK_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIWeb.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIBytecode.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPI.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPICPU.h
@@ -234,6 +241,48 @@ if(NEVERD_ENABLE_Z3)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_SOURCE_DIR}/LICENSES/Z3.txt"
           "${_neverd_z3_notices_dir}/LICENSE.txt"
+      VERBATIM)
+  endforeach()
+endif()
+
+if(NEVERD_ENABLE_WEB_ANALYSIS)
+  set(_neverd_web_notice_sets bun asar whatwg ada)
+  if(NEVERD_ENABLE_WEB_ASAR)
+    list(APPEND _neverd_web_notice_sets icu)
+  endif()
+  foreach(_neverd_web_notice_set IN LISTS _neverd_web_notice_sets)
+    foreach(_neverd_web_notices_dir
+        "$<TARGET_FILE_DIR:neverd_shared>/licenses/${_neverd_web_notice_set}"
+        "${NEVERD_STAGED_SDK_DIRECTORY}/licenses/${_neverd_web_notice_set}")
+      add_custom_command(TARGET neverd_shared POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/LICENSES/${_neverd_web_notice_set}"
+            "${_neverd_web_notices_dir}"
+        COMMENT "Copying web analysis dependency and format reference notices"
+        VERBATIM)
+    endforeach()
+  endforeach()
+endif()
+
+if(NEVERD_ENABLE_WEB_ANALYSIS AND NEVERD_ENABLE_WEB_JAVASCRIPT)
+  foreach(_neverd_webpack_notices_dir
+      "$<TARGET_FILE_DIR:neverd_shared>/licenses/webpack"
+      "${NEVERD_STAGED_SDK_DIRECTORY}/licenses/webpack")
+    add_custom_command(TARGET neverd_shared POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/LICENSES/webpack"
+          "${_neverd_webpack_notices_dir}"
+      COMMENT "Copying bundle profile reference license"
+      VERBATIM)
+  endforeach()
+  foreach(_neverd_hermes_notices_dir
+      "$<TARGET_FILE_DIR:neverd_shared>/licenses/hermes"
+      "${NEVERD_STAGED_SDK_DIRECTORY}/licenses/hermes")
+    add_custom_command(TARGET neverd_shared POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/LICENSES/hermes"
+          "${_neverd_hermes_notices_dir}"
+      COMMENT "Copying embedded JavaScript parser dependency notices"
       VERBATIM)
   endforeach()
 endif()

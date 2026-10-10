@@ -2,8 +2,50 @@
 
 #include <charconv>
 #include <limits>
+#include <set>
+#include <vector>
 
 namespace neverd::worker {
+namespace {
+// nlohmann's DOM filter callback rescans the parent array at every object
+// end to remove discarded nodes, even when no callback discards anything.
+// Use the public SAX interface for decoded-key admission, then its ordinary
+// DOM parser. Both passes are bounded by the existing byte/depth ceilings.
+class UniqueKeys final : public nlohmann::json_sax<Json> {
+  std::vector<std::set<std::string>> keys_;
+
+public:
+  bool null() override { return true; }
+  bool boolean(bool) override { return true; }
+  bool number_integer(Json::number_integer_t) override { return true; }
+  bool number_unsigned(Json::number_unsigned_t) override { return true; }
+  bool number_float(Json::number_float_t, const Json::string_t &) override {
+    return true;
+  }
+  bool string(Json::string_t &) override { return true; }
+  bool binary(Json::binary_t &) override { return true; }
+  bool start_object(std::size_t) override {
+    keys_.emplace_back();
+    return true;
+  }
+  bool key(Json::string_t &value) override {
+    if (!keys_.back().insert(value).second)
+      throw Error("invalid_json", "Duplicate object key in JSON frame");
+    return true;
+  }
+  bool end_object() override {
+    keys_.pop_back();
+    return true;
+  }
+  bool start_array(std::size_t) override { return true; }
+  bool end_array() override { return true; }
+  bool parse_error(std::size_t, const std::string &,
+                   const Json::exception &) override {
+    return false;
+  }
+};
+} // namespace
+
 std::string hexAddress(std::uint64_t value) {
   char buffer[16];
   const auto result = std::to_chars(buffer, buffer + sizeof buffer, value, 16);
@@ -78,6 +120,9 @@ Json parseJson(std::string_view text, std::size_t maxBytes) {
       --depth;
   }
   try {
+    UniqueKeys keys;
+    if (!Json::sax_parse(text, &keys))
+      throw Error("invalid_json", "Malformed UTF-8 JSON frame");
     return Json::parse(text);
   } catch (const Json::exception &) {
     throw Error("invalid_json", "Malformed UTF-8 JSON frame");

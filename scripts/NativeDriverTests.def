@@ -5,8 +5,56 @@
 //===----------------------------------------------------------------------===//
 #ifdef NEVERD_NATIVE_DRIVER_OWNER
 NEVERD_NATIVE_DRIVER_OWNER(NeverDNativeDriverTests)
+NEVERD_NATIVE_DRIVER_OWNER(NeverDUnpackDriverTests)
 #endif
 #ifdef NEVERD_NATIVE_DRIVER_REQUIRED_TEST
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverTimestamp.ReadsOneSchedulerClockAndPreservesOtherState/"
+    "{backend}_driver")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverTimestamp.ReadsOneSchedulerClockAndPreservesOtherState/"
+    "{backend}_checked")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverTimestamp.BudgetStopsBeforeUnadmittedReads/{backend}_driver")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverTimestamp.BudgetStopsBeforeUnadmittedReads/{backend}_checked")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverTimestamp.ClockOverflowRemainsAnExplicitFailure/"
+    "{backend}_driver")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverTimestamp.ClockOverflowRemainsAnExplicitFailure/"
+    "{backend}_checked")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "DriverChecksum.AgreesWithTheIndependentLinker")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/UnpackDriver.RecoversDriverEntryImportsAndLifecycle/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/"
+    "UnpackDriver.RetainedKernelObjectsAndBorrowedPointersAreNotRecovery/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/"
+    "UnpackDriver.EntryArgumentsRegistersAndShadowSpaceRequireTheirOwnProof/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/UnpackDriver.DynamicKernelExportIdentitySurvivesRebinding/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/UnpackDriver.UserRuntimeInputsAndRestorationAreRejected/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/UnpackDriver.MalformedExportMetadataFailsBeforeExecution/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/UnpackDriver.ObservationPreservesLifecycleAndCallbackProvenance/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/"
+    "UnpackDriver.SchedulingSlicesPreserveInvocationAndTransferIdentity/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/UnpackDriver.ObserverFailuresAreAPIErrors/{backend_title}")
 NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
     "DriverSchedulingPolicy.RejectsMalformedAndOverflowingScenarios")
 NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
@@ -72,6 +120,10 @@ NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
     "WaitAllRetainsBothTimerSignalsUntilEveryConditionIsReady")
 NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
     "KernelMultipleWait.ExitedThreadWinsItsIndexWithoutConsumingAnotherSignal")
+#endif
+#ifdef NEVERD_NATIVE_DRIVER_WHP_REQUIRED_TEST
+NEVERD_NATIVE_DRIVER_WHP_REQUIRED_TEST(
+    "DriverChecksum.NativeImageHlpValidatesOddAndEvenFileExtents")
 #endif
 #ifdef NEVERD_NATIVE_DRIVER_REQUIRED_CASES
 NEVERD_NATIVE_DRIVER_REQUIRED_CASES(

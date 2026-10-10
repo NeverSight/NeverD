@@ -93,7 +93,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 ワーク項目はコールバック開始前にキューから外れるため、コールバックは自身の項目を解放できます。キュー内の項目の解放、二重登録、失効したオブジェクト、実行可能なゲストメモリ外のコールバック先は明示的に失敗します。デバイス参照はコールバックが戻るまで保持します。アンロードには全ワーク項目の解放とキュー内の処理の完了が必要です。CPU コンテキストは汎用、SIMD、FPU、制御状態を保存・復元します。ゲストメモリは共有され、障害後の CPU を保存コンテキストで再開することはできません。
 ファイルオブジェクトやキュー内／実行中ワーク項目の参照が残る間は削除を延期します。オブジェクト領域が不足するとワーク項目の割り当ては NULL を返します。
 
-シナリオで有効な再配置先アドレスを選ばない限り、イメージは優先ベースアドレスを使用します。イメージは native サブシステムを持つ PE32+ x64 実行ファイルでなければなりません。インポート元には `ntoskrnl.exe`、`ntkrnlmp.exe` または `WDFLDR.SYS` を使用できます。
+シナリオで有効な再配置先アドレスを選ばない限り、イメージは優先ベースアドレスを使用します。イメージは native サブシステムを持つ PE32+ x64 実行ファイルでなければなりません。インポート元には `ntoskrnl.exe`、`ntkrnlmp.exe`、`HAL.dll` または `WDFLDR.SYS` を使用できます。
 
 実行ローダーは、検証済みの x64 `DIR64` ベース再配置と、限定されたセキュリティ Cookie のロード構成に対応します。エントリーラッパーの実行前に、決定的なゲスト Cookie を初期化します。その他の未モデル化ロード構成フィールド、TLS、遅延／バインド済みインポート、序数によるインポート、マネージドイメージは拒否します。イメージは厳格な範囲とアラインメントの検査にも合格する必要があります。
 
@@ -334,6 +334,7 @@ PnP FDO では、`WdfDeviceInitSetDeviceType` が指定した 32 ビットの型
 | `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | ユーザー／システムマッピングは物理ページのキャッシュ属性と各権限を維持。非ページプール MDL は安全なヘルパーで元のシステムマッピングを再利用 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | 独立または IRP に関連付けた非ページプール／ユーザー MDL、変更可能なチェーンリンク、独立したロックとシステム別名。クォータは未対応 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 明示的なセッションレジストリ、ハンドルごとの権限と寿命、クエリバッファーサイズと変更。ホストレジストリは使用しない |
+| `ExAllocatePool` | 従来の 2 引数によるプール種別 `0`、`1`、`512` のデータ割り当て。共通の整列、未初期化バイトモデル、サイズ／IRQL 検査を使い、枯渇時は NULL。`ExFreePool` またはタグがゼロの `ExFreePoolWithTag` で解放し、残存割り当てはカーネル依存状態として保持。 |
 | `ExAllocatePoolWithTag`、`ExFreePoolWithTag`、`ExFreePool` | プール種別 `0`、`1`、`512` のデータ割り当て。サイズ／タグは正で、タグ付き解放は割り当てと一致する必要があり、アドレスは再利用しない |
 | `IoCreateDevice`、`IoDeleteDevice` | デバイス種別 `0x22`、characteristics は `0` または `0x100`、拡張領域のサイズは有限、名前は ASCII の `\Device\Name` |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | 同一ドライバー内の接続。以前の最上位を返し、切断は保存した下位を受け取る。上記の構造・寿命制限に従う |
@@ -467,7 +468,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v86` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v89` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 
@@ -577,3 +578,11 @@ checked Unicorn は `MachineRunControl` を使い、ARM64 の保守、ゲスト�
 `RunDeadline::invoke` は WHP の停止済み・期限切れの実行をホスト呼び出し前に拒否し、キャンセル中も実際のホスト結果を保持し、借用した停止トークンを解放する前に割り込みコールバックの完了を確認します。KVM と WHP は、完全に取得した非公開状態を実行リースの所有スレッドで検証してから、同時に到着した停止や期限を分類します。実際のホスト・取得エラーと認証済み x64 CPU 例外が優先されます。通常の成功状態はキャンセル確認が終わるまで公開せず、確認済みの中断では投機的な CPU/RAM 効果を破棄して再試行を許可します。準備、ネイティブ実行、状態取得には単一のステップ猶予を使います。協調キャンセルを提供しますが、厳密な実時間上限は保証しません。
 
 CPU0 の明示的プリエンプション、仮想時計と制約は[ドライバースケジューリング](driver-scheduling.md)を参照してください。
+
+## HAL エクスポートとパフォーマンスカウンター
+
+`HAL.dll` は独立したインポート提供元で、モジュール名の大文字と小文字を区別しません。静的インポートと `MmGetSystemRoutineAddress` は、カーネルと HAL の大文字と小文字を区別する正確なエクスポート識別を共有します。有効な識別が競合する場合は拒否します。`kernel_exports` は既知の HAL ルーチンを HAL 名前空間で上書きし、他の明示宣言はカーネルに属します。未知の HAL インポートは遅延トラップのままで、同名という理由だけではカーネル API の意味を取得しません。
+
+`KeQueryPerformanceCounter` は共有スケジューラー時刻を 100 ns 単位で返し、周波数は毎秒 10,000,000 回に固定されます。省略可能な出力ポインターでは、8 バイト全体の書き込み権限とオブジェクト寿命を検査します。有効なすべての x64 IRQL で呼び出せます。協調モードは既存のスケジューリング境界でのみ時刻を進め、命令クロックモードは設定済みの計時を維持します。読み取り自体は別の時計を作らず、時刻も進めません。これは決定的なプロファイルであり、ホストハードウェアの測定ではありません。独立コンパイルした実行時フィクスチャは、ネイティブ CPU バックエンドで優先アドレスと再配置アドレスにおける静的／動的識別、周波数、単調性を確認します。
+
+`RDTSC` と `RDTSCP` は `KeQueryPerformanceCounter` と同じ 10 MHz のスケジューラ時計を読みます。`RDTSCP` の ECX は単一のモデルプロセッサを示すゼロです。EAX/EDX（RDTSCP では ECX も）の上位 32 ビットをゼロにし、他のレジスタとフラグは維持します。協調実行では読み取りによって時間は進みません。明示的な命令スケジューリングでは、その命令の計上後の時刻を読み、量子の長さには依存しません。オーバーフローは結果の書き込み前に停止し、命令予算と観測停止も有効です。ホストの TSC 周波数やプロセッサ識別情報は公開しません。MSR アクセス、RDPMC、その他の未モデル化 CPU 問い合わせは未対応です。

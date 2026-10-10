@@ -130,10 +130,18 @@ class EmulationDocumentationInventoryTests(unittest.TestCase):
         self.assertIn(token, original)
         changed = original.replace(token, "")
 
-        for wrap_token, wrap_path in ((True, False), (False, True), (True, True)):
-            with self.subTest(wrap_token=wrap_token, wrap_path=wrap_path):
+        for wrap_token, wrap_path, split_token in (
+            (True, False, False), (False, True, False), (True, True, False),
+            (False, False, True), (True, True, True),
+        ):
+            with self.subTest(wrap_token=wrap_token, wrap_path=wrap_path,
+                              split_token=split_token):
                 token_entry = f'NEVERD_EMULATION_DOC_TOKEN({group}, "{token}")'
                 path_entry = f'NEVERD_EMULATION_DOC_PATH({group}, "{pattern}")'
+                if split_token:
+                    middle = len(token) // 2
+                    token_entry = (f'NEVERD_EMULATION_DOC_TOKEN({group}, '
+                                   f'"{token[:middle]}"\n    "{token[middle:]}")')
                 if wrap_token:
                     token_entry = token_entry.replace("(", "(\n    ", 1)
                 if wrap_path:

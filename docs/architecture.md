@@ -177,8 +177,16 @@ the continuation's independent runtime frame. Shared coordinate projection
 expresses the aligned establisher from entry ESP for HighIR and LLVM, while
 entry-stack proofs cannot claim a fixed displacement. Pointer-copy and slot
 proofs keep each runtime definition's identity. Full callback lowering and
-native re-reconstruction still need their own source-frame contract; HighIR
-retains handler/continuation annotations for this model.
+native re-reconstruction have separate contracts. HighIR retains
+handler/continuation annotations for this model. Native scalar-catch lowering
+projects the source coordinate only into an allocation with proved physical
+alignment. A dedicated catch-stack planner bounds private ESP uses; catch
+objects, cleanup borrows and continuation writeback share the parent projection.
+The COFF consumer independently binds the private stack to the source callback,
+checks its lifetime and allows a parent bridge only through SavedESP. Its memory
+proof tracks initialization by allocation identity and resets callback bytes at
+every catch entry. Shared mask folding requires actual alloca alignment and
+cannot infer a constant displacement for an arbitrary source entry ESP.
 The LowIR no-return path proof lives in the low validation component, so call
 ABI checks do not depend on aggregate IR or MedIR. LowIR and MedIR consume the
 same architectural intrinsic-termination definition; both follow exceptional
@@ -335,6 +343,70 @@ checker occurrences. Native lowering may replace an authenticated pure check
 with a source-indexed execution event while LLVM owns the physical GS check.
 The public writer replays that ownership and the complete event order against
 immutable input; metadata alone cannot authorize removing a source call.
+
+Offline web analysis has a separate source-domain session in `lib/web`, exposed
+through `NeverDCAPIWeb.h`. It owns immutable artifacts, bounded private disk
+storage and range reads, source identities,
+parser/model admission, lexical binding identities, primitive-value semantics,
+conservative effect summaries, module evidence, admitted-file comparisons,
+qualified bundle source partitions, fixed-profile Bun container extraction,
+map decoding, budgets and query redaction. `SourceView` owns the bounded display
+projection and original/projected range mapping; `SessionView` owns preview,
+publication and revocation. CLI/worker adapters cannot bypass those policies.
+Views use owned parser token/comment spans and never claim semantic rewrites.
+`SourceNavigation` owns syntax containment and lexical links; `SessionAnchor`
+joins source coordinates, original storage and committed display views. Bun
+source range conversion uses the same decoder as source extraction. Compressed
+sources return containing frames instead of fabricated per-character offsets.
+`ArtifactView` owns direct-byte selection and origins for original files, Bun
+assets and available ASAR members. Encoded Bun/map source keeps its dedicated
+decoder. `Asar` owns Pickle/JSON/member/integrity validation, while `PathPolicy`
+owns its pinned native Unicode collision policy. `SessionAsar` publishes bounded
+member pages and explicit captured unpacked associations. Source, anchors,
+relative module-file comparisons and native handoff share these selections;
+unavailable members never become consumer bytes. `SourceOrigins` owns finite
+syntactic module provenance over the existing binding/module model; `ElectronSource`
+consumes it without claiming runtime API targets. `ElectronManifest` compares
+entry declarations within the selected captured namespace, and `SessionElectron`
+owns revisions, caches and metadata-only publication. The manifest consumer
+does not depend on the JS parser. `ElectronIPC` owns explicit manifest-scoped
+channel comparisons; `SessionElectronIPC` only selects cached evidence and
+publishes bounded source/channel/endpoint pages. No transport infers routing.
+`ElectronSelection` owns shared manifest/source admission for scoped consumers.
+`SourcePaths` owns finite captured-root path candidates; `ElectronEntries`
+compares them with exact available namespace members. `SessionElectronEntries`
+selects evidence, caches results and publishes redacted pages; CLI and worker
+share those rules. Relative renderer-file and source-directory roots remain
+distinct. Association does not execute targets or automatically parse HTML.
+`HTML` owns the bounded UTF-8 script/base scanner, `HTMLReferences` owns pinned
+attribute decoding, and `HTMLLinks` owns portable local URL comparison.
+Its private `HTMLFiles` index and declared-base rules are shared with
+`HTMLModules`, which binds inline module requests to explicit document/script
+contexts and captured occurrences. `ImportMap` owns bounded JSON/URL normalization
+and exact/prefix/scoped/blocking rules over the embedded C++ Ada URL parser.
+`HTMLImportMaps` owns captured declaration bases, source-order eligibility and
+the separate capture-root projection. Full serialized URLs stay private;
+decoded filesystem candidates never substitute for URL identity. Unknown browser
+activation/history and absolute key origins remain explicit boundaries.
+`SessionModules` selects this context only for derived
+inline IDs; ordinary external-file analyses keep their own profile and cache.
+`SessionHTML` owns cache/revision and private
+metadata policy. Inline scripts use `ArtifactView` slices with nested original
+storage origins and a shared inline-occurrence selector; source parser and
+anchor consumers do not reconstruct or execute browser source. HTML inventory
+remains available without the JS parser.
+`SessionNative` supplies the selected immutable native occurrence. The SDK
+bridge joins that evidence to a new independent native session;
+the web library does not depend on the native pipeline. `loadBinaryBuffer` uses
+the same ELF/COFF/Mach-O readers as file loading and refuses implicit universal
+slice selection. Snapshot-backed native sessions have no file or sidecar
+namespace; native path-dependent operations check that boundary explicitly.
+JavaScript is not
+a native ISA and does not enter LowIR. The CLI uses this C API, while the pinned
+embedded parser is private to the backend; no target code or external analyzer
+is executed. Syntax acceptance and source-map format validity do not establish
+semantic completeness or producer provenance. See [web analysis](web-analysis.md)
+and its [schema](web-artifact-schema.md) for the current capability boundary.
 
 Library feature recognition reads the shared MedIR boundary before the source
 routes diverge. `SignatureDB` owns validated packs and the existing byte matcher;
@@ -1511,6 +1583,8 @@ The LLVM model owns validation of `initializes` parameter contracts. It reuses s
 `NeverDInterpreterLLVMRefinement` owns native-to-LLVM proof composition. It rebuilds both state models and mandatory contracts, uses the authoritative profile for an entry-only flag projection, and checks both premises afresh. Clients may propose loop plans but cannot replace models, observations or receipts. Analysis models copy executable graphs and declared roots only; entry backedges are rejected before state initialization can repeat.
 
 An optional `InterpreterLLVMRefinementPreservation` request adds GPR-byte preservation to both fresh premises. Preparation owns bounded validation, overlap union and word splitting; mandatory state, definedness and frame observations remain. `NativeState` reaches only the native checker and supports `SelectedWitness`; `AllUndefinedChoices` is refused. Effective subcontracts bind the receipts, and an empty request preserves existing defaults.
+
+`InterpreterLLVMNativeCollection` exposes two false-by-default collection choices only to the fresh native premise. Retained audit boundaries must be unreachable under the selected witness; deferred branches still require complete semantics on every feasible path. The native receipt binds these choices. Source assumptions, observations and proof budgets remain unchanged.
 
 The v3 recovery C API and CLI map explicit field, refinement and solver-query budgets to the shared specializer. The adapter validates structure sizes and reserved fields before reading extensions; v1/v2 layouts and defaults remain stable. Budget increases change permitted work, not the execution contract or publication criteria.
 
@@ -3802,7 +3876,7 @@ Windows virtual memory adds `VirtualAlloc`, `VirtualFree`, `VirtualProtect`, `Vi
 
 `NeverDEmulationWindowsProcess` → `os/windows/process/`; `NeverDWindowsProcessTests` + `NeverDProcessPublicTests`: [windows-pe64-v1](process-emulation.md#windows-pe64-profile).
 
-`lib/unpack` recovers packed images in four layers. `core` owns orchestration and the format registry. `format/pe` validates the container and rebuilds observed memory, imports and metadata; `PETLS.cpp` validates replacement TLS records against the loader allocation and observed callbacks. No protector registry or static stub signature selects an entry. `dynamic` observes a guest process through `observeProcess`: `Observation.def` maps each container and instruction set to a process profile and gives each instruction set its stack pointer and instruction window. A new target is a table row and a module directory, and an input without a row is rejected by name. `ExecutionSession` owns execution watches; a `ProcessObserver` reads a stopped process and chooses the next stop, but cannot change guest state. The emulation layer knows only `defer_unmodeled`, which binds unmodeled imports to opaque entries that stop when executed. See [unpacking](unpack.md). Deferred loading permits executable callback and entry targets that earlier initializers materialize in zero-filled memory. Callback arrays and TLS allocation metadata still require validated backing; ordinary strict loading retains its file-backing checks. The OS model supplies invocation provenance and notifies observers when it prepares an invocation or restores a suspended caller. Transfer watches are rearmed at those boundaries, including when a callback and the generated entry share a page.
+`lib/unpack` recovers packed images in separate layers. `core` owns orchestration and the format registry. `format/pe` validates the container and rebuilds observed memory, imports and metadata; `PETLS.cpp` validates replacement TLS records against the loader allocation and observed callbacks. No protector registry or static stub signature selects an entry. `dynamic` observes a guest process through `observeProcess`: `Observation.def` maps each container and instruction set to a process profile and gives each instruction set its stack pointer and instruction window. A new target is a table row and a module directory, and an input without a row is rejected by name. `ExecutionSession` owns execution watches; a `ProcessObserver` reads a stopped process and chooses the next stop, but cannot change guest state. The emulation layer knows only `defer_unmodeled`, which binds unmodeled imports to opaque entries that stop when executed. See [unpacking](unpack.md). Deferred loading permits executable callback and entry targets that earlier initializers materialize in zero-filled memory. Callback arrays and TLS allocation metadata still require validated backing; ordinary strict loading retains its file-backing checks. The OS model supplies invocation provenance and notifies observers when it prepares an invocation or restores a suspended caller. Transfer watches are rearmed at those boundaries, including when a callback and the generated entry share a page.
 
 `WindowsLibraryHost.cpp` owns DLL host construction; the Windows loader owns its ordinary load/unload lifecycle. `ProcessView::inputModule()` separates the observed input from the host EXE and permits a late initial snapshot. `ProcessView::callFrame()` reads integer argument and return facts through `IntegerABI`; `dynamic/ProcessTransfer` owns matching continuation and stack evidence. `PETLS.cpp` alone decides whether that evidence completes a process-attach callback.
 
@@ -4146,6 +4220,14 @@ DarwinFiles owns common attribute import, name/stat validity and record encoding
 DarwinFiles owns retained attribute state, initial-object mutation grants, shared name import and complete-stat validity. DarwinExtendedAttributes stages value/list changes before one commit. Fixed initial reservations and runtime attribute excess use the same storage/count owner as content and namespace mutations; unlinked objects and mapping leases retain their dynamic charge until final release. JSON only imports explicit grants. Directory attribute mutation invalidates full metadata independently of membership, snapshots and enumeration versions.
 
 When a recovered DLL entry differs from its original PE entry, the writer emits a loader-notification adapter: process attach goes to the selected entry; detach and thread notifications go to the original live executable entry so outer-wrapper cleanup remains reachable. An unavailable original entry fails rebuilding. Reported `entry_rva` still identifies the selected program entry; the PE header can point to the adapter. The independent wrapped-DLL fixture checks cleanup outside the selected function on both emulated architectures and native Windows.
+
+`ProcessView::runtimeState()` transports immutable OS-owned state. `WindowsProcessState.cpp` snapshots resource identity, committed backing and lifecycle from their authoritative owners. `unpack/os/windows` validates and compiles the initializer; `format/pe/PERuntime.cpp` owns placement and merging of import, TLS and unwind metadata. Generic observation neither interprets Windows object layouts nor infers ownership from integer matches.
+
+`observeImage` selects the process or driver owner from the PE execution domain. `observeDriver` shares stopped `ProcessObserver` callbacks through `EmulationRuntime`; kernel ownership and DriverEntry ABI checks remain in the driver layer. Scheduling slices retain invocation identity. See [driver unpacking](unpack.md).
+
+`support/X86Addressing.h` owns the width-specific interpretation of absent ordinary SIB indices for both lifting and checked execution. `EIZ` is absent only with a 32-bit address, and `RIZ` only with a 64-bit address; neither is a base register or VSIB vector index. REX.X-selected R12/R12D remains a real scaled index. `X64Address` regressions compare original processor execution, access observations, cancellation and memory faults at both privilege levels, while `X86NoIndexAddress` retains the strict lifting and malformed-alias checks.
+
+Ordinary RAM `XCHG` admits unaligned 8/16/32/64-bit operands with or without an explicit LOCK prefix. The shared RAM transaction retains the original effective address, serializes publication and discards cancelled or faulted writes; the processor executes the original exchange. `X64Address` tests cover address/register overlap, partial register writes, cache-line and page crossings, observers and missing-page faults. MMIO exchanges retain their provider and natural-alignment requirements; other locked instruction families retain their existing admission rules.
 
 ## Native opaque-state preservation
 

@@ -32,6 +32,9 @@ TEST(DriverKernelAPIIRQL, CoversExactSupportedInventoryWithoutDuplicates) {
 #define NEVERD_KERNEL_API(Name, Arity, Availability) #Name,
 #include "os/windows/kernel/KernelAPIs.def"
 #undef NEVERD_KERNEL_API
+#define NEVERD_KERNEL_HAL_API(Name, Arity, IRQL, Operation) #Name,
+#include "os/windows/kernel/KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
   };
   const llvm::StringLiteral Catalog[] = {
 #define NEVERD_KERNEL_IRQL_API(Name, Maximum) #Name,

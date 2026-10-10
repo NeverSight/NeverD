@@ -618,11 +618,6 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                     WindowsEHNativeSourceReason::ConflictingLanguageModel,
                     Capability);
     const auto &Chain = *EH.Registration;
-    if (Chain.RealignedFrame)
-      return reject(
-          Model,
-          WindowsEHNativeSourceReason::UnsupportedCxxDynamicStackAlignment,
-          Capability);
     if (!EH.PersonalityVA || Chain.HandlerVA != EH.PersonalityVA ||
         !Chain.ScopeTableVA || Chain.ScopeTableVA != EH.HandlerDataVA ||
         Chain.ScopeTableVA != EH.Cxx->NativeFuncInfoVA ||

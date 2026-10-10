@@ -35,8 +35,9 @@ public:
   /// \p Wanted selects a transfer by its one-based position; zero accepts the
   /// first one that has the program invocation's entry stack.
   TransferObserver(const InputImage &Image, const ArchitectureTraits &Traits,
-                   uint64_t Wanted)
-      : Extent(Image.extent()), Traits(Traits), Wanted(Wanted) {}
+                   uint64_t Wanted, bool CaptureRuntime = false)
+      : Extent(Image.extent()), Traits(Traits), Wanted(Wanted),
+        CaptureRuntime(CaptureRuntime) {}
   llvm::Expected<std::vector<emulation::ExecutionWatch>>
   started(emulation::ProcessView &Process) override;
   llvm::Expected<std::optional<std::vector<emulation::ExecutionWatch>>>
@@ -60,6 +61,7 @@ private:
   const uint64_t Extent;
   const ArchitectureTraits Traits;
   const uint64_t Wanted;
+  const bool CaptureRuntime;
   uint64_t Base = 0, InitialSP = 0;
   bool Initialized = false;
   bool EnteredProgram = false;

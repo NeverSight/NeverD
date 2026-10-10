@@ -152,6 +152,8 @@ v4 テストはプレフィックスのサイズとパディング、切り詰�
 
 `InterpreterLLVMRefinement.Preservation*` は部分範囲と重複、不正要求、独立計算した準備コスト、両側の同一破壊、ループをまたぐ入口値の保存と復元、新しい不透明状態の証拠、後段の拒否を検証します。API 利用側の `NeverDPEFixedImageTests` も再ビルドします。要求省略時の結果・カウンタ・ダイジェストは別途ベースラインと比較します。
 
+`InterpreterLLVMRefinement.Collection*` は有限・帰納証明で必要な保持と遅延、到達可能な不正分岐、後段のソース拒否、入口値の保存、四通りのネイティブ設定の識別を検証します。組合せ処理で設定の伝達を除いた故障版をコンパイルし、必要な設定が検証器に届くことを確認します。
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1248,7 +1250,7 @@ KVM の判定には、実際に自発終了しない vCPU のキャンセルと�
 
 `native_cpu_only=true` と `native_driver_tests=true` を指定すると、Unicorn なしで `NeverDNativeDriverTests` を有効にします。構成前に `build_wdk_driver_fixtures.py` が Microsoft 公式 WDK/SDK 10.0.26100.6584 パッケージ全体の SHA-256 を検証し、元のソースから通常版・CFG 版・DBG 版のドライバーイメージを計 48 個構築します。`WDKDriverFixtures.def` がパッケージ識別子、コンパイラーとリンカーの引数、フィクスチャの対応を定義します。変更していない Microsoft のファイルとライセンスはローカルのビルド／キャッシュ内に保持し、CI はビルドメタデータとログだけをアップロードします。マニフェストにはツールのバージョン、コマンド、ソースとヘッダーのハッシュ、出力イメージのハッシュを記録します。
 
-`NativeDriverTests.def` は `DriverBuiltinImages.def` と `DriverBackendParityCases.def` の全 115 ワークロードから 230 件の WHP 結果を要求します。内訳は組み込み 27、WDK 48 イメージ、要求シナリオ 40 件で、それぞれ元と再配置先のアドレスを使います。必須項目全体は `5058 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets = 5420`。待機集合の 30 件は移植可能なモデル 16 件と独自ネイティブドライバー 14 件です。`run_native_cpu_ci.py --with-drivers` は Unicorn を無効にして正確な一覧と JUnit 証拠を保存します。必須フィクスチャの欠落やスキップは選択式ゲートを失敗させ、通常のビルドでは外部フィクスチャを省略できます。固定イメージの再配置拒否は期待結果のままです。ARM64 のネイティブゲスト実行は未検証です。
+`NativeDriverTests.def` は `DriverBuiltinImages.def` と `DriverBackendParityCases.def` の全 115 ワークロードから 230 件の WHP 結果を要求します。内訳は組み込み 27、WDK 48 イメージ、要求シナリオ 40 件で、それぞれ元と再配置先のアドレスを使います。必須項目全体は `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads = 5447`。待機集合の 30 件は移植可能なモデル 16 件と独自ネイティブドライバー 14 件です。`run_native_cpu_ci.py --with-drivers` は Unicorn を無効にして正確な一覧と JUnit 証拠を保存します。必須フィクスチャの欠落やスキップは選択式ゲートを失敗させ、通常のビルドでは外部フィクスチャを省略できます。固定イメージの再配置拒否は期待結果のままです。ARM64 のネイティブゲスト実行は未検証です。
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` は起動中の異なる2命令の前で期限切れ、停止、両方の中断を注入します。正確な段階診断、メッセージの所有寿命、エラー型と原因ビット、手順間で変わらない単一の期限、メモリ所有権の解放を検査します。実際の転送失敗と状態不一致は引き続き区別します。ネイティブ x64 起動検証の予算は `5 s` で、通常のゲスト期限と単一ステップ猶予は変更しません。
 
@@ -1622,6 +1624,10 @@ MainActor のフィクスチャは固定メタデータと静的テーブルの�
 ## 有界ディレクトリ一括属性
 
 bulk-attributes は完全なグループ、名前/型の集合、未使用バイトの保護、low32 FD、bitmap ワード、ネイティブエラー、dup、独立 open、EOF、ゼロ rewind を確認する。リテラル/未対応モードは仮想専用。モデルは完全な stat と無効化、NFD/255バイト名、入出力の別名、転送/予算エラー、移動/SWAP/削除/再使用、明示権限も確認する。必須在庫はプラットフォーム当たり63項目、ARM64 は189件、Intel は126件。本機で検証した実行は一致する ARM64 HVF のみ。native5s、guest/Python5,000,000us/quantum1024、public10s は不変。
+
+`MaterializedRuntimePreservesOwnedObjectsOnNativeWindows` は元プログラムのモデル実行、復元、セクション権限、元と復元結果の Windows ネイティブ実行を検証します。ヒープ再割り当て・解放、符号化した内部ポインター、FLS コールバックの再設定、再帰ロック、LastError、仮想ページの予約・コミット・保護を含みます。`MaterializationRequiresKnownSupportedState` はバージョン欠落と動的 TLS を拒否し、`RuntimeRestorationHasTheSameCAPIAndCLIContract` は正確なバイト列と報告を比較します。Linux での構築検証や Wine の観測は Windows ネイティブの寿命検証を代替しません。
+
+`NeverDUnpackDriverTests` は入口、カーネルインポート、残存資源、ABI、エクスポート、スケジューリング、要求とアンロード、C API/CLI、PE チェックサムを検証します。KVM/WHP の必須ケースと Windows ImageHlp 比較は、ネイティブカーネルへのロード証明ではありません。 [UNPACK](unpack.md).
 
 ## 不透明状態の検査
 

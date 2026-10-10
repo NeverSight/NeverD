@@ -21,6 +21,7 @@
 #include "../kernel/KernelModel.h"
 #include "../kernel/WindowsKernelLayout.h"
 #include "DriverImage.h"
+#include "DriverObservation.h"
 #include "DriverScenario.h"
 #include "GuardControlFlow.h"
 #include "WindowsX64ExecutionPolicy.h"
@@ -81,8 +82,9 @@ std::string guestCallPhase(const GuestCallToken &Token) {
 
 } // namespace
 
-llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
-                                           const DriverOptions &Options) {
+static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
+                                              const DriverOptions &Options,
+                                              ProcessObserver *Observer) {
   if (Options.Contract != ExecutionContract::Legacy &&
       Options.Contract != ExecutionContract::CheckedX64)
     return diagnostic::error(diagnostic::Contract);
@@ -163,6 +165,14 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   KernelModel Kernel(CPU, Result, &Exports);
   if (auto E = Kernel.initialize(*Image, Options))
     return std::move(E);
+  DriverObservation Observation(Observer, CPU, *Image, Kernel, Exports, Result,
+                                Path.filename().string());
+  bool PendingObservation = false, PendingMemoryWrite = false;
+  std::optional<std::string> ObserverFailure;
+  auto ObservationFailed = [&](llvm::Error Error) {
+    ObserverFailure = llvm::toString(std::move(Error));
+    return failure(*ObserverFailure);
+  };
   X64SEH Exceptions(
       Image->Exceptions, Image->PreferredBase, Image->Base, Image->Size,
       [&](uint64_t Address) -> llvm::Expected<uint64_t> {
@@ -258,6 +268,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       return false;
     }
     Result.Instructions = Resources.instructions();
+    Observation.instructionAdmitted();
     ++RunInstructions;
     return true;
   };
@@ -267,6 +278,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     if (Stopped)
       return;
     Result.PC = Address;
+    if (Observation.matches(Address)) {
+      PendingObservation = true;
+      CPU.stop();
+      return;
+    }
     auto StackPointer = CPU.reg(X64Register::SP);
     if (!StackPointer) {
       Stop(DriverStopReason::EngineError,
@@ -308,12 +324,6 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       return;
     }
     if (const auto *Export = Exports.lookup(Address)) {
-      if (!KernelModel::argumentCount(*Export)) {
-        Stop(DriverStopReason::UnsupportedAPI,
-             session_diagnostic::UnsupportedImport + Export->Module + "!" +
-                 Export->Name);
-        return;
-      }
       Pending = Export;
       CPU.stop();
       return;
@@ -384,6 +394,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     if (auto E = Kernel.validateGuestAccess(Address, Size, false))
       Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
   };
+  Hooks.MemoryWritten = [&]() { PendingMemoryWrite = true; };
   Hooks.Write = [&](uint64_t Address, uint32_t Size, uint64_t Value) {
     if (Stopped)
       return;
@@ -492,6 +503,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     uint64_t SynchronizationObject = 0;
     bool SynchronizationEntered = false;
     bool CallbackEntered = false;
+    bool ObservationEntered = false;
     bool PowerManagedCallback = false;
     uint64_t RequestIRP = 0;
     std::optional<KernelGuestCall> ChildCall;
@@ -501,6 +513,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     std::unique_ptr<Execution> Parent;
   };
   std::vector<std::unique_ptr<Execution>> Waiting;
+  const Execution *ObservedFrame = nullptr;
   struct ClockCall {
     KernelGuestCall Call;
     std::optional<KernelModel::Wait> Wait;
@@ -758,14 +771,25 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     }
     return llvm::Error::success();
   };
-  auto AdvanceClock = [&]() -> llvm::Error {
+  // The same checked projection supplies instruction environment reads and
+  // the scheduler's next commit. Reading it must not consume the scheduler's
+  // instruction accounting or give the current thread a fresh time slice.
+  auto ExecutionTime = [&]() -> llvm::Expected<uint64_t> {
     if (!Options.Scheduling)
-      return llvm::Error::success();
+      return Kernel.now100ns();
     const uint64_t Count = Result.Instructions - AccountedInstructions;
     const uint64_t Unit = Options.Scheduling->InstructionTime100ns;
     if (Count > (UINT64_MAX - Kernel.now100ns()) / Unit)
       return failure(driver_scheduling::ClockOverflow);
-    const uint64_t End = Kernel.now100ns() + Count * Unit;
+    return Kernel.now100ns() + Count * Unit;
+  };
+  auto AdvanceClock = [&]() -> llvm::Error {
+    if (!Options.Scheduling)
+      return llvm::Error::success();
+    auto Time = ExecutionTime();
+    if (!Time)
+      return Time.takeError();
+    const uint64_t End = *Time;
     for (;;) {
       const auto Deadline = NextExecutionDeadline();
       const uint64_t Boundary = Deadline ? std::min(*Deadline, End) : End;
@@ -913,9 +937,31 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     }
     bool Ran = false;
     uint64_t NextPC = Frame.PC;
+    if (Observer) {
+      if (auto E = CPU.setReg(X64Register::PC, NextPC))
+        return E;
+      // A time slice of the same invocation does not start a new code
+      // generation. Nested callbacks and restored callers do establish a
+      // new invocation boundary, as in the process environment.
+      if (!Frame.ObservationEntered || ObservedFrame != &Frame) {
+        if (auto E = Observation.entered(Frame.Phase == EntryPhase &&
+                                             !Frame.ID && !Frame.Parent &&
+                                             !Frame.ExceptionCallback,
+                                         {Frame.Base, Frame.Size}))
+          return ObservationFailed(std::move(E));
+        Frame.ObservationEntered = true;
+        ObservedFrame = &Frame;
+      }
+    }
     while (!Stopped) {
       if (Options.Scheduling && Ran)
         return SaveBoundary(NextPC);
+      if (Observer) {
+        if (auto E = CPU.setReg(X64Register::PC, NextPC))
+          return E;
+        if (auto E = Observation.resuming())
+          return ObservationFailed(std::move(E));
+      }
       const uint64_t Remaining = Resources.remainingMicroseconds();
       if (!Remaining) {
         Stop(DriverStopReason::Timeout, runtime::Timeout);
@@ -924,6 +970,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       Pending = nullptr;
       PendingGuard = 0;
       PendingEnvironmentRead.reset();
+      PendingObservation = PendingMemoryWrite = false;
       if (auto E = CPU.run(NextPC, Remaining)) {
         std::string Message = llvm::toString(std::move(E));
         if (!Stopped)
@@ -932,9 +979,20 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                                       : DriverStopReason::EngineError,
                Message);
       }
-      Ran = true;
       if (Stopped)
         break;
+      if (PendingObservation) {
+        auto Resume = Observation.watched(Result.PC);
+        if (!Resume)
+          return ObservationFailed(Resume.takeError());
+        if (!*Resume) {
+          Stop(DriverStopReason::Observer, "");
+          break;
+        }
+        NextPC = Result.PC;
+        continue;
+      }
+      Ran = true;
       if (AdmissionBoundary)
         return SaveBoundary(Result.PC);
       // An import observes time after all preceding machine instructions.
@@ -989,6 +1047,28 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (PendingEnvironmentRead) {
         const auto &Action = PendingEnvironmentRead->Request;
         if (Action.Source ==
+                WindowsX64ExecutionPolicy::Action::Kind::ReadTimestamp ||
+            Action.Source == WindowsX64ExecutionPolicy::Action::Kind::
+                                 ReadTimestampAndProcessor) {
+          // The modeled TSC shares the 10 MHz scheduler clock. Account for
+          // this admitted instruction exactly once when sampling, retaining
+          // its time-slice charge for the scheduler. Cooperative reads never
+          // advance time. No host CPU state escapes.
+          auto Timestamp = ExecutionTime();
+          if (!Timestamp)
+            return Timestamp.takeError();
+          if (auto E = CPU.setReg(X64Register::AX, uint32_t(*Timestamp)))
+            return E;
+          if (auto E = CPU.setReg(X64Register::DX, *Timestamp >> 32))
+            return E;
+          if (Action.Source == WindowsX64ExecutionPolicy::Action::Kind::
+                                   ReadTimestampAndProcessor)
+            if (auto E = CPU.setReg(X64Register::CX, 0))
+              return E;
+          NextPC = PendingEnvironmentRead->NextPC;
+          continue;
+        }
+        if (Action.Source ==
             WindowsX64ExecutionPolicy::Action::Kind::ReadCurrentThread) {
           if (auto E = PrepareProcessorView())
             return E;
@@ -1039,8 +1119,24 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         }
         continue;
       }
+      if (PendingMemoryWrite && !Pending) {
+        auto PC = CPU.reg(X64Register::PC);
+        if (!PC)
+          return PC.takeError();
+        NextPC = *PC;
+        continue;
+      }
       if (!Pending) {
         Stop(DriverStopReason::EngineError, session_diagnostic::UnknownCPUExit);
+        break;
+      }
+      if (auto E = Observation.exporting(*Pending))
+        return ObservationFailed(std::move(E));
+      auto ArgumentCount = KernelModel::argumentCount(*Pending);
+      if (!ArgumentCount) {
+        Stop(DriverStopReason::UnsupportedAPI,
+             session_diagnostic::UnsupportedImport + Pending->Module + "!" +
+                 Pending->Name);
         break;
       }
       if (!EventAvailable())
@@ -1059,7 +1155,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
              llvm::toString(LastArgument.takeError()));
         break;
       }
-      unsigned Count = *KernelModel::argumentCount(*Pending);
+      unsigned Count = *ArgumentCount;
       if (Count > MaxAPIArguments) {
         Stop(DriverStopReason::EngineError,
              session_diagnostic::KernelArgumentContract);
@@ -2070,6 +2166,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
     }
   }
+  if (ObserverFailure)
+    return failure(*ObserverFailure);
   if (auto E = Kernel.snapshot()) {
     Result.Diagnostic += (Result.Diagnostic.empty() ? "" : "; ") +
                          std::string(session_diagnostic::ObjectSnapshot) +
@@ -2095,5 +2193,16 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     Result.Fault = std::move(Observation);
   }
   return Result;
+}
+
+llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
+                                           const DriverOptions &Options) {
+  return runDriver(Path, Options, nullptr);
+}
+
+llvm::Expected<DriverResult> observeDriver(const std::filesystem::path &Path,
+                                           const DriverOptions &Options,
+                                           ProcessObserver &Observer) {
+  return runDriver(Path, Options, &Observer);
 }
 } // namespace neverd::emulation

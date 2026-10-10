@@ -151,6 +151,49 @@ TEST_F(UnpackPublic, ExplicitSnapshotsHaveTheSameCAPIAndCLIContract) {
             text::SnapshotOutcome);
 }
 
+TEST_F(UnpackPublic, RuntimeRestorationHasTheSameCAPIAndCLIContract) {
+#ifndef NEVERD_UNPACK_GENERATED_FIXTURE_DIR
+  GTEST_SKIP() << generated::MissingTools;
+#else
+  const auto Original =
+      readImage(std::filesystem::path(NEVERD_UNPACK_GENERATED_FIXTURE_DIR) /
+                generated::X64Dir / generated::ProgramFile);
+  for (unsigned Mode :
+       {generated::OwnedRuntimeMode, generated::VirtualRuntimeMode}) {
+    SCOPED_TRACE(Mode);
+    const auto Packed = generated::pack(Original, Original.File, Mode);
+    ASSERT_FALSE(HasFailure());
+    const auto Input = (Directory / generated::PackedFile).string();
+    const auto First = (Directory / FirstOutput).string();
+    const auto Second = (Directory / SecondOutput).string();
+    writeFile(Input, Packed);
+    const char *Options =
+        R"({"restore_runtime":true,"windows":{"peb_version":{"major":10,"minor":0,"build":19043,"platform":2}}})";
+    auto Report = api(Input, First, Options);
+    if (!Report) {
+      const std::string Reason = neverd_last_error(Session);
+      if (Reason.find(Unavailable) != std::string::npos ||
+          Reason == text::Disabled)
+        GTEST_SKIP() << Reason;
+      FAIL() << Reason;
+    }
+    ASSERT_EQ(Report->getString(text::OutcomeField), "restored");
+    ASSERT_TRUE(std::filesystem::exists(First));
+    const auto [Status, Text] = cli(Input, Second, Options);
+    EXPECT_EQ(Status, unpack_cli::Success) << Text;
+    ASSERT_TRUE(std::filesystem::exists(Second));
+    EXPECT_EQ(readFile(First), readFile(Second));
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+    ASSERT_TRUE(Parsed->getAsObject());
+    auto Other = *Parsed->getAsObject();
+    (*Other.getObject(text::OutputField))[text::PathField] = First;
+    EXPECT_EQ(llvm::json::Value(std::move(Other)),
+              llvm::json::Value(std::move(*Report)));
+  }
+#endif
+}
+
 TEST_F(UnpackPublic, UnsupportedRuntimeStateNeverCreatesOrTruncatesOutput) {
 #ifndef NEVERD_UNPACK_GENERATED_FIXTURE_DIR
   GTEST_SKIP() << generated::MissingTools;
@@ -329,6 +372,14 @@ TEST_F(UnpackPublic, SetupFailuresAreErrorsNotReports) {
   const std::string Same = neverd_last_error(Session);
   EXPECT_TRUE(Same == text::SamePath || Same == text::Disabled) << Same;
   EXPECT_FALSE(api(Input, Output, UnknownOption));
+  for (const char *Invalid :
+       {R"({"restore_runtime":null})", R"({"restore_runtime":1})",
+        R"({"restore_runtime":"yes"})",
+        R"({"restore_runtime":true,"snapshot_only":true})"}) {
+    EXPECT_FALSE(api(Input, Output, Invalid));
+    EXPECT_EQ(cli(Input, Output, Invalid).first, unpack_cli::Error);
+    EXPECT_FALSE(std::filesystem::exists(Output));
+  }
   EXPECT_FALSE(api((Directory / Missing).string(), Output, nullptr));
   EXPECT_FALSE(std::filesystem::exists(Output));
   EXPECT_EQ(cli(Input, Output, UnknownOption).first, unpack_cli::Error);

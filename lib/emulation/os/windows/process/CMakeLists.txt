@@ -15,6 +15,7 @@ add_neverd_component_library(NeverDEmulationWindowsProcess
   WindowsProcessEnvironment.cpp
   WindowsProcessVariables.cpp
   WindowsProcessHeap.cpp
+  WindowsProcessState.cpp
   WindowsProcessFiles.cpp
   WindowsProcessTime.cpp
   WindowsProcessServices.cpp

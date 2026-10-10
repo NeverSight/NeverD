@@ -1703,10 +1703,18 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     // Ordinary coordinate transfer does not prove the generated catch's
     // distinct runtime restore and continuation protocol.
     EXPECT_FALSE(ReliftStates.CxxContinuationsComplete);
-    // Checked coordinates do not establish the complete native ABI.
-    EXPECT_FALSE(classifyWindowsEHNativeSource(*GeneratedGraph, Arch::X86,
-                                               BinaryFormat::COFF)
-                     .canPatchOutput());
+    // These generated cleanup funclets share the recovered function range.
+    // Frame coordinates alone do not establish their source unwind contract.
+    const auto GeneratedSource = classifyWindowsEHNativeSource(
+        *GeneratedGraph, Arch::X86, BinaryFormat::COFF);
+    EXPECT_FALSE(GeneratedSource.canPatchOutput());
+    EXPECT_EQ(GeneratedSource.Reason,
+              WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+    EXPECT_TRUE(
+        llvm::any_of(GeneratedGraph->Cxx->UnwindMap, [&](const auto &Action) {
+          return Action.ActionVA &&
+                 GeneratedGraph->CodeRange.contains(Action.ActionVA);
+        }));
     for (unsigned Byte : {3u, 8u, 16u, 17u, 23u, 39u, 62u}) {
       SCOPED_TRACE(Byte);
       BinaryImage Disproved = *Reloaded;

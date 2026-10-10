@@ -11,6 +11,7 @@
 #include "neverd/emulation/IntegerABI.h"
 #include "neverd/emulation/ProcessObserver.h"
 #include "neverd/emulation/ProcessSession.h"
+#include "neverd/emulation/WindowsProcessState.h"
 #include "neverd/loader/COFF/PEProgramExports.h"
 #include "neverd/loader/ExceptionTable.h"
 
@@ -207,6 +208,8 @@ public:
   }
   llvm::Expected<ProcessDynamicThreadLocalState>
   dynamicThreadLocalState() const;
+  llvm::Expected<std::shared_ptr<const ProcessRuntimeState>>
+  runtimeState(bool IncludeBacking) const;
 
 private:
   std::optional<uint64_t> unsupported(const Service &Service);

@@ -148,6 +148,7 @@ add_custom_target(check-neverd-capabilities
 )
 
 # --- NeverD component libraries ---
+option(NEVERD_ENABLE_WEB_ANALYSIS "Build offline web artifact analysis" ON)
 option(NEVERD_ENABLE_CPU_EMULATION
        "Enable OS-independent x64 and ARM64 CPU execution" OFF)
 option(NEVERD_ENABLE_DRIVER_EMULATION
@@ -186,6 +187,10 @@ if(NEVERD_BUILD_SHARED)
 endif()
 
 # --- Tools ---
+if(BUILD_TESTING)
+    # Tool directories register their own tests, including the web worker.
+    enable_testing()
+endif()
 add_subdirectory(tools)
 
 
@@ -258,6 +263,5 @@ if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
 endif()
 
 if(BUILD_TESTING)
-    enable_testing()
     add_subdirectory(unittests)
 endif()

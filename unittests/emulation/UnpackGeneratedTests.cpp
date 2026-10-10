@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 #include "HvfTestPolicy.h"
 #include "UnpackGeneratedTestSupport.h"
+#include "WindowsNativeFailure.h"
 
 #include "neverd/emulation/ExecutionConfiguration.h"
 #include "neverd/emulation/ProcessObserver.h"
@@ -22,7 +23,12 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Program.h"
+
+#if defined(_WIN32) && defined(_M_X64)
+#include <intrin.h>
+#endif
 
 namespace neverd::unpack {
 namespace {
@@ -117,11 +123,12 @@ protected:
     const auto Native = Path.string();
     std::string Diagnostic;
     bool Failed = false;
-    EXPECT_EQ(llvm::sys::ExecuteAndWait(Native, {Native}, std::nullopt, {}, 30,
-                                        0, &Diagnostic, &Failed),
-              Status)
-        << Diagnostic;
+    const auto Actual = llvm::sys::ExecuteAndWait(
+        Native, {Native}, std::nullopt, {}, 30, 0, &Diagnostic, &Failed);
+    EXPECT_EQ(Actual, Status) << Diagnostic;
     EXPECT_FALSE(Failed) << Diagnostic;
+    if (Actual != Status && !Failed)
+      diagnoseNativeFailure(Path.c_str());
 #else
     (void)Path;
     (void)Status;
@@ -671,6 +678,124 @@ TEST_P(UnpackGenerated, ExplicitSnapshotsKeepExternalHeapDependenciesVisible) {
     EXPECT_EQ(Replay.Stop, ProcessStopReason::CPUFailure) << Replay.Diagnostic;
     EXPECT_FALSE(Replay.ExitStatus);
     EXPECT_TRUE(Replay.StandardOutput.empty());
+  }
+}
+
+TEST_P(UnpackGenerated,
+       MaterializedRuntimePreservesOwnedObjectsOnNativeWindows) {
+  if (GetParam().ISA != GuestArchitecture::X64)
+    GTEST_SKIP() << "the native materializer currently emits x64 PE code";
+  ASSERT_TRUE(bool(llvm::sys::findProgramByName("clang")));
+  ASSERT_TRUE(bool(llvm::sys::findProgramByName("lld-link")));
+  WindowsPEBVersion Version{10, 0, 19043, 2};
+#if defined(_WIN32) && defined(_M_X64)
+  // Independent native environment input; WindowsSystemNative separately
+  // compares these bytes with RtlGetVersion on this same test host.
+  const auto *PEB = reinterpret_cast<const uint8_t *>(__readgsqword(0x60));
+  Version = {llvm::support::endian::read32le(PEB + 0x118),
+             llvm::support::endian::read32le(PEB + 0x11c),
+             llvm::support::endian::read16le(PEB + 0x120),
+             llvm::support::endian::read32le(PEB + 0x124)};
+#endif
+  Options.Process.Windows->PEBVersion = Version;
+  for (unsigned Mode :
+       {HeapStateMode, EncodedPointerMode, NativeEncodedPointerMode,
+        DynamicFLSMode, ZeroDynamicFLSMode, OwnedRuntimeMode,
+        VirtualRuntimeMode}) {
+    SCOPED_TRACE(Mode);
+    const auto Packed = pack(Mode);
+    ASSERT_FALSE(HasFailure());
+    const auto OriginalRun = run(Packed);
+    ASSERT_EQ(OriginalRun.Stop, ProcessStopReason::Exited)
+        << OriginalRun.Diagnostic;
+    ASSERT_EQ(OriginalRun.ExitStatus, ExitStatus);
+    expectNativeWindows(Packed, ExitStatus);
+    ASSERT_FALSE(HasFailure());
+    Options.RestoreRuntime = true;
+    const auto Restored = unpack(Mode);
+    ASSERT_FALSE(HasFailure());
+    ASSERT_EQ(Restored.Outcome, UnpackOutcome::Restored) << Restored.Diagnostic;
+    ASSERT_FALSE(Restored.Image.empty());
+    EXPECT_EQ(Restored.ImportRepair.ObservedCalls, 0u);
+    const auto Output = Scratch / RebuiltFile;
+    test::writeFile(Output, Restored.Image);
+    const auto Image = test::readImage(Restored.Image);
+    ASSERT_FALSE(HasFailure());
+    // Windows requires adjacent section RVAs. Wine accepts holes, so check
+    // this loader contract even on hosts that cannot launch a native PE.
+    llvm::object::pe32plus_header PE;
+    std::memcpy(
+        &PE,
+        Image.File.data() + Image.EntryOffset -
+            offsetof(llvm::object::pe32plus_header, AddressOfEntryPoint),
+        sizeof(PE));
+    uint64_t Next = llvm::alignTo(uint64_t(PE.SizeOfHeaders),
+                                  uint64_t(PE.SectionAlignment));
+    for (const auto &Section : Image.Sections) {
+      EXPECT_EQ(Section.RVA, Next) << Section.Name;
+      Next = llvm::alignTo(uint64_t(Section.RVA) +
+                               std::max(Section.VirtualSize, Section.FileSize),
+                           uint64_t(PE.SectionAlignment));
+    }
+    EXPECT_EQ(Next, PE.SizeOfImage);
+    // The native loader must be able to bind every import before TLS runs.
+    // Read-only cells need the PE's IAT protection range, even when a second
+    // import provider table is appended by the runtime materializer.
+    const auto IAT = Image.directory(llvm::COFF::IAT);
+    const uint64_t IATBegin = IAT.RelativeVirtualAddress;
+    const uint64_t IATEnd = IATBegin + IAT.Size;
+    for (const auto &Import : Image.Imports) {
+      const auto Section = llvm::find_if(Image.Sections, [&](const auto &S) {
+        return Import.Slot >= S.RVA &&
+               Import.Slot + 8 <= uint64_t(S.RVA) + S.VirtualSize;
+      });
+      ASSERT_NE(Section, Image.Sections.end());
+      if (!(Section->Characteristics & llvm::COFF::IMAGE_SCN_MEM_WRITE)) {
+        EXPECT_GE(Import.Slot, IATBegin) << Import.Name;
+        EXPECT_LE(Import.Slot + 8, IATEnd) << Import.Name;
+      }
+    }
+    expectNativeWindows(Output, ExitStatus);
+    ASSERT_FALSE(HasFailure());
+    for (const auto &Section : Image.Sections)
+      if (llvm::StringRef(Section.Name).starts_with(".nd"))
+        EXPECT_FALSE(
+            (Section.Characteristics & llvm::COFF::IMAGE_SCN_MEM_WRITE) &&
+            (Section.Characteristics & llvm::COFF::IMAGE_SCN_MEM_EXECUTE));
+  }
+}
+
+TEST_P(UnpackGenerated, MaterializationRequiresKnownSupportedState) {
+  for (unsigned Mode : {OwnedRuntimeMode, VirtualRuntimeMode}) {
+    SCOPED_TRACE(Mode);
+    const auto Default = unpack(Mode);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(Default.Outcome, UnpackOutcome::UnsupportedState);
+    EXPECT_TRUE(Default.Image.empty());
+    EXPECT_TRUE(Default.RuntimeState.AdditionalStateInventoryKnown);
+    EXPECT_TRUE(Default.RuntimeState.HasAdditionalDependencies);
+    Options.SnapshotOnly = true;
+    const auto Snapshot = unpack(Mode);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(Snapshot.Outcome, UnpackOutcome::Snapshot);
+    EXPECT_TRUE(Snapshot.RuntimeState.HasAdditionalDependencies);
+    EXPECT_FALSE(Snapshot.Image.empty());
+    Options.SnapshotOnly = false;
+  }
+  Options.RestoreRuntime = true;
+  const auto Missing = unpack(HeapStateMode);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(Missing.Outcome, UnpackOutcome::UnsupportedState);
+  EXPECT_TRUE(Missing.Image.empty());
+  Options.Process.Windows->PEBVersion = WindowsPEBVersion{10, 0, 19043, 2};
+  for (unsigned Mode :
+       {DynamicTLSMode, ZeroDynamicTLSMode, UnallocatedTLSValueMode}) {
+    SCOPED_TRACE(Mode);
+    const auto Refused = unpack(Mode);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(Refused.Outcome, UnpackOutcome::UnsupportedState);
+    EXPECT_FALSE(Refused.Diagnostic.empty());
+    EXPECT_TRUE(Refused.Image.empty());
   }
 }
 

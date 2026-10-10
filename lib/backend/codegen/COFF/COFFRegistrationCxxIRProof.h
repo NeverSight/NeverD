@@ -26,6 +26,8 @@ struct CxxIRControlProof {
   LowFunc Source;
   RegistrationFrame Frame;
   const llvm::CatchPadInst *Catch = nullptr;
+  const llvm::AllocaInst *CallbackStack = nullptr;
+  std::set<const llvm::BasicBlock *> CallbackBlocks;
   std::map<int, SourceSegment> Segments;
   std::map<uint32_t, const llvm::CleanupPadInst *> Cleanups;
   std::map<const llvm::CallBase *, CxxIRCall> Calls;
@@ -36,6 +38,9 @@ llvm::Expected<const llvm::CatchReturnInst *>
 validateCxxContinuationRestore(const llvm::Instruction &Anchor,
                                const RegistrationFrame &Frame,
                                const RegistrationCxxContinuation &Resume);
+
+llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
+                              const llvm::Function &Function);
 
 llvm::Expected<CxxIRControlProof>
 getCheckedCxxControlIRProof(const llvm::Function &Function,

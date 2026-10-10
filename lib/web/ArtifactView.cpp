@@ -1,0 +1,112 @@
+#include "ArtifactView.h"
+
+#include "SessionInternal.h"
+
+namespace neverd::web {
+std::optional<Session::Impl::HTMLSourceSelection>
+Session::Impl::htmlSource(std::string_view SelectionID) const {
+  for (const auto &[ID, H] : HTMLDocuments)
+    for (uint32_t I = 0; I < H.Document.Scripts.size(); ++I) {
+      const auto &S = H.Document.Scripts[I];
+      if (!S.InlineArtifactID.empty() && S.InlineArtifactID == SelectionID)
+        return HTMLSourceSelection{&H, I};
+    }
+  return std::nullopt;
+}
+
+std::optional<ArtifactView>
+Session::Impl::artifactView(std::string_view SelectionID) const {
+  for (const auto &A : Published.Artifacts)
+    if (A.ID == SelectionID) {
+      if (A.Directory)
+        throw Error("artifact_has_no_bytes");
+      return ArtifactView{
+          A.Content, A.BlobHash, 0,
+          llvm::json::Object{{"kind", "original_artifact"},
+                             {"artifact_id", A.ID},
+                             {"parent_artifact_id", A.ParentID}}};
+    }
+  for (const auto &[ID, E] : BunExtractions)
+    for (const auto &R : E.Regions)
+      if (R.ID == SelectionID && R.Kind == "asset")
+        return ArtifactView{
+            R.Content, R.BlobHash, R.Offset,
+            llvm::json::Object{
+                {"kind", "bun_asset"},
+                {"container_artifact_id", E.ArtifactID},
+                {"extraction_id", E.ID},
+                {"region_id", R.ID},
+                {"module_id",
+                 R.Module == NoBunIndex
+                     ? llvm::json::Value(nullptr)
+                     : llvm::json::Value(E.Modules.at(R.Module).ID)},
+                {"byte_offset", std::to_string(R.Offset)},
+                {"byte_length", std::to_string(R.Content.size())}}};
+  for (const auto &[ID, E] : AsarExtractions)
+    for (const auto &M : E.Members)
+      if (M.ID == SelectionID) {
+        if (!M.available())
+          throw Error("artifact_bytes_unavailable");
+        return ArtifactView{
+            M.Content, M.BlobHash, M.Offset,
+            llvm::json::Object{{"kind", M.Unpacked ? "asar_unpacked_member"
+                                                   : "asar_packed_member"},
+                               {"container_artifact_id", E.ArtifactID},
+                               {"extraction_id", E.ID},
+                               {"member_id", M.ID},
+                               {"storage_artifact_id", M.StorageArtifactID},
+                               {"unpacked_directory_id",
+                                M.Unpacked
+                                    ? llvm::json::Value(E.UnpackedDirectoryID)
+                                    : llvm::json::Value(nullptr)},
+                               {"byte_offset", std::to_string(M.Offset)},
+                               {"byte_length", std::to_string(M.Size)},
+                               {"integrity_status", M.IntegrityStatus},
+                               {"authenticates_publisher", false}}};
+      }
+  if (const auto Inline = htmlSource(SelectionID)) {
+    const auto &H = *Inline->Analysis;
+    const auto &S = H.Document.Scripts[Inline->Script];
+    auto Parent = artifactView(H.Document.ArtifactID);
+    if (!Parent)
+      throw Error("html_parent_bytes_unavailable");
+    return ArtifactView{
+        Parent->Content.slice(S.BodyStart, S.BodyEnd - S.BodyStart), S.BodyHash,
+        Parent->StorageOffset + S.BodyStart,
+        llvm::json::Object{
+            {"kind", "html_inline_script"},
+            {"html_id", H.Document.ID},
+            {"html_artifact_id", H.Document.ArtifactID},
+            {"script_id", S.ID},
+            {"document_byte_offset", std::to_string(S.BodyStart)},
+            {"byte_length", std::to_string(S.BodyEnd - S.BodyStart)},
+            {"byte_preprocessing", "none_raw_source_candidate"},
+            {"parent_origin", std::move(Parent->Origin)}}};
+  }
+  return std::nullopt;
+}
+
+std::optional<Snapshot>
+Session::Impl::memberNamespace(std::string_view SelectionID) const {
+  for (const auto &[ID, E] : AsarExtractions) {
+    if (std::none_of(E.Members.begin(), E.Members.end(), [&](const auto &M) {
+          return M.ID == SelectionID && M.available();
+        }))
+      continue;
+    Snapshot S;
+    S.ID = E.ID;
+    Artifact Root;
+    Root.ID = E.ID;
+    Root.Directory = true;
+    S.Artifacts.push_back(std::move(Root));
+    for (const auto &M : E.Members) {
+      if (!M.available() && M.Kind != "directory")
+        continue;
+      S.Artifacts.push_back(Artifact{M.ID, M.BlobHash, M.ParentID, M.Path,
+                                     M.Kind, M.Content, M.Kind == "directory"});
+    }
+    return S;
+  }
+  return std::nullopt;
+}
+} // namespace neverd::web

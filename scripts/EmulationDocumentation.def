@@ -640,9 +640,9 @@ NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "--with-drivers")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "WDKDriverFixtures.def")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "build_wdk_driver_fixtures.py")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "DriverNativeOutcomes.def")
-NEVERD_EMULATION_DOC_TOKEN(
-    NativeDriverCI,
-    "5058 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets = 5420")
+NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI,
+                           "5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 "
+                           "wait sets + 11 driver UNPACK + 6 clock reads = 5447")
 NEVERD_EMULATION_DOC_TOKEN(Overview, "FOP/FIP/FDP")
 NEVERD_EMULATION_DOC_TOKEN(X64Startup, "FOP/FIP/FDP")
 #endif
@@ -1339,6 +1339,10 @@ NEVERD_EMULATION_DOC_TOKEN(Unpack, "entry_source")
 NEVERD_EMULATION_DOC_TOKEN(Unpack, "no_entry")
 NEVERD_EMULATION_DOC_TOKEN(Unpack, "unsupported_state")
 NEVERD_EMULATION_DOC_TOKEN(Unpack, "snapshot_only")
+NEVERD_EMULATION_DOC_TOKEN(Unpack, "restore_runtime")
+NEVERD_EMULATION_DOC_TOKEN(Unpack, "additional_state_inventory_known")
+NEVERD_EMULATION_DOC_TOKEN(Unpack, "has_additional_dependencies")
+NEVERD_EMULATION_DOC_TOKEN(Unpack, "restored")
 NEVERD_EMULATION_DOC_TOKEN(Unpack, "runtime_state.heap_inventory_known")
 NEVERD_EMULATION_DOC_TOKEN(Unpack, "possible_heap_references")
 NEVERD_EMULATION_DOC_TOKEN(Unpack, "runtime_state.direct_service_calls")

@@ -155,6 +155,8 @@ Geschützte Countdown-Tests prüfen den nächsten Versuch nach einem verworfenen
 
 `InterpreterLLVMRefinement.Preservation*` prüft Teilbereiche und Überlappungen, ungültige Anfragen, unabhängig berechneten Vorbereitungsaufwand, identische Endwertänderungen, Sicherung/Wiederherstellung von Eintrittswerten über Schleifen, neue opake Nachweise und späte Ablehnung. Auch den API-Verbraucher `NeverDPEFixedImageTests` neu bauen. Ergebnisse, Zähler und Digests bei ausgelassener Anfrage separat mit der Basis vergleichen.
 
+`InterpreterLLVMRefinement.Collection*` prüft notwendige Beibehaltung und Verzögerung in endlichen und induktiven Beweisen, erreichbare ungültige Zweige, späte Quellablehnung, Eintrittserhaltung und alle vier nativen Optionsidentitäten. Kompilierte Auslassungsfehler im Kompositionsmodul prüfen die Weitergabe jeder benötigten Option.
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1364,7 +1366,7 @@ Die KVM-Abnahme verlangt den Abbruch einer echten vCPU ohne selbstständigen Aus
 
 Mit `native_cpu_only=true` aktiviert `native_driver_tests=true` die `NeverDNativeDriverTests` ohne Unicorn. Vor der Konfiguration prüft `build_wdk_driver_fixtures.py` den vollständigen SHA-256 der offiziellen Microsoft-Pakete WDK/SDK 10.0.26100.6584 und baut 48 normale/CFG/DBG-Treiberimages aus den Originalquellen. `WDKDriverFixtures.def` deklariert Paketidentitäten, Compiler- und Linkerargumente sowie Fixture-Zuordnungen. Unveränderte Microsoft-Dateien und ihre Lizenzen bleiben in den lokalen Build-/Cache-Verzeichnissen; CI lädt nur Build-Metadaten und Protokolle hoch. Das Manifest enthält Werkzeugversionen, Befehle, Quell-/Header-Hashes und Hashes der erzeugten Images.
 
-`NativeDriverTests.def` verlangt 230 WHP-Ergebnisse aus allen 115 Workloads in `DriverBuiltinImages.def` und `DriverBackendParityCases.def`: 27 eingebaute Images, 48 WDK-Images und 40 Anfrageszenarien an ursprünglichen und verschobenen Adressen. Das vollständige Pflichtinventar lautet `5058 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets = 5420`. Die 30 Wartemengenprüfungen umfassen sechzehn portable Modellfälle und vierzehn eigene native Treiberfälle. `run_native_cpu_ci.py --with-drivers` bewahrt genaue Identitäten und JUnit-Nachweise bei deaktiviertem Unicorn. Fehlende oder übersprungene Pflicht-Fixtures lassen diese optionale Prüfung scheitern; gewöhnliche Builds halten externe Fixtures optional. Feste Images behalten ihre erwartete Relokationsablehnung. Native ARM64-Gastausführung bleibt ungeprüft.
+`NativeDriverTests.def` verlangt 230 WHP-Ergebnisse aus allen 115 Workloads in `DriverBuiltinImages.def` und `DriverBackendParityCases.def`: 27 eingebaute Images, 48 WDK-Images und 40 Anfrageszenarien an ursprünglichen und verschobenen Adressen. Das vollständige Pflichtinventar lautet `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads = 5447`. Die 30 Wartemengenprüfungen umfassen sechzehn portable Modellfälle und vierzehn eigene native Treiberfälle. `run_native_cpu_ci.py --with-drivers` bewahrt genaue Identitäten und JUnit-Nachweise bei deaktiviertem Unicorn. Fehlende oder übersprungene Pflicht-Fixtures lassen diese optionale Prüfung scheitern; gewöhnliche Builds halten externe Fixtures optional. Feste Images behalten ihre erwartete Relokationsablehnung. Native ARM64-Gastausführung bleibt ungeprüft.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` injiziert Fristablauf, Stopp und beides vor zwei unterschiedlichen Startinstruktionen. Geprüft werden genaue Phasendiagnose, eigene Nachrichtenlebensdauer, Fehlertyp und Ursachenbits, eine unveränderte gemeinsame Frist sowie freigegebener Speicherbesitz. Echte Transportfehler und Zustandsabweichungen bleiben getrennt. Das native x64-Startvalidierungsbudget beträgt `5 s`; normale Gastfristen und Einzelschrittzulagen bleiben unverändert.
 
@@ -1738,6 +1740,10 @@ Die MainActor-Fixture prüft den vollständigen Ablauf für feste Metadaten und 
 ## Begrenzte Verzeichnisattribute in Gruppen
 
 bulk-attributes prüft ganze Gruppen, Namen/Typen als Menge, Schutz unbenutzter Bytes, low32 FD, bitmap-Wörter, native Fehler, dup, unabhängige open, EOF und Null-rewind. Literal-/Unbekannt-Modi sind nur virtuell. Modelle decken vollständiges stat, Invalidierung, NFD/255-Byte-Namen, Ein-/Ausgabealias, Transport-/Budgetfehler, Verschieben/SWAP/Entfernen/Wiederverwenden und explizite Rechte ab. Pflichtinventar:63 Fälle pro Plattform,189 ARM64 und126 Intel. Lokal wurde nur passendes ARM64 HVF geprüft. native5s, guest/Python5,000,000us/quantum1024 und public10s bleiben gleich.
+
+`MaterializedRuntimePreservesOwnedObjectsOnNativeWindows` prüft ursprüngliche Modellausführung, Wiederherstellung, Sektionsrechte und native Windows-Ausführung beider Abbilder: Heap-Neuzuweisung/Freigabe, kodierte innere Zeiger, FLS-Neuaktivierung, rekursive Sperren, LastError und virtuelle Reservierung, Zusicherung und Schutz. `MaterializationRequiresKnownSupportedState` lehnt fehlende Versionen und dynamisches TLS ab. `RuntimeRestorationHasTheSameCAPIAndCLIContract` vergleicht genaue Bytes und Berichte. Linux-Konstruktionsprüfungen und Wine-Beobachtungen ersetzen keine nativen Windows-Lebensdauernachweise.
+
+`NeverDUnpackDriverTests` prüft Einstieg, Kernelimports, verbleibende Ressourcen, ABI, Exporte, Ablaufplanung, Anforderungen und Entladen, C API/CLI sowie PE-Prüfsummen. Pflichtfälle für KVM/WHP und ImageHlp unter Windows belegen keinen nativen Kernelladevorgang. [UNPACK](unpack.md).
 
 ## Prüfungen opaker Zustände
 

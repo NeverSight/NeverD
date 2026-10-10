@@ -20,6 +20,7 @@
 
 namespace llvm {
 class AllocaInst;
+class BasicBlock;
 class CallBase;
 class CatchPadInst;
 class Function;
@@ -52,6 +53,9 @@ struct RegistrationCxxFrameContract {
   int64_t HomeOffset = 0;
   uint32_t ObjectSize = 0;
   bool Reference = false;
+  const llvm::AllocaInst *CallbackStack = nullptr;
+  std::set<const llvm::BasicBlock *> CallbackBlocks;
+  int64_t SavedStackOffset = 0;
   std::map<const llvm::CallBase *, RegistrationFrameBorrow> Borrows;
   std::map<const llvm::Instruction *, RegistrationRuntimeAccess>
       RuntimeAccesses;

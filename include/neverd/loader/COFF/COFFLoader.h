@@ -24,6 +24,7 @@ namespace neverd {
 class COFFLoader : public Loader {
 public:
   llvm::Expected<BinaryImage> load(const std::filesystem::path &Path) override;
+  llvm::Expected<BinaryImage> loadBuffer(llvm::MemoryBufferRef Buffer) override;
   /// Add the load dialog's rows for \p Buffer, whose file magic this
   /// loader reads (LoadCandidate.h), judged as load() judges the file.
   static void identify(llvm::MemoryBufferRef Buffer,

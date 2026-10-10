@@ -28,6 +28,7 @@
 #define NEVERD_LIFT_X86_X86LIFTDETAIL_H
 
 #include "neverd/lift/X86Lifter.h"
+#include "neverd/support/X86Addressing.h"
 
 #include <capstone/capstone.h>
 #include <cstddef>
@@ -37,10 +38,6 @@ namespace neverd {
 //===----------------------------------------------------------------------===//
 // Helpers shared by more than one handler translation unit
 //===----------------------------------------------------------------------===//
-
-/// A missing ordinary SIB index, including width-specific decoder aliases.
-/// These aliases are not base registers or VSIB vector indices.
-bool isNoSibIndex(x86_reg Register, uint16_t AddressSize);
 
 /// Element size (bytes) of a MOVS/STOS/LODS/SCAS/CMPS variant.
 /// Defined in X86LiftString.cpp.

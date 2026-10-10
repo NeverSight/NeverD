@@ -21,6 +21,7 @@
 #ifndef NEVERD_UNPACK_UNPACK_H
 #define NEVERD_UNPACK_UNPACK_H
 
+#include "neverd/emulation/DriverSession.h"
 #include "neverd/emulation/ProcessSession.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -90,14 +91,18 @@ struct PackerIdentification {
 llvm::Expected<PackerIdentification>
 identifyPacker(llvm::ArrayRef<uint8_t> File);
 
-/// Unpacking runs the input as a guest process, so it takes the same explicit
-/// inputs. Only the resource defaults differ: a stub decompresses a whole
-/// image before the program's first instruction.
+/// Unpacking runs the input in its guest OS environment. Common resource
+/// limits apply to both process and driver execution; each environment owns
+/// its explicit inputs.
 struct UnpackOptions {
   /// Applies the unpacking defaults of Unpack.def, including those of each
   /// guest OS model.
   UnpackOptions();
   emulation::ProcessOptions Process;
+  /// Driver scenario inputs for a native-subsystem x64 PE. The common
+  /// backend, contract and resource limits above apply to this run too.
+  /// User images reject this option rather than ignoring kernel inputs.
+  std::optional<emulation::DriverOptions> Driver;
   /// The one-based transfer into generated code to accept as the entry. Zero
   /// accepts the first transfer in the main program's entry invocation made
   /// on the stack that invocation started with,
@@ -109,6 +114,10 @@ struct UnpackOptions {
   /// cannot be reconstructed. This produces Snapshot rather
   /// than Unpacked and does not claim a runnable native executable.
   bool SnapshotOnly = false;
+  /// Materialize supported OS-owned resources in a self-contained image.
+  /// Restored outputs retain an explicit environment contract and fixed
+  /// addresses. This is mutually exclusive with an analysis-only snapshot.
+  bool RestoreRuntime = false;
 };
 
 /// A pointer-sized value in captured image or thread-local bytes that falls
@@ -121,6 +130,9 @@ struct UnpackHeapReference {
 };
 
 struct UnpackRuntimeState {
+  /// Other profile-owned resources cannot be inferred from integer matches.
+  bool AdditionalStateInventoryKnown = false;
+  bool HasAdditionalDependencies = false;
   bool HeapInventoryKnown = false;
   uint64_t PossibleHeapReferences = 0;
   /// Direct model service calls witnessed during entry and import discovery.
@@ -193,7 +205,8 @@ struct UnpackResult {
   std::vector<UnpackTransfer> Transfers;
   std::vector<UnpackedSection> Sections;
   std::vector<UnpackedImport> Imports;
-  /// Possible process-local heap dependencies that the file does not restore.
+  /// Dependencies observed before reconstruction. A Restored outcome retains
+  /// these diagnostics even when its initializer materializes their owners.
   /// An empty inventory does not certify other OS state or unreached code.
   UnpackRuntimeState RuntimeState;
   /// The rebuilt file, in the container of the input. Empty without an
@@ -218,16 +231,18 @@ struct UnpackResult {
   uint64_t MaterializedTLSCallbacks = 0;
 };
 
-/// Observe \p Input as a bounded guest process and rebuild its image at the
-/// transfer accepted as its entry. Invalid input, options or an unavailable
+/// Observe \p Input in its bounded guest environment and rebuild its image at
+/// the transfer accepted as its entry. Invalid input, options or an unavailable
 /// backend return Error. A run that ends before such a transfer returns a
 /// result whose outcome, transfers and process stop explain why.
 llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
                                         const UnpackOptions &Options = {});
 
-/// Strict options decoding. Every guest process option is accepted with its
-/// usual meaning, plus "transfer" and "snapshot_only". Unknown fields, null
-/// values, invalid types and nonpositive limits are errors.
+/// Strict options decoding. User images accept guest process options plus
+/// "transfer", "snapshot_only" and "restore_runtime". Native-subsystem x64
+/// images use common limits/backend and an optional "driver" scenario; user
+/// process inputs do not apply. Unknown fields, null values, invalid types
+/// and nonpositive limits are errors.
 llvm::Expected<UnpackOptions> unpackOptionsFromJSON(llvm::StringRef Text);
 /// The report omits the rebuilt bytes and records their size and digest.
 std::string unpackResultJSON(const UnpackResult &Result,

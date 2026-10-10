@@ -53,7 +53,8 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
     llvm::StringRef FunctionName, const LowIRIndependenceFrame &Frame,
     const InterpreterLLVMRefinementPlans &Plans, LowIRRefinementWitness Witness,
     const InterpreterLLVMRefinementLimits &Limits,
-    const InterpreterLLVMRefinementPreservation &Preservation) {
+    const InterpreterLLVMRefinementPreservation &Preservation,
+    const InterpreterLLVMNativeCollection &Collection) {
   InterpreterLLVMRefinementResult Result;
   if (Options.ExternalStoresDisjointEntryFrame) {
     Result.Stage = InterpreterLLVMRefinementStage::Native;
@@ -97,6 +98,10 @@ InterpreterLLVMRefinementResult checkBinaryLLVMRefinement(
   NativeContract.PreservedRegisters = Models->Preservation.ModeledRegisters;
   NativeContract.NativePreservedState = Models->Preservation.NativeState;
   NativeContract.PreservedFrameRanges = {{0, 8}};
+  NativeContract.RetainUnauditedNativeBoundaries =
+      Collection.RetainUnauditedNativeBoundaries;
+  NativeContract.DeferNativeConditionalEdges =
+      Collection.DeferNativeConditionalEdges;
 
   Result.Stage = InterpreterLLVMRefinementStage::Native;
   Result.Native = Plans.Native

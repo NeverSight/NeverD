@@ -26,6 +26,7 @@ __declspec(dllimport) void *GetProcessHeap(void);
 __declspec(dllimport) void *HeapAlloc(void *, U32, U64);
 __declspec(dllimport) int HeapFree(void *, U32, void *);
 #include "unpack_dynamic_tls_state.h"
+#include "unpack_runtime_state.h"
 volatile U32 *HeapState;
 static volatile U64 EncodedState;
 
@@ -328,6 +329,9 @@ __attribute__((noinline)) static void useDirectService(void) {
 #endif
 
 PROGRAM_ENTRY U32 program(void) {
+  const int RuntimeOK =
+      (Pack.Mode != OwnedRuntimeMode || checkRuntimeState()) &&
+      (Pack.Mode != VirtualRuntimeMode || checkVirtualState());
   if (Pack.Mode == LateEncodedPointerMode)
     EncodedState = encodeNull(Pack.Mode);
   const int PointerOK = (Pack.Mode != EncodedPointerMode &&
@@ -372,7 +376,7 @@ PROGRAM_ENTRY U32 program(void) {
   // impure helper's persistent increment must still change the exit status.
   Written &= 0u - ((Pack.Mode != ImpureCallMode) | (AddressEffects == 1));
 #endif
-  ExitProcess(HeapResult == InitializeResult && PointerOK &&
+  ExitProcess(HeapResult == InitializeResult && PointerOK && RuntimeOK &&
                       validDynamicState(Pack.Mode)
                   ? status(Written)
                   : FailureStatus);
@@ -395,6 +399,10 @@ RELAY_ENTRY U32 relay(void) {
 // loader does when it hands control to the program it carried.
 __declspec(dllexport) U32 loader(void) {
   prepareDynamicState(Pack.Mode);
+  if (Pack.Mode == OwnedRuntimeMode)
+    prepareRuntimeState();
+  if (Pack.Mode == VirtualRuntimeMode)
+    prepareVirtualState();
   if (Pack.Mode == DecodedPointerMode ||
       Pack.Mode == NativeDecodedPointerMode) {
     EncodedState = 0x12345678;

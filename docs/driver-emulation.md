@@ -185,7 +185,7 @@ inventing requests or unload.
 
 Images use their preferred base unless a scenario selects a valid relocated
 address, and must be PE32+ x64 executables with the native subsystem. Imports
-may come from `ntoskrnl.exe`, `ntkrnlmp.exe` or `WDFLDR.SYS`.
+may come from `ntoskrnl.exe`, `ntkrnlmp.exe`, `HAL.dll` or `WDFLDR.SYS`.
 The execution loader supports validated x64 `DIR64` base relocations and a
 limited security-cookie load configuration, initialized before the entry wrapper
 with a deterministic guest cookie. Other unmodeled load-configuration
@@ -536,6 +536,7 @@ The initial API model deliberately has a finite contract:
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | MDL system aliases and process-owned user views retain physical cache attributes and permissions; nonpaged pool MDLs reuse the original pool mapping through the safe helper |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | Standalone or IRP-associated nonpaged-pool/user descriptors, mutable chain links, independent locks and shared system aliases; no quota |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Explicit session registry, per-handle rights and lifetime, query buffer sizing and mutations; no host registry access |
+| `ExAllocatePool` | Legacy two-argument data allocation for pool types `0`, `1`, and `512`; shared alignment, uninitialized-byte model, size/IRQL checks and NULL on exhaustion. Free through `ExFreePool` or a zero-tag `ExFreePoolWithTag`; retained allocations remain kernel dependencies. |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Data allocations for pool types `0`, `1`, and `512`; positive size/tag, matching tagged frees, no address reuse |
 | `IoCreateDevice`, `IoDeleteDevice` | Device type `0x22`, characteristics `0` or `0x100`, bounded extensions, ASCII `\Device\Name` names |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | Same-driver attachment; attach returns the previous top, detach consumes the saved lower device; explicit topology/lifetime limits above |
@@ -991,7 +992,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v86`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v89`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -1184,3 +1185,11 @@ use Unicorn. The existing ISA and OS contracts remain authoritative. See
 evidence and Intel runtime coverage are reported separately.
 
 Explicit CPU0 preemption, clock semantics and current limits are described in [driver scheduling](driver-scheduling.md).
+
+## HAL exports and performance counter
+
+`HAL.dll` is a separate, case-insensitive import provider. Static imports and `MmGetSystemRoutineAddress` share exact, case-sensitive export identities across the kernel and HAL; conflicting live identities are refused. `kernel_exports` overrides known HAL routines in their HAL namespace; other explicit declarations remain kernel exports. Unknown HAL imports retain lazy traps, without acquiring a kernel API contract merely from their name.
+
+`KeQueryPerformanceCounter` returns the shared scheduler time in 100 ns ticks with a fixed frequency of 10,000,000 ticks per second. Its optional output pointer is checked for the complete eight-byte write and object lifetime. The call is available at every valid x64 IRQL. Cooperative mode advances time only at existing scheduling boundaries; instruction-clock mode retains its configured timing. Counter reads never create a second clock or advance time themselves. This is a deterministic profile, not a measurement of host hardware. The independently compiled runtime fixture checks static/dynamic identity, frequency and monotonicity at preferred and rebased addresses on native CPU backends.
+
+`RDTSC` and `RDTSCP` read the same 10 MHz scheduler clock as `KeQueryPerformanceCounter`. `RDTSCP` returns zero in ECX for the single modeled processor. EAX/EDX (and ECX for RDTSCP) zero their upper halves; other registers and flags are preserved. Cooperative reads do not advance time. With explicit instruction scheduling, the read observes time after its own admitted instruction is charged, independently of the quantum. Overflow stops before publishing register results. Instruction limits and observer stops still apply. This profile does not measure host TSC frequency or expose host processor identity; MSR access, RDPMC and other unmodeled CPU queries remain unsupported.

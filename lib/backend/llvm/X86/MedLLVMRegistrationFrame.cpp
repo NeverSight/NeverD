@@ -12,6 +12,24 @@
 
 namespace neverd {
 
+std::pair<uint64_t, uint64_t> x86RegistrationFrameStorage(const MedFunc &Func,
+                                                          uint64_t EntrySP,
+                                                          uint64_t Alignment) {
+  if (Func.ExceptionMetadata && Func.RegistrationStates) {
+    const auto Coordinate = realignedRegistrationFrameCoordinate(
+        *Func.ExceptionMetadata, &*Func.RegistrationStates);
+    if (Coordinate) {
+      const auto &SourceFrame =
+          *Func.ExceptionMetadata->Registration->RealignedFrame;
+      Alignment = std::max<uint64_t>(Alignment, Coordinate->Alignment);
+      EntrySP = llvm::alignTo(
+          std::max<uint64_t>(EntrySP, SourceFrame.AllocationBytes + 16),
+          Alignment);
+    }
+  }
+  return {EntrySP, Alignment};
+}
+
 llvm::Value *emitX86RegistrationRoot(const MedFunc &Func, const MedOp &Op,
                                      llvm::Value *EntrySP,
                                      llvm::IRBuilder<> &Builder) {

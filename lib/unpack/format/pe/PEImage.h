@@ -72,6 +72,11 @@ private:
 llvm::Expected<RebuiltImage>
 rebuild(const Image &Input, const Capture &Observed, const RebuildPlan &Plan);
 
+/// Append a separately linked fixed-address runtime. This owner alone rebases
+/// its relative metadata and combines imports, unwind records and TLS startup.
+llvm::Expected<RebuiltImage> appendRuntime(RebuiltImage Output,
+                                           llvm::ArrayRef<uint8_t> Runtime);
+
 /// Dispatch process attach to the recovered entry, retaining the original
 /// DLL entry for other loader notifications. Returns the actual header RVA.
 llvm::Expected<uint64_t> rebuildEntry(const Image &Input,

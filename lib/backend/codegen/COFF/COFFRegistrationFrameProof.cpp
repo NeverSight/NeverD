@@ -10,6 +10,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/RegistrationFrameAddress.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/RegistrationCall.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionCommon.h"
@@ -63,7 +64,9 @@ llvm::Error validateFramePrivacy(
     int64_t Offset;
     bool operator==(const Cell &) const = default;
     bool operator<(const Cell &Other) const {
-      return std::tie(Root, Offset) < std::tie(Other.Root, Other.Offset);
+      return Root != Other.Root
+                 ? std::less<const llvm::Value *>{}(Root, Other.Root)
+                 : Offset < Other.Offset;
     }
   };
   const auto &Layout = Parent.getParent()->getDataLayout();
@@ -198,6 +201,19 @@ llvm::Error validateFramePrivacy(
     if (const auto *Binary = llvm::dyn_cast<llvm::BinaryOperator>(Value)) {
       const auto *Amount =
           llvm::dyn_cast<llvm::ConstantInt>(Binary->getOperand(1));
+      if (Amount && Amount->getBitWidth() == 32 &&
+          Binary->getOpcode() == llvm::Instruction::And &&
+          !Binary->hasPoisonGeneratingFlags()) {
+        auto Base = Locate(Binary->getOperand(0), Depth + 1);
+        const auto *Root =
+            Base ? llvm::dyn_cast<llvm::AllocaInst>(Base->Root) : nullptr;
+        auto Offset = Root ? alignX86RegistrationOffset(
+                                 Base->Offset, Root->getAlign().value(),
+                                 uint32_t(Amount->getZExtValue()))
+                           : std::nullopt;
+        if (Offset)
+          return Cell{Root, *Offset};
+      }
       if (Amount && Amount->getBitWidth() <= 64 &&
           (Binary->getOpcode() == llvm::Instruction::Add ||
            Binary->getOpcode() == llvm::Instruction::Sub)) {
@@ -371,6 +387,9 @@ llvm::Error validateFramePrivacy(
                 return Reject("runtime object read changed its checked domain");
               continue;
             }
+            if (Cxx && Where && Where->Root == Cxx->CallbackStack &&
+                !Cxx->CallbackBlocks.count(&Block))
+              return Reject("callback stack read outlived its invocation");
             const bool Private =
                 Where && llvm::isa<llvm::AllocaInst>(Where->Root);
             if (Cxx && Where && llvm::isa<llvm::GlobalVariable>(Where->Root) &&
@@ -452,6 +471,22 @@ llvm::Error validateFramePrivacy(
           if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
             auto Where = Locate(Store->getPointerOperand(), 0);
             const uint64_t Bytes = Size(Store->getValueOperand()->getType());
+            if (Cxx && Cxx->CallbackStack) {
+              const auto Stored = Locate(Store->getValueOperand(), 0);
+              if (Where && Where->Root == LogicalFrame &&
+                  IsAddress(Store->getValueOperand()) && !Stored)
+                return Reject("unproved pointer stored in the source frame");
+              if ((Where && Where->Root == Cxx->CallbackStack ||
+                   Stored && Stored->Root == Cxx->CallbackStack) &&
+                  !Cxx->CallbackBlocks.count(&Block))
+                return Reject("callback stack write outlived its invocation");
+              if (Stored && Stored->Root == Cxx->CallbackStack && Where &&
+                  Where->Root == LogicalFrame &&
+                  (Where->Offset != Cxx->SavedStackOffset || Bytes != 4 ||
+                   !I.getMetadata(
+                       windows_eh_md::RegistrationOperationAttachment)))
+                return Reject("callback stack escaped its SavedESP bridge");
+            }
             if (Cxx && Where && llvm::isa<llvm::GlobalVariable>(Where->Root) &&
                 !CheckImageAccess(*Where, Bytes, true))
               return Reject(
@@ -665,18 +700,19 @@ llvm::Error validateFramePrivacy(
   if (Cxx) {
     // Recompute definite initialization from actual LLVM stores and the CRT
     // catch write. Callee write summaries are may-effects and never seed bytes.
-    std::map<const llvm::Instruction *, std::vector<int64_t>> RequiredBytes;
-    std::map<const llvm::Instruction *, std::pair<int64_t, uint64_t>> Writes;
-    std::set<int64_t> Bytes;
-    auto Require = [&](const llvm::Instruction *I, int64_t Offset,
+    std::map<const llvm::Instruction *, std::vector<Cell>> RequiredBytes;
+    std::map<const llvm::Instruction *, std::pair<Cell, uint64_t>> Writes;
+    std::set<Cell> Bytes;
+    auto Require = [&](const llvm::Instruction *I, Cell Address,
                        uint64_t Size) {
       if (Work > limits::kMaxRegistrationEHStateWork ||
           Size > limits::kMaxRegistrationEHStateWork - Work)
         return false;
       Work += Size;
       for (uint64_t Index = 0; Index != Size; ++Index) {
-        RequiredBytes[I].push_back(Offset + int64_t(Index));
-        Bytes.insert(Offset + int64_t(Index));
+        const Cell Byte{Address.Root, Address.Offset + int64_t(Index)};
+        RequiredBytes[I].push_back(Byte);
+        Bytes.insert(Byte);
       }
       return true;
     };
@@ -687,37 +723,40 @@ llvm::Error validateFramePrivacy(
           return Reject("initialization proof exhausted its work budget");
         if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I)) {
           const auto Where = Locate(Load->getPointerOperand(), 0);
-          if (Where && Where->Root == LogicalFrame &&
-              !Require(Load, Where->Offset, Size(Load->getType())))
+          if (Where &&
+              (Where->Root == LogicalFrame ||
+               Where->Root == Cxx->CallbackStack) &&
+              !Require(Load, *Where, Size(Load->getType())))
             return Reject("frame read initialization exceeds its work budget");
         }
         if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
           const auto Where = Locate(Store->getPointerOperand(), 0);
-          if (Where && Where->Root == LogicalFrame) {
+          if (Where && (Where->Root == LogicalFrame ||
+                        Where->Root == Cxx->CallbackStack)) {
             if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(
                     Store->getValueOperand()))
               return Reject(
                   "undefined value initializes a source frame object");
             Writes.emplace(
-                Store,
-                std::make_pair(Where->Offset,
-                               Size(Store->getValueOperand()->getType())));
+                Store, std::make_pair(
+                           *Where, Size(Store->getValueOperand()->getType())));
           }
         }
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I)) {
           const auto Borrow = Cxx->Borrows.find(Call);
           if (Borrow != Cxx->Borrows.end())
             for (const auto &Read : Borrow->second.Reads)
-              if (!Require(Call, Borrow->second.Offset + Read.Begin,
+              if (!Require(Call,
+                           {LogicalFrame, Borrow->second.Offset + Read.Begin},
                            uint64_t(int64_t(Read.End) - Read.Begin)))
                 return Reject("callee initialization exceeds its work budget");
         }
       }
-    Writes.emplace(
-        Cxx->Catch,
-        std::make_pair(Cxx->HomeOffset, Cxx->Reference ? 4 : Cxx->ObjectSize));
-    std::map<int64_t, unsigned> Indices;
-    for (int64_t Byte : Bytes)
+    Writes.emplace(Cxx->Catch,
+                   std::make_pair(Cell{LogicalFrame, Cxx->HomeOffset},
+                                  Cxx->Reference ? 4 : Cxx->ObjectSize));
+    std::map<Cell, unsigned> Indices;
+    for (Cell Byte : Bytes)
       Indices.emplace(Byte, Indices.size());
     using Initialized = llvm::BitVector;
     std::map<const llvm::BasicBlock *, Initialized> Normal, Unwind;
@@ -738,12 +777,20 @@ llvm::Error validateFramePrivacy(
       return State;
     };
     auto Seed = [&](Initialized &State, const llvm::Instruction &I) {
+      if (&I == Cxx->Catch && Cxx->CallbackStack)
+        for (const auto &[Byte, Index] : Indices) {
+          if (++Work > limits::kMaxRegistrationEHStateWork)
+            return false;
+          if (Byte.Root == Cxx->CallbackStack)
+            State.reset(Index);
+        }
       const auto Write = Writes.find(&I);
       if (Write == Writes.end())
         return true;
       for (auto It = Indices.lower_bound(Write->second.first);
-           It != Indices.end() &&
-           It->first < Write->second.first + int64_t(Write->second.second);
+           It != Indices.end() && It->first.Root == Write->second.first.Root &&
+           It->first.Offset <
+               Write->second.first.Offset + int64_t(Write->second.second);
            ++It) {
         if (++Work > limits::kMaxRegistrationEHStateWork)
           return false;
@@ -780,7 +827,7 @@ llvm::Error validateFramePrivacy(
         CurrentInstruction = &I;
         const auto Required = RequiredBytes.find(&I);
         if (Required != RequiredBytes.end())
-          for (int64_t Byte : Required->second) {
+          for (Cell Byte : Required->second) {
             if (++Work > limits::kMaxRegistrationEHStateWork ||
                 !State.test(Indices.at(Byte)))
               return Reject("source frame read or callee borrow is not "

@@ -96,7 +96,8 @@ catch RETURN，HighIR 与原生 LLVM 显式生成写回。PE 安装器重新分�
 从原始入口 ESP 表达父帧对齐关系，不将其误当成固定栈偏移。SSA 构造前仅根据
 精确匹配的 no-return 调用证明移除普通落入边，保留异常入口。HighIR 在转移到已检查的
 continuation 前，使用同一对齐坐标写回捕获的 SavedESP，同时保留 handler 与
-continuation 注释；这些对齐帧的完整结构化回调降级及原生再次重建仍未支持。
+continuation 注释；这些对齐帧的完整结构化回调降级仍未支持。原生重建支持下文经过
+检查的标量 catch 子集，并为每次回调提供独立的临时栈。
 栈偏移证明、HighIR 与 LLVM 共享同一坐标。非法根操作或相互冲突的
 保存栈值不能获得这些保证。
 结构化 catch 保留到已检查 continuation 的显式转移；回退注释保留 catch-object 偏移、
@@ -150,10 +151,14 @@ GS 初始化还要求 `LLVM_NEVERD_X86_REGISTRATION_GS`。
 
 x86 C++ 原生重建目前支持一个同步 typed try 和一个按值或引用捕获的标量 catch，
 源 unwind state 最多 128 个。输入必须具有经过证明的 MSVC 直接 registration frame，
-采用 magic `0x19930522` 的 FuncInfo，且不带 GS wrapper。保留的每个调用、throw type
-和 cleanup relay 都需要独立 ABI 证明。源对象借用必须有界、已经初始化且不与注册
+或 LLVM 以 ESI 为锚点的有界对齐帧；采用 magic `0x19930522` 的 FuncInfo，且不带
+GS wrapper。保留的每个调用、throw type 和 cleanup relay 都需要独立 ABI 证明。
+源对象借用必须有界、已经初始化且不与注册
 存储重叠；引用访问必须在 catch 返回前保留 CRT 提供的对象身份。所有读写保持原始
-映像存储身份。
+映像存储身份。对齐源帧的合成分配必须证明实际对齐和范围，catch 对象、cleanup 借用
+及 SavedESP 写回使用同一坐标投影。catch 的临时栈单独分配且经过边界检查，只能通过
+SavedESP 将其地址存入父帧。安装器重放源契约，并独立核验实际 LLVM 对齐、边界、
+每次 catch 入口的初始化、回调生命周期及最终写回；仅有帧布局描述不足以允许重建。
 
 LLVM 重新发射物理 registration、typed catch home、有序 cleanup dispatch、完整
 FuncInfo 和私有 handler。公开安装要求编译器同时提供
@@ -161,8 +166,8 @@ FuncInfo 和私有 handler。公开安装要求编译器同时提供
 与 `LLVM_NEVERD_X86_CXX_HANDLER_RECEIPTS`，随后独立重放编辑后的 IR，并检查实际
 机器码、语言表、SafeSEH 和全部绝对重定位。入口 patch 不得覆盖保留的 helper 或 CRT
 指令。当前运行样本在 Wine 和 Windows CRT 下证明整数按值/引用捕获、嵌套析构和强制
-重定位。其他 try/catch 图、未经证明的对象类型、传入栈参数、动态帧以及 GS 或异步
-C++ 仍保留分析信息，并拒绝原生安装。
+重定位。其他 try/catch 图、未经证明的对象类型、传入栈参数、未经证明的动态帧，
+以及 GS 或异步 C++ 仍保留分析信息，并拒绝原生安装。
 
 ## IR 契约
 

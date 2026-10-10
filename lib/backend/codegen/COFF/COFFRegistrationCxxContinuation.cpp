@@ -31,13 +31,13 @@ validateCxxContinuationRestore(const llvm::Instruction &Anchor,
       Store ? llvm::dyn_cast_or_null<llvm::CatchReturnInst>(next(*Store))
             : nullptr;
   const int64_t SavedOffset =
-      int64_t(Frame.EntrySP) - 4 + Resume.SavedStackOffset;
+      int64_t(Frame.Establisher) + Resume.SavedStackOffset;
   if (!Slot || !Saved || !Value || !Store || !Return ||
-      Frame.EntrySP > INT32_MAX || Resume.SavedStackOffset > -16 ||
+      Frame.Establisher > INT32_MAX || Resume.SavedStackOffset > -16 ||
       SavedOffset < 0 || Slot->getPointerOperand() != Frame.Slot ||
       Saved->getPointerOperand() != Frame.Slot ||
       registration_frame::checkedByteGEPOffset(Slot) !=
-          int64_t(Frame.EntrySP) - 20 ||
+          int64_t(Frame.Establisher) - 16 ||
       registration_frame::checkedByteGEPOffset(Saved) != SavedOffset ||
       Value->getPointerOperand() != Saved ||
       !Value->getType()->isIntegerTy(32) ||

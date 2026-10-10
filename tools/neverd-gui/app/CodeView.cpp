@@ -882,16 +882,13 @@ void CodeText::paintEvent(QPaintEvent *) {
   const int first = verticalScrollBar()->value();
   const int last = std::min(int(lines_.size()) - 1, first + visibleLines());
   const int left = textLeft();
-  const int selectionFirst =
-      anchor_ ? std::min(anchor_->first, cursorLine_) : -1;
-  const int selectionLast =
-      anchor_ ? std::max(anchor_->first, cursorLine_) : -1;
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  const auto selectionFirst = anchor_ ? std::min(*anchor_, cursor) : cursor;
+  const auto selectionLast = anchor_ ? std::max(*anchor_, cursor) : cursor;
   for (int i = first; i <= last; ++i) {
     const int y = (i - first) * lineHeight_;
     const QRect row(0, y, area.width(), lineHeight_);
-    if (i >= selectionFirst && i <= selectionLast)
-      painter.fillRect(row, theme.color(ColorRole::ListingSelection));
-    else if (i == cursorLine_)
+    if (i == cursorLine_)
       painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
     else if (marked_.contains(i) || lines_[i].folded)
       painter.fillRect(row, theme.color(ColorRole::CodeFold));
@@ -909,7 +906,19 @@ void CodeText::paintEvent(QPaintEvent *) {
                          theme.color(ColorRole::ListingHighlight));
       }
     }
-    layout.draw(&painter, QPointF(left, y));
+    QList<QTextLayout::FormatRange> selection;
+    if (anchor_ && selectionFirst != selectionLast &&
+        i >= selectionFirst.first && i <= selectionLast.first) {
+      QTextLayout::FormatRange range;
+      range.start = i == selectionFirst.first ? selectionFirst.second : 0;
+      const int end = i == selectionLast.first
+                          ? selectionLast.second
+                          : int(lines_[i].styled.text.size());
+      range.length = std::max(0, end - range.start);
+      range.format.setBackground(theme.color(ColorRole::ListingSelection));
+      selection.append(range);
+    }
+    layout.draw(&painter, QPointF(left, y), selection);
     if (i == cursorLine_ && hasFocus() && layout.lineCount()) {
       const qreal x = left + layout.lineAt(0).cursorToX(cursorColumn_);
       painter.fillRect(QRectF(x, y + 1, 2, lineHeight_ - 2),
@@ -1049,19 +1058,27 @@ std::optional<QJsonObject> CodeText::commentTarget() const {
 QString CodeText::selectedText() const {
   if (lines_.isEmpty())
     return {};
-  const int first = anchor_
-                        ? std::min(anchor_->first, cursorLine_)
-                        : std::clamp(cursorLine_, 0, int(lines_.size()) - 1);
-  const int last = anchor_ ? std::max(anchor_->first, cursorLine_) : first;
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  const bool selected = anchor_ && *anchor_ != cursor;
+  const auto first =
+      selected ? std::min(*anchor_, cursor) : std::pair{cursorLine_, 0};
+  const auto last =
+      selected
+          ? std::max(*anchor_, cursor)
+          : std::pair{cursorLine_, int(lines_[cursorLine_].styled.text.size())};
   // Folded summaries copy as the code they stand for.
   if (library_.anyFolded()) {
-    const int begin = displayPosition(first, 0);
-    const int end = displayPosition(last, int(lines_[last].styled.text.size()));
+    const int begin = displayPosition(first.first, first.second);
+    const int end = displayPosition(last.first, last.second);
     return library_.originalSelection(begin, end);
   }
   QStringList text;
-  for (int i = first; i <= last && i < lines_.size(); ++i)
-    text.append(lines_[i].styled.text);
+  for (int i = first.first; i <= last.first && i < lines_.size(); ++i) {
+    const int begin = i == first.first ? first.second : 0;
+    const int end =
+        i == last.first ? last.second : int(lines_[i].styled.text.size());
+    text.append(lines_[i].styled.text.mid(begin, end - begin));
+  }
   return text.join(QLatin1Char('\n'));
 }
 
@@ -1154,6 +1171,9 @@ void CodeText::keyPressEvent(QKeyEvent *event) {
 
 void CodeText::mousePressEvent(QMouseEvent *event) {
   setFocus(Qt::MouseFocusReason);
+  selecting_ = false;
+  if (event->button() != Qt::LeftButton && event->button() != Qt::RightButton)
+    return;
   if (event->button() == Qt::LeftButton)
     if (const QString id = regionAt(event->position().toPoint());
         !id.isEmpty()) {
@@ -1167,8 +1187,11 @@ void CodeText::mousePressEvent(QMouseEvent *event) {
   if (line < 0)
     return;
   const int column = columnAt(line, int(event->position().x()));
+  if (event->button() == Qt::RightButton && anchor_ && line == cursorLine_)
+    return;
   moveCursor(line, column, event->modifiers() & Qt::ShiftModifier);
   if (event->button() == Qt::LeftButton) {
+    selecting_ = true;
     const auto name = sourceNameAt(line, column);
     highlight_ = name ? name->first : lines_[line].styled.tokenAt(column);
   }
@@ -1176,7 +1199,7 @@ void CodeText::mousePressEvent(QMouseEvent *event) {
 }
 
 void CodeText::mouseMoveEvent(QMouseEvent *event) {
-  if (!(event->buttons() & Qt::LeftButton) || lines_.isEmpty())
+  if (!selecting_ || !(event->buttons() & Qt::LeftButton) || lines_.isEmpty())
     return;
   pendingAddress_.reset();
   selectedAddress_.reset();
@@ -1187,6 +1210,12 @@ void CodeText::mouseMoveEvent(QMouseEvent *event) {
   cursorLine_ = line;
   cursorColumn_ = columnAt(line, int(event->position().x()));
   viewport()->update();
+}
+
+void CodeText::mouseReleaseEvent(QMouseEvent *) {
+  selecting_ = false;
+  if (anchor_ && *anchor_ == std::pair{cursorLine_, cursorColumn_})
+    anchor_.reset();
 }
 
 void CodeText::mouseDoubleClickEvent(QMouseEvent *event) {

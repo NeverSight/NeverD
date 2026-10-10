@@ -149,6 +149,8 @@ v4 測試固定前綴大小與填充，拒絕截斷配置和未知旗標，保�
 
 `InterpreterLLVMRefinement.Preservation*` 涵蓋局部／重疊範圍、非法請求、獨立計算的準備開銷、兩端相同的最終破壞、跨迴圈的入口保存／還原、新鮮不透明狀態證據及後期拒絕。`NeverDPEFixedImageTests` 也是 API 使用端，需要重新建置。未提供請求時的結果、計數與摘要另行對照基準。
 
+`InterpreterLLVMRefinement.Collection*` 檢查有限與歸納證明所需的保留／延遲策略、可達壞分支、後期原始碼拒絕、入口保存及全部四種原生策略身分。編譯組合層遺漏傳遞的故障，確認每項必要選項確實到達原生檢查器。
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1194,7 +1196,7 @@ KVM 驗收要求真實且不主動退出的 vCPU 取消，以及 `KvmStateTransf
 
 在 `native_cpu_only=true` 時，設定 `native_driver_tests=true` 可啟用不依賴 Unicorn 的 `NeverDNativeDriverTests`。設定前，`build_wdk_driver_fixtures.py` 驗證微軟官方 WDK/SDK 10.0.26100.6584 套件的完整 SHA-256，並從原始程式碼重建 48 個一般、CFG 或 DBG 驅動程式映像。`WDKDriverFixtures.def` 統一定義套件身分、編譯與連結參數及範例繫結。未修改的微軟檔案與授權保留在本機建置或快取目錄；CI 僅上傳建置中繼資料與記錄。清單記錄工具版本、命令、原始碼與標頭摘要及輸出映像摘要。
 
-`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 與 `DriverBackendParityCases.def` 中全部 115 個負載產生 230 項 WHP 結果：27 個內建映像、48 個 WDK 映像及 40 個要求情境，各涵蓋原始與重定位位址。完整必測清單為 `5058 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets = 5420`。30 項等待集合檢查包含十六項可攜模型測試及十四項原創原生驅動測試。`run_native_cpu_ci.py --with-drivers` 在停用 Unicorn 時保留精確清單與 JUnit 證據；必要範例遺失或略過會使此選用驗收失敗，一般建置仍可不提供外部範例。固定位址映像保留預期的重定位拒絕。ARM64 原生客體執行仍未驗證。
+`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 與 `DriverBackendParityCases.def` 中全部 115 個負載產生 230 項 WHP 結果：27 個內建映像、48 個 WDK 映像及 40 個要求情境，各涵蓋原始與重定位位址。完整必測清單為 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads = 5447`。30 項等待集合檢查包含十六項可攜模型測試及十四項原創原生驅動測試。`run_native_cpu_ci.py --with-drivers` 在停用 Unicorn 時保留精確清單與 JUnit 證據；必要範例遺失或略過會使此選用驗收失敗，一般建置仍可不提供外部範例。固定位址映像保留預期的重定位拒絕。ARM64 原生客體執行仍未驗證。
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` 在兩條不同啟動指令前注入逾時、停止及兩者同時發生的中斷，檢查精確階段診斷、訊息自行持有的生命週期、錯誤類型和原因位元、步驟間不變的統一截止時間及記憶體占用釋放。既有真實傳輸失敗與狀態不符仍分別處理。原生 x64 啟動驗證預算為 `5 s`；一般客體截止時間及單步寬限不變。
 
@@ -1568,6 +1570,10 @@ MainActor 測試資料檢查完整的固定中繼資料與靜態表流程，拒�
 ## 有界目錄批次屬性
 
 bulk-attributes 檢查完整組、名稱/型別集合、未使用位元組保護區、low32 FD、bitmap 字、原生錯誤、dup 共用進度、獨立 open、快取 EOF 與零 rewind。字面值與未知模式僅用於虛擬環境。模型另涵蓋完整 stat、失效、NFD/255位元組名稱、輸入/輸出別名、傳輸/預算失敗、移動/SWAP/刪除/重用及明確授權。每個平台必需63個工作負載：ARM64 為189例，Intel 為126例；本地僅驗證匹配的 ARM64 HVF。native5s、guest/Python5,000,000us/quantum1024、public10s 不變。
+
+`MaterializedRuntimePreservesOwnedObjectsOnNativeWindows` 檢查原程式的模型執行、恢復、區段權限及原始與恢復程式的 Windows 原生執行，涵蓋私有堆積擴容與釋放、編碼內部指標、FLS 回呼重設、遞迴鎖、LastError，以及虛擬頁面的保留、提交與保護。`MaterializationRequiresKnownSupportedState` 拒絕缺失版本及動態 TLS；`RuntimeRestorationHasTheSameCAPIAndCLIContract` 比較精確位元組及報告。Linux 建構檢查與 Wine 觀察不能取代原生 Windows 生命週期證據。
+
+`NeverDUnpackDriverTests` 涵蓋 DriverEntry 恢復、靜態／動態核心匯入、殘留核心資源、入口 ABI／控制狀態、畸形匯出、排程、要求／卸載生命週期、C API／CLI 一致性與 PE 檢查碼。原生驅動清單要求對應 KVM／WHP 案例執行；Windows 另以 ImageHlp 對照。這不代表原生核心載入驗收。見[脫殼](unpack.md)。
 
 ## 原生不透明狀態檢查
 

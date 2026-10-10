@@ -47,6 +47,9 @@ public:
   bool returning(uint64_t PC, uint64_t SP, size_t LoaderDepth) const;
   llvm::Expected<Transfer> returned(uint32_t Disposition);
   void abandon() { Frames.clear(); }
+  bool hasRuntimeState() const {
+    return !Handlers.empty() || !ContinueHandlers.empty() || !Frames.empty();
+  }
 
 private:
   llvm::Expected<std::optional<Exception>>

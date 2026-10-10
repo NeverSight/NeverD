@@ -192,10 +192,14 @@ class NativeCPUEvidenceTests(unittest.TestCase):
             _, cpu = native.declared_inventory(native.ROOT, backend=backend)
             _, combined = native.declared_inventory(native.ROOT, with_drivers=True, backend=backend)
             outcomes[backend] = {name.replace("/" + backend + "_", "/{backend}_")
+                                 .replace("/" + backend.title(), "/{backend_title}")
                                  for name in combined - cpu}
             self.assertTrue(any("/{backend}_Original_" in name for name in outcomes[backend]))
             self.assertTrue(any("/{backend}_Rebased_" in name for name in outcomes[backend]))
-        self.assertEqual(outcomes["kvm"], outcomes["whp"])
+        imagehlp = "DriverChecksum.NativeImageHlpValidatesOddAndEvenFileExtents"
+        self.assertIn(imagehlp, outcomes["whp"])
+        self.assertNotIn(imagehlp, outcomes["kvm"])
+        self.assertEqual(outcomes["kvm"], outcomes["whp"] - {imagehlp})
 
     def add_drivers(self):
         (self.root / "scripts" / "NativeDriverTests.def").write_text(

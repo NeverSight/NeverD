@@ -9,11 +9,63 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "KernelAPIIRQL.h"
 #include "KernelExportRegistry.h"
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
 namespace neverd::emulation {
+std::optional<unsigned> KernelModel::halArgumentCount(llvm::StringRef Name) {
+#define NEVERD_KERNEL_HAL_API(Symbol, Arity, IRQL, Operation)                  \
+  if (Name == #Symbol)                                                         \
+    return Arity;
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
+  return std::nullopt;
+}
+
+llvm::Expected<uint64_t> KernelModel::callHAL(llvm::StringRef Name,
+                                              llvm::ArrayRef<uint64_t> A) {
+  const auto Arity = halArgumentCount(Name);
+  if (!DriverObject || !Arity || A.size() != *Arity)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "unknown HAL API, invalid arguments or "
+                                   "uninitialized kernel model: " +
+                                       Name);
+  auto MaximumIRQL = maximumKernelIRQL(Name);
+  if (!MaximumIRQL)
+    return MaximumIRQL.takeError();
+  if (CurrentIRQL > *MaximumIRQL)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   Name + " exceeds its IRQL contract");
+#define NEVERD_KERNEL_HAL_API(Symbol, Arity, IRQL, Operation)                  \
+  if (Name == #Symbol)                                                         \
+    return Operation;
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
+  llvm_unreachable("validated HAL contract has no dispatch");
+}
+
+llvm::Expected<uint64_t>
+KernelModel::queryPerformanceCounter(uint64_t FrequencyAddress) {
+  // KeQueryPerformanceCounter is available at every valid x64 IRQL. The
+  // shared scheduler owns elapsed time; API calls never advance a second
+  // clock or invent execution progress in cooperative scheduling mode.
+  if (Scheduler.now100ns() > INT64_MAX)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "HAL counter exceeds its signed time domain");
+  if (FrequencyAddress) {
+    if (auto E = validateGuestAccess(FrequencyAddress, sizeof(uint64_t), true))
+      return E;
+    constexpr uint64_t Frequency = 1000 * scheduler::TicksPerMillisecond;
+    if (auto E =
+            Memory.writeInteger(FrequencyAddress, Frequency, sizeof(uint64_t)))
+      return E;
+  }
+  return Scheduler.now100ns();
+}
+
 llvm::Expected<uint64_t> KernelModel::resolveRoutine(uint64_t Address) {
   if (!Exports)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),

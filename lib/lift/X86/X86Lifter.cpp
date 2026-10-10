@@ -42,12 +42,6 @@ namespace neverd {
 
 X86Lifter::X86Lifter(Arch A) : TargetArch(A) {}
 
-bool isNoSibIndex(x86_reg Register, uint16_t AddressSize) {
-  return Register == X86_REG_INVALID ||
-         (AddressSize == 4 && Register == X86_REG_EIZ) ||
-         (AddressSize == 8 && Register == X86_REG_RIZ);
-}
-
 // ===----------------------------------------------------------------------===//
 // LiftState helpers
 // ===----------------------------------------------------------------------===//

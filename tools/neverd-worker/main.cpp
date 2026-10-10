@@ -1,5 +1,6 @@
 #include "Engine.h"
 #include "Protocol.h"
+#include "WebEngine.h"
 
 #include <atomic>
 #include <chrono>
@@ -116,6 +117,13 @@ struct Request {
   std::size_t bytes;
   bool cancelled = false;
 };
+bool isWeb(const Json &request) {
+  if (!request.is_object())
+    return false;
+  const auto operation = request.find("operation");
+  return operation != request.end() && operation->is_string() &&
+         operation->get_ref<const std::string &>().starts_with("web_");
+}
 struct State {
   std::mutex mutex;
   std::condition_variable changed;
@@ -128,19 +136,29 @@ struct State {
   std::string revision = "0", projectId;
   // Engine background work state, published with heartbeats.
   Json background = nullptr;
+  std::string webRevision = "0", webProjectId;
+  const std::string &revisionFor(const Json &request) const {
+    return isWeb(request) ? webRevision : revision;
+  }
+  const std::string &projectFor(const Json &request) const {
+    return isWeb(request) ? webProjectId : projectId;
+  }
 };
 
 Json response(const Json &request, const std::string &revision,
               const std::string &project, const std::string &status,
               Json payload = Json::object()) {
-  return {{"protocol_major", 1},
-          {"type", "response"},
-          {"request_id", request.value("request_id", std::string())},
-          {"operation", request.value("operation", std::string())},
-          {"revision", revision},
-          {"project_id", project},
-          {"status", status},
-          {"payload", std::move(payload)}};
+  Json result{{"protocol_major", 1},
+              {"type", "response"},
+              {"request_id", request.value("request_id", std::string())},
+              {"operation", request.value("operation", std::string())},
+              {"revision", revision},
+              {"project_id", project},
+              {"status", status},
+              {"payload", std::move(payload)}};
+  if (isWeb(request))
+    result["domain"] = "web";
+  return result;
 }
 
 Json failure(const Json &request, const std::string &revision,
@@ -155,7 +173,7 @@ Json failure(const Json &request, const std::string &revision,
 
 Json hello() {
   Json result{{"protocol_major", 1},
-              {"protocol_minor", 0},
+              {"protocol_minor", 1},
               {"type", "hello"},
               {"engine_version", Engine::version()},
               {"project_schema", 1},
@@ -223,6 +241,7 @@ Json hello() {
     result["capabilities"].push_back("operand_format");
   if (Engine::identifiesFiles())
     result["capabilities"].push_back("identify");
+  result["web"] = WebEngine::capabilities();
   return result;
 }
 
@@ -232,6 +251,7 @@ constexpr auto IdleGracePeriod = std::chrono::milliseconds(150);
 void executeLoop(State &state, Transport &transport) {
   try {
     Engine engine;
+    WebEngine web;
     while (true) {
       std::shared_ptr<Request> request;
       {
@@ -264,17 +284,24 @@ void executeLoop(State &state, Transport &transport) {
         state.active = request;
       }
       const auto &value = request->value;
+      const auto op = value["operation"].get<std::string>();
+      const bool webRequest = isWeb(value);
+      const auto revision = [&] {
+        return webRequest ? web.revision() : engine.revision();
+      };
+      const auto project = [&] {
+        return webRequest ? web.projectId() : engine.projectId();
+      };
       Json result;
       try {
         if (value.contains("expected_revision") &&
-            value["expected_revision"] != engine.revision())
+            value["expected_revision"] != revision())
           throw Error("stale_revision",
                       "Project revision changed; refresh before retrying");
         if (value.contains("project_id") &&
             !value["project_id"].get<std::string>().empty() &&
-            value["project_id"] != engine.projectId())
+            value["project_id"] != project())
           throw Error("stale_project", "Request refers to a different project");
-        const auto op = value["operation"].get<std::string>();
         engine.setLoadProgressSink([&](const char *Phase, std::uint64_t Done,
                                        std::uint64_t Total,
                                        const char *Detail) {
@@ -285,19 +312,22 @@ void executeLoop(State &state, Transport &transport) {
                                    {"total", Total},
                                    {"detail", Detail ? Detail : ""}}));
         });
+        const auto input = value.value("payload", Json::object());
         auto payload =
-            engine.execute(op, value.value("payload", Json::object()));
-        engine.setLoadProgressSink({});
-        result = response(value, engine.revision(), engine.projectId(), "ok",
-                          std::move(payload));
+            webRequest ? web.execute(op, input) : engine.execute(op, input);
+        result =
+            response(value, revision(), project(), "ok", std::move(payload));
       } catch (const Error &error) {
-        result = failure(value, engine.revision(), engine.projectId(), error);
+        result = failure(value, revision(), project(), error);
       } catch (const std::exception &error) {
-        result = failure(value, engine.revision(), engine.projectId(),
-                         Error("engine_error", error.what()));
+        result = failure(value, revision(), project(),
+                         Error("engine_error", webRequest ? "Web adapter failed"
+                                                          : error.what()));
       }
-      result["analysis_state"] =
-          engine.analyzed() ? "complete" : "not_analyzed";
+      engine.setLoadProgressSink({});
+      result["analysis_state"] = webRequest          ? web.analysisState()
+                                 : engine.analyzed() ? "complete"
+                                                     : "not_analyzed";
       {
         std::lock_guard lock(state.mutex);
         if (request->cancelled) {
@@ -310,6 +340,8 @@ void executeLoop(State &state, Transport &transport) {
         state.revision = engine.revision();
         state.projectId = engine.projectId();
         state.background = engine.backgroundState();
+        state.webRevision = web.revision();
+        state.webProjectId = web.projectId();
         state.pending.erase(value["request_id"].get<std::string>());
         state.active.reset();
       }
@@ -332,8 +364,9 @@ void executeLoop(State &state, Transport &transport) {
 
 void cancelQueued(State &state, Transport &transport) {
   for (const auto &item : state.queue) {
-    transport.send(response(item->value, state.revision, state.projectId,
-                            "cancelled", {{"calculation_stopped", true}}));
+    transport.send(response(item->value, state.revisionFor(item->value),
+                            state.projectFor(item->value), "cancelled",
+                            {{"calculation_stopped", true}}));
     state.pending.erase(item->value["request_id"].get<std::string>());
   }
   state.queue.clear();
@@ -343,7 +376,7 @@ void cancelQueued(State &state, Transport &transport) {
 
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--version") {
-    std::cout << "neverd-worker protocol 1.0\n";
+    std::cout << "neverd-worker protocol 1.1\n";
     return 0;
   }
   if (argc != 1) {
@@ -368,6 +401,9 @@ int main(int argc, char **argv) {
             {"type", "heartbeat"},
             {"revision", state.revision},
             {"project_id", state.projectId},
+            {"web",
+             {{"revision", state.webRevision},
+              {"project_id", state.webProjectId}}},
             {"active_request_id",
              state.active ? state.active->value["request_id"] : Json(nullptr)},
             {"cancellation_requested", state.active && state.active->cancelled},
@@ -417,9 +453,10 @@ int main(int argc, char **argv) {
                    ++it) {
                 if ((*it)->value["request_id"] != target)
                   continue;
-                transport.send(response((*it)->value, state.revision,
-                                        state.projectId, "cancelled",
-                                        {{"calculation_stopped", true}}));
+                transport.send(
+                    response((*it)->value, state.revisionFor((*it)->value),
+                             state.projectFor((*it)->value), "cancelled",
+                             {{"calculation_stopped", true}}));
                 state.queuedBytes -= (*it)->bytes;
                 state.pending.erase(target);
                 state.queue.erase(it);
@@ -459,8 +496,8 @@ int main(int argc, char **argv) {
           std::string revision, project;
           {
             std::lock_guard lock(state.mutex);
-            revision = state.revision;
-            project = state.projectId;
+            revision = state.revisionFor(value);
+            project = state.projectFor(value);
           }
           // Shape-invalid requests may not have string correlation fields.
           Json safe = Json::object();

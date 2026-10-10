@@ -14,8 +14,19 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 執行期觀察 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 執行期觀察 |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v89`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 輸入由 `IMAGE_FILE_DLL` 識別。建模的來賓 EXE 呼叫 `LoadLibraryA`、`FreeLibrary`，沿用一般相依、TLS 與 `DllMain` 生命週期。DLL 預設入口是其程序附加呼叫；不替任意匯出猜測參數。重建保留匯出名稱、序號、別名、資料及轉送器；指向自身匯出的指標保持為內部指標，不產生自身匯入。輔助常式傳回的位址也遵循此規則：內部結果會撤銷該位置先前的匯入修復證據。
+
+## Windows x64 驅動程式
+
+啟用 `NEVERD_ENABLE_DRIVER_EMULATION=ON` 後，native 子系統的 x64 PE 映像（`.sys`）透過驅動環境執行。`DriverEntry` 提供入口來源，派遣與卸載回呼不能成為預設恢復入口。可選 `driver` 物件接受[驅動情境](driver-emulation.md)，包括服務名稱、登錄、要求與排程；共用後端、執行契約與資源限制仍生效。使用者處理程序參數、環境與 PEB 輸入會被拒絕。
+
+恢復會檢查入口參數、返回／影子堆疊框架、非揮發性暫存器、方向旗標、浮點控制與核心物件所有權。殘留記憶體池、借用核心指標、已修改的載入器物件或未計入的核心效果會回傳 `unsupported_state`；明確的 `snapshot_only` 保留診斷。核心狀態尚無 `restore_runtime` 實作。匯入重建使用核心匯出身分，驗證原始匯出表並重算 PE 檢查碼。固定基底產物不代表已通過 Windows 核心載入、簽章驗證或未執行路徑的驗收。
+
+```bash
+neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+```
 
 ## 用法
 
@@ -25,7 +36,13 @@ neverd unpack packed.exe -o unpacked.exe \
   --options='{"backend":"unicorn","instruction_limit":400000000,"transfer":2}'
 ```
 
-該命令輸出一份 JSON 報告。結束碼 0 表示已寫出 `unpacked` 映像或明確要求的 `snapshot`；3 表示 `no_entry` 或 `unsupported_state`，不會建立或截斷輸出檔案；1 表示輸入、選項無效或準備失敗。報告會給出實際執行的 `format`、`architecture` 和 `profile`。C 入口是 `neverd_unpack_json`；Python 提供 `Session.unpack`。選項為[行程選項](process-emulation.md)加上 `transfer` 和 `snapshot_only`。外殼需要更多資源之處預設值不同：100000000 條指令、600 秒、512 MiB，並且 `windows.defer_unmodeled` 預設開啟。
+該命令輸出一份 JSON 報告。結束碼 0 表示已寫出 `unpacked` 映像或明確要求的 `snapshot` / `restored`；3 表示 `no_entry` 或 `unsupported_state`，不會建立或截斷輸出檔案；1 表示輸入、選項無效或準備失敗。報告會給出實際執行的 `format`、`architecture` 和 `profile`。C 入口是 `neverd_unpack_json`；Python 提供 `Session.unpack`。選項為[行程選項](process-emulation.md)加上 `transfer` 和 `snapshot_only` / `restore_runtime`。外殼需要更多資源之處預設值不同：100000000 條指令、600 秒、512 MiB，並且 `windows.defer_unmodeled` 預設開啟。
+
+## 明確恢復執行期狀態
+
+`restore_runtime:true` 產生自足的 Windows x64 初始化器，回傳 `restored`，結束碼為 0，並與 `snapshot_only` 互斥。`PATH` 必須包含 Clang 與 `lld-link`，且 `windows.peb_version` 必須明確指定目標原生環境。初始化器檢查版本而不修改原生 PEB，恢復有歸屬的堆積資料、指標編碼操作、FLS 值與回呼、遞迴臨界區、私有虛擬記憶體保留區與頁面權限，以及 `LastError`。匯出跳轉入口保留觀察到的呼叫形式；程式碼、資料及中繼資料分置於具有各自權限的 `.nd*` 區段，不產生輔助 DLL。
+
+前述拒絕規則適用於預設恢復。本明確模式保留捕獲時的 `runtime_state` 診斷，略過新行程中的匯入探索。固定位址、所選 DLL 轉移及捕獲的參數與環境仍是執行條件。歷史直接系統呼叫計數仍保留；系統呼叫編號及未到達路徑的可攜性尚未認證。動態 TLS、開啟的控制代碼、映射區段、暫停的例外狀態及其他來賓 DLL 狀態仍不支援。狀態不支援或初始化器建構失敗時不發布輸出。`restored` 表示依這些條件完成建構，不是所有原生路徑的正確性證明。
 
 ## 執行階段狀態與分析快照
 
@@ -108,3 +125,5 @@ neverd unpack packed.exe -o unpacked.exe \
 `WrappedEntriesRequireExplicitTransferEvidence` 涵蓋 DLL 包裝器透過更深的堆疊呼叫復原入口。預設結果仍為 `no_entry`；透過 `transfer` 選取該已觀察呼叫後，可重建可載入 DLL。僅憑深層呼叫無法區分入口與初始化器。
 
 復原的 DLL 入口與原始 PE 入口不同時，寫入器產生載入器通知配接器：程序附加進入選定入口，卸載與執行緒通知進入原始的可執行入口，以保留外層包裝函式的清理。原始入口不可用時重建失敗。報告的 `entry_rva` 仍表示選定的程式入口，PE 標頭可指向配接器。獨立包裝 DLL 測試在兩種模擬架構與原生 Windows 上檢查選定函式之外的清理。
+
+`runtime_state.additional_state_inventory_known` 與 `has_additional_dependencies` 回報 OS 所有者保留的私有堆積、虛擬保留區、鎖、控制代碼、視圖及例外狀態。清單缺失或仍有資源時，即使沒有堆積指標比對，預設恢復也會拒絕。明確快照保留診斷；執行期恢復必須重建支援的所有者。

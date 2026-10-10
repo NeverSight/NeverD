@@ -12,6 +12,7 @@
 #include "neverd/support/BinaryLoading.h"
 
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ObjectFileUtils.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/TextEncoding.h"
 
@@ -102,6 +103,30 @@ Expected<BinaryImage> loadBinary(const std::filesystem::path &Path,
     return ImgOrErr.takeError();
   normalizeBinaryMetadata(*ImgOrErr);
   return std::move(*ImgOrErr);
+}
+
+Expected<BinaryImage> loadBinaryBuffer(llvm::MemoryBufferRef Buffer,
+                                       const BinaryLoadOptions &Opts) {
+  if (Opts.Choice.Format != BinaryFormat::Unknown)
+    return make_error<StringError>(
+        "native buffer does not accept a loader choice",
+        inconvertibleErrorCode());
+  const auto Magic = llvm::identify_magic(Buffer.getBuffer());
+  if (Magic == llvm::file_magic::macho_universal_binary)
+    return make_error<StringError>(
+        "native buffer requires a selected Mach-O slice",
+        inconvertibleErrorCode());
+  auto TheLoader = Loader::create(magicToFormat(Magic));
+  if (!TheLoader)
+    return make_error<StringError>("unknown native buffer format",
+                                   inconvertibleErrorCode());
+  TheLoader->restrictFunctions(Opts.OnlyFunctionEntries);
+  TheLoader->setARMFunctionModes(Opts.ARMFunctionModes);
+  auto Image = TheLoader->loadBuffer(Buffer);
+  if (!Image)
+    return Image.takeError();
+  normalizeBinaryMetadata(*Image);
+  return std::move(*Image);
 }
 
 } // namespace neverd

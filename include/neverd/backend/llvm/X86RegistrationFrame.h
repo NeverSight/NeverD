@@ -11,7 +11,15 @@
 
 #include "llvm/IR/IRBuilder.h"
 
+#include <utility>
+
 namespace neverd {
+
+/// Reserve the checked aligned allocation and entry-save area. Returns the
+/// entry-SP offset and allocation alignment; headroom is added by the caller.
+std::pair<uint64_t, uint64_t> x86RegistrationFrameStorage(const MedFunc &Func,
+                                                          uint64_t EntrySP,
+                                                          uint64_t Alignment);
 
 /// Lower a checked source runtime root using the logical entry ESP. Callback
 /// ESP remains a distinct seed for the native callback outlining owner.

@@ -82,6 +82,8 @@ int neverd_patch_from_ir(neverd_session_t Sess, const char *IRText,
   if (!S)
     return 0;
   S->clearError();
+  if (!S->requireFileBacked())
+    return 0;
 
   if (!S->Loaded) {
     S->setError("no binary loaded");
@@ -162,6 +164,8 @@ int neverd_patch_from_c(neverd_session_t Sess, const char *CText,
   if (!S)
     return 0;
   S->clearError();
+  if (!S->requireFileBacked())
+    return 0;
 
   if (!S->Loaded) {
     S->setError("no binary loaded");

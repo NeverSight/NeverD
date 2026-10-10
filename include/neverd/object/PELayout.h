@@ -153,6 +153,14 @@ inline uint64_t getPEUserSectionMappedSize(uint32_t VirtualSize,
                        PageSize);
 }
 
+/// The strict driver profile retains both declared and file-backed bytes.
+/// This is deliberately separate from the native user-image mapping rule.
+inline uint64_t getPEDriverSectionMappedSize(uint32_t VirtualSize,
+                                             uint32_t RawSize,
+                                             uint64_t PageSize) {
+  return llvm::alignTo(uint64_t(std::max(VirtualSize, RawSize)), PageSize);
+}
+
 inline uint32_t getPESizeOfImage(const PEHeaderPtrs &PE) {
   using namespace llvm::object;
   if (const auto *Opt = getPE32PlusOptionalHeader(PE))

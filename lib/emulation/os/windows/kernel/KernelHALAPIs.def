@@ -1,0 +1,9 @@
+//===- KernelHALAPIs.def - HAL export execution contracts ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryperformancecounter
+NEVERD_KERNEL_HAL_API(KeQueryPerformanceCounter, 1, Any,
+                      queryPerformanceCounter(A[0]))

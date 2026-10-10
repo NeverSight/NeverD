@@ -28,12 +28,14 @@ NEVERD_UNPACK_EVIDENCE(UPXEntryStub, "upx_entry_stub")
 // the transfers it did observe and the process stop reason say why.
 // UnsupportedState: the accepted image has runtime dependencies whose
 // reconstruction is unsupported. Snapshot: the caller explicitly requested
-// image bytes only.
+// image bytes only. Restored: supported owned runtime resources are embedded
+// under an explicit fixed-address/native-environment contract.
 #ifdef NEVERD_UNPACK_OUTCOME
 NEVERD_UNPACK_OUTCOME(Unpacked, "unpacked")
 NEVERD_UNPACK_OUTCOME(NoEntry, "no_entry")
 NEVERD_UNPACK_OUTCOME(UnsupportedState, "unsupported_state")
 NEVERD_UNPACK_OUTCOME(Snapshot, "snapshot")
+NEVERD_UNPACK_OUTCOME(Restored, "restored")
 #endif
 
 // Transfer is the observed transfer that was accepted. Stub is retained for
@@ -95,6 +97,7 @@ NEVERD_UNPACK_REPORT_FIELD(Profile, "profile")
 NEVERD_UNPACK_REPORT_FIELD(Backend, "backend")
 NEVERD_UNPACK_REPORT_FIELD(Transfer, "transfer")
 NEVERD_UNPACK_REPORT_FIELD(SnapshotOnly, "snapshot_only")
+NEVERD_UNPACK_REPORT_FIELD(RestoreRuntime, "restore_runtime")
 NEVERD_UNPACK_REPORT_FIELD(Transfers, "transfers")
 NEVERD_UNPACK_REPORT_FIELD(Generation, "generation")
 NEVERD_UNPACK_REPORT_FIELD(Packer, "packer")
@@ -112,6 +115,9 @@ NEVERD_UNPACK_REPORT_FIELD(ProgramInvocation, "program_invocation")
 NEVERD_UNPACK_REPORT_FIELD(MaterializedTLSCallbacks,
                            "materialized_tls_callbacks")
 NEVERD_UNPACK_REPORT_FIELD(RuntimeState, "runtime_state")
+NEVERD_UNPACK_REPORT_FIELD(AdditionalStateKnown,
+                           "additional_state_inventory_known")
+NEVERD_UNPACK_REPORT_FIELD(AdditionalState, "has_additional_dependencies")
 NEVERD_UNPACK_REPORT_FIELD(HeapKnown, "heap_inventory_known")
 NEVERD_UNPACK_REPORT_FIELD(HeapReferenceCount, "possible_heap_references")
 NEVERD_UNPACK_REPORT_FIELD(DirectServiceCalls, "direct_service_calls")
@@ -196,7 +202,7 @@ NEVERD_UNPACK_CLI_STRING(OutputValue, "path")
 NEVERD_UNPACK_CLI_STRING(OptionsOption, "options")
 NEVERD_UNPACK_CLI_STRING(OptionsHelp,
                          "Options JSON: backend, resource limits, transfer, "
-                         "snapshot_only, "
+                         "snapshot_only, restore_runtime, "
                          "arguments/environment and Windows module inputs")
 NEVERD_UNPACK_CLI_STRING(OptionsValue, "json")
 #endif

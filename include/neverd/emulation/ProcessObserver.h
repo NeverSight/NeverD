@@ -19,11 +19,13 @@
 #include "neverd/emulation/ProcessSession.h"
 
 #include <array>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace neverd::emulation {
+class ProcessRuntimeState;
 /// One image known to the guest loader at the observed boundary.
 struct ProcessModuleView {
   /// Guest basename as the loader records it.
@@ -122,6 +124,14 @@ public:
   virtual llvm::Expected<std::optional<ProcessDynamicThreadLocalState>>
   dynamicThreadLocalState() {
     return std::nullopt;
+  }
+  /// Immutable OS-owned objects at this exact stop. IncludeBacking requests
+  /// allocation contents for materialization, rather than inventory only.
+  /// Missing means the profile has no materialization contract, not an empty
+  /// state.
+  virtual llvm::Expected<std::shared_ptr<const ProcessRuntimeState>>
+  runtimeState(bool IncludeBacking = false) {
+    return std::shared_ptr<const ProcessRuntimeState>();
   }
   /// Number of OS service invocations so far, including calls still active.
   /// Missing provenance cannot establish that a helper has no OS effects.

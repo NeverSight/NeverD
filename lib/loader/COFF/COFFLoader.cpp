@@ -92,14 +92,19 @@ std::string machineName(uint16_t Machine) {
 
 llvm::Expected<BinaryImage>
 COFFLoader::load(const std::filesystem::path &Path) {
-  BinaryImage Img;
-  auto BufOrErr = readFileInto(Path, Img, BinaryFormat::COFF,
-                               /*CopyRaw=*/RestrictFunctionEntries.empty());
+  auto BufOrErr = readFileBuffer(Path, BinaryFormat::COFF);
   if (!BufOrErr)
     return BufOrErr.takeError();
-  auto &Buf = *BufOrErr;
+  return loadBuffer((*BufOrErr)->getMemBufferRef());
+}
 
-  auto ObjOrErr = coff_loader::COFFObjectView::create(Buf->getMemBufferRef());
+llvm::Expected<BinaryImage>
+COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
+  BinaryImage Img;
+  initializeImage(Buffer, Img, BinaryFormat::COFF,
+                  /*CopyRaw=*/RestrictFunctionEntries.empty());
+
+  auto ObjOrErr = coff_loader::COFFObjectView::create(Buffer);
   if (!ObjOrErr)
     return ObjOrErr.takeError();
   const auto &Obj = ObjOrErr->object();
@@ -153,7 +158,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
   if (!IsRelocatable) {
     Img.Entry = normalizeCodeAddress(Img.Entry, Img.Arch, Img.Mode);
     Img.COFFRichHeader =
-        decodeRichHeader(llvm::arrayRefFromStringRef(Buf->getBuffer()));
+        decodeRichHeader(llvm::arrayRefFromStringRef(Buffer.getBuffer()));
   }
   Img.Base = ImageBase;
   Img.LoadOnlyFunctionEntries = RestrictFunctionEntries;
@@ -992,7 +997,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
 
   // --- Debug Directory (PDB path) ---
   coff_loader::parseDebugDirectory(
-      Obj, Img, llvm::arrayRefFromStringRef(Buf->getBuffer()));
+      Obj, Img, llvm::arrayRefFromStringRef(Buffer.getBuffer()));
 
   // Named definitions own their entries before unwind discovery supplies
   // ranges. Otherwise .pdata creates an anonymous duplicate for every typed
@@ -1020,7 +1025,10 @@ COFFLoader::load(const std::filesystem::path &Path) {
   // or data-pointer heuristic can turn an interior instruction into a symbol.
   // Personality resolution still follows import-veneer discovery below.
   dwarf_eh::recordFrameExtents(Img);
-  runPostLoadDiscovery(Img, "coff: loaded " + pathToUTF8(Path.filename()));
+  runPostLoadDiscovery(
+      Img, "coff: loaded " + pathToUTF8(std::filesystem::u8path(
+                                            Buffer.getBufferIdentifier().str())
+                                            .filename()));
   // Classified before any table is read.  A PE is the format where schema and
   // language diverge most: Delphi and MSVC share the registration chain, Rust
   // and C++ share the `FuncInfo`, and a MinGW image carries Itanium tables

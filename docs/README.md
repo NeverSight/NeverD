@@ -19,6 +19,11 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [README (English)](../README.md) | Overview, quick start, build, SDK, CLI |
 | [Contributing](../CONTRIBUTING.md) | Development setup, build profiles, workflow, style, and PR expectations |
 | [Architecture](architecture.md) | IR routes, component boundaries, strict lifting, support depth, and where to edit |
+| [Offline web analysis](web-analysis.md) | C++ artifact/source/binding/map inspection, metadata policy, SDK and current qualification |
+| [Bun standalone profile](web-bun-profile.md) | Fixed ELF extraction, original evidence ranges, source decoding and pinned fixture provenance |
+| [ASAR extraction profile](web-asar-profile.md) | Packed/unpacked capture association, integrity states, member consumers and native Unicode dependency |
+| [Electron evidence profile](web-electron-profile.md) | Captured entry paths, manifest/source scope, window/bridge evidence and IPC channel candidates |
+| [HTML source profile](web-html-profile.md) | Bounded C++ script inventory, captured local references and original inline-source anchors |
 | [Testing](testing.md) | Test suites, generated fixtures, Unicorn roundtrips, and incremental commands |
 | [Desktop workbench](gui.md) | Classic disassembler layout, worker separation, project databases, localization and MCP connections |
 | [Library recognition](library-recognition.md) | Evidence-backed STL, ATL/MFC, COM and libc identities, profiles and reversible C folds |

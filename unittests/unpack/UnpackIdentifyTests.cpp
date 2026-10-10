@@ -19,7 +19,7 @@ struct Fixture {
   const char *Name, *Packed, *Original;
 };
 constexpr Fixture Fixtures[] = {
-#define NEVERD_UNPACK_TEST_FIXTURE(Name, Packed, Original)                     \
+#define NEVERD_UNPACK_TEST_FIXTURE(Name, Packed, Original, HasRuntimeState)    \
   {#Name, Packed, Original},
 #include "UnpackCases.def"
 #undef NEVERD_UNPACK_TEST_FIXTURE

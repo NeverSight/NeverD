@@ -113,6 +113,8 @@ private:
   int visibleLines() const;
   int lineAt(int y) const;
   int columnAt(const Line &line, int x) const;
+  int firstColumn(const Line &line) const;
+  qreal columnX(const Line &line, int column) const;
   int textLeft() const;
   void paintArrows(QPainter &painter, int first, int last);
   void showHint(const QPoint &position);
@@ -125,6 +127,7 @@ private:
   bool fetchingBefore_ = false, fetchingAfter_ = false;
   quint64 serial_ = 0;
   int top_ = 0;
+  // Body-relative columns; negative positions select the address prefix.
   int cursorLine_ = 0, cursorColumn_ = 0;
   std::optional<std::pair<int, int>> anchor_; // selection anchor (line, col)
   bool selecting_ = false;

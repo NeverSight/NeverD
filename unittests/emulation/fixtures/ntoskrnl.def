@@ -8,6 +8,7 @@ EXPORTS
   ZwDeleteKey
   ZwClose
   RtlInitUnicodeString
+  ExAllocatePool
   ExAllocatePoolWithTag
   ExFreePoolWithTag
   IoCreateDevice

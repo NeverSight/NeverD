@@ -32,3 +32,8 @@
 *.zip   binary
 *.gz    binary
 *.tar   binary
+
+# Pinned upstream evidence/notices retain their original whitespace.
+LICENSES/hermes/LLVH.txt whitespace=-blank-at-eof
+unittests/web/fixtures/webpack-commonjs-upstream.md whitespace=-blank-at-eol
+unittests/web/fixtures/webpack-commonjs.bundle.txt whitespace=-blank-at-eol

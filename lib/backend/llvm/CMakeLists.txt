@@ -9,9 +9,11 @@ add_neverd_component_library(NeverDLLVMFloatConvertLowering
 )
 
 add_neverd_component_library(NeverDWindowsRegistrationFrame
+  X86/RegistrationFrameLayout.cpp
   X86/WindowsRegistrationABI.cpp
   X86/WindowsRegistrationCallbackPlan.cpp
   X86/WindowsRegistrationCallbackStack.cpp
+  X86/WindowsRegistrationCatchStack.cpp
   X86/WindowsRegistrationFrame.cpp
 )
 
@@ -43,6 +45,7 @@ add_neverd_component_library(NeverDBackendLLVM
   eh/MedLLVMNativeSEH.cpp
   X86/MedLLVMRegistrationSEHProof.cpp
   X86/MedLLVMRegistrationCxxContinuation.cpp
+  X86/MedLLVMRegistrationCxxStack.cpp
   X86/MedLLVMRegistrationFrame.cpp
   X86/MedLLVMNativeRegistration.cpp
   X86/MedLLVMNativeRegistrationCxx.cpp

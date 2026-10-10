@@ -46,6 +46,8 @@ __declspec(dllimport) U8 KeGetCurrentIrql(void);
 __declspec(dllimport) void *IoGetCurrentProcess(void);
 U64 __readgsqword(unsigned long);
 #pragma intrinsic(__readgsqword)
+U64 __rdtsc(void);
+#pragma intrinsic(__rdtsc)
 __declspec(dllimport) void KeStackAttachProcess(void *, void *);
 __declspec(dllimport) void KeUnstackDetachProcess(void *);
 __declspec(dllimport) NTSTATUS KeDelayExecutionThread(U32, U8, long long *);
@@ -266,6 +268,10 @@ static NTSTATUS PreemptDispatch(void *Target, IRP *Request) {
                                          Thread,
                                          (void *)(U64)I) != StatusSuccess);
     while (!Finished[0] || (Count == 2 && !Finished[1])) {
+      // An environment read must retain its instruction/time-slice charge.
+      // Otherwise this polling thread can starve the thread that completes it.
+      if (Mode == BusyThread)
+        (void)__rdtsc();
     }
     for (U32 I = 0; I != Count; ++I)
       RecordFailure(ZwClose(Handles[I]) != StatusSuccess);

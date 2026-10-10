@@ -217,6 +217,8 @@ NEVERD_DRIVER_IMAGE_DIAGNOSTIC(InconsistentDataDirectoryRVAAndSize,
                                "inconsistent data directory RVA and size")
 NEVERD_DRIVER_IMAGE_DIAGNOSTIC(UnsupportedLoaderDataDirectory,
                                "unsupported loader data directory ")
+NEVERD_DRIVER_IMAGE_DIAGNOSTIC(ExportAddressIsNotMapped,
+                               "export address is not mapped")
 NEVERD_DRIVER_IMAGE_DIAGNOSTIC(TruncatedCertificateTable,
                                "truncated certificate table")
 NEVERD_DRIVER_IMAGE_DIAGNOSTIC(

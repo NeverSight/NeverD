@@ -22,6 +22,10 @@ typedef struct {
 } UNICODE_STRING;
 
 typedef void *(*ALLOCATE_POOL)(U64, U64, U32);
+typedef void *(*ALLOCATE_LEGACY_POOL)(U32, U64);
+__declspec(dllimport) void *ExAllocatePool(U32, U64);
+typedef long long (*QUERY_COUNTER)(long long *);
+__declspec(dllimport) long long KeQueryPerformanceCounter(long long *);
 __declspec(dllimport) U32 DbgPrint(const char *, ...);
 __declspec(dllimport) U32 DbgPrintEx(U32, U32, const char *, ...);
 __declspec(dllimport) void *MmGetSystemRoutineAddress(const UNICODE_STRING *);
@@ -49,6 +53,36 @@ NTSTATUS DriverEntry(void *Driver, const UNICODE_STRING *RegistryPath) {
     if (Pool[I])
       return (NTSTATUS)0xc000000dU;
   ExFreePoolWithTag(Pool, 0x74736554);
+
+  RtlInitUnicodeString(&Name, (const U16 *)L"ExAllocatePool");
+  ALLOCATE_LEGACY_POOL Legacy =
+      (ALLOCATE_LEGACY_POOL)MmGetSystemRoutineAddress(&Name);
+  if (!Legacy || Legacy != ExAllocatePool)
+    return (NTSTATUS)0xc000000dU;
+  Pool = (U8 *)ExAllocatePool(512, 17);
+  if (!Pool || ((U64)Pool & 15))
+    return (NTSTATUS)0xc000009aU;
+  for (U32 I = 0; I < 17; ++I)
+    ((volatile U8 *)Pool)[I] = (U8)(I ^ 0x5a);
+  for (U32 I = 0; I < 17; ++I)
+    if (((volatile U8 *)Pool)[I] != (U8)(I ^ 0x5a))
+      return (NTSTATUS)0xc000000dU;
+  ExFreePoolWithTag(Pool, 0);
+  Pool = (U8 *)Legacy(1, 8);
+  if (!Pool)
+    return (NTSTATUS)0xc000009aU;
+  ExFreePoolWithTag(Pool, 0);
+
+  RtlInitUnicodeString(&Name, (const U16 *)L"KeQueryPerformanceCounter");
+  QUERY_COUNTER Counter = (QUERY_COUNTER)MmGetSystemRoutineAddress(&Name);
+  if (!Counter || Counter != KeQueryPerformanceCounter)
+    return (NTSTATUS)0xc000000dU;
+  long long Frequency = 0, OtherFrequency = 0;
+  long long First = KeQueryPerformanceCounter(&Frequency);
+  long long Second = Counter(&OtherFrequency);
+  if (Frequency <= 0 || Frequency != OtherFrequency || First > Second ||
+      Counter(0) < Second)
+    return (NTSTATUS)0xc000000dU;
 
   UNICODE_STRING Source;
   U16 Buffer[8] = {'!', '!', '!', '!', '!', '!', '!', '!'};

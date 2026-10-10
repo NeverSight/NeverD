@@ -6,6 +6,7 @@
 #include "UnpackTestSupport.h"
 
 #include "neverd/emulation/ProcessObserver.h"
+#include "neverd/emulation/WindowsProcessState.h"
 #include "neverd/unpack/Unpack.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -24,10 +25,11 @@ using emulation::ExecutionBackendKind;
 
 struct Fixture {
   const char *Name, *Packed, *Original;
+  bool HasRuntimeState;
 };
 constexpr Fixture Fixtures[] = {
-#define NEVERD_UNPACK_TEST_FIXTURE(Name, Packed, Original)                     \
-  {#Name, Packed, Original},
+#define NEVERD_UNPACK_TEST_FIXTURE(Name, Packed, Original, HasRuntimeState)    \
+  {#Name, Packed, Original, HasRuntimeState},
 #include "UnpackCases.def"
 #undef NEVERD_UNPACK_TEST_FIXTURE
 };
@@ -118,6 +120,7 @@ class LinkedEntrySnapshot final : public emulation::ProcessObserver {
 public:
   explicit LinkedEntrySnapshot(Image &Program) : Program(Program) {}
   std::optional<std::vector<uint8_t>> ThreadLocal;
+  std::shared_ptr<const emulation::ProcessRuntimeState> Runtime;
   llvm::Expected<std::vector<emulation::ExecutionWatch>>
   started(emulation::ProcessView &Process) override {
     return std::vector<emulation::ExecutionWatch>{
@@ -134,6 +137,10 @@ public:
     if (!TLS)
       return TLS.takeError();
     ThreadLocal = std::move(*TLS);
+    auto State = Process.runtimeState();
+    if (!State)
+      return State.takeError();
+    Runtime = std::move(*State);
     return std::nullopt;
   }
 
@@ -150,7 +157,20 @@ TEST_P(UnpackFixture, RecoversEntrySectionsAndImports) {
       GTEST_SKIP() << BackendUnavailable;
     return;
   }
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked) << Result->Diagnostic;
+  if (F.HasRuntimeState) {
+    ASSERT_EQ(Result->Outcome, UnpackOutcome::UnsupportedState)
+        << Result->Diagnostic;
+    EXPECT_TRUE(Result->RuntimeState.AdditionalStateInventoryKnown);
+    EXPECT_TRUE(Result->RuntimeState.HasAdditionalDependencies);
+    EXPECT_TRUE(Result->Image.empty());
+    UnpackOptions Options;
+    Options.SnapshotOnly = true;
+    Result = unpackOn(Transport.Kind, F.Packed, Options);
+    ASSERT_TRUE(Result);
+  }
+  ASSERT_EQ(Result->Outcome, F.HasRuntimeState ? UnpackOutcome::Snapshot
+                                               : UnpackOutcome::Unpacked)
+      << Result->Diagnostic;
   EXPECT_EQ(Result->Packer.Kind, PackerKind::Unidentified);
   EXPECT_EQ(Result->ProcessStop, StopObserver);
   Image Original = readImage(fixture(F.Original));
@@ -199,14 +219,17 @@ TEST_P(UnpackFixture, DirectContractRecoversTheSameImage) {
       Transport.Kind != ExecutionBackendKind::KVM &&
       Transport.Kind != ExecutionBackendKind::WHP)
     GTEST_SKIP() << "this transport has no direct x64 execution";
-  auto Checked = unpackOn(Transport.Kind, F.Packed);
+  UnpackOptions Options;
+  Options.SnapshotOnly = F.HasRuntimeState;
+  auto Checked = unpackOn(Transport.Kind, F.Packed, Options);
   if (!Checked) {
     if (!HasFailure())
       GTEST_SKIP() << BackendUnavailable;
     return;
   }
-  ASSERT_EQ(Checked->Outcome, UnpackOutcome::Unpacked) << Checked->Diagnostic;
-  UnpackOptions Options;
+  const auto Expected =
+      F.HasRuntimeState ? UnpackOutcome::Snapshot : UnpackOutcome::Unpacked;
+  ASSERT_EQ(Checked->Outcome, Expected) << Checked->Diagnostic;
   Options.Process.Contract = emulation::ExecutionContract::DirectUserX64;
   auto Direct = unpackOn(Transport.Kind, F.Packed, Options);
   if (!Direct) {
@@ -214,7 +237,7 @@ TEST_P(UnpackFixture, DirectContractRecoversTheSameImage) {
       GTEST_SKIP() << BackendUnavailable;
     return;
   }
-  ASSERT_EQ(Direct->Outcome, UnpackOutcome::Unpacked) << Direct->Diagnostic;
+  ASSERT_EQ(Direct->Outcome, Expected) << Direct->Diagnostic;
   EXPECT_EQ(Direct->EntryRVA, Checked->EntryRVA);
   EXPECT_EQ(Direct->Packer.Kind, Checked->Packer.Kind);
   // Byte-identical rebuilt file: the two contracts observed the same program.
@@ -344,9 +367,12 @@ TEST_P(Unpack, DirectJumpToTheProgramIsObservedAsItsEntry) {
 }
 
 TEST_P(Unpack, StubCallIntoTheProgramIsNotItsEntry) {
-  auto Result = unpack(RuntimePacked);
+  UnpackOptions SnapshotOptions;
+  SnapshotOptions.SnapshotOnly = true;
+  auto Result = unpack(RuntimePacked, SnapshotOptions);
   NEVERD_REQUIRE(Result);
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked) << Result->Diagnostic;
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Snapshot) << Result->Diagnostic;
+  EXPECT_TRUE(Result->RuntimeState.HasAdditionalDependencies);
   const Image Original = readImage(fixture(RuntimeOriginal));
   // The stub calls the program's TLS callbacks before it leaves. That call
   // enters generated code on a deeper stack and is reported, not accepted.
@@ -436,6 +462,17 @@ TEST_P(Unpack, StubCallIntoTheProgramIsNotItsEntry) {
   EXPECT_EQ(OriginalRun->Stop, emulation::ProcessStopReason::Observer);
   EXPECT_EQ(RebuiltRun->Stop, emulation::ProcessStopReason::Observer);
   EXPECT_EQ(OriginalState.ThreadLocal, RebuiltState.ThreadLocal);
+  ASSERT_TRUE(OriginalState.Runtime);
+  ASSERT_EQ(OriginalState.Runtime->Profile,
+            emulation::ProcessRuntimeState::Kind::WindowsPE64);
+  const auto &Owned = static_cast<const emulation::WindowsProcessState &>(
+      *OriginalState.Runtime);
+  ASSERT_EQ(Owned.CriticalSections.size(), 1u);
+  EXPECT_EQ(Owned.CriticalSections.front().Recursion, 0u);
+  // The bytes agree, but a fresh process has no initialized critical section.
+  // This is why the image is an explicit snapshot, not a recovery success.
+  ASSERT_TRUE(RebuiltState.Runtime);
+  EXPECT_FALSE(RebuiltState.Runtime->hasAdditionalDependencies());
   for (const auto &S : Initialized.Sections)
     EXPECT_EQ(differingBytes(Initialized, Rebuilt, S), 0u) << S.Name;
 }
@@ -501,9 +538,13 @@ class UnpackBackends : public testing::TestWithParam<Fixture> {};
 TEST_P(UnpackBackends, ProduceIdenticalImages) {
   const auto &F = GetParam();
   std::map<std::string, std::vector<uint8_t>> Images;
+  UnpackOptions Options;
+  Options.SnapshotOnly = F.HasRuntimeState;
   for (const auto &B : Backends)
-    if (auto Result = unpackOn(B.Kind, F.Packed)) {
-      ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked);
+    if (auto Result = unpackOn(B.Kind, F.Packed, Options)) {
+      ASSERT_EQ(Result->Outcome, F.HasRuntimeState ? UnpackOutcome::Snapshot
+                                                   : UnpackOutcome::Unpacked)
+          << Result->Diagnostic;
       Images[B.Name] = std::move(Result->Image);
     }
   if (HasFailure())

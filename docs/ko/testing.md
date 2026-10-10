@@ -151,6 +151,8 @@ v4 테스트는 접두 구조의 크기와 패딩, 잘린 구조와 알 수 없�
 
 `InterpreterLLVMRefinement.Preservation*`는 부분 및 겹침 범위, 잘못된 요청, 독립 계산한 준비 비용, 양쪽의 동일한 최종 손상, 루프를 통한 진입값 저장과 복원, 새로운 불투명 상태 증거 및 후반 거부를 검사합니다. API 사용자인 `NeverDPEFixedImageTests`도 다시 빌드합니다. 요청 생략 시 결과, 카운터 및 다이제스트는 별도로 기준선과 비교합니다.
 
+`InterpreterLLVMRefinement.Collection*`는 유한 및 귀납 증명에 필요한 유지와 지연, 도달 가능한 잘못된 분기, 후반 소스 거부, 진입값 보존, 네 가지 네이티브 설정의 식별을 검사합니다. 조합 계층에서 전달을 누락한 결함 버전을 컴파일해 필요한 설정이 네이티브 검사기에 전달되는지 확인합니다.
+
 ```sh
 cmake --build build-release --target NeverDLLVMCScalarLoopRecoveryTests --parallel 4
 build-release/bin/NeverDLLVMCScalarLoopRecoveryTests
@@ -1238,7 +1240,7 @@ KVM 검증은 스스로 종료하지 않는 실제 vCPU의 취소와 `KvmStateTr
 
 `native_cpu_only=true`와 `native_driver_tests=true`를 지정하면 Unicorn 없이 `NeverDNativeDriverTests`를 활성화합니다. 구성 전에 `build_wdk_driver_fixtures.py`가 공식 Microsoft WDK/SDK 10.0.26100.6584 패키지 전체의 SHA-256을 검증하고 원본 소스에서 일반/CFG/DBG 드라이버 이미지 48개를 다시 빌드합니다. `WDKDriverFixtures.def`는 패키지 식별자, 컴파일러·링커 인수와 픽스처 연결을 선언합니다. 수정하지 않은 Microsoft 파일과 라이선스는 로컬 빌드/캐시 디렉터리에 보관하며 CI는 빌드 메타데이터와 로그만 업로드합니다. 매니페스트에는 도구 버전, 명령, 소스·헤더 해시와 출력 이미지 해시를 기록합니다.
 
-`NativeDriverTests.def`는 `DriverBuiltinImages.def`와 `DriverBackendParityCases.def`의 115개 작업 전체에서 WHP 결과 230개를 요구합니다. 기본 이미지 27개, WDK 이미지 48개와 요청 시나리오 40개를 원본 및 재배치 주소에서 실행합니다. 전체 필수 목록은 `5058 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets = 5420`입니다. 대기 집합 검사 30개는 이식 가능한 모델 사례 16개와 독자적인 네이티브 드라이버 사례 14개입니다. `run_native_cpu_ci.py --with-drivers`는 Unicorn을 끄고 정확한 목록과 JUnit 증거를 보존합니다. 필수 픽스처 누락이나 건너뛰기는 선택형 게이트를 실패시키며, 일반 빌드에서는 외부 픽스처가 선택 사항입니다. 고정 이미지의 예상 재배치 거부는 유지됩니다. ARM64 네이티브 게스트 실행은 아직 검증되지 않았습니다.
+`NativeDriverTests.def`는 `DriverBuiltinImages.def`와 `DriverBackendParityCases.def`의 115개 작업 전체에서 WHP 결과 230개를 요구합니다. 기본 이미지 27개, WDK 이미지 48개와 요청 시나리오 40개를 원본 및 재배치 주소에서 실행합니다. 전체 필수 목록은 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads = 5447`입니다. 대기 집합 검사 30개는 이식 가능한 모델 사례 16개와 독자적인 네이티브 드라이버 사례 14개입니다. `run_native_cpu_ci.py --with-drivers`는 Unicorn을 끄고 정확한 목록과 JUnit 증거를 보존합니다. 필수 픽스처 누락이나 건너뛰기는 선택형 게이트를 실패시키며, 일반 빌드에서는 외부 픽스처가 선택 사항입니다. 고정 이미지의 예상 재배치 거부는 유지됩니다. ARM64 네이티브 게스트 실행은 아직 검증되지 않았습니다.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease`는 서로 다른 시작 명령 두 개 앞에서 기한 만료, 중지, 두 원인의 동시 중단을 주입합니다. 정확한 단계 진단, 메시지 소유 수명, 오류 타입과 원인 비트, 단계 간 동일한 기한, 메모리 소유권 해제를 검사합니다. 실제 전송 실패와 상태 불일치는 계속 구분합니다. 네이티브 x64 시작 검증 예산은 `5 s`이며 일반 게스트 기한과 단일 단계 유예는 유지됩니다.
 
@@ -1612,6 +1614,10 @@ MainActor 픽스처는 고정 메타데이터와 정적 테이블의 전체 흐�
 ## 제한된 디렉터리 일괄 속성
 
 bulk-attributes는 완전한 그룹, 이름/종류 집합, 미사용 바이트 보호, low32 FD, bitmap 워드, 네이티브 오류, dup 공유 진행, 독립 open, EOF와 0 rewind를 검사한다. 리터럴/미지원 모드는 가상 전용이다. 모델은 전체 stat와 무효화, NFD/255바이트 이름, 입출력 별칭, 전송/예산 실패, 이동/SWAP/삭제/재사용, 명시 권한도 검사한다. 필수 목록은 플랫폼별63개로 ARM64는189개, Intel은126개다. 로컬에서는 일치하는 ARM64 HVF만 검증했다. native5s, guest/Python5,000,000us/quantum1024, public10s는 그대로다.
+
+`MaterializedRuntimePreservesOwnedObjectsOnNativeWindows`는 원본 모델 실행, 복원, 섹션 권한, 원본과 복원본의 Windows 네이티브 실행을 검사합니다. 힙 재할당·해제, 인코딩된 내부 포인터, FLS 콜백 재설정, 재귀 잠금, LastError, 가상 페이지 예약·커밋·보호를 포함합니다. `MaterializationRequiresKnownSupportedState`는 버전 누락과 동적 TLS를 거부하며 `RuntimeRestorationHasTheSameCAPIAndCLIContract`는 정확한 바이트와 보고서를 비교합니다. Linux 구성 검사와 Wine 관찰은 Windows 네이티브 수명 증거를 대체하지 않습니다.
+
+`NeverDUnpackDriverTests`는 진입점, 커널 가져오기, 잔여 자원, ABI, 내보내기, 스케줄링, 요청 및 언로드, C API/CLI, PE 체크섬을 검증합니다. 필수 KVM/WHP 사례와 Windows ImageHlp 비교는 네이티브 커널 로드를 증명하지 않습니다. [UNPACK](unpack.md).
 
 ## 불투명 상태 검사
 

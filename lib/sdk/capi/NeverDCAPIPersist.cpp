@@ -146,6 +146,8 @@ const char *neverd_annotations_json(neverd_session_t Sess) {
 int neverd_annotations_save(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   S->clearError();
+  if (!S->requireFileBacked())
+    return 1;
   if (!S->Loaded) {
     S->setError("no binary loaded");
     return 1;
@@ -171,6 +173,8 @@ int neverd_annotations_save(neverd_session_t Sess) {
 int neverd_annotations_load(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   S->clearError();
+  if (!S->requireFileBacked())
+    return 1;
   if (!S->Loaded)
     return 1;
   auto Path = annotationPath(S);
@@ -313,6 +317,8 @@ const char *neverd_renames_json(neverd_session_t Sess) {
 int neverd_renames_save(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   ProjectWriteLock Lock(S->FilePath);
@@ -337,6 +343,8 @@ int neverd_renames_save(neverd_session_t Sess) {
 int neverd_renames_load(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   auto Path = S->FilePath;
@@ -484,6 +492,8 @@ int neverd_functions_save(neverd_session_t Sess) {
   if (!S)
     return -1;
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   ProjectWriteLock Lock(S->FilePath);
@@ -501,6 +511,8 @@ int neverd_functions_load(neverd_session_t Sess) {
   if (!S)
     return -1;
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   const auto Path = functionsPath(S);
@@ -899,6 +911,8 @@ int neverd_operand_formats_save(neverd_session_t Sess) {
   if (!S)
     return -1;
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   ProjectWriteLock Lock(S->FilePath);
@@ -917,6 +931,8 @@ int neverd_operand_formats_load(neverd_session_t Sess) {
   if (!S)
     return -1;
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   const auto Path = operandsPath(S);
@@ -988,6 +1004,8 @@ int neverd_items_save(neverd_session_t Sess) {
   if (!S)
     return -1;
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   ProjectWriteLock Lock(S->FilePath);
@@ -1003,6 +1021,8 @@ int neverd_items_load(neverd_session_t Sess) {
   if (!S)
     return -1;
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   const auto Path = itemsPath(S);
@@ -1319,6 +1339,8 @@ int neverd_load_options_save(neverd_session_t Sess) {
   if (!S)
     return -1;
   S->clearError();
+  if (!S->requireFileBacked())
+    return -1;
   if (!S->Loaded)
     return -1;
   ProjectWriteLock Lock(S->FilePath);
