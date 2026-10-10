@@ -204,6 +204,16 @@ copy budget. A separately converted ordinary PE32 callback cannot be embedded
 without a parent-frame projection; its clause retains the native target.
 `hasCallerCleanupRegistrationABI` owns the current PE32 stack-cleanup check,
 which the writer replays against immutable input.
+Registration state recovery also consumes independent returning-stack facts.
+`getCheckedX86CalleeStackPop` replays immutable ordinary callee paths with the
+shared affine transfer, requires restored entry ESP at every near return and
+requires every return-pop immediate to agree. Nested calls forget ESP;
+explicit restoration through an ABI-preserved register can recover it. Memory
+loads do not acquire a saved-stack identity in this analysis. Already decoded
+interior finally calls use their ordinary subgraph, while the checked
+RaiseException provider supplies its separate stdcall adjustment. These facts
+do not grant object borrows, memory-effect completeness or native EH authority;
+the existing call-frame and generated-code checks remain required.
 `getCheckedX86RegistrationLeafCalleeABI` uses the same affine transfer for
 callee-private stack and borrowed ECX object domains, with separate spill
 storage. Its exact object/image footprints describe a returning leaf; a caller

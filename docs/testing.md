@@ -2258,6 +2258,22 @@ constructor order against independent C observations at O0/O2. Immutable
 scan tests additionally check lossless address carriers and folding a scan's
 exit count into successor PHI operands.
 
+`ExactIndirectTargetsReuseTheirRecoveredCallSignature` checks all twelve
+target/format cells: a function identity or immutable slot uses the recovered
+callee signature, including narrow parameters and surplus caller registers.
+Mutable and atomic loads retain runtime dispatch, and missing required
+arguments fail explicitly. A consumed void-call result remains unknown, and
+immutable table observations survive target resolution. The native pointer
+test compiles LLVM, default C and exact-type C at O0/O2 and checks the narrow
+argument's actual value after the indirect call. Function-address initializers
+also require declarations matching the emitted definitions before the tables.
+`TargetAggregateLayoutCompilesAcrossArchitecturesAndFormats` checks each
+target's pointer width and compiles LLVM-derived record size/offset assertions
+with Clang for all twelve target/format combinations, without host headers.
+`OptimizedSwitchTablesPreservePhysicalAndTwoLevelSelectors` executes original
+x64 machine code and both optimized/unoptimized lifted LLVM at O0/O2, checking
+1024 selectors plus the two-level default boundary against independent results.
+
 `MedABIPass.SplitStackArgumentSetupRequiresEveryIncomingPath` checks all twelve
 architecture/format cells, block-order changes, conflicting or missing stores,
 partial overwrites, opaque calls, aliases, provenance and independent/EH roots.
@@ -2323,6 +2339,13 @@ observations and metadata mutation. The leaf-callee matrix also checks separate
 private-stack/object spills, pointer escape, bounds, unknown addresses and
 nonvolatile-register preservation. These proofs do not enable native source
 C++ reconstruction on their own.
+`StackCleanupRequiresEveryRestoredNearReturn` separately checks balanced
+caller/callee cleanup, nonvolatile restoration after an opaque call, dynamic
+alignment, disagreeing return pops, missing restoration, volatile anchors,
+memory-only saved pointers, far/tail returns, writable code, wrong targets and
+exhausted work. `StackCleanupDoesNotGrantMemoryBorrowAuthority` checks exact
+direct/indirect target identity, registration-overlapping pops and duplicate
+contracts while retaining the independent call-frame refusal.
 Cleanup-relay tests cover both EBP displacement widths, exact thiscall object
 reads, PE32 relative-branch wrapping, nonwrapping storage, writable/overlapping
 code, fixups, call substitutions, callee stack pops and FS-dependent effects.
