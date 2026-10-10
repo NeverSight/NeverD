@@ -2377,9 +2377,27 @@ C++ reconstruction on their own.
 caller/callee cleanup, nonvolatile restoration after an opaque call, dynamic
 alignment, disagreeing return pops, missing restoration, volatile anchors,
 memory-only saved pointers, far/tail returns, writable code, wrong targets and
-exhausted work. `StackCleanupDoesNotGrantMemoryBorrowAuthority` checks exact
+exhausted work. `StackCleanupIncludesCheckedNestedImportCleanup` verifies
+provider and exact-slot identity before a nested stdcall can balance its caller.
+`StackCleanupDoesNotGrantMemoryBorrowAuthority` checks exact
 direct/indirect target identity, registration-overlapping pops and duplicate
 contracts while retaining the independent call-frame refusal.
+
+The Windows nonlocal-call regressions also check `_setjmp3`, `_setjmpex`,
+`__intrinsic_setjmp`, `__intrinsic_setjmpex` and MinGW's ARM wrappers through
+the shared returns-twice/no-return tables. PE32 import calls retain their LLVM
+attributes for IAT and register-carried targets at both optimization settings,
+and the CFG retains ordinary continuations only for returning entries. The
+native pointer target adapts these spellings with tail veneers to the host's
+independent `setjmp`/`longjmp` runtime and checks 512 live values on each calling
+route at `-O0` and `-O2`. Pointer mirrors honor the loader's post-relocation
+read-only record as well as section names; the four-architecture, three-format
+signature matrix checks this alongside mutable and atomic counterexamples.
+These control-flow properties follow
+the [Microsoft setjmp contract](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setjmp3)
+and [MinGW-w64 runtime declarations](https://github.com/mingw-w64/mingw-w64/blob/master/mingw-w64-headers/crt/setjmp.h);
+they do not prove the contents or lifetime of a caller's jump buffer.
+
 Cleanup-relay tests cover both EBP displacement widths, exact thiscall object
 reads, PE32 relative-branch wrapping, nonwrapping storage, writable/overlapping
 code, fixups, call substitutions, callee stack pops and FS-dependent effects.

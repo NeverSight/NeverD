@@ -21,7 +21,7 @@ struct BinaryImage;
 struct LowFunc;
 
 /// Prove the entry ESP is restored at every ordinary near return and that
-/// all return-pop immediates agree. Nested calls invalidate ESP; an explicit
+/// all return-pop immediates agree. Unchecked calls invalidate ESP; an explicit
 /// restoration from an ABI-preserved register can recover it. No memory
 /// value survives this proof, and no memory-effect authority is granted.
 std::optional<uint32_t>

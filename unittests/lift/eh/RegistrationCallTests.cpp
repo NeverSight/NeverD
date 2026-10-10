@@ -188,6 +188,40 @@ TEST(RegistrationCallABI, StackCleanupRequiresEveryRestoredNearReturn) {
   }
 }
 
+TEST(RegistrationCallABI, StackCleanupIncludesCheckedNestedImportCleanup) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    // Four stack arguments, RaiseException, then a near return without an
+    // explicit ESP reset. Its exact stdcall contract restores entry ESP.
+    Text.Data = {0x6a, 0,    0x6a, 0,    0x6a, 0, 0x6a, 0,
+                 0xff, 0x15, 0x30, 0x40, 0x40, 0, 0xc3};
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    F.Image.Imports[0].Name = "RaiseException";
+    F.Image.Imports[0].Module = "KERNEL32.dll";
+    ASSERT_TRUE(F.Image.recordImportStorageSlot(
+        ThrowImage::IATVA, "RaiseException", 0,
+        ImportStorageEvidence::ImportDirectory));
+    if (Mutation == 1)
+      F.Image.Imports[0].Module = "untrusted.dll";
+    if (Mutation == 2)
+      F.Image.ConflictingImportStorageSlots.insert(ThrowImage::IATVA);
+    if (Mutation == 3)
+      F.Image.ImportStorageSlots.at(ThrowImage::IATVA).Addend = 4;
+    if (Mutation == 4)
+      Text.Data[0] = Text.Data[1] = 0x90; // One argument was not pushed.
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+              Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+  }
+}
+
 TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
   for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
     SCOPED_TRACE(Mutation);

@@ -142,7 +142,23 @@ std::optional<uint32_t> stackPopForBody(StackBody &Body, va_t Entry) {
       // Deliberately do not store memory facts: an alias, nested call or a
       // saved-SP reload cannot supply an unproved restoration. Register-only
       // affine transfers share the registration state's authoritative rules.
+      std::optional<FrameValue> ImportSP;
+      if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4)
+        if (const auto *Import = Image.findImportAt(Op.Inputs[0].Offset);
+            Import && Import->IATAddr == Op.Inputs[0].Offset)
+          if (auto Bytes = registration_abi::checkedRegistrationImportStackPop(
+                  Image, Import->IATAddr)) {
+            LowOp Adjust;
+            Adjust.Opcode = NdOp::INT_ADD;
+            Adjust.Output = NdVar::reg(x86reg::RSP, 4);
+            Adjust.addInput(Adjust.Output);
+            Adjust.addInput(NdVar::cst(*Bytes, 4));
+            ImportSP = Transfer.evaluate(Adjust, false);
+          }
       Transfer.write(Op, Transfer.evaluate(Op, false));
+      if (ImportSP)
+        State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *ImportSP;
     }
     if (Block.Succs.empty() &&
         (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::RETURN))

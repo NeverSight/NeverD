@@ -231,7 +231,7 @@ which the writer replays against immutable input.
 Registration state recovery also consumes independent returning-stack facts.
 `getCheckedX86CalleeStackPop` replays immutable ordinary callee paths with the
 shared affine transfer, requires restored entry ESP at every near return and
-requires every return-pop immediate to agree. Nested calls forget ESP;
+requires every return-pop immediate to agree. Unchecked nested calls forget ESP;
 explicit restoration through an ABI-preserved register can recover it. Memory
 loads do not acquire a saved-stack identity in this analysis. Already decoded
 interior finally calls use their ordinary subgraph, while the checked
