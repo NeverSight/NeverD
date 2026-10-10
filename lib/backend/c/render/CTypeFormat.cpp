@@ -627,6 +627,15 @@ bool hasCSpelling(const TypeRef &Ty) {
   }
 }
 
+bool hasCValueLayout(const TypeRef &Ty) {
+  if (Ty && Ty->Kind == NdTypeKind::Struct && !Ty->IsEnum &&
+      sourceAggregateMembers(Ty).empty())
+    return false;
+  if (Ty && Ty->Kind == NdTypeKind::Array)
+    return hasCValueLayout(Ty->ElemType);
+  return hasCSpelling(Ty);
+}
+
 static std::string anonymousAggregateName(llvm::Type *Ty) {
   std::string Text;
   llvm::raw_string_ostream Stream(Text);

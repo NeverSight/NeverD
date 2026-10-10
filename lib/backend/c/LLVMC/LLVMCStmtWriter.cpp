@@ -4650,8 +4650,10 @@ LLVMCWriter::joinAllocaForCallArg(const llvm::Value *Arg,
 }
 
 namespace {
-TypeRef debugCallArgType(const FunctionSym &FS, size_t Index) {
-  const bool Indirect = isMsvcIndirectReturn(FS.ReturnType);
+TypeRef debugCallArgType(const FunctionSym &FS, size_t Index,
+                         const CEmitterOptions &Opts) {
+  const bool Indirect =
+      isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format);
   const bool Member =
       Indirect && !FS.Params.empty() && FS.Params[0].first == "this";
   if (Member) {
@@ -4727,7 +4729,7 @@ TypeRef LLVMCWriter::enumTypeUsedAsCallArg(const llvm::AllocaInst *Slot) const {
       for (unsigned I = 0; I < CB->arg_size(); ++I) {
         if (peelIntCast(CB->getArgOperand(I)) != LI)
           continue;
-        TypeRef Ty = debugCallArgType(*FS, I);
+        TypeRef Ty = debugCallArgType(*FS, I, Opts);
         if (Ty && Ty->Kind == NdTypeKind::Struct && Ty->IsEnum)
           return Ty;
       }
@@ -4894,7 +4896,7 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
   if (const auto *CI =
           llvm::dyn_cast<llvm::ConstantInt>(peelIntegerView(Arg))) {
     if (const auto FS = debugCallee(Call))
-      if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx),
+      if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts),
                                         CI->getZExtValue()))
         return *Name;
   }
@@ -4902,7 +4904,8 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
     uint64_t Val = 0;
     if (!llvm::StringRef(*Imm).getAsInteger(0, Val))
       if (const auto FS = debugCallee(Call))
-        if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx), Val))
+        if (auto Name =
+                enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts), Val))
           return *Name;
   }
   return valueStr(Arg);

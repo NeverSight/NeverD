@@ -371,8 +371,8 @@ TEST(HighCIntegerWidths, NamedFieldArithmeticUsesModularOperations) {
       Record->FieldDisplayOffsets = {0, Width};
       Record->FieldDisplayTypes = {Type, Type};
       const auto Pointer = NdType::makePtr(Record);
-      Declarations += "typedef struct { " + typeToC(Type) + " left, right; } " +
-                      RecordName + ";\n";
+      Declarations += "typedef struct " + RecordName + " { " + typeToC(Type) +
+                      " left, right; } " + RecordName + ";\n";
       for (NdOp Op : {NdOp::INT_ADD, NdOp::INT_SUB, NdOp::INT_MULT}) {
         HighFunc Func;
         Func.Name = "field" + std::to_string(Bits) + (Signed ? "_s" : "_u") +
@@ -484,7 +484,7 @@ TEST(HighCIntegerWidths, NamedFieldUpdatesPreserveAdjacentFields) {
                                      static_cast<uint16_t>(Width * 2)};
       Record->FieldDisplayTypes = {Type, Type, Type};
       const auto Pointer = NdType::makePtr(Record);
-      Declarations += "typedef struct { " + typeToC(Type) +
+      Declarations += "typedef struct " + RecordName + " { " + typeToC(Type) +
                       " before, value, after; } " + RecordName + ";\n";
       for (NdOp Op : {NdOp::INT_ADD, NdOp::INT_SUB}) {
         HighFunc Func;
