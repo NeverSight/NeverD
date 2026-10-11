@@ -618,14 +618,20 @@ they do not reuse CFG or value proofs across changed snapshots. A builder may
 retain one successful graph with an owned instruction snapshot. Reuse requires
 exact instruction facts, LowOps, effective edges, block starts, proof roots,
 conditional roots and storage-owner inputs. Hits pay the complete original
-graph-construction charge. The graph may also retain up to 64 completed query
-batches under a separate 8 MiB retained-payload allowance. Exact ordered query
+graph-construction charge. The graph may also retain up to 64 query outcomes
+under a separate 8 MiB retained-payload allowance. Exact ordered query
 fields, proof limits, output shape, function context and both relocation
 occurrence inventories bind each result. Hits pay the complete cold value
-charge; a smaller budget runs the normal path. Incomplete proofs and batches
-using pointer-named symbolic values or merges are excluded. Image metadata is
-immutable during a build, and every new build discards this state. These caches
-do not bypass proposal validation, rollback or fixed-point stages.
+charge; a smaller budget runs the normal path. Fixed reconstruction-depth and
+match-work refusals may be retained with the exact result, completion flag and
+feasible mask of each query. A local depth refusal does not suppress independent
+queries; a shared match-work exhaustion stops the remaining queries and clears
+every output. Replay preserves these incomplete states. Changing either limit
+or the proof context requires fresh analysis. Any other incomplete query,
+outer-account exhaustion, symbolic failure or use of pointer-named symbolic
+values or merges excludes the batch. Image metadata is immutable during a
+build, and every new build discards this state.
+These caches do not bypass proposal validation, rollback or fixed-point stages.
 
 A bounded group of AArch64 absolute dispatches in one relocatable ELF function
 can share an exact read-only pointer object. Each selector first proves its
