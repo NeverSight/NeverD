@@ -514,6 +514,8 @@ class Writer {
       if (E->IsIndirectCall || E->IndirectTarget || E->SourceCallHint ||
           E->DoesNotReturn || !x86FPStateShapeIsValid(E->IntrinsicId, Shape) ||
           isX86FPConversionStateIntrinsic(E->IntrinsicId) ||
+          isX86FPScalarConvertStateIntrinsic(E->IntrinsicId) ||
+          isX86FPPackedConvertStateIntrinsic(E->IntrinsicId) ||
           isX86FPRoundStateIntrinsic(E->IntrinsicId) ||
           isX86FPApprox12Intrinsic(E->IntrinsicId) ||
           isX86FPArithStateIntrinsic(E->IntrinsicId) ||

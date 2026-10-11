@@ -14,7 +14,7 @@ Il contenitore determina come un file viene validato e ricostruito, il set di is
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | osservazione durante l’esecuzione |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | osservazione durante l’esecuzione |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
 
 Gli input DLL PE32+ sono identificati da `IMAGE_FILE_DLL`. Un EXE guest modellato chiama `LoadLibraryA` e poi `FreeLibrary`, usando il normale ciclo di dipendenze, TLS e `DllMain`. L’ingresso DLL accettato è la chiamata di collegamento al processo; non si inventano argomenti per export arbitrari. Nomi, ordinali, alias, dati e inoltri sono conservati. I puntatori agli export propri rimangono interni, senza autoimportazioni. La stessa regola vale per gli indirizzi restituiti dagli helper: un risultato interno revoca le prove precedenti di riparazione degli import per quel sito.
 
@@ -25,6 +25,12 @@ Con `NEVERD_ENABLE_DRIVER_EMULATION=ON`, le immagini PE x64 del sottosistema nat
 UNPACK dei driver disattiva la registrazione delle singole scritture e mantiene la convalida della memoria e gli osservatori di ripristino. Il budget degli eventi conta le chiamate API; i limiti di istruzioni e tempo restano validi.
 
 Il recupero verifica argomenti iniziali, frame di ritorno e spazio riservato, registri non volatili, flag di direzione, controlli floating point e proprietà degli oggetti kernel. Pool conservati, puntatori presi in prestito, oggetti del loader modificati o effetti non contabilizzati producono `unsupported_state`; `snapshot_only` conserva la diagnostica. Non esiste un materializzatore `restore_runtime` per lo stato kernel. Gli import usano le identità degli export kernel; gli export originali vengono validati e il checksum PE ricalcolato. Il risultato a base fissa non dimostra caricamento nel kernel Windows, validità della firma o esecuzione dei percorsi non raggiunti.
+
+Con `backend: "unicorn"` e `execution_contract: "driver-strict"`, il recupero dei driver x64 usa la decodifica delle istruzioni a esecuzione ferma e il monitoraggio delle scritture RAM completate attraverso alias fisici. Questo contratto usa la semantica delle istruzioni di Unicorn; `checked-x64-v1` ne verifica l’ammissione prima dell’esecuzione.
+
+Gli MDL temporanei sulle pagine immagine del loader non aggiungono più una dipendenza di ripristino dopo la rimozione di tutti gli alias, il rilascio di tutti i blocchi e la liberazione di tutti i descrittori. Il contratto ammette alias kernel con cache senza indirizzo richiesto. Gli MDL ancora attivi, altri tipi di proprietà o mapping e le letture guest delle identità fisiche PFN restano dipendenze; contano anche le letture dei servizi modellati di copia, spostamento e confronto.
+
+Le letture del clock tramite `KeQueryPerformanceCounter`, `RDTSC` o `RDTSCP` mantengono una dipendenza esplicita per il ripristino del driver. I valori acquisiti del contatore e della frequenza non hanno un contratto di riassociazione a un nuovo ambiente kernel. Il ripristino predefinito restituisce `unsupported_state`; `snapshot_only` conserva la diagnosi.
 
 ```bash
 neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'

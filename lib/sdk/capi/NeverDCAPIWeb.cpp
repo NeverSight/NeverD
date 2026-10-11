@@ -754,6 +754,38 @@ const char *neverd_web_sea_records_json(neverd_web_session_t Session,
 #endif
 }
 
+const char *
+neverd_web_nexe_extract_json(neverd_web_session_t Session,
+                             const char *ExpectedRevision, size_t RevisionSize,
+                             const char *ArtifactID, size_t ArtifactIDSize,
+                             const char *Profile, size_t ProfileSize) {
+#ifdef NEVERD_ENABLE_WEB_ANALYSIS
+  return invoke(Session, [&](auto &S) {
+    return S.extractNexe(buffer(ExpectedRevision, RevisionSize, 20),
+                         buffer(ArtifactID, ArtifactIDSize, 64),
+                         buffer(Profile, ProfileSize, 64));
+  });
+#else
+  return unavailable();
+#endif
+}
+const char *
+neverd_web_nexe_records_json(neverd_web_session_t Session,
+                             const char *ExpectedRevision, size_t RevisionSize,
+                             const char *ExtractionID, size_t ExtractionIDSize,
+                             const char *RecordKind, size_t RecordKindSize,
+                             uint64_t Offset, uint64_t Limit) {
+#ifdef NEVERD_ENABLE_WEB_ANALYSIS
+  return invoke(Session, [&](auto &S) {
+    return S.nexeRecords(buffer(ExpectedRevision, RevisionSize, 20),
+                         buffer(ExtractionID, ExtractionIDSize, 64),
+                         buffer(RecordKind, RecordKindSize, 16), Offset, Limit);
+  });
+#else
+  return unavailable();
+#endif
+}
+
 const char *neverd_web_bun_extract_json(neverd_web_session_t Session,
                                         const char *ExpectedRevision,
                                         size_t RevisionSize,

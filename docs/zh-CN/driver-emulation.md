@@ -174,6 +174,8 @@ READ／WRITE／IOCTL 可声明 `interrupt_events`，每项指定 `after_100ns`�
 
 `KeFlushIoBuffers` 验证有效的已锁定／非分页 MDL。模型平台具有缓存一致性，因此 ReadOperation 和 DmaOperation 的任意取值均无需额外缓存副本；此调用不释放 DMA 所有权，也不替代 FlushAdapterBuffers。[通道场景](../examples/driver-dma-channel-scenario.json)运行原创 `driver_wdm_dma_channel.c`，执行两次 MapTransfer、一个跨页设备事务、独立声明的 IRQ/DPC、整体刷新及确切寄存器释放。真实普通／CFG 镜像使用 `NEVERD_WDM_DMA_CHANNEL_FIXTURE` 和 `NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE`。
 
+由加载器拥有的镜像区间支持的系统 MDL 别名允许访问所描述 4 KiB 页中的已知镜像字节。即使底层页面已经映射，访问声明镜像范围之外的填充字节也会失败。`ByteOffset` 和 `ByteCount` 仍表示逻辑缓冲区范围，并不是页内 CPU 权限边界。范围之外的镜像字节与原始视图共享，保护和解除映射则作用于完整映射。对象存储仍保留模型对填充区的范围限制。
+
 `KernelPhysicalMemory` 为现有 RAM 分配最多 16384 个、每页 4096 字节的模型物理页身份。CPU 虚拟地址、物理页身份和设备逻辑地址彼此区分。已构建 MDL 的 PFN 数组以只读方式暴露这些共享身份，未构建描述符没有可用 PFN。相邻小分配可以共享 PFN，但字节范围和生命周期仍独立。公共缓冲区、池和请求缓冲区使用 `GuestMemory` 已有的同一份字节，不增加 DMA 数据副本。有效 SG 映射固定确切数据范围及描述符；完成、池／MDL 释放和拆除在退休存储前拒绝尚存依赖。解除直接 MDL 映射只撤销 CPU 系统映射，DMA 仍可访问锁定的底层 RAM。`DmaWritable` 将写锁定契约与 CPU 映射权限分开记录：设备写入要求直接 READ／OUT_DIRECT 或可写非分页存储；WRITE／IN_DIRECT 不会因为 CPU 映射可写就取得该许可。
 
 `GetScatterGatherList` 按 MDL 原始范围验证 CurrentVa／Length，并在现有底层 RAM 上生成逻辑页片段。映射寄存器可用时，真实的四参数 void `AdapterListControl` 在 API 返回前内嵌执行；否则接纳过程保留数据／描述符，并为 PDO 的 FIFO 预留回调，直到资源释放。此范围没有 StartIo 所有权，因此回调第二个 IRP 参数为 NULL。回调返回不会释放映射。`PutScatterGatherList` 可以在回调内执行；Put 后驱动可以完成请求并释放最后一个适配器，而回调续接和设备引用持续到返回。有效 SG 映射期间，CPU 必须先 Put 才能访问数据；仍在等待映射寄存器的回调尚未把字节交给设备独占。释放公共缓冲区必须匹配原适配器、长度、逻辑地址和 CPU 地址。逻辑地址在整个会话中永不复用，重启也不例外。缺少真实生产者的资源等待会明确停滞，不虚构完成或截止时间。
@@ -358,6 +360,7 @@ neither 请求可声明 `user_buffers`（`id`、`size`、可选 `input`／`acces
 | `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | 驻留的 KMUTEX 按逻辑线程持有，支持跨嵌套回调和 SEH 的递归获取；KeReleaseMutex 返回先前的有符号信号状态，要求持有者和匹配的 DISPATCH_LEVEL 获取上下文，且仅接受 Wait=FALSE。持有期间禁止最外层返回、重新初始化或释放存储。非持有者释放触发 `STATUS_MUTANT_NOT_OWNED`。 |
 | `PsCreateSystemThread`, `PsTerminateSystemThread`, `ObReferenceObjectByHandle`, `ObfDereferenceObject`, `ZwClose` | 系统进程中的有界线程在 PASSIVE_LEVEL 运行。句柄与不透明线程对象的引用各自持有生命周期；PsTerminateSystemThread 不返回客体代码，并使线程对象可等待且进入信号状态。APC 交付、进程优先级类别和带类型的对象引用尚未建模。 |
 | `KeSetPriorityThread`, `KeQueryPriorityThread` | 在 `PASSIVE_LEVEL` 访问运行时优先级；设置接受 1..31 并返回原值，确定性初始值为 8，要求已知线程对象。`scheduling` 启用优先级调度；动态提升与进程优先级类别尚未支持。 [driver-scheduling.md](driver-scheduling.md) |
+| `KeQueryActiveProcessors`, `KeSetSystemAffinityThread`, `KeRevertToUserAffinityThread` | 组 0 只有一个处理器：`KeQueryActiveProcessors` 在任意有效 IRQL 返回掩码 `1`。旧式亲和性设置／恢复对在 IRQL <= DISPATCH_LEVEL 接受掩码 `1`，跨挂起和嵌套调用跟踪逻辑线程所有权，并要求外层返回前恢复。其他掩码和无对应设置的恢复会明确失败。这些依赖环境的调用保留 UNPACK 恢复依赖。 |
 | `KeEnterCriticalRegion`, `KeLeaveCriticalRegion`, `KeEnterGuardedRegion`, `KeLeaveGuardedRegion`, `KeAreApcsDisabled`, `KeAreAllApcsDisabled` | 按线程跟踪可嵌套的 APC 禁用状态。临界区及持有的 KMUTEX 禁用普通内核 APC；保护区和 IRQL >= APC_LEVEL 禁用全部 APC。系统线程启动时处于一层临界区内。未匹配的离开和带未平衡状态返回都会失败；尚未实现 APC 投递。 |
 | `KeWaitForSingleObject` | 单个已初始化的事件、定时器、信号量或互斥体；非警报 `KernelMode`、原因 `Executive`；零超时轮询、有限相对／绝对或无限等待；非零／无限等待要求 IRQL <= APC_LEVEL |
 | `KeWaitForMultipleObjects` | 非警报式 `KernelMode`／`Executive` 下对 1..64 个对象执行 `WaitAll`／`WaitAny`；超过三个须提供非分页 `KWAIT_BLOCK`。原子获取、数组索引结果、线程引用和超时释放见[驱动调度](driver-scheduling.md)。 |
@@ -366,7 +369,7 @@ neither 请求可声明 `user_buffers`（`id`、`size`、可选 `input`／`acces
 | `IofCompleteRequest`、`IoCompleteRequest` | 使用 `IO_NO_INCREMENT` 执行完成展开，支持暂停／继续；仅在最终展开边界释放 IRP、MDL 和缓冲区 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的来宾缓冲区操作，每次调用最多 1 MiB；要求不重叠的复制 API 会拒绝重叠 |
 
-`MmProbeAndLockPages` 支持在 IRQL <= APC_LEVEL 下，以 `KernelMode` 锁定输入驱动镜像中由加载器拥有的单个连续区间。镜像页必须可读，并受物理页配额限制。模型已持有私有且驻留的镜像后备存储：即使原镜像视图只读，`IoWriteAccess` 和 `IoModifyAccess` 也允许可写 MDL 别名；`IoReadAccess` 仍只允许只读别名。原镜像保护属性保持不变。镜像空洞和无关映射不属于该所有权；低于用户地址边界的镜像也通过所有权识别。锁定后必须解锁并释放描述符。MDL 调用保留现有 UNPACK 恢复依赖；模型中的镜像访问成功不代表驱动已可移植恢复。
+`MmProbeAndLockPages` 支持在 IRQL <= APC_LEVEL 下，以 `KernelMode` 锁定输入驱动镜像中由加载器拥有的单个连续区间。镜像页必须可读，并受物理页配额限制。模型已持有私有且驻留的镜像后备存储：即使原镜像视图只读，`IoWriteAccess` 和 `IoModifyAccess` 也允许可写 MDL 别名；`IoReadAccess` 仍只允许只读别名。原镜像保护属性保持不变。镜像空洞和无关映射不属于该所有权；低于用户地址边界的镜像也通过所有权识别。锁定后必须解锁并释放描述符。加载器拥有的镜像页上，临时 MDL 的全部别名解除、全部锁释放且全部描述符释放后，不再额外阻止恢复。此契约允许未指定地址的内核态缓存别名。存活 MDL、其他所有权或映射类型，以及来宾对物理 PFN 身份的读取仍保留恢复依赖；建模的复制、移动和比较服务读取也计入。
 
 `KernelDispatcher` 按带符号的 32 位 `LONG` 解码信号量的 `Count`、`Limit` 和 `Adjustment`，按 32 位 `ULONG` 解码互斥体的 `Level`，按 8 位 `BOOLEAN` 解码 `Wait`，并依照 [Windows x64 ABI](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170) 忽略寄存器中未定义的高位。有效位中的非法值及信号量溢出仍在修改对象状态之前被拒绝。
 
@@ -465,7 +468,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v95`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v100`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 
@@ -591,5 +594,7 @@ CPU0 显式抢占、虚拟时钟语义及当前边界见[驱动调度](driver-sc
 `KeQueryPerformanceCounter` 返回调度器共享的 100 ns 时钟值，固定频率为每秒 10,000,000 次。可选输出指针经过完整八字节写入权限及对象生命周期检查。调用支持所有有效 x64 IRQL。协作模式只在已有调度边界推进时间；指令时钟模式沿用配置的计时方式。读取计数器不会创建第二个时钟或自行推进时间。这是确定性的执行配置，不是宿主硬件测量。独立编译的运行时样本在原始及重定位地址上检查静态／动态身份、频率与单调性，并由原生 CPU 后端执行。
 
 `RDTSC` 与 `RDTSCP` 和 `KeQueryPerformanceCounter` 共用 10 MHz 调度时钟。`RDTSCP` 在 ECX 中返回单个模型处理器的编号零。EAX/EDX（以及 RDTSCP 的 ECX）清零高 32 位，其他寄存器和标志保持不变。协作模式下读取不推进时间；显式指令调度模式在计入本条已获准指令后读取时间，结果不依赖时间片长度。溢出在写入寄存器结果之前停止，指令预算和观察器停止仍然有效。此配置不测量宿主 TSC 频率，也不暴露宿主处理器身份；MSR 访问、RDPMC 和其他未建模 CPU 查询仍不支持。
+
+通过 `KeQueryPerformanceCounter`、`RDTSC` 或 `RDTSCP` 读取时钟会保留明确的驱动恢复依赖。捕获的计数器和频率值尚无面向新内核环境的重绑定契约。默认恢复返回 `unsupported_state`；`snapshot_only` 保留此诊断。
 
 `KernelModuleImages` 根据 `KernelExportRegistry` 生成可读的 PE 头和导出表；静态导入、动态查找和模块枚举共享同一组地址。提供者代码保持不透明，清单描述的是模拟环境，而非宿主内核。两个输出都在写入前检查，包括池内存生命周期与重叠。Nt 查询要求已知的内核 previous-mode；Zw 查询采用内核调用契约。完整模块查询会保留明确的恢复依赖，即使其缓冲区已释放；提供者映像指针也按借用状态跟踪。`KernelExportTests.cpp` 检查 PE 解析、权限、ABI 字段、写入拒绝和恢复依赖；原创编译运行时夹具在 CPU 后端遍历这些导出表。

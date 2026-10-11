@@ -11,6 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPScalarConvertState.h"
 #include "X86LiftAPXValidation.h"
 #include "X86LiftDetail.h"
 #include "X86ScalarFPConversion.h"
@@ -549,78 +550,14 @@ bool liftCoreMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     return liftScalarFPIntegerState(
         L, S, Insn, X86, Insn->id == X86_INS_CVTSS2SI ? 4 : 8, false, false);
   }
-  case X86_INS_CVTSI2SD: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    // Convert into an 8-byte temp so FLOAT_INT2FLOAT infers double, then
-    // merge into DEST.  Legacy SSE writes only [63:0]; [127:64] is unchanged.
-    // clang -O2 consumes that high lane (`cvtsi2sd; mulpd`).
-    NdVar Tmp = S.makeTemp(8);
-    S.emit(NdOp::FLOAT_INT2FLOAT, Tmp, {Src});
-    if (X86.operands[0].type == X86_OP_MEM) {
-      S.storeToMem(X86.operands[0], Tmp);
-    } else if (Dst.Size > 8) {
-      NdVar Hi = S.makeTemp(Dst.Size - 8);
-      S.emit(NdOp::SUBBYTES, Hi, {Dst, NdVar::cst(8, 4)});
-      S.emit(NdOp::CONCAT, Dst, {Hi, Tmp});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Tmp});
-    }
-    break;
-  }
-  case X86_INS_CVTSI2SS: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    // Convert into a 4-byte temp so FLOAT_INT2FLOAT infers float, then merge
-    // into DEST.  Legacy SSE writes only [31:0]; [127:32] is unchanged.
-    NdVar Tmp = S.makeTemp(4);
-    S.emit(NdOp::FLOAT_INT2FLOAT, Tmp, {Src});
-    if (X86.operands[0].type == X86_OP_MEM) {
-      S.storeToMem(X86.operands[0], Tmp);
-    } else if (Dst.Size > 4) {
-      NdVar Hi = S.makeTemp(Dst.Size - 4);
-      S.emit(NdOp::SUBBYTES, Hi, {Dst, NdVar::cst(4, 4)});
-      S.emit(NdOp::CONCAT, Dst, {Hi, Tmp});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Tmp});
-    }
-    break;
-  }
+  case X86_INS_CVTSI2SD:
+  case X86_INS_CVTSI2SS:
+    return liftScalarConvertToFPState(
+        L, S, Insn, X86, true, InsnId == X86_INS_CVTSI2SD ? 8 : 4, false);
   case X86_INS_CVTSD2SS:
-  case X86_INS_CVTSS2SD: {
-    if (X86.op_count < 2)
-      break;
-    bool ToDouble = (Insn->id == X86_INS_CVTSS2SD);
-    unsigned SrcFPSz = ToDouble ? 4 : 8;
-    unsigned DstFPSz = ToDouble ? 8 : 4;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    // Narrow the source to its real scalar FP width: a full XMM (16 bytes)
-    // would make the emitter mis-infer the source type and pick the wrong
-    // conversion direction.
-    if (Src.Size > SrcFPSz) {
-      NdVar N = S.makeTemp(SrcFPSz);
-      S.emit(NdOp::SUBBYTES, N, {Src, NdVar::cst(0, 4)});
-      Src = N;
-    }
-    NdVar Tmp = S.makeTemp(DstFPSz);
-    S.emit(NdOp::FLOAT_FLOAT2FLOAT, Tmp, {Src});
-    if (X86.operands[0].type == X86_OP_MEM) {
-      S.storeToMem(X86.operands[0], Tmp);
-    } else if (Dst.Size > DstFPSz) {
-      // Scalar SSE conversions preserve the upper lanes of the destination.
-      NdVar Hi = S.makeTemp(Dst.Size - DstFPSz);
-      S.emit(NdOp::SUBBYTES, Hi, {Dst, NdVar::cst(DstFPSz, 4)});
-      S.emit(NdOp::CONCAT, Dst, {Hi, Tmp});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Tmp});
-    }
-    break;
-  }
+  case X86_INS_CVTSS2SD:
+    return liftScalarConvertToFPState(
+        L, S, Insn, X86, false, InsnId == X86_INS_CVTSS2SD ? 8 : 4, false);
 
   // --- LEA ---
   case X86_INS_LEA: {

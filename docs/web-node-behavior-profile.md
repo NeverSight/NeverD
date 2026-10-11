@@ -70,7 +70,7 @@ ID, hash and size. Unrecorded installed-package ownership stays null; no root
 or longest-prefix fallback is invented. Exact direct declared-entry matches
 retain up to 16 entry IDs, the full count and truncation status.
 
-For Bun/SEA sources, the session builds ancestry only from its retained typed
+For Bun/SEA/nexe sources, the session builds ancestry only from its retained typed
 extractor results. It can follow at most 16 edges to an inventoried file,
 including a native member of a captured archive. The resulting
 `embedded_source` relation retains the **delivery package** and origin evidence,

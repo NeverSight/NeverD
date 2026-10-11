@@ -49,6 +49,18 @@ llvm::Expected<uint64_t> mdlRecordSize(uint64_t Address, uint32_t Size) {
 }
 } // namespace
 
+std::optional<uint64_t> KernelModel::imageOwnerForRange(uint64_t Address,
+                                                        uint64_t Size) const {
+  auto It = ImageRAM.upper_bound(Address);
+  if (It == ImageRAM.begin())
+    return std::nullopt;
+  --It;
+  const uint64_t Offset = Address - It->first;
+  if (Offset >= It->second || Size > It->second - Offset)
+    return std::nullopt;
+  return It->first;
+}
+
 llvm::Expected<uint64_t>
 KernelModel::createMDLRecord(uint64_t Address, uint32_t Size, uint16_t Flags) {
   auto Extent = mdlRecordSize(Address, Size);
@@ -288,13 +300,9 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     return mdlError(
         "MmProbeAndLockPages requires a supported mode and lock operation");
   auto &State = It->second;
-  auto Image = ImageRAM.upper_bound(State.OriginalAddress);
-  if (Image != ImageRAM.begin())
-    --Image;
-  const bool ImageRange =
-      Image != ImageRAM.end() && State.OriginalAddress >= Image->first &&
-      State.OriginalAddress - Image->first < Image->second &&
-      State.ByteCount <= Image->second - (State.OriginalAddress - Image->first);
+  const auto ImageOwner =
+      imageOwnerForRange(State.OriginalAddress, State.ByteCount);
+  const bool ImageRange = ImageOwner.has_value();
   const bool UserRange =
       State.OriginalAddress < profile::UserProbeLimit && !ImageRange;
   auto Range = [&]() -> llvm::Expected<UserMemoryRange> {
@@ -309,7 +317,7 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     uint64_t Start = 0;
     bool Pageable = true;
     if (ImageRange) {
-      Start = Image->first;
+      Start = *ImageOwner;
     } else {
       auto Pool = Allocations.upper_bound(State.OriginalAddress);
       if (Pool == Allocations.begin())
@@ -342,7 +350,7 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
       return llvm::make_error<KernelGuestException>(
           exceptions::StatusAccessViolation);
     if (ImageRange && !Physical.find(Start))
-      if (auto E = Physical.registerRegion(Start, Start, Image->second))
+      if (auto E = Physical.registerRegion(Start, Start, ImageRAM.at(Start)))
         return E;
     auto Owner = Physical.ownerForRange(State.OriginalAddress, State.ByteCount);
     if (!Owner)
@@ -1115,6 +1123,8 @@ llvm::Error KernelModel::validateMDLAccess(uint64_t Address, uint32_t Size,
             profile::PageSize;
         if (Last > MDLSize + Pages * profile::PointerSize)
           return mdlError("MDL physical PFN read exceeds its described pages");
+        if (UnpackBaseline)
+          UnpackMDLIdentityRead = true;
       }
     }
     // Driver MDLs describe an existing allocation; neither their byte range
@@ -1135,8 +1145,24 @@ llvm::Error KernelModel::validateMDLAccess(uint64_t Address, uint32_t Size,
       continue;
     if (!State.Mapped)
       return mdlError("guest access to an unmapped MDL system buffer");
-    if (Address < State.Buffer || End > State.Buffer + State.ByteCount)
-      return mdlError("guest access exceeds the MDL byte range");
+    // Image ownership admits known bytes before ByteOffset and after
+    // ByteCount. Intersect the physical pages with the actual owned span;
+    // an incomplete page must not turn unrelated padding into image data.
+    // Object-backed owners retain their bounded logical-buffer contract.
+    const auto Image = ImageRAM.find(State.Pool);
+    uint64_t Begin = State.Buffer;
+    uint64_t Limit = State.Buffer + State.ByteCount;
+    if (Image != ImageRAM.end()) {
+      const auto Offset = State.OriginalAddress - Image->first;
+      const auto PageOffset = State.OriginalAddress & (profile::PageSize - 1);
+      Begin -= std::min(Offset, PageOffset);
+      Limit = State.Buffer + std::min(Image->second - Offset,
+                                      State.AllocationSize - PageOffset);
+    }
+    if (Address < Begin || End > Limit)
+      return mdlError(Image != ImageRAM.end()
+                          ? "guest access exceeds the MDL image backing range"
+                          : "guest access exceeds the MDL byte range");
     if (IsWrite) {
       auto Writable = Memory.canAccess(Address, Size, Write);
       if (!Writable)

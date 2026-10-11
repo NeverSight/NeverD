@@ -3,6 +3,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -498,6 +499,10 @@ void expectVexScalarFma(Arch Target, FmaFamily Family, FmaOrder Order,
   Image.Segments.push_back(std::move(Data));
   NdOpEmulator Emulator(Image);
   Emulator.setStrictMode(true);
+  // The memory contract checks canonical x64 addresses before reading.
+  if (Target == Arch::X64)
+    Emulator.setX86LinearAddressBits(48);
+  Emulator.setLoadCollect(true);
   const RegInfo DestinationReg = mapCapstoneReg(X86_REG_ZMM0);
   Emulator.setRegisterBytes(DestinationReg.Offset, ToBytes(Destination));
   Emulator.setRegisterBytes(mapCapstoneReg(X86_REG_ZMM2).Offset,
@@ -506,15 +511,29 @@ void expectVexScalarFma(Arch Target, FmaFamily Family, FmaOrder Order,
                             ToBytes(Source2));
   Emulator.setRegister(mapCapstoneReg(X86_REG_RAX).Offset, 0x4000);
   if (Memory) {
-    size_t Loads = 0;
-    for (const LowOp &Op : Ops)
-      if (Op.Opcode == NdOp::LOAD) {
-        ++Loads;
-        EXPECT_EQ(Op.Output.Size, sizeof(Float));
+    // The FMA memory contract owns the r/m access together with MXCSR
+    // completion, so no separate LOAD may read the scalar source.
+    size_t Loads = 0, Contracts = 0;
+    for (const LowOp &Op : Ops) {
+      Loads += Op.Opcode == NdOp::LOAD;
+      if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+          Op.Inputs[0].isConst() &&
+          Op.Inputs[0].Offset == unsigned(Intrinsic::X86FPFmaMemoryState)) {
+        ++Contracts;
+        EXPECT_EQ(Op.Output.Size, sizeof(Float) + 4);
       }
-    EXPECT_EQ(Loads, 1u);
+    }
+    EXPECT_EQ(Loads, 0u);
+    EXPECT_EQ(Contracts, 1u);
   }
   EXPECT_EQ(Emulator.run(Ops), Ops.size());
+  if (Memory) {
+    // Exactly the scalar element is read, never a full vector.
+    const auto &Reads = Emulator.getLoadRecords();
+    ASSERT_EQ(Reads.size(), 1u);
+    EXPECT_EQ(Reads[0].Addr, UINT64_C(0x4000));
+    EXPECT_EQ(Reads[0].Size, sizeof(Float));
+  }
   const auto Result = Emulator.getRegisterBytes(DestinationReg.Offset);
   ASSERT_TRUE(Result);
   EXPECT_EQ(*Result, ToBytes(Expected));

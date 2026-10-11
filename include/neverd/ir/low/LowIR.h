@@ -256,7 +256,13 @@ inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
   const bool Arithmetic =
       Op.NumInputs && Op.Inputs[0].isConst() &&
       isX86FPArithStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
-  const unsigned ControlIndex = Memory ? 2 : 1;
+  const bool ScalarConvert =
+      Op.NumInputs && Op.Inputs[0].isConst() &&
+      (isX86FPScalarConvertStateIntrinsic(
+           static_cast<Intrinsic>(Op.Inputs[0].Offset)) ||
+       isX86FPPackedConvertStateIntrinsic(
+           static_cast<Intrinsic>(Op.Inputs[0].Offset)));
+  const unsigned ControlIndex = Memory || ScalarConvert ? 2 : 1;
   const bool Fma =
       Op.NumInputs && Op.Inputs[0].isConst() &&
       isX86FPFmaStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));

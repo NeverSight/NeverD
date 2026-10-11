@@ -142,6 +142,13 @@ public:
   std::string seaRecords(std::string_view ExpectedRevision,
                          std::string_view ExtractionID, uint64_t Offset,
                          uint64_t Limit) const;
+  std::string extractNexe(std::string_view ExpectedRevision,
+                          std::string_view ArtifactID,
+                          std::string_view Profile);
+  std::string nexeRecords(std::string_view ExpectedRevision,
+                          std::string_view ExtractionID,
+                          std::string_view RecordKind, uint64_t Offset,
+                          uint64_t Limit) const;
   /// Explicit local raw disclosure into a new directory. Fixed output names;
   /// captured names are manifest data only. Never overwrites or executes.
   std::string exportBun(std::string_view ExpectedRevision,

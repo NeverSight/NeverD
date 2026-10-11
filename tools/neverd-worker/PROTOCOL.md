@@ -200,6 +200,8 @@ Heartbeat retains its native fields and adds
 | `web_asar_extract` | Exact `revision`, original `artifact_id`, optional captured `unpacked_directory_id`; no host companion lookup, member integrity/availability explicit |
 | `web_asar_records` | Exact `revision`, `extraction_id`, optional page fields; private names, actual storage identities/ranges, usable `member_id` selections |
 | `web_bun_extract` | Exact `revision`, original `artifact_id`; explicit qualified Bun ELF/thin Mach-O/PE profiles; no execution or producer authentication |
+| `web_nexe_extract` | Exact `revision`, original or available member `artifact_id`, and explicit `profile`; bounded resource envelope, unverified opaque native prefix/signatures/runtime |
+| `web_nexe_records` | Exact `revision`, `extraction_id`, `record_kind:regions/members`, optional `offset:0,limit:128` (max 512); private paths/payloads omitted, explicit selection IDs for shared consumers |
 | `web_bun_records` | Exact `revision`, `extraction_id`, `record_kind: modules/regions`, optional page fields; original offsets/hashes and private decoded source IDs |
 | `web_source_analyze` | Exact `revision`, `artifact_id`, explicit `source_type` |
 | `web_source_nodes` | Exact `revision`, `source_id`, optional page fields |

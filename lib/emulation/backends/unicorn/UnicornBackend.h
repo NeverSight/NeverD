@@ -76,6 +76,9 @@ public:
   /// Restore between run() calls. A snapshot cannot recover a faulted CPU.
   llvm::Error restoreContext(const BackendContext &Context) override;
   llvm::Error installHooks(BackendHooks Hooks) override;
+  llvm::Error
+  setMemoryWriteWatches(const std::vector<MemoryWriteWatch> &Watches) override;
+  llvm::Expected<uint32_t> instructionSize(uint64_t Address) override;
   /// A normally stopped CPU can continue. A faulted CPU cannot resume: Unicorn
   /// does not guarantee its internal state after an unhandled execution error.
   llvm::Expected<ExecutionExit>

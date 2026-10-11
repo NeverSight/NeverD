@@ -2404,18 +2404,23 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
       }
     }
   }
-  if (DebugFn) {
+  {
+    // Analyses cache rendered parameter views before the signature is printed.
+    // Allocate their final identifiers once, before any expression can use
+    // them.
     const bool Indirect =
+        !Opts.PreserveLLVMFunctionTypes && DebugFn &&
         isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format);
     const bool Member = Indirect && !DebugFn->Params.empty() &&
                         DebugFn->Params[0].first == "this";
     const int Sret = !Indirect ? -1 : (Member ? 1 : 0);
+    CProjectionIdentifierAllocator ParameterIdentifiers;
     unsigned ParamIdx = 0;
     for (llvm::Argument &Arg : Fn.args()) {
       std::string Raw;
       if (Sret >= 0 && static_cast<int>(ParamIdx) == Sret)
         Raw = "result";
-      else {
+      else if (DebugFn) {
         size_t DebugIdx = ParamIdx;
         if (Sret >= 0 && static_cast<int>(ParamIdx) > Sret)
           DebugIdx = static_cast<size_t>(ParamIdx - 1);
@@ -2423,8 +2428,13 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
             !DebugFn->Params[DebugIdx].first.empty())
           Raw = DebugFn->Params[DebugIdx].first;
       }
-      if (!Raw.empty())
-        ValNames[&Arg] = std::move(Raw);
+      if (Raw.empty() && Arg.hasName())
+        Raw = Arg.getName().str();
+      if (Raw.empty())
+        Raw = "arg" + std::to_string(ParamIdx);
+      auto Name = ParameterIdentifiers.allocate(Raw, "nd_arg");
+      ValNames[&Arg] = Name;
+      UsedNames.insert(Name);
       ++ParamIdx;
     }
   }
@@ -2433,6 +2443,18 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
 
   scanReferencedBlocks(Fn);
   analyzeIntrinsicStructs(Analysis, Fn);
+  // The dedicated CPU arrays and their extract users share the same identity
+  // as all other locals. Bind it before analysis can cache an indexed view.
+  for (auto &BB : Fn)
+    for (auto &Inst : BB)
+      if (auto Entry = Analysis.IntrinsicStructNames.find(&Inst);
+          Entry != Analysis.IntrinsicStructNames.end()) {
+        auto Name = Entry->second;
+        if (!UsedNames.insert(Name).second)
+          Name = freshVar(Name);
+        ValNames[&Inst] = Name;
+        Entry->second = std::move(Name);
+      }
   markInlinable(Fn);
   analyzeDeadFrameStores(Analysis, Fn);
   analyzeStoreForwarding(Analysis, Fn);
@@ -8164,6 +8186,18 @@ bool LLVMCWriter::allocaHasPrintedLoad(const llvm::AllocaInst *Slot) {
 }
 
 void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
+  // A query in a nested region can feed an extract in a later block. Declare
+  // its array at function scope rather than at the effect's execution point.
+  for (auto &BB : Fn)
+    for (auto &Inst : BB)
+      if (Analysis.IntrinsicStructVals.count(&Inst)) {
+        const auto Name = getName(&Inst);
+        CallDeclNames.push_back(Name);
+        emitIndent(1);
+        OS << "uint32_t " << Name << "["
+           << llvm::cast<llvm::StructType>(Inst.getType())->getNumElements()
+           << "];\n";
+      }
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst);
@@ -8637,28 +8671,7 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
     return Tag + "*";
   };
 
-  CProjectionIdentifierAllocator ParameterIdentifiers;
-  auto BindParam = [&](llvm::Argument &Arg, unsigned ParamIdx) {
-    std::string Raw;
-    if (SretParamIdx >= 0 && static_cast<int>(ParamIdx) == SretParamIdx)
-      Raw = "result";
-    else if (DebugFn) {
-      size_t DebugIdx = ParamIdx;
-      if (SretParamIdx >= 0 && static_cast<int>(ParamIdx) > SretParamIdx)
-        DebugIdx = static_cast<size_t>(static_cast<int>(ParamIdx) - 1);
-      if (DebugIdx < DebugFn->Params.size() &&
-          !DebugFn->Params[DebugIdx].first.empty())
-        Raw = DebugFn->Params[DebugIdx].first;
-    }
-    if (Raw.empty() && Arg.hasName())
-      Raw = Arg.getName().str();
-    if (Raw.empty())
-      Raw = "arg" + std::to_string(ParamIdx);
-    std::string ParamName = ParameterIdentifiers.allocate(Raw, "nd_arg");
-    ValNames[&Arg] = ParamName;
-    UsedNames.insert(ParamName);
-    return ParamName;
-  };
+  auto BindParam = [&](llvm::Argument &Arg, unsigned) { return getName(&Arg); };
   auto ParamTypeStr = [&](llvm::Argument &Arg, unsigned ParamIdx) {
     if (Opts.PreserveLLVMFunctionTypes)
       return typeToCLLVM(Arg.getType());

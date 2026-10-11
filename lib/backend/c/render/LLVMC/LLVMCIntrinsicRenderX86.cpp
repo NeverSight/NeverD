@@ -170,25 +170,27 @@ InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
     return {"__writeeflags(" + Args[0] + ");\n", true};
 
   if (Mnemonic == "cpuid") {
-    std::string Leaf = Args.empty() ? "0" : Args[0];
-    if (IsStructReturn)
-      return {"int cpuInfo[4]; __cpuid(cpuInfo, " + Leaf + ");\n", true};
-    return {"{ int cpuInfo[4]; __cpuid(cpuInfo, " + Leaf + "); }\n", true};
+    if (AsmStr != "cpuid" || !IsStructReturn || ResultName.empty() ||
+        Args.size() != 2)
+      throw std::runtime_error("unsupported CPUID inline assembly contract");
+    // Preserve each ordered query even when its outputs are unused. The ECX
+    // subleaf and the original memory barrier are part of the lifted effect.
+    return {"__asm__ volatile(\"cpuid\" : \"=a\"(" + ResultName +
+                "[0]), \"=b\"(" + ResultName + "[1]), \"=c\"(" + ResultName +
+                "[2]), \"=d\"(" + ResultName + "[3]) : \"a\"((uint32_t)(" +
+                Args[0] + ")), \"c\"((uint32_t)(" + Args[1] +
+                ")) : \"memory\");\n",
+            false};
   }
 
   if (Mnemonic == "xgetbv") {
-    std::string ECX = Args.empty() ? "0" : Args[0];
-    if (IsStructReturn) {
-      return {"uint32_t xcr[2]; { uint64_t _t = _xgetbv(" + ECX +
-                  "); xcr[0] = (uint32_t)_t; xcr[1] = (uint32_t)(_t >> "
-                  "32); }\n",
-              true};
-    }
-    std::string Result;
-    if (ResultLive && !ResultName.empty())
-      Result = ResultName + " = ";
-    Result += "_xgetbv(" + ECX + ");\n";
-    return {Result, true};
+    if (AsmStr != "xgetbv" || !IsStructReturn || ResultName.empty() ||
+        Args.size() != 1)
+      throw std::runtime_error("unsupported XGETBV inline assembly contract");
+    return {"__asm__ volatile(\"xgetbv\" : \"=a\"(" + ResultName +
+                "[0]), \"=d\"(" + ResultName + "[1]) : \"c\"((uint32_t)(" +
+                Args[0] + ")) : \"memory\");\n",
+            false};
   }
 
   // MOV to/from a control or debug register, as MedLLVM emits it

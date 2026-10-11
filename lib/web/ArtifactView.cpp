@@ -110,6 +110,44 @@ Session::Impl::artifactView(std::string_view SelectionID) const {
                 {"container_origin", std::move(Parent->Origin)}},
             Parent->DirectStorage};
       }
+  for (const auto &[ID, E] : NexeExtractions) {
+    auto Select = [&](const auto &R, const char *Kind) -> ArtifactView {
+      auto Parent = artifactView(E.ArtifactID);
+      if (!Parent)
+        throw Error("nexe_parent_bytes_unavailable");
+      const auto At = Parent->StorageOffset + R.Offset;
+      return ArtifactView{
+          R.Content, R.BlobHash, At,
+          llvm::json::Object{
+              {"kind", Kind},
+              {"container_artifact_id", E.ArtifactID},
+              {"storage_artifact_id",
+               Parent->Origin.getString("storage_artifact_id")
+                   .value_or("")
+                   .str()},
+              {"extraction_id", E.ID},
+              {"selection_id", R.ID},
+              {"container_byte_offset", std::to_string(R.Offset)},
+              {"member_byte_length", std::to_string(R.Content.size())},
+              {"byte_length", std::to_string(R.Content.size())},
+              {"byte_offset", Parent->DirectStorage
+                                  ? llvm::json::Value(std::to_string(At))
+                                  : llvm::json::Value(nullptr)},
+              {"expanded_byte_offset",
+               !Parent->DirectStorage ? llvm::json::Value(std::to_string(At))
+                                      : llvm::json::Value(nullptr)},
+              {"byte_offset_basis",
+               Parent->DirectStorage ? "storage_artifact" : "expanded_stream"},
+              {"container_origin", std::move(Parent->Origin)}},
+          Parent->DirectStorage};
+    };
+    for (const auto &M : E.Members)
+      if (M.ID == SelectionID)
+        return Select(M, "nexe_member");
+    for (const auto &R : E.Regions)
+      if (R.ID == SelectionID && R.selectable())
+        return Select(R, "nexe_bootstrap");
+  }
   for (const auto &[ID, E] : AsarExtractions)
     for (const auto &M : E.Members)
       if (M.ID == SelectionID) {
@@ -200,6 +238,10 @@ Session::Impl::artifactView(std::string_view SelectionID) const {
 
 std::optional<Snapshot>
 Session::Impl::memberNamespace(std::string_view SelectionID) const {
+  for (const auto &[ID, E] : NexeExtractions)
+    if (std::any_of(E.Members.begin(), E.Members.end(),
+                    [&](const auto &M) { return M.ID == SelectionID; }))
+      return nexeNamespace(E);
   for (const auto &[ID, E] : PackageArchives)
     if (std::any_of(E.Members.begin(), E.Members.end(), [&](const auto &M) {
           return M.ID == SelectionID && M.available();

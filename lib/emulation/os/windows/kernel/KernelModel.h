@@ -70,6 +70,7 @@ public:
   /// A stopped DriverEntry can be rebuilt only when borrowed loader objects
   /// retain their initial state and every retained kernel effect is known.
   llvm::Error captureUnpackBaseline();
+  void recordUnpackClockRead();
   llvm::Expected<bool> hasUnpackDependencies() const;
   std::map<uint64_t, uint64_t> unpackAllocations() const;
   uint64_t driverObject() const { return DriverObject; }
@@ -741,6 +742,10 @@ private:
                                              bool Changing) const;
   llvm::Expected<uint64_t> queryThreadPriority(uint64_t Object) const;
   llvm::Expected<uint64_t> setThreadPriority(uint64_t Object, int32_t Priority);
+  // Canonical logical-thread ownership survives parked and nested executions.
+  std::set<uint64_t> SystemAffinityThreads;
+  llvm::Expected<uint64_t> setSystemAffinity(uint64_t Mask);
+  llvm::Expected<uint64_t> revertSystemAffinity();
   std::map<uint64_t, size_t> RemoveLockWaitReferences;
   llvm::Expected<uint64_t>
   initializeRemoveLock(llvm::ArrayRef<uint64_t> Arguments);
@@ -803,12 +808,19 @@ private:
   // Only loader-owned mapped spans, excluding image holes. Physical backing is
   // registered lazily when a permitted image range is first locked.
   std::map<uint64_t, uint64_t> ImageRAM;
+  std::optional<uint64_t> imageOwnerForRange(uint64_t Address,
+                                             uint64_t Size) const;
+  bool unpackImageMDLCall(KernelAPIKind Kind,
+                          llvm::ArrayRef<uint64_t> Arguments) const;
   uint64_t DriverObject = 0;
   uint64_t RegistryPath = 0;
   uint64_t DriverExtension = 0;
   bool EntryFinished = false;
   std::optional<std::map<uint64_t, std::vector<uint8_t>>> UnpackBaseline;
   bool UnpackOpaqueEffects = false;
+  // Admission conservatively records reads that can expose model PFNs,
+  // including reads performed by modeled copy/compare services.
+  mutable bool UnpackMDLIdentityRead = false;
   uint64_t NextAllocation = 0;
   uint64_t AllocationEnd = 0;
   struct PoolAllocation {

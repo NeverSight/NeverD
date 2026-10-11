@@ -53,6 +53,9 @@ DriverOptions scenario(const Parameter &P) {
   Options.Contract = P.Contract;
   Options.Scheduling = DriverScheduling{Quantum, InstructionTime};
   Options.InstructionLimit = InstructionBudget;
+  // This oracle checks modeled time and instruction ordering. Allow each
+  // bounded replay enough host time on contended native CI runners.
+  Options.TimeoutMilliseconds = HostTimeoutMilliseconds;
   if (P.Code == TimerWakeThenReset || P.Code == TimeoutBeforeSignal ||
       P.Code == TimeoutBeforeTimer)
     Options.Scheduling->QuantumInstructions = WaiterQuantum;

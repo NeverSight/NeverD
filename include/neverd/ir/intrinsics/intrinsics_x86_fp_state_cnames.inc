@@ -12,3 +12,9 @@ C(Intrinsic::X86FPApprox12State, "neverd_x86_fp_approx12_bits");
 C(Intrinsic::X86FPApprox12MemoryState, "neverd_x86_fp_approx12_memory_bits");
 C(Intrinsic::X86FPArithState, "neverd_x86_fp_arith_state");
 C(Intrinsic::X86FPArithMemoryState, "neverd_x86_fp_arith_memory_state");
+C(Intrinsic::X86FPScalarConvertState, "neverd_x86_scalar_convert_state");
+C(Intrinsic::X86FPScalarConvertMemoryState,
+  "neverd_x86_scalar_convert_memory_state");
+C(Intrinsic::X86FPPackedConvertState, "neverd_x86_packed_convert_state");
+C(Intrinsic::X86FPPackedConvertMemoryState,
+  "neverd_x86_packed_convert_memory_state");

@@ -40,7 +40,8 @@ TEST_F(X86_32_FP, Cvtss2siLifts) {
 }
 
 TEST_F(X86_32_FP, Cvtsi2ssLifts) {
-  verifyLowIRContains(testObj(), "test_cvtsi2ss32", "FLOAT_INT2FLOAT");
+  verifyScalarFPState(testObj(), "test_cvtsi2ss32",
+                      neverd::Intrinsic::X86FPScalarConvertState, 1);
 }
 
 TEST_F(X86_32_FP, AddsdLifts) {

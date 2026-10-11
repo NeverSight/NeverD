@@ -43,8 +43,9 @@ protected:
         const std::string Expected =
             " cst:0x" + llvm::utohexstr(*Control) + ":1";
         auto ControlPosition = Found + Operand.size();
-        if (Operation == neverd::Intrinsic::X86FPArithMemoryState) {
-          // The memory form carries its address before the control operand.
+        if (Operation == neverd::Intrinsic::X86FPArithMemoryState ||
+            neverd::isX86FPScalarConvertStateIntrinsic(Operation)) {
+          // These forms carry their source/address before the control.
           ControlPosition = Text.find(' ', ControlPosition + 1);
           ASSERT_NE(ControlPosition, std::string::npos) << Text;
           ASSERT_LT(ControlPosition, Text.find('\n', Found)) << Text;

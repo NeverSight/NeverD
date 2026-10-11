@@ -14,7 +14,8 @@ TEST_F(X86_64_FPConvert, AllStagesPass) {
 TEST_F(X86_64_FPConvert, NoUnlifted) { verifyNoUnlifted(testObj()); }
 
 TEST_F(X86_64_FPConvert, Cvtsi2ssLifts) {
-  verifyLowIRContains(testObj(), "test_cvtsi2ss", "FLOAT_INT2FLOAT");
+  verifyScalarFPState(testObj(), "test_cvtsi2ss",
+                      neverd::Intrinsic::X86FPScalarConvertState, 1);
 }
 
 TEST_F(X86_64_FPConvert, Unsigned64ConversionPreservesMedIRWidths) {
@@ -38,11 +39,13 @@ TEST_F(X86_64_FPConvert, Cvttss2siLifts) {
 }
 
 TEST_F(X86_64_FPConvert, Cvtsi2sdLifts) {
-  verifyLowIRContains(testObj(), "test_cvtsi2sd", "FLOAT_INT2FLOAT");
+  verifyScalarFPState(testObj(), "test_cvtsi2sd",
+                      neverd::Intrinsic::X86FPScalarConvertState, 5);
 }
 
 TEST_F(X86_64_FPConvert, Cvtss2sdLifts) {
-  verifyLowIRContains(testObj(), "test_cvtss2sd", "FLOAT_FLOAT2FLOAT");
+  verifyScalarFPState(testObj(), "test_cvtss2sd",
+                      neverd::Intrinsic::X86FPScalarConvertState, 4);
 }
 
 TEST_F(X86_64_FPConvert, AddssLifts) {

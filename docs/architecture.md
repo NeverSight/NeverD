@@ -556,6 +556,13 @@ JS/assets through `ArtifactView`. Caches and snapshots remain opaque; native
 activation/version authentication are not inferred. Asset keys never establish
 a filesystem namespace. Package analysis of an explicitly selected asset uses
 one document with no directory inventory. See the [SEA profile](web-sea-profile.md).
+`nexe/Reader` owns explicit EOF envelope framing and complete byte partitions;
+`nexe/Index` owns bounded first-shim JSON, private portable paths and deduplicated
+range hashing. `SessionNexe` publishes immutable occurrences only after complete
+admission. `ArtifactView` composes nested coordinates and retains one namespace
+per extraction; typed package ancestry establishes outer delivery only. The
+opaque prefix has no implicit native/signature/runtime validation. See the
+[nexe profile](web-nexe-profile.md).
 `packages/PackageReader` owns versioned Node metadata and captured placement
 evidence; `packages/PackageDiff` compares its model without transport concerns.
 `SessionPackages` owns revision-bound caches, fixed metadata pages and
@@ -563,7 +570,7 @@ comparisons. Missing evidence, conflicting declarations and unresolved runtime
 semantics remain distinct. All adapters consume these same results.
 `packages/behavior/Rules` owns the fixed Node API syntax vocabulary, `Source`
 consumes shared bindings/module origins/values, and `Package` owns exact
-inventory and retained Bun/SEA delivery joins. `Publication` emits metadata;
+inventory and retained Bun/SEA/nexe delivery joins. `Publication` emits metadata;
 the two behavior session adapters own selection, cache and revision boundaries.
 Source ownership, delivery package and declared entry remain distinct.
 `SourceModel::indexSourceDeclarations` supplies the order-independent unique
@@ -1795,6 +1802,17 @@ rounding on hosts that otherwise use excess precision. Compiler options that
 explicitly override source pragmas, such as Clang's `-ffp-contract=fast`, are
 outside this contract.
 
+LLVMC binds final parameter identifiers before its analyses can cache rendered
+views. Signature emission reuses those identities, including colliding debug
+names and MSVC hidden result/`this` arguments. CPU query arrays use that same
+function-local name owner and are declared at function scope, so extracts in
+later blocks cannot refer to a different query or an expired C scope.
+`LLVMCIntrinsicAnalysis` authenticates the exact MedLLVM CPUID/XGETBV assembly,
+register constraints, i32 inputs/results and direct register-extract uses.
+Malformed contracts and unrepresented aggregate ABIs are refused explicitly.
+The C renderer retains volatile assembly and the original memory barrier for
+each query, including unused outputs and CPUID's ECX subleaf.
+
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
 invalid conversions. HighC and the LLVM lowering select that same policy;
@@ -1853,6 +1871,39 @@ scope. Scalar output merges the old destination's upper 128 bits; VEX zeroes
 the remaining upper vector. Immutable scalar stack sources reuse the matching
 six-input value contract, preserving both other numerical inputs and CSR.
 
+Legacy/VEX CVTSI2SS/SD and CVTSS2SD/CVTSD2SS use
+`X86FPScalarConvertState` and `X86FPScalarConvertMemoryState`. One aggregate
+contains the destination's raw scalar bytes followed by MXCSR. Its control
+byte owns signed-integer versus precision conversion, source/destination width
+and VEX identity; it admits neither SAE nor embedded rounding. Memory access
+uses the source width, inside the state completion scope, including Default/FS/GS.
+The lifter authenticates raw bytes against operand metadata before emitting
+effects and owns legacy/VEX lane merging. Only the exact numerical slice gains
+floating type provenance. LLVM and both readable C routes retain the actual
+conversion instruction even for discarded results. The concrete adapter reuses
+the shared SIMD converter: input exceptions precede newly raised result
+exceptions, and unsuccessful completion leaves numerical output untouched.
+IEEE bit arithmetic supplements APFloat's narrowing status for directed finite
+overflow and SSE tininess before denormalization; FTZ remains per active lane.
+Unsigned, EVEX, F16C and x87 conversions retain their separate contracts.
+Swift refuses this completion surface until it has an equivalent lowering.
+
+SSE/VEX CVTDQ2PS/PD, CVTPS2PD/CVTPD2PS and CVT(T)PS/PD2DQ share
+`X86FPPackedConvertState` and `X86FPPackedConvertMemoryState`. The packed control
+owner selects numerical kind, VEX identity and vector length; rounded and
+truncated integer conversions remain distinct. Logical source bytes, source
+register width and padded destination bytes are separate facts: m64/low64
+widening uses an initialized physical XMM carrier, while VEX memory narrowing
+retains the encoded 128/256-bit source width in assembly. One completion owns
+all active lanes, outgoing MXCSR and the complete source access. Native LLVM
+and both C routes execute the original operation; concrete evaluation reuses
+the common SIMD converter. Only legacy m128 forms require 16-byte alignment;
+widening m64 and VEX sources remain unaligned. No packed slice establishes a
+scalar FP return. Incoming stack homes retain the packed memory contract and
+every source byte, independently of output width. Unsupported masks, broadcasts,
+SAE, embedded rounding and altered decoded metadata are refused. This does not
+extend MMX, unsigned, EVEX, F16C or x87 completion.
+
 Legacy/VEX ROUND extends that state surface through whole-instruction
 `X86FPRoundState` aggregates. Immediate bits 7:4 are ignored, bit 2 selects
 MXCSR rounding, and bit 3 suppresses precision only. Packed results complete
@@ -1869,7 +1920,9 @@ segment bases. Unknown context refuses; known memory faults retain incoming
 CSR and publish no numerical result. This does not extend EVEX/SAE coverage.
 
 Stack-argument recovery consumes the authenticated source address and byte
-extent of arithmetic, ROUND and APPROX12 memory contracts. A proven immutable
+extent of arithmetic, scalar conversion, ROUND and APPROX12 memory contracts.
+Scalar conversion uses source bytes independently of destination width.
+A proven immutable
 scalar incoming argument can supply the corresponding value contract without
 changing numerical/MXCSR completion. A two-slot i386 scalar uses explicit byte
 composition. Packed, straddling, written or escaped sources keep their original

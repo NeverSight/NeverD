@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "producer": "nexe",
+  "version": "4.0.0-rc.7",
+  "git_head": "c32a79a684011d7ac28a236593c514be441b6c27",
+  "producer_tarball": "https://registry.npmjs.org/nexe/-/nexe-4.0.0-rc.7.tgz",
+  "producer_integrity": "sha512-uM/+SV/an7ci4q0SLdPnBotw8So3x/w8nCemDww448jLYYwpnERhREFSo36S5Tuu3FBb6EwsdGqswSN58RG/ew==",
+  "producer_lock_sha256": "bbafe4350de2595e13d4bba8af1401de9202a712ec4c543d44c0085ddbc42e1c",
+  "host": "darwin-arm64",
+  "host_node": "24.1.0",
+  "host_npm": "11.3.0",
+  "base_node": "14.15.3",
+  "base_release": "https://github.com/nexe/nexe/releases/tag/v3.3.3",
+  "producer_mode": "no-bundle, explicit local asset, three explicit resources",
+  "executes_samples": false,
+  "redistributed": false,
+  "bootstrap_size": "16044",
+  "bootstrap_sha256": "a1b48361fc18b15b37951e8fcf3287cb0fb1cefae0d6be3904a1f90d6a5651e3",
+  "resource_size": "365",
+  "resource_sha256": "b691b13c308fd60c3a1579b032f294c118b991dc9a74dbcec746ca0c6b8738d4",
+  "inputs": [
+    {"name":"asset.txt","sha256":"a25fa935415d46bbf521f9b1a4394264245c41df58e36339be4f3b3bd2eaf12a","bytes":"NeverD controlled nexe resource fixture.\n"},
+    {"name":"main.js","sha256":"37b9886da2be1ec0ed7f23bc927793192a9f7435fc7beb75fe9b2cf3b0a4925f","bytes":"// NeverD controlled producer fixture. This input is packaged, never executed.\nconst fs = require('node:fs');\nmodule.exports = function readFixture() {\n  return fs.readFileSync(__dirname + '/asset.txt', 'utf8');\n};\n"},
+    {"name":"minified.js","sha256":"b7fe0fbde04b24b85270a6b7006017ce20facbb63eff2f45e82b96bb2e100620","bytes":"module.exports=(a,b)=>a+b;\n"},
+    {"name":"package.json","sha256":"30b96f5dc0aa83300b7651b7f79a2e1e2ef34485d9f67bc31c5b41c8a44b9c9d","bytes":"{\"name\":\"neverd-nexe-fixture\",\"version\":\"1.0.0\",\"main\":\"main.js\",\"license\":\"MIT\"}\n"}
+  ],
+  "images": [
+    {"name":"linux-x64-fixture","size":"74115849","sha256":"7fcbb31cf6588096ae229fb08274c62322a5dd2b8637c4cccef7ec367ac95634","base_name":"linux-x64-14.15.3","base_size":"74099408","base_sha256":"4f8ad776d078af270f11972b3345f929ca14ac48fd68b3e5642970b6eba4b540"},
+    {"name":"mac-x64-fixture","size":"73308097","sha256":"8766df72060960b2acff3442f21ceb07162c8d22caa1f5003fde75b10a4cb19c","base_name":"mac-x64-14.15.3","base_size":"73291656","base_sha256":"4b1f39f9d078923bcd772941247748f5b24418b9d1f169e649c2508c743b510a"},
+    {"name":"windows-x64-fixture.exe","size":"56506937","sha256":"c78170cabf198b1579e6572eda57dff99817d46a5ea066b0d49f70f960ca203d","base_name":"windows-x64-14.15.3","base_size":"56490496","base_sha256":"912d31be5152ba605215766b82189695db2e91de8c8468b2cf05138882660f6a"}
+  ]
+}

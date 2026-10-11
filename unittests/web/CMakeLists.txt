@@ -14,6 +14,7 @@ add_neverd_unittest(NeverDWebArtifactTests
   BlobStoreTests.cpp
   BunTests.cpp
   SEATests.cpp
+  NexeTests.cpp
   JsonReaderTests.cpp
   LINK_COMPONENTS Web
 )
@@ -31,6 +32,9 @@ target_include_directories(NeverDWebZipWithoutDeflateTests PRIVATE "${CMAKE_SOUR
 # Manual, development-only recorder; no production or test dependency on it.
 add_executable(neverd-web-bun-fixture-record EXCLUDE_FROM_ALL fixtures/bun/Record.cpp)
 add_executable(neverd-web-sea-fixture-record EXCLUDE_FROM_ALL fixtures/sea/Record.cpp)
+add_executable(neverd-web-nexe-fixture-inputs EXCLUDE_FROM_ALL fixtures/nexe/WriteInputs.cpp)
+target_include_directories(neverd-web-nexe-fixture-inputs PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(neverd-web-nexe-fixture-inputs PRIVATE LLVMSupport)
 target_include_directories(neverd-web-sea-fixture-record PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(neverd-web-sea-fixture-record PRIVATE LLVMSupport)
 target_include_directories(neverd-web-bun-fixture-record PRIVATE ${LLVM_INCLUDE_DIRS})
@@ -93,6 +97,7 @@ if(TARGET neverd_shared)
     InterfaceSDKTests.cpp
     StreamSDKTests.cpp
     SEASDKTests.cpp
+    NexeSDKTests.cpp
     AsarSDKTests.cpp
     ElectronSDKTests.cpp
     DesktopSDKTests.cpp

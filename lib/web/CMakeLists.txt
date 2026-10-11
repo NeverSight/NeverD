@@ -49,6 +49,9 @@ add_neverd_component_library(NeverDWeb
   sea/MachO.cpp
   sea/PE.cpp
   SessionSEA.cpp
+  nexe/Reader.cpp
+  nexe/Index.cpp
+  SessionNexe.cpp
   BunSourceMap.cpp
   SessionBun.cpp
   SessionBunExport.cpp

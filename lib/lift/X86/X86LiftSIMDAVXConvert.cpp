@@ -11,6 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPPackedConvertState.h"
+#include "X86FPScalarConvertState.h"
 #include "X86LiftDetail.h"
 #include "X86ScalarFPConversion.h"
 
@@ -1241,6 +1243,8 @@ bool liftSIMDAVXConvert(X86Lifter &L, X86Lifter::LiftState &S,
     return liftScalarFPIntegerState(L, S, Insn, X86,
                                     ScalarIntegerSpec.SourceElementSize,
                                     ScalarIntegerSpec.Truncate, true);
+  if (const auto Kind = x86PackedConvertKind(InsnId, true))
+    return liftPackedConvertState(L, S, Insn, X86, *Kind, true);
   switch (InsnId) {
 
   // ========================================================================
@@ -1249,49 +1253,12 @@ bool liftSIMDAVXConvert(X86Lifter &L, X86Lifter::LiftState &S,
   //     VBROADCAST (EVEX), VINSERT/VEXTRACT (EVEX), VCOMPRESS/VEXPAND (float).
   // ========================================================================
 
-  // VCVT — integer ↔ float conversions (AVX/AVX-512).
-  // Packed int->FP `vcvtdq2ps/pd ymm/xmm` (128- or 256-bit): convert each i32
-  // lane independently.  PS keeps lane count == dword count; PD widens the low
-  // dwords to f64 (dst f64-lane count).  Lifting this as a single bulk
-  // FLOAT_INT2FLOAT (the old scalar-shared path) treats the whole i128/i256 as
-  // one integer and is wrong.
-  case X86_INS_VCVTDQ2PS:
-  case X86_INS_VCVTDQ2PD: {
-    if (X86.op_count < 2)
-      break;
-    bool IsPD = (Insn->id == X86_INS_VCVTDQ2PD);
-    unsigned FPSz = IsPD ? 8 : 4;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[X86.op_count - 1]);
-    unsigned NLanes = Dst.Size / FPSz;
-    if (NLanes < 1) {
-      S.emit(NdOp::FLOAT_INT2FLOAT, Dst, {Src});
-      break;
-    }
-    NdVar Acc = S.makeTemp(0);
-    for (unsigned I = 0; I < NLanes; ++I) {
-      NdVar Elem = S.makeTemp(4);
-      S.emit(NdOp::SUBBYTES, Elem, {Src, NdVar::cst(I * 4, 4)});
-      NdVar Lane = S.makeTemp(FPSz);
-      S.emit(NdOp::FLOAT_INT2FLOAT, Lane, {Elem});
-      if (I == 0) {
-        Acc = Lane;
-      } else {
-        NdVar Next = S.makeTemp(Acc.Size + FPSz);
-        S.emit(NdOp::CONCAT, Next, {Lane, Acc});
-        Acc = Next;
-      }
-    }
-    S.emit(NdOp::COPY, Dst, {Acc});
-    break;
-  }
-  // Scalar VEX int->FP `vcvtsi2ss/sd xmm1, xmm2, r/m`: the converted scalar
-  // goes in the low element (float or double) and the upper bits come from
-  // xmm2.  The result temp must be the real FP width, otherwise the emitter
-  // infers the type from the wide destination and produces a double for a
-  // single-precision convert.
+  // Scalar VEX signed conversions complete the scalar and MXCSR together;
+  // their authenticated helper also preserves the source1 upper lanes.
   case X86_INS_VCVTSI2SS:
   case X86_INS_VCVTSI2SD:
+    return liftScalarConvertToFPState(
+        L, S, Insn, X86, true, InsnId == X86_INS_VCVTSI2SD ? 8 : 4, true);
   case X86_INS_VCVTUSI2SS:
   case X86_INS_VCVTUSI2SD: {
     if (X86.op_count < 2)
@@ -1334,10 +1301,6 @@ bool liftSIMDAVXConvert(X86Lifter &L, X86Lifter::LiftState &S,
     break;
   }
 
-  case X86_INS_VCVTPS2DQ:
-  case X86_INS_VCVTPD2DQ:
-  case X86_INS_VCVTTPS2DQ:
-  case X86_INS_VCVTTPD2DQ:
   case X86_INS_VCVTSS2SI:
   case X86_INS_VCVTSD2SI:
   case X86_INS_VCVTTSS2SI:
@@ -1366,101 +1329,12 @@ bool liftSIMDAVXConvert(X86Lifter &L, X86Lifter::LiftState &S,
     break;
   }
 
-  // Scalar VEX precision convert `vcvtXX2YY xmm1, xmm2, xmm3/m`: the converted
-  // scalar goes in the low element and the upper bits come from xmm2.  Narrow
-  // the convert source to its real FP width so the emitter does not mis-infer
-  // the type from the full vector and pick the wrong direction.
+  // Scalar VEX precision conversion and MXCSR share one completion; upper
+  // lanes come from source1, independently of the numerical source.
   case X86_INS_VCVTSS2SD:
-  case X86_INS_VCVTSD2SS: {
-    if (X86.op_count < 2)
-      break;
-    bool ToDouble = (Insn->id == X86_INS_VCVTSS2SD);
-    unsigned SrcFPSz = ToDouble ? 4 : 8;
-    unsigned DstFPSz = ToDouble ? 8 : 4;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[X86.op_count - 1]);
-    NdVar Upper = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[1]) : Dst;
-    if (Src.Size > SrcFPSz) {
-      NdVar N = S.makeTemp(SrcFPSz);
-      S.emit(NdOp::SUBBYTES, N, {Src, NdVar::cst(0, 4)});
-      Src = N;
-    }
-    NdVar Tmp = S.makeTemp(DstFPSz);
-    S.emit(NdOp::FLOAT_FLOAT2FLOAT, Tmp, {Src});
-    if (X86.operands[0].type == X86_OP_MEM) {
-      S.storeToMem(X86.operands[0], Tmp);
-    } else if (Dst.Size > DstFPSz) {
-      NdVar Hi = S.makeTemp(Dst.Size - DstFPSz);
-      S.emit(NdOp::SUBBYTES, Hi, {Upper, NdVar::cst(DstFPSz, 4)});
-      S.emit(NdOp::CONCAT, Dst, {Hi, Tmp});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Tmp});
-    }
-    break;
-  }
-  // Packed widen single->double (per dst lane); reads the low single lanes.
-  case X86_INS_VCVTPS2PD: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[X86.op_count - 1]);
-    unsigned NLanes = Dst.Size / 8;
-    if (NLanes < 1) {
-      S.emit(NdOp::FLOAT_FLOAT2FLOAT, Dst, {Src});
-      break;
-    }
-    NdVar Cur;
-    for (unsigned I = 0; I < NLanes; ++I) {
-      NdVar E = S.makeTemp(4);
-      S.emit(NdOp::SUBBYTES, E, {Src, NdVar::cst(I * 4, 4)});
-      NdVar L = S.makeTemp(8);
-      S.emit(NdOp::FLOAT_FLOAT2FLOAT, L, {E});
-      if (I == 0) {
-        Cur = L;
-      } else {
-        NdVar Next = S.makeTemp((I + 1) * 8);
-        S.emit(NdOp::CONCAT, Next, {L, Cur});
-        Cur = Next;
-      }
-    }
-    S.emit(NdOp::COPY, Dst, {Cur});
-    break;
-  }
-  // Packed narrow double->single (per src lane); upper dst lanes are zeroed.
-  case X86_INS_VCVTPD2PS: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[X86.op_count - 1]);
-    unsigned NLanes = Src.Size / 8;
-    if (NLanes < 1) {
-      S.emit(NdOp::FLOAT_FLOAT2FLOAT, Dst, {Src});
-      break;
-    }
-    NdVar Cur;
-    for (unsigned I = 0; I < NLanes; ++I) {
-      NdVar E = S.makeTemp(8);
-      S.emit(NdOp::SUBBYTES, E, {Src, NdVar::cst(I * 8, 4)});
-      NdVar L = S.makeTemp(4);
-      S.emit(NdOp::FLOAT_FLOAT2FLOAT, L, {E});
-      if (I == 0) {
-        Cur = L;
-      } else {
-        NdVar Next = S.makeTemp((I + 1) * 4);
-        S.emit(NdOp::CONCAT, Next, {L, Cur});
-        Cur = Next;
-      }
-    }
-    if (Dst.Size > NLanes * 4) {
-      NdVar ZHi = S.makeTemp(Dst.Size - NLanes * 4);
-      S.emit(NdOp::COPY, ZHi,
-             {NdVar::cst(0, (uint16_t)(Dst.Size - NLanes * 4))});
-      S.emit(NdOp::CONCAT, Dst, {ZHi, Cur});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Cur});
-    }
-    break;
-  }
+  case X86_INS_VCVTSD2SS:
+    return liftScalarConvertToFPState(
+        L, S, Insn, X86, false, InsnId == X86_INS_VCVTSS2SD ? 8 : 4, true);
   // F16C has instruction-specific rounding and MXCSR exception semantics that
   // cannot be represented by the generic float-width conversion opcode.
   // Keep EVEX masked/SAE forms fail-closed until their merge/zero contracts are

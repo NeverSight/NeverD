@@ -12,6 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPPackedConvertState.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -343,18 +344,18 @@ bool emitPackedUnpack(X86Lifter::LiftState &S, NdVar Destination, NdVar Left,
 bool liftSIMDConvert(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                      const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  if (const auto Kind = x86PackedConvertKind(InsnId, false))
+    return liftPackedConvertState(L, S, Insn, X86, *Kind, false);
   switch (InsnId) {
 
   // SSE int<->float conversions, additional variants.
-  case X86_INS_CVTDQ2PS:
-  case X86_INS_CVTDQ2PD:
   case X86_INS_CVTPI2PS:
   case X86_INS_CVTPI2PD: {
     if (X86.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
-    bool IsPD = (InsnId == X86_INS_CVTDQ2PD || InsnId == X86_INS_CVTPI2PD);
+    bool IsPD = InsnId == X86_INS_CVTPI2PD;
     unsigned IntSz = 4;
     unsigned FPSz = IsPD ? 8 : 4;
     unsigned NLanes = Src.Size / IntSz;
@@ -395,25 +396,18 @@ bool liftSIMDConvert(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     }
     break;
   }
-  case X86_INS_CVTPS2DQ:
-  case X86_INS_CVTPD2DQ:
   case X86_INS_CVTPS2PI:
   case X86_INS_CVTPD2PI:
-  case X86_INS_CVTTPS2DQ:
-  case X86_INS_CVTTPD2DQ:
   case X86_INS_CVTTPS2PI:
   case X86_INS_CVTTPD2PI: {
     if (X86.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
-    bool IsPD = (InsnId == X86_INS_CVTPD2DQ || InsnId == X86_INS_CVTTPD2DQ ||
-                 InsnId == X86_INS_CVTPD2PI || InsnId == X86_INS_CVTTPD2PI);
+    bool IsPD = InsnId == X86_INS_CVTPD2PI || InsnId == X86_INS_CVTTPD2PI;
     // The non-T variants round using MXCSR (default: nearest, ties to even);
     // only the CVTT* variants truncate toward zero.
-    bool IsTrunc =
-        (InsnId == X86_INS_CVTTPS2DQ || InsnId == X86_INS_CVTTPD2DQ ||
-         InsnId == X86_INS_CVTTPS2PI || InsnId == X86_INS_CVTTPD2PI);
+    bool IsTrunc = InsnId == X86_INS_CVTTPS2PI || InsnId == X86_INS_CVTTPD2PI;
     unsigned FPSz = IsPD ? 8 : 4;
     unsigned DstElemSz = 4;
     unsigned NLanes = Src.Size / FPSz;
@@ -456,51 +450,6 @@ bool liftSIMDConvert(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     }
     break;
   }
-  // Packed FP width conversions (scalar CVTSS2SD/CVTSD2SS are handled in
-  // liftCore, which runs first).  Each lane must carry its true FP width so
-  // the emitter picks fpext/fptrunc correctly.
-  case X86_INS_CVTPS2PD: {
-    // Low two single-precision lanes -> two double-precision lanes.
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    std::vector<NdVar> Lanes(2);
-    for (unsigned I = 0; I < 2; ++I) {
-      NdVar Elem = S.makeTemp(4);
-      S.emit(NdOp::SUBBYTES, Elem, {Src, NdVar::cst(I * 4, 4)});
-      Lanes[I] = S.makeTemp(8);
-      S.emit(NdOp::FLOAT_FLOAT2FLOAT, Lanes[I], {Elem});
-    }
-    S.emit(NdOp::CONCAT, Dst, {Lanes[1], Lanes[0]});
-    break;
-  }
-  case X86_INS_CVTPD2PS: {
-    // Two double-precision lanes -> two single-precision lanes (low 64 bits);
-    // the upper 64 bits of the destination are zeroed.
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    std::vector<NdVar> Lanes(2);
-    for (unsigned I = 0; I < 2; ++I) {
-      NdVar Elem = S.makeTemp(8);
-      S.emit(NdOp::SUBBYTES, Elem, {Src, NdVar::cst(I * 8, 4)});
-      Lanes[I] = S.makeTemp(4);
-      S.emit(NdOp::FLOAT_FLOAT2FLOAT, Lanes[I], {Elem});
-    }
-    NdVar Lo = S.makeTemp(8);
-    S.emit(NdOp::CONCAT, Lo, {Lanes[1], Lanes[0]});
-    if (Dst.Size > 8) {
-      NdVar ZHi = S.makeTemp(Dst.Size - 8);
-      S.emit(NdOp::COPY, ZHi, {NdVar::cst(0, (uint16_t)(Dst.Size - 8))});
-      S.emit(NdOp::CONCAT, Dst, {ZHi, Lo});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Lo});
-    }
-    break;
-  }
-
   // VEX and EVEX packed unpacks. Wider vectors still interleave independently
   // inside each architectural 128-bit lane.
   case X86_INS_VPUNPCKLBW:

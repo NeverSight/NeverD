@@ -322,6 +322,50 @@ cmake --build build-release --target NeverDX86FPRoundAccuracyTests --parallel 4
 ctest --test-dir build-release -L '^NeverDX86FPRoundAccuracyTests$' --output-on-failure
 ```
 
+`NeverDX86FPScalarConvertStateTests` compares 24 original legacy/VEX
+CVTSI2SS/SD and CVTSS2SD/CVTSD2SS register/memory forms with SDK Codegen and
+HighC/LLVMC, at default/NoOpt and C O0/O2. Full YMM/MXCSR observations cover
+integer boundaries, precision narrowing, NaNs, all rounding/DAZ/FTZ modes and
+sticky flags. Discarded results retain state completion and complete faulting
+reads; native exception contexts verify untouched output and flag priority.
+Additional probes cover unaligned sources, source/destination/merge aliases,
+GS addressing, typed scalar precision returns and declared stack source ABI.
+The concrete suite compares
+raw bits and MXCSR with native instructions, and separately checks exception
+atomicity, active masks, SAE status suppression and independent FTZ lanes in
+the shared conversion evaluator. Low/Med/High shapes, LLVM assembly ownership
+and changed decode metadata have negative controls. `MedCallingConvFPStack`
+checks source extents and preserved controls/state across x64 ELF/Mach-O/COFF.
+Native tests require x64; full YMM probes also require OS-enabled AVX.
+These tests do not certify native x86-32, AVX-512/EVEX, F16C, MMX, x87,
+enabled alignment checking or unavailable-feature faults.
+
+```sh
+cmake --build build-release --target NeverDX86FPScalarConvertStateTests
+ctest --test-dir build-release -L '^NeverDX86FPScalarConvertStateTests$' --output-on-failure
+```
+
+`NeverDX86FPPackedConvertStateTests` checks 48 SSE/VEX register/memory/width
+forms of CVTDQ2PS/PD, CVTPS2PD/CVTPD2PS and CVT(T)PS/PD2DQ against original
+x64 bytes. Codegen and HighC/LLVMC run at default/NoOpt and C O0/O2, observing
+full YMM bits and MXCSR across rounding, DAZ/FTZ, sticky flags, NaNs and directed
+boundaries. Narrowing padding, low64 widening carriers, aliases, GS and source
+extents are independent controls. Fault probes cover unmasked exceptions,
+cross-lane priority, legacy alignment before numerical evaluation and discarded
+complete-source protected-page reads. The concrete evaluator compares padded
+results and state with native packed instructions; Low/Med/High and owned asm
+reject malformed roles, source/state address spaces and unsupported effects.
+`MedCallingConvFPStack` checks source-width home initialization without replacing
+packed memory completion with scalar parameter reads. Native YMM observers
+require OS-enabled AVX on x64. This suite does not certify native x86-32,
+AVX-512/EVEX, MMX, unsigned conversions, F16C, x87, enabled #AC or unavailable
+CPU-feature faults.
+
+```sh
+cmake --build build-release --target NeverDX86FPPackedConvertStateTests
+ctest --test-dir build-release -L '^NeverDX86FPPackedConvertStateTests$' --output-on-failure
+```
+
 `NeverDX86FPRoundAccuracyTests` compares original legacy/VEX scalar and packed
 ROUND bytes with actual SDK Codegen and HighC/LLVMC at default/NoOpt and O0/O2.
 Directed controls cover all immediate rounding selectors, ignored high bits,
@@ -414,6 +458,31 @@ ctest --test-dir build-release -L '^NeverDX86EncodingAccuracyTests$' \
   --output-on-failure
 ```
 
+## LLVMC parameter names and CPU queries
+
+`NeverDLLVMCIntrinsicSemanticTests` compiles and executes cached parameter views,
+colliding debug names, narrow arguments and MSVC hidden result/`this` controls
+at O0/O2. CPU array tests retain repeated queries, parameter/local collisions,
+partial register extracts and cross-block uses. CPUID includes nonzero subleafs;
+native XGETBV requires an x64 host with OSXSAVE. Changed assembly, constraints,
+types and unrepresented aggregate uses must fail before array projection.
+
+On Windows x64, a single-step exception observer compares original
+`CPUID(0,0); INT3; CPUID(7,1)` bytes with emitted C at O0/O2. It observes query
+inputs, the query count at the breakpoint, event order and the returned value;
+matching only the final return is insufficient. Other hosts skip this Windows
+event observer explicitly. Windows standalone C checks select Clang's
+compiler-rt so the existing i128 floating conversion controls also execute.
+
+```bash
+cmake --build build-release --target NeverDLLVMCIntrinsicSemanticTests \
+  NeverDLLVMCValueTests NeverDLLVMCFrameMemoryTests NeverDLLVMCPhiTests \
+  NeverDLLVMCVectorTests NeverDLLVMCVoidAnalysisTests
+ctest --test-dir build-release \
+  -L '^NeverDLLVMC(IntrinsicSemantic|Value|FrameMemory|Phi|Vector|VoidAnalysis)Tests$' \
+  --output-on-failure
+```
+
 ## Inline C memory accesses
 
 `NeverDCMemoryCopyTests` executes HighC and LLVMC output at `-O0` and `-O2`
@@ -500,6 +569,18 @@ profile also sets `NEVERD_ENABLE_PYTHON_PLUGINS=OFF`. Shared JSON/client changes
 require worker protocol/Web and affected mock transport regressions. These
 MCP suites own catalog qualification separately from the existing Python
 native capability checker. See the [profile](web-mcp-profile.md).
+
+`WebNexe.*` covers pinned EOF framing, strict first-shim JSON, malformed binary64
+lengths, first-sentinel window boundaries, private paths, overlap/alias coverage
+and independent member/work/private-metadata budgets. `WebNexeSDK.*` exercises
+publication and cache atomicity, stored/deflate ZIP nonzero source coordinates,
+two identical occurrences with isolated package namespaces, outer delivery-only
+joins, source/bootstrap/native consumers and CLI operation with an unusable
+PATH. Set `NEVERD_NEXE_4RC7_CORPUS` for three optional producer-built full images;
+missing samples explicitly skip and tests never generate/download/execute them.
+Worker/MCP suites verify both operations through the shared C API. Check
+parser-off extraction and backend-off ABI/discovery, then restore both options.
+See the [nexe profile](web-nexe-profile.md).
 
 `WebSEA.*` covers independent Node SEA serialization, x64/ARM64 ELF/Mach-O/PE
 resource location, malformed names/tables, duplicate mappings, cumulative work,
@@ -3968,7 +4049,7 @@ The KVM gate requires real non-exiting vCPU cancellation and 48 state-transfer o
 
 With `native_cpu_only=true`, `native_driver_tests=true` enables `NeverDNativeDriverTests` without Unicorn. Before configuring, `build_wdk_driver_fixtures.py` verifies the complete SHA-256 of the official Microsoft WDK/SDK 10.0.26100.6584 packages and rebuilds 48 original normal/CFG/DBG driver images. `WDKDriverFixtures.def` owns package identities, compiler/linker arguments and fixture bindings. Unmodified Microsoft inputs and their licenses remain in the local build/cache directories; CI uploads only build metadata and logs. The manifest records tool versions, commands, source/header hashes and output image hashes.
 
-`NativeDriverTests.def` requires 230 WHP outcomes from all 115 workloads in `DriverBuiltinImages.def` and `DriverBackendParityCases.def`: 27 built-in images, 48 WDK images and 40 request scenarios, each at original and rebased addresses. The complete mandatory inventory is `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 4 image memory checks = 5451`. The 30 wait-set checks comprise sixteen portable model cases and fourteen original native driver cases. `run_native_cpu_ci.py --with-drivers` retains exact inventory/JUnit evidence with Unicorn disabled. Missing or skipped required fixtures fail the opt-in gate; ordinary builds keep external fixtures optional. Fixed images retain their expected rebase rejection. ARM64 native guest execution remains unverified.
+`NativeDriverTests.def` requires 230 WHP outcomes from all 115 workloads in `DriverBuiltinImages.def` and `DriverBackendParityCases.def`: 27 built-in images, 48 WDK images and 40 request scenarios, each at original and rebased addresses. The complete mandatory inventory is `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 12 driver UNPACK + 6 clock reads + 4 image memory checks = 5452`. The 30 wait-set checks comprise sixteen portable model cases and fourteen original native driver cases. `run_native_cpu_ci.py --with-drivers` retains exact inventory/JUnit evidence with Unicorn disabled. Missing or skipped required fixtures fail the opt-in gate; ordinary builds keep external fixtures optional. Fixed images retain their expected rebase rejection. ARM64 native guest execution remains unverified.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` injects deadline, stop and combined interruptions before two different startup instructions. It checks the exact phase diagnostic, owned message lifetime, preserved error type and cause bits, one unchanged deadline across steps and released memory ownership. Existing real transport failures and state mismatches remain distinct. The native x64 startup validation budget is `5 s`; ordinary guest deadlines and single-step allowances are unchanged.
 

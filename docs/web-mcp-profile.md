@@ -47,7 +47,7 @@ when the embedded parser is disabled. No-input launches omit import preview.
 Tools use `neverd_web_` names and schema version 1; `schema_version` defaults to
 1 when omitted. The catalog covers import, metadata, artifacts, source/maps,
 bindings, primitive semantics/rewrite receipts, modules/bundles/navigation, structural views,
-anchors, Bun/SEA/ASAR extraction, package/archive/integrity/diff evidence,
+anchors, Bun/SEA/nexe/ASAR extraction, package/archive/integrity/diff evidence,
 selected Node source/package behavior metadata,
 Electron/HTML, passive HAR/streams/interfaces and native loader metadata.
 Published IDs, decimal-string revisions/coordinates, evidence classes and
