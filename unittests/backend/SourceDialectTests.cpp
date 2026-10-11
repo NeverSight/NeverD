@@ -686,6 +686,176 @@ std::string normalizeLineEndings(std::string Text) {
   return Text;
 }
 
+HighFunc nativeWindowsCallback(Arch Target) {
+  HighFunc Function;
+  Function.Entry = 0x1000;
+  Function.Name = "parent";
+  Function.ReturnType = NdType::makeInt(4);
+  auto &EH = Function.ExceptionMetadata.emplace();
+  EH.CodeRange = {0x1000, 0x1040};
+  EH.Encoding = Target == Arch::X64 ? ExceptionEncoding::X64UnwindV1
+                                    : ExceptionEncoding::ARM64Unpacked;
+  EH.Cxx.emplace();
+  auto &Try = EH.Cxx->TryBlocks.emplace_back();
+  auto &Catch = Try.Handlers.emplace_back();
+  Catch.HandlerVA = 0x1020;
+  Catch.Adjectives = 0x40;
+  HighStmt Region;
+  Region.Kind = StmtKind::CxxTry;
+  Region.EHRange = {0x1000, 0x1010};
+  Region.EHIsReducible = true;
+  auto &Clause = Region.EHClauses.emplace_back();
+  Clause.Kind = HighEHClauseKind::CxxCatch;
+  Clause.HandlerVA = Catch.HandlerVA;
+  Clause.Adjectives = Catch.Adjectives;
+  HighStmt Anchor;
+  Anchor.Kind = StmtKind::Block;
+  Anchor.Addr = Catch.HandlerVA;
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.Addr = Catch.HandlerVA + 4;
+  Ret.RetVal = HighExpr::makeConst(7, 4);
+  Region.EHClauseBodies.push_back({Anchor, Ret});
+  Function.Body.push_back(Region);
+  Ret.Addr = 0x1010;
+  Ret.RetVal = HighExpr::makeConst(11, 4);
+  Function.Body.push_back(Ret);
+  return Function;
+}
+
+TEST(SourceDialect, PlainCPreservesTableOwnedCallbackWithoutOrdinaryEntry) {
+  const std::string Clang = NEVERD_TEST_CLANG;
+  if (Clang.empty())
+    GTEST_SKIP() << "no clang: the ordinary callback bypass is not executed";
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-callback", Dir));
+  for (Arch Target : {Arch::X64, Arch::AArch64}) {
+    const HighFunc Function = nativeWindowsCallback(Target);
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::COFF;
+    Options.StructuredExceptionSyntax = false;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, OS, Options));
+    EXPECT_NE(Text.find("L_windows_callback_1020_0"), std::string::npos);
+    EXPECT_NE(Text.find("return 7;"), std::string::npos);
+    llvm::SmallString<128> File(Dir), Binary(Dir);
+    llvm::sys::path::append(File, "source.c");
+    llvm::sys::path::append(Binary, "source.out");
+    std::error_code EC;
+    {
+      llvm::raw_fd_ostream Out(File, EC);
+      ASSERT_FALSE(EC);
+      Out << Text << "\nint main(void) { return parent() != 11; }\n";
+    }
+    auto Built =
+        run(Clang, {"-std=c11", "-pedantic-errors", "-O1", "-o", Binary, File},
+            Dir);
+    ASSERT_TRUE(bool(Built)) << llvm::toString(Built.takeError());
+    auto Result = run(Binary, {}, Dir);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  }
+  llvm::sys::fs::remove_directories(Dir);
+}
+
+TEST(SourceDialect, PlainCCallbackRequiresItsNativeTableAndBodyIdentity) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = nativeWindowsCallback(Arch::X64);
+    auto &EH = *Function.ExceptionMetadata;
+    auto &Region = Function.Body.front();
+    switch (Mutation) {
+    case 0:
+      EH.Cxx.reset();
+      break;
+    case 1:
+      EH.Cxx->TryBlocks.push_back(EH.Cxx->TryBlocks.front());
+      break;
+    case 2:
+      EH.ParseStatus = ExceptionParseStatus::Partial;
+      break;
+    case 3:
+      Region.EHClauses.front().ParseStatus = ExceptionParseStatus::Partial;
+      break;
+    case 4:
+      EH.CodeRange.End = 0x1010;
+      break;
+    case 5:
+      ++Region.EHClauses.front().Adjectives;
+      break;
+    case 6:
+      ++Region.EHClauseBodies.front().front().Addr;
+      break;
+    case 7:
+      Region.EHIsReducible = false;
+      break;
+    case 8:
+      EH.Encoding = ExceptionEncoding::DwarfFDE;
+      break;
+    }
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    Options.StructuredExceptionSyntax = false;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    EXPECT_THROW(HighCEmitter().emit({Function}, OS, Options),
+                 std::invalid_argument);
+  }
+}
+
+TEST(SourceDialect, CxxAlignmentUsesStandardSyntaxAndPreservesStorage) {
+  const llvm::StringRef Source = R"C(
+#include <stdint.h>
+/* _Alignas in comments and strings is not a keyword. */
+_Alignas(64) unsigned char global_storage[64];
+struct aligned_record { _Alignas(32) unsigned char bytes[32]; };
+_Static_assert(_Alignof(struct aligned_record) == 32, "_Alignas record");
+int main(void) {
+  _Alignas(16) unsigned char stack_storage[96];
+  return ((uintptr_t)global_storage & 63) |
+         ((uintptr_t)stack_storage & 15);
+}
+)C";
+  const auto C = spell(Source, SourceDialect::C);
+  const auto Cpp = spell(Source, SourceDialect::Cpp);
+  ASSERT_TRUE(C.Unread.empty()) << C.Text;
+  ASSERT_TRUE(Cpp.Unread.empty()) << Cpp.Text;
+  EXPECT_EQ(tokens(C.Text), tokens(Source));
+  EXPECT_NE(Cpp.Text.find("alignas(16)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("alignas(32)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("alignas(64)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("alignof(struct aligned_record)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("/* _Alignas in comments"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("\"_Alignas record\""), std::string::npos);
+
+  const std::string Clang = NEVERD_TEST_CLANG;
+  if (Clang.empty())
+    GTEST_SKIP() << "no clang: aligned C and C++ storage are not executed";
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-alignment", Dir));
+  for (bool IsCpp : {false, true}) {
+    llvm::SmallString<128> File(Dir), Binary(Dir);
+    llvm::sys::path::append(File, IsCpp ? "source.cpp" : "source.c");
+    llvm::sys::path::append(Binary, IsCpp ? "cpp.out" : "c.out");
+    std::error_code EC;
+    {
+      llvm::raw_fd_ostream OS(File, EC);
+      ASSERT_FALSE(EC);
+      OS << (IsCpp ? Cpp.Text : C.Text);
+    }
+    auto Built = run(Clang,
+                     {IsCpp ? "-std=c++17" : "-std=c11", "-pedantic-errors",
+                      "-O1", "-o", Binary, File},
+                     Dir);
+    ASSERT_TRUE(bool(Built)) << llvm::toString(Built.takeError());
+    auto Result = run(Binary, {}, Dir);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  }
+  llvm::sys::fs::remove_directories(Dir);
+}
+
 /// Compiles the C functions with clang and their Rust view with rustc, runs
 /// both on the same inputs and compares what they print: the Rust view must
 /// compute what the C computes.  NEVERD_TEST_RUSTC or a `rustc` on PATH runs

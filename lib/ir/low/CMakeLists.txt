@@ -14,19 +14,24 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationState.cpp
   X86/RegistrationStateCalls.cpp
   X86/RegistrationStateCxx.cpp
+  X86/RegistrationStateObject.cpp
+  X86/RegistrationStateResume.cpp
   X86/RegistrationStateCallback.cpp
   X86/RegistrationStateContracts.cpp
   X86/RegistrationStateCookies.cpp
   X86/RegistrationStateDispatch.cpp
   X86/RegistrationStateLocalUnwind.cpp
   X86/RegistrationStateOccurrences.cpp
+  X86/RegistrationStateOrder.cpp
   X86/RegistrationStateRealignment.cpp
   X86/RegistrationStateInstallation.cpp
   X86/RegistrationStateResult.cpp
   X86/RegistrationStateSearch.cpp
+  X86/RegistrationStateThrow.cpp
   X86/RegistrationStateTransfer.cpp
   X86/RegistrationStateUnwind.cpp
   X86/RegistrationFrame.cpp
+  X86/RegistrationFrameMemory.cpp
   X86/RegistrationFrameCallback.cpp
   X86/RegistrationFrameRealignment.cpp
 )
@@ -46,10 +51,16 @@ add_neverd_component_library(NeverDIRLow
   FuncDetectorAArch64.cpp
   IndirectTailFrame.cpp
   X86/RegistrationCalleeABI.cpp
+  X86/RegistrationCleanupABI.cpp
+  X86/RegistrationCleanupFrame.cpp
+  X86/RegistrationThrowABI.cpp
+  X86/RegistrationThrowImportABI.cpp
+  X86/RegistrationRuntimeThrowInfo.cpp
   X86/RegistrationCalleeFrame.cpp
   X86/RegistrationCalleeIndex.cpp
   X86/RegistrationCalleeStack.cpp
   X86/RegistrationCallerABI.cpp
+  X86/RegistrationEntryABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp
   NdOpEmulatorFloatConvert.cpp

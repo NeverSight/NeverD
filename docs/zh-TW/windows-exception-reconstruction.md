@@ -29,7 +29,9 @@ record、語言表與防護表彼此一致時，NeverD 才允許重寫。
 | `__CxxFrameHandler3` | unwind map、try map、catch、catch-object/frame offset、continuation 與 IP-to-state map | 可規約狀態區間變成明確 C++ HighIR，並帶 C 相容型別註解 | 對下文所述嚴格受限且 verifier-clean 的子集執行原生 x64 重建 |
 | `__CxxFrameHandler4` | 有界變長解碼到共用 C++ graph，包括 action kind 與 object offset | 同一 HighIR graph 並保留 FH4 來源 | 僅分析；拒絕修改涉及的函式 |
 | `__GSHandlerCheck_SEH/EH/EH4` | 包裝後的 personality 與經檢查的 GS cookie 來源 | 基礎語言 graph 加 wrapper 註解 | 僅分析；拒絕修改涉及的函式，不做降級 |
-| x86 registration-chain EH | 與表格驅動 EH 明確區分 | 不支援形式的註解 | 不重建 |
+| x86 registration-chain EH | 經檢查的 SEH 鏈與 C++ 圖 | 保留 callback 身分的 HighIR 區域 | 對已證明的子集執行 PE32 重建；參見詳細契約 |
+
+純量引用 `catch` 內的 `try` 可保留仍存活的外層例外物件，並恢復其私有堆疊。共享 callback 與通用物件生命週期仍不屬於原生重建子集。 [PE32 C++](../windows-exception-reconstruction.md).
 
 畸形 record 絕不會當成一般完整 record。部分解碼 record 仍可用於檢查，但不能授權產生
 原生 metadata。如果 ARM xdata header 仍可證明有界可執行 fragment 範圍，而後續
@@ -60,6 +62,23 @@ cycle 或 decode budget 耗盡都會降低相關 parse status。
 try-map entry 重複使用同一 handler map，解析工作也不能超過總預算。共享相同
 `FuncInfo` 與 personality 的 FH3 record 會當作有界函式群組解碼，使父函式的
 IP-to-state map 能合法指向其 catch funclet，同時排除不相關 runtime function 地址。
+
+產生的 PE32 C++ 入口在完整來源證明通過後，可再次載入、提升及重建。loader 從映像
+位元組核驗精確的 FS:[0] 寫入、對齊框架及 SafeSEH 指標用途。安裝器允許修改先前產生的
+可執行節內經過認證的入口，但要求虛擬位址與原始檔案儲存皆唯一，且位元組與分析輸入一致。
+cdecl/stdcall/thiscall/fastcall 樣本使用 Microsoft x86 CRT 驗證兩代重建、兩種 patch 模式
+及強制重定位。每一代均重新進行 LowIR 與 LLVM 證明，舊憑據不能授予重寫權限。
+產生的 ESI cleanup relay 在區域框架基址與保存的入口 EBP 完全符合已認證父函式時，
+也支援第二次重建。快取的位元組證明必須逐次綁定派送框架，LowIR 證明物件借用與保存框架
+的生命週期。真實 MSVC 按值／參考樣本驗證兩代程式碼的有序解構、參考寫回、兩種 patch
+模式及強制重定位。一般物件生命週期與型別轉換仍待支援。
+
+PE32 平凡複製物件也支援按值或參考捕獲、直接拋出與重新拋出。不可變 ThrowInfo
+必須只有一個可捕獲型別，不含位址調整、複製建構、解構或轉送回呼。每個來源位元組
+都必須已初始化，私有框架指標不得逸出。O0/O1 測試涵蓋 8 與 12 位元組記錄、欄位
+修改、catch 分支、兩種 CLI 模式及 Microsoft CRT 重定位。PHI 複製區塊保留回呼
+歸屬；獨立安裝驗證拒絕額外呼叫、別名記憶體與變更的 CFG 目標。RTTI 不提供成員
+配置，C++ 語法檢查使用樣本的真實型別宣告；輸出保留原生偏移與未知聚合型別的拋出呼叫。
 
 ## IR 契約
 

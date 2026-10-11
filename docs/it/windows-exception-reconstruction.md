@@ -33,7 +33,9 @@ Il supporto di analisi non implica la ricostruzione nativa.
 | `__CxxFrameHandler3` | Unwind/try map, catch, offset object/frame, continuation e IP-to-state | Intervalli riducibili come C++ HighIR con annotazioni di tipo compatibili C | Ricostruzione x64 del subset stretto e verifier-clean descritto sotto |
 | `__CxxFrameHandler4` | Decodifica variabile limitata nel grafo C++ comune | Stesso HighIR con provenienza FH4 | Solo analisi; funzione toccata rifiutata |
 | `__GSHandlerCheck_SEH/EH/EH4` | Personality avvolta e provenienza GS cookie verificata | Grafo base e annotazione wrapper | Solo analisi; rifiuto senza downgrade |
-| EH x86 registration-chain | Distinto dall’EH tabellare | Annotazione di forma non supportata | Non ricostruito |
+| EH x86 a catena di registrazione | Catene SEH e grafi C++ verificati | Regioni HighIR con identità dei callback conservata | Ricostruzione PE32 del sottoinsieme verificato; vedere il contratto dettagliato |
+
+Un `try` dentro un `catch` di riferimento scalare può conservare l’oggetto esterno vivo e ripristinarne lo stack privato. I callback condivisi e la gestione generale della durata degli oggetti restano esclusi dal sottoinsieme nativo. [PE32 C++](../windows-exception-reconstruction.md).
 
 Un record malformed non è mai completo. Una decodifica partial resta utile per
 l’ispezione ma non autorizza la generazione nativa. Se un header xdata ARM prova
@@ -64,6 +66,27 @@ I limiti valgono per tabella e per l’intero grafo della funzione. Riutilizzare
 una handler map in molte try entry non supera il budget aggregato. I record FH3
 con `FuncInfo` e personality comuni formano un gruppo limitato: accettano i propri
 catch funclet, non indirizzi runtime estranei.
+
+Gli ingressi C++ PE32 generati possono essere caricati, elevati e ricostruiti di nuovo se la prova completa dell’origine riesce.
+Il loader verifica nei byte la scrittura FS:[0] esatta, il frame riallineato e i ruoli dei puntatori SafeSEH.
+L’installazione può modificare un ingresso autenticato in una sezione eseguibile generata in precedenza se la memoria
+virtuale e lo spazio fisico sono univoci e corrispondono ai byte analizzati. I casi cdecl/stdcall/thiscall/fastcall
+verificano due generazioni, entrambe le modalità patch e il rebasing forzato con il CRT Microsoft x86.
+Ogni generazione richiede nuove prove LowIR e LLVM; una ricevuta precedente non autorizza altre riscritture.
+I relay cleanup basati su ESI consentono una seconda ricostruzione se la base del frame e l’EBP di ingresso
+salvato corrispondono al padre autenticato. La prova dei byte in cache viene associata a ogni chiamata;
+LowIR verifica gli accessi agli oggetti e la durata del frame salvato. I campioni MSVC reali verificano
+distruzione ordinata e scritture per riferimento su due generazioni, entrambe le modalità patch e basi
+forzate. La durata generale degli oggetti e le conversioni di tipo restano da supportare.
+
+Gli oggetti PE32 copiati banalmente supportano catch per valore o riferimento, throw diretto e rilancio.
+Il ThrowInfo immutabile deve contenere un solo tipo senza correzioni dell’indirizzo, costruttore di
+copia, distruttore o callback di inoltro. Ogni byte deve essere inizializzato e i puntatori al frame
+privato non possono uscire. I casi O0/O1 verificano strutture di 8 e 12 byte, modifiche dei campi,
+rami catch, entrambe le modalità CLI e rilocazione con Microsoft CRT. Le copie PHI mantengono arco
+CFG e callback; la verifica indipendente rifiuta chiamate aggiunte, alias e destinazioni alterate.
+RTTI non rivela il layout dei membri: i controlli sintattici C++ usano le dichiarazioni reali del test,
+mentre l’output conserva offset nativi e chiamate throw per aggregati sconosciuti.
 
 ## Contratto IR
 

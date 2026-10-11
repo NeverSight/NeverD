@@ -11,6 +11,7 @@ import re
 import shutil
 import struct
 import subprocess
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
 if __package__:
@@ -30,35 +31,99 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_nested_try_driver.cpp"
 EMITTER = ROOT / "unittests/lift/eh/WindowsRegistrationNestedTryTests.cpp"
 PROOF = ROOT / "unittests/lift/eh/RegistrationNestedTryTestUtils.cpp"
+RETHROW_PROOF = ROOT / "unittests/lift/eh/RegistrationRethrowTestUtils.cpp"
+DIRECT_PROOF = ROOT / "unittests/lift/eh/RegistrationDirectThrowTestUtils.cpp"
+CATCH_PROOF = ROOT / "unittests/lift/eh/WindowsRegistrationCatchContextTests.cpp"
+RECEIPT_PROOF = ROOT / "unittests/lift/eh/RegistrationSourceReceiptTestUtils.cpp"
+CLEANUP_PROOF = ROOT / "unittests/lift/eh/RegistrationCleanupTestUtils.cpp"
 FORMS = {prefix + "-" + mode + "-llvm-fixed": "-" + mode.upper()
-         for prefix in ("nested", "secondary") for mode in ("o0", "o1")}
+         for prefix in ("nested", "secondary", "rethrow", "inline-rethrow",
+                        "direct-nested", "direct-secondary", "direct-rethrow", "catch-try",
+                        "catch-cleanup")
+         for mode in ("o0", "o1")}
 CASES = tuple(name + suffix for name in FORMS for suffix in ("", "-control"))
 
 
-def observe(path, case, route, receipt, launcher, env, timeout):
-    secondary = case.startswith("secondary-")
-    if receipt.get("secondary_search") is not secondary:
+def search_context(case):
+    family, separator, mode = case.removesuffix("-control").removesuffix("-llvm-fixed").rpartition("-")
+    if not separator or mode not in ("o0", "o1") or family not in (
+            "nested", "secondary", "rethrow", "inline-rethrow", "direct-nested",
+            "direct-secondary", "direct-rethrow", "catch-try", "catch-cleanup"):
+        raise ValueError("unknown nested throw profile")
+    rethrow = family in ("rethrow", "inline-rethrow", "direct-rethrow")
+    return {"secondary_search": rethrow or family in ("secondary", "direct-secondary"),
+            "rethrow_search": rethrow,
+            "inline_rethrow": family in ("inline-rethrow", "direct-rethrow"),
+            "direct_throw": family.startswith("direct-"),
+            "catch_try": family in ("catch-try", "catch-cleanup"),
+            "catch_cleanup": family == "catch-cleanup"}
+
+
+def validate_search_context(receipt, case):
+    context = search_context(case)
+    if any(receipt.get(key) is not value for key, value in context.items()):
         raise ValueError("nested source proof has the wrong catch search context")
-    expected = (17, 17, 39, 7, 7, 39, 1, 12) if secondary else (17, 28, 39, 7, 18, 39, 1, 12)
+    return context
+
+
+def observe(path, case, route, receipt, launcher, env, timeout):
+    context = validate_search_context(receipt, case)
+    rethrow, secondary = context["rethrow_search"], context["secondary_search"]
+    expected = ((39, 28, 39, 39, 18, 39, 1, 12) if rethrow else
+                (17, 17, 39, 7, 7, 39, 1, 12) if secondary else
+                (17, 28, 39, 7, 18, 39, 1, 12))
     return observe_catches(path, case, route, receipt, launcher, env, timeout,
-                           expected_values=expected)
+                           expected_values=expected,
+                           expected_cleanup=(0, 53, 0) if context["catch_cleanup"] else None)
 
 
-def validate_decompilation(text: str, language: str) -> None:
-    if "highir.structured_regions=2, fallback_regions=0" not in text or \
-            text.count("= __neverd_x86_callback_esp(0x") != 3:
+def validate_decompilation(text: str, language: str, inline: bool = False,
+                           direct: bool = False, catch_try: bool = False,
+                           cleanup_actions: int = 0) -> None:
+    regions, callbacks = (3, 4) if catch_try else (2, 3)
+    if f"highir.structured_regions={regions}, fallback_regions=0" not in text or \
+            text.count("= __neverd_x86_callback_esp(0x") != callbacks:
         raise ValueError("nested decompilation lost a language region or callback")
-    if language == "c" and text.count("Native x86 callback @") != 3:
+    if language == "c" and text.count("Native x86 callback @") != callbacks:
         raise ValueError("nested C output lost a callback entry")
-    if language == "cpp" and (text.count("catch (") != 3 or
-                               len(re.findall(r"\btry \{", text)) != 2 or ".Value" in text):
+    if language == "cpp" and (text.count("catch (") != callbacks or
+                               len(re.findall(r"\btry \{", text)) != regions or ".Value" in text):
         raise ValueError("nested C++ output lost a try or invented an object field")
-    if len(set(re.findall(r"goto L_([0-9A-F]+);", text))) < 3:
+    if inline and language == "cpp" and len(re.findall(r"\bthrow;", text)) != 1:
+        raise ValueError("direct rethrow lost its current exception")
+    if direct and language == "cpp" and any("throw (" + spelling + ")" not in text
+                                                for spelling in ("int", "unsigned int", "float")):
+        raise ValueError("direct typed throw output lost its arguments")
+    if len(set(re.findall(r"goto L_([0-9A-F]+);", text))) < callbacks:
         raise ValueError("nested output lost runtime continuation targets")
+    if cleanup_actions:
+        pattern = (r"Native x86 cleanup @ 0x([1-9A-F][0-9A-F]*); state=(\d+), "
+                   r"to-state=-?\d+, object-offset=-?\d+" if language == "cpp" else
+                   r"\* cleanup @ 0x0, action @ 0x([1-9A-F][0-9A-F]*), "
+                   r"type descriptor @ 0x0, state=(\d+),")
+        actions = re.findall(pattern, text)
+        if len(actions) != cleanup_actions or len(set(actions)) != cleanup_actions or \
+                "__unwind" in text:
+            raise ValueError("nested cleanup output lost a native action")
+
+
+def source_profile(name):
+    if name == "nested":
+        return SimpleNamespace(source=SOURCE, forms=FORMS, cases=CASES,
+                               types=None, proof=None, test=None,
+                               validate_decompilation=validate_decompilation)
+    if name == "objects":
+        if __package__:
+            from .windows_registration_objects import profile
+        else:
+            from windows_registration_objects import profile
+        return profile(validate_decompilation)
+    raise ValueError("unknown nested source profile")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", choices=("nested", "objects"), default="nested")
     parser.add_argument("--test-binary", type=Path, required=True)
     parser.add_argument("--patch-binary", type=Path, required=True)
     parser.add_argument("--runtime-libs", type=Path, required=True)
@@ -70,11 +135,12 @@ def main() -> int:
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
+    profile = source_profile(args.profile)
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy() | {"WINEDEBUG": "-all", "WINEDLLOVERRIDES": "vcruntime140=n"}
     report = {"schema": 1, "evidence": "nested-try-source-reconstruction",
-              "passed": False, "commands": [], "cases": []}
+              "passed": False, "profile": args.profile, "commands": [], "cases": []}
 
     def run(command, extra=None):
         command = list(map(str, command))
@@ -93,20 +159,40 @@ def main() -> int:
             raise ValueError("compiler, linker or Wine unavailable")
         libraries, report["runtime_libraries"] = load_libraries(args.runtime_libs.resolve())
         runtime, report["catch_search_runtime"] = load_runtime(args.runtime_libs.resolve())
-        report["source_sha256"], report["emitter_sha256"] = file_digest(SOURCE), file_digest(EMITTER)
+        report["source_sha256"], report["emitter_sha256"] = file_digest(profile.source), file_digest(EMITTER)
         report["proof_sha256"] = file_digest(PROOF)
+        report["rethrow_proof_sha256"] = file_digest(RETHROW_PROOF)
+        report["direct_proof_sha256"] = file_digest(DIRECT_PROOF)
+        report["catch_proof_sha256"] = file_digest(CATCH_PROOF)
+        report["receipt_proof_sha256"] = file_digest(RECEIPT_PROOF)
+        report["cleanup_proof_sha256"] = file_digest(CLEANUP_PROOF)
+        if profile.proof:
+            report["object_proof_sha256"] = file_digest(profile.proof)
+            report["object_types_sha256"] = file_digest(profile.types)
         test, patch = args.test_binary.resolve(), args.patch_binary.resolve()
-        for kind, optimization in FORMS.items():
+        for kind, optimization in profile.forms.items():
             for control in (False, True):
                 name = kind + ("-control" if control else "")
                 case = out / name
                 case.mkdir(exist_ok=True)
                 shutil.copyfile(runtime, case / NAME)
-                secondary = kind.startswith("secondary-")
+                context = search_context(kind)
+                inline, rethrow, secondary, direct = (
+                    context["inline_rethrow"], context["rethrow_search"],
+                    context["secondary_search"], context["direct_throw"])
+                catch_try = context["catch_try"]
+                cleanup = context["catch_cleanup"]
+                first = (39 if rethrow else 17) + int(control and not cleanup)
                 run([compiler, "--target=i686-pc-windows-msvc", "-fms-extensions", "-fexceptions",
                      "-fcxx-exceptions", "-fno-omit-frame-pointer", optimization,
-                     *(["-DSECONDARY_SEARCH"] if secondary else []),
-                     "-DEXPECTED_FIRST=" + ("18" if control else "17"), "-c", SOURCE,
+                     *(["-DDIRECT_TYPED_THROW"] if direct else []),
+                     *(["-DCATCH_TRY"] if catch_try else []),
+                     *(["-DCATCH_CLEANUP", "-DEXPECTED_CLEANUP=" + str(35 if control else 53)]
+                       if cleanup else []),
+                     *(["-DINLINE_RETHROW_SEARCH"] if inline else []),
+                     *(["-DRETHROW_SEARCH"] if rethrow else
+                       ["-DSECONDARY_SEARCH"] if secondary else []),
+                     "-DEXPECTED_FIRST=" + str(first), "-c", profile.source,
                      "-o", case / "driver.obj"])
                 original, product = case / "original.exe", case / "product.exe"
                 run([linker, "/entry:mainCRTStartup", "/nodefaultlib", "/machine:x86", "/subsystem:console",
@@ -116,14 +202,22 @@ def main() -> int:
                 report["commands"].append({"original_runtime": initial})
                 if initial.get("exit_code") != int(control):
                     raise ValueError("original nested fixture failed")
-                run([test, "--gtest_filter=WindowsRegistrationNestedTry.InputPE32Reconstructs" +
-                     ("SecondarySearch" if secondary else "NestedSearch"),
+                test_case = (("DirectThrowAndRethrow" if rethrow else
+                              "DirectSecondaryThrow" if secondary else "DirectThrows") if direct else
+                             "InlineRethrow" if inline else "Rethrow" if rethrow else
+                             "SecondarySearch" if secondary else "NestedSearch")
+                test_filter = ("WindowsRegistrationCatchContext.InputPE32RestoresTheOuterReferenceCatch"
+                               if catch_try else
+                               "WindowsRegistrationNestedTry.InputPE32Reconstructs" + test_case)
+                if profile.test:
+                    test_filter += ":" + profile.test
+                run([test, "--gtest_filter=" + test_filter,
                      "--gtest_output=xml:" + str(case / "rewrite.xml")],
                     {"NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32": str(original),
                      "NEVERD_REGISTRATION_REALIGNED_OUTPUT_PE32": str(product),
                      "NEVERD_REGISTRATION_REALIGNED_RECEIPT": str(case / "contract.json"),
                      "NEVERD_REGISTRATION_OUTPUT_IR": str(case / "source.ll")})
-                if require_test_result(case / "rewrite.xml") != 1:
+                if require_test_result(case / "rewrite.xml") != 1 + int(bool(profile.test)):
                     raise ValueError("nested source reconstruction check missing")
                 receipt = json.loads((case / "contract.json").read_text())
                 validate_installation(PE32(original.read_bytes()), PE32(product.read_bytes()), receipt, name)
@@ -142,10 +236,14 @@ def main() -> int:
                     run([patch, "decompile", original,
                          "--func=" + hex(receipt["base"] + receipt["source_begin"]),
                          "--language=" + language, "-o", source])
-                    validate_decompilation(source.read_text(), language)
+                    profile.validate_decompilation(source.read_text(), language, inline, direct, catch_try,
+                                           (2 if optimization == "-O0" else 1) if cleanup else 0)
                     if language == "c":
                         run([compiler, "-x", "c", "-std=c11", "-fsyntax-only",
                              "-Werror=implicit-function-declaration", source])
+                    else:
+                        run([compiler, "-x", "c++", "-std=c++17",
+                             "-fsyntax-only", *(["-include", profile.types] if profile.types else []), source])
                     record["decompilation"][language] = file_digest(source)
                 for route in ROUTES:
                     source = case / (route + ".exe")

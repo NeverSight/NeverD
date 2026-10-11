@@ -79,7 +79,8 @@ enum ProvenanceOperand : unsigned {
   ProvenanceOperandCount,
 };
 
-/// Bumped whenever an operand's position or meaning changes. Version 10 retains
+/// Bumped whenever an operand's position or meaning changes. Version 11 binds
+/// disjoint callback and cold-code chunks. Version 10 retains
 /// the checked realigned-frame anchor separately from entry EBP coordinates.
 /// Version 9 records
 /// each x86 state store's width; narrow immediates do not assert a whole level.
@@ -96,7 +97,7 @@ enum ProvenanceOperand : unsigned {
 /// ones do not.  LLVM may preserve older opaque attachments for analysis, but
 /// rewrite authentication always requires a canonical node at this version and
 /// therefore fails old schemas closed.
-inline constexpr unsigned SchemaVersion = 10;
+inline constexpr unsigned SchemaVersion = 11;
 inline constexpr unsigned SchemaV5OperandCount = 33;
 
 enum FunctionOperand : unsigned {
@@ -135,12 +136,14 @@ enum FunctionOperand : unsigned {
   CanRegenerate,
   /// Appended in schema v6 so every schema-v5 operand retains its index.
   Registration = SchemaV5OperandCount,
+  /// Disjoint code chunks, appended in schema v11.
+  FragmentRanges,
   OperandCount,
 };
 
 static_assert(CanRegenerate == SchemaV5OperandCount - 1);
 static_assert(Registration == SchemaV5OperandCount);
-static_assert(OperandCount == SchemaV5OperandCount + 1);
+static_assert(OperandCount == SchemaV5OperandCount + 2);
 
 enum UnwindOperationOperand : unsigned {
   UnwindOpKind = 0,

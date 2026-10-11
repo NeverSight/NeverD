@@ -33,7 +33,9 @@ Le support d’analyse n’implique pas le support de reconstruction native.
 | `__CxxFrameHandler3` | Unwind map, try map, catches, offsets objet/frame, continuations et IP-to-state map | Intervalles réductibles en C++ HighIR avec annotations de type compatibles C | Reconstruction x64 du sous-ensemble volontairement étroit et verifier-clean décrit plus bas |
 | `__CxxFrameHandler4` | Décodage variable borné vers le graphe C++ commun, actions et offsets inclus | Même graphe HighIR avec provenance FH4 | Analyse seulement ; fonction touchée refusée |
 | `__GSHandlerCheck_SEH/EH/EH4` | Personality enveloppée et provenance GS cookie vérifiée | Graphe du langage de base et annotation wrapper | Analyse seulement ; refus sans downgrade |
-| EH x86 par chaîne d’enregistrement | Distinct de l’EH tabulaire | Annotation de forme non prise en charge | Non reconstruit |
+| EH x86 par chaîne d’enregistrement | Chaînes SEH et graphes C++ vérifiés | Régions HighIR et callbacks avec identité conservée | Reconstruction PE32 du sous-ensemble prouvé ; voir le contrat détaillé |
+
+Un `try` dans un `catch` de référence scalaire peut conserver l’objet extérieur vivant et restaurer sa pile privée. Les callbacks partagés et la durée de vie générale des objets restent hors du sous-ensemble natif. [PE32 C++](../windows-exception-reconstruction.md).
 
 Un record malformé n’est jamais considéré comme complet. Un décodage partiel
 reste consultable mais n’autorise pas la génération native. Si un header xdata
@@ -66,6 +68,28 @@ réutilisation d’une handler map par plusieurs try entries ne multiplie pas le
 travail au-delà du budget global. Les records FH3 partageant `FuncInfo` et la
 personality forment un groupe borné, ce qui autorise les catch funclets du parent
 sans accepter les adresses de fonctions sans rapport.
+
+Les entrées C++ PE32 générées peuvent être rechargées, relevées et reconstruites si la preuve source complète réussit.
+Le chargeur vérifie les octets de l’écriture FS:[0], le cadre réaligné et les rôles des pointeurs SafeSEH.
+L’installation peut modifier une entrée authentifiée d’une section exécutable précédemment générée, à condition que
+son stockage virtuel et physique soit unique et corresponde aux octets analysés. Les cas cdecl/stdcall/thiscall/fastcall
+vérifient deux générations, les deux modes de patch et le rebasage forcé avec le CRT Microsoft x86.
+Chaque génération exige de nouvelles preuves LowIR et LLVM ; un ancien reçu n’autorise aucune réécriture.
+Les relais cleanup fondés sur ESI permettent une seconde reconstruction si la base du cadre et l’EBP
+d’entrée sauvegardé correspondent au parent authentifié. La preuve des octets en cache est liée à chaque
+appel ; LowIR prouve les accès aux objets et la durée de vie du cadre sauvegardé. Les exemples MSVC réels
+vérifient l’ordre des destructions et les écritures par référence sur deux générations, les deux modes patch
+et les bases forcées. Les durées de vie générales des objets et les conversions de types restent à traiter.
+
+Les objets PE32 copiés trivialement prennent en charge les catches par valeur ou référence,
+les throws directs et les relances. Le ThrowInfo immuable doit décrire un seul type sans ajustement,
+constructeur de copie, destructeur ni callback de transfert. Chaque octet est initialisé et aucun
+pointeur de frame privée ne s’échappe. Les cas O0/O1 vérifient des structures de 8 et 12 octets,
+les modifications, les branches de catch, les deux modes CLI et le rebasage avec le CRT Microsoft.
+Les copies PHI gardent leur callback et leur arête CFG ; la validation indépendante refuse appels
+supplémentaires, alias mémoire et cibles modifiées. Le RTTI ne décrit pas les membres : les contrôles
+syntaxiques C++ utilisent les déclarations réelles du test, et la sortie conserve offsets natifs
+et appels throw des agrégats inconnus.
 
 ## Contrat IR
 

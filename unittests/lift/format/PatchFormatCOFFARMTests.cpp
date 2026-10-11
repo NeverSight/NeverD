@@ -12,6 +12,8 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/StringExtras.h"
+
 #include <set>
 
 namespace {
@@ -703,8 +705,12 @@ TEST_F(PatchCOFF_AArch64, ReconstructsBoundedNativeFH3GroupAndRelifts) {
   EXPECT_NE(HighC.find("personality=__CxxFrameHandler3"), std::string::npos);
   EXPECT_NE(HighC.find("cxx.try[0]"), std::string::npos);
   EXPECT_NE(HighC.find("catch[1]"), std::string::npos);
-  EXPECT_NE(HighC.find("type @ 0x"), std::string::npos);
-  EXPECT_NE(HighC.find("catch ("), std::string::npos);
+  EXPECT_NE(HighC.find("type descriptor @ 0x"), std::string::npos);
+  EXPECT_EQ(HighC.find("catch ("), std::string::npos);
+  for (const auto &Catch : OriginalHandlers)
+    EXPECT_NE(HighC.find("L_windows_callback_" +
+                         llvm::utohexstr(Catch.HandlerVA) + "_"),
+              std::string::npos);
 
   const auto Patch = patchBinary(PE);
   ASSERT_EQ(Patch.exitCode, 0) << Patch.err;

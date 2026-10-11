@@ -47,11 +47,15 @@ RegistrationRoots::RegistrationRoots(const LowFunc &Low, Arch Architecture,
     return;
   for (const auto &Resume : State->CxxContinuations) {
     const bool Valid =
-        EH.CodeRange.contains(Resume.TargetVA) &&
-        Resume.SavedStackOffset <= int64_t(*Chain.RegistrationOffset) - 4;
-    auto [It, New] =
-        RestoredStacks.emplace(Resume.TargetVA, Resume.SavedStackOffset);
-    if (!Valid || (!New && It->second != Resume.SavedStackOffset))
+        EH.ownsCode(Resume.TargetVA) &&
+        (Resume.SavedCallbackVA ? EH.ownsCode(Resume.SavedCallbackVA) &&
+                                      Resume.SavedStackOffset <= 0
+                                : Resume.SavedStackOffset <=
+                                      int64_t(*Chain.RegistrationOffset) - 4);
+    const auto Coordinate =
+        std::make_pair(Resume.SavedCallbackVA, Resume.SavedStackOffset);
+    auto [It, New] = RestoredStacks.emplace(Resume.TargetVA, Coordinate);
+    if (!Valid || (!New && It->second != Coordinate))
       It->second.reset();
   }
 }
@@ -100,6 +104,7 @@ void RegistrationRoots::disconnectNoReturnFallthroughs(MedFunc &Func) const {
       break;
     }
   }
+  removeUnreachedBlocks(Func);
 }
 
 bool RegistrationRoots::isCxxHandler(const MedBlock &Block) const {
@@ -111,8 +116,8 @@ bool RegistrationRoots::isCxxHandler(const MedBlock &Block) const {
          });
 }
 
-std::optional<int32_t>
-RegistrationRoots::restoredStackOffset(const MedBlock &Block) const {
+std::optional<std::pair<va_t, int32_t>>
+RegistrationRoots::restoredStack(const MedBlock &Block) const {
   if (Block.StartAddr == Low.Entry || !Block.Preds.empty() ||
       Low.OrdinaryModuleAnalysisRoots.count(Block.StartAddr))
     return std::nullopt;
@@ -120,8 +125,9 @@ RegistrationRoots::restoredStackOffset(const MedBlock &Block) const {
   return It == RestoredStacks.end() ? std::nullopt : It->second;
 }
 
-void RegistrationRoots::initialize(MedOp &Op, bool RuntimeRoot, bool Callback,
-                                   std::optional<int32_t> RestoredSP) const {
+void RegistrationRoots::initialize(
+    MedOp &Op, bool RuntimeRoot, bool Callback,
+    std::optional<std::pair<va_t, int32_t>> RestoredSP) const {
   const auto &Value = Op.Output;
   if (!(Direct || Realigned) || !RuntimeRoot || Value.Kind != MedVar::Reg ||
       Value.Size != 4)
@@ -137,9 +143,11 @@ void RegistrationRoots::initialize(MedOp &Op, bool RuntimeRoot, bool Callback,
       Op.RegistrationRoot = MedOp::RegistrationRootKind::DisplacedFramePointer;
   } else if (Value.RegOff == TRI.StackPointer && RestoredSP) {
     Op.RegistrationRoot =
-        Realigned ? MedOp::RegistrationRootKind::RealignedRestoredStackPointer
-                  : MedOp::RegistrationRootKind::RestoredStackPointer;
-    Op.RegistrationStackOffset = *RestoredSP;
+        RestoredSP->first
+            ? MedOp::RegistrationRootKind::RestoredCallbackStackPointer
+        : Realigned ? MedOp::RegistrationRootKind::RealignedRestoredStackPointer
+                    : MedOp::RegistrationRootKind::RestoredStackPointer;
+    Op.RegistrationStackOffset = RestoredSP->second;
   } else if (Value.RegOff == TRI.StackPointer && Callback)
     Op.RegistrationRoot = MedOp::RegistrationRootKind::CallbackStackPointer;
 }

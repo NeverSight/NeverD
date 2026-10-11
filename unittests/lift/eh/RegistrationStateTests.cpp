@@ -556,8 +556,9 @@ RegistrationCleanupFrameContract objectCleanupContract() {
   RegistrationCleanupFrameContract C;
   C.ActionState = 0;
   C.RelayTarget = 0x2200;
-  C.ObjectFrameOffset = -24;
-  C.Leaf = objectLeafContract();
+  C.Calls.emplace_back();
+  C.Calls[0].ObjectFrameOffset = -24;
+  C.Calls[0].Leaf = objectLeafContract();
   return C;
 }
 } // namespace
@@ -601,25 +602,25 @@ TEST(RegistrationState, RejectsUnprovedCleanupObjectsAndContracts) {
       C.ActionState = 1;
       break;
     case 3:
-      C.ObjectFrameOffset = -16; // SavedESP.
+      C.Calls[0].ObjectFrameOffset = -16; // SavedESP.
       break;
     case 4:
-      C.ObjectFrameOffset = -12; // The registration link.
+      C.Calls[0].ObjectFrameOffset = -12; // The registration link.
       break;
     case 5:
-      C.ObjectFrameOffset = -32; // Below the allocated parent stack.
+      C.Calls[0].ObjectFrameOffset = -32; // Below the allocated parent stack.
       break;
     case 6:
-      C.ObjectFrameOffset = 0; // Saved EBP.
+      C.Calls[0].ObjectFrameOffset = 0; // Saved EBP.
       break;
     case 7:
-      C.Leaf.StackPopBytes = 4;
+      C.Calls[0].Leaf.StackPopBytes = 4;
       break;
     case 8:
-      C.Leaf.ECXReads[0].End = 8; // Four bytes remain uninitialized.
+      C.Calls[0].Leaf.ECXReads[0].End = 8; // Four bytes remain uninitialized.
       break;
     case 9:
-      C.Leaf.CallerPCWrites = {{0x3100, 0x3104}};
+      C.Calls[0].Leaf.CallerPCWrites = {{0x3100, 0x3104}};
       break;
     case 10:
       for (auto &Op : F.Blocks[1].Ops)
@@ -628,12 +629,38 @@ TEST(RegistrationState, RejectsUnprovedCleanupObjectsAndContracts) {
           Op.Inputs[1] = NdVar::reg(x86reg::RBP, 4);
       break;
     case 11:
-      C.Leaf.ECXReads = {{4, 4}};
+      C.Calls[0].Leaf.ECXReads = {{4, 4}};
       break;
     }
     const auto A = analyzeRegistrationStates(F, 0, 0, &Calls, &Cleanups);
     EXPECT_FALSE(A.CleanupFrameEffectsComplete);
     EXPECT_TRUE(A.CleanupFrameEffects.empty());
+  }
+}
+
+TEST(RegistrationState, ChecksEveryCallInACombinedCleanup) {
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = makeCxxObjectCleanup();
+    const std::vector Calls{objectLeafContract()};
+    std::vector Cleanups{objectCleanupContract()};
+    auto &Sequence = Cleanups[0].Calls;
+    Sequence.push_back(Sequence[0]);
+    if (Mutation == 1)
+      Sequence[1].ObjectFrameOffset = -16;
+    if (Mutation == 2)
+      Sequence[1].Leaf.ECXReads[0].End = 8;
+    if (Mutation == 3)
+      Sequence.clear();
+    const auto Result = analyzeRegistrationStates(F, 0, 0, &Calls, &Cleanups);
+    EXPECT_EQ(Result.CleanupFrameEffectsComplete, Mutation == 0);
+    if (Mutation == 0) {
+      ASSERT_TRUE(Result.Complete);
+      ASSERT_FALSE(Result.CleanupFrameEffects.empty());
+      EXPECT_EQ(
+          Result.CleanupFrameEffects[0].FrameReads,
+          (std::vector<RegistrationObjectExtent>{{-24, -20}, {-24, -20}}));
+    }
   }
 }
 

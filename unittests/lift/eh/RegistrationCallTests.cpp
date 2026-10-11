@@ -606,7 +606,7 @@ TEST(RegistrationCallABI, ChecksImmutableSimpleThrowInfo) {
       F.tableWord(0x24, 0);
       break;
     case 8:
-      F.tableWord(0x30, 0);
+      F.tableWord(0x30, 2);
       break;
     case 9:
       F.tableWord(0x30, 5);
@@ -845,6 +845,50 @@ TEST(RegistrationCallABI, BindsTheMemoizedContractToOneBuildImage) {
   EXPECT_TRUE(Changed->empty());
 }
 
+TEST(RegistrationCallABI, RuntimeThrowTypesBelongToTheCurrentCaller) {
+  for (bool Reverse : {false, true}) {
+    ThrowImage F;
+    LowFunc Caller;
+    Caller.Blocks.resize(1);
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.addInput(NdVar::cst(ThrowImage::ImportVA, 4));
+    Caller.Blocks[0].Ops.push_back(Call);
+    auto Typed = Caller;
+    LowOp Table;
+    Table.Opcode = NdOp::COPY;
+    Table.addInput(NdVar::cst(ThrowImage::TableVA, 4));
+    Typed.Blocks[0].Ops.push_back(Table);
+    RegistrationCallCalleeIndex Index(F.Image);
+    auto Check = [&](bool WithType) {
+      const auto Contracts = Index.contracts(WithType ? Typed : Caller);
+      ASSERT_TRUE(Contracts);
+      ASSERT_EQ(Contracts->size(), 1u);
+      const auto &Contract = Contracts->front();
+      ASSERT_TRUE(Contract.isRuntimeThrow());
+      ASSERT_EQ(Contract.RuntimeThrowInfos.size(), unsigned(WithType));
+      if (WithType) {
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].Address, ThrowImage::TableVA);
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].TypeDescriptorVA,
+                  ThrowImage::DataVA);
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].ObjectSize, 4u);
+      }
+    };
+    Check(Reverse);
+    Check(!Reverse);
+    Check(Reverse);
+    auto Malformed = Typed;
+    Malformed.Blocks[0].Ops.back().NumInputs = 255;
+    EXPECT_FALSE(Index.contracts(Malformed));
+    F.tableWord(0x44, 0);
+    RegistrationCallCalleeIndex ChangedIndex(F.Image);
+    auto Changed = ChangedIndex.contracts(Typed);
+    ASSERT_TRUE(Changed);
+    ASSERT_EQ(Changed->size(), 1u);
+    EXPECT_TRUE(Changed->front().RuntimeThrowInfos.empty());
+  }
+}
+
 TEST(RegistrationCallABI, ScopeExtentKeepsTheFormatHeaderAndPE32Bounds) {
   for (bool EH4 : {false, true}) {
     ExceptionFunction F;
@@ -982,13 +1026,13 @@ TEST(RegistrationCallABI, ChecksMSVCParentFrameCleanupRelays) {
       ASSERT_TRUE(P);
       EXPECT_EQ(P->Target, CleanupRelayImage::RelayVA);
       EXPECT_EQ(P->EndAddress, CleanupRelayImage::RelayVA + (Wide ? 11 : 8));
-      EXPECT_EQ(P->ObjectFrameOffset, Offset);
-      EXPECT_EQ(P->Leaf.Target, CleanupRelayImage::LeafVA);
-      EXPECT_EQ(P->Leaf.StackPopBytes, 0u);
-      ASSERT_EQ(P->Leaf.ECXReads.size(), 1u);
-      EXPECT_EQ(P->Leaf.ECXReads[0].Begin, 0);
-      EXPECT_EQ(P->Leaf.ECXReads[0].End, 4);
-      EXPECT_TRUE(P->Leaf.ECXWrites.empty());
+      EXPECT_EQ(P->Calls[0].ObjectFrameOffset, Offset);
+      EXPECT_EQ(P->Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
+      EXPECT_EQ(P->Calls[0].Leaf.StackPopBytes, 0u);
+      ASSERT_EQ(P->Calls[0].Leaf.ECXReads.size(), 1u);
+      EXPECT_EQ(P->Calls[0].Leaf.ECXReads[0].Begin, 0);
+      EXPECT_EQ(P->Calls[0].Leaf.ECXReads[0].End, 4);
+      EXPECT_TRUE(P->Calls[0].Leaf.ECXWrites.empty());
     }
 }
 
@@ -1074,7 +1118,7 @@ TEST(RegistrationCallABI, UsesPE32RelativeBranchWrapWithoutWrappingStorage) {
       getCheckedX86RegistrationCleanupRelayABI(F.Image, Relay.VA, &Work);
   ASSERT_TRUE(P);
   EXPECT_EQ(P->EndAddress, uint64_t(UINT32_MAX) + 1);
-  EXPECT_EQ(P->Leaf.Target, CleanupRelayImage::LeafVA);
+  EXPECT_EQ(P->Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
   EXPECT_GT(Work, 8u);
   auto &Last = F.Image.Segments.back();
   ++Last.VA;
@@ -1100,9 +1144,10 @@ TEST(RegistrationCallABI, MemoizesCleanupRelaysWithoutGrantingAFrameBorrow) {
   const auto &C = Contracts->front();
   EXPECT_EQ(C.ActionState, 1u);
   EXPECT_EQ(C.RelayTarget, CleanupRelayImage::RelayVA);
-  EXPECT_EQ(C.ObjectFrameOffset, -24);
-  EXPECT_EQ(C.Leaf.Target, CleanupRelayImage::LeafVA);
-  EXPECT_EQ(C.Leaf.ECXReads, (std::vector<RegistrationObjectExtent>{{0, 4}}));
+  EXPECT_EQ(C.Calls[0].ObjectFrameOffset, -24);
+  EXPECT_EQ(C.Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
+  EXPECT_EQ(C.Calls[0].Leaf.ECXReads,
+            (std::vector<RegistrationObjectExtent>{{0, 4}}));
   EXPECT_EQ(Index.cleanupContracts(Parent)->size(), 1u);
   F.Image.Segments[0].Data[0] = 0x90;
   RegistrationCallCalleeIndex NextImage(F.Image);
@@ -1242,6 +1287,8 @@ TEST(RegistrationCallABI, CxxPersonalitySkipsTheOriginalFuncInfoOperand) {
     EXPECT_EQ(Runtime->IATVA, F.IATVA);
     EXPECT_NE(Runtime->RuntimeVA, F.HandlerVA);
     EXPECT_FALSE(Runtime->CodeRanges.empty());
+    EXPECT_TRUE(coff_loader::isCheckedX86CxxHandlerReference(
+        F.Source.Code.Image, F.HandlerVA));
   }
 }
 
@@ -1323,6 +1370,10 @@ TEST(RegistrationCallABI, CxxPersonalityRejectsStorageAndRuntimeConflicts) {
     }
     EXPECT_FALSE(
         coff_loader::getCheckedX86CxxPersonalityABI(Image, F.Source.EH));
+    // The independent reference has no parent record to trust. A forged
+    // parent association leaves the actual retained thunk identity intact.
+    EXPECT_EQ(coff_loader::isCheckedX86CxxHandlerReference(Image, F.HandlerVA),
+              Mutation == 4);
   }
 }
 
@@ -1502,7 +1553,7 @@ TEST(RegistrationCallABI, PhysicalScalarReturnNeedsMoreThanFramePrivacy) {
   const auto Relay = getCheckedX86RegistrationCleanupRelayABI(
       F.Image, CleanupRelayImage::RelayVA);
   ASSERT_TRUE(Relay);
-  EXPECT_TRUE(Relay->Leaf.HasIndependentScalarReturn);
+  EXPECT_TRUE(Relay->Calls[0].Leaf.HasIndependentScalarReturn);
 }
 
 TEST(RegistrationCallABI, PhysicalReturnRejectsCallerPCAndMixedPredecessors) {

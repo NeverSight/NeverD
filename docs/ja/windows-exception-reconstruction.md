@@ -31,7 +31,9 @@ NeverD は Windows のテーブルベース例外情報を、ロード、lift、
 | `__CxxFrameHandler3` | unwind/try map、catch、catch-object/frame offset、continuation、IP-to-state map | reducible state interval を明示的 C++ HighIR と C 互換型注釈に変換 | 後述する狭い verifier-clean subset のネイティブ x64 再構築 |
 | `__CxxFrameHandler4` | action kind と object offset を含む bounded variable-length decode | FH4 provenance を持つ共通 HighIR graph | 解析のみ。対象関数の変更を拒否 |
 | `__GSHandlerCheck_SEH/EH/EH4` | wrapped personality と検査済み GS cookie provenance | base language graph と wrapper 注釈 | 解析のみ。downgrade せず対象関数の変更を拒否 |
-| x86 registration-chain EH | table-based EH と区別 | unsupported-form 注釈 | 再構築しない |
+| x86 registration-chain EH | 検証済み SEH チェーンと C++ グラフ | callback の識別を保持する HighIR 領域 | 証明済み部分集合の PE32 再構築。詳細な契約を参照 |
+
+スカラー参照の `catch` 内にある `try` は、生存中の外側の例外オブジェクトと専用スタックの復元を保持できます。共有 callback と一般的なオブジェクト寿命は、まだネイティブ再構築の対象外です。 [PE32 C++](../windows-exception-reconstruction.md).
 
 Malformed record を完全な通常 record として扱うことはありません。partial decode は調査に
 使えますが、ネイティブ metadata 生成を許可しません。ARM xdata header から bounded な
@@ -62,6 +64,27 @@ handler map を多数の try-map entry が再利用しても総予算を超え�
 personality を共有する FH3 record は bounded function group として decode され、親の
 IP-to-state map は自身の catch funclet を参照できますが、無関係な runtime function の
 address は受け入れません。
+
+生成済み PE32 C++ エントリは、完全なソース証明に成功すれば再ロード、再リフト、再構築できます。
+loader は実際の FS:[0] 書き込み、整列フレーム、SafeSEH ポインターの役割をバイト列から検証します。
+インストーラーは以前生成した実行可能セクション内の認証済みエントリも変更できますが、仮想範囲と
+ファイル上の格納範囲が一意で、解析時のバイト列と一致する必要があります。cdecl/stdcall/thiscall/fastcall
+の検体は Microsoft x86 CRT で二世代の再構築、両 patch モード、強制再配置を検証します。
+各世代で LowIR と LLVM を新たに証明し、古い証明記録を許可として再利用しません。
+生成された ESI cleanup relay も、ローカルフレームの基点と保存した入口 EBP が認証済みの
+親と一致すれば二度目の再構築に対応します。キャッシュしたバイト列の証明は呼び出しごとに
+親フレームへ結び直し、LowIR がオブジェクトの借用と保存フレームの寿命を証明します。
+実際の MSVC 値／参照サンプルで、二世代、両 patch モード、強制再配置にわたりデストラクタの
+順序と参照書き戻しを検証します。一般的なオブジェクト寿命と型変換は未対応です。
+
+PE32 の自明にコピーできる例外オブジェクトは、値・参照による捕捉、直接 throw、
+再 throw にも対応します。不変の ThrowInfo は型を一つだけ含み、アドレス調整、コピー・
+デストラクタ・転送コールバックを持たない必要があります。全バイトの初期化と私有
+フレームポインタの非流出を証明します。O0/O1 の 8・12 バイト構造体でフィールド更新、
+catch 内分岐、両 CLI モード、Microsoft CRT の再配置を検証します。PHI コピーは元の
+CFG 辺とコールバックに所属し、独立検証は追加呼び出し、別名メモリ、遷移先変更を拒否します。
+RTTI はメンバー配置を示さないため、C++ 構文検査にはサンプルの実際の型宣言を使い、
+出力はネイティブオフセットと未知の集約型の throw 呼び出しを保持します。
 
 ## IR 契約
 

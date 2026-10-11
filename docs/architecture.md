@@ -160,12 +160,28 @@ stack proof, outlining and security-check ABI under `lib/backend/llvm/X86`.
 used by both SEH and C++: preflight binds source memory occurrences, installation
 captures the physical entry frame in an escaped slot, and rollback restores
 pointers, metadata, volatility and newly introduced declarations. The shared
-C++ entry ABI accepts only observed contiguous cdecl words or a single ECX
-parameter; parameter attributes cannot silently select another register ABI.
+C++ entry projection in `lib/ir/med/X86/RegistrationEntry.cpp` orders physical
+ECX/EDX and stack words using the LowIR parent's authenticated RET cleanup count.
+`lib/ir/low/X86/RegistrationEntryABI.cpp` binds those returns to source bytes and
+keeps callback returns separate. The LLVM adapter selects cdecl, stdcall,
+thiscall or fastcall and independently validates its exact parameter attributes;
+fastcall requires `inreg` on both register words. HighIR's x86 continuation
+projection keeps shared resume tails outside synchronous protected prefixes and
+preserves the original destination of a moved fallthrough.
 COFF installation, source-IR replay, callback identity, incoming-frame proof,
 image-pointer closure and emitted SEH table checks remain separate consumers
 under `lib/backend/codegen/COFF`. Splitting these implementations does not add a
 second source-semantics owner or turn an analysis result into rewrite permission.
+The loader owns exact registration instruction widths and authenticated pointer
+roles, including SafeSEH table storage. Code discovery consumes those roles at the
+specific pointer slot so an independent reference retains its ordinary identity.
+`RegistrationFrameMemory` owns byte-cell overlap queries for the LowIR frame domain.
+The COFF LLVM privacy proof indexes private reaching stores and tainted byte ranges
+in separate units, preserving the shared work limit and conservative alias checks.
+`COFFTrampolineRegions` resolves authenticated source entries across executable
+sections, including earlier generated code, with unique virtual/raw ownership
+and unchanged input bytes. A second reconstruction repeats all source and LLVM
+proofs rather than trusting a previous installation receipt.
 It also publishes ordinary, runtime-dispatch and catch-resumption reachability.
 Empty levels alone do not identify dead code: a reached block can precede
 installation or follow removal. The call ABI consumer prunes only with complete
@@ -176,6 +192,15 @@ It publishes every possible catch-search target and the exited guard count.
 Secondary search through a parent try removes the exited invocations and
 restores their captured stack snapshot. CFG construction and native call
 lowering consume that result rather than filtering by the first guard alone.
+`RegistrationStateResume` restores suspended callback cells and initialized
+bytes for a try inside a catch; `RegistrationStateObject` binds each exception
+pointer to an identity present in every reaching live catch stack. MedIR's
+`RegistrationCatchContext` owns current block membership and catch parents.
+HighIR and LLVM consume that same projection. `COFFRegistrationCxxResume`
+independently binds edited resume seeds to freshly checked source coordinates;
+`COFFRegistrationCxxLifetime` follows checked catchpad ancestry for outer
+reference objects. A restored callback ESP is a distinct MedIR root, retaining
+its original invocation rather than becoming a new parent-frame address.
 The captured pre-dispatch SavedESP owns the catch-return writeback even when
 catch code changes the cell. That effect remains bound to the exact RETURN in
 LowIR and MedIR. Dedicated x86 HighIR and LLVM continuation lowering restore
@@ -314,17 +339,40 @@ The same frame transfer separately reports whether every ordinary leaf return
 computes a 32-bit scalar independently of incoming registers, borrowed pointers
 and the caller PC. Frame privacy can admit an unobserved entry-EAX return;
 that weaker fact cannot choose a physical scalar call declaration.
-The same ABI owner authenticates immutable MSVC cleanup relays that derive
-ECX from the establisher EBP and tail-jump to a checked leaf. PE32 relative
-branches wrap at the architectural width; instruction storage does not wrap.
-This relay describes an object offset, without granting a parent-frame borrow
-at an unwind dispatch. The shared immutable-code reader verifies unique
+`COFFRegistrationFrameBits` checks which pointer-dependent bits survive a
+register truncation. It follows masks and casts through the existing private
+store index, includes every full-width definition, and rejects unknown aliases
+or poisoned operations. It shares the frame proof's bounded work budget.
+
+`RegistrationCleanupFrame` authenticates fixed and realigned callback prefixes.
+ESI-based relays bind their base and saved entry EBP to each parent after cache
+lookup, again during caller ABI replay and during LLVM emission. LowIR owns
+the saved frame lifetime and object borrow proof.
+`RegistrationCleanupABI` authenticates immutable MSVC tail-jump relays and
+Clang relays that save EBP, adjust the source frame and call one or more checked
+leaves before restoring EBP. The ordered call list retains every ECX object
+offset, including multiple destructors combined into one unwind action. PE32
+relative branches wrap at the architectural width; instruction storage does
+not wrap. Each invocation still needs a parent-frame borrow at dispatch. The shared immutable-code reader verifies unique
 file-backed PE32 storage without pointer fixups before decoding the relay.
 The COFF loader separately owns bounded scalar ThrowInfo decoding and its
 immutable CatchableType graph. The call ABI owner binds that graph to an exact
 CRT import and a fully initialized private exception object, retaining real
 caller-PC observations and rejecting metadata mutation. This still describes
 a preserved helper, rather than authorizing a rewritten parent.
+The separate x86 throw-import ABI owner authenticates the runtime, IAT and
+transparent jump stub for both helpers and direct calls. The source state
+solver admits a direct rethrow only with a live catch and two initialized null
+words in its actual argument-stack coordinate. The LLVM call adapter checks
+current arguments before projecting the two-pointer stdcall ABI. COFF control
+and frame consumers independently replay the source and generated call contract.
+For direct scalar throws the import owns only the physical ABI. A bounded,
+immutable ThrowInfo catalogue supplies candidates; each current source call
+selects its actual table and proves initialized scalar storage in the parent or
+active callback stack. The receipt retains that occurrence and coordinate.
+Native lowering preserves the current object expression, and the shared LLVM
+frame validator checks its exact storage, initialization and original table
+identity before installation.
 One CFG construction memoizes these callee proofs under a shared budget that
 also charges failed attempts. Registration-state analysis projects each exact
 source call into the caller's allocated frame, intersects byte initialization
@@ -344,8 +392,19 @@ private frame spills preserve that identity without treating it as an image or
 parent-frame pointer. Exact typed access receipts require the active catch
 context, bounded scalar reads/writes and complete source occurrences. Partial
 spills, pointer escape and use after catch return discard runtime authority.
-Adjacent table-owned catch labels extend the parent code range; cleanup relays
-retain their separate ABI and ordinary-entry conflicts remain explicit.
+`COFFRegistrationEHRange` recovers contiguous and disjoint table-owned callback
+chunks without claiming intervening cleanup relays. Canonical metadata schema
+11 and semantic-token schema 2 bind all code ranges. Cleanup relays retain their
+separate ABI and ordinary-entry conflicts remain explicit.
+`RegistrationReachability` removes only exact source-proven dead blocks before
+SSA, after authenticating no-return fallthrough removal. Independent entries,
+incomplete state or live incoming edges prevent that removal. This keeps an
+unreachable normal destructor tail from polluting a resumed callback's SSA.
+`RegistrationCleanupContext` binds each action to its still-active catch;
+LLVM and COFF use the same source projection. The independent installation
+proof checks each generated cleanup call in order, its object address, effects
+and outer unwind edge. Nested catches retain outer exception-object aliases
+only when every checked cleanup write is disjoint from the entire alias cell.
 These call facts remain separate from a compiler or installation receipt.
 For PE32 C++, the loader authenticates the original FuncInfo-loading handler
 thunk separately from the CRT dispatch entry. Its shared immutable-code reader
@@ -3363,6 +3422,26 @@ never followed as `std::type_info`. Native reconstruction emits LLVM
 `personality` plus address-form `invoke`/`landingpad` clauses. Corpus-proven
 status is a separate claim and is not implied by personality recognition or
 native lowering.
+
+For PE32 C++ callbacks, the generic LLVM emitter records each PHI edge it splits.
+The x86 adapter assigns a copy block only when both source endpoints belong to
+the same proved invocation. COFF installation independently recognizes the
+actual single-edge block and private scalar spill accesses; names and emitter
+receipts cannot authorize added calls, aliased memory or altered CFG targets.
+The COFF ThrowInfo decoder owns trivial-copy eligibility. State analysis still
+proves complete initialization and pointer privacy for every object byte;
+RTTI remains a type identity, not a recovered member layout.
+
+The PE32 registration solver schedules ordinary blocks in reverse postorder per
+entry component, with stable address ordering for independent roots. Runtime
+dispatch and continuation restoration still provide the only reaching states;
+scheduling never creates an edge or widens the cumulative work limit. Failed
+continuation closure retains earlier analysis diagnostics even if withdrawing
+a candidate makes the reduced graph easier to analyze. The loader applies its
+shared decode budget to long straight-line registration initializers. It retains
+confirmed function boundaries and stops at control transfers; padding-like
+immediate bytes cannot truncate a decoded instruction merely because a local
+instruction-count cutoff was reached.
 
 ## Verified LowIR concolic branch flips
 

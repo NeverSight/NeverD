@@ -9,7 +9,31 @@
 
 #include "neverd/ir/med/MedIR.h"
 
+#include <map>
+
 namespace neverd {
+using RegistrationCatchIdentity = std::pair<uint32_t, uint32_t>;
+
+/// Project the authoritative LowIR invocation stacks onto exact MedIR ranges.
+std::optional<std::map<int, RegistrationCatchIdentity>>
+registrationCatchBlocks(const MedFunc &Function);
+std::optional<std::vector<std::optional<RegistrationCatchIdentity>>>
+registrationCatchParents(const MedFunc &Function);
+
+/// The live catch containing each cleanup action, proved at every dispatch
+/// that can execute it. A cleanup reached in conflicting invocations needs
+/// separate native funclets and has no unique projection here.
+std::optional<std::map<uint32_t, std::optional<RegistrationCatchIdentity>>>
+registrationCleanupParents(const MedFunc &Function);
+
+struct RegistrationCallbackStackCoordinate {
+  va_t Entry = InvalidVA;
+  int32_t Offset = 0;
+};
+
+/// The private stack coordinate of an entry or a checked nested catch resume.
+std::optional<RegistrationCallbackStackCoordinate>
+registrationCallbackStackCoordinate(const MedFunc &Func, const MedOp &Op);
 
 /// Bind a private ESP definition to the current runtime-only callback entry.
 /// A source-frame coordinate cannot stand in for this invocation's stack.

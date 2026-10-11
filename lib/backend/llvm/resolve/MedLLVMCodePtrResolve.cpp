@@ -83,7 +83,13 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
     if (Block && Block->getParent())
       return llvm::BlockAddress::get(Block->getParent(), Block);
   }
-  return resolveLiftedFunctionInterior(Address);
+  if (auto *Interior = resolveLiftedFunctionInterior(Address))
+    return Interior;
+  if (CurMedFunc && CurMedFunc->ExceptionMetadata &&
+      CurMedFunc->ExceptionMetadata->Registration &&
+      CurMedFunc->ExceptionMetadata->Cxx)
+    return resolveX86RegistrationHandlerReference(Address);
+  return nullptr;
 }
 
 llvm::Constant *MedLLVMEmitter::resolveLiftedFunctionInterior(va_t Address) {

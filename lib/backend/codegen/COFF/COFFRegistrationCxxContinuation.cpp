@@ -12,7 +12,8 @@ namespace neverd::coff_registration {
 
 llvm::Expected<const llvm::CatchReturnInst *> validateCxxContinuationRestore(
     const llvm::Instruction &Anchor, const RegistrationFrame &Frame,
-    int32_t SavedStackSlot, const RegistrationCxxContinuation &Resume) {
+    int32_t SavedStackSlot, const RegistrationCxxContinuation &Resume,
+    const llvm::AllocaInst *SavedCallbackStack) {
   // Require the writeback immediately before catchret. A receipt on another
   // store, an earlier write or a restored physical ESP cannot substitute for
   // this effect in the recovered source frame.
@@ -29,13 +30,25 @@ llvm::Expected<const llvm::CatchReturnInst *> validateCxxContinuationRestore(
   const auto *Return =
       Store ? llvm::dyn_cast_or_null<llvm::CatchReturnInst>(next(*Store))
             : nullptr;
-  const int64_t SavedOffset =
-      int64_t(Frame.Establisher) + Resume.SavedStackOffset;
+  uint64_t SavedBase = Frame.Establisher;
+  const llvm::Value *SavedFrame = Frame.Slot;
+  if (Resume.SavedCallbackVA) {
+    if (!SavedCallbackStack)
+      return rejectIR("C++ continuation lost its suspended stack allocation");
+    const auto Size = SavedCallbackStack->getAllocationSize(
+        Anchor.getModule()->getDataLayout());
+    if (!Size || Size->isScalable() || Size->getFixedValue() > INT32_MAX ||
+        Resume.SavedStackOffset > 0)
+      return rejectIR("C++ continuation has an unbounded suspended stack");
+    SavedBase = Size->getFixedValue();
+    SavedFrame = SavedCallbackStack;
+  } else if (SavedCallbackStack || Resume.SavedStackOffset > SavedStackSlot)
+    return rejectIR("C++ continuation changed its parent stack coordinate");
+  const int64_t SavedOffset = int64_t(SavedBase) + Resume.SavedStackOffset;
   if (!Slot || !Saved || !Value || !Store || !Return ||
       Frame.Establisher > INT32_MAX || SavedStackSlot > -16 ||
-      Resume.SavedStackOffset > SavedStackSlot || SavedOffset < 0 ||
-      Slot->getPointerOperand() != Frame.Slot ||
-      Saved->getPointerOperand() != Frame.Slot ||
+      SavedOffset < 0 || Slot->getPointerOperand() != Frame.Slot ||
+      Saved->getPointerOperand() != SavedFrame ||
       registration_frame::checkedByteGEPOffset(Slot) !=
           int64_t(Frame.Establisher) + SavedStackSlot ||
       registration_frame::checkedByteGEPOffset(Saved) != SavedOffset ||

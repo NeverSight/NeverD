@@ -23,15 +23,13 @@ using registration_abi::callerPCIsNotReadBack;
 using registration_abi::chargeCalleeWork;
 using registration_abi::hasPrivateCallerFrame;
 using registration_abi::ImageFrameEffects;
-} // namespace
-
-bool hasCallerCleanupRegistrationABI(
+bool hasRegistrationCallFrameABI(
     const LowFunc &Function, const BinaryImage &Image,
     std::vector<ExceptionAddressRange> *CallerPCWrites) {
   if (CallerPCWrites)
     CallerPCWrites->clear();
   if (Image.Arch != Arch::X86 || Image.Format != BinaryFormat::COFF ||
-      Function.CalleePopBytes || !Function.hasCompleteLiftCoverage())
+      !Function.hasCompleteLiftCoverage())
     return false;
   size_t Work = 0;
   const auto *States =
@@ -103,6 +101,23 @@ bool hasCallerCleanupRegistrationABI(
             for (const auto &State : Function.RegistrationStates->Blocks)
               if (State.BlockId == Block.Id && State.CallbackOnly)
                 return false;
+      if (UseReachability) {
+        const auto *Call = States->callFrameEffect(Op.Addr, Op.Seq);
+        const auto *Contract =
+            Call->CalleeIndex < States->CalleeContracts.size()
+                ? &States->CalleeContracts[Call->CalleeIndex]
+                : nullptr;
+        if (Contract && Contract->isRuntimeThrow()) {
+          // A noreturn CRT dispatch has no return cleanup. Its two stack
+          // arguments and object or active catch are owned by the source proof.
+          if (!Call->DoesNotReturn || !Call->RuntimeThrow ||
+              Contract->Target != Call->Target ||
+              !getCheckedX86RegistrationThrowImportABI(Image, Call->Target,
+                                                       &Work))
+            return false;
+          continue;
+        }
+      }
       Targets.insert(Op.Inputs[0].Offset);
       if (Targets.size() > 256)
         return false;
@@ -248,14 +263,18 @@ bool hasCallerCleanupRegistrationABI(
         return false;
       const auto Relay = getCheckedX86RegistrationCleanupRelayABI(
           Image, Action.ActionVA, &Work);
-      if (!Relay || !Relay->Leaf.CallerPCWrites.empty() ||
-          !chargeCalleeWork(Work, Relay->Leaf.ImageReads.size() +
-                                      Relay->Leaf.ImageWrites.size()))
+      if (!Relay || !Relay->matchesParentFrame(*EH.Registration))
         return false;
-      for (const auto &Read : Relay->Leaf.ImageReads)
-        Effects.Reads.emplace(Read.Begin, Read.End);
-      for (const auto &Write : Relay->Leaf.ImageWrites)
-        Effects.Writes.emplace(Write.Begin, Write.End);
+      for (const auto &Call : Relay->Calls) {
+        if (!Call.Leaf.CallerPCWrites.empty() ||
+            !chargeCalleeWork(Work, Call.Leaf.ImageReads.size() +
+                                        Call.Leaf.ImageWrites.size() + 1))
+          return false;
+        for (const auto &Read : Call.Leaf.ImageReads)
+          Effects.Reads.emplace(Read.Begin, Read.End);
+        for (const auto &Write : Call.Leaf.ImageWrites)
+          Effects.Writes.emplace(Write.Begin, Write.End);
+      }
     }
     if (Ranges->size() &&
         Effects.Writes.size() >
@@ -294,5 +313,26 @@ bool hasCallerCleanupRegistrationABI(
         CallerPCWrites->push_back({Begin, End});
     }
   return true;
+}
+} // namespace
+
+bool hasCallerCleanupRegistrationABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites) {
+  if (CallerPCWrites)
+    CallerPCWrites->clear();
+  return !Function.CalleePopBytes &&
+         hasRegistrationCallFrameABI(Function, Image, CallerPCWrites);
+}
+
+std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites) {
+  if (CallerPCWrites)
+    CallerPCWrites->clear();
+  const auto Pop = registration_abi::parentPopBytes(Function, Image);
+  if (!Pop || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+    return std::nullopt;
+  return Pop;
 }
 } // namespace neverd

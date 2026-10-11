@@ -135,10 +135,6 @@ struct RegistrationChainInfo {
     return RealignedFrame || cxxRuntimeFrameOffset().value_or(0) != 0;
   }
 
-  uint8_t chainInstallInstructionSize() const {
-    return hasCxxCallbackStack() ? 6 : 7;
-  }
-
   /// An absolute code-pointer field owned by this decoded SEH table. These
   /// references are runtime dispatch entries, not ordinary address-taken CFG
   /// roots. Independent references to the same code keep their own role.

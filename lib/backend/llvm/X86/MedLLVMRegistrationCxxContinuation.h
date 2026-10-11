@@ -24,7 +24,8 @@ struct RegistrationCxxContinuation;
 void emitRegistrationCxxContinuation(
     llvm::ReturnInst &Return, llvm::AllocaInst &Frame, uint64_t Establisher,
     int32_t SavedStackSlot, llvm::CatchPadInst &Pad, llvm::BasicBlock &Target,
-    va_t FunctionVA, const RegistrationCxxContinuation &Resume);
+    va_t FunctionVA, const RegistrationCxxContinuation &Resume,
+    llvm::AllocaInst &SavedFrame, uint64_t SavedBase);
 } // namespace neverd
 
 #endif // NEVERD_MEDLLVMREGISTRATIONCXXCONTINUATION_H

@@ -118,6 +118,33 @@ class MultipleCatchEvidenceTests(unittest.TestCase):
             with patch.object(runner, "run_image", return_value=runtime(correct)), self.assertRaises(ValueError):
                 runner.observe(path, "ordered-control", "original", contract, [], {}, 1)
 
+    def test_cleanup_observation_requires_exact_order_and_control_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.capture(root)
+            path = root / "ordered/original.exe"
+            contract = json.loads((path.parent / "contract.json").read_text())
+            values = [17, 28, 39, 7, 18, 39, 1, 12, 0x401010, 0x401020, 0x401030]
+            prefix = "MULTICATCH " + " ".join(f"{v:08X}" for v in values) + "\n"
+            trace = "CLEANUP 00000000 00000035 00000000\n"
+            for control in (False, True):
+                name = "ordered-control" if control else "ordered"
+                result = {"exit_code": int(control), "stdout": prefix + trace}
+                with patch.object(runner, "run_image", return_value=result):
+                    runner.observe(path, name, "original", contract, [], {}, 1,
+                                   expected_cleanup=(0, 53, 0))
+                for changed in ("", trace.replace("00000035", "00000003"),
+                                trace.replace("00000035", "00000023"),
+                                trace.replace("00000035", "000014E9"),
+                                trace.replace("00000000", "00000001", 1),
+                                trace + trace, trace + "extra\n"):
+                    result["stdout"] = prefix + changed
+                    with self.subTest(control=control, trace=changed), \
+                            patch.object(runner, "run_image", return_value=result), \
+                            self.assertRaises(ValueError):
+                        runner.observe(path, name, "original", contract, [], {}, 1,
+                                       expected_cleanup=(0, 53, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "../eh/MedLLVMEHHelpers.h"
+#include "MedLLVMRegistrationCxxBlocks.h"
+#include "MedLLVMRegistrationCxxCall.h"
 #include "MedLLVMRegistrationCxxCatch.h"
 #include "MedLLVMRegistrationCxxContinuation.h"
 #include "MedLLVMRegistrationCxxStack.h"
@@ -21,6 +23,7 @@
 #include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
 #include "neverd/loader/ExceptionInfo.h"
 
@@ -40,15 +43,16 @@ namespace neverd {
 
 bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     const MedFunc &Func, llvm::Function &Parent,
-    const std::map<int, llvm::BasicBlock *> &OriginalBlockMap) {
+    const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
+    const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges) {
 #ifndef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
   return false;
 #else
   if (TargetArch != Arch::X86 || TargetFormat != BinaryFormat::COFF || !Img ||
       !Func.ExceptionMetadata || !Func.RegistrationStates || Func.SkippedSSA ||
-      Func.CalleePopBytes || !Func.RegistrationCallerCleanupABIComplete ||
-      !FrameAlloca || FrameEntrySPOffset < 20 || Parent.hasPersonalityFn() ||
-      Func.IsVariadic || !Parent.getReturnType()->isIntegerTy(32))
+      !Func.RegistrationCxxEntryPopBytes || !FrameAlloca ||
+      FrameEntrySPOffset < 20 || Parent.hasPersonalityFn() || Func.IsVariadic ||
+      !Parent.getReturnType()->isIntegerTy(32))
     return false;
   const auto &EH = *Func.ExceptionMetadata;
   const auto Source = classifyWindowsEHNativeSource(
@@ -82,7 +86,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   if (!Layout)
     return false;
   const auto CatchOwners = projectX86RegistrationCatchBlocks(Func);
-  if (!CatchOwners)
+  const auto CatchParents = projectX86RegistrationCatchParents(Func);
+  if (!CatchOwners || !CatchParents)
     return false;
   std::map<X86RegistrationCatchIdentity, RegistrationCxxCatchPlan> Catches;
   for (uint32_t Region = 0; Region < Cxx.TryBlocks.size(); ++Region)
@@ -155,13 +160,13 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     const RegistrationCallFrameEffect *Effect;
     const RegistrationBlockState *State;
     bool Throw;
-    bool Borrow;
+    med_llvm_eh::RegistrationCxxCallABI ABI;
     X86RegistrationCatchIdentity CatchIdentity;
     std::string Name;
   };
   struct CleanupPlan {
     const RegistrationCleanupFrameContract *Contract;
-    std::string Name;
+    std::vector<std::string> Names;
     std::optional<llvm::mc_rewrite::RewriteWinEHSemanticToken> Token;
   };
   std::vector<Operation> Operations;
@@ -174,9 +179,6 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   auto *I32 = llvm::Type::getInt32Ty(*Ctx);
   auto *Void = llvm::Type::getVoidTy(*Ctx);
   auto *Ptr = llvm::PointerType::get(*Ctx, 0);
-  auto *ThrowType = llvm::FunctionType::get(Void, false);
-  auto *BorrowType = llvm::FunctionType::get(I32, {Ptr}, false);
-  auto *LeafType = llvm::FunctionType::get(I32, false);
   auto *CleanupType = llvm::FunctionType::get(Void, {Ptr}, false);
   auto *PersonalityType = llvm::FunctionType::get(I32, {}, true);
   auto CalleeName = [](va_t Target, llvm::StringRef ABI) {
@@ -232,8 +234,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
                                          Resume->CatchIndex} !=
                 CatchOwners->at(Block.Id) ||
             !BlocksAt.count(Resume->TargetVA) ||
-            Resume->SavedStackOffset > -16 ||
-            !Layout->runtimeOffset(Resume->SavedStackOffset, 0) ||
+            (Resume->SavedCallbackVA
+                 ? Resume->SavedStackOffset > 0
+                 : Resume->SavedStackOffset > -16 ||
+                       !Layout->runtimeOffset(Resume->SavedStackOffset, 0)) ||
             FrameEntrySPOffset > INT32_MAX ||
             !Resumes.emplace(Return, Resume).second)
           return false;
@@ -258,41 +262,23 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
           Op.Inputs[0].ConstVal != Effect->Target || Effect->StackPopBytes)
         return false;
       const auto &Contract = States.CalleeContracts[Effect->CalleeIndex];
-      const bool Throw = Contract.CalleeKind ==
-                         RegistrationCalleeFrameContract::Kind::PrivateThrow;
-      bool Borrow = false;
-      if (Contract.Target != Effect->Target ||
-          Contract.DoesNotReturn != Effect->DoesNotReturn)
+      const bool Throw = Contract.isThrow();
+      const auto ABI = med_llvm_eh::getCheckedRegistrationCxxCallABI(
+          *Img, Contract, *Effect, *Call, Work);
+      if (!ABI || (ABI->ThrowInfoVA &&
+                   !med_llvm_eh::canMaterializeExternalDataDeclaration(
+                       *Mod, makeNdDataSymbol(ABI->ThrowInfoVA), I8, true)))
         return false;
-      if (Throw) {
-        const auto Proof = getCheckedX86RegistrationThrowCalleeABI(
-            *Img, Effect->Target, &Work);
-        if (!Proof || !Effect->DoesNotReturn || Effect->ECXFrameOffset ||
-            !Call->use_empty())
-          return false;
-      } else {
-        const auto Proof =
-            getCheckedX86RegistrationLeafCalleeABI(*Img, Effect->Target, &Work);
-        if (!Proof || !Proof->HasIndependentScalarReturn ||
-            Proof->StackPopBytes || Effect->DoesNotReturn ||
-            (!Call->getType()->isIntegerTy(32) &&
-             !Call->getType()->isIntegerTy(64)))
-          return false;
-        Borrow = !Proof->ECXReads.empty() || !Proof->ECXWrites.empty();
-        if (Borrow != Effect->ECXFrameOffset.has_value())
-          return false;
-      }
-      const auto Name = CalleeName(Effect->Target, Throw    ? "throw"
-                                                   : Borrow ? "ecx"
-                                                            : "leaf");
-      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
-              *Mod, Name,
-              Throw    ? ThrowType
-              : Borrow ? BorrowType
-                       : LeafType))
+      const auto Name =
+          CalleeName(Effect->Target, ABI->RuntimeThrow ? "runtime_throw"
+                                     : Throw           ? "throw"
+                                     : ABI->BorrowsECX ? "ecx"
+                                                       : "leaf");
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
+                                                                  ABI->Type))
         return false;
       Calls.push_back(
-          {Call, Effect, State, Throw, Borrow,
+          {Call, Effect, State, Throw, *ABI,
            State->CallbackOnly
                ? CatchOwners->at(Block.Id)
                : X86RegistrationCatchIdentity{UINT32_MAX, UINT32_MAX},
@@ -308,6 +294,12 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   if (Resumes.empty() || Resumes.size() != States.CxxContinuations.size() ||
       Calls.size() != States.CallFrameEffects.size())
     return false;
+  const auto CopyOwners = registrationCxxPHICopyOwners(
+      *CatchOwners, OriginalBlockMap, PHICopyEdges);
+  if (!CopyOwners)
+    return false;
+  for (const auto &[Block, Identity] : *CopyOwners)
+    Catches.at(Identity).Blocks.insert(Block);
   for (const auto &[Identity, Catch] : Catches) {
     if (!Catch.Blocks.count(Catch.Handler))
       return false;
@@ -334,26 +326,38 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       }
     const auto Relay =
         getCheckedX86RegistrationCleanupRelayABI(*Img, Action.ActionVA, &Work);
-    if (!Contract || !Relay || Contract->RelayTarget != Action.ActionVA ||
-        Contract->ObjectFrameOffset != Relay->ObjectFrameOffset ||
-        !EH.Registration->cxxSourceFrameOffset(Contract->ObjectFrameOffset) ||
-        Contract->Leaf.Target != Relay->Leaf.Target ||
-        !Relay->Leaf.CallerPCWrites.empty())
+    if (!Contract || !Relay || !Relay->matchesParentFrame(*EH.Registration) ||
+        Contract->RelayTarget != Action.ActionVA || Contract->Calls.empty() ||
+        Contract->Calls.size() != Relay->Calls.size())
       return false;
-    const auto Name = CalleeName(Relay->Leaf.Target, "cleanup.ecx");
-    if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
-                                                                CleanupType))
-      return false;
+    std::vector<std::string> Names;
+    for (size_t I = 0; I < Contract->Calls.size(); ++I) {
+      const auto &Call = Contract->Calls[I];
+      const auto &Fresh = Relay->Calls[I];
+      if (Call.ObjectFrameOffset != Fresh.ObjectFrameOffset ||
+          !EH.Registration->cxxSourceFrameOffset(Call.ObjectFrameOffset) ||
+          Call.Leaf.Target != Fresh.Leaf.Target ||
+          !Fresh.Leaf.CallerPCWrites.empty())
+        return false;
+      auto Name = CalleeName(Fresh.Leaf.Target, "cleanup.ecx");
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
+                                                                  CleanupType))
+        return false;
+      Names.push_back(std::move(Name));
+    }
     const auto Token =
         windows_eh_semantics::getCxxCleanupSemanticToken(EH, Arch::X86, State);
 #ifdef LLVM_NEVERD_X86_CXX_FUNCTION_RECEIPTS
     if (!Token)
       return false;
 #endif
-    Cleanups.emplace(State, CleanupPlan{Contract, Name, Token});
+    Cleanups.emplace(State, CleanupPlan{Contract, std::move(Names), Token});
   }
+  const auto CleanupParents = registrationCleanupParents(Func);
+  if (!CleanupParents)
+    return false;
   for (const auto &Plan : Calls) {
-    if (Plan.State->Levels.empty() || Plan.State->CallbackOnly)
+    if (Plan.State->Levels.empty())
       continue;
     const auto Level = Plan.State->Levels[0];
     int32_t Walk = Level;
@@ -428,13 +432,23 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
           Stores.push_back(llvm::cast<llvm::StoreInst>(Event.IR));
       const std::vector<llvm::BasicBlock *> Body(Catch.Blocks.begin(),
                                                  Catch.Blocks.end());
-      auto Plan = prepareRegistrationCxxStack(*SourceBlock, *Catch.Handler,
-                                              Body, VarAllocs, Stores);
+      auto Plan =
+          prepareRegistrationCxxStack(Func, *SourceBlock, *Catch.Handler, Body,
+                                      VarAllocs, Stores, OriginalBlockMap);
       if (!Plan) {
         llvm::consumeError(Plan.takeError());
         return false;
       }
       Catch.Stack = *Plan;
+    }
+
+  for (const auto &[Return, Resume] : Resumes)
+    if (Resume->SavedCallbackVA) {
+      const auto Parent = (*CatchParents)[Resume->TryIndex];
+      if (!Parent || !Catches.at(*Parent).Stack ||
+          int64_t(Catches.at(*Parent).Stack->Bytes) + Resume->SavedStackOffset <
+              0)
+        return false;
     }
 
   const auto Incoming = x86_registration::prepareIncomingFrame(
@@ -454,6 +468,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   Parent.setPersonalityFn(Personality);
   rewrite_source::setOriginalVA(*Personality, Runtime->RuntimeVA);
   Parent.setCallingConv(*EntryABI);
+  if (*EntryABI == llvm::CallingConv::X86_FastCall) {
+    Parent.addParamAttr(0, llvm::Attribute::InReg);
+    Parent.addParamAttr(1, llvm::Attribute::InReg);
+  }
   Parent.addFnAttr(llvm::RewriteWinX86CxxFrameAttribute);
   Parent.addFnAttr("frame-pointer", "all");
   Parent.addFnAttr(llvm::Attribute::NoInline);
@@ -529,20 +547,24 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       llvm_unreachable("prevalidated C++ cleanup semantic token rejected");
     med_llvm_eh::emitWindowsEHProvenanceAnchor(
         B, Model, Role::RegistrationCallback, EH.CodeRange.Begin,
-        Action.ActionVA, State, 0, Cleanup, Plan.Contract->Leaf.Target, 1);
-    auto *Callee = llvm::cast<llvm::Function>(
-        Mod->getOrInsertFunction(Plan.Name, CleanupType).getCallee());
-    Callee->setCallingConv(llvm::CallingConv::X86_ThisCall);
-    rewrite_source::setOriginalVA(*Callee, Plan.Contract->Leaf.Target);
-    auto *Address =
-        B.CreateInBoundsGEP(I8, FrameAlloca,
-                            B.getInt32(Layout->Establisher +
-                                       *EH.Registration->cxxSourceFrameOffset(
-                                           Plan.Contract->ObjectFrameOffset)));
-    auto *Call = B.CreateCall(Callee, {Address},
-                              {llvm::OperandBundleDef("funclet", Cleanup)});
-    Call->setCallingConv(llvm::CallingConv::X86_ThisCall);
-    Call->setDoesNotThrow();
+        Action.ActionVA, State, 0, Cleanup,
+        Plan.Contract->Calls.front().Leaf.Target, 1);
+    for (size_t I = 0; I < Plan.Contract->Calls.size(); ++I) {
+      const auto &Borrow = Plan.Contract->Calls[I];
+      auto *Callee = llvm::cast<llvm::Function>(
+          Mod->getOrInsertFunction(Plan.Names[I], CleanupType).getCallee());
+      Callee->setCallingConv(llvm::CallingConv::X86_ThisCall);
+      rewrite_source::setOriginalVA(*Callee, Borrow.Leaf.Target);
+      auto *Address =
+          B.CreateInBoundsGEP(I8, FrameAlloca,
+                              B.getInt32(Layout->Establisher +
+                                         *EH.Registration->cxxSourceFrameOffset(
+                                             Borrow.ObjectFrameOffset)));
+      auto *Call = B.CreateCall(Callee, {Address},
+                                {llvm::OperandBundleDef("funclet", Cleanup)});
+      Call->setCallingConv(llvm::CallingConv::X86_ThisCall);
+      Call->setDoesNotThrow();
+    }
     B.CreateCleanupRet(Cleanup, Outer);
     Unwinds.emplace(State, Block);
     return Block;
@@ -551,7 +573,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   for (const auto &Try : Cxx.TryBlocks)
     OuterUnwinds.push_back(UnwindAt(Cxx.UnwindMap[Try.TryLow].ToState));
   emitRegistrationCxxCatches(EH, Catches, Dispatches, OuterUnwinds,
-                             *FrameAlloca, Parent);
+                             *CatchParents, *FrameAlloca, Parent);
   auto ProtectedCall = [&](const RegistrationBlockState &State) {
     if (State.Levels.empty())
       return false;
@@ -564,17 +586,29 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     auto *Old = Plan.Call;
     llvm::IRBuilder<> B(Old);
     auto *Callee = llvm::cast<llvm::Function>(
-        Mod->getOrInsertFunction(Plan.Name, Plan.Throw    ? ThrowType
-                                            : Plan.Borrow ? BorrowType
-                                                          : LeafType)
-            .getCallee());
-    Callee->setCallingConv(Plan.Borrow ? llvm::CallingConv::X86_ThisCall
-                                       : llvm::CallingConv::C);
+        Mod->getOrInsertFunction(Plan.Name, Plan.ABI.Type).getCallee());
+    Callee->setCallingConv(Plan.ABI.Convention);
     rewrite_source::setOriginalVA(*Callee, Plan.Effect->Target);
     if (Plan.Throw)
       Callee->addFnAttr(llvm::Attribute::NoReturn);
-    llvm::SmallVector<llvm::Value *, 1> Args;
-    if (Plan.Borrow)
+    llvm::SmallVector<llvm::Value *, 2> Args;
+    if (Plan.ABI.RuntimeThrow) {
+      if (Plan.ABI.ThrowInfoVA) {
+        auto *Object = Old->getArgOperand(0);
+        Args.push_back(Object->getType()->isPointerTy()
+                           ? Object
+                           : B.CreateIntToPtr(Object, Ptr));
+        const auto Name = makeNdDataSymbol(Plan.ABI.ThrowInfoVA);
+        auto *Table = Mod->getNamedGlobal(Name);
+        if (!Table)
+          Table = new llvm::GlobalVariable(*Mod, I8, true,
+                                           llvm::GlobalValue::ExternalLinkage,
+                                           nullptr, Name);
+        Args.push_back(Table);
+      } else
+        Args.assign(2, llvm::ConstantPointerNull::get(Ptr));
+    }
+    if (Plan.ABI.BorrowsECX)
       Args.push_back(B.CreateInBoundsGEP(
           I8, FrameAlloca,
           B.getInt32(Layout->Establisher + *Plan.Effect->ECXFrameOffset)));
@@ -630,12 +664,23 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     CallSiteAddrs.erase(Old);
     Old->eraseFromParent();
   }
-  for (const auto &[Return, Resume] : Resumes)
+  for (const auto &[State, Block] : Unwinds)
+    if (const auto &Owner = CleanupParents->at(State))
+      llvm::cast<llvm::CleanupPadInst>(&*Block->getFirstNonPHIIt())
+          ->setParentPad(Catches.at(*Owner).Pad);
+  for (const auto &[Return, Resume] : Resumes) {
+    const auto *Stack =
+        Resume->SavedCallbackVA
+            ? &*Catches.at(*(*CatchParents)[Resume->TryIndex]).Stack
+            : nullptr;
     emitRegistrationCxxContinuation(
         *Return, *FrameAlloca, Layout->Establisher,
         *EH.Registration->RegistrationOffset - 4,
         *Catches.at({Resume->TryIndex, Resume->CatchIndex}).Pad,
-        *BlocksAt.at(Resume->TargetVA), EH.CodeRange.Begin, *Resume);
+        *BlocksAt.at(Resume->TargetVA), EH.CodeRange.Begin, *Resume,
+        Stack ? *Stack->Allocation : *FrameAlloca,
+        Stack ? Stack->Bytes : Layout->Establisher);
+  }
   for (const auto &Access : States.ChainAccesses) {
     auto *I = RegistrationChainIR.at({Access.Address, Access.OpSeq});
     llvm::IRBuilder<> B(I);

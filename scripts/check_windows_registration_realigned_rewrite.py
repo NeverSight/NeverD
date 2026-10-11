@@ -33,6 +33,12 @@ EMITTER = ROOT / "unittests/lift/eh/WindowsRegistrationRealignedNativeTests.cpp"
 DIRECT_EMITTER = ROOT / "unittests/lift/eh/WindowsRegistrationDirectNativeTests.cpp"
 BASES = (0x400000, 0x18000000)
 ROUTES = ("original", "product", "cli-section", "cli-inplace")
+INCOMING_PROOFS = (
+    "WindowsRegistrationIncoming.EntryRequiresObservedPhysicalWords",
+    "WindowsRegistrationIncoming.ProjectsRegisterAndCalleeCleanupEntries",
+    "WindowsRegistrationIncoming.RecoversStackHomesReadOnlyByCallbacks",
+    "WindowsRegistrationIncoming.FailedProjectionRestoresMemoryAndDeclaration",
+)
 FORMS = {
     "value": "Value", "reference": "Reference", "unnamed-value": "UnnamedValue",
     "unnamed-reference": "UnnamedReference", "catch-all": "CatchAll",
@@ -162,9 +168,9 @@ def main() -> int:
              "--gtest_output=xml:" + str(out / "catch-projection.xml")])
         if require_test_result(out / "catch-projection.xml") != 1:
             raise ValueError("catch projection proof test missing")
-        run([test, "--gtest_filter=WindowsRegistrationIncoming.*",
+        run([test, "--gtest_filter=" + ":".join(INCOMING_PROOFS),
              "--gtest_output=xml:" + str(out / "incoming-projection.xml")])
-        if require_test_result(out / "incoming-projection.xml") != 2:
+        if require_test_result(out / "incoming-projection.xml") != len(INCOMING_PROOFS):
             raise ValueError("caller argument entry/rollback proof tests missing")
         run([test, "--gtest_filter=WindowsRegistrationFixed.RuntimeOffsetsRequireTheCompleteLayout",
              "--gtest_output=xml:" + str(out / "fixed-projection.xml")])

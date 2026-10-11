@@ -15,12 +15,12 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_realigned_rewrite import (
-        BASES, CASES, DIRECT_EMITTER, EMITTER, FORMS, ROUTES, SOURCE, PE32, file_digest, observe,
+        BASES, CASES, DIRECT_EMITTER, EMITTER, FORMS, INCOMING_PROOFS, ROUTES, SOURCE, PE32, file_digest, observe,
         proof_count, require_test_result, validate_installation)
     from .windows_registration_libraries import validate_manifest
 else:
     from check_windows_registration_realigned_rewrite import (
-        BASES, CASES, DIRECT_EMITTER, EMITTER, FORMS, ROUTES, SOURCE, PE32, file_digest, observe,
+        BASES, CASES, DIRECT_EMITTER, EMITTER, FORMS, INCOMING_PROOFS, ROUTES, SOURCE, PE32, file_digest, observe,
         proof_count, require_test_result, validate_installation)
     from windows_registration_libraries import validate_manifest
 
@@ -35,7 +35,7 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
     validate_manifest(capture.get("runtime_libraries", {}))
     if require_test_result(root / "catch-projection.xml") != 1:
         raise ValueError("catch projection proof test changed")
-    if require_test_result(root / "incoming-projection.xml") != 2:
+    if require_test_result(root / "incoming-projection.xml") != len(INCOMING_PROOFS):
         raise ValueError("caller argument entry/rollback proof tests changed")
     if require_test_result(root / "fixed-projection.xml") != 1:
         raise ValueError("fixed runtime coordinate proof test missing")

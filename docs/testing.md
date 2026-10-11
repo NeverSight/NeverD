@@ -2791,7 +2791,7 @@ build/bin/NeverDRegistrationEHTests
 build/bin/NeverDNoReturnTests
 build/bin/NeverDWindowsRegistrationFrameTests
 build/bin/NeverDWindowsRegistrationNativeTests \
-  --gtest_filter='-WindowsRegistrationNative.InputPE32PreservesItsCheckedSourceContract:WindowsRegistrationCxxSource.*'
+  --gtest_filter='-WindowsRegistrationNative.InputPE32PreservesItsCheckedSourceContract:WindowsRegistrationCxxSource.*:RegistrationEntryABI.InputPE32*:RegistrationRelift.InputPE32*'
 for registration_case in filter nested-finally continue-search continue-execution normal-finally cdecl-parameter cdecl-parameter-write eh4-filter; do
   python scripts/check_windows_registration_rewrite.py \
     --test-binary build/bin/NeverDWindowsRegistrationNativeTests \
@@ -2963,21 +2963,93 @@ IR, installation, decompilation and PE identities before replaying the same
 files on Windows. Its Python admission suite rejects incomplete, stale or
 substituted evidence.
 
+`check_windows_registration_entry.py` uses the native registration test binary
+and captured CRT libraries for cdecl, stdcall, thiscall and fastcall parents at
+O0/O1. Four changing arguments, four caller stack layouts and three catch paths
+plus a normal return exercise register/stack ordering, caller-visible results,
+ESP balance and FS-chain restoration. Its 128 executions cover source and
+wrong-result controls, the checked installation, both CLI modes and two bases.
+The C++ proof rejects altered source RET boundaries, incomplete continuations,
+changed calling conventions and missing or misplaced fastcall `inreg` attributes;
+it also decodes the generated parent RET cleanup count. Both C and C++ output
+must retain two tries, three callback bodies and their exact resume labels and
+pass syntax checks. `replay_windows_registration_entry.py` authenticates every
+source, proof, receipt, object, IR, output and executable before repeating the
+same 128 images with the Windows CRT. Python tests reject missing cases, skipped
+proofs, stale identities and substitutions of the ABI, runtime or rebased image.
+
+`check_windows_registration_relift.py` consumes the authenticated entry capture
+and treats each first-generation product as fresh PE32 input. Its native test
+reproves the frame, callback states, incoming ABI and LLVM privacy contract before
+a second rewrite; both CLI modes must reproduce the API transaction byte for byte.
+The 16 cases produce 128 executions across four routes and two image bases, with
+16 calls each. Caller PCs must move into the second generated owner, and ESP,
+FS:[0], argument writes and results must still match. The independent
+`replay_windows_registration_relift.py` validates both complete capture identities,
+source/IR/receipt hashes, both trampolines, native CRT and exact rebased bytes
+before replaying those 128 images on Wine or Windows. Mutation tests reject missing
+cases, changed identities, stale proofs, wrong ABI and forged caller ownership.
+`RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
+proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
+independent SafeSEH/code references and real function boundaries while excluding
+padding bytes inside proved instructions. `COFFTrampolineRegion` tests unique
+raw/virtual entry storage and instruction-mode widths on x86, x64, Thumb and ARM64.
+
 `check_windows_registration_nested_try.py` compiles independent Clang `-O0`
 and `-O1` parents and links the captured CRT libraries. Inner reference catches
 and outer value/catch-all clauses exercise all three continuations under four
 caller stack layouts, including a new throw inside the inner catch. The
-64-image source/control matrix covers both CLI patch
-modes and forced rebasing. The C++ test rejects changed prologue saves,
+288-image source/control matrix covers ordinary searches, secondary throws,
+true helper and direct rethrows, and a try with or without local cleanups inside
+a live reference catch through
+both CLI patch modes and forced rebasing.
+The C++ test rejects changed prologue saves,
 personality argument reads, search edges, handler order, continuation ownership,
 and emitted try/unwind state rows. Secondary-search mutations also reject
 searching the exited inner try or losing the active catch token. HighIR must
-contain both nested tries and all three callback bodies; C output receives a
-syntax check. `windows_registration_runtime.py` captures the selected MSVC
+contain every try and callback body; C and C++ output receive syntax checks.
+The catch-internal profile has three tries and four catches. Its inner catch
+updates the still-live outer reference, then resumes the suspended outer stack.
+`WindowsRegistrationCatchContext` rejects changed catch ancestry, missing
+suspended owners, and verifier-clean edits to resume values, source identities,
+offsets and required memory properties. State tests separately distinguish
+outer/inner object sizes, ended lifetimes and unbalanced private stacks.
+The cleanup variant independently records two destructors in reverse construction
+order (`53`). Clang O0 uses two unwind actions; O1 combines two calls into one
+action. The wrong-order control expects `35` and must fail while retaining the
+actual `53` trace. Each caller layout checks all three choices and resets the
+trace. Thirteen verifier-clean edits reject missing, reordered, redirected or
+misattributed calls, changed optimizer promises, skipped actions and forged
+callback chunks. ABI tests bind every relay instruction and reject changed
+frame adjustments, calls, returns, fixups and work exhaustion. State tests check
+every borrow in a combined action and partial writes overlapping live references.
+Replay binds the cleanup proof and shared receipt writer to their current digests.
+`windows_registration_runtime.py` captures the selected MSVC
 x86 redistributable DLL alongside the link libraries. Each image runs with
 that exact app-local runtime, with a native-only Wine override, and replay
 authenticates its provider and digest. A missing or changed runtime fails;
 Wine's built-in catch-guard behavior cannot silently replace the Windows CRT.
+Rethrow cases modify an unsigned object in the inner reference catch and require
+the outer reference catch to observe that same modified value. ABI tests reject
+partially null arguments, borrowed or unknown pointers and changed runtime
+imports. State tests require a live catch and reject invented new-object fields,
+missing initialization and callback arguments that overlap the runtime return PC.
+Direct-call tests change each current MedIR argument and verifier-clean LLVM
+arguments, parameter attributes, calling convention, target and noreturn
+properties. HighC requires
+both null runtime arguments before rendering a bare `throw;`.
+Direct scalar profiles additionally throw int, unsigned and float through the
+same runtime entry, including a fresh throw from a catch and a mixed typed-throw /
+rethrow function. A separate returning marker retains an actual generated caller
+PC witness. Source-state tests reject missing/partial initialization, pointers in
+scalar bytes, changed table arguments, duplicate candidates, oversized object
+reads and callback return-PC overlap. The native proof rechecks each actual
+object argument against its original parent or callback coordinate, including
+byte initialization and the exact relocated ThrowInfo address.
+Callback-boundary mutations distinguish decoded straight-line instructions from
+stated entries, exports, returns, traps and jumps. A padding-byte guess inside an
+instruction cannot truncate a table-owned callback, while a real terminating
+instruction preserves the next function boundary.
 `RegistrationCxxUnwind` tests nested, disjoint, three-level and cleanup search
 graphs. `replay_windows_registration_nested_try.py` authenticates the source,
 rejection tests, compiler objects, IR, decompilation and installed PE bytes
@@ -3008,13 +3080,35 @@ On Windows, replay with `scripts/replay_windows_registration_cxx.py
 Both profiles require `value=7`, cleanup `trace=213`, four iterations, restored
 FS chain, and `caught=7` by value or `caught=18` by reference. The observed caller PC
 must lie in the indexed generated parent rather than an original helper or
-another part of the generated section. Schema2 requires all six routes at both
+another part of the generated section. Schema3 requires nine routes at both
 bases: original, manual, public COFF patcher, called-helper/import-name collision,
-CLI section and CLI inplace. All five generated routes must reproduce the entire
-checked manual transaction byte for byte, including preserved helpers, before
-runtime observation can count. Native replay validates every hash and the same
-complete route matrix. Schema1 replay remains explicitly manual-only for older
-evidence and cannot count as public/CLI runtime verification.
+CLI section and CLI inplace, followed by a second public transaction and its two
+CLI modes. The second generation reproves generated ESI cleanup relays, their
+saved entry EBP, two ordered destructor calls and complete callback state. It
+binds both trampoline destinations, the full callback owner and the new SafeSEH
+handler. Each CLI route must reproduce its generation's complete transaction
+byte for byte. The source and re-lift test digests, both LLVM inputs and the
+captured Microsoft x86 CRT are bound to replay. Both ordinary and SavedESP
+writeback profiles require all 18 executions per value/reference case.
+Schema2 replay remains first-generation public/CLI evidence; schema1 remains
+manual-only. Neither older format establishes cleanup re-lifting.
+
+The shared re-lift runner also accepts `--profile catch-cleanup` and a complete,
+authenticated nested-try capture. Clang O0/O1 plus wrong-result controls require
+32 executions and 32 independent replays, including ordered local destruction
+inside an active reference catch. O0 preserves pointer bits in a register's high
+bytes while replacing its low byte with a scalar condition. The independent
+LLVM frame proof tracks demanded bits through masks and unaliased spills;
+truncating retained pointer bits, overlapping writes, aliases and poison flags
+remain rejected. `RegistrationFrameBitsTests.cpp` covers those boundaries.
+
+`RegistrationRealignedCleanupABITests.cpp` checks short and wide displacements,
+ordered multiple calls, restored EBP, preserved leaf ESI, immutable code,
+relocations, coordinate overflow and work limits. Cached relay proofs are tested
+against matching and mismatching parents in both lookup orders. The independent
+caller ABI check and LLVM emitter also bind each relay to its current parent.
+Plain C table-owned callbacks retain checked native labels; normal-flow execution
+must skip those bodies on x64 and AArch64.
 
 The runtime runner builds actual SEH3, no-GS EH4 and initialized-GS EH4 source
 images, including explicit source exit checks, lifts their protected
@@ -3065,6 +3159,25 @@ Caller stack padding varies on repeated calls, and the recorded throw caller
 must belong to the selected parent according to its export and linker map.
 `check_windows_registration_cxx.py` labels original-program and generated-frame
 ABI evidence separately; neither establishes source C++ reconstruction.
+
+The nested PE32 runner also accepts `--profile objects`. It builds 8-byte and
+12-byte trivial exception records with Clang O0/O1, private/direct throws,
+reference updates and rethrows into value catches. The 16 source/control cases
+cover 128 images across both patch modes and forced bases. The extra object
+proof and exact fixture type declarations are hashed into capture admission;
+C++ syntax checks use those declarations rather than inventing record layouts.
+`replay_windows_registration_nested_try.py` selects the authenticated profile
+and replays identical files with the Microsoft CRT. `RegistrationPHICopy` checks
+emission ownership and independently rejects nonprivate scalar copy edges.
+
+The object profile also feeds `check_windows_registration_relift.py --profile
+objects`. All sixteen original/control cases are loaded again from their first
+installed PE32 bytes, reconstructed a second time, installed through both CLI
+modes, and executed at both bases (128 runs). Native Windows replays the same
+files with `replay_windows_registration_relift.py`; source proofs, both image
+generations, Microsoft CRT identity, field effects and throw caller ranges are
+mandatory evidence. Second-generation direct throws run the normal call ABI
+recovery pass before native LLVM emission.
 
 ### Language exception models
 

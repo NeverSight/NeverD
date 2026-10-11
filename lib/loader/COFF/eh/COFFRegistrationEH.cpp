@@ -216,47 +216,18 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
                "recoverable table");
     }
 
-    // MSVC labels adjacent SEH callbacks and C++ catches as functions. Grow
-    // the inferred body through those table-owned entries so their runtime
-    // roots are decoded, stopping at the next unrelated function. Out-of-line
-    // cleanup relays retain their independently checked establisher ABI.
-    {
-      std::set<va_t> Thunks;
-      for (const RegistrationScopeRecord &Scope : Chain.Scopes) {
-        if (Scope.FilterVA)
-          Thunks.insert(Scope.FilterVA);
-        if (Scope.HandlerVA)
-          Thunks.insert(Scope.HandlerVA);
-      }
-      if (F.Cxx)
-        for (const CxxTryBlock &Try : F.Cxx->TryBlocks)
-          for (const CxxCatchHandler &Catch : Try.Handlers)
-            if (Catch.HandlerVA)
-              Thunks.insert(Catch.HandlerVA);
-      bool Grew = true;
-      for (unsigned Guard = 0;
-           Grew && Guard < limits::kMaxRegistrationEHFixedPoint; ++Guard) {
-        Grew = false;
-        for (va_t Addr : Thunks) {
-          if (!registration_detail::isExecutableAddress(Img, Addr) ||
-              Addr < F.CodeRange.Begin || Addr > F.CodeRange.End)
-            continue;
-          auto Range = Functions.find(Img, Addr);
-          if (!Range || Range->Begin < F.CodeRange.Begin)
-            continue;
-          if (Range->End > F.CodeRange.End) {
-            F.CodeRange.End = Range->End;
-            Grew = true;
-          }
-        }
-      }
-    }
-
     proveDirectRegistrationLayout(Img, Site, Chain);
+    registration_detail::recoverRegistrationCallbackRanges(F, Img, Functions,
+                                                           Chain);
     if (Chain.SeededTryLevel)
       recoverTryLevelStores(Img, F.CodeRange, *Chain.SeededTryLevel,
                             F.Cxx ? F.Cxx->MaxState : Chain.Scopes.size(),
                             Chain);
+    if (Chain.SeededTryLevel)
+      for (const auto &Fragment : F.FragmentRanges)
+        recoverTryLevelStores(Img, Fragment, *Chain.SeededTryLevel,
+                              F.Cxx ? F.Cxx->MaxState : Chain.Scopes.size(),
+                              Chain);
 
     F.Registration = std::move(Chain);
     // Registration personalities and language tables were resolved together
@@ -273,13 +244,17 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
   for (ExceptionFunction &F : Recovered) {
     // An untyped PE export alone is not a callable entry. The exact decoded
     // direct registration prologue supplies that missing instruction evidence.
+    const auto InstallSize = F.Registration
+                                 ? getX86RegistrationChainStoreSize(
+                                       Img, F.Registration->ChainInstallVA)
+                                 : std::nullopt;
     if (F.ParseStatus == ExceptionParseStatus::Complete && F.Registration &&
-        F.Registration->RegistrationOffset && F.Registration->TryLevelOffset &&
+        InstallSize && F.Registration->RegistrationOffset &&
+        F.Registration->TryLevelOffset &&
         F.CodeRange.contains(F.Registration->ChainInstallVA) &&
-        Img.hasExecutableCodeOwnerRange(
-            F.CodeRange.Begin,
-            F.Registration->ChainInstallVA - F.CodeRange.Begin +
-                F.Registration->chainInstallInstructionSize()))
+        Img.hasExecutableCodeOwnerRange(F.CodeRange.Begin,
+                                        F.Registration->ChainInstallVA -
+                                            F.CodeRange.Begin + *InstallSize))
       Img.VerifiedFunctionEntries.insert(F.CodeRange.Begin);
     Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
         Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
@@ -293,11 +268,12 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
   // that installed the record, as FuncDetector treats them: a guess goes, and
   // a stated symbol stays as a label.
   const std::set<va_t> Thunks = Img.ExceptionMetadata.registrationScopeThunks();
-  const auto CxxRoles = getCheckedX86CxxCallbackPointerRoles(Img);
+  const auto PointerRoles = getCheckedX86RegistrationPointerRoles(Img);
   llvm::erase_if(Img.Symbols, [&](const Symbol &Sym) {
     return Sym.IsFunc && Sym.Origin == NameOrigin::Synthesized &&
            (Thunks.count(Sym.Addr) ||
-            (CxxRoles && CxxRoles->RuntimeOnlyPointerTargets.count(Sym.Addr)));
+            (PointerRoles &&
+             PointerRoles->RuntimeOnlyPointerTargets.count(Sym.Addr)));
   });
   for (Symbol &Sym : Img.Symbols)
     if (Sym.IsFunc && Thunks.count(Sym.Addr))

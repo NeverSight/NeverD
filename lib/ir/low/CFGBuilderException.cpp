@@ -39,6 +39,7 @@ void CFGBuilder::closeRegistrationCxxContinuations(const BinaryImage &Img,
   std::set<va_t> AddedRoots;
   std::set<va_t> AddedPersistent;
   std::set<va_t> Quarantined;
+  std::set<std::string> FailureDiagnostics;
   size_t WorkUsed = 0;
   bool Failed = false;
   auto Charge = [&](size_t Amount) {
@@ -50,6 +51,8 @@ void CFGBuilder::closeRegistrationCxxContinuations(const BinaryImage &Img,
     return true;
   };
   for (;;) {
+    const auto &Diagnostics = Func.RegistrationStates->Diagnostics;
+    FailureDiagnostics.insert(Diagnostics.begin(), Diagnostics.end());
     const auto Candidates = Func.RegistrationStates->CxxContinuations;
     if (!Charge(Candidates.size() + Func.Blocks.size() + 1))
       break;
@@ -108,6 +111,12 @@ void CFGBuilder::closeRegistrationCxxContinuations(const BinaryImage &Img,
   }
   if (Failed) {
     auto &State = *Func.RegistrationStates;
+    // Rebuilding after withdrawing a candidate may succeed on the smaller
+    // graph. Retain the failure that caused that withdrawal, including state
+    // work exhaustion, rather than reporting only a missing continuation.
+    for (const auto &Diagnostic : FailureDiagnostics)
+      if (llvm::find(State.Diagnostics, Diagnostic) == State.Diagnostics.end())
+        State.Diagnostics.push_back(Diagnostic);
     State.Complete = State.CallbackStatesComplete =
         State.CxxContinuationsComplete = State.RegistrationLifetimeComplete =
             State.ChainOperationsComplete = State.ImageReadsComplete = false;

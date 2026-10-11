@@ -30,9 +30,13 @@ add_neverd_component_library(NeverDLoader
   COFF/eh/COFFExceptionSEH.cpp
   COFF/eh/COFFExceptionX64.cpp
   COFF/eh/COFFRegistrationEH.cpp
+  COFF/eh/COFFRegistrationEHRange.cpp
+  COFF/eh/COFFRegistrationEHCallback.cpp
   COFF/eh/COFFRegistrationEHRealignment.cpp
   COFF/eh/COFFRegistrationEHFixedFrame.cpp
+  COFF/eh/COFFRegistrationEHEncoding.cpp
   COFF/eh/COFFRegistrationEHCommon.cpp
+  COFF/eh/COFFRegistrationEHPointers.cpp
   COFF/eh/COFFRegistrationEHFuncInfo.cpp
   COFF/eh/COFFRegistrationEHHandler.cpp
   COFF/eh/COFFRegistrationEHPersonality.cpp

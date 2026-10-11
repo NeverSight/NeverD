@@ -9,6 +9,7 @@
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86RegistrationEntry.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
@@ -27,6 +28,7 @@ TEST(WindowsRegistrationIncoming, EntryRequiresObservedPhysicalWords) {
       llvm::GlobalValue::ExternalLinkage, "parent", Module);
   MedFunc Source;
   Source.RegistrationCallerCleanupABIComplete = true;
+  Source.RegistrationCxxEntryPopBytes = 0;
   Source.RegistrationStates.emplace();
   Source.RegistrationStates->IncomingFrameAccessesComplete = true;
   for (int Index = 0; Index != 2; ++Index) {
@@ -47,10 +49,10 @@ TEST(WindowsRegistrationIncoming, EntryRequiresObservedPhysicalWords) {
     auto &State = *Changed.RegistrationStates;
     switch (Mutation) {
     case 0:
-      Changed.RegistrationCallerCleanupABIComplete = false;
+      Changed.RegistrationCxxEntryPopBytes.reset();
       break;
     case 1:
-      Changed.CalleePopBytes = 8;
+      Changed.RegistrationCxxEntryPopBytes = 4;
       break;
     case 2:
       State.IncomingFrameAccessesComplete = false;
@@ -59,13 +61,13 @@ TEST(WindowsRegistrationIncoming, EntryRequiresObservedPhysicalWords) {
       State.IncomingFrameAccesses.pop_back();
       break;
     case 4:
-      State.IncomingFrameAccesses[1].Write = true;
+      State.IncomingFrameAccesses[1].Offset = 4;
       break;
     case 5:
       State.IncomingFrameAccesses[1].Offset = 16;
       break;
     case 6:
-      State.IncomingFrameAccesses[1].Width = 1;
+      State.IncomingFrameAccesses[1].Width = 0;
       break;
     case 7:
       Changed.Params[0].RegOff = getTargetRegInfo(Arch::X86).IntParamRegs[0];
@@ -81,6 +83,79 @@ TEST(WindowsRegistrationIncoming, EntryRequiresObservedPhysicalWords) {
   }
   Function->addParamAttr(0, llvm::Attribute::InReg);
   EXPECT_FALSE(getX86RegistrationCxxEntryABI(Source, *Function));
+}
+
+TEST(WindowsRegistrationIncoming, ProjectsRegisterAndCalleeCleanupEntries) {
+  for (unsigned Registers : {0u, 1u, 2u})
+    for (unsigned Words : {0u, 1u, 4u}) {
+      SCOPED_TRACE(Registers);
+      SCOPED_TRACE(Words);
+      MedFunc Source;
+      Source.RegistrationCxxEntryPopBytes = Words * 4;
+      Source.RegistrationStates.emplace();
+      Source.RegistrationStates->IncomingFrameAccessesComplete = true;
+      for (unsigned I = 0; I != Registers; ++I) {
+        MedVar P;
+        P.Kind = MedVar::Param;
+        P.Id = 100 + I;
+        P.Size = 4;
+        P.RegOff = getTargetRegInfo(Arch::X86).IntParamRegs[I];
+        Source.Params.push_back(P);
+      }
+      completeX86RegistrationEntryParameters(Source);
+      ASSERT_EQ(Source.Params.size(), Registers + Words);
+      llvm::LLVMContext Context;
+      llvm::Module Module("entry", Context);
+      auto *I32 = llvm::Type::getInt32Ty(Context);
+      std::vector<llvm::Type *> Types(Registers + Words, I32);
+      auto *Function = llvm::Function::Create(
+          llvm::FunctionType::get(I32, Types, false),
+          llvm::GlobalValue::ExternalLinkage, "parent", Module);
+      const auto Convention = Registers == 2   ? llvm::CallingConv::X86_FastCall
+                              : Registers == 1 ? llvm::CallingConv::X86_ThisCall
+                              : Words          ? llvm::CallingConv::X86_StdCall
+                                               : llvm::CallingConv::C;
+      EXPECT_EQ(getX86RegistrationCxxEntryABI(Source, *Function), Convention);
+      Function->setCallingConv(Convention);
+      if (Registers == 2) {
+        EXPECT_FALSE(hasX86RegistrationCxxEntryABI(Source, *Function));
+        Function->addParamAttr(0, llvm::Attribute::InReg);
+        EXPECT_FALSE(hasX86RegistrationCxxEntryABI(Source, *Function));
+        Function->addParamAttr(1, llvm::Attribute::InReg);
+      }
+      EXPECT_TRUE(hasX86RegistrationCxxEntryABI(Source, *Function));
+      if (Registers == 2) {
+        Function->removeParamAttr(0, llvm::Attribute::InReg);
+        Function->removeParamAttr(1, llvm::Attribute::InReg);
+      }
+      if (Words) {
+        auto Changed = Source;
+        Changed.RegistrationCxxEntryPopBytes = (Words + 1) * 4;
+        EXPECT_FALSE(getX86RegistrationCxxEntryABI(Changed, *Function));
+        Changed = Source;
+        Changed.RegistrationStates->IncomingFrameAccesses.push_back(
+            {0x1000, 0, int32_t(8 + 4 * Words), 4, false});
+        EXPECT_FALSE(getX86RegistrationCxxEntryABI(Changed, *Function));
+        Source.Params.back().Id += 1;
+        EXPECT_FALSE(getX86RegistrationCxxEntryABI(Source, *Function));
+      }
+    }
+}
+
+TEST(WindowsRegistrationIncoming, RecoversStackHomesReadOnlyByCallbacks) {
+  MedFunc Source;
+  Source.RegistrationCxxEntryPopBytes = 0;
+  Source.RegistrationStates.emplace();
+  auto &States = *Source.RegistrationStates;
+  States.IncomingFrameAccessesComplete = true;
+  States.IncomingFrameAccesses.push_back({0x1100, 0, 20, 4, false});
+  completeX86RegistrationEntryParameters(Source);
+  ASSERT_EQ(Source.Params.size(), 4u);
+  const auto ABI = projectX86RegistrationEntry(Source);
+  ASSERT_TRUE(ABI);
+  EXPECT_EQ(ABI->StackWords, 4u);
+  EXPECT_EQ(ABI->PopBytes, 0u);
+  EXPECT_EQ(ABI->RegisterCount, 0u);
 }
 
 TEST(WindowsRegistrationIncoming,

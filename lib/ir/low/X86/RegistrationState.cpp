@@ -32,21 +32,26 @@ RegistrationStateSolver::RegistrationStateSolver(
       CheckRuntimeObjects(KnownCxx && CheckCalls),
       CheckCleanups(KnownCxx && Cleanups != nullptr),
       Facts(Function.Blocks.size()), Incoming(Function.Blocks.size()),
-      Queued(Function.Blocks.size()), CompleteCalls(CheckCalls),
-      CompleteCleanups(CheckCleanups),
+      CompleteCalls(CheckCalls), CompleteCleanups(CheckCleanups),
       CompleteCatchObjects(CheckRuntimeObjects),
       CompleteRuntimeObjects(CheckRuntimeObjects) {}
 
 RegistrationStateAnalysis RegistrationStateSolver::run() {
-  if (!initialize() || !initializeContracts())
+  if (!initialize())
+    return std::move(Result);
+  if (!initializeOrder()) {
+    Result.Diagnostics.push_back(
+        "registration-state ordering budget exhausted");
+    return std::move(Result);
+  }
+  if (!initializeContracts())
     return std::move(Result);
   initializeCookies();
   collectOccurrences();
   seedEntries();
   while (!Work.empty() && !Exhausted) {
-    const size_t I = Work.front();
-    Work.pop_front();
-    Queued[I] = false;
+    const size_t I = Work.begin()->second;
+    Work.erase(Work.begin());
     if (!transferBlock(I))
       return std::move(Result);
   }
@@ -161,7 +166,9 @@ bool RegistrationStateSolver::initialize() {
          Block.InstructionBoundaries)
       HasInstallBoundary |=
           Instruction.Address == Chain.ChainInstallVA &&
-          Instruction.Size == Chain.chainInstallInstructionSize() &&
+          Instruction.Size != 0 &&
+          Instruction.Control == LowInstructionControl::None &&
+          Instruction.Address <= InvalidVA - Instruction.Size &&
           Instruction.Address + Instruction.Size == Block.EndAddr;
   if (!HasInstallBoundary) {
     Result.Diagnostics.push_back(

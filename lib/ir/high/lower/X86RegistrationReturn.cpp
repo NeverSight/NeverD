@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/high/X86RegistrationFrame.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
@@ -26,8 +27,11 @@ bool MedToHighConverter::lowerX86RegistrationCatchReturn(
   const auto *Resume =
       Med.RegistrationStates->cxxContinuation(CurOp.Addr, CurOp.OriginSeq);
   if (!Resume || Resume->EndAddress != CurBlock.EndAddr ||
-      Resume->SavedStackOffset >
-          *Med.ExceptionMetadata->Registration->RegistrationOffset - 4 ||
+      (Resume->SavedCallbackVA
+           ? Resume->SavedStackOffset > 0
+           : Resume->SavedStackOffset >
+                 *Med.ExceptionMetadata->Registration->RegistrationOffset -
+                     4) ||
       !std::any_of(Med.Blocks.begin(), Med.Blocks.end(),
                    [&](const auto &Block) {
                      return Block.StartAddr == Resume->TargetVA;
@@ -51,6 +55,22 @@ bool MedToHighConverter::lowerX86RegistrationCatchReturn(
   auto Slot = x86RegistrationFrameAddress(
       *Frame, *Med.ExceptionMetadata->Registration->RegistrationOffset - 4);
   auto Saved = x86RegistrationFrameAddress(*Frame, Resume->SavedStackOffset);
+  if (Resume->SavedCallbackVA) {
+    MedVar SP;
+    SP.Kind = MedVar::Reg;
+    SP.TheArch = Arch::X86;
+    SP.RegOff = getTargetRegInfo(Arch::X86).StackPointer;
+    SP.Size = 4;
+    Saved = HighExpr::makeVar(SP, NdType::makeInt(4, false));
+    Saved->Kind = ExprKind::EntryRegister;
+    Saved->EntryFunctionVA = Med.Entry;
+    Saved->EntryVA = Resume->SavedCallbackVA;
+    if (Resume->SavedStackOffset)
+      Saved = HighExpr::makeBinop(
+          NdOp::INT_SUB, Saved,
+          HighExpr::makeConst(-int64_t(Resume->SavedStackOffset), 4,
+                              ConstantAddressProvenance::Scalar));
+  }
   if (!Slot || !Saved)
     return false;
   HighStmt Restore;

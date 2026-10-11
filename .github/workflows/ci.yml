@@ -2187,7 +2187,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=40 \
             install --yes --no-install-recommends lld wine wine32:i386
       - name: Verify runtime evidence admission
-        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_check_windows_registration_multiple_catch scripts.tests.test_check_windows_registration_nested_try scripts.tests.test_windows_registration_libraries scripts.tests.test_windows_registration_runtime -v
+        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_check_windows_registration_multiple_catch scripts.tests.test_check_windows_registration_nested_try scripts.tests.test_check_windows_registration_entry scripts.tests.test_check_windows_registration_relift scripts.tests.test_windows_registration_cleanup_relift scripts.tests.test_windows_registration_objects scripts.tests.test_windows_registration_libraries scripts.tests.test_windows_registration_runtime -v
       - name: Fetch genuine MSVC C++ source inputs
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         uses: actions/download-artifact@v4
@@ -2277,6 +2277,12 @@ jobs:
           build-windows-eh/bin/NeverDWindowsRegistrationFrameTests --gtest_output=xml:build-windows-eh/evidence/frame.xml
           build-windows-eh/bin/NeverDWindowsEHMetadataEncoderTests --gtest_output=xml:build-windows-eh/evidence/metadata.xml
           build-windows-eh/bin/NeverDCOFFExceptionPatchTests --gtest_output=xml:build-windows-eh/evidence/planner.xml
+          build-windows-eh/bin/NeverDWindowsRegistrationRealignedTests \
+            --gtest_filter=RegistrationRethrowHighC.*:RegistrationThrowHighC.*:RegistrationObject.RequiresOneTrivialIdentityCopy \
+            --gtest_output=xml:build-windows-eh/evidence/rethrow-source.xml
+          build-windows-eh/bin/NeverDWindowsRegistrationNativeTests \
+            --gtest_filter=RegistrationPHICopy.* \
+            --gtest_output=xml:build-windows-eh/evidence/callback-copy.xml
       - name: Execute generated x86 callback frames with real exceptions
         run: |
           python scripts/check_windows_registration_frame.py \
@@ -2319,7 +2325,7 @@ jobs:
             --patch-binary build-windows-eh/bin/neverd \
             --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
             --output build-windows-eh/evidence/multiple-catch-rewrite
-      - name: Reconstruct nested x86 try and secondary catch searches
+      - name: Reconstruct nested x86 tries, direct scalar throws and rethrows
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         env:
           WINEARCH: win32
@@ -2330,6 +2336,62 @@ jobs:
             --patch-binary build-windows-eh/bin/neverd \
             --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
             --output build-windows-eh/evidence/nested-try-rewrite
+      - name: Reconstruct trivial x86 C++ objects and reference rethrows
+        if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
+        run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
+          python scripts/check_windows_registration_nested_try.py --profile objects \
+            --test-binary build-windows-eh/bin/NeverDWindowsRegistrationRealignedTests \
+            --patch-binary build-windows-eh/bin/neverd \
+            --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
+            --output build-windows-eh/evidence/object-rewrite
+      - name: Reconstruct x86 C++ entries across Microsoft calling conventions
+        if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
+        run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
+          python scripts/check_windows_registration_entry.py \
+            --test-binary build-windows-eh/bin/NeverDWindowsRegistrationNativeTests \
+            --patch-binary build-windows-eh/bin/neverd \
+            --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
+            --output build-windows-eh/evidence/entry-rewrite
+      - name: Re-lift trivial objects and reference rethrows
+        if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
+        run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
+          python scripts/check_windows_registration_relift.py --profile objects \
+            --input-root build-windows-eh/evidence/object-rewrite \
+            --test-binary build-windows-eh/bin/NeverDWindowsRegistrationNativeTests \
+            --patch-binary build-windows-eh/bin/neverd \
+            --output build-windows-eh/evidence/object-relift
+      - name: Re-lift and reconstruct generated x86 C++ entries
+        if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
+        run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
+          python scripts/check_windows_registration_relift.py \
+            --input-root build-windows-eh/evidence/entry-rewrite \
+            --test-binary build-windows-eh/bin/NeverDWindowsRegistrationNativeTests \
+            --patch-binary build-windows-eh/bin/neverd \
+            --output build-windows-eh/evidence/relift-rewrite
+      - name: Re-lift generated catches with ordered local destruction
+        if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
+        run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
+          python scripts/check_windows_registration_relift.py \
+            --profile catch-cleanup \
+            --input-root build-windows-eh/evidence/nested-try-rewrite \
+            --test-binary build-windows-eh/bin/NeverDWindowsRegistrationNativeTests \
+            --patch-binary build-windows-eh/bin/neverd \
+            --output build-windows-eh/evidence/cleanup-relift
       - name: Execute strict generated EH4 and GS cookie contracts
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         run: |
@@ -2345,7 +2407,7 @@ jobs:
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         run: |
           build-windows-eh/bin/NeverDWindowsRegistrationNativeTests \
-            --gtest_filter=-WindowsRegistrationNative.InputPE32PreservesItsCheckedSourceContract:WindowsRegistrationCxxSource.* \
+            --gtest_filter=-WindowsRegistrationNative.InputPE32PreservesItsCheckedSourceContract:WindowsRegistrationCxxSource.*:RegistrationEntryABI.InputPE32*:RegistrationRelift.InputPE32* \
             --gtest_output=xml:build-windows-eh/evidence/native.xml
           for registration_case in filter nested-finally continue-search continue-execution normal-finally cdecl-parameter cdecl-parameter-write eh4-filter eh4-nested-finally eh4-continue-search eh4-continue-execution eh4-normal-finally eh4-cdecl-parameter eh4-cdecl-parameter-write eh4-gs-filter eh4-gs-nested-finally eh4-gs-continue-search eh4-gs-continue-execution eh4-gs-normal-finally eh4-gs-cdecl-parameter eh4-gs-cdecl-parameter-write; do
             python scripts/check_windows_registration_rewrite.py \
@@ -2354,7 +2416,7 @@ jobs:
               --output "build-windows-eh/evidence/source-${registration_case}" \
               --wine-prefix "$RUNNER_TEMP/neverd-wine32"
           done
-      - name: Execute actual source C++ reconstruction with ordered cleanups and reference effects
+      - name: Reconstruct two generations of source C++ with ordered cleanups and reference effects
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         run: |
           python scripts/check_windows_registration_cxx_rewrite.py \
@@ -2378,7 +2440,7 @@ jobs:
           from pathlib import Path
           import xml.etree.ElementTree as ET
           root = Path('build-windows-eh/evidence')
-          for name in ('state', 'registration', 'stack', 'noreturn', 'frame', 'metadata', 'planner', 'ir-pe', 'corpus'):
+          for name in ('state', 'registration', 'stack', 'noreturn', 'frame', 'metadata', 'planner', 'rethrow-source', 'ir-pe', 'corpus'):
               result = ET.parse(root / (name + '.xml')).getroot()
               assert int(result.get('tests', '0')) > 0, name
               assert not result.findall('.//skipped'), name
@@ -2390,6 +2452,11 @@ jobs:
                       assert not result.findall('.//skipped'), (profile, case)
                       assert not int(result.get('failures', '0')), (profile, case)
                       assert not int(result.get('errors', '0')), (profile, case)
+                      relift = ET.parse(root / profile / case / 'relift.xml').getroot()
+                      assert int(relift.get('tests', '0')) == 1, (profile, case)
+                      assert not relift.findall('.//skipped'), (profile, case)
+                      assert not int(relift.get('failures', '0')), (profile, case)
+                      assert not int(relift.get('errors', '0')), (profile, case)
           PY
       - name: Preserve runtime and cross-target evidence
         if: ${{ always() }}
@@ -2465,6 +2532,25 @@ jobs:
         if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
         run: python scripts/replay_windows_registration_nested_try.py --evidence-root build-windows-eh/evidence/nested-try-rewrite --output build-windows-eh/native-nested-try-replay.json
 
+      - name: Replay identical trivial object reconstructions with the Windows CRT
+        if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
+        run: python scripts/replay_windows_registration_nested_try.py --evidence-root build-windows-eh/evidence/object-rewrite --output build-windows-eh/native-object-replay.json
+
+      - name: Replay identical entry ABI reconstructions with the Windows CRT
+        if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
+        run: python scripts/replay_windows_registration_entry.py --evidence-root build-windows-eh/evidence/entry-rewrite --output build-windows-eh/native-entry-replay.json
+
+      - name: Replay both x86 C++ rewrite generations with the Windows CRT
+        if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
+        run: python scripts/replay_windows_registration_relift.py --evidence-root build-windows-eh/evidence/relift-rewrite --output build-windows-eh/native-relift-replay.json
+      - name: Replay generated catch cleanup reconstructions
+        if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
+        run: python scripts/replay_windows_registration_relift.py --evidence-root build-windows-eh/evidence/cleanup-relift --output build-windows-eh/native-cleanup-relift-replay.json
+
+      - name: Replay both trivial object generations with the Windows CRT
+        if: ${{ inputs.windows_eh_replay_artifact_run == '' && !inputs.windows_eh_cxx_frame_only }}
+        run: python scripts/replay_windows_registration_relift.py --evidence-root build-windows-eh/evidence/object-relift --output build-windows-eh/native-object-relift-replay.json
+
       - name: Preserve native loader evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -2478,6 +2564,11 @@ jobs:
             build-windows-eh/native-realigned-rewrite-replay.json
             build-windows-eh/native-multiple-catch-replay.json
             build-windows-eh/native-nested-try-replay.json
+            build-windows-eh/native-object-replay.json
+            build-windows-eh/native-object-relift-replay.json
+            build-windows-eh/native-entry-replay.json
+            build-windows-eh/native-relift-replay.json
+            build-windows-eh/native-cleanup-relift-replay.json
             build-windows-eh/runtime-diagnostics.json
             build-windows-eh/cxx-original/
           if-no-files-found: error

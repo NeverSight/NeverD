@@ -29,7 +29,9 @@ record, 언어 테이블, guard table의 일관성을 증명할 수 없는 재�
 | `__CxxFrameHandler3` | unwind/try map, catch, catch-object/frame offset, continuation, IP-to-state map | reducible state interval을 명시적 C++ HighIR 및 C 호환 형식 주석으로 변환 | 아래의 좁은 verifier-clean subset에 대해 네이티브 x64 재구성 |
 | `__CxxFrameHandler4` | action kind/object offset를 포함한 bounded variable-length decode | FH4 provenance를 가진 공통 HighIR graph | 분석 전용. 대상 함수 변경 거부 |
 | `__GSHandlerCheck_SEH/EH/EH4` | wrapped personality와 검사된 GS cookie provenance | base language graph와 wrapper 주석 | 분석 전용. downgrade 없이 대상 함수 변경 거부 |
-| x86 registration-chain EH | table-based EH와 구분 | unsupported-form 주석 | 재구성하지 않음 |
+| x86 registration-chain EH | 검증된 SEH 체인 및 C++ 그래프 | callback 식별자를 유지하는 HighIR 영역 | 증명된 부분 집합의 PE32 재구성. 자세한 계약 참조 |
+
+스칼라 참조 `catch` 내부의 `try`는 살아 있는 외부 예외 객체를 유지하고 전용 스택을 복원할 수 있습니다. 공유 callback과 일반적인 객체 수명은 아직 네이티브 재구성 범위에 포함되지 않습니다. [PE32 C++](../windows-exception-reconstruction.md).
 
 Malformed record를 완전한 일반 record로 취급하지 않습니다. partial decode는 조사에 쓸 수 있지만
 네이티브 metadata 생성을 허가하지 않습니다. ARM xdata header가 bounded executable fragment
@@ -59,6 +61,26 @@ language-table limit는 개별 테이블과 함수 전체 정규화 graph에 모
 entry가 같은 handler map을 재사용해도 총 예산을 넘지 않습니다. 동일 `FuncInfo`와 personality를
 공유하는 FH3 record는 bounded function group으로 decode하므로 부모 IP-to-state map은 자신의
 catch funclet을 참조할 수 있지만 관련 없는 runtime function address는 거부합니다.
+
+생성된 PE32 C++ 진입점은 완전한 소스 증명이 성공하면 다시 로드, 리프트 및 재구성할 수 있습니다.
+loader는 실제 FS:[0] 쓰기, 정렬 프레임, SafeSEH 포인터 역할을 이미지 바이트에서 검증합니다.
+설치기는 이전에 생성된 실행 섹션의 인증된 진입점도 수정하지만, 가상 및 파일 저장 범위가 유일하고
+분석한 바이트와 일치해야 합니다. cdecl/stdcall/thiscall/fastcall 검체는 Microsoft x86 CRT에서
+두 세대의 재구성, 두 patch 모드와 강제 재배치를 검증합니다. 각 세대는 LowIR와 LLVM을 새로
+증명하며 이전 증명 기록만으로 재작성을 허용하지 않습니다. 생성된 ESI cleanup relay도 지역 프레임 기준점과 저장된 진입 EBP가 인증된 부모와 일치하면
+두 번째 재구성을 지원합니다. 캐시된 바이트 증명은 각 호출의 부모 프레임에 다시 연결하며,
+LowIR가 객체 접근과 저장된 프레임 수명을 증명합니다. 실제 MSVC 값/참조 검체는 두 세대,
+두 patch 모드와 강제 재배치에서 소멸 순서와 참조 쓰기를 검증합니다. 일반적인 객체 수명과
+형식 변환은 아직 지원하지 않습니다.
+
+PE32의 단순 복사 예외 객체도 값·참조 catch, 직접 throw 및 재던지기를 지원합니다.
+불변 ThrowInfo에는 단일 타입만 있어야 하며 주소 조정, 복사 생성자, 소멸자 또는 전달
+콜백이 없어야 합니다. 모든 바이트의 초기화와 비공개 프레임 포인터의 비탈출을 증명합니다.
+O0/O1의 8·12바이트 구조체로 필드 변경, catch 분기, 두 CLI 모드와 Microsoft CRT
+재배치를 검사합니다. PHI 복사 블록은 원래 CFG 간선과 콜백에 속하며 독립 검증은 추가
+호출, 별칭 메모리와 변경된 대상을 거부합니다. RTTI는 멤버 배치를 제공하지 않으므로
+C++ 구문 검사는 실제 테스트 타입 선언을 사용하고 출력은 원래 오프셋과 알 수 없는
+집합 타입의 throw 호출을 유지합니다.
 
 ## IR 계약
 

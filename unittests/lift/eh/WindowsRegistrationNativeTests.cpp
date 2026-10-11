@@ -429,6 +429,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
         if (parseNdCodePtrSymbol(Global.getName()) ==
             Loaded
                 ->getSegmentFor(Low.RegistrationStates->CleanupContracts[0]
+                                    .Calls[0]
                                     .Leaf.ImageWrites[0]
                                     .Begin)
                 ->VA) {
@@ -505,7 +506,8 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
       for (const auto &Contract : Low.RegistrationStates->CalleeContracts)
         Shared |= Observed(Contract);
       for (const auto &Contract : Low.RegistrationStates->CleanupContracts)
-        Shared |= Observed(Contract.Leaf);
+        for (const auto &Call : Contract.Calls)
+          Shared |= Observed(Call.Leaf);
       if (!Shared)
         continue;
       ++SharedRoots;
@@ -517,7 +519,8 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
   CheckSharedImageRoots(*Module);
   ASSERT_FALSE(Low.RegistrationStates->CleanupContracts.empty());
   auto HelperLow = CFGBuilder().build(
-      *Loaded, Decoder, Low.RegistrationStates->CleanupContracts[0].Leaf.Target,
+      *Loaded, Decoder,
+      Low.RegistrationStates->CleanupContracts[0].Calls[0].Leaf.Target,
       "registration_image_identity_first");
   auto Helper = Converter.convert(HelperLow, Arch::X86, BinaryFormat::COFF);
   inferMedTypes(Helper, Arch::X86);
@@ -1592,6 +1595,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     llvm::consumeError(std::move(Failure));
   }
   Patcher.setImageContext(&*Loaded);
+  std::optional<va_t> GeneratedOwnerEnd;
   for (bool Collision : {false, true}) {
     auto ProductModule = llvm::CloneModule(*Module);
     if (Collision) {
@@ -1657,6 +1661,9 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     ASSERT_NE(GeneratedGraph, Reloaded->ExceptionMetadata.Functions.end());
     EXPECT_EQ(*GeneratedGraph->Cxx, Update->GeneratedCxxGraphs[0]);
     EXPECT_EQ(GeneratedGraph->ParseStatus, ExceptionParseStatus::Complete);
+    if (GeneratedOwnerEnd)
+      EXPECT_EQ(*GeneratedOwnerEnd, GeneratedGraph->CodeRange.End);
+    GeneratedOwnerEnd = GeneratedGraph->CodeRange.End;
     ASSERT_TRUE(GeneratedGraph->Registration);
     const auto &GeneratedChain = *GeneratedGraph->Registration;
     ASSERT_TRUE(GeneratedChain.RealignedFrame);
@@ -1670,7 +1677,9 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     EXPECT_EQ(GeneratedFrame.SavedParentFrameOffset, -20);
     EXPECT_EQ(GeneratedChain.RegistrationOffset, -12);
     EXPECT_EQ(GeneratedChain.TryLevelOffset, -4);
-    EXPECT_EQ(GeneratedChain.chainInstallInstructionSize(), 6u);
+    EXPECT_EQ(coff_loader::getX86RegistrationChainStoreSize(
+                  *Reloaded, GeneratedChain.ChainInstallVA),
+              6u);
     ASSERT_FALSE(GeneratedChain.TryLevelStores.empty());
     EXPECT_EQ(GeneratedChain.TryLevelStores.front().Level, -1);
     EXPECT_TRUE(
@@ -1700,21 +1709,33 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     EXPECT_TRUE(Installed->Reached);
     EXPECT_TRUE(Installed->CanDispatch);
     EXPECT_FALSE(Installed->Unknown);
-    // Ordinary coordinate transfer does not prove the generated catch's
-    // distinct runtime restore and continuation protocol.
-    EXPECT_FALSE(ReliftStates.CxxContinuationsComplete);
-    // These generated cleanup funclets share the recovered function range.
-    // Frame coordinates alone do not establish their source unwind contract.
+    // Cleanup relays stay outside the parent's callback code ranges. Their
+    // independent byte and frame proofs permit a second native reconstruction.
+    EXPECT_TRUE(ReliftStates.Complete);
+    EXPECT_TRUE(ReliftStates.CxxContinuationsComplete);
+    EXPECT_TRUE(ReliftStates.CleanupFrameEffectsComplete);
+    ASSERT_EQ(ReliftStates.CleanupContracts.size(), 2u);
     const auto GeneratedSource = classifyWindowsEHNativeSource(
         *GeneratedGraph, Arch::X86, BinaryFormat::COFF);
-    EXPECT_FALSE(GeneratedSource.canPatchOutput());
-    EXPECT_EQ(GeneratedSource.Reason,
-              WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
-    EXPECT_TRUE(
-        llvm::any_of(GeneratedGraph->Cxx->UnwindMap, [&](const auto &Action) {
-          return Action.ActionVA &&
-                 GeneratedGraph->CodeRange.contains(Action.ActionVA);
-        }));
+    EXPECT_TRUE(GeneratedSource.canPatchOutput());
+    for (const auto &Action : GeneratedGraph->Cxx->UnwindMap)
+      if (Action.ActionVA)
+        EXPECT_FALSE(GeneratedGraph->ownsCode(Action.ActionVA));
+    LowToMedConverter ReliftConverter;
+    ReliftConverter.setBinaryImage(&*Reloaded);
+    auto ReliftMed =
+        ReliftConverter.convert(Relift, Arch::X86, BinaryFormat::COFF);
+    inferMedTypes(ReliftMed, Arch::X86);
+    llvm::LLVMContext ReliftContext;
+    MedLLVMEmitter ReliftEmitter;
+    auto ReliftModule = ReliftEmitter.emit(
+        {ReliftMed}, ReliftContext, "generated-cleanup-analysis", Arch::X86, {},
+        &*Reloaded, BinaryFormat::COFF);
+    ASSERT_TRUE(ReliftModule);
+    ASSERT_TRUE(ReliftModule->getFunction(ReliftMed.Name));
+    EXPECT_TRUE(ReliftModule->getFunction(ReliftMed.Name)
+                    ->getMetadata(windows_eh_md::NativeAttachment));
+    EXPECT_FALSE(llvm::verifyModule(*ReliftModule, &llvm::errs()));
     for (unsigned Byte : {3u, 8u, 16u, 17u, 23u, 39u, 62u}) {
       SCOPED_TRACE(Byte);
       BinaryImage Disproved = *Reloaded;
@@ -1758,6 +1779,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
                  Range.ParentOwnerSymbol.empty();
         });
     ASSERT_NE(ParentRange, OriginalCompiled.FunctionRanges.end());
+    ASSERT_TRUE(GeneratedOwnerEnd);
     llvm::json::Array Fields;
     for (va_t Field : HandlerReceipt->AbsolutePointerFields)
       Fields.push_back(llvm::json::Object{
@@ -1771,6 +1793,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
         {"source_entry_rva", Source->CodeRange.Begin - Loaded->Base},
         {"generated_code_begin_rva", ParentRange->BeginVA - Loaded->Base},
         {"generated_code_end_rva", ParentRange->EndVA - Loaded->Base},
+        {"generated_owner_end_rva", *GeneratedOwnerEnd - Loaded->Base},
         {"registration_handler_rva", RegistrationVA - Loaded->Base},
         {"func_info_rva", HandlerReceipt->Tables.FuncInfoVA - Loaded->Base},
         {"absolute_pointer_fields", std::move(Fields)},

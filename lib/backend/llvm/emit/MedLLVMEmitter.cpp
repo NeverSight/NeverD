@@ -782,7 +782,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     for (size_t I = 0; I != Funcs.size(); ++I) {
       const auto &Func = Funcs[I];
       if (!Func.ExceptionMetadata || !Func.RegistrationStates ||
-          Func.SkippedSSA || !Func.RegistrationCallerCleanupABIComplete)
+          Func.SkippedSSA || !Func.RegistrationCxxEntryPopBytes)
         continue;
       const auto Classification =
           classifyWindowsEHNativeSource(*Func.ExceptionMetadata, TheArch, Fmt,
@@ -828,7 +828,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       for (const auto &Contract : States.CalleeContracts)
         Complete &= Preserve(Contract);
       for (const auto &Contract : States.CleanupContracts)
-        Complete &= Preserve(Contract.Leaf);
+        for (const auto &Call : Contract.Calls)
+          Complete &= Preserve(Call.Leaf);
       if (!Complete) {
         llvm::WithColor::error() << "med_llvm_emitter: malformed preserved "
                                     "registration image footprint\n";
@@ -1185,19 +1186,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
           !coff_loader::getCheckedX86CxxPersonalityABI(*Img,
                                                        *Func.ExceptionMetadata))
         continue;
-      const auto Address = Func.ExceptionMetadata->PersonalityVA;
-      if (EmittedFuncNames.count(Address))
-        continue;
-      const auto Name = "__nd_registration_handler_" + llvm::utohexstr(Address);
-      auto *Type =
-          llvm::FunctionType::get(llvm::Type::getInt32Ty(*Ctx), {}, true);
-      if (Mod_->getNamedValue(Name))
-        continue;
-      auto *Declaration = llvm::cast<llvm::Function>(
-          Mod_->getOrInsertFunction(Name, Type).getCallee());
-      rewrite_source::setOriginalVA(*Declaration, Address);
-      EmittedFuncNames[Address] = Name;
-      FuncNames[Address] = Name;
+      resolveX86RegistrationHandlerReference(
+          Func.ExceptionMetadata->PersonalityVA);
     }
 
   // Build every ordinary block skeleton before emitting the first operation.

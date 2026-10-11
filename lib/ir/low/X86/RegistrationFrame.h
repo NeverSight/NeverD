@@ -10,10 +10,12 @@
 #include "neverd/Common.h"
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
 
 namespace neverd {
 struct LowOp;
@@ -28,7 +30,7 @@ namespace neverd::registration_state {
 struct CallbackFrameAddress {
   va_t Entry = InvalidVA;
   int32_t Offset = 0;
-  bool operator==(const CallbackFrameAddress &) const = default;
+  auto operator<=>(const CallbackFrameAddress &) const = default;
 };
 
 /// Values in the PE32 address domain. Offset names the runtime establisher;
@@ -56,6 +58,9 @@ struct FrameValue {
   /// never satisfy an Offset query, even when both displacements are zero.
   std::optional<int32_t> EntryOffset;
   std::optional<CallbackFrameAddress> CallbackAddress;
+  /// Runtime exception pointers keep the catch invocation that owns them.
+  /// Two live reference catches can have the same object-relative offset.
+  std::optional<std::pair<uint32_t, uint32_t>> ExceptionObject;
 
   static FrameValue frame(int32_t Offset) { return {Offset, {}, false, true}; }
   static FrameValue entryFrame(int32_t Offset) {
@@ -74,7 +79,12 @@ struct FrameValue {
     return Result;
   }
   static FrameValue previousChain() { return {{}, {}, true, false}; }
-  friend bool operator==(const FrameValue &, const FrameValue &) = default;
+  static FrameValue exceptionObject(uint32_t Try, uint32_t Catch) {
+    auto Result = frame(0);
+    Result.ExceptionObject = {Try, Catch};
+    return Result;
+  }
+  auto operator<=>(const FrameValue &) const = default;
 };
 
 FrameValue join(FrameValue Left, const FrameValue &Right);
@@ -96,6 +106,9 @@ struct FrameState {
     return Cells.size() + EntryCells.size() + CallbackCells.size() +
            InitializedCallbackBytes.size();
   }
+  /// Bound a known interval lookup by its overlapping cells. Unknown addresses
+  /// still require a complete provenance scan across all frame coordinates.
+  size_t memoryAccessWork(const FrameValue &Address, uint16_t Width) const;
 
   bool merge(const FrameState &Other);
   void forgetCellValues();

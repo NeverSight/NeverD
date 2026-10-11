@@ -44,10 +44,16 @@ projectX86RegistrationCatch(const ExceptionFunction &EH,
                             const X86RegistrationFrameLayout &Frame,
                             uint32_t TryIndex = 0, uint32_t CatchIndex = 0);
 
-/// Partition the normal CFG by runtime catch entry. A block shared by distinct
-/// invocations needs cloning before native lowering and has no unique owner.
+/// Partition the CFG and checked catch resumes by runtime invocation. A block
+/// shared by distinct invocations needs cloning before native lowering and has
+/// no unique owner.
 std::optional<std::map<int, X86RegistrationCatchIdentity>>
 projectX86RegistrationCatchBlocks(const MedFunc &Function);
+
+/// Each try group has one lexical parent catch or belongs to the function.
+/// Resolve it from checked invocation stacks, including exceptional resumes.
+std::optional<std::vector<std::optional<X86RegistrationCatchIdentity>>>
+projectX86RegistrationCatchParents(const MedFunc &Function);
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_LLVM_X86REGISTRATIONCATCH_H
