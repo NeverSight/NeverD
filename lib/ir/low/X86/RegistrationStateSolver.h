@@ -97,7 +97,7 @@ private:
   bool registrationInstallationReady(const FrameState &Frame) const;
   bool callbackCanReturn(const Domain &State) const;
   std::optional<int32_t> parentStackOffset(const Domain &State) const;
-  void preserveCxxRuntimeCells(Domain &Root, const Domain &Source);
+  void preserveCxxFrameCells(Domain &Root, const Domain &Source);
   bool initializeContracts();
   std::optional<RegistrationRuntimeThrow>
   runtimeThrowArguments(const Domain &State,

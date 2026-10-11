@@ -69,6 +69,14 @@ travail au-delà du budget global. Les records FH3 partageant `FuncInfo` et la
 personality forment un groupe borné, ce qui autorise les catch funclets du parent
 sans accepter les adresses de fonctions sans rapport.
 
+Les entrées C++ PE32 générées peuvent être rechargées, relevées et reconstruites si la preuve source complète réussit.
+Le chargeur vérifie les octets de l’écriture FS:[0], le cadre réaligné et les rôles des pointeurs SafeSEH.
+L’installation peut modifier une entrée authentifiée d’une section exécutable précédemment générée, à condition que
+son stockage virtuel et physique soit unique et corresponde aux octets analysés. Les cas cdecl/stdcall/thiscall/fastcall
+vérifient deux générations, les deux modes de patch et le rebasage forcé avec le CRT Microsoft x86.
+Chaque génération exige de nouvelles preuves LowIR et LLVM ; un ancien reçu n’autorise aucune réécriture.
+Les relais cleanup générés et les durées de vie générales des objets nécessitent encore du travail.
+
 ## Contrat IR
 
 Les metadata d’exception traversent toutes les représentations sans modifier le

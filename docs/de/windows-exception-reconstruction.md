@@ -67,6 +67,14 @@ Handler-Maps können den Gesamtaufwand nicht vervielfachen. FH3-Records mit
 gemeinsamem `FuncInfo` und gleicher Personality bilden eine begrenzte Gruppe:
 Catch-Funclets des Parents sind erlaubt, fremde Runtime Functions nicht.
 
+Generierte PE32-C++-Einstiege lassen sich bei vollständigem Quellnachweis erneut laden, liften und rekonstruieren.
+Der Loader prüft den exakten FS:[0]-Store, den neu ausgerichteten Frame und die SafeSEH-Zeigerrollen anhand der Bytes.
+Die Installation darf einen authentifizierten Einstieg in einer zuvor erzeugten ausführbaren Section patchen,
+wenn virtuelle und physische Speicherung eindeutig sind und den analysierten Bytes entsprechen.
+Die cdecl/stdcall/thiscall/fastcall-Fixtures prüfen zwei Generationen, beide Patch-Modi und erzwungenes Rebasing
+mit der Microsoft-x86-CRT. Jede Generation benötigt neue LowIR- und LLVM-Nachweise; alte Belege erteilen keine
+Schreibberechtigung. Generierte Cleanup-Relays und allgemeine Objektlebenszeiten erfordern weitere Unterstützung.
+
 ## IR-Vertrag
 
 Exception-Metadaten durchlaufen alle Repräsentationen, ohne den normalen CFG zu ändern:

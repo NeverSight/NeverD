@@ -62,6 +62,14 @@ entry가 같은 handler map을 재사용해도 총 예산을 넘지 않습니다
 공유하는 FH3 record는 bounded function group으로 decode하므로 부모 IP-to-state map은 자신의
 catch funclet을 참조할 수 있지만 관련 없는 runtime function address는 거부합니다.
 
+생성된 PE32 C++ 진입점은 완전한 소스 증명이 성공하면 다시 로드, 리프트 및 재구성할 수 있습니다.
+loader는 실제 FS:[0] 쓰기, 정렬 프레임, SafeSEH 포인터 역할을 이미지 바이트에서 검증합니다.
+설치기는 이전에 생성된 실행 섹션의 인증된 진입점도 수정하지만, 가상 및 파일 저장 범위가 유일하고
+분석한 바이트와 일치해야 합니다. cdecl/stdcall/thiscall/fastcall 검체는 Microsoft x86 CRT에서
+두 세대의 재구성, 두 patch 모드와 강제 재배치를 검증합니다. 각 세대는 LowIR와 LLVM을 새로
+증명하며 이전 증명 기록만으로 재작성을 허용하지 않습니다. 생성된 cleanup relay와 일반적인
+객체 수명은 추가 지원이 필요합니다.
+
 ## IR 계약
 
 예외 metadata는 일반 CFG 의미를 바꾸지 않고 모든 표현으로 전달됩니다.

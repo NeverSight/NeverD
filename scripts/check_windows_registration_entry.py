@@ -72,7 +72,7 @@ def validate_installation(original, product, receipt, case):
     code_owner(product, target, receipt["generated_end"], ".ndtext")
 
 
-def observe(path, case, route, receipt, launcher, env, timeout):
+def observe(path, case, route, receipt, launcher, env, timeout, *, source_section=".text"):
     image = PE32(path.read_bytes())
     if image.base not in BASES or image.u16(image.optional + 70) & 0x40:
         raise ValueError("entry runtime probe has no forced base")
@@ -88,7 +88,7 @@ def observe(path, case, route, receipt, launcher, env, timeout):
     callers = [value - image.base for value in values[11:]]
     if any(not begin <= caller < end for caller in callers):
         raise ValueError("entry throw caller is outside its exact owner")
-    code_owner(image, begin, end, ".text" if route == "original" else ".ndtext")
+    code_owner(image, begin, end, source_section if route == "original" else ".ndtext")
     return {"image": path.name, "sha256": file_digest(path), "route": route,
             "base": image.base, "expected_exit": int(case.endswith("-control")),
             "caller_rvas": callers, "runtime": result}

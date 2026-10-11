@@ -68,6 +68,14 @@ una handler map en muchas try entries no supera el presupuesto agregado. Los
 records FH3 que comparten `FuncInfo` y personality forman un grupo acotado:
 aceptan sus catch funclets, no direcciones runtime ajenas.
 
+Las entradas C++ PE32 generadas se pueden volver a cargar, elevar y reconstruir si pasa la prueba completa del origen.
+El cargador verifica en los bytes la escritura exacta FS:[0], el frame realineado y las funciones de los punteros SafeSEH.
+La instalación puede modificar una entrada autenticada de una sección ejecutable generada anteriormente si su
+almacenamiento virtual y físico es único y coincide con los bytes analizados. Los casos cdecl/stdcall/thiscall/fastcall
+comprueban dos generaciones, ambos modos de patch y rebasing forzado con el CRT Microsoft x86.
+Cada generación exige nuevas pruebas LowIR y LLVM; un recibo anterior no autoriza otra reescritura.
+Los relays cleanup generados y la vida útil general de los objetos aún requieren más soporte.
+
 ## Contrato IR
 
 Los metadatos atraviesan todas las representaciones sin cambiar el CFG ordinario:

@@ -19,6 +19,16 @@ void recoverRegistrationCallbackRanges(ExceptionFunction &F,
                                        const BinaryImage &Img,
                                        const FunctionRangeMap &Functions,
                                        const RegistrationChainInfo &Chain) {
+  // A proved installing prologue owns its straight-line body just as a
+  // table-owned callback does. Immediate bytes can look like alignment
+  // padding inside a large generated frame initializer; they cannot split
+  // an instruction into a new function.
+  if (Chain.RegistrationOffset && Chain.TryLevelOffset &&
+      F.CodeRange.contains(Chain.ChainInstallVA)) {
+    const auto Parent = Functions.find(Img, F.CodeRange.Begin, true);
+    if (Parent && Parent->Begin == F.CodeRange.Begin)
+      F.CodeRange.End = std::max(F.CodeRange.End, Parent->End);
+  }
   std::set<va_t> Callbacks;
   std::set<va_t> Cleanups;
   for (const auto &Scope : Chain.Scopes) {

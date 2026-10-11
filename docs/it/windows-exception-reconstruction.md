@@ -67,6 +67,14 @@ una handler map in molte try entry non supera il budget aggregato. I record FH3
 con `FuncInfo` e personality comuni formano un gruppo limitato: accettano i propri
 catch funclet, non indirizzi runtime estranei.
 
+Gli ingressi C++ PE32 generati possono essere caricati, elevati e ricostruiti di nuovo se la prova completa dell’origine riesce.
+Il loader verifica nei byte la scrittura FS:[0] esatta, il frame riallineato e i ruoli dei puntatori SafeSEH.
+L’installazione può modificare un ingresso autenticato in una sezione eseguibile generata in precedenza se la memoria
+virtuale e lo spazio fisico sono univoci e corrispondono ai byte analizzati. I casi cdecl/stdcall/thiscall/fastcall
+verificano due generazioni, entrambe le modalità patch e il rebasing forzato con il CRT Microsoft x86.
+Ogni generazione richiede nuove prove LowIR e LLVM; una ricevuta precedente non autorizza altre riscritture.
+I relay cleanup generati e la durata generale degli oggetti richiedono ancora ulteriore supporto.
+
 ## Contratto IR
 
 I metadata attraversano tutte le rappresentazioni senza alterare il CFG ordinario:

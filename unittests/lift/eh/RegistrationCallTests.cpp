@@ -805,6 +805,8 @@ TEST(RegistrationCallABI, CxxPersonalitySkipsTheOriginalFuncInfoOperand) {
     EXPECT_EQ(Runtime->IATVA, F.IATVA);
     EXPECT_NE(Runtime->RuntimeVA, F.HandlerVA);
     EXPECT_FALSE(Runtime->CodeRanges.empty());
+    EXPECT_TRUE(coff_loader::isCheckedX86CxxHandlerReference(
+        F.Source.Code.Image, F.HandlerVA));
   }
 }
 
@@ -886,6 +888,10 @@ TEST(RegistrationCallABI, CxxPersonalityRejectsStorageAndRuntimeConflicts) {
     }
     EXPECT_FALSE(
         coff_loader::getCheckedX86CxxPersonalityABI(Image, F.Source.EH));
+    // The independent reference has no parent record to trust. A forged
+    // parent association leaves the actual retained thunk identity intact.
+    EXPECT_EQ(coff_loader::isCheckedX86CxxHandlerReference(Image, F.HandlerVA),
+              Mutation == 4);
   }
 }
 

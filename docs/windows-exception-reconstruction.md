@@ -370,6 +370,17 @@ try/catch graphs, unproved object types or entry ABIs, unproved dynamic frames
 and GS or asynchronous C++ remain available for analysis and are rejected for
 native installation.
 
+Generated PE32 C++ entries can be loaded, lifted and reconstructed again when
+the complete source proof succeeds. The loader checks the exact FS:[0] store,
+realigned frame and SafeSEH pointer roles from image bytes. Installation can
+patch an authenticated entry in an earlier generated executable section; its
+virtual and raw storage must be unique and match the analyzed bytes. The
+cdecl/stdcall/thiscall/fastcall fixtures cover two rewrite generations, both
+patch modes and forced rebasing, with the Microsoft x86 CRT. Each generation
+requires fresh LowIR and LLVM proofs; a previous receipt grants no authority.
+Generated cleanup relays and broader object lifetimes still require additional
+support.
+
 ## IR contract
 
 Canonical Windows EH metadata schema 11 and semantic-token schema 2 bind the

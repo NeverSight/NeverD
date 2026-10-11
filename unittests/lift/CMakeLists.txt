@@ -1305,6 +1305,8 @@ add_neverd_unittest(NeverDRegistrationStateTests
   eh/RegistrationRealignedStateTests.cpp
   eh/RegistrationRealignedTestUtils.cpp
   eh/RegistrationCallbackStateTests.cpp
+  eh/RegistrationFrameMemoryTests.cpp
+  eh/RegistrationIncomingAliasTests.cpp
 
   LINK_COMPONENTS
   IRRegistrationState
@@ -1364,6 +1366,12 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationCleanupABITests.cpp
   eh/RegistrationEntryABITests.cpp
   eh/RegistrationEntryLayoutTests.cpp
+  eh/RegistrationRealignedLayoutTests.cpp
+  eh/RegistrationRuntimePointerTests.cpp
+  eh/RegistrationFrameTaintTests.cpp
+  eh/RegistrationFrameStoresTests.cpp
+  eh/COFFTrampolineRegionTests.cpp
+  eh/RegistrationReliftTests.cpp
   eh/RegistrationSourceReceiptTestUtils.cpp
   eh/RegistrationCodeRangeTests.cpp
   eh/RegistrationRethrowTests.cpp

@@ -11,6 +11,28 @@
 #include <set>
 
 namespace neverd::coff_loader {
+bool isCheckedX86CxxHandlerReference(const BinaryImage &Img, va_t HandlerVA) {
+  if (Img.Arch != Arch::X86 || Img.Bits != Bitness::Bits32 ||
+      Img.Format != BinaryFormat::COFF || !HandlerVA || HandlerVA > UINT32_MAX)
+    return false;
+  registration_detail::HandlerIdentity Identity;
+  if (!registration_detail::decodeCxxHandlerThunk(Img, HandlerVA, Identity))
+    return false;
+  auto Records = getCheckedX86CxxFuncInfoRecords(Img, Identity.CxxFuncInfoVA);
+  if (!Records || !Records->HasDistinctRanges)
+    return false;
+  ExceptionFunction Function;
+  Function.Encoding = ExceptionEncoding::X86CxxFuncInfo;
+  Function.Personality = Identity.Personality;
+  Function.PersonalityVA = HandlerVA;
+  Function.HandlerDataVA = Identity.CxxFuncInfoVA;
+  Function.Cxx = std::move(Records->Cxx);
+  Function.Registration.emplace();
+  Function.Registration->HandlerVA = HandlerVA;
+  Function.Registration->ScopeTableVA = Identity.CxxFuncInfoVA;
+  return getCheckedX86CxxPersonalityABI(Img, Function).has_value();
+}
+
 std::optional<X86CxxPersonalityABI>
 getCheckedX86CxxPersonalityABI(const BinaryImage &Img,
                                const ExceptionFunction &Function) {

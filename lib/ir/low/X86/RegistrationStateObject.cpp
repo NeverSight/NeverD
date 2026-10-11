@@ -9,8 +9,8 @@
 #include "RegistrationStateSolver.h"
 
 namespace neverd::registration_state {
-void RegistrationStateSolver::preserveCxxRuntimeCells(Domain &Root,
-                                                      const Domain &Source) {
+void RegistrationStateSolver::preserveCxxFrameCells(Domain &Root,
+                                                    const Domain &Source) {
   std::vector<std::pair<int64_t, int64_t>> Writes;
   for (uint32_t State = 0; State < EH.Cxx->UnwindMap.size(); ++State) {
     if (!charge(1))
@@ -30,6 +30,22 @@ void RegistrationStateSolver::preserveCxxRuntimeCells(Domain &Root,
                             int64_t(*Offset) + Write.End);
     }
   }
+  auto Untouched = [&](int32_t Offset) {
+    return llvm::none_of(Writes, [&](const auto &Write) {
+      return Write.first < int64_t(Offset) + 4 && Offset < Write.second;
+    });
+  };
+  // A spilled incoming-frame address remains exact when every authenticated
+  // unwind action leaves its four bytes intact. The selected catch object's
+  // construction is applied afterwards and may overwrite this same cell.
+  // Unknown cleanup effects return above without publishing any aliases.
+  if (Chain.RealignedFrame && CompleteCatchObjects)
+    for (const auto &[Offset, Value] : Source.Frame.Cells) {
+      if (!charge(Writes.size() + 1))
+        return;
+      if (Value.EntryOffset && Untouched(Offset))
+        Root.Frame.Cells[Offset] = Value;
+    }
   // A retained outer exception remains alive during a nested catch. Its
   // aliases survive only when every authenticated cleanup leaves all four
   // bytes intact. Unknown callbacks and ended invocations retain only taint.
@@ -38,10 +54,7 @@ void RegistrationStateSolver::preserveCxxRuntimeCells(Domain &Root,
       return;
     if (Value.ExceptionObject &&
         runtimeObjectIsLive(Source, *Value.ExceptionObject) &&
-        runtimeObjectIsLive(Root, *Value.ExceptionObject) &&
-        llvm::none_of(Writes, [&](const auto &Write) {
-          return Write.first < int64_t(Offset) + 4 && Offset < Write.second;
-        }))
+        runtimeObjectIsLive(Root, *Value.ExceptionObject) && Untouched(Offset))
       Root.RuntimeObject.Cells[Offset] = Value;
   }
 }
@@ -114,7 +127,8 @@ bool RegistrationStateSolver::recordRuntimeMemory(
     const auto Stored = RuntimeTransfer.read(*Memory.StoredValue);
     const auto PrivateAddress = Transfer.read(*Memory.Address);
     if (PrivateAddress.Offset && !RuntimeAddress.MayBeFrame) {
-      if (!charge(After.RuntimeObject.cellCount() +
+      if (!charge(After.RuntimeObject.memoryAccessWork(PrivateAddress,
+                                                       Memory.AccessSize) +
                   (Memory.AccessSize + 3) / 4 + 1))
         return false;
       After.RuntimeObject.store(*PrivateAddress.Offset, Memory.AccessSize,

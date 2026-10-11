@@ -3,11 +3,14 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFFH4Encoding.cpp
   COFF/COFFInplace.cpp
   COFF/COFFPatch.cpp
+  COFF/COFFTrampolineRegions.cpp
   COFF/PESignaturePolicy.cpp
   COFF/COFFReloc.cpp
   COFF/COFFRegistrationPatch.cpp
   COFF/COFFRegistrationCallbackProof.cpp
   COFF/COFFRegistrationFrameProof.cpp
+  COFF/COFFRegistrationFrameStores.cpp
+  COFF/COFFRegistrationFrameTaint.cpp
   COFF/COFFRegistrationImageProof.cpp
   COFF/COFFRegistrationIncomingFrame.cpp
   COFF/COFFRegistrationIR.cpp

@@ -1673,7 +1673,9 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     EXPECT_EQ(GeneratedFrame.SavedParentFrameOffset, -20);
     EXPECT_EQ(GeneratedChain.RegistrationOffset, -12);
     EXPECT_EQ(GeneratedChain.TryLevelOffset, -4);
-    EXPECT_EQ(GeneratedChain.chainInstallInstructionSize(), 6u);
+    EXPECT_EQ(coff_loader::getX86RegistrationChainStoreSize(
+                  *Reloaded, GeneratedChain.ChainInstallVA),
+              6u);
     ASSERT_FALSE(GeneratedChain.TryLevelStores.empty());
     EXPECT_EQ(GeneratedChain.TryLevelStores.front().Level, -1);
     EXPECT_TRUE(

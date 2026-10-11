@@ -65,6 +65,14 @@ personality を共有する FH3 record は bounded function group として deco
 IP-to-state map は自身の catch funclet を参照できますが、無関係な runtime function の
 address は受け入れません。
 
+生成済み PE32 C++ エントリは、完全なソース証明に成功すれば再ロード、再リフト、再構築できます。
+loader は実際の FS:[0] 書き込み、整列フレーム、SafeSEH ポインターの役割をバイト列から検証します。
+インストーラーは以前生成した実行可能セクション内の認証済みエントリも変更できますが、仮想範囲と
+ファイル上の格納範囲が一意で、解析時のバイト列と一致する必要があります。cdecl/stdcall/thiscall/fastcall
+の検体は Microsoft x86 CRT で二世代の再構築、両 patch モード、強制再配置を検証します。
+各世代で LowIR と LLVM を新たに証明し、古い証明記録を許可として再利用しません。
+生成された cleanup relay と一般的なオブジェクト寿命には追加対応が必要です。
+
 ## IR 契約
 
 例外 metadata は通常 CFG の意味を変えずに全表現へ渡されます。

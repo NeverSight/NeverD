@@ -1178,19 +1178,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
           !coff_loader::getCheckedX86CxxPersonalityABI(*Img,
                                                        *Func.ExceptionMetadata))
         continue;
-      const auto Address = Func.ExceptionMetadata->PersonalityVA;
-      if (EmittedFuncNames.count(Address))
-        continue;
-      const auto Name = "__nd_registration_handler_" + llvm::utohexstr(Address);
-      auto *Type =
-          llvm::FunctionType::get(llvm::Type::getInt32Ty(*Ctx), {}, true);
-      if (Mod_->getNamedValue(Name))
-        continue;
-      auto *Declaration = llvm::cast<llvm::Function>(
-          Mod_->getOrInsertFunction(Name, Type).getCallee());
-      rewrite_source::setOriginalVA(*Declaration, Address);
-      EmittedFuncNames[Address] = Name;
-      FuncNames[Address] = Name;
+      resolveX86RegistrationHandlerReference(
+          Func.ExceptionMetadata->PersonalityVA);
     }
 
   // Build every ordinary block skeleton before emitting the first operation.

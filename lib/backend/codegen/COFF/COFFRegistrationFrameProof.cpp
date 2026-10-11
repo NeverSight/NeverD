@@ -6,6 +6,9 @@
 
 #include "COFFRegistrationFrameProof.h"
 
+#include "COFFRegistrationFrameStores.h"
+#include "COFFRegistrationFrameTaint.h"
+
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/RegistrationFrameAddress.h"
@@ -132,7 +135,10 @@ llvm::Error validateFramePrivacy(
   }
   size_t Work = 0;
   bool Exhausted = false;
-  std::map<const llvm::Value *, Cell> Located;
+  RegistrationFrameStores Stores;
+  if (!Stores.build(Functions, Work))
+    return Reject("private store index exhausted its work budget");
+  std::map<const llvm::Value *, std::optional<Cell>> Located;
   std::function<std::optional<Cell>(const llvm::Value *, unsigned)> Locate,
       LocateImpl;
   Locate = [&](const llvm::Value *Value,
@@ -145,8 +151,10 @@ llvm::Error validateFramePrivacy(
     if (Found != Located.end())
       return Found->second;
     auto Where = LocateImpl(Value, Depth);
-    if (Where)
-      Located.emplace(Value, *Where);
+    // Address ownership depends only on this immutable LLVM graph. Repeated
+    // scalar queries must not replay the same reaching-definition walk.
+    if (!Exhausted)
+      Located.emplace(Value, Where);
     return Where;
   };
   LocateImpl = [&](const llvm::Value *Value,
@@ -286,15 +294,18 @@ llvm::Error validateFramePrivacy(
         // revisits the same block's suffix, which may overwrite this cell.
         if (!Seen.emplace(Block, Last).second)
           continue;
+        const auto Candidates =
+            Stores.candidates(Slot->Root, Block, Last, Work);
+        if (!Candidates) {
+          Exhausted = true;
+          return std::nullopt;
+        }
         bool Found = false;
-        for (const auto *I = Last; I; I = I->getPrevNode()) {
+        for (const auto *Store : llvm::reverse(*Candidates)) {
           if (++Work > limits::kMaxRegistrationEHStateWork) {
             Exhausted = true;
             return std::nullopt;
           }
-          const auto *Store = llvm::dyn_cast<llvm::StoreInst>(I);
-          if (!Store)
-            continue;
           auto Destination = Locate(Store->getPointerOperand(), Depth + 1);
           if (!Destination || Destination->Root != Slot->Root)
             continue;
@@ -328,7 +339,8 @@ llvm::Error validateFramePrivacy(
     }
     return std::nullopt;
   };
-  std::map<Cell, uint64_t> TaintedMemory;
+  RegistrationFrameTaint TaintedMemory;
+  std::set<const llvm::StoreInst *> TaintedStores;
   auto Size = [&](llvm::Type *Type) -> uint64_t {
     if (!Type->isSized())
       return UINT64_MAX;
@@ -490,16 +502,14 @@ llvm::Error validateFramePrivacy(
                 Changed |= Addresses.insert(Load).second;
               }
             }
-            if (Where)
-              for (const auto &[Stored, Bytes] : TaintedMemory) {
-                if (++Work > limits::kMaxRegistrationEHStateWork)
-                  return Reject();
-                if (Stored.Root == Where->Root &&
-                    Where->Offset < Stored.Offset + int64_t(Bytes) &&
-                    Stored.Offset <
-                        Where->Offset + int64_t(Size(Load->getType())))
-                  Changed |= Addresses.insert(Load).second;
-              }
+            if (Private && !IsAddress(Load)) {
+              const auto Tainted = TaintedMemory.overlaps(
+                  Where->Root, Where->Offset, Size(Load->getType()), Work);
+              if (!Tainted)
+                return Reject("frame taint lookup exhausted its work budget");
+              if (*Tainted)
+                Changed |= Addresses.insert(Load).second;
+            }
             continue;
           }
           if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
@@ -595,12 +605,15 @@ llvm::Error validateFramePrivacy(
                   !Dominators.at(Function)->dominates(Bridge->second, Store))
                 return Reject();
             }
-            if (IsAddress(Store->getValueOperand())) {
+            if (IsAddress(Store->getValueOperand()) &&
+                TaintedStores.insert(Store).second) {
               if (!Where || !Bounded(*Where, Bytes) || Store->isAtomic())
                 return Reject();
-              auto [It, New] = TaintedMemory.emplace(*Where, Bytes);
-              Changed |= New || It->second < Bytes;
-              It->second = std::max(It->second, Bytes);
+              const auto Grew =
+                  TaintedMemory.insert(Where->Root, Where->Offset, Bytes, Work);
+              if (!Grew)
+                return Reject("frame taint update exhausted its work budget");
+              Changed |= *Grew;
             }
             continue;
           }
@@ -653,17 +666,17 @@ llvm::Error validateFramePrivacy(
                                  uint64_t(int64_t(Effect.End) - Effect.Begin)))
                       return Reject(
                           "callee borrow leaves its allocated source frame");
-                    if (Effects == &Borrow->second.Reads)
-                      for (const auto &[Stored, Width] : TaintedMemory) {
-                        if (++Work > limits::kMaxRegistrationEHStateWork)
-                          return Reject(
-                              "callee value proof exhausted its work budget");
-                        if (Stored.Root == Access.Root &&
-                            Stored.Offset < Where->Offset + Effect.End &&
-                            Access.Offset < Stored.Offset + int64_t(Width))
-                          return Reject("callee reads a pointer from its "
-                                        "scalar object borrow");
-                      }
+                    if (Effects == &Borrow->second.Reads) {
+                      const auto Tainted = TaintedMemory.overlaps(
+                          Access.Root, Access.Offset,
+                          uint64_t(int64_t(Effect.End) - Effect.Begin), Work);
+                      if (!Tainted)
+                        return Reject(
+                            "callee value proof exhausted its work budget");
+                      if (*Tainted)
+                        return Reject("callee reads a pointer from its "
+                                      "scalar object borrow");
+                    }
                     const auto *Home =
                         Effects == &Borrow->second.Writes
                             ? activeCxxReferenceHome(

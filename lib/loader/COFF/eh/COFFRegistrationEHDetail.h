@@ -115,15 +115,15 @@ public:
   /// and by the end of the executable segment it lives in.
   std::optional<ExceptionAddressRange>
   find(const BinaryImage &Img, va_t Address,
-       bool TableOwnedCallback = false) const {
+       bool AuthenticatedEntry = false) const {
     auto It = std::upper_bound(Starts.begin(), Starts.end(), Address);
     if (It == Starts.begin())
       return std::nullopt;
     va_t Begin = *std::prev(It);
-    // A padding guess cannot truncate a callback's proved straight-line
+    // A padding guess cannot truncate an authenticated entry's straight-line
     // instructions. Keep guesses after control transfers or undecodable bytes,
     // as well as every stated symbol, export and other confirmed boundary.
-    if (TableOwnedCallback)
+    if (AuthenticatedEntry)
       while (It != Starts.end() && Guesses.count(*It) &&
              callbackFallsThroughBoundary(Img, Address, *It, CallbackWork))
         ++It;
@@ -165,6 +165,10 @@ public:
         ConfigRVA > InvalidVA - Img.Base)
       return;
     const va_t ConfigVA = Img.Base + ConfigRVA;
+    if (ConfigVA > UINT32_MAX - 0x47) {
+      Invalid = true;
+      return;
+    }
     auto TableVA = readScalar<uint32_t>(Img, ConfigVA + 0x40);
     auto Count = readScalar<uint32_t>(Img, ConfigVA + 0x44);
     if (!TableVA || !Count) {
@@ -174,7 +178,8 @@ public:
     if (*TableVA == 0 && *Count == 0)
       return;
     Present = true;
-    if (*TableVA == 0 || *Count == 0 || *Count > MaxRegistrationRecords) {
+    if (*TableVA == 0 || *Count == 0 || *Count > MaxRegistrationRecords ||
+        uint64_t(*TableVA) + uint64_t(*Count) * 4 > uint64_t(UINT32_MAX) + 1) {
       Invalid = true;
       return;
     }
@@ -188,10 +193,14 @@ public:
       }
       Handlers.push_back(Img.Base + *Entry);
     }
+    TablePointer = std::make_pair(ConfigVA + 0x40, va_t(*TableVA));
   }
 
   bool isPresent() const { return Present; }
   bool isMalformed() const { return Invalid; }
+  std::optional<std::pair<va_t, va_t>> tablePointer() const {
+    return TablePointer;
+  }
   bool contains(va_t Address) const {
     return !Invalid &&
            std::binary_search(Handlers.begin(), Handlers.end(), Address);
@@ -199,6 +208,7 @@ public:
 
 private:
   std::vector<va_t> Handlers;
+  std::optional<std::pair<va_t, va_t>> TablePointer;
   bool Present = false;
   bool Invalid = false;
 };

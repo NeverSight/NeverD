@@ -28,6 +28,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateTransfer.cpp
   X86/RegistrationStateUnwind.cpp
   X86/RegistrationFrame.cpp
+  X86/RegistrationFrameMemory.cpp
   X86/RegistrationFrameCallback.cpp
   X86/RegistrationFrameRealignment.cpp
 )

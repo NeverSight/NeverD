@@ -21,6 +21,7 @@
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/X86Regs.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -863,10 +864,11 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         AddExceptionalRoot(Pad.PadVA);
     if (Exception->Registration) {
       const RegistrationChainInfo &Chain = *Exception->Registration;
-      const unsigned InstallSize = Chain.chainInstallInstructionSize();
+      const auto InstallSize = coff_loader::getX86RegistrationChainStoreSize(
+          Img, Chain.ChainInstallVA);
       if (Chain.RegistrationOffset && Chain.ChainInstallVA != 0 &&
-          Chain.ChainInstallVA <= InvalidVA - InstallSize)
-        AddBoundary(Chain.ChainInstallVA + InstallSize);
+          InstallSize && Chain.ChainInstallVA <= InvalidVA - *InstallSize)
+        AddBoundary(Chain.ChainInstallVA + *InstallSize);
       for (const RegistrationScopeRecord &Scope :
            Exception->Registration->Scopes) {
         AddExceptionalRoot(Scope.FilterVA);

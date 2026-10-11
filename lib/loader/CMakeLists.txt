@@ -34,7 +34,9 @@ add_neverd_component_library(NeverDLoader
   COFF/eh/COFFRegistrationEHCallback.cpp
   COFF/eh/COFFRegistrationEHRealignment.cpp
   COFF/eh/COFFRegistrationEHFixedFrame.cpp
+  COFF/eh/COFFRegistrationEHEncoding.cpp
   COFF/eh/COFFRegistrationEHCommon.cpp
+  COFF/eh/COFFRegistrationEHPointers.cpp
   COFF/eh/COFFRegistrationEHFuncInfo.cpp
   COFF/eh/COFFRegistrationEHHandler.cpp
   COFF/eh/COFFRegistrationEHPersonality.cpp

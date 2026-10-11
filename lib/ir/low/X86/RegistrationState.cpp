@@ -158,7 +158,9 @@ bool RegistrationStateSolver::initialize() {
          Block.InstructionBoundaries)
       HasInstallBoundary |=
           Instruction.Address == Chain.ChainInstallVA &&
-          Instruction.Size == Chain.chainInstallInstructionSize() &&
+          Instruction.Size != 0 &&
+          Instruction.Control == LowInstructionControl::None &&
+          Instruction.Address <= InvalidVA - Instruction.Size &&
           Instruction.Address + Instruction.Size == Block.EndAddr;
   if (!HasInstallBoundary) {
     Result.Diagnostics.push_back(

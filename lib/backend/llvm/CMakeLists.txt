@@ -58,6 +58,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMRegistrationFrame.cpp
   X86/MedLLVMNativeRegistration.cpp
   X86/MedLLVMNativeRegistrationCxx.cpp
+  X86/MedLLVMRegistrationHandler.cpp
   X86/MedLLVMRegistrationCxxCatch.cpp
   X86/MedLLVMRegistrationCxxCall.cpp
   emit/MedLLVMCall.cpp

@@ -106,6 +106,9 @@ struct FrameState {
     return Cells.size() + EntryCells.size() + CallbackCells.size() +
            InitializedCallbackBytes.size();
   }
+  /// Bound a known interval lookup by its overlapping cells. Unknown addresses
+  /// still require a complete provenance scan across all frame coordinates.
+  size_t memoryAccessWork(const FrameValue &Address, uint16_t Width) const;
 
   bool merge(const FrameState &Other);
   void forgetCellValues();

@@ -2536,7 +2536,7 @@ build/bin/NeverDRegistrationEHTests
 build/bin/NeverDNoReturnTests
 build/bin/NeverDWindowsRegistrationFrameTests
 build/bin/NeverDWindowsRegistrationNativeTests \
-  --gtest_filter='-WindowsRegistrationNative.InputPE32PreservesItsCheckedSourceContract:WindowsRegistrationCxxSource.*'
+  --gtest_filter='-WindowsRegistrationNative.InputPE32PreservesItsCheckedSourceContract:WindowsRegistrationCxxSource.*:RegistrationEntryABI.InputPE32*:RegistrationRelift.InputPE32*'
 for registration_case in filter nested-finally continue-search continue-execution normal-finally cdecl-parameter cdecl-parameter-write eh4-filter; do
   python scripts/check_windows_registration_rewrite.py \
     --test-binary build/bin/NeverDWindowsRegistrationNativeTests \
@@ -2722,6 +2722,23 @@ pass syntax checks. `replay_windows_registration_entry.py` authenticates every
 source, proof, receipt, object, IR, output and executable before repeating the
 same 128 images with the Windows CRT. Python tests reject missing cases, skipped
 proofs, stale identities and substitutions of the ABI, runtime or rebased image.
+
+`check_windows_registration_relift.py` consumes the authenticated entry capture
+and treats each first-generation product as fresh PE32 input. Its native test
+reproves the frame, callback states, incoming ABI and LLVM privacy contract before
+a second rewrite; both CLI modes must reproduce the API transaction byte for byte.
+The 16 cases produce 128 executions across four routes and two image bases, with
+16 calls each. Caller PCs must move into the second generated owner, and ESP,
+FS:[0], argument writes and results must still match. The independent
+`replay_windows_registration_relift.py` validates both complete capture identities,
+source/IR/receipt hashes, both trampolines, native CRT and exact rebased bytes
+before replaying those 128 images on Wine or Windows. Mutation tests reject missing
+cases, changed identities, stale proofs, wrong ABI and forged caller ownership.
+`RegistrationFrameStores` and `RegistrationFrameTaint` test bounded LLVM spill
+proofs, joins, backedges, partial writes and exhausted budgets. Loader tests keep
+independent SafeSEH/code references and real function boundaries while excluding
+padding bytes inside proved instructions. `COFFTrampolineRegion` tests unique
+raw/virtual entry storage and instruction-mode widths on x86, x64, Thumb and ARM64.
 
 `check_windows_registration_nested_try.py` compiles independent Clang `-O0`
 and `-O1` parents and links the captured CRT libraries. Inner reference catches

@@ -120,7 +120,17 @@ void RegistrationStateSolver::dispatch(
       return;
     if (!enterCxxCatch(Root, Source, CxxCatch->first, CxxCatch->second))
       return;
-    preserveCxxRuntimeCells(Root, Source);
+    // Unwinding and catch-object construction may change local objects.
+    // Keep only frame taint until their write footprints establish that a
+    // particular alias survives. Runtime administration has separate owners.
+    for (auto &[Offset, Value] : Root.Frame.Cells)
+      if (Offset != *Chain.RegistrationOffset &&
+          int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
+          Offset != *Chain.TryLevelOffset &&
+          (!Chain.RealignedFrame ||
+           Offset != Chain.RealignedFrame->SavedParentFrameOffset))
+        Value = registration_state::join(Value, {});
+    preserveCxxFrameCells(Root, Source);
     if (CheckRuntimeObjects) {
       const auto Object = CatchObjects.find(*CxxCatch);
       const auto &Catch =
@@ -155,16 +165,6 @@ void RegistrationStateSolver::dispatch(
         }
       }
     }
-    // Unwinding and catch-object construction may change local objects.
-    // Keep only frame taint for their old values. Runtime administration is
-    // separate: the link word and SavedESP remain owned by the EH frame.
-    for (auto &[Offset, Value] : Root.Frame.Cells)
-      if (Offset != *Chain.RegistrationOffset &&
-          int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
-          Offset != *Chain.TryLevelOffset &&
-          (!Chain.RealignedFrame ||
-           Offset != Chain.RealignedFrame->SavedParentFrameOffset))
-        Value = registration_state::join(Value, {});
   }
   Root.Installed = true;
   Root.CanDispatch = !SearchFilter;

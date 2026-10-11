@@ -143,6 +143,16 @@ COFF installation, source-IR replay, callback identity, incoming-frame proof,
 image-pointer closure and emitted SEH table checks remain separate consumers
 under `lib/backend/codegen/COFF`. Splitting these implementations does not add a
 second source-semantics owner or turn an analysis result into rewrite permission.
+The loader owns exact registration instruction widths and authenticated pointer
+roles, including SafeSEH table storage. Code discovery consumes those roles at the
+specific pointer slot so an independent reference retains its ordinary identity.
+`RegistrationFrameMemory` owns byte-cell overlap queries for the LowIR frame domain.
+The COFF LLVM privacy proof indexes private reaching stores and tainted byte ranges
+in separate units, preserving the shared work limit and conservative alias checks.
+`COFFTrampolineRegions` resolves authenticated source entries across executable
+sections, including earlier generated code, with unique virtual/raw ownership
+and unchanged input bytes. A second reconstruction repeats all source and LLVM
+proofs rather than trusting a previous installation receipt.
 It also publishes ordinary, runtime-dispatch and catch-resumption reachability.
 Empty levels alone do not identify dead code: a reached block can precede
 installation or follow removal. The call ABI consumer prunes only with complete
