@@ -34,8 +34,10 @@ PE32+ DLL 입력은 `IMAGE_FILE_DLL`로 식별합니다. 모델링된 게스트 
 
 `runtime_state.additional_dependency_reasons`는 유지 중인 풀이나 MDL, 변경된 로더 객체, 커널 부작용, 진입 호출 컨텍스트 변경 등 드라이버 모델이 관찰한 이유를 나열합니다. 기본 거부와 명시적 스냅샷은 같은 이유를 보존합니다. 빈 목록은 `has_additional_dependencies`를 무효화하거나 복원 계약을 입증하지 않습니다.
 
+풀이나 빌린 객체가 남지 않아도 커널 이미지 재배치는 별도의 로더 의존성입니다. 현재 작성기는 생성된 내용의 재배치 정보를 제거하므로 기본 드라이버 복원은 `unsupported_state`를 반환하며 출력 파일을 만들거나 잘라내지 않습니다. 명시적인 `snapshot_only`만 고정 주소 이미지를 출력하고 이 진단을 유지합니다. 원래 재배치 테이블만으로 생성된 포인터를 모두 포함한다고 증명할 수 없습니다.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## 사용법

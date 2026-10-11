@@ -34,8 +34,10 @@ Le letture del clock tramite `KeQueryPerformanceCounter`, `RDTSC` o `RDTSCP` man
 
 `runtime_state.additional_dependency_reasons` elenca i motivi osservati dal modello del driver: pool o MDL attivi, oggetti del caricatore modificati, effetti del kernel e modifiche al contesto della chiamata di ingresso. Il rifiuto predefinito e gli snapshot espliciti conservano gli stessi motivi. Un elenco vuoto non annulla `has_additional_dependencies` e non dimostra un contratto di ripristino.
 
+Le rilocazioni dell’immagine del kernel restano una dipendenza del loader anche senza pool od oggetti presi in prestito ancora presenti. Poiché il writer elimina le rilocazioni del contenuto generato, il recupero predefinito restituisce `unsupported_state` senza creare né troncare l’output. Solo `snapshot_only` esplicito produce l’immagine a indirizzo fisso mantenendo la diagnosi. La tabella originale non dimostra di coprire i puntatori generati.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Uso

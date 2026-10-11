@@ -34,8 +34,10 @@ Uhrabfragen über `KeQueryPerformanceCounter`, `RDTSC` oder `RDTSCP` behalten ei
 
 `runtime_state.additional_dependency_reasons` nennt die vom Treibermodell beobachteten Gründe, etwa aktive Pools oder MDLs, geänderte Loader-Objekte, Kernel-Effekte und einen geänderten Aufrufkontext am Einstieg. Die standardmäßige Ablehnung und explizite Snapshots behalten dieselben Gründe bei. Eine leere Liste setzt `has_additional_dependencies` nicht außer Kraft und belegt keinen Wiederherstellungsvertrag.
 
+Kernelbild-Relokationen bleiben auch ohne erhaltene Pools oder geliehene Objekte eine eigene Loader-Abhängigkeit. Da der Writer Relokationen erzeugter Inhalte derzeit entfernt, liefert die normale Treiberwiederherstellung `unsupported_state`, ohne die Ausgabe anzulegen oder zu kürzen. Nur explizites `snapshot_only` schreibt das Bild mit fester Adresse und behält die Diagnose. Die ursprüngliche Relokationstabelle beweist nicht, dass sie erzeugte Zeiger vollständig abdeckt.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Verwendung

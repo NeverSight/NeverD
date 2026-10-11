@@ -34,8 +34,10 @@ PE32+ DLL 入力は `IMAGE_FILE_DLL` で識別します。モデル化された�
 
 `runtime_state.additional_dependency_reasons` は、存続中のプールや MDL、変更されたローダーオブジェクト、カーネルの副作用、入口呼び出しコンテキストの変更など、ドライバーモデルが観測した理由を列挙します。既定の拒否と明示的なスナップショットは同じ理由を保持します。空のリストは `has_additional_dependencies` を上書きせず、復元契約を証明するものでもありません。
 
+プールや借用オブジェクトが残らなくても、カーネル画像の再配置は独立したローダー依存関係です。現在の出力処理は生成コードの再配置情報を除去するため、既定のドライバー復元は `unsupported_state` を返し、出力を作成・切り詰めしません。明示的な `snapshot_only` のみ固定ベースの画像を出力し、この診断を保持します。元の再配置表だけでは生成されたポインターの網羅性を証明できません。
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## 使い方

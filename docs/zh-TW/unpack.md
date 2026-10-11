@@ -34,8 +34,10 @@ PE32+ DLL 輸入由 `IMAGE_FILE_DLL` 識別。建模的來賓 EXE 呼叫 `LoadLi
 
 `runtime_state.additional_dependency_reasons` 列出驅動模型觀察到的原因，包括存活的池或 MDL、被修改的載入器物件、核心副作用及入口呼叫上下文變化。預設拒絕與明確快照保留相同原因。空清單不會覆寫 `has_additional_dependencies`，也不證明存在恢復契約。
 
+即使沒有殘留集區或借用物件，核心映像重定位仍是獨立的載入器相依性。目前重建器移除生成內容的重定位，因此預設驅動程式復原會傳回 `unsupported_state`，不會建立或截斷輸出。僅明確指定 `snapshot_only` 才輸出固定基址快照並保留此診斷。原始重定位表不能證明其涵蓋生成的指標。
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## 用法

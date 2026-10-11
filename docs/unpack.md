@@ -32,8 +32,10 @@ Clock reads through `KeQueryPerformanceCounter`, `RDTSC`, or `RDTSCP` retain an 
 
 `runtime_state.additional_dependency_reasons` lists the driver model’s observed reasons, including live pools or MDLs, changed loader objects, kernel effects and a changed entry invocation context. Default refusal and explicit snapshots retain the same reasons. An empty list does not override `has_additional_dependencies` or establish a restoration contract.
 
+Kernel image relocations remain a separate loader dependency even when no pool or borrowed object survives. Because the current writer strips relocations for generated content, default driver recovery returns `unsupported_state` without creating or truncating output. Only explicit `snapshot_only` emits the fixed image and retains this diagnostic. An original relocation table is not proof that it covers generated pointers.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Use

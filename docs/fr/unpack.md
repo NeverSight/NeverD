@@ -34,8 +34,10 @@ Les lectures d’horloge via `KeQueryPerformanceCounter`, `RDTSC` ou `RDTSCP` co
 
 `runtime_state.additional_dependency_reasons` énumère les raisons observées par le modèle du pilote : pools ou MDL actifs, objets du chargeur modifiés, effets du noyau et contexte d’appel d’entrée modifié. Le refus par défaut et les instantanés explicites conservent les mêmes raisons. Une liste vide ne remplace pas `has_additional_dependencies` et ne prouve aucun contrat de restauration.
 
+Les relocalisations de l’image noyau restent une dépendance du chargeur même sans pool ni objet emprunté conservé. Le générateur supprime actuellement les relocalisations du contenu produit : la récupération par défaut renvoie donc `unsupported_state` sans créer ni tronquer la sortie. Seul `snapshot_only` explicite émet l’image à adresse fixe en conservant ce diagnostic. La table d’origine ne prouve pas qu’elle couvre les pointeurs générés.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Utilisation
