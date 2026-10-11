@@ -11,6 +11,7 @@
 
 #include "../../../unittests/web/BunFixture.h"
 #include "../../../unittests/web/SEAFixture.h"
+#include "../../../unittests/web/ZipFixture.h"
 #include "TestSupport.h"
 #include "neverd-web-mcp/WebTools.h"
 
@@ -235,6 +236,26 @@ void passiveInputs(Harness &H) {
               Records.at("protocol_negotiation_verified") == false,
           "Stream facts or evidence class changed");
 }
+
+void zipArchive(Harness &H) {
+  const auto Artifact = H.import(7);
+  const auto A = H.same(
+      "web_package_archive_extract",
+      {{"revision", H.Revision}, {"artifact_id", Artifact}, {"format", "zip"}});
+  const auto Page =
+      H.same("web_package_archive_records",
+             {{"revision", H.Revision}, {"archive_id", A.at("archive_id")}});
+  require(A.at("profile") == "zip32-local-central-v1" &&
+              Page.at("items")[1].at("unavailable_reason") == "encrypted",
+          "MCP lost ZIP profile or unavailable member evidence");
+  const auto P = H.same("web_packages_analyze",
+                        {{"revision", H.Revision},
+                         {"artifact_id", Page.at("items")[0].at("member_id")},
+                         {"input_kind", "package-json"}});
+  H.same("web_package_records", {{"revision", H.Revision},
+                                 {"analysis_id", P.at("package_analysis_id")},
+                                 {"record_kind", "scripts"}});
+}
 } // namespace
 
 int main() {
@@ -242,7 +263,7 @@ int main() {
     Fixture F;
     std::vector<std::string> Inputs;
     for (const auto *Name :
-         {"source", "sea", "bun", "package", "har", "stream", "map"})
+         {"source", "sea", "bun", "package", "har", "stream", "map", "zip"})
       Inputs.push_back(F.path(Name));
     // The configured paths deliberately do not exist yet: construction must
     // neither capture nor reject them before an explicit preview request.
@@ -266,7 +287,7 @@ int main() {
     invalid([&] {
       H.get("web_import_preview", {{"input_index", 0}, {"path", "CANARY"}});
     });
-    invalid([&] { H.get("web_import_preview", {{"input_index", 7}}); });
+    invalid([&] { H.get("web_import_preview", {{"input_index", 8}}); });
     invalid([&] {
       H.get("web_native_analyze",
             {{"revision", "1"}, {"handoff_id", "CANARY"}});
@@ -290,6 +311,11 @@ int main() {
     F.write(
         "map",
         R"({"version":3,"sources":["CANARY.js"],"sourcesContent":["throw 'CANARY';"],"mappings":"AAAA"})");
+    F.write("zip", neverd::web::test::ZipFixture(
+                       {{"package.json",
+                         R"({"name":"CANARY","scripts":{"install":"CANARY"}})"},
+                        {"opaque", "CANARY", 0, 1}})
+                       .Bytes);
     const auto &Ops = Backend.at("operations");
     const bool HasParser =
         std::find(Ops.begin(), Ops.end(), "source_analyze") != Ops.end();
@@ -299,6 +325,10 @@ int main() {
       invalid([&] { H.get("web_source_analyze", Json::object()); });
     archives(H, HasParser);
     passiveInputs(H);
+    for (const auto &Analysis : Backend.at("analysis"))
+      if (Analysis.at("kind") == "package_archive" &&
+          Analysis.value("available", false))
+        zipArchive(H);
     WebTools Isolated(Inputs);
     const auto Error =
         evidence(Isolated.call("neverd_web_metadata", Json::object()), true);

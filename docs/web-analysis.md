@@ -33,6 +33,7 @@ neverd web capabilities
 neverd web packages ./package-lock.json npm-lock
 neverd web packages ./package.json package-json
 neverd web archive ./package.tgz tgz
+neverd web archive ./extension.vsix zip
 neverd web bun-export ./standalone-elf ./new-recovery-directory
 neverd web inspect ./input-directory
 neverd web source ./bundle.js script
@@ -94,6 +95,10 @@ bounded tar/local-PAX/single-gzip members and compare explicitly selected
 original artifacts with captured registry or npm-lock SRI declarations.
 Source, package, Bun and native consumers share the immutable member selection.
 SHA equality, archive validity and publisher authenticity are separate claims.
+The separate [ZIP32 profile](web-zip-profile.md) admits stored/deflate members
+through the same APIs with explicit `zip` format, retaining member CRC results,
+unavailable reasons and original/expanded ranges. This is container support;
+NW.js and VSIX framework manifests and entry graphs remain separate work.
 
 Bun extraction is explicitly selected and follows
 [versioned layouts](web-bun-profile.md). Module/region pages preserve original

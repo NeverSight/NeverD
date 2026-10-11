@@ -413,6 +413,13 @@ semantics remain distinct. All adapters consume these same results.
 `packages/PackageArchive` owns tar/local-PAX/single-gzip framing, complete-stream
 budgets and member admission; `BlobStore` supplies bounded private derived
 spools. `SessionPackageArchive` atomically publishes members after full validation.
+`archives/Zip` separately owns ZIP32 local/central agreement and framing;
+`ZipPayload` owns stored/raw-deflate decoding, exact size and CRC validation.
+`archives/PathIndex` owns the shared portable archive namespace. ZIP reuses the
+archive model and aggregate cache/spool budget; transport and desktop manifest
+consumers do not parse container records. `ArtifactView` composes exact stored
+payload offsets and compressed member frames for nested consumers. See the
+[ZIP profile](web-zip-profile.md).
 `packages/PackageIntegrity` owns shared SRI classification and original-byte
 comparison; `SessionPackageIntegrity` binds selected captured registry/lock
 declarations to selected original artifacts. Archive validation, byte equality,

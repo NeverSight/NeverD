@@ -396,6 +396,18 @@ ctest --test-dir build-release \
 
 ## Offline web analysis
 
+`WebZip.*` checks native ZIP32 records, independently preserved libarchive
+fixtures, framing/CRC/path/expansion refusals and unavailable-member evidence.
+`WebZipNoDeflate.*` compiles the payload owner without its decoder macro;
+it is not a whole-engine zlib-free build. `WebPackageArchiveSDK.*` also checks
+ZIP consumer coordinates, nested Bun/SEA/HTML origins, atomic failure and CLI
+processes with an unusable PATH. Supply `NEVERD_CLAUDE_CODE_21296_VSIX_LINUX_X64`
+for the hash-pinned Marketplace ZIP body (after HTTP Content-Encoding decoding),
+as documented in the [qualification record](web-claude-code-qualification.md).
+These tests never download, install or execute a supplied extension/helper.
+Shared path/origin changes require the whole owning Web directory and affected
+worker/MCP parity tests. See the [ZIP profile](web-zip-profile.md).
+
 The optional `NEVERD_BUILD_WEB_MCP=ON` target builds a native C++ transport.
 Run `ctest --test-dir build/tools/neverd-web-mcp --output-on-failure` for its
 four C++ suites: protocol, catalog, real-backend evidence parity and actual

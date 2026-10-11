@@ -139,26 +139,35 @@ Session::Impl::artifactView(std::string_view SelectionID) const {
         continue;
       if (!M.available())
         throw Error("artifact_bytes_unavailable");
+      const bool Zip = E.Format == "zip";
+      const bool Direct = E.Format == "tar" || (Zip && M.Compression == 0);
       return ArtifactView{
-          M.Content, M.BlobHash, M.Offset,
+          M.Content, M.BlobHash, Zip && Direct ? M.StoredOffset : M.Offset,
           llvm::json::Object{
               {"kind", "package_archive_member"},
               {"container_artifact_id", E.ArtifactID},
               {"storage_artifact_id", E.ArtifactID},
               {"byte_offset_basis",
-               E.Format == "tar" ? "storage_artifact" : "expanded_stream"},
+               Direct ? "storage_artifact" : "expanded_stream"},
+              {"byte_offset", Direct ? llvm::json::Value(std::to_string(
+                                           Zip ? M.StoredOffset : M.Offset))
+                                     : llvm::json::Value(nullptr)},
+              {"byte_length", Direct ? llvm::json::Value(std::to_string(M.Size))
+                                     : llvm::json::Value(nullptr)},
               {"container_sha256", E.BlobHash},
               {"archive_id", E.ID},
               {"member_id", M.ID},
               {"member_index", I},
-              {"profile", std::string(PackageArchiveProfile)},
+              {"profile", E.Profile},
               {"format", E.Format},
               {"expanded_stream_sha256", E.ExpandedHash},
               {"expanded_byte_offset", std::to_string(M.Offset)},
               {"expanded_byte_length", std::to_string(M.Size)},
-              {"container_frame_offset", "0"},
-              {"container_frame_length", std::to_string(E.Original.size())}},
-          E.Format == "tar"};
+              {"container_frame_offset",
+               std::to_string(Zip ? M.LocalHeaderOffset : 0)},
+              {"container_frame_length",
+               std::to_string(Zip ? M.StoredFrameSize : E.Original.size())}},
+          Direct};
     }
   if (const auto Inline = htmlSource(SelectionID)) {
     const auto &H = *Inline->Analysis;

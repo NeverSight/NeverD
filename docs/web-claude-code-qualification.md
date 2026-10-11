@@ -1,5 +1,39 @@
 # Claude Code 2.1.296: offline NeverD qualification
 
+## VSIX container and embedded CLI equality — 2026-10-11
+
+The official [Marketplace extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code)
+version `2.1.296`, target `linux-x64`, was downloaded through its
+[versioned package endpoint](https://marketplace.visualstudio.com/_apis/public/gallery/publishers/anthropic/vsextensions/claude-code/2.1.296/vspackage?targetPlatform=linux-x64).
+The HTTP response used `Content-Encoding: gzip`. The initial wire body was
+preserved and correctly refused as ZIP; downloading with HTTP content decoding
+produced the actual VSIX body. NeverD did not infer or unwrap HTTP encoding.
+
+| Evidence | Bytes | SHA-256 |
+|---|---:|---|
+| HTTP gzip wire body | 118,756,941 | `e7039fcac6d32b4632f9eda4a24a56bc813cd4a48fde23d2c594561f4deb0995` |
+| Decoded VSIX ZIP body | 118,957,454 | `31176c4a2a29144673170dfb9affc2589af997d01532f1f7f97f8b93999a3d11` |
+| Embedded native helper | 257,068,216 | `24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de` |
+
+The C++ ZIP reader validated 29 available regular members totaling 268,754,709
+decoded bytes. The captured `extension/package.json` declares version `2.1.296`
+and produces package entry evidence. Member index 15 matches the previously
+qualified standalone CLI byte-for-byte and yields 2,589 Bun modules and 10,005
+regions. Extension and helper identities remain separate; equality here comes
+from bytes, not matching version labels. This verifies container extraction and
+downstream analysis, not extension activation or publisher authentication.
+
+The real C++ test is enabled only by
+`NEVERD_CLAUDE_CODE_21296_VSIX_LINUX_X64`. The CLI also completed:
+
+```console
+PATH=/neverd-no-external-tools /absolute/path/to/neverd web archive-bun /path/to/decoded.vsix zip 0 15
+```
+
+No VS Code, extension, helper, installer or external extraction program ran.
+Framework manifest analysis is a separate phase from the
+[ZIP container profile](web-zip-profile.md).
+
 ## npm originals and standalone equality — 2026-10-11
 
 NeverD's C++ tar/gzip reader admitted the official

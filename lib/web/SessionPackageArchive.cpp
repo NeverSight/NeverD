@@ -21,7 +21,7 @@ llvm::json::Object summary(const PackageArchive &A, uint64_t Revision) {
       {"archive_id", A.ID},
       {"artifact_id", A.ArtifactID},
       {"blob_sha256", A.BlobHash},
-      {"profile", std::string(PackageArchiveProfile)},
+      {"profile", A.Profile},
       {"format", A.Format},
       {"member_count", A.Members.size()},
       {"original_bytes", std::to_string(A.Original.size())},
@@ -31,7 +31,8 @@ llvm::json::Object summary(const PackageArchive &A, uint64_t Revision) {
       {"coverage", "declared_archive_members"},
       {"follows_links", false},
       {"executes_input", false},
-      {"integrity_verification", "not_performed"},
+      {"integrity_verification",
+       A.Format == "zip" ? "crc32_available_members" : "not_performed"},
       {"authenticates_publisher", false},
       {"redaction_policy", "metadata-only-v1"}};
 }
@@ -80,23 +81,42 @@ std::string Session::packageArchiveRecords(std::string_view Revision,
   llvm::json::Array Items;
   for (auto I = Offset; I < End; ++I) {
     const auto &M = A.Members[I];
-    Items.emplace_back(llvm::json::Object{
+    llvm::json::Object Item{
         {"member_id", M.ID},
         {"member_index", I},
         {"kind", M.Kind},
         {"availability", M.available() ? "available" : "metadata_only"},
         {"size_bytes", std::to_string(M.Size)},
-        {"header_expanded_offset", std::to_string(M.HeaderOffset)},
-        {"expanded_byte_offset", std::to_string(M.Offset)},
+        {"header_expanded_offset",
+         A.Format == "zip" ? llvm::json::Value(nullptr)
+                           : llvm::json::Value(std::to_string(M.HeaderOffset))},
+        {"expanded_byte_offset",
+         A.Format == "zip" && !M.available()
+             ? llvm::json::Value(nullptr)
+             : llvm::json::Value(std::to_string(M.Offset))},
         {"original_byte_offset",
-         A.Format == "tar" && M.available()
-             ? llvm::json::Value(std::to_string(M.Offset))
+         M.available() && (A.Format == "tar" ||
+                           (A.Format == "zip" && M.Compression == 0))
+             ? llvm::json::Value(std::to_string(
+                   A.Format == "zip" ? M.StoredOffset : M.Offset))
              : llvm::json::Value(nullptr)},
         {"blob_sha256", M.available() ? llvm::json::Value(M.BlobHash)
                                       : llvm::json::Value(nullptr)},
         {"executable_claim", M.Executable},
         {"path_redacted", true},
-        {"link_target_redacted", !M.Link.empty()}});
+        {"link_target_redacted", !M.Link.empty()}};
+    if (A.Format == "zip") {
+      Item["local_header_offset"] = std::to_string(M.LocalHeaderOffset);
+      Item["stored_byte_offset"] = std::to_string(M.StoredOffset);
+      Item["stored_byte_length"] = std::to_string(M.StoredSize);
+      Item["stored_frame_length"] = std::to_string(M.StoredFrameSize);
+      Item["compression_method"] = M.Compression;
+      Item["unavailable_reason"] = M.UnavailableReason.empty()
+                                       ? llvm::json::Value(nullptr)
+                                       : llvm::json::Value(M.UnavailableReason);
+      Item["crc32_status"] = M.available() ? "verified" : "not_verified";
+    }
+    Items.emplace_back(std::move(Item));
   }
   return json(llvm::json::Object{
       {"schema_version", 1},
