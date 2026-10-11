@@ -864,7 +864,12 @@ Resource failure and value-analysis incompleteness remain distinct.
 `ResolverValueQueryCache.*` checks actual complete-batch reuse, exact remaining
 budgets at every small-fixture boundary, ordered mixed results and feasible
 masks, all query fields, proof limits and graph-independent relocation context.
-Incomplete proofs and oversized records cannot be retained; count and byte
+Shared match-work failures clear all outputs, including earlier feasible masks.
+Cached match/depth refusals preserve per-query incomplete status, independent
+results and cold work charges for every requested output shape. Changed limits,
+graphs, query ordering and relocation context require fresh analysis. An
+independent unknown prevents refusal retention. Other incomplete proofs and
+oversized records cannot be retained; count and byte
 limits are checked independently.
 The long-predecessor guard fixture separates a shallow comparison from its
 value's CFG history. It checks 128 table slots reaching four exact case targets,
