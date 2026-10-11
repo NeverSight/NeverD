@@ -295,6 +295,15 @@ class Allowance:
 
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
+        path="LICENSES/node/LICENSE",
+        rule="provenance-phrase",
+        reason=(
+            "Verbatim Node.js dependency notices identify the SES/Caja "
+            "copyright holders and Apache-2.0 license. Preserve this required "
+            "upstream attribution; it is not a NeverD implementation claim."
+        ),
+    ),
+    Allowance(
         path="LICENSES/bun/LICENSE.md",
         rule="provenance-phrase",
         reason=(
