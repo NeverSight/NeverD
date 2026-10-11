@@ -766,7 +766,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     for (size_t I = 0; I != Funcs.size(); ++I) {
       const auto &Func = Funcs[I];
       if (!Func.ExceptionMetadata || !Func.RegistrationStates ||
-          Func.SkippedSSA || !Func.RegistrationCallerCleanupABIComplete)
+          Func.SkippedSSA || !Func.RegistrationCxxEntryPopBytes)
         continue;
       const auto Classification =
           classifyWindowsEHNativeSource(*Func.ExceptionMetadata, TheArch, Fmt,

@@ -44,6 +44,8 @@ bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
                              std::vector<ExceptionAddressRange> &Ranges);
 
 bool chargeCalleeWork(size_t &Work, size_t Amount);
+std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
+                                       const BinaryImage &Image);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                            size_t &Work, ImageFrameEffects &Effects,

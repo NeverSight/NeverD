@@ -131,8 +131,14 @@ stack proof, outlining and security-check ABI under `lib/backend/llvm/X86`.
 used by both SEH and C++: preflight binds source memory occurrences, installation
 captures the physical entry frame in an escaped slot, and rollback restores
 pointers, metadata, volatility and newly introduced declarations. The shared
-C++ entry ABI accepts only observed contiguous cdecl words or a single ECX
-parameter; parameter attributes cannot silently select another register ABI.
+C++ entry projection in `lib/ir/med/X86/RegistrationEntry.cpp` orders physical
+ECX/EDX and stack words using the LowIR parent's authenticated RET cleanup count.
+`lib/ir/low/X86/RegistrationEntryABI.cpp` binds those returns to source bytes and
+keeps callback returns separate. The LLVM adapter selects cdecl, stdcall,
+thiscall or fastcall and independently validates its exact parameter attributes;
+fastcall requires `inreg` on both register words. HighIR's x86 continuation
+projection keeps shared resume tails outside synchronous protected prefixes and
+preserves the original destination of a moved fallthrough.
 COFF installation, source-IR replay, callback identity, incoming-frame proof,
 image-pointer closure and emitted SEH table checks remain separate consumers
 under `lib/backend/codegen/COFF`. Splitting these implementations does not add a

@@ -103,8 +103,8 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("cannot replay C++ registration source analysis");
   Result.Source = CFGBuilder().build(Image, Decoder, Source.CodeRange.Begin,
                                      Function.getName().str());
-  if (!hasCallerCleanupRegistrationABI(Result.Source, Image,
-                                       &Result.CallerPCWrites) ||
+  if (!getCheckedX86RegistrationCxxParentABI(Result.Source, Image,
+                                             &Result.CallerPCWrites) ||
       !Result.Source.RegistrationStates)
     return rejectIR("C++ source has no checked call/frame ABI");
   const auto &States = *Result.Source.RegistrationStates;
@@ -129,8 +129,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   auto Med = Converter.convert(Result.Source, Arch::X86, BinaryFormat::COFF);
-  const auto EntryABI = getX86RegistrationCxxEntryABI(Med, Function);
-  if (!EntryABI || Function.getCallingConv() != *EntryABI)
+  if (!hasX86RegistrationCxxEntryABI(Med, Function))
     return rejectIR("C++ parent changed its physical entry ABI");
   const std::array<const llvm::Function *, 1> Functions = {&Function};
   std::set<const llvm::Instruction *> IncomingSetup;

@@ -22,6 +22,9 @@ struct TerminalRegistrationRegion {
   std::map<va_t, std::pair<va_t, int>> Ranges;
   std::set<int> Ordinary;
   std::set<va_t> Calls;
+  std::set<va_t> ReturnAddresses;
+  std::set<va_t> ExitTargets;
+  std::map<int, va_t> ResumeFallthroughs;
   size_t Work = 0;
 };
 
@@ -84,6 +87,9 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
   auto &Calls = Result.Calls;
   std::vector<int> Pending{Entry};
   auto &Work = Result.Work;
+  const auto Resumed = registrationResumeClosure(Med, Work);
+  if (!Resumed || Resumed->count(Entry))
+    return std::nullopt;
   while (!Pending.empty()) {
     const int Id = Pending.back();
     Pending.pop_back();
@@ -100,9 +106,16 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
         return std::nullopt;
       if (Op.Dead)
         continue;
-      if (Terminal || Op.Opcode == NdOp::RETURN ||
-          Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INDIR_BR)
+      if (Terminal || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::INDIR_BR)
         return std::nullopt;
+      if (Op.Opcode == NdOp::RETURN) {
+        if (Parent || !Med.RegistrationCxxEntryPopBytes ||
+            !Result.ReturnAddresses.insert(Op.Addr).second)
+          return std::nullopt;
+        Terminal = true;
+        continue;
+      }
       if (Op.Opcode != NdOp::CALL)
         continue;
       Work += OperationCount + State.Blocks.size();
@@ -135,7 +148,18 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
     }
     if (Terminal != Block.Succs.empty())
       return std::nullopt;
-    Pending.insert(Pending.end(), Block.Succs.begin(), Block.Succs.end());
+    for (int Successor : Block.Succs) {
+      if (!Blocks.count(Successor))
+        return std::nullopt;
+      if (Resumed->count(Successor)) {
+        Result.ExitTargets.insert(Blocks.at(Successor)->StartAddr);
+        if (Block.Succs.size() == 1 &&
+            Block.EndAddr == Blocks.at(Successor)->StartAddr)
+          Result.ResumeFallthroughs.emplace(Id,
+                                            Blocks.at(Successor)->StartAddr);
+      } else
+        Pending.push_back(Successor);
+    }
   }
   if (Calls.empty())
     return std::nullopt;
@@ -225,8 +249,10 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
   }
   if (SeenCalls != Calls)
     return false;
-  // Every gap must follow an explicit terminal source call. Relocating an
-  // independently entered resume body cannot manufacture a fallthrough edge.
+  // A gap must follow a source terminal or an explicit exit to the shared
+  // resume component. Moving the prefix cannot manufacture fallthrough into
+  // an independently entered callback or return tail.
+  std::map<size_t, va_t> ResumeTransfers;
   for (size_t I = 1; I < Selected.size(); ++I)
     if (Selected[I - 1] && !Selected[I]) {
       const HighStmt *Previous = &Func.Body[I - 1];
@@ -234,6 +260,20 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
         Previous = &Previous->Body.back();
       const auto &Call =
           Previous->Kind == StmtKind::Call ? Previous->CallExpr : Previous->Val;
+      if ((Previous->Kind == StmtKind::Return &&
+           Region->ReturnAddresses.count(Previous->Addr)) ||
+          (Previous->Kind == StmtKind::Goto &&
+           Region->ExitTargets.count(Previous->GotoTarget)))
+        continue;
+      auto Range = Ranges.upper_bound(Previous->Addr);
+      if (Range != Ranges.begin() && (--Range)->second.first > Previous->Addr) {
+        const auto Fallthrough =
+            Region->ResumeFallthroughs.find(Range->second.second);
+        if (Fallthrough != Region->ResumeFallthroughs.end()) {
+          ResumeTransfers.emplace(I - 1, Fallthrough->second);
+          continue;
+        }
+      }
       if (!Calls.count(Previous->Addr) || !Call ||
           Call->Kind != ExprKind::Call || !Call->DoesNotReturn)
         return false;
@@ -247,6 +287,14 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
         InsertAt = Remaining.size();
       Found = true;
       Protected.push_back(std::move(Func.Body[I]));
+      if (const auto Transfer = ResumeTransfers.find(I);
+          Transfer != ResumeTransfers.end()) {
+        HighStmt Jump;
+        Jump.Kind = StmtKind::Goto;
+        Jump.Addr = Protected.back().Addr;
+        Jump.GotoTarget = Transfer->second;
+        Protected.push_back(std::move(Jump));
+      }
     } else
       Remaining.push_back(std::move(Func.Body[I]));
   }

@@ -2708,6 +2708,21 @@ IR, installation, decompilation and PE identities before replaying the same
 files on Windows. Its Python admission suite rejects incomplete, stale or
 substituted evidence.
 
+`check_windows_registration_entry.py` uses the native registration test binary
+and captured CRT libraries for cdecl, stdcall, thiscall and fastcall parents at
+O0/O1. Four changing arguments, four caller stack layouts and three catch paths
+plus a normal return exercise register/stack ordering, caller-visible results,
+ESP balance and FS-chain restoration. Its 128 executions cover source and
+wrong-result controls, the checked installation, both CLI modes and two bases.
+The C++ proof rejects altered source RET boundaries, incomplete continuations,
+changed calling conventions and missing or misplaced fastcall `inreg` attributes;
+it also decodes the generated parent RET cleanup count. Both C and C++ output
+must retain two tries, three callback bodies and their exact resume labels and
+pass syntax checks. `replay_windows_registration_entry.py` authenticates every
+source, proof, receipt, object, IR, output and executable before repeating the
+same 128 images with the Windows CRT. Python tests reject missing cases, skipped
+proofs, stale identities and substitutions of the ABI, runtime or rebased image.
+
 `check_windows_registration_nested_try.py` compiles independent Clang `-O0`
 and `-O1` parents and links the captured CRT libraries. Inner reference catches
 and outer value/catch-all clauses exercise all three continuations under four

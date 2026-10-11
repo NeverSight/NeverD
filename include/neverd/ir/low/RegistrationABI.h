@@ -127,6 +127,13 @@ private:
 bool hasCallerCleanupRegistrationABI(
     const LowFunc &Function, const BinaryImage &Image,
     std::vector<ExceptionAddressRange> *CallerPCWrites = nullptr);
+
+/// Prove the C++ parent's exact RET cleanup separately from its runtime
+/// callbacks, and replay the preserved call/frame closure. The returned byte
+/// count is not the decoder's maximum across unrelated return instructions.
+std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites = nullptr);
 } // namespace neverd
 
 #endif

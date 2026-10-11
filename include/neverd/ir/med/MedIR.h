@@ -415,6 +415,9 @@ struct MedFunc {
   int CalleePopBytes = 0;
   /// Source and preserved callees have a checked caller-cleanup stack contract.
   bool RegistrationCallerCleanupABIComplete = false;
+  /// Checked C++ parent return cleanup and preserved call/frame closure.
+  /// Runtime catch returns are excluded from this physical entry contract.
+  std::optional<uint16_t> RegistrationCxxEntryPopBytes;
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;
   int64_t FrameHeadroom = 0;

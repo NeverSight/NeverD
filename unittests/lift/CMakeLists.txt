@@ -1362,6 +1362,9 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationCxxContinuationTestUtils.cpp
   eh/RegistrationCallTests.cpp
   eh/RegistrationCleanupABITests.cpp
+  eh/RegistrationEntryABITests.cpp
+  eh/RegistrationEntryLayoutTests.cpp
+  eh/RegistrationSourceReceiptTestUtils.cpp
   eh/RegistrationCodeRangeTests.cpp
   eh/RegistrationRethrowTests.cpp
 

@@ -48,9 +48,9 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
 #else
   if (TargetArch != Arch::X86 || TargetFormat != BinaryFormat::COFF || !Img ||
       !Func.ExceptionMetadata || !Func.RegistrationStates || Func.SkippedSSA ||
-      Func.CalleePopBytes || !Func.RegistrationCallerCleanupABIComplete ||
-      !FrameAlloca || FrameEntrySPOffset < 20 || Parent.hasPersonalityFn() ||
-      Func.IsVariadic || !Parent.getReturnType()->isIntegerTy(32))
+      !Func.RegistrationCxxEntryPopBytes || !FrameAlloca ||
+      FrameEntrySPOffset < 20 || Parent.hasPersonalityFn() || Func.IsVariadic ||
+      !Parent.getReturnType()->isIntegerTy(32))
     return false;
   const auto &EH = *Func.ExceptionMetadata;
   const auto Source = classifyWindowsEHNativeSource(
@@ -460,6 +460,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   Parent.setPersonalityFn(Personality);
   rewrite_source::setOriginalVA(*Personality, Runtime->RuntimeVA);
   Parent.setCallingConv(*EntryABI);
+  if (*EntryABI == llvm::CallingConv::X86_FastCall) {
+    Parent.addParamAttr(0, llvm::Attribute::InReg);
+    Parent.addParamAttr(1, llvm::Attribute::InReg);
+  }
   Parent.addFnAttr(llvm::RewriteWinX86CxxFrameAttribute);
   Parent.addFnAttr("frame-pointer", "all");
   Parent.addFnAttr(llvm::Attribute::NoInline);

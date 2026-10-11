@@ -23,15 +23,13 @@ using registration_abi::callerPCIsNotReadBack;
 using registration_abi::chargeCalleeWork;
 using registration_abi::hasPrivateCallerFrame;
 using registration_abi::ImageFrameEffects;
-} // namespace
-
-bool hasCallerCleanupRegistrationABI(
+bool hasRegistrationCallFrameABI(
     const LowFunc &Function, const BinaryImage &Image,
     std::vector<ExceptionAddressRange> *CallerPCWrites) {
   if (CallerPCWrites)
     CallerPCWrites->clear();
   if (Image.Arch != Arch::X86 || Image.Format != BinaryFormat::COFF ||
-      Function.CalleePopBytes || !Function.hasCompleteLiftCoverage())
+      !Function.hasCompleteLiftCoverage())
     return false;
   size_t Work = 0;
   const auto *States =
@@ -319,5 +317,26 @@ bool hasCallerCleanupRegistrationABI(
         CallerPCWrites->push_back({Begin, End});
     }
   return true;
+}
+} // namespace
+
+bool hasCallerCleanupRegistrationABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites) {
+  if (CallerPCWrites)
+    CallerPCWrites->clear();
+  return !Function.CalleePopBytes &&
+         hasRegistrationCallFrameABI(Function, Image, CallerPCWrites);
+}
+
+std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites) {
+  if (CallerPCWrites)
+    CallerPCWrites->clear();
+  const auto Pop = registration_abi::parentPopBytes(Function, Image);
+  if (!Pop || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+    return std::nullopt;
+  return Pop;
 }
 } // namespace neverd
