@@ -345,6 +345,8 @@ struct ResolverGraphCacheTestAccess {
     B.Insns.at(0x100).Ops.front().Inputs[0] = NdVar::cst(8, 8);
   }
 
+  static LowOp &firstOp(CFGBuilder &B) { return B.Insns.at(0x100).Ops.front(); }
+
   static void addBackedge(CFGBuilder &B) {
     auto &R = B.Insns.at(0x103);
     R.IsRet = false;
@@ -861,6 +863,61 @@ TEST(ResolverGraphCache, EqualCountsDoNotHideBackedgesRootsOrChangedOps) {
     const auto After = Access::query(B);
     EXPECT_NE(Access::token(B), Before);
     expectColdAnswer(B, After);
+  }
+}
+
+TEST(ResolverGraphCache, EveryOperationFieldInvalidatesFrozenProofs) {
+  const auto Image = image();
+  const std::vector<std::function<void(LowOp &)>> OpChanges{
+      [](LowOp &Op) { Op.Opcode = NdOp::INT_ZEXT; },
+      [](LowOp &Op) { Op.MemoryOrdering = NdMemoryOrdering::Acquire; },
+      [](LowOp &Op) { Op.MemoryAddressSpace = NdMemoryAddressSpace::X86GS; },
+      [](LowOp &Op) { ++Op.NumInputs; },
+      [](LowOp &Op) { Op.Addr ^= uint64_t{1} << 63; },
+      [](LowOp &Op) { Op.Seq = -1; },
+      // Equal changed bits must not cancel across fields or operands.
+      [](LowOp &Op) {
+        Op.Inputs[0].Offset ^= 1;
+        Op.Inputs[0].AddressOwnerVA ^= 1;
+      },
+      [](LowOp &Op) {
+        Op.Inputs[0].Offset ^= 1;
+        Op.Inputs[1].Offset ^= 1;
+      }};
+  const auto Check = [&](const auto &Mutate) {
+    CFGBuilder B;
+    Access::seed(B, Image);
+    const auto BeforeAnswer = Access::query(B);
+    ASSERT_TRUE(BeforeAnswer.Complete);
+    ASSERT_EQ(BeforeAnswer.Values, (std::vector<bool>{true}));
+    const auto Before = Access::token(B);
+    ASSERT_TRUE(Before);
+    Mutate(Access::firstOp(B));
+    const auto After = Access::query(B);
+    EXPECT_NE(Access::token(B), Before);
+    expectColdAnswer(B, After);
+  };
+  for (size_t I = 0; I < OpChanges.size(); ++I) {
+    SCOPED_TRACE(I);
+    Check(OpChanges[I]);
+  }
+
+  const std::vector<std::function<void(NdVar &)>> ValueChanges{
+      [](NdVar &V) { V.Space = VnodeSpace::RAM; },
+      [](NdVar &V) { V.Offset ^= uint64_t{1} << 63; },
+      [](NdVar &V) { V.Size ^= 1; },
+      [](NdVar &V) { V.Provenance = ConstantAddressProvenance::CodeAddress; },
+      [](NdVar &V) { V.AddressOwnerVA ^= uint64_t{1} << 63; }};
+  // The frozen snapshot includes the output and every input slot, even those
+  // beyond NumInputs. None may be silently omitted from graph validation.
+  for (size_t Slot = 0; Slot <= std::size(LowOp{}.Inputs); ++Slot) {
+    SCOPED_TRACE(Slot);
+    for (size_t Field = 0; Field < ValueChanges.size(); ++Field) {
+      SCOPED_TRACE(Field);
+      Check([&](LowOp &Op) {
+        ValueChanges[Field](Slot == 0 ? Op.Output : Op.Inputs[Slot - 1]);
+      });
+    }
   }
 }
 

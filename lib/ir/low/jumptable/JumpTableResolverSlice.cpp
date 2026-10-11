@@ -2837,12 +2837,32 @@ struct CFGBuilder::ResolverGraphCache {
   }
 
   static bool sameOp(const LowOp &A, const LowOp &B) {
-    return A.Opcode == B.Opcode && A.MemoryOrdering == B.MemoryOrdering &&
-           A.MemoryAddressSpace == B.MemoryAddressSpace &&
-           A.Output == B.Output && A.NumInputs == B.NumInputs &&
-           A.Addr == B.Addr && A.Seq == B.Seq &&
-           std::equal(std::begin(A.Inputs), std::end(A.Inputs),
-                      std::begin(B.Inputs));
+    // Most compared instructions are unchanged. Accumulate exact field
+    // differences so that their equality does not require a branch per field.
+    // OR keeps every difference, including matching changed bits in different
+    // fields. Compare values only: object padding is not part of the key.
+    uint64_t Difference =
+        static_cast<uint64_t>(A.Opcode) ^ static_cast<uint64_t>(B.Opcode);
+    Difference |= static_cast<uint64_t>(A.MemoryOrdering) ^
+                  static_cast<uint64_t>(B.MemoryOrdering);
+    Difference |= static_cast<uint64_t>(A.MemoryAddressSpace) ^
+                  static_cast<uint64_t>(B.MemoryAddressSpace);
+    Difference |= A.NumInputs ^ B.NumInputs;
+    Difference |= A.Addr ^ B.Addr;
+    Difference |= static_cast<unsigned>(A.Seq) ^ static_cast<unsigned>(B.Seq);
+    const auto CompareVar = [&](const NdVar &Left, const NdVar &Right) {
+      Difference |= static_cast<uint64_t>(Left.Space) ^
+                    static_cast<uint64_t>(Right.Space);
+      Difference |= Left.Offset ^ Right.Offset;
+      Difference |= Left.Size ^ Right.Size;
+      Difference |= static_cast<uint64_t>(Left.Provenance) ^
+                    static_cast<uint64_t>(Right.Provenance);
+      Difference |= Left.AddressOwnerVA ^ Right.AddressOwnerVA;
+    };
+    CompareVar(A.Output, B.Output);
+    for (size_t I = 0; I < std::size(A.Inputs); ++I)
+      CompareVar(A.Inputs[I], B.Inputs[I]);
+    return Difference == 0;
   }
 
   static bool sameInsn(const ResolverInsnSnapshot &A,
