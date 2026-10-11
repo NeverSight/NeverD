@@ -515,6 +515,13 @@ class ReviewedFpremHistoryTests(unittest.TestCase):
 
 
 class ProvenanceOfThisRepositoryTests(unittest.TestCase):
+    def test_node_license_credit_does_not_exempt_implementation_claims(self) -> None:
+        line = "Adapted from SES/Caja - Copyright (C) 2011 Google Inc."
+        self.assertEqual(provenance._scan_text(
+            "LICENSES/node/LICENSE", line, provenance.RULES), [])
+        self.assertTrue(provenance._scan_text(
+            "lib/node.cpp", line, provenance.RULES))
+
     @staticmethod
     def commit(root: Path, message: str) -> None:
         subprocess.run(

@@ -295,6 +295,14 @@ class Allowance:
 
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
+        path="LICENSES/node/LICENSE",
+        rule="provenance-phrase",
+        reason=(
+            "The upstream Node license names SES/Caja, Google and Agoric "
+            "in its required freeze_intrinsics.js attribution."
+        ),
+    ),
+    Allowance(
         path="LICENSES/bun/LICENSE.md",
         rule="provenance-phrase",
         reason=(
