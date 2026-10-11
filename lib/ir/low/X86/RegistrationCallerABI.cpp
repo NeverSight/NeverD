@@ -267,7 +267,7 @@ bool hasRegistrationCallFrameABI(
         return false;
       const auto Relay = getCheckedX86RegistrationCleanupRelayABI(
           Image, Action.ActionVA, &Work);
-      if (!Relay)
+      if (!Relay || !Relay->matchesParentFrame(*EH.Registration))
         return false;
       for (const auto &Call : Relay->Calls) {
         if (!Call.Leaf.CallerPCWrites.empty() ||

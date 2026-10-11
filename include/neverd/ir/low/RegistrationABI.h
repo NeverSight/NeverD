@@ -50,6 +50,13 @@ struct RegistrationCleanupCallABI {
   RegistrationLeafCalleeABI Leaf;
 };
 
+/// Coordinates read by a realigned cleanup before calling its leaves. The
+/// parent state proof must establish the saved entry EBP and keep it intact.
+struct RegistrationCleanupParentFrame {
+  int32_t BaseOffset = 0;
+  int32_t SavedParentFrameOffset = 0;
+};
+
 /// A checked cleanup relay derives each ECX object from the establisher EBP.
 /// It tail-jumps to one leaf or saves/restores runtime EBP around an ordered
 /// sequence of leaf calls. The parent must prove every borrow at dispatch.
@@ -57,6 +64,11 @@ struct RegistrationCleanupRelayABI {
   va_t Target = InvalidVA;
   va_t EndAddress = InvalidVA;
   std::vector<RegistrationCleanupCallABI> Calls;
+  std::optional<RegistrationCleanupParentFrame> RealignedParent;
+
+  /// Bind a cached byte proof to this invocation's frame. This checks only
+  /// coordinates; the parent's LowIR proof owns contents and lifetime.
+  bool matchesParentFrame(const RegistrationChainInfo &Chain) const;
 };
 
 std::optional<RegistrationCleanupRelayABI>

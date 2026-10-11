@@ -67,6 +67,9 @@ TEST(RegistrationRelift, InputPE32ReconstructsGeneratedFunction) {
   ASSERT_TRUE(States.RuntimeObjectAccessesComplete);
   ASSERT_TRUE(States.CallFrameEffectsComplete);
   ASSERT_TRUE(States.CleanupFrameEffectsComplete);
+  size_t CleanupCalls = 0;
+  for (const auto &Cleanup : States.CleanupContracts)
+    CleanupCalls += Cleanup.Calls.size();
   EXPECT_EQ(getCheckedX86RegistrationCxxParentABI(Low, *Image), ExpectedPop);
 
   LowToMedConverter Converter;
@@ -112,7 +115,13 @@ TEST(RegistrationRelift, InputPE32ReconstructsGeneratedFunction) {
     registration_test::writeSourceReceipt(
         Path, Output, *Image, *EH, States, *Generated,
         llvm::json::Object{{"entry_pop", ExpectedPop},
-                           {"entry_registers", ExpectedRegisters}});
+                           {"entry_registers", ExpectedRegisters},
+                           {"cleanup_actions", States.CleanupContracts.size()},
+                           {"cleanup_calls", CleanupCalls},
+                           {"generated_handler",
+                            Generated->Registration->HandlerVA - Image->Base},
+                           {"generated_func_info",
+                            Generated->Cxx->NativeFuncInfoVA - Image->Base}});
   }
 #else
   GTEST_SKIP() << "LLVM lacks native PE32 C++ contracts";

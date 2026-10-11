@@ -44,6 +44,18 @@ bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
                              std::vector<ExceptionAddressRange> &Ranges);
 
 bool chargeCalleeWork(size_t &Work, size_t Amount);
+
+struct CleanupFramePrefix {
+  unsigned Size = 0;
+  uint8_t BaseRegister = 5;
+  int32_t BaseOffset = 0;
+  bool CallsLeaf = false;
+  std::optional<RegistrationCleanupParentFrame> RealignedParent;
+};
+
+std::optional<CleanupFramePrefix>
+getCleanupFramePrefix(const BinaryImage &Image, va_t Target, size_t &Work);
+
 std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
                                        const BinaryImage &Image);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);

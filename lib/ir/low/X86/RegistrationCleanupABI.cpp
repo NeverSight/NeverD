@@ -27,33 +27,23 @@ getCheckedX86RegistrationCleanupRelayABI(const BinaryImage &Image, va_t Target,
   size_t &Work = CumulativeWork ? *CumulativeWork : LocalWork;
   if (!chargeCalleeWork(Work, 1))
     return std::nullopt;
-  auto Header = readImmutableCodeBytes(Image, Target, 3);
-  if (!Header)
+  const auto Prefix = getCleanupFramePrefix(Image, Target, Work);
+  if (!Prefix)
     return std::nullopt;
-  const bool CallsLeaf = (*Header)[0] == 0x55;
-  unsigned AddressOffset = 0;
-  int64_t FrameAdjustment = 0;
-  if (CallsLeaf) {
-    // Clang saves the incoming runtime EBP, adjusts it to the source frame,
-    // calls the destructor, then restores EBP before returning to the CRT.
-    if (((*Header)[1] != 0x83 && (*Header)[1] != 0x81) || (*Header)[2] != 0xc5)
-      return std::nullopt;
-    AddressOffset = (*Header)[1] == 0x83 ? 4 : 7;
-    auto Prefix = readImmutableCodeBytes(Image, Target, AddressOffset);
-    if (!Prefix)
-      return std::nullopt;
-    FrameAdjustment = AddressOffset == 4 ? int8_t((*Prefix)[3])
-                                         : readLE<int32_t>(Prefix->data() + 3);
-    Header = readImmutableCodeBytes(Image, Target + AddressOffset, 3);
-  }
+  const bool CallsLeaf = Prefix->CallsLeaf;
+  unsigned AddressOffset = Prefix->Size;
   RegistrationCleanupRelayABI Result;
   Result.Target = Target;
+  Result.RealignedParent = Prefix->RealignedParent;
   for (;;) {
-    Header = readImmutableCodeBytes(Image, Target + AddressOffset, 3);
+    const auto Header =
+        readImmutableCodeBytes(Image, Target + AddressOffset, 3);
+    const unsigned NarrowAddress = 0x48 | Prefix->BaseRegister;
+    const unsigned WideAddress = 0x88 | Prefix->BaseRegister;
     if (!Header || (*Header)[0] != 0x8d ||
-        ((*Header)[1] != 0x4d && (*Header)[1] != 0x8d))
+        ((*Header)[1] != NarrowAddress && (*Header)[1] != WideAddress))
       return std::nullopt;
-    const unsigned AddressSize = (*Header)[1] == 0x4d ? 3 : 6;
+    const unsigned AddressSize = (*Header)[1] == NarrowAddress ? 3 : 6;
     const unsigned Size = AddressSize + 5;
     const va_t CallEnd = Target + AddressOffset + Size;
     if (CallEnd > uint64_t(UINT32_MAX) + 1 ||
@@ -66,7 +56,7 @@ getCheckedX86RegistrationCleanupRelayABI(const BinaryImage &Image, va_t Target,
     const int32_t Displacement = AddressSize == 3
                                      ? int8_t((*Bytes)[2])
                                      : readLE<int32_t>(Bytes->data() + 2);
-    const int64_t ObjectOffset = FrameAdjustment + Displacement;
+    const int64_t ObjectOffset = int64_t(Prefix->BaseOffset) + Displacement;
     if (ObjectOffset < INT32_MIN || ObjectOffset > INT32_MAX)
       return std::nullopt;
     const uint32_t LeafTarget =

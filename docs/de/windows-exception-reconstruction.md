@@ -73,7 +73,11 @@ Die Installation darf einen authentifizierten Einstieg in einer zuvor erzeugten 
 wenn virtuelle und physische Speicherung eindeutig sind und den analysierten Bytes entsprechen.
 Die cdecl/stdcall/thiscall/fastcall-Fixtures prüfen zwei Generationen, beide Patch-Modi und erzwungenes Rebasing
 mit der Microsoft-x86-CRT. Jede Generation benötigt neue LowIR- und LLVM-Nachweise; alte Belege erteilen keine
-Schreibberechtigung. Generierte Cleanup-Relays und allgemeine Objektlebenszeiten erfordern weitere Unterstützung.
+Schreibberechtigung. Generierte ESI-Cleanup-Relays können erneut rekonstruiert werden, wenn ihre Rahmenbasis und der
+gespeicherte Eintritts-EBP zum authentifizierten Elternrahmen passen. Der zwischengespeicherte Bytenachweis
+wird bei jedem Aufruf neu gebunden; LowIR prüft Objektzugriffe und Rahmenlebenszeit. Echte MSVC-Fixtures
+prüfen Wert- und Referenz-Catches, Destruktorreihenfolge und Rückschreiben über zwei Generationen, beide
+Patch-Modi und erzwungene Basisadressen. Allgemeine Objektlebenszeiten und Typkonvertierungen bleiben offen.
 
 ## IR-Vertrag
 

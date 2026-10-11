@@ -33,6 +33,7 @@ bool charge(size_t &Work, size_t Count = 1) {
 bool RegistrationFrameStores::build(
     llvm::ArrayRef<const llvm::Function *> Functions, size_t &Work) {
   Stores.clear();
+  DirectStores.clear();
   AllStores.clear();
   Positions.clear();
   for (const auto *Function : Functions)
@@ -66,11 +67,14 @@ bool RegistrationFrameStores::build(
       }
     }
   for (auto &[Root, Blocks] : Stores) {
+    auto &Direct = DirectStores[Root];
     for (const auto *User : Root->users()) {
       if (!charge(Work))
         return false;
-      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User))
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User)) {
         Blocks[Store->getParent()].push_back(Store);
+        Direct.push_back(Store);
+      }
     }
     for (auto &[Block, Definitions] : Blocks) {
       // Sorting user-list order costs at most N log N comparisons.
@@ -105,5 +109,16 @@ RegistrationFrameStores::candidates(const llvm::Value *Root,
                                        return Position < Positions.at(I);
                                      });
   return llvm::ArrayRef(Candidates).take_front(End - Candidates.begin());
+}
+
+std::optional<llvm::ArrayRef<const llvm::StoreInst *>>
+RegistrationFrameStores::directDefinitions(const llvm::Value *Root,
+                                           size_t &Work) const {
+  if (!charge(Work))
+    return std::nullopt;
+  const auto Found = DirectStores.find(Root);
+  if (Found == DirectStores.end())
+    return std::nullopt;
+  return llvm::ArrayRef(Found->second);
 }
 } // namespace neverd::coff_registration

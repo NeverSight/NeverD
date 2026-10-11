@@ -129,6 +129,10 @@ RegistrationCallCalleeIndex::cleanupContracts(const LowFunc &Function) {
     if (!It->second)
       continue;
     const auto &Relay = *It->second;
+    // Cached bytes describe a relay, never the parent that dispatched it.
+    const auto &Chain = Function.ExceptionMetadata->Registration;
+    if (Relay.RealignedParent && (!Chain || !Relay.matchesParentFrame(*Chain)))
+      continue;
     RegistrationCleanupFrameContract Contract;
     Contract.ActionState = State;
     Contract.RelayTarget = Relay.Target;

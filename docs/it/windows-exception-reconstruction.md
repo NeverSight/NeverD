@@ -73,7 +73,11 @@ L’installazione può modificare un ingresso autenticato in una sezione eseguib
 virtuale e lo spazio fisico sono univoci e corrispondono ai byte analizzati. I casi cdecl/stdcall/thiscall/fastcall
 verificano due generazioni, entrambe le modalità patch e il rebasing forzato con il CRT Microsoft x86.
 Ogni generazione richiede nuove prove LowIR e LLVM; una ricevuta precedente non autorizza altre riscritture.
-I relay cleanup generati e la durata generale degli oggetti richiedono ancora ulteriore supporto.
+I relay cleanup basati su ESI consentono una seconda ricostruzione se la base del frame e l’EBP di ingresso
+salvato corrispondono al padre autenticato. La prova dei byte in cache viene associata a ogni chiamata;
+LowIR verifica gli accessi agli oggetti e la durata del frame salvato. I campioni MSVC reali verificano
+distruzione ordinata e scritture per riferimento su due generazioni, entrambe le modalità patch e basi
+forzate. La durata generale degli oggetti e le conversioni di tipo restano da supportare.
 
 ## Contratto IR
 

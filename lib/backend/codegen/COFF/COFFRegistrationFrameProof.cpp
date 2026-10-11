@@ -6,6 +6,7 @@
 
 #include "COFFRegistrationFrameProof.h"
 
+#include "COFFRegistrationFrameBits.h"
 #include "COFFRegistrationFrameStores.h"
 #include "COFFRegistrationFrameTaint.h"
 
@@ -771,6 +772,14 @@ llvm::Error validateFramePrivacy(
                 Binary &&
                 (Binary->hasNoSignedWrap() || Binary->hasNoUnsignedWrap()))
               return Reject();
+            if (const auto *Trunc = llvm::dyn_cast<llvm::TruncInst>(&I)) {
+              const auto Depends =
+                  truncationMayDependOnFrame(*Trunc, IsAddress, Stores, Work);
+              if (!Depends)
+                return Reject("register slice proof exhausted its work budget");
+              if (!*Depends)
+                continue;
+            }
             Changed |= Addresses.insert(&I).second;
           }
         }

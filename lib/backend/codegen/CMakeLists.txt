@@ -11,6 +11,7 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationFrameProof.cpp
   COFF/COFFRegistrationFrameStores.cpp
   COFF/COFFRegistrationFrameTaint.cpp
+  COFF/COFFRegistrationFrameBits.cpp
   COFF/COFFRegistrationImageProof.cpp
   COFF/COFFRegistrationIncomingFrame.cpp
   COFF/COFFRegistrationIR.cpp

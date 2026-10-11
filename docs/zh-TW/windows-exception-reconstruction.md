@@ -68,7 +68,10 @@ IP-to-state map 能合法指向其 catch funclet，同時排除不相關 runtime
 可執行節內經過認證的入口，但要求虛擬位址與原始檔案儲存皆唯一，且位元組與分析輸入一致。
 cdecl/stdcall/thiscall/fastcall 樣本使用 Microsoft x86 CRT 驗證兩代重建、兩種 patch 模式
 及強制重定位。每一代均重新進行 LowIR 與 LLVM 證明，舊憑據不能授予重寫權限。
-產生的 cleanup relay 及更廣泛的物件生命週期仍待補齊。
+產生的 ESI cleanup relay 在區域框架基址與保存的入口 EBP 完全符合已認證父函式時，
+也支援第二次重建。快取的位元組證明必須逐次綁定派送框架，LowIR 證明物件借用與保存框架
+的生命週期。真實 MSVC 按值／參考樣本驗證兩代程式碼的有序解構、參考寫回、兩種 patch
+模式及強制重定位。一般物件生命週期與型別轉換仍待支援。
 
 ## IR 契約
 

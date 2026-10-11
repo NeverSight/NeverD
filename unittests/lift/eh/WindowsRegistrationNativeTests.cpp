@@ -1595,6 +1595,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     llvm::consumeError(std::move(Failure));
   }
   Patcher.setImageContext(&*Loaded);
+  std::optional<va_t> GeneratedOwnerEnd;
   for (bool Collision : {false, true}) {
     auto ProductModule = llvm::CloneModule(*Module);
     if (Collision) {
@@ -1660,6 +1661,9 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     ASSERT_NE(GeneratedGraph, Reloaded->ExceptionMetadata.Functions.end());
     EXPECT_EQ(*GeneratedGraph->Cxx, Update->GeneratedCxxGraphs[0]);
     EXPECT_EQ(GeneratedGraph->ParseStatus, ExceptionParseStatus::Complete);
+    if (GeneratedOwnerEnd)
+      EXPECT_EQ(*GeneratedOwnerEnd, GeneratedGraph->CodeRange.End);
+    GeneratedOwnerEnd = GeneratedGraph->CodeRange.End;
     ASSERT_TRUE(GeneratedGraph->Registration);
     const auto &GeneratedChain = *GeneratedGraph->Registration;
     ASSERT_TRUE(GeneratedChain.RealignedFrame);
@@ -1705,11 +1709,12 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     EXPECT_TRUE(Installed->Reached);
     EXPECT_TRUE(Installed->CanDispatch);
     EXPECT_FALSE(Installed->Unknown);
-    // Callback ranges exclude the generated cleanup entries. Catch resumption
-    // is recoverable, while these compiler funclets still need their own ABI
-    // proof before a second native reconstruction is possible.
+    // Cleanup relays stay outside the parent's callback code ranges. Their
+    // independent byte and frame proofs permit a second native reconstruction.
+    EXPECT_TRUE(ReliftStates.Complete);
     EXPECT_TRUE(ReliftStates.CxxContinuationsComplete);
-    EXPECT_FALSE(ReliftStates.CleanupFrameEffectsComplete);
+    EXPECT_TRUE(ReliftStates.CleanupFrameEffectsComplete);
+    ASSERT_EQ(ReliftStates.CleanupContracts.size(), 2u);
     const auto GeneratedSource = classifyWindowsEHNativeSource(
         *GeneratedGraph, Arch::X86, BinaryFormat::COFF);
     EXPECT_TRUE(GeneratedSource.canPatchOutput());
@@ -1720,16 +1725,17 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     ReliftConverter.setBinaryImage(&*Reloaded);
     auto ReliftMed =
         ReliftConverter.convert(Relift, Arch::X86, BinaryFormat::COFF);
+    inferMedTypes(ReliftMed, Arch::X86);
     llvm::LLVMContext ReliftContext;
     MedLLVMEmitter ReliftEmitter;
     auto ReliftModule = ReliftEmitter.emit(
         {ReliftMed}, ReliftContext, "generated-cleanup-analysis", Arch::X86, {},
         &*Reloaded, BinaryFormat::COFF);
-    if (ReliftModule) {
-      ASSERT_TRUE(ReliftModule->getFunction(ReliftMed.Name));
-      EXPECT_FALSE(ReliftModule->getFunction(ReliftMed.Name)
-                       ->getMetadata(windows_eh_md::NativeAttachment));
-    }
+    ASSERT_TRUE(ReliftModule);
+    ASSERT_TRUE(ReliftModule->getFunction(ReliftMed.Name));
+    EXPECT_TRUE(ReliftModule->getFunction(ReliftMed.Name)
+                    ->getMetadata(windows_eh_md::NativeAttachment));
+    EXPECT_FALSE(llvm::verifyModule(*ReliftModule, &llvm::errs()));
     for (unsigned Byte : {3u, 8u, 16u, 17u, 23u, 39u, 62u}) {
       SCOPED_TRACE(Byte);
       BinaryImage Disproved = *Reloaded;
@@ -1773,6 +1779,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
                  Range.ParentOwnerSymbol.empty();
         });
     ASSERT_NE(ParentRange, OriginalCompiled.FunctionRanges.end());
+    ASSERT_TRUE(GeneratedOwnerEnd);
     llvm::json::Array Fields;
     for (va_t Field : HandlerReceipt->AbsolutePointerFields)
       Fields.push_back(llvm::json::Object{
@@ -1786,6 +1793,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
         {"source_entry_rva", Source->CodeRange.Begin - Loaded->Base},
         {"generated_code_begin_rva", ParentRange->BeginVA - Loaded->Base},
         {"generated_code_end_rva", ParentRange->EndVA - Loaded->Base},
+        {"generated_owner_end_rva", *GeneratedOwnerEnd - Loaded->Base},
         {"registration_handler_rva", RegistrationVA - Loaded->Base},
         {"func_info_rva", HandlerReceipt->Tables.FuncInfoVA - Loaded->Base},
         {"absolute_pointer_fields", std::move(Fields)},

@@ -75,7 +75,11 @@ L’installation peut modifier une entrée authentifiée d’une section exécut
 son stockage virtuel et physique soit unique et corresponde aux octets analysés. Les cas cdecl/stdcall/thiscall/fastcall
 vérifient deux générations, les deux modes de patch et le rebasage forcé avec le CRT Microsoft x86.
 Chaque génération exige de nouvelles preuves LowIR et LLVM ; un ancien reçu n’autorise aucune réécriture.
-Les relais cleanup générés et les durées de vie générales des objets nécessitent encore du travail.
+Les relais cleanup fondés sur ESI permettent une seconde reconstruction si la base du cadre et l’EBP
+d’entrée sauvegardé correspondent au parent authentifié. La preuve des octets en cache est liée à chaque
+appel ; LowIR prouve les accès aux objets et la durée de vie du cadre sauvegardé. Les exemples MSVC réels
+vérifient l’ordre des destructions et les écritures par référence sur deux générations, les deux modes patch
+et les bases forcées. Les durées de vie générales des objets et les conversions de types restent à traiter.
 
 ## Contrat IR
 

@@ -318,8 +318,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       }
     const auto Relay =
         getCheckedX86RegistrationCleanupRelayABI(*Img, Action.ActionVA, &Work);
-    if (!Contract || !Relay || Contract->RelayTarget != Action.ActionVA ||
-        Contract->Calls.empty() ||
+    if (!Contract || !Relay || !Relay->matchesParentFrame(*EH.Registration) ||
+        Contract->RelayTarget != Action.ActionVA || Contract->Calls.empty() ||
         Contract->Calls.size() != Relay->Calls.size())
       return false;
     std::vector<std::string> Names;

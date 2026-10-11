@@ -12,21 +12,25 @@ from scripts import check_windows_registration_entry as entry
 from scripts import check_windows_registration_relift as runner
 from scripts import replay_windows_registration_relift as replay
 from scripts.tests import test_check_windows_registration_entry as first_fixture
+from scripts.tests import test_check_windows_registration_nested_try as nested_fixture
+from scripts import check_windows_registration_multiple_catch as catches
 
 
 class ReliftEvidenceTests(unittest.TestCase):
-    def capture(self, root):
+    def capture(self, root, profile_name="entry"):
+        profile = runner.get_profile(profile_name)
         first_root = root / "first"
         first_root.mkdir()
-        first = first_fixture.EntryEvidenceTests().capture(first_root)
-        first_path = first_root / "entry-rewrite.json"
+        first = (first_fixture.EntryEvidenceTests().capture(first_root) if profile_name == "entry"
+                 else nested_fixture.NestedTryEvidenceTests().capture(first_root))
+        first_path = first_root / profile.first_capture
         first_path.write_text(json.dumps(first))
-        result = {"schema": 1, "evidence": "relifted-entry-reconstruction", "passed": True,
+        result = {"schema": 1, "evidence": profile.evidence, "profile": profile_name, "passed": True,
                   "proof_sha256": runner.file_digest(runner.PROOF),
                   "receipt_sha256": runner.file_digest(runner.RECEIPT),
                   "first_capture_sha256": runner.file_digest(first_path),
                   "catch_search_runtime": first["catch_search_runtime"], "cases": []}
-        for name in runner.CASES:
+        for name in profile.cases:
             previous, parent = first_root / name, root / name
             parent.mkdir()
             shutil.copyfile(previous / "vcruntime140.dll", parent / "vcruntime140.dll")
@@ -45,6 +49,9 @@ class ReliftEvidenceTests(unittest.TestCase):
                            generated_begin=0x3000, generated_end=0x3080,
                            source_image_sha256=hashlib.sha256(original).hexdigest(),
                            image_sha256=hashlib.sha256(product).hexdigest())
+            if profile_name == "catch-cleanup":
+                receipt.update(entry_registers=0, entry_pop=0, incoming_reads=0, incoming_writes=0,
+                               cleanup_actions=2 if "-o0-" in name else 1, cleanup_calls=2)
             (parent / "contract.json").write_text(json.dumps(receipt))
             (parent / "source.ll").write_text("second-generation IR")
             (parent / "rewrite.xml").write_text('<testsuites tests="1"/>')
@@ -61,6 +68,42 @@ class ReliftEvidenceTests(unittest.TestCase):
                                              "sha256": runner.file_digest(path)})
             result["cases"].append(record)
         return result
+
+    def test_cleanup_profile_requires_its_nested_capture_and_ordered_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root, "catch-cleanup")
+            self.assertEqual(len(replay.validate_capture(root, capture)), 32)
+            for wrong in ("entry", "unknown"):
+                with self.subTest(profile=wrong), self.assertRaises(ValueError):
+                    replay.validate_capture(root, capture | {"profile": wrong})
+            profile = runner.get_profile("catch-cleanup")
+            for case in capture["cases"]:
+                name, parent = case["case"], root / case["case"]
+                receipt = json.loads((parent / "contract.json").read_text())
+                first = json.loads((root / "first" / name / "contract.json").read_text())
+                original = runner.PE32((parent / "original.exe").read_bytes())
+                product = runner.PE32((parent / "product.exe").read_bytes())
+                for key, value in (("cleanup_actions", 3), ("cleanup_calls", 1),
+                                   ("entry_registers", 1), ("incoming_writes", 1)):
+                    with self.subTest(case=name, key=key), self.assertRaises(ValueError):
+                        profile.validate_installation(original, product, receipt | {key: value}, first, name)
+            case = capture["cases"][0]
+            name = case["case"]
+            parent = root / name
+            receipt = json.loads((parent / "contract.json").read_text())
+            values = [17, 28, 39, 7, 18, 39, 1, 12] + [runner.BASES[0] + 0x3004] * 3
+            output = "MULTICATCH " + " ".join(f"{v:08X}" for v in values) + "\nCLEANUP 00000000 00000035 00000000\n"
+            for changed in (output, output.replace("00403004", "00402004"),
+                             output.replace("00000035", "00000053")):
+                result = {"exit_code": 0, "stdout": changed}
+                with patch.object(catches, "run_image", return_value=result):
+                    args = (parent / "product.exe", name, "product", receipt, [], {}, 1)
+                    if changed == output:
+                        profile.observe(*args)
+                    else:
+                        with self.assertRaises(ValueError):
+                            profile.observe(*args)
 
     def test_requires_both_generation_identities_and_the_complete_matrix(self):
         with tempfile.TemporaryDirectory() as directory:

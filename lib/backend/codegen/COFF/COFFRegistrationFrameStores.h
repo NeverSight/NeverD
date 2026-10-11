@@ -40,10 +40,17 @@ public:
   candidates(const llvm::Value *Root, const llvm::BasicBlock *Block,
              const llvm::Instruction *Through, size_t &Work) const;
 
+  /// Every write to an unaliased allocation, including later and loop writes.
+  /// Unknown ownership or an exhausted budget returns no result.
+  std::optional<llvm::ArrayRef<const llvm::StoreInst *>>
+  directDefinitions(const llvm::Value *Root, size_t &Work) const;
+
 private:
   using Blocks = llvm::DenseMap<const llvm::BasicBlock *,
                                 std::vector<const llvm::StoreInst *>>;
   llvm::DenseMap<const llvm::Value *, Blocks> Stores;
+  llvm::DenseMap<const llvm::Value *, std::vector<const llvm::StoreInst *>>
+      DirectStores;
   Blocks AllStores;
   llvm::DenseMap<const llvm::Instruction *, unsigned> Positions;
 };

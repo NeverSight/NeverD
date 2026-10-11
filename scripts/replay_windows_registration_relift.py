@@ -15,27 +15,28 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_relift import (
-        BASES, CASES, PROOF, RECEIPT, ROUTES, PE32, file_digest, observe,
-        require_test_result, validate_first_capture, validate_installation, validate_runtime)
+        BASES, PROOF, RECEIPT, ROUTES, PE32, file_digest,
+        require_test_result, validate_runtime, get_profile)
 else:
     from check_windows_registration_relift import (
-        BASES, CASES, PROOF, RECEIPT, ROUTES, PE32, file_digest, observe,
-        require_test_result, validate_first_capture, validate_installation, validate_runtime)
+        BASES, PROOF, RECEIPT, ROUTES, PE32, file_digest,
+        require_test_result, validate_runtime, get_profile)
 
 
 def validate_capture(root: Path, capture: dict) -> list[tuple]:
+    profile = get_profile(capture.get("profile", "entry"))
     if capture.get("schema") != 1 or capture.get("passed") is not True or \
-            capture.get("evidence") != "relifted-entry-reconstruction" or \
+            capture.get("evidence") != profile.evidence or \
             capture.get("proof_sha256") != file_digest(PROOF) or \
             capture.get("receipt_sha256") != file_digest(RECEIPT) or \
-            capture.get("first_capture_sha256") != file_digest(root / "first/entry-rewrite.json"):
+            capture.get("first_capture_sha256") != file_digest(root / "first" / profile.first_capture):
         raise ValueError("re-lifted capture has no current proof or first-generation identity")
-    first = json.loads((root / "first/entry-rewrite.json").read_text())
-    validate_first_capture(root / "first", first)
+    first = json.loads((root / "first" / profile.first_capture).read_text())
+    profile.validate_first(root / "first", first)
     if capture.get("catch_search_runtime") != first["catch_search_runtime"]:
         raise ValueError("re-lifted capture changed its Microsoft runtime")
     cases = capture.get("cases", [])
-    if len(cases) != len(CASES) or {c.get("case") for c in cases} != set(CASES):
+    if len(cases) != len(profile.cases) or {c.get("case") for c in cases} != set(profile.cases):
         raise ValueError("re-lifted calling-convention/control matrix is incomplete")
     expected = {(route + suffix + ".exe", route, base)
                 for route in ROUTES for suffix, base in (("", BASES[0]), ("-rebased", BASES[1]))}
@@ -54,7 +55,7 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
         first_receipt = json.loads((previous / "contract.json").read_text())
         original = PE32((parent / "original.exe").read_bytes())
         product = PE32((parent / "product.exe").read_bytes())
-        validate_installation(original, product, receipt, first_receipt, name)
+        profile.validate_installation(original, product, receipt, first_receipt, name)
         records = case.get("images", [])
         if len(records) != len(expected) or \
                 {(r.get("image"), r.get("route"), r.get("base")) for r in records} != expected:
@@ -91,8 +92,10 @@ def main():
         root = args.evidence_root.resolve()
         capture = json.loads((root / "relift-rewrite.json").read_text())
         records = validate_capture(root, capture)
+        profile = get_profile(capture.get("profile", "entry"))
+        report["profile"] = capture.get("profile", "entry")
         for name, path, route, receipt in records:
-            result = observe(path, name, route, receipt, [wine] if wine else [],
+            result = profile.observe(path, name, route, receipt, [wine] if wine else [],
                              os.environ.copy() | {"WINEDLLOVERRIDES": "vcruntime140=n"},
                              args.timeout, source_section=".ndtext")
             report["images"].append({"case": name, **result})

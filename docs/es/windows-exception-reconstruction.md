@@ -74,7 +74,11 @@ La instalación puede modificar una entrada autenticada de una sección ejecutab
 almacenamiento virtual y físico es único y coincide con los bytes analizados. Los casos cdecl/stdcall/thiscall/fastcall
 comprueban dos generaciones, ambos modos de patch y rebasing forzado con el CRT Microsoft x86.
 Cada generación exige nuevas pruebas LowIR y LLVM; un recibo anterior no autoriza otra reescritura.
-Los relays cleanup generados y la vida útil general de los objetos aún requieren más soporte.
+Los relays cleanup basados en ESI permiten una segunda reconstrucción cuando la base del marco y el
+EBP de entrada guardado coinciden con el padre autenticado. La prueba de bytes en caché se vincula a cada
+despacho; LowIR prueba los accesos a objetos y la vida del marco guardado. Las muestras MSVC reales
+verifican destrucción ordenada y escritura por referencia en dos generaciones, ambos modos patch y bases
+forzadas. La vida útil general de objetos y las conversiones de tipos siguen pendientes.
 
 ## Contrato IR
 

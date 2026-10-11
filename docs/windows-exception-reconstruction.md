@@ -378,8 +378,12 @@ virtual and raw storage must be unique and match the analyzed bytes. The
 cdecl/stdcall/thiscall/fastcall fixtures cover two rewrite generations, both
 patch modes and forced rebasing, with the Microsoft x86 CRT. Each generation
 requires fresh LowIR and LLVM proofs; a previous receipt grants no authority.
-Generated cleanup relays and broader object lifetimes still require additional
-support.
+Generated ESI-based cleanup relays also support a second reconstruction when
+their local-frame base and saved entry EBP exactly match the authenticated parent.
+The cached byte proof is rebound at each dispatch; LowIR proves object borrows
+and the saved frame lifetime. Genuine MSVC value/reference fixtures exercise
+ordered destruction and reference writes across both generations, both patch
+modes and forced bases. General object lifetimes and conversions remain unsupported.
 
 ## IR contract
 

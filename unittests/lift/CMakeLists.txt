@@ -1364,12 +1364,14 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationCxxContinuationTestUtils.cpp
   eh/RegistrationCallTests.cpp
   eh/RegistrationCleanupABITests.cpp
+  eh/RegistrationRealignedCleanupABITests.cpp
   eh/RegistrationEntryABITests.cpp
   eh/RegistrationEntryLayoutTests.cpp
   eh/RegistrationRealignedLayoutTests.cpp
   eh/RegistrationRuntimePointerTests.cpp
   eh/RegistrationFrameTaintTests.cpp
   eh/RegistrationFrameStoresTests.cpp
+  eh/RegistrationFrameBitsTests.cpp
   eh/COFFTrampolineRegionTests.cpp
   eh/RegistrationReliftTests.cpp
   eh/RegistrationSourceReceiptTestUtils.cpp
@@ -1674,6 +1676,11 @@ add_neverd_unittest(NeverDMachOPointerRelocationBoundaryTests
   Loader
   Pipeline
 )
+
+if(MSVC)
+  # Release builds of the pointer-boundary cases exceed standard COFF sections.
+  target_compile_options(NeverDMachOPointerRelocationBoundaryTests PRIVATE /bigobj)
+endif()
 
 target_include_directories(NeverDMachOPointerRelocationBoundaryTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include

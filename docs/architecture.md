@@ -266,6 +266,15 @@ The same frame transfer separately reports whether every ordinary leaf return
 computes a 32-bit scalar independently of incoming registers, borrowed pointers
 and the caller PC. Frame privacy can admit an unobserved entry-EAX return;
 that weaker fact cannot choose a physical scalar call declaration.
+`COFFRegistrationFrameBits` checks which pointer-dependent bits survive a
+register truncation. It follows masks and casts through the existing private
+store index, includes every full-width definition, and rejects unknown aliases
+or poisoned operations. It shares the frame proof's bounded work budget.
+
+`RegistrationCleanupFrame` authenticates fixed and realigned callback prefixes.
+ESI-based relays bind their base and saved entry EBP to each parent after cache
+lookup, again during caller ABI replay and during LLVM emission. LowIR owns
+the saved frame lifetime and object borrow proof.
 `RegistrationCleanupABI` authenticates immutable MSVC tail-jump relays and
 Clang relays that save EBP, adjust the source frame and call one or more checked
 leaves before restoring EBP. The ordered call list retains every ECX object

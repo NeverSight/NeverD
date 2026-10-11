@@ -2825,13 +2825,35 @@ On Windows, replay with `scripts/replay_windows_registration_cxx.py
 Both profiles require `value=7`, cleanup `trace=213`, four iterations, restored
 FS chain, and `caught=7` by value or `caught=18` by reference. The observed caller PC
 must lie in the indexed generated parent rather than an original helper or
-another part of the generated section. Schema2 requires all six routes at both
+another part of the generated section. Schema3 requires nine routes at both
 bases: original, manual, public COFF patcher, called-helper/import-name collision,
-CLI section and CLI inplace. All five generated routes must reproduce the entire
-checked manual transaction byte for byte, including preserved helpers, before
-runtime observation can count. Native replay validates every hash and the same
-complete route matrix. Schema1 replay remains explicitly manual-only for older
-evidence and cannot count as public/CLI runtime verification.
+CLI section and CLI inplace, followed by a second public transaction and its two
+CLI modes. The second generation reproves generated ESI cleanup relays, their
+saved entry EBP, two ordered destructor calls and complete callback state. It
+binds both trampoline destinations, the full callback owner and the new SafeSEH
+handler. Each CLI route must reproduce its generation's complete transaction
+byte for byte. The source and re-lift test digests, both LLVM inputs and the
+captured Microsoft x86 CRT are bound to replay. Both ordinary and SavedESP
+writeback profiles require all 18 executions per value/reference case.
+Schema2 replay remains first-generation public/CLI evidence; schema1 remains
+manual-only. Neither older format establishes cleanup re-lifting.
+
+The shared re-lift runner also accepts `--profile catch-cleanup` and a complete,
+authenticated nested-try capture. Clang O0/O1 plus wrong-result controls require
+32 executions and 32 independent replays, including ordered local destruction
+inside an active reference catch. O0 preserves pointer bits in a register's high
+bytes while replacing its low byte with a scalar condition. The independent
+LLVM frame proof tracks demanded bits through masks and unaliased spills;
+truncating retained pointer bits, overlapping writes, aliases and poison flags
+remain rejected. `RegistrationFrameBitsTests.cpp` covers those boundaries.
+
+`RegistrationRealignedCleanupABITests.cpp` checks short and wide displacements,
+ordered multiple calls, restored EBP, preserved leaf ESI, immutable code,
+relocations, coordinate overflow and work limits. Cached relay proofs are tested
+against matching and mismatching parents in both lookup orders. The independent
+caller ABI check and LLVM emitter also bind each relay to its current parent.
+Plain C table-owned callbacks retain checked native labels; normal-flow execution
+must skip those bodies on x64 and AArch64.
 
 The runtime runner builds actual SEH3, no-GS EH4 and initialized-GS EH4 source
 images, including explicit source exit checks, lifts their protected

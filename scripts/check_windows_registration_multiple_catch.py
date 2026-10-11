@@ -53,7 +53,7 @@ def validate_decompilation(text: str, language: str) -> None:
 def observe(path: Path, case: str, route: str, receipt: dict,
             launcher: list[str], env: dict[str, str], timeout: float,
             *, expected_values: tuple = (17, 28, 39, 7, 18, 39, 1, 12),
-            expected_cleanup: tuple | None = None) -> dict:
+            expected_cleanup: tuple | None = None, source_section: str = ".text") -> dict:
     image = PE32(path.read_bytes())
     if image.base not in BASES or image.u16(image.optional + 70) & 0x40:
         raise ValueError("multiple-catch probe has no forced base")
@@ -76,7 +76,7 @@ def observe(path: Path, case: str, route: str, receipt: dict,
     callers = [value - image.base for value in values[8:]]
     if any(not begin <= caller < end for caller in callers):
         raise ValueError("throw caller is outside the exact parent owner")
-    code_owner(image, begin, end, ".text" if route == "original" else ".ndtext")
+    code_owner(image, begin, end, source_section if route == "original" else ".ndtext")
     return {"image": path.name, "sha256": file_digest(path), "route": route,
             "base": image.base, "expected_exit": int(case.endswith("-control")),
             "caller_rvas": callers, "runtime": result}
