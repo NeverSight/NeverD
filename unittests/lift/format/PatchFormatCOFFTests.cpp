@@ -12,6 +12,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/Win64EH.h"
 
@@ -1050,8 +1051,12 @@ TEST_F(PatchCOFF_X64, ReconstructsBoundedNativeTypedFH4StateGraph) {
                     std::istreambuf_iterator<char>());
   EXPECT_NE(HighC.find("personality=__CxxFrameHandler4"), std::string::npos);
   EXPECT_NE(HighC.find("cxx.try[0]"), std::string::npos);
-  EXPECT_NE(HighC.find("type @ 0x"), std::string::npos);
-  EXPECT_NE(HighC.find("catch ("), std::string::npos);
+  EXPECT_NE(HighC.find("type descriptor @ 0x"), std::string::npos);
+  EXPECT_EQ(HighC.find("catch ("), std::string::npos);
+  for (const auto &Catch : OriginalCxx->Cxx->TryBlocks.front().Handlers)
+    EXPECT_NE(HighC.find("L_windows_callback_" +
+                         llvm::utohexstr(Catch.HandlerVA) + "_"),
+              std::string::npos);
 
   auto Patch = patchBinary(PE);
   ASSERT_EQ(Patch.exitCode, 0) << Patch.err;

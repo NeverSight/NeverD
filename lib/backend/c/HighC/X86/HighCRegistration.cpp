@@ -8,7 +8,6 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -71,40 +70,6 @@ bool HighCWriter::isEmbeddedRegistrationCallback(const HighStmt &Stmt,
          Entry->Val->EntryFunctionVA == CurrentFunc->Entry &&
          Entry->Val->EntryVA == Stmt.EHClauses[I].HandlerVA &&
          Entry->Addr == Entry->Val->EntryVA;
-}
-
-void HighCWriter::writeEmbeddedRegistrationCallbacks(const HighStmt &Stmt,
-                                                     int Indent) {
-  bool HasEmbedded = false;
-  for (size_t I = 0; I < Stmt.EHClauses.size(); ++I)
-    HasEmbedded |= isEmbeddedRegistrationCallback(Stmt, I);
-  if (!HasEmbedded)
-    return;
-  const std::string Suffix = std::to_string(RegistrationRegionNumber++);
-  const std::string After = "L_x86_eh_after_" + Suffix;
-  emitIndent(Indent);
-  OS << "goto " << After << ";\n";
-  const bool SavedHandler = InEHClauseBody;
-  InEHClauseBody = true;
-  llvm::scope_exit Restore([&] { InEHClauseBody = SavedHandler; });
-  for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
-    if (!isEmbeddedRegistrationCallback(Stmt, I))
-      continue;
-    const std::string Address = llvm::utohexstr(Stmt.EHClauses[I].HandlerVA);
-    emitIndent(Indent);
-    OS << "/* Native x86 callback @ 0x" << Address
-       << ": entered by the exception runtime with its private stack. */\n";
-    emitIndent(Indent);
-    OS << "L_x86_callback_" << Address << "_" << Suffix << ": {\n";
-    writeStmts(Stmt.EHClauseBodies[I], Indent + 1);
-    emitIndent(Indent + 1);
-    OS << "__builtin_unreachable(); /* callback has no ordinary fallthrough "
-          "*/\n";
-    emitIndent(Indent);
-    OS << "}\n";
-  }
-  emitIndent(Indent);
-  OS << After << ":;\n";
 }
 
 std::string HighCWriter::registrationEntryExpression(const HighExpr &E) const {

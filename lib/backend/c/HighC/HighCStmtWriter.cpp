@@ -269,8 +269,9 @@ std::string HighCWriter::sehFilterValueText(const HighExpr &Value) {
 
 void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
   // The C projection shows native entry points, not an invented setjmp-based
-  // replacement for the platform unwinder. A funclet keeps its own ABI,
-  // return and frame access in a separate definition in this emission.
+  // replacement for the platform unwinder. A funclet keeps its own ABI and
+  // frame. A checked body within the parent remains a runtime-only label;
+  // independent funclets retain their separate definitions.
   for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
     const HighEHClause &Clause = Stmt.EHClauses[I];
     const va_t Entry = Clause.Kind == HighEHClauseKind::CxxCleanup
@@ -278,6 +279,7 @@ void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
                            : Clause.HandlerVA;
     if (I < Stmt.EHClauseBodies.size() && !Stmt.EHClauseBodies[I].empty() &&
         !isEmbeddedRegistrationCallback(Stmt, I) &&
+        !isEmbeddedWindowsCallback(Stmt, I) &&
         (!Entry || (CurrentFunc && Entry == CurrentFunc->Entry) ||
          !DefinedFunctionsByAddress.count(Entry)))
       throw std::invalid_argument(
@@ -310,7 +312,7 @@ void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
   writeTryBody(Stmt.Body, Indent + 1);
   emitIndent(Indent);
   OS << "}\n";
-  writeEmbeddedRegistrationCallbacks(Stmt, Indent);
+  writeEmbeddedNativeCallbacks(Stmt, Indent);
 }
 
 void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {

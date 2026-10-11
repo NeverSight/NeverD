@@ -142,9 +142,10 @@ public:
   std::string registrationEntryExpression(const HighExpr &E) const;
   static bool preservesRegistrationMemory(const HighFunc &Func);
   bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
-  void writeEmbeddedRegistrationCallbacks(const HighStmt &Stmt, int Indent);
+  bool isEmbeddedWindowsCallback(const HighStmt &Stmt, size_t I) const;
+  void writeEmbeddedNativeCallbacks(const HighStmt &Stmt, int Indent);
   bool writeRegistrationCleanup(const HighStmt &Stmt, size_t I, int Indent);
-  unsigned RegistrationRegionNumber = 0;
+  unsigned NativeExceptionRegionNumber = 0;
   struct MemoryLoadDestination {
     std::string Name;
     bool Written = false;
