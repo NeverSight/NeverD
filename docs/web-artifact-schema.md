@@ -417,6 +417,23 @@ and bytes before DOM creation, and rejects decoded duplicate object keys.
 The current POSIX reader rejects links, special files, unsafe names and detected
 changes. It does not yet provide export-path normalization or Windows admission.
 
+## Node SEA selections
+
+`sea_extract` requires an explicit `profile` and admitted `artifact_id`.
+Its extraction ID binds the occurrence, immutable hash and layout profile.
+`sea_records` returns a complete byte partition with fixed region kinds,
+original-relative offsets/lengths and hashes, except private code paths/asset
+keys whose individual hashes are withheld. Pages contain at most 128 records.
+
+Only stored JavaScript and assets have `selection_id`; the main script also
+appears as the extraction's `source_artifact_id`. Snapshots and caches remain
+opaque. Profile compatibility does not prove runtime identity or activation.
+Nested `sea_region` origins retain selected-container offsets, original storage
+identity and direct or expanded byte coordinates; compressed frames remain
+distinct from source byte offsets. Asset keys are not paths, and a selected
+package document supplies no neighboring-file inventory. Import revokes all
+extractions and selectors. See the [SEA contract](web-sea-profile.md).
+
 ## Package archives and original integrity
 
 `package_archive_extract` takes an explicit original `artifact_id` and `format`

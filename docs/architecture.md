@@ -458,13 +458,26 @@ conservative effect summaries, module evidence, admitted-file comparisons,
 qualified bundle source partitions, fixed-profile Bun container extraction,
 map decoding, budgets and query redaction. `SourceView` owns the bounded display
 projection and original/projected range mapping; `SessionView` owns preview,
-publication and revocation. CLI/worker adapters cannot bypass those policies.
+publication and revocation. CLI/worker/MCP adapters cannot bypass those policies.
+`tools/common/web/Backend` owns the shared C++ worker/MCP C ABI client;
+`tools/common/transport/Json` owns bounded generic JSON admission. The compiled
+`neverd-web-mcp` separates launch inputs, schemas, lifecycle and stdio framing.
+It only exposes a capability-filtered subset and cannot assert reviewed source
+ranges. No analysis process or language runtime is spawned. See the
+[MCP profile](web-mcp-profile.md) for its concrete limits and ownership.
 Views use owned parser token/comment spans and never claim semantic rewrites.
 `BunContainer` owns ELF/Mach-O/PE graph location, target identity and native-range
 validation. `Bun` owns the shared graph records, flags and module decoding;
 transport capability lists and extraction results use the same profile builder.
 Adding a target container does not change source semantics or imply native
 machine-code/bytecode decompilation.
+`sea/Container` and the format readers independently locate explicit Node SEA
+resources; `sea/Blob` owns their serialization, region partition and private-key
+budgets. `SessionSEA` publishes revision-bound metadata and exposes only stored
+JS/assets through `ArtifactView`. Caches and snapshots remain opaque; native
+activation/version authentication are not inferred. Asset keys never establish
+a filesystem namespace. Package analysis of an explicitly selected asset uses
+one document with no directory inventory. See the [SEA profile](web-sea-profile.md).
 `packages/PackageReader` owns versioned Node metadata and captured placement
 evidence; `packages/PackageDiff` compares its model without transport concerns.
 `SessionPackages` owns revision-bound caches, fixed metadata pages and
@@ -678,14 +691,20 @@ they do not reuse CFG or value proofs across changed snapshots. A builder may
 retain one successful graph with an owned instruction snapshot. Reuse requires
 exact instruction facts, LowOps, effective edges, block starts, proof roots,
 conditional roots and storage-owner inputs. Hits pay the complete original
-graph-construction charge. The graph may also retain up to 64 completed query
-batches under a separate 8 MiB retained-payload allowance. Exact ordered query
+graph-construction charge. The graph may also retain up to 64 query outcomes
+under a separate 8 MiB retained-payload allowance. Exact ordered query
 fields, proof limits, output shape, function context and both relocation
 occurrence inventories bind each result. Hits pay the complete cold value
-charge; a smaller budget runs the normal path. Incomplete proofs and batches
-using pointer-named symbolic values or merges are excluded. Image metadata is
-immutable during a build, and every new build discards this state. These caches
-do not bypass proposal validation, rollback or fixed-point stages.
+charge; a smaller budget runs the normal path. Fixed reconstruction-depth and
+match-work refusals may be retained with the exact result, completion flag and
+feasible mask of each query. A local depth refusal does not suppress independent
+queries; a shared match-work exhaustion stops the remaining queries and clears
+every output. Replay preserves these incomplete states. Changing either limit
+or the proof context requires fresh analysis. Any other incomplete query,
+outer-account exhaustion, symbolic failure or use of pointer-named symbolic
+values or merges excludes the batch. Image metadata is immutable during a
+build, and every new build discards this state.
+These caches do not bypass proposal validation, rollback or fixed-point stages.
 
 A bounded group of AArch64 absolute dispatches in one relocatable ELF function
 can share an exact read-only pointer object. Each selector first proves its

@@ -83,7 +83,25 @@ std::string Session::analyzePackages(std::string_view Revision,
       return json(summary(A, State->Revision));
   if (State->PackageAnalyses.size() >= 4)
     throw Error("package_cache_budget_exceeded");
-  const auto Namespace = State->memberNamespace(ArtifactID);
+  auto Namespace = State->memberNamespace(ArtifactID);
+  if (!Namespace &&
+      std::none_of(State->Published.Artifacts.begin(),
+                   State->Published.Artifacts.end(),
+                   [&](const auto &F) { return F.ID == ArtifactID; })) {
+    if (const auto View = State->artifactView(ArtifactID)) {
+      // A selected opaque-key asset supplies one document, not a captured
+      // filesystem. Never fabricate paths or neighbors from asset names.
+      Snapshot Single;
+      Single.ID = identity("package-selected-bytes",
+                           {State->Published.ID, ArtifactID, View->BlobHash});
+      Artifact A;
+      A.ID = ArtifactID;
+      A.BlobHash = View->BlobHash;
+      A.Content = View->Content;
+      Single.Artifacts.push_back(std::move(A));
+      Namespace = std::move(Single);
+    }
+  }
   auto A = web::analyzePackages(Namespace ? *Namespace : State->Published,
                                 ArtifactID, InputKind);
   auto Reply = json(summary(A, State->Revision));

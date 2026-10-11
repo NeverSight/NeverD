@@ -170,6 +170,7 @@ add_subdirectory(lib)
 option(NEVERD_BUILD_SHARED "Build libneverd shared library" ON)
 option(NEVERD_BUILD_GUI "Build the Qt Quick desktop workbench and analysis worker" OFF)
 option(NEVERD_BUILD_WORKER "Build the headless analysis worker" OFF)
+option(NEVERD_BUILD_WEB_MCP "Build the offline C++ web MCP server" OFF)
 option(NEVERD_ENABLE_PYTHON_PLUGINS
        "Enable embedded CPython support for NeverD plugins" ON)
 

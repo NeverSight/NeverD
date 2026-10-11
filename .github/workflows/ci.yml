@@ -310,6 +310,7 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DBUILD_TESTING=ON \
+            -DNEVERD_BUILD_WEB_MCP=ON \
             -DNEVERD_BUILD_PLUGINS=ON \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON \

@@ -433,6 +433,31 @@ ctest --test-dir build-release \
 
 ## Offline web analysis
 
+The optional `NEVERD_BUILD_WEB_MCP=ON` target builds a native C++ transport.
+Run `ctest --test-dir build/tools/neverd-web-mcp --output-on-failure` for its
+four C++ suites: protocol, catalog, real-backend evidence parity and actual
+stdio process tests with an unusable PATH. The process suite explicitly skips
+on Windows. An additional `NeverDWebMCPClaude` process case requires the pinned
+`NEVERD_CLAUDE_CODE_21296_ELF` artifact and otherwise explicitly skips.
+Repeat against parser-off and backend-off builds; the latter must
+retain capabilities while omitting analysis tools. The runtime-free engine
+profile also sets `NEVERD_ENABLE_PYTHON_PLUGINS=OFF`. Shared JSON/client changes
+require worker protocol/Web and affected mock transport regressions. These
+MCP suites own catalog qualification separately from the existing Python
+native capability checker. See the [profile](web-mcp-profile.md).
+
+`WebSEA.*` covers independent Node SEA serialization, x64/ARM64 ELF/Mach-O/PE
+resource location, malformed names/tables, duplicate mappings, cumulative work,
+opaque V8 evidence and exact compiler-generated blobs. `WebSEASDK.*` and
+`NeverDWorkerWeb` cover publication/revocation, private-key redaction,
+source/map/package/native consumers, nested compressed anchors and CLI/framed
+parity. Set `NEVERD_NODE_SEA_22150_CORPUS` for the optional pinned snapshot
+directory and `NEVERD_NODE_SEA_22150_IMAGES` for injected full-image fixtures.
+Tests never download or execute them. See the [profile](web-sea-profile.md).
+After shared artifact/session/package boundary changes, run the owning web
+directory, C API availability and five core worker cases. Verify parser-off
+extraction and backend-off ABI behavior separately.
+
 `WebStreams.*` covers explicit JSONL/SSE/JSON-RPC/MCP/log profiles, byte spans,
 EOF limits, duplicate/missing context, original numeric tokens and aggregate
 JSON work including failures. `WebStreamSDK.*` and `NeverDWorkerWeb` cover
@@ -889,7 +914,12 @@ Resource failure and value-analysis incompleteness remain distinct.
 `ResolverValueQueryCache.*` checks actual complete-batch reuse, exact remaining
 budgets at every small-fixture boundary, ordered mixed results and feasible
 masks, all query fields, proof limits and graph-independent relocation context.
-Incomplete proofs and oversized records cannot be retained; count and byte
+Shared match-work failures clear all outputs, including earlier feasible masks.
+Cached match/depth refusals preserve per-query incomplete status, independent
+results and cold work charges for every requested output shape. Changed limits,
+graphs, query ordering and relocation context require fresh analysis. An
+independent unknown prevents refusal retention. Other incomplete proofs and
+oversized records cannot be retained; count and byte
 limits are checked independently.
 The long-predecessor guard fixture separates a shallow comparison from its
 value's CFG history. It checks 128 table slots reaching four exact case targets,
