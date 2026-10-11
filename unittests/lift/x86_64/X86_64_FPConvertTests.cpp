@@ -66,7 +66,9 @@ TEST_F(X86_64_FPConvert, DivssLifts) {
 }
 
 TEST_F(X86_64_FPConvert, SqrtssLifts) {
-  verifyLowIRContains(testObj(), "test_sqrtss", "FLOAT_SQRT");
+  verifyScalarFPState(testObj(), "test_sqrtss",
+                      neverd::Intrinsic::X86FPArithState,
+                      unsigned(neverd::X86FPArithKind::SquareRoot) | 16);
 }
 
 TEST_F(X86_64_FPConvert, AddsdLifts) {
@@ -75,7 +77,9 @@ TEST_F(X86_64_FPConvert, AddsdLifts) {
 }
 
 TEST_F(X86_64_FPConvert, SqrtsdLifts) {
-  verifyLowIRContains(testObj(), "test_sqrtsd", "FLOAT_SQRT");
+  verifyScalarFPState(testObj(), "test_sqrtsd",
+                      neverd::Intrinsic::X86FPArithState,
+                      unsigned(neverd::X86FPArithKind::SquareRoot) | 24);
 }
 
 TEST_F(X86_64_FPConvert, LLVMIRHasFloat) {
