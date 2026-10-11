@@ -198,20 +198,42 @@ TEST(HighSwiftEmitter, MXCSRReadIsAValueAndCommitIsAStatement) {
 }
 
 TEST(HighSwiftEmitter, RoundStateRequiresAnExplicitSwiftImplementation) {
-  for (auto Id : {Intrinsic::X86FPRoundState, Intrinsic::X86FPRoundMemoryState}) {
+  for (auto Id :
+       {Intrinsic::X86FPRoundState, Intrinsic::X86FPRoundMemoryState}) {
     auto F = function();
-    auto Operands = Id == Intrinsic::X86FPRoundState
-                        ? std::vector<ExprPtr>{HighExpr::makeConst(4, 1),
-                                               HighExpr::makeConst(0x3fa00000, 4)}
-                        : std::vector<ExprPtr>{HighExpr::makeConst(0x1000, 8),
-                                               HighExpr::makeConst(4, 1)};
+    auto Operands =
+        Id == Intrinsic::X86FPRoundState
+            ? std::vector<ExprPtr>{HighExpr::makeConst(4, 1),
+                                   HighExpr::makeConst(0x3fa00000, 4)}
+            : std::vector<ExprPtr>{HighExpr::makeConst(0x1000, 8),
+                                   HighExpr::makeConst(4, 1)};
     Operands.push_back(HighExpr::makeConst(4, 1));
     Operands.push_back(HighExpr::makeConst(0x1f80, 4));
     F.Body[0].RetVal = fpStateCall(Id, 8, std::move(Operands));
     const auto Emitted = HighSwiftEmitter().emit(F, signature());
     EXPECT_FALSE(Emitted.Recovered);
     EXPECT_TRUE(Emitted.Source.empty());
-    EXPECT_NE(Emitted.Reason.find("floating-point state shape"), std::string::npos);
+    EXPECT_NE(Emitted.Reason.find("floating-point state shape"),
+              std::string::npos);
+  }
+}
+
+TEST(HighSwiftEmitter,
+     ApproximateReciprocalsRequireAnExplicitSwiftImplementation) {
+  for (auto Id :
+       {Intrinsic::X86FPApprox12State, Intrinsic::X86FPApprox12MemoryState}) {
+    auto F = function();
+    auto Operands = Id == Intrinsic::X86FPApprox12State
+                        ? std::vector<ExprPtr>{HighExpr::makeConst(2, 1),
+                                               HighExpr::makeConst(0, 4)}
+                        : std::vector<ExprPtr>{HighExpr::makeConst(0x1000, 8),
+                                               HighExpr::makeConst(2, 1)};
+    F.Body[0].RetVal = fpStateCall(Id, 4, std::move(Operands));
+    const auto Emitted = HighSwiftEmitter().emit(F, signature());
+    EXPECT_FALSE(Emitted.Recovered);
+    EXPECT_TRUE(Emitted.Source.empty());
+    EXPECT_NE(Emitted.Reason.find("floating-point state shape"),
+              std::string::npos);
   }
 }
 
@@ -1537,4 +1559,29 @@ for x: Swift.Int64 in [Swift.Int64.min, -7, 0, 1, Swift.Int64.max] {
                                       {}, 30, 0, &Error),
             0)
       << Error;
+}
+
+TEST(HighSwiftEmitter,
+     InstructionCompletionArithmeticRequiresAnAvailableLowering) {
+  for (bool Memory : {false, true}) {
+    auto F = function();
+    const unsigned Control = 16 | unsigned(X86FPArithKind::SquareRoot);
+    F.Body.front().RetVal = fpStateCall(
+        Memory ? Intrinsic::X86FPArithMemoryState : Intrinsic::X86FPArithState,
+        8,
+        Memory ? std::vector<ExprPtr>{HighExpr::makeConst(0x1000, 8),
+                                      HighExpr::makeConst(Control, 1),
+                                      HighExpr::makeConst(0, 4),
+                                      HighExpr::makeConst(0x1f80, 4)}
+               : std::vector<ExprPtr>{HighExpr::makeConst(Control, 1),
+                                      HighExpr::makeConst(0, 4),
+                                      HighExpr::makeConst(0x40000000, 4),
+                                      HighExpr::makeConst(0x1f80, 4)});
+    auto Result = HighSwiftEmitter().emit(F, signature());
+    EXPECT_FALSE(Result.Recovered);
+    EXPECT_TRUE(Result.Source.empty());
+    EXPECT_NE(Result.Reason.find("floating-point state shape"),
+              std::string::npos)
+        << Result.Reason;
+  }
 }

@@ -25,6 +25,56 @@ inline std::string x86FPStateRawCType(unsigned Bytes) {
                     : "unsigned _BitInt(" + std::to_string(Bytes * 8) + ")";
 }
 
+inline std::string x86FPApprox12CHelperName(Intrinsic Id, unsigned Layout) {
+  std::string Name = std::string("neverd_x86_") +
+                     x86FPApprox12Mnemonic(Layout) + "_bits" +
+                     std::to_string(x86FPStateSourceBytes(Layout) * 8);
+  if (Id == Intrinsic::X86FPApprox12MemoryState) {
+    const auto Space = x86FPRoundStateAddressSpace(Layout);
+    Name += Space == NdMemoryAddressSpace::X86FS   ? "_memory_fs"
+            : Space == NdMemoryAddressSpace::X86GS ? "_memory_gs"
+                                                   : "_memory";
+  }
+  return Name;
+}
+
+template <typename Stream>
+inline void writeX86FPApprox12CHelper(Stream &OS, Intrinsic Id, unsigned Layout,
+                                      const std::string &Name) {
+  const unsigned Bytes = x86FPStateSourceBytes(Layout);
+  const unsigned Control = x86FPRoundStateControl(Layout);
+  const bool Memory = Id == Intrinsic::X86FPApprox12MemoryState;
+  const auto Space = x86FPRoundStateAddressSpace(Layout);
+  const auto Raw = x86FPStateRawCType(Bytes);
+  OS << "/* Approximate reciprocal, preserving MXCSR and raw NaN bits. */\n"
+     << "static inline ";
+  if (Bytes == 32 || (Control & 4))
+    OS << "__attribute__((target(\"avx\"))) ";
+  OS << Raw << " " << Name << "(" << (Memory ? "void *address" : Raw + " bits")
+     << ") {\n    ";
+  if (x86FPApprox12IsScalar(Control))
+    OS << "float";
+  else
+    OS << "typedef float approx_vector __attribute__((vector_size(" << Bytes
+       << ")));\n    approx_vector";
+  OS << (Memory ? " result_value;\n" : " value, result_value;\n") << "    "
+     << Raw << " result;\n";
+  if (!Memory)
+    OS << "    __builtin_memcpy(&value, &bits, " << Bytes << ");\n";
+  OS << "    __asm__ volatile(\"" << x86FPApprox12Mnemonic(Layout) << " ";
+  if (Memory)
+    OS << (Space == NdMemoryAddressSpace::X86FS   ? "%%fs:"
+           : Space == NdMemoryAddressSpace::X86GS ? "%%gs:"
+                                                  : "")
+       << "(%1)";
+  else
+    OS << "%1";
+  OS << ",%0\" : \"=&x\"(result_value) : "
+     << (Memory ? "\"r\"(address)" : "\"x\"(value)") << " : \"memory\");\n"
+     << "    __builtin_memcpy(&result, &result_value, " << Bytes << ");\n"
+     << "    return result;\n}\n\n";
+}
+
 inline std::string x86FPRoundStateCHelperName(Intrinsic Id, unsigned Layout) {
   std::string Name = std::string("neverd_x86_") +
                      x86FPRoundStateMnemonic(Layout) + "_bits" +
@@ -97,7 +147,86 @@ writeX86FPRoundStateCHelper(Stream &OS, Intrinsic Id, unsigned Layout,
        << Bytes * 8 << ");\n}\n\n";
 }
 
+inline std::string x86FPArithStateCHelperName(Intrinsic Id, unsigned Layout) {
+  std::string Name = "neverd_x86_" + x86FPArithStateMnemonic(Layout) + "_bits" +
+                     std::to_string(x86FPStateSourceBytes(Layout) * 8) +
+                     "_state";
+  if (Id == Intrinsic::X86FPArithMemoryState) {
+    const auto Space = x86FPRoundStateAddressSpace(Layout);
+    Name += Space == NdMemoryAddressSpace::X86FS   ? "_memory_fs"
+            : Space == NdMemoryAddressSpace::X86GS ? "_memory_gs"
+                                                   : "_memory";
+  }
+  return Name;
+}
+
+template <typename Stream>
+inline void
+writeX86FPArithStateCHelper(Stream &OS, Intrinsic Id, unsigned Layout,
+                            const std::string &Name, bool StateAddress) {
+  const unsigned Control = x86FPRoundStateControl(Layout);
+  const unsigned Bytes = x86FPStateSourceBytes(Layout);
+  const bool Unary = x86FPArithStateIsUnary(Control);
+  const bool Scalar = x86FPArithStateIsScalar(Control);
+  const bool Vex = Bytes == 32 || (Control & 32);
+  const bool Memory = Id == Intrinsic::X86FPArithMemoryState;
+  const auto Space = x86FPRoundStateAddressSpace(Layout);
+  const auto Raw = x86FPStateRawCType(Bytes);
+  const auto Return = StateAddress ? Raw : x86FPStateRawCType(Bytes + 4);
+  OS << "/* SIMD numerical bits and MXCSR complete in one instruction. */\n"
+     << "static inline ";
+  if (Vex)
+    OS << "__attribute__((target(\"avx\"))) ";
+  OS << Return << " " << Name << "(";
+  if (Memory)
+    OS << "void *address, " << Raw << " left_bits";
+  else
+    OS << Raw << " left_bits, " << Raw << " right_bits";
+  OS << ", " << (StateAddress ? "void *state_address" : "uint32_t state")
+     << ") {\n";
+  if (StateAddress)
+    OS << "    uint32_t state; __builtin_memcpy(&state, state_address, 4);\n";
+  const char *ScalarName = (Control & 8) ? "double" : "float";
+  if (!Scalar)
+    OS << "    typedef " << ScalarName
+       << " fp_vector __attribute__((vector_size(" << Bytes << ")));\n";
+  const std::string Type = Scalar ? ScalarName : "fp_vector";
+  OS << "    " << Type << " value;\n";
+  if (!Unary)
+    OS << "    __builtin_memcpy(&value, &left_bits, " << Bytes << ");\n";
+  if (!Memory)
+    OS << "    " << Type << " right;\n"
+       << "    __builtin_memcpy(&right, &right_bits, " << Bytes << ");\n";
+  OS << "    __asm__ volatile(\"ldmxcsr %1\\n\\t"
+     << x86FPArithStateMnemonic(Layout) << " ";
+  if (Memory)
+    OS << (Space == NdMemoryAddressSpace::X86FS   ? "%%fs:"
+           : Space == NdMemoryAddressSpace::X86GS ? "%%gs:"
+                                                  : "")
+       << "(%2)";
+  else
+    OS << "%2";
+  if (!Unary && Vex)
+    OS << ",%0";
+  OS << ",%0\\n\\tstmxcsr %1\"\n"
+     << "        : \"" << (Unary ? "=&x" : "+x")
+     << "\"(value), \"+m\"(state) : "
+     << (Memory ? "\"r\"(address)" : "\"x\"(right)") << " : \"memory\");\n"
+     << "    " << Raw << " result;\n"
+     << "    __builtin_memcpy(&result, &value, " << Bytes << ");\n";
+  if (StateAddress)
+    OS << "    __builtin_memcpy(state_address, &state, 4);\n    return "
+          "result;\n}\n\n";
+  else
+    OS << "    return (" << Return << ")result | ((" << Return << ")state << "
+       << Bytes * 8 << ");\n}\n\n";
+}
+
 inline std::string x86FPScalarValueCHelper(Intrinsic Id, unsigned Bytes) {
+  if (isX86FPArithStateIntrinsic(Id))
+    return x86FPArithStateCHelperName(Id, Bytes) + "_value";
+  if (isX86FPApprox12Intrinsic(Id))
+    return x86FPApprox12CHelperName(Id, Bytes);
   if (isX86FPRoundStateIntrinsic(Id))
     return x86FPRoundStateCHelperName(Id, Bytes) + "_value";
   if (isX86FPConversionStateIntrinsic(Id))
@@ -114,6 +243,14 @@ inline void writeX86FPScalarValueCHelpers(Stream &OS,
                                           const X86FPStateCHelperNames &Used) {
   for (const auto &[Shape, Name] : Used) {
     const auto [Id, Bytes] = Shape;
+    if (isX86FPArithStateIntrinsic(Id)) {
+      writeX86FPArithStateCHelper(OS, Id, Bytes, Name, true);
+      continue;
+    }
+    if (isX86FPApprox12Intrinsic(Id)) {
+      writeX86FPApprox12CHelper(OS, Id, Bytes, Name);
+      continue;
+    }
     if (isX86FPRoundStateIntrinsic(Id)) {
       writeX86FPRoundStateCHelper(OS, Id, Bytes, Name, true);
       continue;
@@ -162,6 +299,10 @@ inline void writeX86FPScalarValueCHelpers(Stream &OS,
 }
 
 inline std::string x86FPStateCHelper(Intrinsic Id, unsigned ScalarBytes) {
+  if (isX86FPArithStateIntrinsic(Id))
+    return x86FPArithStateCHelperName(Id, ScalarBytes);
+  if (isX86FPApprox12Intrinsic(Id))
+    return x86FPApprox12CHelperName(Id, ScalarBytes);
   if (isX86FPRoundStateIntrinsic(Id))
     return x86FPRoundStateCHelperName(Id, ScalarBytes);
   if (isX86FPConversionStateIntrinsic(Id))
@@ -178,6 +319,14 @@ inline void writeX86FPStateCHelpers(llvm::raw_ostream &OS,
                                     const X86FPStateCHelperNames &Used) {
   for (const auto &[Shape, Name] : Used) {
     const auto [Id, Bytes] = Shape;
+    if (isX86FPArithStateIntrinsic(Id)) {
+      writeX86FPArithStateCHelper(OS, Id, Bytes, Name, false);
+      continue;
+    }
+    if (isX86FPApprox12Intrinsic(Id)) {
+      writeX86FPApprox12CHelper(OS, Id, Bytes, Name);
+      continue;
+    }
     if (isX86FPRoundStateIntrinsic(Id)) {
       writeX86FPRoundStateCHelper(OS, Id, Bytes, Name, false);
       continue;

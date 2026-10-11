@@ -444,8 +444,10 @@ int main(void) {
     Bytes.insert(Bytes.end(),
                  {uint8_t(0x49 | (Argument >= 8 ? 4 : 0)), 0x89,
                   uint8_t(0xc0 | ((Argument & 7) << 3) | (Base & 7))});
-    const bool Preserved = Register == 3 || Register == 5 || Register == 6 ||
-                           Register == 7 || Register >= 12;
+
+    const bool Preserved = Register == 3 || Register == 5 || Register >= 12 ||
+                           (hostFormat() == BinaryFormat::COFF &&
+                            (Register == 6 || Register == 7));
     if (Preserved) {
       if (Register >= 8)
         Bytes.push_back(0x41);

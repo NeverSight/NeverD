@@ -14,6 +14,7 @@
 #include "../../../unittests/web/BunSourceMapFixture.h"
 #include "../../../unittests/web/NativeFixture.h"
 #include "../../../unittests/web/PackageArchiveFixture.h"
+#include "../../../unittests/web/SEAFixture.h"
 #include "WebEngine.h"
 
 #include <algorithm>
@@ -1634,6 +1635,50 @@ int main(int argc, char **argv) {
       reply = process.call("web_stream_preview", invalid, revision, project);
       check(reply["error"]["code"] == "invalid_request",
             "Stream transport accepted a replay flag");
+    }
+    {
+      const auto seaRoot = fixture.root / "sea";
+      fs::create_directory(seaRoot);
+      std::ofstream(seaRoot / "one", std::ios::binary)
+          << neverd::web::sea_test::blob(12);
+      const auto before = web.revision(), projectBefore = web.projectId();
+      const Json input{{"schema_version", 1}, {"path", seaRoot.string()}};
+      const auto p = web.execute("web_import_preview", input);
+      const auto c = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", p["preview_token"]}});
+      reply = process.call("web_import_preview", input, before, projectBefore);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       before, projectBefore);
+      check(reply["payload"] == c, "SEA input differs");
+      const auto revision = web.revision(), project = web.projectId();
+      const auto items = web.execute(
+          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+      const Json args{{"schema_version", 1},
+                      {"revision", revision},
+                      {"artifact_id", items["items"][1]["artifact_id"]},
+                      {"profile", "node-sea-22.15.0-blob-le64-v1"}};
+      const auto extracted = web.execute("web_sea_extract", args);
+      reply = process.call("web_sea_extract", args, revision, project);
+      check(reply["payload"] == extracted && extracted["asset_count"] == 2 &&
+                extracted["runtime_activation"] == "not_checked",
+            "SEA extraction differs");
+      const Json page{{"schema_version", 1},
+                      {"revision", revision},
+                      {"extraction_id", extracted["extraction_id"]}};
+      const auto records = web.execute("web_sea_records", page);
+      reply = process.call("web_sea_records", page, revision, project);
+      check(reply["payload"] == records &&
+                reply.dump().find("CANARY") == std::string::npos,
+            "SEA records differ or reveal private values");
+      auto invalid = args;
+      invalid["execute"] = true;
+      reply = process.call("web_sea_extract", invalid, revision, project);
+      check(reply["error"]["code"] == "invalid_request",
+            "SEA accepted target execution");
     }
     process.stop();
     std::ifstream errors(fixture.root / "stderr");

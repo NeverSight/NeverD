@@ -19,6 +19,23 @@ namespace neverd {
 struct BinaryImage;
 struct LowFunc;
 
+/// Prove the entry ESP is restored at every ordinary near return and that
+/// all return-pop immediates agree. Unchecked calls invalidate ESP; an explicit
+/// restoration from an ABI-preserved register can recover it. Ordinary bodies
+/// retain no memory values. SEH bodies also require complete current
+/// registration state/lifetime evidence to separate dispatcher returns and
+/// seed established EBP at except entries. Neither route infers saved-stack
+/// memory values or grants memory-effect authority.
+std::optional<uint32_t>
+getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
+                            size_t *CumulativeWork = nullptr);
+
+/// Authenticate the exact PE32 _local_unwind2 import or immutable IAT veneer.
+/// This identifies its runtime protocol, not its caller's frame or callbacks.
+std::optional<RegistrationLocalUnwindContract>
+getCheckedX86LocalUnwindContract(const BinaryImage &Image, va_t Target,
+                                 bool Indirect);
+
 /// A leaf's two separate address domains: its private invocation frame and
 /// the bounded object borrowed through entry ECX. Object offsets are relative
 /// to that object, never invented image addresses or private stack offsets.
@@ -118,18 +135,31 @@ getCheckedX86RegistrationThrowCalleeABI(const BinaryImage &Image, va_t Target,
 /// a fresh index so edits to an image cannot reuse stale callee evidence.
 class RegistrationCallCalleeIndex {
 public:
-  explicit RegistrationCallCalleeIndex(const BinaryImage &Image)
-      : Image(Image) {}
+  explicit RegistrationCallCalleeIndex(const BinaryImage &Image,
+                                       size_t *CumulativeWork = nullptr)
+      : Image(Image), Work(CumulativeWork ? *CumulativeWork : LocalWork) {}
+  RegistrationCallCalleeIndex(const RegistrationCallCalleeIndex &) = delete;
+  RegistrationCallCalleeIndex &
+  operator=(const RegistrationCallCalleeIndex &) = delete;
+  bool ownsImage(const BinaryImage &Other) const { return &Image == &Other; }
+  std::optional<uint32_t> stackPop(va_t Target);
   std::optional<std::vector<RegistrationCalleeFrameContract>>
   contracts(const LowFunc &Function);
   std::optional<std::vector<RegistrationCleanupFrameContract>>
   cleanupContracts(const LowFunc &Function);
+  std::optional<std::vector<RegistrationCalleeStackContract>>
+  stackContracts(const LowFunc &Function);
+  std::optional<std::vector<RegistrationLocalUnwindContract>>
+  localUnwindContracts(const LowFunc &Function);
 
 private:
   const BinaryImage &Image;
-  size_t Work = 0;
+  size_t LocalWork = 0;
+  size_t &Work;
+  unsigned StackDepth = 0;
   std::map<va_t, std::optional<RegistrationCalleeFrameContract>> Cache;
   std::map<va_t, std::optional<RegistrationCleanupRelayABI>> CleanupCache;
+  std::map<va_t, std::optional<uint32_t>> StackCache;
 };
 
 /// Native registration lowering currently emits caller-cleanup calls. Require

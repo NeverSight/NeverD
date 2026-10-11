@@ -3527,11 +3527,16 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
       (!Store || !Store->isSimple() || Store->getPointerAddressSpace() != 0))
     return false;
   auto *Type = Load ? Load->getType() : Store->getValueOperand()->getType();
-  // These carriers have exact C object representations. Partial-width
-  // integers and x87 have their separate exact-byte paths.
+  // Native carriers have exact C object representations. Wider _BitInt
+  // carriers can contain padding: transfer the LLVM store size and byte
+  // order, never the C object's representation. The x87 memory image has
+  // its own exact-byte path.
+  const bool WideInteger = Type->isIntegerTy() &&
+                           Type->getIntegerBitWidth() > 128 &&
+                           Type->getIntegerBitWidth() <= 512;
   const bool Integer = Type->isIntegerTy(8) || Type->isIntegerTy(16) ||
                        Type->isIntegerTy(32) || Type->isIntegerTy(64) ||
-                       Type->isIntegerTy(128);
+                       Type->isIntegerTy(128) || WideInteger;
   if (!Integer && !Type->isFloatTy() && !Type->isDoubleTy() &&
       !Type->isHalfTy() && !Type->isBFloatTy() && !Type->isPointerTy())
     return false;
@@ -3571,6 +3576,38 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
     Pointer = "&" + Pointer;
   }
   emitIndent(Indent);
+  if (WideInteger) {
+    const auto Carrier = typeToCLLVM(Type);
+    const auto AddressName = freshVar("wide_address");
+    const auto Index = freshVar("wide_byte");
+    const auto Value = Load ? getName(Load) : freshVar("wide_value");
+    OS << "{ " << (Load ? "const " : "") << "uint8_t *" << AddressName << " = ("
+       << (Load ? "const " : "") << "uint8_t *)(" << Pointer << ");\n";
+    emitIndent(Indent + 1);
+    if (Load)
+      OS << Value << " = 0;\n";
+    else
+      OS << Carrier << " " << Value << " = "
+         << integerPointerOperandStr(Store->getValueOperand()) << ";\n";
+    emitIndent(Indent + 1);
+    OS << "for (unsigned " << Index << " = 0; " << Index << " < "
+       << Size.getFixedValue() << "; ++" << Index << ")\n";
+    const std::string ByteIndex =
+        Layout.isLittleEndian()
+            ? Index
+            : "(" + std::to_string(Size.getFixedValue() - 1) + " - " + Index +
+                  ")";
+    emitIndent(Indent + 2);
+    if (Load)
+      OS << Value << " |= (" << Carrier << ")" << AddressName << "[" << Index
+         << "] << (8 * " << ByteIndex << ");\n";
+    else
+      OS << AddressName << "[" << Index << "] = (uint8_t)(" << Value
+         << " >> (8 * " << ByteIndex << "));\n";
+    emitIndent(Indent);
+    OS << "}\n";
+    return true;
+  }
   if (UnalignedTypesWritten) {
     if (auto Alias = c_memory::alias(typeToCLLVM(Type), Opts.ScalarPointers);
         !Alias.empty()) {
@@ -3874,12 +3911,49 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     const auto Helper = FPStateHelperNames.find(*Shape);
     if (Helper == FPStateHelperNames.end())
       llvm::report_fatal_error("uncollected x86 FP state C helper");
+    if (isX86FPApprox12Intrinsic(Id)) {
+      const std::string Source =
+          Id == Intrinsic::X86FPApprox12MemoryState
+              ? "(void*)(uintptr_t)(" +
+                    integerPointerOperandStr(Call.getArgOperand(0)) + ")"
+              : BitcastInput(0);
+      const std::string Expression = Helper->second + "(" + Source + ")";
+      if (!Call.use_empty())
+        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Call.getType())
+           << ", " << Expression << ");\n";
+      else
+        OS << "(void)" << Expression << ";\n";
+      return true;
+    }
     if (isX86FPConversionStateIntrinsic(Id)) {
       const std::string Expression = Helper->second + "(" + BitcastInput(0) +
                                      ", (void*)" +
                                      valueStr(Call.getArgOperand(1)) + ")";
       if (!Call.use_empty())
         OS << Name << " = " << Expression << ";\n";
+      else
+        OS << "(void)" << Expression << ";\n";
+      return true;
+    }
+    if (isX86FPArithStateIntrinsic(Id)) {
+      const bool Memory = Id == Intrinsic::X86FPArithMemoryState;
+      const bool Unary = x86FPArithStateIsUnary(x86FPRoundStateControl(Bytes));
+      const std::string Left =
+          Unary ? "(" + x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ")0"
+                : BitcastInput(0);
+      const std::string Right =
+          Memory ? "(void*)(uintptr_t)(" +
+                       integerPointerOperandStr(
+                           Call.getArgOperand(Unary ? 0 : 1)) +
+                       ")"
+                 : BitcastInput(Unary ? 0 : 1);
+      const std::string Expression =
+          Helper->second + "(" +
+          (Memory ? Right + ", " + Left : Left + ", " + Right) + ", (void*)" +
+          valueStr(Call.getArgOperand(Unary ? 1 : 2)) + ")";
+      if (!Call.use_empty())
+        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Call.getType())
+           << ", " << Expression << ");\n";
       else
         OS << "(void)" << Expression << ";\n";
       return true;
@@ -3913,6 +3987,11 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   std::string AsmStr = IA->getAsmString().str();
   if (llvm::StringRef(AsmStr).contains("rdssp"))
     llvm::report_fatal_error("unowned shadow stack read C projection");
+  if (llvm::StringRef(AsmStr).contains("rcpss ") ||
+      llvm::StringRef(AsmStr).contains("rcpps ") ||
+      llvm::StringRef(AsmStr).contains("rsqrtss ") ||
+      llvm::StringRef(AsmStr).contains("rsqrtps "))
+    llvm::report_fatal_error("unowned x86 approximate reciprocal C projection");
   if (AsmStr.empty())
     return false;
 
@@ -4688,8 +4767,10 @@ LLVMCWriter::joinAllocaForCallArg(const llvm::Value *Arg,
 }
 
 namespace {
-TypeRef debugCallArgType(const FunctionSym &FS, size_t Index) {
-  const bool Indirect = isMsvcIndirectReturn(FS.ReturnType);
+TypeRef debugCallArgType(const FunctionSym &FS, size_t Index,
+                         const CEmitterOptions &Opts) {
+  const bool Indirect =
+      isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format);
   const bool Member =
       Indirect && !FS.Params.empty() && FS.Params[0].first == "this";
   if (Member) {
@@ -4765,7 +4846,7 @@ TypeRef LLVMCWriter::enumTypeUsedAsCallArg(const llvm::AllocaInst *Slot) const {
       for (unsigned I = 0; I < CB->arg_size(); ++I) {
         if (peelIntCast(CB->getArgOperand(I)) != LI)
           continue;
-        TypeRef Ty = debugCallArgType(*FS, I);
+        TypeRef Ty = debugCallArgType(*FS, I, Opts);
         if (Ty && Ty->Kind == NdTypeKind::Struct && Ty->IsEnum)
           return Ty;
       }
@@ -4932,7 +5013,7 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
   if (const auto *CI =
           llvm::dyn_cast<llvm::ConstantInt>(peelIntegerView(Arg))) {
     if (const auto FS = debugCallee(Call))
-      if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx),
+      if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts),
                                         CI->getZExtValue()))
         return *Name;
   }
@@ -4940,7 +5021,8 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
     uint64_t Val = 0;
     if (!llvm::StringRef(*Imm).getAsInteger(0, Val))
       if (const auto FS = debugCallee(Call))
-        if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx), Val))
+        if (auto Name =
+                enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts), Val))
           return *Name;
   }
   return valueStr(Arg);

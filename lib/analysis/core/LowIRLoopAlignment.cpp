@@ -112,10 +112,8 @@ class AlignmentSearch {
         queryGrant(Stage.Execution.MaxSolverQueries);
     Stage.MaxCutSelectionWork = std::min(
         Stage.MaxCutSelectionWork, Limits.MaxSearchWork - Result.SearchWork);
-    auto R = Family == CutFamily::Default
-                 ? inferLowIRLoopRefinementPlan(F, Contract, Stage, Eligible)
-                 : detail::inferLowIRLoopRefinementPlanFamily(
-                       F, Contract, Stage, Family, Previous);
+    auto R = detail::inferLowIRLoopRefinementPlanFamily(
+        F, Contract, Stage, Family, Previous, Limits.MaxCuts, Eligible);
     Result.SolverQueries += R.SolverQueries;
     charge(R.CutSelectionWork);
     AttemptExhausted |= R.Status == LowIRLoopInferenceStatus::BudgetExceeded;

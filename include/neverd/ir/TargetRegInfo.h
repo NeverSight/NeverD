@@ -350,12 +350,22 @@ struct TargetRegInfo {
   /// stride is 8 yet each S lane is 4 bytes, so those high-half lanes are not
   /// isVectorReg even though they are valid FP-argument registers.
   bool isFPArgReg(uint64_t RegOff) const {
-    for (uint64_t Reg : FPParamRegs)
+    return isFPArgReg(RegOff, BinaryFormat::Unknown);
+  }
+
+  /// Floating argument bank of the selected ABI. Win64 uses XMM0-XMM3 in
+  /// positional slots; the ordinary x86-64 bank also includes XMM4-XMM7.
+  llvm::ArrayRef<uint64_t> floatingParamRegs(BinaryFormat Format) const;
+
+  /// Format-aware membership, including ARM's high-half single registers.
+  bool isFPArgReg(uint64_t RegOff, BinaryFormat Format) const {
+    const auto Registers = floatingParamRegs(Format);
+    for (uint64_t Reg : Registers)
       if (Reg == RegOff)
         return true;
-    if (TheArch == Arch::ARM && VecRegStride == 8 && !FPParamRegs.empty())
+    if (TheArch == Arch::ARM && VecRegStride == 8 && !Registers.empty())
       return RegOff >= VecRegBase &&
-             RegOff < VecRegBase + 4 * (2 * FPParamRegs.size()) &&
+             RegOff < VecRegBase + 4 * (2 * Registers.size()) &&
              ((RegOff - VecRegBase) % 4 == 0);
     return false;
   }

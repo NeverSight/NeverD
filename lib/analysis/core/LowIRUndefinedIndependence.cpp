@@ -5939,7 +5939,8 @@ public:
   run(llvm::ArrayRef<va_t> Eligible,
       detail::LowIRLoopCutFamily Family = detail::LowIRLoopCutFamily::Default,
       llvm::ArrayRef<const LowIRLoopRefinementPlan *> PreviousPlans = {},
-      llvm::ArrayRef<detail::NativeLoopCutpointOrigin> NativeOrigins = {}) {
+      llvm::ArrayRef<detail::NativeLoopCutpointOrigin> NativeOrigins = {},
+      uint32_t MaxPlanCuts = UINT32_MAX) {
     std::string LastTemplateFailure;
     const bool BranchArms = Family != detail::LowIRLoopCutFamily::Default;
     const bool FilterBranches =
@@ -5989,6 +5990,11 @@ public:
       if (!Feedback)
         stop(Status::Unsupported,
              "eligible cutpoints do not cover every cycle");
+      // A caller may admit fewer cuts than it permits cutpoint attempts.
+      // Keep complete graph validation/coverage and single-cut retries, but
+      // do not spend symbolic queries constructing an inadmissible plan.
+      if (Feedback->size() > MaxPlanCuts)
+        stop(Status::BudgetExceeded, "loop inference plan cut count exceeded");
       for (const auto *Previous : PreviousPlans)
         if (BranchArms && Feedback->size() == Previous->Cutpoints.size() &&
             std::all_of(Feedback->begin(), Feedback->end(), [&](va_t Address) {
@@ -6081,9 +6087,10 @@ LowIRLoopInferenceResult detail::inferBranchArmLowIRLoopRefinementPlan(
 LowIRLoopInferenceResult detail::inferLowIRLoopRefinementPlanFamily(
     const LowFunc &Candidate, const LowIRIndependenceContract &Contract,
     const LowIRLoopInferenceLimits &Limits, LowIRLoopCutFamily Family,
-    llvm::ArrayRef<const LowIRLoopRefinementPlan *> PreviousPlans) {
+    llvm::ArrayRef<const LowIRLoopRefinementPlan *> PreviousPlans,
+    uint32_t MaxPlanCuts, llvm::ArrayRef<va_t> EligibleCutpoints) {
   return LoopPlanInference(Candidate, Contract, Limits)
-      .run({}, Family, PreviousPlans);
+      .run(EligibleCutpoints, Family, PreviousPlans, {}, MaxPlanCuts);
 }
 
 std::optional<detail::NativeLoopStateProposalFailure>

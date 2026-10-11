@@ -7,6 +7,7 @@
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/lift/X86Regs.h"
 
 #include <algorithm>
@@ -80,6 +81,9 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
         if (RuntimeTransfer.read(Op.Inputs[Input]).MayBeFrame)
           CompleteRuntimeObjects = false;
     recordCatchReturn(I, After, Op, Transfer, CatchReturn);
+    if (!KnownCxx && After.Callback && Op.Opcode == NdOp::RETURN &&
+        (!callbackCanReturn(After) || !callbackReturnInstruction(I, Op)))
+      Invalidate();
     if (Op.Seq >= 0 && Op.Output.Size != 0 && Value.MayBeFrame) {
       if (!charge(1))
         break;
@@ -386,16 +390,59 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       }
     }
     std::optional<FrameValue> CallSP;
+    bool CheckedCall = false;
     if (auto Call = transferCall(I, After, Op)) {
+      CheckedCall = true;
       CallSP = Call->StackPointer;
       NoReturnAtExit = Call->DoesNotReturn;
       if (NoReturnAtExit)
         NoReturnEnd = Call->EndAddress;
     }
+    if (auto SP = transferLocalUnwind(I, After, Op))
+      CallSP = *SP;
+    // The CFG's exact instruction already owns the no-return decision.
+    // A missing memory-borrow contract cannot create an ordinary return from
+    // it. Keep transferCall's refusal and the exceptional dispatch below.
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+      const auto It = Boundaries.find(Op.Addr);
+      if (Op.Seq >= 0 && It != Boundaries.end() &&
+          It->second.first == Block.Id) {
+        const auto &Insn = It->second.second;
+        const size_t OpIndex = &Op - Block.Ops.data();
+        if (Insn.Control == LowInstructionControl::Call &&
+            isUnconditionalNoReturn(Insn) && OpIndex >= Insn.FirstOp &&
+            OpIndex - Insn.FirstOp < Insn.OpCount &&
+            Insn.FirstOp <= Block.Ops.size() &&
+            Insn.OpCount <= Block.Ops.size() - Insn.FirstOp) {
+          NoReturnAtExit = true;
+          NoReturnEnd = Insn.Address + Insn.Size;
+        }
+      }
+    }
+    // Stack balance alone does not discharge transferCall's memory, object
+    // initialization or no-return obligations. Retain their refusal while
+    // recovering the independent register coordinate for ordinary flow.
+    if (!CallSP && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+        Op.NumInputs == 1 && Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4) {
+      const auto It =
+          StackPops.find({Op.Inputs[0].Offset, Op.Opcode == NdOp::INDIR_CALL});
+      const auto Boundary = Boundaries.find(Op.Addr);
+      if (It != StackPops.end() && Op.Seq >= 0 &&
+          Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
+          Boundary->second.second.Control == LowInstructionControl::Call) {
+        LowOp Adjust;
+        Adjust.Opcode = NdOp::INT_ADD;
+        Adjust.Output = NdVar::reg(x86reg::RSP, 4);
+        Adjust.NumInputs = 2;
+        Adjust.Inputs[0] = Adjust.Output;
+        Adjust.Inputs[1] = NdVar::cst(It->second, 4);
+        CallSP = Transfer.evaluate(Adjust, After.Installed);
+      }
+    }
     Transfer.write(Op, Value, CookieCheckVA);
     if (CheckRuntimeObjects) {
       RuntimeTransfer.write(Op, RuntimeValue);
-      if (CallSP) {
+      if (CheckedCall) {
         After.RuntimeObject
             .Registers[x86reg::RAX / x86reg::GeneralRegStride] = {};
         After.RuntimeObject

@@ -17,10 +17,13 @@ namespace neverd::registration_state {
 RegistrationStateSolver::RegistrationStateSolver(
     const LowFunc &Function, va_t SecurityCookieVA, va_t CookieCheckVA,
     const std::vector<RegistrationCalleeFrameContract> *Callees,
-    const std::vector<RegistrationCleanupFrameContract> *Cleanups)
+    const std::vector<RegistrationCleanupFrameContract> *Cleanups,
+    const std::vector<RegistrationCalleeStackContract> *Stacks,
+    const std::vector<RegistrationLocalUnwindContract> *LocalUnwinds)
     : Function(Function), EH(*Function.ExceptionMetadata),
       Chain(*EH.Registration), SecurityCookieVA(SecurityCookieVA),
       CookieCheckVA(CookieCheckVA), Callees(Callees), Cleanups(Cleanups),
+      Stacks(Stacks), LocalUnwinds(LocalUnwinds),
       KnownCxx(EH.Encoding == ExceptionEncoding::X86CxxFuncInfo &&
                (EH.Personality == ExceptionPersonality::CxxFrameHandlerX86 ||
                 EH.Personality == ExceptionPersonality::CxxFrameHandler3)),
@@ -190,11 +193,14 @@ namespace neverd {
 RegistrationStateAnalysis analyzeRegistrationStates(
     const LowFunc &Function, va_t SecurityCookieVA, va_t CookieCheckVA,
     const std::vector<RegistrationCalleeFrameContract> *Callees,
-    const std::vector<RegistrationCleanupFrameContract> *Cleanups) {
+    const std::vector<RegistrationCleanupFrameContract> *Cleanups,
+    const std::vector<RegistrationCalleeStackContract> *Stacks,
+    const std::vector<RegistrationLocalUnwindContract> *LocalUnwinds) {
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Registration)
     return {};
   return registration_state::RegistrationStateSolver(
-             Function, SecurityCookieVA, CookieCheckVA, Callees, Cleanups)
+             Function, SecurityCookieVA, CookieCheckVA, Callees, Cleanups,
+             Stacks, LocalUnwinds)
       .run();
 }
 } // namespace neverd

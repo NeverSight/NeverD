@@ -40,8 +40,9 @@ struct DarwinExtendedAttribute {
 
 /// Fixed stat64 observations. Regular-file Size must match its bytes; directory
 /// Size is an explicit nonnegative observation, not an entry count.
-/// These observations do not grant or revoke catalogue access, and reads do
-/// not advance timestamps. Unknown metadata is not synthesized from the host.
+/// These observations alone do not authorize catalogue access. The explicit
+/// static query environments can use Mode/UID/GID; reads do not advance
+/// timestamps. Unknown metadata is not synthesized from the host.
 struct DarwinFileMetadata {
   int32_t Device = 0;
   uint64_t Inode = 0;
@@ -168,11 +169,32 @@ struct DarwinDirectoryEnumerationPolicy {
   bool BulkAttributes = false;
 };
 
+/// Immutable ordinary local authorization for access/faccessat only.
+/// Declares no ACL, MAC, additional kauth listener, entitlement or other
+/// permission bypass; a writable/executable nonopaque local mount with
+/// ownership enabled; flags=0 and no special mode bits. Actual checks require
+/// explicit credentials, metadata and a nonzero selected UID. Root and general
+/// vnode authorization remain unsupported. Other vnode operations are
+/// closed; existing opaque standard streams remain independent.
+enum class DarwinFileAuthorization {
+  /// Actual checks require a matching owner UID; nonowners stay unsupported.
+  StaticOwnerQueries,
+  /// Same closed ordinary environment, with nonowner queries when whole-mask
+  /// group/world outcomes agree or explicit credentials prove membership.
+  /// A missing in-credential group is usually unknown external membership;
+  /// the real-credential displacement may make an explicit list authoritative.
+  /// Selected root and general vnode operations remain unsupported.
+  StaticOrdinaryQueries
+};
+
 /// Closed initial catalogue, with canonical absolute guest paths. No host
 /// filesystem is consulted. Separate opens have independent offsets; dup
 /// shares an open description. Ancestor directories are implicit.
 struct DarwinFileOptions {
   std::map<std::string, std::vector<uint8_t>> Files;
+  /// Absence retains existence-only queries without permission enforcement.
+  /// This declaration never infers missing credentials or metadata.
+  std::optional<DarwinFileAuthorization> Authorization;
   /// Absent means unknown input; an explicitly empty stream is EOF.
   std::optional<std::vector<uint8_t>> StandardInput;
   /// Exclusive FD ceiling, including the initially open descriptors 0/1/2.

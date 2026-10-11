@@ -283,9 +283,9 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           return false;
         unsigned Pop = 0;
         if (Op.NumInputs == 1 && Op.Inputs[0].isConst())
-          if (const auto *Import = Image.findImportAt(Op.Inputs[0].Offset))
-            if (Import->Name == "RaiseException")
-              Pop = 16;
+          if (auto Known =
+                  checkedRegistrationImportStackPop(Image, Op.Inputs[0].Offset))
+            Pop = *Known;
         if (int64_t(*SP) + Pop > INT32_MAX)
           return false;
         AfterCallSP = int32_t(int64_t(*SP) + Pop);

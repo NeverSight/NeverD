@@ -203,6 +203,81 @@ int main(void) {
   EXPECT_EQ(Executed.exitCode, 0) << Source;
 }
 
+TEST_F(AArch64_FP, SeparateArithmeticKeepsItsRoundingThroughBothCRoutes) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "floating-point source execution requires Clang";
+  const auto Assembly = tmpFile("unfused-ops.s");
+  const auto Object = tmpFile("unfused-ops.o");
+  {
+    std::ofstream Out(Assembly);
+    Out << ".text\n";
+    for (const auto &[Lane, Word] :
+         {std::pair{"h", "w"}, {"s", "w"}, {"d", "x"}}) {
+      const auto Name = std::string("unfused_") + Lane;
+      Out << ".global " << Name << "\n.type " << Name << ",%function\n"
+          << Name << ":\n";
+      for (unsigned I = 0; I != 3; ++I)
+        Out << "  fmov " << Lane << I << ", " << Word << I << '\n';
+      Out << "  fmul " << Lane << "3, " << Lane << "0, " << Lane << "1\n"
+          << "  fadd " << Lane << "0, " << Lane << "3, " << Lane << "2\n"
+          << "  fmov " << Word << "0, " << Lane << "0\n"
+          << "  ret\n.size " << Name << ",.-" << Name << '\n';
+    }
+  }
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG,
+           {"-target", "aarch64-none-elf", "-march=armv8.2-a+fp16", "-c",
+            Assembly.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  // Each multiplication rounds to one, so adding minus one yields zero.
+  // A fused multiply-add instead yields minus epsilon squared in all widths.
+  const std::string Harness = R"C(
+int main(void) {
+  if ((uint16_t)unfused_h(0x3c01, 0x3bfe, 0xbc00) != 0) return 1;
+  if ((uint32_t)unfused_s(0x3f800001, 0x3f7ffffe, 0xbf800000) != 0) return 2;
+  if ((uint64_t)unfused_d(UINT64_C(0x3ff0000000000001),
+                          UINT64_C(0x3feffffffffffffe),
+                          UINT64_C(0xbff0000000000000)) != 0) return 3;
+  return 0;
+}
+)C";
+  for (bool LLVMRoute : {false, true}) {
+    SCOPED_TRACE(LLVMRoute);
+    const auto Decompiled =
+        LLVMRoute ? decompileToC(Object) : decompileToHighC(Object);
+    ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+    std::ifstream Input(
+        tmpFile(LLVMRoute ? "decompiled.c" : "decompiled_high.c"));
+    ASSERT_TRUE(Input.good());
+    const std::string Source((std::istreambuf_iterator<char>(Input)),
+                             std::istreambuf_iterator<char>());
+    const auto CFile = tmpFile("unfused-host.c");
+    std::ofstream(CFile) << Source << Harness;
+    // Check the affected architecture even on a host without native FP16/FMA.
+    // The test harness uses no library, so no target SDK or emulator is needed.
+    const auto IRFile = tmpFile("unfused-aarch64.ll");
+    const auto CrossCompiled =
+        exec(NEVERD_TEST_CLANG,
+             {"-target", "aarch64-none-elf", "-march=armv8.2-a+fp16",
+              "-ffreestanding", "-O2", "-S", "-emit-llvm", CFile.string(), "-o",
+              IRFile.string()});
+    ASSERT_EQ(CrossCompiled.exitCode, 0) << CrossCompiled.err << Source;
+    std::ifstream IRInput(IRFile);
+    const std::string IR((std::istreambuf_iterator<char>(IRInput)),
+                         std::istreambuf_iterator<char>());
+    EXPECT_EQ(IR.find("@llvm.fmuladd."), std::string::npos) << IR;
+    EXPECT_EQ(IR.find("@llvm.fma."), std::string::npos) << IR;
+    for (const auto Optimization : {"-O0", "-O2"}) {
+      const auto Program = tmpFile("unfused-host.exe");
+      const auto Compiled =
+          exec(NEVERD_TEST_CLANG, {"-std=gnu11", Optimization, CFile.string(),
+                                   "-lm", "-o", Program.string()});
+      ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err << Source;
+      EXPECT_EQ(exec(Program.string(), {}).exitCode, 0) << Source;
+    }
+  }
+}
+
 TEST_F(AArch64_FP, FaddLifts) {
   verifyLowIRContains(testObj(), "test_fadd_a64", "FLOAT_ADD");
 }

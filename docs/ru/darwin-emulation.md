@@ -1,6 +1,6 @@
 **Языки**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 1939e117643388dff149085b992e1ad646feefca63b630abec9b09122e15c2f1 -->
+<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
 
 [← Оглавление документации](README.md)
 
@@ -630,7 +630,7 @@ macOS ARM64 Release зарегистрировано/пройдено/skip бе�
 
 ## Явные учётные данные, группы и согласованный владелец
 
-Необязательные Credentials содержат RealUID/EffectiveUID/RealGID/EffectiveGID и отдельно необязательный GroupAccessList. Без Credentials четыре getter1000; явный0/root допустим, ID0..INT32_MAX. Групп1..16, первая=EffectiveGID, порядок/повторы сохраняются; отсутствие неизвестно, host/EGID не выводятся. darwin_system.credentials требует ровно real_uid/effective_uid/real_gid/effective_gid, groups необязателен. Целые без потерь/центральная проверка отвергают форму/поля/диапазон/число/первую несогласованность до загрузки; неDarwin также.
+Необязательные Credentials содержат RealUID/EffectiveUID/RealGID/EffectiveGID и отдельно необязательные GroupAccessList и GroupMembershipUID. Без Credentials четыре getter1000; явный0/root допустим, четыре скалярных ID/элементы группы0..INT32_MAX; отдельный диапазон GroupMembershipUID ниже. Групп1..16, первая=EffectiveGID, порядок/повторы сохраняются; отсутствие неизвестно, host/EGID не выводятся. darwin_system.credentials требует ровно real_uid/effective_uid/real_gid/effective_gid, groups и group_membership_uid независимо необязательны. Целые без потерь/центральная проверка отвергают форму/поля/диапазон/число/первую несогласованность до загрузки; неDarwin также.
 
 getuid24/geteuid25/getgid47/getegid43/getgroups79 имеют одного владельца system. Новый обычный файл использует эффективныйUID, device/GID прямого родителя; rename/сохранённыеFD/повтор имени сохраняют объект, входнойstat неизменён. Root не даёт прав записи/мутации/ACL; setuid/setgid/setgroups и процесс/сессия отсутствуют.
 
@@ -1039,3 +1039,126 @@ owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU thread_selfid ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [libpthread current-thread owner](https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_support.c).
+
+## Явные наблюдения собственных портов Mach
+
+Сырые Mach-вызовы thread_self_trap27, task_self_trap28 и host_self_trap29 читают независимые необязательные uint32-наблюдения DarwinSystemOptions::ThreadSelfPort, TaskSelfPort, HostSelfPort через darwin_system.thread_self_port, task_self_port, host_self_port. Каждому запросу нужно только своё поле. Отсутствие остаётся неизвестным и останавливает UnsupportedService; ноль, одинаковые имена и все32-битные шаблоны явны. Допустимы точные числа или десятичные строки до UINT32_MAX, без положительных pid_t-ограничений process_group_id/session_id.
+
+Владелец системы преобразует имя через знаковый int32-результат ядра в raw64: 0x80000001 даёт0xffffffff80000001, UINT32_MAX даётUINT64_MAX. Mach-привязка сохраняет флаги и X1/RDX, правила перезаписи x64 RCX/R11, игнорирует аргументы и не обращается к памяти. Разрешение low32 сохраняет полный сырой номер события. Запросы Mach пропускают BSD error и не создают ThreadID планировщика. Повторное использование и независимые настройки не изменяют наблюдения.
+
+Исходная подготовка ARM64 O0/O1/O2 сохраняет432 наблюдения, все16 NZCV, high32-префиксы, начальные регистры и сравнение SDK. Нативные имена с bit31 не наблюдались; старшее знаковое расширение основано на закреплённом пути возврата XNU и независимых литеральных тестах модели/гостя/API. Общая нативная программа сравнивает только отношения внутри процесса; виртуальные имена и отсутствие входов исключены из детерминированных нативных эталонов. Это не выделяет имён/ссылок отправки и не подтверждает живые права, уникальность, IPC/жизненный цикл/планирование. Права/ACL, ожидание готовности, движущиеся часы, реальные Mach IPC/потоки, dyld/TLS и полные runtime/framework остаются неполными. Нативные Intel HVF и физический iOS не проверены.
+
+```json
+{"darwin_system":{"thread_self_port":2147483649,"task_self_port":0,"host_self_port":"4294967295"}}
+```
+
+```text
+Mach thread_self_trap27 / task_self_trap28 / host_self_trap29
+ThreadSelfPort / TaskSelfPort / HostSelfPort / uint32 / signed-int32 -> raw64
+known0 / missing -> UnsupportedService / no arguments or memory
+low32 resolution / complete raw number / flags and RDX-X1 preserved / no BSD error
+mach-self-ports / mach-self-port-values / mach-self-port-missing
+MachSelfPortsPreserveExplicitBitsAndIndependentRuns
+6 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+70 mandatory workloads per platform / ARM64 210 / Intel 140 unverified
+original ARM64 O0/O1/O2 probes432 / no native bit31 name observed
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU Mach trap table](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/syscall_sw.c), [self-port name owners](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/ipc_tt.c), [host-port owner](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/ipc_host.c), [ARM64 return](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/arm64/bsd_arm64.c), [x64 return](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/i386/bsd_i386.c).
+
+
+## Статические запросы прав обычного владельца
+
+darwin_files.authorization="static-owner-queries" (DarwinFileAuthorization::StaticOwnerQueries) явно задаёт неизменяемую обычную локальную среду: без ACL, MAC, дополнительных слушателей kauth, entitlement и обходов; доступное для записи и исполнения не opaque монтирование с проверкой владельца; flags=0, специальных битов нет. Сами наблюдения прав не дают. Поддержаны только запросы access/faccessat.
+
+Проверка требует явных darwin_system.credentials и метаданных настоящего объекта. access выбирает real_uid; AT_EACCESS — effective_uid для SEARCH и итоговых R/W/X. Выбранный UID ненулевой и совпадает с владельцем, нужны все запрошенные owner-биты. Известный отказ возвращает EACCES13 и прежний BSD carry. Неизвестные данные, выбранный UID0, чужой владелец, расширенные действия и R/W/X сохранённой конечной ссылки останавливают UnsupportedService; невыбранный UID0 допустим. Хост, UID1000, группы/прочие и root-исключения не выводятся.
+
+SEARCH проверяет X родительского объекта до поиска ребёнка, отсутствующего имени, применимых точек/двух точек и повторного прохода ссылки. F_OK/игнорируемые биты требуют только реальный SEARCH. Корень из одних слешей и ограниченное корнем dotdot не требуют SEARCH; поглощённый конечный слеш не добавляет итоговую проверку. Порядок flags/копирования/относительного dirfd/пустого имени сохранён. Name255 — предел доступности: после разрешённого SEARCH превышение Unsupported, отказ раньше EACCES, неизвестность раньше остановка, errno файловой системы не угадывается.
+
+Остальные файловые операции, включая open/stat/chdir/readlink/атрибуты/перечисление/мутации, остановлены до эффектов. Только реальные Input/Output/Error и dup-алиасы сохраняют I/O, close, dup/dup2, lseek, fcntl; номера FD0/1/2 не дают исключения. Файловые mmap/mappingSource закрыты, анонимная память независима. Общий C++/JSON отклоняет права/политики изменения/создания, известные flags/спецбиты и inode/device-алиасы; неизвестные данные и256 записей/16MiB сохранены.
+
+Пример задаёт SEARCH корня и файл0400: чтение разрешено, запись EACCES, open не поддержан. ARM64 O0/O1/O2 сохраняет2472 raw/SDK пары,2439 независимых литералов,33 только наблюдения при compile120s/native5s. fstatx/filesec подтверждает отсутствие ACL. Первый NULL/ENOENT — ошибка протокола до запросов, запись сохранена. Native real/effective одинаковы; разный выбор подтверждает фиксированный источник/модель. Все глобальные hooks/opaque внутренности не проверены. owner-queries исключён из58 детерминированных native эталонов. Группы/root/ACL/MAC, динамические credentials, общие vnode-права, ожидание, часы, Mach IPC/потоки, dyld/TLS и полные runtime остаются незавершёнными; Intel HVF и физический iOS не проверены.
+
+```json
+{"darwin_files":{"authorization":"static-owner-queries","files":[{"path":"/data","bytes_hex":"00","metadata":{"device":7,"inode":2,"mode":33024,"link_count":1,"uid":501,"gid":20,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16832,"link_count":2,"uid":501,"gid":20,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":501,"real_gid":20,"effective_gid":20}}}
+```
+
+```text
+DarwinFileAuthorization::StaticOwnerQueries / authorization=static-owner-queries
+access33 / faccessat466 / real_uid / effective_uid / AT_EACCESS0x10
+owner R/W/X / all requested bits / directory SEARCH / EACCES13
+no-action root LOOKUP / root-clamped dotdot / consumed terminal separators
+unknown credentials-metadata-root-nonowner -> UnsupportedService
+all other vnode routes closed / typed standard streams and dup aliases only
+anonymous memory independent / file-backed mmap and mappingSource closed
+Name255 availability stop after allowed SEARCH / no guessed filesystem errno
+owner-queries / owner-query-stop / owner-query-open / owner-query-map
+OwnerQueriesKeepPermissionAndUnknownBoundaries
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+original ARM64 O0/O1/O2 pairs2472 / literal2439 / capture-only33
+native5s / compile120s / owner-build1200s / guest-Python5,000,000us
+```
+[XNU access and subject selection](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_syscalls.c), [real credential copy](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c), [owner authorization](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_subr.c), [pathname SEARCH](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_lookup.c), [cached lookup](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_cache.c), [Libc ACL properties](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/gen/filesec.c), [fstatx ACL absence](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/sys/statx_np.c).
+
+## Статические обычные запросы с частично известными группами
+
+`darwin_files.authorization="static-ordinary-queries"` (DarwinFileAuthorization::StaticOrdinaryQueries) сохраняет неизменяемые условия монтирования, безопасности и метаданных предыдущего раздела, закрытые файловые операции, исключения стандартных потоков и независимую анонимную память. static-owner-queries остаётся только для владельца. Реальная проверка требует явных учётных данных, метаданных и ненулевого выбранного UID; root, расширенные права и R/W/X конечной ссылки не поддерживаются.
+
+Владелец использует все запрошенные биты своей категории. Для другого пользователя сравниваются результаты группы и остальных для полной маски. Равные результаты дают разрешение или EACCES13 без поиска членства; разные наборы битов также могут оба отказать. Иначе известный участник использует группу, доказанный неучастник — остальных, а неизвестное членство останавливает UnsupportedService до поиска или эффектов. Категории не смешиваются.
+
+credentials.groups — упорядоченный список групп в учётных данных ядра с EffectiveGID на позиции0 и сохранёнными повторами, а не расширенный список резолвера SDK getgroups. Выбранная основная группа и явное положительное вхождение известны; отсутствие или пропуск списка обычно не доказывает отрицание. При совпадении обеих пар UID/GID реальный контекст сохраняется. Иначе RealGID заменяет позицию0, а прежний EffectiveGID заменяет первое дополнительное вхождение RealGID. Без совпадения прежняя основная группа удаляется и memberd отключается. Это доказанное преобразование или явно исходный KAUTH_UID_NONE вместе с явным полным списком позволяет отрицательные ответы. Разные UID при одинаковых GID тоже вызывают преобразование; повтор основной группы может сохранить неизвестное внешнее членство. AT_EACCESS использует исходный эффективный контекст; входные данные неизменны.
+
+В примере реальный запрос получает отказ после вытеснения GID20, а AT_EACCESS разрешён известной эффективной основной группой20. SEARCH определяется совпадением результатов группы/остальных; выбранный UID0 и открытие файла не разрешаются.
+
+```json
+{"darwin_files":{"authorization":"static-ordinary-queries","files":[{"path":"/data","metadata":{"device":7,"inode":2,"mode":32816,"link_count":1,"uid":700,"gid":20,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}},"bytes_hex":"00"}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16895,"link_count":2,"uid":0,"gid":0,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":502,"real_gid":30,"effective_gid":20,"groups":[20,40]}}}
+```
+
+Нативные проверки ARM64 O0/O1/O2 только для чтения сохраняют270 пар raw/SDK для чужих объектов, SEARCH, ошибок, идентичности и независимого отсутствия свойства ACL. Сырой список учётных групп имеет16 элементов, расширенный SDK —17. Первый запуск ошибочно ограничил длину SDK до запросов прав; неудача сохранена. Реальные/эффективные ID равны: различия и полные преобразования доказываются фиксированным XNU и независимыми моделями, а не нативной проверкой всех внешних механизмов. Пять программных и три ARM64 HVF конфигурации проверяют настоящего гостя, C/CLI/Python, неизвестные идентичности, метаданные, root и членство. Предоставленная модель не входит в58 общих нативных эталонов. Полное разрешение групп, root, ACL/MAC, общие vnode, динамические данные, готовность/сеть, ход часов, Mach IPC/потоки, dyld/TLS и полные фреймворки остаются незавершёнными; нативный Intel HVF и физический iOS не проверены. Сроки не меняются.
+
+```text
+DarwinFileAuthorization::StaticOrdinaryQueries / authorization=static-ordinary-queries
+owner bits / whole-mask group-world outcomes / EACCES13
+credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
+real credential copy / first supplementary match / displacement disables memberd
+missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
+all40 other file routes and direct/file-backed mappings closed / typed streams only
+ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
+OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+original ARM64 O0/O1/O2 nonowner pairs270 / raw-groups16 / SDK-extended-groups17
+native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU ordinary mode authorization](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_subr.c), [real credential and group membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c), [raw in-credential getgroups](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_prot.c), [SDK extended getgroups](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/sys/getgroups.c).
+
+## Явный исходный контекст членства в группах
+
+Необязательный `DarwinCredentials::GroupMembershipUID` / `darwin_system.credentials.group_membership_uid` объявляет исходный cr_gmuid независимо от четырёх ID и groups. Допустимы0..INT32_MAX или ровно KAUTH_UID_NONE=4294967195 (0xffffff9b, UINT32_MAX минус100). Используется существующий декодер точных числовых целых и десятичных строк без потерь; неверные типы, дроби, отрицательные и другие недопустимые значения отвергаются до загрузки. Маркер остаётся недопустимым в обычных UID/GID и группах. Пропуск и другие допустимые UID не доказывают внешнее нечленство и не включают резолвер.
+
+Основная группа и положительные вхождения известны прежде всего. Исходный NONE с явным полным списком доказывает нечленство отсутствующей записи; без списка оно неизвестно. Реальная копия сохраняет исходный NONE даже при первом дополнительном совпадении, сохраняющем прежнюю основную группу; доказанное вытеснение также отключает внешнее разрешение. Скалярные запросы, raw getgroups, владение при создании и прежние режимы не меняются. Тот же владелец запросов выбирает права остальных и проверяет SEARCH до поиска потомка; остальные операции vnode закрыты.
+
+Вызывающий в примере не входит в GID50: обе идентичности читают /data, запрос права записи возвращает EACCES13. Без group_membership_uid различные результаты группы/остальных остаются неподдержанными.
+
+```json
+{"darwin_files":{"authorization":"static-ordinary-queries","files":[{"path":"/data","bytes_hex":"00","metadata":{"device":7,"inode":2,"mode":32772,"link_count":1,"uid":700,"gid":50,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16895,"link_count":2,"uid":0,"gid":0,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":501,"real_gid":20,"effective_gid":20,"groups":[20],"group_membership_uid":4294967195}}}
+```
+
+Локальные исполнения SDK O0/O1/O2 проверяют лишь маркер и четырёхбайтовый uid_t, не наблюдают cr_gmuid хоста или резолвер и не заменяют прежние270 фактических пар raw/SDK. ordinary-queries-closed-groups проверяет173 события, отказы эффективным нечленам и SEARCH отсутствующих потомков, точки/двойной точки и ссылок в пяти программных/трёх обязательных ARM64 HVF профилях и C/CLI/Python. Он не входит в58 native-common эталонов. Root, ACL/MAC, полное разрешение групп, общая авторизация vnode, динамические данные, ожидание/сеть, движущиеся часы, Mach IPC/потоки, dyld/TLS и полные фреймворки остаются незавершёнными. Intel HVF/физический iOS не проверены; сроки прежние.
+
+```text
+GroupMembershipUID / group_membership_uid / original cr_gmuid
+0..INT32_MAX or KAUTH_UID_NONE=4294967195 / 0xffffff9b / not UINT32_MAX
+positive entries first / original NONE plus complete list proves negatives
+omitted list unknown / first-match real copy preserves original NONE
+ordinary-queries-closed-groups / 173 events / stdout GN
+OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+SDK constant O0/O1/O2 only / prior actual nonowner pairs270 remain separate
+58 native-common references unchanged / Intel and physical iOS unverified
+native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).

@@ -36,9 +36,11 @@ struct DarwinResourceUsage {
   /// ru_nsignals, ru_nvcsw, ru_nivcsw. Meanings are implementation-defined.
   std::array<int64_t, CounterCount> Counters{};
 };
-/// Fixed credential observations, not permission or privilege authorization.
+/// Fixed credential observations; alone these do not authorize permissions.
 /// Supported IDs are 0..INT32_MAX. A supplied GroupAccessList has 1..16
 /// entries, preserves order/duplicates and starts with EffectiveGID.
+/// This is the in-credential list, not the SDK's extended resolver list.
+/// Missing entries alone do not prove negative external group membership.
 /// Omitted groups are unknown; constructing this record explicitly declares
 /// its zero/root IDs. Omitting Credentials retains the profile's legacy IDs.
 struct DarwinCredentials {
@@ -47,6 +49,12 @@ struct DarwinCredentials {
   uint32_t RealGID = 0;
   uint32_t EffectiveGID = 0;
   std::optional<std::vector<uint32_t>> GroupAccessList;
+  /// Original credential cr_gmuid, independent of scalar UID observations.
+  /// Values 0..INT32_MAX or KAUTH_UID_NONE (4294967195) are supported.
+  /// NONE makes an explicit complete group list authoritative for ordinary
+  /// queries; an omitted list still cannot prove negative membership.
+  /// Omission leaves the external membership context unknown.
+  std::optional<uint32_t> GroupMembershipUID = std::nullopt;
 };
 /// Fixed system observations, independent of host hardware and OS identity.
 /// Missing is unknown; an empty string is an explicit value. Strings contain
@@ -74,8 +82,11 @@ struct DarwinSystemOptions {
   std::optional<DarwinResourceUsage> ResourceUsageSelf;
   std::optional<DarwinResourceUsage> ResourceUsageChildren;
   /// Scalar queries and new-file UID share this immutable observation.
-  /// Absence retains UID/GID 1000; it never supplies a group list or grants
-  /// filesystem permissions, credential mutation or privileged sysctl writes.
+  /// Absence retains UID/GID 1000 for observations; this fallback never
+  /// supplies authorization knowledge. StaticOwnerQueries uses only explicitly
+  /// supplied real/effective UID. Groups, credential mutation and privileged
+  /// sysctl writes remain independent and are not enabled by these
+  /// observations.
   std::optional<DarwinCredentials> Credentials;
   /// Nonnegative int observation (0..INT32_MAX) for kern.maxfilesperproc.
   /// With ResourceLimits[8].Current this supplies getdtablesize; neither
@@ -111,6 +122,13 @@ struct DarwinSystemOptions {
   /// is unknown; every supplied uint64 value, including zero, is known. Does
   /// not infer host/PID/Mach identity, allocation or thread scheduling.
   std::optional<uint64_t> ThreadID;
+  /// Independent raw Mach self-port names, not live rights or IPC authority.
+  /// Missing is unknown; every uint32 pattern, including zero, is explicit.
+  /// Raw trap returns sign-extend the name through the native int32 carrier.
+  /// No host/PID/thread identity, reference allocation or lifetime is inferred.
+  std::optional<uint32_t> ThreadSelfPort;
+  std::optional<uint32_t> TaskSelfPort;
+  std::optional<uint32_t> HostSelfPort;
 };
 } // namespace neverd::emulation
 #endif

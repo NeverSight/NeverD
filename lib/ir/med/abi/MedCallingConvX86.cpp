@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 
@@ -180,8 +181,10 @@ void detectXMMParams(
       if (Any == 0)
         return false;
       switch (Op.Opcode) {
-      case NdOp::COPY: {
-        if (Op.NumInputs != 1)
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT: {
+        if (Op.NumInputs != 1 ||
+            (Op.Opcode == NdOp::INT_ZEXT && Op.Output.Size < Op.Inputs[0].Size))
           return true;
         if (isSelfCopy(Op)) {
           record(Op.Output, In[0] & byteMask(Op.Output.Size));
@@ -193,8 +196,6 @@ void detectXMMParams(
           return false;
         return !carry(Op.Output, In[0]);
       }
-      case NdOp::INT_ZEXT:
-        return Op.NumInputs != 1 || !carry(Op.Output, In[0]);
       case NdOp::INT_SEXT: {
         const uint16_t InSize = Op.Inputs[0].Size;
         if (Op.NumInputs != 1 || InSize == 0 || InSize > MaskBytes)
@@ -368,7 +369,7 @@ void detectXMMParams(
       continue;
 
     uint64_t ROff = Op.Output.RegOff;
-    if (!TRI.isFPArgReg(ROff))
+    if (!TRI.isFPArgReg(ROff, TargetFormat))
       continue;
     // A positional convention (Win64) finds its floating arguments among
     // the argument slots; each still carries a scalar or a vector.
@@ -621,12 +622,11 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
   int MaxIdx = -1;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto Off = stackArgOffset(Op.Inputs[0])) {
-          Offsets.insert(*Off);
-          int W = Op.Output.Size > 0 ? Op.Output.Size : 4;
-          int LastSlot = static_cast<int>((*Off - 4) / 4) + (W + 3) / 4 - 1;
+      if (auto Read = med_calling_conv_detail::stackMemoryRead(Op))
+        if (auto Off = Read->AddressInput == 1 ? rawStackArgOffset(Op.Inputs[1])
+                                               : stackArgOffset(Op.Inputs[0])) {
+          Offsets.insert(4 + ((*Off - 4) / 4) * 4);
+          int LastSlot = static_cast<int>((*Off - 4 + Read->Bytes - 1) / 4);
           MaxIdx = std::max(MaxIdx, LastSlot);
         }
 
@@ -716,12 +716,17 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       // The home address used as anything but a load/store address (a call
       // argument, a stored value, ...) escapes and may be written through.
       for (uint8_t K = 0; K < Op.NumInputs; ++K) {
-        if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && K == 0)
+        if (((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && K == 0) ||
+            (med_calling_conv_detail::stackMemoryRead(Op) &&
+             K == med_calling_conv_detail::stackMemoryRead(Op)->AddressInput))
           continue;
         if (auto Off = stackArgOffset(Op.Inputs[K]))
           MutableArgOffsets.insert(*Off);
       }
     }
+
+  med_calling_conv_detail::preserveFPStackHomes(Func, 4, 4, rawStackArgOffset,
+                                                MutableArgOffsets);
 
   // The home slot of each mutable parameter is [frame_end + Off] (the entry-SP
   // offset equals the frame_end offset).  Record it so the emitter seeds that
@@ -799,9 +804,182 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       Op.Inputs[1] = MedVar::makeConst(static_cast<uint64_t>(ByteOff), 4);
       Op.NumInputs = 2;
     }
+  med_calling_conv_detail::recoverFPStackReads(
+      Func, TargetArch, 4, 4, BaseIdx, rawStackArgOffset, MutableArgOffsets);
 }
 
 namespace med_calling_conv_detail {
+
+std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op) {
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return std::nullopt;
+  if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 && Op.Output.Size)
+    return StackMemoryRead{0, Op.Output.Size};
+  if (Op.MemoryOrdering != NdMemoryOrdering::None)
+    return std::nullopt;
+  if (Op.Opcode != NdOp::INTRINSIC || !Op.NumInputs || !Op.Inputs[0].isConst())
+    return std::nullopt;
+  const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+  if (Op.Inputs[0].ConstVal != unsigned(Id) || !isX86FPStateMemoryIntrinsic(Id))
+    return std::nullopt;
+  const auto Shape = x86FPStateMedShape(Op);
+  if (!x86FPStateShapeIsValid(Id, Shape))
+    return std::nullopt;
+  const bool Approx = Id == Intrinsic::X86FPApprox12MemoryState;
+  const bool Scalar = Approx ? x86FPApprox12IsScalar(Shape.Control)
+                      : Id == Intrinsic::X86FPRoundMemoryState
+                          ? x86FPRoundStateIsScalar(Shape.Control)
+                          : x86FPArithStateIsScalar(Shape.Control);
+  return StackMemoryRead{1, Shape.OutputSize - (Approx ? 0 : 4), Scalar};
+}
+
+void preserveFPStackHomes(
+    const MedFunc &Func, int64_t Base, unsigned Slot,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    std::set<int64_t> &MutableSlots) {
+  // A write or escaped pointer to one part of a memory operand keeps every
+  // covered slot in its physical home. Packed reads retain alignment/fault
+  // ownership even when all incoming bytes are otherwise immutable.
+  bool Changed;
+  do {
+    Changed = false;
+    for (const auto &Block : Func.Blocks)
+      for (const auto &Op : Block.Ops) {
+        const auto Read = stackMemoryRead(Op);
+        if (!Read || Read->AddressInput != 1)
+          continue;
+        const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
+        if (!Offset)
+          continue;
+        const int64_t First = Base + ((*Offset - Base) / Slot) * Slot;
+        const int64_t Last =
+            Base + ((*Offset - Base + Read->Bytes - 1) / Slot) * Slot;
+        const unsigned ByteOffset = *Offset - First;
+        const bool Pair = ByteOffset == 0 && Slot == 4 && Read->Bytes == 8;
+        bool Keep =
+            !Read->ScalarFP || (!Pair && ByteOffset + Read->Bytes > Slot);
+        for (int64_t Home = First; Home <= Last; Home += Slot)
+          Keep |= MutableSlots.count(Home) != 0;
+        if (Keep)
+          for (int64_t Home = First; Home <= Last; Home += Slot)
+            Changed |= MutableSlots.insert(Home).second;
+      }
+  } while (Changed);
+}
+
+void recoverFPStackReads(
+    MedFunc &Func, Arch Architecture, int64_t Base, unsigned Slot,
+    unsigned ParameterBase,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    const std::set<int64_t> &MutableSlots) {
+  if (Architecture != Arch::X86 && Architecture != Arch::X64)
+    return;
+  int NextTemp = 0;
+  const auto Observe = [&](const MedVar &V) {
+    if (V.Kind == MedVar::Temp)
+      NextTemp = std::max(NextTemp, V.Id + 1);
+  };
+  for (const auto &Block : Func.Blocks) {
+    for (const auto &Phi : Block.Phis) {
+      Observe(Phi.Output);
+      for (const auto &[Pred, Input] : Phi.Args)
+        Observe(Input);
+    }
+    for (const auto &Op : Block.Ops) {
+      Observe(Op.Output);
+      for (const auto &V : Op.Inputs)
+        Observe(V);
+      for (const auto &V : Op.IntrinsicOutputs)
+        Observe(V);
+    }
+  }
+  struct Rewrite {
+    MedOp Value;
+    std::vector<MedOp> Prefix;
+  };
+  std::map<std::pair<size_t, size_t>, Rewrite> Rewrites;
+  // Compute every trace before inserting operations: the ABI owner holds
+  // pointers to the original unique definitions across all blocks.
+  for (size_t B = 0; B < Func.Blocks.size(); ++B)
+    for (size_t I = 0; I < Func.Blocks[B].Ops.size(); ++I) {
+      const auto &Op = Func.Blocks[B].Ops[I];
+      const auto Read = stackMemoryRead(Op);
+      if (!Read || !Read->ScalarFP)
+        continue;
+      const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
+      if (!Offset)
+        continue;
+      const int64_t Home = Base + ((*Offset - Base) / Slot) * Slot;
+      const unsigned ByteOffset = *Offset - Home;
+      const bool Pair = ByteOffset == 0 && Slot == 4 && Read->Bytes == 8;
+      if ((!Pair && ByteOffset + Read->Bytes > Slot) ||
+          MutableSlots.count(Home) || (Pair && MutableSlots.count(Home + Slot)))
+        continue;
+      Rewrite R{Op, {}};
+      MedVar Source;
+      Source.Kind = MedVar::Param;
+      Source.Id = ParameterBase + (Home - Base) / Slot;
+      Source.RegOff = kNoParamReg;
+      Source.Size = Read->Bytes;
+      Source.TheArch = Architecture;
+      if (Pair || ByteOffset) {
+        MedOp Compose;
+        Compose.Opcode = Pair ? NdOp::CONCAT : NdOp::SUBBYTES;
+        Compose.Addr = Op.Addr;
+        Compose.OriginSeq = Op.OriginSeq;
+        Compose.Output = Source;
+        Compose.Output.Kind = MedVar::Temp;
+        Compose.Output.Id = NextTemp++;
+        Source.Size = Slot;
+        if (Pair) {
+          auto High = Source;
+          ++High.Id;
+          Compose.addInput(High);
+          Compose.addInput(Source);
+        } else {
+          Compose.addInput(Source);
+          Compose.addInput(MedVar::makeConst(ByteOffset, 4));
+        }
+        R.Prefix.push_back(Compose);
+        Source = Compose.Output;
+      }
+      const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+      if (Id == Intrinsic::X86FPArithMemoryState) {
+        R.Value.Inputs[0] =
+            MedVar::makeConst(unsigned(Intrinsic::X86FPArithState), 2);
+        R.Value.Inputs[1] = MedVar::makeConst(Op.Inputs[2].ConstVal & 31, 1);
+        R.Value.Inputs[2] = Op.Inputs[3];
+        R.Value.Inputs[3] = Source;
+      } else {
+        const auto ValueId = Id == Intrinsic::X86FPRoundMemoryState
+                                 ? Intrinsic::X86FPRoundState
+                                 : Intrinsic::X86FPApprox12State;
+        R.Value.Inputs[0] = MedVar::makeConst(unsigned(ValueId), 2);
+        R.Value.Inputs[1] = MedVar::makeConst(
+            Op.Inputs[2].ConstVal &
+                (ValueId == Intrinsic::X86FPRoundState ? 6 : 3),
+            1);
+        R.Value.Inputs[2] = Source;
+      }
+      Rewrites.emplace(std::pair{B, I}, std::move(R));
+    }
+  if (Rewrites.empty())
+    return;
+  for (size_t B = 0; B < Func.Blocks.size(); ++B) {
+    auto &Ops = Func.Blocks[B].Ops;
+    std::vector<MedOp> Rebuilt;
+    for (size_t I = 0; I < Ops.size(); ++I) {
+      const auto It = Rewrites.find({B, I});
+      if (It != Rewrites.end()) {
+        for (auto &Prefix : It->second.Prefix)
+          Rebuilt.push_back(std::move(Prefix));
+        Rebuilt.push_back(std::move(It->second.Value));
+      } else
+        Rebuilt.push_back(std::move(Ops[I]));
+    }
+    Ops = std::move(Rebuilt);
+  }
+}
 
 /// An i386 parameter register can look "live-in" purely because the body uses
 /// it as scratch in a way that reads its incoming bits — never because it

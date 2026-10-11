@@ -27,12 +27,20 @@ namespace {
 bool mergeCells(std::map<int32_t, FrameValue> &Cells,
                 const std::map<int32_t, FrameValue> &Other) {
   bool Changed = false;
-  for (auto &[Offset, Value] : Cells) {
-    const auto It = Other.find(Offset);
+  for (auto Cell = Cells.begin(); Cell != Cells.end();) {
+    const auto It = Other.find(Cell->first);
     const FrameValue Merged =
-        join(Value, It == Other.end() ? FrameValue{} : It->second);
-    Changed |= Merged != Value;
-    Value = Merged;
+        join(Cell->second, It == Other.end() ? FrameValue{} : It->second);
+    Changed |= Merged != Cell->second;
+    // An absent cell already means no exact value and no frame taint. Keep
+    // that canonical representation: dead local values must not accumulate
+    // in every subsequent CFG state or consume the proof work budget.
+    if (Merged == FrameValue{})
+      Cell = Cells.erase(Cell);
+    else {
+      Cell->second = Merged;
+      ++Cell;
+    }
   }
   for (const auto &[Offset, Value] : Other)
     if (!Cells.count(Offset)) {
@@ -97,8 +105,15 @@ bool FrameState::merge(const FrameState &Other) {
 
 void FrameState::forgetCellValues() {
   for (auto *Space : {&Cells, &EntryCells, &CallbackCells})
-    for (auto &[Offset, Value] : *Space)
-      Value = join(Value, {});
+    for (auto It = Space->begin(); It != Space->end();) {
+      const auto Value = join(It->second, {});
+      if (Value == FrameValue{})
+        It = Space->erase(It);
+      else {
+        It->second = Value;
+        ++It;
+      }
+    }
 }
 
 void FrameTransfer::beginInstruction(va_t Address) {

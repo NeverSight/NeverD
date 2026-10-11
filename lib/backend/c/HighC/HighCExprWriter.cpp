@@ -35,6 +35,17 @@
 namespace neverd {
 
 namespace {
+TypeRef debugParameterCarrier(TypeRef Type, Arch Architecture,
+                              BinaryFormat Format) {
+  // An indirect source parameter needs only a record declaration. Decide
+  // its physical carrier before requiring a complete by-value C layout.
+  if (isMsvcClassValueReturn(Type, Architecture, Format))
+    return NdType::makePtr(Type);
+  if (!Type || !hasCValueLayout(Type))
+    return NdType::makeInt(pointerBytes(Architecture), false);
+  return Type;
+}
+
 /// A load through an access pointer, `(*(_QWORD *)p)`, without its
 /// parentheses where no unary or postfix operator applies to it: the
 /// dereference is itself a unary expression.
@@ -126,7 +137,7 @@ TypeRef HighCWriter::debugTypeForDisplacement(va_t Entry, int64_t Disp) const {
   // A local whose type C cannot spell keeps the type its accesses give it,
   // as a parameter keeps its machine type.
   TypeRef Display = cDisplayType(Ty);
-  if (Display && !hasCSpelling(Display))
+  if (Display && !hasCValueLayout(Display))
     return {};
   return Display;
 }
@@ -983,7 +994,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (E.SourceCallHint)
     return renderSourceCallExpr(E);
   if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
-      E.IntrinsicId != Intrinsic::X86FPRoundMemoryState)
+      !isX86FPStateMemoryIntrinsic(E.IntrinsicId))
     llvm::report_fatal_error(
         "HighC cannot safely render a segmented-memory intrinsic");
   std::string Name = resolvedCallTarget(E);
@@ -1660,7 +1671,7 @@ TypeRef HighCWriter::knownCallReturnType(const HighExpr &E) const {
       return Return;
   if (const auto Callee = debugCallee(E)) {
     // A result whose type C cannot spell is the register it arrives in.
-    if (!hasCSpelling(cDisplayType(Callee->ReturnType)))
+    if (!hasCValueLayout(cDisplayType(Callee->ReturnType)))
       return {};
     return Callee->ReturnType;
   }
@@ -2063,9 +2074,10 @@ bool HighCWriter::looksLikeHiddenSretOperand(const HighExpr *Op) const {
 
 bool HighCWriter::debugExternUsesHiddenSret(const FunctionSym &FS,
                                             llvm::StringRef ExternName) const {
-  if (isMsvcClassValueReturn(FS.ReturnType))
+  if (isMsvcClassValueReturn(FS.ReturnType, Opts.TheArch, Opts.Format))
     return true;
-  if (!isMsvcPointerEncodedClassReturn(FS.ReturnType))
+  if (!isMsvcPointerEncodedClassReturn(FS.ReturnType, Opts.TheArch,
+                                       Opts.Format))
     return false;
   return DebugExternHiddenSret.count(ExternName.str()) != 0;
 }
@@ -2088,7 +2100,8 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
     // their count.
     if (!positionalDebugSignature(*Callee))
       return Have;
-    const bool Indirect = isMsvcIndirectReturn(Callee->ReturnType);
+    const bool Indirect =
+        isMsvcIndirectReturn(Callee->ReturnType, Opts.TheArch, Opts.Format);
     const bool Member = Indirect && isWin64MemberIndirectReturn(*Callee);
     size_t Limit = 0;
     if (Member)
@@ -2103,7 +2116,8 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
       if (Msvc && Msvc->ArityKind == MsvcArityKind::Keep)
         return Have;
       if (Indirect &&
-          (Member || isMsvcPointerEncodedClassReturn(Callee->ReturnType))) {
+          (Member || isMsvcPointerEncodedClassReturn(
+                         Callee->ReturnType, Opts.TheArch, Opts.Format))) {
         const size_t SretIdx = Member ? 1 : 0;
         if (SretIdx < Have &&
             !looksLikeHiddenSretOperand(E.Operands[SretIdx].get()))
@@ -2199,11 +2213,13 @@ TypeRef HighCWriter::expectedDebugCallArgType(const FunctionSym &FS,
   // signature's only for a positional one.
   if (!positionalDebugSignature(FS))
     return nullptr;
-  const bool Indirect = isMsvcIndirectReturn(FS.ReturnType);
+  const bool Indirect =
+      isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format);
   const bool Member = Indirect && isWin64MemberIndirectReturn(FS);
   TypeRef Sret;
   if (Indirect) {
-    if (TypeRef Record = msvcIndirectReturnRecordType(FS.ReturnType))
+    if (TypeRef Record = msvcIndirectReturnRecordType(
+            FS.ReturnType, Opts.TheArch, Opts.Format))
       Sret = NdType::makePtr(cDisplayType(Record));
   }
   // The callee's declaration gives a parameter whose type C cannot spell the
@@ -2211,10 +2227,8 @@ TypeRef HighCWriter::expectedDebugCallArgType(const FunctionSym &FS,
   auto Declared = [&](size_t Param) -> TypeRef {
     if (Param >= FS.Params.size())
       return nullptr;
-    const TypeRef &Ty = FS.Params[Param].second;
-    if (Ty && !hasCSpelling(cDisplayType(Ty)))
-      return NdType::makeInt(pointerBytes(Opts.TheArch), false);
-    return Ty;
+    return debugParameterCarrier(cDisplayType(FS.Params[Param].second),
+                                 Opts.TheArch, Opts.Format);
   };
   if (Member) {
     if (Index == 0)
@@ -2577,11 +2591,11 @@ std::string HighCWriter::debugSignatureKey(const FunctionSym &FS) {
   return Key;
 }
 
-int HighCWriter::debugSymRichness(const FunctionSym &FS) {
+int HighCWriter::debugSymRichness(const FunctionSym &FS) const {
   int Score = static_cast<int>(FS.Params.size()) * 10;
   if (FS.ReturnType) {
     Score += 2;
-    if (isMsvcIndirectReturn(FS.ReturnType))
+    if (isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format))
       Score += 5;
   }
   for (const auto &Param : FS.Params) {
@@ -2605,8 +2619,8 @@ TypeRef HighCWriter::cDisplayType(const TypeRef &Ty) {
   if (Ty->Kind == NdTypeKind::Ptr)
     return NdType::makePtr(cDisplayType(Ty->Pointee));
   if (Ty->Kind == NdTypeKind::Struct && !Ty->SourceName.empty()) {
-    auto Out = NdType::makeNamedRecord(cNamedTypeSpelling(Ty->SourceName),
-                                       Ty->Size ? Ty->Size : 8, Ty->IsEnum);
+    auto Out = std::make_shared<NdType>(*Ty);
+    Out->SourceName = cNamedTypeSpelling(Ty->SourceName);
     Out->FieldDisplayNames = Ty->FieldDisplayNames;
     Out->FieldDisplayOffsets = Ty->FieldDisplayOffsets;
     Out->FieldDisplayTypes = Ty->FieldDisplayTypes;
@@ -2626,14 +2640,15 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
                            ? cDisplayType(FS.ReturnType)
                            : NdType::makeInt(pointerBytes(Opts.TheArch), false);
   // So does one whose type C cannot spell.
-  if (!hasCSpelling(ReturnType))
+  if (!hasCValueLayout(ReturnType))
     ReturnType = NdType::makeInt(pointerBytes(Opts.TheArch), false);
   TypeRef SretPtr;
   const bool Indirect = debugExternUsesHiddenSret(
       FS, ExternName.empty() ? Identifier : ExternName);
   const bool Member = Indirect && isWin64MemberIndirectReturn(FS);
   if (Indirect) {
-    const NdType *Record = msvcIndirectReturnRecord(FS.ReturnType);
+    const NdType *Record =
+        msvcIndirectReturnRecord(FS.ReturnType, Opts.TheArch, Opts.Format);
     const std::string Spell = cNamedTypeSpelling(Record->SourceName);
     SretPtr = NdType::makePtr(
         NdType::makeNamedRecord(Spell, Record->Size ? Record->Size : 8));
@@ -2646,16 +2661,7 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
     if (Msvc && Msvc->ArityKind == MsvcArityKind::Fixed &&
         Emitted >= Msvc->MaxArgs)
       return;
-    Ty = cDisplayType(Ty);
-    if (!Ty)
-      Ty = NdType::makeInt(8);
-    // A parameter whose type C cannot spell is the register it travels in.
-    if (!hasCSpelling(Ty))
-      Ty = NdType::makeInt(pointerBytes(Opts.TheArch), false);
-    // MSVC x64 passes a named class through a hidden pointer. The PDB
-    // still records the class. Enums stay in a register.
-    if (Opts.TheArch == Arch::X64 && isMsvcClassValueReturn(Ty))
-      Ty = NdType::makePtr(Ty);
+    Ty = debugParameterCarrier(cDisplayType(Ty), Opts.TheArch, Opts.Format);
     if (Name.empty())
       Name = "arg" + std::to_string(Emitted);
     if (Emitted++)
@@ -4954,7 +4960,8 @@ bool HighCWriter::isReservedParamDisplayName(llvm::StringRef Name) const {
       return true;
   if (Dbg && CurrentFunc) {
     if (const auto FS = Dbg->resolveFunction(CurrentFunc->Entry); FS) {
-      if (isMsvcIndirectReturn(FS->ReturnType) && Name == "result")
+      if (isMsvcIndirectReturn(FS->ReturnType, Opts.TheArch, Opts.Format) &&
+          Name == "result")
         return true;
       for (const auto &Param : FS->Params)
         if (!Param.first.empty() && Name == Param.first)

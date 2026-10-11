@@ -248,6 +248,8 @@
           "neverd_web_package_records_json",
           "neverd_web_packages_analyze_json",
           "neverd_web_packages_compare_json",
+          "neverd_web_sea_extract_json",
+          "neverd_web_sea_records_json",
           "neverd_web_session_create",
           "neverd_web_session_destroy",
           "neverd_web_source_analyze_json",
@@ -1049,6 +1051,8 @@
           "neverd_web_package_records_json",
           "neverd_web_packages_analyze_json",
           "neverd_web_packages_compare_json",
+          "neverd_web_sea_extract_json",
+          "neverd_web_sea_records_json",
           "neverd_web_source_analyze_json",
           "neverd_web_source_anchor_json",
           "neverd_web_source_binding_records_json",
@@ -13282,7 +13286,11 @@
         "O_SYMLINK0x00200000 retains final symbolic objects at all3 access modes without granting writable target content. CREAT follows; NOFOLLOW/exclusive/directory and intermediate/trailing resolver ordering remain native. Shared descriptions retain LinkNode and selected NameIdentity through dup, rename, unlink, name reuse and removed parents; independent opens keep their own flags/cursors. Negative I/O offsets retain existing early pwrite/pwritev rules and EINVAL after common prefixes; read INT64_MAX returns0, write INT64_MAX EFBIG, other admitted symbolic offsets EPERM before zero-length success, APPEND or payload access. DATA/HOLE nonnegative ENXIO/negative EINVAL preserve cursor. Symbolic open TRUNC, including readonly, and writable nonnegative ftruncate only set WasWritten, without target/stat/xattr/cursor/storage/inode effects. Admitted F_SETFL changes APPEND|NONBLOCK before ENOTTY25; unknown arguments stop before effects. Fixed fpathconf, held attributes and independent initial ordinary FD-xattr grants use the link object; directory-FD/fchdir return ENOTDIR. Legacy aligned non-executable private/shared mmap reaches symbolic-kind EINVAL without allocation or lease; ordinary shared and other unknown mapping contracts remain unsupported. Initial reservations stay fixed; dynamic name/target/entry/xattr costs wait for final ownership, including orphan parents and last-alias replacement. Multi-name history permanently refuses vnode names. Native mmap controls cover18 cases at length16384/offset0/protection1,2,3 only. Original SDK-free native O0/O1/O2 and thin5-profile guest/C/CLI/Python controls retain all bounds. Native Intel HVF, physical iOS, permissions/ACLs, coherent mapped EOF/signals and full OS/framework execution remain unverified or incomplete.",
         "O_NONBLOCK4 is admitted and retained for bounded regular/directory/symbolic opens and shared dup descriptions; independent opens retain their own state. F_SETFL validates raw low32 mask0x1000f before effects, applies native open-flag conversion and updates only APPEND|NONBLOCK. Literal requests3/7/11/15 select4/8/12/0; high32 is ignored. Access, actual WasWritten, per-FD CLOEXEC, cursors, bytes and metadata remain independently owned. Symbolic status effects precede ENOTTY25. Finite stdin preserves unknown-input refusal/EOF/EFAULT and captures preserve shared budgets/partial-copy faults. ASYNC and O_EVTONLY process policy, readiness waits, pipes, networking, kqueue and async signals remain unsupported. Original122-observation ARM64 controls and SDK-free O0/O1/O2 native/5-profile guest/C/CLI/Python routes retain all existing deadlines; native Intel HVF, physical iOS and full OS/framework completion remain unverified or incomplete.",
         "Raw BSD getentropy500 consumes explicit immutable per-call DarwinSystemOptions.EntropyReads / darwin_system.entropy_reads observations, with a fresh DarwinEntropy cursor for each execution and strict shared native/JSON admission. At most256 nonempty records of1..256 bytes; JSON uses even-length nonempty hex strings and retains the existing65536-byte transport limit. Omission is unknown and [] explicitly exhausted. Full64 size>256 returns EINVAL22 and zero succeeds for any pointer without memory/input/consumption. Nonzero calls require the next exact length before copyout, including bad addresses. Success and wholly inaccessible EFAULT14 consume one admitted record; partial writable output stops UnsupportedService before bytes/cursor changes. Memory transport errors do not advance; later return-register failure preserves completed service effects. Five software guest/C/CLI/Python profiles and three ARM64 HVF profiles check bytes/canaries/error ABI/repeated options; original ARM64 O0/O1/O2 evidence retains594 native calls and does not infer copied length from changed sentinel bytes. Fixed replay data is excluded from native deterministic RNG oracles. No host RNG, crypto-quality guarantee, /dev/random, libc imports, frameworks, thread scheduling or new Mach binding. Native Intel HVF, physical iOS and full OS compatibility remain unverified/incomplete.",
-        "Raw BSD thread_selfid372 returns the explicit immutable optional DarwinSystemOptions.ThreadID / darwin_system.thread_id observation. All uint64 bits including0 are known; omission stops UnsupportedService. Decimal strings preserve full64 values, numeric JSON requires an exact integer up to2^53-1, and no host/PID/Mach value supplies a default. The no-argument call ignores six carriers without memory access. Shared low32 raw-number resolution and BSD return authority preserve complete values/raw events, clear carry and RDX/X1, and reject Mach spellings. Repeated runs preserve the observation and independent options remain independent; the value never populates scheduler ProcessServiceEvent.ThreadID. Original ARM64 O0/O1/O2 probes retain24 calls comparing SDK current pthread IDs, seed and high32-number behavior. The common native mode compares only within-process relationships; literal supplied-ID bytes are excluded from deterministic native references. Five software and three mandatory ARM64 HVF profiles, canonical C/CLI and real Python routes check zero/high-bit/UINT64_MAX, exact bytes/events, missing observations and strict preflight. No ID allocation, uniqueness guarantee, pthread/TLS/thread lifecycle, Mach IPC or framework/OS completeness; native Intel HVF and physical iOS remain unverified."
+        "Raw BSD thread_selfid372 returns the explicit immutable optional DarwinSystemOptions.ThreadID / darwin_system.thread_id observation. All uint64 bits including0 are known; omission stops UnsupportedService. Decimal strings preserve full64 values, numeric JSON requires an exact integer up to2^53-1, and no host/PID/Mach value supplies a default. The no-argument call ignores six carriers without memory access. Shared low32 raw-number resolution and BSD return authority preserve complete values/raw events, clear carry and RDX/X1, and reject Mach spellings. Repeated runs preserve the observation and independent options remain independent; the value never populates scheduler ProcessServiceEvent.ThreadID. Original ARM64 O0/O1/O2 probes retain24 calls comparing SDK current pthread IDs, seed and high32-number behavior. The common native mode compares only within-process relationships; literal supplied-ID bytes are excluded from deterministic native references. Five software and three mandatory ARM64 HVF profiles, canonical C/CLI and real Python routes check zero/high-bit/UINT64_MAX, exact bytes/events, missing observations and strict preflight. No ID allocation, uniqueness guarantee, pthread/TLS/thread lifecycle, Mach IPC or framework/OS completeness; native Intel HVF and physical iOS remain unverified.",
+        "Raw Mach self queries27/28/29 read independent explicit optional uint32 ThreadSelfPort/TaskSelfPort/HostSelfPort observations through darwin_system.thread_self_port/task_self_port/host_self_port. Selected-field omission stops UnsupportedService; known0, equal names and UINT32_MAX are admitted without positive pid_t restrictions. DarwinSystem alone converts the name through signed int32 into raw64; resolved Mach binding and returnService alone preserve flags and RDX/X1 with existing x64 RCX/R11 clobbers. The queries ignore all arguments and access no memory. Low32 resolution keeps complete raw event numbers; query reports omit BSD error and scheduler ThreadID. Five software and three mandatory ARM64 HVF profiles, canonical C/CLI and real Python verify zero, high-bit signed carriers, width boundaries, missing independence, stable runs and preflight. Original ARM64 O0/O1/O2 probes retain432 raw observations with all16 NZCV, number prefixes, seeded carriers and SDK comparison at their original source identity. No native bit31 name was observed: high-bit extension is a pinned XNU source contract with independent literal tests. The common native fixture checks relationships only; virtual names are excluded from native deterministic reference cases. No live rights, uniqueness, name/send-reference allocation, IPC/lifecycle or scheduling is inferred. Mach reply-port26 and IPC31 remain unsupported; permissions/ACL, readiness, advancing clocks, real threads/Mach IPC, dyld/TLS and full runtimes/frameworks remain incomplete; native Intel HVF and physical iOS remain unverified.",
+        "Optional DarwinFileOptions.Authorization / darwin_files.authorization=\"static-owner-queries\" declares an immutable ordinary local owner-query environment: no ACL/MAC/additional kauth listeners, entitlements or permission bypass; writable executable nonopaque local mount with ownership enabled; flags0 and no special mode bits. Explicit canonical Credentials and object metadata authorize only matching nonzero owner UID. Access uses real UID; AT_EACCESS uses effective UID throughout SEARCH and final R/W/X. Missing identity/metadata, selected UID0, nonowner, retained-link R/W/X and extended actions stop UnsupportedService; known owner denial is native EACCES13. Actual directory SEARCH precedes child lookup, dots and missing/over-limit components, except slash-only root and root-clamped dotdot no-action paths. An allowed over-limit component remains Unsupported rather than deriving filesystem errno from Name255. Only permission queries and typed opaque standard streams including dup aliases remain open; every other file route and direct/file-backed mapping source stop before model effects, while anonymous VM remains independent. Admission rejects mutation/creation grants, nonordinary known metadata and known inode/device aliases without charging another path/entry. Original native ARM64 O0/O1/O2 raw/SDK preparation retains2472 pairs,2439 independently literal-checked and33 capture-only; ACL absence is observed independently with fstatx/filesec property presence, with unobservable global-hook assumptions explicit. Distinct real/effective IDs require source/model evidence, not a native host claim. SDK-free supplied queries are excluded from the58 common native deterministic references. Group/root/ACL/MAC authorization, dynamic credentials, general authorized open/namespace operations, readiness, advancing clocks, real Mach IPC/threads, dyld/TLS/frameworks and full OS compatibility remain unfinished; native Intel HVF and physical iOS are unverified.",
+        "Optional DarwinFileOptions.Authorization / darwin_files.authorization=\"static-ordinary-queries\" retains the immutable ordinary mount/security assumptions and closed routes of static-owner-queries, whose owner-only behavior stays unchanged. Actual checks require explicit credentials, object metadata and selected nonzero UID. Owners use their whole requested owner mask; nonowners use equal whole-mask group/world outcomes without membership, including equal denials for different bit sets. Otherwise a known member selects group and a proved nonmember selects world; unresolved external membership stops UnsupportedService before lookup/effects. Positive primary/in-credential membership is known; credentials.groups is the ordered list with effective GID at index0 and duplicates retained, not the SDK extended resolver list. Real-copy identity changes scan the first supplementary real-GID match and swap the old primary into it; no match displaces that primary and disables memberd. That proved change or explicit original GroupMembershipUID=KAUTH_UID_NONE, each with an explicit complete list, supplies known negative membership. Missing lists never supply negative answers; unequal UIDs with equal GIDs still transform, and duplicate primaries may preserve unknown membership. AT_EACCESS uses the original effective context. All40 other file routes and direct/file-backed mappings remain closed, typed streams and anonymous VM independent. Original read-only ARM64 O0/O1/O2 evidence retains270 raw/SDK literal pairs with held-object/stat/ACL-property guards; raw groups16 and SDK extended groups17 are distinct observations. Equal native IDs do not establish distinct identity transforms or every external hook. Five software and three required ARM64 HVF profiles plus C/CLI/Python verify the supplied-model workload outside the58 native-common cases; all deadlines remain unchanged. Root, ACL/MAC, general vnode authorization, full group resolution, dynamic credentials, readiness/networking, advancing clocks, Mach IPC/threads, dyld/TLS and complete OS/frameworks remain incomplete; native Intel HVF and physical iOS unverified.",
+        "Optional DarwinCredentials.GroupMembershipUID / darwin_system.credentials.group_membership_uid declares independent original cr_gmuid: bounded 0..INT32_MAX or exact KAUTH_UID_NONE4294967195 (0xffffff9b, UINT32_MAX minus100), using shared lossless numeric/decimal-string admission. Positive primary/in-credential membership wins before negatives. Original NONE plus an explicit complete list proves missing membership; omitted groups never prove negatives. First-match real copies preserve original NONE, while proved displacement also disables memberd. Omission and other admitted UIDs retain external uncertainty; no resolver, root bypass or new vnode-operation authority is supplied. Four scalar IDs, group-list entries, getgroups, creation ownership and old modes retain their existing contract; NONE remains invalid in ordinary UID/GID/group entries. Five software and three mandatory ARM64 HVF profiles, C/CLI and Python verify173 supplied-model events and strict admission. Local O0/O1/O2 SDK controls establish only the sentinel and four-byte uid_t, not host cr_gmuid or resolver state; prior270 actual native nonowner pairs keep their original identity. All58 native-common references, original bounds and unverified Intel/physical-iOS/full-OS gaps remain unchanged."
       ],
       "tests": [
         {
@@ -15917,6 +15925,336 @@
           "target": "NeverDProcessPublicTests",
           "source": "unittests/emulation/ProcessPublicTests.cpp",
           "filter": "ProcessPublic.DarwinThreadIdentityRejectsMalformedObservationsBeforeLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MachSelfPortsAreIndependentAndMemoryFree/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MachPortAdmissionKeepsLegacyProcessBounds/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MachSelfPortsTraverseRawBindingAndPreserveCarriers/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.MachSelfPortsPreserveExplicitBitsAndIndependentRuns/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinMachSelfPortsRejectMalformedObservationsBeforeLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "DarwinFileOptions.OwnerQueriesRejectContradictionsWithoutInventingFacts",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "DarwinFileOptions.OwnerDeclarationDoesNotChargeAnotherPathOrEntry",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesMatchIndependentOwnerAndSearchMatrices/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesRequireKnowledgeOnlyAtActualChecks/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesSelectRealOrEffectiveForSearchAndFinal/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesWalkLinksDotsAndConsumedSeparators/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesPreserveImportErrorsAndLengthBoundary/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesLeavePathMemoryAndInputsUnchanged/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesCloseEveryOtherDispatchedFileRoute/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesPreserveTypedStreamsAndTheirPreflight/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinMemoryTests.cpp",
+          "filter": "*/DarwinMemoryTest.OwnerQueriesKeepAnonymousMemoryAndCloseFileMappings/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.OwnerQueriesKeepPermissionAndUnknownBoundaries/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinOwnerQueriesRejectContradictionsBeforeLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesMatchIndependentWholeMaskMatrices/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesKeepOwnerOnlyModeAndMissingFactsDistinct/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesUseLiteralRealGroupTransformCases/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesAuthorizeSelectedSearchBeforeLookupAndCaps/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesUseOriginalMembershipUIDForSearch/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MembershipUIDKeepsScalarAndGroupObservationsIndependent/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "DarwinSystemOptions.MembershipUIDAdmitsOnlyBoundedIDsOrExactNone",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLinuxProcessTests",
+          "source": "unittests/emulation/ProcessReportTests.cpp",
+          "filter": "ProcessReport.DarwinMembershipUIDKeepsLosslessAndIndependentAdmission",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLinuxProcessTests",
+          "source": "unittests/emulation/ProcessReportTests.cpp",
+          "filter": "ProcessReport.MalformedDarwinMembershipUIDFailsBeforeImageLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinMembershipUIDRejectsMalformedCredentialsBeforeLoading",
           "platforms": [
             "darwin",
             "linux",

@@ -103,19 +103,33 @@ void registerLoaderRunFunctions(BinaryImage &Img) {
 }
 
 ImportThunkCandidates::ImportThunkCandidates(const BinaryImage &Img) {
+  // One ELF FDE can cover a whole PLT, including several callable veneers.
+  // Only a wholly contained range has that loader-owned role. Stated function
+  // symbols still own their bodies, even when they overlap such a range.
+  const auto IsPLT = [&](va_t Start, va_t End) {
+    return Img.isELF() && Start < End &&
+           llvm::any_of(
+               Img.ImportStubRanges,
+               [&](const auto &Range) {
+                 return Range.first <= Start && End <= Range.second;
+               });
+  };
   const auto Add = [&](va_t Start, va_t End) {
     if (Start >= End || End == InvalidVA)
       return;
     Bodies.emplace_back(Start, End);
   };
   for (const auto &[Start, End] : Img.KnownCodeRanges)
-    Add(Start, End);
+    if (!IsPLT(Start, End))
+      Add(Start, End);
   for (const Symbol &Sym : Img.Symbols) {
     if (!Sym.IsFunc)
       continue;
     const va_t Start = normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode);
     Entries.insert(Start);
-    if (Sym.Size && Sym.Size < InvalidVA - Start)
+    if (Sym.Size && Sym.Size < InvalidVA - Start &&
+        (Sym.Origin != NameOrigin::Synthesized ||
+         !IsPLT(Start, Start + Sym.Size)))
       Add(Start, Start + Sym.Size);
   }
   // Restricted PE loads keep the other unwind ranges in their raw table.

@@ -58,6 +58,9 @@ getCleanupFramePrefix(const BinaryImage &Image, va_t Target, size_t &Work);
 
 std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
                                        const BinaryImage &Image);
+
+std::optional<uint32_t>
+checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                            size_t &Work, ImageFrameEffects &Effects,

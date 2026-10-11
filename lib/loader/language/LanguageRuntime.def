@@ -173,6 +173,8 @@ NEVERD_LANGUAGE_EVIDENCE(MicrosoftSymbol, CxxMSVC, Chain,
                          "microsoft c++ runtime symbol")
 NEVERD_LANGUAGE_PROBE(MicrosoftSymbol, Symbol, "__CxxFrameHandler3")
 NEVERD_LANGUAGE_PROBE(MicrosoftSymbol, Symbol, "__CxxFrameHandler4")
+NEVERD_LANGUAGE_PROBE(MicrosoftSymbol, Symbol, "__GSHandlerCheck_EH")
+NEVERD_LANGUAGE_PROBE(MicrosoftSymbol, Symbol, "__GSHandlerCheck_EH4")
 NEVERD_LANGUAGE_PROBE(MicrosoftSymbol, Symbol, "__CxxFrameHandler")
 NEVERD_LANGUAGE_PROBE(MicrosoftSymbol, SymbolPrefix, "??_7type_info")
 NEVERD_LANGUAGE_PROBE(MicrosoftSymbol, Microsoft, "")

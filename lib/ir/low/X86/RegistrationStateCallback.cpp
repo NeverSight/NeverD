@@ -34,6 +34,9 @@ RegistrationStateSolver::parentStackOffset(const Domain &State) const {
 }
 
 bool RegistrationStateSolver::callbackCanReturn(const Domain &State) const {
+  if (!KnownCxx)
+    return State.Callback && !State.Parent &&
+           State.Frame.callbackStackIsRestored(0);
   if (!Chain.hasCxxCallbackStack())
     return true;
   if (State.CxxCatchStacks.size() != 1 || State.CxxCatchStacks.begin()->empty())
@@ -43,15 +46,27 @@ bool RegistrationStateSolver::callbackCanReturn(const Domain &State) const {
                          .Handlers[Context.CatchIndex]
                          .HandlerVA;
   const auto &Frame = State.Frame;
-  const auto &SP =
-      Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].CallbackAddress;
-  return Frame.CallbackEntry == Entry && SP && SP->Entry == Entry &&
-         SP->Offset == 0 &&
-         Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride].Offset ==
-             Chain.cxxRuntimeFrameOffset() &&
+  return Frame.CallbackEntry == Entry &&
+         Frame.callbackStackIsRestored(*Chain.cxxRuntimeFrameOffset()) &&
          (!Chain.RealignedFrame ||
           Frame.load(Chain.RealignedFrame->SavedParentFrameOffset, 4)
                   .EntryOffset == 0);
+}
+
+bool RegistrationStateSolver::callbackReturnInstruction(size_t I,
+                                                        const LowOp &Op) const {
+  const auto &Block = Function.Blocks[I];
+  const auto Boundary = Boundaries.find(Op.Addr);
+  if (Op.Opcode != NdOp::RETURN || Op.Seq < 0 || Block.Ops.empty() ||
+      &Op != &Block.Ops.back() || !Block.Succs.empty() ||
+      Boundary == Boundaries.end() || Boundary->second.first != Block.Id)
+    return false;
+  const auto &Insn = Boundary->second.second;
+  return Insn.Control == LowInstructionControl::Return &&
+         !hasLowInstructionControlFlag(
+             Insn.ControlFlags, LowInstructionControlFlag::Conditional) &&
+         Insn.Immediate.value_or(0) == 0 && Op.Addr < Block.EndAddr &&
+         Insn.Size == Block.EndAddr - Op.Addr;
 }
 
 } // namespace neverd::registration_state

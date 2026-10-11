@@ -626,6 +626,26 @@ TEST(IsNoReturnFunction, Terminators) {
   EXPECT_TRUE(isNoReturnFunction("_longjmp"));
 }
 
+TEST(IsNoReturnFunction, WindowsNonlocalJumpFamily) {
+  for (const char *Name : {"_longjmpex", "longjmpex", "__mingw_longjmp"}) {
+    SCOPED_TRACE(Name);
+    EXPECT_TRUE(isNoReturnFunction(Name));
+    EXPECT_FALSE(isReturnsTwiceFunction(Name));
+  }
+  for (const char *Name : {"_setjmp3", "_setjmpex", "__intrinsic_setjmp",
+                           "__intrinsic_setjmpex", "__mingw_setjmp"}) {
+    SCOPED_TRACE(Name);
+    EXPECT_TRUE(isReturnsTwiceFunction(Name));
+    EXPECT_FALSE(isNoReturnFunction(Name));
+  }
+  for (const char *Name :
+       {"my_setjmp3", "longjmpex_cleanup", "mingw_setjmp_init"}) {
+    SCOPED_TRACE(Name);
+    EXPECT_FALSE(isReturnsTwiceFunction(Name));
+    EXPECT_FALSE(isNoReturnFunction(Name));
+  }
+}
+
 TEST(IsNoReturnFunction, ItaniumCxxTerminators) {
   EXPECT_TRUE(isNoReturnFunction("_ZSt9terminatev"));
   EXPECT_TRUE(isNoReturnFunction("__cxa_call_terminate"));

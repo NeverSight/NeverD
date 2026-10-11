@@ -283,6 +283,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
       MOp.CalleeStackArgs = static_cast<int8_t>(std::min(
           S->second, static_cast<int>(std::numeric_limits<int8_t>::max())));
   const llvm::ArrayRef<uint64_t> ArgRegs = TRI.integerParamRegs(TargetFormat);
+  const auto FPParamRegs = TRI.floatingParamRegs(TargetFormat);
   const int8_t Slots =
       static_cast<int8_t>(std::min<size_t>(ArgRegs.size(), kTrackedArgSlots));
   // An indirect-call dispatcher calls the function in its target register.
@@ -314,7 +315,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
       const bool VectorSlots = Convention->VectorArgumentsFromCalleeSummary &&
                                Convention->PositionalArgumentSlots;
       auto SlotVectorWidth = [&](int8_t I) -> uint8_t {
-        return VectorSlots && static_cast<size_t>(I) < TRI.FPParamRegs.size() &&
+        return VectorSlots && static_cast<size_t>(I) < FPParamRegs.size() &&
                        static_cast<unsigned>(I) < kX64VectorArgumentFamilies &&
                        !R->second[ArgRegs[I] / 8]
                    ? R->second[kX64VectorFamilyBase + I]
@@ -331,7 +332,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
       // the caller left in the register.
       for (int8_t I = 0; I < Count; ++I) {
         if (const uint8_t Vector = SlotVectorWidth(I)) {
-          MOp.addInput(ndVarToMedVar(NdVar::reg(TRI.FPParamRegs[I], 16)));
+          MOp.addInput(ndVarToMedVar(NdVar::reg(FPParamRegs[I], 16)));
           MOp.CalleeVectorSlots |= static_cast<uint8_t>(1u << I);
           MOp.CalleeVectorArgWidths |= static_cast<uint32_t>(Vector <= 4   ? 1
                                                              : Vector <= 8 ? 2
@@ -374,10 +375,10 @@ void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
         int8_t Vectors = 0;
         uint32_t Widths = 0;
         for (size_t K = 0;
-             K < TRI.FPParamRegs.size() && K < kX64VectorArgumentFamilies; ++K)
+             K < FPParamRegs.size() && K < kX64VectorArgumentFamilies; ++K)
           if (const uint8_t Width = R->second[kX64VectorFamilyBase + K]) {
             const uint32_t Units = Width <= 4 ? 1 : Width <= 8 ? 2 : 4;
-            MOp.addInput(ndVarToMedVar(NdVar::reg(TRI.FPParamRegs[K], 16)));
+            MOp.addInput(ndVarToMedVar(NdVar::reg(FPParamRegs[K], 16)));
             Widths |= Units << (4 * Vectors);
             ++Vectors;
           }

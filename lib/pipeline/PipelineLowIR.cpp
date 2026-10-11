@@ -20,7 +20,7 @@
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/InternalNoReturn.h"
-#include "neverd/ir/low/LowUndefinedEffects.h"
+#include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/lift/X86Regs.h"
@@ -501,116 +501,6 @@ struct ModuleEvidenceBudget {
   }
 };
 
-/// The module address lattice retains may-dependencies through escaped frame
-/// cells. They are not a must-value memory proof. Independently check the two
-/// pointer values at this call: only exact full-width copies and arithmetic,
-/// and private spills since the last opaque call/store, can carry current SP.
-bool localUnwindUsesCurrentSP(const LowBlock &Block, size_t End,
-                              const TargetRegInfo &TRI,
-                              ModuleEvidenceBudget &Budget) {
-  std::map<LowValueKey, int64_t> Values;
-  std::map<int64_t, int64_t> Spills;
-  const NdVar SP = NdVar::reg(TRI.StackPointer, 8);
-  Values[{SP.Space, SP.Offset, SP.Size}] = 0;
-  auto Get = [&](const NdVar &V) -> std::optional<int64_t> {
-    if (V.Size != 8 || (!V.isReg() && !V.isTemp()))
-      return std::nullopt;
-    auto It = Values.find({V.Space, V.Offset, V.Size});
-    return It == Values.end() ? std::nullopt
-                              : std::optional<int64_t>{It->second};
-  };
-  va_t Instruction = InvalidVA;
-  for (size_t I = 0; I < End; ++I) {
-    if (!Budget.consume())
-      return false;
-    const LowOp &Op = Block.Ops[I];
-    if (Op.NumInputs > std::size(Op.Inputs) ||
-        Op.MemoryOrdering != NdMemoryOrdering::None ||
-        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-        (Op.Output.Size && ((!Op.Output.isReg() && !Op.Output.isTemp()) ||
-                            Op.Output.Offset > UINT64_MAX - Op.Output.Size)))
-      return false;
-    if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
-        Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN)
-      return false;
-    if (Op.Addr != Instruction) {
-      std::erase_if(Values, [](const auto &V) {
-        return std::get<0>(V.first) == VnodeSpace::TEMP;
-      });
-      Instruction = Op.Addr;
-    }
-    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-        Op.Opcode == NdOp::INTRINSIC) {
-      // Even a pointer to a neighbouring local could give an opaque callee
-      // access to a saved SP. Do not infer the pointee extent from its width.
-      Spills.clear();
-      const auto CurrentSP = Get(SP);
-      Values.clear();
-      if (CurrentSP && Op.Opcode != NdOp::INTRINSIC && Op.Output != SP)
-        Values[{SP.Space, SP.Offset, SP.Size}] = *CurrentSP;
-      continue;
-    }
-    if (Op.Opcode == NdOp::STORE) {
-      if (Op.NumInputs != 2) {
-        Spills.clear();
-        continue;
-      }
-      const auto Address = Get(Op.Inputs[0]);
-      const auto Value = Get(Op.Inputs[1]);
-      int64_t StoreEnd = 0;
-      if (!Address || !Op.Inputs[1].Size ||
-          llvm::AddOverflow(*Address, int64_t{Op.Inputs[1].Size}, StoreEnd)) {
-        Spills.clear();
-        continue;
-      }
-      std::erase_if(Spills, [&](const auto &S) {
-        int64_t End = 0;
-        return llvm::AddOverflow(S.first, int64_t{8}, End) ||
-               (*Address < End && S.first < StoreEnd);
-      });
-      if (Value && Op.Inputs[1].Size == 8)
-        Spills[*Address] = *Value;
-      continue;
-    }
-    std::optional<int64_t> Value;
-    if (Op.Output.Size == 8 && Op.NumInputs == 1 && Op.Opcode == NdOp::COPY)
-      Value = Get(Op.Inputs[0]);
-    else if (Op.Output.Size == 8 && Op.NumInputs == 2 &&
-             (Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
-             Op.Inputs[1].isConst() && Op.Inputs[1].Size == 8) {
-      if (auto Base = Get(Op.Inputs[0])) {
-        const int64_t Delta = static_cast<int64_t>(Op.Inputs[1].Offset);
-        int64_t Sum = 0;
-        const bool Overflow = Op.Opcode == NdOp::INT_ADD
-                                  ? llvm::AddOverflow(*Base, Delta, Sum)
-                                  : llvm::SubOverflow(*Base, Delta, Sum);
-        if (!Overflow)
-          Value = Sum;
-      }
-    } else if (Op.Output.Size == 8 && Op.NumInputs == 1 &&
-               Op.Opcode == NdOp::LOAD) {
-      if (auto Address = Get(Op.Inputs[0]))
-        if (auto It = Spills.find(*Address); It != Spills.end())
-          Value = It->second;
-    }
-    if (!Op.Output.Size)
-      continue;
-    // Partial definitions invalidate the entire identity, including a wider
-    // register subsequently re-read after a byte/word write.
-    std::erase_if(Values, [&](const auto &V) {
-      const auto &[Space, Offset, Size] = V.first;
-      return Space == Op.Output.Space &&
-             Offset < Op.Output.Offset + Op.Output.Size &&
-             Op.Output.Offset < Offset + Size;
-    });
-    if (Value)
-      Values[{Op.Output.Space, Op.Output.Offset, Op.Output.Size}] = *Value;
-  }
-  const auto CurrentSP = Get(SP);
-  const auto Frame = Get(NdVar::reg(TRI.Win64ParamRegs.front(), 8));
-  return CurrentSP && Frame && *CurrentSP == *Frame;
-}
-
 LowValueKey lowValueKey(const NdVar &Value) {
   return {Value.Space, Value.Offset, Value.Size};
 }
@@ -955,6 +845,7 @@ bool collectLowAddressUses(
     std::vector<ModuleAddressState> OutStates(BlockCount);
     std::map<std::pair<va_t, int>, LowCxxContinuationExitEvidence>
         ReturnedOccurrences;
+    std::optional<LowSEHFrameProof> SEHFrameProof;
 
     auto mergeFacts = [&](ModuleAddressFacts &Into,
                           const ModuleAddressFacts &From) {
@@ -1654,17 +1545,19 @@ bool collectLowAddressUses(
                           Module.equals_insensitive("msvcrtd.dll");
                       if (KnownRuntime && Frame.isPrivateFrameOnly() &&
                           SP.isPrivateFrameOnly() &&
-                          Frame.FrameOffsets == SP.FrameOffsets &&
-                          localUnwindUsesCurrentSP(Block, OpIndex, TRI,
-                                                   Budget) &&
-                          Budget.consume(OpIndex + 1))
-                        LocalUnwind->SameFrameCallsByFunction[FuncIndex]
-                            .push_back(
-                                {Target, Op.Addr, Op.Seq, CalleeVA,
-                                 *Frame.FrameOffsets.begin(),
-                                 lowUndefinedOperationDigest(
-                                     llvm::ArrayRef(Block.Ops).take_front(
-                                         OpIndex + 1))});
+                          Frame.FrameOffsets == SP.FrameOffsets) {
+                        if (!SEHFrameProof)
+                          SEHFrameProof =
+                              proveLowSEHFrames(Func, TRI, Budget.Remaining);
+                        const auto Proof =
+                            SEHFrameProof->Calls.find({Op.Addr, Op.Seq});
+                        if (Proof != SEHFrameProof->Calls.end() &&
+                            Proof->second == *Frame.FrameOffsets.begin())
+                          LocalUnwind->SameFrameCallsByFunction[FuncIndex]
+                              .push_back({Target, Op.Addr, Op.Seq, CalleeVA,
+                                          Proof->second,
+                                          SEHFrameProof->DependencyDigest});
+                      }
                     }
                   }
                 }

@@ -475,7 +475,7 @@ public:
   static std::string debugSignatureKey(const FunctionSym &FS);
   /// Prefer more TPI params / a typed or sret return when two decorations
   /// collapse to one C identifier. Display-only; does not invent call args.
-  static int debugSymRichness(const FunctionSym &FS);
+  int debugSymRichness(const FunctionSym &FS) const;
   static TypeRef cDisplayType(const TypeRef &Ty);
   std::optional<int64_t> frameDisplacement(const HighExpr &E) const;
   std::optional<int64_t>

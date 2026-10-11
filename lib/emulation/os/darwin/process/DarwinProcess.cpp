@@ -122,7 +122,9 @@ llvm::Expected<ProcessResult> runProcess(const std::filesystem::path &Path,
   auto &CPU = (*Session)->cpu();
   DarwinMemory Memory(**Space, Image->Memory, Options);
   DarwinFiles Files(CPU, Options.DarwinFiles, Options.OutputLimit,
-                    credentialID(ServiceKind::GetEUID, Options.DarwinSystem));
+                    credentialID(ServiceKind::GetEUID, Options.DarwinSystem),
+                    Options.DarwinSystem ? Options.DarwinSystem->Credentials
+                                         : std::nullopt);
   DarwinEntropy Entropy(Options.DarwinSystem);
   ProcessResult Result{Profile.Profile, Image->Architecture, Backend->Kind,
                        Backend->Reason};

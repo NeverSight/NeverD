@@ -14,6 +14,8 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <optional>
+#include <set>
 #include <tuple>
 
 namespace neverd::med_calling_conv_detail {
@@ -21,7 +23,29 @@ namespace neverd::med_calling_conv_detail {
 using ValueKey = std::tuple<MedVar::VarKind, int, int>;
 using ValueSet = llvm::DenseSet<ValueKey>;
 
+/// An authenticated byte read, including instruction-owned FP memory sources.
+/// Scalar FP sources can use a proven immutable incoming argument. Packed
+/// sources retain their instruction-owned memory/alignment effects and homes.
+struct StackMemoryRead {
+  unsigned AddressInput;
+  unsigned Bytes;
+  bool ScalarFP = false;
+};
+std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op);
+void preserveFPStackHomes(
+    const MedFunc &Func, int64_t Base, unsigned Slot,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    std::set<int64_t> &MutableSlots);
+void recoverFPStackReads(
+    MedFunc &Func, Arch Architecture, int64_t Base, unsigned Slot,
+    unsigned ParameterBase,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    const std::set<int64_t> &MutableSlots);
+
 ValueKey valueKey(const MedVar &V);
+/// Internal register-ABI stack recovery, including a bounded variadic prefix.
+void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Format,
+                       int64_t MaxStackOff = 0);
 bool containsValue(const ValueSet &Values, const MedVar &V);
 
 ValueSet computeForwardValueClosure(

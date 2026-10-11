@@ -696,7 +696,7 @@ TEST_F(PatchCOFF_AArch64, ReconstructsBoundedNativeFH3GroupAndRelifts) {
   ASSERT_NE(OriginalPersonality, nullptr);
   const uint8_t OriginalPersonalityOpcode = *OriginalPersonality;
 
-  const auto Decompile = decompileToHighC(PE);
+  const auto Decompile = decompileToHighC(PE, "cpp");
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
   std::ifstream HighCInput(tmpFile("decompiled_high.c"));
   ASSERT_TRUE(HighCInput.good());

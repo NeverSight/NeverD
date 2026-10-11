@@ -246,7 +246,7 @@ if(NEVERD_ENABLE_Z3)
 endif()
 
 if(NEVERD_ENABLE_WEB_ANALYSIS)
-  set(_neverd_web_notice_sets bun asar whatwg ada)
+  set(_neverd_web_notice_sets bun node asar whatwg ada)
   if(NEVERD_ENABLE_WEB_ASAR)
     list(APPEND _neverd_web_notice_sets icu)
   endif()

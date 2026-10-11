@@ -863,6 +863,102 @@ TEST(LowIRLoopAlignment, KnownCounterDiscoversLaterPreservedLane) {
   EXPECT_TRUE(Proof.proved()) << Proof.Diagnostic;
 }
 
+TEST(LowIRLoopAlignment, PlanCutCapRejectsOversizedFamiliesBeforeQueries) {
+  const auto P = sequentialCounterLoop(2);
+  const auto Standalone = inferLowIRLoopRefinementPlan(P.Function, P.Contract);
+  ASSERT_TRUE(Standalone.inferred()) << Standalone.Diagnostic;
+  ASSERT_EQ(Standalone.Plan->Cutpoints.size(), 2U);
+  ASSERT_GT(Standalone.SolverQueries, 0U);
+  for (auto Family : {detail::LowIRLoopCutFamily::Default,
+                      detail::LowIRLoopCutFamily::BranchArms,
+                      detail::LowIRLoopCutFamily::FilteredBranchArms}) {
+    SCOPED_TRACE(static_cast<unsigned>(Family));
+    const auto Exact = detail::inferLowIRLoopRefinementPlanFamily(
+        P.Function, P.Contract, {}, Family, {}, 2);
+    ASSERT_TRUE(Exact.inferred()) << Exact.Diagnostic;
+    ASSERT_EQ(Exact.Plan->Cutpoints.size(), 2U);
+    const auto Proof = checkLowIRLoopRefinement(
+        P.Function, P.Records, P.Function, P.Contract, *Exact.Plan);
+    ASSERT_TRUE(Proof.proved()) << Proof.Diagnostic;
+    if (Family == detail::LowIRLoopCutFamily::Default) {
+      EXPECT_EQ(Exact.SolverQueries, Standalone.SolverQueries);
+      EXPECT_EQ(Exact.Operations, Standalone.Operations);
+      EXPECT_EQ(Exact.CutpointAttempts, Standalone.CutpointAttempts);
+    }
+    for (uint32_t Cap : {0U, 1U}) {
+      const auto Short = detail::inferLowIRLoopRefinementPlanFamily(
+          P.Function, P.Contract, {}, Family, {}, Cap);
+      EXPECT_EQ(Short.Status, LowIRLoopInferenceStatus::BudgetExceeded);
+      EXPECT_EQ(Short.Diagnostic, "loop inference plan cut count exceeded");
+      EXPECT_FALSE(Short.Plan);
+      EXPECT_EQ(Short.SolverQueries, 0U);
+      EXPECT_EQ(Short.Operations, 0U);
+      EXPECT_EQ(Short.CutpointAttempts, 0U);
+      EXPECT_EQ(Short.WideningRounds, 0U);
+      EXPECT_EQ(Short.CutSelectionWork, Exact.CutSelectionWork);
+    }
+  }
+  // The caller must pass the cap before any original self-plan is inferred;
+  // a later rejection of an already inferred plan has spent these queries.
+  for (uint32_t Cap : {0U, 1U}) {
+    LowIRLoopAlignmentLimits Limits;
+    Limits.MaxCuts = Cap;
+    const auto Aligned = P.check(P, Limits);
+    EXPECT_EQ(Aligned.Status, LowIRLoopAlignmentStatus::BudgetExceeded);
+    EXPECT_FALSE(Aligned.Refinement.Certificate);
+    EXPECT_EQ(Aligned.SolverQueries, 0U);
+    EXPECT_EQ(Aligned.CandidateAttempts, 0U);
+    EXPECT_EQ(Aligned.PairingAttempts, 0U);
+  }
+}
+
+TEST(LowIRLoopAlignment, PlanCutCapRetainsCompleteCoverageAndValidation) {
+  const auto P = sequentialCounterLoop(2);
+  const va_t OneCycleOnly[] = {0x400};
+  const auto Missing = detail::inferLowIRLoopRefinementPlanFamily(
+      P.Function, P.Contract, {}, detail::LowIRLoopCutFamily::Default, {}, 1,
+      OneCycleOnly);
+  EXPECT_EQ(Missing.Status, LowIRLoopInferenceStatus::Unsupported);
+  EXPECT_EQ(Missing.Diagnostic, "eligible cutpoints do not cover every cycle");
+  EXPECT_FALSE(Missing.Plan);
+  EXPECT_EQ(Missing.SolverQueries, 0U);
+  auto Broken = P;
+  Broken.Function.Blocks.front().Succs.push_back(999);
+  const auto Invalid = detail::inferLowIRLoopRefinementPlanFamily(
+      Broken.Function, Broken.Contract, {}, detail::LowIRLoopCutFamily::Default,
+      {}, 0);
+  EXPECT_EQ(Invalid.Status, LowIRLoopInferenceStatus::Invalid);
+  EXPECT_FALSE(Invalid.Plan);
+  EXPECT_EQ(Invalid.SolverQueries, 0U);
+}
+
+TEST(LowIRLoopAlignment, PlanCutCapKeepsQueriesForFilteredFamilies) {
+  const auto A = phasedResetLoop(3, 1, false, true);
+  const auto B = phasedResetLoop(3, 1, false, false, true);
+  LowIRLoopAlignmentLimits Limits;
+  Limits.MaxCandidateAttempts = 3;
+  Limits.MaxSolverQueries = 16384;
+  Limits.OriginalInference.Execution.MaxSolverQueries = 16384;
+  Limits.CandidateInference.Execution.MaxSolverQueries = 16384;
+  Limits.Proof.Execution.MaxSolverQueries = 16384;
+  // Do not restrict MaxCutpointAttempts: the broad family must be refused
+  // because its complete plan is too large, before it spends these queries.
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    const auto R = Reverse ? B.check(A, Limits) : A.check(B, Limits);
+    ASSERT_TRUE(R.proved())
+        << R.Diagnostic << ": " << R.LastCandidateDiagnostic;
+    ASSERT_TRUE(R.Refinement.Certificate);
+    EXPECT_EQ(R.Refinement.Certificate->LoopPlan->Cutpoints.size(), 3U);
+    EXPECT_LE(R.SolverQueries, Limits.MaxSolverQueries);
+  }
+  const auto Wrong = phasedResetLoop(4, 1, false, false, true);
+  const auto Refused = A.check(Wrong, Limits);
+  EXPECT_FALSE(Refused.proved());
+  EXPECT_FALSE(Refused.Refinement.Certificate);
+  EXPECT_LE(Refused.SolverQueries, Limits.MaxSolverQueries);
+}
+
 TEST(LowIRLoopAlignment, InternalDiamondsDoNotSplitLoopPhases) {
   const auto A = phasedResetLoop(3, 1, false, true);
   const auto B = phasedResetLoop(3, 1, false, false, true);

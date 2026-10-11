@@ -253,15 +253,16 @@ TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {
       return NdType::makeVoid();
     return {};
   }
-  if (isMsvcIndirectReturn(DebugFn->ReturnType)) {
-    const NdType *Record = msvcIndirectReturnRecord(DebugFn->ReturnType);
+  if (isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format)) {
+    const NdType *Record = msvcIndirectReturnRecord(DebugFn->ReturnType,
+                                                    Opts.TheArch, Opts.Format);
     return NdType::makePtr(
         NdType::makeNamedRecord(cNamedTypeSpelling(Record->SourceName),
                                 Record->Size ? Record->Size : 8));
   }
   // A return type C cannot spell keeps the recovered machine type, as a
   // parameter's does.
-  if (!hasCSpelling(cDisplayType(DebugFn->ReturnType)))
+  if (!hasCValueLayout(cDisplayType(DebugFn->ReturnType)))
     return {};
   return DebugFn->ReturnType;
 }
@@ -309,13 +310,13 @@ void HighCWriter::prepareFunctionReturns(std::vector<HighFunc> &Funcs) const {
 
 bool HighCWriter::highIRIncludesIndirectReturn(const HighFunc &Func,
                                                const FunctionSym &FS) const {
-  return isMsvcIndirectReturn(FS.ReturnType) &&
+  return isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format) &&
          Func.Params.size() == FS.Params.size() + 1;
 }
 
 bool HighCWriter::isWin64MemberIndirectReturn(const FunctionSym &FS) const {
-  return isMsvcIndirectReturn(FS.ReturnType) && !FS.Params.empty() &&
-         FS.Params[0].first == "this";
+  return isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format) &&
+         !FS.Params.empty() && FS.Params[0].first == "this";
 }
 
 int HighCWriter::indirectReturnParamId(const FunctionSym &FS) const {
@@ -731,7 +732,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
       // A debug type C cannot spell leaves the local its recovered type, as
       // debugTypeForDisplacement does.
       if (auto Var = Dbg->resolveVariable(CurrentFunc->Entry, Local.StackOff);
-          Var && Var->Type && hasCSpelling(cDisplayType(Var->Type)))
+          Var && Var->Type && hasCValueLayout(cDisplayType(Var->Type)))
         Ty = cDisplayType(Var->Type);
     }
     auto ExplicitTy = ExplicitDeclarations.find(Name);
@@ -2353,7 +2354,8 @@ void HighCWriter::noteDebugExtern(const std::string &Name,
 void HighCWriter::noteDebugExternCallSret(const std::string &Name,
                                           const FunctionSym &FS,
                                           const HighExpr &Call) {
-  if (!isMsvcPointerEncodedClassReturn(FS.ReturnType))
+  if (!isMsvcPointerEncodedClassReturn(FS.ReturnType, Opts.TheArch,
+                                       Opts.Format))
     return;
   const size_t SretIdx =
       isWin64MemberIndirectReturn(FS) ? static_cast<size_t>(1) : 0;
@@ -4230,9 +4232,10 @@ void HighCWriter::collectCallResultNames(const HighFunc &Func) {
       if (Dbg)
         Dbg->completeType(FS->ReturnType);
       ReturnType = cDisplayType(FS->ReturnType);
-      if (isMsvcIndirectReturn(FS->ReturnType) && ReturnType &&
-          ReturnType->Kind != NdTypeKind::Ptr) {
-        if (const NdType *Record = msvcIndirectReturnRecord(FS->ReturnType)) {
+      if (isMsvcIndirectReturn(FS->ReturnType, Opts.TheArch, Opts.Format) &&
+          ReturnType && ReturnType->Kind != NdTypeKind::Ptr) {
+        if (const NdType *Record = msvcIndirectReturnRecord(
+                FS->ReturnType, Opts.TheArch, Opts.Format)) {
           if (ReturnType->Kind == NdTypeKind::Struct)
             ReturnType = NdType::makePtr(ReturnType);
           else
@@ -4245,7 +4248,7 @@ void HighCWriter::collectCallResultNames(const HighFunc &Func) {
                    msvcCallee(callIdentifier(*S.Val), Opts.Format))
       ReturnType = msvcSyntheticReturn(Msvc->ReturnKind);
     // A result whose type C cannot spell keeps the destination's type.
-    if (ReturnType && !hasCSpelling(ReturnType))
+    if (ReturnType && !hasCValueLayout(ReturnType))
       ReturnType = nullptr;
     if (ReturnType)
       CallResultTypes[Name] = ReturnType;
@@ -4359,7 +4362,7 @@ void HighCWriter::bindParams(const HighFunc &Func) const {
   auto Bind = [&](size_t PI, size_t DI) {
     ParamBindings[PI] = {static_cast<int>(DI), 0, true, false};
   };
-  if (isMsvcIndirectReturn(DebugFn->ReturnType)) {
+  if (isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format)) {
     // MSVC's hidden result pointer keeps its own positions.
     const bool HighIRIncludesSret =
         highIRIncludesIndirectReturn(Func, *DebugFn);
@@ -4483,7 +4486,7 @@ void HighCWriter::bindParams(const HighFunc &Func) const {
     // cannot spell, such as a pointer to a record without a printable name or
     // validated fields, keeps the recovered machine parameter.
     if (const TypeRef DebugType = cDisplayType(DebugFn->Params[B.Index].second);
-        DebugType && hasCSpelling(DebugType))
+        DebugType && hasCValueLayout(DebugType))
       EmittedParamTypes[PI] = DebugType;
   }
   // A piece's name, `result` or a source name such as `arg1` can meet another
@@ -4520,7 +4523,7 @@ std::string HighCWriter::debugParamName(const HighFunc &Func,
 bool HighCWriter::positionalDebugSignature(const FunctionSym &FS) const {
   if (!FS.PlatformConvention)
     return false;
-  if (isMsvcIndirectReturn(FS.ReturnType))
+  if (isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format))
     return true;
   const uint16_t Word = pointerBytes(Opts.TheArch);
   // A record result in memory takes the first argument.
@@ -4559,7 +4562,8 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
   std::vector<size_t> All;
   const auto DebugFn = debugFunction(Dbg, Func.Entry);
   const size_t N = Func.Params.size();
-  if (DebugFn && isMsvcIndirectReturn(DebugFn->ReturnType)) {
+  if (DebugFn &&
+      isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format)) {
     All.resize(N);
     for (size_t I = 0; I < N; ++I)
       All[I] = I;
@@ -5419,7 +5423,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   IndirectReturnName.clear();
   if (const auto DebugFn = debugFunction(Dbg, Func.Entry);
       !Func.SourceTypeHint && DebugFn &&
-      isMsvcIndirectReturn(DebugFn->ReturnType))
+      isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format))
     IndirectReturnName = "result";
   PrintedIndirectReturn = false;
   Analysis = {};
@@ -5728,7 +5732,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   TypeRef ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
   TypeRef IndirectReturnPtr;
   if (!Func.SourceTypeHint && DebugFn &&
-      isMsvcIndirectReturn(DebugFn->ReturnType)) {
+      isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format)) {
     IndirectReturnName = "result";
     InferredVoid = false;
     IndirectReturnPtr = FuncReturnType;
@@ -5791,7 +5795,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     else if (Opts.TheArch == Arch::X64 && DebugFn) {
       const bool Member =
           !DebugFn->Params.empty() && DebugFn->Params[0].first == "this";
-      const bool Sret = isMsvcIndirectReturn(DebugFn->ReturnType);
+      const bool Sret =
+          isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format);
       DebugCallConv CC = DebugFn->CallConv;
       if (CC == DebugCallConv::Thiscall)
         CC = DebugCallConv::Fastcall;
@@ -6258,6 +6263,17 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   for (const auto &Name : ParamNames)
     MemoryIdentifiers.allocate(Name);
 
+  // Frame projection can hide an ordinary-edge PHI copy after a try. Settle
+  // clause exits against the statements that will actually be printed, while
+  // retaining all previously required labels as conservative entry evidence.
+  FallthroughTryExits.clear();
+  {
+    std::set<std::pair<va_t, va_t>> Kept;
+    decideTryExits(Func.Body, {}, Kept);
+    for (const auto &Exit : Kept)
+      FallthroughTryExits.erase(Exit);
+  }
+  collectGotoTargets(Func.Body);
   // Render the body first: a name the declaration pass expected to be
   // forwarded or dead may still be printed, and it must be declared.
   std::string Body;

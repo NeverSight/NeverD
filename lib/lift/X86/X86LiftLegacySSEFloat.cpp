@@ -13,6 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPArithState.h"
 #include "X86LiftDetail.h"
 #include "X86ScalarFPConversion.h"
 
@@ -161,95 +162,7 @@ bool liftLegacySSEFloat(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_DIVSD:
   case X86_INS_DIVPS:
   case X86_INS_DIVPD: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    NdOp Opc;
-    switch (InsnId) {
-    case X86_INS_ADDSS:
-    case X86_INS_ADDSD:
-    case X86_INS_ADDPS:
-    case X86_INS_ADDPD:
-      Opc = NdOp::FLOAT_ADD;
-      break;
-    case X86_INS_SUBSS:
-    case X86_INS_SUBSD:
-    case X86_INS_SUBPS:
-    case X86_INS_SUBPD:
-      Opc = NdOp::FLOAT_SUB;
-      break;
-    case X86_INS_MULSS:
-    case X86_INS_MULSD:
-    case X86_INS_MULPS:
-    case X86_INS_MULPD:
-      Opc = NdOp::FLOAT_MULT;
-      break;
-    default:
-      Opc = NdOp::FLOAT_DIV;
-    }
-    bool IsPacked = (InsnId == X86_INS_ADDPS || InsnId == X86_INS_ADDPD ||
-                     InsnId == X86_INS_SUBPS || InsnId == X86_INS_SUBPD ||
-                     InsnId == X86_INS_MULPS || InsnId == X86_INS_MULPD ||
-                     InsnId == X86_INS_DIVPS || InsnId == X86_INS_DIVPD);
-    if (IsPacked && Dst.Size >= 16) {
-      bool IsPD = (InsnId == X86_INS_ADDPD || InsnId == X86_INS_SUBPD ||
-                   InsnId == X86_INS_MULPD || InsnId == X86_INS_DIVPD);
-      unsigned ElemSz = IsPD ? 8 : 4;
-      unsigned NLanes = Dst.Size / ElemSz;
-      std::vector<NdVar> Lanes(NLanes);
-      for (unsigned I = 0; I < NLanes; ++I) {
-        NdVar A = S.makeTemp(ElemSz);
-        S.emit(NdOp::SUBBYTES, A, {Dst, NdVar::cst(I * ElemSz, 4)});
-        NdVar B = S.makeTemp(ElemSz);
-        S.emit(NdOp::SUBBYTES, B, {Src, NdVar::cst(I * ElemSz, 4)});
-        Lanes[I] = S.makeTemp(ElemSz);
-        S.emit(Opc, Lanes[I], {A, B});
-      }
-      if (NLanes == 2) {
-        S.emit(NdOp::CONCAT, Dst, {Lanes[1], Lanes[0]});
-      } else {
-        NdVar Lo = S.makeTemp(ElemSz * 2);
-        S.emit(NdOp::CONCAT, Lo, {Lanes[1], Lanes[0]});
-        NdVar Hi = S.makeTemp(ElemSz * 2);
-        S.emit(NdOp::CONCAT, Hi, {Lanes[3], Lanes[2]});
-        S.emit(NdOp::CONCAT, Dst, {Hi, Lo});
-      }
-    } else {
-      bool IsSS = (InsnId == X86_INS_ADDSS || InsnId == X86_INS_SUBSS ||
-                   InsnId == X86_INS_MULSS || InsnId == X86_INS_DIVSS);
-      bool IsSD = (InsnId == X86_INS_ADDSD || InsnId == X86_INS_SUBSD ||
-                   InsnId == X86_INS_MULSD || InsnId == X86_INS_DIVSD);
-      if ((IsSS || IsSD) && Dst.Size > 8) {
-        unsigned ScalarSz = IsSS ? 4 : 8;
-        NdVar A = S.makeTemp(ScalarSz);
-        S.emit(NdOp::SUBBYTES, A, {Dst, NdVar::cst(0, 4)});
-        NdVar B = S.makeTemp(ScalarSz);
-        S.emit(NdOp::SUBBYTES, B, {Src, NdVar::cst(0, 4)});
-        NdVar Res = S.makeTemp(ScalarSz);
-        Intrinsic Stateful = Opc == NdOp::FLOAT_ADD   ? Intrinsic::X86FPAddState
-                             : Opc == NdOp::FLOAT_SUB ? Intrinsic::X86FPSubState
-                             : Opc == NdOp::FLOAT_MULT
-                                 ? Intrinsic::X86FPMulState
-                                 : Intrinsic::X86FPDivState;
-        NdVar Incoming = S.makeTemp(4);
-        S.emitIntrinsic(Intrinsic::X86ReadMXCSR, Incoming);
-        NdVar ValueAndState = S.makeTemp(ScalarSz + 4);
-        S.emitIntrinsic(Stateful, ValueAndState, {A, B, Incoming});
-        S.emit(NdOp::SUBBYTES, Res, {ValueAndState, NdVar::cst(0, 4)});
-        NdVar Outgoing = S.makeTemp(4);
-        S.emit(NdOp::SUBBYTES, Outgoing,
-               {ValueAndState, NdVar::cst(ScalarSz, 4)});
-        S.emitVoidIntrinsic(Intrinsic::X86WriteMXCSR, {Outgoing});
-        unsigned HiSz = Dst.Size - ScalarSz;
-        NdVar Hi = S.makeTemp(HiSz);
-        S.emit(NdOp::SUBBYTES, Hi, {Dst, NdVar::cst(ScalarSz, 4)});
-        S.emit(NdOp::CONCAT, Dst, {Hi, Res});
-      } else {
-        S.emit(Opc, Dst, {Dst, Src});
-      }
-    }
-    break;
+    return liftFPArithState(L, S, Insn, X86);
   }
 
   // ========================================================================

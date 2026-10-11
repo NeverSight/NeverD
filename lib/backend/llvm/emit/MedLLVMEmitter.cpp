@@ -25,6 +25,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
@@ -631,7 +632,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     // takes its register ABI type so LLVM's calling-convention lowering assigns
     // it to the FP register file; declaring it an integer would route it
     // through the integer registers instead.
-    if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff)) {
+    if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff, TargetFormat)) {
       ParamTypes.push_back(fpAbiType(P.Size));
       continue;
     }
@@ -722,6 +723,14 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   // bodies. Validate mutable storage and metadata before any such traversal,
   // then reuse the same plan during emission.
   for (const auto &Func : Funcs) {
+    for (const auto &Block : Func.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].ConstVal == static_cast<uint64_t>(Intrinsic::X87Fxam))
+          throw std::runtime_error(
+              "FXAM requires a proven x87 slot tag and payload in " +
+              Func.Name);
     if (!Func.SkippedSSA)
       continue;
     if (Img_)
@@ -737,6 +746,13 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   Ctx = &LCtx;
   auto Mod_ = std::make_unique<llvm::Module>(ModName, LCtx);
   Mod = Mod_.get();
+  if (const char *Triple = llvmEmitTriple(TheArch, Fmt)) {
+    Mod_->setTargetTriple(llvm::Triple(Triple));
+    // Address folding, aggregate layout and C projection run before native
+    // codegen. They need the same target layout on every architecture/format,
+    // not LLVM's generic default until a TargetMachine happens to be created.
+    Mod_->setDataLayout(Mod_->getTargetTriple().computeDataLayout());
+  }
   Img = Img_;
   ImportStorageSnapshotImage = nullptr;
   EffectiveImportStorageSlots.clear();
@@ -982,14 +998,6 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     if (!VetoedSuppression.count(Slot))
       ModuleSuppressibleJumpTableRelocationSlots.insert(Slot);
 
-  const char *Triple = llvmEmitTriple(TheArch, Fmt);
-  if (Triple) {
-    Mod_->setTargetTriple(llvm::Triple(Triple));
-    // Registration callbacks recover pointer-sized cells before target
-    // codegen creates a TargetMachine. Use LLVM's target layout here too.
-    if (TheArch == Arch::X86 && Fmt == BinaryFormat::COFF)
-      Mod_->setDataLayout(Mod_->getTargetTriple().computeDataLayout());
-  }
   if (Fmt == BinaryFormat::COFF && Img) {
     uint32_t GuardFlags = Img->DynInfo.GuardFlags;
     if ((GuardFlags & uint32_t(llvm::COFF::GuardFlags::CF_INSTRUMENTED)) != 0)
@@ -1299,7 +1307,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
             language_eh_md::InternalCxxContinuationReturnAttachment, nullptr);
       }
 
-  if (FatalCodePointerResolution || FatalDataPointerResolution)
+  if (FatalCodePointerResolution || FatalDataPointerResolution ||
+      !normalizeResolvedLLVMCalls(*Mod_, SourceMap) ||
+      !validateResolvedLLVMCallSignatures(*Mod_))
     return nullptr;
 
   // Mark the producer schema independently of per-function attachments.  A

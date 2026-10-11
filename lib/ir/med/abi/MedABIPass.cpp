@@ -17,6 +17,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/X86RegistrationCall.h"
 #include "neverd/libc/LibCNames.h"
@@ -439,6 +440,7 @@ void recoverCallAbi(
   const auto &TRI = getTargetRegInfo(TheArch);
   const AbiSpillContext SpillContext{Func, TRI, FrameLocalLeafCallees};
   const BinaryFormat Fmt = Img ? Img->abiFormat() : BinaryFormat::Unknown;
+  const auto FPParamRegs = TRI.floatingParamRegs(Fmt);
   const CallArgumentConvention *Convention =
       callArgumentConvention(TheArch, Fmt);
   const AbiCallPolicy *Policy = abiCallPolicy(TheArch, Fmt);
@@ -649,6 +651,16 @@ void recoverCallAbi(
 
       const bool IsDirectImport =
           !CI.IsIndirect && Img && Img->findImportAt(CI.TargetAddr);
+      // LowIR canonicalizes an import-slot load to an exact indirect target.
+      // The import's ABI still applies: a forwarded incoming register need
+      // not have a setup write. Names alone do not prove this identity.
+      bool IsIndirectImport = false;
+      if (CI.IsIndirect && Img && Op.NumInputs && Op.Inputs[0].isConst())
+        if (std::string Name = importCalleeName(*Img, CI.TargetAddr);
+            !Name.empty()) {
+          CI.TargetName = std::move(Name);
+          IsIndirectImport = true;
+        }
 
       // An external placeholder collision, indirect call or import keeps its
       // existing output here (promoteFloatCallResult).
@@ -664,7 +676,7 @@ void recoverCallAbi(
           TargetSection && Img->isMachO() &&
           TargetSection->Name == section_names::macho::ObjCStubs;
       std::optional<libc::LibCArity> ExternalArity;
-      if (!CI.IsIndirect)
+      if (!CI.IsIndirect || IsIndirectImport)
         ExternalArity = libc::libcArityForSymbol(CI.TargetName);
 
       // The callee's integer register-argument count, if it is a known direct
@@ -990,10 +1002,15 @@ void recoverCallAbi(
               HasStackArgAtCallSP = true;
           }
       }
-      // A call first in its block can have its stack arguments stored at the
-      // end of a predecessor (MSVC sets them before an EH state change).
-      if (OI == 0 && Policy && Policy->ScanPredecessorStackArgs)
-        Policy->ScanPredecessorStackArgs(Ctx, HasStackArg, HasStackArgAtCallSP);
+      // A branch or EH boundary may split the setup from the call on any
+      // architecture. Keep only stores agreed upon by every incoming path.
+      const auto ReachingStackStores = callSetupStackStores(Ctx);
+      for (const auto &[Offset, Value] : ReachingStackStores) {
+        HasStackArg = true;
+        if (Offset == CallLayout.CallStackBase &&
+            !(Value.Kind == MedVar::Reg && TRI.isFrameOrLinkReg(Value.RegOff)))
+          HasStackArgAtCallSP = true;
+      }
       const int NumIntParamRegs = static_cast<int>(IntParamRegs.size());
 
       // With positional slots a stack argument (`[rsp+20h]` on Win64) proves
@@ -1071,8 +1088,10 @@ void recoverCallAbi(
       // consecutive register slots from the value reaching the call across the
       // CFG.
       bool Arg0FromInBlock = FoundMask[0];
-      if (!CI.IsIndirect && IntRegArgsApply)
+      if ((!CI.IsIndirect || UseExternalArity) && IntRegArgsApply)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
+          if (UseExternalArity && K >= CalleeRegArgs)
+            break;
           if (FoundMask[K])
             continue;
           if (K > 0 && !FoundMask[K - 1])
@@ -1088,6 +1107,9 @@ void recoverCallAbi(
           auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K,
                                       IntegerLayout, AllowLiveIn, &FromLiveIn);
           if (!V)
+            break;
+          if (IsIndirectImport && (FromLiveIn || V->Kind == MedVar::Param) &&
+              !incomingArgumentReachesCall(Ctx, K))
             break;
           Found[K] = *V;
           FoundMask[K] = true;
@@ -1467,8 +1489,20 @@ void recoverCallAbi(
         }
       }
 
-      if (OI == 0 && Policy && Policy->TakePredecessorStackArgs)
-        Policy->TakePredecessorStackArgs(Ctx);
+      const int ReachingStackBase = StackAfterUsedRegisters ? FirstStackSlot
+                                    : DarwinVarArgBase >= 0
+                                        ? DarwinVarArgBase
+                                        : static_cast<int>(IntParamRegs.size());
+      for (const auto &[Offset, Value] : ReachingStackStores) {
+        const int64_t Slot =
+            ReachingStackBase +
+            (Offset - CallLayout.CallStackBase) / CallLayout.SlotBytes;
+        if (Slot < 0 || Slot >= MaxArgs || FoundMask[Slot])
+          continue;
+        Found[Slot] = Value;
+        FoundMask[Slot] = true;
+        FromStackScan[Slot] = true;
+      }
 
       // Pack two AAPCS64-packed sub-8-byte integer stack arguments into one
       // 8-byte slot value (Apple arm64 places e.g. `int a8@[sp+0], a9@[sp+4]`
@@ -1723,7 +1757,8 @@ void recoverCallAbi(
           if (Param.RegOff != kNoParamReg)
             ++CallerStackBase;
       }
-      if (IsTailJump && (!CI.IsIndirect || ImportStackArgs) &&
+      if (IsTailJump &&
+          (!CI.IsIndirect || ImportStackArgs || UseExternalArity) &&
           CalleeArgs > CalleeStackBase) {
         for (int K = CalleeStackBase; K < CalleeArgs && K < MaxArgs; ++K) {
           if (FoundMask[K])
@@ -1763,7 +1798,7 @@ void recoverCallAbi(
       // the real variadic arguments so the callee reads the wrong slots
       // (printf("p[%d]=%.3f", i, v) then prints "p[0]=0.000").
       std::vector<MedVar> FoundFP;
-      if (RegArgsApply && !TRI.FPParamRegs.empty() && DarwinVarArgBase < 0 &&
+      if (RegArgsApply && !FPParamRegs.empty() && DarwinVarArgBase < 0 &&
           !CoreRegisterFloats) {
         // The FP-argument registers to probe, in ABI order.  Default to the
         // architecture's FP parameter registers (XMM0-7 / V0-7 / ARM D0-7); for
@@ -1771,8 +1806,7 @@ void recoverCallAbi(
         // so an ARM `float`-argument callee is recovered at s0,s1,.. (not
         // d0,d1) — the high-half S registers (s1=0x104) alias no D-register
         // slot.
-        std::vector<uint64_t> FPRegs(TRI.FPParamRegs.begin(),
-                                     TRI.FPParamRegs.end());
+        std::vector<uint64_t> FPRegs(FPParamRegs.begin(), FPParamRegs.end());
         if (!CI.IsIndirect && !IsRelocExtern && CalleeFPRegs) {
           auto RIt = CalleeFPRegs->find(CI.TargetAddr);
           if (RIt != CalleeFPRegs->end() && !RIt->second.empty())
@@ -1908,9 +1942,9 @@ void recoverCallAbi(
       // int+FP overflow) leaves the run empty, falling back to the 8-byte-slot
       // model below.  The covered slots are cleared so that model does not also
       // emit them.
-      if (CI.IsIndirect && !FPStackByOff.empty() && !TRI.FPParamRegs.empty() &&
+      if (CI.IsIndirect && !FPStackByOff.empty() && !FPParamRegs.empty() &&
           static_cast<int>(FoundFP.size()) ==
-              static_cast<int>(TRI.FPParamRegs.size())) {
+              static_cast<int>(FPParamRegs.size())) {
         const int NumRegArgSlots = static_cast<int>(IntParamRegs.size());
         const int SlotSize = TRI.PointerSize;
         int64_t Next = 0;
@@ -2369,7 +2403,7 @@ void recoverCallAbi(
     std::set<uint64_t> ExistingFP;
     for (const auto &P : Func.Params)
       if (P.RegOff != kNoParamReg)
-        for (uint64_t FR : TRI.FPParamRegs)
+        for (uint64_t FR : FPParamRegs)
           if (P.RegOff == FR) {
             ExistingFP.insert(P.RegOff);
             break;

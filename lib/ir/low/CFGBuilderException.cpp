@@ -138,13 +138,26 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
   if (Metadata.Registration) {
     std::optional<std::vector<RegistrationCalleeFrameContract>> Callees;
     std::optional<std::vector<RegistrationCleanupFrameContract>> Cleanups;
+    std::optional<std::vector<RegistrationCalleeStackContract>> Stacks;
+    std::optional<std::vector<RegistrationLocalUnwindContract>> LocalUnwinds;
     const bool CheckCalls = CurrentImg && Metadata.Cxx.has_value();
+    RegistrationCallCalleeIndex *CalleeIndex = nullptr;
+    if (CurrentImg) {
+      if (BorrowedRegistrationCallees &&
+          BorrowedRegistrationCallees->ownsImage(*CurrentImg))
+        CalleeIndex = BorrowedRegistrationCallees;
+      else {
+        if (!RegistrationCallees)
+          RegistrationCallees =
+              std::make_shared<RegistrationCallCalleeIndex>(*CurrentImg);
+        CalleeIndex = RegistrationCallees.get();
+      }
+      Stacks = CalleeIndex->stackContracts(Func);
+      LocalUnwinds = CalleeIndex->localUnwindContracts(Func);
+    }
     if (CheckCalls) {
-      if (!RegistrationCallees)
-        RegistrationCallees =
-            std::make_shared<RegistrationCallCalleeIndex>(*CurrentImg);
-      Callees = RegistrationCallees->contracts(Func);
-      Cleanups = RegistrationCallees->cleanupContracts(Func);
+      Callees = CalleeIndex->contracts(Func);
+      Cleanups = CalleeIndex->cleanupContracts(Func);
     }
     va_t CookieCheckVA = 0;
     if (CurrentImg &&
@@ -161,7 +174,13 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
             ? CurrentImg->Base + CurrentImg->DynInfo.SecurityCookieRVA
             : 0,
         CookieCheckVA, CheckCalls && Callees ? &*Callees : nullptr,
-        CheckCalls && Cleanups ? &*Cleanups : nullptr);
+        CheckCalls && Cleanups ? &*Cleanups : nullptr,
+        Stacks ? &*Stacks : nullptr, LocalUnwinds ? &*LocalUnwinds : nullptr);
+    if (CurrentImg && !LocalUnwinds) {
+      Func.RegistrationStates->Complete = false;
+      Func.RegistrationStates->Diagnostics.push_back(
+          "registration runtime-call proof budget exhausted");
+    }
     if (CheckCalls && (!Callees || !Cleanups))
       Func.RegistrationStates->Diagnostics.push_back(
           "registration callee proof budget exhausted");

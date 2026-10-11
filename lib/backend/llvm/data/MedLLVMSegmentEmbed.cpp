@@ -217,7 +217,7 @@ bool MedLLVMEmitter::segHasPtrRelocSlots(const Segment *S) const {
 
 bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
   return S && S->isReadable() && !S->isExecutable() && !S->Data.empty() &&
-         (!S->isWritable() ||
+         (!S->isWritable() || S->ReadOnlyAfterRelocations ||
           section_names::isReadOnlyAfterRelocSectionName(S->Name));
 }
 

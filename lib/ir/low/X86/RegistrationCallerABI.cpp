@@ -205,14 +205,10 @@ bool hasRegistrationCallFrameABI(
             Op.Inputs[0].Size != 4)
           return false;
         const va_t Next = Op.Inputs[0].Offset;
-        if (const auto *Import = Image.findImportAt(Next)) {
+        if (Image.findImportAt(Next)) {
           // Dispatch intentionally consumes the live registration chain.
           // Other opaque APIs need a separate frame-observation contract.
-          if (Import->Name != "RaiseException" ||
-              (!llvm::StringRef(Import->Module)
-                    .equals_insensitive("kernel32.dll") &&
-               !llvm::StringRef(Import->Module)
-                    .equals_insensitive("kernelbase.dll")))
+          if (!registration_abi::checkedRegistrationImportStackPop(Image, Next))
             return false;
           continue;
         }

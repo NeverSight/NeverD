@@ -14,6 +14,7 @@
 #include "PipelineMedAudit.h"
 #include "PipelineReturnModelingDetail.h"
 
+#include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -286,11 +287,22 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   std::string FinalVerifyError;
   llvm::raw_string_ostream FinalVerifyStream(FinalVerifyError);
+  if (!normalizeResolvedLLVMCalls(*Result.LlvmModule,
+                                  Result.LLVMSources.get())) {
+    Result.Error =
+        "final LLVM verification failed: resolved call signature mismatch";
+    return false;
+  }
   Result.LLVMVerifierFailed =
       llvm::verifyModule(*Result.LlvmModule, &FinalVerifyStream);
   if (Result.LLVMVerifierFailed) {
     Result.Error = "final LLVM verification failed: " + FinalVerifyError;
     llvm::WithColor::warning() << "pipeline: " << Result.Error << "\n";
+    return false;
+  }
+  if (!validateResolvedLLVMCallSignatures(*Result.LlvmModule)) {
+    Result.Error =
+        "final LLVM verification failed: resolved call signature mismatch";
     return false;
   }
 

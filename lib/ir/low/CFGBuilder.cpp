@@ -20,6 +20,7 @@
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
@@ -2228,6 +2229,20 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         if (!Saved.IsCond)
           break;
       }
+
+      // This runtime call retires a registration-state transition just like
+      // a source try-level store. Give its ordinary continuation a new block.
+      if (Saved.IsCall && Img.Arch == Arch::X86)
+        if (const auto *EH =
+                Img.ExceptionMetadata.findFunction(CurrentFuncEntry);
+            EH && EH->Registration)
+          for (const auto &Op : Saved.Ops)
+            if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+                Op.NumInputs == 1 && Op.Inputs[0].isConst() &&
+                Op.Inputs[0].Size == 4 &&
+                getCheckedX86LocalUnwindContract(Img, Op.Inputs[0].Offset,
+                                                 Op.Opcode == NdOp::INDIR_CALL))
+              BlockStarts.insert(Next);
 
       Cur = Next;
     }

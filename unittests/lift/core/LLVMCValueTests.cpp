@@ -32,7 +32,8 @@ namespace {
 void compileAndRun(const std::string &Source,
                    llvm::StringRef Optimization = "-O2",
                    const std::string &ReferenceIR = {},
-                   bool CheckUndefinedBehavior = false) {
+                   bool CheckUndefinedBehavior = false,
+                   bool NativeI386 = false) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -59,6 +60,14 @@ void compileAndRun(const std::string &Source,
     llvm::raw_fd_ostream OS(SourcePath, EC);
     ASSERT_FALSE(EC);
     OS << Source;
+    if (NativeI386)
+      OS << R"(
+__attribute__((noreturn)) void _start(void) {
+  unsigned result = main();
+  __asm__ __volatile__("int $0x80" : : "a"(1), "b"(result) : "memory");
+  __builtin_unreachable();
+}
+)";
   }
   if (!ReferenceIR.empty()) {
     llvm::raw_fd_ostream OS(ReferencePath, EC);
@@ -77,6 +86,13 @@ void compileAndRun(const std::string &Source,
                                                    BinaryPath};
   if (!ReferenceIR.empty())
     Arguments.push_back(ReferencePath);
+  if (NativeI386) {
+    // This scalar projection needs no host 32-bit C library or sanitizer
+    // runtime. The Linux i386 entry executes the actual 32-bit address model.
+    for (llvm::StringRef Flag :
+         {"-m32", "-ffreestanding", "-nostdlib", "-static", "-Wl,-e,_start"})
+      Arguments.push_back(Flag);
+  }
   if (CheckUndefinedBehavior) {
     Arguments.push_back("-fsanitize=undefined");
     Arguments.push_back("-fsanitize-trap=all");
@@ -1578,7 +1594,67 @@ TEST(LLVMCValues, WideIntegerPointerConstantKeepsItsPointerWidth) {
       "int main(void) { return (uintptr_t)wide_pointer() != 0x1234; }\n");
 }
 
-TEST(LLVMCValues, ConstantsWiderThanTheCarrierAreRejected) {
+TEST(LLVMCValues, WideIntegerConstantsPreserveEveryWordAndStoreExtent) {
+  for (unsigned Width : {160U, 256U, 288U, 512U}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("wide-constant", Context);
+    auto *Signature =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                                {llvm::PointerType::getUnqual(Context)}, false);
+    auto *Function = llvm::Function::Create(
+        Signature, llvm::GlobalValue::ExternalLinkage, "wide_store", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    llvm::APInt Value(Width, 0);
+    for (unsigned Bit : {0U, 65U, 130U, Width - 1})
+      Value.setBit(Bit);
+    auto *Store = Builder.CreateStore(llvm::ConstantInt::get(Context, Value),
+                                      Function->getArg(0));
+    Store->setAlignment(llvm::Align(1));
+    Builder.CreateRetVoid();
+    auto *CopySignature =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                                {llvm::PointerType::getUnqual(Context),
+                                 llvm::PointerType::getUnqual(Context)},
+                                false);
+    auto *Copy = llvm::Function::Create(
+        CopySignature, llvm::GlobalValue::ExternalLinkage, "wide_copy", Module);
+    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Copy));
+    auto *Loaded =
+        Builder.CreateLoad(Builder.getIntNTy(Width), Copy->getArg(0));
+    Loaded->setAlignment(llvm::Align(1));
+    Builder.CreateStore(Loaded, Copy->getArg(1))->setAlignment(llvm::Align(1));
+    Builder.CreateRetVoid();
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+    std::string Driver = R"(
+#include <string.h>
+int main(void) {
+  unsigned char storage[96], expected[96];
+  memset(storage, 0x59, sizeof(storage));
+  memcpy(expected, storage, sizeof(storage));
+)";
+    Driver += "  memset(expected + 1, 0, " + std::to_string(Width / 8) + ");\n";
+    for (unsigned Bit : {0U, 65U, 130U, Width - 1})
+      Driver += "  expected[" + std::to_string(1 + Bit / 8) +
+                "] |= " + std::to_string(1U << (Bit % 8)) + ";\n";
+    Driver += "  wide_store(storage + 1);\n"
+              "  if (memcmp(storage, expected, sizeof(storage))) return 1;\n"
+              "  unsigned char copy[96], expected_copy[96];\n"
+              "  memset(copy, 0xa5, sizeof(copy));\n"
+              "  memcpy(expected_copy, copy, sizeof(copy));\n";
+    Driver += "  memcpy(expected_copy + 3, expected + 1, " +
+              std::to_string(Width / 8) +
+              ");\n"
+              "  wide_copy(storage + 1, copy + 3);\n"
+              "  return memcmp(copy, expected_copy, sizeof(copy)) != 0;\n}\n";
+    for (const char *Optimization : {"-O0", "-O2"})
+      compileAndRun(Source + Driver, Optimization, {}, true);
+  }
+}
+
+TEST(LLVMCValues, ConstantsBeyondTheSupportedCarrierAreRejected) {
   llvm::LLVMContext Context;
   llvm::Module Module("unsupported-constant", Context);
   auto *Signature =
@@ -1588,13 +1664,88 @@ TEST(LLVMCValues, ConstantsWiderThanTheCarrierAreRejected) {
       Signature, llvm::GlobalValue::ExternalLinkage, "wide_store", Module);
   llvm::IRBuilder<> Builder(
       llvm::BasicBlock::Create(Context, "entry", Function));
-  Builder.CreateStore(llvm::ConstantInt::get(Context, llvm::APInt(256, 17)),
+  Builder.CreateStore(llvm::ConstantInt::get(Context, llvm::APInt(513, 17)),
                       Function->getArg(0));
   Builder.CreateRetVoid();
   std::string Source;
   llvm::raw_string_ostream Out(Source);
   EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, {}),
-               std::runtime_error);
+               std::invalid_argument);
+}
+
+TEST(LLVMCValues, WideConstantsPreserveEveryStoredByte) {
+  for (bool LittleEndian : {true, false})
+    for (unsigned Bits :
+         {129u, 136u, 159u, 192u, 224u, 255u, 256u, 257u, 384u, 511u, 512u}) {
+      SCOPED_TRACE(Bits);
+      SCOPED_TRACE(LittleEndian);
+      llvm::LLVMContext Context;
+      llvm::Module Module("wide-constant-bytes", Context);
+      Module.setDataLayout(LittleEndian ? "e-p:64:64" : "E-p:64:64");
+      auto *Signature = llvm::FunctionType::get(
+          llvm::Type::getVoidTy(Context),
+          {llvm::PointerType::getUnqual(Context)}, false);
+      auto *Function = llvm::Function::Create(
+          Signature, llvm::GlobalValue::ExternalLinkage, "wide_store", Module);
+      llvm::IRBuilder<> Builder(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      llvm::APInt Value(Bits, 0);
+      const unsigned Bytes = (Bits + 7) / 8;
+      for (unsigned Byte = 0; Byte < Bytes; ++Byte)
+        Value |= llvm::APInt(Bits, (Byte * 37 + 17) & 255) << (Byte * 8);
+      auto *Store = Builder.CreateStore(llvm::ConstantInt::get(Context, Value),
+                                        Function->getArg(0));
+      Store->setAlignment(llvm::Align(1));
+      Builder.CreateRetVoid();
+      auto *CopySignature = llvm::FunctionType::get(
+          Builder.getVoidTy(), {Builder.getPtrTy(), Builder.getPtrTy()}, false);
+      auto *Copy = llvm::Function::Create(CopySignature,
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          "wide_copy", Module);
+      Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Copy));
+      auto *Loaded = Builder.CreateLoad(llvm::IntegerType::get(Context, Bits),
+                                        Copy->getArg(0));
+      Loaded->setAlignment(llvm::Align(1));
+      Builder.CreateStore(Loaded, Copy->getArg(1))
+          ->setAlignment(llvm::Align(1));
+      Builder.CreateRetVoid();
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+      const std::string Main =
+          R"(
+int main(void) {
+  unsigned char bytes[66];
+  for (unsigned i = 0; i < 66; ++i) bytes[i] = 0xA5;
+  wide_store(bytes + 1);
+  for (unsigned i = 0; i < 66; ++i) {
+    unsigned byte_index = )" +
+          std::to_string(LittleEndian) + R"( ? i - 1 : )" +
+          std::to_string(Bytes) + R"( - i;
+    unsigned char expected = i > 0 && i <= )" +
+          std::to_string(Bytes) +
+          R"( ? (byte_index * 37 + 17) & 255 : 0xA5;
+    unsigned mask = i == )" +
+          std::to_string(LittleEndian ? Bytes : 1) + R"( ? )" +
+          std::to_string(Bits % 8 ? (1u << (Bits % 8)) - 1 : 255) + R"( : 255;
+    if ((bytes[i] & mask) != (expected & mask)) return 1;
+  }
+  unsigned char copy[66];
+  for (unsigned i = 0; i < 66; ++i) copy[i] = 0xA5;
+  bytes[1] ^= 0xFF;
+  wide_copy(bytes + 1, copy + 1);
+  for (unsigned i = 0; i < 66; ++i) {
+    unsigned mask = i == )" +
+          std::to_string(LittleEndian ? Bytes : 1) + R"( ? )" +
+          std::to_string(Bits % 8 ? (1u << (Bits % 8)) - 1 : 255) + R"( : 255;
+    if ((bytes[i] & mask) != (copy[i] & mask)) return 2;
+  }
+  return 0;
+}
+)";
+      for (llvm::StringRef Optimization : {"-O0", "-O2"})
+        compileAndRun(Source + Main, Optimization, {}, true);
+    }
 }
 
 TEST(LLVMCValues, GlobalByteViewsUseObjectAddresses) {
@@ -2979,6 +3130,105 @@ entry:
       Frame, llvm::DataLayout("e-p:64:64")));
   EXPECT_FALSE(neverd::llvmc::syntheticFrameBaseOffset(
       Frame, llvm::DataLayout("e-p:128:128")));
+}
+
+void checkSelectedTableStorage(bool NativeI386) {
+  for (auto Arch : NativeI386
+                       ? std::vector{neverd::Arch::X86, neverd::Arch::ARM}
+                       : std::vector{neverd::Arch::X64, neverd::Arch::AArch64})
+    for (auto Format : {neverd::BinaryFormat::ELF, neverd::BinaryFormat::COFF,
+                        neverd::BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<int>(Arch));
+      SCOPED_TRACE(static_cast<int>(Format));
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      auto Module = llvm::parseAssemblyString(R"ir(
+@selected_values = private constant [4 x i32] [i32 73, i32 19, i32 211, i32 6]
+@unrelated_values = private constant [2 x i32] [i32 999, i32 888]
+define i32 @table_selection(i32 %index) {
+  %slot = getelementptr [4 x i32], ptr @selected_values, i32 0, i32 %index
+  %value = load i32, ptr %slot
+  ret i32 %value
+}
+)ir",
+                                              Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      Module->setDataLayout(
+          Arch == neverd::Arch::X86 || Arch == neverd::Arch::ARM ? "e-p:32:32"
+                                                                 : "e-p:64:64");
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Arch;
+      Options.Format = Format;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(
+          neverd::LLVMCEmitter().emit(*Module, Out, Options, nullptr, nullptr,
+                                      Module->getFunction("table_selection")));
+      EXPECT_EQ(Source.find("unrelated_values"), std::string::npos);
+      const std::string Main = R"(
+int main(void) {
+  const uint32_t expected[] = {73, 19, 211, 6};
+  for (uint32_t i = 0; i < 4; ++i)
+    if (table_selection(i) != expected[i]) return 1;
+  return 0;
+}
+)";
+      for (llvm::StringRef Optimization : {"-O0", "-O2"})
+        compileAndRun(Source + Main, Optimization, {}, true, NativeI386);
+    }
+}
+
+TEST(LLVMCValues, SelectedFunctionKeepsSynthesizedTableStorage) {
+  checkSelectedTableStorage(false);
+}
+
+TEST(LLVMCValues, SelectedFunctionKeeps32BitSynthesizedTableStorage) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+  checkSelectedTableStorage(true);
+#else
+  GTEST_SKIP() << "32-bit scalar C execution requires Linux i386 support";
+#endif
+}
+
+TEST(LLVMCValues, SelectedGlobalInitializersKeepForwardStorageAndProviders) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+@selected_storage = internal global [1 x ptr] [ptr @later_storage]
+@selected_provider = internal global [1 x ptr] [ptr @fragment_provider]
+@later_storage = internal global [2 x i32] [i32 23, i32 41]
+@unused_storage = internal global [1 x ptr] [ptr @unused_provider]
+declare i32 @fragment_provider(i32)
+declare i32 @unused_provider(i32)
+define i32 @selected_dependencies(i32 %index) {
+  %base = load ptr, ptr @selected_storage
+  %slot = getelementptr i32, ptr %base, i32 %index
+  %value = load i32, ptr %slot
+  %callee = load ptr, ptr @selected_provider
+  %result = call i32 %callee(i32 %value)
+  ret i32 %result
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(
+      *Module, Out, Options, nullptr, nullptr,
+      Module->getFunction("selected_dependencies")));
+  EXPECT_EQ(Source.find("unused_storage"), std::string::npos);
+  EXPECT_EQ(Source.find("unused_provider"), std::string::npos);
+  const std::string Runtime = R"(
+uint32_t fragment_provider(uint32_t value) { return value * 7; }
+int main(void) {
+  return selected_dependencies(0) != 161 || selected_dependencies(1) != 287;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source + Runtime, Optimization, {}, true);
 }
 
 TEST(LLVMCValues, SelectedScalarCallsDeclareExternalAndUnemittedProviders) {

@@ -10,11 +10,46 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/ReadOnlyBytes.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <deque>
 #include <set>
 
 namespace neverd::registration_abi {
+
+static const Import *checkedImportSlot(const BinaryImage &Image, va_t Target) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF)
+    return nullptr;
+  const auto *Import = Image.findImportAt(Target);
+  if (!Import || Import->IATAddr != Target ||
+      !Image.isValidImportStorageSlot(Import->IATAddr, Import->Name))
+    return nullptr;
+  for (const auto &Other : Image.Imports)
+    if (Other.IATAddr == Import->IATAddr &&
+        (Other.Name != Import->Name ||
+         !llvm::StringRef(Other.Module).equals_insensitive(Import->Module)))
+      return nullptr;
+  const auto Storage = Image.collectImportStorageSlot(Import->IATAddr);
+  const auto Slot = Storage.Slots.find(Import->IATAddr);
+  if (Storage.Conflicts.count(Import->IATAddr) || Slot == Storage.Slots.end() ||
+      Slot->second.Name != Import->Name || Slot->second.Addend)
+    return nullptr;
+  return Import;
+}
+
+std::optional<uint32_t>
+checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
+  const auto *Named = Image.findImportAt(Target);
+  const auto *Import =
+      Named ? checkedImportSlot(Image, Named->IATAddr) : nullptr;
+  if (!Import || Import->Name != "RaiseException" ||
+      (!llvm::StringRef(Import->Module).equals_insensitive("kernel32.dll") &&
+       !llvm::StringRef(Import->Module).equals_insensitive("kernelbase.dll")))
+    return std::nullopt;
+  return 16;
+}
 
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects) {
   auto Read = Effects.Reads.begin();
@@ -73,6 +108,57 @@ bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
 } // namespace neverd::registration_abi
 
 namespace neverd {
+
+std::optional<RegistrationLocalUnwindContract>
+getCheckedX86LocalUnwindContract(const BinaryImage &Image, va_t Target,
+                                 bool Indirect) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Target > UINT32_MAX)
+    return std::nullopt;
+  va_t Slot = Target;
+  if (!Indirect) {
+    const auto Bytes =
+        readImmutablePE32CodeBytes(Image, Target, 6, {Target + 2});
+    if (!Bytes || (*Bytes)[0] != 0xff || (*Bytes)[1] != 0x25)
+      return std::nullopt;
+    Slot = readLE<uint32_t>(Bytes->data() + 2);
+  }
+  const auto *Import = registration_abi::checkedImportSlot(Image, Slot);
+  if (!Import || Import->Name != "_local_unwind2" ||
+      (!llvm::StringRef(Import->Module).equals_insensitive("msvcrt.dll") &&
+       !llvm::StringRef(Import->Module)
+            .equals_insensitive("vcruntime140.dll") &&
+       !llvm::StringRef(Import->Module)
+            .equals_insensitive("vcruntime140d.dll")))
+    return std::nullopt;
+  return RegistrationLocalUnwindContract{Target, Indirect};
+}
+
+std::optional<std::vector<RegistrationLocalUnwindContract>>
+RegistrationCallCalleeIndex::localUnwindContracts(const LowFunc &Function) {
+  std::vector<RegistrationLocalUnwindContract> Result;
+  std::set<std::pair<va_t, bool>> Seen;
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (!registration_abi::chargeCalleeWork(Work, 1))
+        return std::nullopt;
+      if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
+          Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
+          Op.Inputs[0].Size != 4)
+        continue;
+      const auto Identity =
+          std::make_pair(Op.Inputs[0].Offset, Op.Opcode == NdOp::INDIR_CALL);
+      if (!Seen.insert(Identity).second)
+        continue;
+      if (Seen.size() > 256)
+        return std::nullopt;
+      if (const auto Contract = getCheckedX86LocalUnwindContract(
+              Image, Identity.first, Identity.second))
+        Result.push_back(*Contract);
+    }
+  return Result;
+}
+
 namespace {
 using registration_abi::callerPCIsNotReadBack;
 using registration_abi::chargeCalleeWork;
