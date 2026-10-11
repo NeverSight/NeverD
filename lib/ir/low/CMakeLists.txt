@@ -3,6 +3,7 @@ add_neverd_component_library(NeverDIRLowValidation
   LowNoReturn.cpp
   LowPreservedState.cpp
   LowUndefinedEffects.cpp
+  SEHFrameProof.cpp
   X87PartialRemainder.cpp
 
   LINK_COMPONENTS

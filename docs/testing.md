@@ -2429,6 +2429,28 @@ capture a developer's absolute workspace path.
 
 ### Windows exception reconstruction
 
+`AArch64_FP.SeparateArithmeticKeepsItsRoundingThroughBothCRoutes` uses original
+half/single/double multiply-and-add instructions and fixed bit-pattern oracles.
+Both C routes execute at O0/O2 on the host and cross-compile to ARM64 IR that
+must retain separate operations. This exercises half bitcasts and intermediate
+rounding on hosts without native FP16, alongside the native half-arithmetic CI
+case. It does not certify nondefault floating environments.
+
+`PLTImportsRequireSymbolAddressRelocations` checks REL and RELA slot roles for
+x86, x64, ARM and AArch64, retaining TLS descriptor runtime semantics without
+turning descriptor symbols into callable imports. `PLTUnwindRangesDoNotHideIndividualVeneers`
+checks all four architectures, including explicit function ownership and
+partial-range counterexamples. Session C API regressions cover TLS calls,
+variadic veneers and lazy-binding source pages.
+
+`LocalUnwindTargetRequiresExclusiveSameFrameUses` includes decoded x64 calls
+whose SP save and load occupy different blocks, stale producer changes, opaque
+calls, partial writes, foreign address uses and invalid module/runtime facts.
+`LocalUnwindFrameProofIntersectsEveryPredecessor` checks diamonds, stable and
+changing loops, block ordering, independent/EH roots, expired temporaries,
+released stack storage, partial/atomic writes and exhausted budgets. No opaque
+callee memory preservation or mixed PE32 callback activation is implied.
+
 CRT source regressions use synthetic tables and the pinned Windows corpus:
 
 ```bash

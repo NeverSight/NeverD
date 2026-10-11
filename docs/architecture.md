@@ -1627,8 +1627,12 @@ selected-function scans and exhausted budgets cannot establish exclusivity.
 An independent call-site proof requires the frame argument to equal current
 SP through full-width copies, constant offsets or private spills untouched by
 an intervening opaque call or write. Generic address may-facts alone cannot
-prove a saved frame value. An operation digest binds that proof to the current
-argument-producing block prefix. Shared SSA then checks the call occurrence, parent
+prove a saved frame value. `LowSEHFrameProof` owns the all-predecessor
+intersection, including stable loops, independent roots and released stack
+storage. A digest binds every operation, instruction boundary, root and CFG
+edge in that function; changing an earlier block invalidates the receipt.
+The analysis runs once per queried function, within the module evidence budget.
+Shared SSA then checks the call occurrence, parent
 unwind allocation, decoded prologue, converted SP effects and every relevant
 predecessor path. The initial contract requires an ordinary-reachable target;
 cross-funclet frame borrowing and saved frames surviving opaque calls remain
@@ -1641,6 +1645,14 @@ whose C evaluation refines it without introducing undefined behavior.
 Division additionally requires defined operands. Helper discovery covers all
 emitted bodies, including Windows analysis bodies; supported indirect vector
 calls use the same C vector ABI as direct calls.
+
+Both C emitters use `FloatingPointContract.h` to disable implicit contraction
+of separate floating operations. Explicit FMA operations retain fused builtins.
+LLVMC spells IEEE half as `_Float16`, copies its bits through exact byte
+transfers, and casts narrow floating arithmetic at each operation to retain
+rounding on hosts that otherwise use excess precision. Compiler options that
+explicitly override source pragmas, such as Clang's `-ffp-contract=fast`, are
+outside this contract.
 
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
