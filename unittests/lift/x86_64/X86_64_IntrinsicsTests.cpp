@@ -809,3 +809,45 @@ beyond_baseline:
       CFile, {"-target", "x86_64-linux-gnu", "-ffreestanding", "-std=gnu11"});
   EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << C;
 }
+
+// CMPXCHG16B faults on an address that is not 16-byte aligned; the C traps
+// there before the exchange.
+TEST_F(X86_64_Intrinsics, Decompile_AlignmentPreconditionTraps) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "assembling x86-64 requires Clang";
+  const auto Source = tmpFile("cas16.s");
+  const auto Object = tmpFile("cas16.o");
+  std::ofstream(Source) << R"S(
+.text
+.globl cas16
+.type cas16,@function
+cas16:
+  pushq %rbx
+  movq %rsi, %rax
+  movq %rdx, %rbx
+  xorl %edx, %edx
+  xorl %ecx, %ecx
+  lock cmpxchg16b (%rdi)
+  sete %al
+  movzbl %al, %eax
+  popq %rbx
+  ret
+.size cas16,.-cas16
+)S";
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-c",
+                               Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  auto r = decompileToHighC(Object);
+  ASSERT_EQ(r.exitCode, 0) << "Decompile failed: " << r.err;
+  const std::string C = readDecompiledFile("decompiled_high.c");
+  EXPECT_NE(C.find("& 15) != 0)\n"), std::string::npos) << C;
+  EXPECT_NE(C.find("__builtin_trap();"), std::string::npos) << C;
+  EXPECT_EQ(C.find("neverd_require_aligned"), std::string::npos) << C;
+  const auto CFile = tmpFile("cas16_high.c");
+  std::ofstream(CFile) << C;
+  const auto Compiled =
+      checkHighCClangCompile(CFile, {"-target", "x86_64-linux-gnu", "-mcx16",
+                                     "-ffreestanding", "-std=gnu11"});
+  EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << C;
+}
