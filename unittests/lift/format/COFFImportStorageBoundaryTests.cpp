@@ -165,7 +165,8 @@ bool referencesValue(const llvm::Value *Root, const llvm::Value *Target,
     if (const auto *Alloca = llvm::dyn_cast<llvm::AllocaInst>(Pointer))
       for (const llvm::User *User : Alloca->users())
         if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
-            Store && Store->getPointerOperand()->stripPointerCasts() == Alloca &&
+            Store &&
+            Store->getPointerOperand()->stripPointerCasts() == Alloca &&
             referencesValue(Store->getValueOperand(), Target, Seen))
           return true;
   }
@@ -219,13 +220,19 @@ TEST(COFFImportStorageBoundary, ExactIATSlotFeedsThePointerMirrorAndCall) {
   BinaryImage Image = makeImage();
   addImport(Image, IATVA, "RaiseException");
   ASSERT_TRUE(Image.recordImportStorageSlot(
-      IATVA, "RaiseException", 0,
-      ImportStorageEvidence::ImportDirectory));
+      IATVA, "RaiseException", 0, ImportStorageEvidence::ImportDirectory));
 
+  MedFunc Source = makeIndirectCaller(IATVA);
+  MedCallInfo CI;
+  CI.BlockId = 0;
+  CI.OpIdx = 2;
+  CI.IsIndirect = true;
+  CI.Args.assign(4, MedVar::makeConst(0, 8, ConstantAddressProvenance::Scalar));
+  Source.CallInfos.push_back(CI);
   llvm::LLVMContext Context;
-  auto Module = MedLLVMEmitter().emit(
-      {makeIndirectCaller(IATVA)}, Context, "coff-exact-iat", Arch::X64,
-      importNames(Image), &Image, BinaryFormat::COFF);
+  auto Module =
+      MedLLVMEmitter().emit({Source}, Context, "coff-exact-iat", Arch::X64,
+                            importNames(Image), &Image, BinaryFormat::COFF);
   ASSERT_NE(Module, nullptr);
   expectValidModule(*Module);
 
@@ -236,42 +243,50 @@ TEST(COFFImportStorageBoundary, ExactIATSlotFeedsThePointerMirrorAndCall) {
   llvm::GlobalValue *Imported = Module->getNamedValue("RaiseException");
   ASSERT_NE(Imported, nullptr);
   std::set<const llvm::Value *> InitializerSeen;
-  EXPECT_TRUE(referencesValue(Mirror->getInitializer(), Imported,
-                              InitializerSeen));
+  EXPECT_TRUE(
+      referencesValue(Mirror->getInitializer(), Imported, InitializerSeen));
 
   llvm::Function *Caller = Module->getFunction("iat_indirect_caller");
   ASSERT_NE(Caller, nullptr);
   llvm::CallInst *Call = onlyCall(*Caller);
   ASSERT_NE(Call, nullptr);
-  std::set<const llvm::Value *> CallSeen;
-  EXPECT_TRUE(referencesValue(Call->getCalledOperand(), Mirror, CallSeen));
+  EXPECT_EQ(Call->getCalledFunction(), Imported);
+  EXPECT_EQ(Call->arg_size(), 4u);
 }
 
 TEST(COFFImportStorageBoundary, MemoryIndirectIATCallLoadsTheSlotContents) {
   BinaryImage Image = makeImage();
   addImport(Image, IATVA, "RaiseException");
   ASSERT_TRUE(Image.recordImportStorageSlot(
-      IATVA, "RaiseException", 0,
-      ImportStorageEvidence::ImportDirectory));
+      IATVA, "RaiseException", 0, ImportStorageEvidence::ImportDirectory));
 
+  MedFunc Source = makeMemoryIndirectCaller(IATVA);
+  MedCallInfo CI;
+  CI.BlockId = CI.OpIdx = 0;
+  CI.IsIndirect = true;
+  CI.Args.assign(4, MedVar::makeConst(0, 8, ConstantAddressProvenance::Scalar));
+  Source.CallInfos.push_back(CI);
   llvm::LLVMContext Context;
   auto Module = MedLLVMEmitter().emit(
-      {makeMemoryIndirectCaller(IATVA)}, Context, "coff-memory-indirect-iat",
-      Arch::X64, importNames(Image), &Image, BinaryFormat::COFF);
+      {Source}, Context, "coff-memory-indirect-iat", Arch::X64,
+      importNames(Image), &Image, BinaryFormat::COFF);
   ASSERT_NE(Module, nullptr);
   expectValidModule(*Module);
 
   llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
       (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
   ASSERT_NE(Mirror, nullptr);
-  llvm::Function *Caller =
-      Module->getFunction("iat_memory_indirect_caller");
+  llvm::Function *Caller = Module->getFunction("iat_memory_indirect_caller");
   ASSERT_NE(Caller, nullptr);
   llvm::CallInst *Call = onlyCall(*Caller);
   ASSERT_NE(Call, nullptr);
+  auto *Imported = Module->getFunction("RaiseException");
+  ASSERT_NE(Imported, nullptr);
   std::set<const llvm::Value *> Seen;
-  EXPECT_TRUE(loadsFromGlobal(Call->getCalledOperand(), Mirror, Seen))
-      << "memory-indirect call used the slot address instead of its contents";
+  EXPECT_TRUE(referencesValue(Mirror->getInitializer(), Imported, Seen));
+  EXPECT_EQ(Call->getCalledFunction(), Imported)
+      << "memory-indirect call must reach the imported function, not its slot";
+  EXPECT_EQ(Call->arg_size(), 4u);
 }
 
 TEST(COFFImportStorageBoundary,
@@ -281,18 +296,17 @@ TEST(COFFImportStorageBoundary,
       RuntimeCallableVA, RuntimeCallablePointerSlotKind::GuardCFDispatch));
 
   llvm::LLVMContext Context;
-  auto Module = MedLLVMEmitter().emit(
-      {makeMemoryIndirectCaller(RuntimeCallableVA)}, Context,
-      "coff-runtime-callable-slot", Arch::X64, importNames(Image), &Image,
-      BinaryFormat::COFF);
+  auto Module =
+      MedLLVMEmitter().emit({makeMemoryIndirectCaller(RuntimeCallableVA)},
+                            Context, "coff-runtime-callable-slot", Arch::X64,
+                            importNames(Image), &Image, BinaryFormat::COFF);
   ASSERT_NE(Module, nullptr);
   expectValidModule(*Module);
 
   llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
       (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
   ASSERT_NE(Mirror, nullptr);
-  llvm::Function *Caller =
-      Module->getFunction("iat_memory_indirect_caller");
+  llvm::Function *Caller = Module->getFunction("iat_memory_indirect_caller");
   ASSERT_NE(Caller, nullptr);
   llvm::CallInst *Call = onlyCall(*Caller);
   ASSERT_NE(Call, nullptr);
@@ -305,8 +319,7 @@ TEST(COFFImportStorageBoundary, NeighboringIATCannotNameAnUnregisteredSlot) {
   BinaryImage Image = makeImage();
   addImport(Image, IATVA + 8, "RaiseException");
   ASSERT_TRUE(Image.recordImportStorageSlot(
-      IATVA + 8, "RaiseException", 0,
-      ImportStorageEvidence::ImportDirectory));
+      IATVA + 8, "RaiseException", 0, ImportStorageEvidence::ImportDirectory));
 
   llvm::LLVMContext Context;
   testing::internal::CaptureStderr();
@@ -325,15 +338,14 @@ TEST(COFFImportStorageBoundary,
   BinaryImage Image = makeImage();
   addImport(Image, IATVA + 8, "RaiseException");
   ASSERT_TRUE(Image.recordImportStorageSlot(
-      IATVA + 8, "RaiseException", 0,
-      ImportStorageEvidence::ImportDirectory));
+      IATVA + 8, "RaiseException", 0, ImportStorageEvidence::ImportDirectory));
 
   llvm::LLVMContext Context;
   testing::internal::CaptureStderr();
-  auto Module = MedLLVMEmitter().emit(
-      {makeMemoryIndirectCaller(IATVA)}, Context,
-      "coff-memory-indirect-neighbor-iat", Arch::X64, importNames(Image),
-      &Image, BinaryFormat::COFF);
+  auto Module =
+      MedLLVMEmitter().emit({makeMemoryIndirectCaller(IATVA)}, Context,
+                            "coff-memory-indirect-neighbor-iat", Arch::X64,
+                            importNames(Image), &Image, BinaryFormat::COFF);
   const std::string Diagnostic = testing::internal::GetCapturedStderr();
   EXPECT_EQ(Module, nullptr);
   EXPECT_NE(Diagnostic.find("has no exact callable slot identity"),
@@ -345,11 +357,9 @@ TEST(COFFImportStorageBoundary, ConflictingExactIATIdentityFailsClosed) {
   BinaryImage Image = makeImage();
   addImport(Image, IATVA, "RaiseException");
   ASSERT_TRUE(Image.recordImportStorageSlot(
-      IATVA, "RaiseException", 0,
-      ImportStorageEvidence::ImportDirectory));
+      IATVA, "RaiseException", 0, ImportStorageEvidence::ImportDirectory));
   ASSERT_FALSE(Image.recordImportStorageSlot(
-      IATVA, "DifferentImport", 0,
-      ImportStorageEvidence::ImportDirectory));
+      IATVA, "DifferentImport", 0, ImportStorageEvidence::ImportDirectory));
 
   llvm::LLVMContext Context;
   testing::internal::CaptureStderr();

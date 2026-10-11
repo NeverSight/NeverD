@@ -14708,9 +14708,20 @@ TEST(LLVMCodePointerInvariantBoundary,
     llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
         (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
     ASSERT_NE(Mirror, nullptr);
-    std::set<const llvm::Value *> Seen;
-    EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
-                                              Mirror, Seen));
+    EXPECT_EQ(Calls.front()->getCalledFunction(),
+              Module->getFunction(Callee.Name));
+    // Exact immutable identity permits a direct call, but the source table
+    // observation remains. Unmarked and data slots above still fail closed.
+    bool ObservedMirror = false;
+    for (const auto &Block : *EmittedCaller)
+      for (const auto &Inst : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+          std::set<const llvm::Value *> Seen;
+          ObservedMirror |= Load->isVolatile() &&
+                            valueReferencesSpecificGlobal(
+                                Load->getPointerOperand(), Mirror, Seen);
+        }
+    EXPECT_TRUE(ObservedMirror);
   }
 }
 
@@ -15301,6 +15312,279 @@ TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
             SharedSelector, OtherLoad, nullptr));
       }
     }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     SharedRuntimeAddressDAGDoesNotExhaustTheLiteralAudit) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool HiddenAddress : {false, true}) {
+        SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                     formatTraceName(Format) + "/" +
+                     std::to_string(HiddenAddress));
+        const uint16_t Width = getTargetRegInfo(A).PointerSize;
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Format = Format;
+        Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+        Segment Data;
+        Data.Name = ".rodata";
+        Data.VA = 0x4000;
+        Data.Flags = SegmentFlags::Readable;
+        Data.Data.resize(64);
+        Data.Size = Data.FileSz = Data.Data.size();
+        Image.Segments.push_back(Data);
+        Image.RelocDataAddrs.insert(0x4000);
+        MedFunc F;
+        F.Entry = 0x100;
+        F.Name = "shared_runtime_address";
+        F.ReturnType = NdType::makeInt(1);
+        MedBlock B;
+        B.Id = 0;
+        B.StartAddr = F.Entry;
+        int Next = 0;
+        auto temp = [&]() {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.Id = Next++;
+          V.SSAVer = 1;
+          V.Size = Width;
+          V.TheArch = A;
+          return V;
+        };
+        auto append = [&](NdOp Opcode, MedVar Out,
+                          std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = Out;
+          Op.Addr = F.Entry + B.Ops.size();
+          for (const MedVar &V : Inputs)
+            Op.addInput(V);
+          B.Ops.push_back(Op);
+        };
+        MedVar Input = temp();
+        Input.Kind = MedVar::Param;
+        F.Params.push_back(Input);
+        MedVar Current = temp();
+        append(NdOp::LOAD, Current, {Input});
+        for (unsigned Depth = 0; Depth != 24; ++Depth) {
+          MedVar Right = Current;
+          if (HiddenAddress && Depth == 12)
+            Right = MedVar::makeConst(0x4000, Width,
+                                      ConstantAddressProvenance::DataAddress);
+          MedVar Shifted = temp(), Joined = temp();
+          append(NdOp::INT_RIGHT, Shifted,
+                 {Right, MedVar::makeConst(1, Width,
+                                           ConstantAddressProvenance::Scalar)});
+          append(NdOp::INT_XOR, Joined, {Current, Shifted});
+          Current = Joined;
+        }
+        MedVar Byte = temp();
+        Byte.Size = 1;
+        append(NdOp::LOAD, Byte, {Current});
+        append(NdOp::RETURN, {}, {Byte});
+        B.EndAddr = F.Entry + B.Ops.size();
+        F.Blocks.push_back(std::move(B));
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit({F}, Context, "runtime-diamond", A,
+                                            {}, &Image, Format);
+        const std::string Diagnostic = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(Module != nullptr, !HiddenAddress) << Diagnostic;
+        if (Module)
+          expectValidModule(*Module);
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     RuntimeScalarBoundsBelongToTheScaledDefinition) {
+  enum class Case {
+    Valid,
+    Taken,
+    OtherSSA,
+    Narrow,
+    Bypass,
+    Exceptional,
+    IndependentRoot,
+    ImageRoot,
+    AddressBound,
+    BeforeGuard,
+    ImageLoad,
+    AddressInput,
+    Masked,
+    MaskedOutside,
+    MaskedImage,
+    MaskedAddress,
+    NonContiguousMask,
+    OversizedMask
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (Case C :
+           {Case::Valid, Case::Taken, Case::OtherSSA, Case::Narrow,
+            Case::Bypass, Case::Exceptional, Case::IndependentRoot,
+            Case::ImageRoot, Case::AddressBound, Case::BeforeGuard,
+            Case::ImageLoad, Case::AddressInput, Case::Masked,
+            Case::MaskedOutside, Case::MaskedImage, Case::MaskedAddress,
+            Case::NonContiguousMask, Case::OversizedMask}) {
+        SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                     formatTraceName(Format) + "/" +
+                     std::to_string(static_cast<int>(C)));
+        const bool Masked =
+            C == Case::Masked || C == Case::MaskedOutside ||
+            C == Case::MaskedImage || C == Case::MaskedAddress ||
+            C == Case::NonContiguousMask || C == Case::OversizedMask;
+        const bool ImageLoad = C == Case::ImageLoad || C == Case::MaskedImage;
+        const bool StableMask = C == Case::Masked || C == Case::MaskedOutside;
+        const bool Expected = C == Case::Valid || StableMask;
+        const uint16_t Width = getTargetRegInfo(A).PointerSize;
+        constexpr va_t Table = 0x4000;
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Format = Format;
+        Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+        Segment Data;
+        Data.Name = ".rodata";
+        Data.VA = Table;
+        Data.Flags = SegmentFlags::Readable;
+        Data.Data.resize(64, 42);
+        Data.Size = Data.FileSz = Data.Data.size();
+        Image.Segments.push_back(Data);
+        Image.RelocDataAddrs.insert(Table);
+        if (ImageLoad) {
+          const uint64_t Target = Table + 32;
+          std::memcpy(Image.Segments.front().Data.data(), &Target, Width);
+          Image.DataPtrRelocSlots.insert(Table);
+          Image.DataPtrRelocTargetOwners[Table] = Table;
+          Image.RelocDataAddrs.insert(Target);
+        }
+        MedFunc F;
+        F.Name = "runtime_record_index";
+        F.Entry = 0x100;
+        F.ReturnType = NdType::makeInt(1);
+        auto temp = [&](int Id, uint16_t Size) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.TheArch = A;
+          V.Size = Size;
+          return V;
+        };
+        auto number = [&](uint64_t N, uint16_t Size = 0) {
+          return MedVar::makeConst(N, Size ? Size : Width,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        MedVar Arg = temp(0, Width);
+        Arg.Kind = MedVar::Param;
+        F.Params = {Arg};
+        MedVar Loaded = temp(1, Width), Index = temp(2, Width);
+        MedVar Compared = Index, Condition = temp(3, 1);
+        MedVar Scaled = temp(4, Width), Address = temp(5, Width);
+        MedVar Byte = temp(6, 1);
+        F.Blocks.resize(3);
+        for (int I = 0; I != 3; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = 0x100 + I * 0x40;
+          F.Blocks[I].EndAddr = F.Blocks[I].StartAddr + 0x40;
+        }
+        auto append = [&](int Block, NdOp Code, MedVar Out,
+                          std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Code;
+          Op.Output = Out;
+          Op.Addr = F.Blocks[Block].StartAddr + F.Blocks[Block].Ops.size();
+          for (const MedVar &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[Block].Ops.push_back(Op);
+        };
+        append(0, NdOp::LOAD, Loaded,
+               {ImageLoad
+                    ? MedVar::makeConst(Table, Width,
+                                        ConstantAddressProvenance::DataAddress)
+                    : Arg});
+        MedVar Delta = number(~uint64_t(0));
+        if (C == Case::AddressInput)
+          Delta = MedVar::makeConst(Table, Width,
+                                    ConstantAddressProvenance::DataAddress);
+        if (C == Case::MaskedAddress) {
+          MedVar Mixed = temp(8, Width);
+          append(0, NdOp::INT_ADD, Mixed,
+                 {Loaded,
+                  MedVar::makeConst(Table, Width,
+                                    ConstantAddressProvenance::DataAddress)});
+          Loaded = Mixed;
+        }
+        if (Masked)
+          append(0, NdOp::INT_AND, Index,
+                 {Loaded, number(C == Case::NonContiguousMask ? 0x1001
+                                 : C == Case::OversizedMask   ? 0xffff
+                                                              : 0xf)});
+        else
+          append(0, NdOp::INT_ADD, Index, {Loaded, Delta});
+        if (C == Case::OtherSSA) {
+          Compared.SSAVer = 2;
+          append(0, NdOp::INT_ADD, Compared, {Loaded, number(0)});
+        } else if (C == Case::Narrow) {
+          Compared = temp(7, 1);
+          append(0, NdOp::SUBBYTES, Compared, {Index, number(0)});
+        }
+        MedVar Bound = number(5, Compared.Size);
+        if (C == Case::AddressBound)
+          Bound.Provenance = ConstantAddressProvenance::DataAddress;
+        append(0, NdOp::INT_LESS, Condition, {Bound, Compared});
+        if (C == Case::BeforeGuard || Masked)
+          append(0, NdOp::INT_MULT, Scaled, {Index, number(Width)});
+        append(0, NdOp::COND_BR, {},
+               {number(C == Case::Taken ? 0x140 : 0x180), Condition});
+        F.Blocks[0].Succs = {1, 2};
+        F.Blocks[1].Preds = {0};
+        F.Blocks[2].Preds = {0};
+        if (C != Case::BeforeGuard && !Masked)
+          append(1, NdOp::INT_MULT, Scaled, {Index, number(Width)});
+        append(1, NdOp::INT_ADD, Address,
+               {Scaled,
+                MedVar::makeConst(Table, Width,
+                                  ConstantAddressProvenance::DataAddress)});
+        append(1, NdOp::LOAD, Byte, {Address});
+        append(1, NdOp::RETURN, {}, {Byte});
+        if (C == Case::Bypass) {
+          F.Blocks[2].Succs = {1};
+          F.Blocks[1].Preds.push_back(2);
+          append(2, NdOp::BRANCH, {}, {number(0x140)});
+        } else {
+          append(2, NdOp::RETURN, {}, {number(0, 1)});
+        }
+        if (C == Case::Exceptional) {
+          ExceptionalEdge Edge;
+          Edge.BlockId = 1;
+          F.Blocks[2].ExceptionalSuccs.push_back(Edge);
+        }
+        if (C == Case::IndependentRoot)
+          F.ModuleAnalysisRoots.insert(0x140);
+        if (C == Case::ImageRoot)
+          Image.CodeRefTargets.insert(0x140);
+        MedLLVMEmitter Classifier;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Classifier, F, Image, A,
+                                                        Format);
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(Classifier, Scaled,
+                                                          nullptr),
+                  Expected);
+        // A control-flow bound belongs to the scaled definition; a mask
+        // certifies its own SSA value even before the branch.
+        EXPECT_EQ(
+            MedLLVMProvenanceTestPeer::stableOffset(Classifier, Index, nullptr),
+            StableMask);
+        if (Expected) {
+          llvm::LLVMContext Context;
+          auto Module = MedLLVMEmitter().emit({F}, Context, "guarded-record", A,
+                                              {}, &Image, Format);
+          ASSERT_NE(Module, nullptr);
+          expectValidModule(*Module);
+        }
+      }
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
@@ -16660,6 +16944,85 @@ TEST(MachOLLVMDataPointerBoundary,
                 std::string::npos)
           << Diagnostic;
     }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     SymbolizedAndRuntimePointersUseTheSameSelectionProof) {
+  // A null-substitution CMOV in MinGW pformat has the same value semantics as
+  // SELECT. Exercise direct parameters and a pointer read from a va_list.
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool Masked : {false, true})
+        for (bool Loaded : {false, true})
+          for (bool Deferred : {false, true}) {
+            SCOPED_TRACE(std::to_string(static_cast<int>(TargetArch)) + "/" +
+                         formatTraceName(Format) + "/" +
+                         (Masked ? "masked/" : "select/") +
+                         (Loaded ? "loaded/" : "parameter/") +
+                         (Deferred ? "deferred" : "symbolized"));
+            const uint16_t Width = getTargetRegInfo(TargetArch).PointerSize;
+            BinaryImage Image;
+            Image.Arch = TargetArch;
+            Image.Format = Format;
+            Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+            constexpr uint64_t StaticVA = 0x4020;
+            Segment Data;
+            Data.Name = Format == BinaryFormat::COFF ? ".rdata" : ".rodata";
+            Data.VA = 0x4000;
+            Data.Flags = SegmentFlags::Readable;
+            Data.Data.resize(64);
+            std::memcpy(Data.Data.data(), &StaticVA, Width);
+            Data.Data[32] = 42;
+            Data.Size = Data.FileSz = Data.Data.size();
+            Image.Segments.push_back(Data);
+            Image.DataPtrRelocSlots.insert(0x4000);
+            Image.DataPtrRelocTargetOwners[0x4000] = 0x4000;
+            Image.RelocDataAddrs.insert(StaticVA);
+            MedFunc Lookup = makeNoPhiSelectedTableLookup(TargetArch, Masked);
+            for (MedOp &Op : Lookup.Blocks.front().Ops)
+              for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+                MedVar &Input = Op.Inputs[I];
+                if (Input.isConst() && Input.ConstVal == LowSpilledConstTableVA)
+                  Input = MedVar::makeConst(
+                      StaticVA, Width,
+                      Deferred ? ConstantAddressProvenance::Address
+                               : ConstantAddressProvenance::DataAddress);
+              }
+            if (Loaded) {
+              MedVar Runtime = Lookup.Params[1];
+              Runtime.Kind = MedVar::Temp;
+              Runtime.Id = 900;
+              Runtime.SSAVer = 1;
+              for (MedOp &Op : Lookup.Blocks.front().Ops)
+                for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+                  MedVar &Input = Op.Inputs[I];
+                  if (Input.Kind == MedVar::Param && Input.Id == 1)
+                    Input = Runtime;
+                }
+              MedOp Load;
+              Load.Opcode = NdOp::LOAD;
+              Load.Output = Runtime;
+              Load.addInput(Lookup.Params[1]);
+              Lookup.Blocks.front().Ops.insert(
+                  Lookup.Blocks.front().Ops.begin(), Load);
+            }
+            llvm::LLVMContext Context;
+            auto Module = MedLLVMEmitter().emit(
+                {Lookup}, Context, "runtime-static-pointer-selection",
+                TargetArch, {}, &Image, Format);
+            ASSERT_NE(Module, nullptr);
+            expectValidModule(*Module);
+            llvm::Function *Function = Module->getFunction(Lookup.Name);
+            ASSERT_NE(Function, nullptr);
+            const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+            ASSERT_NE(TableLoad, nullptr);
+            std::set<const llvm::Value *> Seen;
+            EXPECT_TRUE(valueReferencesMaterializedGlobal(
+                TableLoad->getPointerOperand(), Seen));
+            EXPECT_FALSE(
+                llvm::isa<llvm::Constant>(TableLoad->getPointerOperand()));
+          }
 }
 
 TEST(MachOLLVMDataPointerBoundary,
@@ -19104,6 +19467,265 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     ImportCallSignaturesDoNotDependOnFirstDirectCallOrder) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (unsigned Shape = 0; Shape != 5; ++Shape)
+        for (unsigned Order = 0; Order != 4; ++Order) {
+          SCOPED_TRACE(static_cast<unsigned>(A));
+          SCOPED_TRACE(formatTraceName(Format));
+          SCOPED_TRACE(Shape);
+          SCOPED_TRACE(Order);
+          const unsigned Width = getTargetRegInfo(A).PointerSize;
+          const std::string Name = Shape == 0   ? "rand"
+                                   : Shape == 1 ? "tolower"
+                                   : Shape == 2 ? "sqrt"
+                                   : Shape == 3 ? "snprintf"
+                                                : "vfprintf";
+          const unsigned Fixed = Shape == 0 ? 0 : Shape < 3 ? 1 : 3;
+          const bool Variadic = Shape == 3;
+          const bool Missing = Order == 3;
+          if (Missing && Fixed == 0)
+            continue;
+          const std::string ObjectName =
+              Format == BinaryFormat::MachO ? "_" + Name : Name;
+          BinaryImage Image;
+          Image.Arch = A;
+          Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+          Image.Format = Format;
+          Segment Code;
+          Code.VA = 0x1000;
+          Code.Size = Code.FileSz = 0x200;
+          Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+          Code.Data.assign(Code.Size, 0);
+          Image.Segments.push_back(Code);
+          Segment Data;
+          Data.VA = 0x2000;
+          Data.Size = Data.FileSz = Width;
+          Data.Flags = SegmentFlags::Readable;
+          Data.Data.assign(Width, 0);
+          Image.Segments.push_back(Data);
+          Import Import;
+          Import.Name = ObjectName;
+          Import.IATAddr = Data.VA;
+          Image.Imports.push_back(Import);
+          ASSERT_TRUE(Image.recordImportStub(0x1100, 0));
+          ASSERT_TRUE(Image.recordImportStorageSlot(
+              Data.VA, ObjectName, 0, ImportStorageEvidence::PointerTable));
+          auto Make = [&](bool Indirect) {
+            MedFunc F;
+            F.Entry = Indirect ? 0x1000 : 0x1020;
+            F.Name = Indirect ? "import_indirect_first" : "import_direct";
+            F.ReturnType = NdType::makeVoid();
+            MedBlock B;
+            B.Id = 0;
+            B.StartAddr = F.Entry;
+            B.EndAddr = F.Entry + 8;
+            MedOp Call;
+            Call.Opcode = Indirect ? NdOp::INDIR_CALL : NdOp::CALL;
+            Call.Addr = F.Entry;
+            Call.addInput(
+                MedVar::makeConst(Indirect ? Data.VA : 0x1100, Width,
+                                  ConstantAddressProvenance::Address));
+            B.Ops.push_back(Call);
+            MedOp Ret;
+            Ret.Opcode = NdOp::RETURN;
+            Ret.Addr = F.Entry + 4;
+            B.Ops.push_back(Ret);
+            F.Blocks.push_back(B);
+            MedCallInfo CI;
+            CI.BlockId = CI.OpIdx = 0;
+            CI.IsIndirect = Indirect;
+            if (!Indirect) {
+              CI.TargetAddr = 0x1100;
+              CI.TargetName = ObjectName;
+            }
+            const unsigned Count = Variadic   ? Fixed + 2
+                                   : Indirect ? Fixed + 2
+                                              : Fixed;
+            for (unsigned I = 0; I != Count; ++I)
+              CI.Args.push_back(
+                  MedVar::makeConst(7 + I, !Indirect && Shape == 1 ? 4 : Width,
+                                    ConstantAddressProvenance::Scalar));
+            if (Indirect && Missing)
+              CI.Args.resize(Fixed - 1);
+            F.CallInfos.push_back(CI);
+            return F;
+          };
+          std::vector<MedFunc> Functions{Make(true)};
+          if (Order == 1)
+            Functions.push_back(Make(false));
+          if (Order == 2)
+            Functions.insert(Functions.begin(), Make(false));
+          llvm::LLVMContext Context;
+          if (Missing)
+            testing::internal::CaptureStderr();
+          auto Module =
+              MedLLVMEmitter().emit(Functions, Context, "import-call-order", A,
+                                    {{0x1100, ObjectName}}, &Image, Format);
+          if (Missing) {
+            const auto Diagnostic = testing::internal::GetCapturedStderr();
+            EXPECT_EQ(Module, nullptr);
+            EXPECT_NE(Diagnostic.find("lacks recovered arguments"),
+                      std::string::npos)
+                << Diagnostic;
+            continue;
+          }
+          ASSERT_NE(Module, nullptr);
+          expectValidModule(*Module);
+          auto *Callee = Module->getFunction(Name);
+          ASSERT_NE(Callee, nullptr);
+          EXPECT_EQ(Module->getNamedGlobal(Name), nullptr);
+          EXPECT_EQ(Callee->arg_size(), Fixed);
+          EXPECT_EQ(Callee->isVarArg(), Variadic);
+          if (Shape == 1)
+            EXPECT_TRUE(Callee->getFunctionType()->getParamType(0)->isIntegerTy(
+                Width * 8));
+          for (const auto &F : Functions) {
+            const auto Calls = callsIn(*Module->getFunction(F.Name));
+            ASSERT_EQ(Calls.size(), 1u);
+            EXPECT_EQ(Calls[0]->getCalledFunction(), Callee);
+            EXPECT_EQ(Calls[0]->getFunctionType(), Callee->getFunctionType());
+            EXPECT_EQ(Calls[0]->arg_size(), Fixed + (Variadic ? 2 : 0));
+          }
+        }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     ExactIndirectTargetsReuseTheirRecoveredCallSignature) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (unsigned Mode = 0; Mode != 7; ++Mode) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(Mode); // Address, immutable slot, mutable slot, atomic,
+                            // missing arg, observed void result, loader RELRO.
+        const auto Width = getTargetRegInfo(TargetArch).PointerSize;
+        const va_t Rebase = Width == 4 ? TextVA - 0x10000 : 0;
+        const va_t TargetVA = CodeVA - Rebase;
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        for (auto &Segment : Image.Segments)
+          Segment.VA -= Rebase;
+        for (auto &Section : Image.Sections)
+          Section.VA -= Rebase;
+        Image.CodePtrRelocSlots = {DataVA + 8 - Rebase};
+        Image.DataPtrRelocSlots.clear();
+        auto &Storage = Image.Segments[1];
+        std::fill(Storage.Data.begin(), Storage.Data.end(), 0);
+        if (Width == 4)
+          writeObject(Storage.Data, 8, uint32_t(TargetVA));
+        else
+          writeObject(Storage.Data, 8, TargetVA);
+        if (Mode == 2 || Mode == 6) {
+          Storage.Name = Format == BinaryFormat::MachO ? "__DATA" : ".data";
+          Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+          auto &Section = Image.Sections.back();
+          Section.Name = Format == BinaryFormat::MachO ? "__data" : ".data";
+          Section.SegmentName = Storage.Name;
+          Section.Flags = Storage.Flags;
+          Storage.ReadOnlyAfterRelocations = Mode == 6;
+        }
+        MedFunc Caller =
+            Mode == 0 ? makeExactAddressIndirectCaller(TargetArch)
+                      : makeExactMixedPointerSlotIndirectCaller(TargetArch, 8);
+        Caller.Entry -= Rebase;
+        for (auto &Block : Caller.Blocks) {
+          Block.StartAddr -= Rebase;
+          Block.EndAddr -= Rebase;
+          for (auto &Op : Block.Ops) {
+            Op.Addr -= Rebase;
+            for (auto &Input : Op.Inputs)
+              if (Input.isConst())
+                Input.ConstVal -= Rebase;
+          }
+        }
+        if (Mode == 3)
+          Caller.Blocks[0].Ops[1].MemoryOrdering = NdMemoryOrdering::Acquire;
+        if (Mode == 5) {
+          MedVar Result = Caller.Blocks[0].Ops[1].Output;
+          Result.Id = 300;
+          Caller.Blocks[0].Ops[2].Output = Result;
+          Caller.Blocks[0].Ops.back().addInput(Result);
+          Caller.ReturnType = NdType::makeInt(Width);
+        }
+        MedFunc Callee = makeReturnFunction("exact_signature_callee", TargetVA);
+        for (unsigned I = 0; I != 2; ++I) {
+          MedVar P;
+          P.Kind = MedVar::Param;
+          P.TheArch = TargetArch;
+          P.Id = I;
+          P.Size = I == 0 ? Width : 4;
+          P.RegOff = kNoParamReg;
+          Callee.Params.push_back(P);
+        }
+        MedCallInfo Call;
+        Call.BlockId = 0;
+        Call.OpIdx = Mode == 0 ? 1 : 2;
+        Call.IsIndirect = true;
+        for (unsigned I = 0; I != 4; ++I)
+          Call.Args.push_back(MedVar::makeConst(
+              19 + I, Width, ConstantAddressProvenance::Scalar));
+        if (Mode == 4)
+          Call.Args.resize(1);
+        Caller.CallInfos.push_back(Call);
+        llvm::LLVMContext Context;
+        if (Mode == 4)
+          testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                            "exact-indirect-signature",
+                                            TargetArch, {}, &Image, Format);
+        if (Mode == 4) {
+          const auto Diagnostic = testing::internal::GetCapturedStderr();
+          EXPECT_EQ(Module, nullptr);
+          EXPECT_NE(Diagnostic.find("lacks recovered arguments"),
+                    std::string::npos)
+              << Diagnostic;
+          continue;
+        }
+        ASSERT_NE(Module, nullptr);
+        expectValidModule(*Module);
+        auto *Definition = Module->getFunction(Callee.Name);
+        auto *Function = Module->getFunction(Caller.Name);
+        ASSERT_NE(Definition, nullptr);
+        ASSERT_NE(Function, nullptr);
+        const auto Calls = callsIn(*Function);
+        ASSERT_EQ(Calls.size(), 1u);
+        if (Mode < 2 || Mode == 5 || Mode == 6) {
+          std::string IR;
+          llvm::raw_string_ostream IRStream(IR);
+          Module->print(IRStream, nullptr);
+          EXPECT_EQ(Calls[0]->getCalledFunction(), Definition) << IR;
+          EXPECT_EQ(Calls[0]->getFunctionType(), Definition->getFunctionType());
+          EXPECT_EQ(Calls[0]->arg_size(), 2u);
+          EXPECT_TRUE(Calls[0]->getArgOperand(1)->getType()->isIntegerTy(32));
+          if (Mode == 5) {
+            bool UnknownResult = false;
+            for (const auto &Block : *Function)
+              for (const auto &Inst : Block)
+                if (const auto *Freeze =
+                        llvm::dyn_cast<llvm::FreezeInst>(&Inst))
+                  UnknownResult |=
+                      llvm::isa<llvm::UndefValue>(Freeze->getOperand(0)) &&
+                      Freeze->getType()->isIntegerTy(Width * 8);
+            EXPECT_TRUE(UnknownResult);
+          }
+        } else {
+          EXPECT_EQ(Calls[0]->getCalledFunction(), nullptr);
+          EXPECT_EQ(Calls[0]->arg_size(), 4u);
+          bool KeptLoad = false;
+          for (const auto &Block : *Function)
+            for (const auto &Inst : Block)
+              if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+                KeptLoad |= Mode == 2 || Load->isAtomic();
+          EXPECT_TRUE(KeptLoad);
+        }
+      }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      MaterializesExactGenericCodeAddressAtObservableValueSinksAcrossFormats) {
   for (BinaryFormat Format :
        {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
@@ -20519,6 +21141,354 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     CountdownTableBoundsRequireExactRecurrenceAndEveryEntry) {
+  enum class Case {
+    Valid,
+    UpdatedGuard,
+    EqualExit,
+    BadStep,
+    BadGuard,
+    WrongSSA,
+    Narrow,
+    Zero,
+    AddressCount,
+    MissingArm,
+    Bypass,
+    Exceptional,
+    Independent,
+    ImageRoot
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (unsigned Count : {1u, 4u})
+        for (Case C :
+             {Case::Valid, Case::UpdatedGuard, Case::EqualExit, Case::BadStep,
+              Case::BadGuard, Case::WrongSSA, Case::Narrow, Case::Zero,
+              Case::AddressCount, Case::MissingArm, Case::Bypass,
+              Case::Exceptional, Case::Independent, Case::ImageRoot}) {
+          SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                       formatTraceName(Format) + "/" + std::to_string(Count) +
+                       "/" + std::to_string(static_cast<int>(C)));
+          const unsigned Width = getTargetRegInfo(A).PointerSize;
+          BinaryImage Image;
+          Image.Arch = A;
+          Image.Format = Format;
+          Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+          Segment Text;
+          Text.VA = 0x100;
+          Text.Name = ".text";
+          Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+          Text.Data.resize(0x2000);
+          Text.Size = Text.FileSz = Text.Data.size();
+          Image.Segments.push_back(Text);
+          Segment Data;
+          Data.Name = ".rodata";
+          Data.VA = 0x4000;
+          Data.Flags = SegmentFlags::Readable;
+          Data.Data.resize((Count + 2) * Width, 0xff);
+          Data.Size = Data.FileSz = Data.Data.size();
+          const uint64_t Target = 0x2000;
+          for (unsigned I = 1; I <= Count; ++I) {
+            std::memcpy(Data.Data.data() + I * Width, &Target, Width);
+            Image.CodePtrRelocSlots.insert(Data.VA + I * Width);
+          }
+          Image.Segments.push_back(Data);
+          Image.RelocDataAddrs.insert(Data.VA);
+          Image.CodeRefTargets.insert(Target);
+          Section S;
+          S.Name = Data.Name;
+          S.VA = Data.VA;
+          S.Size = S.FileSz = Data.Size;
+          S.Flags = Data.Flags;
+          Image.Sections.push_back(S);
+          auto v = [&](int Id, unsigned Size = 0) {
+            MedVar V;
+            V.Kind = MedVar::Temp;
+            V.TheArch = A;
+            V.Id = Id;
+            V.SSAVer = 1;
+            V.Size = Size ? Size : Width;
+            return V;
+          };
+          auto n = [&](uint64_t N, unsigned Size = 0) {
+            return MedVar::makeConst(N, Size ? Size : Width,
+                                     ConstantAddressProvenance::Scalar);
+          };
+          MedFunc F;
+          F.Name = "countdown_table";
+          F.Entry = 0x100;
+          F.ReturnType = NdType::makeVoid();
+          F.Blocks.resize(3);
+          for (unsigned I = 0; I < 3; ++I) {
+            F.Blocks[I].Id = I;
+            F.Blocks[I].StartAddr = 0x100 + I * 0x40;
+            F.Blocks[I].EndAddr = 0x140 + I * 0x40;
+          }
+          F.Blocks[0].Succs = {1};
+          F.Blocks[1].Preds = {0, 1};
+          F.Blocks[1].Succs = {2, 1};
+          F.Blocks[2].Preds = {1};
+          MedVar Initial = n(C == Case::Zero ? 0 : Count);
+          if (C == Case::AddressCount)
+            Initial.Provenance = ConstantAddressProvenance::DataAddress;
+          F.Blocks[1].Phis.push_back({v(0), {{0, Initial}, {1, v(1)}}});
+          if (C == Case::MissingArm)
+            F.Blocks[1].Phis[0].Args.pop_back();
+          auto op = [&](int B, NdOp Code, MedVar Out,
+                        std::initializer_list<MedVar> Inputs) {
+            MedOp O;
+            O.Opcode = Code;
+            O.Output = Out;
+            O.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+            for (auto V : Inputs)
+              O.addInput(V);
+            F.Blocks[B].Ops.push_back(O);
+          };
+          op(0, NdOp::BRANCH, {}, {n(0x140)});
+          op(1, NdOp::INT_MULT, v(2), {v(0), n(Width)});
+          op(1, NdOp::INT_ADD, v(3),
+             {MedVar::makeConst(Data.VA, Width,
+                                ConstantAddressProvenance::DataAddress),
+              v(2)});
+          op(1, NdOp::LOAD, v(4), {v(3)});
+          op(1, NdOp::INDIR_CALL, {}, {v(4)});
+          op(1, NdOp::INT_SUB, v(1), {v(0), n(C == Case::BadStep ? 2 : 1)});
+          MedVar Compared = C == Case::UpdatedGuard ? v(1) : v(0);
+          if (C == Case::WrongSSA) {
+            Compared = v(9);
+            Compared.Kind = MedVar::Param;
+            F.Params.push_back(Compared);
+          }
+          if (C == Case::Narrow) {
+            op(1, NdOp::SUBBYTES, v(10, Width / 2), {Compared, n(0)});
+            Compared = v(10, Width / 2);
+          }
+          op(1, C == Case::EqualExit ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
+             v(5, 1),
+             {Compared, n(C == Case::UpdatedGuard ? 0
+                          : C == Case::BadGuard   ? 2
+                                                  : 1,
+                          Compared.Size)});
+          op(1, NdOp::COND_BR, {},
+             {n(C == Case::EqualExit ? 0x180 : 0x140), v(5, 1)});
+          op(2, NdOp::RETURN, {}, {});
+          if (C == Case::Bypass)
+            F.Blocks[2].Succs = {1};
+          if (C == Case::Exceptional) {
+            F.Blocks[1].ExceptionalPreds.push_back({2});
+            F.Blocks[2].ExceptionalSuccs.push_back({1});
+          }
+          if (C == Case::Independent)
+            F.ModuleAnalysisRoots.insert(0x140);
+          if (C == Case::ImageRoot)
+            Image.CodeRefTargets.insert(0x140);
+          MedFunc Callee = makeReturnFunction("countdown_callee", Target);
+          llvm::LLVMContext Context;
+          testing::internal::CaptureStderr();
+          auto M = MedLLVMEmitter().emit(
+              {F, Callee}, Context, "countdown-table", A, {}, &Image, Format);
+          const std::string Diagnostic = testing::internal::GetCapturedStderr();
+          const bool Expected = C == Case::Valid || C == Case::UpdatedGuard ||
+                                C == Case::EqualExit;
+          EXPECT_EQ(M != nullptr, Expected) << Diagnostic;
+          if (M)
+            expectValidModule(*M);
+        }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     NullableRuntimeCalleeRequiresItsOwnNonNullGuard) {
+  enum class Case {
+    Valid,
+    Unguarded,
+    Reversed,
+    OtherSSA,
+    Narrow,
+    Bypass,
+    Exceptional,
+    IndependentRoot,
+    ImageRoot,
+    NonzeroScalar,
+    UnguardedSecondCall,
+    WritableSlot,
+    ReadOnlySlot,
+    NonzeroSlot,
+    DataPointerSlot,
+    UnguardedSlot,
+    NotEqual,
+    SwappedZero,
+    ReturnFragment
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (Case C :
+           {Case::Valid, Case::Unguarded, Case::Reversed, Case::OtherSSA,
+            Case::Narrow, Case::Bypass, Case::Exceptional,
+            Case::IndependentRoot, Case::ImageRoot, Case::NonzeroScalar,
+            Case::UnguardedSecondCall, Case::WritableSlot, Case::ReadOnlySlot,
+            Case::NonzeroSlot, Case::DataPointerSlot, Case::UnguardedSlot,
+            Case::NotEqual, Case::SwappedZero, Case::ReturnFragment}) {
+        SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                     formatTraceName(Format) + "/" +
+                     std::to_string(static_cast<int>(C)));
+        const bool SlotCase =
+            C == Case::WritableSlot || C == Case::ReadOnlySlot ||
+            C == Case::NonzeroSlot || C == Case::DataPointerSlot ||
+            C == Case::UnguardedSlot;
+        const bool Expected = C == Case::Valid || C == Case::WritableSlot ||
+                              C == Case::NotEqual || C == Case::SwappedZero;
+        const uint16_t Width = getTargetRegInfo(A).PointerSize;
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Format = Format;
+        Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+        if (SlotCase) {
+          Segment Data;
+          Data.VA = 0x4000;
+          Data.Name = C == Case::ReadOnlySlot ? ".rodata" : ".data";
+          Data.Flags = SegmentFlags::Readable;
+          if (C != Case::ReadOnlySlot)
+            Data.Flags = Data.Flags | SegmentFlags::Writable;
+          Data.Data.resize(64, 0);
+          Data.Size = Data.FileSz = Data.Data.size();
+          const uint64_t TargetVA = 0x4020;
+          std::memcpy(Data.Data.data() + Width, &TargetVA, Width);
+          if (C == Case::NonzeroSlot)
+            Data.Data[0] = 1;
+          Image.Segments.push_back(Data);
+          Image.DataPtrRelocSlots.insert(0x4000 + Width);
+          Image.DataPtrRelocTargetOwners[0x4000 + Width] = 0x4000;
+          Image.RelocDataAddrs.insert(0x4000);
+          Image.RelocDataAddrs.insert(TargetVA);
+          if (C == Case::DataPointerSlot) {
+            Image.DataPtrRelocSlots.insert(0x4000);
+            Image.DataPtrRelocTargetOwners[0x4000] = 0x4000;
+          }
+        }
+        MedFunc F;
+        F.Name = "nullable_runtime_call";
+        F.Entry = 0x100;
+        F.ReturnType = NdType::makeInt(Width);
+        auto var = [&](int Id, uint16_t Size) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.TheArch = A;
+          V.Size = Size;
+          return V;
+        };
+        auto number = [&](uint64_t N, uint16_t Size = 0) {
+          return MedVar::makeConst(N, Size ? Size : Width,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        MedVar Target = var(0, Width), Choose = var(1, 1);
+        Choose.Kind = MedVar::Param;
+        F.Params = {Choose};
+        MedVar Selected = var(2, Width), Condition = var(3, 1);
+        MedVar Compared = Selected;
+        F.Blocks.resize(3);
+        for (int I = 0; I != 3; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = 0x100 + I * 0x40;
+          F.Blocks[I].EndAddr = F.Blocks[I].StartAddr + 0x40;
+        }
+        auto append = [&](int B, NdOp Code, MedVar Out,
+                          std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Code;
+          Op.Output = Out;
+          Op.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+          for (const MedVar &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[B].Ops.push_back(Op);
+        };
+        if (SlotCase) {
+          append(0, NdOp::LOAD, Selected,
+                 {MedVar::makeConst(0x4000, Width,
+                                    ConstantAddressProvenance::DataAddress)});
+        } else {
+          MedVar Returned =
+              C == Case::ReturnFragment ? var(7, Width * 2) : Target;
+          append(0, NdOp::CALL, Returned, {number(0x300)});
+          if (C == Case::ReturnFragment)
+            append(0, NdOp::SUBBYTES, Target, {Returned, number(Width)});
+          MedCallInfo Factory;
+          Factory.TargetAddr = 0x300;
+          Factory.BlockId = 0;
+          Factory.OpIdx = 0;
+          Factory.TargetName = "get_runtime_callback";
+          F.CallInfos.push_back(Factory);
+          append(0, NdOp::SELECT, Selected,
+                 {Choose, Target, number(C == Case::NonzeroScalar ? 1 : 0)});
+        }
+        if (C == Case::OtherSSA) {
+          Compared.SSAVer = 2;
+          append(0, NdOp::SELECT, Compared, {Choose, Target, number(0)});
+        } else if (C == Case::Narrow) {
+          Compared = var(4, 1);
+          append(0, NdOp::SUBBYTES, Compared, {Selected, number(0)});
+        }
+        append(0, C == Case::NotEqual ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL,
+               Condition,
+               C == Case::SwappedZero
+                   ? std::initializer_list<MedVar>{number(0, Compared.Size),
+                                                   Compared}
+                   : std::initializer_list<MedVar>{Compared,
+                                                   number(0, Compared.Size)});
+        if (C == Case::Unguarded || C == Case::UnguardedSlot) {
+          append(0, NdOp::BRANCH, {}, {number(0x140)});
+          F.Blocks[0].Succs = {1};
+        } else {
+          append(0, NdOp::COND_BR, {},
+                 {number(C == Case::Reversed || C == Case::NotEqual ? 0x140
+                                                                    : 0x180),
+                  Condition});
+          F.Blocks[0].Succs = {1, 2};
+        }
+        F.Blocks[1].Preds = {0};
+        F.Blocks[2].Preds = {0};
+        append(1, NdOp::INDIR_CALL, var(5, Width), {Selected});
+        append(1, NdOp::RETURN, {}, {number(0)});
+        if (C == Case::Bypass) {
+          append(2, NdOp::BRANCH, {}, {number(0x140)});
+          F.Blocks[2].Succs = {1};
+          F.Blocks[1].Preds.push_back(2);
+        } else {
+          if (C == Case::UnguardedSecondCall)
+            append(2, NdOp::INDIR_CALL, var(6, Width), {Selected});
+          append(2, NdOp::RETURN, {}, {number(0)});
+        }
+        if (C == Case::Exceptional) {
+          ExceptionalEdge Edge;
+          Edge.BlockId = 1;
+          F.Blocks[2].ExceptionalSuccs.push_back(Edge);
+        }
+        if (C == Case::IndependentRoot)
+          F.ModuleAnalysisRoots.insert(0x140);
+        if (C == Case::ImageRoot)
+          Image.CodeRefTargets.insert(0x140);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit({F}, Context, "nullable-callback",
+                                            A, {}, &Image, Format);
+        const std::string Diagnostic = testing::internal::GetCapturedStderr();
+        if (!Expected) {
+          EXPECT_EQ(Module, nullptr);
+          EXPECT_FALSE(Diagnostic.empty());
+          continue;
+        }
+        ASSERT_NE(Module, nullptr) << Diagnostic;
+        expectValidModule(*Module);
+        auto Calls = callsIn(*Module->getFunction(F.Name));
+        ASSERT_EQ(Calls.size(), SlotCase ? 1u : 2u);
+        EXPECT_EQ(Calls.back()->getCalledFunction(), nullptr);
+      }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      RejectsMixedExactCodeAddressAtObservableValueSinkAcrossFormats) {
   for (BinaryFormat Format :
        {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
@@ -20763,79 +21733,89 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
-     PreservesRuntimeReturnWordAcrossCodeValueMergeWithoutMakingItCallable) {
+     CallableRuntimeCodeMergesRequireTheWholeNativeReturnPointer) {
   constexpr va_t RuntimeVA = CodeVA + 0x80;
   for (BinaryFormat Format :
        {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
-    for (bool AsCall : {false, true}) {
-      SCOPED_TRACE(formatTraceName(Format));
-      SCOPED_TRACE(AsCall);
-      constexpr Arch TargetArch = Arch::X86;
-      BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
-      Image.Bits = Bitness::Bits32;
-      MedFunc Caller =
-          AsCall
-              ? makeMergedExactAddressIndirectCaller(
-                    ExactAddressMergeKind::Select, CodeVA, CodeVA, TargetArch)
-              : makeMergedExactAddressReturn(ExactAddressMergeKind::Select,
-                                             TargetArch, CodeVA, CodeVA);
-      MedVar Result;
-      Result.Kind = MedVar::Temp;
-      Result.Id = 30;
-      Result.SSAVer = 1;
-      Result.Size = 8;
-      MedVar HighWord = Result;
-      HighWord.Id = 31;
-      HighWord.Size = 4;
-      replaceSecondMergedAddressArm(Caller, ExactAddressMergeKind::Select,
-                                    HighWord);
-      MedOp Call;
-      Call.Opcode = NdOp::CALL;
-      Call.Output = Result;
-      Call.addInput(MedVar::makeConst(RuntimeVA, 4,
-                                      ConstantAddressProvenance::CodeAddress));
-      MedOp Extract;
-      Extract.Opcode = NdOp::SUBBYTES;
-      Extract.Output = HighWord;
-      Extract.addInput(Result);
-      Extract.addInput(
-          MedVar::makeConst(4, 4, ConstantAddressProvenance::Scalar));
-      auto &Ops = Caller.Blocks.front().Ops;
-      Ops.insert(Ops.begin(), {Call, Extract});
-      MedFunc Callee = makeReturnFunction("merged_function_identity", CodeVA);
-      MedFunc Runtime = makeReturnFunction("runtime_word_producer", RuntimeVA);
-      Runtime.ReturnType = NdType::makeInt(8);
-      llvm::LLVMContext Context;
-      testing::internal::CaptureStderr();
-      auto Module = MedLLVMEmitter().emit({Caller, Callee, Runtime}, Context,
-                                          "runtime-code-value-merge",
-                                          TargetArch, {}, &Image, Format);
-      const std::string Diagnostic = testing::internal::GetCapturedStderr();
-      if (AsCall) {
-        EXPECT_EQ(Module, nullptr);
-        EXPECT_NE(Diagnostic.find("no unique lifted function entry"),
-                  std::string::npos)
-            << Diagnostic;
-        continue;
-      }
-      ASSERT_NE(Module, nullptr) << Diagnostic;
-      expectValidModule(*Module);
-      auto *Emitted = Module->getFunction(Caller.Name);
-      ASSERT_NE(Emitted, nullptr);
-      bool SawSelection = false;
-      for (const auto &Block : *Emitted)
-        for (const auto &Instruction : Block)
-          if (const auto *Select =
-                  llvm::dyn_cast<llvm::SelectInst>(&Instruction)) {
-            std::set<const llvm::Value *> SeenCode, SeenRuntime;
-            SawSelection |=
-                valueReferencesTarget(Select, Module->getFunction(Callee.Name),
-                                      SeenCode) &&
-                valueReferencesTarget(Select, Module->getFunction(Runtime.Name),
-                                      SeenRuntime);
+    for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+      for (bool WholePointer : {false, true})
+        for (bool AsCall : {false, true}) {
+          SCOPED_TRACE(formatTraceName(Format));
+          SCOPED_TRACE(AsCall);
+          SCOPED_TRACE(static_cast<int>(TargetArch));
+          SCOPED_TRACE(WholePointer);
+          const unsigned Width = getTargetRegInfo(TargetArch).PointerSize;
+          BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+          Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+          MedFunc Caller =
+              AsCall
+                  ? makeMergedExactAddressIndirectCaller(
+                        ExactAddressMergeKind::Select, CodeVA, CodeVA,
+                        TargetArch)
+                  : makeMergedExactAddressReturn(ExactAddressMergeKind::Select,
+                                                 TargetArch, CodeVA, CodeVA);
+          MedVar Result;
+          Result.Kind = MedVar::Temp;
+          Result.Id = 30;
+          Result.SSAVer = 1;
+          Result.Size = WholePointer ? Width : Width * 2;
+          Result.TheArch = TargetArch;
+          MedVar HighWord = Result;
+          HighWord.Id = 31;
+          HighWord.Size = Width;
+          replaceSecondMergedAddressArm(Caller, ExactAddressMergeKind::Select,
+                                        WholePointer ? Result : HighWord);
+          MedOp Call;
+          Call.Opcode = NdOp::CALL;
+          Call.Output = Result;
+          Call.addInput(MedVar::makeConst(
+              RuntimeVA, Width, ConstantAddressProvenance::CodeAddress));
+          MedOp Extract;
+          Extract.Opcode = NdOp::SUBBYTES;
+          Extract.Output = HighWord;
+          Extract.addInput(Result);
+          Extract.addInput(MedVar::makeConst(
+              Width, Width, ConstantAddressProvenance::Scalar));
+          auto &Ops = Caller.Blocks.front().Ops;
+          if (!WholePointer)
+            Ops.insert(Ops.begin(), Extract);
+          Ops.insert(Ops.begin(), Call);
+          MedFunc Callee =
+              makeReturnFunction("merged_function_identity", CodeVA);
+          MedFunc Runtime =
+              makeReturnFunction("runtime_word_producer", RuntimeVA);
+          Runtime.ReturnType = NdType::makeInt(Result.Size);
+          llvm::LLVMContext Context;
+          testing::internal::CaptureStderr();
+          auto Module = MedLLVMEmitter().emit(
+              {Caller, Callee, Runtime}, Context, "runtime-code-value-merge",
+              TargetArch, {}, &Image, Format);
+          const std::string Diagnostic = testing::internal::GetCapturedStderr();
+          if (AsCall && !WholePointer) {
+            EXPECT_EQ(Module, nullptr);
+            EXPECT_NE(Diagnostic.find("no unique lifted function entry"),
+                      std::string::npos)
+                << Diagnostic;
+            continue;
           }
-      EXPECT_TRUE(SawSelection);
-    }
+          ASSERT_NE(Module, nullptr) << Diagnostic;
+          expectValidModule(*Module);
+          auto *Emitted = Module->getFunction(Caller.Name);
+          ASSERT_NE(Emitted, nullptr);
+          bool SawSelection = false;
+          for (const auto &Block : *Emitted)
+            for (const auto &Instruction : Block)
+              if (const auto *Select =
+                      llvm::dyn_cast<llvm::SelectInst>(&Instruction)) {
+                std::set<const llvm::Value *> SeenCode, SeenRuntime;
+                SawSelection |=
+                    valueReferencesTarget(
+                        Select, Module->getFunction(Callee.Name), SeenCode) &&
+                    valueReferencesTarget(
+                        Select, Module->getFunction(Runtime.Name), SeenRuntime);
+              }
+          EXPECT_TRUE(SawSelection);
+        }
 }
 
 TEST(LLVMCodePointerInvariantBoundary,

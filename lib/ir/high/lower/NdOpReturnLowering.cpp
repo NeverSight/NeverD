@@ -331,14 +331,19 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   if (!RetVal)
     RetVal = unchangedDeclaredReturnParameter(Med, TRI, ReturnReg);
 
-  // A proven i64 result on a 32-bit target occupies both integer return
+  // A proven register-pair result occupies both integer return
   // registers.  The RETURN operand names only the low register, so recover
   // the high register from the same reaching definitions before constructing
   // the source return value.  Keep the low and high SSA values separate until
   // this boundary; an unrelated earlier write to the high register is not a
   // substitute for the value reaching this RETURN.
   if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Int &&
-      Func.ReturnType->Size == 2 * TRI.PointerSize && TRI.PointerSize == 4 &&
+      Func.ReturnType->Size == 2 * TRI.PointerSize &&
+      (TRI.PointerSize == 4 ||
+       (Med.MultiReturn.size() == 2 && !Med.MultiReturn[0].IsFP &&
+        !Med.MultiReturn[1].IsFP &&
+        Med.MultiReturn[0].RegOff == TRI.IntReturnReg &&
+        Med.MultiReturn[1].RegOff == TRI.IntReturnReg2)) &&
       TRI.IntReturnReg2 != 0 && RetVal && RetVal->Type &&
       RetVal->Type->Size == TRI.PointerSize) {
     ExprPtr High;

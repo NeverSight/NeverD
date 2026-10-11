@@ -12,6 +12,14 @@
 
 namespace neverd {
 
+/// Ends the ordinary path; exceptional successors remain reachable.
+inline bool isUnconditionalNoReturn(const LowInstructionBoundary &Insn) {
+  return hasLowInstructionControlFlag(Insn.ControlFlags,
+                                      LowInstructionControlFlag::NoReturn) &&
+         !hasLowInstructionControlFlag(Insn.ControlFlags,
+                                       LowInstructionControlFlag::Conditional);
+}
+
 bool isArchitecturalNoReturn(const LowOp &Op);
 inline bool isArchitecturalNoReturn(const LowOp &Op, Arch) {
   return isArchitecturalNoReturn(Op);

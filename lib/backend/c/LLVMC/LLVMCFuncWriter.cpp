@@ -957,13 +957,16 @@ bool isArgListRecord(const TypeRef &Ty) {
                                           hasDisplayField(Ty, 8, "values_")));
 }
 
-TypeRef debugCallArgPointer(const FunctionSym &FS, unsigned Index) {
-  const bool Indirect = isMsvcIndirectReturn(FS.ReturnType);
+TypeRef debugCallArgPointer(const FunctionSym &FS, unsigned Index,
+                            const CEmitterOptions &Opts) {
+  const bool Indirect =
+      isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format);
   const bool Member =
       Indirect && !FS.Params.empty() && FS.Params[0].first == "this";
   TypeRef Sret;
   if (Indirect)
-    if (TypeRef Record = msvcIndirectReturnRecordType(FS.ReturnType))
+    if (TypeRef Record = msvcIndirectReturnRecordType(
+            FS.ReturnType, Opts.TheArch, Opts.Format))
       Sret = NdType::makePtr(Record);
   TypeRef Arg;
   if (Member) {
@@ -2402,7 +2405,8 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
     }
   }
   if (DebugFn) {
-    const bool Indirect = isMsvcIndirectReturn(DebugFn->ReturnType);
+    const bool Indirect =
+        isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format);
     const bool Member = Indirect && !DebugFn->Params.empty() &&
                         DebugFn->Params[0].first == "this";
     const int Sret = !Indirect ? -1 : (Member ? 1 : 0);
@@ -2798,10 +2802,12 @@ unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
     // an indirect result. With no debug parameters, live integer machine
     // arguments do not establish a hidden result address.
     if (Have != 0 && !Msvc && FS->Params.empty() &&
-        isMsvcPointerEncodedClassReturn(FS->ReturnType) &&
+        isMsvcPointerEncodedClassReturn(FS->ReturnType, Opts.TheArch,
+                                        Opts.Format) &&
         !looksLikeHiddenSretOperand(Call.getArgOperand(0)))
       return 0;
-    const bool Indirect = isMsvcIndirectReturn(FS->ReturnType);
+    const bool Indirect =
+        isMsvcIndirectReturn(FS->ReturnType, Opts.TheArch, Opts.Format);
     const bool Member =
         Indirect && !FS->Params.empty() && FS->Params[0].first == "this";
     size_t Limit = 0;
@@ -2892,7 +2898,7 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
   auto expectedCallArgType = [&](const llvm::CallBase &Call,
                                  unsigned Index) -> TypeRef {
     if (auto FS = debugCallee(Call))
-      if (TypeRef Ty = cDisplayType(debugCallArgPointer(*FS, Index)))
+      if (TypeRef Ty = cDisplayType(debugCallArgPointer(*FS, Index, Opts)))
         return Ty;
     std::string Name;
     if (const auto *Callee = Call.getCalledFunction()) {
@@ -8608,8 +8614,9 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         OS << "/* " << Demangled << " */\n";
   writeExceptionAnnotation(Fn);
 
-  const bool IndirectReturn = !Opts.PreserveLLVMFunctionTypes && DebugFn &&
-                              isMsvcIndirectReturn(DebugFn->ReturnType);
+  const bool IndirectReturn =
+      !Opts.PreserveLLVMFunctionTypes && DebugFn &&
+      isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format);
   const bool MemberIndirectReturn = IndirectReturn &&
                                     !DebugFn->Params.empty() &&
                                     DebugFn->Params[0].first == "this";
@@ -8620,7 +8627,8 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   auto IndirectReturnTypeStr = [&]() -> std::string {
     if (!IndirectReturn)
       return {};
-    const NdType *Record = msvcIndirectReturnRecord(DebugFn->ReturnType);
+    const NdType *Record = msvcIndirectReturnRecord(DebugFn->ReturnType,
+                                                    Opts.TheArch, Opts.Format);
     if (!Record)
       return {};
     const std::string Tag = cNamedTypeSpelling(Record->SourceName);
@@ -8686,21 +8694,26 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         InferredVoid ? "void" : typeToCLLVM(FuncTy->getReturnType());
     if (std::string Ty = IndirectReturnTypeStr(); !Ty.empty())
       RetStr = std::move(Ty);
-    OS << RetStr << " " << FName << "(";
+    std::string Signature;
+    llvm::raw_string_ostream SignatureOS(Signature);
+    SignatureOS << RetStr << " " << FName << "(";
 
     unsigned ParamIdx = 0;
     for (auto &Arg : Fn.args()) {
       if (ParamIdx > 0)
-        OS << ", ";
-      OS << ParamTypeStr(Arg, ParamIdx) << " " << BindParam(Arg, ParamIdx);
+        SignatureOS << ", ";
+      SignatureOS << ParamTypeStr(Arg, ParamIdx) << " "
+                  << BindParam(Arg, ParamIdx);
       ++ParamIdx;
     }
     if (Fn.isVarArg() && ParamIdx != 0) {
       if (ParamIdx > 0)
-        OS << ", ";
-      OS << "...";
+        SignatureOS << ", ";
+      SignatureOS << "...";
     }
-    OS << ") {\n";
+    SignatureOS << ")";
+    DefinitionDeclarations[&Fn] = Signature;
+    OS << Signature << " {\n";
   } else {
     unsigned ParamIdx = 0;
     for (auto &Arg : Fn.args()) {

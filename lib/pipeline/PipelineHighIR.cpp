@@ -110,6 +110,11 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
     if (!MF.SourceParametersBound)
       inferMedTypes(MF, Img.Arch);
   modelWideIntReturns(Img, Result);
+  // Calls remodeled to return a packed register pair must agree with the
+  // corresponding definition on the HighIR route as well as the LLVM route.
+  recoverStructReturnFromCallers(Img, Result);
+  propagateStructReturnForwarderShapes(Img, Result);
+  materializeKnownStructReturnCallSites(Img, Result);
   bindFloatCallResults(Img, Result);
   settleReturnContracts(Img, Result, Dbg);
 

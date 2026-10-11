@@ -18,7 +18,6 @@ void RegistrationStateSolver::recordCatchReturn(
     return;
   const LowBlock &Block = Function.Blocks[I];
   const auto Identity = std::make_pair(Op.Addr, Op.Seq);
-  const auto Boundary = Boundaries.find(Op.Addr);
   const FrameValue Target =
       Op.NumInputs == 1 ? Transfer.read(Op.Inputs[0]) : FrameValue{};
   const int64_t SavedSlot = int64_t(*Chain.RegistrationOffset) - 4;
@@ -32,16 +31,11 @@ void RegistrationStateSolver::recordCatchReturn(
       callbackCanReturn(After) && After.CxxCatchStacks.size() == 1 &&
       !After.Parent && !After.OtherCallback && !After.Unknown &&
       !Facts[I].Invalid && After.Installed && !After.Uninstalled &&
-      !After.Levels.empty() && Op.Seq >= 0 && Op.NumInputs == 1 &&
-      Op.Inputs[0].Size == 4 && &Op == &Block.Ops.back() &&
-      Block.Succs.empty() && Target.Constant && !Target.MayBeFrame &&
-      EH.CodeRange.contains(*Target.Constant) &&
+      !After.Levels.empty() && callbackReturnInstruction(I, Op) &&
+      Op.NumInputs == 1 && Op.Inputs[0].Size == 4 && Target.Constant &&
+      !Target.MayBeFrame && EH.CodeRange.contains(*Target.Constant) &&
       *Target.Constant != Function.Entry && CapturedSP &&
-      *CapturedSP <= SavedSlot && Boundary != Boundaries.end() &&
-      Boundary->second.first == Block.Id &&
-      Boundary->second.second.Control == LowInstructionControl::Return &&
-      Boundary->second.second.Immediate.value_or(0) == 0 &&
-      Op.Addr + Boundary->second.second.Size == Block.EndAddr;
+      *CapturedSP <= SavedSlot;
   if (!Valid) {
     InvalidCxxContinuations.insert(Identity);
     CxxContinuations.erase(Identity);

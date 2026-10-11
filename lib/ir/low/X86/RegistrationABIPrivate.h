@@ -24,6 +24,8 @@ struct ImageFrameEffects {
 };
 
 bool chargeCalleeWork(size_t &Work, size_t Amount);
+std::optional<uint32_t>
+checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                            size_t &Work, ImageFrameEffects &Effects,

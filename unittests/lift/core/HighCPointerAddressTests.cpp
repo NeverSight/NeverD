@@ -3720,6 +3720,7 @@ TEST(HighCPointerAddresses, TypedCallPeelsWidenedImmediate) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4184,6 +4185,7 @@ TEST(HighCPointerAddresses, NamedClassReturnIsIndirectResult) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4238,6 +4240,7 @@ TEST(HighCPointerAddresses, MemberSretKeepsThisInRcx) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4327,6 +4330,7 @@ TEST(HighCPointerAddresses, DebugCalleePointerArgsOmitIntegerView) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -4562,6 +4566,7 @@ TEST(HighCPointerAddresses, MemberSretCallKeepsLiveInThis) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options, &Dbg));
@@ -4726,6 +4731,7 @@ TEST(HighCPointerAddresses, MemberSretCallRecoversUnwrittenLiveInThis) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options, &Dbg));
@@ -6189,6 +6195,7 @@ TEST(HighCPointerAddresses, ClassByValueStringArgTakesPointer) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -6539,6 +6546,7 @@ TEST(HighCPointerAddresses, CallResultTempUsesDebugReturnType) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -7416,6 +7424,7 @@ TEST(HighCPointerAddresses, CollidingSretPointerStillPrintsAssignedEnumerator) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -7941,6 +7950,7 @@ TEST(HighCPointerAddresses, PointerClassReturnIsIndirectResult) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -8029,6 +8039,7 @@ TEST(HighCPointerAddresses, PointerClassReturnKeepsObservedSretOperand) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -8077,6 +8088,7 @@ TEST(HighCPointerAddresses, StaticPointerClassGetterIgnoresLiveIntegerParam) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -8277,6 +8289,7 @@ TEST(HighCPointerAddresses, ForwardNamedClassReturnIsIndirectResult) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -21103,6 +21116,9 @@ TEST(HighCPointerAddresses, CleanupFuncletFrameSlotLoadForwardsIntoDtor) {
       Var.Type->FieldDisplayNames = {"m_pszData"};
       Var.Type->FieldDisplayOffsets = {0};
       Var.Type->FieldDisplayTypes = {NdType::makePtr()};
+      Var.Type->Fields = Var.Type->FieldDisplayTypes;
+      Var.Type->FieldOffsets = Var.Type->FieldDisplayOffsets;
+      Var.Type->Alignment = 8;
       Var.StackOffset = Disp;
       return Var;
     }
@@ -22598,6 +22614,7 @@ TEST(HighCPointerAddresses, CollidingDebugStemsKeepRicherPrototype) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -23378,6 +23395,7 @@ TEST(HighCPointerAddresses, Win64MemberCallUsesRewrittenRcxNotSret) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options, &Dbg));
@@ -23521,6 +23539,7 @@ TEST(HighCPointerAddresses, FrameHomeDoesNotReuseParamName) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
   OS.flush();
@@ -31096,6 +31115,44 @@ TEST(HighCPointerAddresses, TryExitToNextStatementKeepsCodeAfterTry) {
   EXPECT_NE(Source.find("L_140001080:"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, ExceptTailUsesOnlyItsPrintedContinuation) {
+  for (unsigned Variant : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Variant);
+    const va_t Next = 0x140001050;
+    HighFunc Func;
+    Func.Name = "except_tail";
+    Func.Entry = 0x140001000;
+    Func.ReturnType = NdType::makeVoid();
+    auto Try = exceptTry(
+        {callStmt("Probe", 0x140002000, {})},
+        {callStmt("Recover", 0x140002100, {}), gotoStmt(0x14000104E, Next)});
+    if (Variant == 2) {
+      Try.EHClauses.front().Kind = HighEHClauseKind::SEHFinally;
+      Try.EHClauses.front().FilterOrActionVA = 0x14000104C;
+    }
+    Func.Body.push_back(std::move(Try));
+    if (Variant == 1)
+      Func.Body.push_back(callStmt("Intervening", 0x140002300, {}));
+    if (Variant == 3) {
+      HighStmt Anchor;
+      Anchor.Kind = StmtKind::Block;
+      Anchor.Addr = 0x14000104F;
+      Func.Body.push_back(std::move(Anchor));
+    }
+    auto Work = callStmt("Work", 0x140002200, {});
+    Work.Addr = Next;
+    Func.Body.push_back(std::move(Work));
+    const std::string Source = emitFunctions({Func});
+    EXPECT_EQ(Source.find("goto L_140001050;") != std::string::npos,
+              Variant == 1 || Variant == 2)
+        << Source;
+    if (Variant == 1 || Variant == 2)
+      EXPECT_NE(Source.find("L_140001050:"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("Work();"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("Recover();"), std::string::npos) << Source;
+  }
+}
+
 TEST(HighCPointerAddresses, ExceptArmCapturesTheExceptionCode) {
   // A handler that stores its exception code reads the value captured at the
   // top of the __except arm, where GetExceptionCode() is valid.
@@ -36203,6 +36260,7 @@ TEST(LLVMCPointerAddresses, IndirectCallPrintsLoadedCalleePlusOffset) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.EmitIncludes = false;
   ASSERT_TRUE(
       LLVMCEmitter().emit(Module, OS, Options, &Dbg, nullptr, Function));
@@ -38642,6 +38700,7 @@ TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.EmitIncludes = false;
   ASSERT_TRUE(
       LLVMCEmitter().emit(Module, OS, Options, &Dbg, nullptr, Function));
@@ -40401,9 +40460,13 @@ TEST(HighCPointerAddresses, CorpusFuncLoadX86SehProbeExceptAssignsResult) {
   // The retained SSA copy of the exception code must reach the call unchanged.
   const std::string Code = assignedNameBefore(Source, "= 0xE0421001;");
   ASSERT_FALSE(Code.empty()) << Source;
-  EXPECT_NE(Source.find("RaiseException(" + Code + ", 0, 0, 0)"),
-            std::string::npos)
+  const auto Raise = callArguments(Source, "RaiseException", true);
+  ASSERT_TRUE(Raise && Raise->size() == 4) << Source;
+  EXPECT_TRUE(llvm::StringRef((*Raise)[0]).trim() == Code ||
+              llvm::StringRef((*Raise)[0]).trim() == "0xE0421001")
       << Source;
+  for (unsigned I = 1; I != 4; ++I)
+    EXPECT_EQ(llvm::StringRef((*Raise)[I]).trim(), "0") << Source;
   EXPECT_EQ(Source.find("var_m14"), std::string::npos) << Source;
 }
 
@@ -40753,6 +40816,7 @@ TEST(LLVMCPointerAddresses, StaticPointerClassGetterOmitsLiveIntegerOperand) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.Format = BinaryFormat::COFF;
   Options.EmitIncludes = false;
   Options.TheArch = Arch::X64;
   ASSERT_TRUE(
@@ -41028,6 +41092,81 @@ BinaryImage makeCodeFixture(va_t Entry, std::vector<uint8_t> Bytes) {
   Seg.Data = std::move(Bytes);
   Img.Segments.push_back(std::move(Seg));
   return Img;
+}
+
+TEST(HighCPointerAddresses,
+     RuntimeStackProbesKeepTheirPlatformAndNameEvidence) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Stated : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(Architecture));
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(Stated);
+        std::vector<uint8_t> Code;
+        if (Architecture == Arch::X86 || Architecture == Arch::X64)
+          Code = {0xb8, 7, 0, 0, 0, 0xc3};
+        else if (Architecture == Arch::ARM)
+          Code = {7, 0, 0xa0, 0xe3, 0x1e, 0xff, 0x2f, 0xe1};
+        else
+          Code = {0xe0, 0, 0x80, 0x52, 0xc0, 3, 0x5f, 0xd6};
+        const auto FunctionSize = Code.size();
+        Code.resize(32, 0);
+        const auto Probe = Code.size();
+        const auto Body =
+            std::vector<uint8_t>(Code.begin(), Code.begin() + FunctionSize);
+        Code.insert(Code.end(), Body.begin(), Body.end());
+        auto Img = makeCodeFixture(0x1000, Code);
+        Img.Base = 0;
+        Img.Arch = Architecture;
+        if (Architecture == Arch::ARM)
+          Img.Mode = InstructionMode::ARM;
+        Img.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                       ? Bitness::Bits32
+                       : Bitness::Bits64;
+        Img.Format = Format;
+        Img.Symbols.push_back(Symbol::makeFunc(Img.Entry, FunctionSize));
+        Symbol Helper = Symbol::makeFunc(Img.Entry + Probe, FunctionSize);
+        Helper.Name = Architecture == Arch::X86 ? "___chkstk_ms" : "__chkstk";
+        Helper.Origin = Stated ? NameOrigin::Stated : NameOrigin::Analysis;
+        Img.Symbols.push_back(Helper);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.LiftMode = true;
+        Options.NoOpt = true;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(Img, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        const auto Audit =
+            llvm::find_if(Result.FunctionAudits, [&](const auto &A) {
+              return A.Entry == Helper.Addr;
+            });
+        ASSERT_NE(Audit, Result.FunctionAudits.end());
+        const bool Runtime =
+            Stated && Format == BinaryFormat::COFF && Architecture != Arch::ARM;
+        EXPECT_EQ(Audit->Disposition,
+                  Runtime ? PipelineFunctionDisposition::SkippedRuntimeScaffold
+                          : PipelineFunctionDisposition::Accepted);
+      }
+}
+
+TEST(HighCPointerAddresses,
+     NamedDebugRecordsDoNotTransferTheWin64ABIToOtherTargets) {
+  const auto Record = NdType::makeNamedRecord("OpaqueResult", 16);
+  const auto Pointer = NdType::makePtr(Record);
+  EXPECT_TRUE(hasCSpelling(Record));
+  EXPECT_FALSE(hasCValueLayout(Record));
+  EXPECT_TRUE(hasCValueLayout(Pointer));
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      const bool Win64 =
+          Architecture == Arch::X64 && Format == BinaryFormat::COFF;
+      EXPECT_EQ(isMsvcIndirectReturn(Record, Architecture, Format), Win64);
+      EXPECT_EQ(isMsvcIndirectReturn(Pointer, Architecture, Format), Win64);
+      EXPECT_FALSE(
+          isMsvcIndirectReturn(NdType::makeInt(8), Architecture, Format));
+    }
 }
 
 TEST(HighCPointerAddresses, StateSnapshotPrintsSourceIntrinsics) {

@@ -16,7 +16,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
-#include "neverd/ir/low/LowUndefinedEffects.h"
+#include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/X86Regs.h"
@@ -51,7 +51,8 @@ namespace {
 /// which no protected block may write.  That case returns nullopt.
 std::optional<uint64_t> proveSEHEstablisherFrame(
     const LowFunc &Low, const MedFunc &Med, va_t Handler,
-    const TargetRegInfo &TRI, bool OrdinaryEntry, bool CxxContinuation = false,
+    const TargetRegInfo &TRI, bool OrdinaryEntry,
+    llvm::StringRef LocalUnwindDigest = {}, bool CxxContinuation = false,
     std::vector<int> *ProtectedSources = nullptr,
     std::map<int, std::set<va_t>> *ProtectedCalls = nullptr) {
   auto Fail = [](const std::string &Why) -> void {
@@ -122,9 +123,7 @@ std::optional<uint64_t> proveSEHEstablisherFrame(
               Op.Inputs[0].isConst() && Op.Inputs[0].Size == 8 &&
               Op.Inputs[0].Offset == Entry.Callee) {
             if (Source >= 0 || Entry.OperationDigest.empty() ||
-                Entry.OperationDigest !=
-                    lowUndefinedOperationDigest(
-                        llvm::ArrayRef(Low.Blocks[B].Ops).take_front(I + 1)))
+                Entry.OperationDigest != LocalUnwindDigest)
               Fail("stale local-unwind argument proof");
             Source = static_cast<int>(B);
           }
@@ -990,7 +989,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         std::map<int, std::set<va_t>> Calls;
         auto FrameBytes = proveSEHEstablisherFrame(
             Low, Func, Func.Blocks[B].StartAddr, TRI, !IsRoot[B],
-            /*CxxContinuation=*/true, &Protected, &Calls);
+            /*LocalUnwindDigest=*/{}, /*CxxContinuation=*/true, &Protected,
+            &Calls);
         if (!IsRoot[B])
           continue;
         CxxContinuationRoots.insert(B);
@@ -1015,6 +1015,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     }
     if (TargetArch == Arch::X64 && Low.ExceptionMetadata &&
         Low.ExceptionMetadata->SEH) {
+      // LowIR is immutable throughout this conversion. Hash all predecessors
+      // once, even when many handlers consume the same local-unwind receipts.
+      const std::string LocalUnwindDigest =
+          Low.SEHLocalUnwindContinuations.empty()
+              ? std::string{}
+              : lowSEHFrameDependencyDigest(Low);
       for (int B = 0; B < N; ++B) {
         const bool IsSEHHandler =
             std::any_of(Func.Blocks[B].ExceptionalPreds.begin(),
@@ -1039,12 +1045,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           // dispatcher enters with; that entry then needs no SP of its own.
           if (!IsRoot[B]) {
             proveSEHEstablisherFrame(Low, Func, Func.Blocks[B].StartAddr, TRI,
-                                     /*OrdinaryEntry=*/true);
+                                     /*OrdinaryEntry=*/true, LocalUnwindDigest);
             continue;
           }
           if (std::optional<uint64_t> FrameBytes = proveSEHEstablisherFrame(
                   Low, Func, Func.Blocks[B].StartAddr, TRI,
-                  /*OrdinaryEntry=*/false))
+                  /*OrdinaryEntry=*/false, LocalUnwindDigest))
             SEHFrameOffsets[B] = *FrameBytes;
           else
             SEHProtectedSPRoots.insert(B);

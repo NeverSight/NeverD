@@ -21,6 +21,22 @@ struct RegistrationObjectExtent {
   bool operator==(const RegistrationObjectExtent &) const = default;
 };
 
+/// A returning PE32 call's stack adjustment, independent of its memory
+/// effects. An indirect identity names an authenticated import slot, never a
+/// runtime pointer value. This cannot authorize a frame borrow or native EH.
+struct RegistrationCalleeStackContract {
+  va_t Target = InvalidVA;
+  uint32_t StackPopBytes = 0;
+  bool Indirect = false;
+};
+
+/// Runtime identity alone grants no frame effect. The state solver must bind
+/// the actual arguments and prove every invoked finally before using it.
+struct RegistrationLocalUnwindContract {
+  va_t Target = InvalidVA;
+  bool Indirect = false;
+};
+
 /// A checked original callee's contract. A returning leaf may borrow ECX;
 /// a private scalar-throw helper terminates without borrowing the parent.
 /// This is source evidence, not a compiler or native installation receipt.

@@ -26,3 +26,10 @@ configure_file("${_llvh}/include/llvh/Config/config.h.cmake"
 configure_file("${_llvh}/include/llvh/Config/llvm-config.h.cmake"
                include/llvh/Config/llvm-config.h)
 add_subdirectory("${_llvh}/lib" lib)
+
+# LLVM and Hermes' renamed LLVM support library coexist in the shared engine.
+# This Windows callback retains an upstream C linkage name outside the llvh
+# namespace; give the Hermes copy a private symbol without changing its body.
+if(WIN32)
+  target_compile_definitions(LLVHSupport PRIVATE HandleAbort=neverd_hermes_HandleAbort)
+endif()

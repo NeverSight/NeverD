@@ -88,7 +88,7 @@ selectUnique(ArrayRef<WindowsEHArtifactExpectation> Expectations,
   return Match;
 }
 
-Expected<std::string> decompileToHighC(const std::filesystem::path &Input) {
+Expected<std::string> decompileToSource(const std::filesystem::path &Input) {
   SmallString<128> OutputPath;
   if (std::error_code EC = sys::fs::createTemporaryFile(
           "neverd-windows-eh-mode", "c", OutputPath))
@@ -110,8 +110,8 @@ Expected<std::string> decompileToHighC(const std::filesystem::path &Input) {
   const std::string InputString = Input.string();
   const std::string OutputString = OutputPath.str().str();
   SmallVector<StringRef, 10> Args{
-      NEVERD_BINARY,  "decompile", "--no-debug", "--no-opt",
-      "--language=c", "-o",        OutputString, InputString,
+      NEVERD_BINARY,       "decompile", "--no-debug", "--no-opt",
+      "--language=source", "-o",        OutputString, InputString,
   };
   std::optional<StringRef> Redirects[] = {std::nullopt, StdoutPath.str(),
                                           StderrPath.str()};
@@ -123,7 +123,7 @@ Expected<std::string> decompileToHighC(const std::filesystem::path &Input) {
     if (auto StderrOrErr = MemoryBuffer::getFile(StderrPath.str()))
       Diagnostic += (*StderrOrErr)->getBuffer().str();
     return createStringError(inconvertibleErrorCode(),
-                             "HighC decompile failed with exit %d: %s", Exit,
+                             "source decompile failed with exit %d: %s", Exit,
                              Diagnostic.c_str());
   }
 
@@ -204,9 +204,14 @@ TEST(WindowsEHModesCorpus,
     auto ExpectationOrErr = selectUnique(*ExpectationsOrErr, TestCase.Selector);
     ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
         << toString(ExpectationOrErr.takeError());
-    auto OutputOrErr = decompileToHighC(CorpusRoot / (*ExpectationOrErr)->Path);
-    ASSERT_TRUE(static_cast<bool>(OutputOrErr))
-        << toString(OutputOrErr.takeError());
+    // Structured EH belongs to the source view. Explicit C retains native
+    // callbacks and cannot invent a separate C ABI for an embedded handler.
+    auto OutputOrErr =
+        decompileToSource(CorpusRoot / (*ExpectationOrErr)->Path);
+    if (!OutputOrErr) {
+      ADD_FAILURE() << toString(OutputOrErr.takeError());
+      continue;
+    }
     StringRef Output(*OutputOrErr);
     const std::vector<StringRef> GuardedBlocks = guardedAnalysisBlocks(Output);
     ASSERT_FALSE(GuardedBlocks.empty());
@@ -294,7 +299,7 @@ TEST(WindowsEHModesCorpus, PinsTargetedNativeSourceClassificationReasons) {
        {WindowsEHNativeSourceReason::GSWrappedPersonality}},
       {{"seh_probe", "msvc", "x86", "native", true, "o2"},
        NativeTargetRecord::X86EH4Registration,
-       {WindowsEHNativeSourceReason::UnsupportedArchitecture}},
+       {WindowsEHNativeSourceReason::IncompleteRegistrationFrame}},
       {{"cxx_eh_probe", "msvc", "arm", "native", true, "o0"},
        NativeTargetRecord::ArmCxx,
        {WindowsEHNativeSourceReason::UnsupportedArchitecture}},

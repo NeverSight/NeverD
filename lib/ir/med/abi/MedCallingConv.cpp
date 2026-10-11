@@ -1224,9 +1224,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   if (Convention && Convention->PositionalArgumentSlots) {
     // The FP argument registers take the same positions as the integer ones.
     ParamRegs.assign(IntegerRegs.begin(), IntegerRegs.end());
-    for (uint64_t R : TRI.FPParamRegs)
-      if (ParamRegs.size() < 2 * IntegerRegs.size())
-        ParamRegs.push_back(R);
+    for (uint64_t R : TRI.floatingParamRegs(Fmt))
+      ParamRegs.push_back(R);
   } else {
     // Floating-point arguments use a *separate* register class with its own
     // argument index (XMM0-7, V0-7, ARM D0-7), recovered by detectXMMParams.
