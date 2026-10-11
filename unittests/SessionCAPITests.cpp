@@ -4371,14 +4371,29 @@ counter:
                                       std::nullopt, {}, 60, 0, &Message),
             0)
       << Message;
-  ASSERT_EQ(neverd_session_load(Session, Library.c_str()), 1)
-      << takeString(neverd_last_error(Session));
-  const int Bump = neverd_func_find_by_name(Session, "bump");
-  ASSERT_GE(Bump, 0);
-  const std::string LLVMC = takeString(
-      neverd_decompile_llvm(Session, neverd_func_entry(Session, Bump)));
-  ASSERT_FALSE(LLVMC.empty()) << takeString(neverd_last_error(Session));
-  EXPECT_NE(LLVMC.find("(*)("), std::string::npos) << LLVMC;
+  // Linkers place TLS descriptors in different relocation tables. Renaming
+  // the section leaves every relocation and instruction unchanged, and must
+  // not turn a descriptor resolver into a direct call to the TLS variable.
+  std::ifstream Linked(Library, std::ios::binary);
+  ASSERT_TRUE(Linked.good());
+  std::string Renamed((std::istreambuf_iterator<char>(Linked)),
+                      std::istreambuf_iterator<char>());
+  const auto RelocationName = Renamed.find(".rela.dyn");
+  ASSERT_NE(RelocationName, std::string::npos);
+  Renamed.replace(RelocationName, 9, ".rela.plt");
+  const auto PLTLibrary = write("tls-plt.so", Renamed);
+  for (const auto &Input : {Library, PLTLibrary}) {
+    SCOPED_TRACE(Input);
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+        << takeString(neverd_last_error(Session));
+    const int Bump = neverd_func_find_by_name(Session, "bump");
+    ASSERT_GE(Bump, 0);
+    const std::string LLVMC = takeString(
+        neverd_decompile_llvm(Session, neverd_func_entry(Session, Bump)));
+    ASSERT_FALSE(LLVMC.empty()) << takeString(neverd_last_error(Session));
+    EXPECT_NE(LLVMC.find("(*)("), std::string::npos) << LLVMC;
+    EXPECT_EQ(LLVMC.find("counter("), std::string::npos) << LLVMC;
+  }
 #endif
 }
 
