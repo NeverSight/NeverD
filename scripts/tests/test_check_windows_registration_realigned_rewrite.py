@@ -46,7 +46,8 @@ class RealignedRewriteEvidenceTests(unittest.TestCase):
                                          "files": [{"name": n, "sha256": "a" * 64}
                                                    for n in libraries.LIBRARIES]}, "cases": []}
         (root / "catch-projection.xml").write_text('<testsuites tests="1"/>')
-        (root / "incoming-projection.xml").write_text('<testsuites tests="2"/>')
+        (root / "incoming-projection.xml").write_text(
+            f'<testsuites tests="{len(runner.INCOMING_PROOFS)}"/>')
         (root / "fixed-projection.xml").write_text('<testsuites tests="1"/>')
         for kind in runner.FORMS:
             (root / (kind + ".obj")).write_bytes(kind.encode())
@@ -190,9 +191,11 @@ class RealignedRewriteEvidenceTests(unittest.TestCase):
             root = Path(directory)
             capture = self.capture(root)
             path = root / "incoming-projection.xml"
+            count = len(runner.INCOMING_PROOFS)
             for xml in ('<testsuites tests="0"/>', '<testsuites tests="1"/>',
-                        '<testsuites tests="2" failures="1"/>',
-                        '<testsuites tests="2"><testcase><skipped/></testcase></testsuites>'):
+                        '<testsuites tests="2"/>',
+                        f'<testsuites tests="{count}" failures="1"/>',
+                        f'<testsuites tests="{count}"><testcase><skipped/></testcase></testsuites>'):
                 path.write_text(xml)
                 with self.subTest(xml=xml), self.assertRaises(ValueError):
                     replay.validate_capture(root, capture)
