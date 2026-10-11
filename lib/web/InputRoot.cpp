@@ -1,3 +1,14 @@
+//===- InputRoot.cpp - Confined input traversal ------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Confined input traversal.
+///
+//===----------------------------------------------------------------------===//
+
 #include "BlobStore.h"
 #include "Internal.h"
 

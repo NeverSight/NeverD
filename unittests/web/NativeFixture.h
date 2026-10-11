@@ -1,3 +1,14 @@
+//===- NativeFixture.h - Immutable native handoff test fixtures --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Immutable native handoff test fixtures.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <cstdint>

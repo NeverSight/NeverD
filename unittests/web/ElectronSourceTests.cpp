@@ -1,3 +1,14 @@
+//===- ElectronSourceTests.cpp - Electron source boundaries tests ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Electron source boundaries tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Electron.h"

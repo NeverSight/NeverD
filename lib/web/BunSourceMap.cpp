@@ -1,9 +1,20 @@
+//===- BunSourceMap.cpp - Bun serialized source maps -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bun serialized source maps.
+///
+//===----------------------------------------------------------------------===//
+
 // Fixed layout references and license: docs/web-bun-profile.md, LICENSES/bun.
 // This bounded C++ reader deliberately does not use Bun's trusted-memory
 // reader.
 #include "BunSourceMap.h"
 
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/Error.h"

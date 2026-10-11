@@ -9,6 +9,14 @@ NEVERD_NATIVE_DRIVER_OWNER(NeverDUnpackDriverTests)
 #endif
 #ifdef NEVERD_NATIVE_DRIVER_REQUIRED_TEST
 NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/"
+    "DriverImageMemory.WriteTraceSelectionPreservesEffectsFaultsAndBudgets/"
+    "{backend}_driver")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/"
+    "DriverImageMemory.WriteTraceSelectionPreservesEffectsFaultsAndBudgets/"
+    "{backend}_checked")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
     "Native/DriverImageMemory.ImageMDLAliasesPreserveBytesAndCompleteUnload/"
     "{backend}_driver")
 NEVERD_NATIVE_DRIVER_REQUIRED_TEST(

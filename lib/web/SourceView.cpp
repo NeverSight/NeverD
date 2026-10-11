@@ -1,10 +1,21 @@
+//===- SourceView.cpp - Reviewed source display projections ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Reviewed source display projections.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/SourceView.h"
 
 #include "JsonReader.h"
 #include "SourceModel.h"
 
 #include "neverd/web/Artifact.h"
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 #include <algorithm>
 #include <charconv>

@@ -90,6 +90,10 @@ v4 テストはプレフィックスのサイズとパディング、切り詰�
 
 `LowIRLoopAlignment.*` は独立に作成した通常形と回転形のフレームカウンタループを検査します。既定の自己関係計画はそれぞれ証明できますが、最初の対応付けは失敗し、別の候補カットで関係が証明されます。複数カットの順列、誤った結果とフレーム書き込み、元の記録の欠落・陳腐化、明示的な未定義値 witness、非減少・桁あふれカウンタ、不正なグラフ、失敗試行の累積クエリ、ちょうど足りる総予算、探索限界の枯渇を網羅します。拒否結果に証明書があってはなりません。 追加ケースは、分離したリセットと進行段階、終了判定を移動して候補群間の対応付けが必要になる等価ループ、再推論しないキャッシュ、合計メタデータ超過を検査します。後続の独立ループは明示的な16384クエリ上限で全循環の被覆を確認します。空・重複候補群は記号クエリを使わず、カット不足は拒否します。ちょうど十分および一回不足の全体予算、誤った結果、進行の欠如、元の証拠、未定義値の witness も検査します。 フィルターの回帰は結果を変えない算術ダイヤモンド、局所合流と境界だけの合流、到達可能な合流点を迂回して終了または循環境界に戻る経路を検査します。元側の重複候補群が候補側の試行を妨げないこと、先に成功したフィルター計画を後続の全分岐試行が再利用すること、厳密・一単位不足・ゼロの `MaxCutSelectionWork`、失敗した `CutSelectionWork` の累積、全体のグラフ作業枠消費後に記号推論を始めないことを確認します。両分岐候補群の完全循環被覆を検査し、ダイヤモンドの関係には明示的な推論・証明クエリ上限を使います。
 
+`LowIRLoopAlignment.DirectRanks*` ではレジスタ／フレームの格納先変更、両立するフレームとの和集合、両端点での競合、定数・式ランクおよび実際の8バイト／4バイトのフレーム入力の保守的な拒否を検査します。計上 oracle は公開の自己関係計画から追加の走査・比較・メタデータ費用を独立に導き、厳密な上限と一単位不足を検査する必要があります。成功した探索の合計を期待値に転記してはなりません。重複案は試行数と作業量を消費し、新しい検査クエリは発行せず、追加試行枠の枯渇後も後続の通常対応付けで証明できることを要求します。誤った結果、フレームや保存状態の変更、進行欠如、古い元の証拠は、完全な観測と選択した witness を保ったまま拒否する必要があります。`InterpreterLLVMRefinement.PreservationRestoresEntryAcrossLoopCutpoints` ではカット番地やランク対応付けを手指定せず公開探索でソース関係計画を発見し、新しいモデルを準備して合成検査器で native と LLVM の両前提を再検査します。これは実行済みテストの合格や通常 ABI 認証を表しません。
+
+`LowIRLoopAlignment.PlanCutCap*` はゼロ・不足・厳密な計画上限、過大な候補群での記号クエリゼロ、完全な循環被覆、不正なグラフ、両方向での後続フィルタ付き候補の証明を検査します。単独推論の互換性も維持します。`LLVMModel.RejectedBodyTemplateDoesNotHideAValidGuardedHeader` は、単一切断点の整列上限でも複数の推論試行が可能なことを検査します。誤った結果は引き続き証明書を得られません。
+
 部分カウンターの回帰はフレーム・レジスター、増減両方向、下位・中間・上位、不規則な幅、両エンディアン、3バイトのフレーム語を扱います。遅れて現れるレーン、保持ビットの改変、進行しないループと無保護の周回、無効な追加入口、正確／不足の推論予算、既存の単一カット探索を検査します。
 
 先頭フェーズの回帰は、同じカウントダウン語を再利用する二つ・三つの順次ループ、既存の入れ子ループフェーズとの合成、厳密および一回不足の順位・クエリ予算、進行しないループ、前のフェーズへ戻るリセットを検査します。同じ幅の誤ったフェーズ定数、誤った結果とフレーム書込みは完全チェッカーが証明書なしで拒否し、元の証拠が欠ける場合も未対応となります。
@@ -99,6 +103,8 @@ v4 テストはプレフィックスのサイズとパディング、切り詰�
 `NeverDLLVMInterpreterModelTests` は独自 LLVM を全状態 LowIR 参照実装と比較し、ビット幅、並列 PHI、switch、ゲストメモリ、独立ステータス、poison ガード、組み込み関数の値域、拒否契約、四つの構築予算を検証します。任意ワードのカウントダウンを完全に証明し、変更されたステータスを拒否します。独自 C の O1/O2 コンパイル結果も同じ観測契約を満たす必要があります。これは対応モデルの検証であり、自動不変条件発見とコンパイラーの正しさは別の義務です。 可変シフトのケースは四つのビット幅、マスクや分岐で制限したシフト量、境界値と範囲外の値、オーバーフロー禁止と正確性フラグ、厳格な poison 拒否、O1/O2 でコンパイルした C を検証します。
 
 `LLVMGuestAlignment.*` はロードとストアを独立したバイトメモリ参照実装と比較し、整列・非整列の領域、自由なアドレス上位ビット、解析された既定アラインメント、部分幅、未使用・上書きされたアクセス、到達不能な分岐、ちょうど十分・1 単位不足の構築予算を検証します。`InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises` は両関係を新たに検査し、ネイティブのスタックストア、入口合同条件の一致、ソース効果の改変を確認します。
+
+`LLVMByteSwap*`、`LLVMScalarByteSwap.*`、`InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises` は独立したバイトコピーとシフト／マスクの参照で、上位バイト、ブロック間の値、poison、呼び出し契約、独立計数による厳密／一単位不足の予算を検証します。Clang O1/O2 では実際の交換 intrinsic を要求し、小さなネイティブ交換／BSWAP 例では両側を新たに証明し、誤った値や上位半分のゼロクリア漏れを拒否します。
 
 `NeverDLLVMScalarEquivalenceTests` は完全なループ入力領域、ゼロ回反復、PHI の同時交換、switch、入力の上位ビット、最後の分割での反例、poison を生む追加更新、戻り値範囲、未対応契約、ちょうど・1不足・ゼロの予算を検査します。独立した倍幅・オーバーフローの参照実装が各対応幅のファネル端点と制約付き乗算を検査し、独立した入れ子ループ C の O1/O2 出力がコンパイラー入力形態を確認します。状態モデルのスイートも端点を検査します。`SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings` は累積計測と従来の局所上限を確認します。
 
@@ -1252,7 +1258,7 @@ KVM の判定には、実際に自発終了しない vCPU のキャンセルと�
 
 `native_cpu_only=true` と `native_driver_tests=true` を指定すると、Unicorn なしで `NeverDNativeDriverTests` を有効にします。構成前に `build_wdk_driver_fixtures.py` が Microsoft 公式 WDK/SDK 10.0.26100.6584 パッケージ全体の SHA-256 を検証し、元のソースから通常版・CFG 版・DBG 版のドライバーイメージを計 48 個構築します。`WDKDriverFixtures.def` がパッケージ識別子、コンパイラーとリンカーの引数、フィクスチャの対応を定義します。変更していない Microsoft のファイルとライセンスはローカルのビルド／キャッシュ内に保持し、CI はビルドメタデータとログだけをアップロードします。マニフェストにはツールのバージョン、コマンド、ソースとヘッダーのハッシュ、出力イメージのハッシュを記録します。
 
-`NativeDriverTests.def` は `DriverBuiltinImages.def` と `DriverBackendParityCases.def` の全 115 ワークロードから 230 件の WHP 結果を要求します。内訳は組み込み 27、WDK 48 イメージ、要求シナリオ 40 件で、それぞれ元と再配置先のアドレスを使います。必須項目全体は `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`。待機集合の 30 件は移植可能なモデル 16 件と独自ネイティブドライバー 14 件です。`run_native_cpu_ci.py --with-drivers` は Unicorn を無効にして正確な一覧と JUnit 証拠を保存します。必須フィクスチャの欠落やスキップは選択式ゲートを失敗させ、通常のビルドでは外部フィクスチャを省略できます。固定イメージの再配置拒否は期待結果のままです。ARM64 のネイティブゲスト実行は未検証です。
+`NativeDriverTests.def` は `DriverBuiltinImages.def` と `DriverBackendParityCases.def` の全 115 ワークロードから 230 件の WHP 結果を要求します。内訳は組み込み 27、WDK 48 イメージ、要求シナリオ 40 件で、それぞれ元と再配置先のアドレスを使います。必須項目全体は `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 4 image memory checks = 5451`。待機集合の 30 件は移植可能なモデル 16 件と独自ネイティブドライバー 14 件です。`run_native_cpu_ci.py --with-drivers` は Unicorn を無効にして正確な一覧と JUnit 証拠を保存します。必須フィクスチャの欠落やスキップは選択式ゲートを失敗させ、通常のビルドでは外部フィクスチャを省略できます。固定イメージの再配置拒否は期待結果のままです。ARM64 のネイティブゲスト実行は未検証です。
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` は起動中の異なる2命令の前で期限切れ、停止、両方の中断を注入します。正確な段階診断、メッセージの所有寿命、エラー型と原因ビット、手順間で変わらない単一の期限、メモリ所有権の解放を検査します。実際の転送失敗と状態不一致は引き続き区別します。ネイティブ x64 起動検証の予算は `5 s` で、通常のゲスト期限と単一ステップ猶予は変更しません。
 
@@ -1624,6 +1630,33 @@ MainActor のフィクスチャは固定メタデータと静的テーブルの�
 `ZeroTimeoutPollRetainsReadinessAndOrderedCopies` は八版の O0／O2 生呼び出しで、生存・負・閉じた記述子、重複件数、引数の縮小、タイムアウトとマスクの順序、読み取り専用ゼロ timespec、全メタデータの先行取り込み、後続障害で残る `revents` を検証します。`ZeroTimeoutPollKeepsUnobservedBoundaries` は未観測のカーネル、上限、マスク、待機、準備状態を維持します。Android の `ReleasedGKIZeroTimeoutPollSharesRawAndBionicResults` は六つの梱包形式で共有表と errno の所有者を確認します。
 
 ## 有界ディレクトリ一括属性
+
+bulk-attributes は完全なグループ、名前/型の集合、未使用バイトの保護、low32 FD、bitmap ワード、ネイティブエラー、dup、独立 open、EOF、ゼロ rewind を確認する。リテラル/未対応モードは仮想専用。モデルは完全な stat と無効化、NFD/255バイト名、入出力の別名、転送/予算エラー、移動/SWAP/削除/再使用、明示権限も確認する。必須在庫はプラットフォーム当たり65項目、ARM64 は195件、Intel は130件。本機で検証した実行は一致する ARM64 HVF のみ。native5s、guest/Python5,000,000us/quantum1024、public10s は不変。
+
+## 範囲を限定した Darwin ハードリンク
+
+link は末尾のシンボリックリンクを追跡する。linkat の flags=0 はリンク自体、AT_SYMLINK_FOLLOW は対象を選ぶ。low32 の 0/0x40 のみを受け入れ、他の下位ビットは入力前に EINVAL。ソース検索とディレクトリ EPERM は宛先入力に先行し、既存の宛先は EEXIST。宛先の変更権限と明示された同一マウント領域が必要。初期識別の別名や既知のデバイス・モード・フラグの矛盾は未対応。
+
+別名はエントリとパス/NUL の使用量のみを増やし、新しい inode を使わない。バイト、属性権限、メタデータ有効性、マッピングのリースは共有オブジェクトが保持する。明示ポリシーがリンク数と ctime を更新し、欠落時の完全な stat は未知。属性変更は stat を、内容変更は属性観測を無効化する。削除名と最終マッピングの使用量は保持され、置換は直ちに解放できる分だけを差し引く。部分木は正確な識別と親で移動し、外部の別名は動かず、相対ターゲットは選択エントリの親から解決する。
+
+複数名を持った履歴のあるオブジェクトの F_GETPATH/ATTR_CMN_NAME は、残りが一つやゼロでも未対応。APFS キャッシュを一般化しない。bulk NAME は実エントリを使い、同一オブジェクトの通常 rename/SWAP は両名を保持する。EXCL の大小文字、O_SYMLINK、Intel HVF、実機 iOS、ACL、マッピング整合性/EOF シグナル、dyld、Mach IPC、スレッド、完全なフレームワークは別の課題。この契約の範囲内だけで以前の除外を拡張する。
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+65 mandatory workloads per platform / ARM64 195 / Intel 130
+```
 
 bulk-attributes は完全なグループ、名前/型の集合、未使用バイトの保護、low32 FD、bitmap ワード、ネイティブエラー、dup、独立 open、EOF、ゼロ rewind を確認する。リテラル/未対応モードは仮想専用。モデルは完全な stat と無効化、NFD/255バイト名、入出力の別名、転送/予算エラー、移動/SWAP/削除/再使用、明示権限も確認する。必須在庫はプラットフォーム当たり63項目、ARM64 は189件、Intel は126件。本機で検証した実行は一致する ARM64 HVF のみ。native5s、guest/Python5,000,000us/quantum1024、public10s は不変。
 

@@ -28,6 +28,12 @@ std::optional<RegistrationFrameCoordinate>
 realignedRegistrationFrameCoordinate(const ExceptionFunction &EH,
                                      const RegistrationStateAnalysis *State);
 
+/// Source coordinate for a complete fixed or realigned C++ frame. Native
+/// runtime displacements additionally require cxxSourceFrameOffset().
+std::optional<RegistrationFrameCoordinate>
+cxxRegistrationFrameCoordinate(const ExceptionFunction &EH,
+                               const RegistrationStateAnalysis *State);
+
 /// Coordinate of a source-frame runtime definition. Callback ESP is a
 /// separate invocation's stack and deliberately has no parent coordinate.
 std::optional<RegistrationFrameCoordinate>

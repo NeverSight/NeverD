@@ -11,6 +11,524 @@
 #include <string_view>
 
 namespace neverd::emulation::darwin_test {
+inline DarwinFileMetadata ownerQueryMetadata(uint16_t Mode, uint64_t Inode,
+                                             uint64_t Size = 0) {
+  DarwinFileMetadata M;
+  M.Device = 7;
+  M.Inode = Inode;
+  M.Mode = Mode;
+  M.LinkCount = (Mode & 0170000) == 0040000 ? 2 : 1;
+  M.UID = 501;
+  M.GID = 20;
+  M.Size = Size;
+  M.BlockSize = 4096;
+  return M;
+}
+inline DarwinFileOptions ownerQueryOptions() {
+  DarwinFileOptions O;
+  O.Authorization = DarwinFileAuthorization::StaticOwnerQueries;
+  O.Files["/data"] = {'a', 'b', 0, 255, 'e', 'f'};
+  O.Files["/directory/leaf"] = {};
+  O.Files["/unknown"] = {};
+  O.Directories = {"/", "/directory"};
+  O.WorkingDirectory = "/";
+  O.Metadata["/"] = ownerQueryMetadata(0040700, 1);
+  O.Metadata["/data"] = ownerQueryMetadata(0100400, 2, 6);
+  O.Metadata["/directory"] = ownerQueryMetadata(0040000, 3);
+  O.Metadata["/directory/leaf"] = ownerQueryMetadata(0100700, 4);
+  O.SymbolicLinks["/alias"] = {'d', 'a', 't', 'a'};
+  O.SymbolicLinks["/via"] = {'d', 'i', 'r', 'e', 'c', 't', 'o', 'r', 'y'};
+  return O;
+}
+inline constexpr char OwnerQueriesJSON[] = R"({
+  "authorization":"static-owner-queries",
+  "files":[
+    {"path":"/data","bytes_hex":"616200ff6566","metadata":{
+      "device":7,"inode":2,"mode":33024,"link_count":1,"uid":501,"gid":20,
+      "size":6,"block_size":4096,"blocks":0,"flags":0,"generation":0,
+      "access_time":{"seconds":0,"nanoseconds":0},
+      "modification_time":{"seconds":0,"nanoseconds":0},
+      "change_time":{"seconds":0,"nanoseconds":0},
+      "birth_time":{"seconds":0,"nanoseconds":0}}},
+    {"path":"/directory/leaf","bytes_hex":"","metadata":{
+      "device":7,"inode":4,"mode":33216,"link_count":1,"uid":501,"gid":20,
+      "size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,
+      "access_time":{"seconds":0,"nanoseconds":0},
+      "modification_time":{"seconds":0,"nanoseconds":0},
+      "change_time":{"seconds":0,"nanoseconds":0},
+      "birth_time":{"seconds":0,"nanoseconds":0}}},
+    {"path":"/unknown","bytes_hex":""}],
+  "directories":[
+    {"path":"/","metadata":{
+      "device":7,"inode":1,"mode":16832,"link_count":2,"uid":501,"gid":20,
+      "size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,
+      "access_time":{"seconds":0,"nanoseconds":0},
+      "modification_time":{"seconds":0,"nanoseconds":0},
+      "change_time":{"seconds":0,"nanoseconds":0},
+      "birth_time":{"seconds":0,"nanoseconds":0}}},
+    {"path":"/directory","metadata":{
+      "device":7,"inode":3,"mode":16384,"link_count":2,"uid":501,"gid":20,
+      "size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,
+      "access_time":{"seconds":0,"nanoseconds":0},
+      "modification_time":{"seconds":0,"nanoseconds":0},
+      "change_time":{"seconds":0,"nanoseconds":0},
+      "birth_time":{"seconds":0,"nanoseconds":0}}}],
+  "symbolic_links":[{"path":"/alias","target_hex":"64617461"},
+    {"path":"/via","target_hex":"6469726563746f7279"}],
+  "working_directory":"/"})";
+inline constexpr char OwnerQueryCredentialsJSON[] = R"({"credentials":{
+  "real_uid":501,"effective_uid":501,"real_gid":20,"effective_gid":20}})";
+inline DarwinFileOptions ordinaryQueryOptions() {
+  DarwinFileOptions O;
+  O.Authorization = DarwinFileAuthorization::StaticOrdinaryQueries;
+  O.Directories = {"/", "/directory"};
+  O.WorkingDirectory = "/";
+  O.Metadata["/"] = ownerQueryMetadata(040777, 1, 0);
+  O.Metadata["/"].UID = 0;
+  O.Metadata["/"].GID = 0;
+  O.Files["/agreement"] = {'a', 'b', 0, 255, 'e', 'f'};
+  O.Metadata["/agreement"] = ownerQueryMetadata(0100644, 2, 6);
+  O.Metadata["/agreement"].UID = 700;
+  O.Metadata["/agreement"].GID = 50;
+  O.Files["/group"] = {};
+  O.Metadata["/group"] = ownerQueryMetadata(0100060, 3, 0);
+  O.Metadata["/group"].UID = 700;
+  O.Metadata["/group"].GID = 20;
+  O.Files["/supplement"] = {};
+  O.Metadata["/supplement"] = ownerQueryMetadata(0100010, 4, 0);
+  O.Metadata["/supplement"].UID = 700;
+  O.Metadata["/supplement"].GID = 40;
+  O.Files["/world"] = {};
+  O.Metadata["/world"] = ownerQueryMetadata(0100004, 5, 0);
+  O.Metadata["/world"].UID = 700;
+  O.Metadata["/world"].GID = 20;
+  O.Files["/unknown"] = {};
+  O.Metadata["/unknown"] = ownerQueryMetadata(0100064, 6, 0);
+  O.Metadata["/unknown"].UID = 700;
+  O.Metadata["/unknown"].GID = 50;
+  O.Metadata["/directory"] = ownerQueryMetadata(040010, 7, 0);
+  O.Metadata["/directory"].UID = 700;
+  O.Metadata["/directory"].GID = 20;
+  O.Files["/directory/leaf"] = {};
+  O.Metadata["/directory/leaf"] = ownerQueryMetadata(0100644, 8, 0);
+  O.Metadata["/directory/leaf"].UID = 700;
+  O.Metadata["/directory/leaf"].GID = 50;
+  O.SymbolicLinks["/alias"] = {'a', 'g', 'r', 'e', 'e', 'm', 'e', 'n', 't'};
+  O.SymbolicLinks["/via"] = {'d', 'i', 'r', 'e', 'c', 't', 'o', 'r', 'y'};
+  return O;
+}
+inline DarwinFileOptions closedGroupQueryOptions() {
+  auto O = ordinaryQueryOptions();
+  O.Directories.insert("/external");
+  O.Directories.insert("/blocked");
+  O.Files["/external/leaf"] = {};
+  O.Metadata["/external"] = ownerQueryMetadata(040001, 9, 0);
+  O.Metadata["/blocked"] = ownerQueryMetadata(040010, 10, 0);
+  O.Metadata["/external/leaf"] = ownerQueryMetadata(0100644, 11, 0);
+  for (const char *Path : {"/external", "/blocked", "/external/leaf"}) {
+    O.Metadata[Path].UID = 700;
+    O.Metadata[Path].GID = 50;
+  }
+  O.SymbolicLinks["/external-via"] = {'e', 'x', 't', 'e', 'r', 'n', 'a', 'l'};
+  return O;
+}
+inline constexpr char OrdinaryQueriesJSON[] = R"({
+  "authorization": "static-ordinary-queries",
+  "files": [
+    {
+      "path": "/agreement",
+      "metadata": {
+        "device": 7,
+        "inode": 2,
+        "mode": 33188,
+        "link_count": 1,
+        "uid": 700,
+        "gid": 50,
+        "size": 6,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      },
+      "bytes_hex": "616200ff6566"
+    },
+    {
+      "path": "/group",
+      "metadata": {
+        "device": 7,
+        "inode": 3,
+        "mode": 32816,
+        "link_count": 1,
+        "uid": 700,
+        "gid": 20,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      },
+      "bytes_hex": ""
+    },
+    {
+      "path": "/supplement",
+      "metadata": {
+        "device": 7,
+        "inode": 4,
+        "mode": 32776,
+        "link_count": 1,
+        "uid": 700,
+        "gid": 40,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      },
+      "bytes_hex": ""
+    },
+    {
+      "path": "/world",
+      "metadata": {
+        "device": 7,
+        "inode": 5,
+        "mode": 32772,
+        "link_count": 1,
+        "uid": 700,
+        "gid": 20,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      },
+      "bytes_hex": ""
+    },
+    {
+      "path": "/unknown",
+      "metadata": {
+        "device": 7,
+        "inode": 6,
+        "mode": 32820,
+        "link_count": 1,
+        "uid": 700,
+        "gid": 50,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      },
+      "bytes_hex": ""
+    },
+    {
+      "path": "/directory/leaf",
+      "metadata": {
+        "device": 7,
+        "inode": 8,
+        "mode": 33188,
+        "link_count": 1,
+        "uid": 700,
+        "gid": 50,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      },
+      "bytes_hex": ""
+    }
+  ],
+  "directories": [
+    {
+      "path": "/",
+      "metadata": {
+        "device": 7,
+        "inode": 1,
+        "mode": 16895,
+        "link_count": 2,
+        "uid": 0,
+        "gid": 0,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      }
+    },
+    {
+      "path": "/directory",
+      "metadata": {
+        "device": 7,
+        "inode": 7,
+        "mode": 16392,
+        "link_count": 2,
+        "uid": 700,
+        "gid": 20,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      }
+    }
+  ],
+  "symbolic_links": [
+    {
+      "path": "/alias",
+      "target_hex": "61677265656d656e74"
+    },
+    {
+      "path": "/via",
+      "target_hex": "6469726563746f7279"
+    }
+  ],
+  "working_directory": "/"
+})";
+inline constexpr char OrdinaryQueryCredentialsJSON[] = R"({"credentials":{
+  "real_uid":501,"effective_uid":502,"real_gid":30,"effective_gid":20,
+  "groups":[20,40]}})";
+
+inline constexpr char ClosedGroupQueriesExtraJSON[] = R"({
+  "files": [
+    {
+      "path": "/external/leaf",
+      "bytes_hex": "",
+      "metadata": {
+        "device": 7,
+        "inode": 11,
+        "mode": 33188,
+        "link_count": 1,
+        "uid": 700,
+        "gid": 50,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      }
+    }
+  ],
+  "directories": [
+    {
+      "path": "/external",
+      "metadata": {
+        "device": 7,
+        "inode": 9,
+        "mode": 16385,
+        "link_count": 2,
+        "uid": 700,
+        "gid": 50,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      }
+    },
+    {
+      "path": "/blocked",
+      "metadata": {
+        "device": 7,
+        "inode": 10,
+        "mode": 16392,
+        "link_count": 2,
+        "uid": 700,
+        "gid": 50,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 0,
+        "access_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "modification_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "change_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        },
+        "birth_time": {
+          "seconds": 0,
+          "nanoseconds": 0
+        }
+      }
+    }
+  ],
+  "symbolic_links": [
+    {
+      "path": "/external-via",
+      "target_hex": "65787465726e616c"
+    }
+  ]
+})";
+inline constexpr char ClosedGroupQueryCredentialsJSON[] = R"({"credentials":{
+  "real_uid":501,"effective_uid":502,"real_gid":30,"effective_gid":20,
+  "groups":[20,40],"group_membership_uid":4294967195}})";
+
 inline constexpr char KernelPathConfHex[] =
     "0100000000000000010000000000000001000000000000000000000000000000"
     "0010000000000000000001000000000000100000000000000010000000000000"
@@ -663,6 +1181,308 @@ inline constexpr char MetadataJSON[] = R"({
   "modification_time":{"seconds":"9223372036854775807","nanoseconds":999999999},
   "change_time":{"seconds":-3,"nanoseconds":4},
   "birth_time":{"seconds":-5,"nanoseconds":6}})";
+inline constexpr char NonblockingDescriptorsJSON[] = R"({
+  "files":[{"path":"/data","bytes_hex":"30313233343536373839","writable":true}],
+  "directories":[{"path":"/"}],
+  "symbolic_links":[{"path":"/fd-nonblock","target_hex":"64617461"}],
+  "working_directory":"/"})";
+inline DarwinFileOptions nonblockingDescriptorOptions() {
+  DarwinFileOptions O;
+  O.Files["/data"] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+  O.WritableFiles.insert("/data");
+  O.Directories.insert("/");
+  O.SymbolicLinks["/fd-nonblock"] = {'d', 'a', 't', 'a'};
+  O.WorkingDirectory = "/";
+  return O;
+}
+inline DarwinFileOptions symbolicDescriptorOptions() {
+  DarwinFileOptions O;
+  O.Files["/data"] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+  O.Directories.insert("/");
+  O.MutableDirectories.insert("/");
+  O.Metadata["/"] = creationParentMetadata();
+  O.CreationPolicy = NamespaceCreationPolicy;
+  O.InitialUmask = 0027;
+  O.WorkingDirectory = "/";
+  O.SymbolicLinks["/fd-attrs"] = {'d', 'a', 't', 'a'};
+  O.MutableSymbolicLinks.insert("/fd-attrs");
+  O.ExtendedAttributes["/fd-attrs"] = {};
+  O.MutableExtendedAttributes.insert("/fd-attrs");
+  return O;
+}
+// Independent LP64 literal: first runtime symbolic stat and OBJTYPE reply.
+inline constexpr char SymbolicDescriptorHex[] =
+    "85ffffffe8a101001132547698badcfee803000098badcfe0000000000000000"
+    "edffffffffffffffb168de3a00000000edffffffffffffffb168de3a00000000"
+    "edffffffffffffffb168de3a00000000edffffffffffffffb168de3a00000000"
+    "040000000000000001000000000000000020000000000000efcdab8900000000"
+    "000000000000000000000000000000000800000005000000";
+inline constexpr char SymbolicDescriptorJSON[] = R"({
+  "files": [
+    {
+      "path": "/data",
+      "bytes_hex": "30313233343536373839"
+    }
+  ],
+  "directories": [
+    {
+      "path": "/",
+      "mutable": true,
+      "metadata": {
+        "device": -123,
+        "inode": 41,
+        "mode": 16877,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      }
+    }
+  ],
+  "creation_policy": {
+    "first_inode": "18364758544493064721",
+    "block_size": 8192,
+    "generation": 2309737967,
+    "creation_time": {
+      "seconds": -19,
+      "nanoseconds": 987654321
+    },
+    "mutation_policy": {
+      "allocation_unit": 4096,
+      "mutation_time": {
+        "seconds": -7,
+        "nanoseconds": 123456789
+      }
+    },
+    "namespace_policy": {
+      "symbolic_link_allocation_unit": 512,
+      "directory_entry_size": 32,
+      "directory_blocks": 7
+    }
+  },
+  "umask": 23,
+  "working_directory": "/",
+  "symbolic_links": [
+    {
+      "path": "/fd-attrs",
+      "target_hex": "64617461",
+      "mutable": true,
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    }
+  ]
+})";
+inline DarwinFileOptions hardLinksOptions() {
+  auto O = kernelPathConfOptions();
+  O.WorkingDirectory = "/";
+  O.Directories.insert("/");
+  O.MutableDirectories.insert("/");
+  O.WritableFiles.insert("/data");
+  O.Metadata["/data"] = mutationMetadata();
+  O.MutationPolicies["/data"] = MutationPolicy;
+  O.Metadata["/"] = creationParentMetadata();
+  O.Files["/attributes"] = {'x'};
+  O.Metadata["/alias"] = initialSymbolicLinkMetadata(4);
+  O.SymbolicLinkMutationPolicies["/alias"] = InitialSymbolicLinkPolicy;
+  O.CreationPolicy = NamespaceCreationPolicy;
+  O.InitialUmask = 0027;
+  for (const auto &[Path, Target] : O.SymbolicLinks)
+    O.MutableSymbolicLinks.insert(Path);
+  for (const char *Path : {"/data", "/alias", "/attributes"}) {
+    O.ExtendedAttributes[Path] = {};
+    O.MutableExtendedAttributes.insert(Path);
+  }
+  return O;
+}
+inline constexpr char HardLinksHex[] = "51313233343536373839";
+inline constexpr char HardLinksJSON[] = R"({
+  "files": [
+    {
+      "path": "/data",
+      "bytes_hex": "30313233343536373839",
+      "writable": true,
+      "metadata": {
+        "device": -123,
+        "inode": "18364758544493064720",
+        "mode": 33188,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 10,
+        "block_size": 4096,
+        "blocks": 8,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      },
+      "mutation_policy": {
+        "allocation_unit": 4096,
+        "mutation_time": {
+          "seconds": -7,
+          "nanoseconds": 123456789
+        }
+      },
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    },
+    {
+      "path": "/attributes",
+      "bytes_hex": "78",
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    }
+  ],
+  "directories": [
+    {
+      "path": "/",
+      "mutable": true,
+      "metadata": {
+        "device": -123,
+        "inode": 41,
+        "mode": 16877,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 0,
+        "block_size": 4096,
+        "blocks": 0,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      }
+    },
+    {
+      "path": "/empty"
+    }
+  ],
+  "symbolic_links": [
+    {
+      "path": "/alias",
+      "target_hex": "64617461",
+      "mutable": true,
+      "metadata": {
+        "device": -123,
+        "inode": 57,
+        "mode": 41471,
+        "link_count": 1,
+        "uid": 2309737967,
+        "gid": 4275878552,
+        "size": 4,
+        "block_size": 4096,
+        "blocks": 8,
+        "flags": 0,
+        "generation": 2309737967,
+        "access_time": {
+          "seconds": "-9223372036854775807",
+          "nanoseconds": 1
+        },
+        "modification_time": {
+          "seconds": "9223372036854775807",
+          "nanoseconds": 999999999
+        },
+        "change_time": {
+          "seconds": -3,
+          "nanoseconds": 4
+        },
+        "birth_time": {
+          "seconds": -5,
+          "nanoseconds": 6
+        }
+      },
+      "mutation_policy": {
+        "mutation_time": {
+          "seconds": -13,
+          "nanoseconds": 456
+        }
+      },
+      "extended_attributes": [],
+      "mutable_extended_attributes": true
+    },
+    {
+      "path": "/dangling",
+      "target_hex": "6d697373696e67",
+      "mutable": true
+    },
+    {
+      "path": "/cycle",
+      "target_hex": "6379636c65",
+      "mutable": true
+    }
+  ],
+  "creation_policy": {
+    "first_inode": "18364758544493064721",
+    "block_size": 8192,
+    "generation": 2309737967,
+    "creation_time": {
+      "seconds": -19,
+      "nanoseconds": 987654321
+    },
+    "mutation_policy": {
+      "allocation_unit": 4096,
+      "mutation_time": {
+        "seconds": -7,
+        "nanoseconds": 123456789
+      }
+    },
+    "namespace_policy": {
+      "symbolic_link_allocation_unit": 512,
+      "directory_entry_size": 32,
+      "directory_blocks": 7
+    }
+  },
+  "umask": 23,
+  "working_directory": "/"
+})";
 inline DarwinFileOptions symbolicLinkOptions() {
   DarwinFileOptions O;
   O.Files["/data"] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};

@@ -1,10 +1,20 @@
 # Offline web analysis
 
+Explicitly selected SSE, JSONL, JSON-RPC/MCP-shape and diagnostic-log inputs
+use `neverd web stream-preview` and receipt-bound `stream-import`.
+See the [stream profiles](web-stream-profile.md) for framing, redaction,
+recorded-context joins and limitations.
+
+Passive HAR/source interface commands and their explicit redaction preview
+workflow are documented in the [interface profile](web-interface-profile.md).
+Use `neverd web har-preview` before hash-bound `har-import` or
+`interface-correlate`; `neverd web interfaces` supports source-only candidates.
+
 The `neverd web` command and independent C API inspect admitted files without
 executing them. The current implementation provides immutable artifact
 inventory, JavaScript syntax and lexical-binding queries, bounded primitive
 values, conservative effect metadata, module evidence, qualified bundle partitions,
-reviewed source views and source-map decoding. Versioned Bun ELF profiles preserve source, asset,
+reviewed source views and source-map decoding. Versioned Bun ELF/Mach-O/PE profiles preserve source, asset,
 map and cache ranges and feeds decoded source into the same analysis API.
 The ASAR reader admits packed members and explicitly associated captured
 unpacked files, with shared source/map/native selection and integrity checks.
@@ -20,6 +30,9 @@ JavaScript, package, desktop and protocol work remains in progress; see the
 
 ```console
 neverd web capabilities
+neverd web packages ./package-lock.json npm-lock
+neverd web packages ./package.json package-json
+neverd web archive ./package.tgz tgz
 neverd web bun-export ./standalone-elf ./new-recovery-directory
 neverd web inspect ./input-directory
 neverd web source ./bundle.js script
@@ -71,6 +84,17 @@ installation, plugin loading, subprocess analyzer or automatic network/file
 resolution. Input bytes are data, including `eval`, `require`, imports,
 source-map references and executable configuration files.
 
+The [package evidence profile](web-package-profile.md) adds explicitly selected
+npm v1/v2/v3 lockfile and manifest inspection, bounded graph pages and comparisons
+of two supplied roots. Placement candidates, integrity declarations, missing
+evidence and version/platform uncertainty remain separate; it neither installs
+packages nor issues a benignness verdict.
+The [archive and integrity profiles](web-package-archive-profile.md) admit
+bounded tar/local-PAX/single-gzip members and compare explicitly selected
+original artifacts with captured registry or npm-lock SRI declarations.
+Source, package, Bun and native consumers share the immutable member selection.
+SHA equality, archive validity and publisher authenticity are separate claims.
+
 Bun extraction is explicitly selected and follows
 [versioned layouts](web-bun-profile.md). Module/region pages preserve original
 container offsets and hashes; derived source IDs select strict UTF-8 decoding
@@ -81,7 +105,9 @@ decoded-source identities remain separate. The producer's lost names/unmapped
 boundaries are reported explicitly; JSC caches remain opaque. The original
 container and native asset members can be selected for the explicit native
 handoff described below. Raw export is available through the CLI and C API;
-the worker does not expose filesystem export. Other Bun platforms remain pending.
+the worker does not expose filesystem export. Bun input profiles cover Linux,
+macOS and Windows on x64/ARM64; the [matrix](web-bun-profile.md) distinguishes
+input formats from host qualification and remaining unsupported layouts.
 
 ## SDK lifecycle
 
@@ -101,7 +127,11 @@ No Python binding for this domain is currently claimed.
 The C++ worker exposes the same operations with the `web_` prefix and keeps web
 and native project state separate. Its payload and envelope contract is in the
 [worker protocol](../tools/neverd-worker/PROTOCOL.md#offline-web-operations).
-The web MCP adapter is still pending.
+The optional native C++ [web MCP adapter](web-mcp-profile.md) exposes the
+supported offline tools through the shared worker/C API adapter. Its launch
+configuration supplies an explicit input scope; tool discovery follows the
+loaded backend capabilities. It does not expose raw export or reviewed source
+ranges. Build with `NEVERD_BUILD_WEB_MCP=ON`.
 
 1. Create a session and inspect `neverd_web_capabilities_json()`.
 2. Preview an explicitly selected file/directory. Empty options use the

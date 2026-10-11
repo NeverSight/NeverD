@@ -87,6 +87,10 @@ v4 测试固定前缀大小及填充，拒绝截断布局和未知标志，保�
 
 `LowIRLoopAlignment.*` 使用独立编写的普通和旋转栈帧计数循环：两个默认自关系计划分别证明成功，首次配对失败，另一个候选切点则证明关系成立。回归覆盖多切点排列、错误结果和栈帧写入、缺失或过期的原始记录、显式未定义值 witness、不递减或回绕的计数器、畸形图、失败尝试的累计查询、恰好足够的总预算及搜索限额耗尽。任何拒绝结果都不得包含证书。 新增用例覆盖分离的重置与进展阶段、移动退出判断后需要跨族配对的等价循环、不重复推断的共享缓存，以及缓存元数据合计超限。后接独立循环的用例以显式 16384 次查询上限验证完整周期覆盖。空候选族与重复候选族不消耗符号查询，切点不足必须拒绝。同时检查恰好足够与少一次的全局预算、错误结果、缺失进展、原始证据和未定义值 witness。 过滤候选族回归覆盖保持结果不变的算术菱形、局部汇合与仅在边界汇合，以及能够绕过可达汇合点退出或返回循环边界的路径。测试原始过滤族重复时仍尝试候选过滤族、先成功的过滤计划被后续完整分支尝试复用、恰好足够／少一次／零 `MaxCutSelectionWork`、失败后的累计 `CutSelectionWork`，以及全局图工作预算耗尽后不启动符号推断。两种分支候选族都验证完整周期覆盖；菱形关系使用显式推断与证明查询上限。
 
+`LowIRLoopAlignment.DirectRanks*` 应检查寄存器／栈帧载体重命名、兼容栈帧并集、任一配对端冲突，以及常量秩、表达式秩和实际 8 字节／4 字节栈帧输入的保守拒绝。计费 oracle 必须从公开自关系计划独立推导可选扫描、比较和元数据成本，再检查恰好足够及少一单位的限额，不得复制成功搜索返回的总量。重复提案应消耗尝试次数和工作量，但不新增检查器查询；可选次数耗尽后仍应允许后续普通配对证明成功。错误结果、栈帧或保留状态修改、缺失进展及过期原始证据，仍须在完整观测和所选 witness 不变时拒绝。`InterpreterLLVMRefinement.PreservationRestoresEntryAcrossLoopCutpoints` 应通过公开搜索自动发现源码关系计划，不手工指定切点地址或秩配对，再准备新模型，由组合检查器重新验证原生和 LLVM 两个前提。这些要求不代表某次测试已通过，也不授予普通 ABI 认证。
+
+`LowIRLoopAlignment.PlanCutCap*` 检查零、少一及恰好足够的计划上限、过大模板不发起符号查询、完整循环覆盖、畸形图，以及两个方向的后续筛选模板证明。独立推断保持兼容。`LLVMModel.RejectedBodyTemplateDoesNotHideAValidGuardedHeader` 还检查单切点对齐上限仍允许多次推断尝试。错误结果仍须拒绝证书。
+
 局部计数器回归覆盖栈帧和寄存器、递增和递减、低位／中间位／高位、非标准宽度、两种字节序及三字节帧字。测试检查延迟发现新区间、篡改保留位、不进展和无保护回绕、无效新增入口、恰好足够／不足的推导预算，以及原有单切点搜索。
 
 前置阶段回归覆盖两个和三个顺序循环复用同一倒计数字、与原有嵌套循环阶段组合、恰好足够与少一次的排名／查询预算、不进展循环，以及重置回前一阶段。同宽但错误的阶段常量、错误结果和帧写入必须被完整检查器拒绝且不产生证书；缺失原始证据仍返回不支持。
@@ -96,6 +100,8 @@ v4 测试固定前缀大小及填充，拒绝截断布局和未知标志，保�
 `NeverDLLVMInterpreterModelTests` 将独立编写的 LLVM 与完整状态 LowIR 参考实现比较，覆盖位宽、并行 PHI、switch、客体内存、独立状态码、poison 检查、内建函数值域、被拒绝的契约和四种建模预算。测试完成任意字长倒计数循环的完整证明，并拒绝被改写的状态码。独立 C 用例在 O1/O2 编译后必须满足同一观察契约。这些测试验证受支持的模型；自动不变量发现和编译器正确性仍是独立义务。 变量移位用例覆盖全部四种位宽、经掩码或分支限制的移位量、边界及越界移位量、无回绕与精确标志、严格 poison 拒绝，以及 O1/O2 编译后的 C。
 
 `LLVMGuestAlignment.*` 将加载和存储与独立字节内存参考实现比较，覆盖正确和错误的对齐域、自由高位地址、解析后的默认对齐、部分宽度、未使用或被覆盖的访问、不可达分支及恰好/少一单位的构造预算。`InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises` 通过两次新鲜关系检查验证原生栈存储、匹配的入口同余条件和被改写的源码效果。
+
+`LLVMByteSwap*`、`LLVMScalarByteSwap.*` 和 `InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises` 使用独立字节复制及移位／掩码参照，检查高字节保留、跨块值、poison 保留、严格调用契约，以及独立计数的精确／少一预算。Clang O1/O2 夹具要求实际出现字节交换 intrinsic；小型原生字节交换／BSWAP 夹具检查两侧新鲜证明，并拒绝错误值或遗漏高半字清零。
 
 `NeverDLLVMScalarEquivalenceTests` 覆盖完整循环域、零次循环、PHI 同时交换、switch、高位输入、最后分区反例、产生 poison 的额外更新、返回范围、不支持的契约，以及精确、少一单位和零预算。独立双宽与溢出参考实现覆盖各受支持字宽的漏斗移位端点和带溢出约束的乘法；独立嵌套循环 C 在 O1/O2 检查编译器输入形态。状态模型测试也检查漏斗移位端点。`SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings` 检查累计查询计费和不变的局部上限。
 
@@ -1160,7 +1166,7 @@ KVM 验收要求真实的不主动退出 vCPU 取消，以及 `KvmStateTransferC
 
 在 `native_cpu_only=true` 时，设置 `native_driver_tests=true` 可启用不依赖 Unicorn 的 `NeverDNativeDriverTests`。配置前，`build_wdk_driver_fixtures.py` 校验微软官方 WDK/SDK 10.0.26100.6584 包的完整 SHA-256，并从原始源码重建 48 个普通、CFG 或 DBG 驱动映像。`WDKDriverFixtures.def` 统一声明包身份、编译和链接参数及样例绑定。未经修改的微软文件和许可证保留在本地构建或缓存目录；CI 仅上传构建元数据和日志。清单记录工具版本、命令、源码与头文件摘要以及输出映像摘要。
 
-`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 与 `DriverBackendParityCases.def` 中全部 115 个负载产生 230 项 WHP 结果：27 个内建映像、48 个 WDK 映像及 40 个请求场景，各覆盖原始和重定位地址。完整必测清单为 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`。30 项等待集合检查包含十六项可移植模型测试及十四项原创原生驱动测试。`run_native_cpu_ci.py --with-drivers` 在禁用 Unicorn 时保留精确清单和 JUnit 证据；必需样例缺失或跳过会使此可选验收失败，普通构建仍可不提供外部样例。固定位址映像保留预期的重定位拒绝。ARM64 原生客体执行仍未验证。
+`NativeDriverTests.def` 要求 `DriverBuiltinImages.def` 与 `DriverBackendParityCases.def` 中全部 115 个负载产生 230 项 WHP 结果：27 个内建映像、48 个 WDK 映像及 40 个请求场景，各覆盖原始和重定位地址。完整必测清单为 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 4 image memory checks = 5451`。30 项等待集合检查包含十六项可移植模型测试及十四项原创原生驱动测试。`run_native_cpu_ci.py --with-drivers` 在禁用 Unicorn 时保留精确清单和 JUnit 证据；必需样例缺失或跳过会使此可选验收失败，普通构建仍可不提供外部样例。固定位址映像保留预期的重定位拒绝。ARM64 原生客体执行仍未验证。
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` 在两条不同启动指令前注入超时、停止及二者同时发生的中断，检查精确阶段诊断、消息自身持有的生命周期、错误类型和原因位、步骤间不变的统一截止时间及内存占用释放。既有真实传输失败与状态不匹配仍分别处理。原生 x64 启动验证预算为 `5 s`；普通客体截止时间及单步宽限不变。
 
@@ -1532,6 +1538,33 @@ MainActor 测试数据检查完整的固定元数据与静态表流程，拒绝�
 `ZeroTimeoutPollRetainsReadinessAndOrderedCopies` 覆盖八个 GKI 分支的 O0／O2 原始调用，检查存活／负数／已关闭描述符、重复计数、参数收窄、超时／掩码顺序、只读零 timespec、全部元数据先于就绪，以及后续故障保留较早 `revents`。`ZeroTimeoutPollKeepsUnobservedBoundaries` 保留内核、限额、掩码、等待和就绪状态的未知边界。Android 的 `ReleasedGKIZeroTimeoutPollSharesRawAndBionicResults` 在六种打包配置中复验共享表和 errno 所有权。
 
 ## 有界目录批量属性
+
+bulk-attributes 检查完整组、名称/类型集合、未使用字节保护区、low32 FD、bitmap 字、原生错误、dup 共享进度、独立 open、缓存 EOF 和零 rewind。字面值与未知模式仅用于虚拟环境。模型还覆盖完整 stat、失效、NFD/255字节名称、输入/输出别名、传输/预算失败、移动/SWAP/删除/复用及显式授权。每个平台必需65个工作负载：ARM64 为195例，Intel 为130例；本地仅验证匹配的 ARM64 HVF。native5s、guest/Python5,000,000us/quantum1024、public10s 不变。
+
+## 有界 Darwin 硬链接
+
+原始 link 跟随最终符号链接目标；linkat 的 flags=0 链接符号链接对象本身，AT_SYMLINK_FOLLOW 跟随目标。仅接受 low32 的 0/0x40，其余低位在导入前返回 EINVAL。源路径导入、查找和目录 EPERM 先于目标导入；已存在目标返回 EEXIST。目标实际父目录需要修改授权，且双方必须属于明确建立的同一挂载域；源父目录不要求可修改。已知设备冲突、标志、特殊模式和初始身份别名仍不支持，输入元数据不会合并独立的初始对象。
+
+新增别名只消耗一个名称条目及路径/NUL 费用，不消耗新 inode，也不重复计费对象字节或属性。内容与属性授权、元数据有效性和映射租约属于共享对象。链接数与 ctime 使用现有显式元数据策略；缺少策略时，修改后的完整 stat 保持未知。修改扩展属性使完整 stat 失效，修改内容使普通属性观察失效。删除名称后，描述对象保留名称费用，最后一个名称及对象费用也由仅存的映射租约保留；替换只能抵扣可立即释放的费用。子树移动/SWAP 按确切身份及实际父目录选择条目，树外别名不移动，相对符号链接目标从所选条目的父目录解析。
+
+对象一旦拥有过多个名称，即使只剩一个或零个名称，F_GETPATH 与 vnode ATTR_CMN_NAME 仍明确不支持。ARM64 原生控制显示 APFS 名称观察依赖查找历史，路径与名称缓存行为也不同，尚不能声明通用缓存模型。目录批量 NAME 直接来自实际条目。相同对象的普通重命名/SWAP 保留双方条目，大小写不敏感 EXCL 仍超出当前契约。O_SYMLINK 描述符、原生 Intel HVF、实体 iOS、权限/ACL、映射一致性及 EOF 信号、dyld、Mach IPC、线程和完整框架仍是独立缺口。本节仅在上述范围内扩展前文的硬链接限制。
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+65 mandatory workloads per platform / ARM64 195 / Intel 130
+```
 
 bulk-attributes 检查完整组、名称/类型集合、未使用字节保护区、low32 FD、bitmap 字、原生错误、dup 共享进度、独立 open、缓存 EOF 和零 rewind。字面值与未知模式仅用于虚拟环境。模型还覆盖完整 stat、失效、NFD/255字节名称、输入/输出别名、传输/预算失败、移动/SWAP/删除/复用及显式授权。每个平台必需63个工作负载：ARM64 为189例，Intel 为126例；本地仅验证匹配的 ARM64 HVF。native5s、guest/Python5,000,000us/quantum1024、public10s 不变。
 

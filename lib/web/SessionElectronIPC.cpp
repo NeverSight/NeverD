@@ -1,3 +1,14 @@
+//===- SessionElectronIPC.cpp - Electron IPC publication ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Electron IPC publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "ElectronSelection.h"
 #include "SessionInternal.h"
 

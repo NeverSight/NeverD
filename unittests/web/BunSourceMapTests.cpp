@@ -1,3 +1,14 @@
+//===- BunSourceMapTests.cpp - Bun serialized source maps tests --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bun serialized source maps tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "BunSourceMap.h"
 #include "BunSourceMapFixture.h"
 #include "Internal.h"

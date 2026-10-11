@@ -1,3 +1,14 @@
+//===- NativeInput.h - Immutable native handoff ------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Immutable native handoff.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Blob.h"

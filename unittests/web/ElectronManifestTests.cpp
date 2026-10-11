@@ -1,3 +1,14 @@
+//===- ElectronManifestTests.cpp - Captured Electron manifests tests ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured Electron manifests tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Electron.h"

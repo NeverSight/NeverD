@@ -1,3 +1,14 @@
+//===- SourceEffectTests.cpp - Source Effect tests ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source Effect tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Artifact.h"
@@ -44,6 +55,30 @@ TEST(WebSourceEffects, FunctionBodiesAndDefaultsRemainDeferred) {
   }
   EXPECT_FALSE(E.node("Program").Immediate & Call);
   EXPECT_TRUE(E.node("Program").ContainsDeclaration);
+}
+
+TEST(WebSourceEffects, ResourceAcquisitionAndScopeExitNeverLookPure) {
+  const Effects E("using x=null; async function f(){await using y=null;}",
+                  "module");
+  const auto Sync = E.node("VariableDeclaration");
+  EXPECT_TRUE(Sync.Immediate & ReadProperty);
+  EXPECT_TRUE(Sync.Immediate & Call);
+  EXPECT_TRUE(Sync.Immediate & MayThrow);
+  EXPECT_TRUE(Sync.Immediate & Control);
+  EXPECT_TRUE(Sync.Immediate & UnknownEffect);
+  EXPECT_FALSE(Sync.Immediate & Suspend);
+  const auto Async = E.node("VariableDeclaration", 1);
+  EXPECT_TRUE(Async.Immediate & Suspend);
+  EXPECT_TRUE(Async.Immediate & Call);
+  const auto Function = E.node("FunctionDeclaration");
+  EXPECT_FALSE(Function.Immediate & Suspend);
+  EXPECT_FALSE(Function.Immediate & Call);
+  EXPECT_TRUE(Function.Deferred & Suspend);
+  EXPECT_TRUE(Function.Deferred & Call);
+  const Effects Loop("for(using x=null;false;){}", "module");
+  EXPECT_TRUE(Loop.node("ForStatement").Immediate & Call);
+  const Effects Unchosen("if(false){using x=null;}", "module");
+  EXPECT_FALSE(Unchosen.node("IfStatement").Immediate & Call);
 }
 
 TEST(WebSourceEffects, ClassInstanceInitializersAndMethodsAreDeferred) {

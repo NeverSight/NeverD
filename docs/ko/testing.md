@@ -89,6 +89,10 @@ v4 테스트는 접두 구조의 크기와 패딩, 잘린 구조와 알 수 없�
 
 `LowIRLoopAlignment.*`는 독립적으로 작성한 일반 및 회전형 프레임 카운터 루프를 검사합니다. 두 기본 자기 관계 계획은 각각 증명되지만 첫 짝짓기는 실패하고 다른 후보 절단점에서 관계가 증명됩니다. 여러 절단점의 순열, 잘못된 결과와 프레임 쓰기, 누락되거나 오래된 원본 기록, 명시적 미정의 값 witness, 감소하지 않거나 래핑되는 카운터, 잘못된 그래프, 실패 시도의 누적 쿼리, 정확히 충분한 총예산과 탐색 한도 소진을 회귀 검사합니다. 거부 결과에는 인증서가 없어야 합니다. 추가 사례는 분리된 초기화·진행 단계, 종료 조건을 옮겨 후보군 간 짝짓기가 필요한 동등한 루프, 재추론 없는 캐시, 메타데이터 합계 초과를 검증합니다. 뒤따르는 독립 루프는 명시적인 16384회 질의 한도로 전체 순환 포괄을 확인합니다. 비거나 중복된 후보군은 기호 질의를 쓰지 않고 절단점 부족은 거부합니다. 정확히 충분하거나 한 번 부족한 전체 예산, 잘못된 결과, 진행 누락, 원본 증거와 미정의 값 witness도 검사합니다. 필터 회귀는 결과를 유지하는 산술 다이아몬드, 로컬 합류와 경계에서만의 합류, 도달 가능한 합류점을 우회해 종료하거나 순환 경계로 돌아가는 경로를 검사합니다. 원본 필터 후보군이 중복이어도 후보 필터를 시도하는지, 먼저 성공한 필터 계획을 뒤늦은 전체 분기 시도가 재사용하는지, 정확히 충분한 값·한 단위 부족·0의 `MaxCutSelectionWork`, 실패한 `CutSelectionWork` 누적, 전역 그래프 작업 소진 후 기호 추론 중단을 검증합니다. 두 분기 후보군 모두 완전한 순환 포괄을 검사하며 다이아몬드 관계에는 명시적인 추론·증명 질의 한도를 사용합니다.
 
+`LowIRLoopAlignment.DirectRanks*`는 레지스터/프레임 저장 위치 변경, 호환되는 프레임 합집합, 양 끝점의 충돌, 상수·식 순위 및 실제 8바이트/4바이트 프레임 입력의 보수적 거부를 검사해야 합니다. 계수 oracle은 공개 자기 관계 계획에서 선택 경로의 스캔·비교·메타데이터 비용을 독립적으로 도출한 뒤 정확한 한도와 한 단위 부족한 한도를 검사해야 하며, 성공한 탐색의 합계를 기대값으로 복사해서는 안 됩니다. 중복 제안은 시도와 작업을 소비하지만 검사기 질의를 추가하지 않아야 하고, 선택 한도 소진 후에도 후속 일반 짝짓기가 증명할 수 있어야 합니다. 잘못된 결과, 프레임·보존 상태 변경, 진행 누락 및 오래된 원본 증거는 완전한 관측과 선택 witness를 유지한 채 거부해야 합니다. `InterpreterLLVMRefinement.PreservationRestoresEntryAcrossLoopCutpoints`는 절단점 주소나 순위 바인딩을 수동 지정하지 않고 공개 탐색으로 소스 관계 계획을 얻은 뒤 새 모델을 준비하여 합성 검사기에서 native와 LLVM 양쪽 전제를 다시 검사해야 합니다. 이는 테스트 실행의 통과나 일반 ABI 인증을 선언하지 않습니다.
+
+`LowIRLoopAlignment.PlanCutCap*`는 0·부족·정확한 계획 한도, 과대 후보군의 기호 질의 0회, 완전한 순환 커버리지, 잘못된 그래프, 양방향의 후속 필터 후보 증명을 검사합니다. 독립 추론의 호환성도 유지합니다. `LLVMModel.RejectedBodyTemplateDoesNotHideAValidGuardedHeader`는 단일 절단점 정렬 한도에서도 여러 추론 시도가 허용되는지 검사합니다. 잘못된 결과에는 계속 인증서를 발급하지 않아야 합니다.
+
 부분 카운터 회귀는 프레임과 레지스터, 증가·감소, 하위·중간·상위 위치, 특수 너비, 두 바이트 순서와 3바이트 프레임 워드를 다룹니다. 늦게 발견되는 레인, 보존 비트 변조, 진행 없음과 보호 없는 래핑, 잘못된 추가 진입, 정확하거나 부족한 추론 예산, 기존 단일 절단점 탐색을 검사합니다.
 
 선행 단계 회귀는 같은 카운트다운 워드를 재사용하는 두 개와 세 개의 순차 루프, 기존 중첩 루프 단계와의 결합, 정확히 충분하거나 한 번 부족한 순위·질의 예산, 진행하지 않는 루프와 이전 단계로 되돌아가는 초기화를 검사합니다. 같은 너비의 잘못된 단계 상수, 잘못된 결과와 프레임 쓰기는 완전한 검사기가 인증서 없이 거부해야 하며 원본 증거 누락은 계속 미지원입니다.
@@ -98,6 +102,8 @@ v4 테스트는 접두 구조의 크기와 패딩, 잘린 구조와 알 수 없�
 `NeverDLLVMInterpreterModelTests`는 독립 LLVM을 전체 상태 LowIR 기준과 비교하여 비트 폭, 병렬 PHI, switch, 게스트 메모리, 별도 상태, poison 조건, 내장 함수 범위, 거부 계약과 네 가지 구성 예산을 검사합니다. 임의 워드 카운트다운의 완전한 증명을 검사하고 변조된 상태를 거부합니다. 독립 C의 O1/O2 컴파일 결과도 같은 관찰 계약을 만족해야 합니다. 지원 모델을 검증하는 테스트이며 자동 불변식 발견과 컴파일러 정확성은 별도 의무입니다. 가변 시프트 사례는 네 가지 비트 폭, 마스크나 분기로 제한한 시프트 양, 경계값과 범위 초과 값, 오버플로 금지 및 정확성 플래그, 엄격한 poison 거부, O1/O2로 컴파일한 C를 검증합니다.
 
 `LLVMGuestAlignment.*`는 로드와 스토어를 독립적인 바이트 메모리 기준과 비교하여 정렬 및 비정렬 도메인, 자유로운 주소 상위 비트, 파싱된 기본 정렬, 부분 폭, 미사용 또는 덮어쓴 접근, 도달 불가능한 분기와 정확한/한 단위 부족 구성 예산을 검사합니다. `InterpreterLLVMRefinement.GuestAlignmentRequiresBothFreshPremises`는 두 관계를 새로 검사하여 네이티브 스택 저장, 일치하는 진입 합동 조건과 변경된 소스 효과를 검증합니다.
+
+`LLVMByteSwap*`, `LLVMScalarByteSwap.*`, `InterpreterLLVMRefinement.ByteSwapRequiresBothFreshPremises`는 독립적인 바이트 복사 및 시프트/마스크 기준으로 상위 바이트 보존, 블록 간 값, poison, 호출 계약과 독립 계산한 정확/한 단위 부족 예산을 확인합니다. Clang O1/O2 예제는 실제 교환 intrinsic을 요구합니다. 작은 네이티브 교환/BSWAP 예제는 양쪽을 새로 증명하고 잘못된 값이나 상위 워드 초기화 누락을 거부합니다.
 
 `NeverDLLVMScalarEquivalenceTests`는 전체 루프 입력 영역, 0회 반복, PHI 동시 교환, switch, 상위 입력 비트, 마지막 분할의 반례, poison을 만드는 추가 갱신, 반환 범위, 미지원 계약 및 정확한·한 단위 부족·0 예산을 검사합니다. 독립적인 두 배 폭·오버플로 기준 구현이 지원하는 각 폭의 funnel 끝점과 제약된 곱셈을 검사하며 독립 중첩 루프 C의 O1/O2 출력이 컴파일러 입력 형태를 확인합니다. 상태 모델 테스트도 끝점을 검사합니다. `SymExpr.ConstantWindowSharesActualWorkWithoutRelaxingQueryCeilings`는 누적 계산과 기존 개별 한도를 검사합니다.
 
@@ -1242,7 +1248,7 @@ KVM 검증은 스스로 종료하지 않는 실제 vCPU의 취소와 `KvmStateTr
 
 `native_cpu_only=true`와 `native_driver_tests=true`를 지정하면 Unicorn 없이 `NeverDNativeDriverTests`를 활성화합니다. 구성 전에 `build_wdk_driver_fixtures.py`가 공식 Microsoft WDK/SDK 10.0.26100.6584 패키지 전체의 SHA-256을 검증하고 원본 소스에서 일반/CFG/DBG 드라이버 이미지 48개를 다시 빌드합니다. `WDKDriverFixtures.def`는 패키지 식별자, 컴파일러·링커 인수와 픽스처 연결을 선언합니다. 수정하지 않은 Microsoft 파일과 라이선스는 로컬 빌드/캐시 디렉터리에 보관하며 CI는 빌드 메타데이터와 로그만 업로드합니다. 매니페스트에는 도구 버전, 명령, 소스·헤더 해시와 출력 이미지 해시를 기록합니다.
 
-`NativeDriverTests.def`는 `DriverBuiltinImages.def`와 `DriverBackendParityCases.def`의 115개 작업 전체에서 WHP 결과 230개를 요구합니다. 기본 이미지 27개, WDK 이미지 48개와 요청 시나리오 40개를 원본 및 재배치 주소에서 실행합니다. 전체 필수 목록은 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 2 image MDLs = 5449`입니다. 대기 집합 검사 30개는 이식 가능한 모델 사례 16개와 독자적인 네이티브 드라이버 사례 14개입니다. `run_native_cpu_ci.py --with-drivers`는 Unicorn을 끄고 정확한 목록과 JUnit 증거를 보존합니다. 필수 픽스처 누락이나 건너뛰기는 선택형 게이트를 실패시키며, 일반 빌드에서는 외부 픽스처가 선택 사항입니다. 고정 이미지의 예상 재배치 거부는 유지됩니다. ARM64 네이티브 게스트 실행은 아직 검증되지 않았습니다.
+`NativeDriverTests.def`는 `DriverBuiltinImages.def`와 `DriverBackendParityCases.def`의 115개 작업 전체에서 WHP 결과 230개를 요구합니다. 기본 이미지 27개, WDK 이미지 48개와 요청 시나리오 40개를 원본 및 재배치 주소에서 실행합니다. 전체 필수 목록은 `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 11 driver UNPACK + 6 clock reads + 4 image memory checks = 5451`입니다. 대기 집합 검사 30개는 이식 가능한 모델 사례 16개와 독자적인 네이티브 드라이버 사례 14개입니다. `run_native_cpu_ci.py --with-drivers`는 Unicorn을 끄고 정확한 목록과 JUnit 증거를 보존합니다. 필수 픽스처 누락이나 건너뛰기는 선택형 게이트를 실패시키며, 일반 빌드에서는 외부 픽스처가 선택 사항입니다. 고정 이미지의 예상 재배치 거부는 유지됩니다. ARM64 네이티브 게스트 실행은 아직 검증되지 않았습니다.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease`는 서로 다른 시작 명령 두 개 앞에서 기한 만료, 중지, 두 원인의 동시 중단을 주입합니다. 정확한 단계 진단, 메시지 소유 수명, 오류 타입과 원인 비트, 단계 간 동일한 기한, 메모리 소유권 해제를 검사합니다. 실제 전송 실패와 상태 불일치는 계속 구분합니다. 네이티브 x64 시작 검증 예산은 `5 s`이며 일반 게스트 기한과 단일 단계 유예는 유지됩니다.
 
@@ -1614,6 +1620,33 @@ MainActor 픽스처는 고정 메타데이터와 정적 테이블의 전체 흐�
 `ZeroTimeoutPollRetainsReadinessAndOrderedCopies`는 여덟 버전의 O0／O2 원시 호출에서 생존·음수·닫힌 설명자, 중복 개수, 인수 축소, 시간 제한／마스크 순서, 읽기 전용 0 timespec, 모든 메타데이터의 선행 반입 및 후속 오류에 유지되는 `revents`를 검증합니다. `ZeroTimeoutPollKeepsUnobservedBoundaries`는 미관측 커널, 한도, 마스크, 대기 및 준비 상태 경계를 유지합니다. Android의 `ReleasedGKIZeroTimeoutPollSharesRawAndBionicResults`는 여섯 패킹 프로필에서 공유 표와 errno 소유권을 확인합니다.
 
 ## 제한된 디렉터리 일괄 속성
+
+bulk-attributes는 완전한 그룹, 이름/종류 집합, 미사용 바이트 보호, low32 FD, bitmap 워드, 네이티브 오류, dup 공유 진행, 독립 open, EOF와 0 rewind를 검사한다. 리터럴/미지원 모드는 가상 전용이다. 모델은 전체 stat와 무효화, NFD/255바이트 이름, 입출력 별칭, 전송/예산 실패, 이동/SWAP/삭제/재사용, 명시 권한도 검사한다. 필수 목록은 플랫폼별65개로 ARM64는195개, Intel은130개다. 로컬에서는 일치하는 ARM64 HVF만 검증했다. native5s, guest/Python5,000,000us/quantum1024, public10s는 그대로다.
+
+## 범위가 제한된 Darwin 하드 링크
+
+link는 마지막 심볼릭 링크 대상을 따라가며 linkat flags=0은 링크 객체, AT_SYMLINK_FOLLOW는 대상을 선택한다. low32 0/0x40만 허용하고 나머지 하위 비트는 입력 전에 EINVAL이다. 소스 조회와 디렉터리 EPERM이 대상 입력보다 먼저이며 기존 대상은 EEXIST다. 대상 수정 권한과 명시된 같은 마운트 영역이 필요하다. 초기 식별 별칭과 알려진 장치/모드/플래그 충돌은 미지원이다.
+
+별칭은 항목 및 경로/NUL 비용만 추가하고 새 inode를 소비하지 않는다. 바이트, 속성 권한, 메타데이터 유효성과 매핑 임대는 공유 객체가 소유한다. 명시 정책이 링크 수와 ctime을 갱신하며 정책이 없으면 전체 stat는 미지다. 속성 변경은 stat를, 내용 변경은 속성 관찰을 무효화한다. 설명 및 마지막 매핑이 삭제 이름의 비용을 유지하며 교체는 즉시 해제 가능한 비용만 공제한다. 하위 트리는 정확한 식별과 부모로 이동하고 외부 별칭은 유지한다. 상대 심볼릭 대상은 선택 항목의 부모를 사용한다.
+
+여러 이름을 가졌던 객체의 F_GETPATH/ATTR_CMN_NAME은 한 개 또는 0개가 남아도 미지원이다. APFS 캐시 모델을 일반화하지 않는다. bulk NAME은 실제 항목을 사용하며 같은 객체의 일반 rename/SWAP는 두 이름을 유지한다. EXCL 대소문자, O_SYMLINK, Intel HVF, 실제 iOS, ACL, 매핑 일관성/EOF 신호, dyld, Mach IPC, 스레드 및 전체 프레임워크는 별도 과제다. 이 계약 범위에서만 이전 제외를 확장한다.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+65 mandatory workloads per platform / ARM64 195 / Intel 130
+```
 
 bulk-attributes는 완전한 그룹, 이름/종류 집합, 미사용 바이트 보호, low32 FD, bitmap 워드, 네이티브 오류, dup 공유 진행, 독립 open, EOF와 0 rewind를 검사한다. 리터럴/미지원 모드는 가상 전용이다. 모델은 전체 stat와 무효화, NFD/255바이트 이름, 입출력 별칭, 전송/예산 실패, 이동/SWAP/삭제/재사용, 명시 권한도 검사한다. 필수 목록은 플랫폼별63개로 ARM64는189개, Intel은126개다. 로컬에서는 일치하는 ARM64 HVF만 검증했다. native5s, guest/Python5,000,000us/quantum1024, public10s는 그대로다.
 

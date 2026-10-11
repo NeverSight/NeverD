@@ -18,6 +18,39 @@
 namespace neverd::emulation {
 namespace {
 
+TEST(DriverScenario, WriteTraceSelectionIsExplicitAndRoundTrips) {
+  auto Parsed =
+      driverOptionsFromScenarioJSON(R"({"trace_memory_writes":false})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  auto Inherited = driverOptionsFromScenarioJSON("{}", *Parsed);
+  ASSERT_TRUE(bool(Inherited)) << llvm::toString(Inherited.takeError());
+  auto Enabled =
+      driverOptionsFromScenarioJSON(R"({"trace_memory_writes":true})", *Parsed);
+  ASSERT_TRUE(bool(Enabled)) << llvm::toString(Enabled.takeError());
+  const DriverOptions Options[] = {DriverOptions{}, *Parsed, *Inherited,
+                                   *Enabled};
+  const bool Expected[] = {true, false, false, true};
+  for (unsigned I = 0; I != 4; ++I) {
+    EXPECT_EQ(Options[I].TraceMemoryWrites, Expected[I]);
+    DriverResult Run;
+    Run.Configuration = Options[I];
+    auto Report = llvm::json::parse(driverResultJSON(Run));
+    ASSERT_TRUE(bool(Report));
+    auto *Configuration = Report->getAsObject()->getObject("configuration");
+    ASSERT_NE(Configuration, nullptr);
+    EXPECT_EQ(Configuration->getBoolean("trace_memory_writes"), Expected[I]);
+  }
+  for (const char *Invalid :
+       {R"({"trace_memory_writes":1})", R"({"trace_memory_writes":"false"})",
+        R"({"trace_memory_writes":null})",
+        R"({"trace_memory_writes":false,
+                                   "trace_memory_writes":true})"}) {
+    auto Rejected = driverOptionsFromScenarioJSON(Invalid);
+    ASSERT_FALSE(bool(Rejected)) << Invalid;
+    llvm::consumeError(Rejected.takeError());
+  }
+}
+
 TEST(DriverScenario, ParsesOrderedLifecycleWithoutChangingExecutionBudgets) {
   DriverOptions Base;
   Base.InstructionLimit = 37;

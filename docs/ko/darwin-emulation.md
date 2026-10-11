@@ -1,6 +1,6 @@
 **언어**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: aa19cf02d09c66c62cfde94ee71c93b210f3d92165151c58778e1e91ec0df607 -->
+<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
 
 [← 문서 목록](README.md)
 
@@ -67,7 +67,7 @@ BSD 호출에서 ARM64는 X16, X0–X5와 `svc #0x80`을 사용하고 x64는 BSD
 
 엄격한 불리언 `"writable":true` 또는 C++ `DarwinFileOptions::WritableFiles`로 프로세스 내 변경을 명시합니다. 생략/false는 읽기 전용이며 알 수 없는 권한은 중지합니다. 호스트나 입력 옵션을 바꾸지 않습니다. write(4/397), pwrite(154/415), truncate(200), ftruncate(201), O_TRUNC는 내용 노드를 공유합니다. 별도 open의 위치는 독립적이고 dup은 위치와 상태를 공유하며 마지막 close 뒤에도 내용이 남습니다. 확장은 0으로 채우고 절단은 위치를 보존하며 O_RDONLY|O_TRUNC도 절단합니다.
 
-F_SETFL은 O_APPEND만 바꾸고 접근 모드, close-on-exec, FWASWRITTEN을 보존합니다. 실제 비영 바이트 전송 뒤 F_GETFL에 0x10000이 나타나며 pwrite와 출력 캡처도 포함합니다. pwrite는 append를 무시하고 위치를 유지합니다. INT_MAX 길이 검사는 FD보다 앞서고 pwrite의 -1은 더 먼저 EINVAL입니다. INT64_MAX는 길이 0보다 먼저 EFBIG이며 길이를 제한한 뒤 EOF를 선택합니다.
+F_SETFL은 원시 플래그 변환 후 O_APPEND|O_NONBLOCK만 바꾸고 접근 모드, close-on-exec, FWASWRITTEN을 보존합니다. 실제 비영 바이트 전송 뒤 F_GETFL에 0x10000이 나타나며 pwrite와 출력 캡처도 포함합니다. pwrite는 append를 무시하고 위치를 유지합니다. INT_MAX 길이 검사는 FD보다 앞서고 pwrite의 -1은 더 먼저 EINVAL입니다. INT64_MAX는 길이 0보다 먼저 EFBIG이며 길이를 제한한 뒤 EOF를 선택합니다.
 
 성공한 ftruncate는 크기가 같아도 호출 open 설명과 dup에 FWASWRITTEN을 설정합니다. O_TRUNC는 O_RDONLY를 포함해 새 설명에 설정하며 경로 truncate는 기존 설명의 플래그를 바꾸지 않습니다.
 
@@ -632,7 +632,7 @@ macOS ARM64 Release 등록/통과/미실행 skip/실패 1371/867/504/0, 필수 H
 
 ## 명시적 자격 정보와 그룹 및 생성 소유자 일관성
 
-선택Credentials는RealUID/EffectiveUID/RealGID/EffectiveGID와 독립 선택GroupAccessList입니다. 생략하면 네조회1000, 명시0/root 유효, ID0..INT32_MAX. 그룹1..16, 첫항EffectiveGID, 순서/중복보존. 누락은 알수없음이며host/EGID로 채우지 않습니다. 엄격darwin_system.credentials는real_uid/effective_uid/real_gid/effective_gid 필수, groups선택. 무손실 정수/중앙검증은 모양/필드/범위/수/첫그룹 오류를 로드전 거부하며 비Darwin도 거부합니다.
+선택Credentials는RealUID/EffectiveUID/RealGID/EffectiveGID와 독립 선택GroupAccessList와 GroupMembershipUID입니다. 생략하면 네조회1000, 명시0/root 유효, 네 스칼라 ID/그룹 항목0..INT32_MAX. GroupMembershipUID의 독립 범위는 아래와 같습니다. 그룹1..16, 첫항EffectiveGID, 순서/중복보존. 누락은 알수없음이며host/EGID로 채우지 않습니다. 엄격darwin_system.credentials는real_uid/effective_uid/real_gid/effective_gid 필수, groups와 group_membership_uid는 독립 선택. 무손실 정수/중앙검증은 모양/필드/범위/수/첫그룹 오류를 로드전 거부하며 비Darwin도 거부합니다.
 
 getuid24/geteuid25/getgid47/getegid43/getgroups79는 단일system소유자입니다. 새일반파일UID는 유효UID, device/GID는 직계부모상속. rename/보존FD/이름재사용은 객체 유지, 입력stat불변. root는 쓰기/디렉터리변경/권한/ACL을 부여하지 않으며 setuid/setgid/setgroups와process/session 미구현입니다.
 
@@ -924,3 +924,243 @@ setxattr(236), fsetxattr(237), removexattr(238), fremovexattr(239)는 초기 객
 xattr-mutations / xattr-mutations-values / xattr-mutations-unsupported는 직접 작성한 네이티브/게스트 대조, 독립적인 가상 바이트 리터럴, 기존 출력을 유지하는 허가 부족 중단을 검사합니다. ARM64 비공개 준비는726회 raw/SDK 호출, 전체544바이트 보호 영역 관측 및 읽을 수 있는 전체 페이지를 확인했습니다. native5s/compile120s/drain1s/reap1s, guest/Python5,000,000us/quantum1024, public10s는 그대로입니다. 네이티브 Intel, 실제 iOS 기기, dyld, Mach IPC, 스레드/신호, Objective-C/Swift 런타임 및 전체 프레임워크는 아직 검증되지 않았거나 미완성입니다.
 
 주요 ABI 자료: [XNU 시스템 호출 선언](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/syscalls.master), [xattr 정의](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/sys/xattr.h). 코드와 프로브는 직접 작성했으며 Apple 구현을 복사하지 않았습니다.
+
+## 범위가 제한된 Darwin 하드 링크
+
+link는 마지막 심볼릭 링크 대상을 따라가며 linkat flags=0은 링크 객체, AT_SYMLINK_FOLLOW는 대상을 선택한다. low32 0/0x40만 허용하고 나머지 하위 비트는 입력 전에 EINVAL이다. 소스 조회와 디렉터리 EPERM이 대상 입력보다 먼저이며 기존 대상은 EEXIST다. 대상 수정 권한과 명시된 같은 마운트 영역이 필요하다. 초기 식별 별칭과 알려진 장치/모드/플래그 충돌은 미지원이다.
+
+별칭은 항목 및 경로/NUL 비용만 추가하고 새 inode를 소비하지 않는다. 바이트, 속성 권한, 메타데이터 유효성과 매핑 임대는 공유 객체가 소유한다. 명시 정책이 링크 수와 ctime을 갱신하며 정책이 없으면 전체 stat는 미지다. 속성 변경은 stat를, 내용 변경은 속성 관찰을 무효화한다. 설명 및 마지막 매핑이 삭제 이름의 비용을 유지하며 교체는 즉시 해제 가능한 비용만 공제한다. 하위 트리는 정확한 식별과 부모로 이동하고 외부 별칭은 유지한다. 상대 심볼릭 대상은 선택 항목의 부모를 사용한다.
+
+여러 이름을 가졌던 객체의 F_GETPATH/ATTR_CMN_NAME은 한 개 또는 0개가 남아도 미지원이다. APFS 캐시 모델을 일반화하지 않는다. bulk NAME은 실제 항목을 사용하며 같은 객체의 일반 rename/SWAP는 두 이름을 유지한다. EXCL 대소문자, Intel HVF, 실제 iOS, ACL, 매핑 일관성/EOF 신호, dyld, Mach IPC, 스레드 및 전체 프레임워크는 별도 과제다. 이 계약 범위에서만 이전 제외를 확장한다.
+
+```text
+link(9), linkat(471), AT_SYMLINK_FOLLOW=0x40
+DarwinFiles, FileEntry, LinkEntry, NameIdentity, Contents, LinkNode
+LinkedNames, HadMultipleNames, DetachedNames
+F_GETPATH, ATTR_CMN_NAME, getattrlist(220), fgetattrlist(228), getattrlistat(476)
+getattrlistbulk(461), O_SYMLINK
+hard-links
+hard-links-values
+hard-links-name-unsupported
+hard-links-attributes-unsupported
+HardLink*, HardLinksShareObjectsAndRetainExplicitNameBoundary
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 guest cases / 20 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## 제한된 O_SYMLINK 설명자
+
+O_SYMLINK=0x00200000은 읽기 전용, 쓰기 전용, 읽기/쓰기에서 마지막 심볼릭 링크 자체를 보존하며 끊어진 링크와 순환 링크도 포함합니다. 대상 내용의 쓰기 권한은 부여하지 않습니다. O_CREAT는 마지막 대상을 따라가고 NOFOLLOW의 ELOOP, 독점 생성의 EEXIST, 보존된 링크에 대한 O_DIRECTORY의 ENOTDIR 순서를 유지합니다. 중간 또는 끝 슬래시 확장은 기존 해석기와 NOFOLLOW_ANY를 따르며 F_GETFL은 선택 비트를 제외합니다.
+
+실제 LinkNode와 선택한 NameIdentity를 보존합니다. dup은 상태 플래그와 커서를 공유하고 독립 open은 별도 설명을 사용합니다. 이름 변경, 삭제, 이름 재사용, 부모 삭제 후에도 기존 객체가 유지됩니다. 단일 이름의 F_GETPATH/ATTR_CMN_NAME은 선택한 보존 이름을 사용합니다. 여러 이름을 가졌던 객체는 이름을 모두 삭제해도 vnode 이름 추론을 거부합니다. 초기 예약은 고정이며 동적 이름, 대상, 항목, 속성 증가 비용은 마지막 소유자까지 유지됩니다. 다른 설명자가 객체나 선택한 이름을 보존하면 마지막 별칭을 교체 비용에서 공제할 수 없습니다.
+
+I/O는 대상 문자열을 파일 내용으로 노출하지 않습니다. 기존 스칼라/벡터 가져오기, 접근, 개수 검사 후 음수 오프셋은 EINVAL입니다. INT64_MAX 읽기는 0, 다른 허용 오프셋은 길이 0을 포함해 EPERM입니다. INT64_MAX 쓰기는 EFBIG, 나머지는 길이 0 성공, APPEND, 데이터 접근 전에 EPERM입니다. pwrite/pwritev의 기존 조기 음수 규칙을 유지합니다. DATA/HOLE seek은 음수가 아니면 ENXIO, 음수면 EINVAL이며 커서는 그대로입니다.
+
+쓰기 전용/읽기·쓰기의 음수가 아닌 ftruncate와 허용 open TRUNC는 WasWritten만 설정하며 대상 바이트, 전체 stat, 속성, 커서, 저장 예산, inode를 변경하지 않습니다. 읽기 전용 또는 음수 길이는 EINVAL입니다. 허용 F_SETFL은 APPEND|NONBLOCK를 변경한 후 ENOTTY25를 반환하고 dup에 반영됩니다. 알 수 없는 인수는 효과 전에 중지합니다.
+
+고정 fpathconf, fgetattrlist, 독립 선언된 일반 FD 속성 권한은 심볼릭 객체에 적용됩니다. 상대 디렉터리 FD와 fchdir는 ENOTDIR입니다. 속성 변경으로 무효화된 stat을 truncate가 복구하지 않습니다. 정렬된 비실행 레거시 private/shared mmap은 객체 종류에서 EINVAL로 거부되며 매핑이나 임대를 만들지 않습니다. 일반 shared 매핑, 알 수 없는 플래그, 실행 보호 등 기존 미지원 경계는 유지됩니다. 네이티브 mmap은 length16384, offset0, protection1/2/3의18개 조합만 검증합니다.
+
+독자 ARM64 준비는15개 truncate의 전체144바이트 stat, 극단 오프셋/개수 I/O, 희소 seek, 실패 F_SETFL 효과를 확인합니다. SDK 없는 공통 프로그램은 O0/O1/O2에서 실행하고 실제 부모 설명자 경로를 비교합니다. 가상 경로는 독립 stat/type 리터럴 또는 기존 출력을 보존하는 다중 이름 거부를 검증합니다. Intel HVF, 실제 iOS, ACL/권한, 매핑 EOF/신호, dyld, Mach IPC, 스레드, 전체 런타임/프레임워크는 미검증 또는 미완성입니다.
+
+일차 해석 자료: [동일 버전 XNU 매핑 경계](https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-11417.140.69/bsd/kern/kern_mman.c). 구현과 탐침은 독자 작성하며 Apple 구현을 복사하지 않습니다.
+
+```text
+O_SYMLINK=0x00200000; ENOTTY=25
+open O_RDONLY|O_SYMLINK|O_TRUNC: WasWritten only
+LinkNode, NameIdentity, HadMultipleNames, DetachedNames
+INT64_MAX read=0 / write=EFBIG; other admitted offsets=EPERM
+SEEK_DATA/SEEK_HOLE nonnegative=ENXIO / negative=EINVAL
+F_SETFL: APPEND|NONBLOCK effect before ENOTTY; dup shares / independent open separate
+symbolic-descriptors
+symbolic-descriptors-values
+symbolic-descriptors-name-unsupported
+SymbolicDescriptor*, SymbolicDescriptorsRetainObjectsAndNativeErrorOrder
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+34 model cases / 20 transport parameters / 15 public cases / 5 Python profiles
+66 mandatory workloads per platform / ARM64 198 / Intel 132
+```
+
+## 제한된 비차단 설명자 상태
+
+일반 파일, 디렉터리, O_SYMLINK open은 O_NONBLOCK=4를 허용하며 F_GETFL이 이를 보존합니다. dup은 상태와 위치를 공유하고 독립 open은 별도 설명을 유지합니다. 접근, close-on-exec, WasWritten, 메타데이터, 바이트, 위치의 기존 규칙이 적용됩니다. 명시한 유한 stdin은 EOF와 포인터 오류 순서를 유지하고 생략 입력은 미지 상태입니다. 출력 캡처는 복사 오류와 공유 예산을 유지합니다.
+
+F_SETFL은 효과 전에 허용 low32 인수를 검사하고 원시 open 플래그 변환으로 1을 더한 뒤 APPEND|NONBLOCK만 변경합니다. high32는 무시하며 접근 및 입력 WasWritten 비트로 권한이나 쓰기 이력을 만들지 않습니다. 독립 원시 관찰에서 요청3/7/11/15는 상태4/8/12/0을 선택합니다. 심볼릭 설명은 상태 변경 후 ENOTTY25를 반환합니다. ASYNC0x40 등 미지 플래그는 효과 전에 중지합니다.
+
+독자 ARM64 macOS 준비의122개 관찰은 유효 객체/접근 조합별16개 요청, 유지 dup, 독립 open, 상태 해제, 실제 쓰기 및 FD별 CLOEXEC를 포함합니다. SDK 없는 공통 프로그램은 O0/O1/O2에서 바이트, 상태, 위치와 원시 BSD carry/errno ABI를 비교합니다. 게스트, C/CLI, Python도 미지 플래그 거부를 검증하며 ARM64 HVF 세 profile의 실제 실행이 필수입니다. 준비 상태 대기, 파이프, 네트워크, kqueue, 비동기 신호나 호스트 I/O는 추가하지 않습니다. O_EVTONLY 프로세스 정책은 미지원이며 Intel HVF, 실제 iOS, 전체 macOS/iOS 환경은 미검증 또는 미완성입니다.
+
+```text
+O_NONBLOCK=4; F_SETFL raw low32 mask=0x1000f
+requests3/7/11/15 -> APPEND|NONBLOCK status4/8/12/0
+nonblocking-descriptors / nonblocking-flags-unsupported
+Nonblocking*, NonblockingDescriptorsKeepNativeControlState
+native5s / compile120s / drain1s / reap1s
+guest/Python5,000,000us / quantum1024 / public10s
+8 model cases / 20 transport parameters / 10 public cases / 5 Python profiles
+67 mandatory workloads per platform / ARM64 201 / Intel 134
+```
+
+## 명시적인 유한 getentropy 관측
+
+원시 BSD getentropy500은 순서가 있는 `DarwinSystemOptions::EntropyReads`를 사용하며 JSON 필드는 `darwin_system.entropy_reads`입니다. 비어 있지 않은 짝수 길이 16진수 문자열을 최대256개, 각1..256바이트로 제공합니다. 모델 한도이며 기존65536바이트 JSON 전송 한도는 유지합니다. 생략은 알 수 없음, `[]`는 명시적 소진입니다. 이미지나 백엔드 변경 전에 입력을 검증하며 다른 OS 프로필은 Darwin 옵션을 거부합니다.
+
+전체64비트 길이를 먼저 확인합니다. 256 초과는 메모리 접근이나 소비 없이 EINVAL22, 길이0은 모든 포인터에 대해 입력 없이 성공합니다. 비영 요청은 다음 기록의 정확한 길이를 먼저 승인합니다. 누락·소진·불일치는 잘못된 주소에서도 효과 전 UnsupportedService로 멈춥니다. 이는 재생 승인 순서입니다. 성공 또는 완전히 쓸 수 없는 EFAULT14는 한 기록을 소비합니다. 일부만 쓸 수 있는 대상은 복사 및 커서 변경 전에 거부하며 전송 오류는 커서를 진행하지 않습니다. 이후 반환 레지스터 실패는 완료된 효과를 유지합니다. 같은 옵션을 재사용해도 매 실행은 첫 기록에서 시작합니다.
+
+매 실행의 DarwinEntropy가 독립 커서를 소유하고 입력 바이트는 불변입니다. 기존 BSD 분배와 returnService가 양쪽 ISA, 캐리와 보조 레지스터를 담당합니다. SDK 없는 재생은5개 게스트와3개 ARM64 HVF 프로필을 검증하며 고정 바이트는 원시 결정적 RNG 목록에 넣지 않습니다. ARM64 O0/O1/O2 탐침은594회 호출이며 센티널 변화 수는 정확한 복사 길이가 아닙니다. 호스트 난수, 암호학적 품질, /dev/random, libc 가져오기와 프레임워크는 제공하지 않습니다. Intel HVF·물리 iOS·완전한 OS 호환성은 미검증 또는 미완료입니다。
+
+```text
+BSD getentropy500 / DarwinEntropy / EntropyReads / darwin_system.entropy_reads
+full64 size>256 -> EINVAL22; zero ->0; whole EFAULT14 consumes one record
+1..256 bytes per record / at most256 records / JSON transport65536 bytes
+entropy-replay / entropy-missing / entropy-exhausted / entropy-mismatch / entropy-partial
+15 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+68 mandatory workloads per platform / ARM64 204 / Intel 136
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU getentropy ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [XNU generation/copyout boundary](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/dev/random/randomdev.c).
+
+## 명시적인 현재 스레드 식별자
+
+BSD thread_selfid372는 변경되지 않는 선택적 `DarwinSystemOptions::ThreadID` / JSON `darwin_system.thread_id`를 읽습니다. 0을 포함한 모든 uint64 비트 패턴은 알려진 관측이며, 생략하면 UnsupportedService로 중단합니다. 십진 문자열은64비트를 보존하고 JSON 숫자는2^53-1 이하의 정확한 정수만 허용합니다. 호스트, PID 또는 Mach 포트에서 ID를 추정하지 않습니다. 인자 없는 호출은 여섯 전달값을 무시하고 메모리에 접근하지 않습니다. 기존 하위32비트 해석은 이벤트의 원래 전체 번호를 보존하며 BSD 반환 계층은64비트 값과 carry 및 RDX/X1 초기화를 담당합니다. Mach 번호 형식은 지원하지 않습니다.
+
+반복 실행은 입력 관측을 유지하며 서로 다른 옵션은 독립적입니다. ID 할당, 유일성, 스케줄러 이벤트의 식별, 스레드 생명주기, pthread, TLS, Mach IPC를 제공하지 않습니다. ARM64 O0/O1/O2 원본 프로브24회는 SDK의 현재 pthread ID, 임의 인자와 번호 상위32비트를 비교합니다. 공통 네이티브 프로그램은 같은 프로세스 내부 관계만 비교하며 고정 ID 바이트는 결정적 네이티브 참조 목록에서 제외합니다. Intel HVF, 실제 iOS 기기 및 완전한 OS 호환성은 검증되지 않았거나 미완성입니다.
+
+```text
+BSD thread_selfid372 / Wide / ThreadID / darwin_system.thread_id
+known uint64 including0 / missing -> UnsupportedService / no memory
+full64 return / low32 resolution / carry clear / RDX-X1 zero / raw event number
+thread-identity / thread-identity-value / thread-identity-missing
+4 model cases / 20 transport parameters / 16 public cases / 5 Python profiles
+69 mandatory workloads per platform / ARM64 207 / Intel 138 unverified
+original ARM64 O0/O1/O2 probes24 / native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU thread_selfid ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [libpthread current-thread owner](https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_support.c).
+
+## 명시적 Mach 자체 포트 관측
+
+원시 Mach thread_self_trap27, task_self_trap28, host_self_trap29는 독립적인 선택 uint32 관측 DarwinSystemOptions::ThreadSelfPort, TaskSelfPort, HostSelfPort를 읽습니다. JSON은 darwin_system.thread_self_port, task_self_port, host_self_port입니다. 각 쿼리는 선택한 필드만 요구합니다. 누락은 미지 상태로 UnsupportedService를 일으키며 0, 같은 이름, 모든32비트 패턴은 명시적 값입니다. UINT32_MAX까지 정확한 정수 또는 십진 문자열을 받으며 process_group_id/session_id의 양수 pid_t 제한을 적용하지 않습니다.
+
+시스템 소유자가 이름을 부호 있는 int32 커널 결과를 통해 raw64로 변환합니다. 0x80000001은0xffffffff80000001, UINT32_MAX는UINT64_MAX를 반환합니다. 기존 Mach 바인딩은 플래그와 X1/RDX, x64 RCX/R11 덮어쓰기 규칙을 유지하며 인자를 무시하고 메모리에 접근하지 않습니다. 하위32비트 해석 후에도 이벤트는 전체 원시 번호를 보존합니다. Mach 쿼리 이벤트는 BSD error를 생략하며 스케줄러 ThreadID를 만들지 않습니다. 재사용한 옵션과 독립 옵션은 관측을 바꾸지 않습니다.
+
+원본 ARM64 O0/O1/O2 준비는432번 원시 관측, 전체16 NZCV, 상위32비트 번호, 레지스터 시드와 SDK 비교를 보존합니다. 네이티브 bit31 포트 이름은 관측되지 않았습니다. 상위 비트 부호 확장은 고정 XNU 반환 경로 계약이며 독립 리터럴 모델/게스트/공개 테스트로 확인합니다. 공통 네이티브 프로그램은 같은 프로세스 내 관계만 비교하며 가상 이름과 누락 모드는 결정적 네이티브 참조에 포함하지 않습니다. 이름/송신 참조 할당, 유효 권한 인증, 유일성, IPC/수명/스케줄링은 구현하지 않습니다. 권한/ACL, 준비 대기, 진행 시계, 실제 Mach IPC/스레드, dyld/TLS, 완전한 런타임/프레임워크는 미완성입니다. 네이티브 Intel HVF와 실제 iOS 장치는 미검증입니다.
+
+```json
+{"darwin_system":{"thread_self_port":2147483649,"task_self_port":0,"host_self_port":"4294967295"}}
+```
+
+```text
+Mach thread_self_trap27 / task_self_trap28 / host_self_trap29
+ThreadSelfPort / TaskSelfPort / HostSelfPort / uint32 / signed-int32 -> raw64
+known0 / missing -> UnsupportedService / no arguments or memory
+low32 resolution / complete raw number / flags and RDX-X1 preserved / no BSD error
+mach-self-ports / mach-self-port-values / mach-self-port-missing
+MachSelfPortsPreserveExplicitBitsAndIndependentRuns
+6 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+70 mandatory workloads per platform / ARM64 210 / Intel 140 unverified
+original ARM64 O0/O1/O2 probes432 / no native bit31 name observed
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU Mach trap table](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/syscall_sw.c), [self-port name owners](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/ipc_tt.c), [host-port owner](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/ipc_host.c), [ARM64 return](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/arm64/bsd_arm64.c), [x64 return](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/i386/bsd_i386.c).
+
+
+## 정적 일반 소유자 권한 조회
+
+darwin_files.authorization="static-owner-queries" (DarwinFileAuthorization::StaticOwnerQueries)는 불변 일반 로컬 권한 환경을 선언합니다. ACL, MAC, 추가 kauth 리스너, entitlement 및 우회가 없고, 소유권을 적용하는 쓰기/실행 가능한 비 opaque 마운트, flags=0, 특수 모드 비트 없음을 전제합니다. 기존 관측만으로 권한을 부여하지 않으며 access/faccessat 조회만 지원합니다.
+
+실제 검사는 명시적 darwin_system.credentials와 객체 메타데이터가 필요합니다. access는 real_uid, AT_EACCESS는 SEARCH와 최종 R/W/X 모두 effective_uid를 선택합니다. 선택 UID는 0이 아닌 일치 소유자이고 모든 요청 owner 비트가 필요합니다. 알려진 거부는 EACCES13과 기존 BSD carry입니다. 알 수 없는 자격/메타데이터, 선택 UID0, 비소유자, 확장 동작, 보존 끝 링크의 R/W/X는 UnsupportedService이며 선택하지 않은 UID0은 유효합니다. 호스트/UID1000/그룹/기타/root 예외를 추정하지 않습니다.
+
+부모 X/SEARCH는 자식, 없는 이름, 해당 점/점점 및 링크 재시작보다 먼저입니다. F_OK/무시 비트는 필요한 SEARCH만 수행합니다. 슬래시뿐인 루트와 루트에 고정된 점점에는 SEARCH가 없고 소비한 끝 슬래시는 최종 검사를 추가하지 않습니다. 플래그/복사/상대 dirfd/빈 이름 오류 순서는 유지합니다. Name255는 모델 한도이며 허용 SEARCH 뒤 초과는 Unsupported, 거부는 먼저 EACCES, 미상은 먼저 중단합니다. 파일 시스템 errno를 추정하지 않습니다.
+
+다른 파일 경로(open/stat/chdir/readlink/속성/열거/이름 변경)는 효과 전에 중단합니다. 실제 Input/Output/Error와 dup 별칭만 기존 I/O, close, dup/dup2, lseek, fcntl을 유지하며 FD0/1/2 숫자는 예외가 아닙니다. 파일 mmap/mappingSource는 닫고 익명 메모리는 독립입니다. 공유 C++/JSON은 변경/생성 권한, 알려진 flags/특수 비트와 inode/device 별칭을 거부하고 미상 메타데이터와256항목/16MiB 계산을 보존합니다.
+
+예제는 루트 SEARCH와0400 소유자 파일을 제공해 읽기 검사는 성공, 쓰기 검사는 EACCES이나 open은 지원하지 않습니다. ARM64 O0/O1/O2에2472 raw/SDK쌍,2439 독립 리터럴,33 관측 전용을 compile120s/native5s로 유지합니다. fstatx/filesec이 ACL 부재를 확인합니다. 최초 NULL/ENOENT 오판은 조회 전이며 기록을 보존합니다. 호스트 real/effective는 같고 별도 선택은 고정 소스/모델 증거이며 모든 글로벌 훅/opaque 내부는 검증하지 않았습니다. owner-queries는58개 결정적 네이티브 참조에서 제외합니다. 그룹/root/ACL/MAC, 동적 자격, 일반 vnode 권한, 준비 대기, 시계, Mach IPC/스레드, dyld/TLS, 전체 런타임은 미완성입니다. Intel HVF와 실제 iOS는 미검증입니다.
+
+```json
+{"darwin_files":{"authorization":"static-owner-queries","files":[{"path":"/data","bytes_hex":"00","metadata":{"device":7,"inode":2,"mode":33024,"link_count":1,"uid":501,"gid":20,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16832,"link_count":2,"uid":501,"gid":20,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":501,"real_gid":20,"effective_gid":20}}}
+```
+
+```text
+DarwinFileAuthorization::StaticOwnerQueries / authorization=static-owner-queries
+access33 / faccessat466 / real_uid / effective_uid / AT_EACCESS0x10
+owner R/W/X / all requested bits / directory SEARCH / EACCES13
+no-action root LOOKUP / root-clamped dotdot / consumed terminal separators
+unknown credentials-metadata-root-nonowner -> UnsupportedService
+all other vnode routes closed / typed standard streams and dup aliases only
+anonymous memory independent / file-backed mmap and mappingSource closed
+Name255 availability stop after allowed SEARCH / no guessed filesystem errno
+owner-queries / owner-query-stop / owner-query-open / owner-query-map
+OwnerQueriesKeepPermissionAndUnknownBoundaries
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+original ARM64 O0/O1/O2 pairs2472 / literal2439 / capture-only33
+native5s / compile120s / owner-build1200s / guest-Python5,000,000us
+```
+[XNU access and subject selection](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_syscalls.c), [real credential copy](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c), [owner authorization](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_subr.c), [pathname SEARCH](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_lookup.c), [cached lookup](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_cache.c), [Libc ACL properties](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/gen/filesec.c), [fstatx ACL absence](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/sys/statx_np.c).
+
+## 그룹 정보가 일부 알려진 정적 일반 질의
+
+`darwin_files.authorization="static-ordinary-queries"`(DarwinFileAuthorization::StaticOrdinaryQueries)는 앞 절의 불변 일반 환경, 마운트·보안·메타데이터 조건, 닫힌 파일 작업, 표준 스트림 예외와 독립 익명 메모리를 유지합니다. 기존 static-owner-queries 는 소유자만 지원합니다. 실제 검사는 명시적 자격 정보, 메타데이터와 0이 아닌 선택 UID를 요구합니다. root, 확장 권한, 최종 링크 R/W/X는 지원하지 않습니다.
+
+소유자는 요청된 소유자 비트를 모두 사용합니다. 비소유자는 전체 요청 마스크에 대한 그룹과 기타 권한 결과를 비교합니다. 결과가 같으면 그룹 조회 없이 허용 또는 EACCES13을 확정하며, 서로 다른 비트도 같은 거부를 낼 수 있습니다. 결과가 다르면 알려진 구성원은 그룹, 증명된 비구성원은 기타 권한을 사용합니다. 알려지지 않은 소속은 조회나 효과 전에 UnsupportedService로 멈추며 권한 범주를 합치지 않습니다.
+
+credentials.groups 는 순서 있는 커널 자격 그룹 목록이며 첫 항목은 EffectiveGID이고 중복을 보존합니다. SDK getgroups의 확장 해석기 목록이 아닙니다. 선택 주 그룹과 명시적 양성 소속은 알려져 있지만 누락이나 목록 생략은 일반적으로 비소속 증거가 아닙니다. 실제/유효 UID 및 GID 쌍이 모두 같으면 원 문맥을 유지합니다. 그 외에는 첫 항목을 RealGID로 바꾸고 처음 일치하는 보충 RealGID 항목에 이전 EffectiveGID를 넣습니다. 일치 항목이 없으면 이전 주 그룹을 제거하고 memberd를 끕니다. 이 증명된 변환 또는 명시된 원래 KAUTH_UID_NONE과 완전한 명시 목록이 함께 있으면 누락을 비소속으로 확정합니다. GID가 같고 UID만 다른 경우도 변환하며 주 그룹 중복은 외부 소속을 미지로 남길 수 있습니다. AT_EACCESS는 원 유효 문맥을 쓰며 입력은 불변입니다.
+
+예제의 실제 질의는 GID20 제거로 거부되고 AT_EACCESS는 알려진 유효 주 그룹20으로 성공합니다. 디렉터리 SEARCH는 그룹/기타 결과 일치로 확정되며 선택 UID0이나 파일 열기를 허용하지 않습니다.
+
+```json
+{"darwin_files":{"authorization":"static-ordinary-queries","files":[{"path":"/data","metadata":{"device":7,"inode":2,"mode":32816,"link_count":1,"uid":700,"gid":20,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}},"bytes_hex":"00"}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16895,"link_count":2,"uid":0,"gid":0,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":502,"real_gid":30,"effective_gid":20,"groups":[20,40]}}}
+```
+
+읽기 전용 원생 ARM64 O0/O1/O2 검증은 raw/SDK 270쌍을 보존하며 비소유 객체, SEARCH, 오류, 동일 객체와 독립 ACL 속성 부재를 확인합니다. raw 자격 그룹은16개, SDK 확장 목록은17개입니다. 잘못된 SDK 길이 제한은 첫 시도를 권한 질의 전에 중단했으며 실패 기록을 보존합니다. 실제/유효 ID가 같으므로 다른 ID와 전체 그룹 변환은 고정 XNU 소스/독립 모델 증거이며 모든 외부 훅의 원생 증거가 아닙니다. 소프트웨어5/ARM64 HVF3 구성은 실제 게스트와 C/CLI/Python, 미지 ID·메타데이터·root·소속을 검증합니다. 공급 모델은 기존58 원생 공통 사례에 넣지 않습니다. 전체 그룹 해석, root, ACL/MAC, 일반 vnode, 동적 자격, 준비/네트워크, 진행 시계, Mach IPC/스레드, dyld/TLS 및 전체 프레임워크는 미완성이며 원생 Intel HVF/물리 iOS는 미검증입니다. 기한은 그대로입니다.
+
+```text
+DarwinFileAuthorization::StaticOrdinaryQueries / authorization=static-ordinary-queries
+owner bits / whole-mask group-world outcomes / EACCES13
+credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
+real credential copy / first supplementary match / displacement disables memberd
+missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
+all40 other file routes and direct/file-backed mappings closed / typed streams only
+ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
+OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+original ARM64 O0/O1/O2 nonowner pairs270 / raw-groups16 / SDK-extended-groups17
+native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU ordinary mode authorization](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_subr.c), [real credential and group membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c), [raw in-credential getgroups](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_prot.c), [SDK extended getgroups](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/sys/getgroups.c).
+
+## 명시적 원래 그룹 소속 문맥
+
+선택 `DarwinCredentials::GroupMembershipUID` / `darwin_system.credentials.group_membership_uid`는 원래 cr_gmuid를 선언하며 네 ID와 groups에서 독립적입니다. 0..INT32_MAX 또는 정확한 KAUTH_UID_NONE=4294967195(0xffffff9b, UINT32_MAX에서100을 뺀 값)를 허용합니다. 기존 무손실 십진 문자열 및 정확한 수치 정수 디코더를 사용하며 잘못된 유형, 소수, 음수와 다른 범위 밖 값은 로드 전에 거부합니다. 일반 UID/GID나 그룹 항목에는 이 센티넬을 허용하지 않습니다. 생략이나 다른 유효 UID는 외부 비소속을 증명하거나 해석기를 제공하지 않습니다.
+
+선택 주 그룹과 명시적 양성 소속을 먼저 판정합니다. 원래 NONE과 명시적 완전 목록이 함께 있어야 누락을 비소속으로 확정하고, 목록 생략은 미지입니다. 실제 자격 복사는 첫 보충 일치로 이전 유효 주 그룹을 보존하더라도 원래 NONE을 유지하며, 증명된 제거도 외부 해석을 끕니다. 스칼라 조회, 원시 getgroups, 생성 소유권 및 기존 모드는 바뀌지 않습니다. 같은 일반 질의 소유자가 기타 권한을 선택하고 자식 조회 전에 SEARCH를 검사하며 다른 vnode 작업은 닫힌 상태입니다.
+
+예제의 호출자는 GID50 비소속으로 두 신분에서 /data 읽기가 가능하지만 쓰기 권한 질의는 EACCES13입니다. group_membership_uid 생략 시 서로 다른 그룹/기타 결과는 미지원입니다.
+
+```json
+{"darwin_files":{"authorization":"static-ordinary-queries","files":[{"path":"/data","bytes_hex":"00","metadata":{"device":7,"inode":2,"mode":32772,"link_count":1,"uid":700,"gid":50,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16895,"link_count":2,"uid":0,"gid":0,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":501,"real_gid":20,"effective_gid":20,"groups":[20],"group_membership_uid":4294967195}}}
+```
+
+로컬 O0/O1/O2 SDK 실행은 센티넬과4바이트 uid_t만 검증하며 호스트 cr_gmuid나 해석기 상태를 관측하지 않습니다. 앞선 실제 raw/SDK 비소유자270쌍과 별개입니다. ordinary-queries-closed-groups는173이벤트, 유효 비소속 거부, 누락/점/점점/링크 SEARCH를5소프트웨어 및3필수ARM64 HVF 설정과 C/CLI/Python에서 검증하며58 native-common 참조에는 포함하지 않습니다. root, ACL/MAC, 완전 그룹 해석, 일반 vnode 권한, 동적 자격, 대기/네트워크, 진행 시계, Mach IPC/스레드, dyld/TLS 및 완전 프레임워크는 미완성입니다. Intel HVF/물리 iOS는 미검증이며 기존 시간 한도는 유지합니다.
+
+```text
+GroupMembershipUID / group_membership_uid / original cr_gmuid
+0..INT32_MAX or KAUTH_UID_NONE=4294967195 / 0xffffff9b / not UINT32_MAX
+positive entries first / original NONE plus complete list proves negatives
+omitted list unknown / first-match real copy preserves original NONE
+ordinary-queries-closed-groups / 173 events / stdout GN
+OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+SDK constant O0/O1/O2 only / prior actual nonowner pairs270 remain separate
+58 native-common references unchanged / Intel and physical iOS unverified
+native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).

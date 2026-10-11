@@ -1,3 +1,14 @@
+//===- SessionBundles.cpp - Bundle analysis publication ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bundle analysis publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "SessionInternal.h"
 
 namespace neverd::web {

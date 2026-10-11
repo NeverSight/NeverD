@@ -78,12 +78,17 @@ x86ShadowStackReadMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
 
 inline X86FPStateShape x86FPStateMedShape(const MedOp &Op,
                                           Arch TargetArch = Arch::Unknown) {
-  const bool Memory =
-      Op.NumInputs && Op.Inputs[0].isConst() &&
-      Op.Inputs[0].ConstVal == unsigned(Intrinsic::X86FPRoundMemoryState);
+  if (Op.NumInputs > Op.Inputs.size())
+    return {.TargetArch = TargetArch};
+  const bool Memory = Op.NumInputs && Op.Inputs[0].isConst() &&
+                      isX86FPStateMemoryIntrinsic(
+                          static_cast<Intrinsic>(Op.Inputs[0].ConstVal));
   const bool Round =
       Op.NumInputs && Op.Inputs[0].isConst() &&
       isX86FPRoundStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].ConstVal));
+  const bool Arithmetic =
+      Op.NumInputs && Op.Inputs[0].isConst() &&
+      isX86FPArithStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].ConstVal));
   const unsigned ControlIndex = Memory ? 2 : 1;
   const bool Conversion = Op.NumInputs && Op.Inputs[0].isConst() &&
                           isX86FPConversionStateIntrinsic(
@@ -104,36 +109,42 @@ inline X86FPStateShape x86FPStateMedShape(const MedOp &Op,
               Op.Inputs[Index].Kind == MedVar::Param;
     ObserveArch(Op.Inputs[Index]);
   }
-  return {
-      .TargetArch = TargetArch,
-      .MemoryOrdering = Op.MemoryOrdering,
-      .MemoryAddressSpace = Op.MemoryAddressSpace,
-      .NumInputs = Op.NumInputs,
-      .IdIsConst = Op.NumInputs && Op.Inputs[0].isConst(),
-      .IdSize = Op.NumInputs ? Op.Inputs[0].Size : 0U,
-      .OutputIsWritable = isMedIntrinsicWritableScalar(Op.Output),
-      .OutputSize = Op.Output.Size,
-      .OperandsAreScalar = Scalar,
-      .LeftSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : 0U,
-      .RightSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U,
-      .StateSize = Round        ? (Op.NumInputs > 4 ? Op.Inputs[4].Size : 0U)
-                   : Conversion ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
-                                : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
-      .HasAuxiliaryOutputs = !Op.IntrinsicOutputs.empty(),
-      .DestinationIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
-      .DestinationSelectorSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
-      .DestinationBytes = Op.NumInputs > 3 ? Op.Inputs[3].ConstVal : 0U,
-      .ArchitectureMatchesOperands = ArchitectureMatchesOperands,
-      .ControlIsConst =
-          Op.NumInputs > ControlIndex && Op.Inputs[ControlIndex].isConst(),
-      .ControlSize =
-          Op.NumInputs > ControlIndex ? Op.Inputs[ControlIndex].Size : 0U,
-      .Control =
-          Op.NumInputs > ControlIndex ? Op.Inputs[ControlIndex].ConstVal : 0U,
-      .ImmediateIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
-      .ImmediateSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
-      .Immediate = Op.NumInputs > 3 ? Op.Inputs[3].ConstVal : 0U,
-      .AddressIsScalar = Op.NumInputs > 1 && Scalar};
+  return {.TargetArch = TargetArch,
+          .MemoryOrdering = Op.MemoryOrdering,
+          .MemoryAddressSpace = Op.MemoryAddressSpace,
+          .NumInputs = Op.NumInputs,
+          .IdIsConst = Op.NumInputs && Op.Inputs[0].isConst(),
+          .IdSize = Op.NumInputs ? Op.Inputs[0].Size : 0U,
+          .IdValue = Op.NumInputs ? Op.Inputs[0].ConstVal : 0U,
+          .OutputIsWritable = isMedIntrinsicWritableScalar(Op.Output),
+          .OutputSize = Op.Output.Size,
+          .OperandsAreScalar = Scalar,
+          .LeftSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : 0U,
+          .RightSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U,
+          .ThirdSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
+          .ArithmeticLeftIsZero = Op.NumInputs > (Memory ? 3U : 2U) &&
+                                  Op.Inputs[Memory ? 3 : 2].isConst() &&
+                                  Op.Inputs[Memory ? 3 : 2].ConstVal == 0,
+          .StateSize =
+              Round || Arithmetic ? (Op.NumInputs > 4 ? Op.Inputs[4].Size : 0U)
+              : Conversion        ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
+                                  : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
+          .HasAuxiliaryOutputs = !Op.IntrinsicOutputs.empty(),
+          .DestinationIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
+          .DestinationSelectorSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
+          .DestinationBytes = Op.NumInputs > 3 ? Op.Inputs[3].ConstVal : 0U,
+          .ArchitectureMatchesOperands = ArchitectureMatchesOperands,
+          .ControlIsConst =
+              Op.NumInputs > ControlIndex && Op.Inputs[ControlIndex].isConst(),
+          .ControlSize =
+              Op.NumInputs > ControlIndex ? Op.Inputs[ControlIndex].Size : 0U,
+          .Control = Op.NumInputs > ControlIndex
+                         ? Op.Inputs[ControlIndex].ConstVal
+                         : 0U,
+          .ImmediateIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
+          .ImmediateSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
+          .Immediate = Op.NumInputs > 3 ? Op.Inputs[3].ConstVal : 0U,
+          .AddressIsScalar = Op.NumInputs > 1 && Scalar};
 }
 
 inline ApxAtomicIntrinsicShape apxAtomicMedShape(const MedOp &Op) {

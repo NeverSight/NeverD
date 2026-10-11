@@ -1139,6 +1139,121 @@ TEST(ObjectModel, HeapAllocationSurvivesStackSpillReload) {
   EXPECT_FALSE(D.CapacityExact);
 }
 
+TEST(ObjectModel, CanonicalIncomingRegisterPreservesAllocationSpill) {
+  constexpr uint64_t Incoming = 0x3000;
+  for (bool Marked : {false, true}) {
+    SCOPED_TRACE(Marked);
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    AnalysisInput In;
+    In.Img = &Img;
+    In.StackPointerReg = kSP;
+    In.FramePointerReg = kFP;
+    In.StackRegsKnown = true;
+
+    MedFunc F = newFunc(Arch::X64);
+    F.Blocks[0].StartAddr = F.Entry;
+    if (Marked)
+      push(F, NdOp::COPY, mkReg(Incoming, 0), {mkReg(Incoming, 0)});
+    push(F, NdOp::INT_SUB, mkReg(kSP, 1),
+         {mkReg(kSP, 0), MedVar::makeConst(8, 8)});
+    pushCall(F, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    push(F, NdOp::STORE, MedVar{}, {mkReg(kSP, 1), temp(1)});
+    pushCall(F, "opaque_external", MedVar{}, {mkReg(Incoming, 0)});
+    push(F, NdOp::LOAD, temp(2), {mkReg(kSP, 1)});
+    const size_t Sink = pushCall(F, "memcpy", temp(0),
+                                 {temp(2), temp(3), MedVar::makeConst(8, 8)});
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    ASSERT_TRUE(D.Capacity.has_value());
+    EXPECT_EQ(D.Region, ObjectRegion::Heap);
+    EXPECT_EQ(*D.Capacity, 16u);
+  }
+}
+
+TEST(ObjectModel, IncomingMarkerCannotHideAllocationSpillInvalidation) {
+  constexpr uint64_t Incoming = 0x3000;
+  for (const std::string Scenario :
+       {"late-self-copy", "conflicting-definition", "frame-argument",
+        "partial-write", "deep-incoming", "cyclic-argument", "incomplete-phi",
+        "mixed-frame-phi", "call-clobber", "frame-pointer-argument"}) {
+    SCOPED_TRACE(Scenario);
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    AnalysisInput In;
+    In.Img = &Img;
+    In.StackPointerReg = kSP;
+    In.FramePointerReg = kFP;
+    In.StackRegsKnown = true;
+    MedFunc F = newFunc(Arch::X64);
+    F.Blocks[0].StartAddr = F.Entry;
+    if (Scenario != "late-self-copy")
+      push(F, NdOp::COPY, mkReg(Incoming, 0), {mkReg(Incoming, 0)});
+    if (Scenario == "frame-pointer-argument")
+      push(F, NdOp::COPY, mkReg(kFP, 0), {mkReg(kFP, 0)});
+    push(F, NdOp::INT_SUB, mkReg(kSP, 1),
+         {mkReg(kSP, 0), MedVar::makeConst(8, 8)});
+    pushCall(F, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    push(F, NdOp::STORE, MedVar{}, {mkReg(kSP, 1), temp(1)});
+    if (Scenario == "late-self-copy")
+      push(F, NdOp::COPY, mkReg(Incoming, 0), {mkReg(Incoming, 0)});
+    if (Scenario == "conflicting-definition")
+      push(F, NdOp::COPY, mkReg(Incoming, 0), {mkReg(kSP, 1)});
+    MedVar Argument =
+        Scenario == "frame-argument" ? mkReg(kSP, 1) : mkReg(Incoming, 0);
+    size_t CallBlock = 0;
+    if (Scenario == "deep-incoming") {
+      for (int I = 0; I < 65; ++I) {
+        const MedVar Next = temp(100 + I);
+        push(F, NdOp::COPY, Next, {Argument});
+        Argument = Next;
+      }
+    } else if (Scenario == "cyclic-argument") {
+      push(F, NdOp::COPY, temp(50), {temp(51)});
+      push(F, NdOp::COPY, temp(51), {temp(50)});
+      Argument = temp(50);
+    } else if (Scenario == "incomplete-phi" || Scenario == "mixed-frame-phi") {
+      F.Blocks.resize(4);
+      for (int I = 1; I < 4; ++I)
+        F.Blocks[I].Id = I;
+      F.Blocks[0].Succs = {1, 2};
+      F.Blocks[1].Preds = {0};
+      F.Blocks[2].Preds = {0};
+      F.Blocks[1].Succs = {3};
+      F.Blocks[2].Succs = {3};
+      F.Blocks[3].Preds = {1, 2};
+      PhiNode Phi;
+      Phi.Output = temp(50);
+      Phi.Args = {{1, Argument}};
+      if (Scenario == "mixed-frame-phi")
+        Phi.Args.emplace_back(2, mkReg(kSP, 1));
+      F.Blocks[3].Phis.push_back(std::move(Phi));
+      Argument = temp(50);
+      CallBlock = 3;
+    } else if (Scenario == "call-clobber") {
+      const size_t DefiningCall = pushCall(F, "opaque_producer", MedVar{}, {});
+      F.Blocks[0].Ops[F.CallInfos[DefiningCall].OpIdx].CallSiteId = 1;
+      MedCallClobber Clobber;
+      Clobber.Value = Argument;
+      Clobber.CallSiteId = 1;
+      F.CallClobbers.push_back(Clobber);
+    } else if (Scenario == "frame-pointer-argument") {
+      Argument = mkReg(kFP, 0);
+    }
+    pushCall(F, F.Blocks[CallBlock], "opaque_external", MedVar{}, {Argument});
+    if (Scenario == "partial-write")
+      push(F.Blocks[CallBlock], NdOp::STORE, MedVar{},
+           {mkReg(kSP, 1), MedVar::makeConst(7, 4)});
+    push(F.Blocks[CallBlock], NdOp::LOAD, temp(2), {mkReg(kSP, 1)});
+    const size_t Sink = pushCall(F, F.Blocks[CallBlock], "memcpy", temp(0),
+                                 {temp(2), temp(3), MedVar::makeConst(8, 8)});
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_FALSE(D.Capacity.has_value());
+  }
+}
+
 TEST(ObjectModel, NonDefaultLoadCannotRecoverAllocationSpill) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

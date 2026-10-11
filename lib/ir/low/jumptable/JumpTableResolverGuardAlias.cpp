@@ -673,6 +673,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     std::vector<GuardSyntaxPtr> Inputs;
     size_t IndexQuery = std::numeric_limits<size_t>::max();
     size_t DefQuery = std::numeric_limits<size_t>::max();
+    size_t ExtendedLaneQuery = std::numeric_limits<size_t>::max();
     bool IndexQueryUsesDefinition = false;
   };
   using BuildKey = std::tuple<uint8_t, uint64_t, uint16_t, va_t, int>;
@@ -689,6 +690,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
                                  Info.IndexValueDefinedAtUse});
   }
   std::vector<JumpTableValueQuery> ProofQueries;
+  std::vector<std::pair<GuardSyntaxPtr, JumpTableValueQuery>>
+      ExtendedLaneQueries;
   std::vector<std::pair<GuardSyntaxPtr, bool>> GuardRoots;
 
   auto supportedGuardOpcode = [](NdOp Opcode) {
@@ -1089,6 +1092,9 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       }
     }
   }
+  // Value reconstruction crosses CFG predecessors as well as expression
+  // definitions. Use the expanded graph-walk limit; local guard syntax keeps
+  // its separate depth bound and every query retains the shared work budget.
   if (!AliasQueries.empty()) {
     bool AliasProofComplete = false;
     const std::vector<bool> AliasResults = tableValuesMatchAtUses(
@@ -1096,7 +1102,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
         /*CandidateBranchesSharingTargets=*/nullptr,
         /*QueryUnsignedFeasibleMasks=*/nullptr,
-        /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
+        limits::kMaxJumpTableExpandedResolverDepth, CertifiedEdgeOverrides);
     if (!AliasProofComplete || AliasResults.size() != AliasQueries.size()) {
       Info.IncompleteGuardDomain = true;
       return false;
@@ -1325,6 +1331,21 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       if (UseDefinedAlternativesAsRoots)
         ProofQueries.back().UseDefinedAlternativesAsOccurrenceRoots = true;
 
+      // Rooting a narrow lane at a complete extension writer preserves cheap
+      // occurrence identity, but hides any further range known by its input
+      // producer (for example, a bit count). Retain the original query as a
+      // fallback, only to be evaluated if the occurrence proof cannot bind
+      // the index. Expanding it eagerly would revisit unrelated deep inputs
+      // even when the exact lane already proves the guard.
+      if (DefinedLane &&
+          (Def.Opcode == NdOp::INT_ZEXT || Def.Opcode == NdOp::INT_SEXT) &&
+          Def.NumInputs == 1 && Def.Inputs[0].Size > V.Size &&
+          V.Offset == Def.Output.Offset) {
+        if (!consumeGuardBuildWork(IndexAlternatives.size() + 2))
+          return Finish({});
+        ExtendedLaneQueries.emplace_back(Node, ProofQueries[Node->IndexQuery]);
+      }
+
       // Prove index identity through the same immutable definition from both
       // ends.  This avoids recursively expanding unrelated wide inputs merely
       // to establish that the narrow value produced here is the table index:
@@ -1392,7 +1413,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     return false;
   }
 
-  // Resolve every syntax leaf and def edge in one CFG/lane query session.
+  // Resolve the syntax leaves and def edges in one CFG/lane query session.
   // Its ResolverFlowGraph, memo tables, and MatchBudget are shared across the
   // entire guard DAG; the outer evidence budget bounds collection and result
   // materialisation, so no node can restart a whole-function proof.  Preserve
@@ -1400,21 +1421,59 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   // exceed the recursive value depth after fixed-point graph growth, while a
   // separate guard still proves a complete (and therefore conservative)
   // selector domain.
+  auto ResolveGuardQueries =
+      [&](const std::vector<JumpTableValueQuery> &Queries,
+          std::vector<bool> &QueryComplete, bool &Complete) {
+        return tableValuesMatchAtUses(
+            Queries, &Complete, &QueryComplete, InvalidVA, nullptr,
+            CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
+            /*CandidateBranchesSharingTargets=*/nullptr,
+            /*QueryUnsignedFeasibleMasks=*/nullptr,
+            limits::kMaxJumpTableExpandedResolverDepth, CertifiedEdgeOverrides);
+      };
   bool ProofComplete = false;
   std::vector<bool> ProofQueryComplete;
   std::vector<bool> ProofResults;
   if (!ProofQueries.empty())
-    ProofResults = tableValuesMatchAtUses(
-        ProofQueries, &ProofComplete, &ProofQueryComplete, InvalidVA, nullptr,
-        CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
-        /*CandidateBranchesSharingTargets=*/nullptr,
-        /*QueryUnsignedFeasibleMasks=*/nullptr,
-        /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
+    ProofResults =
+        ResolveGuardQueries(ProofQueries, ProofQueryComplete, ProofComplete);
   if (ProofResults.size() != ProofQueries.size() ||
       ProofQueryComplete.size() != ProofQueries.size()) {
     if (SawControllingGuard)
       Info.IncompleteGuardDomain = true;
     return false;
+  }
+  // Preserve the fast exact-occurrence path for narrow guards over arbitrarily
+  // deep arithmetic. Only its unmatched extension lanes need their input's
+  // value facts. Batch those fallback queries as well, retaining the same
+  // graph context, shared evidence budget and per-query completeness rules.
+  std::vector<JumpTableValueQuery> FallbackQueries;
+  for (auto &[Node, Query] : ExtendedLaneQueries) {
+    if (!consumeGuardBuildWork(2))
+      return failIncomplete();
+    if (ProofQueryComplete[Node->IndexQuery] &&
+        ProofResults[Node->IndexQuery] && ProofQueryComplete[Node->DefQuery] &&
+        ProofResults[Node->DefQuery])
+      continue;
+    Node->ExtendedLaneQuery = ProofResults.size() + FallbackQueries.size();
+    FallbackQueries.push_back(std::move(Query));
+  }
+  if (!FallbackQueries.empty()) {
+    bool FallbackComplete = false;
+    std::vector<bool> FallbackQueryComplete;
+    const auto FallbackResults = ResolveGuardQueries(
+        FallbackQueries, FallbackQueryComplete, FallbackComplete);
+    ProofComplete &= FallbackComplete;
+    if (FallbackResults.size() != FallbackQueries.size() ||
+        FallbackQueryComplete.size() != FallbackQueries.size() ||
+        !consumeGuardBuildWork(FallbackQueries.size()) ||
+        !consumeGuardBuildWork(FallbackQueries.size()))
+      return failIncomplete();
+    ProofResults.insert(ProofResults.end(), FallbackResults.begin(),
+                        FallbackResults.end());
+    ProofQueryComplete.insert(ProofQueryComplete.end(),
+                              FallbackQueryComplete.begin(),
+                              FallbackQueryComplete.end());
   }
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
   std::set<const GuardSyntaxNode *> ActiveExprs;
@@ -1460,10 +1519,15 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
                                  Node->DefQuery < ProofQueryComplete.size();
     const bool DefQueryComplete =
         DefQueryPresent && ProofQueryComplete[Node->DefQuery];
+    const bool ExtendedLanePresent =
+        Node->ExtendedLaneQuery < ProofResults.size();
+    const bool ExtendedLaneComplete =
+        ExtendedLanePresent && ProofQueryComplete[Node->ExtendedLaneQuery];
     const bool IndexMatches =
-        IndexQueryComplete && ProofResults[Node->IndexQuery] &&
-        (!Node->IndexQueryUsesDefinition ||
-         (DefQueryComplete && ProofResults[Node->DefQuery]));
+        (IndexQueryComplete && ProofResults[Node->IndexQuery] &&
+         (!Node->IndexQueryUsesDefinition ||
+          (DefQueryComplete && ProofResults[Node->DefQuery]))) ||
+        (ExtendedLaneComplete && ProofResults[Node->ExtendedLaneQuery]);
     if (IndexMatches) {
       Expr->K = GuardExpr::Kind::Index;
       Expr->ContainsIndex = true;
@@ -1477,7 +1541,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     // incomplete result is reinterpreted as false or as an index identity.
     if (!Node->HasDef || !Node->InputsComplete) {
       if (!IndexQueryComplete ||
-          (Node->IndexQueryUsesDefinition && !DefQueryComplete))
+          (Node->IndexQueryUsesDefinition && !DefQueryComplete) ||
+          (ExtendedLanePresent && !ExtendedLaneComplete))
         SawIncompleteProofQuery = true;
       return Finish({});
     }

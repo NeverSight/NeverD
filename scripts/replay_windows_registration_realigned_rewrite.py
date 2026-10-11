@@ -35,6 +35,10 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
     validate_manifest(capture.get("runtime_libraries", {}))
     if require_test_result(root / "catch-projection.xml") != 1:
         raise ValueError("catch projection proof test changed")
+    if require_test_result(root / "incoming-projection.xml") != 2:
+        raise ValueError("caller argument entry/rollback proof tests changed")
+    if require_test_result(root / "fixed-projection.xml") != 1:
+        raise ValueError("fixed runtime coordinate proof test missing")
     objects = capture.get("objects", {})
     if set(objects) != set(FORMS):
         raise ValueError("realigned object matrix is incomplete")

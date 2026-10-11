@@ -30,6 +30,7 @@ bool hasValidRegistrationRootShape(const MedOp &Op) {
   switch (Op.RegistrationRoot) {
   case MedOp::RegistrationRootKind::EstablishedFramePointer:
   case MedOp::RegistrationRootKind::RealignedFramePointer:
+  case MedOp::RegistrationRootKind::DisplacedFramePointer:
     return Op.Output.RegOff == TRI.FramePointer &&
            Op.RegistrationStackOffset == 0;
   case MedOp::RegistrationRootKind::CallbackStackPointer:
@@ -58,6 +59,7 @@ std::optional<int64_t> registrationRootEntryStackOffset(const MedOp &Op) {
   case MedOp::RegistrationRootKind::RealignedFramePointer:
   case MedOp::RegistrationRootKind::RealignedRestoredStackPointer:
   case MedOp::RegistrationRootKind::None:
+  case MedOp::RegistrationRootKind::DisplacedFramePointer:
     return std::nullopt;
   }
   return std::nullopt;
@@ -97,6 +99,24 @@ realignedRegistrationFrameCoordinate(const ExceptionFunction &EH,
 }
 
 std::optional<RegistrationFrameCoordinate>
+cxxRegistrationFrameCoordinate(const ExceptionFunction &EH,
+                               const RegistrationStateAnalysis *State) {
+  if (!EH.Registration || !EH.Registration->cxxRuntimeFrameOffset() ||
+      EH.ParseStatus != ExceptionParseStatus::Complete ||
+      EH.Encoding != ExceptionEncoding::X86CxxFuncInfo || !EH.Cxx ||
+      !EH.Cxx->hasValidStateGraph() ||
+      (EH.Personality != ExceptionPersonality::CxxFrameHandler3 &&
+       EH.Personality != ExceptionPersonality::CxxFrameHandlerX86) ||
+      !State || !State->Complete || !State->CallbackStatesComplete ||
+      !State->RegistrationLifetimeComplete || !State->ChainOperationsComplete ||
+      !State->CxxContinuationsComplete)
+    return std::nullopt;
+  if (EH.Registration->RealignedFrame)
+    return realignedRegistrationFrameCoordinate(EH, State);
+  return RegistrationFrameCoordinate{-4, 1, 0};
+}
+
+std::optional<RegistrationFrameCoordinate>
 registrationRootFrameCoordinate(const MedFunc &Func, const MedOp &Op) {
   if (!hasValidRegistrationRootShape(Op))
     return std::nullopt;
@@ -105,7 +125,8 @@ registrationRootFrameCoordinate(const MedFunc &Func, const MedOp &Op) {
   if (Op.RegistrationRoot !=
           MedOp::RegistrationRootKind::RealignedFramePointer &&
       Op.RegistrationRoot !=
-          MedOp::RegistrationRootKind::RealignedRestoredStackPointer)
+          MedOp::RegistrationRootKind::RealignedRestoredStackPointer &&
+      Op.RegistrationRoot != MedOp::RegistrationRootKind::DisplacedFramePointer)
     return std::nullopt;
   if (!Func.ExceptionMetadata ||
       Func.Entry != Func.ExceptionMetadata->CodeRange.Begin ||
@@ -113,12 +134,22 @@ registrationRootFrameCoordinate(const MedFunc &Func, const MedOp &Op) {
       Func.RegistrationStates->CxxContinuations.size() >
           limits::kMaxRegistrationEHRecords)
     return std::nullopt;
-  auto Coordinate = realignedRegistrationFrameCoordinate(
-      *Func.ExceptionMetadata, &*Func.RegistrationStates);
+  auto Coordinate = cxxRegistrationFrameCoordinate(*Func.ExceptionMetadata,
+                                                   &*Func.RegistrationStates);
   if (!Coordinate)
     return std::nullopt;
   const auto &EH = *Func.ExceptionMetadata;
+  const bool Displaced =
+      Op.RegistrationRoot == MedOp::RegistrationRootKind::DisplacedFramePointer;
+  if (Displaced) {
+    if (EH.Registration->RealignedFrame ||
+        EH.Registration->cxxRuntimeFrameOffset().value_or(0) == 0)
+      return std::nullopt;
+    Coordinate->AlignedOffset = *EH.Registration->cxxRuntimeFrameOffset();
+  } else if (!EH.Registration->RealignedFrame)
+    return std::nullopt;
   const bool FramePointer =
+      Displaced ||
       Op.RegistrationRoot == MedOp::RegistrationRootKind::RealignedFramePointer;
   bool RuntimeEntry = false;
   if (FramePointer) {

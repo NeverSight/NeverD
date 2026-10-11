@@ -451,16 +451,25 @@ TEST_F(KernelPhysicalRAM, OwnerTombstoneLimitIsCumulativeAndNeverReusesTokens) {
 }
 
 TEST_F(KernelPhysicalRAM, PhysicalPageShortageDoesNotPublishAPrefix) {
-  ASSERT_EQ(llvm::toString(CPU->map(Base + 3 * Page, 254 * Page, 0)), "");
-  auto Shortage = Model->registerRegion(1, Base, 257 * Page);
+  Model.reset();
+  CPU = take(UnicornBackend::create(physical::PhysicalSize + Page));
+  ASSERT_TRUE(CPU);
+  Model = std::make_unique<KernelPhysicalMemory>(*CPU);
+  ASSERT_EQ(llvm::toString(CPU->map(Base, physical::PhysicalSize + Page, 0)),
+            "");
+  auto Shortage = Model->registerRegion(1, Base, physical::PhysicalSize + Page);
   EXPECT_TRUE(Shortage.isA<PhysicalMemoryLimitError>());
   llvm::consumeError(std::move(Shortage));
   EXPECT_EQ(Model->find(1), nullptr);
-  ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base, 256 * Page)), "");
+  ASSERT_EQ(
+      llvm::toString(Model->registerRegion(1, Base, physical::PhysicalSize)),
+      "");
   EXPECT_EQ(take(Model->physicalAddress(Base)), physical::PhysicalBase);
-  EXPECT_EQ(take(Model->physicalAddress(Base + 256 * Page - 1)),
+  EXPECT_EQ(take(Model->physicalAddress(Base + physical::PhysicalSize - 1)),
             physical::PhysicalBase + physical::PhysicalSize - 1);
-  EXPECT_NE(llvm::toString(Model->registerRegion(2, Base + 256 * Page, 1)), "");
+  EXPECT_NE(llvm::toString(
+                Model->registerRegion(2, Base + physical::PhysicalSize, 1)),
+            "");
 }
 
 TEST_F(KernelPhysicalRAM, ReleaseRangeIncludesPaddingAndEveryIntersectedOwner) {

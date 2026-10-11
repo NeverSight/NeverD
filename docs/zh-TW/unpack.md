@@ -14,13 +14,15 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 執行期觀察 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 執行期觀察 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v92`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 輸入由 `IMAGE_FILE_DLL` 識別。建模的來賓 EXE 呼叫 `LoadLibraryA`、`FreeLibrary`，沿用一般相依、TLS 與 `DllMain` 生命週期。DLL 預設入口是其程序附加呼叫；不替任意匯出猜測參數。重建保留匯出名稱、序號、別名、資料及轉送器；指向自身匯出的指標保持為內部指標，不產生自身匯入。輔助常式傳回的位址也遵循此規則：內部結果會撤銷該位置先前的匯入修復證據。
 
 ## Windows x64 驅動程式
 
 啟用 `NEVERD_ENABLE_DRIVER_EMULATION=ON` 後，native 子系統的 x64 PE 映像（`.sys`）透過驅動環境執行。`DriverEntry` 提供入口來源，派遣與卸載回呼不能成為預設恢復入口。可選 `driver` 物件接受[驅動情境](driver-emulation.md)，包括服務名稱、登錄、要求與排程；共用後端、執行契約與資源限制仍生效。使用者處理程序參數、環境與 PEB 輸入會被拒絕。
+
+驅動程式 UNPACK 關閉逐筆寫入報告，保留記憶體驗證和還原觀察器。事件預算計算 API 呼叫，指令和時間限制仍然生效。
 
 恢復會檢查入口參數、返回／影子堆疊框架、非揮發性暫存器、方向旗標、浮點控制與核心物件所有權。殘留記憶體池、借用核心指標、已修改的載入器物件或未計入的核心效果會回傳 `unsupported_state`；明確的 `snapshot_only` 保留診斷。核心狀態尚無 `restore_runtime` 實作。匯入重建使用核心匯出身分，驗證原始匯出表並重算 PE 檢查碼。固定基底產物不代表已通過 Windows 核心載入、簽章驗證或未執行路徑的驗收。
 

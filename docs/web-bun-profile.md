@@ -1,7 +1,7 @@
 # Bun standalone extraction profiles
 
-`bun-1.4.2-linux-x64-elf-v1` is a C++ offline reader for the layout emitted by
-Bun 1.4.2's Linux x64 compiler target. Invoke `neverd web bun FILE`, or call
+The C++ offline reader supports these Bun 1.4.2 container contracts. Invoke
+`neverd web bun FILE`, or call
 `neverd_web_bun_extract_json` on an admitted original artifact. Pages use
 `neverd_web_bun_records_json` with `modules` or `regions`. The worker exposes
 the corresponding `web_bun_extract` and `web_bun_records` operations.
@@ -9,7 +9,27 @@ the corresponding `web_bun_extract` and `web_bun_records` operations.
 `bun-71d0d439-prelinked-linux-x64-elf-v1` additionally admits the prelinked graph
 and runtime-options extensions observed in the official Claude Code 2.1.296
 Linux x64 artifact. Selection follows validated graph flags, not the filename.
-The baseline profile and its extraction identities are unchanged.
+Existing Linux x64 profiles and extraction identities are unchanged.
+
+| Target | Container | Baseline layout profile |
+|---|---|---|
+| Linux x64 | ELF64 little-endian | `bun-1.4.2-linux-x64-elf-v1` |
+| Linux ARM64 | ELF64 little-endian | `bun-1.4.2-linux-arm64-elf-v1` |
+| macOS x64 | Thin Mach-O 64 little-endian | `bun-1.4.2-macos-x64-macho-v1` |
+| macOS ARM64 | Thin Mach-O 64 little-endian | `bun-1.4.2-macos-arm64-macho-v1` |
+| Windows x64 | PE32+ | `bun-1.4.2-windows-x64-pe-v1` |
+| Windows ARM64 | PE32+ | `bun-1.4.2-windows-arm64-pe-v1` |
+
+All six support inventory, JS/assets extraction and raw map/cache preservation.
+Map decoding requires the separate LLVM Zstd capability; bytecode decoding is
+unsupported. The shared graph reader also recognizes the prelinked/runtime
+extensions under corresponding `bun-71d0d439-prelinked-<target>-v1` profiles.
+Real extension qualification remains the Linux x64 Claude artifact; cross-target
+extension cases are synthetic. Metadata reports container format, target OS and
+architecture separately from the analyzer's host. Universal Mach-O, 32-bit and
+big-endian containers, ARM64e, FreeBSD/Android-specific contracts and stripped
+ELF section tables are not qualified by this matrix. These are compatible
+layouts, not authenticated compiler versions or libc/runtime ABI claims.
 
 This is a selected layout profile, not authentication of the producer or its
 version. Its response always reports `producer_version_verified:false`.
@@ -23,6 +43,8 @@ The fixed source revision is
 the commit referenced by the `bun-v1.4.2` tag and release:
 
 - [ELF section writer](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/exe_format/elf.rs), Git blob `9d231ec56e0acfbbc0d880512f3e6628919df842`.
+- [Mach-O section writer](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/exe_format/macho.rs), Git blob `59a66dabea863b1838fa52e8342e5ecb52d883f2`.
+- [PE section writer](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/exe_format/pe.rs), Git blob `ab1a03d072a519c410c24d41f49b43437dea48cc`.
 - [Standalone graph writer and records](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/standalone_graph/StandaloneModuleGraph.rs), Git blob `9ab6dbbf0f8dfaef469bab851b19989a65ff474c`.
 - [Loader discriminants](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/ast/loader.rs), Git blob `cf748647a6d85cf7d2cfbab3d132db0795e42cab`.
 - [StringPointer ABI](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/bun_core/util.rs), Git blob `28006517b5d1e9f0c9a8541b95581b3e03b6d0bd`.
@@ -45,12 +67,33 @@ version that built an otherwise compatible artifact.
 
 ## Admission and evidence
 
-The reader accepts bounded ELF64 little-endian x86-64 ET_EXEC/ET_DYN images
+The ELF reader accepts bounded ELF64 little-endian x86-64/AArch64 ET_EXEC/ET_DYN images
 with a unique `.bun` PROGBITS section. The section must have one consistent
 file/virtual-address owner in a writable, non-executable PT_LOAD, with equal
 file/memory sizes. Headers, section names, tables, section overlap and range
-arithmetic are checked before reading graph records. Stripped section tables,
-another architecture, PE and Mach-O require separate profiles.
+arithmetic are checked before reading graph records. Bun virtual starts follow
+the pinned writer's 4-KiB x64 and 64-KiB AArch64 alignment.
+
+The Mach-O reader bounds load commands/sections and selects one `__BUN,__bun`
+section in a read/write, non-executable segment. Section and segment mappings
+must agree, other segments cannot alias it, and segment padding must be zero.
+The writer expands the segment to 16 KiB multiples while retaining the template
+start: x64 permits 4 KiB starts, ARM64 requires 16 KiB. The section's recorded
+alignment alone does not prove a 16-KiB x64 start.
+Typed load-command sizes, contained strings, symbol/relocation/linkedit file
+ranges and the entry offset are checked. Referenced metadata cannot overlap
+the Bun segment. One macOS build/minimum-version declaration is required;
+missing, duplicate, foreign-platform and unknown command contracts fail
+explicitly. Field layouts follow Apple's
+[Mach-O format declarations](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h);
+the analyzer neither loads native libraries nor verifies a code signature.
+
+The PE reader bounds DOS/COFF/optional headers, sections and directories. One
+read-only initialized-data `.bun` section must have a complete file-backed
+graph, checked file/section alignment and zero file padding. Other sections and
+data directories cannot alias the selected file/virtual range. The security
+directory uses file offsets rather than RVAs. Unsupported machine types and
+ambiguous mappings fail before any graph content is published.
 
 The section begins with an eight-byte graph length. The graph ends with a
 32-byte offsets record and the fixed 16-byte trailer. Every module record is
@@ -78,7 +121,7 @@ Prefix/suffix regions preserve the native
 container remainder without claiming native-code recovery. Graph alignment
 gaps are covered by the original artifact hash rather than separate regions.
 Names, source, compile arguments and cache bytes are absent from ordinary
-JSON output. Virtual `/$bunfs/` keys are opaque evidence, never host paths;
+JSON output. Virtual `/$bunfs/` and Windows `B:/~BUN/` keys are opaque evidence, never host paths;
 even a stored `..` segment cannot cause a filesystem lookup or export.
 
 ## Local evidence export
@@ -108,13 +151,13 @@ Unsupported projections preserve raw bytes and report a failure code; an empty
 substitute is never written.
 
 When the embedded parser is enabled, the separate sequential recovery profile
-`hermes-602befee-recovery-js-v1` admits at most 32 MiB of source, 1,000,000 nodes,
+`hermes-602befee-recovery-js-v2` admits at most 32 MiB of source, 2,000,000 nodes,
 2,000,000 lexemes, 16,777,216 decoded UTF-16 code units, a 256 MiB parser arena and
 1,600,000 work units with a cooperative 30-second check. It does not enlarge
 interactive caches or claim a process-wide memory/CPU bound. This uses the
 same parser and semantic admission, including the async-rest source-location
 fix and parser-token check for forbidden rest trailing commas. The ordinary
-parser profile is now `hermes-602befee-js-v2`.
+parser profile is now `hermes-602befee-js-v3`.
 
 `mNNNNN.readable.js` only inserts whitespace at parser-owned token boundaries.
 All original bytes, including comments and licenses, remain in order. Before
@@ -123,8 +166,9 @@ child roles/ordinals and complete retained attribute values. The status is
 `verified_same_parser_tree`, not a runtime equivalence proof: source text
 reflection and source positions necessarily change. Failed parsing, budgets or
 tree mismatches produce no readable file and retain diagnostic codes and
-original UTF-8 offsets in the manifest. The pinned parser does not support
-explicit resource-management declarations (`using` / `await using`).
+original UTF-8 offsets in the manifest. The private C++ parser extension retains
+explicit resource-management declarations (`using` / `await using`); see the
+[resource-management profile](web-resource-management-profile.md).
 
 The index contains no JavaScript and declares `default-src 'none'`. Export
 does not run target code, install packages, invoke a formatter or restore
@@ -155,10 +199,10 @@ container and native asset members can enter an independent native session
 through [explicit native handoff](web-analysis.md#explicit-native-handoff).
 The container hash or exact member range remains attached to that session;
 encoded source, maps, cache and runtime-prefix regions cannot be selected as
-standalone native images. The remaining #718 work includes PE/Mach-O Bun
-extraction qualification and the independent SEA/pkg/nexe adapters. A native
-loader accepting a PE or Mach-O asset does not qualify Bun extraction on that
-platform.
+standalone native images. The independent SEA/pkg/nexe adapters and broader
+runtime-version qualification remain #718 work. Native-loader support alone
+does not qualify a new Bun layout; the six targets above have separate
+compiler-container and member-hash evidence.
 
 ## Serialized source maps
 
@@ -230,14 +274,23 @@ binary asset and map, and CommonJS source plus JSC cache and map. Full-image
 hashes and original member hashes are recorded independently of the reader.
 
 The small checked-in fixtures preserve the exact graph bytes, not the native
-runtime. Default C++ tests use explicitly synthetic ELF wrappers for these
+runtime. Default C++ tests use explicitly synthetic container wrappers for these
 graphs plus hostile mutations. The full-container test requires the separately
 held corpus and is explicitly skipped when it is absent. A successful small
 fixture test alone must not be reported as full-container qualification.
 
+The [cross-container corpus](../unittests/web/fixtures/bun/cross/README.md) adds
+20 complete compiler images: four cases for each additional target. The C++
+recorder captured member ranges independently. All 20 extraction tests passed
+with both full corpora and the official Claude Code 2.1.296 ELF supplied on
+2026-10-11; this includes 25 self-authored full images, cross-container hashes,
+UTF-16, assets/maps/caches and malformed-container refusal. Tests run with an
+unusable external-tool PATH. This does not count raw map preservation as map
+decompression or bytecode execution.
+
 ```console
 cmake --build build-release --target NeverDWebArtifactTests NeverDWebSourceMapTests NeverDWebSDKTests
-NEVERD_BUN_142_CORPUS=/path/to/pinned-corpus build-release/bin/NeverDWebArtifactTests --gtest_filter='WebBun.*'
+NEVERD_BUN_142_CORPUS=/path/to/pinned-corpus NEVERD_BUN_142_CROSS_CORPUS=/path/to/cross-images build-release/bin/NeverDWebArtifactTests --gtest_filter='WebBun.*'
 build-release/bin/NeverDWebSDKTests --gtest_filter='WebSDK.Bun*'
 build-release/bin/NeverDWebSourceMapTests --gtest_filter='WebBunSourceMap.*'
 ctest --test-dir build-release/tools/neverd-worker -R NeverDWorkerWeb --output-on-failure
@@ -246,7 +299,7 @@ ctest --test-dir build-release/tools/neverd-worker -R NeverDWorkerWeb --output-o
 The corpus compiler and development recorder are never prerequisites for
 analysis, ordinary builds or tests. The CLI/worker tests deliberately use an
 unusable external-tool PATH. Host qualification remains macOS arm64 Release;
-the extracted target is Linux x64. This does not establish Linux-host or
+the extracted targets are listed above. This does not establish Linux-host or
 Windows-host support.
 
 The preserved minified asset and cached CommonJS graphs also exercise actual

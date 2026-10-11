@@ -1,5 +1,21 @@
 add_neverd_component_library(NeverDWeb
   ArtifactStore.cpp
+  packages/PackageReader.cpp
+  packages/PackageDiff.cpp
+  packages/PackageArchive.cpp
+  packages/PackageIntegrity.cpp
+  packages/SHA512.cpp
+  interfaces/Endpoint.cpp
+  interfaces/HAR.cpp
+  interfaces/Correlation.cpp
+  SessionInterfaces.cpp
+  streams/Framing.cpp
+  streams/Records.cpp
+  streams/Relations.cpp
+  SessionStreams.cpp
+  SessionPackages.cpp
+  SessionPackageArchive.cpp
+  SessionPackageIntegrity.cpp
   HTML.cpp
   HTMLReferences.cpp
   HTMLLinks.cpp
@@ -16,6 +32,13 @@ add_neverd_component_library(NeverDWeb
   PathPolicy.cpp
   BlobStore.cpp
   Bun.cpp
+  BunContainer.cpp
+  sea/Blob.cpp
+  sea/Container.cpp
+  sea/ELF.cpp
+  sea/MachO.cpp
+  sea/PE.cpp
+  SessionSEA.cpp
   BunSourceMap.cpp
   SessionBun.cpp
   SessionBunExport.cpp
@@ -36,6 +59,11 @@ add_neverd_component_library(NeverDWeb
   LLVM_COMPONENTS Support
 )
 include("${CMAKE_SOURCE_DIR}/cmake/NeverDWebURL.cmake")
+find_package(ZLIB QUIET)
+if(ZLIB_FOUND)
+  target_link_libraries(NeverDWeb PRIVATE ZLIB::ZLIB)
+  target_compile_definitions(NeverDWeb PRIVATE NEVERD_WEB_ZLIB=1)
+endif()
 neverd_add_web_url_parser()
 target_link_libraries(NeverDWeb PRIVATE neverd_web_url)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/ada/"
@@ -52,6 +80,8 @@ if(NEVERD_ENABLE_WEB_ASAR)
 endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/bun/"
         DESTINATION share/neverd/licenses/bun)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/node/"
+        DESTINATION share/neverd/licenses/node)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/asar/"
         DESTINATION share/neverd/licenses/asar)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/whatwg/"
@@ -65,11 +95,17 @@ if(NEVERD_ENABLE_WEB_JAVASCRIPT)
   include("${CMAKE_SOURCE_DIR}/cmake/NeverDJavaScriptParser.cmake")
   neverd_add_javascript_parser()
   target_sources(NeverDWeb PRIVATE SourceParser.cpp ParserBudget.cpp
+    interfaces/SourceInterfaces.cpp
     SourceRecovery.cpp
     SourceModel.cpp SourceBindings.cpp SourceEvaluate.cpp SourceEffects.cpp SourceModules.cpp HTMLModules.cpp
     SourceBundles.cpp SourceView.cpp SourceNavigation.cpp SourceOrigins.cpp SourcePaths.cpp ElectronSource.cpp ElectronSelection.cpp ElectronIPC.cpp ElectronEntries.cpp PrimitiveNumbers.cpp)
   target_link_libraries(NeverDWeb PRIVATE neverd_js_parser)
   target_compile_definitions(NeverDWeb PRIVATE NEVERD_ENABLE_WEB_JAVASCRIPT=1)
+  if(MSVC)
+    # HermesModel forwards variadic AST field lists through nested macros.
+    # The traditional MSVC preprocessor does not expand these as C++ requires.
+    target_compile_options(NeverDWeb PRIVATE /Zc:preprocessor)
+  endif()
   # The parser's build directory is EXCLUDE_FROM_ALL, including its install
   # rules. Ship both embedded-source license sets from the owning feature.
   install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/hermes/"

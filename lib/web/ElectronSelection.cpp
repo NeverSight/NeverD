@@ -1,10 +1,21 @@
+//===- ElectronSelection.cpp - Shared Electron evidence selection ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared Electron evidence selection.
+///
+//===----------------------------------------------------------------------===//
+
 #include "ElectronSelection.h"
 
 #include "JsonReader.h"
 #include "SourceModel.h"
 
+#include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
-#include "neverd/web/Session.h"
 
 #include <algorithm>
 #include <map>

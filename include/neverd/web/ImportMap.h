@@ -1,3 +1,14 @@
+//===- ImportMap.h - Bounded import map resolution ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded import map resolution.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Artifact.h"

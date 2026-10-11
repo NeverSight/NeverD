@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "HighCFSimplifyDetail.h"
+#include "X86RegistrationTry.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -432,6 +433,10 @@ bool extractAddressSlice(std::vector<HighStmt> &Statements,
 }
 
 struct RegionCandidate {
+  /// This PE32 scope depends on the closed terminal-component proof. A failed
+  /// extraction may not fall back to address containment that ignores the
+  /// search context of an already structured inner catch.
+  bool TerminalRegistration = false;
   StmtKind Kind = StmtKind::SEHTry;
   ExceptionAddressRange Range;
   std::vector<ExceptionAddressRange> Cover;
@@ -465,9 +470,8 @@ codeRangesMatching(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
                    Pred Live,
                    const RegistrationStateAnalysis *Registration = nullptr) {
   if (EH.Registration) {
-    if (!Registration ||
-        (EH.Registration->RealignedFrame &&
-         !realignedRegistrationFrameCoordinate(EH, Registration)))
+    if (!Registration || (EH.Registration->hasCxxCallbackStack() &&
+                          !cxxRegistrationFrameCoordinate(EH, Registration)))
       return {};
     auto Ranges = registrationRangesWhere(*Registration, Live);
     return Ranges ? std::move(*Ranges) : std::vector<ExceptionAddressRange>{};
@@ -632,7 +636,7 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
   const CxxExceptionInfo &Cxx = *EH.Cxx;
   for (uint32_t TryIndex = 0; TryIndex < Cxx.TryBlocks.size(); ++TryIndex) {
     const CxxTryBlock &Try = Cxx.TryBlocks[TryIndex];
-    if (EH.Registration && EH.Registration->RealignedFrame &&
+    if (EH.Registration && EH.Registration->hasCxxCallbackStack() &&
         llvm::any_of(Try.Handlers, [&](const auto &Catch) {
           return !registrationCallbackRegion(Med, Catch.HandlerVA);
         })) {
@@ -641,7 +645,21 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
     }
     auto Ranges =
         codeRangesForStates(EH, Cxx, Try.TryLow, Try.TryHigh, Registration);
-    const bool SplitRegistration = EH.Registration && Ranges.size() > 1;
+    // Catch continuations may merge protected and unprotected source states
+    // after the ordinary component has terminated. In synchronous C++ that
+    // join does not prevent a lexical try around the independently checked
+    // terminal component. Use the same ownership proof during extraction.
+    bool TerminalRegistration = false;
+    if (EH.Registration && EH.Registration->hasCxxCallbackStack()) {
+      auto Terminal =
+          terminalRegistrationTryRanges(Med, Try.TryLow, Try.TryHigh);
+      if (!Terminal.empty()) {
+        Ranges = std::move(Terminal);
+        TerminalRegistration = true;
+      }
+    }
+    const bool SplitRegistration =
+        EH.Registration && (Ranges.size() > 1 || TerminalRegistration);
     const ExceptionAddressRange Range =
         SplitRegistration
             ? ExceptionAddressRange{Ranges.front().Begin, Ranges.back().End}
@@ -654,6 +672,7 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
     RegionCandidate Candidate;
     Candidate.Kind = StmtKind::CxxTry;
     Candidate.Range = Range;
+    Candidate.TerminalRegistration = TerminalRegistration;
     if (SplitRegistration)
       Candidate.Cover = std::move(Ranges);
     Candidate.NativeRegionCount = 1;
@@ -731,8 +750,8 @@ void addCxxCleanupOnlyCandidates(const ExceptionFunction &EH,
     if (Action.ActionVA == 0 || coveredByTry(State))
       continue;
     // A cleanup needs its own entry/return ABI proof before it can supply a
-    // realigned clause body. Catch projection does not establish that ABI.
-    if (EH.Registration && EH.Registration->RealignedFrame) {
+    // callback clause body. Catch projection does not establish that ABI.
+    if (EH.Registration && EH.Registration->hasCxxCallbackStack()) {
       ++Rejected;
       continue;
     }
@@ -1350,7 +1369,7 @@ uniqueHandlerBlockRange(const MedFunc &Med, const ExceptionFunction &EH,
   if (Callback) {
     Ranges = std::move(Callback->Ranges);
   } else {
-    if (EH.Registration && EH.Registration->RealignedFrame)
+    if (EH.Registration && EH.Registration->hasCxxCallbackStack())
       return std::nullopt;
     const MedBlock *Match = nullptr;
     for (const MedBlock &Block : Med.Blocks) {
@@ -1665,7 +1684,7 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
         Candidate.HasTryStates && !Candidate.Cover.empty();
     const bool SeparateRegistrationCxx =
         SplitRegistrationCxx ||
-        (EH.Registration && EH.Registration->RealignedFrame &&
+        (EH.Registration && EH.Registration->hasCxxCallbackStack() &&
          Candidate.Kind == StmtKind::CxxTry);
     std::optional<std::vector<HighStmt>> OriginalBody;
     bool RegionInstalled = false;
@@ -1709,7 +1728,7 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
         // A closed native CFG is not enough if earlier structuring scattered
         // its statements into several lists. Move the complete callback from
         // its actual entry, or restore the original function transactionally.
-        if (EH.Registration->RealignedFrame) {
+        if (EH.Registration->hasCxxCallbackStack()) {
           bool Left = SeparatedBodies[C].front().Addr != Clause.HandlerVA;
           walkStmts(Func.Body, [&](const HighStmt &Stmt) {
             Left |= Stmt.Addr != 0 && Stmt.Addr != InvalidVA &&
@@ -1765,6 +1784,17 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     }
     AddressSet ProtectedAddresses{Candidate.Range, Candidate.Cover};
     ProtectedAddresses.SplitScope = SplitRegistrationCxx;
+    const bool TerminalRegistration =
+        !Host && SplitRegistrationCxx &&
+        extractTerminalRegistrationTry(Func, Med, Candidate.TryLow,
+                                       Candidate.TryHigh, ProtectedBody,
+                                       InsertAt);
+    if (TerminalRegistration)
+      Host = &Func.Body;
+    if (Candidate.TerminalRegistration && !TerminalRegistration) {
+      Rejected += Candidate.NativeRegionCount;
+      continue;
+    }
     if ((!Host &&
          !extractAddressSlice(Func.Body, ProtectedAddresses, EH.CodeRange,
                               ProtectedBody, InsertAt,
@@ -1775,7 +1805,7 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     }
     // A try joined from split parts may start with a part's statements: its
     // entry, and the label it carries, is its first statement's address.
-    va_t Entry = Candidate.Range.Begin;
+    va_t Entry = TerminalRegistration ? Med.Entry : Candidate.Range.Begin;
     if (!NestedParts.empty())
       for (const HighStmt &S : ProtectedBody)
         if (S.Addr && S.Addr != InvalidVA) {

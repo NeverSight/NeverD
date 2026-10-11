@@ -1,3 +1,14 @@
+//===- PrimitiveNumbers.h - JavaScript primitive formatting ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript primitive formatting.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <cstdint>

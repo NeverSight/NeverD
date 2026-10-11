@@ -33,10 +33,13 @@
 #include "neverd/loader/SymbolDecoration.h"
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <list>
 #include <llvm/Support/SaveAndRestore.h>
 #include <map>
 #include <mutex>
+#include <new>
 #include <queue>
 #include <set>
 #include <utility>
@@ -62,6 +65,14 @@ int demaskDelta(int D) {
   D &= 7;
   return D >= 4 ? D - 8 : D;
 }
+
+// A callback can synchronously request another graph while a leader builds.
+// Never wait on any other flight from this nested call: two leaders could
+// otherwise wait on each other, including through different caches.
+struct ActiveX87CacheBuild {
+  const ActiveX87CacheBuild *Previous;
+};
+thread_local const ActiveX87CacheBuild *CurrentX87CacheBuild = nullptr;
 
 } // namespace
 
@@ -116,6 +127,22 @@ class X87CallGraphCache {
     std::shared_ptr<const X87CallGraph> Value;
     size_t Bytes;
   };
+  struct PendingGraph {
+    Context Inputs;
+    va_t Address;
+    size_t Bytes;
+    std::condition_variable Ready;
+    std::shared_ptr<const X87CallGraph> Value;
+    bool Done = false;
+    PendingGraph(Context C, va_t A, size_t B)
+        : Inputs(std::move(C)), Address(A), Bytes(B) {}
+  };
+  struct Request {
+    std::shared_ptr<const X87CallGraph> Value;
+    std::shared_ptr<PendingGraph> Leader;
+  };
+  static constexpr size_t MaxPendingGraphs = 32;
+  static constexpr size_t MaxPendingBytes = 1024 * 1024;
   static constexpr size_t MaxGraphs = 128;
   static constexpr size_t MaxBytes = 8 * 1024 * 1024;
   std::mutex Mutex;
@@ -123,7 +150,19 @@ class X87CallGraphCache {
   std::list<Entry> Graphs;
   size_t RetainedBytes = 0;
   size_t Hits = 0;
+  const NoReturnCalleeProver *NonReentrantProver;
+  const libc::NoReturnTargetIndex *NonReentrantTargets;
+  std::list<std::shared_ptr<PendingGraph>> Pending;
+  size_t PendingBytes = 0;
+  size_t Leaders = 0, Waits = 0, NonWaitingMisses = 0;
+  std::condition_variable PendingChanged;
 
+public:
+  X87CallGraphCache(const NoReturnCalleeProver *Prover,
+                   const libc::NoReturnTargetIndex *Targets)
+      : NonReentrantProver(Prover), NonReentrantTargets(Targets) {}
+
+private:
   static bool account(size_t &Bytes, size_t Count, size_t Width) {
     if (Bytes > MaxBytes || Count > (MaxBytes - Bytes) / Width)
       return false;
@@ -141,22 +180,22 @@ class X87CallGraphCache {
             (Frozen->size() == Live->size() &&
              std::equal(Frozen->begin(), Frozen->end(), Live->begin())));
   }
+  static bool matches(const Context &C, const CFGBuilder &B) {
+    return C.Image == B.CurrentImg && C.Architecture == B.CurrentImg->Arch &&
+           C.Mode == B.CurrentImg->Mode && C.Bits == B.CurrentImg->Bits &&
+           C.Format == B.CurrentImg->Format &&
+           C.ABI == B.CurrentImg->abiFormat() &&
+           C.NoReturnTargets == B.NoReturnTargets &&
+           C.NoReturnCallees == B.NoReturnCallees &&
+           C.NoReturnDepth == B.NoReturnCalleeDepth + 1 &&
+           C.RelocationRoots == B.AbsoluteRelocationRoots &&
+           C.CodeOwners == B.ExecutableCodeOwners &&
+           sameSet(C.Entries, B.KnownFuncEntries) &&
+           sameSet(C.ProtectedSlots, B.ProtectedJumpTableRelocationSlots) &&
+           sameSet(C.UnsafeBranches, B.UnsafeJumpTableBranches);
+  }
   bool matches(const CFGBuilder &B) const {
-    return Inputs && Inputs->Image == B.CurrentImg &&
-           Inputs->Architecture == B.CurrentImg->Arch &&
-           Inputs->Mode == B.CurrentImg->Mode &&
-           Inputs->Bits == B.CurrentImg->Bits &&
-           Inputs->Format == B.CurrentImg->Format &&
-           Inputs->ABI == B.CurrentImg->abiFormat() &&
-           Inputs->NoReturnTargets == B.NoReturnTargets &&
-           Inputs->NoReturnCallees == B.NoReturnCallees &&
-           Inputs->NoReturnDepth == B.NoReturnCalleeDepth + 1 &&
-           Inputs->RelocationRoots == B.AbsoluteRelocationRoots &&
-           Inputs->CodeOwners == B.ExecutableCodeOwners &&
-           sameSet(Inputs->Entries, B.KnownFuncEntries) &&
-           sameSet(Inputs->ProtectedSlots,
-                   B.ProtectedJumpTableRelocationSlots) &&
-           sameSet(Inputs->UnsafeBranches, B.UnsafeJumpTableBranches);
+    return Inputs && matches(*Inputs, B);
   }
   static std::optional<size_t> graphBytes(const X87CallGraph &Graph) {
     size_t Bytes = sizeof(Entry) + sizeof(X87CallGraph) + 16 * sizeof(void *);
@@ -184,18 +223,142 @@ class X87CallGraphCache {
         return std::nullopt;
     return Bytes;
   }
-  std::shared_ptr<const X87CallGraph> find(const CFGBuilder &B, va_t Address) {
-    std::lock_guard<std::mutex> Lock(Mutex);
-    if (!matches(B))
-      return {};
-    for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
-      if (It->Address == Address) {
-        Graphs.splice(Graphs.begin(), Graphs, It);
-        ++Hits;
-        return Graphs.front().Value;
-      }
-    return {};
+  static Context freezeContext(const CFGBuilder &B) {
+    return {B.CurrentImg,
+            B.CurrentImg->Arch,
+            B.CurrentImg->Mode,
+            B.CurrentImg->Bits,
+            B.CurrentImg->Format,
+            B.CurrentImg->abiFormat(),
+            B.NoReturnTargets,
+            B.NoReturnCallees,
+            B.NoReturnCalleeDepth + 1,
+            B.AbsoluteRelocationRoots,
+            B.ExecutableCodeOwners,
+            freeze(B.KnownFuncEntries),
+            freeze(B.ProtectedJumpTableRelocationSlots),
+            freeze(B.UnsafeJumpTableBranches)};
   }
+  Request acquire(const CFGBuilder &B, va_t Address) {
+    std::unique_lock<std::mutex> Lock(Mutex);
+    if (matches(B))
+      for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
+        if (It->Address == Address) {
+          Graphs.splice(Graphs.begin(), Graphs, It);
+          ++Hits;
+          return {Graphs.front().Value, {}};
+        }
+    // Arbitrary prover/name-resolver callbacks may dispatch a request to
+    // another thread and wait for it. Only explicitly registered callback
+    // owners permit waiting. Nested construction never waits on any cache.
+    if (CurrentX87CacheBuild ||
+        (B.NoReturnCallees && B.NoReturnCallees != NonReentrantProver) ||
+        (B.NoReturnTargets && B.NoReturnTargets != NonReentrantTargets)) {
+      ++NonWaitingMisses;
+      return {};
+    }
+    for (const auto &Flight : Pending)
+      if (Flight->Address == Address && matches(Flight->Inputs, B)) {
+        // Keep the state alive even after its leader removes the pending slot.
+        const auto Waiting = Flight;
+        ++Waits;
+        PendingChanged.notify_all();
+        Waiting->Ready.wait(Lock, [&] { return Waiting->Done; });
+        if (Waiting->Value)
+          ++Hits;
+        // A failure/incomplete graph resumes the original independent build,
+        // without re-entering acquire or sharing the failed proof result.
+        return {Waiting->Value, {}};
+      }
+    if (Pending.size() >= MaxPendingGraphs) {
+      ++NonWaitingMisses;
+      return {};
+    }
+    size_t Estimated = sizeof(PendingGraph) + 8 * sizeof(void *);
+    for (const auto *Values :
+         {B.KnownFuncEntries, B.ProtectedJumpTableRelocationSlots,
+          B.UnsafeJumpTableBranches})
+      if (Values && !accountAllocation(Estimated, Values->size(), sizeof(va_t)))
+        return {};
+    if (Estimated > MaxPendingBytes - PendingBytes) {
+      ++NonWaitingMisses;
+      return {};
+    }
+    try {
+      Context Frozen = freezeContext(B);
+      const auto ContextSize = contextBytes(Frozen);
+      if (!ContextSize)
+        return {};
+      const size_t Bytes = *ContextSize + sizeof(PendingGraph) -
+                           sizeof(Context) + 8 * sizeof(void *);
+      if (Bytes > MaxPendingBytes - PendingBytes) {
+        ++NonWaitingMisses;
+        return {};
+      }
+      auto Flight =
+          std::make_shared<PendingGraph>(std::move(Frozen), Address, Bytes);
+      Pending.push_back(Flight);
+      PendingBytes += Bytes;
+      ++Leaders;
+      return {{}, std::move(Flight)};
+    } catch (const std::bad_alloc &) {
+      // Single-flight admission is optional. No pending state was published
+      // before all allocations succeeded, so this retains the cold path.
+      ++NonWaitingMisses;
+      return {};
+    }
+  }
+  void finish(const std::shared_ptr<PendingGraph> &Flight,
+              std::shared_ptr<const X87CallGraph> Value) noexcept {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    Flight->Value = std::move(Value);
+    Flight->Done = true;
+    for (auto It = Pending.begin(); It != Pending.end(); ++It)
+      if (*It == Flight) {
+        PendingBytes -= Flight->Bytes;
+        Pending.erase(It);
+        break;
+      }
+    // Waiters only need completion and its immutable result after removal.
+    // Release the frozen inventories before their private references drain.
+    Flight->Inputs.Entries.reset();
+    Flight->Inputs.ProtectedSlots.reset();
+    Flight->Inputs.UnsafeBranches.reset();
+    Flight->Ready.notify_all();
+    PendingChanged.notify_all();
+  }
+  class Completion {
+    X87CallGraphCache *Cache;
+    std::shared_ptr<PendingGraph> Flight;
+    std::shared_ptr<const X87CallGraph> Value;
+    ActiveX87CacheBuild Active;
+
+  public:
+    Completion(X87CallGraphCache *Owner, std::shared_ptr<PendingGraph> Pending)
+        : Cache(Owner), Flight(std::move(Pending)),
+          Active{CurrentX87CacheBuild} {
+      if (Flight)
+        CurrentX87CacheBuild = &Active;
+    }
+    Completion(const Completion &) = delete;
+    Completion &operator=(const Completion &) = delete;
+    ~Completion() {
+      if (Flight) {
+        CurrentX87CacheBuild = Active.Previous;
+        Cache->finish(Flight, std::move(Value));
+      }
+    }
+    void completed(std::shared_ptr<const X87CallGraph> Graph) {
+      if (!Flight ||
+          (!Graph->Complete &&
+           Graph->Rejection == X87CallGraph::ProjectionRejection::None))
+        return;
+      const auto Bytes = graphBytes(*Graph);
+      const auto ContextSize = contextBytes(Flight->Inputs);
+      if (Bytes && ContextSize && *Bytes <= MaxBytes - *ContextSize)
+        Value = std::move(Graph);
+    }
+  };
   std::shared_ptr<const X87CallGraph>
   publish(const CFGBuilder &B, va_t Address,
           std::shared_ptr<const X87CallGraph> Graph) {
@@ -218,20 +381,7 @@ class X87CallGraphCache {
       return Graph;
     std::lock_guard<std::mutex> Lock(Mutex);
     if (!matches(B)) {
-      Context Next{B.CurrentImg,
-                   B.CurrentImg->Arch,
-                   B.CurrentImg->Mode,
-                   B.CurrentImg->Bits,
-                   B.CurrentImg->Format,
-                   B.CurrentImg->abiFormat(),
-                   B.NoReturnTargets,
-                   B.NoReturnCallees,
-                   B.NoReturnCalleeDepth + 1,
-                   B.AbsoluteRelocationRoots,
-                   B.ExecutableCodeOwners,
-                   freeze(B.KnownFuncEntries),
-                   freeze(B.ProtectedJumpTableRelocationSlots),
-                   freeze(B.UnsafeJumpTableBranches)};
+      Context Next = freezeContext(B);
       const auto NextBytes = contextBytes(Next);
       if (!NextBytes || *Bytes > MaxBytes - *NextBytes)
         return Graph;
@@ -261,7 +411,14 @@ class X87CallGraphCache {
 };
 
 std::shared_ptr<X87CallGraphCache> createX87CallGraphCache() {
-  return std::make_shared<X87CallGraphCache>();
+  return createX87CallGraphCache(nullptr, nullptr);
+}
+
+std::shared_ptr<X87CallGraphCache>
+createX87CallGraphCache(const NoReturnCalleeProver *NonReentrantProver,
+                       const libc::NoReturnTargetIndex *NonReentrantTargets) {
+  return std::make_shared<X87CallGraphCache>(NonReentrantProver,
+                                           NonReentrantTargets);
 }
 
 std::array<size_t, 3> CFGBuilder::x87CallGraphCacheStatsForTesting() const {
@@ -270,6 +427,25 @@ std::array<size_t, 3> CFGBuilder::x87CallGraphCacheStatsForTesting() const {
   std::lock_guard<std::mutex> Lock(SharedX87CallGraphs->Mutex);
   return {SharedX87CallGraphs->Hits, SharedX87CallGraphs->Graphs.size(),
           SharedX87CallGraphs->RetainedBytes};
+}
+
+std::array<size_t, 5> CFGBuilder::x87CallGraphFlightStatsForTesting() const {
+  if (!SharedX87CallGraphs)
+    return {};
+  std::lock_guard<std::mutex> Lock(SharedX87CallGraphs->Mutex);
+  return {SharedX87CallGraphs->Leaders, SharedX87CallGraphs->Waits,
+          SharedX87CallGraphs->NonWaitingMisses,
+          SharedX87CallGraphs->Pending.size(),
+          SharedX87CallGraphs->PendingBytes};
+}
+
+bool CFGBuilder::waitForX87CallGraphWaitersForTesting(size_t Count) const {
+  if (!SharedX87CallGraphs)
+    return false;
+  std::unique_lock<std::mutex> Lock(SharedX87CallGraphs->Mutex);
+  return SharedX87CallGraphs->PendingChanged.wait_for(
+      Lock, std::chrono::seconds(5),
+      [&] { return SharedX87CallGraphs->Waits >= Count; });
 }
 
 /// The index lives for one CFG build of an unchanged image. Its cached local
@@ -366,9 +542,15 @@ class X87CallEffectIndex {
     if (const auto It = Graphs.find(Entry); It != Graphs.end())
       return *It->second;
     const bool HasCodeOwner = Image.hasExecutableCodeOwnerAt(Entry);
-    if (HasCodeOwner && Settings.SharedX87CallGraphs)
-      if (auto Shared = Settings.SharedX87CallGraphs->find(Settings, Entry))
-        return *Graphs.emplace(Entry, std::move(Shared)).first->second;
+    std::shared_ptr<X87CallGraphCache::PendingGraph> Flight;
+    if (HasCodeOwner && Settings.SharedX87CallGraphs) {
+      auto Request = Settings.SharedX87CallGraphs->acquire(Settings, Entry);
+      if (Request.Value)
+        return *Graphs.emplace(Entry, std::move(Request.Value)).first->second;
+      Flight = std::move(Request.Leader);
+    }
+    X87CallGraphCache::Completion Complete(Settings.SharedX87CallGraphs.get(),
+                                          std::move(Flight));
     auto Built = std::make_shared<Graph>();
     const auto It = Graphs.emplace(Entry, Built).first;
     Graph &G = *Built;
@@ -402,6 +584,7 @@ class X87CallEffectIndex {
       if (Settings.SharedX87CallGraphs)
         It->second =
             Settings.SharedX87CallGraphs->publish(Settings, Entry, Built);
+      Complete.completed(It->second);
       return *It->second;
     };
     G.Blocks.resize(F.Blocks.size());
@@ -483,6 +666,7 @@ class X87CallEffectIndex {
     if (Settings.SharedX87CallGraphs)
       It->second =
           Settings.SharedX87CallGraphs->publish(Settings, Entry, Built);
+    Complete.completed(It->second);
     return *It->second;
   }
 

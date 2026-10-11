@@ -33,6 +33,15 @@ inline constexpr char SystemHex[] =
     "4e6576657244207669727475616c206b65726e656c0056343200"
     "7669727475616c3634005669727475616c4d6f64656c0007000000"
     "1032547698badcfe";
+inline DarwinSystemOptions threadIdentityOptions() {
+  DarwinSystemOptions O;
+  O.ThreadID = 0xfedcba9876543210ULL;
+  return O;
+}
+inline constexpr char ThreadIdentityJSON[] =
+    R"({"thread_id":"18364758544493064720"})";
+// Independent little-endian complete uint64 observation.
+inline constexpr char ThreadIdentityHex[] = "1032547698badcfe";
 inline DarwinSystemOptions hostNameOptions() {
   DarwinSystemOptions O;
   O.HostName = "abcd";
@@ -149,5 +158,17 @@ inline constexpr char GroupsHex[] = "9401000000000000ffffff7f0700000007000000";
 inline constexpr char CredentialsHex[] =
     "65000000ca0000002f01000094010000050000009401000000000000ffffff7f0700000007"
     "000000";
+inline DarwinSystemOptions machSelfPortOptions() {
+  DarwinSystemOptions O;
+  O.ThreadSelfPort = 0x80000001;
+  O.TaskSelfPort = 0;
+  O.HostSelfPort = UINT32_MAX;
+  return O;
+}
+inline constexpr char MachSelfPortsJSON[] =
+    R"({"thread_self_port":2147483649,"task_self_port":0,"host_self_port":"4294967295"})";
+// Independent little-endian signed raw64 thread/task/host return carriers.
+inline constexpr char MachSelfPortsHex[] =
+    "01000080ffffffff0000000000000000ffffffffffffffff";
 } // namespace neverd::emulation::darwin_test
 #endif

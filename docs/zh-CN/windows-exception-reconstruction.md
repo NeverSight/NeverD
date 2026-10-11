@@ -31,7 +31,7 @@ NeverD 在加载、提升、反编译和二进制重写的全过程中携带 Win
 | `__GSHandlerCheck_SEH/EH/EH4` | 包装后的 personality 与经检查的 GS cookie 来源 | 基础语言图加 wrapper 注释 | 仅分析；拒绝修改涉及的函数，不做降级 |
 | x86 registration-chain SEH3 | 经检查的 scope 图、实际 FS:[0] 操作、callback root 与基于 CFG 的 try-level 状态集合 | 可规约且无歧义的区域生成显式 EH 节点；其他状态保留原生注释 | 对下文固定栈帧、caller-cleanup 的已证明子集支持原生 PE32 重建 |
 | x86 registration-chain SEH4 | 经检查的 cookie 表达式、编码 scope 指针与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文已认证的直接栈帧子集支持原生 PE32 重建，包含 EH/GS cookie 初始化 |
-| x86 registration-chain C++ EH | 绝对指针 FuncInfo、cleanup/对象契约与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文经过证明的单 try、标量或无绑定对象 catch 子集执行原生 PE32 重建 |
+| x86 registration-chain C++ EH | 绝对指针 FuncInfo、cleanup/对象契约与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文经过证明的同步 try、标量或无绑定对象 catch 子集执行原生 PE32 重建 |
 
 畸形记录绝不会按普通完整记录处理。部分解码记录仍可用于检查，但不能授权生成原生
 元数据。如果 ARM xdata header 仍能证明一个有界可执行 fragment 范围，而后续 unwind
@@ -89,6 +89,11 @@ continuation 保留注释，同时撤销原生重建权限。这些推导结果�
 指针写回该单元，再恢复 ESP。LowIR 与 MedIR 将这个隐式内存效果绑定到准确的
 catch RETURN，HighIR 与原生 LLVM 显式生成写回。PE 安装器重新分析原始代码，
 核对写入地址、值和顺序。未知的派发前快照不能靠 catch 写入补造。
+经检查的 LLVM 固定 C++ 序言将注册节点放在源 EBP-24，state 放在 EBP-16；
+运行时 EBP 等于源 EBP-12。普通代码保留入口 EBP 坐标，catch 对象、cleanup 对象
+和回调入口使用经过检查的偏移。catch 入口及 continuation 代码必须显式恢复自己的
+EBP，SavedESP 写回源 EBP-28。回调私有栈和保存寄存器区域的隔离仍需要独立数据流
+证明，只有序言识别不能允许重建。
 对于已经验证的重新对齐帧，LowIR 分别跟踪回调私有栈、已初始化的保存单元和入口 EBP。
 非嵌套 catch 必须平衡自己的 ESP 并恢复运行时 EBP，才能建立 continuation。
 经检查的调用可以借用已初始化的父帧对象，其边界取自派发前的栈快照；保存入口 EBP
@@ -156,13 +161,17 @@ record 推导生成 cookie 偏移，包括运行时的虚拟帧基址；安装�
 预编译包会拒绝原生安装。EH4 还要求 `LLVM_NEVERD_X86_REGISTRATION_COOKIES`，
 GS 初始化还要求 `LLVM_NEVERD_X86_REGISTRATION_GS`。
 
-x86 C++ 原生重建目前支持一个同步 try 和一个 catch，源 unwind state 最多 128 个。
+x86 C++ 原生重建支持同步父函数内的有序 catch，最多 64 个 try 和 128 个源 unwind state。
 catch 可以按值或引用绑定经过检查的标量，也可以没有局部对象，或采用 `catch(...)`。
 无绑定对象的 typed catch 保留准确的 RTTI 和 adjectives；catch-all 保留空 RTTI 和原生
 catch-all adjective。没有对象 home 仍要求完整的源证明，且不得存在运行时对象访问；
 它不会为恢复的父帧凭空提供隐式初始化写入。
-输入必须具有经过证明的 MSVC 直接 registration frame，
-或 LLVM 以 ESI 为锚点的有界对齐帧；采用 magic `0x19930522` 的 FuncInfo，且不带
+经过证明的 cdecl 栈参数在父函数和 catch 中保留实际调用者栈位置，写入对调用者可见。
+入口 ABI 接受连续且已观察到的 32 位栈参数，或已有的单 ECX 参数；混合寄存器与栈参数
+仍被拒绝。SEH 与 C++ 共用可回滚的调用者帧投影，安装器独立检查入口初始化、escape、
+偏移、访问宽度、源操作身份和调用约定；私有帧指针不得写入调用者存储。
+输入必须具有经过证明的 MSVC 直接 registration frame、在注册节点上方保存
+EBX/EDI/ESI 的 LLVM 固定帧，或 LLVM 以 ESI 为锚点的有界对齐帧；采用 magic `0x19930522` 的 FuncInfo，且不带
 GS wrapper。保留的每个调用、throw type 和 cleanup relay 都需要独立 ABI 证明。
 源对象借用必须有界、已经初始化且不与注册
 存储重叠；引用访问必须在 catch 返回前保留 CRT 提供的对象身份。所有读写保持原始
@@ -171,6 +180,23 @@ GS wrapper。保留的每个调用、throw type 和 cleanup relay 都需要独�
 SavedESP 将其地址存入父帧。安装器重放源契约，并独立核验实际 LLVM 对齐、边界、
 每次 catch 入口的初始化、回调生命周期及最终写回；仅有帧布局描述不足以允许重建。
 
+每条 catch 分别绑定自己的 catchpad、对象 home、临时栈和精确 continuation；分派顺序
+必须与源 HandlerMap 一致。其他 catch 的对象初始化或临时栈不能供当前 catch 使用。
+父函数中的 try 可以互不相交或嵌套，每个 catch 边界必须紧随其保护状态区间。
+共享的源图投影检查完整的由内到外搜索链；安装器独立核验各 try 的保护状态集合、
+实际 HandlerMap、搜索顺序和 unwind 边。catch 中经过证明的私有 throw 可以向父函数
+的外层 try 发起二次搜索；invoke 保留当前 catch token，并指向外层分派节点。
+LowIR 统一记录搜索目标及退出的 catch 数量，退出 guard 时恢复先前捕获的 SavedESP，
+不保留已经结束的回调上下文。安装器独立重放这次转移和栈恢复。
+共享 callback 和 catch 内的 try 仍被拒绝。
+二次搜索运行矩阵使用捕获的微软 x86 CRT DLL，在 Wine 下也强制加载这份原生 DLL；
+其来源与哈希绑定到验证记录，Windows CI 复跑相同的原始和重建文件。
+CRT 缺失或字节变化会使验证失败，不能用 Wine 内置 CRT 的 guard 恢复行为代替。
+HighIR 依据完整调用及状态证明，合并被运行时恢复块隔开的同步不返回分支；catch
+返回后不同状态的合流不会把恢复代码纳入保护区。内层 try 保留独立核验的回调正文
+及精确 continuation，不能因此为异步异常或原先未保护的调用添加 handler。C/C++ 输出保留原生对象位置和读取时的临时值，
+不把可变 catch 对象猜成可以随处替换的不可变源表达式。
+
 LLVM 重新发射物理 registration、需要时才存在的 catch home、有序 cleanup dispatch、
 完整 FuncInfo 和私有 handler。安装器检查无对象字段和空 RTTI 字段必须为字面零值，
 且没有重叠 fixup，防止重定位将其变成指针。公开安装要求编译器同时提供
@@ -178,9 +204,15 @@ LLVM 重新发射物理 registration、需要时才存在的 catch home、有序
 与 `LLVM_NEVERD_X86_CXX_HANDLER_RECEIPTS`，随后独立重放编辑后的 IR，并检查实际
 机器码、语言表、SafeSEH 和全部绝对重定位。入口 patch 不得覆盖保留的 helper 或 CRT
 指令。当前运行样本覆盖整数按值/引用捕获、无绑定对象的 typed catch、捕获有符号与无符号
-抛出值的 catch-all、嵌套析构及强制重定位。固定 MSVC 风格帧使用独立汇编样本，
-重新对齐帧使用编译器生成的父函数，均链接捕获的 MSVC CRT 库；CI 在 Windows
-上重放完全相同的 PE 文件。其他 try/catch 图、未经证明的对象类型、传入栈参数、
+抛出值的 catch-all、调用者参数读写、嵌套析构及强制重定位。固定 MSVC 风格帧使用独立汇编样本，
+LLVM 固定帧及重新对齐帧使用编译器生成的父函数，固定帧覆盖短立即数及完整宽度的
+栈分配。多 catch 样本在同一函数中组合有符号按值、无符号引用与 catch-all，检查
+三条恢复路径、引用写回和四种调用者栈布局，并覆盖两种安装模式及强制重定位。
+新增 Clang `-O0`/`-O1` 样本覆盖内层引用 catch、外层按值和 catch-all 搜索、
+三条 continuation、反向对照及强制重定位。`-O0` loader 还检查相邻的 ESP 到 EAX
+保存序列与 personality 跳板的四条参数读取；篡改这些字节、IR 分派边或生成的
+try/unwind 行必须拒绝重建。所有样本均链接捕获的 MSVC CRT 库；CI 在 Windows
+上重放完全相同的 PE 文件。其他 try/catch 图、未经证明的对象类型或入口 ABI、
 未经证明的动态帧，
 以及 GS 或异步 C++ 仍保留分析信息，并拒绝原生安装。
 

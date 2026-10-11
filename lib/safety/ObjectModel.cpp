@@ -1096,8 +1096,11 @@ private:
     --StackAddressProofBudget;
 
     bool Result = false;
-    if (V.Kind == MedVar::Reg &&
-        (V.RegOff == In.StackPointerReg || V.RegOff == In.FramePointerReg))
+    if (detail::isAuthenticatedNonFrameEntryRegister(F, V, In.StackPointerReg,
+                                                     In.FramePointerReg))
+      Result = false;
+    else if (V.Kind == MedVar::Reg &&
+             (V.RegOff == In.StackPointerReg || V.RegOff == In.FramePointerReg))
       Result = true;
     else if (auto It = Defs.PhiDef.find(Key); It != Defs.PhiDef.end()) {
       const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];

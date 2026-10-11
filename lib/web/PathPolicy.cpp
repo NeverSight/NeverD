@@ -1,3 +1,14 @@
+//===- PathPolicy.cpp - Portable member name policy --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Portable member name policy.
+///
+//===----------------------------------------------------------------------===//
+
 #include "PathPolicy.h"
 
 #include "Internal.h"

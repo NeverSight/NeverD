@@ -1,3 +1,14 @@
+//===- SourceBindings.h - JavaScript lexical binding analysis ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript lexical binding analysis.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Source.h"

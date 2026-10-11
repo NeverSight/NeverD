@@ -1,3 +1,14 @@
+//===- RecordReferences.cpp - Pinned HTML entity table recording -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Pinned HTML entity table recording.
+///
+//===----------------------------------------------------------------------===//
+
 // Development-only conversion of a preserved WHATWG entity table into C++
 // literals. Never run by the analyzer, production build or tests. No network.
 #include "llvm/ADT/StringExtras.h"

@@ -1,3 +1,14 @@
+//===- SessionAsar.cpp - ASAR session publication ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// ASAR session publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "PathPolicy.h"
 #include "SessionInternal.h"
 

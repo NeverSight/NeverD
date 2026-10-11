@@ -2464,6 +2464,12 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
       return Number.takeError();
     Base.LoadAddress = *Number;
   }
+  if (const auto *Trace = Object->get(TraceMemoryWritesField)) {
+    auto Boolean = Trace->getAsBoolean();
+    if (!Boolean)
+      return invalid("trace_memory_writes must be boolean");
+    Base.TraceMemoryWrites = *Boolean;
+  }
   if (const auto *Unload = Object->get(UnloadField)) {
     auto Boolean = Unload->getAsBoolean();
     if (!Boolean)

@@ -1242,6 +1242,10 @@ TEST(WindowsEHNativeSource, PE32CxxOutputNeedsCompleteCompilerReceipts) {
   for (auto &Action : EH.Cxx->UnwindMap)
     Action.Kind = CxxUnwindAction::ActionKind::None;
   EH.Cxx->UnwindMap[1] = {0, 0x401300, CxxUnwindAction::ActionKind::Direct};
+  EH.Cxx->MaxState = 3;
+  EH.Cxx->UnwindMap.push_back({-1, 0, CxxUnwindAction::ActionKind::None});
+  EH.Cxx->TryBlocks[0].TryHigh = 1;
+  EH.Cxx->TryBlocks[0].CatchHigh = 2;
   const auto IR = classifyWindowsEHNativeSource(
       EH, Arch::X86, BinaryFormat::COFF, WindowsEHNativeCapability::IRLowering);
   EXPECT_EQ(IR.Model, WindowsEHNativeSourceModel::X86RegistrationCxx);
@@ -1534,6 +1538,10 @@ TEST(WindowsEHSemanticDigest, BindsCleanupToTheWholePE32CxxSourceGraph) {
   auto EH = makeRegistrationCxxDigestSource();
   EH.Cxx->UnwindMap[0].Kind = CxxUnwindAction::ActionKind::None;
   EH.Cxx->UnwindMap[1] = {0, 0x401300, CxxUnwindAction::ActionKind::Direct};
+  EH.Cxx->MaxState = 3;
+  EH.Cxx->UnwindMap.push_back({-1, 0, CxxUnwindAction::ActionKind::None});
+  EH.Cxx->TryBlocks[0].TryHigh = 1;
+  EH.Cxx->TryBlocks[0].CatchHigh = 2;
   const auto Token =
       windows_eh_semantics::getCxxCleanupSemanticToken(EH, Arch::X86, 1);
   ASSERT_TRUE(Token);

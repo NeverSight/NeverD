@@ -1,3 +1,14 @@
+//===- Artifact.h - Immutable artifact evidence ------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Immutable artifact evidence.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Blob.h"

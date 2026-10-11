@@ -29,7 +29,41 @@ template <unsigned Padding> __declspec(noinline) int call_with_padding() {
   for (unsigned I = 0; I != Padding; ++I)
     Space[I] = static_cast<unsigned char>(I);
   const auto Chain = __readfsdword(0);
+#if INCOMING_FRAME
+  const int First = -int(Padding), Second = int(Padding * 3);
+  int Result, WrittenFirst, WrittenSecond;
+  // Observe the physical argument words after return. C++ by-value parameters
+  // cannot express this check: the optimizer may keep their original values.
+  __asm {
+    mov eax, First
+    mov ecx, Second
+    push ecx
+    push eax
+    call callback_parent
+    xor edx, edx
+    mov Result, eax
+    mov eax, [esp]
+    mov WrittenFirst, eax
+    mov eax, [esp + 4]
+    mov WrittenSecond, eax
+    add esp, 8
+  }
+#if INCOMING_READ_ONLY
+  const int Expected = 2 * First + Second + 7;
+  const int Value =
+      Result == Expected && WrittenFirst == First && WrittenSecond == Second
+          ? 7
+          : -1;
+#else
+  const int Expected = 2 * First + Second + 12;
+  const int Value = Result == Expected && WrittenFirst == First + 5 &&
+                            WrittenSecond == Expected
+                        ? 7
+                        : -1;
+#endif
+#else
   const int Value = callback_parent();
+#endif
   for (unsigned I = 0; I != Padding; ++I)
     if (Space[I] != I)
       return -1;

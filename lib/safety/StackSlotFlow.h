@@ -126,6 +126,18 @@ inline bool isAuthenticatedEntryRegisterLiveIn(const MedFunc &F,
   return false;
 }
 
+/// An ordinary incoming register has the same frame origin with or without
+/// its synthetic self-copy. Callers must first reject ambiguous or call-defined
+/// values and consume their normal proof step; this does not authenticate
+/// SP/FP.
+inline bool isAuthenticatedNonFrameEntryRegister(const MedFunc &F,
+                                                 const MedVar &Value,
+                                                 uint64_t StackPointerReg,
+                                                 uint64_t FramePointerReg) {
+  return Value.RegOff != StackPointerReg && Value.RegOff != FramePointerReg &&
+         isAuthenticatedEntryRegisterLiveIn(F, Value);
+}
+
 inline bool isAtomicMemoryAccess(NdOp Opcode) {
   return Opcode == NdOp::ATOMIC_XCHG || Opcode == NdOp::ATOMIC_ADD ||
          Opcode == NdOp::ATOMIC_CMPXCHG;

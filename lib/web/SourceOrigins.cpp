@@ -1,8 +1,19 @@
+//===- SourceOrigins.cpp - Syntactic module provenance -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Syntactic module provenance.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/SourceOrigins.h"
 
 #include "SourceModel.h"
 
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 #include <optional>
 

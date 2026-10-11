@@ -1,3 +1,14 @@
+//===- AsarTests.cpp - Bounded ASAR archive extraction tests -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded ASAR archive extraction tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "AsarFixture.h"
 #include "Internal.h"
 #include "PathPolicy.h"

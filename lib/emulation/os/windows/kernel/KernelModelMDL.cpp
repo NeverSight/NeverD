@@ -328,7 +328,12 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     if (Pageable && CurrentIRQL > APCLevel)
       return mdlError(
           "pageable kernel page locking requires IRQL <= APC_LEVEL");
-    const unsigned Permissions = Read | (Operation != IoReadAccess ? Write : 0);
+    // Driver image pages are private to this loaded image. Their write-lock
+    // contract belongs to the MDL alias, independently of the original image
+    // VA's read-only or executable protection. Other owners still require the
+    // requested permission on their original view.
+    const unsigned Permissions =
+        Read | (!ImageRange && Operation != IoReadAccess ? Write : 0);
     auto Accessible =
         Memory.canAccess(State.OriginalAddress, State.ByteCount, Permissions);
     if (!Accessible)

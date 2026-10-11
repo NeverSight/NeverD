@@ -90,15 +90,16 @@ std::optional<uint32_t> evaluateRoot(const ExprPtr &Expr, uint32_t EntrySP) {
 #ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
 TEST(WindowsRegistrationRealigned, RuntimeRootsKeepInvocationIdentity) {
   const auto &TRI = getTargetRegInfo(Arch::X86);
-  for (auto Kind :
-       {MedOp::RegistrationRootKind::EstablishedFramePointer,
-        MedOp::RegistrationRootKind::CallbackStackPointer,
-        MedOp::RegistrationRootKind::RestoredStackPointer,
-        MedOp::RegistrationRootKind::RealignedFramePointer,
-        MedOp::RegistrationRootKind::RealignedRestoredStackPointer}) {
+  for (auto Kind : {MedOp::RegistrationRootKind::EstablishedFramePointer,
+                    MedOp::RegistrationRootKind::CallbackStackPointer,
+                    MedOp::RegistrationRootKind::RestoredStackPointer,
+                    MedOp::RegistrationRootKind::RealignedFramePointer,
+                    MedOp::RegistrationRootKind::RealignedRestoredStackPointer,
+                    MedOp::RegistrationRootKind::DisplacedFramePointer}) {
     const bool FP =
         Kind == MedOp::RegistrationRootKind::EstablishedFramePointer ||
-        Kind == MedOp::RegistrationRootKind::RealignedFramePointer;
+        Kind == MedOp::RegistrationRootKind::RealignedFramePointer ||
+        Kind == MedOp::RegistrationRootKind::DisplacedFramePointer;
     const bool Restored =
         Kind == MedOp::RegistrationRootKind::RestoredStackPointer ||
         Kind == MedOp::RegistrationRootKind::RealignedRestoredStackPointer;

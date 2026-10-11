@@ -1,3 +1,14 @@
+//===- SessionBunExport.cpp - Verified Bun recovery export -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Verified Bun recovery export.
+///
+//===----------------------------------------------------------------------===//
+
 #include "ExportDirectory.h"
 #include "RecoveryParser.h"
 #include "SessionInternal.h"
@@ -47,10 +58,8 @@ std::string Session::exportBun(std::string_view ExpectedRevision,
   if (Found == State->BunExtractions.end())
     throw Error("unknown_bun_extraction");
   const auto &E = Found->second;
-  const auto Original = std::find_if(
-      State->Published.Artifacts.begin(), State->Published.Artifacts.end(),
-      [&](const auto &A) { return A.ID == E.ArtifactID; });
-  if (Original == State->Published.Artifacts.end())
+  const auto Original = State->artifactView(E.ArtifactID);
+  if (!Original)
     throw Error("unknown_artifact");
   ExportDirectory Output(OutputDirectory);
   Output.write("original.bin", Original->Content, Original->BlobHash);
@@ -167,8 +176,12 @@ std::string Session::exportBun(std::string_view ExpectedRevision,
       {"status", "ok"},
       {"export_profile", "bun-local-evidence-export-v1"},
       {"layout_profile", E.Profile},
+      {"container_format", E.ContainerFormat},
+      {"platform", E.Platform},
+      {"architecture", E.Architecture},
       {"extraction_id", E.ID},
       {"original_sha256", Original->BlobHash},
+      {"original_origin", llvm::json::Object(Original->Origin)},
       {"original_bytes", std::to_string(Original->Content.size())},
       {"module_count", E.Modules.size()},
       {"region_count", E.Regions.size()},

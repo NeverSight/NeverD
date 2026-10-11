@@ -1,3 +1,14 @@
+//===- HTMLTests.cpp - Captured HTML script evidence tests -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured HTML script evidence tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/HTML.h"

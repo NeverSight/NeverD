@@ -254,7 +254,7 @@ class WDKDriverFixtureTests(unittest.TestCase):
                    f"+ {len(wait_required)} wait sets "
                    f"+ {len(unpack_required)} driver UNPACK "
                    f"+ {len(timestamp_required)} clock reads "
-                   f"+ {len(image_required)} image MDLs = {len(required)}")
+                   f"+ {len(image_required)} image memory checks = {len(required)}")
         definitions = (fixtures.ROOT / "scripts/EmulationDocumentation.def")
         tokens = i18n.emulation_document_tokens(definitions.read_text(encoding="utf-8"))
         self.assertIn(formula, tokens["NativeDriverCI"])

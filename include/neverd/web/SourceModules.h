@@ -1,3 +1,14 @@
+//===- SourceModules.h - JavaScript module declarations ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript module declarations.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Artifact.h"

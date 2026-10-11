@@ -1,3 +1,14 @@
+//===- HTMLImportMaps.h - Captured import map contexts -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured import map contexts.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/HTML.h"

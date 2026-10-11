@@ -1,3 +1,14 @@
+//===- SourceViewTests.cpp - Reviewed source display projections tests -===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Reviewed source display projections tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Artifact.h"

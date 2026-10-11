@@ -1,3 +1,14 @@
+//===- HTMLLinks.cpp - Confined HTML file candidates -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Confined HTML file candidates.
+///
+//===----------------------------------------------------------------------===//
+
 #include "HTMLFiles.h"
 #include "Internal.h"
 

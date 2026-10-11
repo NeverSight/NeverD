@@ -1,3 +1,14 @@
+//===- SourceMapTests.cpp - Source map evidence tests ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source map evidence tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Session.h"

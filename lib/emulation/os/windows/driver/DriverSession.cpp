@@ -401,10 +401,11 @@ static llvm::Expected<DriverResult> runDriver(const std::filesystem::path &Path,
       Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
       return;
     }
-    if (Stopped || ((Address >= StackBase && Address < StackBase + StackSize) ||
-                    (Address >= CallbackStackBase &&
-                     Address < CallbackStackBase + MaxConcurrentCallbacks *
-                                                       CallbackStackStride)))
+    if (!Options.TraceMemoryWrites || Stopped ||
+        ((Address >= StackBase && Address < StackBase + StackSize) ||
+         (Address >= CallbackStackBase &&
+          Address < CallbackStackBase +
+                        MaxConcurrentCallbacks * CallbackStackStride)))
       return;
     if (!EventAvailable())
       return;

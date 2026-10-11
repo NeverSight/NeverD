@@ -51,13 +51,14 @@ enum class ServiceKind {
 };
 class DarwinMemory;
 class DarwinFiles;
+class DarwinEntropy;
 llvm::Expected<ProcessServiceEvent> readService(ExecutionBackend &CPU,
                                                 const ServiceRequest &Request);
 llvm::Error returnService(ExecutionBackend &CPU, const ServiceRequest &Request,
                           ServiceResult Result);
 llvm::Expected<std::optional<ServiceResult>>
 handleService(ExecutionBackend &CPU, DarwinMemory &Memory, DarwinFiles &Files,
-              const ProcessServiceEvent &Event, const ProcessOptions &Options,
-              ProcessResult &Result);
+              DarwinEntropy &Entropy, const ProcessServiceEvent &Event,
+              const ProcessOptions &Options, ProcessResult &Result);
 } // namespace neverd::emulation::darwin_model
 #endif

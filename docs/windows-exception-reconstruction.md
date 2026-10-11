@@ -36,7 +36,7 @@ Analysis support does not imply native reconstruction support.
 | `__GSHandlerCheck_SEH/EH/EH4` | Wrapped personality plus checked GS cookie provenance | Base-language graph and wrapper annotation | Analysis only; a touched function is rejected rather than downgraded |
 | x86 registration-chain SEH3 | Checked scope graph, actual FS:[0] administration, callback roots and CFG-derived reaching try levels | Reducible, unambiguous regions become explicit EH nodes; other state flow retains native annotations | Native PE32 reconstruction for the checked fixed-frame, caller-cleanup subset below |
 | x86 registration-chain SEH4 | Checked cookie expressions, encoded scope pointer and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the authenticated direct-frame subset below, including initialized EH/GS cookies |
-| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked single-try scalar or unbound catch subset below |
+| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked synchronous try and scalar or unbound catch subset below |
 
 Malformed records are never treated as ordinary complete records. A partially
 decoded record remains useful for inspection, but cannot authorize native
@@ -94,9 +94,13 @@ derived facts separately from the authenticated loader descriptor. HighIR
 requires every reaching state to agree about region membership before emitting
 a structured region. Unknown transitions retain annotations rather than
 inventing an IP-to-state map.
-C++ catches have a separate runtime context: nested exception search starts
-above the active try block, and a catch returns a continuation code pointer to
-the runtime. LowIR requires an exact decoded return and saved stack value,
+C++ catches have a separate runtime context. The active catch guard first
+searches tries inside that catch; an unmatched exception continues through
+enclosing guards and the parent registration. LowIR records each possible
+search target and the number of exited catch guards. Selecting an enclosing
+try discards those invocations and restores their captured SavedESP before
+entering its catch. A catch returns a continuation code pointer to the runtime.
+LowIR requires an exact decoded return and saved stack value,
 decodes the target within the same function, and replays the restored context.
 Each active catch retains the saved-stack snapshot taken before runtime
 dispatch. A direct-frame catch may overwrite SavedESP: the continuation
@@ -152,6 +156,14 @@ projection before its body can be copied into a clause; its native target is
 retained when that proof is absent.
 Direct MSVC prologues must prove the actual FS:[0] write and the registration
 and state-field offsets; matching integer sequences in locals are insufficient.
+
+The checked LLVM fixed C++ prologue places the node at source EBP-24 and state
+at EBP-16. Runtime EBP is source EBP-12. Ordinary source accesses retain their
+entry-EBP coordinate; runtime catch homes, cleanup objects and callback roots
+use the checked displacement. Catch entry and continuation code must restore
+their own EBP explicitly. SavedESP is written back at source EBP-28. Private
+callback stacks and saved-register exclusion require independent dataflow
+proofs; recognizing the prologue alone does not authorize reconstruction.
 
 For the checked LLVM realigned C++ prologue, ordinary LowIR propagation keeps
 entry EBP and runtime-establisher offsets separate. It replays stack alignment,
@@ -219,20 +231,29 @@ EH4 also requires `LLVM_NEVERD_X86_REGISTRATION_COOKIES`; GS initialization
 requires `LLVM_NEVERD_X86_REGISTRATION_GS`. The older published r3 package
 rejects native installation.
 
-Native x86 C++ reconstruction currently supports one synchronous try and one
-catch, with at most 128 source unwind states. A catch may bind a checked scalar
+Native x86 C++ reconstruction supports synchronous parent try groups with
+ordered catches, with at most 128 source unwind states. A catch may bind a checked scalar
 by value or reference, omit its local object, or be `catch(...)`. An unbound
 typed catch retains its exact RTTI and adjectives; catch-all retains null RTTI
 and its native catch-all adjective. An absent object home requires complete
 source proofs with no runtime-object accesses. It cannot supply an implicit
 initialization write to the recovered parent frame.
-The source uses a checked direct MSVC registration frame or the bounded LLVM
-ESI-anchored aligned frame, with `FuncInfo` magic `0x19930522` and no GS wrapper.
+The source uses a checked direct MSVC registration frame, the LLVM fixed frame
+with saved EBX/EDI/ESI above the node, or the bounded LLVM ESI-anchored aligned
+frame, with `FuncInfo` magic `0x19930522` and no GS wrapper.
 Every preserved call, throw type and cleanup relay needs an independently
 checked ABI. Source object
 borrows must be bounded, initialized and separate from registration storage;
 reference accesses retain the CRT-provided object identity through catch return.
 Reads and writes must retain the original image storage identity.
+Checked incoming cdecl words retain their physical caller locations across
+parent code and catch execution, including writes observed by the caller.
+The entry ABI permits contiguous observed 32-bit stack parameters or the
+existing single ECX parameter. Mixed register/stack signatures remain rejected.
+SEH and C++ share the transactional caller-frame projection; installation
+independently checks its entry initialization, escape, offsets, access widths,
+occurrences and calling convention. Private-frame pointers cannot escape into
+caller storage.
 For an aligned source, the synthetic allocation proves the parent coordinate's
 alignment and extent. Catch objects, cleanup borrows and SavedESP writeback use
 that same projection. A catch has a separately bounded scratch allocation;
@@ -240,6 +261,27 @@ its address may enter the parent only through SavedESP. Installation replays
 the source contract and independently checks actual LLVM alignment, bounds,
 initialization at every catch entry, callback lifetime and the final writeback.
 A frame-layout descriptor alone cannot authorize reconstruction.
+
+Each clause retains its own catchpad, object home, scratch stack and exact
+continuation. Dispatch order must match the source HandlerMap. A sibling catch
+cannot borrow another clause's implicit object initialization or callback stack.
+Parent try groups may be disjoint or nested, with at most 64 tries and 128
+source states. Each catch boundary must immediately follow its protected state
+interval. The shared source projection proves the complete inner-to-outer
+search chain; independent installation checks preserve every try's protected
+state set, emitted HandlerMap, search order and unwind edges. A checked private
+throw inside a catch can continue the search through an enclosing parent try.
+Its invoke retains the active catch token and targets the outer dispatch;
+independent IR validation replays that transfer and its restored stack.
+Shared callbacks and a try inside a catch remain rejected.
+HighIR can gather terminal branches of synchronous tries even when runtime
+resume blocks interrupt their address order or merge different post-catch
+states. An inner try stays intact with independently checked callback bodies
+and exact continuation targets. It requires complete call and
+state receipts; asynchronous faults and unprotected calls cannot acquire a new
+handler through this projection. C and C++ output retain explicit native object
+homes and load snapshots instead of assuming a mutable catch object is an
+immutable source expression.
 
 LLVM recreates the physical registration, an object home only when required,
 ordered cleanup dispatch, complete FuncInfo and private handler. The installer
@@ -251,11 +293,26 @@ fixup, so rebasing cannot turn them into pointers. Public installation requires
 checks actual emitted code, tables, SafeSEH and all absolute relocations. Entry
 patches may not overwrite preserved helper or CRT instructions. The current
 runtime fixtures cover integer value/reference catches, unbound typed catches,
-catch-all with signed and unsigned throws, and nested destruction, including
+catch-all with signed and unsigned throws, caller argument reads and writes,
+and nested destruction, including
 forced relocation. Fixed MSVC-style frames use an independent assembly fixture;
-realigned frames use compiler-generated parents. Both link the captured MSVC
-CRT libraries. The CI replay executes the identical PE files on Windows. Other
-try/catch graphs, unproved object types, incoming stack arguments, unproved dynamic frames
+LLVM fixed and realigned frames use compiler-generated parents. Fixed-frame
+coverage includes both short and full-width stack allocations. Ordered-catch
+fixtures combine signed value, unsigned reference and catch-all clauses in one
+function and check all three continuations and reference writes across four
+caller stack layouts. Both installation modes and forced rebasing participate
+in the same-file runtime matrix. Additional Clang `-O0` and `-O1` fixtures
+exercise inner reference catches, outer value/catch-all search, all three
+continuations, secondary throws from a catch, negative controls and forced
+rebasing. The matrix uses the captured Microsoft x86 CRT DLL, including under
+Wine. Wine's built-in CRT is not the authority for catch-guard stack restoration;
+the same original and reconstructed files are also replayed on Windows.
+Runtime bytes and provider identity are bound into the evidence. The `-O0`
+loader proof also checks the exact adjacent ESP-to-EAX save and the personality thunk's four
+argument reads. Mutating those bytes, an IR dispatch edge or generated try and
+unwind rows must reject reconstruction. All fixtures
+link the captured MSVC CRT libraries. The CI replay executes the identical PE files on Windows. Other
+try/catch graphs, unproved object types or entry ABIs, unproved dynamic frames
 and GS or asynchronous C++ remain available for analysis and are rejected for
 native installation.
 

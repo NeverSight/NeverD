@@ -1,5 +1,14 @@
 # Third-Party Notices
 
+## nlohmann JSON
+
+The native C++ worker and offline web MCP transport use the header-only
+nlohmann JSON 3.11.3 library. Both use the existing pinned release archive,
+SHA-256 `d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d`.
+The unchanged [MIT notice](LICENSES/nlohmann-json/LICENSE.MIT) is staged
+beside both executables and installed under `share/neverd/licenses`.
+No external JSON executable or language runtime is invoked.
+
 ## Ada URL parser
 
 Offline import-map analysis embeds the unchanged C++ Ada 4.0.0 URL parser at
@@ -23,7 +32,7 @@ The source commit is a development tree, not an authenticated writer release.
 
 ## ICU archive path policy
 
-The optional ASAR reader links the native ICU4C 77.1 common/data libraries for
+The optional ASAR and package tar readers link native ICU4C 77.1 common/data libraries for
 NFC normalization and full case folding, with Unicode 16.0 runtime checks.
 The full upstream Unicode License V3 and bundled third-party notices are
 preserved in [`LICENSES/icu/LICENSE`](LICENSES/icu/LICENSE), matching
@@ -56,7 +65,14 @@ integration also generates a private copy of `JSParserImpl.cpp` with one
 source-location fix: async-arrow rest parameters retain the original spread
 node's parser-owned source range. It requires the pinned code to match exactly
 once, retains upstream notices, and does not modify the fetched sources.
-This fix is exposed as parser profile `hermes-602befee-js-v2`.
+The 2026-10-11 C++ extension adds resource-declaration grammar, preserves the
+`using`/`await using` ESTree kinds and validates their names/async contexts in
+the private semantic-validator copy. Its private lexer header also restores
+newline state during lookahead backtracking. These edits are recorded with
+exact-match anchors in `cmake/hermes-parser/Patches.cmake`; all copies retain
+their upstream notices. NeverD's added grammar is in
+`lib/web/HermesResourceDeclarations.inc`. The parser profile is
+`hermes-602befee-js-v3`.
 The integration selects the parser dependency graph and excludes upstream VM,
 tool and test targets. Enabled builds stage the license set beside libneverd,
 inside the SDK and under the installed `share/neverd/licenses/hermes`.
@@ -213,9 +229,20 @@ sample's actual producer version; that manifest field remains unknown.
 Enabled builds stage the license beside libneverd and in the SDK, and install
 it under `share/neverd/licenses/webpack`.
 
+## Node SEA layout reference and generated corpus
+
+The independent C++ SEA reader follows Node.js 22.15.0 commit
+`b009466555c360513b8012ce549f716501090ee5` serialization and bundled postject
+resource-location contracts. Node/V8/postject code is not linked or invoked by
+NeverD. Small trusted fixture outputs include opaque V8 code-cache data; the
+runtime snapshot and full executables remain outside the repository.
+The upstream [license and notices](LICENSES/node/LICENSE) are preserved and
+shipped with the enabled web backend. See the [profile](docs/web-sea-profile.md)
+and [fixture provenance](unittests/web/fixtures/sea/README.md).
+
 ## Bun layout reference and generated corpus
 
-The independent C++ Bun reader follows the ELF, standalone graph and serialized
+The independent C++ Bun reader follows the ELF/Mach-O/PE, standalone graph and serialized
 source-map data formats from `oven-sh/bun` commit
 `744846f844374847c902b5e7fd59b4342a51ef99` (`bun-v1.4.2`). The self-authored
 fixture graph data may contain JavaScript scaffolding emitted by that compiler.
@@ -248,6 +275,12 @@ stage these notices with the library and SDK and install them under
 executed by this implementation.
 
 ## zlib
+
+Offline package gzip admission links the installed native zlib library when
+available, using only its in-process stream decoder and checksum validation.
+No zlib executable or upstream implementation source is copied into the web
+component. Gzip capability is unavailable when this dependency is omitted;
+plain tar and original SRI verification remain independent.
 
 Mobile ZIP extraction links zlib for DEFLATE and CRC-32. CMake uses an installed
 library when available, or builds the unchanged, hash-pinned zlib 1.3.2 source

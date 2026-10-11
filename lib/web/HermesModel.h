@@ -1,3 +1,14 @@
+//===- HermesModel.h - Embedded parser AST conversion ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Embedded parser AST conversion.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 // This private adapter is included only by the parser translation unit.
@@ -5,7 +16,7 @@
 #include "hermes/AST/ESTree.h"
 
 #include "neverd/web/Artifact.h"
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 #include "neverd/web/Source.h"
 
 namespace neverd::web {
@@ -145,8 +156,10 @@ public:
 
   uint32_t collect(AST::Node *Node, uint32_t Parent = UINT32_MAX,
                    bool Strict = false, unsigned Depth = 0) {
-    if (Result.Nodes.size() >= NodeLimit || Depth >= 256)
+    if (Result.Nodes.size() >= NodeLimit)
       throw Error("syntax_inventory_budget_exceeded");
+    if (Depth >= 256)
+      throw Error("syntax_inventory_depth_exceeded");
     if (Result.SourceType != "module" &&
         (llvh::isa<AST::ImportDeclarationNode>(Node) ||
          llvh::isa<AST::ExportNamedDeclarationNode>(Node) ||

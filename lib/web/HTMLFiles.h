@@ -1,7 +1,18 @@
+//===- HTMLFiles.h - Captured HTML file index --------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured HTML file index.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
+#include "neverd/web/Error.h"
 #include "neverd/web/HTML.h"
-#include "neverd/web/Session.h"
 
 #include <algorithm>
 #include <functional>

@@ -1,3 +1,14 @@
+//===- Asar.cpp - Bounded ASAR archive extraction ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded ASAR archive extraction.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/Asar.h"
 
 #include "Internal.h"

@@ -1,7 +1,18 @@
+//===- BlobStore.cpp - Private immutable blob storage ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Private immutable blob storage.
+///
+//===----------------------------------------------------------------------===//
+
 #include "BlobStore.h"
 
+#include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
-#include "neverd/web/Session.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
@@ -90,6 +101,70 @@ BlobStore::BlobStore(uint64_t Budget) : Budget(Budget) {
     throw Error("invalid_blob_store_budget");
 }
 
+void BlobStore::initialize() {
+#ifdef _WIN32
+  throw Error("input_reader_unavailable");
+#else
+  static_assert(sizeof(off_t) >= sizeof(int64_t));
+  static_assert(Limits::HardInputBytes <
+                uint64_t(std::numeric_limits<off_t>::max()));
+  if (!State) {
+    State = std::make_shared<Blob::Storage>();
+    llvm::SmallString<128> Model, Path;
+    llvm::sys::path::system_temp_directory(true, Model);
+    llvm::sys::path::append(
+        Model, "neverd-web-spool-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%.tmp");
+    // Request exclusive creation, mode 0600 and close-on-exec. Do not use
+    // createTemporaryFile: this LLVM revision uses 0666 despite its header's
+    // 0600 claim. Explicit permissions are part of the storage boundary.
+    // Remove the directory entry before copying any target bytes. No name
+    // survives in the store, output, crash cleanup list or analysis model.
+    if (llvm::sys::fs::createUniqueFile(Model, State->Descriptor, Path,
+                                        llvm::sys::fs::OF_None, 0600))
+      throw Error("blob_storage_unavailable");
+    if (unlink(Path.c_str()) != 0) {
+      // No input bytes have been written. Best-effort remove the empty file.
+      llvm::sys::fs::remove(Path);
+      throw Error("blob_storage_unavailable");
+    }
+    struct stat Info{};
+    const int Flags = fcntl(State->Descriptor, F_GETFD);
+    if (fstat(State->Descriptor, &Info) != 0 || !S_ISREG(Info.st_mode) ||
+        Info.st_nlink != 0 || (Info.st_mode & 0777) != 0600 || Flags < 0 ||
+        !(Flags & FD_CLOEXEC))
+      throw Error("blob_storage_unavailable");
+  }
+#endif
+}
+
+void BlobStore::append(std::string_view Bytes) {
+  if (Finished || Failed)
+    throw Error("blob_store_closed");
+  if (Bytes.size() > Budget - Used)
+    throw Error("budget_exceeded");
+  try {
+    initialize();
+#ifndef _WIN32
+    uint64_t Written = 0;
+    while (Written < Bytes.size()) {
+      const auto Count = pwrite(
+          State->Descriptor, Bytes.data() + Written,
+          size_t(std::min<uint64_t>(BlobTransferBytes, Bytes.size() - Written)),
+          off_t(Used + Written));
+      if (Count < 0 && errno == EINTR)
+        continue;
+      if (Count <= 0)
+        throw Error("blob_storage_write_failed");
+      Written += uint64_t(Count);
+    }
+    Used += Bytes.size();
+#endif
+  } catch (...) {
+    Failed = true;
+    throw;
+  }
+}
+
 BlobStore::Captured BlobStore::capture(int Descriptor, uint64_t ExpectedSize) {
   if (Finished || Failed)
     throw Error("blob_store_closed");
@@ -98,36 +173,9 @@ BlobStore::Captured BlobStore::capture(int Descriptor, uint64_t ExpectedSize) {
 #ifdef _WIN32
   throw Error("input_reader_unavailable");
 #else
-  static_assert(sizeof(off_t) >= sizeof(int64_t));
-  static_assert(Limits::HardInputBytes <
-                uint64_t(std::numeric_limits<off_t>::max()));
   try {
-    if (!State) {
-      State = std::make_shared<Blob::Storage>();
-      llvm::SmallString<128> Model, Path;
-      llvm::sys::path::system_temp_directory(true, Model);
-      llvm::sys::path::append(
-          Model, "neverd-web-spool-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%.tmp");
-      // Request exclusive creation, mode 0600 and close-on-exec. Do not use
-      // createTemporaryFile: this LLVM revision uses 0666 despite its header's
-      // 0600 claim. Explicit permissions are part of the storage boundary.
-      // Remove the directory entry before copying any target bytes. No name
-      // survives in the store, output, crash cleanup list or analysis model.
-      if (llvm::sys::fs::createUniqueFile(Model, State->Descriptor, Path,
-                                          llvm::sys::fs::OF_None, 0600))
-        throw Error("blob_storage_unavailable");
-      if (unlink(Path.c_str()) != 0) {
-        // No input bytes have been written. Best-effort remove the empty file.
-        llvm::sys::fs::remove(Path);
-        throw Error("blob_storage_unavailable");
-      }
-      struct stat Info{};
-      const int Flags = fcntl(State->Descriptor, F_GETFD);
-      if (fstat(State->Descriptor, &Info) != 0 || !S_ISREG(Info.st_mode) ||
-          Info.st_nlink != 0 || (Info.st_mode & 0777) != 0600 || Flags < 0 ||
-          !(Flags & FD_CLOEXEC))
-        throw Error("blob_storage_unavailable");
-    }
+    initialize();
+    const uint64_t Start = Used;
     std::array<char, BlobTransferBytes> Buffer;
     llvm::SHA256 Hash;
     uint64_t Done = 0;
@@ -140,17 +188,7 @@ BlobStore::Captured BlobStore::capture(int Descriptor, uint64_t ExpectedSize) {
         continue;
       if (Count <= 0)
         throw Error("input_changed");
-      uint64_t Written = 0;
-      while (Written < uint64_t(Count)) {
-        const auto N = pwrite(State->Descriptor, Buffer.data() + Written,
-                              size_t(uint64_t(Count) - Written),
-                              off_t(Used + Done + Written));
-        if (N < 0 && errno == EINTR)
-          continue;
-        if (N <= 0)
-          throw Error("blob_storage_write_failed");
-        Written += uint64_t(N);
-      }
+      append(std::string_view(Buffer.data(), size_t(Count)));
       Hash.update(llvm::StringRef(Buffer.data(), size_t(Count)));
       Done += uint64_t(Count);
     }
@@ -161,9 +199,8 @@ BlobStore::Captured BlobStore::capture(int Descriptor, uint64_t ExpectedSize) {
     } while (Count < 0 && errno == EINTR);
     if (Count != 0)
       throw Error("input_changed");
-    Captured Result{Blob(State, Used, ExpectedSize),
+    Captured Result{Blob(State, Start, ExpectedSize),
                     llvm::toHex(Hash.final(), true)};
-    Used += ExpectedSize;
     return Result;
   } catch (...) {
     Failed = true;
@@ -186,5 +223,11 @@ void BlobStore::seal() {
     State->Sealed = true;
   }
 #endif
+}
+
+Blob BlobStore::whole() const {
+  if (!Finished || Failed || (State && !State->Sealed))
+    throw Error("blob_not_sealed");
+  return Blob(State, 0, Used);
 }
 } // namespace neverd::web

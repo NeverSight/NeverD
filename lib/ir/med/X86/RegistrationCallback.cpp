@@ -36,10 +36,7 @@ bool hasCallbackContract(const MedFunc &Func) {
       State.Blocks.size() > limits::kMaxRegistrationEHRecords ||
       State.CxxContinuations.size() > limits::kMaxRegistrationEHRecords)
     return false;
-  return EH.Registration->RealignedFrame
-             ? realignedRegistrationFrameCoordinate(EH, &State).has_value()
-             : EH.Registration->RegistrationOffset == -12 &&
-                   EH.Registration->TryLevelOffset == -4;
+  return cxxRegistrationFrameCoordinate(EH, &State).has_value();
 }
 
 std::optional<std::pair<uint32_t, uint32_t>>
@@ -186,9 +183,13 @@ registrationCallbackRegion(const MedFunc &Func, va_t Entry) {
       } else if (Op.Opcode == NdOp::CALL && Op.DoesNotReturn) {
         const auto *Call = State.callFrameEffect(Op.Addr, Op.OriginSeq);
         if (!State.CallFrameEffectsComplete || !Call || !Call->DoesNotReturn ||
-            Call->EndAddress != Block.EndAddr || Op.NumInputs != 1 ||
-            !Op.Inputs[0].isConst() || Op.Inputs[0].ConstVal != Call->Target)
+            Call->EndAddress <= Op.Addr || Call->EndAddress > Block.EndAddr ||
+            Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
+            Op.Inputs[0].ConstVal != Call->Target)
           return std::nullopt;
+        // The decoded block can include unreachable padding after a newly
+        // proved noreturn call. MedIR has already removed its fallthrough;
+        // no later live operation may survive in this invocation.
         Exit = true;
       }
     }

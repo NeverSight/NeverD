@@ -1,3 +1,14 @@
+//===- Source.h - JavaScript source evidence ---------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript source evidence.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <cstdint>
@@ -74,7 +85,7 @@ struct SourceAnalysis {
 };
 
 inline constexpr std::string_view JavaScriptParserProfile =
-    "hermes-602befee-js-v2";
+    "hermes-602befee-js-v3";
 inline constexpr uint64_t MaxJavaScriptBytes = 1024 * 1024;
 inline constexpr uint64_t MaxJavaScriptNodes = 100000;
 inline constexpr uint64_t MaxJavaScriptStringUnits = 2 * 1024 * 1024;

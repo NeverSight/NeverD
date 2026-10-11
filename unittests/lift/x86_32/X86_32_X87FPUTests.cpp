@@ -6,6 +6,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -13,14 +14,25 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <array>
+#include <atomic>
 #include <barrier>
+#include <chrono>
+#include <condition_variable>
 #include <future>
+#include <mutex>
 #include <set>
+#include <stdexcept>
 
 namespace neverd::detail {
 struct X87CallGraphCacheTestAccess {
   static std::array<size_t, 3> stats(const CFGBuilder &Builder) {
     return Builder.x87CallGraphCacheStatsForTesting();
+  }
+  static std::array<size_t, 5> flightStats(const CFGBuilder &Builder) {
+    return Builder.x87CallGraphFlightStatsForTesting();
+  }
+  static bool waitForWaiters(const CFGBuilder &Builder, size_t Count) {
+    return Builder.waitForX87CallGraphWaitersForTesting(Count);
   }
   static std::pair<std::optional<int>, size_t>
   query(CFGBuilder &Builder, const BinaryImage &Image, va_t Entry,
@@ -663,6 +675,325 @@ TEST(X87CallGraphCache, ConcurrentBuildersKeepIndependentProofState) {
   EXPECT_GT(Stats[0], 0u);
   EXPECT_LE(Stats[1], 128u);
   EXPECT_LE(Stats[2], 8u * 1024 * 1024);
+}
+
+namespace {
+// This callback holds the leader at a real CFG construction boundary. Tests
+// wait for a registered follower, not for a guessed wall-clock overlap.
+class GatedX87Prover final : public NoReturnCalleeProver {
+  mutable std::mutex Mutex;
+  mutable std::condition_variable Changed;
+  mutable size_t Calls = 0;
+  bool Released = false;
+  bool ThrowFirst;
+
+public:
+  explicit GatedX87Prover(bool Throw = false) : ThrowFirst(Throw) {}
+  bool mayNeverReturn(va_t) const override { return true; }
+  bool neverReturns(va_t, unsigned) const override {
+    std::unique_lock<std::mutex> Lock(Mutex);
+    const size_t Number = ++Calls;
+    Changed.notify_all();
+    Changed.wait(Lock, [&] { return Released; });
+    if (ThrowFirst && Number == 1)
+      throw std::runtime_error("controlled x87 graph build failure");
+    return false;
+  }
+  bool waitForCalls(size_t Count) const {
+    std::unique_lock<std::mutex> Lock(Mutex);
+    return Changed.wait_for(Lock, std::chrono::seconds(5),
+                            [&] { return Calls >= Count; });
+  }
+  void release() {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    Released = true;
+    Changed.notify_all();
+  }
+  size_t calls() const {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    return Calls;
+  }
+};
+
+class ReturningX87Prover final : public NoReturnCalleeProver {
+public:
+  bool mayNeverReturn(va_t) const override { return true; }
+  bool neverReturns(va_t, unsigned) const override { return false; }
+};
+} // namespace
+
+TEST(X87CallGraphCache,
+     IdenticalConcurrentBuildsHaveOneLeaderAndPrivateBudgets) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    BinaryImage Image = x87CallLoopImage(Architecture, BinaryFormat::ELF);
+    ReturningX87Prover Returning;
+    CFGBuilder Cold, Limited;
+    Cold.setNoReturnCalleeProver(&Returning);
+    Limited.setNoReturnCalleeProver(&Returning);
+    const auto Expected = Access::query(Cold, Image, 0x1100);
+    const auto ExpectedLimited = Access::query(Limited, Image, 0x1100, 1);
+    GatedX87Prover Prover;
+    auto Cache = createX87CallGraphCache(&Prover);
+    CFGBuilder Observer;
+    Observer.setX87CallGraphCache(Cache);
+    auto Run = [&](size_t Budget) {
+      CFGBuilder Builder;
+      Builder.setNoReturnCalleeProver(&Prover);
+      Builder.setX87CallGraphCache(Cache);
+      return Access::query(Builder, Image, 0x1100, Budget);
+    };
+    auto Leader = std::async(std::launch::async, Run,
+                             size_t(limits::kMaxX87CallProofWork));
+    EXPECT_TRUE(Prover.waitForCalls(1));
+    auto Follower = std::async(std::launch::async, Run, size_t(1));
+    EXPECT_TRUE(Access::waitForWaiters(Observer, 1));
+    const auto Held = Access::flightStats(Observer);
+    EXPECT_EQ(Held[0], 1u);
+    EXPECT_EQ(Held[1], 1u);
+    EXPECT_EQ(Held[3], 1u);
+    EXPECT_EQ(Prover.calls(), 1u);
+    Prover.release();
+    EXPECT_EQ(Leader.get(), Expected);
+    EXPECT_EQ(Follower.get(), ExpectedLimited);
+    EXPECT_EQ(Prover.calls(), 1u);
+    EXPECT_EQ(Access::flightStats(Observer)[3], 0u);
+    EXPECT_EQ(Access::flightStats(Observer)[4], 0u);
+  }
+}
+
+TEST(X87CallGraphCache, FailedLeaderWakesFollowersForIndependentRetry) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  ReturningX87Prover Returning;
+  CFGBuilder Cold;
+  Cold.setNoReturnCalleeProver(&Returning);
+  const auto Expected = Access::query(Cold, Image, 0x1100);
+  GatedX87Prover Prover(/*Throw=*/true);
+  auto Cache = createX87CallGraphCache(&Prover);
+  CFGBuilder Observer;
+  Observer.setX87CallGraphCache(Cache);
+  auto Run = [&] {
+    CFGBuilder Builder;
+    Builder.setNoReturnCalleeProver(&Prover);
+    Builder.setX87CallGraphCache(Cache);
+    return Access::query(Builder, Image, 0x1100);
+  };
+  auto Leader = std::async(std::launch::async, Run);
+  EXPECT_TRUE(Prover.waitForCalls(1));
+  auto Follower = std::async(std::launch::async, Run);
+  EXPECT_TRUE(Access::waitForWaiters(Observer, 1));
+  Prover.release();
+  EXPECT_THROW((void)Leader.get(), std::runtime_error);
+  EXPECT_EQ(Follower.get(), Expected);
+  EXPECT_EQ(Prover.calls(), 2u);
+  EXPECT_EQ(Run(), Expected);
+  EXPECT_EQ(Prover.calls(),
+            2u); // Failed leader did not poison later retention.
+  EXPECT_EQ(Access::flightStats(Observer)[3], 0u);
+  EXPECT_EQ(Access::flightStats(Observer)[4], 0u);
+}
+
+TEST(X87CallGraphCache, IncompleteLeaderIsNotSharedWithWaitingProofs) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  Segment Leaf;
+  Leaf.Name = ".leaf";
+  Leaf.VA = 0x1200;
+  Leaf.Size = 3;
+  Leaf.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Leaf.Data = {0xd9, 0xe8, 0xc3};
+  Image.Segments[0].Size = 0x106;
+  Image.Segments[0].Data.resize(0x106);
+  Image.Segments[0].Data.back() = 0x0f; // Truncated instruction after the call.
+  Image.Segments.push_back(std::move(Leaf));
+  GatedX87Prover Prover;
+  auto Cache = createX87CallGraphCache(&Prover);
+  CFGBuilder Observer;
+  Observer.setX87CallGraphCache(Cache);
+  auto Run = [&] {
+    CFGBuilder Builder;
+    Builder.setNoReturnCalleeProver(&Prover);
+    Builder.setX87CallGraphCache(Cache);
+    return Access::query(Builder, Image, 0x1100);
+  };
+  auto Leader = std::async(std::launch::async, Run);
+  EXPECT_TRUE(Prover.waitForCalls(1));
+  auto Follower = std::async(std::launch::async, Run);
+  EXPECT_TRUE(Access::waitForWaiters(Observer, 1));
+  Prover.release();
+  const auto First = Leader.get();
+  EXPECT_FALSE(First.first);
+  EXPECT_EQ(First.second, limits::kMaxX87CallProofWork - 1);
+  EXPECT_EQ(Follower.get(), First);
+  EXPECT_EQ(Prover.calls(), 2u);
+  EXPECT_EQ(Access::stats(Observer)[1], 0u);
+  EXPECT_EQ(Run(), First);
+  EXPECT_EQ(Prover.calls(), 3u);
+  EXPECT_EQ(Access::flightStats(Observer)[3], 0u);
+}
+
+TEST(X87CallGraphCache, ConcurrentDifferentContextsNeverJoinTheSameFlight) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+    BinaryImage Other = x87CallLoopImage(Arch::X86, BinaryFormat::ELF, 5);
+    GatedX87Prover Prover;
+    auto Cache = createX87CallGraphCache(&Prover);
+    const std::set<va_t> Empty, Different{0x12f0};
+    CFGBuilder Observer;
+    Observer.setX87CallGraphCache(Cache);
+    auto Run = [&](bool Changed) {
+      CFGBuilder Builder;
+      Builder.setNoReturnCalleeProver(&Prover,
+                                      Changed && Mutation == 0 ? 1 : 0);
+      Builder.setKnownFuncEntries(Changed && Mutation == 1 ? &Different
+                                                           : &Empty);
+      Builder.setProtectedJumpTableRelocationSlots(
+          Changed && Mutation == 2 ? &Different : &Empty);
+      Builder.setX87CallGraphCache(Cache);
+      return Access::query(Builder, Changed && Mutation == 3 ? Other : Image,
+                           0x1100);
+    };
+    auto First = std::async(std::launch::async, Run, false);
+    EXPECT_TRUE(Prover.waitForCalls(1));
+    auto Second = std::async(std::launch::async, Run, true);
+    // Both actual builders must reach the held callback. A context-blind join
+    // cannot make progress to this point while the first leader is held.
+    EXPECT_TRUE(Prover.waitForCalls(2));
+    EXPECT_EQ(Access::flightStats(Observer)[1], 0u);
+    EXPECT_EQ(Access::flightStats(Observer)[3], 2u);
+    Prover.release();
+    EXPECT_EQ(First.get().first, std::optional<int>(-1));
+    EXPECT_EQ(Second.get().first, std::optional<int>(Mutation == 3 ? 0 : -1));
+    EXPECT_EQ(Access::flightStats(Observer)[3], 0u);
+  }
+}
+
+TEST(X87CallGraphCache,
+     NestedAndUnregisteredAsyncProversNeverWaitOnThemselves) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  struct ReentrantProver final : NoReturnCalleeProver {
+    const BinaryImage &Image;
+    bool Async;
+    std::shared_ptr<X87CallGraphCache> Cache;
+    mutable std::atomic<bool> Entered{false};
+    mutable std::optional<int> NestedResult;
+    ReentrantProver(const BinaryImage &I, bool A) : Image(I), Async(A) {}
+    bool mayNeverReturn(va_t) const override { return true; }
+    bool neverReturns(va_t, unsigned) const override {
+      if (!Entered.exchange(true)) {
+        auto Run = [&] {
+          CFGBuilder Nested;
+          Nested.setNoReturnCalleeProver(this);
+          Nested.setX87CallGraphCache(Cache);
+          return Access::query(Nested, Image, 0x1100).first;
+        };
+        NestedResult =
+            Async ? std::async(std::launch::async, Run).get() : Run();
+      }
+      return false;
+    }
+  };
+  for (bool Async : {false, true}) {
+    SCOPED_TRACE(Async);
+    BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+    ReentrantProver Prover(Image, Async);
+    // A synchronous nested request is guarded even for a registered callback.
+    // An arbitrary callback that delegates then waits is not registered.
+    auto Cache = createX87CallGraphCache(Async ? nullptr : &Prover);
+    Prover.Cache = Cache;
+    CFGBuilder Builder;
+    Builder.setNoReturnCalleeProver(&Prover);
+    Builder.setX87CallGraphCache(Cache);
+    EXPECT_EQ(Access::query(Builder, Image, 0x1100).first,
+              std::optional<int>(-1));
+    EXPECT_EQ(Prover.NestedResult, std::optional<int>(-1));
+    const auto Stats = Access::flightStats(Builder);
+    EXPECT_GT(Stats[2], 0u);
+    EXPECT_EQ(Stats[1], 0u);
+    EXPECT_EQ(Stats[3], 0u);
+    EXPECT_EQ(Stats[4], 0u);
+    if (Async)
+      EXPECT_EQ(Stats[0], 0u);
+  }
+}
+
+TEST(X87CallGraphCache, NestedCrossCacheRequestsCannotFormWaitCycles) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  struct CrossCacheProver final : NoReturnCalleeProver {
+    const BinaryImage &Image;
+    std::barrier<> &BothLeaders;
+    const CrossCacheProver *Other = nullptr;
+    std::shared_ptr<X87CallGraphCache> Cache;
+    mutable std::atomic<bool> Entered{false};
+    mutable std::optional<int> NestedResult;
+    CrossCacheProver(const BinaryImage &I, std::barrier<> &Gate)
+        : Image(I), BothLeaders(Gate) {}
+    bool mayNeverReturn(va_t) const override { return true; }
+    bool neverReturns(va_t, unsigned) const override {
+      if (!Entered.exchange(true)) {
+        // Both outer flights exist before either callback requests the other
+        // cache. Neither callback dispatches work to a different thread.
+        BothLeaders.arrive_and_wait();
+        CFGBuilder Nested;
+        Nested.setNoReturnCalleeProver(Other);
+        Nested.setX87CallGraphCache(Other->Cache);
+        NestedResult = Access::query(Nested, Image, 0x1100).first;
+      }
+      return false;
+    }
+  };
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  std::barrier BothLeaders(2);
+  CrossCacheProver First(Image, BothLeaders), Second(Image, BothLeaders);
+  First.Other = &Second;
+  Second.Other = &First;
+  First.Cache = createX87CallGraphCache(&First);
+  Second.Cache = createX87CallGraphCache(&Second);
+  auto Run = [&](const CrossCacheProver &Prover) {
+    CFGBuilder Builder;
+    Builder.setNoReturnCalleeProver(&Prover);
+    Builder.setX87CallGraphCache(Prover.Cache);
+    const auto Result = Access::query(Builder, Image, 0x1100);
+    return std::make_pair(Result.first, Access::flightStats(Builder));
+  };
+  auto A = std::async(std::launch::async, Run, std::cref(First));
+  auto B = std::async(std::launch::async, Run, std::cref(Second));
+  size_t NestedMisses = 0;
+  for (const auto &Result : {A.get(), B.get()}) {
+    EXPECT_EQ(Result.first, std::optional<int>(-1));
+    EXPECT_EQ(Result.second[1], 0u);
+    NestedMisses += Result.second[2];
+  }
+  // One nested build may publish before its peer requests the other cache.
+  EXPECT_GT(NestedMisses, 0u);
+  EXPECT_EQ(First.NestedResult, std::optional<int>(-1));
+  EXPECT_EQ(Second.NestedResult, std::optional<int>(-1));
+}
+
+TEST(X87CallGraphCache, UnregisteredNameResolverNeverReservesAFlight) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = x87CallLoopImage(Arch::X86, BinaryFormat::ELF);
+  Image.LoadOnlyFunctionEntries.insert(0x1100);
+  Image.Symbols.clear();
+  size_t Calls = 0;
+  const libc::NoReturnTargetIndex Targets(Image, [&](va_t) {
+    ++Calls;
+    return std::optional<std::string>("ordinary_returning_function");
+  });
+  CFGBuilder Builder;
+  Builder.setNoReturnTargetIndex(&Targets);
+  Builder.setX87CallGraphCache(createX87CallGraphCache());
+  EXPECT_EQ(Access::query(Builder, Image, 0x1100).first,
+            std::optional<int>(-1));
+  EXPECT_GT(Calls, 0u);
+  const auto Stats = Access::flightStats(Builder);
+  EXPECT_EQ(Stats[0], 0u);
+  EXPECT_EQ(Stats[1], 0u);
+  EXPECT_GT(Stats[2], 0u);
 }
 
 TEST(X87CallGraphCache, EvictionBoundsRetentionWithoutChangingResults) {

@@ -1,9 +1,20 @@
+//===- SourceEffects.cpp - Conservative JavaScript effects -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Conservative JavaScript effects.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/SourceEffects.h"
 
 #include "SourceModel.h"
 
 #include "neverd/web/Artifact.h"
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 #include <optional>
 
@@ -263,6 +274,16 @@ class Effects {
         coercion(Out, I);
     } else if (K == "VariableDeclaration") {
       Out.ContainsDeclaration = true;
+      const auto *Kind = N.text("kind");
+      if (Kind && (*Kind == u"using" || *Kind == u"await using")) {
+        // Registration reads dispose methods (including getters); leaving the
+        // owning scope can invoke arbitrary code even through return/throw.
+        // Immediate includes the scope-exit obligation, not its exact timing.
+        // Deferred is reserved for function/instance bodies in this model.
+        Out.Immediate |= ReadProperty | Invocation | Control;
+        if (*Kind == u"await using")
+          Out.Immediate |= Suspend;
+      }
     } else if (K == "VariableDeclarator") {
       Out.Immediate |= WriteBinding;
     } else if (K == "ArrayPattern" || K == "ObjectPattern" ||

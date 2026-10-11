@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include <algorithm>
@@ -60,6 +61,80 @@ struct ResolverGraphCacheTestAccess {
       B.Insns.emplace(Address, std::move(R));
       B.BlockStarts.insert(Address);
     }
+  }
+
+  static Query seedPredecessorLane(CFGBuilder &B, const BinaryImage &Image,
+                                   unsigned Length) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    const auto Lane = NdVar::reg(0, 8);
+    for (unsigned I = 0; I <= Length; ++I) {
+      const va_t Address = 0x100 + I;
+      CFGBuilder::InsnRecord R{};
+      R.Addr = Address;
+      R.Size = 1;
+      LowOp Op;
+      Op.Addr = Address;
+      if (I == 0) {
+        Op.Opcode = NdOp::COPY;
+        Op.Output = Lane;
+        Op.addInput(NdVar::cst(7, 8));
+      } else if (I == Length) {
+        R.IsRet = true;
+        Op.Opcode = NdOp::RETURN;
+        Op.addInput(Lane);
+      } else {
+        R.IsBranch = true;
+        R.BranchTarget = Address + 1;
+        Op.Opcode = NdOp::BRANCH;
+        Op.addInput(NdVar::cst(Address + 1, 8));
+      }
+      R.Ops.push_back(Op);
+      B.Insns.emplace(Address, std::move(R));
+      B.BlockStarts.insert(Address);
+    }
+    Query Q;
+    Q.Candidate = Lane;
+    Q.UseAddr = 0x100 + Length;
+    Q.UseSeq = 0;
+    Q.Alternatives = {{NdVar::cst(7, 8), InvalidVA, -1, false}};
+    return Q;
+  }
+
+  static Query seedCountLane(CFGBuilder &B, const BinaryImage &Image,
+                             NdOp Opcode, uint16_t InputSize,
+                             uint16_t OutputSize, unsigned SliceOffset = 0,
+                             unsigned CountInputs = 1) {
+    seed(B, Image, 1);
+    auto &Ops = B.Insns.at(0x100).Ops;
+    Ops.clear();
+    LowOp Count;
+    Count.Addr = 0x100;
+    Count.Seq = 0;
+    Count.Opcode = Opcode;
+    Count.Output = NdVar::tmp(0, OutputSize);
+    for (unsigned I = 0; I < CountInputs; ++I)
+      Count.addInput(NdVar::reg(I * 32, InputSize));
+    Ops.push_back(Count);
+    LowOp Slice;
+    Slice.Addr = 0x100;
+    Slice.Seq = 1;
+    Slice.Opcode = NdOp::SUBBYTES;
+    Slice.Output = NdVar::tmp(32, 1);
+    Slice.addInput(Count.Output);
+    Slice.addInput(NdVar::cst(SliceOffset, 4));
+    Ops.push_back(Slice);
+    B.Insns.at(0x101).Ops.front().Inputs[0] = Count.Output;
+
+    Query Q;
+    Q.Candidate = Count.Output;
+    Q.UseAddr = 0x101;
+    Q.UseSeq = 0;
+    Q.Alternatives = {{Slice.Output, 0x100, Slice.Seq, true}};
+    Q.AllowZeroExtension = true;
+    return Q;
   }
 
   static Answer query(CFGBuilder &B, size_t Budget = 1000000,
@@ -315,6 +390,111 @@ TEST(ResolverGraphCache, ResourceFailureAndAnalysisIncompleteAreDistinct) {
   EXPECT_EQ(Access::token(B), Graph);
 }
 
+TEST(ResolverValueQueryCache, ExpandedValueDepthKeepsTheDefaultGuardCap) {
+  const auto Image = image();
+  for (unsigned Length : {80u, 160u}) {
+    SCOPED_TRACE(Length);
+    CFGBuilder Builder;
+    const auto Query = Access::seedPredecessorLane(Builder, Image, Length);
+    const auto Default = Access::batch(Builder, {Query});
+    EXPECT_FALSE(Default.Complete);
+    EXPECT_EQ(Default.QueryComplete, (std::vector<bool>{false}));
+    EXPECT_EQ(Default.Values, (std::vector<bool>{false}));
+    EXPECT_GT(Default.Remaining, 0u); // Depth, not aggregate work exhaustion.
+    const auto Expanded = Access::batch(
+        Builder, {Query}, 1000000, limits::kMaxJumpTableExpandedResolverDepth);
+    EXPECT_EQ(Expanded.Complete, Length == 80);
+    EXPECT_EQ(Expanded.QueryComplete, (std::vector<bool>{Length == 80}));
+    EXPECT_EQ(Expanded.Values, (std::vector<bool>{Length == 80}));
+    EXPECT_GT(Expanded.Remaining, 0u);
+    if (Length == 80) {
+      const auto Hits = Access::stats(Builder)[0];
+      EXPECT_EQ(Access::batch(Builder, {Query}, 1000000,
+                              limits::kMaxJumpTableExpandedResolverDepth),
+                Expanded);
+      EXPECT_EQ(Access::stats(Builder)[0], Hits + 1);
+    }
+    // A successful expanded query cannot turn a later default-depth request
+    // into evidence, including when both requests use the same graph cache.
+    EXPECT_EQ(Access::batch(Builder, {Query}), Default);
+  }
+}
+
+TEST(ResolverCountLane, ScalarCountsEqualTheirZeroExtendedLowByte) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    auto Image = image();
+    Image.Arch = Architecture;
+    for (auto Opcode : {NdOp::POPCOUNT, NdOp::LZCOUNT}) {
+      for (uint16_t InputSize : {1, 2, 4, 8}) {
+        for (uint16_t OutputSize : {2, 4, 8}) {
+          SCOPED_TRACE(static_cast<unsigned>(Architecture));
+          SCOPED_TRACE(static_cast<unsigned>(Opcode));
+          SCOPED_TRACE(InputSize);
+          SCOPED_TRACE(OutputSize);
+          CFGBuilder Builder;
+          const auto Query = Access::seedCountLane(Builder, Image, Opcode,
+                                                   InputSize, OutputSize);
+          const auto Result = Access::batch(Builder, {Query});
+          EXPECT_TRUE(Result.Complete);
+          EXPECT_EQ(Result.QueryComplete, (std::vector<bool>{true}));
+          EXPECT_EQ(Result.Values, (std::vector<bool>{true}));
+        }
+      }
+    }
+  }
+}
+
+TEST(ResolverCountLane, OtherWidthsLanesAndOperationsGrantNoProof) {
+  const auto Image = image();
+  for (auto Opcode : {NdOp::POPCOUNT, NdOp::LZCOUNT, NdOp::INT_NOT}) {
+    for (const auto Shape : {std::array<unsigned, 4>{0, 4, 0, 1},
+                             {16, 4, 0, 1},
+                             {4, 16, 0, 1},
+                             {4, 4, 1, 1},
+                             {4, 4, 0, 0},
+                             {4, 4, 0, 2}}) {
+      SCOPED_TRACE(static_cast<unsigned>(Opcode));
+      SCOPED_TRACE(::testing::PrintToString(Shape));
+      CFGBuilder Builder;
+      const auto Query = Access::seedCountLane(Builder, Image, Opcode, Shape[0],
+                                               Shape[1], Shape[2], Shape[3]);
+      EXPECT_EQ(Access::batch(Builder, {Query}).Values,
+                (std::vector<bool>{false}));
+    }
+  }
+  CFGBuilder Other;
+  const auto Query = Access::seedCountLane(Other, Image, NdOp::INT_NOT, 4, 4);
+  EXPECT_EQ(Access::batch(Other, {Query}).Values, (std::vector<bool>{false}));
+}
+
+TEST(ResolverCountLane, ExtensionsAndCachedProofsKeepTheirWorkContract) {
+  const auto Image = image();
+  CFGBuilder Warm;
+  auto Query = Access::seedCountLane(Warm, Image, NdOp::POPCOUNT, 8, 8);
+  const auto First = Access::batch(Warm, {Query});
+  ASSERT_TRUE(First.Complete);
+  ASSERT_EQ(First.Values, (std::vector<bool>{true}));
+  const auto Hits = Access::stats(Warm)[0];
+  EXPECT_EQ(Access::batch(Warm, {Query}), First);
+  EXPECT_GT(Access::stats(Warm)[0], Hits);
+  const size_t Work = 1000000 - First.Remaining;
+  ASSERT_GT(Work, 1u);
+  for (size_t Budget :
+       {size_t{0}, size_t{1}, Work / 2, Work - 1, Work, Work + 1}) {
+    SCOPED_TRACE(Budget);
+    CFGBuilder Cold;
+    Access::seedCountLane(Cold, Image, NdOp::POPCOUNT, 8, 8);
+    EXPECT_EQ(Access::batch(Warm, {Query}, Budget),
+              Access::batch(Cold, {Query}, Budget));
+  }
+  EXPECT_FALSE(Access::batch(Warm, {Query}, 0).Complete);
+  EXPECT_TRUE(Access::batch(Warm, {Query}, 0).Values.empty());
+  Query.AllowZeroExtension = false;
+  const auto NoExtension = Access::batch(Warm, {Query});
+  EXPECT_TRUE(NoExtension.Complete);
+  EXPECT_EQ(NoExtension.Values, (std::vector<bool>{false}));
+}
+
 TEST(ResolverValueQueryCache, ReplaysOrderedResultsAndEveryBudgetBoundary) {
   const auto Image = image();
   CFGBuilder Warm;
@@ -530,7 +710,7 @@ TEST(ResolverValueQueryCache, GraphIdentityDoesNotReplaceProofContextIdentity) {
   EXPECT_EQ(Access::batch(B, {Q}), Changed);
 }
 
-TEST(ResolverValueQueryCache, AnalysisIncompleteCannotBecomeAReusableAnswer) {
+TEST(ResolverValueQueryCache, DepthRefusalRemainsIncompleteAndRetriesNewLimit) {
   const auto Image = image();
   CFGBuilder B;
   Access::seed(B, Image, 16);
@@ -540,17 +720,208 @@ TEST(ResolverValueQueryCache, AnalysisIncompleteCannotBecomeAReusableAnswer) {
   ASSERT_GT(Incomplete.Remaining, 0u);
   ASSERT_TRUE(Access::token(B));
   EXPECT_EQ(Access::stats(B)[0], 0u);
-  EXPECT_EQ(Access::stats(B)[1], 0u);
+  EXPECT_EQ(Access::stats(B)[1], 1u);
   EXPECT_EQ(Access::batch(B, {Q}, 1000000, 1), Incomplete);
-  EXPECT_EQ(Access::stats(B)[0], 0u);
-  EXPECT_EQ(Access::stats(B)[1], 0u);
+  EXPECT_EQ(Access::stats(B)[0], 1u);
+  EXPECT_EQ(Access::stats(B)[1], 1u);
   const auto Complete = Access::batch(B, {Q});
   ASSERT_TRUE(Complete.Complete);
   ASSERT_GT(Access::stats(B)[1], 0u);
   EXPECT_EQ(Access::batch(B, {Q}, 1000000, 1), Incomplete);
-  EXPECT_EQ(Access::stats(B)[0], 0u);
+  EXPECT_EQ(Access::stats(B)[0], 2u);
   EXPECT_EQ(Access::batch(B, {Q}), Complete);
-  EXPECT_EQ(Access::stats(B)[0], 1u);
+  EXPECT_EQ(Access::stats(B)[0], 3u);
+}
+
+TEST(ResolverValueQueryCache, DepthRefusalPreservesIndependentQueryOutputs) {
+  const auto Image = image();
+  const auto Deep = Access::valueQuery(16);
+  auto Direct = Deep;
+  Direct.Candidate = NdVar::cst(7, 8);
+  auto Different = Direct;
+  Different.Alternatives.front().Value = NdVar::cst(8, 8);
+  auto Range = Direct;
+  Range.Relation = Access::Relation::UnsignedFeasibleSet;
+  Range.UnsignedUpperBound = 16;
+  Range.Alternatives.clear();
+  for (bool WantComplete : {false, true}) {
+    for (bool WantQueryComplete : {false, true}) {
+      for (bool WantMasks : {false, true}) {
+        SCOPED_TRACE(std::to_string(WantComplete) + ":" +
+                     std::to_string(WantQueryComplete) + ":" +
+                     std::to_string(WantMasks));
+        CFGBuilder B;
+        Access::seed(B, Image, 16);
+        auto Run = [&](const std::vector<Access::Query> &Queries) {
+          return Access::batch(B, Queries, 1000000, 1, 0, WantComplete,
+                               WantQueryComplete, WantMasks);
+        };
+        const std::vector<Access::Query> Queries{Range, Deep, Direct,
+                                                 Different};
+        const auto First = Run(Queries);
+        EXPECT_FALSE(First.Complete);
+        EXPECT_EQ(First.Values, (std::vector<bool>{true, false, true, false}));
+        if (WantQueryComplete)
+          EXPECT_EQ(First.QueryComplete,
+                    (std::vector<bool>{true, false, true, true}));
+        if (WantMasks)
+          EXPECT_EQ(First.Masks, (std::vector<uint64_t>{128, 0, 0, 0}));
+        EXPECT_EQ(Run(Queries), First);
+        EXPECT_EQ(Access::stats(B)[0], 1u);
+        const std::vector<Access::Query> Reordered{Deep, Range, Different,
+                                                   Direct};
+        const auto Changed = Run(Reordered);
+        EXPECT_EQ(Access::stats(B)[0], 1u);
+        Access::clear(B);
+        EXPECT_EQ(Run(Reordered), Changed);
+      }
+    }
+  }
+}
+
+TEST(ResolverValueQueryCache, DepthRefusalPaysColdWorkAndTracksContext) {
+  const auto Image = image();
+  const auto Deep = Access::valueQuery(16);
+  auto Direct = Deep;
+  Direct.Candidate = NdVar::cst(7, 8);
+  CFGBuilder Warm;
+  Access::seed(Warm, Image, 16);
+  auto Run = [&](CFGBuilder &B, size_t Budget) {
+    return Access::batch(B, {Deep, Direct}, Budget, 1, 0, true, true, true);
+  };
+  const auto First = Run(Warm, 1000000);
+  ASSERT_FALSE(First.Complete);
+  ASSERT_EQ(First.QueryComplete, (std::vector<bool>{false, true}));
+  ASSERT_EQ(Access::stats(Warm)[1], 1u);
+  const size_t Work = 1000000 - First.Remaining;
+  for (size_t Budget = 0; Budget <= Work + 1; ++Budget) {
+    SCOPED_TRACE(Budget);
+    CFGBuilder Cold;
+    Access::seed(Cold, Image, 16);
+    EXPECT_EQ(Run(Warm, Budget), Run(Cold, Budget));
+  }
+  for (auto Mutate :
+       {Access::changeValue, Access::changeEntry,
+        Access::changeAddressOccurrence, Access::changeNestedAddressOccurrence,
+        Access::changeScalarOccurrence}) {
+    CFGBuilder B;
+    Access::seed(B, Image, 16);
+    Access::seedOccurrences(B);
+    const auto Original = Run(B, 1000000);
+    ASSERT_EQ(Run(B, 1000000), Original);
+    const auto Graph = Access::token(B);
+    const auto Hits = Access::stats(B)[0];
+    Mutate(B);
+    const auto Changed = Run(B, 1000000);
+    EXPECT_EQ(Access::stats(B)[0], Access::token(B) == Graph ? Hits : 0u);
+    Access::clear(B);
+    EXPECT_EQ(Run(B, 1000000), Changed);
+  }
+}
+
+TEST(ResolverValueQueryCache, SharedMatchFailureClearsEveryOutput) {
+  const auto Image = image();
+  CFGBuilder B;
+  Access::seed(B, Image);
+  auto Range = Access::valueQuery();
+  Range.Relation = Access::Relation::UnsignedFeasibleSet;
+  Range.UnsignedUpperBound = 16;
+  Range.Alternatives.clear();
+  const auto Match = Access::valueQuery();
+  const auto Result =
+      Access::batch(B, {Range, Match, Range}, 1000000, 0, 1, true, true, true);
+  EXPECT_FALSE(Result.Complete);
+  EXPECT_EQ(Result.Values, (std::vector<bool>{false, false, false}));
+  EXPECT_EQ(Result.QueryComplete, (std::vector<bool>{false, false, false}));
+  EXPECT_EQ(Result.Masks, (std::vector<uint64_t>{0, 0, 0}))
+      << "a failed transaction must not expose a prefix or suffix mask";
+}
+
+TEST(ResolverValueQueryCache, MatchRefusalReplaysWithoutBecomingAProof) {
+  const auto Image = image();
+  const auto Q = Access::valueQuery();
+  for (bool WantComplete : {false, true}) {
+    for (bool WantQueryComplete : {false, true}) {
+      for (bool WantMasks : {false, true}) {
+        SCOPED_TRACE(std::to_string(WantComplete) + ":" +
+                     std::to_string(WantQueryComplete) + ":" +
+                     std::to_string(WantMasks));
+        CFGBuilder B;
+        Access::seed(B, Image);
+        auto Run = [&](size_t MatchLimit) {
+          return Access::batch(B, {Q}, 1000000, 0, MatchLimit, WantComplete,
+                               WantQueryComplete, WantMasks);
+        };
+        const auto Refusal = Run(1);
+        ASSERT_FALSE(Refusal.Complete);
+        ASSERT_EQ(Refusal.Values, (std::vector<bool>{false}));
+        ASSERT_GT(Refusal.Remaining, 0u);
+        ASSERT_EQ(Access::stats(B)[1], 1u);
+        EXPECT_EQ(Run(1), Refusal);
+        EXPECT_EQ(Access::stats(B)[0], 1u);
+        const auto Retried = Run(0);
+        EXPECT_EQ(Retried.Complete, WantComplete);
+        EXPECT_EQ(Retried.Values, (std::vector<bool>{true}));
+        EXPECT_EQ(Access::stats(B)[0], 1u)
+            << "a larger match allowance must reanalyze the query";
+        EXPECT_EQ(Run(1), Refusal);
+        EXPECT_EQ(Access::stats(B)[0], 2u);
+      }
+    }
+  }
+}
+
+TEST(ResolverValueQueryCache, MatchRefusalPaysColdWorkAndTracksGraphChanges) {
+  const auto Image = image();
+  const auto Q = Access::valueQuery();
+  CFGBuilder Warm;
+  Access::seed(Warm, Image);
+  auto Run = [&](CFGBuilder &B, size_t Budget) {
+    return Access::batch(B, {Q}, Budget, 0, 1, true, true, true);
+  };
+  const auto Refusal = Run(Warm, 1000000);
+  ASSERT_FALSE(Refusal.Complete);
+  ASSERT_EQ(Access::stats(Warm)[1], 1u);
+  const size_t Work = 1000000 - Refusal.Remaining;
+  for (size_t Budget = 0; Budget <= Work + 1; ++Budget) {
+    SCOPED_TRACE(Budget);
+    CFGBuilder Cold;
+    Access::seed(Cold, Image);
+    EXPECT_EQ(Run(Warm, Budget), Run(Cold, Budget));
+  }
+  const auto OriginalGraph = Access::token(Warm);
+  Access::changeValue(Warm);
+  const auto Changed = Run(Warm, 1000000);
+  EXPECT_NE(Access::token(Warm), OriginalGraph);
+  EXPECT_EQ(Access::stats(Warm)[0], 0u);
+  Access::clear(Warm);
+  EXPECT_EQ(Run(Warm, 1000000), Changed);
+  const auto Complete = Access::batch(Warm, {Q});
+  EXPECT_TRUE(Complete.Complete);
+  EXPECT_EQ(Complete.Values, (std::vector<bool>{false}));
+}
+
+TEST(ResolverValueQueryCache, EarlierUnknownPreventsMatchRefusalRetention) {
+  const auto Image = image();
+  CFGBuilder B;
+  Access::seed(B, Image, 16);
+  auto Unknown = Access::valueQuery(16);
+  Unknown.Candidate = NdVar::cst(7, 8);
+  Unknown.Relation = Access::Relation::UnsignedFeasibleSet;
+  Unknown.UnsignedUpperBound = 0;
+  auto Direct = Access::valueQuery(16);
+  Direct.Candidate = NdVar::cst(7, 8);
+  const auto First = Access::batch(B, {Unknown, Direct}, 1000000, 1, 1);
+  ASSERT_FALSE(First.Complete);
+  ASSERT_EQ(First.Values, (std::vector<bool>{false, false}));
+  EXPECT_EQ(Access::stats(B)[1], 0u);
+  EXPECT_EQ(Access::batch(B, {Unknown, Direct}, 1000000, 1, 1), First);
+  EXPECT_EQ(Access::stats(B)[0], 0u);
+  EXPECT_EQ(Access::stats(B)[1], 0u);
+  Unknown.UnsignedUpperBound = 16;
+  const auto Complete = Access::batch(B, {Unknown, Direct});
+  EXPECT_TRUE(Complete.Complete);
+  EXPECT_EQ(Complete.Values, (std::vector<bool>{true, true}));
 }
 
 TEST(ResolverValueQueryCache, RetainedCompletedBatchesAreBounded) {

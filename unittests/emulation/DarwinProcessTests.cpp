@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "DarwinEntropyTestData.h"
 #include "DarwinFileTestData.h"
 #include "DarwinSystemTestData.h"
 #include "DarwinTestImage.h"
@@ -80,6 +81,592 @@ protected:
     return emulateProcess(Path, GetParam().OS, Options);
   }
 };
+TEST_P(DarwinProcess, MachSelfPortsPreserveExplicitBitsAndIndependentRuns) {
+  Options.InstructionQuantum = 1024;
+  const bool X64 = GetParam().ISA == GuestArchitecture::X64;
+  const auto check = [&](const ProcessResult &R,
+                         const std::array<uint64_t, 3> &Carriers) {
+    EXPECT_EQ(R.Stop, ProcessStopReason::Exited) << R.Diagnostic;
+    EXPECT_EQ(R.ExitStatus, 37);
+    EXPECT_TRUE(R.StandardError.empty());
+    EXPECT_EQ(R.SelectedBackend, GetParam().Backend);
+    ASSERT_EQ(R.Services.size(), 22u);
+    for (unsigned Q = 0; Q != 3; ++Q) {
+      const uint32_t Low = X64 ? 0x1000000 | (27 + Q) : 0u - (27 + Q);
+      for (unsigned I = 0; I != 7; ++I) {
+        const auto &E = R.Services[Q * 7 + I];
+        const uint64_t Prefix = !I      ? (X64 ? 0 : 0xffffffff00000000ULL)
+                                : I < 3 ? 0
+                                : I < 5 ? 0x1234567800000000ULL
+                                        : 0xffffffff00000000ULL;
+        EXPECT_EQ(E.Number, Prefix | Low);
+        EXPECT_EQ(E.Result, Carriers[Q]);
+        EXPECT_FALSE(E.Error);
+        EXPECT_FALSE(E.ThreadID);
+        EXPECT_EQ(E.Arguments[0], UINT64_MAX);
+        EXPECT_EQ(E.Arguments[X64 ? 2 : 1], 0x1122334455667788ULL);
+        EXPECT_EQ(E.Arguments[X64 ? 1 : 2], 0x8877665544332211ULL);
+      }
+    }
+    const auto &Write = R.Services.back();
+    EXPECT_EQ(Write.Number, X64 ? 0x2000004u : 4u);
+    EXPECT_EQ(Write.Arguments[0], 1u);
+    EXPECT_EQ(Write.Result, Write.Arguments[2]);
+    EXPECT_EQ(Write.Error, false);
+    EXPECT_FALSE(Write.ThreadID);
+  };
+  Options.DarwinSystem = darwin_test::machSelfPortOptions();
+  const std::array<uint64_t, 3> Mixed = {0xffffffff80000001ULL, 0, UINT64_MAX};
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("mach-self-ports");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    check(*R, Mixed);
+    EXPECT_EQ(R->StandardOutput, "J");
+  }
+  struct Sample {
+    uint32_t Name;
+    uint64_t Carrier;
+    const char *Hex;
+  };
+  for (const auto &S :
+       {Sample{0, 0, "0000000000000000"}, Sample{1, 1, "0100000000000000"},
+        Sample{0x7fffffff, 0x7fffffff, "ffffff7f00000000"},
+        Sample{0x80000000, 0xffffffff80000000ULL, "00000080ffffffff"},
+        Sample{0x80000001, 0xffffffff80000001ULL, "01000080ffffffff"},
+        Sample{UINT32_MAX, UINT64_MAX, "ffffffffffffffff"}}) {
+    SCOPED_TRACE(S.Name);
+    Options.DarwinSystem->ThreadSelfPort = S.Name;
+    Options.DarwinSystem->TaskSelfPort = S.Name;
+    Options.DarwinSystem->HostSelfPort = S.Name;
+    for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+      auto R = run("mach-self-port-values");
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      check(*R, {S.Carrier, S.Carrier, S.Carrier});
+      EXPECT_EQ(R->StandardOutput,
+                llvm::fromHex(std::string(S.Hex) + S.Hex + S.Hex));
+      EXPECT_EQ(Options.DarwinSystem->ThreadSelfPort, S.Name);
+      EXPECT_EQ(Options.DarwinSystem->TaskSelfPort, S.Name);
+      EXPECT_EQ(Options.DarwinSystem->HostSelfPort, S.Name);
+    }
+  }
+  auto Independent = Options;
+  Independent.DarwinSystem = darwin_test::machSelfPortOptions();
+  auto R = emulateProcess(Path, GetParam().OS, Independent);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  check(*R, Mixed);
+  EXPECT_EQ(R->StandardOutput, llvm::fromHex(darwin_test::MachSelfPortsHex));
+  EXPECT_EQ(Options.DarwinSystem->ThreadSelfPort, UINT32_MAX);
+  const std::array<std::optional<uint32_t> DarwinSystemOptions::*, 3> Members =
+      {&DarwinSystemOptions::ThreadSelfPort, &DarwinSystemOptions::TaskSelfPort,
+       &DarwinSystemOptions::HostSelfPort};
+  const char *Selections[] = {"thread", "task", "host"};
+  for (unsigned Q = 0; Q != 3; ++Q) {
+    Options.Arguments[2] = Selections[Q];
+    for (unsigned State = 0; State != 3; ++State) {
+      Options.DarwinSystem.reset();
+      if (State)
+        Options.DarwinSystem.emplace();
+      if (State == 2) {
+        Options.DarwinSystem = darwin_test::machSelfPortOptions();
+        Options.DarwinSystem->ThreadID = UINT64_MAX;
+        ((*Options.DarwinSystem).*Members[Q]).reset();
+      }
+      auto Missing = run("mach-self-port-missing");
+      ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+      EXPECT_EQ(Missing->Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_EQ(Missing->Diagnostic,
+                std::string("Darwin current-") + Selections[Q] +
+                    " Mach port observation is not configured");
+      EXPECT_EQ(Missing->StandardOutput, "!");
+      ASSERT_EQ(Missing->Services.size(), 2u);
+      EXPECT_EQ(Missing->Services.back().Number,
+                X64 ? uint64_t(0x1000000 | (27 + Q))
+                    : uint64_t(-int64_t(27 + Q)));
+      EXPECT_FALSE(Missing->Services.back().Result);
+      EXPECT_FALSE(Missing->Services.back().Error);
+      EXPECT_FALSE(Missing->Services.back().ThreadID);
+    }
+  }
+}
+
+TEST_P(DarwinProcess, OwnerQueriesKeepPermissionAndUnknownBoundaries) {
+  Options.InstructionQuantum = 1024;
+  Options.DarwinFiles = darwin_test::ownerQueryOptions();
+  Options.DarwinSystem.emplace().Credentials =
+      DarwinCredentials{501, 501, 20, 20, {}};
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("owner-queries");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+    EXPECT_EQ(R->ExitStatus, 37);
+    EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+    EXPECT_EQ(R->StandardOutput, "P");
+    EXPECT_TRUE(R->StandardError.empty());
+    ASSERT_EQ(R->Services.size(), 51u);
+    constexpr uint64_t FileErrors[] = {0, 13, 13, 13, 0, 13, 13, 13};
+    for (unsigned API = 0; API != 3; ++API) {
+      for (unsigned Request = 0; Request != 8; ++Request) {
+        const auto &E = R->Services[API * 8 + Request];
+        EXPECT_EQ(E.Number, Class + (API ? 466 : 33));
+        EXPECT_EQ(E.Result, FileErrors[Request]);
+        EXPECT_EQ(E.Error, FileErrors[Request] != 0);
+        EXPECT_EQ(E.Arguments[API ? 2 : 1], Request);
+      }
+    }
+    const auto &Raw = R->Services[47];
+    EXPECT_EQ(Raw.Number, 0x1234567800000021ULL | Class);
+    EXPECT_EQ(Raw.Result, 0u);
+    EXPECT_EQ(Raw.Error, false);
+    EXPECT_EQ(R->Services[48].Number, Class + 197);
+    EXPECT_EQ(R->Services[48].Error, false);
+    EXPECT_EQ(R->Services[49].Number, Class + 73);
+    EXPECT_EQ(R->Services[49].Result, 0u);
+    EXPECT_EQ(R->Services[50].Number, Class + 4);
+    EXPECT_EQ(R->Services[50].Result, 1u);
+    EXPECT_EQ(Options.DarwinFiles->Metadata.at("/data").Mode, 0100400);
+    EXPECT_EQ(Options.DarwinSystem->Credentials->RealUID, 501u);
+  }
+  const auto Good = Options;
+  for (const char *Mode : {"owner-query-open", "owner-query-map"}) {
+    Options = Good;
+    auto R = run(Mode);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(
+        R->Diagnostic,
+        "Darwin static owner queries do not authorize other vnode operations");
+    EXPECT_EQ(R->StandardOutput, "!");
+    ASSERT_EQ(R->Services.size(), 2u);
+    EXPECT_EQ(R->Services.back().Number,
+              Class + (llvm::StringRef(Mode).ends_with("map") ? 197 : 5));
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+  for (unsigned Missing = 0; Missing != 6; ++Missing) {
+    SCOPED_TRACE(Missing);
+    Options = Good;
+    Options.Arguments[2] = "/data";
+    const char *Reason;
+    if (Missing == 0) {
+      Options.DarwinSystem.reset();
+      Reason = "Darwin owner authorization requires explicit credentials";
+    } else if (Missing < 3) {
+      Options.DarwinFiles->Metadata.erase(Missing == 1 ? "/" : "/data");
+      Reason = "Darwin owner authorization requires explicit object metadata";
+    } else {
+      Options.DarwinSystem->Credentials->RealUID = Missing == 3 ? 0 : 502;
+      if (Missing == 5) {
+        Options.DarwinSystem->Credentials->RealUID = 501;
+        Options.DarwinFiles->Metadata["/data"].UID = 502;
+      }
+      Reason =
+          "Darwin owner authorization requires a matching nonzero owner UID";
+    }
+    auto R = run("owner-query-stop");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic, Reason);
+    EXPECT_EQ(R->StandardOutput, "!");
+    ASSERT_EQ(R->Services.size(), 2u);
+    EXPECT_EQ(R->Services.back().Number, Class + 33);
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+  Options = Good;
+  auto Independent = run("owner-queries");
+  ASSERT_TRUE(bool(Independent)) << llvm::toString(Independent.takeError());
+  EXPECT_EQ(Independent->Stop, ProcessStopReason::Exited)
+      << Independent->Diagnostic;
+  EXPECT_EQ(Independent->StandardOutput, "P");
+}
+
+TEST_P(DarwinProcess, OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch) {
+  Options.InstructionQuantum = 1024;
+  Options.DarwinFiles = darwin_test::ordinaryQueryOptions();
+  Options.DarwinSystem.emplace().Credentials =
+      DarwinCredentials{501, 502, 30, 20, std::vector<uint32_t>{20, 40}};
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("ordinary-queries");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+    EXPECT_EQ(R->ExitStatus, 37);
+    EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+    EXPECT_EQ(R->StandardOutput, "G");
+    EXPECT_TRUE(R->StandardError.empty());
+    ASSERT_EQ(R->Services.size(), 146u);
+    constexpr uint64_t Read[] = {0, 13, 13, 13, 0, 13, 13, 13};
+    constexpr uint64_t None[] = {0, 13, 13, 13, 13, 13, 13, 13};
+    constexpr uint64_t RW[] = {0, 13, 0, 13, 0, 13, 0, 13};
+    constexpr uint64_t X[] = {0, 0, 13, 13, 13, 13, 13, 13};
+    for (unsigned API = 0; API != 3; ++API)
+      for (unsigned Request = 0; Request != 8; ++Request) {
+        const uint64_t Expected[] = {
+            Read[Request], API == 2 ? RW[Request] : None[Request], X[Request],
+            API == 2 ? None[Request] : Read[Request]};
+        for (unsigned File = 0; File != 4; ++File) {
+          const auto &E = R->Services[API * 32 + Request * 4 + File];
+          EXPECT_EQ(E.Number, Class + (API ? 466 : 33));
+          EXPECT_EQ(E.Result, Expected[File]);
+          EXPECT_EQ(E.Error, Expected[File] != 0);
+          EXPECT_EQ(E.Arguments[API ? 2 : 1], Request);
+          if (API)
+            EXPECT_EQ(E.Arguments[3], API == 2 ? 16u : 0u);
+        }
+      }
+    constexpr uint64_t Remaining[] = {
+        0,  13, 13, 13, 0,  13, 13, 13, 0,  13, 13, 13, 0, 13, 13, 13,
+        0,  13, 13, 0,  13, 13, 0,  13, 13, 13, 13, 13, 0, 2,  0,  13,
+        13, 13, 13, 13, 0,  2,  0,  2,  0,  0,  0,  0,  0, 2};
+    for (unsigned I = 0; I != std::size(Remaining); ++I) {
+      const auto &E = R->Services[96 + I];
+      EXPECT_EQ(E.Result, Remaining[I]);
+      EXPECT_EQ(E.Error, Remaining[I] != 0);
+    }
+    EXPECT_EQ(R->Services[142].Number, 0x1234567800000021ULL | Class);
+    EXPECT_EQ(R->Services[142].Result, 0u);
+    EXPECT_EQ(R->Services[143].Number, Class + 197);
+    EXPECT_EQ(R->Services[143].Error, false);
+    EXPECT_EQ(R->Services[144].Number, Class + 73);
+    EXPECT_EQ(R->Services[144].Result, 0u);
+    EXPECT_EQ(R->Services[145].Number, Class + 4);
+    EXPECT_EQ(R->Services[145].Result, 1u);
+    EXPECT_EQ(
+        Options.DarwinSystem->Credentials->GroupAccessList,
+        std::optional<std::vector<uint32_t>>(std::vector<uint32_t>{20, 40}));
+    EXPECT_EQ(Options.DarwinFiles->Metadata.at("/group").Mode, 0100060);
+  }
+  const auto Good = Options;
+  for (const char *Mode : {"ordinary-query-open", "ordinary-query-map"}) {
+    Options = Good;
+    auto R = run(Mode);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic, "Darwin static ordinary queries do not authorize "
+                             "other vnode operations");
+    EXPECT_EQ(R->StandardOutput, "!");
+    ASSERT_EQ(R->Services.size(), 2u);
+    EXPECT_EQ(R->Services.back().Number,
+              Class + (llvm::StringRef(Mode).ends_with("map") ? 197 : 5));
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+  for (unsigned Missing = 0; Missing != 5; ++Missing) {
+    SCOPED_TRACE(Missing);
+    Options = Good;
+    Options.Arguments[2] = Missing == 0 ? "/unknown" : "/agreement";
+    const char *Reason =
+        "Darwin ordinary authorization requires known group membership";
+    if (Missing == 1) {
+      Options.DarwinSystem.reset();
+      Reason = "Darwin ordinary authorization requires explicit credentials";
+    } else if (Missing == 2 || Missing == 3) {
+      Options.DarwinFiles->Metadata.erase(Missing == 2 ? "/" : "/agreement");
+      Reason =
+          "Darwin ordinary authorization requires explicit object metadata";
+    } else if (Missing == 4) {
+      Options.DarwinSystem->Credentials->EffectiveUID = 0;
+      Reason = "Darwin ordinary authorization requires a nonzero selected UID";
+    }
+    auto R = run("ordinary-query-unknown");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic, Reason);
+    EXPECT_EQ(R->StandardOutput, "!");
+    ASSERT_EQ(R->Services.size(), 2u);
+    EXPECT_EQ(R->Services.back().Number, Class + 466);
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+  Options = Good;
+  auto Independent = run("ordinary-queries");
+  ASSERT_TRUE(bool(Independent)) << llvm::toString(Independent.takeError());
+  EXPECT_EQ(Independent->Stop, ProcessStopReason::Exited)
+      << Independent->Diagnostic;
+  EXPECT_EQ(Independent->StandardOutput, "G");
+}
+
+TEST_P(DarwinProcess, OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver) {
+  Options.InstructionQuantum = 1024;
+  Options.DarwinFiles = darwin_test::closedGroupQueryOptions();
+  Options.DarwinSystem.emplace().Credentials = DarwinCredentials{
+      501, 502, 30, 20, std::vector<uint32_t>{20, 40}, 4294967195u};
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  constexpr uint64_t Read[] = {0, 13, 13, 13, 0, 13, 13, 13};
+  constexpr uint64_t None[] = {0, 13, 13, 13, 13, 13, 13, 13};
+  constexpr uint64_t RW[] = {0, 13, 0, 13, 0, 13, 0, 13};
+  constexpr uint64_t X[] = {0, 0, 13, 13, 13, 13, 13, 13};
+  constexpr uint64_t Remaining[] = {
+      0,  13, 13, 13, 0,  13, 13, 13, 0,  13, 13, 13, 0, 13, 13, 13,
+      0,  13, 13, 0,  13, 13, 0,  13, 13, 13, 13, 13, 0, 2,  0,  13,
+      13, 13, 13, 13, 0,  2,  0,  2,  0,  0,  0,  0,  0, 2};
+  constexpr uint64_t Search[] = {2, 0, 0, 0, 13, 13, 0, 0};
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("ordinary-queries-closed-groups");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+    EXPECT_EQ(R->ExitStatus, 37);
+    EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+    EXPECT_EQ(R->StandardOutput, "GN");
+    EXPECT_TRUE(R->StandardError.empty());
+    ASSERT_EQ(R->Services.size(), 173u);
+    for (unsigned API = 0; API != 3; ++API)
+      for (unsigned Request = 0; Request != 8; ++Request) {
+        const uint64_t Expected[] = {
+            Read[Request], API == 2 ? RW[Request] : None[Request], X[Request],
+            API == 2 ? None[Request] : Read[Request]};
+        for (unsigned File = 0; File != 4; ++File) {
+          const auto &E = R->Services[API * 32 + Request * 4 + File];
+          EXPECT_EQ(E.Number, Class + (API ? 466 : 33));
+          EXPECT_EQ(E.Result, Expected[File]);
+          EXPECT_EQ(E.Error, Expected[File] != 0);
+          EXPECT_EQ(E.Arguments[API ? 2 : 1], Request);
+          if (API)
+            EXPECT_EQ(E.Arguments[3], API == 2 ? 16u : 0u);
+        }
+      }
+    for (unsigned I = 0; I != std::size(Remaining); ++I) {
+      const auto &E = R->Services[96 + I];
+      EXPECT_EQ(E.Result, Remaining[I]);
+      EXPECT_EQ(E.Error, Remaining[I] != 0);
+    }
+    EXPECT_EQ(R->Services[142].Number, 0x1234567800000021ULL | Class);
+    EXPECT_EQ(R->Services[142].Result, 0u);
+    EXPECT_EQ(R->Services[143].Number, Class + 197);
+    EXPECT_EQ(R->Services[143].Error, false);
+    EXPECT_EQ(R->Services[144].Number, Class + 73);
+    EXPECT_EQ(R->Services[144].Result, 0u);
+    EXPECT_EQ(R->Services[145].Number, Class + 4);
+    EXPECT_EQ(R->Services[145].Result, 1u);
+    for (unsigned I = 0; I != 2; ++I) {
+      const auto &E = R->Services[146 + I];
+      EXPECT_EQ(E.Number, Class + 466);
+      EXPECT_EQ(E.Result, 13u);
+      EXPECT_EQ(E.Error, true);
+      EXPECT_EQ(E.Arguments[2], I ? 6u : 2u);
+      EXPECT_EQ(E.Arguments[3], 16u);
+    }
+    for (unsigned API = 0; API != 3; ++API)
+      for (unsigned I = 0; I != 8; ++I) {
+        const auto &E = R->Services[148 + API * 8 + I];
+        EXPECT_EQ(E.Number, Class + (API ? 466 : 33));
+        EXPECT_EQ(E.Result, Search[I]);
+        EXPECT_EQ(E.Error, Search[I] != 0);
+        EXPECT_EQ(E.Arguments[API ? 2 : 1], I == 1 || I == 6 ? 4u : 0u);
+        if (API)
+          EXPECT_EQ(E.Arguments[3], API == 2 ? 16u : 0u);
+      }
+    EXPECT_EQ(R->Services[172].Number, Class + 4);
+    EXPECT_EQ(R->Services[172].Result, 1u);
+    EXPECT_EQ(Options.DarwinSystem->Credentials->GroupMembershipUID,
+              4294967195u);
+    EXPECT_EQ(
+        Options.DarwinSystem->Credentials->GroupAccessList,
+        std::optional<std::vector<uint32_t>>(std::vector<uint32_t>{20, 40}));
+    EXPECT_EQ(Options.DarwinFiles->Metadata.at("/external").Mode, 040001);
+    EXPECT_EQ(Options.DarwinFiles->Metadata.at("/blocked").Mode, 040010);
+  }
+  const auto Good = Options;
+  const std::optional<uint32_t> UnknownUIDs[] = {std::nullopt, 0u,
+                                                 uint32_t(INT32_MAX)};
+  for (auto MembershipUID : UnknownUIDs) {
+    Options = Good;
+    Options.DarwinSystem->Credentials->GroupMembershipUID = MembershipUID;
+    auto R = run("ordinary-queries-closed-groups");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic,
+              "Darwin ordinary authorization requires known group membership");
+    EXPECT_EQ(R->StandardOutput, "G");
+    ASSERT_EQ(R->Services.size(), 147u);
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+  for (unsigned Missing = 0; Missing != 3; ++Missing) {
+    Options = Good;
+    Options.Arguments[2] = "/unknown";
+    const char *Reason =
+        "Darwin ordinary authorization requires known group membership";
+    if (Missing == 0)
+      Options.DarwinSystem->Credentials->GroupAccessList.reset();
+    else if (Missing == 1) {
+      Options.DarwinSystem->Credentials->EffectiveUID = 0;
+      Reason = "Darwin ordinary authorization requires a nonzero selected UID";
+    } else {
+      Options.DarwinFiles->Metadata.erase("/unknown");
+      Reason =
+          "Darwin ordinary authorization requires explicit object metadata";
+    }
+    auto R = run("ordinary-query-unknown");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic, Reason);
+    EXPECT_EQ(R->StandardOutput, "!");
+    ASSERT_EQ(R->Services.size(), 2u);
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+  for (const char *Mode : {"ordinary-query-open", "ordinary-query-map"}) {
+    Options = Good;
+    auto R = run(Mode);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic, "Darwin static ordinary queries do not authorize "
+                             "other vnode operations");
+    EXPECT_EQ(R->StandardOutput, "!");
+    ASSERT_EQ(R->Services.size(), 2u);
+  }
+  Options = Good;
+  auto Again = run("ordinary-queries-closed-groups");
+  ASSERT_TRUE(bool(Again)) << llvm::toString(Again.takeError());
+  EXPECT_EQ(Again->Stop, ProcessStopReason::Exited) << Again->Diagnostic;
+  EXPECT_EQ(Again->StandardOutput, "GN");
+  EXPECT_EQ(Options.DarwinSystem->Credentials->GroupMembershipUID, 4294967195u);
+}
+
+TEST_P(DarwinProcess, ThreadIdentityPreservesExplicitBitsAndIndependentRuns) {
+  Options.InstructionQuantum = 1024;
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  const auto check = [&](const ProcessResult &R, uint64_t ID) {
+    EXPECT_EQ(R.Stop, ProcessStopReason::Exited) << R.Diagnostic;
+    EXPECT_EQ(R.ExitStatus, 37);
+    EXPECT_TRUE(R.StandardError.empty());
+    EXPECT_EQ(R.SelectedBackend, GetParam().Backend);
+    std::vector<const ProcessServiceEvent *> Calls;
+    for (const auto &E : R.Services)
+      if (uint32_t(E.Number) == Class + 372)
+        Calls.push_back(&E);
+    ASSERT_EQ(Calls.size(), 10u);
+    for (unsigned I = 0; I != 10; ++I) {
+      EXPECT_EQ(Calls[I]->Result, ID);
+      EXPECT_EQ(Calls[I]->Error, false);
+      EXPECT_FALSE(Calls[I]->ThreadID);
+      const uint64_t Prefix = I < 4   ? 0
+                              : I < 7 ? 0x1234567800000000ULL
+                                      : 0xffffffff00000000ULL;
+      EXPECT_EQ(Calls[I]->Number, Prefix | (Class + 372));
+    }
+    EXPECT_EQ(Calls.front()->Arguments[0], UINT64_MAX);
+    EXPECT_EQ(Calls.front()->Arguments[1], 0x8000000000000000ULL);
+    EXPECT_EQ(Calls.front()->Arguments[2], 0x1122334455667788ULL);
+    EXPECT_EQ(Calls.front()->Arguments[3], 1u);
+    EXPECT_EQ(Calls.front()->Arguments[4], UINT64_MAX);
+    EXPECT_EQ(Calls.front()->Arguments[5], 0x123456789abcdef0ULL);
+  };
+  Options.DarwinSystem = darwin_test::threadIdentityOptions();
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("thread-identity");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    check(*R, 0xfedcba9876543210ULL);
+    EXPECT_EQ(R->StandardOutput, "T");
+  }
+  struct Sample {
+    uint64_t ID;
+    const char *Hex;
+  };
+  for (const auto &S :
+       {Sample{0, "0000000000000000"}, Sample{1, "0100000000000000"},
+        Sample{0x100000001ULL, "0100000001000000"},
+        Sample{0x8000000000000000ULL, "0000000000000080"},
+        Sample{UINT64_MAX, "ffffffffffffffff"}}) {
+    SCOPED_TRACE(S.ID);
+    Options.DarwinSystem->ThreadID = S.ID;
+    for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+      auto R = run("thread-identity-value");
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      check(*R, S.ID);
+      EXPECT_EQ(R->StandardOutput, llvm::fromHex(S.Hex));
+      EXPECT_EQ(Options.DarwinSystem->ThreadID, S.ID);
+    }
+  }
+  auto Independent = Options;
+  Independent.DarwinSystem->ThreadID = 0xfedcba9876543210ULL;
+  auto R = emulateProcess(Path, GetParam().OS, Independent);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  check(*R, 0xfedcba9876543210ULL);
+  EXPECT_EQ(R->StandardOutput, llvm::fromHex(darwin_test::ThreadIdentityHex));
+  EXPECT_EQ(Options.DarwinSystem->ThreadID, UINT64_MAX);
+  for (bool Present : {false, true}) {
+    Options.DarwinSystem.reset();
+    if (Present)
+      Options.DarwinSystem.emplace();
+    auto Missing = run("thread-identity-missing");
+    ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+    EXPECT_EQ(Missing->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(Missing->Diagnostic,
+              "Darwin current-thread identity observation is not configured");
+    EXPECT_EQ(Missing->StandardOutput, "!");
+    ASSERT_EQ(Missing->Services.size(), 2u);
+    EXPECT_EQ(Missing->Services.back().Number, Class + 372);
+    EXPECT_FALSE(Missing->Services.back().Result);
+    EXPECT_FALSE(Missing->Services.back().Error);
+    EXPECT_FALSE(Missing->Services.back().ThreadID);
+  }
+}
+
+TEST_P(DarwinProcess, EntropyReplayKeepsBytesFaultOrderAndFreshRunLifetime) {
+  Options.InstructionQuantum = 1024;
+  Options.DarwinSystem = darwin_test::entropyReplayOptions();
+  const uint64_t Class =
+      GetParam().ISA == GuestArchitecture::X64 ? 0x2000000 : 0;
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("entropy-replay");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+    EXPECT_EQ(R->ExitStatus, 37);
+    EXPECT_EQ(R->StandardOutput, "R");
+    EXPECT_TRUE(R->StandardError.empty());
+    EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+    std::vector<const ProcessServiceEvent *> Calls;
+    for (const auto &E : R->Services)
+      if (E.Number == Class + 500)
+        Calls.push_back(&E);
+    ASSERT_EQ(Calls.size(), 28u);
+    for (unsigned I = 0; I != 24; ++I) {
+      const bool Zero = I % 6 == 0;
+      EXPECT_EQ(Calls[I]->Arguments[1] == 0, Zero);
+      EXPECT_EQ(Calls[I]->Result, Zero ? 0 : 22);
+      EXPECT_EQ(Calls[I]->Error, !Zero);
+    }
+    EXPECT_EQ(Calls[24]->Arguments[0], 0u);
+    EXPECT_EQ(Calls[24]->Result, 14u);
+    EXPECT_EQ(Calls[24]->Error, true);
+    for (unsigned I = 25; I != 28; ++I) {
+      EXPECT_EQ(Calls[I]->Result, 0u);
+      EXPECT_EQ(Calls[I]->Error, false);
+    }
+  }
+  for (const auto &[Mode, Diagnostic] :
+       {std::pair{"entropy-missing",
+                  "Darwin entropy observations are not configured"},
+        std::pair{"entropy-exhausted",
+                  "Darwin entropy observations are exhausted"},
+        std::pair{
+            "entropy-mismatch",
+            "Darwin entropy observation length does not match the request"},
+        std::pair{"entropy-partial",
+                  "Darwin partial entropy output is unsupported"}}) {
+    Options.DarwinSystem = darwin_test::entropyReplayOptions();
+    if (llvm::StringRef(Mode) == "entropy-missing")
+      Options.DarwinSystem->EntropyReads.reset();
+    if (llvm::StringRef(Mode) == "entropy-exhausted")
+      Options.DarwinSystem->EntropyReads->resize(1);
+    auto R = run(Mode);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R->Diagnostic, Diagnostic);
+    EXPECT_EQ(R->StandardOutput, "!");
+    EXPECT_EQ(R->Services.back().Number, Class + 500);
+    EXPECT_FALSE(R->Services.back().Result);
+    EXPECT_FALSE(R->Services.back().Error);
+  }
+}
+
 TEST_P(DarwinProcess, StartupDataBSSCarryAndBinaryOutput) {
   auto Result = run("normal");
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
@@ -497,6 +1084,106 @@ TEST_P(DarwinProcess, CommonAttributesPreserveRecordAndDescriptorState) {
     }
   }
 }
+TEST_P(DarwinProcess, NonblockingDescriptorsKeepNativeControlState) {
+  Options.DarwinFiles = darwin_test::nonblockingDescriptorOptions();
+  Options.Arguments[2] = "/data";
+  Options.InstructionQuantum = 1024;
+  Options.Limits.TimeoutMicroseconds = 5000000;
+  for (const char *Mode :
+       {"nonblocking-descriptors", "nonblocking-flags-unsupported"}) {
+    SCOPED_TRACE(Mode);
+    auto Result = run(Mode);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    const bool Unknown = llvm::StringRef(Mode).ends_with("-unsupported");
+    ASSERT_EQ(Result->Stop, Unknown ? ProcessStopReason::UnsupportedService
+                                    : ProcessStopReason::Exited)
+        << Result->Diagnostic;
+    EXPECT_EQ(Result->StandardOutput, "N");
+    EXPECT_TRUE(Result->StandardError.empty());
+    if (Unknown) {
+      EXPECT_EQ(Result->Diagnostic, "unsupported Darwin fcntl command");
+      ASSERT_FALSE(Result->Services.empty());
+      const auto &Last = Result->Services.back();
+      EXPECT_EQ(uint32_t(Last.Number) & 0x00ffffff, 92u);
+      EXPECT_FALSE(Last.Result);
+      EXPECT_FALSE(Last.Error);
+    } else
+      EXPECT_EQ(Result->ExitStatus, 37);
+  }
+}
+
+TEST_P(DarwinProcess, SymbolicDescriptorsRetainObjectsAndNativeErrorOrder) {
+  Options.DarwinFiles = darwin_test::symbolicDescriptorOptions();
+  Options.Arguments[2] = "/data";
+  Options.InstructionQuantum = 1024;
+  Options.Limits.TimeoutMicroseconds = 5000000;
+  for (const char *Mode :
+       {"symbolic-descriptors", "symbolic-descriptors-values",
+        "symbolic-descriptors-name-unsupported"}) {
+    SCOPED_TRACE(Mode);
+    auto Result = run(Mode);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    const bool Unknown = llvm::StringRef(Mode).ends_with("-unsupported");
+    ASSERT_EQ(Result->Stop, Unknown ? ProcessStopReason::UnsupportedService
+                                    : ProcessStopReason::Exited)
+        << Result->Diagnostic << "; instructions=" << Result->Instructions
+        << "; services=" << Result->Services.size();
+    EXPECT_EQ(llvm::toHex(Result->StandardOutput, true),
+              llvm::StringRef(Mode) == "symbolic-descriptors-values"
+                  ? darwin_test::SymbolicDescriptorHex
+                  : "53");
+    EXPECT_TRUE(Result->StandardError.empty());
+    ASSERT_FALSE(Result->Services.empty());
+    if (Unknown) {
+      EXPECT_EQ(Result->Diagnostic,
+                "Darwin multiple-name vnode observations are unsupported");
+      const auto &Last = Result->Services.back();
+      EXPECT_EQ(uint32_t(Last.Number) & 0x00ffffff, 92u);
+      EXPECT_FALSE(Last.Result);
+      EXPECT_FALSE(Last.Error);
+    } else {
+      EXPECT_EQ(Result->ExitStatus, 37);
+    }
+  }
+}
+
+TEST_P(DarwinProcess, HardLinksShareObjectsAndRetainExplicitNameBoundary) {
+  Options.DarwinFiles = darwin_test::hardLinksOptions();
+  Options.Arguments[2] = "/data";
+  Options.InstructionQuantum = 1024;
+  Options.Limits.TimeoutMicroseconds = 5000000;
+  for (const char *Mode :
+       {"hard-links", "hard-links-values", "hard-links-name-unsupported",
+        "hard-links-attributes-unsupported"}) {
+    SCOPED_TRACE(Mode);
+    auto Result = run(Mode);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    const bool Unknown = llvm::StringRef(Mode).ends_with("-unsupported");
+    ASSERT_EQ(Result->Stop, Unknown ? ProcessStopReason::UnsupportedService
+                                    : ProcessStopReason::Exited)
+        << Result->Diagnostic << "; instructions=" << Result->Instructions
+        << "; services=" << Result->Services.size();
+    EXPECT_EQ(llvm::toHex(Result->StandardOutput, true),
+              llvm::StringRef(Mode) == "hard-links-values"
+                  ? darwin_test::HardLinksHex
+                  : "48");
+    EXPECT_TRUE(Result->StandardError.empty());
+    ASSERT_FALSE(Result->Services.empty());
+    if (Unknown) {
+      EXPECT_EQ(Result->Diagnostic,
+                "Darwin multiple-name vnode observations are unsupported");
+      const auto &Last = Result->Services.back();
+      EXPECT_EQ(uint32_t(Last.Number) & 0x00ffffff,
+                llvm::StringRef(Mode) == "hard-links-name-unsupported" ? 92u
+                                                                       : 228u);
+      EXPECT_FALSE(Last.Result);
+      EXPECT_FALSE(Last.Error);
+    } else {
+      EXPECT_EQ(Result->ExitStatus, 37);
+    }
+  }
+}
+
 TEST_P(DarwinProcess, XattrMutationsPreserveInputAuthorityAndObjectLifetime) {
   Options.DarwinFiles = darwin_test::xattrMutationsOptions();
   Options.Arguments[2] = "/data";
@@ -923,27 +1610,31 @@ TEST_P(DarwinProcess, CredentialsKeepGroupQueriesAndCreationOwnershipCoherent) {
     EXPECT_TRUE(R->StandardOutput.empty());
   }
   Options.DarwinSystem = darwin_test::credentialOptions();
-  for (const char *Mode : {"credentials", "virtual-credentials"}) {
-    auto R = run(Mode);
-    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
-    ASSERT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
-    EXPECT_EQ(R->ExitStatus, 37);
-    EXPECT_EQ(R->StandardOutput,
-              llvm::StringRef(Mode) == "credentials"
-                  ? "k"
-                  : llvm::fromHex(darwin_test::CredentialsHex));
-    EXPECT_TRUE(R->StandardError.empty());
-    EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
-    EXPECT_TRUE(llvm::any_of(R->Services, [](const auto &E) {
-      return (uint32_t(E.Number) & 0x00ffffff) == 79 &&
-             E.Arguments[0] == 0x1234567800001000ULL && E.Result == 5 &&
-             E.Error == false;
-    }));
-    EXPECT_TRUE(llvm::any_of(R->Services, [](const auto &E) {
-      return (uint32_t(E.Number) & 0x00ffffff) == 79 &&
-             E.Arguments[0] == 0x12345678ffffffffULL && E.Result == 22 &&
-             E.Error == true;
-    }));
+  for (const std::optional<uint32_t> MembershipUID :
+       {std::optional<uint32_t>{}, std::optional<uint32_t>{4294967195u}}) {
+    Options.DarwinSystem->Credentials->GroupMembershipUID = MembershipUID;
+    for (const char *Mode : {"credentials", "virtual-credentials"}) {
+      auto R = run(Mode);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      ASSERT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+      EXPECT_EQ(R->ExitStatus, 37);
+      EXPECT_EQ(R->StandardOutput,
+                llvm::StringRef(Mode) == "credentials"
+                    ? "k"
+                    : llvm::fromHex(darwin_test::CredentialsHex));
+      EXPECT_TRUE(R->StandardError.empty());
+      EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+      EXPECT_TRUE(llvm::any_of(R->Services, [](const auto &E) {
+        return (uint32_t(E.Number) & 0x00ffffff) == 79 &&
+               E.Arguments[0] == 0x1234567800001000ULL && E.Result == 5 &&
+               E.Error == false;
+      }));
+      EXPECT_TRUE(llvm::any_of(R->Services, [](const auto &E) {
+        return (uint32_t(E.Number) & 0x00ffffff) == 79 &&
+               E.Arguments[0] == 0x12345678ffffffffULL && E.Result == 22 &&
+               E.Error == true;
+      }));
+    }
   }
   Options.DarwinFiles.emplace();
   Options.DarwinFiles->Files["/data"] = {'0', '1', '2', '3', '4',

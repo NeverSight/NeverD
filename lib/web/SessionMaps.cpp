@@ -1,3 +1,14 @@
+//===- SessionMaps.cpp - Source map analysis publication ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source map analysis publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "SessionInternal.h"
 
 #include <algorithm>

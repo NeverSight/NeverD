@@ -3509,15 +3509,16 @@ void Pipeline::buildLowIR(
         FuncEntries.insert(Start);
     }
   }
-  // A single-function run lifts no callee, so a callee that never returns is
-  // proved on demand; whole-image runs share the same proofs.
+  // Internal no-return proofs are requested during CFG construction, before
+  // later register-effect summaries are available. Independent builders share
+  // this index.
   const InternalNoReturnIndex NoReturnCallees(
       Img, &FuncEntries, &NoReturnTargets, &AbsoluteRelocationRoots,
       CodeOwnerIndex);
   // Share immutable x87 graph facts only inside this image analysis.
   // Context keys snapshot the changing CFG protection sets; the immutable
   // indexes above outlive every worker and every graph retained here.
-  auto X87Graphs = createX87CallGraphCache();
+  auto X87Graphs = createX87CallGraphCache(&NoReturnCallees, &NoReturnTargets);
 
   // Decode cost tracks a function's instruction count, which is unknown before
   // the recursive-descent build runs.  Candidates are address-sorted, so the
@@ -3894,7 +3895,7 @@ void Pipeline::buildLowIR(
   // Newly published image facts can change a callee's address provenance.
   // Extra-callee analysis begins a fresh cache lifetime after such a change.
   if (PublishedCodeRefs)
-    X87Graphs = createX87CallGraphCache();
+    X87Graphs = createX87CallGraphCache(&NoReturnCallees, &NoReturnTargets);
 
   size_t FuncCount = 0;
   for (size_t I = 0; I < Total; ++I) {

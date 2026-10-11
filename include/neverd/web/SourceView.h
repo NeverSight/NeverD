@@ -1,3 +1,14 @@
+//===- SourceView.h - Reviewed source display projections --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Reviewed source display projections.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/SourceBindings.h"

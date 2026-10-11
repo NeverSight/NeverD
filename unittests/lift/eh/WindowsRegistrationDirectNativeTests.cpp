@@ -18,11 +18,28 @@ using namespace neverd;
 
 namespace {
 // An independent canonical MSVC frame exercises the direct EBP coordinate.
-// The runtime dispatches through the real CRT. No catch object is allocated
-// or read, and the continuation observes an actual write to parent storage.
-void emitDirectCallback(bool Reference, bool CatchAll) {
+// The runtime dispatches through the real CRT. Incoming argument cases observe
+// parent and catch writes to caller storage as well as the catch object.
+enum class DirectCatch {
+  UnnamedValue,
+  UnnamedReference,
+  All,
+  Value,
+  Reference
+};
+enum class IncomingArguments { None, ReadWrite, ReadOnly };
+
+void emitDirectCallback(DirectCatch Form,
+                        IncomingArguments Arguments = IncomingArguments::None) {
+  const bool Reference =
+      Form == DirectCatch::Reference || Form == DirectCatch::UnnamedReference;
+  const bool CatchAll = Form == DirectCatch::All;
+  const bool Bound =
+      Form == DirectCatch::Value || Form == DirectCatch::Reference;
+  const bool Incoming = Arguments != IncomingArguments::None;
+  const bool Write = Arguments == IncomingArguments::ReadWrite;
   llvm::LLVMContext Context;
-  llvm::Module Module("direct-unbound-parent", Context);
+  llvm::Module Module("direct-cxx-parent", Context);
   Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
   Module.setDataLayout("e-m:x-p:32:32-i64:64-n8:16:32-S32");
   Module.appendModuleInlineAsm(llvm::formatv(R"(
@@ -44,6 +61,7 @@ _callback_parent:
   pushl %edi
   movl %esp, -16(%ebp)
   movl $0, -4(%ebp)
+{2}
   calll _callback_throw
   ud2
 direct_resume:
@@ -57,8 +75,9 @@ direct_resume:
   popl %ebp
   retl
 direct_catch:
-  movl $7, _callback_caught
-  movl $7, -24(%ebp)
+{3}
+{4}
+  movl %eax, -24(%ebp)
   movl $direct_resume, %eax
   retl
 .def direct_handler; .scl 3; .type 32; .endef
@@ -75,14 +94,53 @@ direct_unwind:
 direct_try:
   .long 0, 0, 1, 1, direct_catches
 direct_catches:
-  .long {0}, {1}, 0, direct_catch
+  .long {0}, {1}, {5}, direct_catch
 .section .drectve,"yn"
   .ascii " /EXPORT:_callback_parent"
 )",
                                              CatchAll    ? 64
                                              : Reference ? 8
                                                          : 0,
-                                             CatchAll ? "0" : "\"??_R0H@8\"")
+                                             CatchAll ? "0" : "\"??_R0H@8\"",
+                                             Write      ? R"(
+  movl 8(%ebp), %eax
+  movl %eax, -28(%ebp)
+  addl $5, %eax
+  movl %eax, 8(%ebp)
+)"
+                                             : Incoming ? R"(
+  movl 8(%ebp), %eax
+  movl %eax, -28(%ebp)
+)"
+                                                        : "",
+                                             !Bound      ? R"(
+  movl $7, %eax
+  movl %eax, _callback_caught
+)"
+                                             : Reference ? R"(
+  movl -20(%ebp), %ecx
+  movl (%ecx), %eax
+  addl $11, (%ecx)
+  movl (%ecx), %edx
+  movl %edx, _callback_caught
+)"
+                                                         : R"(
+  movl -20(%ebp), %eax
+  movl %eax, _callback_caught
+)",
+                                             Write      ? R"(
+  addl 8(%ebp), %eax
+  addl -28(%ebp), %eax
+  addl 12(%ebp), %eax
+  movl %eax, 12(%ebp)
+)"
+                                             : Incoming ? R"(
+  addl 8(%ebp), %eax
+  addl -28(%ebp), %eax
+  addl 12(%ebp), %eax
+)"
+                                                        : "",
+                                             Bound ? -20 : 0)
                                    .str());
   auto Object = Codegen().compile(Module, Arch::X86, BinaryFormat::COFF);
   ASSERT_TRUE(Object.Success);
@@ -98,14 +156,29 @@ direct_catches:
 }
 
 TEST(WindowsRegistrationRealignedNative, EmitsUnnamedValueFixedCallback) {
-  emitDirectCallback(false, false);
+  emitDirectCallback(DirectCatch::UnnamedValue);
 }
 
 TEST(WindowsRegistrationRealignedNative, EmitsUnnamedReferenceFixedCallback) {
-  emitDirectCallback(true, false);
+  emitDirectCallback(DirectCatch::UnnamedReference);
 }
 
 TEST(WindowsRegistrationRealignedNative, EmitsCatchAllFixedCallback) {
-  emitDirectCallback(false, true);
+  emitDirectCallback(DirectCatch::All);
+}
+TEST(WindowsRegistrationRealignedNative, EmitsValueIncomingFixedCallback) {
+  emitDirectCallback(DirectCatch::Value, IncomingArguments::ReadWrite);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsReferenceIncomingFixedCallback) {
+  emitDirectCallback(DirectCatch::Reference, IncomingArguments::ReadWrite);
+}
+
+TEST(WindowsRegistrationRealignedNative, EmitsCatchAllIncomingFixedCallback) {
+  emitDirectCallback(DirectCatch::All, IncomingArguments::ReadWrite);
+}
+TEST(WindowsRegistrationRealignedNative,
+     EmitsCatchAllIncomingReadOnlyFixedCallback) {
+  emitDirectCallback(DirectCatch::All, IncomingArguments::ReadOnly);
 }
 } // namespace

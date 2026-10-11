@@ -1,3 +1,14 @@
+//===- BunFixture.h - Qualified Bun graph extraction test fixtures -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Qualified Bun graph extraction test fixtures.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <array>
@@ -24,12 +35,13 @@ inline uint64_t get(std::string_view B, uint64_t At, unsigned Width) {
     V |= uint64_t(uint8_t(B[At + I])) << (I * 8);
   return V;
 }
-inline std::string bunELF(std::string Graph) {
-  const uint64_t End = (4096 + 8 + Graph.size() + 4095) & ~uint64_t(4095);
+inline std::string bunELF(std::string Graph, uint16_t Machine = 62) {
+  const uint64_t Page = Machine == 183 ? 65536 : 4096;
+  const uint64_t End = (Page + 8 + Graph.size() + Page - 1) & ~(Page - 1);
   std::string B(End + 192, '\0');
   B.replace(0, 7, "\177ELF\2\1\1", 7);
   put(B, 16, 2, 2);
-  put(B, 18, 62, 2);
+  put(B, 18, Machine, 2);
   put(B, 20, 1, 4);
   put(B, 32, 64, 8);
   put(B, 40, End, 8);
@@ -45,7 +57,7 @@ inline std::string bunELF(std::string Graph) {
   put(B, 88, 0x400000, 8);
   put(B, 96, End, 8);
   put(B, 104, End, 8);
-  put(B, 112, 4096, 8);
+  put(B, 112, Page, 8);
   const std::string Names("\0.shstrtab\0.bun\0", 16);
   B.replace(128, Names.size(), Names);
   put(B, End + 64, 1, 4);
@@ -56,12 +68,86 @@ inline std::string bunELF(std::string Graph) {
   put(B, End + 128, 11, 4);
   put(B, End + 132, 1, 4);
   put(B, End + 136, 3, 8);
-  put(B, End + 144, 0x401000, 8);
-  put(B, End + 152, 4096, 8);
+  put(B, End + 144, 0x400000 + Page, 8);
+  put(B, End + 152, Page, 8);
   put(B, End + 160, Graph.size() + 8, 8);
   put(B, End + 176, 8, 8);
-  put(B, 4096, Graph.size(), 8);
-  B.replace(4104, Graph.size(), Graph);
+  put(B, Page, Graph.size(), 8);
+  B.replace(Page + 8, Graph.size(), Graph);
+  return B;
+}
+
+inline std::string bunMachO(const std::string &Graph, bool ARM64) {
+  const auto Size = (Graph.size() + 8 + 16383) & ~uint64_t(16383);
+  // The real x64 template retains 4-KiB file/VM starts while the writer
+  // expands the segment to a multiple of 16 KiB. Their residues can differ.
+  const uint64_t File = ARM64 ? 16384 : 12288;
+  const uint64_t VA = ARM64 ? 0x100004000 : 0x100001000;
+  std::string B(File + Size, '\0');
+  put(B, 0, 0xfeedfacf, 4);
+  put(B, 4, ARM64 ? 0x100000c : 0x1000007, 4);
+  put(B, 8, ARM64 ? 0 : 3, 4);
+  put(B, 12, 2, 4);
+  put(B, 16, 2, 4);
+  put(B, 20, 176, 4);
+  put(B, 32, 0x19, 4);
+  put(B, 36, 152, 4);
+  B.replace(40, 5, "__BUN");
+  put(B, 56, VA, 8);
+  put(B, 64, Size, 8);
+  put(B, 72, File, 8);
+  put(B, 80, Size, 8);
+  put(B, 88, 3, 4);
+  put(B, 92, 3, 4);
+  put(B, 96, 1, 4);
+  B.replace(104, 5, "__bun");
+  B.replace(120, 5, "__BUN");
+  put(B, 136, VA, 8);
+  put(B, 144, Graph.size() + 8, 8);
+  put(B, 152, File, 4);
+  put(B, 156, 14, 4);
+  put(B, 168, 0x10000000, 4);
+  put(B, 184, 0x32, 4); // LC_BUILD_VERSION, macOS, no tool entries
+  put(B, 188, 24, 4);
+  put(B, 192, 1, 4);
+  put(B, File, Graph.size(), 8);
+  B.replace(File + 8, Graph.size(), Graph);
+  return B;
+}
+
+inline std::string windowsGraph(std::string Graph) {
+  size_t At = 0;
+  while ((At = Graph.find("/$bunfs/", At)) != std::string::npos) {
+    Graph.replace(At, 8, "B:/~BUN/");
+    At += 8;
+  }
+  return Graph;
+}
+
+inline std::string bunPE(const std::string &Graph, bool ARM64) {
+  const auto Size = (Graph.size() + 8 + 511) & ~uint64_t(511);
+  std::string B(512 + Size, '\0');
+  B.replace(0, 2, "MZ");
+  put(B, 60, 128, 4);
+  put(B, 128, 0x4550, 4);
+  put(B, 132, ARM64 ? 0xaa64 : 0x8664, 2);
+  put(B, 134, 1, 2);
+  put(B, 148, 240, 2);
+  put(B, 150, 2, 2);
+  put(B, 152, 0x20b, 2);
+  put(B, 184, 4096, 4);
+  put(B, 188, 512, 4);
+  put(B, 208, 4096 + ((Size + 4095) & ~uint64_t(4095)), 4);
+  put(B, 212, 512, 4);
+  put(B, 260, 16, 4);
+  B.replace(392, 4, ".bun");
+  put(B, 400, Graph.size() + 8, 4);
+  put(B, 404, 4096, 4);
+  put(B, 408, Size, 4);
+  put(B, 412, 512, 4);
+  put(B, 428, 0x40000040, 4);
+  put(B, 512, Graph.size(), 8);
+  B.replace(520, Graph.size(), Graph);
   return B;
 }
 

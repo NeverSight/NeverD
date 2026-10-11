@@ -1,8 +1,19 @@
+//===- SourceRecovery.cpp - Verified readable source recovery ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Verified readable source recovery.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/SourceRecovery.h"
 
 #include "RecoveryParser.h"
 
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 #include <algorithm>
 

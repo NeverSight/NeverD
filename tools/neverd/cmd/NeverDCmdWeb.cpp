@@ -1,3 +1,14 @@
+//===- NeverDCmdWeb.cpp - Offline web analysis commands ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Offline web analysis commands.
+///
+//===----------------------------------------------------------------------===//
+
 #include "../NeverDCLI.h"
 
 #include "neverd/sdk/NeverDCAPIWeb.h"
@@ -31,6 +42,26 @@ std::optional<llvm::json::Value> result(const char *Owned) {
 } // namespace
 
 int runWeb() {
+  if (!WebArguments.empty() &&
+      (WebArguments[0] == "sea" || WebArguments[0] == "sea-source"))
+    return runWebSEA();
+  if (!WebArguments.empty() &&
+      (WebArguments[0] == "har-preview" || WebArguments[0] == "har-import" ||
+       WebArguments[0] == "interfaces" ||
+       WebArguments[0] == "interface-correlate"))
+    return runWebInterfaces();
+  if (!WebArguments.empty() && (WebArguments[0] == "stream-preview" ||
+                                WebArguments[0] == "stream-import"))
+    return runWebStreams();
+  if (!WebArguments.empty() && WebArguments[0] == "integrity")
+    return runWebIntegrity();
+  if (!WebArguments.empty() &&
+      (WebArguments[0] == "archive" || WebArguments[0] == "archive-packages" ||
+       WebArguments[0] == "archive-bun"))
+    return runWebArchive();
+  if (!WebArguments.empty() &&
+      (WebArguments[0] == "packages" || WebArguments[0] == "package-diff"))
+    return runWebPackages();
   const auto Decimal = [&](size_t I, uint64_t &Value) {
     if (I >= WebArguments.size())
       return false;
@@ -228,6 +259,7 @@ int runWeb() {
            "<source-member-index:source-type>... | "
            "source|bindings|semantics|modules|bundles|view|navigate <file> "
            "<script|module|commonjs> "
+           "| sea|sea-source <file-or-root> <profile> [artifact-index] "
            "| map|bun "
            "<file> | bun-export <file> <new-output-directory> | "
            "bun-map <file> <module-index> | "

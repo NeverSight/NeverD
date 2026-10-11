@@ -215,6 +215,7 @@
           "neverd_web_artifacts_json",
           "neverd_web_asar_extract_json",
           "neverd_web_asar_records_json",
+          "neverd_web_bun_export_json",
           "neverd_web_bun_extract_json",
           "neverd_web_bun_records_json",
           "neverd_web_capabilities_json",
@@ -225,14 +226,30 @@
           "neverd_web_electron_manifest_analyze_json",
           "neverd_web_electron_source_analyze_json",
           "neverd_web_electron_source_records_json",
+          "neverd_web_har_commit_json",
+          "neverd_web_har_preview_json",
+          "neverd_web_har_records_json",
           "neverd_web_html_analyze_json",
           "neverd_web_html_records_json",
           "neverd_web_import_commit_json",
           "neverd_web_import_preview_json",
+          "neverd_web_interface_correlation_records_json",
+          "neverd_web_interface_records_json",
+          "neverd_web_interfaces_analyze_json",
+          "neverd_web_interfaces_compare_json",
           "neverd_web_metadata_json",
           "neverd_web_native_analyze_json",
           "neverd_web_native_metadata_json",
           "neverd_web_native_open_json",
+          "neverd_web_package_archive_extract_json",
+          "neverd_web_package_archive_records_json",
+          "neverd_web_package_diff_records_json",
+          "neverd_web_package_integrity_verify_json",
+          "neverd_web_package_records_json",
+          "neverd_web_packages_analyze_json",
+          "neverd_web_packages_compare_json",
+          "neverd_web_sea_extract_json",
+          "neverd_web_sea_records_json",
           "neverd_web_session_create",
           "neverd_web_session_destroy",
           "neverd_web_source_analyze_json",
@@ -255,7 +272,10 @@
           "neverd_web_source_view_chunk_json",
           "neverd_web_source_view_commit_json",
           "neverd_web_source_view_preview_json",
-          "neverd_web_source_view_records_json"
+          "neverd_web_source_view_records_json",
+          "neverd_web_stream_commit_json",
+          "neverd_web_stream_preview_json",
+          "neverd_web_stream_records_json"
         ]
       }
     ],
@@ -998,6 +1018,7 @@
           "neverd_web_artifacts_json",
           "neverd_web_asar_extract_json",
           "neverd_web_asar_records_json",
+          "neverd_web_bun_export_json",
           "neverd_web_bun_extract_json",
           "neverd_web_bun_records_json",
           "neverd_web_capabilities_json",
@@ -1008,14 +1029,30 @@
           "neverd_web_electron_manifest_analyze_json",
           "neverd_web_electron_source_analyze_json",
           "neverd_web_electron_source_records_json",
+          "neverd_web_har_commit_json",
+          "neverd_web_har_preview_json",
+          "neverd_web_har_records_json",
           "neverd_web_html_analyze_json",
           "neverd_web_html_records_json",
           "neverd_web_import_commit_json",
           "neverd_web_import_preview_json",
+          "neverd_web_interface_correlation_records_json",
+          "neverd_web_interface_records_json",
+          "neverd_web_interfaces_analyze_json",
+          "neverd_web_interfaces_compare_json",
           "neverd_web_metadata_json",
           "neverd_web_native_analyze_json",
           "neverd_web_native_metadata_json",
           "neverd_web_native_open_json",
+          "neverd_web_package_archive_extract_json",
+          "neverd_web_package_archive_records_json",
+          "neverd_web_package_diff_records_json",
+          "neverd_web_package_integrity_verify_json",
+          "neverd_web_package_records_json",
+          "neverd_web_packages_analyze_json",
+          "neverd_web_packages_compare_json",
+          "neverd_web_sea_extract_json",
+          "neverd_web_sea_records_json",
           "neverd_web_source_analyze_json",
           "neverd_web_source_anchor_json",
           "neverd_web_source_binding_records_json",
@@ -1036,7 +1073,10 @@
           "neverd_web_source_view_chunk_json",
           "neverd_web_source_view_commit_json",
           "neverd_web_source_view_preview_json",
-          "neverd_web_source_view_records_json"
+          "neverd_web_source_view_records_json",
+          "neverd_web_stream_commit_json",
+          "neverd_web_stream_preview_json",
+          "neverd_web_stream_records_json"
         ]
       }
     ],
@@ -6006,9 +6046,9 @@
         "READ/WRITE/IOCTL requests may declare interrupt_events, each with explicit after_100ns, device_id and interrupt_id. Optional action defaults to pulse for existing latched scenarios. Level sources require assert or deassert; latched sources require pulse. Other request kinds reject the field even when empty. At most 64 events per request / 1024 total are accepted, with nonnegative delay through INT64_MAX. Successful submission captures the live connections and PDO resource epoch. Source IRP completion does not cancel an event. Due events run at supported callback boundaries; time advances only while idle, without instruction-level preemption. Provider hardware publication precedes eligibility, and ISRs precede DPCs/workers according to assigned DIRQL. A lost connection, stale/unavailable epoch or physical D3 records an undelivered_reason and stops without rebinding the event. A shared latched pulse invokes every captured ISR in registration order, even when an earlier handler claims it. Level lines retain one asserted state per PDO/source/epoch; the shared physical line is the OR of those sources. All same-time source changes apply before sampling. A still-asserted line is sampled again after its declared interval, so a repeated assertion does not invent an edge. Claiming a level interrupt stops that sample's handler search but does not acknowledge the device or clear any source. Only explicit deassert changes that source's state. A session permits at most 4096 delivery batches, in addition to shared callback and instruction budgets; exhaustion fails before another delivery. Disconnect and device retirement reject a still-asserted source. Register writes never infer an enable or acknowledgement protocol.",
         "IoConnectInterrupt uses its eleven arguments and the exact translated assignment. IoConnectInterruptEx supports FullySpecified (1), LineBased (2, one assigned line on the explicit PDO) and FullySpecifiedGroup (4, group 0); disconnection requires the matching version/context. Registration and disconnection require PASSIVE_LEVEL. A private lock or an initialized caller-provided nonpaged lock is supported. Multiple connections can share the caller's lock with the same synchronization IRQL, which must be at least each assigned DIRQL; it does not change scheduler priority. LineBased zero selects the assigned level. CPU0/group0 and no floating-state save remain required. KINTERRUPT is opaque. The real ISR receives (Interrupt, ServiceContext) and returns BOOLEAN from AL; FALSE is a valid unclaimed observation. KeSynchronizeExecution runs the actual callback under the same lock at synchronization IRQL, restoring caller IRQL/CR8 afterward. Manual acquire/release enforce nonrecursive ownership, original execution and saved IRQL. Connected locks cannot be accessed through executive spin-lock APIs or outlive their storage. DIRQL waits, floating-state save and instruction-level preemption remain unsupported. Failed START and successful STOP/REMOVE require disconnection before terminal completion; disconnect never silently discards queued DPCs.",
         "Reports retain declared resources in configuration.pnp_devices[].interrupts and flatten events in configuration.interrupt_events. Observed interrupts rows retain source_request_index, event_index, device_id, interrupt_id, action, epoch, due_at_100ns, nullable occurred_at_100ns, delivered_at_100ns, returned_at_100ns, interrupt_object, return_value, claimed and undelivered_reason. handlers records each actual callback, including its delivery_index for repeated samples. A deassertion records its occurrence without fabricating an ISR return. The row's claimed result aggregates actual handlers; an unclaimed interrupt remains valid. The runnable [interrupt scenario](examples/driver-interrupt-scenario.json) uses genuine-WDK driver_wdm_interrupts.c through optional NEVERD_WDM_INTERRUPT_FIXTURE / NEVERD_WDM_INTERRUPT_CFG_FIXTURE. Normal/CFG and preferred/rebased tests cover shared pulses, caller-provided locks and level assertion/repetition/deassertion. The existing C/Python scenario_json boundary and neverd_driver_options_v1 layout are unchanged. Missing artifacts skip explicitly; execution evidence remains Linux-only.",
-        "DriverDMA.h / DriverDMA.def add an optional dma object to a register_bank PDO, alongside its memory/interrupt assignments; DMA alone does not replace either resource list. All seven fields are explicit: address_bits (32 or 64), maximum_length (1\u20131048576 bytes), map_registers (1\u2013256), alignment (power of two from 1\u20134096), logical_base (nonzero and page aligned), logical_length (page aligned, 4096\u20131073741824 bytes), and Boolean scatter_gather. The overflow-free aperture must fit the address width. Each PDO has an independent logical domain, so equal addresses on different devices do not alias. Translated MMIO resources must avoid the reserved model RAM range [0x1000000000, 0x1000100000). These declarations describe a coherent synthetic bus master, never host physical memory or a PCI device.",
+        "DriverDMA.h / DriverDMA.def add an optional dma object to a register_bank PDO, alongside its memory/interrupt assignments; DMA alone does not replace either resource list. All seven fields are explicit: address_bits (32 or 64), maximum_length (1\u20131048576 bytes), map_registers (1\u2013256), alignment (power of two from 1\u20134096), logical_base (nonzero and page aligned), logical_length (page aligned, 4096\u20131073741824 bytes), and Boolean scatter_gather. The overflow-free aperture must fit the address width. Each PDO has an independent logical domain, so equal addresses on different devices do not alias. Translated MMIO resources must avoid the reserved model RAM range [0x1000000000, 0x1004000000). These declarations describe a coherent synthetic bus master, never host physical memory or a PCI device.",
         "IoGetDmaAdapter accepts the historical DEVICE_DESCRIPTION version 0/1 fields for an Internal bus master and publishes a version-one DMA_ADAPTER with its actual 104-byte DMA_OPERATIONS table. Version 2/3 probes return NULL without reading a modern description tail. Each indirect method is bound to that exact live adapter, independently of kernel imports. Implemented methods are AllocateCommonBuffer, FreeCommonBuffer, GetDmaAlignment, GetScatterGatherList, PutScatterGatherList, PutDmaAdapter, AllocateAdapterChannel, MapTransfer, FlushAdapterBuffers and FreeMapRegisters. FreeAdapterChannel and ReadDmaCounter remain named traps because this profile has no subordinate/system DMA controller. Common-buffer allocation/free and alignment queries require PASSIVE_LEVEL; Get/PutScatterGatherList require DISPATCH_LEVEL, and adapter release permits IRQL through DISPATCH_LEVEL. x64 ignores CacheEnabled. Unsupported version probes, incompatible declared capabilities and documented allocation shortages return NULL; malformed or unmodeled interface selections and backend failures remain explicit errors.",
-        "KernelPhysicalMemory assigns at most 256 model physical pages of 4096 bytes to existing RAM. CPU virtual addresses, physical page identities and device logical addresses are distinct. Built MDL PFN arrays expose these shared identities read-only; unbuilt descriptors have no usable PFNs. Small neighboring allocations may share a PFN but retain separate byte ranges and lifetimes. Common buffers, pool storage and request buffers use the same bytes already owned by GuestMemory, without a second DMA copy. A live SG mapping pins its exact data range and descriptor. Completion, pool/MDL free and teardown reject live dependencies before retirement. Unmapping a direct MDL only revokes its CPU system mapping; DMA remains able to reach its locked backing. DmaWritable records the write-lock contract separately from CPU mapping permissions: device writes require direct READ/OUT_DIRECT or writable nonpaged storage; WRITE/IN_DIRECT do not gain that permission merely because their CPU mapping is writable.",
+        "KernelPhysicalMemory assigns at most 16384 model physical pages of 4096 bytes to existing RAM. CPU virtual addresses, physical page identities and device logical addresses are distinct. Built MDL PFN arrays expose these shared identities read-only; unbuilt descriptors have no usable PFNs. Small neighboring allocations may share a PFN but retain separate byte ranges and lifetimes. Common buffers, pool storage and request buffers use the same bytes already owned by GuestMemory, without a second DMA copy. A live SG mapping pins its exact data range and descriptor. Completion, pool/MDL free and teardown reject live dependencies before retirement. Unmapping a direct MDL only revokes its CPU system mapping; DMA remains able to reach its locked backing. DmaWritable records the write-lock contract separately from CPU mapping permissions: device writes require direct READ/OUT_DIRECT or writable nonpaged storage; WRITE/IN_DIRECT do not gain that permission merely because their CPU mapping is writable.",
         "GetScatterGatherList validates CurrentVa/Length against the MDL's original range and creates logical page fragments over its existing backing. Available map registers allow the real four-argument void AdapterListControl to run inline before the API returns; otherwise admission retains the data/descriptor and reserves a callback in the PDO's FIFO until resources are released. This profile has no StartIo ownership, so the callback's second IRP argument is NULL. Callback return does not release a mapping. CPU access to a live SG data range requires Put first; a callback waiting for map registers has not yet granted the device ownership of those bytes. PutScatterGatherList may run inside the callback; after Put, the driver may complete the request and release the last adapter while its callback continuation and device hold survive until return. Common buffers require their original adapter, length, logical address and CPU address when freed. Logical addresses are never reused during the session, including restart. A resource wait without a real producer stalls explicitly; it does not fabricate a completion or deadline.",
         "Only READ/WRITE/IOCTL requests accept dma_events. Each event requires after_100ns, device_id, logical_address, direction and length; write_memory additionally requires exact-length data_hex, while read_memory rejects that field. Directions are from the device's perspective. Limits are 64 events per request, 1024 total, 16 MiB of total transaction bytes and 1 MiB per transaction; delay is nonnegative through INT64_MAX. Submission captures the PDO's current assigned epoch and anchors virtual time, but does not require a mapping that the forthcoming dispatch has yet to create. Delivery resolves the complete live logical range and direction, requires physical D0, and validates all backing bytes before any transaction effect. Source IRP completion does not cancel an event. Missing/released mappings, stale epochs, surprise removal or non-D0 power record a failure and stop; events neither rebind nor invent an interrupt, register protocol or IRP completion. At one scheduled boundary, provider hardware publication precedes DMA bytes, which precede independently declared interrupt pulses. Timing remains cooperative, not instruction-level preemption.",
         "Reports retain configuration.pnp_devices[].dma and flattened configuration.dma_events. Root dma_transfers rows identify source_request_index, event_index, device_id, epoch, logical_address, direction, length and due_at_100ns, with nullable occurred_at_100ns, completed_at_100ns, mapping, adapter and failure_reason; data_hex contains actual transferred bytes. Every declared transaction must finish without failure for scenario_success. The DMA scenario uses original genuine-WDK driver_wdm_dma.c with optional NEVERD_WDM_DMA_FIXTURE / NEVERD_WDM_DMA_CFG_FIXTURE, exercising a common buffer through actual adapter pointers and a separately declared ISR\u2192DPC completion. C/Python still use scenario_json without changing neverd_driver_options_v1. Missing artifacts skip explicitly; evidence is Linux-only. Subordinate controllers, V2/V3 methods, hardware descriptor engines, general KMDF DMA and other device models remain unsupported.",
@@ -13235,13 +13275,22 @@
         "External libraries, fixups, initialization/TLS, encrypted payloads, arm64e/PAC and unmodeled image contracts fail explicitly. No dyld linking, Objective-C/Swift runtime, Foundation/UIKit, AMFI, full application compatibility or native iOS-host HVF support is claimed.",
         "The complete regular input file, including unmapped metadata and trailing bytes, must fit memory_limit before parsing or copying. Reads use a bounded private snapshot; embedded-NUL paths, short reads and file-size changes are rejected. Host filesystem I/O has no hard wall-clock guarantee.",
         "Each available matching native backend is tested separately. Cross-ISA software execution and compilation cannot establish Intel HVF, Linux KVM or Windows WHP runtime coverage.",
-        "Fixed initial symbolic_links with raw target_hex share bounded guest namei, readlink/readlinkat and own metadata/snapshot admission.32 expansions and terminator-inclusive1024-byte paths are enforced. Without per-link mutable grants, mutable directory names cannot contain protected initial link names; separate mutable domains may contain targets created, moved, deleted or replaced at runtime. Existing grants and metadata policy apply; resolved FDs/CWD/mapping leases retain object ownership. Raw symlink57/symlinkat474 create bounded process-local links in admitted mutable parents with target-first import, empty-target readlink/follow boundaries and shared budgets. Without creation_policy.namespace_policy, created-link complete metadata stays unknown and link/directory creation does not consume regular-file inodes. With the strict explicit namespace policy, regular files/links/directories share one successful-creation inode allocator and permanent exhaustion. New links use umask, actual-parent Device/GID and effective UID with exact raw-target size and declared allocation; created-directory counts/sizes/blocks and namespace timestamps follow the declared virtual contract. Object-owned complete stat64 metadata survives held FDs/CWD, mixed SWAP, ancestor moves, removal and name reuse; refusals consume no inode. Without per-directory mutation_policy, initial-parent stat still invalidates; fixed snapshots always invalidate. Explicit per-directory enumeration_policy admits live getdirentries64 views with observed/created nonzero inodes, actual parents, unsigned-byte name order, ordinal cookies and declared constant d_seekoff. Initial directories retain own declarations; mkdir inherits the actual-parent policy. Dup shares cursor/version; committed changes and direct directory moves require zero rewind, while refusals/no-ops and ancestor moves preserve the relevant cursors. Version saturation refuses explicitly. Held removed empty directories emit zero records across name reuse. Missing identity stops before output; when full stat is invalidated, only inode is reused. The existing encoder, bounds, EOF suffix and ordered copies are shared. Snapshot/policy conflicts and strict three-field lossless JSON are rejected, and each policy reference has a fixed path/NUL cost. Omission retains legacy refusal. APFS generations remain unsupported. Strict per-initial-directory mutation_policy declares directory_entry_size and mutation_time with own complete nonzero-inode metadata, a fixed path/NUL reference charge and no namespace grant. The first committed change copies the observed record without allocation. Child-name changes project nlink as two plus all linked immediate names, size as nlink times entry size and mtime/ctime as the declared time. Direct moves/SWAP/removal change only ctime; refusals, same-object no-ops and ancestor moves preserve the relevant records. Blocks and all other observed fields stay object-owned across held FD/dup/CWD/removal/name reuse. New mkdir objects use the separate creation policy and do not inherit initial stat policies. Immutable snapshots still invalidate; stat and live enumeration declarations are independent. Omitting the stat policy retains unknown mutated initial metadata. Native observations do not infer general APFS allocation or timestamp rules. Resolved object ownership is preserved. Rmdir/replacement detect link children; moving/SWAP subtrees containing protected initial links remain explicit unsupported. Runtime link descendants participate in ordinary/EXCL directory moves and directory/directory or directory/file SWAP. All directory/file/link paths and keys are preflighted and all three maps extracted before publication. Current link name/NUL charges are replaced once; raw target charges persist, with no SWAP replacement credit. Actual parent objects, relative rebinding, held descriptions/cursors/CWD/orphan nodes/mapping leases are retained. No additional entry, FD or inode is consumed. Unlink/unlinkat remove runtime-created links under actual-parent authority and refund the actual name/NUL/target charge once. Bare NOFOLLOW_ANY retains a final link; required intermediate/trailing expansion returns ELOOP. Protected initial links remain immutable; target descriptors, CWD and mappings retain their objects. Ordinary/EXCL leaf rename admits runtime link/missing, link/link, link/file and file/link pairs under both actual-parent grants in one established mount. Relative raw targets rebind at the new parent; replaced links refund their current name/target once while regular-file descriptor/mapping leases retain their bytes. Rename consumes no additional entry/FD/file inode. Leaf link/link, link/file and file/link SWAP is admitted with actual-parent mutation/SWAP authority in one established mount. Both nodes stay linked; both name/NUL charges are reserved without replacement credit, preserving raw targets, relative rebinding, nlink, descriptions, cursors, CWD and mapping leases. Same-name SWAP succeeds; missing targets give ENOENT, intermediate NOFOLLOW_ANY gives ELOOP, SWAP|EXCL gives EINVAL before path input. Same-object EXCL remains unsupported; ordinary admitted directory/link pairs retain ENOTDIR/EISDIR and EXCL existence errors. Initial symbolic_links[].mutable grants admit ordinary unique initial links with separately mutable actual parents; known flags/special mode/alias/link-count/device contradictions refuse. Each grant fixes one path/NUL reference and consumes no created entry/inode. Initial raw-target/name/reference costs remain reserved after unlink/replacement; rekey owns a separate dynamic name and refunds only dynamically owned name/created-target costs. Only created links count as dynamic entries. Existing parent/mount/SWAP/lookup transactions admit granted initial leaves and subtree descendants. Strict optional initial-link mutation_policy has exactly mutation_time with complete nonzero-inode metadata and the grant; first direct move/SWAP copies scalar observations without allocation and changes only ctime. All other stat fields stay observed; failures/no-ops and ancestor moves retain the record. Without policy, complete moved-link stat is unknown while enumeration inode and known device contradictions remain authoritative. Initial policies follow objects; reused names/new symlinks never inherit old metadata or policies. Actual directory/link root SWAP is admitted in both orders, including nonempty trees, under existing object grants and actual-parent mutation/SWAP authority in one established mount. Direct root links join the same three-map preflight/extraction/publication as directory descendants. Both canonical paths and all linked/held descendants are checked atomically; only dynamic name costs are replaced, with no fixed-input/content/target/lease credit or new entry/FD/inode. Actual-object parents decide membership across reused names and retained orphans. Raw targets rebind relatively; FD/dup/CWD/referents/mappings retain their objects. Direct roots apply their own existing ctime policies, while ancestor descendants retain full records. Unknown full stat and known enumeration identities remain independent. Both directory/descendant-link cycle orders return EINVAL; self-referent-link creation by successful exchange remains allowed and later follow returns ELOOP. Hard links and ACL enforcement remain unsupported. Native ARM64 macOS observations do not establish physical iOS acceptance.",
+        "Fixed initial symbolic_links with raw target_hex share bounded guest namei, readlink/readlinkat and own metadata/snapshot admission.32 expansions and terminator-inclusive1024-byte paths are enforced. Without per-link mutable grants, mutable directory names cannot contain protected initial link names; separate mutable domains may contain targets created, moved, deleted or replaced at runtime. Existing grants and metadata policy apply; resolved FDs/CWD/mapping leases retain object ownership. Raw symlink57/symlinkat474 create bounded process-local links in admitted mutable parents with target-first import, empty-target readlink/follow boundaries and shared budgets. Without creation_policy.namespace_policy, created-link complete metadata stays unknown and link/directory creation does not consume regular-file inodes. With the strict explicit namespace policy, regular files/links/directories share one successful-creation inode allocator and permanent exhaustion. New links use umask, actual-parent Device/GID and effective UID with exact raw-target size and declared allocation; created-directory counts/sizes/blocks and namespace timestamps follow the declared virtual contract. Object-owned complete stat64 metadata survives held FDs/CWD, mixed SWAP, ancestor moves, removal and name reuse; refusals consume no inode. Without per-directory mutation_policy, initial-parent stat still invalidates; fixed snapshots always invalidate. Explicit per-directory enumeration_policy admits live getdirentries64 views with observed/created nonzero inodes, actual parents, unsigned-byte name order, ordinal cookies and declared constant d_seekoff. Initial directories retain own declarations; mkdir inherits the actual-parent policy. Dup shares cursor/version; committed changes and direct directory moves require zero rewind, while refusals/no-ops and ancestor moves preserve the relevant cursors. Version saturation refuses explicitly. Held removed empty directories emit zero records across name reuse. Missing identity stops before output; when full stat is invalidated, only inode is reused. The existing encoder, bounds, EOF suffix and ordered copies are shared. Snapshot/policy conflicts and strict three-field lossless JSON are rejected, and each policy reference has a fixed path/NUL cost. Omission retains legacy refusal. APFS generations remain unsupported. Strict per-initial-directory mutation_policy declares directory_entry_size and mutation_time with own complete nonzero-inode metadata, a fixed path/NUL reference charge and no namespace grant. The first committed change copies the observed record without allocation. Child-name changes project nlink as two plus all linked immediate names, size as nlink times entry size and mtime/ctime as the declared time. Direct moves/SWAP/removal change only ctime; refusals, same-object no-ops and ancestor moves preserve the relevant records. Blocks and all other observed fields stay object-owned across held FD/dup/CWD/removal/name reuse. New mkdir objects use the separate creation policy and do not inherit initial stat policies. Immutable snapshots still invalidate; stat and live enumeration declarations are independent. Omitting the stat policy retains unknown mutated initial metadata. Native observations do not infer general APFS allocation or timestamp rules. Resolved object ownership is preserved. Rmdir/replacement detect link children; moving/SWAP subtrees containing protected initial links remain explicit unsupported. Runtime link descendants participate in ordinary/EXCL directory moves and directory/directory or directory/file SWAP. All directory/file/link paths and keys are preflighted and all three maps extracted before publication. Current link name/NUL charges are replaced once; raw target charges persist, with no SWAP replacement credit. Actual parent objects, relative rebinding, held descriptions/cursors/CWD/orphan nodes/mapping leases are retained. No additional entry, FD or inode is consumed. Unlink/unlinkat remove runtime-created links under actual-parent authority; dynamic name/NUL/target costs remain while descriptions retain them and refund once at actual final release. Bare NOFOLLOW_ANY retains a final link; required intermediate/trailing expansion returns ELOOP. Protected initial links remain immutable; target descriptors, CWD and mappings retain their objects. Ordinary/EXCL leaf rename admits runtime link/missing, link/link, link/file and file/link pairs under both actual-parent grants in one established mount. Relative raw targets rebind at the new parent; replaced links retain description-owned name/target costs until final release, while regular-file descriptor/mapping leases retain their bytes. Rename consumes no additional entry/FD/file inode. Leaf link/link, link/file and file/link SWAP is admitted with actual-parent mutation/SWAP authority in one established mount. Both nodes stay linked; both name/NUL charges are reserved without replacement credit, preserving raw targets, relative rebinding, nlink, descriptions, cursors, CWD and mapping leases. Same-name SWAP succeeds; missing targets give ENOENT, intermediate NOFOLLOW_ANY gives ELOOP, SWAP|EXCL gives EINVAL before path input. Same-object EXCL remains unsupported; ordinary admitted directory/link pairs retain ENOTDIR/EISDIR and EXCL existence errors. Initial symbolic_links[].mutable grants admit ordinary unique initial links with separately mutable actual parents; known flags/special mode/alias/link-count/device contradictions refuse. Each grant fixes one path/NUL reference and consumes no created entry/inode. Initial raw-target/name/reference costs remain reserved after unlink/replacement; rekey owns a separate dynamic name and refunds only dynamically owned name/created-target costs. Only created links count as dynamic entries. Existing parent/mount/SWAP/lookup transactions admit granted initial leaves and subtree descendants. Strict optional initial-link mutation_policy has exactly mutation_time with complete nonzero-inode metadata and the grant; first direct move/SWAP copies scalar observations without allocation and changes only ctime. All other stat fields stay observed; failures/no-ops and ancestor moves retain the record. Without policy, complete moved-link stat is unknown while enumeration inode and known device contradictions remain authoritative. Initial policies follow objects; reused names/new symlinks never inherit old metadata or policies. Actual directory/link root SWAP is admitted in both orders, including nonempty trees, under existing object grants and actual-parent mutation/SWAP authority in one established mount. Direct root links join the same three-map preflight/extraction/publication as directory descendants. Both canonical paths and all linked/held descendants are checked atomically; only dynamic name costs are replaced, with no fixed-input/content/target/lease credit or new entry/FD/inode. Actual-object parents decide membership across reused names and retained orphans. Raw targets rebind relatively; FD/dup/CWD/referents/mappings retain their objects. Direct roots apply their own existing ctime policies, while ancestor descendants retain full records. Unknown full stat and known enumeration identities remain independent. Both directory/descendant-link cycle orders return EINVAL; self-referent-link creation by successful exchange remains allowed and later follow returns ELOOP. General APFS alias-cache semantics and ACL enforcement remain unsupported. Native ARM64 macOS observations do not establish physical iOS acceptance.",
         "Raw pathconf191/fpathconf192 use one fixed XNU vnode query owner for selectors15/16/17/19..25, preserving lookup-before-selector, low32 FD/int carriers and BSD return conventions. Known regular-file/directory objects retain query identity over dup/rename/removal/name reuse without stat. No output/cursor/metadata/enumeration or entry/FD/inode changes. Native stream kinds and all filesystem-dependent/unknown selectors remain explicitly unsupported after lookup; catalogue bounds, host filesystem and guessed EINVAL do not supply values. These observations do not implement asynchronous execution or authorization.",
         "Raw getattrlist220/fgetattrlist228/getattrlistat476 share one 24-byte import/common-field codec and complete-stat validity with stat64. Eleven common fields plus RETURNED_ATTRS preserve full st_mode, signed times, native lookup/import/range/bitmap order, full required length in short user buffers, low32 FD, full-width options and BSD return ABI. Known flags0/1/4/8/0x800 are bounded; PACK_INVAL requires RETURNED_ATTRS. Type/empty selections need no stat. Partial copies, missing/invalidated metadata and root names/mounts/volume/ACL/masks/options/native stream kind stop explicitly. No host observations, setters or cursor/namespace/metadata/entry-FD-inode budget changes. Native ARM64 private controls retain5s; SDK15.5 raw476 has no typed at declaration. Native Intel and physical iOS remain unverified.",
         "Raw getxattr234/fgetxattr235/listxattr240/flistxattr241 read explicit complete ordered ordinary extended_attributes observations, with absent versus known-empty distinction, strict UTF8/name/count/16MiB admission, independent object lifetime/stat validity and content-mutation invalidation. BSD Wide returns, low32 carriers, NULL/path/FD/legacy-size distinctions and complete-name ERANGE prefixes are bounded by original native observations. Unknown/special/compression/permission semantics, ungranted mutations and negative full64 nonNULL declared-empty lists remain unsupported; automatic host provenance never supplies virtual defaults.",
         "ATTR_CMN_NAME adds an 8-byte relative reference and a NUL-terminated four-byte-aligned legal UTF8 leaf1..255 from the actual uniquely named non-root catalogue object. NAME/type are independent of stat validity, retain FD/dup/CWD through moves/SWAP/removal/reuse, and preserve exact partial UTF8 prefixes/full required lengths without cursor or budget effects. Root/mount labels, malformed names, hard-link/case-fold aliases, normalization and full-path attributes remain unknown. ARM64 private controls:601 raw queries/453 complete guarded SDK comparisons/384 prefixes; native Intel and physical iOS remain unverified.",
         "getattrlistbulk461 requires explicit enumeration_policy.bulk_attributes=true on an initial directory object. NAME/type/RETURNED and options0/8 use the common attribute codec and selected stat validity. Live virtual unsigned-byte child order excludes dot entries and uses local ordinals. Dup shares progress; nonzero completed EOF stays cached after request validation, offset0 empty refreshes, zero seek resets iteration. Authorization survives held moves/SWAP/removal/reuse but never inherits to newly created directories. Complete4/8-byte groups, strict boolean JSON, no unused-tail access and pre-copy stop for partial required output are bounded; missing policy, NAME-only/ERROR/snapshot/ACL/host-order/unknown masks/options/mixed iteration/arbitrary nonzero seeks fail explicitly. Native ARM64 preparation728 guarded raw/SDK comparisons; original native5s, guest/Python5,000,000us/quantum1024, public10s unchanged. Intel native and physical iOS remain unverified; no full OS/framework claim.",
-        "Explicit ordinary setxattr236/fsetxattr237/removexattr238/fremovexattr239 require independent initial-object mutable_extended_attributes grants and complete initial observations. Virtual ordered values, initial reservations and shared runtime growth follow retained objects across dup/move/removal/mapping leases. Scratch, capacity and transport failures do not publish; partially readable input stops explicitly. Complete stat invalidates independently of directory enumeration. Unknown permissions, special attributes and provider-wide behavior remain unsupported; original thin native/guest/public/Python controls do not establish Intel HVF, physical iOS or full frameworks."
+        "Explicit ordinary setxattr236/fsetxattr237/removexattr238/fremovexattr239 require independent initial-object mutable_extended_attributes grants and complete initial observations. Virtual ordered values, initial reservations and shared runtime growth follow retained objects across dup/move/removal/mapping leases. Scratch, capacity and transport failures do not publish; partially readable input stops explicitly. Complete stat invalidates independently of directory enumeration. Unknown permissions, special attributes and provider-wide behavior remain unsupported; original thin native/guest/public/Python controls do not establish Intel HVF, physical iOS or full frameworks.",
+        "Raw link9/linkat471 admit bounded runtime aliases in mutable destination parents within an explicitly established mount domain. Source-first import, directory EPERM, existing-target EEXIST, low32 FDs/flags0 or AT_SYMLINK_FOLLOW0x40 and final-symbol selection use the shared resolver. Names own entry/path/NUL cost while object bytes, content/attribute grants, metadata validity and leases remain shared. Initial aliases are not coalesced; conflicting identities/devices/flags/modes fail explicitly. Successful links consume no inode. Existing explicit policies project link counts and ctime; attribute/content invalidation remains independent. Removal and replacement retain description/mapping-owned costs; subtree movement selects exact identities/parents and keeps outside aliases fixed. Multiple-name history permanently refuses vnode F_GETPATH/ATTR_CMN_NAME, including one/zero survivors, while bulk NAME uses the actual entry. APFS cache semantics, permissions/ACLs, coherent file mappings/EOF signals, native Intel HVF, physical iOS and complete OS/framework compatibility remain unsupported or unverified. Original ARM64 native controls and thin guest/C/CLI/Python workloads retain all deadlines.",
+        "O_SYMLINK0x00200000 retains final symbolic objects at all3 access modes without granting writable target content. CREAT follows; NOFOLLOW/exclusive/directory and intermediate/trailing resolver ordering remain native. Shared descriptions retain LinkNode and selected NameIdentity through dup, rename, unlink, name reuse and removed parents; independent opens keep their own flags/cursors. Negative I/O offsets retain existing early pwrite/pwritev rules and EINVAL after common prefixes; read INT64_MAX returns0, write INT64_MAX EFBIG, other admitted symbolic offsets EPERM before zero-length success, APPEND or payload access. DATA/HOLE nonnegative ENXIO/negative EINVAL preserve cursor. Symbolic open TRUNC, including readonly, and writable nonnegative ftruncate only set WasWritten, without target/stat/xattr/cursor/storage/inode effects. Admitted F_SETFL changes APPEND|NONBLOCK before ENOTTY25; unknown arguments stop before effects. Fixed fpathconf, held attributes and independent initial ordinary FD-xattr grants use the link object; directory-FD/fchdir return ENOTDIR. Legacy aligned non-executable private/shared mmap reaches symbolic-kind EINVAL without allocation or lease; ordinary shared and other unknown mapping contracts remain unsupported. Initial reservations stay fixed; dynamic name/target/entry/xattr costs wait for final ownership, including orphan parents and last-alias replacement. Multi-name history permanently refuses vnode names. Native mmap controls cover18 cases at length16384/offset0/protection1,2,3 only. Original SDK-free native O0/O1/O2 and thin5-profile guest/C/CLI/Python controls retain all bounds. Native Intel HVF, physical iOS, permissions/ACLs, coherent mapped EOF/signals and full OS/framework execution remain unverified or incomplete.",
+        "O_NONBLOCK4 is admitted and retained for bounded regular/directory/symbolic opens and shared dup descriptions; independent opens retain their own state. F_SETFL validates raw low32 mask0x1000f before effects, applies native open-flag conversion and updates only APPEND|NONBLOCK. Literal requests3/7/11/15 select4/8/12/0; high32 is ignored. Access, actual WasWritten, per-FD CLOEXEC, cursors, bytes and metadata remain independently owned. Symbolic status effects precede ENOTTY25. Finite stdin preserves unknown-input refusal/EOF/EFAULT and captures preserve shared budgets/partial-copy faults. ASYNC and O_EVTONLY process policy, readiness waits, pipes, networking, kqueue and async signals remain unsupported. Original122-observation ARM64 controls and SDK-free O0/O1/O2 native/5-profile guest/C/CLI/Python routes retain all existing deadlines; native Intel HVF, physical iOS and full OS/framework completion remain unverified or incomplete.",
+        "Raw BSD getentropy500 consumes explicit immutable per-call DarwinSystemOptions.EntropyReads / darwin_system.entropy_reads observations, with a fresh DarwinEntropy cursor for each execution and strict shared native/JSON admission. At most256 nonempty records of1..256 bytes; JSON uses even-length nonempty hex strings and retains the existing65536-byte transport limit. Omission is unknown and [] explicitly exhausted. Full64 size>256 returns EINVAL22 and zero succeeds for any pointer without memory/input/consumption. Nonzero calls require the next exact length before copyout, including bad addresses. Success and wholly inaccessible EFAULT14 consume one admitted record; partial writable output stops UnsupportedService before bytes/cursor changes. Memory transport errors do not advance; later return-register failure preserves completed service effects. Five software guest/C/CLI/Python profiles and three ARM64 HVF profiles check bytes/canaries/error ABI/repeated options; original ARM64 O0/O1/O2 evidence retains594 native calls and does not infer copied length from changed sentinel bytes. Fixed replay data is excluded from native deterministic RNG oracles. No host RNG, crypto-quality guarantee, /dev/random, libc imports, frameworks, thread scheduling or new Mach binding. Native Intel HVF, physical iOS and full OS compatibility remain unverified/incomplete.",
+        "Raw BSD thread_selfid372 returns the explicit immutable optional DarwinSystemOptions.ThreadID / darwin_system.thread_id observation. All uint64 bits including0 are known; omission stops UnsupportedService. Decimal strings preserve full64 values, numeric JSON requires an exact integer up to2^53-1, and no host/PID/Mach value supplies a default. The no-argument call ignores six carriers without memory access. Shared low32 raw-number resolution and BSD return authority preserve complete values/raw events, clear carry and RDX/X1, and reject Mach spellings. Repeated runs preserve the observation and independent options remain independent; the value never populates scheduler ProcessServiceEvent.ThreadID. Original ARM64 O0/O1/O2 probes retain24 calls comparing SDK current pthread IDs, seed and high32-number behavior. The common native mode compares only within-process relationships; literal supplied-ID bytes are excluded from deterministic native references. Five software and three mandatory ARM64 HVF profiles, canonical C/CLI and real Python routes check zero/high-bit/UINT64_MAX, exact bytes/events, missing observations and strict preflight. No ID allocation, uniqueness guarantee, pthread/TLS/thread lifecycle, Mach IPC or framework/OS completeness; native Intel HVF and physical iOS remain unverified.",
+        "Raw Mach self queries27/28/29 read independent explicit optional uint32 ThreadSelfPort/TaskSelfPort/HostSelfPort observations through darwin_system.thread_self_port/task_self_port/host_self_port. Selected-field omission stops UnsupportedService; known0, equal names and UINT32_MAX are admitted without positive pid_t restrictions. DarwinSystem alone converts the name through signed int32 into raw64; resolved Mach binding and returnService alone preserve flags and RDX/X1 with existing x64 RCX/R11 clobbers. The queries ignore all arguments and access no memory. Low32 resolution keeps complete raw event numbers; query reports omit BSD error and scheduler ThreadID. Five software and three mandatory ARM64 HVF profiles, canonical C/CLI and real Python verify zero, high-bit signed carriers, width boundaries, missing independence, stable runs and preflight. Original ARM64 O0/O1/O2 probes retain432 raw observations with all16 NZCV, number prefixes, seeded carriers and SDK comparison at their original source identity. No native bit31 name was observed: high-bit extension is a pinned XNU source contract with independent literal tests. The common native fixture checks relationships only; virtual names are excluded from native deterministic reference cases. No live rights, uniqueness, name/send-reference allocation, IPC/lifecycle or scheduling is inferred. Mach reply-port26 and IPC31 remain unsupported; permissions/ACL, readiness, advancing clocks, real threads/Mach IPC, dyld/TLS and full runtimes/frameworks remain incomplete; native Intel HVF and physical iOS remain unverified.",
+        "Optional DarwinFileOptions.Authorization / darwin_files.authorization=\"static-owner-queries\" declares an immutable ordinary local owner-query environment: no ACL/MAC/additional kauth listeners, entitlements or permission bypass; writable executable nonopaque local mount with ownership enabled; flags0 and no special mode bits. Explicit canonical Credentials and object metadata authorize only matching nonzero owner UID. Access uses real UID; AT_EACCESS uses effective UID throughout SEARCH and final R/W/X. Missing identity/metadata, selected UID0, nonowner, retained-link R/W/X and extended actions stop UnsupportedService; known owner denial is native EACCES13. Actual directory SEARCH precedes child lookup, dots and missing/over-limit components, except slash-only root and root-clamped dotdot no-action paths. An allowed over-limit component remains Unsupported rather than deriving filesystem errno from Name255. Only permission queries and typed opaque standard streams including dup aliases remain open; every other file route and direct/file-backed mapping source stop before model effects, while anonymous VM remains independent. Admission rejects mutation/creation grants, nonordinary known metadata and known inode/device aliases without charging another path/entry. Original native ARM64 O0/O1/O2 raw/SDK preparation retains2472 pairs,2439 independently literal-checked and33 capture-only; ACL absence is observed independently with fstatx/filesec property presence, with unobservable global-hook assumptions explicit. Distinct real/effective IDs require source/model evidence, not a native host claim. SDK-free supplied queries are excluded from the58 common native deterministic references. Group/root/ACL/MAC authorization, dynamic credentials, general authorized open/namespace operations, readiness, advancing clocks, real Mach IPC/threads, dyld/TLS/frameworks and full OS compatibility remain unfinished; native Intel HVF and physical iOS are unverified.",
+        "Optional DarwinFileOptions.Authorization / darwin_files.authorization=\"static-ordinary-queries\" retains the immutable ordinary mount/security assumptions and closed routes of static-owner-queries, whose owner-only behavior stays unchanged. Actual checks require explicit credentials, object metadata and selected nonzero UID. Owners use their whole requested owner mask; nonowners use equal whole-mask group/world outcomes without membership, including equal denials for different bit sets. Otherwise a known member selects group and a proved nonmember selects world; unresolved external membership stops UnsupportedService before lookup/effects. Positive primary/in-credential membership is known; credentials.groups is the ordered list with effective GID at index0 and duplicates retained, not the SDK extended resolver list. Real-copy identity changes scan the first supplementary real-GID match and swap the old primary into it; no match displaces that primary and disables memberd. That proved change or explicit original GroupMembershipUID=KAUTH_UID_NONE, each with an explicit complete list, supplies known negative membership. Missing lists never supply negative answers; unequal UIDs with equal GIDs still transform, and duplicate primaries may preserve unknown membership. AT_EACCESS uses the original effective context. All40 other file routes and direct/file-backed mappings remain closed, typed streams and anonymous VM independent. Original read-only ARM64 O0/O1/O2 evidence retains270 raw/SDK literal pairs with held-object/stat/ACL-property guards; raw groups16 and SDK extended groups17 are distinct observations. Equal native IDs do not establish distinct identity transforms or every external hook. Five software and three required ARM64 HVF profiles plus C/CLI/Python verify the supplied-model workload outside the58 native-common cases; all deadlines remain unchanged. Root, ACL/MAC, general vnode authorization, full group resolution, dynamic credentials, readiness/networking, advancing clocks, Mach IPC/threads, dyld/TLS and complete OS/frameworks remain incomplete; native Intel HVF and physical iOS unverified.",
+        "Optional DarwinCredentials.GroupMembershipUID / darwin_system.credentials.group_membership_uid declares independent original cr_gmuid: bounded 0..INT32_MAX or exact KAUTH_UID_NONE4294967195 (0xffffff9b, UINT32_MAX minus100), using shared lossless numeric/decimal-string admission. Positive primary/in-credential membership wins before negatives. Original NONE plus an explicit complete list proves missing membership; omitted groups never prove negatives. First-match real copies preserve original NONE, while proved displacement also disables memberd. Omission and other admitted UIDs retain external uncertainty; no resolver, root bypass or new vnode-operation authority is supplied. Four scalar IDs, group-list entries, getgroups, creation ownership and old modes retain their existing contract; NONE remains invalid in ordinary UID/GID/group entries. Five software and three mandatory ARM64 HVF profiles, C/CLI and Python verify173 supplied-model events and strict admission. Local O0/O1/O2 SDK controls establish only the sentinel and four-byte uid_t, not host cr_gmuid or resolver state; prior270 actual native nonowner pairs keep their original identity. All58 native-common references, original bounds and unverified Intel/physical-iOS/full-OS gaps remain unchanged."
       ],
       "tests": [
         {
@@ -15271,6 +15320,941 @@
           "target": "NeverDLinuxProcessTests",
           "source": "unittests/emulation/ProcessReportTests.cpp",
           "filter": "ProcessReport.DarwinXattrMutationGrantsAreStrictAndObjectSpecific",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkSharesBytesInodeAndLastNameLifetime/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkSharesAttributeGrantWithoutContentGrant/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkAttributeMutationInvalidatesEveryAliasStat/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkErrorOrderUsesSourceBeforeDestination/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkFailedOperationsPreserveSingleNameObservations/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkNameAmbiguitySurvivesOneAndZeroNames/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkDetachedAliasBudgetWaitsForItsDescription/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkFinalAliasBudgetWaitsForItsMappingLease/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkDoesNotConsumeOrRestoreCreationInodes/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkSymbolSelectionAndAttributesRemainObjectOwned/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkRelativeSymbolsUseEachSelectedEntryParent/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkNeedsDestinationAuthorityOnlyInDeclaredDomain/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkSameObjectRenameAndSwapKeepBothNames/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkDirectorySwapMovesEachEntryOnce/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkBulkNamesComeFromEntriesWithoutVnodeGuessing/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkReplacementCannotCreditLastMappedAlias/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.HardLinkEntrySlotWaitsForDetachedDescription/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.HardLinksShareObjectsAndRetainExplicitNameBoundary/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorsSelectFinalObjectsAndKeepOpenOrder/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorsCreationAndTrailingSlashUseReferents/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorScalarIOKeepsNativePrefixMatrix/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorVectorIOKeepsNativeImportMatrix/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorTruncateAndControlShareOnlyDescriptions/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorsSeekAndAttributesUseTheirObject/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorXattrsDoNotRequireContentOrAccessGrants/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorsRetainUniqueNamesAfterParentRemoval/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorsKeepPermanentMultipleNameBoundary/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicReplacementCannotCreditDeletedHeldAliasObject/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicFinalNameAndObjectWaitForEveryDescription/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicCloseReclaimsRemovedParentsToFixedPoint/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicTruncateDoesNotSpendLastCreationInode/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorUnlinkedXattrGrowthKeepsObjectBudget/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.SymbolicDescriptorEntrySlotSurvivesLastUnlink/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinMemoryTests.cpp",
+          "filter": "*/DarwinMemoryTest.SymbolicDescriptorsRefuseNativePrivateAndSharedModes/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinMemoryTests.cpp",
+          "filter": "*/DarwinMemoryTest.SymbolicSharedAdmissionKeepsUnknownMappingBoundaries/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.SymbolicDescriptorsRetainObjectsAndNativeErrorOrder/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.NonblockingFlagsUseNativeConversionAndDescriptionOwnership/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.NonblockingAppendAndPositionedWritesKeepBytesAndCursors/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.NonblockingStreamsRetainInputFaultAndCaptureBudgets/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.NonblockingAdmissionPreservesPathAndAccessFailures/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.NonblockingDescriptorsKeepNativeControlState/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "*/DarwinEntropyTest.ZeroAndFullWidthInvalidLengthsNeedNoMemoryOrInput/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "*/DarwinEntropyTest.ExactRecordsPreserveBytesCanariesAndOwnerIsolation/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "*/DarwinEntropyTest.AdmissionRefusalsPrecedeBadAddressAndPreserveRecord/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "*/DarwinEntropyTest.WholeFaultConsumesExactlyOneAdmittedRecord/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "*/DarwinEntropyTest.PartialOutputRefusesBeforeBytesOrRecordAdvance/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "*/DarwinEntropyTest.TransportErrorsNeverInventErrnoOrAdvanceReplay/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "*/DarwinEntropyTest.ServiceHandoffKeepsEffectsOnReturnRegisterFailure/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinEntropyTests.cpp",
+          "filter": "DarwinEntropyOptions.FiniteNonemptyRecordsShareTypedValidation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.EntropyReplayKeepsBytesFaultOrderAndFreshRunLifetime/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinEntropyRejectsMalformedReplayBeforeLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.ThreadIdentityIsExplicitFullWidthAndMemoryIndependent/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.ThreadIdentityTraversesRawBindingAndBothReturnABIs/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.ThreadIdentityPreservesExplicitBitsAndIndependentRuns/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinThreadIdentityRejectsMalformedObservationsBeforeLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MachSelfPortsAreIndependentAndMemoryFree/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MachPortAdmissionKeepsLegacyProcessBounds/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MachSelfPortsTraverseRawBindingAndPreserveCarriers/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.MachSelfPortsPreserveExplicitBitsAndIndependentRuns/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinMachSelfPortsRejectMalformedObservationsBeforeLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "DarwinFileOptions.OwnerQueriesRejectContradictionsWithoutInventingFacts",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "DarwinFileOptions.OwnerDeclarationDoesNotChargeAnotherPathOrEntry",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesMatchIndependentOwnerAndSearchMatrices/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesRequireKnowledgeOnlyAtActualChecks/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesSelectRealOrEffectiveForSearchAndFinal/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesWalkLinksDotsAndConsumedSeparators/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesPreserveImportErrorsAndLengthBoundary/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesLeavePathMemoryAndInputsUnchanged/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesCloseEveryOtherDispatchedFileRoute/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OwnerQueriesPreserveTypedStreamsAndTheirPreflight/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinMemoryTests.cpp",
+          "filter": "*/DarwinMemoryTest.OwnerQueriesKeepAnonymousMemoryAndCloseFileMappings/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.OwnerQueriesKeepPermissionAndUnknownBoundaries/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinOwnerQueriesRejectContradictionsBeforeLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesMatchIndependentWholeMaskMatrices/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesKeepOwnerOnlyModeAndMissingFactsDistinct/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesUseLiteralRealGroupTransformCases/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesAuthorizeSelectedSearchBeforeLookupAndCaps/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinFileTests.cpp",
+          "filter": "*/DarwinFileTest.OrdinaryQueriesUseOriginalMembershipUIDForSearch/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "*/DarwinSystemTest.MembershipUIDKeepsScalarAndGroupObservationsIndependent/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinSystemTests.cpp",
+          "filter": "DarwinSystemOptions.MembershipUIDAdmitsOnlyBoundedIDsOrExactNone",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLinuxProcessTests",
+          "source": "unittests/emulation/ProcessReportTests.cpp",
+          "filter": "ProcessReport.DarwinMembershipUIDKeepsLosslessAndIndependentAdmission",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLinuxProcessTests",
+          "source": "unittests/emulation/ProcessReportTests.cpp",
+          "filter": "ProcessReport.MalformedDarwinMembershipUIDFailsBeforeImageLoading",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "ProcessPublic.DarwinMembershipUIDRejectsMalformedCredentialsBeforeLoading",
           "platforms": [
             "darwin",
             "linux",

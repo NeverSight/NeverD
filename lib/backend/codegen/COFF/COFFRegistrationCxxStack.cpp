@@ -13,11 +13,15 @@
 
 namespace neverd::coff_registration {
 
-llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
-                              const llvm::Function &Function) {
+static llvm::Error bindCatchStack(CxxIRControlProof &Proof,
+                                  const MedFunc &Source,
+                                  const llvm::Function &Function,
+                                  X86RegistrationCatchIdentity Identity) {
+  auto &Catch = Proof.Catches.at(Identity);
   const auto &EH = *Source.ExceptionMetadata;
-  const bool Realigned = EH.Registration->RealignedFrame.has_value();
-  const va_t Callback = EH.Cxx->TryBlocks[0].Handlers[0].HandlerVA;
+  const bool PrivateStack = EH.Registration->hasCxxCallbackStack();
+  const va_t Callback =
+      EH.Cxx->TryBlocks[Identity.first].Handlers[Identity.second].HandlerVA;
   size_t Work = 0;
   unsigned Expected = 0;
   for (const auto &Block : Source.Blocks)
@@ -36,8 +40,16 @@ llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
         return rejectIR("C++ callback stack identity exceeded its work budget");
       if (const auto *MD =
               I.getMetadata(windows_eh_md::RegistrationCatchStackAttachment)) {
+        const auto Owner = metadataInteger(*MD, 1, 64);
+        if (PrivateStack && Owner && *Owner != Callback &&
+            llvm::any_of(EH.Cxx->TryBlocks, [&](const auto &Try) {
+              return llvm::any_of(Try.Handlers, [&](const auto &Handler) {
+                return Handler.HandlerVA == *Owner;
+              });
+            }))
+          continue;
         Stack = llvm::dyn_cast<llvm::AllocaInst>(&I);
-        if (!Realigned || Proof.CallbackStack || !Stack ||
+        if (!PrivateStack || Catch.Stack || !Stack ||
             MD->getNumOperands() != 2 ||
             metadataInteger(*MD, 0, 64) != Source.Entry ||
             metadataInteger(*MD, 1, 64) != Callback ||
@@ -46,17 +58,22 @@ llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
             &Block != &Function.getEntryBlock() || Stack == Proof.Frame.Slot ||
             Stack->getAlign() != llvm::Align(16))
           return rejectIR("C++ callback stack lost its invocation identity");
-        Proof.CallbackStack = Stack;
+        Catch.Stack = Stack;
       }
       if (I.getMetadata(windows_eh_md::RegistrationRootAttachment)) {
+        if (PrivateStack && &Block != Catch.Pad->getParent() &&
+            llvm::any_of(Proof.Catches, [&](const auto &Other) {
+              return Other.second.Pad->getParent() == &Block;
+            }))
+          continue;
         const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I);
-        if (!Realigned || Seed || !Store || Store->isAtomic() ||
-            Store->isVolatile() || &Block != Proof.Catch->getParent())
+        if (!PrivateStack || Seed || !Store || Store->isAtomic() ||
+            Store->isVolatile() || &Block != Catch.Pad->getParent())
           return rejectIR("C++ callback ESP has no unique runtime definition");
         Seed = Store;
       }
     }
-  if (!Realigned)
+  if (!PrivateStack)
     return llvm::Error::success();
   if (Expected != 1 || !Seed || !Stack)
     return rejectIR("C++ callback stack lost its source ESP binding");
@@ -86,22 +103,6 @@ llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
           llvm::TypeSize::getFixed(4) ||
       !Destination->getAllocatedType()->isIntegerTy(32))
     return rejectIR("C++ callback ESP changed its private frame address");
-  for (const auto &State : Source.RegistrationStates->Blocks) {
-    if (!State.Reached || !State.CallbackOnly)
-      continue;
-    const auto &Segment = Proof.Segments.at(State.BlockId);
-    const auto *I = Segment.Enter;
-    while (I != Segment.Exit) {
-      if (++Work > limits::kMaxRegistrationEHStateWork)
-        return rejectIR("C++ callback stack body exceeded its work budget");
-      Proof.CallbackBlocks.insert(I->getParent());
-      I = I->isTerminator() ? &*llvm::cast<llvm::InvokeInst>(I)
-                                    ->getNormalDest()
-                                    ->getFirstInsertionPt()
-                            : next(*I);
-    }
-    Proof.CallbackBlocks.insert(Segment.Exit->getParent());
-  }
   llvm::DominatorTree Dominators(const_cast<llvm::Function &>(Function));
   for (const auto *User : Destination->users()) {
     if (++Work > limits::kMaxRegistrationEHStateWork)
@@ -118,11 +119,18 @@ llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
         continue;
     }
     const auto *Load = llvm::dyn_cast<llvm::LoadInst>(User);
-    if (!Load || !Proof.CallbackBlocks.count(Load->getParent()) ||
-        Load->isVolatile() || Load->isAtomic() ||
-        !Dominators.dominates(Seed, Load))
+    if (!Load || !Catch.Blocks.count(Load->getParent()) || Load->isVolatile() ||
+        Load->isAtomic() || !Dominators.dominates(Seed, Load))
       return rejectIR("C++ callback ESP escaped its runtime invocation");
   }
+  return llvm::Error::success();
+}
+
+llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
+                              const llvm::Function &Function) {
+  for (const auto &[Identity, Catch] : Proof.Catches)
+    if (auto Error = bindCatchStack(Proof, Source, Function, Identity))
+      return Error;
   return llvm::Error::success();
 }
 
