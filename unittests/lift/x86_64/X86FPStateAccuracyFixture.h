@@ -128,7 +128,16 @@ protected:
     std::string Error;
     const int Status = llvm::sys::ExecuteAndWait(Program, Args, std::nullopt,
                                                  Redirects, 30, 0, &Error);
-    return {Status, contents(Stdout), Error + contents(Stderr)};
+    const auto Out = contents(Stdout);
+    const auto Diagnostics = Error + contents(Stderr);
+    if (Status != 0) {
+      std::string Invocation = Program.str();
+      for (const auto &Arg : Arguments)
+        Invocation += "\n" + Arg;
+      retain("command-failure-" + std::to_string(Files.size()) + ".txt",
+             Invocation + "\nstdout:\n" + Out + "\nstderr:\n" + Diagnostics);
+    }
+    return {Status, Out, Diagnostics + (Status != 0 ? Out : "")};
   }
 
   static bool nativeX64() {

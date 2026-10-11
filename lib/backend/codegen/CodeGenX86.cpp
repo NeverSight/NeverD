@@ -53,7 +53,8 @@ detectTargetFeaturesX86(const std::set<std::string> &Names) {
   // llvm.fma lowers to a hardware VEX FMA (vfmadd*) only with +fma; without it
   // the backend falls back to an `fmaf`/`fma` libcall, which the bare-metal
   // round-trip cannot resolve.  FMA3 is VEX-encoded, so it also implies +avx.
-  bool FMA = Has("llvm.fma");
+  bool FMA = Has("llvm.fma") || Has("vfmadd") || Has("vfmsub") ||
+             Has("vfnmadd") || Has("vfnmsub");
   // Half-precision (_Float16): without +f16c the backend softens the
   // half<->float conversions (LLVM promotes half arithmetic through float) to
   // __extendhfsf2 / __truncsfhf2 library calls the rewrite image cannot

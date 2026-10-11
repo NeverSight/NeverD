@@ -1542,9 +1542,10 @@ std::string renderX86TypedIntrinsicCall(
     const bool Round = isX86FPRoundStateIntrinsic(Call.IntrinsicId);
     const bool Approx12 = isX86FPApprox12Intrinsic(Call.IntrinsicId);
     const bool Arithmetic = isX86FPArithStateIntrinsic(Call.IntrinsicId);
+    const bool Fma = isX86FPFmaStateIntrinsic(Call.IntrinsicId);
     const bool Memory = isX86FPStateMemoryIntrinsic(Call.IntrinsicId);
     const unsigned Operands =
-        Arithmetic ? 3
+        Arithmetic ? (Fma ? 4 : 3)
         : Approx12 ? 1
         : Round || isX86FPConversionStateIntrinsic(Call.IntrinsicId)
             ? 2
@@ -1553,9 +1554,11 @@ std::string renderX86TypedIntrinsicCall(
       if (Index)
         Result += ", ";
       const auto &Operand =
-          *Call.Operands[Arithmetic ? (Index == 2 ? 3
-                                                  : (Memory ? Index == 0 ? 0 : 2
-                                                            : Index + 1))
+          *Call.Operands[Arithmetic
+                             ? (Index == Operands - 1
+                                    ? Operands
+                                    : (Memory ? (Index == 0 ? 0 : Index + 1)
+                                              : Index + 1))
                          : Approx12 ? (Memory ? 0 : 1)
                          : Round    ? (Index == 0 ? (Memory ? 0 : 1) : 3)
                                     : Index];

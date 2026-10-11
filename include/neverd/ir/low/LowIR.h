@@ -257,6 +257,9 @@ inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
       Op.NumInputs && Op.Inputs[0].isConst() &&
       isX86FPArithStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
   const unsigned ControlIndex = Memory ? 2 : 1;
+  const bool Fma =
+      Op.NumInputs && Op.Inputs[0].isConst() &&
+      isX86FPFmaStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
   const bool Conversion = Op.NumInputs && Op.Inputs[0].isConst() &&
                           isX86FPConversionStateIntrinsic(
                               static_cast<Intrinsic>(Op.Inputs[0].Offset));
@@ -277,13 +280,16 @@ inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
           .LeftSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : 0U,
           .RightSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U,
           .ThirdSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
+          .FourthSize = Op.NumInputs > 4 ? Op.Inputs[4].Size : 0U,
           .ArithmeticLeftIsZero = Op.NumInputs > (Memory ? 3U : 2U) &&
                                   Op.Inputs[Memory ? 3 : 2].isConst() &&
                                   Op.Inputs[Memory ? 3 : 2].Offset == 0,
-          .StateSize =
-              Round || Arithmetic ? (Op.NumInputs > 4 ? Op.Inputs[4].Size : 0U)
-              : Conversion        ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
-                                  : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
+          .StateSize = Round || Arithmetic ? (Op.NumInputs > (Fma ? 5U : 4U)
+                                                  ? Op.Inputs[Fma ? 5 : 4].Size
+                                                  : 0U)
+                       : Conversion
+                           ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
+                           : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
           .DestinationIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
           .DestinationSelectorSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
           .DestinationBytes = Op.NumInputs > 3 ? Op.Inputs[3].Offset : 0U,

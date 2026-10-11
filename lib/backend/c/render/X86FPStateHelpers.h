@@ -151,7 +151,7 @@ inline std::string x86FPArithStateCHelperName(Intrinsic Id, unsigned Layout) {
   std::string Name = "neverd_x86_" + x86FPArithStateMnemonic(Layout) + "_bits" +
                      std::to_string(x86FPStateSourceBytes(Layout) * 8) +
                      "_state";
-  if (Id == Intrinsic::X86FPArithMemoryState) {
+  if (isX86FPStateMemoryIntrinsic(Id)) {
     const auto Space = x86FPRoundStateAddressSpace(Layout);
     Name += Space == NdMemoryAddressSpace::X86FS   ? "_memory_fs"
             : Space == NdMemoryAddressSpace::X86GS ? "_memory_gs"
@@ -164,24 +164,27 @@ template <typename Stream>
 inline void
 writeX86FPArithStateCHelper(Stream &OS, Intrinsic Id, unsigned Layout,
                             const std::string &Name, bool StateAddress) {
-  const unsigned Control = x86FPRoundStateControl(Layout);
+  const unsigned Control = x86FPArithStateControl(Layout);
   const unsigned Bytes = x86FPStateSourceBytes(Layout);
+  const bool Fma = isX86FPFmaStateIntrinsic(Id);
   const bool Unary = x86FPArithStateIsUnary(Control);
   const bool Scalar = x86FPArithStateIsScalar(Control);
-  const bool Vex = Bytes == 32 || (Control & 32);
-  const bool Memory = Id == Intrinsic::X86FPArithMemoryState;
+  const bool Vex = Fma || Bytes == 32 || (Control & 32);
+  const bool Memory = isX86FPStateMemoryIntrinsic(Id);
   const auto Space = x86FPRoundStateAddressSpace(Layout);
   const auto Raw = x86FPStateRawCType(Bytes);
   const auto Return = StateAddress ? Raw : x86FPStateRawCType(Bytes + 4);
   OS << "/* SIMD numerical bits and MXCSR complete in one instruction. */\n"
      << "static inline ";
   if (Vex)
-    OS << "__attribute__((target(\"avx\"))) ";
+    OS << "__attribute__((target(\"" << (Fma ? "avx,fma" : "avx") << "\"))) ";
   OS << Return << " " << Name << "(";
   if (Memory)
     OS << "void *address, " << Raw << " left_bits";
   else
     OS << Raw << " left_bits, " << Raw << " right_bits";
+  if (Fma)
+    OS << ", " << Raw << (Memory ? " right_bits" : " third_bits");
   OS << ", " << (StateAddress ? "void *state_address" : "uint32_t state")
      << ") {\n";
   if (StateAddress)
@@ -194,24 +197,32 @@ writeX86FPArithStateCHelper(Stream &OS, Intrinsic Id, unsigned Layout,
   OS << "    " << Type << " value;\n";
   if (!Unary)
     OS << "    __builtin_memcpy(&value, &left_bits, " << Bytes << ");\n";
-  if (!Memory)
+  if (!Memory || Fma)
     OS << "    " << Type << " right;\n"
        << "    __builtin_memcpy(&right, &right_bits, " << Bytes << ");\n";
+  if (Fma && !Memory)
+    OS << "    " << Type << " third;\n"
+       << "    __builtin_memcpy(&third, &third_bits, " << Bytes << ");\n";
   OS << "    __asm__ volatile(\"ldmxcsr %1\\n\\t"
      << x86FPArithStateMnemonic(Layout) << " ";
   if (Memory)
     OS << (Space == NdMemoryAddressSpace::X86FS   ? "%%fs:"
            : Space == NdMemoryAddressSpace::X86GS ? "%%gs:"
                                                   : "")
-       << "(%2)";
+       << (Fma ? "(%3)" : "(%2)");
   else
-    OS << "%2";
-  if (!Unary && Vex)
+    OS << (Fma ? "%3" : "%2");
+  if (Fma)
+    OS << ",%2";
+  else if (!Unary && Vex)
     OS << ",%0";
   OS << ",%0\\n\\tstmxcsr %1\"\n"
      << "        : \"" << (Unary ? "=&x" : "+x")
      << "\"(value), \"+m\"(state) : "
-     << (Memory ? "\"r\"(address)" : "\"x\"(right)") << " : \"memory\");\n"
+     << (Fma ? (Memory ? "\"x\"(right), \"r\"(address)"
+                       : "\"x\"(right), \"x\"(third)")
+             : (Memory ? "\"r\"(address)" : "\"x\"(right)"))
+     << " : \"memory\");\n"
      << "    " << Raw << " result;\n"
      << "    __builtin_memcpy(&result, &value, " << Bytes << ");\n";
   if (StateAddress)

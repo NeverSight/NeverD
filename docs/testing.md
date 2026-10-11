@@ -359,6 +359,19 @@ OS-enabled AVX; descriptor checks also cover x86-32 without claiming native
 x86-32 execution. These tests do not certify FMA,
 EVEX/SAE, x87, enabled #AC or unavailable-feature faults.
 
+`NeverDX86FPFmaStateAccuracyTests` compares 192 VEX FMA3 forms: 132/213/231,
+single/double, scalar 128 and packed 128/256, register/memory, four product/addend
+sign combinations and both packed alternating forms. Original bytes are
+compared with Codegen default/NoOpt and standalone HighC/LLVMC default/NoOpt at
+O0/O2. Every comparison retains full YMM output, memory and MXCSR. The concrete
+matrix independently executes 5,971,968 native comparisons across rounding,
+DAZ/FTZ, seeded status and raw zero/denormal/infinity/NaN values. Child processes
+check unmasked invalid/overflow, instruction-wide priority, unchanged output
+and discarded protected-source accesses. Malformed controls and owned-assembly
+contracts must fail clearly. Typed source stack probes separately cover the
+fifth Win64 or ninth SysV floating argument. Native execution requires an x64
+host with OS-enabled FMA3. FMA4, EVEX/SAE and unavailable features are excluded.
+
 ## x86 invalid encodings and instruction boundaries
 
 `NeverDX86EncodingAccuracyTests` requires raw illegal LOCK forms (including

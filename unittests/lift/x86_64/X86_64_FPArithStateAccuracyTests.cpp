@@ -1387,7 +1387,7 @@ TEST_F(X86FPArithFixture,
 
 class X86FPArithStackAccuracy : public X86FPStateFixture {
 protected:
-  void compareStackArguments(bool IsDouble, bool Declared) {
+  void compareStackArguments(bool IsDouble, bool Declared, bool Fma = false) {
     if (!nativeX64())
       GTEST_SKIP() << "native x86_64 host required";
     const unsigned Registers = hostFormat() == BinaryFormat::COFF ? 4 : 8;
@@ -1397,9 +1397,16 @@ protected:
     for (unsigned I = 1; I < Registers; ++I)
       Bytes.insert(Bytes.end(), {static_cast<uint8_t>(IsDouble ? 0xf2 : 0xf3),
                                  0x0f, 0x58, static_cast<uint8_t>(0xc0 | I)});
-    Bytes.insert(Bytes.end(),
-                 {static_cast<uint8_t>(IsDouble ? 0xf2 : 0xf3), 0x0f, 0x58,
-                  0x44, 0x24, static_cast<uint8_t>(Offset), 0xc3});
+    if (Fma) {
+      if (!llvm::sys::getHostCPUFeatures().lookup("fma"))
+        GTEST_SKIP() << "native FMA3 required";
+      Bytes.insert(Bytes.end(),
+                   {0xc4, 0xe2, static_cast<uint8_t>(IsDouble ? 0xf1 : 0x71),
+                    0xa9, 0x44, 0x24, static_cast<uint8_t>(Offset), 0xc3});
+    } else
+      Bytes.insert(Bytes.end(),
+                   {static_cast<uint8_t>(IsDouble ? 0xf2 : 0xf3), 0x0f, 0x58,
+                    0x44, 0x24, static_cast<uint8_t>(Offset), 0xc3});
     const auto Native = file("stack-native.s");
     const auto NativeObject = file("stack-native.o");
     auto NativeText = assembly(Bytes);
@@ -1532,6 +1539,12 @@ TEST_F(X86FPArithStackAccuracy, DeclaredFloatStackArgumentBindsItsSourceABI) {
 }
 TEST_F(X86FPArithStackAccuracy, DeclaredDoubleStackArgumentBindsItsSourceABI) {
   compareStackArguments(true, true);
+}
+TEST_F(X86FPArithStackAccuracy, FmaFloatStackArgumentBindsItsSourceABI) {
+  compareStackArguments(false, true, true);
+}
+TEST_F(X86FPArithStackAccuracy, FmaDoubleStackArgumentBindsItsSourceABI) {
+  compareStackArguments(true, true, true);
 }
 
 } // namespace

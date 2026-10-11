@@ -3737,6 +3737,12 @@ add_neverd_unittest(NeverDX86FPArithStateAccuracyTests
 target_include_directories(NeverDX86FPArithStateAccuracyTests PRIVATE
   ${CMAKE_SOURCE_DIR}/unittests)
 
+add_neverd_unittest(NeverDX86FPFmaStateAccuracyTests
+  x86_64/X86_64_FPFmaStateAccuracyTests.cpp
+  LINK_COMPONENTS Pipeline BackendC CodeGen)
+target_include_directories(NeverDX86FPFmaStateAccuracyTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/unittests)
+
 add_neverd_unittest(NeverDX86RdSspAccuracyTests
   x86_64/X86_64_RdSspAccuracyTests.cpp
   LINK_COMPONENTS Pipeline BackendC CodeGen)

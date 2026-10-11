@@ -21,6 +21,7 @@ struct FPArithStateSpec {
   bool Scalar;
   bool Vex;
   unsigned Topology = 0;
+  unsigned Order = 0;
 };
 
 inline bool getFPArithStateSpec(unsigned Id, FPArithStateSpec &Spec) {
@@ -75,6 +76,82 @@ inline bool getFPArithStateSpec(unsigned Id, FPArithStateSpec &Spec) {
     FP_PACKED(HSUB, 0x7d, Subtract, 64)
     FP_PACKED(ADDSUB, 0xd0, Add, 128)
 #undef FP_PACKED
+#define FP_FMA(Name, Opcode, Flags, Order)                                     \
+  case X86_INS_V##Name##PS:                                                    \
+    Spec = {X86FPArithKind::FusedMultiplyAdd,                                  \
+            Opcode,                                                            \
+            false,                                                             \
+            false,                                                             \
+            true,                                                              \
+            Flags,                                                             \
+            Order};                                                            \
+    return true;                                                               \
+  case X86_INS_V##Name##PD:                                                    \
+    Spec = {X86FPArithKind::FusedMultiplyAdd,                                  \
+            Opcode,                                                            \
+            true,                                                              \
+            false,                                                             \
+            true,                                                              \
+            Flags,                                                             \
+            Order};                                                            \
+    return true;                                                               \
+  case X86_INS_V##Name##SS:                                                    \
+    Spec = {X86FPArithKind::FusedMultiplyAdd,                                  \
+            Opcode + 1,                                                        \
+            false,                                                             \
+            true,                                                              \
+            true,                                                              \
+            Flags,                                                             \
+            Order};                                                            \
+    return true;                                                               \
+  case X86_INS_V##Name##SD:                                                    \
+    Spec = {X86FPArithKind::FusedMultiplyAdd,                                  \
+            Opcode + 1,                                                        \
+            true,                                                              \
+            true,                                                              \
+            true,                                                              \
+            Flags,                                                             \
+            Order};                                                            \
+    return true;
+    FP_FMA(FMADD132, 0x98, 0, 0)
+    FP_FMA(FMADD213, 0xa8, 0, 1)
+    FP_FMA(FMADD231, 0xb8, 0, 2)
+    FP_FMA(FMSUB132, 0x9a, 128, 0)
+    FP_FMA(FMSUB213, 0xaa, 128, 1)
+    FP_FMA(FMSUB231, 0xba, 128, 2)
+    FP_FMA(FNMADD132, 0x9c, 64, 0)
+    FP_FMA(FNMADD213, 0xac, 64, 1)
+    FP_FMA(FNMADD231, 0xbc, 64, 2)
+    FP_FMA(FNMSUB132, 0x9e, 192, 0)
+    FP_FMA(FNMSUB213, 0xae, 192, 1)
+    FP_FMA(FNMSUB231, 0xbe, 192, 2)
+#undef FP_FMA
+#define FP_FMA_ALTERNATING(Name, Opcode, Flags, Order)                         \
+  case X86_INS_V##Name##PS:                                                    \
+    Spec = {X86FPArithKind::FusedMultiplyAdd,                                  \
+            Opcode,                                                            \
+            false,                                                             \
+            false,                                                             \
+            true,                                                              \
+            Flags,                                                             \
+            Order};                                                            \
+    return true;                                                               \
+  case X86_INS_V##Name##PD:                                                    \
+    Spec = {X86FPArithKind::FusedMultiplyAdd,                                  \
+            Opcode,                                                            \
+            true,                                                              \
+            false,                                                             \
+            true,                                                              \
+            Flags,                                                             \
+            Order};                                                            \
+    return true;
+    FP_FMA_ALTERNATING(FMADDSUB132, 0x96, 3072, 0)
+    FP_FMA_ALTERNATING(FMADDSUB213, 0xa6, 3072, 1)
+    FP_FMA_ALTERNATING(FMADDSUB231, 0xb6, 3072, 2)
+    FP_FMA_ALTERNATING(FMSUBADD132, 0x97, 1024, 0)
+    FP_FMA_ALTERNATING(FMSUBADD213, 0xa7, 1024, 1)
+    FP_FMA_ALTERNATING(FMSUBADD231, 0xb7, 1024, 2)
+#undef FP_FMA_ALTERNATING
   default:
     return false;
   }
@@ -94,6 +171,7 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return Refuse();
   const bool Unary = Spec.Kind == X86FPArithKind::SquareRoot;
+  const bool Fma = Spec.Kind == X86FPArithKind::FusedMultiplyAdd;
   const bool HasVvvv = Spec.Vex && (!Unary || Spec.Scalar);
   const unsigned SourceIndex = HasVvvv ? 2 : 1;
   if (X86.op_count != SourceIndex + 1 || X86.operands[0].type != X86_OP_REG)
@@ -103,9 +181,10 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
         X86.operands[Index].avx_zero_opmask)
       return Refuse();
   const bool Mode64 = L.targetArch() == Arch::X64;
-  const unsigned PP = Spec.Topology ? (Spec.Double ? 1 : 3)
-                      : Spec.Scalar ? (Spec.Double ? 3 : 2)
-                                    : (Spec.Double ? 1 : 0);
+  const unsigned PP = Fma             ? 1
+                      : Spec.Topology ? (Spec.Double ? 1 : 3)
+                      : Spec.Scalar   ? (Spec.Double ? 3 : 2)
+                                      : (Spec.Double ? 1 : 0);
   const uint8_t MandatoryByte = PP == 1   ? 0x66
                                 : PP == 2 ? 0xf3
                                 : PP == 3 ? 0xf2
@@ -143,6 +222,8 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
       return Refuse();
     uint8_t P1 = 0;
     if (Insn->bytes[Offset] == 0xc5) {
+      if (Fma)
+        return Refuse();
       P1 = Insn->bytes[Offset + 1];
       R = (P1 & 0x80) == 0;
       B = X = false;
@@ -151,7 +232,7 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
       if (Offset + 4 >= Insn->size)
         return Refuse();
       const auto P0 = Insn->bytes[Offset + 1];
-      if ((P0 & 0x1f) != 1 || (!Mode64 && (P0 & 0xe0) != 0xe0))
+      if ((P0 & 0x1f) != (Fma ? 2 : 1) || (!Mode64 && (P0 & 0xe0) != 0xe0))
         return Refuse();
       R = (P0 & 0x80) == 0;
       B = (P0 & 0x20) == 0;
@@ -160,8 +241,9 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
       Offset += 3;
     } else
       return Refuse();
-    if ((P1 & 3) != PP || (Spec.Scalar && (P1 & 4)) ||
-        (!HasVvvv && (P1 & 0x78) != 0x78) || (!Mode64 && R))
+    if ((P1 & 3) != PP || (Fma && ((P1 & 0x80) != 0) != Spec.Double) ||
+        (Spec.Scalar && (P1 & 4)) || (!HasVvvv && (P1 & 0x78) != 0x78) ||
+        (!Mode64 && R))
       return Refuse();
     Width = (P1 & 4) ? 32 : 16;
     const unsigned Left = (~P1 >> 3) & 15;
@@ -218,7 +300,20 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
   const unsigned Control =
       unsigned(Spec.Kind) | (Spec.Double ? 8 : 0) | (Spec.Scalar ? 16 : 0) |
       (Memory && Spec.Vex && !Spec.Scalar ? 32 : 0) | Spec.Topology;
-  if (Memory)
+  if (Fma) {
+    const auto Old = Slice(L.operandRead(S, X86.operands[0]));
+    const unsigned FmaControl = makeX86FPFmaStateControl(
+        Spec.Order, Spec.Double, Spec.Scalar, Memory, (Spec.Topology & 64) != 0,
+        (Spec.Topology & 128) != 0, (Spec.Topology & 1024) != 0,
+        (Spec.Topology & 2048) != 0);
+    if (Memory)
+      S.emitIntrinsic(Intrinsic::X86FPFmaMemoryState, Result,
+                      {Right, NdVar::cst(FmaControl, 2), Old, Left, Incoming},
+                      NdMemoryOrdering::None, S.memoryAddressSpace(RHSOperand));
+    else
+      S.emitIntrinsic(Intrinsic::X86FPFmaState, Result,
+                      {NdVar::cst(FmaControl, 2), Old, Left, Right, Incoming});
+  } else if (Memory)
     S.emitIntrinsic(Intrinsic::X86FPArithMemoryState, Result,
                     {Right, NdVar::cst(Control, 1), Left, Incoming},
                     NdMemoryOrdering::None, S.memoryAddressSpace(RHSOperand));
@@ -241,7 +336,8 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
   if (Spec.Scalar) {
     const auto Upper = S.makeTemp(16 - Element);
     S.emit(NdOp::SUBBYTES, Upper,
-           {L.operandRead(S, X86.operands[LeftIndex]), NdVar::cst(Element, 4)});
+           {L.operandRead(S, X86.operands[Fma ? 0 : LeftIndex]),
+            NdVar::cst(Element, 4)});
     S.emit(NdOp::CONCAT, Destination, {Upper, Number});
   } else
     S.emit(NdOp::COPY, Destination, {Number});

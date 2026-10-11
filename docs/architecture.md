@@ -1600,10 +1600,22 @@ shape validators and LLVM/C assembly authentication consume the same contract;
 only exact scalar numerical slices acquire floating type provenance. LLVM and
 readable C execute the actual instruction, and concrete execution reuses the
 common packed evaluator and authenticated memory access owner. Existing scalar
-ADD/SUB/MUL/DIV register contracts remain valid. FMA,
+ADD/SUB/MUL/DIV register contracts remain valid. FMA4,
 EVEX/SAE, enabled alignment checking and unavailable CPU-feature faults retain
 their separate contracts. Swift explicitly refuses this new completion surface
 until it has an equivalent lowering.
+
+VEX FMA3 uses append-only `X86FPFmaState` and `X86FPFmaMemoryState` contracts.
+Their six LowIR inputs retain the physical destination, vvvv and r/m sources
+and incoming MXCSR. A two-byte control retains132/213/231 order, source signs,
+scalar/packed width and alternating addends. These sources are never commuted
+or negated through ordinary FLOAT nodes: native LLVM and both C projections
+execute the original operation. Concrete evaluation maps physical sources to
+the common single-rounding FMA evaluator, including same-lane invalid priority
+over denormal evidence. Memory access completes inside that instruction's CSR
+scope. Scalar output merges the old destination's upper 128 bits; VEX zeroes
+the remaining upper vector. Immutable scalar stack sources reuse the matching
+six-input value contract, preserving both other numerical inputs and CSR.
 
 Legacy/VEX ROUND extends that state surface through whole-instruction
 `X86FPRoundState` aggregates. Immediate bits 7:4 are ignored, bit 2 selects

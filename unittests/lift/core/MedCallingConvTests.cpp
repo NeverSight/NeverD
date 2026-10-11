@@ -93,7 +93,8 @@ TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
          {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
       for (auto Id :
            {Intrinsic::X86FPArithMemoryState, Intrinsic::X86FPRoundMemoryState,
-            Intrinsic::X86FPApprox12MemoryState})
+            Intrinsic::X86FPApprox12MemoryState,
+            Intrinsic::X86FPFmaMemoryState})
         for (unsigned Bytes : {4u, 8u}) {
           if (Id == Intrinsic::X86FPApprox12MemoryState && Bytes == 8)
             continue;
@@ -121,13 +122,20 @@ TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
               Architecture);
           Read.addInput(MedVar::makeConst(unsigned(Id), 2));
           Read.addInput(Address);
-          const unsigned Control = Id == Intrinsic::X86FPArithMemoryState
-                                       ? 16 | (Bytes == 8 ? 8 : 0)
-                                   : Id == Intrinsic::X86FPRoundMemoryState
-                                       ? 4 | (Bytes == 8 ? 2 : 0)
-                                       : 2;
-          Read.addInput(MedVar::makeConst(Control, 1));
-          if (Id == Intrinsic::X86FPArithMemoryState)
+          const bool Fma = Id == Intrinsic::X86FPFmaMemoryState;
+          const unsigned Control =
+              Fma ? makeX86FPFmaStateControl(1, Bytes == 8, true, true, false,
+                                             false)
+              : Id == Intrinsic::X86FPArithMemoryState
+                  ? 16 | (Bytes == 8 ? 8 : 0)
+              : Id == Intrinsic::X86FPRoundMemoryState
+                  ? 4 | (Bytes == 8 ? 2 : 0)
+                  : 2;
+          Read.addInput(MedVar::makeConst(Control, Fma ? 2 : 1));
+          if (Fma) {
+            Read.addInput(MedVar::makeConst(0, Bytes));
+            Read.addInput(MedVar::makeConst(0, Bytes));
+          } else if (Id == Intrinsic::X86FPArithMemoryState)
             Read.addInput(MedVar::makeConst(0, Bytes));
           else if (Id == Intrinsic::X86FPRoundMemoryState)
             Read.addInput(MedVar::makeConst(4, 1));
@@ -143,7 +151,8 @@ TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
           ASSERT_FALSE(F.Params.empty());
           EXPECT_TRUE(F.MutableStackParamHomes.empty());
           const auto &ValueRead = F.Blocks[0].Ops.back();
-          const auto Expected = Id == Intrinsic::X86FPArithMemoryState
+          const auto Expected = Fma ? Intrinsic::X86FPFmaState
+                                : Id == Intrinsic::X86FPArithMemoryState
                                     ? Intrinsic::X86FPArithState
                                 : Id == Intrinsic::X86FPRoundMemoryState
                                     ? Intrinsic::X86FPRoundState
@@ -153,9 +162,11 @@ TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
               Expected, x86FPStateMedShape(ValueRead, Architecture)));
           EXPECT_EQ(ValueRead.Output, Read.Output);
           if (Id != Intrinsic::X86FPApprox12MemoryState)
-            EXPECT_EQ(ValueRead.Inputs[4], Read.Inputs[4]);
+            EXPECT_EQ(ValueRead.Inputs[Fma ? 5 : 4], Read.Inputs[Fma ? 5 : 4]);
           const auto &Source =
-              ValueRead.Inputs[Id == Intrinsic::X86FPArithMemoryState ? 3 : 2];
+              ValueRead.Inputs[Fma                                      ? 4
+                               : Id == Intrinsic::X86FPArithMemoryState ? 3
+                                                                        : 2];
           EXPECT_EQ(Source.Size, Bytes);
           if (Architecture == Arch::X86 && Bytes == 8) {
             ASSERT_EQ(F.Blocks[0].Ops.size(), 4u);

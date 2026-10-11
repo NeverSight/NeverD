@@ -12,6 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPArithState.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -355,6 +356,12 @@ static bool validateCanonicalVexFma4(const cs_insn *Insn, const cs_x86 &X86,
 bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                     const cs_x86 &X86) {
   const bool IsEvex = Insn && X86.opcode[0] == 0x62;
+  if (!IsEvex && Insn) {
+    FPArithStateSpec Spec{};
+    if (getFPArithStateSpec(Insn->id, Spec) &&
+        Spec.Kind == X86FPArithKind::FusedMultiplyAdd)
+      return liftFPArithState(L, S, Insn, X86);
+  }
 
   enum class FmaOrder { Order132, Order213, Order231 };
   const auto EmitFma3 = [&](FmaOrder Order, bool NegProd, bool SubAdd,

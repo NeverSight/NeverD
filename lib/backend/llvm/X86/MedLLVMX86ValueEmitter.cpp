@@ -674,9 +674,10 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     }
     if (isX86FPArithStateIntrinsic(IC)) {
       const unsigned Layout = x86FPStateHelperLayout(IC, Shape);
-      const unsigned Control = x86FPRoundStateControl(Layout);
+      const unsigned Control = x86FPArithStateControl(Layout);
       const unsigned Bytes = x86FPStateSourceBytes(Layout);
-      const bool Memory = IC == I::X86FPArithMemoryState;
+      const bool Memory = isX86FPStateMemoryIntrinsic(IC);
+      const bool Fma = isX86FPFmaStateIntrinsic(IC);
       const bool Unary = x86FPArithStateIsUnary(Control);
       auto *Type = x86FPArithStateLLVMType(*Ctx, Layout);
       llvm::Value *RHS;
@@ -690,7 +691,7 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
             Address, llvm::PointerType::get(*Ctx, llvmX86MemoryAddressSpace(
                                                       Op.MemoryAddressSpace)));
       } else
-        RHS = Builder.CreateBitCast(Raw(3, Bytes), Type);
+        RHS = Builder.CreateBitCast(Raw(Fma ? 4 : 3, Bytes), Type);
       llvm::SmallVector<llvm::Value *, 3> Args;
       llvm::SmallVector<llvm::Type *, 3> Types;
       if (!Unary) {
@@ -698,7 +699,11 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
         Args.push_back(LHS);
         Types.push_back(Type);
       }
-      Builder.CreateStore(Raw(4, 4), State);
+      if (Fma) {
+        Args.push_back(Builder.CreateBitCast(Raw(Memory ? 4 : 3, Bytes), Type));
+        Types.push_back(Type);
+      }
+      Builder.CreateStore(Raw(Fma ? 5 : 4, 4), State);
       Args.append({RHS, State});
       Types.append({RHS->getType(), Ptr});
       auto *Fn = llvm::FunctionType::get(Type, Types, false);

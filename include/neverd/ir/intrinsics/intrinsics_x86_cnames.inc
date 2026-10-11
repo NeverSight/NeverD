@@ -213,6 +213,8 @@ C(Intrinsic::EVEXCompressStore, "neverd_evex_compress_store");
 C(Intrinsic::EVEXExpandLoad, "neverd_evex_expand_load");
 C(Intrinsic::X86FPClass, "neverd_x86_fpclass");
 C(Intrinsic::X86FPArith, "neverd_x86_fp_arith");
+C(Intrinsic::X86FPFmaState, "neverd_x86_fp_fma_state");
+C(Intrinsic::X86FPFmaMemoryState, "neverd_x86_fp_fma_memory_state");
 C(Intrinsic::X86FPConvert, "neverd_x86_fp_convert");
 C(Intrinsic::X86FPRoundTransform, "neverd_x86_fp_round_transform");
 C(Intrinsic::X86FPExtract, "neverd_x86_fp_extract");

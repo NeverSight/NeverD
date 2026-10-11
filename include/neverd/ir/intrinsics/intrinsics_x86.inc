@@ -369,3 +369,8 @@ DebugService,
 // on the stack.  The 48-byte result carries, in order, the returned RAX and
 // R11 and the volatile RDX, R8, R9 and R10.
 X64WindowsSyscall,
+
+// Append-only: VEX FMA3 numerical/MXCSR completion. Physical destination,
+// vvvv source and r/m source retain their original order. Memory owns r/m
+// access; both contracts carry explicit incoming and outgoing MXCSR.
+X86FPFmaState, X86FPFmaMemoryState,

@@ -14,9 +14,13 @@
 
 namespace neverd {
 
+constexpr bool isX86FPFmaStateIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::X86FPFmaState || Id == Intrinsic::X86FPFmaMemoryState;
+}
+
 constexpr bool isX86FPArithStateIntrinsic(Intrinsic Id) {
   return Id == Intrinsic::X86FPArithState ||
-         Id == Intrinsic::X86FPArithMemoryState;
+         Id == Intrinsic::X86FPArithMemoryState || isX86FPFmaStateIntrinsic(Id);
 }
 
 constexpr bool x86FPArithStateIsScalar(unsigned Control) {
@@ -29,10 +33,37 @@ constexpr bool x86FPArithStateIsUnary(unsigned Control) {
   return (Control & 7) == unsigned(X86FPArithKind::SquareRoot);
 }
 constexpr bool x86FPArithStateIsHorizontal(unsigned Control) {
-  return (Control & 64) != 0;
+  return (Control & 7) != unsigned(X86FPArithKind::FusedMultiplyAdd) &&
+         (Control & 64) != 0;
 }
 constexpr bool x86FPArithStateIsAlternating(unsigned Control) {
-  return (Control & 128) != 0;
+  return (Control & 7) != unsigned(X86FPArithKind::FusedMultiplyAdd) &&
+         (Control & 128) != 0;
+}
+
+/// FMA3 controls retain order132/213/231 in bits9:8, product/addend signs
+/// in bits6/7 and alternating addends in bits10/11. VEX has no SAE/ER.
+constexpr unsigned makeX86FPFmaStateControl(unsigned Order, bool Double,
+                                            bool Scalar, bool Memory,
+                                            bool Negate, bool Subtract,
+                                            bool Alternating = false,
+                                            bool SubtractEven = false) {
+  return unsigned(X86FPArithKind::FusedMultiplyAdd) | (Double ? 8 : 0) |
+         (Scalar ? 16 : 0) | (Memory && !Scalar ? 32 : 0) | (Negate ? 64 : 0) |
+         (Subtract ? 128 : 0) | (Order << 8) | (Alternating ? 1024 : 0) |
+         (SubtractEven ? 2048 : 0);
+}
+constexpr bool x86FPFmaStateControlIsValid(uint64_t Control, bool Memory) {
+  const bool Alternating = (Control & 1024) != 0;
+  return (Control & ~UINT64_C(4095)) == 0 &&
+         (Control & 7) == unsigned(X86FPArithKind::FusedMultiplyAdd) &&
+         ((Control >> 8) & 3) < 3 &&
+         ((Control & 32) != 0) == (Memory && !(Control & 16)) &&
+         (!(Control & 2048) || Alternating) &&
+         (!Alternating || !(Control & (16 | 64 | 128)));
+}
+constexpr unsigned x86FPArithStateControl(unsigned Layout) {
+  return (Layout >> 8) & 0xffff;
 }
 
 /// Bits6/7 select horizontal pairs or alternating subtraction/addition.
@@ -60,7 +91,8 @@ constexpr bool isX86FPApprox12Intrinsic(Intrinsic Id) {
 constexpr bool isX86FPStateMemoryIntrinsic(Intrinsic Id) {
   return Id == Intrinsic::X86FPRoundMemoryState ||
          Id == Intrinsic::X86FPApprox12MemoryState ||
-         Id == Intrinsic::X86FPArithMemoryState;
+         Id == Intrinsic::X86FPArithMemoryState ||
+         Id == Intrinsic::X86FPFmaMemoryState;
 }
 
 /// APPROX12 has no CSR operand: even unknown MXCSR remains unchanged.
@@ -168,6 +200,7 @@ struct X86FPStateShape {
   unsigned LeftSize = 0;
   unsigned RightSize = 0;
   unsigned ThirdSize = 0;
+  unsigned FourthSize = 0;
   bool ArithmeticLeftIsZero = false;
   unsigned StateSize = 0;
   bool HasAuxiliaryOutputs = false;
@@ -230,14 +263,18 @@ constexpr bool x86FPStateShapeIsValid(Intrinsic Id,
                    : Shape.RightSize == Shape.OutputSize);
   }
   if (isX86FPArithStateIntrinsic(Id)) {
-    const bool Memory = Id == Intrinsic::X86FPArithMemoryState;
+    const bool Fma = isX86FPFmaStateIntrinsic(Id);
+    const bool Memory = isX86FPStateMemoryIntrinsic(Id);
     const bool Scalar = x86FPArithStateIsScalar(Shape.Control);
     const unsigned Bytes = Shape.OutputSize >= 4 ? Shape.OutputSize - 4 : 0;
     const bool VexPackedMemory = (Shape.Control & 32) != 0;
-    return Shape.IdValue == unsigned(Id) && Shape.NumInputs == 5 &&
-           Shape.OutputIsWritable && Shape.OperandsAreScalar &&
-           Shape.ControlIsConst && Shape.ControlSize == 1 &&
-           x86FPArithStateControlIsValid(Shape.Control, Memory) &&
+    return Shape.IdValue == unsigned(Id) &&
+           Shape.NumInputs == (Fma ? 6U : 5U) && Shape.OutputIsWritable &&
+           Shape.OperandsAreScalar && Shape.ControlIsConst &&
+           Shape.ControlSize == (Fma ? 2U : 1U) &&
+           (Fma ? x86FPFmaStateControlIsValid(Shape.Control, Memory)
+                : x86FPArithStateControlIsValid(Shape.Control, Memory)) &&
+           (!Fma || Shape.FourthSize == Bytes) &&
            (!Scalar || !VexPackedMemory) && Shape.StateSize == 4 &&
            (Scalar ? Bytes == x86FPArithStateElementBytes(Shape.Control)
                    : Bytes == 16 ||
@@ -335,7 +372,19 @@ constexpr const char *x86FPArithStateOperation(unsigned Control) {
   }
 }
 inline std::string x86FPArithStateMnemonic(unsigned Layout) {
-  const unsigned Control = x86FPRoundStateControl(Layout);
+  const unsigned Control = x86FPArithStateControl(Layout);
+  if ((Control & 7) == unsigned(X86FPArithKind::FusedMultiplyAdd)) {
+    const char *Operation =
+        (Control & 1024) ? ((Control & 2048) ? "fmaddsub" : "fmsubadd")
+        : (Control & 64) ? ((Control & 128) ? "fnmsub" : "fnmadd")
+                         : ((Control & 128) ? "fmsub" : "fmadd");
+    const char *Order = ((Control >> 8) & 3) == 0   ? "132"
+                        : ((Control >> 8) & 3) == 1 ? "213"
+                                                    : "231";
+    return std::string("v") + Operation + Order +
+           ((Control & 16) ? ((Control & 8) ? "sd" : "ss")
+                           : ((Control & 8) ? "pd" : "ps"));
+  }
   const bool Vex = x86FPStateSourceBytes(Layout) == 32 || (Control & 32);
   return std::string(Vex ? "v" : "") + x86FPArithStateOperation(Control) +
          (x86FPArithStateIsScalar(Control) ? ((Control & 8) ? "sd" : "ss")

@@ -171,6 +171,8 @@ SIDEEFFECT(Intrinsic::X86Invalidate);
 SIDEEFFECT(Intrinsic::X86RequireDivPrecondition);
 SIDEEFFECT(Intrinsic::X86MsrAccess);
 SIDEEFFECT(Intrinsic::X86FPArith);
+SIDEEFFECT(Intrinsic::X86FPFmaState);
+SIDEEFFECT(Intrinsic::X86FPFmaMemoryState);
 SIDEEFFECT(Intrinsic::X86ReadMXCSR);
 SIDEEFFECT(Intrinsic::X86WriteMXCSR);
 SIDEEFFECT(Intrinsic::X86FPAddState);
