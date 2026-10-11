@@ -1622,7 +1622,7 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofInspectsLeafWritesAndReturnPC) {
     Img.ExceptionMetadata.rebuildIndex();
     return Img;
   };
-  for (unsigned Mutation = 0; Mutation != 21; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 25; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Img = Make();
     auto &Bytes = Img.Segments[0].Data;
@@ -1658,6 +1658,19 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofInspectsLeafWritesAndReturnPC) {
         Body[24] = 0x28; // the other return must also preserve the saved SP
       std::copy(Body.begin(), Body.end(), Bytes.begin() + 0x100);
       Img.Symbols[1].Size = Body.size();
+    }
+    if (Mutation == 23 || Mutation == 24) {
+      std::copy_backward(Bytes.begin() + 0x11, Bytes.begin() + 0x24,
+                         Bytes.begin() + 0x28);
+      const std::array<uint8_t, 4> Branch{0x85, 0xc9, 0x74, 0x3b};
+      std::copy(Branch.begin(), Branch.end(), Bytes.begin() + 0x11);
+      Bytes[0x18] = 0x64; // lea rdx,Target
+      Bytes[0x22] = 0x5a; // call Stub
+      Bytes[0x27] = 0x58; // jmp Target
+      const std::array<uint8_t, 7> Arm{
+          0xc6, 0x44, 0x24, static_cast<uint8_t>(Mutation == 24 ? 40 : 32),
+          1,    0xeb, 0xbe}; // byte store; jmp back to the local-unwind setup
+      std::copy(Arm.begin(), Arm.end(), Bytes.begin() + 0x50);
     }
     Decoder Dec;
     ASSERT_TRUE(Dec.init(Arch::X64));
@@ -1703,6 +1716,26 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofInspectsLeafWritesAndReturnPC) {
       std::erase(Branch.Succs, Arm->Id);
       std::erase(Arm->Preds, Branch.Id);
     }
+    if (Mutation == 21)
+      Caller.Blocks.front().InstructionBoundaries.erase(
+          Caller.Blocks.front().InstructionBoundaries.begin());
+    if (Mutation == 22)
+      ++Caller.Blocks.front().InstructionBoundaries.front().FirstOp;
+    if (Mutation == 24) {
+      // A dropped caller arm must not hide the write that invalidates the
+      // saved SP. Removing its incoming and outgoing edges leaves a symmetric
+      // graph, but the decoded conditional branch still targets the arm.
+      const auto Arm = llvm::find_if(Caller.Blocks, [&](const auto &Block) {
+        return Block.StartAddr == Entry + 0x50;
+      });
+      ASSERT_NE(Arm, Caller.Blocks.end());
+      const int Id = Arm->Id;
+      Caller.Blocks.erase(Arm);
+      for (auto &Block : Caller.Blocks) {
+        std::erase(Block.Preds, Id);
+        std::erase(Block.Succs, Id);
+      }
+    }
     std::map<va_t, const LowFunc *> Callees{{Leaf, &Callee}};
     size_t Budget = 100000;
     const auto Opaque =
@@ -1711,7 +1744,7 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofInspectsLeafWritesAndReturnPC) {
     Budget = Mutation == 10 ? 0 : Mutation == 16 ? 1 : 100000;
     auto Proof = proveLowSEHFrames(Caller, getTargetRegInfo(Arch::X64), Budget,
                                    &Callees);
-    if (Mutation != 0 && Mutation != 11) {
+    if (Mutation != 0 && Mutation != 11 && Mutation != 23) {
       EXPECT_TRUE(Proof.Calls.empty());
       continue;
     }
@@ -2249,7 +2282,7 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofIntersectsEveryPredecessor) {
       auto &B = F.Blocks[I];
       B.Id = (I + 1) * 10;
       B.StartAddr = F.Entry + I * 0x100;
-      B.EndAddr = B.StartAddr + 0x80;
+      B.EndAddr = B.StartAddr + 0x100;
     }
     F.Blocks[0].Succs = {20, 30};
     F.Blocks[1].Preds = F.Blocks[2].Preds = {10};
@@ -2300,23 +2333,72 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofIntersectsEveryPredecessor) {
           MakeOp(NdOp::COPY, NdVar::reg(x86reg::RSP, 4), {NdVar::cst(0, 4)})};
     if (Mutation == 15)
       Arm.ExceptionalPreds.push_back({.BlockId = 10});
-    if (Mutation == 16) {
-      LowInstructionBoundary B;
-      B.Control = LowInstructionControl::ConditionalCall;
-      F.Blocks[3].InstructionBoundaries.push_back(B);
-    }
     if (Mutation == 17)
       Arm.Ops = {MakeOp(NdOp::INT_ADD, SP, {SP, NdVar::cst(40, 8)}),
                  MakeOp(NdOp::INT_SUB, SP, {SP, NdVar::cst(40, 8)})};
     if (Mutation == 18)
       F.Blocks[0].Ops.insert(F.Blocks[0].Ops.begin(),
                              MakeOp(NdOp::CALL, {}, {NdVar::cst(0x3000, 8)}));
-    // Only operations from one synthetic instruction share temporaries.
-    for (auto &Block : F.Blocks)
-      for (size_t I = 0; I < Block.Ops.size(); ++I) {
-        Block.Ops[I].Addr = Block.StartAddr;
-        Block.Ops[I].Seq = I;
+    // Give the synthetic dataflow graph complete, consistent instruction
+    // boundaries and explicit branches. Only operations in one non-control
+    // slice share temporaries; every call has its own source occurrence.
+    for (auto &Block : F.Blocks) {
+      const bool Conditional =
+          Block.Id == 10 || (Block.Id == 30 && Block.hasSucc(Block.Id));
+      if (Block.Id == 40)
+        Block.Ops.push_back(
+            MakeOp(NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)}));
+      else if (Conditional)
+        Block.Ops.push_back(
+            MakeOp(NdOp::COND_BR, {},
+                   {NdVar::cst(0x1200, 8), NdVar::reg(x86reg::RCX, 1)}));
+      else
+        Block.Ops.push_back(MakeOp(NdOp::BRANCH, {}, {NdVar::cst(0x1300, 8)}));
+      const auto IsControl = [](const LowOp &Op) {
+        return Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::BRANCH ||
+               Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::RETURN;
+      };
+      va_t Address = Block.StartAddr;
+      for (size_t First = 0; First < Block.Ops.size();) {
+        size_t End = First + 1;
+        if (!IsControl(Block.Ops[First]))
+          while (End < Block.Ops.size() && !IsControl(Block.Ops[End]))
+            ++End;
+        LowInstructionBoundary Boundary;
+        Boundary.Address = Address;
+        Boundary.Size = End == Block.Ops.size() ? Block.EndAddr - Address : 1;
+        Boundary.FirstOp = First;
+        Boundary.OpCount = End - First;
+        const auto &Op = Block.Ops[First];
+        if (Op.Opcode == NdOp::CALL) {
+          Boundary.Control = LowInstructionControl::Call;
+          Boundary.ControlFlags = LowInstructionControlFlag::Call;
+          Boundary.Immediate = Op.Inputs[0].Offset;
+        } else if (Op.Opcode == NdOp::RETURN) {
+          Boundary.Control = LowInstructionControl::Return;
+          Boundary.ControlFlags = LowInstructionControlFlag::Return;
+        } else if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
+          Boundary.Control = LowInstructionControl::Branch;
+          Boundary.ControlFlags = LowInstructionControlFlag::Branch;
+          if (Op.Opcode == NdOp::COND_BR)
+            Boundary.ControlFlags =
+                Boundary.ControlFlags | LowInstructionControlFlag::Conditional;
+          Boundary.Immediate = Op.Inputs[0].Offset;
+        }
+        for (size_t I = First; I < End; ++I) {
+          Block.Ops[I].Addr = Address;
+          Block.Ops[I].Seq = I - First;
+        }
+        Block.InstructionBoundaries.push_back(Boundary);
+        Address += Boundary.Size;
+        First = End;
       }
+    }
+    if (Mutation == 16)
+      for (auto &Block : F.Blocks)
+        for (auto &Boundary : Block.InstructionBoundaries)
+          if (Boundary.Control == LowInstructionControl::Call)
+            Boundary.Control = LowInstructionControl::ConditionalCall;
     size_t Budget = Mutation == 11 ? 0 : Mutation == 19 ? 1 : 10000;
     const auto Proof =
         proveLowSEHFrames(F, getTargetRegInfo(Arch::X64), Budget);

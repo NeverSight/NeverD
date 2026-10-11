@@ -2489,8 +2489,9 @@ callee memory preservation or mixed PE32 callback activation is implied.
 instructions to check a neighbouring parent-frame write, partial saved-SP
 overwrite, unknown write address, return-PC corruption, wrong return SP,
 nested calls, malformed/incomplete bodies, and missing or stale callee evidence.
-Missing instruction slices and a symmetrically removed branch edge cannot hide
-the path that overwrites a saved cell.
+Missing instruction slices in either caller or callee, a symmetrically removed
+callee branch edge, and a wholly removed caller branch arm cannot hide the path
+that overwrites a saved cell. Complete caller diamonds retain their frame proof.
 
 CRT source regressions use synthetic tables and the pinned Windows corpus:
 

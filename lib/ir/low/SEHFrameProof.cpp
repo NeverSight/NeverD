@@ -10,6 +10,7 @@
 #include "neverd/ir/low/SEHFrameProof.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -71,6 +72,78 @@ bool consume(size_t &Remaining, size_t Amount = 1) {
   if (Amount > Remaining)
     return false;
   Remaining -= Amount;
+  return true;
+}
+
+// Both sides of a call need the complete decoded paths. A symmetric graph
+// alone can omit a branch arm that overwrites the saved frame pointer.
+bool completeFrameCFG(const LowFunc &F, const std::map<int, size_t> &Positions,
+                      size_t &Remaining) {
+  std::map<va_t, va_t> Ranges;
+  for (const auto &B : F.Blocks) {
+    if (!consume(Remaining, B.Preds.size() + B.Succs.size() + B.Ops.size() +
+                                B.InstructionBoundaries.size() + 1))
+      return false;
+    if (auto Error = validateLowInstructionBoundaries(
+            B, LowInstructionBoundaryRequirement::Required)) {
+      llvm::consumeError(std::move(Error));
+      return false;
+    }
+    if (!Ranges.emplace(B.StartAddr, B.EndAddr).second)
+      return false;
+    for (const auto &Insn : B.InstructionBoundaries) {
+      if (Insn.Mode != InstructionMode::Default ||
+          Insn.TargetMode != LowInstructionTargetMode::Preserve ||
+          Insn.Control == LowInstructionControl::ConditionalCall ||
+          Insn.Control == LowInstructionControl::ConditionalReturn ||
+          (&Insn != &B.InstructionBoundaries.back() &&
+           (isUnconditionalNoReturn(Insn) ||
+            Insn.Control == LowInstructionControl::Branch ||
+            Insn.Control == LowInstructionControl::Return ||
+            Insn.Control == LowInstructionControl::TailCall ||
+            Insn.Control == LowInstructionControl::Terminator)))
+        return false;
+    }
+    for (int Id : B.Preds)
+      if (!Positions.count(Id) || !F.Blocks[Positions.at(Id)].hasSucc(B.Id))
+        return false;
+    std::set<va_t> Successors;
+    for (int Id : B.Succs)
+      if (!Positions.count(Id) ||
+          !llvm::is_contained(F.Blocks[Positions.at(Id)].Preds, B.Id))
+        return false;
+      else
+        Successors.insert(F.Blocks[Positions.at(Id)].StartAddr);
+    const auto &Insn = B.InstructionBoundaries.back();
+    std::set<va_t> Expected;
+    if (Insn.Control == LowInstructionControl::Branch) {
+      if (B.Ops.empty())
+        return false;
+      const auto &Last = B.Ops.back();
+      const bool Conditional = Last.Opcode == NdOp::COND_BR;
+      if ((!Conditional && Last.Opcode != NdOp::BRANCH) ||
+          Last.NumInputs != (Conditional ? 2 : 1) ||
+          !Last.Inputs[0].isConst() || Last.Inputs[0].Size != 8)
+        return false;
+      Expected.insert(Last.Inputs[0].Offset);
+      if (Conditional)
+        Expected.insert(B.EndAddr);
+    } else if (Insn.Control != LowInstructionControl::Return &&
+               Insn.Control != LowInstructionControl::TailCall &&
+               !isUnconditionalNoReturn(Insn) &&
+               (Insn.Control != LowInstructionControl::Terminator ||
+                hasLowInstructionControlFlag(
+                    Insn.ControlFlags, LowInstructionControlFlag::Resumable)))
+      Expected.insert(B.EndAddr);
+    if (Successors != Expected)
+      return false;
+  }
+  va_t End = 0;
+  for (const auto &[Start, Limit] : Ranges) {
+    if (Start < End)
+      return false;
+    End = Limit;
+  }
   return true;
 }
 
@@ -256,59 +329,21 @@ std::optional<State> transferLeaf(const LowFunc &F, const State &Caller,
   std::optional<size_t> Entry;
   for (size_t I = 0; I != F.Blocks.size(); ++I) {
     const auto &B = F.Blocks[I];
-    if (!consume(Remaining, B.Preds.size() + B.Succs.size() + B.Ops.size() +
-                                B.InstructionBoundaries.size() + 1) ||
-        B.Id < 0 || !Positions.emplace(B.Id, I).second ||
+    if (!consume(Remaining) || B.Id < 0 || !Positions.emplace(B.Id, I).second ||
         !Starts.insert(B.StartAddr).second || !B.ExceptionalPreds.empty() ||
         !B.ExceptionalSuccs.empty())
       return std::nullopt;
-    if (auto Error = validateLowInstructionBoundaries(
-            B, LowInstructionBoundaryRequirement::Required)) {
-      llvm::consumeError(std::move(Error));
-      return std::nullopt;
-    }
     if (B.StartAddr == F.Entry)
       Entry = I;
   }
-  if (!Entry || !F.Blocks[*Entry].Preds.empty())
+  if (!Entry || !F.Blocks[*Entry].Preds.empty() ||
+      !completeFrameCFG(F, Positions, Remaining))
     return std::nullopt;
   for (const auto *Roots :
        {&F.ModuleAnalysisRoots, &F.OrdinaryModuleAnalysisRoots})
     for (va_t Root : *Roots)
       if (!consume(Remaining) || Root != F.Entry)
         return std::nullopt;
-  for (const auto &B : F.Blocks) {
-    for (int Id : B.Preds)
-      if (!Positions.count(Id) || !F.Blocks[Positions.at(Id)].hasSucc(B.Id))
-        return std::nullopt;
-    std::set<va_t> Successors;
-    for (int Id : B.Succs)
-      if (!Positions.count(Id) ||
-          !llvm::is_contained(F.Blocks[Positions.at(Id)].Preds, B.Id))
-        return std::nullopt;
-      else
-        Successors.insert(F.Blocks[Positions.at(Id)].StartAddr);
-    if (B.Ops.empty())
-      return std::nullopt;
-    const auto &Last = B.Ops.back();
-    std::set<va_t> Expected;
-    if (Last.Opcode == NdOp::BRANCH || Last.Opcode == NdOp::COND_BR) {
-      const bool Conditional = Last.Opcode == NdOp::COND_BR;
-      if (Last.NumInputs != (Conditional ? 2 : 1) ||
-          !Last.Inputs[0].isConst() || Last.Inputs[0].Size != 8)
-        return std::nullopt;
-      Expected.insert(Last.Inputs[0].Offset);
-      if (Conditional)
-        Expected.insert(B.EndAddr);
-    } else if (Last.Opcode == NdOp::INDIR_BR)
-      return std::nullopt;
-    else if (Last.Opcode != NdOp::RETURN)
-      Expected.insert(B.EndAddr);
-    // Symmetric Preds/Succs alone cannot certify that the CFG includes the
-    // decoded instruction's taken and fallthrough paths.
-    if (Successors != Expected)
-      return std::nullopt;
-  }
   State Initial = Caller;
   Initial.dropTemporaries();
   Initial.Values[key(SP)] = Slot;
@@ -474,7 +509,7 @@ proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI, size_t &Remaining,
         !Positions.emplace(F.Blocks[I].Id, I).second ||
         !Starts.insert(F.Blocks[I].StartAddr).second)
       return {};
-  if (!Starts.count(F.Entry))
+  if (!Starts.count(F.Entry) || !completeFrameCFG(F, Positions, Remaining))
     return {};
   for (const auto *Roots :
        {&F.ModuleAnalysisRoots, &F.OrdinaryModuleAnalysisRoots})
@@ -492,17 +527,6 @@ proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI, size_t &Remaining,
   };
   for (size_t I = 0; I < N; ++I) {
     const auto &Block = F.Blocks[I];
-    if (!consume(Remaining, Block.Preds.size() + Block.Succs.size()))
-      return {};
-    for (int Id : Block.Preds)
-      if (!Positions.count(Id) || !F.Blocks[Positions.at(Id)].hasSucc(Block.Id))
-        return {};
-    for (int Id : Block.Succs)
-      if (!Positions.count(Id) ||
-          std::find(F.Blocks[Positions.at(Id)].Preds.begin(),
-                    F.Blocks[Positions.at(Id)].Preds.end(),
-                    Block.Id) == F.Blocks[Positions.at(Id)].Preds.end())
-        return {};
     Roots[I] = Block.StartAddr == F.Entry || Block.Preds.empty() ||
                F.ModuleAnalysisRoots.count(Block.StartAddr) ||
                F.OrdinaryModuleAnalysisRoots.count(Block.StartAddr) ||

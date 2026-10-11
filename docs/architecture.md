@@ -1650,6 +1650,11 @@ prove a saved frame value. `LowSEHFrameProof` owns the all-predecessor
 intersection, including stable loops, independent roots and released stack
 storage. A digest binds every operation, instruction boundary, root and CFG
 edge in that function; changing an earlier block invalidates the receipt.
+Caller and callee proofs share one check for complete instruction boundaries,
+nonoverlapping blocks and actual taken/fallthrough successors. Removing both
+sides of an edge or dropping a whole write-containing block cannot turn an
+incomplete graph into a frame proof. Indirect branches require a separate proof
+and remain outside this bounded frame analysis.
 Complete decoded leaf callees can retain saved cells when their concrete
 argument values bound every store and all returns restore the invocation SP
 without changing its physical return PC. The analysis intersects all returning
