@@ -385,7 +385,13 @@ conservative effect summaries, module evidence, admitted-file comparisons,
 qualified bundle source partitions, fixed-profile Bun container extraction,
 map decoding, budgets and query redaction. `SourceView` owns the bounded display
 projection and original/projected range mapping; `SessionView` owns preview,
-publication and revocation. CLI/worker adapters cannot bypass those policies.
+publication and revocation. CLI/worker/MCP adapters cannot bypass those policies.
+`tools/common/web/Backend` owns the shared C++ worker/MCP C ABI client;
+`tools/common/transport/Json` owns bounded generic JSON admission. The compiled
+`neverd-web-mcp` separates launch inputs, schemas, lifecycle and stdio framing.
+It only exposes a capability-filtered subset and cannot assert reviewed source
+ranges. No analysis process or language runtime is spawned. See the
+[MCP profile](web-mcp-profile.md) for its concrete limits and ownership.
 Views use owned parser token/comment spans and never claim semantic rewrites.
 `BunContainer` owns ELF/Mach-O/PE graph location, target identity and native-range
 validation. `Bun` owns the shared graph records, flags and module decoding;

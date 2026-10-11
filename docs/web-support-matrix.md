@@ -48,7 +48,7 @@ Other hosts require separate evidence.
 | Node SEA | Node 22.15.0 LE64 preparation blob and explicit ELF64/Mach-O64/PE32+ x64/ARM64 resource profiles | Separate C++ reader, stored JS/assets and opaque V8 cache/snapshot, shared consumers; [qualification and limits](web-sea-profile.md). Runtime activation/version and other versions/hosts are unverified |
 | Tauri/Wails/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
 | C++ worker | `web_` operations in protocol 1.1 | Real framed-process, direct-query parity, web/native revision isolation and private-output checks passed locally |
-| C++ MCP transport | Pending | Must use the same C API and enforce an explicit host input scope |
+| C++ MCP transport | `neverd-offline-web-mcp-v1`, MCP 2025-06-18 stdio | Shared worker/C API adapter, launch-configured input indices and capability-filtered tools; structural views only, no raw export/deep native analysis. [Profile and qualification limits](web-mcp-profile.md) |
 
 The ASAR increment restored the backend, JavaScript parser, ASAR and LLVM Zstd
 options to ON. Its final local run passed 185 of 186 registered web cases;

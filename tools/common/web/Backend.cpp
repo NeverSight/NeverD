@@ -1,15 +1,15 @@
-//===- WebEngine.cpp - Offline analysis worker adapter -----------------===//
+//===- Backend.cpp - Shared offline web C API client ----------------------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Offline analysis worker adapter.
+/// Shared offline analysis adapter for native C++ transports.
 ///
 //===----------------------------------------------------------------------===//
 
-#include "WebEngine.h"
+#include "Backend.h"
 
 #include <algorithm>
 #include <charconv>
@@ -17,12 +17,19 @@
 #include <limits>
 #include <memory>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>
 #endif
 
-namespace neverd::worker {
+namespace neverd::web_client {
+using transport::Error;
+using transport::parseJson;
+using transport::sizeField;
+using transport::stringField;
 namespace {
 // Optional additive API: a worker linked to an older engine must still run
 // native requests. Resolve only already-loaded engine symbols, never a path.
@@ -129,8 +136,8 @@ Json result(const char *text) {
       text, neverd_free_string);
   if (!text)
     throw Error("allocation_failed", "Web response allocation failed");
-  const auto length = strnlen(text, MaxFrameBytes + 1);
-  if (length > MaxFrameBytes)
+  const auto length = strnlen(text, transport::MaxJsonBytes + 1);
+  if (length > transport::MaxJsonBytes)
     throw Error("budget_exceeded", "Web response exceeds the transport budget");
   auto value = parseJson({text, length});
   if (!value.is_object() || value.value("schema_version", 0) != 1)
@@ -178,13 +185,13 @@ uint64_t decimal(const Json &payload, const char *key) {
 }
 } // namespace
 
-WebEngine::~WebEngine() {
+Backend::~Backend() {
   neverd_session_destroy(native_);
   if (session_)
     api().neverd_web_session_destroy(session_);
 }
 
-Json WebEngine::capabilities() {
+Json Backend::capabilities() {
   if (!api().complete())
     return {{"schema_version", 1},
             {"status", "error"},
@@ -201,7 +208,7 @@ Json WebEngine::capabilities() {
   }
 }
 
-Json WebEngine::execute(const std::string &operation, const Json &p) {
+Json Backend::execute(const std::string &operation, const Json &p) {
   if (operation == "web_capabilities") {
     fields(p, {});
     return capabilities();
@@ -827,4 +834,4 @@ Json WebEngine::execute(const std::string &operation, const Json &p) {
   return result(query(session_, revision.data(), revision.size(), id.data(),
                       id.size(), offset, limit));
 }
-} // namespace neverd::worker
+} // namespace neverd::web_client

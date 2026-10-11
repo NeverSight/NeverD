@@ -396,6 +396,19 @@ ctest --test-dir build-release \
 
 ## Offline web analysis
 
+The optional `NEVERD_BUILD_WEB_MCP=ON` target builds a native C++ transport.
+Run `ctest --test-dir build/tools/neverd-web-mcp --output-on-failure` for its
+four C++ suites: protocol, catalog, real-backend evidence parity and actual
+stdio process tests with an unusable PATH. The process suite explicitly skips
+on Windows. An additional `NeverDWebMCPClaude` process case requires the pinned
+`NEVERD_CLAUDE_CODE_21296_ELF` artifact and otherwise explicitly skips.
+Repeat against parser-off and backend-off builds; the latter must
+retain capabilities while omitting analysis tools. The runtime-free engine
+profile also sets `NEVERD_ENABLE_PYTHON_PLUGINS=OFF`. Shared JSON/client changes
+require worker protocol/Web and affected mock transport regressions. These
+MCP suites own catalog qualification separately from the existing Python
+native capability checker. See the [profile](web-mcp-profile.md).
+
 `WebSEA.*` covers independent Node SEA serialization, x64/ARM64 ELF/Mach-O/PE
 resource location, malformed names/tables, duplicate mappings, cumulative work,
 opaque V8 evidence and exact compiler-generated blobs. `WebSEASDK.*` and

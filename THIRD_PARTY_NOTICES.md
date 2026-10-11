@@ -1,5 +1,14 @@
 # Third-Party Notices
 
+## nlohmann JSON
+
+The native C++ worker and offline web MCP transport use the header-only
+nlohmann JSON 3.11.3 library. Both use the existing pinned release archive,
+SHA-256 `d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d`.
+The unchanged [MIT notice](LICENSES/nlohmann-json/LICENSE.MIT) is staged
+beside both executables and installed under `share/neverd/licenses`.
+No external JSON executable or language runtime is invoked.
+
 ## Ada URL parser
 
 Offline import-map analysis embeds the unchanged C++ Ada 4.0.0 URL parser at

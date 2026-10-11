@@ -1352,3 +1352,84 @@ Native Windows/Linux host capture and distribution have not been qualified.
 The five epics remain open: semantic rewrites, remaining desktop adapters,
 package behavior/provenance, wider passive source mapping, other standalone
 formats and native C++ MCP still require their planned implementation and tests.
+
+## Native C++ offline MCP transport — 2026-10-11
+
+The optional `neverd-web-mcp` target implements MCP 2025-06-18 stdio directly
+in C++, through the same Web C API client as the worker. Generic JSON admission
+now belongs to `tools/common/transport`; the Web adapter belongs to
+`tools/common/web`. Worker framing, native protocol fields and operation
+semantics remain in their existing owners. The [MCP profile](web-mcp-profile.md)
+records the exact catalog, lifecycle, bounds and omissions.
+
+Startup configures at most eight private input paths without capturing them.
+MCP requests select input indices and cannot pass arbitrary paths, reviewed
+source ranges or raw export options. Tools follow the backend's available
+operations. C API evidence, revision checks, source anchors and redaction
+preview/commit remain authoritative. Results carry identical structured JSON
+and JSON text under capped serialization. Unsupported methods/arguments,
+analysis failures, notifications, duplicate initialization and EOF have
+separate fixed behavior. No new implementation or test invokes an analysis
+script, JavaScript runtime, external extractor or sample executable.
+
+On macOS arm64 Release, the initial four native MCP suites passed: protocol,
+catalog, shared-backend evidence parity and real stdio with an unusable PATH.
+The evidence suite exercises source views/anchors/maps, Bun, SEA, package
+scripts, HAR, streams, revocation and session separation with private-value
+canaries. The independent imported-library build passed the same four suites
+and installed its executable and unchanged JSON license. Logs are
+`/tmp/neverd-mcp-{tests,final-tests}.log` and
+`/tmp/neverd-mcp-standalone-{configure,build,tests,install}.log`.
+
+All eleven affected worker suites passed serially. The first parallel run
+timed out in HistoryContributions; its isolated retry and the complete serial
+run passed without changes to that behavior. Independent review found the
+GUI's separate mock SDK still compiling Protocol without the extracted JSON
+dependency. It now links the shared JSON target with PIC enabled; the standalone
+mock SDK built successfully. Existing fixture C-linkage warnings remain.
+Logs use `/tmp/neverd-mcp-worker-{tests,history-retry,serial}.log` and
+`/tmp/neverd-mcp-gui-{configure,build}.log`. This did not run the Qt GUI suites.
+
+Review also found that an over-budget string method could produce an error
+reply to a notification. Such notifications are now silently refused, with a
+C++ regression covering long, empty and NUL-containing method strings. GUI CI
+now watches `tools/common/**`; the main CI configuration enables the new MCP
+target and its C++ tests. These workflow edits have not yet run remotely.
+
+With JavaScript parsing disabled, all four MCP suites and five C++ worker
+suites passed, and enabled-backend C ABI availability passed (the omission-only
+case skipped). With the whole Web backend disabled, all four MCP suites and
+both C ABI availability cases passed; four C++ worker suites passed and its
+Web-only suite skipped. MCP's omitted-backend test checks capabilities and
+absence of analysis tools, including through a real stdio process. Logs use
+`/tmp/neverd-mcp-nojs-{tests,worker,api}.log` and
+`/tmp/neverd-mcp-disabled-{tests,api,worker}.log`. Python plugins remain disabled
+in these local runtime-free engine profiles.
+
+After restoring both Web options to ON, all 408 registered Web cases completed:
+401 passed and seven explicitly skipped (six LLVM-Zstd-dependent Bun map cases
+and the ASAR-omission-only case). This included the supplied full SEA images,
+Bun cross-container corpus, npm archives and all 2,345 shipped Claude Code JS
+modules. All eleven affected worker suites passed; the enabled C ABI case
+passed with the omission-only case skipped. The existing capability checker
+validated 23 native capabilities. The independent MCP build and installation
+were also repeated successfully. Logs use
+`/tmp/neverd-mcp-restored-{web,worker,api,capabilities}.log` and
+`/tmp/neverd-mcp-standalone-final-{build,tests,install}.log`.
+
+The new optional real-process `NeverDWebMCPClaude` case pins the official
+2.1.296 linux-x64 artifact by size and SHA-256 and reads all 2,589 modules over
+MCP pages with an unusable PATH. It verifies 2,345 source artifacts, 244 assets,
+2,343 opaque caches and no maps, without launching the sample. Its first run
+hit the harness's 15-second response limit. Fixed operation names and elapsed
+times were added to test diagnostics; no product behavior or timeout was
+changed. The isolated retry and complete five-case MCP run passed in 19.88 and
+19.30 seconds respectively. The retry's preview, commit and extraction calls
+took 6.06, 7.06 and 5.16 seconds. The initial timeout's exact request/cause was
+not captured and remains unisolated; the later passes do not establish a fix.
+Logs are `/tmp/neverd-mcp-claude-{tests,trace,final-tests}.log`.
+
+This completes the initial native C++ offline MCP profile, not the five epics.
+Semantic rewrite receipts/undo, the remaining desktop and standalone adapters,
+package behavior/provenance/reporting, broader passive source mapping, and
+Windows/Linux host and distribution qualification remain outstanding.
