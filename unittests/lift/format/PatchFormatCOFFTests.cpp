@@ -504,7 +504,7 @@ TEST_F(PatchCOFF_X64, ReconstructsNativeFH3StateGraph) {
   ASSERT_NE(OriginalPersonality, nullptr);
   const uint8_t OriginalPersonalityOpcode = *OriginalPersonality;
 
-  auto Decompile = decompileToHighC(PE);
+  auto Decompile = decompileToHighC(PE, "cpp");
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
   std::ifstream HighCInput(tmpFile("decompiled_high.c"));
   ASSERT_TRUE(HighCInput.good());
@@ -584,7 +584,7 @@ TEST_F(PatchCOFF_X64, ReconstructsBoundedNativeFH4StateGraph) {
   ASSERT_EQ(Lift.exitCode, 0) << Lift.err;
   EXPECT_NE(Lift.out.find("personality=__CxxFrameHandler4"), std::string::npos);
 
-  auto Decompile = decompileToHighC(PE);
+  auto Decompile = decompileToHighC(PE, "cpp");
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
   std::ifstream HighCInput(tmpFile("decompiled_high.c"));
   ASSERT_TRUE(HighCInput.good());
@@ -799,7 +799,7 @@ TEST_F(PatchCOFF_X64, ReconstructsCompilerOwnedGSWrappedFH4StateGraph) {
   EXPECT_NE(Lift.out.find("personality=__GSHandlerCheck_EH4"),
             std::string::npos);
 
-  auto Decompile = decompileToHighC(PE);
+  auto Decompile = decompileToHighC(PE, "cpp");
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
   std::ifstream HighCInput(tmpFile("decompiled_high.c"));
   ASSERT_TRUE(HighCInput.good());
@@ -1042,7 +1042,7 @@ TEST_F(PatchCOFF_X64, ReconstructsBoundedNativeTypedFH4StateGraph) {
   ASSERT_EQ(Lift.exitCode, 0) << Lift.err;
   EXPECT_NE(Lift.out.find("personality=__CxxFrameHandler4"), std::string::npos);
 
-  auto Decompile = decompileToHighC(PE);
+  auto Decompile = decompileToHighC(PE, "cpp");
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
   std::ifstream HighCInput(tmpFile("decompiled_high.c"));
   ASSERT_TRUE(HighCInput.good());

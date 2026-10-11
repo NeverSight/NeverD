@@ -216,6 +216,109 @@ protected:
   }
 };
 
+template <typename ELFT>
+std::vector<uint8_t> makePLTRelocationFixture(uint16_t Machine, uint32_t Type,
+                                              bool WithAddend) {
+  using namespace llvm::ELF;
+  using Ehdr = typename ELFT::Ehdr;
+  using Phdr = typename ELFT::Phdr;
+  using Shdr = typename ELFT::Shdr;
+  using Rel = typename ELFT::Rel;
+  using Rela = typename ELFT::Rela;
+  auto Bytes = makeELFFunctionFixture<ELFT>(false, false, false);
+  Bytes.resize(SectionOff + 8 * sizeof(Shdr));
+  auto Put = [&](size_t Offset, const auto &Record) {
+    std::memcpy(Bytes.data() + Offset, &Record, sizeof(Record));
+  };
+  Ehdr Header;
+  std::memcpy(&Header, Bytes.data(), sizeof(Header));
+  Header.e_machine = Machine;
+  Header.e_shnum = 8;
+  Put(0, Header);
+  Phdr Load;
+  std::memcpy(&Load, Bytes.data() + sizeof(Ehdr), sizeof(Load));
+  Load.p_filesz = Bytes.size();
+  Load.p_memsz = Bytes.size();
+  Put(sizeof(Ehdr), Load);
+  Shdr Names;
+  std::memcpy(&Names, Bytes.data() + SectionOff + 6 * sizeof(Shdr),
+              sizeof(Names));
+  Shdr Section{};
+  Section.sh_name = Names.sh_size;
+  const std::string Name = WithAddend ? ".rela.plt" : ".rel.plt";
+  std::memcpy(Bytes.data() + SectionNameOff + Names.sh_size, Name.c_str(),
+              Name.size() + 1);
+  Names.sh_size += Name.size() + 1;
+  Put(SectionOff + 6 * sizeof(Shdr), Names);
+  Section.sh_type = WithAddend ? SHT_RELA : SHT_REL;
+  Section.sh_flags = SHF_ALLOC;
+  Section.sh_offset = 0x600;
+  Section.sh_addr = ImageBase + Section.sh_offset;
+  Section.sh_size = WithAddend ? sizeof(Rela) : sizeof(Rel);
+  Section.sh_entsize = Section.sh_size;
+  Section.sh_link = 5;
+  Section.sh_info = 2;
+  Section.sh_addralign = ELFT::Is64Bits ? 8 : 4;
+  Put(SectionOff + 7 * sizeof(Shdr), Section);
+  Rela Record{};
+  Record.r_offset = ImageBase + DataOff;
+  Record.setSymbolAndType(4, Type, false);
+  if (WithAddend)
+    Put(Section.sh_offset, Record);
+  else {
+    Rel WithoutAddend{};
+    WithoutAddend.r_offset = Record.r_offset;
+    WithoutAddend.r_info = Record.r_info;
+    Put(Section.sh_offset, WithoutAddend);
+  }
+  return Bytes;
+}
+
+TEST_F(ELFFunctionListingTest, PLTImportsRequireSymbolAddressRelocations) {
+  using namespace llvm::ELF;
+  struct Target {
+    uint16_t Machine;
+    uint32_t JumpSlot;
+    uint32_t TLSDescriptor;
+    uint32_t IRelative;
+    bool Is64;
+  };
+  for (const auto &T :
+       {Target{EM_386, R_386_JUMP_SLOT, R_386_TLS_DESC, R_386_IRELATIVE, false},
+        Target{EM_X86_64, R_X86_64_JUMP_SLOT, R_X86_64_TLSDESC,
+               R_X86_64_IRELATIVE, true},
+        Target{EM_ARM, R_ARM_JUMP_SLOT, R_ARM_TLS_DESC, R_ARM_IRELATIVE, false},
+        Target{EM_AARCH64, R_AARCH64_JUMP_SLOT, R_AARCH64_TLSDESC,
+               R_AARCH64_IRELATIVE, true}})
+    for (bool WithAddend : {false, true})
+      for (uint32_t Type : {T.JumpSlot, T.TLSDescriptor, T.IRelative, 0u}) {
+        SCOPED_TRACE(testing::Message()
+                     << T.Machine << ':' << Type << ':' << WithAddend);
+        const auto Bytes =
+            T.Is64 ? makePLTRelocationFixture<llvm::object::ELF64LE>(
+                         T.Machine, Type, WithAddend)
+                   : makePLTRelocationFixture<llvm::object::ELF32LE>(
+                         T.Machine, Type, WithAddend);
+        const fs::path Path = tmpFile("plt-relocation.elf");
+        std::ofstream Output(Path, std::ios::binary);
+        Output.write(reinterpret_cast<const char *>(Bytes.data()),
+                     Bytes.size());
+        Output.close();
+        auto Loaded = ELFLoader().load(Path);
+        ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+        const auto *Import = Loaded->findImportAt(ImageBase + DataOff);
+        if (Type == T.JumpSlot) {
+          ASSERT_NE(Import, nullptr);
+          EXPECT_EQ(Import->Name, "imported");
+        } else {
+          EXPECT_EQ(Import, nullptr);
+          EXPECT_FALSE(Loaded->ImportStorageSlots.count(ImageBase + DataOff));
+        }
+        EXPECT_EQ(Loaded->hasRuntimeCallablePointerSlotAt(ImageBase + DataOff),
+                  Type == T.TLSDescriptor);
+      }
+}
+
 TEST_F(ELFFunctionListingTest,
        MergesRepeatedDefinitionsAndKeepsAliasesInBothLayoutsAndTableOrders) {
   for (bool Is64 : {false, true}) {

@@ -532,8 +532,8 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   // reassigned at runtime) must be a writable global so stores into a slot are
   // legal; read-only-after-relocation and rodata pointer tables stay constant
   // — their slots are never stored to.
-  bool SegWritable = Seg->isWritable() && !Seg->isExecutable() &&
-                     !section_names::isReadOnlyAfterRelocSectionName(Seg->Name);
+  bool SegWritable =
+      Seg->isWritable() && !Seg->isExecutable() && !isReadOnlyAfterReloc(Seg);
   auto *GV = new llvm::GlobalVariable(
       *Mod, StructTy, /*isConstant=*/!SegWritable, dataLinkage(),
       llvm::ConstantAggregateZero::get(StructTy), GlobalName);
@@ -1852,6 +1852,19 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
     AddressProof Proven =
         proveAddressRole(AddrVar, 0, {}, /*DirectPhiConstant=*/false);
     if (Proven.Role != AddressRole::PointerTable || Proven.Segment != SelSeg) {
+      // A pointer consumer can select an external/runtime address instead of
+      // this mirror. The read-only selection owner can rebuild each exact
+      // static arm separately; a uniform run-relative anchor cannot do that.
+      // Keep malformed blends and arbitrary arithmetic on this proof's
+      // fail-closed path.
+      const MedOp *Selection = lookupDef(AddrVar);
+      MedVar Condition, True, False;
+      if (Selection && (selectPreservesPointerValues(*Selection) ||
+                        isMaskedSelectOr(*Selection, Condition, True, False))) {
+        if (llvm::Value *Pointer =
+                tryResolveSelectMergeTable(AddrVar, 0, true, Builder))
+          return Pointer;
+      }
       if (!FatalDataPointerResolution)
         syncError() << "med_llvm_emitter: ambiguous pointer-table address "
                     << AddrVar.display() << " in " << CurMedFunc->Name
@@ -2199,6 +2212,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     // still denote an emitted function entry without pointer arithmetic.
     bool AllFunctionEntries = false;
     bool SawRuntimeValue = false;
+    bool AllCallableLeaves = false;
   };
   auto mergeProof = [](CodeProof A, const CodeProof &B) {
     A.SawCode |= B.SawCode;
@@ -2218,6 +2232,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     A.SawUnsafeCodeDependency |= B.SawUnsafeCodeDependency;
     A.AllFunctionEntries &= B.AllFunctionEntries;
     A.SawRuntimeValue |= B.SawRuntimeValue;
+    A.AllCallableLeaves &= B.AllCallableLeaves;
     if (A.CommonTarget && B.CommonTarget && *A.CommonTarget != *B.CommonTarget)
       A.SawConflict = true;
     else if (!A.CommonTarget)
@@ -2294,7 +2309,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (Current.Provenance == ConstantAddressProvenance::AddressFragment)
       return {.SawUnresolved = true, .SawExplicit = true};
     if (Current.ConstVal == 0 && !isExactAddressProvenance(Current.Provenance))
-      return {.SawNull = true, .SawExplicit = true};
+      return {.SawNull = true,
+              .SawExplicit = true,
+              .AllCallableLeaves = Current.Size == PointerSize};
     if (Current.Provenance == ConstantAddressProvenance::Scalar ||
         Current.Provenance == ConstantAddressProvenance::DataAddress)
       return {.SawNonCode = true, .SawExplicit = true};
@@ -2353,7 +2370,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
             .SawStrongCodeProvenance =
                 isCodeAddressProvenance(Current.Provenance) ||
                 HasLoaderCodeProvenance || HasAuthenticatedFunctionEntry,
-            .AllFunctionEntries = HasFunctionIdentity};
+            .AllFunctionEntries = HasFunctionIdentity,
+            .AllCallableLeaves = HasFunctionIdentity};
   };
 
   struct CodeProofResult {
@@ -2468,7 +2486,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     };
 
     if (const PhiNode *Phi = lookupPhi(Current)) {
-      CodeProof Combined{.AllFunctionEntries = true};
+      CodeProof Combined{.AllFunctionEntries = true, .AllCallableLeaves = true};
       bool SawArm = false;
       bool Complete = true;
       for (const auto &[Pred, Arg] : Phi->Args) {
@@ -2479,6 +2497,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
           if (!isPureIdentityRecurrence(*Phi, Arg)) {
             Combined.SawCodeDependency = true;
             Combined.AllFunctionEntries = false;
+            Combined.AllCallableLeaves = false;
             SawArm = true;
           }
           continue;
@@ -2491,6 +2510,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       if (!SawArm) {
         Combined.SawUnresolved = true;
         Combined.AllFunctionEntries = false;
+        Combined.AllCallableLeaves = false;
       }
       return Finish({finishValueMerge(std::move(Combined)), Complete});
     }
@@ -2505,7 +2525,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
                                    .SawFunctionIdentity = true,
                                    .SawLiftedCodeIdentity = true,
                                    .SawStrongCodeProvenance = true,
-                                   .AllFunctionEntries = true}));
+                                   .AllFunctionEntries = true,
+                                   .AllCallableLeaves = true}));
     if (std::optional<MedVar> Forwarded = pointerPreservingInput(*Def)) {
       // Low-to-Med publishes entry-state registers as COPY R,R. This is a
       // runtime input boundary, not an incomplete SSA recurrence. Treat the
@@ -2541,7 +2562,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       std::vector<MedVar> Sources;
       if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
         return Finish(completeProof({.SawUnresolved = true}));
-      CodeProof Combined{.AllFunctionEntries = true};
+      CodeProof Combined{.AllFunctionEntries = true, .AllCallableLeaves = true};
       bool Complete = true;
       for (const MedVar &Source : Sources) {
         CodeProofResult SourceResult =
@@ -2561,10 +2582,14 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     case NdOp::ATOMIC_XCHG:
     case NdOp::ATOMIC_ADD:
     case NdOp::ATOMIC_CMPXCHG:
-      return Finish(completeProof({.SawRuntimeValue = true}));
+      return Finish(
+          completeProof({.SawRuntimeValue = true,
+                         .AllCallableLeaves = Current.Size == PointerSize}));
     case NdOp::INTRINSIC:
       if (atomicIntrinsicAddressInput(*Def))
-        return Finish(completeProof({.SawRuntimeValue = true}));
+        return Finish(
+            completeProof({.SawRuntimeValue = true,
+                           .AllCallableLeaves = Current.Size == PointerSize}));
       break;
     default:
       break;
@@ -2583,8 +2608,13 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
           proveCodeValue(Def->Inputs[0], IncludeLayoutCodeOwners);
       if (Input.Proof.SawRuntimeValue && !Input.Proof.SawCode &&
           !Input.Proof.SawCodeDependency && !Input.Proof.SawUnresolved &&
-          !Input.Proof.SawNonCode)
+          !Input.Proof.SawNonCode) {
+        // A high word of a wide return is a runtime integer, not a complete
+        // returned pointer. Only pointer-preserving casts may retain that
+        // stronger contract (handled above).
+        Input.Proof.AllCallableLeaves = false;
         return Finish(std::move(Input));
+      }
     }
 
     CodeProof Combined;
@@ -2626,8 +2656,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     return Finish({std::move(Combined), Complete});
   };
 
-  const CodeProof Proof =
-      proveCodeValue(V, /*IncludeLayoutCodeOwners=*/true).Proof;
+  const CodeProofResult ProofResult =
+      proveCodeValue(V, /*IncludeLayoutCodeOwners=*/true);
+  const CodeProof &Proof = ProofResult.Proof;
   const bool UniqueCode = Proof.SawCode && Proof.CommonTarget &&
                           !Proof.SawNonCode && !Proof.SawUnresolved &&
                           !Proof.SawConflict;
@@ -2659,6 +2690,29 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       !Proof.SawUnresolved && !Proof.SawNonCode && !Proof.SawNull &&
       !Proof.SawConflict && !Proof.SawOwnerConflict &&
       !Proof.SawUnmaterializableCodeIdentity && !Proof.SawUnsafeCodeDependency)
+    return getVar(V, Builder);
+
+  // A returned runtime pointer may select a lifted fallback implementation.
+  // Preserve that selection only when every leaf is a complete native pointer
+  // or emitted function entry; arithmetic, interior labels, narrow return
+  // fragments and unresolved inputs cannot acquire callable identity here.
+  if (ProofResult.Complete && Proof.AllCallableLeaves &&
+      Proof.SawRuntimeValue && !Proof.SawUnresolved && !Proof.SawNonCode &&
+      !Proof.SawNull && !Proof.SawConflict && !Proof.SawOwnerConflict &&
+      !Proof.SawUnmaterializableCodeIdentity && !Proof.SawUnsafeCodeDependency)
+    return getVar(V, Builder);
+
+  // GetProcAddress/dlsym-style results often merge with a null fallback.
+  // Null contributes explicit provenance but no original-image code identity.
+  // Keep the runtime value only when every call of this SSA occurrence is
+  // guarded against null; scalar/data/code alternatives and incomplete proofs
+  // continue through the existing strict callable-target checks.
+  if (RequireCodeRole && ProofResult.Complete && Proof.AllCallableLeaves &&
+      Proof.SawRuntimeValue && Proof.SawNull && !Proof.SawCode &&
+      !Proof.SawNonCode && !Proof.SawUnresolved && !Proof.SawConflict &&
+      !Proof.SawOwnerConflict && !Proof.SawCodeDependency &&
+      !Proof.SawUnmaterializableCodeIdentity &&
+      !Proof.SawUnsafeCodeDependency && valueHasNonNullIndirectCallGuards(V))
     return getVar(V, Builder);
 
   if (!Proof.SawCode && !Proof.SawOwnerConflict &&
@@ -2808,6 +2862,34 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
       if (SlotRoles.isCallableOnly() && SlotRoles.ValueAdjustment == 0)
         if (llvm::Value *Target = getVar(V, Builder))
           return Target;
+
+      // A mutable, initially-null field has no static pointer payload to
+      // relocate. After a non-null guard the loaded SSA value is a runtime
+      // callback, just like a dynamic loader's return value. Keep the exact
+      // mirrored load; neighbouring relocation roles confer no authority.
+      const auto IsNullableRuntimeField = [&]() {
+        const unsigned Width = Img->getPointerSize();
+        if (!SlotRoles.Complete || SlotRoles.ValueAdjustment != 0 ||
+            SlotRoles.Slots.size() != 1 || !SlotRoles.SawUnknown ||
+            SlotRoles.SawCode || SlotRoles.SawData || SlotRoles.SawImport ||
+            SlotRoles.SawRuntimeCallable || SlotRoles.SawConflict ||
+            Width == 0 || Width > 8 || !SlotRoles.Load ||
+            SlotRoles.Load->Output.Size != Width)
+          return false;
+        const uint64_t Slot = *SlotRoles.Slots.begin();
+        const Segment *Seg = Img->getSegmentFor(Slot);
+        const Section *Sec = Img->getSectionFor(Slot);
+        if (!Seg || !Seg->isWritable() || Seg->isExecutable() ||
+            (Sec && (!Sec->isWritable() || Sec->isExecutable())))
+          return false;
+        const uint8_t *Bytes = Img->readVA(Slot, Width);
+        return Bytes &&
+               std::all_of(Bytes, Bytes + Width,
+                           [](uint8_t B) { return B == 0; }) &&
+               valueHasNonNullIndirectCallGuards(V);
+      };
+      if (IsNullableRuntimeField())
+        return getVar(V, Builder);
 
       if (!FatalCodePointerResolution && !FatalDataPointerResolution) {
         if (SlotRoles.isDataOnly())

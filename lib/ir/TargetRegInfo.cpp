@@ -396,6 +396,14 @@ TargetRegInfo::integerParamRegs(BinaryFormat Format) const {
   return integerArgumentLayout(Format == BinaryFormat::COFF).Registers;
 }
 
+llvm::ArrayRef<uint64_t>
+TargetRegInfo::floatingParamRegs(BinaryFormat Format) const {
+  if (TheArch == Arch::X64 && Format == BinaryFormat::COFF)
+    return FPParamRegs.take_front(
+        std::min(FPParamRegs.size(), Win64ParamRegs.size()));
+  return FPParamRegs;
+}
+
 int IntegerArgumentLayout::registerIndex(uint64_t RegOff) const {
   for (size_t I = 0; I < Registers.size(); ++I)
     if (Registers[I] == RegOff)
@@ -432,8 +440,9 @@ int TargetRegInfo::regToArgIdx(uint64_t RegOff, bool IsWin64) const {
     int Idx = integerArgumentLayout(IsWin64).registerIndex(RegOff);
     if (Idx >= 0)
       return Idx;
-    for (size_t I = 0; I < FPParamRegs.size() && I < Win64ParamRegs.size(); ++I)
-      if (FPParamRegs[I] == RegOff)
+    const auto Floating = floatingParamRegs(BinaryFormat::COFF);
+    for (size_t I = 0; I < Floating.size(); ++I)
+      if (Floating[I] == RegOff)
         return static_cast<int>(I);
     return -1;
   }

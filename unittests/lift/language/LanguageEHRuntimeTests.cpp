@@ -173,6 +173,30 @@ TEST(LanguageRuntimeDetection, IdentifiesRustFromStandardLibrarySymbols) {
   EXPECT_FALSE(Info.Evidence.empty());
 }
 
+TEST(LanguageRuntimeDetection, ExportsProvideTheSameLanguageEvidenceAsSymbols) {
+  for (const auto &[Name, Runtime] :
+       std::vector<std::pair<std::string, SourceLanguageRuntime>>{
+           {"__CxxFrameHandler3", SourceLanguageRuntime::CxxMSVC},
+           {"__GSHandlerCheck_EH4", SourceLanguageRuntime::CxxMSVC},
+           {"?method@Example@@QEAAHXZ", SourceLanguageRuntime::CxxMSVC},
+           {"_Z3foov", SourceLanguageRuntime::CxxItanium},
+           {"_ZN4core9panicking9panic_fmt17h0123456789abcdefE",
+            SourceLanguageRuntime::Rust}}) {
+    SCOPED_TRACE(Name);
+    auto Img = makeImage();
+    Export Exp;
+    Exp.Name = Name;
+    Exp.Addr = kTextVA;
+    Img.Exports.push_back(Exp);
+    EXPECT_TRUE(detectLanguageRuntime(Img).is(Runtime));
+    Img.Exports.clear();
+    Symbol Sym = Symbol::makeFunc(kTextVA);
+    Sym.Name = Name;
+    Img.Symbols.push_back(Sym);
+    EXPECT_TRUE(detectLanguageRuntime(Img).is(Runtime));
+  }
+}
+
 TEST(LanguageRuntimeDetection, IdentifiesGoFromBuildInfoInDataNotText) {
   BinaryImage Img = makeImage();
   const char Banner[] = "\xff Go buildinf:";

@@ -16,6 +16,7 @@
 
 #include "../../../loader/Swift/SwiftBooleanSourceBinding.h"
 #include "../../../loader/Swift/SwiftErrorRuntime.h"
+#include "../FloatingPointContract.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../render/X86FPStateHelpers.h"
@@ -1474,6 +1475,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   // declarations and casts in a standalone translation unit.
   bool NeedsBlockObject = false;
   bool NeedsBool = false;
+  bool HasFloatingArithmetic = false;
   const auto CheckType = [&](const TypeRef &Type) {
     TypeRef Current = Type;
     while (Current && Current->Kind == NdTypeKind::Ptr)
@@ -1489,6 +1491,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
       return;
     CheckType(Expr->Type);
     CheckType(Expr->CastTo);
+    HasFloatingArithmetic |=
+        Expr->Op == NdOp::FLOAT_ADD || Expr->Op == NdOp::FLOAT_SUB ||
+        Expr->Op == NdOp::FLOAT_MULT || Expr->Op == NdOp::FLOAT_DIV;
     if (Expr->Kind == ExprKind::Call) {
       CheckType(knownCallReturnType(*Expr));
       if (Expr->SourceCallHint) {
@@ -1517,6 +1522,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     if (Int128AsBitInt)
       OS << "#define __int128 _BitInt(128)\n\n";
   };
+  if (HasFloatingArithmetic)
+    c_float::writeContractionPolicy(OS);
   if (!Opts.EmitIncludes) {
     WriteInt128Spelling();
     if (NeedsBlockObject)

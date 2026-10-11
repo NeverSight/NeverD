@@ -609,10 +609,11 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     S.emit(NdOp::COPY, ST(0), {Sig});
     break;
   }
-  // FXAM classifies st(0) into the status-word condition codes without changing
-  // st(0); model as a side effect (no value) so st(0) is preserved.
+  // Classification also depends on the slot's empty tag. The CFG x87-state
+  // pass resolves that tag after rebasing physical slots across control flow.
   case X86_INS_FXAM:
-    S.emitIntrinsic(Intrinsic::X87Op);
+    S.emitIntrinsic(Intrinsic::X87Fxam, NdVar::reg(x86reg::FPU_SW, 2),
+                    {ST(0), NdVar::reg(x86reg::FPU_SW, 2)});
     break;
 
   // FCMOVcc: move st(i) into st(0) when the EFLAGS condition (set by a prior
@@ -624,6 +625,7 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   case X86_INS_FCMOVNB:
   case X86_INS_FCMOVNBE:
   case X86_INS_FCMOVNE:
+  case X86_INS_FCMOVNP:
   case X86_INS_FCMOVNU: {
     // Intel order is destination ST0, then source ST(i). The source can itself
     // be ST0; discarding that operand silently turns a self move into ST1.
@@ -658,6 +660,7 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       S.emit(NdOp::BOOL_NOT, Cond, {Zf});
       break;
     case X86_INS_FCMOVNU:
+    case X86_INS_FCMOVNP:
       S.emit(NdOp::BOOL_NOT, Cond, {Pf});
       break;
     case X86_INS_FCMOVNBE: {

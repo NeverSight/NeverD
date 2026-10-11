@@ -369,7 +369,7 @@ void detectXMMParams(
       continue;
 
     uint64_t ROff = Op.Output.RegOff;
-    if (!TRI.isFPArgReg(ROff))
+    if (!TRI.isFPArgReg(ROff, TargetFormat))
       continue;
     // A positional convention (Win64) finds its floating arguments among
     // the argument slots; each still carries a scalar or a vector.

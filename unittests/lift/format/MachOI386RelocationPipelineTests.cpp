@@ -1,12 +1,12 @@
-//===- MachOI386RelocationPipelineTests.cpp - Mach-O i386 lift and recompile tests -===//
+//===- MachOI386RelocationPipelineTests.cpp - i386 relocations ---------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachOI386RelocationTestsDetail.h"
 #include "gtest/gtest.h"
 
-#include "MachOI386RelocationTestsDetail.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
 
@@ -97,7 +97,8 @@ TEST_F(MachOI386Relocation,
        DispatchUsesRelinkablePointerToRecompiledZeroAddressFunction) {
   auto PICBytes = readBinaryFile(fixture("test_macho_i386.o"));
   auto PICObj = createMachOObject(PICBytes);
-  auto PICText = PICObj ? findSection(*PICObj, section_names::macho::Text) : std::nullopt;
+  auto PICText =
+      PICObj ? findSection(*PICObj, section_names::macho::Text) : std::nullopt;
   auto PICData = rawSectionLayout(PICBytes, section_names::macho::Data);
   ASSERT_NE(PICObj, nullptr);
   ASSERT_TRUE(PICText.has_value());
@@ -119,8 +120,10 @@ TEST_F(MachOI386Relocation,
   auto PICImgOrErr = loadBinary(fixture("test_macho_i386.o"));
   ASSERT_TRUE(static_cast<bool>(PICImgOrErr))
       << llvm::toString(PICImgOrErr.takeError());
-  const Section *LoadedText = PICImgOrErr->getSectionByName(section_names::macho::Text);
-  const Section *LoadedData = PICImgOrErr->getSectionByName(section_names::macho::Data);
+  const Section *LoadedText =
+      PICImgOrErr->getSectionByName(section_names::macho::Text);
+  const Section *LoadedData =
+      PICImgOrErr->getSectionByName(section_names::macho::Data);
   ASSERT_NE(LoadedText, nullptr);
   ASSERT_NE(LoadedData, nullptr);
   EXPECT_EQ(PICImgOrErr->CodePtrRelocSlots.count(LoadedText->VA +
@@ -136,9 +139,8 @@ TEST_F(MachOI386Relocation,
   Decoder Decoder;
   ASSERT_TRUE(Decoder.init(Arch::X86));
   CFGBuilder Builder;
-  const LowFunc Low =
-      Builder.build(*PICImgOrErr, Decoder, Dispatch->Addr,
-                    "_i386_call_dispatch");
+  const LowFunc Low = Builder.build(*PICImgOrErr, Decoder, Dispatch->Addr,
+                                    "_i386_call_dispatch");
   ASSERT_EQ(Low.I386GetPcOccurrences.size(), 1u);
   const I386GetPcOccurrence &GetPc = Low.I386GetPcOccurrences.front();
   EXPECT_TRUE(GetPc.RawPCAuthenticated);
@@ -146,8 +148,7 @@ TEST_F(MachOI386Relocation,
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops)
       if (Op.Addr == GetPc.InstructionAddr && Op.Seq == GetPc.OpSeq &&
-          Op.Opcode == GetPc.OutputOpcode &&
-          Op.Output == GetPc.OutputWitness) {
+          Op.Opcode == GetPc.OutputOpcode && Op.Output == GetPc.OutputWitness) {
         ASSERT_EQ(SeedCopy, nullptr);
         SeedCopy = &Op;
       }
@@ -189,9 +190,11 @@ TEST_P(MachOI386Pipeline, CompletesLiftAndDecompilation) {
   ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
   EXPECT_NE(LLVM.out.find("@i386_add"), std::string::npos);
   EXPECT_NE(LLVM.out.find("@i386_global_address"), std::string::npos);
+  const std::string IndexType =
+      "i" + std::to_string(ImgOrErr->getPointerSize() * 8);
   auto HasGlobalReference = [&](llvm::StringRef Name, va_t Address) {
     if (LLVM.out.find(Name.str()) != std::string::npos ||
-        LLVM.out.find("i64 " + std::to_string(Address) + " to ptr") !=
+        LLVM.out.find(IndexType + " " + std::to_string(Address) + " to ptr") !=
             std::string::npos)
       return true;
     const Segment *Seg = ImgOrErr->getSegmentFor(Address);
@@ -202,8 +205,8 @@ TEST_P(MachOI386Pipeline, CompletesLiftAndDecompilation) {
       return false;
     uint64_t Offset = Address - Seg->VA;
     return Offset == 0 ||
-           LLVM.out.find(Mirror + ", i64 " + std::to_string(Offset)) !=
-               std::string::npos;
+           LLVM.out.find(Mirror + ", " + IndexType + " " +
+                         std::to_string(Offset)) != std::string::npos;
   };
   EXPECT_TRUE(HasGlobalReference("_global_value", Global->Addr));
   EXPECT_TRUE(HasGlobalReference("_local_bias", Local->Addr));

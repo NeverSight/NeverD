@@ -40,6 +40,11 @@ std::string typeToC(const TypeRef &Ty);
 /// when it does not, such as the machine type of a debug parameter.
 bool hasCSpelling(const TypeRef &Ty);
 
+/// Whether a debug type has enough layout for a C value. A named opaque
+/// record can be spelled behind a pointer, but its name alone does not
+/// establish a by-value argument, local, or return ABI.
+bool hasCValueLayout(const TypeRef &Ty);
+
 /// Readonly printable C/wchar image bytes as `"..."` / `L"..."`.
 /// Non-ASCII or writable/executable bytes stay unnamed. Empty NUL-only
 /// strings stay unnamed unless \p AllowEmpty (MSVC `??_C@` publics).  Bytes
@@ -86,16 +91,21 @@ std::optional<ImageCString> imageCString(const BinaryImage *Img, va_t Addr);
 /// Named class/struct returned by value.  MSVC x64 passes that object through
 /// a hidden pointer in RCX.  Enums stay in RAX.  Forward-ref classes may
 /// have Size 0.
-inline bool isMsvcClassValueReturn(const TypeRef &Ty) {
-  return Ty && Ty->Kind == NdTypeKind::Struct && !Ty->SourceName.empty() &&
+inline bool isMsvcClassValueReturn(const TypeRef &Ty, Arch Architecture,
+                                   BinaryFormat Format) {
+  return Architecture == Arch::X64 && Format == BinaryFormat::COFF && Ty &&
+         Ty->Kind == NdTypeKind::Struct && !Ty->SourceName.empty() &&
          !Ty->IsEnum;
 }
 
 /// TPI sometimes writes `CStringT*` for a class-by-value return, and sometimes
 /// a getter really returns `T*` in RAX.  Treat the pointer encoding as sret
 /// only when a call site shows a hidden result pointer.
-inline bool isMsvcPointerEncodedClassReturn(const TypeRef &Ty) {
-  return Ty && Ty->Kind == NdTypeKind::Ptr && Ty->Pointee &&
+inline bool isMsvcPointerEncodedClassReturn(const TypeRef &Ty,
+                                            Arch Architecture,
+                                            BinaryFormat Format) {
+  return Architecture == Arch::X64 && Format == BinaryFormat::COFF && Ty &&
+         Ty->Kind == NdTypeKind::Ptr && Ty->Pointee &&
          Ty->Pointee->Kind == NdTypeKind::Struct &&
          !Ty->Pointee->SourceName.empty() && !Ty->Pointee->IsEnum;
 }
@@ -104,20 +114,25 @@ inline bool isMsvcPointerEncodedClassReturn(const TypeRef &Ty) {
 /// Enums stay in RAX.  Pointer-to-class TPI is included so current-function
 /// prototypes still inject `result` for `CStringT*` methods; externs must
 /// also see a real sret operand.
-inline TypeRef msvcIndirectReturnRecordType(const TypeRef &Ty) {
-  if (isMsvcClassValueReturn(Ty))
+inline TypeRef msvcIndirectReturnRecordType(const TypeRef &Ty,
+                                            Arch Architecture,
+                                            BinaryFormat Format) {
+  if (isMsvcClassValueReturn(Ty, Architecture, Format))
     return Ty;
-  if (isMsvcPointerEncodedClassReturn(Ty))
+  if (isMsvcPointerEncodedClassReturn(Ty, Architecture, Format))
     return Ty->Pointee;
   return nullptr;
 }
 
-inline const NdType *msvcIndirectReturnRecord(const TypeRef &Ty) {
-  return msvcIndirectReturnRecordType(Ty).get();
+inline const NdType *msvcIndirectReturnRecord(const TypeRef &Ty,
+                                              Arch Architecture,
+                                              BinaryFormat Format) {
+  return msvcIndirectReturnRecordType(Ty, Architecture, Format).get();
 }
 
-inline bool isMsvcIndirectReturn(const TypeRef &Ty) {
-  return msvcIndirectReturnRecord(Ty) != nullptr;
+inline bool isMsvcIndirectReturn(const TypeRef &Ty, Arch Architecture,
+                                 BinaryFormat Format) {
+  return msvcIndirectReturnRecord(Ty, Architecture, Format) != nullptr;
 }
 
 /// Place a declarator inside a C type, including nested function pointers.
