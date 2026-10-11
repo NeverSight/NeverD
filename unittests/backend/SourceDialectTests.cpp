@@ -686,6 +686,57 @@ std::string normalizeLineEndings(std::string Text) {
   return Text;
 }
 
+TEST(SourceDialect, CxxAlignmentUsesStandardSyntaxAndPreservesStorage) {
+  const llvm::StringRef Source = R"C(
+#include <stdint.h>
+/* _Alignas in comments and strings is not a keyword. */
+_Alignas(64) unsigned char global_storage[64];
+struct aligned_record { _Alignas(32) unsigned char bytes[32]; };
+_Static_assert(_Alignof(struct aligned_record) == 32, "_Alignas record");
+int main(void) {
+  _Alignas(16) unsigned char stack_storage[96];
+  return ((uintptr_t)global_storage & 63) |
+         ((uintptr_t)stack_storage & 15);
+}
+)C";
+  const auto C = spell(Source, SourceDialect::C);
+  const auto Cpp = spell(Source, SourceDialect::Cpp);
+  ASSERT_TRUE(C.Unread.empty()) << C.Text;
+  ASSERT_TRUE(Cpp.Unread.empty()) << Cpp.Text;
+  EXPECT_EQ(tokens(C.Text), tokens(Source));
+  EXPECT_NE(Cpp.Text.find("alignas(16)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("alignas(32)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("alignas(64)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("alignof(struct aligned_record)"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("/* _Alignas in comments"), std::string::npos);
+  EXPECT_NE(Cpp.Text.find("\"_Alignas record\""), std::string::npos);
+
+  const std::string Clang = NEVERD_TEST_CLANG;
+  if (Clang.empty())
+    GTEST_SKIP() << "no clang: aligned C and C++ storage are not executed";
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-alignment", Dir));
+  for (bool IsCpp : {false, true}) {
+    llvm::SmallString<128> File(Dir), Binary(Dir);
+    llvm::sys::path::append(File, IsCpp ? "source.cpp" : "source.c");
+    llvm::sys::path::append(Binary, IsCpp ? "cpp.out" : "c.out");
+    std::error_code EC;
+    {
+      llvm::raw_fd_ostream OS(File, EC);
+      ASSERT_FALSE(EC);
+      OS << (IsCpp ? Cpp.Text : C.Text);
+    }
+    auto Built = run(Clang,
+                     {IsCpp ? "-std=c++17" : "-std=c11", "-pedantic-errors",
+                      "-O1", "-o", Binary, File},
+                     Dir);
+    ASSERT_TRUE(bool(Built)) << llvm::toString(Built.takeError());
+    auto Result = run(Binary, {}, Dir);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  }
+  llvm::sys::fs::remove_directories(Dir);
+}
+
 /// Compiles the C functions with clang and their Rust view with rustc, runs
 /// both on the same inputs and compares what they print: the Rust view must
 /// compute what the C computes.  NEVERD_TEST_RUSTC or a `rustc` on PATH runs
