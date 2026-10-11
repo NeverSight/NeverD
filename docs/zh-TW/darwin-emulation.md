@@ -1,6 +1,6 @@
 **語言**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
+<!-- i18n-source: c5503091e713c63aa7b08a8cbd5fab1b5cc3c8d8950bb7da4fe754dbe5787137 -->
 
 [← 文件索引](README.md)
 
@@ -37,7 +37,7 @@ neverd emulate guest.macho --profile=ios-macho64-v1 \
 
 ## Darwin 服務
 
-BSD 呼叫在 ARM64 使用 X16、X0–X5 與 `svc #0x80`；x64 使用 BSD 類別 `0x02000000`、RAX 及 RDI/RSI/RDX/R10/R8/R9。成功清除 carry，失敗設定 carry 並返回正 errno。ARM64 清除 X1；x64 成功清除 RDX、失敗保留 RDX。SYSCALL 的暫存器改寫明確定義。報告以 `result` 與 `error=true` 表達 BSD 錯誤；不返回或不支援的請求沒有這兩個欄位。規則依據 XNU [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c) 與 [x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c)，未納入 Apple 實作程式碼。
+BSD 呼叫在 ARM64 使用 X16、X0–X5 與 `svc #0x80`；x64 使用 BSD 類別 `0x02000000`、RAX 及 RDI/RSI/RDX/R10/R8/R9。成功清除 carry，失敗設定 carry 並返回正 errno。ARM64 清除 X1；x64 成功清除 RDX、失敗保留 RDX。SYSCALL 的暫存器改寫明確定義。報告以 `result` 與 `error=true` 表達 BSD 錯誤；不返回或不支援的請求在 JSON 中使用 `result: null`，並省略 `error`。規則依據 XNU [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c) 與 [x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c)，未納入 Apple 實作程式碼。
 
 服務包含 `exit`、`write`、`getpid`、`getppid`、`getuid`、`geteuid`、`getgid`、`getegid`、`getgroups`、`mmap`、`mprotect`、`munmap`。PID 為 1000，PPID 為 1；UID/GID 預設 1000，可由下述憑據明確提供不同的真實/有效 ID。描述元 1、2 擷取原始位元組，包含 NUL 與非 UTF8；關閉或唯讀描述元返回 EBADF。部分複製已取得的資料會保留，但後續錯誤仍為 EFAULT。長度超過 `INT_MAX` 時，先返回 EINVAL，再談描述元、指標或預算檢查，依據 [XNU write](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_generic.c)。
 
@@ -1126,7 +1126,7 @@ owner bits / whole-mask group-world outcomes / EACCES13
 credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
 real credential copy / first supplementary match / displacement disables memberd
 missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
-all40 other file routes and direct/file-backed mappings closed / typed streams only
+all41 other file routes and direct/file-backed mappings closed / typed streams only
 ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
 OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
 73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
@@ -1164,3 +1164,27 @@ native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).
+
+## 一般檔案的即時就緒查詢
+
+原始 BSD poll(230) 與 poll_nocancel(417) 支援 timeout 的 low int32=0。描述元所有者把 nfds 解碼為 uint32；超過 OPEN_MAX10240 先傳回 EINVAL22，不存取指標。正數項目需要明確 darwin_system.resource_limits 資源8 Current，省略代表未知。超過 Current 時，項目數大於 FD_SETSIZE1024 傳回 EINVAL；較小項目數需要原始明確有效 UID，非零傳回 EINVAL，零允許繼續。root 例外只有原始碼/模型證據。DescriptorLimit、kern.maxfilesperproc、FD 數值與執行預算不提供此觀測。零項目不存取陣列；非零逾時在項目准入後報告不支援。
+
+建構的虛擬一般檔案明確採用未撤銷、一般讀寫過濾器註冊成功、沒有 MAC 或提供方拒絕的契約；原生 vnode 類型本身不能證明註冊成功。此前提下 IN/RDNORM、OUT/WRBAND 在 EOF 或唯讀開啟時也就緒，不由剩餘位元組、存取旗標、O_NONBLOCK 或寫入授權推斷。過濾器依數字 FD 與讀/寫類別各自保留最後請求位置，不合併 dup 的不同 FD。單獨 HUP 登記讀過濾器但不輸出就緒位元。負 FD 與僅忽略位元為零；關閉 FD 的有效登記逐項回傳 POLLNVAL32。活動 OOB/vnode、串流、目錄和符號連結提供方在任何輸出前拒絕。先完整快照八位元組記錄；輸入不完整或輸出完全不可寫回傳 EFAULT14，部分輸出拒絕且不複製前綴。完整複製保留 fd/events，替換全部 revents。兩種靜態權限查詢模式於預檢前關閉 Poll，包含零項目；共享清單現有41條關閉路由。
+
+無 SDK 的 immediate-poll 工作負載涵蓋86事件、五個軟體設定和三個必需 ARM64 HVF 設定，含 C/CLI/Python 檢查，新增一個共同原生參考，使目前清單成為59例。獨立 O0/O1/O2 ARM64 探針保留582次混合字面 ABI/錯誤控制及一般提供方觀測，不是通用就緒常數。舊58例證明保留原始碼身分；下載失敗與首次原生逾時亦保留，未延長時限。原生 Intel HVF、實體 iOS、撤銷/MAC/註冊拒絕、select、阻塞等待、非同步提供方、網路、推進時鐘、真實 Mach IPC/執行緒、dyld/TLS 和完整框架仍未驗證或未完成。
+
+```text
+poll230 / poll_nocancel417 / timeout low int32=0 / nfds uint32
+ResourceLimits[8].Current / OPEN_MAX10240 / FD_SETSIZE1024 / explicit original effective UID
+constructive regular provider: nonrevoked / successful ordinary filter attachment / no MAC-provider refusal
+numeric FD + read/write filter / independent last requested index / distinct dup aliases
+IN1 RDNORM64 OUT4 WRBAND256 / HUP16 trigger only / closed registrations POLLNVAL32
+negative and ignored-only rows zero / whole input snapshot / whole output / partial output unsupported
+EFAULT14 EINVAL22 / no ready prefix on unsupported row / zero count no pointer
+static-owner-queries and static-ordinary-queries / all41 other file routes closed before preflight
+immediate-poll86 events / five software + three mandatory ARM64 HVF profiles / C CLI Python
+59 current native-common cases / prior58 source identity preserved / 582 mixed controls and captures
+native Intel and physical iOS unverified / waits select revoked-MAC-provider failures networking unfinished
+```
+
+[XNU poll ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/poll.h), [poll registration and copy order](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/sys_generic.c), [vnode registration and regular filters](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_vnops.c).

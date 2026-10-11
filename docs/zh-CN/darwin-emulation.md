@@ -1,6 +1,6 @@
 **语言**: [English](../darwin-emulation.md) | [简体中文](darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
+<!-- i18n-source: c5503091e713c63aa7b08a8cbd5fab1b5cc3c8d8950bb7da4fe754dbe5787137 -->
 
 [← 文档索引](README.md)
 
@@ -1230,7 +1230,7 @@ owner bits / whole-mask group-world outcomes / EACCES13
 credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
 real credential copy / first supplementary match / displacement disables memberd
 missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
-all40 other file routes and direct/file-backed mappings closed / typed streams only
+all41 other file routes and direct/file-backed mappings closed / typed streams only
 ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
 OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
 73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
@@ -1268,3 +1268,27 @@ native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).
+
+## 普通文件的即时就绪查询
+
+原始 BSD poll(230) 与 poll_nocancel(417) 支持 timeout 的 low int32=0。描述符所有者把 nfds 解码为 uint32；超过 OPEN_MAX10240 先返回 EINVAL22，不访问指针。正数条目需要明确的 darwin_system.resource_limits 资源8 Current，省略代表未知。超过 Current 时，条目数大于 FD_SETSIZE1024 返回 EINVAL；较小条目数需要原始显式有效 UID，非零返回 EINVAL，零允许继续。root 例外仅有源码/模型证据。DescriptorLimit、kern.maxfilesperproc、FD 数值和执行预算不提供该观测。零条目不访问数组；非零超时在条目准入后报告不支持。
+
+构造的虚拟普通文件明确采用未撤销、普通读写过滤器注册成功、没有 MAC 或提供方拒绝的契约；原生 vnode 的文件类型本身不能证明注册成功。在此前提下，IN/RDNORM 和 OUT/WRBAND 在 EOF 或只读打开时也就绪，不从剩余字节、访问标志、O_NONBLOCK 或写授权推断。过滤器按数字 FD 与读/写类别分别保留最后请求位置，dup 的不同 FD 不合并。单独 HUP 登记读过滤器但不输出就绪位。负 FD 与仅忽略位为零，关闭 FD 的有效登记逐条返回 POLLNVAL32。活动 OOB/vnode、流、目录和符号链接提供方在任何输出前拒绝。先完整快照八字节记录输入；输入不完整或输出完全不可写返回 EFAULT14，部分输出则拒绝且不复制前缀。完整复制保留 fd/events，替换全部 revents。两种静态权限查询模式在预检前关闭 Poll，包括零条目；共享清单现在有41条关闭的文件路由。
+
+无 SDK 的 immediate-poll 工作负载覆盖86个事件、五个软件设置和三个必需 ARM64 HVF 设置，含 C/CLI/Python 检查，并新增一个公共原生参考，当前清单为59例。独立 O0/O1/O2 ARM64 探针保留582次混合的字面 ABI/错误控制及普通提供方观测，不是通用就绪常量。旧58例证明保留原源码身份；下载失败和首次原生超时也保留，未延长时限。原生 Intel HVF、实体 iOS、撤销/MAC/注册拒绝、select、阻塞等待、异步提供方、网络、推进时钟、真实 Mach IPC/线程、dyld/TLS 与完整框架仍未验证或未完成。 不支持或不返回的事件在 JSON 中使用 `result: null`，并省略 `error`。
+
+```text
+poll230 / poll_nocancel417 / timeout low int32=0 / nfds uint32
+ResourceLimits[8].Current / OPEN_MAX10240 / FD_SETSIZE1024 / explicit original effective UID
+constructive regular provider: nonrevoked / successful ordinary filter attachment / no MAC-provider refusal
+numeric FD + read/write filter / independent last requested index / distinct dup aliases
+IN1 RDNORM64 OUT4 WRBAND256 / HUP16 trigger only / closed registrations POLLNVAL32
+negative and ignored-only rows zero / whole input snapshot / whole output / partial output unsupported
+EFAULT14 EINVAL22 / no ready prefix on unsupported row / zero count no pointer
+static-owner-queries and static-ordinary-queries / all41 other file routes closed before preflight
+immediate-poll86 events / five software + three mandatory ARM64 HVF profiles / C CLI Python
+59 current native-common cases / prior58 source identity preserved / 582 mixed controls and captures
+native Intel and physical iOS unverified / waits select revoked-MAC-provider failures networking unfinished
+```
+
+[XNU poll ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/poll.h), [poll registration and copy order](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/sys_generic.c), [vnode registration and regular filters](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_vnops.c).

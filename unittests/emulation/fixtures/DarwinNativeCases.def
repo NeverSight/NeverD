@@ -58,3 +58,5 @@ NEVERD_DARWIN_NATIVE_CASE("hard-links", 37, "H")
 NEVERD_DARWIN_NATIVE_CASE("symbolic-descriptors", 37, "S")
 NEVERD_DARWIN_NATIVE_CASE("thread-identity", 37, "T")
 NEVERD_DARWIN_NATIVE_CASE("mach-self-ports", 37, "J")
+
+NEVERD_DARWIN_NATIVE_CASE("immediate-poll", 37, "p")

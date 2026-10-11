@@ -30,7 +30,8 @@ The existing [process C, Python and CLI APIs](process-emulation.md#cli-and-sdk)
 share this implementation and the same limits and report schema. Returning
 BSD services add an `error` Boolean to their records: a positive errno in
 `result` with `error=true` represents BSD carry, not a Linux negative result.
-Nonreturning or unsupported requests have no result or error field.
+Nonreturning or unsupported requests have no result value: JSON uses
+`result: null` and omits the `error` field.
 
 ## Image and startup contract
 
@@ -1987,7 +1988,7 @@ owner bits / whole-mask group-world outcomes / EACCES13
 credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
 real credential copy / first supplementary match / displacement disables memberd
 missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
-all40 other file routes and direct/file-backed mappings closed / typed streams only
+all41 other file routes and direct/file-backed mappings closed / typed streams only
 ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
 OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
 73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
@@ -2025,3 +2026,27 @@ native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).
+
+## Immediate ordinary-file readiness
+
+Raw BSD `poll` (230) and `poll_nocancel` (417) support timeout low int32=0. The descriptor owner decodes nfds as uint32. Counts above OPEN_MAX10240 return EINVAL22 before pointers. Positive counts require explicit `darwin_system.resource_limits` resource8 Current; omission is unknown. Above Current, counts over FD_SETSIZE1024 return EINVAL; smaller counts require the original explicit effective UID, with nonzero returning EINVAL and zero admitted. This root exception is source/model evidence only. DescriptorLimit, kern.maxfilesperproc, FD numeric value and execution budgets do not supply this observation. Zero count touches no array pointer. Nonzero timeout is unsupported after count admission.
+
+The constructive virtual regular-file provider explicitly represents nonrevoked descriptions with successful ordinary read/write filter attachment and no MAC/provider refusal. A regular native vnode kind alone does not establish registration success. Under this premise, IN/RDNORM and OUT/WRBAND are ready even at EOF or through read-only opens; remaining bytes, access flags, O_NONBLOCK and write grants do not determine readiness. Filter keys are numeric FD plus read/write kind: each keeps its last requesting row independently; distinct dup aliases do not coalesce. HUP alone registers a read filter without a ready bit. Negative FDs and ignored-only requests yield zero; closed registrations yield POLLNVAL32 per row. Live OOB/vnode requests and stream/directory/symbolic providers stop unsupported before any output. The entire eight-byte-record input is snapshotted; incomplete input or whole unwritable output returns EFAULT14, while partial output is refused without copying a prefix. Whole copyout preserves fd/events and replaces all revents. Both static permission-query modes close Poll before preflight, including zero count; their shared inventory now has41 closed file routes.
+
+The SDK-free immediate-poll workload covers86 events across five software profiles and three mandatory ARM64 HVF profiles, with C/CLI and Python checks and one new common native reference, bringing the current common inventory to59. The independent O0/O1/O2 ARM64 probe retains582 mixed literal ABI/error controls and regular-provider captures; these are not universal readiness constants. Older58-case proofs retain their original source identity. Failed source-download and initial native-timeout attempts remain preserved; deadlines were not enlarged. Native Intel HVF, physical iOS, revoked/MAC/refused vnode registration, select, blocking waits, asynchronous providers, networking, advancing clocks, real Mach IPC/threads, dyld/TLS and complete frameworks remain unverified or unfinished.
+
+```text
+poll230 / poll_nocancel417 / timeout low int32=0 / nfds uint32
+ResourceLimits[8].Current / OPEN_MAX10240 / FD_SETSIZE1024 / explicit original effective UID
+constructive regular provider: nonrevoked / successful ordinary filter attachment / no MAC-provider refusal
+numeric FD + read/write filter / independent last requested index / distinct dup aliases
+IN1 RDNORM64 OUT4 WRBAND256 / HUP16 trigger only / closed registrations POLLNVAL32
+negative and ignored-only rows zero / whole input snapshot / whole output / partial output unsupported
+EFAULT14 EINVAL22 / no ready prefix on unsupported row / zero count no pointer
+static-owner-queries and static-ordinary-queries / all41 other file routes closed before preflight
+immediate-poll86 events / five software + three mandatory ARM64 HVF profiles / C CLI Python
+59 current native-common cases / prior58 source identity preserved / 582 mixed controls and captures
+native Intel and physical iOS unverified / waits select revoked-MAC-provider failures networking unfinished
+```
+
+[XNU poll ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/poll.h), [poll registration and copy order](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/sys_generic.c), [vnode registration and regular filters](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_vnops.c).

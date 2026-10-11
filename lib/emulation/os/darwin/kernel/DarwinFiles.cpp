@@ -2621,7 +2621,8 @@ std::optional<ServiceResult> DarwinFiles::pathconf(const Description &File,
 
 llvm::Expected<std::optional<ServiceResult>>
 DarwinFiles::handle(ServiceKind Service, const ProcessServiceEvent &Event,
-                    ProcessResult &Result) {
+                    ProcessResult &Result,
+                    const std::optional<DarwinSystemOptions> &System) {
   const auto &A = Event.Arguments;
   if (queryEnvironment()) {
     // Closed by default, including new file routes. Only queries and the
@@ -2647,6 +2648,8 @@ DarwinFiles::handle(ServiceKind Service, const ProcessServiceEvent &Event,
       return unsupported(Result, authorizationScope());
     }
   }
+  if (Service == ServiceKind::Poll)
+    return poll(Event, System, Result);
   if (Service == ServiceKind::SetXattr || Service == ServiceKind::FsetXattr ||
       Service == ServiceKind::RemoveXattr ||
       Service == ServiceKind::FremoveXattr)

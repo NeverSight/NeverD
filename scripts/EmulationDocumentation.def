@@ -54,6 +54,13 @@ NEVERD_EMULATION_DOC_TOKEN(Darwin, "EACCES13")
 NEVERD_EMULATION_DOC_TOKEN(Darwin,
                            "OwnerQueriesKeepPermissionAndUnknownBoundaries")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "GroupMembershipUID")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "poll230 / poll_nocancel417")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "constructive regular provider: nonrevoked")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "independent last requested index")
+NEVERD_EMULATION_DOC_TOKEN(Darwin,
+                           "all41 other file routes closed before preflight")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "59 current native-common cases")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "582 mixed controls and captures")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "group_membership_uid")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "4294967195")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "ordinary-queries-closed-groups")

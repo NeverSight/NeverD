@@ -131,3 +131,6 @@ NEVERD_NATIVE_DARWIN_CASE(
     OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch)
 NEVERD_NATIVE_DARWIN_CASE(
     OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver)
+
+NEVERD_NATIVE_DARWIN_CASE(
+    ImmediatePollPreservesFiltersCopiesAndExplicitResourceKnowledge)

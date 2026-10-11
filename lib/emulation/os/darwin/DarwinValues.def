@@ -112,6 +112,14 @@ NEVERD_DARWIN_VALUE(FileDirectoryMode, 0x4000)
 NEVERD_DARWIN_VALUE(FileSymbolicLinkMode, 0xa000)
 NEVERD_DARWIN_VALUE(FilePermissionMask, 0x0fff)
 NEVERD_DARWIN_VALUE(MaxWriteBytes, 0x7fffffff)
+NEVERD_DARWIN_VALUE(PollOpenMax, 10240)
+NEVERD_DARWIN_VALUE(PollFDSetSize, 1024)
+NEVERD_DARWIN_VALUE(PollReadEvents, 0x00d3)
+NEVERD_DARWIN_VALUE(PollWriteEvents, 0x0104)
+NEVERD_DARWIN_VALUE(PollVNodeEvents, 0x1e00)
+NEVERD_DARWIN_VALUE(PollOutOfBandEvents, 0x0082)
+NEVERD_DARWIN_VALUE(PollOrdinaryReadEvents, 0x0041)
+NEVERD_DARWIN_VALUE(PollInvalid, 0x0020)
 NEVERD_DARWIN_VALUE(MaxIOVectors, 1024)
 NEVERD_DARWIN_VALUE(BadAddress, 14)
 NEVERD_DARWIN_VALUE(InvalidArgument, 22)
@@ -159,6 +167,7 @@ NEVERD_DARWIN_SERVICE(LinkAt, 471, Int)
 NEVERD_DARWIN_SERVICE(Exit, 1, None)
 NEVERD_DARWIN_SERVICE(Read, 3, Wide)
 NEVERD_DARWIN_SERVICE(Write, 4, Wide)
+NEVERD_DARWIN_SERVICE(Poll, 230, Int)
 NEVERD_DARWIN_SERVICE(Readv, 120, Wide)
 NEVERD_DARWIN_SERVICE(Writev, 121, Wide)
 NEVERD_DARWIN_SERVICE(Preadv, 540, Wide)
@@ -259,6 +268,7 @@ NEVERD_DARWIN_SERVICE_ALIAS(Readv, 411)
 NEVERD_DARWIN_SERVICE_ALIAS(Writev, 412)
 NEVERD_DARWIN_SERVICE_ALIAS(Preadv, 542)
 NEVERD_DARWIN_SERVICE_ALIAS(Pwritev, 543)
+NEVERD_DARWIN_SERVICE_ALIAS(Poll, 417)
 NEVERD_DARWIN_SERVICE_ALIAS(Pread, 414)
 NEVERD_DARWIN_SERVICE_ALIAS(Pwrite, 415)
 NEVERD_DARWIN_SERVICE_ALIAS(OpenAt, 464)
@@ -627,6 +637,19 @@ NEVERD_DARWIN_DIAGNOSTIC(
     "Darwin directory position buffer is partially writable")
 NEVERD_DARWIN_DIAGNOSTIC(DirectoryPartialFlags,
                          "Darwin directory flags buffer is partially writable")
+NEVERD_DARWIN_DIAGNOSTIC(
+    PollNoFile, "Darwin poll NOFILE resource observation is not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    PollCredentials,
+    "Darwin poll effective credential observation is not configured")
+NEVERD_DARWIN_DIAGNOSTIC(PollWait, "Darwin poll waiting is not implemented")
+NEVERD_DARWIN_DIAGNOSTIC(
+    PollObject,
+    "Darwin poll readiness for this descriptor kind is not implemented")
+NEVERD_DARWIN_DIAGNOSTIC(
+    PollEvents, "Darwin poll OOB/vnode notifications are not implemented")
+NEVERD_DARWIN_DIAGNOSTIC(PollPartialOutput,
+                         "Darwin poll partial array copyout is not implemented")
 NEVERD_DARWIN_DIAGNOSTIC(FileControl, "unsupported Darwin fcntl command")
 NEVERD_DARWIN_DIAGNOSTIC(
     FilePathConf,

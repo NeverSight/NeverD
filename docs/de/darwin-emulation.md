@@ -1,6 +1,6 @@
 **Sprachen**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
+<!-- i18n-source: c5503091e713c63aa7b08a8cbd5fab1b5cc3c8d8950bb7da4fe754dbe5787137 -->
 
 [← Dokumentationsübersicht](README.md)
 
@@ -37,7 +37,7 @@ Externe Dylibs, Imports, Rebases/Chained Fixups, Konstruktoren/Destruktoren, TLS
 
 ## Darwin-Dienste
 
-BSD-Aufrufe auf ARM64 nutzen X16, X0–X5 und `svc #0x80`; x64 die BSD-Klasse `0x02000000`, RAX und RDI/RSI/RDX/R10/R8/R9. Erfolg löscht Carry, Fehler setzt Carry und liefert positives errno. ARM64 löscht X1; x64 löscht RDX nur bei Erfolg und erhält es bei Fehlern. SYSCALL-Registeränderungen sind explizit. Der Bericht kennzeichnet BSD-Fehler mit `result` und `error=true`; nicht zurückkehrende oder nicht unterstützte Aufrufe haben keines dieser Felder. Grundlage sind XNU-Eintrittspfade für [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c) und [x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c); Apple-Code wurde nicht übernommen.
+BSD-Aufrufe auf ARM64 nutzen X16, X0–X5 und `svc #0x80`; x64 die BSD-Klasse `0x02000000`, RAX und RDI/RSI/RDX/R10/R8/R9. Erfolg löscht Carry, Fehler setzt Carry und liefert positives errno. ARM64 löscht X1; x64 löscht RDX nur bei Erfolg und erhält es bei Fehlern. SYSCALL-Registeränderungen sind explizit. Der Bericht kennzeichnet BSD-Fehler mit `result` und `error=true`; nicht zurückkehrende oder nicht unterstützte Aufrufe haben in JSON `result: null` und kein `error`-Feld. Grundlage sind XNU-Eintrittspfade für [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c) und [x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c); Apple-Code wurde nicht übernommen.
 
 Unterstützt werden `exit`, `write`, `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `getegid`, `getgroups`, `mmap`, `mprotect`, `munmap`. PID ist1000 und PPID1; UID/GID sind standardmäßig1000 oder die unten explizit erklärten realen/effektiven IDs. Deskriptoren 1 und 2 erfassen Bytes einschließlich NUL und Nicht-UTF8; geschlossene oder nur lesbare Deskriptoren ergeben EBADF. Bei teilweisem Kopieren bleiben gelesene Bytes erhalten, der nachfolgende Zugriffsfehler bleibt EFAULT. Längen über `INT_MAX` ergeben EINVAL vor Deskriptor-, Zeiger- oder Budgetprüfung: [XNU write](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_generic.c).
 
@@ -1124,7 +1124,7 @@ owner bits / whole-mask group-world outcomes / EACCES13
 credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
 real credential copy / first supplementary match / displacement disables memberd
 missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
-all40 other file routes and direct/file-backed mappings closed / typed streams only
+all41 other file routes and direct/file-backed mappings closed / typed streams only
 ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
 OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
 73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
@@ -1162,3 +1162,27 @@ native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).
+
+## Sofortige Bereitschaft gewöhnlicher Dateien
+
+Raw BSD poll(230) und poll_nocancel(417) unterstützen timeout low int32=0. nfds wird uint32; über OPEN_MAX10240 folgt EINVAL22 vor Zeigern. Positive Anzahlen brauchen explizites darwin_system.resource_limits resource8 Current. Darüber und über FD_SETSIZE1024 folgt EINVAL; kleinere Anzahlen brauchen die ursprüngliche explizite effektive UID, nichtnull ergibt EINVAL, null erlaubt. Die root-Ausnahme ist nur Quell-/Modellevidenz. DescriptorLimit, kern.maxfilesperproc, FD-Zahl und Laufzeitbudgets liefern diese Beobachtung nicht. Null Anzahl berührt keinen Arrayzeiger; anderer timeout bleibt nach Anzahlzulassung unsupported.
+
+Der konstruierte virtuelle reguläre Anbieter erklärt nicht widerrufene Beschreibungen, erfolgreiche gewöhnliche Lese-/Schreibfilterregistrierung und keine MAC/Anbieterverweigerung. Der native vnode-Typ beweist keine Registrierung. Unter dieser Voraussetzung sind IN/RDNORM und OUT/WRBAND auch bei EOF/readonly bereit, ohne Ableitung aus Restbytes, Zugriffsflags, O_NONBLOCK oder Schreibrechten. Numerische FD/Lese- und FD/Schreibschlüssel behalten jeweils die letzte Zeile; verschiedene dup-FDs bleiben getrennt. HUP allein registriert Lesen ohne Bereitschaftsbit. Negative FD/ignorierte Bits ergeben null, geschlossene Registrierungen pro Zeile POLLNVAL32. Live OOB/vnode, Streams/Verzeichnisse/Links werden vor Ausgabe verweigert. Ganze 8-Byte-Eingabe wird aufgenommen; unvollständige Eingabe/komplett unschreibbare Ausgabe ergibt EFAULT14, partielle Ausgabe wird ohne Präfixkopie verweigert. Ganze Ausgabe erhält fd/events und ersetzt revents. Beide statischen Berechtigungsmodi sperren Poll vor Vorprüfung, auch bei null Anzahl; die gemeinsame Sperrliste enthält41 Routen.
+
+SDK-freies immediate-poll umfasst86 Ereignisse, fünf Software-/drei erforderliche ARM64 HVF-Profile sowie C/CLI/Python und eine neue gemeinsame native Referenz, aktuell59 Fälle. Die unabhängige O0/O1/O2 ARM64-Probe hält582 gemischte literale ABI/Fehlerkontrollen und reguläre Anbieterbeobachtungen fest, keine universellen Bereitschaftskonstanten. Frühere58 Belege behalten Quellidentität; Downloadfehler, erster nativer Timeout und ursprüngliche Fristen bleiben erhalten. Intel HVF, physisches iOS, Widerruf/MAC/Registrierungsverweigerung, select, Warten, asynchrone Anbieter, Netzwerk, fortlaufende Uhren, echte Mach IPC/Threads, dyld/TLS und vollständige Frameworks bleiben ungeprüft oder unvollständig.
+
+```text
+poll230 / poll_nocancel417 / timeout low int32=0 / nfds uint32
+ResourceLimits[8].Current / OPEN_MAX10240 / FD_SETSIZE1024 / explicit original effective UID
+constructive regular provider: nonrevoked / successful ordinary filter attachment / no MAC-provider refusal
+numeric FD + read/write filter / independent last requested index / distinct dup aliases
+IN1 RDNORM64 OUT4 WRBAND256 / HUP16 trigger only / closed registrations POLLNVAL32
+negative and ignored-only rows zero / whole input snapshot / whole output / partial output unsupported
+EFAULT14 EINVAL22 / no ready prefix on unsupported row / zero count no pointer
+static-owner-queries and static-ordinary-queries / all41 other file routes closed before preflight
+immediate-poll86 events / five software + three mandatory ARM64 HVF profiles / C CLI Python
+59 current native-common cases / prior58 source identity preserved / 582 mixed controls and captures
+native Intel and physical iOS unverified / waits select revoked-MAC-provider failures networking unfinished
+```
+
+[XNU poll ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/poll.h), [poll registration and copy order](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/sys_generic.c), [vnode registration and regular filters](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_vnops.c).
