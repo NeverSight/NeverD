@@ -1,3 +1,4 @@
+#include "HighCHostExecution.h"
 #include "NeverDLiftFixture.h"
 
 namespace {
@@ -727,4 +728,84 @@ TEST_F(X86_64_Intrinsics, LlvmC_WrmsrUsesIntrinsic) {
               content.find("wrmsr") != std::string::npos)
       << "Expected wrmsr-related output in LLVM C decompile:\n"
       << content.substr(0, 3000);
+}
+
+class X86_64_HighCIntrinsics : public HighCHostExecutionTest {};
+
+// PADDSB, PSUBUSB, PADDUSW and PSUBSW saturate each lane.  HighC computes a
+// lane in int32_t and clamps it to the lane's range.
+TEST_F(X86_64_HighCIntrinsics, SaturatingLanesRunLikeTheSource) {
+  expectHighCRunsLikeSource(
+      {"-target", "x86_64-linux-gnu"}, R"C(
+#include <emmintrin.h>
+int saturate(int a) {
+  __m128i x = _mm_set1_epi32((int)((unsigned)a * 0x01030507u));
+  __m128i y = _mm_set1_epi32(a ^ 0x7F80FF01);
+  __m128i r = _mm_adds_epi8(x, y);
+  r = _mm_xor_si128(r, _mm_subs_epu8(x, y));
+  r = _mm_xor_si128(r, _mm_adds_epu16(x, y));
+  r = _mm_xor_si128(r, _mm_subs_epi16(x, y));
+  return _mm_cvtsi128_si32(r) ^ _mm_extract_epi16(r, 5);
+}
+)C",
+      "saturate", {"saturate"},
+      {0, 1, -1, 0x7F, -0x80, 0x12345678, 0x40404040, 0x7FFF7FFF, -0x7FFFFFFF});
+}
+
+// CRC32 of each operand width prints as the SSE4.2 intrinsic, the function
+// taking the target feature the intrinsic needs.
+TEST_F(X86_64_HighCIntrinsics, Crc32RunsLikeTheSource) {
+  expectHighCRunsLikeSource({"-target", "x86_64-linux-gnu"}, R"C(
+#include <nmmintrin.h>
+__attribute__((target("sse4.2"))) int checksum(int a) {
+  unsigned c = _mm_crc32_u8((unsigned)a, (unsigned char)(a >> 3));
+  c = _mm_crc32_u16(c, (unsigned short)((unsigned)a * 3u));
+  c = _mm_crc32_u32(c, (unsigned)a ^ 0xDEADBEEFu);
+  return (int)_mm_crc32_u64(c, (unsigned long long)(unsigned)a *
+                                   0x9E3779B97F4A7C15ull);
+}
+)C",
+                            "checksum", {"checksum"},
+                            {0, 1, -1, 0x7F, 0x12345678, -0x7FFFFFFF});
+}
+
+// An instruction past the x86-64 baseline prints as its intrinsic in a
+// function that takes the intrinsic's target feature, so the C compiles with
+// no -m option.
+TEST_F(X86_64_Intrinsics, Decompile_IntrinsicsTakeTheirTargetFeature) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "assembling x86-64 requires Clang";
+  const auto Source = tmpFile("beyond_baseline.s");
+  const auto Object = tmpFile("beyond_baseline.o");
+  std::ofstream(Source) << R"S(
+.text
+.globl beyond_baseline
+.type beyond_baseline,@function
+beyond_baseline:
+  pdep %rsi, %rdi, %rax
+  pext %rsi, %rax, %rax
+  movq %rax, %xmm0
+  movq %rsi, %xmm1
+  pshufb %xmm1, %xmm0
+  aesenc %xmm1, %xmm0
+  movq %xmm0, %rax
+  ret
+.size beyond_baseline,.-beyond_baseline
+)S";
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-c",
+                               Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  auto r = decompileToHighC(Object);
+  ASSERT_EQ(r.exitCode, 0) << "Decompile failed: " << r.err;
+  const std::string C = readDecompiledFile("decompiled_high.c");
+  for (const char *Name :
+       {"_pdep_u64(", "_pext_u64(", "_mm_shuffle_epi8(", "_mm_aesenc_si128("})
+    EXPECT_NE(C.find(Name), std::string::npos) << Name << "\n" << C;
+  EXPECT_EQ(C.find("unknown"), std::string::npos) << C;
+  const auto CFile = tmpFile("beyond_baseline_high.c");
+  std::ofstream(CFile) << C;
+  const auto Compiled = checkHighCClangCompile(
+      CFile, {"-target", "x86_64-linux-gnu", "-ffreestanding", "-std=gnu11"});
+  EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << C;
 }

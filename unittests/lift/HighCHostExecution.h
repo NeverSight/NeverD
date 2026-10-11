@@ -26,9 +26,10 @@ class HighCHostExecutionTest : public NeverDLiftTest {
 protected:
   /// Compile \p Kernel with Clang and \p TargetFlags, decompile it to HighC,
   /// and expect the C of \p Entry, which takes and returns an int, to return
-  /// what \p Kernel's does for each of \p Values.  \p Names are the kernel's
-  /// functions, renamed in the reference copy.  An unknown value in the C
-  /// fails.
+  /// what \p Kernel's does for each of \p Values.  Only the int the ABI
+  /// returns is compared: the C may return the whole register.  \p Names are
+  /// the kernel's functions, renamed in the reference copy.  An unknown value
+  /// in the C fails.
   void expectHighCRunsLikeSource(const std::vector<std::string> &TargetFlags,
                                  const std::string &Kernel,
                                  const std::string &Entry,
@@ -76,7 +77,7 @@ protected:
     for (int Value : Values)
       Main += std::to_string(Value) + ", ";
     Main += "};\n  for (unsigned I = 0; I != sizeof(Values) / sizeof(*Values);"
-            " ++I)\n    if (" +
+            " ++I)\n    if ((int)" +
             Entry + "(Values[I]) != ref_" + Entry +
             "(Values[I]))\n      return 1;\n  return 0;\n}\n";
     const auto HostSource = tmpFile("host.c");

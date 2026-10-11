@@ -1,0 +1,26 @@
+//===- X86SaturatingLanes.def - x86 saturating lane arithmetic --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// The saturating integer arithmetic the x86 lifter keeps one lane at a time
+/// (PADDSB/PADDSW, PADDUSB/PADDUSW, PSUBSB/PSUBSW, PSUBUSB/PSUBUSW, and the
+/// PHADDSW/PHSUBSW sums).  HighC prints each through a helper on the lane's
+/// signed or unsigned integer type, computing in int32_t and clamping to the
+/// lane's range.
+///
+//===----------------------------------------------------------------------===//
+
+// NEVERD_X86_SATURATING_LANE(Intrinsic, Operation, Operator, Signed)
+#ifndef NEVERD_X86_SATURATING_LANE
+#define NEVERD_X86_SATURATING_LANE(Intrinsic, Operation, Operator, Signed)
+#endif
+
+NEVERD_X86_SATURATING_LANE(X86_SaddSat, "adds", "+", true)
+NEVERD_X86_SATURATING_LANE(X86_UaddSat, "adds", "+", false)
+NEVERD_X86_SATURATING_LANE(X86_SsubSat, "subs", "-", true)
+NEVERD_X86_SATURATING_LANE(X86_UsubSat, "subs", "-", false)
+
+#undef NEVERD_X86_SATURATING_LANE

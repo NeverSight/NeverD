@@ -8,6 +8,13 @@ C(Intrinsic::X87ReadStatus, "neverd_x87_read_status");
 C(Intrinsic::X64Syscall, "neverd_x64_syscall");
 C(Intrinsic::X64WindowsSyscall, "neverd_x64_windows_syscall");
 
+// SSE4.2 CRC32 (the function takes the crc32 target feature,
+// X86IntrinsicTargetFeatures.def).
+C(Intrinsic::X86Crc32b, "_mm_crc32_u8");
+C(Intrinsic::X86Crc32w, "_mm_crc32_u16");
+C(Intrinsic::X86Crc32d, "_mm_crc32_u32");
+C(Intrinsic::X86Crc32q, "_mm_crc32_u64");
+
 // SSE/AVX shuffle & unpack
 C(Intrinsic::Pshufb, "_mm_shuffle_epi8");
 C(Intrinsic::Pshufd, "_mm_shuffle_epi32");

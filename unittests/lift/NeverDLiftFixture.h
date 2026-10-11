@@ -334,6 +334,24 @@ protected:
   RunResult
   checkHighCClangSyntax(const fs::path &CFile,
                         const std::vector<std::string> &ExtraArgs) const {
+    return runHighCClang(CFile, ExtraArgs, {"-fsyntax-only"});
+  }
+
+  // As checkHighCClangSyntax, compiling the C to an object: Clang checks that
+  // a function has the target features of the intrinsics it calls only when
+  // it generates code.
+  RunResult
+  checkHighCClangCompile(const fs::path &CFile,
+                         const std::vector<std::string> &ExtraArgs) const {
+    return runHighCClang(
+        CFile, ExtraArgs,
+        {"-O1", "-c", "-o", (tmp() / (CFile.stem().string() + ".o")).string()});
+  }
+
+  // Run Clang on HighC with the builtin stubs, \p ExtraArgs, then \p Mode.
+  RunResult runHighCClang(const fs::path &CFile,
+                          const std::vector<std::string> &ExtraArgs,
+                          const std::vector<std::string> &Mode) const {
     if (!hasCrossTargetClang()) {
       // GTEST_SKIP returns from its lexical helper.  Record the skip in a void
       // helper, then return a successful sentinel so the caller's immediate
@@ -351,10 +369,11 @@ protected:
     Shim.close();
 
     std::vector<std::string> Args = ExtraArgs;
-    Args.insert(Args.end(),
-                {"-I", tmp().string(), "-include",
-                 std::string(TEST_SOURCE_DIR) + "/aarch64/HostClangBuiltins.h",
-                 "-fsyntax-only", CFile.string()});
+    Args.insert(Args.end(), {"-I", tmp().string(), "-include",
+                             std::string(TEST_SOURCE_DIR) +
+                                 "/aarch64/HostClangBuiltins.h"});
+    Args.insert(Args.end(), Mode.begin(), Mode.end());
+    Args.push_back(CFile.string());
     return exec(NEVERD_TEST_CLANG, Args);
   }
 

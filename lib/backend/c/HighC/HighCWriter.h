@@ -779,6 +779,9 @@ public:
   /// The helper counting a zero's leading zeros as its width, by the bits it
   /// counts in (32 or 64).
   std::map<unsigned, std::string> LeadingZeroHelpers;
+  /// The helper of each x86 saturating lane operation and lane width
+  /// (X86SaturatingLanes.def).
+  std::map<std::pair<Intrinsic, unsigned>, std::string> SaturatingLaneHelpers;
   std::map<std::string, unsigned> PartialIntegerBytes;
   std::set<std::pair<std::string, NdMemoryAddressSpace>> SegmentedMemoryTypes;
   std::set<std::tuple<std::string, NdMemoryOrdering, NdMemoryAddressSpace>>

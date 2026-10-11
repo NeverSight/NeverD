@@ -156,6 +156,8 @@ struct X86CIntrinsicFeatures {
   unsigned GfniWidth = 0;
   bool HasVdbpsadbw = false;
   bool NeedsVdbpsadbwVL = false;
+  /// The features X86IntrinsicTargetFeatures.def names.
+  std::set<std::string> Named;
 };
 
 X86CIntrinsicFeatures collectX86CIntrinsicFeatures(const HighFunc &Func) {
@@ -175,6 +177,15 @@ X86CIntrinsicFeatures collectX86CIntrinsicFeatures(const HighFunc &Func) {
       Features.HasVdbpsadbw = true;
       if (Expr.Type && Expr.Type->Size != 64)
         Features.NeedsVdbpsadbwVL = true;
+    }
+    switch (Expr.IntrinsicId) {
+#define NEVERD_X86_TARGET_FEATURE(Intrinsic, Feature)                          \
+  case I::Intrinsic:                                                           \
+    Features.Named.insert(Feature);                                            \
+    break;
+#include "neverd/backend/c/render/HighC/X86IntrinsicTargetFeatures.def"
+    default:
+      break;
     }
     for (const ExprPtr &Operand : Expr.Operands)
       if (Operand)
@@ -202,6 +213,9 @@ std::string x86CIntrinsicTargetFeatures(const HighFunc &Func) {
     Features.emplace_back("avx512vl");
   if (Required.GfniWidth != 0)
     Features.emplace_back("gfni");
+  for (const std::string &Feature : Required.Named)
+    if (!llvm::is_contained(Features, Feature))
+      Features.push_back(Feature);
 
   std::string Result;
   for (const std::string &Feature : Features) {

@@ -989,6 +989,14 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
+    if (const auto Bits = x86SaturatingLaneBits(E)) {
+      const auto Helper = SaturatingLaneHelpers.find({E.IntrinsicId, *Bits});
+      if (Helper == SaturatingLaneHelpers.end())
+        llvm::report_fatal_error("uncollected x86 saturating lane helper");
+      return renderX86SaturatingLane(
+          E, Helper->second,
+          [this](const HighExpr &Expr) { return exprStr(Expr); });
+    }
     auto Typed = renderX86TypedIntrinsicCall(
         Opts.TheArch, E, [this](const HighExpr &Expr) { return exprStr(Expr); },
         HasCIntrinsics, Opts.Format != BinaryFormat::COFF,

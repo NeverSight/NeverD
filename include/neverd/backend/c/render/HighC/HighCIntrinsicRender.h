@@ -104,6 +104,27 @@ std::string renderX86TypedIntrinsicCall(
     bool GnuToolchain,
     std::function<std::string(Intrinsic, unsigned)> FPHelperName = {});
 
+/// The lane width, in bits, of an x86 saturating lane operation
+/// (X86SaturatingLanes.def) whose C helper \p Call needs, or nullopt when
+/// \p Call is no such operation of a 1- or 2-byte lane.
+std::optional<unsigned> x86SaturatingLaneBits(const HighExpr &Call);
+
+/// The name to give the helper of saturating lane operation \p Id on
+/// \p Bits-bit lanes (`neverd_adds_i8`).
+std::string x86SaturatingLaneHelperName(Intrinsic Id, unsigned Bits);
+
+/// Write the helper \p Name of saturating lane operation \p Id on \p Bits-bit
+/// lanes: it computes in int32_t and clamps to the lane's range.
+void writeX86SaturatingLaneHelper(llvm::raw_ostream &OS,
+                                  const std::string &Name, Intrinsic Id,
+                                  unsigned Bits);
+
+/// \p Call, a saturating lane operation, as a call of its helper \p Helper
+/// on its operands cast to the lane type.
+std::string renderX86SaturatingLane(
+    const HighExpr &Call, const std::string &Helper,
+    const std::function<std::string(const HighExpr &)> &ExprFn);
+
 /// Return the fail-closed diagnostic for an x86 intrinsic that cannot be
 /// represented faithfully as standalone C, or nullptr when normal rendering
 /// may proceed. renderX86IntrinsicCall uses this same policy.

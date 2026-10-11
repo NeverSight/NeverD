@@ -1,0 +1,155 @@
+//===- X86IntrinsicTargetFeatures.def - x86 intrinsic features --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// The target feature a function needs to call the C intrinsic HighC spells
+/// an x86 operation with: the function takes `__attribute__((target(...)))`
+/// naming it, as the compiler's intrinsic headers require, so the C builds
+/// with no -m option for an instruction past the target's baseline (i386 has
+/// no SSE at all).  Each entry is the feature Clang's header declares the
+/// intrinsic with; one the x86-64 baseline already has costs nothing there.
+///
+//===----------------------------------------------------------------------===//
+
+// NEVERD_X86_TARGET_FEATURE(Intrinsic, Feature)
+#ifndef NEVERD_X86_TARGET_FEATURE
+#define NEVERD_X86_TARGET_FEATURE(Intrinsic, Feature)
+#endif
+
+// SSE
+NEVERD_X86_TARGET_FEATURE(Shufps, "sse")
+NEVERD_X86_TARGET_FEATURE(Unpckhps, "sse")
+NEVERD_X86_TARGET_FEATURE(Unpcklps, "sse")
+NEVERD_X86_TARGET_FEATURE(Sfence, "sse")
+
+// SSE2
+NEVERD_X86_TARGET_FEATURE(Pshufd, "sse2")
+NEVERD_X86_TARGET_FEATURE(Pshufhw, "sse2")
+NEVERD_X86_TARGET_FEATURE(Pshuflw, "sse2")
+NEVERD_X86_TARGET_FEATURE(Shufpd, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpckhqdq, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpcklqdq, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpckhdq, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpckldq, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpckhwd, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpcklwd, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpckhbw, "sse2")
+NEVERD_X86_TARGET_FEATURE(Punpcklbw, "sse2")
+NEVERD_X86_TARGET_FEATURE(Unpckhpd, "sse2")
+NEVERD_X86_TARGET_FEATURE(Unpcklpd, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsllD, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsllQ, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsllW, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsrlD, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsrlQ, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsrlW, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsraD, "sse2")
+NEVERD_X86_TARGET_FEATURE(PsraW, "sse2")
+NEVERD_X86_TARGET_FEATURE(PackedShift, "sse2")
+NEVERD_X86_TARGET_FEATURE(Pmovmskb, "sse2")
+NEVERD_X86_TARGET_FEATURE(Mfence, "sse2")
+NEVERD_X86_TARGET_FEATURE(Lfence, "sse2")
+NEVERD_X86_TARGET_FEATURE(Clflush, "sse2")
+
+// SSE3
+NEVERD_X86_TARGET_FEATURE(Movddup, "sse3")
+NEVERD_X86_TARGET_FEATURE(Movshdup, "sse3")
+NEVERD_X86_TARGET_FEATURE(Movsldup, "sse3")
+
+// SSSE3
+NEVERD_X86_TARGET_FEATURE(Pshufb, "ssse3")
+NEVERD_X86_TARGET_FEATURE(Palignr, "ssse3")
+
+// SSE4.1
+NEVERD_X86_TARGET_FEATURE(Dpps, "sse4.1")
+NEVERD_X86_TARGET_FEATURE(Mpsadbw, "sse4.1")
+NEVERD_X86_TARGET_FEATURE(Phminposuw, "sse4.1")
+
+// SSE4.2
+NEVERD_X86_TARGET_FEATURE(Pcmpistri, "sse4.2")
+NEVERD_X86_TARGET_FEATURE(Pcmpistrm, "sse4.2")
+NEVERD_X86_TARGET_FEATURE(Pcmpestri, "sse4.2")
+NEVERD_X86_TARGET_FEATURE(Pcmpestrm, "sse4.2")
+NEVERD_X86_TARGET_FEATURE(PcmpistrFlag, "sse4.2")
+NEVERD_X86_TARGET_FEATURE(PcmpestrFlag, "sse4.2")
+NEVERD_X86_TARGET_FEATURE(X86Crc32b, "crc32")
+NEVERD_X86_TARGET_FEATURE(X86Crc32w, "crc32")
+NEVERD_X86_TARGET_FEATURE(X86Crc32d, "crc32")
+NEVERD_X86_TARGET_FEATURE(X86Crc32q, "crc32")
+
+// AES, CLMUL and SHA
+NEVERD_X86_TARGET_FEATURE(AesEnc, "aes")
+NEVERD_X86_TARGET_FEATURE(AesEncLast, "aes")
+NEVERD_X86_TARGET_FEATURE(AesDec, "aes")
+NEVERD_X86_TARGET_FEATURE(AesDecLast, "aes")
+NEVERD_X86_TARGET_FEATURE(AesImc, "aes")
+NEVERD_X86_TARGET_FEATURE(AesKeyGenAssist, "aes")
+NEVERD_X86_TARGET_FEATURE(AesGeneric, "aes")
+NEVERD_X86_TARGET_FEATURE(Pclmulqdq, "pclmul")
+NEVERD_X86_TARGET_FEATURE(Sha1Rnds4, "sha")
+NEVERD_X86_TARGET_FEATURE(Sha1Nexte, "sha")
+NEVERD_X86_TARGET_FEATURE(Sha1Msg1, "sha")
+NEVERD_X86_TARGET_FEATURE(Sha1Msg2, "sha")
+NEVERD_X86_TARGET_FEATURE(Sha256Rnds2, "sha")
+NEVERD_X86_TARGET_FEATURE(Sha256Msg1, "sha")
+NEVERD_X86_TARGET_FEATURE(Sha256Msg2, "sha")
+
+// AVX and AVX2
+NEVERD_X86_TARGET_FEATURE(Perm2f128, "avx")
+NEVERD_X86_TARGET_FEATURE(BroadcastSS, "avx2")
+NEVERD_X86_TARGET_FEATURE(BroadcastSD, "avx2")
+NEVERD_X86_TARGET_FEATURE(BroadcastB, "avx2")
+NEVERD_X86_TARGET_FEATURE(BroadcastW, "avx2")
+NEVERD_X86_TARGET_FEATURE(BroadcastD, "avx2")
+NEVERD_X86_TARGET_FEATURE(BroadcastQ, "avx2")
+NEVERD_X86_TARGET_FEATURE(Blendd, "avx2")
+NEVERD_X86_TARGET_FEATURE(Permd, "avx2")
+NEVERD_X86_TARGET_FEATURE(MaskedLoadD, "avx2")
+NEVERD_X86_TARGET_FEATURE(MaskedLoadQ, "avx2")
+NEVERD_X86_TARGET_FEATURE(MaskedStoreD, "avx2")
+NEVERD_X86_TARGET_FEATURE(MaskedStoreQ, "avx2")
+NEVERD_X86_TARGET_FEATURE(VGather, "avx2")
+
+// AVX-512
+NEVERD_X86_TARGET_FEATURE(Vpcompress, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vpexpand, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vpternlog, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vgetexp, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vgetmant, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vscalef, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vfixupimm, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vpgather, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vpscatter, "avx512f")
+NEVERD_X86_TARGET_FEATURE(Vpconflict, "avx512cd")
+NEVERD_X86_TARGET_FEATURE(Vfpclass, "avx512dq")
+NEVERD_X86_TARGET_FEATURE(Vreduce, "avx512dq")
+NEVERD_X86_TARGET_FEATURE(Vrange, "avx512dq")
+NEVERD_X86_TARGET_FEATURE(Vpmultishiftqb, "avx512vbmi")
+NEVERD_X86_TARGET_FEATURE(Vpshufbitqmb, "avx512bitalg")
+
+// BMI2
+NEVERD_X86_TARGET_FEATURE(Pdep, "bmi2")
+NEVERD_X86_TARGET_FEATURE(Pext, "bmi2")
+
+// Cache control, transactions, state saving and protection keys
+NEVERD_X86_TARGET_FEATURE(Clflushopt, "clflushopt")
+NEVERD_X86_TARGET_FEATURE(Clwb, "clwb")
+NEVERD_X86_TARGET_FEATURE(Xbegin, "rtm")
+NEVERD_X86_TARGET_FEATURE(Xend, "rtm")
+NEVERD_X86_TARGET_FEATURE(Xtest, "rtm")
+NEVERD_X86_TARGET_FEATURE(Xsave64, "xsave")
+NEVERD_X86_TARGET_FEATURE(Xrstor64, "xsave")
+NEVERD_X86_TARGET_FEATURE(Xgetbv, "xsave")
+NEVERD_X86_TARGET_FEATURE(Xsaves64, "xsaves")
+NEVERD_X86_TARGET_FEATURE(Xrstors64, "xsaves")
+NEVERD_X86_TARGET_FEATURE(Xsavec64, "xsavec")
+NEVERD_X86_TARGET_FEATURE(Xsaveopt64, "xsaveopt")
+NEVERD_X86_TARGET_FEATURE(CetIncSsp, "shstk")
+NEVERD_X86_TARGET_FEATURE(CetRdSsp, "shstk")
+NEVERD_X86_TARGET_FEATURE(Wrpkru, "pku")
+NEVERD_X86_TARGET_FEATURE(Rdpkru, "pku")
+
+#undef NEVERD_X86_TARGET_FEATURE
