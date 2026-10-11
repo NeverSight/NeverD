@@ -84,6 +84,10 @@ uint16_t countedBytes(const HighExpr &Operand);
 /// at most 4 bytes (unsigned int), 64 for 8 bytes, and 0 for any other width.
 unsigned countedBits(const HighExpr &Operand);
 
+/// Whether \p E prints as integer arithmetic, whose C type follows from its
+/// operands' by C's conversions rather than from the IR's type.
+bool printsIntegerArithmetic(const HighExpr &E);
+
 /// \p E prints as a C expression whose value is 0 or 1: a comparison, a
 /// logical operation, or a carry or overflow test.  Its zero or sign
 /// extension is that value at any width, with no view of its own byte.
@@ -646,6 +650,9 @@ public:
   /// See printedIntegerType.
   std::unordered_map<const HighExpr *, std::pair<uint16_t, bool>>
       PrintedIntegerTypes;
+  /// Variables printed as forwarded integer arithmetic of no known C type:
+  /// their own types do not decide how the text reads.
+  std::unordered_set<const HighExpr *> UntypedArithmeticTexts;
   /// See signedCarrierResult: the carrier text and its precedence.
   std::unordered_map<const HighExpr *, std::pair<std::string, int>>
       UnsignedCarrierTexts;

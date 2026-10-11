@@ -264,6 +264,31 @@ bool isPlainInteger(const TypeRef &T) {
 
 } // anonymous namespace
 
+bool printsIntegerArithmetic(const HighExpr &E) {
+  if (E.Kind == ExprKind::UnaryOp)
+    return E.Op == NdOp::INT_NEGATE || E.Op == NdOp::INT_NOT;
+  if (E.Kind != ExprKind::BinOp)
+    return false;
+  switch (E.Op) {
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_MULT:
+  case NdOp::INT_DIV:
+  case NdOp::INT_SDIV:
+  case NdOp::INT_REM:
+  case NdOp::INT_SREM:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_LEFT:
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool printsTruthValue(const HighExpr &E) {
   if (E.Kind == ExprKind::UnaryOp)
     return E.Op == NdOp::BOOL_NOT;
@@ -3941,6 +3966,7 @@ bool HighCWriter::isNamedFrameMemory(const HighExpr &E) const {
 std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec,
                                  MemoryLoadDestination *Destination) {
   PrintedIntegerTypes.erase(&E);
+  UntypedArithmeticTexts.erase(&E);
   UnsignedCarrierTexts.erase(&E);
   std::string Text = exprStrImpl(E, ParentPrec, Destination);
   // A local's name has its declared type.
@@ -4030,10 +4056,14 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     const HighExpr *Forwarded = nullptr;
     if (auto Printed = printedForwardedVar(Name, ParentPrec, &Forwarded);
         Printed != Name) {
-      // The definition printed in place keeps the type of its own text.
-      if (Forwarded)
+      // The definition printed in place keeps the type of its own text;
+      // arithmetic of no known type reads as C converts its operands.
+      if (Forwarded) {
         if (const auto Typed = printedIntegerType(*Forwarded))
           PrintedIntegerTypes[&E] = *Typed;
+        else if (printsIntegerArithmetic(*Forwarded))
+          UntypedArithmeticTexts.insert(&E);
+      }
       return Printed;
     }
     if (std::string Unknown = unknownVarUse(E, Name, RawName); !Unknown.empty())

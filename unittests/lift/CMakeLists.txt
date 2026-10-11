@@ -69,6 +69,7 @@ add_neverd_unittest(NeverDLiftTests
   x86_32/X86_32_DShiftTests.cpp
   x86_32/X86_32_FlagsTests.cpp
   x86_32/X86_32_FPTests.cpp
+  x86_32/X86_32_HighCSignednessTests.cpp
   x86_32/X86_32_LodsMiscTests.cpp
   x86_32/X86_32_LoopTests.cpp
   x86_32/X86_32_MiscTests.cpp

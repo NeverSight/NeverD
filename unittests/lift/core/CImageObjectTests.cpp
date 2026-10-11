@@ -393,8 +393,7 @@ TEST(CImageObjects, AnIndexedTableIsDeclaredWhole) {
   ASSERT_TRUE(HighCEmitter().emit({Lookup}, OS, Options));
   OS.flush();
   EXPECT_NE(Source.find("table[16] = {"), NotFound) << Source;
-  EXPECT_NE(Source.find("&table[0] + (uint64_t)(arg0 & 15)"), NotFound)
-      << Source;
+  EXPECT_NE(Source.find("&table[0] + (arg0 & 15)"), NotFound) << Source;
   source_call_execution_test::compileAndRun(Source + R"(
 int main(void) {
   for (uint64_t i = 0; i < 40; ++i)
@@ -497,8 +496,8 @@ TEST(CImageObjects, AnAddressTheCodeKeepsReachesTheWholeObject) {
     ASSERT_TRUE(HighCEmitter().emit(Funcs, OS, Options));
     OS.flush();
     EXPECT_NE(Source.find("vals[16] = {"), NotFound) << Source;
-    source_call_execution_test::compileAndRun(
-        Source + std::string(BothFunctions ? R"(
+    source_call_execution_test::compileAndRun(Source + std::string(BothFunctions
+                                                                       ? R"(
 int main(void) {
   const int32_t *all = (const int32_t *)(uintptr_t)whole();
   const int32_t *third = (const int32_t *)(uintptr_t)third_place();
@@ -506,7 +505,7 @@ int main(void) {
          third[1] != 0x14141414;
 }
 )"
-                                           : R"(
+                                                                       : R"(
 int main(void) {
   const int32_t *third = (const int32_t *)(uintptr_t)third_place();
   return third[-2] != 0x11111111 || third[1] != 0x14141414;
@@ -614,8 +613,8 @@ TEST(CImageObjects, ARelocatedPointerTableNamesWhatItPointsTo) {
       U64);
   HighFunc Pick = function("pick", I32, TextVA);
   Pick.Params = {{"arg0", U64}, {"arg1", U64}};
-  Pick.Body = {returnStatement(
-      HighExpr::makeLoad(Sum(Row, Scaled(Param(1), 4)), I32))};
+  Pick.Body = {
+      returnStatement(HighExpr::makeLoad(Sum(Row, Scaled(Param(1), 4)), I32))};
   CEmitterOptions Options;
   Options.TheArch = Arch::X64;
   Options.Format = BinaryFormat::ELF;
@@ -647,9 +646,9 @@ BinaryImage dataImage(std::vector<uint8_t> Rodata, std::vector<uint8_t> Data) {
               SegmentFlags::Readable | SegmentFlags::Executable));
   Img.Segments.push_back(
       segment(".rodata", RodataVA, std::move(Rodata), SegmentFlags::Readable));
-  Img.Segments.push_back(segment(".data", DataVA, std::move(Data),
-                                 SegmentFlags::Readable |
-                                     SegmentFlags::Writable));
+  Img.Segments.push_back(
+      segment(".data", DataVA, std::move(Data),
+              SegmentFlags::Readable | SegmentFlags::Writable));
   return Img;
 }
 
@@ -732,7 +731,8 @@ TEST(CImageObjects, AnAddressPairKeepsItsObjects) {
   BinaryImage Img = dataImage(std::vector<uint8_t>(0x20), {});
   Img.Arch = Arch::X86;
   Img.Bits = Bitness::Bits32;
-  Img.Symbols = {dataSymbol("a", RodataVA, 8), dataSymbol("b", RodataVA + 8, 8)};
+  Img.Symbols = {dataSymbol("a", RodataVA, 8),
+                 dataSymbol("b", RodataVA + 8, 8)};
   auto Pair = HighExpr::makeBinop(
       NdOp::CONCAT,
       HighExpr::makeConst(RodataVA + 8, 4,

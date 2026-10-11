@@ -72,6 +72,25 @@ int getOpPrecedence(NdOp Op) {
   }
 }
 
+/// The type C converts both operands of arithmetic to (C17 6.3.1.8), given
+/// each as its byte width and signedness: an operand narrower than int
+/// becomes int; of two in one signedness the wider wins; otherwise the
+/// unsigned one, unless the signed one is wider.  int is 4 bytes on every
+/// target.
+std::pair<uint16_t, bool> commonArithmeticType(std::pair<uint16_t, bool> A,
+                                               std::pair<uint16_t, bool> B) {
+  const auto Promote = [](std::pair<uint16_t, bool> Type) {
+    return Type.first < 4 ? std::pair<uint16_t, bool>{4, true} : Type;
+  };
+  A = Promote(A);
+  B = Promote(B);
+  if (A.second == B.second)
+    return {std::max(A.first, B.first), A.second};
+  const auto &Unsigned = A.second ? B : A;
+  const auto &Signed = A.second ? A : B;
+  return Unsigned.first >= Signed.first ? Unsigned : Signed;
+}
+
 /// Whether the integer \p Count is certainly below \p Limit, so a shift by it
 /// needs no guard against C's undefined overshift: a constant, a mask by a
 /// small constant (x86 masks a variable count to the operand width), or such
@@ -1132,13 +1151,16 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
       if (Op->Kind == ExprKind::Const && Op->ConstVal == 0)
         return std::string("0");
       // What the text certainly prints as decides over the IR's type: a
-      // declared local or parameter can read in the other signedness.
+      // declared local or parameter can read in the other signedness, and
+      // arithmetic printed in a variable's place reads as C converts it.
       if (Op->Kind == ExprKind::Var || Op->Kind == ExprKind::Phi) {
         std::string Text = exprStr(*Op, 99);
         if (const auto Printed = printedIntegerType(*Op))
           return Printed->first == CmpSize && Printed->second == NeedsSignedCast
                      ? Text
                      : "(" + UTy + ")" + Text;
+        if (UntypedArithmeticTexts.count(Op))
+          return "(" + UTy + ")" + Text;
       }
       // So does an operation's text: a shift happens in an unsigned carrier
       // whatever its type says, and `x << 24 < y << 24` compares unsigned.
@@ -1194,6 +1216,30 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
   std::string Result = LHS + OpSym + RHS;
   if (MyPrec > 0 && MyPrec <= ParentPrec)
     Result = "(" + Result + ")";
+  // C converts the operands of arithmetic to a common type, so when both
+  // operands' printed types are known, so is this text's.  An unsuffixed
+  // literal that fits an int is one.
+  if (E.Op == NdOp::INT_ADD || E.Op == NdOp::INT_SUB ||
+      E.Op == NdOp::INT_MULT || E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR ||
+      E.Op == NdOp::INT_XOR) {
+    const auto OperandType =
+        [&](const HighExpr &Operand,
+            llvm::StringRef Text) -> std::optional<std::pair<uint16_t, bool>> {
+      if (const auto Printed = printedIntegerType(Operand))
+        return Printed;
+      uint64_t Value = 0;
+      if (Operand.Kind == ExprKind::Const && !Text.getAsInteger(0, Value) &&
+          Value <= INT32_MAX)
+        return std::pair<uint16_t, bool>{4, true};
+      return std::nullopt;
+    };
+    const auto Left = OperandType(*E.Operands[0], LHS);
+    const auto Right = OperandType(*E.Operands[1], RHS);
+    if (Left && Right) {
+      const auto [Bytes, Signed] = commonArithmeticType(*Left, *Right);
+      return typedText(E, std::move(Result), Bytes, Signed);
+    }
+  }
   return Result;
 }
 
