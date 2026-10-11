@@ -1673,6 +1673,17 @@ rounding on hosts that otherwise use excess precision. Compiler options that
 explicitly override source pragmas, such as Clang's `-ffp-contract=fast`, are
 outside this contract.
 
+LLVMC binds final parameter identifiers before its analyses can cache rendered
+views. Signature emission reuses those identities, including colliding debug
+names and MSVC hidden result/`this` arguments. CPU query arrays use that same
+function-local name owner and are declared at function scope, so extracts in
+later blocks cannot refer to a different query or an expired C scope.
+`LLVMCIntrinsicAnalysis` authenticates the exact MedLLVM CPUID/XGETBV assembly,
+register constraints, i32 inputs/results and direct register-extract uses.
+Malformed contracts and unrepresented aggregate ABIs are refused explicitly.
+The C renderer retains volatile assembly and the original memory barrier for
+each query, including unused outputs and CPUID's ECX subleaf.
+
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
 invalid conversions. HighC and the LLVM lowering select that same policy;
