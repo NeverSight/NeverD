@@ -394,6 +394,31 @@ ctest --test-dir build-release -L '^NeverDX86EncodingAccuracyTests$' \
   --output-on-failure
 ```
 
+## LLVMC parameter names and CPU queries
+
+`NeverDLLVMCIntrinsicSemanticTests` compiles and executes cached parameter views,
+colliding debug names, narrow arguments and MSVC hidden result/`this` controls
+at O0/O2. CPU array tests retain repeated queries, parameter/local collisions,
+partial register extracts and cross-block uses. CPUID includes nonzero subleafs;
+native XGETBV requires an x64 host with OSXSAVE. Changed assembly, constraints,
+types and unrepresented aggregate uses must fail before array projection.
+
+On Windows x64, a single-step exception observer compares original
+`CPUID(0,0); INT3; CPUID(7,1)` bytes with emitted C at O0/O2. It observes query
+inputs, the query count at the breakpoint, event order and the returned value;
+matching only the final return is insufficient. Other hosts skip this Windows
+event observer explicitly. Windows standalone C checks select Clang's
+compiler-rt so the existing i128 floating conversion controls also execute.
+
+```bash
+cmake --build build-release --target NeverDLLVMCIntrinsicSemanticTests \
+  NeverDLLVMCValueTests NeverDLLVMCFrameMemoryTests NeverDLLVMCPhiTests \
+  NeverDLLVMCVectorTests NeverDLLVMCVoidAnalysisTests
+ctest --test-dir build-release \
+  -L '^NeverDLLVMC(IntrinsicSemantic|Value|FrameMemory|Phi|Vector|VoidAnalysis)Tests$' \
+  --output-on-failure
+```
+
 ## Inline C memory accesses
 
 `NeverDCMemoryCopyTests` executes HighC and LLVMC output at `-O0` and `-O2`
