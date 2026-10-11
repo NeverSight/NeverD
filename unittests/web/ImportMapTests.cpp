@@ -1,3 +1,14 @@
+//===- ImportMapTests.cpp - Bounded import map resolution tests --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded import map resolution tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/ImportMap.h"

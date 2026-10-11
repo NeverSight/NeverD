@@ -112,6 +112,13 @@ fpReturnElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
       Carrier = &Source.Inputs[0];
     }
   }
+  if (Def->Opcode == NdOp::INTRINSIC && Def->NumInputs &&
+      Def->Inputs[0].isConst()) {
+    const auto Id = static_cast<Intrinsic>(Def->Inputs[0].ConstVal);
+    if (isX86FPApprox12Intrinsic(Id))
+      return static_cast<uint16_t>(x86FPStateNumericalSliceSize(
+          Id, x86FPStateMedShape(*Def), 0, V.Size));
+  }
   // The state primitive's aggregate and MXCSR words are raw carriers. Only
   // its exact numerical slice above establishes a scalar FP return.
   if (Def->Opcode == NdOp::INTRINSIC && Def->NumInputs &&

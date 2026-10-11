@@ -433,6 +433,10 @@ bool extractAddressSlice(std::vector<HighStmt> &Statements,
 }
 
 struct RegionCandidate {
+  /// This PE32 scope depends on the closed terminal-component proof. A failed
+  /// extraction may not fall back to address containment that ignores the
+  /// search context of an already structured inner catch.
+  bool TerminalRegistration = false;
   StmtKind Kind = StmtKind::SEHTry;
   ExceptionAddressRange Range;
   std::vector<ExceptionAddressRange> Cover;
@@ -641,7 +645,21 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
     }
     auto Ranges =
         codeRangesForStates(EH, Cxx, Try.TryLow, Try.TryHigh, Registration);
-    const bool SplitRegistration = EH.Registration && Ranges.size() > 1;
+    // Catch continuations may merge protected and unprotected source states
+    // after the ordinary component has terminated. In synchronous C++ that
+    // join does not prevent a lexical try around the independently checked
+    // terminal component. Use the same ownership proof during extraction.
+    bool TerminalRegistration = false;
+    if (EH.Registration && EH.Registration->hasCxxCallbackStack()) {
+      auto Terminal =
+          terminalRegistrationTryRanges(Med, Try.TryLow, Try.TryHigh);
+      if (!Terminal.empty()) {
+        Ranges = std::move(Terminal);
+        TerminalRegistration = true;
+      }
+    }
+    const bool SplitRegistration =
+        EH.Registration && (Ranges.size() > 1 || TerminalRegistration);
     const ExceptionAddressRange Range =
         SplitRegistration
             ? ExceptionAddressRange{Ranges.front().Begin, Ranges.back().End}
@@ -654,6 +672,7 @@ void addCxxCandidates(const ExceptionFunction &EH, const MedFunc &Med,
     RegionCandidate Candidate;
     Candidate.Kind = StmtKind::CxxTry;
     Candidate.Range = Range;
+    Candidate.TerminalRegistration = TerminalRegistration;
     if (SplitRegistration)
       Candidate.Cover = std::move(Ranges);
     Candidate.NativeRegionCount = 1;
@@ -1767,9 +1786,15 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     ProtectedAddresses.SplitScope = SplitRegistrationCxx;
     const bool TerminalRegistration =
         !Host && SplitRegistrationCxx &&
-        extractTerminalRegistrationTry(Func, Med, ProtectedBody, InsertAt);
+        extractTerminalRegistrationTry(Func, Med, Candidate.TryLow,
+                                       Candidate.TryHigh, ProtectedBody,
+                                       InsertAt);
     if (TerminalRegistration)
       Host = &Func.Body;
+    if (Candidate.TerminalRegistration && !TerminalRegistration) {
+      Rejected += Candidate.NativeRegionCount;
+      continue;
+    }
     if ((!Host &&
          !extractAddressSlice(Func.Body, ProtectedAddresses, EH.CodeRange,
                               ProtectedBody, InsertAt,

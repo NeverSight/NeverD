@@ -90,7 +90,7 @@ darwinSystemOptionsFromJSON(const llvm::json::Value &Value) {
     const llvm::StringRef Name = Key;
     if (Name == field::SystemCredentials) {
       const auto *C = V.getAsObject();
-      if (!C || C->size() < 4 || C->size() > 5)
+      if (!C || C->size() < 4 || C->size() > 6)
         return invalid(Name);
       DarwinCredentials Credentials;
       const llvm::StringRef Keys[] = {
@@ -119,6 +119,11 @@ darwinSystemOptionsFromJSON(const llvm::json::Value &Value) {
               return invalid(Name);
             OutGroups.push_back(*ID);
           }
+        } else if (K == field::CredentialGroupMembershipUID) {
+          auto ID = process_json::integer<uint32_t>(Input);
+          if (!ID)
+            return invalid(Name);
+          Credentials.GroupMembershipUID = *ID;
         } else if (!llvm::is_contained(Keys, llvm::StringRef(K)))
           return invalid(Name);
       }
@@ -194,7 +199,7 @@ darwinSystemOptionsFromJSON(const llvm::json::Value &Value) {
       return invalid(Name);                                                    \
     continue;                                                                  \
   }
-#define NEVERD_DARWIN_PROCESS_FIELD(Member, Field)                             \
+#define NEVERD_DARWIN_PROCESS_FIELD(Member, Field, Admission)                  \
   if (Name == field::Field) {                                                  \
     if (!parse(V, Out.Member))                                                 \
       return invalid(Name);                                                    \

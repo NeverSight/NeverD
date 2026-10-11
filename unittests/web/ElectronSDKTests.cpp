@@ -1,3 +1,14 @@
+//===- ElectronSDKTests.cpp - Electron manifest evidence tests ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Electron manifest evidence tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "AsarFixture.h"
 #include "gtest/gtest.h"
 

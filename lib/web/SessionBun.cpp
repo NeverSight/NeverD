@@ -1,3 +1,14 @@
+//===- SessionBun.cpp - Bun extraction publication ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bun extraction publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "SessionInternal.h"
 
 namespace neverd::web {
@@ -10,6 +21,9 @@ llvm::json::Object summary(const BunExtraction &E, uint64_t Revision) {
       {"extraction_id", E.ID},
       {"artifact_id", E.ArtifactID},
       {"profile", E.Profile},
+      {"container_format", E.ContainerFormat},
+      {"platform", E.Platform},
+      {"architecture", E.Architecture},
       {"layout_status", "compatible"},
       {"producer_version_verified", false},
       {"graph_offset", std::to_string(E.GraphOffset)},
@@ -39,14 +53,17 @@ std::string Session::extractBun(std::string_view ExpectedRevision,
       return json(summary(E, State->Revision));
   if (State->BunExtractions.size() >= 4)
     throw Error("bun_cache_budget_exceeded");
-  for (const auto &A : State->Published.Artifacts)
-    if (A.ID == ArtifactID) {
-      auto E = web::extractBun(A);
-      auto Reply = json(summary(E, State->Revision));
-      const auto ID = E.ID;
-      State->BunExtractions.emplace(ID, std::move(E));
-      return Reply;
-    }
+  if (const auto View = State->artifactView(ArtifactID)) {
+    Artifact A;
+    A.ID = ArtifactID;
+    A.BlobHash = View->BlobHash;
+    A.Content = View->Content;
+    auto E = web::extractBun(A);
+    auto Reply = json(summary(E, State->Revision));
+    const auto ID = E.ID;
+    State->BunExtractions.emplace(ID, std::move(E));
+    return Reply;
+  }
   throw Error("unknown_artifact");
 }
 

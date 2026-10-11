@@ -1,3 +1,14 @@
+//===- ElectronIPCTests.cpp - Scoped Electron IPC evidence tests -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Scoped Electron IPC evidence tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/ElectronIPC.h"

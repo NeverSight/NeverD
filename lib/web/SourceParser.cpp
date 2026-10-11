@@ -1,3 +1,14 @@
+//===- SourceParser.cpp - Embedded JavaScript parser adapter -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Embedded JavaScript parser adapter.
+///
+//===----------------------------------------------------------------------===//
+
 #include "HermesLexemes.h"
 #include "HermesModel.h"
 #include "RecoveryParser.h"
@@ -8,8 +19,8 @@
 #include "llvh/Support/MemoryBuffer.h"
 
 #include "neverd/web/Artifact.h"
+#include "neverd/web/Error.h"
 #include "neverd/web/ParserBudget.h"
-#include "neverd/web/Session.h"
 #include "neverd/web/Source.h"
 
 #include <cfenv>

@@ -32,8 +32,8 @@ struct CxxIRCatch {
 struct CxxIRControlProof {
   LowFunc Source;
   RegistrationFrame Frame;
-  std::vector<CxxIRCatch> Catches;
-  std::map<int, uint32_t> SourceCatchOwners;
+  std::map<X86RegistrationCatchIdentity, CxxIRCatch> Catches;
+  std::map<int, X86RegistrationCatchIdentity> SourceCatchOwners;
   std::map<int, SourceSegment> Segments;
   std::map<uint32_t, const llvm::CleanupPadInst *> Cleanups;
   std::map<const llvm::CallBase *, CxxIRCall> Calls;

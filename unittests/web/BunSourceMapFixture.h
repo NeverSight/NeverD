@@ -1,3 +1,14 @@
+//===- BunSourceMapFixture.h - Bun serialized source maps test fixtures -===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bun serialized source maps test fixtures.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "BunFixture.h"

@@ -19,6 +19,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
@@ -651,8 +652,11 @@ void computeFrameBounds(
 // (offsets [0, overflow_base)); the trailing variadic arguments live at and
 // above the overflow base and are read through the va_arg walk (not direct
 // [entry_sp+k] loads), so they must not be mistaken for fixed stack parameters.
+} // namespace
+
+namespace med_calling_conv_detail {
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
-                       int64_t MaxStackOff = 0) {
+                       int64_t MaxStackOff) {
   // Stack parameters that follow the used registers (i386) are recovered by
   // detectCdeclStackParams instead.
   const CallArgumentConvention *Convention =
@@ -826,17 +830,17 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   std::set<int64_t> Offsets;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto Off = rawStackOff(Op.Inputs[0])) {
+      if (auto Read = med_calling_conv_detail::stackMemoryRead(Op))
+        if (auto Off = rawStackOff(Op.Inputs[Read->AddressInput])) {
           auto [SlotBase, ByteOff] = slotOf(*Off);
           Offsets.insert(SlotBase);
           // A slot-aligned load wider than one pointer slot (an 8-byte double
           // stack argument on a 4-byte-slot target) spans several slots; record
           // the highest so every covered slot is created as a parameter below.
-          uint16_t LoadSz =
-              Op.Output.Size > 0 ? Op.Output.Size : static_cast<uint16_t>(Slot);
-          if (ByteOff == 0 && LoadSz > Slot)
+          const unsigned LoadSz = Read->Bytes;
+          if (Read->AddressInput == 1)
+            Offsets.insert(slotOf(*Off + LoadSz - 1).first);
+          else if (ByteOff == 0 && LoadSz > Slot)
             Offsets.insert(slotOf(*Off + LoadSz - Slot).first);
         }
   // A tail call at the entry stack pointer hands its callee this function's
@@ -971,12 +975,17 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
         break;
       }
       for (uint8_t K = 0; K < Op.NumInputs; ++K) {
-        if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && K == 0)
+        if (((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && K == 0) ||
+            (med_calling_conv_detail::stackMemoryRead(Op) &&
+             K == med_calling_conv_detail::stackMemoryRead(Op)->AddressInput))
           continue;
         if (auto Off = rawStackOff(Op.Inputs[K]))
           MutableSlots.insert(slotOf(*Off).first); // escaped address
       }
     }
+
+  med_calling_conv_detail::preserveFPStackHomes(Func, Base, Slot, rawStackOff,
+                                                MutableSlots);
 
   // The home slot of each mutable stack argument is [frame_end + SlotBase].
   // Record it so the emitter seeds that headroom slot with the parameter at
@@ -1054,8 +1063,13 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
         Op.NumInputs = 2;
       }
     }
+  med_calling_conv_detail::recoverFPStackReads(
+      Func, TargetArch, Base, Slot, MaxRegArgs, rawStackOff, MutableSlots);
 }
 
+} // namespace med_calling_conv_detail
+
+namespace {
 // Recover the hidden indirect-result (sret) pointer parameter: a function that
 // returns a by-value aggregate too large for the return registers receives the
 // caller-allocated result buffer in the indirect-result register (AArch64 x8)
@@ -1253,7 +1267,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // pointer walk (PHI-merged, vectorized), invisible to this load scan; those
   // are recovered from the call sites in finalizeVariadicCallees instead.
   if (!Func.IsVariadic)
-    detectStackParams(Func, TargetArch, Fmt);
+    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt);
   else if (Convention && Convention->VariadicArgumentsOnStack &&
            Func.VariadicOverflowBase > 0) {
     // A variadic function (Darwin AArch64) with more than the register count
@@ -1266,7 +1280,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     // prefix as register params + these (the overflow count is everything past
     // them).
     const size_t Before = Func.Params.size();
-    detectStackParams(Func, TargetArch, Fmt, Func.VariadicOverflowBase);
+    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt,
+                                               Func.VariadicOverflowBase);
     Func.VariadicFixedStackArgs = static_cast<int>(Func.Params.size() - Before);
   }
 

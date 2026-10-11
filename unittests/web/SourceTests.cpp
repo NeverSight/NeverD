@@ -1,3 +1,14 @@
+//===- SourceTests.cpp - JavaScript source evidence tests --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript source evidence tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Artifact.h"

@@ -1,7 +1,20 @@
+//===- Bun.cpp - Qualified Bun graph extraction ------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Qualified Bun graph extraction.
+///
+//===----------------------------------------------------------------------===//
+
 #include "neverd/web/Bun.h"
 
+#include "BunContainer.h"
+
+#include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
-#include "neverd/web/Session.h"
 #include "neverd/web/SourceLocation.h"
 
 #include <algorithm>
@@ -14,145 +27,17 @@
 // This reader does not link Bun or JavaScriptCore. See docs/web-bun-profile.md.
 namespace neverd::web {
 namespace {
-struct Range {
-  uint64_t Offset = 0, Size = 0;
-  uint64_t end() const { return Offset + Size; }
-};
+using namespace bun_detail;
 
-void within(Range R, uint64_t Size) {
-  if (R.Offset > Size || R.Size > Size - R.Offset)
-    throw Error("bun_range_out_of_bounds");
-}
-
-bool overlaps(Range A, Range B) {
-  return A.Size && B.Size && A.Offset < B.end() && B.Offset < A.end();
-}
-
-uint64_t number(std::string_view Bytes, size_t Offset, size_t Width) {
-  within({Offset, Width}, Bytes.size());
-  uint64_t Value = 0;
-  for (size_t I = 0; I < Width; ++I)
-    Value |= uint64_t(uint8_t(Bytes[Offset + I])) << (8 * I);
-  return Value;
-}
-
-struct Reader {
-  Blob Bytes;
-  std::string read(Range R) const {
-    within(R, Bytes.size());
-    return Bytes.read(R.Offset, R.Size);
-  }
-  uint64_t integer(uint64_t Offset, size_t Width) const {
-    return number(read({Offset, Width}), 0, Width);
-  }
-};
-
-bool powerOfTwo(uint64_t V) { return V && !(V & (V - 1)); }
-
-struct Section {
-  Range File;
-  uint64_t Address = 0, Flags = 0, Alignment = 0;
-  uint32_t Type = 0, Name = 0;
-};
-
-Range locate(const Reader &R) {
-  if (R.Bytes.size() < 64)
-    throw Error("bun_unsupported_container");
-  const auto H = R.read({0, 64});
-  if (H.compare(0, 4, "\177ELF") || uint8_t(H[4]) != 2 || H[5] != 1 ||
-      H[6] != 1 || (H[7] != 0 && H[7] != 3) ||
-      (number(H, 16, 2) != 2 && number(H, 16, 2) != 3) ||
-      number(H, 18, 2) != 62 || number(H, 20, 4) != 1 ||
-      number(H, 52, 2) != 64 || number(H, 54, 2) != 56 ||
-      number(H, 58, 2) != 64)
-    throw Error("bun_unsupported_container");
-  const auto PN = number(H, 56, 2), SN = number(H, 60, 2);
-  const auto NamesIndex = number(H, 62, 2);
-  if (!PN || PN > 1024 || !SN || SN > 4096 || !NamesIndex || NamesIndex >= SN)
-    throw Error("bun_unsupported_elf_tables");
-  const Range PH{number(H, 32, 8), PN * 56};
-  const Range SH{number(H, 40, 8), SN * 64};
-  const auto P = R.read(PH), S = R.read(SH);
-  if (overlaps(PH, SH) || overlaps(PH, {0, 64}) || overlaps(SH, {0, 64}))
-    throw Error("bun_overlapping_elf_tables");
-  std::vector<Section> Sections;
-  for (uint64_t I = 0; I < SN; ++I) {
-    const auto At = I * 64;
-    Section V{{number(S, At + 24, 8), number(S, At + 32, 8)},
-              number(S, At + 16, 8),
-              number(S, At + 8, 8),
-              number(S, At + 48, 8),
-              uint32_t(number(S, At + 4, 4)),
-              uint32_t(number(S, At, 4))};
-    if (V.Type != 8)
-      within(V.File, R.Bytes.size());
-    if (V.Alignment > 1 && !powerOfTwo(V.Alignment))
-      throw Error("bun_invalid_elf_alignment");
-    Sections.push_back(V);
-  }
-  const auto &NS = Sections[NamesIndex];
-  if (NS.Type != 3 || !NS.File.Size || NS.File.Size > MaxBunNameBytes)
-    throw Error("bun_invalid_section_names");
-  const auto Names = R.read(NS.File);
-  if (Names.front() || Names.back())
-    throw Error("bun_invalid_section_names");
-  size_t Found = Sections.size();
-  for (size_t I = 0; I < Sections.size(); ++I) {
-    const auto Off = Sections[I].Name;
-    if (Off >= Names.size())
-      throw Error("bun_invalid_section_names");
-    // Only compare the fixed candidate; no unbounded per-section strlen.
-    if (std::string_view(Names).substr(Off, 5) ==
-        std::string_view(".bun\0", 5)) {
-      if (Found != Sections.size())
-        throw Error("bun_duplicate_section");
-      Found = I;
-    }
-  }
-  if (Found == Sections.size())
-    throw Error("bun_section_not_found");
-  const auto &B = Sections[Found];
-  if (B.Type != 1 || B.Flags != 3 || B.File.Size < 8 || overlaps(B.File, PH) ||
-      overlaps(B.File, SH) || overlaps(B.File, {0, 64}))
-    throw Error("bun_invalid_section");
-  for (size_t I = 0; I < Sections.size(); ++I)
-    if (I != Found && Sections[I].Type != 8 &&
-        overlaps(B.File, Sections[I].File))
-      throw Error("bun_overlapping_section");
-  unsigned Owners = 0;
-  within({B.Address, B.File.Size}, UINT64_MAX);
-  for (uint64_t I = 0; I < PN; ++I) {
-    const auto At = I * 56;
-    const Range F{number(P, At + 8, 8), number(P, At + 32, 8)};
-    const Range V{number(P, At + 16, 8), number(P, At + 40, 8)};
-    const auto Alignment = number(P, At + 48, 8);
-    within(F, R.Bytes.size());
-    within(V, UINT64_MAX);
-    if (number(P, At, 4) != 1)
-      continue;
-    if (F.Size > V.Size ||
-        (Alignment > 1 && (!powerOfTwo(Alignment) ||
-                           F.Offset % Alignment != V.Offset % Alignment)))
-      throw Error("bun_invalid_load_segment");
-    const bool Physical = overlaps(F, B.File);
-    const bool Virtual = overlaps(V, {B.Address, B.File.Size});
-    if (!Physical && !Virtual)
-      continue;
-    if (!Physical || !Virtual || number(P, At + 4, 4) != 6 ||
-        F.Offset > B.File.Offset || B.File.end() > F.end() ||
-        V.Offset > B.Address || B.Address + B.File.Size > V.end() ||
-        B.File.Offset - F.Offset != B.Address - V.Offset || F.Size != V.Size)
-      throw Error("bun_ambiguous_load_mapping");
-    ++Owners;
-  }
-  if (Owners != 1)
-    throw Error("bun_ambiguous_load_mapping");
-  const auto Size = R.integer(B.File.Offset, 8);
-  if (!Size && B.File.Size == 8)
-    throw Error("bun_not_standalone");
-  if (B.Address % 4096 || Size != B.File.Size - 8 || Size < 48)
-    throw Error("bun_invalid_graph_header");
-  return {B.File.Offset + 8, Size};
+std::string profile(std::string_view Platform, std::string_view Architecture,
+                    std::string_view Format, bool Prelinked) {
+  std::string Result = Prelinked ? "bun-71d0d439-prelinked-" : "bun-1.4.2-";
+  Result += Platform;
+  Result += "-";
+  Result += Architecture;
+  Result += "-";
+  Result += Format;
+  return Result + "-v1";
 }
 
 class GraphReader {
@@ -208,18 +93,23 @@ class GraphReader {
       if (Text.find('\0') != std::string::npos)
         throw Error("bun_invalid_name");
       if (Required &&
-          (!Text.starts_with("/$bunfs/") || !Names.insert(Text).second))
+          (!Text.starts_with(Out.Platform == "windows" ? "B:/~BUN/"
+                                                       : "/$bunfs/") ||
+           !Names.insert(Text).second))
         throw Error("bun_invalid_module_name");
     }
     return Index;
   }
 
 public:
-  GraphReader(const Artifact &Input, Range Graph)
-      : Input(Input), R{Input.Content.slice(Graph.Offset, Graph.Size)} {
+  GraphReader(const Artifact &Input, const Container &C)
+      : Input(Input), R{Input.Content.slice(C.Graph.Offset, C.Graph.Size)} {
     Out.ArtifactID = Input.ID;
-    Out.GraphOffset = Graph.Offset;
-    Out.GraphSize = Graph.Size;
+    Out.GraphOffset = C.Graph.Offset;
+    Out.GraphSize = C.Graph.Size;
+    Out.ContainerFormat = C.Format;
+    Out.Platform = C.Platform;
+    Out.Architecture = C.Architecture;
   }
 
   BunExtraction run() {
@@ -238,8 +128,8 @@ public:
     if ((Out.Flags & ~uint32_t(0x1fff)) ||
         (Out.Flags & RequiredFlags) != RequiredFlags)
       throw Error("bun_unsupported_graph_flags");
-    Out.Profile = (Out.Flags & ((1 << 11) | (1 << 12))) ? BunPrelinkedProfile
-                                                        : BunProfile;
+    Out.Profile = profile(Out.Platform, Out.Architecture, Out.ContainerFormat,
+                          Out.Flags & ((1 << 11) | (1 << 12)));
     Out.ID =
         identity("bun-extraction", {Input.ID, Input.BlobHash, Out.Profile});
     within(Modules, DataSize);
@@ -393,6 +283,18 @@ BunExtraction extractBun(const Artifact &Input) {
   if (Input.Content.size() > Limits::HardMemberBytes)
     throw Error("bun_input_budget_exceeded");
   return GraphReader(Input, locate({Input.Content})).run();
+}
+
+std::vector<std::string> bunProfiles() {
+  std::vector<std::string> Result;
+  for (const auto Platform : {"linux", "macos", "windows"}) {
+    const std::string_view P = Platform;
+    const auto Format = P == "linux" ? "elf" : P == "macos" ? "macho" : "pe";
+    for (const auto Architecture : {"x64", "arm64"})
+      for (const bool Prelinked : {false, true})
+        Result.push_back(profile(P, Architecture, Format, Prelinked));
+  }
+  return Result;
 }
 
 namespace {

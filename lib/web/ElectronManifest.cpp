@@ -1,3 +1,14 @@
+//===- ElectronManifest.cpp - Captured Electron manifests --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured Electron manifests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "Internal.h"
 #include "JsonReader.h"
 

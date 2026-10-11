@@ -1,3 +1,14 @@
+//===- ArtifactStore.cpp - Artifact identities and admission -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Artifact identities and admission.
+///
+//===----------------------------------------------------------------------===//
+
 #include "Internal.h"
 #include "JsonReader.h"
 

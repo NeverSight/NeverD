@@ -1,3 +1,14 @@
+//===- JsonReader.h - Bounded JSON admission ---------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded JSON admission.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "llvm/Support/JSON.h"
@@ -16,6 +27,9 @@ struct JsonLimits {
 /// Bound structure before constructing a JSON DOM. Duplicate decoded keys
 /// are rejected rather than silently overriding evidence. Errors are fixed
 /// codes and never contain JSON input, paths or parser diagnostic text.
+/// ConsumedNodes, when supplied, reports preflight work even on failure.
+/// Callers can debit a shared budget across independently framed records.
 llvm::json::Value parseBoundedJSON(std::string_view Bytes,
-                                   const JsonLimits &Limits = {});
+                                   const JsonLimits &Limits = {},
+                                   uint64_t *ConsumedNodes = nullptr);
 } // namespace neverd::web

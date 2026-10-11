@@ -1,3 +1,14 @@
+//===- SessionSemantics.cpp - Source semantics publication -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source semantics publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "SessionInternal.h"
 
 namespace neverd::web {

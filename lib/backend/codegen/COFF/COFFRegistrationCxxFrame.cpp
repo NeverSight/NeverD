@@ -22,7 +22,9 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
   const auto &States = *Proof->Source.RegistrationStates;
   coff_registration::RegistrationCxxFrameContract Contract;
   Contract.Image = &Image;
-  for (const auto &Catch : Proof->Catches) {
+  std::map<X86RegistrationCatchIdentity, size_t> CatchIndices;
+  for (const auto &[Identity, Catch] : Proof->Catches) {
+    CatchIndices.emplace(Identity, Contract.Catches.size());
     auto &Invocation = Contract.Catches.emplace_back();
     Invocation.Catch = Catch.Pad;
     if (const auto &Home = Catch.Home) {
@@ -90,14 +92,14 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
   for (const auto &Access : States.RuntimeObjectAccesses) {
     const auto Found =
         Operations.find({Access.Address, uint32_t(Access.OpSeq)});
-    if (Found == Operations.end() || Access.TryIndex ||
-        Access.CatchIndex >= Contract.Catches.size() ||
-        !Contract.Catches[Access.CatchIndex].Reference ||
+    const auto Index = CatchIndices.find({Access.TryIndex, Access.CatchIndex});
+    if (Found == Operations.end() || Index == CatchIndices.end() ||
+        !Contract.Catches[Index->second].Reference ||
         !Contract.RuntimeAccesses
              .emplace(Found->second,
                       coff_registration::RegistrationRuntimeAccess{
                           Access.Offset, Access.Width, Access.Write,
-                          Contract.Catches[Access.CatchIndex].Catch})
+                          Contract.Catches[Index->second].Catch})
              .second)
       return coff_registration::rejectIR(
           "C++ runtime object lost its exact source access");

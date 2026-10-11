@@ -1,5 +1,10 @@
 add_neverd_unittest(NeverDWebArtifactTests
   ArtifactTests.cpp
+  PackageTests.cpp
+  PackageArchiveTests.cpp
+  PackageIntegrityTests.cpp
+  InterfaceTests.cpp
+  StreamTests.cpp
   AsarTests.cpp
   ElectronManifestTests.cpp
   HTMLTests.cpp
@@ -29,6 +34,7 @@ target_compile_definitions(NeverDWebSourceMapTests PRIVATE
   NEVERD_WEB_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 if(NEVERD_ENABLE_WEB_JAVASCRIPT)
   add_neverd_unittest(NeverDWebSourceTests
+    SourceInterfaceTests.cpp
     HTMLModuleTests.cpp
     ElectronIPCTests.cpp
     ElectronEntryTests.cpp
@@ -58,6 +64,11 @@ if(TARGET neverd_shared)
     "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
   add_neverd_unittest(NeverDWebSDKTests
     SDKTests.cpp
+    PackageSDKTests.cpp
+    PackageArchiveSDKTests.cpp
+    PackageIntegritySDKTests.cpp
+    InterfaceSDKTests.cpp
+    StreamSDKTests.cpp
     AsarSDKTests.cpp
     ElectronSDKTests.cpp
     HTMLSDKTests.cpp

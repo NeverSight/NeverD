@@ -24,9 +24,11 @@ struct RegistrationCxxCatchPlan {
   std::optional<RegistrationCxxStackPlan> Stack;
   std::set<llvm::BasicBlock *> Blocks;
 };
-llvm::BasicBlock *emitRegistrationCxxCatches(
+void emitRegistrationCxxCatches(
     const ExceptionFunction &EH,
-    llvm::MutableArrayRef<RegistrationCxxCatchPlan> Plans,
-    llvm::AllocaInst &Frame, llvm::Function &Parent);
+    std::map<X86RegistrationCatchIdentity, RegistrationCxxCatchPlan> &Plans,
+    llvm::ArrayRef<llvm::BasicBlock *> Dispatches,
+    llvm::ArrayRef<llvm::BasicBlock *> OuterUnwinds, llvm::AllocaInst &Frame,
+    llvm::Function &Parent);
 } // namespace neverd
 #endif

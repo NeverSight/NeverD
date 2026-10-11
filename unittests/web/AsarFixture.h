@@ -1,3 +1,14 @@
+//===- AsarFixture.h - Bounded ASAR archive extraction test fixtures ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded ASAR archive extraction test fixtures.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 #include "AsarEnvelopeFixture.h"
 

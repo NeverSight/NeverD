@@ -1,21 +1,25 @@
+//===- Session.h - Offline analysis session ----------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Offline analysis session.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
+#include "neverd/web/Error.h"
 #include "neverd/web/NativeInput.h"
 
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
 namespace neverd::web {
-
-/// Diagnostics are fixed codes. Input paths, source and exception text must
-/// never be interpolated into ordinary API failures.
-class Error : public std::runtime_error {
-public:
-  explicit Error(const char *Code) : std::runtime_error(Code) {}
-};
 
 class Session {
 public:
@@ -30,6 +34,58 @@ public:
   /// Revalidate the selected input before atomically publishing the preview.
   std::string commit(std::string_view Token);
   std::string metadata() const;
+  std::string previewStream(std::string_view ExpectedRevision,
+                            std::string_view ArtifactID,
+                            std::string_view Profile);
+  std::string commitStream(std::string_view ExpectedRevision,
+                           std::string_view PreviewToken);
+  std::string streamRecords(std::string_view ExpectedRevision,
+                            std::string_view CaptureID, uint64_t Offset,
+                            uint64_t Limit) const;
+  std::string previewHAR(std::string_view ExpectedRevision,
+                         std::string_view ArtifactID);
+  std::string commitHAR(std::string_view ExpectedRevision,
+                        std::string_view PreviewToken);
+  std::string harRecords(std::string_view ExpectedRevision,
+                         std::string_view CaptureID, uint64_t Offset,
+                         uint64_t Limit) const;
+  std::string analyzeInterfaces(std::string_view ExpectedRevision,
+                                std::string_view SourceID);
+  std::string interfaceRecords(std::string_view ExpectedRevision,
+                               std::string_view AnalysisID, uint64_t Offset,
+                               uint64_t Limit) const;
+  std::string compareInterfaces(std::string_view ExpectedRevision,
+                                std::string_view AnalysisID,
+                                std::string_view CaptureID);
+  std::string interfaceCorrelationRecords(std::string_view ExpectedRevision,
+                                          std::string_view CorrelationID,
+                                          uint64_t Offset,
+                                          uint64_t Limit) const;
+  std::string extractPackageArchive(std::string_view ExpectedRevision,
+                                    std::string_view ArtifactID,
+                                    std::string_view Format);
+  std::string verifyPackageIntegrity(std::string_view ExpectedRevision,
+                                     std::string_view ArtifactID,
+                                     std::string_view DeclarationID,
+                                     std::string_view PackageID);
+  std::string packageArchiveRecords(std::string_view ExpectedRevision,
+                                    std::string_view ArchiveID, uint64_t Offset,
+                                    uint64_t Limit) const;
+  std::string analyzePackages(std::string_view ExpectedRevision,
+                              std::string_view ArtifactID,
+                              std::string_view InputKind);
+  std::string packageRecords(std::string_view ExpectedRevision,
+                             std::string_view AnalysisID,
+                             std::string_view RecordKind, uint64_t Offset,
+                             uint64_t Limit) const;
+  /// Both analyses belong to this published revision. A new import revokes
+  /// both sides and their comparisons; no stale ID is rebound to new bytes.
+  std::string comparePackages(std::string_view ExpectedRevision,
+                              std::string_view BeforeID,
+                              std::string_view AfterID);
+  std::string packageDiffRecords(std::string_view ExpectedRevision,
+                                 std::string_view DiffID, uint64_t Offset,
+                                 uint64_t Limit) const;
   std::string analyzeHTML(std::string_view ExpectedRevision,
                           std::string_view ArtifactID);
   std::string htmlRecords(std::string_view ExpectedRevision,

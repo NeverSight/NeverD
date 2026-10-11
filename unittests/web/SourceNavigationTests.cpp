@@ -1,3 +1,14 @@
+//===- SourceNavigationTests.cpp - Source containment and lexical links tests -===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source containment and lexical links tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Artifact.h"

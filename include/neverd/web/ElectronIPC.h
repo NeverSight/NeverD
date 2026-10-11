@@ -1,3 +1,14 @@
+//===- ElectronIPC.h - Scoped Electron IPC evidence --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Scoped Electron IPC evidence.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Electron.h"

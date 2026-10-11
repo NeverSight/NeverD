@@ -23,7 +23,8 @@ inline X86FPStateShape x86FPStateHighShape(const HighExpr &Call,
   };
   const bool Conversion = isX86FPConversionStateIntrinsic(Call.IntrinsicId);
   const bool Round = isX86FPRoundStateIntrinsic(Call.IntrinsicId);
-  const bool Memory = Call.IntrinsicId == Intrinsic::X86FPRoundMemoryState;
+  const bool Arithmetic = isX86FPArithStateIntrinsic(Call.IntrinsicId);
+  const bool Memory = isX86FPStateMemoryIntrinsic(Call.IntrinsicId);
   const unsigned ControlIndex = Memory ? 1 : 0;
   const bool HasControl =
       Call.Operands.size() > ControlIndex && Call.Operands[ControlIndex];
@@ -35,6 +36,15 @@ inline X86FPStateShape x86FPStateHighShape(const HighExpr &Call,
         (Operand->Type->Kind == NdTypeKind::Int ||
          Operand->Type->Kind == NdTypeKind::Float ||
          (Memory && Index == 0 && Operand->Type->Kind == NdTypeKind::Ptr));
+    if (Arithmetic && Operand && Operand->Type &&
+        Operand->Type->Kind == NdTypeKind::Float) {
+      const uint64_t Control =
+          HasControl ? Call.Operands[ControlIndex]->ConstVal : 0;
+      ScalarOperands &=
+          (Memory ? Index == 2 : Index == 1 || Index == 2) &&
+          x86FPArithStateIsScalar(Control) &&
+          Operand->Type->Size == x86FPArithStateElementBytes(Control);
+    }
   }
   const bool PointerAddress = Memory && !Call.Operands.empty() &&
                               Call.Operands[0] && Call.Operands[0]->Type &&
@@ -47,15 +57,28 @@ inline X86FPStateShape x86FPStateHighShape(const HighExpr &Call,
           .NumInputs = static_cast<unsigned>(Call.Operands.size() + 1),
           .IdIsConst = true,
           .IdSize = 2,
-          .OutputIsWritable = Call.Type && Call.Type->Kind == NdTypeKind::Int &&
-                              Call.Type->Size > 0,
+          .IdValue = static_cast<unsigned>(Call.IntrinsicId),
+          .OutputIsWritable =
+              Call.Type && Call.Type->Kind == NdTypeKind::Int &&
+              Call.Type->Size > 0 &&
+              (!(isX86FPApprox12Intrinsic(Call.IntrinsicId) || Arithmetic) ||
+               (!Call.IsIndirectCall && !Call.IndirectTarget &&
+                !Call.SourceCallHint && !Call.DoesNotReturn)),
           .OutputSize = Call.Type ? Call.Type->Size : 0U,
           .OperandsAreScalar = ScalarOperands,
           .LeftSize = PointerAddress ? 8 : Size(0),
           .RightSize = Size(1),
-          .StateSize = Size(Round        ? 3
-                            : Conversion ? 1
-                                         : 2),
+          .ThirdSize = Size(2),
+          .ArithmeticLeftIsZero =
+              Call.Operands.size() > (Memory ? 2U : 1U) &&
+              Call.Operands[Memory ? 2 : 1] &&
+              Call.Operands[Memory ? 2 : 1]->Type &&
+              Call.Operands[Memory ? 2 : 1]->Type->Kind == NdTypeKind::Int &&
+              Call.Operands[Memory ? 2 : 1]->Kind == ExprKind::Const &&
+              Call.Operands[Memory ? 2 : 1]->ConstVal == 0,
+          .StateSize = Size(Round || Arithmetic ? 3
+                            : Conversion        ? 1
+                                                : 2),
           .HasAuxiliaryOutputs = !Call.IntrinsicOutputs.empty(),
           .DestinationIsConst = HasSelector &&
                                 Call.Operands[2]->Kind == ExprKind::Const &&

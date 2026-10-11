@@ -1,3 +1,14 @@
+//===- SourceEffects.h - Conservative JavaScript effects ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Conservative JavaScript effects.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/SourceBindings.h"

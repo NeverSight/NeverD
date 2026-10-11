@@ -22,10 +22,11 @@ bool ordinaryExtendedAttributeName(llvm::StringRef Name);
 
 class DarwinFiles {
 public:
-  DarwinFiles(GuestMemory &Memory,
-              const std::optional<DarwinFileOptions> &Options,
-              uint64_t OutputLimit = process_defaults::Output,
-              uint32_t EffectiveUID = value::UserID);
+  DarwinFiles(
+      GuestMemory &Memory, const std::optional<DarwinFileOptions> &Options,
+      uint64_t OutputLimit = process_defaults::Output,
+      uint32_t EffectiveUID = value::UserID,
+      const std::optional<DarwinCredentials> &Credentials = std::nullopt);
   llvm::Expected<std::optional<ServiceResult>>
   handle(ServiceKind Kind, const ProcessServiceEvent &Event,
          ProcessResult &Result);
@@ -62,6 +63,8 @@ private:
     RenameTarget,
     RenameDirectoryTarget
   };
+  enum class Subject { Real, Effective };
+  using Authorization = std::variant<std::monostate, uint32_t, const char *>;
   // Retaining a terminal link and refusing required expansion are separate
   // namei policies. AT_SYMLINK_NOFOLLOW_ANY uses both; ordinary open uses only
   // NoExpansion, while exclusive creation retains the terminal entry.
@@ -240,6 +243,9 @@ private:
   const std::optional<DarwinFileOptions> &Options;
   const uint64_t OutputLimit;
   const uint32_t EffectiveUID;
+  /// Explicit immutable knowledge, separate from the scalar observation
+  /// fallback used by legacy creation metadata.
+  const std::optional<DarwinCredentials> Credentials;
   std::map<uint32_t, Descriptor> Descriptors;
   std::map<std::string, std::shared_ptr<FileEntry>> Nodes;
   std::map<std::string, std::shared_ptr<LinkEntry>> Links;
@@ -272,16 +278,23 @@ private:
   DirectoryLookup directoryDescriptor(uint32_t FD) const;
   llvm::Expected<std::optional<Lookup>> directoryPrefix(uint64_t Address,
                                                         uint32_t DirectoryFD);
+  bool queryEnvironment() const;
+  const char *authorizationScope() const;
+  std::optional<bool> groupMembership(uint32_t GID, Subject User) const;
+  Authorization authorize(const DarwinFileMetadata *Metadata, uint32_t Actions,
+                          Subject User) const;
   llvm::Expected<Lookup> resolvePath(uint64_t Address, uint32_t DirectoryFD,
                                      LookupMode Mode = LookupMode::Existing,
                                      LinkPolicy Links = {true, false},
-                                     bool CheckDirectoryPrefix = true);
+                                     bool CheckDirectoryPrefix = true,
+                                     Subject User = Subject::Real);
   llvm::Expected<std::optional<ServiceResult>>
   open(uint64_t Address, uint32_t Flags, uint32_t DirectoryFD, uint32_t Mode,
        ProcessResult &Result);
   llvm::Expected<std::optional<ServiceResult>>
   access(uint64_t Path, uint32_t DirectoryFD, uint32_t Mode,
-         ProcessResult &Result, LinkPolicy Links = {true, false});
+         ProcessResult &Result, LinkPolicy Links = {true, false},
+         Subject User = Subject::Real);
   std::optional<ServiceResult> pathconf(const Description &File, uint32_t Name,
                                         ProcessResult &Result);
   llvm::Expected<std::optional<ServiceResult>>

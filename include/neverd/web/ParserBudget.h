@@ -1,3 +1,14 @@
+//===- ParserBudget.h - JavaScript parser resource limits --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript parser resource limits.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include <chrono>

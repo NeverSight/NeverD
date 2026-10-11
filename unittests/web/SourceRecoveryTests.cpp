@@ -1,3 +1,14 @@
+//===- SourceRecoveryTests.cpp - Verified readable source recovery tests -===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Verified readable source recovery tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "../../lib/web/Internal.h"
 #include "gtest/gtest.h"
 

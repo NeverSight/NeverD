@@ -47,11 +47,20 @@ bool proveFixedCxxRegistrationLayout(const BinaryImage &Img,
   };
   // SavedESP, state, node address and handler must all precede publication.
   // A handler literal or an FS read in unrelated code proves none of these.
-  if (!Operand(0x89, 4, -28) || !Operand(0xc7, 0, -16) ||
-      !Immediate(UINT32_MAX) || !Operand(0x8d, 0, -24) ||
-      !Operand(0xc7, 0, -20) || !Immediate(Site.HandlerVA) ||
-      Cursor + 7 > Size || Site.InstallVA != Site.Range.Begin + Cursor ||
-      P[Cursor] != 0x64 || P[Cursor + 1] != 0x8b ||
+  // Unoptimized Clang first copies ESP to EAX. Admit only the adjacent copy
+  // and matching store; the later node LEA then replaces this EAX definition.
+  if (Cursor + 2 <= Size && P[Cursor] == 0x89 && P[Cursor + 1] == 0xe0) {
+    Cursor += 2;
+    if (!Operand(0x89, 0, -28))
+      return false;
+  } else if (!Operand(0x89, 4, -28)) {
+    return false;
+  }
+  if (!Operand(0xc7, 0, -16) || !Immediate(UINT32_MAX) ||
+      !Operand(0x8d, 0, -24) || !Operand(0xc7, 0, -20) ||
+      !Immediate(Site.HandlerVA) || Cursor + 7 > Size ||
+      Site.InstallVA != Site.Range.Begin + Cursor || P[Cursor] != 0x64 ||
+      P[Cursor + 1] != 0x8b ||
       (P[Cursor + 2] != 0x0d && P[Cursor + 2] != 0x15) ||
       readLE<uint32_t>(P + Cursor + 3) != 0)
     return false;

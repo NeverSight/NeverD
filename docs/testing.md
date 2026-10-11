@@ -336,6 +336,42 @@ source probes require Windows/Linux and FS probes require Linux. Native ROUND
 requires x64 SSE4.1; VEX probes additionally require AVX. These directed tests
 do not certify EVEX/SAE, unavailable-feature faults or general x87 state.
 
+`NeverDX86FPApprox12AccuracyTests` covers legacy/VEX RCP/RSQRT scalar and
+packed forms with original byte kernels, SDK Codegen default/NoOpt and both C
+routes default/NoOpt at O0/O2. Numerical bits, unchanged MXCSR (including
+unmasked exceptions), scalar merging and vector upper bits are complete
+observations. Memory checks cover legacy packed alignment faults, scalar/VEX
+unaligned access, canonical ranges, permissions and FS/GS. Scalar C return
+observers check FP type and raw bits. The portable software reference is an
+explicit non-strict opt-in: check the architectural error envelope separately
+from implementation-dependent RCP tininess and record approximated execution.
+Default/strict concrete evaluation refuses unproved normal results; definite
+special values remain exact. Native FS requires Linux and AVX probes require
+native OS-enabled AVX. These tests do not certify x86-32 execution, enabled #AC,
+unavailable-feature faults or EVEX 14/28-bit approximations.
+
+`NeverDX86FPArithStateAccuracyTests` compares original scalar and packed
+ADD/SUB/MUL/DIV/SQRT/MIN/MAX bytes with SDK Codegen default/NoOpt and HighC/LLVMC
+default/NoOpt at O0/O2. Its 140 forms cover legacy scalar/128-bit packed and VEX
+scalar/128/256-bit packed register and memory sources. Directed raw values and
+full MXCSR observations cover rounding, DAZ/FTZ, sticky flags, NaN payloads and
+complete YMM upper state. Additional probes cover distinct source registers,
+destination/RHS aliasing, unaligned scalar/VEX memory, unmasked exceptions,
+instruction-wide exception priority, legacy alignment and protected cross-page
+sources. Discarded numerical results must retain state changes and faults.
+Scalar C return probes separately verify floating type, raw bits and state.
+Declared scalar stack-argument probes compare original execution and readable C
+through default/NoOpt and O0/O2, including complete raw results and MXCSR. They
+exercise the fifth Win64 or ninth SysV floating argument. `MedCallingConvFPStack`
+additionally checks arithmetic, ROUND and APPROX12 incoming ranges across
+ELF/Mach-O/COFF and x86-32/x64, two-slot composition, writes, escaped addresses,
+packed/straddling home initialization and malformed or segmented refusals.
+Low/Med/High and owned assembly tests reject malformed roles, controls, state
+pointers, effects and addressing contracts. Native execution requires x64 and
+OS-enabled AVX; descriptor checks also cover x86-32 without claiming native
+x86-32 execution. These tests do not certify horizontal arithmetic, FMA,
+EVEX/SAE, x87, enabled #AC or unavailable-feature faults.
+
 ## x86 invalid encodings and instruction boundaries
 
 `NeverDX86EncodingAccuracyTests` requires raw illegal LOCK forms (including
@@ -396,6 +432,45 @@ ctest --test-dir build-release \
 ```
 
 ## Offline web analysis
+
+`WebStreams.*` covers explicit JSONL/SSE/JSON-RPC/MCP/log profiles, byte spans,
+EOF limits, duplicate/missing context, original numeric tokens and aggregate
+JSON work including failures. `WebStreamSDK.*` and `NeverDWorkerWeb` cover
+preview gates, profile/hash/policy receipts, redaction canaries, cache/revision
+revocation and transport parity. Run the owning web directory after changing
+shared JSON admission or session boundaries; readers remain enabled without JS.
+See the [stream profiles](web-stream-profile.md).
+
+`WebInterfaces.*` and `WebSourceInterfaces.*` cover passive HAR admission,
+fixed redaction classifications, missing/malformed fields, source anchors,
+shadowing/eval, options inheritance, method normalization, credential and
+WebSocket exclusions, exact origin/path candidate joins and fanout budgets.
+`WebInterfaceSDK.*` and `NeverDWorkerWeb` verify explicit preview/commit,
+hash-bound CLI receipts, revoked tokens/revisions, immutable capture bytes,
+cache limits, canary exclusion and direct/framed parity. Run the owning web
+directory after changes to these shared session boundaries. HAR remains
+available without the parser; source/interface comparison requires it.
+See the [interface profile](web-interface-profile.md).
+
+`WebPackageArchive.*`, `WebPackageIntegrity.*` and `WebPackageDigest.*` in
+`NeverDWebArtifactTests` cover bounded tar/PAX/gzip admission, shared storage,
+strongest SRI declarations, original compressed-byte scope and independent
+SHA-384/512 vectors. `WebPackageArchiveSDK.*`, `WebPackageIntegritySDK.*` and
+`NeverDWorkerWeb` cover consumer identity, nested coordinates, cache/revision
+revocation, native storage lifetime and offline CLI/transport parity. Optional
+hash-pinned official Claude Code npm artifacts are described in the
+[archive/integrity profile](web-package-archive-profile.md). Run the owning
+web directory and `WebBlobStore.*` when changing these shared storage paths.
+
+`WebPackages.*` in `NeverDWebArtifactTests` covers npm v1/v2/v3 placement,
+hidden locks, aliases/workspaces, optional/peer rules, declaration conflicts,
+field evidence coverage, two-root diffs and metadata budgets. The optional
+`NEVERD_NPM_CLI_1190_LOCK` path enables the pinned full npm CLI v11.9.0 lockfile
+case described in the [package profile](web-package-profile.md). It performs
+no download or installation. `WebPackageSDK.*` and `NeverDWorkerWeb` exercise
+metadata pages, stale IDs, private canaries and direct/framed adapter parity.
+Run the owning web CTest directory after changes to shared artifact/error or
+session boundaries; unavailable parser/compression/host profiles remain explicit.
 
 The Bun profile's C++ cases add preserved compiler graph hashes, synthetic
 hostile ELF/graph layouts, source encoding and immutable range checks. Set
@@ -480,6 +555,15 @@ Navigation/anchor cases compare ordinary, Bun and compressed-map storage
 precision, committed-view coverage, revisions and direct/framed query parity.
 CLI cases also exercise `bun-navigate`, `bun-view` and `bun-anchor` with an
 unusable external-tool PATH.
+
+The optional `NEVERD_BUN_142_CROSS_CORPUS` is documented in the
+[Bun cross-container corpus](../unittests/web/fixtures/bun/cross/README.md).
+`WebBun.CrossPlatformFullCompilerContainersWhenSupplied` validates twenty pinned
+ELF/Mach-O/PE compiler images for the additional ARM64/x64 targets; absent full
+images are a skip. Preserved graph tests use synthetic wrappers and cannot
+replace this qualification. All reads, negative mutations and golden member
+checks are C++, and the generated targets are never run.
+
 `NeverDWebNativeTests` compares file and immutable-buffer loading of synthetic
 ELF/PE/thin Mach-O, verifies direct native bytes and static decompilation after
 web/input destruction, rejects truncated images and implicit universal slices,
@@ -828,6 +912,18 @@ optimized and unoptimized LLVMC, execute every byte selector and four table-sele
 inputs at O0/O2 with undefined-behavior traps against the fixture formula.
 The existing deep selector-copy refusals remain covered independently.
 
+`ResolverCountLane.*` checks that scalar POPCOUNT/LZCOUNT results and their
+zero-extended low bytes identify the same value on x86, x64 and AArch64 LowIR.
+Malformed operands, wider inputs, different byte lanes, unrelated operations
+and exhausted work remain negative controls; cached answers retain cold work
+charges. `JumpTableCountLane.*` uses actual x64 TZCNT/POPCNT/LZCNT instructions
+with 32/64-bit inputs and byte/full-width guards. High-bit arithmetic and
+partial-register writes must prevent recovery. Relative-table HighC and
+absolute-table HighC, optimized LLVMC and unoptimized LLVMC execute zero,
+all bit positions and deterministic mixed inputs at O0/O2 with UB traps.
+The existing deep-arithmetic narrow guards must retain their exact-definition
+proof before the batched extension-range fallback is considered.
+
 `NeverDJumpTableTests` groups the existing enhanced and proposal fixed-point
 regressions with independent AArch64 and x64 finite-selector fixtures. The new
 fixtures select slots 2 and 3 from four-slot and 96-slot absolute pointer
@@ -1050,6 +1146,10 @@ Shared-header and shared-latch regressions cover zero-extended 32-bit and full 6
 `LowIRLoopPlanPairing.*` in the same target checks renamed registers, different arithmetic bodies, side-specific prefix snapshots, retained predicates, shared frame inputs, nested cut coverage and fresh proof budgets. Missing relations, incorrect writes, malformed temporary bindings, incomplete pairings and exhausted metadata limits must not establish a certificate.
 
 `LowIRLoopAlignment.*` checks independently authored ordinary and rotated frame-counter loops: both default self-plans prove individually, their first pairing fails, and another candidate cut proves the relation. Regressions cover multiple-cut permutations, wrong results and frame writes, missing/stale original records, explicit undefined witnesses, nondecreasing/wrapping counters, malformed graphs, cumulative failed-attempt queries, exact total budgets and exhausted search limits. Every refusal must lack a certificate. Additional cases cover separate reset/progress phases, equivalent relocated exit guards requiring cross-family pairing, shared caching without repeated inference, and combined metadata exhaustion. A trailing independent cycle checks complete feedback coverage with an explicit 16384-query inference limit. Empty and duplicate families use no symbolic queries; too few cuts refuse. Exact and one-short global budgets, wrong results, missing progress, original evidence and undefined witnesses remain checked. Filtered-family regressions cover neutral arithmetic diamonds, local versus boundary-only joins, and a reachable join that can be bypassed to an exit or loop boundary. They check a filtered candidate even when the original filtered family is duplicate, reuse of a filtered plan before a later broad attempt, exact/one-short/zero `MaxCutSelectionWork`, cumulative failed `CutSelectionWork`, and no symbolic inference after global graph work is exhausted. Complete cycle coverage is checked for both branch families; the diamond relation uses explicit inference and proof query limits.
+
+`LowIRLoopAlignment.DirectRanks*` should check renamed register/frame carriers, compatible frame unions, conflicts at either binding endpoint, and conservative refusal of constant or expression ranks and actual 8-byte versus 4-byte frame inputs. The accounting oracle must derive optional scan, comparison and metadata costs from the public self-plans before testing exact and one-short limits, rather than copying the successful search's total. Duplicate proposals must consume attempts and work without new checker queries; exhausting the optional cap must still allow a later ordinary pairing to prove. Wrong results, frame or preserved-state changes, missing progress, and stale original evidence must remain rejected with complete observations and the selected witness intact. `InterpreterLLVMRefinement.PreservationRestoresEntryAcrossLoopCutpoints` should discover the source plan through public search without manual cut addresses or rank bindings, then prepare fresh models and recheck both native and LLVM premises in the composite checker. These requirements do not assert a test-run result or ordinary ABI certification.
+
+`LowIRLoopAlignment.PlanCutCap*` checks zero, short and exact plan caps, zero symbolic queries for oversized families, complete cycle coverage, malformed graphs and later filtered proofs in both directions. Standalone inference remains compatible. `LLVMModel.RejectedBodyTemplateDoesNotHideAValidGuardedHeader` also checks that a one-cut alignment cap permits multiple inference attempts. Wrong results must still refuse a certificate.
 
 Partial-counter regressions cover frame and register lanes, both directions, low/interior/high positions, unusual widths, both byte orders and three-byte represented frame words. They check delayed lane discovery, preserved-bit mutations, nonprogress and unguarded wrap, invalid additional entries, exact/short inference budgets, and existing single-cut search.
 
@@ -2798,6 +2898,27 @@ retain all callback bodies and resume labels; C receives a syntax check.
 IR, installation, decompilation and PE identities before replaying the same
 files on Windows. Its Python admission suite rejects incomplete, stale or
 substituted evidence.
+
+`check_windows_registration_nested_try.py` compiles independent Clang `-O0`
+and `-O1` parents and links the captured CRT libraries. Inner reference catches
+and outer value/catch-all clauses exercise all three continuations under four
+caller stack layouts, including a new throw inside the inner catch. The
+64-image source/control matrix covers both CLI patch
+modes and forced rebasing. The C++ test rejects changed prologue saves,
+personality argument reads, search edges, handler order, continuation ownership,
+and emitted try/unwind state rows. Secondary-search mutations also reject
+searching the exited inner try or losing the active catch token. HighIR must
+contain both nested tries and all three callback bodies; C output receives a
+syntax check. `windows_registration_runtime.py` captures the selected MSVC
+x86 redistributable DLL alongside the link libraries. Each image runs with
+that exact app-local runtime, with a native-only Wine override, and replay
+authenticates its provider and digest. A missing or changed runtime fails;
+Wine's built-in catch-guard behavior cannot silently replace the Windows CRT.
+`RegistrationCxxUnwind` tests nested, disjoint, three-level and cleanup search
+graphs. `replay_windows_registration_nested_try.py` authenticates the source,
+rejection tests, compiler objects, IR, decompilation and installed PE bytes
+before executing the identical images on Windows. Its Python admission tests
+reject missing routes, stale proofs, altered images and lost nested regions.
 
 
 The focused Windows EH workflow first builds and executes genuine MSVC x86

@@ -91,6 +91,25 @@ TEST_F(LLVMModel, RejectedBodyTemplateDoesNotHideAValidGuardedHeader) {
   const auto Inferred = inferLowIRLoopRefinementPlan(M->Function, C);
   ASSERT_TRUE(Inferred.inferred()) << Inferred.Diagnostic;
   EXPECT_GT(Inferred.CutpointAttempts, 1U);
+  ASSERT_EQ(Inferred.Plan->Cutpoints.size(), 1U);
+  LowIRLoopAlignmentLimits Alignment;
+  Alignment.MaxCuts = 1;
+  // The SSA counter is a register input. Frame-only pairing cannot relate
+  // the two independent counters, even when both models are identical.
+  const auto Unpaired = inferAndCheckLowIRLoopRefinement(
+      M->Function, M->Instructions, M->Function, C,
+      LowIRRefinementWitness::LiftedBits, Alignment);
+  EXPECT_FALSE(Unpaired.proved());
+  EXPECT_FALSE(Unpaired.Refinement.Certificate);
+  EXPECT_EQ(Unpaired.RankPairingAttempts, 0U);
+  Alignment.MaxRankPairingAttempts = 1;
+  const auto Aligned = inferAndCheckLowIRLoopRefinement(
+      M->Function, M->Instructions, M->Function, C,
+      LowIRRefinementWitness::LiftedBits, Alignment);
+  ASSERT_TRUE(Aligned.proved())
+      << Aligned.Diagnostic << ": " << Aligned.LastCandidateDiagnostic;
+  ASSERT_TRUE(Aligned.Refinement.Certificate);
+  EXPECT_EQ(Aligned.RankPairingAttempts, 1U);
   const auto Proof = checkLowIRLoopRefinement(
       M->Function, M->Instructions, M->Function, C, *Inferred.Plan,
       LowIRRefinementWitness::LiftedBits);

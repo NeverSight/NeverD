@@ -1,3 +1,14 @@
+//===- SourceOrigins.h - Syntactic module provenance -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Syntactic module provenance.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/SourceModules.h"

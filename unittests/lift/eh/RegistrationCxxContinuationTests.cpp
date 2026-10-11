@@ -215,6 +215,8 @@ TEST(RegistrationState, NestedCxxCatchResumesTheEnclosingCatchContext) {
   EXPECT_EQ(Result.Blocks[10].CxxMinimumTryLevel, 1);
   EXPECT_TRUE(Result.Blocks[9].CallbackOnly);
   EXPECT_EQ(Result.Blocks[9].CxxMinimumTryLevel, 3);
+  EXPECT_EQ(Result.Blocks[7].CxxSearches,
+            (std::vector<RegistrationCxxSearch>{{2, 1, 0}}));
   EXPECT_FALSE(Result.Blocks[6].CallbackOnly);
 }
 

@@ -1,3 +1,14 @@
+//===- ArtifactTests.cpp - Immutable artifact evidence tests -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Immutable artifact evidence tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Artifact.h"

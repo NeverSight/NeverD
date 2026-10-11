@@ -17,6 +17,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86RegistrationCxxUnwind.h"
 #include "neverd/backend/llvm/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86RegistrationLayout.h"
 #include "neverd/ir/low/RegistrationABI.h"
@@ -67,7 +68,9 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       !States.RuntimeObjectAccessesComplete || !States.ImageReadsComplete)
     return false;
   const auto &Cxx = *EH.Cxx;
-  const auto &Try = Cxx.TryBlocks[0];
+  const auto UnwindGraph = projectX86RegistrationCxxUnwind(Cxx);
+  if (!UnwindGraph)
+    return false;
   const auto FrameBytes = FrameAlloca->getAllocationSize(Mod->getDataLayout());
   const auto Coordinate = cxxRegistrationFrameCoordinate(EH, &States);
   const auto Layout =
@@ -81,13 +84,16 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   const auto CatchOwners = projectX86RegistrationCatchBlocks(Func);
   if (!CatchOwners)
     return false;
-  std::vector<RegistrationCxxCatchPlan> Catches(Try.Handlers.size());
-  for (uint32_t Index = 0; Index < Catches.size(); ++Index) {
-    auto Object = projectX86RegistrationCatch(EH, States, *Layout, 0, Index);
-    if (!Object)
-      return false;
-    Catches[Index].Object = *Object;
-  }
+  std::map<X86RegistrationCatchIdentity, RegistrationCxxCatchPlan> Catches;
+  for (uint32_t Region = 0; Region < Cxx.TryBlocks.size(); ++Region)
+    for (uint32_t Index = 0; Index < Cxx.TryBlocks[Region].Handlers.size();
+         ++Index) {
+      auto Object =
+          projectX86RegistrationCatch(EH, States, *Layout, Region, Index);
+      if (!Object)
+        return false;
+      Catches[{Region, Index}].Object = *Object;
+    }
 
   const auto EntryABI = getX86RegistrationCxxEntryABI(Func, Parent);
   if (!EntryABI)
@@ -112,8 +118,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       return false;
     auto State = SourceStates.find({Block.StartAddr, Block.EndAddr});
     if (State != SourceStates.end() && State->second->Reached) {
-      if (State->second->Levels.size() > 1 ||
-          !Matched.insert(State->second).second)
+      if (!Matched.insert(State->second).second)
         return false;
       BlockStates.emplace(Block.Id, State->second);
     } else {
@@ -128,13 +133,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   for (const auto &State : States.Blocks)
     if (State.Reached && !Matched.count(&State))
       return false;
-  for (uint32_t Index = 0; Index < Catches.size(); ++Index) {
-    const auto Handler = BlocksAt.find(Try.Handlers[Index].HandlerVA);
+  for (auto &[Identity, Plan] : Catches) {
+    const auto &[Region, Index] = Identity;
+    const auto Handler =
+        BlocksAt.find(Cxx.TryBlocks[Region].Handlers[Index].HandlerVA);
     if (Handler == BlocksAt.end() ||
-        !windows_eh_semantics::getCxxCatchSemanticToken(EH, Arch::X86, 0,
+        !windows_eh_semantics::getCxxCatchSemanticToken(EH, Arch::X86, Region,
                                                         Index))
       return false;
-    Catches[Index].Handler = Handler->second;
+    Plan.Handler = Handler->second;
   }
 
   struct Operation {
@@ -149,7 +156,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     const RegistrationBlockState *State;
     bool Throw;
     bool Borrow;
-    uint32_t CatchIndex;
+    X86RegistrationCatchIdentity CatchIdentity;
     std::string Name;
   };
   struct CleanupPlan {
@@ -178,11 +185,12 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
           *Mod, "__CxxFrameHandler3", PersonalityType))
     return false;
-  for (const auto &Catch : Try.Handlers)
-    if (Catch.TypeDescriptorVA &&
-        !med_llvm_eh::canMaterializeExternalDataDeclaration(
-            *Mod, makeNdDataSymbol(Catch.TypeDescriptorVA), I8, false))
-      return false;
+  for (const auto &Try : Cxx.TryBlocks)
+    for (const auto &Catch : Try.Handlers)
+      if (Catch.TypeDescriptorVA &&
+          !med_llvm_eh::canMaterializeExternalDataDeclaration(
+              *Mod, makeNdDataSymbol(Catch.TypeDescriptorVA), I8, false))
+        return false;
   if (auto *Existing = Mod->getFunction("__CxxFrameHandler3")) {
     auto Address = rewrite_source::getOriginalVA(*Existing);
     if (!Address) {
@@ -198,11 +206,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       continue;
     const auto *State = S->second;
     auto *IR = OriginalBlockMap.at(Block.Id);
-    if (State->CallbackOnly) {
-      if (State->CxxMinimumTryLevel != Try.TryHigh + 1)
-        return false;
-      Catches[CatchOwners->at(Block.Id)].Blocks.insert(IR);
-    }
+    if (State->CallbackOnly)
+      Catches.at(CatchOwners->at(Block.Id)).Blocks.insert(IR);
     for (const auto &Op : Block.Ops) {
       if (++Work > limits::kMaxRegistrationEHStateWork)
         return false;
@@ -222,8 +227,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       if (Op.Opcode == NdOp::RETURN && State->CallbackOnly) {
         auto *Return = llvm::dyn_cast<llvm::ReturnInst>(IR->getTerminator());
         const auto *Resume = States.cxxContinuation(Op.Addr, Op.OriginSeq);
-        if (!Return || !Resume || Resume->TryIndex ||
-            Resume->CatchIndex != CatchOwners->at(Block.Id) ||
+        if (!Return || !Resume ||
+            X86RegistrationCatchIdentity{Resume->TryIndex,
+                                         Resume->CatchIndex} !=
+                CatchOwners->at(Block.Id) ||
             !BlocksAt.count(Resume->TargetVA) ||
             Resume->SavedStackOffset > -16 ||
             !Layout->runtimeOffset(Resume->SavedStackOffset, 0) ||
@@ -233,6 +240,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       }
       if (Op.Opcode != NdOp::CALL)
         continue;
+      // Synchronous calls need one source dispatch state. A common resume
+      // block may join catch states before its next state store or return.
+      if (State->Levels.size() > 1)
+        return false;
       const auto *Effect = States.callFrameEffect(Op.Addr, Op.OriginSeq);
       llvm::CallInst *Call = nullptr;
       for (const auto &[Candidate, Address] : CallSiteAddrs)
@@ -282,7 +293,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
         return false;
       Calls.push_back(
           {Call, Effect, State, Throw, Borrow,
-           State->CallbackOnly ? CatchOwners->at(Block.Id) : UINT32_MAX, Name});
+           State->CallbackOnly
+               ? CatchOwners->at(Block.Id)
+               : X86RegistrationCatchIdentity{UINT32_MAX, UINT32_MAX},
+           Name});
       Operations.push_back({Call, &Op, State->BlockId, 2});
       // The shared receipt and fresh callee proof agree that this call never
       // returns. Its lifted post-call stack/register operations cannot execute
@@ -294,7 +308,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   if (Resumes.empty() || Resumes.size() != States.CxxContinuations.size() ||
       Calls.size() != States.CallFrameEffects.size())
     return false;
-  for (const auto &Catch : Catches) {
+  for (const auto &[Identity, Catch] : Catches) {
     if (!Catch.Blocks.count(Catch.Handler))
       return false;
     for (auto *Block : Catch.Blocks) {
@@ -339,15 +353,13 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     Cleanups.emplace(State, CleanupPlan{Contract, Name, Token});
   }
   for (const auto &Plan : Calls) {
-    if (Plan.State->Levels.empty() ||
-        Plan.State->CxxMinimumTryLevel > Try.TryLow)
+    if (Plan.State->Levels.empty() || Plan.State->CallbackOnly)
       continue;
     const auto Level = Plan.State->Levels[0];
-    if (Level < Try.TryLow || Level > Try.TryHigh)
-      continue;
     int32_t Walk = Level;
-    while (Walk != Try.TryLow) {
-      if (++Work > limits::kMaxRegistrationEHStateWork || Walk < Try.TryLow)
+    while (Walk >= 0) {
+      if (++Work > limits::kMaxRegistrationEHStateWork ||
+          uint32_t(Walk) >= Cxx.UnwindMap.size())
         return false;
       const auto &Action = Cxx.UnwindMap[Walk];
       if (Action.ActionVA &&
@@ -401,11 +413,12 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     }
 
   if (EH.Registration->hasCxxCallbackStack())
-    for (uint32_t Index = 0; Index < Catches.size(); ++Index) {
-      auto &Catch = Catches[Index];
+    for (auto &[Identity, Catch] : Catches) {
       const auto SourceBlock =
           llvm::find_if(Func.Blocks, [&](const auto &Block) {
-            return Block.StartAddr == Try.Handlers[Index].HandlerVA;
+            return Block.StartAddr == Cxx.TryBlocks[Identity.first]
+                                          .Handlers[Identity.second]
+                                          .HandlerVA;
           });
       if (SourceBlock == Func.Blocks.end())
         return false;
@@ -487,23 +500,25 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     }
   }
   auto *None = llvm::ConstantTokenNone::get(*Ctx);
-  auto *Dispatch =
-      emitRegistrationCxxCatches(EH, Catches, *FrameAlloca, Parent);
-
+  std::vector<llvm::BasicBlock *> Dispatches;
+  for (uint32_t Index = 0; Index < Cxx.TryBlocks.size(); ++Index)
+    Dispatches.push_back(llvm::BasicBlock::Create(
+        *Ctx, "registration.cxx.dispatch." + std::to_string(Index), &Parent));
   std::map<int32_t, llvm::BasicBlock *> Unwinds;
-  Unwinds.emplace(Try.TryLow, Dispatch);
   std::function<llvm::BasicBlock *(int32_t)> UnwindAt = [&](int32_t State) {
-    if (State < Try.TryLow || State > Try.TryHigh)
+    if (State < 0 || uint32_t(State) >= UnwindGraph->size())
       return static_cast<llvm::BasicBlock *>(nullptr);
+    const auto &Target = (*UnwindGraph)[State];
+    if (Target.TargetKind == X86RegistrationCxxUnwindTarget::Kind::Caller)
+      return static_cast<llvm::BasicBlock *>(nullptr);
+    if (Target.TargetKind == X86RegistrationCxxUnwindTarget::Kind::Try)
+      return Dispatches[Target.Index];
+    State = Target.Index;
     auto Found = Unwinds.find(State);
     if (Found != Unwinds.end())
       return Found->second;
     const auto &Action = Cxx.UnwindMap[State];
     auto *Outer = UnwindAt(Action.ToState);
-    if (!Action.ActionVA) {
-      Unwinds.emplace(State, Outer);
-      return Outer;
-    }
     const auto &Plan = Cleanups.at(State);
     auto *Block = llvm::BasicBlock::Create(
         *Ctx, "registration.cxx.cleanup." + std::to_string(State), &Parent);
@@ -532,6 +547,19 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     Unwinds.emplace(State, Block);
     return Block;
   };
+  std::vector<llvm::BasicBlock *> OuterUnwinds;
+  for (const auto &Try : Cxx.TryBlocks)
+    OuterUnwinds.push_back(UnwindAt(Cxx.UnwindMap[Try.TryLow].ToState));
+  emitRegistrationCxxCatches(EH, Catches, Dispatches, OuterUnwinds,
+                             *FrameAlloca, Parent);
+  auto ProtectedCall = [&](const RegistrationBlockState &State) {
+    if (State.Levels.empty())
+      return false;
+    const int32_t Level = State.Levels.front();
+    return llvm::any_of(State.CxxSearches, [&](const auto &Search) {
+      return Search.Level == Level;
+    });
+  };
   for (const auto &Plan : Calls) {
     auto *Old = Plan.Call;
     llvm::IRBuilder<> B(Old);
@@ -552,9 +580,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
           B.getInt32(Layout->Establisher + *Plan.Effect->ECXFrameOffset)));
     const int32_t Level =
         Plan.State->Levels.empty() ? -1 : Plan.State->Levels.front();
-    auto *Unwind = Plan.State->CxxMinimumTryLevel <= Try.TryLow
-                       ? UnwindAt(Level)
-                       : nullptr;
+    auto *Unwind = ProtectedCall(*Plan.State) ? UnwindAt(Level) : nullptr;
+    llvm::SmallVector<llvm::OperandBundleDef, 1> Bundles;
+    if (Plan.State->CallbackOnly)
+      Bundles.emplace_back("funclet", Catches.at(Plan.CatchIdentity).Pad);
     llvm::CallBase *Call = nullptr;
     if (Unwind) {
       auto *Block = Old->getParent();
@@ -562,16 +591,13 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
                                               "registration.cxx.call.cont");
       Block->getTerminator()->eraseFromParent();
       B.SetInsertPoint(Old);
-      Call = B.CreateInvoke(Callee, Continue, Unwind, Args);
+      Call = B.CreateInvoke(Callee, Continue, Unwind, Args, Bundles);
       B.SetInsertPoint(Call);
       med_llvm_eh::emitWindowsEHProvenanceAnchor(
           B, Model, Role::ProtectedInvoke, EH.CodeRange.Begin,
           Plan.Effect->Address, uint32_t(Level), Plan.Effect->OpSeq, nullptr,
           Plan.Effect->Target, Plan.Throw);
     } else {
-      llvm::SmallVector<llvm::OperandBundleDef, 1> Bundles;
-      if (Plan.State->CallbackOnly)
-        Bundles.emplace_back("funclet", Catches[Plan.CatchIndex].Pad);
       Call = B.CreateCall(Callee, Args, Bundles);
     }
     Call->setCallingConv(Callee->getCallingConv());
@@ -605,11 +631,11 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     Old->eraseFromParent();
   }
   for (const auto &[Return, Resume] : Resumes)
-    emitRegistrationCxxContinuation(*Return, *FrameAlloca, Layout->Establisher,
-                                    *EH.Registration->RegistrationOffset - 4,
-                                    *Catches[Resume->CatchIndex].Pad,
-                                    *BlocksAt.at(Resume->TargetVA),
-                                    EH.CodeRange.Begin, *Resume);
+    emitRegistrationCxxContinuation(
+        *Return, *FrameAlloca, Layout->Establisher,
+        *EH.Registration->RegistrationOffset - 4,
+        *Catches.at({Resume->TryIndex, Resume->CatchIndex}).Pad,
+        *BlocksAt.at(Resume->TargetVA), EH.CodeRange.Begin, *Resume);
   for (const auto &Access : States.ChainAccesses) {
     auto *I = RegistrationChainIR.at({Access.Address, Access.OpSeq});
     llvm::IRBuilder<> B(I);
@@ -660,11 +686,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       llvm::MDNode::get(
           *Ctx, {med_llvm_eh::mdUInt(*Ctx, 1, 1),
                  llvm::MDString::get(*Ctx, "cxx-x86-registration-native")}));
-  const auto Protected = llvm::count_if(Calls, [&](const CallPlan &Plan) {
-    const auto Level = Plan.State->Levels.empty() ? -1 : Plan.State->Levels[0];
-    return Plan.State->CxxMinimumTryLevel <= Try.TryLow &&
-           Level >= Try.TryLow && Level <= Try.TryHigh;
-  });
+  const auto Protected = llvm::count_if(
+      Calls, [&](const CallPlan &Plan) { return ProtectedCall(*Plan.State); });
   exception_rewrite::setContract(
       Parent, exception_rewrite::SourceState::Complete,
       exception_rewrite::LoweringState::Complete, Protected, Protected, 0);

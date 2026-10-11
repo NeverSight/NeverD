@@ -1,3 +1,14 @@
+//===- JsonReaderTests.cpp - Bounded JSON admission tests --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded JSON admission tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "JsonReader.h"
 #include "gtest/gtest.h"
 

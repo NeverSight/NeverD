@@ -1,8 +1,19 @@
+//===- PrimitiveNumbers.cpp - JavaScript primitive formatting ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JavaScript primitive formatting.
+///
+//===----------------------------------------------------------------------===//
+
 #include "PrimitiveNumbers.h"
 
 #include "hermes/Support/Conversions.h"
 
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 
 #include <cfenv>
 #include <cstring>

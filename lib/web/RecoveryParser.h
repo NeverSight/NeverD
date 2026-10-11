@@ -1,3 +1,14 @@
+//===- RecoveryParser.h - Bounded source recovery parsing --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded source recovery parsing.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Source.h"

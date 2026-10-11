@@ -1,3 +1,14 @@
+//===- HermesModel.h - Embedded parser AST conversion ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Embedded parser AST conversion.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 // This private adapter is included only by the parser translation unit.
@@ -5,7 +16,7 @@
 #include "hermes/AST/ESTree.h"
 
 #include "neverd/web/Artifact.h"
-#include "neverd/web/Session.h"
+#include "neverd/web/Error.h"
 #include "neverd/web/Source.h"
 
 namespace neverd::web {

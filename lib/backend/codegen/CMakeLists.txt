@@ -13,6 +13,7 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationIR.cpp
   COFF/COFFRegistrationSEHTables.cpp
   COFF/COFFRegistrationCxx.cpp
+  COFF/COFFRegistrationCxxStateProof.cpp
   COFF/COFFRegistrationCxxIR.cpp
   COFF/COFFRegistrationCxxCatch.cpp
   COFF/COFFRegistrationCxxContinuation.cpp

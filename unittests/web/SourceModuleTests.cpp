@@ -1,3 +1,14 @@
+//===- SourceModuleTests.cpp - Source Module tests ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Source Module tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/web/Session.h"

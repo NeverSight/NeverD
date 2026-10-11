@@ -1,3 +1,14 @@
+//===- ExportDirectory.h - Verified local artifact export --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Verified local artifact export.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "Internal.h"

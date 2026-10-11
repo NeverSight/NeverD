@@ -1,3 +1,14 @@
+//===- SDKTests.cpp -  tests -------------------------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+///  tests.
+///
+//===----------------------------------------------------------------------===//
+
 #include "BunFixture.h"
 #include "BunSourceMapFixture.h"
 #include "gtest/gtest.h"
@@ -387,6 +398,48 @@ TEST_F(WebSDK, BunExportPreservesCapturedBytesAndRefusesExistingDestinations) {
   ASSERT_EQ(field(commit(preview()), "revision"), "2");
   EXPECT_EQ(errorCode(Export("2", Root / "stale")), "unknown_bun_extraction");
   EXPECT_FALSE(fs::exists(Root / "stale"));
+}
+
+TEST_F(WebSDK, BunPlatformsShareCapabilitiesSourcesAndVerifiedExport) {
+  using namespace neverd::web::test;
+  const BunFixture F;
+  const auto Capabilities =
+      llvm::formatv("{0}", take(neverd_web_capabilities_json())).str();
+  for (const bool ARM64 : {false, true}) {
+    for (const auto *Platform : {"linux", "macos", "windows"}) {
+      const std::string_view P = Platform;
+      const auto Bytes = P == "linux"   ? bunELF(F.Graph, ARM64 ? 183 : 62)
+                         : P == "macos" ? bunMachO(F.Graph, ARM64)
+                                        : bunPE(windowsGraph(F.Graph), ARM64);
+      write(Bytes);
+      const auto Revision = field(commit(preview()), "revision");
+      const auto Summary = bun(Revision, rootID(Revision));
+      ASSERT_EQ(field(Summary, "status"), "ok");
+      EXPECT_EQ(field(Summary, "platform"), P);
+      EXPECT_EQ(field(Summary, "architecture"), ARM64 ? "arm64" : "x64");
+      const auto Profile = field(Summary, "profile");
+      EXPECT_NE(Capabilities.find(Profile), std::string::npos);
+      const auto Extraction = field(Summary, "extraction_id");
+      const auto Destination = (Root / ("cross-export-" + Revision)).string();
+      const auto Reply = take(neverd_web_bun_export_json(
+          Session, Revision.data(), Revision.size(), Extraction.data(),
+          Extraction.size(), Destination.data(), Destination.size()));
+      ASSERT_EQ(field(Reply, "status"), "ok");
+      EXPECT_EQ(field(Reply, "layout_profile"), Profile);
+      EXPECT_EQ(field(Reply, "platform"), P);
+      EXPECT_EQ(field(Reply, "architecture"), ARM64 ? "arm64" : "x64");
+      EXPECT_EQ(Reply.getAsObject()->getInteger("source_count"), 2);
+#if NEVERD_TEST_WEB_JAVASCRIPT
+      EXPECT_EQ(Reply.getAsObject()->getInteger("readable_source_count"), 2);
+#endif
+      std::ifstream Source(fs::path(Destination) / "m00001.js",
+                           std::ios::binary);
+      const std::string Text(std::istreambuf_iterator<char>(Source), {});
+      EXPECT_EQ(Text, "export const x = '中文🌱';");
+      EXPECT_EQ(llvm::formatv("{0}", Reply).str().find("CANARY"),
+                std::string::npos);
+    }
+  }
 }
 
 #ifdef NEVERD_WEB_TEST_CLI

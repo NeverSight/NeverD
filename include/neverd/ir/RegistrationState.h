@@ -12,6 +12,7 @@
 #include "neverd/loader/ExceptionCommon.h"
 
 #include <algorithm>
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -21,6 +22,16 @@
 namespace neverd {
 
 struct LowFunc;
+
+/// A possible language search at a reaching state. ExitedCatches counts CRT
+/// catch guards unwound before the target catch is entered. Zero denotes a
+/// parent search or a try inside the current catch invocation.
+struct RegistrationCxxSearch {
+  int32_t Level = -1;
+  uint32_t TryIndex = 0;
+  uint32_t ExitedCatches = 0;
+  auto operator<=>(const RegistrationCxxSearch &) const = default;
+};
 
 /// Reaching registration states at an exact, decoded LowIR block. These are
 /// CFG facts, not an IP-to-state table in the input image. Keep them separate
@@ -36,13 +47,15 @@ struct RegistrationBlockState {
   /// Finally callbacks can dispatch to outer scopes even though they are not
   /// lexical parent blocks. Searching filters have a separate runtime context.
   bool CanDispatch = false;
-  /// A catch executes inside a runtime catch context. Only try blocks at or
-  /// above this minimum participate in a nested exception search.
+  /// Minimum for the innermost catch guard's search. A failed search proceeds
+  /// through enclosing guards and the parent registration. CxxSearches, not
+  /// this minimum alone, owns all possible dispatch targets.
   int32_t CxxMinimumTryLevel = 0;
   /// Reached by ordinary flow, runtime dispatch or a checked catch resume.
   /// Empty levels can also describe a reached pre-install/post-remove block.
   /// Consumers require the complete state/lifetime proof before pruning.
   bool Reached = false;
+  std::vector<RegistrationCxxSearch> CxxSearches;
 };
 
 /// A PE32 C++ catch returns a continuation code pointer to the runtime. This

@@ -16,73 +16,89 @@
 
 namespace neverd {
 
-bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
-                                    std::vector<HighStmt> &Body,
-                                    size_t &InsertAt) {
+namespace {
+struct TerminalRegistrationRegion {
+  std::map<va_t, std::pair<va_t, int>> Ranges;
+  std::set<int> Ordinary;
+  std::set<va_t> Calls;
+  size_t Work = 0;
+};
+
+std::optional<TerminalRegistrationRegion>
+terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
+                           int32_t TryHigh) {
   if (!Med.ExceptionMetadata || !Med.RegistrationStates || Med.Blocks.empty() ||
       Med.Blocks.size() > limits::kMaxRegistrationEHRecords)
-    return false;
+    return std::nullopt;
   const auto &EH = *Med.ExceptionMetadata;
   const auto &State = *Med.RegistrationStates;
   if (!EH.Registration || EH.Encoding != ExceptionEncoding::X86CxxFuncInfo ||
       EH.ParseStatus != ExceptionParseStatus::Complete || !EH.Cxx ||
-      !EH.Cxx->IsSynchronous || EH.Cxx->TryBlocks.size() != 1 ||
+      EH.Cxx->TryBlocks.size() > limits::kMaxRegistrationEHRecords ||
+      EH.Cxx->UnwindMap.size() > limits::kMaxRegistrationEHRecords ||
+      !EH.Cxx->IsSynchronous || !EH.Cxx->hasValidStateGraph() ||
       !State.Complete || !State.CallFrameEffectsComplete ||
       !State.CxxContinuationsComplete || !State.RegistrationLifetimeComplete ||
       State.Blocks.size() > limits::kMaxRegistrationEHRecords)
-    return false;
-  const auto &Try = EH.Cxx->TryBlocks.front();
+    return std::nullopt;
+  const auto NativeTry = llvm::find_if(EH.Cxx->TryBlocks, [&](const auto &Try) {
+    return Try.TryLow == TryLow && Try.TryHigh == TryHigh;
+  });
+  if (NativeTry == EH.Cxx->TryBlocks.end())
+    return std::nullopt;
+  const auto &Try = *NativeTry;
   std::map<int, const MedBlock *> Blocks;
-  std::map<va_t, std::pair<va_t, int>> Ranges;
+  TerminalRegistrationRegion Result;
+  auto &Ranges = Result.Ranges;
   int Entry = -1;
   size_t OperationCount = 0;
   for (const auto &Block : Med.Blocks) {
     OperationCount += Block.Ops.size();
     if (OperationCount > limits::kMaxRegistrationEHStateWork)
-      return false;
+      return std::nullopt;
     if (Block.StartAddr >= Block.EndAddr ||
         !Blocks.emplace(Block.Id, &Block).second ||
         !Ranges
              .emplace(Block.StartAddr, std::make_pair(Block.EndAddr, Block.Id))
              .second)
-      return false;
+      return std::nullopt;
     if (Block.StartAddr == Med.Entry)
       Entry = Block.Id;
   }
   va_t End = 0;
   for (const auto &[Start, Range] : Ranges) {
     if (Start < End)
-      return false;
+      return std::nullopt;
     End = Range.first;
   }
-  std::set<int> Ordinary;
-  std::set<va_t> Calls;
+  auto &Ordinary = Result.Ordinary;
+  auto &Calls = Result.Calls;
   std::vector<int> Pending{Entry};
-  size_t Work = 0;
+  auto &Work = Result.Work;
   while (!Pending.empty()) {
     const int Id = Pending.back();
     Pending.pop_back();
     if (++Work > limits::kMaxRegistrationEHStateWork || !Blocks.count(Id))
-      return false;
+      return std::nullopt;
     if (!Ordinary.insert(Id).second)
       continue;
     const auto &Block = *Blocks.at(Id);
     if (!Block.ExceptionalPreds.empty())
-      return false;
+      return std::nullopt;
     bool Terminal = false;
     for (const auto &Op : Block.Ops) {
       if (++Work > limits::kMaxRegistrationEHStateWork)
-        return false;
+        return std::nullopt;
       if (Op.Dead)
         continue;
       if (Terminal || Op.Opcode == NdOp::RETURN ||
           Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INDIR_BR)
-        return false;
+        return std::nullopt;
       if (Op.Opcode != NdOp::CALL)
         continue;
       Work += OperationCount + State.Blocks.size();
       if (Work > limits::kMaxRegistrationEHStateWork)
-        return false;
+        return std::nullopt;
       // Extending a synchronous language scope over its branch and frame
       // setup is valid only if every ordinary call already has that scope.
       // In particular, never bring an unprotected call or an EHa memory fault
@@ -99,19 +115,48 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
                                  });
                         }) ||
           !Calls.insert(Op.Addr).second)
-        return false;
+        return std::nullopt;
       Terminal = true;
     }
     if (Terminal != Block.Succs.empty())
-      return false;
+      return std::nullopt;
     Pending.insert(Pending.end(), Block.Succs.begin(), Block.Succs.end());
   }
   if (Calls.empty())
-    return false;
+    return std::nullopt;
   for (int Id : Ordinary)
     for (int Pred : Blocks.at(Id)->Preds)
       if (!Ordinary.count(Pred))
-        return false;
+        return std::nullopt;
+
+  return Result;
+}
+} // namespace
+
+std::vector<ExceptionAddressRange>
+terminalRegistrationTryRanges(const MedFunc &Med, int32_t TryLow,
+                              int32_t TryHigh) {
+  const auto Region = terminalRegistrationRegion(Med, TryLow, TryHigh);
+  if (!Region)
+    return {};
+  std::vector<ExceptionAddressRange> Ranges;
+  for (const auto &[Begin, Range] : Region->Ranges)
+    if (Region->Ordinary.count(Range.second))
+      Ranges.push_back({Begin, Range.first});
+  return Ranges;
+}
+
+bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
+                                    int32_t TryLow, int32_t TryHigh,
+                                    std::vector<HighStmt> &Body,
+                                    size_t &InsertAt) {
+  auto Region = terminalRegistrationRegion(Med, TryLow, TryHigh);
+  if (!Region)
+    return false;
+  const auto &Ranges = Region->Ranges;
+  const auto &Ordinary = Region->Ordinary;
+  const auto &Calls = Region->Calls;
+  auto &Work = Region->Work;
 
   auto Owner = [&](va_t Address) -> std::optional<bool> {
     auto It = Ranges.upper_bound(Address);
@@ -121,6 +166,7 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
   };
   std::vector<bool> Selected;
   std::set<va_t> SeenCalls;
+  std::set<const HighStmt *> Nested;
   for (const auto &Top : Func.Body) {
     bool Inside = false, Outside = false, Invalid = false;
     std::vector<const HighStmt *> Statements{&Top};
@@ -150,10 +196,13 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
       Add(Stmt.DefaultBody);
       for (const auto &Case : Stmt.Cases)
         Add(Case.Body);
-      // Existing language regions need their own scope ownership; this
-      // terminal-component projection does not flatten nested handlers.
-      if (!Stmt.EHClauses.empty() || !Stmt.EHClauseBodies.empty())
-        return false;
+      // Inner callback code is an independent runtime entry, not part of
+      // the ordinary component. Keep it attached to its checked inner try.
+      if (!Stmt.EHClauses.empty() || !Stmt.EHClauseBodies.empty()) {
+        if (!checkNestedRegistrationTry(Stmt, Med, TryLow, TryHigh, Work))
+          return false;
+        Nested.insert(&Stmt);
+      }
     }
     if (Invalid || Inside == Outside)
       return false;
@@ -165,10 +214,12 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
   // independently entered resume body cannot manufacture a fallthrough edge.
   for (size_t I = 1; I < Selected.size(); ++I)
     if (Selected[I - 1] && !Selected[I]) {
-      const auto &Previous = Func.Body[I - 1];
+      const HighStmt *Previous = &Func.Body[I - 1];
+      while (Nested.count(Previous))
+        Previous = &Previous->Body.back();
       const auto &Call =
-          Previous.Kind == StmtKind::Call ? Previous.CallExpr : Previous.Val;
-      if (!Calls.count(Previous.Addr) || !Call ||
+          Previous->Kind == StmtKind::Call ? Previous->CallExpr : Previous->Val;
+      if (!Calls.count(Previous->Addr) || !Call ||
           Call->Kind != ExprKind::Call || !Call->DoesNotReturn)
         return false;
     }

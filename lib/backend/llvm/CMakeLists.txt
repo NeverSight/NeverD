@@ -1,6 +1,7 @@
 add_neverd_component_library(NeverDWindowsEHMetadata
   eh/WindowsEHMetadataEncoder.cpp
   eh/WindowsEHNativeSource.cpp
+  X86/RegistrationCxxUnwind.cpp
   eh/WindowsEHSemanticDigest.cpp
 )
 

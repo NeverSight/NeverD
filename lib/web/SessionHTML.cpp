@@ -1,3 +1,14 @@
+//===- SessionHTML.cpp - HTML analysis publication ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// HTML analysis publication.
+///
+//===----------------------------------------------------------------------===//
+
 #include "SessionInternal.h"
 
 namespace neverd::web {

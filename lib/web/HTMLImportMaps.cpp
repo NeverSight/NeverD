@@ -1,3 +1,14 @@
+//===- HTMLImportMaps.cpp - Captured import map contexts ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Captured import map contexts.
+///
+//===----------------------------------------------------------------------===//
+
 #include "HTMLImportMaps.h"
 
 #include "HTMLFiles.h"

@@ -1,3 +1,14 @@
+//===- Bun.h - Qualified Bun graph extraction --------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Qualified Bun graph extraction.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Artifact.h"
@@ -34,6 +45,7 @@ struct BunModule {
 struct BunExtraction {
   std::string ID, ArtifactID;
   std::string Profile;
+  std::string ContainerFormat, Platform, Architecture;
   uint64_t GraphOffset = 0, GraphSize = 0;
   uint32_t EntryPoint = 0, StartupCount = 0, Flags = 0;
   std::vector<BunModule> Modules;
@@ -43,6 +55,8 @@ struct BunExtraction {
 /// Explicit versioned layout selection, not producer/version authentication.
 /// Failure publishes no partial extraction. The input remains inert.
 BunExtraction extractBun(const Artifact &Input);
+/// Exact layout contracts advertised by all transports, not producer claims.
+std::vector<std::string> bunProfiles();
 /// Decode only an already admitted module's stored text. UTF-16 lone
 /// surrogates refuse UTF-8 projection; the original bytes remain available.
 std::string bunSourceBytes(const BunExtraction &Extraction,

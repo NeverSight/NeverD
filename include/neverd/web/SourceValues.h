@@ -1,3 +1,14 @@
+//===- SourceValues.h - Finite primitive value evidence ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Finite primitive value evidence.
+///
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "neverd/web/Source.h"

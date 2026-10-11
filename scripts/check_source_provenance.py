@@ -366,6 +366,41 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="tools/neverd-gui/benchmarks/results/linux-x86_64-20261010-linear-copy-performance.json",
+        rule="private-path",
+        commits=frozenset({
+            "b3acf92849e63cfe95f25eeb25903f941f5289ce",
+            "ceca16a8a76bce78ac0cbf75cea40c9549c551d8",
+        }),
+        line="",
+        reason=(
+            "The published GUI linear-copy report was removed from tracked "
+            "sources with the other local performance artifacts. Review binds "
+            "only the exact path-line digests in its original publication and "
+            "deletion commits; current and future text remains fully checked."
+        ),
+        line_sha256=frozenset({
+            "00870df07891e305ba7fad70012faf7bba817c7ec27288e433e4eac2e54b2e19",
+            "08c68f1b773654cd75c5a1183026635f0c4fbfabca5e60f761bf1ccb4261552d",
+            "144287a60c3e1690a17c277185076d5833f2eb7cf2873ea02e705698734a56ad",
+            "1dabfb5f95cf28171adea8f5bf4db308842ff337e066ed998cd54a3d17ff3b79",
+            "2994f63321fe5f0512f35e3dede07db18394d89deaa6e5cc8ef0daee8c485907",
+            "2f1e4308455cf8a0863f360a25ff313550c7a955c1efa716c654cc2f32b1ef43",
+            "424669a717456884633db23e2687ee973f75e204cf9fe1eff3c594ad0ae513ee",
+            "5b7f31f6aa247ff64b276ef4f852f6540e8228ffe4a8669ebb142a54f58d2cf3",
+            "5bb9528f4766e3c319e0f422b0a4244cef73a2e1524478fd68e6ec990e8926c6",
+            "5d06dc546760ca6ea0a5ed9a4b50bd9df120bd2aebe9abfc531fa84dbb4aebc1",
+            "84cf35a9fcc970b2bfd1cd6c0ee6a53447e2c205a97eaa0f5c1b94d3d81f4611",
+            "981c2cfcc6ac0eea8767e03da7327a683a59f9b3c7d996bca04736c87e82dfbc",
+            "d5887401515e4271c72491cdbfa5425f9b1010c04c2c7eb0161ee56edf30596c",
+            "dccd904594647396c97fa1d2ff5d83436adf4cc23f1e0a87550031a0d4ecc449",
+            "deb466b1d26945f392137d17db884bda9653bdd3bb9fe9cd4ac57d23cbc45909",
+            "dfb8c743f59afb7992bfe2519a46eefc990333b27a55b4f82eb968249e7e8181",
+            "fe12b9c137ca8667b23aed9bf1ee5d189d0e5bdec5199fc95741fedf8251d6c9",
+            "ff3ec4dd41b019a322b02ded8cc2e3946fd718afb1ccd21b02dc47d0750160f6",
+        }),
+    ),
+    HistoryAllowance(
         path="tools/neverd-gui/benchmarks/results/linux-x86_64-20261010-rust-pseudocode-round4.json",
         rule="private-path",
         commits=frozenset({"8bf008bdedc5fb59bbe043e7185a0d91c2b1b567"}),

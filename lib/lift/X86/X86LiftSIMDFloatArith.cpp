@@ -13,6 +13,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPApprox12.h"
+#include "X86FPArithState.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -373,6 +375,11 @@ bool liftSIMDFloatArith(X86Lifter &L, X86Lifter::LiftState &S,
                         const cs_insn *Insn, const cs_x86 &X86) {
   const unsigned InsnId = Insn->id;
   const bool IsEvex = beginsWithCanonicalEvexPrefix(Insn);
+  if (!IsEvex) {
+    FPArithStateSpec StateSpec{};
+    if (getFPArithStateSpec(InsnId, StateSpec))
+      return liftFPArithState(L, S, Insn, X86);
+  }
   EvexFloatArithSpec EvexFloatSpec;
   const bool IsEvexFloatArith =
       IsEvex && getEvexFloatArithSpec(InsnId, EvexFloatSpec);
@@ -552,6 +559,20 @@ bool liftSIMDFloatArith(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VRSQRTPS:
   case X86_INS_VRCPSS:
   case X86_INS_VRCPPS: {
+    const bool ApproxRcp = InsnId == X86_INS_RCPPS || InsnId == X86_INS_RCPSS ||
+                           InsnId == X86_INS_VRCPPS || InsnId == X86_INS_VRCPSS;
+    const bool ApproxRsqrt =
+        InsnId == X86_INS_RSQRTPS || InsnId == X86_INS_RSQRTSS ||
+        InsnId == X86_INS_VRSQRTPS || InsnId == X86_INS_VRSQRTSS;
+    if (ApproxRcp || ApproxRsqrt)
+      return liftFPApprox12(
+          L, S, Insn, X86, ApproxRsqrt,
+          InsnId == X86_INS_RCPSS || InsnId == X86_INS_RSQRTSS ||
+              InsnId == X86_INS_VRCPSS || InsnId == X86_INS_VRSQRTSS,
+          InsnId == X86_INS_VRCPPS || InsnId == X86_INS_VRSQRTPS ||
+              InsnId == X86_INS_VRCPSS || InsnId == X86_INS_VRSQRTSS);
+    if (!IsEvexFloatArith)
+      return liftFPArithState(L, S, Insn, X86);
     if (X86.op_count < 2)
       break;
 
@@ -696,23 +717,8 @@ bool liftSIMDFloatArith(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[X86.op_count - 1]);
 
-    bool IsRcp = (InsnId == X86_INS_RCPPS || InsnId == X86_INS_RCPSS ||
-                  InsnId == X86_INS_VRCPPS || InsnId == X86_INS_VRCPSS);
-    bool IsRsqrt = (InsnId == X86_INS_RSQRTPS || InsnId == X86_INS_RSQRTSS ||
-                    InsnId == X86_INS_VRSQRTPS || InsnId == X86_INS_VRSQRTSS);
-
     auto emitLaneOp = [&](NdVar In, NdVar Out) {
-      if (IsRcp) {
-        NdVar One = NdVar::cst(0x3F800000, In.Size); // 1.0f
-        S.emit(NdOp::FLOAT_DIV, Out, {One, In});
-      } else if (IsRsqrt) {
-        NdVar Sq = S.makeTemp(In.Size);
-        S.emit(NdOp::FLOAT_SQRT, Sq, {In});
-        NdVar One = NdVar::cst(0x3F800000, In.Size); // 1.0f
-        S.emit(NdOp::FLOAT_DIV, Out, {One, Sq});
-      } else {
-        S.emit(NdOp::FLOAT_SQRT, Out, {In});
-      }
+      S.emit(NdOp::FLOAT_SQRT, Out, {In});
     };
 
     if (IsPacked && Dst.Size > LaneSz) {
@@ -780,6 +786,8 @@ bool liftSIMDFloatArith(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VMAXSD:
   case X86_INS_VMAXPS:
   case X86_INS_VMAXPD: {
+    if (!IsEvexFloatArith)
+      return liftFPArithState(L, S, Insn, X86);
     if (X86.op_count < 2)
       break;
     bool IsMin = (InsnId == X86_INS_MINSS || InsnId == X86_INS_MINSD ||
@@ -971,6 +979,8 @@ bool liftSIMDFloatArith(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VDIVSD:
   case X86_INS_VDIVPS:
   case X86_INS_VDIVPD: {
+    if (!IsEvexFloatArith)
+      return liftFPArithState(L, S, Insn, X86);
     if (X86.op_count < 2)
       break;
     NdOp Opc;
