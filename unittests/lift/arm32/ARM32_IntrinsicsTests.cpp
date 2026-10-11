@@ -284,3 +284,62 @@ neon_saturating:
   const auto Compiled = checkHighCClangCompile(CFile, Check);
   EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << C;
 }
+
+// The NEON reciprocal and reciprocal square root estimates and steps on f32
+// lanes, and the unsigned estimates on u32 lanes, print as the ACLE intrinsic
+// of their shape.
+TEST_F(ARM32_Intrinsics, Decompile_NeonEstimatesUseACLE) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "assembling ARM requires Clang";
+  const auto Source = tmpFile("neon_estimates.s");
+  const auto Object = tmpFile("neon_estimates.o");
+  std::ofstream(Source) << R"S(
+.syntax unified
+.arm
+.text
+.global neon_estimates
+.type neon_estimates,%function
+neon_estimates:
+  vld1.8 {d0-d3}, [r0]
+  vrecpe.f32 q8, q0
+  vrecps.f32 d18, d0, d1
+  vrsqrte.f32 q10, q1
+  vrsqrts.f32 d22, d2, d3
+  vrecpe.u32 q12, q0
+  vrsqrte.u32 d26, d1
+  vst1.8 {d16-d19}, [r1]
+  add r1, r1, #32
+  vst1.8 {d20-d23}, [r1]
+  add r1, r1, #32
+  vst1.8 {d24-d27}, [r1]
+  bx lr
+.size neon_estimates,.-neon_estimates
+)S";
+  const std::vector<std::string> Target = {"-target", "armv7a-none-eabi",
+                                           "-mfpu=neon", "-mfloat-abi=softfp"};
+  std::vector<std::string> Assemble = Target;
+  Assemble.insert(Assemble.end(),
+                  {"-c", Source.string(), "-o", Object.string()});
+  const auto Assembled = exec(NEVERD_TEST_CLANG, Assemble);
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  auto r = decompileToHighC(Object);
+  ASSERT_EQ(r.exitCode, 0) << "Decompile failed: " << r.err;
+  const std::string C = readDecompiledFile("decompiled_high.c");
+  for (const char *Name : {"vrecpeq_f32(", "vrecps_f32(", "vrsqrteq_f32(",
+                           "vrsqrts_f32(", "vrecpeq_u32(", "vrsqrte_u32("})
+    EXPECT_NE(C.find(Name), std::string::npos) << Name << "\n" << C;
+  EXPECT_EQ(C.find("unknown"), std::string::npos) << C;
+  const auto CFile = tmpFile("neon_estimates_high.c");
+  std::ofstream(CFile) << C;
+  std::vector<std::string> Check = Target;
+  Check.insert(Check.end(), {"-ffreestanding", "-std=gnu11"});
+  const auto Compiled = checkHighCClangCompile(CFile, Check);
+  EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << C;
+
+  auto IR = liftToLLVMIR(Object);
+  ASSERT_EQ(IR.exitCode, 0) << IR.err;
+  for (const char *Name :
+       {"@llvm.arm.neon.vrecpe.v4f32(", "@llvm.arm.neon.vrecpe.v4i32(",
+        "@llvm.arm.neon.vrsqrte.v2i32("})
+    EXPECT_NE(IR.out.find(Name), std::string::npos) << Name << "\n" << IR.out;
+}

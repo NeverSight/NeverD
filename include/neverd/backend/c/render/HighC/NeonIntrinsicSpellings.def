@@ -13,10 +13,11 @@
 ///
 //===----------------------------------------------------------------------===//
 
-// The floating-point estimate and step instructions (FRECPE, FRSQRTE,
-// FRECPS, FRSQRTS, FMULX).  The lifter passes the element width as the last
-// operand; with the result's width it selects one shape, a scalar when the
-// two are equal, else a 64- or 128-bit vector.  The intrinsic is the
+// The floating-point estimate and step instructions (AArch64 FRECPE,
+// FRSQRTE, FRECPS, FRSQRTS, FMULX; AArch32 VRECPE, VRSQRTE, VRECPS, VRSQRTS
+// on f32 lanes).  The lifter passes the element width as the last operand;
+// with the result's width it selects one shape, a scalar when the two are
+// equal, else a 64- or 128-bit vector.  The intrinsic is the
 // operation's base followed by the shape's suffix (vrecpes_f32, vrecpe_f32,
 // vrecpeq_f32).
 //
@@ -45,12 +46,16 @@ NEVERD_NEON_FLOAT_OPERATION(A64_Frsqrte, "vrsqrte", 1)
 NEVERD_NEON_FLOAT_OPERATION(A64_Frecps, "vrecps", 2)
 NEVERD_NEON_FLOAT_OPERATION(A64_Frsqrts, "vrsqrts", 2)
 NEVERD_NEON_FLOAT_OPERATION(A64_Fmulx, "vmulx", 2)
+NEVERD_NEON_FLOAT_OPERATION(ArmVrecpe, "vrecpe", 1)
+NEVERD_NEON_FLOAT_OPERATION(ArmVrsqrte, "vrsqrte", 1)
+NEVERD_NEON_FLOAT_OPERATION(ArmVrecps, "vrecps", 2)
+NEVERD_NEON_FLOAT_OPERATION(ArmVrsqrts, "vrsqrts", 2)
 
 #undef NEVERD_NEON_FLOAT_SHAPE
 #undef NEVERD_NEON_FLOAT_OPERATION
 
-// The unsigned estimates (URECPE, URSQRTE) take 32-bit lanes of a 64- or
-// 128-bit vector.
+// The unsigned estimates (AArch64 URECPE, URSQRTE; AArch32 VRECPE.U32,
+// VRSQRTE.U32) take 32-bit lanes of a 64- or 128-bit vector.
 //
 // NEVERD_NEON_U32_SHAPE(ResultBytes, RawType, ValueType, Suffix)
 // NEVERD_NEON_U32_OPERATION(Intrinsic, Base)
@@ -66,6 +71,8 @@ NEVERD_NEON_U32_SHAPE(16, "unsigned __int128", "uint32x4_t", "q_u32")
 
 NEVERD_NEON_U32_OPERATION(A64_Urecpe, "vrecpe")
 NEVERD_NEON_U32_OPERATION(A64_Ursqrte, "vrsqrte")
+NEVERD_NEON_U32_OPERATION(ArmUrecpe, "vrecpe")
+NEVERD_NEON_U32_OPERATION(ArmUrsqrte, "vrsqrte")
 
 #undef NEVERD_NEON_U32_SHAPE
 #undef NEVERD_NEON_U32_OPERATION

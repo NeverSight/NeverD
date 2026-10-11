@@ -333,20 +333,30 @@ llvm::Value *MedLLVMEmitter::emitARMIntrinsicValue(const MedOp &Op,
     }
   }
 
-  // NEON reciprocal / reciprocal-sqrt estimate & step (float).  These have an
-  // architecturally-defined approximation that cannot be expressed as plain FP
-  // ops; lower them to the matching LLVM ARM NEON intrinsic so codegen emits
-  // the real `vrecpe/vrecps/vrsqrte/vrsqrts.f32` instruction and the recompiled
-  // code runs bit-identically to the original under Unicorn (keep the binary
+  // NEON reciprocal / reciprocal-sqrt estimate & step (f32), and the unsigned
+  // fixed-point estimates (u32).  These have an architecturally-defined
+  // approximation that cannot be expressed as plain ops; lower them to the
+  // matching LLVM ARM NEON intrinsic so codegen emits the real
+  // `vrecpe/vrecps/vrsqrte/vrsqrts` instruction and the recompiled code runs
+  // bit-identically to the original under Unicorn (keep the binary
   // instruction; do NOT approximate with a true divide).  vrecpe/vrsqrte are
   // unary; vrecps/vrsqrts are the binary Newton-Raphson step.
   {
     llvm::Intrinsic::ID IID = llvm::Intrinsic::not_intrinsic;
     bool Binary = false;
+    bool Unsigned = false;
     switch (IC) {
     case I::ArmVrecpe:
       IID = llvm::Intrinsic::arm_neon_vrecpe;
       Binary = false;
+      break;
+    case I::ArmUrecpe:
+      IID = llvm::Intrinsic::arm_neon_vrecpe;
+      Unsigned = true;
+      break;
+    case I::ArmUrsqrte:
+      IID = llvm::Intrinsic::arm_neon_vrsqrte;
+      Unsigned = true;
       break;
     case I::ArmVrecps:
       IID = llvm::Intrinsic::arm_neon_vrecps;
@@ -366,12 +376,13 @@ llvm::Value *MedLLVMEmitter::emitARMIntrinsicValue(const MedOp &Op,
     if (IID != llvm::Intrinsic::not_intrinsic && Op.Output.Size > 0) {
       auto *OutTy = sizeToType(Op.Output.Size);
       unsigned Bytes = Op.Output.Size;
-      unsigned NLanes = Bytes / 4; // f32 lanes (vrecpe.f32 / vrecps.f32 ...)
+      unsigned NLanes = Bytes / 4; // f32 or u32 lanes (vrecpe.f32, .u32 ...)
       unsigned Needed = Binary ? 3u : 2u;
       if (NLanes < 1 || NLanes * 4 != Bytes || Op.NumInputs < Needed)
         return llvm::ConstantInt::get(OutTy, 0);
-      auto *FloatTy = llvm::Type::getFloatTy(*Ctx);
-      auto *VecTy = llvm::FixedVectorType::get(FloatTy, NLanes);
+      auto *LaneTy = Unsigned ? llvm::Type::getInt32Ty(*Ctx)
+                              : llvm::Type::getFloatTy(*Ctx);
+      auto *VecTy = llvm::FixedVectorType::get(LaneTy, NLanes);
       auto *IntTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
       auto toVec = [&](const MedVar &In) -> llvm::Value * {
         llvm::Value *V = getVar(In, Builder);

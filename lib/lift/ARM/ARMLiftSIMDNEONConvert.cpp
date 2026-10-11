@@ -25,8 +25,8 @@
 
 namespace neverd {
 
-bool liftSIMDNEONConvert(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                         const cs_arm &ARM) {
+bool liftSIMDNEONConvert(ARMLifter &L, ARMLifter::LiftState &S,
+                         const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // NEON misc unary: operations with correct NdOp mapping
   case ARM_INS_VMVN: {
@@ -307,46 +307,45 @@ bool liftSIMDNEONConvert(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *I
     }
     break;
   }
-  // NEON reciprocal estimate/step: use intrinsics
-  case ARM_INS_VRECPE: {
-    if (ARM.op_count >= 2) {
-      NdVar Dst = L.operandWrite(ARM.operands[0]);
-      NdVar Src = L.operandRead(S, ARM.operands[1]);
-      S.emitIntrinsic(Intrinsic::ArmVrecpe, Dst, {Src});
-    }
-    break;
-  }
-  case ARM_INS_VRECPS: {
-    // VRECPS/VRSQRTS are BINARY (`vrecps.f32 Qd,Qn,Qm` = per-lane
-    // Newton-Raphson step `2 - Qn*Qm`).  The old code read only operands[1] and
-    // dropped the second source, so the refinement step was wrong.  Read both
-    // sources; the 2-operand destructive form (Qd = Qd · Qm) uses Qd as the
-    // first source.
-    if (ARM.op_count >= 2) {
-      NdVar Dst = L.operandWrite(ARM.operands[0]);
-      NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                      : L.operandRead(S, ARM.operands[0]);
-      NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
-      S.emitIntrinsic(Intrinsic::ArmVrecps, Dst, {A, B});
-    }
-    break;
-  }
-  case ARM_INS_VRSQRTE: {
-    if (ARM.op_count >= 2) {
-      NdVar Dst = L.operandWrite(ARM.operands[0]);
-      NdVar Src = L.operandRead(S, ARM.operands[1]);
-      S.emitIntrinsic(Intrinsic::ArmVrsqrte, Dst, {Src});
-    }
-    break;
-  }
+  // NEON reciprocal and reciprocal square root estimates and Newton-Raphson
+  // steps on f32 lanes, the element width last (NeonIntrinsicSpellings.def),
+  // and the unsigned fixed-point estimates on u32 lanes.  The f16 forms
+  // compute other results: decline them, which the dispatcher refuses,
+  // rather than give them the f32 one.  The steps are binary
+  // (`vrecps.f32 Qd,Qn,Qm` = per-lane `2 - Qn*Qm`); the 2-operand destructive
+  // form (Qd = Qd · Qm) uses Qd as the first source.
+  case ARM_INS_VRECPE:
+  case ARM_INS_VRSQRTE:
+  case ARM_INS_VRECPS:
   case ARM_INS_VRSQRTS: {
-    if (ARM.op_count >= 2) {
-      NdVar Dst = L.operandWrite(ARM.operands[0]);
-      NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                      : L.operandRead(S, ARM.operands[0]);
-      NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
-      S.emitIntrinsic(Intrinsic::ArmVrsqrts, Dst, {A, B});
+    const auto LI = getNeonLaneInfo(ARM.vector_data, Insn->mnemonic);
+    const bool Estimate =
+        Insn->id == ARM_INS_VRECPE || Insn->id == ARM_INS_VRSQRTE;
+    const bool Unsigned = Estimate && !LI.IsFloat && !LI.IsSigned;
+    if (ARM.op_count < 2 || LI.LaneSz != 4 || (!LI.IsFloat && !Unsigned))
+      return false;
+    NdVar Dst = L.operandWrite(ARM.operands[0]);
+    if (Unsigned) {
+      NdVar Src = L.operandRead(S, ARM.operands[1]);
+      S.emitIntrinsic(Insn->id == ARM_INS_VRECPE ? Intrinsic::ArmUrecpe
+                                                 : Intrinsic::ArmUrsqrte,
+                      Dst, {Src});
+      break;
     }
+    const NdVar ElementBytes = NdVar::cst(LI.LaneSz, 4);
+    if (Estimate) {
+      NdVar Src = L.operandRead(S, ARM.operands[1]);
+      S.emitIntrinsic(Insn->id == ARM_INS_VRECPE ? Intrinsic::ArmVrecpe
+                                                 : Intrinsic::ArmVrsqrte,
+                      Dst, {Src, ElementBytes});
+      break;
+    }
+    NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
+                                  : L.operandRead(S, ARM.operands[0]);
+    NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
+    S.emitIntrinsic(Insn->id == ARM_INS_VRECPS ? Intrinsic::ArmVrecps
+                                               : Intrinsic::ArmVrsqrts,
+                    Dst, {A, B, ElementBytes});
     break;
   }
 

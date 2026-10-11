@@ -1,5 +1,8 @@
 // ARM 32-bit intrinsic enum entries — included by intrinsics.h.
 // Range: 11000 – 15999.  New entries go at the bottom.
+// The entries are laid out by hand in groups, which clang-format would run
+// together as one expression; it leaves the rest of the file alone.
+// clang-format off
 
 // Supervisor / debug.
 ArmSvc = 11000,
@@ -75,3 +78,6 @@ ArmMrc, ArmMrc2, ArmMrrc, ArmMrrc2,
 ArmCdp, ArmCdp2,
 ArmLdc, ArmLdc2, ArmLdc2l,
 ArmStc, ArmStc2, ArmStc2l,
+
+// The unsigned fixed-point estimates on u32 lanes (VRECPE.U32, VRSQRTE.U32).
+ArmUrecpe, ArmUrsqrte,
