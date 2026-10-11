@@ -912,10 +912,17 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   if (AnyFloat)
     return NdType::makeFloat(BestFloatElem ? BestFloatElem : 8);
   uint16_t IntSize = 0;
-  if (BestInt)
-    IntSize = (BestInt->Opcode == NdOp::INT_ZEXT && BestInt->NumInputs >= 1)
-                  ? BestInt->Inputs[0].Size
-                  : BestInt->Output.Size;
+  // A byte or halfword zero-extended into the register is unsigned: a signed
+  // return type would sign-extend it.  A 32-bit value zero-extended into a
+  // 64-bit register is how those targets write any 32-bit result.
+  uint16_t ZeroExtendedSize = 0;
+  if (BestInt) {
+    const bool ZeroExtended =
+        BestInt->Opcode == NdOp::INT_ZEXT && BestInt->NumInputs >= 1;
+    IntSize = ZeroExtended ? BestInt->Inputs[0].Size : BestInt->Output.Size;
+    if (ZeroExtended && IntSize < 4)
+      ZeroExtendedSize = IntSize;
+  }
   if (BestIntPhiWidth > IntSize)
     IntSize = BestIntPhiWidth;
   // A path that defines only the low bytes of the result over an undefined
@@ -941,7 +948,7 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
     }
   }
   if (IntSize)
-    return NdType::makeInt(IntSize);
+    return NdType::makeInt(IntSize, /*S=*/IntSize != ZeroExtendedSize);
   return NdType::makeInt(DefaultSize);
 }
 

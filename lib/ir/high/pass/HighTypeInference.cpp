@@ -153,10 +153,10 @@ void MedToHighConverter::inferTypes(HighFunc &Func) {
 }
 
 //===----------------------------------------------------------------------===//
-// inferReturnSize — deduce return value width from RETURN predecessors
+// inferReturnType — deduce the return value's type from RETURN predecessors
 //===----------------------------------------------------------------------===//
 
-uint16_t inferReturnSize(const MedFunc &Med) {
+TypeRef inferReturnType(const MedFunc &Med) {
   for (auto &Blk : Med.Blocks) {
     for (auto RIt = Blk.Ops.rbegin(); RIt != Blk.Ops.rend(); ++RIt) {
       if (RIt->Opcode != NdOp::RETURN)
@@ -165,13 +165,20 @@ uint16_t inferReturnSize(const MedFunc &Med) {
         if (RIt2->Output.Kind != MedVar::Reg || RIt2->Output.RegOff != 0 ||
             RIt2->Output.Size == 0)
           continue;
-        if (RIt2->Opcode == NdOp::INT_ZEXT && RIt2->NumInputs >= 1)
-          return RIt2->Inputs[0].Size;
-        return RIt2->Output.Size;
+        if (RIt2->Opcode == NdOp::INT_ZEXT && RIt2->NumInputs >= 1) {
+          // A byte or halfword zero-extended into the register is unsigned:
+          // a signed return type would sign-extend it.  A 32-bit value
+          // zero-extended into a 64-bit register is how those targets write
+          // any 32-bit result, signed or not.
+          const uint16_t Bytes = RIt2->Inputs[0].Size;
+          return Bytes < 4 ? NdType::makeInt(Bytes, /*S=*/false)
+                           : NdType::makeInt(Bytes);
+        }
+        return NdType::makeInt(RIt2->Output.Size);
       }
     }
   }
-  return 4;
+  return NdType::makeInt(4);
 }
 
 //===----------------------------------------------------------------------===//

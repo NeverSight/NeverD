@@ -34,7 +34,7 @@ class HighEntryStackOffsets;
 
 Intrinsic intrinsicId(const MedOp &Op);
 std::string intrinsicName(const MedOp &Op);
-uint16_t inferReturnSize(const MedFunc &Med);
+TypeRef inferReturnType(const MedFunc &Med);
 std::set<uint64_t> detectPtrParamRegs(const MedFunc &Med);
 /// Stack-passed parameter ids (`MedVar::Param`) used as memory addresses.
 std::set<int> detectPtrParamIds(const MedFunc &Med);

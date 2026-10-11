@@ -1,10 +1,11 @@
+#include "HighCHostExecution.h"
 #include "NeverDLiftFixture.h"
 
 #include <fstream>
 #include <iterator>
 #include <regex>
 
-class ARM32_CallAbi : public NeverDLiftTest {};
+class ARM32_CallAbi : public HighCHostExecutionTest {};
 
 // The base AAPCS (softfp) passes an external routine's float arguments in
 // r0-r3, not in the VFP registers the image's own code computes in.  Here
@@ -62,4 +63,24 @@ int main(void) {
   ASSERT_EQ(Built.exitCode, 0) << Built.err << "\n" << C;
   const auto Run = exec(Program.string(), {});
   EXPECT_EQ(Run.exitCode, 0) << C;
+}
+
+// AAPCS returns a narrow value extended to 32 bits.  This function's -O0
+// code loads its unsigned byte with LDRB, so it returns the byte
+// zero-extended: its C must return an unsigned type, which the host extends
+// alike, rather than sign-extend 0xA5 to 0xFFFFFFA5.
+TEST_F(ARM32_CallAbi, AZeroExtendedByteReturnIsUnsigned) {
+  expectHighCRunsLikeSource({"-target", "arm-linux-gnueabi", "-mcpu=cortex-a15",
+                             "-mfloat-abi=softfp"},
+                            R"C(
+__attribute__((optnone)) int rev8(int x) {
+  unsigned char b = (unsigned char)x;
+  b = (unsigned char)(((b >> 4) & 0x0F) | ((b << 4) & 0xF0));
+  b = (unsigned char)(((b >> 2) & 0x33) | ((b << 2) & 0xCC));
+  b = (unsigned char)(((b >> 1) & 0x55) | ((b << 1) & 0xAA));
+  return b;
+}
+)C",
+                            "rev8", {"rev8"},
+                            {0, 1, -1, 0xA5, 0x80, 0x55AA, 0x12345678});
 }

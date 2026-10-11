@@ -1203,8 +1203,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
       !Func.CxxContinuationTargets.empty() ||
       (Med.ExceptionMetadata && Med.ExceptionMetadata->Registration &&
        Med.ExceptionMetadata->Registration->hasCxxCallbackStack());
-  Func.ReturnType =
-      Med.ReturnType ? Med.ReturnType : NdType::makeInt(inferReturnSize(Med));
+  Func.ReturnType = Med.ReturnType ? Med.ReturnType : inferReturnType(Med);
   Func.SourceTypeHint = Med.SourceTypeHint;
   Func.RegisterCopyProjections = Med.RegisterCopyProjections;
   Func.ClassGetterCallFacts = Med.ClassGetterCallFacts;
