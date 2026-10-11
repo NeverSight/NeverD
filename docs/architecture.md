@@ -1631,11 +1631,24 @@ prove a saved frame value. `LowSEHFrameProof` owns the all-predecessor
 intersection, including stable loops, independent roots and released stack
 storage. A digest binds every operation, instruction boundary, root and CFG
 edge in that function; changing an earlier block invalidates the receipt.
-The analysis runs once per queried function, within the module evidence budget.
-Shared SSA then checks the call occurrence, parent
-unwind allocation, decoded prologue, converted SP effects and every relevant
-predecessor path. The initial contract requires an ordinary-reachable target;
-cross-funclet frame borrowing and saved frames surviving opaque calls remain
+Complete decoded leaf callees can retain saved cells when their concrete
+argument values bound every store and all returns restore the invocation SP
+without changing its physical return PC. The analysis intersects all returning
+paths, discards private callee storage at return, and refuses nested calls,
+unknown writes, exceptional transfers and independent callee roots. A receipt
+names every inspected callee; shared SSA requires their current operation/CFG
+digests before accepting the frame. Source signatures grant no memory effects.
+The analysis runs once per queried function, with a cumulative module work cap
+separate from the address-use receipt limit. Transfers charge the tracked
+register/cell facts as well as operations; joins and dependency hashing also
+consume this cap. Frame-proof exhaustion retains independent roots without
+discarding otherwise complete address-use evidence.
+Shared SSA then checks the call occurrence, parent unwind allocation, decoded
+prologue, converted SP effects and every relevant predecessor path. Certified
+runtime transfers participate in frame-proof reachability even when no ordinary
+edge reaches their target. Such a root receives the established SP and unknown
+volatile registers, with the same offset required by every certified source.
+Cross-funclet frame borrowing and saved frames surviving opaque calls remain
 unsupported until their memory and activation lifetimes can be proved.
 
 LLVMC preserves relocatable constant address arithmetic, and constant

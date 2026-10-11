@@ -580,9 +580,22 @@ bool collectLowAddressUses(
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const std::vector<TargetRegisterRange> PreservedRanges =
       TRI.callPreservedRanges(Img.abiFormat());
+  std::map<va_t, const LowFunc *> SEHCallees;
+  if (LocalUnwind)
+    for (const auto &Func : Funcs)
+      if (!SEHCallees.emplace(Func.Entry, &Func).second)
+        return false;
   constexpr size_t kMaxModuleAddressScanOps =
       size_t{limits::kMaxJumpTableEvidenceWork} *
       size_t{limits::kMaxMultiStageRetries};
+  // Address-use receipts and complete-CFG frame dataflow count different
+  // work. Charging every lifted operation to the small address-use budget
+  // would reject a straight-line function before its first continuation and
+  // would also discard unrelated module ownership evidence. Keep a separate,
+  // cumulative cap for frame transfers, joins and dependency hashing.
+  constexpr size_t kMaxSEHFrameWork = kMaxModuleAddressScanOps * 16;
+  size_t SEHFrameWorkRemaining =
+      std::min(TestBudget.value_or(kMaxSEHFrameWork), kMaxSEHFrameWork);
   size_t ScanOps = 0;
   auto failCollect = [](const char *, size_t = 0, va_t = InvalidVA) {
     return false;
@@ -1547,8 +1560,8 @@ bool collectLowAddressUses(
                           SP.isPrivateFrameOnly() &&
                           Frame.FrameOffsets == SP.FrameOffsets) {
                         if (!SEHFrameProof)
-                          SEHFrameProof =
-                              proveLowSEHFrames(Func, TRI, Budget.Remaining);
+                          SEHFrameProof = proveLowSEHFrames(
+                              Func, TRI, SEHFrameWorkRemaining, &SEHCallees);
                         const auto Proof =
                             SEHFrameProof->Calls.find({Op.Addr, Op.Seq});
                         if (Proof != SEHFrameProof->Calls.end() &&
@@ -1556,7 +1569,8 @@ bool collectLowAddressUses(
                           LocalUnwind->SameFrameCallsByFunction[FuncIndex]
                               .push_back({Target, Op.Addr, Op.Seq, CalleeVA,
                                           Proof->second,
-                                          SEHFrameProof->DependencyDigest});
+                                          SEHFrameProof->DependencyDigest,
+                                          SEHFrameProof->CalleeDependencies});
                       }
                     }
                   }

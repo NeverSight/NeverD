@@ -26,19 +26,29 @@ struct LowSEHFrameProof {
   /// continuation ownership or unwind-prologue permission is implied.
   std::map<std::pair<va_t, int>, int64_t> Calls;
   std::string DependencyDigest;
+  /// Complete decoded callees inspected to retain memory across a call.
+  std::vector<va_t> CalleeDependencies;
 };
 
 /// Intersection analysis over ordinary CFG edges. Independent and exceptional
 /// entries start without the function's SP identity. Unknown calls/stores
-/// invalidate saved memory; no callee memory contract is inferred from an ABI.
+/// invalidate saved memory. Optional decoded leaf callees prove concrete
+/// effects; no callee memory contract is inferred from an ABI.
 /// Exhausted budgets and incomplete inputs return no proof.
-LowSEHFrameProof proveLowSEHFrames(const LowFunc &Function,
-                                   const TargetRegInfo &TRI,
-                                   size_t &WorkRemaining);
+LowSEHFrameProof
+proveLowSEHFrames(const LowFunc &Function, const TargetRegInfo &TRI,
+                  size_t &WorkRemaining,
+                  const std::map<va_t, const LowFunc *> *Callees = nullptr);
 
 /// Binds a proof to all operations, control boundaries, roots and CFG edges.
 /// This is a freshness check, not a replacement for the producing analysis.
 std::string lowSEHFrameDependencyDigest(const LowFunc &Function);
+
+/// Empty if any dependency is missing, duplicated or does not name its body.
+std::string
+lowSEHFrameDependencyDigest(const LowFunc &Function,
+                            llvm::ArrayRef<va_t> Dependencies,
+                            const std::map<va_t, const LowFunc *> *Callees);
 
 } // namespace neverd
 

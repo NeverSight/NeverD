@@ -1140,6 +1140,9 @@ struct LowSEHLocalUnwindEvidence {
   int64_t FrameOffset = 0;
   /// Bind the argument proof to the exact operations, roots and CFG edges.
   std::string OperationDigest;
+  /// Memory preservation may inspect decoded leaf callees. Consumers must
+  /// bind the receipt to these current bodies as well as the caller.
+  std::vector<va_t> CalleeDependencies;
 };
 
 struct LowFunctionTemporary {
