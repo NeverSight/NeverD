@@ -101,6 +101,13 @@ bool hasSymbolPrefix(const BinaryImage &Img, llvm::StringRef Prefix,
       *Match = Imp.Name;
     return true;
   }
+  for (const Export &Exp : Img.Exports) {
+    if (!llvm::StringRef(Exp.Name).starts_with(Prefix))
+      continue;
+    if (Match)
+      *Match = Exp.Name;
+    return true;
+  }
   return false;
 }
 
@@ -116,6 +123,9 @@ bool hasExactSymbol(const BinaryImage &Img, llvm::StringRef Name) {
       return true;
   for (const Import &Imp : Img.Imports)
     if (matches(Imp.Name))
+      return true;
+  for (const Export &Exp : Img.Exports)
+    if (matches(Exp.Name))
       return true;
   return false;
 }
@@ -187,7 +197,8 @@ bool probeHolds(const BinaryImage &Img, const Probe &P) {
              !cxxSourceName(Symbol.Name).empty();
     };
     return llvm::any_of(Img.Symbols, Matches) ||
-           llvm::any_of(Img.Imports, Matches);
+           llvm::any_of(Img.Imports, Matches) ||
+           llvm::any_of(Img.Exports, Matches);
   }
   }
   return false;

@@ -480,6 +480,30 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // proof traversal-order independent without granting an unanchored cycle
   // pointer authority.
   enum class BaseProof { Invalid, NoBase, HasBase, Cycle };
+  // Selection semantics do not depend on whether the decoder used SELECT or
+  // a boolean complementary-mask blend. Raw/symbolized compatibility is
+  // checked after the complete expression has been audited.
+  auto mergeSelectedProofs = [&](BaseProof T, BaseProof F) {
+    if (T == BaseProof::Invalid || F == BaseProof::Invalid) {
+      SawInvalidPointerExpression = true;
+      return BaseProof::Invalid;
+    }
+    if (T == F)
+      return T;
+    if ((T == BaseProof::HasBase && F == BaseProof::Cycle) ||
+        (F == BaseProof::HasBase && T == BaseProof::Cycle)) {
+      SawPointerValueMerge = true;
+      return BaseProof::HasBase;
+    }
+    if ((T == BaseProof::HasBase && F == BaseProof::NoBase) ||
+        (F == BaseProof::HasBase && T == BaseProof::NoBase)) {
+      SawPointerValueMerge = true;
+      SawNonBaseValueMerge = true;
+      return BaseProof::HasBase;
+    }
+    SawInvalidPointerExpression = true;
+    return BaseProof::Invalid;
+  };
   auto isExactSameVar = [](const MedVar &Left, const MedVar &Right) {
     if (Left.Kind != Right.Kind || Left.TheArch != Right.TheArch ||
         Left.RenameTag != Right.RenameTag || Left.Id != Right.Id ||
@@ -946,8 +970,15 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       SawTableShapedInvalidExpression = true;
     }
   };
-  std::function<BaseProof(const MedVar &, int, SeenSet)> walk =
-      [&](const MedVar &V, int Depth, SeenSet Seen) -> BaseProof {
+  // Cache only complete, cycle-independent absence proofs. Shared numeric
+  // DAGs otherwise spend the audit budget exponentially, even though no arm
+  // contains a table address. A result that used an active-path cycle cannot
+  // be reused under a different ancestor set.
+  std::set<AddressProvenanceVarKey> ProvenWithoutBase;
+  size_t CycleEpoch = 0;
+  std::function<BaseProof(const MedVar &, int, SeenSet)> walk;
+  auto walkUncached = [&](const MedVar &V, int Depth,
+                          SeenSet Seen) -> BaseProof {
     if (RemainingAuditNodes == 0) {
       AuditIncomplete = true;
       return BaseProof::Invalid;
@@ -1012,8 +1043,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     if (!IsForwardingWrapper && valueIsStableAddressOffset(V))
       return BaseProof::NoBase;
     auto Key = std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer);
-    if (!Seen.insert(Key).second)
+    if (!Seen.insert(Key).second) {
+      ++CycleEpoch;
       return BaseProof::Cycle;
+    }
 
     // A pointer-table LOAD's source address belongs to the table segment, but
     // the value it produces belongs to one of the relocation targets.  Record
@@ -1194,52 +1227,20 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
                    ? BaseProof::NoBase
                    : BaseProof::Invalid;
       }
-      if (T == BaseProof::Invalid || F == BaseProof::Invalid) {
-        if (T != BaseProof::NoBase || F != BaseProof::NoBase)
-          SawInvalidPointerExpression = true;
-        return BaseProof::Invalid;
-      }
-      if (T == F)
-        return T;
-      if ((T == BaseProof::HasBase && F == BaseProof::Cycle) ||
-          (F == BaseProof::HasBase && T == BaseProof::Cycle)) {
-        SawPointerValueMerge = true;
-        return BaseProof::HasBase;
-      }
-      if ((T == BaseProof::HasBase && F == BaseProof::NoBase) ||
-          (F == BaseProof::HasBase && T == BaseProof::NoBase)) {
-        SawPointerValueMerge = true;
-        SawNonBaseValueMerge = true;
-        return BaseProof::HasBase;
-      }
-      if (T != BaseProof::NoBase || F != BaseProof::NoBase)
-        SawInvalidPointerExpression = true;
-      return BaseProof::Invalid;
+      return mergeSelectedProofs(T, F);
     }
     case NdOp::INT_OR: {
       if (Def->NumInputs < 2)
         return BaseProof::Invalid;
-      // OR never preserves a pointer merely because one operand contains table
-      // provenance. It is pointer-valued only when the whole operation is the
-      // strict complementary-mask SELECT idiom and both selected value arms are
-      // independently proven table pointers. In particular, masking a table PHI
-      // on one side and a live scalar on the other must fail closed.
+      // Only an exact complementary-mask SELECT preserves the selected value.
+      // Apply the same all-arms address model as SELECT: a runtime pointer can
+      // share the merge with a symbolized static address, but the final audit
+      // must still reject any raw original-image base in such a merge.
       MedVar Cond, ArmT, ArmF;
       if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF)) {
         BaseProof T = walk(ArmT, Depth + 1, Seen);
         BaseProof F = walk(ArmF, Depth + 1, Seen);
-        if ((T == BaseProof::HasBase || T == BaseProof::Cycle) &&
-            (F == BaseProof::HasBase || F == BaseProof::Cycle) &&
-            (T == BaseProof::HasBase || F == BaseProof::HasBase)) {
-          SawPointerValueMerge = true;
-          return BaseProof::HasBase;
-        }
-        if (T == BaseProof::Cycle && F == BaseProof::Cycle)
-          return BaseProof::Cycle;
-        if (T == BaseProof::NoBase && F == BaseProof::NoBase)
-          return BaseProof::NoBase;
-        SawInvalidPointerExpression = true;
-        return BaseProof::Invalid;
+        return mergeSelectedProofs(T, F);
       }
       BaseProof L = walk(Def->Inputs[0], Depth + 1, Seen);
       BaseProof R = walk(Def->Inputs[1], Depth + 1, Seen);
@@ -1543,6 +1544,16 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       return BaseProof::NoBase;
     }
   };
+  walk = [&](const MedVar &V, int Depth, SeenSet Seen) {
+    if (!V.isConst() && ProvenWithoutBase.count(addressProvenanceVarKey(V)))
+      return BaseProof::NoBase;
+    const size_t Before = CycleEpoch;
+    const BaseProof Result = walkUncached(V, Depth, std::move(Seen));
+    if (!V.isConst() && Result == BaseProof::NoBase && Before == CycleEpoch &&
+        !AuditIncomplete)
+      ProvenWithoutBase.insert(addressProvenanceVarKey(V));
+    return Result;
+  };
   BaseProof Proof = walk(BaseVar, 0, {});
 
   // An invalid relocatable leaf can be hidden by constant arithmetic whose
@@ -1577,6 +1588,97 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       SawRawOriginalBase = true;
       SawSymbolizedBase = false;
       Proof = BaseProof::HasBase;
+    }
+  }
+  // A role-neutral LEA inside a pointer-mirror run deliberately stays raw
+  // until its consumer chooses the address model. A selection with a runtime
+  // pointer cannot be uniformly re-anchored: rebuild each exact static arm at
+  // this use instead. Validate the complete tree before materializing anything;
+  // legacy numeric coincidences and PHI/frame merges keep the normal audit.
+  if (!AuditIncomplete && Proof == BaseProof::HasBase && SawNonBaseValueMerge &&
+      SawRawOriginalBase && !SawInvalidPointerExpression &&
+      !SawUnprovedFrameReload) {
+    struct SelectionNode {
+      enum Kind { Runtime, Static, Selection } Type = Runtime;
+      MedVar Value;
+      MedVar Condition;
+      uint64_t Address = 0;
+      size_t True = 0, False = 0;
+    };
+    std::vector<SelectionNode> Plan;
+    size_t Budget = 128;
+    std::function<std::optional<size_t>(const MedVar &, unsigned)> plan =
+        [&](const MedVar &V, unsigned Depth) -> std::optional<size_t> {
+      const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+      if (Depth > 32 || Budget == 0 || V.Size < PointerSize)
+        return std::nullopt;
+      --Budget;
+      const MedOp *Def = V.isConst() ? nullptr : findDef(V);
+      if (Def)
+        if (auto Input = pointerPreservingInput(*Def))
+          return plan(*Input, Depth + 1);
+      MedVar Condition, T, F;
+      bool Selection = false;
+      if (Def && selectPreservesPointerValues(*Def)) {
+        Condition = Def->Inputs[0];
+        T = Def->Inputs[1];
+        F = Def->Inputs[2];
+        Selection = true;
+      } else if (Def) {
+        Selection = isMaskedSelectOr(*Def, Condition, T, F);
+      }
+      if (Selection) {
+        auto True = plan(T, Depth + 1);
+        auto False = plan(F, Depth + 1);
+        if (!True || !False)
+          return std::nullopt;
+        Plan.push_back(
+            {SelectionNode::Selection, V, Condition, 0, *True, *False});
+      } else if (V.isConst()) {
+        if ((V.Provenance != ConstantAddressProvenance::Address &&
+             V.Provenance != ConstantAddressProvenance::DataAddress) ||
+            !readOnlyBaseIdentity(V, V.ConstVal))
+          return std::nullopt;
+        Plan.push_back({SelectionNode::Static, V, {}, V.ConstVal});
+      } else {
+        if (findPhi(V) || (Def && Def->Opcode != NdOp::LOAD) ||
+            walk(V, 0, {}) != BaseProof::NoBase || AuditIncomplete ||
+            SawInvalidPointerExpression || SawUnprovedFrameReload)
+          return std::nullopt;
+        Plan.push_back({SelectionNode::Runtime, V});
+      }
+      return Plan.size() - 1;
+    };
+    if (auto Root = plan(AddrVar, 0)) {
+      std::vector<llvm::Value *> Values;
+      auto *PointerTy = llvm::PointerType::get(*Ctx, 0);
+      bool Complete = true;
+      for (const SelectionNode &Node : Plan) {
+        llvm::Value *Value = nullptr;
+        if (Node.Type == SelectionNode::Static) {
+          Value = tryResolveReadOnlyDataOccurrence(
+              Node.Value, Node.Address, std::max<uint16_t>(SizeHint, 1));
+        } else if (Node.Type == SelectionNode::Runtime) {
+          Value = getVar(Node.Value, Builder);
+          if (Value && Value->getType()->isIntegerTy())
+            Value = Builder.CreateIntToPtr(Value, PointerTy);
+        } else {
+          llvm::Value *Condition = getVar(Node.Condition, Builder);
+          if (Condition && Condition->getType()->isIntegerTy()) {
+            if (!Condition->getType()->isIntegerTy(1))
+              Condition = Builder.CreateIsNotNull(Condition);
+            Value = Builder.CreateSelect(Condition, Values[Node.True],
+                                         Values[Node.False], "ptrsel");
+          }
+        }
+        if (!Value || !Value->getType()->isPointerTy()) {
+          Complete = false;
+          break;
+        }
+        Values.push_back(Value);
+      }
+      if (Complete)
+        return Values[*Root];
     }
   }
   auto failAmbiguousAddress = [&](const char *SnapshotBranch) {

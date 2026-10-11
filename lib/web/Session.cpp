@@ -157,8 +157,12 @@ std::string Session::capabilities() {
   Analyses.emplace_back(llvm::json::Object{
       {"kind", "package_archive"},
       {"profile", std::string(PackageArchiveProfile)},
+      {"zip_profile", std::string(ZipArchiveProfile)},
+      {"formats", llvm::json::Array{"tar", "tgz", "zip"}},
       {"available", packageArchiveAvailable()},
       {"gzip_available", packageGzipAvailable()},
+      {"zip_deflate_available", packageZipDeflateAvailable()},
+      {"zip_max_expansion_ratio", 1000},
       {"max_expanded_bytes", std::to_string(MaxPackageArchiveBytes)},
       {"max_cached_expanded_bytes", std::to_string(MaxPackageArchiveBytes)},
       {"max_file_bytes", std::to_string(MaxPackageArchiveFileBytes)},

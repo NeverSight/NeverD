@@ -3,6 +3,7 @@ add_neverd_component_library(NeverDIRLowValidation
   LowNoReturn.cpp
   LowPreservedState.cpp
   LowUndefinedEffects.cpp
+  SEHFrameProof.cpp
   X87PartialRemainder.cpp
 
   LINK_COMPONENTS
@@ -17,6 +18,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateContracts.cpp
   X86/RegistrationStateCookies.cpp
   X86/RegistrationStateDispatch.cpp
+  X86/RegistrationStateLocalUnwind.cpp
   X86/RegistrationStateOccurrences.cpp
   X86/RegistrationStateRealignment.cpp
   X86/RegistrationStateInstallation.cpp
@@ -46,6 +48,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationCalleeABI.cpp
   X86/RegistrationCalleeFrame.cpp
   X86/RegistrationCalleeIndex.cpp
+  X86/RegistrationCalleeStack.cpp
   X86/RegistrationCallerABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp

@@ -943,6 +943,15 @@ private:
   /// Exact post-SSA value whose LowIR definition was proven to implement the
   /// loader's scalar model-zero address base (currently i386 ELF GOTPC).
   bool valueIsAuthenticatedModelZero(const MedVar &V) const;
+  /// Prove a scaled index at its guarded SSA definition. This does not publish
+  /// a scalar model for the unconstrained input or for another load occurrence.
+  bool valueIsGuardedScalarOffset(const MedVar &V) const;
+  /// A runtime word read with no frame or relocatable image address dependency.
+  /// Only a separately bounded scalar use may consume this certificate.
+  bool isOpaqueRuntimeWordLoad(const MedOp &Op) const;
+  /// Every indirect call of this exact SSA value is reached through a complete
+  /// predecessor edge that excludes zero; no result is shared with other uses.
+  bool valueHasNonNullIndirectCallGuards(const MedVar &V) const;
   bool valueIsStableAddressOffset(const MedVar &V,
                                   const MedVar *Forbidden = nullptr) const;
 

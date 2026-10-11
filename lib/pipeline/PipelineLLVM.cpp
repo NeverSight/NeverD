@@ -12,6 +12,7 @@
 #include "PipelineLLVMDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/loader/BinaryImage.h"
@@ -350,9 +351,17 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
         ShardPhase = "post-optimization verification";
         std::string FinalVerifyError;
         llvm::raw_string_ostream FinalVerifyStream(FinalVerifyError);
+        if (!normalizeResolvedLLVMCalls(*M, Emission.Sources.get())) {
+          fail("resolved call signature mismatch");
+          return;
+        }
         if (llvm::verifyModule(*M, &FinalVerifyStream)) {
           Shard.LLVMVerifierFailed = true;
           fail(FinalVerifyError);
+          return;
+        }
+        if (!validateResolvedLLVMCallSignatures(*M)) {
+          fail("resolved call signature mismatch");
           return;
         }
         ShardPhase = "serialization";
@@ -431,6 +440,12 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
     }
     if (LinkedShards != NumShards) {
       Result.Error = "LLVM shard linking failed: incomplete module";
+      return Result;
+    }
+    if (!normalizeResolvedLLVMCalls(*Linked, Result.Sources.get()) ||
+        !validateResolvedLLVMCallSignatures(*Linked)) {
+      Result.Error =
+          "LLVM shard linking failed: resolved call signature mismatch";
       return Result;
     }
     // The linker may move a body into an existing declaration and delete its

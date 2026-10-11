@@ -429,10 +429,17 @@ TEST(LLVMImportVeneerBoundary, ACallThroughASlotReturnsWhatTheImportDeclares) {
     // The PE loader binds each import's slot of the address table.
     ASSERT_TRUE(Image.recordImportStorageSlot(
         IATVA, Name, 0, ImportStorageEvidence::ImportDirectory));
+    MedFunc Source = makeSlotThunk(LocalVA, IATVA);
+    MedCallInfo CI;
+    CI.BlockId = CI.OpIdx = 0;
+    CI.IsIndirect = true;
+    CI.Args.assign(ReturnsValue ? 2 : 1,
+                   MedVar::makeConst(0, 8, ConstantAddressProvenance::Scalar));
+    Source.CallInfos.push_back(CI);
     llvm::LLVMContext Context;
-    auto Module = MedLLVMEmitter().emit(
-        {makeSlotThunk(LocalVA, IATVA)}, Context, "slot-thunk", Arch::X64,
-        importNames(Image), &Image, BinaryFormat::COFF);
+    auto Module =
+        MedLLVMEmitter().emit({Source}, Context, "slot-thunk", Arch::X64,
+                              importNames(Image), &Image, BinaryFormat::COFF);
     ASSERT_NE(Module, nullptr);
     expectValidModule(*Module);
     const llvm::Function *Thunk = Module->getFunction("slot_thunk");

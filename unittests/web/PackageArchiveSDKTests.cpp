@@ -12,6 +12,8 @@
 #include "BunFixture.h"
 #include "NativeFixture.h"
 #include "PackageArchiveFixture.h"
+#include "SEAFixture.h"
+#include "ZipFixture.h"
 #include "gtest/gtest.h"
 
 #include "neverd/sdk/NeverDCAPI.h"
@@ -120,15 +122,33 @@ protected:
         tarMember("package/native.node", nativeELF()) +
         tarMember("package/link", "", '2', "../../CANARY_OUTSIDE"));
   }
+  static std::string zipFixture(bool Deflate) {
+    const uint16_t Method = Deflate ? 8 : 0;
+    return ZipFixture(
+               {{"package/package.json",
+                 R"({"name":"CANARY_NAME","main":"a.js","scripts":{"install":"CANARY_DO_NOT_RUN"}})",
+                 Method},
+                {"package/a.js", "export const CANARY_VALUE = 7;", Method},
+                {"package/bun", BunFixture(true, {}, nativeELF()).Bytes,
+                 Method},
+                {"package/native.node", nativeELF(), Method},
+                {"package/unavailable", "CANARY_OPAQUE", 0, 1}})
+        .Bytes;
+  }
 };
 
 TEST_F(WebPackageArchiveSDK,
        ConsumersShareMembersAndKeepCompressedCoordinates) {
-  for (const auto *Format : {"tar", "tgz"}) {
-    if (std::string_view(Format) == "tgz" && !Gzip)
+  for (const std::string_view Case :
+       {"tar", "tgz", "zip-stored", "zip-deflate"}) {
+    const bool Zip = Case.starts_with("zip");
+    const bool Compressed = Case == "tgz" || Case == "zip-deflate";
+    const auto Format = Zip ? std::string_view("zip") : Case;
+    if (Compressed && !Gzip)
       continue;
-    capture(std::string_view(Format) == "tar" ? fixture()
-                                              : storedGzip(fixture()));
+    capture(Zip          ? zipFixture(Compressed)
+            : Compressed ? storedGzip(fixture())
+                         : fixture());
     const auto A = extract(Format);
     ASSERT_EQ(field(A, "status"), "ok");
     const auto ID = field(A, "archive_id");
@@ -156,13 +176,20 @@ TEST_F(WebPackageArchiveSDK,
     ASSERT_NE(Storage, nullptr);
     EXPECT_EQ(Storage->getString("kind"), "package_archive_member");
     EXPECT_EQ(Storage->getString("mapping"),
-              std::string_view(Format) == "tar"
-                  ? "byte_identity"
-                  : "containing_compressed_frame");
-    if (std::string_view(Format) == "tgz") {
+              Compressed ? "containing_compressed_frame" : "byte_identity");
+    if (Compressed) {
       EXPECT_TRUE(Storage->get("byte_offset")->getAsNull().has_value());
       EXPECT_EQ(Storage->getString("expanded_byte_offset"),
                 Members[1].getAsObject()->getString("expanded_byte_offset"));
+    } else if (Zip) {
+      EXPECT_EQ(Storage->getString("byte_offset"),
+                Members[1].getAsObject()->getString("stored_byte_offset"));
+    }
+    if (Zip) {
+      EXPECT_EQ(Storage->getString("container_frame_offset"),
+                Members[1].getAsObject()->getString("local_header_offset"));
+      EXPECT_EQ(Storage->getString("container_frame_length"),
+                Members[1].getAsObject()->getString("stored_frame_length"));
     }
 #endif
     const auto BID = field(Members[2], "member_id");
@@ -198,6 +225,197 @@ TEST_F(WebPackageArchiveSDK,
 #endif
     );
   }
+}
+
+TEST_F(WebPackageArchiveSDK, ZipCoordinatesComposeThroughSEAHTMLAndBun) {
+#if !NEVERD_TEST_WEB_JAVASCRIPT
+  GTEST_SKIP() << "Requires JS parser";
+#else
+  for (const uint16_t Method : {0, 8}) {
+    if (Method == 8 && !Gzip)
+      continue;
+    const ZipFixture F(
+        {{"a.js", "let CANARY_A=1;", Method},
+         {"b.js", "let CANARY_B=2;", Method},
+         {"cli", neverd::web::sea_test::blob(), Method},
+         {"index.html", "<script>let CANARY_HTML=3;</script>", Method},
+         {"bun", BunFixture().Bytes, Method}});
+    capture(F.Bytes);
+    const auto A = extract("zip");
+    ASSERT_EQ(field(A, "status"), "ok");
+    const auto ID = field(A, "archive_id");
+    const auto P = page(ID);
+    const auto &Members = *P.getAsObject()->getArray("items");
+    const auto Member = [&](unsigned I) {
+      return field(Members[I], "member_id");
+    };
+    const auto Anchor = [&](const std::string &Artifact, const char *Kind) {
+      const auto Parsed = take(neverd_web_source_analyze_json(
+          S, Revision.data(), Revision.size(), Artifact.data(), Artifact.size(),
+          Kind, std::char_traits<char>::length(Kind)));
+      EXPECT_EQ(field(Parsed, "parse_status"), "parsed");
+      const auto SID = field(Parsed, "source_id");
+      return take(neverd_web_source_anchor_json(S, Revision.data(),
+                                                Revision.size(), SID.data(),
+                                                SID.size(), 0, 1, nullptr, 0));
+    };
+    const auto CheckOrigin = [&](const llvm::json::Object *Origin, unsigned I,
+                                 bool SelectedRange = false) {
+      ASSERT_NE(Origin, nullptr);
+      EXPECT_EQ(Origin->getString("archive_id"), ID);
+      EXPECT_EQ(Origin->getString("member_id"), Member(I));
+      EXPECT_EQ(Origin->getString("container_frame_offset"),
+                std::to_string(F.Local[I]));
+      EXPECT_EQ(Origin->getString("container_frame_length"),
+                field(Members[I], "stored_frame_length"));
+      EXPECT_EQ(Origin->getString("byte_offset_basis"),
+                Method == 0 ? "storage_artifact" : "expanded_stream");
+      if (Method == 0) {
+        EXPECT_EQ(Origin->getString("byte_offset"), std::to_string(F.Data[I]));
+        EXPECT_EQ(Origin->getString("byte_length"),
+                  SelectedRange ? "1" : field(Members[I], "size_bytes"));
+      } else {
+        EXPECT_TRUE(Origin->get("byte_offset")->getAsNull().has_value());
+      }
+    };
+    for (unsigned I : {0, 1}) {
+      const auto R = Anchor(Member(I), "script");
+      const auto *Storage = R.getAsObject()->getObject("storage");
+      CheckOrigin(Storage, I, true);
+      ASSERT_NE(Storage, nullptr);
+      EXPECT_EQ(Storage->getString("mapping"),
+                Method == 0 ? "byte_identity" : "containing_compressed_frame");
+      if (Method == 0)
+        EXPECT_EQ(Storage->getString("byte_offset"), std::to_string(F.Data[I]));
+      else {
+        EXPECT_TRUE(Storage->get("byte_offset")->getAsNull().has_value());
+        EXPECT_EQ(Storage->getString("expanded_byte_offset"),
+                  field(Members[I], "expanded_byte_offset"));
+      }
+    }
+    const std::string SEAProfile = "node-sea-22.15.0-blob-le64-v1";
+    const auto SEAID = Member(2);
+    const auto SEA = take(neverd_web_sea_extract_json(
+        S, Revision.data(), Revision.size(), SEAID.data(), SEAID.size(),
+        SEAProfile.data(), SEAProfile.size()));
+    ASSERT_EQ(field(SEA, "status"), "ok");
+    const auto SA = Anchor(field(SEA, "source_artifact_id"), "commonjs");
+    const auto *SS = SA.getAsObject()->getObject("storage");
+    ASSERT_NE(SS, nullptr);
+    CheckOrigin(SS->getObject("container_origin"), 2);
+    EXPECT_EQ(SS->getString("mapping"),
+              Method == 0 ? "byte_identity" : "containing_compressed_frame");
+
+    const auto HTMLID = Member(3);
+    const auto HTML = take(neverd_web_html_analyze_json(
+        S, Revision.data(), Revision.size(), HTMLID.data(), HTMLID.size()));
+    const auto HID = field(HTML, "html_id");
+    const auto HP = take(neverd_web_html_records_json(
+        S, Revision.data(), Revision.size(), HID.data(), HID.size(), "scripts",
+        7, 0, 1));
+    const auto Inline =
+        field((*HP.getAsObject()->getArray("items"))[0], "inline_artifact_id");
+    const auto HA = Anchor(Inline, "script");
+    const auto *HS = HA.getAsObject()->getObject("storage");
+    ASSERT_NE(HS, nullptr);
+    CheckOrigin(HS->getObject("parent_origin"), 3);
+    if (Method == 0)
+      EXPECT_EQ(HS->getString("byte_offset"), std::to_string(F.Data[3] + 8));
+    else
+      EXPECT_EQ(
+          HS->getString("expanded_byte_offset"),
+          std::to_string(
+              std::stoull(field(Members[3], "expanded_byte_offset")) + 8));
+
+    const auto BID = Member(4);
+    const auto Bun = take(neverd_web_bun_extract_json(
+        S, Revision.data(), Revision.size(), BID.data(), BID.size()));
+    const auto EID = field(Bun, "extraction_id");
+    const auto BP = take(neverd_web_bun_records_json(
+        S, Revision.data(), Revision.size(), EID.data(), EID.size(), "modules",
+        7, 0, 1));
+    const auto BSID =
+        field((*BP.getAsObject()->getArray("items"))[0], "source_artifact_id");
+    const auto BA = Anchor(BSID, "module");
+    const auto *BS = BA.getAsObject()->getObject("storage");
+    ASSERT_NE(BS, nullptr);
+    CheckOrigin(BS->getObject("container_origin"), 4);
+    if (Method == 0) {
+      const auto *Origin = BS->getObject("container_origin");
+      const auto Base = std::stoull(Origin->getString("byte_offset")->str());
+      const auto At = std::stoull(BS->getString("byte_offset")->str());
+      const auto Size = std::stoull(BS->getString("byte_length")->str());
+      EXPECT_EQ(F.Bytes.substr(Base + At, Size),
+                BunFixture().Bytes.substr(At, Size));
+    }
+  }
+#endif
+}
+
+TEST_F(WebPackageArchiveSDK, ZipFailureIsAtomicAndImportRevokesDerivedMembers) {
+  const ZipFixture F({{"a.js", "let CANARY=1;"}});
+  auto Bad = F.Bytes;
+  Bad[F.Data[0]] ^= 1;
+  capture(Bad);
+  EXPECT_EQ(code(extract("zip")), "zip_crc_mismatch");
+  EXPECT_EQ(field(take(neverd_web_metadata_json(S)), "analysis_status"),
+            "not_analyzed");
+  capture(F.Bytes);
+  const auto A = extract("zip");
+  const auto ID = field(A, "archive_id"), Old = Revision;
+  const auto P = page(ID);
+  const auto Member =
+      field((*P.getAsObject()->getArray("items"))[0], "member_id");
+  capture(F.Bytes);
+  EXPECT_EQ(code(take(neverd_web_package_archive_records_json(
+                S, Old.data(), Old.size(), ID.data(), ID.size(), 0, 1))),
+            "stale_revision");
+  EXPECT_EQ(code(page(ID)), "unknown_package_archive");
+#if NEVERD_TEST_WEB_JAVASCRIPT
+  EXPECT_EQ(code(take(neverd_web_source_analyze_json(
+                S, Revision.data(), Revision.size(), Member.data(),
+                Member.size(), "script", 6))),
+            "unknown_artifact");
+#endif
+}
+
+TEST_F(WebPackageArchiveSDK, ZipLatePayloadFailurePreservesExistingArchive) {
+  const ZipFixture Good({{"good.js", "let CANARY=1;"}});
+  const ZipFixture Bad(
+      {{"first.js", "let CANARY=2;"}, {"second.js", "let CANARY=3;"}});
+  auto Corrupt = Bad.Bytes;
+  Corrupt[Bad.Data[1]] ^= 1;
+  std::ofstream(Root / "0-good.zip", std::ios::binary)
+      .write(Good.Bytes.data(), Good.Bytes.size());
+  std::ofstream(Root / "1-bad.zip", std::ios::binary)
+      .write(Corrupt.data(), Corrupt.size());
+  Path = Root.string();
+  open();
+  const auto Inputs = take(
+      neverd_web_artifacts_json(S, Revision.data(), Revision.size(), 1, 2));
+  const auto &Items = *Inputs.getAsObject()->getArray("items");
+  ASSERT_EQ(Items.size(), 2);
+  Artifact = field(Items[0], "artifact_id");
+  const auto A = extract("zip");
+  ASSERT_EQ(field(A, "status"), "ok");
+  const auto ID = field(A, "archive_id");
+  const auto Before = page(ID);
+  Artifact = field(Items[1], "artifact_id");
+  for (unsigned Attempt = 0; Attempt < 5; ++Attempt)
+    EXPECT_EQ(code(extract("zip")), "zip_crc_mismatch");
+  EXPECT_EQ(page(ID), Before);
+  // Failed attempts never consume cache slots or revoke a retained member.
+  Artifact = field(Items[0], "artifact_id");
+  EXPECT_EQ(field(extract("zip"), "archive_id"), ID);
+#if NEVERD_TEST_WEB_JAVASCRIPT
+  const auto Member =
+      field((*Before.getAsObject()->getArray("items"))[0], "member_id");
+  EXPECT_EQ(field(take(neverd_web_source_analyze_json(
+                      S, Revision.data(), Revision.size(), Member.data(),
+                      Member.size(), "script", 6)),
+                  "parse_status"),
+            "parsed");
+#endif
 }
 
 TEST_F(WebPackageArchiveSDK, FailureDoesNotPublishAndRevisionRevokesMembers) {
@@ -337,31 +555,33 @@ TEST_F(WebPackageArchiveSDK, FourArchiveCacheAllowsHitsAndReleasesOnImport) {
 
 #ifdef NEVERD_WEB_TEST_CLI
 TEST_F(WebPackageArchiveSDK, CLIUsesCapturedMembersWithAnUnusablePath) {
-  capture(fixture());
   const auto Out = (Root / "out").string(), Err = (Root / "err").string();
   const llvm::StringRef Env[] = {"PATH=/neverd-no-external-tools", "LC_ALL=C"};
   const std::optional<llvm::StringRef> Redirects[] = {std::nullopt, Out, Err};
-  for (const llvm::StringRef Command :
-       {"archive", "archive-packages", "archive-bun"}) {
-    llvm::SmallVector<llvm::StringRef> Args{
-        NEVERD_WEB_TEST_CLI, "web", Command, Path, "tar", "0"};
-    if (Command != "archive")
-      Args.push_back(Command == "archive-bun" ? "2" : "0");
-    if (Command == "archive-packages")
-      Args.push_back("package-json");
-    ASSERT_EQ(llvm::sys::ExecuteAndWait(NEVERD_WEB_TEST_CLI, Args, Env,
-                                        Redirects, 30),
-              0);
-    std::ifstream F(Out), E(Err);
-    const std::string Text{std::istreambuf_iterator<char>(F), {}};
-    const std::string Errors{std::istreambuf_iterator<char>(E), {}};
-    EXPECT_EQ(Text.find("CANARY"), std::string::npos);
-    EXPECT_EQ(Errors.find("CANARY"), std::string::npos);
-    EXPECT_NE(Text.find("archive_id"), std::string::npos);
-    if (Command == "archive-packages")
-      EXPECT_NE(Text.find("package_analysis_id"), std::string::npos);
-    if (Command == "archive-bun")
-      EXPECT_NE(Text.find("extraction_id"), std::string::npos);
+  for (const llvm::StringRef Format : {"tar", "zip"}) {
+    capture(Format == "tar" ? fixture() : zipFixture(false));
+    for (const llvm::StringRef Command :
+         {"archive", "archive-packages", "archive-bun"}) {
+      llvm::SmallVector<llvm::StringRef> Args{
+          NEVERD_WEB_TEST_CLI, "web", Command, Path, Format, "0"};
+      if (Command != "archive")
+        Args.push_back(Command == "archive-bun" ? "2" : "0");
+      if (Command == "archive-packages")
+        Args.push_back("package-json");
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(NEVERD_WEB_TEST_CLI, Args, Env,
+                                          Redirects, 30),
+                0);
+      std::ifstream F(Out), E(Err);
+      const std::string Text{std::istreambuf_iterator<char>(F), {}};
+      const std::string Errors{std::istreambuf_iterator<char>(E), {}};
+      EXPECT_EQ(Text.find("CANARY"), std::string::npos);
+      EXPECT_EQ(Errors.find("CANARY"), std::string::npos);
+      EXPECT_NE(Text.find("archive_id"), std::string::npos);
+      if (Command == "archive-packages")
+        EXPECT_NE(Text.find("package_analysis_id"), std::string::npos);
+      if (Command == "archive-bun")
+        EXPECT_NE(Text.find("extraction_id"), std::string::npos);
+    }
   }
 }
 #endif

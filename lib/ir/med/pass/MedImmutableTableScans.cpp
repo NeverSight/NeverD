@@ -148,8 +148,9 @@ public:
     if (V.isConst()) {
       if (V.Provenance == ConstantAddressProvenance::AddressFragment)
         return std::nullopt;
-      if (pointer(V) && (V.Size != Image.getPointerSize() ||
-                         V.ConstVal != (V.ConstVal & mask(V.Size))))
+      if (pointer(V) &&
+          (V.Size < Image.getPointerSize() ||
+           V.ConstVal != (V.ConstVal & mask(Image.getPointerSize()))))
         return std::nullopt;
       return V;
     }
@@ -247,6 +248,20 @@ public:
     const unsigned Size = Op.Output.Size;
     if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 && A->Size == Size)
       return A;
+    // LowIR uses a widened integer carrier for a 32-bit memory address.
+    // Retain the exact pointer occurrence through lossless views instead of
+    // erasing its owner or refusing the immutable load that consumes it.
+    if (pointer(*A) && A->Size >= Image.getPointerSize() &&
+        Size >= Image.getPointerSize() &&
+        ((Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs == 1 &&
+          Size >= A->Size) ||
+         (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          Op.Inputs[1].isConst() && scalar(Op.Inputs[1]) &&
+          Op.Inputs[1].ConstVal == 0 && Size <= A->Size))) {
+      MedVar Result = *A;
+      Result.Size = Size;
+      return Result;
+    }
     if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 && A->isConst()) {
       const auto Slot = A->ConstVal;
       if (pointer(*A) && A->AddressOwnerVA != InvalidVA) {
@@ -288,6 +303,8 @@ public:
       if (Equal)
         return literal(Op.Opcode == NdOp::INT_EQUAL ? *Equal : !*Equal, Size);
     }
+    if (Op.Opcode == NdOp::INT_ADD && B && pointer(*B) && scalar(*A))
+      std::swap(A, B);
     if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) && B &&
         pointer(*A) &&
         A->Provenance == ConstantAddressProvenance::DataAddress && scalar(*B) &&
@@ -507,6 +524,21 @@ bool foldImmutableTableScans(MedFunc &Func, const BinaryImage &Image) {
     Evaluator Eval(Func, Image, Budget);
     if (!Eval.complete())
       break;
+    // A folded scan often feeds a later loop through an invariant PHI.
+    // Publish those exact incoming values as well as operation results, so
+    // every consumer sees the scan's count without re-evaluating image bytes.
+    for (auto &Block : Func.Blocks)
+      for (auto &Phi : Block.Phis)
+        for (auto &[Pred, Arg] : Phi.Args) {
+          if (Arg.isConst())
+            continue;
+          auto Value = Eval.value(Arg);
+          if (Value && Value->isConst() && Value->Size == Arg.Size &&
+              !Eval.exhausted()) {
+            Arg = *Value;
+            Progress = true;
+          }
+        }
     for (auto &Block : Func.Blocks)
       for (auto &Op : Block.Ops) {
         if (Op.Dead || (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&

@@ -10,8 +10,10 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
+#include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/lift/X86Regs.h"
@@ -1346,7 +1348,7 @@ TEST(CFGBuilderCoverage, LocalUnwindTargetRequiresExclusiveSameFrameUses) {
     Img.ExceptionMetadata.rebuildIndex();
     return Img;
   };
-  for (unsigned Mutation = 0; Mutation != 13; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 14; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Img = Make();
     if (Mutation == 1)
@@ -1402,6 +1404,21 @@ TEST(CFGBuilderCoverage, LocalUnwindTargetRequiresExclusiveSameFrameUses) {
       Img.Imports.push_back(Opaque);
       ASSERT_TRUE(Img.recordImportStub(Entry + 0x160, 1));
     }
+    if (Mutation == 13) {
+      // Saving the current SP and loading it need not share a basic block.
+      auto &Bytes = Img.Segments[0].Data;
+      const std::array<uint8_t, 5> Jump{0xe9, 0x52, 0, 0, 0};
+      std::copy(Jump.begin(), Jump.end(), Bytes.begin() + 9);
+      const std::array<uint8_t, 19> CallBlock{
+          0x48, 0x8d, 0x15, 0xb9, 0xff, 0xff, 0xff, // lea rdx,Target
+          0x48, 0x8b, 0x4c, 0x24, 0x20,             // mov rcx,[rsp+32]
+          0xe8, 0x0f, 0x01, 0,    0,                // call Stub
+          0xeb, 0xad};                              // jmp Target
+      std::copy(CallBlock.begin(), CallBlock.end(), Bytes.begin() + 0x60);
+      Img.Symbols[0].Size = 0x80;
+      Img.ExceptionMetadata.Functions[0].CodeRange.End = Entry + 0x80;
+      Img.ExceptionMetadata.rebuildIndex();
+    }
     Decoder Dec;
     ASSERT_TRUE(Dec.init(Arch::X64));
     std::set<va_t> Entries{Entry, Stub};
@@ -1425,7 +1442,7 @@ TEST(CFGBuilderCoverage, LocalUnwindTargetRequiresExclusiveSameFrameUses) {
             Img, Bodies, Entries,
             Mutation == 5 ? std::optional<size_t>{0} : std::nullopt,
             /*CompleteModule=*/Mutation != 7);
-    if (Mutation != 0) {
+    if (Mutation != 0 && Mutation != 13) {
       EXPECT_TRUE(Evidence.LocalUnwindsByOwner.empty());
       EXPECT_THROW(
           LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::COFF),
@@ -1456,6 +1473,23 @@ TEST(CFGBuilderCoverage, LocalUnwindTargetRequiresExclusiveSameFrameUses) {
     EXPECT_THROW(
         LowToMedConverter().convert(Changed, Arch::X64, BinaryFormat::COFF),
         std::exception);
+    if (Mutation == 13) {
+      // The saved value is in a different block from the call. Binding just
+      // the call block's prefix would miss a changed reaching store.
+      auto ChangedStore = Low;
+      bool FoundStore = false;
+      for (auto &Block : ChangedStore.Blocks)
+        if (Block.StartAddr == Entry)
+          for (auto &Op : Block.Ops)
+            if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2) {
+              Op.Inputs[1] = NdVar::cst(0, 8);
+              FoundStore = true;
+            }
+      ASSERT_TRUE(FoundStore);
+      EXPECT_THROW(LowToMedConverter().convert(ChangedStore, Arch::X64,
+                                               BinaryFormat::COFF),
+                   std::exception);
+    }
     // A certificate cannot be replayed against a different unwind frame.
     Low.SEHLocalUnwindContinuations.front().FrameOffset = -48;
     EXPECT_THROW(
@@ -1931,4 +1965,127 @@ TEST(FuncDetectorCoverage, SweepsInPiecesExactlyAsInOnePiece) {
   const auto Pieces = DetectWith(16);
   EXPECT_GT(OnePiece.size(), 1000u);
   EXPECT_EQ(Pieces, OnePiece);
+}
+
+TEST(CFGBuilderCoverage, LocalUnwindFrameProofIntersectsEveryPredecessor) {
+  const auto SP = NdVar::reg(x86reg::RSP, 8);
+  const auto Frame = NdVar::reg(x86reg::RCX, 8);
+  const auto Address = NdVar::tmp(0, 8);
+  const auto MakeOp = [](NdOp Opcode, NdVar Output,
+                         std::initializer_list<NdVar> Inputs) {
+    LowOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Output;
+    for (const auto &Input : Inputs)
+      Op.addInput(Input);
+    return Op;
+  };
+  auto Make = [&] {
+    LowFunc F;
+    F.Entry = 0x1000;
+    F.ModuleAnalysisRoots.insert(F.Entry);
+    F.OrdinaryModuleAnalysisRoots.insert(F.Entry);
+    F.Blocks.resize(4);
+    for (size_t I = 0; I < 4; ++I) {
+      auto &B = F.Blocks[I];
+      B.Id = (I + 1) * 10;
+      B.StartAddr = F.Entry + I * 0x100;
+      B.EndAddr = B.StartAddr + 0x80;
+    }
+    F.Blocks[0].Succs = {20, 30};
+    F.Blocks[1].Preds = F.Blocks[2].Preds = {10};
+    F.Blocks[1].Succs = F.Blocks[2].Succs = {40};
+    F.Blocks[3].Preds = {20, 30};
+    F.Blocks[0].Ops = {MakeOp(NdOp::INT_SUB, SP, {SP, NdVar::cst(40, 8)}),
+                       MakeOp(NdOp::INT_ADD, Address, {SP, NdVar::cst(32, 8)}),
+                       MakeOp(NdOp::STORE, {}, {Address, SP})};
+    F.Blocks[3].Ops = {MakeOp(NdOp::INT_ADD, Address, {SP, NdVar::cst(32, 8)}),
+                       MakeOp(NdOp::LOAD, Frame, {Address}),
+                       MakeOp(NdOp::CALL, {}, {NdVar::cst(0x2000, 8)})};
+    return F;
+  };
+  for (unsigned Mutation = 0; Mutation != 21; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = Make();
+    auto &Arm = F.Blocks[2];
+    if (Mutation == 1 || Mutation == 3 || Mutation == 20) {
+      Arm.Ops = {MakeOp(NdOp::INT_ADD, Address, {SP, NdVar::cst(32, 8)}),
+                 MakeOp(Mutation == 20 ? NdOp::ATOMIC_XCHG : NdOp::STORE, {},
+                        {Mutation == 3 ? NdVar::reg(x86reg::RDX, 8) : Address,
+                         NdVar::cst(1, 1)})};
+    }
+    if (Mutation == 2)
+      Arm.Ops = {MakeOp(NdOp::CALL, {}, {NdVar::cst(0x3000, 8)})};
+    if (Mutation == 4)
+      F.OrdinaryModuleAnalysisRoots.insert(Arm.StartAddr);
+    if (Mutation == 5)
+      F.ModuleAnalysisRoots.insert(F.Blocks[3].StartAddr);
+    if (Mutation == 6)
+      F.Blocks[3].Preds.pop_back();
+    if (Mutation == 7)
+      F.Blocks[0].Ops.pop_back();
+    if (Mutation == 8 || Mutation == 9) {
+      Arm.Preds.push_back(Arm.Id);
+      Arm.Succs.push_back(Arm.Id);
+      if (Mutation == 9)
+        Arm.Ops = {MakeOp(NdOp::INT_SUB, SP, {SP, NdVar::cst(8, 8)})};
+    }
+    if (Mutation == 10)
+      std::reverse(F.Blocks.begin(), F.Blocks.end());
+    if (Mutation == 12)
+      F.FunctionTemporaries.push_back({0, 8});
+    if (Mutation == 13)
+      F.Blocks[3].Ops.erase(F.Blocks[3].Ops.begin());
+    if (Mutation == 14)
+      Arm.Ops = {
+          MakeOp(NdOp::COPY, NdVar::reg(x86reg::RSP, 4), {NdVar::cst(0, 4)})};
+    if (Mutation == 15)
+      Arm.ExceptionalPreds.push_back({.BlockId = 10});
+    if (Mutation == 16) {
+      LowInstructionBoundary B;
+      B.Control = LowInstructionControl::ConditionalCall;
+      F.Blocks[3].InstructionBoundaries.push_back(B);
+    }
+    if (Mutation == 17)
+      Arm.Ops = {MakeOp(NdOp::INT_ADD, SP, {SP, NdVar::cst(40, 8)}),
+                 MakeOp(NdOp::INT_SUB, SP, {SP, NdVar::cst(40, 8)})};
+    if (Mutation == 18)
+      F.Blocks[0].Ops.insert(F.Blocks[0].Ops.begin(),
+                             MakeOp(NdOp::CALL, {}, {NdVar::cst(0x3000, 8)}));
+    // Only operations from one synthetic instruction share temporaries.
+    for (auto &Block : F.Blocks)
+      for (size_t I = 0; I < Block.Ops.size(); ++I) {
+        Block.Ops[I].Addr = Block.StartAddr;
+        Block.Ops[I].Seq = I;
+      }
+    size_t Budget = Mutation == 11 ? 0 : Mutation == 19 ? 1 : 10000;
+    const auto Proof =
+        proveLowSEHFrames(F, getTargetRegInfo(Arch::X64), Budget);
+    const bool Expected =
+        Mutation == 0 || Mutation == 8 || Mutation == 10 || Mutation == 18;
+    ASSERT_EQ(Proof.Calls.size(), Expected ? 1u : 0u);
+    if (!Expected) {
+      EXPECT_TRUE(Proof.DependencyDigest.empty());
+      continue;
+    }
+    EXPECT_EQ(Proof.Calls.begin()->second, -40);
+    EXPECT_EQ(Proof.DependencyDigest, lowSEHFrameDependencyDigest(F));
+    auto Changed = F;
+    Changed.Blocks[0].Ops.push_back(MakeOp(NdOp::NOP, {}, {}));
+    EXPECT_NE(Proof.DependencyDigest, lowSEHFrameDependencyDigest(Changed));
+    Changed = F;
+    Changed.Blocks[0].Succs.push_back(9876);
+    EXPECT_NE(Proof.DependencyDigest, lowSEHFrameDependencyDigest(Changed));
+    Changed = F;
+    Changed.ModuleAnalysisRoots.insert(F.Entry + 0x100);
+    EXPECT_NE(Proof.DependencyDigest, lowSEHFrameDependencyDigest(Changed));
+  }
+  // A Win64 receipt cannot seed another architecture's runtime frame.
+  for (Arch Architecture : {Arch::X86, Arch::ARM, Arch::AArch64}) {
+    size_t Budget = 10000;
+    const auto Proof =
+        proveLowSEHFrames(Make(), getTargetRegInfo(Architecture), Budget);
+    EXPECT_TRUE(Proof.Calls.empty());
+    EXPECT_TRUE(Proof.DependencyDigest.empty());
+  }
 }

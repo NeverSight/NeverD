@@ -113,6 +113,9 @@ struct FrameState {
   void leaveCallback();
   bool callbackMemoryIsPrivate(const CallbackFrameAddress &Address,
                                uint16_t Width, bool Read = false) const;
+  /// Returning to the runtime requires this invocation's untouched return
+  /// slot and the owning function's established frame register.
+  bool callbackStackIsRestored(int32_t ParentFrameOffset) const;
   void trimCallbackCells();
 };
 

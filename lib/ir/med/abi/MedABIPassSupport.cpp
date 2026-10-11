@@ -16,6 +16,7 @@
 #include "MedABIPassDetail.h"
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/libc/LibCNames.h"
@@ -47,6 +48,173 @@ bool isAbiRecoveryBarrier(const MedOp &Op) {
   if (static_cast<uint64_t>(Id) != Op.Inputs[0].ConstVal)
     return true;
   return !x86FPStateShapeIsValid(Id, x86FPStateMedShape(Op));
+}
+
+bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
+  if (C.Func.Blocks.empty() || C.CallIdx < 0)
+    return false;
+  size_t Remaining = limits::kMaxCallSetupStackProofWork;
+  std::map<int, const MedBlock *> Blocks;
+  for (const auto &B : C.Func.Blocks)
+    if (!Blocks.emplace(B.Id, &B).second)
+      return false;
+  std::vector<std::pair<const MedBlock *, size_t>> Work{
+      {&C.Blk, static_cast<size_t>(C.CallIdx)}};
+  std::set<int> Seen;
+  bool ReachedEntry = false;
+  while (!Work.empty()) {
+    auto [B, End] = Work.back();
+    Work.pop_back();
+    if (!Remaining-- || End > B->Ops.size() || !B->ExceptionalPreds.empty())
+      return false;
+    // Revisit the call block on a backedge: the entire previous iteration,
+    // including its calls, must preserve the incoming value as well.
+    if (End == B->Ops.size() && !Seen.insert(B->Id).second)
+      continue;
+    auto Root = C.Func.ModuleAnalysisRoots.lower_bound(B->StartAddr);
+    if (Root != C.Func.ModuleAnalysisRoots.end() &&
+        (*Root == B->StartAddr || *Root < B->EndAddr) && *Root != C.Func.Entry)
+      return false;
+    for (size_t I = 0; I < End; ++I) {
+      if (!Remaining--)
+        return false;
+      const auto &Op = B->Ops[I];
+      if (isAbiRecoveryBarrier(Op))
+        return false;
+      if (Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+          C.Layout.registerIndex(Op.Output.RegOff) == ArgIndex &&
+          !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+            Op.Inputs[0] == Op.Output))
+        return false;
+    }
+    if (B == &C.Func.Blocks.front()) {
+      ReachedEntry = true;
+      if (B->Preds.empty())
+        continue;
+    } else if (B->Preds.empty())
+      return false;
+    for (int Id : B->Preds) {
+      auto P = Blocks.find(Id);
+      if (P == Blocks.end() || std::count(P->second->Succs.begin(),
+                                          P->second->Succs.end(), B->Id) != 1)
+        return false;
+      Work.emplace_back(P->second, P->second->Ops.size());
+    }
+  }
+  return ReachedEntry;
+}
+
+std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C) {
+  using Stores = std::map<int64_t, MedVar>;
+  const int64_t Word = C.Layout.SlotBytes;
+  const int64_t Base = C.Layout.CallStackBase;
+  if (Word <= 0 || C.MaxArgs <= 0 || Base < 0)
+    return {};
+  const int64_t Limit = Base + Word * C.MaxArgs;
+  // A per-call bound also limits path duplication in diamonds. Exhaustion
+  // publishes no partial predecessor proof.
+  size_t Remaining = limits::kMaxCallSetupStackProofWork;
+  std::map<int, const MedBlock *> Blocks;
+  for (const MedBlock &B : C.Func.Blocks)
+    if (!Blocks.emplace(B.Id, &B).second)
+      return {};
+  std::set<int> Active;
+  auto same = [](const MedVar &A, const MedVar &B) {
+    return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer &&
+           A.Size == B.Size && A.RegOff == B.RegOff && A.TheArch == B.TheArch &&
+           A.Provenance == B.Provenance &&
+           A.AddressOwnerVA == B.AddressOwnerVA && A.RenameTag == B.RenameTag;
+  };
+  std::function<Stores(const MedBlock &, size_t, unsigned)> Visit =
+      [&](const MedBlock &B, size_t End, unsigned Depth) -> Stores {
+    const auto Root = C.Func.ModuleAnalysisRoots.lower_bound(B.StartAddr);
+    const bool Independent = Root != C.Func.ModuleAnalysisRoots.end() &&
+                             (*Root == B.StartAddr || *Root < B.EndAddr);
+    // A root inside an unsplit block could bypass any earlier local store.
+    if (Independent && *Root != B.StartAddr)
+      return {};
+    if (!Remaining || End > B.Ops.size() ||
+        Depth >= limits::kCallArgStoreAddressDepth ||
+        !Active.insert(B.Id).second)
+      return {};
+    --Remaining;
+    Stores Local;
+    std::set<int64_t> Overwritten;
+    bool Inherit = true;
+    for (size_t I = End; I > 0; --I) {
+      if (!Remaining) {
+        Inherit = false;
+        break;
+      }
+      --Remaining;
+      const MedOp &Op = B.Ops[I - 1];
+      if (isAbiRecoveryBarrier(Op) || Op.Opcode == NdOp::ATOMIC_XCHG ||
+          Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
+          Op.MemoryOrdering != NdMemoryOrdering::None) {
+        Inherit = false;
+        break;
+      }
+      if (Op.Opcode != NdOp::STORE)
+        continue;
+      const auto Offset =
+          Op.NumInputs == 2 ? C.CallStackOffset(Op.Inputs[0]) : std::nullopt;
+      if (!Offset || !Op.Inputs[1].Size ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+          *Offset > INT64_MAX - Op.Inputs[1].Size) {
+        Inherit = false; // A may-alias write hides all earlier stores.
+        break;
+      }
+      const int64_t StoreEnd = *Offset + Op.Inputs[1].Size;
+      for (int64_t Slot = Base; Slot < Limit; Slot += Word) {
+        if (*Offset >= Slot + Word || StoreEnd <= Slot ||
+            !Overwritten.insert(Slot).second)
+          continue;
+        // An aligned scalar keeps its actual width (a Win64 int store is
+        // four bytes in an eight-byte slot). Never complete its upper bytes
+        // from another store or reinterpret an interior byte as a new slot.
+        if (*Offset == Slot && Op.Inputs[1].Size <= Word &&
+            (Op.Inputs[1].Size & (Op.Inputs[1].Size - 1)) == 0 &&
+            !(Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0 &&
+              C.TRI.isCalleeSaveReg(Op.Inputs[1].RegOff)))
+          Local.emplace(Slot, Op.Inputs[1]);
+      }
+    }
+    Stores Common;
+    if (Inherit && !Independent && B.ExceptionalPreds.empty() &&
+        !B.Preds.empty() && B.StartAddr != C.Func.Entry) {
+      bool First = true;
+      std::set<int> Preds;
+      for (int Id : B.Preds) {
+        const auto P = Blocks.find(Id);
+        if (!Remaining || !Preds.insert(Id).second || P == Blocks.end() ||
+            std::count(P->second->Succs.begin(), P->second->Succs.end(),
+                       B.Id) != 1) {
+          Common.clear();
+          break;
+        }
+        --Remaining;
+        Stores Incoming = Visit(*P->second, P->second->Ops.size(), Depth + 1);
+        if (First) {
+          Common = std::move(Incoming);
+          First = false;
+        } else {
+          std::erase_if(Common, [&](const auto &Item) {
+            const auto Other = Incoming.find(Item.first);
+            return Other == Incoming.end() || !same(Item.second, Other->second);
+          });
+        }
+        if (Common.empty())
+          break;
+      }
+    }
+    for (int64_t Slot : Overwritten)
+      Common.erase(Slot);
+    Common.insert(Local.begin(), Local.end());
+    Active.erase(B.Id);
+    return Common;
+  };
+  Stores Result = Visit(C.Blk, C.CallIdx, 0);
+  return Remaining ? Result : Stores{};
 }
 
 // Address = Base + Offset modulo the original address width. Offset owns the
@@ -829,7 +997,7 @@ std::string relocCalleeName(const BinaryImage &Img, va_t InsnAddr) {
 static MedVar argRegSourceValue(const MedOp &Op) {
   if (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1)
     return Op.Inputs[0];
-  if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 2 &&
+  if (Op.Opcode == NdOp::SUBBYTES && Op.OriginSeq < 0 && Op.NumInputs >= 2 &&
       Op.Inputs[1].isConst() && Op.Inputs[1].ConstVal == 0 &&
       Op.Inputs[0].Kind == MedVar::Reg &&
       Op.Inputs[0].RegOff == Op.Output.RegOff &&
@@ -838,15 +1006,11 @@ static MedVar argRegSourceValue(const MedOp &Op) {
   return Op.Output;
 }
 
-// argRegSourceValue with block context: resolves a low-half sub-register sync
-// whose source is a *temporary* (`SUBBYTES Wn = subpiece(t, 0)`, not the
-// `subpiece(Xn, 0)` of the register itself that argRegSourceValue already
-// widens) to the full-width value of a paired full-register write of the same
-// source (`COPY Xn = t`) appearing just before it in the block.  The backward
-// register scan meets the 32-bit sync before the 64-bit write, so without this
-// a pointer written whole to an argument register and then synced to its 32-bit
-// view -- a FILE* loaded into x1 right before an external `fputs` -- would be
-// recovered as the truncated low 32 bits, yielding a wild pointer at run time.
+// Resolve synthetic low-register observations back to the whole argument
+// written by the same machine instruction. Multiple sibling aliases may
+// intervene, but a real partial write, another instruction, or a call ends
+// the proof. Source identity includes constant provenance and owner as well
+// as the exact register/temporary SSA occurrence.
 MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
                                 const TargetRegInfo &TRI,
                                 const IntegerArgumentLayout &Layout) {
@@ -857,25 +1021,43 @@ MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
   // already resolved by argRegSourceValue.
   if (Op.Opcode != NdOp::SUBBYTES || Op.NumInputs < 2 ||
       !Op.Inputs[1].isConst() || Op.Inputs[1].ConstVal != 0 ||
-      Op.Inputs[0].isConst() || Op.Output.Kind != MedVar::Reg ||
+      Op.Output.Kind != MedVar::Reg ||
       (Op.Inputs[0].Kind == MedVar::Reg &&
        Op.Inputs[0].RegOff == Op.Output.RegOff))
     return Base;
   const MedVar &Src = Op.Inputs[0];
+  auto sameSource = [&](const MedVar &Candidate) {
+    return sameAddressValue(Candidate, Src) &&
+           (!Src.isConst() || (Candidate.ConstVal == Src.ConstVal &&
+                               Candidate.Provenance == Src.Provenance &&
+                               Candidate.AddressOwnerVA == Src.AddressOwnerVA));
+  };
   const int ArgIdx = Layout.registerIndex(Op.Output.RegOff);
+  if (Op.OriginSeq >= 0 || Src.Size <= Op.Output.Size || ArgIdx < 0)
+    return Base;
+  const uint64_t Register = Layout.Registers[ArgIdx];
   for (int K = J - 1; K >= 0; --K) {
     const MedOp &W = Blk.Ops[K];
-    if (W.Output.Kind != MedVar::Reg ||
-        Layout.registerIndex(W.Output.RegOff) != ArgIdx)
+    if (W.Addr != Op.Addr || isAbiRecoveryBarrier(W))
+      break;
+    if (W.Output.Kind != MedVar::Reg || W.Output.Size == 0)
       continue;
-    // The nearest earlier write to this same argument register: when it is a
-    // wider write of the same source value, it is the full-width definition the
-    // sub-register sync mirrors.
-    if (W.Output.Size > Op.Output.Size && W.NumInputs >= 1 &&
-        !W.Inputs[0].isConst() && W.Inputs[0].Kind == Src.Kind &&
-        W.Inputs[0].Id == Src.Id && W.Inputs[0].SSAVer == Src.SSAVer)
-      return argRegSourceValue(W);
-    break; // only the nearest earlier write to this register is the pair
+    const bool Overlaps = W.Output.RegOff < Register + TRI.FullRegWidth &&
+                          W.Output.RegOff + W.Output.Size > Register;
+    if (!Overlaps)
+      continue;
+    // Several synthetic aliases can follow the same full-register write.
+    // They are observations, not successive writes of narrower arguments.
+    if (W.Opcode == NdOp::SUBBYTES && W.OriginSeq < 0 && W.NumInputs == 2 &&
+        W.Output.RegOff == Register && W.Output.Size < Src.Size &&
+        W.Inputs[1].isConst() && W.Inputs[1].ConstVal == 0 &&
+        sameSource(W.Inputs[0]))
+      continue;
+    if (W.Opcode == NdOp::COPY && W.Output.RegOff == Register &&
+        W.Output.Size == Src.Size && W.NumInputs == 1 &&
+        sameSource(W.Inputs[0]))
+      return Src;
+    break;
   }
   return Base;
 }

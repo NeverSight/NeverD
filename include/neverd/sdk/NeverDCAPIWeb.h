@@ -100,7 +100,8 @@ NEVERD_API const char *neverd_web_package_integrity_verify_json(
     const char *DeclarationID, size_t DeclarationIDSize, const char *PackageID,
     size_t PackageIDSize);
 
-/// Explicit tar/tgz profile; captured originals only, no recursive extraction.
+/// Explicit tar/tgz/zip profile; captured originals only, no recursive
+/// extraction.
 NEVERD_API const char *neverd_web_package_archive_extract_json(
     neverd_web_session_t Session, const char *ExpectedRevision,
     size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,

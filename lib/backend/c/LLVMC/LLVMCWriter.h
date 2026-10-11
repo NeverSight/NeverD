@@ -669,12 +669,17 @@ public:
   bool GuardAnalysisOnlyFunctions;
   CSourceRecorder *SourceRecorder = nullptr;
   const llvm::Function *OnlyFunction = nullptr;
+  std::set<const llvm::GlobalValue *> SelectedGlobals;
+  std::set<std::string> EmittedGlobalNames;
   /// When false, emit recovered statements without a C wrapper so analysis-only
   /// functions can nest the listing inside `#if 0` of the trap stub.
   bool EmitFunctionWrapper = true;
   CProjectionIdentifierAllocator GlobalIdentifierAllocator;
   std::map<std::pair<Intrinsic, unsigned>, std::string> FPStateHelperNames;
   std::map<const llvm::Function *, std::string> FunctionIdentifiers;
+  /// Exact projected prototypes captured while rendering definitions. They
+  /// include source presentation choices such as inferred void and sret.
+  std::map<const llvm::Function *, std::string> DefinitionDeclarations;
   std::map<const llvm::GlobalVariable *, std::string> ExternalDataIdentifiers;
   /// The C name each function's symbol spells, for its definition's comment.
   std::map<const llvm::Function *, std::string> FunctionSymbolNames;

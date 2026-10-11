@@ -778,11 +778,6 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::NOP, {}, {});
     break;
 
-  // Legacy FPU handled in x87 block above.
-  case X86_INS_FCMOVNP:
-    S.emitIntrinsic(Intrinsic::X87Op);
-    break;
-
   // ========================================================================
   // SSE/MMX data moves — treat as COPY to preserve dataflow.
   // ========================================================================

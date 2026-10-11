@@ -38,6 +38,7 @@ Other hosts require separate evidence.
 | Electron selected-source IPC | `electron-scoped-channel-candidates-v1` | Exact private UTF-16 channel equality inside an explicitly selected manifest/source scope, unresolved endpoints, evidence-linked pages and compatible pair counts; no process-role/runtime-routing or complete application graph claim |
 | Captured source paths / Electron entries | `javascript-captured-portable-path-candidates-v1` / `electron-captured-entry-candidates-v1` | Distinct source/app bases, finite path/URL operations and exact available-file association inside the explicit manifest scope; HTML/import closure and runtime path bases remain unverified |
 | NW.js / VSIX | Pending | Each needs its own qualified container profile; ASAR does not establish this support or safe raw export |
+| ZIP32 container | `zip32-local-central-v1` | Native stored/deflate reader, exact local/central agreement, CRC validation, unavailable-member evidence and shared downstream consumers; [profile](web-zip-profile.md). ZIP64, prefixed images, newer envelopes and framework manifests are separate work |
 | Captured HTML | `html-utf8-script-candidates-v1` | Script/base inventory, captured local URL candidates and inline raw-byte sources/anchors; DOM and runtime activation remain unverified. [Profile](web-html-profile.md) |
 | HTML inline module files | `html-inline-module-file-candidates-v2` | Literal requests use explicit document/base evidence and exact captured members; early captured maps add scoped/prefix/null rules and private URL candidates; browser activation/history and full closure remain pending |
 | HTML import maps | `import-map-url-evidence-v1`, embedded Ada 4.0.0 | Bounded C++ JSON/URL processing and metadata pages remain available without JS parsing; absolute key origins, later/interleaved maps and order-dependent JSON remain explicit HTML-profile refusals |
@@ -48,7 +49,7 @@ Other hosts require separate evidence.
 | Node SEA | Node 22.15.0 LE64 preparation blob and explicit ELF64/Mach-O64/PE32+ x64/ARM64 resource profiles | Separate C++ reader, stored JS/assets and opaque V8 cache/snapshot, shared consumers; [qualification and limits](web-sea-profile.md). Runtime activation/version and other versions/hosts are unverified |
 | Tauri/Wails/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
 | C++ worker | `web_` operations in protocol 1.1 | Real framed-process, direct-query parity, web/native revision isolation and private-output checks passed locally |
-| C++ MCP transport | Pending | Must use the same C API and enforce an explicit host input scope |
+| C++ MCP transport | `neverd-offline-web-mcp-v1`, MCP 2025-06-18 stdio | Shared worker/C API adapter, launch-configured input indices and capability-filtered tools; structural views only, no raw export/deep native analysis. [Profile and qualification limits](web-mcp-profile.md) |
 
 The ASAR increment restored the backend, JavaScript parser, ASAR and LLVM Zstd
 options to ON. Its final local run passed 185 of 186 registered web cases;

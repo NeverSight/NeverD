@@ -2484,9 +2484,10 @@ static ResolverResult mergeResolverResults(
 
 } // namespace
 
-// Reuse an immutable proof graph and bounded, complete value-query batches.
+// Reuse an immutable proof graph and bounded value-query outcomes.
 // Every graph input is compared by value. Batch reuse additionally binds all
-// query inputs and proof modes, and pays its original complete work charge.
+// query inputs and proof modes, and pays its original work charge. A stored
+// refusal remains incomplete; it never supplies a proof for a failed query.
 struct CFGBuilder::ResolverGraphCache {
   struct StorageOwner {
     va_t Branch;
@@ -2528,7 +2529,9 @@ struct CFGBuilder::ResolverGraphCache {
     std::optional<size_t> FiniteSymbolBudget;
     bool QueryCompletion;
     bool FeasibleMasks;
+    bool Complete;
     std::vector<bool> Results;
+    std::vector<bool> Completions;
     std::vector<uint64_t> Masks;
     size_t Work;
     size_t Bytes;
@@ -2584,10 +2587,12 @@ struct CFGBuilder::ResolverGraphCache {
   static std::optional<size_t>
   valueBatchBytes(const std::vector<JumpTableValueQuery> &Queries,
                   const std::vector<bool> &Results,
+                  const std::vector<bool> *Completions,
                   const std::vector<uint64_t> *Masks, bool Capacity) {
     size_t Bytes = sizeof(ValueBatch) + 8 * sizeof(void *);
     if (!accountValueVector(Bytes, Queries, Capacity) ||
         !accountValueVector(Bytes, Results, Capacity) ||
+        (Completions && !accountValueVector(Bytes, *Completions, Capacity)) ||
         (Masks && !accountValueVector(Bytes, *Masks, Capacity)))
       return std::nullopt;
     for (const auto &Query : Queries)
@@ -2645,15 +2650,16 @@ struct CFGBuilder::ResolverGraphCache {
 
   void rememberValueBatch(const CFGBuilder &B,
                           const std::vector<JumpTableValueQuery> &Queries,
-                          uint32_t Depth, size_t MatchBudget,
-                          bool QueryCompletion,
+                          uint32_t Depth, size_t MatchBudget, bool Complete,
                           const std::vector<bool> &Results,
+                          const std::vector<bool> *Completions,
                           const std::vector<uint64_t> *Masks,
                           size_t ColdWork) const {
     const auto EstimatedContext =
         valueContextBytes(B.RelocatedInstructionAddressOccurrences,
                           B.RelocatedInstructionScalarModelOccurrences, false);
-    const auto EstimatedBatch = valueBatchBytes(Queries, Results, Masks, false);
+    const auto EstimatedBatch =
+        valueBatchBytes(Queries, Results, Completions, Masks, false);
     if (!EstimatedContext || !EstimatedBatch ||
         *EstimatedBatch > MaxValueBytes - *EstimatedContext)
       return;
@@ -2675,13 +2681,20 @@ struct CFGBuilder::ResolverGraphCache {
       QueryContext = std::move(Context);
       ValueBytes = *Bytes;
     }
-    ValueBatch Batch{Queries,         Depth,
-                     MatchBudget,     B.FiniteSetSymbolEvidenceBudgetForTesting,
-                     QueryCompletion, Masks != nullptr,
-                     Results,         Masks ? *Masks : std::vector<uint64_t>{},
-                     ColdWork,        0};
-    const auto Bytes =
-        valueBatchBytes(Batch.Queries, Batch.Results, &Batch.Masks, true);
+    ValueBatch Batch{Queries,
+                     Depth,
+                     MatchBudget,
+                     B.FiniteSetSymbolEvidenceBudgetForTesting,
+                     Completions != nullptr,
+                     Masks != nullptr,
+                     Complete,
+                     Results,
+                     Completions ? *Completions : std::vector<bool>{},
+                     Masks ? *Masks : std::vector<uint64_t>{},
+                     ColdWork,
+                     0};
+    const auto Bytes = valueBatchBytes(Batch.Queries, Batch.Results,
+                                       &Batch.Completions, &Batch.Masks, true);
     const auto ContextBytes = valueContextBytes(
         QueryContext->Addresses, QueryContext->ScalarModels, true);
     if (!Bytes || !ContextBytes || *Bytes > MaxValueBytes - *ContextBytes)
@@ -4623,14 +4636,18 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return Results;
   }
   bool Complete = true;
+  bool HasRepeatableRefusal = false;
+  bool NonRepeatableAnalysisIncomplete = false;
   const uint32_t MaxResolverDepth =
       ResolverDepthLimit != 0 ? ResolverDepthLimit
                               : limits::kMaxJumpTableGuardExpressionDepth;
   if (QueryAnalysisComplete)
     std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
               true);
-  auto markIncomplete = [&](size_t QueryIndex) {
+  auto markIncomplete = [&](size_t QueryIndex, bool RepeatableRefusal = false) {
     Complete = false;
+    HasRepeatableRefusal |= RepeatableRefusal;
+    NonRepeatableAnalysisIncomplete |= !RepeatableRefusal;
     if (QueryAnalysisComplete)
       (*QueryAnalysisComplete)[QueryIndex] = false;
   };
@@ -4699,10 +4716,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   const ResolverFlowGraph &Graph =
       ReusedGraph ? ReusedGraph->Graph : *FreshGraph;
   // A cache hit pays the full cold graph charge, including storage ownership.
-  // Resource-incomplete graphs never enter the cache. Reuse a complete value
-  // batch only after every ordinary graph/output charge, and only when the
-  // remaining allowance can pay its full cold value-analysis charge. A smaller
-  // allowance takes the normal path to preserve partial exhaustion behavior.
+  // Resource-incomplete graphs never enter the cache. Reuse a value batch only
+  // after every ordinary graph/output charge, and only when the remaining
+  // allowance can pay its full cold value-analysis charge. A stored refusal
+  // also binds the independent match/depth limits and restores every query's
+  // completion flag. A smaller outer allowance takes the normal exhaustion
+  // path.
   const size_t DefaultMatchEvidenceLimit =
       ActiveJumpTableConsumerAudit
           ? limits::kMaxJumpTableConsumerAuditMatchEvidenceWork
@@ -4721,12 +4740,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       *GraphWorkBudget -= Batch->Work;
       Results = Batch->Results;
       if (QueryAnalysisComplete)
-        std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
-                  true);
+        *QueryAnalysisComplete = Batch->Completions;
       if (QueryUnsignedFeasibleMasks)
         *QueryUnsignedFeasibleMasks = Batch->Masks;
       if (AnalysisComplete)
-        *AnalysisComplete = true;
+        *AnalysisComplete = Batch->Complete;
       return Results;
     }
   // Pointer-named opaque values and merges have allocation-dependent lengths,
@@ -5014,6 +5032,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   std::map<MemoryKey, ResolverMemoEntry> MemoryMemo;
   std::map<LaneKey, std::optional<bool>> FrameAddressTaintMemo;
   bool QueryResolverAnalysisIncomplete = false;
+  bool QueryResolverDepthExceeded = false;
+  auto markResolverDepthIncomplete = [&] {
+    QueryResolverAnalysisIncomplete = true;
+    QueryResolverDepthExceeded = true;
+  };
   bool ResolvingPredicate = false;
 
   std::function<ResolverResult(int, int, const NdVar &, unsigned)> resolveValue;
@@ -5068,7 +5091,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                      const ResolverValue &B,
                                      unsigned Depth) -> bool {
     if (Depth > MaxResolverDepth) {
-      QueryResolverAnalysisIncomplete = true;
+      markResolverDepthIncomplete();
       return false;
     }
     if (!consumeEvidence())
@@ -5130,6 +5153,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
            Predicate->Inputs.size() == 1) {
       if (!consumeEvidence() || ++Depth > MaxResolverDepth) {
         QueryResolverAnalysisIncomplete = true;
+        QueryResolverDepthExceeded |= Depth > MaxResolverDepth;
         return resolverInvalid();
       }
       Taken = !Taken;
@@ -5359,7 +5383,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (Value.isReg())
       return resolveFrameBase(Block, Before, Value.Offset, Depth);
     if (Depth > MaxResolverDepth) {
-      QueryResolverAnalysisIncomplete = true;
+      markResolverDepthIncomplete();
       return frameInvalid();
     }
     if (!Value.isTemp())
@@ -5426,7 +5450,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (MemoIt != FrameMemo.end())
       return MemoIt->second;
     if (Depth > MaxResolverDepth) {
-      QueryResolverAnalysisIncomplete = true;
+      markResolverDepthIncomplete();
       return frameInvalid();
     }
     if (!consumeMemoInsert(FrameKeyWork, FrameMemo.size()))
@@ -5701,7 +5725,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return false;
     }
     if (Depth > MaxResolverDepth) {
-      QueryResolverAnalysisIncomplete = true;
+      markResolverDepthIncomplete();
       return std::nullopt;
     }
 
@@ -6024,7 +6048,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         return *Entry.Result;
     }
     if (Depth > MaxResolverDepth) {
-      QueryResolverAnalysisIncomplete = true;
+      markResolverDepthIncomplete();
       return resolverInvalid();
     }
     if (MemoIt == MemoryMemo.end()) {
@@ -6346,7 +6370,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     // boundary.  Consult the prepaid memo first so that back edges close as a
     // cycle; only a genuinely new state beyond the limit is incomplete.
     if (Depth > MaxResolverDepth) {
-      QueryResolverAnalysisIncomplete = true;
+      markResolverDepthIncomplete();
       return resolverInvalid();
     }
     if (MemoIt == ValueMemo.end()) {
@@ -8313,6 +8337,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   };
 
   for (size_t QueryIndex = 0; QueryIndex < Queries.size(); ++QueryIndex) {
+    // These shared failures invalidate the whole transaction below. Further
+    // queries cannot publish any result, so do not rebuild their value DAGs.
+    // A query-local reconstruction failure is different: independent queries
+    // may still complete after their incomplete memo entries are cleared.
+    if (EvidenceBudgetExhausted || MatchBudgetExhausted ||
+        SymbolBudgetExhausted)
+      break;
     if (QueryResolverAnalysisIncomplete) {
       // A depth-limited query may have cached Invalid values while unwinding.
       // Those entries are not evidence about an independent query in the same
@@ -8326,6 +8357,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       FrameStates.clear();
       QueryResolverAnalysisIncomplete = false;
     }
+    QueryResolverDepthExceeded = false;
     if (!consumeEvidence()) {
       markIncomplete(QueryIndex);
       continue;
@@ -8414,7 +8446,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           AlternativeBase, AlternativeOffset);
       if (!CandidateFrame || !AlternativeFrame) {
         if (QueryResolverAnalysisIncomplete)
-          markIncomplete(QueryIndex);
+          markIncomplete(QueryIndex, QueryResolverDepthExceeded);
         continue;
       }
       const std::optional<int64_t> AdjustedCandidate = stackCheckedOffset(
@@ -8426,7 +8458,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                             CandidateBase == AlternativeBase &&
                             *AdjustedCandidate == *AdjustedAlternative;
       if (EvidenceBudgetExhausted || QueryResolverAnalysisIncomplete)
-        markIncomplete(QueryIndex);
+        markIncomplete(QueryIndex, QueryResolverDepthExceeded);
       continue;
     }
 
@@ -8464,7 +8496,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (!canonicalFrameSlotKey(AddressBlock, AddressOp - 1, Query.Candidate,
                                  SlotBase, SlotOffset)) {
         if (QueryResolverAnalysisIncomplete)
-          markIncomplete(QueryIndex);
+          markIncomplete(QueryIndex, QueryResolverDepthExceeded);
         continue;
       }
       const std::optional<int64_t> AdjustedOffset = stackCheckedOffset(
@@ -8486,7 +8518,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (Query.Relation == JumpTableValueRelation::AuthenticatedFrameMemory) {
         Results[QueryIndex] = CandidateValue.Kind == ResolverResultKind::Value;
         if (EvidenceBudgetExhausted || QueryResolverAnalysisIncomplete)
-          markIncomplete(QueryIndex);
+          markIncomplete(QueryIndex, QueryResolverDepthExceeded);
         continue;
       }
       if (Query.AlternativeFrameValueOffsets.size() !=
@@ -8549,7 +8581,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       continue;
     }
     if (EvidenceBudgetExhausted || QueryResolverAnalysisIncomplete) {
-      markIncomplete(QueryIndex);
+      markIncomplete(QueryIndex, QueryResolverDepthExceeded);
       continue;
     }
     if (CandidateValue.Kind != ResolverResultKind::Value) {
@@ -8656,7 +8688,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       AllowedValues.push_back(IndexValue.Value);
     }
     if (EvidenceBudgetExhausted || QueryResolverAnalysisIncomplete) {
-      markIncomplete(QueryIndex);
+      markIncomplete(QueryIndex, QueryResolverDepthExceeded);
       continue;
     }
     if (AllowedValues.empty())
@@ -8877,12 +8909,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         if (Retried.Kind == ResolverResultKind::Value && Retried.Value)
           Results[QueryIndex] = MatchesAllowed(Retried.Value, /*Depth=*/0);
         if (QueryResolverAnalysisIncomplete)
-          markIncomplete(QueryIndex);
+          markIncomplete(QueryIndex, QueryResolverDepthExceeded);
       }
     }
     if (QueryBudgetExhausted || MatchBudgetExhausted ||
         EvidenceBudgetExhausted) {
-      markIncomplete(QueryIndex);
+      markIncomplete(QueryIndex, MatchBudgetExhausted && MatchBudget == 0 &&
+                                     !EvidenceBudgetExhausted);
     }
   }
   // A shared allowance belongs to the complete query transaction.  Do not
@@ -8894,16 +8927,26 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (QueryAnalysisComplete)
       std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
                 false);
+    if (QueryUnsignedFeasibleMasks)
+      std::fill(QueryUnsignedFeasibleMasks->begin(),
+                QueryUnsignedFeasibleMasks->end(), 0);
     Complete = false;
   }
   if (AnalysisComplete)
     *AnalysisComplete = Complete;
-  if (Complete && !EvidenceBudgetExhausted && !MatchBudgetExhausted &&
+  // Fixed match-work and reconstruction-depth limits are deterministic for
+  // this exact ordered batch. Retain only those refusals, preserving both
+  // failed queries and independently completed queries. Outer exhaustion,
+  // solver uncertainty and other unknowns remain uncached. Changing a limit
+  // or proof context must run the analysis again.
+  const bool RepeatableRefusal =
+      HasRepeatableRefusal && !NonRepeatableAnalysisIncomplete;
+  if ((Complete || RepeatableRefusal) && !EvidenceBudgetExhausted &&
       !SymbolBudgetExhausted && !UsedPointerSymbol && ReusedGraph &&
       GraphWorkBudget)
     ReusedGraph->rememberValueBatch(
-        *this, Queries, MaxResolverDepth, InitialMatchBudget,
-        QueryAnalysisComplete != nullptr, Results, QueryUnsignedFeasibleMasks,
+        *this, Queries, MaxResolverDepth, InitialMatchBudget, Complete, Results,
+        QueryAnalysisComplete, QueryUnsignedFeasibleMasks,
         ValueWorkBefore - *GraphWorkBudget);
   return Results;
 }

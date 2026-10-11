@@ -1204,6 +1204,14 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
       (Med.ExceptionMetadata && Med.ExceptionMetadata->Registration &&
        Med.ExceptionMetadata->Registration->hasCxxCallbackStack());
   Func.ReturnType = Med.ReturnType ? Med.ReturnType : inferReturnType(Med);
+  const auto &ReturnTRI = getTargetRegInfo(TargetArch);
+  if (!Med.SourceParametersBound && Med.MultiReturn.size() == 2 &&
+      !Med.MultiReturn[0].IsFP && !Med.MultiReturn[1].IsFP &&
+      Med.MultiReturn[0].RegOff == ReturnTRI.IntReturnReg &&
+      Med.MultiReturn[1].RegOff == ReturnTRI.IntReturnReg2 &&
+      Med.MultiReturn[0].Size == ReturnTRI.PointerSize &&
+      Med.MultiReturn[1].Size == ReturnTRI.PointerSize)
+    Func.ReturnType = NdType::makeInt(2 * ReturnTRI.PointerSize);
   Func.SourceTypeHint = Med.SourceTypeHint;
   Func.RegisterCopyProjections = Med.RegisterCopyProjections;
   Func.ClassGetterCallFacts = Med.ClassGetterCallFacts;

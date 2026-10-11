@@ -1138,7 +1138,7 @@ struct LowSEHLocalUnwindEvidence {
   int CallSeq = -1;
   va_t Callee = InvalidVA;
   int64_t FrameOffset = 0;
-  /// Bind the independent argument proof to the exact current block prefix.
+  /// Bind the argument proof to the exact operations, roots and CFG edges.
   std::string OperationDigest;
 };
 
