@@ -105,11 +105,11 @@ std::optional<uint64_t> proveSEHEstablisherFrame(
   }
   if (!Preds[0].empty())
     Fail("ordinary control flow re-enters the prologue");
-  if (HandlerId <= 0 || (!OrdinaryEntry && !Preds[HandlerId].empty()) ||
-      (!CxxContinuation && Low.OrdinaryModuleAnalysisRoots.count(Handler)))
+  if (HandlerId <= 0 || (!OrdinaryEntry && !Preds[HandlerId].empty()))
     Fail("handler also has an ordinary entry role");
 
   std::map<int, std::vector<std::pair<int, int64_t>>> LocalUnwindSources;
+  std::vector<std::vector<int>> LocalUnwindSuccessors(N);
   if (!CxxContinuation)
     for (const auto &Entry : Low.SEHLocalUnwindContinuations) {
       int Target = -1, Source = -1;
@@ -132,7 +132,12 @@ std::optional<uint64_t> proveSEHEstablisherFrame(
       if (Target <= 0 || Source < 0 || Entry.FrameOffset >= 0)
         Fail("stale local-unwind continuation certificate");
       LocalUnwindSources[Target].emplace_back(Source, Entry.FrameOffset);
+      LocalUnwindSuccessors[Source].push_back(Target);
     }
+  const bool IsLocalUnwindTarget = LocalUnwindSources.count(HandlerId);
+  if (!CxxContinuation && Low.OrdinaryModuleAnalysisRoots.count(Handler) &&
+      !IsLocalUnwindTarget)
+    Fail("handler also has an ordinary entry role");
 
   // Every ordinary predecessor path into a protected block participates. A
   // stack adjustment before the guarded interval matters just as much as one
@@ -229,8 +234,11 @@ std::optional<uint64_t> proveSEHEstablisherFrame(
              return Scope.HandlerVA == Start;
            });
   };
-  if (!AddProtectedBlocks(Handler))
+  if (!AddProtectedBlocks(Handler) && !IsLocalUnwindTarget)
     Fail("handler has no decoded protected scope");
+  if (IsLocalUnwindTarget)
+    for (const auto &[Source, Offset] : LocalUnwindSources.at(HandlerId))
+      Work.push_back(Source);
   // Ordinary flow into a shared handler must keep the same frame.
   if (OrdinaryEntry)
     Work.insert(Work.end(), Preds[HandlerId].begin(), Preds[HandlerId].end());
@@ -261,6 +269,8 @@ std::optional<uint64_t> proveSEHEstablisherFrame(
     Reachable[B] = true;
     Work.insert(Work.end(), Low.Blocks[B].Succs.begin(),
                 Low.Blocks[B].Succs.end());
+    Work.insert(Work.end(), LocalUnwindSuccessors[B].begin(),
+                LocalUnwindSuccessors[B].end());
   }
   for (size_t B = 0; B < N; ++B)
     if (Relevant[B] &&
@@ -478,7 +488,7 @@ std::optional<uint64_t> proveSEHEstablisherFrame(
   if (ExpectedAdjustments != ActualAdjustments)
     Fail("decoded prologue disagrees with unwind allocation");
   for (const auto &[Target, Sources] : LocalUnwindSources)
-    if (Relevant[Target])
+    if (Relevant[Target] || (IsLocalUnwindTarget && Target == HandlerId))
       for (const auto &[Source, Offset] : Sources)
         if (DynamicSP || !Relevant[Source] || !Reachable[Source] ||
             Offset != -static_cast<int64_t>(FrameBytes))
@@ -978,6 +988,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
 
     std::map<int, uint64_t> SEHFrameOffsets;
     std::set<int> CxxContinuationRoots;
+    std::set<int> LocalUnwindRoots;
     if (TargetArch == Arch::X64 && Low.ExceptionMetadata &&
         Low.ExceptionMetadata->Cxx && !Low.CxxContinuationEntries.empty()) {
       for (int B = 1; B < N; ++B) {
@@ -1020,7 +1031,16 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       const std::string LocalUnwindDigest =
           Low.SEHLocalUnwindContinuations.empty()
               ? std::string{}
-              : lowSEHFrameDependencyDigest(Low);
+              : lowSEHFrameDependencyDigest(
+                    Low,
+                    Low.SEHLocalUnwindContinuations.front().CalleeDependencies,
+                    SEHFrameCallees);
+      for (const auto &Evidence : Low.SEHLocalUnwindContinuations)
+        if (LocalUnwindDigest.empty() ||
+            Evidence.CalleeDependencies !=
+                Low.SEHLocalUnwindContinuations.front().CalleeDependencies)
+          throw LowToMedConversionError(
+              "Windows SEH establisher frame: stale local-unwind callee proof");
       for (int B = 0; B < N; ++B) {
         const bool IsSEHHandler =
             std::any_of(Func.Blocks[B].ExceptionalPreds.begin(),
@@ -1028,8 +1048,13 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
                         [](const ExceptionalEdge &E) {
                           return E.Kind == ExceptionalEdgeKind::SEHHandler;
                         });
-        if (!IsSEHHandler)
+        const bool IsLocalUnwindTarget = llvm::any_of(
+            Low.SEHLocalUnwindContinuations, [&](const auto &Call) {
+              return Call.Target == Func.Blocks[B].StartAddr;
+            });
+        if (!IsSEHHandler && !IsLocalUnwindTarget)
           continue;
+        bool NeedsFrame = IsLocalUnwindTarget;
         for (int Id : LiveIn[B]) {
           auto V = VarOfId.find(Id);
           if (V == VarOfId.end() || V->second.Kind != MedVar::Reg ||
@@ -1039,22 +1064,24 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
             throw LowToMedConversionError(
                 "Windows SEH establisher frame: handler is not an isolated "
                 "full-width SP root");
-          // A handler that ordinary flow also enters (an empty __except body
-          // resuming at the code after its __try) takes the SP that flow
-          // brings.  Certify every way in keeps the establisher frame the
-          // dispatcher enters with; that entry then needs no SP of its own.
-          if (!IsRoot[B]) {
-            proveSEHEstablisherFrame(Low, Func, Func.Blocks[B].StartAddr, TRI,
-                                     /*OrdinaryEntry=*/true, LocalUnwindDigest);
-            continue;
-          }
-          if (std::optional<uint64_t> FrameBytes = proveSEHEstablisherFrame(
-                  Low, Func, Func.Blocks[B].StartAddr, TRI,
-                  /*OrdinaryEntry=*/false, LocalUnwindDigest))
-            SEHFrameOffsets[B] = *FrameBytes;
-          else
-            SEHProtectedSPRoots.insert(B);
+          NeedsFrame = true;
         }
+        if (!NeedsFrame)
+          continue;
+        // Ordinary flow and runtime resumption must agree on the same frame.
+        // A runtime-only continuation is a real root: its SP is the proved
+        // target frame, not a second ordinary function-entry SP.
+        const auto FrameBytes = proveSEHEstablisherFrame(
+            Low, Func, Func.Blocks[B].StartAddr, TRI,
+            /*OrdinaryEntry=*/!IsRoot[B], LocalUnwindDigest);
+        if (!IsRoot[B])
+          continue;
+        if (FrameBytes)
+          SEHFrameOffsets[B] = *FrameBytes;
+        else
+          SEHProtectedSPRoots.insert(B);
+        if (IsLocalUnwindTarget)
+          LocalUnwindRoots.insert(B);
       }
     }
 
@@ -1116,7 +1143,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           Root == 0 ? std::nullopt
                     : RegistrationRoots.restoredStackOffset(Func.Blocks[Root]);
       const bool IsWindowsRuntimeRoot =
-          CxxContinuationRoots.count(Root) ||
+          CxxContinuationRoots.count(Root) || LocalUnwindRoots.count(Root) ||
           (Root != 0 &&
            (IsCxxHandlerRoot || RestoredCxxSP ||
             std::any_of(Func.Blocks[Root].ExceptionalPreds.begin(),

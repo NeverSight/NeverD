@@ -13,7 +13,7 @@ analysis and comparison output belong outside the repository.
 | Release performance varies by function and debug input | Time paired fresh `--func` calls and separate load from decompile cost. Profile before changing shared analysis. Preserve byte-identical C and EH semantics. |
 | Toolset coverage varies by hosted runner | Verify each compiler's actual version and path before publishing corpus artifacts. Treat unavailable versions as explicit skips. |
 | MinGW x86 call arguments can remain unknown after function boundaries are repaired | Inspect the recovered callee ABI and each caller's actual register/stack evidence. Do not treat residual unknown arguments as evidence that an internal label is still a function. |
-| The public x64 `xcpt4` SEH analysis matrix still rejects an independent ordinary entry in a protected scope | Cross-block saved-SP tracking now exists; the remaining case needs independently bounded callee writes and runtime-root frame evidence. ABI declarations alone do not preserve saved memory. |
+| The public x64 `xcpt4` SEH analysis matrix still rejects an independent ordinary entry in a protected scope | Bounded decoded leaf writes and certified runtime-only continuations now retain their frame evidence. This case still needs nested/opaque callee effects and cross-funclet runtime activation identities. ABI declarations alone do not preserve saved memory. |
 | The public PE32 `xcpt4` mixes ordinary calls into finally bodies with runtime activations and nonlocal stack restoration | Model invocation identity and the actual return PC through normal returns and parent resumes. The current registration solver loses that distinction; neither a zero-pop summary nor an unconditional no-return annotation is valid. |
 | Two native out-of-line catch tests match an unused forward declaration as if it were an executed call | Audit declarations separately from emitted function bodies; the historical build reproduces both failures, while the catch body already resumes after the skipped call. |
 
@@ -23,7 +23,13 @@ analysis and comparison output belong outside the repository.
   including stable loops, partial writes, released storage and independent
   roots. Both module ownership and SSA consumers retain exact call identities;
   a whole-function dependency digest rejects stale earlier-block evidence.
-  This does not preserve saved pointers through opaque callees.
+  Complete decoded leaf calls can preserve saved cells when every returning
+  path bounds actual writes and retains its physical return PC. Callee digests
+  are rechecked by shared SSA. Frame-dataflow work has a separate cumulative
+  budget from address-use receipts; exhaustion does not erase that inventory.
+  Certified runtime-only continuation roots receive their established SP even
+  without an ordinary incoming edge. This does not preserve saved pointers
+  through opaque callees or prove cross-funclet frame borrowing.
 - The Windows EH analysis matrix requests the structured source view. Explicit
   C has a separate native-callback contract. The matrix reports every case even
   if one input fails; x86 EH4 classification now reaches its actual registration

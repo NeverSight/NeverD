@@ -10,8 +10,10 @@
 #include "neverd/ir/low/SEHFrameProof.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SHA256.h"
@@ -73,8 +75,90 @@ bool consume(size_t &Remaining, size_t Amount = 1) {
   return true;
 }
 
+// Both sides of a call need the complete decoded paths. A symmetric graph
+// alone can omit a branch arm that overwrites the saved frame pointer.
+bool completeFrameCFG(const LowFunc &F, const std::map<int, size_t> &Positions,
+                      size_t &Remaining) {
+  std::map<va_t, va_t> Ranges;
+  for (const auto &B : F.Blocks) {
+    if (!consume(Remaining, B.Preds.size() + B.Succs.size() + B.Ops.size() +
+                                B.InstructionBoundaries.size() + 1))
+      return false;
+    if (auto Error = validateLowInstructionBoundaries(
+            B, LowInstructionBoundaryRequirement::Required)) {
+      llvm::consumeError(std::move(Error));
+      return false;
+    }
+    if (!Ranges.emplace(B.StartAddr, B.EndAddr).second)
+      return false;
+    for (const auto &Insn : B.InstructionBoundaries) {
+      if (Insn.Mode != InstructionMode::Default ||
+          Insn.TargetMode != LowInstructionTargetMode::Preserve ||
+          Insn.Control == LowInstructionControl::ConditionalCall ||
+          Insn.Control == LowInstructionControl::ConditionalReturn ||
+          (&Insn != &B.InstructionBoundaries.back() &&
+           (isUnconditionalNoReturn(Insn) ||
+            Insn.Control == LowInstructionControl::Branch ||
+            Insn.Control == LowInstructionControl::Return ||
+            Insn.Control == LowInstructionControl::TailCall ||
+            Insn.Control == LowInstructionControl::Terminator)))
+        return false;
+    }
+    for (int Id : B.Preds)
+      if (!Positions.count(Id) || !F.Blocks[Positions.at(Id)].hasSucc(B.Id))
+        return false;
+    std::set<va_t> Successors;
+    for (int Id : B.Succs)
+      if (!Positions.count(Id) ||
+          !llvm::is_contained(F.Blocks[Positions.at(Id)].Preds, B.Id))
+        return false;
+      else
+        Successors.insert(F.Blocks[Positions.at(Id)].StartAddr);
+    const auto &Insn = B.InstructionBoundaries.back();
+    std::set<va_t> Expected;
+    if (Insn.Control == LowInstructionControl::Branch) {
+      if (B.Ops.empty())
+        return false;
+      const auto &Last = B.Ops.back();
+      const bool Conditional = Last.Opcode == NdOp::COND_BR;
+      if ((!Conditional && Last.Opcode != NdOp::BRANCH) ||
+          Last.NumInputs != (Conditional ? 2 : 1) ||
+          !Last.Inputs[0].isConst() || Last.Inputs[0].Size != 8)
+        return false;
+      Expected.insert(Last.Inputs[0].Offset);
+      if (Conditional)
+        Expected.insert(B.EndAddr);
+    } else if (Insn.Control != LowInstructionControl::Return &&
+               Insn.Control != LowInstructionControl::TailCall &&
+               !isUnconditionalNoReturn(Insn) &&
+               (Insn.Control != LowInstructionControl::Terminator ||
+                hasLowInstructionControlFlag(
+                    Insn.ControlFlags, LowInstructionControlFlag::Resumable)))
+      Expected.insert(B.EndAddr);
+    if (Successors != Expected)
+      return false;
+  }
+  va_t End = 0;
+  for (const auto &[Start, Limit] : Ranges) {
+    if (Start < End)
+      return false;
+    End = Limit;
+  }
+  return true;
+}
+
+struct CallContext {
+  const std::map<va_t, const LowFunc *> *Callees = nullptr;
+  std::set<va_t> Dependencies;
+};
+
+std::optional<State> transferLeaf(const LowFunc &Callee, const State &Caller,
+                                  const TargetRegInfo &TRI, size_t &Remaining);
+
 bool transfer(const LowBlock &Block, State &S, const TargetRegInfo &TRI,
-              size_t &Remaining, LowSEHFrameProof *Record) {
+              size_t &Remaining, LowSEHFrameProof *Record,
+              CallContext *Calls = nullptr,
+              std::optional<int64_t> ReturnSlot = std::nullopt) {
   const NdVar SP = NdVar::reg(TRI.StackPointer, 8);
   const NdVar Frame = NdVar::reg(TRI.Win64ParamRegs.front(), 8);
   for (const auto &Boundary : Block.InstructionBoundaries) {
@@ -91,7 +175,7 @@ bool transfer(const LowBlock &Block, State &S, const TargetRegInfo &TRI,
   }
   va_t Instruction = InvalidVA;
   for (size_t I = 0; I < Block.Ops.size(); ++I) {
-    if (!consume(Remaining))
+    if (!consume(Remaining, S.Values.size() + S.Spills.size() + 1))
       return false;
     const LowOp &Op = Block.Ops[I];
     if (Op.Opcode >= NdOp::_COUNT || Op.NumInputs > std::size(Op.Inputs) ||
@@ -117,6 +201,8 @@ bool transfer(const LowBlock &Block, State &S, const TargetRegInfo &TRI,
     }
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
         Op.Opcode == NdOp::INTRINSIC) {
+      if (ReturnSlot)
+        return false; // This bounded proof admits returning leaves only.
       const auto CurrentSP = S.get(SP);
       if (Record && CurrentSP && S.get(Frame) == CurrentSP &&
           Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
@@ -125,9 +211,22 @@ bool transfer(const LowBlock &Block, State &S, const TargetRegInfo &TRI,
                  .second)
           return false;
       }
-      // A pointer to any neighbouring local may let an opaque callee write
-      // the saved SP. Pointer width does not bound the pointee's extent.
-      S = {};
+      std::optional<State> Returned;
+      if (Calls && Calls->Callees && CurrentSP && !S.Spills.empty() &&
+          Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
+          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 8) {
+        const auto It = Calls->Callees->find(Op.Inputs[0].Offset);
+        if (It != Calls->Callees->end() && It->second &&
+            It->second->Entry == It->first) {
+          Returned = transferLeaf(*It->second, S, TRI, Remaining);
+          if (Returned)
+            Calls->Dependencies.insert(It->first);
+        }
+      }
+      // Only the inspected body's actual stores may preserve a saved slot.
+      // A neighbouring pointer passed to an opaque callee has no extent.
+      S = Returned ? std::move(*Returned) : State{};
+      S.Values.clear();
       const bool DefinesSP = Op.Output.isReg() && Op.Output.Size &&
                              Op.Output.Offset < SP.Offset + SP.Size &&
                              SP.Offset < Op.Output.Offset + Op.Output.Size;
@@ -145,17 +244,24 @@ bool transfer(const LowBlock &Block, State &S, const TargetRegInfo &TRI,
       int64_t End = 0;
       if (!Address || !Op.Inputs[1].Size ||
           llvm::AddOverflow(*Address, int64_t{Op.Inputs[1].Size}, End)) {
+        if (ReturnSlot)
+          return false; // It may overwrite this invocation's return PC.
         S.Spills.clear();
         continue;
       }
+      if (ReturnSlot && *Address < *ReturnSlot + 8 && *ReturnSlot < End)
+        return false;
       S.invalidateMemory(*Address, End);
       if (Value && Op.Inputs[1].Size == 8)
         S.Spills[*Address] = *Value;
       continue;
     }
     if (Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
-        Op.Opcode == NdOp::ATOMIC_CMPXCHG)
+        Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
+      if (ReturnSlot)
+        return false;
       S.Spills.clear();
+    }
     std::optional<int64_t> Value;
     if (Op.Output.Size == 8 && Op.NumInputs == 1 && Op.Opcode == NdOp::COPY)
       Value = S.get(Op.Inputs[0]);
@@ -200,11 +306,137 @@ bool transfer(const LowBlock &Block, State &S, const TargetRegInfo &TRI,
   return true;
 }
 
+// Inspect the concrete argument/frame values at this call, preserving only
+// saved cells common to all returns. The architectural call owns one new PC
+// slot; LowIR's RETURN does not otherwise expose its load. A store through an
+// unknown address, a modified PC, a non-returning exit or a nested call cannot
+// establish this contract. No parameter width or ABI declaration bounds writes.
+std::optional<State> transferLeaf(const LowFunc &F, const State &Caller,
+                                  const TargetRegInfo &TRI, size_t &Remaining) {
+  const auto SP = NdVar::reg(TRI.StackPointer, 8);
+  const auto CallerSP = Caller.get(SP);
+  int64_t Slot = 0;
+  if (!CallerSP || llvm::SubOverflow(*CallerSP, int64_t{8}, Slot) ||
+      !F.hasCompleteLiftCoverage() || !F.FunctionTemporaries.empty() ||
+      F.Blocks.empty() || F.CalleePopBytes ||
+      (F.ExceptionMetadata &&
+       (F.ExceptionMetadata->SEH || F.ExceptionMetadata->Cxx ||
+        F.ExceptionMetadata->Registration)) ||
+      !consume(Remaining, Caller.Values.size() + Caller.Spills.size() + 1))
+    return std::nullopt;
+  std::map<int, size_t> Positions;
+  std::set<va_t> Starts;
+  std::optional<size_t> Entry;
+  for (size_t I = 0; I != F.Blocks.size(); ++I) {
+    const auto &B = F.Blocks[I];
+    if (!consume(Remaining) || B.Id < 0 || !Positions.emplace(B.Id, I).second ||
+        !Starts.insert(B.StartAddr).second || !B.ExceptionalPreds.empty() ||
+        !B.ExceptionalSuccs.empty())
+      return std::nullopt;
+    if (B.StartAddr == F.Entry)
+      Entry = I;
+  }
+  if (!Entry || !F.Blocks[*Entry].Preds.empty() ||
+      !completeFrameCFG(F, Positions, Remaining))
+    return std::nullopt;
+  for (const auto *Roots :
+       {&F.ModuleAnalysisRoots, &F.OrdinaryModuleAnalysisRoots})
+    for (va_t Root : *Roots)
+      if (!consume(Remaining) || Root != F.Entry)
+        return std::nullopt;
+  State Initial = Caller;
+  Initial.dropTemporaries();
+  Initial.Values[key(SP)] = Slot;
+  // The callee owns new storage below the caller SP, including the pushed PC.
+  // Reusing stale values from a previous invocation would prove false loads.
+  std::erase_if(Initial.Spills,
+                [&](const auto &Cell) { return Cell.first < *CallerSP; });
+  std::vector<std::optional<State>> Inputs(F.Blocks.size());
+  Inputs[*Entry] = std::move(Initial);
+  std::deque<size_t> Queue{*Entry};
+  std::vector<bool> Queued(F.Blocks.size());
+  Queued[*Entry] = true;
+  std::optional<State> Returned;
+  while (!Queue.empty()) {
+    const size_t I = Queue.front();
+    Queue.pop_front();
+    Queued[I] = false;
+    const auto &B = F.Blocks[I];
+    if (!consume(Remaining,
+                 Inputs[I]->Values.size() + Inputs[I]->Spills.size() + 1) ||
+        B.Ops.empty())
+      return std::nullopt;
+    State Out = *Inputs[I];
+    if (!transfer(B, Out, TRI, Remaining, nullptr, nullptr, Slot))
+      return std::nullopt;
+    const auto &Last = B.Ops.back();
+    if (Last.Opcode == NdOp::RETURN) {
+      const auto Boundary =
+          llvm::find_if(B.InstructionBoundaries, [&](const auto &Insn) {
+            return Insn.Address == Last.Addr;
+          });
+      if (!B.Succs.empty() || Out.get(SP) != Slot || Last.Seq < 0 ||
+          Boundary == B.InstructionBoundaries.end() ||
+          Boundary->Control != LowInstructionControl::Return ||
+          !hasLowInstructionControlFlag(Boundary->ControlFlags,
+                                        LowInstructionControlFlag::Return) ||
+          (static_cast<uint16_t>(Boundary->ControlFlags) &
+           ~static_cast<uint16_t>(LowInstructionControlFlag::Return |
+                                  LowInstructionControlFlag::Indirect)) ||
+          Boundary->Immediate.value_or(0) != 0 || !Boundary->OpCount ||
+          Boundary->FirstOp >= B.Ops.size() ||
+          Boundary->OpCount != B.Ops.size() - Boundary->FirstOp ||
+          Last.Addr >= B.EndAddr || Boundary->Size != B.EndAddr - Last.Addr)
+        return std::nullopt;
+      if (!Returned)
+        Returned = Out;
+      else {
+        if (!consume(Remaining,
+                     Returned->Values.size() + Returned->Spills.size()))
+          return std::nullopt;
+        Returned->intersect(Out);
+      }
+      continue;
+    }
+    if (B.Succs.empty() || Last.Opcode == NdOp::INDIR_BR)
+      return std::nullopt;
+    for (int Id : B.Succs) {
+      const size_t Next = Positions.at(Id);
+      const size_t OldFacts = Inputs[Next] ? Inputs[Next]->Values.size() +
+                                                 Inputs[Next]->Spills.size()
+                                           : 0;
+      if (!consume(Remaining,
+                   Out.Values.size() + Out.Spills.size() + OldFacts + 1))
+        return std::nullopt;
+      bool Changed = !Inputs[Next];
+      if (Changed)
+        Inputs[Next] = Out;
+      else {
+        State Joined = *Inputs[Next];
+        Joined.intersect(Out);
+        Changed = Joined != *Inputs[Next];
+        Inputs[Next] = std::move(Joined);
+      }
+      if (Changed && !Queued[Next]) {
+        Queued[Next] = true;
+        Queue.push_back(Next);
+      }
+    }
+  }
+  if (Returned)
+    std::erase_if(Returned->Spills, [&](const auto &Cell) {
+      const auto Before = Caller.Spills.find(Cell.first);
+      return Cell.first < *CallerSP || Before == Caller.Spills.end() ||
+             Before->second != Cell.second;
+    });
+  return Returned;
+}
+
 } // namespace
 
 std::string lowSEHFrameDependencyDigest(const LowFunc &F) {
   llvm::SHA256 Hash;
-  Hash.update("neverd-low-seh-frame-cfg-v1");
+  Hash.update("neverd-low-seh-frame-cfg-v2");
   const auto Word = [&](uint64_t Value) {
     uint8_t Bytes[8];
     for (unsigned I = 0; I != 8; ++I)
@@ -217,6 +449,10 @@ std::string lowSEHFrameDependencyDigest(const LowFunc &F) {
       Word(Item);
   };
   Word(F.Entry);
+  Word(F.CalleePopBytes);
+  Word(F.ExceptionMetadata &&
+       (F.ExceptionMetadata->SEH || F.ExceptionMetadata->Cxx ||
+        F.ExceptionMetadata->Registration));
   Word(F.hasCompleteLiftCoverage());
   Words(F.ModuleAnalysisRoots);
   Words(F.OrdinaryModuleAnalysisRoots);
@@ -257,13 +493,15 @@ std::string lowSEHFrameDependencyDigest(const LowFunc &F) {
   return llvm::toHex(Hash.final(), true);
 }
 
-LowSEHFrameProof proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI,
-                                   size_t &Remaining) {
+LowSEHFrameProof
+proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI, size_t &Remaining,
+                  const std::map<va_t, const LowFunc *> *Callees) {
   if (TRI.TheArch != Arch::X64 || TRI.PointerSize != 8 ||
       TRI.Win64ParamRegs.empty() || F.Blocks.empty() ||
       !F.hasCompleteLiftCoverage() || !F.FunctionTemporaries.empty())
     return {};
   const size_t N = F.Blocks.size();
+  CallContext Calls{Callees, {}};
   std::map<int, size_t> Positions;
   std::set<va_t> Starts;
   for (size_t I = 0; I < N; ++I)
@@ -271,7 +509,7 @@ LowSEHFrameProof proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI,
         !Positions.emplace(F.Blocks[I].Id, I).second ||
         !Starts.insert(F.Blocks[I].StartAddr).second)
       return {};
-  if (!Starts.count(F.Entry))
+  if (!Starts.count(F.Entry) || !completeFrameCFG(F, Positions, Remaining))
     return {};
   for (const auto *Roots :
        {&F.ModuleAnalysisRoots, &F.OrdinaryModuleAnalysisRoots})
@@ -289,17 +527,6 @@ LowSEHFrameProof proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI,
   };
   for (size_t I = 0; I < N; ++I) {
     const auto &Block = F.Blocks[I];
-    if (!consume(Remaining, Block.Preds.size() + Block.Succs.size()))
-      return {};
-    for (int Id : Block.Preds)
-      if (!Positions.count(Id) || !F.Blocks[Positions.at(Id)].hasSucc(Block.Id))
-        return {};
-    for (int Id : Block.Succs)
-      if (!Positions.count(Id) ||
-          std::find(F.Blocks[Positions.at(Id)].Preds.begin(),
-                    F.Blocks[Positions.at(Id)].Preds.end(),
-                    Block.Id) == F.Blocks[Positions.at(Id)].Preds.end())
-        return {};
     Roots[I] = Block.StartAddr == F.Entry || Block.Preds.empty() ||
                F.ModuleAnalysisRoots.count(Block.StartAddr) ||
                F.OrdinaryModuleAnalysisRoots.count(Block.StartAddr) ||
@@ -335,7 +562,7 @@ LowSEHFrameProof proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI,
     if (!Input)
       continue;
     State Output = *Input;
-    if (!transfer(Block, Output, TRI, Remaining, nullptr))
+    if (!transfer(Block, Output, TRI, Remaining, nullptr, &Calls))
       return {};
     const bool Changed = !Visited[I] || Output != Outputs[I];
     Visited[I] = true;
@@ -348,7 +575,7 @@ LowSEHFrameProof proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI,
   LowSEHFrameProof Result;
   for (size_t I = 0; I < N; ++I)
     if (Visited[I] &&
-        !transfer(F.Blocks[I], Inputs[I], TRI, Remaining, &Result))
+        !transfer(F.Blocks[I], Inputs[I], TRI, Remaining, &Result, &Calls))
       return {};
   if (!Result.Calls.empty()) {
     for (const auto &Block : F.Blocks)
@@ -356,9 +583,42 @@ LowSEHFrameProof proveLowSEHFrames(const LowFunc &F, const TargetRegInfo &TRI,
                                   Block.InstructionBoundaries.size() +
                                   Block.Preds.size() + Block.Succs.size() + 1))
         return {};
-    Result.DependencyDigest = lowSEHFrameDependencyDigest(F);
+    for (va_t Dependency : Calls.Dependencies)
+      for (const auto &Block : Callees->at(Dependency)->Blocks)
+        if (!consume(Remaining,
+                     Block.Ops.size() + Block.InstructionBoundaries.size() +
+                         Block.Preds.size() + Block.Succs.size() + 1))
+          return {};
+    Result.CalleeDependencies.assign(Calls.Dependencies.begin(),
+                                     Calls.Dependencies.end());
+    Result.DependencyDigest =
+        lowSEHFrameDependencyDigest(F, Result.CalleeDependencies, Callees);
+    if (Result.DependencyDigest.empty())
+      return {};
   }
   return Result;
+}
+
+std::string
+lowSEHFrameDependencyDigest(const LowFunc &F, llvm::ArrayRef<va_t> Dependencies,
+                            const std::map<va_t, const LowFunc *> *Callees) {
+  const auto CallerDigest = lowSEHFrameDependencyDigest(F);
+  if (Dependencies.empty())
+    return CallerDigest;
+  if (!Callees)
+    return {};
+  llvm::SHA256 Hash;
+  Hash.update("neverd-low-seh-frame-callees-v1");
+  Hash.update(CallerDigest);
+  std::set<va_t> Seen;
+  for (va_t Entry : Dependencies) {
+    const auto It = Callees->find(Entry);
+    if (Entry == F.Entry || !Seen.insert(Entry).second ||
+        It == Callees->end() || !It->second || It->second->Entry != Entry)
+      return {};
+    Hash.update(lowSEHFrameDependencyDigest(*It->second));
+  }
+  return llvm::toHex(Hash.final(), true);
 }
 
 } // namespace neverd

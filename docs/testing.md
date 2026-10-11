@@ -2497,10 +2497,22 @@ variadic veneers and lazy-binding source pages.
 `LocalUnwindTargetRequiresExclusiveSameFrameUses` includes decoded x64 calls
 whose SP save and load occupy different blocks, stale producer changes, opaque
 calls, partial writes, foreign address uses and invalid module/runtime facts.
+Its runtime-only continuation has no ordinary incoming edge; the test requires
+both the protected-scope proof and the exact established SP in shared SSA.
+An additional decoded 4096-NOP block checks that complete-CFG work does not
+consume the address-use receipt budget; an explicitly small frame budget still
+refuses the frame proof while preserving the separate address-use analysis.
 `LocalUnwindFrameProofIntersectsEveryPredecessor` checks diamonds, stable and
 changing loops, block ordering, independent/EH roots, expired temporaries,
 released stack storage, partial/atomic writes and exhausted budgets. No opaque
 callee memory preservation or mixed PE32 callback activation is implied.
+`LocalUnwindFrameProofInspectsLeafWritesAndReturnPC` uses decoded caller/helper
+instructions to check a neighbouring parent-frame write, partial saved-SP
+overwrite, unknown write address, return-PC corruption, wrong return SP,
+nested calls, malformed/incomplete bodies, and missing or stale callee evidence.
+Missing instruction slices in either caller or callee, a symmetrically removed
+callee branch edge, and a wholly removed caller branch arm cannot hide the path
+that overwrites a saved cell. Complete caller diamonds retain their frame proof.
 
 CRT source regressions use synthetic tables and the pinned Windows corpus:
 

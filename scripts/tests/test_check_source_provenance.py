@@ -288,6 +288,18 @@ class ProvenanceScanTests(unittest.TestCase):
             # The allowance names one rule, and says nothing about the others.
             self.assertEqual(len(self.scan("docs/x.md", "/Users/someone\n")), 1)
 
+    def test_node_dependency_license_keeps_attribution_and_private_path_checks(self) -> None:
+        notice = "Adapted from SES/Caja - Copyright (C) 2011 Google Inc.\n"
+        self.assertEqual(self.scan("LICENSES/node/LICENSE", notice), [])
+        self.assertEqual(len(self.scan("lib/notice.cpp", notice)), 1)
+        self.assertEqual(
+            len(self.scan("LICENSES/node/LICENSE", "/Users/someone/notes\n")), 1
+        )
+        rule = self.term_rule("foreign-project", "private-engine")
+        self.assertEqual(
+            len(self.scan("LICENSES/node/LICENSE", "private-engine\n", (rule,))), 1
+        )
+
     def test_skips_files_it_cannot_read_as_text(self) -> None:
         rule = self.term_rule("foreign-project", "example-engine")
         self.assertEqual(self.scan("a.png", "example-engine\n", (rule,)), [])
