@@ -4468,6 +4468,10 @@ TEST_F(SessionCAPITest, StubsOfVariadicImportsPassTheirArgumentsOn) {
       {"printf", "vprintf(format, arguments)"},
       {"open", "va_arg(arguments, int)"},
       {"execl", "execv(arg0, (char *const *)vector)"}};
+  // PLT veneers have no function symbols. Discover their called entries
+  // before enumerating the inventory exposed by the session.
+  ASSERT_EQ(neverd_session_analyze(Session), 1)
+      << takeString(neverd_last_error(Session));
   std::set<std::string> Shown;
   for (int I = 0; I < neverd_func_count(Session); ++I) {
     const neverd_va_t Entry = neverd_func_entry(Session, I);
