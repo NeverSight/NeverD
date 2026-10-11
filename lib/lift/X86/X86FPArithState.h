@@ -20,6 +20,7 @@ struct FPArithStateSpec {
   bool Double;
   bool Scalar;
   bool Vex;
+  unsigned Topology = 0;
 };
 
 inline bool getFPArithStateSpec(unsigned Id, FPArithStateSpec &Spec) {
@@ -57,6 +58,23 @@ inline bool getFPArithStateSpec(unsigned Id, FPArithStateSpec &Spec) {
     FP_FAMILY(MIN, 0x5d, Minimum)
     FP_FAMILY(MAX, 0x5f, Maximum)
 #undef FP_FAMILY
+#define FP_PACKED(Name, Opcode, Kind, Topology)                                \
+  case X86_INS_##Name##PS:                                                     \
+    Spec = {X86FPArithKind::Kind, Opcode, false, false, false, Topology};      \
+    return true;                                                               \
+  case X86_INS_##Name##PD:                                                     \
+    Spec = {X86FPArithKind::Kind, Opcode, true, false, false, Topology};       \
+    return true;                                                               \
+  case X86_INS_V##Name##PS:                                                    \
+    Spec = {X86FPArithKind::Kind, Opcode, false, false, true, Topology};       \
+    return true;                                                               \
+  case X86_INS_V##Name##PD:                                                    \
+    Spec = {X86FPArithKind::Kind, Opcode, true, false, true, Topology};        \
+    return true;
+    FP_PACKED(HADD, 0x7c, Add, 64)
+    FP_PACKED(HSUB, 0x7d, Subtract, 64)
+    FP_PACKED(ADDSUB, 0xd0, Add, 128)
+#undef FP_PACKED
   default:
     return false;
   }
@@ -85,8 +103,9 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
         X86.operands[Index].avx_zero_opmask)
       return Refuse();
   const bool Mode64 = L.targetArch() == Arch::X64;
-  const unsigned PP =
-      Spec.Scalar ? (Spec.Double ? 3 : 2) : (Spec.Double ? 1 : 0);
+  const unsigned PP = Spec.Topology ? (Spec.Double ? 1 : 3)
+                      : Spec.Scalar ? (Spec.Double ? 3 : 2)
+                                    : (Spec.Double ? 1 : 0);
   const uint8_t MandatoryByte = PP == 1   ? 0x66
                                 : PP == 2 ? 0xf3
                                 : PP == 3 ? 0xf2
@@ -196,9 +215,9 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
   const auto Incoming = S.makeTemp(4);
   S.emitIntrinsic(Intrinsic::X86ReadMXCSR, Incoming);
   const auto Result = S.makeTemp(Bytes + 4);
-  const unsigned Control = unsigned(Spec.Kind) | (Spec.Double ? 8 : 0) |
-                           (Spec.Scalar ? 16 : 0) |
-                           (Memory && Spec.Vex && !Spec.Scalar ? 32 : 0);
+  const unsigned Control =
+      unsigned(Spec.Kind) | (Spec.Double ? 8 : 0) | (Spec.Scalar ? 16 : 0) |
+      (Memory && Spec.Vex && !Spec.Scalar ? 32 : 0) | Spec.Topology;
   if (Memory)
     S.emitIntrinsic(Intrinsic::X86FPArithMemoryState, Result,
                     {Right, NdVar::cst(Control, 1), Left, Incoming},

@@ -340,6 +340,13 @@ destination/RHS aliasing, unaligned scalar/VEX memory, unmasked exceptions,
 instruction-wide exception priority, legacy alignment and protected cross-page
 sources. Discarded numerical results must retain state changes and faults.
 Scalar C return probes separately verify floating type, raw bits and state.
+Another 36 forms cover HADD/HSUB and ADDSUB single/double precision, legacy 128
+and VEX 128/256 register/memory sources. A native SSE3 raw-bit oracle compares
+248,832 concrete masked-completion observations across all rounding modes,
+DAZ/FTZ and seeded status, including both source orders and distinct NaN payloads.
+Generated-code probes additionally retain discarded results, unmasked invalid
+priority, legacy misalignment and full protected sources. VEX 256 native probes
+exercise the production feature scan as well as SIMD register allocation.
 Declared scalar stack-argument probes compare original execution and readable C
 through default/NoOpt and O0/O2, including complete raw results and MXCSR. They
 exercise the fifth Win64 or ninth SysV floating argument. `MedCallingConvFPStack`
@@ -349,7 +356,7 @@ packed/straddling home initialization and malformed or segmented refusals.
 Low/Med/High and owned assembly tests reject malformed roles, controls, state
 pointers, effects and addressing contracts. Native execution requires x64 and
 OS-enabled AVX; descriptor checks also cover x86-32 without claiming native
-x86-32 execution. These tests do not certify horizontal arithmetic, FMA,
+x86-32 execution. These tests do not certify FMA,
 EVEX/SAE, x87, enabled #AC or unavailable-feature faults.
 
 ## x86 invalid encodings and instruction boundaries

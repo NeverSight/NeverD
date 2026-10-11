@@ -47,7 +47,8 @@ detectTargetFeaturesX86(const std::set<std::string> &Names) {
                Has("llvm.nearbyint") || Has("sse42.crc32") || Has("roundss") ||
                Has("roundsd") || Has("roundps") || Has("roundpd"),
        SSE42 = Has("sse42") || Has("sse42.crc32");
-  bool SSE3 = Has("sse3") || SSSE3 || SSE41 || SSE42 || AES;
+  bool SSE3 = Has("sse3") || Has("hadd") || Has("hsub") || Has("addsub") ||
+              SSSE3 || SSE41 || SSE42 || AES;
   SSSE3 = SSSE3 || SSE41 || SSE42;
   // llvm.fma lowers to a hardware VEX FMA (vfmadd*) only with +fma; without it
   // the backend falls back to an `fmaf`/`fma` libcall, which the bare-metal
@@ -60,11 +61,11 @@ detectTargetFeaturesX86(const std::set<std::string> &Names) {
   // +avx.  Half arithmetic itself stays in float, so conversion support alone
   // (no native fp16 ALU) suffices.
   bool Half = Has(kUsesHalfMarker);
-  bool AVX2 = Has("avx2"), AVX = Has("avx") || AVX2 || Has("avx512") ||
-                                 Has("vround") || Has("vrcp") ||
-                                 Has("vrsqrt") || Has("vadd") || Has("vsub") ||
-                                 Has("vmul") || Has("vdiv") || Has("vsqrt") ||
-                                 Has("vmin") || Has("vmax") || FMA || Half;
+  bool AVX2 = Has("avx2"),
+       AVX = Has("avx") || AVX2 || Has("avx512") || Has("vround") ||
+             Has("vrcp") || Has("vrsqrt") || Has("vadd") || Has("vsub") ||
+             Has("vmul") || Has("vdiv") || Has("vsqrt") || Has("vmin") ||
+             Has("vmax") || Has("vhadd") || Has("vhsub") || FMA || Half;
 
   std::string F = "+sse,+sse2,+cx16";
   if (SSE3)

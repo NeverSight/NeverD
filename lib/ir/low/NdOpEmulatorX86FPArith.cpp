@@ -332,7 +332,8 @@ NdOpEmulator::loadX86FPStateMemory(const LowOp &Op, uint16_t Bytes,
   return Loaded;
 }
 
-bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
+bool NdOpEmulator::executeX86FPArith(const LowOp &Op,
+                                     bool AlternateAddSubtract) {
   if (!MXCSRKnown)
     return false;
   if (Op.NumInputs != 6 ||
@@ -348,7 +349,9 @@ bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
   const uint16_t Control = static_cast<uint16_t>(readOperand(Op.Inputs[1]));
   if (!isValidX86FPArithControl(Control))
     return false;
-  const auto Kind = static_cast<X86FPArithKind>(Control & 7U);
+  const auto OperationKind = static_cast<X86FPArithKind>(Control & 7U);
+  if (AlternateAddSubtract && OperationKind != X86FPArithKind::Add)
+    return false;
   const bool IsF64 = (Control & (UINT16_C(1) << 3)) != 0;
   const bool Scalar = (Control & (UINT16_C(1) << 4)) != 0;
   const bool SuppressExceptions = (Control & (UINT16_C(1) << 5)) != 0;
@@ -387,6 +390,9 @@ bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
   uint32_t PreRaised = 0;
 
   for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
+    const auto Kind = AlternateAddSubtract && !(Lane & 1)
+                          ? X86FPArithKind::Subtract
+                          : OperationKind;
     if (((ActiveMask >> Lane) & 1) == 0)
       continue;
     const size_t Offset = static_cast<size_t>(Lane) * ElementSize;
@@ -519,6 +525,9 @@ bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
 
   uint32_t PostRaised = 0;
   for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
+    const auto Kind = AlternateAddSubtract && !(Lane & 1)
+                          ? X86FPArithKind::Subtract
+                          : OperationKind;
     if (!NeedsArithmetic[Lane])
       continue;
     uint32_t Raised = 0;
@@ -710,6 +719,21 @@ bool NdOpEmulator::executeX86ScalarFPState(const LowOp &Op) {
       Right = *Source;
     } else
       Right = readOperandBytes(Op.Inputs[3]);
+    if (x86FPArithStateIsHorizontal(Control)) {
+      const unsigned Element = x86FPArithStateElementBytes(Control);
+      const unsigned Pairs = 8 / Element;
+      const auto SourceLeft = Left, SourceRight = Right;
+      for (unsigned Block = 0; Block < Bytes; Block += 16)
+        for (unsigned Pair = 0; Pair < 2 * Pairs; ++Pair) {
+          const auto &Source = Pair < Pairs ? SourceLeft : SourceRight;
+          const unsigned Input = Block + (Pair % Pairs) * 2 * Element;
+          const unsigned Output = Block + Pair * Element;
+          // Preserve physical low-then-high operand priority for NaN payloads.
+          std::copy_n(Source.begin() + Input, Element, Left.begin() + Output);
+          std::copy_n(Source.begin() + Input + Element, Element,
+                      Right.begin() + Output);
+        }
+    }
     // Adapt roles and control explicitly: the existing SQRT evaluator reads
     // A, while this instruction-level contract consistently owns RHS access.
     // New bit5 is VEX memory topology, never the old evaluator's SAE bit.
@@ -738,7 +762,8 @@ bool NdOpEmulator::executeX86ScalarFPState(const LowOp &Op) {
     const unsigned Lanes =
         Scalar ? 1 : Bytes / x86FPArithStateElementBytes(Control);
     Arithmetic.addInput(NdVar::cst((UINT64_C(1) << Lanes) - 1, 1));
-    const bool Complete = Evaluation.executeX86FPArith(Arithmetic);
+    const bool Complete = Evaluation.executeX86FPArith(
+        Arithmetic, x86FPArithStateIsAlternating(Control));
     setMXCSR(Evaluation.getMXCSR());
     if (!Complete)
       return false;

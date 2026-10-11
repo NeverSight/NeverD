@@ -28,6 +28,29 @@ constexpr unsigned x86FPArithStateElementBytes(unsigned Control) {
 constexpr bool x86FPArithStateIsUnary(unsigned Control) {
   return (Control & 7) == unsigned(X86FPArithKind::SquareRoot);
 }
+constexpr bool x86FPArithStateIsHorizontal(unsigned Control) {
+  return (Control & 64) != 0;
+}
+constexpr bool x86FPArithStateIsAlternating(unsigned Control) {
+  return (Control & 128) != 0;
+}
+
+/// Bits6/7 select horizontal pairs or alternating subtraction/addition.
+/// Both complete as one packed instruction, including exception priority.
+constexpr bool x86FPArithStateControlIsValid(uint64_t Control, bool Memory) {
+  const unsigned Kind = Control & 7;
+  const bool Horizontal = x86FPArithStateIsHorizontal(Control);
+  const bool Alternating = x86FPArithStateIsAlternating(Control);
+  const bool Scalar = x86FPArithStateIsScalar(Control);
+  return (Control & ~(Memory ? UINT64_C(255) : UINT64_C(223))) == 0 &&
+         Kind != unsigned(X86FPArithKind::FusedMultiplyAdd) &&
+         (!Scalar || !(Control & 32)) &&
+         (!(Horizontal || Alternating) || !Scalar) &&
+         !(Horizontal && Alternating) &&
+         (!Horizontal || Kind == unsigned(X86FPArithKind::Add) ||
+          Kind == unsigned(X86FPArithKind::Subtract)) &&
+         (!Alternating || Kind == unsigned(X86FPArithKind::Add));
+}
 
 constexpr bool isX86FPApprox12Intrinsic(Intrinsic Id) {
   return Id == Intrinsic::X86FPApprox12State ||
@@ -214,8 +237,7 @@ constexpr bool x86FPStateShapeIsValid(Intrinsic Id,
     return Shape.IdValue == unsigned(Id) && Shape.NumInputs == 5 &&
            Shape.OutputIsWritable && Shape.OperandsAreScalar &&
            Shape.ControlIsConst && Shape.ControlSize == 1 &&
-           (Shape.Control & ~(Memory ? UINT64_C(63) : UINT64_C(31))) == 0 &&
-           (Shape.Control & 7) != unsigned(X86FPArithKind::FusedMultiplyAdd) &&
+           x86FPArithStateControlIsValid(Shape.Control, Memory) &&
            (!Scalar || !VexPackedMemory) && Shape.StateSize == 4 &&
            (Scalar ? Bytes == x86FPArithStateElementBytes(Shape.Control)
                    : Bytes == 16 ||
@@ -289,6 +311,10 @@ constexpr unsigned x86FPRoundStateControl(unsigned Layout) {
   return (Layout >> 8) & 0xff;
 }
 constexpr const char *x86FPArithStateOperation(unsigned Control) {
+  if (x86FPArithStateIsHorizontal(Control))
+    return (Control & 7) == unsigned(X86FPArithKind::Add) ? "hadd" : "hsub";
+  if (x86FPArithStateIsAlternating(Control))
+    return "addsub";
   switch (static_cast<X86FPArithKind>(Control & 7)) {
   case X86FPArithKind::Add:
     return "add";

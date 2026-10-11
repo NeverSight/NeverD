@@ -175,11 +175,12 @@ classifyX86FPStateAsm(const llvm::CallInst &Call) {
           }
         }
   for (bool Memory : {false, true})
-    for (unsigned Control = 0; Control < (Memory ? 64U : 32U); ++Control)
+    for (unsigned Control = 0; Control < 256; ++Control)
       for (unsigned Bytes : {4U, 8U, 16U, 32U}) {
         const bool Unary = x86FPArithStateIsUnary(Control);
         const bool Scalar = x86FPArithStateIsScalar(Control);
-        if (!x86FPArithStateOperation(Control) ||
+        if (!x86FPArithStateControlIsValid(Control, Memory) ||
+            !x86FPArithStateOperation(Control) ||
             (Scalar
                  ? Bytes != x86FPArithStateElementBytes(Control) ||
                        (Control & 32)

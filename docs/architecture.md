@@ -1588,12 +1588,18 @@ evidence. Its configured reset environment remains the concrete starting
 profile. Generic external FLOAT operations and remaining x87 control/TOP/tag
 semantics retain their separate contracts.
 
-Legacy/VEX ADD/SUB/MUL/DIV/SQRT/MIN/MAX scalar and packed forms extend this
+Legacy/VEX ADD/SUB/MUL/DIV/SQRT/MIN/MAX scalar and packed forms, plus packed
+HADD/HSUB and ADDSUB, extend this
 completion scope with `X86FPArithState` and `X86FPArithMemoryState`. One
 aggregate carries the complete raw numerical result and outgoing MXCSR;
 packed lanes complete together, retaining instruction-wide exception priority.
 SQRT consumes only its RHS and requires an exact zero dummy LHS. Control bit
-5 identifies VEX packed memory and does not enable SAE. Memory accesses remain
+5 identifies VEX packed memory and does not enable SAE. Bits 6/7 select
+horizontal pair reduction or alternating subtraction/addition; these controls
+exclude scalar and incompatible arithmetic kinds. Horizontal pairs retain
+physical low-then-high NaN source priority within each 128-bit block. Alternating
+lanes share the common evaluator's two-stage exception completion rather than
+committing separate scalar operations. Memory accesses remain
 inside the incoming/outgoing CSR scope, preserving legacy packed alignment
 faults and complete source reads even when the numerical result is discarded.
 The lifter owns scalar source merging and VEX upper zeroing. Low/Med/High
@@ -1601,7 +1607,7 @@ shape validators and LLVM/C assembly authentication consume the same contract;
 only exact scalar numerical slices acquire floating type provenance. LLVM and
 readable C execute the actual instruction, and concrete execution reuses the
 common packed evaluator and authenticated memory access owner. Existing scalar
-ADD/SUB/MUL/DIV register contracts remain valid. Horizontal arithmetic, FMA,
+ADD/SUB/MUL/DIV register contracts remain valid. FMA,
 EVEX/SAE, enabled alignment checking and unavailable CPU-feature faults retain
 their separate contracts. Swift explicitly refuses this new completion surface
 until it has an equivalent lowering.

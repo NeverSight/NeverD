@@ -19,6 +19,7 @@ struct ArithForm {
   bool Vex;
   unsigned Bytes;
   bool Memory;
+  unsigned Topology = 0; // elementwise, horizontal, alternating subtract/add
 };
 
 constexpr std::array<uint8_t, 8> Opcodes = {0x58, 0x5c, 0x59, 0x5e,
@@ -43,7 +44,10 @@ std::vector<ArithForm> arithForms() {
 }
 
 std::string arithFormName(const ArithForm &Form) {
-  return std::string(Names[unsigned(Form.Kind)]) +
+  return std::string(Form.Topology == 2 ? "AddSub"
+                     : Form.Topology == 1
+                         ? (Form.Kind == X86FPArithKind::Add ? "HAdd" : "HSub")
+                         : Names[unsigned(Form.Kind)]) +
          (Form.Scalar ? (Form.Double ? "SD" : "SS")
                       : (Form.Double ? "PD" : "PS")) +
          (Form.Vex ? (Form.Bytes == 32 ? "Vex256" : "Vex128") : "Legacy") +
@@ -160,9 +164,13 @@ int main(void) {
     if (!Form.Memory)
       Bytes.insert(Bytes.end(),
                    {0xc5, 0xfe, 0x6f, static_cast<uint8_t>(0x48 | Arg), 32});
-    const unsigned PP =
-        Form.Scalar ? (Form.Double ? 3 : 2) : (Form.Double ? 1 : 0);
-    const unsigned Opcode = Opcodes[unsigned(Form.Kind)];
+    const unsigned PP = Form.Topology ? (Form.Double ? 1 : 3)
+                        : Form.Scalar ? (Form.Double ? 3 : 2)
+                                      : (Form.Double ? 1 : 0);
+    const unsigned Opcode =
+        Form.Topology == 2   ? 0xd0
+        : Form.Topology == 1 ? (Form.Kind == X86FPArithKind::Add ? 0x7c : 0x7d)
+                             : Opcodes[unsigned(Form.Kind)];
     const bool UnaryPacked =
         Form.Kind == X86FPArithKind::SquareRoot && !Form.Scalar;
     if (SourceSegment != NdMemoryAddressSpace::Default)
@@ -268,6 +276,56 @@ INSTANTIATE_TEST_SUITE_P(ArithForms, X86FPArithAccuracy,
                            return arithFormName(Info.param);
                          });
 
+std::vector<ArithForm> horizontalForms() {
+  std::vector<ArithForm> Forms;
+  for (unsigned Topology : {1U, 2U})
+    for (auto Kind : {X86FPArithKind::Add, X86FPArithKind::Subtract}) {
+      if (Topology == 2 && Kind == X86FPArithKind::Subtract)
+        continue;
+      for (bool Double : {false, true})
+        for (bool Memory : {false, true})
+          for (const auto [Vex, Bytes] :
+               {std::pair{false, 16U}, std::pair{true, 16U},
+                std::pair{true, 32U}})
+            Forms.push_back(
+                {Kind, Double, false, Vex, Bytes, Memory, Topology});
+    }
+  return Forms;
+}
+
+class X86FPHorizontalAccuracy : public X86FPArithFixture,
+                                public testing::WithParamInterface<ArithForm> {
+};
+TEST_P(X86FPHorizontalAccuracy, NumericalAndMXCSRCompleteTogether) {
+  check(GetParam());
+}
+INSTANTIATE_TEST_SUITE_P(HorizontalForms, X86FPHorizontalAccuracy,
+                         testing::ValuesIn(horizontalForms()),
+                         [](const testing::TestParamInfo<ArithForm> &Info) {
+                           return arithFormName(Info.param);
+                         });
+TEST_F(X86FPArithFixture, DiscardedHorizontalResultsRetainMXCSR) {
+  KeepResult = false;
+  for (const auto &Form : horizontalForms())
+    if (Form.Bytes == 32 && !Form.Double)
+      check(Form);
+}
+TEST_F(X86FPArithFixture, HorizontalVexMemoryAllowsUnalignedAddresses) {
+  SourceOffset = 1;
+  for (unsigned Topology : {1U, 2U})
+    check({X86FPArithKind::Add, false, false, true, 32, true, Topology});
+}
+TEST_F(X86FPArithFixture, HorizontalSource1SurvivesDestinationRHSAlias) {
+  LeftRegister = 2;
+  DestinationRegister = 1;
+  for (const auto [Kind, Topology] : {std::pair{X86FPArithKind::Add, 1U},
+                                      std::pair{X86FPArithKind::Subtract, 1U},
+                                      std::pair{X86FPArithKind::Add, 2U}}) {
+    check({Kind, false, false, true, 32, false, Topology});
+    check({Kind, true, false, true, 16, false, Topology});
+  }
+}
+
 TEST(X86FPArithContract, PackedExceptionPriorityMatchesNativeFaultContexts) {
   BinaryImage Image;
   Image.Arch = Arch::X64;
@@ -361,6 +419,158 @@ std::vector<uint8_t> arithmeticRepeated(uint64_t Value, unsigned Element,
     for (unsigned Index = 0; Index < Element; ++Index)
       Result[Offset + Index] = uint8_t(Value >> (Index * 8));
   return Result;
+}
+
+#if (defined(__x86_64__) || defined(_M_X64)) &&                                \
+    (defined(__clang__) || defined(__GNUC__))
+template <typename Scalar>
+std::pair<std::array<uint8_t, 16>, uint32_t>
+nativeHorizontal(unsigned Control, const uint8_t *A, const uint8_t *B,
+                 uint32_t State) {
+  typedef Scalar Vector __attribute__((vector_size(16)));
+  Vector Left, Right;
+  std::memcpy(&Left, A, 16);
+  std::memcpy(&Right, B, 16);
+  const uint32_t Saved = _mm_getcsr();
+#define RUN_HORIZONTAL(PS, PD)                                                 \
+  if constexpr (sizeof(Scalar) == 4)                                           \
+    __asm__ volatile("ldmxcsr %1\n\t" PS " %2,%0\n\tstmxcsr %1"                \
+                     : "+x"(Left), "+m"(State)                                 \
+                     : "x"(Right)                                              \
+                     : "memory");                                              \
+  else                                                                         \
+    __asm__ volatile("ldmxcsr %1\n\t" PD " %2,%0\n\tstmxcsr %1"                \
+                     : "+x"(Left), "+m"(State)                                 \
+                     : "x"(Right)                                              \
+                     : "memory")
+  if (x86FPArithStateIsAlternating(Control)) {
+    RUN_HORIZONTAL("addsubps", "addsubpd");
+  } else if ((Control & 7) == unsigned(X86FPArithKind::Subtract)) {
+    RUN_HORIZONTAL("hsubps", "hsubpd");
+  } else {
+    RUN_HORIZONTAL("haddps", "haddpd");
+  }
+#undef RUN_HORIZONTAL
+  std::array<uint8_t, 16> Result;
+  std::memcpy(Result.data(), &Left, 16);
+  _mm_setcsr(Saved);
+  return {Result, State};
+}
+#endif
+
+TEST(X86FPHorizontalContract, ConcreteStateMatchesNativeRawBitsAndMXCSR) {
+#if (defined(__x86_64__) || defined(_M_X64)) &&                                \
+    (defined(__clang__) || defined(__GNUC__))
+  if (!llvm::sys::getHostCPUFeatures().lookup("sse3"))
+    GTEST_SKIP() << "native SSE3 required";
+  constexpr std::array<uint64_t, 18> Singles = {
+      0,          0x80000000, 0x3f800000, 0xbf800000, 0x3f800001, 0x3dcccccd,
+      1,          0x007fffff, 0x00800000, 0x7f7fffff, 0x7f800000, 0xff800000,
+      0x7fc00011, 0x7fc00077, 0x7f800031, 0x7f800071, 0x33800000, 0x40000000};
+  constexpr std::array<uint64_t, 18> Doubles = {0,
+                                                UINT64_C(0x8000000000000000),
+                                                UINT64_C(0x3ff0000000000000),
+                                                UINT64_C(0xbff0000000000000),
+                                                UINT64_C(0x3ff0000000000001),
+                                                UINT64_C(0x3fb999999999999a),
+                                                1,
+                                                UINT64_C(0x000fffffffffffff),
+                                                UINT64_C(0x0010000000000000),
+                                                UINT64_C(0x7fefffffffffffff),
+                                                UINT64_C(0x7ff0000000000000),
+                                                UINT64_C(0xfff0000000000000),
+                                                UINT64_C(0x7ff8000000000011),
+                                                UINT64_C(0x7ff8000000000077),
+                                                UINT64_C(0x7ff0000000000031),
+                                                UINT64_C(0x7ff0000000000071),
+                                                UINT64_C(0x3ca0000000000000),
+                                                UINT64_C(0x4000000000000000)};
+  for (unsigned BaseControl : {64U, 65U, 128U, 72U, 73U, 136U}) {
+    const bool Double = (BaseControl & 8) != 0;
+    const auto &Values = Double ? Doubles : Singles;
+    const unsigned Element = Double ? 8 : 4;
+    for (unsigned Bytes : {16U, 32U})
+      for (bool Memory : {false, true})
+        for (unsigned RC = 0; RC < 4; ++RC)
+          for (unsigned Environment = 0; Environment < 4; ++Environment)
+            for (unsigned Sticky = 0; Sticky < 2; ++Sticky)
+              for (unsigned A = 0; A < Values.size(); ++A)
+                for (unsigned B = 0; B < Values.size(); ++B) {
+                  const uint32_t State =
+                      0x1f80 | (RC << 13) | ((Environment & 1) ? 0x40 : 0) |
+                      ((Environment & 2) ? 0x8000 : 0) | (Sticky ? 0x25 : 0);
+                  const unsigned Control = BaseControl | (Memory ? 32 : 0);
+                  SCOPED_TRACE(testing::Message()
+                               << "control=" << Control << "bytes=" << Bytes
+                               << " a=" << A << " b=" << B
+                               << " state=" << State);
+                  std::vector<uint8_t> Left(Bytes), Right(Bytes),
+                      Expected(Bytes + 4);
+                  for (unsigned Lane = 0; Lane < Bytes / Element; ++Lane) {
+                    const auto L = Values[(A + Lane * 3) % Values.size()];
+                    const auto R = Values[(B + Lane * 7) % Values.size()];
+                    std::memcpy(Left.data() + Lane * Element, &L, Element);
+                    std::memcpy(Right.data() + Lane * Element, &R, Element);
+                  }
+                  uint32_t Outgoing = State;
+                  for (unsigned Block = 0; Block < Bytes; Block += 16) {
+                    const auto Native =
+                        Double ? nativeHorizontal<double>(
+                                     Control, Left.data() + Block,
+                                     Right.data() + Block, Outgoing)
+                               : nativeHorizontal<float>(
+                                     Control, Left.data() + Block,
+                                     Right.data() + Block, Outgoing);
+                    std::memcpy(Expected.data() + Block, Native.first.data(),
+                                16);
+                    Outgoing = Native.second;
+                  }
+                  std::memcpy(Expected.data() + Bytes, &Outgoing, 4);
+                  BinaryImage Image;
+                  Image.Arch = Arch::X64;
+                  Segment Source;
+                  Source.VA = 0x2000;
+                  Source.Size = Source.FileSz = Bytes;
+                  Source.Flags = SegmentFlags::Readable;
+                  Source.Data = Right;
+                  Image.Segments.push_back(Source);
+                  NdOpEmulator Emulator(Image);
+                  Emulator.setStrictMode(true);
+                  Emulator.setX86LinearAddressBits(48);
+                  Emulator.setRegisterBytes(10001, Left);
+                  Emulator.setRegisterBytes(10002, Right);
+                  ASSERT_TRUE(Emulator.step(arithmeticStateOp(
+                      Control, Bytes, Memory, 0x2000, State)));
+                  ASSERT_EQ(Emulator.getRegisterBytes(0), Expected);
+                  ASSERT_EQ(Emulator.getMXCSR(), Outgoing);
+                }
+  }
+#else
+  GTEST_SKIP() << "native x64 SSE3 oracle requires GCC/Clang";
+#endif
+}
+
+TEST(X86FPHorizontalContract,
+     ScalarAndConflictingTopologiesRefuseWithoutWrites) {
+  for (unsigned Control : {80U, 192U, 66U, 129U, 152U})
+    for (bool Memory : {false, true}) {
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      Emulator.setMXCSR(0x1fa5);
+      const std::vector<uint8_t> Sentinel(20, 0x59);
+      Emulator.setRegisterBytes(10000, Sentinel);
+      auto Op = arithmeticStateOp(Control, 16, Memory);
+      Op.Output = NdVar::reg(10000, 20);
+      const auto Id = Memory ? Intrinsic::X86FPArithMemoryState
+                             : Intrinsic::X86FPArithState;
+      EXPECT_FALSE(
+          x86FPStateShapeIsValid(Id, x86FPStateLowShape(Op, Arch::X64)));
+      EXPECT_FALSE(Emulator.step(Op));
+      EXPECT_EQ(Emulator.getRegisterBytes(10000), Sentinel);
+      EXPECT_EQ(Emulator.getMXCSR(), 0x1fa5U);
+    }
 }
 
 TEST(X86FPArithContract, SquareRootUsesRHSAndDoesNotReadTheNumericalDummy) {
@@ -885,6 +1095,36 @@ TEST_F(X86FPArithFaultAccuracy, DiscardedVectorStillReadsTheProtectedSource) {
   KeepResult = false;
   runFault({X86FPArithKind::Multiply, false, false, true, 32, true}, 2, 0, 0);
 }
+TEST_F(X86FPArithFaultAccuracy, HorizontalInvalidPrecedesOtherLanePrecision) {
+  for (const auto [Kind, Topology] : {std::pair{X86FPArithKind::Add, 1U},
+                                      std::pair{X86FPArithKind::Subtract, 1U},
+                                      std::pair{X86FPArithKind::Add, 2U}})
+    for (bool Memory : {false, true})
+      runFault({Kind, false, false, true, 32, Memory, Topology}, 2, 1, 3);
+}
+TEST_F(X86FPArithFaultAccuracy, DiscardedHorizontalStillRaisesUnmaskedInvalid) {
+  KeepResult = false;
+  for (unsigned Topology : {1U, 2U})
+    runFault({X86FPArithKind::Add, false, false, true, 16, true, Topology}, 2,
+             1, 3);
+}
+TEST_F(X86FPArithFaultAccuracy,
+       LegacyHorizontalMisalignmentPrecedesEvaluation) {
+  FaultMode = 1;
+  SourceOffset = 1;
+  KeepResult = false;
+  for (unsigned Topology : {1U, 2U})
+    runFault({X86FPArithKind::Add, false, false, false, 16, true, Topology}, 2,
+             0, 0);
+}
+TEST_F(X86FPArithFaultAccuracy,
+       DiscardedHorizontalReadsTheCompleteProtectedSource) {
+  FaultMode = 2;
+  KeepResult = false;
+  for (unsigned Topology : {1U, 2U})
+    runFault({X86FPArithKind::Add, false, false, true, 32, true, Topology}, 2,
+             0, 0);
+}
 TEST_F(X86FPArithFixture, DiscardedPackedNumericalResultsRetainMXCSRFlags) {
   KeepResult = false;
   check({X86FPArithKind::Add, false, false, false, 16, false});
@@ -893,7 +1133,7 @@ TEST_F(X86FPArithFixture, DiscardedPackedNumericalResultsRetainMXCSRFlags) {
 
 TEST(X86FPArithContract,
      OwnedAssemblyAuthenticatesRolesStateAddressAndEffects) {
-  for (unsigned Form = 0; Form < 3; ++Form)
+  for (unsigned Form = 0; Form < 5; ++Form)
     for (unsigned Mutation = 0; Mutation < 14; ++Mutation) {
       SCOPED_TRACE(testing::Message()
                    << "form=" << Form << " mutation=" << Mutation);
@@ -901,8 +1141,12 @@ TEST(X86FPArithContract,
       llvm::Module Module("arith-owned", Context);
       llvm::IRBuilder<> Builder(Context);
       const bool Unary = Form == 1;
-      const bool Memory = Form == 2;
-      const unsigned Control = Unary ? 29 : Memory ? 32 : 3;
+      const bool Memory = Form == 2 || Form == 4;
+      const unsigned Control = Form == 3   ? 64
+                               : Form == 4 ? 160
+                               : Unary     ? 29
+                               : Memory    ? 32
+                                           : 3;
       const unsigned Layout = x86FPRoundStateLayout(
           Unary    ? 8
           : Memory ? 32
