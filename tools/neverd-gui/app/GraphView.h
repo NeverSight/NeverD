@@ -102,7 +102,9 @@ private:
   QVector<Node> nodes_;
   QVector<Edge> edges_;
   QRectF bounds_;
-  std::optional<Address> function_, pendingCursor_;
+  std::optional<Address> function_;
+  // Latest requested or selected address, including while a layout is loading.
+  std::optional<Address> pendingCursor_;
   QString layoutRevision_;
   quint64 serial_ = 0;
   qreal scale_ = 1;

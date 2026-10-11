@@ -146,10 +146,14 @@ bool RegistrationStateSolver::projectFrameObject(
     const int64_t Begin = int64_t(Object) + Extent.Begin;
     const int64_t End = int64_t(Object) + Extent.End;
     // Registration/SavedESP, saved EBP and the caller PC cannot be objects.
+    // The realigned frame additionally owns a distinct saved entry EBP.
+    const int64_t Administration =
+        Chain.RealignedFrame
+            ? Chain.RealignedFrame->SavedParentFrameOffset
+            : int64_t(*Chain.RegistrationOffset) - (KnownCxx ? 4 : 0);
     if (Begin < *SP || Begin < -int64_t(limits::kMaxRegistrationEHStateWork) ||
-        End > 0 ||
-        (Begin < int64_t(*Chain.TryLevelOffset) + 4 &&
-         int64_t(*Chain.RegistrationOffset) - (KnownCxx ? 4 : 0) < End) ||
+        End > (KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0) ||
+        (Begin < int64_t(*Chain.TryLevelOffset) + 4 && Administration < End) ||
         !charge(size_t(End - Begin) + State.Frame.cellCount()))
       return false;
     if (Reads) {

@@ -112,6 +112,13 @@ fpReturnElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
       Carrier = &Source.Inputs[0];
     }
   }
+  if (Def->Opcode == NdOp::INTRINSIC && Def->NumInputs &&
+      Def->Inputs[0].isConst()) {
+    const auto Id = static_cast<Intrinsic>(Def->Inputs[0].ConstVal);
+    if (isX86FPApprox12Intrinsic(Id))
+      return static_cast<uint16_t>(x86FPStateNumericalSliceSize(
+          Id, x86FPStateMedShape(*Def), 0, V.Size));
+  }
   // The state primitive's aggregate and MXCSR words are raw carriers. Only
   // its exact numerical slice above establishes a scalar FP return.
   if (Def->Opcode == NdOp::INTRINSIC && Def->NumInputs &&
@@ -563,6 +570,15 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   ReturnViaX87 = false;
   DefinedReturnBytes = 0;
   uint16_t DefaultSize = TRI.PointerSize > 0 ? TRI.PointerSize : 4;
+
+  // CFG construction can prove the exact logical x87 top at every return.
+  // Its explicit operand is the returned value, including across calls and
+  // joins; do not rediscover a different physical slot by backward scanning.
+  if (Func.ExplicitX87ReturnValue) {
+    ReturnViaX87 = true;
+    DefinedReturnBytes = 10;
+    return NdType::makeFloat(10);
+  }
 
   // The epilogue register-restore filter below applies to x86/x86-64: a `pop`
   // into the integer return register right before `ret` is a stack-cleanup /

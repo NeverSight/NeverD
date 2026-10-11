@@ -312,6 +312,7 @@ void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
                            ? Clause.FilterOrActionVA
                            : Clause.HandlerVA;
     if (I < Stmt.EHClauseBodies.size() && !Stmt.EHClauseBodies[I].empty() &&
+        !isEmbeddedRegistrationCallback(Stmt, I) &&
         (!Entry || (CurrentFunc && Entry == CurrentFunc->Entry) ||
          !DefinedFunctionsByAddress.count(Entry)))
       throw std::invalid_argument(
@@ -344,6 +345,7 @@ void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
   writeTryBody(Stmt.Body, Indent + 1);
   emitIndent(Indent);
   OS << "}\n";
+  writeEmbeddedRegistrationCallbacks(Stmt, Indent);
 }
 
 void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
@@ -363,8 +365,9 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         (Stmt.Dst->Kind == ExprKind::Var || Stmt.Dst->Kind == ExprKind::Phi) &&
         AmbiguousFrameAliases.count(varName(Stmt.Dst->Var))))
     return;
-  const bool HideEHRuntimeMemory =
-      CurrentFunc && CurrentFunc->ExceptionMetadata.has_value();
+  const bool HideEHRuntimeMemory = CurrentFunc &&
+                                   CurrentFunc->ExceptionMetadata.has_value() &&
+                                   !preservesRegistrationMemory(*CurrentFunc);
   auto IsEHRuntimeSpace = [&](NdMemoryAddressSpace Space) {
     return HideEHRuntimeMemory && Space == NdMemoryAddressSpace::X86FS;
   };

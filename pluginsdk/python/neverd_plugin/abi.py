@@ -1059,6 +1059,11 @@ _declare(
     ["neverd_session_t", "neverd_va_t", "neverd_va_t *", "neverd_va_t *"],
 )
 _declare(
+    "neverd_prepare_function",
+    "int",
+    ["neverd_session_t", "neverd_va_t"],
+)
+_declare(
     "neverd_decompile",
     "const char *",
     ["neverd_session_t", "neverd_va_t"],

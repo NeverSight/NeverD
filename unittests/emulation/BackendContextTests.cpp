@@ -126,6 +126,20 @@ TEST_F(DriverBackendContext, PermissionPreflightWorksInsideLiveMemoryHooks) {
   EXPECT_FALSE(CPU->fault());
 }
 
+TEST_F(DriverBackendContext, MemoryHooksPreserveCarryAcrossACall) {
+  ASSERT_EQ(llvm::toString(CPU->setReg(X64Register::R10, 0x8001)), "");
+  ASSERT_EQ(llvm::toString(CPU->setReg(X64Register::AX, 0)), "");
+  // SHL r10w, 1; CALL callee; JMP done; callee: SETA al; RET; done: NOP.
+  // The stack write must retain CF=1 from SHL, so SETA produces zero.
+  // Running each instruction separately hides a stale lazy-flags tag.
+  execute({0x66, 0x41, 0xd1, 0xe2, 0xe8, 0x02, 0x00, 0x00, 0x00, 0xeb, 0x04,
+           0x0f, 0x97, 0xc0, 0xc3, 0x90});
+  EXPECT_EQ(reg(X64Register::AX), 0u);
+  EXPECT_EQ(reg(X64Register::R10), 2u);
+  EXPECT_EQ(reg(X64Register::FLAGS) & 0x8c5, 0x801u);
+  EXPECT_EQ(reg(X64Register::SP), StackAddress + 0x800);
+}
+
 TEST_F(DriverBackendContext,
        XmmAccessPreservesBothHalvesAndRejectsInvalidIndex) {
   const UnicornBackend::XmmValue Value = {0x123456789abcdef0,

@@ -30,6 +30,26 @@ llvm::Expected<UnpackOptions> unpackOptionsFromJSON(llvm::StringRef Text) {
   if (!Object)
     return failure(text::ObjectRequired);
   UnpackOptions Options;
+  if (const auto *Driver = Object->get("driver")) {
+#ifdef NEVERD_UNPACK_DRIVER_EXECUTION
+    std::string Scenario;
+    llvm::raw_string_ostream(Scenario) << *Driver;
+    auto ParsedDriver = emulation::driverOptionsFromScenarioJSON(Scenario);
+    if (!ParsedDriver)
+      return ParsedDriver.takeError();
+    Options.Driver = std::move(*ParsedDriver);
+    Object->erase("driver");
+#else
+    return failure("driver options require NEVERD_ENABLE_DRIVER_EMULATION");
+#endif
+  }
+  if (const auto *Restore = Object->get(field::RestoreRuntime)) {
+    auto Value = Restore->getAsBoolean();
+    if (!Value)
+      return failure(llvm::Twine(text::FieldType) + field::RestoreRuntime);
+    Options.RestoreRuntime = *Value;
+    Object->erase(field::RestoreRuntime);
+  }
   if (const auto *Snapshot = Object->get(field::SnapshotOnly)) {
     auto Value = Snapshot->getAsBoolean();
     if (!Value)
@@ -37,6 +57,8 @@ llvm::Expected<UnpackOptions> unpackOptionsFromJSON(llvm::StringRef Text) {
     Options.SnapshotOnly = *Value;
     Object->erase(field::SnapshotOnly);
   }
+  if (Options.SnapshotOnly && Options.RestoreRuntime)
+    return failure("snapshot_only and restore_runtime are mutually exclusive");
   if (const auto *Transfer = Object->get(field::Transfer)) {
     auto Number = Transfer->getAsUINT64();
     if (!Number || !*Number || *Number > defaults::MaxTransfers)
@@ -154,6 +176,10 @@ std::string unpackResultJSON(const UnpackResult &Result,
       {field::Transfers, std::move(Transfers)},
       {field::RuntimeState,
        llvm::json::Object{
+           {field::AdditionalStateKnown,
+            Result.RuntimeState.AdditionalStateInventoryKnown},
+           {field::AdditionalState,
+            Result.RuntimeState.HasAdditionalDependencies},
            {field::HeapKnown, Result.RuntimeState.HeapInventoryKnown},
            {field::HeapReferenceCount,
             Result.RuntimeState.PossibleHeapReferences},

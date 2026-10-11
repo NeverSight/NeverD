@@ -22,8 +22,8 @@ StackEntryKind functionEntryKind(const MedFunc &Func, StackEntryKind AtEntry);
 /// A synthetic PE32 runtime-entry definition, with its full register carrier.
 bool hasValidRegistrationRootShape(const MedOp &Op);
 
-/// The established source frame and a checked continuation have exact parent
-/// entry-stack coordinates. A callback's private stack deliberately does not.
+/// A direct established frame and its continuation have exact entry-stack
+/// offsets. Realigned frames and private callback stacks deliberately do not.
 std::optional<int64_t> registrationRootEntryStackOffset(const MedOp &Op);
 
 /// In source mode, simplify an alignment mask only when its operand is an

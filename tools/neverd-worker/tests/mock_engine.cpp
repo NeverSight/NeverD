@@ -81,7 +81,8 @@ struct MockSession {
   /// Source-document tests distinguish page reuse from a fresh preparation,
   /// and refuse graph/IR reads against a different restricted pipeline.
   std::uint64_t preparedEntry = 0;
-  unsigned sourcePrepares = 0, sourcePages = 0;
+  unsigned sourcePrepares = 0, sourcePages = 0, sourceRenders = 0;
+  bool rejectedPreparation = false;
   bool wholeProgramPrepared = false;
   bool sourceCacheVMFixture() const {
     return path.ends_with("source-cache-evm.bin") ||
@@ -89,7 +90,9 @@ struct MockSession {
   }
   bool sourceCacheFixture() const {
     return path.ends_with("source-cache.bin") ||
-           path.ends_with("source-cache-budget.bin") || sourceCacheVMFixture();
+           path.ends_with("source-cache-budget.bin") ||
+           path.ends_with("source-cache-prepare-fail.bin") ||
+           sourceCacheVMFixture();
   }
 };
 MockSession *session(neverd_session_t s) {
@@ -663,10 +666,18 @@ const char *neverd_unwind_frame_json(neverd_session_t, neverd_va_t address) {
          true}}.dump());
   return copy("null");
 }
-const char *neverd_decompile(neverd_session_t s, neverd_va_t address) {
+static int prepareMockFunction(neverd_session_t s, neverd_va_t address) {
+  session(s)->error.clear();
   if (session(s)->sourceCacheFixture()) {
-    session(s)->preparedEntry = address;
     ++session(s)->sourcePrepares;
+    session(s)->preparedEntry = 0;
+    if (session(s)->path.ends_with("source-cache-prepare-fail.bin") &&
+        address == Base + 16 && !session(s)->rejectedPreparation) {
+      session(s)->rejectedPreparation = true;
+      session(s)->error = "fixture preparation failed after retiring old IR";
+      return 0;
+    }
+    session(s)->preparedEntry = address;
   }
   if (session(s)->path.ends_with("pseudocode-parallel.bin") &&
       (address == Base || address == Base + 16)) {
@@ -680,6 +691,15 @@ const char *neverd_decompile(neverd_session_t s, neverd_va_t address) {
     std::fflush(stdout);
     std::this_thread::sleep_for(std::chrono::seconds(30));
   }
+  return 1;
+}
+int neverd_prepare_function(neverd_session_t s, neverd_va_t address) {
+  return prepareMockFunction(s, address);
+}
+const char *neverd_decompile(neverd_session_t s, neverd_va_t address) {
+  ++session(s)->sourceRenders;
+  if (!prepareMockFunction(s, address))
+    return copy("");
   if (session(s)->path.ends_with("pseudocode-import.bin"))
     return copy("int caller(void) {\n  return function_22();\n}\n");
   if (session(s)->path.ends_with("pseudocode-global.bin"))
@@ -854,7 +874,8 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
                      {"library_regions", Json::array()},
                      {"source_names", Json::array()},
                      {"fixture_prepares", state.sourcePrepares},
-                     {"fixture_pages", state.sourcePages}}
+                     {"fixture_pages", state.sourcePages},
+                     {"fixture_renders", state.sourceRenders}}
                     .dump());
   }
   if (session(s)->path.ends_with("code-edits.bin") ||

@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 88b72dd8f373ee05729ab1db29a51d3837d123853880c232431f70eade967be3 -->
+<!-- i18n-source: 6241c9252ec89317b9c488c7e2b6b8c7bd60329dfdd734df27e1a7a7139b1eff -->
 
 [← NeverD 项目](project.md)
 
@@ -17,6 +17,11 @@
 | [项目说明（简体中文）](project.md) | 概览、快速开始、构建、SDK、CLI |
 | [贡献指南](CONTRIBUTING.md) | 开发环境、构建配置、工作流、风格与 PR 要求 |
 | [架构](architecture.md) | IR 路径、组件边界、严格提升、支持深度与修改位置 |
+| [离线 Web 分析（英文）](../web-analysis.md) | C++ 制品、源码、绑定和映射检查，元数据策略、SDK 与当前验证范围 |
+| [Bun 独立程序配置（英文）](../web-bun-profile.md) | 固定 ELF 提取、原始证据范围、源码解码与固定测试样本的来源 |
+| [ASAR 提取配置（英文）](../web-asar-profile.md) | 包内与包外捕获关联、完整性状态、成员使用方及原生 Unicode 依赖 |
+| [Electron 证据配置（英文）](../web-electron-profile.md) | 捕获的入口路径、清单与源码范围、窗口和桥接证据及 IPC 通道候选 |
+| [HTML 源码配置（英文）](../web-html-profile.md) | 有界 C++ 脚本清单、捕获的本地引用与原始内联源码锚点 |
 | [测试](testing.md) | 测试套件、生成 fixture、Unicorn 往返与增量命令 |
 | [桌面工作台 (英文)](../gui.md) | 经典反汇编器布局、独立工作进程、项目数据库、本地化和 MCP 连接 |
 | [库识别（英文）](../library-recognition.md) | 基于证据的 STL、ATL/MFC、COM 和 libc 身份、配置与可恢复的 C 源码折叠 |

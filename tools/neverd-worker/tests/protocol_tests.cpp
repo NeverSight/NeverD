@@ -62,6 +62,33 @@ int main() {
   rejects([] { parseJson(std::string(65, '[') + std::string(65, ']')); },
           "Excessive nesting accepted");
   rejects([] { parseJson("{broken"); }, "Malformed JSON accepted");
+  rejects([] { parseJson(R"({"path":"first","p\u0061th":"second"})"); },
+          "Decoded duplicate path key accepted");
+  rejects([] { parseJson(R"({"options":{"limit":1,"limit":2}})"); },
+          "Nested duplicate options key accepted");
+  check(parseJson(R"([{"key":1},{"key":2}])").size() == 2,
+        "Separate object keys incorrectly merged");
+  // Native history and source inventories can contain large arrays. The
+  // duplicate-key admission must not run a DOM filter that rescans every
+  // preceding sibling whenever an object ends.
+  std::string large = "[";
+  for (unsigned i = 0; i < 29000; ++i) {
+    if (i)
+      large += ',';
+    large += "{\"id\":" + std::to_string(i) + ",\"text\":\"" +
+             std::string(220, 'x') + "\"}";
+  }
+  large += ']';
+  const auto inventory = parseJson(large);
+  check(inventory.size() == 29000 && inventory.back()["id"] == 28999 &&
+            inventory.front()["text"] == std::string(220, 'x'),
+        "Large object array was not preserved");
+  large.pop_back();
+  large += R"(,{"id":1,"\u0069d":2}])";
+  rejects([&] { parseJson(large); },
+          "Duplicate key late in a large array accepted");
+  rejects([] { parseJson(R"({"outer":[{"nested":{"x":1,"x":2}}]})"); },
+          "Object key scopes drifted through nested arrays");
   rejects(
       [] {
         const unsigned char bytes[]{0, 0, 0, 0};

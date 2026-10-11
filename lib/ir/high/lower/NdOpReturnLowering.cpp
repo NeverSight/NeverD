@@ -182,6 +182,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   }
 
   ExprPtr RetVal;
+  if (Med.ExplicitX87ReturnValue && Med.FPReturnViaX87 && CurOp.NumInputs == 1)
+    RetVal = sourceFloatValue(CurOp.Inputs[0], 10);
   const auto &TRI = getTargetRegInfo(TargetArch);
   const bool UsesFPReturnReg = Func.ReturnType &&
                                Func.ReturnType->Kind == NdTypeKind::Float &&

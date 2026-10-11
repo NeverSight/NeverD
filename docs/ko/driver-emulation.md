@@ -92,7 +92,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 콜백 시작 전에 작업 항목이 대기열에서 제거되므로 콜백은 자신의 작업 항목을 해제할 수 있습니다. 대기열 항목 해제, 중복 큐 삽입, 만료 객체 및 실행 가능한 게스트 메모리 밖의 콜백 주소는 명시적으로 실패합니다. 장치 참조는 콜백 반환까지 유지합니다. 언로드에는 모든 작업 항목 해제와 큐 작업 완료가 필요합니다. CPU 컨텍스트는 일반, SIMD, FPU 및 제어 상태를 저장하고 복원합니다. 게스트 메모리는 공유되며 장애가 난 CPU는 저장된 컨텍스트로 재개할 수 없습니다.
 파일 객체 또는 대기/실행 중인 작업 항목 참조가 남아 있으면 삭제를 연기합니다. 객체 영역이 소진되면 작업 항목 할당은 NULL을 반환합니다.
 
-시나리오에서 유효한 재배치 주소를 지정하지 않으면 이미지는 선호 베이스를 사용하며, native 서브시스템의 PE32+ x64 실행 파일이어야 합니다. import 제공자는 `ntoskrnl.exe`, `ntkrnlmp.exe` 또는 `WDFLDR.SYS`일 수 있습니다. 실행 로더는 검증된 x64 `DIR64` 베이스 재배치와 제한적인 security-cookie 로드 구성을 지원합니다. security cookie는 진입 래퍼 실행 전에 결정적인 게스트 값으로 초기화됩니다. 기타 모델링되지 않은 로드 구성 필드, TLS, 지연/바인딩 import, ordinal import, managed 이미지는 거부됩니다. 이미지에는 엄격한 범위 및 정렬 검사도 적용됩니다.
+시나리오에서 유효한 재배치 주소를 지정하지 않으면 이미지는 선호 베이스를 사용하며, native 서브시스템의 PE32+ x64 실행 파일이어야 합니다. import 제공자는 `ntoskrnl.exe`, `ntkrnlmp.exe`, `HAL.dll` 또는 `WDFLDR.SYS`일 수 있습니다. 실행 로더는 검증된 x64 `DIR64` 베이스 재배치와 제한적인 security-cookie 로드 구성을 지원합니다. security cookie는 진입 래퍼 실행 전에 결정적인 게스트 값으로 초기화됩니다. 기타 모델링되지 않은 로드 구성 필드, TLS, 지연/바인딩 import, ordinal import, managed 이미지는 거부됩니다. 이미지에는 엄격한 범위 및 정렬 검사도 적용됩니다.
 
 활성 Control Flow Guard(CFG)는 PE 플래그, 포인터 슬롯과 정렬된 실행 가능 대상 테이블을 검증합니다. check/dispatch 도우미는 선언된 이미지 진입점 또는 등록된 API 썽크만 허용하며 Win64 호출 상태를 보존하고 미선언 대상을 거부합니다. CFG가 활성화되지 않은 계측은 원래 게스트 대체 포인터를 유지합니다. 활성 XFG, 내보내기 억제 및 다른 미지원 보호 정책은 거부되며 실행 가능 메모리에 있다는 이유만으로 유효한 대상이 되지는 않습니다.
 
@@ -159,7 +159,7 @@ READ/WRITE/IOCTL은 `interrupt_events`를 선언하며 각 항목에 `after_100n
 
 보고서는 선언과 관측을 구분합니다. `configuration.pnp_devices[].interrupts`는 리소스를, `configuration.interrupt_events`는 이벤트와 `action`, 0부터 시작하는 `source_request_index`/`event_index`를 보존합니다. 루트 `interrupts`는 장치/리소스, 세대, 기한, 상태 적용 시각을 기록하며 `occurred_at_100ns`는 외부 상태 적용을 뜻합니다. `handlers[]`는 실제 실행한 ISR마다 인터럽트 객체, 전달/반환 시각, BOOLEAN 반환값, `claimed`, `delivery_index`를 기록합니다. assert는 여러 배치를 만들 수 있습니다. deassert나 같은 경계에서 상쇄된 assert에 ISR 실행이 없으면 ISR 필드를 만들지 않습니다. 처리를 맡지 않은 ISR도 유효하며 DPC 효과는 실제 요청 완료, API 호출 및 메시지에 나타납니다. 행은 `device_id`, `interrupt_id`, `epoch`, `due_at_100ns`, `occurred_at_100ns`, `interrupt_object`, `undelivered_reason`도 보존합니다. `delivered_at_100ns`는 첫 처리기 진입을 기록하고 최상위 `returned_at_100ns`, `return_value`, `claimed`는 마지막 배치를 요약합니다. `handlers`는 전체 이력을 보존합니다. 소스가 assert 상태인 동안 첫 assert에 관측을 연결하므로 반복 assert 자체에는 ISR 기록이 없을 수 있습니다. 실행 가능한 [인터럽트 시나리오](../examples/driver-interrupt-scenario.json)는 실제 WDK로 빌드하는 자체 fixture `driver_wdm_interrupts.c`와 선택적 `NEVERD_WDM_INTERRUPT_FIXTURE` / `NEVERD_WDM_INTERRUPT_CFG_FIXTURE`를 사용합니다. 7개 요청에서 지연 START, ISR→DPC로 완료되는 대기 IOCTL, 파일 정리／닫기와 제거를 실행합니다. 기존 C／Python `scenario_json` 경계와 `neverd_driver_options_v1` 레이아웃은 변경하지 않습니다. 실제 산출물 누락은 명시적으로 건너뛰며 실행 증거는 Linux에 한정됩니다.
 
-`DriverDMA.h` / `DriverDMA.def`는 메모리／인터럽트 할당과 함께 `register_bank` PDO에 선택적 `dma` 객체를 추가합니다. DMA만으로 두 리소스 목록을 대체할 수 없습니다. 일곱 필드를 모두 명시해야 합니다: `address_bits`(32 또는 64), `maximum_length`(1–1048576바이트), `map_registers`(1–256), `alignment`(1–4096의 2의 거듭제곱), `logical_base`(0이 아니며 페이지 정렬), `logical_length`(페이지 정렬, 4096–1073741824바이트), 불리언 `scatter_gather`. 논리 범위는 오버플로 없이 주소 폭에 들어가야 합니다. PDO마다 독립적인 논리 도메인이 있으므로 서로 다른 장치의 같은 주소는 별칭이 아닙니다. 변환된 MMIO 리소스는 예약된 모델 RAM 범위 `[0x1000000000, 0x1000100000)`와 겹칠 수 없습니다. 이 선언은 일관성을 갖춘 합성 버스 마스터를 나타내며 호스트 물리 메모리나 PCI 장치를 나타내지 않습니다.
+`DriverDMA.h` / `DriverDMA.def`는 메모리／인터럽트 할당과 함께 `register_bank` PDO에 선택적 `dma` 객체를 추가합니다. DMA만으로 두 리소스 목록을 대체할 수 없습니다. 일곱 필드를 모두 명시해야 합니다: `address_bits`(32 또는 64), `maximum_length`(1–1048576바이트), `map_registers`(1–256), `alignment`(1–4096의 2의 거듭제곱), `logical_base`(0이 아니며 페이지 정렬), `logical_length`(페이지 정렬, 4096–1073741824바이트), 불리언 `scatter_gather`. 논리 범위는 오버플로 없이 주소 폭에 들어가야 합니다. PDO마다 독립적인 논리 도메인이 있으므로 서로 다른 장치의 같은 주소는 별칭이 아닙니다. 변환된 MMIO 리소스는 예약된 모델 RAM 범위 `[0x1000000000, 0x1004000000)`와 겹칠 수 없습니다. 이 선언은 일관성을 갖춘 합성 버스 마스터를 나타내며 호스트 물리 메모리나 PCI 장치를 나타내지 않습니다.
 
 `IoGetDmaAdapter`는 Internal 버스 마스터의 기존 `DEVICE_DESCRIPTION` 버전 0／1 필드를 받아 버전 1 `DMA_ADAPTER`와 실제 104바이트 `DMA_OPERATIONS` 테이블을 제공합니다. 버전 2／3 탐색은 최신 구조의 뒷부분을 읽지 않고 NULL을 반환합니다. 각 간접 메서드는 정확한 유효 어댑터에 연결되며 커널 import와 별개의 식별자를 가집니다. 구현된 메서드는 `AllocateCommonBuffer`, `FreeCommonBuffer`, `GetDmaAlignment`, `GetScatterGatherList`, `PutScatterGatherList`, `PutDmaAdapter`, `AllocateAdapterChannel`, `MapTransfer`, `FlushAdapterBuffers`, `FreeMapRegisters`입니다. 이 프로필은 종속／시스템 DMA 컨트롤러를 모델링하지 않으므로 `FreeAdapterChannel`과 `ReadDmaCounter`는 이름을 명시하는 미지원 오류로 남습니다. 공통 버퍼 할당／해제와 정렬 조회는 PASSIVE_LEVEL, Get／PutScatterGatherList는 DISPATCH_LEVEL을 요구하며 어댑터 해제는 DISPATCH_LEVEL 이하에서 허용합니다. x64는 `CacheEnabled`를 무시합니다. 미지원 버전 탐색, 선언된 기능과의 불일치, 문서에 규정된 할당 자원 부족은 NULL을 반환합니다. 잘못되거나 모델링되지 않은 인터페이스 선택과 백엔드 실패는 명시적 오류입니다.
 
@@ -171,7 +171,7 @@ READ/WRITE/IOCTL은 `interrupt_events`를 선언하며 각 항목에 `after_100n
 
 `KeFlushIoBuffers`는 유효한 잠금／비페이지 MDL을 검증합니다. 모델 플랫폼은 일관성을 보장하므로 ReadOperation과 DmaOperation이 어떤 값이어도 별도 캐시 복사가 필요 없습니다. 이 호출은 DMA 소유권을 해제하거나 FlushAdapterBuffers를 대신하지 않습니다. [채널 시나리오](../examples/driver-dma-channel-scenario.json)는 직접 작성한 `driver_wdm_dma_channel.c`로 두 번의 MapTransfer, 페이지를 가로지르는 하나의 장치 트랜잭션, 별도 선언한 IRQ/DPC, 전체 플러시와 정확한 레지스터 해제를 실행합니다. 실제 일반／CFG 이미지는 `NEVERD_WDM_DMA_CHANNEL_FIXTURE`와 `NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE`를 사용합니다.
 
-`KernelPhysicalMemory`는 기존 RAM에 최대 256개의 4096바이트 모델 물리 페이지 식별자를 할당합니다. CPU 가상 주소, 물리 페이지 식별자, 장치 논리 주소는 서로 다릅니다. 구성된 MDL의 PFN 배열은 이 공유 식별자를 읽기 전용으로 노출하며 미구성 설명자에는 사용 가능한 PFN이 없습니다. 인접한 작은 할당은 PFN을 공유할 수 있지만 바이트 범위와 수명은 별개입니다. 공통 버퍼, 풀 저장소, 요청 버퍼는 `GuestMemory`가 소유한 같은 바이트를 사용하며 별도 DMA 복사본을 만들지 않습니다. 유효한 SG 매핑은 정확한 데이터 범위와 설명자를 고정합니다. 완료, 풀／MDL 해제, 장치 정리는 저장소를 폐기하기 전에 남은 의존성을 거부합니다. 직접 MDL의 unmap은 CPU 시스템 매핑만 취소하며 DMA는 잠긴 기반 RAM에 계속 접근할 수 있습니다. `DmaWritable`은 CPU 매핑 권한과 별도로 쓰기 잠금 계약을 기록합니다. 장치 쓰기는 직접 READ／OUT_DIRECT 또는 쓰기 가능한 비페이지 저장소를 요구하며 WRITE／IN_DIRECT는 CPU 매핑이 쓰기 가능하다는 이유만으로 이 권한을 얻지 않습니다.
+`KernelPhysicalMemory`는 기존 RAM에 최대 16384개의 4096바이트 모델 물리 페이지 식별자를 할당합니다. CPU 가상 주소, 물리 페이지 식별자, 장치 논리 주소는 서로 다릅니다. 구성된 MDL의 PFN 배열은 이 공유 식별자를 읽기 전용으로 노출하며 미구성 설명자에는 사용 가능한 PFN이 없습니다. 인접한 작은 할당은 PFN을 공유할 수 있지만 바이트 범위와 수명은 별개입니다. 공통 버퍼, 풀 저장소, 요청 버퍼는 `GuestMemory`가 소유한 같은 바이트를 사용하며 별도 DMA 복사본을 만들지 않습니다. 유효한 SG 매핑은 정확한 데이터 범위와 설명자를 고정합니다. 완료, 풀／MDL 해제, 장치 정리는 저장소를 폐기하기 전에 남은 의존성을 거부합니다. 직접 MDL의 unmap은 CPU 시스템 매핑만 취소하며 DMA는 잠긴 기반 RAM에 계속 접근할 수 있습니다. `DmaWritable`은 CPU 매핑 권한과 별도로 쓰기 잠금 계약을 기록합니다. 장치 쓰기는 직접 READ／OUT_DIRECT 또는 쓰기 가능한 비페이지 저장소를 요구하며 WRITE／IN_DIRECT는 CPU 매핑이 쓰기 가능하다는 이유만으로 이 권한을 얻지 않습니다.
 
 `GetScatterGatherList`는 MDL의 원래 범위에 대해 CurrentVa／Length를 검증하고 기존 기반 RAM에 논리 페이지 조각을 만듭니다. 매핑 레지스터가 있으면 실제 인자 네 개의 void `AdapterListControl`이 API 반환 전에 인라인으로 실행됩니다. 부족하면 데이터／설명자를 유지하고 자원이 해제될 때까지 PDO FIFO에 콜백을 예약합니다. 이 범위에는 StartIo 소유권이 없으므로 두 번째 IRP 인자는 NULL입니다. 콜백 반환은 매핑을 해제하지 않습니다. 유효한 SG 데이터 범위에 CPU가 접근하려면 먼저 Put해야 합니다. 매핑 레지스터를 기다리는 콜백은 아직 바이트 소유권을 장치에 넘기지 않았습니다. `PutScatterGatherList`는 콜백 안에서 호출할 수 있으며 이후 요청을 완료하고 마지막 어댑터를 해제해도 콜백의 이어지는 실행과 장치 참조는 반환까지 유지됩니다. 공통 버퍼를 해제할 때는 원래 어댑터, 길이, 논리 주소, CPU 주소가 일치해야 합니다. 논리 주소는 재시작을 포함한 세션 내에서 재사용하지 않습니다. 실제 생산자가 없는 자원 대기는 명시적으로 정체를 보고하며 완료나 기한을 만들어 내지 않습니다.
 
@@ -320,6 +320,7 @@ PnP FDO에서 `WdfDeviceInitSetDeviceType`은 지정한 32비트 유형을 WDM `
 | `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | 게스트 예외를 발생시키며 정상 API 반환은 없음. 실제 C 필터/처리기와 unwind finally, 사용자 CPU 메모리 예외의 제한된 재개는 아래 설명 참조 |
 | `ExAllocatePool2` | Paged/nonpaged NX 할당이며 기본값은 0으로 초기화. uninitialized 및 cache-aligned 플래그를 모델링함. 잘못된 필수 플래그는 NULL을 반환하고, quota/executable 풀과 할당 예외 발생은 중단함 |
 | `MmGetSystemRoutineAddress` | 공유 export 목록을 통해 길이가 지정된 게스트 이름을 해석함 |
+| `NtQuerySystemInformation`, `ZwQuerySystemInformation` | PASSIVE_LEVEL에서 클래스 `11`(`SystemModuleInformation`)을 지원합니다. 길이 0의 크기 조회와 모델 제공자 및 입력 드라이버의 완전한 Win64 모듈 레코드를 반환합니다. 부분 버퍼와 알 수 없는 정보 클래스는 명시적으로 중단합니다. |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 선언된 변환 후 하위 구간, 비캐시 RO／RW, 공유 별칭과 정확한 unmap. 임의 물리 메모리는 미지원 |
 | `IoConnectInterrupt`, `IoDisconnectInterrupt`, `IoConnectInterruptEx`, `IoDisconnectInterruptEx` | 정확히 할당된 독점/공유 latched 또는 level_sensitive 라인, PASSIVE_LEVEL의 기존 ABI 및 Ex 1/2/4, 엄격한 연결 세대와 잠금 소유권 |
 | `KeSynchronizeExecution`, `KeAcquireInterruptSpinLock`, `KeReleaseInterruptSpinLock` | 실제 BOOLEAN 동기화 콜백과 할당 DIRQL 이상의 동기화 IRQL에서 보유하는 동일 비재귀 잠금, 원래 호출자 IRQL 및 소유권 복원 |
@@ -331,6 +332,7 @@ PnP FDO에서 `WdfDeviceInitSetDeviceType`은 지정한 32비트 유형을 WDM `
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | 사용자/시스템 매핑은 물리 페이지 캐시 속성과 각 권한을 유지하며 비페이지 풀 MDL은 안전 도우미로 원래 시스템 매핑을 재사용 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | 독립 또는 IRP 연결 비페이지 풀/사용자 MDL, 변경 가능한 체인 링크, 독립 잠금과 시스템 별칭. 할당량은 미지원 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 명시적인 세션 레지스트리, 핸들별 권한과 수명, 쿼리 버퍼 크기와 변경. 호스트 레지스트리에 접근하지 않음 |
+| `ExAllocatePool` | 기존 두 인수 인터페이스로 풀 유형 `0`, `1`, `512`의 데이터를 할당합니다. 정렬, 초기화되지 않은 바이트 모델, 크기/IRQL 검사를 공유하고 고갈 시 NULL을 반환합니다. `ExFreePool` 또는 태그가 0인 `ExFreePoolWithTag`로 해제하며 남은 할당은 커널 종속 상태로 유지됩니다. |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | 풀 유형 `0`, `1`, `512`의 데이터 할당. 크기/태그는 양수이며, 태그가 있는 해제는 일치해야 하고 주소를 재사용하지 않음 |
 | `IoCreateDevice`, `IoDeleteDevice` | 장치 유형 `0x22`, 특성 `0` 또는 `0x100`, 제한된 확장, ASCII `\Device\Name` 이름 |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | 동일 드라이버 연결. 이전 최상단을 반환하며 분리는 저장한 하위 장치를 받음. 위 토폴로지/수명 제한 적용 |
@@ -360,6 +362,8 @@ PnP FDO에서 `WdfDeviceInitSetDeviceType`은 지정한 32비트 유형을 WDM `
 | `IoMarkIrpPending` | 현재 유효한 IRP를 보류로 표시. WDM 매크로의 스택 제어 필드 쓰기도 지원. 디스패치는 `STATUS_PENDING`을 반환해야 함 |
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`로 완료 해제를 수행. 중단/재개를 지원하고 최종 경계에서만 IRP/MDL/버퍼를 폐기 |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | 호출당 최대 1 MiB의 제한된 게스트 버퍼 작업. 비중첩 복사 API는 겹치는 범위를 거부함 |
+
+`MmProbeAndLockPages`는 IRQL <= APC_LEVEL에서 입력 드라이버 이미지의 로더 소유 단일 연속 범위를 `KernelMode`로 잠글 수 있습니다. 이미지 페이지는 읽을 수 있어야 하며 물리 페이지 한도를 따릅니다. 모델의 이미지 저장소는 이미 전용 상주 메모리이므로 원래 이미지 뷰가 읽기 전용이어도 `IoWriteAccess`와 `IoModifyAccess`는 쓰기 가능한 MDL 별칭을 허용합니다. `IoReadAccess` 별칭은 읽기 전용 계약을 유지합니다. 원본 이미지 보호 속성은 바꾸지 않습니다. 이미지의 빈 영역과 무관한 매핑은 제외하며 사용자 주소 경계 아래의 이미지도 소유권으로 식별합니다. 잠금 해제와 설명자 해제가 필요합니다. MDL 호출은 기존 UNPACK 복원 의존성을 유지하므로 이미지 접근 성공만으로 이식 가능한 드라이버 복원을 입증하지 않습니다.
 
 `KernelDispatcher`는 세마포어의 `Count`, `Limit`, `Adjustment`를 부호 있는 32비트 `LONG`, 뮤텍스의 `Level`을 32비트 `ULONG`, `Wait`를 8비트 `BOOLEAN`으로 해석하며 [Windows x64 ABI](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170)에 따라 정의되지 않은 레지스터 상위 비트를 무시합니다. 유효한 비트 범위의 잘못된 값과 세마포어 오버플로는 객체 상태 변경 전에 거부합니다.
 
@@ -413,7 +417,7 @@ READ/WRITE/IOCTL 요청만 선택적 `cancel_after_100ns` 필드를 허용합니
 
 Direct IOCTL에서 `input`은 첫 번째 시스템 버퍼를 초기화하고, `direct_input`은 MDL이 설명하는 별도의 두 번째 버퍼를 초기화하며 `output_size`까지 0으로 채웁니다. `METHOD_IN_DIRECT`는 읽기 접근을 요구하지만 읽기 전용 시스템 매핑을 뜻하지는 않습니다. 두 방식 모두 읽기/쓰기가 가능한 시나리오 버퍼를 사용합니다. `MdlMappingNoWrite`는 매핑의 쓰기 권한을, `MdlMappingNoExecute`는 실행 권한을 제거합니다. 매핑 해제는 시스템 VA를 무효화하며, 다시 매핑해도 같은 잠긴 데이터가 유지됩니다. 완료되면 MDL과 매핑의 수명이 끝납니다. WDM 매크로가 사용하는 공개 MDL 필드는 모델링하지만, 프로세스 필드, 미구성 설명자의 PFN, 직접 만든 MDL, 아래 프로세스 소유 MDL 모델 밖의 사용자 매핑 및 원시 UserBuffer를 통한 직접 접근은 거부합니다. 길이가 0인 direct 버퍼의 MDL은 null입니다.
 
-`IoAllocateMdl`은 비어 있지 않고 주소가 넘치지 않는 최대 1 MiB 버퍼의 메타데이터를 할당하며, 버퍼를 검사하거나 잠그지 않습니다. `Irp`는 NULL 또는 유효한 모델 IRP입니다. 기본 MDL은 현재 드라이버 체인의 머리를 교체하며 분리된 MDL은 드라이버 소유로 남습니다. `SecondaryBuffer`는 끝에 추가하고 빈 체인에서는 머리가 됩니다. 요청이 소유한 원래 direct-I/O MDL은 계속 도달 가능해야 하며 드라이버가 교체하거나 해제할 수 없습니다. `ChargeQuota`는 FALSE여야 하며 아레나가 고갈되면 NULL을 반환합니다. `MmBuildMdlForNonPagedPool`은 전체 범위가 하나의 유효한 비페이지 풀 할당에 속하도록 요구합니다. 안전 도우미와 WDM 매크로는 원래 주소와 권한을 재사용하며, 새 쓰기/실행 금지 플래그도 기존 권한을 바꾸지 않습니다. 추가 시스템 매핑과 매핑 해제는 거부합니다. `IoFreeMdl`은 지정한 드라이버 MDL만 해제하며 링크를 끊거나 `Next`를 따라가지 않습니다. 사용자 MDL을 수동 해제하기 전에는 잠금을 풀어야 합니다. 풀 버퍼의 수명은 독립적이며 해제된 저장소를 다시 사용하지 않으면 두 해제 순서를 모두 지원합니다.
+`IoAllocateMdl`은 비어 있지 않고 주소가 넘치지 않는 버퍼의 메타데이터를 할당하며, 버퍼를 검사하거나 잠그지 않습니다. 모델의 기술자와 PFN 배열은 16비트 크기 필드에 들어가야 하며 페이지 내부 오프셋도 PFN 용량에 포함합니다. 기술자 저장 크기는 설명하는 버퍼 크기와 독립적입니다. `Irp`는 NULL 또는 유효한 모델 IRP입니다. 기본 MDL은 현재 드라이버 체인의 머리를 교체하며 분리된 MDL은 드라이버 소유로 남습니다. `SecondaryBuffer`는 끝에 추가하고 빈 체인에서는 머리가 됩니다. 요청이 소유한 원래 direct-I/O MDL은 계속 도달 가능해야 하며 드라이버가 교체하거나 해제할 수 없습니다. `ChargeQuota`는 FALSE여야 하며 아레나가 고갈되면 NULL을 반환합니다. `MmBuildMdlForNonPagedPool`은 전체 범위가 하나의 유효한 비페이지 풀 할당에 속하도록 요구합니다. 안전 도우미와 WDM 매크로는 원래 주소와 권한을 재사용하며, 새 쓰기/실행 금지 플래그도 기존 권한을 바꾸지 않습니다. 추가 시스템 매핑과 매핑 해제는 거부합니다. `IoFreeMdl`은 지정한 드라이버 MDL만 해제하며 링크를 끊거나 `Next`를 따라가지 않습니다. 사용자 MDL을 수동 해제하기 전에는 잠금을 풀어야 합니다. 풀 버퍼의 수명은 독립적이며 해제된 저장소를 다시 사용하지 않으면 두 해제 순서를 모두 지원합니다.
 
 드라이버는 `MDL.Next`와 `IRP.MdlAddress`를 수정하여 모델 MDL을 삽입하거나 분리할 수 있습니다. IRP 최종 완료는 변경 전에 현재 체인 전체를 검증하고, 연결된 사용자 MDL의 잠금과 별칭을 해제한 뒤 모든 연결 MDL을 해제합니다. 분리된 MDL과 풀 저장소는 드라이버 소유로 남습니다. 순환, 알 수 없거나 해제된 링크, 여러 활성 IRP가 공유하는 MDL, WDM 체인에 삽입한 WDF 전용 MDL은 명시적으로 실패합니다. 활성 DMA 및 디스패처 의존성이 있으면 조기 회수를 거부합니다. 나머지 모델 MDL 필드와 만들어진 PFN은 읽기 전용입니다. 프로세스 필드, 미구축 PFN, 수동 MDL은 지원하지 않습니다. 언로드 전 남은 모든 드라이버 MDL을 해제해야 합니다.
 
@@ -462,7 +466,7 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v86`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v95`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
 
 작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 
@@ -483,6 +487,8 @@ C SEH 범위는 끝 주소를 포함하지 않는 반개방 구간입니다. 유
 null이 가능한 `fault` 객체는 최초로 확정된 종료 백엔드 오류를 보존합니다. 재개 가능한 사용자 CPU 메모리 예외는 위 SEH 경로에서 처리합니다. `kind`, `pc`와 null이 가능한 `address`, `size`, `access`, `interrupt`는 매핑되지 않았거나 보호된 메모리, 잘못된 범위, 잘못된 명령어와 CPU 예외를 구분합니다. 주소는 16진 문자열, 크기와 인터럽트 벡터는 정수를 사용합니다. 관찰을 위한 읽기는 원래 오류를 대체할 수 없습니다. 오류가 발생한 백엔드는 재개할 수 없으며, 이 레코드로 이러한 백엔드 오류를 게스트 SEH에서 처리할 수는 없습니다.
 
 `instructions`는 허용된 게스트 명령어 실행 시도 수입니다. 실행 정책이 거부한 명령어는 세지 않지만, 허용된 후 CPU에서 오류가 난 명령어는 셉니다. 합성 API 디스패치와 반환 센티널은 이 카운터를 증가시키지 않습니다.
+
+선택적 시나리오 불리언 `trace_memory_writes`의 기본값은 true입니다. false이면 `writes`는 비어 있고 이벤트 예산에는 API 호출만 포함됩니다. 메모리 검증, 완료된 쓰기 관찰자, 명령어 및 시간 제한은 계속 적용됩니다. 보고서는 `configuration.trace_memory_writes`에 선택을 기록하며 C++에서는 `DriverOptions::TraceMemoryWrites`를 사용합니다.
 
 각 `writes` 항목의 `semantics: "attempted_guest_write"`는 스택 밖의 CPU 쓰기 시도를 기록한다는 뜻입니다. 이후 오류가 발생하거나 예산으로 중단되는 시도도 포함됩니다. 쓰기 완료를 보장하지 않으며 API 모델이 수행한 쓰기는 포함하지 않습니다. 장치와 드라이버 객체 스냅샷은 실행이 중단될 때 관찰한 상태를 나타냅니다.
 
@@ -572,3 +578,13 @@ checked Unicorn은 `MachineRunControl`을 사용하며 ARM64 유지보수, 게�
 `RunDeadline::invoke`는 중지되었거나 기한이 지난 WHP 실행을 호스트 호출 전에 거부하고, 취소 중에도 실제 호스트 결과를 보존하며, 빌린 중지 토큰을 해제하기 전에 인터럽트 콜백의 종료를 확인합니다. KVM과 WHP는 실행 임대를 보유한 호출 스레드에서 완전히 캡처된 비공개 상태를 검증한 다음 동시에 도착한 중지나 기한을 분류합니다. 실제 호스트·캡처 실패와 인증된 x64 CPU 예외가 우선합니다. 일반 성공 상태는 취소 확인이 끝날 때까지 비공개로 유지하며, 확인된 중단은 추측적 CPU/RAM 효과를 버리고 재시도를 허용합니다. 준비, 네이티브 실행, 캡처는 하나의 스텝 유예를 공유합니다. 협력적 취소를 제공하지만 엄격한 실제 시간 상한은 보장하지 않습니다.
 
 CPU0 명시적 선점, 가상 시계 의미와 현재 한계는 [드라이버 스케줄링](driver-scheduling.md)을 참조하세요.
+
+## HAL 내보내기와 성능 카운터
+
+`HAL.dll`은 모듈 이름의 대소문자를 구분하지 않는 별도 가져오기 공급자입니다. 정적 가져오기와 `MmGetSystemRoutineAddress`는 커널과 HAL에서 대소문자를 구분하는 정확한 내보내기 식별을 공유하며, 유효한 식별이 충돌하면 거부합니다. `kernel_exports`는 알려진 HAL 루틴을 HAL 네임스페이스에서 재정의하고, 나머지 명시적 선언은 커널에 속합니다. 알 수 없는 HAL 가져오기는 지연 트랩을 유지하며, 이름이 같다는 이유만으로 커널 API 의미를 얻지 않습니다.
+
+`KeQueryPerformanceCounter`는 공유 스케줄러 시간을 100 ns 단위로 반환하며 주파수는 초당 10,000,000회로 고정됩니다. 선택적 출력 포인터에는 8바이트 전체 쓰기 권한과 객체 수명 검사가 적용됩니다. 모든 유효한 x64 IRQL에서 호출할 수 있습니다. 협력 모드는 기존 스케줄링 경계에서만 시간을 진행하며 명령어 시계 모드는 설정된 타이밍을 유지합니다. 읽기 자체는 별도 시계를 만들거나 시간을 진행하지 않습니다. 이는 결정적 프로필이며 호스트 하드웨어 측정이 아닙니다. 독립적으로 컴파일된 런타임 픽스처는 네이티브 CPU 백엔드의 기본 및 재배치 주소에서 정적／동적 식별, 주파수와 단조성을 검사합니다.
+
+`RDTSC`와 `RDTSCP`는 `KeQueryPerformanceCounter`와 동일한 10 MHz 스케줄러 시계를 읽습니다. `RDTSCP`는 단일 모델 프로세서를 나타내는 0을 ECX에 반환합니다. EAX/EDX와 RDTSCP의 ECX 상위 32비트는 0이 되며 다른 레지스터와 플래그는 유지됩니다. 협력 실행에서는 읽기가 시간을 진행시키지 않습니다. 명시적 명령 스케줄링에서는 해당 명령을 계산한 뒤 시간을 읽으므로 시간 할당량 길이에 의존하지 않습니다. 오버플로는 레지스터 결과를 쓰기 전에 중단되며 명령 예산과 관찰자 중단도 적용됩니다. 호스트 TSC 주파수나 프로세서 식별 정보는 노출하지 않습니다. MSR 접근, RDPMC 및 그 밖의 모델링하지 않은 CPU 조회는 계속 지원하지 않습니다.
+
+`KernelModuleImages`는 `KernelExportRegistry`에서 읽을 수 있는 PE 헤더와 내보내기 테이블을 생성하며, 정적 가져오기·동적 조회·모듈 열거가 같은 주소를 공유합니다. 제공자 코드는 불투명하게 유지되고 목록은 호스트 커널이 아닌 모델 환경을 설명합니다. 두 출력은 쓰기 전에 풀 수명과 겹침까지 검사합니다. Nt 조회에는 알려진 커널 previous-mode가 필요하며 Zw 조회는 커널 계약을 사용합니다. 완전한 조회는 버퍼가 해제된 뒤에도 명시적인 복원 의존성을 유지하고 제공자 이미지 포인터도 빌린 상태로 추적합니다. `KernelExportTests.cpp`는 PE 파싱, 권한, ABI 필드, 쓰기 거부, 복원 의존성을 검사하며 자체 작성한 컴파일 런타임 픽스처는 CPU 백엔드에서 내보내기 테이블을 순회합니다.

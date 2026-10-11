@@ -1,5 +1,6 @@
 //===- NdOpEmulatorX86FPArith.cpp - Exact x86 SIMD FP arithmetic --------===//
 
+#include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 
@@ -264,7 +265,72 @@ bool exactPositiveSquareRoot(uint64_t Bits, uint16_t ElementSize,
   return true;
 }
 
+/// A software representative is opt-in, never exact concrete evidence.
+/// All operations use integer/APFloat semantics and preserve host FP state.
+std::optional<uint32_t> approximate12Lane(uint32_t Bits, bool Rsqrt,
+                                          bool AllowReference,
+                                          bool &Approximated) {
+  const auto Format = formatForSize(4);
+  const uint32_t Sign = Bits & 0x80000000U;
+  if (isNaN(Bits, Format))
+    return Bits | 0x00400000U;
+  if (isZero(Bits, Format) || isDenormal(Bits, Format))
+    return Sign | 0x7f800000U;
+  if (Rsqrt && Sign)
+    return 0xffc00000U;
+  if (isInfinity(Bits, Format))
+    return Sign;
+  if (!AllowReference)
+    return std::nullopt;
+  Approximated = true;
+  if (Rsqrt) {
+    ExactSqrtResult Root;
+    if (!exactPositiveSquareRoot(Bits, 4, llvm::APFloat::rmNearestTiesToEven,
+                                 Root))
+      return std::nullopt;
+    Bits = static_cast<uint32_t>(Root.Bits);
+  }
+  llvm::APFloat Input(llvm::APFloat::IEEEsingle(), llvm::APInt(32, Bits));
+  llvm::APFloat Value(llvm::APFloat::IEEEsingle(), llvm::APInt(32, 0x3f800000));
+  Value.divide(Input, llvm::APFloat::rmNearestTiesToEven);
+  const auto Result =
+      static_cast<uint32_t>(Value.bitcastToAPInt().getZExtValue());
+  // RCP flushes tiny results independently of FTZ. Its boundary interval is
+  // implementation dependent; this RN representative is an allowed member.
+  return isDenormal(Result, Format) ? Result & 0x80000000U : Result;
+}
+
 } // namespace
+
+std::optional<std::vector<uint8_t>>
+NdOpEmulator::loadX86FPStateMemory(const LowOp &Op, uint16_t Bytes,
+                                   unsigned Alignment) {
+  if ((Img.Arch == Arch::X64 && !X86LinearAddressBits) ||
+      (Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+      (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+       !MemoryAddressSpaceBases.contains(Op.MemoryAddressSpace)))
+    return std::nullopt;
+  const uint64_t Offset = Img.Arch == Arch::X86
+                              ? uint32_t(readOperand(Op.Inputs[1]))
+                              : readOperand(Op.Inputs[1]);
+  const auto Address = resolveMemoryAddress(Op, Offset);
+  if (!Address || !isX86CanonicalMemoryRange(*Address, Bytes) ||
+      (Alignment > 1 && (*Address % Alignment)))
+    return std::nullopt;
+  // A write-back cache supplies data, never memory-access permission.
+  for (unsigned Index = 0; Index < Bytes; ++Index) {
+    const uint64_t ByteAddress = *Address + Index;
+    const Segment *Mapped = Img.getSegmentFor(ByteAddress);
+    if (!Mapped || !Mapped->isReadable() || ByteAddress < Mapped->VA ||
+        ByteAddress - Mapped->VA >= Mapped->Size)
+      return std::nullopt;
+  }
+  const auto Loaded = loadMemoryBytes(*Address, Bytes);
+  if (Loaded && CollectLoads &&
+      static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+    LoadLog.push_back({*Address, Bytes});
+  return Loaded;
+}
 
 bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
   if (!MXCSRKnown)
@@ -346,7 +412,10 @@ bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
         // MIN/MAX select the second source for every unordered pair.  Intel
         // raises invalid even for a QNaN, but still forwards a second-source
         // SNaN bit-for-bit rather than quieting the selected result.
-        writeLane(Result, Offset, ElementSize, OriginalB);
+        const uint64_t Selected = DAZ && isDenormal(OriginalB, Format)
+                                      ? OriginalB & Format.Sign
+                                      : OriginalB;
+        writeLane(Result, Offset, ElementSize, Selected);
       } else {
         const uint64_t Selected =
             ANaN ? OriginalA : (BNaN ? OriginalB : OriginalC);
@@ -501,9 +570,13 @@ bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
           tinyBeforeDenormalization(Kind, Left, Right, Addend, APFRounding))
         Raised |= 1U << 4;
     }
-    if (isDenormal(Bits, Format) && !UnderflowMasked) {
+    // MIN/MAX select an input, including a denormal, without producing an
+    // arithmetic underflow. FTZ must not change the selected source bits.
+    const bool IsMinMax =
+        Kind == X86FPArithKind::Minimum || Kind == X86FPArithKind::Maximum;
+    if (!IsMinMax && isDenormal(Bits, Format) && !UnderflowMasked) {
       Raised |= 1U << 4;
-    } else if (FTZ && UnderflowMasked &&
+    } else if (!IsMinMax && FTZ && UnderflowMasked &&
                (isDenormal(Bits, Format) || (Raised & (1U << 4)))) {
       Bits &= Format.Sign;
       Raised |= (1U << 4) | (1U << 5);
@@ -544,6 +617,35 @@ bool NdOpEmulator::executeX86ScalarFPState(const LowOp &Op) {
     setMXCSR(static_cast<uint32_t>(State));
     return true;
   }
+  if (isX86FPApprox12Intrinsic(Id)) {
+    const bool Memory = Id == Intrinsic::X86FPApprox12MemoryState;
+    const unsigned Control = Op.Inputs[Memory ? 2 : 1].Offset;
+    std::vector<uint8_t> Source;
+    if (Memory) {
+      const auto Loaded = loadX86FPStateMemory(
+          Op, Op.Output.Size,
+          !x86FPApprox12IsScalar(Control) && !(Control & 4) ? 16 : 1);
+      if (!Loaded)
+        return false;
+      Source = *Loaded;
+    } else
+      Source = readOperandBytes(Op.Inputs[2]);
+    std::vector<uint8_t> Result(Op.Output.Size);
+    bool Approximated = false;
+    for (unsigned Offset = 0; Offset < Op.Output.Size; Offset += 4) {
+      const auto Value = approximate12Lane(
+          static_cast<uint32_t>(readLane(Source, Offset, 4)),
+          (Control & 1) != 0, X86Approx12ReferenceMode && !StrictMode,
+          Approximated);
+      if (!Value)
+        return false;
+      writeLane(Result, Offset, 4, *Value);
+    }
+    writeOutputBytes(Op.Output, Result);
+    if (Approximated)
+      ++Skips.ApproximatedOps;
+    return true;
+  }
   if (isX86FPConversionStateIntrinsic(Id)) {
     const unsigned SourceBytes = Op.Inputs[1].Size;
     const unsigned DestinationBytes =
@@ -580,6 +682,125 @@ bool NdOpEmulator::executeX86ScalarFPState(const LowOp &Op) {
     for (unsigned Index = 0; Index < 4; ++Index)
       Result[DestinationBytes + Index] =
           static_cast<uint8_t>(MXCSR >> (Index * 8));
+    writeOutputBytes(Op.Output, Result);
+    return true;
+  }
+  if (isX86FPArithStateIntrinsic(Id)) {
+    const bool Memory = Id == Intrinsic::X86FPArithMemoryState;
+    const unsigned Control = Op.Inputs[Memory ? 2 : 1].Offset;
+    const unsigned Bytes = Op.Output.Size - 4;
+    const bool Scalar = x86FPArithStateIsScalar(Control);
+    const bool Unary = x86FPArithStateIsUnary(Control);
+    const auto State = readOperand(Op.Inputs[4]);
+    if ((State & ~UINT64_C(0xffff)) != 0)
+      return false;
+    std::vector<uint8_t> Left = readOperandBytes(Op.Inputs[Memory ? 3 : 2]);
+    std::vector<uint8_t> Right;
+    if (Memory) {
+      if ((Img.Arch == Arch::X64 && !X86LinearAddressBits) ||
+          (Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+          (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+           !MemoryAddressSpaceBases.contains(Op.MemoryAddressSpace)))
+        return false;
+      setMXCSR(static_cast<uint32_t>(State));
+      const auto Source =
+          loadX86FPStateMemory(Op, Bytes, !Scalar && !(Control & 32) ? 16 : 1);
+      if (!Source)
+        return false;
+      Right = *Source;
+    } else
+      Right = readOperandBytes(Op.Inputs[3]);
+    // Adapt roles and control explicitly: the existing SQRT evaluator reads
+    // A, while this instruction-level contract consistently owns RHS access.
+    // New bit5 is VEX memory topology, never the old evaluator's SAE bit.
+    if (Unary)
+      std::swap(Left, Right);
+    const unsigned VectorBytes = std::max(Bytes, 16U);
+    Left.resize(VectorBytes, 0);
+    Right.resize(VectorBytes, 0);
+    NdOpEmulator Evaluation(Img);
+    Evaluation.setStrictMode(true);
+    Evaluation.setMXCSR(static_cast<uint32_t>(State));
+    Evaluation.writeOutputBytes(NdVar::tmp(1, VectorBytes), Left);
+    Evaluation.writeOutputBytes(NdVar::tmp(2, VectorBytes), Right);
+    LowOp Arithmetic;
+    Arithmetic.Opcode = NdOp::INTRINSIC;
+    Arithmetic.Output = NdVar::tmp(0, VectorBytes);
+    Arithmetic.addInput(NdVar::cst(unsigned(Intrinsic::X86FPArith), 2));
+    Arithmetic.addInput(NdVar::cst(
+        makeX86FPArithControl(static_cast<X86FPArithKind>(Control & 7),
+                              (Control & 8) != 0, Scalar, false,
+                              X86FPRounding::MXCSR),
+        2));
+    Arithmetic.addInput(NdVar::tmp(1, VectorBytes));
+    Arithmetic.addInput(NdVar::tmp(2, VectorBytes));
+    Arithmetic.addInput(NdVar::cst(0, VectorBytes));
+    const unsigned Lanes =
+        Scalar ? 1 : Bytes / x86FPArithStateElementBytes(Control);
+    Arithmetic.addInput(NdVar::cst((UINT64_C(1) << Lanes) - 1, 1));
+    const bool Complete = Evaluation.executeX86FPArith(Arithmetic);
+    setMXCSR(Evaluation.getMXCSR());
+    if (!Complete)
+      return false;
+    auto Result = Evaluation.readOperandBytes(Arithmetic.Output);
+    Result.resize(Bytes + 4);
+    for (unsigned Index = 0; Index < 4; ++Index)
+      Result[Bytes + Index] = uint8_t(MXCSR >> (Index * 8));
+    writeOutputBytes(Op.Output, Result);
+    return true;
+  }
+  if (isX86FPRoundStateIntrinsic(Id)) {
+    const bool Memory = Id == Intrinsic::X86FPRoundMemoryState;
+    const unsigned Bytes = Memory ? Op.Output.Size - 4 : Op.Inputs[2].Size;
+    const unsigned Control = Op.Inputs[Memory ? 2 : 1].Offset;
+    const auto State = readOperand(Op.Inputs[4]);
+    if ((State & ~UINT64_C(0xffff)) != 0)
+      return false;
+    NdOpEmulator Evaluation(Img);
+    Evaluation.setStrictMode(true);
+    Evaluation.setMXCSR(static_cast<uint32_t>(State));
+    std::vector<uint8_t> Source;
+    if (Memory) {
+      // An unknown architectural address context is a refusal, not a fault
+      // prediction based on the image or a permissive external memory reader.
+      if ((Img.Arch == Arch::X64 && !X86LinearAddressBits) ||
+          (Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+          (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+           !MemoryAddressSpaceBases.contains(Op.MemoryAddressSpace)))
+        return false;
+      // Match the native scope on memory faults: the authenticated incoming
+      // CSR is installed before the instruction accesses its source.
+      setMXCSR(static_cast<uint32_t>(State));
+      const auto Loaded = loadX86FPStateMemory(
+          Op, Bytes,
+          !x86FPRoundStateIsScalar(Control) && !(Control & 8) ? 16 : 1);
+      if (!Loaded)
+        return false;
+      Source = *Loaded;
+    } else
+      Source = readOperandBytes(Op.Inputs[2]);
+    const unsigned VectorBytes = std::max(Bytes, 16U);
+    Source.resize(VectorBytes, 0);
+    Evaluation.writeOutputBytes(NdVar::tmp(1, VectorBytes), Source);
+    LowOp Round;
+    Round.Opcode = NdOp::INTRINSIC;
+    Round.Output = NdVar::tmp(0, VectorBytes);
+    Round.addInput(
+        NdVar::cst(static_cast<unsigned>(Intrinsic::X86FPRoundTransform), 2));
+    // Memory bit 3 selects VEX packed addressing; it is not EVEX SAE.
+    Round.addInput(NdVar::cst(Control & 6, 1));
+    Round.addInput(NdVar::tmp(1, VectorBytes));
+    // Legacy/VEX ROUND ignores bits 7:4; they are not a RNDSCALE scale.
+    Round.addInput(NdVar::cst(Op.Inputs[3].Offset & 15, 1));
+    Round.addInput(NdVar::cst(0xff, 1));
+    const bool Complete = Evaluation.executeX86FPRoundTransform(Round);
+    setMXCSR(Evaluation.getMXCSR());
+    if (!Complete)
+      return false;
+    auto Result = Evaluation.readOperandBytes(Round.Output);
+    Result.resize(Bytes + 4);
+    for (unsigned Index = 0; Index < 4; ++Index)
+      Result[Bytes + Index] = static_cast<uint8_t>(MXCSR >> (Index * 8));
     writeOutputBytes(Op.Output, Result);
     return true;
   }

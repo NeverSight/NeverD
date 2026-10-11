@@ -3912,6 +3912,96 @@ TEST_F(SessionCAPITest, LibrarySourcePagesPreserveTextAndReloadEvidence) {
   EXPECT_EQ(Withdrawn.getString("text"), Before.getString("text"));
 }
 
+TEST_F(SessionCAPITest, PrepareFunctionKeepsAnalysisWithoutEmittingSource) {
+  const auto Path = write(
+      "prepare.elf", makeNativeELF(false, 0x400000,
+                                   std::string("\xb8\x09\x00\x00\x00\xc3", 6)));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  const auto Other = Entry + 6;
+  auto &State = *neverd::sdk::toSession(Session);
+  ASSERT_EQ(neverd_prepare_function(Session, Entry), 1)
+      << takeString(neverd_last_error(Session));
+  EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
+  EXPECT_TRUE(State.FunctionSources.empty());
+  EXPECT_FALSE(takeString(neverd_ir_low(Session, Entry)).empty());
+  EXPECT_FALSE(takeString(neverd_ir_med(Session, Entry)).empty());
+  EXPECT_FALSE(takeString(neverd_cfg_json(Session, Entry)).empty());
+  EXPECT_TRUE(State.FunctionSources.empty());
+
+  const std::string Original = takeString(neverd_decompile(Session, Entry));
+  ASSERT_FALSE(Original.empty()) << takeString(neverd_last_error(Session));
+  using Route = neverd::sdk::Session::SourceRoute;
+  auto *Kept = State.findFunctionSource(Entry, Route::PlainC);
+  ASSERT_NE(Kept, nullptr);
+  Kept->Text = "/* already emitted */\n";
+  ASSERT_EQ(neverd_prepare_function(Session, Entry), 1);
+  EXPECT_EQ(takeString(neverd_decompile(Session, Entry)),
+            "/* already emitted */\n");
+
+  ASSERT_EQ(neverd_prepare_function(Session, Other), 1)
+      << takeString(neverd_last_error(Session));
+  EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Other});
+  EXPECT_TRUE(State.FunctionSources.empty());
+  EXPECT_NE(State.findLowFunc(Other), nullptr);
+  ASSERT_EQ(neverd_prepare_function(Session, Entry), 1);
+  EXPECT_TRUE(State.FunctionSources.empty());
+  EXPECT_EQ(takeString(neverd_decompile(Session, Entry)), Original);
+
+  // A whole-image analysis remains whole; preparing a view must not replace
+  // it with a restricted pipeline or discard already computed IR.
+  neverd_session_restrict_function(Session, 0);
+  ASSERT_EQ(neverd_session_analyze(Session), 1);
+  ASSERT_TRUE(State.OnlyFunctionEntries.empty());
+  const auto *Whole = State.findLowFunc(Entry);
+  ASSERT_NE(Whole, nullptr);
+  ASSERT_EQ(neverd_prepare_function(Session, Entry), 1);
+  EXPECT_TRUE(State.OnlyFunctionEntries.empty());
+  EXPECT_EQ(State.findLowFunc(Entry), Whole);
+  EXPECT_TRUE(State.FunctionSources.empty());
+}
+
+TEST_F(SessionCAPITest, PrepareFunctionRejectsMissingInputAndUnknownARMMode) {
+  EXPECT_EQ(neverd_prepare_function(nullptr, 0), 0);
+  EXPECT_EQ(neverd_prepare_function(Session, 0), 0);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("no binary loaded"),
+            std::string::npos);
+  EXPECT_TRUE(neverd::sdk::toSession(Session)->OnlyFunctionEntries.empty());
+  const auto Path = write("prepare-mode.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  auto &State = *neverd::sdk::toSession(Session);
+  // The SDK must reject unknown instruction state before starting analysis.
+  State.Img.Arch = neverd::Arch::ARM;
+  State.Img.Mode = neverd::InstructionMode::MixedARMThumb;
+  State.Img.ARMModeRequiresLocalEvidence = true;
+  EXPECT_EQ(neverd_prepare_function(Session, Entry), 0);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("ARM/Thumb mode"),
+            std::string::npos);
+  EXPECT_FALSE(State.PipeRan);
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  ASSERT_EQ(neverd_prepare_function(Session, Entry), 1)
+      << takeString(neverd_last_error(Session));
+  EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+  EXPECT_TRUE(State.FunctionSources.empty());
+}
+
+TEST_F(SessionCAPITest, PrepareFunctionAcceptsAnEntryAtAddressZero) {
+  const auto Path =
+      write("prepare-zero.bin", std::string("\xb8\x07\x00\x00\x00\xc3", 6));
+  ASSERT_EQ(neverd_session_set_load_options(
+                Session, R"({"loader":"binary","processor":"x86_64",)"
+                         R"("base":"0x0"})"),
+            0);
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  ASSERT_EQ(neverd_prepare_function(Session, 0), 1)
+      << takeString(neverd_last_error(Session));
+  auto &State = *neverd::sdk::toSession(Session);
+  EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{0});
+  EXPECT_NE(State.findLowFunc(0), nullptr);
+  EXPECT_TRUE(State.FunctionSources.empty());
+}
+
 TEST_F(SessionCAPITest, SourcePagesReadTheFunctionsKeptEmission) {
   // A copy: renaming writes its sidecar beside the input.
   const auto Input = Directory / "kept-emission.o";
@@ -4245,23 +4335,42 @@ TEST_F(SessionCAPITest, TLSDescriptorCallsShowAsCallsThroughTheDescriptor) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "builds an x86-64 ELF shared object";
 #else
-  if (llvm::StringRef(NEVERD_RUNTIME_FIXTURE_COMPILER).empty())
-    GTEST_SKIP() << "needs a GNU-style host C compiler";
-  // Under the GNU2 dialect, code reaches a thread-local variable by calling
-  // the resolver the dynamic linker writes into its TLS descriptor.
-  const auto Source = write("tls.c", "__thread int counter;\n"
-                                     "int bump(int by) {\n"
-                                     "  counter += by;\n"
-                                     "  return counter;\n"
-                                     "}\n");
+  ASSERT_FALSE(llvm::StringRef(NEVERD_RUNTIME_FIXTURE_COMPILER).empty())
+      << "needs a GNU-style host compiler";
+  // Exercise the actual GNU TLS descriptor call without requiring the
+  // compiler driver's optional GNU2 C dialect. The descriptor resolver gives
+  // the counter's offset from the thread pointer; bump adds its int argument.
+  const auto Source = write("tls.s", R"(.text
+.globl bump
+.type bump,@function
+bump:
+  pushq %rdi
+  leaq counter@TLSDESC(%rip), %rax
+  call *counter@TLSCALL(%rax)
+  movq %rax, %rdx
+  popq %rdi
+  movl %fs:(%rdx), %eax
+  addl %edi, %eax
+  movl %eax, %fs:(%rdx)
+  retq
+.size bump,.-bump
+.section .tbss,"awT",@nobits
+.p2align 2
+.globl counter
+.type counter,@tls_object
+counter:
+  .zero 4
+.size counter,4
+.section .note.GNU-stack,"",@progbits
+)");
   const std::string Library = (Directory / "libtls.so").string();
   std::string Message;
-  if (llvm::sys::ExecuteAndWait(NEVERD_RUNTIME_FIXTURE_COMPILER,
-                                {NEVERD_RUNTIME_FIXTURE_COMPILER, "-O1",
-                                 "-fPIC", "-shared", "-mtls-dialect=gnu2",
-                                 Source, "-o", Library},
-                                std::nullopt, {}, 60, 0, &Message) != 0)
-    GTEST_SKIP() << "the compiler has no GNU2 TLS dialect: " << Message;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(NEVERD_RUNTIME_FIXTURE_COMPILER,
+                                      {NEVERD_RUNTIME_FIXTURE_COMPILER, "-fPIC",
+                                       "-shared", Source, "-o", Library},
+                                      std::nullopt, {}, 60, 0, &Message),
+            0)
+      << Message;
   ASSERT_EQ(neverd_session_load(Session, Library.c_str()), 1)
       << takeString(neverd_last_error(Session));
   const int Bump = neverd_func_find_by_name(Session, "bump");

@@ -81,7 +81,10 @@ enum class ExprKind : uint8_t {
   /// conversion.
   BitCast,
   /// One naturally laid-out source record, with one operand per direct field.
-  Record
+  Record,
+  /// A register supplied by the runtime at a nonordinary entry. Capture it
+  /// at EntryVA; it is not the register's value at the expression's use.
+  EntryRegister
 };
 
 struct HighExpr {
@@ -93,6 +96,11 @@ struct HighExpr {
 
   /// For Var
   MedVar Var = {};
+
+  /// For EntryRegister: the owning function and runtime entry. Var names the
+  /// physical input, not a local variable or an ordinary function parameter.
+  va_t EntryFunctionVA = InvalidVA;
+  va_t EntryVA = InvalidVA;
 
   /// For Const
   uint64_t ConstVal = 0;

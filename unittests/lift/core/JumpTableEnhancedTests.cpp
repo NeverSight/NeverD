@@ -30,6 +30,7 @@
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
 
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -3656,6 +3657,75 @@ TEST_F(JTE_X86_64, RecoversExactCOFFImageRelativeRVASwitch) {
                  "PE RVA slots cannot carry mixed relocation provenance");
 }
 
+TEST_F(JTE_X86_64, COFFBorrowedFrameReloadReachesVerifiedLLVM) {
+  constexpr neverd::va_t ImageBase = 0x140000000;
+  constexpr neverd::va_t Entry = ImageBase + 0x1000;
+  auto Make = [&](bool DifferentField) {
+    auto Image = makeCOFFImageRelativeRVASwitch();
+    auto &Text = Image.Segments.front();
+    Text.Size = 0x100 + 7 * sizeof(uint32_t);
+    Text.Data.assign(Text.Size, 0xcc);
+    Image.Sections.front().Size = Text.Size;
+    Image.Symbols.front().Size = 0xe0;
+    Image.KnownCodeRanges = {{Entry, Entry + 0xe0}};
+    // The finally-funclet shape in XCPT4: RBP borrows the parent's frame,
+    // the guard reloads its field, and the dispatch loads unsigned PE RVAs.
+    const uint8_t Code[] = {
+        0x55,                                     // push rbp
+        0x48, 0x83, 0xec, 0x20,                   // sub rsp,32
+        0x48, 0x89, 0xd5,                         // mov rbp,rdx
+        0x83, 0x7d, 0x24, 0x05,                   // cmp dword [rbp+36],5
+        0x0f, 0x87, 0xbe, 0,    0,    0,          // ja default (+0xd0)
+        0x48, 0x63, 0x45, 0x24,                   // movsxd rax,[rbp+36]
+        0x48, 0x8d, 0x0d, 0xe3, 0xef, 0xff,       // lea rcx,image base
+        0xff, 0x8b, 0x84, 0x81, 0,    0x11, 0, 0, // mov eax,[rcx+rax*4+0x1100]
+        0x48, 0x01, 0xc8,                         // add rax,rcx
+        0xff, 0xe0};                              // jmp rax
+    std::copy(std::begin(Code), std::end(Code), Text.Data.begin());
+    if (DifferentField)
+      Text.Data[21] = 40;
+    for (uint8_t I = 0; I != 8; ++I) {
+      const size_t Offset = 0x60 + I * 16;
+      const uint8_t Return[] = {0xb8, I,    0,    0,    0,    // mov eax,I
+                                0x48, 0x83, 0xc4, 0x20, 0x5d, // restore frame
+                                0xc3};
+      std::copy(std::begin(Return), std::end(Return),
+                Text.Data.begin() + Offset);
+      if (I < 7) {
+        const uint32_t RVA = 0x1000 + Offset;
+        for (unsigned Byte = 0; Byte != 4; ++Byte)
+          Text.Data[0x100 + I * 4 + Byte] =
+              static_cast<uint8_t>(RVA >> (Byte * 8));
+      }
+    }
+    return Image;
+  };
+  for (bool DifferentField : {false, true}) {
+    SCOPED_TRACE(DifferentField);
+    auto Image = Make(DifferentField);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low = Builder.build(Image, Decoder, Entry, "funclet");
+    if (DifferentField) {
+      EXPECT_TRUE(Low.JumpTables.empty());
+      continue;
+    }
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    EXPECT_TRUE(Low.JumpTables.front().IsPEImageRelativeRVA);
+    EXPECT_EQ(
+        Low.JumpTables.front().Targets,
+        (std::vector<neverd::va_t>{Entry + 0x60, Entry + 0x70, Entry + 0x80,
+                                   Entry + 0x90, Entry + 0xa0, Entry + 0xb0}));
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    auto Run = runPipelineWithEvidenceBudget(
+        Image, neverd::limits::kMaxJumpTableEvidenceWork);
+    ASSERT_TRUE(Run.Result.Error.empty()) << Run.Result.Error;
+    ASSERT_NE(Run.Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Run.Result.LlvmModule, &llvm::errs()));
+  }
+}
+
 namespace {
 enum class ColdTargetOwner { None, FramelessLeaf, FramedLeaf, ChainedFragment };
 
@@ -4321,6 +4391,91 @@ TEST_F(JTE_X86_64, TwoTableSelectorSharesCandidateGraphBudget) {
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
+TEST_F(JTE_X86_64, TwoTableLinearCopiesUseTheSharedWorkBudget) {
+  auto ImageOrErr = neverd::loadBinary(selectorOccurrenceX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  for (const char *Name : {"jt_selector_twotable_address_copies",
+                           "jt_selector_twotable_base_copies"}) {
+    SCOPED_TRACE(Name);
+    const auto *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const auto Low = Builder.build(Image, Decoder, Function->Addr, Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    EXPECT_EQ(Low.JumpTables.front().Targets.size(), 8u);
+    EXPECT_EQ(Low.JumpTables.front().CaseLabels,
+              (std::vector<int64_t>{0, 8, 16, 24, 32, 40, 48, 56}));
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+
+    neverd::CFGBuilder ExhaustedBuilder;
+    ExhaustedBuilder.setMaskFixedPointEvidenceBudgetForTesting(0);
+    const auto Exhausted =
+        ExhaustedBuilder.build(Image, Decoder, Function->Addr, Name);
+    EXPECT_TRUE(Exhausted.JumpTables.empty());
+    EXPECT_TRUE(lowFunctionHasOpcode(Exhausted, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(lowFunctionHasOpcode(Exhausted, neverd::NdOp::INDIR_CALL));
+    EXPECT_FALSE(Exhausted.UnsafeIndirectBranchAddresses.empty());
+  }
+
+  const auto *Clobbered =
+      Image.findSymbol("jt_selector_twotable_address_clobber");
+  ASSERT_NE(Clobbered, nullptr);
+  neverd::CFGBuilder ClobberedBuilder;
+  const auto ClobberedLow = ClobberedBuilder.build(
+      Image, Decoder, Clobbered->Addr, Clobbered->Name);
+  EXPECT_TRUE(ClobberedLow.JumpTables.empty());
+}
+
+TEST_F(JTE_X86_64, TwoTableLinearCopiesExecuteTheOriginalSelection) {
+  for (const char *Name : {"jt_selector_twotable_address_copies",
+                           "jt_selector_twotable_base_copies"}) {
+    for (unsigned Route : {0u, 1u, 2u}) {
+      SCOPED_TRACE(std::string(Name) + ":" + std::to_string(Route));
+      const auto File = tmpFile("copy-selection.c");
+      std::vector<std::string> Args = {
+          "decompile", selectorOccurrenceX64Obj().string(),
+          "--func", Name, "-o", File.string()};
+      if (Route != 0)
+        Args.push_back("--llvm");
+      if (Route == 2)
+        Args.push_back("--no-opt");
+      const auto Recovered = exec(ndBin(), Args);
+      ASSERT_TRUE(Recovered.ok()) << Recovered.err;
+      std::ifstream Input(File);
+      const std::string Source((std::istreambuf_iterator<char>(Input)), {});
+      ASSERT_EQ(Source.find("unresolved indirect branch"), std::string::npos);
+      std::ofstream Out(File, std::ios::app);
+      Out << "\nint main(void) {\n"
+             "const uint32_t selectors[] = {0, 1, 2, UINT32_MAX};\n"
+             "for (uint32_t x = 0; x < 256; ++x)\n"
+             "for (unsigned c = 0; c < 4; ++c)\n"
+             "if ("
+          << Name
+          << "(x, selectors[c]) != "
+             "((selectors[c] ? 7200 : 7100) + (x & 3))) return 1;\n"
+             "return 0; }\n";
+      Out.close();
+      for (const char *Optimization : {"-O0", "-O2"}) {
+        SCOPED_TRACE(Optimization);
+        const auto Exe = tmpFile(std::string("copy-selection") +
+                                neverd::test::executableSuffix());
+        const auto Built = exec(
+            NEVERD_TEST_CLANG,
+            {"-std=c11", Optimization, "-fsanitize=undefined",
+             "-fsanitize-trap=undefined", File.string(), "-o", Exe.string()});
+        ASSERT_TRUE(Built.ok()) << Built.err;
+        const auto Run = exec(Exe.string(), {});
+        EXPECT_TRUE(Run.ok()) << Run.err;
+      }
+    }
+  }
+}
+
 TEST_F(JTE_X86_64, TwoTableSelectorBudgetExhaustionFailsClosed) {
   auto ImageOrErr = neverd::loadBinary(selectorOccurrenceX64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -4665,6 +4820,114 @@ static void verifyFieldOffsetReloads(const fs::path &Object,
       EXPECT_TRUE(Low.JumpTables.empty());
     }
   }
+}
+
+// The real MinGW scanner guards AL/DL after a full-register calculation.
+// Long independently authored arithmetic makes expansion of that calculation
+// incomplete: only the exact reaching lane is needed to prove this switch.
+static void verifyNarrowGuardLanes(const fs::path &Object,
+                                   llvm::ArrayRef<const char *> Names,
+                                   bool ExpectedRecovery) {
+  auto ImageOrErr = neverd::loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  for (const char *Name : Names) {
+    SCOPED_TRACE(Name);
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    if (!ExpectedRecovery) {
+      EXPECT_TRUE(Low.JumpTables.empty());
+      continue;
+    }
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    EXPECT_EQ(Low.JumpTables.front().Targets.size(), 3u);
+    EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+              (std::vector<uint32_t>{0, 1, 2}));
+
+    llvm::LLVMContext Context;
+    neverd::PipelineOptions Options;
+    Options.LiftMode = true;
+    Options.NoOpt = true;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries.insert(Function->Addr);
+    auto Result = neverd::Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Error.empty()) << Result.Error;
+    ASSERT_NE(Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    std::string IR;
+    llvm::raw_string_ostream Stream(IR);
+    Result.LlvmModule->print(Stream, nullptr);
+    const std::string Body = llvmFunctionBody(IR, Name);
+    ASSERT_FALSE(Body.empty());
+    EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
+    EXPECT_TRUE(llvmHasSwitchCase(Body, 2)) << Body;
+    EXPECT_FALSE(llvmHasSwitchCase(Body, 3)) << Body;
+
+    neverd::CFGBuilder Exhausted;
+    Exhausted.setMaskFixedPointEvidenceBudgetForTesting(0);
+    EXPECT_TRUE(Exhausted.build(Image, Decoder, Function->Addr, Function->Name)
+                    .JumpTables.empty());
+  }
+}
+
+TEST_F(JTE_X86_32, NarrowGuardRetainsRootsWhenEscapeAuditIsIncomplete) {
+  const auto Object =
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_i386.o";
+  auto ImageOrErr = neverd::loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  auto &Image = *ImageOrErr;
+  auto *Function = Image.findSymbol("narrow_guard_scalar_return");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  auto Low = Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 3u);
+  EXPECT_TRUE(Low.JumpTables.front().SuppressibleRelocationSlots.empty());
+  for (auto Target : Low.JumpTables.front().Targets)
+    EXPECT_TRUE(Low.OrdinaryModuleAnalysisRoots.count(Target));
+}
+
+TEST_F(JTE_X86_32, NarrowGuardUsesTheExactFullRegisterDefinition) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_i386.o",
+                         {"narrow_guard_low", "narrow_guard_high",
+                          "narrow_guard_word", "narrow_guard_disjoint_write"},
+                         true);
+}
+
+TEST_F(JTE_X86_32, NarrowGuardRejectsChangedOrUnboundedLanes) {
+  verifyNarrowGuardLanes(
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_i386.o",
+      {"narrow_guard_changed_low", "narrow_guard_changed_full",
+       "narrow_guard_other_lane", "narrow_guard_unextended",
+       "narrow_guard_call"},
+      false);
+}
+
+TEST_F(JTE_X86_64, NarrowGuardUsesTheExactFullRegisterDefinition) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_x64.o",
+                         {"narrow_guard_low", "narrow_guard_high",
+                          "narrow_guard_word", "narrow_guard_disjoint_write"},
+                         true);
+}
+
+TEST_F(JTE_X86_64, NarrowGuardRejectsChangedOrUnboundedLanes) {
+  verifyNarrowGuardLanes(
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_x64.o",
+      {"narrow_guard_changed_low", "narrow_guard_changed_full",
+       "narrow_guard_other_lane", "narrow_guard_unextended",
+       "narrow_guard_call"},
+      false);
 }
 
 TEST_F(JTE_X86_64, FieldOffsetReloadSharesItsGuard) {
@@ -5552,6 +5815,57 @@ TEST_F(JTE_X86_64, GuardEvidenceStopsAtMatchedIndexBeforeWideAncestor) {
   EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64, GuardEvidenceSeparatesValueHistoryFromSyntaxDepth) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  for (const auto &[Name, ExpectedTables] :
+       {std::pair{"jt_identity_guard_long_predecessors", 1u},
+        std::pair{"jt_identity_guard_unrelated_predecessors", 0u},
+        std::pair{"jt_identity_guard_changed_low_byte", 0u},
+        std::pair{"jt_identity_guard_depth_budget", 0u}}) {
+    SCOPED_TRACE(Name);
+    const auto *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low = Builder.build(Image, Decoder, Function->Addr, Name);
+    ASSERT_TRUE(Low.hasCompleteInstructionLift());
+    if (std::string_view(Name) != "jt_identity_guard_depth_budget")
+      EXPECT_GE(Low.Blocks.size(), 80u);
+    ASSERT_EQ(Low.JumpTables.size(), ExpectedTables);
+    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    if (ExpectedTables) {
+      EXPECT_EQ(Low.JumpTables.front().Targets.size(), 128u);
+      std::set<uint64_t> CaseValues;
+      for (const auto Target : Low.JumpTables.front().Targets) {
+        const auto Block = std::find_if(Low.Blocks.begin(), Low.Blocks.end(),
+                                        [&](const auto &Candidate) {
+                                          return Candidate.StartAddr == Target;
+                                        });
+        ASSERT_NE(Block, Low.Blocks.end());
+        EXPECT_TRUE(std::any_of(
+            Block->Ops.begin(), Block->Ops.end(),
+            [](const auto &Op) { return Op.Opcode == neverd::NdOp::RETURN; }));
+        std::set<uint64_t> TargetValues;
+        for (const auto &Op : Block->Ops)
+          for (unsigned I = 0; I < Op.NumInputs; ++I)
+            if (Op.Inputs[I].isConst() && Op.Inputs[I].Size == 4 &&
+                Op.Inputs[I].Offset >= 5100 && Op.Inputs[I].Offset <= 5103)
+              TargetValues.insert(Op.Inputs[I].Offset);
+        ASSERT_EQ(TargetValues.size(), 1u);
+        CaseValues.insert(*TargetValues.begin());
+      }
+      EXPECT_EQ(CaseValues, (std::set<uint64_t>{5100, 5101, 5102, 5103}));
+      EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+      EXPECT_TRUE(Low.TruncatedPathAddresses.empty());
+    }
+  }
 }
 
 TEST_F(JTE_X86_64, GuardEvidenceDepthBudgetFailsClosed) {
@@ -9067,6 +9381,20 @@ TEST_F(JTE_AArch64, NestedSwitchLifts) {
   auto R = liftToHighIR(jteA64Obj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
   EXPECT_FALSE(R.out.empty());
+}
+
+TEST_F(JTE_AArch64, NarrowGuardUsesTheExactFullRegisterDefinition) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_a64.o",
+                         {"narrow_guard_low"}, true);
+}
+
+TEST_F(JTE_AArch64, NarrowGuardRejectsChangedOrUnboundedLanes) {
+  verifyNarrowGuardLanes(
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_a64.o",
+      {"narrow_guard_changed_low", "narrow_guard_changed_full",
+       "narrow_guard_unextended"},
+      false);
 }
 
 TEST_F(JTE_AArch64, FieldOffsetReloadSharesItsGuard) {

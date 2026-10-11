@@ -39,6 +39,7 @@ protected:
   }
   void rejectsEnvironment(llvm::ArrayRef<uint8_t> Bytes,
                           llvm::StringRef Mnemonic) {
+    SCOPED_TRACE(Mnemonic.str());
     auto Error = Policy.validate(Bytes, 0x1000);
     ASSERT_TRUE(static_cast<bool>(Error));
     EXPECT_EQ(llvm::toString(std::move(Error)),
@@ -239,6 +240,32 @@ TEST_F(DriverExecutionPolicy, KeepsOrdinaryXLATAndIgnoredSegmentPrefixes) {
   accepts({0x3e, 0xd7});
   accepts({0x65, 0x90});             // NOP does not access GS memory.
   accepts({0x64, 0x48, 0x89, 0xd8}); // Register MOV ignores the prefix.
+}
+
+TEST_F(DriverExecutionPolicy, TimestampReadsRequireModeledEnvironmentActions) {
+  using Kind = WindowsX64ExecutionPolicy::Action::Kind;
+  for (const auto &[Bytes, Expected] :
+       {std::pair{std::vector<uint8_t>{0x0f, 0x31}, Kind::ReadTimestamp},
+        std::pair{std::vector<uint8_t>{0x0f, 0x01, 0xf9},
+                  Kind::ReadTimestampAndProcessor},
+        std::pair{std::vector<uint8_t>{0x65, 0x66, 0x0f, 0x31},
+                  Kind::ReadTimestamp}}) {
+    auto Action = Policy.inspect(Bytes, 0x1000);
+    ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+    ASSERT_TRUE(*Action);
+    EXPECT_EQ((**Action).Source, Expected);
+    EXPECT_FALSE((**Action).Destination);
+  }
+  for (const auto &Bytes : {std::vector<uint8_t>{0xf0, 0x0f, 0x31},
+                            std::vector<uint8_t>{0xf0, 0x0f, 0x01, 0xf9},
+                            std::vector<uint8_t>{0x0f, 0x31, 0x90}}) {
+    auto Action = Policy.inspect(Bytes, 0x1000);
+    ASSERT_FALSE(bool(Action));
+    llvm::consumeError(Action.takeError());
+  }
+  rejectsEnvironment({0x0f, 0x32}, "rdmsr");
+  rejectsEnvironment({0x0f, 0x30}, "wrmsr");
+  rejectsEnvironment({0x0f, 0x33}, "rdpmc");
 }
 
 TEST_F(DriverExecutionPolicy, RejectsExplicitAndStringThreadMemory) {

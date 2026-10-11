@@ -296,7 +296,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
           MF.ReturnType && MF.ReturnType->Size ? MF.ReturnType->Size : 8;
       const bool ReturnsScalarFP =
           MF.ReturnType && MF.ReturnType->Kind == NdTypeKind::Float &&
-          MF.MultiReturn.empty() && modelsScalarFPReturnInVectorReg(ReturnSize);
+          MF.MultiReturn.empty() && !MF.FPReturnViaX87 &&
+          modelsScalarFPReturnInVectorReg(ReturnSize);
       CalleeFPReturnSize[MF.Entry] = ReturnsScalarFP ? ReturnSize : 0;
     }
   }
@@ -377,7 +378,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
             }
           }
           if (G->ReturnType && G->ReturnType->Kind == NdTypeKind::Float &&
-              G->MultiReturn.empty())
+              G->MultiReturn.empty() && !G->FPReturnViaX87)
             FpRetSize = G->ReturnType->Size ? G->ReturnType->Size : 8;
         }
         if (IntArgs <= 0 && FpArgs <= 0 && FpRetSize == 0)
@@ -427,7 +428,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         // Inherit a scalar FP return so the function and its callers treat the
         // result as floating-point; recoverCallAbi rewires the tail call's
         // result register to the FP return register.
-        if (FpRetSize) {
+        if (FpRetSize && !MF.FPReturnViaX87) {
           MF.ReturnType = NdType::makeFloat(FpRetSize);
           CalleeFPReturnSize[MF.Entry] =
               !(TRI.WideFloatsReturnInX87 && FpRetSize > 8) &&

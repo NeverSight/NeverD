@@ -8,6 +8,8 @@
 
 #include "UnpackInternal.h"
 
+#include "neverd/emulation/ProcessObserver.h"
+
 #include <array>
 #include <map>
 #include <tuple>
@@ -64,6 +66,8 @@ struct Capture {
   /// Live main-thread TLS outside the image, when the profile can capture it.
   std::optional<std::vector<uint8_t>> ThreadLocal;
   UnpackRuntimeState RuntimeState;
+  std::shared_ptr<const emulation::ProcessRuntimeState> OwnedState;
+  std::vector<emulation::ProcessModuleView> Modules;
   /// Entry addresses of every export the guest loader can bind.
   std::map<uint64_t, ExportBinding> Exports;
 };
@@ -103,6 +107,7 @@ struct RebuiltImage {
   uint64_t RepairedImportLoads = 0;
   uint64_t ConflictingTailCalls = 0;
   uint64_t MaterializedTLSCallbacks = 0;
+  uint64_t LoaderEntryRVA = 0;
 };
 } // namespace neverd::unpack
 #endif

@@ -17,6 +17,8 @@ add_neverd_component_library(NeverDIRHigh
   lower/NdOpLowering.cpp
   lower/NdOpReturnLowering.cpp
   lower/X86RegistrationReturn.cpp
+  lower/X86RegistrationFrame.cpp
+  lower/X86RegistrationCall.cpp
   lower/NdOpSwitchRecovery.cpp
   pass/HighCleanup.cpp
   pass/HighCopyProp.cpp
@@ -35,6 +37,8 @@ add_neverd_component_library(NeverDIRHigh
   structure/HighCFSimplify.cpp
   structure/HighCFSimplifyIfElse.cpp
   structure/HighEHStructurer.cpp
+  structure/X86RegistrationTry.cpp
+  structure/X86RegistrationNestedTry.cpp
   structure/HighIfChainToSwitch.cpp
   structure/HighLoopRecovery.cpp
 

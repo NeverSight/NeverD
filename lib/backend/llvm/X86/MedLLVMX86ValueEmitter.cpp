@@ -561,6 +561,30 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     const auto Shape = x86FPStateMedShape(Op, TargetArch);
     if (!x86FPStateShapeIsValid(IC, Shape))
       llvm::report_fatal_error("invalid x86 numerical/state contract");
+    if (isX86FPApprox12Intrinsic(IC)) {
+      const bool Memory = IC == I::X86FPApprox12MemoryState;
+      const unsigned Layout = x86FPStateHelperLayout(IC, Shape);
+      auto *Type = x86FPApprox12LLVMType(*Ctx, Layout);
+      auto *Source = getVar(Op.Inputs[Memory ? 1 : 2], Builder);
+      if (Memory) {
+        auto *Integer = Builder.getInt64Ty();
+        Source = Source->getType()->isPointerTy()
+                     ? Builder.CreatePtrToInt(Source, Integer)
+                     : Builder.CreateZExtOrTrunc(Source, Integer);
+        Source = Builder.CreateIntToPtr(
+            Source, llvm::PointerType::get(*Ctx, llvmX86MemoryAddressSpace(
+                                                     Op.MemoryAddressSpace)));
+      } else
+        Source = Builder.CreateBitCast(Source, Type);
+      auto *Fn = llvm::FunctionType::get(Type, {Source->getType()}, false);
+      auto *Asm = llvm::InlineAsm::get(Fn, x86FPApprox12Asm(Layout, Memory),
+                                       Memory ? X86FPApprox12MemoryConstraints
+                                              : X86FPApprox12ValueConstraints,
+                                       true);
+      auto *Result = Builder.CreateCall(Asm, {Source}, "fp_approx12");
+      Result->setMetadata(X86FPStateAsmMetadata, llvm::MDNode::get(*Ctx, {}));
+      return Builder.CreateBitCast(Result, sizeToType(Op.Output.Size));
+    }
     auto *I32 = llvm::Type::getInt32Ty(*Ctx);
     auto *Ptr = llvm::PointerType::getUnqual(*Ctx);
     llvm::IRBuilder<> EntryBuilder(&CurFunc->getEntryBlock(),
@@ -572,7 +596,8 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     const auto Raw = [&](unsigned Index, unsigned Size) {
       auto *Value = getVar(Op.Inputs[Index], Builder);
       auto *Ty = llvm::Type::getIntNTy(*Ctx, Size * 8);
-      if (Value->getType()->isFloatingPointTy())
+      if (Value->getType()->isFloatingPointTy() ||
+          Value->getType()->isVectorTy())
         Value = Builder.CreateBitCast(Value, Ty);
       else
         Value = Builder.CreateZExtOrTrunc(Value, Ty);
@@ -610,6 +635,85 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
           Builder.CreateZExt(Result, OutTy),
           Builder.CreateShl(Builder.CreateZExt(Status, OutTy),
                             DestinationBytes * 8));
+    }
+    if (isX86FPRoundStateIntrinsic(IC)) {
+      const bool Memory = IC == I::X86FPRoundMemoryState;
+      const unsigned Bytes = Memory ? Shape.OutputSize - 4 : Shape.RightSize;
+      const unsigned Layout = x86FPStateHelperLayout(IC, Shape);
+      auto *Type = x86FPRoundStateLLVMType(*Ctx, Layout);
+      llvm::Value *Source;
+      if (Memory) {
+        auto *Address = getVar(Op.Inputs[1], Builder);
+        auto *I64 = llvm::Type::getInt64Ty(*Ctx);
+        if (Address->getType()->isPointerTy())
+          Address = Builder.CreatePtrToInt(Address, I64);
+        else
+          Address = Builder.CreateZExtOrTrunc(Address, I64);
+        Source = Builder.CreateIntToPtr(
+            Address, llvm::PointerType::get(*Ctx, llvmX86MemoryAddressSpace(
+                                                      Op.MemoryAddressSpace)));
+      } else
+        Source = Builder.CreateBitCast(Raw(2, Bytes), Type);
+      Builder.CreateStore(Raw(4, 4), State);
+      auto *Fn = llvm::FunctionType::get(Type, {Source->getType(), Ptr}, false);
+      auto *Asm = llvm::InlineAsm::get(Fn,
+                                       Memory ? x86FPRoundMemoryStateAsm(Layout)
+                                              : x86FPRoundStateAsm(Layout),
+                                       Memory ? X86FPStateRoundMemoryConstraints
+                                              : X86FPStateRoundConstraints,
+                                       true);
+      auto *Result = Builder.CreateCall(Asm, {Source, State}, "fp_round");
+      Mark(Result);
+      auto *Bits =
+          Builder.CreateBitCast(Result, llvm::Type::getIntNTy(*Ctx, Bytes * 8));
+      auto *OutTy = sizeToType(Op.Output.Size);
+      auto *Status = Builder.CreateLoad(I32, State, "fp_state");
+      return Builder.CreateOr(
+          Builder.CreateZExt(Bits, OutTy),
+          Builder.CreateShl(Builder.CreateZExt(Status, OutTy), Bytes * 8));
+    }
+    if (isX86FPArithStateIntrinsic(IC)) {
+      const unsigned Layout = x86FPStateHelperLayout(IC, Shape);
+      const unsigned Control = x86FPRoundStateControl(Layout);
+      const unsigned Bytes = x86FPStateSourceBytes(Layout);
+      const bool Memory = IC == I::X86FPArithMemoryState;
+      const bool Unary = x86FPArithStateIsUnary(Control);
+      auto *Type = x86FPArithStateLLVMType(*Ctx, Layout);
+      llvm::Value *RHS;
+      if (Memory) {
+        auto *Address = getVar(Op.Inputs[1], Builder);
+        auto *I64 = Builder.getInt64Ty();
+        Address = Address->getType()->isPointerTy()
+                      ? Builder.CreatePtrToInt(Address, I64)
+                      : Builder.CreateZExtOrTrunc(Address, I64);
+        RHS = Builder.CreateIntToPtr(
+            Address, llvm::PointerType::get(*Ctx, llvmX86MemoryAddressSpace(
+                                                      Op.MemoryAddressSpace)));
+      } else
+        RHS = Builder.CreateBitCast(Raw(3, Bytes), Type);
+      llvm::SmallVector<llvm::Value *, 3> Args;
+      llvm::SmallVector<llvm::Type *, 3> Types;
+      if (!Unary) {
+        auto *LHS = Builder.CreateBitCast(Raw(Memory ? 3 : 2, Bytes), Type);
+        Args.push_back(LHS);
+        Types.push_back(Type);
+      }
+      Builder.CreateStore(Raw(4, 4), State);
+      Args.append({RHS, State});
+      Types.append({RHS->getType(), Ptr});
+      auto *Fn = llvm::FunctionType::get(Type, Types, false);
+      auto *Asm = llvm::InlineAsm::get(
+          Fn, x86FPArithStateAsm(Layout, Memory),
+          x86FPArithStateConstraints(Layout, Memory), true);
+      auto *Result = Builder.CreateCall(Asm, Args, "fp_arithmetic");
+      Mark(Result);
+      auto *Bits =
+          Builder.CreateBitCast(Result, llvm::Type::getIntNTy(*Ctx, Bytes * 8));
+      auto *OutTy = sizeToType(Op.Output.Size);
+      auto *Status = Builder.CreateLoad(I32, State, "fp_state");
+      return Builder.CreateOr(
+          Builder.CreateZExt(Bits, OutTy),
+          Builder.CreateShl(Builder.CreateZExt(Status, OutTy), Bytes * 8));
     }
     const unsigned Bytes = Op.Inputs[1].Size;
     auto *Scalar = Bytes == 4 ? llvm::Type::getFloatTy(*Ctx)

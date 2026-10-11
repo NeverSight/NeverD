@@ -21,11 +21,10 @@ struct RegistrationCxxContinuation;
 
 /// Materialize the runtime's SavedESP writeback in the recovered source
 /// frame. LLVM separately owns the generated physical registration frame.
-void emitRegistrationCxxContinuation(llvm::ReturnInst &Return,
-                                     llvm::AllocaInst &Frame, uint64_t EntrySP,
-                                     llvm::CatchPadInst &Pad,
-                                     llvm::BasicBlock &Target, va_t FunctionVA,
-                                     const RegistrationCxxContinuation &Resume);
+void emitRegistrationCxxContinuation(
+    llvm::ReturnInst &Return, llvm::AllocaInst &Frame, uint64_t Establisher,
+    int32_t SavedStackSlot, llvm::CatchPadInst &Pad, llvm::BasicBlock &Target,
+    va_t FunctionVA, const RegistrationCxxContinuation &Resume);
 } // namespace neverd
 
 #endif // NEVERD_MEDLLVMREGISTRATIONCXXCONTINUATION_H

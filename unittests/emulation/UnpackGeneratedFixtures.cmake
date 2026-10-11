@@ -64,7 +64,7 @@ foreach(_arch X64 AArch64)
       "${_dir}/program.obj" "${_dir}/kernel.lib" "${_dir}/user.lib"
       "/out:${_dir}/${_generated_ProgramFile}"
     DEPENDS fixtures/unpack_generated.c fixtures/unpack_pointer_state.h
-      fixtures/unpack_dynamic_tls_state.h
+      fixtures/unpack_dynamic_tls_state.h fixtures/unpack_runtime_state.h
       "${_generated_cases}"
       "${_generated_dir}/KERNEL.def" "${_generated_dir}/USER.def"
     VERBATIM)

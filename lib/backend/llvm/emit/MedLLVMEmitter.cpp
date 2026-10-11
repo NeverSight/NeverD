@@ -600,10 +600,8 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
       TRI.isVectorReg(TRI.fpReturnModelReg())) {
     // The i386 cdecl x87 (st0) return is a scalar FP type so LLVM lowers it to
     // the x87 stack; the XMM0-vector convention keeps the 16-byte vector type.
-    RetType = Func.FPReturnViaX87
-                  ? (Func.ReturnType->Size <= 4 ? llvm::Type::getFloatTy(*Ctx)
-                                                : llvm::Type::getDoubleTy(*Ctx))
-                  : fpAbiType(Func.ReturnType->Size);
+    RetType = Func.FPReturnViaX87 ? mapNdtype(Func.ReturnType)
+                                  : fpAbiType(Func.ReturnType->Size);
   }
 
   // AArch64: a narrow integer return is materialized by a sub-register write

@@ -281,11 +281,16 @@ std::string elfTypeName(uint16_t Type) {
 } // anonymous namespace
 
 llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
-  BinaryImage Img;
-  auto BufOrErr = readFileInto(Path, Img, BinaryFormat::ELF);
+  auto BufOrErr = readFileBuffer(Path, BinaryFormat::ELF);
   if (!BufOrErr)
     return BufOrErr.takeError();
-  auto &Buf = *BufOrErr;
+  return loadBuffer((*BufOrErr)->getMemBufferRef());
+}
+
+llvm::Expected<BinaryImage>
+ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
+  BinaryImage Img;
+  initializeImage(Buffer, Img, BinaryFormat::ELF);
 
   if (Img.Raw.size() < llvm::ELF::EI_NIDENT)
     return llvm::make_error<llvm::StringError>("elf: file too small",
@@ -307,8 +312,7 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
   if (*IsSBF)
     return Img;
 
-  auto ObjOrErr =
-      llvm::object::ObjectFile::createObjectFile(Buf->getMemBufferRef());
+  auto ObjOrErr = llvm::object::ObjectFile::createObjectFile(Buffer);
   if (!ObjOrErr)
     return ObjOrErr.takeError();
 
@@ -349,7 +353,10 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
   // Frame extents are function boundaries the discovery heuristics must not
   // guess inside, as PE .pdata ranges already are when they run.
   dwarf_eh::recordFrameExtents(Img);
-  runPostLoadDiscovery(Img, "elf: loaded " + pathToUTF8(Path.filename()));
+  runPostLoadDiscovery(
+      Img, "elf: loaded " + pathToUTF8(std::filesystem::u8path(
+                                           Buffer.getBufferIdentifier().str())
+                                           .filename()));
   // Classified before any table is read: a decoder that finds an Itanium LSDA
   // cannot tell from the table alone whether its cleanup pads are C++
   // destructors or Rust drop glue, and the evidence that settles it is the

@@ -273,29 +273,44 @@ static std::string emissionFailure(const std::exception &Error) {
   return std::string("C emission failed: ") + Error.what();
 }
 
+int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return 0;
+  S->clearError();
+  try {
+    if (!S->Loaded) {
+      S->setError("no binary loaded");
+      return 0;
+    }
+    if (auto Reason = missingARMModeReason(S->Img, FuncEntry)) {
+      S->setError(*Reason);
+      return 0;
+    }
+    if (S->Img.Format == BinaryFormat::COFF)
+      coff_loader::ensureExceptionHandlers(S->Img, {FuncEntry});
+
+    if (!S->PipeRan)
+      S->OnlyFunctionEntries.insert(FuncEntry);
+    else if (!S->OnlyFunctionEntries.empty() &&
+             !S->OnlyFunctionEntries.count(FuncEntry)) {
+      S->invalidatePipeline();
+      S->OnlyFunctionEntries = {FuncEntry};
+    }
+    return S->ensurePipeline() ? 1 : 0;
+  } catch (const std::exception &Error) {
+    S->setError(std::string("function analysis failed: ") + Error.what());
+  } catch (...) {
+    S->setError("unexpected function analysis failure");
+  }
+  return 0;
+}
+
 static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
                                   CSourceMap *SourceMap, bool PlainC = false) {
+  if (!neverd_prepare_function(Sess, FuncEntry))
+    return dupStr(std::string());
   auto *S = toSession(Sess);
-  S->clearError();
-
-  if (auto Reason = missingARMModeReason(S->Img, FuncEntry)) {
-    S->setError(*Reason);
-    return dupStr(std::string());
-  }
-
-  if (S->Img.Format == BinaryFormat::COFF)
-    coff_loader::ensureExceptionHandlers(S->Img, {FuncEntry});
-
-  if (!S->PipeRan)
-    S->OnlyFunctionEntries.insert(FuncEntry);
-  else if (!S->OnlyFunctionEntries.empty() &&
-           !S->OnlyFunctionEntries.count(FuncEntry)) {
-    S->invalidatePipeline();
-    S->OnlyFunctionEntries = {FuncEntry};
-  }
-
-  if (!S->ensurePipeline())
-    return dupStr(std::string());
 
   if (S->PipeResult.EVM) {
     auto Output = evm::emitC(*S->PipeResult.EVM);
@@ -401,27 +416,9 @@ const char *neverd_decompile_llvm(neverd_session_t Sess,
 
 static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
                                   int NoOpt, CSourceMap *SourceMap) {
+  if (!neverd_prepare_function(Sess, FuncEntry))
+    return dupStr(std::string());
   auto *S = toSession(Sess);
-  S->clearError();
-
-  if (auto Reason = missingARMModeReason(S->Img, FuncEntry)) {
-    S->setError(*Reason);
-    return dupStr(std::string());
-  }
-
-  if (S->Img.Format == BinaryFormat::COFF)
-    coff_loader::ensureExceptionHandlers(S->Img, {FuncEntry});
-
-  if (!S->PipeRan)
-    S->OnlyFunctionEntries.insert(FuncEntry);
-  else if (!S->OnlyFunctionEntries.empty() &&
-           !S->OnlyFunctionEntries.count(FuncEntry)) {
-    S->invalidatePipeline();
-    S->OnlyFunctionEntries = {FuncEntry};
-  }
-
-  if (!S->ensurePipeline())
-    return dupStr(std::string());
 
   if (S->PipeResult.EVM) {
     S->setError("LLVM-to-C route is not supported for EVM; use the "

@@ -96,6 +96,8 @@ TEST(DriverGuardLoader, ImagesCannotOccupyHelpersOrNestedCallbackStacks) {
   for (const char *Fixture : {"driver_guard", "driver_guard_inactive"})
     for (uint64_t Base :
          {profile::GuardThunkBase, profile::CallbackStackBase,
+          profile::KernelModuleBase,
+          profile::KernelModuleBase + 2 * profile::KernelModuleStride,
           (profile::CallbackStackBase +
            profile::MaxConcurrentCallbacks * profile::CallbackStackStride - 1) &
               ~uint64_t(65535)}) {

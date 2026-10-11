@@ -12,6 +12,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/high/X86RegistrationFrame.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImage.h"
@@ -145,21 +146,9 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
   }
   switch (Op.Opcode) {
   case NdOp::COPY:
-    if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None) {
-      const auto Offset = registrationRootEntryStackOffset(Op);
-      if (!Offset)
-        return HighExpr::makeUndef(Op.Output.Size);
-      MedVar EntrySP;
-      EntrySP.Kind = MedVar::Reg;
-      EntrySP.TheArch = Arch::X86;
-      EntrySP.RegOff = getTargetRegInfo(Arch::X86).StackPointer;
-      EntrySP.Size = 4;
-      auto Value = HighExpr::makeVar(EntrySP);
-      return HighExpr::makeBinop(
-          NdOp::INT_SUB, Value,
-          HighExpr::makeConst(uint64_t(-*Offset), 4,
-                              ConstantAddressProvenance::Scalar));
-    }
+    if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None)
+      return CurMed ? lowerX86RegistrationRoot(*CurMed, Op)
+                    : HighExpr::makeUndef(Op.Output.Size);
     if (Op.NumInputs >= 1)
       return medvarToExpr(Op.Inputs[0]);
     break;

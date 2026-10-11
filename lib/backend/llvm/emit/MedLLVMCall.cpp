@@ -241,6 +241,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   };
   llvm::Type *AggregateRetTy = inferAggregateReturnType();
   llvm::Type *DefaultRetTy = AggregateRetTy ? AggregateRetTy : RetTy;
+  const bool X87Result =
+      Op.Output.Kind == MedVar::Reg && Op.Output.Size == 10 &&
+      getTargetRegInfo(TargetArch).isX87StackReg(Op.Output.RegOff);
+  if (X87Result)
+    DefaultRetTy = llvm::Type::getX86_FP80Ty(*Ctx);
 
   // The symbol of the routine a direct call reaches.
   auto calleeSymbol = [&]() -> std::string {
@@ -736,15 +741,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       IRetTy = Vec2; // scalar FP result returned in v0/d0
     } else if (Op.Output.Kind == MedVar::Reg && Op.Output.Size > 0 &&
                ITRI.isX87StackReg(Op.Output.RegOff)) {
-      // i386 returns a scalar float/double in the x87 st0 register, not in
-      // the integer EAX:EDX pair.  Typing the indirect call as `i64` makes the
-      // backend read the result from EAX:EDX while the recompiled callee left
-      // it in st0 (its `ret double` lowers to an x87 return), so the caller
-      // reads integer-register garbage.  Type the call as `double` so the
-      // backend reads st0; a float-returning callee's st0 value converts to
-      // double exactly, and the post-call FPExt below widens it to the
-      // x86_fp80 the st0 output register models.
-      IRetTy = llvm::Type::getDoubleTy(*Ctx);
+      // Read the complete physical x87 result. Inferring double here would
+      // round an unknown long-double result and selects XMM0 on x86-64.
+      IRetTy = llvm::Type::getX86_FP80Ty(*Ctx);
     } else if (AggregateRetTy) {
       IRetTy = AggregateRetTy;
     }

@@ -66,6 +66,14 @@ WindowsX64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
     return failure(std::string(policy::Rejected) + Insn->mnemonic);
   };
   const cs_x86 &X86 = Insn->detail->x86;
+  if (Insn->id == X86_INS_RDTSC || Insn->id == X86_INS_RDTSCP) {
+    if (X86.prefix[0] == X86_PREFIX_LOCK || X86.op_count)
+      return Rejected();
+    return std::optional<Action>{{Insn->id == X86_INS_RDTSC
+                                      ? Action::Kind::ReadTimestamp
+                                      : Action::Kind::ReadTimestampAndProcessor,
+                                  std::nullopt}};
+  }
   // WDK headers inline the IRQL and current-thread queries. Decode only the
   // exact full-width reads whose values belong to the Windows model. Other
   // segment offsets and all writes remain outside this execution profile.

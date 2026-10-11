@@ -22,7 +22,10 @@ llvm::Error modelError(const llvm::Twine &Message) {
 
 llvm::Expected<uint64_t> KernelModel::allocatePool(llvm::ArrayRef<uint64_t> A,
                                                    bool Modern) {
-  const uint32_t Tag = static_cast<uint32_t>(A[2]);
+  // Dispatch validates each API's exact arity. The original two-argument
+  // ExAllocatePool has no caller-supplied tag; keep that absence explicit.
+  const bool Tagged = A.size() == 3;
+  const uint32_t Tag = Tagged ? static_cast<uint32_t>(A[2]) : 0;
   const uint64_t Flags = Modern ? A[0] : 0;
   const auto AllocationFailure = [&]() -> llvm::Expected<uint64_t> {
     if (Flags & pool::RaiseOnFailure)
@@ -53,7 +56,7 @@ llvm::Expected<uint64_t> KernelModel::allocatePool(llvm::ArrayRef<uint64_t> A,
     if (Type != 0 && Type != 1 && Type != PoolNX)
       return modelError("pool model supports NonPagedPool, PagedPool and "
                         "NonPagedPoolNx without additional flags");
-    if (!Tag)
+    if (Tagged && !Tag)
       return modelError("pool allocation requires non-zero size and tag");
   }
   if (!A[1])

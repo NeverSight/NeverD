@@ -13,6 +13,8 @@
 
 #include "neverd/ir/med/LowToMed.h"
 
+#include "../X86/RegistrationRoots.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -546,6 +548,17 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   Func.RegistrationStates = Low.RegistrationStates;
   Func.CalleePopBytes = Low.CalleePopBytes;
+  bool HasReturn = false, AllX87Returns = true;
+  for (const LowBlock &Block : Low.Blocks)
+    for (const LowOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::RETURN) {
+        HasReturn = true;
+        AllX87Returns &=
+            Op.NumInputs == 1 && Op.Inputs[0].isReg() &&
+            Op.Inputs[0].Size == 10 &&
+            getTargetRegInfo(TheArch).isX87StackReg(Op.Inputs[0].Offset);
+      }
+  Func.ExplicitX87ReturnValue = HasReturn && AllX87Returns;
   if (Low.RegistrationStates && Image)
     Func.RegistrationCallerCleanupABIComplete =
         hasCallerCleanupRegistrationABI(Low, *Image);
@@ -923,6 +936,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   }
 
   try {
+    x86_registration::RegistrationRoots(Low, TheArch, Fmt)
+        .disconnectNoReturnFallthroughs(Func);
     bindSourceCalls(Func, Low, Fmt);
     modelKnownWideCallReturns(Func);
     debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
@@ -1360,11 +1375,18 @@ void LowToMedConverter::resolveSwitchSelectorPlans(MedFunc &Func) {
     int BlockId = -1;
     MedVar Value = {};
   };
-  auto bindUseRef =
-      [&](const JumpTableSelectorUseRef &Ref) -> std::optional<BoundSelector> {
-    std::optional<BoundSelector> Bound;
-    bool Ambiguous = false;
+  std::map<int, const MedBlock *> Blocks;
+  for (const MedBlock &Block : Func.Blocks)
+    if (!Blocks.emplace(Block.Id, &Block).second)
+      return;
+  auto bindUseRef = [&](const JumpTableSelectorUseRef &Ref, int DispatchBlock,
+                        const std::set<int> *AllowedBlocks =
+                            nullptr) -> std::optional<BoundSelector> {
+    std::map<int, std::vector<MedVar>> Bindings;
+    size_t Count = 0;
     for (const MedBlock &Block : Func.Blocks) {
+      if (AllowedBlocks && !AllowedBlocks->count(Block.Id))
+        continue;
       for (const MedOp &Op : Block.Ops) {
         if (Op.Addr != Ref.Addr || Op.OriginSeq != Ref.Seq ||
             Op.Opcode != Ref.ExpectedOpcode)
@@ -1380,99 +1402,129 @@ void LowToMedConverter::resolveSwitchSelectorPlans(MedFunc &Func) {
             continue;
           Candidate = Op.Output;
         }
-        if (Bound) {
-          Ambiguous = true;
-          break;
-        }
-        Bound = BoundSelector{Block.Id, Candidate};
+        ++Count;
+        Bindings[Block.Id].push_back(Candidate);
       }
-      if (Ambiguous)
-        break;
     }
-    if (Ambiguous || !Bound || Bound->Value.Size == 0 || Bound->Value.isConst())
+    // A CFG product (for example x87 TOP states) copies the instruction but
+    // gives each dispatcher its own SSA lifetime. Every incoming path must
+    // encounter the same occurrence before an independent entry. A surviving
+    // use in a sibling clone cannot repair this clone's missing/changed use.
+    std::optional<BoundSelector> Bound;
+    if (AllowedBlocks) {
+      // An edge-merged plan binds each explicitly admitted predecessor once;
+      // the caller checks complete, one-to-one predecessor coverage below.
+      if (Count == 1)
+        Bound = BoundSelector{Bindings.begin()->first,
+                              Bindings.begin()->second.front()};
+    } else {
+      std::set<int> Seen;
+      std::vector<int> Work{DispatchBlock};
+      size_t Remaining = limits::kMaxSSAFunctionOps;
+      while (!Work.empty()) {
+        if (Remaining-- == 0)
+          return std::nullopt;
+        const int Id = Work.back();
+        Work.pop_back();
+        if (!Seen.insert(Id).second)
+          continue;
+        const auto BlockIt = Blocks.find(Id);
+        if (BlockIt == Blocks.end())
+          return std::nullopt;
+        if (const auto Found = Bindings.find(Id); Found != Bindings.end()) {
+          if (Found->second.size() != 1 || (Bound && Bound->BlockId != Id))
+            return std::nullopt;
+          Bound = BoundSelector{Id, Found->second.front()};
+          continue;
+        }
+        const MedBlock &Block = *BlockIt->second;
+        if (Block.Preds.empty() || Block.Id == Func.Blocks.front().Id ||
+            Func.ModuleAnalysisRoots.count(Block.StartAddr))
+          return std::nullopt;
+        if (Block.Preds.size() > Remaining)
+          return std::nullopt;
+        Remaining -= Block.Preds.size();
+        Work.insert(Work.end(), Block.Preds.begin(), Block.Preds.end());
+      }
+    }
+    if (!Bound || Bound->Value.Size == 0 || Bound->Value.isConst())
       return std::nullopt;
     return Bound;
   };
 
   for (const JumpTable &JT : Func.JumpTables) {
-    if (JT.CompositeSelectorUseRef) {
-      const JumpTableCompositeSelectorUseRef &Composite =
-          *JT.CompositeSelectorUseRef;
-      if (!JT.TwoTableSelect || !JT.SelectorUseRefs.empty() ||
-          Composite.RecipeKind !=
-              JumpTableCompositeSelectorUseRef::Kind::SelectOffset)
+    for (const MedBlock &Dispatch : Func.Blocks) {
+      const size_t Branches = std::count_if(
+          Dispatch.Ops.begin(), Dispatch.Ops.end(), [&](const MedOp &Op) {
+            return Op.Addr == JT.InsnAddr && Op.Opcode == NdOp::INDIR_BR;
+          });
+      if (Branches != 1)
         continue;
-      auto ByteIndex = bindUseRef(Composite.ByteIndex);
-      auto Condition = bindUseRef(Composite.Condition);
-      if (!ByteIndex || !Condition ||
-          ByteIndex->Value.Size != Composite.ResultSize)
-        continue;
+      const auto Key = std::make_pair(JT.InsnAddr, Dispatch.Id);
+      if (JT.CompositeSelectorUseRef) {
+        const JumpTableCompositeSelectorUseRef &Composite =
+            *JT.CompositeSelectorUseRef;
+        if (!JT.TwoTableSelect || !JT.SelectorUseRefs.empty() ||
+            Composite.RecipeKind !=
+                JumpTableCompositeSelectorUseRef::Kind::SelectOffset)
+          continue;
+        auto ByteIndex = bindUseRef(Composite.ByteIndex, Dispatch.Id);
+        auto Condition = bindUseRef(Composite.Condition, Dispatch.Id);
+        if (!ByteIndex || !Condition ||
+            ByteIndex->Value.Size != Composite.ResultSize)
+          continue;
 
-      MedSwitchSelectorPlan Plan;
-      Plan.PlanKind = MedSwitchSelectorPlan::Kind::SelectOffset;
-      Plan.Selector = ByteIndex->Value;
-      Plan.Condition = Condition->Value;
-      Plan.TrueOffset = Composite.TrueOffset;
-      Plan.FalseOffset = Composite.FalseOffset;
-      Plan.ResultSize = Composite.ResultSize;
-      Func.SwitchSelectorPlans.emplace(JT.InsnAddr, std::move(Plan));
-      continue;
-    }
-    if (JT.SelectorUseRefs.empty() || JT.TwoTableSelect)
-      continue;
-    if (JT.SelectorUseRefs.size() > 1) {
-      const MedBlock *Dispatch = nullptr;
-      bool AmbiguousDispatch = false;
-      for (const MedBlock &Block : Func.Blocks) {
-        for (const MedOp &Op : Block.Ops) {
-          if (Op.Addr == JT.InsnAddr && Op.Opcode == NdOp::INDIR_BR) {
-            if (Dispatch) {
-              AmbiguousDispatch = true;
-              break;
-            }
-            Dispatch = &Block;
+        MedSwitchSelectorPlan Plan;
+        Plan.PlanKind = MedSwitchSelectorPlan::Kind::SelectOffset;
+        Plan.Selector = ByteIndex->Value;
+        Plan.Condition = Condition->Value;
+        Plan.TrueOffset = Composite.TrueOffset;
+        Plan.FalseOffset = Composite.FalseOffset;
+        Plan.ResultSize = Composite.ResultSize;
+        Func.SwitchSelectorPlans.emplace(Key, std::move(Plan));
+        continue;
+      }
+      if (JT.SelectorUseRefs.empty() || JT.TwoTableSelect)
+        continue;
+      if (JT.SelectorUseRefs.size() > 1) {
+        if (Dispatch.Preds.size() < 2 ||
+            Dispatch.Preds.size() != JT.SelectorUseRefs.size())
+          continue;
+        const std::set<int> Preds(Dispatch.Preds.begin(), Dispatch.Preds.end());
+        MedSwitchSelectorPlan Plan;
+        Plan.PlanKind = MedSwitchSelectorPlan::Kind::EdgeMerged;
+        std::set<int> SeenPreds;
+        bool Valid = true;
+        for (const JumpTableSelectorUseRef &Ref : JT.SelectorUseRefs) {
+          auto Selector = bindUseRef(Ref, Dispatch.Id, &Preds);
+          if (!Selector || Selector->Value.Size == 0 ||
+              (Plan.ResultSize != 0 &&
+               Selector->Value.Size != Plan.ResultSize) ||
+              !SeenPreds.insert(Selector->BlockId).second) {
+            Valid = false;
+            break;
           }
+          Plan.ResultSize = Selector->Value.Size;
+          Plan.EdgeSelectors.emplace_back(Selector->BlockId, Selector->Value);
         }
-        if (AmbiguousDispatch)
-          break;
+        if (!Valid || SeenPreds != Preds)
+          continue;
+        std::sort(
+            Plan.EdgeSelectors.begin(), Plan.EdgeSelectors.end(),
+            [](const auto &A, const auto &B) { return A.first < B.first; });
+        Func.SwitchSelectorPlans.emplace(Key, std::move(Plan));
+        continue;
       }
-      if (AmbiguousDispatch || !Dispatch || Dispatch->Preds.size() < 2 ||
-          Dispatch->Preds.size() != JT.SelectorUseRefs.size())
+      auto Selector = bindUseRef(JT.SelectorUseRefs.front(), Dispatch.Id);
+      if (!Selector)
         continue;
 
       MedSwitchSelectorPlan Plan;
-      Plan.PlanKind = MedSwitchSelectorPlan::Kind::EdgeMerged;
-      std::set<int> SeenPreds;
-      bool Valid = true;
-      for (const JumpTableSelectorUseRef &Ref : JT.SelectorUseRefs) {
-        auto Selector = bindUseRef(Ref);
-        if (!Selector || Selector->Value.Size == 0 ||
-            (Plan.ResultSize != 0 && Selector->Value.Size != Plan.ResultSize) ||
-            std::find(Dispatch->Preds.begin(), Dispatch->Preds.end(),
-                      Selector->BlockId) == Dispatch->Preds.end() ||
-            !SeenPreds.insert(Selector->BlockId).second) {
-          Valid = false;
-          break;
-        }
-        Plan.ResultSize = Selector->Value.Size;
-        Plan.EdgeSelectors.emplace_back(Selector->BlockId, Selector->Value);
-      }
-      if (!Valid || SeenPreds.size() != Dispatch->Preds.size())
-        continue;
-      std::sort(Plan.EdgeSelectors.begin(), Plan.EdgeSelectors.end(),
-                [](const auto &A, const auto &B) { return A.first < B.first; });
-      Func.SwitchSelectorPlans.emplace(JT.InsnAddr, std::move(Plan));
-      continue;
+      Plan.PlanKind = MedSwitchSelectorPlan::Kind::Direct;
+      Plan.Selector = Selector->Value;
+      Plan.ResultSize = Selector->Value.Size;
+      Func.SwitchSelectorPlans.emplace(Key, std::move(Plan));
     }
-    auto Selector = bindUseRef(JT.SelectorUseRefs.front());
-    if (!Selector)
-      continue;
-
-    MedSwitchSelectorPlan Plan;
-    Plan.PlanKind = MedSwitchSelectorPlan::Kind::Direct;
-    Plan.Selector = Selector->Value;
-    Plan.ResultSize = Selector->Value.Size;
-    Func.SwitchSelectorPlans.emplace(JT.InsnAddr, std::move(Plan));
   }
 }
 

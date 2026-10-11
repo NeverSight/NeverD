@@ -36,6 +36,15 @@ bool validName(llvm::StringRef Name) {
          std::all_of(Name.begin(), Name.end(),
                      [](unsigned char C) { return C >= '!' && C <= '~'; });
 }
+
+llvm::StringRef defaultProvider(llvm::StringRef Name) {
+#define NEVERD_KERNEL_HAL_API(Symbol, Arity, IRQL, Operation)                  \
+  if (Name == #Symbol)                                                         \
+    return HALProvider;
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
+  return KernelProvider;
+}
 } // namespace
 
 std::optional<llvm::StringRef>
@@ -45,7 +54,34 @@ KernelExportRegistry::canonicalImportModule(llvm::StringRef Module) {
     return KernelProvider;
   if (Module.equals_insensitive(FrameworkLoaderProvider))
     return FrameworkLoaderProvider;
+  if (Module.equals_insensitive(HALProvider))
+    return HALProvider;
   return std::nullopt;
+}
+
+std::optional<uint64_t>
+KernelExportRegistry::moduleBase(llvm::StringRef Module) {
+  const auto Canonical = canonicalImportModule(Module);
+  if (!Canonical)
+    return std::nullopt;
+  unsigned Index = *Canonical == KernelProvider ? 0
+                   : *Canonical == HALProvider  ? 1
+                                                : 2;
+  return profile::KernelModuleBase + Index * profile::KernelModuleStride;
+}
+
+bool KernelExportRegistry::overlapsThunk(uint64_t Address, uint64_t Size) {
+  const auto Overlaps = [&](uint64_t Base) {
+    return Size && Address < Base + profile::ThunkSize &&
+           (Address >= Base || Size > Base - Address);
+  };
+  if (Overlaps(profile::ThunkBase))
+    return true;
+  for (unsigned I = 0; I < profile::KernelModuleCount; ++I)
+    if (Overlaps(profile::KernelModuleBase + I * profile::KernelModuleStride +
+                 profile::KernelModuleCodeRVA))
+      return true;
+  return false;
 }
 
 llvm::Error KernelExportRegistry::initialize(const DriverOptions &Options) {
@@ -60,7 +96,8 @@ llvm::Error KernelExportRegistry::initialize(const DriverOptions &Options) {
     if (!validName(Name))
       return invalid("kernel export names must be bounded printable ASCII");
     if (!Present)
-      Candidate.Names.emplace(Identity{KernelProvider.str(), Name, 0}, 0);
+      Candidate.Names.emplace(Identity{defaultProvider(Name).str(), Name, 0},
+                              0);
   }
 #define NEVERD_KERNEL_API(Name, Arity, Availability)                           \
   if (KernelRoutineAvailability::Availability ==                               \
@@ -72,9 +109,17 @@ llvm::Error KernelExportRegistry::initialize(const DriverOptions &Options) {
   }
 #include "KernelAPIs.def"
 #undef NEVERD_KERNEL_API
+#define NEVERD_KERNEL_HAL_API(Name, Arity, IRQL, Operation)                    \
+  if (!Candidate.Names.count(Identity{HALProvider.str(), #Name, 0})) {         \
+    auto Address = Candidate.insert(HALProvider, #Name);                       \
+    if (!Address)                                                              \
+      return Address.takeError();                                              \
+  }
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
   for (const auto &[Name, Present] : Options.KernelExports)
     if (Present) {
-      auto Address = Candidate.insert(KernelProvider, Name);
+      auto Address = Candidate.insert(defaultProvider(Name), Name);
       if (!Address)
         return Address.takeError();
     }
@@ -92,8 +137,14 @@ llvm::Expected<uint64_t> KernelExportRegistry::insert(llvm::StringRef Module,
     return I->second;
   if (Exports.size() >= profile::ThunkSize / profile::ThunkStride - 1)
     return invalid("kernel export table exhausted its thunk capacity");
-  const uint64_t Address =
-      profile::ThunkBase + Exports.size() * profile::ThunkStride;
+  uint64_t Base = profile::ThunkBase;
+  if (Kind == ExportKind::ModuleExport) {
+    const auto Image = moduleBase(Module);
+    if (!Image)
+      return invalid("kernel export has no module image identity");
+    Base = *Image + profile::KernelModuleCodeRVA;
+  }
+  const uint64_t Address = Base + Exports.size() * profile::ThunkStride;
   Names.emplace(std::move(Key), Address);
   Exports.emplace(Address,
                   Export{Name.str(), Module.str(), Address, Kind, Binding});
@@ -126,11 +177,20 @@ KernelExportRegistry::resolve(llvm::StringRef Name) const {
     return 0;
   if (!validName(Name))
     return invalid("kernel export names must be bounded printable ASCII");
-  auto I = Names.find(Identity{KernelProvider.str(), Name.str(), 0});
-  if (I == Names.end())
+  std::optional<uint64_t> Address;
+  for (llvm::StringRef Module : {KernelProvider, HALProvider}) {
+    auto I = Names.find(Identity{Module.str(), Name.str(), 0});
+    if (I == Names.end())
+      continue;
+    if (Address && *Address && I->second && *Address != I->second)
+      return invalid("ambiguous kernel/HAL export identity: " + Name);
+    if (!Address || I->second)
+      Address = I->second;
+  }
+  if (!Address)
     return invalid("kernel export availability is unspecified: " + Name +
                    "; declare it in kernel_exports");
-  return I->second;
+  return *Address;
 }
 
 llvm::Expected<uint64_t>

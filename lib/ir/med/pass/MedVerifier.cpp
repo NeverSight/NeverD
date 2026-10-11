@@ -20,6 +20,7 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86RegistrationFrame.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
@@ -144,6 +145,15 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
       if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None) {
         if (!hasValidRegistrationRootShape(Op))
           Err("registration runtime root has an invalid carrier", Blk.Id,
+              Op.Addr);
+        else if ((Op.RegistrationRoot ==
+                      MedOp::RegistrationRootKind::RealignedFramePointer ||
+                  Op.RegistrationRoot ==
+                      MedOp::RegistrationRootKind::DisplacedFramePointer ||
+                  Op.RegistrationRoot == MedOp::RegistrationRootKind::
+                                             RealignedRestoredStackPointer) &&
+                 !registrationRootFrameCoordinate(Func, Op))
+          Err("registration root has no checked source coordinate", Blk.Id,
               Op.Addr);
       } else if (Op.RegistrationStackOffset != 0)
         Err("restored stack offset has no registration runtime root", Blk.Id,

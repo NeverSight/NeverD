@@ -753,6 +753,7 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::InstructionLimit, Result.Configuration.InstructionLimit},
       {field::MemoryLimit, Result.Configuration.MemoryLimit},
       {field::EventLimit, Result.Configuration.EventLimit},
+      {field::TraceMemoryWrites, Result.Configuration.TraceMemoryWrites},
       {field::TimeoutMilliseconds, Result.Configuration.TimeoutMilliseconds},
       {field::LoadAddress, Address(Result.Configuration.LoadAddress)},
       {field::Unload, Result.Configuration.Unload},

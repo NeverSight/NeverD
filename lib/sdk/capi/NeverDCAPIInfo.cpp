@@ -676,9 +676,7 @@ const char *neverd_headers_json(neverd_session_t Sess) {
   Root["bits"] = S->Img.is64Bit() ? 64 : 32;
   Root["file_path"] = jsonSafeText(pathToUTF8(S->FilePath));
 
-  std::error_code EC;
-  auto FileSz = std::filesystem::file_size(S->FilePath, EC);
-  Root["file_size"] = EC ? 0 : static_cast<int64_t>(FileSz);
+  Root["file_size"] = static_cast<int64_t>(S->inputFileSize());
 
   Root["segment_count"] = static_cast<int64_t>(S->Img.Segments.size());
   Root["section_count"] = static_cast<int64_t>(S->Img.Sections.size());
@@ -844,6 +842,8 @@ const char *neverd_entrypoints_json(neverd_session_t Sess) {
 /// Empty when the file cannot be read.
 static std::string inputSha256(Session &S) {
   if (!S.Img.InputFileSHA256) {
+    if (S.MemoryInputBytes)
+      return {};
     auto Buffer = llvm::MemoryBuffer::getFile(pathToUTF8(S.FilePath));
     if (!Buffer)
       return {};
@@ -877,13 +877,17 @@ const char *neverd_dashboard_json(neverd_session_t Sess) {
   File["entry"] = vaHex(S->Img.Entry);
   File["base"] = vaHex(S->Img.Base);
   File["endian"] = "LE";
-  std::error_code EC;
-  auto FileSz = std::filesystem::file_size(S->FilePath, EC);
-  File["size"] = EC ? 0 : static_cast<int64_t>(FileSz);
+  File["size"] = static_cast<int64_t>(S->inputFileSize());
   Root["file"] = std::move(File);
 
   llvm::json::Object Hashes;
-  std::ifstream Ifs(S->FilePath, std::ios::binary);
+  std::ifstream Ifs;
+  if (S->MemoryInputBytes) {
+    if (S->Img.InputFileSHA256)
+      Hashes["sha256"] = llvm::toHex(*S->Img.InputFileSHA256, true);
+  } else {
+    Ifs.open(S->FilePath, std::ios::binary);
+  }
   if (Ifs.is_open()) {
     llvm::MD5 Md5;
     uint32_t Crc = 0;

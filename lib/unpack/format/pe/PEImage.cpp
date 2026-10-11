@@ -87,6 +87,8 @@ Image::read(llvm::ArrayRef<uint8_t> File) {
     return failure(text::Truncated);
   std::unique_ptr<Image> Out(new Image(File));
   Out->Architecture = *Architecture;
+  const bool Kernel = PE.Subsystem == llvm::COFF::IMAGE_SUBSYSTEM_NATIVE;
+  Out->Domain = Kernel ? ExecutionDomain::Kernel : ExecutionDomain::User;
   Out->Base = PE.ImageBase;
   Out->Extent = PE.SizeOfImage;
   Out->EntryRVA = PE.AddressOfEntryPoint;
@@ -113,11 +115,15 @@ Image::read(llvm::ArrayRef<uint8_t> File) {
     R.RVA = Raw.VirtualAddress;
     R.FileSize = Raw.SizeOfRawData;
     // The Windows loader reads section data from a sector boundary.
-    R.FileOffset = R.FileSize ? uint32_t(Raw.PointerToRawData) &
-                                    ~uint32_t(value::MinFileAlignment - 1)
-                              : 0;
-    R.MemorySize = getPEUserSectionMappedSize(
-        Raw.VirtualSize, Raw.SizeOfRawData, unpack::value::PageSize);
+    R.FileOffset = R.FileSize ? uint32_t(Raw.PointerToRawData) : 0;
+    if (!Kernel)
+      R.FileOffset &= ~uint64_t(value::MinFileAlignment - 1);
+    R.MemorySize =
+        Kernel
+            ? getPEDriverSectionMappedSize(Raw.VirtualSize, Raw.SizeOfRawData,
+                                           unpack::value::PageSize)
+            : getPEUserSectionMappedSize(Raw.VirtualSize, Raw.SizeOfRawData,
+                                         unpack::value::PageSize);
     if (!R.MemorySize || R.RVA % PE.SectionAlignment || R.RVA < Next ||
         R.RVA >= PE.SizeOfImage || R.MemorySize > PE.SizeOfImage - R.RVA)
       return failure(text::Sections);

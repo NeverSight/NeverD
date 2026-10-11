@@ -194,6 +194,12 @@ struct MedOp {
     EstablishedFramePointer,
     CallbackStackPointer,
     RestoredStackPointer,
+    /// Runtime establisher and restored ESP of a separately aligned frame.
+    /// Their non-affine coordinates come from the checked LowIR contract.
+    RealignedFramePointer,
+    RealignedRestoredStackPointer,
+    /// Runtime EBP below source EBP in a checked fixed C++ frame.
+    DisplacedFramePointer,
   };
   NdOp Opcode = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
@@ -444,6 +450,10 @@ struct MedFunc {
   /// scalar FP return type so LLVM lowers it to st0 (instead of the XMM0 vector
   /// return used by clang's internal convention for static functions).
   bool FPReturnViaX87 = false;
+  /// LowIR explicitly bound every RETURN to the proven logical x87 top.
+  /// The operand remains the result after SSA propagation changes its carrier
+  /// to a temporary or constant; this is independent of heuristic typing.
+  bool ExplicitX87ReturnValue = false;
   /// Bytes of the result every return path defines when that is fewer than
   /// the return register holds (a `bool` left in AL over an undefined RAX);
   /// 0 otherwise.  The bytes above belong to no result.
@@ -516,8 +526,10 @@ struct MedFunc {
   /// Resolved jump tables (carried from LowFunc) so the LLVM emitter can
   /// lower an INDIR_BR into a switch on the table index.
   std::vector<JumpTable> JumpTables;
-  /// Exact Med SSA selector plans keyed by the indirect-branch address.
-  std::map<va_t, MedSwitchSelectorPlan> SwitchSelectorPlans;
+  /// Exact Med SSA selector plans keyed by native branch address and current
+  /// Med block. Cloned blocks can share a machine address but never an SSA
+  /// selector occurrence merely because those addresses compare equal.
+  std::map<std::pair<va_t, int>, MedSwitchSelectorPlan> SwitchSelectorPlans;
   std::vector<MedScalarAddressModel> ScalarAddressModels;
   std::vector<MedI386GetPcModel> I386GetPcModels;
   /// Published machine entry/exception/address-taken/continuation roots.

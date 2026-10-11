@@ -125,6 +125,8 @@ tests/build/
 
 # Qt GUI build artifacts
 tools/neverd-gui/build/
+# Machine-local benchmark reports and diagnostic evidence
+/tools/neverd-gui/benchmarks/results/
 # Qt Creator user files
 *.pro.user
 *.pro.user.*

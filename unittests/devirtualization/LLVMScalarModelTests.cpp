@@ -44,7 +44,8 @@ TEST(LLVMScalarModel, IntegerInputsAndResultsPreserveDeclaredWidths) {
     ASSERT_EQ(M->Arguments.size(), 2U);
     EXPECT_EQ(M->Arguments[0].Bits, Bits);
     EXPECT_EQ(M->Arguments[0].Storage.Size, (Bits + 7) / 8);
-    auto A = llvm::APInt::getAllOnes(Bits), B = llvm::APInt(Bits, 0x95);
+    auto A = llvm::APInt::getAllOnes(Bits);
+    auto B = llvm::APInt(64, 0x95).zextOrTrunc(Bits);
     auto R = evaluate(*M, {A, B});
     ASSERT_TRUE(R);
     EXPECT_EQ(*R, (A ^ B).zext((Bits + 7) / 8 * 8));
@@ -74,9 +75,9 @@ TEST(LLVMScalarModel, FunnelResultsMatchDoubleWidthConcatenation) {
         // count bits and signed-looking data. The oracle works on a joined
         // double word rather than the model's two shifts and conditional.
         for (uint64_t High : {uint64_t{0}, uint64_t{1} << (Bits - 1)}) {
-          llvm::APInt A(Bits, 0xa79135bdf24680e1ULL);
-          llvm::APInt B(Bits, 0x184fe6239a57cd02ULL);
-          llvm::APInt N(Bits, Raw | High);
+          auto A = llvm::APInt(64, 0xa79135bdf24680e1ULL).zextOrTrunc(Bits);
+          auto B = llvm::APInt(64, 0x184fe6239a57cd02ULL).zextOrTrunc(Bits);
+          auto N = llvm::APInt(64, Raw | High).zextOrTrunc(Bits);
           const unsigned Count = N.getZExtValue() % Bits;
           auto Pair = (A.zext(Bits * 2).shl(Bits) | B.zext(Bits * 2));
           auto Expected = Left ? Pair.shl(Count).lshr(Bits).trunc(Bits)

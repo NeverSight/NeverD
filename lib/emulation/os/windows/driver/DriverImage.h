@@ -43,6 +43,7 @@ struct DriverGuardControlFlow {
   std::vector<uint64_t> ValidTargets;
 };
 struct DriverImage {
+  std::string Name;
   uint64_t Base = 0;
   uint64_t PreferredBase = 0;
   uint64_t SecurityCookieAddress = 0;

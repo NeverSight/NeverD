@@ -20,6 +20,7 @@
 
 namespace llvm {
 class AllocaInst;
+class BasicBlock;
 class CallBase;
 class CatchPadInst;
 class Function;
@@ -42,16 +43,25 @@ struct RegistrationRuntimeAccess {
   int32_t Offset = 0;
   uint16_t Width = 0;
   bool Write = false;
+  const llvm::CatchPadInst *Catch = nullptr;
 };
 /// Source facts supplied by the independent C++ control replay. These define
 /// required effects; the actual LLVM addresses and initialization are checked
 /// below through the same address owner used for SEH frame privacy.
-struct RegistrationCxxFrameContract {
-  const BinaryImage *Image = nullptr;
+struct RegistrationCxxCatchFrameContract {
   const llvm::CatchPadInst *Catch = nullptr;
   int64_t HomeOffset = 0;
+  /// Zero means no bound object, so dispatch initializes no frame bytes.
+  /// HomeOffset, Reference and RuntimeAccesses must then also be empty.
   uint32_t ObjectSize = 0;
   bool Reference = false;
+  const llvm::AllocaInst *CallbackStack = nullptr;
+  std::set<const llvm::BasicBlock *> CallbackBlocks;
+};
+struct RegistrationCxxFrameContract {
+  const BinaryImage *Image = nullptr;
+  std::vector<RegistrationCxxCatchFrameContract> Catches;
+  int64_t SavedStackOffset = 0;
   std::map<const llvm::CallBase *, RegistrationFrameBorrow> Borrows;
   std::map<const llvm::Instruction *, RegistrationRuntimeAccess>
       RuntimeAccesses;

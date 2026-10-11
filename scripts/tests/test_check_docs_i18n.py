@@ -130,10 +130,18 @@ class EmulationDocumentationInventoryTests(unittest.TestCase):
         self.assertIn(token, original)
         changed = original.replace(token, "")
 
-        for wrap_token, wrap_path in ((True, False), (False, True), (True, True)):
-            with self.subTest(wrap_token=wrap_token, wrap_path=wrap_path):
+        for wrap_token, wrap_path, split_token in (
+            (True, False, False), (False, True, False), (True, True, False),
+            (False, False, True), (True, True, True),
+        ):
+            with self.subTest(wrap_token=wrap_token, wrap_path=wrap_path,
+                              split_token=split_token):
                 token_entry = f'NEVERD_EMULATION_DOC_TOKEN({group}, "{token}")'
                 path_entry = f'NEVERD_EMULATION_DOC_PATH({group}, "{pattern}")'
+                if split_token:
+                    middle = len(token) // 2
+                    token_entry = (f'NEVERD_EMULATION_DOC_TOKEN({group}, '
+                                   f'"{token[:middle]}"\n    "{token[middle:]}")')
                 if wrap_token:
                     token_entry = token_entry.replace("(", "(\n    ", 1)
                 if wrap_path:
@@ -327,9 +335,11 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     def test_readme_index_order_matches_english(self) -> None:
         path = Path("docs/zh-CN/README.md")
         text = path.read_text(encoding="utf-8")
-        first = next(line for line in text.splitlines() if "](architecture.md)" in line)
-        second = next(line for line in text.splitlines() if "](testing.md)" in line)
-        self.assert_readme_rejected(path, text.replace(first + "\n" + second, second + "\n" + first), "link order")
+        lines = text.splitlines(keepends=True)
+        first = next(i for i, line in enumerate(lines) if "](architecture.md)" in line)
+        second = next(i for i, line in enumerate(lines) if "](testing.md)" in line)
+        lines[first], lines[second] = lines[second], lines[first]
+        self.assert_readme_rejected(path, "".join(lines), "link order")
 
     def test_readme_body_cannot_link_another_locale(self) -> None:
         path = Path("docs/zh-CN/project.md")

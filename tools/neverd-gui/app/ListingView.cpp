@@ -393,12 +393,38 @@ int ListingView::lineAt(int y) const {
 }
 
 int ListingView::columnAt(const Line &line, int x) const {
+  if (showPrefixes_ && x < textLeft()) {
+    QTextLayout prefix(line.prefix + QLatin1Char(' '),
+                       Theme::instance().codeFont());
+    prefix.beginLayout();
+    const auto row = prefix.createLine();
+    prefix.endLayout();
+    const int left = arrowsWidth_ + TextMargin - horizontalScrollBar()->value();
+    return row.xToCursor(x - left) + firstColumn(line);
+  }
   auto &layout = line.styled.layout(
       Theme::instance().codeFont(), styleStamp_,
       [](int role) { return Theme::instance().listingRole(role); });
   if (layout.lineCount() == 0)
     return 0;
   return layout.lineAt(0).xToCursor(x - textLeft());
+}
+
+int ListingView::firstColumn(const Line &line) const {
+  return showPrefixes_ ? -int(line.prefix.size()) - 1 : 0;
+}
+
+qreal ListingView::columnX(const Line &line, int column) const {
+  if (column < 0)
+    return arrowsWidth_ + TextMargin - horizontalScrollBar()->value() +
+           QFontMetricsF(Theme::instance().codeFont())
+               .horizontalAdvance((line.prefix + QLatin1Char(' '))
+                                      .left(column - firstColumn(line)));
+  auto &layout = line.styled.layout(
+      Theme::instance().codeFont(), styleStamp_,
+      [](int role) { return Theme::instance().listingRole(role); });
+  return textLeft() +
+         (layout.lineCount() ? layout.lineAt(0).cursorToX(column) : 0);
 }
 
 void ListingView::resizeEvent(QResizeEvent *event) {
@@ -550,17 +576,30 @@ std::optional<int> ListingView::currentOperand() const {
 }
 
 QString ListingView::selectedText() const {
-  if (!anchor_)
+  if (lines_.empty())
+    return {};
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  if (!anchor_ || *anchor_ == cursor)
     return currentLineText();
-  int first = std::min(anchor_->first, cursorLine_);
-  int last = std::max(anchor_->first, cursorLine_);
-  first = std::clamp(first, 0, int(lines_.size()) - 1);
-  last = std::clamp(last, 0, int(lines_.size()) - 1);
+  const auto first = std::min(*anchor_, cursor);
+  const auto last = std::max(*anchor_, cursor);
   QStringList text;
-  for (int i = first; i <= last; ++i)
-    text.append(
+  for (int i = std::max(0, first.first);
+       i <= last.first && i < int(lines_.size()); ++i) {
+    const auto &line = lines_[i];
+    const QString row =
         (showPrefixes_ ? lines_[i].prefix + QLatin1Char(' ') : QString()) +
-        lines_[i].styled.text);
+        lines_[i].styled.text;
+    const int begin =
+        i == first.first
+            ? std::clamp(first.second - firstColumn(line), 0, int(row.size()))
+            : 0;
+    const int end =
+        i == last.first
+            ? std::clamp(last.second - firstColumn(line), 0, int(row.size()))
+            : int(row.size());
+    text.append(row.mid(begin, end - begin));
+  }
   return text.join(QLatin1Char('\n'));
 }
 
@@ -572,8 +611,8 @@ void ListingView::moveCursor(int line, int column, bool extend) {
   else if (!extend)
     anchor_.reset();
   cursorLine_ = std::clamp(line, 0, int(lines_.size()) - 1);
-  cursorColumn_ =
-      std::clamp(column, 0, int(lines_[cursorLine_].styled.text.size()));
+  cursorColumn_ = std::clamp(column, firstColumn(lines_[cursorLine_]),
+                             int(lines_[cursorLine_].styled.text.size()));
   ensureCursorVisible();
   emitLocation();
   viewport()->update();
@@ -599,7 +638,11 @@ void ListingView::emitLocation() {
 }
 
 void ListingView::setShowPrefixes(bool show) {
+  if (show == showPrefixes_)
+    return;
   showPrefixes_ = show;
+  anchor_.reset();
+  cursorColumn_ = std::max(0, cursorColumn_);
   viewport()->update();
 }
 
@@ -657,20 +700,31 @@ void ListingView::paintEvent(QPaintEvent *) {
   const auto colorOf = [&theme](int role) { return theme.listingRole(role); };
   const int first = top_;
   const int last = std::min<int>(lines_.size() - 1, top_ + visibleLines());
-  const int selectionFirst =
-      anchor_ ? std::min(anchor_->first, cursorLine_) : -1;
-  const int selectionLast =
-      anchor_ ? std::max(anchor_->first, cursorLine_) : -1;
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  const auto selectionFirst = anchor_ ? std::min(*anchor_, cursor) : cursor;
+  const auto selectionLast = anchor_ ? std::max(*anchor_, cursor) : cursor;
   painter.setClipRect(
       QRect(arrowsWidth_, 0, area.width() - arrowsWidth_, area.height()));
   for (int i = first; i <= last; ++i) {
     const auto &line = lines_[i];
     const int y = (i - top_) * lineHeight_;
     const QRect row(arrowsWidth_, y, area.width() - arrowsWidth_, lineHeight_);
-    if (i >= selectionFirst && i <= selectionLast)
-      painter.fillRect(row, theme.color(ColorRole::ListingSelection));
-    else if (i == cursorLine_)
+    if (i == cursorLine_)
       painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
+    const bool selected = anchor_ && selectionFirst != selectionLast &&
+                          i >= selectionFirst.first && i <= selectionLast.first;
+    const int begin = selected && i == selectionFirst.first
+                          ? selectionFirst.second
+                          : firstColumn(line);
+    const int end = selected && i == selectionLast.first
+                        ? selectionLast.second
+                        : int(line.styled.text.size());
+    if (selected && begin < 0) {
+      const qreal x0 = columnX(line, std::max(begin, firstColumn(line)));
+      const qreal x1 = columnX(line, std::min(end, 0));
+      painter.fillRect(QRectF(x0, y, x1 - x0, lineHeight_),
+                       theme.color(ColorRole::ListingSelection));
+    }
     if (showPrefixes_) {
       painter.setPen(theme.prefixColor(line.cls));
       painter.drawText(QPointF(prefixLeft, y + ascent_), line.prefix);
@@ -685,9 +739,17 @@ void ListingView::paintEvent(QPaintEvent *) {
                          theme.color(ColorRole::ListingHighlight));
       }
     }
-    layout.draw(&painter, QPointF(left, y));
+    QList<QTextLayout::FormatRange> selection;
+    if (selected && end > 0) {
+      QTextLayout::FormatRange range;
+      range.start = std::max(0, begin);
+      range.length = std::max(0, end - range.start);
+      range.format.setBackground(theme.color(ColorRole::ListingSelection));
+      selection.append(range);
+    }
+    layout.draw(&painter, QPointF(left, y), selection);
     if (i == cursorLine_ && hasFocus() && layout.lineCount()) {
-      const qreal x = left + layout.lineAt(0).cursorToX(cursorColumn_);
+      const qreal x = columnX(line, cursorColumn_);
       painter.fillRect(QRectF(x, y + 1, 2, lineHeight_ - 2),
                        theme.color(ColorRole::ListingCursor));
     }
@@ -902,7 +964,7 @@ void ListingView::mouseMoveEvent(QMouseEvent *event) {
 
 void ListingView::mouseReleaseEvent(QMouseEvent *event) {
   selecting_ = false;
-  if (anchor_ && anchor_->first == cursorLine_)
+  if (anchor_ && *anchor_ == std::pair{cursorLine_, cursorColumn_})
     anchor_.reset();
   if ((event->modifiers() & Qt::ControlModifier) &&
       event->button() == Qt::LeftButton)

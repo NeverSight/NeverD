@@ -121,8 +121,10 @@ std::string unsignedCmpOperand(const std::string &S) {
 std::string signedIntegerOperand(const llvm::Type *Type,
                                  const std::string &Text) {
   const unsigned Width = Type->getIntegerBitWidth();
+  if (Width > 512)
+    throw std::runtime_error("LLVMC signed operand exceeds 512-bit carrier");
   if (Width > 128)
-    throw std::runtime_error("LLVMC signed operand exceeds 128-bit carrier");
+    return "(_BitInt(" + std::to_string(Width) + "))(" + Text + ")";
   const unsigned Carrier = Width <= 8    ? 8
                            : Width <= 16 ? 16
                            : Width <= 32 ? 32
@@ -603,9 +605,20 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
   }
   if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(C)) {
     if (CI->getBitWidth() > 64) {
-      if (CI->getBitWidth() > 128)
-        throw std::runtime_error(
-            "LLVM C constant exceeds supported 128-bit carrier");
+      if (CI->getBitWidth() > 128) {
+        const std::string Type = typeToCLLVM(CI->getType());
+        std::string Text = "(";
+        const auto &Bits = CI->getValue();
+        for (unsigned Offset = 0; Offset < Bits.getBitWidth(); Offset += 64) {
+          if (Offset)
+            Text += " | ";
+          const unsigned Count = std::min(64U, Bits.getBitWidth() - Offset);
+          Text += "((" + Type + ")0x" +
+                  llvm::utohexstr(Bits.extractBitsAsZExtValue(Count, Offset)) +
+                  "ULL << " + std::to_string(Offset) + ")";
+        }
+        return Text + ")";
+      }
       auto Value = CI->getValue().zextOrTrunc(128);
       auto Low = Value.extractBitsAsZExtValue(64, 0);
       auto High = Value.extractBitsAsZExtValue(64, 64);
@@ -2803,8 +2816,8 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
     return "(" + Dst + ")" + Src;
   const unsigned SrcWidth = SrcTy->getIntegerBitWidth();
   const unsigned DstWidth = DstTy->getIntegerBitWidth();
-  if (SrcWidth > 128 || DstWidth > 128)
-    throw std::runtime_error("LLVMC integer cast exceeds 128-bit carrier");
+  if (SrcWidth > 512 || DstWidth > 512)
+    throw std::runtime_error("LLVMC integer cast exceeds 512-bit carrier");
 
   auto Cast = [](const std::string &Type, const std::string &Text) {
     return "(" + Type + ")(" + Text + ")";
@@ -2819,7 +2832,10 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
       if (peelOperandWrap(Operand) != Operand)
         Result = Text;
     }
-    if (Width != 8 && Width != 16 && Width != 32 && Width != 64 && Width != 128)
+    // Wider carriers are exact C23 _BitInt(N); shifting by N to manufacture
+    // a mask would itself be undefined. Only rounded narrow carriers need it.
+    if (Width <= 128 && Width != 8 && Width != 16 && Width != 32 &&
+        Width != 64 && Width != 128)
       Result = "(" + Result + " & (((" + Carrier + ")1 << " +
                std::to_string(Width) + ") - 1))";
     return Result;

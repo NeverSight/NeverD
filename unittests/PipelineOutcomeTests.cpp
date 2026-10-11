@@ -10,6 +10,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
@@ -63,6 +64,20 @@ public:
     Pipeline().buildHighIR(Image, {}, Result);
   }
 
+  static void buildLowIR(const BinaryImage &Image, PipelineResult &Result,
+                         const std::vector<va_t> &Entries) {
+    PipelineOptions Options;
+    Options.OnlyFunctionEntries.insert(Entries.begin(), Entries.end());
+    std::vector<std::pair<va_t, std::string>> Candidates;
+    for (va_t Entry : Entries)
+      Candidates.emplace_back(Entry, Image.getFunctionNameAt(Entry));
+    Pipeline().buildLowIR(Image, Candidates, Options, nullptr, Result);
+  }
+
+  static void buildLowIR(const BinaryImage &Image, PipelineResult &Result) {
+    buildLowIR(Image, Result, {Image.Entry});
+  }
+
   static bool runLift(const BinaryImage &Image, llvm::LLVMContext &Context,
                       PipelineResult &Result) {
     PipelineOptions Options;
@@ -104,6 +119,152 @@ TEST(PipelineOutcome, UnsupportedArchitectureRetainsDecoderDiagnostic) {
   EXPECT_NE(Result.Error.find("decoder"), std::string::npos);
   EXPECT_TRUE(Result.HighFuncs.empty());
   EXPECT_EQ(Result.LlvmModule, nullptr);
+}
+
+TEST(PipelineOutcome, ParallelCalleeFrontiersPreserveEveryRegisterSummary) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Entry = 0x1000;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Image.Entry;
+  Text.Size = 0x5000;
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  auto emitCall = [&](va_t From, va_t To) {
+    const uint32_t Relative = static_cast<uint32_t>(To - (From + 5));
+    const size_t Offset = static_cast<size_t>(From - Text.VA);
+    Text.Data[Offset] = 0xe8;
+    for (unsigned I = 0; I < 4; ++I)
+      Text.Data[Offset + 1 + I] = static_cast<uint8_t>(Relative >> (I * 8));
+  };
+  // More than one scheduling window, followed by a second complete frontier.
+  // Sized symbols give independent ownership and enough estimated work for
+  // the parallel path without padding the decoded bodies with real work.
+  constexpr unsigned CalleeCount = 40;
+  Image.Symbols.push_back(Symbol::makeFunc(Image.Entry, 0x100));
+  for (unsigned I = 0; I < CalleeCount; ++I) {
+    const va_t Callee = 0x2000 + I * 0x80;
+    const va_t Grandchild = 0x4000 + I * 0x80;
+    Image.Symbols.push_back(Symbol::makeFunc(Callee, 0x80));
+    Image.Symbols.push_back(Symbol::makeFunc(Grandchild, 0x80));
+    emitCall(Image.Entry + I * 5, Callee);
+    emitCall(Callee, Grandchild);
+    Text.Data[Callee - Text.VA + 5] = 0xc3;
+    // Alternate which SysV argument each grandchild reads into its result.
+    Text.Data[Grandchild - Text.VA] = 0x89;
+    Text.Data[Grandchild - Text.VA + 1] = I % 2 ? 0xf0 : 0xf8;
+    Text.Data[Grandchild - Text.VA + 2] = 0xc3;
+  }
+  Text.Data[CalleeCount * 5] = 0xc3;
+  Image.Segments.push_back(std::move(Text));
+  PipelineResult Serial;
+  PipelineResult Parallel;
+  {
+    ScopedThreadCount Threads(1);
+    PipelineTestPeer::buildLowIR(Image, Serial);
+  }
+  {
+    ScopedThreadCount Threads(4);
+    PipelineTestPeer::buildLowIR(Image, Parallel);
+  }
+  ASSERT_EQ(Serial.LowFuncs.size(), 1u);
+  ASSERT_EQ(Parallel.LowFuncs.size(), 1u);
+  EXPECT_EQ(Serial.LowFuncs.front().Entry, Image.Entry);
+  EXPECT_EQ(Parallel.LowFuncs.front().Entry, Image.Entry);
+  EXPECT_EQ(Serial.CallMayWriteGPRs.size(), 2 * CalleeCount + 1);
+  EXPECT_EQ(Parallel.CallMayWriteGPRs, Serial.CallMayWriteGPRs);
+  EXPECT_EQ(Parallel.CallEntryReadGPRs, Serial.CallEntryReadGPRs);
+  EXPECT_EQ(Parallel.CallEntryStackArgs, Serial.CallEntryStackArgs);
+  EXPECT_EQ(Parallel.CallVariadicFrom, Serial.CallVariadicFrom);
+  EXPECT_EQ(Parallel.CallDispatchThunks, Serial.CallDispatchThunks);
+}
+
+TEST(PipelineOutcome, SelectedX87WrappersPreserveReturnsAcrossParallelBuilds) {
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    BinaryImage Image;
+    Image.Arch = Architecture;
+    Image.Bits = Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Entry = 0x1000;
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = Image.Entry;
+    Text.Size = 0x2000;
+    Text.FileSz = Text.Size;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0xcc);
+    auto emitWrapper = [&](va_t From, va_t To) {
+      const uint32_t Relative = static_cast<uint32_t>(To - (From + 5));
+      const size_t Offset = static_cast<size_t>(From - Text.VA);
+      Text.Data[Offset] = 0xe8;
+      for (unsigned I = 0; I != 4; ++I)
+        Text.Data[Offset + 1 + I] = static_cast<uint8_t>(Relative >> (I * 8));
+      Text.Data[Offset + 5] = 0xc3;
+      Image.Symbols.push_back(Symbol::makeFunc(From, 6));
+    };
+    // Enough independent roots to take the production parallel path. None
+    // contains an x87 instruction: the result comes through a shared wrapper.
+    constexpr unsigned WrapperCount = 32;
+    constexpr va_t Forwarder = 0x1800, Leaf = 0x2000;
+    std::vector<va_t> Entries;
+    for (unsigned I = 0; I != WrapperCount; ++I) {
+      Entries.push_back(Image.Entry + I * 0x10);
+      emitWrapper(Entries.back(), Forwarder);
+    }
+    emitWrapper(Forwarder, Leaf);
+    Text.Data[Leaf - Text.VA] = 0xd9; // fld1; ret
+    Text.Data[Leaf - Text.VA + 1] = 0xe8;
+    Text.Data[Leaf - Text.VA + 2] = 0xc3;
+    Image.Symbols.push_back(Symbol::makeFunc(Leaf, 3));
+    Image.Segments.push_back(std::move(Text));
+
+    PipelineResult Serial, Parallel;
+    {
+      ScopedThreadCount Threads(1);
+      PipelineTestPeer::buildLowIR(Image, Serial, Entries);
+    }
+    {
+      ScopedThreadCount Threads(4);
+      PipelineTestPeer::buildLowIR(Image, Parallel, Entries);
+    }
+    for (const PipelineResult *Result : {&Serial, &Parallel}) {
+      ASSERT_EQ(Result->LowFuncs.size(), WrapperCount);
+      for (size_t I = 0; I != Entries.size(); ++I) {
+        const auto &Function = Result->LowFuncs[I];
+        SCOPED_TRACE(Function.Entry);
+        EXPECT_EQ(Function.Entry, Entries[I]);
+        ASSERT_TRUE(Function.hasCompleteInstructionLift());
+        size_t Calls = 0, Returns = 0;
+        const auto ResultSlot = NdVar::reg(x86reg::ST7, x86reg::FPURegSize);
+        for (const auto &Block : Function.Blocks)
+          for (const auto &Op : Block.Ops) {
+            if (Op.Opcode == NdOp::CALL) {
+              ++Calls;
+              ASSERT_GT(Op.NumInputs, 0u);
+              EXPECT_TRUE(Op.Inputs[0].isConst());
+              EXPECT_EQ(Op.Inputs[0].Offset, Forwarder);
+              EXPECT_EQ(Op.Output, ResultSlot);
+            } else if (Op.Opcode == NdOp::RETURN) {
+              ++Returns;
+              ASSERT_EQ(Op.NumInputs, 1u);
+              EXPECT_EQ(Op.Inputs[0], ResultSlot);
+            }
+          }
+        EXPECT_EQ(Calls, 1u);
+        EXPECT_EQ(Returns, 1u);
+      }
+    }
+    EXPECT_EQ(Parallel.CallMayWriteGPRs, Serial.CallMayWriteGPRs);
+    EXPECT_EQ(Parallel.CallEntryReadGPRs, Serial.CallEntryReadGPRs);
+    EXPECT_EQ(Parallel.CallEntryStackArgs, Serial.CallEntryStackArgs);
+    EXPECT_EQ(Parallel.CallVariadicFrom, Serial.CallVariadicFrom);
+    EXPECT_EQ(Parallel.CallDispatchThunks, Serial.CallDispatchThunks);
+  }
 }
 
 TEST(PipelineOutcome, PatchDiscoversStandaloneELFEntryButPreservesCRTEntry) {

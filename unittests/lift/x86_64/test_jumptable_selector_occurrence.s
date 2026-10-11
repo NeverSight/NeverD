@@ -432,3 +432,70 @@ jt_selector_twotable_diamond:
         .quad   .Lselector_twotable_diamond_b3
 
         .section .note.GNU-stack,"",@progbits
+
+// The address and selected base may cross more than sixteen pure COPYs.
+// These finite prefix walks have a shared work budget; their length must not
+// make an otherwise complete two-table proof retry the entire CFG.
+        .macro selector_copy_chain name, base_pairs, address_pairs, clobber=0
+        .text
+        .globl  \name
+        .type   \name,@function
+\name:
+        movl    %edi, %r10d
+        shll    $3, %r10d
+        andl    $24, %r10d
+        leaq    .Lcopy_a\@(%rip), %r8
+        leaq    .Lcopy_b\@(%rip), %r9
+        testl   %esi, %esi
+        cmovneq %r9, %r8
+        .rept   \base_pairs
+        movq    %r8, %rax
+        movq    %rax, %r8
+        .endr
+        leaq    (%r8,%r10), %r11
+        .rept   \address_pairs
+        movq    %r11, %rax
+        movq    %rax, %r11
+        .endr
+        .if     \clobber
+        movb    %dl, %r11b
+        .endif
+        movq    (%r11), %rax
+        jmpq    *%rax
+.Lcopy_a0\@:
+        movl    $7100, %eax
+        retq
+.Lcopy_a1\@:
+        movl    $7101, %eax
+        retq
+.Lcopy_a2\@:
+        movl    $7102, %eax
+        retq
+.Lcopy_a3\@:
+        movl    $7103, %eax
+        retq
+.Lcopy_b0\@:
+        movl    $7200, %eax
+        retq
+.Lcopy_b1\@:
+        movl    $7201, %eax
+        retq
+.Lcopy_b2\@:
+        movl    $7202, %eax
+        retq
+.Lcopy_b3\@:
+        movl    $7203, %eax
+        retq
+        .size   \name, .-\name
+        .section .data.rel.ro.\name,"aw",@progbits
+        .p2align 3
+.Lcopy_a\@:
+        .quad   .Lcopy_a0\@, .Lcopy_a1\@, .Lcopy_a2\@, .Lcopy_a3\@
+.Lcopy_b\@:
+        .quad   .Lcopy_b0\@, .Lcopy_b1\@, .Lcopy_b2\@, .Lcopy_b3\@
+        .endm
+
+        selector_copy_chain jt_selector_twotable_address_copies, 0, 10
+        selector_copy_chain jt_selector_twotable_base_copies, 10, 0
+        selector_copy_chain jt_selector_twotable_address_clobber, 0, 10, 1
+        .purgem selector_copy_chain

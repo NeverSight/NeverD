@@ -61,6 +61,7 @@ public:
 
 namespace detail {
 struct ResolverGraphCacheTestAccess;
+struct X87CallGraphCacheTestAccess;
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
 using I386GOTOFFAmbiguityReplayKey = std::tuple<va_t, va_t, int, int, va_t>;
@@ -645,7 +646,27 @@ private:
 };
 } // namespace detail
 
+class X87CallEffectIndex;
+class X87CallGraphCache;
+/// Share bounded immutable x87 graph facts during one unchanged-image
+/// operation, including explicit projection exclusions of complete CFGs.
+/// Replace the cache when image bytes/metadata or borrowed analysis indexes
+/// change.
+/// Registered callback owners (including a target index's name resolver) must
+/// not directly or indirectly wait for x87 graph construction in any cache on
+/// another thread during a CFG build. Waiting requires each nonnull callback
+/// owner to match its exact registered identity. Unregistered callbacks retain
+/// independent, nonwaiting construction. Synchronous nested graph construction
+/// never waits on another cache.
+std::shared_ptr<X87CallGraphCache> createX87CallGraphCache();
+std::shared_ptr<X87CallGraphCache> createX87CallGraphCache(
+    const NoReturnCalleeProver *NonReentrantProver,
+    const libc::NoReturnTargetIndex *NonReentrantTargets = nullptr);
+
 class CFGBuilder {
+  friend class X87CallEffectIndex;
+  friend class X87CallGraphCache;
+
 public:
   /// Build CFG for a single function starting at EntryAddr.
   LowFunc build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
@@ -710,6 +731,14 @@ public:
   /// metadata.
   void setExecutableCodeOwnerIndex(const ExecutableCodeOwnerIndex *Index) {
     ExecutableCodeOwners = Index;
+  }
+  /// Reuse x87 machine graphs and deterministic projection exclusions across
+  /// builders of one immutable image.
+  /// Proof traversal and its budgets remain private to each builder. Borrowed
+  /// index identities and complete entry/protection inventories bind each
+  /// graph.
+  void setX87CallGraphCache(std::shared_ptr<X87CallGraphCache> Cache) {
+    SharedX87CallGraphs = std::move(Cache);
   }
   /// Provide exception-metadata-proven continuation addresses owned by the
   /// function passed to build().  These are intentionally owner-scoped rather
@@ -988,10 +1017,18 @@ public:
 
 private:
   friend struct detail::ResolverGraphCacheTestAccess;
+  friend struct detail::X87CallGraphCacheTestAccess;
+  std::array<size_t, 3> x87CallGraphCacheStatsForTesting() const;
+  std::array<size_t, 5> x87CallGraphFlightStatsForTesting() const;
+  bool waitForX87CallGraphWaitersForTesting(size_t Count) const;
+  std::optional<int> x87CallEffectForTesting(const BinaryImage &Image,
+                                             va_t Entry, size_t &Remaining,
+                                             unsigned Depth = 0);
   struct ResolverGraphCache;
   // One immutable, size-bounded graph. The incomplete type keeps proof-graph
   // implementation and arena ownership inside the resolver translation unit.
   mutable std::shared_ptr<const ResolverGraphCache> CachedResolverGraph;
+  std::array<size_t, 3> resolverValueQueryCacheStatsForTesting() const;
 
   struct InsnRecord {
     va_t Addr;
@@ -1059,6 +1096,9 @@ private:
   /// offset 0) for straight-line / stack-balanced code, so only the mistracked
   /// cases move.
   void fixupFpuStack(LowFunc &Func);
+  bool SkipX87StackFixup = false;
+  std::shared_ptr<X87CallEffectIndex> X87CallEffects;
+  std::shared_ptr<X87CallGraphCache> SharedX87CallGraphs;
 
   /// Whether \p Target is the entry of a *different* known function — i.e. an
   /// unconditional direct branch to it is a tail call, not intra-function flow.
@@ -1264,6 +1304,8 @@ private:
     /// occurrences.  Compare those definitions as occurrence-local SSA roots
     /// without re-resolving their inputs.  Callers must separately
     /// authenticate the relation that grants each producer.
+    /// A contained architectural register lane names the complete writer as
+    /// its root, while comparisons retain the lane's exact offset and width.
     bool UseDefinedAlternativesAsOccurrenceRoots = false;
     /// The candidate is an exact i386 GOT-base model use whose reaching value
     /// may be reloaded from a caller-frame spill.  Calls are transparent to
@@ -1296,6 +1338,8 @@ private:
     /// Fold pure, exactly sized scalar AND/OR/SHL nodes while proving a
     /// constant at this use. Other relations retain producer identity.
     bool FoldScalarConstantOps = false;
+
+    bool operator==(const JumpTableValueQuery &) const = default;
   };
 
   struct JumpTableFrameAddressUse {

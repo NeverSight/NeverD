@@ -17,6 +17,7 @@
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86RegistrationFrame.h"
 #include "neverd/ir/med/I386PicAddress.h"
 #include "neverd/ir/med/MedIntrinsicOutputs.h"
 #include "neverd/ir/med/MedStackAlignment.h"
@@ -229,16 +230,11 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   switch (Op.Opcode) {
   case NdOp::COPY: {
     if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None) {
-      if (TargetArch != Arch::X86 || !FrameBaseInt ||
-          !hasValidRegistrationRootShape(Op))
+      if (TargetArch != Arch::X86 || !FrameBaseInt || !CurMedFunc)
         throw std::invalid_argument("invalid PE32 registration runtime root");
-      auto *SP = Builder.CreateTrunc(FrameBaseInt, Builder.getInt32Ty());
-      if (Op.RegistrationRoot ==
-          MedOp::RegistrationRootKind::CallbackStackPointer)
-        Result = SP;
-      else if (const auto Offset = registrationRootEntryStackOffset(Op))
-        Result = Builder.CreateAdd(SP, Builder.getInt32(uint32_t(*Offset)),
-                                   "registration.source.frame");
+      Result = emitX86RegistrationRoot(
+          *CurMedFunc, Op,
+          Builder.CreateTrunc(FrameBaseInt, Builder.getInt32Ty()), Builder);
       break;
     }
     if (CurMedFunc && CurMedFunc->SkippedSSA) {

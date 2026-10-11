@@ -92,20 +92,32 @@ bool valid(const std::optional<T> &Value, uint64_t Limit) {
            (Value->size() < Limit && Value->find('\0') == std::string::npos);
   return true;
 }
-template <typename T>
+enum class ProcessAdmission { Identity, Login, Nice, Raw };
+template <ProcessAdmission Admission, typename T>
 const char *invalidProcess(const std::optional<T> &Value) {
-  if constexpr (std::is_same_v<T, uint32_t>) {
+  if constexpr (Admission == ProcessAdmission::Identity) {
+    static_assert(std::is_same_v<T, uint32_t>);
     if (Value && (!*Value || *Value > uint32_t(INT32_MAX)))
       return diagnostic::ProcessIdentityOption;
-  } else if constexpr (std::is_same_v<T, int32_t>) {
+  } else if constexpr (Admission == ProcessAdmission::Nice) {
+    static_assert(std::is_same_v<T, int32_t>);
     if (Value && (*Value < -int32_t(PriorityNiceBound) ||
                   *Value > int32_t(PriorityNiceBound)))
       return diagnostic::ProcessNiceOption;
-  } else if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
+  } else if constexpr (Admission == ProcessAdmission::Login) {
+    static_assert(std::is_same_v<T, std::vector<uint8_t>>);
     if (Value && Value->size() != LoginNameSize)
       return diagnostic::LoginNameOption;
+  } else {
+    static_assert(Admission == ProcessAdmission::Raw);
+    static_assert(std::is_same_v<T, bool> || std::is_same_v<T, uint32_t> ||
+                  std::is_same_v<T, uint64_t>);
   }
   return nullptr;
+}
+uint64_t machPortCarrier(uint32_t Name) {
+  // Mach's saved-state return path uses a signed 32-bit kernel result.
+  return uint64_t(int64_t(int32_t(Name)));
 }
 } // namespace
 
@@ -132,6 +144,9 @@ llvm::Error validateSystemOptions(const DarwinSystemOptions &Options) {
     for (auto ID : {C.RealUID, C.EffectiveUID, C.RealGID, C.EffectiveGID})
       if (ID > CredentialIDMax)
         return failure(diagnostic::CredentialOption);
+    if (C.GroupMembershipUID && *C.GroupMembershipUID > CredentialIDMax &&
+        *C.GroupMembershipUID != GroupMembershipUIDNone)
+      return failure(diagnostic::GroupMembershipUIDOption);
     if (C.GroupAccessList) {
       const auto &G = *C.GroupAccessList;
       if (G.empty() || G.size() > GroupAccessLimit ||
@@ -151,8 +166,9 @@ llvm::Error validateSystemOptions(const DarwinSystemOptions &Options) {
                        : diagnostic::SystemString);
 #include "DarwinSystemFields.def"
 #undef NEVERD_DARWIN_SYSTEM_FIELD
-#define NEVERD_DARWIN_PROCESS_FIELD(Member, Field)                             \
-  if (const char *Reason = invalidProcess(Options.Member))                     \
+#define NEVERD_DARWIN_PROCESS_FIELD(Member, Field, Admission)                  \
+  if (const char *Reason =                                                     \
+          invalidProcess<ProcessAdmission::Admission>(Options.Member))         \
     return failure(Reason);
 #include "DarwinSystemFields.def"
 #undef NEVERD_DARWIN_PROCESS_FIELD
@@ -171,6 +187,13 @@ llvm::Error validateSystemOptions(const DarwinSystemOptions &Options) {
     if (*Usage && ((**Usage).UserMicroseconds >= 1000000 ||
                    (**Usage).SystemMicroseconds >= 1000000))
       return failure(diagnostic::ResourceUsageOption);
+  if (Options.EntropyReads) {
+    if (Options.EntropyReads->size() > EntropyReplayLimit)
+      return failure(diagnostic::EntropyOption);
+    for (const auto &Read : *Options.EntropyReads)
+      if (Read.empty() || Read.size() > EntropyReadLimit)
+        return failure(diagnostic::EntropyOption);
+  }
   return llvm::Error::success();
 }
 
@@ -252,6 +275,22 @@ systemService(GuestMemory &Memory, uint64_t PageSize, ServiceKind Kind,
     return Options && Options->SessionID
                ? returned(*Options->SessionID)
                : unsupported(Result, diagnostic::ProcessSessionObservation);
+  case ServiceKind::ThreadSelfID:
+    return Options && Options->ThreadID
+               ? returned(*Options->ThreadID)
+               : unsupported(Result, diagnostic::ThreadIDObservation);
+  case ServiceKind::ThreadSelfPort:
+    return Options && Options->ThreadSelfPort
+               ? returned(machPortCarrier(*Options->ThreadSelfPort))
+               : unsupported(Result, diagnostic::ThreadSelfPortObservation);
+  case ServiceKind::TaskSelfPort:
+    return Options && Options->TaskSelfPort
+               ? returned(machPortCarrier(*Options->TaskSelfPort))
+               : unsupported(Result, diagnostic::TaskSelfPortObservation);
+  case ServiceKind::HostSelfPort:
+    return Options && Options->HostSelfPort
+               ? returned(machPortCarrier(*Options->HostSelfPort))
+               : unsupported(Result, diagnostic::HostSelfPortObservation);
   case ServiceKind::IsSetUGID:
     return Options && Options->ProcessTainted
                ? returned(*Options->ProcessTainted)

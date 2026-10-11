@@ -202,12 +202,12 @@ constexpr uint32_t kMaxJumpTableGuardExpressionDepth = 64;
 /// with `mov eax, [rcx]` in the next block.
 constexpr uint32_t kMaxJumpTableReloadSearchBlocks = 4;
 
-/// Target/address-role and mask fixed-point value reconstruction can cross
-/// several independently authenticated loop back edges in one expanded O0
-/// dispatch graph.  A 3-machine x64 selector reaches 65 distinct exact states
-/// before closing its memoized cycles; retain the next power-of-two depth while
-/// every visit still debits the candidate-wide graph-work account.  Generic
-/// guard/domain expression proofs keep the stricter limit above.
+/// CFG value reconstruction for target/address roles, masks and exact guard
+/// occurrences can cross many predecessors in an expanded dispatch graph.
+/// A 3-machine x64 selector reaches 65 distinct exact states before closing its
+/// memoized cycles. Retain the next power-of-two depth while every visit still
+/// debits the candidate-wide graph-work account. Guard syntax collection and
+/// materialization keep the separate expression limit above.
 constexpr uint32_t kMaxJumpTableExpandedResolverDepth = 128;
 
 /// Exact target/address-role proofs for vector-reduction switches can cross
@@ -400,6 +400,11 @@ constexpr size_t kMaxCallEffectExtraLifts = 256;
 /// A no-return proof for an internal callee lifts it, and its own proofs
 /// lift their callees in turn; one this many proofs deep counts as returning.
 constexpr unsigned kMaxNoReturnProofDepth = 4;
+/// One x87 call-effect proof must close every returning path and callee under
+/// these independent limits. Incomplete proofs grant no stack or return fact.
+constexpr unsigned kMaxX87CallProofDepth = 16;
+constexpr size_t kMaxX87CallProofFunctions = 128;
+constexpr size_t kMaxX87CallProofWork = 262144;
 /// Alignment no-ops between a call and the next function are fewer bytes
 /// than the widest function alignment compilers use (64); a longer run is
 /// not taken as padding.

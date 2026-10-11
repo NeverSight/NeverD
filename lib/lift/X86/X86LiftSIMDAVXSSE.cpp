@@ -13,6 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPRoundState.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -115,127 +116,23 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // ROUNDSS/VROUNDSS — scalar single float rounding (lowest 32 bits).
-  // Legacy: roundss xmm, xmm/m32, imm8 (3 operands: dst, src, imm)
-  // VEX:    vroundss xmm, xmm, xmm/m32, imm8 (4 operands)
+  // ROUND consumes MXCSR and completes all numerical lanes and state once.
   case X86_INS_ROUNDSS:
-  case X86_INS_VROUNDSS: {
-    if (X86.op_count < 3)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    bool IsVEX = (X86.op_count >= 4);
-    NdVar PassThru = L.operandRead(S, X86.operands[IsVEX ? 1 : 0]);
-    NdVar Src = L.operandRead(S, X86.operands[IsVEX ? 2 : 1]);
-    uint8_t Imm = X86.operands[X86.op_count - 1].imm & 0x3;
-    NdVar Lo = S.makeTemp(4);
-    S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(0, 4)});
-    NdVar Rounded = S.makeTemp(4);
-    if (Imm == 3) {
-      // Round toward zero = floor for non-negative, ceil for negative.  Using
-      // floor/ceil (not float->int->float) stays correct past 2^31/2^63.
-      NdVar Fl = S.makeTemp(4), Ce = S.makeTemp(4), IsNeg = S.makeTemp(1);
-      S.emit(NdOp::FLOAT_FLOOR, Fl, {Lo});
-      S.emit(NdOp::FLOAT_CEIL, Ce, {Lo});
-      S.emit(NdOp::FLOAT_LESS, IsNeg, {Lo, NdVar::cst(0, 4)});
-      S.emit(NdOp::SELECT, Rounded, {IsNeg, Ce, Fl});
-    } else {
-      NdOp RndOp = Imm == 1 ? NdOp::FLOAT_FLOOR
-                   : Imm == 2
-                       ? NdOp::FLOAT_CEIL
-                       : NdOp::FLOAT_ROUNDEVEN; // imm0: nearest, ties even
-      S.emit(RndOp, Rounded, {Lo});
-    }
-    if (Dst.Size > 4) {
-      NdVar Hi = S.makeTemp(Dst.Size - 4);
-      S.emit(NdOp::SUBBYTES, Hi, {PassThru, NdVar::cst(4, 4)});
-      S.emit(NdOp::CONCAT, Dst, {Hi, Rounded});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Rounded});
-    }
-    break;
-  }
-  // ROUNDSD/VROUNDSD — scalar double float rounding (lowest 64 bits).
   case X86_INS_ROUNDSD:
-  case X86_INS_VROUNDSD: {
-    if (X86.op_count < 3)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    bool IsVEX = (X86.op_count >= 4);
-    NdVar PassThru = L.operandRead(S, X86.operands[IsVEX ? 1 : 0]);
-    NdVar Src = L.operandRead(S, X86.operands[IsVEX ? 2 : 1]);
-    uint8_t Imm = X86.operands[X86.op_count - 1].imm & 0x3;
-    NdVar Lo = S.makeTemp(8);
-    S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(0, 4)});
-    NdVar Rounded = S.makeTemp(8);
-    if (Imm == 3) {
-      // Round toward zero = floor for non-negative, ceil for negative.  Using
-      // floor/ceil (not float->int->float) stays correct past 2^31/2^63.
-      NdVar Fl = S.makeTemp(8), Ce = S.makeTemp(8), IsNeg = S.makeTemp(1);
-      S.emit(NdOp::FLOAT_FLOOR, Fl, {Lo});
-      S.emit(NdOp::FLOAT_CEIL, Ce, {Lo});
-      S.emit(NdOp::FLOAT_LESS, IsNeg, {Lo, NdVar::cst(0, 8)});
-      S.emit(NdOp::SELECT, Rounded, {IsNeg, Ce, Fl});
-    } else {
-      NdOp RndOp = Imm == 1 ? NdOp::FLOAT_FLOOR
-                   : Imm == 2
-                       ? NdOp::FLOAT_CEIL
-                       : NdOp::FLOAT_ROUNDEVEN; // imm0: nearest, ties even
-      S.emit(RndOp, Rounded, {Lo});
-    }
-    if (Dst.Size > 8) {
-      NdVar Hi = S.makeTemp(Dst.Size - 8);
-      S.emit(NdOp::SUBBYTES, Hi, {PassThru, NdVar::cst(8, 4)});
-      S.emit(NdOp::CONCAT, Dst, {Hi, Rounded});
-    } else {
-      S.emit(NdOp::COPY, Dst, {Rounded});
-    }
-    break;
-  }
-  // ROUNDPS/ROUNDPD/VROUNDPS/VROUNDPD — packed float rounding (per-lane).
-  case X86_INS_ROUNDPD:
   case X86_INS_ROUNDPS:
+  case X86_INS_ROUNDPD:
+  case X86_INS_VROUNDSS:
+  case X86_INS_VROUNDSD:
+  case X86_INS_VROUNDPS:
   case X86_INS_VROUNDPD:
-  case X86_INS_VROUNDPS: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[X86.op_count >= 3 ? 1 : 0]);
-    uint8_t Imm = X86.operands[X86.op_count - 1].imm & 0x3;
-    bool IsPD = (InsnId == X86_INS_ROUNDPD || InsnId == X86_INS_VROUNDPD);
-    unsigned LaneSz = IsPD ? 8 : 4;
-    unsigned NLanes = Dst.Size / LaneSz;
-    std::vector<NdVar> Lanes;
-    for (unsigned I = 0; I < NLanes; ++I) {
-      NdVar Lane = S.makeTemp(LaneSz);
-      S.emit(NdOp::SUBBYTES, Lane, {Src, NdVar::cst(I * LaneSz, 4)});
-      NdVar R = S.makeTemp(LaneSz);
-      if (Imm == 3) {
-        // Round toward zero = floor for non-negative, ceil for negative.  Using
-        // floor/ceil (not float->int->float) stays correct past 2^31/2^63.
-        NdVar Fl = S.makeTemp(LaneSz), Ce = S.makeTemp(LaneSz),
-              IsNeg = S.makeTemp(1);
-        S.emit(NdOp::FLOAT_FLOOR, Fl, {Lane});
-        S.emit(NdOp::FLOAT_CEIL, Ce, {Lane});
-        S.emit(NdOp::FLOAT_LESS, IsNeg, {Lane, NdVar::cst(0, LaneSz)});
-        S.emit(NdOp::SELECT, R, {IsNeg, Ce, Fl});
-      } else {
-        NdOp RndOp = Imm == 1 ? NdOp::FLOAT_FLOOR
-                     : Imm == 2
-                         ? NdOp::FLOAT_CEIL
-                         : NdOp::FLOAT_ROUNDEVEN; // imm0: nearest, ties even
-        S.emit(RndOp, R, {Lane});
-      }
-      Lanes.push_back(R);
-    }
-    NdVar Acc = Lanes[0];
-    for (unsigned I = 1; I < NLanes; ++I) {
-      NdVar W = S.makeTemp((I + 1) * LaneSz);
-      S.emit(NdOp::CONCAT, W, {Lanes[I], Acc});
-      Acc = W;
-    }
-    S.emit(NdOp::COPY, Dst, {Acc});
-    break;
-  }
+    return liftFPRoundState(
+        L, S, Insn, X86,
+        InsnId == X86_INS_ROUNDSD || InsnId == X86_INS_ROUNDPD ||
+            InsnId == X86_INS_VROUNDSD || InsnId == X86_INS_VROUNDPD,
+        InsnId == X86_INS_ROUNDSS || InsnId == X86_INS_ROUNDSD ||
+            InsnId == X86_INS_VROUNDSS || InsnId == X86_INS_VROUNDSD,
+        InsnId == X86_INS_VROUNDSS || InsnId == X86_INS_VROUNDSD ||
+            InsnId == X86_INS_VROUNDPS || InsnId == X86_INS_VROUNDPD);
 
   // DPPS / DPPD — dot product with imm8 Lane Mask.
   // DPPS/DPPD — dot product with immediate lane mask.

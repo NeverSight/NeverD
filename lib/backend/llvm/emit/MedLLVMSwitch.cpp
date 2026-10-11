@@ -125,11 +125,11 @@ llvm::Value *MedLLVMEmitter::synthesizeSharedDispatchIndex(
 }
 
 llvm::Value *
-MedLLVMEmitter::synthesizeTwoTableSelector(const JumpTable &JT,
+MedLLVMEmitter::synthesizeTwoTableSelector(const JumpTable &JT, int BlockId,
                                            llvm::IRBuilder<> &Builder) {
   if (!CurMedFunc || !JT.CompositeSelectorUseRef)
     return nullptr;
-  auto It = CurMedFunc->SwitchSelectorPlans.find(JT.InsnAddr);
+  auto It = CurMedFunc->SwitchSelectorPlans.find({JT.InsnAddr, BlockId});
   if (It == CurMedFunc->SwitchSelectorPlans.end())
     return nullptr;
   const MedSwitchSelectorPlan &Plan = It->second;
@@ -191,7 +191,7 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
 
   std::optional<MedVar> IndexVar;
   auto indexFromSelectorPlan = [&]() -> std::optional<MedVar> {
-    auto It = CurMedFunc->SwitchSelectorPlans.find(JT->InsnAddr);
+    auto It = CurMedFunc->SwitchSelectorPlans.find({JT->InsnAddr, Blk.Id});
     if (It == CurMedFunc->SwitchSelectorPlans.end() ||
         It->second.PlanKind != MedSwitchSelectorPlan::Kind::Direct ||
         It->second.Selector.Size == 0 || It->second.Selector.isConst() ||
@@ -200,7 +200,7 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     return It->second.Selector;
   };
   auto edgeMergedIndexFromSelectorPlan = [&]() -> llvm::Value * {
-    auto It = CurMedFunc->SwitchSelectorPlans.find(JT->InsnAddr);
+    auto It = CurMedFunc->SwitchSelectorPlans.find({JT->InsnAddr, Blk.Id});
     if (It == CurMedFunc->SwitchSelectorPlans.end() ||
         It->second.PlanKind != MedSwitchSelectorPlan::Kind::EdgeMerged ||
         It->second.ResultSize == 0 || It->second.EdgeSelectors.size() < 2 ||
@@ -310,7 +310,8 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     // or changed role; never fall back to a physical register/DAG guess.
     if (!JT->SelectorUseRefs.empty()) {
       IndexVar = indexFromSelectorPlan();
-      const auto PlanIt = CurMedFunc->SwitchSelectorPlans.find(JT->InsnAddr);
+      const auto PlanIt =
+          CurMedFunc->SwitchSelectorPlans.find({JT->InsnAddr, Blk.Id});
       const bool HasEdgeMergedPlan =
           PlanIt != CurMedFunc->SwitchSelectorPlans.end() &&
           PlanIt->second.PlanKind == MedSwitchSelectorPlan::Kind::EdgeMerged;
@@ -469,7 +470,7 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
   }
 
   llvm::Value *Index =
-      JT->TwoTableSelect ? synthesizeTwoTableSelector(*JT, Builder)
+      JT->TwoTableSelect ? synthesizeTwoTableSelector(*JT, Blk.Id, Builder)
       : IndexVar         ? getVar(*IndexVar, Builder)
       : !JT->SelectorUseRefs.empty()
           ? edgeMergedIndexFromSelectorPlan()

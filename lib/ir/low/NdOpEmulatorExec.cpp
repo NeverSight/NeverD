@@ -714,21 +714,9 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       return false;
     }
 
-    const auto IsCanonical = [&](uint64_t Address) {
-      const unsigned Bits = *X86LinearAddressBits;
-      const uint64_t LowMask = (UINT64_C(1) << Bits) - 1;
-      const uint64_t HighMask = ~LowMask;
-      const bool Sign = ((Address >> (Bits - 1)) & 1) != 0;
-      return (Address & HighMask) == (Sign ? HighMask : 0);
-    };
-    const auto IsCanonicalRange = [&](uint64_t Address, uint64_t Size) {
-      return Size != 0 && Size - 1 <= UINT64_MAX - Address &&
-             IsCanonical(Address) && IsCanonical(Address + Size - 1);
-    };
-
     const auto SourceAddress =
         resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
-    if (!SourceAddress || !IsCanonicalRange(*SourceAddress, 64))
+    if (!SourceAddress || !isX86CanonicalMemoryRange(*SourceAddress, 64))
       return false;
     const auto Command = loadMemoryBytes(*SourceAddress, 64);
     if (!Command)
@@ -744,7 +732,8 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       return false;
 
     const uint64_t PortalAddress = readOperand(Op.Inputs[2]);
-    if ((PortalAddress & 63) != 0 || !IsCanonicalRange(PortalAddress, 64))
+    if ((PortalAddress & 63) != 0 ||
+        !isX86CanonicalMemoryRange(PortalAddress, 64))
       return false;
     for (uint64_t Offset = 0; Offset != 64; ++Offset) {
       const Segment *Mapped = Img.getSegmentFor(PortalAddress + Offset);

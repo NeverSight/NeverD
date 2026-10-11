@@ -446,7 +446,7 @@ private:
   /// the merged table is indexed by the exact post-SSA SelectOffset plan
   /// exported from the resolver-certified Low occurrences.  No MedIR DAG or
   /// physical-register rescan is permitted here.
-  llvm::Value *synthesizeTwoTableSelector(const JumpTable &JT,
+  llvm::Value *synthesizeTwoTableSelector(const JumpTable &JT, int BlockId,
                                           llvm::IRBuilder<> &Builder);
 
   /// Trace an INDIR_BR target var back to the scaled index of its table load,

@@ -254,6 +254,155 @@ static int xattr_bytes(const u64 *words, const unsigned char *expected,
   }
   return 0;
 }
+static int hard_link_status(u64 number, u64 object, unsigned links, u64 device,
+                            u64 inode) {
+  u64 words[20];
+  words[0] = words[19] = 0xa5a5a5a5a5a5a5a5UL;
+  unsigned char *out = (unsigned char *)(words + 1);
+  if (xattr_result(number, object, (u64)out, 0, 0, 0, 0, 0, 0) ||
+      words[0] != 0xa5a5a5a5a5a5a5a5UL || words[19] != 0xa5a5a5a5a5a5a5a5UL ||
+      little_integer(out, 4) != device || little_integer(out + 8, 8) != inode ||
+      little_integer(out + 6, 2) != links)
+    return 214;
+  return 0;
+}
+/* Stable namespace/object observations only. APFS vnode-name caching is
+ * deliberately queried only by the virtual unsupported modes below. */
+static int hard_links(const char *path, unsigned mode) {
+  unsigned error;
+  char parent[1024];
+  unsigned length = 0, last = 0;
+  while (path[length] && length < 1023) {
+    parent[length] = path[length];
+    if (path[length] == '/')
+      last = length;
+    ++length;
+  }
+  if (path[length] || !length)
+    return 200;
+  parent[last ? last : 1] = 0;
+  u64 file = call(5, (u64)path, 2, 0, 0, 0, 0, &error);
+  if (error || secondary)
+    return 201;
+  u64 root = call(5, (u64)parent, 0x100000, 0, 0, 0, 0, &error);
+  if (error || secondary || xattr_result(13, root, 0, 0, 0, 0, 0, 0, 0))
+    return 202;
+  u64 copy = call(41, file, 0, 0, 0, 0, 0, &error);
+  if (error || secondary || xattr_result(199, copy, 37, 0, 0, 0, 0, 37, 0))
+    return 203;
+  u64 stat[18], symstat[18];
+  if (xattr_result(339, file, (u64)stat, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(340, (u64) "alias", (u64)symstat, 0, 0, 0, 0, 0, 0))
+    return 204;
+  const unsigned char *s = (const unsigned char *)stat;
+  const unsigned char *t = (const unsigned char *)symstat;
+  const u64 device = little_integer(s, 4), inode = little_integer(s + 8, 8);
+  const u64 symdevice = little_integer(t, 4),
+            syminode = little_integer(t + 8, 8);
+  if (hard_link_status(339, file, 1, device, inode) ||
+      xattr_result(471, 99, -1UL, 99, -1UL, 0x20, 0, 22, 1) ||
+      xattr_result(9, (u64) "missing", -1UL, 0, 0, 0, 0, 2, 1) ||
+      xattr_result(471, 99, (u64) "data", 99, -1UL, 0, 0, 9, 1) ||
+      xattr_result(471, 99, -1UL, 99, -1UL, 0, 0, 14, 1) ||
+      xattr_result(9, (u64) ".", -1UL, 0, 0, 0, 0, 1, 1) ||
+      xattr_result(9, (u64) "data", -1UL, 0, 0, 0, 0, 14, 1) ||
+      xattr_result(9, (u64) "data", (u64) "data", 0, 0, 0, 0, 17, 1))
+    return 205;
+  if (xattr_result(9, (u64) "alias", (u64) "followed", 0, 0, 0, 0, 0, 0) ||
+      xattr_result(471, root | 0x1234567800000000UL, (u64) "alias", root,
+                   (u64) "followed2", 0x1234567800000040UL, 0, 0, 0) ||
+      xattr_result(471, root, (u64) "alias", root, (u64) "symbol-name", 0, 0, 0,
+                   0) ||
+      hard_link_status(339, file, 3, device, inode) ||
+      hard_link_status(340, (u64) "symbol-name", 2, symdevice, syminode) ||
+      xattr_result(9, (u64) "dangling", (u64) "dangling-name", 0, 0, 0, 0, 2,
+                   1) ||
+      xattr_result(471, root, (u64) "dangling", root, (u64) "dangling-name", 0,
+                   0, 0, 0))
+    return 206;
+  unsigned char target[16], out[16];
+  if (xattr_result(58, (u64) "symbol-name", (u64)target, 16, 0, 0, 0, 4, 0) ||
+      target[0] != 'd' || target[1] != 'a' || target[2] != 't' ||
+      target[3] != 'a')
+    return 207;
+  const char *attribute = "user.neverd.shared";
+  const unsigned char value = 'V', symvalue = 42, changed = 'Q';
+  if (xattr_result(236, (u64) "symbol-name", (u64)attribute, (u64)&symvalue, 1,
+                   0, 1, 0, 0) ||
+      xattr_result(234, (u64) "alias", (u64)attribute, (u64)out, 1, 0, 1, 1,
+                   0) ||
+      out[0] != symvalue)
+    return 208;
+  /* Byte mutations invalidate complete ordinary-attribute observations in
+   * the virtual contract. Exercise independent attribute sharing on another
+   * declared object, without assuming provider behavior after a byte write. */
+  u64 attributes = call(5, (u64) "attributes", 0, 0, 0, 0, 0, &error);
+  if (error || secondary ||
+      xattr_result(9, (u64) "attributes", (u64) "attribute-name", 0, 0, 0, 0, 0,
+                   0))
+    return 208;
+  u64 attribute_alias = call(5, (u64) "attribute-name", 0, 0, 0, 0, 0, &error);
+  if (error || secondary ||
+      xattr_result(237, attributes, (u64)attribute, (u64)&value, 1, 0, 0, 0,
+                   0) ||
+      xattr_result(235, attribute_alias, (u64)attribute, (u64)out, 1, 0, 0, 1,
+                   0) ||
+      out[0] != value ||
+      xattr_result(10, (u64) "attributes", 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(10, (u64) "attribute-name", 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(235, attribute_alias, (u64)attribute, (u64)out, 1, 0, 0, 1,
+                   0) ||
+      out[0] != value)
+    return 208;
+  u64 alias = call(5, (u64) "followed", 2, 0, 0, 0, 0, &error);
+  if (error || secondary ||
+      xattr_result(154, alias, (u64)&changed, 1, 0, 0, 0, 1, 0) ||
+      xattr_result(153, file, (u64)out, 10, 0, 0, 0, 10, 0) || out[0] != 'Q' ||
+      out[1] != '1' || out[9] != '9' ||
+      xattr_result(199, copy, 0, 1, 0, 0, 0, 37, 0))
+    return 209;
+  if (xattr_result(128, (u64) "followed", (u64) "moved", 0, 0, 0, 0, 0, 0) ||
+      xattr_result(128, (u64) "data", (u64) "moved", 0, 0, 0, 0, 0, 0) ||
+      hard_link_status(339, alias, 3, device, inode) ||
+      xattr_result(10, (u64) "data", 0, 0, 0, 0, 0, 0, 0) ||
+      hard_link_status(339, copy, 2, device, inode) ||
+      xattr_result(10, (u64) "moved", 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(10, (u64) "followed2", 0, 0, 0, 0, 0, 0, 0) ||
+      hard_link_status(339, alias, 0, device, inode))
+    return 210;
+  u64 fresh = call(5, (u64) "data", 0x202, 0600, 0, 0, 0, &error);
+  if (error || secondary ||
+      xattr_result(339, fresh, (u64)stat, 0, 0, 0, 0, 0, 0) ||
+      little_integer((const unsigned char *)stat + 8, 8) == inode ||
+      xattr_result(153, alias, (u64)out, 10, 0, 0, 0, 10, 0) ||
+      out[0] != changed || out[9] != '9')
+    return 211;
+  if (mode == 1) {
+    if (xattr_result(4, 1, (u64)out, 10, 0, 0, 0, 10, 0))
+      return 212;
+  } else if (xattr_result(4, 1, (u64) "H", 1, 0, 0, 0, 1, 0)) {
+    return 212;
+  }
+  if (mode == 2) {
+    call(92, file, 50, (u64)out, 0, 0, 0, &error);
+    return 213;
+  }
+  if (mode == 3) {
+    u64 request[3] = {5UL | (1UL << 32), 0, 0}, names[32];
+    call(228, file, (u64)request, (u64)names, sizeof(names), 0, 0, &error);
+    return 213;
+  }
+  if (xattr_result(6, fresh, 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(6, attribute_alias, 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(6, attributes, 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(6, alias, 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(6, copy, 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(6, file, 0, 0, 0, 0, 0, 0, 0) ||
+      xattr_result(6, root, 0, 0, 0, 0, 0, 0, 0))
+    return 215;
+  return 37;
+}
+
 static int xattr_mutations(const char *path, unsigned mode) {
   unsigned error;
   char parent[1024];
@@ -675,17 +824,34 @@ static int attribute_names(const char *path, unsigned mode) {
       0,  0, 0, 0, 0, 0, 0,   0,   0,   12,  0, 0, 0, 5, 0,
       0,  0, 1, 0, 0, 0, 'd', 'a', 't', 'a', 0, 0, 0, 0};
   u64 words[10];
+  u64 literal[6];
+  for (unsigned i = 0; i != 5; ++i)
+    literal[i] = little_integer(expected + i * 8, 8);
+  literal[5] = little_integer(expected + 40, 4);
   unsigned char *bytes = (unsigned char *)words, observed[44];
   if (attribute_result(228, copy, (u64)request, (u64)observed, 44, 0, 0, 0, 0))
     return 229;
   for (unsigned i = 0; i != 5; ++i)
-    if (little_integer(observed + i * 8, 8) !=
-        little_integer(expected + i * 8, 8))
+    if (little_integer(observed + i * 8, 8) != literal[i])
       return 230;
-  if (little_integer(observed + 40, 4) != little_integer(expected + 40, 4))
+  if (little_integer(observed + 40, 4) != literal[5])
     return 230;
   const u64 sizes[] = {4, 7, 24, 27, 31, 35, 36, 40, 41, 43, 44, 512};
-  for (unsigned i = 0; i != 12; ++i)
+  for (unsigned i = 0; i != 12; ++i) {
+    const unsigned count = sizes[i] < 44 ? (unsigned)sizes[i] : 44;
+    const unsigned whole = count / 8, partial = count % 8;
+    // Each route compares the complete guarded buffer with this independent
+    // literal. Construct its identical size-specific prefix only once.
+    u64 wanted[10];
+    for (unsigned j = 0; j != 10; ++j) {
+      wanted[j] = 0xa5a5a5a5a5a5a5a5UL;
+      if (j >= 1 && j < 1 + whole)
+        wanted[j] = literal[j - 1];
+      else if (j == 1 + whole && partial) {
+        const u64 mask = (1UL << (partial * 8)) - 1;
+        wanted[j] = (literal[whole] & mask) | (wanted[j] & ~mask);
+      }
+    }
     for (unsigned route = 0; route != 3; ++route) {
       for (unsigned j = 0; j != 10; ++j)
         words[j] = 0xa5a5a5a5a5a5a5a5UL;
@@ -701,23 +867,13 @@ static int attribute_names(const char *path, unsigned mode) {
                                  (u64)(bytes + 8), sizes[i], flags, 0, 0);
       if (failed)
         return 231;
-      const unsigned count = sizes[i] < 44 ? (unsigned)sizes[i] : 44;
       // Compare all 80 bytes in ten words. A partial final word keeps its
       // exact output prefix and every unwritten canary byte, as above.
-      const unsigned whole = count / 8, partial = count % 8;
-      for (unsigned j = 0; j != 10; ++j) {
-        u64 wanted = 0xa5a5a5a5a5a5a5a5UL;
-        if (j >= 1 && j < 1 + whole)
-          wanted = little_integer(expected + (j - 1) * 8, 8);
-        else if (j == 1 + whole && partial) {
-          const u64 mask = (1UL << (partial * 8)) - 1;
-          wanted =
-              little_integer(expected + whole * 8, partial) | (wanted & ~mask);
-        }
-        if (words[j] != wanted)
+      for (unsigned j = 0; j != 10; ++j)
+        if (words[j] != wanted[j])
           return 232;
-      }
     }
+  }
   if (attribute_result(220, (u64) "alias", (u64)request, (u64)bytes, 80, 1, 0,
                        0, 0) ||
       attribute_name_record(bytes, "alias", 5) ||
@@ -1672,6 +1828,53 @@ static int preserved_mach(struct mach_observation value, unsigned carry) {
          value.second == 0x1122334455667788UL &&
          value.third == 0x8877665544332211UL;
 }
+/* Independent fixed observations exercise the original no-argument Mach ABI.
+ * Equal/zero names are permitted; this does not grant a live IPC right. */
+static int mach_self_ports(int emit_values) {
+  u64 names[3];
+  const u64 prefixes[] = {0, 0x1234567800000000UL, 0xffffffff00000000UL};
+  int check = 50;
+#define SELF_EXPECT(expression)                                                \
+  do {                                                                         \
+    ++check;                                                                   \
+    if (!(expression))                                                         \
+      return check;                                                            \
+  } while (0)
+  for (unsigned q = 0; q != 3; ++q) {
+    const u64 plain = mach_number(27 + q);
+    struct mach_observation first = raw_trap(plain, (u64)-1, mach_flags(1));
+    SELF_EXPECT(preserved_mach(first, 1));
+    names[q] = first.value;
+    SELF_EXPECT(first.value == (u64)(long)(int)(unsigned)first.value);
+    for (unsigned p = 0; p != 3; ++p)
+      for (unsigned carry = 0; carry != 2; ++carry) {
+        struct mach_observation next = raw_trap(
+            (plain & 0xffffffffUL) | prefixes[p], (u64)-1, mach_flags(carry));
+        SELF_EXPECT(preserved_mach(next, carry));
+        SELF_EXPECT(next.value == names[q]);
+      }
+  }
+  unsigned error;
+  const u64 size = emit_values ? sizeof(names) : 1;
+  SELF_EXPECT(call(4, 1, emit_values ? (u64)names : (u64) "J", size, 0, 0, 0,
+                   &error) == size &&
+              !error);
+#undef SELF_EXPECT
+  return 37;
+}
+static int mach_self_port_missing(const char *selection) {
+  unsigned index = equal(selection, "thread") ? 27
+                   : equal(selection, "task") ? 28
+                   : equal(selection, "host") ? 29
+                                              : 0;
+  if (!index)
+    return 79;
+  unsigned error;
+  if (call(4, 1, (u64) "!", 1, 0, 0, 0, &error) != 1 || error)
+    return 78;
+  return (int)raw_trap(mach_number(index), (u64)-1, mach_flags(1)).value;
+}
+
 static int mach_timebase(int emit_values) {
   unsigned char bytes[10];
   unsigned error;
@@ -4831,6 +5034,182 @@ static int directory_mutations(const char *path) {
   return 37;
 }
 
+static int owner_query_result(unsigned api, const char *path, u64 mode,
+                              u64 flags, u64 expected) {
+  unsigned error;
+  u64 result = api ? call(466, -2UL, (u64)path, mode, flags, 0, 0, &error)
+                   : call(33, (u64)path, mode, 0, 0, 0, 0, &error);
+  if (result != expected || error != (expected != 0))
+    return 211;
+#if defined(__aarch64__)
+  if (secondary)
+    return 212;
+#endif
+  return 0;
+}
+static int owner_queries(const char *stop_path, unsigned scope) {
+  unsigned error;
+  if (stop_path || scope) {
+    if (call(4, 1, (u64) "!", 1, 0, 0, 0, &error) != 1 || error)
+      return 213;
+    if (scope == 1)
+      call(5, (u64) "/data", 0x601, 0, 0, 0, 0, &error);
+    else if (scope == 2)
+      call(197, 0, PAGE, 1, 2, 1, 0, &error);
+    else
+      call(33, (u64)stop_path, 4, 0, 0, 0, 0, &error);
+    return 214; /* Every selected operation must stop before this return. */
+  }
+  const unsigned file_errors[] = {0, 13, 13, 13, 0, 13, 13, 13};
+  for (unsigned api = 0; api != 3; ++api)
+    for (unsigned request = 0; request != 8; ++request) {
+      int status = owner_query_result(api, "/data", request, api == 2 ? 16 : 0,
+                                      file_errors[request]);
+      if (status)
+        return status;
+    }
+  // Keep pointers in call instructions: a constant pointer table introduces
+  // Mach-O rebases and changes this SDK-free static guest's loading contract.
+#define OWNER_QUERY(path, mode, expected)                                      \
+  do {                                                                         \
+    int status = owner_query_result(0, path, mode, 0, expected);               \
+    if (status)                                                                \
+      return status;                                                           \
+  } while (0)
+  OWNER_QUERY("/directory", 0, 0);
+  OWNER_QUERY("/directory", 1, 13);
+  OWNER_QUERY("/directory/", 0, 0);
+  OWNER_QUERY("/directory/.", 0, 13);
+  OWNER_QUERY("/directory/..", 0, 13);
+  OWNER_QUERY("/directory/leaf", 0, 13);
+  OWNER_QUERY("/directory/missing", 0, 13);
+  OWNER_QUERY("/via/leaf", 0, 13);
+  OWNER_QUERY("/alias", 4, 0);
+  OWNER_QUERY("/alias", 2, 13);
+  OWNER_QUERY("/unknown", 0, 0);
+  OWNER_QUERY("/missing", 0, 2);
+  OWNER_QUERY("/data/child", 0, 20);
+  OWNER_QUERY("////", 0, 0);
+  OWNER_QUERY("/../../", 0, 0);
+  OWNER_QUERY("/data", 0x1234567880000088UL, 0);
+  OWNER_QUERY("", 0, 2);
+  OWNER_QUERY((const char *)1, 0, 14);
+#undef OWNER_QUERY
+  if (owner_query_result(1, "/alias", 0, 32, 0) ||
+      owner_query_result(1, "/via/leaf", 0, 2048, 62) ||
+      owner_query_result(1, (const char *)1, 7, 1, 22))
+    return 215;
+  if (call(466, 999, (u64) "/data", 4, 16, 0, 0, &error) != 0 || error)
+    return 216;
+  if (call(466, 999, (u64) "data", 0, 0, 0, 0, &error) != 9 || !error)
+    return 217;
+  if (call(0x1234567800000021UL, (u64) "/data", 4, 0, 0, 0, 0, &error) || error)
+    return 218;
+  u64 address = call(197, 0, PAGE, 3, 0x1002, -1UL, 0, &error);
+  if (error || address % PAGE)
+    return 219;
+  *(volatile u64 *)address = 0x1122334455667788UL;
+  if (*(volatile u64 *)address != 0x1122334455667788UL ||
+      call(73, address, PAGE, 0, 0, 0, 0, &error) || error)
+    return 220;
+  return call(4, 1, (u64) "P", 1, 0, 0, 0, &error) == 1 && !error ? 37 : 221;
+}
+
+static int ordinary_queries(const char *stop_path, unsigned scope) {
+  unsigned error;
+  if (stop_path || scope) {
+    if (call(4, 1, (u64) "!", 1, 0, 0, 0, &error) != 1 || error)
+      return 222;
+    if (scope == 1)
+      call(5, (u64) "/agreement", 0x601, 0, 0, 0, 0, &error);
+    else if (scope == 2)
+      call(197, 0, PAGE, 1, 2, 1, 0, &error);
+    else
+      call(466, -2UL, (u64)stop_path, 2, 16, 0, 0, &error);
+    return 223;
+  }
+  const unsigned read_errors[] = {0, 13, 13, 13, 0, 13, 13, 13};
+  const unsigned no_errors[] = {0, 13, 13, 13, 13, 13, 13, 13};
+  const unsigned rw_errors[] = {0, 13, 0, 13, 0, 13, 0, 13};
+  const unsigned x_errors[] = {0, 0, 13, 13, 13, 13, 13, 13};
+#define ORDINARY_QUERY(api, path, mode, flags, expected)                       \
+  do {                                                                         \
+    int status = owner_query_result(api, path, mode, flags, expected);         \
+    if (status)                                                                \
+      return status;                                                           \
+  } while (0)
+  for (unsigned api = 0; api != 3; ++api) {
+    const unsigned flags = api == 2 ? 16 : 0;
+    for (unsigned request = 0; request != 8; ++request) {
+      // Literal outcomes for UID501/502, real GID30, effective GID20,
+      // and in-credential groups[20,40]; no pointer table or native resolver.
+      ORDINARY_QUERY(api, "/agreement", request, flags, read_errors[request]);
+      ORDINARY_QUERY(api, "/group", request, flags,
+                     api == 2 ? rw_errors[request] : no_errors[request]);
+      ORDINARY_QUERY(api, "/supplement", request, flags, x_errors[request]);
+      ORDINARY_QUERY(api, "/world", request, flags,
+                     api == 2 ? no_errors[request] : read_errors[request]);
+    }
+  }
+  for (unsigned api = 0; api != 3; ++api)
+    for (unsigned request = 0; request != 8; ++request) {
+      // Effective GID50 membership is unknown only for masks2 and6.
+      // Different bit sets still determine equal whole-mask denials.
+      if (api == 2 && (request == 2 || request == 6))
+        continue;
+      ORDINARY_QUERY(api, "/unknown", request, api == 2 ? 16 : 0,
+                     read_errors[request]);
+    }
+  for (unsigned api = 0; api != 3; ++api) {
+    const unsigned flags = api == 2 ? 16 : 0;
+    ORDINARY_QUERY(api, "/directory///", 0, flags, 0);
+    ORDINARY_QUERY(api, "/directory/missing", 0, flags, api == 2 ? 2 : 13);
+    ORDINARY_QUERY(api, "/directory/leaf", 4, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/directory/.", 0, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/directory/..", 0, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/via/leaf", 4, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/alias", 4, flags, 0);
+    ORDINARY_QUERY(api, "/missing", 0, flags, 2);
+  }
+#undef ORDINARY_QUERY
+  if (call(0x1234567800000021UL, (u64) "/agreement", 4, 0, 0, 0, 0, &error) ||
+      error)
+    return 224;
+  u64 address = call(197, 0, PAGE, 3, 0x1002, -1UL, 0, &error);
+  if (error || address % PAGE)
+    return 225;
+  *(volatile u64 *)address = 0x8877665544332211UL;
+  if (*(volatile u64 *)address != 0x8877665544332211UL ||
+      call(73, address, PAGE, 0, 0, 0, 0, &error) || error)
+    return 226;
+  return call(4, 1, (u64) "G", 1, 0, 0, 0, &error) == 1 && !error ? 37 : 227;
+}
+
+static int ordinary_closed_group_queries(void) {
+  int initial = ordinary_queries(0, 0);
+  if (initial != 37)
+    return initial;
+  // Original NONE and complete groups[20,40] make effective GID50 misses
+  // negative. The ordinary baseline already checked every other request mask.
+  if (owner_query_result(2, "/unknown", 2, 16, 13) ||
+      owner_query_result(2, "/unknown", 6, 16, 13))
+    return 228;
+  for (unsigned api = 0; api != 3; ++api) {
+    const unsigned flags = api == 2 ? 16 : 0;
+    if (owner_query_result(api, "/external/missing", 0, flags, 2) ||
+        owner_query_result(api, "/external/leaf", 4, flags, 0) ||
+        owner_query_result(api, "/external/.", 0, flags, 0) ||
+        owner_query_result(api, "/external/..", 0, flags, 0) ||
+        owner_query_result(api, "/blocked/missing", 0, flags, 13) ||
+        owner_query_result(api, "/blocked/.", 0, flags, 13) ||
+        owner_query_result(api, "/external-via/leaf", 4, flags, 0) ||
+        owner_query_result(api, "/external///", 0, flags, 0))
+      return 229;
+  }
+  unsigned error;
+  return call(4, 1, (u64) "N", 1, 0, 0, 0, &error) == 1 && !error ? 37 : 230;
+}
+
 static int file_access(const char *path) {
   unsigned error;
   char parent[1024];
@@ -6391,7 +6770,354 @@ static int created_namespace_metadata(const char *input, int virtual_record) {
   return 37;
 }
 
+/* Original SDK-free nonblocking controls; finite data and descriptor status
+ * are observed without adding readiness or asynchronous I/O semantics. */
+static int nonblocking_descriptors(const char *input, unsigned mode) {
+  unsigned error, length = 0, slash = 0;
+  char parent[1024], bytes[12];
+  while (length < sizeof(parent) - 1 && input[length]) {
+    parent[length] = input[length];
+    if (input[length] == '/')
+      slash = length;
+    ++length;
+  }
+  if (!length || input[length] || input[0] != '/')
+    return 201;
+  parent[slash ? slash : 1] = 0;
+#define NONBLOCK_EXPECT(expression)                                            \
+  do {                                                                         \
+    if (!(expression))                                                         \
+      return 50 + (__LINE__ % 200);                                            \
+  } while (0)
+  u64 root = call(5, (u64)parent, 0x100004, 0, 0, 0, 0, &error);
+  NONBLOCK_EXPECT(!error && !secondary && root >= 3);
+  NONBLOCK_EXPECT(!xattr_result(92, root, 3, 0, 0, 0, 0, 4, 0));
+  NONBLOCK_EXPECT(!xattr_result(13, root, 0, 0, 0, 0, 0, 0, 0));
+  u64 file = call(5, (u64) "data", 0x100000e, 0, 0, 0, 0, &error);
+  NONBLOCK_EXPECT(!error && !secondary && file >= 3);
+  u64 copy = call(41, file, 0, 0, 0, 0, 0, &error);
+  NONBLOCK_EXPECT(!error && !secondary && copy >= 3);
+  u64 independent = call(5, (u64) "data", 4, 0, 0, 0, 0, &error);
+  NONBLOCK_EXPECT(!error && !secondary && independent >= 3);
+  NONBLOCK_EXPECT(!xattr_result(4, copy, (u64) "XY", 2, 0, 0, 0, 2, 0));
+  NONBLOCK_EXPECT(!xattr_result(154, file, (u64) "Z", 1, 0, 0, 0, 1, 0));
+  NONBLOCK_EXPECT(
+      !xattr_result(153, independent, (u64)bytes, 12, 0, 0, 0, 12, 0));
+  const char expected[] = "Z123456789XY";
+  for (unsigned i = 0; i != sizeof(bytes); ++i)
+    NONBLOCK_EXPECT(bytes[i] == expected[i]);
+  const unsigned replies[] = {0, 0, 0, 4,  4,  4,  4,  8,
+                              8, 8, 8, 12, 12, 12, 12, 0};
+  for (unsigned request = 0; request != 16; ++request) {
+    u64 word = 0xa5a5000000010000UL | request;
+    NONBLOCK_EXPECT(!xattr_result(92, copy, 4, word, 0, 0, 0, 0, 0));
+    NONBLOCK_EXPECT(
+        !xattr_result(92, file, 3, 0, 0, 0, 0, 0x10002 | replies[request], 0));
+    NONBLOCK_EXPECT(!xattr_result(92, independent, 3, 0, 0, 0, 0, 4, 0));
+    NONBLOCK_EXPECT(!xattr_result(92, file, 1, 0, 0, 0, 0, 1, 0));
+    NONBLOCK_EXPECT(!xattr_result(92, copy, 1, 0, 0, 0, 0, 0, 0));
+    NONBLOCK_EXPECT(!xattr_result(199, copy, 0, 1, 0, 0, 0, 12, 0));
+  }
+  u64 link = call(5, (u64) "fd-nonblock", 0x200004, 0, 0, 0, 0, &error);
+  NONBLOCK_EXPECT(!error && !secondary && link >= 3);
+  u64 link_copy = call(41, link, 0, 0, 0, 0, 0, &error);
+  NONBLOCK_EXPECT(!error && !secondary && link_copy >= 3);
+  for (unsigned request = 0; request != 16; ++request) {
+    NONBLOCK_EXPECT(!xattr_result(92, link_copy, 4, request, 0, 0, 0, 25, 1));
+    NONBLOCK_EXPECT(
+        !xattr_result(92, link, 3, 0, 0, 0, 0, replies[request], 0));
+  }
+  NONBLOCK_EXPECT(!xattr_result(3, root, (u64)bytes, 0, 0, 0, 0, 21, 1));
+  NONBLOCK_EXPECT(!xattr_result(4, independent, (u64)bytes, 0, 0, 0, 0, 9, 1));
+  NONBLOCK_EXPECT(!xattr_result(4, 1, (u64) "N", 1, 0, 0, 0, 1, 0));
+  if (mode)
+    return xattr_result(92, file, 4, 0x40, 0, 0, 0, 0, 0);
+  for (unsigned i = 0; i != 6; ++i) {
+    const u64 fds[] = {root, file, copy, independent, link, link_copy};
+    NONBLOCK_EXPECT(!xattr_result(6, fds[i], 0, 0, 0, 0, 0, 0, 0));
+  }
+#undef NONBLOCK_EXPECT
+  return 37;
+}
+
+/* Original SDK-free O_SYMLINK controls. Complete virtual stat bytes are a
+ * separate observation; multi-name vnode queries stop only in mode2. */
+static int symbolic_descriptors(const char *input, unsigned mode) {
+  unsigned error, length = 0, slash = 0;
+  char parent[1024];
+  while (length < sizeof(parent) - 1 && input[length]) {
+    parent[length] = input[length];
+    if (input[length] == '/')
+      slash = length;
+    ++length;
+  }
+  if (!length || input[length] || input[0] != '/')
+    return 201;
+  parent[slash ? slash : 1] = 0;
+#define SYMBOL_EXPECT(expression)                                              \
+  do {                                                                         \
+    if (!(expression))                                                         \
+      return 50 + (__LINE__ % 200);                                            \
+  } while (0)
+  u64 root = call(5, (u64)parent, 0x100000, 0, 0, 0, 0, &error);
+  SYMBOL_EXPECT(!error && !secondary && root >= 3);
+  // Native temporary roots may contain /var -> /private/var. Compare against
+  // the actual held parent, rather than the caller's unresolved spelling.
+  SYMBOL_EXPECT(!xattr_result(92, root, 50, (u64)parent, 0, 0, 0, 0, 0));
+  SYMBOL_EXPECT(!xattr_result(13, root, 0, 0, 0, 0, 0, 0, 0));
+  u64 mask = call(60, 0027, 0, 0, 0, 0, 0, &error);
+  SYMBOL_EXPECT(!error && !secondary && mask <= 07777);
+  SYMBOL_EXPECT(
+      !xattr_result(57, (u64) "data", (u64) "held-sym", 0, 0, 0, 0, 0, 0));
+  u64 fds[3];
+  for (unsigned access = 0; access != 3; ++access) {
+    fds[access] =
+        call(5, (u64) "held-sym", 0x200000 | access, 0, 0, 0, 0, &error);
+    SYMBOL_EXPECT(!error && !secondary && fds[access] >= 3);
+    SYMBOL_EXPECT(!xattr_result(92, fds[access], 3, 0, 0, 0, 0, access, 0));
+    SYMBOL_EXPECT(!xattr_result(192, fds[access], 20, 0, 0, 0, 0, 4096, 0));
+    SYMBOL_EXPECT(!xattr_result(199, fds[access], 7, 0, 0, 0, 0, 7, 0));
+  }
+  u64 copy = call(41, fds[2], 0, 0, 0, 0, 0, &error);
+  SYMBOL_EXPECT(!error && !secondary && copy >= 3);
+  u64 independent = call(5, (u64) "held-sym", 0x200002, 0, 0, 0, 0, &error);
+  SYMBOL_EXPECT(!error && !secondary && independent >= 3);
+  SYMBOL_EXPECT(!xattr_result(199, independent, 0, 1, 0, 0, 0, 0, 0));
+  SYMBOL_EXPECT(
+      !xattr_result(5, (u64) "held-sym", 0x200100, 0, 0, 0, 0, 62, 1));
+  SYMBOL_EXPECT(
+      !xattr_result(5, (u64) "held-sym", 0x300000, 0, 0, 0, 0, 20, 1));
+  SYMBOL_EXPECT(
+      !xattr_result(5, (u64) "held-sym", 0x200003, 0, 0, 0, 0, 22, 1));
+  SYMBOL_EXPECT(!xattr_result(13, fds[2], 0, 0, 0, 0, 0, 20, 1));
+  SYMBOL_EXPECT(!xattr_result(463, fds[2], (u64) "child", 0, 0, 0, 0, 20, 1));
+  u64 before[20], current[20], attributes[3] = {5UL | (8UL << 32), 0, 0};
+  u64 type[3] = {0xa5a5a5a5a5a5a5a5UL, 0, 0xa5a5a5a5a5a5a5a5UL};
+  before[0] = before[19] = current[0] = current[19] = 0xa5a5a5a5a5a5a5a5UL;
+  SYMBOL_EXPECT(
+      !xattr_result(339, fds[2], (u64)(before + 1), 0, 0, 0, 0, 0, 0));
+  const unsigned char *stat = (const unsigned char *)(before + 1);
+  SYMBOL_EXPECT(
+      (little_integer(stat + 4, 2) & 0xf000) == 0xa000 &&
+      little_integer(stat + 6, 2) == 1 && little_integer(stat + 96, 8) == 4 &&
+      before[0] == 0xa5a5a5a5a5a5a5a5UL && before[19] == 0xa5a5a5a5a5a5a5a5UL);
+  SYMBOL_EXPECT(!xattr_result(228, fds[2], (u64)attributes, (u64)(type + 1), 8,
+                              0, 0, 0, 0));
+  SYMBOL_EXPECT(type[1] == 0x0000000500000008UL &&
+                type[0] == 0xa5a5a5a5a5a5a5a5UL &&
+                type[2] == 0xa5a5a5a5a5a5a5a5UL);
+  const u64 maximum = 0x7fffffffffffffffUL;
+  u64 vector[2] = {-1UL, 1};
+  for (unsigned access = 0; access != 3; ++access) {
+    u64 fd = fds[access], rd = access == 1 ? 9 : 1, wr = access == 0 ? 9 : 1;
+    for (unsigned zero = 0; zero != 2; ++zero) {
+      SYMBOL_EXPECT(!xattr_result(3, fd, -1UL, zero, 0, 0, 0, rd, 1));
+      SYMBOL_EXPECT(!xattr_result(4, fd, -1UL, zero, 0, 0, 0, wr, 1));
+      SYMBOL_EXPECT(!xattr_result(153, fd, -1UL, zero, maximum, 0, 0,
+                                  access == 1 ? 9 : 0, access == 1));
+      SYMBOL_EXPECT(!xattr_result(154, fd, -1UL, zero, maximum, 0, 0,
+                                  access == 0 ? 9 : 27, 1));
+    }
+    SYMBOL_EXPECT(!xattr_result(154, fd, -1UL, 1, -1UL, 0, 0, 22, 1));
+    SYMBOL_EXPECT(
+        !xattr_result(153, fd, -1UL, 1, -1UL, 0, 0, access == 1 ? 9 : 22, 1));
+    const unsigned numbers[] = {120, 121, 540, 541, 542, 543};
+    for (unsigned i = 0; i != 6; ++i) {
+      unsigned write = i & 1, positioned = i >= 4;
+      SYMBOL_EXPECT(!xattr_result(numbers[i], fd, (u64)vector, 1,
+                                  positioned ? maximum : 0, 0, 0,
+                                  positioned && !write ? (access == 1 ? 9 : 0)
+                                  : positioned         ? (access == 0 ? 9 : 27)
+                                  : write              ? wr
+                                                       : rd,
+                                  !(positioned && !write && access != 1)));
+      SYMBOL_EXPECT(!xattr_result(numbers[i], fd, -1UL, 1, 0, 0, 0, 14, 1));
+      SYMBOL_EXPECT(!xattr_result(numbers[i], fd, -1UL, 0, 0, 0, 0, 22, 1));
+    }
+    for (unsigned seek = 3; seek != 5; ++seek) {
+      SYMBOL_EXPECT(!xattr_result(199, fd, 7, seek, 0, 0, 0, 6, 1));
+      SYMBOL_EXPECT(!xattr_result(199, fd, -1UL, seek, 0, 0, 0, 22, 1));
+    }
+    for (unsigned protection = 1; protection != 4; ++protection)
+      for (unsigned flags = 1; flags != 3; ++flags)
+        SYMBOL_EXPECT(
+            !xattr_result(197, 0, 16384, protection, flags, fd, 0, 22, 1));
+    SYMBOL_EXPECT(!xattr_result(199, fd, 0, 1, 0, 0, 0, 7, 0));
+  }
+  SYMBOL_EXPECT(!xattr_result(201, fds[0], 0, 0, 0, 0, 0, 22, 1));
+  SYMBOL_EXPECT(!xattr_result(201, fds[2], -1UL, 0, 0, 0, 0, 22, 1));
+  SYMBOL_EXPECT(!xattr_result(201, copy, maximum, 0, 0, 0, 0, 0, 0));
+  SYMBOL_EXPECT(!xattr_result(92, fds[2], 3, 0, 0, 0, 0, 0x10002, 0));
+  SYMBOL_EXPECT(!xattr_result(92, independent, 3, 0, 0, 0, 0, 2, 0));
+  SYMBOL_EXPECT(!xattr_result(339, copy, (u64)(current + 1), 0, 0, 0, 0, 0, 0));
+  for (unsigned i = 0; i != 20; ++i)
+    SYMBOL_EXPECT(current[i] == before[i]);
+  SYMBOL_EXPECT(!xattr_result(92, copy, 4, 8, 0, 0, 0, 25, 1));
+  SYMBOL_EXPECT(!xattr_result(92, fds[2], 3, 0, 0, 0, 0, 0x1000a, 0));
+  SYMBOL_EXPECT(!xattr_result(92, independent, 3, 0, 0, 0, 0, 2, 0));
+  SYMBOL_EXPECT(!xattr_result(92, copy, 4, 0, 0, 0, 0, 25, 1));
+  SYMBOL_EXPECT(!xattr_result(199, copy, 0, 1, 0, 0, 0, 7, 0));
+  SYMBOL_EXPECT(
+      !xattr_result(58, (u64) "held-sym", (u64)vector, 4, 0, 0, 0, 4, 0));
+  SYMBOL_EXPECT(little_integer((const unsigned char *)vector, 4) == 0x61746164);
+  SYMBOL_EXPECT(!xattr_result(128, (u64) "held-sym", (u64) "moved-sym", 0, 0, 0,
+                              0, 0, 0));
+  SYMBOL_EXPECT(!xattr_result(10, (u64) "moved-sym", 0, 0, 0, 0, 0, 0, 0));
+  SYMBOL_EXPECT(
+      !xattr_result(57, (u64) "fresh", (u64) "moved-sym", 0, 0, 0, 0, 0, 0));
+  SYMBOL_EXPECT(directory_path(copy, parent, "/moved-sym"));
+  SYMBOL_EXPECT(!xattr_result(339, copy, (u64)(current + 1), 0, 0, 0, 0, 0, 0));
+  const unsigned char *held = (const unsigned char *)(current + 1);
+  SYMBOL_EXPECT(little_integer(held + 6, 2) == 0 &&
+                little_integer(held + 8, 8) == little_integer(stat + 8, 8) &&
+                little_integer(held + 96, 8) == 4);
+  SYMBOL_EXPECT(!xattr_result(6, fds[2], 0, 0, 0, 0, 0, 0, 0));
+  SYMBOL_EXPECT(!xattr_result(3, copy, -1UL, 1, 0, 0, 0, 1, 1));
+  // A read-only symbolic FD has independent ordinary-xattr authority. Its
+  // target receives no content or attribute grant from this operation.
+  u64 attrfd = call(5, (u64) "fd-attrs", 0x200000, 0, 0, 0, 0, &error);
+  SYMBOL_EXPECT(!error && !secondary && attrfd >= 3);
+  SYMBOL_EXPECT(!xattr_result(237, attrfd, (u64) "user.neverd.descriptor",
+                              (u64) "F", 1, 0, 0, 0, 0));
+  SYMBOL_EXPECT(!xattr_result(235, attrfd, (u64) "user.neverd.descriptor",
+                              (u64)vector, 1, 0, 0, 1, 0));
+  SYMBOL_EXPECT(*(unsigned char *)vector == 'F');
+  SYMBOL_EXPECT(!xattr_result(201, attrfd, 0, 0, 0, 0, 0, 22, 1));
+  SYMBOL_EXPECT(!xattr_result(228, attrfd, (u64)attributes, (u64)(type + 1), 8,
+                              0, 0, 0, 0));
+  SYMBOL_EXPECT(type[1] == 0x0000000500000008UL);
+  SYMBOL_EXPECT(!xattr_result(239, attrfd, (u64) "user.neverd.descriptor", 0, 0,
+                              0, 0, 0, 0));
+  SYMBOL_EXPECT(!xattr_result(235, attrfd, (u64) "user.neverd.descriptor",
+                              (u64)vector, 1, 0, 0, 93, 1));
+  SYMBOL_EXPECT(!xattr_result(6, attrfd, 0, 0, 0, 0, 0, 0, 0));
+  if (mode == 1) {
+    SYMBOL_EXPECT(!xattr_result(4, 1, (u64)(before + 1), 144, 0, 0, 0, 144, 0));
+    SYMBOL_EXPECT(!xattr_result(4, 1, (u64)(type + 1), 8, 0, 0, 0, 8, 0));
+  } else {
+    SYMBOL_EXPECT(!xattr_result(4, 1, (u64) "S", 1, 0, 0, 0, 1, 0));
+  }
+  if (mode == 2) {
+    SYMBOL_EXPECT(!xattr_result(471, root, (u64) "moved-sym", root,
+                                (u64) "other-sym", 0, 0, 0, 0));
+    u64 aliased = call(5, (u64) "moved-sym", 0x200000, 0, 0, 0, 0, &error);
+    SYMBOL_EXPECT(!error && !secondary && aliased >= 3);
+    SYMBOL_EXPECT(!xattr_result(10, (u64) "moved-sym", 0, 0, 0, 0, 0, 0, 0));
+    SYMBOL_EXPECT(!xattr_result(10, (u64) "other-sym", 0, 0, 0, 0, 0, 0, 0));
+    call(92, aliased, 50, (u64)parent, 0, 0, 0, &error);
+    return 202;
+  }
+  SYMBOL_EXPECT(!xattr_result(10, (u64) "moved-sym", 0, 0, 0, 0, 0, 0, 0));
+  const u64 closing[] = {copy, independent, fds[0], fds[1], root};
+  for (unsigned i = 0; i != 5; ++i)
+    SYMBOL_EXPECT(!xattr_result(6, closing[i], 0, 0, 0, 0, 0, 0, 0));
+  SYMBOL_EXPECT(!xattr_result(60, mask, 0, 0, 0, 0, 0, 0027, 0));
+#undef SYMBOL_EXPECT
+  return 37;
+}
+
+/* Model replay workload: fixed bytes never enter a native RNG inventory. */
+static int entropy_replay(unsigned mode) {
+  unsigned error;
+  const u64 sentinel = 0x1122334455667788UL;
+  unsigned char bytes[258];
+#define ENTROPY_EXPECT(expression)                                             \
+  do {                                                                         \
+    if (!(expression))                                                         \
+      return 50 + (__LINE__ % 200);                                            \
+  } while (0)
+  for (unsigned i = 0; i != sizeof(bytes); ++i)
+    bytes[i] = 0xa5;
+  if (mode) {
+    u64 address = (u64)(bytes + 1), size = mode == 3 ? 3 : 4;
+    if (mode == 2)
+      ENTROPY_EXPECT(!xattr_result(500, address, 4, sentinel, 0, 0, 0, 0, 0));
+    if (mode == 4) {
+      u64 mapped = call(197, 0, 2 * PAGE, 3, 0x1002, -1UL, 0, &error);
+      ENTROPY_EXPECT(!error && !secondary);
+      ENTROPY_EXPECT(!xattr_result(74, mapped + PAGE, PAGE, 1, 0, 0, 0, 0, 0));
+      address = mapped + PAGE - 2;
+    }
+    ENTROPY_EXPECT(!xattr_result(4, 1, (u64) "!", 1, 0, 0, 0, 1, 0));
+    call(500, address, size, sentinel, 0, 0, 0, &error);
+    return 201;
+  }
+  const u64 pointers[] = {0, 1, (u64)-1, 0x8000000000000000UL};
+  const u64 lengths[] = {257, 0x100000000UL, 0x100000001UL, 0x100000100UL,
+                         (u64)-1};
+  for (unsigned p = 0; p != 4; ++p) {
+    ENTROPY_EXPECT(!xattr_result(500, pointers[p], 0, sentinel, 0, 0, 0, 0, 0));
+    for (unsigned n = 0; n != 5; ++n)
+      ENTROPY_EXPECT(!xattr_result(500, pointers[p], lengths[n], sentinel, 0, 0,
+                                   0, 22, 1));
+  }
+  ENTROPY_EXPECT(!xattr_result(500, 0, 4, sentinel, 0, 0, 0, 14, 1));
+  ENTROPY_EXPECT(
+      !xattr_result(500, (u64)(bytes + 1), 4, sentinel, 0, 0, 0, 0, 0));
+  const unsigned char expected[] = {0, 0xff, 0x80, 0xa5};
+  for (unsigned i = 0; i != 4; ++i)
+    ENTROPY_EXPECT(bytes[i + 1] == expected[i]);
+  ENTROPY_EXPECT(bytes[0] == 0xa5 && bytes[5] == 0xa5);
+  ENTROPY_EXPECT(
+      !xattr_result(500, (u64)(bytes + 1), 1, sentinel, 0, 0, 0, 0, 0));
+  ENTROPY_EXPECT(bytes[1] == 0x7f && bytes[2] == 0xff && bytes[5] == 0xa5);
+  ENTROPY_EXPECT(
+      !xattr_result(500, (u64)(bytes + 1), 256, sentinel, 0, 0, 0, 0, 0));
+  for (unsigned i = 0; i != 256; ++i)
+    ENTROPY_EXPECT(bytes[i + 1] == (unsigned char)i);
+  ENTROPY_EXPECT(bytes[0] == 0xa5 && bytes[257] == 0xa5);
+  ENTROPY_EXPECT(!xattr_result(4, 1, (u64) "R", 1, 0, 0, 0, 1, 0));
+#undef ENTROPY_EXPECT
+  return 37;
+}
+
+/* Native IDs are compared only within one process. Literal virtual bytes
+ * never enter the deterministic native reference inventory. */
+static int thread_identity(unsigned mode) {
+  unsigned error;
+  const char marker = mode == 2 ? '!' : 'T';
+  if (mode == 2) {
+    if (call(4, 1, (u64)&marker, 1, 0, 0, 0, &error) != 1 || error || secondary)
+      return 213;
+    call(372, -1UL, -1UL, -1UL, -1UL, -1UL, -1UL, &error);
+    return 214;
+  }
+  u64 id = call(372, -1UL, 0x8000000000000000UL, 0x1122334455667788UL, 1, -1UL,
+                0x123456789abcdef0UL, &error);
+  if (error || secondary || (!mode && !id))
+    return 215;
+  const u64 prefixes[] = {0, 0x1234567800000000UL, 0xffffffff00000000UL};
+  const u64 seeds[] = {0, -1UL, 0x8000000000000000UL};
+  for (unsigned p = 0; p != 3; ++p)
+    for (unsigned a = 0; a != 3; ++a)
+      if (call(prefixes[p] | 372, seeds[a], ~seeds[a], 0x1122334455667788UL,
+               -1UL, 1, -1UL, &error) != id ||
+          error || secondary)
+        return 216;
+  u64 output = mode ? (u64)&id : (u64)&marker;
+  u64 size = mode ? sizeof(id) : 1;
+  if (call(4, 1, output, size, 0, 0, 0, &error) != size || error || secondary)
+    return 217;
+  return 37;
+}
+
 int main(int argc, char **argv, char **envp, char **apple) {
+  if (argc >= 2 && equal(argv[1], "thread-identity"))
+    return thread_identity(0);
+  if (argc >= 2 && equal(argv[1], "thread-identity-value"))
+    return thread_identity(1);
+  if (argc >= 2 && equal(argv[1], "thread-identity-missing"))
+    return thread_identity(2);
+  if (argc >= 2 && equal(argv[1], "entropy-replay"))
+    return entropy_replay(0);
+  if (argc >= 2 && equal(argv[1], "entropy-missing"))
+    return entropy_replay(1);
+  if (argc >= 2 && equal(argv[1], "entropy-exhausted"))
+    return entropy_replay(2);
+  if (argc >= 2 && equal(argv[1], "entropy-mismatch"))
+    return entropy_replay(3);
+  if (argc >= 2 && equal(argv[1], "entropy-partial"))
+    return entropy_replay(4);
   if (argc >= 2 && equal(argv[1], "symbolic-link-rename")) {
     int status = argc < 3 ? 51 : symbolic_link_rename(argv[2]);
     if (status == 37 && argc >= 4 && equal(argv[3], "protected")) {
@@ -6512,6 +7238,29 @@ int main(int argc, char **argv, char **envp, char **apple) {
     return call(116, 0, 0, 0, 0, 0, 0, &error) || error || secondary ? 51 : 37;
   if (equal(argv[1], "time") || equal(argv[1], "time-values"))
     return time_calls(equal(argv[1], "time-values"));
+  if (equal(argv[1], "ordinary-queries-closed-groups"))
+    return ordinary_closed_group_queries();
+  if (equal(argv[1], "ordinary-queries"))
+    return ordinary_queries(0, 0);
+  if (equal(argv[1], "ordinary-query-unknown"))
+    return ordinary_queries(argc < 3 ? "/unknown" : argv[2], 0);
+  if (equal(argv[1], "ordinary-query-open"))
+    return ordinary_queries(0, 1);
+  if (equal(argv[1], "ordinary-query-map"))
+    return ordinary_queries(0, 2);
+  if (equal(argv[1], "owner-queries"))
+    return owner_queries(0, 0);
+  if (equal(argv[1], "owner-query-stop"))
+    return owner_queries(argc < 3 ? "/data" : argv[2], 0);
+  if (equal(argv[1], "owner-query-open"))
+    return owner_queries(0, 1);
+  if (equal(argv[1], "owner-query-map"))
+    return owner_queries(0, 2);
+  if (equal(argv[1], "mach-self-ports") ||
+      equal(argv[1], "mach-self-port-values"))
+    return mach_self_ports(equal(argv[1], "mach-self-port-values"));
+  if (equal(argv[1], "mach-self-port-missing"))
+    return argc < 3 ? 79 : mach_self_port_missing(argv[2]);
   if (equal(argv[1], "mach-time") || equal(argv[1], "mach-timebase-values"))
     return mach_timebase(equal(argv[1], "mach-timebase-values"));
   if (equal(argv[1], "mach-clock-values"))
@@ -6592,6 +7341,34 @@ int main(int argc, char **argv, char **envp, char **apple) {
                                  : equal(argv[1], "attribute-names-unsupported")
                                      ? 2
                                      : 0);
+  if (equal(argv[1], "nonblocking-descriptors") ||
+      equal(argv[1], "nonblocking-flags-unsupported"))
+    return argc < 3
+               ? 201
+               : nonblocking_descriptors(
+                     argv[2], equal(argv[1], "nonblocking-flags-unsupported"));
+  if (equal(argv[1], "symbolic-descriptors") ||
+      equal(argv[1], "symbolic-descriptors-values") ||
+      equal(argv[1], "symbolic-descriptors-name-unsupported"))
+    return argc < 3
+               ? 201
+               : symbolic_descriptors(
+                     argv[2],
+                     equal(argv[1], "symbolic-descriptors-values") ? 1
+                     : equal(argv[1], "symbolic-descriptors-name-unsupported")
+                         ? 2
+                         : 0);
+  if (equal(argv[1], "hard-links") || equal(argv[1], "hard-links-values") ||
+      equal(argv[1], "hard-links-name-unsupported") ||
+      equal(argv[1], "hard-links-attributes-unsupported"))
+    return argc < 3
+               ? 79
+               : hard_links(
+                     argv[2],
+                     equal(argv[1], "hard-links-values")                   ? 1
+                     : equal(argv[1], "hard-links-name-unsupported")       ? 2
+                     : equal(argv[1], "hard-links-attributes-unsupported") ? 3
+                                                                           : 0);
   if (equal(argv[1], "xattr-mutations") ||
       equal(argv[1], "xattr-mutations-values") ||
       equal(argv[1], "xattr-mutations-unsupported"))

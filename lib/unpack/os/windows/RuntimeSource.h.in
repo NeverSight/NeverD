@@ -1,0 +1,5 @@
+namespace neverd::unpack::windows {
+inline constexpr char NativeRuntimeSource[] = R"NEVERD_RUNTIME(
+@_runtime_source@
+)NEVERD_RUNTIME";
+}

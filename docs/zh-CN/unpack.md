@@ -14,8 +14,21 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 运行时观察 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 运行时观察 |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 输入由 `IMAGE_FILE_DLL` 标识。建模的来宾 EXE 调用 `LoadLibraryA`、`FreeLibrary`，复用普通依赖、TLS 与 `DllMain` 生命周期。DLL 默认入口是其进程附加调用；不会为任意导出猜测参数。重建保留导出名称、序号、别名、数据及转发器；指向自身导出的指针保持为内部指针，不生成自身导入。辅助例程返回的地址也遵循此规则：内部结果会撤销该位置先前的导入修复证据。
+
+## Windows x64 驱动
+
+启用 `NEVERD_ENABLE_DRIVER_EMULATION=ON` 后，native 子系统的 x64 PE 映像（`.sys`）通过驱动环境执行。`DriverEntry` 提供入口来源，派遣和卸载回调不能成为默认恢复入口。可选 `driver` 对象接受[驱动场景](driver-emulation.md)，包括服务名、注册表、请求和调度；公共后端、执行契约和资源限制仍生效。用户进程参数、环境和 PEB 输入会被拒绝。
+
+驱动 UNPACK 关闭逐写报告记录，保留内存校验和恢复观察器。事件预算统计 API 调用，指令和时间限制仍然生效。
+
+恢复同时检查驱动入口参数、返回／影子栈帧、非易失寄存器、方向标志、浮点控制和内核对象所有权。遗留池、借用的内核指针、被修改的加载器对象或未计入的内核副作用返回 `unsupported_state`；显式 `snapshot_only` 保留诊断。内核状态尚无 `restore_runtime` 实现。导入重建使用内核导出身份，校验原始导出表并重新计算 PE 校验和。固定基址产物不代表已通过 Windows 内核加载、签名验证或未执行驱动路径的验收。
+
+```bash
+neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+```
 
 ## 用法
 
@@ -25,7 +38,13 @@ neverd unpack packed.exe -o unpacked.exe \
   --options='{"backend":"unicorn","instruction_limit":400000000,"transfer":2}'
 ```
 
-该命令输出一份 JSON 报告。退出码 0 表示已写出 `unpacked` 镜像或显式请求的 `snapshot`；3 表示 `no_entry` 或 `unsupported_state`，不会创建或截断输出文件；1 表示输入、选项无效或准备失败。报告会给出实际运行的 `format`、`architecture` 和 `profile`。C 入口是 `neverd_unpack_json`；Python 提供 `Session.unpack`。选项为[进程选项](process-emulation.md)加上 `transfer` 和 `snapshot_only`。外壳需要更多资源的地方默认值不同：100000000 条指令、600 秒、512 MiB，并且 `windows.defer_unmodeled` 默认开启。
+该命令输出一份 JSON 报告。退出码 0 表示已写出 `unpacked` 镜像或显式请求的 `snapshot` / `restored`；3 表示 `no_entry` 或 `unsupported_state`，不会创建或截断输出文件；1 表示输入、选项无效或准备失败。报告会给出实际运行的 `format`、`architecture` 和 `profile`。C 入口是 `neverd_unpack_json`；Python 提供 `Session.unpack`。选项为[进程选项](process-emulation.md)加上 `transfer` 和 `snapshot_only` / `restore_runtime`。外壳需要更多资源的地方默认值不同：100000000 条指令、600 秒、512 MiB，并且 `windows.defer_unmodeled` 默认开启。
+
+## 显式恢复运行时状态
+
+`restore_runtime:true` 请求生成自包含的 Windows x64 初始化器，结果为 `restored`，退出码为 0；它与 `snapshot_only` 互斥。`PATH` 中必须有 Clang 和 `lld-link`，并通过 `windows.peb_version` 明确指定目标原生环境。初始化器校验版本，不改写原生 PEB。它恢复有归属的堆内存、编码指针操作、FLS 值与回调、递归临界区、私有虚拟内存保留区与页权限，以及 `LastError`。导出跳转入口保留观察到的调用形式；代码、数据和元数据分别放入具有相应权限的 `.nd*` 节，不生成辅助 DLL。
+
+前面的拒绝规则描述默认恢复路径。本显式模式保留捕获时的 `runtime_state` 诊断，并跳过新进程中的导入发现。固定地址、所选 DLL 转移及捕获时的参数与环境仍是运行条件。历史直接系统调用计数仍保留，系统调用号和未到达路径的可移植性尚未认证。动态 TLS、打开的句柄、映射节、挂起的异常状态及其他来宾 DLL 状态仍不支持；不支持的状态或初始化器构建失败都不会发布输出。`restored` 表示按这些条件完成构建，不代表所有原生路径都已证明正确。
 
 ## 运行时状态与分析快照
 
@@ -108,3 +127,5 @@ neverd unpack packed.exe -o unpacked.exe \
 `WrappedEntriesRequireExplicitTransferEvidence` 覆盖 DLL 包装器通过更深的栈调用恢复入口。默认结果仍为 `no_entry`；通过 `transfer` 选择该已观察调用后，可重建可加载 DLL。仅凭深层调用无法区分入口与初始化器。
 
 恢复的 DLL 入口与原始 PE 入口不同时，写入器生成加载器通知适配器：进程附加进入选定入口，卸载和线程通知进入原始的可执行入口，以保留外层包装函数的清理。原始入口不可用时重建失败。报告的 `entry_rva` 仍表示选定的程序入口，PE 头可以指向适配器。独立包装 DLL 测试在两种仿真架构和原生 Windows 上检查选定函数之外的清理。
+
+`runtime_state.additional_state_inventory_known` 与 `has_additional_dependencies` 报告 OS 所有者保留的私有堆、虚拟内存保留区、锁、句柄、视图及异常状态。清单缺失或仍有资源时，即使没有堆指针匹配，默认恢复也会拒绝。显式快照保留诊断；运行时恢复必须重建受支持的所有者。

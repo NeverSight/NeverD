@@ -35,6 +35,30 @@ NEVERD_NATIVE_CPU_HOST(WHP, "Windows", "AMD64", "x86_64")
 
 #ifdef NEVERD_NATIVE_CPU_REQUIRED_TEST
 NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "X64Address.UnalignedExchangesPreserveAtomicMemoryAndAddressRegisters/"
+    "{backend}Supervisor")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "X64Address.UnalignedExchangesPreserveAtomicMemoryAndAddressRegisters/"
+    "{backend}User")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "X64Address.SibIndicesPreserveAddressesAndMemoryTransactions/"
+    "{backend}Supervisor")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "X64Address.SibIndicesPreserveAddressesAndMemoryTransactions/"
+    "{backend}User")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "X64Address.AbsentSibIndicesRetainMemoryFaultsAndEntryState/"
+    "{backend}Supervisor")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "ExplicitBackends/"
+    "X64Address.AbsentSibIndicesRetainMemoryFaultsAndEntryState/"
+    "{backend}User")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "PEDelayImports.ResolvedCellsRebindWithoutRepeatingHelpers")
 NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "PEDelayImports.PendingCellsAndMetadataRemainByteExact")
@@ -173,6 +197,22 @@ NEVERD_NATIVE_CPU_REQUIRED_TEST(
 NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "Backends/UnpackGenerated."
     "ExplicitSnapshotsKeepExternalHeapDependenciesVisible/"
+    "{backend_title}DirectX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/UnpackGenerated."
+    "MaterializedRuntimePreservesOwnedObjectsOnNativeWindows/"
+    "{backend_title}X64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/UnpackGenerated."
+    "MaterializedRuntimePreservesOwnedObjectsOnNativeWindows/"
+    "{backend_title}DirectX64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/UnpackGenerated."
+    "MaterializationRequiresKnownSupportedState/"
+    "{backend_title}X64")
+NEVERD_NATIVE_CPU_REQUIRED_TEST(
+    "Backends/UnpackGenerated."
+    "MaterializationRequiresKnownSupportedState/"
     "{backend_title}DirectX64")
 NEVERD_NATIVE_CPU_REQUIRED_TEST(
     "Backends/UnpackGenerated.DirectServiceBindingsRequireAnExplicitSnapshot/"

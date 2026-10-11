@@ -109,9 +109,14 @@ void RegistrationStateSolver::dispatch(
   Root.Frame.Cells[*Chain.TryLevelOffset] =
       FrameValue::constant(uint32_t(Level));
   Root.Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
-      FrameValue::frame(0);
+      FrameValue::frame(KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0);
   Root.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].MayBeFrame =
       true;
+  if (Chain.hasCxxCallbackStack() && CxxCatch) {
+    if (!charge(Root.Frame.cellCount() + 8))
+      return;
+    Root.Frame.enterCallback(Address);
+  }
   Root.Unknown = Unknown || Source.Unknown;
   Root.Parent = !Callback;
   Root.Callback = Callback;
@@ -119,25 +124,8 @@ void RegistrationStateSolver::dispatch(
   if (CxxCatch) {
     if (!charge(Source.Frame.cellCount() + 1))
       return;
-    CxxCatchContext Context{CxxCatch->first, CxxCatch->second, {}};
-    const int64_t SavedSlot = int64_t(*Chain.RegistrationOffset) - 4;
-    if (SavedSlot >= INT32_MIN)
-      Context.SavedStackOffset =
-          Source.Frame.load(int32_t(SavedSlot), 4).Offset;
-    if (Source.Parent && !Source.Callback)
-      Root.CxxCatchStacks.insert({Context});
-    else if (!Source.Parent && Source.Callback && !Source.OtherCallback &&
-             !Source.CxxCatchStacks.empty()) {
-      for (auto Stack : Source.CxxCatchStacks) {
-        if (!charge(Stack.size() + 1))
-          return;
-        Stack.push_back(Context);
-        Root.CxxCatchStacks.insert(std::move(Stack));
-      }
-    } else {
-      Root.CxxCatchStacks.insert({Context});
-      Root.Unknown = true;
-    }
+    if (!enterCxxCatch(Root, Source, CxxCatch->first, CxxCatch->second))
+      return;
     if (CheckRuntimeObjects) {
       const auto Object = CatchObjects.find(*CxxCatch);
       const auto &Catch =
@@ -148,21 +136,22 @@ void RegistrationStateSolver::dispatch(
         const auto &C = Object->second;
         const uint16_t SlotBytes = C.Reference ? 4 : uint16_t(C.ObjectSize);
         const auto SP =
-            Source.Frame.load(*Chain.RegistrationOffset - 4, 4).Offset;
-        const int64_t End = int64_t(C.FrameOffset) + SlotBytes;
-        if (!SP || Source.Unknown || Unknown || C.FrameOffset < *SP ||
-            C.FrameOffset < -int64_t(limits::kMaxRegistrationEHStateWork) ||
-            End > 0 ||
-            (C.FrameOffset < int64_t(*Chain.TryLevelOffset) + 4 &&
+            Root.Frame.load(*Chain.RegistrationOffset - 4, 4).Offset;
+        const auto Offset = Chain.cxxSourceFrameOffset(C.FrameOffset);
+        const int64_t End = int64_t(Offset.value_or(0)) + SlotBytes;
+        if (!SP || !Offset || Source.Unknown || Unknown || *Offset < *SP ||
+            *Offset < -int64_t(limits::kMaxRegistrationEHStateWork) ||
+            End > *Chain.cxxRuntimeFrameOffset() ||
+            (*Offset < int64_t(*Chain.TryLevelOffset) + 4 &&
              int64_t(*Chain.RegistrationOffset) - 4 < End) ||
             !charge(SlotBytes + Root.Frame.cellCount() +
                     Root.RuntimeObject.cellCount())) {
           CompleteCatchObjects = false;
         } else {
-          Root.Frame.store(C.FrameOffset, SlotBytes, {});
-          for (int64_t Byte = C.FrameOffset; Byte < End; ++Byte)
+          Root.Frame.store(*Offset, SlotBytes, {});
+          for (int64_t Byte = *Offset; Byte < End; ++Byte)
             Root.InitializedFrameBytes.insert(int32_t(Byte));
-          Root.RuntimeObject.store(C.FrameOffset, SlotBytes,
+          Root.RuntimeObject.store(*Offset, SlotBytes,
                                    C.Reference ? FrameValue::frame(0)
                                                : FrameValue{});
           if (C.Reference)
@@ -176,7 +165,9 @@ void RegistrationStateSolver::dispatch(
     for (auto &[Offset, Value] : Root.Frame.Cells)
       if (Offset != *Chain.RegistrationOffset &&
           int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
-          Offset != *Chain.TryLevelOffset)
+          Offset != *Chain.TryLevelOffset &&
+          (!Chain.RealignedFrame ||
+           Offset != Chain.RealignedFrame->SavedParentFrameOffset))
         Value = registration_state::join(Value, {});
   }
   Root.Installed = true;

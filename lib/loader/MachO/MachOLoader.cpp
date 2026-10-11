@@ -107,12 +107,19 @@ void judge(const llvm::object::MachOObjectFile &Obj, LoadCandidate &Row) {
 
 llvm::Expected<BinaryImage>
 MachOLoader::load(const std::filesystem::path &Path) {
-  auto OpenOr = macho_loader::openMachOFile(Path);
+  auto Buffer = readFileBuffer(Path, BinaryFormat::MachO);
+  if (!Buffer)
+    return Buffer.takeError();
+  return loadBuffer((*Buffer)->getMemBufferRef());
+}
+
+llvm::Expected<BinaryImage>
+MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
+  auto OpenOr = macho_loader::openMachOBuffer(Buffer);
   if (!OpenOr)
     return OpenOr.takeError();
 
-  auto Buf = std::move(OpenOr->first);
-  auto MachOObj = std::move(OpenOr->second);
+  auto MachOObj = std::move(*OpenOr);
   const auto &Obj = *MachOObj;
 
   bool Is64 = Obj.is64Bit();
@@ -122,7 +129,7 @@ MachOLoader::load(const std::filesystem::path &Path) {
         "macho: big-endian not supported", llvm::inconvertibleErrorCode());
 
   BinaryImage Img;
-  Img.Format = BinaryFormat::MachO;
+  initializeImage(Buffer, Img, BinaryFormat::MachO, /*CopyRaw=*/false);
   Img.IsRelocatable = Obj.getHeader().filetype == MH_OBJECT;
   Img.MachOIsDylib = Obj.getHeader().filetype == MH_DYLIB;
   // An executable linked without MH_PIE runs at its link address.
@@ -132,7 +139,6 @@ MachOLoader::load(const std::filesystem::path &Path) {
   Img.Raw.assign(reinterpret_cast<const uint8_t *>(ObjBytes.data()),
                  reinterpret_cast<const uint8_t *>(ObjBytes.data()) +
                      ObjBytes.size());
-  (void)Buf;
 
   uint32_t CpuType = Is64 ? Obj.getHeader64().cputype : Obj.getHeader().cputype;
   Img.Arch = cpuTypeToArch(CpuType, Is64);
@@ -534,7 +540,10 @@ MachOLoader::load(const std::filesystem::path &Path) {
   if (llvm::Error Err = verifyARMFunctionModeHints(Img, ARMFunctionModes))
     return std::move(Err);
 
-  runPostLoadDiscovery(Img, "macho: loaded " + pathToUTF8(Path.filename()));
+  runPostLoadDiscovery(
+      Img, "macho: loaded " + pathToUTF8(std::filesystem::u8path(
+                                             Buffer.getBufferIdentifier().str())
+                                             .filename()));
   // Classified before any table is read: a compact-unwind entry names a
   // personality slot, not a language, so what its LSDA means is settled by the
   // image's symbols and sections rather than by the entry.

@@ -28,6 +28,7 @@
 #define NEVERD_LIFT_X86_X86LIFTDETAIL_H
 
 #include "neverd/lift/X86Lifter.h"
+#include "neverd/support/X86Addressing.h"
 
 #include <capstone/capstone.h>
 #include <cstddef>
@@ -37,10 +38,6 @@ namespace neverd {
 //===----------------------------------------------------------------------===//
 // Helpers shared by more than one handler translation unit
 //===----------------------------------------------------------------------===//
-
-/// A missing ordinary SIB index, including width-specific decoder aliases.
-/// These aliases are not base registers or VSIB vector indices.
-bool isNoSibIndex(x86_reg Register, uint16_t AddressSize);
 
 /// Element size (bytes) of a MOVS/STOS/LODS/SCAS/CMPS variant.
 /// Defined in X86LiftString.cpp.
@@ -163,7 +160,8 @@ bool validateCanonicalVex3RegisterTail(
 bool validateCanonicalScalarConversionTail(
     const cs_insn *Insn, const cs_x86 &X86, size_t TailOffset,
     uint8_t SegmentPrefix, bool Is64Bit, uint16_t AddressSize,
-    unsigned BaseExtension, unsigned IndexExtension, const cs_x86_op &Operand);
+    unsigned BaseExtension, unsigned IndexExtension, const cs_x86_op &Operand,
+    size_t TrailingBytes = 0);
 
 /// Load an EVEX vector memory source under a compact K-register mask.  Full
 /// tuples fault-suppress each inactive lane.  Broadcast tuples perform at most

@@ -168,12 +168,172 @@ bool dropFile(QWidget *target, const QString &path) {
   QApplication::sendEvent(target, &drop);
   return drop.isAccepted() && drop.dropAction() == Qt::CopyAction;
 }
+
+void dragText(QWidget *viewport, const QPoint &begin, const QPoint &end) {
+  QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, begin);
+  QMouseEvent move(QEvent::MouseMove, end, viewport->mapToGlobal(end),
+                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(viewport, &move);
+  QTest::mouseRelease(viewport, Qt::LeftButton, Qt::NoModifier, end);
+}
+
+// Windows delivers clipboard notifications asynchronously. Pump them between
+// synthetic user actions, including reads that request delayed rendering.
+QString clipboardText() {
+  const QString text = QApplication::clipboard()->text();
+  if (QGuiApplication::platformName() == QLatin1String("windows"))
+    QTest::qWait(20);
+  return text;
+}
+
+void clearClipboard() {
+  QApplication::clipboard()->clear();
+  if (QGuiApplication::platformName() == QLatin1String("windows"))
+    QTest::qWait(20);
+}
 } // namespace
 
 class WorkbenchTests : public QObject {
   Q_OBJECT
   QTemporaryDir settingsDirectory_;
 private slots:
+  void copyingCharacterSelections_data() {
+    QTest::addColumn<QString>("view");
+    QTest::addColumn<bool>("reverse");
+    for (const QString view :
+         {QStringLiteral("address"), QStringLiteral("assembly"),
+          QStringLiteral("source"), QStringLiteral("go"),
+          QStringLiteral("llvmc")}) {
+      QTest::newRow(qPrintable(view + "-forward")) << view << false;
+      QTest::newRow(qPrintable(view + "-reverse")) << view << true;
+    }
+  }
+
+  void copyingCharacterSelections() {
+    QFETCH(QString, view);
+    QFETCH(bool, reverse);
+    QTemporaryDir directory;
+    Workbench bench;
+    const auto path = writeFixture(directory, view == QLatin1String("go")
+                                                  ? "pseudocode-go.bin"
+                                                  : "fixture.bin");
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.window->disassembly()->navigate(Base + 0x140);
+    QTRY_COMPARE(bench.window->disassembly()->currentFunction(),
+                 std::optional<Address>(Base + 0x140));
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    const QFont font = Theme::instance().codeFont();
+    const QFontMetricsF metrics(font);
+    const int height = int(std::ceil(metrics.lineSpacing()));
+    const qreal width = metrics.horizontalAdvance(QLatin1Char('M'));
+    QAbstractScrollArea *text = nullptr;
+    QString row;
+    int first = 0, last = 0, y = 0, left = 0;
+    if (view == QLatin1String("address") || view == QLatin1String("assembly")) {
+      auto *listing = bench.window->disassembly()->listing();
+      QTRY_VERIFY(listing->cursorLine());
+      listing->setShowPrefixes(view == QLatin1String("address"));
+      listing->horizontalScrollBar()->setValue(0);
+      left = int(std::ceil(width * 7)) + 6;
+      // Pick a visible row by the same native mouse input a user uses.
+      for (y = height / 2; y < listing->viewport()->height(); y += height) {
+        QTest::mouseClick(listing->viewport(), Qt::LeftButton, Qt::NoModifier,
+                          QPoint(left, y));
+        if (!listing->cursorLine())
+          continue;
+        row = view == QLatin1String("address")
+                  ? listing->cursorLine()->prefix
+                  : listing->cursorLine()->styled.text;
+        if (row.size() >= 8)
+          break;
+      }
+      QVERIFY(row.size() >= 8);
+      first = view == QLatin1String("address") ? int(row.size()) - 8 : 2;
+      last = view == QLatin1String("address") ? int(row.size()) : 6;
+      text = listing;
+    } else {
+      const QString representation = view == QLatin1String("llvmc")
+                                         ? QStringLiteral("llvmc")
+                                         : QStringLiteral("source");
+      bench.action(ActionId::ViewPseudocode)->trigger();
+      auto *codeView = bench.codeView(QStringLiteral("source"));
+      QVERIFY(codeView);
+      codeView->setRepresentation(representation);
+      auto *code = codeView->text();
+      QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 3,
+                               OpenTimeoutMs);
+      if (view == QLatin1String("llvmc"))
+        QVERIFY(code->preludeFolded());
+      const QString token = view == QLatin1String("go")
+                                ? QStringLiteral("int64")
+                                : QStringLiteral("code");
+      int line = 1;
+      for (; line < std::min(50, code->lineCount()); ++line) {
+        code->setCursorLine(line);
+        row = code->selectedText();
+        first = int(row.indexOf(token));
+        if (first >= 0)
+          break;
+      }
+      QVERIFY(first >= 0);
+      last = first + int(token.size());
+      y = (line - code->verticalScrollBar()->value()) * height + height / 2;
+      left = 6 +
+             int((std::max(3, int(QString::number(code->lineCount()).size())) +
+                  2) *
+                 width) -
+             code->horizontalScrollBar()->value();
+      text = code;
+    }
+    QTextLayout layout(row, font);
+    layout.beginLayout();
+    const auto line = layout.createLine();
+    layout.endLayout();
+    const QPoint begin(left + qRound(line.cursorToX(first)), y);
+    const QPoint end(left + qRound(line.cursorToX(last)), y);
+    dragText(text->viewport(), reverse ? end : begin, reverse ? begin : end);
+    const QString expected = row.mid(first, last - first);
+    clearClipboard();
+    QTest::keyClick(text, Qt::Key_C, Qt::ControlModifier);
+    QCOMPARE(clipboardText(), expected);
+    clearClipboard();
+    bench.action(ActionId::EditCopy)->trigger();
+    QCOMPARE(clipboardText(), expected);
+    // A right click must keep the selection for context-menu copying.
+    QTest::mouseClick(text->viewport(), Qt::RightButton, Qt::NoModifier, end);
+    bench.action(ActionId::EditCopy)->trigger();
+    QCOMPARE(clipboardText(), expected);
+    // Keyboard selection uses the same character boundaries as mouse dragging.
+    QTest::keyClick(text, Qt::Key_Home);
+    for (int i = 0; i < 3; ++i)
+      QTest::keyClick(
+          text, view == QLatin1String("address") ? Qt::Key_Left : Qt::Key_Right,
+          Qt::ShiftModifier);
+    QTest::keyClick(text, Qt::Key_C, Qt::ControlModifier);
+    QCOMPARE(clipboardText(), view == QLatin1String("address")
+                                  ? (row + QLatin1Char(' ')).right(3)
+                                  : row.left(3));
+    if (view != QLatin1String("address")) {
+      QTest::keyClick(text, Qt::Key_Home);
+      QTest::keyClick(text, Qt::Key_Right);
+      QTest::keyClick(text, Qt::Key_Right);
+      QTest::keyClick(text, Qt::Key_Down);
+      const QString next =
+          qobject_cast<CodeText *>(text)
+              ? qobject_cast<CodeText *>(text)->selectedText()
+              : qobject_cast<ListingView *>(text)->selectedText();
+      QTest::keyClick(text, Qt::Key_Up);
+      QTest::keyClick(text, Qt::Key_Home);
+      QTest::keyClick(text, Qt::Key_Right);
+      QTest::keyClick(text, Qt::Key_Right);
+      QTest::keyClick(text, Qt::Key_Down, Qt::ShiftModifier);
+      QTest::keyClick(text, Qt::Key_C, Qt::ControlModifier);
+      QCOMPARE(clipboardText(), row.mid(2) + QLatin1Char('\n') + next.left(2));
+    }
+  }
+
   void tabFromCodeUsesSelectedInstruction_data() {
     QTest::addColumn<QString>("representation");
     QTest::addColumn<bool>("native");
@@ -329,6 +489,96 @@ private slots:
     QTRY_COMPARE(assembly->currentAddress(), std::optional<Address>(target));
     QTest::qWait(100);
     QCOMPARE(assembly->currentFunction(), std::optional<Address>(first));
+    QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+  }
+
+  void graphRefreshKeepsLatestRequestedAddress_data() {
+    QTest::addColumn<QString>("refresh");
+    QTest::newRow("navigate-during-refresh") << QStringLiteral("navigate");
+    QTest::newRow("keyboard-during-refresh") << QStringLiteral("keyboard");
+    QTest::newRow("mouse-during-refresh") << QStringLiteral("mouse");
+    QTest::newRow("generation-during-load") << QStringLiteral("generation");
+    QTest::newRow("revision-during-load") << QStringLiteral("revision");
+  }
+
+  void graphJumpDuringFunctionResolutionKeepsLatestAddress() {
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("code-edits-mapped.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    const Address first = Base + 0x140;
+    const Address second = Base + 0x180;
+    const Address target = first + 2;
+    assembly->navigate(first);
+    QTRY_COMPARE(assembly->currentFunction(), std::optional<Address>(first));
+    assembly->setGraphMode(true);
+    QTRY_VERIFY(assembly->graphMode() && assembly->graph()->loaded());
+
+    // Another function first resolves through the listing. A new jump within
+    // the visible graph supersedes that still-pending resolution as well.
+    assembly->navigate(second);
+    QVERIFY(assembly->listing()->jumpPending());
+    assembly->navigate(target);
+    QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+    QTRY_VERIFY(!assembly->listing()->jumpPending());
+    QTRY_VERIFY(assembly->graph()->loaded());
+    QCOMPARE(assembly->currentFunction(), std::optional<Address>(first));
+    QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+    QCOMPARE(assembly->listing()->currentAddress(),
+             std::optional<Address>(target));
+  }
+
+  void graphRefreshKeepsLatestRequestedAddress() {
+    QFETCH(QString, refresh);
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("code-edits-mapped.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    const Address first = Base + 0x140;
+    const Address second = Base + 0x180;
+    assembly->navigate(first);
+    QTRY_COMPARE(assembly->currentFunction(), std::optional<Address>(first));
+    assembly->setGraphMode(true);
+    QTRY_VERIFY(assembly->graphMode() && assembly->graph()->loaded());
+    auto *graph = assembly->graph();
+    QSignalSpy status(graph, &GraphView::statusChanged);
+    Address target;
+    if (refresh != QLatin1String("generation") &&
+        refresh != QLatin1String("revision")) {
+      target = first + 2;
+      // A refresh retains its current nodes, so navigation can succeed before
+      // the replacement layout arrives. That layout must retain the new row.
+      graph->showFunction(first, first);
+      if (refresh == QLatin1String("navigate")) {
+        assembly->navigate(target);
+      } else if (refresh == QLatin1String("keyboard")) {
+        QTest::keyClick(graph, Qt::Key_Down);
+        QTest::keyClick(graph, Qt::Key_Down);
+      } else {
+        QVERIFY(graph->nodes().size() > 2);
+        graph->centerOn(graph->nodes().at(2).box.center());
+        QTest::mouseClick(graph, Qt::LeftButton, {},
+                          QPoint(graph->width() / 2, graph->height() / 2));
+      }
+      QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
+    } else {
+      target = second + 2;
+      graph->showFunction(second, target);
+      QVERIFY(!graph->currentAddress());
+      // Background discovery or edits can refresh a function whose graph has
+      // not arrived. Preserve the requested instruction across that refresh.
+      if (refresh == QLatin1String("generation"))
+        emit bench.session.generationChanged();
+      else
+        emit bench.session.revisionChanged();
+    }
+    QTRY_VERIFY(!status.isEmpty() &&
+                status.back().front().toString().isEmpty());
+    QVERIFY(graph->loaded());
     QCOMPARE(assembly->currentAddress(), std::optional<Address>(target));
   }
 
@@ -1793,6 +2043,103 @@ private slots:
     QVERIFY(bench.session.filePath().isEmpty());
   }
 
+  void startupQuickStartDoesNotWaitForExposureOrWorker_data() {
+    QTest::addColumn<bool>("go");
+    QTest::newRow("close") << false;
+    QTest::newRow("go") << true;
+  }
+
+  void startupQuickStartDoesNotWaitForExposureOrWorker() {
+    QFETCH(bool, go);
+    QTemporaryDir directory;
+    Workbench bench(directory.filePath(QStringLiteral("missing-worker.exe")));
+    // The initial exposure has already happened, and no engine can become
+    // ready.
+    QVERIFY(QTest::qWaitForWindowExposed(bench.window.get()));
+    int shown = 0;
+    bool clickedGo = false;
+    QTimer close;
+    connect(&close, &QTimer::timeout, this, [&] {
+      auto *dialog =
+          qobject_cast<QuickStartDialog *>(QApplication::activeModalWidget());
+      if (!dialog)
+        return;
+      ++shown;
+      if (go)
+        for (auto *button : dialog->findChildren<QPushButton *>())
+          if (button->text() == QStringLiteral("&Go")) {
+            clickedGo = true;
+            QTest::mouseClick(button, Qt::LeftButton);
+            return;
+          }
+      dialog->reject();
+    });
+    close.start(5);
+    bench.window->scheduleQuickStart();
+    QTRY_COMPARE_WITH_TIMEOUT(shown, 1, 1000);
+    QCOMPARE(clickedGo, go);
+    QVERIFY(bench.window->isVisible());
+    QVERIFY(bench.session.filePath().isEmpty());
+    QVERIFY(!bench.session.loaded());
+    QVERIFY(!QApplication::activeModalWidget());
+    bench.window->hide();
+    bench.window->show();
+    QTest::qWait(50);
+    QCOMPARE(shown, 1);
+  }
+
+  void openingAFileCancelsStartupQuickStart_data() {
+    QTest::addColumn<QString>("mode");
+    QTest::newRow("before-worker-ready") << QStringLiteral("open");
+    QTest::newRow("drop-before-queued-dialog") << QStringLiteral("drop");
+    QTest::newRow("already-loaded") << QStringLiteral("loaded");
+  }
+
+  void openingAFileCancelsStartupQuickStart() {
+    QFETCH(QString, mode);
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("fixture.bin"));
+    Workbench bench;
+    if (mode == QLatin1String("drop"))
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.identifiesFiles(), OpenTimeoutMs);
+    if (mode == QLatin1String("loaded")) {
+      bench.window->openFile(path);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    }
+    int shown = 0;
+    QTimer dismiss;
+    connect(&dismiss, &QTimer::timeout, this, [&] {
+      if (auto *dialog = qobject_cast<QuickStartDialog *>(
+              QApplication::activeModalWidget())) {
+        ++shown;
+        dialog->reject();
+      }
+    });
+    dismiss.start(5);
+    LoadDialogAcceptor loadDialogs;
+    bench.window->scheduleQuickStart();
+    if (mode == QLatin1String("drop"))
+      QVERIFY(dropFile(bench.window.get(), path));
+    else if (mode == QLatin1String("open"))
+      bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    // Process the startup callback even when the session was already loaded.
+    QTest::qWait(50);
+    QCOMPARE(shown, 0);
+    QCOMPARE(bench.session.filePath(), path);
+    // Explicitly opening Quick Start from the menu still works in a project.
+    QTimer::singleShot(0, bench.window.get(), [&] {
+      if (auto *dialog = qobject_cast<QuickStartDialog *>(
+              QApplication::activeModalWidget())) {
+        ++shown;
+        dialog->reject();
+      }
+    });
+    bench.window->showQuickStart();
+    QCOMPARE(shown, 1);
+    QVERIFY(bench.session.loaded());
+  }
+
   void quickStartShowsRecentFilesAndStartsAsChosen() {
     // As IDA's Quick start: New, Go and Previous, the recent files and
     // whether it greets the next start.  Each recent file shows its format,
@@ -2210,12 +2557,12 @@ private slots:
                        .arg(*hex->byteAt(at), 2, 16, QLatin1Char('0'))
                        .toUpper());
     }
-    QApplication::clipboard()->clear();
+    clearClipboard();
     QTest::keyClick(hex, Qt::Key_C, Qt::ControlModifier);
-    QTRY_COMPARE(QApplication::clipboard()->text(), bytes.join(' '));
-    QApplication::clipboard()->clear();
+    QTRY_COMPARE(clipboardText(), bytes.join(' '));
+    clearClipboard();
     bench.action(ActionId::EditCopy)->trigger();
-    QTRY_COMPARE(QApplication::clipboard()->text(), bytes.join(' '));
+    QTRY_COMPARE(clipboardText(), bytes.join(' '));
     // A move without Shift ends the selection.
     QTest::keyClick(hex, Qt::Key_Left);
     QVERIFY(!hex->selection());
@@ -2371,7 +2718,10 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(ir->text()->lineCount() > 3, OpenTimeoutMs);
     ir->text()->setCursorLine(3);
     QCOMPARE(disassembly->currentItem(), std::optional<Address>(Base + 0x140));
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
     ir->text()->setFocus();
+    QTRY_VERIFY(ir->text()->hasFocus());
     bench.action(ActionId::JumpPseudocode)->trigger();
     QTRY_COMPARE(disassembly->currentItem(),
                  std::optional<Address>(Base + 0x143));
@@ -2393,13 +2743,14 @@ private slots:
     QTRY_VERIFY(ir->text()->hasFocus());
     ir->text()->setCursorLine(1);
     QTest::keyClick(ir->text(), Qt::Key_Down, Qt::ShiftModifier);
+    QTest::keyClick(ir->text(), Qt::Key_End, Qt::ShiftModifier);
     const QString lines = QStringLiteral("// code line 1\n// code line 2");
-    QApplication::clipboard()->clear();
+    clearClipboard();
     QTest::keyClick(ir->text(), Qt::Key_C, Qt::ControlModifier);
-    QCOMPARE(QApplication::clipboard()->text(), lines);
-    QApplication::clipboard()->clear();
+    QCOMPARE(clipboardText(), lines);
+    clearClipboard();
     bench.action(ActionId::EditCopy)->trigger();
-    QCOMPARE(QApplication::clipboard()->text(), lines);
+    QCOMPARE(clipboardText(), lines);
 
     // C opens at the definition: the includes and declarations before it fold
     // into one line, which Keypad + expands and Keypad - folds again, and
@@ -2417,7 +2768,7 @@ private slots:
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
     code->setCursorLine(0);
-    QApplication::clipboard()->clear();
+    clearClipboard();
     QTest::keyClick(code, Qt::Key_C, Qt::ControlModifier);
     const QString declaration =
         QStringLiteral("typedef struct QDomNode QDomNode;");
@@ -2426,9 +2777,9 @@ private slots:
     const QString globals =
         QStringLiteral("/* neverd.image: 0x20 */\nint64_t dso_handle = 0x20;\n"
                        "extern uint64_t qword_10; /* 0x10 */\n");
-    QCOMPARE(QApplication::clipboard()->text(),
-             QStringLiteral("#include <stdint.h>\n") + declaration +
-                 QLatin1Char('\n') + linked + QLatin1Char('\n') + globals);
+    QCOMPARE(clipboardText(), QStringLiteral("#include <stdint.h>\n") +
+                                  declaration + QLatin1Char('\n') + linked +
+                                  QLatin1Char('\n') + globals);
     QTest::keyClick(code, Qt::Key_Plus, Qt::KeypadModifier);
     QCOMPARE(code->lineCount(), 708);
     QTest::keyClick(code, Qt::Key_Minus, Qt::KeypadModifier);
@@ -2467,15 +2818,15 @@ private slots:
         QItemSelection(model.index(0, 0),
                        model.index(1, model.columnCount() - 1)),
         QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-    QApplication::clipboard()->clear();
+    clearClipboard();
     QTest::keyClick(functions->table(), Qt::Key_C, Qt::ControlModifier);
-    const QString rows = QApplication::clipboard()->text();
+    const QString rows = clipboardText();
     QCOMPARE(rows.count(QLatin1Char('\n')), 1);
     QVERIFY2(rows.startsWith(QStringLiteral("function_0\t")), qPrintable(rows));
     QVERIFY2(rows.contains(QStringLiteral("\nfunction_1\t")), qPrintable(rows));
-    QApplication::clipboard()->clear();
+    clearClipboard();
     bench.action(ActionId::EditCopy)->trigger();
-    QCOMPARE(QApplication::clipboard()->text(), rows);
+    QCOMPARE(clipboardText(), rows);
 
     // The graph of the current function.
     disassembly->navigate(Base + 0x140);

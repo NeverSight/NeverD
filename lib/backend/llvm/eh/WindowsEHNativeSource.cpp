@@ -7,6 +7,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/X86RegistrationCxxUnwind.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -195,12 +197,7 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
 
   if (Cxx.TryBlocks.size() > std::numeric_limits<uint32_t>::max())
     return WindowsEHNativeSourceReason::InvalidCxxTryBlock;
-  // One physical runtime context is currently lowered. Keep this source
-  // projection authoritative for the emitter, IR replay and table consumer.
-  if (Registration &&
-      (Cxx.UnwindMap.size() > 128 || Cxx.TryBlocks.size() != 1 ||
-       Cxx.TryBlocks[0].TryLow != 0 || Cxx.TryBlocks[0].Handlers.size() != 1 ||
-       Cxx.TryBlocks[0].CatchHigh != Cxx.TryBlocks[0].TryHigh + 1))
+  if (Registration && !projectX86RegistrationCxxUnwind(Cxx))
     return WindowsEHNativeSourceReason::InvalidCxxTryBlock;
   auto StateAt = [&](va_t Address) {
     int32_t State = -1;
@@ -211,6 +208,7 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
     }
     return State;
   };
+  std::set<va_t> RegistrationHandlers;
   for (const CxxTryBlock &Try : Cxx.TryBlocks) {
     if (Try.Handlers.empty() ||
         Try.Handlers.size() > std::numeric_limits<uint32_t>::max())
@@ -219,12 +217,16 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
       if (Catch.ParentFrameOffset != 0 ||
           (!Registration && Catch.CatchObjectOffset != 0) ||
           (Registration &&
-           (Catch.CatchObjectOffset >= 0 || !Catch.TypeDescriptorVA ||
+           (Catch.CatchObjectOffset > 0 ||
             Catch.TypeDescriptorVA > UINT32_MAX ||
-            (Catch.Adjectives != 0 && Catch.Adjectives != 8))))
+            (Catch.TypeDescriptorVA
+                 ? Catch.Adjectives != 0 && Catch.Adjectives != 8
+                 : Catch.CatchObjectOffset != 0 || Catch.Adjectives != 0x40))))
         return WindowsEHNativeSourceReason::UnsupportedCxxHandlerFrameState;
       if (Catch.HandlerVA == 0 || Catch.HandlerVA == EH.CodeRange.Begin ||
-          !EH.CodeRange.contains(Catch.HandlerVA))
+          !EH.CodeRange.contains(Catch.HandlerVA) ||
+          (Registration &&
+           !RegistrationHandlers.insert(Catch.HandlerVA).second))
         return WindowsEHNativeSourceReason::InvalidCxxHandler;
       const int32_t HandlerState = StateAt(Catch.HandlerVA);
       if (!Registration &&
@@ -618,17 +620,11 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                     WindowsEHNativeSourceReason::ConflictingLanguageModel,
                     Capability);
     const auto &Chain = *EH.Registration;
-    if (Chain.RealignedFrame)
-      return reject(
-          Model,
-          WindowsEHNativeSourceReason::UnsupportedCxxDynamicStackAlignment,
-          Capability);
     if (!EH.PersonalityVA || Chain.HandlerVA != EH.PersonalityVA ||
         !Chain.ScopeTableVA || Chain.ScopeTableVA != EH.HandlerDataVA ||
         Chain.ScopeTableVA != EH.Cxx->NativeFuncInfoVA ||
-        Chain.RegistrationOffset != -12 || Chain.TryLevelOffset != -4 ||
-        Chain.SeededTryLevel != -1 || Chain.HasSecurityCookies ||
-        !Chain.Scopes.empty() ||
+        !Chain.cxxRuntimeFrameOffset() || Chain.SeededTryLevel != -1 ||
+        Chain.HasSecurityCookies || !Chain.Scopes.empty() ||
         Chain.TryLevelStores.size() > limits::kMaxRegistrationEHRecords ||
         !EH.CodeRange.contains(Chain.ChainInstallVA))
       return reject(Model,

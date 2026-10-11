@@ -44,7 +44,7 @@ TEST_F(LLVMModel, PointerEscapesAndUnprovedMemoryModesAreRefused) {
       "%p = getelementptr i8, ptr %state, i64 -1\nret i64 0",
       "%p = getelementptr i8, ptr %state, i64 132\n%v = load i64, ptr %p, "
       "align 1\nret i64 %v",
-      "%p = getelementptr i64, ptr %state, i64 1\nret i64 0",
+      "%p = getelementptr i128, ptr %state, i64 1\nret i64 0",
       "%p = getelementptr i8, ptr %state, i64 1\n%v = load i64, ptr %p, align "
       "8\nret i64 %v",
       "%x = load i64, ptr %state, align 16\nret i64 %x",
@@ -64,12 +64,39 @@ TEST_F(LLVMModel, PointerEscapesAndUnprovedMemoryModesAreRefused) {
       "store volatile i64 3, ptr %state\nret i64 0",
       "%x = load atomic i64, ptr %state monotonic, align 8\nret i64 %x",
       "store atomic i64 3, ptr %state monotonic, align 8\nret i64 0",
-      "%x = load i64, ptr %state\n%p = inttoptr i64 %x to ptr\n%y = load i64, "
-      "ptr %p, align 8\nret i64 %y",
       "%x = load i64, ptr %state\n%p = inttoptr i64 %x to ptr\n%q = "
       "getelementptr i8, ptr %p, i64 1\nret i64 0",
       "%x = icmp eq ptr %state, %state\nret i64 0"};
   for (const char *Body : Bodies) {
+    SCOPED_TRACE(Body);
+    parse(Body);
+    ASSERT_TRUE(Module);
+    reject();
+  }
+}
+
+TEST_F(LLVMModel, TypedStateProjectionsRefuseWrappedAndUnprovedOffsets) {
+  for (const char *Flags : {"", "inbounds ", "nuw ", "nusw "}) {
+    SCOPED_TRACE(Flags);
+    parse("%p = getelementptr " + std::string(Flags) +
+          "i64, ptr %state, i64 2305843009213693956\nret i64 0");
+    ASSERT_TRUE(Module);
+    reject("state GEP offset overflow");
+  }
+  for (const char *Body :
+       {"%p = getelementptr i64, ptr %state, i64 17\nret i64 0",
+        "%p = getelementptr i64, ptr %state, i64 -1\nret i64 0",
+        "%p = getelementptr i32, ptr %state, i64 33\n"
+        "%x = load i64, ptr %p, align 1\nret i64 %x",
+        "%p = getelementptr i24, ptr %state, i64 1\nret i64 0",
+        "%p = getelementptr [2 x i64], ptr %state, i64 0, i64 1\nret i64 0",
+        "%p = getelementptr i64, ptr %state, i32 1\nret i64 0",
+        "%x = load i64, ptr %state\n"
+        "%p = getelementptr i64, ptr %state, i64 %x\nret i64 0",
+        "%p = getelementptr i64, ptr %state, i64 4\n"
+        "%q = getelementptr nuw i64, ptr %p, i64 -1\nret i64 0",
+        "%x = load i64, ptr %state\n%p = inttoptr i64 %x to ptr\n"
+        "%q = getelementptr i64, ptr %p, i64 1\nret i64 0"}) {
     SCOPED_TRACE(Body);
     parse(Body);
     ASSERT_TRUE(Module);

@@ -73,12 +73,21 @@ class DarwinKernelReferenceTests(unittest.TestCase):
                 self.assertTrue((path.parent / "cycle").is_symlink())
                 self.assertEqual((path.parent / "dirlink").readlink(), Path("empty"))
                 self.assertFalse((path.parent / "dangling").exists())
-            elif command[1] in ("kernel-pathconf", "common-attributes", "extended-attributes", "attribute-names", "bulk-attributes", "xattr-mutations"):
-                self.assertEqual({item.name for item in path.parent.iterdir()},
-                                 {"data", "empty", "alias", "dangling", "cycle"})
+            elif command[1] in ("kernel-pathconf", "common-attributes", "extended-attributes", "attribute-names", "bulk-attributes", "xattr-mutations", "hard-links"):
+                names = {"data", "empty", "alias", "dangling", "cycle"}
+                if command[1] == "hard-links":
+                    names.add("attributes")
+                    self.assertEqual((path.parent / "attributes").read_bytes(), b"x")
+                self.assertEqual({item.name for item in path.parent.iterdir()}, names)
                 self.assertEqual((path.parent / "alias").readlink(), Path("data"))
                 self.assertEqual((path.parent / "cycle").readlink(), Path("cycle"))
                 self.assertFalse((path.parent / "dangling").exists())
+            elif command[1] == "symbolic-descriptors":
+                self.assertEqual({item.name for item in path.parent.iterdir()}, {"data", "fd-attrs"})
+                self.assertEqual((path.parent / "fd-attrs").readlink(), Path("data"))
+            elif command[1] == "nonblocking-descriptors":
+                self.assertEqual({item.name for item in path.parent.iterdir()}, {"data", "fd-nonblock"})
+                self.assertEqual((path.parent / "fd-nonblock").readlink(), Path("data"))
             elif command[1] == "directory-link-roots":
                 catalogue = path.parent
                 self.assertEqual({item.name for item in catalogue.iterdir()}, {"data", "a", "b"})
@@ -119,7 +128,7 @@ class DarwinKernelReferenceTests(unittest.TestCase):
                  ("directory-link-roots", 37, b""),
                  ("directory-entries", 37, b""),
                  ("kernel-pathconf", 37, b""), ("common-attributes", 37, b""),
-                 ("extended-attributes", 37, b""), ("attribute-names", 37, b""), ("bulk-attributes", 37, b""), ("xattr-mutations", 37, b"")])
+                 ("extended-attributes", 37, b""), ("attribute-names", 37, b""), ("bulk-attributes", 37, b""), ("xattr-mutations", 37, b""), ("hard-links", 37, b""), ("symbolic-descriptors", 37, b""), ("nonblocking-descriptors", 37, b"")])
             self.assertEqual(attributes.call_count, 3)
             self.assertEqual([(call.args[1], call.args[2]) for call in attributes.call_args_list],
                              [("user.neverd.beta", b"\x00\xffA\x00\x80B\n"),
@@ -131,6 +140,7 @@ class DarwinKernelReferenceTests(unittest.TestCase):
         self.assertNotIn(roots[11], roots[:11])
         self.assertNotIn(roots[12], roots[:12])
         self.assertNotIn(roots[13], roots[:13])
+        self.assertNotIn(roots[15], roots[:15])
         self.assertNotEqual(roots[0], roots[1])
         self.assertNotIn(roots[2], roots[:2])
         self.assertNotIn(roots[3], roots[:3])

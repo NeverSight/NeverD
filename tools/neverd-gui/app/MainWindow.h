@@ -46,6 +46,9 @@ public:
   /// window has its size so preferred dock sizes apply.
   void initializeLayout();
   void showQuickStart();
+  /// Greet an empty startup on the next event-loop turn, unless opening a
+  /// file takes precedence. No window-exposure or engine-ready event is needed.
+  void scheduleQuickStart();
   /// Command lines to run in the output window once the next file opens.
   void runAfterOpen(const QStringList &commands) {
     pendingCommands_ = commands;
@@ -189,6 +192,7 @@ private:
   std::optional<Address> initialAddress_;
   bool restoreGraph_ = false;
   QPointer<QDialog> quickStart_;
+  bool startupQuickStartPending_ = false;
   QLabel *analysisLabel_ = nullptr, *directionLabel_ = nullptr,
          *diskLabel_ = nullptr, *fileLabel_ = nullptr;
   QMenu *recentMenu_ = nullptr;

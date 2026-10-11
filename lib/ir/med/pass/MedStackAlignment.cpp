@@ -10,6 +10,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86RegistrationFrame.h"
 
 #include <cstdint>
 #include <limits>
@@ -192,8 +193,12 @@ private:
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           Op.IntrinsicOutputs.empty()) {
         if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None) {
-          if (Architecture == Arch::X86 && Format == BinaryFormat::COFF)
-            Result = registrationRootEntryStackOffset(Op);
+          if (Architecture == Arch::X86 && Format == BinaryFormat::COFF) {
+            const auto Coordinate = registrationRootFrameCoordinate(Func, Op);
+            if (Coordinate && Coordinate->Alignment == 1)
+              Result =
+                  int64_t(Coordinate->EntryOffset) + Coordinate->AlignedOffset;
+          }
         } else if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
           Result = resolve(Op.Inputs[0], Depth + 1);
         else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
@@ -238,52 +243,6 @@ private:
 };
 
 } // namespace
-
-bool hasValidRegistrationRootShape(const MedOp &Op) {
-  const auto &TRI = getTargetRegInfo(Arch::X86);
-  if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 || Op.OriginSeq != -1 ||
-      Op.Output.Kind != MedVar::Reg || Op.Output.TheArch != Arch::X86 ||
-      Op.Output.Size != 4 || Op.Inputs[0].Kind != MedVar::Reg ||
-      Op.Inputs[0].TheArch != Arch::X86 || Op.Inputs[0].Size != 4 ||
-      Op.Inputs[0].RegOff != Op.Output.RegOff ||
-      Op.Inputs[0].Id != Op.Output.Id || Op.Inputs[0].SSAVer != 0 ||
-      Op.Inputs[0].RenameTag != Op.Output.RenameTag ||
-      Op.MemoryOrdering != NdMemoryOrdering::None ||
-      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-      !Op.IntrinsicOutputs.empty() || Op.CallSiteId || Op.SourceCallHint ||
-      Op.DoesNotReturn)
-    return false;
-  switch (Op.RegistrationRoot) {
-  case MedOp::RegistrationRootKind::EstablishedFramePointer:
-    return Op.Output.RegOff == TRI.FramePointer &&
-           Op.RegistrationStackOffset == 0;
-  case MedOp::RegistrationRootKind::CallbackStackPointer:
-    return Op.Output.RegOff == TRI.StackPointer &&
-           Op.RegistrationStackOffset == 0;
-  case MedOp::RegistrationRootKind::RestoredStackPointer:
-    return Op.Output.RegOff == TRI.StackPointer &&
-           Op.RegistrationStackOffset <= -16 &&
-           int64_t(Op.RegistrationStackOffset) - 4 >= INT32_MIN;
-  case MedOp::RegistrationRootKind::None:
-    return false;
-  }
-  return false;
-}
-
-std::optional<int64_t> registrationRootEntryStackOffset(const MedOp &Op) {
-  if (!hasValidRegistrationRootShape(Op))
-    return std::nullopt;
-  switch (Op.RegistrationRoot) {
-  case MedOp::RegistrationRootKind::EstablishedFramePointer:
-    return -4;
-  case MedOp::RegistrationRootKind::RestoredStackPointer:
-    return int64_t(Op.RegistrationStackOffset) - 4;
-  case MedOp::RegistrationRootKind::CallbackStackPointer:
-  case MedOp::RegistrationRootKind::None:
-    return std::nullopt;
-  }
-  return std::nullopt;
-}
 
 StackEntryKind functionEntryKind(const MedFunc &Func, StackEntryKind AtEntry) {
   if (AtEntry != StackEntryKind::ProcessEntry)

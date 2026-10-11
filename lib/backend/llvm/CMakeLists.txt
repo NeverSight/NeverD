@@ -1,6 +1,7 @@
 add_neverd_component_library(NeverDWindowsEHMetadata
   eh/WindowsEHMetadataEncoder.cpp
   eh/WindowsEHNativeSource.cpp
+  X86/RegistrationCxxUnwind.cpp
   eh/WindowsEHSemanticDigest.cpp
 )
 
@@ -9,10 +10,18 @@ add_neverd_component_library(NeverDLLVMFloatConvertLowering
 )
 
 add_neverd_component_library(NeverDWindowsRegistrationFrame
+  X86/RegistrationFrameLayout.cpp
+  X86/RegistrationCatch.cpp
+  X86/RegistrationCatchBlocks.cpp
+  X86/RegistrationEntry.cpp
   X86/WindowsRegistrationABI.cpp
   X86/WindowsRegistrationCallbackPlan.cpp
   X86/WindowsRegistrationCallbackStack.cpp
+  X86/WindowsRegistrationCatchStack.cpp
   X86/WindowsRegistrationFrame.cpp
+
+  LINK_COMPONENTS
+  IR
 )
 
 add_neverd_component_library(NeverDBackendLLVM
@@ -41,10 +50,14 @@ add_neverd_component_library(NeverDBackendLLVM
   eh/MedLLVMNativeCxxEH.cpp
   eh/MedLLVMNativeItaniumEH.cpp
   eh/MedLLVMNativeSEH.cpp
+  X86/MedLLVMRegistrationIncoming.cpp
   X86/MedLLVMRegistrationSEHProof.cpp
   X86/MedLLVMRegistrationCxxContinuation.cpp
+  X86/MedLLVMRegistrationCxxStack.cpp
+  X86/MedLLVMRegistrationFrame.cpp
   X86/MedLLVMNativeRegistration.cpp
   X86/MedLLVMNativeRegistrationCxx.cpp
+  X86/MedLLVMRegistrationCxxCatch.cpp
   emit/MedLLVMCall.cpp
   emit/MedLLVMEmitter.cpp
   emit/MedLLVMFloatEmitter.cpp

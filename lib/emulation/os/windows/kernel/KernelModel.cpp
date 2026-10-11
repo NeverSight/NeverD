@@ -143,12 +143,51 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
                                     const DriverOptions &Options) {
   if (DriverObject)
     return modelError("kernel model cannot be initialized twice");
+  std::map<uint64_t, uint64_t> ImageRanges;
+  for (const auto &Region : Image.Regions) {
+    const uint64_t Size = Region.Bytes.size();
+    if (!Size || Region.Address < Image.Base ||
+        Region.Address - Image.Base >= Image.Size ||
+        Size > Image.Size - (Region.Address - Image.Base) ||
+        Size > UINT64_MAX - Region.Address)
+      return modelError("invalid driver image RAM ownership range");
+    if (!ImageRanges.empty()) {
+      auto &Last = *ImageRanges.rbegin();
+      if (Region.Address < Last.first + Last.second)
+        return modelError("overlapping driver image RAM ownership ranges");
+      if (Region.Address == Last.first + Last.second) {
+        Last.second += Size;
+        continue;
+      }
+    }
+    ImageRanges.emplace(Region.Address, Size);
+  }
+  ImageRAM = std::move(ImageRanges);
   InstructionClock = Options.Scheduling.has_value();
   Scheduler = KernelScheduler(KernelScheduler::Limits{},
                               Options.Scheduling.has_value());
   ConfiguredPnpDevices = Options.PnpDevices;
   if (auto E = Registry.initialize(Options.Registry))
     return E;
+  if (Exports) {
+    auto Modules = makeKernelModuleImages(*Exports);
+    if (!Modules)
+      return Modules.takeError();
+    for (auto &Module : *Modules) {
+      const uint64_t Base = Module.Identity.Base, Size = Module.Identity.Size;
+      if (auto E = Memory.map(Base, Size, Read | Write))
+        return E;
+      if (auto E = Memory.write(Base, Module.Bytes))
+        return E;
+      if (auto E = Memory.protect(Base, Size, Read))
+        return E;
+      if (auto E = Memory.protect(Base + profile::KernelModuleCodeRVA,
+                                  profile::ThunkSize, Read | Execute))
+        return E;
+      LoadedModules.push_back(std::move(Module.Identity));
+    }
+    LoadedModules.push_back({Image.Name, Image.Base, Image.Size});
+  }
   if (auto E = Memory.map(profile::KernelArenaBase, profile::KernelArenaSize,
                           Read | Write))
     return E;
@@ -582,8 +621,7 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
           Base < End && !Physical.hasPinnedPages(Address, Size))
         return modelError("paged pool access requires IRQL <= APC_LEVEL or "
                           "live physical page locks");
-  if (Address < profile::ThunkBase + profile::ThunkSize &&
-      profile::ThunkBase < End)
+  if (KernelExportRegistry::overlapsThunk(Address, Size))
     return modelError(
         "kernel import thunks have no modeled readable or writable data");
   if (Address < AllocationEnd && NextAllocation < End)

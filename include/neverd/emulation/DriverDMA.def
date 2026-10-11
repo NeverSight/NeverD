@@ -27,7 +27,9 @@ NEVERD_DRIVER_DMA_LIMIT(DriverScenarioDmaBytesLimit, 16777216)
 
 #ifdef NEVERD_DRIVER_DMA_ADDRESS
 NEVERD_DRIVER_DMA_ADDRESS(DriverDmaPhysicalBase, 0x1000000000ULL)
-NEVERD_DRIVER_DMA_ADDRESS(DriverDmaPhysicalSize, 0x100000ULL)
+// Physical identities cover image RAM as well as the smaller object arena.
+// This is a finite identity window; guest backing retains its memory budget.
+NEVERD_DRIVER_DMA_ADDRESS(DriverDmaPhysicalSize, 0x4000000ULL)
 #endif
 
 #ifdef NEVERD_DRIVER_DMA_FIELD

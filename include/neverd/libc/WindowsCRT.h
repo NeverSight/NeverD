@@ -152,6 +152,11 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("__std_exception_destroy", "void", {"void *"}),
     windowsCRTPrototype("_purecall", "int", {}),
     // kernel32 and ntdll.
+    // synchapi.h: these calls have no floating-point return value.
+    windowsAPIPrototype("Sleep", "void", {"uint32_t"}),
+    windowsAPIPrototype("InitializeCriticalSection", "void", {"void *"}),
+    windowsAPIPrototype("EnterCriticalSection", "void", {"void *"}),
+    windowsAPIPrototype("LeaveCriticalSection", "void", {"void *"}),
     windowsAPIPrototype("GetCurrentProcess", "void *", {}),
     windowsAPIPrototype("GetCurrentProcessId", "uint32_t", {}),
     windowsAPIPrototype("GetCurrentThreadId", "uint32_t", {}),

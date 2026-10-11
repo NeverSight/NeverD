@@ -5,6 +5,8 @@
 //===----------------------------------------------------------------------===//
 #include "ProcessTransfer.h"
 
+#include "neverd/emulation/ProcessRuntimeState.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -413,6 +415,17 @@ TransferObserver::watched(ProcessView &Process, uint64_t PC) {
   if (!ThreadLocal)
     return ThreadLocal.takeError();
   Observed.ThreadLocal = std::move(*ThreadLocal);
+  auto OwnedState = Process.runtimeState(CaptureRuntime);
+  if (!OwnedState)
+    return OwnedState.takeError();
+  Observed.OwnedState = std::move(*OwnedState);
+  if (Observed.OwnedState) {
+    Observed.RuntimeState.AdditionalStateInventoryKnown = true;
+    Observed.RuntimeState.HasAdditionalDependencies =
+        Observed.OwnedState->hasAdditionalDependencies();
+  }
+  if (CaptureRuntime)
+    Observed.Modules = Process.modules();
   auto DynamicState = Process.dynamicThreadLocalState();
   if (!DynamicState)
     return DynamicState.takeError();

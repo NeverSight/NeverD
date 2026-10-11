@@ -1688,7 +1688,9 @@ void recoverCallAbi(
       // callee's recovered ReturnType) -- inferReturnType ran before call
       // recovery and could not see it.
       if (ForwardsCallResult && Func.ReturnType &&
-          Func.ReturnType->Kind == NdTypeKind::Float) {
+          Func.ReturnType->Kind == NdTypeKind::Float && !Func.FPReturnViaX87 &&
+          !(Op.Output.Kind == MedVar::Reg &&
+            TRI.isX87StackReg(Op.Output.RegOff))) {
         ForwarderFPRetSize = Func.ReturnType->Size ? Func.ReturnType->Size : 8;
         ForwarderFPRetBlk = Blk.Id;
         ForwarderFPRetCallAddr = Op.Addr;

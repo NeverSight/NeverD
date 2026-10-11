@@ -163,6 +163,30 @@ bool NdOpEmulator::setMemoryAddressSpaceBase(NdMemoryAddressSpace AddressSpace,
   return false;
 }
 
+bool NdOpEmulator::setX86LinearAddressBits(uint8_t LinearAddressBits) {
+  if (Img.Arch != Arch::X64 ||
+      (LinearAddressBits != 48 && LinearAddressBits != 57))
+    return false;
+  X86LinearAddressBits = LinearAddressBits;
+  return true;
+}
+
+bool NdOpEmulator::isX86CanonicalMemoryRange(uint64_t Address,
+                                             uint64_t Size) const {
+  if (!Size || Size - 1 > UINT64_MAX - Address)
+    return false;
+  if (Img.Arch == Arch::X86)
+    return Address + Size - 1 <= UINT32_MAX;
+  if (Img.Arch != Arch::X64 || !X86LinearAddressBits)
+    return false;
+  const unsigned Bits = *X86LinearAddressBits;
+  const uint64_t HighMask = ~((UINT64_C(1) << Bits) - 1);
+  const auto IsCanonical = [&](uint64_t Value) {
+    return (Value & HighMask) == (((Value >> (Bits - 1)) & 1) ? HighMask : 0);
+  };
+  return IsCanonical(Address) && IsCanonical(Address + Size - 1);
+}
+
 bool NdOpEmulator::setX86ShadowStackContext(uint8_t CurrentPrivilegeLevel,
                                             bool Enabled,
                                             std::optional<uint64_t> SSP) {
@@ -462,6 +486,10 @@ bool NdOpEmulator::step(const LowOp &Op) {
               Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
         return false;
       switch (Id) {
+      case Intrinsic::X86FPRoundMemoryState:
+      case Intrinsic::X86FPApprox12MemoryState:
+      case Intrinsic::X86FPArithMemoryState:
+        return executeX86ScalarFPState(Op);
       case Intrinsic::MaskedLoadB:
       case Intrinsic::MaskedLoadW:
       case Intrinsic::MaskedLoadD:

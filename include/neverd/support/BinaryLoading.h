@@ -51,6 +51,13 @@ void normalizeBinaryMetadata(BinaryImage &Img);
 /// loader. Returns an error if the format is unrecognized.
 llvm::Expected<BinaryImage> loadBinary(const std::filesystem::path &Path,
                                        const BinaryLoadOptions &Opts = {});
+/// Load a selected immutable native byte image, without host file access or
+/// extension-based guessing. Universal Mach-O requires explicit slice selection
+/// and is refused here. File-specific loader choices are also refused. The
+/// returned image owns its data.
+llvm::Expected<BinaryImage>
+loadBinaryBuffer(llvm::MemoryBufferRef Buffer,
+                 const BinaryLoadOptions &Opts = {});
 
 } // namespace neverd
 

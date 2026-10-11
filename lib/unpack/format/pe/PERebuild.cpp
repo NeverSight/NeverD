@@ -7,6 +7,7 @@
 #include "PEImage.h"
 
 #include "neverd/emulation/GuestMemory.h"
+#include "neverd/object/PEChecksum.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -591,6 +592,7 @@ llvm::Expected<RebuiltImage> rebuild(const Image &In, const Capture &C,
       ++Out.RepairedTailCalls;
   Out.ConflictingTailCalls = Repairs->Conflicts;
   Out.MaterializedTLSCallbacks = RebuiltTLS->MaterializedCallbacks;
+  Out.LoaderEntryRVA = *Entry;
   Out.File.assign(Cursor + Overlay.size(), 0);
   std::copy_n(File.begin(), H.SizeOfHeaders, Out.File.begin());
   auto COFF = fetch<coff_file_header>(Out.File, H.FileHeaderOffset);
@@ -673,6 +675,14 @@ llvm::Expected<RebuiltImage> rebuild(const Image &In, const Capture &C,
          S.Target->Name.empty() ? S.Target->Ordinal : std::nullopt, S.RVA,
          S.Origin});
   // The emitted headers must satisfy the same contract as an input.
+  if (In.domain() == ExecutionDomain::Kernel) {
+    const uint64_t Offset =
+        H.OptionalHeaderOffset + offsetof(pe32plus_header, CheckSum);
+    auto Checksum = computePEChecksum(Out.File, Offset);
+    if (!Checksum)
+      return failure("driver image exceeds the PE checksum contract");
+    store(Out.File, Offset, llvm::support::ulittle32_t(*Checksum));
+  }
   if (auto Check = Image::read(Out.File); !Check)
     return failure(unpack::text::Rebuilt + llvm::toString(Check.takeError()));
   return Out;

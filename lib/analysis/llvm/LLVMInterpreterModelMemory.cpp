@@ -20,13 +20,25 @@ void Builder::pointerProjections() {
         const llvm::Value *Base = nullptr;
         int64_t Delta = 0;
         if (auto *G = llvm::dyn_cast<llvm::GetElementPtrInst>(&I)) {
-          llvm::APInt O(64, 0);
-          if (!G->getSourceElementType()->isIntegerTy(8) ||
+          auto *Element = G->getSourceElementType();
+          if (!(Element->isIntegerTy(8) || Element->isIntegerTy(16) ||
+                Element->isIntegerTy(32) || Element->isIntegerTy(64)) ||
               G->getNumIndices() != 1 || G->getPointerAddressSpace() != 0 ||
               !G->getOperand(1)->getType()->isIntegerTy(64))
             fail("unsupported typed pointer projection");
-          if (!G->accumulateConstantOffset(F.getParent()->getDataLayout(), O))
+          auto *Index = llvm::dyn_cast<llvm::ConstantInt>(G->getOperand(1));
+          if (!Index)
             continue;
+          const auto Stride =
+              F.getParent()->getDataLayout().getTypeAllocSize(Element);
+          // Preserve the element's allocation stride, including ABI padding.
+          // A wrapped index must not disguise a poison/out-of-object GEP as
+          // an ordinary byte offset into the declared state object.
+          bool Overflow = false;
+          const auto O = Index->getValue().smul_ov(
+              llvm::APInt(64, Stride.getFixedValue()), Overflow);
+          if (Overflow)
+            fail("state GEP offset overflow");
           Base = G->getPointerOperand();
           Delta = O.getSExtValue();
           if (G->hasNoUnsignedWrap() && Delta < 0)
@@ -81,6 +93,16 @@ NdVar Builder::stateSlot(const llvm::Value *Pointer, unsigned Bytes,
     fail("unproved state alignment");
   return rvar(Off, Bytes);
 }
+void Builder::requireGuestAlignment(LowBlock &Out, NdVar Address,
+                                    uint64_t Align) {
+  if (Align == 1)
+    return;
+  // LLVM alignment is an obligation on every reached address, not an entry
+  // assumption or permission to access bytes beyond this load/store.
+  auto Residue = local(8);
+  emit(Out, op(NdOp::INT_AND, Residue, {Address, num(Align - 1)}));
+  requireEqual(Out, Residue, num(0));
+}
 bool Builder::emitMemory(LowBlock &Out, const llvm::Instruction &I) {
   if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I)) {
     if (Load->isAtomic() || Load->isVolatile() ||
@@ -91,9 +113,9 @@ bool Builder::emitMemory(LowBlock &Out, const llvm::Instruction &I) {
                    {stateSlot(Load->getPointerOperand(), bytes(I.getType()),
                               Load->getAlign().value())}));
     else {
-      if (Load->getAlign().value() != 1)
-        fail("unproved guest alignment");
-      emit(Out, op(NdOp::LOAD, value(&I), {value(Load->getPointerOperand())}));
+      auto Address = value(Load->getPointerOperand());
+      requireGuestAlignment(Out, Address, Load->getAlign().value());
+      emit(Out, op(NdOp::LOAD, value(&I), {Address}));
     }
     return true;
   }
@@ -107,11 +129,10 @@ bool Builder::emitMemory(LowBlock &Out, const llvm::Instruction &I) {
                              Store->getAlign().value()),
                    {value(Store->getValueOperand())}));
     else {
-      if (Store->getAlign().value() != 1)
-        fail("unproved guest alignment");
-      emit(Out, op(NdOp::STORE, {},
-                   {value(Store->getPointerOperand()),
-                    value(Store->getValueOperand())}));
+      auto Address = value(Store->getPointerOperand());
+      requireGuestAlignment(Out, Address, Store->getAlign().value());
+      emit(Out,
+           op(NdOp::STORE, {}, {Address, value(Store->getValueOperand())}));
     }
     return true;
   }

@@ -158,6 +158,16 @@ NEVERD_API int neverd_pointer_at(neverd_session_t Sess, neverd_va_t Address,
 // Decompilation
 // ===--------------------------------------------------------------------===//
 
+/// Prepare one function's analysis without emitting source. A fresh or
+/// previously restricted session analyzes the requested entry; an existing
+/// whole-image analysis is retained. ARM mode and native exception-handler
+/// discovery follow the decompiler's checks. Returns 1 when analysis succeeds,
+/// or 0 with neverd_last_error on failure (also 0 for a null session).
+/// Individual IR/source views can still refuse an unavailable representation.
+/// This does not make mutable session operations safe to call concurrently.
+NEVERD_API int neverd_prepare_function(neverd_session_t Sess,
+                                       neverd_va_t FuncEntry);
+
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);
 

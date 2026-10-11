@@ -72,6 +72,8 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
   bool FeedsPhi = PhiArgVars.count(Key) > 0;
   bool HasMemoryEffect =
       CurOp.Opcode == NdOp::LOAD ||
+      CurOp.RegistrationRoot ==
+          MedOp::RegistrationRootKind::CallbackStackPointer ||
       CurOp.MemoryOrdering != NdMemoryOrdering::None ||
       CurOp.MemoryAddressSpace != NdMemoryAddressSpace::Default;
   if (!MultiUse && !IsCallResult && !FeedsPhi && !HasMemoryEffect)
@@ -81,6 +83,7 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
   S.Addr = CurOp.Addr;
   S.Dst = HighExpr::makeVar(CurOp.Output);
   S.Val = medOpToExpr(CurOp);
+  S.KeepsName = S.Val && S.Val->Kind == ExprKind::EntryRegister;
   Func.Body.push_back(std::move(S));
 }
 
@@ -156,7 +159,10 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
   auto CallExpr = HighExpr::makeCall(Callee, Target, std::move(Args));
   CallExpr->SourceCallHint = CurOp.SourceCallHint;
   CallExpr->DoesNotReturn = CurOp.DoesNotReturn;
-  if (CurOp.SourceCallHint)
+  const bool X87Result =
+      CurOp.Output.Kind == MedVar::Reg && CurOp.Output.Size == 10 &&
+      getTargetRegInfo(TargetArch).isX87StackReg(CurOp.Output.RegOff);
+  if (CurOp.SourceCallHint || X87Result)
     CallExpr->Type = sourceCallResultType(CurOp);
   if (ExpressionObserver && CurOp.Addr != InvalidVA && CurOp.OriginSeq >= 0)
     ExpressionObserver(CurOp, CallExpr);
@@ -170,7 +176,12 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
                                       CallExpr->Type->Kind == NdTypeKind::Struct
                                   ? CallExpr->Type
                                   : nullptr);
-    S.Val = CallExpr;
+    // All machine consumers read the x87 carrier as eighty raw bits. Keep
+    // that representation at the assignment boundary, including when a
+    // later pass inlines the call into an arithmetic operand or return.
+    S.Val = X87Result ? HighExpr::makeBitCast(
+                            CallExpr, NdType::makeInt(CurOp.Output.Size, false))
+                      : CallExpr;
     Func.Body.push_back(std::move(S));
   } else {
     HighStmt S;

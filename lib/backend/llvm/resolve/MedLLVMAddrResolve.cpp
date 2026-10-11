@@ -1496,7 +1496,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffset(const MedVar &V,
                                                 const MedVar *Forbidden) const {
   // The ordinary budget decides almost every proof. Exhaustion leaves a proof
   // undecided; when the closed-graph proof cannot decide it either, retry it
-  // once with the escalated budget. A depth or structural rejection is final.
+  // once with the escalated budget. The closed-graph proof can also discharge
+  // a recursive-depth limit; neither attempt weakens a structural rejection.
   auto proveEscalating = [&]() {
     bool Exhausted = false;
     if (valueIsStableAddressOffsetImpl(V, Forbidden,
@@ -1551,6 +1552,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
   const char *FirstRejectionReason = nullptr;
   MedVar FirstRejectedValue = V;
   int FirstRejectionDepth = -1;
+  bool RecursiveDepthExhausted = false;
   auto stableOffsetFailure = [&](const char *Reason, const MedVar &Value,
                                  int Depth) {
     if (!FirstRejectionReason) {
@@ -2305,8 +2307,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                      std::set<Key>)>
       prove;
   // Prove a closed scalar value graph only if the full path-sensitive proof
-  // exhausts its node budget. Shared arithmetic diamonds behind loop PHIs
-  // otherwise expand once per path, even though their non-frame leaves are
+  // exhausts its node or depth budget. Shared arithmetic diamonds behind loop
+  // PHIs otherwise expand once per path, even though their non-frame leaves are
   // independently numeric. Cycles require a feasible scalar initializer;
   // unproved frame reloads, pointer-width non-frame loads, and materializable
   // addresses fail closed.
@@ -2496,8 +2498,10 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                  ? true
                  : stableOffsetFailure("unanchored-cycle", Start, Depth);
     }
-    if (Depth > 128)
+    if (Depth > 128) {
+      RecursiveDepthExhausted = true;
       return stableOffsetFailure("depth", Start, Depth);
+    }
     if (RemainingProofNodes-- <= 0)
       return stableOffsetFailure("budget", Start, Depth);
     auto constantIsMappedAddress = [&](uint64_t Value, uint16_t Size) {
@@ -3192,7 +3196,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
     return Result;
   };
   bool Result = prove(V, 0, {}, {}, {});
-  if (!Result && RemainingProofNodes <= 0)
+  if (!Result && (RemainingProofNodes <= 0 || RecursiveDepthExhausted))
     Result = proveClosedScalarGraph(V);
   Exhausted = !Result && RemainingProofNodes <= 0;
   if (!Result && (FinalAttempt || !Exhausted))
@@ -3843,7 +3847,8 @@ const MedOp *MedLLVMEmitter::memoryAddressSumDef(const MedVar &Address) const {
 
 std::optional<MedVar>
 MedLLVMEmitter::pointerPreservingInput(const MedOp &Op) const {
-  if (Op.NumInputs < 1 || Op.Output.Size == 0 || Op.Inputs[0].Size == 0)
+  if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None ||
+      Op.NumInputs < 1 || Op.Output.Size == 0 || Op.Inputs[0].Size == 0)
     return std::nullopt;
 
   const MedVar &Input = Op.Inputs[0];

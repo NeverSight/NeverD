@@ -80,6 +80,8 @@ bool MedLLVMEmitter::frameDerivedRec(
     return false;
 
   const MedOp *Def = lookupDef(V);
+  if (Def && Def->RegistrationRoot != MedOp::RegistrationRootKind::None)
+    return true;
   if (!Def) {
     // A PHI fed by any frame-derived predecessor — an induction pointer walking
     // a stack array, `p = PHI(sp-k, p+stride)` — is itself frame-derived.  PHIs
@@ -364,7 +366,8 @@ MedLLVMEmitter::addrSlotKey(const MedVar &V, int Depth,
   if (!CurMedFunc)
     return std::nullopt;
   const MedOp *Def = lookupDef(V);
-  if (!Def || Def->NumInputs < 1)
+  if (!Def || Def->NumInputs < 1 ||
+      Def->RegistrationRoot != MedOp::RegistrationRootKind::None)
     return std::make_pair(std::make_pair(V.Id, V.SSAVer), int64_t{0});
   // Slot identity follows the guest operation's modular width.  Accumulate as
   // raw bits so 64-bit wrap is defined and narrow guests do not become i64.
@@ -619,6 +622,12 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     auto Cleanup = llvm::scope_exit([&] { Active.erase(Key); });
     auto Proof = [&]() -> std::optional<med_llvm::SlotKey> {
       const MedOp *Def = lookupDef(Cur);
+      // A runtime definition is not an identity copy of the ordinary entry
+      // register. Keep its invocation as the origin of any derived slots.
+      if (Def && Def->RegistrationRoot != MedOp::RegistrationRootKind::None)
+        return RequireEntryStackPointer ? std::nullopt
+                                        : std::optional<med_llvm::SlotKey>(
+                                              {{Cur.Id, Cur.SSAVer}, 0});
       // The lifter's entry register seeds are represented as self-copies.  They
       // are roots, not definitions to recurse through.  Only the physical stack
       // pointer is the preferred canonical frame origin.  A physical frame

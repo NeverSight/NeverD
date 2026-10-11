@@ -29,7 +29,7 @@ void RegistrationStateSolver::recordCatchReturn(
   // The runtime owns this snapshot, independently of subsequent catch writes
   // to SavedESP. The continuation edge restores both the cell and ESP.
   const bool Valid =
-      !Chain.RealignedFrame && After.CxxCatchStacks.size() == 1 &&
+      callbackCanReturn(After) && After.CxxCatchStacks.size() == 1 &&
       !After.Parent && !After.OtherCallback && !After.Unknown &&
       !Facts[I].Invalid && After.Installed && !After.Uninstalled &&
       !After.Levels.empty() && Op.Seq >= 0 && Op.NumInputs == 1 &&

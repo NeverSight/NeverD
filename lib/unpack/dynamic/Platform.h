@@ -32,5 +32,17 @@ architectureTraits(emulation::GuestArchitecture Architecture);
 /// its container and instruction set.
 llvm::Expected<emulation::ProcessProfile>
 processProfile(const InputImage &Image);
+
+/// Profile-neutral evidence used by the unpacking coordinator. Each owning
+/// environment retains its own stop vocabulary and reports actual work.
+struct ObservedExecution {
+  std::string Profile, Stop, Diagnostic, BackendSelectionReason;
+  emulation::ExecutionBackendKind Backend;
+  uint64_t PC = 0, Instructions = 0, Events = 0, DirectServiceCalls = 0;
+};
+llvm::Expected<ObservedExecution>
+observeImage(const std::filesystem::path &Path, const InputImage &Image,
+             const UnpackOptions &Options,
+             emulation::ProcessObserver &Observer);
 } // namespace neverd::unpack
 #endif

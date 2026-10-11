@@ -22,8 +22,9 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After,
                               Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4
                           ? CalleeIndices.find(Op.Inputs[0].Offset)
                           : CalleeIndices.end();
-  const auto SP =
-      After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
+  const auto StackPointer =
+      After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+  const auto SP = parentStackOffset(After);
   bool Valid = !After.Unknown && !Facts[I].Invalid && Op.Seq >= 0 &&
                Boundary != Boundaries.end() &&
                Boundary->second.first == Block.Id &&
@@ -97,7 +98,7 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After,
       After.Frame.forgetCellValues();
     return std::nullopt;
   }
-  return CallTransfer{*SP, Effect.DoesNotReturn, Effect.EndAddress};
+  return CallTransfer{StackPointer, Effect.DoesNotReturn, Effect.EndAddress};
 }
 
 } // namespace neverd::registration_state

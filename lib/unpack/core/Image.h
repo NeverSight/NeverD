@@ -18,6 +18,7 @@
 #include "UnpackInternal.h"
 
 namespace neverd::unpack {
+enum class ExecutionDomain { User, Kernel };
 /// One extent the container maps: a section, or a segment in a container
 /// that maps segments. Extents are ordered by address and do not overlap.
 struct ImageRegion {
@@ -34,6 +35,7 @@ public:
   virtual ~InputImage();
   FormatKind format() const { return Format; }
   emulation::GuestArchitecture architecture() const { return Architecture; }
+  ExecutionDomain domain() const { return Domain; }
   llvm::ArrayRef<uint8_t> file() const { return File; }
   /// The address the image is linked for.
   uint64_t preferredBase() const { return Base; }
@@ -51,6 +53,7 @@ protected:
   InputImage(FormatKind Format, llvm::ArrayRef<uint8_t> File)
       : Format(Format), File(File) {}
   emulation::GuestArchitecture Architecture = emulation::GuestArchitecture::X64;
+  ExecutionDomain Domain = ExecutionDomain::User;
   uint64_t Base = 0, Extent = 0, EntryRVA = 0;
   std::vector<ImageRegion> Regions;
 

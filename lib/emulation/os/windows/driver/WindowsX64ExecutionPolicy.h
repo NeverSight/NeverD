@@ -33,13 +33,19 @@ public:
   ~WindowsX64ExecutionPolicy();
   llvm::Error initialize(X64BranchModel Model = X64BranchModel::Intel);
   struct Action {
-    enum class Kind { ReadIRQL, ReadCurrentThread };
+    enum class Kind {
+      ReadIRQL,
+      ReadCurrentThread,
+      ReadTimestamp,
+      ReadTimestampAndProcessor
+    };
     Kind Source;
     std::optional<X64Register> Destination;
     bool operator==(const Action &) const = default;
   };
   /// Environment reads require an exact model action. CR8 names its full-width
   /// destination; current-thread reads require the modeled processor field.
+  /// Timestamp reads use the scheduler clock and implicit EDX:EAX/ECX outputs.
   /// Ordinary admitted instructions return nullopt and execute in the backend.
   llvm::Expected<std::optional<Action>> inspect(llvm::ArrayRef<uint8_t> Bytes,
                                                 uint64_t PC);

@@ -41,7 +41,8 @@ llvm::Error checkPrivateStack(
     const std::set<llvm::BasicBlock *> &Body,
     const std::map<llvm::StoreInst *, X86RegistrationRootKind> &Seeds,
     X86RegistrationCallbackFrame &Frame,
-    std::set<llvm::AllocaInst *> &PrivateSlots, size_t &WorkUsed) {
+    std::set<llvm::AllocaInst *> &PrivateSlots, size_t &WorkUsed,
+    const std::set<llvm::StoreInst *> *SourceStores) {
   std::map<llvm::Value *, int64_t> Offsets;
   std::vector<llvm::Value *> Work;
   struct ScratchAccess {
@@ -179,6 +180,8 @@ llvm::Error checkPrivateStack(
                   true});
           continue;
         }
+        if (SourceStores && SourceStores->count(Store))
+          continue;
         auto *Slot =
             llvm::dyn_cast<llvm::AllocaInst>(Store->getPointerOperand());
         if (!Slot || !Slot->isStaticAlloca() ||

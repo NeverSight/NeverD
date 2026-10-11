@@ -1,6 +1,6 @@
 **Lingue**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 88b72dd8f373ee05729ab1db29a51d3837d123853880c232431f70eade967be3 -->
+<!-- i18n-source: 6241c9252ec89317b9c488c7e2b6b8c7bd60329dfdd734df27e1a7a7139b1eff -->
 
 [← Progetto NeverD](project.md)
 
@@ -17,6 +17,11 @@ Le guide inglesi sono direttamente in `docs/`. Le traduzioni sono raggruppate in
 | [README (italiano)](project.md) | Panoramica, avvio rapido, build, SDK, CLI |
 | [Contribuire](CONTRIBUTING.md) | Ambiente, profili di build, workflow, stile e requisiti PR |
 | [Architettura](architecture.md) | Percorsi IR, confini dei componenti, lifting strict, profondità del supporto e punti di modifica |
+| [Analisi Web offline (inglese)](../web-analysis.md) | Ispezione C++ di artefatti, sorgenti, associazioni e mappe, criteri dei metadati, SDK e verifica attuale |
+| [Profilo Bun autonomo (inglese)](../web-bun-profile.md) | Estrazione ELF fissa, intervalli di evidenza originali, decodifica dei sorgenti e provenienza dei campioni fissati |
+| [Profilo di estrazione ASAR (inglese)](../web-asar-profile.md) | Associazione delle acquisizioni interne ed esterne, stati di integrità, utilizzatori dei membri e dipendenza Unicode nativa |
+| [Profilo di evidenza Electron (inglese)](../web-electron-profile.md) | Percorsi di ingresso acquisiti, ambito di manifesti e sorgenti, evidenza di finestre e bridge, canali IPC candidati |
+| [Profilo sorgente HTML (inglese)](../web-html-profile.md) | Inventario limitato degli script in C++, riferimenti locali acquisiti e ancore originali dei sorgenti incorporati |
 | [Test](testing.md) | Suite, fixture generate, roundtrip Unicorn e comandi incrementali |
 | [Ambiente desktop (inglese)](../gui.md) | Disposizione da disassemblatore classico, worker separato, database di progetto, localizzazione e connessioni MCP |
 | [Riconoscimento delle librerie (inglese)](../library-recognition.md) | Identità STL, ATL/MFC, COM e libc con evidenze, profili e compressione reversibile del codice C |

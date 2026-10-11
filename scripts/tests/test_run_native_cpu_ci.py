@@ -192,10 +192,14 @@ class NativeCPUEvidenceTests(unittest.TestCase):
             _, cpu = native.declared_inventory(native.ROOT, backend=backend)
             _, combined = native.declared_inventory(native.ROOT, with_drivers=True, backend=backend)
             outcomes[backend] = {name.replace("/" + backend + "_", "/{backend}_")
+                                 .replace("/" + backend.title(), "/{backend_title}")
                                  for name in combined - cpu}
             self.assertTrue(any("/{backend}_Original_" in name for name in outcomes[backend]))
             self.assertTrue(any("/{backend}_Rebased_" in name for name in outcomes[backend]))
-        self.assertEqual(outcomes["kvm"], outcomes["whp"])
+        imagehlp = "DriverChecksum.NativeImageHlpValidatesOddAndEvenFileExtents"
+        self.assertIn(imagehlp, outcomes["whp"])
+        self.assertNotIn(imagehlp, outcomes["kvm"])
+        self.assertEqual(outcomes["kvm"], outcomes["whp"] - {imagehlp})
 
     def add_drivers(self):
         (self.root / "scripts" / "NativeDriverTests.def").write_text(
@@ -527,8 +531,55 @@ class NativeCPUEvidenceTests(unittest.TestCase):
                 with self.subTest(backend=backend, host=host):
                     owners, required = native.darwin_inventory(native.ROOT, backend, host)
                     self.assertEqual(owners, ["NeverDDarwinProcessTests"])
-                    self.assertEqual(len(required), 64 * len(platforms))
+                    self.assertEqual(len(required), 73 * len(platforms))
                     for platform in platforms:
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch/"
+                            f"{platform}_{backend}", required,
+                        )
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver/"
+                            f"{platform}_{backend}", required,
+                        )
+                    for platform in platforms:
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "OwnerQueriesKeepPermissionAndUnknownBoundaries/"
+                            f"{platform}_{backend}", required,
+                        )
+                    for platform in platforms:
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "MachSelfPortsPreserveExplicitBitsAndIndependentRuns/"
+                            f"{platform}_{backend}", required,
+                        )
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "ThreadIdentityPreservesExplicitBitsAndIndependentRuns/"
+                            f"{platform}_{backend}", required,
+                        )
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "EntropyReplayKeepsBytesFaultOrderAndFreshRunLifetime/"
+                            f"{platform}_{backend}", required,
+                        )
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "NonblockingDescriptorsKeepNativeControlState/"
+                            f"{platform}_{backend}", required,
+                        )
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "SymbolicDescriptorsRetainObjectsAndNativeErrorOrder/"
+                            f"{platform}_{backend}", required,
+                        )
+                        self.assertIn(
+                            "Transports/DarwinProcess."
+                            "HardLinksShareObjectsAndRetainExplicitNameBoundary/"
+                            f"{platform}_{backend}", required,
+                        )
                         self.assertIn(
                             "Transports/DarwinProcess."
                             "XattrMutationsPreserveInputAuthorityAndObjectLifetime/"

@@ -102,6 +102,9 @@ std::string HighExpr::str() const {
   }
   case ExprKind::Undef:
     return "undef";
+  case ExprKind::EntryRegister:
+    return "entry_register(0x" + llvm::utohexstr(EntryFunctionVA) + ", 0x" +
+           llvm::utohexstr(EntryVA) + ", " + Var.display() + ")";
   case ExprKind::BinOp:
     if (Op == NdOp::FLOAT_FMA && Operands.size() == 3)
       return "fma(" + Operands[0]->str() + ", " + Operands[1]->str() + ", " +
@@ -199,6 +202,10 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
     break;
   case ExprKind::Var:
     return Var == Other.Var;
+  case ExprKind::EntryRegister:
+    return EntryFunctionVA == Other.EntryFunctionVA &&
+           EntryVA == Other.EntryVA && Var.TheArch == Other.Var.TheArch &&
+           Var.RegOff == Other.Var.RegOff && Var.Size == Other.Var.Size;
   case ExprKind::Const:
     return ConstVal == Other.ConstVal &&
            ConstProvenance == Other.ConstProvenance &&

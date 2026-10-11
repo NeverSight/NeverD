@@ -842,7 +842,11 @@ llvm::Error CheckedX64Backend::execute(const cs_insn &I) {
       Fault.Cause = BackendFaultCause::OperandAlignment;
       return raiseFault(Fault, true);
     }
-    if ((Locked || I.id == X86_INS_XCHG) && A % O.size)
+    // Memory XCHG is implicitly locked, including unaligned ordinary RAM.
+    // The RAM transaction retains the entry address and owns atomic publish;
+    // the selected processor supplies the register result or precise fault.
+    // Device atomics retain their separate natural-alignment requirement.
+    if (Locked && I.id != X86_INS_XCHG && A % O.size)
       return llvm::make_error<UnsupportedExecutionError>();
     // Some SETcc and SSE destinations have advisory decoder access metadata
     // marking them as reads. The architecture owns their actual effects.

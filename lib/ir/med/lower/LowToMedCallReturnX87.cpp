@@ -41,6 +41,10 @@ void LowToMedConverter::modelCallX87Return(MedFunc &Func) {
       auto &Op = Blk.Ops[OI];
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
+      // A proved LowIR call already defines the physical slot selected by
+      // its control-flow TOP. Its SSA lifetime can extend beyond this block.
+      if (Op.Output.Kind == MedVar::Reg && TRI.isX87StackReg(Op.Output.RegOff))
+        continue;
 
       // The first post-call x87 read (the `fstp` of the FP return), before any
       // op redefines an x87 register.
@@ -48,6 +52,8 @@ void LowToMedConverter::modelCallX87Return(MedFunc &Func) {
       bool Found = false;
       for (size_t J = OI + 1; J < Blk.Ops.size() && !Found; ++J) {
         auto &Nx = Blk.Ops[J];
+        if (Nx.Opcode == NdOp::CALL || Nx.Opcode == NdOp::INDIR_CALL)
+          break;
         for (uint8_t I = 0; I < Nx.NumInputs; ++I)
           if (Nx.Inputs[I].Kind == MedVar::Reg &&
               TRI.isX87StackReg(Nx.Inputs[I].RegOff)) {

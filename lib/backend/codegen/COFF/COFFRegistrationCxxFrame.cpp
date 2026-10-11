@@ -20,13 +20,23 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
   if (!Proof)
     return Proof.takeError();
   const auto &States = *Proof->Source.RegistrationStates;
-  const auto &Object = States.CxxCatchObjects[0];
   coff_registration::RegistrationCxxFrameContract Contract;
   Contract.Image = &Image;
-  Contract.Catch = Proof->Catch;
-  Contract.HomeOffset = int64_t(Proof->Frame.EntrySP) - 4 + Object.FrameOffset;
-  Contract.ObjectSize = Object.ObjectSize;
-  Contract.Reference = Object.Reference;
+  std::map<X86RegistrationCatchIdentity, size_t> CatchIndices;
+  for (const auto &[Identity, Catch] : Proof->Catches) {
+    CatchIndices.emplace(Identity, Contract.Catches.size());
+    auto &Invocation = Contract.Catches.emplace_back();
+    Invocation.Catch = Catch.Pad;
+    if (const auto &Home = Catch.Home) {
+      Invocation.HomeOffset = Home->Offset;
+      Invocation.ObjectSize = Home->ObjectSize;
+      Invocation.Reference = Home->Reference;
+    }
+    Invocation.CallbackStack = Catch.Stack;
+    Invocation.CallbackBlocks = Catch.Blocks;
+  }
+  Contract.SavedStackOffset = int64_t(Proof->Frame.Establisher) +
+                              *Source.Registration->RegistrationOffset - 4;
   auto Ranges = coff_loader::getCheckedX86CxxMetadataRanges(Image, Source);
   auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(Image, Source);
   if (!Ranges || !Runtime)
@@ -51,7 +61,7 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       Contract.Borrows.emplace(
           Call,
           coff_registration::RegistrationFrameBorrow{
-              int64_t(Proof->Frame.EntrySP) - 4 + *Checked.ObjectFrameOffset,
+              int64_t(Proof->Frame.Establisher) + *Checked.ObjectFrameOffset,
               Checked.Contract.ECXReads, Checked.Contract.ECXWrites});
     if (Checked.Contract.CalleeKind ==
         RegistrationCalleeFrameContract::Kind::PrivateThrow) {
@@ -82,12 +92,14 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
   for (const auto &Access : States.RuntimeObjectAccesses) {
     const auto Found =
         Operations.find({Access.Address, uint32_t(Access.OpSeq)});
-    if (Found == Operations.end() || Access.TryIndex || Access.CatchIndex ||
-        !Contract.Reference ||
+    const auto Index = CatchIndices.find({Access.TryIndex, Access.CatchIndex});
+    if (Found == Operations.end() || Index == CatchIndices.end() ||
+        !Contract.Catches[Index->second].Reference ||
         !Contract.RuntimeAccesses
              .emplace(Found->second,
                       coff_registration::RegistrationRuntimeAccess{
-                          Access.Offset, Access.Width, Access.Write})
+                          Access.Offset, Access.Width, Access.Write,
+                          Contract.Catches[Index->second].Catch})
              .second)
       return coff_registration::rejectIR(
           "C++ runtime object lost its exact source access");
@@ -109,7 +121,7 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
               "dispatch");
       }
   return coff_registration::validateFramePrivacy(
-      Function, {}, Proof->Frame.Slot, {}, {}, Proof->CallerPCWrites,
-      Proof->ChainReads, 0, Immutable, &Contract);
+      Function, {}, Proof->Frame.Slot, {}, Proof->IncomingAccesses,
+      Proof->CallerPCWrites, Proof->ChainReads, 0, Immutable, &Contract);
 }
 } // namespace neverd

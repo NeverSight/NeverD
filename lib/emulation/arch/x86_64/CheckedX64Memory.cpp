@@ -6,6 +6,8 @@
 #include "../../core/ExecutionDiagnostics.h"
 #include "CheckedX64Backend.h"
 
+#include "neverd/support/X86Addressing.h"
+
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -24,7 +26,9 @@ CheckedX64Backend::operandAddress(const cs_insn &I, const cs_x86_op &O,
        O.mem.segment != X86_REG_GS && O.mem.segment != X86_REG_FS))
     return llvm::make_error<UnsupportedExecutionError>();
   auto Base = operandRegister(O.mem.base);
-  auto Index = operandRegister(O.mem.index);
+  auto Index = isNoSibIndex(O.mem.index, X.addr_size)
+                   ? llvm::Expected<uint64_t>(0)
+                   : operandRegister(O.mem.index);
   if (!Base) {
     if (!Index)
       llvm::consumeError(Index.takeError());

@@ -137,6 +137,13 @@ public:
   void writeMemoryHelpers();
   void writeX64SyscallHelper();
   void writeX64WindowsSyscallHelper();
+  // X86/HighCRegistration.cpp: explicit runtime ABI inputs in the EH view.
+  void writeRegistrationEntryDeclarations(const std::vector<HighFunc> &Funcs);
+  std::string registrationEntryExpression(const HighExpr &E) const;
+  static bool preservesRegistrationMemory(const HighFunc &Func);
+  bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
+  void writeEmbeddedRegistrationCallbacks(const HighStmt &Stmt, int Indent);
+  unsigned RegistrationRegionNumber = 0;
   struct MemoryLoadDestination {
     std::string Name;
     bool Written = false;
@@ -422,10 +429,10 @@ public:
   /// value; null where a view drops bytes.
   const HighExpr *floatBitsSource(const HighExpr &Bits,
                                   const TypeRef &Float) const;
-  /// The call whose result \p Bits are (floatBitsSource), when it returns
-  /// \p Float; else null.
-  const HighExpr *floatCallResult(const HighExpr &Bits,
-                                  const TypeRef &Float) const;
+  /// The call whose result \p Bits are (floatBitsSource), rendered as
+  /// \p Float when its known return and actual carrier allow it; else nullopt.
+  std::optional<std::string> floatCallResultText(const HighExpr &Bits,
+                                                 const TypeRef &Float);
   /// The value of type \p Float whose bits \p Bits are (floatBitsSource), or
   /// null.
   const HighExpr *floatBitsValue(const HighExpr &Bits,

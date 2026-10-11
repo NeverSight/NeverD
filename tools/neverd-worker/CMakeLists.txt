@@ -4,14 +4,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(CTest)
 endif()
 
-include(FetchContent)
-if(NOT TARGET nlohmann_json::nlohmann_json)
-  set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
-  FetchContent_Declare(neverd_worker_json
-    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
-    URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-  FetchContent_MakeAvailable(neverd_worker_json)
+if(NOT TARGET neverd_tool_web)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../common" common)
 endif()
 find_package(Threads REQUIRED)
 
@@ -31,7 +25,7 @@ endif()
 
 add_library(neverd_worker_protocol STATIC Protocol.cpp)
 target_compile_features(neverd_worker_protocol PUBLIC cxx_std_20)
-target_link_libraries(neverd_worker_protocol PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(neverd_worker_protocol PUBLIC neverd_tool_json)
 target_include_directories(neverd_worker_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 add_library(neverd_worker_graph STATIC GraphSnapshot.cpp GraphLayout.cpp)
 add_library(neverd_worker_format STATIC OperandFormat.cpp CodeEdits.cpp)
@@ -43,10 +37,11 @@ add_executable(neverd-worker main.cpp Engine.cpp Listing.cpp StringReferences.cp
 target_compile_features(neverd-worker PRIVATE cxx_std_20)
 target_include_directories(neverd-worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
 # The C ABI is the only engine dependency. Never add LLVM to this target.
-target_link_libraries(neverd-worker PRIVATE neverd_worker_graph neverd_worker_format neverd_shared Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(neverd-worker PRIVATE neverd_worker_graph neverd_worker_format neverd_tool_web neverd_shared Threads::Threads ${CMAKE_DL_LIBS})
 set_target_properties(neverd-worker PROPERTIES
   INSTALL_RPATH "$ORIGIN/../lib;@loader_path/../lib")
 install(TARGETS neverd-worker RUNTIME DESTINATION bin)
+neverd_stage_json_notice(neverd-worker)
 
 if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
   add_executable(neverd-worker-protocol-tests tests/protocol_tests.cpp)
@@ -61,6 +56,19 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
   add_executable(neverd-worker-graph-tests tests/graph_tests.cpp)
   target_link_libraries(neverd-worker-graph-tests PRIVATE neverd_worker_graph)
   add_test(NAME NeverDWorkerGraph COMMAND neverd-worker-graph-tests)
+  if(_neverd_worker_imported_engine)
+    option(NEVERD_WORKER_WEB_ENGINE_TESTS "Test an imported engine with the web C API" OFF)
+  else()
+    option(NEVERD_WORKER_WEB_ENGINE_TESTS "Test the web C API worker adapter" ON)
+  endif()
+  if(NEVERD_WORKER_WEB_ENGINE_TESTS)
+    add_executable(neverd-worker-web-tests tests/web_engine_tests.cpp)
+    target_include_directories(neverd-worker-web-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
+    target_link_libraries(neverd-worker-web-tests PRIVATE neverd_worker_protocol neverd_tool_web neverd_shared ${CMAKE_DL_LIBS})
+    add_dependencies(neverd-worker-web-tests neverd-worker)
+    add_test(NAME NeverDWorkerWeb COMMAND neverd-worker-web-tests "$<TARGET_FILE:neverd-worker>")
+    set_tests_properties(NeverDWorkerWeb PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+  endif()
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_executable(neverd-worker-test-server main.cpp Engine.cpp Listing.cpp StringReferences.cpp TextFold.cpp ProjectHistory.cpp Contributions.cpp tests/mock_engine.cpp)
@@ -68,7 +76,7 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
     target_compile_features(neverd-worker-test-server PRIVATE cxx_std_20)
     target_compile_definitions(neverd-worker-test-server PRIVATE NEVERD_EXPORTS)
     target_include_directories(neverd-worker-test-server PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
-    target_link_libraries(neverd-worker-test-server PRIVATE neverd_worker_graph neverd_worker_format Threads::Threads ${CMAKE_DL_LIBS})
+    target_link_libraries(neverd-worker-test-server PRIVATE neverd_worker_graph neverd_worker_format neverd_tool_web Threads::Threads ${CMAKE_DL_LIBS})
     add_test(NAME NeverDWorkerTransport
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/transport_test.py"
                 "$<TARGET_FILE:neverd-worker-test-server>")
@@ -76,6 +84,13 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_snapshot_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
     set_tests_properties(NeverDWorkerAnalysisSnapshot PROPERTIES TIMEOUT 30)
+    if(APPLE)
+      # The worker records canonical paths. The fixture compares that path to
+      # its temporary input; avoid macOS's /var and /tmp symlink aliases.
+      file(REAL_PATH "/tmp" _worker_canonical_tmp)
+      set_tests_properties(NeverDWorkerAnalysisSnapshot PROPERTIES
+        ENVIRONMENT "TMPDIR=${_worker_canonical_tmp}")
+    endif()
     set_tests_properties(NeverDWorkerTransport PROPERTIES TIMEOUT 40)
     add_test(NAME NeverDWorkerSourceCache
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_cache_test.py"

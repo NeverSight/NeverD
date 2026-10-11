@@ -2559,9 +2559,9 @@ TEST(HighControlFlowSemantics, ThreadedSoleSuccessorKeepsItsTransferAndPhi) {
     }
     M.Blocks[0].Succs = {1, 2, 3};
     M.Blocks[0].Ops = {operation(NdOp::INDIR_BR, 0x1000, {}, {Input})};
-    M.SwitchSelectorPlans[0x1000] = {};
-    M.SwitchSelectorPlans[0x1000].Selector = Input;
-    M.SwitchSelectorPlans[0x1000].ResultSize = 8;
+    M.SwitchSelectorPlans[{0x1000, 0}] = {};
+    M.SwitchSelectorPlans[{0x1000, 0}].Selector = Input;
+    M.SwitchSelectorPlans[{0x1000, 0}].ResultSize = 8;
     auto Joined = machineValue(1, Architecture);
     auto Return = machineValue(2, Architecture);
     Return.Kind = MedVar::Reg;
@@ -2623,9 +2623,9 @@ TEST(HighControlFlowSemantics, SwitchPublishesTheCaseOfEachTablePosition) {
   M.Blocks[0].Ops = {
       operation(NdOp::INT_ADD, 0x1000, Index, {Input, C(uint64_t(-10))}),
       operation(NdOp::INDIR_BR, 0x1008, {}, {Index})};
-  M.SwitchSelectorPlans[0x1008] = {};
-  M.SwitchSelectorPlans[0x1008].Selector = Index;
-  M.SwitchSelectorPlans[0x1008].ResultSize = 8;
+  M.SwitchSelectorPlans[{0x1008, 0}] = {};
+  M.SwitchSelectorPlans[{0x1008, 0}].Selector = Index;
+  M.SwitchSelectorPlans[{0x1008, 0}].ResultSize = 8;
   const uint64_t Results[] = {7, 37, 93};
   for (int I = 1; I < 4; ++I) {
     auto Return = machineValue(2, Architecture);
@@ -2911,9 +2911,9 @@ TEST(HighControlFlowSemantics, GotoToReturnBlockKeepsItsStoreAndLoad) {
   }
   M.Blocks[0].Succs = {1, 2};
   M.Blocks[0].Ops = {operation(NdOp::INDIR_BR, 0x1000, {}, {Input})};
-  M.SwitchSelectorPlans[0x1000] = {};
-  M.SwitchSelectorPlans[0x1000].Selector = Input;
-  M.SwitchSelectorPlans[0x1000].ResultSize = 8;
+  M.SwitchSelectorPlans[{0x1000, 0}] = {};
+  M.SwitchSelectorPlans[{0x1000, 0}].Selector = Input;
+  M.SwitchSelectorPlans[{0x1000, 0}].ResultSize = 8;
   for (int I = 1; I < 3; ++I) {
     M.Blocks[I].Preds = {0};
     M.Blocks[I].Succs = {3};
@@ -5509,9 +5509,9 @@ TEST(HighControlFlowSemantics, JumpTableSuccessorsKeepCallsStoresAndPhiEdges) {
       }
       M.Blocks[0].Succs = {1, 2};
       M.Blocks[0].Ops = {operation(NdOp::INDIR_BR, 0x1000, {}, {Input})};
-      M.SwitchSelectorPlans[0x1000] = {};
-      M.SwitchSelectorPlans[0x1000].Selector = Input;
-      M.SwitchSelectorPlans[0x1000].ResultSize = 8;
+      M.SwitchSelectorPlans[{0x1000, 0}] = {};
+      M.SwitchSelectorPlans[{0x1000, 0}].Selector = Input;
+      M.SwitchSelectorPlans[{0x1000, 0}].ResultSize = 8;
       auto First = machineValue(1, Architecture);
       auto Second = machineValue(2, Architecture);
       First.Kind = Second.Kind = MedVar::Reg;
@@ -5611,9 +5611,10 @@ TEST(HighControlFlowSemantics, JumpTableLoopEdgesPreserveParallelPhiSnapshots) {
       Terminator.Opcode = NdOp::INDIR_BR;
       Terminator.Inputs[0] = Selector;
       Terminator.NumInputs = 1;
-      Med.SwitchSelectorPlans[Terminator.Addr] = {};
-      Med.SwitchSelectorPlans[Terminator.Addr].Selector = Selector;
-      Med.SwitchSelectorPlans[Terminator.Addr].ResultSize = Selector.Size;
+      Med.SwitchSelectorPlans[{Terminator.Addr, Loop.Id}] = {};
+      Med.SwitchSelectorPlans[{Terminator.Addr, Loop.Id}].Selector = Selector;
+      Med.SwitchSelectorPlans[{Terminator.Addr, Loop.Id}].ResultSize =
+          Selector.Size;
       JumpTable Table;
       Table.InsnAddr = Terminator.Addr;
       Table.Targets = {0x1200, 0x1100};

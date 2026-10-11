@@ -1,6 +1,10 @@
 add_neverd_component_library(NeverDIRMed
   MedLibraryRecognition.cpp
   MedComLibraryRecognition.cpp
+  X86/RegistrationFrame.cpp
+  X86/RegistrationCallback.cpp
+  X86/RegistrationCall.cpp
+  X86/RegistrationRoots.cpp
   abi/MedABIPass.cpp
   abi/MedABIPassI386.cpp
   abi/MedABIPassSupport.cpp

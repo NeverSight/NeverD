@@ -925,26 +925,53 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
     // exact Low certificate exported as a bound composite selector plan plus
     // complete ownership of both physical pointer runs.
     if (JT.TwoTableSelect) {
-      const auto PlanIt = CurMedFunc->SwitchSelectorPlans.find(JT.InsnAddr);
-      if (!JT.CompositeSelectorUseRef ||
-          PlanIt == CurMedFunc->SwitchSelectorPlans.end())
+      if (!JT.CompositeSelectorUseRef)
         continue;
-      const MedSwitchSelectorPlan &Plan = PlanIt->second;
       const JumpTableCompositeSelectorUseRef &Recipe =
           *JT.CompositeSelectorUseRef;
-      if (Plan.PlanKind != MedSwitchSelectorPlan::Kind::SelectOffset ||
-          Recipe.RecipeKind !=
-              JumpTableCompositeSelectorUseRef::Kind::SelectOffset ||
-          Plan.Selector.isConst() || Plan.Condition.isConst() ||
-          Plan.Selector.Size == 0 || Plan.Condition.Size == 0 ||
-          Plan.Selector.Size != Recipe.ByteIndex.ExpectedSize ||
-          Plan.Condition.Size != Recipe.Condition.ExpectedSize ||
-          Plan.ResultSize == 0 || Plan.ResultSize != Recipe.ResultSize ||
-          Plan.TrueOffset != Recipe.TrueOffset ||
-          Plan.FalseOffset != Recipe.FalseOffset ||
-          !((Plan.TrueOffset == 0 && Plan.FalseOffset == JT.TwoTableOffset) ||
-            (Plan.FalseOffset == 0 && Plan.TrueOffset == JT.TwoTableOffset)) ||
-          JT.StorageRanges.size() != 2)
+      auto validPlan = [&](const MedSwitchSelectorPlan &Plan) {
+        return Plan.PlanKind == MedSwitchSelectorPlan::Kind::SelectOffset &&
+               Recipe.RecipeKind ==
+                   JumpTableCompositeSelectorUseRef::Kind::SelectOffset &&
+               !Plan.Selector.isConst() && !Plan.Condition.isConst() &&
+               Plan.Selector.Size != 0 && Plan.Condition.Size != 0 &&
+               Plan.Selector.Size == Recipe.ByteIndex.ExpectedSize &&
+               Plan.Condition.Size == Recipe.Condition.ExpectedSize &&
+               Plan.ResultSize != 0 && Plan.ResultSize == Recipe.ResultSize &&
+               Plan.TrueOffset == Recipe.TrueOffset &&
+               Plan.FalseOffset == Recipe.FalseOffset &&
+               ((Plan.TrueOffset == 0 &&
+                 Plan.FalseOffset == JT.TwoTableOffset) ||
+                (Plan.FalseOffset == 0 &&
+                 Plan.TrueOffset == JT.TwoTableOffset));
+      };
+      // This checks the recipe's survival, without substituting its SSA values
+      // for this LOAD. The LOAD can precede the dispatch in another block.
+      // Every copy of the terminal must retain its own bound recipe; a valid
+      // sibling cannot authorize a clone whose selector occurrence changed.
+      bool FoundDispatch = false, CompleteDispatch = true;
+      for (const MedBlock &Block : CurMedFunc->Blocks) {
+        if (1 + Block.Ops.size() > TerminalUseEvidenceRemaining) {
+          CompleteDispatch = false;
+          break;
+        }
+        TerminalUseEvidenceRemaining -= 1 + Block.Ops.size();
+        for (const MedOp &Op : Block.Ops) {
+          if (Op.Opcode != NdOp::INDIR_BR || Op.Addr != JT.InsnAddr)
+            continue;
+          FoundDispatch = true;
+          const auto PlanIt =
+              CurMedFunc->SwitchSelectorPlans.find({JT.InsnAddr, Block.Id});
+          if (PlanIt == CurMedFunc->SwitchSelectorPlans.end() ||
+              !validPlan(PlanIt->second)) {
+            CompleteDispatch = false;
+            break;
+          }
+        }
+        if (!CompleteDispatch)
+          break;
+      }
+      if (!FoundDispatch || !CompleteDispatch || JT.StorageRanges.size() != 2)
         continue;
 
       const JumpTableStorageRange &Lo = JT.StorageRanges[0];

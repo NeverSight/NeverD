@@ -11,6 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../X86/RegistrationRoots.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
@@ -871,48 +873,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   };
   // x86 EH3/EH4 restores the registration frame's EBP before entering a
   // handler; it does not restore arbitrary callee-saved GPRs from the fault.
-  const bool HasX86SEHFrame =
-      TargetArch == Arch::X86 && Low.ExceptionMetadata &&
-      Low.ExceptionMetadata->ParseStatus == ExceptionParseStatus::Complete &&
-      (Low.ExceptionMetadata->Encoding == ExceptionEncoding::X86ScopeTableEH3 ||
-       Low.ExceptionMetadata->Encoding == ExceptionEncoding::X86ScopeTableEH4);
-  const bool HasX86CxxFrame =
-      TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
-      Low.ExceptionMetadata &&
-      Low.ExceptionMetadata->ParseStatus == ExceptionParseStatus::Complete &&
-      Low.ExceptionMetadata->Encoding == ExceptionEncoding::X86CxxFuncInfo &&
-      Low.ExceptionMetadata->Cxx &&
-      Low.ExceptionMetadata->Cxx->hasValidStateGraph() &&
-      (Low.ExceptionMetadata->Personality ==
-           ExceptionPersonality::CxxFrameHandler3 ||
-       Low.ExceptionMetadata->Personality ==
-           ExceptionPersonality::CxxFrameHandlerX86);
-  const bool HasX86RegistrationFrame = HasX86SEHFrame || HasX86CxxFrame;
-  const bool HasDirectX86RegistrationFrame =
-      TargetFormat == BinaryFormat::COFF && HasX86RegistrationFrame &&
-      Low.ExceptionMetadata->Registration &&
-      !Low.ExceptionMetadata->Registration->RealignedFrame &&
-      Low.ExceptionMetadata->Registration->RegistrationOffset ==
-          (HasX86CxxFrame ? -12 : -16) &&
-      Low.ExceptionMetadata->Registration->TryLevelOffset == -4;
-  std::map<va_t, std::optional<int32_t>> RestoredCxxStackOffsets;
-  if (HasDirectX86RegistrationFrame && HasX86CxxFrame &&
-      Low.RegistrationStates &&
-      Low.RegistrationStates->CxxContinuationsComplete &&
-      Low.RegistrationStates->CxxContinuations.size() <=
-          limits::kMaxRegistrationEHRecords)
-    for (const auto &Resume : Low.RegistrationStates->CxxContinuations) {
-      const bool Valid =
-          Low.ExceptionMetadata->CodeRange.contains(Resume.TargetVA) &&
-          Resume.SavedStackOffset <=
-              int64_t(
-                  *Low.ExceptionMetadata->Registration->RegistrationOffset) -
-                  4;
-      auto [It, New] = RestoredCxxStackOffsets.emplace(Resume.TargetVA,
-                                                       Resume.SavedStackOffset);
-      if (!Valid || (!New && It->second != Resume.SavedStackOffset))
-        It->second.reset();
-    }
+  const x86_registration::RegistrationRoots RegistrationRoots(Low, TargetArch,
+                                                              TargetFormat);
+  const bool HasX86SEHFrame = RegistrationRoots.hasSEHFrame();
+  const bool HasX86RegistrationFrame = RegistrationRoots.hasFrame();
   auto IsSEHRestored = [&](const MedVar &V) {
     if (TargetArch == Arch::X86)
       return HasX86RegistrationFrame && V.Kind == MedVar::Reg &&
@@ -1141,20 +1105,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       // An x86 filter or finally block is entered by the personality too, with
       // no callee-saved register of the faulting code.
       const bool IsCxxHandlerRoot =
-          Root != 0 && HasX86CxxFrame &&
-          !Low.OrdinaryModuleAnalysisRoots.count(Func.Blocks[Root].StartAddr) &&
-          std::any_of(Func.Blocks[Root].ExceptionalPreds.begin(),
-                      Func.Blocks[Root].ExceptionalPreds.end(),
-                      [](const ExceptionalEdge &E) {
-                        return E.Kind == ExceptionalEdgeKind::CxxCatch ||
-                               E.Kind == ExceptionalEdgeKind::CxxCleanup;
-                      });
-      std::optional<int32_t> RestoredCxxSP;
-      if (Root != 0 && Func.Blocks[Root].Preds.empty() &&
-          !Low.OrdinaryModuleAnalysisRoots.count(Func.Blocks[Root].StartAddr))
-        if (auto It = RestoredCxxStackOffsets.find(Func.Blocks[Root].StartAddr);
-            It != RestoredCxxStackOffsets.end())
-          RestoredCxxSP = It->second;
+          Root != 0 && RegistrationRoots.isCxxHandler(Func.Blocks[Root]);
+      const auto RestoredCxxSP =
+          Root == 0 ? std::nullopt
+                    : RegistrationRoots.restoredStackOffset(Func.Blocks[Root]);
       const bool IsWindowsRuntimeRoot =
           CxxContinuationRoots.count(Root) ||
           (Root != 0 &&
@@ -1181,28 +1135,16 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         Init.Opcode = NdOp::COPY;
         Init.Output = VIt->second;
         MedVar Input = VIt->second;
-        if (HasDirectX86RegistrationFrame && IsWindowsRuntimeRoot &&
-            Input.Kind == MedVar::Reg && Input.Size == 4) {
-          if (Input.RegOff == TRI.FramePointer)
-            Init.RegistrationRoot =
-                MedOp::RegistrationRootKind::EstablishedFramePointer;
-          else if (Input.RegOff == TRI.StackPointer && RestoredCxxSP) {
-            Init.RegistrationRoot =
-                MedOp::RegistrationRootKind::RestoredStackPointer;
-            Init.RegistrationStackOffset = *RestoredCxxSP;
-          } else if (Input.RegOff == TRI.StackPointer &&
-                     (IsCxxHandlerRoot ||
-                      std::any_of(Func.Blocks[Root].ExceptionalPreds.begin(),
-                                  Func.Blocks[Root].ExceptionalPreds.end(),
-                                  [](const ExceptionalEdge &Edge) {
-                                    return Edge.Kind ==
-                                               ExceptionalEdgeKind::SEHFilter ||
-                                           Edge.Kind ==
-                                               ExceptionalEdgeKind::SEHFinally;
-                                  })))
-            Init.RegistrationRoot =
-                MedOp::RegistrationRootKind::CallbackStackPointer;
-        }
+        const bool Callback =
+            IsCxxHandlerRoot ||
+            std::any_of(Func.Blocks[Root].ExceptionalPreds.begin(),
+                        Func.Blocks[Root].ExceptionalPreds.end(),
+                        [](const ExceptionalEdge &Edge) {
+                          return Edge.Kind == ExceptionalEdgeKind::SEHFilter ||
+                                 Edge.Kind == ExceptionalEdgeKind::SEHFinally;
+                        });
+        RegistrationRoots.initialize(Init, IsWindowsRuntimeRoot, Callback,
+                                     RestoredCxxSP);
         if (IsItaniumEHRoot && Input.Kind == MedVar::Reg &&
             Input.RegOff == TRI.IntReturnReg) {
           Input.Kind = MedVar::EHException;

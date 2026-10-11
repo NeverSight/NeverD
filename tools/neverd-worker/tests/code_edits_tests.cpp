@@ -144,6 +144,26 @@ int main() {
   check(target(helpers, "other").is_null() &&
             !target(helpers, "value").is_null(),
         "A synthetic helper was treated as the requested image function");
+
+  // The source-cache transport fixture has 9,000 rows. Comments must not
+  // become linker evidence or enter a whole-document regex search.
+  std::string large =
+      "extern int shim(int (*callback)(int)) __asm__(\"callee\");\n"
+      "int target(void) { return shim(0) + fake(0); }\n";
+  for (unsigned i = 0; i < 9000; ++i)
+    large += "// " + std::string(512, 'x') +
+             " int fake(int) __asm__(\"callee\"); neverd.image: 0x1100\n";
+  auto largeView = page(large);
+  decorate(largeView, nullptr, imageNames);
+  check(largeView.at("text").get<std::string>().find(
+            "return renamed_callee(0) + fake(0)") != std::string::npos,
+        "Real asm linkage was lost or a comment supplied fake linkage");
+  check(largeView.at("rows").size() == 9002 &&
+            largeView.at("rows").back().at("code_anchor") ==
+                large.substr(large.rfind('\n', large.size() - 2) + 1,
+                             large.size() -
+                                 large.rfind('\n', large.size() - 2) - 2),
+        "Large comment source lost its final row or edit anchor");
   std::cout << "Precise variable/image targets, literal isolation, UTF-8 spans "
                "and stale-edit checks passed\n";
 }

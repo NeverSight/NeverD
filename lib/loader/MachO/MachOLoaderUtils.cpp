@@ -146,7 +146,15 @@ openMachOFile(const std::filesystem::path &Path) {
                                                llvm::inconvertibleErrorCode());
 
   auto Buf = std::move(*BufOrErr);
-  auto BinaryOr = llvm::object::createBinary(Buf->getMemBufferRef());
+  auto Obj = openMachOBuffer(Buf->getMemBufferRef());
+  if (!Obj)
+    return Obj.takeError();
+  return std::make_pair(std::move(Buf), std::move(*Obj));
+}
+
+llvm::Expected<std::unique_ptr<llvm::object::MachOObjectFile>>
+openMachOBuffer(llvm::MemoryBufferRef Buffer) {
+  auto BinaryOr = llvm::object::createBinary(Buffer);
   if (!BinaryOr)
     return BinaryOr.takeError();
 
@@ -160,7 +168,7 @@ openMachOFile(const std::filesystem::path &Path) {
         if (Index++ != *Chosen)
           continue;
         if (auto ObjOr = Slice.getAsObjectFile())
-          return std::make_pair(std::move(Buf), std::move(*ObjOr));
+          return std::move(*ObjOr);
         else
           llvm::consumeError(ObjOr.takeError());
         break;
@@ -176,7 +184,7 @@ openMachOFile(const std::filesystem::path &Path) {
         Obj->getMemoryBufferRef(), Obj->isLittleEndian(), Obj->is64Bit());
     if (!ObjCopy)
       return ObjCopy.takeError();
-    return std::make_pair(std::move(Buf), std::move(*ObjCopy));
+    return std::move(*ObjCopy);
   }
 
   return llvm::make_error<llvm::StringError>("macho: not a Mach-O file",

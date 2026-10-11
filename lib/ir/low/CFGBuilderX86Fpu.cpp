@@ -23,10 +23,23 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/Limits.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/low/LowNoReturn.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/lift/X86Regs.h"
+#include "neverd/loader/SymbolDecoration.h"
 
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <list>
+#include <llvm/Support/SaveAndRestore.h>
 #include <map>
+#include <mutex>
+#include <new>
 #include <queue>
 #include <set>
 #include <utility>
@@ -53,9 +66,739 @@ int demaskDelta(int D) {
   return D >= 4 ? D - 8 : D;
 }
 
+// A callback can synchronously request another graph while a leader builds.
+// Never wait on any other flight from this nested call: two leaders could
+// otherwise wait on each other, including through different caches.
+struct ActiveX87CacheBuild {
+  const ActiveX87CacheBuild *Previous;
+};
+thread_local const ActiveX87CacheBuild *CurrentX87CacheBuild = nullptr;
+
 } // namespace
 
+// Only this compact projection is shared: callers retain independent active
+// sets, recursion depths, proof allowances and completed effect answers.
+struct X87CallGraphStep {
+  int Delta = 0;
+  uint8_t Reads = 0;
+  uint8_t Writes = 0;
+  std::optional<va_t> Callee;
+  bool Unknown = false;
+};
+struct X87CallGraphBlock {
+  std::vector<X87CallGraphStep> Steps;
+  std::vector<int> Successors;
+  bool Returns = false;
+  bool Stops = false;
+};
+struct X87CallGraph {
+  enum class ProjectionRejection : uint8_t {
+    None,
+    ExceptionalEdges,
+    MissingTerminator,
+  };
+  std::vector<X87CallGraphBlock> Blocks;
+  size_t Cost = 0;
+  bool Complete = false;
+  ProjectionRejection Rejection = ProjectionRejection::None;
+};
+
+class X87CallGraphCache {
+  friend class X87CallEffectIndex;
+  friend class CFGBuilder;
+  struct Context {
+    const BinaryImage *Image;
+    Arch Architecture;
+    InstructionMode Mode;
+    Bitness Bits;
+    BinaryFormat Format;
+    BinaryFormat ABI;
+    const libc::NoReturnTargetIndex *NoReturnTargets;
+    const NoReturnCalleeProver *NoReturnCallees;
+    unsigned NoReturnDepth;
+    const detail::AbsoluteRelocationRootIndex *RelocationRoots;
+    const ExecutableCodeOwnerIndex *CodeOwners;
+    std::optional<std::vector<va_t>> Entries;
+    std::optional<std::vector<va_t>> ProtectedSlots;
+    std::optional<std::vector<va_t>> UnsafeBranches;
+  };
+  struct Entry {
+    va_t Address;
+    std::shared_ptr<const X87CallGraph> Value;
+    size_t Bytes;
+  };
+  struct PendingGraph {
+    Context Inputs;
+    va_t Address;
+    size_t Bytes;
+    std::condition_variable Ready;
+    std::shared_ptr<const X87CallGraph> Value;
+    bool Done = false;
+    PendingGraph(Context C, va_t A, size_t B)
+        : Inputs(std::move(C)), Address(A), Bytes(B) {}
+  };
+  struct Request {
+    std::shared_ptr<const X87CallGraph> Value;
+    std::shared_ptr<PendingGraph> Leader;
+  };
+  static constexpr size_t MaxPendingGraphs = 32;
+  static constexpr size_t MaxPendingBytes = 1024 * 1024;
+  static constexpr size_t MaxGraphs = 128;
+  static constexpr size_t MaxBytes = 8 * 1024 * 1024;
+  std::mutex Mutex;
+  std::optional<Context> Inputs;
+  std::list<Entry> Graphs;
+  size_t RetainedBytes = 0;
+  size_t Hits = 0;
+  const NoReturnCalleeProver *NonReentrantProver;
+  const libc::NoReturnTargetIndex *NonReentrantTargets;
+  std::list<std::shared_ptr<PendingGraph>> Pending;
+  size_t PendingBytes = 0;
+  size_t Leaders = 0, Waits = 0, NonWaitingMisses = 0;
+  std::condition_variable PendingChanged;
+
+public:
+  X87CallGraphCache(const NoReturnCalleeProver *Prover,
+                   const libc::NoReturnTargetIndex *Targets)
+      : NonReentrantProver(Prover), NonReentrantTargets(Targets) {}
+
+private:
+  static bool account(size_t &Bytes, size_t Count, size_t Width) {
+    if (Bytes > MaxBytes || Count > (MaxBytes - Bytes) / Width)
+      return false;
+    Bytes += Count * Width;
+    return true;
+  }
+  static bool accountAllocation(size_t &Bytes, size_t Count, size_t Width) {
+    return !Count ||
+           (account(Bytes, 8, sizeof(void *)) && account(Bytes, Count, Width));
+  }
+  static bool sameSet(const std::optional<std::vector<va_t>> &Frozen,
+                      const std::set<va_t> *Live) {
+    return Frozen.has_value() == (Live != nullptr) &&
+           (!Live ||
+            (Frozen->size() == Live->size() &&
+             std::equal(Frozen->begin(), Frozen->end(), Live->begin())));
+  }
+  static bool matches(const Context &C, const CFGBuilder &B) {
+    return C.Image == B.CurrentImg && C.Architecture == B.CurrentImg->Arch &&
+           C.Mode == B.CurrentImg->Mode && C.Bits == B.CurrentImg->Bits &&
+           C.Format == B.CurrentImg->Format &&
+           C.ABI == B.CurrentImg->abiFormat() &&
+           C.NoReturnTargets == B.NoReturnTargets &&
+           C.NoReturnCallees == B.NoReturnCallees &&
+           C.NoReturnDepth == B.NoReturnCalleeDepth + 1 &&
+           C.RelocationRoots == B.AbsoluteRelocationRoots &&
+           C.CodeOwners == B.ExecutableCodeOwners &&
+           sameSet(C.Entries, B.KnownFuncEntries) &&
+           sameSet(C.ProtectedSlots, B.ProtectedJumpTableRelocationSlots) &&
+           sameSet(C.UnsafeBranches, B.UnsafeJumpTableBranches);
+  }
+  bool matches(const CFGBuilder &B) const {
+    return Inputs && matches(*Inputs, B);
+  }
+  static std::optional<size_t> graphBytes(const X87CallGraph &Graph) {
+    size_t Bytes = sizeof(Entry) + sizeof(X87CallGraph) + 16 * sizeof(void *);
+    if (!accountAllocation(Bytes, Graph.Blocks.capacity(),
+                           sizeof(X87CallGraphBlock)))
+      return std::nullopt;
+    for (const auto &Block : Graph.Blocks)
+      if (!accountAllocation(Bytes, Block.Steps.capacity(),
+                             sizeof(X87CallGraphStep)) ||
+          !accountAllocation(Bytes, Block.Successors.capacity(), sizeof(int)))
+        return std::nullopt;
+    return Bytes;
+  }
+  static std::optional<std::vector<va_t>> freeze(const std::set<va_t> *Values) {
+    if (!Values)
+      return std::nullopt;
+    return std::vector<va_t>(Values->begin(), Values->end());
+  }
+  static std::optional<size_t> contextBytes(const Context &C) {
+    size_t Bytes = sizeof(Context);
+    for (const auto *Values :
+         {&C.Entries, &C.ProtectedSlots, &C.UnsafeBranches})
+      if (*Values &&
+          !accountAllocation(Bytes, (*Values)->capacity(), sizeof(va_t)))
+        return std::nullopt;
+    return Bytes;
+  }
+  static Context freezeContext(const CFGBuilder &B) {
+    return {B.CurrentImg,
+            B.CurrentImg->Arch,
+            B.CurrentImg->Mode,
+            B.CurrentImg->Bits,
+            B.CurrentImg->Format,
+            B.CurrentImg->abiFormat(),
+            B.NoReturnTargets,
+            B.NoReturnCallees,
+            B.NoReturnCalleeDepth + 1,
+            B.AbsoluteRelocationRoots,
+            B.ExecutableCodeOwners,
+            freeze(B.KnownFuncEntries),
+            freeze(B.ProtectedJumpTableRelocationSlots),
+            freeze(B.UnsafeJumpTableBranches)};
+  }
+  Request acquire(const CFGBuilder &B, va_t Address) {
+    std::unique_lock<std::mutex> Lock(Mutex);
+    if (matches(B))
+      for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
+        if (It->Address == Address) {
+          Graphs.splice(Graphs.begin(), Graphs, It);
+          ++Hits;
+          return {Graphs.front().Value, {}};
+        }
+    // Arbitrary prover/name-resolver callbacks may dispatch a request to
+    // another thread and wait for it. Only explicitly registered callback
+    // owners permit waiting. Nested construction never waits on any cache.
+    if (CurrentX87CacheBuild ||
+        (B.NoReturnCallees && B.NoReturnCallees != NonReentrantProver) ||
+        (B.NoReturnTargets && B.NoReturnTargets != NonReentrantTargets)) {
+      ++NonWaitingMisses;
+      return {};
+    }
+    for (const auto &Flight : Pending)
+      if (Flight->Address == Address && matches(Flight->Inputs, B)) {
+        // Keep the state alive even after its leader removes the pending slot.
+        const auto Waiting = Flight;
+        ++Waits;
+        PendingChanged.notify_all();
+        Waiting->Ready.wait(Lock, [&] { return Waiting->Done; });
+        if (Waiting->Value)
+          ++Hits;
+        // A failure/incomplete graph resumes the original independent build,
+        // without re-entering acquire or sharing the failed proof result.
+        return {Waiting->Value, {}};
+      }
+    if (Pending.size() >= MaxPendingGraphs) {
+      ++NonWaitingMisses;
+      return {};
+    }
+    size_t Estimated = sizeof(PendingGraph) + 8 * sizeof(void *);
+    for (const auto *Values :
+         {B.KnownFuncEntries, B.ProtectedJumpTableRelocationSlots,
+          B.UnsafeJumpTableBranches})
+      if (Values && !accountAllocation(Estimated, Values->size(), sizeof(va_t)))
+        return {};
+    if (Estimated > MaxPendingBytes - PendingBytes) {
+      ++NonWaitingMisses;
+      return {};
+    }
+    try {
+      Context Frozen = freezeContext(B);
+      const auto ContextSize = contextBytes(Frozen);
+      if (!ContextSize)
+        return {};
+      const size_t Bytes = *ContextSize + sizeof(PendingGraph) -
+                           sizeof(Context) + 8 * sizeof(void *);
+      if (Bytes > MaxPendingBytes - PendingBytes) {
+        ++NonWaitingMisses;
+        return {};
+      }
+      auto Flight =
+          std::make_shared<PendingGraph>(std::move(Frozen), Address, Bytes);
+      Pending.push_back(Flight);
+      PendingBytes += Bytes;
+      ++Leaders;
+      return {{}, std::move(Flight)};
+    } catch (const std::bad_alloc &) {
+      // Single-flight admission is optional. No pending state was published
+      // before all allocations succeeded, so this retains the cold path.
+      ++NonWaitingMisses;
+      return {};
+    }
+  }
+  void finish(const std::shared_ptr<PendingGraph> &Flight,
+              std::shared_ptr<const X87CallGraph> Value) noexcept {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    Flight->Value = std::move(Value);
+    Flight->Done = true;
+    for (auto It = Pending.begin(); It != Pending.end(); ++It)
+      if (*It == Flight) {
+        PendingBytes -= Flight->Bytes;
+        Pending.erase(It);
+        break;
+      }
+    // Waiters only need completion and its immutable result after removal.
+    // Release the frozen inventories before their private references drain.
+    Flight->Inputs.Entries.reset();
+    Flight->Inputs.ProtectedSlots.reset();
+    Flight->Inputs.UnsafeBranches.reset();
+    Flight->Ready.notify_all();
+    PendingChanged.notify_all();
+  }
+  class Completion {
+    X87CallGraphCache *Cache;
+    std::shared_ptr<PendingGraph> Flight;
+    std::shared_ptr<const X87CallGraph> Value;
+    ActiveX87CacheBuild Active;
+
+  public:
+    Completion(X87CallGraphCache *Owner, std::shared_ptr<PendingGraph> Pending)
+        : Cache(Owner), Flight(std::move(Pending)),
+          Active{CurrentX87CacheBuild} {
+      if (Flight)
+        CurrentX87CacheBuild = &Active;
+    }
+    Completion(const Completion &) = delete;
+    Completion &operator=(const Completion &) = delete;
+    ~Completion() {
+      if (Flight) {
+        CurrentX87CacheBuild = Active.Previous;
+        Cache->finish(Flight, std::move(Value));
+      }
+    }
+    void completed(std::shared_ptr<const X87CallGraph> Graph) {
+      if (!Flight ||
+          (!Graph->Complete &&
+           Graph->Rejection == X87CallGraph::ProjectionRejection::None))
+        return;
+      const auto Bytes = graphBytes(*Graph);
+      const auto ContextSize = contextBytes(Flight->Inputs);
+      if (Bytes && ContextSize && *Bytes <= MaxBytes - *ContextSize)
+        Value = std::move(Graph);
+    }
+  };
+  std::shared_ptr<const X87CallGraph>
+  publish(const CFGBuilder &B, va_t Address,
+          std::shared_ptr<const X87CallGraph> Graph) {
+    if (!Graph->Complete &&
+        Graph->Rejection == X87CallGraph::ProjectionRejection::None)
+      return Graph;
+    const auto Bytes = graphBytes(*Graph);
+    if (!Bytes)
+      return Graph;
+    // Bound context copies before allocation, then account their actual
+    // capacities before publication. The limit is retained payload, not RSS
+    // of in-flight builds or graphs still used by an active private index.
+    size_t Estimated = sizeof(Context);
+    for (const auto *Values :
+         {B.KnownFuncEntries, B.ProtectedJumpTableRelocationSlots,
+          B.UnsafeJumpTableBranches})
+      if (Values && !accountAllocation(Estimated, Values->size(), sizeof(va_t)))
+        return Graph;
+    if (*Bytes > MaxBytes - Estimated)
+      return Graph;
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (!matches(B)) {
+      Context Next = freezeContext(B);
+      const auto NextBytes = contextBytes(Next);
+      if (!NextBytes || *Bytes > MaxBytes - *NextBytes)
+        return Graph;
+      Graphs.clear();
+      Inputs = std::move(Next);
+      RetainedBytes = *NextBytes;
+    }
+    const auto InputBytes = contextBytes(*Inputs);
+    if (!InputBytes || *Bytes > MaxBytes - *InputBytes)
+      return Graph;
+    // Another worker may have published while this worker built outside the
+    // lock. Use its identical immutable projection without waiting on builds.
+    for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
+      if (It->Address == Address) {
+        Graphs.splice(Graphs.begin(), Graphs, It);
+        return Graphs.front().Value;
+      }
+    while (!Graphs.empty() &&
+           (Graphs.size() >= MaxGraphs || *Bytes > MaxBytes - RetainedBytes)) {
+      RetainedBytes -= Graphs.back().Bytes;
+      Graphs.pop_back();
+    }
+    Graphs.push_front({Address, Graph, *Bytes});
+    RetainedBytes += *Bytes;
+    return Graph;
+  }
+};
+
+std::shared_ptr<X87CallGraphCache> createX87CallGraphCache() {
+  return createX87CallGraphCache(nullptr, nullptr);
+}
+
+std::shared_ptr<X87CallGraphCache>
+createX87CallGraphCache(const NoReturnCalleeProver *NonReentrantProver,
+                       const libc::NoReturnTargetIndex *NonReentrantTargets) {
+  return std::make_shared<X87CallGraphCache>(NonReentrantProver,
+                                           NonReentrantTargets);
+}
+
+std::array<size_t, 3> CFGBuilder::x87CallGraphCacheStatsForTesting() const {
+  if (!SharedX87CallGraphs)
+    return {};
+  std::lock_guard<std::mutex> Lock(SharedX87CallGraphs->Mutex);
+  return {SharedX87CallGraphs->Hits, SharedX87CallGraphs->Graphs.size(),
+          SharedX87CallGraphs->RetainedBytes};
+}
+
+std::array<size_t, 5> CFGBuilder::x87CallGraphFlightStatsForTesting() const {
+  if (!SharedX87CallGraphs)
+    return {};
+  std::lock_guard<std::mutex> Lock(SharedX87CallGraphs->Mutex);
+  return {SharedX87CallGraphs->Leaders, SharedX87CallGraphs->Waits,
+          SharedX87CallGraphs->NonWaitingMisses,
+          SharedX87CallGraphs->Pending.size(),
+          SharedX87CallGraphs->PendingBytes};
+}
+
+bool CFGBuilder::waitForX87CallGraphWaitersForTesting(size_t Count) const {
+  if (!SharedX87CallGraphs)
+    return false;
+  std::unique_lock<std::mutex> Lock(SharedX87CallGraphs->Mutex);
+  return SharedX87CallGraphs->PendingChanged.wait_for(
+      Lock, std::chrono::seconds(5),
+      [&] { return SharedX87CallGraphs->Waits >= Count; });
+}
+
+/// The index lives for one CFG build of an unchanged image. Its cached local
+/// graphs contain machine facts, not answers obtained under a caller's budget.
+/// Each query pays for its complete call closure and every dataflow transfer.
+class X87CallEffectIndex {
+  friend class CFGBuilder;
+  using Step = X87CallGraphStep;
+  using Block = X87CallGraphBlock;
+  using Graph = X87CallGraph;
+  struct Query {
+    size_t Remaining = limits::kMaxX87CallProofWork;
+    std::set<va_t> Charged, Active;
+    std::map<std::pair<va_t, unsigned>, std::optional<int>> Results;
+    bool pay(size_t Cost) {
+      if (Cost > Remaining) {
+        Remaining = 0;
+        return false;
+      }
+      Remaining -= Cost;
+      return true;
+    }
+  };
+  const CFGBuilder &Settings;
+  const BinaryImage &Image;
+  std::map<va_t, std::shared_ptr<const Graph>> Graphs;
+  std::map<va_t, std::optional<int>> Answers;
+
+  std::optional<int> importEffect(llvm::StringRef Name) const {
+    bool Floating = false, LongDouble = false, Complex = false;
+    if (const auto *Prototype =
+            libc::libcPrototype(Name.str(), Image.abiFormat())) {
+      Floating = libc::isFloatingType(Prototype->Return);
+      LongDouble = Prototype->Return == "long double";
+    } else if (const auto Arity = importNamesAreCNames(Image.Format)
+                                      ? libc::libcArity(Name.str())
+                                      : libc::libcArityForSymbol(Name.str())) {
+      Floating = libc::floatReturnBytes(*Arity) != 0;
+      LongDouble = Arity->FpRetLongDouble;
+      Complex = Arity->FpRetComplex;
+    } else {
+      return std::nullopt;
+    }
+    if (Image.Arch == Arch::X86)
+      return Complex ? std::nullopt
+                     : std::optional<int>(Floating || LongDouble ? -1 : 0);
+    // Win64 toolchains disagree on long double's representation. An import
+    // name alone cannot choose MSVC's double or MinGW's x87 result contract.
+    if (LongDouble)
+      return Image.abiFormat() == BinaryFormat::COFF || Complex
+                 ? std::nullopt
+                 : std::optional<int>(-1);
+    return 0;
+  }
+
+  static bool modeledIntrinsic(const LowOp &Op) {
+    if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
+      return false;
+    if (isArchitecturalNoReturn(Op))
+      return true;
+    // The decoder already accounts for the numeric x87 operations' pops and
+    // pushes. Environment restores, tag changes and unknown intrinsics have
+    // additional state effects and cannot acquire a net-stack summary here.
+    switch (static_cast<Intrinsic>(Op.Inputs[0].Offset)) {
+    case Intrinsic::X87Fsin:
+    case Intrinsic::X87Fcos:
+    case Intrinsic::X87F2xm1:
+    case Intrinsic::X87Fscale:
+    case Intrinsic::X87Fprem:
+    case Intrinsic::X87Fprem1:
+    case Intrinsic::X87Fpatan:
+    case Intrinsic::X87Fyl2x:
+    case Intrinsic::X87Fyl2xp1:
+    case Intrinsic::X87Fptan:
+    case Intrinsic::X87Fxtractsig:
+    case Intrinsic::X87Fxtractexp:
+    case Intrinsic::X87Fnclex:
+    case Intrinsic::X87ReadStatus:
+    case Intrinsic::X87Wait:
+    case Intrinsic::Pause:
+    case Intrinsic::Cpuid:
+    case Intrinsic::Rdtsc:
+    case Intrinsic::Rdtscp:
+    case Intrinsic::Mfence:
+    case Intrinsic::Lfence:
+    case Intrinsic::Sfence:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  const Graph &graph(va_t Entry) {
+    if (const auto It = Graphs.find(Entry); It != Graphs.end())
+      return *It->second;
+    const bool HasCodeOwner = Image.hasExecutableCodeOwnerAt(Entry);
+    std::shared_ptr<X87CallGraphCache::PendingGraph> Flight;
+    if (HasCodeOwner && Settings.SharedX87CallGraphs) {
+      auto Request = Settings.SharedX87CallGraphs->acquire(Settings, Entry);
+      if (Request.Value)
+        return *Graphs.emplace(Entry, std::move(Request.Value)).first->second;
+      Flight = std::move(Request.Leader);
+    }
+    X87CallGraphCache::Completion Complete(Settings.SharedX87CallGraphs.get(),
+                                          std::move(Flight));
+    auto Built = std::make_shared<Graph>();
+    const auto It = Graphs.emplace(Entry, Built).first;
+    Graph &G = *Built;
+    if (!HasCodeOwner)
+      return G;
+    Decoder Dec;
+    if (!Dec.init(Image))
+      return G;
+    CFGBuilder Builder;
+    Builder.SkipX87StackFixup = true;
+    Builder.setKnownFuncEntries(Settings.KnownFuncEntries);
+    Builder.setNoReturnTargetIndex(Settings.NoReturnTargets);
+    Builder.setNoReturnCalleeProver(Settings.NoReturnCallees,
+                                    Settings.NoReturnCalleeDepth + 1);
+    Builder.setAbsoluteRelocationRootIndex(Settings.AbsoluteRelocationRoots);
+    Builder.setExecutableCodeOwnerIndex(Settings.ExecutableCodeOwners);
+    Builder.ProtectedJumpTableRelocationSlots =
+        Settings.ProtectedJumpTableRelocationSlots;
+    Builder.UnsafeJumpTableBranches = Settings.UnsafeJumpTableBranches;
+    const LowFunc F = Builder.build(Image, Dec, Entry);
+    if (!F.hasCompleteInstructionLift() || !F.TruncatedPathAddresses.empty() ||
+        F.Blocks.empty() || F.Blocks.front().StartAddr != Entry)
+      return G;
+    auto RejectProjection =
+        [&](Graph::ProjectionRejection Reason) -> const Graph & {
+      // These two exclusions are immutable facts of a completely lifted CFG,
+      // not failures of a caller's proof allowance. Retain only an empty
+      // refusal marker; prove() still rejects !Complete before charging Cost.
+      G = Graph{};
+      G.Rejection = Reason;
+      if (Settings.SharedX87CallGraphs)
+        It->second =
+            Settings.SharedX87CallGraphs->publish(Settings, Entry, Built);
+      Complete.completed(It->second);
+      return *It->second;
+    };
+    G.Blocks.resize(F.Blocks.size());
+    for (size_t I = 0; I < F.Blocks.size(); ++I) {
+      const LowBlock &Source = F.Blocks[I];
+      Block &B = G.Blocks[I];
+      if (Source.Id != static_cast<int>(I) ||
+          Source.InstructionBoundaries.empty())
+        return G;
+      if (!Source.ExceptionalSuccs.empty() || !Source.ExceptionalPreds.empty())
+        return RejectProjection(Graph::ProjectionRejection::ExceptionalEdges);
+      G.Cost += 1 + Source.Ops.size() + Source.Succs.size();
+      if (G.Cost > limits::kMaxX87CallProofWork)
+        return G;
+      B.Successors = Source.Succs;
+      for (int S : B.Successors)
+        if (S < 0 || static_cast<size_t>(S) >= F.Blocks.size())
+          return G;
+      for (const LowInstructionBoundary &Boundary :
+           Source.InstructionBoundaries) {
+        const auto RecIt = Builder.Insns.find(Boundary.Address);
+        if (RecIt == Builder.Insns.end() ||
+            RecIt->second.Size != Boundary.Size ||
+            Boundary.FirstOp > Source.Ops.size() ||
+            Boundary.OpCount > Source.Ops.size() - Boundary.FirstOp)
+          return G;
+        const auto &Rec = RecIt->second;
+        Step S;
+        S.Delta = demaskDelta(Rec.FpuTopOut - Rec.FpuTopIn);
+        S.Unknown = Rec.FpuReset;
+        for (size_t O = Boundary.FirstOp;
+             O < Boundary.FirstOp + Boundary.OpCount; ++O) {
+          const LowOp &Op = Source.Ops[O];
+          if (Op.Opcode == NdOp::INTRINSIC) {
+            S.Unknown |= !modeledIntrinsic(Op);
+            B.Stops |= isArchitecturalNoReturn(Op);
+          }
+          for (unsigned K = 0; K < Op.NumInputs; ++K)
+            if (isStReg(Op.Inputs[K])) {
+              const uint8_t Bit =
+                  uint8_t(1u << ((x86reg::stRegIndex(Op.Inputs[K].Offset) -
+                                  Rec.FpuTopIn) &
+                                 7));
+              S.Reads |= Bit & ~S.Writes;
+              S.Unknown |= Op.Inputs[K].Size != x86reg::FPURegSize;
+            }
+          if (isStReg(Op.Output)) {
+            if (Op.Output.Size != x86reg::FPURegSize)
+              S.Unknown = true;
+            else
+              S.Writes |= uint8_t(
+                  1u << ((x86reg::stRegIndex(Op.Output.Offset) - Rec.FpuTopIn) &
+                         7));
+          }
+          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+            if (hasLowInstructionControlFlag(
+                    Boundary.ControlFlags,
+                    LowInstructionControlFlag::NoReturn)) {
+              B.Stops = true;
+              continue;
+            }
+            if (S.Callee || Op.NumInputs == 0)
+              S.Unknown = true;
+            else if (Op.Inputs[0].isConst())
+              S.Callee = Op.Inputs[0].Offset;
+            else
+              S.Callee = loadedCallSlot(F, Source, O, Op.Inputs[0]);
+            S.Unknown |= !S.Callee;
+          }
+          B.Returns |= Op.Opcode == NdOp::RETURN;
+        }
+        if (S.Delta || S.Reads || S.Writes || S.Callee || S.Unknown)
+          B.Steps.push_back(S);
+      }
+      if (B.Successors.empty() && !B.Returns && !B.Stops)
+        return RejectProjection(Graph::ProjectionRejection::MissingTerminator);
+    }
+    G.Complete = true;
+    if (Settings.SharedX87CallGraphs)
+      It->second =
+          Settings.SharedX87CallGraphs->publish(Settings, Entry, Built);
+    Complete.completed(It->second);
+    return *It->second;
+  }
+
+  std::optional<int> prove(va_t Entry, unsigned Depth, Query &Q) {
+    if (!Q.pay(1) || Depth >= limits::kMaxX87CallProofDepth)
+      return std::nullopt;
+    const auto Key = std::make_pair(Entry, Depth);
+    if (auto It = Q.Results.find(Key); It != Q.Results.end())
+      return It->second;
+    if (!Q.Active.insert(Entry).second)
+      return std::nullopt;
+    auto Compute = [&]() -> std::optional<int> {
+      if (Q.Charged.insert(Entry).second &&
+          Q.Charged.size() > limits::kMaxX87CallProofFunctions)
+        return std::nullopt;
+      if (const auto Name = importCalleeName(Image, Entry); !Name.empty())
+        return importEffect(Name);
+      const Graph &G = graph(Entry);
+      if (!G.Complete || !Q.pay(G.Cost))
+        return std::nullopt;
+      std::map<va_t, int> Callees;
+      for (const Block &B : G.Blocks)
+        for (const Step &S : B.Steps) {
+          if (S.Unknown)
+            return std::nullopt;
+          if (S.Callee && !Callees.count(*S.Callee)) {
+            const auto Effect = prove(*S.Callee, Depth + 1, Q);
+            if (!Effect || (*Effect != 0 && *Effect != -1))
+              return std::nullopt;
+            Callees.emplace(*S.Callee, *Effect);
+          }
+        }
+      struct State {
+        int Top = 0;
+        uint8_t Defined = 0;
+      };
+      std::vector<std::optional<State>> Entries(G.Blocks.size()),
+          Exits(G.Blocks.size());
+      std::queue<int> Work;
+      Entries[0] = State{};
+      Work.push(0);
+      while (!Work.empty()) {
+        const int Id = Work.front();
+        Work.pop();
+        const Block &B = G.Blocks[Id];
+        if (!Q.pay(1 + B.Steps.size() + B.Successors.size()))
+          return std::nullopt;
+        State Value = *Entries[Id];
+        for (const Step &S : B.Steps) {
+          for (int K = 0; K != 8; ++K)
+            if ((S.Reads & (1u << K)) &&
+                !(Value.Defined & (1u << ((Value.Top + K) & 7))))
+              return std::nullopt;
+          const int Delta = S.Delta + (S.Callee ? Callees.at(*S.Callee) : 0);
+          // Pushes discard stale slots before their new definitions; pops
+          // discard them after the instruction's reads and writes.
+          for (int K = Delta; K < 0; ++K)
+            Value.Defined &= uint8_t(~(1u << ((Value.Top + K) & 7)));
+          for (int K = 0; K != 8; ++K)
+            if (S.Writes & (1u << K))
+              Value.Defined |= uint8_t(1u << ((Value.Top + K) & 7));
+          for (int K = 0; K < Delta; ++K)
+            Value.Defined &= uint8_t(~(1u << ((Value.Top + K) & 7)));
+          Value.Top += Delta;
+          if (Value.Top < -8 || Value.Top > 8)
+            return std::nullopt;
+          if (S.Callee && Callees.at(*S.Callee) == -1)
+            Value.Defined |= uint8_t(1u << (Value.Top & 7));
+        }
+        Exits[Id] = Value;
+        for (int S : B.Successors) {
+          if (!Entries[S]) {
+            Entries[S] = Value;
+            Work.push(S);
+          } else {
+            if (Entries[S]->Top != Value.Top)
+              return std::nullopt;
+            const uint8_t Meet = Entries[S]->Defined & Value.Defined;
+            if (Meet != Entries[S]->Defined) {
+              Entries[S]->Defined = Meet;
+              Work.push(S);
+            }
+          }
+        }
+      }
+      std::optional<int> Result;
+      for (size_t I = 0; I < G.Blocks.size(); ++I) {
+        if (!Exits[I] || !G.Blocks[I].Returns)
+          continue;
+        const State &Out = *Exits[I];
+        if ((Result && *Result != Out.Top) || (Out.Top != 0 && Out.Top != -1) ||
+            (Out.Top == -1 && !(Out.Defined & (1u << 7))))
+          return std::nullopt;
+        Result = Out.Top;
+      }
+      return Result;
+    };
+    const auto Result = Compute();
+    Q.Active.erase(Entry);
+    Q.Results.emplace(Key, Result);
+    return Result;
+  }
+
+public:
+  explicit X87CallEffectIndex(const CFGBuilder &Builder)
+      : Settings(Builder), Image(*Builder.CurrentImg) {}
+  std::optional<int> effect(va_t Entry) {
+    if (auto It = Answers.find(Entry); It != Answers.end())
+      return It->second;
+    Query Q;
+    const auto Result = prove(Entry, 0, Q);
+    Answers.emplace(Entry, Result);
+    return Result;
+  }
+};
+
+std::optional<int> CFGBuilder::x87CallEffectForTesting(const BinaryImage &Image,
+                                                       va_t Entry,
+                                                       size_t &Remaining,
+                                                       unsigned Depth) {
+  llvm::SaveAndRestore<const BinaryImage *> Restore(CurrentImg, &Image);
+  X87CallEffectIndex Index(*this);
+  X87CallEffectIndex::Query Q;
+  Q.Remaining = Remaining;
+  const auto Result = Index.prove(Entry, Depth, Q);
+  Remaining = Q.Remaining;
+  return Result;
+}
+
 void CFGBuilder::fixupFpuStack(LowFunc &Func) {
+  if (SkipX87StackFixup)
+    return;
   if (!CurrentImg)
     return;
   if (CurrentImg->Arch != Arch::X86 && CurrentImg->Arch != Arch::X64)
@@ -70,17 +813,50 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
   for (size_t I = 0; I < N; ++I) {
     auto &Blk = Func.Blocks[I];
     bool First = true;
-    for (auto It = Insns.lower_bound(Blk.StartAddr);
-         It != Insns.end() && It->first < Blk.EndAddr; ++It) {
+    int CallShift = 0;
+    for (const LowInstructionBoundary &Boundary : Blk.InstructionBoundaries) {
+      const auto It = Insns.find(Boundary.Address);
+      if (It == Insns.end())
+        continue;
       const InsnRecord &Rec = It->second;
       if (First) {
         LiftedIn[I] = Rec.FpuTopIn;
         First = false;
       }
-      LiftedOut[I] = Rec.FpuTopOut;
-      if (Rec.FpuReset)
+      if (Rec.FpuReset) {
         HasReset[I] = true;
+        CallShift = 0;
+      }
       BlockDelta[I] += demaskDelta(Rec.FpuTopOut - Rec.FpuTopIn);
+      for (size_t O = Boundary.FirstOp;
+           O < Boundary.FirstOp + Boundary.OpCount && O < Blk.Ops.size(); ++O) {
+        LowOp &Op = Blk.Ops[O];
+        rebaseStReg(Op.Output, CallShift);
+        for (uint8_t K = 0; K < Op.NumInputs; ++K)
+          rebaseStReg(Op.Inputs[K], CallShift);
+        if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
+            Op.NumInputs == 0 ||
+            hasLowInstructionControlFlag(Boundary.ControlFlags,
+                                         LowInstructionControlFlag::NoReturn))
+          continue;
+        const auto Target = Op.Inputs[0].isConst()
+                                ? std::optional<va_t>(Op.Inputs[0].Offset)
+                                : loadedCallSlot(Func, Blk, O, Op.Inputs[0]);
+        if (!Target)
+          continue;
+        if (!X87CallEffects)
+          X87CallEffects = std::make_shared<X87CallEffectIndex>(*this);
+        if (X87CallEffects->effect(*Target) != std::optional<int>(-1))
+          continue;
+        // The callee's complete returning paths push exactly one initialized
+        // value. Publish the definition before SSA and advance TOP before
+        // rebasing subsequent instructions, including successor blocks.
+        --CallShift;
+        --BlockDelta[I];
+        Op.Output = NdVar::reg(x86reg::stReg((Rec.FpuTopIn + CallShift) & 7),
+                               x86reg::FPURegSize);
+      }
+      LiftedOut[I] = (Rec.FpuTopOut + CallShift) & 7;
     }
     for (auto &Op : Blk.Ops) {
       if (isStReg(Op.Output)) {
@@ -101,6 +877,17 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
     AnyFpu = AnyFpu || HasFpu[I];
   if (!AnyFpu)
     return;
+  if (!X87CallEffects)
+    X87CallEffects = std::make_shared<X87CallEffectIndex>(*this);
+  const bool ReturnsX87 =
+      X87CallEffects->effect(Func.Entry) == std::optional<int>(-1);
+  auto bindReturn = [&](LowBlock &Block, int Top) {
+    if (!ReturnsX87)
+      return;
+    for (LowOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::RETURN && Op.NumInputs == 1)
+        Op.Inputs[0] = NdVar::reg(x86reg::stReg(Top & 7), x86reg::FPURegSize);
+  };
 
   int EntryBlk = -1;
   for (size_t I = 0; I < N; ++I)
@@ -156,16 +943,17 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
     // One TOP per block — re-base each block in place (the common case; a no-op
     // for offset 0, i.e. straight-line / stack-balanced code).
     for (size_t I = 0; I < N; ++I) {
-      if (TopSets[I].empty() || HasReset[I] || !HasFpu[I])
+      if (TopSets[I].empty())
         continue;
-      int Offset = (*TopSets[I].begin() - LiftedIn[I]) & 7;
-      if (Offset == 0)
-        continue;
-      for (auto &Op : Func.Blocks[I].Ops) {
-        rebaseStReg(Op.Output, Offset);
-        for (int K = 0; K < Op.NumInputs; ++K)
-          rebaseStReg(Op.Inputs[K], Offset);
-      }
+      const int Top = *TopSets[I].begin();
+      int Offset = (Top - LiftedIn[I]) & 7;
+      if (!HasReset[I] && HasFpu[I] && Offset != 0)
+        for (auto &Op : Func.Blocks[I].Ops) {
+          rebaseStReg(Op.Output, Offset);
+          for (int K = 0; K < Op.NumInputs; ++K)
+            rebaseStReg(Op.Inputs[K], Offset);
+        }
+      bindReturn(Func.Blocks[I], exitTop(static_cast<int>(I), Top));
     }
     return;
   }
@@ -218,6 +1006,7 @@ void CFGBuilder::fixupFpuStack(LowFunc &Func) {
         }
     }
     int Ex = exitTop(B, T);
+    bindReturn(NB, Ex);
     for (int S : Func.Blocks[B].Succs)
       NB.Succs.push_back(S >= 0 && S < static_cast<int>(N) ? stateFor(S, Ex)
                                                            : S);

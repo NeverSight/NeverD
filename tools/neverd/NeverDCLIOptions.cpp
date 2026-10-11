@@ -47,6 +47,36 @@ std::optional<uint64_t> parseAddrArg(StringRef Ref) {
 //===----------------------------------------------------------------------===//
 
 cl::SubCommand LiftCmd("lift", "Lift binary to LLVM IR");
+cl::SubCommand WebCmd("web", "Inspect offline web artifacts");
+cl::list<std::string> WebArguments(
+    cl::Positional,
+    cl::desc(
+        "capabilities | inspect <input> | bun|map <file> | "
+        "bun-map <file> <module-index> | "
+        "source|bindings|semantics|modules|bundles|view|navigate <file> "
+        "<script|module|commonjs> | anchor <file> <source-type> "
+        "<byte-offset> <byte-length> | bun-view|bun-navigate <file> "
+        "<module-index> <source-type> | "
+        "bun-anchor <file> <module-index> <source-type> <byte-offset> "
+        "<byte-length> | native|native-analyze <file> | "
+        "bun-native|bun-native-analyze <file> <module-index> | "
+        "asar <file-or-root> [archive-index [unpacked-index|-]] | "
+        "electron-manifest <file-or-root> [manifest-index] | "
+        "electron-source <file> <source-type> | "
+        "electron-ipc <root> <manifest-index> <source-index:source-type>... | "
+        "asar-ipc <root> <archive-index> <unpacked-index|-> "
+        "<manifest-member-index> <source-member-index:source-type>... | "
+        "bun-electron <file> <module-index> <source-type> | "
+        "asar-manifest <root> <archive-index> "
+        "<unpacked-directory-index|-> <member-index> | "
+        "asar-source|asar-view|asar-navigate|asar-electron <root> "
+        "<archive-index> "
+        "<unpacked-index|-> <member-index> <source-type> | "
+        "asar-anchor <root> <archive-index> <unpacked-index|-> "
+        "<member-index> <source-type> <byte-offset> <byte-length> | "
+        "asar-map|asar-native|asar-native-analyze <root> <archive-index> "
+        "<unpacked-index|-> <member-index>"),
+    cl::ZeroOrMore, cl::sub(WebCmd));
 cl::SubCommand
     MobileCmd("mobile",
               "Recover Android Java and iOS native sources and metadata");

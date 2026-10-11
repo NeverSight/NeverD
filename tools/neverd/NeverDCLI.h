@@ -206,6 +206,15 @@ extern llvm::cl::SubCommand AuditCmd;
 extern llvm::cl::SubCommand HuntCmd;
 extern llvm::cl::SubCommand ConcolicCmd;
 extern llvm::cl::SubCommand MobileCmd;
+extern llvm::cl::SubCommand WebCmd;
+extern llvm::cl::list<std::string> WebArguments;
+int runWeb();
+int runWebPackages();
+int runWebArchive();
+int runWebIntegrity();
+int runWebInterfaces();
+int runWebStreams();
+int runWebSEA();
 
 extern llvm::cl::opt<bool> Devirtualize;
 extern llvm::cl::list<std::string> VMControlRegisters;

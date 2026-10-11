@@ -93,7 +93,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 工作项在回调开始前出队，因此回调可以释放自身的工作项。释放仍在队列中的项、重复入队、使用失效对象或非来宾可执行内存中的回调地址都会明确失败。设备引用保留到回调返回。请求卸载要求释放全部工作项并完成排队工作。CPU 上下文保存与恢复包含通用、SIMD、FPU 和控制状态；来宾内存始终共享，故障 CPU 不能靠恢复上下文继续执行。
 删除会延后到文件对象及排队／执行中的工作项引用全部释放。对象区耗尽时，工作项分配返回 NULL。
 
-映像默认使用首选基址，除非场景选择了有效的重定位地址。映像必须为使用 native 子系统的 PE32+ x64 可执行文件。导入可来自 `ntoskrnl.exe`、`ntkrnlmp.exe` 或 `WDFLDR.SYS`。
+映像默认使用首选基址，除非场景选择了有效的重定位地址。映像必须为使用 native 子系统的 PE32+ x64 可执行文件。导入可来自 `ntoskrnl.exe`、`ntkrnlmp.exe`、`HAL.dll` 或 `WDFLDR.SYS`。
 
 执行加载器支持经验证的 x64 `DIR64` 基址重定位，以及有限的安全 cookie 加载配置；它会在入口包装函数执行前设置确定性的来宾 cookie。其他未建模的加载配置字段、TLS、延迟／绑定导入、按序号导入以及托管映像都会被拒绝。映像还必须通过严格的范围与对齐检查。
 
@@ -162,7 +162,7 @@ READ／WRITE／IOCTL 可声明 `interrupt_events`，每项指定 `after_100ns`�
 
 报告区分声明与观测：`configuration.pnp_devices[].interrupts` 保留资源，`configuration.interrupt_events` 保留事件及 `action`、从零开始的 `source_request_index` 和 `event_index`。根 `interrupts` 记录设备／资源、代次、到期时间和状态应用时间；`occurred_at_100ns` 表示外部状态已应用。`handlers[]` 对每次真实 ISR 记录中断对象、递送／返回时间、BOOLEAN 返回值、`claimed` 和 `delivery_index`；assert 可产生多轮。deassert 或同边界被抵消的 assert 没有 ISR 时，不虚构 ISR 字段。未认领的 ISR 是有效结果；DPC 效果通过真实请求完成、API 调用及消息体现。行字段保留 `device_id`、`interrupt_id`、`epoch`、`due_at_100ns`、`occurred_at_100ns`、`interrupt_object` 和 `undelivered_reason`。`delivered_at_100ns` 记录首次处理器入口；顶层 `returned_at_100ns`、`return_value` 与 `claimed` 汇总最近一批，`handlers` 保留完整历史。首次 assert 承载来源持续有效期间的观测，重复 assert 可无自己的 ISR 记录。可执行的[中断场景](../examples/driver-interrupt-scenario.json)使用原创真实 WDK `driver_wdm_interrupts.c`，由可选 `NEVERD_WDM_INTERRUPT_FIXTURE`／`NEVERD_WDM_INTERRUPT_CFG_FIXTURE` 指定：七个请求包括延迟 START、由 ISR→DPC 完成的 pending IOCTL、文件清理／关闭及移除。现有 C／Python `scenario_json` 边界和 `neverd_driver_options_v1` 布局不变。缺少真实产物明确跳过，执行证据仅来自 Linux。
 
-`DriverDMA.h`／`DriverDMA.def` 为 `register_bank` PDO 增加可选的 `dma` 对象，与内存／中断分配并存；仅声明 DMA 不能取代这两类资源列表。七个字段都必须显式提供：`address_bits`（32 或 64）、`maximum_length`（1–1048576 字节）、`map_registers`（1–256）、`alignment`（1–4096 之间的二次幂）、`logical_base`（非零、页对齐）、`logical_length`（页对齐、4096–1073741824 字节）及布尔值 `scatter_gather`。逻辑地址窗口必须无溢出且落在地址位宽内。每个 PDO 都有独立逻辑地址域，不同设备的相同地址不会互为别名。转换后的 MMIO 资源不能与保留的模型 RAM 区间 `[0x1000000000, 0x1000100000)` 重叠。这些声明描述具备一致性的合成总线主设备，不代表宿主物理内存或 PCI 设备。
+`DriverDMA.h`／`DriverDMA.def` 为 `register_bank` PDO 增加可选的 `dma` 对象，与内存／中断分配并存；仅声明 DMA 不能取代这两类资源列表。七个字段都必须显式提供：`address_bits`（32 或 64）、`maximum_length`（1–1048576 字节）、`map_registers`（1–256）、`alignment`（1–4096 之间的二次幂）、`logical_base`（非零、页对齐）、`logical_length`（页对齐、4096–1073741824 字节）及布尔值 `scatter_gather`。逻辑地址窗口必须无溢出且落在地址位宽内。每个 PDO 都有独立逻辑地址域，不同设备的相同地址不会互为别名。转换后的 MMIO 资源不能与保留的模型 RAM 区间 `[0x1000000000, 0x1004000000)` 重叠。这些声明描述具备一致性的合成总线主设备，不代表宿主物理内存或 PCI 设备。
 
 `IoGetDmaAdapter` 接受 Internal 总线主设备的历史 `DEVICE_DESCRIPTION` 版本 0／1 字段，发布版本为 1 的 `DMA_ADAPTER` 及真实的 104 字节 `DMA_OPERATIONS` 表。版本 2／3 探测返回 NULL，不读取现代结构尾部。每个间接方法绑定到确切的有效适配器，身份独立于内核导入。已实现 `AllocateCommonBuffer`、`FreeCommonBuffer`、`GetDmaAlignment`、`GetScatterGatherList`、`PutScatterGatherList`、`PutDmaAdapter`、`AllocateAdapterChannel`、`MapTransfer`、`FlushAdapterBuffers` 和 `FreeMapRegisters`。本配置不建模从属／系统 DMA 控制器，因此 `FreeAdapterChannel` 和 `ReadDmaCounter` 仍保留具名的不支持错误。公共缓冲区分配／释放及对齐查询要求 PASSIVE_LEVEL；Get／PutScatterGatherList 要求 DISPATCH_LEVEL，适配器释放允许 IRQL 不高于 DISPATCH_LEVEL。x64 忽略 `CacheEnabled`。不支持的版本探测、声明能力不兼容以及文档规定的分配资源不足返回 NULL；非法或未建模的接口选择及后端故障仍明确报错。
 
@@ -174,7 +174,7 @@ READ／WRITE／IOCTL 可声明 `interrupt_events`，每项指定 `after_100ns`�
 
 `KeFlushIoBuffers` 验证有效的已锁定／非分页 MDL。模型平台具有缓存一致性，因此 ReadOperation 和 DmaOperation 的任意取值均无需额外缓存副本；此调用不释放 DMA 所有权，也不替代 FlushAdapterBuffers。[通道场景](../examples/driver-dma-channel-scenario.json)运行原创 `driver_wdm_dma_channel.c`，执行两次 MapTransfer、一个跨页设备事务、独立声明的 IRQ/DPC、整体刷新及确切寄存器释放。真实普通／CFG 镜像使用 `NEVERD_WDM_DMA_CHANNEL_FIXTURE` 和 `NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE`。
 
-`KernelPhysicalMemory` 为现有 RAM 分配最多 256 个、每页 4096 字节的模型物理页身份。CPU 虚拟地址、物理页身份和设备逻辑地址彼此区分。已构建 MDL 的 PFN 数组以只读方式暴露这些共享身份，未构建描述符没有可用 PFN。相邻小分配可以共享 PFN，但字节范围和生命周期仍独立。公共缓冲区、池和请求缓冲区使用 `GuestMemory` 已有的同一份字节，不增加 DMA 数据副本。有效 SG 映射固定确切数据范围及描述符；完成、池／MDL 释放和拆除在退休存储前拒绝尚存依赖。解除直接 MDL 映射只撤销 CPU 系统映射，DMA 仍可访问锁定的底层 RAM。`DmaWritable` 将写锁定契约与 CPU 映射权限分开记录：设备写入要求直接 READ／OUT_DIRECT 或可写非分页存储；WRITE／IN_DIRECT 不会因为 CPU 映射可写就取得该许可。
+`KernelPhysicalMemory` 为现有 RAM 分配最多 16384 个、每页 4096 字节的模型物理页身份。CPU 虚拟地址、物理页身份和设备逻辑地址彼此区分。已构建 MDL 的 PFN 数组以只读方式暴露这些共享身份，未构建描述符没有可用 PFN。相邻小分配可以共享 PFN，但字节范围和生命周期仍独立。公共缓冲区、池和请求缓冲区使用 `GuestMemory` 已有的同一份字节，不增加 DMA 数据副本。有效 SG 映射固定确切数据范围及描述符；完成、池／MDL 释放和拆除在退休存储前拒绝尚存依赖。解除直接 MDL 映射只撤销 CPU 系统映射，DMA 仍可访问锁定的底层 RAM。`DmaWritable` 将写锁定契约与 CPU 映射权限分开记录：设备写入要求直接 READ／OUT_DIRECT 或可写非分页存储；WRITE／IN_DIRECT 不会因为 CPU 映射可写就取得该许可。
 
 `GetScatterGatherList` 按 MDL 原始范围验证 CurrentVa／Length，并在现有底层 RAM 上生成逻辑页片段。映射寄存器可用时，真实的四参数 void `AdapterListControl` 在 API 返回前内嵌执行；否则接纳过程保留数据／描述符，并为 PDO 的 FIFO 预留回调，直到资源释放。此范围没有 StartIo 所有权，因此回调第二个 IRP 参数为 NULL。回调返回不会释放映射。`PutScatterGatherList` 可以在回调内执行；Put 后驱动可以完成请求并释放最后一个适配器，而回调续接和设备引用持续到返回。有效 SG 映射期间，CPU 必须先 Put 才能访问数据；仍在等待映射寄存器的回调尚未把字节交给设备独占。释放公共缓冲区必须匹配原适配器、长度、逻辑地址和 CPU 地址。逻辑地址在整个会话中永不复用，重启也不例外。缺少真实生产者的资源等待会明确停滞，不虚构完成或截止时间。
 
@@ -323,6 +323,7 @@ neither 请求可声明 `user_buffers`（`id`、`size`、可选 `input`／`acces
 | `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | 抛出来宾异常，无正常 API 返回；真实 C 过滤器／处理器及展开 finally，用户 CPU 访存异常的受限恢复见下文 |
 | `ExAllocatePool2` | 分页／非分页 NX 分配，默认清零；支持未初始化与缓存行对齐标志；无效的必需标志返回 NULL，配额／可执行池以及分配失败引发异常的路径会停止 |
 | `MmGetSystemRoutineAddress` | 通过共享导出清单解析带长度的来宾名称 |
+| `NtQuerySystemInformation`, `ZwQuerySystemInformation` | 在 PASSIVE_LEVEL 支持类 `11`（`SystemModuleInformation`）：零长度大小查询，以及模拟提供者和输入驱动的完整 Win64 模块记录。部分缓冲区和未知信息类会明确停止。 |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 声明的转换后子区间；非缓存 RO／RW、共享别名、精确取消映射；不提供任意物理内存 |
 | `IoConnectInterrupt`, `IoDisconnectInterrupt`, `IoConnectInterruptEx`, `IoDisconnectInterruptEx` | 精确配置的独占／共享 latched 或 level_sensitive 线路；PASSIVE_LEVEL 下传统 ABI 与 Ex 1／2／4，严格连接代次和锁所有权 |
 | `KeSynchronizeExecution`, `KeAcquireInterruptSpinLock`, `KeReleaseInterruptSpinLock` | 真实 BOOLEAN 同步回调，在不低于配置 DIRQL 的同步 IRQL 下持有同一非递归锁；恢复原调用者 IRQL 和所有权 |
@@ -334,6 +335,7 @@ neither 请求可声明 `user_buffers`（`id`、`size`、可选 `input`／`acces
 | `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | 用户／系统映射继承物理页缓存属性及各自权限；非分页池 MDL 通过安全辅助函数复用原系统映射 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | 独立或 IRP 关联的非分页池／用户描述符；可修改链指针，锁页与系统别名独立；不支持配额 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 显式配置的会话注册表、逐句柄权限与生命周期、查询缓冲区大小及修改；不访问宿主注册表 |
+| `ExAllocatePool` | 旧版双参数接口，支持池类型 `0`、`1`、`512` 的数据分配；共用对齐、未初始化字节模型及大小／IRQL 检查，耗尽时返回 NULL。通过 `ExFreePool` 或零标签的 `ExFreePoolWithTag` 释放；存活分配仍属于内核依赖。 |
 | `ExAllocatePoolWithTag`、`ExFreePoolWithTag`、`ExFreePool` | 对池类型 `0`、`1`、`512` 提供数据分配；大小／标签必须为正，带标签释放必须匹配，地址不复用 |
 | `IoCreateDevice`、`IoDeleteDevice` | 设备类型为 `0x22`，characteristics 为 `0` 或 `0x100`，扩展大小有界，名称为 ASCII `\Device\Name` |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | 同驱动附加；返回原栈顶，拆链接收保存的下层设备；遵守上述拓扑和生命周期限制 |
@@ -363,6 +365,8 @@ neither 请求可声明 `user_buffers`（`id`、`size`、可选 `input`／`acces
 | `IoMarkIrpPending` | 标记当前存活的 IRP；也支持 WDM 宏对栈控制字段的等效写入；派发必须返回 `STATUS_PENDING` |
 | `IofCompleteRequest`、`IoCompleteRequest` | 使用 `IO_NO_INCREMENT` 执行完成展开，支持暂停／继续；仅在最终展开边界释放 IRP、MDL 和缓冲区 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的来宾缓冲区操作，每次调用最多 1 MiB；要求不重叠的复制 API 会拒绝重叠 |
+
+`MmProbeAndLockPages` 支持在 IRQL <= APC_LEVEL 下，以 `KernelMode` 锁定输入驱动镜像中由加载器拥有的单个连续区间。镜像页必须可读，并受物理页配额限制。模型已持有私有且驻留的镜像后备存储：即使原镜像视图只读，`IoWriteAccess` 和 `IoModifyAccess` 也允许可写 MDL 别名；`IoReadAccess` 仍只允许只读别名。原镜像保护属性保持不变。镜像空洞和无关映射不属于该所有权；低于用户地址边界的镜像也通过所有权识别。锁定后必须解锁并释放描述符。MDL 调用保留现有 UNPACK 恢复依赖；模型中的镜像访问成功不代表驱动已可移植恢复。
 
 `KernelDispatcher` 按带符号的 32 位 `LONG` 解码信号量的 `Count`、`Limit` 和 `Adjustment`，按 32 位 `ULONG` 解码互斥体的 `Level`，按 8 位 `BOOLEAN` 解码 `Wait`，并依照 [Windows x64 ABI](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170) 忽略寄存器中未定义的高位。有效位中的非法值及信号量溢出仍在修改对象状态之前被拒绝。
 
@@ -416,7 +420,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 对于 direct IOCTL，`input` 初始化第一个系统缓冲区，`direct_input` 初始化由 MDL 描述的独立第二缓冲区，并补零至 `output_size`。`METHOD_IN_DIRECT` 要求可读访问，但不意味着系统映射为只读。两种方法都使用可读写的场景缓冲区。`MdlMappingNoWrite` 移除映射的写权限，`MdlMappingNoExecute` 移除执行权限。解除映射会撤销系统虚拟地址；重新映射保留同一份锁定数据。请求完成时 MDL 和映射均失效。模型支持 WDM 宏使用的公共 MDL 字段；进程字段、未构建描述符的 PFN 访问、手工构造的 MDL、超出下述受限进程契约的用户映射以及通过原始 UserBuffer 直接访问都会被拒绝；已构建描述符的 PFN 数组只读。零长度 direct 缓冲区的 MDL 为空。
 
-`IoAllocateMdl` 为非空、不溢出且不超过 1 MiB 的缓冲区分配元数据，不探测或锁定缓冲区。`Irp` 可为 NULL 或有效的建模 IRP。主描述符替换当前驱动链的头部，脱离的描述符仍由驱动拥有；`SecondaryBuffer` 将描述符追加到链尾，空链则设置为头部。原始请求拥有的 direct-I/O MDL 必须保持可达，不能由驱动替换或释放。`ChargeQuota` 必须为 FALSE；对象区耗尽时返回 NULL。`MmBuildMdlForNonPagedPool` 要求完整范围位于同一个有效非分页池分配内。安全辅助函数和 WDM 宏复用原始地址与权限；新增禁止写入／执行标志不改变既有权限，额外系统映射及解除映射会被拒绝。`IoFreeMdl` 仅释放指定的驱动描述符，不解除链连接，也不沿 `Next` 释放后继；手动释放用户 MDL 前必须先解锁。池缓冲区具有独立生命周期，只要不再访问已释放存储，两种释放顺序均受支持。
+`IoAllocateMdl` 为非空、不溢出的缓冲区分配元数据，不探测或锁定缓冲区。建模描述符及其 PFN 数组必须能由 16 位大小字段精确表示；页内偏移也计入 PFN 容量。描述符存储大小与所描述缓冲区的大小独立。 `Irp` 可为 NULL 或有效的建模 IRP。主描述符替换当前驱动链的头部，脱离的描述符仍由驱动拥有；`SecondaryBuffer` 将描述符追加到链尾，空链则设置为头部。原始请求拥有的 direct-I/O MDL 必须保持可达，不能由驱动替换或释放。`ChargeQuota` 必须为 FALSE；对象区耗尽时返回 NULL。`MmBuildMdlForNonPagedPool` 要求完整范围位于同一个有效非分页池分配内。安全辅助函数和 WDM 宏复用原始地址与权限；新增禁止写入／执行标志不改变既有权限，额外系统映射及解除映射会被拒绝。`IoFreeMdl` 仅释放指定的驱动描述符，不解除链连接，也不沿 `Next` 释放后继；手动释放用户 MDL 前必须先解锁。池缓冲区具有独立生命周期，只要不再访问已释放存储，两种释放顺序均受支持。
 
 驱动可修改 `MDL.Next` 和 `IRP.MdlAddress`，插入或脱离建模描述符。IRP 最终完成前验证当前整条链，随后解锁附加的用户 MDL、撤销其别名并释放附加描述符；脱离的描述符和池缓冲区仍由驱动拥有。环、未知或已释放节点、多个活动 IRP 共用描述符，以及把 WDF 私有描述符接入 WDM 链，均明确失败。活动 DMA 和调度器依赖阻止过早回收。其他建模 MDL 字段及已构建 PFN 数组只读；进程字段、未构建 PFN、手工 MDL、任意进程映射仍不支持。卸载前必须释放剩余驱动描述符。
 
@@ -461,7 +465,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v86`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v95`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 
@@ -482,6 +486,8 @@ C SEH 作用域仍使用左闭右开区间。合法的 `__C_specific_handler` �
 可为空的 `fault` 对象保留后端首次锁存的终止故障；可恢复的用户 CPU 访存异常通过上述 SEH 路径处理。其 `kind`、`pc`、可为空的 `address`、`size`、`access` 和 `interrupt` 区分未映射或受保护内存、无效范围、无效指令及 CPU 异常。地址使用十六进制字符串；大小和中断向量使用整数。用于观察的读取不能替换原始故障。发生故障的后端不能恢复执行，此记录也不会使这些后端故障能够由来宾 SEH 处理。
 
 `instructions` 统计执行策略已准许的来宾指令尝试次数。被执行策略拒绝的指令不计数；已准许但在 CPU 中发生故障的指令计数。合成的 API 派发与返回哨兵不增加该计数。
+
+场景布尔字段 `trace_memory_writes` 默认为 true。设为 false 时，`writes` 为空，事件预算仅统计 API 调用；内存校验、已完成写入的观察器以及指令和时间限制仍然生效。报告在 `configuration.trace_memory_writes` 中记录选择，C++ 接口为 `DriverOptions::TraceMemoryWrites`。
 
 每个 `writes` 条目都带有 `semantics: "attempted_guest_write"`：记录栈外的 CPU 写入尝试，包括随后可能发生故障或被预算停止的尝试。它不保证写入已完成，也不包含 API 模型所做的写入。设备与驱动对象快照描述执行停止时观察到的状态。
 
@@ -577,3 +583,13 @@ checked Unicorn 使用 `MachineRunControl`：ARM64 维护、来宾执行和完�
 `RunDeadline::invoke` 在 WHP 入口已停止或过期时拒绝调用宿主，取消期间保留真实宿主结果，并在释放借用的停止标记前确认中断回调结束。KVM 和 WHP 在持有执行租约的调用线程上验证完整捕获的私有状态，然后分类同时到达的停止或超时。真实宿主错误、捕获失败以及经过认证的 x64 CPU 异常保持更高优先级。普通成功状态在取消检查结束前保持私有；已确认的中断丢弃推测性的 CPU/RAM 效果并允许重试。准备、原生执行和捕获共用一次单步宽限。这些控制提供协作式取消，不保证硬性墙钟时限。
 
 CPU0 显式抢占、虚拟时钟语义及当前边界见[驱动调度](driver-scheduling.md)。
+
+## HAL 导出与性能计数器
+
+`HAL.dll` 是独立且模块名不区分大小写的导入提供者。静态导入与 `MmGetSystemRoutineAddress` 共享内核和 HAL 中精确、区分大小写的导出身份；存在冲突的有效身份时明确拒绝。`kernel_exports` 对已知 HAL 例程的覆盖作用于 HAL 命名空间，其他显式声明仍属于内核。未知 HAL 导入保留延迟陷阱，不会仅因同名而获得内核 API 语义。
+
+`KeQueryPerformanceCounter` 返回调度器共享的 100 ns 时钟值，固定频率为每秒 10,000,000 次。可选输出指针经过完整八字节写入权限及对象生命周期检查。调用支持所有有效 x64 IRQL。协作模式只在已有调度边界推进时间；指令时钟模式沿用配置的计时方式。读取计数器不会创建第二个时钟或自行推进时间。这是确定性的执行配置，不是宿主硬件测量。独立编译的运行时样本在原始及重定位地址上检查静态／动态身份、频率与单调性，并由原生 CPU 后端执行。
+
+`RDTSC` 与 `RDTSCP` 和 `KeQueryPerformanceCounter` 共用 10 MHz 调度时钟。`RDTSCP` 在 ECX 中返回单个模型处理器的编号零。EAX/EDX（以及 RDTSCP 的 ECX）清零高 32 位，其他寄存器和标志保持不变。协作模式下读取不推进时间；显式指令调度模式在计入本条已获准指令后读取时间，结果不依赖时间片长度。溢出在写入寄存器结果之前停止，指令预算和观察器停止仍然有效。此配置不测量宿主 TSC 频率，也不暴露宿主处理器身份；MSR 访问、RDPMC 和其他未建模 CPU 查询仍不支持。
+
+`KernelModuleImages` 根据 `KernelExportRegistry` 生成可读的 PE 头和导出表；静态导入、动态查找和模块枚举共享同一组地址。提供者代码保持不透明，清单描述的是模拟环境，而非宿主内核。两个输出都在写入前检查，包括池内存生命周期与重叠。Nt 查询要求已知的内核 previous-mode；Zw 查询采用内核调用契约。完整模块查询会保留明确的恢复依赖，即使其缓冲区已释放；提供者映像指针也按借用状态跟踪。`KernelExportTests.cpp` 检查 PE 解析、权限、ABI 字段、写入拒绝和恢复依赖；原创编译运行时夹具在 CPU 后端遍历这些导出表。

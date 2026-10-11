@@ -99,6 +99,7 @@ struct DriverRequest {
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
 /// or explicit instruction-driven preemptive scheduling, dispatcher waits,
 /// and DPC execution at modeled IRQLs.
+/// RDTSC/RDTSCP share the scheduler's 10 MHz clock; RDTSCP reports CPU0.
 /// All pointers describe guest addresses, never native pointers. No host OS
 /// services are forwarded. Unsupported APIs and CPU environment effects stop.
 struct DriverOptions {
@@ -108,6 +109,9 @@ struct DriverOptions {
   uint64_t InstructionLimit = profile::DefaultInstructionLimit;
   uint64_t MemoryLimit = profile::DefaultMemoryLimit;
   uint64_t EventLimit = profile::DefaultEventLimit;
+  /// Retain attempted guest writes as budgeted report events. Disabling this
+  /// leaves memory validation and execution observers active.
+  bool TraceMemoryWrites = true;
   uint64_t TimeoutMilliseconds = profile::DefaultTimeoutMilliseconds;
   std::string ServiceName = profile::DefaultServiceName;
   /// Zero selects the preferred PE image base.
@@ -240,6 +244,14 @@ struct DriverResult {
 /// DriverResult and retain the observations made before the stop.
 llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                                            const DriverOptions &Options = {});
+
+class ProcessObserver;
+/// Observe the stopped driver environment without modifying guest state.
+/// DriverEntry, nested callbacks and later lifecycle invocations retain their
+/// own provenance. Observer failures are API errors, not guest outcomes.
+llvm::Expected<DriverResult> observeDriver(const std::filesystem::path &Path,
+                                           const DriverOptions &Options,
+                                           ProcessObserver &Observer);
 
 #define NEVERD_DRIVER_SCENARIO_LIMIT(Name, CName, Value)                       \
   inline constexpr size_t Name = Value;

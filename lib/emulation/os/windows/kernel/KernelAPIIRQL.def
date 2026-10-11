@@ -23,6 +23,11 @@ NEVERD_KERNEL_IRQL_VALUE(Any, dispatcher::HighLevel)
 
 #ifdef NEVERD_KERNEL_IRQL_API
 
+#define NEVERD_KERNEL_HAL_API(Name, Arity, IRQL, Operation)                    \
+  NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelHALAPIs.def"
+#undef NEVERD_KERNEL_HAL_API
+
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exraisestatus
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exraiseaccessviolation
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exraisedatatypemisalignment
@@ -32,6 +37,8 @@ NEVERD_KERNEL_IRQL_API(ExRaiseDatatypeMisalignment, Passive)
 NEVERD_KERNEL_IRQL_API(ProbeForRead, APC)
 NEVERD_KERNEL_IRQL_API(ProbeForWrite, APC)
 NEVERD_KERNEL_IRQL_API(ExGetPreviousMode, Any)
+NEVERD_KERNEL_IRQL_API(NtQuerySystemInformation, Passive)
+NEVERD_KERNEL_IRQL_API(ZwQuerySystemInformation, Passive)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetrequestorprocessid
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid
 NEVERD_KERNEL_IRQL_API(IoGetRequestorProcessId, Dispatch)
@@ -117,6 +124,7 @@ NEVERD_KERNEL_IRQL_API(KeDelayExecutionThread, APC)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool2
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepoolwithtag
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepool
+NEVERD_KERNEL_IRQL_API(ExAllocatePool, Dispatch)
 NEVERD_KERNEL_IRQL_API(ExAllocatePoolWithTag, Dispatch)
 NEVERD_KERNEL_IRQL_API(ExAllocatePool2, Dispatch)
 NEVERD_KERNEL_IRQL_API(ExFreePoolWithTag, Dispatch)

@@ -83,7 +83,11 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
     if (Memory.Address &&
         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
       const auto Address = Transfer.read(*Memory.Address);
-      if (!realignedMemoryIsDisjoint(Address, Memory.AccessSize)) {
+      if (!realignedMemoryIsDisjoint(Address, Memory.AccessSize) ||
+          (Address.CallbackAddress &&
+           (!Memory.Complete || !After.Frame.callbackMemoryIsPrivate(
+                                    *Address.CallbackAddress, Memory.AccessSize,
+                                    Op.Opcode != NdOp::STORE)))) {
         // Alignment leaves the distance between the two frames unknown.
         // Reject accesses that could cross into the other coordinate space.
         Invalidate();
@@ -165,7 +169,8 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       const auto Address = Transfer.read(*Memory.Address);
       if (!Memory.Complete)
         CompleteImageReads = false;
-      else if (Address.Offset || Address.EntryOffset || RuntimeMemory) {
+      else if (Address.Offset || Address.EntryOffset ||
+               Address.CallbackAddress || RuntimeMemory) {
         // The established private frame cannot alias an image allocation.
       } else if (Address.Constant && !Address.MayBeFrame)
         ImageReads.emplace(*Address.Constant,
@@ -180,7 +185,8 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       const uint16_t Width =
           Op.Opcode == NdOp::LOAD ? Op.Output.Size : Memory.StoredValue->Size;
       std::optional<RegistrationIncomingFrameAccess> Access;
-      if (Address.MayBeFrame && !Address.Offset && !Address.EntryOffset)
+      if (Address.MayBeFrame && !Address.Offset && !Address.EntryOffset &&
+          !Address.CallbackAddress)
         ConsistentIncomingAccesses = false;
       const auto IncomingOffset =
           Chain.RealignedFrame ? Address.EntryOffset : Address.Offset;
@@ -237,7 +243,7 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
         if (Address.Constant == uint32_t{0} && Width == 4 && AtEnd &&
             Op.Addr == Chain.ChainInstallVA &&
             Stored.Offset == Chain.RegistrationOffset && After.Uninstalled &&
-            !After.Installed && realignedInstallationReady(After.Frame)) {
+            !After.Installed && registrationInstallationReady(After.Frame)) {
           After.Levels = {*Chain.SeededTryLevel};
           After.Unknown = false;
           After.Uninstalled = false;
@@ -260,15 +266,16 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
           After.Installed = After.Uninstalled = true;
         }
       } else if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-        if (Chain.RealignedFrame && !After.Installed && After.Uninstalled &&
-            Address.Offset == Chain.TryLevelOffset && Width == 4 &&
-            Stored.Constant == uint32_t(*Chain.SeededTryLevel)) {
+        if (Chain.hasCxxCallbackStack() && !After.Installed &&
+            After.Uninstalled && Address.Offset == Chain.TryLevelOffset &&
+            Width == 4 && Stored.Constant == uint32_t(*Chain.SeededTryLevel)) {
           const auto Observation = Stores.find(Op.Addr);
           if (Observation != Stores.end() && Observation->second.Width == 4 &&
               Observation->second.Level == *Chain.SeededTryLevel)
             ProvenStores.insert(Op.Addr);
         }
         if (After.Installed && Address.MayBeFrame && !Address.EntryOffset &&
+            !Address.CallbackAddress &&
             (!Address.Offset ||
              overlaps(*Address.Offset, Width, *Chain.TryLevelOffset, 4))) {
           auto Observation = Stores.find(Op.Addr);
@@ -312,14 +319,20 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
                 *Address.Offset, Width, *Chain.RegistrationOffset,
                 uint16_t(*Chain.TryLevelOffset - *Chain.RegistrationOffset)))
           Invalidate();
+        if (Stored.CallbackAddress && !Address.CallbackAddress &&
+            (Address.Offset != int64_t(*Chain.RegistrationOffset) - 4 ||
+             Width != 4))
+          Invalidate();
+        if (After.Installed && Chain.RealignedFrame && Address.Offset &&
+            overlaps(*Address.Offset, Width,
+                     Chain.RealignedFrame->SavedParentFrameOffset, 4))
+          Invalidate();
         if (Address.Offset) {
           if (!charge(After.Frame.cellCount() + 1))
             break;
           After.Frame.store(*Address.Offset, Width, Stored);
           if (CheckCalls) {
-            const auto SP =
-                After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
-                    .Offset;
+            const auto SP = parentStackOffset(After);
             const int64_t End = int64_t(*Address.Offset) + Width;
             if (SP && *Address.Offset >= *SP && End <= 0) {
               if (!charge(Width))
@@ -332,6 +345,14 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
               ProvenStores.count(Op.Addr) && After.Levels.size() == 1)
             After.Frame.Cells[*Chain.TryLevelOffset] =
                 FrameValue::constant(uint32_t(*After.Levels.begin()));
+        } else if (Address.CallbackAddress) {
+          if (!After.Frame.callbackMemoryIsPrivate(*Address.CallbackAddress,
+                                                   Width) ||
+              !charge(After.Frame.cellCount() + Width + 1))
+            Invalidate();
+          else
+            After.Frame.storeCallback(Address.CallbackAddress->Offset, Width,
+                                      Stored);
         } else if (Address.EntryOffset) {
           // Only the checked entry's saved-register area is disjoint from
           // the newly allocated frame. Do not guess aliases below it.
@@ -347,7 +368,8 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
           Invalidate();
         }
         if (CheckCalls && !RuntimeMemory && !Address.Offset &&
-            !Address.EntryOffset && !Address.Constant) {
+            !Address.EntryOffset && !Address.CallbackAddress &&
+            !Address.Constant) {
           After.InitializedFrameBytes.clear();
           if (!charge(After.Frame.cellCount()))
             break;
@@ -355,9 +377,9 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
         }
       }
     }
-    std::optional<int32_t> CallSP;
+    std::optional<FrameValue> CallSP;
     if (auto Call = transferCall(I, After, Op)) {
-      CallSP = Call->StackOffset;
+      CallSP = Call->StackPointer;
       NoReturnAtExit = Call->DoesNotReturn;
       if (NoReturnAtExit)
         NoReturnEnd = Call->EndAddress;
@@ -378,14 +400,19 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
         After.RuntimeObject.OtherRegistersMayBeFrame = false;
       }
     }
+    if (Op.Output.isReg() && Op.Output.Offset == x86reg::RSP &&
+        After.Frame.CallbackEntry) {
+      if (!charge(After.Frame.CallbackCells.size() +
+                  After.Frame.InitializedCallbackBytes.size()))
+        break;
+      After.Frame.trimCallbackCells();
+    }
     if (CallSP)
-      After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
-          FrameValue::frame(*CallSP);
+      After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
     if (CheckCalls && Op.Output.isReg() &&
         Op.Output.Offset / x86reg::GeneralRegStride ==
             x86reg::RSP / x86reg::GeneralRegStride) {
-      const auto SP =
-          After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
+      const auto SP = parentStackOffset(After);
       if (!SP)
         After.InitializedFrameBytes.clear();
       else {
@@ -440,8 +467,17 @@ bool RegistrationStateSolver::transferBlock(size_t I) {
       Continued.Frame.store(SavedSlot, 4,
                             FrameValue::frame(CatchReturn->SavedStackOffset));
       Continued.RuntimeObject.store(SavedSlot, 4, {});
+      if (Chain.hasCxxCallbackStack()) {
+        Continued.Frame.leaveCallback();
+        // The CRT's call frame does not promise the callback's general
+        // registers at its continuation. The restore block rebuilds them.
+        for (auto &Register : Continued.Frame.Registers)
+          Register = {{}, {}, false, true};
+        Continued.Frame.OtherRegisterBytes.clear();
+        Continued.Frame.OtherRegistersMayBeFrame = true;
+      }
       Continued.Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
-          FrameValue::frame(0);
+          FrameValue::frame(*Chain.cxxRuntimeFrameOffset());
       Continued.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
           FrameValue::frame(CatchReturn->SavedStackOffset);
       merge(Resume->second, Continued);

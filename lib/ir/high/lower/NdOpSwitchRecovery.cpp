@@ -92,7 +92,7 @@ bool MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
   bool PeelOK = false;
   uint16_t SelectorSize = 0;
 
-  auto PlanIt = Med.SwitchSelectorPlans.find(JT.InsnAddr);
+  auto PlanIt = Med.SwitchSelectorPlans.find({JT.InsnAddr, CurBlock.Id});
   if (PlanIt != Med.SwitchSelectorPlans.end() &&
       PlanIt->second.PlanKind == MedSwitchSelectorPlan::Kind::Direct &&
       PlanIt->second.Selector.Size != 0 &&

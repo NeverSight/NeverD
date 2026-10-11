@@ -5,6 +5,9 @@
 //===----------------------------------------------------------------------===//
 #include "DarwinSystemTestData.h"
 #include "gtest/gtest.h"
+#include "os/darwin/kernel/DarwinEntropy.h"
+#include "os/darwin/kernel/DarwinFiles.h"
+#include "os/darwin/kernel/DarwinMemory.h"
 #include "os/darwin/kernel/DarwinSystem.h"
 
 #include "neverd/emulation/AddressSpace.h"
@@ -407,6 +410,181 @@ public:
     return Memory.write(A, B);
   }
 };
+struct MachSelfQuery {
+  ServiceKind Kind;
+  std::optional<uint32_t> DarwinSystemOptions::*Member;
+  uint32_t Number;
+  const char *Missing;
+};
+constexpr MachSelfQuery MachSelfQueries[] = {
+    {ServiceKind::ThreadSelfPort, &DarwinSystemOptions::ThreadSelfPort, 27,
+     diagnostic::ThreadSelfPortObservation},
+    {ServiceKind::TaskSelfPort, &DarwinSystemOptions::TaskSelfPort, 28,
+     diagnostic::TaskSelfPortObservation},
+    {ServiceKind::HostSelfPort, &DarwinSystemOptions::HostSelfPort, 29,
+     diagnostic::HostSelfPortObservation}};
+struct MachPortSample {
+  uint32_t Name;
+  uint64_t Carrier;
+};
+// Independent full-width expectations for the signed kernel result carrier.
+constexpr MachPortSample MachPortSamples[] = {
+    {0, 0},
+    {1, 1},
+    {0x7fffffff, 0x7fffffff},
+    {0x80000000, 0xffffffff80000000ULL},
+    {0x80000001, 0xffffffff80000001ULL},
+    {UINT32_MAX, UINT64_MAX}};
+
+TEST_P(DarwinSystemTest, MachSelfPortsAreIndependentAndMemoryFree) {
+  FailingSystemMemory Memory(*Space);
+  Memory.FailAccess = Memory.FailRead = Memory.FailWrite = 1;
+  const auto Before = bytes(Base, Page * 2);
+  const std::array<uint64_t, 6> Arguments = {
+      UINT64_MAX, 0x8000000000000000ULL, Output,
+      Length,     value::UserLimit,      0x123456789abcdef0ULL};
+  for (const auto &Q : MachSelfQueries) {
+    SCOPED_TRACE(Q.Number);
+    for (unsigned State = 0; State != 3; ++State) {
+      Options.reset();
+      if (State)
+        Options.emplace();
+      if (State == 2) {
+        *Options = darwin_test::machSelfPortOptions();
+        Options->ThreadID = UINT64_MAX;
+        Options->ProcessGroupID = 7;
+        Options->SessionID = 11;
+        ((*Options).*Q.Member).reset();
+      }
+      auto R = systemService(Memory, Page, Q.Kind,
+                             {0, Q.Number, Arguments, std::nullopt}, Options,
+                             Result);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      EXPECT_FALSE(*R);
+      EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_EQ(Result.Diagnostic, Q.Missing);
+    }
+    for (const auto &S : MachPortSamples) {
+      SCOPED_TRACE(S.Name);
+      Options.emplace();
+      ((*Options).*Q.Member) = S.Name;
+      EXPECT_FALSE(bool(validateSystemOptions(*Options)));
+      for (unsigned Repeat = 0; Repeat != 3; ++Repeat) {
+        auto R = systemService(Memory, Page, Q.Kind,
+                               {0, Q.Number, Arguments, std::nullopt}, Options,
+                               Result);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        ASSERT_TRUE(*R);
+        EXPECT_EQ((**R).Value, S.Carrier);
+        EXPECT_FALSE((**R).Error);
+        EXPECT_EQ((*Options).*Q.Member, S.Name);
+      }
+      std::optional<DarwinSystemOptions> Other;
+      Other.emplace();
+      ((*Other).*Q.Member) = 1;
+      auto R =
+          systemService(Memory, Page, Q.Kind,
+                        {0, Q.Number, Arguments, std::nullopt}, Other, Result);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      ASSERT_TRUE(*R);
+      EXPECT_EQ((**R).Value, 1u);
+      EXPECT_EQ((*Options).*Q.Member, S.Name);
+    }
+  }
+  EXPECT_EQ(Memory.Accesses, 0u);
+  EXPECT_EQ(Memory.Reads, 0u);
+  EXPECT_EQ(Memory.Writes, 0u);
+  EXPECT_EQ(bytes(Base, Page * 2), Before);
+}
+
+TEST_P(DarwinSystemTest, MachPortAdmissionKeepsLegacyProcessBounds) {
+  DarwinSystemOptions O;
+  for (const auto &S : MachPortSamples) {
+    O.ThreadSelfPort = O.TaskSelfPort = O.HostSelfPort = S.Name;
+    O.ThreadID = UINT64_MAX;
+    O.ProcessTainted = false;
+    EXPECT_FALSE(bool(validateSystemOptions(O)));
+  }
+  for (auto Member : {&DarwinSystemOptions::ProcessGroupID,
+                      &DarwinSystemOptions::SessionID}) {
+    for (uint32_t Bad : {0u, 0x80000000u, UINT32_MAX}) {
+      O.*Member = Bad;
+      auto E = validateSystemOptions(O);
+      ASSERT_TRUE(bool(E));
+      EXPECT_EQ(llvm::toString(std::move(E)),
+                diagnostic::ProcessIdentityOption);
+    }
+    O.*Member = INT32_MAX;
+    EXPECT_FALSE(bool(validateSystemOptions(O)));
+    (O.*Member).reset();
+  }
+  for (int32_t Bad : {-21, 21}) {
+    O.ProcessNice = Bad;
+    auto E = validateSystemOptions(O);
+    ASSERT_TRUE(bool(E));
+    EXPECT_EQ(llvm::toString(std::move(E)), diagnostic::ProcessNiceOption);
+  }
+  O.ProcessNice = -20;
+  for (unsigned Bad : {254, 256}) {
+    O.LoginNameBytes.emplace(Bad, 0);
+    auto E = validateSystemOptions(O);
+    ASSERT_TRUE(bool(E));
+    EXPECT_EQ(llvm::toString(std::move(E)), diagnostic::LoginNameOption);
+  }
+  O.LoginNameBytes.emplace(255, 0);
+  EXPECT_FALSE(bool(validateSystemOptions(O)));
+}
+
+TEST_P(DarwinSystemTest,
+       ThreadIdentityIsExplicitFullWidthAndMemoryIndependent) {
+  FailingSystemMemory Memory(*Space);
+  Memory.FailAccess = Memory.FailRead = Memory.FailWrite = 1;
+  const auto Before = bytes(Base, Page * 2);
+  const std::array<uint64_t, 6> Arguments = {
+      UINT64_MAX, uint64_t(1) << 63, Output,
+      Length,     value::UserLimit,  0x123456789abcdef0ULL};
+  for (bool Present : {false, true}) {
+    Options.reset();
+    if (Present)
+      Options.emplace();
+    auto R = systemService(Memory, Page, ServiceKind::ThreadSelfID,
+                           {0, 372, Arguments, std::nullopt}, Options, Result);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_FALSE(*R);
+    EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(Result.Diagnostic, diagnostic::ThreadIDObservation);
+  }
+  for (uint64_t ID : {0ULL, 1ULL, 0x100000001ULL, 0x8000000000000000ULL,
+                      0xfedcba9876543210ULL, 0xffffffffffffffffULL}) {
+    SCOPED_TRACE(ID);
+    Options->ThreadID = ID;
+    EXPECT_FALSE(bool(validateSystemOptions(*Options)));
+    for (unsigned Repeat = 0; Repeat != 3; ++Repeat) {
+      auto R =
+          systemService(Memory, Page, ServiceKind::ThreadSelfID,
+                        {0, 372, Arguments, std::nullopt}, Options, Result);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      ASSERT_TRUE(*R);
+      EXPECT_EQ((**R).Value, ID);
+      EXPECT_FALSE((**R).Error);
+      EXPECT_EQ((**R).Convention, ServiceConvention::BSD);
+      EXPECT_EQ(Options->ThreadID, ID);
+    }
+    std::optional<DarwinSystemOptions> Other =
+        darwin_test::threadIdentityOptions();
+    auto R = systemService(Memory, Page, ServiceKind::ThreadSelfID,
+                           {0, 372, Arguments, std::nullopt}, Other, Result);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_TRUE(*R);
+    EXPECT_EQ((**R).Value, 0xfedcba9876543210ULL);
+    EXPECT_EQ(Options->ThreadID, ID);
+  }
+  EXPECT_EQ(Memory.Accesses, 0u);
+  EXPECT_EQ(Memory.Reads, 0u);
+  EXPECT_EQ(Memory.Writes, 0u);
+  EXPECT_EQ(bytes(Base, Page * 2), Before);
+}
+
 TEST_P(DarwinSystemTest,
        TransportFailuresKeepCompletedCopiesAndDoNotBecomeErrno) {
   for (unsigned Phase = 0; Phase != 3; ++Phase) {
@@ -1830,6 +2008,46 @@ TEST_P(DarwinSystemTest, GroupsPreserveDuplicatesAndOnlyCopyActualCount) {
   EXPECT_EQ(*Options->Credentials->GroupAccessList,
             (std::vector<uint32_t>{404, 0, INT32_MAX, 7, 7}));
 }
+TEST_P(DarwinSystemTest,
+       MembershipUIDKeepsScalarAndGroupObservationsIndependent) {
+  const std::optional<uint32_t> MembershipUIDs[] = {
+      std::nullopt, 0u, uint32_t(INT32_MAX), 4294967195u};
+  for (auto MembershipUID : MembershipUIDs) {
+    Options = darwin_test::credentialOptions();
+    Options->Credentials->GroupMembershipUID = MembershipUID;
+    Options->ProcessTainted = false;
+    ASSERT_FALSE(bool(validateSystemOptions(*Options)));
+    const ServiceKind Kinds[] = {ServiceKind::GetUID, ServiceKind::GetEUID,
+                                 ServiceKind::GetGID, ServiceKind::GetEGID};
+    const uint32_t IDs[] = {101, 202, 303, 404};
+    for (unsigned I = 0; I != 4; ++I) {
+      FailingSystemMemory Memory(*Space);
+      Memory.FailAccess = Memory.FailRead = Memory.FailWrite = 1;
+      auto Out = systemService(Memory, Page, Kinds[I],
+                               {0, 0, {UINT64_MAX, UINT64_MAX}, std::nullopt},
+                               Options, Result);
+      ASSERT_TRUE(bool(Out)) << llvm::toString(Out.takeError());
+      ASSERT_TRUE(*Out);
+      EXPECT_EQ((**Out).Value, IDs[I]);
+      EXPECT_FALSE((**Out).Error);
+      EXPECT_EQ(Memory.Accesses, 0u);
+      EXPECT_EQ(Memory.Reads, 0u);
+      EXPECT_EQ(Memory.Writes, 0u);
+    }
+    fill();
+    auto Out = invoke(ServiceKind::GetGroups, {16, Output + 1});
+    ASSERT_TRUE(Out);
+    EXPECT_EQ(Out->Value, 5u);
+    EXPECT_FALSE(Out->Error);
+    std::string Expected(Page * 2, '\xa5');
+    Expected.replace(Output + 1 - Base, 20,
+                     llvm::fromHex("9401000000000000ffffff7f0700000007000000"));
+    EXPECT_EQ(bytes(Base, Page * 2), Expected);
+    EXPECT_EQ(Options->Credentials->GroupMembershipUID, MembershipUID);
+    EXPECT_EQ(*Options->Credentials->GroupAccessList,
+              (std::vector<uint32_t>{404, 0, INT32_MAX, 7, 7}));
+  }
+}
 TEST_P(DarwinSystemTest, GroupsMaximumAndExplicitRootAreNotDefaulted) {
   for (bool Maximum : {false, true}) {
     Options = DarwinSystemOptions{};
@@ -2055,6 +2273,269 @@ TEST(DarwinSystemOptions, CredentialsRequireBoundedCoherentGroups) {
   EXPECT_FALSE(bool(validateSystemOptions(O)));
   O.Credentials.reset();
   EXPECT_FALSE(bool(validateSystemOptions(O)));
+}
+TEST(DarwinSystemOptions, MembershipUIDAdmitsOnlyBoundedIDsOrExactNone) {
+  auto O = darwin_test::credentialOptions();
+  for (auto ID : {0u, uint32_t(INT32_MAX), 4294967195u}) {
+    O.Credentials->GroupMembershipUID = ID;
+    EXPECT_FALSE(bool(validateSystemOptions(O)));
+    auto NoGroups = O;
+    NoGroups.Credentials->GroupAccessList.reset();
+    EXPECT_FALSE(bool(validateSystemOptions(NoGroups)));
+  }
+  for (auto ID : {0x80000000u, 4294967194u, 4294967196u, UINT32_MAX}) {
+    O.Credentials->GroupMembershipUID = ID;
+    EXPECT_EQ(llvm::toString(validateSystemOptions(O)),
+              diagnostic::GroupMembershipUIDOption);
+  }
+  O.Credentials->GroupMembershipUID = 4294967195u;
+  for (auto Member :
+       {&DarwinCredentials::RealUID, &DarwinCredentials::EffectiveUID,
+        &DarwinCredentials::RealGID, &DarwinCredentials::EffectiveGID}) {
+    auto Bad = O;
+    (*Bad.Credentials).*Member = 4294967195u;
+    EXPECT_EQ(llvm::toString(validateSystemOptions(Bad)),
+              diagnostic::CredentialOption);
+  }
+  O.Credentials->GroupAccessList->push_back(4294967195u);
+  EXPECT_EQ(llvm::toString(validateSystemOptions(O)),
+            diagnostic::CredentialOption);
+}
+
+class SystemQueryCPU final : public ExecutionBackend {
+  std::shared_ptr<AddressSpace> Space;
+  GuestArchitecture ISA;
+
+public:
+  std::map<CPURegister, RegisterValue> Registers;
+  mutable unsigned Accesses = 0;
+  unsigned Reads = 0, Writes = 0;
+
+  SystemQueryCPU(std::shared_ptr<AddressSpace> Space, GuestArchitecture ISA)
+      : Space(std::move(Space)), ISA(ISA) {}
+  GuestArchitecture architecture() const override { return ISA; }
+  std::shared_ptr<AddressSpace> addressSpace() const override { return Space; }
+  llvm::Error bindAddressSpace(std::shared_ptr<AddressSpace>) override {
+    return failure("unexpected bind");
+  }
+  llvm::Expected<RegisterValue> readRegister(CPURegister R) override {
+    return Registers[R];
+  }
+  llvm::Error writeRegister(CPURegister R,
+                            const RegisterValue &Value) override {
+    Registers[R] = Value;
+    return llvm::Error::success();
+  }
+  llvm::Error map(uint64_t A, uint64_t N, unsigned P) override {
+    return Space->map(A, N, P);
+  }
+  llvm::Error protect(uint64_t A, uint64_t N, unsigned P) override {
+    return Space->protect(A, N, P);
+  }
+  llvm::Expected<bool> canAccess(uint64_t A, uint64_t N,
+                                 unsigned P) const override {
+    ++Accesses;
+    return Space->canAccess(A, N, P);
+  }
+  llvm::Error read(uint64_t A, llvm::MutableArrayRef<uint8_t> B) override {
+    ++Reads;
+    return Space->read(A, B);
+  }
+  llvm::Error write(uint64_t A, llvm::ArrayRef<uint8_t> B) override {
+    ++Writes;
+    return Space->write(A, B);
+  }
+  llvm::Error fetch(uint64_t, llvm::MutableArrayRef<uint8_t>) override {
+    return failure("unexpected fetch");
+  }
+  llvm::Expected<std::unique_ptr<BackendContext>> saveContext() override {
+    return failure("unexpected save");
+  }
+  llvm::Error saveContext(BackendContext &) override {
+    return failure("unexpected save");
+  }
+  llvm::Error restoreContext(const BackendContext &) override {
+    return failure("unexpected restore");
+  }
+  llvm::Error installHooks(BackendHooks) override {
+    return failure("unexpected hooks");
+  }
+  bool timedOut() const override { return false; }
+  void stop() override {}
+  bool hasMemoryFault() const override { return false; }
+  bool hasDeviceError() const override { return false; }
+  std::optional<BackendFault> fault() const override { return std::nullopt; }
+  std::optional<BackendFault> takeRecoverableFault() override {
+    return std::nullopt;
+  }
+  bool executable(uint64_t) const override { return false; }
+};
+
+TEST_P(DarwinSystemTest, ThreadIdentityTraversesRawBindingAndBothReturnABIs) {
+  using enum CPURegister;
+  const auto Before = bytes(Base, Page * 2);
+  for (auto ISA : {GuestArchitecture::X64, GuestArchitecture::AArch64}) {
+    const bool X64 = ISA == GuestArchitecture::X64;
+    ProcessOptions O;
+    O.DarwinSystem.emplace();
+    SystemQueryCPU CPU(Space, ISA);
+    DarwinMemory Memory(*Space, {Page, value::MinimumAddress, {}}, O);
+    DarwinFiles Files(CPU, O.DarwinFiles);
+    DarwinEntropy Entropy(O.DarwinSystem);
+    const ServiceRequest Request{X64 ? ServiceRequestKind::X64Syscall
+                                     : ServiceRequestKind::AArch64SVC,
+                                 0x200000, 0x200004, uint16_t(X64 ? 0 : 0x80)};
+    for (uint64_t ID :
+         {0ULL, 0x100000001ULL, 0x8000000000000000ULL, 0xffffffffffffffffULL}) {
+      O.DarwinSystem->ThreadID = ID;
+      for (uint64_t Prefix :
+           {0ULL, 0x1234567800000000ULL, 0xffffffff00000000ULL}) {
+        const uint64_t Number = Prefix | (X64 ? 0x2000174 : 372);
+        CPU.Registers[X64 ? X64AX : AArch64X16] = {Number, 0};
+        CPU.Registers[X64 ? X64DI : AArch64X0] = {UINT64_MAX, 0};
+        CPU.Registers[X64 ? X64SI : AArch64X1] = {0x8000000000000000ULL, 0};
+        CPU.Registers[X64 ? X64DX : AArch64X2] = {0x123456789abcdef0ULL, 0};
+        CPU.Registers[X64 ? X64FLAGS : AArch64NZCV] = {
+            X64 ? 0x41ULL : 0xf0000000ULL, 0};
+        auto Event = readService(CPU, Request);
+        ASSERT_TRUE(bool(Event)) << llvm::toString(Event.takeError());
+        EXPECT_EQ(Event->Number, Number);
+        EXPECT_EQ(Event->Arguments[0], UINT64_MAX);
+        EXPECT_EQ(Event->Arguments[1], 0x8000000000000000ULL);
+        EXPECT_EQ(Event->Arguments[2], 0x123456789abcdef0ULL);
+        EXPECT_FALSE(Event->ThreadID);
+        auto R = handleService(CPU, Memory, Files, Entropy, *Event, O, Result);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        ASSERT_TRUE(*R);
+        EXPECT_EQ((**R).Value, ID);
+        EXPECT_FALSE((**R).Error);
+        EXPECT_EQ((**R).Convention, ServiceConvention::BSD);
+        ASSERT_FALSE(bool(returnService(CPU, Request, **R)));
+        EXPECT_EQ(CPU.Registers[X64 ? X64AX : AArch64X0][0], ID);
+        EXPECT_EQ(CPU.Registers[X64 ? X64DX : AArch64X1][0], 0u);
+        EXPECT_EQ(CPU.Registers[X64 ? X64FLAGS : AArch64NZCV][0],
+                  X64 ? 0x40ULL : 0xd0000000ULL);
+        EXPECT_EQ(CPU.Registers[X64 ? X64PC : AArch64PC][0], Request.NextPC);
+        EXPECT_FALSE(Event->ThreadID);
+        EXPECT_EQ(Event->Number, Number);
+        Event->Number = X64 ? 0x1234567801000174ULL
+                            : 0x1234567800000000ULL | uint32_t(-372);
+        auto Mach =
+            handleService(CPU, Memory, Files, Entropy, *Event, O, Result);
+        ASSERT_TRUE(bool(Mach)) << llvm::toString(Mach.takeError());
+        EXPECT_FALSE(*Mach);
+        EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+        EXPECT_EQ(O.DarwinSystem->ThreadID, ID);
+      }
+    }
+  }
+  EXPECT_EQ(bytes(Base, Page * 2), Before);
+}
+
+TEST_P(DarwinSystemTest, MachSelfPortsTraverseRawBindingAndPreserveCarriers) {
+  using enum CPURegister;
+  const auto Before = bytes(Base, Page * 2);
+  const std::array<uint64_t, 6> Arguments = {UINT64_MAX,
+                                             0x1122334455667788ULL,
+                                             0x8877665544332211ULL,
+                                             0x8000000000000000ULL,
+                                             0xfedcba9876543210ULL,
+                                             0x123456789abcdef0ULL};
+  const std::array<CPURegister, 6> X64Arguments = {X64DI,  X64SI, X64DX,
+                                                   X64R10, X64R8, X64R9};
+  const std::array<CPURegister, 6> ARMArguments = {
+      AArch64X0, AArch64X1, AArch64X2, AArch64X3, AArch64X4, AArch64X5};
+  for (auto ISA : {GuestArchitecture::X64, GuestArchitecture::AArch64}) {
+    const bool X64 = ISA == GuestArchitecture::X64;
+    ProcessOptions O;
+    O.DarwinSystem = darwin_test::machSelfPortOptions();
+    SystemQueryCPU CPU(Space, ISA);
+    DarwinMemory Memory(*Space, {Page, value::MinimumAddress, {}}, O);
+    DarwinFiles Files(CPU, O.DarwinFiles);
+    DarwinEntropy Entropy(O.DarwinSystem);
+    const ServiceRequest Request{X64 ? ServiceRequestKind::X64Syscall
+                                     : ServiceRequestKind::AArch64SVC,
+                                 0x200000, 0x200004, uint16_t(X64 ? 0 : 0x80)};
+    const auto &ArgumentRegisters = X64 ? X64Arguments : ARMArguments;
+    const auto NumberRegister = X64 ? X64AX : AArch64X16;
+    const auto FlagRegister = X64 ? X64FLAGS : AArch64NZCV;
+    const auto PCRegister = X64 ? X64PC : AArch64PC;
+    for (const auto &Q : MachSelfQueries) {
+      for (const auto &S : MachPortSamples) {
+        ((*O.DarwinSystem).*Q.Member) = S.Name;
+        for (uint64_t Prefix :
+             {0ULL, 0x1234567800000000ULL, 0xffffffff00000000ULL}) {
+          const uint64_t Number =
+              Prefix | (X64 ? 0x1000000 | Q.Number : 0u - Q.Number);
+          for (unsigned F = 0; F != (X64 ? 4u : 16u); ++F) {
+            const uint64_t Flags =
+                X64 ? (0x882 | (F & 1) | ((F & 2) << 5)) : uint64_t(F) << 28;
+            CPU.Registers.clear();
+            CPU.Registers[NumberRegister] = {Number, 0};
+            CPU.Registers[FlagRegister] = {Flags, 0};
+            CPU.Registers[PCRegister] = {Request.PC, 0};
+            for (unsigned I = 0; I != 6; ++I)
+              CPU.Registers[ArgumentRegisters[I]] = {Arguments[I], 0};
+            if (X64) {
+              CPU.Registers[X64CX] = {0xabc, 0};
+              CPU.Registers[X64R11] = {0xdef, 0};
+            } else {
+              CPU.Registers[AArch64X6] = {0xabc, 0};
+              CPU.Registers[AArch64X17] = {0xdef, 0};
+            }
+            auto ExpectedRegisters = CPU.Registers;
+            auto Event = readService(CPU, Request);
+            ASSERT_TRUE(bool(Event)) << llvm::toString(Event.takeError());
+            EXPECT_EQ(Event->Number, Number);
+            EXPECT_EQ(Event->Arguments, Arguments);
+            EXPECT_FALSE(Event->ThreadID);
+            auto R =
+                handleService(CPU, Memory, Files, Entropy, *Event, O, Result);
+            ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+            ASSERT_TRUE(*R);
+            EXPECT_EQ((**R).Value, S.Carrier);
+            EXPECT_FALSE((**R).Error);
+            EXPECT_EQ((**R).Convention, ServiceConvention::Mach);
+            ASSERT_FALSE(bool(returnService(CPU, Request, **R)));
+            ExpectedRegisters[X64 ? X64AX : AArch64X0] = {S.Carrier, 0};
+            ExpectedRegisters[PCRegister] = {Request.NextPC, 0};
+            if (X64) {
+              ExpectedRegisters[X64CX] = {Request.NextPC, 0};
+              ExpectedRegisters[X64R11] = {Flags, 0};
+            }
+            EXPECT_EQ(CPU.Registers, ExpectedRegisters);
+            EXPECT_EQ(Event->Number, Number);
+            EXPECT_EQ(Event->Arguments, Arguments);
+            EXPECT_FALSE(Event->ThreadID);
+            EXPECT_EQ((*O.DarwinSystem).*Q.Member, S.Name);
+          }
+        }
+      }
+      // Missing selected observations and other syscall classes cannot return.
+      ((*O.DarwinSystem).*Q.Member).reset();
+      O.DarwinSystem->ThreadID = UINT64_MAX;
+      const auto Registers = CPU.Registers;
+      for (uint64_t Number :
+           {uint64_t(X64 ? 0x1000000 | Q.Number : 0u - Q.Number),
+            uint64_t(X64 ? 0x2000000 | Q.Number : Q.Number),
+            uint64_t(X64 ? 0x100001a : 0u - 26),
+            uint64_t(X64 ? 0x100001f : 0u - 31)}) {
+        const ProcessServiceEvent Event{Request.PC, Number, Arguments,
+                                        std::nullopt};
+        auto R = handleService(CPU, Memory, Files, Entropy, Event, O, Result);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        EXPECT_FALSE(*R);
+        EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+        EXPECT_EQ(CPU.Registers, Registers);
+        EXPECT_FALSE(Event.ThreadID);
+      }
+      ((*O.DarwinSystem).*Q.Member) = 1;
+    }
+    EXPECT_EQ(CPU.Accesses, 0u);
+    EXPECT_EQ(CPU.Reads, 0u);
+    EXPECT_EQ(CPU.Writes, 0u);
+  }
+  EXPECT_EQ(bytes(Base, Page * 2), Before);
 }
 
 INSTANTIATE_TEST_SUITE_P(OSPages, DarwinSystemTest,

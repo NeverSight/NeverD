@@ -94,6 +94,8 @@ const char *runDriver(neverd_session_t Sess, const char *Path,
       }
       EngineOptions = std::move(*Scenario);
     }
+    if (!Path && !S->requireFileBacked())
+      return nullptr;
     const auto Input = Path ? std::filesystem::path(Path) : S->FilePath;
     auto Result = emulation::emulateDriver(Input, EngineOptions);
     if (!Result) {

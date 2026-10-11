@@ -3040,6 +3040,16 @@ def validate_emulation_overview(errors: list[str], view: RepositoryView) -> None
                 report(errors, f"{overview}: missing local emulation guide link")
 
 
+def emulation_document_tokens(inventory: str) -> dict[str, list[str]]:
+    tokens: dict[str, list[str]] = defaultdict(list)
+    for group, literals in re.findall(
+        r'NEVERD_EMULATION_DOC_TOKEN\(\s*(\w+),\s*((?:"[^"\\]+"\s*)+)\)',
+        inventory,
+    ):
+        tokens[group].append("".join(re.findall(r'"([^"]*)"', literals)))
+    return tokens
+
+
 def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     for path in MARKDOWN_DOCS:
         if not view.exists(path):
@@ -3053,11 +3063,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     # Execution contracts and document paths stay in the .def inventory, so
     # every locale is checked against one set of semantic entry points.
     inventory = view.read_text(EMULATION_DOC_INVENTORY)
-    doc_tokens: dict[str, list[str]] = defaultdict(list)
-    for group, token in re.findall(
-        r'NEVERD_EMULATION_DOC_TOKEN\(\s*(\w+),\s*"([^\"]+)"\s*\)', inventory
-    ):
-        doc_tokens[group].append(token)
+    doc_tokens = emulation_document_tokens(inventory)
     for group, pattern in re.findall(
         r'NEVERD_EMULATION_DOC_PATH\(\s*(\w+),\s*"([^\"]+)"\s*\)', inventory
     ):

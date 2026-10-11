@@ -53,6 +53,8 @@ inline constexpr llvm::StringLiteral
     RegistrationFrameAttachment("neverd.windows.registration.frame");
 inline constexpr llvm::StringLiteral
     RegistrationRootAttachment("neverd.windows.registration.root");
+inline constexpr llvm::StringLiteral
+    RegistrationCatchStackAttachment("neverd.windows.registration.catch-stack");
 inline constexpr llvm::StringLiteral RegistrationCallerFrameAttachment(
     "neverd.windows.registration.caller-frame");
 inline constexpr llvm::StringLiteral RegistrationIncomingFrameAttachment(

@@ -484,7 +484,9 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     if (!Seen.insert(&E).second)
       return;
     if (HideEHRuntimeMemory &&
-        E.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
+        E.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
+        !(E.Kind == ExprKind::Call &&
+          isX86FPStateMemoryIntrinsic(E.IntrinsicId)))
       return;
     CollectWideType(E.Type);
     CollectWideType(E.CastTo);
@@ -592,7 +594,8 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
       CollectWideType(Param.Type);
     for (const HighLocal &Local : Func.Locals)
       CollectWideType(Local.Type);
-    HideEHRuntimeMemory = Func.ExceptionMetadata.has_value();
+    HideEHRuntimeMemory = Func.ExceptionMetadata.has_value() &&
+                          !preservesRegistrationMemory(Func);
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
       if (Stmt.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         if (HideEHRuntimeMemory &&
@@ -799,7 +802,8 @@ std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
   // MSVC's FS/GS read intrinsics are a useful source-level spelling for
   // Windows targets. Other formats keep the target address-space-qualified
   // helper, so the segment remains explicit in the C memory type.
-  if (useMsvcSegmentedRead(Opts, CurrentFunc)) {
+  if (useMsvcSegmentedRead(Opts, CurrentFunc) &&
+      !(CurrentFunc && preservesRegistrationMemory(*CurrentFunc))) {
     if (std::string Seg = renderX86MsvcSegmentedLoad(
             Opts.TheArch, Ty ? Ty->Size : 0, Addr, Ordering, AddressSpace);
         !Seg.empty())
@@ -1627,6 +1631,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   // own type's, or all of it.  A function whose address the code only takes
   // reads none.
   std::map<std::string, uint16_t> ResultBytes;
+  std::map<std::string, TypeRef> FloatingResults;
   const uint16_t RegisterBytes = pointerBytes(Opts.TheArch);
   for (const HighFunc &F : Funcs)
     walkStmts(F.Body, [&](const HighStmt &S) {
@@ -1635,6 +1640,13 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
         if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None) {
           uint16_t &Bytes = ResultBytes[callIdentifier(E)];
+          if (E.Type && E.Type->Kind == NdTypeKind::Float) {
+            auto [It, Inserted] =
+                FloatingResults.emplace(callIdentifier(E), E.Type);
+            if (!Inserted && It->second->Size != E.Type->Size)
+              throw std::runtime_error(
+                  "HighC external calls disagree on floating return width");
+          }
           if (&E != Top)
             Bytes = std::max<uint16_t>(Bytes,
                                        E.Type ? E.Type->Size : RegisterBytes);
@@ -2070,8 +2082,12 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         const auto Read = ResultBytes.find(Name);
         const bool WholeRegister =
             Read != ResultBytes.end() && Read->second > sizeof(int32_t);
-        OS << "extern " << (WholeRegister ? Register : "int") << " " << Declared
-           << "(";
+        const auto Floating = FloatingResults.find(Name);
+        const std::string Return = Floating != FloatingResults.end()
+                                       ? typeToC(Floating->second)
+                                   : WholeRegister ? Register
+                                                   : "int";
+        OS << "extern " << Return << " " << Declared << "(";
         if (auto Arity = knownArity(Symbol, Name);
             Arity && Arity->FpArgs == 0 && Arity->IntArgs >= 0) {
           // Each argument fills one integer register: an int64_t on a 32-bit
@@ -3030,6 +3046,7 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   writeMemoryHelpers();
   writeX64SyscallHelper();
   writeX64WindowsSyscallHelper();
+  writeRegistrationEntryDeclarations(Funcs);
   writeForwardDecls(Funcs);
   writeImageObjects();
 

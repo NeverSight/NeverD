@@ -325,6 +325,7 @@ ExprPtr MedToHighConverter::inlineableDefinition(VarKey Key) const {
   auto It = DefExpr.find(Key);
   if (It == DefExpr.end() || !It->second ||
       It->second->Kind == ExprKind::Call ||
+      It->second->Kind == ExprKind::EntryRegister ||
       It->second->MemoryOrdering != NdMemoryOrdering::None ||
       It->second->MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return nullptr;
@@ -341,6 +342,9 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
     if (auto Type = sourceABICallResultType(Op.SourceCallHint->Signature);
         Type && Type->Size == Op.Output.Size)
       return Type;
+  if (Op.Output.Kind == MedVar::Reg && Op.Output.Size == 10 &&
+      getTargetRegInfo(TargetArch).isX87StackReg(Op.Output.RegOff))
+    return NdType::makeFloat(10);
   return NdType::makeInt(Op.Output.Size, false);
 }
 
@@ -1195,7 +1199,10 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   // Catch returns enter the parent through edges absent from its ordinary
   // CFG. Publish those edges before control-flow cleanup can discard or move
   // their target statements; the funclet bodies are attached module-wide.
-  const bool EarlyCxxRegions = !Func.CxxContinuationTargets.empty();
+  const bool EarlyCxxRegions =
+      !Func.CxxContinuationTargets.empty() ||
+      (Med.ExceptionMetadata && Med.ExceptionMetadata->Registration &&
+       Med.ExceptionMetadata->Registration->hasCxxCallbackStack());
   Func.ReturnType =
       Med.ReturnType ? Med.ReturnType : NdType::makeInt(inferReturnSize(Med));
   Func.SourceTypeHint = Med.SourceTypeHint;

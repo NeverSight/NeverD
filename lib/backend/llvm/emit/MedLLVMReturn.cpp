@@ -221,6 +221,9 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
 
   llvm::Value *RetVal = nullptr;
+  if (CurMedFunc && CurMedFunc->FPReturnViaX87 &&
+      CurMedFunc->ExplicitX87ReturnValue && Op.NumInputs == 1)
+    RetVal = GetInput(0);
   if (RetTy->isIntegerTy() && !(CurMedFunc && CurMedFunc->FPReturnViaX87) &&
       hasPropagatedIntegerReturnValue(Op, TargetArch,
                                       (RetTy->getIntegerBitWidth() + 7) / 8))
@@ -229,8 +232,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     const auto &TRI = getTargetRegInfo(TargetArch);
     // A vector return type (x86-64 models a scalar FP return as the 128-bit
     // XMM0 vector) is also carried in the FP return register, not RAX.
-    bool WantFloat =
-        RetTy->isFloatTy() || RetTy->isDoubleTy() || RetTy->isVectorTy();
+    bool WantFloat = RetTy->isFloatingPointTy() || RetTy->isVectorTy();
     // i386 cdecl returns scalar FP values through the x87 stack.  The physical
     // register carrying logical st0 depends on TOP at the return site (often
     // ST7 after a final `fld`), so match the newest x87-stack write instead of
@@ -404,8 +406,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // argument straight through) must still walk predecessors for the FP
     // register, not fall back to the integer return register — returning RAX
     // for a `<2 x i64>` function type produces a type-mismatched `ret`.
-    bool WantFloat =
-        RetTy->isFloatTy() || RetTy->isDoubleTy() || RetTy->isVectorTy();
+    bool WantFloat = RetTy->isFloatingPointTy() || RetTy->isVectorTy();
     const bool WantX87 = WantFloat && CurMedFunc->FPReturnViaX87;
     uint64_t RetRegOff = WantFloat ? TRI.fpReturnModelReg() : TRI.IntReturnReg;
     int RetBlkId = -1;

@@ -25,6 +25,7 @@
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86RegistrationFrame.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedMutableSource.h"
 #include "neverd/loader/X86GetPcThunk.h"
@@ -410,6 +411,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           syntheticEntryStackResidue(TargetArch, TargetFormat, Func.EntryKind);
       uint64_t FrameBaseOffset =
           checkedSyntheticStackAdd(AlignedFrameSize, EntryResidue);
+      uint64_t FrameAlignment = 16;
+      if (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF)
+        std::tie(FrameBaseOffset, FrameAlignment) =
+            x86RegistrationFrameStorage(Func, FrameBaseOffset, FrameAlignment);
       FrameEntrySPOffset = FrameBaseOffset;
       // A variadic function reads its overflow (incoming-stack) arguments at
       // entry_sp + base + i*slot, above frame_end.  Reserve headroom there
@@ -447,7 +452,7 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       auto *FrameTy =
           llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), StorageSize);
       FrameAlloca = FrameB.CreateAlloca(FrameTy, nullptr, "frame");
-      FrameAlloca->setAlignment(llvm::Align(16));
+      FrameAlloca->setAlignment(llvm::Align(FrameAlignment));
       auto *FrameEnd = FrameB.CreateInBoundsGEP(
           llvm::Type::getInt8Ty(*Ctx), FrameAlloca,
           llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), FrameBaseOffset),

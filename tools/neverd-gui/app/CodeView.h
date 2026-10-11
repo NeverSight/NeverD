@@ -118,6 +118,7 @@ protected:
   void keyPressEvent(QKeyEvent *event) override;
   void mousePressEvent(QMouseEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;
+  void mouseReleaseEvent(QMouseEvent *event) override;
   void mouseDoubleClickEvent(QMouseEvent *event) override;
   void wheelEvent(QWheelEvent *event) override;
   void contextMenuEvent(QContextMenuEvent *event) override;
@@ -194,6 +195,7 @@ private:
   mutable std::optional<Declarations> declarations_;
   int cursorLine_ = 0, cursorColumn_ = 0;
   std::optional<std::pair<int, int>> anchor_;
+  bool selecting_ = false;
   QVector<int> marked_;
   qreal charWidth_ = 8;
   int lineHeight_ = 16, ascent_ = 12, gutterChars_ = 4;

@@ -927,14 +927,16 @@ class Session:
     ) -> object:
         """Recover the image a packed PE32+ executable builds at run time.
 
-        The input runs as a bounded guest process and is rebuilt at the
+        The input runs in its bounded guest environment and is rebuilt at the
         transfer into generated code that is accepted as its entry. ``output``
         is written when the report's ``outcome`` is ``unpacked`` or the
-        explicitly requested ``snapshot``. ``unsupported_state`` preserves
-        the output path and reports possible unreconstructed heap dependencies;
+        explicitly requested ``snapshot`` or ``restored``. ``unsupported_state``
+        preserves the output path and reports unreconstructed runtime dependencies;
         ``no_entry`` means the run ended first, and ``transfers`` and
         ``execution`` say why. ``options`` is the native JSON request: every
-        process option plus ``transfer`` and ``snapshot_only``. The loaded
+        process option plus ``transfer``, ``snapshot_only`` and ``restore_runtime``.
+        Native-subsystem x64 drivers use common limits/backend and an optional
+        ``driver`` scenario; user-process inputs do not apply. The loaded
         image is neither required nor changed. Setup failures raise NeverDError.
         """
         value = self._owned_string(

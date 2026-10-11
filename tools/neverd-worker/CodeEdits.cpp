@@ -108,6 +108,48 @@ std::vector<Token> tokens(const std::string &text) {
   }
   return result;
 }
+
+// Find compiler-spelled function linkage using the existing literal/comment
+// aware tokens. A regex search across the entire document revisits long
+// comments even when there is no asm label anywhere in the source.
+std::unordered_map<std::string, std::string>
+sourceLinks(const std::string &text, const std::vector<Token> &ts) {
+  std::vector<std::size_t> close(ts.size(), ts.size()), stack;
+  for (std::size_t i = 0; i < ts.size(); ++i) {
+    if (ts[i].text == "(")
+      stack.push_back(i);
+    else if (ts[i].text == ")" && !stack.empty()) {
+      close[stack.back()] = i;
+      stack.pop_back();
+    }
+  }
+  std::unordered_map<std::string, std::string> links;
+  for (std::size_t i = 0; i + 1 < ts.size(); ++i) {
+    if (!identifier(ts[i].text) || ts[i + 1].text != "(")
+      continue;
+    const auto end = close[i + 1];
+    if (end >= ts.size() || ts.size() - end < 4 ||
+        ts[end + 1].text != "__asm__" || ts[end + 2].text != "(" ||
+        ts[end + 3].text != ")")
+      continue;
+    auto literal = std::string_view(text).substr(
+        ts[end + 2].end, ts[end + 3].begin - ts[end + 2].end);
+    while (!literal.empty() &&
+           std::isspace(static_cast<unsigned char>(literal.front())))
+      literal.remove_prefix(1);
+    while (!literal.empty() &&
+           std::isspace(static_cast<unsigned char>(literal.back())))
+      literal.remove_suffix(1);
+    if (literal.size() < 3 || literal.front() != '"' || literal.back() != '"')
+      continue;
+    literal.remove_prefix(1);
+    literal.remove_suffix(1);
+    // Escaped/concatenated labels need a C string decoder; never guess them.
+    if (literal.find_first_of("\\\"\r\n") == literal.npos)
+      links[ts[i].text] = std::string(literal);
+  }
+  return links;
+}
 bool type(const std::string &name) {
   static const std::set<std::string> types = {
       "int",    "char",     "short",  "long",    "float",  "double",  "bool",
@@ -284,7 +326,9 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
         original.substr(start, newline == std::string::npos ? std::string::npos
                                                             : newline - start);
     std::smatch match;
-    if (std::regex_search(line, match, imageMarker))
+    if (line.find("neverd.image:") != std::string::npos &&
+        std::regex_search(line, match, imageMarker,
+                          std::regex_constants::match_continuous))
       pending = parseAddress(match[1].str());
     else {
       auto address = std::exchange(pending, std::nullopt);
@@ -298,13 +342,7 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
       break;
     start = newline + 1;
   }
-  std::unordered_map<std::string, std::string> links;
-  // The compiler explicitly binds this C spelling to its image symbol.
-  static const std::regex linked(
-      R"re(\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*__asm__\s*\(\s*"([^"]+)"\s*\))re");
-  for (std::sregex_iterator it(original.begin(), original.end(), linked), end;
-       it != end; ++it)
-    links[(*it)[1].str()] = (*it)[2].str();
+  const auto links = sourceLinks(original, ts);
   std::unordered_map<std::string, std::uint64_t> originalAddresses;
   for (const auto &name : renames)
     originalAddresses[name.value("original", std::string())] =

@@ -52,21 +52,47 @@ inline std::optional<va_t> loadedCallSlot(const LowFunc &F,
     return A.Space == B.Space && A.Offset == B.Offset && A.Size == B.Size;
   };
   const LowBlock *Cur = &Block;
+  if (Index >= Block.Ops.size())
+    return std::nullopt;
+  va_t Instruction = Block.Ops[Index].Addr;
   size_t End = Index;
   bool Loaded = false;
   uint64_t Addend = 0;
   for (int Step = 0; Step < limits::kCallTargetSlotDepth; ++Step) {
     if (Loaded && Var.isConst())
       return static_cast<va_t>(Var.Offset + Addend);
+    if (!Var.isReg() && !Var.isTemp())
+      return std::nullopt;
     const LowOp *Def = nullptr;
-    for (size_t J = End; J-- > 0;)
-      if (Cur->Ops[J].Output.Size && Same(Cur->Ops[J].Output, Var)) {
-        Def = &Cur->Ops[J];
-        End = J;
-        break;
-      }
+    for (size_t J = End; J-- > 0;) {
+      const LowOp &Candidate = Cur->Ops[J];
+      // LowIR temporaries belong to one instruction. Calls and intrinsics
+      // cannot supply preservation facts for a pointer carried in a register.
+      if ((Var.isTemp() && Candidate.Addr != Instruction) ||
+          Candidate.Opcode == NdOp::CALL ||
+          Candidate.Opcode == NdOp::INDIR_CALL ||
+          Candidate.Opcode == NdOp::INTRINSIC)
+        return std::nullopt;
+      const NdVar &Written = Candidate.Output;
+      if (!Written.Size || Written.Space != Var.Space)
+        continue;
+      if (Written.Offset > UINT64_MAX - Written.Size ||
+          Var.Offset > UINT64_MAX - Var.Size)
+        return std::nullopt;
+      if (Var.isTemp() ? Written.Offset != Var.Offset
+                       : (Written.Offset >= Var.Offset + Var.Size ||
+                          Var.Offset >= Written.Offset + Written.Size))
+        continue;
+      if (!Same(Written, Var))
+        return std::nullopt;
+      Def = &Candidate;
+      End = J;
+      Instruction = Candidate.Addr;
+      break;
+    }
     if (!Def) {
-      if (Cur->Preds.size() != 1)
+      if (Var.isTemp() || Cur->Preds.size() != 1 ||
+          !Cur->ExceptionalPreds.empty())
         return std::nullopt;
       const int Pred = Cur->Preds.front();
       auto It = std::find_if(F.Blocks.begin(), F.Blocks.end(),

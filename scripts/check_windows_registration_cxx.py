@@ -15,9 +15,13 @@ import sys
 if __package__:
     from .check_windows_registration_eh import run_image
     from .check_windows_registration_rewrite import PE32
+    from .windows_registration_libraries import capture_libraries
+    from .windows_registration_runtime import capture_runtime
 else:
     from check_windows_registration_eh import run_image
     from check_windows_registration_rewrite import PE32
+    from windows_registration_libraries import capture_libraries
+    from windows_registration_runtime import capture_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cxx_runtime.cpp"
@@ -46,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--compiler", default="cl")
+    parser.add_argument("--capture-runtime-libraries", action="store_true",
+                        help="preserve the selected native x86 MSVC link libraries")
     parser.add_argument("--frame-object", type=Path,
                         help="LLVM-generated catch-frame object linked with genuine MSVC RTTI")
     args = parser.parse_args(argv)
@@ -58,6 +64,18 @@ def main(argv: list[str] | None = None) -> int:
               "source_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
               "cases": []}
     try:
+        if args.capture_runtime_libraries:
+            if os.environ.get("VSCMD_ARG_TGT_ARCH") != "x86":
+                raise ValueError("runtime library capture requires the x86 MSVC environment")
+            report["runtime_libraries"] = capture_libraries(
+                output / "runtime-libs",
+                [Path(path) for path in os.environ.get("LIB", "").split(";") if path],
+                os.environ.get("VCToolsVersion", ""))
+            redist = os.environ.get("VCToolsRedistDir")
+            if not redist:
+                raise ValueError("the selected MSVC environment has no redistributable directory")
+            report["catch_search_runtime"] = capture_runtime(
+                output / "runtime-libs", Path(redist), os.environ.get("VCToolsVersion", ""))
         profiles = [("reference" if reference else "value", reference,
                      False, False) for reference in (False, True)]
         if args.frame_object:

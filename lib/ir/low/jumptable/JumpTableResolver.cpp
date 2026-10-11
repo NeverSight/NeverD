@@ -6700,6 +6700,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     bool Stable = false;
     for (size_t Iteration = 0; Iteration <= PhysicalRelocationSlots.size();
          ++Iteration) {
+      if (Allowlist.empty()) {
+        Stable = true;
+        break;
+      }
       if (!consumeCandidateProducts({{Allowlist.size(), 2}}))
         return {};
       Info.SuppressibleRelocationSlots = Allowlist;
@@ -6731,8 +6735,18 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       reachableIndependentLoads(Reachable, ConsumerAnalysisComplete,
                                 DirectReadSlots, AmbiguousObjectLoad);
       if (!ConsumerAnalysisComplete) {
-        CandidateEvidenceAnalysisIncomplete = true;
-        return {};
+        if (CandidateEvidenceBudget == 0) {
+          CandidateEvidenceAnalysisIncomplete = true;
+          return {};
+        }
+        // This audit grants only relocation-root suppression. An unresolved
+        // unrelated value revokes that permission; it does not invalidate the
+        // separately proved selector/target relation. Retain every root and
+        // replay all mandatory roles below in that stronger entry context.
+        // Exhaustion of the shared candidate account still rejects above.
+        Allowlist.clear();
+        Stable = true;
+        break;
       }
 
       const std::optional<size_t> RefinementWork =

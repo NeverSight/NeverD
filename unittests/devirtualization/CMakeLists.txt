@@ -41,11 +41,20 @@ add_neverd_unittest(NeverDPEFixedImageTests
 )
 
 if(TARGET neverd_shared)
+  set(_pe_browse_components Loader CodeGen)
+  if(APPLE)
+    # Resolve the C++ helpers and LLVM from the same dylib as the C API.
+    # Static components would register LLVM command-line options twice.
+    set(_pe_browse_components "")
+  endif()
   add_neverd_unittest(NeverDPEBrowseCompatibilityTests
     PEBrowseCompatibilityTests.cpp
-    LINK_COMPONENTS Loader CodeGen
+    LINK_COMPONENTS ${_pe_browse_components}
     LINK_LIBS neverd_shared
   )
+  target_include_directories(NeverDPEBrowseCompatibilityTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+  unset(_pe_browse_components)
 endif()
 
 add_neverd_unittest(NeverDLowIRRefinementTests
@@ -64,6 +73,8 @@ add_neverd_unittest(NeverDLLVMInterpreterModelTests
   LLVMInterpreterModelTests.cpp
   LLVMInterpreterModelCompileTests.cpp
   LLVMInterpreterModelGuardTests.cpp
+  LLVMInterpreterModelAlignmentTests.cpp
+  LLVMInterpreterModelBswapTests.cpp
   LLVMInterpreterModelInitializationTests.cpp
   LLVMInterpreterModelLoopTests.cpp
   LLVMInterpreterModelRejectionTests.cpp
@@ -81,6 +92,7 @@ target_compile_definitions(NeverDLLVMInterpreterModelTests PRIVATE
 add_neverd_unittest(NeverDLLVMScalarEquivalenceTests
   LLVMScalarAssumeTests.cpp
   LLVMScalarEquivalenceTests.cpp
+  LLVMScalarBswapTests.cpp
   LLVMScalarDecisionTests.cpp
   LLVMScalarDemandTests.cpp
   LLVMScalarModelTests.cpp
@@ -129,6 +141,10 @@ target_compile_definitions(NeverDLLVMScalarInputProjectionTests PRIVATE
 
 add_neverd_unittest(NeverDInterpreterLLVMRefinementTests
   InterpreterLLVMRefinementTests.cpp
+  InterpreterLLVMRefinementPreservationTests.cpp
+  InterpreterLLVMRefinementCollectionTests.cpp
+  InterpreterLLVMRefinementAlignmentTests.cpp
+  InterpreterLLVMRefinementBswapTests.cpp
   InterpreterLLVMRefinementLoopTests.cpp
   InterpreterLLVMRefinementCompileTests.cpp
   LINK_COMPONENTS InterpreterLLVMRefinement

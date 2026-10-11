@@ -110,7 +110,34 @@ struct RegistrationChainInfo {
   /// offsets without an independent transfer proof for this anchor.
   std::optional<RegistrationRealignedFrame> RealignedFrame;
 
-  uint8_t chainInstallInstructionSize() const { return RealignedFrame ? 6 : 7; }
+  /// C++ runtime EBP is immediately above its three-word registration node.
+  /// Fixed LLVM frames save EBX/EDI/ESI above that node, so runtime EBP is
+  /// twelve bytes below source EBP. The loader authenticates each layout;
+  /// consumers must additionally require the appropriate language and proof.
+  std::optional<int32_t> cxxRuntimeFrameOffset() const {
+    if (SeededTryLevel != -1 ||
+        (RegistrationOffset != -12 && RegistrationOffset != -24) ||
+        TryLevelOffset != *RegistrationOffset + 8 ||
+        (RealignedFrame && RegistrationOffset != -12))
+      return std::nullopt;
+    return *RegistrationOffset + 12;
+  }
+
+  /// Translate a native C++ runtime displacement into the source coordinate.
+  std::optional<int32_t> cxxSourceFrameOffset(int32_t Offset) const {
+    const auto Bias = cxxRuntimeFrameOffset();
+    if (!Bias || int64_t(Offset) + *Bias < INT32_MIN)
+      return std::nullopt;
+    return Offset + *Bias;
+  }
+
+  bool hasCxxCallbackStack() const {
+    return RealignedFrame || cxxRuntimeFrameOffset().value_or(0) != 0;
+  }
+
+  uint8_t chainInstallInstructionSize() const {
+    return hasCxxCallbackStack() ? 6 : 7;
+  }
 
   /// An absolute code-pointer field owned by this decoded SEH table. These
   /// references are runtime dispatch entries, not ordinary address-taken CFG

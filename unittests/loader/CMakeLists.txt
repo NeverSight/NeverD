@@ -5,3 +5,8 @@ add_neverd_unittest(NeverDRawISATests
   Loader
   Support
 )
+
+add_neverd_unittest(NeverDNativeBufferTests
+  NativeBufferTests.cpp
+  LINK_COMPONENTS Loader Support
+)

@@ -245,6 +245,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
         continue;
       if (Op.PreservesCallerSaved || Op.SourceCallHint)
         continue;
+      if (Op.Output.Kind == MedVar::Reg && TRI.isX87StackReg(Op.Output.RegOff))
+        continue; // LowIR already bound the proven x87 result.
       // A call already remodeled as a multi-register struct return (its output
       // is the flat aggregate temp, its FP return register claimed by an
       // extract op) is handled there — do not also route its FP register here.

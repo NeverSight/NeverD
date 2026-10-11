@@ -85,6 +85,9 @@ struct Session {
   /// authenticated sanitizer path only.  FilePath deliberately preserves the
   /// caller's legacy spelling for every pre-existing C API consumer.
   std::filesystem::path SanitizeSourcePath;
+  /// Snapshot-backed native sessions have no host path or sidecar namespace.
+  std::optional<uint64_t> MemoryInputBytes;
+  std::string WebNativeProvenance;
   BinaryImage Img;
   bool Loaded = false;
 
@@ -287,8 +290,25 @@ struct Session {
 
   void setError(const std::string &Msg) { LastError = Msg; }
   void clearError() { LastError.clear(); }
+  uint64_t inputFileSize() const {
+    if (!Loaded)
+      return 0;
+    if (MemoryInputBytes)
+      return *MemoryInputBytes;
+    std::error_code EC;
+    const auto Size = std::filesystem::file_size(FilePath, EC);
+    return EC ? 0 : Size;
+  }
+  bool requireFileBacked() {
+    if (!MemoryInputBytes)
+      return true;
+    setError("operation requires a file-backed session");
+    return false;
+  }
 
   void applyAnalysisOptions(PipelineOptions &Opts) const {
+    if (MemoryInputBytes)
+      Opts.EmitDumpOutput = false;
     Opts.LibraryFeatures = &SigDB.featurePacks();
     Opts.EVMFork = EVMFork;
     Opts.EVMStrict = EVMStrict;

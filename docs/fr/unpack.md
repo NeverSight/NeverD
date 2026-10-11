@@ -14,8 +14,21 @@ Le conteneur détermine comment un fichier est validé et reconstruit, le jeu d'
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | observation à l’exécution |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | observation à l’exécution |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
 
 Les DLL PE32+ sont reconnues par `IMAGE_FILE_DLL`. Un EXE invité modélisé appelle `LoadLibraryA`, puis `FreeLibrary`, avec le cycle ordinaire des dépendances, de TLS et de `DllMain`. L’entrée DLL acceptée est son invocation d’attachement au processus ; aucun argument d’export arbitraire n’est inventé. Les noms, ordinaux, alias, données et exports redirigés sont conservés. Les pointeurs vers ses propres exports restent internes, sans auto-importation. Cette règle couvre aussi les adresses renvoyées par les helpers : un résultat interne retire les preuves antérieures de réparation des imports pour ce site.
+
+## Pilotes Windows x64
+
+Avec `NEVERD_ENABLE_DRIVER_EMULATION=ON`, les images PE x64 du sous-système native (`.sys`) utilisent l’environnement pilote. `DriverEntry` fournit la provenance du point d’entrée ; les rappels de traitement et de déchargement ne deviennent pas l’entrée récupérée par défaut. L’objet facultatif `driver` accepte le [scénario pilote](driver-emulation.md) : service, registre, requêtes et ordonnancement. Le backend, le contrat et les limites communs restent applicables. Les arguments, l’environnement et le PEB d’un processus utilisateur sont rejetés.
+
+UNPACK des pilotes désactive la conservation des écritures individuelles tout en gardant la validation mémoire et les observateurs de restauration. Le budget d’événements compte les appels API ; les limites d’instructions et de temps restent applicables.
+
+La récupération vérifie les arguments entrants, le cadre de retour et son espace réservé, les registres non volatils, le drapeau de direction, les contrôles flottants et la propriété des objets noyau. Les pools conservés, pointeurs noyau empruntés, objets du chargeur modifiés ou effets non comptabilisés donnent `unsupported_state` ; `snapshot_only` conserve le diagnostic. Aucun `restore_runtime` ne matérialise l’état noyau. Les imports utilisent les identités des exports noyau ; les exports originaux sont validés et la somme de contrôle PE recalculée. Le résultat à base fixe ne prouve ni le chargement dans le noyau Windows, ni la validité d’une signature, ni les chemins non exécutés.
+
+```bash
+neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+```
 
 ## Utilisation
 
@@ -25,7 +38,13 @@ neverd unpack packed.exe -o unpacked.exe \
   --options='{"backend":"unicorn","instruction_limit":400000000,"transfer":2}'
 ```
 
-La commande affiche un rapport JSON. Le code de sortie 0 signifie qu’une image `unpacked` ou un `snapshot` explicitement demandé a été écrit ; 3 signifie `no_entry` ou `unsupported_state`, sans créer ni tronquer le fichier de sortie ; 1 signale une entrée ou option invalide, ou un échec de préparation. Le rapport indique le `format`, l'`architecture` et le `profile` réellement exécutés. Le point d'entrée C est `neverd_unpack_json` ; Python expose `Session.unpack`. Les options sont les [options de processus](process-emulation.md) plus `transfer` et `snapshot_only`. Les valeurs par défaut diffèrent là où un stub a besoin de plus de ressources : 100000000 instructions, 600 secondes et 512 MiB, et `windows.defer_unmodeled` est activé.
+La commande affiche un rapport JSON. Le code de sortie 0 signifie qu’une image `unpacked` ou un `snapshot` / `restored` explicitement demandé a été écrit ; 3 signifie `no_entry` ou `unsupported_state`, sans créer ni tronquer le fichier de sortie ; 1 signale une entrée ou option invalide, ou un échec de préparation. Le rapport indique le `format`, l'`architecture` et le `profile` réellement exécutés. Le point d'entrée C est `neverd_unpack_json` ; Python expose `Session.unpack`. Les options sont les [options de processus](process-emulation.md) plus `transfer` et `snapshot_only` / `restore_runtime`. Les valeurs par défaut diffèrent là où un stub a besoin de plus de ressources : 100000000 instructions, 600 secondes et 512 MiB, et `windows.defer_unmodeled` est activé.
+
+## Restauration explicite de l’état d’exécution
+
+`restore_runtime:true` produit un initialiseur Windows x64 autonome et retourne `restored` (code 0). Cette option exclut `snapshot_only`. Clang et `lld-link` doivent être dans `PATH`, et `windows.peb_version` doit désigner explicitement l’environnement natif. L’initialiseur vérifie cette version sans modifier le PEB natif. Il restaure les allocations de tas possédées, les opérations de pointeurs encodés, les valeurs et rappels FLS, les sections critiques récursives, les réservations virtuelles privées avec leurs protections, ainsi que `LastError`. Les portes d’export conservent les formes d’appel observées. Code, données et métadonnées occupent des sections `.nd*` avec leurs permissions respectives ; aucune DLL auxiliaire n’est produite.
+
+Les refus précédents décrivent le mode par défaut. Ce mode explicite conserve les diagnostics `runtime_state` et omet la découverte des imports dans un nouveau processus. Adresses fixes, transfert DLL sélectionné, arguments et environnement capturés restent requis. Les appels système directs historiques restent comptés, sans certification de portabilité de leurs numéros ni des chemins non atteints. TLS dynamique, handles ouverts, sections mappées, exceptions suspendues et état d’autres DLL invitées restent non pris en charge. Un état non pris en charge ou un échec de construction ne publie aucun fichier. `restored` décrit cette construction conditionnelle, sans prouver tous les chemins natifs.
 
 ## État d’exécution et instantanés d’analyse
 
@@ -108,3 +127,5 @@ Les imports différés à base de RVA conservent les thunks internes en attente 
 `WrappedEntriesRequireExplicitTransferEvidence` couvre un wrapper DLL appelant son entrée restaurée avec une pile plus profonde. Le défaut reste `no_entry` ; choisir l’appel observé avec `transfer` reconstruit une DLL chargeable. Un appel profond seul ne distingue pas entrée et initialiseur.
 
 Si le point d’entrée DLL récupéré diffère de l’entrée PE initiale, un adaptateur transmet l’attachement du processus à l’entrée sélectionnée, puis le détachement et les notifications de thread à l’entrée initiale encore exécutable, préservant le nettoyage du wrapper. Une entrée initiale indisponible fait échouer la reconstruction. `entry_rva` désigne toujours l’entrée sélectionnée ; l’en-tête PE peut viser l’adaptateur. Un test DLL indépendant vérifie ce nettoyage sur les deux architectures émulées et Windows natif.
+
+`runtime_state.additional_state_inventory_known` et `has_additional_dependencies` signalent les tas privés, réservations virtuelles, verrous, handles, vues et exceptions conservés par leur propriétaire OS. Un inventaire absent ou des ressources retenues bloquent la restauration par défaut même sans correspondance de pointeur de tas. Les snapshots explicites gardent le diagnostic ; la restauration d’exécution doit reconstruire les propriétaires pris en charge.

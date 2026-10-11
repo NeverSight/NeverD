@@ -41,7 +41,8 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
                           (State.Callback && State.Parent) ||
                           (State.Uninstalled && State.Installed));
     const std::set<int32_t> &Levels = Unknown ? AllLevels : State.Levels;
-    if (!charge(Levels.size() + State.CxxCatchStacks.size() + 1)) {
+    auto Searches = cxxSearches(I, State);
+    if (Exhausted || !charge(Levels.size() + State.CxxCatchStacks.size() + 1)) {
       Result.Complete = false;
       Result.Blocks.clear();
       Result.Diagnostics.push_back(
@@ -55,7 +56,8 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
                              CallbackOnly,
                              State.CanDispatch && State.Installed,
                              EH.Cxx ? cxxMinimumTryLevel(State, *EH.Cxx) : 0,
-                             State.Reached});
+                             State.Reached,
+                             std::move(Searches)});
     if (CallbackOnly && Unknown)
       Result.CallbackStatesComplete = false;
     if (!CallbackOnly && Unknown)

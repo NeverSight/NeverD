@@ -6,11 +6,16 @@
 // Each packed fixture names the original it was made from. Expectations are
 // read out of that original at test time, never restated here.
 #ifdef NEVERD_UNPACK_TEST_FIXTURE
-NEVERD_UNPACK_TEST_FIXTURE(PlainNRV2B, "plain.upx-nrv2b.exe", "plain.exe")
-NEVERD_UNPACK_TEST_FIXTURE(PlainNRV2D, "plain.upx-nrv2d.exe", "plain.exe")
-NEVERD_UNPACK_TEST_FIXTURE(PlainNRV2E, "plain.upx-nrv2e.exe", "plain.exe")
-NEVERD_UNPACK_TEST_FIXTURE(PlainLZMA, "plain.upx-lzma.exe", "plain.exe")
-NEVERD_UNPACK_TEST_FIXTURE(Runtime, "crt.upx.exe", "crt.exe")
+NEVERD_UNPACK_TEST_FIXTURE(PlainNRV2B, "plain.upx-nrv2b.exe", "plain.exe",
+                           false)
+NEVERD_UNPACK_TEST_FIXTURE(PlainNRV2D, "plain.upx-nrv2d.exe", "plain.exe",
+                           false)
+NEVERD_UNPACK_TEST_FIXTURE(PlainNRV2E, "plain.upx-nrv2e.exe", "plain.exe",
+                           false)
+NEVERD_UNPACK_TEST_FIXTURE(PlainLZMA, "plain.upx-lzma.exe", "plain.exe", false)
+// The CRT's TLS initializer retains an initialized critical section. Its
+// captured bytes alone cannot reconstruct the OS-owned object.
+NEVERD_UNPACK_TEST_FIXTURE(Runtime, "crt.upx.exe", "crt.exe", true)
 #endif
 
 // Test names spell backends as the native CPU inventory does.

@@ -105,7 +105,7 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
       // A call already remodeled (FP/x87/wide produce a non-register output) is
       // left alone; the default-modeled call writes the integer return
       // register.
-      if (Op.Output.Kind != MedVar::Reg)
+      if (Op.Output.Kind != MedVar::Reg || TRI.isX87StackReg(Op.Output.RegOff))
         continue;
 
       // A loader-bound scalar libm result cannot become a mixed aggregate

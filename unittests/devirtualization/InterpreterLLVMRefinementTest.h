@@ -54,10 +54,12 @@ struct Program {
   check(const LowFunc &Residual, llvm::StringRef IR,
         const InterpreterLLVMRefinementLimits &Limits = {},
         const InterpreterLLVMRefinementPlans &Plans = {},
-        llvm::StringRef Name = "model") const {
+        llvm::StringRef Name = "model",
+        const InterpreterLLVMRefinementPreservation &Preservation = {},
+        const InterpreterLLVMNativeCollection &Collection = {}) const {
     return checkBinaryLLVMRefinement(
         Image, Entry, Options, Residual, IR, Name, Frame, Plans,
-        LowIRRefinementWitness::LiftedBits, Limits);
+        LowIRRefinementWitness::LiftedBits, Limits, Preservation, Collection);
   }
 };
 

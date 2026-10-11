@@ -7,6 +7,7 @@
 #ifdef NEVERD_UNPACK_EXECUTION
 #include "../dynamic/ProcessImports.h"
 #include "../dynamic/ProcessTransfer.h"
+#include "../dynamic/RuntimeState.h"
 
 #include "neverd/emulation/ProcessSession.h"
 
@@ -50,19 +51,16 @@ readInput(const std::filesystem::path &Path) {
 
 #ifdef NEVERD_UNPACK_EXECUTION
 void recordDirectServices(UnpackRuntimeState &State,
-                          const emulation::ProcessResult &Run) {
-  State.DirectServiceCalls = llvm::SaturatingAdd(
-      State.DirectServiceCalls,
-      uint64_t(llvm::count_if(Run.NativeCalls, [](const auto &Call) {
-        return Call.DirectServiceNumber.has_value();
-      })));
+                          const ObservedExecution &Run) {
+  State.DirectServiceCalls =
+      llvm::SaturatingAdd(State.DirectServiceCalls, Run.DirectServiceCalls);
 }
 
 /// Run the recovered image and collect witnessed export calls and address
 /// loads. Failure leaves the image as the entry snapshot already rebuilt it.
 llvm::Expected<std::vector<TailImport>> observeTailImports(
     llvm::ArrayRef<uint8_t> Image, const std::filesystem::path &Input,
-    emulation::ProcessProfile Profile, const emulation::ProcessOptions &Options,
+    const InputImage &ContainerImage, const UnpackOptions &Options,
     UnpackResult::ImportRepairReport &Report, UnpackRuntimeState &State) {
   llvm::SmallString<128> Directory;
   if (std::error_code Error =
@@ -84,11 +82,11 @@ llvm::Expected<std::vector<TailImport>> observeTailImports(
   // Each pass has its own declared process limits. Neither a byte pattern nor
   // an export call alone establishes a replacement's state effects.
   ExportObserver Exports;
-  auto Discovery = emulation::observeProcess(Path, Profile, Options, Exports);
+  auto Discovery = observeImage(Path, ContainerImage, Options, Exports);
   if (!Discovery)
     return Finish(Discovery.takeError());
   recordDirectServices(State, *Discovery);
-  Report.Stop = emulation::processStopReasonName(Discovery->Stop);
+  Report.Stop = Discovery->Stop;
   Report.Diagnostic = Discovery->Diagnostic;
   Report.Instructions = Discovery->Instructions;
   Report.Events = Discovery->Events;
@@ -101,11 +99,11 @@ llvm::Expected<std::vector<TailImport>> observeTailImports(
   if (Continuations.empty())
     return Finish(std::vector<TailImport>{});
   ImportObserver Observer(Continuations, Gates);
-  auto Ran = emulation::observeProcess(Path, Profile, Options, Observer);
+  auto Ran = observeImage(Path, ContainerImage, Options, Observer);
   if (!Ran)
     return Finish(Ran.takeError());
   recordDirectServices(State, *Ran);
-  Report.Stop = emulation::processStopReasonName(Ran->Stop);
+  Report.Stop = Ran->Stop;
   Report.Diagnostic = Ran->Diagnostic;
   Report.Instructions =
       llvm::SaturatingAdd(Report.Instructions, Ran->Instructions);
@@ -123,6 +121,8 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
                                         const UnpackOptions &Options) {
   if (Options.Transfer > defaults::MaxTransfers)
     return failure(text::Limits);
+  if (Options.SnapshotOnly && Options.RestoreRuntime)
+    return failure("snapshot_only and restore_runtime are mutually exclusive");
   auto File = readInput(Input);
   if (!File)
     return File.takeError();
@@ -140,19 +140,16 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
   auto Traits = architectureTraits(Image.architecture());
   if (!Traits)
     return Traits.takeError();
-  auto Profile = processProfile(Image);
-  if (!Profile)
-    return Profile.takeError();
-  TransferObserver Observer(Image, *Traits, Options.Transfer);
-  auto Run =
-      emulation::observeProcess(Input, *Profile, Options.Process, Observer);
+  TransferObserver Observer(Image, *Traits, Options.Transfer,
+                            Options.RestoreRuntime);
+  auto Run = observeImage(Input, Image, Options, Observer);
   if (!Run)
     return Run.takeError();
-  Result.Profile = emulation::processProfileName(Run->Profile);
+  Result.Profile = Run->Profile;
   Result.Transfers = Observer.transfers();
-  Result.Backend = emulation::executionBackendName(Run->SelectedBackend);
+  Result.Backend = emulation::executionBackendName(Run->Backend);
   Result.BackendSelectionReason = Run->BackendSelectionReason;
-  Result.ProcessStop = emulation::processStopReasonName(Run->Stop);
+  Result.ProcessStop = Run->Stop;
   Result.ProcessDiagnostic = Run->Diagnostic;
   Result.PC = Run->PC;
   Result.Instructions = Run->Instructions;
@@ -197,7 +194,17 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
                                ? text::DynamicThreadLocalState
                                : text::UnknownDynamicThreadLocalState;
     }
-    if (!Result.Diagnostic.empty() && !Options.SnapshotOnly) {
+    if (!Result.RuntimeState.AdditionalStateInventoryKnown ||
+        Result.RuntimeState.HasAdditionalDependencies) {
+      if (!Result.Diagnostic.empty())
+        Result.Diagnostic += "; ";
+      Result.Diagnostic +=
+          Result.RuntimeState.AdditionalStateInventoryKnown
+              ? "additional owned OS resources require runtime restoration"
+              : "the process supplies no additional runtime-state inventory";
+    }
+    if (!Result.Diagnostic.empty() && !Options.SnapshotOnly &&
+        !Options.RestoreRuntime) {
       Result.Outcome = UnpackOutcome::UnsupportedState;
       return true;
     }
@@ -209,12 +216,31 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
   auto Rebuilt = Container->rebuild(Image, *Observed, Plan);
   if (!Rebuilt)
     return Rebuilt.takeError();
+  if (Options.RestoreRuntime) {
+    // Materialized export identities retain calls in their observed form.
+    // Replaying a bare entry in a fresh model would discard the very state
+    // this path restores, so it cannot supply import-rewrite evidence.
+    auto Restored = restoreRuntime(Image, *Observed, std::move(*Rebuilt));
+    if (!Restored) {
+      Result.Outcome = UnpackOutcome::UnsupportedState;
+      Result.Diagnostic = llvm::toString(Restored.takeError());
+      return Result;
+    }
+    Result.Outcome = UnpackOutcome::Restored;
+    Result.Diagnostic = "native runtime state materialized; fixed addresses, "
+                        "matching explicit PEB version and captured inputs "
+                        "are required; unreached paths are not certified";
+    Result.MaterializedTLSCallbacks = Restored->MaterializedTLSCallbacks;
+    Result.Sections = std::move(Restored->Sections);
+    Result.Imports = std::move(Restored->Imports);
+    Result.Image = std::move(Restored->File);
+    return Result;
+  }
   // The entry snapshot still has protector import calls. Running it shows
   // which export each one reaches, and a second rebuild turns those sites
   // into ordinary import calls when the container recognizes them.
-  auto Tails =
-      observeTailImports(Rebuilt->File, Input, *Profile, Options.Process,
-                         Result.ImportRepair, Result.RuntimeState);
+  auto Tails = observeTailImports(Rebuilt->File, Input, Image, Options,
+                                  Result.ImportRepair, Result.RuntimeState);
   if (Tails && !Tails->empty()) {
     Plan.TailImports = std::move(*Tails);
     auto Repaired = Container->rebuild(Image, *Observed, Plan);

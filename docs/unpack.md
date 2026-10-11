@@ -12,8 +12,21 @@ The container selects how a file is validated and rebuilt, the instruction set s
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v95`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL inputs are selected by `IMAGE_FILE_DLL`. A modeled guest EXE calls `LoadLibraryA`, then `FreeLibrary`, using the ordinary dependency, TLS and `DllMain` lifecycle. The accepted DLL entry is its process-attach invocation; arbitrary exports are not called with invented arguments. Export names, ordinals, aliases, data and forwarders remain in the rebuilt DLL. Pointers to its own exports remain internal pointers rather than self-imports. This also covers helper-returned addresses: an internal result withdraws earlier import-repair evidence for that site.
+
+## Windows x64 drivers
+
+With `NEVERD_ENABLE_DRIVER_EMULATION=ON`, native-subsystem x64 PE images (`.sys`) run through the driver environment. `DriverEntry` owns entry provenance; dispatch and unload callbacks cannot become its default recovered entry. The optional `driver` object accepts the [driver scenario](driver-emulation.md), including service name, registry, requests and scheduling. Common backend, contract and resource limits still apply. User-process arguments, environment and PEB inputs are rejected.
+
+Driver UNPACK disables per-write report retention while keeping memory validation and recovery observers active. Its event budget counts API calls; the instruction and time limits still apply.
+
+Recovery checks the incoming driver arguments, return/shadow frame, nonvolatile registers, direction flag and floating-point controls, together with kernel object ownership. Retained pools, borrowed kernel pointers, changed loader objects or unaccounted kernel effects return `unsupported_state`; explicit `snapshot_only` keeps their diagnostics. Kernel state has no `restore_runtime` materializer. Import rebuilding uses kernel export identities, validates original exports and recomputes the PE checksum. The fixed-base result does not establish a Windows kernel load, signature validity or execution of unreached driver paths.
+
+```bash
+neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+```
 
 ## Use
 
@@ -23,7 +36,13 @@ neverd unpack packed.exe -o unpacked.exe \
   --options='{"backend":"unicorn","instruction_limit":400000000,"transfer":2}'
 ```
 
-The command prints one JSON report. Exit code 0 means an `unpacked` image or an explicitly requested `snapshot` was written; 3 means `no_entry` or `unsupported_state`, with no file created or truncated; 1 means an invalid input, option or setup failure. The report names the `format`, the `architecture` and the `profile` that ran. The C entry point is `neverd_unpack_json`; Python exposes `Session.unpack`. Options are the [process options](process-emulation.md) plus `transfer` and `snapshot_only`. Defaults differ where a stub needs more room: 100000000 instructions, 600 seconds and 512 MiB, and `windows.defer_unmodeled` is on.
+The command prints one JSON report. Exit code 0 means an `unpacked` image or an explicitly requested `snapshot` / `restored` was written; 3 means `no_entry` or `unsupported_state`, with no file created or truncated; 1 means an invalid input, option or setup failure. The report names the `format`, the `architecture` and the `profile` that ran. The C entry point is `neverd_unpack_json`; Python exposes `Session.unpack`. Options are the [process options](process-emulation.md) plus `transfer` and `snapshot_only` / `restore_runtime`. Defaults differ where a stub needs more room: 100000000 instructions, 600 seconds and 512 MiB, and `windows.defer_unmodeled` is on.
+
+## Explicit runtime restoration
+
+`restore_runtime:true` requests a self-contained Windows x64 initializer and returns `restored` (exit code 0). It is mutually exclusive with `snapshot_only`. Clang and `lld-link` must be in `PATH`; `windows.peb_version` must explicitly identify the intended native environment. The initializer checks that version without changing the native PEB. It restores owned heap backing, encoded-pointer operations, FLS values and callbacks, recursive critical sections, private virtual reservations and page protections, and `LastError`. Export gates retain observed call forms. Code, data and metadata occupy separate `.nd*` sections with their respective permissions; no helper DLL is emitted.
+
+The preceding refusal rules describe default recovery. This explicit mode keeps the captured `runtime_state` diagnostics and skips fresh-process import discovery. Fixed addresses, the selected DLL transfer and captured arguments/environment remain requirements. Historical direct-service counts are retained; service numbers and unreached paths are not certified as portable. Dynamic TLS, open handles, mapped sections, suspended exception state and other guest DLL state remain unsupported. Unsupported state or initializer construction failure publishes no output. `restored` describes construction under these conditions, not proof of every native path.
 
 ## Runtime state and analysis snapshots
 
@@ -106,3 +125,5 @@ RVA-based delay imports preserve pending in-image thunks and rebind already reso
 `WrappedEntriesRequireExplicitTransferEvidence` covers a DLL wrapper calling its restored entry on a deeper stack. The default remains `no_entry`; selecting that observed call with `transfer` rebuilds a loadable DLL. A deeper call alone cannot distinguish an entry from an initializer.
 
 When a recovered DLL entry differs from its original PE entry, the writer emits a loader-notification adapter: process attach goes to the selected entry; detach and thread notifications go to the original live executable entry so outer-wrapper cleanup remains reachable. An unavailable original entry fails rebuilding. Reported `entry_rva` still identifies the selected program entry; the PE header can point to the adapter. The independent wrapped-DLL fixture checks cleanup outside the selected function on both emulated architectures and native Windows.
+
+`runtime_state.additional_state_inventory_known` and `has_additional_dependencies` report the OS owner’s remaining private heaps, virtual reservations, locks, handles, views and exception state. Missing inventory or retained resources blocks default recovery even when no heap-pointer match exists. Explicit snapshots retain this diagnostic; runtime restoration must reconstruct the supported owners.

@@ -12,6 +12,7 @@
 
 namespace neverd::emulation {
 struct ProcessOptions;
+struct WindowsProcessState;
 namespace windows_process {
 struct Image;
 struct MemoryResult {
@@ -46,6 +47,9 @@ public:
   llvm::Expected<MemoryResult> protect(uint64_t Address, uint64_t Size,
                                        uint32_t Protection);
   llvm::Expected<std::optional<MemoryInformation>> query(uint64_t Address);
+  llvm::Error snapshotReservations(WindowsProcessState &State,
+                                   uint64_t RemainingBytes,
+                                   bool IncludeBacking) const;
 
 private:
   enum class Owner { Virtual, Image, Runtime, Heap, Stack };
