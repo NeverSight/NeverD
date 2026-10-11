@@ -1750,8 +1750,8 @@ private:
     bool operator==(const JumpTableInfo &Other) const = default;
   };
 
-  static std::optional<JumpTableStorageRange> implicitJumpTableStorageRange(
-      const JumpTableInfo &Info, size_t TargetCount);
+  static std::optional<JumpTableStorageRange>
+  implicitJumpTableStorageRange(const JumpTableInfo &Info, size_t TargetCount);
 
   /// Scratch-only assumptions for bounded joint finite table proofs.
   /// They are never published as prior role/storage certificates. EmptyEdges

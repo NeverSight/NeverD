@@ -219,7 +219,7 @@ class X87CallGraphCache {
 
 public:
   X87CallGraphCache(const NoReturnCalleeProver *Prover,
-                   const libc::NoReturnTargetIndex *Targets)
+                    const libc::NoReturnTargetIndex *Targets)
       : NonReentrantProver(Prover), NonReentrantTargets(Targets) {}
 
 private:
@@ -476,9 +476,9 @@ std::shared_ptr<X87CallGraphCache> createX87CallGraphCache() {
 
 std::shared_ptr<X87CallGraphCache>
 createX87CallGraphCache(const NoReturnCalleeProver *NonReentrantProver,
-                       const libc::NoReturnTargetIndex *NonReentrantTargets) {
+                        const libc::NoReturnTargetIndex *NonReentrantTargets) {
   return std::make_shared<X87CallGraphCache>(NonReentrantProver,
-                                           NonReentrantTargets);
+                                             NonReentrantTargets);
 }
 
 std::array<size_t, 3> CFGBuilder::x87CallGraphCacheStatsForTesting() const {
@@ -611,7 +611,7 @@ class X87CallEffectIndex {
       Flight = std::move(Request.Leader);
     }
     X87CallGraphCache::Completion Complete(Settings.SharedX87CallGraphs.get(),
-                                          std::move(Flight));
+                                           std::move(Flight));
     auto Built = std::make_shared<Graph>();
     const auto It = Graphs.emplace(Entry, Built).first;
     Graph &G = *Built;

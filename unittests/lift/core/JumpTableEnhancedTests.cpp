@@ -4426,8 +4426,8 @@ TEST_F(JTE_X86_64, TwoTableLinearCopiesUseTheSharedWorkBudget) {
       Image.findSymbol("jt_selector_twotable_address_clobber");
   ASSERT_NE(Clobbered, nullptr);
   neverd::CFGBuilder ClobberedBuilder;
-  const auto ClobberedLow = ClobberedBuilder.build(
-      Image, Decoder, Clobbered->Addr, Clobbered->Name);
+  const auto ClobberedLow =
+      ClobberedBuilder.build(Image, Decoder, Clobbered->Addr, Clobbered->Name);
   EXPECT_TRUE(ClobberedLow.JumpTables.empty());
 }
 
@@ -4439,7 +4439,8 @@ TEST_F(JTE_X86_64, TwoTableLinearCopiesExecuteTheOriginalSelection) {
       const auto File = tmpFile("copy-selection.c");
       std::vector<std::string> Args = {
           "decompile", selectorOccurrenceX64Obj().string(),
-          "--func", Name, "-o", File.string()};
+          "--func",    Name,
+          "-o",        File.string()};
       if (Route != 0)
         Args.push_back("--llvm");
       if (Route == 2)
@@ -4463,7 +4464,7 @@ TEST_F(JTE_X86_64, TwoTableLinearCopiesExecuteTheOriginalSelection) {
       for (const char *Optimization : {"-O0", "-O2"}) {
         SCOPED_TRACE(Optimization);
         const auto Exe = tmpFile(std::string("copy-selection") +
-                                neverd::test::executableSuffix());
+                                 neverd::test::executableSuffix());
         const auto Built = exec(
             NEVERD_TEST_CLANG,
             {"-std=c11", Optimization, "-fsanitize=undefined",
