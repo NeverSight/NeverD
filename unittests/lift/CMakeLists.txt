@@ -193,6 +193,7 @@ add_neverd_unittest(NeverDLiftTests
   core/HighCPointerAddressTests.cpp
   core/SourceParameterPlacementTests.cpp
   core/HighCIntegerWidthTests.cpp
+  core/HighCDemandedBytesTests.cpp
   core/CSourceDefinitionTests.cpp
   core/CStringCommentTests.cpp
   core/CImageObjectTests.cpp

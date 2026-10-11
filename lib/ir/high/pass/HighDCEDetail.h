@@ -80,6 +80,9 @@ void narrowSourceConcatLocals(HighFunc &Func);
 /// that zero-extended prefix, dropping only pure upper bytes.
 void narrowUnreadRegisterBytes(HighFunc &Func,
                                Arch Architecture = Arch::Unknown);
+/// Replace with zero each unknown entry register or undefined value that no
+/// observable result reads a byte of (HighDemandedBytes.cpp).
+void zeroUndemandedUnknownBytes(HighFunc &Func, Arch Architecture);
 /// Whether evaluating an unused integer value can be discarded without a
 /// memory access, call, or trap. This never supplies values for unknown bits.
 bool discardableIntegerValue(const ExprPtr &Root, size_t &Budget);

@@ -710,6 +710,7 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   // view. Re-prove that view with the same bounds before assigning names.
   narrowSourceConcatLocals(Func);
   narrowUnreadRegisterBytes(Func, TargetArch);
+  zeroUndemandedUnknownBytes(Func, TargetArch);
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 14: var rename (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");
