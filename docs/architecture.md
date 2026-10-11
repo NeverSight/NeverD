@@ -854,6 +854,18 @@ reuse dense block visitation storage while preserving walk order and logical
 work charges. Value and memory reconstruction split their ordered memo indexes
 by block ID, retaining full keys, stable recursive references and the original
 global entry counts used by evidence accounting.
+Affine frame equations are independent of value-query matching modes. A mode
+change retires value and memory results while retaining completed frame facts
+within the same frozen batch. Incomplete reconstruction still clears frame
+equations before the next independent query.
+
+Load-address validation first tries an exact instruction-local ADD producer
+when the LOAD's base is not a SELECT or mask blend. The ordinary value matcher
+must prove its base and index, and the existing copy-chain proof must connect
+its output to the exact LOAD. Only a completed positive proof avoids searching
+unrelated ADDs. Missing or failed local proofs fall back to full-function
+discovery; all queries share the candidate's evidence allowance. Final address,
+selector-coordinate and transactional publication checks remain in place.
 
 A bounded group of AArch64 absolute dispatches in one relocatable ELF function
 can share an exact read-only pointer object. Each selector first proves its

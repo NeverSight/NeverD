@@ -5601,6 +5601,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // pop, dynamic adjustment, and FP setup create different epochs of that
   // register.  This point-sensitive affine dataflow proves equal epochs across
   // CFG joins and rejects any ambiguous or non-affine update.
+  // These equations depend on the frozen graph and ABI, not on value-query
+  // matching modes. Retain them when only those modes change; an incomplete
+  // reconstruction still retires them before the next independent query.
   using FrameResultKind = detail::AffineFrameState::Kind;
   using FrameResult = detail::AffineFrameState::Result;
   detail::AffineFrameState FrameStates(consumeEvidence);
@@ -8626,8 +8629,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ValueMemo.clear();
       MemoryMemo.clear();
       ++ResolverMemoGeneration;
-      FrameMemo.clear();
-      FrameStates.clear();
     }
     MemoOccurrenceRootMode = OccurrenceRootMode;
     if (MemoPrivateFrameCallMode &&
@@ -8635,8 +8636,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ValueMemo.clear();
       MemoryMemo.clear();
       ++ResolverMemoGeneration;
-      FrameMemo.clear();
-      FrameStates.clear();
     }
     MemoPrivateFrameCallMode = Query.AllowPrivateFrameMemoryAcrossCalls;
     if (MemoScalarConstantFoldMode &&
@@ -8644,8 +8643,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ValueMemo.clear();
       MemoryMemo.clear();
       ++ResolverMemoGeneration;
-      FrameMemo.clear();
-      FrameStates.clear();
     }
     MemoScalarConstantFoldMode = Query.FoldScalarConstantOps;
     const bool UnsignedOrderMode =
@@ -8654,8 +8651,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ValueMemo.clear();
       MemoryMemo.clear();
       ++ResolverMemoGeneration;
-      FrameMemo.clear();
-      FrameStates.clear();
     }
     MemoUnsignedOrderMode = UnsignedOrderMode;
     if (Query.Candidate.Size == 0 ||
@@ -11851,6 +11846,137 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     const NdVar &LoadAddress =
         State.Load->Inputs[State.Load->NumInputs >= 2 ? 1 : 0];
     const NdVar GuestLoadAddress = guestAddressView(LoadAddress);
+    auto canFormLoadAddress = [&](const LowOp &Add) {
+      return Add.Opcode == NdOp::INT_ADD && Add.NumInputs >= 2 &&
+             (Add.Output.isReg() || Add.Output.isTemp()) &&
+             guestAddressView(Add.Output).Size == GuestLoadAddress.Size;
+    };
+    auto collectAddressProofs = [&](const LowOp &Add,
+                                    std::vector<JumpTableValueQuery> &Queries,
+                                    std::vector<AddressProof> &Proofs) {
+      for (int BaseSide = 0; BaseSide < 2; ++BaseSide) {
+        const NdVar &RawBaseValue = Add.Inputs[BaseSide];
+        const NdVar &RawDynamicValue = Add.Inputs[1 - BaseSide];
+        // x86 LowIR uses the wide physical register container for address
+        // arithmetic even in a 32-bit guest.  Only the low guest-pointer
+        // lane participates in the effective address; requiring the
+        // synthetic high lane to match a 32-bit SELECT/index occurrence
+        // rejects valid i386 GOTOFF/CMOV tables.  Keep the exact occurrence
+        // and lane proof, but query the architectural address view.
+        const NdVar BaseValue = guestAddressView(RawBaseValue);
+        const NdVar DynamicValue = guestAddressView(RawDynamicValue);
+        if (!consumeWork(Role.AllowedBases.size()))
+          return false;
+        if (!Role.HasBaseSelect && !Role.HasBaseMaskBlend &&
+            BaseValue.isConst() &&
+            std::find(Role.AllowedBases.begin(), Role.AllowedBases.end(),
+                      static_cast<va_t>(BaseValue.Offset)) ==
+                Role.AllowedBases.end())
+          continue;
+        if (!consumeProduct(State.SelectQueries.size(), 3) || !consumeWork(2))
+          return false;
+        std::vector<size_t> ProofQueries;
+        ProofQueries.reserve(State.SelectQueries.size());
+        ProofQueries.insert(ProofQueries.end(), State.SelectQueries.begin(),
+                            State.SelectQueries.end());
+        const bool HasBaseMerge = Role.HasBaseSelect || Role.HasBaseMaskBlend;
+        auto BaseQuery =
+            HasBaseMerge ? pushQuery(Queries, BaseValue, Add,
+                                     llvm::ArrayRef<JumpTableValueOccurrence>(
+                                         Role.SelectedBase))
+                         : pushBaseQuery(Queries, BaseValue, Add,
+                                         Role.AllowedBases, BaseValue.Size);
+        if (!consumeWork(State.DynamicAlternatives.size()))
+          return false;
+        const bool LocallyAuthenticatedIndex = std::any_of(
+            State.DynamicAlternatives.begin(), State.DynamicAlternatives.end(),
+            [&](const JumpTableValueOccurrence &Alternative) {
+              return localCopyChainMatchesUse(Alternative, DynamicValue, Add);
+            });
+        std::optional<size_t> IndexQuery;
+        if (!LocallyAuthenticatedIndex)
+          IndexQuery =
+              pushQuery(Queries, DynamicValue, Add, State.DynamicAlternatives,
+                        Role.AllowZeroExtension, Role.AllowSignExtension);
+        if (!BaseQuery || (!LocallyAuthenticatedIndex && !IndexQuery))
+          return false;
+        if (!pushIndex(ProofQueries, *BaseQuery))
+          return false;
+        if (IndexQuery) {
+          if (!pushIndex(ProofQueries, *IndexQuery))
+            return false;
+        }
+        if (!ensureAppendCapacity(Proofs) || !consumeWork(3))
+          return false;
+        Proofs.push_back({RoleIndex,
+                          &Add,
+                          {guestAddressView(Add.Output), Add.Addr, Add.Seq,
+                           /*DefinedAtPoint=*/true},
+                          {DynamicValue, Add.Addr, Add.Seq,
+                           /*DefinedAtPoint=*/false},
+                          std::move(ProofQueries)});
+      }
+      return true;
+    };
+
+    // Prove the exact instruction-local producer first. A successful proof
+    // already covers this LOAD on every path, so unrelated ADDs cannot add
+    // evidence for its address. Failed local proofs retain the complete
+    // function-wide discovery below, including aliases and CFG merges.
+    bool HasLocalProof = false;
+    if (!Role.HasBaseSelect && !Role.HasBaseMaskBlend) {
+      std::vector<JumpTableValueQuery> LocalQueries;
+      std::vector<AddressProof> LocalProofs;
+      if (!consumeWork(4) || !consumeWork(orderedSetLookupWork(Insns.size())))
+        return false;
+      const auto LoadInsn = Insns.find(State.Load->Addr);
+      if (LoadInsn != Insns.end() && !LoadInsn->second.IsInstructionGuard) {
+        if (!consumeProduct(LoadInsn->second.Ops.size(), 9))
+          return false;
+        for (const LowOp &Add : LoadInsn->second.Ops) {
+          if (!canFormLoadAddress(Add))
+            continue;
+          const JumpTableValueOccurrence Producer{guestAddressView(Add.Output),
+                                                  Add.Addr, Add.Seq, true};
+          if (!localCopyChainMatchesUse(Producer, GuestLoadAddress,
+                                        *State.Load))
+            continue;
+          if (!collectAddressProofs(Add, LocalQueries, LocalProofs))
+            return false;
+        }
+      }
+      if (!LocalQueries.empty()) {
+        bool LocalComplete = true;
+        const std::vector<bool> LocalResults = tableValuesMatchAtUses(
+            LocalQueries, &LocalComplete, nullptr, InvalidVA, nullptr,
+            AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
+            nullptr, nullptr,
+            limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
+            CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
+        if (LocalComplete && LocalResults.size() == LocalQueries.size()) {
+          for (AddressProof &Proof : LocalProofs) {
+            if (!consumeWork() || !consumeWork(Proof.QueryIndices.size()))
+              return false;
+            const bool Proven =
+                std::all_of(Proof.QueryIndices.begin(),
+                            Proof.QueryIndices.end(), [&](size_t I) {
+                              return I < LocalResults.size() && LocalResults[I];
+                            });
+            if (!Proven)
+              continue;
+            if (!ensureAppendCapacity(AddressProofs) || !consumeWork(3))
+              return false;
+            // These queries completed in the local batch. The final LOAD
+            // and address-index checks below still consume this exact witness.
+            Proof.QueryIndices.clear();
+            AddressProofs.push_back(std::move(Proof));
+            HasLocalProof = true;
+          }
+        }
+      }
+    }
+    if (HasLocalProof)
+      continue;
     if (!chargeInsnInventoryScan(/*OperationWork=*/9))
       return false;
     for (const auto &[Addr, Insn] : Insns) {
@@ -11858,73 +11984,10 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       if (Insn.IsInstructionGuard)
         continue;
       for (const LowOp &Add : Insn.Ops) {
-        if (Add.Opcode != NdOp::INT_ADD || Add.NumInputs < 2 ||
-            (!Add.Output.isReg() && !Add.Output.isTemp()) ||
-            guestAddressView(Add.Output).Size != GuestLoadAddress.Size)
+        if (!canFormLoadAddress(Add))
           continue;
-        for (int BaseSide = 0; BaseSide < 2; ++BaseSide) {
-          const NdVar &RawBaseValue = Add.Inputs[BaseSide];
-          const NdVar &RawDynamicValue = Add.Inputs[1 - BaseSide];
-          // x86 LowIR uses the wide physical register container for address
-          // arithmetic even in a 32-bit guest.  Only the low guest-pointer
-          // lane participates in the effective address; requiring the
-          // synthetic high lane to match a 32-bit SELECT/index occurrence
-          // rejects valid i386 GOTOFF/CMOV tables.  Keep the exact occurrence
-          // and lane proof, but query the architectural address view.
-          const NdVar BaseValue = guestAddressView(RawBaseValue);
-          const NdVar DynamicValue = guestAddressView(RawDynamicValue);
-          if (!consumeWork(Role.AllowedBases.size()))
-            return false;
-          if (!Role.HasBaseSelect && !Role.HasBaseMaskBlend &&
-              BaseValue.isConst() &&
-              std::find(Role.AllowedBases.begin(), Role.AllowedBases.end(),
-                        static_cast<va_t>(BaseValue.Offset)) ==
-                  Role.AllowedBases.end())
-            continue;
-          if (!consumeProduct(State.SelectQueries.size(), 3) || !consumeWork(2))
-            return false;
-          std::vector<size_t> ProofQueries;
-          ProofQueries.reserve(State.SelectQueries.size());
-          ProofQueries.insert(ProofQueries.end(), State.SelectQueries.begin(),
-                              State.SelectQueries.end());
-          const bool HasBaseMerge = Role.HasBaseSelect || Role.HasBaseMaskBlend;
-          auto BaseQuery =
-              HasBaseMerge ? pushQuery(AddressQueries, BaseValue, Add,
-                                       llvm::ArrayRef<JumpTableValueOccurrence>(
-                                           Role.SelectedBase))
-                           : pushBaseQuery(AddressQueries, BaseValue, Add,
-                                           Role.AllowedBases, BaseValue.Size);
-          if (!consumeWork(State.DynamicAlternatives.size()))
-            return false;
-          const bool LocallyAuthenticatedIndex = std::any_of(
-              State.DynamicAlternatives.begin(),
-              State.DynamicAlternatives.end(),
-              [&](const JumpTableValueOccurrence &Alternative) {
-                return localCopyChainMatchesUse(Alternative, DynamicValue, Add);
-              });
-          std::optional<size_t> IndexQuery;
-          if (!LocallyAuthenticatedIndex)
-            IndexQuery = pushQuery(
-                AddressQueries, DynamicValue, Add, State.DynamicAlternatives,
-                Role.AllowZeroExtension, Role.AllowSignExtension);
-          if (!BaseQuery || (!LocallyAuthenticatedIndex && !IndexQuery))
-            return false;
-          if (!pushIndex(ProofQueries, *BaseQuery))
-            return false;
-          if (IndexQuery) {
-            if (!pushIndex(ProofQueries, *IndexQuery))
-              return false;
-          }
-          if (!ensureAppendCapacity(AddressProofs) || !consumeWork(3))
-            return false;
-          AddressProofs.push_back({RoleIndex,
-                                   &Add,
-                                   {guestAddressView(Add.Output), Add.Addr,
-                                    Add.Seq, /*DefinedAtPoint=*/true},
-                                   {DynamicValue, Add.Addr, Add.Seq,
-                                    /*DefinedAtPoint=*/false},
-                                   std::move(ProofQueries)});
-        }
+        if (!collectAddressProofs(Add, AddressQueries, AddressProofs))
+          return false;
       }
     }
   }

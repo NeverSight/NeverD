@@ -1117,6 +1117,14 @@ diamonds, balanced and unanchored cycles, conflicting paths, checked overflow,
 SSA ambiguity, exception entries, pointer widths and query-order-independent
 depth refusal.
 
+`ResolverFrameModes` checks that value-query mode switches retain independent
+frame equations, partial stack writes reject stale frame identities and an
+incomplete query cannot poison a later query. `ResolverLocalAddress` checks
+that unrelated arithmetic does not multiply LOAD-address proof work, missing
+or failed local proofs retain full discovery, overwritten producers are
+rejected, and every evidence-budget boundary preserves transactional
+publication. Both belong to `NeverDJumpTableTests`.
+
 `ResolverGraphCache.*` in `NeverDJumpTableTests` compares hot and cold answers
 and remaining budgets at every small-fixture budget boundary. Equal-size
 instruction, edge, root and ownership changes must replace the graph; rolled
