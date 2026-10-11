@@ -1336,3 +1336,19 @@ suites passed and the Web worker explicitly skipped. The CLI omission check
 exposed a silent session-creation failure; it now emits the backend capability
 result and a fixed diagnostic. Logs use `/tmp/neverd-sea-nojs-*` and
 `/tmp/neverd-sea-disabled-*`.
+
+Both Web flags are restored to ON. Integration merged `dev` at `e442f57e7`
+without conflicts and rebuilt the affected native dependencies. The restored
+owning run repeated all 408 cases with the same 401 passes and seven skips;
+all five selected worker suites, enabled C API availability and capability
+ownership checks passed. The SEA CLI omission commands both returned status 1
+and fixed `capability_unavailable` metadata. Existing native LLVM/libc++
+deprecation and duplicate-library linker warnings remain; this is not a run
+of the upstream x86 floating-point semantic suites. Logs use
+`/tmp/neverd-sea-dev-{build,web,worker,api,capabilities}.log`.
+
+This qualifies extraction of six target layouts on one macOS arm64 host.
+Native Windows/Linux host capture and distribution have not been qualified.
+The five epics remain open: semantic rewrites, remaining desktop adapters,
+package behavior/provenance, wider passive source mapping, other standalone
+formats and native C++ MCP still require their planned implementation and tests.
