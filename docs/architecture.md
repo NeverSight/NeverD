@@ -1653,7 +1653,8 @@ edge in that function; changing an earlier block invalidates the receipt.
 Complete decoded leaf callees can retain saved cells when their concrete
 argument values bound every store and all returns restore the invocation SP
 without changing its physical return PC. The analysis intersects all returning
-paths, discards private callee storage at return, and refuses nested calls,
+paths, validates complete instruction boundaries and both decoded branch
+successors, discards private callee storage at return, and refuses nested calls,
 unknown writes, exceptional transfers and independent callee roots. A receipt
 names every inspected callee; shared SSA requires their current operation/CFG
 digests before accepting the frame. Source signatures grant no memory effects.

@@ -1622,7 +1622,7 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofInspectsLeafWritesAndReturnPC) {
     Img.ExceptionMetadata.rebuildIndex();
     return Img;
   };
-  for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 21; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Img = Make();
     auto &Bytes = Img.Segments[0].Data;
@@ -1648,13 +1648,13 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofInspectsLeafWritesAndReturnPC) {
       std::copy(Body.begin(), Body.end(), Bytes.begin() + 0x100);
       Img.Symbols[1].Size = Body.size();
     }
-    if (Mutation == 11 || Mutation == 12) {
+    if (Mutation == 11 || Mutation == 12 || Mutation == 20) {
       std::vector<uint8_t> Body{
           0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x89, 0xd5, 0x85, 0xc9,
           0x74, 0x0a, // two separately returning paths
           0xc6, 0x45, 0x20, 1,    0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3,
           0xc6, 0x45, 0x21, 2,    0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3};
-      if (Mutation == 12)
+      if (Mutation == 12 || Mutation == 20)
         Body[24] = 0x28; // the other return must also preserve the saved SP
       std::copy(Body.begin(), Body.end(), Bytes.begin() + 0x100);
       Img.Symbols[1].Size = Body.size();
@@ -1683,6 +1683,26 @@ TEST(CFGBuilderCoverage, LocalUnwindFrameProofInspectsLeafWritesAndReturnPC) {
       Callee.ExceptionMetadata.emplace().SEH.emplace();
     if (Mutation == 15)
       Callee.Blocks.back().InstructionBoundaries.back().Immediate = 8;
+    if (Mutation == 17)
+      Callee.Blocks.front().InstructionBoundaries.erase(
+          Callee.Blocks.front().InstructionBoundaries.begin());
+    if (Mutation == 18)
+      ++Callee.Blocks.front().InstructionBoundaries.front().FirstOp;
+    if (Mutation == 19)
+      ++Callee.Blocks.front().InstructionBoundaries.front().Address;
+    if (Mutation == 20) {
+      // Removing both sides of an edge preserves graph symmetry, but cannot
+      // erase the decoded branch's path through a saved-SP overwrite.
+      auto &Branch = Callee.Blocks.front();
+      ASSERT_EQ(Branch.Ops.back().Opcode, NdOp::COND_BR);
+      const va_t Target = Branch.Ops.back().Inputs[0].Offset;
+      auto Arm = llvm::find_if(Callee.Blocks, [&](const auto &Block) {
+        return Block.StartAddr == Target;
+      });
+      ASSERT_NE(Arm, Callee.Blocks.end());
+      std::erase(Branch.Succs, Arm->Id);
+      std::erase(Arm->Preds, Branch.Id);
+    }
     std::map<va_t, const LowFunc *> Callees{{Leaf, &Callee}};
     size_t Budget = 100000;
     const auto Opaque =

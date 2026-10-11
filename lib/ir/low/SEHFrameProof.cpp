@@ -256,11 +256,17 @@ std::optional<State> transferLeaf(const LowFunc &F, const State &Caller,
   std::optional<size_t> Entry;
   for (size_t I = 0; I != F.Blocks.size(); ++I) {
     const auto &B = F.Blocks[I];
-    if (!consume(Remaining, B.Preds.size() + B.Succs.size() + 1) || B.Id < 0 ||
-        !Positions.emplace(B.Id, I).second ||
+    if (!consume(Remaining, B.Preds.size() + B.Succs.size() + B.Ops.size() +
+                                B.InstructionBoundaries.size() + 1) ||
+        B.Id < 0 || !Positions.emplace(B.Id, I).second ||
         !Starts.insert(B.StartAddr).second || !B.ExceptionalPreds.empty() ||
         !B.ExceptionalSuccs.empty())
       return std::nullopt;
+    if (auto Error = validateLowInstructionBoundaries(
+            B, LowInstructionBoundaryRequirement::Required)) {
+      llvm::consumeError(std::move(Error));
+      return std::nullopt;
+    }
     if (B.StartAddr == F.Entry)
       Entry = I;
   }
@@ -275,10 +281,33 @@ std::optional<State> transferLeaf(const LowFunc &F, const State &Caller,
     for (int Id : B.Preds)
       if (!Positions.count(Id) || !F.Blocks[Positions.at(Id)].hasSucc(B.Id))
         return std::nullopt;
+    std::set<va_t> Successors;
     for (int Id : B.Succs)
       if (!Positions.count(Id) ||
           !llvm::is_contained(F.Blocks[Positions.at(Id)].Preds, B.Id))
         return std::nullopt;
+      else
+        Successors.insert(F.Blocks[Positions.at(Id)].StartAddr);
+    if (B.Ops.empty())
+      return std::nullopt;
+    const auto &Last = B.Ops.back();
+    std::set<va_t> Expected;
+    if (Last.Opcode == NdOp::BRANCH || Last.Opcode == NdOp::COND_BR) {
+      const bool Conditional = Last.Opcode == NdOp::COND_BR;
+      if (Last.NumInputs != (Conditional ? 2 : 1) ||
+          !Last.Inputs[0].isConst() || Last.Inputs[0].Size != 8)
+        return std::nullopt;
+      Expected.insert(Last.Inputs[0].Offset);
+      if (Conditional)
+        Expected.insert(B.EndAddr);
+    } else if (Last.Opcode == NdOp::INDIR_BR)
+      return std::nullopt;
+    else if (Last.Opcode != NdOp::RETURN)
+      Expected.insert(B.EndAddr);
+    // Symmetric Preds/Succs alone cannot certify that the CFG includes the
+    // decoded instruction's taken and fallthrough paths.
+    if (Successors != Expected)
+      return std::nullopt;
   }
   State Initial = Caller;
   Initial.dropTemporaries();
