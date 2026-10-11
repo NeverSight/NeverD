@@ -198,6 +198,53 @@ TEST(FunctionDiscoveryAlignment, ArmImportPatternsRespectFunctionBodies) {
   }
 }
 
+TEST(FunctionDiscoveryAlignment, PLTUnwindRangesDoNotHideIndividualVeneers) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(testing::Message() << int(Architecture) << ':' << Mutation);
+      constexpr va_t Base = 0x1000, Slot = 0x4000, Veneer = Base + 16;
+      std::vector<uint8_t> Bytes(64, 0);
+      if (Architecture == Arch::X86 || Architecture == Arch::X64) {
+        Bytes[16] = 0xff;
+        Bytes[17] = 0x25;
+        writeLE<uint32_t>(Bytes.data() + 18, Architecture == Arch::X64
+                                                 ? Slot - (Veneer + 6)
+                                                 : Slot);
+      } else if (Architecture == Arch::ARM) {
+        writeLE<uint32_t>(Bytes.data() + 16, 0xe51ff004); // ldr pc,[pc,#-4]
+        writeLE<uint32_t>(Bytes.data() + 20, Slot);
+      } else {
+        writeLE<uint32_t>(Bytes.data() + 16, 0xf0000010); // adrp x16,0x4000
+        writeLE<uint32_t>(Bytes.data() + 20, 0xf9400210); // ldr x16,[x16]
+        writeLE<uint32_t>(Bytes.data() + 24, 0xd61f0200); // br x16
+      }
+      BinaryImage Img;
+      Img.Arch = Architecture;
+      Img.Bits = Architecture == Arch::X64 || Architecture == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+      Img.Mode = Architecture == Arch::ARM ? InstructionMode::ARM
+                                           : InstructionMode::Default;
+      Img.Format = BinaryFormat::ELF;
+      Img.Segments.push_back(executableSegment(Base, Bytes));
+      Img.Imports.push_back({"extern", "printf", 0, Slot});
+      Img.KnownCodeRanges.emplace_back(Base, Base + 64);
+      if (Mutation != 2)
+        Img.recordImportStubRange(Base, Mutation == 3 ? 20 : 64);
+      if (Mutation == 1 || Mutation == 4) {
+        auto Function = Symbol::makeFunc(Base, 64);
+        if (Mutation == 4) {
+          Function.Name = "explicit_function";
+          Function.Origin = NameOrigin::Stated;
+        }
+        Img.Symbols.push_back(std::move(Function));
+      }
+      scanImportThunks(Img);
+      EXPECT_EQ(Img.ImportStubIndices.count(Veneer), Mutation <= 1);
+      EXPECT_EQ(Img.findSymbolAt(Veneer) != nullptr, Mutation <= 1);
+    }
+}
+
 TEST(FunctionDiscoveryAlignment, KnownImportEntriesRemainCallable) {
   const uint8_t Code[] = {0xff, 0x25, 0xfa, 0x2f, 0, 0};
   BinaryImage Img;
