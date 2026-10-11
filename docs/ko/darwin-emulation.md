@@ -1,6 +1,6 @@
 **언어**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
+<!-- i18n-source: c5503091e713c63aa7b08a8cbd5fab1b5cc3c8d8950bb7da4fe754dbe5787137 -->
 
 [← 문서 목록](README.md)
 
@@ -37,7 +37,7 @@ neverd emulate guest.macho --profile=ios-macho64-v1 \
 
 ## Darwin 서비스
 
-BSD 호출에서 ARM64는 X16, X0–X5와 `svc #0x80`을 사용하고 x64는 BSD 클래스 `0x02000000`, RAX, RDI/RSI/RDX/R10/R8/R9를 사용합니다. 성공 시 carry를 지우고 오류 시 carry와 양수 errno를 반환합니다. ARM64는 X1을 지우고 x64는 성공 시 RDX를 지우며 오류 시 보존합니다. SYSCALL의 레지스터 변경은 명시적입니다. 보고서의 `result`와 `error=true`는 BSD 오류를 나타내며 반환하지 않거나 미지원인 요청에는 두 필드가 없습니다. XNU [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c)와 [x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c)의 규칙을 따르며 Apple 구현 코드를 포함하지 않습니다.
+BSD 호출에서 ARM64는 X16, X0–X5와 `svc #0x80`을 사용하고 x64는 BSD 클래스 `0x02000000`, RAX, RDI/RSI/RDX/R10/R8/R9를 사용합니다. 성공 시 carry를 지우고 오류 시 carry와 양수 errno를 반환합니다. ARM64는 X1을 지우고 x64는 성공 시 RDX를 지우며 오류 시 보존합니다. SYSCALL의 레지스터 변경은 명시적입니다. 보고서의 `result`와 `error=true`는 BSD 오류를 나타내며 반환하지 않거나 미지원인 요청은 JSON에서 `result: null`을 사용하며 `error`는 생략합니다. XNU [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c)와 [x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c)의 규칙을 따르며 Apple 구현 코드를 포함하지 않습니다.
 
 지원 서비스는 `exit`, `write`, `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `getegid`, `getgroups`, `mmap`, `mprotect`, `munmap`입니다. PID는1000, PPID는1입니다. UID/GID 기본값은1000이며 아래 명시적 자격 정보로 실제/유효 ID를 따로 지정합니다. 설명자 1과 2는 NUL과 비 UTF8을 포함한 바이트를 캡처하고 닫혔거나 읽기 전용인 설명자는 EBADF를 반환합니다. 부분 복사된 바이트는 유지하지만 이후 오류는 EFAULT로 남습니다. 길이가 `INT_MAX`를 넘으면 설명자, 포인터, 예산을 검사하기 전에 EINVAL을 반환합니다. 근거는 [XNU write](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_generic.c)입니다.
 
@@ -1126,7 +1126,7 @@ owner bits / whole-mask group-world outcomes / EACCES13
 credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
 real credential copy / first supplementary match / displacement disables memberd
 missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
-all40 other file routes and direct/file-backed mappings closed / typed streams only
+all41 other file routes and direct/file-backed mappings closed / typed streams only
 ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
 OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
 73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
@@ -1164,3 +1164,27 @@ native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).
+
+## 일반 파일의 즉시 준비 상태
+
+raw BSD poll(230), poll_nocancel(417)은 timeout low int32=0을 지원합니다. nfds는 uint32이며 OPEN_MAX10240 초과는 포인터 전에 EINVAL22입니다. 양수에는 명시 darwin_system.resource_limits resource8 Current가 필요합니다. Current를 넘고 FD_SETSIZE1024도 넘으면 EINVAL, 더 작은 수는 원래 명시 유효 UID가 필요해 비제로는 EINVAL, 제로는 허용합니다. root 예외는 소스/모델 증거뿐입니다. DescriptorLimit, kern.maxfilesperproc, FD 숫자와 실행 예산은 해당 관측이 아닙니다. 제로 개수는 배열을 건드리지 않고 비제로 timeout은 개수 입장 후 미지원입니다.
+
+구성된 가상 일반 파일은 비철회, 일반 읽기/쓰기 필터 등록 성공, MAC/제공자 거부 없음을 명시하는 계약입니다. native vnode 종류만으로 등록 성공을 증명하지 않습니다. 이 전제에서 IN/RDNORM, OUT/WRBAND는 EOF나 읽기 전용 open에서도 준비 상태이며 남은 바이트, 접근 플래그, O_NONBLOCK, 쓰기 권한으로 추정하지 않습니다. 숫자 FD와 읽기/쓰기별 마지막 요청 행을 따로 유지하고 다른 dup FD는 합치지 않습니다. HUP 단독은 읽기 등록만 하고 준비 비트를 내지 않습니다. 음수 FD/무시 비트만은 제로, 닫힌 등록은 행별 POLLNVAL32입니다. live OOB/vnode, 스트림/디렉터리/링크는 출력 전에 미지원입니다. 8바이트 기록 입력을 전부 복사하고 불완전 입력/전체 출력 불가는 EFAULT14, 부분 출력은 접두부 복사 없이 거부합니다. 전체 출력은 fd/events를 보존하고 revents를 모두 바꿉니다. 두 정적 권한 조회 모드는 제로 개수도 사전 처리 전에 Poll을 거부하며 공유 닫힌 목록은41경로입니다.
+
+SDK 없는 immediate-poll은86이벤트, 5소프트웨어/3필수 ARM64 HVF, C/CLI/Python을 다루고 공통 native 참조1개를 추가해 현재59개입니다. 독립 O0/O1/O2 ARM64 탐침582회는 리터럴 ABI/오류 제어와 일반 제공자 관측의 혼합이며 보편적 준비 상수가 아닙니다. 예전58개 소스 신원, 다운로드 실패와 첫 native 제한시간 초과 및 원래 한도를 보존합니다. Intel HVF, 물리 iOS, 철회/MAC/등록 거부, select, 대기, 비동기 제공자, 네트워크, 진행 시계, 실제 Mach IPC/스레드, dyld/TLS 및 완전 프레임워크는 미검증 또는 미완성입니다.
+
+```text
+poll230 / poll_nocancel417 / timeout low int32=0 / nfds uint32
+ResourceLimits[8].Current / OPEN_MAX10240 / FD_SETSIZE1024 / explicit original effective UID
+constructive regular provider: nonrevoked / successful ordinary filter attachment / no MAC-provider refusal
+numeric FD + read/write filter / independent last requested index / distinct dup aliases
+IN1 RDNORM64 OUT4 WRBAND256 / HUP16 trigger only / closed registrations POLLNVAL32
+negative and ignored-only rows zero / whole input snapshot / whole output / partial output unsupported
+EFAULT14 EINVAL22 / no ready prefix on unsupported row / zero count no pointer
+static-owner-queries and static-ordinary-queries / all41 other file routes closed before preflight
+immediate-poll86 events / five software + three mandatory ARM64 HVF profiles / C CLI Python
+59 current native-common cases / prior58 source identity preserved / 582 mixed controls and captures
+native Intel and physical iOS unverified / waits select revoked-MAC-provider failures networking unfinished
+```
+
+[XNU poll ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/poll.h), [poll registration and copy order](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/sys_generic.c), [vnode registration and regular filters](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_vnops.c).

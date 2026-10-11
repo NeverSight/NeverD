@@ -29,7 +29,8 @@ public:
       const std::optional<DarwinCredentials> &Credentials = std::nullopt);
   llvm::Expected<std::optional<ServiceResult>>
   handle(ServiceKind Kind, const ProcessServiceEvent &Event,
-         ProcessResult &Result);
+         ProcessResult &Result,
+         const std::optional<DarwinSystemOptions> &System = std::nullopt);
   struct Mapping {
     llvm::ArrayRef<uint8_t> Bytes;
     /// The VM owner retains this lease until every mapped range is unmapped.
@@ -295,6 +296,9 @@ private:
   access(uint64_t Path, uint32_t DirectoryFD, uint32_t Mode,
          ProcessResult &Result, LinkPolicy Links = {true, false},
          Subject User = Subject::Real);
+  llvm::Expected<std::optional<ServiceResult>>
+  poll(const ProcessServiceEvent &Event,
+       const std::optional<DarwinSystemOptions> &System, ProcessResult &Result);
   std::optional<ServiceResult> pathconf(const Description &File, uint32_t Name,
                                         ProcessResult &Result);
   llvm::Expected<std::optional<ServiceResult>>

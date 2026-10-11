@@ -2596,6 +2596,58 @@ TEST_P(DarwinProcess, RuntimeCreatedSymbolicLinksCanBeRenamed) {
     })) << Flags;
 }
 
+TEST_P(DarwinProcess,
+       ImmediatePollPreservesFiltersCopiesAndExplicitResourceKnowledge) {
+  Options.InstructionQuantum = 1024;
+  Options.DarwinFiles.emplace().Files["/data"] = {'a', 'b', 0, 0xff, 'e', 'f'};
+  Options.DarwinSystem.emplace().ResourceLimits[8] = {10240, 10240};
+  Options.Arguments[2] = "/data";
+  const bool X64 = GetParam().ISA == GuestArchitecture::X64;
+  const uint64_t Class = X64 ? 0x2000000 : 0;
+  constexpr uint64_t Expected[] = {0, 0, 1, 0, 1, 1, 2, 2, 0, 2, 22, 14};
+  constexpr uint64_t High[] = {0, 0x1234567800000000ULL, 0xffffffff00000000ULL};
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    auto R = run("immediate-poll");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+    EXPECT_EQ(R->ExitStatus, 37);
+    EXPECT_EQ(R->StandardOutput, "p");
+    EXPECT_TRUE(R->StandardError.empty());
+    EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+    ASSERT_EQ(R->Services.size(), 86u);
+    EXPECT_EQ(R->Services[5].Number, Class | 199);
+    EXPECT_EQ(R->Services[5].Result, 6u);
+    EXPECT_EQ(R->Services[5].Error, false);
+    EXPECT_EQ(R->Services[5].Arguments[2], 2u);
+    for (unsigned API = 0; API != 2; ++API)
+      for (unsigned H = 0; H != 3; ++H)
+        for (unsigned I = 0; I != 12; ++I) {
+          const auto &E = R->Services[7 + (API * 3 + H) * 12 + I];
+          EXPECT_EQ(E.Number, High[H] | Class | (API ? 417 : 230));
+          EXPECT_EQ(E.Result, Expected[I]);
+          EXPECT_EQ(E.Error, I >= 10);
+          EXPECT_EQ(E.Arguments[2], High[H]);
+        }
+    for (unsigned I = 0; I != 4; ++I) {
+      const auto &E = R->Services[80 + I];
+      EXPECT_EQ(E.Number, Class | (I < 2 ? 230 : 417));
+      EXPECT_EQ(E.Result, 1u);
+      EXPECT_EQ(E.Error, false);
+    }
+  }
+  Options.DarwinSystem->ResourceLimits.clear();
+  auto Missing = run("immediate-poll-missing");
+  ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+  EXPECT_EQ(Missing->Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_EQ(Missing->Diagnostic,
+            "Darwin poll NOFILE resource observation is not configured");
+  EXPECT_EQ(Missing->StandardOutput, "!");
+  ASSERT_EQ(Missing->Services.size(), 2u);
+  EXPECT_EQ(Missing->Services.back().Number, Class | 230);
+  EXPECT_FALSE(Missing->Services.back().Result);
+  EXPECT_FALSE(Missing->Services.back().Error);
+}
+
 INSTANTIATE_TEST_SUITE_P(Transports, DarwinProcess,
                          testing::ValuesIn(profiles()),
                          [](const testing::TestParamInfo<Profile> &P) {

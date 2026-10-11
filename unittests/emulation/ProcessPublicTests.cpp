@@ -3160,4 +3160,83 @@ TEST_F(ProcessPublic,
     EXPECT_EQ(*Report, run(Options));
   }
 }
+TEST_F(ProcessPublic, DarwinImmediatePollPreservesRawResultsAcrossCAndCLI) {
+#ifndef NEVERD_DARWIN_FIXTURE_DIR
+  GTEST_SKIP() << "Clang and ld64.lld Darwin fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  for (const auto &[File, Profile] :
+       {std::pair{"macos-arm64", MacOSMachO64},
+        std::pair{"macos-x86_64", MacOSMachO64},
+        std::pair{"ios-arm64", IOSMachO64},
+        std::pair{"ios-simulator-arm64", IOSSimulatorMachO64},
+        std::pair{"ios-simulator-x86_64", IOSSimulatorMachO64}}) {
+    Path = (std::filesystem::path(NEVERD_DARWIN_FIXTURE_DIR) / File).string();
+    const bool X64 = llvm::StringRef(File).ends_with("x86_64");
+    const uint64_t Class = X64 ? 0x2000000 : 0;
+    for (bool Known : {true, false}) {
+      const std::string Options =
+          std::string(
+              R"({"backend":"unicorn","instruction_quantum":1024,"timeout_microseconds":5000000,"arguments":["guest",")") +
+          (Known ? "immediate-poll" : "immediate-poll-missing") +
+          R"(","/data"],"darwin_files":{"files":[{"path":"/data","bytes_hex":"616200ff6566"}]},"darwin_system":)" +
+          (Known
+               ? R"({"resource_limits":[{"resource":8,"current":10240,"maximum":10240}]})"
+               : "{}") +
+          "}";
+      auto Text = takeString(neverd_emulate_process_json(
+          Session, Path.c_str(), Profile, Options.c_str()));
+      ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+      auto Report = llvm::json::parse(Text);
+      ASSERT_TRUE(bool(Report)) << llvm::toString(Report.takeError());
+      const auto *Object = Report->getAsObject();
+      ASSERT_NE(Object, nullptr);
+      EXPECT_EQ(Object->getString(field::Stop),
+                Known ? "exited" : "unsupported_service");
+      EXPECT_EQ(Object->getString(field::Stdout), Known ? "70" : "21");
+      EXPECT_EQ(Object->getString(field::Stderr), "");
+      const auto *Calls = Object->getArray(field::Services);
+      ASSERT_NE(Calls, nullptr);
+      ASSERT_EQ(Calls->size(), Known ? 86u : 2u);
+      if (Known) {
+        EXPECT_EQ(Object->getInteger(field::ExitStatus), 37);
+        constexpr uint64_t Values[] = {0, 0, 1, 0, 1, 1, 2, 2, 0, 2, 22, 14};
+        constexpr uint64_t High[] = {0, 0x1234567800000000ULL,
+                                     0xffffffff00000000ULL};
+        for (unsigned A = 0; A != 2; ++A)
+          for (unsigned H = 0; H != 3; ++H)
+            for (unsigned I = 0; I != 12; ++I) {
+              const auto *E = (*Calls)[7 + (A * 3 + H) * 12 + I].getAsObject();
+              ASSERT_NE(E, nullptr);
+              EXPECT_EQ(
+                  E->getString(field::Number),
+                  llvm::utohexstr(High[H] | Class | (A ? 417 : 230), true));
+              EXPECT_EQ(E->getString(field::Result),
+                        llvm::utohexstr(Values[I], true));
+              EXPECT_EQ(E->getBoolean(field::Error), I >= 10);
+            }
+      } else {
+        EXPECT_EQ(Object->getString(field::Diagnostic),
+                  "Darwin poll NOFILE resource observation is not configured");
+        const auto *E = Calls->back().getAsObject();
+        ASSERT_NE(E, nullptr);
+        EXPECT_EQ(E->getString(field::Number),
+                  llvm::utohexstr(Class | 230, true));
+        EXPECT_EQ(E->get(field::Error), nullptr);
+        ASSERT_NE(E->get(field::Result), nullptr);
+        EXPECT_EQ(*E->get(field::Result), llvm::json::Value(nullptr));
+      }
+      EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+      EXPECT_EQ(runCLIRequest(Path, Profile, Options, Output),
+                Known ? process_cli::GuestFailure : process_cli::Incomplete);
+      ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, *Report));
+    }
+  }
+#endif
+}
+
 } // namespace

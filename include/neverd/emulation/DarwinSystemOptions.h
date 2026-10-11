@@ -73,8 +73,9 @@ struct DarwinSystemOptions {
   /// Reported memory, independent of the emulation allocation budget.
   std::optional<uint64_t> MemorySize;
   /// Canonical resource keys 0..8. Missing is unknown, and zero is explicit.
-  /// Supplies read-only getrlimit observations without querying the host,
-  /// changing execution budgets or enabling setrlimit/signal delivery.
+  /// Supplies getrlimit observations and explicit NOFILE count admission for
+  /// immediate poll. This never queries the host, changes execution budgets
+  /// or enables setrlimit/signal delivery.
   std::map<uint32_t, DarwinResourceLimit> ResourceLimits;
   /// Independent fixed observations: one query never requires the other.
   /// Missing children remain unknown even when fork/wait are unsupported.

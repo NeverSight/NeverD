@@ -1,6 +1,6 @@
 **言語**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
+<!-- i18n-source: c5503091e713c63aa7b08a8cbd5fab1b5cc3c8d8950bb7da4fe754dbe5787137 -->
 
 [← ドキュメント一覧](README.md)
 
@@ -37,7 +37,7 @@ neverd emulate guest.macho --profile=ios-macho64-v1 \
 
 ## Darwin サービス
 
-BSD 呼出しの ARM64 は X16、X0–X5 と `svc #0x80`、x64 は BSD クラス `0x02000000`、RAX、RDI/RSI/RDX/R10/R8/R9 を使います。成功は carry を消し、エラーは carry と正の errno を返します。ARM64 は X1 を消し、x64 は成功時に RDX を消してエラー時には保持します。SYSCALL が変更するレジスタは明示されています。レポートの `result` と `error=true` は BSD エラーを表します。戻らない要求や未対応要求には両フィールドがありません。XNU の [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c)、[x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c) の規則に基づき、Apple の実装コードは取り込んでいません。
+BSD 呼出しの ARM64 は X16、X0–X5 と `svc #0x80`、x64 は BSD クラス `0x02000000`、RAX、RDI/RSI/RDX/R10/R8/R9 を使います。成功は carry を消し、エラーは carry と正の errno を返します。ARM64 は X1 を消し、x64 は成功時に RDX を消してエラー時には保持します。SYSCALL が変更するレジスタは明示されています。レポートの `result` と `error=true` は BSD エラーを表します。戻らない要求や未対応要求は JSON で `result: null` を持ち、`error` を省略します。XNU の [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c)、[x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c) の規則に基づき、Apple の実装コードは取り込んでいません。
 
 サービスは `exit`、`write`、`getpid`、`getppid`、`getuid`、`geteuid`、`getgid`、`getegid`、`getgroups`、`mmap`、`mprotect`、`munmap` です。PID は1000、PPID は1です。UID/GID は既定1000で、下記の明示的な資格情報から実/実効IDを個別に指定できます。記述子 1、2 は NUL や非 UTF8 を含むバイトを捕捉し、閉じた記述子や読み取り専用記述子は EBADF です。部分コピー済みのバイトは保持しますが、後続の障害は EFAULT のままです。`INT_MAX` を超える長さは、記述子、ポインター、予算の確認前に EINVAL になります。[XNU write](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_generic.c)に基づきます。
 
@@ -1126,7 +1126,7 @@ owner bits / whole-mask group-world outcomes / EACCES13
 credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
 real credential copy / first supplementary match / displacement disables memberd
 missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
-all40 other file routes and direct/file-backed mappings closed / typed streams only
+all41 other file routes and direct/file-backed mappings closed / typed streams only
 ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
 OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
 73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
@@ -1164,3 +1164,27 @@ native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).
+
+## 通常ファイルの即時準備状態
+
+raw BSD poll(230) と poll_nocancel(417) は timeout low int32=0 を扱います。nfds は uint32 で、OPEN_MAX10240 超過はポインタ参照前に EINVAL22。正数には明示的 darwin_system.resource_limits の resource8 Current が必要です。Current 超過かつ FD_SETSIZE1024 超過は EINVAL、それ以下は元の明示的な実効 UID を要求し、非ゼロは EINVAL、ゼロは許可します。root 例外はソース/モデル証拠のみ。DescriptorLimit、kern.maxfilesperproc、FD 数値、実行予算はこの観測を与えません。ゼロ件は配列に触れず、非ゼロ timeout は件数判定後に未対応です。
+
+構築された仮想通常ファイルは非撤回、通常読書きフィルタの登録成功、MAC/提供元拒否なしを明示する契約です。native vnode の種別だけでは登録成功を証明できません。この前提で IN/RDNORM と OUT/WRBAND は EOF や読み取り専用 open でも準備完了で、残量・アクセスフラグ・O_NONBLOCK・書込み許可から推測しません。数値 FD と読/書別に最後の行を保持し、異なる dup FD は別です。HUP 単独は読フィルタを登録しますが準備ビットを出しません。負 FD/無視ビットのみはゼロ、閉じた登録は各行 POLLNVAL32。live OOB/vnode、ストリーム、ディレクトリ、リンクは出力前に未対応です。8バイト記録を全入力取得し、不完全入力/全出力不可は EFAULT14、部分出力は接頭部コピーなしで拒否。全コピーは fd/events を保存し revents 全体を置換。静的権限照会2モードはゼロ件も前処理前に Poll を拒否し、共有閉鎖一覧は41経路です。
+
+SDKなし immediate-poll は86イベント、5ソフトウェア/3必須 ARM64 HVF 設定、C/CLI/Python を扱い、共通 native 参照を1つ増やして現一覧59件。独立 O0/O1/O2 ARM64 探針582回は ABI/エラーの文字通りの制御と通常提供元観測の混合で、普遍的な準備定数ではありません。旧58件のソース識別、ダウンロード失敗、最初の native タイムアウトと元の期限を保持。Intel HVF、実機 iOS、撤回/MAC/登録拒否、select、待機、非同期提供元、ネットワーク、進行時計、実 Mach IPC/スレッド、dyld/TLS、完全フレームワークは未検証または未完成です。
+
+```text
+poll230 / poll_nocancel417 / timeout low int32=0 / nfds uint32
+ResourceLimits[8].Current / OPEN_MAX10240 / FD_SETSIZE1024 / explicit original effective UID
+constructive regular provider: nonrevoked / successful ordinary filter attachment / no MAC-provider refusal
+numeric FD + read/write filter / independent last requested index / distinct dup aliases
+IN1 RDNORM64 OUT4 WRBAND256 / HUP16 trigger only / closed registrations POLLNVAL32
+negative and ignored-only rows zero / whole input snapshot / whole output / partial output unsupported
+EFAULT14 EINVAL22 / no ready prefix on unsupported row / zero count no pointer
+static-owner-queries and static-ordinary-queries / all41 other file routes closed before preflight
+immediate-poll86 events / five software + three mandatory ARM64 HVF profiles / C CLI Python
+59 current native-common cases / prior58 source identity preserved / 582 mixed controls and captures
+native Intel and physical iOS unverified / waits select revoked-MAC-provider failures networking unfinished
+```
+
+[XNU poll ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/poll.h), [poll registration and copy order](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/sys_generic.c), [vnode registration and regular filters](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_vnops.c).

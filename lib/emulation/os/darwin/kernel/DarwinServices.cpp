@@ -152,6 +152,7 @@ dispatchService(ServiceKind Kind, ExecutionBackend &CPU, DarwinMemory &Memory,
     Result.Stop = ProcessStopReason::Exited;
     Result.ExitStatus = Event.Arguments[0] & 0xff;
     return std::optional<ServiceResult>();
+  case ServiceKind::Poll:
   case ServiceKind::Write:
   case ServiceKind::Readv:
   case ServiceKind::Writev:
@@ -207,7 +208,7 @@ dispatchService(ServiceKind Kind, ExecutionBackend &CPU, DarwinMemory &Memory,
   case ServiceKind::Stat64:
   case ServiceKind::Fstat64:
   case ServiceKind::Lstat64:
-    return Files.handle(Kind, Event, Result);
+    return Files.handle(Kind, Event, Result, Options.DarwinSystem);
   case ServiceKind::GetPID:
     return std::optional<ServiceResult>({ProcessID, false});
   case ServiceKind::GetPPID:

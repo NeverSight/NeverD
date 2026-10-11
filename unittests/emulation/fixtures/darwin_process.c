@@ -7101,6 +7101,159 @@ static int thread_identity(unsigned mode) {
   return 37;
 }
 
+/* Immediate ordinary-file poll: literal arrays, no SDK readiness helpers. */
+struct poll_record {
+  int fd;
+  unsigned short events, revents;
+};
+_Static_assert(sizeof(struct poll_record) == 8, "LP64 poll record");
+static int poll_sample(u64 number, u64 high, unsigned count, const int *fds,
+                       const unsigned short *events,
+                       const unsigned short *expected, u64 result) {
+  /* Check all 64 object bytes, including fd/events and unused records.
+   * The C union provides the same byte coverage without per-byte loops. */
+  union poll_guard {
+    struct {
+      u64 before[2];
+      struct poll_record records[4];
+      u64 after[2];
+    } fields;
+    u64 words[8];
+  } buffer = {.words = {0xa5a5a5a5a5a5a5a5UL, 0xa5a5a5a5a5a5a5a5UL,
+                        0xa5a5a5a5a5a5a5a5UL, 0xa5a5a5a5a5a5a5a5UL,
+                        0xa5a5a5a5a5a5a5a5UL, 0xa5a5a5a5a5a5a5a5UL,
+                        0xa5a5a5a5a5a5a5a5UL, 0xa5a5a5a5a5a5a5a5UL}},
+    original;
+  _Static_assert(sizeof(union poll_guard) == 64, "complete poll guard bytes");
+  for (unsigned i = 0; i != count; ++i)
+    buffer.fields.records[i] = (struct poll_record){fds[i], events[i], 0x5a5a};
+  original = buffer;
+  for (unsigned i = 0; i != count; ++i)
+    original.fields.records[i].revents = expected[i];
+  unsigned error;
+  if (call(number | high, (u64)buffer.fields.records, high | count, high, -1UL,
+           -1UL, -1UL, &error) != result ||
+      error || secondary)
+    return 181;
+  if (buffer.words[0] != original.words[0] ||
+      buffer.words[1] != original.words[1] ||
+      buffer.words[2] != original.words[2] ||
+      buffer.words[3] != original.words[3] ||
+      buffer.words[4] != original.words[4] ||
+      buffer.words[5] != original.words[5] ||
+      buffer.words[6] != original.words[6] ||
+      buffer.words[7] != original.words[7])
+    return 182;
+  return 0;
+}
+static int immediate_poll(const char *path) {
+  unsigned error;
+  u64 limit[2];
+  if (call(194, 8, (u64)limit, 0, 0, 0, 0, &error) || error || secondary ||
+      limit[0] < 4)
+    return 185;
+  u64 fd = call(5, (u64)path, 0, 0, 0, 0, 0, &error);
+  if (error || secondary)
+    return 186;
+  u64 copy = call(41, fd, 0, 0, 0, 0, 0, &error);
+  if (error || secondary)
+    return 186;
+  u64 closed = call(41, fd, 0, 0, 0, 0, 0, &error);
+  if (error || secondary)
+    return 186;
+  if (call(6, closed, 0, 0, 0, 0, 0, &error) || error || secondary)
+    return 187;
+  /* Seek to this provider's EOF; the native and virtual payloads differ. */
+  call(199, fd, 0, 2, 0, 0, 0, &error);
+  if (error || secondary || call(92, fd, 4, 4, 0, 0, 0, &error) || error ||
+      secondary)
+    return 187;
+  const u64 high[] = {0, 0x1234567800000000UL, 0xffffffff00000000UL};
+  const u64 numbers[] = {230, 417};
+  const int negative[] = {-1, -2, (-2147483647 - 1), -1};
+  const unsigned short ne[] = {1, 4, 0xffff, 0}, zero[] = {0, 0, 0, 0};
+  for (unsigned a = 0; a != 2; ++a)
+    for (unsigned h = 0; h != 3; ++h) {
+      const u64 number = numbers[a] | high[h];
+      if (call(number, -1UL, high[h], high[h], -1UL, -1UL, -1UL, &error) ||
+          error || secondary)
+        return 188;
+      if (poll_sample(numbers[a], high[h], 4, negative, ne, zero, 0))
+        return 189;
+      int one[] = {closed};
+      const unsigned short read[] = {1}, invalid[] = {32};
+      const unsigned short ignored[] = {0xe028};
+      if (poll_sample(numbers[a], high[h], 1, one, read, invalid, 1) ||
+          poll_sample(numbers[a], high[h], 1, one, ignored, zero, 0))
+        return 190;
+      one[0] = (int)fd;
+      const unsigned short all[] = {0x145};
+      if (poll_sample(numbers[a], high[h], 1, one, all, all, 1))
+        return 191;
+      int pair[] = {(int)fd, (int)fd};
+      const unsigned short rr[] = {1, 1}, last[] = {0, 1}, split[] = {1, 4};
+      const unsigned short overlap[] = {5, 1}, overlap_result[] = {4, 1};
+      const unsigned short hup[] = {1, 16};
+      if (poll_sample(numbers[a], high[h], 2, pair, rr, last, 1) ||
+          poll_sample(numbers[a], high[h], 2, pair, split, split, 2) ||
+          poll_sample(numbers[a], high[h], 2, pair, overlap, overlap_result,
+                      2) ||
+          poll_sample(numbers[a], high[h], 2, pair, hup, zero, 0))
+        return 192;
+      pair[1] = (int)copy;
+      if (poll_sample(numbers[a], high[h], 2, pair, rr, rr, 2))
+        return 193;
+      if (call(number, -1UL, high[h] | 10241, high[h], -1UL, -1UL, -1UL,
+               &error) != 22 ||
+          !error)
+        return 194;
+#if defined(__aarch64__)
+      if (secondary)
+        return 195;
+#else
+      if (secondary != high[h])
+        return 195;
+#endif
+      if (call(number, -1UL, high[h] | 1, high[h], -1UL, -1UL, -1UL, &error) !=
+              14 ||
+          !error)
+        return 196;
+#if defined(__aarch64__)
+      if (secondary)
+        return 197;
+#else
+      if (secondary != high[h])
+        return 197;
+#endif
+    }
+  if (call(6, fd, 0, 0, 0, 0, 0, &error) || error || secondary)
+    return 198;
+  for (unsigned a = 0; a != 2; ++a) {
+    int one[] = {(int)fd};
+    const unsigned short read[] = {1}, invalid[] = {32};
+    if (poll_sample(numbers[a], 0, 1, one, read, invalid, 1))
+      return 199;
+    one[0] = (int)copy;
+    if (poll_sample(numbers[a], 0, 1, one, read, read, 1))
+      return 199;
+  }
+  if (call(6, copy, 0, 0, 0, 0, 0, &error) || error || secondary)
+    return 200;
+  const char mark = 'p';
+  if (call(4, 1, (u64)&mark, 1, 0, 0, 0, &error) != 1 || error || secondary)
+    return 201;
+  return 0;
+}
+static int immediate_poll_missing(void) {
+  unsigned error;
+  const char mark = '!';
+  if (call(4, 1, (u64)&mark, 1, 0, 0, 0, &error) != 1 || error)
+    return 202;
+  struct poll_record input = {-1, 1, 0x5a5a};
+  call(230, (u64)&input, 1, 0, 0, 0, 0, &error);
+  return 203;
+}
+
 int main(int argc, char **argv, char **envp, char **apple) {
   if (argc >= 2 && equal(argv[1], "thread-identity"))
     return thread_identity(0);
@@ -7147,6 +7300,12 @@ int main(int argc, char **argv, char **envp, char **apple) {
   if (argc < 2 || data != 0x1234 || bss != 0)
     return 101;
   bss = 99;
+  if (equal(argv[1], "immediate-poll")) {
+    const int status = immediate_poll(argc < 3 ? "/data" : argv[2]);
+    return status ? status : 37;
+  }
+  if (equal(argv[1], "immediate-poll-missing"))
+    return immediate_poll_missing();
   if (equal(argv[1], "process-priority") ||
       equal(argv[1], "virtual-process-priority"))
     return process_priority(equal(argv[1], "virtual-process-priority"));

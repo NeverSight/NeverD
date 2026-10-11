@@ -1,6 +1,6 @@
 **اللغات**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](darwin-emulation.md)
 
-<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
+<!-- i18n-source: c5503091e713c63aa7b08a8cbd5fab1b5cc3c8d8950bb7da4fe754dbe5787137 -->
 
 [← فهرس الوثائق](README.md)
 
@@ -37,7 +37,7 @@ neverd emulate guest.macho --profile=ios-macho64-v1 \
 
 ## خدمات Darwin
 
-تستخدم استدعاءات BSD على ARM64 السجلات X16 وX0–X5 والتعليمة `svc #0x80`؛ ويستخدم x64 فئة BSD وهي `0x02000000` والسجلات RAX وRDI/RSI/RDX/R10/R8/R9. يمحو النجاح carry، بينما يضبطه الخطأ ويعيد errno موجباً. يمحو ARM64 السجل X1؛ ويمحو x64 السجل RDX عند النجاح ويحافظ عليه عند الخطأ. تغييرات سجلات SYSCALL صريحة. يعبّر التقرير عن خطأ BSD بواسطة `result` و`error=true`؛ ولا تملك الطلبات التي لا تعود أو غير المدعومة هذين الحقلين. تتبع القواعد مسارات XNU لـ [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c) و[x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c)، دون تضمين شيفرة Apple.
+تستخدم استدعاءات BSD على ARM64 السجلات X16 وX0–X5 والتعليمة `svc #0x80`؛ ويستخدم x64 فئة BSD وهي `0x02000000` والسجلات RAX وRDI/RSI/RDX/R10/R8/R9. يمحو النجاح carry، بينما يضبطه الخطأ ويعيد errno موجباً. يمحو ARM64 السجل X1؛ ويمحو x64 السجل RDX عند النجاح ويحافظ عليه عند الخطأ. تغييرات سجلات SYSCALL صريحة. يعبّر التقرير عن خطأ BSD بواسطة `result` و`error=true`؛ وتستخدم الطلبات التي لا تعود أو غير المدعومة `result: null` في JSON وتحذف حقل `error`. تتبع القواعد مسارات XNU لـ [ARM64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/arm/systemcalls.c) و[x64](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/dev/i386/systemcalls.c)، دون تضمين شيفرة Apple.
 
 الخدمات هي `exit` و`write` و`getpid` و`getppid` و`getuid` و`geteuid` و`getgid` و`getegid` و`getgroups` و`mmap` و`mprotect` و`munmap`. قيمة PID هي1000 وPPID هي1؛ UID/GID افتراضياً1000 أو المعرفات الحقيقية/الفعالة المنفصلة المعلنة أدناه. يلتقط الواصفان 1 و2 البايتات بما فيها NUL وغير UTF8؛ وتعيد الواصفات المغلقة أو المخصصة للقراءة EBADF. تُحفظ البايتات المنسوخة جزئياً لكن خطأ الوصول اللاحق يبقى EFAULT. طول أكبر من `INT_MAX` يعيد EINVAL قبل فحص الواصف أو المؤشر أو الميزانية، وفق [XNU write](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_generic.c).
 
@@ -1124,7 +1124,7 @@ owner bits / whole-mask group-world outcomes / EACCES13
 credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
 real credential copy / first supplementary match / displacement disables memberd
 missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
-all40 other file routes and direct/file-backed mappings closed / typed streams only
+all41 other file routes and direct/file-backed mappings closed / typed streams only
 ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
 OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
 73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
@@ -1162,3 +1162,27 @@ native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).
+
+## جاهزية الملفات العادية الفورية
+
+يدعم BSD الخام poll(230) وpoll_nocancel(417) قيمة timeout low int32=0. يفسر nfds كـuint32؛ يتجاوز OPEN_MAX10240 فيعيد EINVAL22 قبل المؤشرات. يحتاج العدد الموجب darwin_system.resource_limits resource8 Current صريحاً. فوق Current وFD_SETSIZE1024 يعيد EINVAL؛ وإلا يحتاج UID الفعّال الأصلي الصريح، غير الصفر يرفض والصفر يسمح. استثناء root له دليل المصدر/النموذج فقط. DescriptorLimit وkern.maxfilesperproc ورقم FD وميزانيات التنفيذ ليست هذه المشاهدة. العدد صفر لا يلمس المصفوفة؛ timeout غير صفر غير مدعوم بعد قبول العدد.
+
+يعلن موفر الملف العادي الافتراضي المبني وصفاً غير مسحوب وتسجيل مرشحات القراءة/الكتابة العادية بنجاح وعدم رفض MAC/الموفر. نوع vnode الأصلي وحده لا يثبت التسجيل. بهذه الفرضية تكون IN/RDNORM وOUT/WRBAND جاهزة حتى عند EOF/open readonly، دون استنتاج من البايتات أو الأعلام أو O_NONBLOCK أو صلاحية الكتابة. يحتفظ مفتاح FD الرقمي والقراءة/الكتابة بآخر صف لكل مرشح مستقلاً؛ لا تندمج FD المختلفة عبر dup. يسجل HUP وحده القراءة دون بت جاهزية. FD السالب/الأعلام المتجاهلة صفر؛ التسجيل المغلق POLLNVAL32 لكل صف. يرفض OOB/vnode الحي والتدفقات/الأدلة/الروابط قبل الإخراج. يلتقط كامل إدخال سجل8 بايت؛ الإدخال الناقص/الإخراج غير القابل للكتابة كله EFAULT14، والإخراج الجزئي يرفض بلا نسخ بادئة. النسخ الكامل يحفظ fd/events ويستبدل revents. يغلق وضعا الاستعلام الثابت Poll قبل الفحص حتى عند صفر؛ القائمة المشتركة41 مساراً.
+
+يغطي immediate-poll بلا SDK عدد86 حدثاً وخمسة إعدادات برمجية/ثلاثة ARM64 HVF إلزامية وC/CLI/Python، ويضيف مرجعاً أصلياً مشتركاً ليصبح المخزون59. يحتفظ مسبار O0/O1/O2 ARM64 المستقل582 تحكماً حرفياً ABI/خطأ ومشاهدات الموفر العادي مختلطة، لا ثوابت جاهزية عامة. تحتفظ أدلة58 السابقة بهوية المصدر؛ فشل التنزيل وأول مهلة أصلية والحدود السابقة محفوظة. Intel HVF وiOS الفعلي والسحب/MAC/رفض التسجيل وselect والانتظار والموفرون غير المتزامنين والشبكة والساعات المتقدمة وMach IPC/الخيوط الحقيقية وdyld/TLS والأطر الكاملة غير مختبرة أو غير مكتملة.
+
+```text
+poll230 / poll_nocancel417 / timeout low int32=0 / nfds uint32
+ResourceLimits[8].Current / OPEN_MAX10240 / FD_SETSIZE1024 / explicit original effective UID
+constructive regular provider: nonrevoked / successful ordinary filter attachment / no MAC-provider refusal
+numeric FD + read/write filter / independent last requested index / distinct dup aliases
+IN1 RDNORM64 OUT4 WRBAND256 / HUP16 trigger only / closed registrations POLLNVAL32
+negative and ignored-only rows zero / whole input snapshot / whole output / partial output unsupported
+EFAULT14 EINVAL22 / no ready prefix on unsupported row / zero count no pointer
+static-owner-queries and static-ordinary-queries / all41 other file routes closed before preflight
+immediate-poll86 events / five software + three mandatory ARM64 HVF profiles / C CLI Python
+59 current native-common cases / prior58 source identity preserved / 582 mixed controls and captures
+native Intel and physical iOS unverified / waits select revoked-MAC-provider failures networking unfinished
+```
+
+[XNU poll ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/poll.h), [poll registration and copy order](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/sys_generic.c), [vnode registration and regular filters](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_vnops.c).

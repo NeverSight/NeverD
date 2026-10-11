@@ -303,6 +303,15 @@ ALLOWED: tuple[Allowance, ...] = (
         ),
     ),
     Allowance(
+        path="LICENSES/node/LICENSE",
+        rule="provenance-phrase",
+        reason=(
+            "The verbatim Node.js license identifies SES/Caja and its copyright "
+            "holder; this required upstream attribution is not a NeverD "
+            "implementation claim."
+        ),
+    ),
+    Allowance(
         path="include/neverd/sbf/solana/SBFAnchorNames.def",
         rule="foreign-project",
         reason=(

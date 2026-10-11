@@ -190,6 +190,9 @@ enum class DarwinFileAuthorization {
 /// Closed initial catalogue, with canonical absolute guest paths. No host
 /// filesystem is consulted. Separate opens have independent offsets; dup
 /// shares an open description. Ancestor directories are implicit.
+/// Constructed regular descriptions model successful ordinary poll filter
+/// attachment, no revocation and no MAC/provider refusal. Arbitrary native
+/// vnode registration failures and security lifecycle are outside this model.
 struct DarwinFileOptions {
   std::map<std::string, std::vector<uint8_t>> Files;
   /// Absence retains existence-only queries without permission enforcement.
