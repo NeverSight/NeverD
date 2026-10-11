@@ -122,3 +122,12 @@ NEVERD_NATIVE_DARWIN_CASE(EntropyReplayKeepsBytesFaultOrderAndFreshRunLifetime)
 
 // Fixed observation on the native CPU; native thread lifecycle is not modeled.
 NEVERD_NATIVE_DARWIN_CASE(ThreadIdentityPreservesExplicitBitsAndIndependentRuns)
+NEVERD_NATIVE_DARWIN_CASE(MachSelfPortsPreserveExplicitBitsAndIndependentRuns)
+
+// Explicit immutable permission environment on the native CPU. Its separate
+// owner-matched raw/SDK oracle is not a common deterministic-host workload.
+NEVERD_NATIVE_DARWIN_CASE(OwnerQueriesKeepPermissionAndUnknownBoundaries)
+NEVERD_NATIVE_DARWIN_CASE(
+    OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch)
+NEVERD_NATIVE_DARWIN_CASE(
+    OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver)

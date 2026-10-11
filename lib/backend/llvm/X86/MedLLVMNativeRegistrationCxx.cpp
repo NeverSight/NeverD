@@ -265,18 +265,6 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
           Contract.DoesNotReturn != Effect->DoesNotReturn)
         return false;
       if (Throw) {
-        // A throwing catch inside an enclosing try needs the CRT's secondary
-        // catch-search context. It is not the parent's ordinary dispatch.
-        if (State->CallbackOnly &&
-            llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-              return Try.TryLow < State->CxxMinimumTryLevel &&
-                     llvm::any_of(
-                         State->Levels,
-                         [&](int32_t Level) {
-                           return Level >= Try.TryLow && Level <= Try.TryHigh;
-                         });
-            }))
-          return false;
         const auto Proof = getCheckedX86RegistrationThrowCalleeABI(
             *Img, Effect->Target, &Work);
         if (!Proof || !Effect->DoesNotReturn || Effect->ECXFrameOffset ||
@@ -568,9 +556,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     if (State.Levels.empty())
       return false;
     const int32_t Level = State.Levels.front();
-    return llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-      return State.CxxMinimumTryLevel <= Try.TryLow && Level >= Try.TryLow &&
-             Level <= Try.TryHigh;
+    return llvm::any_of(State.CxxSearches, [&](const auto &Search) {
+      return Search.Level == Level;
     });
   };
   for (const auto &Plan : Calls) {

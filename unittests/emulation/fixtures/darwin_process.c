@@ -1828,6 +1828,53 @@ static int preserved_mach(struct mach_observation value, unsigned carry) {
          value.second == 0x1122334455667788UL &&
          value.third == 0x8877665544332211UL;
 }
+/* Independent fixed observations exercise the original no-argument Mach ABI.
+ * Equal/zero names are permitted; this does not grant a live IPC right. */
+static int mach_self_ports(int emit_values) {
+  u64 names[3];
+  const u64 prefixes[] = {0, 0x1234567800000000UL, 0xffffffff00000000UL};
+  int check = 50;
+#define SELF_EXPECT(expression)                                                \
+  do {                                                                         \
+    ++check;                                                                   \
+    if (!(expression))                                                         \
+      return check;                                                            \
+  } while (0)
+  for (unsigned q = 0; q != 3; ++q) {
+    const u64 plain = mach_number(27 + q);
+    struct mach_observation first = raw_trap(plain, (u64)-1, mach_flags(1));
+    SELF_EXPECT(preserved_mach(first, 1));
+    names[q] = first.value;
+    SELF_EXPECT(first.value == (u64)(long)(int)(unsigned)first.value);
+    for (unsigned p = 0; p != 3; ++p)
+      for (unsigned carry = 0; carry != 2; ++carry) {
+        struct mach_observation next = raw_trap(
+            (plain & 0xffffffffUL) | prefixes[p], (u64)-1, mach_flags(carry));
+        SELF_EXPECT(preserved_mach(next, carry));
+        SELF_EXPECT(next.value == names[q]);
+      }
+  }
+  unsigned error;
+  const u64 size = emit_values ? sizeof(names) : 1;
+  SELF_EXPECT(call(4, 1, emit_values ? (u64)names : (u64) "J", size, 0, 0, 0,
+                   &error) == size &&
+              !error);
+#undef SELF_EXPECT
+  return 37;
+}
+static int mach_self_port_missing(const char *selection) {
+  unsigned index = equal(selection, "thread") ? 27
+                   : equal(selection, "task") ? 28
+                   : equal(selection, "host") ? 29
+                                              : 0;
+  if (!index)
+    return 79;
+  unsigned error;
+  if (call(4, 1, (u64) "!", 1, 0, 0, 0, &error) != 1 || error)
+    return 78;
+  return (int)raw_trap(mach_number(index), (u64)-1, mach_flags(1)).value;
+}
+
 static int mach_timebase(int emit_values) {
   unsigned char bytes[10];
   unsigned error;
@@ -4987,6 +5034,182 @@ static int directory_mutations(const char *path) {
   return 37;
 }
 
+static int owner_query_result(unsigned api, const char *path, u64 mode,
+                              u64 flags, u64 expected) {
+  unsigned error;
+  u64 result = api ? call(466, -2UL, (u64)path, mode, flags, 0, 0, &error)
+                   : call(33, (u64)path, mode, 0, 0, 0, 0, &error);
+  if (result != expected || error != (expected != 0))
+    return 211;
+#if defined(__aarch64__)
+  if (secondary)
+    return 212;
+#endif
+  return 0;
+}
+static int owner_queries(const char *stop_path, unsigned scope) {
+  unsigned error;
+  if (stop_path || scope) {
+    if (call(4, 1, (u64) "!", 1, 0, 0, 0, &error) != 1 || error)
+      return 213;
+    if (scope == 1)
+      call(5, (u64) "/data", 0x601, 0, 0, 0, 0, &error);
+    else if (scope == 2)
+      call(197, 0, PAGE, 1, 2, 1, 0, &error);
+    else
+      call(33, (u64)stop_path, 4, 0, 0, 0, 0, &error);
+    return 214; /* Every selected operation must stop before this return. */
+  }
+  const unsigned file_errors[] = {0, 13, 13, 13, 0, 13, 13, 13};
+  for (unsigned api = 0; api != 3; ++api)
+    for (unsigned request = 0; request != 8; ++request) {
+      int status = owner_query_result(api, "/data", request, api == 2 ? 16 : 0,
+                                      file_errors[request]);
+      if (status)
+        return status;
+    }
+  // Keep pointers in call instructions: a constant pointer table introduces
+  // Mach-O rebases and changes this SDK-free static guest's loading contract.
+#define OWNER_QUERY(path, mode, expected)                                      \
+  do {                                                                         \
+    int status = owner_query_result(0, path, mode, 0, expected);               \
+    if (status)                                                                \
+      return status;                                                           \
+  } while (0)
+  OWNER_QUERY("/directory", 0, 0);
+  OWNER_QUERY("/directory", 1, 13);
+  OWNER_QUERY("/directory/", 0, 0);
+  OWNER_QUERY("/directory/.", 0, 13);
+  OWNER_QUERY("/directory/..", 0, 13);
+  OWNER_QUERY("/directory/leaf", 0, 13);
+  OWNER_QUERY("/directory/missing", 0, 13);
+  OWNER_QUERY("/via/leaf", 0, 13);
+  OWNER_QUERY("/alias", 4, 0);
+  OWNER_QUERY("/alias", 2, 13);
+  OWNER_QUERY("/unknown", 0, 0);
+  OWNER_QUERY("/missing", 0, 2);
+  OWNER_QUERY("/data/child", 0, 20);
+  OWNER_QUERY("////", 0, 0);
+  OWNER_QUERY("/../../", 0, 0);
+  OWNER_QUERY("/data", 0x1234567880000088UL, 0);
+  OWNER_QUERY("", 0, 2);
+  OWNER_QUERY((const char *)1, 0, 14);
+#undef OWNER_QUERY
+  if (owner_query_result(1, "/alias", 0, 32, 0) ||
+      owner_query_result(1, "/via/leaf", 0, 2048, 62) ||
+      owner_query_result(1, (const char *)1, 7, 1, 22))
+    return 215;
+  if (call(466, 999, (u64) "/data", 4, 16, 0, 0, &error) != 0 || error)
+    return 216;
+  if (call(466, 999, (u64) "data", 0, 0, 0, 0, &error) != 9 || !error)
+    return 217;
+  if (call(0x1234567800000021UL, (u64) "/data", 4, 0, 0, 0, 0, &error) || error)
+    return 218;
+  u64 address = call(197, 0, PAGE, 3, 0x1002, -1UL, 0, &error);
+  if (error || address % PAGE)
+    return 219;
+  *(volatile u64 *)address = 0x1122334455667788UL;
+  if (*(volatile u64 *)address != 0x1122334455667788UL ||
+      call(73, address, PAGE, 0, 0, 0, 0, &error) || error)
+    return 220;
+  return call(4, 1, (u64) "P", 1, 0, 0, 0, &error) == 1 && !error ? 37 : 221;
+}
+
+static int ordinary_queries(const char *stop_path, unsigned scope) {
+  unsigned error;
+  if (stop_path || scope) {
+    if (call(4, 1, (u64) "!", 1, 0, 0, 0, &error) != 1 || error)
+      return 222;
+    if (scope == 1)
+      call(5, (u64) "/agreement", 0x601, 0, 0, 0, 0, &error);
+    else if (scope == 2)
+      call(197, 0, PAGE, 1, 2, 1, 0, &error);
+    else
+      call(466, -2UL, (u64)stop_path, 2, 16, 0, 0, &error);
+    return 223;
+  }
+  const unsigned read_errors[] = {0, 13, 13, 13, 0, 13, 13, 13};
+  const unsigned no_errors[] = {0, 13, 13, 13, 13, 13, 13, 13};
+  const unsigned rw_errors[] = {0, 13, 0, 13, 0, 13, 0, 13};
+  const unsigned x_errors[] = {0, 0, 13, 13, 13, 13, 13, 13};
+#define ORDINARY_QUERY(api, path, mode, flags, expected)                       \
+  do {                                                                         \
+    int status = owner_query_result(api, path, mode, flags, expected);         \
+    if (status)                                                                \
+      return status;                                                           \
+  } while (0)
+  for (unsigned api = 0; api != 3; ++api) {
+    const unsigned flags = api == 2 ? 16 : 0;
+    for (unsigned request = 0; request != 8; ++request) {
+      // Literal outcomes for UID501/502, real GID30, effective GID20,
+      // and in-credential groups[20,40]; no pointer table or native resolver.
+      ORDINARY_QUERY(api, "/agreement", request, flags, read_errors[request]);
+      ORDINARY_QUERY(api, "/group", request, flags,
+                     api == 2 ? rw_errors[request] : no_errors[request]);
+      ORDINARY_QUERY(api, "/supplement", request, flags, x_errors[request]);
+      ORDINARY_QUERY(api, "/world", request, flags,
+                     api == 2 ? no_errors[request] : read_errors[request]);
+    }
+  }
+  for (unsigned api = 0; api != 3; ++api)
+    for (unsigned request = 0; request != 8; ++request) {
+      // Effective GID50 membership is unknown only for masks2 and6.
+      // Different bit sets still determine equal whole-mask denials.
+      if (api == 2 && (request == 2 || request == 6))
+        continue;
+      ORDINARY_QUERY(api, "/unknown", request, api == 2 ? 16 : 0,
+                     read_errors[request]);
+    }
+  for (unsigned api = 0; api != 3; ++api) {
+    const unsigned flags = api == 2 ? 16 : 0;
+    ORDINARY_QUERY(api, "/directory///", 0, flags, 0);
+    ORDINARY_QUERY(api, "/directory/missing", 0, flags, api == 2 ? 2 : 13);
+    ORDINARY_QUERY(api, "/directory/leaf", 4, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/directory/.", 0, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/directory/..", 0, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/via/leaf", 4, flags, api == 2 ? 0 : 13);
+    ORDINARY_QUERY(api, "/alias", 4, flags, 0);
+    ORDINARY_QUERY(api, "/missing", 0, flags, 2);
+  }
+#undef ORDINARY_QUERY
+  if (call(0x1234567800000021UL, (u64) "/agreement", 4, 0, 0, 0, 0, &error) ||
+      error)
+    return 224;
+  u64 address = call(197, 0, PAGE, 3, 0x1002, -1UL, 0, &error);
+  if (error || address % PAGE)
+    return 225;
+  *(volatile u64 *)address = 0x8877665544332211UL;
+  if (*(volatile u64 *)address != 0x8877665544332211UL ||
+      call(73, address, PAGE, 0, 0, 0, 0, &error) || error)
+    return 226;
+  return call(4, 1, (u64) "G", 1, 0, 0, 0, &error) == 1 && !error ? 37 : 227;
+}
+
+static int ordinary_closed_group_queries(void) {
+  int initial = ordinary_queries(0, 0);
+  if (initial != 37)
+    return initial;
+  // Original NONE and complete groups[20,40] make effective GID50 misses
+  // negative. The ordinary baseline already checked every other request mask.
+  if (owner_query_result(2, "/unknown", 2, 16, 13) ||
+      owner_query_result(2, "/unknown", 6, 16, 13))
+    return 228;
+  for (unsigned api = 0; api != 3; ++api) {
+    const unsigned flags = api == 2 ? 16 : 0;
+    if (owner_query_result(api, "/external/missing", 0, flags, 2) ||
+        owner_query_result(api, "/external/leaf", 4, flags, 0) ||
+        owner_query_result(api, "/external/.", 0, flags, 0) ||
+        owner_query_result(api, "/external/..", 0, flags, 0) ||
+        owner_query_result(api, "/blocked/missing", 0, flags, 13) ||
+        owner_query_result(api, "/blocked/.", 0, flags, 13) ||
+        owner_query_result(api, "/external-via/leaf", 4, flags, 0) ||
+        owner_query_result(api, "/external///", 0, flags, 0))
+      return 229;
+  }
+  unsigned error;
+  return call(4, 1, (u64) "N", 1, 0, 0, 0, &error) == 1 && !error ? 37 : 230;
+}
+
 static int file_access(const char *path) {
   unsigned error;
   char parent[1024];
@@ -7015,6 +7238,29 @@ int main(int argc, char **argv, char **envp, char **apple) {
     return call(116, 0, 0, 0, 0, 0, 0, &error) || error || secondary ? 51 : 37;
   if (equal(argv[1], "time") || equal(argv[1], "time-values"))
     return time_calls(equal(argv[1], "time-values"));
+  if (equal(argv[1], "ordinary-queries-closed-groups"))
+    return ordinary_closed_group_queries();
+  if (equal(argv[1], "ordinary-queries"))
+    return ordinary_queries(0, 0);
+  if (equal(argv[1], "ordinary-query-unknown"))
+    return ordinary_queries(argc < 3 ? "/unknown" : argv[2], 0);
+  if (equal(argv[1], "ordinary-query-open"))
+    return ordinary_queries(0, 1);
+  if (equal(argv[1], "ordinary-query-map"))
+    return ordinary_queries(0, 2);
+  if (equal(argv[1], "owner-queries"))
+    return owner_queries(0, 0);
+  if (equal(argv[1], "owner-query-stop"))
+    return owner_queries(argc < 3 ? "/data" : argv[2], 0);
+  if (equal(argv[1], "owner-query-open"))
+    return owner_queries(0, 1);
+  if (equal(argv[1], "owner-query-map"))
+    return owner_queries(0, 2);
+  if (equal(argv[1], "mach-self-ports") ||
+      equal(argv[1], "mach-self-port-values"))
+    return mach_self_ports(equal(argv[1], "mach-self-port-values"));
+  if (equal(argv[1], "mach-self-port-missing"))
+    return argc < 3 ? 79 : mach_self_port_missing(argv[2]);
   if (equal(argv[1], "mach-time") || equal(argv[1], "mach-timebase-values"))
     return mach_timebase(equal(argv[1], "mach-timebase-values"));
   if (equal(argv[1], "mach-clock-values"))

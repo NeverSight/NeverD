@@ -143,6 +143,10 @@ installation or follow removal. The call ABI consumer prunes only with complete
 state/lifetime/call proofs, current block identities and exact call receipts.
 For PE32 C++ catches, that analysis also owns the runtime catch-context stack,
 its nested-search minimum and exact returned continuation and SavedESP facts.
+It publishes every possible catch-search target and the exited guard count.
+Secondary search through a parent try removes the exited invocations and
+restores their captured stack snapshot. CFG construction and native call
+lowering consume that result rather than filtering by the first guard alone.
 The captured pre-dispatch SavedESP owns the catch-return writeback even when
 catch code changes the cell. That effect remains bound to the exact RETURN in
 LowIR and MedIR. Dedicated x86 HighIR and LLVM continuation lowering restore
@@ -381,13 +385,26 @@ conservative effect summaries, module evidence, admitted-file comparisons,
 qualified bundle source partitions, fixed-profile Bun container extraction,
 map decoding, budgets and query redaction. `SourceView` owns the bounded display
 projection and original/projected range mapping; `SessionView` owns preview,
-publication and revocation. CLI/worker adapters cannot bypass those policies.
+publication and revocation. CLI/worker/MCP adapters cannot bypass those policies.
+`tools/common/web/Backend` owns the shared C++ worker/MCP C ABI client;
+`tools/common/transport/Json` owns bounded generic JSON admission. The compiled
+`neverd-web-mcp` separates launch inputs, schemas, lifecycle and stdio framing.
+It only exposes a capability-filtered subset and cannot assert reviewed source
+ranges. No analysis process or language runtime is spawned. See the
+[MCP profile](web-mcp-profile.md) for its concrete limits and ownership.
 Views use owned parser token/comment spans and never claim semantic rewrites.
 `BunContainer` owns ELF/Mach-O/PE graph location, target identity and native-range
 validation. `Bun` owns the shared graph records, flags and module decoding;
 transport capability lists and extraction results use the same profile builder.
 Adding a target container does not change source semantics or imply native
 machine-code/bytecode decompilation.
+`sea/Container` and the format readers independently locate explicit Node SEA
+resources; `sea/Blob` owns their serialization, region partition and private-key
+budgets. `SessionSEA` publishes revision-bound metadata and exposes only stored
+JS/assets through `ArtifactView`. Caches and snapshots remain opaque; native
+activation/version authentication are not inferred. Asset keys never establish
+a filesystem namespace. Package analysis of an explicitly selected asset uses
+one document with no directory inventory. See the [SEA profile](web-sea-profile.md).
 `packages/PackageReader` owns versioned Node metadata and captured placement
 evidence; `packages/PackageDiff` compares its model without transport concerns.
 `SessionPackages` owns revision-bound caches, fixed metadata pages and
@@ -601,14 +618,20 @@ they do not reuse CFG or value proofs across changed snapshots. A builder may
 retain one successful graph with an owned instruction snapshot. Reuse requires
 exact instruction facts, LowOps, effective edges, block starts, proof roots,
 conditional roots and storage-owner inputs. Hits pay the complete original
-graph-construction charge. The graph may also retain up to 64 completed query
-batches under a separate 8 MiB retained-payload allowance. Exact ordered query
+graph-construction charge. The graph may also retain up to 64 query outcomes
+under a separate 8 MiB retained-payload allowance. Exact ordered query
 fields, proof limits, output shape, function context and both relocation
 occurrence inventories bind each result. Hits pay the complete cold value
-charge; a smaller budget runs the normal path. Incomplete proofs and batches
-using pointer-named symbolic values or merges are excluded. Image metadata is
-immutable during a build, and every new build discards this state. These caches
-do not bypass proposal validation, rollback or fixed-point stages.
+charge; a smaller budget runs the normal path. Fixed reconstruction-depth and
+match-work refusals may be retained with the exact result, completion flag and
+feasible mask of each query. A local depth refusal does not suppress independent
+queries; a shared match-work exhaustion stops the remaining queries and clears
+every output. Replay preserves these incomplete states. Changing either limit
+or the proof context requires fresh analysis. Any other incomplete query,
+outer-account exhaustion, symbolic failure or use of pointer-named symbolic
+values or merges excludes the batch. Image metadata is immutable during a
+build, and every new build discards this state.
+These caches do not bypass proposal validation, rollback or fixed-point stages.
 
 A bounded group of AArch64 absolute dispatches in one relocatable ELF function
 can share an exact read-only pointer object. Each selector first proves its
@@ -1574,9 +1597,26 @@ unmasked traps. A discarded numerical result does not discard its state
 effect. The concrete emulator reuses its existing packed evaluator with one
 active lane, and an unknown stepped-over call invalidates imported MXCSR
 evidence. Its configured reset environment remains the concrete starting
-profile. Generic external FLOAT operations, packed FP, VEX arithmetic and
-remaining x87 control/TOP/tag semantics retain their separate contracts;
-this scalar state surface does not certify them.
+profile. Generic external FLOAT operations and remaining x87 control/TOP/tag
+semantics retain their separate contracts.
+
+Legacy/VEX ADD/SUB/MUL/DIV/SQRT/MIN/MAX scalar and packed forms extend this
+completion scope with `X86FPArithState` and `X86FPArithMemoryState`. One
+aggregate carries the complete raw numerical result and outgoing MXCSR;
+packed lanes complete together, retaining instruction-wide exception priority.
+SQRT consumes only its RHS and requires an exact zero dummy LHS. Control bit
+5 identifies VEX packed memory and does not enable SAE. Memory accesses remain
+inside the incoming/outgoing CSR scope, preserving legacy packed alignment
+faults and complete source reads even when the numerical result is discarded.
+The lifter owns scalar source merging and VEX upper zeroing. Low/Med/High
+shape validators and LLVM/C assembly authentication consume the same contract;
+only exact scalar numerical slices acquire floating type provenance. LLVM and
+readable C execute the actual instruction, and concrete execution reuses the
+common packed evaluator and authenticated memory access owner. Existing scalar
+ADD/SUB/MUL/DIV register contracts remain valid. Horizontal arithmetic, FMA,
+EVEX/SAE, enabled alignment checking and unavailable CPU-feature faults retain
+their separate contracts. Swift explicitly refuses this new completion surface
+until it has an equivalent lowering.
 
 Legacy/VEX ROUND extends that state surface through whole-instruction
 `X86FPRoundState` aggregates. Immediate bits 7:4 are ignored, bit 2 selects
@@ -1592,6 +1632,31 @@ the result aggregate, independently of target pointer width. Concrete x64
 evaluation requires authenticated 48/57-bit canonical-address context and
 segment bases. Unknown context refuses; known memory faults retain incoming
 CSR and publish no numerical result. This does not extend EVEX/SAE coverage.
+
+Stack-argument recovery consumes the authenticated source address and byte
+extent of arithmetic, ROUND and APPROX12 memory contracts. A proven immutable
+scalar incoming argument can supply the corresponding value contract without
+changing numerical/MXCSR completion. A two-slot i386 scalar uses explicit byte
+composition. Packed, straddling, written or escaped sources keep their original
+memory contract, and every covered argument home is initialized. Segmented or
+malformed sources do not establish ordinary incoming stack arguments. Both
+register ABIs and i386 use the same memory-read and source-rebinding owner.
+
+Legacy/VEX RCP/RSQRT use `X86FPApprox12State` raw numerical results and
+`X86FPApprox12MemoryState` instruction-owned source access. These instructions
+have no MXCSR input, output or exception effect; an unknown CSR stays unknown.
+Scalar width is four bytes, packed width is 16/32, and upper-lane writes retain
+their existing lifter ownership. Legacy packed memory requires 16-byte
+alignment, while scalar/VEX memory does not impose that requirement. Native
+LLVM and readable C execute the actual instruction, preserving raw NaN bits.
+Concrete evaluation completes determined special values but refuses
+implementation-dependent normal results by default. Explicit non-strict
+reference mode can select a software result within the architectural error
+envelope and records `ApproximatedOps`; strict/concolic execution always
+refuses that representative. This mode does not establish exact path or
+target evidence. Existing EVEX 14/28 approximations retain their own contract.
+Enabled alignment-check faults and unavailable CPU features require further
+authenticated execution context; this surface does not certify them.
 
 Swift consumes the same typed HighIR state contract for scalar SSE arithmetic.
 Its x86_64-only compiler pointer intrinsics import and commit MXCSR; numerical
@@ -1809,6 +1874,8 @@ For multiple cuts, each failed observed counter tuple is followed by a variant w
 Single-cut candidates must cover every cycle among all originally reachable blocks, including cycles disconnected by removing the cut. Each coverage check consumes `MaxCutpointAttempts` before symbolic execution. Scalar counters with unit progress on every returning edge retain priority. Then up to eight observed unit-counter tuple proposals alternate with individual broader scalar guard/bound hypotheses. Remaining scalar hypotheses run before tuple search resumes without replay. This order is independent of the budget cap. Each tuple attempt restores the saved complete stable template and transitions; a failed tuple-domain check disables only that family. Failed scalar guards cannot narrow its domain. `MaxRankCandidates`, query, operation and path budgets remain cumulative. A proposal still needs the complete refinement checker. An additive returning arm can trigger structural widening even when sibling arms stutter or reset; the proposed template must still pass all entry and transition checks.
 
 `inferAndCheckLowIRLoopRefinement` searches a checked relation between LowIR loops. It tries default, broad branch-arm and filtered branch-arm plans in that order, pairing the same families before all cross-family pairs and then individual cyclic candidate cuts. Broad proposals select successors inside a cyclic component that follow a branching block and have one outgoing edge. The filtered family omits branches only when every path reconverges at a nonterminal node before reaching a DFS backedge target. All successors, including exits and boundaries, participate; a join only at a boundary does not remove the branch. Greedy additions still cover every originally reachable cycle. These proposals preserve action phases without requiring default inference to succeed. `MaxCutSelectionWork` separately bounds the optional common-path analysis, including set construction and comparisons; `CutSelectionWork` reports work even on failure and also consumes the remaining global `MaxSearchWork`. Default and broad selectors are unchanged. Successes and failures are cached, with up to three plans per side and lazy cut permutations. Optional families skip cut sets already retained on that side, even if the existing plan was inferred by a later-numbered family. Empty or duplicate families use no symbolic queries but still consume a candidate attempt. All six retained plans share one `MaxMetadata` pool; each pairing construction is bounded separately. By default, `MaxRankPairingAttempts = 0` preserves the existing proposal order and accounting, proposing equality only for same-width frame inputs at identical offsets. Opting in adds two proposals after each ordinary pairing fails: direct rank bindings, then those bindings plus compatible frame bindings. Each nonempty rank tuple must have the same length on both sides; every component must exactly name a unique `Original` input by full `NdVar` identity, with distinct locations and equal nonzero widths. Constants, expressions, prefix inputs and width conversions are not guessed. The union retains rank bindings and skips frame bindings that conflict at either endpoint. Binding sets duplicating the ordinary proposal or the rank-only proposal are skipped before another complete check. Entered optional attempts, including ineligible and duplicate proposals, consume both `MaxRankPairingAttempts` and global `MaxPairingAttempts`; scans, comparisons and storage consume `MaxSearchWork`, and both working pairing vectors share one per-attempt `MaxMetadata` allowance. Exhausting only the optional cap still permits later ordinary proofs within the remaining global budgets. Affine relations and arbitrary feedback sets still require explicit pairing. The authoritative pairer and complete checker retain the caller's original audited records, witness, entry domain, frame observations and termination obligations. `LowIRLoopAlignmentLimits` shares `MaxSolverQueries` across every inference and proof, including failures; each invocation receives at most its stage limit and the remaining total. `MaxSearchWork`, `MaxMetadata`, `MaxCandidateAttempts`, `MaxPairingAttempts` and `MaxCuts` bound search construction and enumeration. Per-attempt exhaustion may retry; global exhaustion stops. `Unsupported` means no relation was found, not that the programs differ. Only a fresh successful `Refinement` contains a certificate. CLI defaults are unchanged.
+
+Alignment forwards `MaxCuts` to the shared inference owner. After input validation and complete feedback-cut selection, an oversized set fails before symbolic entry exploration or widening. This per-plan cap does not reduce `MaxCutpointAttempts` or legal single-cut retries. Filtered families retain their charged selection work. Standalone and native inference keep their existing limits; every accepted relation still requires the unchanged complete checker.
 
 `GeneralizeEntryPrefix` defaults to `false` and requires `UseEntryPrefix`. In the default mode, every arrival must preserve the captured path predicate. The explicit generalized mode instead treats the prefix state expressions as total, untrusted template functions outside that path. It still requires a feasible paired witness, complete real-entry and segment coverage, full register/frame equality, input projections, native guards and strict rank decrease over the expanded induction domain. Inference expands a cut only when an incoming state exceeds the witness domain, then rebuilds and rechecks every general transition. A zero-iteration first witness cannot hide another entry arm that loops. The policy is bound to the inductive certificate digest.
 
@@ -4376,6 +4443,8 @@ DarwinFiles owns common attribute import, name/stat validity and record encoding
 ## Ordinary Darwin attribute mutations
 
 DarwinFiles owns retained attribute state, initial-object mutation grants, shared name import and complete-stat validity. DarwinExtendedAttributes stages value/list changes before one commit. Fixed initial reservations and runtime attribute excess use the same storage/count owner as content and namespace mutations; unlinked objects and mapping leases retain their dynamic charge until final release. JSON only imports explicit grants. Directory attribute mutation invalidates full metadata independently of membership, snapshots and enumeration versions.
+
+DarwinFiles also owns the sole static owner/ordinary-query authorizer and its actual pathname SEARCH points. Process construction passes the canonical explicit credential record separately from scalar observation defaults; JSON imports the exact authorization declaration and uses the same admission owner. The immutable query environment closes all other file routes by default, exempts only actual opaque stream descriptions, and closes direct mappingSource access so DarwinMemory cannot bypass the operation domain. Anonymous VM retains its independent owner. Whole-mask group/world outcomes and explicit selected-credential membership share this owner; a missing group remains unknown except for explicit original GroupMembershipUID=KAUTH_UID_NONE or proved real-copy displacement, each with a complete supplied list. DarwinSystem owns canonical admission of the independent membership UID; JSON uses the shared lossless integer decoder, and no resolver context is inferred from scalar IDs. Broader vnode authorization must extend this same evaluator with operation-specific and resulting-state semantics before opening that domain.
 
 When a recovered DLL entry differs from its original PE entry, the writer emits a loader-notification adapter: process attach goes to the selected entry; detach and thread notifications go to the original live executable entry so outer-wrapper cleanup remains reachable. An unavailable original entry fails rebuilding. Reported `entry_rva` still identifies the selected program entry; the PE header can point to the adapter. The independent wrapped-DLL fixture checks cleanup outside the selected function on both emulated architectures and native Windows.
 

@@ -25,6 +25,7 @@
 #include "neverd/web/PackageArchive.h"
 #include "neverd/web/PackageIntegrity.h"
 #include "neverd/web/Packages.h"
+#include "neverd/web/SEA.h"
 #include "neverd/web/Session.h"
 #include "neverd/web/Source.h"
 #include "neverd/web/SourceBindings.h"
@@ -64,6 +65,7 @@ struct Session::Impl {
   std::map<std::string, ModuleResults> Modules;
   std::map<std::string, SourceBundleAnalysis> Bundles;
   std::map<std::string, BunExtraction> BunExtractions;
+  std::map<std::string, SEAExtraction> SEAExtractions;
   std::map<std::string, AsarExtraction> AsarExtractions;
   std::map<std::string, ElectronManifest> ElectronManifests;
   std::map<std::string, ElectronSource> ElectronSources;
@@ -111,11 +113,11 @@ struct Session::Impl {
 
   const char *analysisStatus() const {
     return Sources.empty() && Maps.empty() && BunExtractions.empty() &&
-                   AsarExtractions.empty() && ElectronManifests.empty() &&
-                   HTMLDocuments.empty() && PackageAnalyses.empty() &&
-                   PackageArchives.empty() && PackageIntegrity.empty() &&
-                   HARCaptures.empty() && InterfaceSources.empty() &&
-                   StreamCaptures.empty()
+                   SEAExtractions.empty() && AsarExtractions.empty() &&
+                   ElectronManifests.empty() && HTMLDocuments.empty() &&
+                   PackageAnalyses.empty() && PackageArchives.empty() &&
+                   PackageIntegrity.empty() && HARCaptures.empty() &&
+                   InterfaceSources.empty() && StreamCaptures.empty()
                ? "not_analyzed"
                : "partial";
   }

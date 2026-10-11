@@ -71,6 +71,41 @@ protected:
     return FD.Value;
   }
 };
+TEST_P(DarwinMemoryTest, OwnerQueriesKeepAnonymousMemoryAndCloseFileMappings) {
+  for (auto Authorization : {DarwinFileAuthorization::StaticOwnerQueries,
+                             DarwinFileAuthorization::StaticOrdinaryQueries}) {
+
+    Options.DarwinFiles = darwin_test::ownerQueryOptions();
+    Options.DarwinFiles->Authorization = Authorization;
+    Files = std::make_unique<DarwinFiles>(*Space, Options.DarwinFiles);
+    const auto Address = allocate(Page);
+    llvm::cantFail(Space->writeInteger(Address, 0x123456789abcdef0ULL, 8));
+    const auto Mapped = Space->mappedBytes();
+    const auto Allocated = Space->physicalMemory()->allocatedBytes();
+    for (uint64_t FD : {0u, 1u, 2u, 999u}) {
+      EXPECT_EQ(call(ServiceKind::Mmap, {0, Page, 1, 2, FD, 0}).Value,
+                UINT64_MAX);
+      EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_EQ(Result.Diagnostic,
+                Authorization == DarwinFileAuthorization::StaticOrdinaryQueries
+                    ? diagnostic::FileOrdinaryAuthorizationScope
+                    : diagnostic::FileAuthorizationScope);
+      EXPECT_EQ(Space->mappedBytes(), Mapped);
+      EXPECT_EQ(Space->physicalMemory()->allocatedBytes(), Allocated);
+      EXPECT_EQ(llvm::cantFail(Space->readInteger(Address, 8)),
+                0x123456789abcdef0ULL);
+    }
+    // VM admission still owns malformed arguments before borrowing a source.
+    const auto Zero =
+        call(ServiceKind::Mmap, {0, 0, 1, 2 | value::MapUnix03, 1, 0});
+    EXPECT_EQ(Zero.Value, 22u);
+    EXPECT_TRUE(Zero.Error);
+    EXPECT_FALSE(call(ServiceKind::Mprotect, {Address, Page, 1}).Error);
+    EXPECT_FALSE(call(ServiceKind::Munmap, {Address, Page}).Error);
+    EXPECT_EQ(Space->mappedBytes(), 0u);
+  }
+}
+
 TEST_P(DarwinMemoryTest, SymbolicDescriptorsRefuseNativePrivateAndSharedModes) {
   Options.DarwinFiles.emplace();
   Options.DarwinFiles->SymbolicLinks["/alias"] = {'d', 'a', 't', 'a'};

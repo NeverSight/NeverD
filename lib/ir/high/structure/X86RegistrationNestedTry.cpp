@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "HighCFSimplifyDetail.h"
 #include "X86RegistrationTry.h"
 
 #include "neverd/Limits.h"
@@ -57,7 +58,7 @@ bool checkNestedRegistrationTry(const HighStmt &Stmt, const MedFunc &Med,
         Clause.CatchObjectOffset != Handler.CatchObjectOffset ||
         Clause.ParentFrameOffset != Handler.ParentFrameOffset || Body.empty() ||
         Body.front().Addr != Handler.HandlerVA ||
-        Body.back().Kind != StmtKind::Goto)
+        !highStmtEndsItsBlock(Body.back()))
       return false;
     Work +=
         Operations + Med.Blocks.size() + Med.RegistrationStates->Blocks.size();
@@ -70,14 +71,33 @@ bool checkNestedRegistrationTry(const HighStmt &Stmt, const MedFunc &Med,
       return llvm::any_of(Region->Ranges,
                           [&](const auto &R) { return R.contains(Address); });
     };
-    // A callback that throws needs the CRT's secondary handler search.
-    // Ordinary terminal-try projection does not establish that contract.
     for (const auto &Block : Med.Blocks)
       if (Owns(Block.StartAddr))
         for (const auto &Op : Block.Ops) {
           if (++Work > limits::kMaxRegistrationEHStateWork ||
-              (!Op.Dead &&
-               (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)))
+              (!Op.Dead && Op.Opcode == NdOp::INDIR_CALL))
+            return false;
+          if (Op.Dead || Op.Opcode != NdOp::CALL)
+            continue;
+          const auto &States = *Med.RegistrationStates;
+          const auto *Call = States.callFrameEffect(Op.Addr, Op.OriginSeq);
+          const auto State = llvm::find_if(States.Blocks, [&](const auto &S) {
+            return S.Range.Begin == Block.StartAddr &&
+                   S.Range.End == Block.EndAddr;
+          });
+          if (!States.CallFrameEffectsComplete || !Call ||
+              Call->DoesNotReturn != Op.DoesNotReturn || Op.NumInputs != 1 ||
+              !Op.Inputs[0].isConst() ||
+              Op.Inputs[0].ConstVal != Call->Target ||
+              State == States.Blocks.end() || State->Unknown ||
+              State->Levels.size() != 1 ||
+              !llvm::any_of(State->CxxSearches, [&](const auto &Search) {
+                return Search.Level == State->Levels.front() &&
+                       Search.ExitedCatches == 1 &&
+                       Search.TryIndex < Tries.size() &&
+                       Tries[Search.TryIndex].TryLow == TryLow &&
+                       Tries[Search.TryIndex].TryHigh == TryHigh;
+              }))
             return false;
         }
     std::vector<const HighStmt *> Pending;
@@ -87,7 +107,10 @@ bool checkNestedRegistrationTry(const HighStmt &Stmt, const MedFunc &Med,
     while (!Pending.empty()) {
       const auto &Child = *Pending.back();
       Pending.pop_back();
-      if (++Work > limits::kMaxRegistrationEHStateWork || !Owns(Child.Addr) ||
+      const va_t Address = Child.Addr && Child.Addr != InvalidVA ? Child.Addr
+                           : Child.Kind == StmtKind::Goto ? Child.GotoTarget
+                                                          : 0;
+      if (++Work > limits::kMaxRegistrationEHStateWork || !Owns(Address) ||
           !Child.EHClauses.empty() || !Child.EHClauseBodies.empty() ||
           Child.Kind == StmtKind::Return || Child.Kind == StmtKind::Break ||
           Child.Kind == StmtKind::Continue)

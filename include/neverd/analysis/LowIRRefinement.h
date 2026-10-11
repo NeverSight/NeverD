@@ -395,6 +395,8 @@ struct LowIRLoopAlignmentLimits {
   /// then cyclic singletons. Empty or duplicate families consume an attempt.
   uint32_t MaxCandidateAttempts = 33;
   uint32_t MaxPairingAttempts = 128;
+  /// Reject oversized complete cut sets before symbolic inference. This
+  /// bounds each plan, not the number of single-cut inference attempts.
   uint32_t MaxCuts = 3;
   /// Optional direct-rank and rank-plus-frame proposals after each failed
   /// ordinary pairing. Zero disables them without changing legacy search.

@@ -1578,7 +1578,67 @@ TEST(LLVMCValues, WideIntegerPointerConstantKeepsItsPointerWidth) {
       "int main(void) { return (uintptr_t)wide_pointer() != 0x1234; }\n");
 }
 
-TEST(LLVMCValues, ConstantsWiderThanTheCarrierAreRejected) {
+TEST(LLVMCValues, WideIntegerConstantsPreserveEveryWordAndStoreExtent) {
+  for (unsigned Width : {160U, 256U, 288U, 512U}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("wide-constant", Context);
+    auto *Signature =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                                {llvm::PointerType::getUnqual(Context)}, false);
+    auto *Function = llvm::Function::Create(
+        Signature, llvm::GlobalValue::ExternalLinkage, "wide_store", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    llvm::APInt Value(Width, 0);
+    for (unsigned Bit : {0U, 65U, 130U, Width - 1})
+      Value.setBit(Bit);
+    auto *Store = Builder.CreateStore(llvm::ConstantInt::get(Context, Value),
+                                      Function->getArg(0));
+    Store->setAlignment(llvm::Align(1));
+    Builder.CreateRetVoid();
+    auto *CopySignature =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                                {llvm::PointerType::getUnqual(Context),
+                                 llvm::PointerType::getUnqual(Context)},
+                                false);
+    auto *Copy = llvm::Function::Create(
+        CopySignature, llvm::GlobalValue::ExternalLinkage, "wide_copy", Module);
+    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Copy));
+    auto *Loaded =
+        Builder.CreateLoad(Builder.getIntNTy(Width), Copy->getArg(0));
+    Loaded->setAlignment(llvm::Align(1));
+    Builder.CreateStore(Loaded, Copy->getArg(1))->setAlignment(llvm::Align(1));
+    Builder.CreateRetVoid();
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+    std::string Driver = R"(
+#include <string.h>
+int main(void) {
+  unsigned char storage[96], expected[96];
+  memset(storage, 0x59, sizeof(storage));
+  memcpy(expected, storage, sizeof(storage));
+)";
+    Driver += "  memset(expected + 1, 0, " + std::to_string(Width / 8) + ");\n";
+    for (unsigned Bit : {0U, 65U, 130U, Width - 1})
+      Driver += "  expected[" + std::to_string(1 + Bit / 8) +
+                "] |= " + std::to_string(1U << (Bit % 8)) + ";\n";
+    Driver += "  wide_store(storage + 1);\n"
+              "  if (memcmp(storage, expected, sizeof(storage))) return 1;\n"
+              "  unsigned char copy[96], expected_copy[96];\n"
+              "  memset(copy, 0xa5, sizeof(copy));\n"
+              "  memcpy(expected_copy, copy, sizeof(copy));\n";
+    Driver += "  memcpy(expected_copy + 3, expected + 1, " +
+              std::to_string(Width / 8) +
+              ");\n"
+              "  wide_copy(storage + 1, copy + 3);\n"
+              "  return memcmp(copy, expected_copy, sizeof(copy)) != 0;\n}\n";
+    for (const char *Optimization : {"-O0", "-O2"})
+      compileAndRun(Source + Driver, Optimization, {}, true);
+  }
+}
+
+TEST(LLVMCValues, ConstantsBeyondTheSupportedCarrierAreRejected) {
   llvm::LLVMContext Context;
   llvm::Module Module("unsupported-constant", Context);
   auto *Signature =
@@ -1588,13 +1648,13 @@ TEST(LLVMCValues, ConstantsWiderThanTheCarrierAreRejected) {
       Signature, llvm::GlobalValue::ExternalLinkage, "wide_store", Module);
   llvm::IRBuilder<> Builder(
       llvm::BasicBlock::Create(Context, "entry", Function));
-  Builder.CreateStore(llvm::ConstantInt::get(Context, llvm::APInt(256, 17)),
+  Builder.CreateStore(llvm::ConstantInt::get(Context, llvm::APInt(1024, 17)),
                       Function->getArg(0));
   Builder.CreateRetVoid();
   std::string Source;
   llvm::raw_string_ostream Out(Source);
   EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, {}),
-               std::runtime_error);
+               std::invalid_argument);
 }
 
 TEST(LLVMCValues, GlobalByteViewsUseObjectAddresses) {

@@ -18,11 +18,13 @@ if __package__:
         BASES, CASES, EMITTER, PROOF, ROUTES, SOURCE, PE32, file_digest, observe,
         require_test_result, validate_installation, validate_decompilation)
     from .windows_registration_libraries import validate_manifest
+    from .windows_registration_runtime import validate_runtime
 else:
     from check_windows_registration_nested_try import (
         BASES, CASES, EMITTER, PROOF, ROUTES, SOURCE, PE32, file_digest, observe,
         require_test_result, validate_installation, validate_decompilation)
     from windows_registration_libraries import validate_manifest
+    from windows_registration_runtime import validate_runtime
 
 
 def validate_capture(root: Path, capture: dict) -> list[tuple]:
@@ -43,12 +45,15 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
     for case in cases:
         name = case["case"]
         parent = root / name
+        validate_runtime(parent, capture.get("catch_search_runtime", {}))
         if case.get("contract_sha256") != file_digest(parent / "contract.json") or \
                 case.get("ir_sha256") != file_digest(parent / "source.ll") or \
                 case.get("object_sha256") != file_digest(parent / "driver.obj") or \
                 require_test_result(parent / "rewrite.xml") != 1:
             raise ValueError("nested try source reconstruction proof changed")
         receipt = json.loads((parent / "contract.json").read_text())
+        if receipt.get("secondary_search") is not name.startswith("secondary-"):
+            raise ValueError("nested try proof changed its catch search context")
         original = PE32((parent / "original.exe").read_bytes())
         product = PE32((parent / "product.exe").read_bytes())
         validate_installation(original, product, receipt, name)
@@ -98,7 +103,7 @@ def main() -> int:
         records = validate_capture(root, capture)
         for name, path, route, receipt in records:
             result = observe(path, name, route, receipt, [wine] if wine else [],
-                             os.environ.copy(), args.timeout)
+                             os.environ.copy() | {"WINEDLLOVERRIDES": "vcruntime140=n"}, args.timeout)
             report["images"].append({"case": name, **result})
         report["passed"] = True
     except (OSError, ValueError, KeyError, TypeError, struct.error, subprocess.TimeoutExpired,

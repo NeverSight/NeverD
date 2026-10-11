@@ -27,12 +27,15 @@ NEVERD_DARWIN_SYSTEM_FIELD(HostName, SystemHostName, "kern.hostname", 1, 10)
 #endif
 
 // Process observations have no sysctl names or numeric MIBs. The member type
-// owns scalar or fixed-buffer encoding and admission.
+// owns wire encoding; explicit policy selects admission in the system owner.
 #ifdef NEVERD_DARWIN_PROCESS_FIELD
-NEVERD_DARWIN_PROCESS_FIELD(ProcessGroupID, SystemProcessGroupID)
-NEVERD_DARWIN_PROCESS_FIELD(SessionID, SystemSessionID)
-NEVERD_DARWIN_PROCESS_FIELD(ProcessTainted, SystemProcessTainted)
-NEVERD_DARWIN_PROCESS_FIELD(LoginNameBytes, SystemLoginNameHex)
-NEVERD_DARWIN_PROCESS_FIELD(ProcessNice, SystemProcessNice)
-NEVERD_DARWIN_PROCESS_FIELD(ThreadID, ThreadID)
+NEVERD_DARWIN_PROCESS_FIELD(ProcessGroupID, SystemProcessGroupID, Identity)
+NEVERD_DARWIN_PROCESS_FIELD(SessionID, SystemSessionID, Identity)
+NEVERD_DARWIN_PROCESS_FIELD(ProcessTainted, SystemProcessTainted, Raw)
+NEVERD_DARWIN_PROCESS_FIELD(LoginNameBytes, SystemLoginNameHex, Login)
+NEVERD_DARWIN_PROCESS_FIELD(ProcessNice, SystemProcessNice, Nice)
+NEVERD_DARWIN_PROCESS_FIELD(ThreadID, ThreadID, Raw)
+NEVERD_DARWIN_PROCESS_FIELD(ThreadSelfPort, SystemThreadSelfPort, Raw)
+NEVERD_DARWIN_PROCESS_FIELD(TaskSelfPort, SystemTaskSelfPort, Raw)
+NEVERD_DARWIN_PROCESS_FIELD(HostSelfPort, SystemHostSelfPort, Raw)
 #endif

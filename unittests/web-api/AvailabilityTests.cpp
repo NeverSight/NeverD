@@ -48,6 +48,8 @@ TEST(WebAvailability, CapabilitiesReflectCompiledBackendAndParser) {
   EXPECT_TRUE(Has("import_preview"));
   EXPECT_TRUE(Has("source_map_analyze"));
   EXPECT_TRUE(Has("bun_extract"));
+  EXPECT_TRUE(Has("sea_extract"));
+  EXPECT_TRUE(Has("sea_records"));
   EXPECT_TRUE(Has("bun_records"));
   EXPECT_TRUE(Has("bun_export"));
   EXPECT_TRUE(Has("packages_analyze"));
@@ -134,6 +136,9 @@ TEST(WebAvailability, AllPublicEntryPointsRemainAvailableWhenBackendIsOmitted) {
   neverd_session_t NativeOutput = reinterpret_cast<void *>(uintptr_t(1));
   for (const auto *Owned :
        {neverd_web_metadata_json(nullptr),
+        neverd_web_sea_extract_json(nullptr, nullptr, 0, nullptr, 0, nullptr,
+                                    0),
+        neverd_web_sea_records_json(nullptr, nullptr, 0, nullptr, 0, 0, 1),
         neverd_web_stream_preview_json(nullptr, nullptr, 0, nullptr, 0, nullptr,
                                        0),
         neverd_web_stream_commit_json(nullptr, nullptr, 0, nullptr, 0),

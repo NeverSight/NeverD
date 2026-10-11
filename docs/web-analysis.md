@@ -127,7 +127,11 @@ No Python binding for this domain is currently claimed.
 The C++ worker exposes the same operations with the `web_` prefix and keeps web
 and native project state separate. Its payload and envelope contract is in the
 [worker protocol](../tools/neverd-worker/PROTOCOL.md#offline-web-operations).
-The web MCP adapter is still pending.
+The optional native C++ [web MCP adapter](web-mcp-profile.md) exposes the
+supported offline tools through the shared worker/C API adapter. Its launch
+configuration supplies an explicit input scope; tool discovery follows the
+loaded backend capabilities. It does not expose raw export or reviewed source
+ranges. Build with `NEVERD_BUILD_WEB_MCP=ON`.
 
 1. Create a session and inspect `neverd_web_capabilities_json()`.
 2. Preview an explicitly selected file/directory. Empty options use the

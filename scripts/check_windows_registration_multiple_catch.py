@@ -51,7 +51,8 @@ def validate_decompilation(text: str, language: str) -> None:
 
 
 def observe(path: Path, case: str, route: str, receipt: dict,
-            launcher: list[str], env: dict[str, str], timeout: float) -> dict:
+            launcher: list[str], env: dict[str, str], timeout: float,
+            *, expected_values: tuple = (17, 28, 39, 7, 18, 39, 1, 12)) -> dict:
     image = PE32(path.read_bytes())
     if image.base not in BASES or image.u16(image.optional + 70) & 0x40:
         raise ValueError("multiple-catch probe has no forced base")
@@ -60,7 +61,7 @@ def observe(path: Path, case: str, route: str, receipt: dict,
     if result.get("exit_code") != int(case.endswith("-control")) or not match:
         raise ValueError("multiple-catch runtime or negative control failed")
     values = [int(v, 16) for v in match.groups()]
-    if values[:8] != [17, 28, 39, 7, 18, 39, 1, 12]:
+    if tuple(values[:8]) != expected_values:
         raise ValueError("catch dispatch, reference effect or registration chain differs")
     owner = "source" if route == "original" else "generated"
     begin, end = receipt[owner + "_begin"], receipt[owner + "_end"]

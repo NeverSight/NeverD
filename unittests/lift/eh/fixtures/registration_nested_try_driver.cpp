@@ -37,6 +37,10 @@ extern "C" __declspec(dllexport) __declspec(noinline) int callback_parent() {
         callback_throw_unsigned();
       callback_throw_float();
     } catch (unsigned &Value) {
+#ifdef SECONDARY_SEARCH
+      if (Value == 7)
+        callback_throw_int();
+#endif
       Value += 11;
       callback_caught = Value;
       return Value + 10;
@@ -69,8 +73,13 @@ template <unsigned Padding> __declspec(noinline) int call_with_padding() {
 extern "C" __declspec(noreturn) void mainCRTStartup() {
   bool Passed = true;
   unsigned Values[3] = {}, Caught[3] = {}, Callers[3] = {}, Iterations = 0;
+#ifdef SECONDARY_SEARCH
+  const unsigned Expected[] = {EXPECTED_FIRST, 17, 39};
+  const unsigned ExpectedCaught[] = {7, 7, 39};
+#else
   const unsigned Expected[] = {EXPECTED_FIRST, 28, 39};
   const unsigned ExpectedCaught[] = {7, 18, 39};
+#endif
   const auto Chain = __readfsdword(0);
   for (unsigned Round = 0; Round != 4; ++Round)
     for (unsigned Choice = 0; Choice != 3; ++Choice) {

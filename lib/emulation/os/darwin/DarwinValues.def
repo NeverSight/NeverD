@@ -134,6 +134,7 @@ NEVERD_DARWIN_VALUE(PriorityGame, 7)
 NEVERD_DARWIN_VALUE(PriorityCarPlay, 8)
 NEVERD_DARWIN_VALUE(SystemMIBLimit, 12)
 NEVERD_DARWIN_VALUE(CredentialIDMax, 0x7fffffff)
+NEVERD_DARWIN_VALUE(GroupMembershipUIDNone, 0xffffff9b)
 NEVERD_DARWIN_VALUE(GroupAccessLimit, 16)
 NEVERD_DARWIN_VALUE(ResourceLimitCount, 9)
 NEVERD_DARWIN_VALUE(ResourceLimitNoFile, 8)
@@ -238,6 +239,9 @@ NEVERD_DARWIN_SERVICE(SymlinkAt, 474, Int)
 // Positive trap indices. ARM64 encodes their negative low-32-bit value;
 // x64 uses the Mach syscall class. Fast ARM64 clocks have no x64 trap slot.
 #ifdef NEVERD_DARWIN_MACH_SERVICE
+NEVERD_DARWIN_MACH_SERVICE(ThreadSelfPort, 27, false)
+NEVERD_DARWIN_MACH_SERVICE(TaskSelfPort, 28, false)
+NEVERD_DARWIN_MACH_SERVICE(HostSelfPort, 29, false)
 NEVERD_DARWIN_MACH_SERVICE(TimebaseInfo, 89, false)
 NEVERD_DARWIN_MACH_SERVICE(AbsoluteTime, 3, true)
 NEVERD_DARWIN_MACH_SERVICE(ContinuousTime, 4, true)
@@ -286,6 +290,15 @@ NEVERD_DARWIN_DIAGNOSTIC(ProcessSessionObservation,
 NEVERD_DARWIN_DIAGNOSTIC(
     ThreadIDObservation,
     "Darwin current-thread identity observation is not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    ThreadSelfPortObservation,
+    "Darwin current-thread Mach port observation is not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    TaskSelfPortObservation,
+    "Darwin current-task Mach port observation is not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    HostSelfPortObservation,
+    "Darwin current-host Mach port observation is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(ProcessTaintObservation,
                          "Darwin process taint observation is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(
@@ -327,6 +340,9 @@ NEVERD_DARWIN_DIAGNOSTIC(
 NEVERD_DARWIN_DIAGNOSTIC(
     CredentialOption,
     "Darwin credentials require bounded IDs and coherent 1..16 groups")
+NEVERD_DARWIN_DIAGNOSTIC(
+    GroupMembershipUIDOption,
+    "Darwin group membership UID requires a bounded ID or KAUTH_UID_NONE")
 NEVERD_DARWIN_DIAGNOSTIC(GroupObservation,
                          "Darwin group access list is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(GroupPartialOutput,
@@ -401,6 +417,45 @@ NEVERD_DARWIN_DIAGNOSTIC(FileOptionPath,
                          "invalid or conflicting Darwin catalogue path")
 NEVERD_DARWIN_DIAGNOSTIC(FileAccessPermissions,
                          "Darwin access permission checks are not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileAuthorizationOption,
+    "Darwin static owner queries require an immutable ordinary environment "
+    "without known inode aliases")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileAuthorizationScope,
+    "Darwin static owner queries do not authorize other vnode operations")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileAuthorizationCredentials,
+    "Darwin owner authorization requires explicit credentials")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileAuthorizationOwner,
+    "Darwin owner authorization requires a matching nonzero owner UID")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileAuthorizationMetadata,
+    "Darwin owner authorization requires explicit object metadata")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileAuthorizationName,
+    "Darwin component exceeds the model bound; filesystem length semantics "
+    "are not configured")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileOrdinaryAuthorizationOption,
+    "Darwin static ordinary queries require an immutable ordinary environment "
+    "without known inode aliases")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileOrdinaryAuthorizationScope,
+    "Darwin static ordinary queries do not authorize other vnode operations")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileOrdinaryAuthorizationCredentials,
+    "Darwin ordinary authorization requires explicit credentials")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileOrdinaryAuthorizationSubject,
+    "Darwin ordinary authorization requires a nonzero selected UID")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileOrdinaryAuthorizationMetadata,
+    "Darwin ordinary authorization requires explicit object metadata")
+NEVERD_DARWIN_DIAGNOSTIC(
+    FileOrdinaryAuthorizationGroups,
+    "Darwin ordinary authorization requires known group membership")
 NEVERD_DARWIN_DIAGNOSTIC(FileInputs, "Darwin file catalogue is not configured")
 NEVERD_DARWIN_DIAGNOSTIC(DirectoryCreationLimit,
                          "Darwin directory creation exceeds catalogue limits")

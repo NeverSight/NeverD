@@ -15,21 +15,33 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_multiple_catch import (
-        BASES, ROUTES, PE32, file_digest, observe, require_test_result,
+        BASES, ROUTES, PE32, file_digest, observe as observe_catches, require_test_result,
         run_image, validate_installation)
     from .windows_registration_libraries import load_libraries
+    from .windows_registration_runtime import NAME, load_runtime
 else:
     from check_windows_registration_multiple_catch import (
-        BASES, ROUTES, PE32, file_digest, observe, require_test_result,
+        BASES, ROUTES, PE32, file_digest, observe as observe_catches, require_test_result,
         run_image, validate_installation)
     from windows_registration_libraries import load_libraries
+    from windows_registration_runtime import NAME, load_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_nested_try_driver.cpp"
 EMITTER = ROOT / "unittests/lift/eh/WindowsRegistrationNestedTryTests.cpp"
 PROOF = ROOT / "unittests/lift/eh/RegistrationNestedTryTestUtils.cpp"
-FORMS = {"nested-o0-llvm-fixed": "-O0", "nested-o1-llvm-fixed": "-O1"}
+FORMS = {prefix + "-" + mode + "-llvm-fixed": "-" + mode.upper()
+         for prefix in ("nested", "secondary") for mode in ("o0", "o1")}
 CASES = tuple(name + suffix for name in FORMS for suffix in ("", "-control"))
+
+
+def observe(path, case, route, receipt, launcher, env, timeout):
+    secondary = case.startswith("secondary-")
+    if receipt.get("secondary_search") is not secondary:
+        raise ValueError("nested source proof has the wrong catch search context")
+    expected = (17, 17, 39, 7, 7, 39, 1, 12) if secondary else (17, 28, 39, 7, 18, 39, 1, 12)
+    return observe_catches(path, case, route, receipt, launcher, env, timeout,
+                           expected_values=expected)
 
 
 def validate_decompilation(text: str, language: str) -> None:
@@ -60,7 +72,7 @@ def main() -> int:
         parser.error("--timeout must be positive and finite")
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy() | {"WINEDEBUG": "-all"}
+    env = os.environ.copy() | {"WINEDEBUG": "-all", "WINEDLLOVERRIDES": "vcruntime140=n"}
     report = {"schema": 1, "evidence": "nested-try-source-reconstruction",
               "passed": False, "commands": [], "cases": []}
 
@@ -80,6 +92,7 @@ def main() -> int:
         if not compiler or not linker or os.name != "nt" and not wine:
             raise ValueError("compiler, linker or Wine unavailable")
         libraries, report["runtime_libraries"] = load_libraries(args.runtime_libs.resolve())
+        runtime, report["catch_search_runtime"] = load_runtime(args.runtime_libs.resolve())
         report["source_sha256"], report["emitter_sha256"] = file_digest(SOURCE), file_digest(EMITTER)
         report["proof_sha256"] = file_digest(PROOF)
         test, patch = args.test_binary.resolve(), args.patch_binary.resolve()
@@ -88,8 +101,11 @@ def main() -> int:
                 name = kind + ("-control" if control else "")
                 case = out / name
                 case.mkdir(exist_ok=True)
+                shutil.copyfile(runtime, case / NAME)
+                secondary = kind.startswith("secondary-")
                 run([compiler, "--target=i686-pc-windows-msvc", "-fms-extensions", "-fexceptions",
                      "-fcxx-exceptions", "-fno-omit-frame-pointer", optimization,
+                     *(["-DSECONDARY_SEARCH"] if secondary else []),
                      "-DEXPECTED_FIRST=" + ("18" if control else "17"), "-c", SOURCE,
                      "-o", case / "driver.obj"])
                 original, product = case / "original.exe", case / "product.exe"
@@ -100,7 +116,8 @@ def main() -> int:
                 report["commands"].append({"original_runtime": initial})
                 if initial.get("exit_code") != int(control):
                     raise ValueError("original nested fixture failed")
-                run([test, "--gtest_filter=WindowsRegistrationNestedTry.InputPE32ReconstructsNestedSearch",
+                run([test, "--gtest_filter=WindowsRegistrationNestedTry.InputPE32Reconstructs" +
+                     ("SecondarySearch" if secondary else "NestedSearch"),
                      "--gtest_output=xml:" + str(case / "rewrite.xml")],
                     {"NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32": str(original),
                      "NEVERD_REGISTRATION_REALIGNED_OUTPUT_PE32": str(product),
