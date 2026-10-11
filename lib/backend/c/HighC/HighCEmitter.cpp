@@ -1369,7 +1369,8 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
       // The x87 helpers, collected with the unit's types, need no header.
       else if (Ex.IntrinsicId != Intrinsic::None && !IsX87Helper &&
                (intrinsicCName(Ex.IntrinsicId) ||
-                x86MemoryIntrinsicUsesCHeader(Ex.IntrinsicId)))
+                x86MemoryIntrinsicUsesCHeader(Ex.IntrinsicId) ||
+                armIntrinsicUsesCHeader(Ex.IntrinsicId)))
         HasCIntrinsics = true;
       if (Opts.Format == BinaryFormat::COFF &&
           (Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&

@@ -5,10 +5,11 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// How HighC spells AArch64 operations as ACLE intrinsics whose names the
-/// operation alone does not fix: the shape of their operands picks the
-/// name's suffix and the C types of their operands and result, each bit cast
-/// from and to the integer type of the same width that HighC carries.
+/// How HighC spells Arm operations, AArch64 and AArch32, as ACLE intrinsics
+/// whose names the operation alone does not fix: the shape of their operands
+/// picks the name's suffix and the C types of their operands and result, each
+/// bit cast from and to the integer type of the same width that HighC
+/// carries.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -95,6 +96,77 @@ NEVERD_NEON_SATURATING_OPERATION(A64Uqsub, "vqsub", false)
 
 #undef NEVERD_NEON_SATURATING_WIDTH
 #undef NEVERD_NEON_SATURATING_OPERATION
+
+// The saturating and rounding shifts by a register of per-lane signed
+// amounts (AArch64 SQSHL, UQSHL, SQRSHL, UQRSHL, SRSHL, URSHL; AArch32 VQSHL,
+// VQRSHL, VRSHL; an immediate shift arrives as that amount in every lane).
+// The lifter passes the element width as the last operand.  A vector takes
+// the base, a `q` for 128 bits, and the element (vqshlq_u32; a 64-bit lane
+// alone is vqshl_s64); an AArch64 scalar narrower than 64 bits takes the
+// base, the width's letter and the element (vqshls_s32).  The amounts are
+// always signed.
+//
+// NEVERD_NEON_SHIFT_OPERATION(Intrinsic, Base, Element)
+#ifndef NEVERD_NEON_SHIFT_OPERATION
+#define NEVERD_NEON_SHIFT_OPERATION(Intrinsic, Base, Element)
+#endif
+
+NEVERD_NEON_SHIFT_OPERATION(A64_Sqshl, "vqshl", "s")
+NEVERD_NEON_SHIFT_OPERATION(A64_Uqshl, "vqshl", "u")
+NEVERD_NEON_SHIFT_OPERATION(A64_Sqrshl, "vqrshl", "s")
+NEVERD_NEON_SHIFT_OPERATION(A64_Uqrshl, "vqrshl", "u")
+NEVERD_NEON_SHIFT_OPERATION(A64_Srshl, "vrshl", "s")
+NEVERD_NEON_SHIFT_OPERATION(A64_Urshl, "vrshl", "u")
+NEVERD_NEON_SHIFT_OPERATION(ArmVqshifts, "vqshl", "s")
+NEVERD_NEON_SHIFT_OPERATION(ArmVqshiftu, "vqshl", "u")
+NEVERD_NEON_SHIFT_OPERATION(ArmVqrshifts, "vqrshl", "s")
+NEVERD_NEON_SHIFT_OPERATION(ArmVqrshiftu, "vqrshl", "u")
+NEVERD_NEON_SHIFT_OPERATION(ArmVrshifts, "vrshl", "s")
+NEVERD_NEON_SHIFT_OPERATION(ArmVrshiftu, "vrshl", "u")
+
+#undef NEVERD_NEON_SHIFT_OPERATION
+
+// The saturating shifts right by an immediate that narrow a 128-bit vector
+// to 64 bits (SQSHRN, SQRSHRN, UQSHRN, UQRSHRN, SQSHRUN, SQRSHRUN).  The
+// lifter passes the shift and then the narrow element width; the intrinsic
+// is named by the source element (vqshrn_n_s32 narrows int32x4_t to
+// int16x4_t, vqshrun_n_s32 to uint16x4_t).
+//
+// NEVERD_NEON_NARROW_SHIFT(Intrinsic, Base, SourceElement)
+#ifndef NEVERD_NEON_NARROW_SHIFT
+#define NEVERD_NEON_NARROW_SHIFT(Intrinsic, Base, SourceElement)
+#endif
+
+NEVERD_NEON_NARROW_SHIFT(A64_Sqshrn, "vqshrn_n", "s")
+NEVERD_NEON_NARROW_SHIFT(A64_Sqrshrn, "vqrshrn_n", "s")
+NEVERD_NEON_NARROW_SHIFT(A64_Uqshrn, "vqshrn_n", "u")
+NEVERD_NEON_NARROW_SHIFT(A64_Uqrshrn, "vqrshrn_n", "u")
+NEVERD_NEON_NARROW_SHIFT(A64_Sqshrun, "vqshrun_n", "s")
+NEVERD_NEON_NARROW_SHIFT(A64_Sqrshrun, "vqrshrun_n", "s")
+NEVERD_NEON_NARROW_SHIFT(ArmVqshiftns, "vqshrn_n", "s")
+NEVERD_NEON_NARROW_SHIFT(ArmVqshiftnu, "vqshrn_n", "u")
+NEVERD_NEON_NARROW_SHIFT(ArmVqshiftnsu, "vqshrun_n", "s")
+NEVERD_NEON_NARROW_SHIFT(ArmVqrshiftns, "vqrshrn_n", "s")
+NEVERD_NEON_NARROW_SHIFT(ArmVqrshiftnu, "vqrshrn_n", "u")
+NEVERD_NEON_NARROW_SHIFT(ArmVqrshiftnsu, "vqrshrun_n", "s")
+
+#undef NEVERD_NEON_NARROW_SHIFT
+
+// The saturating doubling multiplies (VQDMULH and VQRDMULH, which keep the
+// high half of each lane's product, and VQDMULL, which widens 64-bit
+// vectors to 128).  The lifter passes the result's element width last; the
+// intrinsic is named by the source element (vqdmulhq_s16, vqdmull_s16).
+//
+// NEVERD_NEON_DOUBLING_MULTIPLY(Intrinsic, Base, Widening)
+#ifndef NEVERD_NEON_DOUBLING_MULTIPLY
+#define NEVERD_NEON_DOUBLING_MULTIPLY(Intrinsic, Base, Widening)
+#endif
+
+NEVERD_NEON_DOUBLING_MULTIPLY(ArmVqdmulh, "vqdmulh", false)
+NEVERD_NEON_DOUBLING_MULTIPLY(ArmVqrdmulh, "vqrdmulh", false)
+NEVERD_NEON_DOUBLING_MULTIPLY(ArmVqdmull, "vqdmull", true)
+
+#undef NEVERD_NEON_DOUBLING_MULTIPLY
 
 // FCVTXN narrows doubles to floats rounding to odd: one double to a float
 // (the scalar form), or two to a 64-bit vector of floats.

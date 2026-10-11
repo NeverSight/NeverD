@@ -1,0 +1,30 @@
+//===- ARMIntrinsicTargetFeatures.def - Arm intrinsic features --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// The target feature a function needs to call the ACLE intrinsic HighC
+/// spells an AArch64 operation with: the function takes
+/// `__attribute__((target(...)))` naming it, as arm_acle.h requires.  Each
+/// feature is spelled as the ACLE target attribute takes it (`+crc`), which
+/// both GCC and Clang accept.
+///
+//===----------------------------------------------------------------------===//
+
+// NEVERD_ARM_TARGET_FEATURE(Intrinsic, Feature)
+#ifndef NEVERD_ARM_TARGET_FEATURE
+#define NEVERD_ARM_TARGET_FEATURE(Intrinsic, Feature)
+#endif
+
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32b, "+crc")
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32h, "+crc")
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32w, "+crc")
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32x, "+crc")
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32cb, "+crc")
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32ch, "+crc")
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32cw, "+crc")
+NEVERD_ARM_TARGET_FEATURE(A64_Crc32cx, "+crc")
+
+#undef NEVERD_ARM_TARGET_FEATURE

@@ -134,6 +134,10 @@ const char *x86HighCIntrinsicFatalReason(Intrinsic Id);
 /// intrinsic rather than inline assembly.
 bool x86MemoryIntrinsicUsesCHeader(Intrinsic Id);
 
+/// Whether an Arm intrinsic with no C name of its own renders through an
+/// ACLE intrinsic its shape names (NeonIntrinsicSpellings.def).
+bool armIntrinsicUsesCHeader(Intrinsic Id);
+
 /// Whether an x86 intrinsic may render through an <intrin.h> declaration on
 /// a Windows target: REP MOVS/STOS, the flat LIDT/SIDT/INVLPG forms and an
 /// FS/GS MXCSR transfer through the segment accessors.

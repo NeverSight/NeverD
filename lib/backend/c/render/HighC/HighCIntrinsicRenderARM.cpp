@@ -265,7 +265,171 @@ std::string renderNeonFcvtxn(const std::vector<std::string> &Ops,
          "))";
 }
 
+/// A saturating or rounding shift by per-lane signed amounts
+/// (NeonIntrinsicSpellings.def); its last operand is the element width.
+std::string renderNeonShift(Intrinsic Id, const std::vector<std::string> &Ops,
+                            uint16_t ResultBytes, bool &HasCIntrinsics) {
+  struct Operation {
+    Intrinsic Id;
+    const char *Base;
+    const char *Element;
+  };
+  static constexpr Operation Operations[] = {
+#define NEVERD_NEON_SHIFT_OPERATION(ID, Base, Element)                         \
+  {Intrinsic::ID, Base, Element},
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+  };
+  struct Width {
+    uint16_t Bytes;
+    const char *Letter;
+    const char *Bits;
+  };
+  static constexpr Width Widths[] = {
+#define NEVERD_NEON_SATURATING_WIDTH(Bytes, Letter, Bits) {Bytes, Letter, Bits},
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+  };
+  const auto *Op = llvm::find_if(
+      Operations, [&](const Operation &Entry) { return Entry.Id == Id; });
+  unsigned ElementBytes = 0;
+  if (Op == std::end(Operations) || Ops.size() != 3 ||
+      llvm::StringRef(Ops[2]).getAsInteger(10, ElementBytes))
+    return {};
+  const auto *W = llvm::find_if(
+      Widths, [&](const Width &Entry) { return Entry.Bytes == ElementBytes; });
+  const llvm::StringRef Kind = Op->Element;
+  const char *Prefix = neonElementTypePrefix(Kind);
+  const char *SignedPrefix = neonElementTypePrefix("s");
+  if (W == std::end(Widths) || !Prefix || !SignedPrefix)
+    return {};
+  if (ResultBytes == ElementBytes && ResultBytes < 8) {
+    const std::string Type = (llvm::Twine(Prefix) + W->Bits + "_t").str();
+    const std::string Amount =
+        (llvm::Twine(SignedPrefix) + W->Bits + "_t").str();
+    HasCIntrinsics = true;
+    return (llvm::Twine(Op->Base) + W->Letter + "_" + Kind + W->Bits + "((" +
+            Type + ")(" + Ops[0] + "), (" + Amount + ")(" + Ops[1] + "))")
+        .str();
+  }
+  if (ResultBytes != 8 && ResultBytes != 16)
+    return {};
+  const unsigned Lanes = ResultBytes / ElementBytes;
+  const std::string Value =
+      (llvm::Twine(Prefix) + W->Bits + "x" + llvm::Twine(Lanes) + "_t").str();
+  const std::string Amount =
+      (llvm::Twine(SignedPrefix) + W->Bits + "x" + llvm::Twine(Lanes) + "_t")
+          .str();
+  const std::string Raw = typeToC(NdType::makeInt(ResultBytes, false));
+  HasCIntrinsics = true;
+  return "__builtin_bit_cast(" + Raw + ", " + Op->Base +
+         (ResultBytes == 16 ? "q" : "") + "_" + Kind.str() + W->Bits + "(" +
+         neonValue(Value.c_str(), Raw.c_str(), Ops[0]) + ", " +
+         neonValue(Amount.c_str(), Raw.c_str(), Ops[1]) + "))";
+}
+
+/// A saturating doubling multiply (NeonIntrinsicSpellings.def); its last
+/// operand is the result's element width.
+std::string renderNeonDoublingMultiply(Intrinsic Id,
+                                       const std::vector<std::string> &Ops,
+                                       uint16_t ResultBytes,
+                                       bool &HasCIntrinsics) {
+  struct Operation {
+    Intrinsic Id;
+    const char *Base;
+    bool Widening;
+  };
+  static constexpr Operation Operations[] = {
+#define NEVERD_NEON_DOUBLING_MULTIPLY(ID, Base, Widening)                      \
+  {Intrinsic::ID, Base, Widening},
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+  };
+  const auto *Op = llvm::find_if(
+      Operations, [&](const Operation &Entry) { return Entry.Id == Id; });
+  unsigned ResultElement = 0;
+  if (Op == std::end(Operations) || Ops.size() != 3 ||
+      llvm::StringRef(Ops[2]).getAsInteger(10, ResultElement))
+    return {};
+  const unsigned SourceElement =
+      Op->Widening ? ResultElement / 2 : ResultElement;
+  const uint16_t SourceBytes = Op->Widening ? 8 : ResultBytes;
+  if ((SourceElement != 2 && SourceElement != 4) ||
+      (SourceBytes != 8 && SourceBytes != 16) ||
+      (Op->Widening && ResultBytes != 16))
+    return {};
+  const unsigned Bits = SourceElement * 8;
+  const std::string Source = (llvm::Twine("int") + llvm::Twine(Bits) + "x" +
+                              llvm::Twine(SourceBytes * 8 / Bits) + "_t")
+                                 .str();
+  const std::string SourceRaw = typeToC(NdType::makeInt(SourceBytes, false));
+  const std::string ResultRaw = typeToC(NdType::makeInt(ResultBytes, false));
+  HasCIntrinsics = true;
+  return "__builtin_bit_cast(" + ResultRaw + ", " + Op->Base +
+         (!Op->Widening && SourceBytes == 16 ? "q" : "") + "_s" +
+         std::to_string(Bits) + "(" +
+         neonValue(Source.c_str(), SourceRaw.c_str(), Ops[0]) + ", " +
+         neonValue(Source.c_str(), SourceRaw.c_str(), Ops[1]) + "))";
+}
+
+/// A saturating shift right by an immediate that narrows a 128-bit vector to
+/// 64 bits (NeonIntrinsicSpellings.def); its operands are the vector, the
+/// shift, and the narrow element width.
+std::string renderNeonNarrowShift(Intrinsic Id,
+                                  const std::vector<std::string> &Ops,
+                                  uint16_t ResultBytes, bool &HasCIntrinsics) {
+  struct Operation {
+    Intrinsic Id;
+    const char *Base;
+    const char *SourceElement;
+  };
+  static constexpr Operation Operations[] = {
+#define NEVERD_NEON_NARROW_SHIFT(ID, Base, SourceElement)                      \
+  {Intrinsic::ID, Base, SourceElement},
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+  };
+  const auto *Op = llvm::find_if(
+      Operations, [&](const Operation &Entry) { return Entry.Id == Id; });
+  unsigned NarrowBytes = 0;
+  if (Op == std::end(Operations) || Ops.size() != 3 || ResultBytes != 8 ||
+      llvm::StringRef(Ops[2]).getAsInteger(10, NarrowBytes) ||
+      (NarrowBytes != 1 && NarrowBytes != 2 && NarrowBytes != 4))
+    return {};
+  const char *Prefix = neonElementTypePrefix(Op->SourceElement);
+  if (!Prefix)
+    return {};
+  const unsigned SourceBits = NarrowBytes * 16;
+  const std::string Source = (llvm::Twine(Prefix) + llvm::Twine(SourceBits) +
+                              "x" + llvm::Twine(128 / SourceBits) + "_t")
+                                 .str();
+  HasCIntrinsics = true;
+  return (llvm::Twine("__builtin_bit_cast(uint64_t, ") + Op->Base + "_" +
+          Op->SourceElement + llvm::Twine(SourceBits) + "(" +
+          neonValue(Source.c_str(), "unsigned __int128", Ops[0]) + ", " +
+          Ops[1] + "))")
+      .str();
+}
+
 } // anonymous namespace
+
+bool armIntrinsicUsesCHeader(Intrinsic Id) {
+  using I = Intrinsic;
+  switch (Id) {
+#define NEVERD_NEON_FLOAT_OPERATION(ID, Base, Operands) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+#define NEVERD_NEON_U32_OPERATION(ID, Base) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+#define NEVERD_NEON_SATURATING_OPERATION(ID, Base, Signed) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+#define NEVERD_NEON_SHIFT_OPERATION(ID, Base, Element) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+#define NEVERD_NEON_NARROW_SHIFT(ID, Base, SourceElement) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+#define NEVERD_NEON_DOUBLING_MULTIPLY(ID, Base, Widening) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+  case I::A64_Fcvtxn:
+    return true;
+  default:
+    return false;
+  }
+}
 
 llvm::SmallVector<const char *, 3> getARMIntrinsicHeaders() {
   return {"arm_acle.h", "arm_neon.h"};
@@ -668,6 +832,15 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
     return renderNeonSaturating(Id, Ops, ResultBytes, HasCIntrinsics);
   case I::A64_Fcvtxn:
     return renderNeonFcvtxn(Ops, ResultBytes, HasCIntrinsics);
+#define NEVERD_NEON_SHIFT_OPERATION(ID, Base, Element) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+    return renderNeonShift(Id, Ops, ResultBytes, HasCIntrinsics);
+#define NEVERD_NEON_NARROW_SHIFT(ID, Base, SourceElement) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+    return renderNeonNarrowShift(Id, Ops, ResultBytes, HasCIntrinsics);
+#define NEVERD_NEON_DOUBLING_MULTIPLY(ID, Base, Widening) case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+    return renderNeonDoublingMultiply(Id, Ops, ResultBytes, HasCIntrinsics);
   default:
     return {};
   }

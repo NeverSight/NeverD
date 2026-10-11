@@ -750,8 +750,12 @@ llvm::SmallVector<const char *, 3> getArchIntrinsicHeaders(Arch TheArch) {
   if (TheArch == Arch::X86 || TheArch == Arch::X64)
     return getX86IntrinsicHeaders();
   auto Headers = getARMIntrinsicHeaders();
-  if (TheArch == Arch::AArch64)
+  if (TheArch == Arch::AArch64) {
+    // arm_neon.h leaves the scalar half-precision intrinsics (vmulxh_f16) to
+    // arm_fp16.h.
+    Headers.push_back("arm_fp16.h");
     Headers.push_back("arm_sve.h");
+  }
   return Headers;
 }
 

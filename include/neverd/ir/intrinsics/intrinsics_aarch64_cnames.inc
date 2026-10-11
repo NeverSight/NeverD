@@ -1,5 +1,16 @@
 // AArch64 standard C intrinsic names — included by intrinsics.cpp.
 
+// CRC32 (ACLE; the function takes the crc target feature,
+// ARMIntrinsicTargetFeatures.def).
+C(Intrinsic::A64_Crc32b, "__crc32b");
+C(Intrinsic::A64_Crc32h, "__crc32h");
+C(Intrinsic::A64_Crc32w, "__crc32w");
+C(Intrinsic::A64_Crc32x, "__crc32d");
+C(Intrinsic::A64_Crc32cb, "__crc32cb");
+C(Intrinsic::A64_Crc32ch, "__crc32ch");
+C(Intrinsic::A64_Crc32cw, "__crc32cw");
+C(Intrinsic::A64_Crc32cx, "__crc32cd");
+
 // Barriers
 C(Intrinsic::Dmb, "__dmb");
 C(Intrinsic::Dsb, "__dsb");
