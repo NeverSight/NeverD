@@ -983,7 +983,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (E.SourceCallHint)
     return renderSourceCallExpr(E);
   if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
-      E.IntrinsicId != Intrinsic::X86FPRoundMemoryState)
+      !isX86FPStateMemoryIntrinsic(E.IntrinsicId))
     llvm::report_fatal_error(
         "HighC cannot safely render a segmented-memory intrinsic");
   std::string Name = resolvedCallTarget(E);

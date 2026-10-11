@@ -10,6 +10,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -33,6 +34,7 @@ void detectXMMParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat);
+void detectCdeclStackParams(MedFunc &, Arch);
 } // namespace neverd
 
 namespace {
@@ -83,6 +85,174 @@ MedOp binary(NdOp Opcode, MedVar Output, MedVar Left, MedVar Right) {
 
 void addLiveIn(MedBlock &Entry, const MedVar &LiveIn) {
   Entry.Ops.push_back(unary(NdOp::COPY, LiveIn, LiveIn));
+}
+
+TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
+  for (auto Architecture : {Arch::X86, Arch::X64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (auto Id :
+           {Intrinsic::X86FPArithMemoryState, Intrinsic::X86FPRoundMemoryState,
+            Intrinsic::X86FPApprox12MemoryState})
+        for (unsigned Bytes : {4u, 8u}) {
+          if (Id == Intrinsic::X86FPApprox12MemoryState && Bytes == 8)
+            continue;
+          SCOPED_TRACE(testing::Message()
+                       << int(Architecture) << ':' << int(Format) << ':'
+                       << int(Id) << ':' << Bytes);
+          const auto &TRI = getTargetRegInfo(Architecture);
+          const auto Layout = TRI.integerArgumentLayout(Format);
+          const int64_t Base =
+              Architecture == Arch::X86 ? 4 : Layout.EntryStackBase;
+          MedFunc F;
+          F.Blocks.resize(1);
+          auto &B = F.Blocks[0];
+          const auto SP =
+              reg(1, 0, TRI.PointerSize, TRI.StackPointer, Architecture);
+          addLiveIn(B, SP);
+          const auto Address = temp(2, 0, 8, Architecture);
+          B.Ops.push_back(binary(NdOp::INT_ADD, Address, SP,
+                                 MedVar::makeConst(Base, TRI.PointerSize)));
+          MedOp Read;
+          Read.Opcode = NdOp::INTRINSIC;
+          Read.Output = temp(
+              3, 0,
+              Id == Intrinsic::X86FPApprox12MemoryState ? Bytes : Bytes + 4,
+              Architecture);
+          Read.addInput(MedVar::makeConst(unsigned(Id), 2));
+          Read.addInput(Address);
+          const unsigned Control = Id == Intrinsic::X86FPArithMemoryState
+                                       ? 16 | (Bytes == 8 ? 8 : 0)
+                                   : Id == Intrinsic::X86FPRoundMemoryState
+                                       ? 4 | (Bytes == 8 ? 2 : 0)
+                                       : 2;
+          Read.addInput(MedVar::makeConst(Control, 1));
+          if (Id == Intrinsic::X86FPArithMemoryState)
+            Read.addInput(MedVar::makeConst(0, Bytes));
+          else if (Id == Intrinsic::X86FPRoundMemoryState)
+            Read.addInput(MedVar::makeConst(4, 1));
+          if (Id != Intrinsic::X86FPApprox12MemoryState)
+            Read.addInput(MedVar::makeConst(0x1f80, 4));
+          ASSERT_TRUE(x86FPStateShapeIsValid(
+              Id, x86FPStateMedShape(Read, Architecture)));
+          B.Ops.push_back(Read);
+          if (Architecture == Arch::X86)
+            detectCdeclStackParams(F, Architecture);
+          else
+            med_calling_conv_detail::detectStackParams(F, Architecture, Format);
+          ASSERT_FALSE(F.Params.empty());
+          EXPECT_TRUE(F.MutableStackParamHomes.empty());
+          const auto &ValueRead = F.Blocks[0].Ops.back();
+          const auto Expected = Id == Intrinsic::X86FPArithMemoryState
+                                    ? Intrinsic::X86FPArithState
+                                : Id == Intrinsic::X86FPRoundMemoryState
+                                    ? Intrinsic::X86FPRoundState
+                                    : Intrinsic::X86FPApprox12State;
+          EXPECT_EQ(ValueRead.Inputs[0].ConstVal, unsigned(Expected));
+          EXPECT_TRUE(x86FPStateShapeIsValid(
+              Expected, x86FPStateMedShape(ValueRead, Architecture)));
+          EXPECT_EQ(ValueRead.Output, Read.Output);
+          if (Id != Intrinsic::X86FPApprox12MemoryState)
+            EXPECT_EQ(ValueRead.Inputs[4], Read.Inputs[4]);
+          const auto &Source =
+              ValueRead.Inputs[Id == Intrinsic::X86FPArithMemoryState ? 3 : 2];
+          EXPECT_EQ(Source.Size, Bytes);
+          if (Architecture == Arch::X86 && Bytes == 8) {
+            ASSERT_EQ(F.Blocks[0].Ops.size(), 4u);
+            const auto &Compose = F.Blocks[0].Ops[2];
+            EXPECT_EQ(Compose.Opcode, NdOp::CONCAT);
+            EXPECT_EQ(Compose.Output, Source);
+            EXPECT_EQ(Compose.Inputs[0].Id, 1);
+            EXPECT_EQ(Compose.Inputs[1].Id, 0);
+          } else {
+            EXPECT_EQ(Source.Kind, MedVar::Param);
+            EXPECT_EQ(Source.Id, Architecture == Arch::X86
+                                     ? 0
+                                     : int(Layout.Registers.size()));
+          }
+        }
+}
+
+TEST(MedCallingConvFPStack, MemoryOwnershipAndMalformedReadsAreConservative) {
+  for (auto Architecture : {Arch::X86, Arch::X64})
+    for (unsigned Mode = 0; Mode < 8; ++Mode) {
+      SCOPED_TRACE(testing::Message() << int(Architecture) << ':' << Mode);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto Layout = TRI.integerArgumentLayout(BinaryFormat::COFF);
+      const int64_t Base = Architecture == Arch::X86 ? 4 : 40;
+      const unsigned Slot = TRI.PointerSize;
+      MedFunc F;
+      F.Blocks.resize(1);
+      auto &B = F.Blocks[0];
+      const auto SP = reg(1, 0, Slot, TRI.StackPointer, Architecture);
+      addLiveIn(B, SP);
+      const auto Address = temp(2, 0, 8, Architecture);
+      const unsigned Bytes = Mode == 3 ? 16 : 8;
+      const int64_t Offset = Mode == 4   ? Base + 1
+                             : Mode == 7 ? Base - Slot
+                                         : Base;
+      B.Ops.push_back(
+          binary(NdOp::INT_ADD, Address, SP, MedVar::makeConst(Offset, Slot)));
+      MedOp Read;
+      Read.Opcode = NdOp::INTRINSIC;
+      Read.Output = temp(3, 0, Bytes + 4, Architecture);
+      Read.addInput(
+          MedVar::makeConst(unsigned(Intrinsic::X86FPArithMemoryState), 2));
+      Read.addInput(Address);
+      Read.addInput(MedVar::makeConst(Mode == 3 ? 8 : 24, 1));
+      Read.addInput(MedVar::makeConst(0, Bytes));
+      Read.addInput(MedVar::makeConst(0x1f80, 4));
+      if (Mode == 0) {
+        const auto HighAddress = temp(4, 0, 8, Architecture);
+        B.Ops.push_back(binary(NdOp::INT_ADD, HighAddress, Address,
+                               MedVar::makeConst(Slot, 8)));
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.addInput(HighAddress);
+        Store.addInput(MedVar::makeConst(1, Slot));
+        B.Ops.push_back(Store);
+      } else if (Mode == 1) {
+        MedOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.addInput(MedVar::makeConst(0x2000, 8));
+        Call.addInput(Address);
+        B.Ops.push_back(Call);
+      } else if (Mode == 2)
+        Read.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+      else if (Mode == 5)
+        Read.Inputs[2].ConstVal = 20; // FMA has no contract in this family.
+      else if (Mode == 6)
+        Read.Inputs[0].ConstVal |= UINT64_C(1) << 32;
+      B.Ops.push_back(Read);
+      if (Architecture == Arch::X86)
+        detectCdeclStackParams(F, Architecture);
+      else
+        med_calling_conv_detail::detectStackParams(F, Architecture,
+                                                   BinaryFormat::COFF);
+      const bool AdjacentWrite = Mode == 0 && Architecture == Arch::X64;
+      EXPECT_EQ(F.Blocks[0].Ops.back().Inputs[0].ConstVal,
+                AdjacentWrite ? unsigned(Intrinsic::X86FPArithState)
+                              : Read.Inputs[0].ConstVal);
+      if (Mode == 2 || Mode >= 5) {
+        EXPECT_TRUE(F.Params.empty());
+        EXPECT_TRUE(F.MutableStackParamHomes.empty());
+      } else {
+        ASSERT_FALSE(F.Params.empty());
+        if (AdjacentWrite) {
+          EXPECT_TRUE(F.MutableStackParamHomes.empty());
+          continue;
+        }
+        const unsigned Slots = (Offset - Base + Bytes + Slot - 1) / Slot;
+        ASSERT_EQ(F.MutableStackParamHomes.size(), Slots);
+        const int First =
+            Architecture == Arch::X86 ? 0 : int(Layout.Registers.size());
+        for (unsigned I = 0; I < Slots; ++I) {
+          EXPECT_EQ(F.MutableStackParamHomes[I].first, First + int(I));
+          EXPECT_EQ(F.MutableStackParamHomes[I].second,
+                    Base + int64_t(I * Slot));
+        }
+      }
+    }
 }
 
 TEST(MedCallingConvValueFlow, FPInputsFollowOnlyAuthenticatedCallPrefixes) {

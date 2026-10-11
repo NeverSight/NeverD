@@ -249,10 +249,13 @@ inline X86ShadowStackReadShape x86ShadowStackReadLowShape(const LowOp &Op,
 inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
   const bool Memory =
       Op.NumInputs && Op.Inputs[0].isConst() &&
-      Op.Inputs[0].Offset == unsigned(Intrinsic::X86FPRoundMemoryState);
+      isX86FPStateMemoryIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
   const bool Round =
       Op.NumInputs && Op.Inputs[0].isConst() &&
       isX86FPRoundStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
+  const bool Arithmetic =
+      Op.NumInputs && Op.Inputs[0].isConst() &&
+      isX86FPArithStateIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
   const unsigned ControlIndex = Memory ? 2 : 1;
   const bool Conversion = Op.NumInputs && Op.Inputs[0].isConst() &&
                           isX86FPConversionStateIntrinsic(
@@ -267,15 +270,20 @@ inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
           .NumInputs = Op.NumInputs,
           .IdIsConst = Op.NumInputs && Op.Inputs[0].isConst(),
           .IdSize = Op.NumInputs ? Op.Inputs[0].Size : 0U,
+          .IdValue = Op.NumInputs ? Op.Inputs[0].Offset : 0U,
           .OutputIsWritable = Op.Output.isReg() || Op.Output.isTemp(),
           .OutputSize = Op.Output.Size,
           .OperandsAreScalar = Scalar,
           .LeftSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : 0U,
           .RightSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U,
-          .StateSize = Round ? (Op.NumInputs > 4 ? Op.Inputs[4].Size : 0U)
-                       : Conversion
-                           ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
-                           : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
+          .ThirdSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
+          .ArithmeticLeftIsZero = Op.NumInputs > (Memory ? 3U : 2U) &&
+                                  Op.Inputs[Memory ? 3 : 2].isConst() &&
+                                  Op.Inputs[Memory ? 3 : 2].Offset == 0,
+          .StateSize =
+              Round || Arithmetic ? (Op.NumInputs > 4 ? Op.Inputs[4].Size : 0U)
+              : Conversion        ? (Op.NumInputs > 2 ? Op.Inputs[2].Size : 0U)
+                                  : (Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U),
           .DestinationIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
           .DestinationSelectorSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : 0U,
           .DestinationBytes = Op.NumInputs > 3 ? Op.Inputs[3].Offset : 0U,

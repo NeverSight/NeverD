@@ -316,6 +316,42 @@ source probes require Windows/Linux and FS probes require Linux. Native ROUND
 requires x64 SSE4.1; VEX probes additionally require AVX. These directed tests
 do not certify EVEX/SAE, unavailable-feature faults or general x87 state.
 
+`NeverDX86FPApprox12AccuracyTests` covers legacy/VEX RCP/RSQRT scalar and
+packed forms with original byte kernels, SDK Codegen default/NoOpt and both C
+routes default/NoOpt at O0/O2. Numerical bits, unchanged MXCSR (including
+unmasked exceptions), scalar merging and vector upper bits are complete
+observations. Memory checks cover legacy packed alignment faults, scalar/VEX
+unaligned access, canonical ranges, permissions and FS/GS. Scalar C return
+observers check FP type and raw bits. The portable software reference is an
+explicit non-strict opt-in: check the architectural error envelope separately
+from implementation-dependent RCP tininess and record approximated execution.
+Default/strict concrete evaluation refuses unproved normal results; definite
+special values remain exact. Native FS requires Linux and AVX probes require
+native OS-enabled AVX. These tests do not certify x86-32 execution, enabled #AC,
+unavailable-feature faults or EVEX 14/28-bit approximations.
+
+`NeverDX86FPArithStateAccuracyTests` compares original scalar and packed
+ADD/SUB/MUL/DIV/SQRT/MIN/MAX bytes with SDK Codegen default/NoOpt and HighC/LLVMC
+default/NoOpt at O0/O2. Its 140 forms cover legacy scalar/128-bit packed and VEX
+scalar/128/256-bit packed register and memory sources. Directed raw values and
+full MXCSR observations cover rounding, DAZ/FTZ, sticky flags, NaN payloads and
+complete YMM upper state. Additional probes cover distinct source registers,
+destination/RHS aliasing, unaligned scalar/VEX memory, unmasked exceptions,
+instruction-wide exception priority, legacy alignment and protected cross-page
+sources. Discarded numerical results must retain state changes and faults.
+Scalar C return probes separately verify floating type, raw bits and state.
+Declared scalar stack-argument probes compare original execution and readable C
+through default/NoOpt and O0/O2, including complete raw results and MXCSR. They
+exercise the fifth Win64 or ninth SysV floating argument. `MedCallingConvFPStack`
+additionally checks arithmetic, ROUND and APPROX12 incoming ranges across
+ELF/Mach-O/COFF and x86-32/x64, two-slot composition, writes, escaped addresses,
+packed/straddling home initialization and malformed or segmented refusals.
+Low/Med/High and owned assembly tests reject malformed roles, controls, state
+pointers, effects and addressing contracts. Native execution requires x64 and
+OS-enabled AVX; descriptor checks also cover x86-32 without claiming native
+x86-32 execution. These tests do not certify horizontal arithmetic, FMA,
+EVEX/SAE, x87, enabled #AC or unavailable-feature faults.
+
 ## x86 invalid encodings and instruction boundaries
 
 `NeverDX86EncodingAccuracyTests` requires raw illegal LOCK forms (including

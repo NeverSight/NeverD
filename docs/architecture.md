@@ -1585,9 +1585,26 @@ unmasked traps. A discarded numerical result does not discard its state
 effect. The concrete emulator reuses its existing packed evaluator with one
 active lane, and an unknown stepped-over call invalidates imported MXCSR
 evidence. Its configured reset environment remains the concrete starting
-profile. Generic external FLOAT operations, packed FP, VEX arithmetic and
-remaining x87 control/TOP/tag semantics retain their separate contracts;
-this scalar state surface does not certify them.
+profile. Generic external FLOAT operations and remaining x87 control/TOP/tag
+semantics retain their separate contracts.
+
+Legacy/VEX ADD/SUB/MUL/DIV/SQRT/MIN/MAX scalar and packed forms extend this
+completion scope with `X86FPArithState` and `X86FPArithMemoryState`. One
+aggregate carries the complete raw numerical result and outgoing MXCSR;
+packed lanes complete together, retaining instruction-wide exception priority.
+SQRT consumes only its RHS and requires an exact zero dummy LHS. Control bit
+5 identifies VEX packed memory and does not enable SAE. Memory accesses remain
+inside the incoming/outgoing CSR scope, preserving legacy packed alignment
+faults and complete source reads even when the numerical result is discarded.
+The lifter owns scalar source merging and VEX upper zeroing. Low/Med/High
+shape validators and LLVM/C assembly authentication consume the same contract;
+only exact scalar numerical slices acquire floating type provenance. LLVM and
+readable C execute the actual instruction, and concrete execution reuses the
+common packed evaluator and authenticated memory access owner. Existing scalar
+ADD/SUB/MUL/DIV register contracts remain valid. Horizontal arithmetic, FMA,
+EVEX/SAE, enabled alignment checking and unavailable CPU-feature faults retain
+their separate contracts. Swift explicitly refuses this new completion surface
+until it has an equivalent lowering.
 
 Legacy/VEX ROUND extends that state surface through whole-instruction
 `X86FPRoundState` aggregates. Immediate bits 7:4 are ignored, bit 2 selects
@@ -1603,6 +1620,31 @@ the result aggregate, independently of target pointer width. Concrete x64
 evaluation requires authenticated 48/57-bit canonical-address context and
 segment bases. Unknown context refuses; known memory faults retain incoming
 CSR and publish no numerical result. This does not extend EVEX/SAE coverage.
+
+Stack-argument recovery consumes the authenticated source address and byte
+extent of arithmetic, ROUND and APPROX12 memory contracts. A proven immutable
+scalar incoming argument can supply the corresponding value contract without
+changing numerical/MXCSR completion. A two-slot i386 scalar uses explicit byte
+composition. Packed, straddling, written or escaped sources keep their original
+memory contract, and every covered argument home is initialized. Segmented or
+malformed sources do not establish ordinary incoming stack arguments. Both
+register ABIs and i386 use the same memory-read and source-rebinding owner.
+
+Legacy/VEX RCP/RSQRT use `X86FPApprox12State` raw numerical results and
+`X86FPApprox12MemoryState` instruction-owned source access. These instructions
+have no MXCSR input, output or exception effect; an unknown CSR stays unknown.
+Scalar width is four bytes, packed width is 16/32, and upper-lane writes retain
+their existing lifter ownership. Legacy packed memory requires 16-byte
+alignment, while scalar/VEX memory does not impose that requirement. Native
+LLVM and readable C execute the actual instruction, preserving raw NaN bits.
+Concrete evaluation completes determined special values but refuses
+implementation-dependent normal results by default. Explicit non-strict
+reference mode can select a software result within the architectural error
+envelope and records `ApproximatedOps`; strict/concolic execution always
+refuses that representative. This mode does not establish exact path or
+target evidence. Existing EVEX 14/28 approximations retain their own contract.
+Enabled alignment-check faults and unavailable CPU features require further
+authenticated execution context; this surface does not certify them.
 
 Swift consumes the same typed HighIR state contract for scalar SSE arithmetic.
 Its x86_64-only compiler pointer intrinsics import and commit MXCSR; numerical
