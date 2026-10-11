@@ -32,11 +32,14 @@ constexpr CPURegister EntryRegisters[] = {
     CPURegister::X64FPCW};
 
 struct DriverState final : ProcessRuntimeState {
-  explicit DriverState(bool Dependencies)
+  explicit DriverState(std::vector<std::string> Reasons)
       : ProcessRuntimeState(Kind::WindowsDriverX64),
-        Dependencies(Dependencies) {}
-  bool hasAdditionalDependencies() const override { return Dependencies; }
-  bool Dependencies;
+        Reasons(std::move(Reasons)) {}
+  bool hasAdditionalDependencies() const override { return !Reasons.empty(); }
+  std::vector<std::string> additionalDependencyReasons() const override {
+    return Reasons;
+  }
+  std::vector<std::string> Reasons;
 };
 } // namespace
 
@@ -243,11 +246,13 @@ DriverObservation::runtimeState(bool) {
   auto Unchanged = entryContextUnchanged();
   if (!Unchanged)
     return Unchanged.takeError();
-  auto Dependencies = Kernel.hasUnpackDependencies();
+  auto Dependencies = Kernel.unpackDependencies();
   if (!Dependencies)
     return Dependencies.takeError();
+  if (!*Unchanged)
+    Dependencies->emplace_back("changed DriverEntry invocation context");
   return std::shared_ptr<const ProcessRuntimeState>(
-      std::make_shared<DriverState>(!*Unchanged || *Dependencies));
+      std::make_shared<DriverState>(std::move(*Dependencies)));
 }
 std::optional<uint64_t> DriverObservation::nativeCallCount() const {
   return Result.Calls.size();

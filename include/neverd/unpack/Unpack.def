@@ -118,6 +118,7 @@ NEVERD_UNPACK_REPORT_FIELD(RuntimeState, "runtime_state")
 NEVERD_UNPACK_REPORT_FIELD(AdditionalStateKnown,
                            "additional_state_inventory_known")
 NEVERD_UNPACK_REPORT_FIELD(AdditionalState, "has_additional_dependencies")
+NEVERD_UNPACK_REPORT_FIELD(AdditionalReasons, "additional_dependency_reasons")
 NEVERD_UNPACK_REPORT_FIELD(HeapKnown, "heap_inventory_known")
 NEVERD_UNPACK_REPORT_FIELD(HeapReferenceCount, "possible_heap_references")
 NEVERD_UNPACK_REPORT_FIELD(DirectServiceCalls, "direct_service_calls")

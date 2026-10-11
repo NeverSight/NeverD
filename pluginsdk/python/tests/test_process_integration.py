@@ -500,6 +500,529 @@ class ProcessIntegrationTests(unittest.TestCase):
         self.assertIsNone(result["android"]["native_calls"][-1]["result"])
         self.assertIn("no explicit linux_time input", result["diagnostic"])
 
+    def test_darwin_owner_queries_preserve_permissions_scope_and_admission(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import NeverDError, Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+
+        def metadata(mode, inode, size=0):
+            return {"device": 7, "inode": inode, "mode": mode,
+                    "link_count": 2 if mode in (16832, 16384) else 1,
+                    "uid": 501, "gid": 20, "size": size,
+                    "block_size": 4096, "blocks": 0, "flags": 0, "generation": 0,
+                    **{key: {"seconds": 0, "nanoseconds": 0} for key in
+                       ("access_time", "modification_time", "change_time", "birth_time")}}
+
+        files = {"authorization": "static-owner-queries",
+                 "files": [{"path": "/data", "bytes_hex": "616200ff6566",
+                            "metadata": metadata(33024, 2, 6)},
+                           {"path": "/directory/leaf", "bytes_hex": "",
+                            "metadata": metadata(33216, 4)},
+                           {"path": "/unknown", "bytes_hex": ""}],
+                 "directories": [{"path": "/", "metadata": metadata(16832, 1)},
+                                 {"path": "/directory", "metadata": metadata(16384, 3)}],
+                 "symbolic_links": [{"path": "/alias", "target_hex": "64617461"},
+                                    {"path": "/via", "target_hex": "6469726563746f7279"}],
+                 "working_directory": "/"}
+        system = {"credentials": {"real_uid": 501, "effective_uid": 501,
+                                   "real_gid": 20, "effective_gid": 20}}
+        for profile, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                      ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                      ("ios-simulator", "arm64")):
+            path = str((Path(fixtures) / f"{profile}-{architecture}").resolve(strict=True))
+            name = f"{profile}-macho64-v1"
+            x64 = architecture == "x86_64"
+            options = {"backend": "unicorn", "instruction_quantum": 1024,
+                       "timeout_microseconds": 5000000,
+                       "arguments": ["guest", "owner-queries", "/data"],
+                       "darwin_files": files, "darwin_system": system}
+            original = json.dumps(options, sort_keys=True)
+            for repeat in range(2):
+                with self.subTest(profile=profile, architecture=architecture, repeat=repeat):
+                    result = session.emulate_process(path, name, json.dumps(options))
+                    self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                    self.assertEqual(result["exit_status"], 37)
+                    self.assertEqual(result["stdout_hex"], "50")
+                    self.assertEqual(result["stderr_hex"], "")
+                    calls = result["services"]
+                    self.assertEqual(len(calls), 51)
+                    self.assertEqual([c["result"] for c in calls[:24]],
+                                     ["0", "d", "d", "d", "0", "d", "d", "d"] * 3)
+                    self.assertEqual([c["error"] for c in calls[:24]],
+                                     [False, True, True, True, False, True, True, True] * 3)
+                    self.assertEqual(calls[47]["number"],
+                                     "1234567802000021" if x64 else "1234567800000021")
+                    self.assertEqual(json.dumps(options, sort_keys=True), original)
+                    self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+            for mode, number in (("owner-query-open", 5), ("owner-query-map", 197)):
+                request = json.loads(original)
+                request["arguments"][1] = mode
+                result = session.emulate_process(path, name, json.dumps(request))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["stdout_hex"], "21")
+                self.assertEqual(result["diagnostic"],
+                                 "Darwin static owner queries do not authorize other vnode operations")
+                self.assertEqual(result["services"][-1]["number"],
+                                 format(number | (0x02000000 if x64 else 0), "x"))
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+            for unknown in ("credentials", "metadata", "root", "nonowner"):
+                request = json.loads(original)
+                request["arguments"][1] = "owner-query-stop"
+                if unknown == "credentials":
+                    request.pop("darwin_system")
+                elif unknown == "metadata":
+                    request["darwin_files"]["files"][0].pop("metadata")
+                else:
+                    request["darwin_system"]["credentials"]["real_uid"] = 0 if unknown == "root" else 502
+                result = session.emulate_process(path, name, json.dumps(request))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["stdout_hex"], "21")
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+            for bad in (None, True, 0, [], {}, "owner", "", "StaticOwnerQueries"):
+                request = {"darwin_files": {"files": [], "authorization": bad}}
+                with self.assertRaisesRegex(NeverDError, "authorization"):
+                    session.emulate_process("missing.macho", name, json.dumps(request))
+                self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
+    def test_darwin_ordinary_queries_preserve_group_knowledge_scope_and_admission(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import NeverDError, Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+
+        def metadata(mode, inode, uid, gid, size=0):
+            return {"device": 7, "inode": inode, "mode": mode,
+                    "link_count": 2 if mode & 0o170000 == 0o40000 else 1,
+                    "uid": uid, "gid": gid, "size": size,
+                    "block_size": 4096, "blocks": 0, "flags": 0, "generation": 0,
+                    **{key: {"seconds": 0, "nanoseconds": 0} for key in
+                       ("access_time", "modification_time", "change_time", "birth_time")}}
+
+        files = {"authorization": "static-ordinary-queries", "files": [
+                    {"path": "/agreement", "bytes_hex": "616200ff6566",
+                     "metadata": metadata(0o100644, 2, 700, 50, 6)},
+                    {"path": "/group", "bytes_hex": "",
+                     "metadata": metadata(0o100060, 3, 700, 20)},
+                    {"path": "/supplement", "bytes_hex": "",
+                     "metadata": metadata(0o100010, 4, 700, 40)},
+                    {"path": "/world", "bytes_hex": "",
+                     "metadata": metadata(0o100004, 5, 700, 20)},
+                    {"path": "/unknown", "bytes_hex": "",
+                     "metadata": metadata(0o100064, 6, 700, 50)},
+                    {"path": "/directory/leaf", "bytes_hex": "",
+                     "metadata": metadata(0o100644, 8, 700, 50)}],
+                 "directories": [{"path": "/", "metadata": metadata(0o40777, 1, 0, 0)},
+                                 {"path": "/directory", "metadata": metadata(0o40010, 7, 700, 20)}],
+                 "symbolic_links": [{"path": "/alias", "target_hex": "61677265656d656e74"},
+                                    {"path": "/via", "target_hex": "6469726563746f7279"}],
+                 "working_directory": "/"}
+        system = {"credentials": {"real_uid": 501, "effective_uid": 502,
+                                   "real_gid": 30, "effective_gid": 20, "groups": [20, 40]}}
+        read = [0, 13, 13, 13, 0, 13, 13, 13]
+        none = [0, 13, 13, 13, 13, 13, 13, 13]
+        rw = [0, 13, 0, 13, 0, 13, 0, 13]
+        execute = [0, 0, 13, 13, 13, 13, 13, 13]
+        expected = []
+        for api in range(3):
+            for request in range(8):
+                expected.extend([read[request], (rw if api == 2 else none)[request],
+                                 execute[request], (none if api == 2 else read)[request]])
+        expected += read * 2 + [0, 13, 13, 0, 13, 13]
+        expected += [0, 13, 13, 13, 13, 13, 0, 2] * 2 + [0, 2, 0, 0, 0, 0, 0, 2]
+        self.assertEqual(len(expected), 142)
+        for profile, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                      ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                      ("ios-simulator", "arm64")):
+            path = str((Path(fixtures) / f"{profile}-{architecture}").resolve(strict=True))
+            name = f"{profile}-macho64-v1"
+            x64 = architecture == "x86_64"
+            options = {"backend": "unicorn", "instruction_quantum": 1024,
+                       "timeout_microseconds": 5000000,
+                       "arguments": ["guest", "ordinary-queries", "/unknown"],
+                       "darwin_files": files, "darwin_system": system}
+            original = json.dumps(options, sort_keys=True)
+            for repeat in range(2):
+                with self.subTest(profile=profile, architecture=architecture, repeat=repeat):
+                    result = session.emulate_process(path, name, json.dumps(options))
+                    self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                    self.assertEqual(result["exit_status"], 37)
+                    self.assertEqual(result["stdout_hex"], "47")
+                    self.assertEqual(result["stderr_hex"], "")
+                    calls = result["services"]
+                    self.assertEqual(len(calls), 146)
+                    self.assertEqual([c["result"] for c in calls[:142]], [format(v, "x") for v in expected])
+                    self.assertEqual([c["error"] for c in calls[:142]], [v != 0 for v in expected])
+                    self.assertEqual(calls[142]["number"],
+                                     "1234567802000021" if x64 else "1234567800000021")
+                    self.assertEqual(calls[142]["result"], "0")
+                    self.assertEqual(json.dumps(options, sort_keys=True), original)
+                    self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+            for mode, number in (("ordinary-query-open", 5), ("ordinary-query-map", 197)):
+                request = json.loads(original)
+                request["arguments"][1] = mode
+                result = session.emulate_process(path, name, json.dumps(request))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["stdout_hex"], "21")
+                self.assertEqual(result["diagnostic"],
+                                 "Darwin static ordinary queries do not authorize other vnode operations")
+                self.assertEqual(len(result["services"]), 2)
+                self.assertEqual(result["services"][-1]["number"],
+                                 format(number | (0x02000000 if x64 else 0), "x"))
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+            for unknown in ("groups", "credentials", "metadata", "root"):
+                request = json.loads(original)
+                request["arguments"][1] = "ordinary-query-unknown"
+                if unknown != "groups":
+                    request["arguments"][2] = "/agreement"
+                if unknown == "credentials":
+                    request.pop("darwin_system")
+                elif unknown == "metadata":
+                    request["darwin_files"]["files"][0].pop("metadata")
+                elif unknown == "root":
+                    request["darwin_system"]["credentials"]["effective_uid"] = 0
+                result = session.emulate_process(path, name, json.dumps(request))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["stdout_hex"], "21")
+                self.assertEqual(len(result["services"]), 2)
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+                self.assertIn("Darwin ordinary authorization requires", result["diagnostic"])
+            for bad in (None, True, 0, [], {}, "ordinary", "", "StaticOrdinaryQueries",
+                        "static-ordinary-queries\0"):
+                request = {"darwin_files": {"files": [], "authorization": bad}}
+                with self.assertRaisesRegex(NeverDError, "authorization"):
+                    session.emulate_process("missing.macho", name, json.dumps(request))
+                self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
+    def test_darwin_ordinary_queries_use_explicit_membership_uid_without_resolver(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import NeverDError, Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+
+        def metadata(mode, inode, uid, gid, size=0):
+            return {"device": 7, "inode": inode, "mode": mode,
+                    "link_count": 2 if mode & 0o170000 == 0o40000 else 1,
+                    "uid": uid, "gid": gid, "size": size,
+                    "block_size": 4096, "blocks": 0, "flags": 0, "generation": 0,
+                    **{key: {"seconds": 0, "nanoseconds": 0} for key in
+                       ("access_time", "modification_time", "change_time", "birth_time")}}
+
+        files = {"authorization": "static-ordinary-queries", "files": [
+                    {"path": "/agreement", "bytes_hex": "616200ff6566",
+                     "metadata": metadata(0o100644, 2, 700, 50, 6)},
+                    {"path": "/group", "bytes_hex": "",
+                     "metadata": metadata(0o100060, 3, 700, 20)},
+                    {"path": "/supplement", "bytes_hex": "",
+                     "metadata": metadata(0o100010, 4, 700, 40)},
+                    {"path": "/world", "bytes_hex": "",
+                     "metadata": metadata(0o100004, 5, 700, 20)},
+                    {"path": "/unknown", "bytes_hex": "",
+                     "metadata": metadata(0o100064, 6, 700, 50)},
+                    {"path": "/directory/leaf", "bytes_hex": "",
+                     "metadata": metadata(0o100644, 8, 700, 50)},
+                    {"path": "/external/leaf", "bytes_hex": "",
+                     "metadata": metadata(0o100644, 11, 700, 50)}],
+                 "directories": [{"path": "/", "metadata": metadata(0o40777, 1, 0, 0)},
+                                 {"path": "/directory", "metadata": metadata(0o40010, 7, 700, 20)},
+                                 {"path": "/external", "metadata": metadata(0o40001, 9, 700, 50)},
+                                 {"path": "/blocked", "metadata": metadata(0o40010, 10, 700, 50)}],
+                 "symbolic_links": [{"path": "/alias", "target_hex": "61677265656d656e74"},
+                                    {"path": "/via", "target_hex": "6469726563746f7279"},
+                                    {"path": "/external-via", "target_hex": "65787465726e616c"}],
+                 "working_directory": "/"}
+        system = {"credentials": {"real_uid": 501, "effective_uid": 502,
+                                   "real_gid": 30, "effective_gid": 20, "groups": [20, 40],
+                                   "group_membership_uid": 4294967195}}
+        read = [0, 13, 13, 13, 0, 13, 13, 13]
+        none = [0, 13, 13, 13, 13, 13, 13, 13]
+        rw = [0, 13, 0, 13, 0, 13, 0, 13]
+        execute = [0, 0, 13, 13, 13, 13, 13, 13]
+        expected = []
+        for api in range(3):
+            for request in range(8):
+                expected.extend([read[request], (rw if api == 2 else none)[request],
+                                 execute[request], (none if api == 2 else read)[request]])
+        expected += read * 2 + [0, 13, 13, 0, 13, 13]
+        expected += [0, 13, 13, 13, 13, 13, 0, 2] * 2 + [0, 2, 0, 0, 0, 0, 0, 2]
+        self.assertEqual(len(expected), 142)
+        search = [2, 0, 0, 0, 13, 13, 0, 0]
+        for profile, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                      ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                      ("ios-simulator", "arm64")):
+            path = str((Path(fixtures) / f"{profile}-{architecture}").resolve(strict=True))
+            name = f"{profile}-macho64-v1"
+            x64 = architecture == "x86_64"
+            options = {"backend": "unicorn", "instruction_quantum": 1024,
+                       "timeout_microseconds": 5000000,
+                       "arguments": ["guest", "ordinary-queries-closed-groups", "/unknown"],
+                       "darwin_files": files, "darwin_system": system}
+            original = json.dumps(options, sort_keys=True)
+            for wire in (4294967195, "4294967195"):
+                request = json.loads(original)
+                request["darwin_system"]["credentials"]["group_membership_uid"] = wire
+                for repeat in range(2):
+                    with self.subTest(profile=profile, architecture=architecture, wire=wire, repeat=repeat):
+                        result = session.emulate_process(path, name, json.dumps(request))
+                        self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                        self.assertEqual(result["exit_status"], 37)
+                        self.assertEqual(result["stdout_hex"], "474e")
+                        self.assertEqual(result["stderr_hex"], "")
+                        calls = result["services"]
+                        self.assertEqual(len(calls), 173)
+                        self.assertEqual([c["result"] for c in calls[:142]], [format(v, "x") for v in expected])
+                        self.assertEqual([c["error"] for c in calls[:142]], [v != 0 for v in expected])
+                        self.assertEqual(calls[142]["number"],
+                                         "1234567802000021" if x64 else "1234567800000021")
+                        self.assertEqual(calls[142]["result"], "0")
+                        self.assertEqual(calls[143]["error"], False)
+                        self.assertNotEqual(calls[143]["result"], "0")
+                        self.assertEqual(calls[144]["result"], "0")
+                        self.assertEqual(calls[145]["result"], "1")
+                        for i, mask in enumerate((2, 6), 146):
+                            self.assertEqual(calls[i]["number"], "20001d2" if x64 else "1d2")
+                            self.assertEqual(calls[i]["arguments"][2:4], [format(mask, "x"), "10"])
+                            self.assertEqual(calls[i]["result"], "d")
+                            self.assertEqual(calls[i]["error"], True)
+                        for api, number in enumerate((33, 466, 466)):
+                            for q, value in enumerate(search):
+                                call = calls[148 + api * 8 + q]
+                                self.assertEqual(call["number"], format(number | (0x02000000 if x64 else 0), "x"))
+                                self.assertEqual(call["result"], format(value, "x"))
+                                self.assertEqual(call["error"], value != 0)
+                                self.assertEqual(call["arguments"][2 if api else 1], "4" if q in (1, 6) else "0")
+                                if api:
+                                    self.assertEqual(call["arguments"][3], "10" if api == 2 else "0")
+                        self.assertEqual(calls[172]["result"], "1")
+                        self.assertEqual(json.dumps(options, sort_keys=True), original)
+                        self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+            for wire in (None, 0, "0", 2147483647, "2147483647"):
+                request = json.loads(original)
+                if wire is None:
+                    del request["darwin_system"]["credentials"]["group_membership_uid"]
+                else:
+                    request["darwin_system"]["credentials"]["group_membership_uid"] = wire
+                result = session.emulate_process(path, name, json.dumps(request))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["stdout_hex"], "47")
+                self.assertEqual(len(result["services"]), 147)
+                self.assertEqual(result["diagnostic"], "Darwin ordinary authorization requires known group membership")
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+            for unknown in ("groups", "metadata", "root"):
+                request = json.loads(original)
+                request["arguments"][1] = "ordinary-query-unknown"
+                if unknown == "groups":
+                    del request["darwin_system"]["credentials"]["groups"]
+                elif unknown == "metadata":
+                    next(f for f in request["darwin_files"]["files"] if f["path"] == "/unknown").pop("metadata")
+                else:
+                    request["darwin_system"]["credentials"]["effective_uid"] = 0
+                result = session.emulate_process(path, name, json.dumps(request))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["stdout_hex"], "21")
+                self.assertEqual(len(result["services"]), 2)
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+                self.assertIn("Darwin ordinary authorization requires", result["diagnostic"])
+            for mode, number in (("ordinary-query-open", 5), ("ordinary-query-map", 197)):
+                request = json.loads(original)
+                request["arguments"][1] = mode
+                result = session.emulate_process(path, name, json.dumps(request))
+                self.assertEqual(result["stop_reason"], "unsupported_service")
+                self.assertEqual(result["stdout_hex"], "21")
+                self.assertEqual(result["diagnostic"],
+                                 "Darwin static ordinary queries do not authorize other vnode operations")
+                self.assertEqual(len(result["services"]), 2)
+                self.assertEqual(result["services"][-1]["number"], format(number | (0x02000000 if x64 else 0), "x"))
+                self.assertIsNone(result["services"][-1]["result"])
+                self.assertNotIn("error", result["services"][-1])
+            for bad in (None, True, False, {}, [], 0.5, -1, 2147483648,
+                        4294967194, 4294967196, 4294967295, 4294967296,
+                        "-1", "1.5", "0x10", "x", "", " 0", "0 ", "2147483648",
+                        "4294967194", "4294967196", "4294967295", "4294967296", "1\0"):
+                request = {"darwin_system": json.loads(json.dumps(system))}
+                request["darwin_system"]["credentials"]["group_membership_uid"] = bad
+                with self.assertRaisesRegex(NeverDError, "credentials|group membership UID"):
+                    session.emulate_process("missing.macho", name, json.dumps(request))
+                self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+            for key in ("real_uid", "effective_uid", "real_gid", "effective_gid", "groups"):
+                request = {"darwin_system": json.loads(json.dumps(system))}
+                request["darwin_system"]["credentials"][key] = [20, 4294967195] if key == "groups" else 4294967195
+                with self.assertRaisesRegex(NeverDError, "Darwin credentials"):
+                    session.emulate_process("missing.macho", name, json.dumps(request))
+                self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+            for key in ("GroupMembershipUID", "group_membership_uid\0"):
+                request = {"darwin_system": json.loads(json.dumps(system))}
+                request["darwin_system"]["credentials"][key] = 4294967195
+                with self.assertRaisesRegex(NeverDError, "credentials"):
+                    session.emulate_process("missing.macho", name, json.dumps(request))
+        for name in ("linux-elf64-v1", "windows-pe64-v1", "android-aarch64-api28-v1"):
+            with self.assertRaisesRegex(NeverDError, "darwin_system requires"):
+                session.emulate_process("missing.macho", name, json.dumps({"darwin_system": system}))
+            self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
+    def test_darwin_mach_self_ports_preserve_raw_carriers_and_independent_inputs(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import NeverDError, Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+        fields = ("thread_self_port", "task_self_port", "host_self_port")
+        mixed = dict(zip(fields, (2147483649, 0, "4294967295")))
+        samples = ((0, "0000000000000000", "0"),
+                   (1, "0100000000000000", "1"),
+                   (2147483647, "ffffff7f00000000", "7fffffff"),
+                   (2147483648, "00000080ffffffff", "ffffffff80000000"),
+                   ("2147483649", "01000080ffffffff", "ffffffff80000001"),
+                   (4294967295, "ffffffffffffffff", "ffffffffffffffff"),
+                   ("4294967295", "ffffffffffffffff", "ffffffffffffffff"))
+        for profile, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                      ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                      ("ios-simulator", "arm64")):
+            path = str((Path(fixtures) / f"{profile}-{architecture}").resolve(strict=True))
+            name = f"{profile}-macho64-v1"
+            x64 = architecture == "x86_64"
+            numbers = []
+            for q in range(3):
+                low = (0x1000000 | (27 + q)) if x64 else (-(27 + q) & 0xffffffff)
+                prefixes = [0 if x64 else 0xffffffff00000000, 0, 0,
+                            0x1234567800000000, 0x1234567800000000,
+                            0xffffffff00000000, 0xffffffff00000000]
+                numbers.extend(f"{prefix | low:x}" for prefix in prefixes)
+
+            def check(result, carriers, expected):
+                self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                self.assertEqual(result["exit_status"], 37)
+                self.assertEqual(bytes.fromhex(result["stdout_hex"]), expected)
+                self.assertEqual(result["stderr_hex"], "")
+                calls = result["services"]
+                self.assertEqual(len(calls), 22)
+                self.assertEqual([c["number"] for c in calls[:21]], numbers)
+                self.assertEqual([c["result"] for c in calls[:21]],
+                                 [v for value in carriers for v in [value] * 7])
+                for call in calls[:21]:
+                    self.assertNotIn("error", call)
+                    self.assertNotIn("thread_id", call)
+                    self.assertEqual(call["arguments"][0], "ffffffffffffffff")
+                    self.assertEqual(call["arguments"][2 if x64 else 1], "1122334455667788")
+                    self.assertEqual(call["arguments"][1 if x64 else 2], "8877665544332211")
+                self.assertEqual(calls[-1]["number"], "2000004" if x64 else "4")
+                self.assertEqual(calls[-1]["arguments"][0], "1")
+                self.assertEqual(calls[-1]["arguments"][2], f"{len(expected):x}")
+                self.assertEqual(calls[-1]["result"], f"{len(expected):x}")
+                self.assertFalse(calls[-1]["error"])
+                self.assertNotIn("thread_id", calls[-1])
+                self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
+            options = {"backend": "unicorn", "instruction_quantum": 1024,
+                       "timeout_microseconds": 5000000,
+                       "arguments": ["guest", "mach-self-port-values"]}
+            for wire, hex_bytes, carrier in samples:
+                options["darwin_system"] = dict.fromkeys(fields, wire)
+                request = json.dumps(options)
+                previous = None
+                for repeat in range(2):
+                    with self.subTest(profile=name, architecture=architecture, port=wire, repeat=repeat):
+                        result = session.emulate_process(path, name, request)
+                        check(result, [carrier] * 3, bytes.fromhex(hex_bytes * 3))
+                        if previous is not None:
+                            self.assertEqual(result, previous)
+                        previous = result
+            options["darwin_system"] = mixed.copy()
+            result = session.emulate_process(path, name, json.dumps(options))
+            check(result, ["ffffffff80000001", "0", "ffffffffffffffff"],
+                  bytes.fromhex("01000080ffffffff0000000000000000ffffffffffffffff"))
+            options["arguments"][1] = "mach-self-ports"
+            result = session.emulate_process(path, name, json.dumps(options))
+            check(result, ["ffffffff80000001", "0", "ffffffffffffffff"], b"J")
+            for q, selection in enumerate(("thread", "task", "host")):
+                options["arguments"] = ["guest", "mach-self-port-missing", selection]
+                for state in range(3):
+                    options.pop("darwin_system", None)
+                    if state:
+                        options["darwin_system"] = {}
+                    if state == 2:
+                        options["darwin_system"] = {**mixed, "thread_id": "18446744073709551615"}
+                        del options["darwin_system"][fields[q]]
+                    result = session.emulate_process(path, name, json.dumps(options))
+                    self.assertEqual(result["stop_reason"], "unsupported_service")
+                    self.assertEqual(result["diagnostic"],
+                                     f"Darwin current-{selection} Mach port observation is not configured")
+                    self.assertEqual(bytes.fromhex(result["stdout_hex"]), b"!")
+                    self.assertEqual(len(result["services"]), 2)
+                    last = result["services"][-1]
+                    number = (0x1000000 | (27 + q)) if x64 else (-(27 + q) & 0xffffffffffffffff)
+                    self.assertEqual(last["number"], f"{number:x}")
+                    self.assertIsNone(last["result"])
+                    self.assertNotIn("error", last)
+                    self.assertNotIn("thread_id", last)
+            for field in fields:
+                for bad in (None, True, False, {}, [], -1, 1.5, 4294967296,
+                            9007199254740992, 18446744073709551615,
+                            "", "-1", "1.5", "0x10", "x", "4294967296",
+                            "18446744073709551615", "1\x00"):
+                    options["darwin_system"] = {field: bad}
+                    with self.assertRaises(NeverDError) as caught:
+                        session.emulate_process(path, name, json.dumps(options))
+                    self.assertIn(field, str(caught.exception))
+                    self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
     def test_darwin_thread_identity_preserves_full_bits_and_independent_runs(self) -> None:
         library = os.environ.get("NEVERD_TEST_LIBNEVERD")
         fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")

@@ -101,6 +101,10 @@ struct RebuildPlan {
 
 struct RebuiltImage {
   std::vector<uint8_t> File;
+  /// The format could emit diagnostic bytes but could not reconstruct a
+  /// loader-owned runtime dependency. Ordinary recovery must not publish
+  /// those bytes as a runnable image; explicit snapshots keep the reason.
+  std::string RuntimeDependency;
   std::vector<UnpackedSection> Sections;
   std::vector<UnpackedImport> Imports;
   uint64_t RepairedTailCalls = 0;

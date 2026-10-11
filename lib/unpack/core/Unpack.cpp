@@ -165,6 +165,7 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
   Result.ImageBase = Observed->Base;
   Result.EntryRVA = Observed->EntryRVA;
   Result.Source = Observed->Source;
+  std::string RebuildDependency;
   auto UnsupportedState = [&] {
     Result.Diagnostic.clear();
     if (!Result.RuntimeState.HeapInventoryKnown ||
@@ -203,6 +204,11 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
               ? "additional owned OS resources require runtime restoration"
               : "the process supplies no additional runtime-state inventory";
     }
+    if (!RebuildDependency.empty()) {
+      if (!Result.Diagnostic.empty())
+        Result.Diagnostic += "; ";
+      Result.Diagnostic += RebuildDependency;
+    }
     if (!Result.Diagnostic.empty() && !Options.SnapshotOnly &&
         !Options.RestoreRuntime) {
       Result.Outcome = UnpackOutcome::UnsupportedState;
@@ -216,6 +222,9 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
   auto Rebuilt = Container->rebuild(Image, *Observed, Plan);
   if (!Rebuilt)
     return Rebuilt.takeError();
+  RebuildDependency = Rebuilt->RuntimeDependency;
+  if (UnsupportedState())
+    return Result;
   if (Options.RestoreRuntime) {
     // Materialized export identities retain calls in their observed form.
     // Replaying a bare entry in a fresh model would discard the very state
@@ -247,6 +256,7 @@ llvm::Expected<UnpackResult> unpackFile(const std::filesystem::path &Input,
     if (!Repaired)
       return Repaired.takeError();
     Rebuilt = std::move(Repaired);
+    RebuildDependency = Rebuilt->RuntimeDependency;
   } else if (!Tails) {
     Result.ImportRepair.Stop = text::ImportRepairSetupFailed;
     Result.ImportRepair.Diagnostic = llvm::toString(Tails.takeError());

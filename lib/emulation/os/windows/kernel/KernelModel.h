@@ -70,8 +70,8 @@ public:
   /// A stopped DriverEntry can be rebuilt only when borrowed loader objects
   /// retain their initial state and every retained kernel effect is known.
   llvm::Error captureUnpackBaseline();
-  void recordUnpackClockRead();
-  llvm::Expected<bool> hasUnpackDependencies() const;
+  void recordUnpackEnvironmentRead();
+  llvm::Expected<std::vector<std::string>> unpackDependencies() const;
   std::map<uint64_t, uint64_t> unpackAllocations() const;
   uint64_t driverObject() const { return DriverObject; }
   uint64_t registryPath() const { return RegistryPath; }

@@ -23,6 +23,7 @@
 #endif
 #include "llvm/Support/Endian.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 namespace neverd::registration_test {
 void checkNestedTryHigh(const MedFunc &Med, const HighFunc &High) {
@@ -122,9 +123,9 @@ void checkNestedTrySource(const BinaryImage &Image,
 
 void checkNestedTryEdits(const llvm::Function &Parent,
                          const ExceptionFunction &Source,
-                         const BinaryImage &Image) {
+                         const BinaryImage &Image, bool Secondary) {
 #ifdef LLVM_NEVERD_X86_CXX_FUNCTION_RECEIPTS
-  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != (Secondary ? 7u : 5u); ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Module = llvm::CloneModule(*Parent.getParent());
     auto *Function = Module->getFunction(Parent.getName());
@@ -142,8 +143,23 @@ void checkNestedTryEdits(const llvm::Function &Parent,
       }
     ASSERT_TRUE(Inner && Outer);
     ASSERT_EQ(Returns.size(), 3u);
-    ASSERT_EQ(Invokes.size(), 3u);
+    ASSERT_EQ(Invokes.size(), Secondary ? 4u : 3u);
+    llvm::InvokeInst *NestedCall = nullptr;
+    for (auto *Invoke : Invokes)
+      if (Invoke->getOperandBundle(llvm::LLVMContext::OB_funclet))
+        NestedCall = Invoke;
+    ASSERT_EQ(bool(NestedCall), Secondary);
+    if (NestedCall) {
+      EXPECT_EQ(NestedCall->getUnwindDest(), Outer->getParent());
+      EXPECT_EQ(NestedCall->getOperandBundle(llvm::LLVMContext::OB_funclet)
+                    ->Inputs[0],
+                &*(*Inner->handler_begin())->getFirstNonPHIIt());
+    }
     if (Mutation == 0) {
+      if (NestedCall) {
+        llvm::changeToCall(NestedCall);
+        NestedCall = nullptr;
+      }
       auto *Replacement =
           llvm::CatchSwitchInst::Create(Inner->getParentPad(), nullptr, 1,
                                         "changed.search", Inner->getIterator());
@@ -163,8 +179,18 @@ void checkNestedTryEdits(const llvm::Function &Parent,
       From->setMetadata(
           llvm::mc_rewrite::RewriteWinEHSemanticAttachment,
           To->getMetadata(llvm::mc_rewrite::RewriteWinEHSemanticAttachment));
-    } else {
+    } else if (Mutation == 4) {
       Returns[0]->setSuccessor(Returns[2]->getSuccessor());
+    } else if (Mutation == 5) {
+      // A plain call is verifier-clean inside this catch but omits the
+      // source's secondary search. It must still fail semantic admission.
+      llvm::changeToCall(NestedCall);
+    } else {
+      auto *Replacement = llvm::CallBase::removeOperandBundle(
+          NestedCall, llvm::LLVMContext::OB_funclet, NestedCall->getIterator());
+      Replacement->copyMetadata(*NestedCall);
+      NestedCall->replaceAllUsesWith(Replacement);
+      NestedCall->eraseFromParent();
     }
     ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     auto Error = validateCOFFRegistrationCxxIR(*Function, Source, Image);

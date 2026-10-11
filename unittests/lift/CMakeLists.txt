@@ -1297,6 +1297,7 @@ add_neverd_unittest(NeverDRegistrationStateTests
   eh/RegistrationStateTests.cpp
   eh/RegistrationStateTestUtils.cpp
   eh/RegistrationCxxContinuationTests.cpp
+  eh/RegistrationCxxSearchTests.cpp
   eh/RegistrationRealignedStateTests.cpp
   eh/RegistrationRealignedTestUtils.cpp
   eh/RegistrationCallbackStateTests.cpp
@@ -1649,6 +1650,11 @@ add_neverd_unittest(NeverDMachOPointerRelocationBoundaryTests
   Loader
   Pipeline
 )
+
+if(MSVC)
+  # Release builds of the pointer-boundary cases exceed standard COFF sections.
+  target_compile_options(NeverDMachOPointerRelocationBoundaryTests PRIVATE /bigobj)
+endif()
 
 target_include_directories(NeverDMachOPointerRelocationBoundaryTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
@@ -3717,9 +3723,24 @@ add_neverd_unittest(NeverDX86FPRoundAccuracyTests
   LINK_COMPONENTS Pipeline BackendC CodeGen)
 target_include_directories(NeverDX86FPRoundAccuracyTests PRIVATE
   ${CMAKE_SOURCE_DIR}/unittests)
+add_neverd_unittest(NeverDX86FPApprox12AccuracyTests
+  x86_64/X86_64_FPApprox12AccuracyTests.cpp
+  LINK_COMPONENTS Pipeline BackendC CodeGen)
+target_include_directories(NeverDX86FPApprox12AccuracyTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/unittests)
 add_neverd_unittest(NeverDX86EncodingAccuracyTests
   x86_64/X86_64_EncodingAccuracyTests.cpp
   LINK_COMPONENTS Decode Lift Loader)
+
+add_neverd_unittest(NeverDX86FPMinMaxAccuracyTests
+  x86_64/X86_64_FPMinMaxAccuracyTests.cpp
+  LINK_COMPONENTS IRLow Loader)
+
+add_neverd_unittest(NeverDX86FPArithStateAccuracyTests
+  x86_64/X86_64_FPArithStateAccuracyTests.cpp
+  LINK_COMPONENTS Pipeline BackendC CodeGen)
+target_include_directories(NeverDX86FPArithStateAccuracyTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/unittests)
 
 add_neverd_unittest(NeverDX86RdSspAccuracyTests
   x86_64/X86_64_RdSspAccuracyTests.cpp

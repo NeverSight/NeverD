@@ -3527,11 +3527,14 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
       (!Store || !Store->isSimple() || Store->getPointerAddressSpace() != 0))
     return false;
   auto *Type = Load ? Load->getType() : Store->getValueOperand()->getType();
-  // These carriers have exact C object representations. Partial-width
-  // integers and x87 have their separate exact-byte paths.
-  const bool Integer = Type->isIntegerTy(8) || Type->isIntegerTy(16) ||
-                       Type->isIntegerTy(32) || Type->isIntegerTy(64) ||
-                       Type->isIntegerTy(128);
+  // Use the LLVM byte extent: wider _BitInt objects can have C padding.
+  // Non-byte-aligned integers and x87 retain their separate exact-byte paths.
+  const bool Integer =
+      Type->isIntegerTy(8) || Type->isIntegerTy(16) || Type->isIntegerTy(32) ||
+      Type->isIntegerTy(64) || Type->isIntegerTy(128) ||
+      (Type->isIntegerTy() && Type->getIntegerBitWidth() > 128 &&
+       Type->getIntegerBitWidth() <= 512 &&
+       Type->getIntegerBitWidth() % 8 == 0);
   if (!Integer && !Type->isFloatTy() && !Type->isDoubleTy() &&
       !Type->isHalfTy() && !Type->isBFloatTy() && !Type->isPointerTy())
     return false;
@@ -3874,12 +3877,49 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     const auto Helper = FPStateHelperNames.find(*Shape);
     if (Helper == FPStateHelperNames.end())
       llvm::report_fatal_error("uncollected x86 FP state C helper");
+    if (isX86FPApprox12Intrinsic(Id)) {
+      const std::string Source =
+          Id == Intrinsic::X86FPApprox12MemoryState
+              ? "(void*)(uintptr_t)(" +
+                    integerPointerOperandStr(Call.getArgOperand(0)) + ")"
+              : BitcastInput(0);
+      const std::string Expression = Helper->second + "(" + Source + ")";
+      if (!Call.use_empty())
+        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Call.getType())
+           << ", " << Expression << ");\n";
+      else
+        OS << "(void)" << Expression << ";\n";
+      return true;
+    }
     if (isX86FPConversionStateIntrinsic(Id)) {
       const std::string Expression = Helper->second + "(" + BitcastInput(0) +
                                      ", (void*)" +
                                      valueStr(Call.getArgOperand(1)) + ")";
       if (!Call.use_empty())
         OS << Name << " = " << Expression << ";\n";
+      else
+        OS << "(void)" << Expression << ";\n";
+      return true;
+    }
+    if (isX86FPArithStateIntrinsic(Id)) {
+      const bool Memory = Id == Intrinsic::X86FPArithMemoryState;
+      const bool Unary = x86FPArithStateIsUnary(x86FPRoundStateControl(Bytes));
+      const std::string Left =
+          Unary ? "(" + x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ")0"
+                : BitcastInput(0);
+      const std::string Right =
+          Memory ? "(void*)(uintptr_t)(" +
+                       integerPointerOperandStr(
+                           Call.getArgOperand(Unary ? 0 : 1)) +
+                       ")"
+                 : BitcastInput(Unary ? 0 : 1);
+      const std::string Expression =
+          Helper->second + "(" +
+          (Memory ? Right + ", " + Left : Left + ", " + Right) + ", (void*)" +
+          valueStr(Call.getArgOperand(Unary ? 1 : 2)) + ")";
+      if (!Call.use_empty())
+        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Call.getType())
+           << ", " << Expression << ");\n";
       else
         OS << "(void)" << Expression << ";\n";
       return true;
@@ -3913,6 +3953,11 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   std::string AsmStr = IA->getAsmString().str();
   if (llvm::StringRef(AsmStr).contains("rdssp"))
     llvm::report_fatal_error("unowned shadow stack read C projection");
+  if (llvm::StringRef(AsmStr).contains("rcpss ") ||
+      llvm::StringRef(AsmStr).contains("rcpps ") ||
+      llvm::StringRef(AsmStr).contains("rsqrtss ") ||
+      llvm::StringRef(AsmStr).contains("rsqrtps "))
+    llvm::report_fatal_error("unowned x86 approximate reciprocal C projection");
   if (AsmStr.empty())
     return false;
 

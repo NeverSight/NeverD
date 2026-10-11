@@ -448,20 +448,26 @@ void parsePLTImports(const llvm::object::ELFFile<ELFT> &ELF,
       break;
 
     uint32_t SymIdx = 0;
+    uint32_t RelocType = 0;
     uint64_t Offset = 0;
     if (HasAddend) {
       Elf_Rela Rela;
       std::memcpy(&Rela, Data + ROff, sizeof(Rela));
       SymIdx = Rela.getSymbol(false);
+      RelocType = Rela.getType(false);
       Offset = Rela.r_offset;
     } else {
       Elf_Rel Rel;
       std::memcpy(&Rel, Data + ROff, sizeof(Rel));
       SymIdx = Rel.getSymbol(false);
+      RelocType = Rel.getType(false);
       Offset = Rel.r_offset;
     }
 
-    if (SymIdx >= SymsOr->size())
+    // A PLT relocation table can also contain TLS descriptors or indirect
+    // function resolvers. Its section name does not make their referenced
+    // symbol the callable value stored by the dynamic linker.
+    if (!isELFSlotBinding(Img.Arch, RelocType) || SymIdx >= SymsOr->size())
       continue;
     auto NameOr = (*SymsOr)[SymIdx].getName(DynStr);
     if (!NameOr) {

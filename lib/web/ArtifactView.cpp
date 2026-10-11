@@ -75,6 +75,41 @@ Session::Impl::artifactView(std::string_view SelectionID) const {
                 {"container_origin", std::move(Parent->Origin)}},
             Parent->DirectStorage};
       }
+  for (const auto &[ID, E] : SEAExtractions)
+    for (const auto &R : E.Regions)
+      if (R.ID == SelectionID && R.selectable()) {
+        auto Parent = artifactView(E.ArtifactID);
+        if (!Parent)
+          throw Error("sea_parent_bytes_unavailable");
+        return ArtifactView{
+            R.Content, R.BlobHash, Parent->StorageOffset + R.Offset,
+            llvm::json::Object{
+                {"kind", "sea_region"},
+                {"container_artifact_id", E.ArtifactID},
+                {"storage_artifact_id",
+                 Parent->Origin.getString("storage_artifact_id")
+                     .value_or("")
+                     .str()},
+                {"extraction_id", E.ID},
+                {"region_id", R.ID},
+                {"profile", E.Profile},
+                {"region_kind", R.Kind},
+                {"container_byte_offset", std::to_string(R.Offset)},
+                {"byte_length", std::to_string(R.Content.size())},
+                {"byte_offset", Parent->DirectStorage
+                                    ? llvm::json::Value(std::to_string(
+                                          Parent->StorageOffset + R.Offset))
+                                    : llvm::json::Value(nullptr)},
+                {"expanded_byte_offset",
+                 !Parent->DirectStorage ? llvm::json::Value(std::to_string(
+                                              Parent->StorageOffset + R.Offset))
+                                        : llvm::json::Value(nullptr)},
+                {"byte_offset_basis", Parent->DirectStorage
+                                          ? "storage_artifact"
+                                          : "expanded_stream"},
+                {"container_origin", std::move(Parent->Origin)}},
+            Parent->DirectStorage};
+      }
   for (const auto &[ID, E] : AsarExtractions)
     for (const auto &M : E.Members)
       if (M.ID == SelectionID) {

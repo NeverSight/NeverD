@@ -21,7 +21,7 @@ void checkNestedTrySource(const BinaryImage &Image,
                           const ExceptionFunction &Source);
 void checkNestedTryEdits(const llvm::Function &Parent,
                          const ExceptionFunction &Source,
-                         const BinaryImage &Image);
+                         const BinaryImage &Image, bool Secondary);
 } // namespace registration_test
 } // namespace neverd
 

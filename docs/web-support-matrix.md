@@ -6,7 +6,7 @@ macOS arm64 Release. The integrated-LLVM full, parser-disabled and
 backend-disabled configurations were built and checked on that host. The
 separate current-dev integration uses prebuilt LLVM 23.0.0 r4 without Zstd;
 its checks and omissions are recorded in the
-[implementation ledger](web-analysis-implementation.md#integration-with-current-dev).
+[implementation ledger](web-analysis-implementation.md).
 Other hosts require separate evidence.
 
 | Surface | Implemented profile | Qualification / outstanding work |
@@ -15,7 +15,7 @@ Other hosts require separate evidence.
 | Original-byte storage | `posix-unlinked-spool-v1` | One private unlinked spool per snapshot, bounded range reads, immutable slices, descriptor lifetime and write-failure checks; 512 MiB input qualified locally without whole-file materialization |
 | JavaScript syntax | `hermes-602befee-js-v3` | Script/module/CommonJS, byte spans, async-rest location/comma regressions, `using`/`await using`, module await, selected modern syntax and malformed/deep input tested; [resource profile](web-resource-management-profile.md), complete syntax/semantic coverage not claimed |
 | Source maps | `source-map-v3-offline-v1` | Basic and inline indexed maps, UTF-16/bytes, malformed offsets/VLQ, budgets and private embedded content tested; no automatic association or URL retrieval |
-| C API and CLI | Metadata/source/binding/semantic/module/bundle/map/view/navigation/anchor/native/ASAR/Electron operations | Owned responses, revision/cache checks, offline CLI and output canaries tested |
+| C API and CLI | Source/binding/semantic/module/bundle/map/view/navigation/anchor/native/ASAR/Electron/package/interface/stream operations | Owned responses, revision/cache checks, offline CLI, explicit passive-import previews and output canaries tested |
 | Lexical scope and binding identities | `javascript-lexical-bindings-v1` | Source roles, hoisting/shadowing, default parameters, imports/exports, classes and dynamic cases have C++ checks; no runtime values or complete semantic validity claim |
 | Finite primitive values | `javascript-primitive-values-v1` | C++ binary64, UTF-16, bounded BigInt, coercion, branch and refusal checks; no runtime identifier/object/call evaluation |
 | Conservative effects | `javascript-conservative-effects-v1` | Immediate/deferred boundaries, classes, getters, declarations, dynamic bindings and unavailable-result checks; no rewrite permission |
@@ -43,11 +43,12 @@ Other hosts require separate evidence.
 | HTML import maps | `import-map-url-evidence-v1`, embedded Ada 4.0.0 | Bounded C++ JSON/URL processing and metadata pages remain available without JS parsing; absolute key origins, later/interleaved maps and order-dependent JSON remain explicit HTML-profile refusals |
 | npm metadata and supplied-directory diff | `node-package-evidence-v1` | npm lock v1/v2/v3, hidden locks, captured manifests, unresolved/conditional placements, exact file hashes and evidence coverage comparisons; [profile](web-package-profile.md). Behavior/advisory/provenance, dispositions and reports remain pending |
 | Package archives and original SRI | `ustar-pax-single-gzip-v1`, `npm-original-sri-v1` | Native tar/local-PAX/single-gzip, metadata-only links, shared source/package/Bun/native consumers and explicit registry/lock declaration checks over original bytes. [Profile and limits](web-package-archive-profile.md). Recursive archives, full tar dialects and publisher authentication are unsupported |
-| Passive interface evidence | `har-1.2-metadata-v1`, `direct-fetch-websocket-syntax-v1`, `absolute-http-method-origin-path-v1` | HAR redaction preview/commit, fixed metadata and source-node links; explicit candidate joins preserve inference/observation classes. XHR/wrappers, dynamic URLs, WebSocket frames, stream/log adapters and protocol reconstruction remain unsupported. [Profile](web-interface-profile.md) |
-| Static interfaces/HAR/streams/MCP records | Pending | Passive-only parsing, redaction and observation/static separation required |
-| Tauri/Wails/SEA/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
+| Passive interface evidence | `har-1.2-metadata-v1`, `direct-fetch-websocket-syntax-v1`, `absolute-http-method-origin-path-v1` | HAR redaction preview/commit, fixed metadata and source-node links; explicit candidate joins preserve inference/observation classes. XHR/wrappers, dynamic URLs, WebSocket frames and protocol reconstruction remain unsupported. [Profile](web-interface-profile.md) |
+| Passive stream/log records | Six explicitly selected JSONL/SSE/JSON-RPC/MCP-shape/recorded-envelope/log profiles | Bounded native framing, redaction preview/commit and recorded-context candidate joins; missing/ambiguous evidence refuses links. No complete MCP schema/negotiation, source correlation or live capture claim. [Profiles](web-stream-profile.md) |
+| Node SEA | Node 22.15.0 LE64 preparation blob and explicit ELF64/Mach-O64/PE32+ x64/ARM64 resource profiles | Separate C++ reader, stored JS/assets and opaque V8 cache/snapshot, shared consumers; [qualification and limits](web-sea-profile.md). Runtime activation/version and other versions/hosts are unverified |
+| Tauri/Wails/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
 | C++ worker | `web_` operations in protocol 1.1 | Real framed-process, direct-query parity, web/native revision isolation and private-output checks passed locally |
-| C++ MCP transport | Pending | Must use the same C API and enforce an explicit host input scope |
+| C++ MCP transport | `neverd-offline-web-mcp-v1`, MCP 2025-06-18 stdio | Shared worker/C API adapter, launch-configured input indices and capability-filtered tools; structural views only, no raw export/deep native analysis. [Profile and qualification limits](web-mcp-profile.md) |
 
 The ASAR increment restored the backend, JavaScript parser, ASAR and LLVM Zstd
 options to ON. Its final local run passed 185 of 186 registered web cases;
@@ -107,6 +108,12 @@ closure remain outstanding.
 | Package archive members / depth / cached archives | 10,000 / 64 / 4 |
 | Package archive PAX/name/prefix metadata | 8 MiB |
 | SRI declaration bytes / tokens / cached verifications | 64 KiB / 256 / 16 |
+| HAR original / observations / field records | 8 MiB / 4,096 / 32,768 |
+| Source interface records / correlation pairs | 4,096 / 32,768 |
+| HAR captures / pending previews / source analyses / correlations | 4 / 1 / 4 / 4 |
+| Stream original / physical line or SSE block | 8 MiB / 256 KiB |
+| Stream records / aggregate JSON nodes / JSON depth | 4,096 / 200,000 / 32 |
+| Stream private recorded ID/session bytes / captures / pending previews | 1 MiB / 4 / 1 |
 | Original entries / directory depth | 10,000 / 64 |
 | JavaScript source / syntax nodes | 1 MiB / 100,000 |
 | Lexer tokens plus comments at admission / retained cached lexemes | 200,000 (including EOF) / 400,000 |
@@ -122,6 +129,8 @@ closure remain outstanding.
 | Bundles / recovered module slots / dependency records per source | 64 / 4,096 / 50,000 |
 | Bun modules / builtins / cached extractions | 4,096 / 4,096 / 4 |
 | Bun private names total / one name | 1 MiB / 32 KiB |
+| SEA selected input / assets / cached extractions | 256 MiB / 4,096 / 4 |
+| SEA private names total / one name / page records | 1 MiB / 32 KiB / 128 |
 | Bun section / program headers | 4,096 / 1,024 |
 | Bun serialized map / decoded content total | 8 MiB / 8 MiB |
 | Bun decoded source / Zstd window | 4 MiB / 8 MiB |

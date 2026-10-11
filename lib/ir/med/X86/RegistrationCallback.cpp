@@ -183,9 +183,13 @@ registrationCallbackRegion(const MedFunc &Func, va_t Entry) {
       } else if (Op.Opcode == NdOp::CALL && Op.DoesNotReturn) {
         const auto *Call = State.callFrameEffect(Op.Addr, Op.OriginSeq);
         if (!State.CallFrameEffectsComplete || !Call || !Call->DoesNotReturn ||
-            Call->EndAddress != Block.EndAddr || Op.NumInputs != 1 ||
-            !Op.Inputs[0].isConst() || Op.Inputs[0].ConstVal != Call->Target)
+            Call->EndAddress <= Op.Addr || Call->EndAddress > Block.EndAddr ||
+            Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
+            Op.Inputs[0].ConstVal != Call->Target)
           return std::nullopt;
+        // The decoded block can include unreachable padding after a newly
+        // proved noreturn call. MedIR has already removed its fallthrough;
+        // no later live operation may survive in this invocation.
         Exit = true;
       }
     }

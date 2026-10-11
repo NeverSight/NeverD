@@ -14,6 +14,7 @@
 #include "../../../unittests/web/BunSourceMapFixture.h"
 #include "../../../unittests/web/NativeFixture.h"
 #include "../../../unittests/web/PackageArchiveFixture.h"
+#include "../../../unittests/web/SEAFixture.h"
 #include "WebEngine.h"
 
 #include <algorithm>
@@ -1572,6 +1573,112 @@ int main(int argc, char **argv) {
                              interfaceRevision, interfaceProject);
         check(reply["payload"] == records, "Correlation records differ");
       }
+    }
+    {
+      const auto streamRoot = fixture.root / "streams";
+      fs::create_directory(streamRoot);
+      std::ofstream(streamRoot / "a.jsonl")
+          << R"({"session":"SECRET_WEB","direction":"client_to_server","timestamp":"SECRET_WEB","message":{"jsonrpc":"2.0","id":"SECRET_WEB","method":"SECRET_WEB","params":{"SECRET_WEB":"SECRET_WEB"}}})"
+          << '\n'
+          << R"({"session":"SECRET_WEB","direction":"server_to_client","message":{"jsonrpc":"2.0","id":"SECRET_WEB","result":"SECRET_WEB"}})"
+          << '\n';
+      const auto before = web.revision(), projectBefore = web.projectId();
+      const Json input{{"schema_version", 1}, {"path", streamRoot.string()}};
+      const auto p = web.execute("web_import_preview", input);
+      const auto c = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", p["preview_token"]}});
+      reply = process.call("web_import_preview", input, before, projectBefore);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       before, projectBefore);
+      check(reply["payload"] == c, "Stream input differs");
+      const auto revision = web.revision(), project = web.projectId();
+      const auto items = web.execute(
+          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+      const Json previewArgs{{"schema_version", 1},
+                             {"revision", revision},
+                             {"artifact_id", items["items"][1]["artifact_id"]},
+                             {"profile", "recorded-jsonrpc-2.0-jsonl-v1"}};
+      const auto redaction = web.execute("web_stream_preview", previewArgs);
+      reply =
+          process.call("web_stream_preview", previewArgs, revision, project);
+      check(reply["payload"] == redaction &&
+                redaction["publication_status"] == "preview" &&
+                redaction["recorded_pair_candidates"] == 1 &&
+                reply.dump().find("SECRET_WEB") == std::string::npos,
+            "Stream preview differs or exposes input");
+      const Json page{{"schema_version", 1},
+                      {"revision", revision},
+                      {"capture_id", redaction["stream_capture_id"]}};
+      reply = process.call("web_stream_records", page, revision, project);
+      check(reply["error"]["code"] == "stream_capture_not_committed",
+            "Stream observations escaped preview gate");
+      const Json acceptance{{"schema_version", 1},
+                            {"revision", revision},
+                            {"preview_token", redaction["preview_token"]}};
+      const auto accepted = web.execute("web_stream_commit", acceptance);
+      reply = process.call("web_stream_commit", acceptance, revision, project);
+      check(reply["payload"] == accepted, "Stream commit differs");
+      const auto records = web.execute("web_stream_records", page);
+      reply = process.call("web_stream_records", page, revision, project);
+      check(reply["payload"] == records &&
+                records["items"][0]["peer_record_id"] ==
+                    records["items"][1]["record_id"] &&
+                records["protocol_negotiation_verified"] == false &&
+                reply.dump().find("SECRET_WEB") == std::string::npos,
+            "Stream pages differ or expose values");
+      auto invalid = previewArgs;
+      invalid["replay"] = true;
+      reply = process.call("web_stream_preview", invalid, revision, project);
+      check(reply["error"]["code"] == "invalid_request",
+            "Stream transport accepted a replay flag");
+    }
+    {
+      const auto seaRoot = fixture.root / "sea";
+      fs::create_directory(seaRoot);
+      std::ofstream(seaRoot / "one", std::ios::binary)
+          << neverd::web::sea_test::blob(12);
+      const auto before = web.revision(), projectBefore = web.projectId();
+      const Json input{{"schema_version", 1}, {"path", seaRoot.string()}};
+      const auto p = web.execute("web_import_preview", input);
+      const auto c = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", p["preview_token"]}});
+      reply = process.call("web_import_preview", input, before, projectBefore);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       before, projectBefore);
+      check(reply["payload"] == c, "SEA input differs");
+      const auto revision = web.revision(), project = web.projectId();
+      const auto items = web.execute(
+          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+      const Json args{{"schema_version", 1},
+                      {"revision", revision},
+                      {"artifact_id", items["items"][1]["artifact_id"]},
+                      {"profile", "node-sea-22.15.0-blob-le64-v1"}};
+      const auto extracted = web.execute("web_sea_extract", args);
+      reply = process.call("web_sea_extract", args, revision, project);
+      check(reply["payload"] == extracted && extracted["asset_count"] == 2 &&
+                extracted["runtime_activation"] == "not_checked",
+            "SEA extraction differs");
+      const Json page{{"schema_version", 1},
+                      {"revision", revision},
+                      {"extraction_id", extracted["extraction_id"]}};
+      const auto records = web.execute("web_sea_records", page);
+      reply = process.call("web_sea_records", page, revision, project);
+      check(reply["payload"] == records &&
+                reply.dump().find("CANARY") == std::string::npos,
+            "SEA records differ or reveal private values");
+      auto invalid = args;
+      invalid["execute"] = true;
+      reply = process.call("web_sea_extract", invalid, revision, project);
+      check(reply["error"]["code"] == "invalid_request",
+            "SEA accepted target execution");
     }
     process.stop();
     std::ifstream errors(fixture.root / "stderr");

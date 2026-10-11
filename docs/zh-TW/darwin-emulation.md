@@ -1,6 +1,6 @@
 **語言**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: 1939e117643388dff149085b992e1ad646feefca63b630abec9b09122e15c2f1 -->
+<!-- i18n-source: 96008a1080031d252edd0ac02e0a87379caeb30be04154b57c7c6d33eae3d8e4 -->
 
 [← 文件索引](README.md)
 
@@ -632,7 +632,7 @@ macOS ARM64 Release 登記/通過/不可用略過/失敗 1371/867/504/0，必需
 
 ## 明確憑據、群組與一致建立屬主
 
-可選 Credentials 含 RealUID/EffectiveUID/RealGID/EffectiveGID 及獨立可選 GroupAccessList。省略時四查詢為1000；明確零/root有效，ID0..INT32_MAX。群組1..16，首項EffectiveGID，保留順序/重複；缺少仍未知，不推斷宿主/EGID。嚴格 darwin_system.credentials 恰需 real_uid/effective_uid/real_gid/effective_gid，可加groups；無損整數與統一驗證器在載入前拒絕欄位/形狀/範圍/數量/首組錯誤，非Darwin仍拒絕。
+可選 Credentials 含 RealUID/EffectiveUID/RealGID/EffectiveGID 及獨立可選 GroupAccessList 與 GroupMembershipUID。省略時四查詢為1000；明確零/root有效，四個純量 ID 與群組項目0..INT32_MAX；GroupMembershipUID 的獨立範圍見後文。群組1..16，首項EffectiveGID，保留順序/重複；缺少仍未知，不推斷宿主/EGID。嚴格 darwin_system.credentials 恰需 real_uid/effective_uid/real_gid/effective_gid，可加獨立可選 groups 與 group_membership_uid；無損整數與統一驗證器在載入前拒絕欄位/形狀/範圍/數量/首組錯誤，非Darwin仍拒絕。
 
 getuid24/geteuid25/getgid47/getegid43/getgroups79 共用系統所有者；新普通檔UID用有效使用者，device/GID繼承直接父目錄。改名、保留FD及舊名重用保持物件；輸入stat不變，root不授權寫入/目錄修改/權限/ACL，setuid/setgid/setgroups與程序/工作階段未實作。
 
@@ -1041,3 +1041,126 @@ owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
 ```
 
 [XNU thread_selfid ABI](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/syscalls.master), [libpthread current-thread owner](https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_support.c).
+
+## 顯式 Mach 自身埠觀測
+
+原始 Mach thread_self_trap27、task_self_trap28 與 host_self_trap29 分別讀取獨立的可選 uint32 觀測：DarwinSystemOptions::ThreadSelfPort、TaskSelfPort、HostSelfPort，對應 darwin_system.thread_self_port、task_self_port、host_self_port。每次查詢只要求自身欄位。缺失表示未知並停止為 UnsupportedService；零、相等名稱及全部32位模式均為顯式值。輸入接受 UINT32_MAX 範圍內的精確整數或十進位字串，不套用 process_group_id/session_id 的正 pid_t 限制。
+
+系統層將名稱經有符號 int32 核心結果轉為原始64位載體：0x80000001 回傳0xffffffff80000001，UINT32_MAX 回傳UINT64_MAX。既有 Mach 綁定保留旗標及 X1/RDX，並保留 x64 RCX/R11 系統呼叫覆寫規則；忽略所有參數且不存取記憶體。低32位解析保留事件中的完整原始號碼。Mach 查詢事件省略 BSD error 欄位，不產生排程器 ThreadID。重複使用選項保留觀測，獨立選項互不影響。
+
+原生 ARM64 O0/O1/O2 探針保留432次原始觀測，涵蓋全部16種 NZCV、高32位號碼前綴、暫存器種子與 SDK 對照。未觀測到原生 bit31 埠名稱；高位符號延伸依據固定 XNU 回傳路徑，並由獨立字面值模型、客體及公共測試檢查。原生共同程式只比較同一行程內的關係；虛擬名稱與缺失輸入不進入原生確定性參考。這些觀測不配置名稱或傳送引用、不認證有效權限、不推斷唯一性，也不實作 IPC、生命週期或執行緒排程。權限/ACL、就緒等待、推進時鐘、真正 Mach IPC/執行緒、dyld/TLS 及完整執行階段/框架仍不完整；原生 Intel HVF 與實體 iOS 尚未驗證。
+
+```json
+{"darwin_system":{"thread_self_port":2147483649,"task_self_port":0,"host_self_port":"4294967295"}}
+```
+
+```text
+Mach thread_self_trap27 / task_self_trap28 / host_self_trap29
+ThreadSelfPort / TaskSelfPort / HostSelfPort / uint32 / signed-int32 -> raw64
+known0 / missing -> UnsupportedService / no arguments or memory
+low32 resolution / complete raw number / flags and RDX-X1 preserved / no BSD error
+mach-self-ports / mach-self-port-values / mach-self-port-missing
+MachSelfPortsPreserveExplicitBitsAndIndependentRuns
+6 model cases / 20 transport parameters / 26 public cases / 5 Python profiles
+70 mandatory workloads per platform / ARM64 210 / Intel 140 unverified
+original ARM64 O0/O1/O2 probes432 / no native bit31 name observed
+native5s / compile120s / drain1s / reap1s
+owner/build1200s / guest/Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU Mach trap table](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/syscall_sw.c), [self-port name owners](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/ipc_tt.c), [host-port owner](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/kern/ipc_host.c), [ARM64 return](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/arm64/bsd_arm64.c), [x64 return](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/osfmk/i386/bsd_i386.c).
+
+
+## 靜態普通擁有者權限查詢
+
+darwin_files.authorization="static-owner-queries"（DarwinFileAuthorization::StaticOwnerQueries）明確宣告不可變的普通本機權限環境：無 ACL、MAC、額外 kauth 監聽器、entitlement 或其他繞過；掛載可寫、可執行、非 opaque 且啟用所有權；已知 flags=0，無特殊模式位。舊章節的觀測本身不授權，宣告僅啟用 access/faccessat 查詢。
+
+實際檢查需要明確的 darwin_system.credentials 與實際物件中繼資料。access 使用 real_uid；AT_EACCESS 對 SEARCH 與最終 R/W/X 使用 effective_uid。選取 UID 必須非零且符合擁有者，所有請求位均須允許；已知拒絕回傳 EACCES13 與原有 BSD carry。未知身分/資料、選取 UID0、非擁有者、擴充動作及保留末端連結的 R/W/X 停止 UnsupportedService；未選取 UID0 仍合法。不推測主機、UID1000、群組/其他人權限或 root 豁免。
+
+父目錄 X 位的 SEARCH 先於子項查找、缺失名稱、適用點/點點與連結重啟。F_OK/忽略位僅需實際 SEARCH；純斜線根及根處鉗制點點不做 SEARCH，已消耗尾斜線不增加最終目錄檢查。旗標、複製、相對 dirfd 與空名稱錯誤順序保持。Name255 為模型上限：允許 SEARCH 後超限停止 Unsupported，拒絕先 EACCES，未知先停止，不猜原生 errno。
+
+其他檔案路由，包括 open、stat、chdir、readlink、屬性、列舉與命名空間修改，均在效果前停止。只有真正 Input/Output/Error 標準串流及 dup 別名保留既有 I/O、close、dup/dup2、lseek、fcntl；數字 FD0/1/2 不足以豁免。檔案 mmap/mappingSource 關閉，匿名記憶體獨立。共享 C++/JSON 准入拒絕修改/建立授權、已知 flags/特殊位與 inode/device 別名，維持未知資料及256項/16MiB計費。
+
+範例同時提供根 SEARCH 與0400檔案擁有者：讀檢查成功、寫檢查 EACCES，但不能開啟檔案。原生 ARM64 O0/O1/O2 保留2472 raw/SDK組、2439字面值檢查、33僅捕获，compile120s/native5s不變。fstatx/filesec獨立確認 ACL 缺省；最初 NULL/ENOENT 誤判尚未執行權限查詢，記錄保留。主機 real/effective 相同，全域安全鉤子與 opaque 內部未獨立證實；不同身分依据固定原始碼/模型。owner-queries 排除於58個原生確定性參考。群組/root/ACL/MAC、動態身分、一般 vnode 授權、就緒、時鐘、Mach IPC/執行緒、dyld/TLS與完整框架仍有缺口；原生 Intel HVF 與實體 iOS 未驗證。
+
+```json
+{"darwin_files":{"authorization":"static-owner-queries","files":[{"path":"/data","bytes_hex":"00","metadata":{"device":7,"inode":2,"mode":33024,"link_count":1,"uid":501,"gid":20,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16832,"link_count":2,"uid":501,"gid":20,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":501,"real_gid":20,"effective_gid":20}}}
+```
+
+```text
+DarwinFileAuthorization::StaticOwnerQueries / authorization=static-owner-queries
+access33 / faccessat466 / real_uid / effective_uid / AT_EACCESS0x10
+owner R/W/X / all requested bits / directory SEARCH / EACCES13
+no-action root LOOKUP / root-clamped dotdot / consumed terminal separators
+unknown credentials-metadata-root-nonowner -> UnsupportedService
+all other vnode routes closed / typed standard streams and dup aliases only
+anonymous memory independent / file-backed mmap and mappingSource closed
+Name255 availability stop after allowed SEARCH / no guessed filesystem errno
+owner-queries / owner-query-stop / owner-query-open / owner-query-map
+OwnerQueriesKeepPermissionAndUnknownBoundaries
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+original ARM64 O0/O1/O2 pairs2472 / literal2439 / capture-only33
+native5s / compile120s / owner-build1200s / guest-Python5,000,000us
+```
+[XNU access and subject selection](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_syscalls.c), [real credential copy](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c), [owner authorization](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_subr.c), [pathname SEARCH](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_lookup.c), [cached lookup](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_cache.c), [Libc ACL properties](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/gen/filesec.c), [fstatx ACL absence](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/sys/statx_np.c).
+
+## 群組身分部分已知時的靜態普通查詢
+
+`darwin_files.authorization="static-ordinary-queries"`（DarwinFileAuthorization::StaticOrdinaryQueries）沿用前節不可變普通環境的掛載、安全及中繼資料約束，以及預設關閉檔案操作、標準串流例外和獨立匿名記憶體規則。舊 static-owner-queries 仍限於擁有者。實際檢查仍需明確憑據、中繼資料和非零選定 UID；root、延伸權限及最終連結物件的 R/W/X 仍不支援。
+
+擁有者使用全部請求的擁有者權限位元。非擁有者比較群組與其他使用者對完整請求遮罩的結果：相同結果可直接允許或回傳 EACCES13；不同位元集合也可能同樣拒絕。結果不同時，已知成員選群組，已證實非成員選其他使用者；未知身分在查找或效果前停止 UnsupportedService，不合併不同類別。
+
+credentials.groups 是有序的核心憑據群組清單，第0項為 EffectiveGID，保留重複項；不是 SDK getgroups 的延伸解析器清單。選定主群組及明確的正向成員已知，但缺少項目通常不能證明非成員，省略清單也不能。真實身分在兩對 UID/GID 相同時保留原上下文；否則將第0項換為 RealGID，並把舊 EffectiveGID 換入第一個匹配的補充 RealGID 項。無匹配時移除舊主群組並停用 memberd；已證實的轉換或明確原始 KAUTH_UID_NONE，加上明確完整清單，才能證明缺失群組為非成員。UID 不同而 GID 相同仍轉換，重複主群組可保留未知外部成員身分。AT_EACCESS 使用原有效上下文，輸入不變。
+
+下例真實查詢因移除 GID20 而拒絕；AT_EACCESS 因已知有效主群組20而成功。目錄 SEARCH 由群組與其他使用者結果一致確定；不授權選定 UID0 或開啟檔案。
+
+```json
+{"darwin_files":{"authorization":"static-ordinary-queries","files":[{"path":"/data","metadata":{"device":7,"inode":2,"mode":32816,"link_count":1,"uid":700,"gid":20,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}},"bytes_hex":"00"}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16895,"link_count":2,"uid":0,"gid":0,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":502,"real_gid":30,"effective_gid":20,"groups":[20,40]}}}
+```
+
+原生 ARM64 的 O0/O1/O2 唯讀驗證保留270對原始／SDK呼叫，檢查非自有物件、SEARCH、錯誤、物件身分及獨立 ACL 屬性缺失；原始憑據群組16項，SDK延伸清單17項。初次因錯誤限制 SDK 清單長度，在權限查詢前停止並保留失敗記錄。真實／有效身分相同，不同身分與完整群組轉換依固定 XNU 原始碼及獨立模型，原生結果不證明所有外部安全鉤子。五種軟體和三種 ARM64 HVF設定檢查實際來賓、C/CLI/Python及未知憑據、資料、root和群組。此供應模型不加入原58項原生共同基準。完整群組解析、root、ACL/MAC、一般 vnode、動態憑據、就緒／網路、推進時鐘、Mach IPC／執行緒、dyld/TLS及完整框架仍未完成；Intel原生HVF及實體iOS未驗證，期限不變。
+
+```text
+DarwinFileAuthorization::StaticOrdinaryQueries / authorization=static-ordinary-queries
+owner bits / whole-mask group-world outcomes / EACCES13
+credentials.groups / in-credential16 / EffectiveGID index0 / duplicates retained
+real credential copy / first supplementary match / displacement disables memberd
+missing membership usually unknown / original NONE or displaced real plus complete list proves negatives
+all40 other file routes and direct/file-backed mappings closed / typed streams only
+ordinary-queries / ordinary-query-unknown / ordinary-query-open / ordinary-query-map
+OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+original ARM64 O0/O1/O2 nonowner pairs270 / raw-groups16 / SDK-extended-groups17
+native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU ordinary mode authorization](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/vfs/vfs_subr.c), [real credential and group membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c), [raw in-credential getgroups](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_prot.c), [SDK extended getgroups](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/sys/getgroups.c).
+
+## 明確原始群組成員上下文
+
+可選 `DarwinCredentials::GroupMembershipUID` / `darwin_system.credentials.group_membership_uid` 宣告原始 cr_gmuid，獨立於四個身分 ID 及 groups。允許0..INT32_MAX或恰為 KAUTH_UID_NONE=4294967195（0xffffff9b，UINT32_MAX減100）。沿用無損十進位字串與精確數值整數解碼；錯誤型別、小數、負數及其他越界值在載入前拒絕。哨兵仍不能用於一般 UID/GID 或群組清單。省略代表外部成員上下文未知，其他有效 UID 也不啟用解析器。
+
+選定主群組與清單中的正向成員優先確定。原始 NONE 加明確完整清單才能證明缺失項為非成員；省略清單仍未知。真實憑據轉換即使匹配首個補充群組並保留舊有效主群組，也保留原始 NONE；已證實的移除同樣停用外部解析。輸入不改變 getuid/geteuid/getgid/getegid、原始 getgroups、建立所有權或舊授權模式。同一普通查詢所有者選擇其他使用者權限，先檢查目錄 SEARCH 再查找子項；其他 vnode 操作保持關閉。
+
+下例宣告呼叫者不是 GID50 成員：兩種身分可讀 /data，寫入權限查詢回傳 EACCES13。省略 group_membership_uid 後，群組與其他使用者結果不同的查詢仍不支援。
+
+```json
+{"darwin_files":{"authorization":"static-ordinary-queries","files":[{"path":"/data","bytes_hex":"00","metadata":{"device":7,"inode":2,"mode":32772,"link_count":1,"uid":700,"gid":50,"size":1,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"directories":[{"path":"/","metadata":{"device":7,"inode":1,"mode":16895,"link_count":2,"uid":0,"gid":0,"size":0,"block_size":4096,"blocks":0,"flags":0,"generation":0,"access_time":{"seconds":0,"nanoseconds":0},"modification_time":{"seconds":0,"nanoseconds":0},"change_time":{"seconds":0,"nanoseconds":0},"birth_time":{"seconds":0,"nanoseconds":0}}}],"working_directory":"/"},"darwin_system":{"credentials":{"real_uid":501,"effective_uid":501,"real_gid":20,"effective_gid":20,"groups":[20],"group_membership_uid":4294967195}}}
+```
+
+本機 O0/O1/O2 SDK 執行僅驗證哨兵與四位元組 uid_t，不觀察宿主 cr_gmuid、不停用宿主解析器，也不取代先前270對實際 raw/SDK 非所有者觀察。明確 ordinary-queries-closed-groups 用例檢查173個事件，包含有效非成員拒絕及缺失子項、點、點點和連結的搜尋許可/拒絕，涵蓋五個軟體設定、三個必需 ARM64 HVF 設定與 C/CLI/Python 輸入驗證；不加入58個 native-common 確定性參考。root、ACL/MAC、完整群組解析、通用 vnode 授權、動態憑據、就緒等待/網路、推進時鐘、Mach IPC/執行緒、dyld/TLS 與完整框架仍未完成。原生 Intel HVF 與實體 iOS 未驗證，原時限不變。
+
+```text
+GroupMembershipUID / group_membership_uid / original cr_gmuid
+0..INT32_MAX or KAUTH_UID_NONE=4294967195 / 0xffffff9b / not UINT32_MAX
+positive entries first / original NONE plus complete list proves negatives
+omitted list unknown / first-match real copy preserves original NONE
+ordinary-queries-closed-groups / 173 events / stdout GN
+OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver
+73 mandatory workloads per platform / ARM64 219 / Intel 146 unverified
+SDK constant O0/O1/O2 only / prior actual nonowner pairs270 remain separate
+58 native-common references unchanged / Intel and physical iOS unverified
+native5s / compile120s / guest-Python5,000,000us / quantum1024 / public10s
+```
+
+[XNU KAUTH_UID_NONE](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/sys/kauth.h), [XNU credential membership](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_credential.c).

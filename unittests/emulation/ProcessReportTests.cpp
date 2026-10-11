@@ -1317,6 +1317,63 @@ TEST(ProcessReport, DarwinCredentialsRetainDistinctIDsAndOptionalGroupOrder) {
             (std::vector<uint32_t>{0, 0}));
 }
 
+TEST(ProcessReport, DarwinMembershipUIDKeepsLosslessAndIndependentAdmission) {
+  for (auto ID : {0u, uint32_t(INT32_MAX), 4294967195u})
+    for (bool String : {false, true})
+      for (bool Groups : {false, true}) {
+        auto Input =
+            llvm::cantFail(llvm::json::parse(darwin_test::CredentialsJSON));
+        auto *C = Input.getAsObject()->getObject("credentials");
+        (*C)["group_membership_uid"] =
+            String ? llvm::json::Value(std::to_string(ID))
+                   : llvm::json::Value(ID);
+        if (!Groups)
+          C->erase("groups");
+        auto Parsed = processOptionsFromJSON(
+            llvm::formatv("{0}", llvm::json::Value(llvm::json::Object{
+                                     {"darwin_system", std::move(Input)}}))
+                .str());
+        ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+        const auto &Credential = *Parsed->DarwinSystem->Credentials;
+        EXPECT_EQ(Credential.GroupMembershipUID, ID);
+        EXPECT_EQ(Credential.RealUID, 101u);
+        EXPECT_EQ(Credential.EffectiveUID, 202u);
+        EXPECT_EQ(Credential.RealGID, 303u);
+        EXPECT_EQ(Credential.EffectiveGID, 404u);
+        EXPECT_EQ(bool(Credential.GroupAccessList), Groups);
+      }
+  auto Omitted = processOptionsFromJSON(std::string("{\"darwin_system\":") +
+                                        darwin_test::CredentialsJSON + "}");
+  ASSERT_TRUE(bool(Omitted));
+  EXPECT_FALSE(Omitted->DarwinSystem->Credentials->GroupMembershipUID);
+}
+TEST(ProcessReport, MalformedDarwinMembershipUIDFailsBeforeImageLoading) {
+  auto Reject = [](llvm::json::Value System) {
+    auto Parsed = processOptionsFromJSON(
+        llvm::formatv("{0}", llvm::json::Value(llvm::json::Object{
+                                 {"darwin_system", std::move(System)}}))
+            .str());
+    EXPECT_FALSE(bool(Parsed));
+    llvm::consumeError(Parsed.takeError());
+  };
+  for (const char *Bad :
+       {"null", "true", "[]", "{}", "0.5", "-1", "2147483648", "4294967194",
+        "4294967196", "4294967295", "4294967296", R"("1.0")", R"("-1")",
+        R"("0xFFFFFF9B")", R"("4294967296")", R"("4294967295")", R"("")",
+        R"(" 0")"}) {
+    auto S = llvm::cantFail(llvm::json::parse(darwin_test::CredentialsJSON));
+    (*S.getAsObject()->getObject("credentials"))["group_membership_uid"] =
+        llvm::cantFail(llvm::json::parse(Bad));
+    Reject(std::move(S));
+  }
+  for (const auto &Name :
+       {std::string("GroupMembershipUID"), std::string("groupMembershipUID"),
+        std::string("gmuid"), std::string("group_membership_uid") + '\0'}) {
+    auto S = llvm::cantFail(llvm::json::parse(darwin_test::CredentialsJSON));
+    (*S.getAsObject()->getObject("credentials"))[Name] = 4294967195ULL;
+    Reject(std::move(S));
+  }
+}
 TEST(ProcessReport, MalformedDarwinCredentialsFailBeforeImageLoading) {
   auto Seed = [] {
     return llvm::cantFail(llvm::json::parse(darwin_test::CredentialsJSON));

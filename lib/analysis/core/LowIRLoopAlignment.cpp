@@ -34,6 +34,7 @@ class AlignmentSearch {
   std::array<CachedPlan, 3> OriginalPlans, CandidatePlans;
   uint64_t RemainingCachedMetadata;
   using BlockMap = std::map<int, const LowBlock *>;
+  using CutPairs = std::vector<LowIRLoopCutpointPair>;
 
   [[noreturn]] void stop(Status S, llvm::StringRef Message) {
     Result.Status = S;
@@ -111,10 +112,8 @@ class AlignmentSearch {
         queryGrant(Stage.Execution.MaxSolverQueries);
     Stage.MaxCutSelectionWork = std::min(
         Stage.MaxCutSelectionWork, Limits.MaxSearchWork - Result.SearchWork);
-    auto R = Family == CutFamily::Default
-                 ? inferLowIRLoopRefinementPlan(F, Contract, Stage, Eligible)
-                 : detail::inferLowIRLoopRefinementPlanFamily(
-                       F, Contract, Stage, Family, Previous);
+    auto R = detail::inferLowIRLoopRefinementPlanFamily(
+        F, Contract, Stage, Family, Previous, Limits.MaxCuts, Eligible);
     Result.SolverQueries += R.SolverQueries;
     charge(R.CutSelectionWork);
     AttemptExhausted |= R.Status == LowIRLoopInferenceStatus::BudgetExceeded;
@@ -149,17 +148,18 @@ class AlignmentSearch {
     return true;
   }
 
-  bool pairAndCheck(const LowIRLoopRefinementPlan &Left,
-                    const LowIRLoopRefinementPlan &Right,
-                    llvm::ArrayRef<size_t> Order) {
+  void beginPairing() {
     if (Result.PairingAttempts >= Limits.MaxPairingAttempts)
       stop(Status::BudgetExceeded, "loop alignment pairing budget exhausted");
     ++Result.PairingAttempts;
-    uint64_t Remaining = Limits.MaxMetadata;
-    if (!planMetadata(Left, Remaining) || !planMetadata(Right, Remaining) ||
-        !metadata(Order.size(), Remaining))
+  }
+
+  bool framePairs(const LowIRLoopRefinementPlan &Left,
+                  const LowIRLoopRefinementPlan &Right,
+                  llvm::ArrayRef<size_t> Order, uint64_t &Remaining,
+                  CutPairs &Pairs) {
+    if (!metadata(Order.size(), Remaining))
       return false;
-    std::vector<LowIRLoopCutpointPair> Pairs;
     for (size_t I = 0; I != Order.size(); ++I) {
       const auto &L = Left.Cutpoints[I], &R = Right.Cutpoints[Order[I]];
       LowIRLoopCutpointPair Pair;
@@ -184,6 +184,11 @@ class AlignmentSearch {
       }
       Pairs.push_back(std::move(Pair));
     }
+    return true;
+  }
+
+  bool checkPairs(const LowIRLoopRefinementPlan &Left,
+                  const LowIRLoopRefinementPlan &Right, const CutPairs &Pairs) {
     auto Plan =
         pairLowIRLoopRefinementPlans(Left, Right, Pairs, Limits.MaxMetadata);
     if (!Plan) {
@@ -208,6 +213,148 @@ class AlignmentSearch {
         Result.Refinement.Status == LowIRRefinementStatus::BudgetExceeded;
     requireQueries();
     return false;
+  }
+
+  bool pairAndCheck(const LowIRLoopRefinementPlan &Left,
+                    const LowIRLoopRefinementPlan &Right,
+                    llvm::ArrayRef<size_t> Order) {
+    beginPairing();
+    uint64_t Remaining = Limits.MaxMetadata;
+    CutPairs Pairs;
+    return planMetadata(Left, Remaining) && planMetadata(Right, Remaining) &&
+           framePairs(Left, Right, Order, Remaining, Pairs) &&
+           checkPairs(Left, Right, Pairs);
+  }
+
+  static bool sameLocation(const LowIRLoopLocation &A,
+                           const LowIRLoopLocation &B) {
+    return A.Space == B.Space && A.Offset == B.Offset && A.Bytes == B.Bytes;
+  }
+
+  const LowIRLoopInput *rankInput(const LowIRLoopCutpoint &Cut, NdVar Rank) {
+    const LowIRLoopInput *Found = nullptr;
+    for (const auto &I : Cut.Inputs) {
+      charge();
+      if (I.Side != LowIRLoopSide::Original || I.Temporary != Rank)
+        continue;
+      if (Found || !I.Location.Bytes || I.Location.Bytes != Rank.Size)
+        return nullptr;
+      Found = &I;
+    }
+    return Found;
+  }
+
+  bool rankPairs(const LowIRLoopRefinementPlan &Left,
+                 const LowIRLoopRefinementPlan &Right,
+                 llvm::ArrayRef<size_t> Order, uint64_t &Remaining,
+                 CutPairs &Pairs) {
+    if (!metadata(Order.size(), Remaining))
+      return false;
+    for (size_t I = 0; I != Order.size(); ++I) {
+      const auto &L = Left.Cutpoints[I], &R = Right.Cutpoints[Order[I]];
+      if (L.Rank.empty() || L.Rank.size() != R.Rank.size())
+        return false;
+      LowIRLoopCutpointPair Pair{L.OriginalAddress, R.OriginalAddress, {}};
+      for (size_t J = 0; J != L.Rank.size(); ++J) {
+        charge();
+        const auto *LI = rankInput(L, L.Rank[J]);
+        const auto *RI = rankInput(R, R.Rank[J]);
+        if (!LI || !RI || LI->Location.Bytes != RI->Location.Bytes)
+          return false;
+        for (const auto &Previous : Pair.SharedInputs) {
+          charge();
+          if (sameLocation(Previous.Original, LI->Location) ||
+              sameLocation(Previous.Candidate, RI->Location))
+            return false;
+        }
+        if (!metadata(1, Remaining))
+          return false;
+        Pair.SharedInputs.push_back({LI->Location, RI->Location});
+      }
+      Pairs.push_back(std::move(Pair));
+    }
+    return true;
+  }
+
+  bool sameBindings(const CutPairs &A, const CutPairs &B) {
+    // Both vectors follow the same cut permutation and contain distinct
+    // locations. Compare sets without imposing a rank-component ordering.
+    for (size_t I = 0; I != A.size(); ++I) {
+      charge();
+      if (A[I].SharedInputs.size() != B[I].SharedInputs.size())
+        return false;
+      for (const auto &P : A[I].SharedInputs) {
+        bool Found = false;
+        for (const auto &Q : B[I].SharedInputs) {
+          charge();
+          if (sameLocation(P.Original, Q.Original) &&
+              sameLocation(P.Candidate, Q.Candidate)) {
+            Found = true;
+            break;
+          }
+        }
+        if (!Found)
+          return false;
+      }
+    }
+    return true;
+  }
+
+  bool rankAndCheck(const LowIRLoopRefinementPlan &Left,
+                    const LowIRLoopRefinementPlan &Right,
+                    llvm::ArrayRef<size_t> Order, bool IncludeFrame) {
+    if (!Limits.MaxRankPairingAttempts)
+      return false;
+    if (Result.RankPairingAttempts >= Limits.MaxRankPairingAttempts) {
+      AttemptExhausted = true;
+      Result.LastCandidateDiagnostic =
+          "loop alignment rank pairing budget exhausted";
+      return false;
+    }
+    beginPairing();
+    ++Result.RankPairingAttempts;
+    uint64_t Remaining = Limits.MaxMetadata;
+    CutPairs Rank, Frame;
+    if (!planMetadata(Left, Remaining) || !planMetadata(Right, Remaining))
+      return false;
+    Result.LastCandidateDiagnostic =
+        "loop alignment ranks are not distinct direct inputs of equal width";
+    if (!rankPairs(Left, Right, Order, Remaining, Rank) ||
+        !framePairs(Left, Right, Order, Remaining, Frame))
+      return false;
+    if (IncludeFrame) {
+      bool Added = false;
+      for (size_t I = 0; I != Rank.size(); ++I) {
+        charge();
+        for (const auto &P : Frame[I].SharedInputs) {
+          charge();
+          bool Conflict = false;
+          for (const auto &Q : Rank[I].SharedInputs) {
+            charge();
+            if (sameLocation(P.Original, Q.Original) ||
+                sameLocation(P.Candidate, Q.Candidate)) {
+              Conflict = true;
+              break;
+            }
+          }
+          if (Conflict)
+            continue;
+          if (!metadata(1, Remaining))
+            return false;
+          Rank[I].SharedInputs.push_back(P);
+          Added = true;
+        }
+      }
+      if (!Added) {
+        Result.LastCandidateDiagnostic = "duplicate loop input pairing";
+        return false;
+      }
+    }
+    if (sameBindings(Rank, Frame)) {
+      Result.LastCandidateDiagnostic = "duplicate loop input pairing";
+      return false;
+    }
+    return checkPairs(Left, Right, Rank);
   }
 
   LowIRLoopInferenceResult inferCandidate(
@@ -298,6 +445,9 @@ class AlignmentSearch {
     std::iota(Order.begin(), Order.end(), 0);
     do {
       if (pairAndCheck(Left, Right, Order))
+        return true;
+      if (rankAndCheck(Left, Right, Order, false) ||
+          rankAndCheck(Left, Right, Order, true))
         return true;
       charge(Order.size());
     } while (std::next_permutation(Order.begin(), Order.end()));

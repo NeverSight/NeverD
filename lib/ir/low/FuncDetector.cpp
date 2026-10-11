@@ -310,6 +310,13 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     return Img.Format == BinaryFormat::MachO &&
            DirectCallTargets.count(Addr) != 0;
   };
+  auto IsCoveredImportCallTarget = [&](va_t Addr) {
+    // One linker-generated unwind row can cover the whole PLT. A direct
+    // call to an exact import veneer still names a distinct callable entry;
+    // the coarse stub range alone is not enough to establish that identity.
+    return DirectCallTargets.count(Addr) != 0 && Img.isImportStubAt(Addr) &&
+           Img.findImportStubAt(Addr) != nullptr;
+  };
   auto IsX86LinkedCallOrRelocTarget = [&](va_t Addr) {
     return IsX86LinkedCOFF && (DirectCallTargets.count(Addr) != 0 ||
                                RelocationCodeTargets.count(Addr) != 0);
@@ -404,6 +411,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
         Keep[I] = 1;
       else if (UntypedCOFFExports.count(Addr) ||
                IsCoveredMachODirectCallTarget(Addr) ||
+               IsCoveredImportCallTarget(Addr) ||
                ExplicitFunctionStarts.count(
                    normalizeCodeAddress(Addr, Img.Arch, Img.Mode)) != 0 ||
                !InsideKnownButNotStart(Addr))
@@ -522,7 +530,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       Filtered.reserve(Results.size());
       for (auto &R : Results) {
         if (InsideSized(R.first) && !FunctionSymbolStarts.count(R.first) &&
-            !IsCoveredMachODirectCallTarget(R.first))
+            !IsCoveredMachODirectCallTarget(R.first) &&
+            !IsCoveredImportCallTarget(R.first))
           continue;
         Filtered.push_back(R);
       }

@@ -245,16 +245,27 @@ class WDKDriverFixtureTests(unittest.TestCase):
         }
         self.assertTrue(image_required)
         self.assertTrue(image_required <= required)
+        cpuid_source = (source.parent / "DriverCPUIDTests.cpp").read_text()
+        cpuid_required = {
+            f"Native/DriverCPUIDExecution.{name}/whp_{contract}"
+            for name in re.findall(r"TEST_P\(DriverCPUIDExecution,\s*(\w+)\)",
+                                   cpuid_source)
+            for contract in ("driver", "checked")
+        }
+        self.assertTrue(cpuid_required)
+        self.assertTrue(cpuid_required <= required)
         self.assertEqual(len(required), len(cpu_required) + 2 * len(names)
                          + len(seh_required) + len(scheduling_required)
                          + len(wait_required) + len(unpack_required)
-                         + len(timestamp_required) + len(image_required))
+                         + len(timestamp_required) + len(image_required)
+                         + len(cpuid_required))
         formula = (f"{len(cpu_required)} CPU + {2 * len(names)} WHP + "
                    f"{len(seh_required)} SEH + {len(scheduling_required)} scheduling "
                    f"+ {len(wait_required)} wait sets "
                    f"+ {len(unpack_required)} driver UNPACK "
                    f"+ {len(timestamp_required)} clock reads "
-                   f"+ {len(image_required)} image memory checks = {len(required)}")
+                   f"+ {len(image_required)} image memory checks "
+                   f"+ {len(cpuid_required)} CPUID = {len(required)}")
         definitions = (fixtures.ROOT / "scripts/EmulationDocumentation.def")
         tokens = i18n.emulation_document_tokens(definitions.read_text(encoding="utf-8"))
         self.assertIn(formula, tokens["NativeDriverCI"])

@@ -310,6 +310,7 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DBUILD_TESTING=ON \
+            -DNEVERD_BUILD_WEB_MCP=ON \
             -DNEVERD_BUILD_PLUGINS=ON \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON \
@@ -2186,7 +2187,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=40 \
             install --yes --no-install-recommends lld wine wine32:i386
       - name: Verify runtime evidence admission
-        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_check_windows_registration_multiple_catch scripts.tests.test_check_windows_registration_nested_try scripts.tests.test_windows_registration_libraries -v
+        run: python -m unittest scripts.tests.test_check_windows_registration_eh scripts.tests.test_check_windows_registration_frame scripts.tests.test_check_windows_registration_cookie scripts.tests.test_check_windows_registration_cxx_rewrite scripts.tests.test_check_windows_registration_realigned scripts.tests.test_check_windows_registration_realigned_rewrite scripts.tests.test_check_windows_registration_multiple_catch scripts.tests.test_check_windows_registration_nested_try scripts.tests.test_windows_registration_libraries scripts.tests.test_windows_registration_runtime -v
       - name: Fetch genuine MSVC C++ source inputs
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
         uses: actions/download-artifact@v4
@@ -2318,9 +2319,12 @@ jobs:
             --patch-binary build-windows-eh/bin/neverd \
             --runtime-libs build-windows-eh/cxx-source-inputs/runtime-libs \
             --output build-windows-eh/evidence/multiple-catch-rewrite
-      - name: Reconstruct compiler-generated nested x86 try searches
+      - name: Reconstruct nested x86 try and secondary catch searches
         if: ${{ inputs.windows_eh_llvm_artifact_run != '' }}
+        env:
+          WINEARCH: win32
         run: |
+          WINEPREFIX="$RUNNER_TEMP/neverd-wine32" \
           python scripts/check_windows_registration_nested_try.py \
             --test-binary build-windows-eh/bin/NeverDWindowsRegistrationRealignedTests \
             --patch-binary build-windows-eh/bin/neverd \

@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | 실행 중 관찰 |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | 실행 중 관찰 |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v101`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL 입력은 `IMAGE_FILE_DLL`로 식별합니다. 모델링된 게스트 EXE가 `LoadLibraryA`, `FreeLibrary`를 호출하며 일반 의존성, TLS, `DllMain` 수명주기를 사용합니다. DLL 기본 진입점은 프로세스 연결 호출입니다. 임의의 내보내기 함수 인수를 추측하지 않습니다. 이름, 서수, 별칭, 데이터, 전달 내보내기를 보존하며 자체 내보내기 포인터는 자체 가져오기로 변환하지 않습니다. 헬퍼가 반환한 주소에도 같은 규칙을 적용합니다. 내부 주소가 반환되면 해당 위치의 이전 가져오기 복구 증거를 철회합니다.
 
@@ -32,8 +32,12 @@ PE32+ DLL 입력은 `IMAGE_FILE_DLL`로 식별합니다. 모델링된 게스트 
 
 `KeQueryPerformanceCounter`, `RDTSC`, `RDTSCP`를 통한 시계 읽기는 명시적인 드라이버 복구 의존성을 유지합니다. 캡처한 카운터와 주파수 값을 새 커널 환경에 다시 연결하는 계약은 아직 없습니다. 기본 복구는 `unsupported_state`를 반환하며 `snapshot_only`는 진단을 유지합니다.
 
+`runtime_state.additional_dependency_reasons`는 유지 중인 풀이나 MDL, 변경된 로더 객체, 커널 부작용, 진입 호출 컨텍스트 변경 등 드라이버 모델이 관찰한 이유를 나열합니다. 기본 거부와 명시적 스냅샷은 같은 이유를 보존합니다. 빈 목록은 `has_additional_dependencies`를 무효화하거나 복원 계약을 입증하지 않습니다.
+
+풀이나 빌린 객체가 남지 않아도 커널 이미지 재배치는 별도의 로더 의존성입니다. 현재 작성기는 생성된 내용의 재배치 정보를 제거하므로 기본 드라이버 복원은 `unsupported_state`를 반환하며 출력 파일을 만들거나 잘라내지 않습니다. 명시적인 `snapshot_only`만 고정 주소 이미지를 출력하고 이 진단을 유지합니다. 원래 재배치 테이블만으로 생성된 포인터를 모두 포함한다고 증명할 수 없습니다.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## 사용법

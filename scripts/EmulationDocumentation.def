@@ -42,6 +42,23 @@ NEVERD_EMULATION_DOC_TOKEN(Darwin, "darwin-kernel-reference.yml")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "arm64e/PAC")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "Foundation/UIKit")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "darwin_files")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "static-owner-queries")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "static-ordinary-queries")
+NEVERD_EMULATION_DOC_TOKEN(Darwin,
+                           "DarwinFileAuthorization::StaticOrdinaryQueries")
+NEVERD_EMULATION_DOC_TOKEN(
+    Darwin, "OrdinaryQueriesPreserveGroupKnowledgeAndSelectedSearch")
+NEVERD_EMULATION_DOC_TOKEN(Darwin,
+                           "DarwinFileAuthorization::StaticOwnerQueries")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "EACCES13")
+NEVERD_EMULATION_DOC_TOKEN(Darwin,
+                           "OwnerQueriesKeepPermissionAndUnknownBoundaries")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "GroupMembershipUID")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "group_membership_uid")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "4294967195")
+NEVERD_EMULATION_DOC_TOKEN(Darwin, "ordinary-queries-closed-groups")
+NEVERD_EMULATION_DOC_TOKEN(
+    Darwin, "OrdinaryQueriesUseExplicitMembershipUIDWithoutResolver")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "darwin_time")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "hostname")
 NEVERD_EMULATION_DOC_TOKEN(Darwin, "process_group_id")
@@ -643,7 +660,7 @@ NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI, "DriverNativeOutcomes.def")
 NEVERD_EMULATION_DOC_TOKEN(NativeDriverCI,
                            "5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 "
                            "wait sets + 12 driver UNPACK + 6 clock reads "
-                           "+ 4 image memory checks = 5452")
+                           "+ 4 image memory checks + 6 CPUID = 5458")
 NEVERD_EMULATION_DOC_TOKEN(Overview, "FOP/FIP/FDP")
 NEVERD_EMULATION_DOC_TOKEN(X64Startup, "FOP/FIP/FDP")
 #endif
@@ -1394,8 +1411,8 @@ NEVERD_EMULATION_DOC_TOKEN(
 NEVERD_EMULATION_DOC_TOKEN(
     UnpackTests, "ExplicitSnapshotsKeepExternalHeapDependenciesVisible")
 NEVERD_EMULATION_DOC_TOKEN(UnpackTests, "ReleasedHeapStateDoesNotBlockRecovery")
-NEVERD_EMULATION_DOC_TOKEN(
-    UnpackTests, "DirectServiceBindingsRequireAnExplicitSnapshot")
+NEVERD_EMULATION_DOC_TOKEN(UnpackTests,
+                           "DirectServiceBindingsRequireAnExplicitSnapshot")
 NEVERD_EMULATION_DOC_TOKEN(UnpackTests,
                            "HeapReferencesInCapturedTLSCannotBeDiscarded")
 NEVERD_EMULATION_DOC_TOKEN(UnpackTests, "UnpackLibraryTests.cpp")

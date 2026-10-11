@@ -191,6 +191,14 @@ public:
   void setStrictMode(bool Strict) { StrictMode = Strict; }
   bool strictMode() const { return StrictMode; }
 
+  /// Opt into an architectural representative of implementation-dependent
+  /// RCP/RSQRT results. Disabled by default; strict mode always refuses those
+  /// lanes. A completed representative records ApproximatedOps and cannot be
+  /// taken as exact concrete/path evidence. This setting survives reset().
+  void setX86Approx12ReferenceMode(bool Enable) {
+    X86Approx12ReferenceMode = Enable;
+  }
+
   /// What was skipped or approximated.  Accumulates across reset(), so a
   /// caller emulating one path per switch index can ask once at the end
   /// whether any of them stepped over something.
@@ -222,6 +230,7 @@ private:
   std::optional<uint8_t> X86LinearAddressBits;
   bool StepOverCalls = false;
   bool StrictMode = false;
+  bool X86Approx12ReferenceMode = false;
   std::optional<NdVar> ReachedIndirectBranchTarget;
   std::optional<InstructionMode> ReachedSourceMode;
   std::optional<LowInstructionTargetMode> ReachedTargetMode;
@@ -233,6 +242,8 @@ private:
   std::optional<uint64_t> resolveMemoryAddress(const LowOp &Op,
                                                uint64_t Offset) const;
   bool isX86CanonicalMemoryRange(uint64_t Address, uint64_t Size) const;
+  std::optional<std::vector<uint8_t>>
+  loadX86FPStateMemory(const LowOp &Op, uint16_t Bytes, unsigned Alignment);
   void writeOutput(const NdVar &Output, uint64_t Value);
   void writeOutputBytes(const NdVar &Output, llvm::ArrayRef<uint8_t> Value);
   std::optional<std::vector<uint8_t>> loadMemoryBytes(uint64_t Addr,

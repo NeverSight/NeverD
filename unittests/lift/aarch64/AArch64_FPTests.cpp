@@ -194,6 +194,25 @@ int main(void) {
 )C";
   const auto CFile = tmpFile("fp16-ops-host.c");
   std::ofstream(CFile) << Source << "\n" << Harness;
+  // The host may emulate half operations through float, masking contraction
+  // across the recovered multiply/subtract. Check a target with native half
+  // arithmetic too: only the original explicit FMADD may be fused.
+  const auto IRFile = tmpFile("fp16-ops-recompiled.ll");
+  const auto CrossCompiled =
+      exec(NEVERD_TEST_CLANG,
+           {"-target", "aarch64-none-elf", "-march=armv8.2-a+fp16",
+            "-ffreestanding", "-std=gnu11", "-O2", "-ffp-contract=on", "-S",
+            "-emit-llvm", CFile.string(), "-o", IRFile.string()});
+  ASSERT_EQ(CrossCompiled.exitCode, 0) << CrossCompiled.err << "\n" << Source;
+  std::ifstream IRInput(IRFile);
+  ASSERT_TRUE(IRInput.good());
+  const std::string IR((std::istreambuf_iterator<char>(IRInput)),
+                       std::istreambuf_iterator<char>());
+  const auto Body = functionIR(IR, "half_ops");
+  ASSERT_FALSE(Body.empty()) << IR;
+  EXPECT_EQ(Body.find("@llvm.fmuladd"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("fmul half"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("fsub half"), std::string::npos) << Body;
   const auto Program = tmpFile("fp16-ops-host.exe");
   const auto Compiled =
       exec(NEVERD_TEST_CLANG, {"-std=gnu11", "-O2", CFile.string(), "-lm", "-o",

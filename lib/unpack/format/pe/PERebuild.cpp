@@ -676,6 +676,11 @@ llvm::Expected<RebuiltImage> rebuild(const Image &In, const Capture &C,
          S.Origin});
   // The emitted headers must satisfy the same contract as an input.
   if (In.domain() == ExecutionDomain::Kernel) {
+    // A kernel loader chooses the runtime address. Keeping the observed base
+    // while stripping generated-content relocations cannot bind a fresh load.
+    // Original relocation entries alone do not cover generated pointers.
+    Out.RuntimeDependency =
+        "kernel image relocation state requires reconstruction";
     const uint64_t Offset =
         H.OptionalHeaderOffset + offsetof(pe32plus_header, CheckSum);
     auto Checksum = computePEChecksum(Out.File, Offset);

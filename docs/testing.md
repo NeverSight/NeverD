@@ -316,6 +316,42 @@ source probes require Windows/Linux and FS probes require Linux. Native ROUND
 requires x64 SSE4.1; VEX probes additionally require AVX. These directed tests
 do not certify EVEX/SAE, unavailable-feature faults or general x87 state.
 
+`NeverDX86FPApprox12AccuracyTests` covers legacy/VEX RCP/RSQRT scalar and
+packed forms with original byte kernels, SDK Codegen default/NoOpt and both C
+routes default/NoOpt at O0/O2. Numerical bits, unchanged MXCSR (including
+unmasked exceptions), scalar merging and vector upper bits are complete
+observations. Memory checks cover legacy packed alignment faults, scalar/VEX
+unaligned access, canonical ranges, permissions and FS/GS. Scalar C return
+observers check FP type and raw bits. The portable software reference is an
+explicit non-strict opt-in: check the architectural error envelope separately
+from implementation-dependent RCP tininess and record approximated execution.
+Default/strict concrete evaluation refuses unproved normal results; definite
+special values remain exact. Native FS requires Linux and AVX probes require
+native OS-enabled AVX. These tests do not certify x86-32 execution, enabled #AC,
+unavailable-feature faults or EVEX 14/28-bit approximations.
+
+`NeverDX86FPArithStateAccuracyTests` compares original scalar and packed
+ADD/SUB/MUL/DIV/SQRT/MIN/MAX bytes with SDK Codegen default/NoOpt and HighC/LLVMC
+default/NoOpt at O0/O2. Its 140 forms cover legacy scalar/128-bit packed and VEX
+scalar/128/256-bit packed register and memory sources. Directed raw values and
+full MXCSR observations cover rounding, DAZ/FTZ, sticky flags, NaN payloads and
+complete YMM upper state. Additional probes cover distinct source registers,
+destination/RHS aliasing, unaligned scalar/VEX memory, unmasked exceptions,
+instruction-wide exception priority, legacy alignment and protected cross-page
+sources. Discarded numerical results must retain state changes and faults.
+Scalar C return probes separately verify floating type, raw bits and state.
+Declared scalar stack-argument probes compare original execution and readable C
+through default/NoOpt and O0/O2, including complete raw results and MXCSR. They
+exercise the fifth Win64 or ninth SysV floating argument. `MedCallingConvFPStack`
+additionally checks arithmetic, ROUND and APPROX12 incoming ranges across
+ELF/Mach-O/COFF and x86-32/x64, two-slot composition, writes, escaped addresses,
+packed/straddling home initialization and malformed or segmented refusals.
+Low/Med/High and owned assembly tests reject malformed roles, controls, state
+pointers, effects and addressing contracts. Native execution requires x64 and
+OS-enabled AVX; descriptor checks also cover x86-32 without claiming native
+x86-32 execution. These tests do not certify horizontal arithmetic, FMA,
+EVEX/SAE, x87, enabled #AC or unavailable-feature faults.
+
 ## x86 invalid encodings and instruction boundaries
 
 `NeverDX86EncodingAccuracyTests` requires raw illegal LOCK forms (including
@@ -359,6 +395,39 @@ ctest --test-dir build-release \
 ```
 
 ## Offline web analysis
+
+The optional `NEVERD_BUILD_WEB_MCP=ON` target builds a native C++ transport.
+Run `ctest --test-dir build/tools/neverd-web-mcp --output-on-failure` for its
+four C++ suites: protocol, catalog, real-backend evidence parity and actual
+stdio process tests with an unusable PATH. The process suite explicitly skips
+on Windows. An additional `NeverDWebMCPClaude` process case requires the pinned
+`NEVERD_CLAUDE_CODE_21296_ELF` artifact and otherwise explicitly skips.
+Repeat against parser-off and backend-off builds; the latter must
+retain capabilities while omitting analysis tools. The runtime-free engine
+profile also sets `NEVERD_ENABLE_PYTHON_PLUGINS=OFF`. Shared JSON/client changes
+require worker protocol/Web and affected mock transport regressions. These
+MCP suites own catalog qualification separately from the existing Python
+native capability checker. See the [profile](web-mcp-profile.md).
+
+`WebSEA.*` covers independent Node SEA serialization, x64/ARM64 ELF/Mach-O/PE
+resource location, malformed names/tables, duplicate mappings, cumulative work,
+opaque V8 evidence and exact compiler-generated blobs. `WebSEASDK.*` and
+`NeverDWorkerWeb` cover publication/revocation, private-key redaction,
+source/map/package/native consumers, nested compressed anchors and CLI/framed
+parity. Set `NEVERD_NODE_SEA_22150_CORPUS` for the optional pinned snapshot
+directory and `NEVERD_NODE_SEA_22150_IMAGES` for injected full-image fixtures.
+Tests never download or execute them. See the [profile](web-sea-profile.md).
+After shared artifact/session/package boundary changes, run the owning web
+directory, C API availability and five core worker cases. Verify parser-off
+extraction and backend-off ABI behavior separately.
+
+`WebStreams.*` covers explicit JSONL/SSE/JSON-RPC/MCP/log profiles, byte spans,
+EOF limits, duplicate/missing context, original numeric tokens and aggregate
+JSON work including failures. `WebStreamSDK.*` and `NeverDWorkerWeb` cover
+preview gates, profile/hash/policy receipts, redaction canaries, cache/revision
+revocation and transport parity. Run the owning web directory after changing
+shared JSON admission or session boundaries; readers remain enabled without JS.
+See the [stream profiles](web-stream-profile.md).
 
 `WebInterfaces.*` and `WebSourceInterfaces.*` cover passive HAR admission,
 fixed redaction classifications, missing/malformed fields, source anchors,
@@ -808,7 +877,12 @@ Resource failure and value-analysis incompleteness remain distinct.
 `ResolverValueQueryCache.*` checks actual complete-batch reuse, exact remaining
 budgets at every small-fixture boundary, ordered mixed results and feasible
 masks, all query fields, proof limits and graph-independent relocation context.
-Incomplete proofs and oversized records cannot be retained; count and byte
+Shared match-work failures clear all outputs, including earlier feasible masks.
+Cached match/depth refusals preserve per-query incomplete status, independent
+results and cold work charges for every requested output shape. Changed limits,
+graphs, query ordering and relocation context require fresh analysis. An
+independent unknown prevents refusal retention. Other incomplete proofs and
+oversized records cannot be retained; count and byte
 limits are checked independently.
 The long-predecessor guard fixture separates a shallow comparison from its
 value's CFG history. It checks 128 table slots reaching four exact case targets,
@@ -1065,6 +1139,10 @@ Shared-header and shared-latch regressions cover zero-extended 32-bit and full 6
 `LowIRLoopPlanPairing.*` in the same target checks renamed registers, different arithmetic bodies, side-specific prefix snapshots, retained predicates, shared frame inputs, nested cut coverage and fresh proof budgets. Missing relations, incorrect writes, malformed temporary bindings, incomplete pairings and exhausted metadata limits must not establish a certificate.
 
 `LowIRLoopAlignment.*` checks independently authored ordinary and rotated frame-counter loops: both default self-plans prove individually, their first pairing fails, and another candidate cut proves the relation. Regressions cover multiple-cut permutations, wrong results and frame writes, missing/stale original records, explicit undefined witnesses, nondecreasing/wrapping counters, malformed graphs, cumulative failed-attempt queries, exact total budgets and exhausted search limits. Every refusal must lack a certificate. Additional cases cover separate reset/progress phases, equivalent relocated exit guards requiring cross-family pairing, shared caching without repeated inference, and combined metadata exhaustion. A trailing independent cycle checks complete feedback coverage with an explicit 16384-query inference limit. Empty and duplicate families use no symbolic queries; too few cuts refuse. Exact and one-short global budgets, wrong results, missing progress, original evidence and undefined witnesses remain checked. Filtered-family regressions cover neutral arithmetic diamonds, local versus boundary-only joins, and a reachable join that can be bypassed to an exit or loop boundary. They check a filtered candidate even when the original filtered family is duplicate, reuse of a filtered plan before a later broad attempt, exact/one-short/zero `MaxCutSelectionWork`, cumulative failed `CutSelectionWork`, and no symbolic inference after global graph work is exhausted. Complete cycle coverage is checked for both branch families; the diamond relation uses explicit inference and proof query limits.
+
+`LowIRLoopAlignment.DirectRanks*` should check renamed register/frame carriers, compatible frame unions, conflicts at either binding endpoint, and conservative refusal of constant or expression ranks and actual 8-byte versus 4-byte frame inputs. The accounting oracle must derive optional scan, comparison and metadata costs from the public self-plans before testing exact and one-short limits, rather than copying the successful search's total. Duplicate proposals must consume attempts and work without new checker queries; exhausting the optional cap must still allow a later ordinary pairing to prove. Wrong results, frame or preserved-state changes, missing progress, and stale original evidence must remain rejected with complete observations and the selected witness intact. `InterpreterLLVMRefinement.PreservationRestoresEntryAcrossLoopCutpoints` should discover the source plan through public search without manual cut addresses or rank bindings, then prepare fresh models and recheck both native and LLVM premises in the composite checker. These requirements do not assert a test-run result or ordinary ABI certification.
+
+`LowIRLoopAlignment.PlanCutCap*` checks zero, short and exact plan caps, zero symbolic queries for oversized families, complete cycle coverage, malformed graphs and later filtered proofs in both directions. Standalone inference remains compatible. `LLVMModel.RejectedBodyTemplateDoesNotHideAValidGuardedHeader` also checks that a one-cut alignment cap permits multiple inference attempts. Wrong results must still refuse a certificate.
 
 Partial-counter regressions cover frame and register lanes, both directions, low/interior/high positions, unusual widths, both byte orders and three-byte represented frame words. They check delayed lane discovery, preserved-bit mutations, nonprogress and unguarded wrap, invalid additional entries, exact/short inference budgets, and existing single-cut search.
 
@@ -2701,11 +2779,18 @@ substituted evidence.
 `check_windows_registration_nested_try.py` compiles independent Clang `-O0`
 and `-O1` parents and links the captured CRT libraries. Inner reference catches
 and outer value/catch-all clauses exercise all three continuations under four
-caller stack layouts. The 32-image source/control matrix covers both CLI patch
+caller stack layouts, including a new throw inside the inner catch. The
+64-image source/control matrix covers both CLI patch
 modes and forced rebasing. The C++ test rejects changed prologue saves,
 personality argument reads, search edges, handler order, continuation ownership,
-and emitted try/unwind state rows. HighIR must contain both nested tries and
-all three callback bodies; C output also receives a syntax check.
+and emitted try/unwind state rows. Secondary-search mutations also reject
+searching the exited inner try or losing the active catch token. HighIR must
+contain both nested tries and all three callback bodies; C output receives a
+syntax check. `windows_registration_runtime.py` captures the selected MSVC
+x86 redistributable DLL alongside the link libraries. Each image runs with
+that exact app-local runtime, with a native-only Wine override, and replay
+authenticates its provider and digest. A missing or changed runtime fails;
+Wine's built-in catch-guard behavior cannot silently replace the Windows CRT.
 `RegistrationCxxUnwind` tests nested, disjoint, three-level and cleanup search
 graphs. `replay_windows_registration_nested_try.py` authenticates the source,
 rejection tests, compiler objects, IR, decompilation and installed PE bytes
@@ -3490,7 +3575,7 @@ The KVM gate requires real non-exiting vCPU cancellation and 48 state-transfer o
 
 With `native_cpu_only=true`, `native_driver_tests=true` enables `NeverDNativeDriverTests` without Unicorn. Before configuring, `build_wdk_driver_fixtures.py` verifies the complete SHA-256 of the official Microsoft WDK/SDK 10.0.26100.6584 packages and rebuilds 48 original normal/CFG/DBG driver images. `WDKDriverFixtures.def` owns package identities, compiler/linker arguments and fixture bindings. Unmodified Microsoft inputs and their licenses remain in the local build/cache directories; CI uploads only build metadata and logs. The manifest records tool versions, commands, source/header hashes and output image hashes.
 
-`NativeDriverTests.def` requires 230 WHP outcomes from all 115 workloads in `DriverBuiltinImages.def` and `DriverBackendParityCases.def`: 27 built-in images, 48 WDK images and 40 request scenarios, each at original and rebased addresses. The complete mandatory inventory is `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 12 driver UNPACK + 6 clock reads + 4 image memory checks = 5452`. The 30 wait-set checks comprise sixteen portable model cases and fourteen original native driver cases. `run_native_cpu_ci.py --with-drivers` retains exact inventory/JUnit evidence with Unicorn disabled. Missing or skipped required fixtures fail the opt-in gate; ordinary builds keep external fixtures optional. Fixed images retain their expected rebase rejection. ARM64 native guest execution remains unverified.
+`NativeDriverTests.def` requires 230 WHP outcomes from all 115 workloads in `DriverBuiltinImages.def` and `DriverBackendParityCases.def`: 27 built-in images, 48 WDK images and 40 request scenarios, each at original and rebased addresses. The complete mandatory inventory is `5068 CPU + 230 WHP + 25 SEH + 77 scheduling + 30 wait sets + 12 driver UNPACK + 6 clock reads + 4 image memory checks + 6 CPUID = 5458`. The 30 wait-set checks comprise sixteen portable model cases and fourteen original native driver cases. `run_native_cpu_ci.py --with-drivers` retains exact inventory/JUnit evidence with Unicorn disabled. Missing or skipped required fixtures fail the opt-in gate; ordinary builds keep external fixtures optional. Fixed images retain their expected rebase rejection. ARM64 native guest execution remains unverified.
 
 `InterruptionRetainsPhaseCauseDeadlineAndLease` injects deadline, stop and combined interruptions before two different startup instructions. It checks the exact phase diagnostic, owned message lifetime, preserved error type and cause bits, one unchanged deadline across steps and released memory ownership. Existing real transport failures and state mismatches remain distinct. The native x64 startup validation budget is `5 s`; ordinary guest deadlines and single-step allowances are unchanged.
 

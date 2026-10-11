@@ -211,6 +211,47 @@ TEST(FunctionDiscoveryAlignment, KnownImportEntriesRemainCallable) {
   EXPECT_EQ(Img.Symbols.size(), 1u);
 }
 
+TEST(FunctionDiscoveryAlignment, CalledImportVeneerSurvivesCoarseUnwindRange) {
+  constexpr va_t Base = 0x1000, Stub = Base + 16, Entry = Base + 64;
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    BinaryImage Img;
+    Img.Format = BinaryFormat::ELF;
+    Img.Arch = Arch::X64;
+    Img.Bits = Bitness::Bits64;
+    Img.Entry = Entry;
+    std::vector<uint8_t> Code(80, 0xcc);
+    Code[0] = 0xc3;
+    Code[16] = 0xff;
+    Code[17] = 0x25;
+    writeLE<int32_t>(Code.data() + 18,
+                     (Mutation == 4 ? 0x4008 : 0x4000) - (Stub + 6));
+    Code[64] = 0xe8;
+    writeLE<int32_t>(Code.data() + 65, Stub - (Entry + 5));
+    Code[69] = 0xc3;
+    if (Mutation == 3)
+      Code[64] = 0xc3;
+    Img.Segments.push_back(executableSegment(Base, Code));
+    Img.KnownCodeRanges = {{Base, Base + 32}};
+    Img.Symbols.push_back(Symbol::makeFunc(Base, 32));
+    ExceptionFunction EH;
+    EH.Encoding = ExceptionEncoding::DwarfFDE;
+    EH.CodeRange = {Base, Base + 32};
+    EH.Dwarf.emplace();
+    Img.ExceptionMetadata.Functions.push_back(EH);
+    if (Mutation != 1)
+      ASSERT_TRUE(Img.recordImportStubRange(Base, 32));
+    if (Mutation != 2)
+      Img.Imports.push_back({"crt", "printf", 0, 0x4000});
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Img));
+    const auto Found = FuncDetector().detect(Img, Dec);
+    EXPECT_EQ(std::any_of(Found.begin(), Found.end(),
+                          [&](const auto &F) { return F.first == Stub; }),
+              Mutation == 0);
+  }
+}
+
 TEST(FunctionDiscoveryAlignment, RegistersLoaderRunFunctions) {
   // sub rsp, 8; add rsp, 8; ret; ret; ret: initializers nothing in the image
   // calls, and the entry point.

@@ -25,6 +25,7 @@
 #include "neverd/web/PackageArchive.h"
 #include "neverd/web/PackageIntegrity.h"
 #include "neverd/web/Packages.h"
+#include "neverd/web/SEA.h"
 #include "neverd/web/Session.h"
 #include "neverd/web/Source.h"
 #include "neverd/web/SourceBindings.h"
@@ -34,6 +35,7 @@
 #include "neverd/web/SourceModules.h"
 #include "neverd/web/SourceNavigation.h"
 #include "neverd/web/SourceView.h"
+#include "neverd/web/Streams.h"
 
 #include <map>
 #include <mutex>
@@ -63,6 +65,7 @@ struct Session::Impl {
   std::map<std::string, ModuleResults> Modules;
   std::map<std::string, SourceBundleAnalysis> Bundles;
   std::map<std::string, BunExtraction> BunExtractions;
+  std::map<std::string, SEAExtraction> SEAExtractions;
   std::map<std::string, AsarExtraction> AsarExtractions;
   std::map<std::string, ElectronManifest> ElectronManifests;
   std::map<std::string, ElectronSource> ElectronSources;
@@ -73,6 +76,10 @@ struct Session::Impl {
   std::map<std::string, PackageArchive> PackageArchives;
   std::map<std::string, PackageIntegrityResult> PackageIntegrity;
   std::map<std::string, HARCapture> HARCaptures;
+  std::map<std::string, StreamCapture> StreamCaptures;
+  std::optional<StreamCapture> PendingStream;
+  std::string StreamPreviewToken;
+  uint64_t StreamPreviewSequence = 0;
   std::optional<HARCapture> PendingHAR;
   std::string HARPreviewToken;
   uint64_t HARPreviewSequence = 0;
@@ -106,10 +113,11 @@ struct Session::Impl {
 
   const char *analysisStatus() const {
     return Sources.empty() && Maps.empty() && BunExtractions.empty() &&
-                   AsarExtractions.empty() && ElectronManifests.empty() &&
-                   HTMLDocuments.empty() && PackageAnalyses.empty() &&
-                   PackageArchives.empty() && PackageIntegrity.empty() &&
-                   HARCaptures.empty() && InterfaceSources.empty()
+                   SEAExtractions.empty() && AsarExtractions.empty() &&
+                   ElectronManifests.empty() && HTMLDocuments.empty() &&
+                   PackageAnalyses.empty() && PackageArchives.empty() &&
+                   PackageIntegrity.empty() && HARCaptures.empty() &&
+                   InterfaceSources.empty() && StreamCaptures.empty()
                ? "not_analyzed"
                : "partial";
   }

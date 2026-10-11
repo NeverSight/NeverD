@@ -14,7 +14,7 @@ Il contenitore determina come un file viene validato e ricostruito, il set di is
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | osservazione durante l’esecuzione |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | osservazione durante l’esecuzione |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v101`](driver-emulation.md) | `DriverEntry` |
 
 Gli input DLL PE32+ sono identificati da `IMAGE_FILE_DLL`. Un EXE guest modellato chiama `LoadLibraryA` e poi `FreeLibrary`, usando il normale ciclo di dipendenze, TLS e `DllMain`. L’ingresso DLL accettato è la chiamata di collegamento al processo; non si inventano argomenti per export arbitrari. Nomi, ordinali, alias, dati e inoltri sono conservati. I puntatori agli export propri rimangono interni, senza autoimportazioni. La stessa regola vale per gli indirizzi restituiti dagli helper: un risultato interno revoca le prove precedenti di riparazione degli import per quel sito.
 
@@ -32,8 +32,12 @@ Gli MDL temporanei sulle pagine immagine del loader non aggiungono più una dipe
 
 Le letture del clock tramite `KeQueryPerformanceCounter`, `RDTSC` o `RDTSCP` mantengono una dipendenza esplicita per il ripristino del driver. I valori acquisiti del contatore e della frequenza non hanno un contratto di riassociazione a un nuovo ambiente kernel. Il ripristino predefinito restituisce `unsupported_state`; `snapshot_only` conserva la diagnosi.
 
+`runtime_state.additional_dependency_reasons` elenca i motivi osservati dal modello del driver: pool o MDL attivi, oggetti del caricatore modificati, effetti del kernel e modifiche al contesto della chiamata di ingresso. Il rifiuto predefinito e gli snapshot espliciti conservano gli stessi motivi. Un elenco vuoto non annulla `has_additional_dependencies` e non dimostra un contratto di ripristino.
+
+Le rilocazioni dell’immagine del kernel restano una dipendenza del loader anche senza pool od oggetti presi in prestito ancora presenti. Poiché il writer elimina le rilocazioni del contenuto generato, il recupero predefinito restituisce `unsupported_state` senza creare né troncare l’output. Solo `snapshot_only` esplicito produce l’immagine a indirizzo fisso mantenendo la diagnosi. La tabella originale non dimostra di coprire i puntatori generati.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Uso

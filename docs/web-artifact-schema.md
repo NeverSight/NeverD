@@ -8,6 +8,17 @@ General findings and transform receipts still require separate contracts.
 
 ## Identity and immutable evidence
 
+Passive streams use [explicit versioned profiles](web-stream-profile.md).
+Capture IDs bind artifact occurrence, original byte hash, interpretation and
+redaction policy; record IDs add occurrence ordinal. Byte spans cover original
+framing. Arbitrary method/event names, payloads, log lines, recorded IDs, sessions
+and timestamps stay private. A separate preview/commit gate admits at most four
+captures and one pending capture per revision, with pages capped at 128 records.
+CLI receipts bind hash/profile/policy; changing interpretation requires another
+receipt. Recorded session/typed-ID/direction/order joins stay candidates, and
+any protocol coverage gap refuses all links. No transcript proves negotiation,
+capture authenticity, source execution or a complete server protocol.
+
 Passive interface records use the [versioned interface profile](web-interface-profile.md).
 HAR preview/commit is distinct from original artifact capture. Preview tokens
 bind the immutable artifact/hash, revision, policy and preview sequence; only
@@ -405,6 +416,23 @@ no silent truncation. JSON structural preflight bounds depth, nodes, strings
 and bytes before DOM creation, and rejects decoded duplicate object keys.
 The current POSIX reader rejects links, special files, unsafe names and detected
 changes. It does not yet provide export-path normalization or Windows admission.
+
+## Node SEA selections
+
+`sea_extract` requires an explicit `profile` and admitted `artifact_id`.
+Its extraction ID binds the occurrence, immutable hash and layout profile.
+`sea_records` returns a complete byte partition with fixed region kinds,
+original-relative offsets/lengths and hashes, except private code paths/asset
+keys whose individual hashes are withheld. Pages contain at most 128 records.
+
+Only stored JavaScript and assets have `selection_id`; the main script also
+appears as the extraction's `source_artifact_id`. Snapshots and caches remain
+opaque. Profile compatibility does not prove runtime identity or activation.
+Nested `sea_region` origins retain selected-container offsets, original storage
+identity and direct or expanded byte coordinates; compressed frames remain
+distinct from source byte offsets. Asset keys are not paths, and a selected
+package document supplies no neighboring-file inventory. Import revokes all
+extractions and selectors. See the [SEA contract](web-sea-profile.md).
 
 ## Package archives and original integrity
 

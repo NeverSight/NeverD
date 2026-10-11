@@ -61,6 +61,82 @@ TEST(DriverBranchPolicy, RelativeExtentsFollowTheSelectedCPUModel) {
 #undef NEVERD_BRANCH_POLICY
 }
 
+TEST_F(DriverExecutionPolicy, CPUIDRequiresAnEnvironmentAction) {
+  for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0xa2},
+                            std::vector<uint8_t>{0x48, 0x0f, 0xa2}}) {
+    auto Action = Policy.inspect(Bytes, 0x1000);
+    ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+    ASSERT_TRUE(*Action);
+    EXPECT_EQ((**Action).Source,
+              WindowsX64ExecutionPolicy::Action::Kind::ReadCPUID);
+    EXPECT_FALSE((**Action).Destination);
+  }
+  for (const auto &Bytes : {std::vector<uint8_t>{0xf0, 0x0f, 0xa2},
+                            std::vector<uint8_t>{0x0f, 0xa2, 0x90}}) {
+    auto Rejected = Policy.inspect(Bytes, 0x1000);
+    ASSERT_FALSE(bool(Rejected));
+    llvm::consumeError(Rejected.takeError());
+  }
+}
+
+TEST_F(DriverExecutionPolicy, RepeatedInspectionUsesCompleteLiveBytes) {
+  for (unsigned Repeat = 0; Repeat < 3; ++Repeat) {
+    accepts({0x90});
+    for (const auto &[Opcode, Kind] :
+         {std::pair{uint8_t(0xa2),
+                    WindowsX64ExecutionPolicy::Action::Kind::ReadCPUID},
+          std::pair{uint8_t(0x31),
+                    WindowsX64ExecutionPolicy::Action::Kind::ReadTimestamp}}) {
+      for (unsigned Hit = 0; Hit < 2; ++Hit) {
+        auto Action = Policy.inspect({0x0f, Opcode}, 0x1000);
+        ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+        ASSERT_TRUE(*Action);
+        EXPECT_EQ((**Action).Source, Kind);
+      }
+    }
+    rejectsThreadAccess({0x65, 0xd7});
+    auto Extra = Policy.inspect({0x0f, 0x31, 0x90}, 0x1000);
+    ASSERT_FALSE(bool(Extra));
+    llvm::consumeError(Extra.takeError());
+    auto Short = Policy.inspect({0x0f}, 0x1000);
+    ASSERT_FALSE(bool(Short));
+    llvm::consumeError(Short.takeError());
+  }
+}
+
+TEST_F(DriverExecutionPolicy,
+       RepeatedInspectionPreservesEnvironmentDestinations) {
+  for (unsigned Repeat = 0; Repeat < 2; ++Repeat)
+    for (uint64_t PC = 0x1000; PC < 0x2000; ++PC) {
+      const bool High = PC & 1;
+      const std::array<uint8_t, 4> Bytes = {uint8_t(High ? 0x45 : 0x44), 0x0f,
+                                            0x20, uint8_t(High ? 0xc1 : 0xc0)};
+      auto Action = Policy.inspect(Bytes, PC);
+      ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+      ASSERT_TRUE(*Action);
+      EXPECT_EQ((**Action).Source,
+                WindowsX64ExecutionPolicy::Action::Kind::ReadIRQL);
+      EXPECT_EQ((**Action).Destination,
+                High ? X64Register::R9 : X64Register::AX);
+    }
+}
+
+TEST_F(DriverExecutionPolicy, ReinitializationUsesTheSelectedProcessorModel) {
+  for (unsigned Repeat = 0; Repeat < 2; ++Repeat) {
+    llvm::cantFail(Policy.initialize(X64BranchModel::AMD));
+    accepts({0x66, 0xe9, 0, 0});
+    llvm::cantFail(Policy.initialize(X64BranchModel::Intel));
+    auto Short = Policy.inspect({0x66, 0xe9, 0, 0}, 0x1000);
+    ASSERT_FALSE(bool(Short));
+    llvm::consumeError(Short.takeError());
+    accepts({0x66, 0xe9, 0, 0, 0, 0});
+    llvm::cantFail(Policy.initialize(X64BranchModel::AMD));
+    auto Long = Policy.inspect({0x66, 0xe9, 0, 0, 0, 0}, 0x1000);
+    ASSERT_FALSE(bool(Long));
+    llvm::consumeError(Long.takeError());
+  }
+}
+
 TEST_F(DriverExecutionPolicy, RejectsFSAndGSImplicitXLATMemory) {
   rejectsThreadAccess({0x64, 0xd7});
   rejectsThreadAccess({0x65, 0xd7});

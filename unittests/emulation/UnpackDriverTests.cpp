@@ -99,6 +99,10 @@ protected:
     D.Backend = GetParam().Kind;
     D.Contract = ExecutionContract::CheckedX64;
     D.Unload = true;
+    if (Options.Driver) {
+      D.CPUID = Options.Driver->CPUID;
+      D.LoadAddress = Options.Driver->LoadAddress;
+    }
     D.Requests.push_back({DriverRequestKind::Create});
     DriverRequest IO;
     IO.ControlCode = 0x222000;
@@ -128,6 +132,7 @@ protected:
 };
 
 TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
+  ASSERT_NE(Original.FileCharacteristics & llvm::COFF::IMAGE_FILE_DLL, 0u);
   checkLifecycle(NEVERD_UNPACK_DRIVER_FIXTURE);
   ASSERT_FALSE(HasFatalFailure());
   const auto Input = packed();
@@ -135,8 +140,20 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
   ASSERT_FALSE(HasFatalFailure());
   auto Result = unpackFile(Input, Options);
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::UnsupportedState)
       << unpackResultJSON(*Result);
+  EXPECT_TRUE(Result->Image.empty());
+  EXPECT_NE(Result->Diagnostic.find("kernel image relocation state"),
+            std::string::npos);
+  // Native Windows rejects the fixed output even when this fresh model replay
+  // passes. A snapshot must not certify the kernel loader boundary.
+  Options.SnapshotOnly = true;
+  Result = unpackFile(Input, Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Snapshot)
+      << unpackResultJSON(*Result);
+  EXPECT_NE(Result->Diagnostic.find("kernel image relocation state"),
+            std::string::npos);
   EXPECT_EQ(Result->Profile, profile::ReportProfile);
   EXPECT_EQ(Result->EntryRVA, Original.Entry);
   EXPECT_EQ(Result->ProcessStop, "observer");
@@ -144,7 +161,9 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
   EXPECT_TRUE(Result->Transfers.back().ProgramInvocation);
   EXPECT_TRUE(Result->RuntimeState.AdditionalStateInventoryKnown);
   EXPECT_FALSE(Result->RuntimeState.HasAdditionalDependencies);
+  EXPECT_TRUE(Result->RuntimeState.AdditionalDependencyReasons.empty());
   const auto Rebuilt = test::readImage(Result->Image);
+  EXPECT_NE(Rebuilt.FileCharacteristics & llvm::COFF::IMAGE_FILE_DLL, 0u);
   EXPECT_EQ(Rebuilt.Entry, Original.Entry);
   for (const auto &I : Rebuilt.Imports)
     EXPECT_EQ(I.Module, "ntoskrnl.exe");
@@ -154,10 +173,14 @@ TEST_P(UnpackDriver, RecoversDriverEntryImportsAndLifecycle) {
 }
 
 TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
-  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15, 16, 17, 18}) {
+  for (unsigned Mode : {1, 2, 3, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20}) {
     SCOPED_TRACE(Mode);
+    if (Mode == 19) {
+      Options.Driver.emplace();
+      Options.Driver->CPUID = {{0, std::nullopt, {1, 2, 3, 4}}};
+    }
     const auto Input = packed(Mode);
-    if (Mode >= 15) {
+    if (Mode >= 15 && Mode <= 19) {
       checkLifecycle(Input);
       ASSERT_FALSE(HasFatalFailure());
     }
@@ -171,6 +194,24 @@ TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
       EXPECT_GT(Result->RuntimeState.PossibleHeapReferences, 0u);
     else
       EXPECT_TRUE(Result->RuntimeState.HasAdditionalDependencies);
+    const auto &Reasons = Result->RuntimeState.AdditionalDependencyReasons;
+    auto HasReason = [&](llvm::StringRef Reason) {
+      EXPECT_NE(std::find(Reasons.begin(), Reasons.end(), Reason),
+                Reasons.end());
+    };
+    if (Mode == 20) {
+      HasReason("live kernel pool allocations");
+      HasReason("changed kernel loader objects");
+    } else if (Mode == 1)
+      HasReason("live kernel pool allocations");
+    else if (Mode == 2)
+      HasReason("changed kernel loader objects");
+    else if (Mode == 12)
+      HasReason("live kernel MDLs");
+    else if (Mode == 13 || Mode == 14)
+      HasReason("observed kernel MDL physical identity");
+    else if (Mode >= 15)
+      HasReason("unreconstructed kernel or environment effects");
     auto Snapshot = Options;
     Snapshot.SnapshotOnly = true;
     auto Bytes = unpackFile(Input, Snapshot);
@@ -178,6 +219,17 @@ TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
     EXPECT_EQ(Bytes->Outcome, UnpackOutcome::Snapshot) << Bytes->Diagnostic;
     EXPECT_FALSE(Bytes->Image.empty());
     EXPECT_FALSE(Bytes->Diagnostic.empty());
+    EXPECT_EQ(Bytes->RuntimeState.AdditionalDependencyReasons, Reasons);
+    auto Report = llvm::json::parse(unpackResultJSON(*Bytes));
+    ASSERT_TRUE(bool(Report)) << llvm::toString(Report.takeError());
+    const auto *State = Report->getAsObject()->getObject("runtime_state");
+    ASSERT_NE(State, nullptr);
+    const auto *ReportedReasons =
+        State->getArray("additional_dependency_reasons");
+    ASSERT_NE(ReportedReasons, nullptr);
+    ASSERT_EQ(ReportedReasons->size(), Reasons.size());
+    for (size_t I = 0; I < Reasons.size(); ++I)
+      EXPECT_EQ((*ReportedReasons)[I].getAsString(), Reasons[I]);
     if (GetParam().Kind == ExecutionBackendKind::Unicorn && Mode >= 12) {
       auto Strict = Options;
       Strict.Process.Contract = ExecutionContract::Legacy;
@@ -191,15 +243,17 @@ TEST_P(UnpackDriver, RetainedKernelObjectsAndBorrowedPointersAreNotRecovery) {
 }
 
 TEST_P(UnpackDriver, RecoversAfterReleasingTransientImageMDLs) {
+  Options.SnapshotOnly = true;
   const auto Input = packed(11);
   checkLifecycle(Input);
   ASSERT_FALSE(HasFatalFailure());
   auto Result = unpackFile(Input, Options);
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Snapshot)
       << unpackResultJSON(*Result);
   EXPECT_EQ(Result->EntryRVA, Original.Entry);
   EXPECT_FALSE(Result->RuntimeState.HasAdditionalDependencies);
+  EXPECT_TRUE(Result->RuntimeState.AdditionalDependencyReasons.empty());
   const auto Output = Scratch / "released-mdl.sys";
   test::writeFile(Output, Result->Image);
   checkLifecycle(Output);
@@ -208,7 +262,7 @@ TEST_P(UnpackDriver, RecoversAfterReleasingTransientImageMDLs) {
     Strict.Process.Contract = ExecutionContract::Legacy;
     auto Legacy = unpackFile(Input, Strict);
     ASSERT_TRUE(bool(Legacy)) << llvm::toString(Legacy.takeError());
-    ASSERT_EQ(Legacy->Outcome, UnpackOutcome::Unpacked) << Legacy->Diagnostic;
+    ASSERT_EQ(Legacy->Outcome, UnpackOutcome::Snapshot) << Legacy->Diagnostic;
     EXPECT_EQ(Legacy->EntryRVA, Result->EntryRVA);
     EXPECT_EQ(Legacy->Image, Result->Image);
   }
@@ -223,23 +277,43 @@ TEST_P(UnpackDriver,
     EXPECT_EQ(Result->Outcome, UnpackOutcome::UnsupportedState)
         << Result->Diagnostic;
     EXPECT_TRUE(Result->RuntimeState.HasAdditionalDependencies);
+    EXPECT_EQ(
+        Result->RuntimeState.AdditionalDependencyReasons,
+        (std::vector<std::string>{"changed DriverEntry invocation context"}));
     EXPECT_TRUE(Result->Image.empty());
   }
 }
 
 TEST_P(UnpackDriver, DynamicKernelExportIdentitySurvivesRebinding) {
-  auto Result = unpackFile(packed(4), Options);
-  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
-      << unpackResultJSON(*Result);
-  EXPECT_TRUE(std::any_of(
-      Result->Imports.begin(), Result->Imports.end(), [](const auto &I) {
-        return I.Module == "ntoskrnl.exe" && I.Name == "IofCompleteRequest" &&
-               I.Origin == ImportOrigin::Runtime;
-      }));
-  const auto Output = Scratch / "dynamic.sys";
-  test::writeFile(Output, Result->Image);
-  checkLifecycle(Output);
+  Options.SnapshotOnly = true;
+  for (uint64_t Base :
+       {Original.Base, uint64_t(0x190000000), uint64_t(0xfffff80140000000)}) {
+    SCOPED_TRACE(Base);
+    Options.Driver.emplace();
+    Options.Driver->LoadAddress = Base;
+    const auto Input = packed(4);
+    checkLifecycle(Input);
+    ASSERT_FALSE(HasFatalFailure());
+    auto Result = unpackFile(Input, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Outcome, UnpackOutcome::Snapshot)
+        << unpackResultJSON(*Result);
+    EXPECT_EQ(Result->ImageBase, Base);
+    EXPECT_EQ(Result->EntryRVA, Original.Entry);
+    EXPECT_EQ(test::readImage(Result->Image).Base, Base);
+    EXPECT_TRUE(std::any_of(
+        Result->Imports.begin(), Result->Imports.end(), [](const auto &I) {
+          return I.Module == "ntoskrnl.exe" && I.Name == "IofCompleteRequest" &&
+                 I.Origin == ImportOrigin::Runtime;
+        }));
+    const auto Output = Scratch / "dynamic.sys";
+    test::writeFile(Output, Result->Image);
+    // Let the output select its own preferred base. It remains a fixed image;
+    // a caller-provided rebase must not hide an incorrect reconstructed header.
+    Options.Driver->LoadAddress = 0;
+    checkLifecycle(Output);
+    ASSERT_FALSE(HasFatalFailure());
+  }
 }
 
 TEST_P(UnpackDriver, UserRuntimeInputsAndRestorationAreRejected) {
@@ -343,6 +417,7 @@ TEST_P(UnpackDriver, ObservationPreservesLifecycleAndCallbackProvenance) {
 }
 
 TEST_P(UnpackDriver, SchedulingSlicesPreserveInvocationAndTransferIdentity) {
+  Options.SnapshotOnly = true;
   auto D = scenario();
   D.Scheduling = DriverScheduling{1, 1};
   DriverObserver Observer;
@@ -361,7 +436,7 @@ TEST_P(UnpackDriver, SchedulingSlicesPreserveInvocationAndTransferIdentity) {
   Scheduled.Driver->Scheduling = D.Scheduling;
   auto Result = unpackFile(Input, Scheduled);
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  ASSERT_EQ(Result->Outcome, UnpackOutcome::Unpacked)
+  ASSERT_EQ(Result->Outcome, UnpackOutcome::Snapshot)
       << unpackResultJSON(*Result);
   EXPECT_EQ(Result->EntryRVA, Unscheduled->EntryRVA);
   EXPECT_EQ(Result->Transfers.size(), Unscheduled->Transfers.size());
@@ -373,14 +448,14 @@ TEST_P(UnpackDriver, SchedulingSlicesPreserveInvocationAndTransferIdentity) {
   auto WithoutWriteLog = unpackFile(Input, FewEvents);
   ASSERT_TRUE(bool(WithoutWriteLog))
       << llvm::toString(WithoutWriteLog.takeError());
-  ASSERT_EQ(WithoutWriteLog->Outcome, UnpackOutcome::Unpacked)
+  ASSERT_EQ(WithoutWriteLog->Outcome, UnpackOutcome::Snapshot)
       << WithoutWriteLog->Diagnostic;
   EXPECT_EQ(WithoutWriteLog->EntryRVA, Unscheduled->EntryRVA);
   EXPECT_EQ(WithoutWriteLog->Image, Unscheduled->Image);
   FewEvents.Process.Contract = ExecutionContract::Legacy;
   auto Legacy = unpackFile(Input, FewEvents);
   ASSERT_TRUE(bool(Legacy)) << llvm::toString(Legacy.takeError());
-  ASSERT_EQ(Legacy->Outcome, UnpackOutcome::Unpacked) << Legacy->Diagnostic;
+  ASSERT_EQ(Legacy->Outcome, UnpackOutcome::Snapshot) << Legacy->Diagnostic;
   EXPECT_EQ(Legacy->EntryRVA, Unscheduled->EntryRVA);
   EXPECT_EQ(Legacy->Image, Unscheduled->Image);
 }
@@ -411,13 +486,30 @@ TEST_P(UnpackDriver, CAPIAndCLIUseTheDriverEnvironment) {
   std::string JSON = "{\"backend\":\"";
   JSON += executionBackendName(GetParam().Kind);
   JSON += "\",\"driver\":{\"service_name\":\"UnpackOracle\"}}";
+  const std::string DefaultJSON = JSON;
+  const std::vector<uint8_t> Existing{0x55, 0x7f, 0x23};
+  test::writeFile(APIPath, Existing);
+  const char *DefaultRaw = neverd_unpack_json(
+      Session, Input.c_str(), APIPath.c_str(), DefaultJSON.c_str());
+  ASSERT_NE(DefaultRaw, nullptr) << neverd_last_error(Session);
+  auto Default = llvm::json::parse(DefaultRaw);
+  neverd_free_string(DefaultRaw);
+  ASSERT_TRUE(bool(Default)) << llvm::toString(Default.takeError());
+  EXPECT_EQ(Default->getAsObject()->getString("outcome"), "unsupported_state");
+  EXPECT_EQ(test::readFile(APIPath), Existing);
+  JSON.pop_back();
+  JSON += ",\"snapshot_only\":true}";
   const char *Raw =
       neverd_unpack_json(Session, Input.c_str(), APIPath.c_str(), JSON.c_str());
   ASSERT_NE(Raw, nullptr) << neverd_last_error(Session);
   auto Free = llvm::scope_exit([&] { neverd_free_string(Raw); });
   auto API = llvm::json::parse(Raw);
   ASSERT_TRUE(bool(API)) << llvm::toString(API.takeError());
-  ASSERT_EQ(API->getAsObject()->getString("outcome"), "unpacked");
+  ASSERT_EQ(API->getAsObject()->getString("outcome"), "snapshot");
+  ASSERT_NE(API->getAsObject()
+                ->getString("diagnostic")
+                ->find("kernel image relocation state"),
+            llvm::StringRef::npos);
   const auto Report = (Scratch / "cli.json").string();
   const auto Command = neverd::test::shellQuote(NEVERD_UNPACK_DRIVER_CLI) +
                        " unpack " + neverd::test::shellQuote(Input) + " -o " +

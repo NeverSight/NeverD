@@ -33,6 +33,21 @@ NEVERD_API void neverd_web_session_destroy(neverd_web_session_t Session);
 /// no untrusted source text or input name is included in ordinary diagnostics.
 NEVERD_API const char *neverd_web_capabilities_json(void);
 
+/// Explicit passive transcript profile, followed by redaction preview/commit.
+/// Every dispatched current-revision preview revokes its previous token;
+/// every same-revision commit attempt consumes it. No records before commit.
+NEVERD_API const char *neverd_web_stream_preview_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
+    const char *Profile, size_t ProfileSize);
+NEVERD_API const char *neverd_web_stream_commit_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *PreviewToken, size_t PreviewTokenSize);
+NEVERD_API const char *neverd_web_stream_records_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *CaptureID, size_t CaptureIDSize,
+    uint64_t Offset, uint64_t Limit);
+
 /// Preview metadata-only redaction before publishing HAR observations. The
 /// token binds the immutable artifact/hash, revision, policy and preview.
 /// Every dispatched current-revision preview revokes the previous token.
@@ -260,7 +275,22 @@ neverd_web_asar_records_json(neverd_web_session_t Session,
                              const char *ExtractionID, size_t ExtractionIDSize,
                              uint64_t Offset, uint64_t Limit);
 
-/// Extract the explicitly qualified Bun ELF layout from one admitted original.
+/// Extract one explicit Node SEA profile from admitted immutable bytes.
+/// Profiles are listed by capabilities. V8 snapshots/caches remain opaque.
+NEVERD_API const char *
+neverd_web_sea_extract_json(neverd_web_session_t Session,
+                            const char *ExpectedRevision, size_t RevisionSize,
+                            const char *ArtifactID, size_t ArtifactIDSize,
+                            const char *Profile, size_t ProfileSize);
+/// Limit is 1..128. Only main JavaScript and assets expose selection_id for
+/// shared consumers. Names, payloads and private-name hashes are withheld.
+NEVERD_API const char *
+neverd_web_sea_records_json(neverd_web_session_t Session,
+                            const char *ExpectedRevision, size_t RevisionSize,
+                            const char *ExtractionID, size_t ExtractionIDSize,
+                            uint64_t Offset, uint64_t Limit);
+
+/// Extract the explicitly qualified Bun container layout from admitted bytes.
 /// No execution or external tools; version/producer authentication is not
 /// implied. Source maps and JSC caches retain their original byte ranges.
 NEVERD_API const char *neverd_web_bun_extract_json(neverd_web_session_t Session,

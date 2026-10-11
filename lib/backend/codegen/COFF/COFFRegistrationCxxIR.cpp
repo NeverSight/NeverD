@@ -324,18 +324,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     if (State.Levels.size() > 1)
       return rejectIR("C++ source call has ambiguous dispatch states");
     const int32_t Level = State.Levels.empty() ? -1 : State.Levels[0];
-    const bool HasTry = llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-      return State.CxxMinimumTryLevel <= Try.TryLow && Level >= Try.TryLow &&
-             Level <= Try.TryHigh;
-    });
+    const bool HasTry =
+        llvm::any_of(State.CxxSearches,
+                     [&](const auto &Search) { return Search.Level == Level; });
     const auto *Unwind = HasTry ? UnwindAt(Level) : nullptr;
     const auto &Contract = States.CalleeContracts[Effect.CalleeIndex];
-    if (State.CallbackOnly && Effect.DoesNotReturn &&
-        llvm::any_of(Cxx.TryBlocks, [&](const auto &Try) {
-          return Try.TryLow < State.CxxMinimumTryLevel && Level >= Try.TryLow &&
-                 Level <= Try.TryHigh;
-        }))
-      return rejectIR("C++ throwing catch needs a secondary search context");
     if (Unwind) {
       ++Protected;
       const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Call);

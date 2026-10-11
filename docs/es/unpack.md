@@ -14,7 +14,7 @@ El contenedor determina cómo se valida y reconstruye un archivo, el conjunto de
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | observación en ejecución |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | observación en ejecución |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v101`](driver-emulation.md) | `DriverEntry` |
 
 Las DLL PE32+ se identifican por `IMAGE_FILE_DLL`. Un EXE invitado modelado llama a `LoadLibraryA` y después a `FreeLibrary` mediante el ciclo ordinario de dependencias, TLS y `DllMain`. La entrada DLL aceptada es su llamada de asociación al proceso; no se inventan argumentos para exportaciones arbitrarias. Se conservan nombres, ordinales, alias, datos y reenvíos. Los punteros a exportaciones propias permanecen internos, sin autoimportaciones. La misma regla cubre las direcciones devueltas por helpers: un resultado interno retira las pruebas anteriores de reparación de importaciones para ese sitio.
 
@@ -32,8 +32,12 @@ Los MDL temporales de páginas de imagen del cargador dejan de añadir una depen
 
 Las lecturas del reloj mediante `KeQueryPerformanceCounter`, `RDTSC` o `RDTSCP` conservan una dependencia explícita de recuperación del controlador. No existe un contrato para revincular los valores capturados del contador y su frecuencia a un nuevo entorno del núcleo. La recuperación predeterminada devuelve `unsupported_state`; `snapshot_only` conserva el diagnóstico.
 
+`runtime_state.additional_dependency_reasons` enumera los motivos observados por el modelo del controlador: pools o MDL activos, objetos del cargador modificados, efectos del kernel y cambios en el contexto de la llamada de entrada. El rechazo predeterminado y las instantáneas explícitas conservan los mismos motivos. Una lista vacía no anula `has_additional_dependencies` ni demuestra un contrato de restauración.
+
+Las reubicaciones de la imagen del núcleo siguen siendo una dependencia del cargador aunque no queden pools ni objetos prestados. El generador elimina actualmente las reubicaciones del contenido generado, por lo que la recuperación predeterminada devuelve `unsupported_state` sin crear ni truncar la salida. Solo `snapshot_only` explícito emite la imagen de dirección fija y conserva el diagnóstico. La tabla original no demuestra que cubra los punteros generados.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Uso

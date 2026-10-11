@@ -515,6 +515,8 @@ class Writer {
           E->DoesNotReturn || !x86FPStateShapeIsValid(E->IntrinsicId, Shape) ||
           isX86FPConversionStateIntrinsic(E->IntrinsicId) ||
           isX86FPRoundStateIntrinsic(E->IntrinsicId) ||
+          isX86FPApprox12Intrinsic(E->IntrinsicId) ||
+          isX86FPArithStateIntrinsic(E->IntrinsicId) ||
           (Statement && x86FPStateReturnsValue(E->IntrinsicId)) ||
           (!Statement && !x86FPStateReturnsValue(E->IntrinsicId)))
         throw Unsupported("unsupported Swift x86 floating-point state shape");

@@ -16,10 +16,12 @@ if __package__:
     from .check_windows_registration_eh import run_image
     from .check_windows_registration_rewrite import PE32
     from .windows_registration_libraries import capture_libraries
+    from .windows_registration_runtime import capture_runtime
 else:
     from check_windows_registration_eh import run_image
     from check_windows_registration_rewrite import PE32
     from windows_registration_libraries import capture_libraries
+    from windows_registration_runtime import capture_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "unittests/lift/eh/fixtures/registration_cxx_runtime.cpp"
@@ -69,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
                 output / "runtime-libs",
                 [Path(path) for path in os.environ.get("LIB", "").split(";") if path],
                 os.environ.get("VCToolsVersion", ""))
+            redist = os.environ.get("VCToolsRedistDir")
+            if not redist:
+                raise ValueError("the selected MSVC environment has no redistributable directory")
+            report["catch_search_runtime"] = capture_runtime(
+                output / "runtime-libs", Path(redist), os.environ.get("VCToolsVersion", ""))
         profiles = [("reference" if reference else "value", reference,
                      False, False) for reference in (False, True)]
         if args.frame_object:

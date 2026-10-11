@@ -12,7 +12,7 @@ The container selects how a file is validated and rebuilt, the instruction set s
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | runtime observation |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v101`](driver-emulation.md) | `DriverEntry` |
 
 PE32+ DLL inputs are selected by `IMAGE_FILE_DLL`. A modeled guest EXE calls `LoadLibraryA`, then `FreeLibrary`, using the ordinary dependency, TLS and `DllMain` lifecycle. The accepted DLL entry is its process-attach invocation; arbitrary exports are not called with invented arguments. Export names, ordinals, aliases, data and forwarders remain in the rebuilt DLL. Pointers to its own exports remain internal pointers rather than self-imports. This also covers helper-returned addresses: an internal result withdraws earlier import-repair evidence for that site.
 
@@ -30,8 +30,12 @@ Temporary MDLs over loader-owned image pages no longer add a recovery dependency
 
 Clock reads through `KeQueryPerformanceCounter`, `RDTSC`, or `RDTSCP` retain an explicit driver recovery dependency. Captured counter and frequency values have no rebinding contract for a fresh kernel environment. Default recovery reports `unsupported_state`; `snapshot_only` retains the diagnostic.
 
+`runtime_state.additional_dependency_reasons` lists the driver model’s observed reasons, including live pools or MDLs, changed loader objects, kernel effects and a changed entry invocation context. Default refusal and explicit snapshots retain the same reasons. An empty list does not override `has_additional_dependencies` or establish a restoration contract.
+
+Kernel image relocations remain a separate loader dependency even when no pool or borrowed object survives. Because the current writer strips relocations for generated content, default driver recovery returns `unsupported_state` without creating or truncating output. Only explicit `snapshot_only` emits the fixed image and retains this diagnostic. An original relocation table is not proof that it covers generated pointers.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Use

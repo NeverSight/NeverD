@@ -311,18 +311,18 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
                     static_cast<uint32_t>(Walk), State);
             Walk = Cleanup.ToState;
           }
-          for (size_t I = 0; I < Cxx.TryBlocks.size(); ++I) {
+          for (const auto &Search : It->CxxSearches) {
             if (!ChargeRegistrationEdge())
               break;
-            const CxxTryBlock &Try = Cxx.TryBlocks[I];
-            if (Try.TryLow < It->CxxMinimumTryLevel || State < Try.TryLow ||
-                State > Try.TryHigh)
+            if (Search.Level != State ||
+                Search.TryIndex >= Cxx.TryBlocks.size())
               continue;
+            const CxxTryBlock &Try = Cxx.TryBlocks[Search.TryIndex];
             for (const CxxCatchHandler &Catch : Try.Handlers) {
               if (!ChargeRegistrationEdge())
                 break;
               AddEdge(Block, Catch.HandlerVA, ExceptionalEdgeKind::CxxCatch,
-                      static_cast<uint32_t>(I), State);
+                      Search.TryIndex, State);
             }
           }
         }

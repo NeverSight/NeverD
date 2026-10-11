@@ -9,6 +9,24 @@ NEVERD_NATIVE_DRIVER_OWNER(NeverDUnpackDriverTests)
 #endif
 #ifdef NEVERD_NATIVE_DRIVER_REQUIRED_TEST
 NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverCPUIDExecution.ReportsDeclaredRegistersAcrossBackends/"
+    "{backend}_driver")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverCPUIDExecution.ReportsDeclaredRegistersAcrossBackends/"
+    "{backend}_checked")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverCPUIDExecution.UndeclaredQueriesFailBeforePublishingResults/"
+    "{backend}_driver")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverCPUIDExecution.UndeclaredQueriesFailBeforePublishingResults/"
+    "{backend}_checked")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverCPUIDExecution.InstructionBudgetsBoundCPUIDObservations/"
+    "{backend}_driver")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Native/DriverCPUIDExecution.InstructionBudgetsBoundCPUIDObservations/"
+    "{backend}_checked")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
     "Native/"
     "DriverImageMemory.WriteTraceSelectionPreservesEffectsFaultsAndBudgets/"
     "{backend}_driver")

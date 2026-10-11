@@ -14,7 +14,7 @@ Le conteneur détermine comment un fichier est validé et reconstruit, le jeu d'
 | --- | --- | --- | --- |
 | PE32+ (`pe64`) | x86-64 | [`windows-pe64-v1`](process-emulation.md) | observation à l’exécution |
 | PE32+ (`pe64`) | ARM64 | [`windows-pe64-v1`](process-emulation.md) | observation à l’exécution |
-| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v100`](driver-emulation.md) | `DriverEntry` |
+| PE32+ native (`.sys`) | x86-64 | [`wdm-x64-scheduled-v101`](driver-emulation.md) | `DriverEntry` |
 
 Les DLL PE32+ sont reconnues par `IMAGE_FILE_DLL`. Un EXE invité modélisé appelle `LoadLibraryA`, puis `FreeLibrary`, avec le cycle ordinaire des dépendances, de TLS et de `DllMain`. L’entrée DLL acceptée est son invocation d’attachement au processus ; aucun argument d’export arbitraire n’est inventé. Les noms, ordinaux, alias, données et exports redirigés sont conservés. Les pointeurs vers ses propres exports restent internes, sans auto-importation. Cette règle couvre aussi les adresses renvoyées par les helpers : un résultat interne retire les preuves antérieures de réparation des imports pour ce site.
 
@@ -32,8 +32,12 @@ Les MDL temporaires des pages d’image appartenant au chargeur ne créent plus 
 
 Les lectures d’horloge via `KeQueryPerformanceCounter`, `RDTSC` ou `RDTSCP` conservent une dépendance explicite de restauration du pilote. Les valeurs capturées du compteur et de sa fréquence n’ont aucun contrat de réassociation à un nouvel environnement noyau. La restauration par défaut renvoie `unsupported_state` ; `snapshot_only` conserve le diagnostic.
 
+`runtime_state.additional_dependency_reasons` énumère les raisons observées par le modèle du pilote : pools ou MDL actifs, objets du chargeur modifiés, effets du noyau et contexte d’appel d’entrée modifié. Le refus par défaut et les instantanés explicites conservent les mêmes raisons. Une liste vide ne remplace pas `has_additional_dependencies` et ne prouve aucun contrat de restauration.
+
+Les relocalisations de l’image noyau restent une dépendance du chargeur même sans pool ni objet emprunté conservé. Le générateur supprime actuellement les relocalisations du contenu produit : la récupération par défaut renvoie donc `unsupported_state` sans créer ni tronquer la sortie. Seul `snapshot_only` explicite émet l’image à adresse fixe en conservant ce diagnostic. La table d’origine ne prouve pas qu’elle couvre les pointeurs générés.
+
 ```bash
-neverd unpack packed.sys -o unpacked.sys --options='{"backend":"kvm","driver":{"service_name":"Example"}}'
+neverd unpack packed.sys -o snapshot.sys --options='{"backend":"kvm","snapshot_only":true,"driver":{"service_name":"Example"}}'
 ```
 
 ## Utilisation

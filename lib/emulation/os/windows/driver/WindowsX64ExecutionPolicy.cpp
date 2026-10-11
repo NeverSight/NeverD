@@ -17,6 +17,7 @@
 
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -38,6 +39,9 @@ WindowsX64ExecutionPolicy::~WindowsX64ExecutionPolicy() {
     cs_close(&Handle);
 }
 llvm::Error WindowsX64ExecutionPolicy::initialize(X64BranchModel Model) {
+  Inspections = {};
+  if (Handle)
+    cs_close(&Handle);
   if (cs_open(CS_ARCH_X86, x64::decoderMode(Model), &Handle) != CS_ERR_OK ||
       cs_option(Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK)
     return failure(policy::Initialize);
@@ -54,6 +58,25 @@ llvm::Error WindowsX64ExecutionPolicy::validate(llvm::ArrayRef<uint8_t> Bytes,
 
 llvm::Expected<std::optional<WindowsX64ExecutionPolicy::Action>>
 WindowsX64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
+  if (Bytes.empty() || Bytes.size() > profile::MaxInstructionSize)
+    return inspectUncached(Bytes, PC);
+  auto &Entry = Inspections[PC % Inspections.size()];
+  if (Entry.PC == PC && Entry.Size == Bytes.size() &&
+      std::equal(Bytes.begin(), Bytes.end(), Entry.Bytes.begin()))
+    return Entry.Result;
+  auto Result = inspectUncached(Bytes, PC);
+  if (!Result)
+    return Result.takeError();
+  Entry.PC = PC;
+  Entry.Size = Bytes.size();
+  std::copy(Bytes.begin(), Bytes.end(), Entry.Bytes.begin());
+  Entry.Result = *Result;
+  return *Result;
+}
+
+llvm::Expected<std::optional<WindowsX64ExecutionPolicy::Action>>
+WindowsX64ExecutionPolicy::inspectUncached(llvm::ArrayRef<uint8_t> Bytes,
+                                           uint64_t PC) {
   cs_insn *Decoded = nullptr;
   size_t Count = cs_disasm(Handle, Bytes.data(), Bytes.size(), PC, 1, &Decoded);
   if (!Count)
@@ -66,6 +89,11 @@ WindowsX64ExecutionPolicy::inspect(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC) {
     return failure(std::string(policy::Rejected) + Insn->mnemonic);
   };
   const cs_x86 &X86 = Insn->detail->x86;
+  if (Insn->id == X86_INS_CPUID) {
+    if (X86.prefix[0] == X86_PREFIX_LOCK || X86.op_count)
+      return Rejected();
+    return std::optional<Action>{{Action::Kind::ReadCPUID, std::nullopt}};
+  }
   if (Insn->id == X86_INS_RDTSC || Insn->id == X86_INS_RDTSCP) {
     if (X86.prefix[0] == X86_PREFIX_LOCK || X86.op_count)
       return Rejected();

@@ -16,7 +16,6 @@ namespace neverd::registration_state {
 
 void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before) {
   const LowBlock &Block = Function.Blocks[I];
-  const int32_t MinimumTry = EH.Cxx ? cxxMinimumTryLevel(Before, *EH.Cxx) : 0;
   // A filter is a searching callback, while a finally is an unwind callback
   // at its enclosing state. Lexical callback exclusion must not erase an
   // outer exception dispatch when that finally itself faults.
@@ -94,17 +93,16 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before) {
       dispatch(Action.ActionVA, Action.ToState, Before, true, true);
       Walk = Action.ToState;
     }
-    for (uint32_t TryIndex = 0; TryIndex < Cxx.TryBlocks.size(); ++TryIndex) {
-      const CxxTryBlock &Try = Cxx.TryBlocks[TryIndex];
+  }
+  for (const auto &Search : cxxSearches(I, Before)) {
+    const auto &Try = EH.Cxx->TryBlocks[Search.TryIndex];
+    for (uint32_t CatchIndex = 0; CatchIndex < Try.Handlers.size();
+         ++CatchIndex) {
       if (!charge(1))
-        break;
-      if (Try.TryLow >= MinimumTry && Level >= Try.TryLow &&
-          Level <= Try.TryHigh)
-        for (uint32_t CatchIndex = 0; CatchIndex < Try.Handlers.size();
-             ++CatchIndex)
-          dispatch(Try.Handlers[CatchIndex].HandlerVA, Try.TryHigh + 1, Before,
-                   Facts[I].Invalid, true, false,
-                   std::make_pair(TryIndex, CatchIndex));
+        return;
+      dispatch(Try.Handlers[CatchIndex].HandlerVA, Try.TryHigh + 1, Before,
+               Facts[I].Invalid, true, false,
+               std::make_pair(Search.TryIndex, CatchIndex));
     }
   }
 }
