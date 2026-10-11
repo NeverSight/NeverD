@@ -16,6 +16,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 
 #include "../FloatConversion.h"
+#include "../FloatingPointContract.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../pass/LLVMC/LLVMCCommonBranches.h"
@@ -301,6 +302,7 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
 }
 
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
+  bool HasFloatingArithmetic = false;
   std::set<std::string> Headers;
   Headers.insert("stdint.h");
   NeedsUnalignedTypes = false;
@@ -314,6 +316,10 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       continue;
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
+        HasFloatingArithmetic |= Inst.getOpcode() == llvm::Instruction::FAdd ||
+                                 Inst.getOpcode() == llvm::Instruction::FSub ||
+                                 Inst.getOpcode() == llvm::Instruction::FMul ||
+                                 Inst.getOpcode() == llvm::Instruction::FDiv;
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst)) {
           if (auto Shape = scalarIntegerMinMax(*Call))
             IntegerMinMax.emplace(
@@ -446,6 +452,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       OS << "#include <" << H << ">\n";
     OS << "\n";
   }
+  if (HasFloatingArithmetic)
+    c_float::writeContractionPolicy(OS.stream());
   // The accesses' types or assumptions are written only when an access can
   // name a type; otherwise every access keeps its portable byte copy.
   UnalignedTypesWritten = Opts.UseUnalignedPointers && NeedsUnalignedTypes;
@@ -1083,8 +1091,8 @@ static void lowerPackedVectorBitcasts(llvm::Module &Mod) {
     if (!Pack)
       Vector = llvm::dyn_cast<llvm::FixedVectorType>(Cast->getDestTy());
     auto IsLane = [](llvm::Type *Type) {
-      return Type->isIntegerTy() || Type->isFloatTy() || Type->isDoubleTy() ||
-             Type->isBFloatTy();
+      return Type->isIntegerTy() || Type->isHalfTy() || Type->isFloatTy() ||
+             Type->isDoubleTy() || Type->isBFloatTy();
     };
     if (!Vector || !IsLane(Scalar) || !IsLane(Vector->getElementType()))
       continue;
