@@ -255,6 +255,11 @@ Catalog::Catalog(const Json &Capabilities, std::size_t InputCount) {
       "evidence classes remain separate.",
       {decimal("revision"), text("analysis_id"), text("capture_id")});
   Page("web_interface_correlation_records", "correlation_id", false, 128);
+  Add("web_desktop_manifest_analyze",
+      "Inspect explicitly selected NW.js or VS Code extension manifest "
+      "evidence.",
+      {decimal("revision"), text("artifact_id"),
+       choice("input_kind", {"nwjs", "vsix"})});
   Selected("web_electron_manifest_analyze", "artifact_id",
            "Analyze captured Electron manifest entry metadata.");
   Selected(

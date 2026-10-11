@@ -29,6 +29,10 @@ add_neverd_component_library(NeverDWeb
   Asar.cpp
   SessionAsar.cpp
   ElectronManifest.cpp
+  desktop/Manifest.cpp
+  desktop/NWManifest.cpp
+  desktop/VSIXManifest.cpp
+  SessionDesktop.cpp
   SessionElectron.cpp
   SessionElectronIPC.cpp
   SessionElectronEntries.cpp

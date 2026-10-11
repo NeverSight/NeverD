@@ -433,6 +433,15 @@ ctest --test-dir build-release \
 
 ## Offline web analysis
 
+`WebDesktopManifest.*` checks explicit NW.js/VSIX profiles, documented directory
+layouts, manifest-relative files, URL/command-line boundaries, malformed JSON
+and independent metadata/work bounds. `WebDesktopSDK.*` checks distinct profile
+caches, revision replacement, directory/ZIP entries, Bun/SEA asset isolation,
+redaction canaries and actual CLI selection in single-file/directory/ZIP modes.
+The optional pinned VSIX test shares the ZIP environment variable below.
+Run these with and without the JS parser, plus C ABI availability and worker/MCP
+parity. See the [profile](web-desktop-manifest-profile.md).
+
 `WebZip.*` checks native ZIP32 records, independently preserved libarchive
 fixtures, framing/CRC/path/expansion refusals and unavailable-member evidence.
 `WebZipNoDeflate.*` compiles the payload owner without its decoder macro;

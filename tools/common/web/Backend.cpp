@@ -83,6 +83,7 @@ struct API {
   WEB_API(neverd_web_package_diff_records_json)
   WEB_API(neverd_web_asar_extract_json)
   WEB_API(neverd_web_electron_manifest_analyze_json)
+  WEB_API(neverd_web_desktop_manifest_analyze_json)
   WEB_API(neverd_web_electron_source_analyze_json)
   WEB_API(neverd_web_electron_source_records_json)
   WEB_API(neverd_web_electron_ipc_analyze_json)
@@ -480,6 +481,20 @@ Json Backend::execute(const std::string &operation, const Json &p) {
         session_, revision.data(), revision.size(), id.data(), id.size(),
         sizeField(p, "offset", 0, std::numeric_limits<size_t>::max()),
         sizeField(p, "limit", 128, 512)));
+  }
+  if (operation == "web_desktop_manifest_analyze") {
+    fields(p, {"revision", "artifact_id", "input_kind"});
+    if (!api().neverd_web_desktop_manifest_analyze_json)
+      throw Error("capability_unavailable",
+                  "Desktop manifest evidence is unavailable");
+    const auto revision = required(p, "revision", 20);
+    const auto id = required(p, "artifact_id", 64);
+    const auto kind = required(p, "input_kind", 32);
+    auto value = result(api().neverd_web_desktop_manifest_analyze_json(
+        session_, revision.data(), revision.size(), id.data(), id.size(),
+        kind.data(), kind.size()));
+    analysisState_ = "partial";
+    return value;
   }
   if (operation == "web_electron_manifest_analyze" ||
       operation == "web_electron_source_analyze") {

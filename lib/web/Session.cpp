@@ -71,6 +71,17 @@ std::string Session::capabilities() {
                          {"max_cached_map_segments", 200000},
                          {"resolves_external_references", false}}};
   Operations.emplace_back("electron_manifest_analyze");
+  Operations.emplace_back("desktop_manifest_analyze");
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "desktop_manifest"},
+      {"profiles", llvm::json::Array{std::string(NWManifestProfile),
+                                     std::string(VSIXManifestProfile)}},
+      {"input_kinds", llvm::json::Array{"nwjs", "vsix"}},
+      {"max_bytes", std::to_string(MaxDesktopManifestBytes)},
+      {"max_entries", 5},
+      {"max_cached", 16},
+      {"framework_verified", false},
+      {"runtime_entry_verified", false}});
   Operations.emplace_back("sea_extract");
   Operations.emplace_back("sea_records");
   llvm::json::Array SEAProfiles;
@@ -530,6 +541,7 @@ std::string Session::commit(std::string_view Token) {
   State->SEAExtractions.clear();
   State->AsarExtractions.clear();
   State->ElectronManifests.clear();
+  State->DesktopManifests.clear();
   State->ElectronSources.clear();
   State->ElectronIPCs.clear();
   State->ElectronEntryAnalyses.clear();
@@ -581,6 +593,7 @@ std::string Session::metadata() const {
       {"sea_extraction_count", State->SEAExtractions.size()},
       {"asar_extraction_count", State->AsarExtractions.size()},
       {"electron_manifest_count", State->ElectronManifests.size()},
+      {"desktop_manifest_count", State->DesktopManifests.size()},
       {"electron_source_count", State->ElectronSources.size()},
       {"electron_ipc_count", State->ElectronIPCs.size()},
       {"electron_entries_count", State->ElectronEntryAnalyses.size()},

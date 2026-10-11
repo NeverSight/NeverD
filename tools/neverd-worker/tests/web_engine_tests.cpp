@@ -1481,6 +1481,28 @@ int main(int argc, char **argv) {
         reply = process.call("web_packages_analyze", graph, revision, project);
         check(reply["payload"] == direct && direct["entry_count"] == 1,
               "Archive package consumer differs");
+        for (const auto *kind : {"nwjs", "vsix"}) {
+          const Json manifest{{"schema_version", 1},
+                              {"revision", revision},
+                              {"artifact_id", members["items"][0]["member_id"]},
+                              {"input_kind", kind}};
+          const auto desktop =
+              web.execute("web_desktop_manifest_analyze", manifest);
+          reply = process.call("web_desktop_manifest_analyze", manifest,
+                               revision, project);
+          check(reply["payload"] == desktop &&
+                    desktop["entries"][0]["artifact_id"] ==
+                        members["items"][1]["member_id"] &&
+                    desktop["runtime_entry_verified"] == false &&
+                    reply.dump().find("SECRET_WEB") == std::string::npos,
+                "Desktop manifest transport or captured namespace differs");
+          auto unsafe = manifest;
+          unsafe["execute"] = true;
+          reply = process.call("web_desktop_manifest_analyze", unsafe, revision,
+                               project);
+          check(reply["error"]["code"] == "invalid_request",
+                "Desktop manifest accepted an execution flag");
+        }
       }
     }
     {

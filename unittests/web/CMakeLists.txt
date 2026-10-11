@@ -8,6 +8,7 @@ add_neverd_unittest(NeverDWebArtifactTests
   StreamTests.cpp
   AsarTests.cpp
   ElectronManifestTests.cpp
+  DesktopManifestTests.cpp
   HTMLTests.cpp
   ImportMapTests.cpp
   BlobStoreTests.cpp
@@ -85,6 +86,7 @@ if(TARGET neverd_shared)
     SEASDKTests.cpp
     AsarSDKTests.cpp
     ElectronSDKTests.cpp
+    DesktopSDKTests.cpp
     HTMLSDKTests.cpp
     LINK_LIBS neverd_shared LLVMSupport
   )

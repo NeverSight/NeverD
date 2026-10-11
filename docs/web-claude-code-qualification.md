@@ -34,6 +34,31 @@ No VS Code, extension, helper, installer or external extraction program ran.
 Framework manifest analysis is a separate phase from the
 [ZIP container profile](web-zip-profile.md).
 
+The subsequent native C++ VSIX manifest profile selected member index 4,
+the 24,030-byte manifest with SHA-256
+`e3f2ffc5e475f38f29db1568112b7c3a312b6f0fe53fca387d32a004b136101c`.
+Its `main` declaration links to available member artifact
+`b93f9a5471ca812b01e7f03cd7a49fed889712966b77ce8279e4979f6e7f5ff3`
+within the same ZIP; `browser` is absent. Required field shapes are present.
+Compatibility, permissions, activation and helper-version association remain
+explicitly unanalyzed. No manifest strings or contribution/event names appear
+in ordinary output. The original compressed member frame and expanded-byte
+coordinates remain attached to the result.
+
+The C++ SDK case tries all 29 available members through the bounded profile and
+finds exactly one admitted manifest. The actual CLI also passed with an
+unusable external-tool PATH:
+
+```console
+PATH=/neverd-no-external-tools /absolute/path/to/neverd web archive-desktop /path/to/decoded.vsix zip 0 4 vsix
+```
+
+Indices 4 and 15 are observations for this exact pinned archive, not defaults
+for other releases. Logs are `/tmp/neverd-desktop-fixed-tests.log` and
+`/tmp/neverd-desktop-real-cli.log`; see the
+[desktop manifest profile](web-desktop-manifest-profile.md) for the narrower
+file-candidate contract.
+
 ## npm originals and standalone equality — 2026-10-11
 
 NeverD's C++ tar/gzip reader admitted the official
