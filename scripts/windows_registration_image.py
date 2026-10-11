@@ -79,4 +79,3 @@ def validate_generation(original, product, receipt, first, export):
         raise ValueError("two-generation trampoline chain changed its source or destination")
     code_owner(original, receipt["source_begin"], receipt["source_end"], ".ndtext")
     code_owner(product, receipt["generated_begin"], receipt["generated_end"], ".ndtext")
-
