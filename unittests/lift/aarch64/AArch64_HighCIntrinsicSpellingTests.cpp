@@ -113,6 +113,36 @@ neon_narrowing_shifts:
   expectCompiles(C);
 }
 
+// SQSHLU saturates signed lanes shifted left by an immediate to the unsigned
+// range; ACLE has it only with the immediate, which the lifter passes.
+TEST_F(AArch64_HighCIntrinsicSpelling, ShiftLeftUnsignedUsesItsImmediate) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "assembling AArch64 requires Clang";
+  const std::string C = highCOf(R"S(
+.text
+.global neon_shift_left_unsigned
+.type neon_shift_left_unsigned,%function
+neon_shift_left_unsigned:
+  ldp q0, q1, [x0]
+  sqshlu v2.4s, v0.4s, #3
+  sqshlu v3.8b, v1.8b, #7
+  sqshlu s16, s0, #5
+  sqshlu d17, d1, #9
+  stp q2, q3, [x1]
+  stp q16, q17, [x1, #32]
+  ret
+.size neon_shift_left_unsigned,.-neon_shift_left_unsigned
+)S",
+                                "armv8-a");
+  for (const char *Name :
+       {"vqshluq_n_s32(", "vqshlu_n_s8(", "vqshlus_n_s32(", "vqshlu_n_s64("})
+    EXPECT_NE(C.find(Name), std::string::npos) << Name << "\n" << C;
+  for (const char *Shift : {", 3))", ", 7))", ", 5)", ", 9))"})
+    EXPECT_NE(C.find(Shift), std::string::npos) << Shift << "\n" << C;
+  EXPECT_EQ(C.find("unknown"), std::string::npos) << C;
+  expectCompiles(C);
+}
+
 // CRC32 and CRC32C of each operand width print as the ACLE intrinsic, the
 // function taking the target feature arm_acle.h requires.
 TEST_F(AArch64_HighCIntrinsicSpelling, Crc32UsesAcleWithTheCrcFeature) {

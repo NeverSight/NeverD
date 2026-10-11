@@ -819,8 +819,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
 
   // NEON saturating / rounding variable shifts (SQSHL/UQSHL/SQSHLU/SQRSHL/
   // UQRSHL/SRSHL/URSHL).  All lower to a (data, per-lane shift vector) AArch64
-  // intrinsic; the immediate forms pass a splat shift vector.  Inputs:
-  // {data, shiftVec, elemSizeConst}.
+  // intrinsic; the immediate forms pass a splat shift vector, except SQSHLU,
+  // which passes its immediate for the shift vector to splat here.  Inputs:
+  // {data, shiftVec or immConst, elemSizeConst}.
   {
     llvm::Intrinsic::ID IID = llvm::Intrinsic::not_intrinsic;
     switch (IC) {
@@ -871,9 +872,18 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                   : Builder.CreateZExtOrTrunc(V, IntTy);
         return Builder.CreateBitCast(V, VecTy);
       };
+      llvm::Value *Shift = nullptr;
+      if (IC == I::A64_Sqshlu) {
+        if (!Op.Inputs[2].isConst())
+          llvm::report_fatal_error("SQSHLU shift is not an immediate");
+        Shift = llvm::ConstantVector::getSplat(
+            llvm::ElementCount::getFixed(NLanes),
+            llvm::ConstantInt::get(ElemTy, Op.Inputs[2].ConstVal));
+      } else {
+        Shift = toVec(Op.Inputs[2]);
+      }
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {VecTy});
-      llvm::Value *R =
-          Builder.CreateCall(Fn, {toVec(Op.Inputs[1]), toVec(Op.Inputs[2])});
+      llvm::Value *R = Builder.CreateCall(Fn, {toVec(Op.Inputs[1]), Shift});
       R = Builder.CreateBitCast(R, IntTy);
       return (IntTy == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
     }

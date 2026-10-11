@@ -285,6 +285,53 @@ neon_saturating:
   EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << C;
 }
 
+// VQSHLU saturates signed lanes shifted left by an immediate to the unsigned
+// range; ACLE has it only with the immediate, which the lifter passes.
+TEST_F(ARM32_Intrinsics, Decompile_NeonShiftLeftUnsignedUsesItsImmediate) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "assembling ARM requires Clang";
+  const auto Source = tmpFile("neon_shift_left_unsigned.s");
+  const auto Object = tmpFile("neon_shift_left_unsigned.o");
+  std::ofstream(Source) << R"S(
+.syntax unified
+.arm
+.text
+.global neon_shift_left_unsigned
+.type neon_shift_left_unsigned,%function
+neon_shift_left_unsigned:
+  vld1.8 {d0-d1}, [r0]
+  vqshlu.s32 q8, q0, #3
+  vqshlu.s8 d18, d1, #2
+  vst1.8 {d16-d18}, [r1]
+  bx lr
+.size neon_shift_left_unsigned,.-neon_shift_left_unsigned
+)S";
+  const std::vector<std::string> Target = {"-target", "armv7a-none-eabi",
+                                           "-mfpu=neon", "-mfloat-abi=softfp"};
+  std::vector<std::string> Assemble = Target;
+  Assemble.insert(Assemble.end(),
+                  {"-c", Source.string(), "-o", Object.string()});
+  const auto Assembled = exec(NEVERD_TEST_CLANG, Assemble);
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  auto r = decompileToHighC(Object);
+  ASSERT_EQ(r.exitCode, 0) << "Decompile failed: " << r.err;
+  const std::string C = readDecompiledFile("decompiled_high.c");
+  for (const char *Name : {"vqshluq_n_s32(", "vqshlu_n_s8("})
+    EXPECT_NE(C.find(Name), std::string::npos) << Name << "\n" << C;
+  EXPECT_EQ(C.find("unknown"), std::string::npos) << C;
+  const auto CFile = tmpFile("neon_shift_left_unsigned_high.c");
+  std::ofstream(CFile) << C;
+  std::vector<std::string> Check = Target;
+  Check.insert(Check.end(), {"-ffreestanding", "-std=gnu11"});
+  const auto Compiled = checkHighCClangCompile(CFile, Check);
+  EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << C;
+
+  auto IR = liftToLLVMIR(Object);
+  ASSERT_EQ(IR.exitCode, 0) << IR.err;
+  EXPECT_NE(IR.out.find("@llvm.arm.neon.vqshiftsu.v4i32("), std::string::npos)
+      << IR.out;
+}
+
 // The NEON reciprocal and reciprocal square root estimates and steps on f32
 // lanes, and the unsigned estimates on u32 lanes, print as the ACLE intrinsic
 // of their shape.

@@ -69,14 +69,19 @@ bool liftNEONShift(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     break;
   }
   // Saturating shift left (register form: per-lane signed amount; immediate
-  // form: splat).  SQSHLU additionally saturates to the unsigned range.  Map to
-  // the AArch64 NEON intrinsic for bit-exact saturation; the old code was a
-  // plain full-width INT_LEFT (no saturation, no per-lane, no right-shift).
+  // form: splat).  SQSHLU additionally saturates to the unsigned range and
+  // has only the immediate form, which it passes as that constant: ACLE
+  // spells it with the immediate (vqshluq_n_s32).  Map to the AArch64 NEON
+  // intrinsic for bit-exact saturation; the old code was a plain full-width
+  // INT_LEFT (no saturation, no per-lane, no right-shift).
   case AARCH64_INS_SQSHL:
   case AARCH64_INS_UQSHL:
   case AARCH64_INS_SQSHLU: {
     if (ARM64.op_count < 3)
       break;
+    if (Insn->id == AARCH64_INS_SQSHLU &&
+        ARM64.operands[2].type != AARCH64_OP_IMM)
+      return false;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
     unsigned ElemSz = 0;
@@ -103,6 +108,13 @@ bool liftNEONShift(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     if (ElemSz == 0)
       ElemSz = Dst.Size; // scalar form
     unsigned NLanes = ElemSz ? Dst.Size / ElemSz : 1;
+    if (Insn->id == AARCH64_INS_SQSHLU) {
+      S.emitIntrinsic(
+          Intrinsic::A64_Sqshlu, Dst,
+          {Src, NdVar::cst(static_cast<uint64_t>(ARM64.operands[2].imm), 4),
+           NdVar::cst(ElemSz, 4)});
+      break;
+    }
     NdVar ShiftVec;
     if (ARM64.operands[2].type == AARCH64_OP_IMM) {
       NdVar C =
@@ -117,9 +129,8 @@ bool liftNEONShift(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     } else {
       ShiftVec = L.operandRead(S, ARM64.operands[2]);
     }
-    Intrinsic II = (Insn->id == AARCH64_INS_SQSHL)   ? Intrinsic::A64_Sqshl
-                   : (Insn->id == AARCH64_INS_UQSHL) ? Intrinsic::A64_Uqshl
-                                                     : Intrinsic::A64_Sqshlu;
+    Intrinsic II = Insn->id == AARCH64_INS_SQSHL ? Intrinsic::A64_Sqshl
+                                                 : Intrinsic::A64_Uqshl;
     S.emitIntrinsic(II, Dst, {Src, ShiftVec, NdVar::cst(ElemSz, 4)});
     break;
   }

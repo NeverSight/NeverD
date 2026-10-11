@@ -25,8 +25,8 @@
 
 namespace neverd {
 
-bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                       const cs_arm &ARM) {
+bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S,
+                       const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // VSHLL (vector shift left long): widen each narrow D-source lane to a
   // double-width Q-dest lane (sign/zero-extend per `.s`/`.u`), then shift left
@@ -68,27 +68,37 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
     break;
   }
 
-  // NEON saturating / rounding variable shift left (VQSHL/VQSHLU register or
-  // immediate, VQRSHL register, VRSHL register).  Map to the ARM NEON intrinsic
-  // (per-lane signed shift amount, negative = right; immediate forms splat
-  // +imm).  Was wrongly folded into the plain VSHL handler — VQ* lost
-  // saturation and VRSHL lost the rounding bias.  The intrinsic is the hardware
-  // instruction, so rounding is done in wide precision (no lane overflow).
+  // NEON saturating / rounding variable shift left (VQSHL register or
+  // immediate, VQSHLU immediate, VQRSHL register, VRSHL register).  Map to the
+  // ARM NEON intrinsic (per-lane signed shift amount, negative = right;
+  // immediate forms splat +imm, but VQSHLU, which ACLE spells with the
+  // immediate (vqshluq_n_s32), passes it as that constant).  Was wrongly folded
+  // into the plain VSHL handler — VQ* lost saturation and VRSHL lost the
+  // rounding bias.  The intrinsic is the hardware instruction, so rounding is
+  // done in wide precision (no lane overflow).
   case ARM_INS_VQSHL:
   case ARM_INS_VQSHLU:
   case ARM_INS_VRSHL:
   case ARM_INS_VQRSHL: {
     if (ARM.op_count < 3)
       break;
+    if (Insn->id == ARM_INS_VQSHLU && ARM.operands[2].type != ARM_OP_IMM)
+      return false;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar Src = L.operandRead(S, ARM.operands[1]);
     auto LI = getNeonLaneInfo(ARM.vector_data, Insn->mnemonic);
     unsigned ElemSz = LI.LaneSz ? LI.LaneSz : Dst.Size;
     unsigned NLanes = ElemSz ? Dst.Size / ElemSz : 1;
+    if (Insn->id == ARM_INS_VQSHLU) {
+      S.emitIntrinsic(
+          Intrinsic::ArmVqshiftsu, Dst,
+          {Src, NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), 4),
+           NdVar::cst(ElemSz, 4)});
+      break;
+    }
     NdVar ShiftVec;
     if (ARM.operands[2].type == ARM_OP_IMM) {
-      NdVar C =
-          NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), ElemSz);
+      NdVar C = NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), ElemSz);
       NdVar Acc = C;
       for (unsigned I = 1; I < NLanes; ++I) {
         NdVar Next = S.makeTemp(Acc.Size + ElemSz);
@@ -100,9 +110,7 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
       ShiftVec = L.operandRead(S, ARM.operands[2]);
     }
     Intrinsic II;
-    if (Insn->id == ARM_INS_VQSHLU)
-      II = Intrinsic::ArmVqshiftsu;
-    else if (Insn->id == ARM_INS_VQRSHL)
+    if (Insn->id == ARM_INS_VQRSHL)
       II = LI.IsSigned ? Intrinsic::ArmVqrshifts : Intrinsic::ArmVqrshiftu;
     else if (Insn->id == ARM_INS_VRSHL)
       II = LI.IsSigned ? Intrinsic::ArmVrshifts : Intrinsic::ArmVrshiftu;
@@ -148,8 +156,7 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
       NdOp RightOp = LI.IsSigned ? NdOp::INT_ASHR : NdOp::INT_RIGHT;
       NdVar BSc = B;
       if (BImm)
-        BSc =
-            NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), LI.LaneSz);
+        BSc = NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), LI.LaneSz);
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar La = S.makeTemp(LI.LaneSz);
@@ -277,8 +284,7 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
       bool Round = IsRound && BImm && ImmAmt > 0 && ImmAmt <= LI.LaneSz * 8;
       NdVar BSc = B;
       if (BImm)
-        BSc =
-            NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), LI.LaneSz);
+        BSc = NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), LI.LaneSz);
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar La = S.makeTemp(LI.LaneSz);
@@ -287,7 +293,7 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
         if (!BScalar)
           S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LI.LaneSz, 4)});
         NdVar R = Round ? S.emitRoundedShr(La, LI.LaneSz, ImmAmt, LI.IsSigned)
-                          : S.makeTemp(LI.LaneSz);
+                        : S.makeTemp(LI.LaneSz);
         if (!Round)
           S.emit(ShOp, R, {La, Lb});
         if (I == 0)
@@ -344,8 +350,7 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
             SLane = Rounded;
           }
           Shifted = S.makeTemp(SrcLaneSz);
-          S.emit(NdOp::INT_RIGHT, Shifted,
-                 {SLane, NdVar::cst(Imm, SrcLaneSz)});
+          S.emit(NdOp::INT_RIGHT, Shifted, {SLane, NdVar::cst(Imm, SrcLaneSz)});
         }
         NdVar NLane = S.makeTemp(DstLaneSz);
         S.emit(NdOp::SUBBYTES, NLane, {Shifted, NdVar::cst(0, 4)});
@@ -405,8 +410,7 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
       bool BImm = (ARM.operands[2].type == ARM_OP_IMM);
       NdVar BSc = B;
       if (BImm)
-        BSc =
-            NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), LI.LaneSz);
+        BSc = NdVar::cst(static_cast<uint64_t>(ARM.operands[2].imm), LI.LaneSz);
       bool BScalar = BImm || (B.Size <= LI.LaneSz);
       bool Round = IsRound && BImm && ImmAmt > 0 && ImmAmt <= LI.LaneSz * 8;
       NdVar Acc = S.makeTemp(0);
@@ -416,8 +420,7 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
         NdVar Lb = BScalar ? BSc : S.makeTemp(LI.LaneSz);
         if (!BScalar)
           S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LI.LaneSz, 4)});
-        NdVar Sh = Round
-                         ? S.emitRoundedShr(La, LI.LaneSz, ImmAmt, LI.IsSigned)
+        NdVar Sh = Round ? S.emitRoundedShr(La, LI.LaneSz, ImmAmt, LI.IsSigned)
                          : S.makeTemp(LI.LaneSz);
         if (!Round)
           S.emit(ShOp, Sh, {La, Lb});

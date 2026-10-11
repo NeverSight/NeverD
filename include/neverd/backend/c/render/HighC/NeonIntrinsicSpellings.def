@@ -133,6 +133,23 @@ NEVERD_NEON_SHIFT_OPERATION(ArmVrshiftu, "vrshl", "u")
 
 #undef NEVERD_NEON_SHIFT_OPERATION
 
+// The saturating shifts left by an immediate of signed lanes to an unsigned
+// result (AArch64 SQSHLU, AArch32 VQSHLU), which ACLE has only with the
+// immediate.  The lifter passes the shift and then the element width.  A
+// vector takes the base, a `q` for 128 bits, `_n_s` and the element's bits
+// (vqshluq_n_s32); an AArch64 scalar narrower than 64 bits takes the width's
+// letter in place of the `q` (vqshlus_n_s32).
+//
+// NEVERD_NEON_SHIFT_LEFT_UNSIGNED(Intrinsic, Base)
+#ifndef NEVERD_NEON_SHIFT_LEFT_UNSIGNED
+#define NEVERD_NEON_SHIFT_LEFT_UNSIGNED(Intrinsic, Base)
+#endif
+
+NEVERD_NEON_SHIFT_LEFT_UNSIGNED(A64_Sqshlu, "vqshlu")
+NEVERD_NEON_SHIFT_LEFT_UNSIGNED(ArmVqshiftsu, "vqshlu")
+
+#undef NEVERD_NEON_SHIFT_LEFT_UNSIGNED
+
 // The saturating shifts right by an immediate that narrow a 128-bit vector
 // to 64 bits (SQSHRN, SQRSHRN, UQSHRN, UQRSHRN, SQSHRUN, SQRSHRUN).  The
 // lifter passes the shift and then the narrow element width; the intrinsic

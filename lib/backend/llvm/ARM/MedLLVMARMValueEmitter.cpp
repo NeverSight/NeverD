@@ -20,6 +20,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IntrinsicsARM.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace neverd {
 
@@ -208,7 +209,8 @@ llvm::Value *MedLLVMEmitter::emitARMIntrinsicValue(const MedOp &Op,
 
   // NEON saturating / rounding variable shift (VQSHL/VQSHLU/VQRSHL).  Inputs:
   // {data, shiftVec, elemSizeConst}; the per-lane shift amount is signed
-  // (negative = right).  Map to the ARM NEON intrinsic.
+  // (negative = right).  VQSHLU passes its immediate for the shift vector to
+  // splat here.  Map to the ARM NEON intrinsic.
   {
     llvm::Intrinsic::ID IID = llvm::Intrinsic::not_intrinsic;
     switch (IC) {
@@ -259,9 +261,19 @@ llvm::Value *MedLLVMEmitter::emitARMIntrinsicValue(const MedOp &Op,
                   : Builder.CreateZExtOrTrunc(V, IntTy);
         return Builder.CreateBitCast(V, VecTy);
       };
+      llvm::Value *Shift = nullptr;
+      if (IC == I::ArmVqshiftsu) {
+        if (!Op.Inputs[2].isConst())
+          llvm::report_fatal_error("VQSHLU shift is not an immediate");
+        Shift = llvm::ConstantVector::getSplat(
+            llvm::ElementCount::getFixed(NLanes),
+            llvm::ConstantInt::get(VecTy->getElementType(),
+                                   Op.Inputs[2].ConstVal));
+      } else {
+        Shift = toVec(Op.Inputs[2]);
+      }
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {VecTy});
-      llvm::Value *R =
-          Builder.CreateCall(Fn, {toVec(Op.Inputs[1]), toVec(Op.Inputs[2])});
+      llvm::Value *R = Builder.CreateCall(Fn, {toVec(Op.Inputs[1]), Shift});
       R = Builder.CreateBitCast(R, IntTy);
       return (IntTy == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
     }
