@@ -288,6 +288,32 @@ class ProvenanceScanTests(unittest.TestCase):
             # The allowance names one rule, and says nothing about the others.
             self.assertEqual(len(self.scan("docs/x.md", "/Users/someone\n")), 1)
 
+    def test_node_license_keeps_its_upstream_attribution(self) -> None:
+        notice = "Adapted from SES/Caja - Copyright (C) 2011 Google Inc.\n"
+        self.assertEqual(self.scan("LICENSES/node/LICENSE", notice), [])
+        for path in (
+            "LICENSES/node/LICENSE.md",
+            "LICENSES/other/LICENSE",
+            "LICENSES/node/source.cpp",
+            "lib/node/source.cpp",
+        ):
+            with self.subTest(path=path):
+                findings = self.scan(path, notice)
+                self.assertEqual(len(findings), 1)
+                self.assertIn("provenance-phrase", findings[0])
+
+    def test_node_license_allowance_keeps_other_rules_active(self) -> None:
+        path = "LICENSES/node/LICENSE"
+        findings = self.scan(path, "/Users/someone/notes.txt\n")
+        self.assertEqual(len(findings), 1)
+        self.assertIn("private-path", findings[0])
+        for name in ("private-path", "foreign-project", "foreign-terminology"):
+            with self.subTest(rule=name):
+                rule = self.term_rule(name, "example-engine")
+                findings = self.scan(path, "example-engine\n", (rule,))
+                self.assertEqual(len(findings), 1)
+                self.assertIn(name, findings[0])
+
     def test_skips_files_it_cannot_read_as_text(self) -> None:
         rule = self.term_rule("foreign-project", "example-engine")
         self.assertEqual(self.scan("a.png", "example-engine\n", (rule,)), [])
