@@ -18,7 +18,7 @@ if __package__:
         BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, CATCH_PROOF, RECEIPT_PROOF, CLEANUP_PROOF,
         ROUTES, SOURCE, PE32, file_digest, observe,
         require_test_result, validate_installation, validate_decompilation,
-        validate_search_context)
+        validate_search_context, source_profile)
     from .windows_registration_libraries import validate_manifest
     from .windows_registration_runtime import validate_runtime
 else:
@@ -26,17 +26,21 @@ else:
         BASES, CASES, EMITTER, PROOF, RETHROW_PROOF, DIRECT_PROOF, CATCH_PROOF, RECEIPT_PROOF, CLEANUP_PROOF,
         ROUTES, SOURCE, PE32, file_digest, observe,
         require_test_result, validate_installation, validate_decompilation,
-        validate_search_context)
+        validate_search_context, source_profile)
     from windows_registration_libraries import validate_manifest
     from windows_registration_runtime import validate_runtime
 
 
 def validate_capture(root: Path, capture: dict) -> list[tuple]:
+    profile = source_profile(capture.get("profile", "nested"))
     if capture.get("schema") != 1 or capture.get("passed") is not True or \
             capture.get("evidence") != "nested-try-source-reconstruction" or \
-            capture.get("source_sha256") != file_digest(SOURCE) or \
+            capture.get("source_sha256") != file_digest(profile.source) or \
             capture.get("emitter_sha256") != file_digest(EMITTER):
         raise ValueError("nested try reconstruction capture has no current source identity")
+    if profile.proof and (capture.get("object_proof_sha256") != file_digest(profile.proof) or
+                          capture.get("object_types_sha256") != file_digest(profile.types)):
+        raise ValueError("trivial object proof or source declarations changed")
     validate_manifest(capture.get("runtime_libraries", {}))
     if capture.get("proof_sha256") != file_digest(PROOF) or \
             capture.get("rethrow_proof_sha256") != file_digest(RETHROW_PROOF) or \
@@ -46,7 +50,7 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
             capture.get("cleanup_proof_sha256") != file_digest(CLEANUP_PROOF):
         raise ValueError("nested try rejection checks changed")
     cases = capture.get("cases", [])
-    if len(cases) != len(CASES) or {c.get("case") for c in cases} != set(CASES):
+    if len(cases) != len(profile.cases) or {c.get("case") for c in cases} != set(profile.cases):
         raise ValueError("nested try source/control matrix is incomplete")
     result = []
     expected = {(route + suffix + ".exe", route, base)
@@ -58,7 +62,7 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
         if case.get("contract_sha256") != file_digest(parent / "contract.json") or \
                 case.get("ir_sha256") != file_digest(parent / "source.ll") or \
                 case.get("object_sha256") != file_digest(parent / "driver.obj") or \
-                require_test_result(parent / "rewrite.xml") != 1:
+                require_test_result(parent / "rewrite.xml") != 1 + int(bool(profile.test)):
             raise ValueError("nested try source reconstruction proof changed")
         receipt = json.loads((parent / "contract.json").read_text())
         context = validate_search_context(receipt, name)
@@ -73,7 +77,7 @@ def validate_capture(root: Path, capture: dict) -> list[tuple]:
             path = parent / ("decompiled." + language)
             if file_digest(path) != digest:
                 raise ValueError("nested try decompilation changed")
-            validate_decompilation(path.read_text(), language, inline, direct, context["catch_try"],
+            profile.validate_decompilation(path.read_text(), language, inline, direct, context["catch_try"],
                                    (2 if "-o0-" in name else 1) if context["catch_cleanup"] else 0)
         records = case.get("images", [])
         if len(records) != len(expected) or \
@@ -111,6 +115,7 @@ def main() -> int:
         root = args.evidence_root.resolve()
         capture = json.loads((root / "nested-try-rewrite.json").read_text())
         records = validate_capture(root, capture)
+        report["profile"] = capture.get("profile", "nested")
         for name, path, route, receipt in records:
             result = observe(path, name, route, receipt, [wine] if wine else [],
                              os.environ.copy() | {"WINEDLLOVERRIDES": "vcruntime140=n"}, args.timeout)

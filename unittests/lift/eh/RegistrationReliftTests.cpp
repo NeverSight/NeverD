@@ -17,6 +17,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/ir/med/X86RegistrationEntry.h"
 #include "neverd/loader/COFF/COFFLoader.h"
@@ -75,6 +76,7 @@ TEST(RegistrationRelift, InputPE32ReconstructsGeneratedFunction) {
   LowToMedConverter Converter;
   Converter.setBinaryImage(&*Image);
   auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+  recoverCallAbi(Med, Arch::X86, {}, &*Image);
   inferMedTypes(Med, Arch::X86);
   const auto ABI = projectX86RegistrationEntry(Med);
   ASSERT_TRUE(ABI);

@@ -31,7 +31,7 @@ NeverD 在加载、提升、反编译和二进制重写的全过程中携带 Win
 | `__GSHandlerCheck_SEH/EH/EH4` | 包装后的 personality 与经检查的 GS cookie 来源 | 基础语言图加 wrapper 注释 | 仅分析；拒绝修改涉及的函数，不做降级 |
 | x86 registration-chain SEH3 | 经检查的 scope 图、实际 FS:[0] 操作、callback root 与基于 CFG 的 try-level 状态集合 | 可规约且无歧义的区域生成显式 EH 节点；其他状态保留原生注释 | 对下文固定栈帧、caller-cleanup 的已证明子集支持原生 PE32 重建 |
 | x86 registration-chain SEH4 | 经检查的 cookie 表达式、编码 scope 指针与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文已认证的直接栈帧子集支持原生 PE32 重建，包含 EH/GS cookie 初始化 |
-| x86 registration-chain C++ EH | 绝对指针 FuncInfo、cleanup/对象契约与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文经过证明的同步 try、标量或无绑定对象 catch 子集执行原生 PE32 重建 |
+| x86 registration-chain C++ EH | 绝对指针 FuncInfo、cleanup/对象契约与基于 CFG 的状态流 | 可规约区域生成结构化 EH；其他形状保留无损注释 | 对下文经过证明的同步 try、标量、平凡对象或无绑定对象 catch 子集执行原生 PE32 重建 |
 
 畸形记录绝不会按普通完整记录处理。部分解码记录仍可用于检查，但不能授权生成原生
 元数据。如果 ARM xdata header 仍能证明一个有界可执行 fragment 范围，而后续 unwind
@@ -162,7 +162,7 @@ record 推导生成 cookie 偏移，包括运行时的虚拟帧基址；安装�
 GS 初始化还要求 `LLVM_NEVERD_X86_REGISTRATION_GS`。
 
 x86 C++ 原生重建支持同步父函数内的有序 catch，最多 64 个 try 和 128 个源 unwind state。
-catch 可以按值或引用绑定经过检查的标量，也可以没有局部对象，或采用 `catch(...)`。
+catch 可以按值或引用绑定经过检查的标量或平凡对象，也可以没有局部对象，或采用 `catch(...)`。
 无绑定对象的 typed catch 保留准确的 RTTI 和 adjectives；catch-all 保留空 RTTI 和原生
 catch-all adjective。没有对象 home 仍要求完整的源证明，且不得存在运行时对象访问；
 它不会为恢复的父帧凭空提供隐式初始化写入。
@@ -259,6 +259,14 @@ cdecl/stdcall/thiscall/fastcall 样本使用微软 x86 CRT 验证两次重建、
 也支持第二次重建。缓存的字节证明必须逐次绑定分派帧，LowIR 负责证明对象借用和保存帧
 的生命周期。真实 MSVC 按值/引用样本覆盖两代代码的有序析构、引用写回、两种 patch
 模式及强制重定位。通用对象生命周期和类型转换仍待支持。
+
+PE32 平凡复制对象也支持按值或引用捕获、直接抛出和重抛。不可变 ThrowInfo 必须
+只有一个可捕获类型，不含地址调整、复制构造、析构或转发回调。源对象的每个字节
+都必须已初始化，私有栈帧指针不能随对象逃逸；生成的 catch 保留原 RTTI 和对象大小。
+O0/O1 样本覆盖 8 字节与 12 字节结构体、字段修改、catch 内分支、两种 CLI 模式及
+Microsoft CRT 下的强制重定位。PHI 复制辅助块保留其回调归属；独立安装校验只允许
+原 CFG 边上的私有标量复制，拒绝额外调用、别名内存及目标变更。RTTI 不能提供成员
+布局：C++ 语法测试使用样本的真实类型声明，输出保留原生偏移及未知聚合类型的抛出调用。
 
 ## IR 契约
 

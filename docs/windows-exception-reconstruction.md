@@ -36,7 +36,7 @@ Analysis support does not imply native reconstruction support.
 | `__GSHandlerCheck_SEH/EH/EH4` | Wrapped personality plus checked GS cookie provenance | Base-language graph and wrapper annotation | Analysis only; a touched function is rejected rather than downgraded |
 | x86 registration-chain SEH3 | Checked scope graph, actual FS:[0] administration, callback roots and CFG-derived reaching try levels | Reducible, unambiguous regions become explicit EH nodes; other state flow retains native annotations | Native PE32 reconstruction for the checked fixed-frame, caller-cleanup subset below |
 | x86 registration-chain SEH4 | Checked cookie expressions, encoded scope pointer and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the authenticated direct-frame subset below, including initialized EH/GS cookies |
-| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked synchronous try and scalar or unbound catch subset below |
+| x86 registration-chain C++ EH | Absolute-pointer FuncInfo, cleanup/object contracts and CFG-derived state flow | Structured EH where reducible; lossless annotations otherwise | Native PE32 reconstruction for the checked synchronous try and scalar, trivial-object or unbound catch subset below |
 
 Malformed records are never treated as ordinary complete records. A partially
 decoded record remains useful for inspection, but cannot authorize native
@@ -232,7 +232,7 @@ requires `LLVM_NEVERD_X86_REGISTRATION_GS`. The older published r3 package
 rejects native installation.
 
 Native x86 C++ reconstruction supports synchronous parent try groups with
-ordered catches, with at most 128 source unwind states. A catch may bind a checked scalar
+ordered catches, with at most 128 source unwind states. A catch may bind a checked scalar or trivial object
 by value or reference, omit its local object, or be `catch(...)`. An unbound
 typed catch retains its exact RTTI and adjectives; catch-all retains null RTTI
 and its native catch-all adjective. An absent object home requires complete
@@ -384,6 +384,20 @@ The cached byte proof is rebound at each dispatch; LowIR proves object borrows
 and the saved frame lifetime. Genuine MSVC value/reference fixtures exercise
 ordered destruction and reference writes across both generations, both patch
 modes and forced bases. General object lifetimes and conversions remain unsupported.
+
+Trivially copied PE32 exception objects can also be thrown and caught by value
+or reference, including direct throws and rethrows. The immutable ThrowInfo
+must describe one catchable type, an identity adjustment and no copy,
+destructor or forwarding callback. Every source object byte must be initialized;
+private-frame pointers cannot escape through its representation. The same
+original RTTI and object extent bind the generated catch home. O0/O1 fixtures
+check distinct 8-byte and 12-byte records, field updates, conditional catch exits,
+both CLI modes and forced relocation with the Microsoft CRT. Compiler-generated
+PHI copy blocks retain their exact callback owner. Independent installation
+admits only private scalar spills on one original CFG edge; calls, aliased
+storage and changed targets are rejected. RTTI alone does not reveal member
+layouts: C++ syntax checks use the fixture's real type declarations, while
+output retains native offsets and unknown aggregate throw calls.
 
 ## IR contract
 

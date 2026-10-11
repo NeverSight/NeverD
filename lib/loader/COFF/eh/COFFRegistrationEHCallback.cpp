@@ -36,9 +36,14 @@ bool callbackFallsThroughBoundary(const BinaryImage &Img, va_t Entry,
   const uint8_t *Cursor = Segment->Data.data() + Entry - Segment->VA;
   size_t Remaining = Size - (Entry - Segment->VA);
   uint64_t Address = Entry;
-  for (unsigned Count = 0; Address < Boundary && Count != 4096; ++Count) {
-    if (Work++ >= limits::kMaxRegistrationEHStateWork ||
-        !cs_disasm_iter(Handle, &Cursor, &Remaining, &Address, Instruction) ||
+  // Regenerated register-state initialization can exceed 4096 instructions.
+  // Bound all queries by the shared work counter; a second per-query cutoff
+  // would turn an immediate byte in that initializer into a function entry.
+  while (Address < Boundary) {
+    if (Work >= limits::kMaxRegistrationEHStateWork)
+      return false;
+    ++Work;
+    if (!cs_disasm_iter(Handle, &Cursor, &Remaining, &Address, Instruction) ||
         !Img.hasExecutableCodeOwnerRange(Instruction->address,
                                          Instruction->size))
       return false;

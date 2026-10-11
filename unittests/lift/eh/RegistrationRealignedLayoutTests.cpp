@@ -187,10 +187,13 @@ TEST(RegistrationRealignedLayout, RequiresOwnedCompletePublicationBytes) {
     }
 }
 TEST(RegistrationRealignedLayout, ParentOwnsStraightLinePaddingLookalikes) {
-  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
     SCOPED_TRACE(Mutation);
     RealignedLayoutImage F({}, 3, 7, true);
     auto &Text = F.Image.Segments[0];
+    if (Mutation >= 5)
+      Text.Data.insert(Text.Data.end(), 8192, 0x90);
+    const unsigned Shape = Mutation % 5;
     const size_t Body = Text.Data.size();
     const uint8_t Store[] = {0xc7, 0x86, 0xcc, 0x33, 0, 0, 0, 0, 0, 0};
     Text.Data.insert(Text.Data.end(), std::begin(Store), std::end(Store));
@@ -202,22 +205,28 @@ TEST(RegistrationRealignedLayout, ParentOwnsStraightLinePaddingLookalikes) {
     const va_t Boundary = Text.VA + Body + 3;
     auto Guess = Symbol::makeFunc(Boundary);
     Guess.IsBoundaryGuess = true;
-    if (Mutation == 1)
+    if (Shape == 1)
       Guess.Name = "stated_function";
-    if (Mutation == 2)
+    if (Shape == 2)
       Text.Data[Body] = 0xc3;
     F.Image.Symbols.push_back(Guess);
-    if (Mutation == 4)
+    if (Shape == 4)
       F.Image.Symbols.push_back(Symbol::makeFunc(Boundary));
     RegistrationChainInfo Chain;
     ASSERT_TRUE(proveRealignedCxxRegistrationLayout(F.Image, F.Site, Chain));
-    if (Mutation == 3)
+    if (Shape == 3)
       Chain.RegistrationOffset.reset();
     ExceptionFunction EH;
     EH.CodeRange = {Text.VA, Boundary};
     recoverRegistrationCallbackRanges(EH, F.Image, FunctionRangeMap(F.Image),
                                       Chain);
-    EXPECT_EQ(EH.CodeRange.End, Mutation == 0 ? Text.VA + Text.Size : Boundary);
+    EXPECT_EQ(EH.CodeRange.End, Shape == 0 ? Text.VA + Text.Size : Boundary);
+    for (size_t Remaining : {0, 2}) {
+      size_t Work = limits::kMaxRegistrationEHStateWork - Remaining;
+      EXPECT_FALSE(
+          callbackFallsThroughBoundary(F.Image, Text.VA, Boundary, Work));
+      EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+    }
   }
 }
 } // namespace

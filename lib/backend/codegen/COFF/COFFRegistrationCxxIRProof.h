@@ -38,6 +38,7 @@ struct CxxIRControlProof {
   std::map<X86RegistrationCatchIdentity, CxxIRCatch> Catches;
   std::map<int, X86RegistrationCatchIdentity> SourceCatchOwners;
   std::map<int, SourceSegment> Segments;
+  std::map<const llvm::BasicBlock *, const llvm::BasicBlock *> CopyEdges;
   std::map<uint32_t, const llvm::CleanupPadInst *> Cleanups;
   std::map<const llvm::CallBase *, CxxIRCall> Calls;
   std::set<const llvm::Instruction *> ChainReads;
@@ -62,6 +63,10 @@ llvm::Expected<const llvm::CatchReturnInst *> validateCxxContinuationRestore(
 llvm::Error bindCxxCatches(CxxIRControlProof &Proof, const MedFunc &Source,
                            const llvm::Function &Function,
                            const X86RegistrationFrameLayout &Layout);
+
+/// Recognize only private scalar spill copies on one exact source CFG edge.
+/// No emitter metadata or block name grants ownership of a generated block.
+llvm::Error bindCxxCopyEdges(CxxIRControlProof &Proof);
 
 llvm::Error bindCxxCatchResumes(CxxIRControlProof &Proof, const MedFunc &Source,
                                 const llvm::Function &Function);

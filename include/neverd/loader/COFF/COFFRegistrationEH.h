@@ -98,8 +98,8 @@ getCheckedX86RegistrationPointerRoles(const BinaryImage &Img);
 std::optional<std::pair<va_t, va_t>>
 getCheckedX86SafeSEHTablePointer(const BinaryImage &Img);
 
-/// Checked PE32 scalar throw metadata with one simple catchable type, no
-/// copy/destructor/forwarding callback and no pointer adjustment. The three
+/// Checked PE32 throw metadata with one scalar or trivially copied object,
+/// no copy/destructor/forwarding callback and no pointer adjustment. The three
 /// metadata records must be immutable mapped data. TypeDescriptor is retained
 /// by identity; it does not supply a guessed C++ type or object layout.
 struct X86SimpleCxxThrowInfo {

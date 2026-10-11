@@ -3243,6 +3243,26 @@ never followed as `std::type_info`. Native reconstruction emits LLVM
 status is a separate claim and is not implied by personality recognition or
 native lowering.
 
+For PE32 C++ callbacks, the generic LLVM emitter records each PHI edge it splits.
+The x86 adapter assigns a copy block only when both source endpoints belong to
+the same proved invocation. COFF installation independently recognizes the
+actual single-edge block and private scalar spill accesses; names and emitter
+receipts cannot authorize added calls, aliased memory or altered CFG targets.
+The COFF ThrowInfo decoder owns trivial-copy eligibility. State analysis still
+proves complete initialization and pointer privacy for every object byte;
+RTTI remains a type identity, not a recovered member layout.
+
+The PE32 registration solver schedules ordinary blocks in reverse postorder per
+entry component, with stable address ordering for independent roots. Runtime
+dispatch and continuation restoration still provide the only reaching states;
+scheduling never creates an edge or widens the cumulative work limit. Failed
+continuation closure retains earlier analysis diagnostics even if withdrawing
+a candidate makes the reduced graph easier to analyze. The loader applies its
+shared decode budget to long straight-line registration initializers. It retains
+confirmed function boundaries and stops at control transfers; padding-like
+immediate bytes cannot truncate a decoded instruction merely because a local
+instruction-count cutoff was reached.
+
 ## Verified LowIR concolic branch flips
 
 `NeverDConcolic` follows one native LowIR trace from explicit entry-register

@@ -124,7 +124,7 @@ TEST(RegistrationCallABI, ChecksImmutableSimpleThrowInfo) {
       F.tableWord(0x24, 0);
       break;
     case 8:
-      F.tableWord(0x30, 0);
+      F.tableWord(0x30, 2);
       break;
     case 9:
       F.tableWord(0x30, 5);

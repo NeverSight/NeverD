@@ -33,7 +33,7 @@ collectRegistrationRuntimeThrowInfos(const LowFunc &Function,
     if (!Owner || !Owner->isReadable() || Owner->isWritable() ||
         Owner->isExecutable() || !Image.readVA(Address, 16))
       continue;
-    // The scalar decoder reads three fixed records and at most 4096 name
+    // The trivial-copy decoder reads three fixed records and at most 4096 name
     // bytes. Charge its full bound even when the candidate fails early.
     if (!chargeCalleeWork(Work, 16 + 8 + 28 + 4096))
       return std::nullopt;

@@ -79,6 +79,15 @@ LowIR verifica gli accessi agli oggetti e la durata del frame salvato. I campion
 distruzione ordinata e scritture per riferimento su due generazioni, entrambe le modalità patch e basi
 forzate. La durata generale degli oggetti e le conversioni di tipo restano da supportare.
 
+Gli oggetti PE32 copiati banalmente supportano catch per valore o riferimento, throw diretto e rilancio.
+Il ThrowInfo immutabile deve contenere un solo tipo senza correzioni dell’indirizzo, costruttore di
+copia, distruttore o callback di inoltro. Ogni byte deve essere inizializzato e i puntatori al frame
+privato non possono uscire. I casi O0/O1 verificano strutture di 8 e 12 byte, modifiche dei campi,
+rami catch, entrambe le modalità CLI e rilocazione con Microsoft CRT. Le copie PHI mantengono arco
+CFG e callback; la verifica indipendente rifiuta chiamate aggiunte, alias e destinazioni alterate.
+RTTI non rivela il layout dei membri: i controlli sintattici C++ usano le dichiarazioni reali del test,
+mentre l’output conserva offset nativi e chiamate throw per aggregati sconosciuti.
+
 ## Contratto IR
 
 I metadata attraversano tutte le rappresentazioni senza alterare il CFG ordinario:

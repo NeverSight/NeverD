@@ -210,6 +210,10 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ frame has no runtime escape");
   if (auto Error = bindCxxCatches(Result, Med, Function, *Layout))
     return std::move(Error);
+  if (auto Error = bindCxxCopyEdges(Result))
+    return std::move(Error);
+  for (const auto &[Block, Target] : Result.CopyEdges)
+    CompilerBlocks.insert(Block);
   if (auto Error = bindCxxCatchStack(Result, Med, Function))
     return std::move(Error);
   const auto CatchParents = projectX86RegistrationCatchParents(Med);
@@ -541,8 +545,13 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       for (int Successor : SourceBlocks.at(Id)->Succs)
         if (Result.Segments.count(Successor))
           Expected.insert(Result.Segments.at(Successor).Enter->getParent());
-      for (unsigned Index = 0; Index < Term->getNumSuccessors(); ++Index)
-        Actual.insert(Term->getSuccessor(Index));
+      for (unsigned Index = 0; Index < Term->getNumSuccessors(); ++Index) {
+        const auto *Target = Term->getSuccessor(Index);
+        if (const auto Copy = Result.CopyEdges.find(Target);
+            Copy != Result.CopyEdges.end())
+          Target = Copy->second;
+        Actual.insert(Target);
+      }
       if (Expected != Actual || StateByBlock.at(Id)->CallbackOnly &&
                                     llvm::isa<llvm::ReturnInst>(Term))
         return rejectIR(

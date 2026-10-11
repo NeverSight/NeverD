@@ -1336,6 +1336,7 @@ add_neverd_unittest(NeverDWindowsRegistrationRealignedTests
   eh/WindowsRegistrationRealignedNativeTests.cpp
   eh/WindowsRegistrationMultipleCatchTests.cpp
   eh/WindowsRegistrationNestedTryTests.cpp
+  eh/RegistrationObjectTests.cpp
   eh/WindowsRegistrationCatchContextTests.cpp
   eh/RegistrationSourceReceiptTestUtils.cpp
   eh/RegistrationCleanupTestUtils.cpp
@@ -1372,6 +1373,7 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationFrameTaintTests.cpp
   eh/RegistrationFrameStoresTests.cpp
   eh/RegistrationFrameBitsTests.cpp
+  eh/RegistrationPHICopyTests.cpp
   eh/COFFTrampolineRegionTests.cpp
   eh/RegistrationReliftTests.cpp
   eh/RegistrationSourceReceiptTestUtils.cpp

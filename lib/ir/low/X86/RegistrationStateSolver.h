@@ -13,7 +13,6 @@
 #include "neverd/ir/low/LowIR.h"
 
 #include <compare>
-#include <deque>
 #include <map>
 #include <set>
 #include <tuple>
@@ -91,6 +90,7 @@ public:
 
 private:
   bool initialize();
+  bool initializeOrder();
   bool validateRealignedLayout();
   bool realignedMemoryIsDisjoint(const FrameValue &Address,
                                  uint16_t Width) const;
@@ -170,8 +170,8 @@ private:
   std::map<va_t, RegistrationTryLevelStore> Stores;
   std::set<int32_t> AllLevels;
   std::vector<Domain> Incoming;
-  std::deque<size_t> Work;
-  std::vector<bool> Queued;
+  std::vector<size_t> Order;
+  std::set<std::pair<size_t, size_t>> Work;
   size_t WorkUsed = 0;
   bool Exhausted = false;
   bool ProvenInstallation = false;

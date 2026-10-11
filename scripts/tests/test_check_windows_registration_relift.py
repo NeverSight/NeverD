@@ -13,6 +13,7 @@ from scripts import check_windows_registration_relift as runner
 from scripts import replay_windows_registration_relift as replay
 from scripts.tests import test_check_windows_registration_entry as first_fixture
 from scripts.tests import test_check_windows_registration_nested_try as nested_fixture
+from scripts.tests import test_windows_registration_objects as object_fixture
 from scripts import check_windows_registration_multiple_catch as catches
 
 
@@ -22,6 +23,7 @@ class ReliftEvidenceTests(unittest.TestCase):
         first_root = root / "first"
         first_root.mkdir()
         first = (first_fixture.EntryEvidenceTests().capture(first_root) if profile_name == "entry"
+                 else object_fixture.ObjectEvidenceTests().capture(first_root) if profile_name == "objects"
                  else nested_fixture.NestedTryEvidenceTests().capture(first_root))
         first_path = first_root / profile.first_capture
         first_path.write_text(json.dumps(first))
@@ -52,6 +54,9 @@ class ReliftEvidenceTests(unittest.TestCase):
             if profile_name == "catch-cleanup":
                 receipt.update(entry_registers=0, entry_pop=0, incoming_reads=0, incoming_writes=0,
                                cleanup_actions=2 if "-o0-" in name else 1, cleanup_calls=2)
+            elif profile_name == "objects":
+                receipt.update(entry_registers=0, entry_pop=0, incoming_reads=0, incoming_writes=0,
+                               cleanup_actions=0, cleanup_calls=0)
             (parent / "contract.json").write_text(json.dumps(receipt))
             (parent / "source.ll").write_text("second-generation IR")
             (parent / "rewrite.xml").write_text('<testsuites tests="1"/>')
@@ -68,6 +73,47 @@ class ReliftEvidenceTests(unittest.TestCase):
                                              "sha256": runner.file_digest(path)})
             result["cases"].append(record)
         return result
+
+    def test_object_relift_requires_original_byte_proofs_and_both_generations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = self.capture(root, "objects")
+            self.assertEqual(len(replay.validate_capture(root, capture)), 128)
+            for wrong in ("entry", "catch-cleanup", "unknown"):
+                with self.subTest(profile=wrong), self.assertRaises(ValueError):
+                    replay.validate_capture(root, capture | {"profile": wrong})
+            profile = runner.get_profile("objects")
+            for case in capture["cases"]:
+                name, parent = case["case"], root / case["case"]
+                receipt = json.loads((parent / "contract.json").read_text())
+                first = json.loads((root / "first" / name / "contract.json").read_text())
+                original = runner.PE32((parent / "original.exe").read_bytes())
+                product = runner.PE32((parent / "product.exe").read_bytes())
+                for key in ("entry_registers", "entry_pop", "cleanup_actions", "cleanup_calls",
+                            "incoming_reads", "incoming_writes"):
+                    for value in (1, False, None):
+                        with self.subTest(case=name, key=key, value=value), self.assertRaises(ValueError):
+                            profile.validate_installation(original, product, receipt | {key: value}, first, name)
+                values = ([39, 28, 39, 39, 18, 39, 1, 12] if "rethrow-" in name
+                          else [17, 28, 39, 7, 18, 39, 1, 12]) + [runner.BASES[0] + 0x3004] * 3
+                output = "MULTICATCH " + " ".join(f"{v:08X}" for v in values) + "\n"
+                for changed in (output, output.replace("00403004", "00402004"),
+                                output.replace("00000012", "00000007")):
+                    result = {"exit_code": int(name.endswith("-control")), "stdout": changed}
+                    with patch.object(catches, "run_image", return_value=result):
+                        args = (parent / "product.exe", name, "product", receipt, [], {}, 1)
+                        if changed == output:
+                            profile.observe(*args)
+                        else:
+                            with self.assertRaises(ValueError):
+                                profile.observe(*args)
+            first_path = root / "first" / profile.first_capture
+            first = json.loads(first_path.read_text())
+            first["object_proof_sha256"] = "stale"
+            first_path.write_text(json.dumps(first))
+            capture["first_capture_sha256"] = runner.file_digest(first_path)
+            with self.assertRaises(ValueError):
+                replay.validate_capture(root, capture)
 
     def test_cleanup_profile_requires_its_nested_capture_and_ordered_calls(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../eh/MedLLVMEHHelpers.h"
+#include "MedLLVMRegistrationCxxBlocks.h"
 #include "MedLLVMRegistrationCxxCall.h"
 #include "MedLLVMRegistrationCxxCatch.h"
 #include "MedLLVMRegistrationCxxContinuation.h"
@@ -42,7 +43,8 @@ namespace neverd {
 
 bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     const MedFunc &Func, llvm::Function &Parent,
-    const std::map<int, llvm::BasicBlock *> &OriginalBlockMap) {
+    const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
+    const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges) {
 #ifndef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
   return false;
 #else
@@ -292,6 +294,12 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   if (Resumes.empty() || Resumes.size() != States.CxxContinuations.size() ||
       Calls.size() != States.CallFrameEffects.size())
     return false;
+  const auto CopyOwners = registrationCxxPHICopyOwners(
+      *CatchOwners, OriginalBlockMap, PHICopyEdges);
+  if (!CopyOwners)
+    return false;
+  for (const auto &[Block, Identity] : *CopyOwners)
+    Catches.at(Identity).Blocks.insert(Block);
   for (const auto &[Identity, Catch] : Catches) {
     if (!Catch.Blocks.count(Catch.Handler))
       return false;

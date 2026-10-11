@@ -11,6 +11,7 @@ import re
 import shutil
 import struct
 import subprocess
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
 if __package__:
@@ -106,8 +107,23 @@ def validate_decompilation(text: str, language: str, inline: bool = False,
             raise ValueError("nested cleanup output lost a native action")
 
 
+def source_profile(name):
+    if name == "nested":
+        return SimpleNamespace(source=SOURCE, forms=FORMS, cases=CASES,
+                               types=None, proof=None, test=None,
+                               validate_decompilation=validate_decompilation)
+    if name == "objects":
+        if __package__:
+            from .windows_registration_objects import profile
+        else:
+            from windows_registration_objects import profile
+        return profile(validate_decompilation)
+    raise ValueError("unknown nested source profile")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", choices=("nested", "objects"), default="nested")
     parser.add_argument("--test-binary", type=Path, required=True)
     parser.add_argument("--patch-binary", type=Path, required=True)
     parser.add_argument("--runtime-libs", type=Path, required=True)
@@ -119,11 +135,12 @@ def main() -> int:
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
+    profile = source_profile(args.profile)
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy() | {"WINEDEBUG": "-all", "WINEDLLOVERRIDES": "vcruntime140=n"}
     report = {"schema": 1, "evidence": "nested-try-source-reconstruction",
-              "passed": False, "commands": [], "cases": []}
+              "passed": False, "profile": args.profile, "commands": [], "cases": []}
 
     def run(command, extra=None):
         command = list(map(str, command))
@@ -142,15 +159,18 @@ def main() -> int:
             raise ValueError("compiler, linker or Wine unavailable")
         libraries, report["runtime_libraries"] = load_libraries(args.runtime_libs.resolve())
         runtime, report["catch_search_runtime"] = load_runtime(args.runtime_libs.resolve())
-        report["source_sha256"], report["emitter_sha256"] = file_digest(SOURCE), file_digest(EMITTER)
+        report["source_sha256"], report["emitter_sha256"] = file_digest(profile.source), file_digest(EMITTER)
         report["proof_sha256"] = file_digest(PROOF)
         report["rethrow_proof_sha256"] = file_digest(RETHROW_PROOF)
         report["direct_proof_sha256"] = file_digest(DIRECT_PROOF)
         report["catch_proof_sha256"] = file_digest(CATCH_PROOF)
         report["receipt_proof_sha256"] = file_digest(RECEIPT_PROOF)
         report["cleanup_proof_sha256"] = file_digest(CLEANUP_PROOF)
+        if profile.proof:
+            report["object_proof_sha256"] = file_digest(profile.proof)
+            report["object_types_sha256"] = file_digest(profile.types)
         test, patch = args.test_binary.resolve(), args.patch_binary.resolve()
-        for kind, optimization in FORMS.items():
+        for kind, optimization in profile.forms.items():
             for control in (False, True):
                 name = kind + ("-control" if control else "")
                 case = out / name
@@ -172,7 +192,7 @@ def main() -> int:
                      *(["-DINLINE_RETHROW_SEARCH"] if inline else []),
                      *(["-DRETHROW_SEARCH"] if rethrow else
                        ["-DSECONDARY_SEARCH"] if secondary else []),
-                     "-DEXPECTED_FIRST=" + str(first), "-c", SOURCE,
+                     "-DEXPECTED_FIRST=" + str(first), "-c", profile.source,
                      "-o", case / "driver.obj"])
                 original, product = case / "original.exe", case / "product.exe"
                 run([linker, "/entry:mainCRTStartup", "/nodefaultlib", "/machine:x86", "/subsystem:console",
@@ -189,13 +209,15 @@ def main() -> int:
                 test_filter = ("WindowsRegistrationCatchContext.InputPE32RestoresTheOuterReferenceCatch"
                                if catch_try else
                                "WindowsRegistrationNestedTry.InputPE32Reconstructs" + test_case)
+                if profile.test:
+                    test_filter += ":" + profile.test
                 run([test, "--gtest_filter=" + test_filter,
                      "--gtest_output=xml:" + str(case / "rewrite.xml")],
                     {"NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32": str(original),
                      "NEVERD_REGISTRATION_REALIGNED_OUTPUT_PE32": str(product),
                      "NEVERD_REGISTRATION_REALIGNED_RECEIPT": str(case / "contract.json"),
                      "NEVERD_REGISTRATION_OUTPUT_IR": str(case / "source.ll")})
-                if require_test_result(case / "rewrite.xml") != 1:
+                if require_test_result(case / "rewrite.xml") != 1 + int(bool(profile.test)):
                     raise ValueError("nested source reconstruction check missing")
                 receipt = json.loads((case / "contract.json").read_text())
                 validate_installation(PE32(original.read_bytes()), PE32(product.read_bytes()), receipt, name)
@@ -214,14 +236,14 @@ def main() -> int:
                     run([patch, "decompile", original,
                          "--func=" + hex(receipt["base"] + receipt["source_begin"]),
                          "--language=" + language, "-o", source])
-                    validate_decompilation(source.read_text(), language, inline, direct, catch_try,
+                    profile.validate_decompilation(source.read_text(), language, inline, direct, catch_try,
                                            (2 if optimization == "-O0" else 1) if cleanup else 0)
                     if language == "c":
                         run([compiler, "-x", "c", "-std=c11", "-fsyntax-only",
                              "-Werror=implicit-function-declaration", source])
                     else:
                         run([compiler, "-x", "c++", "-std=c++17",
-                             "-fsyntax-only", source])
+                             "-fsyntax-only", *(["-include", profile.types] if profile.types else []), source])
                     record["decompilation"][language] = file_digest(source)
                 for route in ROUTES:
                     source = case / (route + ".exe")

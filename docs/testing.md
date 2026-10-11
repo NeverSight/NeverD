@@ -2905,6 +2905,25 @@ must belong to the selected parent according to its export and linker map.
 `check_windows_registration_cxx.py` labels original-program and generated-frame
 ABI evidence separately; neither establishes source C++ reconstruction.
 
+The nested PE32 runner also accepts `--profile objects`. It builds 8-byte and
+12-byte trivial exception records with Clang O0/O1, private/direct throws,
+reference updates and rethrows into value catches. The 16 source/control cases
+cover 128 images across both patch modes and forced bases. The extra object
+proof and exact fixture type declarations are hashed into capture admission;
+C++ syntax checks use those declarations rather than inventing record layouts.
+`replay_windows_registration_nested_try.py` selects the authenticated profile
+and replays identical files with the Microsoft CRT. `RegistrationPHICopy` checks
+emission ownership and independently rejects nonprivate scalar copy edges.
+
+The object profile also feeds `check_windows_registration_relift.py --profile
+objects`. All sixteen original/control cases are loaded again from their first
+installed PE32 bytes, reconstructed a second time, installed through both CLI
+modes, and executed at both bases (128 runs). Native Windows replays the same
+files with `replay_windows_registration_relift.py`; source proofs, both image
+generations, Microsoft CRT identity, field effects and throw caller ranges are
+mandatory evidence. Second-generation direct throws run the normal call ABI
+recovery pass before native LLVM emission.
+
 ### Language exception models
 
 Everything that is not the Windows table model lives in one focused target.

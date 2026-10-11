@@ -81,6 +81,16 @@ appel ; LowIR prouve les accès aux objets et la durée de vie du cadre sauvegar
 vérifient l’ordre des destructions et les écritures par référence sur deux générations, les deux modes patch
 et les bases forcées. Les durées de vie générales des objets et les conversions de types restent à traiter.
 
+Les objets PE32 copiés trivialement prennent en charge les catches par valeur ou référence,
+les throws directs et les relances. Le ThrowInfo immuable doit décrire un seul type sans ajustement,
+constructeur de copie, destructeur ni callback de transfert. Chaque octet est initialisé et aucun
+pointeur de frame privée ne s’échappe. Les cas O0/O1 vérifient des structures de 8 et 12 octets,
+les modifications, les branches de catch, les deux modes CLI et le rebasage avec le CRT Microsoft.
+Les copies PHI gardent leur callback et leur arête CFG ; la validation indépendante refuse appels
+supplémentaires, alias mémoire et cibles modifiées. Le RTTI ne décrit pas les membres : les contrôles
+syntaxiques C++ utilisent les déclarations réelles du test, et la sortie conserve offsets natifs
+et appels throw des agrégats inconnus.
+
 ## Contrat IR
 
 Les metadata d’exception traversent toutes les représentations sans modifier le

@@ -20,6 +20,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateCookies.cpp
   X86/RegistrationStateDispatch.cpp
   X86/RegistrationStateOccurrences.cpp
+  X86/RegistrationStateOrder.cpp
   X86/RegistrationStateRealignment.cpp
   X86/RegistrationStateInstallation.cpp
   X86/RegistrationStateResult.cpp

@@ -73,10 +73,8 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
     MergeFlag(Dest.Installed, Source.Installed);
     MergeFlag(Dest.CanDispatch, Source.CanDispatch);
   }
-  if (Changed && !Queued[Target]) {
-    Work.push_back(Target);
-    Queued[Target] = true;
-  }
+  if (Changed)
+    Work.emplace(Order[Target], Target);
 }
 
 void RegistrationStateSolver::dispatch(
