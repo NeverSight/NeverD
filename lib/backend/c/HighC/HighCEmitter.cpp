@@ -1005,6 +1005,10 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &Ex) {
     if (!Seen.insert(&Ex).second)
       return;
+    if (Ex.Kind == ExprKind::BinOp &&
+        (Ex.Op == NdOp::FLOAT_ADD || Ex.Op == NdOp::FLOAT_SUB ||
+         Ex.Op == NdOp::FLOAT_MULT || Ex.Op == NdOp::FLOAT_DIV))
+      NeedsSeparateFPOperations = true;
     if (Ex.Kind == ExprKind::Call) {
       if (Ex.SourceCallHint) {
         const auto &Hint = *Ex.SourceCallHint;
@@ -1594,6 +1598,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     OS << "#include <" << H << ">\n";
   if (NeedsFEnvAccess)
     OS << "#pragma STDC FENV_ACCESS ON\n";
+  // Recovered operations round separately even when printed in one expression.
+  // A cast to the same floating type does not prevent compiler contraction;
+  // explicit fused intrinsics still retain their original one-rounding call.
+  if (NeedsSeparateFPOperations)
+    OS << "#pragma STDC FP_CONTRACT OFF\n";
   OS << "\n";
   WriteInt128Spelling();
   if (NeedsBlockObject)
