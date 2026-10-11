@@ -187,6 +187,7 @@ Heartbeat retains its native fields and adds
 | `web_import_commit` | `preview_token` |
 | `web_metadata` | None |
 | `web_electron_manifest_analyze` | Exact `revision`, captured `artifact_id` (original file or available ASAR member); explicit manifest profile, exact admitted entry candidate, no runtime or framework verification |
+| `web_desktop_manifest_analyze` | Exact `revision`, captured `artifact_id`, and `input_kind` (`nwjs` or `vsix`); bounded manifest declarations and exact parent-directory candidates, without runtime/activation/permission inference. Archive members retain their namespace; individual Bun/SEA assets have no neighbors |
 | `web_electron_source_analyze` | Exact `revision`, analyzed `source_id`; lexical module-origin candidates and source-visible window/IPC/bridge boundaries; requires the JS parser |
 | `web_electron_source_records` | Exact `revision`, `source_id`, optional `offset:0,limit:128`; exact source node/range links and fixed categories, private values omitted |
 | `web_electron_ipc_analyze` | Exact `revision`, analyzed `manifest_artifact_id`, `source_ids` array of 1–16 analyzed sources including the main candidate; explicit captured directory scope, private exact UTF-16 channel comparison, no runtime routing proof |

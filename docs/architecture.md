@@ -551,6 +551,13 @@ does not depend on the JS parser. `ElectronIPC` owns explicit manifest-scoped
 channel comparisons; `SessionElectronIPC` only selects cached evidence and
 publishes bounded source/channel/endpoint pages. No transport infers routing.
 `ElectronSelection` owns shared manifest/source admission for scoped consumers.
+`desktop/Manifest` separately owns bounded manifest/hash/name admission and
+exact captured file comparison for NW.js and VS Code extensions;
+`desktop/NWManifest` and `desktop/VSIXManifest` own their declaration rules.
+`SessionDesktop` owns profile/revision-bound caches and fixed metadata replies.
+Individual opaque-key Bun/SEA assets never acquire a directory namespace.
+The C API, CLI, worker and MCP only select and publish this common evidence.
+See the [desktop manifest profile](web-desktop-manifest-profile.md).
 `SourcePaths` owns finite captured-root path candidates; `ElectronEntries`
 compares them with exact available namespace members. `SessionElectronEntries`
 selects evidence, caches results and publishes redacted pages; CLI and worker

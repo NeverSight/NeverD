@@ -156,6 +156,15 @@ NEVERD_API const char *neverd_web_bun_export_json(
 NEVERD_API const char *neverd_web_electron_manifest_analyze_json(
     neverd_web_session_t Session, const char *ExpectedRevision,
     size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize);
+/// Analyze an explicitly selected NW.js or VS Code extension manifest.
+/// InputKind is nwjs or vsix; exact entry candidates stay within its captured
+/// namespace. Available archive members and individual stored assets are valid
+/// inputs; assets do not acquire a directory namespace from private keys.
+NEVERD_API const char *neverd_web_desktop_manifest_analyze_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
+    const char *InputKind, size_t InputKindSize);
+
 /// Source-visible Electron API candidates using lexical module origins.
 /// No framework/runtime-target verification, execution or permission verdict.
 NEVERD_API const char *neverd_web_electron_source_analyze_json(

@@ -42,18 +42,22 @@ std::string field(const llvm::json::Value &V, const char *Name) {
 int runWebArchive() {
   const bool Packages = WebArguments[0] == "archive-packages";
   const bool Bun = WebArguments[0] == "archive-bun";
+  const bool Desktop = WebArguments[0] == "archive-desktop";
   const bool Inventory = WebArguments[0] == "archive";
-  if ((!Packages && !Bun && !Inventory) ||
+  if ((!Packages && !Bun && !Inventory && !Desktop) ||
       (Inventory && WebArguments.size() != 3 && WebArguments.size() != 4) ||
       (Bun && WebArguments.size() != 5) ||
       (Packages && WebArguments.size() != 6) ||
+      (Desktop && WebArguments.size() != 6) ||
       (WebArguments[2] != "tar" && WebArguments[2] != "tgz" &&
        WebArguments[2] != "zip")) {
     llvm::errs() << "usage: neverd web archive <file-or-root> <tar|tgz|zip> "
                     "[artifact-index] | archive-packages <file-or-root> "
                     "<tar|tgz|zip> <artifact-index> <member-index> "
                     "<npm-lock|package-json> | archive-bun <file-or-root> "
-                    "<tar|tgz|zip> <artifact-index> <member-index>\n";
+                    "<tar|tgz|zip> <artifact-index> <member-index> | "
+                    "archive-desktop <file-or-root> <tar|tgz|zip> "
+                    "<artifact-index> <member-index> <nwjs|vsix>\n";
     return 2;
   }
   auto Index = [](size_t At, uint64_t &Out) {
@@ -134,6 +138,13 @@ int runWebArchive() {
                ? 0
                : 1;
   const auto &Kind = WebArguments[5];
+  if (Desktop)
+    return reply(neverd_web_desktop_manifest_analyze_json(
+                     G.S, Revision.data(), Revision.size(), MID.data(),
+                     MID.size(), Kind.data(), Kind.size()),
+                 true)
+               ? 0
+               : 1;
   const auto Graph =
       reply(neverd_web_packages_analyze_json(
                 G.S, Revision.data(), Revision.size(), MID.data(), MID.size(),

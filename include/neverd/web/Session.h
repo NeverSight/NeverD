@@ -93,6 +93,9 @@ public:
                           uint64_t Offset, uint64_t Limit) const;
   std::string analyzeElectronManifest(std::string_view ExpectedRevision,
                                       std::string_view ArtifactID);
+  std::string analyzeDesktopManifest(std::string_view ExpectedRevision,
+                                     std::string_view ArtifactID,
+                                     std::string_view Kind);
   std::string analyzeElectronSource(std::string_view ExpectedRevision,
                                     std::string_view SourceID);
   std::string electronSourceRecords(std::string_view ExpectedRevision,

@@ -273,6 +273,21 @@ const char *neverd_web_electron_manifest_analyze_json(
 #endif
 }
 
+const char *neverd_web_desktop_manifest_analyze_json(
+    neverd_web_session_t Session, const char *ExpectedRevision,
+    size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
+    const char *InputKind, size_t InputKindSize) {
+#ifdef NEVERD_ENABLE_WEB_ANALYSIS
+  return invoke(Session, [&](auto &S) {
+    return S.analyzeDesktopManifest(buffer(ExpectedRevision, RevisionSize, 20),
+                                    buffer(ArtifactID, ArtifactIDSize, 64),
+                                    buffer(InputKind, InputKindSize, 32));
+  });
+#else
+  return unavailable();
+#endif
+}
+
 const char *neverd_web_packages_analyze_json(
     neverd_web_session_t Session, const char *ExpectedRevision,
     size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,

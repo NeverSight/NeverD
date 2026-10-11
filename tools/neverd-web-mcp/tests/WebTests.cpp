@@ -255,6 +255,15 @@ void zipArchive(Harness &H) {
   H.same("web_package_records", {{"revision", H.Revision},
                                  {"analysis_id", P.at("package_analysis_id")},
                                  {"record_kind", "scripts"}});
+  for (const auto *Kind : {"nwjs", "vsix"}) {
+    const auto M = H.same("web_desktop_manifest_analyze",
+                          {{"revision", H.Revision},
+                           {"artifact_id", Page.at("items")[0].at("member_id")},
+                           {"input_kind", Kind}});
+    require(M.at("runtime_entry_verified") == false &&
+                M.at("framework_verified") == false,
+            "MCP changed desktop evidence classification");
+  }
 }
 } // namespace
 

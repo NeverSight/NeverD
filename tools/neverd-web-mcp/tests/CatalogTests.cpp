@@ -87,6 +87,19 @@ void closedArguments() {
   }
 }
 void coordinateBounds() {
+  {
+    Catalog Desktop(capabilities({"desktop_manifest_analyze"}), 0);
+    const auto &Tool = Desktop.find("neverd_web_desktop_manifest_analyze");
+    Json Args{{"revision", "1"}, {"artifact_id", "a"}, {"input_kind", "nwjs"}};
+    Tool.payload(Args);
+    Args["input_kind"] = "vsix";
+    Tool.payload(Args);
+    Args["input_kind"] = "electron";
+    refuses([&] { Tool.payload(Args); });
+    Args["input_kind"] = "nwjs";
+    Args["path"] = "CANARY_PATH";
+    refuses([&] { Tool.payload(Args); });
+  }
   Catalog C(capabilities({"source_anchor", "source_view_chunk", "artifacts"}),
             0);
   const auto &Anchor = C.find("neverd_web_source_anchor");
