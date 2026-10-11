@@ -52,11 +52,13 @@ TEST_F(X86_64_SSEAVX, DivsdLifts) {
 }
 
 TEST_F(X86_64_SSEAVX, SqrtssLifts) {
-  verifyLowIRContains(testObj(), "test_sqrtss", "FLOAT_SQRT");
+  verifyScalarFPState(testObj(), "test_sqrtss",
+                      neverd::Intrinsic::X86FPArithState, 21);
 }
 
 TEST_F(X86_64_SSEAVX, SqrtsdLifts) {
-  verifyLowIRContains(testObj(), "test_sqrtsd", "FLOAT_SQRT");
+  verifyScalarFPState(testObj(), "test_sqrtsd",
+                      neverd::Intrinsic::X86FPArithState, 29);
 }
 
 TEST_F(X86_64_SSEAVX, CvtSs2SiLifts) {
