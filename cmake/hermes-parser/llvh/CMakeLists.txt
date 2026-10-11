@@ -26,3 +26,11 @@ configure_file("${_llvh}/include/llvh/Config/config.h.cmake"
 configure_file("${_llvh}/include/llvh/Config/llvm-config.h.cmake"
                include/llvh/Config/llvm-config.h)
 add_subdirectory("${_llvh}/lib" lib)
+
+# LLVM and LLVH both expose this Windows signal callback with C linkage. Keep
+# the parser's definition and signal registration private to its support copy.
+if(WIN32)
+  set_property(SOURCE "${_llvh}/lib/Support/Signals.cpp"
+    TARGET_DIRECTORY LLVHSupport APPEND PROPERTY COMPILE_DEFINITIONS
+    HandleAbort=NeverDLLVHHandleAbort)
+endif()
