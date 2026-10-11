@@ -918,6 +918,20 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       Found[K] = inlineUniqueLoadVars(Found[K], 0);
   }
 
+  // A call through a pointer passes no register argument where only directly
+  // called internal functions take them and an unknown callee takes every
+  // argument on the stack (an ELF or Mach-O i386 image; a Windows one may
+  // call __thiscall or __fastcall code), as MedIR's recovery has it
+  // (MedABIPass).  Its stack arguments then start at the first position.
+  if (Convention && Convention->RegparmOnlyForInternalCalls && Image &&
+      CallIdx < Ops.size() && Ops[CallIdx].Opcode == NdOp::INDIR_CALL &&
+      !Ops[CallIdx].SourceCallHint &&
+      !(Convention->ImportsMayTakeRegisterArguments &&
+        Convention->ImportsMayTakeRegisterArguments(*Image)))
+    for (size_t K = 0; K < ParamRegs.size() && K < static_cast<size_t>(MaxArgs);
+         ++K)
+      Found[K] = nullptr;
+
   int FirstStackSlot = 0;
   for (int K = 0; K < MaxArgs; ++K) {
     if (Found[K] && Found[K]->Kind != ExprKind::Undef)

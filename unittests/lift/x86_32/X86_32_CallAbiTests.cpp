@@ -121,3 +121,60 @@ int use2(int a) {
 )C",
                           "use2", {"use2", "k2", "h4"});
 }
+
+// A call through a function pointer takes its arguments on the stack, as
+// many as its caller pushes, whatever ECX and EDX hold at the call: here a
+// quotient in EDX and the first argument in ECX, as Clang leaves them in a
+// regparm caller.  The host cannot run i386 function pointers, so the test
+// counts the arguments of each call through the pointer.
+TEST_F(X86_32_CallAbi, AFunctionPointerCallTakesItsStackArguments) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Source = tmpFile("function-pointer-call.c");
+  const auto Object = tmpFile("function-pointer-call.o");
+  std::ofstream(Source) << R"C(
+static int add3(int a, int b) { return a + 3 * b; }
+static int sub2(int a, int b) { return a - 2 * b; }
+__attribute__((noinline)) static int apply(int (*f)(int, int), int a, int b) {
+  int q = a / 7, r = b % 5;
+  return f(q, r) ^ f(r + 1, q - 1);
+}
+int pick(int x) { return apply((x & 1) ? add3 : sub2, x * 13, x >> 2); }
+)C";
+  const auto Compiled = exec(
+      NEVERD_TEST_CLANG, {"-target", "i386-linux-gnu", "-march=pentium4",
+                          "-fno-pic", "-O2", "-fno-asynchronous-unwind-tables",
+                          "-c", Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+  const auto Decompiled = decompileToHighC(Object);
+  ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+  std::ifstream Input(tmpFile("decompiled_high.c"));
+  const std::string C((std::istreambuf_iterator<char>(Input)),
+                      std::istreambuf_iterator<char>());
+  const size_t Body = C.find("apply(int32_t arg0");
+  ASSERT_NE(Body, std::string::npos) << C;
+  const std::string Apply = C.substr(Body, C.find("\n}", Body) - Body);
+  // Each call casts the pointer to a function type, `(*)())`, then applies
+  // it to an argument list: count the list's top-level commas.
+  unsigned Calls = 0;
+  for (size_t At = Apply.find("(*)())"); At != std::string::npos;
+       At = Apply.find("(*)())", At + 1)) {
+    size_t Open = Apply.find("))(", At + 6);
+    ASSERT_NE(Open, std::string::npos) << Apply;
+    Open += 2;
+    unsigned Depth = 0, Arguments = 1;
+    size_t I = Open;
+    for (; I < Apply.size(); ++I) {
+      if (Apply[I] == '(')
+        ++Depth;
+      else if (Apply[I] == ')' && --Depth == 0)
+        break;
+      else if (Apply[I] == ',' && Depth == 1)
+        ++Arguments;
+    }
+    EXPECT_EQ(Arguments, 2u) << Apply.substr(Open, I - Open + 1) << "\n"
+                             << Apply;
+    ++Calls;
+  }
+  EXPECT_EQ(Calls, 2u) << Apply;
+}
