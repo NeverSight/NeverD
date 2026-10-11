@@ -71,6 +71,23 @@ std::string Session::capabilities() {
                          {"max_cached_map_segments", 200000},
                          {"resolves_external_references", false}}};
   Operations.emplace_back("electron_manifest_analyze");
+  Operations.emplace_back("sea_extract");
+  Operations.emplace_back("sea_records");
+  llvm::json::Array SEAProfiles;
+  for (const auto &P : seaProfiles())
+    SEAProfiles.emplace_back(P);
+  Analyses.emplace_back(llvm::json::Object{
+      {"kind", "node_sea_extraction"},
+      {"profiles", std::move(SEAProfiles)},
+      {"max_input_bytes", std::to_string(MaxSEAInputBytes)},
+      {"max_assets", MaxSEAAssets},
+      {"max_private_name_bytes", std::to_string(MaxSEAPrivateBytes)},
+      {"max_cached_extractions", 4},
+      {"max_page_records", 128},
+      {"executes_input", false},
+      {"authenticates_producer_version", false},
+      {"runtime_activation", "not_checked"},
+      {"v8_decoding", "opaque"}});
   for (const auto *Name : {"stream_preview", "stream_commit", "stream_records"})
     Operations.emplace_back(Name);
   llvm::json::Array StreamProfiles;
@@ -140,8 +157,12 @@ std::string Session::capabilities() {
   Analyses.emplace_back(llvm::json::Object{
       {"kind", "package_archive"},
       {"profile", std::string(PackageArchiveProfile)},
+      {"zip_profile", std::string(ZipArchiveProfile)},
+      {"formats", llvm::json::Array{"tar", "tgz", "zip"}},
       {"available", packageArchiveAvailable()},
       {"gzip_available", packageGzipAvailable()},
+      {"zip_deflate_available", packageZipDeflateAvailable()},
+      {"zip_max_expansion_ratio", 1000},
       {"max_expanded_bytes", std::to_string(MaxPackageArchiveBytes)},
       {"max_cached_expanded_bytes", std::to_string(MaxPackageArchiveBytes)},
       {"max_file_bytes", std::to_string(MaxPackageArchiveFileBytes)},
@@ -506,6 +527,7 @@ std::string Session::commit(std::string_view Token) {
   State->Modules.clear();
   State->Bundles.clear();
   State->BunExtractions.clear();
+  State->SEAExtractions.clear();
   State->AsarExtractions.clear();
   State->ElectronManifests.clear();
   State->ElectronSources.clear();
@@ -556,6 +578,7 @@ std::string Session::metadata() const {
       {"source_module_analysis_count", State->Modules.size()},
       {"source_bundle_analysis_count", State->Bundles.size()},
       {"bun_extraction_count", State->BunExtractions.size()},
+      {"sea_extraction_count", State->SEAExtractions.size()},
       {"asar_extraction_count", State->AsarExtractions.size()},
       {"electron_manifest_count", State->ElectronManifests.size()},
       {"electron_source_count", State->ElectronSources.size()},

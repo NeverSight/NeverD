@@ -2,6 +2,10 @@
 // Included by LibCCallTraits.cpp with LIBC_NO_RETURN_SYMBOL defined; names
 // are written without their leading underscores.
 
+// setjmpex.h and the ARM/ARM64 MinGW wrappers resume a saved environment;
+// they never execute the instruction following the longjmp call.
+LIBC_NO_RETURN_SYMBOL("longjmpex")
+LIBC_NO_RETURN_SYMBOL("mingw_longjmp")
 LIBC_NO_RETURN_SYMBOL("CxxThrowException")
 LIBC_NO_RETURN_SYMBOL("report_gsfailure")
 LIBC_NO_RETURN_SYMBOL("raise_securityfailure")

@@ -39,15 +39,15 @@ their existing scope; no Python support for web APIs is claimed.
 | P1 artifact store and safe input | 12 identity/input, eight blob/storage and five JSON admission tests passed on macOS arm64 Release; 512 MiB disk-backed snapshot qualified | Broader host qualification and redaction/export remain; Windows pending |
 | P2 SDK/CLI/worker | Thirty-four SDK/CLI tests passed, including navigation/storage/view anchors and direct Bun navigation/view/anchor commands; C++ worker adapter/framed-process and all nine worker regressions passed | Broader host, cancellation/resource and distribution qualification remain |
 | P3 C++ JS parser/scope/query/maps | Nine parser/model, thirteen binding, eleven primitive-value, ten effect, eleven module, eight bundle, nine source-view, five navigation, nine standard coordinate/map and six Bun map tests passed | Full syntax matrix, feature-specific navigation/attribution, runtime dataflow, foreign export linking, broader bundle profiles and verified map association remain |
-| P4A Bun extraction | ELF, thin Mach-O and PE x64/ARM64 extraction; decoded-source navigation/view/storage anchors, bounded serialized-map decoding and explicit native handoff; 25 full compiler images, Claude Code 2.1.296 and 20 extraction cases qualified | Other runtime/layout versions and independent SEA/pkg/nexe adapters remain; JSC caches stay opaque |
+| P4A Bun extraction | ELF, thin Mach-O and PE x64/ARM64 extraction; decoded-source navigation/view/storage anchors, bounded serialized-map decoding and explicit native handoff; 25 full compiler images, Claude Code 2.1.296 and 20 extraction cases qualified | Other runtime/layout versions and independent pkg/nexe adapters remain; Node SEA is qualified separately in P7 and JSC caches stay opaque |
 | Shared native handoff | Nine native handoff tests and 65 existing Session C API tests passed; immutable-buffer loader, independent native SDK session and metadata-only CLI/worker entry points; parser/backend omission checked | Other hosts, explicit universal slices and bounded native pipeline work remain |
-| P4B desktop/VSIX extraction | C++ ASAR packed/unpacked extraction; Electron manifest entries, source-visible boundaries, scoped IPC comparison, captured preload/renderer files and HTML/import-map candidates implemented; qualification recorded below | External-source HTML contexts and full import closure, runtime/window routing, distribution detection, safe export, NW.js/VSIX and broader host/release qualification remain |
+| P4B desktop/VSIX extraction | C++ ASAR and ZIP32 containers; Electron manifests/boundaries/IPC/entries and HTML/import-map candidates; real Claude Code VSIX→Bun extraction qualified below | NW.js/VSIX manifest adapters, external-source HTML/import closure, runtime/window routing, distribution detection, safe export and broader host/release qualification remain |
 | P4C package graph/diff | Versioned npm graph/diff, bounded tar/local-PAX/single-gzip members, original SRI and shared source/Bun/native consumers implemented; two official Claude Code npm packages qualify original digest and payload evidence | Source behavior, advisory/provenance, dispositions, readable reports and broader archive/host profiles remain |
 | P4D passive interfaces/HAR | Native HAR preview/commit, direct fetch/WebSocket source candidates and explicit method/origin/path comparison implemented | XHR/wrappers, response/transformation tracing, reviewed displays, schema exports and broader qualification remain |
 | P5 reversible source projections | Reviewed display projection and original/projected ranges implemented; semantic transforms pending | Per-pass receipts, local semantic preconditions, undo and refusal tests |
-| P6 stream/log consumers | Native versioned SSE/JSONL/JSON-RPC/MCP-shape/log readers, recorded-ID candidates and preview/commit implemented | Real supplied transcript/source correlation, broader framing/host qualification and C++ MCP transport remain |
-| P7 Tauri/Wails/Node-family | Pending | Actual asset extraction and bridge/native links for each named profile |
-| P8 C++ MCP, optional presentation, distribution | Pending | No external executable/script dependency, bounded outputs and shipped notices |
+| P6 stream/log consumers | Native versioned SSE/JSONL/JSON-RPC/MCP-shape/log readers, recorded-ID candidates and preview/commit implemented | Real supplied transcript/source correlation and broader framing/host qualification remain |
+| P7 Tauri/Wails/Node-family | Independent Node 22.15.0 SEA preparation/native resource reader and stored-source/asset consumers implemented; qualification below | Tauri/Wails bridges/assets, pkg/nexe, other SEA layouts and host qualification remain |
+| P8 C++ MCP, optional presentation, distribution | Initial native C++ MCP stdio profile implemented and qualified below | Broader host/distribution and optional presentation remain |
 | P9 full acceptance audit | Pending | Issue-by-issue fixture and cross-platform evidence, documented gaps |
 
 Original bytes now use `posix-unlinked-spool-v1`: a private, immediately unlinked
@@ -1280,3 +1280,205 @@ relaxing their deadlines. A canonical macOS fixture temporary path removes the
 snapshot alias assumption. Expanded native worker checks retain the separate
 libc++ fixture mismatch and one address-mapping failure that passed on retry,
 as documented in the [qualification](web-claude-code-qualification.md).
+
+## Independent Node SEA extraction — 2026-10-11
+
+The [SEA profile](web-sea-profile.md) implements the Node 22.15.0 LE64
+preparation format and six native resource profiles: ELF64, thin Mach-O64 and
+PE32+, each on x64 and ARM64. Versioned container readers and one serialized
+blob reader own the semantics. Session publication, the C API, CLI and C++
+worker use the same immutable regions and revision checks. This is independent
+of Bun. Layout compatibility is not producer authentication, runtime activation
+or complete native-loader validation.
+
+Stored CommonJS and assets reach the existing source, map, package and native
+consumers. A selected asset supplies one package document without inventing a
+filesystem namespace from its private key. Nested tar/tgz selections preserve
+original storage identity, expanded coordinates and compressed-frame ancestry.
+Snapshots and V8 caches remain opaque and cannot become source selections.
+Private paths, asset keys and their individual hashes stay out of ordinary
+metadata. Malformed structure and work-limit failures publish no extraction.
+
+Four small blobs produced by the official pinned Node compiler preserve plain,
+minified, asset and cache variants, with independently recorded source/asset
+hashes. An optional real snapshot and six complete official Node images with
+the same 250-byte compiler blob injected provide additional local evidence.
+The original downloads matched the official release checksums. The image
+goldens record whole-image hashes and resource offsets independently of the
+production readers. Native images were never executed. Manual fixture creation
+used trusted upstream compiler/packager tools; no product or automated test
+invokes those tools. The [fixture manifest](../unittests/web/fixtures/sea/README.md)
+records the versions, hashes and reproduction boundary.
+
+On macOS arm64 Release, all 18 focused SEA cases passed, including the optional
+snapshot and all six real images. The complete owning web suite registered
+408 cases: 401 passed, six Zstd-dependent map cases skipped because LLVM Zstd
+is unavailable, and one ASAR-omission-only case skipped in the enabled profile.
+The pinned Bun, Claude Code and npm corpora were supplied, including complete
+2,345-module readable-source recovery. All five selected C++ worker suites
+passed, including direct/framed SEA parity. Enabled C API availability passed;
+its backend-omission-only case skipped. The capability ownership check passed
+after correcting the two new exports' lexical ordering. Logs are
+`/tmp/neverd-sea-{focused-tests,full-web-tests,worker-tests,api-tests,capabilities}.log`.
+
+Node license/notices are preserved and staged beside the shared library and
+in the SDK. Both staged files match the preserved upstream file byte for byte.
+Independent plan/implementation review led to regressions for ELF raw-prefix
+ambiguity, cumulative repeated-note work, Mach-O runtime name-padding aliases
+and derived-asset package admission. Scoped LLVM formatting and `git diff
+--check` passed. No Node/V8 runtime dependency or script implementation was added.
+
+With the JS parser disabled, all 28 selected SEA and shared package SDK cases,
+the enabled-backend availability case and all five C++ worker suites passed.
+The nested source-only SEA case is not compiled in that profile. With the
+whole Web backend disabled, both C ABI availability cases passed, four worker
+suites passed and the Web worker explicitly skipped. The CLI omission check
+exposed a silent session-creation failure; it now emits the backend capability
+result and a fixed diagnostic. Logs use `/tmp/neverd-sea-nojs-*` and
+`/tmp/neverd-sea-disabled-*`.
+
+Both Web flags are restored to ON. Integration merged `dev` at `e442f57e7`
+without conflicts and rebuilt the affected native dependencies. The restored
+owning run repeated all 408 cases with the same 401 passes and seven skips;
+all five selected worker suites, enabled C API availability and capability
+ownership checks passed. The SEA CLI omission commands both returned status 1
+and fixed `capability_unavailable` metadata. Existing native LLVM/libc++
+deprecation and duplicate-library linker warnings remain; this is not a run
+of the upstream x86 floating-point semantic suites. Logs use
+`/tmp/neverd-sea-dev-{build,web,worker,api,capabilities}.log`.
+
+This qualifies extraction of six target layouts on one macOS arm64 host.
+Native Windows/Linux host capture and distribution have not been qualified.
+The five epics remain open: semantic rewrites, remaining desktop adapters,
+package behavior/provenance, wider passive source mapping, other standalone
+formats and native C++ MCP still require their planned implementation and tests.
+
+## Native C++ offline MCP transport — 2026-10-11
+
+The optional `neverd-web-mcp` target implements MCP 2025-06-18 stdio directly
+in C++, through the same Web C API client as the worker. Generic JSON admission
+now belongs to `tools/common/transport`; the Web adapter belongs to
+`tools/common/web`. Worker framing, native protocol fields and operation
+semantics remain in their existing owners. The [MCP profile](web-mcp-profile.md)
+records the exact catalog, lifecycle, bounds and omissions.
+
+Startup configures at most eight private input paths without capturing them.
+MCP requests select input indices and cannot pass arbitrary paths, reviewed
+source ranges or raw export options. Tools follow the backend's available
+operations. C API evidence, revision checks, source anchors and redaction
+preview/commit remain authoritative. Results carry identical structured JSON
+and JSON text under capped serialization. Unsupported methods/arguments,
+analysis failures, notifications, duplicate initialization and EOF have
+separate fixed behavior. No new implementation or test invokes an analysis
+script, JavaScript runtime, external extractor or sample executable.
+
+On macOS arm64 Release, the initial four native MCP suites passed: protocol,
+catalog, shared-backend evidence parity and real stdio with an unusable PATH.
+The evidence suite exercises source views/anchors/maps, Bun, SEA, package
+scripts, HAR, streams, revocation and session separation with private-value
+canaries. The independent imported-library build passed the same four suites
+and installed its executable and unchanged JSON license. Logs are
+`/tmp/neverd-mcp-{tests,final-tests}.log` and
+`/tmp/neverd-mcp-standalone-{configure,build,tests,install}.log`.
+
+All eleven affected worker suites passed serially. The first parallel run
+timed out in HistoryContributions; its isolated retry and the complete serial
+run passed without changes to that behavior. Independent review found the
+GUI's separate mock SDK still compiling Protocol without the extracted JSON
+dependency. It now links the shared JSON target with PIC enabled; the standalone
+mock SDK built successfully. Existing fixture C-linkage warnings remain.
+Logs use `/tmp/neverd-mcp-worker-{tests,history-retry,serial}.log` and
+`/tmp/neverd-mcp-gui-{configure,build}.log`. This did not run the Qt GUI suites.
+
+Review also found that an over-budget string method could produce an error
+reply to a notification. Such notifications are now silently refused, with a
+C++ regression covering long, empty and NUL-containing method strings. GUI CI
+now watches `tools/common/**`; the main CI configuration enables the new MCP
+target and its C++ tests. These workflow edits have not yet run remotely.
+
+With JavaScript parsing disabled, all four MCP suites and five C++ worker
+suites passed, and enabled-backend C ABI availability passed (the omission-only
+case skipped). With the whole Web backend disabled, all four MCP suites and
+both C ABI availability cases passed; four C++ worker suites passed and its
+Web-only suite skipped. MCP's omitted-backend test checks capabilities and
+absence of analysis tools, including through a real stdio process. Logs use
+`/tmp/neverd-mcp-nojs-{tests,worker,api}.log` and
+`/tmp/neverd-mcp-disabled-{tests,api,worker}.log`. Python plugins remain disabled
+in these local runtime-free engine profiles.
+
+After restoring both Web options to ON, all 408 registered Web cases completed:
+401 passed and seven explicitly skipped (six LLVM-Zstd-dependent Bun map cases
+and the ASAR-omission-only case). This included the supplied full SEA images,
+Bun cross-container corpus, npm archives and all 2,345 shipped Claude Code JS
+modules. All eleven affected worker suites passed; the enabled C ABI case
+passed with the omission-only case skipped. The existing capability checker
+validated 23 native capabilities. The independent MCP build and installation
+were also repeated successfully. Logs use
+`/tmp/neverd-mcp-restored-{web,worker,api,capabilities}.log` and
+`/tmp/neverd-mcp-standalone-final-{build,tests,install}.log`.
+
+The new optional real-process `NeverDWebMCPClaude` case pins the official
+2.1.296 linux-x64 artifact by size and SHA-256 and reads all 2,589 modules over
+MCP pages with an unusable PATH. It verifies 2,345 source artifacts, 244 assets,
+2,343 opaque caches and no maps, without launching the sample. Its first run
+hit the harness's 15-second response limit. Fixed operation names and elapsed
+times were added to test diagnostics; no product behavior or timeout was
+changed. The isolated retry and complete five-case MCP run passed in 19.88 and
+19.30 seconds respectively. The retry's preview, commit and extraction calls
+took 6.06, 7.06 and 5.16 seconds. The initial timeout's exact request/cause was
+not captured and remains unisolated; the later passes do not establish a fix.
+Logs are `/tmp/neverd-mcp-claude-{tests,trace,final-tests}.log`.
+
+This completes the initial native C++ offline MCP profile, not the five epics.
+Semantic rewrite receipts/undo, the remaining desktop and standalone adapters,
+package behavior/provenance/reporting, broader passive source mapping, and
+Windows/Linux host and distribution qualification remain outstanding.
+
+## Native ZIP32 container evidence — 2026-10-11
+
+`zip32-local-central-v1` adds explicit ZIP input to the existing archive API.
+`archives/Zip`, `ZipPayload` and shared `PathIndex` own framing, payload decoding
+and portable namespace admission respectively. The session retains one sealed
+spool only after all available members validate. Unknown ordinary methods or
+encryption retain bounded metadata without consumer bytes; unsupported newer
+envelopes refuse the archive. Native zlib supplies raw deflate in process.
+See the [profile](web-zip-profile.md) for exact envelopes and budgets.
+
+Stored members compose direct original-byte anchors; compressed members retain
+expanded coordinates and their complete local member frame. Independent review
+found that nested Bun source/native origins lacked the direct ZIP payload base;
+the shared origin now includes it, and SDK regressions verify the arithmetic
+against original bytes. Malformed extra-field framing was also tightened before
+qualification. Late CRC failures preserve earlier published archives and do not
+consume cache entries. Shared tar namespace semantics remain covered.
+
+On macOS arm64 Release, the final owning Web run registered 421 cases:
+414 passed and seven skipped (six Bun source-map cases require unavailable LLVM
+Zstd, and the path-policy-omission case does not apply to this enabled build).
+This includes all eight hostile/independent ZIP cases, the optional real VSIX,
+nine package archive SDK cases, and the payload-owner deflate-omission case.
+The latter compiles `ZipPayload.cpp` without its zlib macro; it does not qualify
+a whole-engine zlib-free build. The existing full-image SEA/Bun/npm corpora and
+the all-2,345-module Claude source recovery case were supplied and passed.
+All five MCP cases passed, including real Claude stdio pages. The worker run
+registered 24 cases: 21 passed and three optional native-file cases skipped.
+The new ZIP parity case initially reused a stale test revision between imports;
+capturing each import's prior revision corrected the harness, and both the
+focused retry and final worker run passed. Formatting and diff checks passed.
+
+The pinned Marketplace Claude Code 2.1.296 linux-x64 VSIX produced 29 members,
+268,754,709 decoded bytes and an embedded helper identical to the previously
+qualified standalone CLI. The real CLI `archive-bun ... zip 0 15` succeeded with
+an unusable external-tool PATH and produced 2,589 modules / 10,005 regions.
+The first downloaded body used HTTP gzip content encoding and was correctly
+refused as ZIP; its wire bytes and decoded ZIP have separately recorded hashes.
+See the [qualification record](web-claude-code-qualification.md).
+
+Logs: `/tmp/neverd-zip-full-web-tests.log`,
+`/tmp/neverd-zip-mcp-real-tests.log`, `/tmp/neverd-zip-all-worker-tests.log`,
+`/tmp/neverd-zip-sdk-fixed-tests.log`, and `/tmp/neverd-zip-real-cli.log`.
+The prior MCP milestone's parser/backend omission checks were not repeated for
+this ZIP increment; only the ZIP payload owner omission was newly executed.
+No Windows/Linux host, ZIP64, prefixed executable, full framework distribution
+or safe raw export qualification is claimed. NW.js/VSIX manifest adapters are
+the next separate phase; ZIP extraction does not finish #716 or the five epics.

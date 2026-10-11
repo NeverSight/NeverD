@@ -1,5 +1,14 @@
 # Third-Party Notices
 
+## nlohmann JSON
+
+The native C++ worker and offline web MCP transport use the header-only
+nlohmann JSON 3.11.3 library. Both use the existing pinned release archive,
+SHA-256 `d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d`.
+The unchanged [MIT notice](LICENSES/nlohmann-json/LICENSE.MIT) is staged
+beside both executables and installed under `share/neverd/licenses`.
+No external JSON executable or language runtime is invoked.
+
 ## Ada URL parser
 
 Offline import-map analysis embeds the unchanged C++ Ada 4.0.0 URL parser at
@@ -219,6 +228,17 @@ shipped as an analyzer. A repository tag does not authenticate the documented
 sample's actual producer version; that manifest field remains unknown.
 Enabled builds stage the license beside libneverd and in the SDK, and install
 it under `share/neverd/licenses/webpack`.
+
+## Node SEA layout reference and generated corpus
+
+The independent C++ SEA reader follows Node.js 22.15.0 commit
+`b009466555c360513b8012ce549f716501090ee5` serialization and bundled postject
+resource-location contracts. Node/V8/postject code is not linked or invoked by
+NeverD. Small trusted fixture outputs include opaque V8 code-cache data; the
+runtime snapshot and full executables remain outside the repository.
+The upstream [license and notices](LICENSES/node/LICENSE) are preserved and
+shipped with the enabled web backend. See the [profile](docs/web-sea-profile.md)
+and [fixture provenance](unittests/web/fixtures/sea/README.md).
 
 ## Bun layout reference and generated corpus
 

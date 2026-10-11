@@ -13,6 +13,8 @@
 
 #include "../BlobStore.h"
 #include "../PathPolicy.h"
+#include "../archives/PathIndex.h"
+#include "../archives/ZipInternal.h"
 
 #include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
@@ -120,11 +122,7 @@ class TarReader {
   PackageArchive &A;
   uint64_t Metadata = 0;
   std::map<std::string, std::string> Pax;
-  struct Node {
-    std::string Path;
-    std::optional<uint32_t> Member;
-  };
-  std::map<std::string, Node> Paths;
+  ArchivePathIndex Paths{Metadata};
 
   void charge(uint64_t Size) {
     if (Size > MaxPackageArchiveMetadata - Metadata)
@@ -165,27 +163,8 @@ class TarReader {
   void admit(PackageArchiveMember &M) {
     if (M.Path.ends_with('/') && M.Kind == "directory")
       M.Path.pop_back();
-    const auto Key = archivePathKey(M.Path);
-    if (std::count(M.Path.begin(), M.Path.end(), '/') >= 64)
-      throw Error("package_archive_depth_budget_exceeded");
-    charge(M.Path.size() + M.Link.size());
-    auto Existing = Paths.find(Key);
-    if (Existing != Paths.end() &&
-        (Existing->second.Member || Existing->second.Path != M.Path ||
-         M.Kind != "directory"))
-      throw Error("package_archive_path_collision");
-    for (auto Slash = M.Path.find('/'); Slash != std::string::npos;
-         Slash = M.Path.find('/', Slash + 1)) {
-      const auto Parent = M.Path.substr(0, Slash);
-      const auto ParentKey = archivePathKey(Parent);
-      charge(Parent.size());
-      auto [It, Inserted] = Paths.try_emplace(ParentKey, Node{Parent, {}});
-      if (!Inserted && (It->second.Path != Parent ||
-                        (It->second.Member &&
-                         A.Members[*It->second.Member].Kind != "directory")))
-        throw Error("package_archive_path_collision");
-    }
-    Paths[Key] = Node{M.Path, uint32_t(A.Members.size())};
+    charge(M.Link.size());
+    Paths.admit(M.Path, M.Kind == "directory");
     M.ID = identity("package-archive-member",
                     {A.ID, std::to_string(A.Members.size())});
     M.ParentID = A.ID;
@@ -306,7 +285,7 @@ PackageArchive extractPackageArchive(const Artifact &Input,
   if (Input.Directory || Input.Content.size() > Limits::HardInputBytes ||
       !ExpandedBudget || ExpandedBudget > MaxPackageArchiveBytes)
     throw Error("package_archive_invalid_input");
-  if (Format != "tar" && Format != "tgz")
+  if (Format != "tar" && Format != "tgz" && Format != "zip")
     throw Error("package_archive_unsupported_profile");
   if (Input.Content.digest() != Input.BlobHash)
     throw Error("package_archive_hash_mismatch");
@@ -315,8 +294,14 @@ PackageArchive extractPackageArchive(const Artifact &Input,
   A.BlobHash = Input.BlobHash;
   A.Original = Input.Content;
   A.Format = Format;
+  if (Format == "zip")
+    A.Profile = ZipArchiveProfile;
   A.ID = identity("package-archive",
-                  {Input.ID, Input.BlobHash, Format, PackageArchiveProfile});
+                  {Input.ID, Input.BlobHash, Format, A.Profile});
+  if (Format == "zip") {
+    readZipArchive(A, ExpandedBudget);
+    return A;
+  }
   A.Expanded = Format == "tgz" ? decompress(Input.Content, ExpandedBudget)
                                : Input.Content;
   A.ExpandedBytes = A.Expanded.size();

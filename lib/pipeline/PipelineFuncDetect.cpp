@@ -14,6 +14,7 @@
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -313,6 +314,16 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
     // exact COFF/ELF thunks back to their Import without changing IATAddr.
     if ((Opts.PatchMode || Opts.LiftMode) && Img.isImportStubAt(Entry)) {
       Audit.Disposition = PipelineFunctionDisposition::SkippedImportStub;
+      Result.FunctionAudits.push_back(std::move(Audit));
+      continue;
+    }
+    // The shared stack-probe contract already owns these calls' effects.
+    // Their size register is not an ordinary C argument and the helper stays
+    // in the native runtime, like an import veneer. Do not reinterpret its
+    // missing Win64 unwind record as evidence of a spurious function.
+    if ((Opts.PatchMode || Opts.LiftMode) && Opts.OnlyFunctionEntries.empty() &&
+        libc::stackProbeEffect(Img, Entry) == libc::StackProbeEffect::Probe) {
+      Audit.Disposition = PipelineFunctionDisposition::SkippedRuntimeScaffold;
       Result.FunctionAudits.push_back(std::move(Audit));
       continue;
     }

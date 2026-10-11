@@ -709,6 +709,12 @@ public:
   void setNoReturnTargetIndex(const libc::NoReturnTargetIndex *Index) {
     NoReturnTargets = Index;
   }
+  /// Share bounded registration callee proofs during nested CFG construction
+  /// for one unchanged image. In-progress callees provide no stack fact. The
+  /// index must outlive the builds; a different image uses a fresh owned index.
+  void setRegistrationCalleeIndex(RegistrationCallCalleeIndex *Index) {
+    BorrowedRegistrationCallees = Index;
+  }
   /// Ask \p Prover about a direct call to an internal function that the name
   /// list does not know, when padding follows the call or the prover's cheap
   /// check finds nothing in the callee that returns.  \p Depth is how many
@@ -1744,8 +1750,8 @@ private:
     bool operator==(const JumpTableInfo &Other) const = default;
   };
 
-  static std::optional<JumpTableStorageRange> implicitJumpTableStorageRange(
-      const JumpTableInfo &Info, size_t TargetCount);
+  static std::optional<JumpTableStorageRange>
+  implicitJumpTableStorageRange(const JumpTableInfo &Info, size_t TargetCount);
 
   /// Scratch-only assumptions for bounded joint finite table proofs.
   /// They are never published as prior role/storage certificates. EmptyEdges
@@ -2722,6 +2728,7 @@ private:
   bool CurrentFuncIsFramelessLeaf = false;
   const BinaryImage *CurrentImg = nullptr;
   std::shared_ptr<RegistrationCallCalleeIndex> RegistrationCallees;
+  RegistrationCallCalleeIndex *BorrowedRegistrationCallees = nullptr;
   /// One-build reverse index for image-global 32-bit relative-code
   /// relocations.  rebuildBlocks may run many times during resolver fixed-point
   /// replay; scanning every image slot on every stage multiplies unrelated

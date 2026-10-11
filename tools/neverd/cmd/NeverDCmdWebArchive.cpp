@@ -47,12 +47,13 @@ int runWebArchive() {
       (Inventory && WebArguments.size() != 3 && WebArguments.size() != 4) ||
       (Bun && WebArguments.size() != 5) ||
       (Packages && WebArguments.size() != 6) ||
-      (WebArguments[2] != "tar" && WebArguments[2] != "tgz")) {
-    llvm::errs() << "usage: neverd web archive <file-or-root> <tar|tgz> "
+      (WebArguments[2] != "tar" && WebArguments[2] != "tgz" &&
+       WebArguments[2] != "zip")) {
+    llvm::errs() << "usage: neverd web archive <file-or-root> <tar|tgz|zip> "
                     "[artifact-index] | archive-packages <file-or-root> "
-                    "<tar|tgz> <artifact-index> <member-index> "
+                    "<tar|tgz|zip> <artifact-index> <member-index> "
                     "<npm-lock|package-json> | archive-bun <file-or-root> "
-                    "<tar|tgz> <artifact-index> <member-index>\n";
+                    "<tar|tgz|zip> <artifact-index> <member-index>\n";
     return 2;
   }
   auto Index = [](size_t At, uint64_t &Out) {

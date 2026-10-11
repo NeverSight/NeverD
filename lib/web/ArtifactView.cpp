@@ -75,6 +75,41 @@ Session::Impl::artifactView(std::string_view SelectionID) const {
                 {"container_origin", std::move(Parent->Origin)}},
             Parent->DirectStorage};
       }
+  for (const auto &[ID, E] : SEAExtractions)
+    for (const auto &R : E.Regions)
+      if (R.ID == SelectionID && R.selectable()) {
+        auto Parent = artifactView(E.ArtifactID);
+        if (!Parent)
+          throw Error("sea_parent_bytes_unavailable");
+        return ArtifactView{
+            R.Content, R.BlobHash, Parent->StorageOffset + R.Offset,
+            llvm::json::Object{
+                {"kind", "sea_region"},
+                {"container_artifact_id", E.ArtifactID},
+                {"storage_artifact_id",
+                 Parent->Origin.getString("storage_artifact_id")
+                     .value_or("")
+                     .str()},
+                {"extraction_id", E.ID},
+                {"region_id", R.ID},
+                {"profile", E.Profile},
+                {"region_kind", R.Kind},
+                {"container_byte_offset", std::to_string(R.Offset)},
+                {"byte_length", std::to_string(R.Content.size())},
+                {"byte_offset", Parent->DirectStorage
+                                    ? llvm::json::Value(std::to_string(
+                                          Parent->StorageOffset + R.Offset))
+                                    : llvm::json::Value(nullptr)},
+                {"expanded_byte_offset",
+                 !Parent->DirectStorage ? llvm::json::Value(std::to_string(
+                                              Parent->StorageOffset + R.Offset))
+                                        : llvm::json::Value(nullptr)},
+                {"byte_offset_basis", Parent->DirectStorage
+                                          ? "storage_artifact"
+                                          : "expanded_stream"},
+                {"container_origin", std::move(Parent->Origin)}},
+            Parent->DirectStorage};
+      }
   for (const auto &[ID, E] : AsarExtractions)
     for (const auto &M : E.Members)
       if (M.ID == SelectionID) {
@@ -104,26 +139,35 @@ Session::Impl::artifactView(std::string_view SelectionID) const {
         continue;
       if (!M.available())
         throw Error("artifact_bytes_unavailable");
+      const bool Zip = E.Format == "zip";
+      const bool Direct = E.Format == "tar" || (Zip && M.Compression == 0);
       return ArtifactView{
-          M.Content, M.BlobHash, M.Offset,
+          M.Content, M.BlobHash, Zip && Direct ? M.StoredOffset : M.Offset,
           llvm::json::Object{
               {"kind", "package_archive_member"},
               {"container_artifact_id", E.ArtifactID},
               {"storage_artifact_id", E.ArtifactID},
               {"byte_offset_basis",
-               E.Format == "tar" ? "storage_artifact" : "expanded_stream"},
+               Direct ? "storage_artifact" : "expanded_stream"},
+              {"byte_offset", Direct ? llvm::json::Value(std::to_string(
+                                           Zip ? M.StoredOffset : M.Offset))
+                                     : llvm::json::Value(nullptr)},
+              {"byte_length", Direct ? llvm::json::Value(std::to_string(M.Size))
+                                     : llvm::json::Value(nullptr)},
               {"container_sha256", E.BlobHash},
               {"archive_id", E.ID},
               {"member_id", M.ID},
               {"member_index", I},
-              {"profile", std::string(PackageArchiveProfile)},
+              {"profile", E.Profile},
               {"format", E.Format},
               {"expanded_stream_sha256", E.ExpandedHash},
               {"expanded_byte_offset", std::to_string(M.Offset)},
               {"expanded_byte_length", std::to_string(M.Size)},
-              {"container_frame_offset", "0"},
-              {"container_frame_length", std::to_string(E.Original.size())}},
-          E.Format == "tar"};
+              {"container_frame_offset",
+               std::to_string(Zip ? M.LocalHeaderOffset : 0)},
+              {"container_frame_length",
+               std::to_string(Zip ? M.StoredFrameSize : E.Original.size())}},
+          Direct};
     }
   if (const auto Inline = htmlSource(SelectionID)) {
     const auto &H = *Inline->Analysis;

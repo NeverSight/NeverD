@@ -2,6 +2,7 @@ add_neverd_unittest(NeverDWebArtifactTests
   ArtifactTests.cpp
   PackageTests.cpp
   PackageArchiveTests.cpp
+  ZipTests.cpp
   PackageIntegrityTests.cpp
   InterfaceTests.cpp
   StreamTests.cpp
@@ -11,14 +12,26 @@ add_neverd_unittest(NeverDWebArtifactTests
   ImportMapTests.cpp
   BlobStoreTests.cpp
   BunTests.cpp
+  SEATests.cpp
   JsonReaderTests.cpp
   LINK_COMPONENTS Web
 )
 target_include_directories(NeverDWebArtifactTests PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
 target_compile_definitions(NeverDWebArtifactTests PRIVATE
   NEVERD_WEB_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+# Compile the owning payload translation unit without its private zlib macro.
+# The archive reader and model are shared; no product omission flag is invented.
+add_neverd_unittest(NeverDWebZipWithoutDeflateTests
+  ZipNoDeflateTests.cpp
+  ../../lib/web/archives/ZipPayload.cpp
+  LINK_COMPONENTS Web
+)
+target_include_directories(NeverDWebZipWithoutDeflateTests PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
 # Manual, development-only recorder; no production or test dependency on it.
 add_executable(neverd-web-bun-fixture-record EXCLUDE_FROM_ALL fixtures/bun/Record.cpp)
+add_executable(neverd-web-sea-fixture-record EXCLUDE_FROM_ALL fixtures/sea/Record.cpp)
+target_include_directories(neverd-web-sea-fixture-record PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(neverd-web-sea-fixture-record PRIVATE LLVMSupport)
 target_include_directories(neverd-web-bun-fixture-record PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(neverd-web-bun-fixture-record PRIVATE LLVMSupport)
 add_executable(neverd-web-html-reference-record EXCLUDE_FROM_ALL fixtures/html/RecordReferences.cpp)
@@ -69,6 +82,7 @@ if(TARGET neverd_shared)
     PackageIntegritySDKTests.cpp
     InterfaceSDKTests.cpp
     StreamSDKTests.cpp
+    SEASDKTests.cpp
     AsarSDKTests.cpp
     ElectronSDKTests.cpp
     HTMLSDKTests.cpp

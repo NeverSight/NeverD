@@ -1,5 +1,8 @@
 # Offline package archive and integrity profiles
 
+The shared archive API also has a separately qualified [ZIP32 profile](web-zip-profile.md).
+The tar/gzip rules below do not define ZIP admission or its member coordinates.
+
 The C++ package pipeline admits an explicitly selected captured tar or tgz,
 publishes immutable members, and can separately compare an original artifact
 with a captured integrity declaration. No package manager, target, external

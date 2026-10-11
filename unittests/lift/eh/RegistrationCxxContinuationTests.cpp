@@ -116,7 +116,7 @@ TEST(RegistrationState,
 }
 
 TEST(RegistrationState, CxxReturnsNeedExactContextStackAndDecodedReturn) {
-  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
     auto F = makeCxxCatchContinuation();
     auto &Handler = F.Blocks[5];
     if (Mutation == 0)
@@ -136,6 +136,9 @@ TEST(RegistrationState, CxxReturnsNeedExactContextStackAndDecodedReturn) {
       Handler.Ops[0].Opcode = NdOp::CALL;
     if (Mutation == 7)
       Handler.Ops.back().Seq = -1;
+    if (Mutation == 8)
+      Handler.InstructionBoundaries.back().ControlFlags =
+          LowInstructionControlFlag::Conditional;
     const auto Result = analyzeRegistrationStates(F);
     EXPECT_FALSE(Result.Complete) << Mutation;
     EXPECT_FALSE(Result.CxxContinuationsComplete) << Mutation;

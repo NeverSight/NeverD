@@ -15,6 +15,31 @@
 namespace neverd::registration_state {
 
 bool RegistrationStateSolver::initializeContracts() {
+  if (LocalUnwinds) {
+    if (LocalUnwinds->size() > 256)
+      return false;
+    for (const auto &Call : *LocalUnwinds)
+      if (!charge(1) || !Call.Target || Call.Target > UINT32_MAX ||
+          !LocalUnwindTargets.emplace(Call.Target, Call.Indirect).second) {
+        Result.Diagnostics.push_back(
+            "registration local-unwind contract is invalid");
+        return false;
+      }
+  }
+  if (Stacks) {
+    if (Stacks->size() > 256)
+      return false;
+    for (const auto &Stack : *Stacks)
+      if (!charge(1) || !Stack.Target || Stack.Target > UINT32_MAX ||
+          Stack.StackPopBytes > UINT16_MAX ||
+          !StackPops
+               .emplace(std::make_pair(Stack.Target, Stack.Indirect),
+                        Stack.StackPopBytes)
+               .second) {
+        Result.Diagnostics.push_back("registration stack contract is invalid");
+        return false;
+      }
+  }
   if (CheckCalls) {
     if (Callees->size() > 256) {
       Result.Diagnostics.push_back("registration callee count exceeds budget");

@@ -111,6 +111,31 @@ TEST(MedImmutableTableScans, EvaluatesSentinelCountAtItsExactExit) {
     }
 }
 
+TEST(MedImmutableTableScans, ScanCountsPropagateThroughInvariantPhiInputs) {
+  for (unsigned Width : {4u, 8u}) {
+    auto Image = table(Width, 4);
+    auto F = scan(Width);
+    F.Blocks[2].Phis.push_back({var(10, 4), {{1, var(1, 4)}}});
+    F.Blocks[2].Succs = {3};
+    F.Blocks[2].Ops = {
+        op(NdOp::BRANCH, {}, {MedVar::makeConst(0x1030, Width)})};
+    MedBlock Next;
+    Next.Id = 3;
+    Next.StartAddr = 0x1030;
+    Next.EndAddr = 0x1040;
+    Next.Preds = {2};
+    Next.Phis.push_back({var(11, 4), {{2, var(10, 4)}}});
+    Next.Ops = {op(NdOp::RETURN, {}, {var(11, 4)})};
+    F.Blocks.push_back(std::move(Next));
+    ASSERT_TRUE(foldImmutableTableScans(F, Image));
+    const MedVar &Count = F.Blocks[3].Phis[0].Args[0].second;
+    ASSERT_TRUE(Count.isConst());
+    EXPECT_EQ(Count.ConstVal, 4u);
+    EXPECT_EQ(Count.Provenance, ConstantAddressProvenance::Scalar);
+    EXPECT_FALSE(foldImmutableTableScans(F, Image));
+  }
+}
+
 TEST(MedImmutableTableScans,
      RefusesMutableIncompleteAndIndependentlyEnteredScans) {
   for (unsigned Case = 0; Case < 11; ++Case) {
@@ -319,6 +344,35 @@ TEST_P(MedImmutableTableScanMatrix, AddressArithmeticUsesTheTargetWidth) {
   ASSERT_EQ(Result.Opcode, NdOp::COPY);
   EXPECT_EQ(Result.Inputs[0].ConstVal, 0x5000u);
   EXPECT_EQ(Result.Inputs[0].AddressOwnerVA, 0x5000u);
+}
+
+TEST_P(MedImmutableTableScanMatrix,
+       SentinelScansKeepWideAddressCarriersAndCommutedOffsets) {
+  for (bool Reverse : {false, true})
+    for (bool NarrowAgain : {false, true}) {
+      SCOPED_TRACE(Reverse);
+      SCOPED_TRACE(NarrowAgain);
+      auto Image = image();
+      auto F = scan(width());
+      auto &Ops = F.Blocks[1].Ops;
+      if (Reverse)
+        std::swap(Ops[3].Inputs[0], Ops[3].Inputs[1]);
+      Ops.insert(Ops.begin() + 4,
+                 op(NdOp::INT_ZEXT, var(8, 8), {var(5, width())}));
+      Ops[5].Inputs[0] = var(8, 8);
+      if (NarrowAgain) {
+        Ops.insert(Ops.begin() + 5, op(NdOp::SUBBYTES, var(9, width()),
+                                       {var(8, 8), MedVar::makeConst(0, 4)}));
+        Ops[6].Inputs[0] = var(9, width());
+      }
+      ASSERT_TRUE(foldImmutableTableScans(F, Image));
+      EXPECT_TRUE(F.Blocks[1].Phis.empty());
+      EXPECT_EQ(F.Blocks[1].Succs, std::vector<int>{2});
+      const auto &Count = F.Blocks[1].Ops.front();
+      ASSERT_EQ(Count.Opcode, NdOp::COPY);
+      EXPECT_EQ(Count.Inputs[0].ConstVal, 4u);
+      EXPECT_EQ(Count.Inputs[0].Provenance, ConstantAddressProvenance::Scalar);
+    }
 }
 
 TEST_P(MedImmutableTableScanMatrix, NarrowTagsCannotProvePointerIdentity) {

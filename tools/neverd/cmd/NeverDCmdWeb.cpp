@@ -43,6 +43,9 @@ std::optional<llvm::json::Value> result(const char *Owned) {
 
 int runWeb() {
   if (!WebArguments.empty() &&
+      (WebArguments[0] == "sea" || WebArguments[0] == "sea-source"))
+    return runWebSEA();
+  if (!WebArguments.empty() &&
       (WebArguments[0] == "har-preview" || WebArguments[0] == "har-import" ||
        WebArguments[0] == "interfaces" ||
        WebArguments[0] == "interface-correlate"))
@@ -256,6 +259,7 @@ int runWeb() {
            "<source-member-index:source-type>... | "
            "source|bindings|semantics|modules|bundles|view|navigate <file> "
            "<script|module|commonjs> "
+           "| sea|sea-source <file-or-root> <profile> [artifact-index] "
            "| map|bun "
            "<file> | bun-export <file> <new-output-directory> | "
            "bun-map <file> <module-index> | "

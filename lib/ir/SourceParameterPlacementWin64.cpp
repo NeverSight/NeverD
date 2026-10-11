@@ -39,7 +39,7 @@ source_placement::placeWin64(const TargetRegInfo &TRI,
                              llvm::ArrayRef<TypeRef> ParamTypes) {
   const auto Layout = TRI.integerArgumentLayout(BinaryFormat::COFF);
   const llvm::ArrayRef<uint64_t> Integer = Layout.Registers;
-  const llvm::ArrayRef<uint64_t> Vector = TRI.FPParamRegs;
+  const auto Vector = TRI.floatingParamRegs(BinaryFormat::COFF);
   if (Integer.empty() || Vector.size() < Integer.size())
     return std::nullopt;
   SourceParameterPlacement Placement;

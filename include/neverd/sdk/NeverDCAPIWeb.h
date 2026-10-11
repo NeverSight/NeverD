@@ -100,7 +100,8 @@ NEVERD_API const char *neverd_web_package_integrity_verify_json(
     const char *DeclarationID, size_t DeclarationIDSize, const char *PackageID,
     size_t PackageIDSize);
 
-/// Explicit tar/tgz profile; captured originals only, no recursive extraction.
+/// Explicit tar/tgz/zip profile; captured originals only, no recursive
+/// extraction.
 NEVERD_API const char *neverd_web_package_archive_extract_json(
     neverd_web_session_t Session, const char *ExpectedRevision,
     size_t RevisionSize, const char *ArtifactID, size_t ArtifactIDSize,
@@ -275,7 +276,22 @@ neverd_web_asar_records_json(neverd_web_session_t Session,
                              const char *ExtractionID, size_t ExtractionIDSize,
                              uint64_t Offset, uint64_t Limit);
 
-/// Extract the explicitly qualified Bun ELF layout from one admitted original.
+/// Extract one explicit Node SEA profile from admitted immutable bytes.
+/// Profiles are listed by capabilities. V8 snapshots/caches remain opaque.
+NEVERD_API const char *
+neverd_web_sea_extract_json(neverd_web_session_t Session,
+                            const char *ExpectedRevision, size_t RevisionSize,
+                            const char *ArtifactID, size_t ArtifactIDSize,
+                            const char *Profile, size_t ProfileSize);
+/// Limit is 1..128. Only main JavaScript and assets expose selection_id for
+/// shared consumers. Names, payloads and private-name hashes are withheld.
+NEVERD_API const char *
+neverd_web_sea_records_json(neverd_web_session_t Session,
+                            const char *ExpectedRevision, size_t RevisionSize,
+                            const char *ExtractionID, size_t ExtractionIDSize,
+                            uint64_t Offset, uint64_t Limit);
+
+/// Extract the explicitly qualified Bun container layout from admitted bytes.
 /// No execution or external tools; version/producer authentication is not
 /// implied. Source maps and JSC caches retain their original byte ranges.
 NEVERD_API const char *neverd_web_bun_extract_json(neverd_web_session_t Session,

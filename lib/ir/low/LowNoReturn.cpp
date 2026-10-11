@@ -45,10 +45,7 @@ bool lowFunctionNeverReturns(const LowFunc &Func, Arch TheArch) {
     // not returning or an architectural trap ends the path.
     bool PathEnds = false;
     for (const LowInstructionBoundary &Insn : Block.InstructionBoundaries) {
-      if (hasLowInstructionControlFlag(Insn.ControlFlags,
-                                       LowInstructionControlFlag::NoReturn) &&
-          !hasLowInstructionControlFlag(
-              Insn.ControlFlags, LowInstructionControlFlag::Conditional)) {
+      if (isUnconditionalNoReturn(Insn)) {
         PathEnds = true;
         break;
       }

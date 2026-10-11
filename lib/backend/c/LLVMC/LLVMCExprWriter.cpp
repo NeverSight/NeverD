@@ -2705,12 +2705,27 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
     // cast would truncate i64/i128 before division, remainder, or shifting.
     return Text.starts_with(Cast) ? Text : Cast + "(" + Text + ")";
   };
+  // Half arithmetic can use excess precision on hosts without native FP16.
+  // An explicit cast publishes the rounding boundary even when a producer is
+  // inlined into another operation; FP_CONTRACT alone does not do this.
+  auto Floating = [&](const char *Operator) {
+    std::string Text = LHS + Operator + RHS;
+    return Ty->isHalfTy() || Ty->isBFloatTy()
+               ? "(" + typeToCLLVM(Ty) + ")(" + Text + ")"
+               : Text;
+  };
   switch (Opcode) {
-  case llvm::Instruction::Add:
   case llvm::Instruction::FAdd:
+    return Floating(" + ");
+  case llvm::Instruction::FSub:
+    return Floating(" - ");
+  case llvm::Instruction::FMul:
+    return Floating(" * ");
+  case llvm::Instruction::FDiv:
+    return Floating(" / ");
+  case llvm::Instruction::Add:
     return LHS + " + " + RHS;
   case llvm::Instruction::Sub:
-  case llvm::Instruction::FSub:
     return LHS + " - " + RHS;
   case llvm::Instruction::Mul:
     // A full u16 product can overflow C's signed integer promotion even
@@ -2723,8 +2738,6 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
       return castStr(llvm::Instruction::Trunc, Product, Ty, Ty);
     }
     return LHS + " * " + RHS;
-  case llvm::Instruction::FMul:
-    return LHS + " * " + RHS;
   case llvm::Instruction::UDiv:
     return Unsigned(LHS) + " / " + Unsigned(RHS);
   case llvm::Instruction::SDiv:
@@ -2732,8 +2745,6 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
                    signedIntegerOperand(Ty, LHS) + " / " +
                        signedIntegerOperand(Ty, RHS),
                    Ty, Ty);
-  case llvm::Instruction::FDiv:
-    return LHS + " / " + RHS;
   case llvm::Instruction::URem:
     return Unsigned(LHS) + " % " + Unsigned(RHS);
   case llvm::Instruction::SRem:
@@ -3037,8 +3048,8 @@ bool LLVMCWriter::isFloatingPointBitcast(const llvm::Instruction &Inst) {
   const auto *Destination = Cast->getDestTy();
   const auto *Float = Source->isIntegerTy() ? Destination : Source;
   const auto *Integer = Source->isIntegerTy() ? Source : Destination;
-  return (Float->isFloatTy() || Float->isDoubleTy() || Float->isBFloatTy() ||
-          Float->isX86_FP80Ty()) &&
+  return (Float->isHalfTy() || Float->isFloatTy() || Float->isDoubleTy() ||
+          Float->isBFloatTy() || Float->isX86_FP80Ty()) &&
          Integer->isIntegerTy() &&
          Float->getPrimitiveSizeInBits() == Integer->getPrimitiveSizeInBits();
 }

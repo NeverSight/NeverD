@@ -3,6 +3,9 @@ add_neverd_component_library(NeverDWeb
   packages/PackageReader.cpp
   packages/PackageDiff.cpp
   packages/PackageArchive.cpp
+  archives/PathIndex.cpp
+  archives/Zip.cpp
+  archives/ZipPayload.cpp
   packages/PackageIntegrity.cpp
   packages/SHA512.cpp
   interfaces/Endpoint.cpp
@@ -33,6 +36,12 @@ add_neverd_component_library(NeverDWeb
   BlobStore.cpp
   Bun.cpp
   BunContainer.cpp
+  sea/Blob.cpp
+  sea/Container.cpp
+  sea/ELF.cpp
+  sea/MachO.cpp
+  sea/PE.cpp
+  SessionSEA.cpp
   BunSourceMap.cpp
   SessionBun.cpp
   SessionBunExport.cpp
@@ -74,6 +83,8 @@ if(NEVERD_ENABLE_WEB_ASAR)
 endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/bun/"
         DESTINATION share/neverd/licenses/bun)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/node/"
+        DESTINATION share/neverd/licenses/node)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/asar/"
         DESTINATION share/neverd/licenses/asar)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/whatwg/"

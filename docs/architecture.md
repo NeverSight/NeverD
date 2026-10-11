@@ -116,6 +116,35 @@ sequence. `LowIR -> MedIR` is shared. Structured decompilation then uses
 `MedIR -> LLVM IR` route. In particular, patch and lift modes deliberately skip
 HighIR.
 
+Call setup split across ordinary blocks is proved by the shared MedIR ABI
+pass. It intersects exact stack-store identities across every predecessor,
+stops at calls, aliasing writes and independent or exceptional roots, and
+publishes nothing after exhausting its work budget. Selecting one function
+does not change its local callees' argument order: bounded, complete callee
+bodies can supply ABI evidence without becoming output definitions. Register
+pair return evidence is also consumed by HighIR, so a packed call result and
+its definition retain both integer carriers.
+
+Loader-authenticated import slots retain the same curated call ABI as direct
+import calls. Register argument recovery can expose an untouched incoming
+parameter only after every reaching path preserves it; intervening calls,
+independent roots and conflicting import storage cannot supply that proof.
+LLVM declaration materialization shares the direct-call ABI rules with exact
+immutable import targets, including FP, variadic and va_list signatures.
+Known integer parameters use the target's pointer-width carrier so narrow
+register aliases and shard order do not choose different declarations.
+`LLVMCallContract` reconciles exact targets revealed by optimization or shard
+linking, drops surplus fixed arguments and adapts integer/pointer carriers.
+Missing arguments, incompatible observed results and musttail changes fail
+clearly. It preserves source observations and discards obsolete return-type
+metadata, then checks the resulting call types and calling conventions;
+opaque-pointer verifier acceptance alone is insufficient.
+
+Debug record names provide C spelling independently of by-value layout.
+Win64 class-return projection is target-specific; a DWARF name on another
+platform cannot create a hidden result parameter. Runtime-language detection
+uses exported names as well as symbols and imports.
+
 Windows registration-chain EH has separate source and generated contracts.
 The COFF loader owns the checked SEH/FuncInfo records. LowIR's
 `analyzeRegistrationStates` owns reaching levels, callback roots and chain
@@ -219,6 +248,31 @@ The LowIR no-return path proof lives in the low validation component, so call
 ABI checks do not depend on aggregate IR or MedIR. LowIR and MedIR consume the
 same architectural intrinsic-termination definition; both follow exceptional
 destinations after an ordinary no-return call.
+Registration-state transfer also consumes the exact unconditional no-return
+instruction boundary. Missing call-frame effects still refuse memory borrows,
+but cannot recreate that call's ordinary continuation or suppress its handlers.
+PE32 EH3 local unwinds have a separate runtime contract. Current strong
+`_local_unwind2` imports and immutable IAT veneers identify the protocol; the
+state solver binds its actual registration pointer and target level at the
+source call. CFG construction splits the ordinary continuation at this state
+transition. Each traversed finally gets a bounded callback-stack analysis with
+the parent's established EBP, and every returning path must preserve the
+runtime fields and invocation stack before its frame effects can be joined.
+SEH filter and finally entries share the private invocation-stack coordinate
+used by C++ catches. A finally may save registers and allocate locals below
+its runtime return PC; loads require initialized bytes in the current
+allocation, and releasing stack storage invalidates its saved identities.
+Only established parent addresses can modify parent locals, so a callback
+stack pointer cannot escape there or alias a parent slot at the same offset.
+SEH and C++ share the check for a final, decoded, unconditional callback
+return with no stack-pop immediate. The shared frame domain separately checks
+the invocation's restored ESP and parent EBP. A conditional, malformed or
+unbalanced return cannot establish callback completeness or a continuation.
+The runtime advances the try level before invoking each finally, as described
+by [Wine's independent CRT implementation](https://github.com/wine-mirror/wine/blob/master/dlls/msvcrt/except_i386.c).
+Unknown callback calls, runtime-field writes and nonlocal callback exits still
+refuse this returning-path proof. These state facts grant no native call-frame
+or installation permission.
 MedIR distinguishes established parent EBP, private callback
 ESP and a continuation's checked saved ESP. Its shared root-shape and
 entry-stack-coordinate helpers are consumed by stack proofs, HighIR and LLVM;
@@ -232,6 +286,25 @@ copy budget. A separately converted ordinary PE32 callback cannot be embedded
 without a parent-frame projection; its clause retains the native target.
 `hasCallerCleanupRegistrationABI` owns the current PE32 stack-cleanup check,
 which the writer replays against immutable input.
+Registration state recovery also consumes independent returning-stack facts.
+`getCheckedX86CalleeStackPop` replays immutable ordinary callee paths with the
+shared affine transfer, requires restored entry ESP at every near return and
+requires every return-pop immediate to agree. Checked nested callees compose
+through one cache and work budget, with no facts borrowed from an in-progress
+recursive proof. Unchecked nested calls forget ESP;
+explicit restoration through an ABI-preserved register can recover it. Memory
+loads do not acquire a saved-stack identity in the ordinary-body analysis.
+SEH callees additionally require the complete shared registration
+state/lifetime proof to separate dispatcher returns and seed established EBP
+at except entries. The same independent register-only proof still checks
+every parent return; saved-stack memory identities do not survive opaque
+calls merely because registration state is complete. Nested CFG builds
+borrow the same callee index, so recursive dependencies cannot restart a
+fresh proof budget. Already decoded interior finally calls use their
+ordinary subgraph, while the checked
+RaiseException provider supplies its separate stdcall adjustment. These facts
+do not grant object borrows, memory-effect completeness or native EH authority;
+the existing call-frame and generated-code checks remain required.
 `getCheckedX86RegistrationLeafCalleeABI` uses the same affine transfer for
 callee-private stack and borrowed ECX object domains, with separate spill
 storage. Its exact object/image footprints describe a returning leaf; a caller
@@ -385,13 +458,26 @@ conservative effect summaries, module evidence, admitted-file comparisons,
 qualified bundle source partitions, fixed-profile Bun container extraction,
 map decoding, budgets and query redaction. `SourceView` owns the bounded display
 projection and original/projected range mapping; `SessionView` owns preview,
-publication and revocation. CLI/worker adapters cannot bypass those policies.
+publication and revocation. CLI/worker/MCP adapters cannot bypass those policies.
+`tools/common/web/Backend` owns the shared C++ worker/MCP C ABI client;
+`tools/common/transport/Json` owns bounded generic JSON admission. The compiled
+`neverd-web-mcp` separates launch inputs, schemas, lifecycle and stdio framing.
+It only exposes a capability-filtered subset and cannot assert reviewed source
+ranges. No analysis process or language runtime is spawned. See the
+[MCP profile](web-mcp-profile.md) for its concrete limits and ownership.
 Views use owned parser token/comment spans and never claim semantic rewrites.
 `BunContainer` owns ELF/Mach-O/PE graph location, target identity and native-range
 validation. `Bun` owns the shared graph records, flags and module decoding;
 transport capability lists and extraction results use the same profile builder.
 Adding a target container does not change source semantics or imply native
 machine-code/bytecode decompilation.
+`sea/Container` and the format readers independently locate explicit Node SEA
+resources; `sea/Blob` owns their serialization, region partition and private-key
+budgets. `SessionSEA` publishes revision-bound metadata and exposes only stored
+JS/assets through `ArtifactView`. Caches and snapshots remain opaque; native
+activation/version authentication are not inferred. Asset keys never establish
+a filesystem namespace. Package analysis of an explicitly selected asset uses
+one document with no directory inventory. See the [SEA profile](web-sea-profile.md).
 `packages/PackageReader` owns versioned Node metadata and captured placement
 evidence; `packages/PackageDiff` compares its model without transport concerns.
 `SessionPackages` owns revision-bound caches, fixed metadata pages and
@@ -400,6 +486,13 @@ semantics remain distinct. All adapters consume these same results.
 `packages/PackageArchive` owns tar/local-PAX/single-gzip framing, complete-stream
 budgets and member admission; `BlobStore` supplies bounded private derived
 spools. `SessionPackageArchive` atomically publishes members after full validation.
+`archives/Zip` separately owns ZIP32 local/central agreement and framing;
+`ZipPayload` owns stored/raw-deflate decoding, exact size and CRC validation.
+`archives/PathIndex` owns the shared portable archive namespace. ZIP reuses the
+archive model and aggregate cache/spool budget; transport and desktop manifest
+consumers do not parse container records. `ArtifactView` composes exact stored
+payload offsets and compressed member frames for nested consumers. See the
+[ZIP profile](web-zip-profile.md).
 `packages/PackageIntegrity` owns shared SRI classification and original-byte
 comparison; `SessionPackageIntegrity` binds selected captured registry/lock
 declarations to selected original artifacts. Archive validation, byte equality,
@@ -605,14 +698,20 @@ they do not reuse CFG or value proofs across changed snapshots. A builder may
 retain one successful graph with an owned instruction snapshot. Reuse requires
 exact instruction facts, LowOps, effective edges, block starts, proof roots,
 conditional roots and storage-owner inputs. Hits pay the complete original
-graph-construction charge. The graph may also retain up to 64 completed query
-batches under a separate 8 MiB retained-payload allowance. Exact ordered query
+graph-construction charge. The graph may also retain up to 64 query outcomes
+under a separate 8 MiB retained-payload allowance. Exact ordered query
 fields, proof limits, output shape, function context and both relocation
 occurrence inventories bind each result. Hits pay the complete cold value
-charge; a smaller budget runs the normal path. Incomplete proofs and batches
-using pointer-named symbolic values or merges are excluded. Image metadata is
-immutable during a build, and every new build discards this state. These caches
-do not bypass proposal validation, rollback or fixed-point stages.
+charge; a smaller budget runs the normal path. Fixed reconstruction-depth and
+match-work refusals may be retained with the exact result, completion flag and
+feasible mask of each query. A local depth refusal does not suppress independent
+queries; a shared match-work exhaustion stops the remaining queries and clears
+every output. Replay preserves these incomplete states. Changing either limit
+or the proof context requires fresh analysis. Any other incomplete query,
+outer-account exhaustion, symbolic failure or use of pointer-named symbolic
+values or merges excludes the batch. Image metadata is immutable during a
+build, and every new build discards this state.
+These caches do not bypass proposal validation, rollback or fixed-point stages.
 
 A bounded group of AArch64 absolute dispatches in one relocatable ELF function
 can share an exact read-only pointer object. Each selector first proves its
@@ -1041,6 +1140,16 @@ before writing, including arguments it only passes on to its own callees.
 For Win64 calls LowToMed publishes those argument registers as CALL inputs.
 SSA then sees a caller's pass-through argument, and HighC passes exactly the
 arguments the callee reads. Stack arguments follow the 32-byte home area.
+
+`TargetRegInfo::floatingParamRegs(format)` owns the default ABI's floating
+argument bank. Entry recovery, outgoing call recovery, module propagation and
+LLVM emission use the same query. Win64 has four positional floating slots
+(XMM0-XMM3); saving XMM6/XMM7 must not create parameters or move the fifth
+integer argument away from its stack slot. SysV x64 retains XMM0-XMM7, and the
+ARM/AArch64 banks retain their architecture-specific lanes. Physical vector
+classification for intermediate values is separate from parameter membership.
+This follows Microsoft's [x64 calling convention](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention)
+and does not infer a custom calling convention from nonvolatile-register saves.
 
 Additional callee CFGs are admitted in deterministic breadth-first order.
 Parallel batches retain at most 32 bodies and use at most four independent
@@ -1544,8 +1653,12 @@ selected-function scans and exhausted budgets cannot establish exclusivity.
 An independent call-site proof requires the frame argument to equal current
 SP through full-width copies, constant offsets or private spills untouched by
 an intervening opaque call or write. Generic address may-facts alone cannot
-prove a saved frame value. An operation digest binds that proof to the current
-argument-producing block prefix. Shared SSA then checks the call occurrence, parent
+prove a saved frame value. `LowSEHFrameProof` owns the all-predecessor
+intersection, including stable loops, independent roots and released stack
+storage. A digest binds every operation, instruction boundary, root and CFG
+edge in that function; changing an earlier block invalidates the receipt.
+The analysis runs once per queried function, within the module evidence budget.
+Shared SSA then checks the call occurrence, parent
 unwind allocation, decoded prologue, converted SP effects and every relevant
 predecessor path. The initial contract requires an ordinary-reachable target;
 cross-funclet frame borrowing and saved frames surviving opaque calls remain
@@ -1558,6 +1671,14 @@ whose C evaluation refines it without introducing undefined behavior.
 Division additionally requires defined operands. Helper discovery covers all
 emitted bodies, including Windows analysis bodies; supported indirect vector
 calls use the same C vector ABI as direct calls.
+
+Both C emitters use `FloatingPointContract.h` to disable implicit contraction
+of separate floating operations. Explicit FMA operations retain fused builtins.
+LLVMC spells IEEE half as `_Float16`, copies its bits through exact byte
+transfers, and casts narrow floating arithmetic at each operation to retain
+rounding on hosts that otherwise use excess precision. Compiler options that
+explicitly override source pragmas, such as Clang's `-ffp-contract=fast`, are
+outside this contract.
 
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
@@ -1901,11 +2022,26 @@ including storage reached through opaque pointers; unrelated globals do not
 expand the selected function's scope. The exact AArch64
 BFMMLA intrinsic retains native float/bfloat lanes and emits the ACLE operation;
 its matrix arithmetic is not approximated with scalar multiply/add.
+
+Selected LLVMC output follows actual constant references from its body through
+global initializers. This closure includes optimizer-created lookup tables and
+function-address providers, without following an unselected function's body.
+Storage and provider declarations precede initializers, and image objects use
+the same declarations without duplicate backing arrays. HighC clause-exit
+elision uses final statement visibility: an except tail may fall through to
+its exact printed continuation, while intervening effects and finally exits
+retain their transfers.
+
 Inline and materialized LLVM GEP expressions share data-layout-derived byte
 offsets, including nested aggregates and signed dynamic indices. Ordinary raw
 scalar accesses with insufficient alignment use Clang/GCC `aligned(1)`,
 `may_alias` scalar types by default (`CEmitterOptions::UseUnalignedPointers`),
 and exact-width byte copies for other widths or when that option is cleared.
+Ordinary raw wide-integer accesses (129-512 bits) assemble and disassemble
+unsigned bytes using the LLVM data layout's byte order. They access exactly
+the LLVM store size even when the C `_BitInt` carrier contains padding, and
+evaluate the address and stored value once. This also keeps an unaligned
+access independent of the carrier's natural C alignment.
 Integer comparisons share one LLVMC rendering rule across inline expressions,
 assigned results, and inverted branches. Operands retain their LLVM bit width
 before C integer promotion, and signed predicates interpret that width's sign

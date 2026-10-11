@@ -1493,7 +1493,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     // the incoming Med value; an unknown footprint may overlap any home.
     auto integerStoreWidth = [&](size_t Index) -> uint16_t {
       const MedVar &Param = CurMedFunc->Params[Index];
-      if (Param.RegOff != kNoParamReg && TRI.isFPArgReg(Param.RegOff))
+      if (Param.RegOff != kNoParamReg &&
+          TRI.isFPArgReg(Param.RegOff, TargetFormat))
         return 0;
       if (HaveTypes) {
         const TypeRef &Type = CurMedFunc->TypedParams[Index].Type;

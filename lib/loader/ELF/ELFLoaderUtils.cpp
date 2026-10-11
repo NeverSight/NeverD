@@ -448,19 +448,27 @@ void parsePLTImports(const llvm::object::ELFFile<ELFT> &ELF,
       break;
 
     uint32_t SymIdx = 0;
+    uint32_t Type = 0;
     uint64_t Offset = 0;
     if (HasAddend) {
       Elf_Rela Rela;
       std::memcpy(&Rela, Data + ROff, sizeof(Rela));
       SymIdx = Rela.getSymbol(false);
+      Type = Rela.getType(false);
       Offset = Rela.r_offset;
     } else {
       Elf_Rel Rel;
       std::memcpy(&Rel, Data + ROff, sizeof(Rel));
       SymIdx = Rel.getSymbol(false);
+      Type = Rel.getType(false);
       Offset = Rel.r_offset;
     }
 
+    // A PLT relocation section can also contain TLS descriptors and IFUNC
+    // resolvers. Their symbol is not the callable value the loader installs.
+    // Share the exact symbol-address role used by ordinary slot bindings.
+    if (!isELFSlotBinding(Img.Arch, Type))
+      continue;
     if (SymIdx >= SymsOr->size())
       continue;
     auto NameOr = (*SymsOr)[SymIdx].getName(DynStr);

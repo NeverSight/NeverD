@@ -14,6 +14,8 @@
 #include "../../../unittests/web/BunSourceMapFixture.h"
 #include "../../../unittests/web/NativeFixture.h"
 #include "../../../unittests/web/PackageArchiveFixture.h"
+#include "../../../unittests/web/SEAFixture.h"
+#include "../../../unittests/web/ZipFixture.h"
 #include "WebEngine.h"
 
 #include <algorithm>
@@ -1398,73 +1400,88 @@ int main(int argc, char **argv) {
                               R"({"name":"SECRET_WEB","main":"a.js"})") +
                     tarMember("package/a.js", "export const SECRET_WEB=1;") +
                     tarMember("package/link", "", '2', "../../SECRET_WEB"));
-      fixture.write(hasGzip ? storedGzip(tar) : tar);
-      const Json request{{"schema_version", 1}, {"path", fixture.path()}};
-      preview = web.execute("web_import_preview", request);
-      const auto committed = web.execute(
-          "web_import_commit",
-          {{"schema_version", 1}, {"preview_token", preview["preview_token"]}});
-      reply = process.call("web_import_preview", request, packageRevision,
-                           packageProject);
-      reply =
-          process.call("web_import_commit",
-                       {{"schema_version", 1},
-                        {"preview_token", reply["payload"]["preview_token"]}},
-                       packageRevision, packageProject);
-      check(reply["payload"] == committed, "Archive capture transport differs");
-      const auto revision = committed["revision"].get<std::string>();
-      const auto project = committed["project_id"].get<std::string>();
-      invalidIntegrity = integrity;
-      invalidIntegrity["revision"] = revision;
-      reply = process.call("web_package_integrity_verify", invalidIntegrity,
-                           revision, project);
-      check(reply["error"]["code"] == "integrity_original_not_captured",
-            "Worker rebound a prior integrity original after replacement");
-      const auto artifacts = web.execute(
-          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
-      const Json extraction{
-          {"schema_version", 1},
-          {"revision", revision},
-          {"artifact_id", artifacts["items"][0]["artifact_id"]},
-          {"format", hasGzip ? "tgz" : "tar"}};
-      const auto archive =
-          web.execute("web_package_archive_extract", extraction);
-      reply = process.call("web_package_archive_extract", extraction, revision,
-                           project);
-      check(reply["payload"] == archive && archive["member_count"] == 3,
-            "Archive publication transport differs");
-      const Json records{{"schema_version", 1},
+      for (const bool zip : {false, true}) {
+        fixture.write(
+            zip ? ZipFixture({{"package/package.json",
+                               R"({"name":"SECRET_WEB","main":"a.js"})"},
+                              {"package/a.js", "export const SECRET_WEB=1;"},
+                              {"package/opaque", "SECRET_WEB", 0, 1}})
+                      .Bytes
+            : hasGzip ? storedGzip(tar)
+                      : tar);
+        const Json request{{"schema_version", 1}, {"path", fixture.path()}};
+        const auto priorRevision = web.revision(),
+                   priorProject = web.projectId();
+        preview = web.execute("web_import_preview", request);
+        const auto committed = web.execute(
+            "web_import_commit", {{"schema_version", 1},
+                                  {"preview_token", preview["preview_token"]}});
+        reply = process.call("web_import_preview", request, priorRevision,
+                             priorProject);
+        reply =
+            process.call("web_import_commit",
+                         {{"schema_version", 1},
+                          {"preview_token", reply["payload"]["preview_token"]}},
+                         priorRevision, priorProject);
+        check(reply["payload"] == committed,
+              "Archive capture transport differs");
+        const auto revision = committed["revision"].get<std::string>();
+        const auto project = committed["project_id"].get<std::string>();
+        invalidIntegrity = integrity;
+        invalidIntegrity["revision"] = revision;
+        reply = process.call("web_package_integrity_verify", invalidIntegrity,
+                             revision, project);
+        check(reply["error"]["code"] == "integrity_original_not_captured",
+              "Worker rebound a prior integrity original after replacement");
+        const auto artifacts = web.execute(
+            "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+        const Json extraction{
+            {"schema_version", 1},
+            {"revision", revision},
+            {"artifact_id", artifacts["items"][0]["artifact_id"]},
+            {"format", zip       ? "zip"
+                       : hasGzip ? "tgz"
+                                 : "tar"}};
+        const auto archive =
+            web.execute("web_package_archive_extract", extraction);
+        reply = process.call("web_package_archive_extract", extraction,
+                             revision, project);
+        check(reply["payload"] == archive && archive["member_count"] == 3,
+              "Archive publication transport differs");
+        const Json records{{"schema_version", 1},
+                           {"revision", revision},
+                           {"archive_id", archive["archive_id"]}};
+        const auto members =
+            web.execute("web_package_archive_records", records);
+        reply = process.call("web_package_archive_records", records, revision,
+                             project);
+        check(reply["payload"] == members &&
+                  members["items"][2]["availability"] == "metadata_only",
+              "Archive member metadata or transport differs");
+        auto invalid = extraction;
+        invalid["execute"] = true;
+        rejects(
+            [&] { return web.execute("web_package_archive_extract", invalid); },
+            "invalid_request");
+        reply = process.call("web_package_archive_extract", invalid, revision,
+                             project);
+        check(reply["error"]["code"] == "invalid_request",
+              "Archive extraction accepted an execution flag");
+        invalid = records;
+        invalid["limit"] = 0;
+        reply = process.call("web_package_archive_records", invalid, revision,
+                             project);
+        check(reply["error"]["code"] == "invalid_page",
+              "Archive accepted zero page limit");
+        const Json graph{{"schema_version", 1},
                          {"revision", revision},
-                         {"archive_id", archive["archive_id"]}};
-      const auto members = web.execute("web_package_archive_records", records);
-      reply = process.call("web_package_archive_records", records, revision,
-                           project);
-      check(reply["payload"] == members &&
-                members["items"][2]["availability"] == "metadata_only",
-            "Archive member metadata or transport differs");
-      auto invalid = extraction;
-      invalid["execute"] = true;
-      rejects(
-          [&] { return web.execute("web_package_archive_extract", invalid); },
-          "invalid_request");
-      reply = process.call("web_package_archive_extract", invalid, revision,
-                           project);
-      check(reply["error"]["code"] == "invalid_request",
-            "Archive extraction accepted an execution flag");
-      invalid = records;
-      invalid["limit"] = 0;
-      reply = process.call("web_package_archive_records", invalid, revision,
-                           project);
-      check(reply["error"]["code"] == "invalid_page",
-            "Archive accepted zero page limit");
-      const Json graph{{"schema_version", 1},
-                       {"revision", revision},
-                       {"artifact_id", members["items"][0]["member_id"]},
-                       {"input_kind", "package-json"}};
-      const auto direct = web.execute("web_packages_analyze", graph);
-      reply = process.call("web_packages_analyze", graph, revision, project);
-      check(reply["payload"] == direct && direct["entry_count"] == 1,
-            "Archive package consumer differs");
+                         {"artifact_id", members["items"][0]["member_id"]},
+                         {"input_kind", "package-json"}};
+        const auto direct = web.execute("web_packages_analyze", graph);
+        reply = process.call("web_packages_analyze", graph, revision, project);
+        check(reply["payload"] == direct && direct["entry_count"] == 1,
+              "Archive package consumer differs");
+      }
     }
     {
       const auto interfaceRoot = fixture.root / "interfaces";
@@ -1634,6 +1651,50 @@ int main(int argc, char **argv) {
       reply = process.call("web_stream_preview", invalid, revision, project);
       check(reply["error"]["code"] == "invalid_request",
             "Stream transport accepted a replay flag");
+    }
+    {
+      const auto seaRoot = fixture.root / "sea";
+      fs::create_directory(seaRoot);
+      std::ofstream(seaRoot / "one", std::ios::binary)
+          << neverd::web::sea_test::blob(12);
+      const auto before = web.revision(), projectBefore = web.projectId();
+      const Json input{{"schema_version", 1}, {"path", seaRoot.string()}};
+      const auto p = web.execute("web_import_preview", input);
+      const auto c = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", p["preview_token"]}});
+      reply = process.call("web_import_preview", input, before, projectBefore);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       before, projectBefore);
+      check(reply["payload"] == c, "SEA input differs");
+      const auto revision = web.revision(), project = web.projectId();
+      const auto items = web.execute(
+          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+      const Json args{{"schema_version", 1},
+                      {"revision", revision},
+                      {"artifact_id", items["items"][1]["artifact_id"]},
+                      {"profile", "node-sea-22.15.0-blob-le64-v1"}};
+      const auto extracted = web.execute("web_sea_extract", args);
+      reply = process.call("web_sea_extract", args, revision, project);
+      check(reply["payload"] == extracted && extracted["asset_count"] == 2 &&
+                extracted["runtime_activation"] == "not_checked",
+            "SEA extraction differs");
+      const Json page{{"schema_version", 1},
+                      {"revision", revision},
+                      {"extraction_id", extracted["extraction_id"]}};
+      const auto records = web.execute("web_sea_records", page);
+      reply = process.call("web_sea_records", page, revision, project);
+      check(reply["payload"] == records &&
+                reply.dump().find("CANARY") == std::string::npos,
+            "SEA records differ or reveal private values");
+      auto invalid = args;
+      invalid["execute"] = true;
+      reply = process.call("web_sea_extract", invalid, revision, project);
+      check(reply["error"]["code"] == "invalid_request",
+            "SEA accepted target execution");
     }
     process.stop();
     std::ifstream errors(fixture.root / "stderr");

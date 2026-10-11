@@ -21,9 +21,12 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -108,6 +111,70 @@ std::string callIn(const BinaryImage &Img, const std::string &Callee) {
     return {};
   }
   return Source.substr(At, Source.find('\n', At) - At);
+}
+
+TEST(I386CallContract, WindowsNonlocalCallsRetainTheirControlFlowContract) {
+  for (const char *Name :
+       {"_setjmp3", "_setjmpex", "__intrinsic_setjmp", "__intrinsic_setjmpex",
+        "__mingw_setjmp", "_longjmpex", "__mingw_longjmp", "opaque_call"})
+    for (bool NoOpt : {false, true})
+      for (bool RegisterCall : {false, true}) {
+        SCOPED_TRACE(Name);
+        SCOPED_TRACE(NoOpt);
+        SCOPED_TRACE(RegisterCall);
+        const bool NoReturn =
+            std::string_view(Name).find("longjmp") != std::string_view::npos;
+        const bool ReturnsTwice =
+            !NoReturn && std::string_view(Name) != "opaque_call";
+        // Two initialized outgoing words, an import call, and an observable
+        // ordinary continuation. Only the longjmp entries cut that edge.
+        std::vector<uint8_t> Code{0x6a, 0, 0x6a, 0};
+        auto Call = callThroughSlot(slot(0));
+        if (RegisterCall) {
+          Call[0] = 0x8b; // mov ecx,[slot]; call ecx
+          Call[1] = 0x0d;
+          Call.insert(Call.end(), {0xff, 0xd1});
+        }
+        Code.insert(Code.end(), Call.begin(), Call.end());
+        const va_t Continuation = Text + Code.size();
+        Code.insert(Code.end(), {0x83, 0xc4, 8, 0xb8, 7, 0, 0, 0, 0xc3});
+        auto Image = makeImage(std::move(Code), {Name});
+        ASSERT_TRUE(Image.recordImportStorageSlot(
+            slot(0), Name, 0, ImportStorageEvidence::ImportDirectory));
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.LiftMode = Options.SourceProjection = true;
+        Options.NoOpt = NoOpt;
+        Options.OnlyFunctionEntries = {Text};
+        const auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_NE(Result.LlvmModule, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        bool SawContinuation = false;
+        for (const auto &Function : Result.LowFuncs)
+          for (const auto &Block : Function.Blocks)
+            for (const auto &Boundary : Block.InstructionBoundaries)
+              SawContinuation |= Boundary.Address == Continuation;
+        if (!RegisterCall)
+          EXPECT_EQ(SawContinuation, !NoReturn);
+        const llvm::CallBase *ObservedCall = nullptr;
+        for (const auto &Function : *Result.LlvmModule)
+          for (const auto &Block : Function)
+            for (const auto &Instruction : Block)
+              if (const auto *Call =
+                      llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+                if (const auto *Target = Call->getCalledFunction();
+                    Target && Target->isIntrinsic())
+                  continue;
+                ASSERT_EQ(ObservedCall, nullptr);
+                ObservedCall = Call;
+              }
+        ASSERT_NE(ObservedCall, nullptr);
+        EXPECT_EQ(ObservedCall->hasFnAttr(llvm::Attribute::NoReturn), NoReturn);
+        EXPECT_EQ(ObservedCall->hasFnAttr(llvm::Attribute::ReturnsTwice),
+                  ReturnsTwice);
+      }
 }
 
 TEST(I386CallContract, AThunkJumpingThroughTheSlotForwardsItsArguments) {
@@ -224,6 +291,107 @@ TEST(I386CallContract, APoppedPushIsNoArgument) {
   EXPECT_EQ(Line.find("0x401007"), std::string::npos) << Source;
   EXPECT_EQ(Line.find("4198407"), std::string::npos) << Source;
   EXPECT_NE(Line.find("arg0"), std::string::npos) << Source;
+}
+
+TEST(I386CallContract, SelectingTheCallerPreservesTheCalleeArgumentContract) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool Regparm : {false, true})
+      for (bool Forwarder : {false, true})
+        for (bool Selected : {false, true})
+          for (bool NoOpt : {false, true})
+            for (bool LLVM : {false, true}) {
+              SCOPED_TRACE(std::to_string(static_cast<int>(Format)) + "/" +
+                           std::to_string(Regparm) + "/" +
+                           std::to_string(Forwarder) + "/" +
+                           std::to_string(Selected) + "/" +
+                           std::to_string(NoOpt) + "/" + std::to_string(LLVM));
+              // Both register and stack setup are present. The callee's
+              // actual reads decide which two values the call passes. ECX
+              // is scratch, despite being first in the default register order.
+              std::vector<uint8_t> Code = {
+                  0xb8, 7,    0,    0,   0, // mov eax,7
+                  0xba, 11,   0,    0,   0, // mov edx,11
+                  0xb9, 99,   0,    0,   0, // mov ecx,99
+                  0x6a, 47,   0x6a, 31,     // push 47; push 31
+                  0xeb, 0,                  // jmp call_block
+                  0xe8, 0x26, 0,    0,   0, // call helper at +0x40
+                  0x83, 0xc4, 8,    0xc3};  // add esp,8; ret
+              Code.resize(0x40, 0xcc);
+              if (Forwarder) {
+                Code.insert(Code.end(), {0xe9, 0x1b, 0, 0, 0});
+                Code.resize(0x60, 0xcc);
+              }
+              const std::vector<uint8_t> Leaf =
+                  Regparm ? std::vector<uint8_t>{0x8d, 0x04, 0x10, 0xc3}
+                          : std::vector<uint8_t>{0x8b, 0x44, 0x24, 4,   0x03,
+                                                 0x44, 0x24, 8,    0xc3};
+              Code.insert(Code.end(), Leaf.begin(), Leaf.end());
+              BinaryImage Img = makeImage(std::move(Code), {});
+              Img.Format = Format;
+              for (va_t Entry : {Text + 0x40, Text + 0x60}) {
+                if (Entry == Text + 0x60 && !Forwarder)
+                  continue;
+                Symbol S = Symbol::makeFunc(Entry);
+                S.Name = Entry == Text + 0x40 ? "helper" : "leaf";
+                Img.Symbols.push_back(std::move(S));
+              }
+              llvm::LLVMContext Ctx;
+              PipelineOptions Opts;
+              Opts.EmitDumpOutput = false;
+              Opts.NoOpt = NoOpt;
+              Opts.LiftMode = LLVM;
+              Opts.SourceProjection = true;
+              Opts.OnlyFunctionEntries = {Text};
+              if (!Selected) {
+                Opts.OnlyFunctionEntries.insert(Text + 0x40);
+                if (Forwarder)
+                  Opts.OnlyFunctionEntries.insert(Text + 0x60);
+              }
+              const PipelineResult R = Pipeline().run(Img, Ctx, Opts);
+              ASSERT_TRUE(R.Success) << R.Error;
+              ASSERT_EQ(R.MedFuncs.size(), Selected ? 1u : Forwarder ? 3u : 2u);
+              const MedFunc *Caller = nullptr;
+              for (const MedFunc &F : R.MedFuncs)
+                if (F.Entry == Text)
+                  Caller = &F;
+              ASSERT_NE(Caller, nullptr);
+              const MedCallInfo *Call = nullptr;
+              for (const MedCallInfo &CI : Caller->CallInfos)
+                if (CI.TargetAddr == Text + 0x40)
+                  Call = &CI;
+              ASSERT_NE(Call, nullptr);
+              if (Selected || !LLVM)
+                ASSERT_EQ(Call->Args.size(), 2u);
+              else
+                ASSERT_GE(Call->Args.size(), 2u);
+              // Follow only representation copies of the two literal inputs;
+              // this oracle does not recover register or stack arguments.
+              auto literal = [&](MedVar V) -> std::optional<uint64_t> {
+                for (unsigned Depth = 0; Depth != 16; ++Depth) {
+                  if (V.isConst())
+                    return V.ConstVal;
+                  const MedOp *Def = nullptr;
+                  for (const MedBlock &B : Caller->Blocks)
+                    for (const MedOp &O : B.Ops)
+                      if (O.Output.Kind == V.Kind && O.Output.Id == V.Id &&
+                          O.Output.SSAVer == V.SSAVer && O.Output.Size &&
+                          (O.Opcode == NdOp::COPY ||
+                           O.Opcode == NdOp::INT_ZEXT))
+                        Def = &O;
+                  if (!Def || Def->NumInputs != 1)
+                    return std::nullopt;
+                  V = Def->Inputs[0];
+                }
+                return std::nullopt;
+              };
+              EXPECT_EQ(literal(Call->Args[0]), Regparm ? 7u : 31u);
+              EXPECT_EQ(literal(Call->Args[1]), Regparm ? 11u : 47u);
+              if (LLVM) {
+                ASSERT_NE(R.LlvmModule, nullptr);
+                EXPECT_FALSE(llvm::verifyModule(*R.LlvmModule, &llvm::errs()));
+              }
+            }
 }
 
 TEST(I386CallContract, StoresThroughACopyOfESPAreArgumentsByOffset) {

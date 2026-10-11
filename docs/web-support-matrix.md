@@ -38,6 +38,7 @@ Other hosts require separate evidence.
 | Electron selected-source IPC | `electron-scoped-channel-candidates-v1` | Exact private UTF-16 channel equality inside an explicitly selected manifest/source scope, unresolved endpoints, evidence-linked pages and compatible pair counts; no process-role/runtime-routing or complete application graph claim |
 | Captured source paths / Electron entries | `javascript-captured-portable-path-candidates-v1` / `electron-captured-entry-candidates-v1` | Distinct source/app bases, finite path/URL operations and exact available-file association inside the explicit manifest scope; HTML/import closure and runtime path bases remain unverified |
 | NW.js / VSIX | Pending | Each needs its own qualified container profile; ASAR does not establish this support or safe raw export |
+| ZIP32 container | `zip32-local-central-v1` | Native stored/deflate reader, exact local/central agreement, CRC validation, unavailable-member evidence and shared downstream consumers; [profile](web-zip-profile.md). ZIP64, prefixed images, newer envelopes and framework manifests are separate work |
 | Captured HTML | `html-utf8-script-candidates-v1` | Script/base inventory, captured local URL candidates and inline raw-byte sources/anchors; DOM and runtime activation remain unverified. [Profile](web-html-profile.md) |
 | HTML inline module files | `html-inline-module-file-candidates-v2` | Literal requests use explicit document/base evidence and exact captured members; early captured maps add scoped/prefix/null rules and private URL candidates; browser activation/history and full closure remain pending |
 | HTML import maps | `import-map-url-evidence-v1`, embedded Ada 4.0.0 | Bounded C++ JSON/URL processing and metadata pages remain available without JS parsing; absolute key origins, later/interleaved maps and order-dependent JSON remain explicit HTML-profile refusals |
@@ -45,9 +46,10 @@ Other hosts require separate evidence.
 | Package archives and original SRI | `ustar-pax-single-gzip-v1`, `npm-original-sri-v1` | Native tar/local-PAX/single-gzip, metadata-only links, shared source/package/Bun/native consumers and explicit registry/lock declaration checks over original bytes. [Profile and limits](web-package-archive-profile.md). Recursive archives, full tar dialects and publisher authentication are unsupported |
 | Passive interface evidence | `har-1.2-metadata-v1`, `direct-fetch-websocket-syntax-v1`, `absolute-http-method-origin-path-v1` | HAR redaction preview/commit, fixed metadata and source-node links; explicit candidate joins preserve inference/observation classes. XHR/wrappers, dynamic URLs, WebSocket frames and protocol reconstruction remain unsupported. [Profile](web-interface-profile.md) |
 | Passive stream/log records | Six explicitly selected JSONL/SSE/JSON-RPC/MCP-shape/recorded-envelope/log profiles | Bounded native framing, redaction preview/commit and recorded-context candidate joins; missing/ambiguous evidence refuses links. No complete MCP schema/negotiation, source correlation or live capture claim. [Profiles](web-stream-profile.md) |
-| Tauri/Wails/SEA/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
+| Node SEA | Node 22.15.0 LE64 preparation blob and explicit ELF64/Mach-O64/PE32+ x64/ARM64 resource profiles | Separate C++ reader, stored JS/assets and opaque V8 cache/snapshot, shared consumers; [qualification and limits](web-sea-profile.md). Runtime activation/version and other versions/hosts are unverified |
+| Tauri/Wails/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
 | C++ worker | `web_` operations in protocol 1.1 | Real framed-process, direct-query parity, web/native revision isolation and private-output checks passed locally |
-| C++ MCP transport | Pending | Must use the same C API and enforce an explicit host input scope |
+| C++ MCP transport | `neverd-offline-web-mcp-v1`, MCP 2025-06-18 stdio | Shared worker/C API adapter, launch-configured input indices and capability-filtered tools; structural views only, no raw export/deep native analysis. [Profile and qualification limits](web-mcp-profile.md) |
 
 The ASAR increment restored the backend, JavaScript parser, ASAR and LLVM Zstd
 options to ON. Its final local run passed 185 of 186 registered web cases;
@@ -128,6 +130,8 @@ closure remain outstanding.
 | Bundles / recovered module slots / dependency records per source | 64 / 4,096 / 50,000 |
 | Bun modules / builtins / cached extractions | 4,096 / 4,096 / 4 |
 | Bun private names total / one name | 1 MiB / 32 KiB |
+| SEA selected input / assets / cached extractions | 256 MiB / 4,096 / 4 |
+| SEA private names total / one name / page records | 1 MiB / 32 KiB / 128 |
 | Bun section / program headers | 4,096 / 1,024 |
 | Bun serialized map / decoded content total | 8 MiB / 8 MiB |
 | Bun decoded source / Zstd window | 4 MiB / 8 MiB |

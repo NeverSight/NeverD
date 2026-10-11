@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -96,6 +97,487 @@ struct ThrowImage {
   }
 };
 } // namespace
+
+TEST(RegistrationCallABI, StackCleanupRequiresEveryRestoredNearReturn) {
+  auto MapText = [](BinaryImage &Image) {
+    auto &Text = Image.Segments[0];
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    Image.Sections = {Code};
+  };
+  struct Case {
+    std::vector<uint8_t> Code;
+    std::optional<uint32_t> Pop;
+  };
+  const Case Cases[] = {
+      {{0xc3}, 0},
+      {{0xc2, 8, 0}, 8},
+      // A nested opaque call loses ESP, recovered explicitly through EBP.
+      {{0x55, 0x8b, 0xec, 0x83, 0xec, 8, 0xff, 0xd0, 0x8b, 0xe5, 0x5d, 0xc3},
+       0},
+      // A different nonvolatile anchor also survives dynamic alignment.
+      {{0x53, 0x8b, 0xdc, 0x83, 0xe4, 0xf0, 0xff, 0xd0, 0x8b, 0xe3, 0x5b, 0xc2,
+        8, 0},
+       8},
+      // Both branches return with the same stack cleanup.
+      {{0x85, 0xc0, 0x74, 3, 0xc2, 8, 0, 0xc2, 8, 0}, 8},
+      // Maximum RET pop alone cannot establish either of these functions.
+      {{0x85, 0xc0, 0x74, 3, 0xc2, 8, 0, 0xc3}, std::nullopt},
+      {{0x85, 0xc0, 0x74, 3, 0xc2, 8, 0, 0x83, 0xec, 4, 0xc2, 8, 0},
+       std::nullopt},
+      {{0xff, 0xd0, 0xc3}, std::nullopt},
+      // A caller-clobbered register is not a restoration anchor.
+      {{0x8b, 0xc4, 0xff, 0xd1, 0x8b, 0xe0, 0xc3}, std::nullopt},
+      {{0x83, 0xec, 4, 0xc3}, std::nullopt},
+      {{0x5c, 0xc3}, std::nullopt},
+      {{0xff, 0xe0}, std::nullopt},
+      {{0xcb}, std::nullopt},
+      // Memory alone cannot recover a stack identity in this domain.
+      {{0x89, 0x64, 0x24, 0xfc, 0x8b, 0x64, 0x24, 0xfc, 0xc3}, std::nullopt},
+  };
+  for (unsigned I = 0; I != std::size(Cases); ++I) {
+    SCOPED_TRACE(I);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    Text.Data = Cases[I].Code;
+    MapText(F.Image);
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA), Cases[I].Pop);
+  }
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    Text.Data = {0xc3};
+    MapText(F.Image);
+    if (Mutation == 0)
+      Text.Flags = Text.Flags | SegmentFlags::Writable;
+    if (Mutation == 1)
+      F.Image.Format = BinaryFormat::ELF;
+    if (Mutation == 2)
+      F.Image.Arch = Arch::X64;
+    if (Mutation == 3)
+      F.Image.Bits = Bitness::Bits64;
+    size_t Work = Mutation == 4 ? limits::kMaxRegistrationEHStateWork : 0;
+    EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, Text.VA, &Work));
+  }
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    Text.Data = {0x55, 0x8b, 0xec, 0xff, 0x15, 0x30, 0x40,
+                 0x40, 0,    0x8b, 0xe5, 0x5d, 0xc3};
+    MapText(F.Image);
+    // This must remain an opaque returning call, not the fixture's
+    // _CxxThrowException import, whose no-return contract ends the CFG.
+    F.Image.Imports.clear();
+    F.Image.BaseRelocations = {{Text.VA + 5, 3}};
+    if (Mutation == 1)
+      F.Image.BaseRelocations[0].Type = 10;
+    if (Mutation == 2)
+      F.Image.BaseRelocations[0].Address = Text.VA + 3;
+    if (Mutation == 3)
+      F.Image.BaseRelocations.push_back(F.Image.BaseRelocations[0]);
+    if (Mutation == 4)
+      F.Image.Segments.push_back(Text);
+    EXPECT_EQ(
+        getCheckedX86CalleeStackPop(F.Image, ThrowImage::TextVA).has_value(),
+        Mutation == 0);
+  }
+}
+
+TEST(RegistrationCallABI, StackCleanupIncludesCheckedNestedImportCleanup) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    auto &Text = F.Image.Segments[0];
+    // Four stack arguments, RaiseException, then a near return without an
+    // explicit ESP reset. Its exact stdcall contract restores entry ESP.
+    Text.Data = {0x6a, 0,    0x6a, 0,    0x6a, 0, 0x6a, 0,
+                 0xff, 0x15, 0x30, 0x40, 0x40, 0, 0xc3};
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    F.Image.Imports[0].Name = "RaiseException";
+    F.Image.Imports[0].Module = "KERNEL32.dll";
+    ASSERT_TRUE(F.Image.recordImportStorageSlot(
+        ThrowImage::IATVA, "RaiseException", 0,
+        ImportStorageEvidence::ImportDirectory));
+    if (Mutation == 1)
+      F.Image.Imports[0].Module = "untrusted.dll";
+    if (Mutation == 2)
+      F.Image.ConflictingImportStorageSlots.insert(ThrowImage::IATVA);
+    if (Mutation == 3)
+      F.Image.ImportStorageSlots.at(ThrowImage::IATVA).Addend = 4;
+    if (Mutation == 4)
+      Text.Data[0] = Text.Data[1] = 0x90; // One argument was not pushed.
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+              Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+  }
+}
+
+TEST(RegistrationCallABI, NestedReturningStackProofIsBoundedAndNonCircular) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports.clear();
+    auto &Text = F.Image.Segments[0];
+    const unsigned Count = Mutation == 3 ? 32 : Mutation == 4 ? 33 : 3;
+    Text.Data.assign(Count * 0x20, 0xcc);
+    for (unsigned I = 0; I != Count; ++I) {
+      const size_t Offset = I * 0x20;
+      size_t Return = Offset;
+      if (I + 1 != Count || Mutation == 2) {
+        // Each wrapper pushes one argument, calls its child, and relies on
+        // the child's independently proved `ret 4` to restore entry ESP.
+        Text.Data[Offset] = 0x6a;
+        Text.Data[Offset + 1] = 0;
+        Text.Data[Offset + 2] = 0xe8;
+        const size_t Target = I + 1 == Count ? 0 : Offset + 0x20;
+        writeLE<uint32_t>(Text.Data.data() + Offset + 3,
+                          uint32_t(Target - (Offset + 7)));
+        Return += 7;
+      }
+      Text.Data[Return] = 0xc2;
+      Text.Data[Return + 1] = Mutation == 1 && I + 1 == Count ? 8 : 4;
+      Text.Data[Return + 2] = 0;
+      F.Image.Symbols.push_back(Symbol::makeFunc(Text.VA + Offset, 0x20));
+    }
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    size_t Work = Mutation == 5 ? limits::kMaxRegistrationEHStateWork - 20 : 0;
+    const auto Pop = getCheckedX86CalleeStackPop(F.Image, Text.VA, &Work);
+    EXPECT_EQ(Pop, Mutation == 0 || Mutation == 3 ? std::optional<uint32_t>{4}
+                                                  : std::nullopt);
+    EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
+  }
+}
+
+TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports[0].Name = "RaiseException";
+    F.Image.Imports[0].Module = "KERNEL32.dll";
+    ASSERT_TRUE(
+        F.Image.recordImportStorageSlot(ThrowImage::IATVA, "RaiseException", 0,
+                                        ImportStorageEvidence::PointerTable));
+    LowFunc Caller;
+    Caller.Blocks.resize(1);
+    LowOp Call;
+    Call.Opcode = NdOp::INDIR_CALL;
+    Call.addInput(NdVar::cst(ThrowImage::IATVA, 4));
+    Caller.Blocks[0].Ops = {Call};
+    if (Mutation == 1)
+      F.Image.Imports[0].Module = "custom.dll";
+    if (Mutation == 2)
+      F.Image.Imports[0].Name = "OtherException";
+    if (Mutation == 3) {
+      F.Image.Imports.push_back(F.Image.Imports[0]);
+      F.Image.Imports[1].Module = "custom.dll";
+    }
+    if (Mutation == 4)
+      F.Image.ConflictingImportStorageSlots.insert(ThrowImage::IATVA);
+    if (Mutation == 5)
+      Caller.Blocks[0].Ops[0].Opcode = NdOp::CALL;
+    if (Mutation == 6)
+      Caller.Blocks[0].Ops[0].Inputs[0].Size = 8;
+    RegistrationCallCalleeIndex Index(F.Image);
+    const auto Contracts = Index.stackContracts(Caller);
+    ASSERT_TRUE(Contracts);
+    ASSERT_EQ(Contracts->size(), Mutation == 0 ? 1u : 0u);
+    if (!Contracts->empty()) {
+      EXPECT_EQ(Contracts->front().StackPopBytes, 16u);
+      EXPECT_TRUE(Contracts->front().Indirect);
+    }
+  }
+}
+
+TEST(RegistrationCallABI, LocalUnwindIdentityRequiresCurrentProviderAndVeneer) {
+  for (bool Indirect : {false, true}) {
+    for (unsigned Mutation = 0; Mutation != 14; ++Mutation) {
+      SCOPED_TRACE(Indirect);
+      SCOPED_TRACE(Mutation);
+      ThrowImage F;
+      F.Image.Imports[0].Name = "_local_unwind2";
+      ASSERT_TRUE(F.Image.recordImportStorageSlot(
+          ThrowImage::IATVA, "_local_unwind2", 0,
+          ImportStorageEvidence::PointerTable));
+      auto &Text = F.Image.Segments[0];
+      Text.FileSz = Text.Size;
+      Section Code;
+      Code.Name = ".text";
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      F.Image.Sections = {Code};
+      if (Mutation == 1)
+        F.Image.Imports[0].Module = "custom.dll";
+      if (Mutation == 2)
+        F.Image.Imports[0].Name = "_local_unwind4";
+      if (Mutation == 3) {
+        F.Image.Imports.push_back(F.Image.Imports[0]);
+        F.Image.Imports.back().Module = "custom.dll";
+      }
+      if (Mutation == 4)
+        F.Image.ConflictingImportStorageSlots.insert(ThrowImage::IATVA);
+      if (Mutation == 5)
+        Text.Data[0x81] = 0x15; // a call is not a transparent jump veneer
+      if (Mutation == 6)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      if (Mutation == 7)
+        F.Image.Arch = Arch::X64;
+      if (Mutation == 8)
+        F.Image.Format = BinaryFormat::ELF;
+      if (Mutation == 9)
+        F.Image.Imports[0].Module = "MSVCRT.dll";
+      if (Mutation == 10)
+        F.Image.Bits = Bitness::Bits64;
+      if (Mutation == 11)
+        F.Image.Arch = Arch::ARM;
+      if (Mutation == 12)
+        F.Image.Arch = Arch::AArch64;
+      if (Mutation == 13)
+        F.Image.Format = BinaryFormat::MachO;
+      const va_t Target = Indirect ? ThrowImage::IATVA : ThrowImage::ImportVA;
+      const auto Contract =
+          getCheckedX86LocalUnwindContract(F.Image, Target, Indirect);
+      EXPECT_EQ(Contract.has_value(),
+                Mutation == 0 || Mutation == 9 ||
+                    (Indirect && (Mutation == 5 || Mutation == 6)));
+      EXPECT_FALSE(
+          getCheckedX86LocalUnwindContract(F.Image, Target + 1, Indirect));
+      if (Contract) {
+        EXPECT_EQ(Contract->Target, Target);
+        EXPECT_EQ(Contract->Indirect, Indirect);
+      }
+    }
+  }
+}
+
+TEST(RegistrationCallABI, SEHReturningStackUsesCompleteParentFrameEvidence) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports.clear();
+    auto &Text = F.Image.Segments[0];
+    Text.Data.assign(0x101, 0xcc);
+    const std::vector<uint8_t> Entry{
+        0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0,    0x30, 0x40, 0, // scope table
+        0x68, 0,    0x11, 0x40, 0, // language handler
+        0x64, 0xa1, 0,    0,    0,    0,    0x50, 0x64, 0x89, 0x25,
+        0,    0,    0,    0,                   // install FS:[0]
+        0xc7, 0x45, 0xfc, 0,    0,    0,    0, // enter scope
+        0xb8, 42,   0,    0,    0,    0xc7, 0x45, 0xfc, 0xff, 0xff,
+        0xff, 0xff, 0xeb, 0x3e}; // common parent epilogue
+    std::copy(Entry.begin(), Entry.end(), Text.Data.begin());
+    const std::vector<uint8_t> Filter{0xb8, 1, 0, 0, 0, 0xc3};
+    std::copy(Filter.begin(), Filter.end(), Text.Data.begin() + 0x50);
+    const std::vector<uint8_t> Handler{0xb8, 7, 0, 0, 0, 0xeb, 9};
+    std::copy(Handler.begin(), Handler.end(), Text.Data.begin() + 0x60);
+    const std::vector<uint8_t> Epilogue{
+        0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0, 0, 0, 0, 0x8b, 0xe5, 0x5d, 0xc3};
+    std::copy(Epilogue.begin(), Epilogue.end(), Text.Data.begin() + 0x70);
+    Text.Data[0x100] = 0xc3;
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    ExceptionFunction EH;
+    EH.CodeRange = {Text.VA, Text.VA + 0xa0};
+    EH.Personality = ExceptionPersonality::ExceptHandler3;
+    EH.Encoding = ExceptionEncoding::X86ScopeTableEH3;
+    auto &Chain = EH.Registration.emplace();
+    Chain.HandlerVA = Text.VA + 0x100;
+    Chain.ScopeTableVA = ThrowImage::TableVA;
+    Chain.SeededTryLevel = -1;
+    Chain.TryLevelOffset = -4;
+    Chain.RegistrationOffset = -16;
+    Chain.ChainInstallVA = Text.VA + 0x16;
+    Chain.ChainRemoveVA = Text.VA + 0x73;
+    Chain.Scopes = {{-1, Text.VA + 0x50, Text.VA + 0x60, false}};
+    Chain.TryLevelStores = {{Text.VA + 0x1d, Text.VA + 0x24, 0},
+                            {Text.VA + 0x29, Text.VA + 0x30, -1}};
+    if (Mutation == 1)
+      Text.Data[0x7a] = Text.Data[0x7b] = 0x90; // missing ESP restoration
+    if (Mutation == 2)
+      Text.Data[0x60] = 0xbd; // handler corrupts established EBP
+    if (Mutation == 3) {
+      Chain.Scopes.front().HandlerVA = Text.VA + 0x80;
+      std::copy(Epilogue.begin(), Epilogue.end(), Text.Data.begin() + 0x80);
+      Text.Data[0x8d] = 0xc2; // only the exceptional parent return pops four
+      Text.Data[0x8e] = 4;
+      Text.Data[0x8f] = 0;
+    }
+    if (Mutation == 4)
+      EH.ParseStatus = ExceptionParseStatus::Partial;
+    if (Mutation == 5)
+      Text.Flags = Text.Flags | SegmentFlags::Writable;
+    if (Mutation == 6)
+      Chain.ChainInstallVA += 1;
+    if (Mutation == 7) {
+      // Registration state is not a memory-preservation contract. An opaque
+      // helper overwrites the saved EBP that the epilogue loads into ESP.
+      const std::vector<uint8_t> OpaqueEpilogue{
+          0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0,    0,    0,    0,
+          0x83, 0xec, 4,    0x89, 0x6d, 0xec, 0x8d, 0x4d, 0xec, 0xe8,
+          0x78, 0,    0,    0,    0x8b, 0x65, 0xec, 0x5d, 0xc3};
+      std::copy(OpaqueEpilogue.begin(), OpaqueEpilogue.end(),
+                Text.Data.begin() + 0x70);
+      const std::vector<uint8_t> Writer{0xc7, 1, 0, 0, 0, 0, 0xc3};
+      Text.Data.resize(0x107);
+      std::copy(Writer.begin(), Writer.end(), Text.Data.begin() + 0x100);
+      Text.Size = Text.FileSz = Text.Data.size();
+      F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+    }
+    F.tableWord(0, UINT32_MAX);
+    F.tableWord(4, Chain.Scopes.front().FilterVA);
+    F.tableWord(8, Chain.Scopes.front().HandlerVA);
+    F.Image.ExceptionMetadata.Functions.push_back(EH);
+    F.Image.ExceptionMetadata.rebuildIndex();
+    if (Mutation == 0 || Mutation == 3 || Mutation == 7) {
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(F.Image));
+      const auto Low = CFGBuilder().build(F.Image, Dec, Text.VA);
+      ASSERT_TRUE(Low.RegistrationStates);
+      ASSERT_TRUE(Low.RegistrationStates->Complete);
+      ASSERT_TRUE(Low.RegistrationStates->RegistrationLifetimeComplete);
+    }
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+              Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+    // An outer ordinary helper must reuse the checked SEH result through
+    // nested CFG construction, without starting a separate callee closure.
+    Text.Data.resize(0x140, 0xcc);
+    Text.Data[0x120] = 0xe8;
+    writeLE<uint32_t>(Text.Data.data() + 0x121, uint32_t(-0x125));
+    Text.Data[0x125] = 0xc3;
+    Text.Size = Text.FileSz = Text.Data.size();
+    F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = Text.Size;
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA + 0x120),
+              Mutation == 0 ? std::optional<uint32_t>{0} : std::nullopt);
+  }
+}
+
+TEST(RegistrationCallABI, LocalUnwindSplitsCurrentMachineStateAtCall) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    F.Image.Imports[0].Name = "_local_unwind2";
+    ASSERT_TRUE(
+        F.Image.recordImportStorageSlot(ThrowImage::IATVA, "_local_unwind2", 0,
+                                        ImportStorageEvidence::PointerTable));
+    auto &Text = F.Image.Segments[0];
+    Text.Data.assign(0x101, 0xcc);
+    const std::vector<uint8_t>
+        Entry{0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0,    0x30,
+              0x40, 0,    0x68, 0,    0x11, 0x40, 0,    0x64,
+              0xa1, 0,    0,    0,    0,    0x50, 0x64, 0x89,
+              0x25, 0,    0,    0,    0,    0x83, 0xec, 0x20, // private frame
+              0x89, 0x65, 0xe8,                               // SavedESP
+              0xc7, 0x45, 0xe4, 0,    0,    0,    0,          // local = 0
+              0xc7, 0x45, 0xfc, 0,    0,    0,    0,          // enter scope 0
+              0x6a, 0xff, 0x8d, 0x45, 0xf0, 0x50, 0xe8, 0x54,
+              0,    0,    0, // _local_unwind2(frame, -1)
+              0x83, 0xc4, 8,    0x8b, 0x45, 0xe4, 0xeb, 0x2c};
+    std::copy(Entry.begin(), Entry.end(), Text.Data.begin());
+    const std::vector<uint8_t> Finally{0xc7, 0x45, 0xe4, 7, 0, 0, 0, 0xc3};
+    std::copy(Finally.begin(), Finally.end(), Text.Data.begin() + 0x50);
+    if (Mutation >= 3) {
+      std::vector<uint8_t> WithPrivateFrame{
+          0x55, 0x8b, 0xec,                  // push ebp; mov ebp,esp
+          0x83, 0xec, 8,                     // sub esp,8
+          0x8b, 0x4d, 0,                     // mov ecx,[ebp]: parent's EBP
+          0xc7, 0x41, 0xe4, 7,    0,   0, 0, // mov dword [ecx-28],7
+          0x83, 0xc4, 8,    0x5d, 0xc3};     // add esp,8; pop ebp; ret
+      if (Mutation == 4)
+        WithPrivateFrame[18] = 4; // wrong return stack
+      if (Mutation == 5)
+        WithPrivateFrame[8] = 4; // read the runtime return PC
+      if (Mutation == 6)
+        WithPrivateFrame[19] = 0x58; // pop eax: EBP not restored
+      if (Mutation == 7) {
+        WithPrivateFrame.erase(WithPrivateFrame.begin() + 9,
+                               WithPrivateFrame.begin() + 16);
+        WithPrivateFrame.insert(WithPrivateFrame.begin() + 9,
+                                {0x89, 0x61, 0xe4}); // escape callback ESP
+      }
+      std::copy(WithPrivateFrame.begin(), WithPrivateFrame.end(),
+                Text.Data.begin() + 0x50);
+    }
+    const std::vector<uint8_t> Epilogue{
+        0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0, 0, 0, 0, 0x8b, 0xe5, 0x5d, 0xc3};
+    std::copy(Epilogue.begin(), Epilogue.end(), Text.Data.begin() + 0x70);
+    Text.Data[0x90] = 0xff;
+    Text.Data[0x91] = 0x25;
+    writeLE<uint32_t>(Text.Data.data() + 0x92, ThrowImage::IATVA);
+    Text.Data[0x100] = 0xc3;
+    if (Mutation == 1)
+      Text.Data[0x35] = 0xf4; // wrong registration argument
+    if (Mutation == 2)
+      Text.Data[0x52] = 0xe8; // finally overwrites SavedESP
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    ExceptionFunction EH;
+    EH.CodeRange = {Text.VA, Text.VA + 0xa0};
+    EH.Personality = ExceptionPersonality::ExceptHandler3;
+    EH.Encoding = ExceptionEncoding::X86ScopeTableEH3;
+    auto &Chain = EH.Registration.emplace();
+    Chain.HandlerVA = Text.VA + 0x100;
+    Chain.ScopeTableVA = ThrowImage::TableVA;
+    Chain.SeededTryLevel = -1;
+    Chain.TryLevelOffset = -4;
+    Chain.RegistrationOffset = -16;
+    Chain.ChainInstallVA = Text.VA + 0x16;
+    Chain.ChainRemoveVA = Text.VA + 0x73;
+    Chain.Scopes = {{-1, 0, Text.VA + 0x50, true}};
+    Chain.TryLevelStores = {{Text.VA + 0x2a, Text.VA + 0x31, 0}};
+    F.tableWord(0, UINT32_MAX);
+    F.tableWord(4, 0);
+    F.tableWord(8, Text.VA + 0x50);
+    F.Image.ExceptionMetadata.Functions.push_back(EH);
+    F.Image.ExceptionMetadata.rebuildIndex();
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(F.Image));
+    const auto Low = CFGBuilder().build(F.Image, Dec, Text.VA);
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    ASSERT_TRUE(Low.RegistrationStates);
+    const auto &States = *Low.RegistrationStates;
+    const bool Valid = Mutation == 0 || Mutation == 3;
+    EXPECT_EQ(States.Complete, Valid);
+    EXPECT_EQ(States.RegistrationLifetimeComplete, Valid);
+    if (Valid)
+      EXPECT_TRUE(States.CallbackStatesComplete);
+    EXPECT_FALSE(States.CallFrameEffectsComplete);
+    bool SawContinuation = false;
+    for (const auto &State : States.Blocks)
+      if (State.Range.Begin == Text.VA + 0x3c) {
+        SawContinuation = true;
+        if (Valid)
+          EXPECT_EQ(State.Levels, std::vector<int32_t>{-1});
+      }
+    EXPECT_TRUE(SawContinuation);
+  }
+}
 
 TEST(RegistrationCallABI, ChecksImmutableSimpleThrowInfo) {
   for (unsigned Mutation = 0; Mutation != 26; ++Mutation) {

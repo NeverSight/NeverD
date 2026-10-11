@@ -1,5 +1,8 @@
 # NeverD MCP
 
+For the offline JavaScript/web analysis surface implemented entirely in C++,
+use the separate [neverd-web-mcp](../neverd-web-mcp/README.md) executable.
+
 `neverd-mcp` is a Python 3.10+ standard-library adapter. It has no Qt, LLVM,
 third-party Python dependency, network listener, model provider, or agent loop.
 It implements MCP **2025-11-25** JSON-RPC over newline-delimited stdio; its

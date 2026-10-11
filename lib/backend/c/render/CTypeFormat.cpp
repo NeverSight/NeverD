@@ -627,6 +627,15 @@ bool hasCSpelling(const TypeRef &Ty) {
   }
 }
 
+bool hasCValueLayout(const TypeRef &Ty) {
+  if (Ty && Ty->Kind == NdTypeKind::Struct && !Ty->IsEnum &&
+      sourceAggregateMembers(Ty).empty())
+    return false;
+  if (Ty && Ty->Kind == NdTypeKind::Array)
+    return hasCValueLayout(Ty->ElemType);
+  return hasCSpelling(Ty);
+}
+
 static std::string anonymousAggregateName(llvm::Type *Ty) {
   std::string Text;
   llvm::raw_string_ostream Stream(Text);
@@ -671,8 +680,8 @@ bool isCVectorType(llvm::Type *Ty) {
   if (!Vector || !llvm::isPowerOf2_32(Vector->getNumElements()))
     return false;
   auto *Element = Vector->getElementType();
-  return (Element->isFloatTy() || Element->isDoubleTy() ||
-          Element->isBFloatTy()) &&
+  return (Element->isHalfTy() || Element->isFloatTy() ||
+          Element->isDoubleTy() || Element->isBFloatTy()) &&
          Vector->getPrimitiveSizeInBits() / 8 <=
              limits::kMaxCIntegerVectorBytes;
 }
@@ -712,6 +721,8 @@ std::string typeToCLLVM(llvm::Type *Ty) {
   }
   if (Ty->isBFloatTy())
     return "__bf16";
+  if (Ty->isHalfTy())
+    return "_Float16";
   if (Ty->isFloatTy())
     return "float";
   if (Ty->isDoubleTy())

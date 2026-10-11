@@ -16,9 +16,14 @@
 #include "PipelineCallAbiDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
+#include "neverd/ir/med/MedTypePass.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -36,6 +41,85 @@
 namespace neverd {
 
 namespace {
+
+/// A selected function still calls the image's other native functions. Use
+/// the normal parameter detector for their bodies instead of assigning the
+/// default register order merely because the user omitted their output.
+/// These bounded support bodies never become emitted definitions.
+std::vector<MedFunc>
+omittedDirectCalleeSignatures(const BinaryImage &Img,
+                              const PipelineResult &Result) {
+  const auto *Convention = callArgumentConvention(Img.Arch, Img.abiFormat());
+  if (!Convention || !Convention->ArgumentsFromCallSetup || Img.IsRelocatable)
+    return {};
+  std::set<va_t> Present, Pending, Entries;
+  for (const auto &Symbol : Img.Symbols)
+    if (Symbol.IsFunc && !Symbol.IsBoundaryGuess)
+      Entries.insert(Symbol.Addr);
+  for (const MedFunc &F : Result.MedFuncs)
+    Present.insert(F.Entry);
+  auto enqueueCallees = [&](const MedFunc &F) {
+    for (const MedBlock &B : F.Blocks)
+      for (const MedOp &Op : B.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst()) {
+          const va_t Target = Op.Inputs[0].ConstVal;
+          if (!Present.count(Target) && !Img.findImportAt(Target) &&
+              !Img.isImportStubAt(Target) &&
+              (Entries.count(Target) || Img.hasKnownFunctionEntryAt(Target)) &&
+              Img.hasExecutableCodeOwnerAt(Target))
+            Pending.insert(Target);
+        }
+  };
+  for (const MedFunc &F : Result.MedFuncs)
+    enqueueCallees(F);
+  std::vector<MedFunc> Signatures;
+  if (Pending.empty())
+    return Signatures;
+  Decoder Dec;
+  if (!Dec.init(Img))
+    return Signatures;
+  CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&Entries);
+  size_t Inspected = 0;
+  size_t Operations = 0;
+  while (!Pending.empty() && Inspected < limits::kMaxCallEffectExtraLifts) {
+    ++Inspected;
+    const va_t Target = *Pending.begin();
+    Pending.erase(Pending.begin());
+    Present.insert(Target);
+    LowFunc Low =
+        Builder.build(Img, Dec, Target, Img.getFunctionNameAt(Target));
+    if (!Low.hasCompleteLiftCoverage() ||
+        !Low.UnsafeIndirectBranchAddresses.empty())
+      continue;
+    for (const auto &Block : Low.Blocks) {
+      if (Block.Ops.size() > limits::kMaxSSAFunctionOps - Operations)
+        return Signatures;
+      Operations += Block.Ops.size();
+    }
+    try {
+      LowToMedConverter Converter;
+      Converter.setBinaryImage(&Img);
+      Converter.setSourceCallHintsEnabled(false);
+      Converter.setCallMayWriteGPRs(&Result.CallMayWriteGPRs);
+      Converter.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
+      Converter.setCallEntryStackArgs(&Result.CallEntryStackArgs);
+      MedFunc Med = Converter.convert(Low, Img.Arch, Img.abiFormat());
+      size_t MedOperations = 0;
+      for (const auto &Block : Med.Blocks)
+        MedOperations += Block.Ops.size();
+      if (Med.Blocks.size() > limits::kMaxStructurableMedBlocks ||
+          MedOperations > static_cast<size_t>(limits::kMaxSSANodes))
+        continue;
+      inferMedTypes(Med, Img.Arch);
+      enqueueCallees(Med);
+      Signatures.push_back(std::move(Med));
+    } catch (const LowToMedConversionError &) {
+      // An unsupported callee's body supplies no signature evidence.
+    }
+  }
+  return Signatures;
+}
 
 // Variadic overflow parameters are finalized only after call recovery.  Keep
 // their interim arity open so neither recovery pass truncates the caller's
@@ -59,7 +143,8 @@ int callRegisterArity(const MedFunc &Func, int MaxRegisterIndex) {
 /// CalleeFPArity for intra-module callees (e.g. `mkD2`) before recoverCallAbi
 /// runs, so a tail-call struct-return forwarder (`fwdD2`) can recover its
 /// forwarded d0/d1 live-ins (KnownFPCallee gate in recoverCallAbi).
-int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
+int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI,
+                           BinaryFormat Format) {
   if (MF.Blocks.empty())
     return 0;
   int Count = 0;
@@ -67,7 +152,7 @@ int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
     if (O.Opcode == NdOp::COPY && O.NumInputs >= 1 &&
         O.Inputs[0].Kind == MedVar::Reg &&
         O.Inputs[0].RegOff == O.Output.RegOff &&
-        TRI.isFPArgReg(O.Output.RegOff))
+        TRI.isFPArgReg(O.Output.RegOff, Format))
       ++Count;
     else if (O.Opcode == NdOp::COPY && TRI.isLinkRegister(O.Output.RegOff))
       continue;
@@ -89,7 +174,7 @@ int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
 /// ops.  The worklist revisits only direct callers of a function whose
 /// signature grew.
 void propagateForwardedCallArities(
-    const std::vector<MedFunc> &Funcs, Arch TheArch,
+    const std::vector<MedFunc *> &Funcs, Arch TheArch,
     const std::map<va_t, std::string> &FuncNames, const BinaryImage &Img,
     std::map<va_t, int> &CalleeRegArity, std::map<va_t, int> &CalleeTotalArity,
     std::map<va_t, int> &CalleeFPArity,
@@ -104,10 +189,10 @@ void propagateForwardedCallArities(
 
   std::map<va_t, std::vector<size_t>> DirectCallers;
   std::set<va_t> Entries;
-  for (const auto &MF : Funcs)
-    Entries.insert(MF.Entry);
+  for (const MedFunc *MF : Funcs)
+    Entries.insert(MF->Entry);
   for (size_t I = 0; I < Funcs.size(); ++I)
-    for (const auto &Blk : Funcs[I].Blocks)
+    for (const auto &Blk : Funcs[I]->Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
             Op.Inputs[0].isConst() && Entries.count(Op.Inputs[0].ConstVal) != 0)
@@ -124,11 +209,12 @@ void propagateForwardedCallArities(
     Work.pop();
     Queued[I] = false;
 
-    const int PreviousRegArity = CalleeRegArity[Funcs[I].Entry];
-    const int PreviousTotalArity = CalleeTotalArity[Funcs[I].Entry];
-    const bool PreviousVariadic = CalleeIsVariadic.count(Funcs[I].Entry) != 0 &&
-                                  CalleeIsVariadic.at(Funcs[I].Entry);
-    MedFunc Probe = Funcs[I];
+    const int PreviousRegArity = CalleeRegArity[Funcs[I]->Entry];
+    const int PreviousTotalArity = CalleeTotalArity[Funcs[I]->Entry];
+    const bool PreviousVariadic =
+        CalleeIsVariadic.count(Funcs[I]->Entry) != 0 &&
+        CalleeIsVariadic.at(Funcs[I]->Entry);
+    MedFunc Probe = *Funcs[I];
     recoverCallAbi(Probe, TheArch, FuncNames, &Img, &CalleeRegArity,
                    &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
                    &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
@@ -143,7 +229,8 @@ void propagateForwardedCallArities(
     for (const auto &P : Probe.Params) {
       if (IRR != 0 && P.RegOff == IRR)
         continue;
-      if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff)) {
+      if (P.RegOff != kNoParamReg &&
+          TRI.isFPArgReg(P.RegOff, Img.abiFormat())) {
         FPRegs.push_back(P.RegOff);
       } else if (P.RegOff != kNoParamReg) {
         const int ArgIdx = ProbeLayout.registerIndex(P.RegOff);
@@ -221,8 +308,15 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   // The integer argument registers of each function that takes them in its
   // own order (MedFunc::IntegerArgumentRegisters).
   std::map<va_t, std::vector<uint64_t>> CalleeIntRegs;
+  auto OmittedCallees = omittedDirectCalleeSignatures(Img, Result);
+  std::vector<MedFunc *> SignatureBodies;
+  for (MedFunc &F : Result.MedFuncs)
+    SignatureBodies.push_back(&F);
+  for (MedFunc &F : OmittedCallees)
+    SignatureBodies.push_back(&F);
   {
     const auto &TRI = getTargetRegInfo(Img.Arch);
+    const auto FPParamRegs = TRI.floatingParamRegs(Img.abiFormat());
     // Internal x86/x86-64 scalar float/double, AArch64, and ARM hard-float
     // calls return through XMM0/V0/D0.  External i386 cdecl calls are excluded
     // by recoverCallAbi's relocation/import gates; x86 long double uses x87.
@@ -231,7 +325,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         return false;
       return TRI.isVectorReg(TRI.fpReturnModelReg());
     };
-    for (const auto &MF : Result.MedFuncs) {
+    for (const MedFunc *Body : SignatureBodies) {
+      const MedFunc &MF = *Body;
       int MaxRegIdx = -1, MaxIdx = -1;
       const IntegerArgumentLayout IntegerLayout =
           integerArgumentLayoutOf(MF, TRI);
@@ -250,7 +345,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
           // Hidden indirect-result (sret) pointer (AArch64 x8): not an ordinary
           // integer/FP/stack argument; recorded separately.
           HasSret = true;
-        } else if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff)) {
+        } else if (P.RegOff != kNoParamReg &&
+                   TRI.isFPArgReg(P.RegOff, Img.abiFormat())) {
           // Floating-point/vector argument register: counted separately.
           FPRegs.push_back(P.RegOff);
         } else if (P.RegOff != kNoParamReg) {
@@ -285,10 +381,9 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
       // Without this, tail-call struct-return forwarders (`fwdD2`) miss the
       // KnownFPCallee gate and pass 0.0 for forwarded d0/d1.
       if (FpArity == 0) {
-        FpArity = countEntryLiveInFPArgs(MF, TRI);
+        FpArity = countEntryLiveInFPArgs(MF, TRI, Img.abiFormat());
         if (FpArity > 0)
-          FPRegs.assign(TRI.FPParamRegs.begin(),
-                        TRI.FPParamRegs.begin() + FpArity);
+          FPRegs.assign(FPParamRegs.begin(), FPParamRegs.begin() + FpArity);
       }
       CalleeFPArity[MF.Entry] = FpArity;
       CalleeFPRegs[MF.Entry] = std::move(FPRegs);
@@ -316,10 +411,11 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   // FP arguments is left untouched.
   {
     const auto &TRI = getTargetRegInfo(Img.Arch);
+    const auto FPParamRegs = TRI.floatingParamRegs(Img.abiFormat());
     std::map<va_t, const MedFunc *> ByEntry;
-    for (const auto &MF : Result.MedFuncs)
-      ByEntry[MF.Entry] = &MF;
-    if (!TRI.FPParamRegs.empty())
+    for (const MedFunc *MF : SignatureBodies)
+      ByEntry[MF->Entry] = MF;
+    if (!FPParamRegs.empty())
       for (auto &MF : Result.MedFuncs) {
         // Only a pure forwarder, which has no parameters of its own recovered
         // yet (its incoming arguments flow straight into the tail call).
@@ -370,11 +466,11 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
           IntArgs = CalleeRegArity[Target]; // g's integer-argument count
           FpArgs = CalleeFPArity[Target];   // g's FP-argument count
           if (FpArgs == 0) {
-            FpArgs = countEntryLiveInFPArgs(*G, TRI);
+            FpArgs = countEntryLiveInFPArgs(*G, TRI, Img.abiFormat());
             if (FpArgs > 0) {
               CalleeFPArity[Target] = FpArgs;
               CalleeFPRegs[Target] = std::vector<uint64_t>(
-                  TRI.FPParamRegs.begin(), TRI.FPParamRegs.begin() + FpArgs);
+                  FPParamRegs.begin(), FPParamRegs.begin() + FpArgs);
             }
           }
           if (G->ReturnType && G->ReturnType->Kind == NdTypeKind::Float &&
@@ -383,8 +479,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         }
         if (IntArgs <= 0 && FpArgs <= 0 && FpRetSize == 0)
           continue; // nothing to inherit
-        int NFp =
-            std::min<int>(FpArgs, static_cast<int>(TRI.FPParamRegs.size()));
+        int NFp = std::min<int>(FpArgs, static_cast<int>(FPParamRegs.size()));
         const auto IntegerRegs =
             TRI.integerArgumentLayout(MF.CC == CallingConv::Win64).Registers;
         int NInt = std::min<int>(IntArgs, static_cast<int>(IntegerRegs.size()));
@@ -408,7 +503,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         };
         bool AllLiveIn = true;
         for (int K = 0; K < NFp && AllLiveIn; ++K)
-          if (regWrittenInF(TRI.FPParamRegs[K]))
+          if (regWrittenInF(FPParamRegs[K]))
             AllLiveIn = false;
         for (int K = 0; K < NInt && AllLiveIn; ++K)
           if (regWrittenInF(IntegerRegs[K]))
@@ -418,7 +513,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         if (NFp > 0) {
           CalleeFPArity[MF.Entry] = NFp;
           CalleeFPRegs[MF.Entry] = std::vector<uint64_t>(
-              TRI.FPParamRegs.begin(), TRI.FPParamRegs.begin() + NFp);
+              FPParamRegs.begin(), FPParamRegs.begin() + NFp);
         }
         if (NInt > 0) {
           CalleeRegArity[MF.Entry] = NInt;
@@ -440,7 +535,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   }
 
   propagateForwardedCallArities(
-      Result.MedFuncs, Img.Arch, AllFuncNames, Img, CalleeRegArity,
+      SignatureBodies, Img.Arch, AllFuncNames, Img, CalleeRegArity,
       CalleeTotalArity, CalleeFPArity, CalleeFPReturnSize, CalleeFPRegs,
       CalleeHasSret, CalleeIsVariadic, CalleeConsumesVaList, CalleeIntRegs);
 
@@ -448,12 +543,14 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
       Convention && Convention->TargetSpillsSurviveLeafCalls
           ? findFrameLocalLeafCallees(Result.MedFuncs, Img.Arch)
           : std::set<va_t>{};
-  for (auto &MF : Result.MedFuncs)
+  for (MedFunc *Body : SignatureBodies) {
+    MedFunc &MF = *Body;
     recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CalleeRegArity,
                    &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
                    &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
                    &CalleeConsumesVaList, &FrameLocalLeafCallees,
                    &CalleeIntRegs);
+  }
 
   // Regparm two-pass call recovery (i386): the first pass promotes forwarder
   // register params (PromoteParams).  Recompute CalleeRegArity from the
@@ -463,9 +560,11 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   // indexed.
   if (Convention && Convention->RegparmOnlyForInternalCalls) {
     const auto &TRI2 = getTargetRegInfo(Img.Arch);
-    std::map<va_t, int> CRA2, CTA2;
-    std::map<va_t, std::vector<uint64_t>> CalleeIntRegs2;
-    for (const auto &MF : Result.MedFuncs) {
+    // Omitted support bodies retain the same contract in both passes.
+    auto CRA2 = CalleeRegArity, CTA2 = CalleeTotalArity;
+    auto CalleeIntRegs2 = CalleeIntRegs;
+    for (const MedFunc *Body : SignatureBodies) {
+      const MedFunc &MF = *Body;
       int MaxRI = -1, MaxI = -1;
       const IntegerArgumentLayout Layout = integerArgumentLayoutOf(MF, TRI2);
       for (const auto &P : MF.Params) {
@@ -482,12 +581,30 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
       if (!MF.IntegerArgumentRegisters.empty())
         CalleeIntRegs2[MF.Entry] = MF.IntegerArgumentRegisters;
     }
-    for (auto &MF : Result.MedFuncs)
+    for (MedFunc *Body : SignatureBodies) {
+      MedFunc &MF = *Body;
       recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CRA2, &CTA2,
                      &CalleeFPArity, &CalleeFPReturnSize, &CalleeFPRegs,
                      &CalleeHasSret, &CalleeIsVariadic, &CalleeConsumesVaList,
                      /*FrameLocalLeafCallees=*/nullptr, &CalleeIntRegs2);
+    }
   }
+  // An omitted definition cannot give the emitter its parameter count.
+  // Apply the same final signature bound used for an emitted callee after
+  // forwarder promotion, so incidental live registers do not become extra
+  // arguments merely because output was restricted to its caller.
+  std::map<va_t, const MedFunc *> OmittedByEntry;
+  for (const MedFunc &F : OmittedCallees)
+    if (!F.IsVariadic && !F.SourceParametersBound)
+      OmittedByEntry.emplace(F.Entry, &F);
+  for (MedFunc &F : Result.MedFuncs)
+    for (MedCallInfo &CI : F.CallInfos) {
+      auto It = CI.IsIndirect ? OmittedByEntry.end()
+                              : OmittedByEntry.find(CI.TargetAddr);
+      if (It != OmittedByEntry.end() &&
+          CI.Args.size() > It->second->Params.size())
+        CI.Args.resize(It->second->Params.size());
+    }
 }
 
 void matchCallsToCalleeSignatures(const BinaryImage &Img,
