@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../unittests/web/BunFixture.h"
+#include "../../../unittests/web/NexeFixture.h"
 #include "../../../unittests/web/SEAFixture.h"
 #include "../../../unittests/web/ZipFixture.h"
 #include "TestSupport.h"
@@ -412,6 +413,44 @@ int main() {
     else
       invalid([&] { H.get("web_source_analyze", Json::object()); });
     archives(H, HasParser);
+    if (std::find(Ops.begin(), Ops.end(), "nexe_extract") != Ops.end()) {
+      F.write("sea",
+              neverd::web::nexe_test::bundle(
+                  {{"CANARY.js", "const x='CANARY';"}, {"data", "CANARY"}}));
+      const auto A = H.import(1);
+      const Json Args{{"revision", H.Revision},
+                      {"artifact_id", A},
+                      {"profile", "nexe-4.0.0-rc.7-eof-resources-v1"}};
+      const auto E = H.same("web_nexe_extract", Args);
+      require(E.at("member_count") == 2 &&
+                  E.at("signature_status") == "not_checked",
+              "nexe evidence differs");
+      const Json Page{{"revision", H.Revision},
+                      {"extraction_id", E.at("extraction_id")},
+                      {"record_kind", "members"},
+                      {"limit", 1}};
+      const auto M = H.same("web_nexe_records", Page);
+      require(M.at("next_offset") == 1, "nexe pages lost continuation");
+      H.fail("web_nexe_records",
+             {{"revision", H.Revision},
+              {"extraction_id", E.at("extraction_id")},
+              {"record_kind", "unknown"}},
+             "invalid_record_kind");
+      auto Invalid = Args;
+      Invalid["execute"] = true;
+      invalid([&] { H.get("web_nexe_extract", Invalid); });
+      if (HasParser) {
+        const auto Source =
+            H.same("web_source_analyze",
+                   {{"revision", H.Revision},
+                    {"artifact_id", M.at("items")[0].at("selection_id")},
+                    {"source_type", "commonjs"}});
+        H.same("web_source_anchor", {{"revision", H.Revision},
+                                     {"source_id", Source.at("source_id")},
+                                     {"byte_offset", "6"},
+                                     {"byte_length", "1"}});
+      }
+    }
     passiveInputs(H);
     for (const auto &Analysis : Backend.at("analysis"))
       if (Analysis.at("kind") == "package_archive" &&

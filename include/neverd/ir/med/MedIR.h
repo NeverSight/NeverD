@@ -200,6 +200,8 @@ struct MedOp {
     RealignedRestoredStackPointer,
     /// Runtime EBP below source EBP in a checked fixed C++ frame.
     DisplacedFramePointer,
+    /// ESP restored into a suspended catch invocation by a nested catchret.
+    RestoredCallbackStackPointer,
   };
   NdOp Opcode = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
@@ -224,7 +226,8 @@ struct MedOp {
   /// register would lose the callback's distinct ABI context.
   RegistrationRootKind RegistrationRoot = RegistrationRootKind::None;
   /// For a proven C++ continuation, ESP is this signed offset from the
-  /// established source EBP. Other registration root kinds keep zero.
+  /// established source EBP or the proved suspended callback entry ESP.
+  /// Other registration root kinds keep zero.
   int32_t RegistrationStackOffset = 0;
   uint32_t CallSiteId = 0;
   std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
@@ -412,6 +415,9 @@ struct MedFunc {
   int CalleePopBytes = 0;
   /// Source and preserved callees have a checked caller-cleanup stack contract.
   bool RegistrationCallerCleanupABIComplete = false;
+  /// Checked C++ parent return cleanup and preserved call/frame closure.
+  /// Runtime catch returns are excluded from this physical entry contract.
+  std::optional<uint16_t> RegistrationCxxEntryPopBytes;
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;
   int64_t FrameHeadroom = 0;

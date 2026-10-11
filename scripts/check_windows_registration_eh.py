@@ -18,6 +18,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -55,18 +56,24 @@ def run_image(path: Path, launcher: list[str], environment: dict[str, str],
     command = [*launcher, str(path.resolve())]
     started = time.monotonic()
     try:
-        result = subprocess.run(command, env=environment, capture_output=True,
-                                text=True, errors="replace", timeout=timeout,
-                                check=False)
-        return {"command": command, "exit_code": result.returncode,
-                "stdout": result.stdout.replace("\r\n", "\n"),
-                "stderr": result.stderr.replace("\r\n", "\n"),
-                "seconds": round(time.monotonic() - started, 3)}
-    except subprocess.TimeoutExpired as error:
-        return {"command": command, "error": f"timeout after {timeout}s",
-                "stdout": (error.stdout or b"").decode(errors="replace"),
-                "stderr": (error.stderr or b"").decode(errors="replace"),
-                "seconds": round(time.monotonic() - started, 3)}
+        # Wine services can inherit the launcher's output handles and outlive
+        # the PE process. File capture waits for the process exit, not for
+        # unrelated services to close a pipe. A live probe still times out.
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            observation = {"command": command}
+            try:
+                result = subprocess.run(command, env=environment, stdout=output,
+                                        stderr=errors, timeout=timeout, check=False)
+                observation["exit_code"] = result.returncode
+            except subprocess.TimeoutExpired:
+                observation["error"] = f"timeout after {timeout}s"
+            output.seek(0)
+            errors.seek(0)
+            observation.update(
+                stdout=output.read().decode(errors="replace").replace("\r\n", "\n"),
+                stderr=errors.read().decode(errors="replace").replace("\r\n", "\n"),
+                seconds=round(time.monotonic() - started, 3))
+            return observation
     except OSError as error:
         return {"command": command, "error": str(error),
                 "seconds": round(time.monotonic() - started, 3)}

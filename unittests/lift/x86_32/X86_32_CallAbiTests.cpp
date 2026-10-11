@@ -178,3 +178,20 @@ int pick(int x) { return apply((x & 1) ? add3 : sub2, x * 13, x >> 2); }
   }
   EXPECT_EQ(Calls, 2u) << Apply;
 }
+
+// A double passed on the stack fills two four-byte slots, and MULSD reads it
+// from its home as one memory operand: the multiply takes both slots.
+TEST_F(X86_32_CallAbi, AStackDoubleFeedsItsMultiplyWhole) {
+  expectRunsLikeSource(R"C(
+int fg(double, double, double, double, double, double)
+    __attribute__((noinline));
+int icfp(int x) {
+  double v = (double)x;
+  return fg(v, v + 1, v + 2, v + 3, v + 4, v + 5);
+}
+int fg(double a, double b, double c, double d, double e, double f) {
+  return (int)(a * b + c * d + e * f);
+}
+)C",
+                       "icfp", {"icfp", "fg"});
+}

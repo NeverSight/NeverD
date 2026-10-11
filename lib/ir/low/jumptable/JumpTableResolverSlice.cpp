@@ -3008,6 +3008,79 @@ struct CFGBuilder::ResolverGraphCache {
   }
 };
 
+// A const resolver invocation can ask many value questions about one graph.
+// Keep its already-validated graph alive without copying/comparing every LowOp
+// again. The caller's stack scope owns the immutability contract; this state
+// still owns and compares temporary override payloads and the current roots.
+struct CFGBuilder::ResolverQueryState {
+  std::shared_ptr<const ResolverGraphCache> Graph;
+  size_t SnapshotWork;
+  va_t Branch;
+  std::optional<std::vector<va_t>> Targets;
+  std::optional<std::set<va_t>> SharedBranches;
+  std::optional<std::map<va_t, std::vector<va_t>>> Edges;
+
+  template <typename T>
+  static bool sameInput(const std::optional<T> &Saved, const T *Input) {
+    return Input ? Saved && *Saved == *Input : !Saved;
+  }
+
+  bool matches(const std::set<va_t> &Roots, va_t InputBranch,
+               const std::vector<va_t> *InputTargets,
+               const std::set<va_t> *InputSharedBranches,
+               const std::map<va_t, std::vector<va_t>> *InputEdges) const {
+    return Branch == InputBranch && Graph->Roots == Roots &&
+           sameInput(Targets, InputTargets) &&
+           sameInput(SharedBranches, InputSharedBranches) &&
+           sameInput(Edges, InputEdges);
+  }
+
+  // One scope retains one bounded graph plus at most 64 KiB of override keys.
+  // Oversized keys take the ordinary snapshot-validation path. Account tree
+  // nodes conservatively before copying any caller-controlled container.
+  static bool canRetain(const std::vector<va_t> *InputTargets,
+                        const std::set<va_t> *InputSharedBranches,
+                        const std::map<va_t, std::vector<va_t>> *InputEdges) {
+    size_t Remaining =
+        64 * 1024 - sizeof(ResolverQueryState) - 16 * sizeof(void *);
+    auto account = [&](size_t Count, size_t Size) {
+      if (Count > Remaining / Size)
+        return false;
+      Remaining -= Count * Size;
+      return true;
+    };
+    if (InputTargets && !account(InputTargets->size(), sizeof(va_t)))
+      return false;
+    if (InputSharedBranches && !account(InputSharedBranches->size(),
+                                        sizeof(va_t) + 8 * sizeof(void *)))
+      return false;
+    if (InputEdges) {
+      if (!account(InputEdges->size(),
+                   sizeof(std::pair<const va_t, std::vector<va_t>>) +
+                       8 * sizeof(void *)))
+        return false;
+      for (const auto &[Branch, Targets] : *InputEdges)
+        if (!account(Targets.size(), sizeof(va_t)))
+          return false;
+    }
+    return true;
+  }
+
+  ResolverQueryState(std::shared_ptr<const ResolverGraphCache> Graph,
+                     size_t SnapshotWork, va_t Branch,
+                     const std::vector<va_t> *InputTargets,
+                     const std::set<va_t> *InputSharedBranches,
+                     const std::map<va_t, std::vector<va_t>> *InputEdges)
+      : Graph(std::move(Graph)), SnapshotWork(SnapshotWork), Branch(Branch) {
+    if (InputTargets)
+      Targets = *InputTargets;
+    if (InputSharedBranches)
+      SharedBranches = *InputSharedBranches;
+    if (InputEdges)
+      Edges = *InputEdges;
+  }
+};
+
 std::array<size_t, 3>
 CFGBuilder::resolverValueQueryCacheStatsForTesting() const {
   if (!CachedResolverGraph)
@@ -4723,7 +4796,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     std::vector<uint64_t> *QueryUnsignedFeasibleMasks,
     uint32_t ResolverDepthLimit,
     const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
-    bool UseGroupContext) const {
+    bool UseGroupContext, ResolverQueryScope *ReadOnlyScope) const {
   if (UseGroupContext && GuardedGroupProofContext)
     CertifiedEdgeOverrides =
         CandidateTargetsOverride && CandidateTargetsOverride->empty()
@@ -4818,36 +4891,71 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       (*QueryAnalysisComplete)[QueryIndex] = false;
   };
 
-  std::vector<ResolverInsnSnapshot> Snapshot;
-  if (!copyResolverInsnSnapshots(
-          Insns, Snapshot,
-          [&](va_t Addr, const auto &Rec) -> const std::vector<va_t> & {
-            if (CandidateTargetsOverride &&
-                (Addr == CandidateBranchOverride ||
-                 (CandidateBranchesSharingTargets &&
-                  CandidateBranchesSharingTargets->count(Addr))))
-              return *CandidateTargetsOverride;
-            if (CertifiedEdgeOverrides) {
-              const auto Override = CertifiedEdgeOverrides->find(Addr);
-              if (Override != CertifiedEdgeOverrides->end())
-                return Override->second;
-            }
-            return Rec.JumpTableTargets;
-          },
-          [&](size_t Amount) {
-            return consumeResolverGraphWork(GraphWorkBudget, Amount);
-          })) {
-    if (QueryAnalysisComplete)
-      std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
-                false);
-    return Results;
-  }
+  // A scope belongs to one const owner; scratch builders and nested resolver
+  // invocations cannot borrow its validation. Null-budget legacy queries keep
+  // their uncached path, including its established result/completion shape.
+  if (ReadOnlyScope && &ReadOnlyScope->Owner != this)
+    ReadOnlyScope = nullptr;
   const std::set<va_t> &ProofRoots = ActiveJumpTableProofRoots
                                          ? *ActiveJumpTableProofRoots
                                          : PersistentCFGRoots;
+  std::vector<ResolverInsnSnapshot> Snapshot;
   bool GraphComplete = false;
-  const auto GraphLease = ResolverGraphCache::acquire(
-      *this, Snapshot, ProofRoots, GraphWorkBudget, GraphComplete);
+  const auto GraphLease = [&]() -> ResolverGraphCache::Lease {
+    if (GraphWorkBudget && ReadOnlyScope && ReadOnlyScope->State &&
+        ReadOnlyScope->State->matches(
+            ProofRoots, CandidateBranchOverride, CandidateTargetsOverride,
+            CandidateBranchesSharingTargets, CertifiedEdgeOverrides)) {
+      const auto &Saved = *ReadOnlyScope->State;
+      // Pay both full cold charges. A smaller allowance must still exhaust at
+      // the graph boundary and clear every per-query completion flag.
+      GraphComplete =
+          consumeResolverGraphWork(GraphWorkBudget, Saved.SnapshotWork) &&
+          consumeResolverGraphWork(GraphWorkBudget, Saved.Graph->Work);
+      ResolverGraphCache::Lease Lease;
+      if (GraphComplete) {
+        Lease.Cached = Saved.Graph;
+        CachedResolverGraph = Saved.Graph;
+      }
+      return Lease;
+    }
+    const size_t BeforeSnapshot = GraphWorkBudget ? *GraphWorkBudget : 0;
+    if (!copyResolverInsnSnapshots(
+            Insns, Snapshot,
+            [&](va_t Addr, const auto &Rec) -> const std::vector<va_t> & {
+              if (CandidateTargetsOverride &&
+                  (Addr == CandidateBranchOverride ||
+                   (CandidateBranchesSharingTargets &&
+                    CandidateBranchesSharingTargets->count(Addr))))
+                return *CandidateTargetsOverride;
+              if (CertifiedEdgeOverrides) {
+                const auto Override = CertifiedEdgeOverrides->find(Addr);
+                if (Override != CertifiedEdgeOverrides->end())
+                  return Override->second;
+              }
+              return Rec.JumpTableTargets;
+            },
+            [&](size_t Amount) {
+              return consumeResolverGraphWork(GraphWorkBudget, Amount);
+            }))
+      return {};
+    const size_t SnapshotWork =
+        GraphWorkBudget ? BeforeSnapshot - *GraphWorkBudget : 0;
+    auto Lease = ResolverGraphCache::acquire(*this, Snapshot, ProofRoots,
+                                             GraphWorkBudget, GraphComplete);
+    if (ReadOnlyScope) {
+      ReadOnlyScope->State.reset();
+      if (GraphComplete && Lease.Cached &&
+          ResolverQueryState::canRetain(CandidateTargetsOverride,
+                                        CandidateBranchesSharingTargets,
+                                        CertifiedEdgeOverrides))
+        ReadOnlyScope->State = std::make_shared<ResolverQueryState>(
+            Lease.Cached, SnapshotWork, CandidateBranchOverride,
+            CandidateTargetsOverride, CandidateBranchesSharingTargets,
+            CertifiedEdgeOverrides);
+    }
+    return Lease;
+  }();
   if (!GraphComplete) {
     if (QueryAnalysisComplete)
       std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
@@ -9138,6 +9246,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   if (Info.TargetLoads.empty())
     return false;
 
+  ResolverQueryScope QueryScope(*this);
+
   auto sameVar = [](const NdVar &A, const NdVar &B) {
     return A.Space == B.Space && A.Offset == B.Offset && A.Size == B.Size;
   };
@@ -9561,7 +9671,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
         RestrictToLexicalTargetRegion
             ? limits::kMaxJumpTableLargeExpressionRoleResolverDepth
             : limits::kMaxJumpTableExpandedResolverDepth,
-        CertifiedEdgeOverrides);
+        CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
     if (!TransformQueriesComplete || QueryResults.size() != Queries.size()) {
       Complete = false;
       return false;
@@ -9657,7 +9767,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       FinalQueries, &FinalQueryComplete, nullptr, InvalidVA, nullptr,
       AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
       nullptr, nullptr, limits::kMaxJumpTableExpandedResolverDepth,
-      CertifiedEdgeOverrides);
+      CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
   if (!FinalQueryComplete || Final.size() != FinalQueries.size()) {
     Complete = false;
     return false;
@@ -9690,6 +9800,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
   } PublishCompletion{AnalysisComplete, Complete};
   if (Info.LoadRoles.empty())
     return false;
+
+  ResolverQueryScope QueryScope(*this);
 
   auto consumeWork = [&](size_t Amount = 1) {
     if (!consumeResolverGraphWork(AggregateEvidenceBudget, Amount)) {
@@ -10146,7 +10258,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           Queries, &QueriesComplete, nullptr, InvalidVA, nullptr,
           AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
           nullptr, nullptr, limits::kMaxJumpTableExpandedResolverDepth,
-          CertifiedEdgeOverrides);
+          CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       if (!QueriesComplete || Results.size() != Queries.size()) {
         Complete = false;
         return false;
@@ -10544,7 +10656,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         ScaleQueries, &ScaleQueriesComplete, nullptr, InvalidVA, nullptr,
         AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
         nullptr, nullptr, limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
-        CertifiedEdgeOverrides);
+        CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
     if (!ScaleQueriesComplete || Results.size() != ScaleQueries.size()) {
       Complete = false;
       return false;
@@ -11830,7 +11942,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         AddressQueries, &AddressQueriesComplete, nullptr, InvalidVA, nullptr,
         AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
         nullptr, nullptr, limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
-        CertifiedEdgeOverrides);
+        CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
     if (!AddressQueriesComplete ||
         AddressResults.size() != AddressQueries.size()) {
       Complete = false;
@@ -11971,7 +12083,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         LoadQueries, &LoadQueriesComplete, nullptr, InvalidVA, nullptr,
         AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
         nullptr, nullptr, limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
-        CertifiedEdgeOverrides);
+        CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
     if (!LoadQueriesComplete || LoadResults.size() != LoadQueries.size()) {
       Complete = false;
       return false;

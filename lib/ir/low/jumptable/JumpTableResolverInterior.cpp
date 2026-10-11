@@ -178,6 +178,8 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
       Exception
           ? coff_loader::getCheckedX86CxxCallbackPointerSources(Img, *Exception)
           : std::nullopt;
+  const auto SafeSEHPointer =
+      coff_loader::getCheckedX86SafeSEHTablePointer(Img);
   for (auto &[Target, Sources] : RelocationSources) {
     if (Exception && Exception->Registration &&
         (Exception->Encoding == ExceptionEncoding::X86ScopeTableEH3 ||
@@ -190,6 +192,8 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
         const auto It = CxxCallbackSources->find(Slot);
         return It != CxxCallbackSources->end() && It->second == Target;
       });
+    if (SafeSEHPointer && SafeSEHPointer->second == Target)
+      Sources.erase(SafeSEHPointer->first);
     if (!Sources.empty())
       RelocationCandidates.insert(Target);
   }

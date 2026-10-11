@@ -40,6 +40,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
@@ -660,7 +661,11 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
         *Ctx, llvm::ArrayRef<uint8_t>(Start, EmbedLen));
     auto *GV = new llvm::GlobalVariable(*Mod, ArrTy, true, dataLinkage(), Init,
                                         SymName + section_names::elf::Rodata);
-    GV->setAlignment(llvm::Align(4));
+    // The copy starts at Addr: aligned as Addr is, an aligned access to it
+    // stays aligned.
+    GV->setAlignment(
+        llvm::Align(uint64_t(1) << llvm::countr_zero(
+                        Addr | limits::kMaxEmbeddedDataAlignment)));
     markSharedLocal(GV);
     llvm::Constant *Indices[] = {Zero, Zero};
     auto *GEP =

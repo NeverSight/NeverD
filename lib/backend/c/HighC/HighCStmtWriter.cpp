@@ -16,6 +16,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
+#include "neverd/ir/high/MsvcTypeName.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -52,6 +53,8 @@ bool isCIdentifier(llvm::StringRef Name) {
 }
 
 bool isCxxTypeSpelling(llvm::StringRef Name) {
+  if (msvc_type_name::isFundamentalSpelling(Name))
+    return true;
   while (!Name.empty()) {
     const size_t Sep = Name.find("::");
     const llvm::StringRef Part =
@@ -68,21 +71,6 @@ bool isCxxTypeSpelling(llvm::StringRef Name) {
 bool isCxxThrowExpr(const HighExpr *E) {
   return E && E->Kind == ExprKind::Call &&
          isMsvcCxxThrowCallName(E->CallTarget);
-}
-
-bool isCxxRethrowObject(const HighExpr *Obj) {
-  const HighExpr *Cur = Obj;
-  for (int Depth = 0; Cur && Depth < 8; ++Depth) {
-    if (Cur->Kind == ExprKind::Const)
-      return Cur->ConstVal == 0;
-    if ((Cur->Kind == ExprKind::Cast || Cur->Kind == ExprKind::UnaryOp) &&
-        !Cur->Operands.empty()) {
-      Cur = Cur->Operands[0].get();
-      continue;
-    }
-    break;
-  }
-  return !Obj;
 }
 
 bool isFastFailExpr(const HighExpr *E) { return E && isX86FastFailCall(*E); }
@@ -289,33 +277,11 @@ std::string HighCWriter::sehFilterValueText(const HighExpr &Value) {
   return exprStr(Value);
 }
 
-void HighCWriter::writeCxxThrowExpr(const HighStmt &Stmt,
-                                    const HighExpr &ThrowCall) {
-  if (!Opts.StructuredExceptionSyntax) {
-    OS << exprStr(ThrowCall);
-    return;
-  }
-  OS << "throw";
-  if (auto Printed = CxxThrowPrints.find(&Stmt);
-      Printed != CxxThrowPrints.end()) {
-    OS << " " << Printed->second.Type << "(";
-    for (size_t I = 0; I < Printed->second.Args.size(); ++I) {
-      if (I)
-        OS << ", ";
-      OS << exprStr(*Printed->second.Args[I]);
-    }
-    OS << ")";
-    return;
-  }
-  if (!ThrowCall.Operands.empty() && ThrowCall.Operands[0] &&
-      !isCxxRethrowObject(ThrowCall.Operands[0].get()))
-    OS << " " << exprStr(*ThrowCall.Operands[0]);
-}
-
 void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
   // The C projection shows native entry points, not an invented setjmp-based
-  // replacement for the platform unwinder. A funclet keeps its own ABI,
-  // return and frame access in a separate definition in this emission.
+  // replacement for the platform unwinder. A funclet keeps its own ABI and
+  // frame. A checked body within the parent remains a runtime-only label;
+  // independent funclets retain their separate definitions.
   for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
     const HighEHClause &Clause = Stmt.EHClauses[I];
     const va_t Entry = Clause.Kind == HighEHClauseKind::CxxCleanup
@@ -323,6 +289,7 @@ void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
                            : Clause.HandlerVA;
     if (I < Stmt.EHClauseBodies.size() && !Stmt.EHClauseBodies[I].empty() &&
         !isEmbeddedRegistrationCallback(Stmt, I) &&
+        !isEmbeddedWindowsCallback(Stmt, I) &&
         (!Entry || (CurrentFunc && Entry == CurrentFunc->Entry) ||
          !DefinedFunctionsByAddress.count(Entry)))
       throw std::invalid_argument(
@@ -355,7 +322,7 @@ void HighCWriter::writeCExceptionRegion(const HighStmt &Stmt, int Indent) {
   writeTryBody(Stmt.Body, Indent + 1);
   emitIndent(Indent);
   OS << "}\n";
-  writeEmbeddedRegistrationCallbacks(Stmt, Indent);
+  writeEmbeddedNativeCallbacks(Stmt, Indent);
 }
 
 void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
@@ -1367,6 +1334,8 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
       const HighEHClause &Clause = Stmt.EHClauses[I];
       if (Clause.Kind == HighEHClauseKind::CxxCleanup) {
+        if (writeRegistrationCleanup(Stmt, I, Indent))
+          continue;
         OS << "\n";
         emitIndent(Indent);
         OS << "__unwind {\n";
@@ -1757,6 +1726,8 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
         for (size_t C = 0; C < Try.EHClauses.size(); ++C) {
           const HighEHClause &Clause = Try.EHClauses[C];
           if (Clause.Kind == HighEHClauseKind::CxxCleanup) {
+            if (writeRegistrationCleanup(Try, C, Indent))
+              continue;
             OS << "\n";
             emitIndent(Indent);
             OS << "__unwind {\n";
@@ -1928,6 +1899,8 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
         for (size_t C = 0; C < Try.EHClauses.size(); ++C) {
           const HighEHClause &Clause = Try.EHClauses[C];
           if (Clause.Kind == HighEHClauseKind::CxxCleanup) {
+            if (writeRegistrationCleanup(Try, C, Indent))
+              continue;
             OS << "\n";
             emitIndent(Indent);
             OS << "__unwind {\n";

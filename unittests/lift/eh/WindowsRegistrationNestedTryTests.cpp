@@ -4,7 +4,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "RegistrationDirectThrowTestUtils.h"
 #include "RegistrationNestedTryTestUtils.h"
+#include "RegistrationRethrowTestUtils.h"
+#include "RegistrationSourceReceiptTestUtils.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
@@ -16,6 +19,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/loader/COFF/COFFLoader.h"
@@ -27,10 +31,6 @@
 #include "llvm/IR/WinEHFrame.h"
 #endif
 #include "llvm/Support/Endian.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/JSON.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -40,7 +40,9 @@ using namespace neverd;
 
 namespace {
 #ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
-void reconstructNestedSearch(bool Secondary) {
+void reconstructNestedSearch(bool Secondary, bool Rethrow = false,
+                             bool InlineRethrow = false,
+                             bool DirectThrow = false) {
   const auto *Path = std::getenv("NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32");
   if (!Path)
     GTEST_SKIP() << "set NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32";
@@ -69,6 +71,23 @@ void reconstructNestedSearch(bool Secondary) {
   ASSERT_EQ(EH.Cxx->TryBlocks[1].Handlers.size(), 2u);
   ASSERT_EQ(States.CxxCatchObjects.size(), 2u);
   ASSERT_EQ(States.CxxContinuations.size(), 3u);
+  EXPECT_EQ(llvm::count_if(
+                States.CallFrameEffects,
+                [&](const auto &Call) {
+                  return States.CalleeContracts[Call.CalleeIndex].isRethrow() ||
+                         (Call.RuntimeThrow && Call.RuntimeThrow->isRethrow());
+                }),
+            unsigned(Rethrow));
+  EXPECT_EQ(llvm::count_if(
+                States.CalleeContracts,
+                [](const auto &Callee) { return Callee.isRuntimeThrow(); }),
+            unsigned(InlineRethrow || DirectThrow));
+  EXPECT_EQ(llvm::count_if(States.CallFrameEffects,
+                           [](const auto &Call) {
+                             return Call.RuntimeThrow &&
+                                    !Call.RuntimeThrow->isRethrow();
+                           }),
+            DirectThrow ? 3u + unsigned(Secondary && !Rethrow) : 0u);
   unsigned SecondaryCalls = 0;
   for (const auto &Call : States.CallFrameEffects) {
     const auto State = llvm::find_if(States.Blocks, [&](const auto &Candidate) {
@@ -98,6 +117,8 @@ void reconstructNestedSearch(bool Secondary) {
   LowToMedConverter Converter;
   Converter.setBinaryImage(&*Image);
   auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+  if (InlineRethrow || DirectThrow)
+    recoverCallAbi(Med, Arch::X86, {}, &*Image);
   inferMedTypes(Med, Arch::X86);
   for (const auto &State : States.Blocks)
     if (State.Reached)
@@ -182,6 +203,10 @@ void reconstructNestedSearch(bool Secondary) {
   auto Proof = validateCOFFRegistrationCxxIR(*Parent, EH, *Image);
   ASSERT_FALSE(bool(Proof)) << llvm::toString(std::move(Proof));
   registration_test::checkNestedTryEdits(*Parent, EH, *Image, Secondary);
+  if (InlineRethrow && !DirectThrow)
+    registration_test::checkRuntimeThrowEdits(Med, *Parent, *Image);
+  if (DirectThrow)
+    registration_test::checkDirectThrowEdits(Med, *Parent, *Image);
 
   if (const auto *Output =
           std::getenv("NEVERD_REGISTRATION_REALIGNED_OUTPUT_PE32")) {
@@ -213,43 +238,13 @@ void reconstructNestedSearch(bool Secondary) {
     ASSERT_EQ(Generated->Cxx->TryBlocks[1].Handlers.size(), 2u);
     if (EH.Registration->RealignedFrame)
       ASSERT_TRUE(Generated->Registration->RealignedFrame);
-    if (const auto *Receipt =
-            std::getenv("NEVERD_REGISTRATION_REALIGNED_RECEIPT")) {
-      auto Digest = [](const char *File) {
-        auto Buffer = llvm::MemoryBuffer::getFile(File);
-        EXPECT_TRUE(bool(Buffer));
-        if (!Buffer)
-          return std::string();
-        return llvm::toHex(llvm::SHA256::hash(llvm::arrayRefFromStringRef(
-                               (*Buffer)->getBuffer())),
-                           true);
-      };
-      llvm::json::Object Record{
-          {"incoming_reads",
-           llvm::count_if(States.IncomingFrameAccesses,
-                          [](const auto &A) { return !A.Write; })},
-          {"incoming_writes",
-           llvm::count_if(States.IncomingFrameAccesses,
-                          [](const auto &A) { return A.Write; })},
-          {"schema", 1},
-          {"secondary_search", Secondary},
-          {"evidence", "checked-realigned-source-reconstruction"},
-          {"source_frame", EH.Registration->RealignedFrame ? "realigned"
-                           : EH.Registration->hasCxxCallbackStack()
-                               ? "fixed-displaced"
-                               : "direct"},
-          {"source_image_sha256", Digest(Path)},
-          {"image_sha256", Digest(Output)},
-          {"base", Image->Base},
-          {"source_begin", EH.CodeRange.Begin - Image->Base},
-          {"source_end", EH.CodeRange.End - Image->Base},
-          {"generated_begin", Generated->CodeRange.Begin - Image->Base},
-          {"generated_end", Generated->CodeRange.End - Image->Base}};
-      std::error_code Error;
-      llvm::raw_fd_ostream Out(Receipt, Error);
-      ASSERT_FALSE(Error) << Error.message();
-      Out << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Record)));
-    }
+    registration_test::writeSourceReceipt(
+        Path, Output, *Image, EH, States, *Generated,
+        llvm::json::Object{{"secondary_search", Secondary},
+                           {"rethrow_search", Rethrow},
+                           {"inline_rethrow", InlineRethrow},
+                           {"direct_throw", DirectThrow},
+                           {"catch_try", false}});
   }
 }
 
@@ -259,6 +254,22 @@ TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsNestedSearch) {
 
 TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsSecondarySearch) {
   reconstructNestedSearch(true);
+}
+
+TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsRethrow) {
+  reconstructNestedSearch(true, true);
+}
+TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsInlineRethrow) {
+  reconstructNestedSearch(true, true, true);
+}
+TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsDirectThrows) {
+  reconstructNestedSearch(false, false, false, true);
+}
+TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsDirectSecondaryThrow) {
+  reconstructNestedSearch(true, false, false, true);
+}
+TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsDirectThrowAndRethrow) {
+  reconstructNestedSearch(true, true, true, true);
 }
 #endif
 } // namespace

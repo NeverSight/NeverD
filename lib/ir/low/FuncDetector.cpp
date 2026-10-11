@@ -180,8 +180,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
   }
   const std::set<va_t> ExceptionThunks =
       Img.ExceptionMetadata.registrationScopeThunks();
-  const auto CxxPointerRoles =
-      coff_loader::getCheckedX86CxxCallbackPointerRoles(Img);
+  const auto RegistrationPointerRoles =
+      coff_loader::getCheckedX86RegistrationPointerRoles(Img);
   std::set<va_t> IndependentEntries = Entries;
   IndependentEntries.insert(ExceptionEntries.begin(), ExceptionEntries.end());
   for (const auto &Sym : Img.Symbols)
@@ -201,8 +201,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       continue;
     if (ExceptionThunks.count(Sym.Addr))
       continue;
-    if (Sym.Origin == NameOrigin::Synthesized && CxxPointerRoles &&
-        CxxPointerRoles->RuntimeOnlyPointerTargets.count(Sym.Addr))
+    if (Sym.Origin == NameOrigin::Synthesized && RegistrationPointerRoles &&
+        RegistrationPointerRoles->RuntimeOnlyPointerTargets.count(Sym.Addr))
       continue;
     if (Img.hasExecutableCodeOwnerAt(Sym.Addr)) {
       Entries.insert(Sym.Addr);
@@ -266,9 +266,9 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
         continue;
       const va_t Target = normalizeCodeAddress(readPtr(Bytes, Img.is64Bit()),
                                                Img.Arch, Img.Mode);
-      if (CxxPointerRoles)
-        if (const auto Source = CxxPointerRoles->Sources.find(Slot);
-            Source != CxxPointerRoles->Sources.end() &&
+      if (RegistrationPointerRoles)
+        if (const auto Source = RegistrationPointerRoles->Sources.find(Slot);
+            Source != RegistrationPointerRoles->Sources.end() &&
             Source->second == Target)
           continue;
       if (Img.hasExecutableCodeOwnerAt(Target) && !IsMachOLocalLabel(Target)) {
@@ -298,8 +298,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       scanX86UnsymbolizedEntries(Img, Dec, Entries);
   }
 
-  if (CxxPointerRoles)
-    for (va_t Target : CxxPointerRoles->RuntimeOnlyPointerTargets)
+  if (RegistrationPointerRoles)
+    for (va_t Target : RegistrationPointerRoles->RuntimeOnlyPointerTargets)
       if (!IndependentEntries.count(Target) && !DirectCallTargets.count(Target))
         Entries.erase(Target);
 

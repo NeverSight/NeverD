@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,11 @@ bool isExecutableAddress(const BinaryImage &Img, va_t Address);
 /// space, so a corrupt operand cannot fabricate an in-image target.
 std::optional<va_t> addSignedOffset(va_t Base, int64_t Displacement);
 
+/// Disprove a padding-derived boundary using uninterrupted decoded callback
+/// instructions. A control transfer or exhausted budget retains the boundary.
+bool callbackFallsThroughBoundary(const BinaryImage &Img, va_t Entry,
+                                  va_t Boundary, size_t &Work);
+
 template <typename T>
 std::optional<T> readScalar(const BinaryImage &Img, va_t Address) {
   const uint8_t *P = Img.readVA(Address, sizeof(T));
@@ -61,14 +67,18 @@ std::optional<T> readScalar(const BinaryImage &Img, va_t Address) {
 /// and could not take part in CFG or structuring.
 class FunctionRangeMap {
 public:
-  explicit FunctionRangeMap(const BinaryImage &Img) {
+  explicit FunctionRangeMap(const BinaryImage &Img)
+      : Guesses(Img.boundaryGuessFunctionStarts()) {
     // PE export entries and the image entry are format-owned boundaries even
     // when no COFF symbol table or preceding padding made them discoverable.
     for (const Export &Entry : Img.Exports)
-      if (isExecutableAddress(Img, Entry.Addr))
+      if (isExecutableAddress(Img, Entry.Addr)) {
         Starts.push_back(Entry.Addr);
+        Guesses.erase(Entry.Addr);
+      }
     if (isExecutableAddress(Img, Img.Entry))
       Starts.push_back(Img.Entry);
+    Guesses.erase(Img.Entry);
     for (const Symbol &Sym : Img.Symbols) {
       if (!Sym.IsFunc || !isExecutableAddress(Img, Sym.Addr))
         continue;
@@ -103,12 +113,20 @@ public:
 
   /// The function containing \p Address, bounded by the next function start
   /// and by the end of the executable segment it lives in.
-  std::optional<ExceptionAddressRange> find(const BinaryImage &Img,
-                                            va_t Address) const {
+  std::optional<ExceptionAddressRange>
+  find(const BinaryImage &Img, va_t Address,
+       bool AuthenticatedEntry = false) const {
     auto It = std::upper_bound(Starts.begin(), Starts.end(), Address);
     if (It == Starts.begin())
       return std::nullopt;
     va_t Begin = *std::prev(It);
+    // A padding guess cannot truncate an authenticated entry's straight-line
+    // instructions. Keep guesses after control transfers or undecodable bytes,
+    // as well as every stated symbol, export and other confirmed boundary.
+    if (AuthenticatedEntry)
+      while (It != Starts.end() && Guesses.count(*It) &&
+             callbackFallsThroughBoundary(Img, Address, *It, CallbackWork))
+        ++It;
     const Segment *Seg = Img.getSegmentFor(Begin);
     if (!Seg || !Seg->isExecutable())
       return std::nullopt;
@@ -124,7 +142,16 @@ public:
 
 private:
   std::vector<va_t> Starts;
+  std::set<va_t> Guesses;
+  mutable size_t CallbackWork = 0;
 };
+
+/// Recover table-owned callback chunks without claiming intervening cleanup
+/// relays or unrelated functions as part of the registration body.
+void recoverRegistrationCallbackRanges(ExceptionFunction &F,
+                                       const BinaryImage &Img,
+                                       const FunctionRangeMap &Functions,
+                                       const RegistrationChainInfo &Chain);
 
 /// The image's SafeSEH handler table, when the load configuration published
 /// one.  It is the authority on which addresses the loader will accept as
@@ -138,6 +165,10 @@ public:
         ConfigRVA > InvalidVA - Img.Base)
       return;
     const va_t ConfigVA = Img.Base + ConfigRVA;
+    if (ConfigVA > UINT32_MAX - 0x47) {
+      Invalid = true;
+      return;
+    }
     auto TableVA = readScalar<uint32_t>(Img, ConfigVA + 0x40);
     auto Count = readScalar<uint32_t>(Img, ConfigVA + 0x44);
     if (!TableVA || !Count) {
@@ -147,7 +178,8 @@ public:
     if (*TableVA == 0 && *Count == 0)
       return;
     Present = true;
-    if (*TableVA == 0 || *Count == 0 || *Count > MaxRegistrationRecords) {
+    if (*TableVA == 0 || *Count == 0 || *Count > MaxRegistrationRecords ||
+        uint64_t(*TableVA) + uint64_t(*Count) * 4 > uint64_t(UINT32_MAX) + 1) {
       Invalid = true;
       return;
     }
@@ -161,10 +193,14 @@ public:
       }
       Handlers.push_back(Img.Base + *Entry);
     }
+    TablePointer = std::make_pair(ConfigVA + 0x40, va_t(*TableVA));
   }
 
   bool isPresent() const { return Present; }
   bool isMalformed() const { return Invalid; }
+  std::optional<std::pair<va_t, va_t>> tablePointer() const {
+    return TablePointer;
+  }
   bool contains(va_t Address) const {
     return !Invalid &&
            std::binary_search(Handlers.begin(), Handlers.end(), Address);
@@ -172,6 +208,7 @@ public:
 
 private:
   std::vector<va_t> Handlers;
+  std::optional<std::pair<va_t, va_t>> TablePointer;
   bool Present = false;
   bool Invalid = false;
 };

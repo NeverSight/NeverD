@@ -48,7 +48,8 @@ Other hosts require separate evidence.
 | Passive interface evidence | `har-1.2-metadata-v1`, `fetch-websocket-xhr-syntax-v2`, `absolute-http-method-origin-path-v1` | HAR preview/commit, direct fetch/WebSocket and bounded XHR constructor/receiver/call/event syntax links; explicit fetch-only joins preserve evidence classes. Wrappers, response dataflow, dynamic URL resolution and WebSocket frames remain unsupported. [Profile](web-interface-profile.md) |
 | Passive stream/log records | Six explicitly selected JSONL/SSE/JSON-RPC/MCP-shape/recorded-envelope/log profiles | Bounded native framing, redaction preview/commit and recorded-context candidate joins; missing/ambiguous evidence refuses links. No complete MCP schema/negotiation, source correlation or live capture claim. [Profiles](web-stream-profile.md) |
 | Node SEA | Node 22.15.0 LE64 preparation blob and explicit ELF64/Mach-O64/PE32+ x64/ARM64 resource profiles | Separate C++ reader, stored JS/assets and opaque V8 cache/snapshot, shared consumers; [qualification and limits](web-sea-profile.md). Runtime activation/version and other versions/hosts are unverified |
-| Tauri/Wails/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
+| nexe | `nexe-4.0.0-rc.7-eof-resources-v1` | C++ stored-resource and bootstrap extraction, alias-aware hashes, private namespaces and shared consumers; three x64 producer outputs qualified. Opaque native prefix/signatures/runtime and ARM64 producer outputs remain unverified. [Profile](web-nexe-profile.md) |
+| Tauri/Wails/pkg | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
 | C++ worker | `web_` operations in protocol 1.1 | Real framed-process, direct-query parity, web/native revision isolation and private-output checks passed locally |
 | C++ MCP transport | `neverd-offline-web-mcp-v1`, MCP 2025-06-18 stdio | Shared worker/C API adapter, launch-configured input indices and capability-filtered tools; structural views only, no raw export/deep native analysis. [Profile and qualification limits](web-mcp-profile.md) |
 
@@ -133,6 +134,9 @@ closure remain outstanding.
 | Bun private names total / one name | 1 MiB / 32 KiB |
 | SEA selected input / assets / cached extractions | 256 MiB / 4,096 / 4 |
 | SEA private names total / one name / page records | 1 MiB / 32 KiB / 128 |
+| nexe bootstrap / JSON index / members | 8 MiB / 1 MiB / 4,096 |
+| nexe private metadata per extraction / per session / cached results | 4 MiB / 8 MiB / 4 |
+| nexe reader steps / hash reads / page rows | 2,000,000 / at most twice captured length / 512 |
 | Bun section / program headers | 4,096 / 1,024 |
 | Bun serialized map / decoded content total | 8 MiB / 8 MiB |
 | Bun decoded source / Zstd window | 4 MiB / 8 MiB |

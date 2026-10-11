@@ -2220,7 +2220,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // The code reaches all of an object through an address that varies or
   // points into it: the object is declared whole, as bytes.
   auto NoteWhole = [&](va_t Addr, const TypeRef &Access, bool Written) {
-    const auto Object = sizedObjectAt(Addr);
+    const auto Object = indexedObjectAt(Addr);
     if (!Object)
       return;
     noteImageObject(Object->first, Access, Written, Access != nullptr);
@@ -2338,6 +2338,21 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         NoteAtomic(*E.Operands[0],
                    E.Operands[1] ? E.Operands[1]->Type : nullptr);
     }
+    // A floating-point state instruction's memory form reads its operand at
+    // the address it takes, as a load of that width would: a constant-pool
+    // double that only MULSD reads is that double, not a weak placeholder.
+    if (E.Kind == ExprKind::Call &&
+        isX86FPStateMemoryIntrinsic(E.IntrinsicId) &&
+        E.MemoryAddressSpace == NdMemoryAddressSpace::Default && E.Type &&
+        E.Operands.size() > 1 && E.Operands[0] && E.Operands[1] &&
+        E.Operands[1]->Kind == ExprKind::Const)
+      if (const unsigned Bytes = x86FPStateMemoryBytes(
+              E.IntrinsicId, E.Type->Size,
+              static_cast<unsigned>(E.Operands[1]->ConstVal))) {
+        NoteAccessAddress(E.Operands[0].get());
+        if (auto VA = constAddress(*E.Operands[0]))
+          noteImageObject(*VA, NdType::makeInt(Bytes, false), false, true);
+      }
     // A read-modify-write reads and writes the object it addresses.
     if (E.Kind == ExprKind::BinOp &&
         (E.Op == NdOp::ATOMIC_ADD || E.Op == NdOp::ATOMIC_XCHG ||

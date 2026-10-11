@@ -24,11 +24,10 @@ projectX86RegistrationCxxUnwind(const CxxExceptionInfo &Cxx) {
     const auto &Try = Cxx.TryBlocks[Index];
     if (Try.Handlers.empty() ||
         Try.Handlers.size() > limits::kMaxRegistrationEHRecords - Handlers ||
-        Try.CatchHigh != Try.TryHigh + 1 ||
-        Cxx.UnwindMap[Try.TryLow].ActionVA ||
-        Cxx.UnwindMap[Try.CatchHigh].ActionVA ||
+        Try.CatchHigh < Try.TryHigh + 1 || Cxx.UnwindMap[Try.TryLow].ActionVA ||
+        Cxx.UnwindMap[Try.TryHigh + 1].ActionVA ||
         !Boundaries.insert(Try.TryLow).second ||
-        !Boundaries.insert(Try.CatchHigh).second ||
+        !Boundaries.insert(Try.TryHigh + 1).second ||
         !Tries.emplace(Try.TryLow, Index).second)
       return std::nullopt;
     Handlers += Try.Handlers.size();
@@ -36,11 +35,16 @@ projectX86RegistrationCxxUnwind(const CxxExceptionInfo &Cxx) {
       const auto &Outer = Cxx.TryBlocks[Other];
       const bool Disjoint =
           Try.CatchHigh < Outer.TryLow || Outer.CatchHigh < Try.TryLow;
-      const bool Nested =
-          (Try.TryLow > Outer.TryLow && Try.CatchHigh <= Outer.TryHigh) ||
-          (Outer.TryLow > Try.TryLow && Outer.CatchHigh <= Try.TryHigh);
-      if ((!Disjoint && !Nested) ||
-          (Try.TryLow > Outer.TryLow && Try.CatchHigh <= Outer.TryHigh))
+      auto Contains = [](const auto &Parent, const auto &Child) {
+        return (Child.TryLow > Parent.TryLow &&
+                Child.CatchHigh <= Parent.TryHigh) ||
+               (Child.TryLow > Parent.TryHigh + 1 &&
+                Child.CatchHigh <= Parent.CatchHigh);
+      };
+      const bool Inside = Contains(Outer, Try);
+      const bool Outside = Contains(Try, Outer);
+      // FuncInfo searches inner rows before their enclosing try or catch.
+      if ((!Disjoint && !Inside && !Outside) || Inside)
         return std::nullopt;
     }
   }

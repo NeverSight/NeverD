@@ -29,7 +29,6 @@ TEST(WindowsRegistrationFixed, RuntimeOffsetsRequireTheCompleteLayout) {
   EXPECT_EQ(Chain.cxxSourceFrameOffset(-64), -76);
   EXPECT_EQ(Chain.cxxSourceFrameOffset(INT32_MIN + 12), INT32_MIN);
   EXPECT_FALSE(Chain.cxxSourceFrameOffset(INT32_MIN + 11));
-  EXPECT_EQ(Chain.chainInstallInstructionSize(), 6);
   for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Changed = Chain;
@@ -50,7 +49,6 @@ TEST(WindowsRegistrationFixed, RuntimeOffsetsRequireTheCompleteLayout) {
   Chain.TryLevelOffset = -4;
   EXPECT_EQ(Chain.cxxRuntimeFrameOffset(), 0);
   EXPECT_EQ(Chain.cxxSourceFrameOffset(-64), -64);
-  EXPECT_EQ(Chain.chainInstallInstructionSize(), 7);
 }
 
 TEST(WindowsRegistrationFixed, InputPE32ProvesDisplacedFrame) {

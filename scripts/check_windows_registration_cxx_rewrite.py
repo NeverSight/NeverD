@@ -23,11 +23,19 @@ if __package__:
     from .check_windows_registration_eh import run_image
     from .check_windows_registration_rewrite import PE32
     from .windows_registration_snapshot import saved_stack_probe
+    from .windows_registration_image import code_owner, safe_handlers
+    from .windows_registration_runtime import NAME, load_runtime
+    from .windows_registration_cleanup_relift import (
+        RELIFT_LABELS, reconstruct_cleanup, proof_digests)
 else:
     from check_windows_registration_cxx import OBSERVATION, SOURCE, parent_code_end
     from check_windows_registration_eh import run_image
     from check_windows_registration_rewrite import PE32
     from windows_registration_snapshot import saved_stack_probe
+    from windows_registration_image import code_owner, safe_handlers
+    from windows_registration_runtime import NAME, load_runtime
+    from windows_registration_cleanup_relift import (
+        RELIFT_LABELS, reconstruct_cleanup, proof_digests)
 
 BASES = (0x400000, 0x18000000)
 IMAGE_LABELS = ("original", "patched", "product-patched", "collision-patched",
@@ -39,9 +47,10 @@ def image_name(path: str) -> str:
 
 
 def require_image_matrix(records: list[dict], schema: int) -> None:
-    if schema not in (1, 2):
+    if schema not in (1, 2, 3):
         raise ValueError("source C++ execution matrix has an unsupported schema")
-    labels = IMAGE_LABELS if schema == 2 else IMAGE_LABELS[:2]
+    labels = IMAGE_LABELS + RELIFT_LABELS if schema == 3 else \
+        IMAGE_LABELS if schema == 2 else IMAGE_LABELS[:2]
     expected = {(label + suffix + ".exe", label != "original", base)
                 for label in labels
                 for suffix, base in (("", BASES[0]), ("-rebased", BASES[1]))}
@@ -57,45 +66,6 @@ def require_installation_identity(image: PE32, manual: PE32) -> None:
     expected = manual.data if image.base == manual.base else manual.rebase(image.base)
     if image.data != expected:
         raise ValueError("public C++ installation differs from its complete checked transaction")
-
-
-def code_owner(image: PE32, begin: int, end: int, name: str) -> None:
-    if not 0 <= begin < end <= 0xffffffff:
-        raise ValueError("C++ code owner has an invalid range")
-    owners = [section for section in image.sections
-              if section[1] <= begin and end <= section[1] + section[2]]
-    if len(owners) != 1 or owners[0][0] != name:
-        raise ValueError("C++ code owner has no unique executable section")
-    image.raw(begin, end - begin)
-    section_table = image.optional + image.u16(image.optional - 4)
-    index = image.sections.index(owners[0])
-    flags = image.u32(section_table + 40 * index + 36)
-    if flags & 0x60000000 != 0x60000000 or flags & 0x80000000:
-        raise ValueError("C++ code section lost read/execute permissions")
-
-
-def safe_handlers(image: PE32) -> tuple[int, list[int]]:
-    rva, size = image.directory(10)
-    if not rva or size < 4:
-        raise ValueError("C++ input has no load configuration")
-    config = image.raw(rva, size)
-    declared = image.u32(config)
-    if declared < 72:
-        raise ValueError("C++ load configuration has no complete SafeSEH fields")
-    config = image.raw(rva, declared)
-    table, count = image.u32(config + 64), image.u32(config + 68)
-    if not table or not 0 < count <= 65536 or table < image.base:
-        raise ValueError("C++ SafeSEH table is incomplete")
-    offset = image.raw(table - image.base, count * 4)
-    handlers = [image.u32(offset + 4 * i) for i in range(count)]
-    if handlers != sorted(set(handlers)):
-        raise ValueError("C++ SafeSEH table is not strictly ordered")
-    for handler in handlers:
-        owners = [s for s in image.sections if s[1] <= handler < s[1] + s[2]]
-        if len(owners) != 1 or owners[0][0] not in (".text", ".ndtext"):
-            raise ValueError("C++ SafeSEH handler has no executable owner")
-        code_owner(image, handler, handler + 1, owners[0][0])
-    return rva + 64, handlers
 
 
 def validate_compiled_image(image: PE32, contract: dict) -> None:
@@ -161,12 +131,18 @@ def require_cxx_outcome(result: dict, base: int, entry: int, begin: int,
 
 def observe(image_path: Path, generated: bool, reference: bool,
             original_end: int, contract: dict, launcher: list[str],
-            environment: dict[str, str], timeout: float) -> dict:
+            environment: dict[str, str], timeout: float,
+            relift_contract: dict | None = None) -> dict:
     image = PE32(image_path.read_bytes())
     if image.base not in BASES:
         raise ValueError("C++ runtime evidence has an unexpected image base")
     entry = image.entry(b"registration_cxx_probe")
-    if generated:
+    if relift_contract:
+        begin, end = relift_contract["generated_begin"], relift_contract["generated_end"]
+        code_owner(image, begin, end, ".ndtext")
+        if image.u16(image.optional + 70) & 0x40:
+            raise ValueError("cleanup re-lift must force its relocation base")
+    elif generated:
         validate_compiled_image(image, contract)
         begin, end = (contract["generated_code_begin_rva"],
                       contract["generated_code_end_rva"])
@@ -196,8 +172,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--timeout must be positive and finite")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    report = {"schema": 2, "evidence": "source-msvc-cxx-reconstruction",
-              "installation": "manual-public-cli-checked-transactions", "passed": False,
+    report = {"schema": 3, "evidence": "source-msvc-cxx-reconstruction",
+              "installation": "two-generation-checked-transactions", "passed": False,
+              "proofs": proof_digests(),
               "source_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
               "cases": [], "steps": []}
     if args.saved_stack_probe:
@@ -208,10 +185,12 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("requested Wine runtime is unavailable")
         launcher = [runtime] if runtime else []
         environment = os.environ.copy()
+        environment["WINEDLLOVERRIDES"] = "vcruntime140=n"
         if args.wine_prefix:
             environment.update(WINEARCH="win32", WINEDEBUG="-all",
                                WINEPREFIX=str(args.wine_prefix.resolve()))
         original_root = args.input_root.resolve()
+        runtime_path, report["catch_search_runtime"] = load_runtime(original_root / "runtime-libs")
         baseline = json.loads((original_root / "cxx-runtime.json").read_text())
         if not baseline.get("passed") or \
                 baseline.get("source_sha256") != report["source_sha256"]:
@@ -223,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         for name, reference in (("value", False), ("reference", True)):
             parent = output / name
             parent.mkdir(exist_ok=True)
+            shutil.copyfile(runtime_path, parent / NAME)
             original = original_root / name / "original.exe"
             native = profiles[name]
             native_image = [r for r in native["observations"]
@@ -252,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.saved_stack_probe:
                 case["native_baseline_sha256"] = native_digest
             report["cases"].append(case)
-            for label in IMAGE_LABELS[1:]:
+            for label in IMAGE_LABELS[1:] + RELIFT_LABELS:
                 (parent / (label + ".exe")).unlink(missing_ok=True)
             test_environment = dict(environment,
                 NEVERD_REGISTRATION_INPUT_CXX_PE32=str(parent / "original.exe"),
@@ -295,20 +275,27 @@ def main(argv: list[str] | None = None) -> int:
                 if result.returncode or not destination.is_file():
                     raise ValueError(f"CLI {mode} C++ reconstruction failed")
             manual = PE32(patched.read_bytes())
-            for label in IMAGE_LABELS:
+            relift, second, identity = reconstruct_cleanup(
+                args.test_binary.resolve(), args.patch_binary.resolve(), parent,
+                contract, environment, args.timeout, report["steps"])
+            case.update(identity)
+            for label in IMAGE_LABELS + RELIFT_LABELS:
                 source = parent / (label + ".exe")
                 rebased = parent / (label + "-rebased.exe")
                 rebased.write_bytes(PE32(source.read_bytes()).rebase(BASES[1]))
                 for path in (source, rebased):
                     if label != "original":
-                        require_installation_identity(PE32(path.read_bytes()), manual)
+                        require_installation_identity(
+                            PE32(path.read_bytes()), second if label in RELIFT_LABELS else manual)
                     case["observations"].append(observe(
                         path, label != "original", reference, original_end,
-                        contract, launcher, environment, args.timeout))
+                        contract, launcher, environment, args.timeout,
+                        relift if label in RELIFT_LABELS else None))
             require_image_matrix(case["observations"], report["schema"])
-            print(f"PASS source C++ {name}: twelve preferred/rebased route executions", flush=True)
+            print(f"PASS source C++ {name}: eighteen preferred/rebased route executions", flush=True)
         report["passed"] = True
-    except (OSError, ValueError, KeyError, ET.ParseError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, KeyError, TypeError, struct.error,
+            ET.ParseError, subprocess.TimeoutExpired) as error:
         report["error"] = str(error)
     destination = output / "registration-cxx-rewrite.json"
     destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

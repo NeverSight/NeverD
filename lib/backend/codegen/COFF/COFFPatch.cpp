@@ -13,6 +13,8 @@
 
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
 
+#include "COFFTrampolineRegions.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
@@ -556,14 +558,21 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
 
         size_t TrampCount = 0;
         if (HasExactSourcePlan) {
-          if (!TrampolinePlan.OriginalVAs.empty())
-            TrampCount = installTrampolines(
-                Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
-                Layout.TextFileOff, Layout.ImageBase, TargetArch, CachedMode,
+          auto Regions = collectCOFFSourceTrampolineRegions(
+              Binary, *CachedImage, TrampolinePlan.OriginalVAs);
+          if (!Regions) {
+            llvm::WithColor::error()
+                << llvm::toString(Regions.takeError()) << '\n';
+            return false;
+          }
+          for (const auto &Region : *Regions)
+            TrampCount += installTrampolines(
+                Binary, Img.SymbolAddrs, Region.SectionVA, Region.SectionSize,
+                Region.SectionFileoff, Layout.ImageBase, TargetArch, CachedMode,
                 CachedSymbols, CachedCodeRanges, TrampolineExports,
                 &PatchedOriginalEntries, &PatchedEntryMappings,
                 &InstalledFunctions, TrampolinePlan.Owners,
-                TrampolinePlan.OriginalVAs);
+                TrampolinePlan.OriginalVAs, CachedImage);
           if (!validatePatchedSourceTrampolineClosure(
                   TrampolinePlan, InstalledFunctions, TrampCount,
                   SourceDetail)) {

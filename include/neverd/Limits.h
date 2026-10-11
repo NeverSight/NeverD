@@ -515,6 +515,13 @@ constexpr size_t kMaxEmbeddedDataLen = 4096;
 /// therefore generous and only guards against an abnormally huge segment.
 constexpr size_t kMaxSingleGlobalEmbedLen = 1u << 20; // 1 MiB
 
+/// The widest alignment an embedded copy of image bytes keeps for the
+/// addresses in it: a 64-byte AVX-512 aligned operand.  A copy starts at an
+/// address aligned as the data it holds needs, so an aligned access to it
+/// (`addps xmm, m128` from a 16-byte constant pool) does not fault in the
+/// rebuilt object.
+constexpr uint64_t kMaxEmbeddedDataAlignment = 64;
+
 /// Maximum number of bytes a GOTOFF-folded rodata table base may precede the
 /// segment that holds its symbol.  clang's switch-to-lookup-table indexed by
 /// the unbiased case value folds the base to `table - min_case*stride`; a sane

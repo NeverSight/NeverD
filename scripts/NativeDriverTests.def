@@ -44,6 +44,9 @@ NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
     "Backends/UnpackDriver.RecoversDriverEntryImportsAndLifecycle/"
     "{backend_title}")
 NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
+    "Backends/UnpackDriver.RecoversAfterReleasingTransientImageMDLs/"
+    "{backend_title}")
+NEVERD_NATIVE_DRIVER_REQUIRED_TEST(
     "Backends/"
     "UnpackDriver.RetainedKernelObjectsAndBorrowedPointersAreNotRecovery/"
     "{backend_title}")

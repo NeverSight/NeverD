@@ -175,7 +175,9 @@ private:
       const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
   bool emitNativeX86RegistrationCxx(
       const MedFunc &Func, llvm::Function &LLVMFunc,
-      const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
+      const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
+      const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges);
+  llvm::Function *resolveX86RegistrationHandlerReference(va_t Address);
   bool
   emitNativeCxxEH(const MedFunc &Func, llvm::Function &LLVMFunc,
                   const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
@@ -594,7 +596,9 @@ private:
   /// Merging adjacent rodata segments keeps PC-relative references that cross a
   /// section boundary valid in the recompiled object (e.g. a switch-to-string
   /// `.rodata` offset table pointing into `.rodata.str1.1`).  Returns {global,
-  /// run-start VA}, or {nullptr, 0} when SegVA is not an embeddable rodata
+  /// VA of its first byte}: the run's start, or below it when a section in
+  /// the run needs more alignment than the start has, so every address keeps
+  /// its residue.  {nullptr, 0} when SegVA is not an embeddable rodata
   /// segment or the run exceeds the embed cap (caller falls back to the
   /// single-segment path).  For a lone rodata segment the run is that segment,
   /// identical to the prior embed.
@@ -2098,6 +2102,8 @@ private:
   // its own [Addr, segment_end] copy (which duplicated the rodata O(N) times
   // and blew the recompiled .rodata up to tens of KB).
   std::map<uint64_t, llvm::GlobalVariable *> SegmentDataGlobals;
+  // The VA each rodata run's global starts at, when below the run's start.
+  std::map<uint64_t, uint64_t> SegmentDataBases;
   // One mutable (non-const) embedded global per WRITABLE segment base VA (see
   // embedWritableRun): every direct and runtime-indexed access into the .data /
   // .bss segment GEPs into the SAME global so store/load pairs stay aliased.

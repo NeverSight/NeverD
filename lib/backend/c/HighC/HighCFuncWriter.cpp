@@ -1150,18 +1150,30 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
   };
   // A frame displacement used as a value prints as `&var_N`. Mark it
   // address-taken so copy-forward/DeadVars cannot drop the declaration.
-  std::function<void(const HighExpr &, bool)> Walk = [&](const HighExpr &E,
-                                                         bool AsAddress) {
+  // The width of the access whose address Walk is in, and each slot a
+  // run-time choice picks as such an address, with that width.
+  uint16_t AccessBytes = 0;
+  std::vector<std::pair<int64_t, uint16_t>> ChosenAccesses;
+  std::function<void(const HighExpr &, bool)> Walk;
+  const auto WalkAccessAddress = [&](const HighExpr &Address,
+                                     const TypeRef &Access) {
+    const uint16_t Saved = AccessBytes;
+    AccessBytes = Access ? Access->Size : 0;
+    Walk(Address, true);
+    AccessBytes = Saved;
+  };
+  Walk = [&](const HighExpr &E, bool AsAddress) {
     if (E.Kind == ExprKind::Load && !E.Operands.empty() && E.Operands[0]) {
       Note(E.Operands[0].get(), E.Type);
-      Walk(*E.Operands[0], true);
+      WalkAccessAddress(*E.Operands[0], E.Type);
       return;
     }
     if (E.Kind == ExprKind::Store && E.Operands.size() >= 2) {
       Note(E.Operands[0].get(), E.Operands[1] ? E.Operands[1]->Type : nullptr,
            /*AddressTaken=*/false, /*IsStore=*/true);
       if (E.Operands[0])
-        Walk(*E.Operands[0], true);
+        WalkAccessAddress(*E.Operands[0],
+                          E.Operands[1] ? E.Operands[1]->Type : nullptr);
       if (E.Operands[1])
         Walk(*E.Operands[1], false);
       return;
@@ -1177,6 +1189,24 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
     }
     if (!AsAddress && frameDisplacement(E)) {
       Note(&E, E.Type, /*AddressTaken=*/true);
+      return;
+    }
+    // A run-time choice of an access's address (`(p & m) | (&slot & ~m)`,
+    // `csel` between slots) picks a whole slot or other frame bytes; which
+    // one is settled once the slots have their types.
+    if (AsAddress && E.Kind == ExprKind::BinOp &&
+        (E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR ||
+         E.Op == NdOp::INT_XOR || E.Op == NdOp::SELECT)) {
+      for (const ExprPtr &Op : E.Operands) {
+        if (!Op)
+          continue;
+        if (const auto Disp = frameDisplacement(*Op)) {
+          Note(Op.get(), nullptr);
+          ChosenAccesses.push_back({*Disp, AccessBytes});
+        } else {
+          Walk(*Op, true);
+        }
+      }
       return;
     }
     for (const ExprPtr &Op : E.Operands)
@@ -1201,7 +1231,8 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
           Note(S.Dst->Operands[0].get(), S.Dst->Type, /*AddressTaken=*/false,
                /*IsStore=*/true);
         if (S.StoreAddr)
-          Walk(*S.StoreAddr, true);
+          WalkAccessAddress(*S.StoreAddr,
+                            S.StoreVal ? S.StoreVal->Type : nullptr);
         if (S.StoreVal)
           Walk(*S.StoreVal, false);
         if (S.Dst)
@@ -1270,6 +1301,16 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
   for (auto &[Disp, Slot] : FrameSlots)
     if (!Slot.Type)
       Slot.Type = NdType::makeInt(4);
+  // A choice that picks a whole slot for an access of its width leaves the
+  // slot a named local; another access through it reaches bytes no single
+  // local holds.
+  for (const auto &[Disp, Bytes] : ChosenAccesses)
+    if (const auto It = FrameSlots.find(Disp); It != FrameSlots.end()) {
+      if (Bytes && It->second.Type->Size == Bytes)
+        It->second.Chosen = true;
+      else
+        It->second.AddressTaken = true;
+    }
 
   // Slots that share bytes are one object, not separate variables: a byte
   // stored at -0x82 changes what a later read of the eight bytes at -0x84
@@ -5052,6 +5093,8 @@ void HighCWriter::foldCxxThrowConstructors(const HighFunc &Func) {
       if (!Call)
         continue;
       if (isMsvcCxxThrowCallName(Call->CallTarget)) {
+        if (cxxScalarThrowType(*Call))
+          continue;
         if (Call->Operands.size() < 2 || !Call->Operands[0] ||
             !Call->Operands[1])
           continue;
@@ -5067,6 +5110,8 @@ void HighCWriter::foldCxxThrowConstructors(const HighFunc &Func) {
         if (!ThrowInfo)
           continue;
         std::string Type = readMsvcThrowInfoFirstType(*Opts.Image, *ThrowInfo);
+        if (Type.empty())
+          continue;
         Type = cNamedTypeSpelling(Type);
         if (Type.empty() || !isCxxThrowTypeIdent(Type))
           continue;
@@ -5479,18 +5524,12 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   auto CheckDynamicFrameIndex = [&](auto &&Self, const HighExpr &Expr) -> void {
     if (HasDynamicFrameIndex)
       return;
-    if (Expr.Kind == ExprKind::BinOp &&
-        (Expr.Op == NdOp::INT_ADD || Expr.Op == NdOp::INT_SUB) &&
-        Expr.Operands.size() == 2 && Expr.Operands[0] && Expr.Operands[1] &&
-        !certifiedFrameStorageDisplacement(Expr) &&
-        (certifiedFrameStorageDisplacement(*Expr.Operands[0]) ||
-         certifiedFrameStorageDisplacement(*Expr.Operands[1]))) {
+    if (reachesFrameThroughIndex(Expr)) {
       HasDynamicFrameIndex = true;
       return;
     }
-    for (const ExprPtr &Operand : Expr.Operands)
-      if (Operand)
-        Self(Self, *Operand);
+    // An indirect callee loaded through such an address reads the frame too.
+    Expr.forEachChildExpr([&](const ExprPtr &Child) { Self(Self, *Child); });
   };
   walkStmts(Func.Body, [&](const HighStmt &Stmt) {
     if (Stmt.Dst)
@@ -5506,7 +5545,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   // no named load reads them. Indexed and escaped frames keep their stores.
   const bool PreserveFrameStores =
       HasDynamicFrameIndex || llvm::any_of(FrameSlots, [](const auto &Entry) {
-        return Entry.second.AddressTaken;
+        return Entry.second.AddressTaken || Entry.second.Chosen;
       });
   // Copy propagation belongs to the HighIR passes, which prove reaching
   // definitions. A function-wide textual alias map cannot represent loop
@@ -5588,12 +5627,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     // A frame alias plus a run-time index cannot be a standalone C local.
     // Fixed slot accesses must share its backing bytes, including across a
     // catch funclet where Param 1 is the parent's establisher frame.
-    if (Expr.Kind == ExprKind::BinOp &&
-        (Expr.Op == NdOp::INT_ADD || Expr.Op == NdOp::INT_SUB) &&
-        Expr.Operands.size() == 2 && Expr.Operands[0] && Expr.Operands[1] &&
-        !certifiedFrameStorageDisplacement(Expr) &&
-        (certifiedFrameStorageDisplacement(*Expr.Operands[0]) ||
-         certifiedFrameStorageDisplacement(*Expr.Operands[1]))) {
+    if (reachesFrameThroughIndex(Expr)) {
       NeedsFrameStorage = true;
       ProjectFrameAliasesIntoStorage = true;
       return;

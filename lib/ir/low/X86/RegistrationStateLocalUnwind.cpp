@@ -8,6 +8,8 @@
 
 #include "neverd/lift/X86Regs.h"
 
+#include <deque>
+
 namespace neverd::registration_state {
 
 bool RegistrationStateSolver::runLocalFinally(va_t Target, FrameState &Parent) {

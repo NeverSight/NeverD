@@ -769,6 +769,24 @@ __attribute__((target("sse4.2"))) int checksum(int a) {
                             {0, 1, -1, 0x7F, 0x12345678, -0x7FFFFFFF});
 }
 
+// MULSD and ADDSS read their constant-pool operand through the address they
+// take, so each constant is the double or float the instruction reads.
+TEST_F(X86_64_HighCIntrinsics, ConstantPoolOperandsKeepTheirWidth) {
+  expectHighCRunsLikeSource({"-target", "x86_64-linux-gnu"}, R"C(
+int scale(int a) {
+  double x = (double)a * 1e-4;
+  float y = (float)a + 2.5f;
+  unsigned long long b;
+  unsigned c;
+  __builtin_memcpy(&b, &x, 8);
+  __builtin_memcpy(&c, &y, 4);
+  return (int)(b ^ (b >> 32) ^ c);
+}
+)C",
+                            "scale", {"scale"},
+                            {0, 1, -1, 31416, 0x12345, -0x7FFFFFFF});
+}
+
 // An instruction past the x86-64 baseline prints as its intrinsic in a
 // function that takes the intrinsic's target feature, so the C compiles with
 // no -m option.

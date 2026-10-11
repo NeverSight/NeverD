@@ -13,6 +13,7 @@
 #include "../../../unittests/web/BunFixture.h"
 #include "../../../unittests/web/BunSourceMapFixture.h"
 #include "../../../unittests/web/NativeFixture.h"
+#include "../../../unittests/web/NexeFixture.h"
 #include "../../../unittests/web/PackageArchiveFixture.h"
 #include "../../../unittests/web/SEAFixture.h"
 #include "../../../unittests/web/ZipFixture.h"
@@ -1834,6 +1835,51 @@ int main(int argc, char **argv) {
       reply = process.call("web_sea_extract", invalid, revision, project);
       check(reply["error"]["code"] == "invalid_request",
             "SEA accepted target execution");
+    }
+    if (std::find(caps["operations"].begin(), caps["operations"].end(),
+                  "nexe_extract") != caps["operations"].end()) {
+      const auto path = fixture.root / "nexe";
+      std::ofstream(path, std::ios::binary)
+          << neverd::web::nexe_test::bundle({{"CANARY.js", "var x='CANARY';"}});
+      const auto before = web.revision(), projectBefore = web.projectId();
+      const Json input{{"schema_version", 1}, {"path", path.string()}};
+      const auto preview = web.execute("web_import_preview", input);
+      const auto committed = web.execute(
+          "web_import_commit",
+          {{"schema_version", 1}, {"preview_token", preview["preview_token"]}});
+      reply = process.call("web_import_preview", input, before, projectBefore);
+      reply =
+          process.call("web_import_commit",
+                       {{"schema_version", 1},
+                        {"preview_token", reply["payload"]["preview_token"]}},
+                       before, projectBefore);
+      check(reply["payload"] == committed, "nexe capture differs");
+      const auto revision = web.revision(), project = web.projectId();
+      const auto items = web.execute(
+          "web_artifacts", {{"schema_version", 1}, {"revision", revision}});
+      const Json args{{"schema_version", 1},
+                      {"revision", revision},
+                      {"artifact_id", items["items"][0]["artifact_id"]},
+                      {"profile", "nexe-4.0.0-rc.7-eof-resources-v1"}};
+      const auto extracted = web.execute("web_nexe_extract", args);
+      reply = process.call("web_nexe_extract", args, revision, project);
+      check(reply["payload"] == extracted && extracted["member_count"] == 1,
+            "nexe extraction differs");
+      const Json page{{"schema_version", 1},
+                      {"revision", revision},
+                      {"extraction_id", extracted["extraction_id"]},
+                      {"record_kind", "members"},
+                      {"limit", 1}};
+      const auto records = web.execute("web_nexe_records", page);
+      reply = process.call("web_nexe_records", page, revision, project);
+      check(reply["payload"] == records &&
+                reply.dump().find("CANARY") == std::string::npos,
+            "nexe pages differ or reveal private evidence");
+      auto invalid = args;
+      invalid["execute"] = true;
+      reply = process.call("web_nexe_extract", invalid, revision, project);
+      check(reply["error"]["code"] == "invalid_request",
+            "nexe accepted execution option");
     }
     process.stop();
     std::ifstream errors(fixture.root / "stderr");

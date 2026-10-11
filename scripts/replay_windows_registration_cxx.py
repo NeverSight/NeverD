@@ -9,7 +9,9 @@ import math
 import os
 from pathlib import Path
 import platform
+import struct
 import subprocess
+import xml.etree.ElementTree as ET
 
 if __package__:
     from .check_windows_registration_cxx import SOURCE, parent_code_end
@@ -17,12 +19,18 @@ if __package__:
         BASES, image_name, observe, require_image_matrix,
         require_installation_identity, safe_handlers)
     from .check_windows_registration_rewrite import PE32
+    from .windows_registration_cleanup_relift import (
+        RELIFT_LABELS, proof_digests, require_test_result, validate_cleanup_artifacts)
+    from .windows_registration_runtime import validate_runtime
 else:
     from check_windows_registration_cxx import SOURCE, parent_code_end
     from check_windows_registration_cxx_rewrite import (
         BASES, image_name, observe, require_image_matrix,
         require_installation_identity, safe_handlers)
     from check_windows_registration_rewrite import PE32
+    from windows_registration_cleanup_relift import (
+        RELIFT_LABELS, proof_digests, require_test_result, validate_cleanup_artifacts)
+    from windows_registration_runtime import validate_runtime
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,7 +53,8 @@ def main(argv: list[str] | None = None) -> int:
         source = json.loads((root / "registration-cxx-rewrite.json").read_text())
         schema = source.get("schema")
         installation = {1: "manual-checked-transaction",
-                        2: "manual-public-cli-checked-transactions"}.get(schema)
+                        2: "manual-public-cli-checked-transactions",
+                        3: "two-generation-checked-transactions"}.get(schema)
         if not installation or \
                 source.get("evidence") != "source-msvc-cxx-reconstruction" or \
                 source.get("installation") != installation or \
@@ -53,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
                 not source.get("passed") or len(source["cases"]) != 2 or \
                 {case["case"] for case in source["cases"]} != {"value", "reference"}:
             raise ValueError("source C++ reconstruction evidence is incomplete")
+        if schema == 3 and source.get("proofs") != proof_digests():
+            raise ValueError("source C++ re-lift proof changed")
         if source.get("source_probe"):
             if source["source_probe"] != "derived-saved-esp-writeback":
                 raise ValueError("source C++ probe has an unknown derivation")
@@ -60,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         report["source_schema"] = schema
         report["installation"] = installation
         environment = os.environ.copy()
+        if schema == 3:
+            environment["WINEDLLOVERRIDES"] = "vcruntime140=n"
         if args.wine_prefix:
             environment.update(WINEARCH="win32", WINEDEBUG="-all",
                                WINEPREFIX=str(args.wine_prefix.resolve()))
@@ -68,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
             name = case["case"]
             reference = name == "reference"
             parent = root / name
+            if schema == 3:
+                validate_runtime(parent, source["catch_search_runtime"])
+                if require_test_result(parent / "rewrite.xml") != 1:
+                    raise ValueError("source C++ first-generation proof failed or skipped")
             contract = json.loads((parent / "compiled-contract.json").read_text())
             original = PE32((parent / "original.exe").read_bytes())
             entry = original.entry(b"registration_cxx_probe")
@@ -83,24 +100,30 @@ def main(argv: list[str] | None = None) -> int:
             _, new_handlers = safe_handlers(patched)
             if new_handlers != sorted(set(old_handlers + [contract["registration_handler_rva"]])):
                 raise ValueError("source C++ SafeSEH closure changed")
+            relift, second = validate_cleanup_artifacts(parent, contract, case) \
+                if schema == 3 else (None, None)
             records = case["observations"]
             require_image_matrix(records, schema)
             replay = {"case": name, "observations": []}
             report["cases"].append(replay)
             for record in records:
                 path = parent / image_name(record["image"])
+                second_generation = path.name.removesuffix(".exe").removesuffix("-rebased") in RELIFT_LABELS
                 if hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]:
                     raise ValueError("source C++ replay file is missing or changed")
                 if record["generated"]:
-                    require_installation_identity(PE32(path.read_bytes()), patched)
+                    require_installation_identity(
+                        PE32(path.read_bytes()), second if second_generation else patched)
                 observation = observe(path, record["generated"], reference, end,
-                                      contract, launcher, environment, args.timeout)
+                                      contract, launcher, environment, args.timeout,
+                                      relift if second_generation else None)
                 if observation["runtime_base"] != record["runtime_base"]:
                     raise ValueError("source C++ loader changed its forced base")
                 replay["observations"].append(observation)
             print(f"PASS native source C++ {name}: {len(records)} identical-file executions", flush=True)
         report["passed"] = True
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, KeyError, TypeError, struct.error,
+            ET.ParseError, subprocess.TimeoutExpired) as error:
         report["error"] = str(error)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

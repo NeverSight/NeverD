@@ -1,7 +1,10 @@
 import hashlib
+import os
 from pathlib import Path
 import struct
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +22,50 @@ def pe32_image(extra: bytes = b"") -> bytes:
 
 
 class WindowsRegistrationEHRunnerTests(unittest.TestCase):
+    def test_process_exit_does_not_wait_for_inherited_output_handles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = root / "service.py"
+            ready = root / "ready"
+            stop = root / "stop"
+            done = root / "done"
+            service.write_text(
+                "import pathlib, sys, time\n"
+                "pathlib.Path(sys.argv[1]).touch()\n"
+                "while not pathlib.Path(sys.argv[2]).exists(): time.sleep(0.01)\n"
+                "pathlib.Path(sys.argv[3]).touch()\n")
+            probe = root / "probe.py"
+            probe.write_text(
+                "import os, pathlib, subprocess, sys, time\n"
+                f"subprocess.Popen([sys.executable, {str(service)!r}, "
+                f"{str(ready)!r}, {str(stop)!r}, {str(done)!r}])\n"
+                f"while not pathlib.Path({str(ready)!r}).exists(): time.sleep(0.01)\n"
+                "os.write(1, b'passed\\r\\n')\n"
+                "os.write(2, b'diagnostic\\r\\n')\n"
+                "sys.exit(7)\n")
+            try:
+                result = runner.run_image(probe, [sys.executable], os.environ.copy(), 5)
+                self.assertEqual(result.get("exit_code"), 7, result)
+                self.assertEqual(result["stdout"], "passed\n")
+                self.assertEqual(result["stderr"], "diagnostic\n")
+            finally:
+                stop.touch()
+                deadline = time.monotonic() + 5
+                while not done.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(done.exists(), "output-handle child did not finish")
+
+    def test_live_process_timeout_retains_output_without_an_exit_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "probe.py"
+            path.write_text("import os, time\nos.write(1, b'before timeout\\r\\n')\n"
+                            "os.write(2, b'still running\\r\\n')\ntime.sleep(30)\n")
+            result = runner.run_image(path, [sys.executable], os.environ.copy(), 2)
+            self.assertNotIn("exit_code", result)
+            self.assertIn("timeout", result["error"])
+            self.assertEqual(result["stdout"], "before timeout\n")
+            self.assertEqual(result["stderr"], "still running\n")
+
     def test_matrix_covers_both_languages_security_and_optimization(self):
         cases = runner.probe_cases()
         self.assertEqual(len(cases), 8)

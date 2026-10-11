@@ -40,11 +40,11 @@ llvm::Error validateCxxGeneratedStates(
         Generated.High >= Generated.CatchHigh ||
         Generated.CatchHigh >= int32_t(MaxState) ||
         !Bind(Original.TryLow, Generated.Low) ||
-        !Bind(Original.CatchHigh, Generated.CatchHigh))
+        !Bind(Original.TryHigh + 1, Generated.High + 1))
       return rejectIR("C++ try and catch dispatch states conflict");
     for (uint32_t Other = 0; Other < Index; ++Other)
       if (Original.TryLow < Source.TryBlocks[Other].TryLow &&
-          Original.TryHigh >= Source.TryBlocks[Other].CatchHigh &&
+          Original.CatchHigh >= Source.TryBlocks[Other].CatchHigh &&
           Generated.RowVA <= Tries[Other].RowVA)
         return rejectIR("C++ nested catch search order changed");
   }
@@ -85,8 +85,14 @@ llvm::Error validateCxxGeneratedStates(
                                    State <= uint32_t(Original.TryHigh);
       const bool GeneratedProtected =
           *Generated >= Try.Low && *Generated <= Try.High;
-      if (SourceProtected != GeneratedProtected)
-        return rejectIR("C++ generated try changed its protected state set");
+      const bool SourceCatch = State > uint32_t(Original.TryHigh) &&
+                               State <= uint32_t(Original.CatchHigh);
+      const bool GeneratedCatch =
+          *Generated > Try.High && *Generated <= Try.CatchHigh;
+      if (SourceProtected != GeneratedProtected ||
+          SourceCatch != GeneratedCatch)
+        return rejectIR(
+            "C++ generated try changed its protected or catch state set");
     }
   }
   for (uint32_t State = 0; State < MaxState; ++State) {

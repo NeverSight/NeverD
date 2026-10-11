@@ -606,7 +606,7 @@ TEST(RegistrationCallABI, ChecksImmutableSimpleThrowInfo) {
       F.tableWord(0x24, 0);
       break;
     case 8:
-      F.tableWord(0x30, 0);
+      F.tableWord(0x30, 2);
       break;
     case 9:
       F.tableWord(0x30, 5);
@@ -845,6 +845,117 @@ TEST(RegistrationCallABI, BindsTheMemoizedContractToOneBuildImage) {
   EXPECT_TRUE(Changed->empty());
 }
 
+TEST(RegistrationCallABI, PrivateThrowClosesOnlyOrdinaryFallthrough) {
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ThrowImage F;
+    Segment Parent;
+    Parent.VA = 0x405000;
+    Parent.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Parent.Data = {
+        0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0, 0x11, 0x40, 0, 0x64, 0xa1, 0, 0,
+        0, 0, 0x50, 0x64, 0x89, 0x25, 0, 0, 0, 0, 0xe8, 0, 0, 0, 0,
+        // This dead branch lands inside the independently rooted callback.
+        0xeb, 1, 0xb8, 1, 2, 3, 4, 0xc3};
+    writeLE<uint32_t>(Parent.Data.data() + 25,
+                      uint32_t(ThrowImage::TextVA - (Parent.VA + 29)));
+    Parent.Size = Parent.FileSz = Parent.Data.size();
+    ExceptionFunction EH;
+    EH.CodeRange = {Parent.VA, Parent.VA + Parent.Size};
+    EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+    EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
+    auto &Chain = EH.Registration.emplace();
+    Chain.HandlerVA = ThrowImage::TextVA + 0x100;
+    Chain.SeededTryLevel = -1;
+    Chain.TryLevelOffset = -4;
+    Chain.RegistrationOffset = -12;
+    Chain.ChainInstallVA = Parent.VA + 17;
+    Chain.TryLevelStores = {{Parent.VA + 3, Parent.VA + 5, -1}};
+    auto &Cxx = EH.Cxx.emplace();
+    Cxx.MaxState = 2;
+    Cxx.UnwindMap.resize(2);
+    CxxTryBlock Try;
+    Try.TryLow = Try.TryHigh = 0;
+    Try.CatchHigh = 1;
+    CxxCatchHandler Catch;
+    Catch.Adjectives = 0x40;
+    Catch.HandlerVA = Parent.VA + 31;
+    Try.Handlers.push_back(Catch);
+    Cxx.TryBlocks.push_back(Try);
+    F.Image.Segments.push_back(Parent);
+    F.Image.ExceptionMetadata.Functions.push_back(EH);
+    F.Image.ExceptionMetadata.rebuildIndex();
+    if (Mutation == 1)
+      F.Image.Imports.front().Name = "unknown_throw";
+    if (Mutation == 2)
+      F.Image.Segments.front().Data[0] = 0xc3;
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(F.Image));
+    const auto Low = CFGBuilder().build(F.Image, Decode, Parent.VA);
+    bool DeadBranch = false, Callback = false, NoReturnCall = false;
+    for (const auto &Block : Low.Blocks)
+      for (const auto &Boundary : Block.InstructionBoundaries) {
+        DeadBranch |= Boundary.Address == Parent.VA + 29;
+        Callback |= Boundary.Address == Parent.VA + 31;
+        if (Boundary.Address == Parent.VA + 24)
+          NoReturnCall = hasLowInstructionControlFlag(
+              Boundary.ControlFlags, LowInstructionControlFlag::NoReturn);
+      }
+    EXPECT_EQ(NoReturnCall, Mutation == 0);
+    EXPECT_EQ(DeadBranch, Mutation != 0);
+    EXPECT_TRUE(Callback);
+    if (Mutation == 0) {
+      auto Error = validateLowInstructionBoundaries(
+          Low, LowInstructionBoundaryRequirement::Required);
+      EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    }
+  }
+}
+
+TEST(RegistrationCallABI, RuntimeThrowTypesBelongToTheCurrentCaller) {
+  for (bool Reverse : {false, true}) {
+    ThrowImage F;
+    LowFunc Caller;
+    Caller.Blocks.resize(1);
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.addInput(NdVar::cst(ThrowImage::ImportVA, 4));
+    Caller.Blocks[0].Ops.push_back(Call);
+    auto Typed = Caller;
+    LowOp Table;
+    Table.Opcode = NdOp::COPY;
+    Table.addInput(NdVar::cst(ThrowImage::TableVA, 4));
+    Typed.Blocks[0].Ops.push_back(Table);
+    RegistrationCallCalleeIndex Index(F.Image);
+    auto Check = [&](bool WithType) {
+      const auto Contracts = Index.contracts(WithType ? Typed : Caller);
+      ASSERT_TRUE(Contracts);
+      ASSERT_EQ(Contracts->size(), 1u);
+      const auto &Contract = Contracts->front();
+      ASSERT_TRUE(Contract.isRuntimeThrow());
+      ASSERT_EQ(Contract.RuntimeThrowInfos.size(), unsigned(WithType));
+      if (WithType) {
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].Address, ThrowImage::TableVA);
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].TypeDescriptorVA,
+                  ThrowImage::DataVA);
+        EXPECT_EQ(Contract.RuntimeThrowInfos[0].ObjectSize, 4u);
+      }
+    };
+    Check(Reverse);
+    Check(!Reverse);
+    Check(Reverse);
+    auto Malformed = Typed;
+    Malformed.Blocks[0].Ops.back().NumInputs = 255;
+    EXPECT_FALSE(Index.contracts(Malformed));
+    F.tableWord(0x44, 0);
+    RegistrationCallCalleeIndex ChangedIndex(F.Image);
+    auto Changed = ChangedIndex.contracts(Typed);
+    ASSERT_TRUE(Changed);
+    ASSERT_EQ(Changed->size(), 1u);
+    EXPECT_TRUE(Changed->front().RuntimeThrowInfos.empty());
+  }
+}
+
 TEST(RegistrationCallABI, ScopeExtentKeepsTheFormatHeaderAndPE32Bounds) {
   for (bool EH4 : {false, true}) {
     ExceptionFunction F;
@@ -982,13 +1093,13 @@ TEST(RegistrationCallABI, ChecksMSVCParentFrameCleanupRelays) {
       ASSERT_TRUE(P);
       EXPECT_EQ(P->Target, CleanupRelayImage::RelayVA);
       EXPECT_EQ(P->EndAddress, CleanupRelayImage::RelayVA + (Wide ? 11 : 8));
-      EXPECT_EQ(P->ObjectFrameOffset, Offset);
-      EXPECT_EQ(P->Leaf.Target, CleanupRelayImage::LeafVA);
-      EXPECT_EQ(P->Leaf.StackPopBytes, 0u);
-      ASSERT_EQ(P->Leaf.ECXReads.size(), 1u);
-      EXPECT_EQ(P->Leaf.ECXReads[0].Begin, 0);
-      EXPECT_EQ(P->Leaf.ECXReads[0].End, 4);
-      EXPECT_TRUE(P->Leaf.ECXWrites.empty());
+      EXPECT_EQ(P->Calls[0].ObjectFrameOffset, Offset);
+      EXPECT_EQ(P->Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
+      EXPECT_EQ(P->Calls[0].Leaf.StackPopBytes, 0u);
+      ASSERT_EQ(P->Calls[0].Leaf.ECXReads.size(), 1u);
+      EXPECT_EQ(P->Calls[0].Leaf.ECXReads[0].Begin, 0);
+      EXPECT_EQ(P->Calls[0].Leaf.ECXReads[0].End, 4);
+      EXPECT_TRUE(P->Calls[0].Leaf.ECXWrites.empty());
     }
 }
 
@@ -1074,7 +1185,7 @@ TEST(RegistrationCallABI, UsesPE32RelativeBranchWrapWithoutWrappingStorage) {
       getCheckedX86RegistrationCleanupRelayABI(F.Image, Relay.VA, &Work);
   ASSERT_TRUE(P);
   EXPECT_EQ(P->EndAddress, uint64_t(UINT32_MAX) + 1);
-  EXPECT_EQ(P->Leaf.Target, CleanupRelayImage::LeafVA);
+  EXPECT_EQ(P->Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
   EXPECT_GT(Work, 8u);
   auto &Last = F.Image.Segments.back();
   ++Last.VA;
@@ -1100,9 +1211,10 @@ TEST(RegistrationCallABI, MemoizesCleanupRelaysWithoutGrantingAFrameBorrow) {
   const auto &C = Contracts->front();
   EXPECT_EQ(C.ActionState, 1u);
   EXPECT_EQ(C.RelayTarget, CleanupRelayImage::RelayVA);
-  EXPECT_EQ(C.ObjectFrameOffset, -24);
-  EXPECT_EQ(C.Leaf.Target, CleanupRelayImage::LeafVA);
-  EXPECT_EQ(C.Leaf.ECXReads, (std::vector<RegistrationObjectExtent>{{0, 4}}));
+  EXPECT_EQ(C.Calls[0].ObjectFrameOffset, -24);
+  EXPECT_EQ(C.Calls[0].Leaf.Target, CleanupRelayImage::LeafVA);
+  EXPECT_EQ(C.Calls[0].Leaf.ECXReads,
+            (std::vector<RegistrationObjectExtent>{{0, 4}}));
   EXPECT_EQ(Index.cleanupContracts(Parent)->size(), 1u);
   F.Image.Segments[0].Data[0] = 0x90;
   RegistrationCallCalleeIndex NextImage(F.Image);
@@ -1242,6 +1354,8 @@ TEST(RegistrationCallABI, CxxPersonalitySkipsTheOriginalFuncInfoOperand) {
     EXPECT_EQ(Runtime->IATVA, F.IATVA);
     EXPECT_NE(Runtime->RuntimeVA, F.HandlerVA);
     EXPECT_FALSE(Runtime->CodeRanges.empty());
+    EXPECT_TRUE(coff_loader::isCheckedX86CxxHandlerReference(
+        F.Source.Code.Image, F.HandlerVA));
   }
 }
 
@@ -1323,6 +1437,10 @@ TEST(RegistrationCallABI, CxxPersonalityRejectsStorageAndRuntimeConflicts) {
     }
     EXPECT_FALSE(
         coff_loader::getCheckedX86CxxPersonalityABI(Image, F.Source.EH));
+    // The independent reference has no parent record to trust. A forged
+    // parent association leaves the actual retained thunk identity intact.
+    EXPECT_EQ(coff_loader::isCheckedX86CxxHandlerReference(Image, F.HandlerVA),
+              Mutation == 4);
   }
 }
 
@@ -1502,7 +1620,7 @@ TEST(RegistrationCallABI, PhysicalScalarReturnNeedsMoreThanFramePrivacy) {
   const auto Relay = getCheckedX86RegistrationCleanupRelayABI(
       F.Image, CleanupRelayImage::RelayVA);
   ASSERT_TRUE(Relay);
-  EXPECT_TRUE(Relay->Leaf.HasIndependentScalarReturn);
+  EXPECT_TRUE(Relay->Calls[0].Leaf.HasIndependentScalarReturn);
 }
 
 TEST(RegistrationCallABI, PhysicalReturnRejectsCallerPCAndMixedPredecessors) {

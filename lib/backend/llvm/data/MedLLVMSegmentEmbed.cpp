@@ -32,6 +32,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
@@ -120,25 +121,39 @@ MedLLVMEmitter::embedRodataRun(uint64_t SegVA) {
   std::vector<const Segment *> Run;
   if (!collectRodataRun(Img, SegVA, Run, RunStart, RunEnd))
     return {nullptr, 0};
-  uint64_t RunLen64 = RunEnd - RunStart;
-  size_t RunLen = static_cast<size_t>(RunLen64);
   if (auto It = SegmentDataGlobals.find(RunStart);
-      It != SegmentDataGlobals.end())
-    return {It->second, RunStart};
+      It != SegmentDataGlobals.end()) {
+    const auto Base = SegmentDataBases.find(RunStart);
+    return {It->second,
+            Base == SegmentDataBases.end() ? RunStart : Base->second};
+  }
+  // A section in the run can need more alignment than the run's start has
+  // (a 16-byte constant pool after a 4-byte one).  The copy then starts below
+  // the run, so each address keeps its residue and an aligned access to it
+  // (`addps xmm, m128`) does not fault in the rebuilt object.
+  uint64_t Alignment = 1;
+  for (const Section &Sec : Img->Sections)
+    if (Sec.VA >= RunStart && Sec.VA < RunEnd && Sec.Alignment > Alignment)
+      Alignment = std::min<uint64_t>(llvm::PowerOf2Ceil(Sec.Alignment),
+                                     limits::kMaxEmbeddedDataAlignment);
+  const uint64_t Base = RunStart - RunStart % Alignment;
+  size_t RunLen = static_cast<size_t>(RunEnd - Base);
   std::vector<uint8_t> Buf(RunLen, 0);
   for (const Segment *S : Run)
-    std::memcpy(Buf.data() + static_cast<size_t>(S->VA - RunStart),
-                S->Data.data(), S->Data.size());
+    std::memcpy(Buf.data() + static_cast<size_t>(S->VA - Base), S->Data.data(),
+                S->Data.size());
   auto *ArrTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), RunLen);
   auto *Init = llvm::ConstantDataArray::get(*Ctx, llvm::ArrayRef<uint8_t>(Buf));
   auto *GV = new llvm::GlobalVariable(
       *Mod, ArrTy, /*isConstant=*/true, dataLinkage(), Init,
-      (kNdDataPrefix + llvm::utohexstr(RunStart)).str() +
+      (kNdDataPrefix + llvm::utohexstr(Base)).str() +
           section_names::elf::Rodata);
-  GV->setAlignment(llvm::Align(16));
+  GV->setAlignment(llvm::Align(std::max<uint64_t>(Alignment, 16)));
   markSharedLocal(GV);
   SegmentDataGlobals[RunStart] = GV;
-  return {GV, RunStart};
+  if (Base != RunStart)
+    SegmentDataBases[RunStart] = Base;
+  return {GV, Base};
 }
 
 std::pair<llvm::GlobalVariable *, uint64_t>

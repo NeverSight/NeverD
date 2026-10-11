@@ -208,6 +208,12 @@ Catalog::Catalog(const Json &Capabilities, std::size_t InputCount) {
       "Extract a Node SEA resource under an explicit supported layout profile.",
       {decimal("revision"), text("artifact_id"), text("profile")});
   Page("web_sea_records", "extraction_id", false, 128);
+  Add("web_nexe_extract",
+      "Read an explicitly selected nexe EOF resource profile without "
+      "execution. "
+      "Native prefix and producer identity remain unverified.",
+      {decimal("revision"), text("artifact_id"), text("profile")});
+  Page("web_nexe_records", "extraction_id", true);
   Add("web_asar_extract",
       "Extract admitted ASAR members with an optional captured unpacked "
       "directory.",

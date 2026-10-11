@@ -6,6 +6,8 @@
 
 #include "RegistrationStateSolver.h"
 
+#include "neverd/lift/X86Regs.h"
+
 namespace neverd::registration_state {
 
 size_t retainedCxxCatchDepth(const Domain::CatchStack &Stack,
@@ -27,29 +29,52 @@ bool RegistrationStateSolver::enterCxxCatch(Domain &Root, const Domain &Source,
   const int32_t Slot = *Chain.RegistrationOffset - 4;
   const FrameValue Current = Source.Frame.load(Slot, 4);
   std::optional<FrameValue> Restored;
-  auto Enter = [&](Domain::CatchStack Stack, FrameValue Saved) {
-    Stack.push_back({TryIndex, CatchIndex, Saved.Offset});
+  auto Enter = [&](Domain::CatchStack Stack, FrameValue Saved,
+                   const CxxCatchContext *Exited = nullptr) {
+    CxxCatchContext Context{TryIndex, CatchIndex, Saved.Offset,
+                            Saved.CallbackAddress};
+    if (!Stack.empty() && Chain.hasCxxCallbackStack()) {
+      Context.SuspendedCallback =
+          Exited ? Exited->SuspendedCallback : Source.Frame.CallbackEntry;
+      const auto &SP =
+          Source.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
+              .CallbackAddress;
+      Context.SuspendedStackOffset =
+          Exited ? Exited->SuspendedStackOffset
+          : SP && SP->Entry == Context.SuspendedCallback
+              ? std::optional(SP->Offset)
+              : std::nullopt;
+      Context.SuspendedCells =
+          Exited ? Exited->SuspendedCells : Source.Frame.CallbackCells;
+      Context.SuspendedInitializedBytes =
+          Exited ? Exited->SuspendedInitializedBytes
+                 : Source.Frame.InitializedCallbackBytes;
+    }
+    Stack.push_back(std::move(Context));
     Root.CxxCatchStacks.insert(std::move(Stack));
     Restored = Restored ? registration_state::join(*Restored, Saved) : Saved;
   };
+  if (!charge(Source.catchCellCount() + Source.Frame.cellCount() + 1))
+    return false;
   if (Source.Parent && !Source.Callback) {
     Enter({}, Current);
   } else if (!Source.Parent && Source.Callback && !Source.OtherCallback &&
              !Source.CxxCatchStacks.empty()) {
-    for (auto Stack : Source.CxxCatchStacks) {
-      if (!charge(Stack.size() + 1))
+    for (const auto &Original : Source.CxxCatchStacks) {
+      if (!charge(Original.size() + Source.Frame.cellCount() + 1))
         return false;
+      auto Stack = Original;
       const size_t Retained = retainedCxxCatchDepth(Stack, *EH.Cxx, TryIndex);
       FrameValue Saved = Current;
+      std::optional<CxxCatchContext> Exited;
       if (Retained < Stack.size()) {
-        // Windows restores the last exited catch guard's pre-entry SavedESP
-        // before the enclosing catch can resume. The current cell can name
-        // a discarded callback allocation and cannot supply that snapshot.
-        Saved = {{}, {}, false, true};
-        Saved.Offset = Stack[Retained].SavedStackOffset;
+        // The last exited guard owns the suspended caller snapshot, including
+        // its callback coordinate when only part of the nesting is unwound.
+        Exited = Stack[Retained];
+        Saved = Exited->savedStack();
       }
       Stack.resize(Retained);
-      Enter(std::move(Stack), Saved);
+      Enter(std::move(Stack), Saved, Exited ? &*Exited : nullptr);
     }
   } else {
     Enter({}, Current);

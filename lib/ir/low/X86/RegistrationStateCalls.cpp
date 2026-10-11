@@ -9,7 +9,6 @@
 #include "neverd/lift/X86Regs.h"
 
 namespace neverd::registration_state {
-
 std::optional<RegistrationStateSolver::CallTransfer>
 RegistrationStateSolver::transferCall(size_t I, Domain &After,
                                       const LowOp &Op) {
@@ -33,6 +32,18 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After,
   RegistrationCallFrameEffect Effect;
   if (Valid) {
     const auto &Contract = Result.CalleeContracts[Callee->second];
+    // A rethrow carries the CRT's current exception, not an initialized new
+    // object. It is valid only in a proved live catch invocation.
+    if (Contract.isRuntimeThrow()) {
+      Effect.RuntimeThrow =
+          runtimeThrowArguments(After, Contract, Effect.FrameReads);
+      Valid = Effect.RuntimeThrow.has_value();
+    }
+    if (Contract.isRethrow() ||
+        (Effect.RuntimeThrow && Effect.RuntimeThrow->isRethrow()))
+      Valid &= KnownCxx && !After.Parent && After.Callback &&
+               !After.OtherCallback && After.CxxCatchStacks.size() == 1 &&
+               !After.CxxCatchStacks.begin()->empty();
     Effect.Address = Op.Addr;
     Effect.EndAddress =
         Boundary->second.second.Address + Boundary->second.second.Size;

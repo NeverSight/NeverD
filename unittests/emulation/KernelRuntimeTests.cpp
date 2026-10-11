@@ -125,6 +125,70 @@ protected:
   }
 };
 
+TEST_F(KernelRuntime, ActiveProcessorMaskMatchesTheSingleProcessorSchedule) {
+  EXPECT_EQ(invoke("KeQueryActiveProcessors", {}), 1u);
+  Model->enterExecution(0x100);
+  const auto Previous = invoke("KfRaiseIrql", {15});
+  EXPECT_EQ(invoke("KeQueryActiveProcessors", {}), 1u);
+  invoke("KeLowerIrql", {Previous});
+  EXPECT_FALSE(failure("KeQueryActiveProcessors", {0}).empty());
+}
+
+TEST_F(KernelRuntime, SystemAffinityFollowsLogicalThreadsAndNestedCalls) {
+  EXPECT_NE(failure("KeSetSystemAffinityThread", {1}).find("thread"),
+            std::string::npos);
+  Model->enterExecution(0x100, 0x42);
+  invoke("KeSetSystemAffinityThread", {1});
+  auto Retained = Model->validateExecutionReturn(0x100, 0);
+  ASSERT_TRUE(bool(Retained));
+  EXPECT_NE(llvm::toString(std::move(Retained)).find("affinity"),
+            std::string::npos);
+  const auto Parent = Model->captureExecutionContext();
+  Model->enterExecution(0x300, 0x99);
+  check(Model->validateExecutionReturn(0x300, 0));
+  EXPECT_NE(failure("KeRevertToUserAffinityThread", {}).find("affinity"),
+            std::string::npos);
+  check(Model->restoreExecutionContext(Parent));
+  check(Model->inheritExecutionContext(0x200, 0x100));
+  Model->enterExecution(0x200, 0x42);
+  check(Model->validateExecutionReturn(0x200, 0, true));
+  invoke("KeRevertToUserAffinityThread", {});
+  check(Model->restoreExecutionContext(Parent));
+  check(Model->validateExecutionReturn(0x100, 0));
+  // Legacy setters replace system affinity rather than nesting restorations.
+  invoke("KeSetSystemAffinityThread", {1});
+  invoke("KeSetSystemAffinityThread", {1});
+  invoke("KeRevertToUserAffinityThread", {});
+  check(Model->validateExecutionReturn(0x100, 0));
+}
+
+TEST_F(KernelRuntime, InvalidAffinityAndIRQLPreserveThreadState) {
+  Model->enterExecution(0x100);
+  invoke("KeSetSystemAffinityThread", {1});
+  for (uint64_t Mask : {0ull, 2ull, 3ull, 0x100000001ull}) {
+    SCOPED_TRACE(Mask);
+    EXPECT_NE(failure("KeSetSystemAffinityThread", {Mask}).find("affinity"),
+              std::string::npos);
+  }
+  const auto Previous = invoke("KfRaiseIrql", {15});
+  EXPECT_NE(failure("KeSetSystemAffinityThread", {1}).find("IRQL"),
+            std::string::npos);
+  EXPECT_NE(failure("KeRevertToUserAffinityThread", {}).find("IRQL"),
+            std::string::npos);
+  invoke("KeLowerIrql", {Previous});
+  auto Retained = Model->validateExecutionReturn(0x100, 0);
+  ASSERT_TRUE(bool(Retained));
+  llvm::consumeError(std::move(Retained));
+  invoke("KeRevertToUserAffinityThread", {});
+  check(Model->validateExecutionReturn(0x100, 0));
+  EXPECT_FALSE(failure("KeRevertToUserAffinityThread", {}).empty());
+  const auto DispatchPrevious = invoke("KfRaiseIrql", {2});
+  invoke("KeSetSystemAffinityThread", {1});
+  invoke("KeRevertToUserAffinityThread", {});
+  invoke("KeLowerIrql", {DispatchPrevious});
+  check(Model->validateExecutionReturn(0x100, 0));
+}
+
 TEST_F(KernelRuntime, ModuleQueryWithoutAnInventoryStopsBeforeWriting) {
   Model->enterExecution(profile::StackBase);
   check(Memory->writeInteger(Scratch, UINT64_MAX, 8));

@@ -19,8 +19,8 @@ struct X86RegistrationCxxUnwindTarget {
   uint32_t Index = 0;
 };
 
-/// Project synchronous parent try groups and direct cleanup states. A catch
-/// body containing another try requires an additional funclet-parent proof.
+/// Project synchronous try groups and direct cleanup states. Nested catch
+/// regions additionally require the checked runtime invocation parent proof.
 /// Indices name source try records or source cleanup states, never IR blocks.
 std::optional<std::vector<X86RegistrationCxxUnwindTarget>>
 projectX86RegistrationCxxUnwind(const CxxExceptionInfo &Cxx);

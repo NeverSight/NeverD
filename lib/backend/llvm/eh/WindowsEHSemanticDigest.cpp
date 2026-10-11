@@ -131,8 +131,8 @@ getStableCxxActionKind(CxxUnwindAction::ActionKind Kind) {
 }
 
 bool appendGraphHeader(CanonicalBytes &Bytes, uint8_t GraphKind,
-                       Arch TargetArch,
-                       const ExceptionAddressRange &OwnerRange) {
+                       Arch TargetArch, const ExceptionFunction &EH) {
+  const auto &OwnerRange = EH.CodeRange;
   const std::optional<uint8_t> StableArch = getStableArch(TargetArch);
   if (!StableArch || !OwnerRange.isValid())
     return false;
@@ -142,6 +142,14 @@ bool appendGraphHeader(CanonicalBytes &Bytes, uint8_t GraphKind,
   Bytes.appendU8(*StableArch);
   Bytes.appendU64(OwnerRange.Begin);
   Bytes.appendU64(OwnerRange.End);
+  if (!appendCount(Bytes, EH.FragmentRanges.size()))
+    return false;
+  for (const auto &Range : EH.FragmentRanges) {
+    if (!Range.isValid())
+      return false;
+    Bytes.appendU64(Range.Begin);
+    Bytes.appendU64(Range.End);
+  }
   return true;
 }
 
@@ -156,7 +164,7 @@ getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
     return std::nullopt;
 
   CanonicalBytes Bytes;
-  if (!appendGraphHeader(Bytes, SEHGraphKind, TargetArch, EH.CodeRange) ||
+  if (!appendGraphHeader(Bytes, SEHGraphKind, TargetArch, EH) ||
       !appendCount(Bytes, EH.SEH->Scopes.size()))
     return std::nullopt;
 
@@ -280,8 +288,7 @@ getRegistrationSEHGraphDigest(const ExceptionFunction &EH) {
        EH.Encoding != ExceptionEncoding::X86ScopeTableEH4))
     return std::nullopt;
   CanonicalBytes Bytes;
-  if (!appendGraphHeader(Bytes, RegistrationSEHGraphKind, Arch::X86,
-                         EH.CodeRange) ||
+  if (!appendGraphHeader(Bytes, RegistrationSEHGraphKind, Arch::X86, EH) ||
       !appendRegistrationContract(
           Bytes, EH,
           EH.Encoding == ExceptionEncoding::X86ScopeTableEH4 ? 2 : 1))
@@ -324,7 +331,7 @@ getCxxGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
   const uint8_t GraphKind = Registration ? RegistrationCxxGraphKind
                             : IsFH3      ? FH3GraphKind
                                          : FH4GraphKind;
-  if (!appendGraphHeader(Bytes, GraphKind, TargetArch, EH.CodeRange))
+  if (!appendGraphHeader(Bytes, GraphKind, TargetArch, EH))
     return std::nullopt;
   if (Registration) {
     Bytes.appendU8(

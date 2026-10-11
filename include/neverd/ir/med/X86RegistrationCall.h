@@ -11,11 +11,12 @@
 
 namespace neverd {
 
-/// The argument registers of a checked original PE32 callee. These callees
-/// read no incoming stack arguments; a leaf may borrow an object through ECX.
-/// This describes the callee, not the current values of the caller's registers.
+/// The physical arguments of a checked original PE32 callee. A leaf may
+/// borrow ECX; a direct rethrow takes two null stack arguments. This describes
+/// the callee, not the current values supplied by the caller.
 struct RegistrationCallABI {
   bool BorrowsECX = false;
+  bool RuntimeThrow = false;
 };
 
 /// Bind the retained LowIR callee contract to this exact surviving CALL.

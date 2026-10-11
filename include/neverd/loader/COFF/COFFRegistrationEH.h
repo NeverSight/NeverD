@@ -31,6 +31,11 @@
 
 namespace neverd::coff_loader {
 
+/// Decode an absolute 32-bit FS:[0] register store in executable image bytes.
+/// A frame descriptor cannot determine whether the encoder used A3 or ModRM.
+std::optional<uint8_t> getX86RegistrationChainStoreSize(const BinaryImage &Img,
+                                                        va_t Address);
+
 /// Scan an x86-32 image for `FS:[0]` registration installs and decode the
 /// `_except_handler3`/`_except_handler4` scope tables and `__CxxFrameHandler`
 /// `FuncInfo` records they reference.  A no-op for other architectures.
@@ -75,19 +80,26 @@ std::optional<std::vector<ExceptionAddressRange>>
 getCheckedX86CxxMetadataRanges(const BinaryImage &Img,
                                const ExceptionFunction &Function);
 
-/// Image-wide callback pointer roles, reconstructed from the same checked
-/// FuncInfo parser. RuntimeOnlyPointerTargets have no independent relocated
-/// code-pointer source; exports, stated symbols and ordinary calls can still
-/// give them independent function-entry roles.
-struct X86CxxCallbackPointerRoles {
+/// Image-wide runtime pointer roles, reconstructed from the checked FuncInfo
+/// and SafeSEH parsers. These sources name callbacks or table storage, not
+/// ordinary function entries. RuntimeOnlyPointerTargets have no independent
+/// relocated code-pointer source. Exports, stated symbols and ordinary calls
+/// retain their separate function-entry roles.
+struct X86RegistrationPointerRoles {
   std::map<va_t, va_t> Sources;
   std::set<va_t> RuntimeOnlyPointerTargets;
 };
-std::optional<X86CxxCallbackPointerRoles>
-getCheckedX86CxxCallbackPointerRoles(const BinaryImage &Img);
+std::optional<X86RegistrationPointerRoles>
+getCheckedX86RegistrationPointerRoles(const BinaryImage &Img);
 
-/// Checked PE32 scalar throw metadata with one simple catchable type, no
-/// copy/destructor/forwarding callback and no pointer adjustment. The three
+/// The exact load-config source slot and mapped SafeSEH table target. A table
+/// in an executable allocation remains data; independent references retain
+/// their own roles. Absent or malformed tables supply no such proof.
+std::optional<std::pair<va_t, va_t>>
+getCheckedX86SafeSEHTablePointer(const BinaryImage &Img);
+
+/// Checked PE32 throw metadata with one scalar or trivially copied object,
+/// no copy/destructor/forwarding callback and no pointer adjustment. The three
 /// metadata records must be immutable mapped data. TypeDescriptor is retained
 /// by identity; it does not supply a guessed C++ type or object layout.
 struct X86SimpleCxxThrowInfo {
@@ -116,6 +128,12 @@ struct X86CxxPersonalityABI {
 std::optional<X86CxxPersonalityABI>
 getCheckedX86CxxPersonalityABI(const BinaryImage &Img,
                                const ExceptionFunction &Function);
+
+/// Authenticate a retained FH3 handler entry directly from its thunk, FuncInfo
+/// and CRT import. This supplies a code-address identity after the original
+/// parent's prologue has been replaced, not ownership of its former callbacks
+/// or permission to reconstruct that parent's exception contract.
+bool isCheckedX86CxxHandlerReference(const BinaryImage &Img, va_t HandlerVA);
 
 /// Authenticate the direct CRT EH4 forwarding wrapper and return its cookie
 /// checker. Names/byte-search observations alone do not authorize rewriting:

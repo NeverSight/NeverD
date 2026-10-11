@@ -138,7 +138,8 @@ void checkNestedTryEdits(const llvm::Function &Parent,
           (Switch->getNumHandlers() == 1 ? Inner : Outer) = Switch;
         if (auto *Return = llvm::dyn_cast<llvm::CatchReturnInst>(&I))
           Returns.push_back(Return);
-        if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(&I))
+        if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(&I);
+            Invoke && Invoke->doesNotReturn())
           Invokes.push_back(Invoke);
       }
     ASSERT_TRUE(Inner && Outer);
@@ -157,7 +158,14 @@ void checkNestedTryEdits(const llvm::Function &Parent,
     }
     if (Mutation == 0) {
       if (NestedCall) {
-        llvm::changeToCall(NestedCall);
+        std::vector<llvm::InvokeInst *> CallbackCalls;
+        for (auto &Block : *Function)
+          if (auto *Invoke =
+                  llvm::dyn_cast<llvm::InvokeInst>(Block.getTerminator());
+              Invoke && Invoke->getOperandBundle(llvm::LLVMContext::OB_funclet))
+            CallbackCalls.push_back(Invoke);
+        for (auto *Invoke : CallbackCalls)
+          llvm::changeToCall(Invoke);
         NestedCall = nullptr;
       }
       auto *Replacement =

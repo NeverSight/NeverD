@@ -84,6 +84,28 @@ std::string Session::capabilities() {
       {"runtime_entry_verified", false}});
   Operations.emplace_back("sea_extract");
   Operations.emplace_back("sea_records");
+  if (nexeAvailable()) {
+    Operations.emplace_back("nexe_extract");
+    Operations.emplace_back("nexe_records");
+    Analyses.emplace_back(llvm::json::Object{
+        {"kind", "nexe_extraction"},
+        {"profile", std::string(NexeProfile)},
+        {"max_input_bytes", std::to_string(MaxNexeInputBytes)},
+        {"max_bootstrap_bytes", std::to_string(MaxNexeBootstrapBytes)},
+        {"max_index_bytes", std::to_string(MaxNexeIndexBytes)},
+        {"max_members", MaxNexeMembers},
+        {"max_private_bytes", std::to_string(MaxNexePrivateBytes)},
+        {"max_cached_private_bytes", std::to_string(MaxCachedNexePrivateBytes)},
+        {"max_reader_steps", std::to_string(MaxNexeSteps)},
+        {"max_cached_extractions", MaxCachedNexeExtractions},
+        {"max_page_records", MaxNexePageRecords},
+        {"member_path_policy", std::string(ArchivePathProfile)},
+        {"executes_input", false},
+        {"authenticates_producer_version", false},
+        {"signature_status", "not_checked"},
+        {"native_prefix_validation", "not_checked"},
+        {"runtime_activation", "not_checked"}});
+  }
   llvm::json::Array SEAProfiles;
   for (const auto &P : seaProfiles())
     SEAProfiles.emplace_back(P);
@@ -582,6 +604,7 @@ std::string Session::commit(std::string_view Token) {
   State->Bundles.clear();
   State->BunExtractions.clear();
   State->SEAExtractions.clear();
+  State->NexeExtractions.clear();
   State->AsarExtractions.clear();
   State->ElectronManifests.clear();
   State->DesktopManifests.clear();
@@ -637,6 +660,7 @@ std::string Session::metadata() const {
       {"source_bundle_analysis_count", State->Bundles.size()},
       {"bun_extraction_count", State->BunExtractions.size()},
       {"sea_extraction_count", State->SEAExtractions.size()},
+      {"nexe_extraction_count", State->NexeExtractions.size()},
       {"asar_extraction_count", State->AsarExtractions.size()},
       {"electron_manifest_count", State->ElectronManifests.size()},
       {"desktop_manifest_count", State->DesktopManifests.size()},

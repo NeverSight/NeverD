@@ -74,6 +74,8 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
       CurOp.Opcode == NdOp::LOAD ||
       CurOp.RegistrationRoot ==
           MedOp::RegistrationRootKind::CallbackStackPointer ||
+      CurOp.RegistrationRoot ==
+          MedOp::RegistrationRootKind::RestoredCallbackStackPointer ||
       CurOp.MemoryOrdering != NdMemoryOrdering::None ||
       CurOp.MemoryAddressSpace != NdMemoryAddressSpace::Default;
   if (!MultiUse && !IsCallResult && !FeedsPhi && !HasMemoryEffect)

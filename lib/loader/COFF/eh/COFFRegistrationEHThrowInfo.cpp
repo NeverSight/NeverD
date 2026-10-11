@@ -1,4 +1,4 @@
-//===- COFFRegistrationEHThrowInfo.cpp - Checked PE32 scalar throws ------===//
+//===- COFFRegistrationEHThrowInfo.cpp - Checked PE32 trivial throws -----===//
 //
 // NeverD Decompiler
 //
@@ -39,7 +39,11 @@ getCheckedX86SimpleCxxThrowInfo(const BinaryImage &Img, va_t Address) {
   if (!Array || readLE<uint32_t>(Array) != 1)
     return std::nullopt;
   const auto *Catchable = ReadImmutable(readLE<uint32_t>(Array + 4), 28);
-  if (!Catchable || readLE<uint32_t>(Catchable) != 1 ||
+  // CT_IsSimpleType selects a scalar/pointer copy. With no flags and no copy
+  // routine, the CRT copies an object representation instead. Both paths are
+  // bounded by the same size and identity adjustment below. Reference-only,
+  // virtual-base and managed conversions require separate contracts.
+  if (!Catchable || (readLE<uint32_t>(Catchable) & ~1u) ||
       readLE<int32_t>(Catchable + 8) != 0 ||
       readLE<int32_t>(Catchable + 12) != -1 ||
       readLE<int32_t>(Catchable + 16) != 0 ||

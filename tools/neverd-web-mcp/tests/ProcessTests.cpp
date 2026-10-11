@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../unittests/web/NexeFixture.h"
 #include "../../../unittests/web/SEAFixture.h"
 #include "TestSupport.h"
 
@@ -240,6 +241,31 @@ void fullSession(const char *Binary, Fixture &F) {
                                    {"source_id", Source.at("source_id")},
                                    {"byte_offset", "0"},
                                    {"byte_length", "6"}});
+    }
+  }
+  if (Backend.value("status", "") == "ok" &&
+      Backend.value("input_reader", "") != "unavailable") {
+    const auto &Ops = Backend.at("operations");
+    if (std::find(Ops.begin(), Ops.end(), "nexe_extract") != Ops.end()) {
+      F.write("input",
+              neverd::web::nexe_test::bundle({{"CANARY.js", "var x=1;"}}));
+      const auto Preview = P.tool("web_import_preview", {{"input_index", 0}});
+      const auto Commit =
+          P.tool("web_import_commit",
+                 {{"preview_token", Preview.at("preview_token")}});
+      const auto Rev = Commit.at("revision");
+      const auto Items = P.tool("web_artifacts", {{"revision", Rev}});
+      const auto E =
+          P.tool("web_nexe_extract",
+                 {{"revision", Rev},
+                  {"artifact_id", Items.at("items")[0].at("artifact_id")},
+                  {"profile", "nexe-4.0.0-rc.7-eof-resources-v1"}});
+      const auto Page =
+          P.tool("web_nexe_records", {{"revision", Rev},
+                                      {"extraction_id", E.at("extraction_id")},
+                                      {"record_kind", "members"}});
+      require(Page.at("items").size() == 1,
+              "Real MCP lost nexe resource evidence");
     }
   }
   require(

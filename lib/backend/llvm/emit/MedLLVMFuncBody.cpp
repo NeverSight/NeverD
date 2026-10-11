@@ -18,6 +18,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MedLLVMDeadSlots.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -947,6 +949,7 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   // multiple successors (conditional branch), phi copies for one edge
   // must not clobber values needed by another edge.  We split such
   // edges by inserting an intermediate block that holds the copies.
+  std::map<llvm::BasicBlock *, std::pair<int, int>> PHICopyEdges;
   {
     // True when the predecessor block writes a register that overlaps `Narrow`
     // at the same offset but is wider — i.e. the narrow phi must re-resolve
@@ -1031,6 +1034,7 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
               Term->setSuccessor(I, SplitBB);
 
           llvm::UncondBrInst::Create(TargetBB, SplitBB);
+          PHICopyEdges.emplace(SplitBB, Edge);
           InsertBB = SplitBB;
         }
 
@@ -1079,9 +1083,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
 
   // Registration-chain and table-driven WinEH have separate source contracts.
   // Install their runtime edges before promoting the callback SSA slots.
-  if (!emitNativeX86RegistrationSEH(Func, *LLVMFunc, BBMap) &&
-      !emitNativeX86RegistrationCxx(Func, *LLVMFunc, BBMap) &&
-      !emitNativeSEH(Func, *LLVMFunc, BBMap) &&
+  const bool NativeRegistration =
+      emitNativeX86RegistrationSEH(Func, *LLVMFunc, BBMap) ||
+      emitNativeX86RegistrationCxx(Func, *LLVMFunc, BBMap, PHICopyEdges);
+  if (!NativeRegistration && !emitNativeSEH(Func, *LLVMFunc, BBMap) &&
       !emitNativeCxxEH(Func, *LLVMFunc, BBMap))
     emitNativeItaniumEH(Func, *LLVMFunc, BBMap);
 
@@ -1096,6 +1101,15 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     }
   }
 
+  // Analysis IR retains the original value graph. Native registration bodies
+  // use optnone and must not materialize unused, unavailable PHI inputs as
+  // physical frame reads that a subsequent reconstruction cannot prove.
+  if (NativeRegistration) {
+    llvm::SmallVector<llvm::AllocaInst *, 32> PrivateSlots;
+    for (const auto &[Key, Slot] : VarAllocs)
+      PrivateSlots.push_back(Slot);
+    discardDeadMedLLVMSlots(PrivateSlots);
+  }
   return LLVMFunc;
 }
 

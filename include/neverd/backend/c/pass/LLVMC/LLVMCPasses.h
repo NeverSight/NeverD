@@ -48,6 +48,9 @@ void analyzeStoreForwarding(LLVMCAnalysisState &State, llvm::Function &Fn);
 bool analyzeVoidReturn(const LLVMCAnalysisState &State, llvm::Function &Fn);
 void analyzeVoidDeadChain(LLVMCAnalysisState &State, llvm::Function &Fn);
 void analyzeIntrinsicStructs(LLVMCAnalysisState &State, llvm::Function &Fn);
+/// Number of i32 outputs for the exact CPUID/XGETBV contracts emitted by
+/// MedLLVM. Non-CPU assembly returns zero; malformed CPU queries throw.
+unsigned x86CPUQueryResultWords(const llvm::CallInst &Call);
 /// Exact lifted Linux x64 SYSCALL ABI, including its RAX/R11 result pair.
 bool isLinuxX64SyscallInlineAsm(const llvm::CallInst &Call);
 /// True when \p Call is the backend's Windows NT x64 SYSCALL inline asm.

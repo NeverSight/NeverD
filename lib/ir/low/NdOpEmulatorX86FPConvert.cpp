@@ -90,6 +90,33 @@ uint64_t signMask(uint16_t Size) {
   return Size == 4 ? UINT64_C(0x80000000) : UINT64_C(0x8000000000000000);
 }
 
+// SSE tests exponent range after rounding to the destination precision but
+// before denormalization. APFloat's finite directed-overflow representative
+// and tininess-after-rounding status alone do not encode that boundary.
+int narrowSingleRoundedExponent(uint64_t Bits,
+                                llvm::APFloat::roundingMode Rounding) {
+  const bool Negative = (Bits >> 63) != 0;
+  const unsigned Exponent = (Bits >> 52) & 0x7ff;
+  if (!Exponent)
+    return -1022;
+  const uint64_t Mantissa =
+      (UINT64_C(1) << 52) | (Bits & UINT64_C(0x000fffffffffffff));
+  uint64_t Rounded = Mantissa >> 29;
+  const uint64_t Remainder = Mantissa & ((UINT64_C(1) << 29) - 1);
+  bool Up = false;
+  if (Remainder) {
+    if (Rounding == llvm::APFloat::rmNearestTiesToEven)
+      Up = Remainder > (UINT64_C(1) << 28) ||
+           (Remainder == (UINT64_C(1) << 28) && (Rounded & 1));
+    else if (Rounding == llvm::APFloat::rmTowardPositive)
+      Up = !Negative;
+    else if (Rounding == llvm::APFloat::rmTowardNegative)
+      Up = Negative;
+  }
+  Rounded += Up;
+  return int(Exponent) - 1023 + (Rounded == (UINT64_C(1) << 24));
+}
+
 } // namespace
 
 bool NdOpEmulator::executeX86FPConvert(const LowOp &Op) {
@@ -137,7 +164,7 @@ bool NdOpEmulator::executeX86FPConvert(const LowOp &Op) {
     return false;
 
   std::vector<uint8_t> Result(DestinationSize, 0);
-  uint32_t Raised = 0;
+  uint32_t PreRaised = 0, PostRaised = 0;
   for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
     if (((ActiveMask >> Lane) & 1U) == 0)
       continue;
@@ -153,14 +180,14 @@ bool NdOpEmulator::executeX86FPConvert(const LowOp &Op) {
       Converted = Value.bitcastToAPInt().getZExtValue();
     } else {
       if (isSignalingNaN(Bits, SourceElementSize))
-        Raised |= 1U << 0;
+        PreRaised |= 1U << 0;
       if (isDenormal(Bits, SourceElementSize)) {
         if (DAZ)
           Bits &= signMask(SourceElementSize);
         // Integer conversion raises invalid/precision, not a denormal
         // operand exception. Float-to-float conversion retains that exception.
         else if (FloatToFloat)
-          Raised |= 1U << 1;
+          PreRaised |= 1U << 1;
       }
       llvm::APFloat Value(floatSemantics(SourceElementSize),
                           llvm::APInt(SourceElementSize * 8, Bits));
@@ -169,12 +196,26 @@ bool NdOpEmulator::executeX86FPConvert(const LowOp &Op) {
         Status = Value.convert(floatSemantics(DestinationElementSize),
                                APFRounding, &LosesInfo);
         Converted = Value.bitcastToAPInt().getZExtValue();
-        if (isDenormal(Converted, DestinationElementSize) && !UnderflowMasked) {
-          Raised |= 1U << 4;
-        } else if (isDenormal(Converted, DestinationElementSize) && FTZ) {
-          Converted &= signMask(DestinationElementSize);
-          Raised |= (1U << 4) | (1U << 5);
+        uint32_t LaneRaised = statusFlags(Status) & ~1U;
+        if (SourceElementSize == 8 && DestinationElementSize == 4 &&
+            (statusFlags(Status) & (1U << 5))) {
+          const auto Exponent = narrowSingleRoundedExponent(Bits, APFRounding);
+          if ((Converted & UINT64_C(0x7fffffff)) == UINT64_C(0x7f7fffff) &&
+              Exponent > 127)
+            LaneRaised |= 1U << 3;
+          if ((Converted & UINT64_C(0x7fffffff)) == UINT64_C(0x00800000) &&
+              Exponent < -126)
+            LaneRaised |= 1U << 4;
         }
+        if (isDenormal(Converted, DestinationElementSize) && !UnderflowMasked) {
+          LaneRaised |= 1U << 4;
+        } else if (UnderflowMasked && FTZ &&
+                   (isDenormal(Converted, DestinationElementSize) ||
+                    (LaneRaised & (1U << 4)))) {
+          Converted &= signMask(DestinationElementSize);
+          LaneRaised |= (1U << 4) | (1U << 5);
+        }
+        PostRaised |= LaneRaised;
       } else {
         llvm::APSInt Integer(DestinationElementSize * 8, Unsigned);
         bool IsExact = false;
@@ -188,14 +229,19 @@ bool NdOpEmulator::executeX86FPConvert(const LowOp &Op) {
         Converted = Integer.getZExtValue();
       }
     }
-    Raised |= statusFlags(Status);
+    const unsigned Flags = statusFlags(Status);
+    PreRaised |= Flags & 1;
+    PostRaised |= Flags & ~1U;
     writeLane(Result, static_cast<size_t>(Lane) * DestinationElementSize,
               DestinationElementSize, Converted);
   }
 
   if (!SuppressExceptions) {
-    MXCSR |= Raised;
-    if (hasUnmaskedException(MXCSR, Raised))
+    MXCSR |= PreRaised;
+    if (hasUnmaskedException(MXCSR, PreRaised))
+      return false;
+    MXCSR |= PostRaised;
+    if (hasUnmaskedException(MXCSR, PostRaised))
       return false;
   }
   writeOutputBytes(Op.Output, Result);

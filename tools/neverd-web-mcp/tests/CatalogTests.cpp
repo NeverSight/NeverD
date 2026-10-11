@@ -159,15 +159,18 @@ void coordinateBounds() {
   refuses([&] { Anchor.payload(Args); });
 }
 void discoveryPages() {
-  Catalog C(
-      capabilities({"import_commit", "metadata", "artifacts", "bun_extract",
-                    "bun_records", "source_analyze", "source_nodes",
-                    "source_map_analyze", "source_map_sources",
-                    "source_map_segments", "source_map_lookup",
-                    "source_view_preview", "source_view_commit",
-                    "source_view_records", "source_view_chunk", "native_open",
-                    "native_metadata", "sea_extract", "sea_records"}),
-      0);
+  Catalog C(capabilities({"import_commit",      "metadata",
+                          "artifacts",          "bun_extract",
+                          "bun_records",        "source_analyze",
+                          "source_nodes",       "source_map_analyze",
+                          "source_map_sources", "source_map_segments",
+                          "source_map_lookup",  "source_view_preview",
+                          "source_view_commit", "source_view_records",
+                          "source_view_chunk",  "native_open",
+                          "native_metadata",    "sea_extract",
+                          "sea_records",        "nexe_extract",
+                          "nexe_records"}),
+            0);
   Json Params = Json::object();
   Json Names = Json::array();
   unsigned Pages = 0;

@@ -15,6 +15,8 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InlineAsm.h"
 
+#include <stdexcept>
+
 namespace neverd {
 
 bool isLinuxX64SyscallInlineAsm(const llvm::CallInst &Call) {
@@ -55,6 +57,39 @@ bool isWindowsX64SyscallInlineAsm(const llvm::CallInst &Call) {
   return true;
 }
 
+unsigned x86CPUQueryResultWords(const llvm::CallInst &Call) {
+  const auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
+  if (!IA)
+    return 0;
+  const llvm::StringRef Mnemonic = IA->getAsmString().trim().take_until(
+      [](char C) { return C == ' ' || C == '\t' || C == '\n' || C == '\r'; });
+  if (Mnemonic != "cpuid" && Mnemonic != "xgetbv")
+    return 0;
+  const bool XCR = Mnemonic == "xgetbv";
+  const unsigned Words = XCR ? 2 : 4;
+  const auto *Result = llvm::dyn_cast<llvm::StructType>(Call.getType());
+  bool Valid =
+      IA->getAsmString() == Mnemonic && IA->hasSideEffects() &&
+      !IA->isAlignStack() && !IA->canThrow() &&
+      IA->getDialect() == llvm::InlineAsm::AD_ATT &&
+      IA->getConstraintString() ==
+          (XCR ? "={eax},={edx},{ecx},~{memory}"
+               : "={eax},={ebx},={ecx},={edx},{eax},{ecx},~{memory}") &&
+      Result && Result->isLiteral() && !Result->isPacked() &&
+      Result->getNumElements() == Words && Call.arg_size() == (XCR ? 1u : 2u) &&
+      !Call.hasOperandBundles();
+  if (Valid) {
+    for (auto *Field : Result->elements())
+      Valid &= Field->isIntegerTy(32);
+    for (const auto &Arg : Call.args())
+      Valid &= Arg->getType()->isIntegerTy(32);
+  }
+  if (!Valid)
+    throw std::runtime_error(
+        "unsupported x86 CPU query inline assembly contract");
+  return Words;
+}
+
 void analyzeIntrinsicStructs(LLVMCAnalysisState &State, llvm::Function &Fn) {
   State.IntrinsicStructVals.clear();
   State.IntrinsicStructNames.clear();
@@ -64,20 +99,19 @@ void analyzeIntrinsicStructs(LLVMCAnalysisState &State, llvm::Function &Fn) {
       auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst);
       if (!CI)
         continue;
-      auto *IA = llvm::dyn_cast<llvm::InlineAsm>(CI->getCalledOperand());
-      if (!IA)
+      const unsigned Words = x86CPUQueryResultWords(*CI);
+      if (!Words)
         continue;
-      if (!CI->getType()->isStructTy())
-        continue;
-
-      std::string AsmStr = IA->getAsmString().str();
-      if (AsmStr == "cpuid") {
-        State.IntrinsicStructVals.insert(CI);
-        State.IntrinsicStructNames[CI] = "cpuInfo";
-      } else if (AsmStr == "xgetbv") {
-        State.IntrinsicStructVals.insert(CI);
-        State.IntrinsicStructNames[CI] = "xcr";
+      // The dedicated array projection represents register extracts, not an
+      // arbitrary LLVM aggregate ABI. Refuse unrepresented aggregate uses.
+      for (const auto *User : CI->users()) {
+        const auto *Extract = llvm::dyn_cast<llvm::ExtractValueInst>(User);
+        if (!Extract || Extract->getNumIndices() != 1 ||
+            Extract->getIndices()[0] >= Words)
+          throw std::runtime_error("unsupported x86 CPU query aggregate use");
       }
+      State.IntrinsicStructVals.insert(CI);
+      State.IntrinsicStructNames[CI] = Words == 4 ? "cpuInfo" : "xcr";
     }
   }
 }

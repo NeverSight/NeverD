@@ -17,6 +17,9 @@
 ///    no parameter arrives in it), an unspecified value, the result of a
 ///    callee that itself returns no value, or of an instruction run for its
 ///    effect;
+///  - the parameter that arrived in the return register of a function that
+///    never writes it (AArch64 x0 of a writer through its pointer argument):
+///    a value only when a caller reads it;
 ///  - a deliberate value: a constant or a comparison, as `return 0` or a
 ///    `setcc` byte merged into the register;
 ///  - some other value.
@@ -63,6 +66,8 @@ ValueKey keyOf(const MedVar &Value) {
 enum class ReturnedValue : uint8_t {
   /// Nothing the function defines.
   Undefined,
+  /// The parameter in a return register the function never writes.
+  Incoming,
   /// A constant or a comparison: a value the function means.
   Deliberate,
   /// Any other value.
@@ -83,6 +88,10 @@ struct FunctionFacts {
   /// What the return register holds at each return; none for the value it
   /// entered the function with.
   std::vector<std::optional<MedVar>> Returns;
+  /// Whether any operation or PHI writes the return register.  A return
+  /// whose value no backward walk finds holds the entry value only when
+  /// none does; otherwise a join can hide a value written before it.
+  bool WritesReturnRegister = false;
 };
 
 /// What the return register holds at the RETURN \p Index of \p Block: the
@@ -136,6 +145,8 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
   Facts.Func = &Func;
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis) {
+      Facts.WritesReturnRegister |= Phi.Output.Kind == MedVar::Reg &&
+                                    Phi.Output.RegOff == TRI.IntReturnReg;
       Facts.Phis.emplace(keyOf(Phi.Output), &Phi);
       for (const auto &[Predecessor, Value] : Phi.Args) {
         (void)Predecessor;
@@ -144,6 +155,15 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
       }
     }
     for (const MedOp &Op : Block.Ops) {
+      // An entry copy of the register into itself writes nothing.
+      const auto WritesReturn = [&](const MedVar &Value) {
+        return Value.Kind == MedVar::Reg && Value.RegOff == TRI.IntReturnReg &&
+               !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                 keyOf(Op.Inputs[0]) == keyOf(Value));
+      };
+      Facts.WritesReturnRegister |=
+          WritesReturn(Op.Output) ||
+          llvm::any_of(Op.IntrinsicOutputs, WritesReturn);
       if (Op.Output.Size && !Op.Output.isConst())
         Facts.Defs.emplace(keyOf(Op.Output), &Op);
       if (Op.Opcode == NdOp::RETURN) {
@@ -469,8 +489,9 @@ private:
     std::vector<ReturnedValue> Paths;
     for (const std::optional<MedVar> &Returned : F.Returns) {
       if (!Returned) {
-        Paths.push_back(entersReturnRegister(Func) ? ReturnedValue::Other
-                                                   : ReturnedValue::Undefined);
+        Paths.push_back(!entersReturnRegister(Func) ? ReturnedValue::Undefined
+                        : F.WritesReturnRegister    ? ReturnedValue::Other
+                                                    : ReturnedValue::Incoming);
         continue;
       }
       std::set<ValueKey> Seen;
@@ -479,13 +500,17 @@ private:
     // A function that never returns hands nothing back.
     if (Paths.empty())
       return true;
+    const bool Read = callerReadsResult(Func);
+    for (ReturnedValue &Path : Paths)
+      if (Path == ReturnedValue::Incoming)
+        Path = Read ? ReturnedValue::Other : ReturnedValue::Undefined;
     const auto Count = [&](ReturnedValue Kind) {
       return llvm::count(Paths, Kind);
     };
     if (Count(ReturnedValue::Undefined) == static_cast<long>(Paths.size()))
       return true;
     return Count(ReturnedValue::Undefined) &&
-           !Count(ReturnedValue::Deliberate) && !callerReadsResult(Func);
+           !Count(ReturnedValue::Deliberate) && !Read;
   }
 };
 

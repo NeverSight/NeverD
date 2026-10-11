@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/X86RegistrationCall.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -21,6 +22,9 @@ struct TerminalRegistrationRegion {
   std::map<va_t, std::pair<va_t, int>> Ranges;
   std::set<int> Ordinary;
   std::set<va_t> Calls;
+  std::set<va_t> ReturnAddresses;
+  std::set<va_t> ExitTargets;
+  std::map<int, va_t> ResumeFallthroughs;
   size_t Work = 0;
 };
 
@@ -47,6 +51,14 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
   if (NativeTry == EH.Cxx->TryBlocks.end())
     return std::nullopt;
   const auto &Try = *NativeTry;
+  const auto Parents = registrationCatchParents(Med);
+  if (!Parents)
+    return std::nullopt;
+  const auto Parent = (*Parents)[NativeTry - EH.Cxx->TryBlocks.begin()];
+  const va_t EntryVA =
+      Parent
+          ? EH.Cxx->TryBlocks[Parent->first].Handlers[Parent->second].HandlerVA
+          : Med.Entry;
   std::map<int, const MedBlock *> Blocks;
   TerminalRegistrationRegion Result;
   auto &Ranges = Result.Ranges;
@@ -62,7 +74,7 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
              .emplace(Block.StartAddr, std::make_pair(Block.EndAddr, Block.Id))
              .second)
       return std::nullopt;
-    if (Block.StartAddr == Med.Entry)
+    if (Block.StartAddr == EntryVA)
       Entry = Block.Id;
   }
   va_t End = 0;
@@ -75,6 +87,9 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
   auto &Calls = Result.Calls;
   std::vector<int> Pending{Entry};
   auto &Work = Result.Work;
+  const auto Resumed = registrationResumeClosure(Med, Work);
+  if (!Resumed || Resumed->count(Entry))
+    return std::nullopt;
   while (!Pending.empty()) {
     const int Id = Pending.back();
     Pending.pop_back();
@@ -83,7 +98,7 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
     if (!Ordinary.insert(Id).second)
       continue;
     const auto &Block = *Blocks.at(Id);
-    if (!Block.ExceptionalPreds.empty())
+    if (!Block.ExceptionalPreds.empty() && (!Parent || Id != Entry))
       return std::nullopt;
     bool Terminal = false;
     for (const auto &Op : Block.Ops) {
@@ -91,36 +106,60 @@ terminalRegistrationRegion(const MedFunc &Med, int32_t TryLow,
         return std::nullopt;
       if (Op.Dead)
         continue;
-      if (Terminal || Op.Opcode == NdOp::RETURN ||
-          Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INDIR_BR)
+      if (Terminal || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::INDIR_BR)
         return std::nullopt;
+      if (Op.Opcode == NdOp::RETURN) {
+        if (Parent || !Med.RegistrationCxxEntryPopBytes ||
+            !Result.ReturnAddresses.insert(Op.Addr).second)
+          return std::nullopt;
+        Terminal = true;
+        continue;
+      }
       if (Op.Opcode != NdOp::CALL)
         continue;
       Work += OperationCount + State.Blocks.size();
       if (Work > limits::kMaxRegistrationEHStateWork)
         return std::nullopt;
       // Extending a synchronous language scope over its branch and frame
-      // setup is valid only if every ordinary call already has that scope.
-      // In particular, never bring an unprotected call or an EHa memory fault
-      // under a new handler merely because the addresses surround the try.
-      if (!registrationCallABI(Med, Block, Op) || !Op.DoesNotReturn ||
-          !llvm::any_of(State.Blocks,
-                        [&](const auto &S) {
-                          return S.Reached && !S.CallbackOnly && !S.Unknown &&
-                                 S.Range.contains(Op.Addr) &&
-                                 !S.Levels.empty() &&
-                                 llvm::all_of(S.Levels, [&](int32_t Level) {
-                                   return Level >= Try.TryLow &&
-                                          Level <= Try.TryHigh;
-                                 });
-                        }) ||
+      // setup is valid when each throw already has that scope. A checked
+      // returning leaf has no calls or C++ throws, so synchronous EH permits
+      // its placement before the compiler's first state store. Unknown calls
+      // and asynchronous memory faults cannot use this exception.
+      if (!registrationCallABI(Med, Block, Op) ||
+          !llvm::any_of(
+              State.Blocks,
+              [&](const auto &S) {
+                const bool Context =
+                    Parent ? S.CallbackOnly && S.CxxCatchStacks.size() == 1 &&
+                                 !S.CxxCatchStacks[0].empty() &&
+                                 S.CxxCatchStacks[0].back() == *Parent
+                           : !S.CallbackOnly;
+                return S.Reached && Context && !S.Unknown &&
+                       S.Range.contains(Op.Addr) && !S.Levels.empty() &&
+                       llvm::all_of(S.Levels, [&](int32_t Level) {
+                         return !Op.DoesNotReturn ||
+                                (Level >= Try.TryLow && Level <= Try.TryHigh);
+                       });
+              }) ||
           !Calls.insert(Op.Addr).second)
         return std::nullopt;
-      Terminal = true;
+      Terminal = Op.DoesNotReturn;
     }
     if (Terminal != Block.Succs.empty())
       return std::nullopt;
-    Pending.insert(Pending.end(), Block.Succs.begin(), Block.Succs.end());
+    for (int Successor : Block.Succs) {
+      if (!Blocks.count(Successor))
+        return std::nullopt;
+      if (Resumed->count(Successor)) {
+        Result.ExitTargets.insert(Blocks.at(Successor)->StartAddr);
+        if (Block.Succs.size() == 1 &&
+            Block.EndAddr == Blocks.at(Successor)->StartAddr)
+          Result.ResumeFallthroughs.emplace(Id,
+                                            Blocks.at(Successor)->StartAddr);
+      } else
+        Pending.push_back(Successor);
+    }
   }
   if (Calls.empty())
     return std::nullopt;
@@ -210,8 +249,10 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
   }
   if (SeenCalls != Calls)
     return false;
-  // Every gap must follow an explicit terminal source call. Relocating an
-  // independently entered resume body cannot manufacture a fallthrough edge.
+  // A gap must follow a source terminal or an explicit exit to the shared
+  // resume component. Moving the prefix cannot manufacture fallthrough into
+  // an independently entered callback or return tail.
+  std::map<size_t, va_t> ResumeTransfers;
   for (size_t I = 1; I < Selected.size(); ++I)
     if (Selected[I - 1] && !Selected[I]) {
       const HighStmt *Previous = &Func.Body[I - 1];
@@ -219,6 +260,20 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
         Previous = &Previous->Body.back();
       const auto &Call =
           Previous->Kind == StmtKind::Call ? Previous->CallExpr : Previous->Val;
+      if ((Previous->Kind == StmtKind::Return &&
+           Region->ReturnAddresses.count(Previous->Addr)) ||
+          (Previous->Kind == StmtKind::Goto &&
+           Region->ExitTargets.count(Previous->GotoTarget)))
+        continue;
+      auto Range = Ranges.upper_bound(Previous->Addr);
+      if (Range != Ranges.begin() && (--Range)->second.first > Previous->Addr) {
+        const auto Fallthrough =
+            Region->ResumeFallthroughs.find(Range->second.second);
+        if (Fallthrough != Region->ResumeFallthroughs.end()) {
+          ResumeTransfers.emplace(I - 1, Fallthrough->second);
+          continue;
+        }
+      }
       if (!Calls.count(Previous->Addr) || !Call ||
           Call->Kind != ExprKind::Call || !Call->DoesNotReturn)
         return false;
@@ -232,6 +287,14 @@ bool extractTerminalRegistrationTry(HighFunc &Func, const MedFunc &Med,
         InsertAt = Remaining.size();
       Found = true;
       Protected.push_back(std::move(Func.Body[I]));
+      if (const auto Transfer = ResumeTransfers.find(I);
+          Transfer != ResumeTransfers.end()) {
+        HighStmt Jump;
+        Jump.Kind = StmtKind::Goto;
+        Jump.Addr = Protected.back().Addr;
+        Jump.GotoTarget = Transfer->second;
+        Protected.push_back(std::move(Jump));
+      }
     } else
       Remaining.push_back(std::move(Func.Body[I]));
   }

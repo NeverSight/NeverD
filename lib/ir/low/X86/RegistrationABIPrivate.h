@@ -9,6 +9,7 @@
 
 #include "neverd/ir/low/RegistrationABI.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <set>
 #include <utility>
@@ -23,7 +24,41 @@ struct ImageFrameEffects {
   std::set<std::pair<int32_t, int32_t>> ECXWrites;
 };
 
+template <typename Set, typename Vector>
+void copyExtents(const Set &From, Vector &To) {
+  for (const auto &[Begin, End] : From) {
+    if (!To.empty() && Begin <= To.back().End)
+      To.back().End = std::max(To.back().End, End);
+    else
+      To.push_back({Begin, End});
+  }
+}
+
+std::optional<std::vector<RegistrationRuntimeThrowInfo>>
+collectRegistrationRuntimeThrowInfos(const LowFunc &Function,
+                                     const BinaryImage &Image, size_t &Work);
+
+bool chargeDecodedCallee(size_t &Work, const LowFunc &Function);
+bool collectCalleeCodeRanges(const LowFunc &Function, const BinaryImage &Image,
+                             size_t &Work,
+                             std::vector<ExceptionAddressRange> &Ranges);
+
 bool chargeCalleeWork(size_t &Work, size_t Amount);
+
+struct CleanupFramePrefix {
+  unsigned Size = 0;
+  uint8_t BaseRegister = 5;
+  int32_t BaseOffset = 0;
+  bool CallsLeaf = false;
+  std::optional<RegistrationCleanupParentFrame> RealignedParent;
+};
+
+std::optional<CleanupFramePrefix>
+getCleanupFramePrefix(const BinaryImage &Image, va_t Target, size_t &Work);
+
+std::optional<uint16_t> parentPopBytes(const LowFunc &Function,
+                                       const BinaryImage &Image);
+
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target);
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects);

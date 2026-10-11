@@ -90,6 +90,8 @@ void resolveCopyChains(VarKeyMap<ExprPtr> &Map) {
 // and expression inlining owners use this same conservative stability proof.
 void filterStableCopyCandidates(const std::vector<HighStmt> &Stmts,
                                 VarKeyMap<ExprPtr> &Candidates) {
+  if (Candidates.empty())
+    return;
   VarKeyMap<int> Definitions;
   VarKeyMap<VarKeySet> Dependents;
   VarKeySet Unstable;
@@ -152,6 +154,8 @@ void rewriteRhsVars(std::vector<HighStmt> &Stmts,
                     const VarKeyMap<ExprPtr> &Candidates) {
   auto Map = Candidates;
   filterStableCopyCandidates(Stmts, Map);
+  if (Map.empty())
+    return;
   HighExprSet Seen;
   std::function<void(ExprPtr &)> Rewrite = [&](ExprPtr &E) {
     if (!E)

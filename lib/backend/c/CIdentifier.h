@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -657,15 +658,24 @@ public:
   /// Allocates \p Identifier, already a C identifier, as it is spelled
   /// unless another name holds it.
   std::string allocateVerbatim(llvm::StringRef Identifier) {
-    std::string Candidate = Identifier.str();
-    unsigned Suffix = 2;
-    while (!Used.insert(Candidate).second)
-      Candidate = Identifier.str() + "_" + std::to_string(Suffix++);
+    std::string Base = Identifier.str();
+    auto [It, Inserted] = Used.try_emplace(Base, 2);
+    if (Inserted)
+      return Base;
+    // Names never leave this allocator. Every suffix before this cursor is
+    // already occupied, including names reserved through another stem. Keep
+    // the original first-free spelling without rescanning the whole prefix.
+    std::string Candidate;
+    unsigned Suffix = It->second;
+    do {
+      Candidate = Base + "_" + std::to_string(Suffix++);
+    } while (!Used.try_emplace(Candidate, 2).second);
+    It->second = Suffix;
     return Candidate;
   }
 
 private:
-  std::set<std::string> Used;
+  std::map<std::string, unsigned> Used;
 };
 
 } // namespace neverd

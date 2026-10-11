@@ -24,6 +24,7 @@
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
+#include "neverd/ir/med/X86RegistrationEntry.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -563,6 +564,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   if (Low.RegistrationStates && Image)
     Func.RegistrationCallerCleanupABIComplete =
         hasCallerCleanupRegistrationABI(Low, *Image);
+  if (Low.ExceptionMetadata && Low.ExceptionMetadata->Cxx && Image)
+    Func.RegistrationCxxEntryPopBytes =
+        getCheckedX86RegistrationCxxParentABI(Low, *Image);
   if (SourceCallHintsEnabled && Image && Fmt == BinaryFormat::MachO &&
       TheArch == Arch::AArch64 && Image->Arch == TheArch) {
     Func.RegisterCopyProjections = sourceRegisterCopies(*Image, Low);
@@ -1106,6 +1110,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     debugVerifyMedFunc(Func, "mergeLoopCarriedVectorReads");
 
     detectCc(Func, TheArch, Fmt);
+    completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");
 
     propagate(Func);

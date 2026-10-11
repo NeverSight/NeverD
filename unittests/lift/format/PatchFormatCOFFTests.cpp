@@ -12,6 +12,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/Win64EH.h"
 
@@ -1042,7 +1043,7 @@ TEST_F(PatchCOFF_X64, ReconstructsBoundedNativeTypedFH4StateGraph) {
   ASSERT_EQ(Lift.exitCode, 0) << Lift.err;
   EXPECT_NE(Lift.out.find("personality=__CxxFrameHandler4"), std::string::npos);
 
-  auto Decompile = decompileToHighC(PE, "cpp");
+  auto Decompile = decompileToHighC(PE, "c");
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
   std::ifstream HighCInput(tmpFile("decompiled_high.c"));
   ASSERT_TRUE(HighCInput.good());
@@ -1050,8 +1051,21 @@ TEST_F(PatchCOFF_X64, ReconstructsBoundedNativeTypedFH4StateGraph) {
                     std::istreambuf_iterator<char>());
   EXPECT_NE(HighC.find("personality=__CxxFrameHandler4"), std::string::npos);
   EXPECT_NE(HighC.find("cxx.try[0]"), std::string::npos);
-  EXPECT_NE(HighC.find("type @ 0x"), std::string::npos);
-  EXPECT_NE(HighC.find("catch ("), std::string::npos);
+  EXPECT_NE(HighC.find("type descriptor @ 0x"), std::string::npos);
+  EXPECT_EQ(HighC.find("catch ("), std::string::npos);
+  for (const auto &Catch : OriginalCxx->Cxx->TryBlocks.front().Handlers)
+    EXPECT_NE(HighC.find("L_windows_callback_" +
+                         llvm::utohexstr(Catch.HandlerVA) + "_"),
+              std::string::npos);
+  HighCInput.close();
+  const auto DecompileCpp = decompileToHighC(PE, "cpp");
+  ASSERT_EQ(DecompileCpp.exitCode, 0) << DecompileCpp.err;
+  std::ifstream HighCppInput(tmpFile("decompiled_high.c"));
+  ASSERT_TRUE(HighCppInput.good());
+  const std::string HighCpp((std::istreambuf_iterator<char>(HighCppInput)),
+                            std::istreambuf_iterator<char>());
+  EXPECT_NE(HighCpp.find("type @ 0x"), std::string::npos);
+  EXPECT_NE(HighCpp.find("catch ("), std::string::npos);
 
   auto Patch = patchBinary(PE);
   ASSERT_EQ(Patch.exitCode, 0) << Patch.err;

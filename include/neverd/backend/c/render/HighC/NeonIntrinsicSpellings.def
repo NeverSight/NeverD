@@ -192,6 +192,23 @@ NEVERD_NEON_DOUBLING_MULTIPLY(ArmVqdmull, "vqdmull", true)
 
 #undef NEVERD_NEON_DOUBLING_MULTIPLY
 
+// The polynomial (carry-less) multiplies: PMUL and VMUL.P8 lane by lane on
+// bytes, a `q` for 128 bits (vmulq_p8); PMULL and VMULL.P8 widening each byte
+// pair to 16 bits (vmull_p8); and PMULL of the one 64-bit lane to 128 bits
+// (vmull_p64).  AArch64 PMULL passes its element width last.
+//
+// NEVERD_NEON_POLY_MULTIPLY(Intrinsic, Base, Long, ElementWidthOperand)
+#ifndef NEVERD_NEON_POLY_MULTIPLY
+#define NEVERD_NEON_POLY_MULTIPLY(Intrinsic, Base, Long, ElementWidthOperand)
+#endif
+
+NEVERD_NEON_POLY_MULTIPLY(A64_Pmul, "vmul", false, false)
+NEVERD_NEON_POLY_MULTIPLY(ArmVmulp, "vmul", false, false)
+NEVERD_NEON_POLY_MULTIPLY(A64_Pmull, "vmull", true, true)
+NEVERD_NEON_POLY_MULTIPLY(ArmVmullp, "vmull", true, false)
+
+#undef NEVERD_NEON_POLY_MULTIPLY
+
 // FCVTXN narrows doubles to floats rounding to odd: one double to a float
 // (the scalar form), or two to a 64-bit vector of floats.
 //

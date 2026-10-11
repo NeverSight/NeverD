@@ -15,10 +15,14 @@ class Function;
 }
 namespace neverd {
 struct MedFunc;
-/// Project only observed physical entry parameters. Caller memory accesses
-/// still require their independent occurrence and frame projection proof.
+/// Select the convention for an unassigned physical entry signature. Caller
+/// memory accesses still require their independent frame projection proof.
 std::optional<llvm::CallingConv::ID>
 getX86RegistrationCxxEntryABI(const MedFunc &Source,
                               const llvm::Function &Function);
+/// Check the assigned convention and every parameter attribute, including the
+/// inreg attributes required by LLVM's x86 fastcall lowering.
+bool hasX86RegistrationCxxEntryABI(const MedFunc &Source,
+                                   const llvm::Function &Function);
 } // namespace neverd
 #endif

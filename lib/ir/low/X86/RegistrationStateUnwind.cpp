@@ -50,11 +50,7 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before) {
       if (CheckCleanups && Action.ActionVA) {
         const CleanupKey Identity{Block.Id, Level, uint32_t(Walk)};
         const auto Contract = CleanupIndices.find(uint32_t(Walk));
-        auto SP = Before.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
-                      .Offset;
-        if (!Before.Parent && Before.Callback && !Before.OtherCallback &&
-            !Before.CxxCatchStacks.empty())
-          SP = Before.Frame.load(*Chain.RegistrationOffset - 4, 4).Offset;
+        const auto SP = parentStackOffset(Before);
         bool Valid = !Before.Unknown && !Facts[I].Invalid &&
                      Contract != CleanupIndices.end() && SP;
         RegistrationCleanupFrameEffect Effect;
@@ -66,17 +62,22 @@ void RegistrationStateSolver::dispatchBlock(size_t I, const Domain &Before) {
           Effect.ActionState = uint32_t(Walk);
           Effect.CleanupIndex = Contract->second;
           Effect.StackOffset = *SP;
-          const auto Offset = Chain.cxxSourceFrameOffset(C.ObjectFrameOffset);
-          Valid &= Offset &&
-                   projectFrameObject(Before, *Offset, SP, C.Leaf.ECXReads,
-                                      Effect.FrameReads, true) &&
-                   projectFrameObject(Before, *Offset, SP, C.Leaf.ECXWrites,
-                                      Effect.FrameWrites, false);
-          if (Valid && charge(C.Leaf.ImageReads.size()))
-            for (const auto &Read : C.Leaf.ImageReads)
+          for (const auto &Call : C.Calls) {
+            const auto Offset =
+                Chain.cxxSourceFrameOffset(Call.ObjectFrameOffset);
+            Valid &=
+                charge(1) && Offset &&
+                projectFrameObject(Before, *Offset, SP, Call.Leaf.ECXReads,
+                                   Effect.FrameReads, true) &&
+                projectFrameObject(Before, *Offset, SP, Call.Leaf.ECXWrites,
+                                   Effect.FrameWrites, false);
+            if (!Valid || !charge(Call.Leaf.ImageReads.size())) {
+              Valid = false;
+              break;
+            }
+            for (const auto &Read : Call.Leaf.ImageReads)
               ImageReads.emplace(Read.Begin, Read.End);
-          else
-            Valid = false;
+          }
         }
         if (Valid && !InvalidCleanups.count(Identity)) {
           auto [It, Inserted] = CleanupEffects.emplace(Identity, Effect);

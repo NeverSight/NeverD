@@ -3761,6 +3761,23 @@ const HighExpr *HighCWriter::unwrapIntegerView(const HighExpr *E) const {
       E = E->Operands[0].get();
       continue;
     }
+    // The low bytes of an extension, as wide as what it extends, are that
+    // value: i386 `SUBBYTES((i64)(esp - 12), 0)` is `esp - 12`.
+    if (E->Kind == ExprKind::BinOp && E->Op == NdOp::SUBBYTES &&
+        E->Operands.size() == 2 && E->Operands[1] &&
+        E->Operands[1]->Kind == ExprKind::Const &&
+        E->Operands[1]->ConstVal == 0 && E->Type) {
+      const HighExpr *Extension = E->Operands[0].get();
+      if (Extension->Kind == ExprKind::UnaryOp &&
+          (Extension->Op == NdOp::INT_ZEXT ||
+           Extension->Op == NdOp::INT_SEXT) &&
+          !Extension->Operands.empty() && Extension->Operands[0] &&
+          Extension->Operands[0]->Type &&
+          Extension->Operands[0]->Type->Size == E->Type->Size) {
+        E = Extension->Operands[0].get();
+        continue;
+      }
+    }
     break;
   }
   return E;
@@ -3934,6 +3951,52 @@ HighCWriter::certifiedFrameStorageDisplacement(const HighExpr &E) const {
       return std::nullopt;
   }
   return std::nullopt;
+}
+
+bool HighCWriter::reachesFrameThroughIndex(const HighExpr &E) const {
+  if (E.Kind != ExprKind::BinOp)
+    return false;
+  // A choice between whole addresses (`csel x8, x9, x10, ne`, or a run-time
+  // mask `(p & m) | (&slot & ~m)`) reaches whichever it picks.  C takes a
+  // named slot's address for it; only a choice of other frame bytes is an
+  // index.
+  const auto ChoosesFrameBytes = [&](const ExprPtr &Operand) {
+    return Operand && certifiedFrameStorageDisplacement(*Operand) &&
+           !namedFrameSlot(*Operand);
+  };
+  if (E.Op == NdOp::SELECT)
+    return E.Operands.size() == 3 && (ChoosesFrameBytes(E.Operands[1]) ||
+                                      ChoosesFrameBytes(E.Operands[2]));
+  // A frame address plus a run-time index (`&buf[i]`), or one with the index
+  // inserted into its bits (AArch64 `bfi x10, x9, #2, #2` over `mov x10, sp`
+  // is `(sp & ~12) | i << 2`).
+  if ((E.Op != NdOp::INT_ADD && E.Op != NdOp::INT_SUB &&
+       E.Op != NdOp::INT_AND && E.Op != NdOp::INT_OR &&
+       E.Op != NdOp::INT_XOR) ||
+      E.Operands.size() != 2 || !E.Operands[0] || !E.Operands[1] ||
+      certifiedFrameStorageDisplacement(E))
+    return false;
+  if (E.Op == NdOp::INT_AND) {
+    bool ConstantMask = false;
+    for (const ExprPtr &Operand : E.Operands)
+      if (const HighExpr *Mask = unwrapIntegerView(Operand.get());
+          Mask && Mask->Kind == ExprKind::Const && E.Type && E.Type->Size) {
+        ConstantMask = true;
+        // A mask clearing only low bits aligns the address (`and rsp,
+        // -32`); it selects no frame bytes by a run-time value.
+        const uint64_t Width = E.Type->Size >= 8
+                                   ? UINT64_MAX
+                                   : (UINT64_C(1) << (8 * E.Type->Size)) - 1;
+        const uint64_t Cleared = ~Mask->ConstVal & Width;
+        if ((Cleared & (Cleared + 1)) == 0)
+          return false;
+      }
+    if (!ConstantMask)
+      return ChoosesFrameBytes(E.Operands[0]) ||
+             ChoosesFrameBytes(E.Operands[1]);
+  }
+  return certifiedFrameStorageDisplacement(*E.Operands[0]) ||
+         certifiedFrameStorageDisplacement(*E.Operands[1]);
 }
 
 std::optional<std::string>
@@ -4818,7 +4881,7 @@ const HighExpr *HighCWriter::indexedImageBase(const HighExpr &Address) const {
     }
     if (Term->ConstProvenance == ConstantAddressProvenance::Scalar ||
         Term->ConstProvenance == ConstantAddressProvenance::AddressFragment ||
-        !isImageDataAddress(Term->ConstVal) || !sizedObjectAt(Term->ConstVal))
+        !isImageDataAddress(Term->ConstVal) || !indexedObjectAt(Term->ConstVal))
       continue;
     if (Base)
       return nullptr;
@@ -4840,6 +4903,32 @@ HighCWriter::sizedObjectAt(va_t Addr) const {
     if (Addr - SizedObjects[I - 1].first < SizedObjects[I - 1].second)
       Outermost = SizedObjects[I - 1];
   return Outermost;
+}
+
+std::optional<std::pair<va_t, uint64_t>>
+HighCWriter::indexedObjectAt(va_t Addr) const {
+  if (auto Object = sizedObjectAt(Addr))
+    return Object;
+  const Section *Sec = Opts.Image ? Opts.Image->getSectionFor(Addr) : nullptr;
+  if (!Sec || !Sec->isReadable() || Sec->isExecutable() || !Sec->Size ||
+      Sec->Size > std::numeric_limits<va_t>::max() - Sec->VA)
+    return std::nullopt;
+  va_t Begin = Sec->VA;
+  va_t End = Sec->VA + Sec->Size;
+  const auto After = llvm::upper_bound(
+      SizedObjects, Addr,
+      [](va_t A, const std::pair<va_t, uint64_t> &O) { return A < O.first; });
+  if (After != SizedObjects.end() && After->first < End)
+    End = After->first;
+  if (After != SizedObjects.begin()) {
+    const va_t Reach = SizedObjectReach[After - SizedObjects.begin() - 1];
+    if (Reach > Begin)
+      Begin = Reach;
+  }
+  if (Begin > Addr || End <= Addr ||
+      End - Begin > limits::kMaxSingleGlobalEmbedLen)
+    return std::nullopt;
+  return std::pair{Begin, static_cast<uint64_t>(End - Begin)};
 }
 
 std::optional<std::string> HighCWriter::imageBackingAddress(va_t Addr) const {

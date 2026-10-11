@@ -21,6 +21,8 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/support/Diagnostic.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -111,75 +113,130 @@ static void breakStmtCycles(std::vector<HighStmt> &Stmts) {
 // Shared DCE utilities
 //===----------------------------------------------------------------------===//
 
-static void collectRefExpr(const ExprPtr &Root, VarKeySet &Refs) {
-  HighExprSet Seen;
-  std::vector<const HighExpr *> Work{Root.get()};
-  while (!Work.empty()) {
-    const auto *E = Work.back();
-    Work.pop_back();
-    if (!E || !Seen.insert(E).second)
-      continue;
-    if (isLocalExpr(*E))
-      Refs.insert(VK(E->Var));
-    E->forEachChildExpr(
-        [&](const ExprPtr &Operand) { Work.push_back(Operand.get()); });
-  }
+static bool isLocalValueAssignment(const HighStmt &S) {
+  return S.Kind == StmtKind::Assign && S.Dst && S.Val && isLocalExpr(*S.Dst);
 }
 
-static bool removableAssignment(const HighStmt &S) {
-  if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val || !isLocalExpr(*S.Dst) ||
-      !S.Body.empty() || !S.ElseBody.empty() || !S.Cases.empty() ||
-      !S.DefaultBody.empty() || !S.EHClauseBodies.empty())
-    return false;
-  HighExprSet Seen;
-  std::vector<const HighExpr *> Work{S.Val.get()};
-  while (!Work.empty()) {
-    const auto *E = Work.back();
-    Work.pop_back();
-    if (!E || !Seen.insert(E).second)
-      continue;
-    if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Store ||
-        E->MemoryOrdering != NdMemoryOrdering::None ||
-        E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
-      return false;
-    E->forEachChildExpr(
-        [&](const ExprPtr &Operand) { Work.push_back(Operand.get()); });
-  }
-  return true;
+static bool assignmentCanBeRemoved(const HighStmt &S) {
+  return isLocalValueAssignment(S) && S.Body.empty() && S.ElseBody.empty() &&
+         S.Cases.empty() && S.DefaultBody.empty() && S.EHClauseBodies.empty();
 }
+
+// One deletion loop only erases/moves statements. Its expressions are
+// immutable, so classify shared RHS nodes once instead of walking their DAG at
+// every use and again when deleting an assignment. Propagating effects through
+// reverse edges also handles cycles without giving an unfinished traversal a
+// pure result.
+namespace {
+class AssignmentEffects {
+  struct Node {
+    const HighExpr *Expr;
+    llvm::SmallVector<size_t, 2> Parents;
+    bool Observable = false;
+  };
+  llvm::DenseMap<const HighExpr *, size_t> Indices;
+  std::vector<Node> Nodes;
+
+  size_t intern(const HighExpr *Expr) {
+    auto [It, Inserted] = Indices.try_emplace(Expr, Nodes.size());
+    if (Inserted)
+      Nodes.push_back({Expr, {}, false});
+    return It->second;
+  }
+
+public:
+  explicit AssignmentEffects(const std::vector<HighStmt> &Stmts) {
+    walkStmts(Stmts, [&](const HighStmt &S) {
+      // Deleting the last child can make a parent assignment removable in a
+      // later iteration. Its RHS is immutable too and needs a classification.
+      if (isLocalValueAssignment(S))
+        intern(S.Val.get());
+    });
+    std::vector<size_t> Work;
+    for (size_t I = 0; I < Nodes.size(); ++I) {
+      const HighExpr *E = Nodes[I].Expr;
+      if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Store ||
+          E->MemoryOrdering != NdMemoryOrdering::None ||
+          E->MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+        Nodes[I].Observable = true;
+        Work.push_back(I);
+      }
+      E->forEachChildExpr([&](const ExprPtr &Child) {
+        if (Child) {
+          const size_t Index = intern(Child.get());
+          Nodes[Index].Parents.push_back(I);
+        }
+      });
+    }
+    for (size_t I = 0; I < Work.size(); ++I)
+      for (size_t Parent : Nodes[Work[I]].Parents)
+        if (!Nodes[Parent].Observable) {
+          Nodes[Parent].Observable = true;
+          Work.push_back(Parent);
+        }
+  }
+
+  bool removable(const HighStmt &S) const {
+    if (!assignmentCanBeRemoved(S))
+      return false;
+    const auto It = Indices.find(S.Val.get());
+    return It != Indices.end() && !Nodes[It->second].Observable;
+  }
+};
+} // namespace
 
 static void collectLiveRefs(const std::vector<HighStmt> &Stmts, VarKeySet &Live,
+                            const AssignmentEffects &Effects,
                             const MedVar *SourceCapture = nullptr) {
   // Swift's logical error slot is captured at entry even if the machine body
   // overwrites its register on every path. The current projection proof owns
   // this value; deleting it must not invalidate an otherwise complete entry.
   if (SourceCapture)
     Live.insert(VK(*SourceCapture));
-  VarKeyMap<VarKeySet> Dependencies;
+  // Keep definition-to-expression edges instead of expanding every definition
+  // into a separate set of all the variables below its RHS. Reachability on
+  // this combined variable/expression graph visits a shared live node once.
+  VarKeyMap<std::vector<const HighExpr *>> Definitions;
+  std::vector<const HighExpr *> Expressions;
   walkStmts(Stmts, [&](const HighStmt &S) {
-    if (removableAssignment(S)) {
+    if (Effects.removable(S)) {
       // PHI edge copies may define the same local on several paths. Union all
       // dependencies instead of selecting a traversal-dependent definition.
-      collectRefExpr(S.Val, Dependencies[VK(S.Dst->Var)]);
+      Definitions[VK(S.Dst->Var)].push_back(S.Val.get());
     } else {
       // Calls, memory effects and control-flow expressions are observable
       // roots. A variable referenced only by other dead assignments is not.
-      forEachExpr(S, [&](const ExprPtr &E) { collectRefExpr(E, Live); });
+      forEachExpr(S, [&](const ExprPtr &E) {
+        if (E)
+          Expressions.push_back(E.get());
+      });
     }
   });
-  std::vector<VarKey> Work(Live.begin(), Live.end());
-  for (size_t I = 0; I < Work.size(); ++I) {
-    const auto Found = Dependencies.find(Work[I]);
-    if (Found == Dependencies.end())
+  auto FollowDefinitions = [&](VarKey Key) {
+    if (auto It = Definitions.find(Key); It != Definitions.end())
+      Expressions.insert(Expressions.end(), It->second.begin(),
+                         It->second.end());
+  };
+  for (VarKey Key : Live)
+    FollowDefinitions(Key);
+  HighExprSet Seen;
+  while (!Expressions.empty()) {
+    const HighExpr *E = Expressions.back();
+    Expressions.pop_back();
+    if (!Seen.insert(E).second)
       continue;
-    for (const auto &Input : Found->second)
-      if (Live.insert(Input).second)
-        Work.push_back(Input);
+    if (isLocalExpr(*E) && Live.insert(VK(E->Var)).second)
+      FollowDefinitions(VK(E->Var));
+    E->forEachChildExpr([&](const ExprPtr &Child) {
+      if (Child)
+        Expressions.push_back(Child.get());
+    });
   }
 }
 
-static bool isDeadAssign(const HighStmt &S, const VarKeySet &Refs) {
-  return removableAssignment(S) && Refs.count(VK(S.Dst->Var)) == 0;
+static bool isDeadAssign(const HighStmt &S, const VarKeySet &Refs,
+                         const AssignmentEffects &Effects) {
+  return Effects.removable(S) && Refs.count(VK(S.Dst->Var)) == 0;
 }
 
 static bool isSelfAssign(const HighStmt &S) {
@@ -212,7 +269,8 @@ referencedStatementEntries(const std::vector<HighStmt> &Stmts) {
 
 static bool eliminateDeadAssigns(std::vector<HighStmt> &Stmts,
                                  const VarKeySet &Refs,
-                                 const std::unordered_set<va_t> &Entries) {
+                                 const std::unordered_set<va_t> &Entries,
+                                 const AssignmentEffects &Effects) {
   bool Changed = false;
   if (!Entries.empty()) {
     for (size_t I = 0; I < Stmts.size();) {
@@ -224,7 +282,8 @@ static bool eliminateDeadAssigns(std::vector<HighStmt> &Stmts,
         continue;
       bool AllDead = true;
       for (size_t J = First; J < I; ++J)
-        AllDead &= isSelfAssign(Stmts[J]) || isDeadAssign(Stmts[J], Refs);
+        AllDead &=
+            isSelfAssign(Stmts[J]) || isDeadAssign(Stmts[J], Refs, Effects);
       if (!AllDead)
         continue;
       // A dead value does not make its branch entry dead. Keep that exact
@@ -246,7 +305,7 @@ static bool eliminateDeadAssigns(std::vector<HighStmt> &Stmts,
                                  Changed = true;
                                  return true;
                                }
-                               if (isDeadAssign(S, Refs)) {
+                               if (isDeadAssign(S, Refs, Effects)) {
                                  Changed = true;
                                  return true;
                                }
@@ -254,18 +313,19 @@ static bool eliminateDeadAssigns(std::vector<HighStmt> &Stmts,
                              }),
               Stmts.end());
   for (auto &S : Stmts) {
-    if (!S.Body.empty() && eliminateDeadAssigns(S.Body, Refs, Entries))
+    if (!S.Body.empty() && eliminateDeadAssigns(S.Body, Refs, Entries, Effects))
       Changed = true;
-    if (!S.ElseBody.empty() && eliminateDeadAssigns(S.ElseBody, Refs, Entries))
+    if (!S.ElseBody.empty() &&
+        eliminateDeadAssigns(S.ElseBody, Refs, Entries, Effects))
       Changed = true;
     for (auto &C : S.Cases)
-      if (eliminateDeadAssigns(C.Body, Refs, Entries))
+      if (eliminateDeadAssigns(C.Body, Refs, Entries, Effects))
         Changed = true;
     if (!S.DefaultBody.empty() &&
-        eliminateDeadAssigns(S.DefaultBody, Refs, Entries))
+        eliminateDeadAssigns(S.DefaultBody, Refs, Entries, Effects))
       Changed = true;
     for (auto &Clause : S.EHClauseBodies)
-      if (eliminateDeadAssigns(Clause, Refs, Entries))
+      if (eliminateDeadAssigns(Clause, Refs, Entries, Effects))
         Changed = true;
   }
   return Changed;
@@ -328,10 +388,11 @@ static void preDCE(std::vector<HighStmt> &Stmts,
                    const std::unordered_set<va_t> &Entries,
                    const MedVar *SourceCapture = nullptr) {
   size_t Before = Stmts.size();
+  const AssignmentEffects Effects(Stmts);
   for (int PreIter = 0; PreIter < 8; ++PreIter) {
     VarKeySet Refs;
-    collectLiveRefs(Stmts, Refs, SourceCapture);
-    if (!eliminateDeadAssigns(Stmts, Refs, Entries))
+    collectLiveRefs(Stmts, Refs, Effects, SourceCapture);
+    if (!eliminateDeadAssigns(Stmts, Refs, Entries, Effects))
       break;
   }
   if (Stmts.size() < Before)
@@ -550,14 +611,17 @@ static void iterativeDCE(HighFunc &Func,
     LLVM_DEBUG(llvm::dbgs() << "      dce iter " << Outer << "/6 (" << Func.Name
                             << ", " << Func.Body.size() << " stmts)\n");
     bool DCEChanged = false;
-    for (int Iter = 0; Iter < 10; ++Iter) {
-      VarKeySet Refs;
-      collectLiveRefs(Func.Body, Refs,
-                      Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input
-                                           : nullptr);
-      if (!eliminateDeadAssigns(Func.Body, Refs, Entries))
-        break;
-      DCEChanged = true;
+    {
+      const AssignmentEffects Effects(Func.Body);
+      for (int Iter = 0; Iter < 10; ++Iter) {
+        VarKeySet Refs;
+        collectLiveRefs(Func.Body, Refs, Effects,
+                        Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input
+                                             : nullptr);
+        if (!eliminateDeadAssigns(Func.Body, Refs, Entries, Effects))
+          break;
+        DCEChanged = true;
+      }
     }
     VarKeyMap<ExprPtr> InlineDefs;
     VarKeyMap<int> InlineDefCount;
@@ -732,14 +796,17 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   // Semantic rewriting can make the scalar definitions that held an MBA
   // expansion dead. Remove them without feeding the shared result back through
   // copy propagation, which could create a cycle in the expression DAG.
-  for (int Iter = 0; Iter < 10; ++Iter) {
-    VarKeySet Refs;
-    collectLiveRefs(Func.Body, Refs,
-                    Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input
-                                         : nullptr);
-    if (!eliminateDeadAssigns(Func.Body, Refs,
-                              referencedStatementEntries(Func.Body)))
-      break;
+  {
+    const AssignmentEffects Effects(Func.Body);
+    for (int Iter = 0; Iter < 10; ++Iter) {
+      VarKeySet Refs;
+      collectLiveRefs(Func.Body, Refs, Effects,
+                      Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input
+                                           : nullptr);
+      if (!eliminateDeadAssigns(Func.Body, Refs,
+                                referencedStatementEntries(Func.Body), Effects))
+        break;
+    }
   }
   eliminateDeadConditions(Func.Body, referencedStatementEntries(Func.Body));
 

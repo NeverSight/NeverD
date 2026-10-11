@@ -230,6 +230,12 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             return false;
           const auto Object = State.Frame.load(*SP, 4);
           const auto Table = State.Frame.load(*SP + 4, 4);
+          if (Object.Constant == 0 && Table.Constant == 0 &&
+              !Object.MayBeFrame && !Table.MayBeFrame) {
+            ThrowProof->IsRethrow = true;
+            Threw = true;
+            break;
+          }
           if (!Object.Offset || Object.ReturnPC || Object.FrameOnlyFromCall ||
               !Table.Constant || Table.MayBeFrame)
             return false;

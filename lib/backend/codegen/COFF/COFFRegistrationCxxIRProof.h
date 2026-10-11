@@ -19,7 +19,10 @@ struct CxxIRCall {
   RegistrationCalleeFrameContract Contract;
   std::optional<int32_t> ObjectFrameOffset;
   bool Cleanup = false;
+  std::optional<RegistrationRuntimeThrow> RuntimeThrow;
 };
+bool hasExactCxxCallAttributes(const llvm::CallBase &Call,
+                               const CxxIRCall &Receipt);
 struct CxxIRCatch {
   const llvm::CatchPadInst *Pad = nullptr;
   std::optional<X86RegistrationCatchHome> Home;
@@ -35,19 +38,38 @@ struct CxxIRControlProof {
   std::map<X86RegistrationCatchIdentity, CxxIRCatch> Catches;
   std::map<int, X86RegistrationCatchIdentity> SourceCatchOwners;
   std::map<int, SourceSegment> Segments;
+  std::map<const llvm::BasicBlock *, const llvm::BasicBlock *> CopyEdges;
   std::map<uint32_t, const llvm::CleanupPadInst *> Cleanups;
   std::map<const llvm::CallBase *, CxxIRCall> Calls;
   std::set<const llvm::Instruction *> ChainReads;
+  std::set<const llvm::StoreInst *> SavedStackRestores;
   std::set<const llvm::Instruction *> IncomingAccesses;
   std::vector<ExceptionAddressRange> CallerPCWrites;
 };
+struct RegistrationCxxFrameContract;
+llvm::Error bindCxxRuntimeThrow(const CxxIRControlProof &Proof,
+                                const llvm::CallBase &Call,
+                                const CxxIRCall &Checked,
+                                const BinaryImage &Image,
+                                RegistrationCxxFrameContract &Contract,
+                                std::vector<ExceptionAddressRange> &Immutable,
+                                size_t &Work);
+
 llvm::Expected<const llvm::CatchReturnInst *> validateCxxContinuationRestore(
     const llvm::Instruction &Anchor, const RegistrationFrame &Frame,
-    int32_t SavedStackSlot, const RegistrationCxxContinuation &Resume);
+    int32_t SavedStackSlot, const RegistrationCxxContinuation &Resume,
+    const llvm::AllocaInst *SavedCallbackStack = nullptr);
 
 llvm::Error bindCxxCatches(CxxIRControlProof &Proof, const MedFunc &Source,
                            const llvm::Function &Function,
                            const X86RegistrationFrameLayout &Layout);
+
+/// Recognize only private scalar spill copies on one exact source CFG edge.
+/// No emitter metadata or block name grants ownership of a generated block.
+llvm::Error bindCxxCopyEdges(CxxIRControlProof &Proof);
+
+llvm::Error bindCxxCatchResumes(CxxIRControlProof &Proof, const MedFunc &Source,
+                                const llvm::Function &Function);
 
 llvm::Error bindCxxCatchStack(CxxIRControlProof &Proof, const MedFunc &Source,
                               const llvm::Function &Function);

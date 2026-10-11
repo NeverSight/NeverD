@@ -83,7 +83,7 @@ private:
                : std::nullopt;
   }
 
-  std::string text(size_t Begin, size_t End) const {
+  std::string text(size_t Begin, size_t End, bool SpellNames = true) const {
     llvm::StringRef Text = T.Source.slice(Begin, End).trim();
     if (Opts.Dialect != SourceDialect::Cpp)
       return Text.str();
@@ -99,13 +99,19 @@ private:
     for (size_t I = 0; I < Tokens->size(); ++I) {
       const Token &Tok = (*Tokens)[I];
       Out += Text.slice(Previous, Tok.Offset);
-      if ((Tok.Text == "struct" || Tok.Text == "class" || Tok.Text == "enum") &&
+      if (SpellNames &&
+          (Tok.Text == "struct" || Tok.Text == "class" || Tok.Text == "enum") &&
           I + 1 < Tokens->size() && sourceType((*Tokens)[I + 1].Text)) {
         Previous = (*Tokens)[I + 1].Offset;
         continue;
       }
-      Out +=
-          Tok.Kind == TokenKind::Identifier ? name(Tok.Text) : Tok.Text.str();
+      if (Tok.Kind == TokenKind::Identifier && Tok.Text == "_Alignas")
+        Out += "alignas";
+      else if (Tok.Kind == TokenKind::Identifier && Tok.Text == "_Alignof")
+        Out += "alignof";
+      else
+        Out += SpellNames && Tok.Kind == TokenKind::Identifier ? name(Tok.Text)
+                                                               : Tok.Text.str();
       Previous = Tok.Offset + Tok.Text.size();
     }
     Out += Text.substr(Previous);
@@ -394,7 +400,7 @@ private:
     if (Opts.Dialect == SourceDialect::Cpp &&
         (Item.Decls.front()->Kind == DeclKind::Record ||
          Item.Decls.front()->Kind == DeclKind::Typedef)) {
-      line(T.Source.slice(Item.Begin, Item.End).trim());
+      line(text(Item.Begin, Item.End, false));
       trailingComments(Item.Trailing);
       return;
     }

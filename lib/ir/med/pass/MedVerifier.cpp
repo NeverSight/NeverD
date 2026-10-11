@@ -20,6 +20,7 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86RegistrationFrame.h"
 
 #include "llvm/Support/Debug.h"
@@ -154,6 +155,11 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
                                              RealignedRestoredStackPointer) &&
                  !registrationRootFrameCoordinate(Func, Op))
           Err("registration root has no checked source coordinate", Blk.Id,
+              Op.Addr);
+        else if (Op.RegistrationRoot == MedOp::RegistrationRootKind::
+                                            RestoredCallbackStackPointer &&
+                 !registrationCallbackStackCoordinate(Func, Op))
+          Err("registration root has no suspended callback coordinate", Blk.Id,
               Op.Addr);
       } else if (Op.RegistrationStackOffset != 0)
         Err("restored stack offset has no registration runtime root", Blk.Id,

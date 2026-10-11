@@ -44,11 +44,12 @@ std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,
     return std::nullopt;
   const auto &Callee = State.CalleeContracts[Effect->CalleeIndex];
   if (Callee.Target != Effect->Target || Callee.StackPopBytes ||
+      Callee.isRuntimeThrow() != Effect->RuntimeThrow.has_value() ||
       Callee.DoesNotReturn != Effect->DoesNotReturn)
     return std::nullopt;
   const bool Borrow = !Callee.ECXReads.empty() || !Callee.ECXWrites.empty();
   if (Borrow != Effect->ECXFrameOffset.has_value() ||
-      (Callee.CalleeKind == RegistrationCalleeFrameContract::Kind::PrivateThrow
+      (Callee.isThrow()
            ? !Callee.DoesNotReturn || Borrow
            : Callee.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf ||
                  Callee.DoesNotReturn))
@@ -66,7 +67,9 @@ std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,
         return std::nullopt;
       Found = true;
     }
-  return Found ? std::optional(RegistrationCallABI{Borrow}) : std::nullopt;
+  return Found ? std::optional(
+                     RegistrationCallABI{Borrow, Callee.isRuntimeThrow()})
+               : std::nullopt;
 }
 
 } // namespace neverd

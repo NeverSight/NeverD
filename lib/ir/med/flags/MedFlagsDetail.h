@@ -76,6 +76,8 @@ struct CmpSource {
   /// are views of these same values in the same instruction.
   MedVar Result;
   int SourceOpIndex = -1;
+  /// The flag definition (INT_EQUAL/INT_SLESS) the search stopped at.
+  int FlagOpIndex = -1;
 };
 
 // ---- Architecture-specific compound flag pattern resolvers ----

@@ -10,6 +10,8 @@
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/lift/X86Regs.h"
 
+#include <algorithm>
+
 namespace {
 using namespace neverd;
 using namespace neverd::registration_test;
@@ -102,5 +104,38 @@ TEST(RegistrationState, SecondarySearchDoesNotEnterAnUnprotectedPeer) {
   ASSERT_TRUE(Result.Complete);
   EXPECT_TRUE(Result.Blocks[5].CxxSearches.empty());
   EXPECT_FALSE(Result.Blocks[7].Reached);
+}
+
+TEST(RegistrationState, SecondarySearchSurvivesBlockAndSuccessorReordering) {
+  auto Original = makeSecondaryCatchSearch(true);
+  // An ordinary backedge tests ordering without inventing a runtime entry.
+  Original.Blocks[2].Succs.push_back(2);
+  const auto Expected = analyzeRegistrationStates(Original);
+  ASSERT_TRUE(Expected.Complete);
+  ASSERT_EQ(Expected.CxxContinuations.size(), 2u);
+  EXPECT_EQ(Expected.CxxContinuations[1].SavedStackOffset, -28);
+  for (bool Reverse : {false, true}) {
+    auto Function = Original;
+    if (Reverse) {
+      std::reverse(Function.Blocks.begin(), Function.Blocks.end());
+      for (auto &Block : Function.Blocks)
+        std::reverse(Block.Succs.begin(), Block.Succs.end());
+    }
+    const auto Result = analyzeRegistrationStates(Function);
+    ASSERT_TRUE(Result.Complete);
+    EXPECT_TRUE(Result.CxxContinuationsComplete);
+    EXPECT_TRUE(Result.RegistrationLifetimeComplete);
+    EXPECT_EQ(Result.CxxContinuations, Expected.CxxContinuations);
+    for (const auto &Block : Result.Blocks) {
+      const auto Found = llvm::find_if(Expected.Blocks, [&](const auto &Other) {
+        return Other.BlockId == Block.BlockId;
+      });
+      ASSERT_NE(Found, Expected.Blocks.end());
+      EXPECT_EQ(Block.Levels, Found->Levels);
+      EXPECT_EQ(Block.CxxSearches, Found->CxxSearches);
+      EXPECT_EQ(Block.CallbackOnly, Found->CallbackOnly);
+      EXPECT_EQ(Block.Unknown, Found->Unknown);
+    }
+  }
 }
 } // namespace

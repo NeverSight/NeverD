@@ -336,6 +336,7 @@ CmpSource findCmpSource(const std::vector<MedOp> &Ops, int SearchEnd,
           continue;
         Result.Result = ResultVar;
         Result.SourceOpIndex = J;
+        Result.FlagOpIndex = I;
         if (Prev.Opcode == NdOp::INT_SUB) {
           Result.A = Prev.Inputs[0];
           Result.B = Prev.Inputs[1];
@@ -480,6 +481,29 @@ bool condReadsConditionalFlag(const std::vector<MedOp> &Ops, int ConsumerIdx,
   return false;
 }
 
+/// The fold compares the operands of the instruction whose flag findCmpSource
+/// stopped at, so each flag the condition reads must still hold that
+/// instruction's value.  A later instruction that redefines one leaves the
+/// compare stale: an AArch32 `strexd; cmp rS, #0; bne` whose status is the
+/// constant success folds the `cmp`'s flags to constants, and the search
+/// skips them to the `adds` before the store.
+bool condFlagsComeFromCmp(const std::vector<MedOp> &Ops, int ConsumerIdx,
+                          CondCode CC, const CmpSource &Cmp,
+                          const TargetRegInfo &TRI) {
+  if (Cmp.FlagOpIndex < 0)
+    return false;
+  const va_t CmpAddr = Ops[Cmp.FlagOpIndex].Addr;
+  for (uint64_t Off : flagsForCond(CC, TRI)) {
+    int J = ConsumerIdx;
+    while (J >= 0 &&
+           (Ops[J].Output.Kind != MedVar::Flag || Ops[J].Output.RegOff != Off))
+      --J;
+    if (J < 0 || Ops[J].Addr != CmpAddr)
+      return false;
+  }
+  return true;
+}
+
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
@@ -567,6 +591,9 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
           continue;
         if (condReadsConditionalFlag(Blk.Ops, static_cast<int>(I) - 1, CC, TRI))
           continue;
+        if (!condFlagsComeFromCmp(Blk.Ops, static_cast<int>(I) - 1, CC, Cmp,
+                                  TRI))
+          continue;
         // Flag-definition walk (robust against a partial-register-merge INT_AND
         // hiding an FP compare from the positional CbHasFP scan above).
         if (condReadsFPFlag(Blk.Ops, static_cast<int>(I) - 1, CC, TRI))
@@ -634,6 +661,9 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
                                TRI))
         continue;
       if (condReadsConditionalFlag(Blk.Ops, static_cast<int>(I) - 1, CC, TRI))
+        continue;
+      if (!condFlagsComeFromCmp(Blk.Ops, static_cast<int>(I) - 1, CC, LocalCmp,
+                                TRI))
         continue;
       // The positional HasFPFlag scan above stops at the first integer
       // SUB/AND/ADD, which a preceding SETcc's partial-register merge

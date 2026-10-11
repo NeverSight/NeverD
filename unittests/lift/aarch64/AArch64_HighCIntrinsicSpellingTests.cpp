@@ -143,6 +143,35 @@ neon_shift_left_unsigned:
   expectCompiles(C);
 }
 
+// The polynomial multiplies print by their shape: PMUL of 8 or 16 bytes,
+// PMULL of byte pairs, and PMULL of the 64-bit lanes, whose function takes
+// the AES feature vmull_p64 needs.
+TEST_F(AArch64_HighCIntrinsicSpelling, PolynomialMultipliesUseTheirShape) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "assembling AArch64 requires Clang";
+  const std::string C = highCOf(R"S(
+.text
+.global neon_polynomial
+.type neon_polynomial,%function
+neon_polynomial:
+  ldp q0, q1, [x0]
+  pmul v2.16b, v0.16b, v1.16b
+  pmul v3.8b, v0.8b, v1.8b
+  pmull v4.8h, v0.8b, v1.8b
+  pmull v5.1q, v0.1d, v1.1d
+  stp q2, q3, [x1]
+  stp q4, q5, [x1, #32]
+  ret
+.size neon_polynomial,.-neon_polynomial
+)S",
+                                "armv8-a+aes");
+  for (const char *Name : {"vmulq_p8(", "vmul_p8(", "vmull_p8(", "vmull_p64(",
+                           "__attribute__((target(\"+aes\")))"})
+    EXPECT_NE(C.find(Name), std::string::npos) << Name << "\n" << C;
+  EXPECT_EQ(C.find("unknown"), std::string::npos) << C;
+  expectCompiles(C);
+}
+
 // CRC32 and CRC32C of each operand width print as the ACLE intrinsic, the
 // function taking the target feature arm_acle.h requires.
 TEST_F(AArch64_HighCIntrinsicSpelling, Crc32UsesAcleWithTheCrcFeature) {

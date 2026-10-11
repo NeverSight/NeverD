@@ -1036,6 +1036,19 @@ private:
   mutable std::shared_ptr<const ResolverGraphCache> CachedResolverGraph;
   std::array<size_t, 3> resolverValueQueryCacheStatsForTesting() const;
 
+  struct ResolverQueryState;
+  // Local to a read-only resolver invocation. The owner, instruction map,
+  // block starts and storage owners must remain unchanged until destruction.
+  // Roots and effective edge overrides are still compared by value per query.
+  // Never retain this scope across proposal publication, rollback or decoding.
+  struct ResolverQueryScope {
+    const CFGBuilder &Owner;
+    std::shared_ptr<const ResolverQueryState> State;
+    explicit ResolverQueryScope(const CFGBuilder &Owner) : Owner(Owner) {}
+    ResolverQueryScope(const ResolverQueryScope &) = delete;
+    ResolverQueryScope &operator=(const ResolverQueryScope &) = delete;
+  };
+
   struct InsnRecord {
     va_t Addr;
     uint16_t Size;
@@ -2222,7 +2235,8 @@ private:
       std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr,
       uint32_t ResolverDepthLimit = 0,
       const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
-      bool UseGroupContext = true) const;
+      bool UseGroupContext = true,
+      ResolverQueryScope *ReadOnlyScope = nullptr) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.

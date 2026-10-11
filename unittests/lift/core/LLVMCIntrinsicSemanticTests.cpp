@@ -24,6 +24,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
+#include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <vector>
@@ -129,6 +130,11 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
       Output};
   if (LLVMOnly)
     Args.append({"-target", "x86_64-pc-windows-msvc", "-S", "-emit-llvm"});
+  // Clang lowers the i128 conversion controls to its compiler runtime. The
+  // MSVC CRT alone does not supply these builtins; retain execution coverage.
+  if (!LLVMOnly &&
+      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows())
+    Args.push_back("--rtlib=compiler-rt");
   if (CheckUndefined)
     Args.append({"-fsanitize=undefined", "-fsanitize-trap=undefined"});
   const std::optional<llvm::StringRef> Redirects[] = {
@@ -1775,6 +1781,476 @@ int main(void) {
     for (const char *Level : {"-O0", "-O2"})
       compileAndCheck(Program, false, {}, Level);
   }
+}
+
+llvm::CallInst *cpuQuery(llvm::IRBuilder<> &B, bool XCR, llvm::Value *Leaf,
+                         llvm::Value *Subleaf = nullptr) {
+  auto *I32 = B.getInt32Ty();
+  auto *Result = llvm::StructType::get(
+      B.getContext(), XCR ? llvm::ArrayRef<llvm::Type *>({I32, I32})
+                          : llvm::ArrayRef<llvm::Type *>({I32, I32, I32, I32}));
+  auto *Type =
+      llvm::FunctionType::get(Result,
+                              XCR ? llvm::ArrayRef<llvm::Type *>({I32})
+                                  : llvm::ArrayRef<llvm::Type *>({I32, I32}),
+                              false);
+  auto *Asm = llvm::InlineAsm::get(
+      Type, XCR ? "xgetbv" : "cpuid",
+      XCR ? "={eax},={edx},{ecx},~{memory}"
+          : "={eax},={ebx},={ecx},={edx},{eax},{ecx},~{memory}",
+      true);
+  return XCR ? B.CreateCall(Asm, {Leaf}) : B.CreateCall(Asm, {Leaf, Subleaf});
+}
+
+TEST(LLVMCIntrinsicSemantics, ParameterNamesAreStableBeforeNarrowViews) {
+  class Names : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      FunctionSym F;
+      F.Addr = Address;
+      F.Name = "cached_parameters";
+      F.ReturnType = NdType::makeInt(8);
+      F.Params = {{"input-r8", NdType::makeInt(8)},
+                  {"input_r8", NdType::makeInt(8)},
+                  {"cpuInfo", NdType::makeInt(8)}};
+      return F;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  for (bool UseDebug : {false, true}) {
+    for (bool PreserveTypes : {false, true}) {
+      SCOPED_TRACE(UseDebug);
+      SCOPED_TRACE(PreserveTypes);
+      llvm::LLVMContext C;
+      llvm::Module M("cached-parameters", C);
+      M.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<> B(C);
+      auto *F = llvm::Function::Create(
+          llvm::FunctionType::get(
+              B.getInt64Ty(), {B.getInt64Ty(), B.getInt64Ty(), B.getInt64Ty()},
+              false),
+          llvm::GlobalValue::ExternalLinkage, "cached_parameters", M);
+      F->getArg(0)->setName("input-r8");
+      F->getArg(1)->setName("input_r8");
+      F->getArg(2)->setName("cpuInfo");
+      rewrite_source::setOriginalVA(*F, 0x1000);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", F));
+      auto Consume =
+          M.getOrInsertFunction("consume_byte", B.getInt64Ty(), B.getInt8Ty());
+      llvm::Value *Result = B.getInt64(0);
+      for (auto &Arg : F->args())
+        Result = B.CreateXor(
+            Result,
+            B.CreateCall(Consume, {B.CreateTrunc(&Arg, B.getInt8Ty())}));
+      B.CreateRet(Result);
+      ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X64;
+      Options.PreserveLLVMFunctionTypes = PreserveTypes;
+      std::string Text;
+      llvm::raw_string_ostream OS(Text);
+      ASSERT_TRUE(
+          LLVMCEmitter().emit(M, OS, Options, UseDebug ? &Debug : nullptr));
+      const std::string Program = Text + R"(
+uint64_t consume_byte(uint8_t x) { return (uint64_t)x * 1234567u; }
+int main(void) {
+  const uint64_t values[] = {0, 1, 255, 256, UINT64_MAX,
+                            UINT64_C(0xfedcba98765432a1)};
+  for (unsigned i = 0; i < 6; ++i)
+    for (unsigned j = 0; j < 6; ++j) {
+      uint64_t a = values[i], b = values[j], c = ~a;
+      uint64_t expected = consume_byte((uint8_t)a) ^ consume_byte((uint8_t)b) ^
+                          consume_byte((uint8_t)c);
+      if (cached_parameters(a, b, c) != expected) return 1;
+    }
+  return 0;
+}
+)";
+      for (const char *Level : {"-O0", "-O2"})
+        compileAndCheck(Program, false, {}, Level);
+    }
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, CachedDebugParameterFieldsKeepSignatureNames) {
+  class FieldNames : public NullDebugContext {
+  public:
+    TypeRef Record = NdType::makeStruct({NdType::makeInt(8)});
+    FieldNames() {
+      Record->SourceName = "ParameterRecord";
+      Record->FieldDisplayNames = {"value"};
+      Record->FieldDisplayOffsets = {0};
+      Record->FieldDisplayTypes = {NdType::makeInt(8)};
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      FunctionSym F;
+      F.Addr = Address;
+      F.Name = "read_parameter_field";
+      F.ReturnType = NdType::makeInt(8);
+      F.Params = {{"record-input", NdType::makePtr(Record)},
+                  {"record_input", NdType::makeInt(8)}};
+      return F;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  llvm::LLVMContext C;
+  llvm::Module M("cached-parameter-field", C);
+  M.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(C);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt64Ty(), {B.getPtrTy(), B.getInt64Ty()},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "read_parameter_field", M);
+  rewrite_source::setOriginalVA(*F, 0x1000);
+  B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", F));
+  B.CreateRet(
+      B.CreateXor(B.CreateLoad(B.getInt64Ty(), F->getArg(0)), F->getArg(1)));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(M, OS, Options, &Debug));
+  const std::string Main = R"(
+int main(void) {
+  ParameterRecord values[] = {{0}, {1}, {UINT64_MAX}, {UINT64_C(0xfedcba9876543210)}};
+  for (unsigned i = 0; i < 4; ++i)
+    for (unsigned j = 0; j < 4; ++j)
+      if (read_parameter_field(&values[i], values[j].value) !=
+          (values[i].value ^ values[j].value)) return 1;
+  return 0;
+}
+)";
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndCheck("#include <stdint.h>\n"
+                    "typedef struct { uint64_t value; } ParameterRecord;\n" +
+                        Text + Main,
+                    false, {}, Level);
+}
+
+void checkCPUArrays(bool XCR) {
+  {
+    SCOPED_TRACE(XCR);
+    llvm::LLVMContext C;
+    llvm::Module M("cpu-query-arrays", C);
+    M.setDataLayout("e-p:64:64");
+    M.setTargetTriple(llvm::Triple(llvm::sys::getDefaultTargetTriple()));
+    llvm::IRBuilder<> B(C);
+    auto *F = llvm::Function::Create(
+        llvm::FunctionType::get(
+            B.getVoidTy(),
+            {B.getInt32Ty(), B.getInt32Ty(), B.getPtrTy(), B.getInt32Ty()},
+            false),
+        llvm::GlobalValue::ExternalLinkage, "query_cpu", M);
+    F->getArg(3)->setName(XCR ? "xcr" : "cpuInfo");
+    auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
+    auto *First = llvm::BasicBlock::Create(C, "first", F);
+    auto *Second = llvm::BasicBlock::Create(C, "second", F);
+    auto *Join = llvm::BasicBlock::Create(C, "join", F);
+    B.SetInsertPoint(Entry);
+    auto *Initial = cpuQuery(B, XCR, F->getArg(0), F->getArg(1));
+    B.CreateCondBr(B.CreateICmpEQ(F->getArg(3), B.getInt32(0)), First, Second);
+    B.SetInsertPoint(First);
+    auto *A =
+        B.CreateExtractValue(cpuQuery(B, XCR, F->getArg(0), F->getArg(1)), 0);
+    B.CreateBr(Join);
+    B.SetInsertPoint(Second);
+    auto *D = B.CreateExtractValue(cpuQuery(B, XCR, F->getArg(0), F->getArg(1)),
+                                   XCR ? 1 : 3);
+    B.CreateBr(Join);
+    B.SetInsertPoint(Join);
+    auto *Selected = B.CreatePHI(B.getInt32Ty(), 2);
+    Selected->addIncoming(A, First);
+    Selected->addIncoming(D, Second);
+    const unsigned Fields = XCR ? 2 : 4;
+    for (unsigned I = 0; I < Fields; ++I)
+      B.CreateStore(B.CreateExtractValue(Initial, I),
+                    B.CreateGEP(B.getInt32Ty(), F->getArg(2), B.getInt32(I)));
+    B.CreateStore(Selected, B.CreateGEP(B.getInt32Ty(), F->getArg(2),
+                                        B.getInt32(Fields)));
+    B.CreateRetVoid();
+    ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    ASSERT_TRUE(LLVMCEmitter().emit(M, OS, Options));
+    const std::string Main = XCR ? R"(
+int main(void) {
+  unsigned a,b,c,d;
+  __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+  if (!(c & (1u << 27))) return 2; /* The host gate requires OSXSAVE. */
+  __asm__ volatile("xgetbv" : "=a"(a), "=d"(d) : "c"(0));
+  for (unsigned mode = 0; mode < 2; ++mode) {
+    uint32_t actual[3] = {0};
+    query_cpu(0, 0, actual, mode);
+    if (actual[0] != a || actual[1] != d || actual[2] != (mode ? d : a)) return 1;
+  }
+  return 0;
+}
+)"
+                                 : R"(
+int main(void) {
+  const unsigned queries[][2] = {{0,0}, {7,0}, {7,1}, {0x80000000,0}};
+  for (unsigned i = 0; i < 4; ++i) {
+    unsigned a,b,c,d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                     : "a"(queries[i][0]), "c"(queries[i][1]));
+    for (unsigned mode = 0; mode < 2; ++mode) {
+      uint32_t actual[5] = {0};
+      query_cpu(queries[i][0], queries[i][1], actual, mode);
+      if (actual[0] != a || actual[1] != b || actual[2] != c ||
+          actual[3] != d || actual[4] != (mode ? d : a)) return 1;
+    }
+  }
+  return 0;
+}
+)";
+    for (const char *Level : {"-O0", "-O2"})
+      compileAndCheck(Text + Main, false, {}, Level);
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, CPUArraysKeepDistinctNamesAcrossBlocks) {
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArch() !=
+      llvm::Triple::x86_64)
+    GTEST_SKIP() << "Native CPU queries require an x64 host";
+  checkCPUArrays(false);
+}
+
+TEST(LLVMCIntrinsicSemantics, XGETBVArraysKeepDistinctNamesAcrossBlocks) {
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArch() !=
+      llvm::Triple::x86_64)
+    GTEST_SKIP() << "Native CPU queries require an x64 host";
+  const auto Features = llvm::sys::getHostCPUFeatures();
+  if (!Features.lookup("xsave"))
+    GTEST_SKIP() << "Native XGETBV requires host OSXSAVE support";
+  checkCPUArrays(true);
+}
+
+TEST(LLVMCIntrinsicSemantics, CPUQueriesRejectChangedAssemblyContracts) {
+  for (bool XCR : {false, true})
+    for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
+      SCOPED_TRACE(XCR);
+      SCOPED_TRACE(Mutation);
+      llvm::LLVMContext C;
+      llvm::Module M("changed-cpu-query", C);
+      M.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<> B(C);
+      const unsigned Words = XCR ? 2 : 4;
+      llvm::SmallVector<llvm::Type *, 4> Fields(
+          Mutation == 0 ? Words - 1 : Words,
+          Mutation == 1 ? B.getInt64Ty() : B.getInt32Ty());
+      auto *Result = llvm::StructType::get(C, Fields, Mutation == 2);
+      llvm::SmallVector<llvm::Type *, 2> Inputs(
+          XCR ? 1 : 2, Mutation == 3 ? B.getInt64Ty() : B.getInt32Ty());
+      const std::string Mnemonic = XCR ? "xgetbv" : "cpuid";
+      std::string Constraints =
+          XCR ? "={eax},={edx},{ecx},~{memory}"
+              : "={eax},={ebx},={ecx},={edx},{eax},{ecx},~{memory}";
+      if (Mutation == 4)
+        Constraints += ",~{cc}";
+      auto *IA = llvm::InlineAsm::get(
+          llvm::FunctionType::get(Result, Inputs, false),
+          Mutation == 5 ? Mnemonic + "\n\tnop" : Mnemonic, Constraints,
+          Mutation != 6, Mutation == 7,
+          Mutation == 8 ? llvm::InlineAsm::AD_Intel : llvm::InlineAsm::AD_ATT);
+      auto *F = llvm::Function::Create(
+          llvm::FunctionType::get(B.getVoidTy(), Inputs, false),
+          llvm::GlobalValue::ExternalLinkage, "query_cpu", M);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", F));
+      llvm::SmallVector<llvm::Value *, 2> Args;
+      for (auto &Arg : F->args())
+        Args.push_back(&Arg);
+      B.CreateCall(IA, Args);
+      B.CreateRetVoid();
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X64;
+      std::string Text;
+      llvm::raw_string_ostream OS(Text);
+      EXPECT_THROW(LLVMCEmitter().emit(M, OS, Options), std::runtime_error);
+    }
+}
+
+TEST(LLVMCIntrinsicSemantics,
+     CPUQueryAggregateABIIsRefusedBeforeArrayProjection) {
+  for (bool XCR : {false, true}) {
+    llvm::LLVMContext C;
+    llvm::Module M("cpu-aggregate-return", C);
+    M.setDataLayout("e-p:64:64");
+    llvm::IRBuilder<> B(C);
+    auto *F = llvm::Function::Create(
+        llvm::FunctionType::get(B.getVoidTy(), {}, false),
+        llvm::GlobalValue::ExternalLinkage, "query_cpu", M);
+    B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", F));
+    auto *Query = cpuQuery(B, XCR, B.getInt32(0), B.getInt32(0));
+    auto Consume = M.getOrInsertFunction("consume_cpu_aggregate", B.getVoidTy(),
+                                         Query->getType());
+    B.CreateCall(Consume, {Query});
+    B.CreateRetVoid();
+    ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    EXPECT_THROW(LLVMCEmitter().emit(M, OS, Options), std::runtime_error);
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics,
+     HiddenResultAndThisNamesStayBoundToPhysicalArguments) {
+  class ResultNames : public NullDebugContext {
+  public:
+    bool Member = false;
+    TypeRef Record =
+        NdType::makeStruct({NdType::makeInt(8), NdType::makeInt(8)});
+    ResultNames() { Record->SourceName = "ResultRecord"; }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      FunctionSym F;
+      F.Name = "write_result";
+      F.Addr = Address;
+      F.ReturnType = Record;
+      if (Member)
+        F.Params.emplace_back("this", NdType::makePtr(NdType::makeInt(8)));
+      F.Params.emplace_back("result", NdType::makeInt(8));
+      return F;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  for (bool Member : {false, true})
+    for (bool Preserve : {false, true}) {
+      SCOPED_TRACE(Member);
+      SCOPED_TRACE(Preserve);
+      Debug.Member = Member;
+      llvm::LLVMContext C;
+      llvm::Module M("hidden-result-names", C);
+      M.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<> B(C);
+      llvm::SmallVector<llvm::Type *, 3> Inputs;
+      if (Member)
+        Inputs.push_back(B.getPtrTy());
+      Inputs.append({B.getPtrTy(), B.getInt64Ty()});
+      auto *F = llvm::Function::Create(
+          llvm::FunctionType::get(B.getPtrTy(), Inputs, false),
+          llvm::GlobalValue::ExternalLinkage, "write_result", M);
+      rewrite_source::setOriginalVA(*F, 0x1000);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", F));
+      auto *Output = F->getArg(Member ? 1 : 0);
+      auto *Value = F->getArg(Member ? 2 : 1);
+      B.CreateStore(Value, Output);
+      B.CreateStore(B.CreateNot(Value),
+                    B.CreateGEP(B.getInt64Ty(), Output, B.getInt64(1)));
+      B.CreateRet(Output);
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X64;
+      Options.Format = BinaryFormat::COFF;
+      Options.PreserveLLVMFunctionTypes = Preserve;
+      std::string Text;
+      llvm::raw_string_ostream OS(Text);
+      ASSERT_TRUE(LLVMCEmitter().emit(M, OS, Options, &Debug));
+      std::string Main = R"(
+int main(void) {
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(0xfedcba9876543210)};
+  for (unsigned i = 0; i < 4; ++i) {
+    ResultRecord actual = {0, 0};
+)";
+      Main += "    if (write_result(" + std::string(Member ? "0, " : "") +
+              "&actual, values[i]) != &actual || actual.first != values[i] || "
+              "actual.second != ~values[i]) return 1;\n  }\n return 0;\n}\n";
+      for (const char *Level : {"-O0", "-O2"})
+        compileAndCheck(
+            "#include <stdint.h>\n"
+            "typedef struct { uint64_t first, second; } ResultRecord;\n" +
+                Text + Main,
+            false, {}, Level);
+    }
+}
+
+TEST(LLVMCIntrinsicSemantics, DeadCPUIDRetainsNativeQueryAndBreakpointOrder) {
+  const llvm::Triple Host(llvm::sys::getDefaultTargetTriple());
+  if (!Host.isOSWindows() || Host.getArch() != llvm::Triple::x86_64)
+    GTEST_SKIP()
+        << "This native event observer uses Windows x64 single stepping";
+  llvm::LLVMContext C;
+  llvm::Module M("ordered-cpu-query", C);
+  M.setDataLayout("e-p:64:64");
+  M.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::IRBuilder<> B(C);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt32Ty(), {}, false),
+      llvm::GlobalValue::ExternalLinkage, "query_with_breakpoint", M);
+  B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", F));
+  cpuQuery(B, false, B.getInt32(0), B.getInt32(0));
+  auto *Break =
+      llvm::InlineAsm::get(llvm::FunctionType::get(B.getVoidTy(), {}, false),
+                           "int3", "~{memory}", true);
+  B.CreateCall(Break);
+  B.CreateRet(B.CreateExtractValue(
+      cpuQuery(B, false, B.getInt32(7), B.getInt32(1)), 0));
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(M, OS, Options));
+  const std::string Main = R"(
+#include <windows.h>
+static volatile unsigned queries, breaks, queries_at_break, bad, steps, active;
+static unsigned leaves[8], subleaves[8];
+static LONG CALLBACK observe(EXCEPTION_POINTERS *info) {
+  CONTEXT *c = info->ContextRecord;
+  DWORD code = info->ExceptionRecord->ExceptionCode;
+  if (code == EXCEPTION_BREAKPOINT) {
+    ++breaks; queries_at_break = queries;
+    if (*(const unsigned char *)(uintptr_t)c->Rip == 0xcc) ++c->Rip;
+  } else if (code != EXCEPTION_SINGLE_STEP) return EXCEPTION_CONTINUE_SEARCH;
+  if (!active) { c->EFlags &= ~256u; return EXCEPTION_CONTINUE_EXECUTION; }
+  /* Windows clears TF when delivering an exception. Rearm each continuation. */
+  if (++steps > 100000) { bad = 1; c->EFlags &= ~256u; }
+  else c->EFlags |= 256u;
+  const unsigned char *pc = (const unsigned char *)(uintptr_t)c->Rip;
+  if (pc[0] == 0x0f && pc[1] == 0xa2) {
+    if (queries < 8) { leaves[queries] = (unsigned)c->Rax;
+                       subleaves[queries] = (unsigned)c->Rcx; }
+    ++queries;
+  }
+  return EXCEPTION_CONTINUE_EXECUTION;
+}
+__attribute__((noinline)) static unsigned trace(unsigned (*fn)(void)) {
+  active = 1;
+  __asm__ volatile("pushfq; orq $256,(%%rsp); popfq" ::: "memory", "cc");
+  unsigned result = fn();
+  active = 0;
+  __asm__ volatile("pushfq; andq $-257,(%%rsp); popfq" ::: "memory", "cc");
+  return result;
+}
+int main(void) {
+  /* push rbx; CPUID(0,0); INT3; CPUID(7,1); pop rbx; ret */
+  const unsigned char bytes[] = {0x53,0x31,0xc0,0x31,0xc9,0x0f,0xa2,0xcc,
+    0xb8,7,0,0,0,0xb9,1,0,0,0,0x0f,0xa2,0x5b,0xc3};
+  void *native = VirtualAlloc(0, sizeof(bytes), MEM_COMMIT|MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  if (!native) return 10;
+  __builtin_memcpy(native, bytes, sizeof(bytes));
+  FlushInstructionCache(GetCurrentProcess(), native, sizeof(bytes));
+  void *handler = AddVectoredExceptionHandler(1, observe);
+  if (!handler) return 11;
+  unsigned reference = trace((unsigned (*)(void))native);
+  if (bad || queries != 2 || breaks != 1 || queries_at_break != 1 ||
+      leaves[0] != 0 || subleaves[0] != 0 || leaves[1] != 7 || subleaves[1] != 1) return 1;
+  queries = breaks = queries_at_break = bad = steps = 0;
+  unsigned actual = trace(query_with_breakpoint);
+  RemoveVectoredExceptionHandler(handler);
+  VirtualFree(native, 0, MEM_RELEASE);
+  if (bad || queries != 2 || breaks != 1 || queries_at_break != 1 ||
+      leaves[0] != 0 || subleaves[0] != 0 || leaves[1] != 7 || subleaves[1] != 1) return 2;
+  return actual != reference;
+}
+)";
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndCheck(Text + Main, false, {}, Level);
 }
 
 } // namespace

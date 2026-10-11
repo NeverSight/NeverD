@@ -233,6 +233,7 @@ void KernelModel::retireThreadIfUnreferenced(uint64_t Object) {
 void KernelModel::retireBorrowedThread(uint64_t Key) {
   Scheduler.forgetThreadPriority(Key);
   ApcStates.erase(Key);
+  SystemAffinityThreads.erase(Key);
   if (const auto Object = CurrentThreadObjects.find(Key);
       Object != CurrentThreadObjects.end()) {
     FreedRanges.emplace(Object->second, profile::ProcessTokenSize);
@@ -556,6 +557,7 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
       return E;
   }
   ApcStates.erase(ID);
+  SystemAffinityThreads.erase(ID);
   if (Invocation.Kind == KernelScheduler::CallbackKind::SystemThread) {
     SystemThreads.at(Invocation.Object).Exited = true;
     SystemThreads.at(Invocation.Object).Terminating = false;

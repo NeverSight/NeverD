@@ -172,6 +172,8 @@ READ／WRITE／IOCTL 可宣告 `interrupt_events`，每項指定 `after_100ns`�
 
 `IoGetDmaAdapter` 接受 Internal 匯流排主控的歷史 `DEVICE_DESCRIPTION` 版本 0／1 欄位，並發布版本一 `DMA_ADAPTER` 及實際 104 位元組 `DMA_OPERATIONS` 表。版本 2／3 探查傳回 NULL，不讀取現代描述的尾端。每個間接方法繫結至確切有效的 adapter，與核心匯入分開。已實作 `AllocateCommonBuffer`、`FreeCommonBuffer`、`GetDmaAlignment`、`GetScatterGatherList`、`PutScatterGatherList`、`PutDmaAdapter`、`AllocateAdapterChannel`、`MapTransfer`、`FlushAdapterBuffers` 與 `FreeMapRegisters`。`FreeAdapterChannel` 和 `ReadDmaCounter` 仍是具名拒絕項目，因為此設定檔沒有從屬／系統 DMA 控制器。common buffer 配置／釋放及對齊查詢要求 PASSIVE_LEVEL；Get／PutScatterGatherList 要求 DISPATCH_LEVEL，adapter 釋放允許最高 DISPATCH_LEVEL。x64 忽略 `CacheEnabled`。不支援的版本探查、不相容的宣告能力與有文件依據的配置不足傳回 NULL；格式錯誤、未建模介面選擇及後端失敗仍明確報錯。
 
+由載入器擁有的映像區間支援的系統 MDL 別名允許存取所描述 4 KiB 頁中的已知映像位元組。即使底層頁面已經映射，存取宣告映像範圍之外的填補位元組也會失敗。`ByteOffset` 和 `ByteCount` 仍表示邏輯緩衝區範圍，並非頁內 CPU 權限邊界。範圍之外的映像位元組與原始檢視共用，保護和解除映射則作用於完整映射。物件儲存仍保留模型對填補區的範圍限制。
+
 `KernelPhysicalMemory` 最多為既有 RAM 指派 16384 個 4096 位元組的模型實體頁面。CPU 虛擬位址、實體頁面身分與裝置邏輯位址彼此不同。已建立 MDL 的 PFN 陣列以唯讀方式公開共用身分；未建立的描述元沒有可用 PFN。相鄰小配置可共用 PFN，但保留獨立位元組範圍與生命週期。common buffer、pool 與請求緩衝區使用 `GuestMemory` 原已擁有的同一份位元組，不另建 DMA 副本。有效 SG 映射會固定其確切資料範圍與描述元；完成、pool／MDL 釋放和拆除均先檢查仍有效的依賴。解除直接 MDL 映射只撤銷 CPU 系統映射，DMA 仍能存取其鎖定儲存。`DmaWritable` 將寫入鎖定契約與 CPU 映射權限分開記錄：裝置寫入要求直接 READ／OUT_DIRECT 或可寫的非分頁儲存；WRITE／IN_DIRECT 不會因 CPU 映射可寫而取得此權限。
 
 `GetScatterGatherList` 依 MDL 原始範圍驗證 CurrentVa／Length，在既有儲存上建立邏輯頁面片段。map register 可用時，真正的四引數 void `AdapterListControl` 可在 API 返回前直接執行；否則保留資料／描述元與回呼名額，等待 PDO 的 FIFO 取得資源。本設定沒有 StartIo 所有權，所以回呼第二個 IRP 引數為 NULL。回呼返回不會釋放映射。`PutScatterGatherList` 可在回呼內執行；Put 後驅動程式可完成請求並釋放最後一個 adapter，而回呼續接與裝置參考持續至返回。釋放 common buffer 必須提供原始 adapter、長度、邏輯位址及 CPU 位址。工作階段內不重用邏輯位址，重新啟動也一樣。缺乏真正生產者的資源等待會明確停滯，不虛構完成或期限。 有效 SG 映射持有裝置資料所有權期間，CPU 必須先 Put 才能存取資料；仍在等待 map register 的回呼尚未交出位元組的裝置所有權。
@@ -358,6 +360,7 @@ neither 要求可宣告 `user_buffers`（`id`、`size`、選用 `input`／`acces
 | `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | 常駐的 KMUTEX 依邏輯執行緒持有，支援跨巢狀回呼和 SEH 的遞迴取得；KeReleaseMutex 回傳先前的有號訊號狀態，要求持有者與相符的 DISPATCH_LEVEL 取得情境，且僅接受 Wait=FALSE。持有期間禁止最外層返回、重新初始化或釋放儲存。非持有者釋放會觸發 `STATUS_MUTANT_NOT_OWNED`。 |
 | `PsCreateSystemThread`, `PsTerminateSystemThread`, `ObReferenceObjectByHandle`, `ObfDereferenceObject`, `ZwClose` | 系統處理程序中的有界執行緒在 PASSIVE_LEVEL 執行。控制代碼與不透明執行緒物件的參照各自維持生命週期；PsTerminateSystemThread 不返回客體程式碼，並使可等待的執行緒物件進入訊號狀態。APC 傳遞、處理程序優先順序類別及具型別的物件參照尚未建模。 |
 | `KeSetPriorityThread`, `KeQueryPriorityThread` | 在 `PASSIVE_LEVEL` 存取執行階段優先順序；設定接受 1..31 並傳回原值，確定性初始值為 8，要求已知執行緒物件。`scheduling` 啟用優先順序排程；尚未支援動態提升與處理程序優先順序類別。 [driver-scheduling.md](driver-scheduling.md) |
+| `KeQueryActiveProcessors`, `KeSetSystemAffinityThread`, `KeRevertToUserAffinityThread` | 群組 0 只有一個處理器：`KeQueryActiveProcessors` 在任意有效 IRQL 傳回遮罩 `1`。舊式親和性設定／還原對在 IRQL <= DISPATCH_LEVEL 接受遮罩 `1`，跨暫停和巢狀呼叫追蹤邏輯執行緒所有權，並要求外層傳回前還原。其他遮罩和沒有對應設定的還原會明確失敗。這些依賴環境的呼叫保留 UNPACK 還原相依性。 |
 | `KeEnterCriticalRegion`, `KeLeaveCriticalRegion`, `KeEnterGuardedRegion`, `KeLeaveGuardedRegion`, `KeAreApcsDisabled`, `KeAreAllApcsDisabled` | 依執行緒追蹤可巢狀的 APC 停用狀態。臨界區及持有的 KMUTEX 停用一般核心 APC；保護區和 IRQL >= APC_LEVEL 停用所有 APC。系統執行緒啟動時處於一層臨界區。未配對的離開及帶有未平衡狀態返回都會失敗；尚未實作 APC 投遞。 |
 | `KeWaitForSingleObject` | 單個已初始化的事件、計時器、號誌或互斥體；非警示 `KernelMode`、原因 `Executive`；零逾時輪詢、有限相對／絕對或無限等待；非零／無限等待要求 IRQL <= APC_LEVEL |
 | `KeWaitForMultipleObjects` | 非警示式 `KernelMode`／`Executive` 下對 1..64 個物件執行 `WaitAll`／`WaitAny`；超過三個須提供非分頁 `KWAIT_BLOCK`。原子取得、陣列索引結果、執行緒參考與逾時釋放見[驅動程式排程](driver-scheduling.md)。 |
@@ -366,7 +369,7 @@ neither 要求可宣告 `user_buffers`（`id`、`size`、選用 `input`／`acces
 | `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 執行完成展開，支援暫停／繼續；僅在最終展開邊界釋放 IRP、MDL 與緩衝區 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的客體緩衝區操作，每次呼叫最多 1 MiB；要求不重疊的複製 API 會拒絕重疊 |
 
-`MmProbeAndLockPages` 支援在 IRQL <= APC_LEVEL 下，以 `KernelMode` 鎖定輸入驅動程式映像中由載入器擁有的單一連續區間。映像頁必須可讀，並受實體頁配額限制。模型已持有私有且駐留的映像後備儲存：即使原映像檢視唯讀，`IoWriteAccess` 和 `IoModifyAccess` 也允許可寫 MDL 別名；`IoReadAccess` 仍只允許唯讀別名。原映像保護屬性保持不變。映像空洞和無關對映不屬於該所有權；低於使用者位址邊界的映像也透過所有權識別。鎖定後必須解鎖並釋放描述元。MDL 呼叫保留既有 UNPACK 還原相依性；模型中的映像存取成功不代表驅動程式已可攜還原。
+`MmProbeAndLockPages` 支援在 IRQL <= APC_LEVEL 下，以 `KernelMode` 鎖定輸入驅動程式映像中由載入器擁有的單一連續區間。映像頁必須可讀，並受實體頁配額限制。模型已持有私有且駐留的映像後備儲存：即使原映像檢視唯讀，`IoWriteAccess` 和 `IoModifyAccess` 也允許可寫 MDL 別名；`IoReadAccess` 仍只允許唯讀別名。原映像保護屬性保持不變。映像空洞和無關對映不屬於該所有權；低於使用者位址邊界的映像也透過所有權識別。鎖定後必須解鎖並釋放描述元。載入器擁有的映像頁上，暫時 MDL 的全部別名解除、全部鎖釋放且全部描述元釋放後，不再額外阻止還原。此契約允許未指定位址的核心模式快取別名。存活 MDL、其他所有權或對映類型，以及客體對實體 PFN 身分的讀取仍保留還原相依性；模型化的複製、移動和比較服務讀取也計入。
 
 `KernelDispatcher` 以帶正負號的 32 位元 `LONG` 解碼號誌的 `Count`、`Limit` 與 `Adjustment`，以 32 位元 `ULONG` 解碼互斥體的 `Level`，以 8 位元 `BOOLEAN` 解碼 `Wait`，並依照 [Windows x64 ABI](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170) 忽略暫存器中未定義的高位元。有效位元中的無效值與號誌溢位仍在修改物件狀態前被拒絕。
 
@@ -471,7 +474,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v95`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v100`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 
@@ -591,5 +594,7 @@ CPU0 顯式搶占、虛擬時鐘語義與目前邊界見[驅動程式排程](dri
 `KeQueryPerformanceCounter` 傳回排程器共用的 100 ns 時鐘值，固定頻率為每秒 10,000,000 次。選用輸出指標會檢查完整八位元組寫入權限與物件生命週期。呼叫支援所有有效 x64 IRQL。協作模式只在既有排程邊界推進時間；指令時鐘模式沿用設定的計時方式。讀取計數器不會建立第二個時鐘或自行推進時間。這是確定性的執行設定，不是主機硬體量測。獨立編譯的執行階段樣本在原始及重新定位位址上檢查靜態／動態識別、頻率與單調性，並由原生 CPU 後端執行。
 
 `RDTSC` 與 `RDTSCP` 和 `KeQueryPerformanceCounter` 共用 10 MHz 排程時鐘。`RDTSCP` 在 ECX 中傳回單一模型處理器的編號零。EAX/EDX（以及 RDTSCP 的 ECX）清除高 32 位元，其他暫存器與旗標保持不變。協作模式下讀取不推進時間；明確指令排程模式在計入本條已允許指令後讀取時間，結果不依賴時間片長度。溢位會在寫入暫存器結果前停止，指令預算與觀察器停止仍有效。此設定不測量主機 TSC 頻率，也不揭露主機處理器身分；MSR 存取、RDPMC 與其他未建模 CPU 查詢仍不支援。
+
+透過 `KeQueryPerformanceCounter`、`RDTSC` 或 `RDTSCP` 讀取時鐘會保留明確的驅動程式恢復相依性。擷取的計數器與頻率值尚無面向新核心環境的重新繫結契約。預設恢復傳回 `unsupported_state`；`snapshot_only` 保留此診斷。
 
 `KernelModuleImages` 根據 `KernelExportRegistry` 產生可讀的 PE 標頭和匯出表；靜態匯入、動態查找和模組列舉共用相同位址。提供者程式碼保持不透明，清單描述的是模擬環境，而非主機核心。兩個輸出皆在寫入前檢查，包括集區記憶體生命週期與重疊。Nt 查詢要求已知的核心 previous-mode；Zw 查詢採用核心呼叫契約。完整模組查詢會保留明確的復原相依性，即使其緩衝區已釋放；提供者映像指標也以借用狀態追蹤。`KernelExportTests.cpp` 檢查 PE 解析、權限、ABI 欄位、寫入拒絕和復原相依性；原創編譯執行階段測試程式在 CPU 後端走訪這些匯出表。

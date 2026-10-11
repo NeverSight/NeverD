@@ -380,6 +380,54 @@ std::string renderNeonShiftLeftUnsigned(Intrinsic Id,
          std::to_string(Shift) + "))";
 }
 
+/// A polynomial multiply (NeonIntrinsicSpellings.def): bytes lane by lane,
+/// byte pairs widened to 16 bits, or one 64-bit pair to 128 bits.
+std::string renderNeonPolyMultiply(Intrinsic Id,
+                                   const std::vector<std::string> &Ops,
+                                   uint16_t ResultBytes, bool &HasCIntrinsics) {
+  struct Operation {
+    Intrinsic Id;
+    const char *Base;
+    bool Long;
+    bool ElementWidthOperand;
+  };
+  static constexpr Operation Operations[] = {
+#define NEVERD_NEON_POLY_MULTIPLY(ID, Base, Long, ElementWidthOperand)         \
+  {Intrinsic::ID, Base, Long, ElementWidthOperand},
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+  };
+  const auto *Op = llvm::find_if(
+      Operations, [&](const Operation &Entry) { return Entry.Id == Id; });
+  if (Op == std::end(Operations) ||
+      Ops.size() != (Op->ElementWidthOperand ? 3u : 2u))
+    return {};
+  unsigned ElementBytes = 1;
+  if (Op->ElementWidthOperand &&
+      llvm::StringRef(Ops[2]).getAsInteger(10, ElementBytes))
+    return {};
+  const std::string Raw = typeToC(NdType::makeInt(ResultBytes, false));
+  if (!Op->Long) {
+    if (ResultBytes != 8 && ResultBytes != 16)
+      return {};
+    const char *Vector = ResultBytes == 16 ? "poly8x16_t" : "poly8x8_t";
+    HasCIntrinsics = true;
+    return "__builtin_bit_cast(" + Raw + ", " + Op->Base +
+           (ResultBytes == 16 ? "q" : "") + "_p8(" +
+           neonValue(Vector, Raw.c_str(), Ops[0]) + ", " +
+           neonValue(Vector, Raw.c_str(), Ops[1]) + "))";
+  }
+  if (ResultBytes != 16 || (ElementBytes != 1 && ElementBytes != 8))
+    return {};
+  const std::string Half = typeToC(NdType::makeInt(8, false));
+  HasCIntrinsics = true;
+  if (ElementBytes == 8)
+    return "__builtin_bit_cast(" + Raw + ", " + Op->Base + "_p64((poly64_t)(" +
+           Ops[0] + "), (poly64_t)(" + Ops[1] + ")))";
+  return "__builtin_bit_cast(" + Raw + ", " + Op->Base + "_p8(" +
+         neonValue("poly8x8_t", Half.c_str(), Ops[0]) + ", " +
+         neonValue("poly8x8_t", Half.c_str(), Ops[1]) + "))";
+}
+
 /// A saturating doubling multiply (NeonIntrinsicSpellings.def); its last
 /// operand is the result's element width.
 std::string renderNeonDoublingMultiply(Intrinsic Id,
@@ -900,6 +948,10 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
 #define NEVERD_NEON_DOUBLING_MULTIPLY(ID, Base, Widening) case I::ID:
 #include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
     return renderNeonDoublingMultiply(Id, Ops, ResultBytes, HasCIntrinsics);
+#define NEVERD_NEON_POLY_MULTIPLY(ID, Base, Long, ElementWidthOperand)         \
+  case I::ID:
+#include "neverd/backend/c/render/HighC/NeonIntrinsicSpellings.def"
+    return renderNeonPolyMultiply(Id, Ops, ResultBytes, HasCIntrinsics);
   default:
     return {};
   }

@@ -877,7 +877,7 @@ TEST(RegistrationTryLevel, CxxCallbackRolesSurviveModuleFunctionDiscovery) {
       llvm::support::endian::write32le(Text.data() + 0xe1, uint32_t(-0x45));
       Text[0xe5] = 0xc3;
     }
-    const auto Roles = coff_loader::getCheckedX86CxxCallbackPointerRoles(Img);
+    const auto Roles = coff_loader::getCheckedX86RegistrationPointerRoles(Img);
     ASSERT_TRUE(Roles);
     EXPECT_EQ(Roles->Sources,
               (std::map<va_t, va_t>{{kRData + 0x6c, kText + 0xa0}}));
@@ -1023,7 +1023,8 @@ TEST(RegistrationTryLevel,
   }
 }
 
-TEST(RegistrationTryLevel, CxxPointerRolesRequireTheExactReparsedGraph) {
+TEST(RegistrationTryLevel,
+     RegistrationPointerRolesRequireTheExactReparsedGraph) {
   for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
     auto Img = makeCxxContinuationImage();
     auto &EH = Img.ExceptionMetadata.Functions.front();

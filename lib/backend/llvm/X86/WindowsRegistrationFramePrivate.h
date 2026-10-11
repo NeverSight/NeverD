@@ -8,6 +8,7 @@
 #define NEVERD_BACKEND_LLVM_X86_WINDOWSREGISTRATIONFRAMEPRIVATE_H
 
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
+#include "neverd/backend/llvm/X86RegistrationCatchStack.h"
 
 #include <cstddef>
 #include <map>
@@ -48,7 +49,8 @@ llvm::Error checkPrivateStack(
     const std::map<llvm::StoreInst *, X86RegistrationRootKind> &Seeds,
     X86RegistrationCallbackFrame &Frame,
     std::set<llvm::AllocaInst *> &PrivateSlots, size_t &WorkUsed,
-    const std::set<llvm::StoreInst *> *SourceStores = nullptr);
+    const std::set<llvm::StoreInst *> *SourceStores = nullptr,
+    llvm::ArrayRef<X86RegistrationCatchStackResume> Resumes = {});
 llvm::Expected<CallbackPlan>
 prepareCallback(llvm::Function &Parent,
                 const X86RegistrationCallbackRequest &Request,

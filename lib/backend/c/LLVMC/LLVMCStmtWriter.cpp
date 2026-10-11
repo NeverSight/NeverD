@@ -3925,6 +3925,44 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
         OS << "(void)" << Expression << ";\n";
       return true;
     }
+    if (isX86FPPackedConvertStateIntrinsic(Id)) {
+      const bool Memory = Id == Intrinsic::X86FPPackedConvertMemoryState;
+      const std::string Source =
+          Memory ? "(void*)(uintptr_t)(" +
+                       integerPointerOperandStr(Call.getArgOperand(0)) + ")"
+                 : "(" + x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) +
+                       ")__builtin_bit_cast(" +
+                       x86FPStateRawCType(
+                           std::max(16u, x86FPStateSourceBytes(Bytes))) +
+                       ", " + valueStr(Call.getArgOperand(0)) + ")";
+      const std::string Expression = Helper->second + "(" + Source +
+                                     ", (void*)" +
+                                     valueStr(Call.getArgOperand(1)) + ")";
+      if (!Call.use_empty())
+        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Call.getType())
+           << ", " << Expression << ");\n";
+      else
+        OS << "(void)" << Expression << ";\n";
+      return true;
+    }
+    if (isX86FPScalarConvertStateIntrinsic(Id)) {
+      const bool Memory = Id == Intrinsic::X86FPScalarConvertMemoryState;
+      const std::string Source =
+          Memory ? "(void*)(uintptr_t)(" +
+                       integerPointerOperandStr(Call.getArgOperand(1)) + ")"
+                 : "__builtin_bit_cast(" +
+                       x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ", " +
+                       valueStr(Call.getArgOperand(1)) + ")";
+      const std::string Expression = Helper->second + "(" + Source +
+                                     ", (void*)" +
+                                     valueStr(Call.getArgOperand(2)) + ")";
+      if (!Call.use_empty())
+        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Call.getType())
+           << ", " << Expression << ");\n";
+      else
+        OS << "(void)" << Expression << ";\n";
+      return true;
+    }
     if (isX86FPConversionStateIntrinsic(Id)) {
       const std::string Expression = Helper->second + "(" + BitcastInput(0) +
                                      ", (void*)" +

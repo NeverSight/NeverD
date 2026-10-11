@@ -48,17 +48,17 @@ bool RegistrationStateSolver::initializeContracts() {
     for (const auto &Callee : *Callees) {
       const bool Leaf =
           Callee.CalleeKind == RegistrationCalleeFrameContract::Kind::Leaf;
-      const bool Throw = Callee.CalleeKind ==
-                         RegistrationCalleeFrameContract::Kind::PrivateThrow;
+      const bool Throw = Callee.isThrow();
       if (!charge(1) || !Callee.Target || Callee.Target > UINT32_MAX ||
           Callee.StackPopBytes || (!Leaf && !Throw) ||
           Callee.DoesNotReturn != Throw ||
-          (Leaf && (Callee.ThrownTypeVA || Callee.ThrownObjectSize)) ||
-          (Throw &&
+          ((Leaf || Callee.isRethrow() || Callee.isRuntimeThrow()) &&
+           (Callee.ThrownTypeVA || Callee.ThrownObjectSize)) ||
+          (Throw && (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty())) ||
+          (Throw && !Callee.isRethrow() && !Callee.isRuntimeThrow() &&
            (!Callee.ThrownTypeVA || Callee.ThrownTypeVA > UINT32_MAX ||
             !Callee.ThrownObjectSize ||
-            Callee.ThrownObjectSize > limits::kMaxRegistrationEHStateWork ||
-            !Callee.ECXReads.empty() || !Callee.ECXWrites.empty())) ||
+            Callee.ThrownObjectSize > limits::kMaxRegistrationEHStateWork)) ||
           !validObjects(Callee.ECXReads) || !validObjects(Callee.ECXWrites) ||
           !validImageRanges(Callee.ImageReads) ||
           !validImageRanges(Callee.ImageWrites) ||
@@ -67,19 +67,37 @@ bool RegistrationStateSolver::initializeContracts() {
         Result.Diagnostics.push_back("registration callee contract is invalid");
         return false;
       }
+      if (!Callee.isRuntimeThrow() && !Callee.RuntimeThrowInfos.empty())
+        return false;
+      va_t Previous = 0;
+      for (const auto &Info : Callee.RuntimeThrowInfos) {
+        if (!charge(1) || Info.Address <= Previous ||
+            Info.Address > UINT32_MAX || !Info.TypeDescriptorVA ||
+            Info.TypeDescriptorVA > UINT32_MAX || !Info.ObjectSize ||
+            Info.ObjectSize > UINT16_MAX)
+          return false;
+        Previous = Info.Address;
+      }
     }
     Result.CalleeContracts = *Callees;
   }
   if (CheckRuntimeObjects) {
     std::map<va_t, uint32_t> Widths;
-    for (const auto &Callee : Result.CalleeContracts)
+    auto RecordWidth = [&](va_t Type, uint32_t Width) {
+      const auto [It, New] = Widths.emplace(Type, Width);
+      if (!New && It->second != Width)
+        It->second = 0;
+    };
+    for (const auto &Callee : Result.CalleeContracts) {
       if (Callee.CalleeKind ==
-          RegistrationCalleeFrameContract::Kind::PrivateThrow) {
-        auto [It, New] =
-            Widths.emplace(Callee.ThrownTypeVA, Callee.ThrownObjectSize);
-        if (!New && It->second != Callee.ThrownObjectSize)
-          It->second = 0;
+          RegistrationCalleeFrameContract::Kind::PrivateThrow)
+        RecordWidth(Callee.ThrownTypeVA, Callee.ThrownObjectSize);
+      for (const auto &Info : Callee.RuntimeThrowInfos) {
+        if (!charge(1))
+          return false;
+        RecordWidth(Info.TypeDescriptorVA, Info.ObjectSize);
       }
+    }
     for (uint32_t I = 0; I < EH.Cxx->TryBlocks.size(); ++I)
       for (uint32_t J = 0; J < EH.Cxx->TryBlocks[I].Handlers.size(); ++J) {
         if (!charge(1))
@@ -108,7 +126,6 @@ bool RegistrationStateSolver::initializeContracts() {
       return false;
     }
     for (const auto &Cleanup : *Cleanups) {
-      const auto &Leaf = Cleanup.Leaf;
       if (!charge(1) || Cleanup.ActionState >= EH.Cxx->UnwindMap.size() ||
           EH.Cxx->UnwindMap[Cleanup.ActionState].Kind !=
               CxxUnwindAction::ActionKind::Direct ||
@@ -116,18 +133,27 @@ bool RegistrationStateSolver::initializeContracts() {
           Cleanup.RelayTarget !=
               EH.Cxx->UnwindMap[Cleanup.ActionState].ActionVA ||
           !Cleanup.RelayTarget || Cleanup.RelayTarget > UINT32_MAX ||
-          !Leaf.Target || Leaf.Target > UINT32_MAX ||
-          Leaf.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf ||
-          Leaf.StackPopBytes || Leaf.DoesNotReturn || Leaf.ThrownTypeVA ||
-          Leaf.ThrownObjectSize || !Leaf.CallerPCWrites.empty() ||
-          !validObjects(Leaf.ECXReads) || !validObjects(Leaf.ECXWrites) ||
-          !validImageRanges(Leaf.ImageReads) ||
-          !validImageRanges(Leaf.ImageWrites) ||
+          Cleanup.Calls.empty() ||
+          Cleanup.Calls.size() > limits::kMaxRegistrationEHRecords ||
           !CleanupIndices.emplace(Cleanup.ActionState, CleanupIndices.size())
                .second) {
         Result.Diagnostics.push_back(
             "registration cleanup contract is invalid");
         return false;
+      }
+      for (const auto &Call : Cleanup.Calls) {
+        const auto &Leaf = Call.Leaf;
+        if (!charge(1) || !Leaf.Target || Leaf.Target > UINT32_MAX ||
+            Leaf.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf ||
+            Leaf.StackPopBytes || Leaf.DoesNotReturn || Leaf.ThrownTypeVA ||
+            Leaf.ThrownObjectSize || !Leaf.RuntimeThrowInfos.empty() ||
+            !Leaf.CallerPCWrites.empty() || !validObjects(Leaf.ECXReads) ||
+            !validObjects(Leaf.ECXWrites) ||
+            !validImageRanges(Leaf.ImageReads) ||
+            !validImageRanges(Leaf.ImageWrites)) {
+          Result.Diagnostics.push_back("registration cleanup call is invalid");
+          return false;
+        }
       }
     }
     Result.CleanupContracts = *Cleanups;

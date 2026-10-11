@@ -5,8 +5,8 @@
 //===----------------------------------------------------------------------===//
 //
 // System V x86-64 passes the seventh and later integer arguments on the
-// stack.  Each kernel is decompiled to HighC and run on the host against its
-// own C.
+// stack, and a callee can come from a stack slot.  Each kernel is decompiled
+// to HighC and run on the host against its own C.
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,4 +39,30 @@ static unsigned ma(unsigned a, unsigned b, unsigned c, unsigned d, unsigned e,
 }
 )C",
                             "manyarg", {"manyarg", "ma"}, {-3, 0, 1, 77});
+}
+
+// `cmove` picks which of two stack slots the tail call loads its callee
+// from, so the stores that fill both slots are read through that choice.
+TEST_F(X86_64_CallAbi, ACalleePickedFromTwoStackSlotsIsTheStoredOne) {
+  expectHighCRunsLikeSource({"-target", "x86_64-linux-gnu"}, R"C(
+static int pick_p(int) __attribute__((noinline));
+static int pick_q(int) __attribute__((noinline));
+typedef int (*pick_fn)(int);
+int pick(int a) {
+  volatile pick_fn s0 = pick_p, s1 = pick_q;
+  pick_fn fp = (a & 1) ? s1 : s0;
+  return fp(a * 3 + 1);
+}
+static int pick_p(int x) {
+  unsigned h = (unsigned)x;
+  for (unsigned i = 0; i < 6; i++)
+    h = h * 131u + i;
+  return (int)h;
+}
+static int pick_q(int x) {
+  return (int)(((unsigned)x * 2654435761u) ^ ((unsigned)x >> 7));
+}
+)C",
+                            "pick", {"pick", "pick_p", "pick_q"},
+                            {-3, 0, 1, 2, 77});
 }

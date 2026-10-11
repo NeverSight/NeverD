@@ -933,6 +933,7 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
 
   constexpr uint32_t kMaskDomainResolverDepthLimit =
       limits::kMaxJumpTableLargeExpressionRoleResolverDepth;
+  ResolverQueryScope QueryScope(*this);
   auto matchForTargets =
       [&](const std::vector<JumpTableValueQuery> &Queries,
           const std::vector<va_t> *Targets, size_t *SharedBudget,
@@ -943,7 +944,8 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
             SharedBudget, limits::kMaxJumpTableMaskMatchEvidenceWork,
             /*CandidateBranchesSharingTargets=*/nullptr,
             /*QueryUnsignedFeasibleMasks=*/nullptr,
-            kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides);
+            kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides,
+            /*UseGroupContext=*/true, &QueryScope);
       };
   auto matchAtUses = [&](const std::vector<JumpTableValueQuery> &Queries,
                          bool *AnalysisComplete = nullptr,
@@ -1769,7 +1771,8 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
               Queries, nullptr, &QueryComplete, Rec.Addr, Targets,
               EvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
               SharedTargetBranches, &FeasibleMasks,
-              kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides);
+              kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides,
+              /*UseGroupContext=*/true, &QueryScope);
           if (!consumeBudgetProducts({{QueryCount, 2}}))
             return std::nullopt;
           if (Matches.size() != Queries.size() ||

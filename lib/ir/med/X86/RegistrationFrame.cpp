@@ -36,6 +36,11 @@ bool hasValidRegistrationRootShape(const MedOp &Op) {
   case MedOp::RegistrationRootKind::CallbackStackPointer:
     return Op.Output.RegOff == TRI.StackPointer &&
            Op.RegistrationStackOffset == 0;
+  case MedOp::RegistrationRootKind::RestoredCallbackStackPointer:
+    return Op.Output.RegOff == TRI.StackPointer &&
+           Op.RegistrationStackOffset <= 0 &&
+           Op.RegistrationStackOffset >=
+               -int64_t(limits::kMaxRegistrationEHStateWork);
   case MedOp::RegistrationRootKind::RestoredStackPointer:
   case MedOp::RegistrationRootKind::RealignedRestoredStackPointer:
     return Op.Output.RegOff == TRI.StackPointer &&
@@ -56,6 +61,7 @@ std::optional<int64_t> registrationRootEntryStackOffset(const MedOp &Op) {
   case MedOp::RegistrationRootKind::RestoredStackPointer:
     return int64_t(Op.RegistrationStackOffset) - 4;
   case MedOp::RegistrationRootKind::CallbackStackPointer:
+  case MedOp::RegistrationRootKind::RestoredCallbackStackPointer:
   case MedOp::RegistrationRootKind::RealignedFramePointer:
   case MedOp::RegistrationRootKind::RealignedRestoredStackPointer:
   case MedOp::RegistrationRootKind::None:
@@ -162,7 +168,8 @@ registrationRootFrameCoordinate(const MedFunc &Func, const MedOp &Op) {
   for (const auto &Resume : Func.RegistrationStates->CxxContinuations)
     if (Resume.TargetVA == Op.Addr) {
       if (!FramePointer &&
-          Resume.SavedStackOffset != Op.RegistrationStackOffset)
+          (Resume.SavedCallbackVA ||
+           Resume.SavedStackOffset != Op.RegistrationStackOffset))
         return std::nullopt;
       RuntimeEntry = true;
     }

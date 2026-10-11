@@ -214,6 +214,10 @@ llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,
   if (EH.ChainedPrimaryRange)
     ChainedPrimaryRange = Node({mdUInt(Context, EH.ChainedPrimaryRange->Begin),
                                 mdUInt(Context, EH.ChainedPrimaryRange->End)});
+  std::vector<llvm::Metadata *> Fragments;
+  for (const auto &Range : EH.FragmentRanges)
+    Fragments.push_back(
+        Node({mdUInt(Context, Range.Begin), mdUInt(Context, Range.End)}));
 
   return Node({mdUInt(Context, SchemaVersion, 32),
                Str(getExceptionParseStatusName(EH.ParseStatus)),
@@ -253,7 +257,8 @@ llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,
                           WindowsEHNativeCapability::OutputPatch)
                           .canPatchOutput(),
                       1),
-               Registration});
+               Registration,
+               Node(Fragments)});
 }
 
 llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,

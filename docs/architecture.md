@@ -160,12 +160,36 @@ stack proof, outlining and security-check ABI under `lib/backend/llvm/X86`.
 used by both SEH and C++: preflight binds source memory occurrences, installation
 captures the physical entry frame in an escaped slot, and rollback restores
 pointers, metadata, volatility and newly introduced declarations. The shared
-C++ entry ABI accepts only observed contiguous cdecl words or a single ECX
-parameter; parameter attributes cannot silently select another register ABI.
+C++ entry projection in `lib/ir/med/X86/RegistrationEntry.cpp` orders physical
+ECX/EDX and stack words using the LowIR parent's authenticated RET cleanup count.
+Register inputs retain their proved 8-, 16- or 32-bit width; source operations
+own sign and zero extension, while physical stack slots remain four bytes.
+After materializing implicit ABI uses and native registration exception edges,
+the LLVM emitter discards store-only private SSA slots and their dead pure inputs.
+This prevents unused PHI copies from reading unavailable register values in
+`optnone` code. Escaping slots, live values, source observations and volatile or
+atomic operations remain intact; no source-frame initialization is invented.
+Ordinary analysis IR retains its original value graph.
+`lib/ir/low/X86/RegistrationEntryABI.cpp` binds those returns to source bytes and
+keeps callback returns separate. The LLVM adapter selects cdecl, stdcall,
+thiscall or fastcall and independently validates its exact parameter attributes;
+fastcall requires `inreg` on both register words. HighIR's x86 continuation
+projection keeps shared resume tails outside synchronous protected prefixes and
+preserves the original destination of a moved fallthrough.
 COFF installation, source-IR replay, callback identity, incoming-frame proof,
 image-pointer closure and emitted SEH table checks remain separate consumers
 under `lib/backend/codegen/COFF`. Splitting these implementations does not add a
 second source-semantics owner or turn an analysis result into rewrite permission.
+The loader owns exact registration instruction widths and authenticated pointer
+roles, including SafeSEH table storage. Code discovery consumes those roles at the
+specific pointer slot so an independent reference retains its ordinary identity.
+`RegistrationFrameMemory` owns byte-cell overlap queries for the LowIR frame domain.
+The COFF LLVM privacy proof indexes private reaching stores and tainted byte ranges
+in separate units, preserving the shared work limit and conservative alias checks.
+`COFFTrampolineRegions` resolves authenticated source entries across executable
+sections, including earlier generated code, with unique virtual/raw ownership
+and unchanged input bytes. A second reconstruction repeats all source and LLVM
+proofs rather than trusting a previous installation receipt.
 It also publishes ordinary, runtime-dispatch and catch-resumption reachability.
 Empty levels alone do not identify dead code: a reached block can precede
 installation or follow removal. The call ABI consumer prunes only with complete
@@ -176,6 +200,15 @@ It publishes every possible catch-search target and the exited guard count.
 Secondary search through a parent try removes the exited invocations and
 restores their captured stack snapshot. CFG construction and native call
 lowering consume that result rather than filtering by the first guard alone.
+`RegistrationStateResume` restores suspended callback cells and initialized
+bytes for a try inside a catch; `RegistrationStateObject` binds each exception
+pointer to an identity present in every reaching live catch stack. MedIR's
+`RegistrationCatchContext` owns current block membership and catch parents.
+HighIR and LLVM consume that same projection. `COFFRegistrationCxxResume`
+independently binds edited resume seeds to freshly checked source coordinates;
+`COFFRegistrationCxxLifetime` follows checked catchpad ancestry for outer
+reference objects. A restored callback ESP is a distinct MedIR root, retaining
+its original invocation rather than becoming a new parent-frame address.
 The captured pre-dispatch SavedESP owns the catch-return writeback even when
 catch code changes the cell. That effect remains bound to the exact RETURN in
 LowIR and MedIR. Dedicated x86 HighIR and LLVM continuation lowering restore
@@ -314,17 +347,40 @@ The same frame transfer separately reports whether every ordinary leaf return
 computes a 32-bit scalar independently of incoming registers, borrowed pointers
 and the caller PC. Frame privacy can admit an unobserved entry-EAX return;
 that weaker fact cannot choose a physical scalar call declaration.
-The same ABI owner authenticates immutable MSVC cleanup relays that derive
-ECX from the establisher EBP and tail-jump to a checked leaf. PE32 relative
-branches wrap at the architectural width; instruction storage does not wrap.
-This relay describes an object offset, without granting a parent-frame borrow
-at an unwind dispatch. The shared immutable-code reader verifies unique
+`COFFRegistrationFrameBits` checks which pointer-dependent bits survive a
+register truncation. It follows masks and casts through the existing private
+store index, includes every full-width definition, and rejects unknown aliases
+or poisoned operations. It shares the frame proof's bounded work budget.
+
+`RegistrationCleanupFrame` authenticates fixed and realigned callback prefixes.
+ESI-based relays bind their base and saved entry EBP to each parent after cache
+lookup, again during caller ABI replay and during LLVM emission. LowIR owns
+the saved frame lifetime and object borrow proof.
+`RegistrationCleanupABI` authenticates immutable MSVC tail-jump relays and
+Clang relays that save EBP, adjust the source frame and call one or more checked
+leaves before restoring EBP. The ordered call list retains every ECX object
+offset, including multiple destructors combined into one unwind action. PE32
+relative branches wrap at the architectural width; instruction storage does
+not wrap. Each invocation still needs a parent-frame borrow at dispatch. The shared immutable-code reader verifies unique
 file-backed PE32 storage without pointer fixups before decoding the relay.
 The COFF loader separately owns bounded scalar ThrowInfo decoding and its
 immutable CatchableType graph. The call ABI owner binds that graph to an exact
 CRT import and a fully initialized private exception object, retaining real
 caller-PC observations and rejecting metadata mutation. This still describes
 a preserved helper, rather than authorizing a rewritten parent.
+The separate x86 throw-import ABI owner authenticates the runtime, IAT and
+transparent jump stub for both helpers and direct calls. The source state
+solver admits a direct rethrow only with a live catch and two initialized null
+words in its actual argument-stack coordinate. The LLVM call adapter checks
+current arguments before projecting the two-pointer stdcall ABI. COFF control
+and frame consumers independently replay the source and generated call contract.
+For direct scalar throws the import owns only the physical ABI. A bounded,
+immutable ThrowInfo catalogue supplies candidates; each current source call
+selects its actual table and proves initialized scalar storage in the parent or
+active callback stack. The receipt retains that occurrence and coordinate.
+Native lowering preserves the current object expression, and the shared LLVM
+frame validator checks its exact storage, initialization and original table
+identity before installation.
 One CFG construction memoizes these callee proofs under a shared budget that
 also charges failed attempts. Registration-state analysis projects each exact
 source call into the caller's allocated frame, intersects byte initialization
@@ -344,8 +400,19 @@ private frame spills preserve that identity without treating it as an image or
 parent-frame pointer. Exact typed access receipts require the active catch
 context, bounded scalar reads/writes and complete source occurrences. Partial
 spills, pointer escape and use after catch return discard runtime authority.
-Adjacent table-owned catch labels extend the parent code range; cleanup relays
-retain their separate ABI and ordinary-entry conflicts remain explicit.
+`COFFRegistrationEHRange` recovers contiguous and disjoint table-owned callback
+chunks without claiming intervening cleanup relays. Canonical metadata schema
+11 and semantic-token schema 2 bind all code ranges. Cleanup relays retain their
+separate ABI and ordinary-entry conflicts remain explicit.
+`RegistrationReachability` removes only exact source-proven dead blocks before
+SSA, after authenticating no-return fallthrough removal. Independent entries,
+incomplete state or live incoming edges prevent that removal. This keeps an
+unreachable normal destructor tail from polluting a resumed callback's SSA.
+`RegistrationCleanupContext` binds each action to its still-active catch;
+LLVM and COFF use the same source projection. The independent installation
+proof checks each generated cleanup call in order, its object address, effects
+and outer unwind edge. Nested catches retain outer exception-object aliases
+only when every checked cleanup write is disjoint from the entire alias cell.
 These call facts remain separate from a compiler or installation receipt.
 For PE32 C++, the loader authenticates the original FuncInfo-loading handler
 thunk separately from the CRT dispatch entry. Its shared immutable-code reader
@@ -489,6 +556,13 @@ JS/assets through `ArtifactView`. Caches and snapshots remain opaque; native
 activation/version authentication are not inferred. Asset keys never establish
 a filesystem namespace. Package analysis of an explicitly selected asset uses
 one document with no directory inventory. See the [SEA profile](web-sea-profile.md).
+`nexe/Reader` owns explicit EOF envelope framing and complete byte partitions;
+`nexe/Index` owns bounded first-shim JSON, private portable paths and deduplicated
+range hashing. `SessionNexe` publishes immutable occurrences only after complete
+admission. `ArtifactView` composes nested coordinates and retains one namespace
+per extraction; typed package ancestry establishes outer delivery only. The
+opaque prefix has no implicit native/signature/runtime validation. See the
+[nexe profile](web-nexe-profile.md).
 `packages/PackageReader` owns versioned Node metadata and captured placement
 evidence; `packages/PackageDiff` compares its model without transport concerns.
 `SessionPackages` owns revision-bound caches, fixed metadata pages and
@@ -496,7 +570,7 @@ comparisons. Missing evidence, conflicting declarations and unresolved runtime
 semantics remain distinct. All adapters consume these same results.
 `packages/behavior/Rules` owns the fixed Node API syntax vocabulary, `Source`
 consumes shared bindings/module origins/values, and `Package` owns exact
-inventory and retained Bun/SEA delivery joins. `Publication` emits metadata;
+inventory and retained Bun/SEA/nexe delivery joins. `Publication` emits metadata;
 the two behavior session adapters own selection, cache and revision boundaries.
 Source ownership, delivery package and declared entry remain distinct.
 `SourceModel::indexSourceDeclarations` supplies the order-independent unique
@@ -730,9 +804,18 @@ retain one successful graph with an owned instruction snapshot. Reuse requires
 exact instruction facts, LowOps, effective edges, block starts, proof roots,
 conditional roots and storage-owner inputs. Hits pay the complete original
 graph-construction charge. The graph may also retain up to 64 query outcomes
-under a separate 8 MiB retained-payload allowance. Exact ordered query
-fields, proof limits, output shape, function context and both relocation
-occurrence inventories bind each result. Hits pay the complete cold value
+under a separate 8 MiB retained-payload allowance. Within one read-only target
+role, load-address role or mask-domain invocation, a local scope can reuse its
+validated graph without recopying the instruction snapshot. It is bound to its
+builder and cannot cross instruction, block or storage-owner mutations.
+Each query still compares roots and owned effective edge overrides, including
+temporary and empty overrides, and pays the original snapshot and graph work.
+One scope retains one bounded graph and at most 64 KiB of override keys;
+oversized keys keep the ordinary validation path. Nested queries own separate
+leases, and a new invocation validates its graph in full.
+Exact ordered query fields, proof limits, output shape, function context and
+both relocation occurrence inventories bind each retained value result.
+Hits pay the complete cold value
 charge; a smaller budget runs the normal path. Fixed reconstruction-depth and
 match-work refusals may be retained with the exact result, completion flag and
 feasible mask of each query. A local depth refusal does not suppress independent
@@ -1719,6 +1802,17 @@ rounding on hosts that otherwise use excess precision. Compiler options that
 explicitly override source pragmas, such as Clang's `-ffp-contract=fast`, are
 outside this contract.
 
+LLVMC binds final parameter identifiers before its analyses can cache rendered
+views. Signature emission reuses those identities, including colliding debug
+names and MSVC hidden result/`this` arguments. CPU query arrays use that same
+function-local name owner and are declared at function scope, so extracts in
+later blocks cannot refer to a different query or an expired C scope.
+`LLVMCIntrinsicAnalysis` authenticates the exact MedLLVM CPUID/XGETBV assembly,
+register constraints, i32 inputs/results and direct register-extract uses.
+Malformed contracts and unrepresented aggregate ABIs are refused explicitly.
+The C renderer retains volatile assembly and the original memory barrier for
+each query, including unused outputs and CPUID's ECX subleaf.
+
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
 invalid conversions. HighC and the LLVM lowering select that same policy;
@@ -1777,6 +1871,39 @@ scope. Scalar output merges the old destination's upper 128 bits; VEX zeroes
 the remaining upper vector. Immutable scalar stack sources reuse the matching
 six-input value contract, preserving both other numerical inputs and CSR.
 
+Legacy/VEX CVTSI2SS/SD and CVTSS2SD/CVTSD2SS use
+`X86FPScalarConvertState` and `X86FPScalarConvertMemoryState`. One aggregate
+contains the destination's raw scalar bytes followed by MXCSR. Its control
+byte owns signed-integer versus precision conversion, source/destination width
+and VEX identity; it admits neither SAE nor embedded rounding. Memory access
+uses the source width, inside the state completion scope, including Default/FS/GS.
+The lifter authenticates raw bytes against operand metadata before emitting
+effects and owns legacy/VEX lane merging. Only the exact numerical slice gains
+floating type provenance. LLVM and both readable C routes retain the actual
+conversion instruction even for discarded results. The concrete adapter reuses
+the shared SIMD converter: input exceptions precede newly raised result
+exceptions, and unsuccessful completion leaves numerical output untouched.
+IEEE bit arithmetic supplements APFloat's narrowing status for directed finite
+overflow and SSE tininess before denormalization; FTZ remains per active lane.
+Unsigned, EVEX, F16C and x87 conversions retain their separate contracts.
+Swift refuses this completion surface until it has an equivalent lowering.
+
+SSE/VEX CVTDQ2PS/PD, CVTPS2PD/CVTPD2PS and CVT(T)PS/PD2DQ share
+`X86FPPackedConvertState` and `X86FPPackedConvertMemoryState`. The packed control
+owner selects numerical kind, VEX identity and vector length; rounded and
+truncated integer conversions remain distinct. Logical source bytes, source
+register width and padded destination bytes are separate facts: m64/low64
+widening uses an initialized physical XMM carrier, while VEX memory narrowing
+retains the encoded 128/256-bit source width in assembly. One completion owns
+all active lanes, outgoing MXCSR and the complete source access. Native LLVM
+and both C routes execute the original operation; concrete evaluation reuses
+the common SIMD converter. Only legacy m128 forms require 16-byte alignment;
+widening m64 and VEX sources remain unaligned. No packed slice establishes a
+scalar FP return. Incoming stack homes retain the packed memory contract and
+every source byte, independently of output width. Unsupported masks, broadcasts,
+SAE, embedded rounding and altered decoded metadata are refused. This does not
+extend MMX, unsigned, EVEX, F16C or x87 completion.
+
 Legacy/VEX ROUND extends that state surface through whole-instruction
 `X86FPRoundState` aggregates. Immediate bits 7:4 are ignored, bit 2 selects
 MXCSR rounding, and bit 3 suppresses precision only. Packed results complete
@@ -1793,7 +1920,9 @@ segment bases. Unknown context refuses; known memory faults retain incoming
 CSR and publish no numerical result. This does not extend EVEX/SAE coverage.
 
 Stack-argument recovery consumes the authenticated source address and byte
-extent of arithmetic, ROUND and APPROX12 memory contracts. A proven immutable
+extent of arithmetic, scalar conversion, ROUND and APPROX12 memory contracts.
+Scalar conversion uses source bytes independently of destination width.
+A proven immutable
 scalar incoming argument can supply the corresponding value contract without
 changing numerical/MXCSR completion. A two-slot i386 scalar uses explicit byte
 composition. Packed, straddling, written or escaped sources keep their original
@@ -3420,6 +3549,30 @@ never followed as `std::type_info`. Native reconstruction emits LLVM
 `personality` plus address-form `invoke`/`landingpad` clauses. Corpus-proven
 status is a separate claim and is not implied by personality recognition or
 native lowering.
+
+For PE32 C++ callbacks, the generic LLVM emitter records each PHI edge it splits.
+The x86 adapter assigns a copy block only when both source endpoints belong to
+the same proved invocation. COFF installation independently recognizes the
+actual single-edge block and private scalar spill accesses; names and emitter
+receipts cannot authorize added calls, aliased memory or altered CFG targets.
+The COFF ThrowInfo decoder owns trivial-copy eligibility. State analysis still
+proves complete initialization and pointer privacy for every object byte;
+RTTI remains a type identity, not a recovered member layout.
+
+The PE32 registration solver schedules ordinary blocks in reverse postorder per
+entry component, with stable address ordering for independent roots. Runtime
+dispatch and continuation restoration still provide the only reaching states;
+scheduling never creates an edge or widens the cumulative work limit. Failed
+continuation closure retains earlier analysis diagnostics even if withdrawing
+a candidate makes the reduced graph easier to analyze. The x86 CFG closure in
+`RegistrationCFG.cpp` also applies the state solver's authenticated nonreturning
+callee contracts to ordinary reachability. Dead fallthrough cannot create
+overlapping callback instructions; independent runtime and address-taken roots
+retain their own identities. The loader applies its
+shared decode budget to long straight-line registration initializers. It retains
+confirmed function boundaries and stops at control transfers; padding-like
+immediate bytes cannot truncate a decoded instruction merely because a local
+instruction-count cutoff was reached.
 
 ## Verified LowIR concolic branch flips
 

@@ -25,7 +25,8 @@ llvm::Error bindCxxCatches(CxxIRControlProof &Proof, const MedFunc &Source,
   const auto &EH = *Source.ExceptionMetadata;
 
   const auto Owners = projectX86RegistrationCatchBlocks(Source);
-  if (!Owners)
+  const auto Parents = projectX86RegistrationCatchParents(Source);
+  if (!Owners || !Parents)
     return rejectIR("C++ callbacks have no disjoint invocation closure");
   for (uint32_t Region = 0; Region < EH.Cxx->TryBlocks.size(); ++Region)
     for (uint32_t Clause = 0;
@@ -89,10 +90,14 @@ llvm::Error bindCxxCatches(CxxIRControlProof &Proof, const MedFunc &Source,
     const auto &Try = EH.Cxx->TryBlocks[Region];
     const auto *First = Proof.Catches.at({Region, 0}).Pad;
     const auto *Switch = First ? First->getCatchSwitch() : nullptr;
-    if (!Switch || !Switches.erase(Switch) ||
+    const llvm::Value *Parent =
+        (*Parents)[Region]
+            ? static_cast<const llvm::Value *>(
+                  Proof.Catches.at(*(*Parents)[Region]).Pad)
+            : llvm::ConstantTokenNone::get(Function.getContext());
+    if (!Parent || !Switch || !Switches.erase(Switch) ||
         Switch->getNumHandlers() != Try.Handlers.size() ||
-        Switch->getParentPad() !=
-            llvm::ConstantTokenNone::get(Function.getContext()))
+        Switch->getParentPad() != Parent)
       return rejectIR("C++ dispatch changed its handler set or parent context");
     auto Entry = Switch->handler_begin();
     for (uint32_t Index = 0; Index < Try.Handlers.size(); ++Index, ++Entry) {

@@ -34,8 +34,16 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
       if (Cache.size() == 256)
         return std::nullopt;
       std::optional<RegistrationCalleeFrameContract> Contract;
-      if (auto Leaf =
-              getCheckedX86RegistrationLeafCalleeABI(Image, Target, &Work)) {
+      if (auto Import =
+              getCheckedX86RegistrationThrowImportABI(Image, Target, &Work)) {
+        Contract.emplace();
+        Contract->CalleeKind =
+            RegistrationCalleeFrameContract::Kind::RuntimeThrow;
+        Contract->Target = Target;
+        Contract->DoesNotReturn = true;
+        Contract->CodeRanges.push_back({Target, Target + 6});
+      } else if (auto Leaf = getCheckedX86RegistrationLeafCalleeABI(
+                     Image, Target, &Work)) {
         Contract.emplace();
         Contract->Target = Target;
         Contract->ECXReads = std::move(Leaf->ECXReads);
@@ -48,11 +56,15 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
                      Image, Target, &Work)) {
         Contract.emplace();
         Contract->CalleeKind =
-            RegistrationCalleeFrameContract::Kind::PrivateThrow;
+            Throw->IsRethrow
+                ? RegistrationCalleeFrameContract::Kind::PrivateRethrow
+                : RegistrationCalleeFrameContract::Kind::PrivateThrow;
         Contract->Target = Target;
         Contract->DoesNotReturn = true;
-        Contract->ThrownTypeVA = Throw->ThrowInfo.TypeDescriptorVA;
-        Contract->ThrownObjectSize = Throw->ThrowInfo.ObjectSize;
+        if (!Throw->IsRethrow) {
+          Contract->ThrownTypeVA = Throw->ThrowInfo.TypeDescriptorVA;
+          Contract->ThrownObjectSize = Throw->ThrowInfo.ObjectSize;
+        }
         Contract->ImageReads = std::move(Throw->ImageReads);
         Contract->ImageWrites = std::move(Throw->ImageWrites);
         Contract->CallerPCWrites = std::move(Throw->CallerPCWrites);
@@ -73,6 +85,18 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
         return std::nullopt;
       Result.push_back(Contract);
     }
+  }
+  if (llvm::any_of(Result, [](const auto &C) { return C.isRuntimeThrow(); })) {
+    auto Infos = registration_abi::collectRegistrationRuntimeThrowInfos(
+        Function, Image, Work);
+    if (!Infos)
+      return std::nullopt;
+    for (auto &Contract : Result)
+      if (Contract.isRuntimeThrow()) {
+        if (!chargeCalleeWork(Work, Infos->size()))
+          return std::nullopt;
+        Contract.RuntimeThrowInfos = *Infos;
+      }
   }
   return Result;
 }
@@ -105,24 +129,32 @@ RegistrationCallCalleeIndex::cleanupContracts(const LowFunc &Function) {
     if (!It->second)
       continue;
     const auto &Relay = *It->second;
-    const auto &Leaf = Relay.Leaf;
-    if (!chargeCalleeWork(
-            Work, Leaf.ECXReads.size() + Leaf.ECXWrites.size() +
-                      Leaf.ImageReads.size() + Leaf.ImageWrites.size() +
-                      Leaf.CallerPCWrites.size() + Leaf.CodeRanges.size() + 1))
-      return std::nullopt;
+    // Cached bytes describe a relay, never the parent that dispatched it.
+    const auto &Chain = Function.ExceptionMetadata->Registration;
+    if (Relay.RealignedParent && (!Chain || !Relay.matchesParentFrame(*Chain)))
+      continue;
     RegistrationCleanupFrameContract Contract;
     Contract.ActionState = State;
     Contract.RelayTarget = Relay.Target;
-    Contract.ObjectFrameOffset = Relay.ObjectFrameOffset;
-    Contract.Leaf.Target = Leaf.Target;
-    Contract.Leaf.StackPopBytes = Leaf.StackPopBytes;
-    Contract.Leaf.ECXReads = Leaf.ECXReads;
-    Contract.Leaf.ECXWrites = Leaf.ECXWrites;
-    Contract.Leaf.ImageReads = Leaf.ImageReads;
-    Contract.Leaf.ImageWrites = Leaf.ImageWrites;
-    Contract.Leaf.CallerPCWrites = Leaf.CallerPCWrites;
-    Contract.Leaf.CodeRanges = Leaf.CodeRanges;
+    for (const auto &Call : Relay.Calls) {
+      const auto &Leaf = Call.Leaf;
+      if (!chargeCalleeWork(Work, Leaf.ECXReads.size() + Leaf.ECXWrites.size() +
+                                      Leaf.ImageReads.size() +
+                                      Leaf.ImageWrites.size() +
+                                      Leaf.CallerPCWrites.size() +
+                                      Leaf.CodeRanges.size() + 1))
+        return std::nullopt;
+      auto &Borrow = Contract.Calls.emplace_back();
+      Borrow.ObjectFrameOffset = Call.ObjectFrameOffset;
+      Borrow.Leaf.Target = Leaf.Target;
+      Borrow.Leaf.StackPopBytes = Leaf.StackPopBytes;
+      Borrow.Leaf.ECXReads = Leaf.ECXReads;
+      Borrow.Leaf.ECXWrites = Leaf.ECXWrites;
+      Borrow.Leaf.ImageReads = Leaf.ImageReads;
+      Borrow.Leaf.ImageWrites = Leaf.ImageWrites;
+      Borrow.Leaf.CallerPCWrites = Leaf.CallerPCWrites;
+      Borrow.Leaf.CodeRanges = Leaf.CodeRanges;
+    }
     Result.push_back(std::move(Contract));
   }
   return Result;
