@@ -35,5 +35,6 @@
 
 # Pinned upstream evidence/notices retain their original whitespace.
 LICENSES/hermes/LLVH.txt whitespace=-blank-at-eof
+LICENSES/node/LICENSE whitespace=-space-before-tab
 unittests/web/fixtures/webpack-commonjs-upstream.md whitespace=-blank-at-eol
 unittests/web/fixtures/webpack-commonjs.bundle.txt whitespace=-blank-at-eol

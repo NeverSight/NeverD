@@ -45,7 +45,8 @@ Other hosts require separate evidence.
 | Package archives and original SRI | `ustar-pax-single-gzip-v1`, `npm-original-sri-v1` | Native tar/local-PAX/single-gzip, metadata-only links, shared source/package/Bun/native consumers and explicit registry/lock declaration checks over original bytes. [Profile and limits](web-package-archive-profile.md). Recursive archives, full tar dialects and publisher authentication are unsupported |
 | Passive interface evidence | `har-1.2-metadata-v1`, `direct-fetch-websocket-syntax-v1`, `absolute-http-method-origin-path-v1` | HAR redaction preview/commit, fixed metadata and source-node links; explicit candidate joins preserve inference/observation classes. XHR/wrappers, dynamic URLs, WebSocket frames and protocol reconstruction remain unsupported. [Profile](web-interface-profile.md) |
 | Passive stream/log records | Six explicitly selected JSONL/SSE/JSON-RPC/MCP-shape/recorded-envelope/log profiles | Bounded native framing, redaction preview/commit and recorded-context candidate joins; missing/ambiguous evidence refuses links. No complete MCP schema/negotiation, source correlation or live capture claim. [Profiles](web-stream-profile.md) |
-| Tauri/Wails/SEA/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
+| Node SEA | Node 22.15.0 LE64 preparation blob and explicit ELF64/Mach-O64/PE32+ x64/ARM64 resource profiles | Separate C++ reader, stored JS/assets and opaque V8 cache/snapshot, shared consumers; [qualification and limits](web-sea-profile.md). Runtime activation/version and other versions/hosts are unverified |
+| Tauri/Wails/pkg/nexe | Research/profile qualification pending | Detection is insufficient; each named profile must extract known assets |
 | C++ worker | `web_` operations in protocol 1.1 | Real framed-process, direct-query parity, web/native revision isolation and private-output checks passed locally |
 | C++ MCP transport | Pending | Must use the same C API and enforce an explicit host input scope |
 
@@ -128,6 +129,8 @@ closure remain outstanding.
 | Bundles / recovered module slots / dependency records per source | 64 / 4,096 / 50,000 |
 | Bun modules / builtins / cached extractions | 4,096 / 4,096 / 4 |
 | Bun private names total / one name | 1 MiB / 32 KiB |
+| SEA selected input / assets / cached extractions | 256 MiB / 4,096 / 4 |
+| SEA private names total / one name / page records | 1 MiB / 32 KiB / 128 |
 | Bun section / program headers | 4,096 / 1,024 |
 | Bun serialized map / decoded content total | 8 MiB / 8 MiB |
 | Bun decoded source / Zstd window | 4 MiB / 8 MiB |

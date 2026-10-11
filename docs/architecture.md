@@ -392,6 +392,13 @@ validation. `Bun` owns the shared graph records, flags and module decoding;
 transport capability lists and extraction results use the same profile builder.
 Adding a target container does not change source semantics or imply native
 machine-code/bytecode decompilation.
+`sea/Container` and the format readers independently locate explicit Node SEA
+resources; `sea/Blob` owns their serialization, region partition and private-key
+budgets. `SessionSEA` publishes revision-bound metadata and exposes only stored
+JS/assets through `ArtifactView`. Caches and snapshots remain opaque; native
+activation/version authentication are not inferred. Asset keys never establish
+a filesystem namespace. Package analysis of an explicitly selected asset uses
+one document with no directory inventory. See the [SEA profile](web-sea-profile.md).
 `packages/PackageReader` owns versioned Node metadata and captured placement
 evidence; `packages/PackageDiff` compares its model without transport concerns.
 `SessionPackages` owns revision-bound caches, fixed metadata pages and

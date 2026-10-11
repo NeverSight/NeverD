@@ -220,6 +220,17 @@ sample's actual producer version; that manifest field remains unknown.
 Enabled builds stage the license beside libneverd and in the SDK, and install
 it under `share/neverd/licenses/webpack`.
 
+## Node SEA layout reference and generated corpus
+
+The independent C++ SEA reader follows Node.js 22.15.0 commit
+`b009466555c360513b8012ce549f716501090ee5` serialization and bundled postject
+resource-location contracts. Node/V8/postject code is not linked or invoked by
+NeverD. Small trusted fixture outputs include opaque V8 code-cache data; the
+runtime snapshot and full executables remain outside the repository.
+The upstream [license and notices](LICENSES/node/LICENSE) are preserved and
+shipped with the enabled web backend. See the [profile](docs/web-sea-profile.md)
+and [fixture provenance](unittests/web/fixtures/sea/README.md).
+
 ## Bun layout reference and generated corpus
 
 The independent C++ Bun reader follows the ELF/Mach-O/PE, standalone graph and serialized

@@ -360,6 +360,18 @@ ctest --test-dir build-release \
 
 ## Offline web analysis
 
+`WebSEA.*` covers independent Node SEA serialization, x64/ARM64 ELF/Mach-O/PE
+resource location, malformed names/tables, duplicate mappings, cumulative work,
+opaque V8 evidence and exact compiler-generated blobs. `WebSEASDK.*` and
+`NeverDWorkerWeb` cover publication/revocation, private-key redaction,
+source/map/package/native consumers, nested compressed anchors and CLI/framed
+parity. Set `NEVERD_NODE_SEA_22150_CORPUS` for the optional pinned snapshot
+directory and `NEVERD_NODE_SEA_22150_IMAGES` for injected full-image fixtures.
+Tests never download or execute them. See the [profile](web-sea-profile.md).
+After shared artifact/session/package boundary changes, run the owning web
+directory, C API availability and five core worker cases. Verify parser-off
+extraction and backend-off ABI behavior separately.
+
 `WebStreams.*` covers explicit JSONL/SSE/JSON-RPC/MCP/log profiles, byte spans,
 EOF limits, duplicate/missing context, original numeric tokens and aggregate
 JSON work including failures. `WebStreamSDK.*` and `NeverDWorkerWeb` cover

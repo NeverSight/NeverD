@@ -55,6 +55,8 @@ struct API {
   WEB_API(neverd_web_artifacts_json)
   WEB_API(neverd_web_bun_extract_json)
   WEB_API(neverd_web_bun_records_json)
+  WEB_API(neverd_web_sea_extract_json)
+  WEB_API(neverd_web_sea_records_json)
   WEB_API(neverd_web_packages_analyze_json)
   WEB_API(neverd_web_package_archive_extract_json)
   WEB_API(neverd_web_package_archive_records_json)
@@ -592,6 +594,30 @@ Json WebEngine::execute(const std::string &operation, const Json &p) {
         session_, revision.data(), revision.size(), id.data(), id.size(),
         sizeField(p, "offset", 0, std::numeric_limits<size_t>::max()),
         sizeField(p, "limit", 128, 512)));
+  }
+  if (operation == "web_sea_extract") {
+    fields(p, {"revision", "artifact_id", "profile"});
+    if (!api().neverd_web_sea_extract_json)
+      throw Error("capability_unavailable", "SEA extraction is unavailable");
+    const auto revision = required(p, "revision", 20);
+    const auto id = required(p, "artifact_id", 64);
+    const auto profile = required(p, "profile", 64);
+    auto value = result(api().neverd_web_sea_extract_json(
+        session_, revision.data(), revision.size(), id.data(), id.size(),
+        profile.data(), profile.size()));
+    analysisState_ = "partial";
+    return value;
+  }
+  if (operation == "web_sea_records") {
+    fields(p, {"revision", "extraction_id", "offset", "limit"});
+    if (!api().neverd_web_sea_records_json)
+      throw Error("capability_unavailable", "SEA extraction is unavailable");
+    const auto revision = required(p, "revision", 20);
+    const auto id = required(p, "extraction_id", 64);
+    return result(api().neverd_web_sea_records_json(
+        session_, revision.data(), revision.size(), id.data(), id.size(),
+        sizeField(p, "offset", 0, std::numeric_limits<size_t>::max()),
+        sizeField(p, "limit", 128, 128)));
   }
   if (operation == "web_bun_extract") {
     fields(p, {"revision", "artifact_id"});

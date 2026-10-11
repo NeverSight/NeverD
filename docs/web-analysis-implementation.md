@@ -39,14 +39,14 @@ their existing scope; no Python support for web APIs is claimed.
 | P1 artifact store and safe input | 12 identity/input, eight blob/storage and five JSON admission tests passed on macOS arm64 Release; 512 MiB disk-backed snapshot qualified | Broader host qualification and redaction/export remain; Windows pending |
 | P2 SDK/CLI/worker | Thirty-four SDK/CLI tests passed, including navigation/storage/view anchors and direct Bun navigation/view/anchor commands; C++ worker adapter/framed-process and all nine worker regressions passed | Broader host, cancellation/resource and distribution qualification remain |
 | P3 C++ JS parser/scope/query/maps | Nine parser/model, thirteen binding, eleven primitive-value, ten effect, eleven module, eight bundle, nine source-view, five navigation, nine standard coordinate/map and six Bun map tests passed | Full syntax matrix, feature-specific navigation/attribution, runtime dataflow, foreign export linking, broader bundle profiles and verified map association remain |
-| P4A Bun extraction | ELF, thin Mach-O and PE x64/ARM64 extraction; decoded-source navigation/view/storage anchors, bounded serialized-map decoding and explicit native handoff; 25 full compiler images, Claude Code 2.1.296 and 20 extraction cases qualified | Other runtime/layout versions and independent SEA/pkg/nexe adapters remain; JSC caches stay opaque |
+| P4A Bun extraction | ELF, thin Mach-O and PE x64/ARM64 extraction; decoded-source navigation/view/storage anchors, bounded serialized-map decoding and explicit native handoff; 25 full compiler images, Claude Code 2.1.296 and 20 extraction cases qualified | Other runtime/layout versions and independent pkg/nexe adapters remain; Node SEA is qualified separately in P7 and JSC caches stay opaque |
 | Shared native handoff | Nine native handoff tests and 65 existing Session C API tests passed; immutable-buffer loader, independent native SDK session and metadata-only CLI/worker entry points; parser/backend omission checked | Other hosts, explicit universal slices and bounded native pipeline work remain |
 | P4B desktop/VSIX extraction | C++ ASAR packed/unpacked extraction; Electron manifest entries, source-visible boundaries, scoped IPC comparison, captured preload/renderer files and HTML/import-map candidates implemented; qualification recorded below | External-source HTML contexts and full import closure, runtime/window routing, distribution detection, safe export, NW.js/VSIX and broader host/release qualification remain |
 | P4C package graph/diff | Versioned npm graph/diff, bounded tar/local-PAX/single-gzip members, original SRI and shared source/Bun/native consumers implemented; two official Claude Code npm packages qualify original digest and payload evidence | Source behavior, advisory/provenance, dispositions, readable reports and broader archive/host profiles remain |
 | P4D passive interfaces/HAR | Native HAR preview/commit, direct fetch/WebSocket source candidates and explicit method/origin/path comparison implemented | XHR/wrappers, response/transformation tracing, reviewed displays, schema exports and broader qualification remain |
 | P5 reversible source projections | Reviewed display projection and original/projected ranges implemented; semantic transforms pending | Per-pass receipts, local semantic preconditions, undo and refusal tests |
 | P6 stream/log consumers | Native versioned SSE/JSONL/JSON-RPC/MCP-shape/log readers, recorded-ID candidates and preview/commit implemented | Real supplied transcript/source correlation, broader framing/host qualification and C++ MCP transport remain |
-| P7 Tauri/Wails/Node-family | Pending | Actual asset extraction and bridge/native links for each named profile |
+| P7 Tauri/Wails/Node-family | Independent Node 22.15.0 SEA preparation/native resource reader and stored-source/asset consumers implemented; qualification below | Tauri/Wails bridges/assets, pkg/nexe, other SEA layouts and host qualification remain |
 | P8 C++ MCP, optional presentation, distribution | Pending | No external executable/script dependency, bounded outputs and shipped notices |
 | P9 full acceptance audit | Pending | Issue-by-issue fixture and cross-platform evidence, documented gaps |
 
@@ -1280,3 +1280,59 @@ relaxing their deadlines. A canonical macOS fixture temporary path removes the
 snapshot alias assumption. Expanded native worker checks retain the separate
 libc++ fixture mismatch and one address-mapping failure that passed on retry,
 as documented in the [qualification](web-claude-code-qualification.md).
+
+## Independent Node SEA extraction — 2026-10-11
+
+The [SEA profile](web-sea-profile.md) implements the Node 22.15.0 LE64
+preparation format and six native resource profiles: ELF64, thin Mach-O64 and
+PE32+, each on x64 and ARM64. Versioned container readers and one serialized
+blob reader own the semantics. Session publication, the C API, CLI and C++
+worker use the same immutable regions and revision checks. This is independent
+of Bun. Layout compatibility is not producer authentication, runtime activation
+or complete native-loader validation.
+
+Stored CommonJS and assets reach the existing source, map, package and native
+consumers. A selected asset supplies one package document without inventing a
+filesystem namespace from its private key. Nested tar/tgz selections preserve
+original storage identity, expanded coordinates and compressed-frame ancestry.
+Snapshots and V8 caches remain opaque and cannot become source selections.
+Private paths, asset keys and their individual hashes stay out of ordinary
+metadata. Malformed structure and work-limit failures publish no extraction.
+
+Four small blobs produced by the official pinned Node compiler preserve plain,
+minified, asset and cache variants, with independently recorded source/asset
+hashes. An optional real snapshot and six complete official Node images with
+the same 250-byte compiler blob injected provide additional local evidence.
+The original downloads matched the official release checksums. The image
+goldens record whole-image hashes and resource offsets independently of the
+production readers. Native images were never executed. Manual fixture creation
+used trusted upstream compiler/packager tools; no product or automated test
+invokes those tools. The [fixture manifest](../unittests/web/fixtures/sea/README.md)
+records the versions, hashes and reproduction boundary.
+
+On macOS arm64 Release, all 18 focused SEA cases passed, including the optional
+snapshot and all six real images. The complete owning web suite registered
+408 cases: 401 passed, six Zstd-dependent map cases skipped because LLVM Zstd
+is unavailable, and one ASAR-omission-only case skipped in the enabled profile.
+The pinned Bun, Claude Code and npm corpora were supplied, including complete
+2,345-module readable-source recovery. All five selected C++ worker suites
+passed, including direct/framed SEA parity. Enabled C API availability passed;
+its backend-omission-only case skipped. The capability ownership check passed
+after correcting the two new exports' lexical ordering. Logs are
+`/tmp/neverd-sea-{focused-tests,full-web-tests,worker-tests,api-tests,capabilities}.log`.
+
+Node license/notices are preserved and staged beside the shared library and
+in the SDK. Both staged files match the preserved upstream file byte for byte.
+Independent plan/implementation review led to regressions for ELF raw-prefix
+ambiguity, cumulative repeated-note work, Mach-O runtime name-padding aliases
+and derived-asset package admission. Scoped LLVM formatting and `git diff
+--check` passed. No Node/V8 runtime dependency or script implementation was added.
+
+With the JS parser disabled, all 28 selected SEA and shared package SDK cases,
+the enabled-backend availability case and all five C++ worker suites passed.
+The nested source-only SEA case is not compiled in that profile. With the
+whole Web backend disabled, both C ABI availability cases passed, four worker
+suites passed and the Web worker explicitly skipped. The CLI omission check
+exposed a silent session-creation failure; it now emits the backend capability
+result and a fixed diagnostic. Logs use `/tmp/neverd-sea-nojs-*` and
+`/tmp/neverd-sea-disabled-*`.

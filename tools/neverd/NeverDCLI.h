@@ -214,6 +214,7 @@ int runWebArchive();
 int runWebIntegrity();
 int runWebInterfaces();
 int runWebStreams();
+int runWebSEA();
 
 extern llvm::cl::opt<bool> Devirtualize;
 extern llvm::cl::list<std::string> VMControlRegisters;
