@@ -221,6 +221,10 @@ NEVERD_API const char *neverd_ir_med(neverd_session_t Sess,
                                      neverd_va_t FuncEntry);
 NEVERD_API const char *neverd_ir_high(neverd_session_t Sess,
                                       neverd_va_t FuncEntry);
+/// Inspect native lifted LLVM with temporary-slot SSA promotion only. Does
+/// not run the LLVMC optimization profile or optional symbolic rewriting;
+/// native CFG/ABI/exception recovery still precedes emission. EVM and SBF
+/// retain their architecture-specific LLVM emission.
 NEVERD_API const char *neverd_ir_llvm(neverd_session_t Sess,
                                       neverd_va_t FuncEntry);
 

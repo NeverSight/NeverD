@@ -4812,6 +4812,49 @@ TEST_F(SessionCAPITest, SourceLLVMProfilesKeepTheirOwnModulesAndEmission) {
   }
 }
 
+TEST_F(SessionCAPITest,
+       NativeLLVMInspectionPreservesBranchesAcrossSourceViews) {
+  // cmp edi,esi; jbe second; return 1; second: return 2. The LLVM source
+  // optimizer can turn this diamond into a select; inspection keeps the CFG.
+  const std::string Body("\x39\xf7\x76\x06\xb8\x01\x00\x00\x00\xc3"
+                         "\xb8\x02\x00\x00\x00\xc3",
+                         16);
+  const auto Path =
+      write("inspect-branches.elf", makeNativeELF(false, 0x400000, {}, Body));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  auto &State = *neverd::sdk::toSession(Session);
+  std::string Inspection, Source;
+  for (bool SourceFirst : {false, true}) {
+    SCOPED_TRACE(SourceFirst);
+    State.clearPipeline();
+    ASSERT_EQ(neverd_prepare_function(Session, Entry), 1);
+    if (SourceFirst)
+      EXPECT_EQ(takeString(neverd_decompile_llvm(Session, Entry)), Source);
+    const auto IR = takeString(neverd_ir_llvm(Session, Entry));
+    ASSERT_FALSE(IR.empty()) << takeString(neverd_last_error(Session));
+    EXPECT_NE(IR.find("br i1 "), std::string::npos) << IR;
+    EXPECT_EQ(IR.find("select i1 "), std::string::npos) << IR;
+    if (!SourceFirst)
+      Inspection = IR;
+    EXPECT_EQ(IR, Inspection);
+    const auto C = takeString(neverd_decompile_llvm(Session, Entry));
+    ASSERT_FALSE(C.empty()) << takeString(neverd_last_error(Session));
+    if (!SourceFirst)
+      Source = C;
+    EXPECT_EQ(C, Source);
+    for (const char *Options :
+         {R"({"llvm_optimization":"O0"})",
+          R"({"llvm_optimization":"O3","symbolic":true})"}) {
+      const auto Page = takeView(
+          neverd_ir_view_ex_json(Session, Entry, "llvmc", 0, 2048, Options));
+      ASSERT_TRUE(Page.getString("text"));
+      EXPECT_EQ(takeString(neverd_ir_llvm(Session, Entry)), Inspection);
+      EXPECT_EQ(takeString(neverd_decompile_llvm(Session, Entry)), Source);
+    }
+  }
+}
+
 TEST_F(SessionCAPITest, SourcePagesReadTheFunctionsKeptEmission) {
   // A copy: renaming writes its sidecar beside the input.
   const auto Input = Directory / "kept-emission.o";

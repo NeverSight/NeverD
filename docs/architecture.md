@@ -149,6 +149,12 @@ pass. Native machine CFG, jump-table, ABI and exception proofs remain
 authoritative and are unaffected. Worker source edits validate
 against the same source options used to display their targets.
 
+The native LLVM IR inspection view requests verified emission with temporary
+slots promoted to SSA only. It preserves the lifted control flow without the
+LLVMC optimization pipeline; the module cache distinguishes these inspection
+modules from optimized source modules. Native CFG, ABI and exception recovery
+still precede emission. EVM and SBF keep their own LLVM emission paths.
+
 The worker's `CodeEdits` owns pseudocode presentation aliases and unmapped line
 notes. `UserStateTables.def` includes this state in history, recovery, read-only
 replicas and database packing. Source identity and exact row anchors prevent

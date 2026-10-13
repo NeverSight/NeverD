@@ -51,7 +51,9 @@ prebuilt-LLVM guidance.
 `SessionCAPITest.SourceOptions*` checks opt-in HighC variants, complete paging,
 restoration of ordinary output, reuse of prepared IR, navigation invalidation
 and strict option validation. `SourceLLVMProfiles*` checks separate source and
-module cache identities. `HighSymSimplify.OrdinaryConversion*` keeps optional
+module cache identities. `NativeLLVMInspection*` preserves inspection branches
+across source profiles and both view orders.
+`HighSymSimplify.OrdinaryConversion*` keeps optional
 rewriting out of ordinary HighC; the other HighSymSimplify cases explicitly
 enable it through the production converter. `SymSimplifyGuard.SourceProfiles*`
 checks that the optional expression pass stays off when disabled and evaluates

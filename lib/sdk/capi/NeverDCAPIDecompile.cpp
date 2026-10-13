@@ -1199,7 +1199,9 @@ const char *neverd_ir_llvm(neverd_session_t Sess, neverd_va_t FuncEntry) {
                       : sbf::emitLLVMText(*S->PipeResult.LlvmModule));
   }
 
-  const auto *Native = S->ensureFunctionLlvmModule(FuncEntry, false);
+  // Inspection shows the lifted control flow, independently of LLVMC's
+  // source optimization profile. Promote temporary slots to SSA only.
+  const auto *Native = S->ensureFunctionLlvmModule(FuncEntry, /*NoOpt=*/true);
   if (!Native) {
     if (S->LastError.empty())
       S->setError("failed to generate LLVM module");

@@ -199,6 +199,11 @@ source** returns to the ordinary view. Failed enhancements retain the preceding
 source. Required machine control-flow, ABI and exception recovery still run.
 These display defaults do not change the conservative binary patch pipeline.
 
+The native **LLVM IR** view shows lifted IR with temporary slots promoted to
+SSA. It does not run LLVMC's O2 profile or optional symbolic transformations.
+Machine control-flow, ABI and exception recovery still run before emission;
+the inspection and optimized source views keep separate cached modules.
+
 **Pseudocode** and **IR** windows show pseudocode in the function's
 own language, C, Rust, Go, C through LLVM, LowIR, MedIR, HighIR or LLVM IR of
 the requested function. F5 or Tab pressed while a jump is loading decompiles the
