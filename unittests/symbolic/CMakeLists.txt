@@ -12,6 +12,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymExprExtensionTests.cpp
   SymExprMaskTests.cpp
   SymKnownBitsTests.cpp
+  SymSimplifyTests.cpp
   SymMBAAffineResidualTests.cpp
   SymMBABooleanResidualTests.cpp
   SymMBAArithmeticTests.cpp
@@ -42,7 +43,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymSynthTests.cpp
   SymX87Tests.cpp
 
-  LINK_COMPONENTS Symbolic
+  LINK_COMPONENTS Symbolic Solver
 )
 
 target_include_directories(NeverDSymbolicTests PRIVATE

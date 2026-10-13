@@ -4204,6 +4204,16 @@ carriers. Width adapters preserve zero extension versus sign extension;
 full-word consumers retain their original values. Node/edge limits and unknown
 shapes leave the original expression intact without invoking a solver.
 
+`symbolic::simplifyExpression` provides bounded, unconditional normalization
+of total bitvector DAGs in `lib/symbolic/expr/SymSimplify.cpp`. It combines exact
+bit windows, extensions, shifts, known bits and modular Boolean arithmetic
+without constructing LLVM IR or assuming path facts. A complete iterative
+inventory precedes rewriting: exceeding its node, edge or work limits retains
+the input. Once inventory is complete, exhaustion of optional rewrite work
+stops new rewrites but still rebuilds the bounded DAG from completed child
+reductions. This preserves useful partial progress without dropping unresolved
+operands. Callers retain responsibility for path proofs and memory provenance.
+
 `SymState` separately owns memory-input creation provenance and historical
 load provenance. `memoryInputOrigins()` records a symbolic region, byte offset,
 and width when untouched input bytes are first materialized; later stores or
