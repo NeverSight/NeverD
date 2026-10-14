@@ -27,9 +27,6 @@ struct SourcePatchCompilation {
   std::string CompilerVersion;
   std::vector<std::string> Arguments;
   std::string Diagnostics;
-  std::vector<std::string> TranslationArguments;
-  std::string TranslationManifest;
-  std::string TranslationMap;
   std::optional<DynCodePatchEvidence> DynCode;
 };
 

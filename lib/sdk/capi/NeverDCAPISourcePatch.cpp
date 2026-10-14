@@ -109,21 +109,6 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
         llvm::SHA256::hash(llvm::ArrayRef<uint8_t>(
             reinterpret_cast<const uint8_t *>(Text.data()), Text.size())),
         true);
-    if (!Compiled->TranslationManifest.empty()) {
-      auto Manifest = llvm::json::parse(Compiled->TranslationManifest);
-      auto Map = llvm::json::parse(Compiled->TranslationMap);
-      if (!Manifest)
-        return Error(Manifest.takeError());
-      if (!Map)
-        return Error(Map.takeError());
-      llvm::json::Array TranslationArgs;
-      for (auto &Arg : Compiled->TranslationArguments)
-        TranslationArgs.push_back(std::move(Arg));
-      Report["translation"] =
-          llvm::json::Object{{"arguments", std::move(TranslationArgs)},
-                             {"manifest", std::move(*Manifest)},
-                             {"map", std::move(*Map)}};
-    }
     DynCode = std::move(Compiled->DynCode);
     if (DynCode) {
       auto Audit = llvm::json::parse(DynCode->Audit);

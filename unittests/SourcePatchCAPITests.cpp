@@ -564,6 +564,25 @@ TEST_F(SourcePatch, CXXEntryUsesTheExactSymbol) {
   EXPECT_EQ(execute({Output.string(), "2"}), 8);
 }
 
+TEST_F(SourcePatch, NeverCRejectsCppBeforeStartingTheCompiler) {
+  Options.compiler = NEVERD_SOURCE_PATCH_NEVERC;
+  Options.compiler_path = "neverd-missing-neverc-must-not-be-started";
+  Options.language = NEVERD_SOURCE_PATCH_CXX;
+  for (const auto [Artifact, Mode] :
+       {std::pair{NEVERD_SOURCE_PATCH_ARTIFACT_IR, NEVERD_SOURCE_PATCH_NORMAL},
+        std::pair{NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT,
+                  NEVERD_SOURCE_PATCH_NORMAL},
+        std::pair{NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT,
+                  NEVERD_SOURCE_PATCH_DYNCODE}}) {
+    Options.artifact = Artifact;
+    Options.mode = Mode;
+    EXPECT_EQ(patch("extern \"C\" int replacement(int x) { return x + 40; }"),
+              0);
+    EXPECT_NE(error().find("NeverC accepts C source only"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(Output));
+  }
+}
+
 TEST_F(SourcePatch, CLIHonorsEntryAddressAndRejectsInvalidAddress) {
   const auto Source = Directory / "replacement.c";
   std::ofstream(Source) << Replacement;

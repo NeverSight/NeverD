@@ -212,25 +212,19 @@ TEST_F(SourcePatchException, GCCObjectRetainsCrossBoundaryExceptionSemantics) {
   check();
 }
 
-TEST_F(SourcePatchException, NeverCCppLifetimesExecuteInNativeProcesses) {
+TEST_F(SourcePatchException, NeverCCSourcesExecuteInNativeProcesses) {
   const char *Compiler = std::getenv("NEVERD_TEST_NEVERC");
   if (!Compiler || !*Compiler)
     GTEST_SKIP() << "explicit NeverC producer required";
   Options.compiler = NEVERD_SOURCE_PATCH_NEVERC;
   Options.compiler_path = Compiler;
+  Options.language = NEVERD_SOURCE_PATCH_C;
   Options.bindings = nullptr;
   Options.binding_count = 0;
   constexpr llvm::StringLiteral Source = R"(
-template <class T> T twice(T x) { return x * 2; }
-struct Guard {
-  int *p;
-  Guard(int *q) : p(q) { *p += 3; }
-  ~Guard() { *p += 5; }
-};
-extern "C" int replacement(int x) {
-  int value = x;
-  { Guard guard(&value); value = twice(value); }
-  return value;
+static int twice(int x) { return x * 2; }
+int replacement(int x) {
+  return twice(x + 3) + 5;
 })";
   for (const auto [Artifact, CompileMode] :
        {std::pair{NEVERD_SOURCE_PATCH_ARTIFACT_IR, NEVERD_SOURCE_PATCH_NORMAL},
@@ -238,7 +232,7 @@ extern "C" int replacement(int x) {
         {NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT, NEVERD_SOURCE_PATCH_DYNCODE}}) {
     Options.artifact = Artifact;
     Options.mode = CompileMode;
-    Output = Directory / ("neverc-cpp-" + std::to_string(Artifact) + "-" +
+    Output = Directory / ("neverc-c-" + std::to_string(Artifact) + "-" +
                           std::to_string(CompileMode));
     ASSERT_EQ(neverd_patch_source(Session, Source.data(), Source.size(),
                                   &Options, Output.string().c_str()),

@@ -253,8 +253,8 @@ typedef struct neverd_source_patch_options_v1 {
 /// the exact byte length, excluding any optional terminating NUL. Input and
 /// existing output files are never overwritten. Unsupported compiler/target/
 /// artifact combinations fail explicitly without selecting another compiler.
-/// NeverC C++ uses the built-in cpp-core-v2 translator followed by NeverC C23
-/// code generation; it does not admit C++ exceptions/RTTI/virtual dispatch.
+/// NeverC accepts C source only, including hosted DynCode. C++ source requires
+/// Clang or a matching ELF GCC driver; no translation or fallback is implicit.
 /// Returns one only after every requested target is installed and verified.
 NEVERD_API int
 neverd_patch_source(neverd_session_t Sess, const void *Input, size_t InputSize,
