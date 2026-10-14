@@ -205,6 +205,8 @@ class Writer {
   bool UsesWide = false;
   bool UsesX86FPState = false;
   std::set<std::pair<Intrinsic, unsigned>> FPStateOperations;
+  std::set<std::pair<Intrinsic, unsigned>> FPStateMemoryOperations;
+  std::set<std::pair<Intrinsic, unsigned>> FPStateConversions;
   std::string WideType = "nd_word128";
   std::string FPStateType, MXCSRLoadName, MXCSRStoreName;
   unsigned Indent = 1;
@@ -503,7 +505,53 @@ class Writer {
                           : WideType + "(lo: result, hi: outgoing)") +
               "\n        }\n";
     }
+    for (const auto &[Id, Bytes] : FPStateMemoryOperations) {
+      const auto Name =
+          std::string(x86ScalarFPStateMnemonic(Id)) + std::to_string(Bytes * 8);
+      Text += Attributes + "        static func " + Name +
+              "_memory(_ address: Swift.UInt64, _ left: Swift.UInt64, "
+              "_ incoming: Swift.UInt64) -> " +
+              (Bytes == 4 ? "Swift.UInt64" : WideType) +
+              " {\n            write(incoming)\n"
+              "            let right = Swift.UnsafeRawPointer(bitPattern: "
+              "Swift.UInt(address))!.loadUnaligned(as: Swift.UInt" +
+              std::to_string(Bytes * 8) + ".self)\n            return " + Name +
+              "(left, Swift.UInt64(right), incoming)\n        }\n";
+    }
+    for (const auto &[Id, Control] : FPStateConversions) {
+      const auto SourceBytes = x86FPScalarConvertSourceBytes(Control);
+      const auto Bytes = x86FPScalarConvertDestinationBytes(Control);
+      const bool Memory = Id == Intrinsic::X86FPScalarConvertMemoryState;
+      Text += Attributes + "        static func " +
+              fpConversionName(Id, Control) +
+              "(_ value: Swift.UInt64, _ incoming: Swift.UInt64) -> " +
+              (Bytes == 4 ? "Swift.UInt64" : WideType) +
+              " {\n            write(incoming)\n";
+      std::string Bits = "value";
+      if (Memory) {
+        Text += "            let bits = Swift.UnsafeRawPointer(bitPattern: "
+                "Swift.UInt(value))!.loadUnaligned(as: Swift.UInt" +
+                std::to_string(SourceBytes * 8) + ".self)\n";
+        Bits = "Swift.UInt64(bits)";
+      }
+      const auto Input = x86FPScalarConvertIsInteger(Control)
+                             ? signedValue(Bits, SourceBytes * 8)
+                             : floatValue(Bits, SourceBytes * 8);
+      Text += "            let input = " + Input +
+              "\n            let result = " + floatType(Bytes * 8) +
+              "(input).bitPattern\n"
+              "            let outgoing = read()\n            return " +
+              (Bytes == 4 ? "Swift.UInt64(result) | (outgoing << 32)"
+                          : WideType + "(lo: result, hi: outgoing)") +
+              "\n        }\n";
+    }
     return Text + "    }\n";
+  }
+
+  static std::string fpConversionName(Intrinsic Id, unsigned Control) {
+    return x86FPScalarConvertMnemonic(Control) + "_source" +
+           std::to_string(x86FPScalarConvertSourceBytes(Control) * 8) +
+           (Id == Intrinsic::X86FPScalarConvertMemoryState ? "_memory" : "");
   }
 
   std::string call(const ExprPtr &E, unsigned Depth, bool Statement = false) {
@@ -516,17 +564,28 @@ class Writer {
     if (E && E->Kind == ExprKind::Call &&
         isX86FPStateIntrinsic(E->IntrinsicId)) {
       const auto Shape = x86FPStateHighShape(*E, Arch::Unknown);
+      Intrinsic ScalarArithmetic = Intrinsic::None;
+      if ((E->IntrinsicId == Intrinsic::X86FPArithState ||
+           E->IntrinsicId == Intrinsic::X86FPArithMemoryState) &&
+          x86FPArithStateIsScalar(Shape.Control)) {
+        for (auto Id : {Intrinsic::X86FPAddState, Intrinsic::X86FPSubState,
+                        Intrinsic::X86FPMulState, Intrinsic::X86FPDivState})
+          if (unsigned(x86ScalarFPStateKind(Id)) == (Shape.Control & 7))
+            ScalarArithmetic = Id;
+      }
       if (E->IsIndirectCall || E->IndirectTarget || E->SourceCallHint ||
-          E->DoesNotReturn || !x86FPStateShapeIsValid(E->IntrinsicId, Shape) ||
+          E->DoesNotReturn ||
+          E->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+          !x86FPStateShapeIsValid(E->IntrinsicId, Shape) ||
           isX86FPConversionStateIntrinsic(E->IntrinsicId) ||
-          isX86FPScalarConvertStateIntrinsic(E->IntrinsicId) ||
           isX86F16CStateIntrinsic(E->IntrinsicId) ||
           isX86FPComiStateIntrinsic(E->IntrinsicId) ||
           isX86FPMaskCompareStateIntrinsic(E->IntrinsicId) ||
           isX86FPPackedConvertStateIntrinsic(E->IntrinsicId) ||
           isX86FPRoundStateIntrinsic(E->IntrinsicId) ||
           isX86FPApprox12Intrinsic(E->IntrinsicId) ||
-          isX86FPArithStateIntrinsic(E->IntrinsicId) ||
+          (isX86FPArithStateIntrinsic(E->IntrinsicId) &&
+           ScalarArithmetic == Intrinsic::None) ||
           (Statement && x86FPStateReturnsValue(E->IntrinsicId)) ||
           (!Statement && !x86FPStateReturnsValue(E->IntrinsicId)))
         throw Unsupported("unsupported Swift x86 floating-point state shape");
@@ -536,6 +595,27 @@ class Writer {
       if (E->IntrinsicId == Intrinsic::X86WriteMXCSR)
         return FPStateType + ".write(" + expression(E->Operands[0], Depth + 1) +
                ")";
+      if (ScalarArithmetic != Intrinsic::None) {
+        const unsigned Bytes = x86FPArithStateElementBytes(Shape.Control);
+        const bool Memory = isX86FPStateMemoryIntrinsic(E->IntrinsicId);
+        FPStateOperations.insert({ScalarArithmetic, Bytes});
+        if (Memory)
+          FPStateMemoryOperations.insert({ScalarArithmetic, Bytes});
+        UsesWide |= Shape.OutputSize == 12;
+        return FPStateType + "." + x86ScalarFPStateMnemonic(ScalarArithmetic) +
+               std::to_string(Bytes * 8) + (Memory ? "_memory(" : "(") +
+               expression(E->Operands[Memory ? 0 : 1], Depth + 1) + ", " +
+               expression(E->Operands[2], Depth + 1) + ", " +
+               expression(E->Operands[3], Depth + 1) + ")";
+      }
+      if (isX86FPScalarConvertStateIntrinsic(E->IntrinsicId)) {
+        FPStateConversions.insert({E->IntrinsicId, Shape.Control});
+        UsesWide |= Shape.OutputSize == 12;
+        return FPStateType + "." +
+               fpConversionName(E->IntrinsicId, Shape.Control) + "(" +
+               expression(E->Operands[0], Depth + 1) + ", " +
+               expression(E->Operands[2], Depth + 1) + ")";
+      }
       FPStateOperations.insert({E->IntrinsicId, Shape.LeftSize});
       UsesWide |= Shape.OutputSize == 12;
       std::string Text = FPStateType + "." +

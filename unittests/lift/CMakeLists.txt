@@ -28,6 +28,10 @@ add_neverd_unittest(NeverDFPParameterMaskTests
   core/MedCallingConvTests.cpp
   LINK_COMPONENTS Pipeline BackendLLVM BackendC)
 
+add_neverd_unittest(NeverDHighSwiftEmitterTests
+  ../backend/HighSwiftEmitterTests.cpp
+  LINK_COMPONENTS Pipeline BackendSwift)
+
 add_neverd_unittest(NeverDARM32ObjectImmediateTests
   arm32/ARM32_ObjectImmediateTests.cpp
   LINK_COMPONENTS Pipeline BackendC CodeGen)

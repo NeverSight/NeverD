@@ -1,6 +1,7 @@
 #include "MobileIOSInternal.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 
@@ -751,6 +752,33 @@ TEST(MobileIOSNative, CCommentsLiteralsCannotCreateFunctionBodies) {
       nativeFunctionCount("static inline int helper(){return 1;}\nint "
                           "real(){const char *s=\"/* } {\";return helper();}"),
       1u);
+}
+
+TEST(MobileIOSNative, ExactFloatingRoundingPrefixPreservesSourceAndBodyCount) {
+  Budget b;
+  auto [batch, metadata] = objcFixture();
+  auto &method = *batch.getArray("methods")->front().getAsObject();
+  const auto body = requiredString(method, "source");
+  const auto policy = neverd::c_float::ContractionPolicy.str();
+  method["source"] = policy + body;
+  EXPECT_EQ(nativeFunctionCount(policy + body), 1u);
+  const auto result = objcSources(batch, metadata, 8, b);
+  EXPECT_EQ(number(result.coverage, "recovered_method_count"), 1);
+  EXPECT_NE(result.source.find(policy), std::string::npos);
+
+  auto modified = policy;
+  modified.replace(modified.find("FP_CONTRACT OFF"), 15, "FP_CONTRACT ON");
+  for (const auto &prefix : {modified, policy + "#if 1\n"}) {
+    method["source"] = prefix + body;
+    EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
+                     "recovered_method_count"),
+              0);
+    EXPECT_THROW(nativeFunctionCount(prefix + body), Error);
+  }
+  method["source"] = "#if 1\n" + policy + body + "#endif\n";
+  EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
+                   "recovered_method_count"),
+            0);
 }
 TEST(MobileIOSNative, RuntimeBlockTypeDoesNotInventInvocationSignature) {
   EXPECT_EQ(
