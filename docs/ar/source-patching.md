@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](source-patching.md)
 
-<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
+<!-- i18n-source: 3ceb56e2abf86f594f437a16b09a1888650cb49d4cf06860711e73458c52c68d -->
 
 [← Documentation Index](README.md)
 
@@ -66,8 +66,8 @@ neverd patch app --from-source=replacement.c --compiler=neverc \
 | المترجم | الناتج | ملف تنفيذ نظام التشغيل المتحقق |
 |---|---|---|
 | Clang 22.1.x | LLVM IR | ELF x64/ARM64 C/C++؛ Mach-O x64/ARM64 C/C++؛ PE x86/x64/ARM64 C; PE x64/ARM64 C++ FH3 |
-| Clang 22.1.6 | كائن أصلي | ELF x64 C/C++; PE x86/x64/ARM64 C |
-| GCC/G++ 13.3.0 | كائن أصلي | ELF x64 C/C++ مع بيئة Itanium متوافقة |
+| Clang 22.1.6 | كائن أصلي | ELF x64/ARM64 C/C++; PE x86/x64/ARM64 C |
+| GCC/G++ 13.3.0 | كائن أصلي | ELF x64/ARM64 C/C++ مع بيئة Itanium متوافقة |
 | NeverC 3389.1.5 الوضع العادي | LLVM IR | ELF x64 C؛ Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 الوضع العادي | كائن أصلي | ELF x64 C |
 | NeverC 3389.1.5 C | LLVM IR / كائن أصلي | ELF / PE / Mach-O x64/ARM64: مصدر C خالص |
@@ -164,6 +164,6 @@ ctest --test-dir build-source -L \
 
 اجتاز التحقق من عمليات Windows الأصلية [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) جميع الملاحظات الـ90: 30 لكل من x86 وx64 وARM64، عبر IR المصدر والكائنات المترجمة والكائنات المقدمة. نُفّذ x86/x64 على Windows x64، ونُفّذ ARM64 على `windows-11-arm` باستخدام الصور نفسها بعد التحقق من بصماتها. اجتاز التشغيل نفسه أيضًا جميع الفحوص المتخصصة الـ16 لمسارات PE والكائنات وtrampoline، وجميع فحوص مصفوفة Unicorn الـ143، دون تخطي أي حالة. احتفظ اختبار FH3 بسيناريوهات تشغيل C++ x64 السبعة.
 
-يثبت التحقق الأصلي إصدار NeverC عند `182fd2c5dc` مع برامج أصلية مستقلة ومثبت NeverD الحالي. يتطلب `check_source_patch_hosted_pe_runtime.py` عدد 36 مشاهدة لكل معمارية Windows لوسيط C وكائناته وhosted ومرور الاستثناء عبر إطارَي C. ويتطلب `check_source_patch_elf_runtime.py` عدد 66 مشاهدة لكل معمارية Linux لـC والمرور hosted وتسعة سيناريوهات لاستثناءات Clang C++. يجب تطابق الإيصالات والبصمات ومعمارية المضيف الفعلية؛ ولا يعني ذلك تشغيل مترجم NeverC نفسه على مضيف CI.
+يثبت التحقق الأصلي إصدار NeverC عند `182fd2c5dc` مع برامج أصلية مستقلة ومثبت NeverD الحالي. يتطلب `check_source_patch_hosted_pe_runtime.py` عدد 36 مشاهدة لكل معمارية Windows لوسيط C وكائناته وhosted ومرور الاستثناء عبر إطارَي C. ويتطلب `check_source_patch_elf_runtime.py` عدد 120 مشاهدة لكل معمارية Linux لـC والمرور hosted وتسعة سيناريوهات لاستثناءات Clang C++. يجب تطابق الإيصالات والبصمات ومعمارية المضيف الفعلية؛ ولا يعني ذلك تشغيل مترجم NeverC نفسه على مضيف CI. ينفذ Linux x64 وARM64 السيناريوهات التسعة لكل من وسيط Clang وكائنات Clang الأصلية وكائنات GCC الأصلية. ويبقى NeverC مخصصا لـC فقط.
 
 تعد المشاهدات الـ204 لملف الترجمة السابق سجلا تاريخيا ولا تثبت عقد C الخالصة الحالي. تستخدم مسارات NeverC الثلاثة الحالية لغة C، وتختبر Clang C++ FH3 منفصلة. تستخدم macOS x64 بيئة Rosetta 2. لا تحل نتائج CPU في Unicorn/QEMU محل التحقق الأصلي من النظام وفك المكدس.

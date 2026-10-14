@@ -33,7 +33,7 @@
         },
         "c.o": {
           "path": "x64/c.o",
-          "sha256": "0db4f8747f6384b4f82a5ff7093693076e9b6807708eb8701ef1db2339153ad1"
+          "sha256": "2f24de10b200310f20a5aa48798cc3e4443c71705a214e7f4ba91b1712f31ab3"
         },
         "hosted.o": {
           "path": "x64/hosted.o",
@@ -61,7 +61,7 @@
         },
         "producer-commands.json": {
           "path": "x64/producer-commands.json",
-          "sha256": "628c23170b011fe0883ef3911018e76ca9ea4221e2c81f19638eca6725a2101d"
+          "sha256": "d3ea67ec1cf482ba199b5994b7f61104091726404fc0656e67ba75934e02ba6d"
         }
       }
     },
@@ -88,7 +88,7 @@
         },
         "c.o": {
           "path": "arm64/c.o",
-          "sha256": "318e517a6d6b5152e46c8837b7b8f4a1fc9769b016cf383a4a38e21ba19c2ba8"
+          "sha256": "9b212adf93fd1e647c1b744cc52d4796899c9d7365e801b38ea88099820c366d"
         },
         "hosted.o": {
           "path": "arm64/hosted.o",
@@ -116,7 +116,7 @@
         },
         "producer-commands.json": {
           "path": "arm64/producer-commands.json",
-          "sha256": "8eb53e2b87700b5d7b492f087aec5dcc00eec3dca17c5b36fcb4808d707b671f"
+          "sha256": "6214c20007b692442be6c56dad10e7e9722433008ea8f73218e5be34bba6e536"
         }
       }
     }

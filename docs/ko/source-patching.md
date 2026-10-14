@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
+<!-- i18n-source: 3ceb56e2abf86f594f437a16b09a1888650cb49d4cf06860711e73458c52c68d -->
 
 [← Documentation Index](README.md)
 
@@ -66,8 +66,8 @@ Clang LLVM IR 경로는 Windows ARM64 C++ FH3를 지원하며 xdata, 부모 프�
 | 컴파일러 | 산출물 | 검증된 OS 실행 프로파일 |
 |---|---|---|
 | Clang 22.1.x | LLVM IR | ELF x64/ARM64 C/C++; Mach-O x64/ARM64 C/C++; PE x86/x64/ARM64 C; PE x64/ARM64 C++ FH3 |
-| Clang 22.1.6 | 네이티브 오브젝트 | ELF x64 C/C++; PE x86/x64/ARM64 C |
-| GCC/G++ 13.3.0 | 네이티브 오브젝트 | 호환되는 Itanium 런타임의 ELF x64 C/C++ |
+| Clang 22.1.6 | 네이티브 오브젝트 | ELF x64/ARM64 C/C++; PE x86/x64/ARM64 C |
+| GCC/G++ 13.3.0 | 네이티브 오브젝트 | 호환되는 Itanium 런타임의 ELF x64/ARM64 C/C++ |
 | NeverC 3389.1.5 일반 모드 | LLVM IR | ELF x64 C; Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 일반 모드 | 네이티브 오브젝트 | ELF x64 C |
 | NeverC 3389.1.5 C | LLVM IR / 네이티브 객체 | ELF / PE / Mach-O x64/ARM64: 순수 C 소스 |
@@ -164,6 +164,6 @@ Windows 워크플로는 x86, x64, ARM64용 PE 교체 바이너리 27개도 생�
 
 Windows 네이티브 프로세스 검증 [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817)에서 소스 IR, 컴파일된 객체, 외부 객체 경로를 포함한 관측 90회가 모두 통과했습니다. x86, x64, ARM64 각각 30회이며, x86/x64는 Windows x64에서, ARM64는 동일한 해시 검증 이미지를 사용해 `windows-11-arm`에서 실행했습니다. 같은 실행에서 PE/객체/trampoline 전용 검사 16개와 Unicorn 대상 행렬 검사 143개도 건너뛰기 없이 모두 통과했습니다. FH3 사례는 x64 C++ 실행 시나리오 7가지도 계속 검증했습니다.
 
-네이티브 검증은 NeverC `182fd2c5dc`, 독립 원본 및 현재 NeverD 설치기를 사용합니다. `check_source_patch_hosted_pe_runtime.py`는 Windows 아키텍처마다 C IR/객체/hosted 결과와 두 C 프레임의 예외 전달을 36회 관측합니다. `check_source_patch_elf_runtime.py`는 Linux 아키텍처마다 C, hosted 전달과 아홉 Clang C++ 예외 시나리오를 66회 관측합니다. 영수증, 해시, 실제 호스트 아키텍처가 일치해야 하며 CI 호스트에서 NeverC 실행 파일을 실행했다는 뜻은 아닙니다.
+네이티브 검증은 NeverC `182fd2c5dc`, 독립 원본 및 현재 NeverD 설치기를 사용합니다. `check_source_patch_hosted_pe_runtime.py`는 Windows 아키텍처마다 C IR/객체/hosted 결과와 두 C 프레임의 예외 전달을 36회 관측합니다. `check_source_patch_elf_runtime.py`는 Linux 아키텍처마다 C, hosted 전달과 아홉 Clang C++ 예외 시나리오를 120회 관측합니다. 영수증, 해시, 실제 호스트 아키텍처가 일치해야 하며 CI 호스트에서 NeverC 실행 파일을 실행했다는 뜻은 아닙니다. Linux x64와 ARM64에서 Clang IR, Clang 네이티브 객체, GCC 네이티브 객체 각각의 아홉 예외 시나리오를 검증합니다. NeverC는 계속 C 전용입니다.
 
 이전 변환 프로필의 204회 관측은 과거 기록이며 현재 C 전용 계약의 근거가 아닙니다. 현재 세 NeverC 경로는 C를 사용하고 Clang C++ FH3는 별도로 검증합니다. macOS x64는 Rosetta 2를 사용하며 Unicorn/QEMU CPU 결과는 네이티브 OS와 언와인더 검증을 대신하지 않습니다.

@@ -9,9 +9,9 @@
       "object": "x64.obj",
       "payload": "x64.bin",
       "audit": "x64.audit.json",
-      "object_sha256": "15a34d8d5e41eb7602e0350beaca8490238382b0825c7aa01ffc1e384882dece",
+      "object_sha256": "a68ac88d13a6272837f049cdf7deea59e7649d0ecac6b236ab73444ffb8f26f3",
       "payload_sha256": "1ac54344cfe17e17fb56b5108812ee7833e32c676619cbcf857718c8a1929dc4",
-      "audit_sha256": "8371b3404afc5a485c473fe2d38a3818cd64e7674c1259dc55ca1287bcecbcda",
+      "audit_sha256": "6f757f77b2872caeda21b6e500c63d332b1241efe8835ee5e7ba222027680439",
       "c_files": {
         "c.ll": {
           "path": "x64/c.ll",
@@ -19,11 +19,11 @@
         },
         "c.obj": {
           "path": "x64/c.obj",
-          "sha256": "0f1d14c49a2aa13aca3616c89005a14d2f322c39015fd4191860a358ef6200b2"
+          "sha256": "4a0b2e3090f3a26764ccaf6d67b06bc038aa41fc51118e7a70dd78b740ace04b"
         },
         "c-hosted.obj": {
           "path": "x64/c-hosted.obj",
-          "sha256": "864a1dd71291dfe431432611aaa4bec138b4930f8036afded02853c7ef02fb17"
+          "sha256": "1c5b59c884ad375083a6a3614f1c7a29d02e1042d84715ec93a2007f266f1680"
         },
         "c-hosted.bin": {
           "path": "x64/c-hosted.bin",
@@ -31,11 +31,11 @@
         },
         "c-hosted.audit.json": {
           "path": "x64/c-hosted.audit.json",
-          "sha256": "248e24b14a2fea0a308c1c27e84dcdb98a16fd46af53440e7f74620e175132cb"
+          "sha256": "c65b6140017882a7637b85d6c3744a1ef0f642240251df9f6cda045bcaba2e8b"
         },
         "producer-commands.json": {
           "path": "x64/producer-commands.json",
-          "sha256": "922893ef46c8ac8e4248307070ebd94cbc6797317538619ca81992072cb255b6"
+          "sha256": "3edd94fc2ebd5216038f4b5cf2a91a22a7fb0d725cf41462dd3f63a3095a8ae9"
         }
       }
     },
@@ -45,9 +45,9 @@
       "object": "arm64.obj",
       "payload": "arm64.bin",
       "audit": "arm64.audit.json",
-      "object_sha256": "3a91b7df38ca28a070e895bc49a47f0b742eecc129029bf10cade2475bf33579",
+      "object_sha256": "84f9651b231eb560fe3251680b880061867ea9d94a028b16b16b19860b96d7b5",
       "payload_sha256": "4bd004bb647b13f02275e3eb219f5e1fbfc20003060851a2e4ef58640d13cd7a",
-      "audit_sha256": "de3256e4b8798cd336031f7a41e92cb23cbb8622e63373a9991954335a24a1a2",
+      "audit_sha256": "910fbc714cbf59a14d9e2709c6c25837eb08bb8c44ad2684c84d412f147174ca",
       "c_files": {
         "c.ll": {
           "path": "arm64/c.ll",
@@ -55,11 +55,11 @@
         },
         "c.obj": {
           "path": "arm64/c.obj",
-          "sha256": "3399e519bc02aae4ca226e691cba0352f3caeb4f0da0f24fdf1af85b04b2c3a8"
+          "sha256": "2d8faff84c060a9792863c5fb36a9964c4c88aeb8ae58ef8b5b41d54da761d8a"
         },
         "c-hosted.obj": {
           "path": "arm64/c-hosted.obj",
-          "sha256": "48cc9f3bda0b98571a4bc8daec9bbdce8ce361d2beb76fb0ac78bbf54f3788b1"
+          "sha256": "ca2a886cf17c7457cb1fff9774603c805fbc1b2ed96117f59d917c09a1b5d5b7"
         },
         "c-hosted.bin": {
           "path": "arm64/c-hosted.bin",
@@ -67,11 +67,11 @@
         },
         "c-hosted.audit.json": {
           "path": "arm64/c-hosted.audit.json",
-          "sha256": "fc653a5b51145aaca10f3508f4bd5502173723139d45b8e66b3c61426e56e106"
+          "sha256": "65bff0360fa3caf13de58fc5cea4ad68a79361b23c5ded686385cc51cfaf1f77"
         },
         "producer-commands.json": {
           "path": "arm64/producer-commands.json",
-          "sha256": "665b7a5e7c7e796be1b5d7fbb46ee99b5cf3488cfc3d74221b9ae735bdc41094"
+          "sha256": "5aa118840c94232cf173db36f573445403a28ea58dd30c930b542c017d9cd58a"
         }
       }
     }

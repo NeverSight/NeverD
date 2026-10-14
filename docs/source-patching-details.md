@@ -56,9 +56,9 @@ explicit mappings; native objects require explicit mappings.
 
 | Producer | Artifact | Target and language verified |
 |---|---|---|
-| Clang 22.1.6 | LLVM IR | ELF x64 C/C++; Mach-O x64/ARM64 C/C++; PE x86/x64/ARM64 C; PE x64 C++ FH3 |
-| Clang 22.1.6 | Native object | ELF x64 C/C++; PE x86/x64/ARM64 C |
-| GCC/G++ 13.3.0 | Native object | ELF x64 C/C++ with a matching Itanium ABI runtime |
+| Clang 22.1.6 | LLVM IR | ELF x64/ARM64 C/C++; Mach-O x64/ARM64 C/C++; PE x86/x64/ARM64 C; PE x64 C++ FH3 |
+| Clang 22.1.6 | Native object | ELF x64/ARM64 C/C++; PE x86/x64/ARM64 C |
+| GCC/G++ 13.3.0 | Native object | ELF x64/ARM64 C/C++ with a matching Itanium ABI runtime |
 | NeverC 3389.1.5 ordinary mode | LLVM IR | ELF x64 C; Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 ordinary mode | Native object | ELF x64 C |
 

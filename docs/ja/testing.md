@@ -1777,7 +1777,7 @@ ctest --test-dir build-release -L '^(NeverDX86X87IntegerLoadTests|NeverDLLVMCInt
 NEVERD_TEST_MATRIX_NEVERC=/path/to/neverc build-source-full/bin/NeverDSourcePatchMatrixTests --gtest_filter="NeverCProfiles/*"
 ```
 
-ネイティブ検証は NeverC `182fd2c5dc`、独立した元プログラム、現在の NeverD インストーラを使います。`check_source_patch_hosted_pe_runtime.py` は Windows の各アーキテクチャで C IR・オブジェクト・hosted と二層 C フレームの例外伝播を 36 回観測します。`check_source_patch_elf_runtime.py` は Linux の各アーキテクチャで C、hosted 伝播、九つの Clang C++ 例外シナリオを 66 回観測します。証跡、ハッシュ、実際のホスト構成の一致が必須で、CI ホスト上の NeverC 本体実行を意味しません。
+ネイティブ検証は NeverC `182fd2c5dc`、独立した元プログラム、現在の NeverD インストーラを使います。`check_source_patch_hosted_pe_runtime.py` は Windows の各アーキテクチャで C IR・オブジェクト・hosted と二層 C フレームの例外伝播を 36 回観測します。`check_source_patch_elf_runtime.py` は Linux の各アーキテクチャで C、hosted 伝播、九つの Clang C++ 例外シナリオを 120 回観測します。証跡、ハッシュ、実際のホスト構成の一致が必須で、CI ホスト上の NeverC 本体実行を意味しません。 Linux の x64 と ARM64 では Clang IR、Clang ネイティブオブジェクト、GCC ネイティブオブジェクトそれぞれの九つの例外シナリオを検証します。NeverC は C 専用です。
 
 旧変換プロファイルの 204 回の観測は履歴であり、現在の C 専用契約の証拠にはなりません。現在の三つの NeverC 経路は C を使用し、Clang C++ FH3 は別途検証します。macOS x64 は Rosetta 2 を使います。Unicorn/QEMU の CPU 結果はネイティブ OS やアンワインダの検証を代替しません。
 
@@ -1808,3 +1808,5 @@ python3 scripts/run_lift_qualification.py \
 ネイティブ構成では LLVM-C の広幅整数定数・格納検証と、i386 合成テーブルのネイティブ実行も必須です。Swift のシグナル観測には独立した生メモリを使い、両最適化レベルで未書き込みの正常例と、状態・結果を早期に書き込む別々の異常例を検証します。シグナルハンドラから使用中の Swift `inout` 変数を読むと排他的アクセス違反が発生し、例外の観測が無効になります。
 
 `NeverDFPParameterMaskTests` は共有 ABI と `FPParameterMask.*` を実行し、有効バイト、先行ストア、曖昧な定義、マスクされない戻り経路を保持して、完全に消去・置換されたバイトだけを除外します。D0 中間転送、D16-D31 作業レジスタ、FP 戻り値合流の両経路を検証します。`NeverDARM32ObjectImmediateTests` は ARM32 ホスト C 差分 5 件を独立実行し、Windows EH CI は Clang 23 と異なる NEON zip/mask 形状も Clang 18 で確認します。ABI オペランド未回復の直接／間接 CALL は明示的に準備された FP レジスタを保持します。
+
+ネイティブ Linux x64 ジョブは Clang IR、Clang ネイティブオブジェクト、GCC ネイティブオブジェクトの三つの C++ 例外置換も必須とします。XML とプロセス終了を別途監査し、失敗やスキップは検証失敗です。これらの C++ 入力には NeverC を使いません。

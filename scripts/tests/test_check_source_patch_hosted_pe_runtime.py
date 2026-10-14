@@ -61,6 +61,17 @@ class HostedProducerEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "extent"):
             checker.image_bytes(path, 0x140001000, 5)
 
+    def test_bitcode_cannot_be_blessed_as_a_native_object_by_a_new_digest(self):
+        path = self.root / "x64/c.obj"
+        path.write_bytes(b"BC\xc0\xde" + b"bitcode" * 4)
+        manifest_path = self.root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        row = next(row for row in manifest["entries"] if row["architecture"] == "x64")
+        row["c_files"]["c.obj"]["sha256"] = checker.pe.digest(path)
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, "native COFF object"):
+            checker.producer_fixture(self.root, "x64")
+
 
 class HostedRuntimeEvidenceTests(unittest.TestCase):
     def setUp(self):

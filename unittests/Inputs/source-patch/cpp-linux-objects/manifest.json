@@ -1,0 +1,95 @@
+{
+  "schema": "neverd.source-patch.cpp-linux-objects.v1",
+  "language": "c++",
+  "source_sha256": "50101a0d8c0ba8b01a59426c1f9ae8efee44c693e99f3b84899a9876c97638c8",
+  "entries": [
+    {
+      "architecture": "x64",
+      "target": "x86_64-unknown-linux-gnu",
+      "objects": {
+        "clang": {
+          "path": "x64/clang.o",
+          "sha256": "8190d8c37bb7ddfe041e01703a4a3fa0166904c1586e1b6d598c8f4996aa961d",
+          "compiler_target": "x86_64-unknown-linux-gnu",
+          "version": "Homebrew clang version 22.1.6\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/22.1.6/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/22.1.6/etc/clang/arm64-apple-darwin24.cfg\n",
+          "arguments": [
+            "/opt/homebrew/opt/llvm/bin/clang",
+            "--target=x86_64-unknown-linux-gnu",
+            "-O0",
+            "-funwind-tables",
+            "-fno-discard-value-names",
+            "-fno-lto",
+            "-fPIC",
+            "-c",
+            "-x",
+            "c++",
+            "unittests/Inputs/source-patch/neverc-linux/exceptions.cpp",
+            "-o",
+            "unittests/Inputs/source-patch/cpp-linux-objects/x64/clang.o"
+          ]
+        },
+        "gcc": {
+          "path": "x64/gcc.o",
+          "sha256": "3e33a64188a2c70d1bfdd2b40fe696a4bbb989959c41ef3ea8cfd5a3009989e3",
+          "compiler_target": "x86_64-linux-gnu",
+          "version": "x86_64-linux-gnu-g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+          "arguments": [
+            "/usr/bin/x86_64-linux-gnu-g++",
+            "-O0",
+            "-fPIC",
+            "-fno-lto",
+            "-funwind-tables",
+            "-c",
+            "/input/exceptions.cpp",
+            "-o",
+            "/output/x64/gcc.o"
+          ]
+        }
+      }
+    },
+    {
+      "architecture": "arm64",
+      "target": "aarch64-unknown-linux-gnu",
+      "objects": {
+        "clang": {
+          "path": "arm64/clang.o",
+          "sha256": "ecf990b09252b5074743c5bb9c870529f30918dcd817c23b7e7f9394369f8112",
+          "compiler_target": "aarch64-unknown-linux-gnu",
+          "version": "Homebrew clang version 22.1.6\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/22.1.6/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/22.1.6/etc/clang/arm64-apple-darwin24.cfg\n",
+          "arguments": [
+            "/opt/homebrew/opt/llvm/bin/clang",
+            "--target=aarch64-unknown-linux-gnu",
+            "-O0",
+            "-funwind-tables",
+            "-fno-discard-value-names",
+            "-fno-lto",
+            "-fPIC",
+            "-c",
+            "-x",
+            "c++",
+            "unittests/Inputs/source-patch/neverc-linux/exceptions.cpp",
+            "-o",
+            "unittests/Inputs/source-patch/cpp-linux-objects/arm64/clang.o"
+          ]
+        },
+        "gcc": {
+          "path": "arm64/gcc.o",
+          "sha256": "89cd42fa2514561e2eae3b4b9c74d6ab7f5dde1bacffbd5b9136e8d7b1479a82",
+          "compiler_target": "aarch64-linux-gnu",
+          "version": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+          "arguments": [
+            "/usr/bin/g++",
+            "-O0",
+            "-fPIC",
+            "-fno-lto",
+            "-funwind-tables",
+            "-c",
+            "/input/exceptions.cpp",
+            "-o",
+            "/output/arm64/gcc.o"
+          ]
+        }
+      }
+    }
+  ]
+}

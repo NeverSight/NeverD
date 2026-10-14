@@ -27,6 +27,8 @@ CASES = {
     "c-hosted": ((0, 11), (2, 15)),
     "hosted": ((0, 40), (2, 42)),
     "exceptions": cpp.PATCHED_CASES,
+    "clang-object-exceptions": cpp.PATCHED_CASES,
+    "gcc-object-exceptions": cpp.PATCHED_CASES,
 }
 
 
@@ -58,6 +60,7 @@ def image_bytes(path: Path, va: int, size: int) -> bytes:
 
 
 def fixtures(root: Path) -> dict[str, dict]:
+    root = root.resolve()
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     if (manifest.get("schema") != "neverd.neverc-linux-fixtures.v2" or
         manifest.get("producer_commit") != PRODUCER or manifest.get("language") != "c"):
@@ -86,6 +89,9 @@ def fixtures(root: Path) -> dict[str, dict]:
             if not path.is_relative_to(root) or pe.digest(path) != item["sha256"]:
                 raise ValueError("Linux producer artifact path/digest mismatch")
         directory = root / arch
+        for name in ("c.o", "c-hosted.o", "hosted.o"):
+            if machine(directory / name) != PROFILES[arch][1]:
+                raise ValueError("producer must emit a matching native ELF object")
         for prefix in ("hosted", "c-hosted"):
             audit = json.loads((directory / (prefix + ".audit.json")).read_text(encoding="utf-8"))
             if (audit.get("execution_profile") != "hosted-v1" or
@@ -97,9 +103,38 @@ def fixtures(root: Path) -> dict[str, dict]:
     return {row["architecture"]: row for row in rows}
 
 
+def cpp_objects(root: Path) -> dict[str, dict]:
+    root = root.resolve()
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if (manifest.get("schema") != "neverd.source-patch.cpp-linux-objects.v1" or
+        manifest.get("language") != "c++" or
+        manifest.get("source_sha256") != pe.digest(root.parent / "neverc-linux/exceptions.cpp")):
+        raise ValueError("C++ object source profile/digest mismatch")
+    rows = manifest["entries"]
+    if len(rows) != 2 or {row["architecture"] for row in rows} != set(PROFILES):
+        raise ValueError("C++ object architecture inventory mismatch")
+    for row in rows:
+        arch = row["architecture"]
+        if row["target"] != PROFILES[arch][0] or set(row["objects"]) != {"clang", "gcc"}:
+            raise ValueError("C++ object target/producer inventory mismatch")
+        for producer, artifact in row["objects"].items():
+            path = (root / artifact["path"]).resolve()
+            version = artifact["version"].lower()
+            if (not path.is_relative_to(root) or pe.digest(path) != artifact["sha256"] or
+                machine(path) != PROFILES[arch][1]):
+                raise ValueError("C++ object path/digest/machine mismatch")
+            if ("neverc" in version or
+                (producer == "clang" and "clang" not in version) or
+                (producer == "gcc" and ("clang" in version or "g++" not in version))):
+                raise ValueError("C++ object compiler identity mismatch")
+    return {row["architecture"]: row for row in rows}
+
+
 def prepare(args: argparse.Namespace) -> None:
     inputs = args.fixtures.resolve()
     rows = fixtures(inputs)
+    cpp_root = inputs.parent / "cpp-linux-objects"
+    cpp_rows = cpp_objects(cpp_root)
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
     manifest = {"schema": SCHEMA, "commit": os.environ.get("GITHUB_SHA"),
@@ -121,21 +156,27 @@ def prepare(args: argparse.Namespace) -> None:
             shutil.copyfile(inputs / arch / path.name, path)
             originals[case] = path
             record(path, case)
-        for case in ("c-ir", "c-object", "c-hosted", "hosted", "exceptions"):
+        for case in ("c-ir", "c-object", "c-hosted", "hosted", "exceptions",
+                     "clang-object-exceptions", "gcc-object-exceptions"):
             original = originals["original-callback" if case == "hosted" else "original-eh"]
             before = pe.digest(original)
             patched = directory / (case + ".elf")
             target = row["callback_target_va" if case == "hosted" else "target_va"]
             command = [str(args.neverd), "patch", str(original), "--entry=replacement",
                        f"--func={target:#x}", "--patch-report", "-o", str(patched)]
-            if case == "c-ir":
+            cpp_object = None
+            if case in ("clang-object-exceptions", "gcc-object-exceptions"):
+                cpp_object = cpp_root / cpp_rows[arch]["objects"][case.split("-")[0]]["path"]
+                command += ["--from-object=" + str(cpp_object)]
+            elif case == "c-ir":
                 command += ["--from-ir=" + str(inputs / arch / "c.ll")]
             elif case in ("c-object", "c-hosted", "hosted"):
                 command += ["--from-object=" + str(inputs / arch / ("c.o" if case == "c-object" else case + ".o"))]
             else:
                 command += ["--from-source=" + str(inputs / "exceptions.cpp"), "--language=c++",
-                            "--compiler-path=" + str(args.clang), "--compiler-arg=-O0",
-                            f"--bind=data:cleanup_count={row['cleanup_va']:#x}:4",
+                            "--compiler-path=" + str(args.clang), "--compiler-arg=-O0"]
+            if case == "exceptions" or cpp_object:
+                command += [f"--bind=data:cleanup_count={row['cleanup_va']:#x}:4",
                             f"--bind=function:original_thrower={row['thrower_va']:#x}"]
             result = pe.run(command, directory / (case + "-patch.log"))
             reports = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
@@ -148,6 +189,8 @@ def prepare(args: argparse.Namespace) -> None:
                 obj = inputs / arch / ("c.o" if case == "c-object" else case + ".o")
                 if receipt.get("object_sha256") != pe.digest(obj):
                     raise ValueError("Linux object publication identity mismatch")
+            if cpp_object and receipt.get("object_sha256") != pe.digest(cpp_object):
+                raise ValueError("C++ object publication identity mismatch")
             if case in ("hosted", "c-hosted"):
                 payload = (inputs / arch / (case + ".bin")).read_bytes()
                 if (receipt.get("object_sha256") != pe.digest(inputs / arch / (case + ".o")) or
@@ -188,7 +231,7 @@ def execute(args: argparse.Namespace) -> None:
     output.write_text(json.dumps({"schema": SCHEMA, "commit": manifest["commit"],
         "producer_commit": PRODUCER, "architecture": args.arch, "native_host": native,
         "observations": observations}, indent=2) + "\n", encoding="utf-8")
-    print(f"{args.arch}: all 66 native Linux C/hosted/Clang EH observations passed")
+    print(f"{args.arch}: all {len(observations)} native Linux C/hosted/Clang/GCC EH observations passed")
 
 
 def main() -> None:

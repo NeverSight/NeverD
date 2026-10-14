@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
+<!-- i18n-source: 3ceb56e2abf86f594f437a16b09a1888650cb49d4cf06860711e73458c52c68d -->
 
 [← Documentation Index](README.md)
 
@@ -66,8 +66,8 @@ Clang 的 LLVM IR 路径也接入 Windows ARM64 C++ FH3，核对编译器拥有�
 | 编译器 | 制品 | 已验证的操作系统运行配置 |
 |---|---|---|
 | Clang 22.1.x | LLVM IR | ELF x64/ARM64 C/C++；Mach-O x64/ARM64 C/C++；PE x86/x64/ARM64 C; PE x64/ARM64 C++ FH3 |
-| Clang 22.1.6 | 原生对象 | ELF x64 C/C++; PE x86/x64/ARM64 C |
-| GCC/G++ 13.3.0 | 原生对象 | ELF x64 C/C++，需要兼容的 Itanium 运行库 |
+| Clang 22.1.6 | 原生对象 | ELF x64/ARM64 C/C++; PE x86/x64/ARM64 C |
+| GCC/G++ 13.3.0 | 原生对象 | ELF x64/ARM64 C/C++，需要兼容的 Itanium 运行库 |
 | NeverC 3389.1.5 普通模式 | LLVM IR | ELF x64 C；Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 普通模式 | 原生对象 | ELF x64 C |
 | NeverC 3389.1.5 C | LLVM IR / 原生对象 | ELF / PE / Mach-O x64/ARM64: 纯 C 源代码 |
@@ -164,6 +164,6 @@ Windows 工作流还会为 x86、x64 和 ARM64 生成 27 个 PE 替换产物。`
 
 Windows 原生进程验收 [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) 的 90 次观测全部通过：x86、x64 和 ARM64 各 30 次，覆盖源码 IR、编译对象和外部对象三条路径。x86/x64 在 Windows x64 上执行；ARM64 在 `windows-11-arm` 上执行，使用同一批经过哈希校验的映像。同一轮的 16 个 PE/对象/trampoline 专项检查和 143 个 Unicorn 目标矩阵检查也全部通过，无跳过。FH3 用例继续验证七种 x64 C++ 运行场景。
 
-原生生产语料固定 NeverC `182fd2c5dc`，使用独立原程序和当前 NeverD 安装器。`check_source_patch_hosted_pe_runtime.py` 在每种 Windows 架构要求 36 次 C IR/对象/hosted 结果与两层 hosted C 展开观测；`check_source_patch_elf_runtime.py` 在每种 Linux 架构要求 66 次 C、hosted 传播和九种 Clang C++ 异常场景观测。凭据、文件摘要及真实主机架构必须一致；这些检查不代表 CI 主机执行了 NeverC 编译器本身。
+原生生产语料固定 NeverC `182fd2c5dc`，使用独立原程序和当前 NeverD 安装器。`check_source_patch_hosted_pe_runtime.py` 在每种 Windows 架构要求 36 次 C IR/对象/hosted 结果与两层 hosted C 展开观测；`check_source_patch_elf_runtime.py` 在每种 Linux 架构要求 120 次 C、hosted 传播和九种 Clang C++ 异常场景观测。凭据、文件摘要及真实主机架构必须一致；这些检查不代表 CI 主机执行了 NeverC 编译器本身。 Linux 清单在 x64、ARM64 上分别覆盖 Clang IR、Clang 原生对象和 GCC 原生对象各九种异常场景；NeverC 仍仅处理 C。
 
 旧翻译配置的 204 次观测凭据仅保留为历史记录，不能证明当前纯 C 编译契约。当前三条 NeverC 路径都使用 C，Clang C++ FH3 另行验证。macOS x64 使用 Rosetta 2；Unicorn/QEMU 的 CPU 结果不能代替原生操作系统与异常展开验证。

@@ -74,6 +74,10 @@ def producer_fixture(root: Path, arch: str) -> tuple[Path, bytes]:
         path = (root / item["path"]).resolve()
         if not path.is_relative_to(root.resolve()) or pe.digest(path) != item["sha256"]:
             raise ValueError("C producer artifact path/digest mismatch")
+    for path in (root / arch / "c.obj", root / arch / "c-hosted.obj", root / row["object"]):
+        data = path.read_bytes()
+        if len(data) < 20 or struct.unpack_from("<H", data)[0] != pe.PROFILES[arch][1]:
+            raise ValueError("producer must emit a native COFF object, not bitcode")
     cpp_audit = json.loads((root / arch / "c-hosted.audit.json").read_text(encoding="utf-8"))
     if (cpp_audit.get("execution_profile") != "hosted-v1" or cpp_audit.get("keep_unwind") is not True or
         cpp_audit.get("target_triple") != row["target"] or cpp_audit.get("entry_offset") != 0 or

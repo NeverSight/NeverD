@@ -1767,7 +1767,7 @@ ctest --test-dir build-release -L '^(NeverDX86X87IntegerLoadTests|NeverDLLVMCInt
 NEVERD_TEST_MATRIX_NEVERC=/path/to/neverc build-source-full/bin/NeverDSourcePatchMatrixTests --gtest_filter="NeverCProfiles/*"
 ```
 
-네이티브 검증은 NeverC `182fd2c5dc`, 독립 원본 및 현재 NeverD 설치기를 사용합니다. `check_source_patch_hosted_pe_runtime.py`는 Windows 아키텍처마다 C IR/객체/hosted 결과와 두 C 프레임의 예외 전달을 36회 관측합니다. `check_source_patch_elf_runtime.py`는 Linux 아키텍처마다 C, hosted 전달과 아홉 Clang C++ 예외 시나리오를 66회 관측합니다. 영수증, 해시, 실제 호스트 아키텍처가 일치해야 하며 CI 호스트에서 NeverC 실행 파일을 실행했다는 뜻은 아닙니다.
+네이티브 검증은 NeverC `182fd2c5dc`, 독립 원본 및 현재 NeverD 설치기를 사용합니다. `check_source_patch_hosted_pe_runtime.py`는 Windows 아키텍처마다 C IR/객체/hosted 결과와 두 C 프레임의 예외 전달을 36회 관측합니다. `check_source_patch_elf_runtime.py`는 Linux 아키텍처마다 C, hosted 전달과 아홉 Clang C++ 예외 시나리오를 120회 관측합니다. 영수증, 해시, 실제 호스트 아키텍처가 일치해야 하며 CI 호스트에서 NeverC 실행 파일을 실행했다는 뜻은 아닙니다. Linux x64와 ARM64에서 Clang IR, Clang 네이티브 객체, GCC 네이티브 객체 각각의 아홉 예외 시나리오를 검증합니다. NeverC는 계속 C 전용입니다.
 
 이전 변환 프로필의 204회 관측은 과거 기록이며 현재 C 전용 계약의 근거가 아닙니다. 현재 세 NeverC 경로는 C를 사용하고 Clang C++ FH3는 별도로 검증합니다. macOS x64는 Rosetta 2를 사용하며 Unicorn/QEMU CPU 결과는 네이티브 OS와 언와인더 검증을 대신하지 않습니다.
 
@@ -1798,3 +1798,5 @@ python3 scripts/run_lift_qualification.py \
 네이티브 구성은 LLVM-C 넓은 정수 상수·저장 검사와 i386 합성 테이블의 네이티브 실행도 요구합니다. Swift 신호 관찰기는 독립적인 원시 저장 공간을 사용하며, 두 최적화 수준에서 미기록 정상 대조와 상태·결과의 조기 기록을 각각 검출하는 음성 대조를 검증합니다. 신호 처리기가 활성 Swift `inout` 변수를 읽으면 배타적 접근 오류가 발생하여 예외 관찰이 무효가 됩니다.
 
 `NeverDFPParameterMaskTests`는 공통 ABI와 `FPParameterMask.*`를 실행하며 유효 바이트, 앞선 저장, 모호한 정의와 마스크되지 않은 반환 경로를 유지하고 완전히 지우거나 대체한 바이트만 제외합니다. D0 중간 전달, D16-D31 임시 레지스터와 FP 반환 합류의 두 경로를 검사합니다. `NeverDARM32ObjectImmediateTests`는 ARM32 호스트 C 차분 5개를 별도로 실행하고 Windows EH CI는 Clang 23과 다른 NEON zip/mask 형태도 Clang 18로 확인합니다. ABI 피연산자가 복구되지 않은 직접/간접 CALL은 명시적으로 준비한 FP 레지스터를 유지합니다.
+
+네이티브 Linux x64 작업은 Clang IR, Clang 네이티브 객체, GCC 네이티브 객체의 세 C++ 예외 패치도 필수로 검증합니다. XML과 프로세스 종료 상태를 별도로 감사하며 실패나 건너뛰기는 검증 실패입니다. 이 C++ 입력에는 NeverC를 사용하지 않습니다.

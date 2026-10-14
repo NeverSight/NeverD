@@ -1723,7 +1723,7 @@ ctest --test-dir build-release -L '^(NeverDX86X87IntegerLoadTests|NeverDLLVMCInt
 NEVERD_TEST_MATRIX_NEVERC=/path/to/neverc build-source-full/bin/NeverDSourcePatchMatrixTests --gtest_filter="NeverCProfiles/*"
 ```
 
-原生生產語料固定 NeverC `182fd2c5dc`，搭配獨立原程式與目前 NeverD 安裝器。`check_source_patch_hosted_pe_runtime.py` 每種 Windows 架構要求 36 次 C IR/物件/hosted 與兩層 hosted C 展開觀測；`check_source_patch_elf_runtime.py` 每種 Linux 架構要求 66 次 C、hosted 傳播及九種 Clang C++ 例外情境觀測。憑據、摘要及真實主機架構必須相符；不表示 CI 主機執行了 NeverC 編譯器本身。
+原生生產語料固定 NeverC `182fd2c5dc`，搭配獨立原程式與目前 NeverD 安裝器。`check_source_patch_hosted_pe_runtime.py` 每種 Windows 架構要求 36 次 C IR/物件/hosted 與兩層 hosted C 展開觀測；`check_source_patch_elf_runtime.py` 每種 Linux 架構要求 120 次 C、hosted 傳播及九種 Clang C++ 例外情境觀測。憑據、摘要及真實主機架構必須相符；不表示 CI 主機執行了 NeverC 編譯器本身。 Linux 清單在 x64、ARM64 分別涵蓋 Clang IR、Clang 原生物件與 GCC 原生物件各九種例外情境；NeverC 仍僅處理 C。
 
 舊翻譯設定的 204 次觀測僅為歷史記錄，不能證明目前純 C 契約。目前三條 NeverC 路徑均使用 C，Clang C++ FH3 獨立驗證。macOS x64 使用 Rosetta 2；Unicorn/QEMU 的 CPU 結果不能替代原生作業系統與例外展開驗證。
 
@@ -1754,3 +1754,5 @@ python3 scripts/run_lift_qualification.py \
 原生設定也要求通過 LLVM-C 寬整數常數與儲存檢查，以及 i386 合成表的原生執行。Swift 訊號觀察器使用獨立的原始儲存，在兩種最佳化層級下分別驗證未寫入的正例、提前寫入狀態與結果的反例。訊號處理器讀取仍處於 Swift `inout` 存取期間的變數會觸發獨佔存取錯誤，使例外觀察失效。
 
 `NeverDFPParameterMaskTests` 執行共用 ABI 套件與 `FPParameterMask.*`，保留有效位元組、先前儲存、歧義定義及未遮罩回傳路徑，只排除完全清零或取代的位元組；涵蓋 D0 中間傳遞、D16-D31 暫用暫存器及浮點回傳匯合的兩條路徑。`NeverDARM32ObjectImmediateTests` 獨立執行五項 ARM32 主機 C 差分，Windows EH CI 用 Clang 18 檢查包括與 Clang 23 不同的 NEON zip/mask 形式。直接與間接呼叫在 ABI 運算元尚未恢復時，保留明確準備的浮點暫存器。
+
+原生 Linux x64 工作還強制驗證三條 C++ 例外替換路徑：Clang IR、Clang 原生物件與 GCC 原生物件。XML 與程序結束狀態分別稽核，任何失敗或略過都會使驗收失敗；這些 C++ 輸入不使用 NeverC。

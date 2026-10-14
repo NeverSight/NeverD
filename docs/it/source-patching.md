@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
+<!-- i18n-source: 3ceb56e2abf86f594f437a16b09a1888650cb49d4cf06860711e73458c52c68d -->
 
 [← Documentation Index](README.md)
 
@@ -66,8 +66,8 @@ Clang LLVM IR ammette Windows ARM64 C++ FH3 e verifica xdata, ABI del frame padr
 | Compilatore | Artefatto | Profilo runtime OS verificato |
 |---|---|---|
 | Clang 22.1.x | LLVM IR | ELF x64/ARM64 C/C++; Mach-O x64/ARM64 C/C++; PE x86/x64/ARM64 C; PE x64/ARM64 C++ FH3 |
-| Clang 22.1.6 | Oggetto nativo | ELF x64 C/C++; PE x86/x64/ARM64 C |
-| GCC/G++ 13.3.0 | Oggetto nativo | ELF x64 C/C++ con runtime Itanium compatibile |
+| Clang 22.1.6 | Oggetto nativo | ELF x64/ARM64 C/C++; PE x86/x64/ARM64 C |
+| GCC/G++ 13.3.0 | Oggetto nativo | ELF x64/ARM64 C/C++ con runtime Itanium compatibile |
 | NeverC 3389.1.5 modalità ordinaria | LLVM IR | ELF x64 C; Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 modalità ordinaria | Oggetto nativo | ELF x64 C |
 | NeverC 3389.1.5 C | LLVM IR / oggetto nativo | ELF / PE / Mach-O x64/ARM64: sorgente C puro |
@@ -164,6 +164,6 @@ Il workflow Windows prepara anche 27 sostituzioni PE per x86, x64 e ARM64. `scri
 
 La verifica dei processi Windows nativi [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) ha superato tutte le 90 osservazioni: 30 per ciascuna architettura x86, x64 e ARM64, tramite IR sorgente, oggetti compilati e oggetti forniti. x86/x64 sono stati eseguiti su Windows x64; ARM64 su `windows-11-arm`, usando le stesse immagini verificate tramite hash. La stessa esecuzione ha superato anche i 16 test mirati PE/oggetti/trampoline e i 143 test della matrice Unicorn, senza casi saltati. Il test FH3 ha mantenuto i suoi sette scenari C++ x64.
 
-La qualifica nativa fissa NeverC a `182fd2c5dc`, con originali indipendenti e l’installatore NeverD attuale. `check_source_patch_hosted_pe_runtime.py` richiede 36 osservazioni per architettura Windows per IR/oggetti/hosted C e propagazione attraverso due frame C. `check_source_patch_elf_runtime.py` ne richiede 66 per architettura Linux per C, propagazione hosted e nove scenari C++ Clang. Ricevute, hash e architettura reale devono coincidere; non si dichiara che NeverC stesso sia stato eseguito sull’host CI.
+La qualifica nativa fissa NeverC a `182fd2c5dc`, con originali indipendenti e l’installatore NeverD attuale. `check_source_patch_hosted_pe_runtime.py` richiede 36 osservazioni per architettura Windows per IR/oggetti/hosted C e propagazione attraverso due frame C. `check_source_patch_elf_runtime.py` ne richiede 120 per architettura Linux per C, propagazione hosted e nove scenari C++ Clang. Ricevute, hash e architettura reale devono coincidere; non si dichiara che NeverC stesso sia stato eseguito sull’host CI. Linux x64 e ARM64 eseguono i nove scenari per ciascuna via: IR Clang, oggetti nativi Clang e oggetti nativi GCC. NeverC resta limitato a C.
 
 Le 204 osservazioni del vecchio profilo di traduzione sono storiche e non provano l’attuale contratto solo C. Le tre vie NeverC attuali usano C; Clang C++ FH3 viene verificato separatamente. macOS x64 usa Rosetta 2. Unicorn/QEMU non sostituiscono la verifica nativa del sistema e dell’unwinder.

@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
+<!-- i18n-source: 3ceb56e2abf86f594f437a16b09a1888650cb49d4cf06860711e73458c52c68d -->
 
 [← Documentation Index](README.md)
 
@@ -66,8 +66,8 @@ Clang LLVM IR は Windows ARM64 C++ FH3 も受け付け、xdata、親フレー�
 | コンパイラ | 成果物 | OS 上で検証した実行プロファイル |
 |---|---|---|
 | Clang 22.1.x | LLVM IR | ELF x64/ARM64 C/C++、Mach-O x64/ARM64 C/C++、PE x86/x64/ARM64 C; PE x64/ARM64 C++ FH3 |
-| Clang 22.1.6 | ネイティブオブジェクト | ELF x64 C/C++; PE x86/x64/ARM64 C |
-| GCC/G++ 13.3.0 | ネイティブオブジェクト | 互換性のある Itanium ランタイムを使う ELF x64 C/C++ |
+| Clang 22.1.6 | ネイティブオブジェクト | ELF x64/ARM64 C/C++; PE x86/x64/ARM64 C |
+| GCC/G++ 13.3.0 | ネイティブオブジェクト | 互換性のある Itanium ランタイムを使う ELF x64/ARM64 C/C++ |
 | NeverC 3389.1.5 通常モード | LLVM IR | ELF x64 C、Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 通常モード | ネイティブオブジェクト | ELF x64 C |
 | NeverC 3389.1.5 C | LLVM IR / ネイティブオブジェクト | ELF / PE / Mach-O x64/ARM64: 純粋な C ソース |
@@ -164,6 +164,6 @@ Windows ワークフローは x86、x64、ARM64 向けに 27 個の PE 置換バ
 
 Windows のネイティブプロセス検証 [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) では、ソース IR、コンパイル済みオブジェクト、外部オブジェクトの各経路を含む全 90 回の観測が成功しました。x86、x64、ARM64 はそれぞれ 30 回で、x86/x64 は Windows x64、ARM64 は同じハッシュ検証済みイメージを使って `windows-11-arm` で実行しました。同じ実行で PE/オブジェクト/trampoline の専用テスト 16 件と Unicorn ターゲット行列テスト 143 件も、スキップなしですべて成功しました。FH3 のテストでは x64 C++ の実行シナリオ 7 種類も引き続き検証しました。
 
-ネイティブ検証は NeverC `182fd2c5dc`、独立した元プログラム、現在の NeverD インストーラを使います。`check_source_patch_hosted_pe_runtime.py` は Windows の各アーキテクチャで C IR・オブジェクト・hosted と二層 C フレームの例外伝播を 36 回観測します。`check_source_patch_elf_runtime.py` は Linux の各アーキテクチャで C、hosted 伝播、九つの Clang C++ 例外シナリオを 66 回観測します。証跡、ハッシュ、実際のホスト構成の一致が必須で、CI ホスト上の NeverC 本体実行を意味しません。
+ネイティブ検証は NeverC `182fd2c5dc`、独立した元プログラム、現在の NeverD インストーラを使います。`check_source_patch_hosted_pe_runtime.py` は Windows の各アーキテクチャで C IR・オブジェクト・hosted と二層 C フレームの例外伝播を 36 回観測します。`check_source_patch_elf_runtime.py` は Linux の各アーキテクチャで C、hosted 伝播、九つの Clang C++ 例外シナリオを 120 回観測します。証跡、ハッシュ、実際のホスト構成の一致が必須で、CI ホスト上の NeverC 本体実行を意味しません。 Linux の x64 と ARM64 では Clang IR、Clang ネイティブオブジェクト、GCC ネイティブオブジェクトそれぞれの九つの例外シナリオを検証します。NeverC は C 専用です。
 
 旧変換プロファイルの 204 回の観測は履歴であり、現在の C 専用契約の証拠にはなりません。現在の三つの NeverC 経路は C を使用し、Clang C++ FH3 は別途検証します。macOS x64 は Rosetta 2 を使います。Unicorn/QEMU の CPU 結果はネイティブ OS やアンワインダの検証を代替しません。
