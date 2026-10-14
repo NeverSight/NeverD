@@ -14,7 +14,7 @@ LLVM、Capstone、Unicorn の各サブモジュールは独自の内部アーキ
 
 `sourcePatchTargetTriple` はイメージから ARM モード、ELF 浮動小数点 ABI、Mach-O CPU サブタイプを選択します。`COFFPatchObject` と `MachOPatchObject` はオブジェクト自身のシンボル、補助／セクション定義、アンワインド記録で範囲を検証し、MC ID を捏造しません。形式ごとのインストーラが実際のテーブルを登録します。
 
-`SourcePatchCompiler` は NeverC `cpp-core-v2` と C23 生成を組み合わせ、`validateDynCodePatchImage` は監査と実際の成果物ハッシュ・コード・入口を結び付けます。形式別インストーラが本物の展開記録を登録します。ARM64 FH3 はローダの xdata 範囲と MC の funclet/FuncInfo 所有関係を使います。DWARF がない Mach-O では全関数の native compact 記録が必要です。
+`SourcePatchCompiler` は起動前に NeverC を C のみに制限し、C++ は Clang または適合する ELF GCC ドライバが担当します。`validateDynCodePatchImage` は hosted C の監査を実際のオブジェクト、ペイロードのハッシュ、正確なコードと入口配置に結び付けます。形式別インストーラは実際のアンワインド記録を登録します。ARM64 Clang FH3 はローダーの xdata 範囲と MC の funclet/FuncInfo 群を使い、Mach-O は完全なネイティブ compact 記録にも対応します。
 
 `CompiledImage` は AArch64 ELF のコロン修飾子を一か所で正規化し、実際の解決と記録した fixup で共有します。ELF リゾルバとローダ再配置の発行は正確な ABS/GOT 識別を使い、TLS と未知の形式は拒否します。COFF のネイティブ関数範囲はデコード済み実行時記録を使えますが、hosted コードにはコンパイラの完全な展開情報が必要です。
 

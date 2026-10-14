@@ -15,7 +15,7 @@ Architektur.
 
 `sourcePatchTargetTriple` bestimmt ARM-Modus, ELF-Fließkomma-ABI und Mach-O-CPU-Untertyp anhand des Images. `COFFPatchObject` und `MachOPatchObject` prüfen native Symbole, Hilfs／Abschnittsdefinitionen und Unwind-Daten ohne erfundene MC-IDs. Format-Installer registrieren die tatsächlichen Tabellen.
 
-`SourcePatchCompiler` verbindet NeverC `cpp-core-v2` mit C23; `validateDynCodePatchImage` bindet den Bericht an echte Objekt-/Nutzlasthashes, Code und Einstieg. Formatinstaller registrieren echte Unwind-Daten. ARM64 FH3 nutzt Loader-xdata-Grenzen und MC-funclet/FuncInfo-Gruppen. Ohne ursprüngliches DWARF müssen native Compact-Daten alle Mach-O-Funktionen abdecken.
+`SourcePatchCompiler` begrenzt NeverC vor dem Start auf C; Clang oder passende ELF-GCC-Treiber kompilieren C++. `validateDynCodePatchImage` bindet die Hosted-C-Prüfung an echte Objekte, Nutzlast-Hashes und genaue Code- und Eintrittslayouts. Formatinstallierer registrieren echte Unwind-Daten. ARM64 Clang FH3 verwendet die xdata-Bereiche des Loaders und funclet/FuncInfo-Gruppen des MC; vollständige native Mach-O-compact-Datensätze bleiben unterstützt.
 
 `CompiledImage` normalisiert AArch64-ELF-Doppelpunkt-Spezifizierer einmal für direkte Auflösung und erfasste Fixups. ELF-Auflösung und Loader-Relokationsveröffentlichung teilen genaue ABS/GOT-Identitäten; TLS und unbekannte Formen bleiben abgewiesen. Native COFF-Funktionsbereiche dürfen dekodierte Laufzeiteinträge nutzen; hosted-Code erfordert vollständige Compiler-Unwind-Abdeckung.
 

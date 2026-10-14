@@ -1717,15 +1717,15 @@ ctest --test-dir build-release -L '^(NeverDX86X87IntegerLoadTests|NeverDLLVMCInt
 
 矩陣也會依獨立的 ABI 清單核對編譯物件與外部原生物件的 `target` 憑據。錯誤物件測試隨後必須安裝並執行未修改的物件，作為有效輸入對照。
 
-可選 `NeverCProfiles/*` 在六個 x64/ARM64 設定增加 30 項測試，涵蓋 C++ IR、物件、hosted DynCode、非內聯輔助函式/遞迴及不支援 C++ 的拒絕。`NeverDSourcePatchDynCodeTests` 拒絕偽造摘要、入口、目標、狀態及驗證。`SourcePatchException.NeverC*` 在真實行程驗證生命週期及兩個 hosted 框架的例外回呼。Windows C++ 檢查器要求九個補丁情境、原始對照、三次執行及相符機器、提交、摘要與原生 x64/ARM64 主機。
+選用的 `NeverCProfiles/*` 在六種 x64/ARM64 設定驗證 30 項：C IR、C 物件、C hosted DynCode、非內聯輔助函式與遞迴，以及拒絕 C++。`SourcePatch.NeverCRejectsCppBeforeStartingTheCompiler` 不需安裝 NeverC，也能證明在啟動前拒絕。`SourcePatchException.NeverC*` 執行純 C 結果與穿過兩層 hosted C 框架的例外回呼；Clang C++ 例外另行驗證。Swift 暫存器及記憶體純量轉換在兩種最佳化層級檢查結果位元與 MXCSR；行動端只接受 C 後端精確的捨入 pragma 前綴，仍拒絕條件宣告與修改過的指令。
 
 ```sh
 NEVERD_TEST_MATRIX_NEVERC=/path/to/neverc build-source-full/bin/NeverDSourcePatchMatrixTests --gtest_filter="NeverCProfiles/*"
 ```
 
-原生產生器驗證固定 NeverC 提交 `182fd2c5dc`，使用獨立編譯的原程式與目前 NeverD 安裝器。`check_source_patch_hosted_pe_runtime.py` 要求每種架構完成 36 次原生 Windows 觀測，涵蓋 C++ IR/物件/hosted 生命週期，以及例外穿過兩個 hosted 框架的回呼。`check_source_patch_elf_runtime.py` 要求每種架構完成 66 次原生 Linux 觀測，涵蓋 C++ IR/物件/hosted、hosted 例外傳播及九種 Clang 例外情境。回執、製品雜湊與實際主機架構必須相符。這些檢查安裝真實編譯器產物，不表示在 CI 主機執行過 NeverC 編譯器。
+原生生產語料固定 NeverC `182fd2c5dc`，搭配獨立原程式與目前 NeverD 安裝器。`check_source_patch_hosted_pe_runtime.py` 每種 Windows 架構要求 36 次 C IR/物件/hosted 與兩層 hosted C 展開觀測；`check_source_patch_elf_runtime.py` 每種 Linux 架構要求 66 次 C、hosted 傳播及九種 Clang C++ 例外情境觀測。憑據、摘要及真實主機架構必須相符；不表示 CI 主機執行了 NeverC 編譯器本身。
 
-原生驗證 [21ac20341](https://github.com/NeverSight/NeverD/actions/runs/38431902780) 的 204 次進程觀測全部通過：Windows x64/ARM64 各 36 次，Linux x64/ARM64 各 66 次。公開原始碼介面產生 C++ IR、普通物件與 C++ hosted DynCode，並驗證例外穿過兩層 NeverC 框架。重放核對目前引擎原始碼和子模組摘要、原件與最終位元組、安裝回執及實際原生主機。macOS ARM64 與 Rosetta x64 在本機通過相同三條 C++ 路徑及兩層例外傳播。Clang FH3 原生驗證 [75b6079e6](https://github.com/NeverSight/NeverD/actions/runs/38413109780) 另在 Windows x64/ARM64 各通過九種例外情境和對照，共各 36 次觀測。
+舊翻譯設定的 204 次觀測僅為歷史記錄，不能證明目前純 C 契約。目前三條 NeverC 路徑均使用 C，Clang C++ FH3 獨立驗證。macOS x64 使用 Rosetta 2；Unicorn/QEMU 的 CPU 結果不能替代原生作業系統與例外展開驗證。
 
 `InterpreterSpecialization.HighAddress*` 與 `BinaryLowIRRefinement.HighAddress*` 涵蓋高位址入口與轉移、重疊指令範圍、原始返回位元組、堆疊還原、與標籤數值相同的資料、無效或缺失程式碼及精確／不足預算。獨立位元組執行器與修改返回值的反例區分執行時數值和 CFG 標籤。
 

@@ -22,9 +22,9 @@ PROFILES = {"x64": ("x86_64-unknown-linux-gnu", 62),
 CASES = {
     "original-eh": ((0, 1), (8, 77), (9, 19)),
     "original-callback": ((0, 1), (2, 42)),
-    "cpp-ir": ((0, 11), (2, 15)),
-    "cpp-object": ((0, 11), (2, 15)),
-    "cpp-hosted": ((0, 11), (2, 15)),
+    "c-ir": ((0, 11), (2, 15)),
+    "c-object": ((0, 11), (2, 15)),
+    "c-hosted": ((0, 11), (2, 15)),
     "hosted": ((0, 40), (2, 42)),
     "exceptions": cpp.PATCHED_CASES,
 }
@@ -59,11 +59,11 @@ def image_bytes(path: Path, va: int, size: int) -> bytes:
 
 def fixtures(root: Path) -> dict[str, dict]:
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    if (manifest.get("schema") != "neverd.neverc-linux-fixtures.v1" or
-        manifest.get("producer_commit") != PRODUCER):
+    if (manifest.get("schema") != "neverd.neverc-linux-fixtures.v2" or
+        manifest.get("producer_commit") != PRODUCER or manifest.get("language") != "c"):
         raise ValueError("unqualified Linux producer fixtures")
     if set(manifest["sources"]) != {"original-eh.cpp", "original-callback.cpp",
-                                    "replacement.cpp", "hosted.c", "exceptions.cpp"}:
+                                    "replacement.c", "hosted.c", "exceptions.cpp"}:
         raise ValueError("Linux source inventory mismatch")
     for name, digest in manifest["sources"].items():
         path = (root / name).resolve()
@@ -76,17 +76,17 @@ def fixtures(root: Path) -> dict[str, dict]:
         arch = row["architecture"]
         if (row["target"], row["machine"]) != PROFILES[arch]:
             raise ValueError("Linux fixture target mismatch")
-        if set(row["files"]) != {"original-eh.elf", "original-callback.elf", "cpp.ll", "cpp.o",
-                                 "hosted.o", "hosted.bin", "hosted.audit.json", "translated.nc",
-                                 "cpp-hosted.o", "cpp-hosted.bin", "cpp-hosted.audit.json",
-                                 "translated.nc.manifest.json", "translated.nc.map.json", "producer-commands.json"}:
+        if set(row["files"]) != {"original-eh.elf", "original-callback.elf", "c.ll", "c.o",
+                                 "hosted.o", "hosted.bin", "hosted.audit.json",
+                                 "c-hosted.o", "c-hosted.bin", "c-hosted.audit.json",
+                                 "producer-commands.json"}:
             raise ValueError("Linux producer artifact inventory mismatch")
         for item in row["files"].values():
             path = (root / item["path"]).resolve()
             if not path.is_relative_to(root) or pe.digest(path) != item["sha256"]:
                 raise ValueError("Linux producer artifact path/digest mismatch")
         directory = root / arch
-        for prefix in ("hosted", "cpp-hosted"):
+        for prefix in ("hosted", "c-hosted"):
             audit = json.loads((directory / (prefix + ".audit.json")).read_text(encoding="utf-8"))
             if (audit.get("execution_profile") != "hosted-v1" or
                 audit.get("keep_unwind") is not True or audit.get("entry_offset") != 0 or
@@ -121,17 +121,17 @@ def prepare(args: argparse.Namespace) -> None:
             shutil.copyfile(inputs / arch / path.name, path)
             originals[case] = path
             record(path, case)
-        for case in ("cpp-ir", "cpp-object", "cpp-hosted", "hosted", "exceptions"):
+        for case in ("c-ir", "c-object", "c-hosted", "hosted", "exceptions"):
             original = originals["original-callback" if case == "hosted" else "original-eh"]
             before = pe.digest(original)
             patched = directory / (case + ".elf")
             target = row["callback_target_va" if case == "hosted" else "target_va"]
             command = [str(args.neverd), "patch", str(original), "--entry=replacement",
                        f"--func={target:#x}", "--patch-report", "-o", str(patched)]
-            if case == "cpp-ir":
-                command += ["--from-ir=" + str(inputs / arch / "cpp.ll")]
-            elif case in ("cpp-object", "cpp-hosted", "hosted"):
-                command += ["--from-object=" + str(inputs / arch / ("cpp.o" if case == "cpp-object" else case + ".o"))]
+            if case == "c-ir":
+                command += ["--from-ir=" + str(inputs / arch / "c.ll")]
+            elif case in ("c-object", "c-hosted", "hosted"):
+                command += ["--from-object=" + str(inputs / arch / ("c.o" if case == "c-object" else case + ".o"))]
             else:
                 command += ["--from-source=" + str(inputs / "exceptions.cpp"), "--language=c++",
                             "--compiler-path=" + str(args.clang), "--compiler-arg=-O0",
@@ -144,11 +144,11 @@ def prepare(args: argparse.Namespace) -> None:
                 len(reports[0].get("installed", [])) != 1 or pe.digest(original) != before):
                 raise ValueError("Linux publication receipt or original identity mismatch")
             receipt = reports[0]
-            if case in ("cpp-object", "cpp-hosted", "hosted"):
-                obj = inputs / arch / ("cpp.o" if case == "cpp-object" else case + ".o")
+            if case in ("c-object", "c-hosted", "hosted"):
+                obj = inputs / arch / ("c.o" if case == "c-object" else case + ".o")
                 if receipt.get("object_sha256") != pe.digest(obj):
                     raise ValueError("Linux object publication identity mismatch")
-            if case in ("hosted", "cpp-hosted"):
+            if case in ("hosted", "c-hosted"):
                 payload = (inputs / arch / (case + ".bin")).read_bytes()
                 if (receipt.get("object_sha256") != pe.digest(inputs / arch / (case + ".o")) or
                     image_bytes(patched, receipt["installed"][0]["replacement_va"], len(payload)) != payload):
@@ -188,7 +188,7 @@ def execute(args: argparse.Namespace) -> None:
     output.write_text(json.dumps({"schema": SCHEMA, "commit": manifest["commit"],
         "producer_commit": PRODUCER, "architecture": args.arch, "native_host": native,
         "observations": observations}, indent=2) + "\n", encoding="utf-8")
-    print(f"{args.arch}: all 66 native Linux C++/hosted/EH observations passed")
+    print(f"{args.arch}: all 66 native Linux C/hosted/Clang EH observations passed")
 
 
 def main() -> None:

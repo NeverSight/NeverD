@@ -1,5 +1,5 @@
 {
-  "schema": "neverd.neverc-linux-fixtures.v1",
+  "schema": "neverd.neverc-linux-fixtures.v2",
   "producer_commit": "182fd2c5dc",
   "original_compiler": "Ubuntu 24.04 GCC/G++ 13.3.0",
   "sources": {
@@ -7,7 +7,7 @@
     "hosted.c": "0194f76dae67a229b8110f8f63fc400a7790ad5c6e958765a7e5bca2930c4263",
     "original-callback.cpp": "882aa95e23507fa12eeee6074469fddf4f51a6a64c8cdee84089166ff1fc26c0",
     "original-eh.cpp": "85ff39e4aeb2adddc6e416e69877f32fd7d071ad3c7eca2b84e5ad3e5a7c305e",
-    "replacement.cpp": "a05fb70f34d55046e4ddc60f6e4a3a0460dc50f83b37f4b6032bc85b58616083"
+    "replacement.c": "b19c76edc0d39484f32a15704db8652e788f2d1d71471971ab63ee53eda03152"
   },
   "entries": [
     {
@@ -19,61 +19,49 @@
       "thrower_va": 4553,
       "callback_target_va": 4198831,
       "files": {
-        "cpp.ll": {
-          "path": "x64/cpp.ll",
-          "sha256": "8dbcc403e5bf59ccc36e84d873a41859021f631f98a4237f6cde924b6f7218a2"
-        },
-        "cpp.o": {
-          "path": "x64/cpp.o",
-          "sha256": "3a799c5873fe7a2111e27755fb4dc6b415811c2ad0e7f492fe00c277a3a7e5f2"
-        },
-        "hosted.audit.json": {
-          "path": "x64/hosted.audit.json",
-          "sha256": "42ee611e905e8ede37bca148f9573bc46e2287228d09fd18d16a96118ac38930"
-        },
-        "hosted.bin": {
-          "path": "x64/hosted.bin",
-          "sha256": "7f2a8dd79b7bf0c124dc6d2402dbc6c4c014f8873824cf59037ed59976025b5c"
-        },
-        "hosted.o": {
-          "path": "x64/hosted.o",
-          "sha256": "4d8b92ffd91bb1bed7bad3a20e72c40fa302a43b6fa5d4a7678089a9aa2a8992"
+        "original-eh.elf": {
+          "path": "x64/original-eh.elf",
+          "sha256": "7230a48e874eef55ec5730f815cc60efecbe56ee3db5f2d24b18db4873b43a3e"
         },
         "original-callback.elf": {
           "path": "x64/original-callback.elf",
           "sha256": "adf20e6a14c1ba3d08c4c08b9051abd9022e510b0345c491057692461aa76724"
         },
-        "original-eh.elf": {
-          "path": "x64/original-eh.elf",
-          "sha256": "7230a48e874eef55ec5730f815cc60efecbe56ee3db5f2d24b18db4873b43a3e"
+        "c.ll": {
+          "path": "x64/c.ll",
+          "sha256": "d55e81550cbedf93a991e413bcec816187addfcd951e903d7768abf4d4f26cf7"
+        },
+        "c.o": {
+          "path": "x64/c.o",
+          "sha256": "0db4f8747f6384b4f82a5ff7093693076e9b6807708eb8701ef1db2339153ad1"
+        },
+        "hosted.o": {
+          "path": "x64/hosted.o",
+          "sha256": "4d8b92ffd91bb1bed7bad3a20e72c40fa302a43b6fa5d4a7678089a9aa2a8992"
+        },
+        "hosted.bin": {
+          "path": "x64/hosted.bin",
+          "sha256": "7f2a8dd79b7bf0c124dc6d2402dbc6c4c014f8873824cf59037ed59976025b5c"
+        },
+        "hosted.audit.json": {
+          "path": "x64/hosted.audit.json",
+          "sha256": "42ee611e905e8ede37bca148f9573bc46e2287228d09fd18d16a96118ac38930"
+        },
+        "c-hosted.o": {
+          "path": "x64/c-hosted.o",
+          "sha256": "5ae0c25d7256391ff15cc74b322e1541f27188d402872f7f39fb7c2e7da33192"
+        },
+        "c-hosted.bin": {
+          "path": "x64/c-hosted.bin",
+          "sha256": "77dd4b81e28f854547fb9afc5077a0000b0508e39e5e13f41ba376f7a649c03e"
+        },
+        "c-hosted.audit.json": {
+          "path": "x64/c-hosted.audit.json",
+          "sha256": "59438688ab2c31b17a7e3e09de54fb240c92987fe1555653a3533de671a1169c"
         },
         "producer-commands.json": {
           "path": "x64/producer-commands.json",
-          "sha256": "1c7b89cf0847c0f9e96c1d6588a08102648da8c32b43fe27602acca48cf1ee6d"
-        },
-        "translated.nc": {
-          "path": "x64/translated.nc",
-          "sha256": "6a71318ac21a6e32b8216038a88975349580c6bc8c0adbb0e0ded38087d74e07"
-        },
-        "translated.nc.manifest.json": {
-          "path": "x64/translated.nc.manifest.json",
-          "sha256": "c551f3827ba38b9ce4ea8199d1891b9eb570ca76cc9604464c904f607b5b9269"
-        },
-        "translated.nc.map.json": {
-          "path": "x64/translated.nc.map.json",
-          "sha256": "71dbc9427a50d5989e0be93e39f746e2fdb2ea48676329c6b018560d9c03495f"
-        },
-        "cpp-hosted.o": {
-          "path": "x64/cpp-hosted.o",
-          "sha256": "87c504e6c43367f3c4d1bd69c0be8a1e676891057b4149cb03eed187e4485e90"
-        },
-        "cpp-hosted.audit.json": {
-          "path": "x64/cpp-hosted.audit.json",
-          "sha256": "d9a60df235dc5f69c3279475a4b41217b18151cde13ff28e8bd0562d7c519ac5"
-        },
-        "cpp-hosted.bin": {
-          "path": "x64/cpp-hosted.bin",
-          "sha256": "77dd4b81e28f854547fb9afc5077a0000b0508e39e5e13f41ba376f7a649c03e"
+          "sha256": "628c23170b011fe0883ef3911018e76ca9ea4221e2c81f19638eca6725a2101d"
         }
       }
     },
@@ -86,61 +74,49 @@
       "thrower_va": 3160,
       "callback_target_va": 4196652,
       "files": {
-        "cpp.ll": {
-          "path": "arm64/cpp.ll",
-          "sha256": "81802d9fc2be5bd7aa56815f22986270b01698189961010b4d833a6ee75d87f2"
-        },
-        "cpp.o": {
-          "path": "arm64/cpp.o",
-          "sha256": "fbbc3a347592e2fd701dece309430b7321481ca44b68010d96947be51211a28e"
-        },
-        "hosted.audit.json": {
-          "path": "arm64/hosted.audit.json",
-          "sha256": "b659879cf6d92d7d311a7a6acbf9db5bac04d29c316142850bc345cb0f09ab0e"
-        },
-        "hosted.bin": {
-          "path": "arm64/hosted.bin",
-          "sha256": "4612c1dc437729b0b18f7c00bc290144d67d09a6c22716f54abe442efdb3ee11"
-        },
-        "hosted.o": {
-          "path": "arm64/hosted.o",
-          "sha256": "cebd085cd29c095f5455c411385be50e268f2a27c46879c0b49ad5088c46e0a1"
+        "original-eh.elf": {
+          "path": "arm64/original-eh.elf",
+          "sha256": "aa9ec1b581bf8e3aef42390c32f7cb7a1e028687798d2b1005e4f6fe37073898"
         },
         "original-callback.elf": {
           "path": "arm64/original-callback.elf",
           "sha256": "d3cf81b06709e739b6c7f865161cd2887caf9814f32f61ec149957d52d8a7ca4"
         },
-        "original-eh.elf": {
-          "path": "arm64/original-eh.elf",
-          "sha256": "aa9ec1b581bf8e3aef42390c32f7cb7a1e028687798d2b1005e4f6fe37073898"
+        "c.ll": {
+          "path": "arm64/c.ll",
+          "sha256": "d5fd1e35f3de8aab12fdeabf69f29012851ed7fb9983f7d75231e066e69136ac"
+        },
+        "c.o": {
+          "path": "arm64/c.o",
+          "sha256": "318e517a6d6b5152e46c8837b7b8f4a1fc9769b016cf383a4a38e21ba19c2ba8"
+        },
+        "hosted.o": {
+          "path": "arm64/hosted.o",
+          "sha256": "cebd085cd29c095f5455c411385be50e268f2a27c46879c0b49ad5088c46e0a1"
+        },
+        "hosted.bin": {
+          "path": "arm64/hosted.bin",
+          "sha256": "4612c1dc437729b0b18f7c00bc290144d67d09a6c22716f54abe442efdb3ee11"
+        },
+        "hosted.audit.json": {
+          "path": "arm64/hosted.audit.json",
+          "sha256": "b659879cf6d92d7d311a7a6acbf9db5bac04d29c316142850bc345cb0f09ab0e"
+        },
+        "c-hosted.o": {
+          "path": "arm64/c-hosted.o",
+          "sha256": "043570b1bcc8dc80620cf1eb08fa95dfba93a8fc9fcdad8e68cf750d5133644a"
+        },
+        "c-hosted.bin": {
+          "path": "arm64/c-hosted.bin",
+          "sha256": "550cbee07f61789d11107dceb0551ff978843d5556e5f321df6477406a79496f"
+        },
+        "c-hosted.audit.json": {
+          "path": "arm64/c-hosted.audit.json",
+          "sha256": "c08359651e36db6c4631e8145cf3d01f81c86afdc760d63045778ccf520b4b83"
         },
         "producer-commands.json": {
           "path": "arm64/producer-commands.json",
-          "sha256": "4746fb923bd4c380bd5f3c8a679d4c29460b1db10725427062a68429cb062a70"
-        },
-        "translated.nc": {
-          "path": "arm64/translated.nc",
-          "sha256": "701d711e3ccecddba8946842a40a1feddf5a5c4fb15a0565f225bee517b556e2"
-        },
-        "translated.nc.manifest.json": {
-          "path": "arm64/translated.nc.manifest.json",
-          "sha256": "2f7375e46fe6baec8e0c0876f125b53151b98e5480d1c844883510143b0ac024"
-        },
-        "translated.nc.map.json": {
-          "path": "arm64/translated.nc.map.json",
-          "sha256": "8ec282bfcae0c478af6939aff6876a793510e44f5710c743878e34fdc5696c3e"
-        },
-        "cpp-hosted.o": {
-          "path": "arm64/cpp-hosted.o",
-          "sha256": "f4a48fa2f407ddfde6cf99c1a5cfbb707d3c0ad5cb18b1e9efb1fd5fb7fb0ad1"
-        },
-        "cpp-hosted.audit.json": {
-          "path": "arm64/cpp-hosted.audit.json",
-          "sha256": "8e875c132540a004a83d713846bc393dc1827dd02842cc0c222232019de143c6"
-        },
-        "cpp-hosted.bin": {
-          "path": "arm64/cpp-hosted.bin",
-          "sha256": "550cbee07f61789d11107dceb0551ff978843d5556e5f321df6477406a79496f"
+          "sha256": "8eb53e2b87700b5d7b492f087aec5dcc00eec3dca17c5b36fcb4808d707b671f"
         }
       }
     }
@@ -168,5 +144,6 @@
       "-fno-pie",
       "-no-pie"
     ]
-  }
+  },
+  "language": "c"
 }

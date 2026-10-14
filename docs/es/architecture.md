@@ -15,7 +15,7 @@ arquitectura interna.
 
 `sourcePatchTargetTriple` selecciona modo ARM, ABI flotante ELF y subtipo CPU Mach-O desde la imagen. `COFFPatchObject` y `MachOPatchObject` verifican símbolos, definiciones auxiliares／de sección y registros nativos sin inventar identificadores MC. Los instaladores de formato registran las tablas reales.
 
-`SourcePatchCompiler` combina NeverC `cpp-core-v2` y C23; `validateDynCodePatchImage` vincula la auditoría a hashes, bytes y entrada reales. Los instaladores registran desenrollado real. ARM64 FH3 usa límites xdata del cargador y grupos funclet/FuncInfo de MC. Sin DWARF original, registros compactos nativos deben cubrir todas las funciones Mach-O.
+`SourcePatchCompiler` limita NeverC a C antes de ejecutarlo; Clang o el controlador ELF GCC adecuado compila C++. `validateDynCodePatchImage` vincula la auditoría hosted C con los objetos, resúmenes y disposiciones exactas de código y entrada. Los instaladores registran datos reales de desenrollado. ARM64 Clang FH3 usa los rangos xdata del cargador y grupos funclet/FuncInfo del MC; Mach-O conserva los registros compact nativos completos.
 
 `CompiledImage` normaliza una sola vez los especificadores ELF AArch64 con dos puntos para la resolución efectiva y los fixups capturados. El resolutor ELF y la publicación de reubicaciones comparten identidades ABS/GOT exactas; TLS y formas desconocidas siguen rechazadas. COFF puede usar límites de funciones nativas decodificados; el código hosted exige cobertura completa de desenrollado del compilador.
 

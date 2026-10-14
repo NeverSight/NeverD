@@ -70,7 +70,7 @@ jobs:
             -DNEVERD_BUILD_GUI=OFF -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
             -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_SEMANTIC_TESTS=OFF
       - name: Build the production CLI and complete Lift test owner
-        run: cmake --build build-lift-qualification --target neverd NeverDLiftTests NeverDLLVMCValueTests --parallel 4
+        run: cmake --build build-lift-qualification --target neverd NeverDLiftTests NeverDLLVMCValueTests NeverDSourcePatchTests --parallel 4
       - name: Require all 108 previous failures and skips to pass
         run: |
           python scripts/run_lift_qualification.py \
@@ -100,6 +100,30 @@ jobs:
           report = audit(ET.parse(xml).getroot(), names, result.returncode)
           (output / 'llvmc-native.json').write_text(json.dumps(report, indent=2) + '\n')
           print('LLVM-C native integration: 3 passed, zero failed, zero skipped')
+          PY
+      - name: Execute native Clang and GCC C++ exception replacements
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          from scripts.run_lift_qualification import audit
+          names = (
+              'SourcePatchException.LLVMIRRetainsCrossBoundaryExceptionSemantics',
+              'SourcePatchException.NativeObjectRetainsCrossBoundaryExceptionSemantics',
+              'SourcePatchException.GCCObjectRetainsCrossBoundaryExceptionSemantics',
+          )
+          output = Path('build-lift-qualification/evidence')
+          xml = output / 'source-patch-cpp-native.xml'
+          with (output / 'source-patch-cpp-native.log').open('w') as log:
+              result = subprocess.run([
+                  'build-lift-qualification/bin/NeverDSourcePatchTests',
+                  '--gtest_filter=' + ':'.join(names), '--gtest_output=xml:' + str(xml)],
+                  env=dict(os.environ, NEVERD_TEST_REQUIRE_FIXED_LLVM='1'),
+                  stdout=log, stderr=subprocess.STDOUT, timeout=600)
+          report = audit(ET.parse(xml).getroot(), names, result.returncode)
+          (output / 'source-patch-cpp-native.json').write_text(json.dumps(report, indent=2) + '\n')
+          print('Native Clang/GCC C++ exceptions: 3 passed, zero failed, zero skipped')
           PY
       - name: Retain individual results, compiler identities and native logs
         if: always()

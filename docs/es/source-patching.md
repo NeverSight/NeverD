@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 382939d2eb45a68de6f110b936bbf8adee2c705da454ddc07ad950447a57cd94 -->
+<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
 
 [← Documentation Index](README.md)
 
@@ -46,15 +46,15 @@ neverd patch app --from-object=replacement.o --entry=replacement \
 
 [NeverC producer: 182fd2c5dc](https://github.com/NeverSight/NeverC/commit/182fd2c5dc)
 
-**NeverC C++ y DynCode alojado**
+**NeverC C y DynCode alojado**
 
-NeverC C++ combina `cpp-core-v2` C++17 integrado con generación NeverC C23 en ELF, PE y Mach-O x64/ARM64. El subconjunto documentado admite plantillas y ciclos de vida normales con entrada `extern "C"`. Excepciones C++, RTTI, despacho virtual y limpieza durante excepciones externas quedan fuera; use Clang para excepciones. El recibo incluye ambos comandos, manifiesto destino, mapa y hashes verificados.
+NeverC solo acepta C puro en ELF, PE y Mach-O x64/ARM64. NeverD rechaza NeverC con `--language=c++` antes de iniciar el compilador, sin traducción ni cambio implícito de compilador. C++ y sus excepciones usan Clang o un controlador GCC compatible con el perfil de objetos ELF verificado. Los marcos C hosted pueden transmitir una excepción lanzada y capturada por el programa C++ que los rodea mediante registros reales de desenrollado; esto no añade C++ a NeverC.
 
 `dyncode`: `--compile-mode=dyncode` usa `-fdyncode-hosted`: fuente, una entrada explícita, objeto nativo y sin enlaces originales. CLI y Python eligen objetos por defecto para este modo y GCC. Se verifican ambos hashes, cada byte enlazado y la entrada antes de publicar, usando CFI/SEH reales o registros compactos completos. Estado modificable/TLS, conversiones implícitas syscall/PEB/heap/string, imports no resueltos y código reordenado se rechazan. Los parámetros pueden llevar datos y callbacks.
 
 ```sh
 neverd patch app --from-source=replacement.cpp --language=c++ \
-  --compiler=neverc --compiler-path=/path/to/neverc \
+  --compiler=clang --compiler-path=/path/to/clang++ \
   --entry=replacement --func=0x401140 --patch-report -o app.cpp
 neverd patch app --from-source=replacement.c --compiler=neverc \
   --compiler-path=/path/to/neverc --compile-mode=dyncode \
@@ -70,8 +70,8 @@ Clang LLVM IR admite Windows ARM64 C++ FH3 y valida xdata, ABI del marco padre y
 | GCC/G++ 13.3.0 | Objeto nativo | ELF x64 C/C++ con runtime Itanium compatible |
 | NeverC 3389.1.5 modo ordinario | IR LLVM | ELF x64 C; Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 modo ordinario | Objeto nativo | ELF x64 C |
-| NeverC 3389.1.5 `cpp-core-v2` | LLVM IR / objeto nativo | ELF / PE / Mach-O x64/ARM64: ciclos de vida normales del subconjunto C++17 |
-| NeverC 3389.1.5 `hosted-v1` | Objeto nativo + carga sellada | ELF / PE / Mach-O x64/ARM64: C / subconjunto C++17, ciclos de vida y propagación a través de marcos C |
+| NeverC 3389.1.5 C | LLVM IR / objeto nativo | ELF / PE / Mach-O x64/ARM64: fuente C pura |
+| NeverC 3389.1.5 `hosted-v1` | Objeto nativo + carga sellada | ELF / PE / Mach-O x64/ARM64: fuente C y propagación a través de marcos C |
 
 La tabla describe perfiles OS comprobados, sin garantizar todas las versiones u opciones. Los instaladores nativos ELF, PE y Mach-O aceptan las cuatro arquitecturas. GCC necesita un controlador ELF compatible y no produce LLVM IR. Las reubicaciones desconocidas, TLS, constructores globales durante la carga, LTO, símbolos common/IFUNC e importaciones sin resolver fallan explícitamente. El recibo JSON conserva compilador, argumentos, enlaces y direcciones; los objetos nativos incluyen SHA-256.
 
@@ -164,6 +164,6 @@ El flujo de Windows también genera 27 reemplazos PE para x86, x64 y ARM64. `scr
 
 La validación de procesos nativos de Windows [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) superó las 90 observaciones: 30 para cada arquitectura x86, x64 y ARM64, con IR de fuente, objetos compilados y objetos suministrados. x86/x64 se ejecutaron en Windows x64; ARM64, en `windows-11-arm`, con las mismas imágenes verificadas mediante sus hashes. La misma ejecución superó las 16 pruebas específicas de PE/objetos/trampoline y las 143 pruebas de la matriz Unicorn, sin omisiones. El caso FH3 mantuvo sus siete escenarios de ejecución de C++ x64.
 
-La validación nativa fija NeverC en la revisión `182fd2c5dc`, usa originales compilados de forma independiente y el instalador NeverD actual. `check_source_patch_hosted_pe_runtime.py` exige 36 observaciones nativas de Windows por arquitectura para ciclos de vida C++ con IR/objetos/hosted y una excepción que atraviesa dos marcos hosted. `check_source_patch_elf_runtime.py` exige 66 observaciones nativas de Linux por arquitectura para C++ IR/objetos/hosted, propagación hosted y nueve escenarios de excepciones Clang. Deben coincidir los recibos, hashes y arquitectura real del host. Se instalan salidas reales del compilador; no se afirma que NeverC se ejecutara en el host CI.
+La validación nativa fija NeverC en `182fd2c5dc`, con originales independientes y el instalador NeverD actual. `check_source_patch_hosted_pe_runtime.py` exige 36 observaciones por arquitectura Windows para IR/objetos/hosted C y propagación a través de dos marcos C. `check_source_patch_elf_runtime.py` exige 66 por arquitectura Linux para C, propagación hosted y nueve escenarios C++ de Clang. Recibos, resúmenes y arquitectura real deben coincidir; esto no afirma que el propio NeverC se ejecutara en el host CI.
 
-La validación nativa [21ac20341](https://github.com/NeverSight/NeverD/actions/runs/38431902780) superó las 204 observaciones: 36 por arquitectura Windows x64/ARM64 y 66 por arquitectura Linux x64/ARM64. La API pública produjo C++ IR, objetos normales y C++ hosted DynCode, además de una excepción a través de dos marcos NeverC. La reproducción verifica los digests del código y submódulos actuales, bytes originales y finales, recibos y host nativo real. macOS ARM64 y Rosetta x64 también superaron las tres rutas C++ y la propagación local. Clang FH3 [75b6079e6](https://github.com/NeverSight/NeverD/actions/runs/38413109780) superó por separado nueve escenarios y controles, 36 observaciones por arquitectura Windows x64/ARM64.
+Las 204 observaciones del antiguo perfil de traducción son históricas y no prueban el contrato actual de C puro. Las tres rutas NeverC actuales usan C; Clang C++ FH3 se valida por separado. macOS x64 usa Rosetta 2. Unicorn/QEMU no sustituyen la validación nativa del sistema y del desenrollador.

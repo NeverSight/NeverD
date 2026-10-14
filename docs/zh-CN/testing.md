@@ -1679,15 +1679,15 @@ ctest --test-dir build-release -L '^(NeverDX86X87IntegerLoadTests|NeverDLLVMCInt
 
 矩阵还会按独立的 ABI 清单核对编译对象和外部原生对象的 `target` 回执。错误对象测试随后必须安装并执行未修改的对象，作为有效输入对照。
 
-可选 `NeverCProfiles/*` 为六个 x64/ARM64 配置增加 30 项测试，覆盖 C++ IR、对象、hosted DynCode、非内联辅助函数/递归和不支持 C++ 的拒绝。`NeverDSourcePatchDynCodeTests` 拒绝伪造摘要、入口、目标、状态和最终验证。`SourcePatchException.NeverC*` 在真实进程检查生命周期及穿过两个 hosted 帧的异常回调。Windows C++ 检查器要求九种补丁场景、原始对照、三次执行以及匹配的机器、提交、摘要和原生 x64/ARM64 主机。
+可选 `NeverCProfiles/*` 矩阵在六种 x64/ARM64 配置上验证 30 项：C IR、C 对象、C hosted DynCode、非内联辅助函数和递归，以及拒绝 C++。`SourcePatch.NeverCRejectsCppBeforeStartingTheCompiler` 不依赖安装 NeverC，证明拒绝发生在启动前。`SourcePatchException.NeverC*` 执行纯 C 结果及穿过两层 hosted C 栈帧的抛异常回调。Clang 的 C++ 异常验证独立进行。Swift 寄存器、内存标量转换在两种优化级别校验结果位与 MXCSR；移动端只接收 C 后端准确的舍入 pragma 前缀，继续拒绝条件声明及被修改的指令。
 
 ```sh
 NEVERD_TEST_MATRIX_NEVERC=/path/to/neverc build-source-full/bin/NeverDSourcePatchMatrixTests --gtest_filter="NeverCProfiles/*"
 ```
 
-原生生产器验证固定 NeverC 提交 `182fd2c5dc`，使用独立编译的原程序和当前 NeverD 安装器。`check_source_patch_hosted_pe_runtime.py` 要求每种架构完成 36 次原生 Windows 观测，覆盖 C++ IR/对象/hosted 生命周期，以及异常穿过两个 hosted 帧的回调。`check_source_patch_elf_runtime.py` 要求每种架构完成 66 次原生 Linux 观测，覆盖 C++ IR/对象/hosted、hosted 异常传播及九种 Clang 异常场景。回执、制品哈希和实际主机架构必须匹配。这些检查安装真实编译器产物，不表示在 CI 主机上运行过 NeverC 编译器。
+原生生产语料固定 NeverC `182fd2c5dc`，使用独立原程序和当前 NeverD 安装器。`check_source_patch_hosted_pe_runtime.py` 在每种 Windows 架构要求 36 次 C IR/对象/hosted 结果与两层 hosted C 展开观测；`check_source_patch_elf_runtime.py` 在每种 Linux 架构要求 66 次 C、hosted 传播和九种 Clang C++ 异常场景观测。凭据、文件摘要及真实主机架构必须一致；这些检查不代表 CI 主机执行了 NeverC 编译器本身。
 
-原生验证 [21ac20341](https://github.com/NeverSight/NeverD/actions/runs/38431902780) 的 204 次进程观测全部通过：Windows x64/ARM64 各 36 次，Linux x64/ARM64 各 66 次。公共源码接口生成 C++ IR、普通对象和 C++ hosted DynCode，并验证异常穿过两层 NeverC 栈帧。重放核对当前引擎源码与子模块摘要、原件和最终字节、安装回执及实际原生主机。macOS ARM64 与 Rosetta x64 在本地通过相同的三条 C++ 路径和两层异常传播。Clang FH3 原生验证 [75b6079e6](https://github.com/NeverSight/NeverD/actions/runs/38413109780) 另在 Windows x64/ARM64 各通过九种异常场景及对照，共各 36 次观测。
+旧翻译配置的 204 次观测凭据仅保留为历史记录，不能证明当前纯 C 编译契约。当前三条 NeverC 路径都使用 C，Clang C++ FH3 另行验证。macOS x64 使用 Rosetta 2；Unicorn/QEMU 的 CPU 结果不能代替原生操作系统与异常展开验证。
 
 `InterpreterSpecialization.HighAddress*` 与 `BinaryLowIRRefinement.HighAddress*` 覆盖高地址入口和转移、重叠指令范围、原始返回字节、栈恢复、与标签数值相同的数据、无效或缺失代码及精确／不足预算。独立字节执行器与修改返回字的反例区分运行时数值和 CFG 标签。
 

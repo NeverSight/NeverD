@@ -44,15 +44,15 @@ neverd patch app --from-object=replacement.o --entry=replacement \
 
 [NeverC producer: 182fd2c5dc](https://github.com/NeverSight/NeverC/commit/182fd2c5dc)
 
-**NeverC C++ and hosted DynCode**
+**NeverC C and hosted DynCode**
 
-NeverC C++ uses the built-in `cpp-core-v2` C++17 translator and then NeverC C23 code generation on x64/ARM64 ELF, PE and Mach-O. Templates and normal constructor/destructor lifetimes are supported within that documented subset. Use an explicit `extern "C"` entry. C++ exceptions, RTTI, virtual dispatch and cleanup during foreign exception propagation are outside that translation profile; use Clang for exception code. The receipt contains both commands, the target manifest, source map and verified hashes.
+NeverC accepts pure C source on x64/ARM64 ELF, PE and Mach-O. NeverD rejects NeverC with `--language=c++` before starting the compiler; it does not translate C++ or choose another compiler implicitly. Select Clang for C++ and exception replacements, or a matching GCC driver for the verified ELF object profile. NeverC's hosted C frames can carry an exception thrown and caught by the surrounding C++ image; this requires real unwind records and does not add C++ language support to NeverC.
 
 `dyncode`: `--compile-mode=dyncode` selects NeverC’s `-fdyncode-hosted` profile. It requires source, one explicit entry, a native object and no original bindings. CLI and Python default to the object artifact for this mode and GCC. The adapter verifies the kept object and final payload digests; the installer compares every linked code byte and the native entry offset before publishing. Real compiler CFI/SEH or complete native compact records provide unwind coverage. It rejects mutable/TLS globals, implicit syscall/PEB/heap/string runtime lowering, unresolved imports and changed/reordered code. Data and callback pointers can be passed as parameters.
 
 ```sh
 neverd patch app --from-source=replacement.cpp --language=c++ \
-  --compiler=neverc --compiler-path=/path/to/neverc \
+  --compiler=clang --compiler-path=/path/to/clang++ \
   --entry=replacement --func=0x401140 --patch-report -o app.cpp
 neverd patch app --from-source=replacement.c --compiler=neverc \
   --compiler-path=/path/to/neverc --compile-mode=dyncode \
@@ -68,8 +68,8 @@ The Clang LLVM-IR route also admits Windows ARM64 C++ FH3, checking compiler-own
 | GCC/G++ 13.3.0 | Native object | ELF x64 C/C++ with a compatible Itanium runtime |
 | NeverC 3389.1.5 ordinary mode | LLVM IR | ELF x64 C; Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 ordinary mode | Native object | ELF x64 C |
-| NeverC 3389.1.5 `cpp-core-v2` | LLVM IR / native object | ELF / PE / Mach-O x64/ARM64: normal C++17 subset lifetimes |
-| NeverC 3389.1.5 `hosted-v1` | Native object + sealed payload | ELF / PE / Mach-O x64/ARM64: C / C++17 subset, normal lifetimes and exception propagation through C frames |
+| NeverC 3389.1.5 ordinary C | LLVM IR / native object | ELF / PE / Mach-O x64/ARM64: C source |
+| NeverC 3389.1.5 `hosted-v1` | Native object + sealed payload | ELF / PE / Mach-O x64/ARM64: C source and exception propagation through C frames |
 
 These are checked OS runtime profiles, not promises for every compiler version or option. The native installers accept all four architectures in ELF, PE and Mach-O. GCC requires a matching ELF driver and cannot produce LLVM IR. Unknown relocations, TLS, load-time global constructors, LTO, common/IFUNC symbols and unresolved imports fail clearly. The JSON receipt records compiler identity, arguments, bindings and installed addresses; native objects also record SHA-256.
 
@@ -162,6 +162,6 @@ The optional matrix producer is selected by `NEVERD_TEST_MATRIX_NEVERC`. NeverC 
 
 Native Windows process qualification at [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) passed all 90 observations: 30 each for x86, x64 and ARM64, covering source IR, compiled objects and supplied objects. x86/x64 executed on Windows x64; ARM64 executed on `windows-11-arm`, using the same hashed images. The same run passed all 16 focused PE/object/trampoline checks and all 143 Unicorn target-matrix checks without skips. The FH3 case retained its seven x64 C++ runtime scenarios.
 
-Native producer qualification pins NeverC revision `182fd2c5dc`, independent originals and the current NeverD installer. `check_source_patch_hosted_pe_runtime.py` requires 36 native Windows observations per architecture for C++ IR/object/hosted lifetimes and a throwing callback through two hosted frames. `check_source_patch_elf_runtime.py` requires 66 native Linux observations per architecture for C++ IR/objects/hosted, hosted propagation and nine Clang exception scenarios. Receipts, artifact hashes and the actual host architecture must match. These checks install real producer outputs; they do not claim a NeverC executable ran on the CI host.
+Native producer qualification pins NeverC revision `182fd2c5dc`, independent originals and the current NeverD installer. `check_source_patch_hosted_pe_runtime.py` requires 36 native Windows observations per architecture for C IR/object/hosted results and a throwing callback through two hosted C frames. `check_source_patch_elf_runtime.py` requires 66 native Linux observations per architecture for C IR/objects/hosted, hosted propagation and nine Clang C++ exception scenarios. Receipts, artifact hashes and the actual host architecture must match. These checks install real C producer outputs; they do not claim a NeverC executable ran on the CI host.
 
-Native qualification [21ac20341](https://github.com/NeverSight/NeverD/actions/runs/38431902780) passed all 204 process observations: 36 each on Windows x64/ARM64 and 66 each on Linux x64/ARM64. The public source API produced C++ IR, ordinary objects and C++ hosted DynCode, plus a throwing callback through two NeverC frames. Replay verified the current engine source/submodule digest, original and final bytes, publication receipts and actual native host. macOS ARM64 and Rosetta x64 passed the same three C++ routes and two-frame propagation locally. Native Clang FH3 qualification [75b6079e6](https://github.com/NeverSight/NeverD/actions/runs/38413109780) separately passed nine exception scenarios plus controls, 36 observations each on Windows x64/ARM64.
+Historical qualification [21ac20341](https://github.com/NeverSight/NeverD/actions/runs/38431902780) recorded 204 observations under the former translation profile; it is not evidence for the current C-only compiler contract. The current fixtures use C for all three NeverC routes and keep Clang C++ exceptions separate. Native Clang FH3 qualification [75b6079e6](https://github.com/NeverSight/NeverD/actions/runs/38413109780) passed nine exception scenarios plus controls, 36 observations each on Windows x64/ARM64. macOS x64 execution uses Rosetta 2; CPU emulators do not establish native OS or unwinder coverage.

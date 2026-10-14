@@ -28,8 +28,8 @@ class HostedProducerEvidenceTests(unittest.TestCase):
             self.assertGreater(len(payload), 40)
 
     def test_changed_source_payload_object_audit_and_revision_are_rejected(self):
-        for name in ("replacement.c", "replacement.cpp", "x64.obj", "x64.bin", "x64.audit.json",
-                     "x64/cpp.ll", "x64/cpp.obj", "x64/cpp-hosted.obj", "x64/cpp-hosted.bin"):
+        for name in ("replacement.c", "scalar.c", "x64.obj", "x64.bin", "x64.audit.json",
+                     "x64/c.ll", "x64/c.obj", "x64/c-hosted.obj", "x64/c-hosted.bin"):
             with self.subTest(name=name):
                 path = self.root / name
                 original = path.read_bytes()
@@ -106,7 +106,7 @@ class HostedRuntimeEvidenceTests(unittest.TestCase):
                    lambda: self.manifest.update(producer_commit="other"),
                    lambda: self.manifest["images"][0].update(sha256="0" * 64),
                    lambda: self.manifest["images"].pop(),
-                   lambda: self.manifest["images"][0].update(case="cpp-ir")]
+                   lambda: self.manifest["images"][0].update(case="c-ir")]
         baseline = json.dumps(self.manifest)
         for change in changes:
             self.manifest = json.loads(baseline)

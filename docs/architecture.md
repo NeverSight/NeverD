@@ -31,7 +31,7 @@ publication. These
 new-program contracts do not assert equivalence to the original Windows EH
 graph; `COFFExceptionPatch` continues to require that evidence for lifted code.
 
-`SourcePatchCompiler` composes NeverC `cpp-core-v2` translation and C23 generation; `validateDynCodePatchImage` binds the hosted audit to actual object/payload hashes and exact linked code/entry layout. Format installers register real compiler unwind records. ARM64 source FH3 uses loader-owned xdata extents and MC-owned funclet/FuncInfo groups. Native compact records may cover every Mach-O function when the original has no DWARF section.
+`SourcePatchCompiler` admits NeverC only for C source and rejects C++ before launching a producer. Clang and matching ELF GCC drivers own C++ compilation. `validateDynCodePatchImage` binds the hosted C audit to actual object/payload hashes and exact linked code/entry layout. Format installers register real compiler unwind records. ARM64 Clang source FH3 uses loader-owned xdata extents and MC-owned funclet/FuncInfo groups. Native compact records may cover every Mach-O function when the original has no DWARF section.
 
 `CompiledImage` normalizes AArch64 ELF colon specifiers once for live resolution and captured fixups. The ELF resolver and loader-relocation publisher share exact ABS/GOT identities; TLS and unknown forms remain rejected. COFF native function extents may use decoded runtime rows, with complete compiler unwind coverage required for hosted code.
 

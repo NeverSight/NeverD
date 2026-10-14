@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](source-patching.md)
 
-<!-- i18n-source: 382939d2eb45a68de6f110b936bbf8adee2c705da454ddc07ad950447a57cd94 -->
+<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
 
 [← Documentation Index](README.md)
 
@@ -46,15 +46,15 @@ neverd patch app --from-object=replacement.o --entry=replacement \
 
 [NeverC producer: 182fd2c5dc](https://github.com/NeverSight/NeverC/commit/182fd2c5dc)
 
-**NeverC C++ وDynCode المستضاف**
+**NeverC C وDynCode المستضاف**
 
-يستخدم NeverC C++ مترجم `cpp-core-v2` المضمن لـC++17 ثم توليد NeverC C23 على ELF وPE وMach-O لـx64/ARM64. تدعم المجموعة الجزئية الموثقة القوالب وأعمار الإنشاء والتدمير العادية، مع مدخل `extern "C"`. لا تشمل استثناءات C++ أو RTTI أو الإرسال الافتراضي أو التنظيف خلال استثناءات خارجية؛ استخدم Clang للاستثناءات. يتضمن الإيصال الأمرين وبيان الهدف والخريطة والبصمات المتحقق منها.
+يقبل NeverC لغة C الخالصة فقط على ELF وPE وMach-O لمعمارَي x64 وARM64. يرفض NeverD الجمع بين NeverC و`--language=c++` قبل تشغيل المترجم، دون ترجمة وسيطة أو تبديل ضمني للمترجم. تستخدم C++ والاستثناءات Clang أو برنامج تشغيل GCC المطابق لملف كائنات ELF المتحقق منه. يمكن لإطارات hosted C تمرير استثناء يرميه برنامج C++ المحيط ويلتقطه بفضل سجلات فك المكدس الفعلية؛ وهذا لا يضيف دعم C++ إلى NeverC.
 
 يستخدم `dyncode`: `--compile-mode=dyncode` وضع `-fdyncode-hosted` ويتطلب مصدرًا ومدخلًا صريحًا واحدًا وكائنًا أصليًا دون ربط بالرموز القائمة. تختار CLI وPython الكائنات لهذا الوضع وGCC. تُفحص البصمتان وكل بايت والمدخل قبل النشر، مع CFI/SEH حقيقية أو سجلات compact كاملة. تُرفض الحالة القابلة للكتابة/TLS وتحويلات syscall/PEB/heap/string الضمنية والاستيرادات غير المحلولة والكود المعاد ترتيبه. تُمرر البيانات وcallbacks كمعاملات.
 
 ```sh
 neverd patch app --from-source=replacement.cpp --language=c++ \
-  --compiler=neverc --compiler-path=/path/to/neverc \
+  --compiler=clang --compiler-path=/path/to/clang++ \
   --entry=replacement --func=0x401140 --patch-report -o app.cpp
 neverd patch app --from-source=replacement.c --compiler=neverc \
   --compiler-path=/path/to/neverc --compile-mode=dyncode \
@@ -70,8 +70,8 @@ neverd patch app --from-source=replacement.c --compiler=neverc \
 | GCC/G++ 13.3.0 | كائن أصلي | ELF x64 C/C++ مع بيئة Itanium متوافقة |
 | NeverC 3389.1.5 الوضع العادي | LLVM IR | ELF x64 C؛ Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 الوضع العادي | كائن أصلي | ELF x64 C |
-| NeverC 3389.1.5 `cpp-core-v2` | LLVM IR / كائن أصلي | ELF / PE / Mach-O x64/ARM64: أعمار الكائنات العادية ضمن مجموعة C++17 |
-| NeverC 3389.1.5 `hosted-v1` | كائن أصلي + حمولة مختومة | ELF / PE / Mach-O x64/ARM64: C / مجموعة C++17، أعمار الكائنات وانتقال الاستثناءات عبر إطارات C |
+| NeverC 3389.1.5 C | LLVM IR / كائن أصلي | ELF / PE / Mach-O x64/ARM64: مصدر C خالص |
+| NeverC 3389.1.5 `hosted-v1` | كائن أصلي + حمولة مختومة | ELF / PE / Mach-O x64/ARM64: مصدر C ومرور الاستثناء عبر إطارات C |
 
 يعرض الجدول ملفات تشغيل OS المتحقق منها، ولا يضمن كل إصدار أو خيار للمترجم. تقبل مثبتات ELF وPE وMach-O الأصلية المعماريات الأربع. يتطلب GCC برنامج تشغيل ELF مطابقًا ولا ينتج LLVM IR. تفشل بوضوح عمليات النقل المجهولة وTLS والمنشئات العامة عند التحميل وLTO ورموز common/IFUNC والاستيرادات غير المحلولة. يسجل إيصال JSON المترجم والوسائط والربط والعناوين، ويسجل SHA-256 للكائنات الأصلية أيضًا.
 
@@ -164,6 +164,6 @@ ctest --test-dir build-source -L \
 
 اجتاز التحقق من عمليات Windows الأصلية [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) جميع الملاحظات الـ90: 30 لكل من x86 وx64 وARM64، عبر IR المصدر والكائنات المترجمة والكائنات المقدمة. نُفّذ x86/x64 على Windows x64، ونُفّذ ARM64 على `windows-11-arm` باستخدام الصور نفسها بعد التحقق من بصماتها. اجتاز التشغيل نفسه أيضًا جميع الفحوص المتخصصة الـ16 لمسارات PE والكائنات وtrampoline، وجميع فحوص مصفوفة Unicorn الـ143، دون تخطي أي حالة. احتفظ اختبار FH3 بسيناريوهات تشغيل C++ x64 السبعة.
 
-يثبت التحقق الأصلي مراجعة NeverC على `182fd2c5dc` ويستخدم برامج أصلية مترجمة بصورة مستقلة ومثبت NeverD الحالي. يتطلب `check_source_patch_hosted_pe_runtime.py` عدد 36 ملاحظة Windows أصلية لكل معمارية لأعمار كائنات C++ عبر IR والكائنات وhosted، واستثناء يعبر إطارين hosted. ويتطلب `check_source_patch_elf_runtime.py` عدد 66 ملاحظة Linux أصلية لكل معمارية لـ C++ عبر IR والكائنات وhosted وانتقال استثناءات hosted وتسعة سيناريوهات Clang. يجب تطابق الإيصالات والبصمات ومعمارية المضيف الفعلية. تثبت هذه الفحوص مخرجات مترجم حقيقية ولا تدعي تشغيل برنامج NeverC التنفيذي على مضيف CI.
+يثبت التحقق الأصلي إصدار NeverC عند `182fd2c5dc` مع برامج أصلية مستقلة ومثبت NeverD الحالي. يتطلب `check_source_patch_hosted_pe_runtime.py` عدد 36 مشاهدة لكل معمارية Windows لوسيط C وكائناته وhosted ومرور الاستثناء عبر إطارَي C. ويتطلب `check_source_patch_elf_runtime.py` عدد 66 مشاهدة لكل معمارية Linux لـC والمرور hosted وتسعة سيناريوهات لاستثناءات Clang C++. يجب تطابق الإيصالات والبصمات ومعمارية المضيف الفعلية؛ ولا يعني ذلك تشغيل مترجم NeverC نفسه على مضيف CI.
 
-نجح التحقق الأصلي [21ac20341](https://github.com/NeverSight/NeverD/actions/runs/38431902780) في الملاحظات الـ204 كلها: 36 لكل معمارية Windows x64/ARM64 و66 لكل معمارية Linux x64/ARM64. أنتجت واجهة المصدر العامة C++ IR وكائنات عادية وC++ hosted DynCode، واستثناء يعبر إطارين NeverC. يتحقق الإعادة من بصمات المصدر والوحدات الفرعية الحالية والبايتات الأصلية والنهائية والإيصالات والمضيف الأصلي الفعلي. نجحت أيضًا مسارات C++ الثلاثة والانتقال المحلي على macOS ARM64 وRosetta x64. ونجح Clang FH3 [75b6079e6](https://github.com/NeverSight/NeverD/actions/runs/38413109780) بصورة منفصلة في تسعة سيناريوهات وضوابطها، بمجموع 36 ملاحظة لكل معمارية Windows x64/ARM64.
+تعد المشاهدات الـ204 لملف الترجمة السابق سجلا تاريخيا ولا تثبت عقد C الخالصة الحالي. تستخدم مسارات NeverC الثلاثة الحالية لغة C، وتختبر Clang C++ FH3 منفصلة. تستخدم macOS x64 بيئة Rosetta 2. لا تحل نتائج CPU في Unicorn/QEMU محل التحقق الأصلي من النظام وفك المكدس.

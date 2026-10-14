@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 382939d2eb45a68de6f110b936bbf8adee2c705da454ddc07ad950447a57cd94 -->
+<!-- i18n-source: eb2a70d2b1d15c943ee92c3ca762c2328fdf4f9c742fc05a8e52771179931675 -->
 
 [← Documentation Index](README.md)
 
@@ -46,15 +46,15 @@ neverd patch app --from-object=replacement.o --entry=replacement \
 
 [NeverC producer: 182fd2c5dc](https://github.com/NeverSight/NeverC/commit/182fd2c5dc)
 
-**NeverC C++ 與 hosted DynCode**
+**NeverC C 與 hosted DynCode**
 
-NeverC C++ 在 x64/ARM64 ELF、PE、Mach-O 上透過內建 `cpp-core-v2` C++17 翻譯器，再由 NeverC 產生 C23。文件子集支援模板及正常控制流程的建構、解構，入口须使用 `extern "C"`。C++ 例外、RTTI、虛擬分派及外部例外傳播時的清理不在此設定內；例外程式碼請用 Clang。憑據包含兩階段命令、目標清單、來源映射及驗證雜湊。
+NeverC 在 x64/ARM64 ELF、PE、Mach-O 上只接受純 C 原始碼。NeverD 會在啟動編譯器前拒絕 NeverC 與 `--language=c++` 的組合，不會隱式翻譯或切換編譯器。C++ 與例外替換使用 Clang，或已驗證 ELF 物件設定下相符的 GCC。hosted C 框架可透過真實展開記錄，讓外圍 C++ 程式拋出並捕捉的例外通過；這不表示 NeverC 支援 C++。
 
 `dyncode`: `--compile-mode=dyncode` 使用 NeverC `-fdyncode-hosted`，要求原始碼、一個明確入口及原生物件，不允許既有符號繫結。CLI 與 Python 對此模式及 GCC 預設選擇物件。安裝前驗證物件與最終載荷摘要、程式碼位元組和入口偏移，並使用真實 CFI/SEH 或完整 native compact 展開記錄。可寫/TLS 狀態、隱含 syscall/PEB/heap/string 改寫、未解析匯入及變動或重排的程式碼明確失敗；指標可由參數傳入。
 
 ```sh
 neverd patch app --from-source=replacement.cpp --language=c++ \
-  --compiler=neverc --compiler-path=/path/to/neverc \
+  --compiler=clang --compiler-path=/path/to/clang++ \
   --entry=replacement --func=0x401140 --patch-report -o app.cpp
 neverd patch app --from-source=replacement.c --compiler=neverc \
   --compiler-path=/path/to/neverc --compile-mode=dyncode \
@@ -70,8 +70,8 @@ Clang LLVM IR 路徑接入 Windows ARM64 C++ FH3，驗證 xdata、父框架 ABI 
 | GCC/G++ 13.3.0 | 原生物件 | ELF x64 C/C++，需要相容的 Itanium 執行階段 |
 | NeverC 3389.1.5 普通模式 | LLVM IR | ELF x64 C；Mach-O x64/ARM64 C |
 | NeverC 3389.1.5 普通模式 | 原生物件 | ELF x64 C |
-| NeverC 3389.1.5 `cpp-core-v2` | LLVM IR / 原生物件 | ELF / PE / Mach-O x64/ARM64: C++17 子集的正常生命週期 |
-| NeverC 3389.1.5 `hosted-v1` | 原生物件 + 封存載荷 | ELF / PE / Mach-O x64/ARM64: C / C++17 子集、正常生命週期與穿過 C 框架的例外傳播 |
+| NeverC 3389.1.5 C | LLVM IR / 原生物件 | ELF / PE / Mach-O x64/ARM64: 純 C 原始碼 |
+| NeverC 3389.1.5 `hosted-v1` | 原生物件 + 封存載荷 | ELF / PE / Mach-O x64/ARM64: 純 C 原始碼與穿過 C 框架的例外傳播 |
 
 上表是已驗證的作業系統執行設定，不保證所有編譯器版本與選項。ELF、PE、Mach-O 原生安裝器皆接入四種架構。GCC 需要相符的 ELF 驅動，不能產生 LLVM IR。未知重定位、TLS、載入時的全域建構函式、LTO、common/IFUNC 符號及未解析匯入皆明確失敗。JSON 憑據記錄編譯器身分、參數、繫結及安裝位址，原生物件另記錄 SHA-256。
 
@@ -164,6 +164,6 @@ Windows 工作流程還會為 x86、x64 和 ARM64 產生 27 個 PE 替換產物�
 
 Windows 原生程序驗收 [a4a5ae3cb](https://github.com/NeverSight/NeverD/actions/runs/38350079817) 的 90 次觀測全部通過：x86、x64 和 ARM64 各 30 次，涵蓋原始碼 IR、編譯物件與外部物件三條路徑。x86/x64 在 Windows x64 上執行；ARM64 在 `windows-11-arm` 上執行，使用同一批經過雜湊驗證的映像。同一輪的 16 個 PE/物件/trampoline 專項檢查與 143 個 Unicorn 目標矩陣檢查也全部通過，沒有跳過。FH3 案例繼續驗證七種 x64 C++ 執行場景。
 
-原生產生器驗證固定 NeverC 提交 `182fd2c5dc`，使用獨立編譯的原程式與目前 NeverD 安裝器。`check_source_patch_hosted_pe_runtime.py` 要求每種架構完成 36 次原生 Windows 觀測，涵蓋 C++ IR/物件/hosted 生命週期，以及例外穿過兩個 hosted 框架的回呼。`check_source_patch_elf_runtime.py` 要求每種架構完成 66 次原生 Linux 觀測，涵蓋 C++ IR/物件/hosted、hosted 例外傳播及九種 Clang 例外情境。回執、製品雜湊與實際主機架構必須相符。這些檢查安裝真實編譯器產物，不表示在 CI 主機執行過 NeverC 編譯器。
+原生生產語料固定 NeverC `182fd2c5dc`，搭配獨立原程式與目前 NeverD 安裝器。`check_source_patch_hosted_pe_runtime.py` 每種 Windows 架構要求 36 次 C IR/物件/hosted 與兩層 hosted C 展開觀測；`check_source_patch_elf_runtime.py` 每種 Linux 架構要求 66 次 C、hosted 傳播及九種 Clang C++ 例外情境觀測。憑據、摘要及真實主機架構必須相符；不表示 CI 主機執行了 NeverC 編譯器本身。
 
-原生驗證 [21ac20341](https://github.com/NeverSight/NeverD/actions/runs/38431902780) 的 204 次進程觀測全部通過：Windows x64/ARM64 各 36 次，Linux x64/ARM64 各 66 次。公開原始碼介面產生 C++ IR、普通物件與 C++ hosted DynCode，並驗證例外穿過兩層 NeverC 框架。重放核對目前引擎原始碼和子模組摘要、原件與最終位元組、安裝回執及實際原生主機。macOS ARM64 與 Rosetta x64 在本機通過相同三條 C++ 路徑及兩層例外傳播。Clang FH3 原生驗證 [75b6079e6](https://github.com/NeverSight/NeverD/actions/runs/38413109780) 另在 Windows x64/ARM64 各通過九種例外情境和對照，共各 36 次觀測。
+舊翻譯設定的 204 次觀測僅為歷史記錄，不能證明目前純 C 契約。目前三條 NeverC 路徑均使用 C，Clang C++ FH3 獨立驗證。macOS x64 使用 Rosetta 2；Unicorn/QEMU 的 CPU 結果不能替代原生作業系統與例外展開驗證。

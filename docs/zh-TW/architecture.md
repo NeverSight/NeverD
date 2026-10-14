@@ -13,7 +13,7 @@ NeverD 自有程式碼；LLVM、Capstone 與 Unicorn 子模組各自維護內部
 
 `sourcePatchTargetTriple` 從映像確定 ARM 指令模式、ELF 浮點 ABI 與 Mach-O CPU 子類型。`COFFPatchObject` 和 `MachOPatchObject` 依物件自身符號、輔助／區段定義及展開記錄驗證範圍，不虛構 MC 識別碼；格式安裝器負責註冊實際展開表。
 
-`SourcePatchCompiler` 組合 NeverC `cpp-core-v2` 翻譯與 C23 產生；`validateDynCodePatchImage` 將 hosted 審計繫結至實際物件/載荷摘要、最終程式碼和入口布局。格式安裝器註冊真實展開記錄。ARM64 FH3 使用載入器 xdata 範圍及 MC funclet/FuncInfo 歸屬。無 DWARF 節的 Mach-O 須由原生 compact 記錄覆蓋全部函式。
+`SourcePatchCompiler` 在啟動前限制 NeverC 為純 C；C++ 由 Clang 或相符的 ELF GCC 驅動負責。`validateDynCodePatchImage` 將 hosted C 稽核綁定至真實物件、載荷摘要及精確程式碼與入口配置。格式安裝器註冊真實展開記錄；ARM64 Clang FH3 保留載入器的 xdata 範圍及 MC 的 funclet/FuncInfo 群組，Mach-O 可使用完整原生 compact 記錄。
 
 `CompiledImage` 在同一入口正規化 AArch64 ELF 冒號重定位標記，供即時解析與記錄後的 fixup 共用。ELF 解析器與載入器重定位發布共用精確 ABS/GOT 身分，TLS 與未知形式仍明確拒絕。COFF 原生函式範圍可採用解碼後的執行階段記錄；hosted 程式碼須具備完整的編譯器展開覆蓋。
 

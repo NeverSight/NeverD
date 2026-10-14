@@ -65,7 +65,7 @@ class ELFRuntimeEvidenceTests(unittest.TestCase):
                    lambda: self.manifest["images"][0].update(sha256="0" * 64),
                    lambda: self.manifest["images"].pop(),
                    lambda: self.manifest["images"][0].update(path="../other.elf"),
-                   lambda: self.manifest["images"][0].update(case="cpp-ir")]
+                   lambda: self.manifest["images"][0].update(case="c-ir")]
         baseline = json.dumps(self.manifest)
         for change in changes:
             with self.subTest(change=change):

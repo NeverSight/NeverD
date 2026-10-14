@@ -14,7 +14,7 @@
 
 يحدد `sourcePatchTargetTriple` وضع ARM وABI الفاصلة العائمة ELF والنوع الفرعي CPU في Mach-O من الصورة. يتحقق `COFFPatchObject` و`MachOPatchObject` من رموز الكائن وتعريفاته المساعدة／الأقسام وسجلاته الأصلية دون اختلاق معرفات MC، وتسجل مثبتات التنسيق الجداول الفعلية.
 
-يجمع `SourcePatchCompiler` ترجمة NeverC `cpp-core-v2` وتوليد C23؛ ويربط `validateDynCodePatchImage` التدقيق ببصمات الكائن والحمولة والكود والمدخل الفعلية. تسجل المثبتات بيانات فك المكدس الحقيقية. يستخدم ARM64 FH3 حدود xdata للودر ومجموعات funclet/FuncInfo في MC. دون DWARF أصلي يجب أن تغطي سجلات compact الأصلية كل دوال Mach-O.
+يقصر `SourcePatchCompiler` استخدام NeverC على C قبل التشغيل؛ ويتولى Clang أو برنامج ELF GCC المطابق ترجمة C++. يربط `validateDynCodePatchImage` تدقيق hosted C بالكائنات والبصمات وتخطيط الشيفرة ونقطة الدخول بدقة. تسجل المثبتات سجلات فك مكدس فعلية. يستخدم ARM64 Clang FH3 نطاقات xdata التابعة للمحمل ومجموعات funclet/FuncInfo التابعة لـMC؛ وتبقى سجلات compact الأصلية الكاملة في Mach-O مدعومة.
 
 يوحد `CompiledImage` محددات ELF AArch64 ذات النقطتين مرة واحدة للحل الفعلي وfixup المسجل. يتشارك محلل ELF ونشر إعادة تموضع اللودر هويات ABS/GOT الدقيقة؛ وتظل TLS والصيغ المجهولة مرفوضة. يمكن لحدود دوال COFF الأصلية استخدام سجلات وقت التشغيل المفكوكة، ويتطلب كود hosted تغطية كاملة لفك المكدس من المترجم.
 

@@ -102,7 +102,9 @@ def prepare(repository: Path, fixtures: Path, output: Path, system: str, arch: s
             if hashlib.sha256(receipt_data).hexdigest() != item["sha256"]:
                 raise ValueError("snapshot publication receipt digest mismatch")
             receipt = json.loads(receipt_data)
-            if receipt.get("schema") != "neverd.source-patch.v1" or receipt.get("success") is not True:
+            if (receipt.get("schema") != "neverd.source-patch.v1" or
+                receipt.get("success") is not True or
+                (receipt.get("compiler") == 1 and receipt.get("language") != 0)):
                 raise ValueError("snapshot publication receipt is not successful")
             (output / f"{row['case']}-{index}-receipt.json").write_bytes(receipt_data)
     (output / "manifest.json").write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")

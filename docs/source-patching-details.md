@@ -78,16 +78,16 @@ checked through this route: every non-relocation text byte, including the
 compiler's added entry padding, survived installation. Other MIR/obfuscation
 transformations need their own relocation and runtime verification.
 
-NeverC is optional. Ordinary compilation does not enable dyncode. NeverC C++
-uses the built-in `cpp-core-v2` C++17-to-C23 translator with an explicit target,
-verified manifest/source-map hashes and a C export. Hosted
+NeverC is optional and accepts pure C only. NeverD refuses NeverC with C++
+source before starting the compiler. C++ replacements use Clang or the verified
+ELF GCC object profile. Ordinary C compilation does not enable dyncode. Hosted
 `--compile-mode=dyncode` requires its producer's `-fdyncode-hosted` capability,
 one native code section, one explicit entry and no original bindings. It
 verifies the kept object and final payload digests and compares linked code
 bytes/entry layout before publication. The compiler retains actual unwind
 records and disables implicit runtime lowering and mutable/TLS state.
-NeverC's translator does not admit C++ EH, RTTI, virtual dispatch or cleanup
-during foreign exception propagation; select Clang for C++ exception code.
+Hosted C frames retain the unwind information needed for a surrounding C++
+image's exception to propagate through them; NeverC does not compile C++.
 Clang source IR admits x64/ARM64 PE FH3 with bounded compiler xdata and exact
 funclet/FuncInfo ownership. GCC cannot
 produce the LLVM IR artifact. Native ELF, COFF and Mach-O objects are accepted

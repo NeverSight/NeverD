@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute pinned NeverC C++ and hosted frames in native Windows processes."""
+"""Execute pinned NeverC C and hosted frames in native Windows processes."""
 from __future__ import annotations
 
 import argparse
@@ -16,8 +16,8 @@ from scripts import check_source_patch_pe_runtime as pe
 SCHEMA = "neverd.source-patch.hosted-pe-runtime.v1"
 PRODUCER = "182fd2c5dc"
 CASES = {"hosted-original": ((0, 1), (2, 42)), "hosted": ((0, 40), (2, 42)),
-         "cpp-original": ((0, 1), (2, 3)), "cpp-ir": ((0, 11), (2, 15)),
-         "cpp-object": ((0, 11), (2, 15)), "cpp-hosted": ((0, 11), (2, 15))}
+         "c-original": ((0, 1), (2, 3)), "c-ir": ((0, 11), (2, 15)),
+         "c-object": ((0, 11), (2, 15)), "c-hosted": ((0, 11), (2, 15))}
 ORIGINAL = r'''
 extern "C" __declspec(dllexport) int cleanup_count = 0;
 using Callback = int (*)(int);
@@ -56,30 +56,30 @@ def image_bytes(path: Path, va: int, size: int) -> bytes:
 
 def producer_fixture(root: Path, arch: str) -> tuple[Path, bytes]:
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("schema") != "neverd.hosted-producer-fixtures.v1" or manifest.get("producer_commit") != PRODUCER:
+    if (manifest.get("schema") != "neverd.hosted-producer-fixtures.v2" or
+        manifest.get("producer_commit") != PRODUCER or manifest.get("language") != "c"):
         raise ValueError("unqualified hosted producer revision")
     if pe.digest(root / "replacement.c") != manifest.get("source_sha256"):
         raise ValueError("hosted source digest mismatch")
-    if pe.digest(root / "replacement.cpp") != manifest.get("cpp_source_sha256"):
-        raise ValueError("C++ source digest mismatch")
+    if pe.digest(root / "scalar.c") != manifest.get("c_source_sha256"):
+        raise ValueError("C source digest mismatch")
     rows = [row for row in manifest["entries"] if row["architecture"] == arch]
     if len(rows) != 1 or rows[0]["target"] != pe.PROFILES[arch][0]:
         raise ValueError("hosted target inventory mismatch")
     row = rows[0]
-    if set(row["cpp_files"]) != {"cpp.ll", "cpp.obj", "cpp-hosted.obj", "cpp-hosted.bin",
-                                  "cpp-hosted.audit.json", "translated.nc", "translated.nc.manifest.json",
-                                  "translated.nc.map.json", "producer-commands.json"}:
-        raise ValueError("C++ producer inventory mismatch")
-    for item in row["cpp_files"].values():
+    if set(row["c_files"]) != {"c.ll", "c.obj", "c-hosted.obj", "c-hosted.bin",
+                                  "c-hosted.audit.json", "producer-commands.json"}:
+        raise ValueError("C producer inventory mismatch")
+    for item in row["c_files"].values():
         path = (root / item["path"]).resolve()
         if not path.is_relative_to(root.resolve()) or pe.digest(path) != item["sha256"]:
-            raise ValueError("C++ producer artifact path/digest mismatch")
-    cpp_audit = json.loads((root / arch / "cpp-hosted.audit.json").read_text(encoding="utf-8"))
+            raise ValueError("C producer artifact path/digest mismatch")
+    cpp_audit = json.loads((root / arch / "c-hosted.audit.json").read_text(encoding="utf-8"))
     if (cpp_audit.get("execution_profile") != "hosted-v1" or cpp_audit.get("keep_unwind") is not True or
         cpp_audit.get("target_triple") != row["target"] or cpp_audit.get("entry_offset") != 0 or
-        cpp_audit.get("input_digest") != pe.digest(root / arch / "cpp-hosted.obj") or
-        cpp_audit.get("output_digest") != pe.digest(root / arch / "cpp-hosted.bin")):
-        raise ValueError("C++ hosted compiler audit mismatch")
+        cpp_audit.get("input_digest") != pe.digest(root / arch / "c-hosted.obj") or
+        cpp_audit.get("output_digest") != pe.digest(root / arch / "c-hosted.bin")):
+        raise ValueError("C hosted compiler audit mismatch")
     files = {}
     for kind in ("object", "payload", "audit"):
         path = (root / row[kind]).resolve()
@@ -130,7 +130,7 @@ def prepare(args: argparse.Namespace) -> None:
                 "path": path.relative_to(root).as_posix(), "sha256": pe.digest(path)})
 
         cpp_source, cpp_obj, cpp_original = (directory / name for name in
-            ("cpp-original.cpp", "cpp-original.obj", "cpp-original.exe"))
+            ("c-original.cpp", "c-original.obj", "c-original.exe"))
         cpp_source.write_text(cpp.ORIGINAL, encoding="utf-8")
         pe.run([str(args.clang), "--driver-mode=g++", "--target=" + pe.PROFILES[arch][0],
                 "-O0", "-fms-runtime-lib=dll", "-c", str(cpp_source), "-o", str(cpp_obj)],
@@ -139,11 +139,11 @@ def prepare(args: argparse.Namespace) -> None:
                 "/export:??_7type_info@@6B@,DATA", "/dynamicbase", *libraries], directory / "cpp-link.log")
         cpp_va = cpp.exports(args.library, cpp_original)["target"]
         cpp_before = pe.digest(cpp_original)
-        manifest["images"].append({"architecture": arch, "case": "cpp-original",
+        manifest["images"].append({"architecture": arch, "case": "c-original",
             "path": cpp_original.relative_to(root).as_posix(), "sha256": cpp_before})
-        for case, input_name, artifact in (("cpp-ir", "cpp.ll", "ir"),
-                                           ("cpp-object", "cpp.obj", "object"),
-                                           ("cpp-hosted", "cpp-hosted.obj", "object")):
+        for case, input_name, artifact in (("c-ir", "c.ll", "ir"),
+                                           ("c-object", "c.obj", "object"),
+                                           ("c-hosted", "c-hosted.obj", "object")):
             output = directory / (case + ".exe")
             input_path = args.fixtures.resolve() / arch / input_name
             command = [str(args.neverd), "patch", str(cpp_original), "--from-" + artifact + "=" + str(input_path),
@@ -151,13 +151,13 @@ def prepare(args: argparse.Namespace) -> None:
             result = pe.run(command, directory / (case + "-patch.log"))
             receipt = pe.publication_receipt(result.stdout, arch, artifact)
             if len(receipt.get("installed", [])) != 1 or pe.digest(cpp_original) != cpp_before:
-                raise ValueError("C++ publication inventory/original mismatch")
+                raise ValueError("C publication inventory/original mismatch")
             if artifact == "object" and receipt.get("object_sha256") != pe.digest(input_path):
-                raise ValueError("C++ publication object digest mismatch")
-            if case == "cpp-hosted":
-                cpp_payload = (input_path.parent / "cpp-hosted.bin").read_bytes()
+                raise ValueError("C publication object digest mismatch")
+            if case == "c-hosted":
+                cpp_payload = (input_path.parent / "c-hosted.bin").read_bytes()
                 if image_bytes(output, receipt["installed"][0]["replacement_va"], len(cpp_payload)) != cpp_payload:
-                    raise ValueError("installed C++ hosted code changed")
+                    raise ValueError("installed C hosted code changed")
             (directory / (case + "-receipt.json")).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
             manifest["images"].append({"architecture": arch, "case": case,
                 "path": output.relative_to(root).as_posix(), "sha256": pe.digest(output)})
@@ -191,7 +191,7 @@ def execute(args: argparse.Namespace) -> None:
     report.write_text(json.dumps({"schema": SCHEMA, "commit": manifest["commit"],
         "producer_commit": PRODUCER, "architecture": args.arch, "native_host": host,
         "observations": observations}, indent=2) + "\n", encoding="utf-8")
-    print(f"{args.arch}: all 36 native Windows NeverC C++/hosted observations passed")
+    print(f"{args.arch}: all 36 native Windows NeverC C/hosted observations passed")
 
 
 def main() -> None:

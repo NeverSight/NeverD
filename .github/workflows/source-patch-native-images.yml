@@ -41,7 +41,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Execute current-engine C++ and hosted process images
+      - name: Execute current-engine C and Clang C++ process images
         run: python scripts/check_source_patch_snapshot_runtime.py --system '${{ matrix.system }}' --arch '${{ matrix.arch }}' --output build-native-images
 
       - name: Preserve native receipts and process observations
