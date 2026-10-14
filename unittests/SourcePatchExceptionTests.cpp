@@ -192,16 +192,17 @@ TEST_F(SourcePatchException, LLVMIRRetainsCrossBoundaryExceptionSemantics) {
 }
 TEST_F(SourcePatchException,
        NativeObjectRetainsCrossBoundaryExceptionSemantics) {
-#if !(defined(__linux__) && defined(__x86_64__))
-  GTEST_SKIP() << "native object exception runtime profile requires Linux x64";
+#if !(defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__)))
+  GTEST_SKIP()
+      << "native object exception runtime profile requires Linux x64/ARM64";
 #endif
   Options.artifact = NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT;
   check();
 }
 
 TEST_F(SourcePatchException, GCCObjectRetainsCrossBoundaryExceptionSemantics) {
-#if !(defined(__linux__) && defined(__x86_64__))
-  GTEST_SKIP() << "GCC exception runtime profile requires Linux x64";
+#if !(defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__)))
+  GTEST_SKIP() << "GCC exception runtime profile requires Linux x64/ARM64";
 #endif
   auto GCC = llvm::sys::findProgramByName("g++");
   if (!GCC)

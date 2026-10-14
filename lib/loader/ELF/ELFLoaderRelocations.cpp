@@ -1451,5 +1451,13 @@ template void applyDynamicRelativeRelocations<llvm::object::ELF64LE>(
     BinaryImage &);
 
 } // namespace detail
+
+std::optional<size_t> objectRelocationFieldWidth(Arch Target, uint32_t Type) {
+  const auto Field = detail::objectRelocationWriterFootprint(Target, Type);
+  if (!Field.Exact || Field.OffsetBias != 0)
+    return std::nullopt;
+  return Field.Width;
+}
+
 } // namespace elf_loader
 } // namespace neverd

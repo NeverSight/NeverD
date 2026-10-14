@@ -25,6 +25,11 @@
 namespace neverd {
 namespace elf_loader {
 
+/// Exact width of a relocation field at r_offset, including a zero-width NONE
+/// record. Unknown or biased writers return none. This describes the bytes,
+/// not admission of the relocation's semantics by a native object installer.
+std::optional<size_t> objectRelocationFieldWidth(Arch Target, uint32_t Type);
+
 /// ABI mapping markers are local, untyped symbols, with an optional suffix.
 inline bool isMappingSymbolName(llvm::StringRef Name) {
   return Name.size() >= 2 && Name[0] == '$' &&

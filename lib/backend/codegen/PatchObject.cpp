@@ -360,11 +360,20 @@ llvm::Expected<ObjectImage> readELFObject(llvm::StringRef Bytes,
       const auto &Data = Result.Storage.Sections[Target->second].ExternalBytes;
       for (const auto &Relocation : *Relocations) {
         const uint32_t Type = Relocation.getType(false);
-        if (!rangeInBounds(Relocation.r_offset, 4, Data.size()))
+        const auto Width =
+            elf_loader::objectRelocationFieldWidth(Original.Arch, Type);
+        if (!Width)
+          return fail("unsupported implicit native relocation field");
+        if (!rangeInBounds(Relocation.r_offset, *Width, Data.size()))
           return fail("implicit relocation addend exceeds its section");
-        const uint32_t Word =
-            readLE<uint32_t>(Data.data() + Relocation.r_offset);
-        int64_t Addend = int32_t(Word);
+        const auto *Field = Data.data() + Relocation.r_offset;
+        const uint64_t Raw = *Width == 8   ? readLE<uint64_t>(Field)
+                             : *Width == 4 ? readLE<uint32_t>(Field)
+                             : *Width == 2 ? readLE<uint16_t>(Field)
+                             : *Width == 1 ? *Field
+                                           : 0;
+        const uint32_t Word = uint32_t(Raw);
+        int64_t Addend = *Width ? llvm::SignExtend64(Raw, *Width * 8) : 0;
         if (Original.Arch == Arch::ARM) {
           if (Type == llvm::ELF::R_ARM_PREL31)
             Addend = llvm::SignExtend64<31>(Word & 0x7fffffff);
@@ -602,7 +611,10 @@ llvm::Error relocateOtherELFObject(
           R.Type == llvm::ELF::R_ARM_THM_JUMP24)) ||
         (A == Arch::AArch64 && (R.Type == llvm::ELF::R_AARCH64_CALL26 ||
                                 R.Type == llvm::ELF::R_AARCH64_JUMP26));
-    const unsigned Width = Absolute ? Image.PointerWidth : 4;
+    const auto FieldWidth = elf_loader::objectRelocationFieldWidth(A, R.Type);
+    if (!FieldWidth)
+      return fail("unsupported native relocation field width");
+    const unsigned Width = *FieldWidth;
     if (!rangeInBounds(R.Offset, Width, Section.Size))
       return fail("relocation exceeds its native section");
     const uint64_t P = Section.VA + R.Offset;
@@ -712,12 +724,18 @@ llvm::Error relocateOtherELFObject(
       } else
         return fail("unsupported ARM native relocation " + llvm::Twine(R.Type));
     } else if (A == Arch::AArch64) {
+      if (Width < 4)
+        return fail("unsupported AArch64 native relocation field width");
       uint32_t Word = readLE<uint32_t>(Out);
-      if (R.Type == llvm::ELF::R_AARCH64_PREL32) {
-        auto D = SignedDelta(P, 32);
+      if (R.Type == llvm::ELF::R_AARCH64_PREL32 ||
+          R.Type == llvm::ELF::R_AARCH64_PREL64) {
+        auto D = SignedDelta(P, Width * 8);
         if (!D)
           return D.takeError();
-        writeLE<uint32_t>(Out, uint32_t(*D));
+        if (Width == 8)
+          writeLE<uint64_t>(Out, uint64_t(*D));
+        else
+          writeLE<uint32_t>(Out, uint32_t(*D));
       } else if (R.Type == llvm::ELF::R_AARCH64_CALL26 ||
                  R.Type == llvm::ELF::R_AARCH64_JUMP26) {
         auto D = SignedDelta(P, 28);
