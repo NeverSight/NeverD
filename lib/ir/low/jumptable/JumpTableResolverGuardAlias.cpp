@@ -48,9 +48,9 @@ namespace neverd {
 
 namespace {
 
+using guard_detail::guardChangePoints;
 using guard_detail::GuardExpr;
 using guard_detail::GuardExprPtr;
-using guard_detail::guardChangePoints;
 
 uint64_t widthMask(uint16_t Bytes) {
   return Bytes == 0 || Bytes >= sizeof(uint64_t)
