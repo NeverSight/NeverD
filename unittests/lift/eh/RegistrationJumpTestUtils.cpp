@@ -10,6 +10,8 @@
 
 #include "neverd/lift/X86Regs.h"
 
+#include <utility>
+
 namespace neverd::registration_test {
 LowFunc makeJumpFrame(unsigned Mutation) {
   auto F = makeBranchingFrame();

@@ -10,8 +10,6 @@
 
 #include "neverd/lift/X86Regs.h"
 
-#include <utility>
-
 using namespace neverd;
 using namespace neverd::registration_state;
 using namespace neverd::registration_test;
