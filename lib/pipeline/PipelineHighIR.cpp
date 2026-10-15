@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PipelineCallAbiDetail.h"
+#include "PipelineHighIRDetail.h"
 #include "PipelineReturnModelingDetail.h"
 
 #include "neverd/Common.h"
@@ -93,8 +94,8 @@ void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result) {
 // buildHighIR — Phase 3
 //===----------------------------------------------------------------------===//
 
-void Pipeline::buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
-                           PipelineResult &Result, DebugContext *Dbg) {
+void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
+                                  PipelineResult &Result, DebugContext *Dbg) {
   // The HighIR route needs the same call-site evidence for register-pair
   // integer returns as direct MedIR -> LLVM emission.  In particular, a
   // 32-bit callee may look low-word-only until another function reads both
@@ -137,7 +138,28 @@ void Pipeline::buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
     // is the stack its calls store.
     sizeVariadicOverflowFromStores(Result.MedFuncs, Img.Arch);
   }
+}
+
+void Pipeline::buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
+                           PipelineResult &Result, DebugContext *Dbg) {
+  prepareSourceMedIR(Img, Result, Dbg);
   rebuildHighIR(Img, Opts, Result, Dbg);
+}
+
+bool Pipeline::resumeHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
+                            PipelineResult &Result, DebugContext *Dbg) {
+  if (!Result.Success || !Result.HighIRDeferred)
+    return Result.Success;
+  if (Result.SourceImage != &Img) {
+    Result.Success = false;
+    Result.Error = "deferred HighIR belongs to a different image";
+    return false;
+  }
+  Result.Success = pipeline_detail::runHighIRStage(
+      Result, [&] { rebuildHighIR(Img, Opts, Result, Dbg); });
+  if (Result.Success)
+    Result.HighIRDeferred = false;
+  return Result.Success;
 }
 
 void Pipeline::rebuildHighIR(const BinaryImage &Img,

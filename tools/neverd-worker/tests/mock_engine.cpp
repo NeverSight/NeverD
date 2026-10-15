@@ -96,6 +96,7 @@ struct MockSession {
   /// and refuse graph/IR reads against a different restricted pipeline.
   std::uint64_t preparedEntry = 0;
   unsigned sourcePrepares = 0, sourcePages = 0, sourceRenders = 0;
+  std::string preparedView;
   bool rejectedPreparation = false;
   bool wholeProgramPrepared = false;
   bool sourceCacheVMFixture() const {
@@ -879,6 +880,12 @@ static int prepareMockFunction(neverd_session_t s, neverd_va_t address) {
   return 1;
 }
 int neverd_prepare_function(neverd_session_t s, neverd_va_t address) {
+  session(s)->preparedView = "legacy";
+  return prepareMockFunction(s, address);
+}
+int neverd_prepare_function_view(neverd_session_t s, neverd_va_t address,
+                                 const char *representation) {
+  session(s)->preparedView = representation ? representation : "";
   return prepareMockFunction(s, address);
 }
 const char *neverd_decompile(neverd_session_t s, neverd_va_t address) {
@@ -1152,6 +1159,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
                      {"library_regions", Json::array()},
                      {"source_names", Json::array()},
                      {"fixture_prepares", state.sourcePrepares},
+                     {"fixture_prepared_view", state.preparedView},
                      {"fixture_pages", state.sourcePages},
                      {"fixture_renders", state.sourceRenders}}
                     .dump());

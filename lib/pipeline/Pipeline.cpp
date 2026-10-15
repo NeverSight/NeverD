@@ -525,6 +525,24 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return Result;
   }
 
+  // Both source routes need the same ABI/return recovery. LLVM views can
+  // postpone only the HighIR projection; they must not bypass those proofs.
+  if (Opts.DeferHighIR && !Opts.DumpHigh) {
+    Trace.start(NativePipelineTrace::Stage::HighIR);
+    try {
+      prepareSourceMedIR(Img, Result, Dbg);
+      Result.HighIRDeferred = true;
+      Result.Success = true;
+    } catch (const std::exception &Error) {
+      Result.Error =
+          std::string("source MedIR preparation failed: ") + Error.what();
+    } catch (...) {
+      Result.Error = "source MedIR preparation failed: unknown exception";
+    }
+    Trace.finish(Result.Success);
+    return Result;
+  }
+
   // Phase 3: MedIR -> HighIR (parallel).
   Trace.start(NativePipelineTrace::Stage::HighIR);
   if (!pipeline_detail::runHighIRStage(

@@ -4436,6 +4436,68 @@ neverd_va_t seedAnalysisCacheSymbols(neverd_session_t Session) {
   return Entry;
 }
 
+TEST_F(SessionCAPITest, LLVMViewsDeferOnlyHighIRAndPreserveLaterSource) {
+  for (bool Floating : {false, true}) {
+    SCOPED_TRACE(Floating);
+    const auto Path = write(Floating ? "deferred-floating.elf" : "deferred.elf",
+                            makeAnalysisCacheELF(Floating));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    const auto Entry = seedAnalysisCacheSymbols(Session);
+    auto &State = *neverd::sdk::toSession(Session);
+    State.selectFunction(Entry);
+    ASSERT_EQ(neverd_prepare_function(Session, Entry), 1);
+    const auto Source = takeString(neverd_decompile(Session, Entry));
+    const auto LLVM = takeString(neverd_decompile_llvm(Session, Entry));
+    const auto IR = takeString(neverd_ir_llvm(Session, Entry));
+    ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+    ASSERT_FALSE(LLVM.empty()) << takeString(neverd_last_error(Session));
+    ASSERT_FALSE(IR.empty()) << takeString(neverd_last_error(Session));
+    for (const char *View : {"llvm", "llvmc"}) {
+      SCOPED_TRACE(View);
+      State.selectFunction(Entry);
+      ASSERT_EQ(neverd_prepare_function_view(Session, Entry, View), 1);
+      ASSERT_TRUE(State.PipeResult.HighIRDeferred);
+      ASSERT_TRUE(State.PipeResult.HighFuncs.empty());
+      const auto *Low = State.findLowFunc(Entry);
+      ASSERT_NE(Low, nullptr);
+      const auto Facts =
+          neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache);
+      EXPECT_EQ(takeString(neverd_ir_llvm(Session, Entry)), IR);
+      EXPECT_EQ(takeString(neverd_decompile_llvm(Session, Entry)), LLVM);
+      EXPECT_TRUE(State.PipeResult.HighIRDeferred);
+      EXPECT_TRUE(State.PipeResult.HighFuncs.empty());
+      EXPECT_EQ(takeString(neverd_decompile(Session, Entry)), Source);
+      EXPECT_FALSE(State.PipeResult.HighIRDeferred);
+      EXPECT_FALSE(State.PipeResult.HighFuncs.empty());
+      EXPECT_EQ(State.findLowFunc(Entry), Low);
+      EXPECT_EQ(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),
+                Facts);
+      EXPECT_EQ(takeString(neverd_ir_llvm(Session, Entry)), IR);
+      EXPECT_EQ(takeString(neverd_decompile_llvm(Session, Entry)), LLVM);
+      ASSERT_EQ(neverd_prepare_function_view(Session, Entry + 0x10, View), 1);
+      EXPECT_TRUE(State.PipeResult.HighIRDeferred);
+      EXPECT_EQ(State.findLowFunc(Entry), nullptr);
+      EXPECT_NE(State.findLowFunc(Entry + 0x10), nullptr);
+    }
+  }
+}
+
+TEST_F(SessionCAPITest, FunctionViewRejectsUnknownPreparationWithoutMutation) {
+  const auto Path = write("deferred-invalid.elf", makeAnalysisCacheELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = seedAnalysisCacheSymbols(Session);
+  auto &State = *neverd::sdk::toSession(Session);
+  ASSERT_EQ(neverd_prepare_function_view(Session, Entry, "llvm"), 1);
+  const auto *Low = State.findLowFunc(Entry);
+  for (const char *View : {static_cast<const char *>(nullptr), "", "unknown"}) {
+    EXPECT_EQ(neverd_prepare_function_view(Session, Entry + 0x10, View), 0);
+    EXPECT_EQ(State.findLowFunc(Entry), Low);
+    EXPECT_TRUE(State.PipeResult.HighIRDeferred);
+    EXPECT_EQ(takeString(neverd_last_error(Session)), "invalid function view");
+  }
+  EXPECT_EQ(neverd_prepare_function_view(nullptr, Entry, "llvm"), 0);
+}
+
 TEST_F(SessionCAPITest, AnalysisCacheSurvivesOnlyFunctionNavigation) {
   const auto Path = write("cache.elf", makeAnalysisCacheELF(false));
   ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);

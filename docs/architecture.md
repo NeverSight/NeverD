@@ -89,10 +89,11 @@ Cancelling its final subscriber retires the process, since a synchronous C API
 analysis call cannot be interrupted safely. Replica revisions and analysis
 discovery never advance the writable project's state. All workers use the
 same public C API; this split does not duplicate engine semantics.
-Function preparation uses `neverd_prepare_function`, which shares the source
-route's ARM mode, exception-handler discovery and analysis-scope checks without
-emitting C. Source, IR and CFG views consume that prepared pipeline. Older
-engines retain the decompiler-based preparation fallback. A failed switch
+Function preparation uses `neverd_prepare_function_view`, which shares the
+source route's ARM mode, exception-handler discovery and analysis-scope checks
+without emitting C. Source, IR and CFG views consume that prepared pipeline.
+Older engines retain `neverd_prepare_function` and the decompiler-based
+preparation fallback. A failed switch
 clears the worker's prepared-entry marker before another view can reuse it.
 
 Consecutive restricted x64 analyses may share a session-owned
@@ -154,6 +155,10 @@ slots promoted to SSA only. It preserves the lifted control flow without the
 LLVMC optimization pipeline; the module cache distinguishes these inspection
 modules from optimized source modules. Native CFG, ABI and exception recovery
 still precede emission. EVM and SBF keep their own LLVM emission paths.
+Native LLVM view preparation postpones HighIR construction after the shared
+source MedIR call/return recovery. A later HighC request resumes only that
+projection through the ordinary HighIR completion boundary; it does not relift
+instructions or mutate the MedIR retained by LLVM emission.
 
 The worker's `CodeEdits` owns pseudocode presentation aliases and unmapped line
 notes. `UserStateTables.def` includes this state in history, recovery, read-only

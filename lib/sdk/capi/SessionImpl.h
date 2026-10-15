@@ -637,7 +637,7 @@ struct Session {
     resetFunctionsFromImage();
   }
 
-  bool ensurePipeline() {
+  bool ensurePipeline(bool NeedHighIR = true) {
     if (!Loaded) {
       setError("no binary loaded");
       return false;
@@ -648,6 +648,7 @@ struct Session {
       LLVMCtx = std::make_unique<llvm::LLVMContext>();
       PipelineOptions Opts;
       applyAnalysisOptions(Opts);
+      Opts.DeferHighIR = !NeedHighIR;
       Opts.AnalysisCache = &AnalysisCache;
       Pipeline ThePipeline;
       // Debug names already reached Img.Symbols at load time; handing the
@@ -656,6 +657,11 @@ struct Session {
       PipeResult = ThePipeline.run(Img, *LLVMCtx, Opts, Dbg.get());
       PipelineFeatureGeneration = SigDB.featureGeneration();
       PipeRan = true;
+    }
+    if (NeedHighIR && PipeResult.Success && PipeResult.HighIRDeferred) {
+      PipelineOptions Opts;
+      applyAnalysisOptions(Opts);
+      Pipeline().resumeHighIR(Img, Opts, PipeResult, Dbg.get());
     }
     if (!PipeResult.Success)
       setError(PipeResult.Error.empty() ? "pipeline failed" : PipeResult.Error);
@@ -807,7 +813,7 @@ struct Session {
                                    FunctionLlvmModules, It);
         return &FunctionLlvmModules.front();
       }
-    if (!ensurePipeline())
+    if (!ensurePipeline(/*NeedHighIR=*/false))
       return nullptr;
     std::vector<char> Mask(PipeResult.MedFuncs.size(), 0);
     bool Found = false;

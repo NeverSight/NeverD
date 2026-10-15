@@ -52,7 +52,11 @@ prebuilt-LLVM guidance.
 restoration of ordinary output, reuse of prepared IR, navigation invalidation
 and strict option validation. `SourceLLVMProfiles*` checks separate source and
 module cache identities. `NativeLLVMInspection*` preserves inspection branches
-across source profiles and both view orders.
+across source profiles and both view orders. `LLVMViewsDeferOnlyHighIR*`
+checks integer and floating call results, unchanged LLVM/source output and
+resumption without relifting; `FunctionViewRejectsUnknown*` preserves the
+prepared function on invalid view names. Worker source-cache tests also check
+that preparation receives the requested LLVM representation.
 `HighSymSimplify.OrdinaryConversion*` keeps optional
 rewriting out of ordinary HighC; the other HighSymSimplify cases explicitly
 enable it through the production converter. `SymSimplifyGuard.SourceProfiles*`

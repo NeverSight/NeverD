@@ -43,6 +43,16 @@ def run(executable):
         binary.write_bytes(b"source cache fixture")
         client = clients.enter_context(Client(executable))
         ok(client, "open", {"path": str(binary), "analysis": False})
+        # Fresh LLVM requests must carry their view to preparation rather
+        # than forcing a full HighIR projection before reading LLVM.
+        llvm_client = clients.enter_context(Client(executable))
+        ok(llvm_client, "open", {"path": str(binary), "analysis": False,
+                                  "read_only": True})
+        llvm = source(llvm_client, representation="llvmc")
+        assert llvm["fixture_prepared_view"] == "llvmc", llvm
+        high = source(llvm_client, B)
+        assert high["fixture_prepared_view"] == "source", high
+        reused(source(llvm_client, representation="llvmc"), llvm)
         first = source(client)
         assert first["fixture_prepares"] == 1 and first["fixture_pages"] == 1
         assert first["fixture_renders"] == 0, first

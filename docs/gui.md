@@ -203,6 +203,8 @@ The native **LLVM IR** view shows lifted IR with temporary slots promoted to
 SSA. It does not run LLVMC's O2 profile or optional symbolic transformations.
 Machine control-flow, ABI and exception recovery still run before emission;
 the inspection and optimized source views keep separate cached modules.
+LLVM views construct HighIR only if a later source view needs it, while keeping
+shared ABI and return recovery in the initial preparation.
 
 **Pseudocode** and **IR** windows show pseudocode in the function's
 own language, C, Rust, Go, C through LLVM, LowIR, MedIR, HighIR or LLVM IR of

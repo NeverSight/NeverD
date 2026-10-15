@@ -283,7 +283,8 @@ static std::string emissionFailure(const std::exception &Error) {
   return std::string("C emission failed: ") + Error.what();
 }
 
-int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
+static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
+                           bool NeedHighIR) {
   auto *S = toSession(Sess);
   if (!S)
     return 0;
@@ -310,13 +311,32 @@ int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
              !S->OnlyFunctionEntries.count(FuncEntry)) {
       S->selectFunction(FuncEntry);
     }
-    return S->ensurePipeline() ? 1 : 0;
+    return S->ensurePipeline(NeedHighIR) ? 1 : 0;
   } catch (const std::exception &Error) {
     S->setError(std::string("function analysis failed: ") + Error.what());
   } catch (...) {
     S->setError("unexpected function analysis failure");
   }
   return 0;
+}
+
+int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
+  return prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/true);
+}
+
+int neverd_prepare_function_view(neverd_session_t Sess, neverd_va_t FuncEntry,
+                                 const char *Representation) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return 0;
+  const llvm::StringRef Stage = Representation ? Representation : "";
+  if (Stage != "low" && Stage != "med" && Stage != "high" && Stage != "llvm" &&
+      Stage != "llvmc" && Stage != "source" && !sourceDialectFromKey(Stage)) {
+    S->setError("invalid function view");
+    return 0;
+  }
+  return prepareFunction(Sess, FuncEntry,
+                         /*NeedHighIR=*/Stage != "llvm" && Stage != "llvmc");
 }
 
 static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
@@ -430,7 +450,7 @@ const char *neverd_decompile_llvm(neverd_session_t Sess,
 
 static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
                                   int NoOpt, CSourceMap *SourceMap) {
-  if (!neverd_prepare_function(Sess, FuncEntry))
+  if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/false))
     return dupStr(std::string());
   auto *S = toSession(Sess);
 
@@ -1009,7 +1029,7 @@ const char *neverd_ir_view_ex_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       throw std::invalid_argument("invalid source view or paging bounds");
     const auto Options =
         readSourceOptions(OptionsJSON ? OptionsJSON : "{}", Stage);
-    if (!neverd_prepare_function(Sess, FuncEntry))
+    if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/Stage != "llvmc"))
       return nullptr;
     if (S->PipeResult.EVM || S->PipeResult.SBF)
       throw std::invalid_argument("source transformations require native code");
@@ -1186,7 +1206,7 @@ const char *neverd_ir_llvm(neverd_session_t Sess, neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
   S->clearError();
 
-  if (!S->ensurePipeline())
+  if (!S->ensurePipeline(/*NeedHighIR=*/false))
     return dupStr(std::string());
   if (S->PipeResult.EVM || S->PipeResult.SBF) {
     if (!S->ensureLlvmModule()) {

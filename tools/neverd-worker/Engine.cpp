@@ -704,7 +704,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     }
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
-  prepareFunction(address);
+  prepareFunction(address, representation);
   // Whole-program VM preparation can analyze(), invalidating the listing and
   // advancing the revision. Rebuild aliases and stamp the prepared context;
   // never keep an alias reference across that invalidation.
@@ -949,7 +949,8 @@ void Engine::analyze() {
     listing_->loadSwitches();
   ++revision_;
 }
-void Engine::prepareFunction(std::uint64_t address) {
+void Engine::prepareFunction(std::uint64_t address,
+                             std::string_view representation) {
   if (analyzed_ || preparedFunction_ == address)
     return;
   // VM images analyze the whole program as one unit.
@@ -967,8 +968,16 @@ void Engine::prepareFunction(std::uint64_t address) {
   using PrepareFunction = int (*)(neverd_session_t, neverd_va_t);
   static const auto prepare =
       engineSymbol<PrepareFunction>("neverd_prepare_function");
-  if (prepare) {
-    if (!prepare(session_, address)) {
+  using PrepareView = int (*)(neverd_session_t, neverd_va_t, const char *);
+  static const auto prepareView =
+      engineSymbol<PrepareView>("neverd_prepare_function_view");
+  if (prepare || prepareView) {
+    const std::string view =
+        representation.empty() ? "source" : std::string(representation);
+    const bool ready = prepareView
+                           ? prepareView(session_, address, view.c_str())
+                           : prepare(session_, address);
+    if (!ready) {
       const auto message = error();
       throw Error("analysis_failed",
                   message.empty() ? "Function analysis failed" : message);
@@ -2670,7 +2679,7 @@ Json Engine::execute(const std::string &operation, const Json &p) {
       if (!options.empty())
         throw Error("unavailable",
                     error().empty() ? "Source transformation failed" : error());
-      prepareFunction(address);
+      prepareFunction(address, representation);
       if (const auto view = irViewFunction()) {
         auto result = backendJson(
             view(session_, address, representation.c_str(), offset, limit),
@@ -2699,7 +2708,7 @@ Json Engine::execute(const std::string &operation, const Json &p) {
                                  : error().empty()
                                      ? "This representation is unavailable"
                                      : error());
-    prepareFunction(address);
+    prepareFunction(address, representation);
     const auto key = hexAddress(address) + ":" + representation;
     if (textKey_ != key) {
       textKey_.clear();

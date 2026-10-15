@@ -9,6 +9,7 @@
 #include <list>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace neverd::worker {
@@ -168,7 +169,8 @@ private:
   void analyze();
   /// Run the session's restricted single-function pipeline for \p address
   /// unless whole-image analysis already covers it.
-  void prepareFunction(std::uint64_t address);
+  void prepareFunction(std::uint64_t address,
+                       std::string_view representation = {});
   Listing &listing();
   ProjectHistory &history();
   Json metadata() const;

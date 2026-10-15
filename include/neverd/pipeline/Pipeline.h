@@ -94,6 +94,9 @@ struct PipelineOptions {
   bool NoOpt = false;
   /// Optional HighIR expression rewriting; machine/ABI recovery is unaffected.
   bool SymbolicHighC = false;
+  /// Native source views may postpone HighIR projection after shared ABI and
+  /// return recovery. Patch/lift, VM routes and DumpHigh retain eager behavior.
+  bool DeferHighIR = false;
   bool PatchMode = false;
   bool LiftMode = false;
   /// LLVM-to-C uses the LLVM route without authorizing source-only rewrites
@@ -250,6 +253,8 @@ struct PipelineResult {
   std::map<va_t, int> CallVariadicFrom;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
+  /// Shared source MedIR is ready; HighIR projection has not been requested.
+  bool HighIRDeferred = false;
   std::vector<sigs::LibraryRecognition> LibraryRecognitions;
   /// Includes analyzed functions with no match, for cheap identity queries.
   std::map<va_t, std::vector<size_t>> LibraryRecognitionsByFunction;
@@ -313,6 +318,12 @@ public:
   /// recognitions; callers may copy those into a private result for a variant.
   void rebuildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
                      PipelineResult &Result, DebugContext *Dbg = nullptr);
+
+  /// Complete deferred HighIR from this image's prepared source MedIR. This
+  /// preserves LowIR, MedIR and LLVM module identities and contains failures
+  /// through the same completion boundary as eager HighIR conversion.
+  bool resumeHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
+                    PipelineResult &Result, DebugContext *Dbg = nullptr);
 
   /// Run the HelloWorldPass on a module.  Wraps PassBuilder/AnalysisManager
   /// setup so callers avoid instantiating LLVM PassManager templates (which
@@ -626,6 +637,10 @@ private:
       unsigned NumShards, unsigned NumThreads, bool NoOpt,
       llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)>
           Emit);
+
+  /// Shared source call/return recovery before either HighIR or LLVM emission.
+  void prepareSourceMedIR(const BinaryImage &Img, PipelineResult &Result,
+                          DebugContext *Dbg);
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,

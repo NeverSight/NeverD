@@ -168,6 +168,15 @@ NEVERD_API int neverd_pointer_at(neverd_session_t Sess, neverd_va_t Address,
 NEVERD_API int neverd_prepare_function(neverd_session_t Sess,
                                        neverd_va_t FuncEntry);
 
+/// Prepare the requested view with the same entry and recovery checks.
+/// Native "llvm" and "llvmc" postpone HighIR construction, preserving shared
+/// CFG/ABI/exception analysis. A later source view completes HighIR on demand.
+/// Other valid representations keep ordinary preparation; unknown names fail.
+/// Returns 1 on success or 0 with neverd_last_error on failure.
+NEVERD_API int neverd_prepare_function_view(neverd_session_t Sess,
+                                            neverd_va_t FuncEntry,
+                                            const char *Representation);
+
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);
 
