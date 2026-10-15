@@ -68,6 +68,48 @@ Json signatureStamp(const fs::path &path) {
   return files;
 }
 
+// A completed document never mutates. Monotone bounds let later pages seek
+// directly to their rows/names without allocating a second navigation index.
+// Both ends must be ordered: nested spans can have ordered starts alone.
+bool orderedViewItems(const Json &view, const char *field, const char *beginKey,
+                      const char *endKey) {
+  const auto items = view.find(field);
+  if (items == view.end() || !items->is_array())
+    return false;
+  std::size_t previousBegin = 0, previousEnd = 0;
+  for (const auto &item : *items) {
+    const auto begin = item.value(beginKey, std::size_t{0});
+    const auto end = item.value(endKey, std::size_t{0});
+    if (begin < previousBegin || end < previousEnd)
+      return false;
+    previousBegin = begin;
+    previousEnd = end;
+  }
+  return true;
+}
+
+// Point rows use an inclusive lower bound; byte spans use an exclusive end.
+Json viewItemsOnPage(const Json &items, bool ordered, const char *beginKey,
+                     const char *endKey, bool points, std::size_t begin,
+                     std::size_t end) {
+  auto first = items.begin();
+  if (ordered)
+    first = std::partition_point(first, items.end(), [&](const auto &item) {
+      const auto last = item.value(endKey, std::size_t{0});
+      return points ? last < begin : last <= begin;
+    });
+  Json selected = Json::array();
+  for (auto it = first; it != items.end(); ++it) {
+    const auto start = it->value(beginKey, std::size_t{0});
+    if (ordered && start >= end)
+      break;
+    const auto last = points ? start : it->value(endKey, std::size_t{0});
+    if (start < end && (points ? last >= begin : last > begin))
+      selected.push_back(*it);
+  }
+  return selected;
+}
+
 using IRViewFunction = const char *(*)(neverd_session_t, neverd_va_t,
                                        const char *, std::size_t, std::size_t);
 using StringEncodingsFunction = const char *(*)();
@@ -884,6 +926,13 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     for (std::size_t i = 0; i < text.size(); ++i)
       if (text[i] == '\n' && i + 1 < text.size())
         document->lines.push_back(i + 1);
+    document->orderedRows = orderedViewItems(full, "rows", "line", "line");
+    document->orderedReferences =
+        orderedViewItems(full, "references", "line", "line");
+    document->orderedSourceNames =
+        orderedViewItems(full, "source_names", "begin_byte", "end_byte");
+    document->orderedCodeNames =
+        orderedViewItems(full, "code_names", "begin_byte", "end_byte");
     document->value = std::move(full);
     document->key = key;
     // If resolving source names changed the listing while decorating this
@@ -939,36 +988,24 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
           value.is_array()))
       page[field] = value;
   page["text"] = text.substr(startByte, endByte - startByte);
-  Json rows = Json::array();
-  for (const auto &row : namedView_.at("rows")) {
-    const auto line = row.value("line", std::size_t{0});
-    if (line >= start && line < end)
-      rows.push_back(row);
-  }
-  page["rows"] = std::move(rows);
+  page["rows"] = viewItemsOnPage(namedView_.at("rows"), document->orderedRows,
+                                 "line", "line", true, start, end);
   if (const auto references = namedView_.find("references");
       references != namedView_.end() && references->is_array()) {
-    Json onPage = Json::array();
-    for (const auto &reference : *references) {
-      const auto line = reference.value("line", std::size_t{0});
-      if (line >= start && line < end)
-        onPage.push_back(reference);
-    }
-    page["references"] = std::move(onPage);
+    page["references"] =
+        viewItemsOnPage(*references, document->orderedReferences, "line",
+                        "line", true, start, end);
   }
   const std::size_t base = namedView_.value("byte_offset", std::size_t{0});
   for (const char *field : {"source_names", "code_names"}) {
     if (!namedView_.contains(field) || !namedView_[field].is_array())
       continue;
-    const auto &names = namedView_[field];
-    Json onPage = Json::array();
-    for (const auto &name : names) {
-      const auto begin = name.value("begin_byte", std::size_t{0});
-      const auto nameEnd = name.value("end_byte", std::size_t{0});
-      if (nameEnd > base + startByte && begin < base + endByte)
-        onPage.push_back(name);
-    }
-    page[field] = std::move(onPage);
+    const bool ordered = std::string_view(field) == "source_names"
+                             ? document->orderedSourceNames
+                             : document->orderedCodeNames;
+    page[field] =
+        viewItemsOnPage(namedView_[field], ordered, "begin_byte", "end_byte",
+                        false, base + startByte, base + endByte);
   }
   page["offset"] = start;
   page["byte_offset"] = base + startByte;

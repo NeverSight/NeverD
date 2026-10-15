@@ -160,7 +160,11 @@ document. A hit can answer before preparing the mutable single-function Session;
 it never marks that Session as
 holding the cached function. Graph and IR preparation keeps its own state.
 Documents own text, rows and edit anchors, and project or presentation changes
-invalidate them. Oversized documents remain readable without being retained.
+invalidate them. After decoration, a document checks whether its row numbers
+and both ends of its name spans are monotone. Pages seek directly through those
+arrays when they are ordered; other producer orders and nested spans keep their
+original filtering order. Oversized documents remain readable without being
+retained.
 
 `SourceViewOptions` owns request-local native source policy. Ordinary HighIR
 conversion skips symbolic expression simplification. An explicit source request

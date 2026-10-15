@@ -110,7 +110,9 @@ struct MockSession {
     return path.ends_with("source-cache.bin") ||
            path.ends_with("source-cache-budget.bin") ||
            path.ends_with("source-cache-prepare-fail.bin") ||
-           sourceCacheVMFixture();
+           path.ends_with("source-cache-ordered.bin") ||
+           path.ends_with("source-cache-unordered.bin") ||
+           path.ends_with("source-cache-nested.bin") || sourceCacheVMFixture();
   }
 };
 MockSession *session(neverd_session_t s) {
@@ -545,6 +547,11 @@ const char *neverd_func_name(neverd_session_t s, int index) {
     return copy("_ZN3BarC1Ev");
   if (it != session(s)->names.end())
     return copy(it->second);
+  if (address == Base &&
+      (session(s)->path.ends_with("source-cache-ordered.bin") ||
+       session(s)->path.ends_with("source-cache-unordered.bin") ||
+       session(s)->path.ends_with("source-cache-nested.bin")))
+    return copy("sub_" + hexAddress(address).substr(2));
   const bool named =
       session(s)->symbolTable ||
       !symbolTableFixture(std::filesystem::u8path(session(s)->path));
@@ -1418,6 +1425,31 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
            {"addresses",
             i == 2 ? Json::array({hexAddress(address + 2)}) : Json::array()}});
     }
+    Json names = Json::array(), references = Json::array();
+    if (state.path.ends_with("source-cache-ordered.bin") ||
+        state.path.ends_with("source-cache-unordered.bin") ||
+        state.path.ends_with("source-cache-nested.bin")) {
+      const auto bytesBefore = [&](std::size_t index) {
+        std::size_t bytes = 0;
+        for (std::size_t i = 0; i < index; ++i)
+          bytes += line(i).size();
+        return bytes;
+      };
+      for (std::size_t i = 0; i < total; ++i) {
+        names.push_back({{"begin_byte", bytesBefore(i)},
+                         {"end_byte", bytesBefore(std::min(i + 2, total))},
+                         {"identifier", "span_" + std::to_string(i)}});
+        references.push_back({{"line", i}, {"marker", i * 2}});
+        references.push_back({{"line", i}, {"marker", i * 2 + 1}});
+      }
+      if (state.path.ends_with("source-cache-nested.bin"))
+        names[0]["end_byte"] = bytesBefore(total);
+      if (state.path.ends_with("source-cache-unordered.bin")) {
+        std::reverse(rows.begin(), rows.end());
+        std::reverse(names.begin(), names.end());
+        std::reverse(references.begin(), references.end());
+      }
+    }
     return copy(Json{{"schema_version", 1},
                      {"address", hexAddress(address)},
                      {"representation", representation},
@@ -1430,7 +1462,9 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
                      {"complete", end == total},
                      {"next_offset", end == total ? Json(nullptr) : Json(end)},
                      {"library_regions", Json::array()},
-                     {"source_names", Json::array()},
+                     {"source_names", names},
+                     {"code_names", names},
+                     {"references", references},
                      {"fixture_prepares", state.sourcePrepares},
                      {"fixture_prepared_view", state.preparedView},
                      {"fixture_pages", state.sourcePages},

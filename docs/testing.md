@@ -168,7 +168,9 @@ that read-only replicas load these edits without changing durable owner files.
 `NeverDWorkerSourceCache` counts actual preparation and source-page calls across
 A-to-B-to-A navigation, including a subsequent graph or IR request. It checks
 edits, undo, replica restore, project replacement, representation separation and
-both document-count and retained-byte eviction. Timing-independent cache tests
+both document-count and retained-byte eviction. Page checks preserve repeated
+references, overlapping names, nested spans and unsorted producer order, including
+empty pages after the end of the text. Timing-independent cache tests
 complement `source_revisit_bench.py`, which measures complete real source pages.
 
 `NeverDSourceAnchorTests` checks byte-identical HighC/LLVMC emission and refuses
