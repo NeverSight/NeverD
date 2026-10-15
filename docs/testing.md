@@ -1747,6 +1747,11 @@ independent set-of-activation-IDs model, including sparse ancestors, completed
 memo hits, reused depths and the fixed bitset's word and capacity boundaries.
 Unrelated returns must preserve an exact snapshot; retiring any actual
 dependency must invalidate it, including beyond the exact tracking capacity.
+`ResolverPredicateDemand.*` places a deep operand behind conditions that the
+current query cannot use. The independent constant candidate must still be
+proved across four architectures and exact COPY/NOT transports. Needed
+conditions, guarded/partial definitions and cross-block producers retain their
+depth refusals; policy switches and evidence budgets agree cold and warm.
 `ResolverQueryScope.*` compares scoped and ordinary queries at every small-fixture
 budget boundary, including completion flags and masks. It covers owned temporary
 overrides, equal-sized edge changes, roots, different builders, nested leases,

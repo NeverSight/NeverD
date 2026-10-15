@@ -1498,6 +1498,13 @@ transparent cycles retain the existing shared generation guard; memory-context
 resets also invalidate those entries in the value memo. Neither cache bypasses
 incomplete-proof rejection.
 
+Edge refinement shares one predicate policy with its local shape inspection.
+An exact, unguarded byte producer can establish that the current query cannot
+use a condition, avoiding reconstruction of its operands. Exact COPY and NOT
+transports preserve that classification. Needed predicates, guarded or partial
+definitions, and producers outside the local block retain the complete walk.
+All inspected definitions consume the ordinary evidence allowance.
+
 HighIR's call-argument projection uses the same checked affine equation core
 for entry-stack offsets in an immutable MedIR function. Each SSA definition is
 indexed once; PHIs require all incoming offsets to agree. Width and ambiguity

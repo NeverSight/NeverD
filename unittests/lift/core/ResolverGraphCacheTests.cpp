@@ -199,6 +199,75 @@ struct ResolverGraphCacheTestAccess {
     return Q;
   }
 
+  static Query seedUnusedPredicate(CFGBuilder &B, const BinaryImage &Image,
+                                   NdOp Opcode, unsigned Variant = 0) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x191, 0x200};
+    auto Emit = [&](va_t Address, NdOp Op, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 1;
+      LowOp Instruction;
+      Instruction.Addr = Address;
+      Instruction.Seq = R.Ops.size();
+      Instruction.Opcode = Op;
+      Instruction.Output = Output;
+      for (const NdVar &Input : Inputs)
+        Instruction.addInput(Input);
+      R.Ops.push_back(Instruction);
+    };
+    const NdVar Lane = NdVar::reg(0, 4);
+    Emit(0x100, NdOp::COPY, Lane, {NdVar::scalar(2, 4)});
+    NdVar Input = NdVar::reg(8, 1);
+    // The known candidate is independent of this condition's deep operand.
+    // Reconstructing the operand would exceed the ordinary expression depth.
+    for (unsigned I = 0; I < 96; ++I) {
+      const NdVar Next = NdVar::tmp(0x1000 + I * 8, 1);
+      Emit(0x101 + I, NdOp::COPY, Next, {Input});
+      Input = Next;
+    }
+    NdVar Condition = NdVar::tmp(0x9000, 1);
+    NdVar Output = Condition;
+    if (Variant == 5)
+      Output.Size = 2; // A partial view does not establish an exact producer.
+    Emit(0x180, Opcode, Output, {Input, NdVar::scalar(1, 1)});
+    if (Variant == 1 || Variant == 2) {
+      const NdVar Alias = NdVar::tmp(0x9008, 1);
+      Emit(0x181, Variant == 1 ? NdOp::COPY : NdOp::BOOL_NOT, Alias,
+           {Condition});
+      Condition = Alias;
+    } else if (Variant == 3) {
+      B.Insns.at(0x180).IsInstructionGuard = true;
+    } else if (Variant == 4) {
+      B.BlockStarts.insert(
+          0x190); // Keep cross-block producers on the full path.
+      Emit(0x18f, NdOp::BRANCH, {},
+           {NdVar::cst(0x190, Image.getPointerSize())});
+      B.Insns.at(0x18f).IsBranch = true;
+      B.Insns.at(0x18f).BranchTarget = 0x190;
+    }
+    Emit(0x190, NdOp::COND_BR, {},
+         {NdVar::cst(0x200, Image.getPointerSize()), Condition});
+    auto &Branch = B.Insns.at(0x190);
+    Branch.IsBranch = Branch.IsCond = true;
+    Branch.BranchTarget = 0x200;
+    for (va_t Address : {va_t{0x191}, va_t{0x200}}) {
+      Emit(Address, NdOp::RETURN, {}, {Lane});
+      B.Insns.at(Address).IsRet = true;
+    }
+    Query Q;
+    Q.Candidate = Lane;
+    Q.UseAddr = 0x200;
+    Q.UseSeq = 0;
+    Q.Relation = Relation::UnsignedLessThan;
+    Q.UnsignedUpperBound = 4;
+    return Q;
+  }
+
   // The first and recurrent values have separate guards. Neither comparison
   // alone names the complete table-index merge after the backedge is known.
   static Query seedJoinedGuard(CFGBuilder &B, const BinaryImage &Image,
@@ -2841,6 +2910,76 @@ TEST(ResolverPendingCycles, WarmAndColdLimitsKeepTheSameTransaction) {
         EXPECT_EQ(
             Access::batch(Warm, Queries, Limit, Depth, 0, true, true, true),
             Access::batch(Cold, Queries, Limit, Depth, 0, true, true, true));
+      }
+  }
+}
+
+TEST(ResolverPredicateDemand, UnusedLocalShapesDoNotExpandTheirOperands) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (NdOp Opcode :
+         {NdOp::BOOL_AND, NdOp::BOOL_OR, NdOp::BOOL_XOR, NdOp::INT_SLESS,
+          NdOp::INT_SLESSEQUAL, NdOp::INT_LESS, NdOp::INT_LESSEQUAL})
+      for (unsigned Variant : {0u, 1u, 2u}) {
+        SCOPED_TRACE(static_cast<unsigned>(Architecture));
+        SCOPED_TRACE(static_cast<unsigned>(Opcode));
+        SCOPED_TRACE(Variant);
+        auto Image = image();
+        Image.Arch = Architecture;
+        Image.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                         ? Bitness::Bits32
+                         : Bitness::Bits64;
+        CFGBuilder B;
+        const auto Q = Access::seedUnusedPredicate(B, Image, Opcode, Variant);
+        const auto A = Access::batch(B, {Q});
+        EXPECT_TRUE(A.Complete);
+        EXPECT_EQ(A.Values, (std::vector<bool>{true}));
+      }
+}
+
+TEST(ResolverPredicateDemand, NeededAndUncertainShapesKeepTheCompleteWalk) {
+  auto Image = image();
+  for (NdOp Opcode :
+       {NdOp::BOOL_AND, NdOp::BOOL_OR, NdOp::INT_LESS, NdOp::INT_LESSEQUAL,
+        NdOp::INT_EQUAL, NdOp::INT_NOTEQUAL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Opcode));
+    CFGBuilder B;
+    auto Q = Access::seedUnusedPredicate(B, Image, Opcode);
+    Q.Relation = Opcode == NdOp::BOOL_AND || Opcode == NdOp::BOOL_OR
+                     ? Access::Relation::JoinedUnsignedFeasibleSet
+                     : Access::Relation::UnsignedFeasibleSet;
+    const auto A = Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+    EXPECT_FALSE(A.Complete);
+    EXPECT_EQ(A.QueryComplete, (std::vector<bool>{false}));
+  }
+  for (unsigned Variant : {3u, 4u, 5u}) {
+    SCOPED_TRACE(Variant);
+    CFGBuilder B;
+    const auto Q =
+        Access::seedUnusedPredicate(B, Image, NdOp::BOOL_AND, Variant);
+    EXPECT_FALSE(Access::batch(B, {Q}).Complete);
+  }
+}
+
+TEST(ResolverPredicateDemand, PolicyChangesAndBudgetsAgreeColdAndWarm) {
+  auto Image = image();
+  CFGBuilder Warm;
+  auto Q = Access::seedUnusedPredicate(Warm, Image, NdOp::INT_LESS, 2);
+  constexpr size_t Budget = 1000000;
+  const auto A = Access::batch(Warm, {Q}, Budget);
+  ASSERT_TRUE(A.Complete);
+  const size_t Work = Budget - A.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (auto Relation : {Access::Relation::UnsignedLessThan,
+                        Access::Relation::UnsignedFeasibleSet,
+                        Access::Relation::JoinedUnsignedFeasibleSet,
+                        Access::Relation::UnsignedLessThan}) {
+    Q.Relation = Relation;
+    for (size_t Limit : {size_t{0}, Work - 1, Work, Work + 1, Budget})
+      for (uint32_t Depth : {1u, 2u, 4u, 64u}) {
+        CFGBuilder Cold;
+        Access::seedUnusedPredicate(Cold, Image, NdOp::INT_LESS, 2);
+        EXPECT_EQ(Access::batch(Warm, {Q}, Limit, Depth, 0, true, true, true),
+                  Access::batch(Cold, {Q}, Limit, Depth, 0, true, true, true));
       }
   }
 }
