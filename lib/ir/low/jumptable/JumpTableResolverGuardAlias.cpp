@@ -17,6 +17,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "GuardExpression.h"
 #include "JumpTableResolverDetail.h"
 
 #include "neverd/Limits.h"
@@ -47,17 +48,9 @@ namespace neverd {
 
 namespace {
 
-struct GuardExpr;
-using GuardExprPtr = std::shared_ptr<const GuardExpr>;
-
-struct GuardExpr {
-  enum class Kind : uint8_t { Constant, Index, Operation } K;
-  uint16_t Size = 0;
-  uint64_t Constant = 0;
-  NdOp Opcode = NdOp::NOP;
-  std::vector<GuardExprPtr> Inputs;
-  bool ContainsIndex = false;
-};
+using guard_detail::GuardExpr;
+using guard_detail::GuardExprPtr;
+using guard_detail::guardChangePoints;
 
 uint64_t widthMask(uint16_t Bytes) {
   return Bytes == 0 || Bytes >= sizeof(uint64_t)
@@ -1823,12 +1816,30 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
                                static_cast<size_t>(LastSample) + 1))
     return failIncomplete();
 
+  // Retain the original whole-window evidence charge above. Partitioning
+  // changes execution cost, never the candidate's proof allowance or outcome.
+  std::vector<uint64_t> ChangePoints{0, LastSample + 1};
+  bool Partitioned = true;
+  for (const auto &[Expr, TableCondition] : IndexGuards) {
+    (void)TableCondition;
+    if (!guardChangePoints(Expr, LastSample, ChangePoints)) {
+      Partitioned = false;
+      break;
+    }
+  }
+  if (Partitioned) {
+    std::sort(ChangePoints.begin(), ChangePoints.end());
+    ChangePoints.erase(std::unique(ChangePoints.begin(), ChangePoints.end()),
+                       ChangePoints.end());
+  }
+  size_t Interval = 0;
   uint32_t FirstRejected = 0;
   bool SawRejected = false;
   // A sparse domain (a two-level index table, whose unreached index bytes are
   // simply unused) is bounded by its last reaching value.
   std::optional<uint64_t> LastReaching;
-  for (uint64_t Value = 0; Value <= LastSample; ++Value) {
+  for (uint64_t Value = 0; Value <= LastSample;) {
+    const uint64_t Next = Partitioned ? ChangePoints[++Interval] : Value + 1;
     bool Reaches = true;
     for (const auto &[Expr, TableCondition] : IndexGuards) {
       std::optional<uint64_t> Condition = evaluateGuardExpr(Expr, Value);
@@ -1837,13 +1848,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       Reaches &= ((*Condition != 0) == TableCondition);
     }
     if (Reaches)
-      LastReaching = Value;
+      LastReaching = Next - 1;
     if (!SawRejected && !Reaches) {
       FirstRejected = static_cast<uint32_t>(Value);
       SawRejected = true;
     } else if (SawRejected && Reaches && !AllowSparseDomain) {
       return failSemantic();
     }
+    Value = Next;
   }
   const bool SparseDomain = AllowSparseDomain && SawRejected && LastReaching &&
                             *LastReaching >= FirstRejected &&

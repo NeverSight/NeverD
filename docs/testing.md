@@ -1861,6 +1861,14 @@ roundtrips execute HighC and both LLVMC modes at O0/O2 against an independent
 selection oracle. Small joined domains reuse the finite-coordinate proof;
 unchecked paths and sparse or incomplete domains cannot grant a dense table.
 
+`GuardExpression.*` independently enumerates every byte offset and boundary
+for signed/unsigned comparisons in both operand orders and affine directions.
+Wide nested affine expressions and Boolean combinations retain wrap, sign and
+hole boundaries; periodic masks, shifts and width changes require full replay.
+The native guard suites above still cover CFG/lane identity, sparse tables,
+all-domain proof rejection and exhausted evidence. Replay partitions retain the
+original whole-window evidence charge and the final solver proof.
+
 `ResolverValueQueryCache.MalformedScalarRecordsCannotPublishProofs` verifies
 missing ADD/SELECT inputs, input-array overflow, zero widths and a memory-space
 scalar input across x86/x64/ARM/AArch64 and ELF/COFF/Mach-O metadata. Each case
