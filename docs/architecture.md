@@ -1347,6 +1347,15 @@ incomplete rather than supplying an unconstrained value or a negative dependency
 certificate. Validation debits the same shared graph work account on cold and
 cached queries; unsupported opcodes acquire no semantics from this check.
 
+An immutable resolver graph may retain completed backward definition searches
+in a bounded, lazily allocated table. Exact block, use position, register view
+and target-register identity bind each entry. Value and affine-frame proofs
+reuse only the next possible definition, then perform their ordinary byte-lane,
+ABI, predicate and value checks. Calls remain candidates; an exhausted search is
+never retained. Hits debit every operation the original scan would visit,
+including the returned candidate, so reuse preserves evidence-budget outcomes.
+Short prefixes keep their ordinary scan. Graph replacement retires the table.
+
 Frame-memory reaching values include an unknown entry arm at every active proof
 root, including roots with loop predecessors. A future back-edge STORE cannot
 certify first-iteration contents or an authenticated writer. Definite writers

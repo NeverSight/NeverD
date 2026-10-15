@@ -19,6 +19,7 @@
 
 #include "AffineFrameState.h"
 #include "JumpTableResolverDetail.h"
+#include "ResolverDefinitionCache.h"
 #include "ResolverLaneView.h"
 
 #include "neverd/Limits.h"
@@ -362,6 +363,7 @@ struct ResolverFlowGraph {
   /// pruned graph.  Dominance and live-in identity must use this set rather
   /// than graph indegree or PersistentCFGRoots alone.
   std::vector<int> RootBlocks;
+  mutable detail::ResolverDefinitionCache Definitions;
 
   ResolverFlowGraph() = default;
   ResolverFlowGraph(ResolverFlowGraph &&) = default;
@@ -5871,16 +5873,23 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     MemoIt = FrameMemo.try_emplace(Key, Reference).first;
 
     const ResolverFlowBlock &B = Graph.Blocks[Block];
-    const LaneView Query = viewOf(NdVar::reg(
-        BaseReg, static_cast<uint16_t>(CurrentImg->getPointerSize())));
+    const NdVar FrameRegister = NdVar::reg(
+        BaseReg, static_cast<uint16_t>(CurrentImg->getPointerSize()));
+    const LaneView Query = viewOf(FrameRegister);
     FrameResult Result = frameInvalid();
     bool Found = false;
     for (int I = std::min(Before, static_cast<int>(B.Ops.size())) - 1; I >= 0;
          --I) {
-      if (!consumeEvidence()) {
+      const auto Previous = Graph.Definitions.previous(
+          Block, B.Ops, I + 1, FrameRegister, Query, TRI, LaneViews,
+          consumeEvidence);
+      if (!Previous) {
         Found = true;
         break;
       }
+      I = *Previous;
+      if (I < 0)
+        break;
       const LowOp &Def = B.Ops[I];
       if (Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) {
         const bool QueryPreserved = [&] {
@@ -6802,10 +6811,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     bool Found = false;
     for (int I = std::min(Before, static_cast<int>(B.Ops.size())) - 1; I >= 0;
          --I) {
-      if (!consumeEvidence()) {
+      const auto Previous = Graph.Definitions.previous(
+          Block, B.Ops, I + 1, V, Query, TRI, LaneViews, consumeEvidence);
+      if (!Previous) {
         Found = true;
         break;
       }
+      I = *Previous;
+      if (I < 0)
+        break;
       const LowOp &Def = B.Ops[I];
       const LaneView Output = viewOf(Def.Output);
       if ((Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) &&

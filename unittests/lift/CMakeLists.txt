@@ -1137,6 +1137,7 @@ target_include_directories(NeverDLiftTests PRIVATE
 add_neverd_unittest(NeverDJumpTableTests
   core/AffineFrameStateTests.cpp
   core/ResolverGraphCacheTests.cpp
+  core/ResolverDefinitionCacheTests.cpp
   core/ResolverLaneViewTests.cpp
   core/JumpTableCountLaneTests.cpp
   core/IndirectTailFrameTests.cpp
