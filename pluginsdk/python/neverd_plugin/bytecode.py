@@ -215,7 +215,7 @@ def _recover(
                        for key in ("reconstructed_calls", "unresolved_contract_calls", "guarded_contract_calls")]
     if any(type(value) is not int or value < 0 for value in contract_counts):
         raise NeverDError("invalid bytecode source contract coverage")
-    if contract_counts[2] > contract_counts[0]:
+    if cast(int, contract_counts[2]) > cast(int, contract_counts[0]):
         raise NeverDError("invalid guarded bytecode call coverage")
     if (result.get("scope") not in ("cfg", "state-c") or
             not isinstance(result.get("source"), str) or
