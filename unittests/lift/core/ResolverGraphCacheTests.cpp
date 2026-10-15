@@ -67,6 +67,98 @@ struct ResolverGraphCacheTestAccess {
     }
   }
 
+  // Two nested loops share H and A. A late definition at D reaches the exit
+  // along entry -> H -> A -> D -> A -> H -> exit. Unknown condition loads
+  // preserve both branch arms. Querying H first must not freeze the exit's
+  // intermediate {2} prefix before D contributes 4.
+  static std::vector<Query> seedPendingCycle(CFGBuilder &B,
+                                             const BinaryImage &Image,
+                                             bool Memory,
+                                             bool Arithmetic = false) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+    const auto SP =
+        NdVar::reg(getTargetRegInfo(Image.Arch).StackPointer, Width);
+    const auto Lane = NdVar::reg(0, 4);
+    auto Emit = [&](va_t Address, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) -> LowOp & {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 0x10;
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = static_cast<int>(R.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+      return R.Ops.back();
+    };
+    std::vector<Query> Queries;
+    for (unsigned I = 0; I < 5; ++I) {
+      const va_t Address = 0x100 + I * 0x10;
+      B.BlockStarts.insert(Address);
+      const auto Slot = NdVar::tmp(0x9000 + I * 16, Width);
+      const auto Read = NdVar::tmp(0xa000 + I * 16, 4);
+      if (Memory)
+        Emit(Address, NdOp::INT_ADD, Slot,
+             {SP, NdVar::scalar(uint64_t{0} - 4, Width)});
+      if (I == 0 || I == 3) {
+        NdVar Value = NdVar::scalar(I == 0 ? 2 : 4, 4);
+        if (Arithmetic && I == 3) {
+          if (Memory)
+            Emit(Address, NdOp::LOAD, Read, {Slot});
+          const auto Updated = Memory ? Read : Lane;
+          Emit(Address, NdOp::INT_ADD, Updated, {Updated, NdVar::scalar(1, 4)});
+          Value = Updated;
+        }
+        if (Memory)
+          Emit(Address, NdOp::STORE, {}, {Slot, Value});
+        else if (!Arithmetic || I != 3)
+          Emit(Address, NdOp::COPY, Lane, {Value});
+      }
+      if (Memory && (I == 1 || I == 4))
+        Emit(Address, NdOp::LOAD, Read, {Slot});
+      const auto Candidate = Memory ? Read : Lane;
+      int UseSeq;
+      if (I == 1 || I == 2) {
+        const auto Condition = NdVar::tmp(0x8000 + I * 16, 1);
+        Emit(Address, NdOp::LOAD, Condition, {NdVar::reg(8, Width)});
+        const va_t Target = I == 1 ? 0x140 : 0x110;
+        UseSeq = Emit(Address, NdOp::COND_BR, {},
+                      {NdVar::cst(Target, Width), Condition})
+                     .Seq;
+        auto &R = B.Insns.at(Address);
+        R.IsBranch = R.IsCond = true;
+        R.BranchTarget = Target;
+      } else if (I == 4) {
+        UseSeq = Emit(Address, NdOp::RETURN, {}, {Candidate}).Seq;
+        B.Insns.at(Address).IsRet = true;
+      } else {
+        const va_t Target = I == 0 ? 0x110 : 0x120;
+        UseSeq =
+            Emit(Address, NdOp::BRANCH, {}, {NdVar::cst(Target, Width)}).Seq;
+        auto &R = B.Insns.at(Address);
+        R.IsBranch = true;
+        R.BranchTarget = Target;
+      }
+      if (I == 1 || I == 4) {
+        Query Q;
+        Q.Candidate = Candidate;
+        Q.UseAddr = Address;
+        Q.UseSeq = UseSeq;
+        Q.Relation = Relation::UnsignedFeasibleSet;
+        Q.UnsignedUpperBound = 8;
+        Queries.push_back(Q);
+      }
+    }
+    return Queries;
+  }
+
   static Query seedPredecessorLane(CFGBuilder &B, const BinaryImage &Image,
                                    unsigned Length) {
     B.CurrentImg = &Image;
@@ -2660,6 +2752,97 @@ TEST(ResolverFiniteControl, ConditionalRootsNeedTheirOwnAdmission) {
   EXPECT_FALSE(Strict.Reachable.count(0x140));
   Access::clear(B);
   EXPECT_EQ(Access::finiteControl(B, Fixture), Strict);
+}
+
+TEST(ResolverPendingCycles, BatchAndSingleQueriesIncludeTheLateLoopDefinition) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool Memory : {false, true})
+        for (bool Reverse : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(Architecture));
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Memory);
+          SCOPED_TRACE(Reverse);
+          auto Image = image();
+          Image.Arch = Architecture;
+          Image.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                           ? Bitness::Bits32
+                           : Bitness::Bits64;
+          Image.Format = Format;
+          CFGBuilder B;
+          auto Queries = Access::seedPendingCycle(B, Image, Memory);
+          if (Reverse)
+            std::reverse(Queries.begin(), Queries.end());
+          const auto Both =
+              Access::batch(B, Queries, 10000000, 0, 0, true, true, true);
+          ASSERT_TRUE(Both.Complete);
+          EXPECT_EQ(Both.Values, (std::vector<bool>{true, true}));
+          EXPECT_EQ(Both.Masks, (std::vector<uint64_t>{20, 20}));
+          EXPECT_EQ(Both, Access::batch(B, Queries, 10000000, 0, 0, true, true,
+                                        true));
+          for (const auto &Q : Queries) {
+            CFGBuilder Single;
+            Access::seedPendingCycle(Single, Image, Memory);
+            const auto One =
+                Access::batch(Single, {Q}, 10000000, 0, 0, true, true, true);
+            ASSERT_TRUE(One.Complete);
+            EXPECT_EQ(One.Masks, (std::vector<uint64_t>{20}));
+          }
+          for (auto &Q : Queries) {
+            Q.Relation = Access::Relation::UnsignedLessThan;
+            Q.UnsignedUpperBound = 4;
+          }
+          const auto Bound = Access::batch(B, Queries);
+          ASSERT_TRUE(Bound.Complete);
+          EXPECT_EQ(Bound.Values, (std::vector<bool>{false, false}));
+        }
+}
+
+TEST(ResolverPendingCycles, RealUpdatesCannotBecomeTransparentBackedges) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Memory : {false, true}) {
+      auto Image = image();
+      Image.Arch = Architecture;
+      Image.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                       ? Bitness::Bits32
+                       : Bitness::Bits64;
+      Image.Format = BinaryFormat::ELF;
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Memory);
+      CFGBuilder B;
+      auto Queries = Access::seedPendingCycle(B, Image, Memory, true);
+      for (auto &Q : Queries) {
+        Q.Relation = Access::Relation::UnsignedLessThan;
+        Q.UnsignedUpperBound = 4;
+      }
+      const auto Bound = Access::batch(B, Queries);
+      EXPECT_EQ(Bound.Values, (std::vector<bool>{false, false}));
+    }
+}
+
+TEST(ResolverPendingCycles, WarmAndColdLimitsKeepTheSameTransaction) {
+  auto Image = image();
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  for (bool Memory : {false, true}) {
+    CFGBuilder Warm;
+    const auto Queries = Access::seedPendingCycle(Warm, Image, Memory);
+    constexpr size_t Budget = 10000000;
+    const auto Complete =
+        Access::batch(Warm, Queries, Budget, 0, 0, true, true, true);
+    ASSERT_TRUE(Complete.Complete);
+    const size_t Work = Budget - Complete.Remaining;
+    ASSERT_GT(Work, 0u);
+    for (size_t Limit : {size_t{0}, Work - 1, Work, Work + 1, Budget})
+      for (uint32_t Depth : {1u, 2u, 4u, 8u, 64u}) {
+        CFGBuilder Cold;
+        Access::seedPendingCycle(Cold, Image, Memory);
+        EXPECT_EQ(
+            Access::batch(Warm, Queries, Limit, Depth, 0, true, true, true),
+            Access::batch(Cold, Queries, Limit, Depth, 0, true, true, true));
+      }
+  }
 }
 
 } // namespace

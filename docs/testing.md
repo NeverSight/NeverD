@@ -1736,6 +1736,12 @@ and remaining budgets at every small-fixture budget boundary. Equal-size
 instruction, edge, root and ownership changes must replace the graph; rolled
 back and temporary override payloads cannot leave borrowed pointers behind.
 Resource failure and value-analysis incompleteness remain distinct.
+`ResolverPendingCycles.*` checks nested loops whose late definitions must reach
+every batched query, in both query orders and in isolated queries. Register and
+private-frame variants cover x86, x64, ARM and AArch64 across ELF, COFF and
+Mach-O. Reachable values cannot disappear from feasible masks or certify a false
+upper bound; real arithmetic updates cannot become transparent backedges. Warm
+and cold queries must agree at evidence-budget and resolver-depth boundaries.
 `ResolverQueryScope.*` compares scoped and ordinary queries at every small-fixture
 budget boundary, including completion flags and masks. It covers owned temporary
 overrides, equal-sized edge changes, roots, different builders, nested leases,

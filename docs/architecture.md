@@ -1463,10 +1463,19 @@ same frame state for each query. Every incoming value must agree; unanchored
 cycles, nonzero loop deltas and overflowing intermediate offsets invalidate
 their users. The existing evidence allowance charges graph construction and
 propagation. Completed equations are immutable within a proof mode, so later
-queries solve only new dependencies. Register/memory transparent-cycle memo
-entries are reusable only until either resolver learns a concrete result;
-both share the invalidation generation because their walks recurse into each
-other. Neither cache bypasses incomplete-proof rejection.
+queries solve only new dependencies.
+
+Register and memory value reconstruction share a stack of active walks. A
+concrete merge that skipped a transparent backedge is still provisional: later
+loop definitions may add values. Every memo result records a conservative range
+of the active walks it depends on, including dependencies inherited through memo
+hits. Retiring a dependency invalidates that snapshot; closing the state's own
+backedges removes only its own activation. Unique activation identities prevent
+a later walk at the same depth from reviving stale entries. Concrete results
+with no pending dependency retain their ordinary batch lifetime. Context-free
+transparent cycles retain the existing shared generation guard; memory-context
+resets also invalidate those entries in the value memo. Neither cache bypasses
+incomplete-proof rejection.
 
 HighIR's call-argument projection uses the same checked affine equation core
 for entry-stack offsets in an immutable MedIR function. Each SSA definition is
