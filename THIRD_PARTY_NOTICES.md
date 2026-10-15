@@ -17,6 +17,18 @@ The unchanged [MIT notice](LICENSES/nlohmann-json/LICENSE.MIT) is staged
 beside both executables and installed under `share/neverd/licenses`.
 No external JSON executable or language runtime is invoked.
 
+## mimalloc
+
+The 64-bit Linux worker embeds the unchanged mimalloc 3.5.3 allocator from
+[Microsoft Research](https://github.com/microsoft/mimalloc/tree/v3.5.3), under
+its [MIT license](LICENSES/mimalloc/LICENSE). The source archive is pinned by
+SHA-256 `3b4a15153a59905995f7070296ed604bb5ccc00cabb8b93446931aff77224d47`.
+Its notice is staged beside the worker and installed under
+`share/neverd/licenses/mimalloc`. The allocator is embedded in the executable;
+the SDK continues to use its host's allocator. `NEVERD_WORKER_MIMALLOC=OFF`
+selects the platform allocator. Allocation-sanitizer builds use that setting.
+The build preserves the existing minimum CPU instruction set.
+
 ## Ada URL parser
 
 Offline import-map analysis embeds the unchanged C++ Ada 4.0.0 URL parser at

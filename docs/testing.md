@@ -154,6 +154,13 @@ their dispatcher when a third function queues, external graph snapshots survive
 interleaved requests, and opening another project retires both replicas.
 Cancelling view reads must preserve a queued project snapshot needed by a
 retained external analysis request.
+`NeverDWorkerAllocator` checks the embedded Linux allocator across the worker's
+C++ runtime, the shared SDK and libc, including reallocation, over-aligned
+objects and cross-thread release. Configure `NEVERD_WORKER_MIMALLOC=OFF` for
+the platform allocator; ASan/TSan/MSan configurations require that setting so
+their allocation interceptors remain authoritative. Real worker and workbench
+integration checks run with the actual linked worker, without `LD_PRELOAD`.
+
 `NeverDWorkerAnalysisSnapshot` verifies read-only replica state,
 unchanged owner files, staged comments, signature replay and stale-input
 rejection. Database restore coverage keeps pseudocode closed until requested.

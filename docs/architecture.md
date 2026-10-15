@@ -139,6 +139,11 @@ Cancelling its final subscriber retires the process, since a synchronous C API
 analysis call cannot be interrupted safely. Replica revisions and analysis
 discovery never advance the writable project's state. All workers use the
 same public C API; this split does not duplicate engine semantics.
+The 64-bit Linux worker embeds a pinned mimalloc allocator in its executable.
+Its C++ code and loaded SDK use that one process heap, including cross-thread
+releases. No allocator replacement is exported by the SDK itself. Other hosts,
+allocation-sanitizer builds and `NEVERD_WORKER_MIMALLOC=OFF` use the platform
+allocator. The build keeps the worker's existing CPU instruction requirements.
 Function preparation uses `neverd_prepare_function_view`, which shares the
 source route's ARM mode, exception-handler discovery and analysis-scope checks
 without emitting C. Source, IR and CFG views consume that prepared pipeline.
