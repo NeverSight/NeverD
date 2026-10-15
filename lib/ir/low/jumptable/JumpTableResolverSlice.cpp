@@ -21,6 +21,7 @@
 #include "JumpTableResolverDetail.h"
 #include "ResolverDefinitionCache.h"
 #include "ResolverLaneView.h"
+#include "ResolverPendingWalks.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -5356,88 +5357,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   constexpr size_t ValueKeyWork = 6;
   using MemoryKey = std::tuple<int, int, uint64_t, int64_t, uint16_t, bool>;
 
-  // A concrete merge can still be provisional: {2} + Cycle is {2} only while
-  // the skipped ancestor is active. Once that ancestor finishes, another query
-  // must reconstruct the merge to include definitions found later in the loop.
-  // Record skipped activations for Value and Cycle results alike, including
-  // dependencies inherited through completed memo hits.
-  //
-  // One conservative interval avoids allocating a dependency set per state.
-  // Walks unwind in stack order, so the deepest activation's identity certifies
-  // every shallower activation in the interval. A reused depth has a new
-  // identity. Over-approximating the interval can only cause an earlier retry.
-  // Value and memory walks share this owner because they recurse into each
-  // other.
-  struct ResolverPendingRange {
-    uint64_t LastIdentity = 0;
-    uint32_t First = 0;
-    uint32_t Last = 0;
-    bool empty() const { return LastIdentity == 0; }
-  };
-  struct ResolverWalkFrame {
-    uint64_t Identity;
-    ResolverPendingRange Pending;
-  };
-  struct ResolverWalks {
-    std::vector<ResolverWalkFrame> Frames;
-    uint64_t NextIdentity = 0;
-    bool live(const ResolverPendingRange &R) const {
-      return R.empty() || (R.Last < Frames.size() &&
-                           Frames[R.Last].Identity == R.LastIdentity);
-    }
-    void observe(const ResolverPendingRange &R) {
-      if (R.empty() || Frames.empty())
-        return;
-      assert(live(R));
-      auto &P = Frames.back().Pending;
-      if (P.empty()) {
-        P = R;
-        return;
-      }
-      P.First = std::min(P.First, R.First);
-      if (P.Last < R.Last) {
-        P.Last = R.Last;
-        P.LastIdentity = R.LastIdentity;
-      }
-    }
-    struct Scope {
-      ResolverWalks &Owner;
-      ResolverPendingRange Self;
-      bool Finished = false;
-      explicit Scope(ResolverWalks &Owner) : Owner(Owner) {
-        assert(Owner.Frames.size() < std::numeric_limits<uint32_t>::max());
-        const uint32_t Depth = Owner.Frames.size();
-        Self = {++Owner.NextIdentity, Depth, Depth};
-        Owner.Frames.push_back({Self.LastIdentity, {}});
-      }
-      Scope(const Scope &) = delete;
-      Scope &operator=(const Scope &) = delete;
-      ~Scope() {
-        if (!Finished) {
-          assert(Owner.Frames.size() == Self.Last + 1);
-          Owner.Frames.pop_back();
-        }
-      }
-      ResolverPendingRange finish() {
-        assert(Owner.Frames.size() == Self.Last + 1);
-        auto P = Owner.Frames.back().Pending;
-        Owner.Frames.pop_back();
-        Finished = true;
-        // The completed state closes its own transparent backedges. Retain
-        // dependencies on enclosing walks; their missing arms are still live.
-        if (!P.empty() && P.Last == Self.Last) {
-          if (P.First == Self.Last)
-            P = {};
-          else {
-            --P.Last;
-            P.LastIdentity = Owner.Frames[P.Last].Identity;
-          }
-        }
-        Owner.observe(P);
-        return P;
-      }
-    };
-  } Walks;
+  using ResolverWalks = detail::ResolverPendingWalks;
+  using ResolverPendingRange = ResolverWalks::Pending;
+  ResolverWalks Walks;
 
   // A disengaged memo value is the single prepaid Active state.  Reusing the
   // same map node for the completed result avoids allocating an Active-set node

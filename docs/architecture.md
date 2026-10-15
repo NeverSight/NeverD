@@ -1486,9 +1486,11 @@ queries solve only new dependencies.
 
 Register and memory value reconstruction share a stack of active walks. A
 concrete merge that skipped a transparent backedge is still provisional: later
-loop definitions may add values. Every memo result records a conservative range
-of the active walks it depends on, including dependencies inherited through memo
-hits. Retiring a dependency invalidates that snapshot; closing the state's own
+loop definitions may add values. `ResolverPendingWalks` records the exact active
+dependencies through depth 255 in fixed storage, including dependencies
+inherited through memo hits. Greater caller-specified depths use a conservative
+interval there. Unrelated intermediate returns do not expire an exact snapshot.
+Retiring a dependency invalidates that snapshot; closing the state's own
 backedges removes only its own activation. Unique activation identities prevent
 a later walk at the same depth from reviving stale entries. Concrete results
 with no pending dependency retain their ordinary batch lifetime. Context-free

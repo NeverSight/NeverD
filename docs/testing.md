@@ -1742,6 +1742,11 @@ private-frame variants cover x86, x64, ARM and AArch64 across ELF, COFF and
 Mach-O. Reachable values cannot disappear from feasible masks or certify a false
 upper bound; real arithmetic updates cannot become transparent backedges. Warm
 and cold queries must agree at evidence-budget and resolver-depth boundaries.
+`ResolverPendingWalks.*` compares recursive dependency lifetimes against an
+independent set-of-activation-IDs model, including sparse ancestors, completed
+memo hits, reused depths and the fixed bitset's word and capacity boundaries.
+Unrelated returns must preserve an exact snapshot; retiring any actual
+dependency must invalidate it, including beyond the exact tracking capacity.
 `ResolverQueryScope.*` compares scoped and ordinary queries at every small-fixture
 budget boundary, including completion flags and masks. It covers owned temporary
 overrides, equal-sized edge changes, roots, different builders, nested leases,
