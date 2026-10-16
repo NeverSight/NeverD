@@ -1,0 +1,146 @@
+name: Temporary Windows session C API qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  session-capi:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      NEVERD_THREADS: '1'
+      NEVERD_SIGNATURE_CACHE: 'off'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Shared integration candidate for CI admission and Darwin libSystem.
+          ref: 5066e6b130d514494a817ef8fdb6531511bdf3f6
+          fetch-depth: 32
+          submodules: recursive
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: 'v0.16.0'
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja --yes --no-progress
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Record source and toolchain
+        shell: bash
+        run: |
+          mkdir -p build-ci/evidence
+          git rev-parse HEAD > build-ci/evidence/head.txt
+          git submodule status --recursive > build-ci/evidence/submodules.txt
+          cmake --version > build-ci/evidence/toolchain.txt
+          python --version >> build-ci/evidence/toolchain.txt
+          cl 2>> build-ci/evidence/toolchain.txt || true
+      - name: Configure the affected Release prebuilt shared-library target
+        shell: bash
+        run: |
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DBUILD_TESTING=ON -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_BUILD_SHARED=ON -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
+            -DNEVERD_ENABLE_CPU_EMULATION=ON \
+            -DNEVERD_ENABLE_DRIVER_EMULATION=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=OFF \
+            -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF \
+            -DNEVERD_ENABLE_WEB_ANALYSIS=OFF -DNEVERD_ENABLE_Z3=OFF
+      - name: Record verified LLVM r6 package identity
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          import json, re, subprocess
+          cache = Path('build-ci/CMakeCache.txt').read_text()
+          def value(name):
+              return re.search(r'^' + name + r':[^=]+=(.*)$', cache, re.M).group(1)
+          tag = value('NEVERD_LLVM_PREBUILT_TAG')
+          assert tag == 'neverd-llvm-v23.0.0-r6'
+          root = Path(value('NEVERD_LLVM_PREBUILT_CACHE_DIR')) / tag / 'x64'
+          digest = (root / 'neverd-llvm-windows-x64.zip.stamp').read_text().strip()
+          assert digest == 'e6be575ae626d027e7e63fcfed5d6185699f9a8edb1203c869f7b9dd2117a099'
+          buildinfo = (root / 'neverd-llvm-windows-x64/BUILDINFO.txt').read_text()
+          commit = '06788fb19109851e6a6b9f109a2b8027a606f0c6'
+          assert re.findall(r'^llvm_commit: (.*)$', buildinfo, re.M) == [commit]
+          gitlink = subprocess.check_output(['git', 'ls-tree', 'HEAD', 'third_party/llvm-project'], text=True)
+          assert gitlink.split()[2] == commit
+          Path('build-ci/evidence/llvm-package.json').write_text(json.dumps({
+              'tag': tag, 'verified_archive_sha256': digest, 'llvm_commit': commit,
+              'gitlink': gitlink, 'buildinfo': buildinfo
+          }, indent=2))
+          PYCODE
+      - name: Build and link the owning executable
+        timeout-minutes: 30
+        shell: bash
+        run: cmake --build build-ci --target NeverDSessionCAPITests --parallel 4
+      - name: Execute affected methods and related source-cache checks
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          import fnmatch, hashlib, json, subprocess, xml.etree.ElementTree as ET
+          root = Path('build-ci/evidence')
+          binary = Path('build-ci/bin/NeverDSessionCAPITests.exe').resolve()
+          listing = subprocess.run([str(binary), '--gtest_list_tests'], capture_output=True, timeout=30)
+          (root / 'inventory.stdout').write_bytes(listing.stdout)
+          (root / 'inventory.stderr').write_bytes(listing.stderr)
+          assert listing.returncode == 0
+          names, suite = [], ''
+          for raw in listing.stdout.decode().splitlines():
+              line = raw.split(' #', 1)[0].rstrip()
+              if line and not line.startswith(' ') and line.endswith('.'):
+                  suite = line[:-1]
+              elif suite and line.startswith('  '):
+                  names.append(suite + '.' + line.strip())
+          patterns = ['SessionCAPITest.LLVMViews*', 'SessionCAPITest.SourceOptions*',
+                      'SessionCAPITest.NativeLLVMInspection*', 'SessionCAPITest.DataAccessWidths*',
+                      'SessionCAPITest.SourceLLVMProfiles*',
+                      'SessionCAPITest.LocalTypesComeFromThePDB',
+                      'SessionCAPITest.DeclaredTypesJoinThePDBsAndStayWithTheProject']
+          selected = [n for n in names if any(fnmatch.fnmatchcase(n, p) for p in patterns)]
+          required = {'SessionCAPITest.LLVMViewsDeferOnlyHighIRAndPreserveLaterSource',
+                      'SessionCAPITest.SourceOptionsKeepOrdinaryAndEnhancedPagesIndependent',
+                      'SessionCAPITest.SourceOptionsDoNotDependOnLLVMViewOrder',
+                      'SessionCAPITest.NativeLLVMInspectionPreservesBranchesAcrossSourceViews'}
+          assert required <= set(selected) and len(selected) == len(set(selected)) == 12
+          rows = []
+          for index, name in enumerate(selected):
+              xml = root / f'case-{index}.xml'
+              result = subprocess.run([str(binary), '--gtest_filter=' + name,
+                                       '--gtest_output=xml:' + str(xml)], capture_output=True, timeout=120)
+              (root / f'case-{index}.stdout').write_bytes(result.stdout)
+              (root / f'case-{index}.stderr').write_bytes(result.stderr)
+              cases = list(ET.parse(xml).getroot().iter('testcase'))
+              assert result.returncode == 0 and len(cases) == 1
+              case = cases[0]
+              assert case.attrib['classname'] + '.' + case.attrib['name'] == name
+              assert case.find('failure') is None and case.find('skipped') is None
+              rows.append({'name': name, 'passed': True})
+          (root / 'receipt.json').write_text(json.dumps({
+              'passed': rows, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'dll_sha256': hashlib.sha256((binary.parent / 'neverd.dll').read_bytes()).hexdigest()
+          }, indent=2))
+          PYCODE
+      - name: Retain exact qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-session-capi-r6
+          path: |
+            build-ci/evidence/
+            build-ci/CMakeCache.txt
+            build-ci/compile_commands.json
+          if-no-files-found: error
+          retention-days: 14
