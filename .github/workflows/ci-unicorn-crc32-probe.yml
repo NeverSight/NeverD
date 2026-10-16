@@ -1,4 +1,4 @@
-name: Unicorn CRC32 Windows coexistence probe
+name: Windows dependency and loader header linkage probe
 on:
   push:
     branches: [codex/unicorn-crc32-probe-7ec4c6457]
@@ -27,7 +27,7 @@ jobs:
           mkdir -p crc32-evidence
           git rev-parse HEAD > crc32-evidence/head.txt
           git submodule status third_party/unicorn > crc32-evidence/unicorn.txt
-          sha256sum cmake/NeverDUnicorn.cmake third_party/unicorn/qemu/util/crc32c.c .github/ci/unicorn-crc32-probe/* > crc32-evidence/inputs.sha256
+          sha256sum cmake/NeverDUnicorn.cmake third_party/unicorn/qemu/util/crc32c.c cmake/UnicornCRCNamespace.h include/neverd/loader/LinkerThunk.h .github/ci/unicorn-crc32-probe/* > crc32-evidence/inputs.sha256
           cmake --version > crc32-evidence/cmake.txt
           ninja --version > crc32-evidence/ninja.txt
       - name: Configure original-symbol control
@@ -45,6 +45,16 @@ jobs:
           set -e
           test "$result" -ne 0
           grep -E 'crc32.*LNK2005|LNK2005.*crc32' crc32-evidence/baseline-build.log
+      - name: Require the original loader header ABI failure
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          cmake --build build-crc-baseline --target NeverDThunkHeaderABI --parallel 4 2>&1 | tee crc32-evidence/header-baseline-build.log
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -ne 0
+          grep -E 'LNK2019.*linker(LongBranch)?ThunkAt' crc32-evidence/header-baseline-build.log
       - name: Configure the real private-symbol fix
         shell: bash
         run: |
@@ -54,12 +64,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cmake --build build-crc-fixed --target NeverDUnicornCRCCoexistence arm-softmmu aarch64-softmmu --parallel 4 2>&1 | tee crc32-evidence/fixed-build.log
+          cmake --build build-crc-fixed --target NeverDUnicornCRCCoexistence arm-softmmu aarch64-softmmu NeverDThunkHeaderABI --parallel 4 2>&1 | tee crc32-evidence/fixed-build.log
       - name: Execute independent CRC and compression checks on Windows
         shell: bash
         run: |
           ./build-crc-fixed/NeverDUnicornCRCCoexistence.exe
-          echo 'native Windows CRC32C, zlib CRC32/CRC32_Z and compression round-trip passed' > crc32-evidence/native-result.txt
+          ./build-crc-fixed/NeverDThunkHeaderABI.exe
+          echo 'native Windows CRC32C, zlib CRC32/CRC32_Z and compression round-trip plus actual loader header ABI passed' > crc32-evidence/native-result.txt
       - name: Preserve bounded experiment evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
