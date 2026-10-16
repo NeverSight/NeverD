@@ -24,7 +24,7 @@
 
 namespace neverd {
 
-class BinaryImage;
+struct BinaryImage;
 
 /// A thunk that only jumps on.
 struct LinkerThunk {
