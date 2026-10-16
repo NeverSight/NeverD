@@ -44,7 +44,7 @@ jobs:
           result=${PIPESTATUS[0]}
           set -e
           test "$result" -ne 0
-          rg 'crc32.*LNK2005|LNK2005.*crc32' crc32-evidence/baseline-build.log
+          grep -E 'crc32.*LNK2005|LNK2005.*crc32' crc32-evidence/baseline-build.log
       - name: Configure the real private-symbol fix
         shell: bash
         run: |
