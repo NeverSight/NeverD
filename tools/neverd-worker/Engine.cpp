@@ -88,10 +88,36 @@ bool orderedViewItems(const Json &view, const char *field, const char *beginKey,
   return true;
 }
 
+// Unordered or nested metadata retains its producer order. Cache only its
+// numeric bounds so each later page avoids rereading JSON fields for every
+// item.
+using ViewBounds = std::vector<std::pair<std::size_t, std::size_t>>;
+ViewBounds viewBounds(const Json &view, const char *field, const char *beginKey,
+                      const char *endKey, bool ordered) {
+  ViewBounds result;
+  const auto items = view.find(field);
+  if (ordered || items == view.end() || !items->is_array())
+    return result;
+  result.reserve(items->size());
+  for (const auto &item : *items)
+    result.emplace_back(item.value(beginKey, std::size_t{0}),
+                        item.value(endKey, std::size_t{0}));
+  return result;
+}
+
 // Point rows use an inclusive lower bound; byte spans use an exclusive end.
 Json viewItemsOnPage(const Json &items, bool ordered, const char *beginKey,
                      const char *endKey, bool points, std::size_t begin,
-                     std::size_t end) {
+                     std::size_t end, const ViewBounds *bounds = nullptr) {
+  if (bounds && !bounds->empty()) {
+    Json selected = Json::array();
+    for (std::size_t i = 0; i < bounds->size(); ++i) {
+      const auto [start, last] = (*bounds)[i];
+      if (start < end && (points ? last >= begin : last > begin))
+        selected.push_back(items[i]);
+    }
+    return selected;
+  }
   auto first = items.begin();
   if (ordered)
     first = std::partition_point(first, items.end(), [&](const auto &item) {
@@ -946,6 +972,16 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         orderedViewItems(full, "source_names", "begin_byte", "end_byte");
     document->orderedCodeNames =
         orderedViewItems(full, "code_names", "begin_byte", "end_byte");
+    document->rowBounds =
+        viewBounds(full, "rows", "line", "line", document->orderedRows);
+    document->referenceBounds = viewBounds(full, "references", "line", "line",
+                                           document->orderedReferences);
+    document->sourceNameBounds =
+        viewBounds(full, "source_names", "begin_byte", "end_byte",
+                   document->orderedSourceNames);
+    document->codeNameBounds =
+        viewBounds(full, "code_names", "begin_byte", "end_byte",
+                   document->orderedCodeNames);
     document->value = std::move(full);
     document->key = key;
     // If resolving source names changed the listing while decorating this
@@ -953,8 +989,17 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     if (cacheKey() != key)
       return document;
     const auto jsonBytes = namedViewJsonBytes(document->value);
-    const auto overhead =
+    auto overhead =
         sizeof(NamedView) + 8 * sizeof(void *) + document->key.capacity() + 1;
+    for (const auto *bounds :
+         {&document->rowBounds, &document->referenceBounds,
+          &document->sourceNameBounds, &document->codeNameBounds}) {
+      if (overhead > MaxNamedViewCacheBytes ||
+          bounds->capacity() > (MaxNamedViewCacheBytes - overhead) /
+                                   sizeof(ViewBounds::value_type))
+        return document;
+      overhead += bounds->capacity() * sizeof(ViewBounds::value_type);
+    }
     if (jsonBytes <= MaxNamedViewCacheBytes &&
         overhead <= MaxNamedViewCacheBytes - jsonBytes &&
         document->lines.capacity() <=
@@ -1001,13 +1046,14 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
           value.is_array()))
       page[field] = value;
   page["text"] = text.substr(startByte, endByte - startByte);
-  page["rows"] = viewItemsOnPage(namedView_.at("rows"), document->orderedRows,
-                                 "line", "line", true, start, end);
+  page["rows"] =
+      viewItemsOnPage(namedView_.at("rows"), document->orderedRows, "line",
+                      "line", true, start, end, &document->rowBounds);
   if (const auto references = namedView_.find("references");
       references != namedView_.end() && references->is_array()) {
     page["references"] =
         viewItemsOnPage(*references, document->orderedReferences, "line",
-                        "line", true, start, end);
+                        "line", true, start, end, &document->referenceBounds);
   }
   const std::size_t base = namedView_.value("byte_offset", std::size_t{0});
   for (const char *field : {"source_names", "code_names"}) {
@@ -1016,9 +1062,11 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
     const bool ordered = std::string_view(field) == "source_names"
                              ? document->orderedSourceNames
                              : document->orderedCodeNames;
-    page[field] =
-        viewItemsOnPage(namedView_[field], ordered, "begin_byte", "end_byte",
-                        false, base + startByte, base + endByte);
+    page[field] = viewItemsOnPage(
+        namedView_[field], ordered, "begin_byte", "end_byte", false,
+        base + startByte, base + endByte,
+        std::string_view(field) == "source_names" ? &document->sourceNameBounds
+                                                  : &document->codeNameBounds);
   }
   page["offset"] = start;
   page["byte_offset"] = base + startByte;
@@ -2930,7 +2978,7 @@ Json Engine::execute(const std::string &operation, const Json &p) {
         representation == "llvmc" || spelled) {
       if (auto named =
               namedViewPage(address, representation, offset, limit, options))
-        return *named;
+        return std::move(*named);
       if (!options.empty())
         throw Error("unavailable",
                     error().empty() ? "Source transformation failed" : error());

@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace neverd::worker {
@@ -124,9 +125,12 @@ private:
     Json value;
     std::vector<std::size_t> lines;
     // Decide once after decoration. Older engines may return unsorted rows
-    // or overlapping name spans; those keep the original filtering path.
+    // or overlapping name spans; those retain their original order while
+    // filtering cached numeric bounds.
     bool orderedRows = false, orderedReferences = false;
     bool orderedSourceNames = false, orderedCodeNames = false;
+    std::vector<std::pair<std::size_t, std::size_t>> rowBounds, referenceBounds,
+        sourceNameBounds, codeNameBounds;
     std::size_t bytes = 0;
   };
   /// Newest first, bounded by retained bytes as well as document count.
