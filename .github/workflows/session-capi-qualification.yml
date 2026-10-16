@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Shared integration candidate for CI admission and Darwin libSystem.
-          ref: 5066e6b130d514494a817ef8fdb6531511bdf3f6
+          ref: 8bed69beee9434f8e19c74e8d74723ef219ab847
           fetch-depth: 32
           submodules: recursive
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -84,7 +84,7 @@ jobs:
       - name: Build and link the owning executable
         timeout-minutes: 45
         shell: bash
-        run: cmake --build build-ci --target NeverDSessionCAPITests --parallel 4
+        run: cmake --build build-ci --target NeverDSessionCAPITests NeverDPrototypeDebugContextTests --parallel 4
       - name: Execute affected methods and related source-cache checks
         shell: bash
         run: |
@@ -128,7 +128,26 @@ jobs:
               assert case.attrib['classname'] + '.' + case.attrib['name'] == name
               assert case.find('failure') is None and case.find('skipped') is None
               rows.append({'name': name, 'passed': True})
+          private = Path('build-ci/bin/NeverDPrototypeDebugContextTests.exe').resolve()
+          name = 'PrototypeDebugContext.TypesTheFunctionsDebugInformationLeavesUntyped'
+          listing = subprocess.run([str(private), '--gtest_list_tests'], capture_output=True, timeout=30)
+          (root / 'private-inventory.stdout').write_bytes(listing.stdout)
+          (root / 'private-inventory.stderr').write_bytes(listing.stderr)
+          assert listing.returncode == 0 and name.split('.')[1] in listing.stdout.decode()
+          xml = root / 'case-prototype.xml'
+          result = subprocess.run([str(private), '--gtest_filter=' + name,
+                                   '--gtest_output=xml:' + str(xml)], capture_output=True, timeout=120)
+          (root / 'case-prototype.stdout').write_bytes(result.stdout)
+          (root / 'case-prototype.stderr').write_bytes(result.stderr)
+          cases = list(ET.parse(xml).getroot().iter('testcase'))
+          assert result.returncode == 0 and len(cases) == 1
+          case = cases[0]
+          assert case.attrib['classname'] + '.' + case.attrib['name'] == name
+          assert case.attrib.get('status') == 'run' and case.attrib.get('result') == 'completed'
+          assert case.find('failure') is None and case.find('skipped') is None
+          rows.append({'name': name, 'passed': True})
           (root / 'receipt.json').write_text(json.dumps({
+              'private_binary_sha256': hashlib.sha256(private.read_bytes()).hexdigest(),
               'passed': rows, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
               'dll_sha256': hashlib.sha256((binary.parent / 'neverd.dll').read_bytes()).hexdigest()
           }, indent=2))
