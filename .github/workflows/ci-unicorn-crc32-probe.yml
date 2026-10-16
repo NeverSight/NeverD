@@ -1,0 +1,68 @@
+name: Unicorn CRC32 Windows coexistence probe
+on:
+  push:
+    branches: [codex/unicorn-crc32-probe-7ec4c6457]
+permissions:
+  contents: read
+concurrency:
+  group: unicorn-crc32-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-crc32:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 1
+      - name: Fetch pinned Unicorn only
+        shell: bash
+        run: git submodule update --init --depth 1 third_party/unicorn
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+      - name: Record source and tools
+        shell: bash
+        run: |
+          mkdir -p crc32-evidence
+          git rev-parse HEAD > crc32-evidence/head.txt
+          git submodule status third_party/unicorn > crc32-evidence/unicorn.txt
+          sha256sum cmake/NeverDUnicorn.cmake third_party/unicorn/qemu/util/crc32c.c .github/ci/unicorn-crc32-probe/* > crc32-evidence/inputs.sha256
+          cmake --version > crc32-evidence/cmake.txt
+          ninja --version > crc32-evidence/ninja.txt
+      - name: Configure original-symbol control
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -S .github/ci/unicorn-crc32-probe -B build-crc-baseline -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DNEVERD_REPOSITORY="$GITHUB_WORKSPACE" -DNEVERD_CRC_BASELINE=ON 2>&1 | tee crc32-evidence/baseline-configure.log
+      - name: Require the actual MSVC duplicate-symbol failure
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          cmake --build build-crc-baseline --target NeverDUnicornCRCCoexistence --parallel 4 2>&1 | tee crc32-evidence/baseline-build.log
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -ne 0
+          rg 'crc32.*LNK2005|LNK2005.*crc32' crc32-evidence/baseline-build.log
+      - name: Configure the real private-symbol fix
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -S .github/ci/unicorn-crc32-probe -B build-crc-fixed -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DNEVERD_REPOSITORY="$GITHUB_WORKSPACE" -DNEVERD_CRC_BASELINE=OFF 2>&1 | tee crc32-evidence/fixed-configure.log
+      - name: Build both ARM callers and the coexistence executable
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build-crc-fixed --target NeverDUnicornCRCCoexistence arm-softmmu aarch64-softmmu --parallel 4 2>&1 | tee crc32-evidence/fixed-build.log
+      - name: Execute independent CRC and compression checks on Windows
+        shell: bash
+        run: |
+          ./build-crc-fixed/NeverDUnicornCRCCoexistence.exe
+          echo 'native Windows CRC32C, zlib CRC32/CRC32_Z and compression round-trip passed' > crc32-evidence/native-result.txt
+      - name: Preserve bounded experiment evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: unicorn-crc32-windows-${{ github.run_id }}
+          path: crc32-evidence
