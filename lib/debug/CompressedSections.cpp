@@ -90,6 +90,12 @@ std::optional<std::vector<uint8_t>> expand(llvm::StringRef Bytes) {
       Out.assign(Bytes.bytes_begin(), Bytes.bytes_end());
     const uint64_t Alignment = std::max<uint64_t>(Header.ch_addralign, 1);
     const uint64_t At = llvm::alignTo(Out.size(), Alignment);
+    // Alignment padding consumes the same bounded expansion budget.
+    if (At < Out.size() ||
+        At - Out.size() > limits::kMaxExpandedDebugSections - Total ||
+        At > Out.max_size() || Size > Out.max_size() - At)
+      return std::nullopt;
+    Total += At - Out.size();
     Out.resize(At);
     Out.insert(Out.end(), Body.begin(), Body.end());
     // The header table lies inside the copied bytes, at its original place.

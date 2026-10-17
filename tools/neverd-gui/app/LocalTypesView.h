@@ -36,12 +36,16 @@ enum class TypesCommand {
 };
 
 /// IDA's Local Types window: every named type of the program, filtered by
-/// name, and the selected one laid out member by member -- offset, size,
-/// bit range and the padding between, each with a bar of where it lies in
-/// the type -- or as the C, C++, Rust or Go that declares it, to copy or
-/// export.  A member's type, or a type named in the source, opens on a
-/// double click; Back returns to the type before.  Types are added and
-/// edited as C, C++, Rust or Go declarations, and deleted, by IDA's keys.
+/// name, each with an icon of its kind, and the selected one laid out
+/// member by member -- offset, size, bit range and the padding between,
+/// each with a bar of where it lies in the type -- or as the C, C++, Rust or
+/// Go that declares it, to copy or export.  A breadcrumb above names the
+/// records that hold the member selected, and the source shows its line.
+/// Hovering a type's name shows what it is; a member's type, or a type
+/// named in the source, opens on a double click or a Ctrl+click, as an
+/// editor follows a definition; Back returns to the type before.  Types are
+/// added and edited as C, C++, Rust or Go declarations, and deleted, by
+/// IDA's keys.
 class LocalTypesView final : public QWidget {
   Q_OBJECT
 public:
@@ -73,7 +77,18 @@ private:
   /// Sizes the layout's columns to what they hold, the member's within
   /// what the view leaves the types.
   void fitLayoutColumns();
-  void addMembers(QTreeWidgetItem *parent, const QJsonArray &members);
+  void addMembers(QTreeWidgetItem *parent, const QJsonArray &members,
+                  const QString &path = QString());
+  /// The breadcrumb of the member selected in the layout: the type, then
+  /// each record that holds the member, each a link that selects it.
+  void showPath();
+  /// Highlights the source's current line.
+  void highlightSourceLine();
+  /// Puts the source's cursor on the line that declares the member selected
+  /// in the layout, where the source shows one.
+  void showMemberInSource();
+  /// The listed type named at \p position of the source, empty for none.
+  QString typeAt(const QPoint &position) const;
   void exportTypes(const QStringList &names);
   void copy();
   void back();
@@ -103,6 +118,7 @@ private:
   QTreeView *list_ = nullptr;
   QToolButton *back_ = nullptr;
   QLabel *heading_ = nullptr;
+  QLabel *path_ = nullptr;
   QTabBar *tabs_ = nullptr;
   QStackedWidget *pages_ = nullptr;
   QTreeWidget *layout_ = nullptr;
@@ -120,6 +136,14 @@ private:
   QJsonObject lastList_;
   QStringList history_;
   QSet<QString> names_;
+  /// What hovering each listed type shows, by its name.
+  QHash<QString, QString> cards_;
+  /// The member selected in the layout, from the type down, as the source
+  /// names each; empty for none.
+  QStringList memberPath_;
+  /// The type named where Ctrl+click pressed in the source, which its
+  /// release there opens.
+  QString pressedType_;
   /// Serials of the last list, layout and source requests; older replies
   /// are dropped.
   quint64 listSerial_ = 0, layoutSerial_ = 0, sourceSerial_ = 0;

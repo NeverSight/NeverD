@@ -3738,10 +3738,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>(relleno)</translation>
     </message>
     <message>
-        <source>Double-click to open %1</source>
-        <translation>Haga doble clic para abrir %1</translation>
-    </message>
-    <message>
         <source>Export local types</source>
         <translation>Exportar tipos locales</translation>
     </message>
@@ -3932,6 +3928,29 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>Lua (*.lua)</source>
         <translation>Lua (*.lua)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n members</source>
+        <translation>
+            <numerusform>%n miembros</numerusform>
+            <numerusform>%n miembros</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Ctrl+click to open</source>
+        <translation>Ctrl+clic para abrir</translation>
+    </message>
+    <message>
+        <source>Double-click or Ctrl+click to open %1</source>
+        <translation>Haga doble clic o Ctrl+clic para abrir %1</translation>
+    </message>
+    <message>
+        <source>bits %1 of the unit at %2</source>
+        <translation>bits %1 de la unidad en %2</translation>
+    </message>
+    <message>
+        <source>at %1, %2 bytes</source>
+        <translation>en %1, %2 bytes</translation>
     </message>
 </context>
 <context>

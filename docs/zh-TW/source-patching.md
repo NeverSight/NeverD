@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 追加式、依結構大小檢查的相依項選項適用於原始碼、外部 IR 與原生物件請求。憑據包含 `added_imports`；重新載入候選檔案後，再核對全部回呼、匯入、儲存權限與安裝位元組。失敗會保留輸入及任何既有目標檔案。
+
+<!-- i18n-section: examples -->
+## 可執行範例
+
+[完整 Windows/macOS/Linux 範例](../../examples/source-patch/README.md) 包含原程式、替換函式與相依程式庫原始碼、建置命令，以及真正宿主中的 Python SDK 外掛。請在儲存庫根目錄執行，使用已啟用 Python 的 NeverD 建置與新的輸出目錄。
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+預設執行兩條路徑；可加 `--api cli` 或 `--api sdk` 單獨選擇。目標位址會自動尋找。輸入 `7` 時，原程式輸出 `8`，兩種補丁皆輸出 `36`。驅動程式檢查實際執行、憑據及缺少程式庫的載入失敗；完整建置與 patch 命令儲存在 `commands.json`。
 
 <!-- i18n-section: exceptions -->
 ## C++ 例外

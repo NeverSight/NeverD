@@ -21,6 +21,9 @@ def run(label,args,timeout=1200,env=None,expected=None,require_actual=None):
   assert all(c.find('failure') is None for c in cs),label
   skipped={n for n,c in seen.items() if c.find('skipped') is not None}
   if require_actual is not None:assert not skipped&require_actual,(label,skipped&require_actual)
+  if ctest and require_actual is not None:
+   for n in require_actual:
+    text=seen[n].findtext('system-out') or '';assert re.search(r'\[\s+PASSED\s+\]\s+1 test\.',text) and not re.search(r'\[\s+SKIPPED\s+\]',text),(label,n,text[-1200:])
   if not ctest:assert all(c.attrib.get('status')=='run' and c.attrib.get('result')=='completed' for c in cs if c.find('skipped') is None)
   row.update(observed=len(cs),passed=len(cs)-len(skipped),skipped=sorted(skipped),xml_sha256=hashlib.sha256(xml.read_bytes()).hexdigest())
  return out.decode(errors='replace')
@@ -40,7 +43,7 @@ try:
  for i in range(3):
   label='deadline-regression-'+str(i);n='ExecutionExit.InstructionObserverCannotAdmitEffectsAfterDeadline';run(label,[J/'bin/NeverDCPUEmulationTests.exe','--gtest_filter='+n,'--gtest_output=xml:'+str(E/(label+'.xml'))],180,expected={n},require_actual={n})
   label='rust-linker-'+str(i);ns={'SourceDialect.RustViewComputesWhatCComputes','SourceDialect.BitFieldsOfTheProgramsTypesComputeWhatCComputes'};run(label,[J/'bin/NeverDSourceDialectTests.exe','--gtest_filter='+':'.join(sorted(ns)),'--gtest_output=xml:'+str(E/(label+'.xml'))],300,expected=ns,require_actual=ns)
- selection='|'.join(re.escape(n)+'(?:  #.*)?$' for n in patterns)
+ selection='|'.join(re.escape(n)+'(  #.*)?$' for n in patterns)
  for threads in ['1',None]:
   env=dict(os.environ)
   if threads is None:env.pop('NEVERD_THREADS',None)
@@ -49,7 +52,7 @@ try:
    label='fixed-threads-'+str(threads)+'-parallel-'+str(parallel);run(label,['ctest','--test-dir',J,'--build-config','Release','--no-tests=error','-R',selection,'--parallel',str(parallel),'--output-on-failure','--output-junit',E/(label+'.xml'),'--output-log',E/(label+'.log')],1200,env,expected=set(patterns),require_actual=set(patterns))
  for i in range(2):
   label='fixed-isolated-repeat-'+str(i);run(label,['ctest','--test-dir',J,'--build-config','Release','--no-tests=error','-R',selection,'--parallel','1','--output-on-failure','--output-junit',E/(label+'.xml')],1200,dict(os.environ,NEVERD_THREADS='1'),expected=set(patterns),require_actual=set(patterns))
- stems={n.rsplit('/',1)[0] for n in patterns};siblings={n for n in allctest if n.rsplit('/',1)[0] in stems};label='affected-methods-all-backends';selection='|'.join(re.escape(n)+'/[^ ]+(?:  #.*)?$' for n in sorted(stems));required={n for n in siblings if '/unicorn' in n or '/whp' in n};run(label,['ctest','--test-dir',J,'--build-config','Release','--no-tests=error','-R',selection,'--parallel','4','--output-on-failure','--output-junit',E/(label+'.xml')],1200,dict(os.environ,NEVERD_THREADS='1'),expected=siblings,require_actual=required)
+ stems={n.rsplit('/',1)[0] for n in patterns};siblings={n for n in allctest if n.rsplit('/',1)[0] in stems};label='affected-methods-all-backends';selection='|'.join(re.escape(n)+'/[^ ]+(  #.*)?$' for n in sorted(stems));required={n for n in siblings if '/unicorn' in n or '/whp' in n};run(label,['ctest','--test-dir',J,'--build-config','Release','--no-tests=error','-R',selection,'--parallel','4','--output-on-failure','--output-junit',E/(label+'.xml')],1200,dict(os.environ,NEVERD_THREADS='1'),expected=siblings,require_actual=required)
  for label,name in [('complete-cpu','NeverDCPUEmulationTests'),('complete-run-control','NeverDRunControlTests'),('complete-source-dialect','NeverDSourceDialectTests')]:
   # Corpus inputs belong to the full workflow; the two explicit local-input
   # cases are kept out of this focused source-dialect execution.
@@ -61,4 +64,4 @@ try:
  good=True
 finally:
  products={str(p.relative_to(J)):hashlib.sha256(p.read_bytes()).hexdigest() for p in (J/'bin').glob('*.exe')};fixtures={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (J/'unittests/emulation/fixtures').glob('driver_context_capture*')}
- (E/'receipt.json').write_text(json.dumps({'accepted':good,'head':os.environ['GITHUB_SHA'],'llvm_mode':'pinned-prebuilt-r6','feature_candidate':'34a42e30fbe57a89a5ab9f8da22805810ee1d526','original_timeout_cases':patterns,'products':products,'context_fixtures':fixtures,'runs':rows,'source_llvm_validation_separate':True},indent=2))
+ (E/'receipt.json').write_text(json.dumps({'accepted':good,'head':os.environ['GITHUB_SHA'],'llvm_mode':'pinned-prebuilt-r6','feature_candidate':'9f3733513d07a323b4d2c2377d1528efed57bb99','original_timeout_cases':patterns,'products':products,'context_fixtures':fixtures,'runs':rows,'source_llvm_validation_separate':True},indent=2))

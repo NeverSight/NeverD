@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 Добавленные в конец структуры параметры зависимостей проверяются по её размеру и применяются к исходникам, предоставленному IR и нативным объектам. Квитанция содержит `added_imports`; после повторной загрузки кандидата вновь проверяются все обратные вызовы, импорты, права памяти и установленные байты. Ошибка сохраняет вход и любой существующий выходной файл.
+
+<!-- i18n-section: examples -->
+## Запускаемые примеры
+
+[Полные примеры для Windows/macOS/Linux](../../examples/source-patch/README.md) содержат исходники программы, замены и библиотеки, команды сборки и настоящий плагин Python SDK внутри хоста NeverD. Запускайте из корня репозитория со сборкой NeverD с Python и новым каталогом вывода.
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+По умолчанию выполняются оба пути; добавьте `--api cli` или `--api sdk` для выбора одного. Адрес цели определяется автоматически. Для `7` оригинал выводит `8`, обе версии с патчем — `36`. Драйвер проверяет выполнение, квитанции и реальные ошибки загрузчика при отсутствии библиотеки; полные команды сохраняются в `commands.json`.
 
 <!-- i18n-section: exceptions -->
 ## Исключения C++

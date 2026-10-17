@@ -114,6 +114,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 
 The append-only, size-gated dependency options apply to source, supplied IR and native-object requests. Receipts include `added_imports`; all callbacks, imports, storage permissions and installed bytes are checked again after reloading the candidate. A failure preserves the input and any existing destination.
 
+<!-- i18n-section: examples -->
+## Runnable examples
+
+[Complete Windows/macOS/Linux examples](../examples/source-patch/README.md) include the original, replacement and dependency library sources, build commands, and a real hosted Python SDK plugin. Run from the repository root with a Python-enabled NeverD build; use a new output directory.
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+Both paths run by default; add `--api cli` or `--api sdk` to choose one. The target address is discovered automatically. With input `7`, the original prints `8` and both patches print `36`. The driver checks execution, receipts and actual missing-library failures; full build and patch commands are saved in `commands.json`.
+
 <!-- i18n-section: exceptions -->
 ## C++ exceptions
 

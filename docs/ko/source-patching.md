@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 구조체 크기를 검사하는 추가형 의존성 옵션은 소스, 외부 IR과 네이티브 객체에 공통 적용됩니다. 영수증은 `added_imports`를 포함하고 후보를 다시 로드한 뒤 모든 콜백·임포트·저장소 권한·설치 바이트를 재검사합니다. 실패하면 입력과 기존 대상을 보존합니다.
+
+<!-- i18n-section: examples -->
+## 실행 가능한 예제
+
+[Windows/macOS/Linux 전체 예제](../../examples/source-patch/README.md) 에는 원본 프로그램, 교체 함수, 의존 라이브러리 소스와 빌드 명령, 실제 호스트에서 실행되는 Python SDK 플러그인이 있습니다. Python이 활성화된 NeverD 빌드를 사용하여 저장소 루트에서 새 출력 디렉터리로 실행합니다.
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+기본적으로 두 경로를 모두 실행합니다. `--api cli` 또는 `--api sdk`로 하나를 선택할 수 있습니다. 대상 주소는 자동으로 찾습니다. 입력 `7`에서 원본은 `8`, 두 패치는 모두 `36`을 출력합니다. 드라이버는 실제 실행, 영수증 및 라이브러리 누락 시 로드 실패를 검사하고 전체 빌드와 patch 명령을 `commands.json`에 저장합니다.
 
 <!-- i18n-section: exceptions -->
 ## C++ 예외

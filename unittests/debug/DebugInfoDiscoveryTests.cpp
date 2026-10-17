@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/debug/CompressedSections.h"
 #include "neverd/debug/DWARFLoader.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
@@ -28,6 +29,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
@@ -2151,6 +2153,31 @@ TEST(LoadDebugInfoTest, CompressedDWARFSectionsReadExpanded) {
       std::any_of(Functions.begin(), Functions.end(), [](const FunctionSym &F) {
         return F.Name == "also_named_by_dwarf";
       }));
+}
+
+TEST(LoadDebugInfoTest, CompressedDWARFExpansionBoundsAlignmentPadding) {
+  std::vector<uint8_t> Compressed =
+      fixtureBytes(companionFixture("companion-zlib.debug"));
+  using ELF = llvm::object::ELF64LE;
+  auto File = llvm::object::ELFFile<ELF>::create(llvm::toStringRef(Compressed));
+  ASSERT_TRUE(static_cast<bool>(File)) << llvm::toString(File.takeError());
+  auto Sections = File->sections();
+  ASSERT_TRUE(static_cast<bool>(Sections))
+      << llvm::toString(Sections.takeError());
+  for (const auto &Section : *Sections) {
+    if (!(Section.sh_flags & llvm::ELF::SHF_COMPRESSED))
+      continue;
+    const uint64_t Offset = Section.sh_offset;
+    ASSERT_LE(Offset, Compressed.size());
+    ASSERT_LE(sizeof(ELF::Chdr), Compressed.size() - Offset);
+    ELF::Chdr Header;
+    std::memcpy(&Header, Compressed.data() + Offset, sizeof(Header));
+    Header.ch_addralign = 2 * limits::kMaxExpandedDebugSections;
+    std::memcpy(Compressed.data() + Offset, &Header, sizeof(Header));
+    EXPECT_FALSE(expandCompressedSections(llvm::toStringRef(Compressed)));
+    return;
+  }
+  FAIL() << "fixture has no compressed section";
 }
 
 TEST(LoadDebugInfoTest, ANamedDWARFFileMustBeOfTheImagesBuildAndMachine) {

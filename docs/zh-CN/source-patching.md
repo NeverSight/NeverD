@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 追加式、按结构大小检查的依赖选项适用于源码、外部 IR 和原生对象请求。凭据包含 `added_imports`；重新加载候选文件后再次核对全部回调、导入、存储权限和安装字节。失败保留输入和任何已有目标文件。
+
+<!-- i18n-section: examples -->
+## 可运行示例
+
+[完整 Windows/macOS/Linux 示例](../../examples/source-patch/README.md) 包含原程序、替换函数和依赖库源码、构建命令及真实宿主中的 Python SDK 插件。在仓库根目录运行，使用启用 Python 的 NeverD 构建和新的输出目录。
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+默认运行两条路径；可加 `--api cli` 或 `--api sdk` 单独选择。目标地址自动发现。输入 `7` 时，原程序输出 `8`，两种补丁均输出 `36`。驱动检查真实执行、凭据和缺库加载失败，完整构建与 patch 命令保存在 `commands.json`。
 
 <!-- i18n-section: exceptions -->
 ## C++ 异常

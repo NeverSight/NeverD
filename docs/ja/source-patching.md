@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 構造体サイズで検査する追記式の依存関係オプションは、ソース、外部 IR、ネイティブオブジェクトに共通です。レシートは `added_imports` を含み、候補を再ロードして全コールバック、インポート、領域権限、インストール済みバイトを再検査します。失敗時は入力と既存の出力を保持します。
+
+<!-- i18n-section: examples -->
+## 実行可能なサンプル
+
+[Windows/macOS/Linux の完全なサンプル](../../examples/source-patch/README.md) には元プログラム、置換関数、依存ライブラリのソース、ビルドコマンドと実際のホストで動く Python SDK プラグインが含まれます。Python を有効にした NeverD ビルドを使用し、リポジトリのルートから新しい出力ディレクトリを指定して実行します。
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+既定では両方の経路を実行します。`--api cli` または `--api sdk` で一方を選べます。対象アドレスは自動検出されます。入力 `7` に対し、元プログラムは `8`、両方のパッチは `36` を出力します。ドライバーは実行、レシート、ライブラリ欠落時のロード失敗を検証し、完全なビルドと patch コマンドを `commands.json` に保存します。
 
 <!-- i18n-section: exceptions -->
 ## C++ 例外

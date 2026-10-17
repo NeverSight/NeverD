@@ -3731,10 +3731,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>（填補）</translation>
     </message>
     <message>
-        <source>Double-click to open %1</source>
-        <translation>按兩下以開啟 %1</translation>
-    </message>
-    <message>
         <source>Export local types</source>
         <translation>匯出本機型別</translation>
     </message>
@@ -3917,6 +3913,28 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>Lua (*.lua)</source>
         <translation>Lua (*.lua)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n members</source>
+        <translation>
+            <numerusform>%n 個成員</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Ctrl+click to open</source>
+        <translation>Ctrl+按一下以開啟</translation>
+    </message>
+    <message>
+        <source>Double-click or Ctrl+click to open %1</source>
+        <translation>按兩下或 Ctrl+按一下以開啟 %1</translation>
+    </message>
+    <message>
+        <source>bits %1 of the unit at %2</source>
+        <translation>位於 %2 的單元中的 %1 位元</translation>
+    </message>
+    <message>
+        <source>at %1, %2 bytes</source>
+        <translation>位於 %1，%2 位元組</translation>
     </message>
 </context>
 <context>

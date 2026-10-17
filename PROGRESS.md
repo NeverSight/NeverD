@@ -1,5 +1,107 @@
 # NeverD Daily Progress
 
+## Current snapshot — 2026-10-17
+
+- Review source pinned at **01:00 UTC / 09:00 Asia/Shanghai** to dev [3264a443](https://github.com/NeverSight/NeverD/commit/3264a443fdbcae22b1641a474e6538f65d3b44ec).
+- Incoming [206fe6f1…3264a443](https://github.com/NeverSight/NeverD/compare/206fe6f1a4ceec63aee93637238c24ce7579b7a1...3264a443fdbcae22b1641a474e6538f65d3b44ec): **408 commits / 892 changed paths** (261 added, 629 modified, 2 removed). Commit pagination was 100 + 100 + 100 + 100 + 8. Both recursive Git trees were complete; their non-directory entries provide the path inventory without the comparison endpoint's 300-file limit. Inventory is not source-review coverage or delivered-feature acceptance.
+- **Two statically confirmed defects repaired**: compressed-debug expansion padding in draft [#1212](https://github.com/NeverSight/NeverD/pull/1212), source [f2364df4](https://github.com/NeverSight/NeverD/commit/f2364df414921d033192dc21f43b88a6e96a011c) and unexecuted regression [8d53af79](https://github.com/NeverSight/NeverD/commit/8d53af79a37df4ab5cee283d1d7b8aac91812917); source-patch ABI audit mapping in draft [#1214](https://github.com/NeverSight/NeverD/pull/1214), [14b03974](https://github.com/NeverSight/NeverD/commit/14b03974e16007f9e8fd16183764198a2f679349). Source/test changes total **3 files, +37/-0** across the two focused branches. Remote full-content readbacks and commit diffs matched the intended edits.
+- Strict static-only work: source, diffs, callers, interfaces, configuration and existing records. **No builds, tests, benchmarks, project execution, repository scripts, formatters, dynamic analysis, manual CI dispatch or reruns.** Regression source was authored, not executed. Automatically triggered CI is separate external evidence.
+- Prior [#1109](https://github.com/NeverSight/NeverD/pull/1109) merged externally at October 16 03:44:47 UTC as [f8e0488d](https://github.com/NeverSight/NeverD/commit/f8e0488d29db7b46c181fa3c6d83be2e60b74edd). Current Python type-conversion ownership declaration and retained file-operation validation remain present; presence is not fresh execution validation.
+- **Concurrent development is explicit:** dev advanced first to [30661538](https://github.com/NeverSight/NeverD/commit/30661538b2e01d96848a0176a8edaff5101cc0c5), 13 additional commits / 102 paths after the pinned head, then to [a35311af](https://github.com/NeverSight/NeverD/commit/a35311afeafbad097e44b56da9051f9ff0c4218d). The broad post-pin source-patch integration was not audited. Its newly failing ABI audit received the separate bounded review and fix described below, based on a35311af. At 01:07 UTC, the compressed-section source, regression file and PROGRESS blobs on dev remained unchanged from the pinned versions. The two PRs avoid importing unrelated integration work into the earlier debug fix.
+
+## Activity and review queue
+
+At the initial 01:01 UTC collection: **54 ordinary open issues / 1 open PR**, versus yesterday's publication snapshot of 50 / 5. Since **October 16 01:08 UTC**, the initial collection contained **4 issues opened / 0 closed; 98 PRs opened / 102 merged / 0 closed without merge**.
+
+At **01:07 UTC**, the all-state PR refresh contained **3 open PRs**, **101 openings / 103 merges / 0 closed without merge** in the same interval. The increase comprises today's two draft repair PRs and external [#1213](https://github.com/NeverSight/NeverD/pull/1213), which opened and merged during review. Ordinary issue count remains 54. Counts are point-in-time activity, including merges and documentation, not a count of qualified product features. Report-only changes are excluded from implementation progress.
+
+- New ordinary issues: [#1118](https://github.com/NeverSight/NeverD/issues/1118) TILE-Gx, [#1128](https://github.com/NeverSight/NeverD/issues/1128) Dart/Flutter, [#1129](https://github.com/NeverSight/NeverD/issues/1129) Squirrel/AngelScript/Pawn, and [#1189](https://github.com/NeverSight/NeverD/issues/1189) an x86 lifting memory-growth report. The first three are planning. #1189 has no replies at observation; its cause is unconfirmed. No linked third-party binary was downloaded or executed, and today's debug repair is not asserted to resolve it.
+- All five PRs pending at yesterday's publication merged externally. Current implementation themes include native debug-file ranking/discovery [#1161](https://github.com/NeverSight/NeverD/pull/1161), broader type/code rendering, Windows driver ownership, Darwin/Android runtime and PE32 unwind work. Only the scope below received source review.
+- [#1211](https://github.com/NeverSight/NeverD/pull/1211), head **69fc0cdb196dd801c7d6c47d0f5580c3d4bdcffd**, is non-draft. It updates decimal expectations after hexadecimal rendering; the PR's claimed local test totals are author-reported. No requested reviewers, submitted reviews, comments or inline review threads were returned. Its exact-head CI was incomplete, so merge readiness is not established.
+- [#1212](https://github.com/NeverSight/NeverD/pull/1212), source/test head **8d53af79a37df4ab5cee283d1d7b8aac91812917**, is draft. No requested reviewers, submitted reviews or inline threads were returned. The API reported mergeable but unstable; that is not approval or a full CI pass.
+- [#1214](https://github.com/NeverSight/NeverD/pull/1214), head **14b03974e16007f9e8fd16183764198a2f679349**, is draft. Review and exact-head validation remain outstanding. This isolated checker fix depends on the later source-patch API already present in its dev base.
+
+## Bounded static review and fixes
+
+Read root AGENTS.md, CONTRIBUTING.md, SECURITY.md, the relevant architecture/testing contracts, and debug fixture/build configuration. Complete pinned-tree discovery found no nested AGENTS.md. Dev was reported unprotected and repository rulesets were empty; CONTRIBUTING nevertheless requires a focused topic branch and PR against dev, which both fixes follow. No protection, dependencies, issue fields, merges or deployment were changed.
+
+### Compressed debug section expansion
+
+**Confirmed:** [lib/debug/CompressedSections.cpp](lib/debug/CompressedSections.cpp), original expansion block at lines 80–100, counted decoded bodies against the shared expansion budget, but separately grew the output for section alignment. A compressed section whose alignment needs excessive padding could therefore cause output allocation beyond that budget.
+
+**Repair:** [f2364df4](https://github.com/NeverSight/NeverD/commit/f2364df414921d033192dc21f43b88a6e96a011c) adds six lines: refuse non-monotonic or container-unrepresentable growth, require padding to fit the remaining expansion budget, and charge accepted padding to the same total before resizing. No compressor, dependency, public option or ordinary layout policy was changed. This is a resource-bound correctness finding; no host exploitability or memory-corruption conclusion is claimed.
+
+**Source-only regression:** [8d53af79](https://github.com/NeverSight/NeverD/commit/8d53af79a37df4ab5cee283d1d7b8aac91812917) adds a focused refusal assertion using the existing ELF64 zlib companion fixture, whose producer recipe was read only. The existing normal-expansion case remains unchanged. Source/test aggregate is two files, +33/-0. The new case and the existing suite have not been run by this review.
+
+Full-file source/interface inspection:
+- include/neverd/debug/CompressedSections.h, DebugFileIdentity.h, DebugInfoDiscovery.h and MapFile.h
+- lib/debug/CompressedSections.cpp, DebugFileIdentity.cpp and DebugInfoDiscovery.cpp
+- lib/debug/map/MapFile.cpp and LLDMapLoader.cpp
+- lib/sdk/capi/NeverDCAPIDebugFiles.cpp
+- lib/debug/CMakeLists.txt, unittests/debug/CMakeLists.txt and unittests/debug/fixtures/Makefile (configuration/source only)
+
+Selected caller, contract and fixture ranges:
+- DWARFLoader.cpp 295–635: ownership, object/slice selection, expansion callers, snapshot and companion trust
+- DebugInfoDiscoveryTests.cpp 1–100 and 1710–2209: discovery, MAP ranking/mismatch, companion identity, compressed DWARF and named-file cases
+- Limits.h 27–44; architecture.md 76–123; testing.md 126–151
+- SafetyIntegrationTests.cpp 699–715: explicit native-debug decline for the MAP-only case; current abi.py 1115–1125 and KernelModelIO.cpp 1524–1544 to reconcile prior repairs
+- .github/workflows/ci.yml 1–160: triggers, concurrency and platform setup
+- Pinned LLVM submodule 06788fb1, llvm/Support/MathExtras.h 463–489: alignTo's documented modulo arithmetic; read-only dependency inspection
+
+Observed invariants include named-file error propagation, native debug precedence over a named MAP supplement, companion names/lines remaining separate from authenticated object extents, reloading against the original image bytes before publishing a selected debug file, and one shared C++ discovery owner for frontend callers. No additional defect was proven in these inspected paths.
+
+### Post-pin Python source-patch ABI audit
+
+The new integrated C API and ctypes options both append the dependency pointer/count and agree on the dependency structure's library/symbol/kind fields. However, scripts/check_python_plugin_sdk.py:308–337 did not map that pointer spelling and did not audit the dependency structure itself. types.get therefore yields None for a valid field, guaranteeing a false mismatch.
+
+[14b03974](https://github.com/NeverSight/NeverD/commit/14b03974e16007f9e8fd16183764198a2f679349) adds the missing pointer mapping and structure inventory entry, exactly **one file, +4/-0**. The public ABI, ctypes layout and native source-patch behavior are unchanged. Read source at dev 30661538: check_python_plugin_sdk.py imports/parser and 290–350, abi.py 767–813, NeverDCAPIPatch.h 210–275, scripts/tests/test_check_python_plugin_sdk.py 1–80. Fresh target-blob checks, full remote readback and commit-diff inspection verified publication. The existing standalone-audit regression source was inspected, not executed.
+
+### Unconfirmed reports and uncovered scope
+
+#1189's observed memory growth is a user report, not a confirmed leak diagnosis and not linked by evidence to today's compressed-debug repair. No other defect is claimed.
+
+Most of the 892 incoming paths and the post-pin 102-path integration remain unaudited. Exclusions include full DWARF DIE/type semantics, every MAP dialect parser, whole-session concurrent mutation behavior, all architecture/loader/SEH/driver/runtime changes, complete source-patch relocation/dependency/callback semantics, native fixtures and application corpus, GUI interactions, LLVM internals beyond the cited helper, and source outside the explicit ranges. No claim is made about build/link success, runtime correctness, formatting compliance, native acceptance, memory benchmarks or release readiness.
+
+## Existing CI evidence and limits
+
+All rows are existing external runs; none was dispatched or rerun by this review.
+
+| Commit and observation | Existing evidence |
+|---|---|
+| Pinned dev **3264a443**, 01:01 UTC | [CI 38987873181](https://github.com/NeverSight/NeverD/actions/runs/38987873181) in progress; [LLVM Style 38987873341](https://github.com/NeverSight/NeverD/actions/runs/38987873341) success; [Mobile Decompilation 38987873489](https://github.com/NeverSight/NeverD/actions/runs/38987873489) queued; Mobile Real Applications skipped. 26 checks: 6 success, 15 skipped, 4 in progress, 1 queued. |
+| Later dev **30661538**, 01:05 UTC | [Python Plugin SDK 38989232035](https://github.com/NeverSight/NeverD/actions/runs/38989232035) had a failed Python 3.11 job while other jobs were pending; [CI 38989231982](https://github.com/NeverSight/NeverD/actions/runs/38989231982) queued. Seven workflows; 33 checks: 1 failure, 15 skipped, 4 in progress, 13 queued. |
+| PR **#1211 / 69fc0cdb**, 01:05 UTC | [LLVM Style](https://github.com/NeverSight/NeverD/actions/runs/38988837828) success, [CI](https://github.com/NeverSight/NeverD/actions/runs/38988837824) in progress, [Mobile](https://github.com/NeverSight/NeverD/actions/runs/38988837849) queued. 17 checks: 4 success, 6 skipped, 5 in progress, 2 queued. |
+| PR **#1212 / 8d53af79**, 01:05 UTC | [CI 38989294380](https://github.com/NeverSight/NeverD/actions/runs/38989294380), [Mobile 38989294331](https://github.com/NeverSight/NeverD/actions/runs/38989294331), [LLVM Style 38989294444](https://github.com/NeverSight/NeverD/actions/runs/38989294444) queued. 17 checks: 6 skipped, 11 queued. This is the source/test head, not the subsequent documentation-only head. |
+| PR **#1214 / 14b03974**, 01:07 UTC | [Python Plugin SDK 38989475752](https://github.com/NeverSight/NeverD/actions/runs/38989475752), [CI 38989475838](https://github.com/NeverSight/NeverD/actions/runs/38989475838), [Mobile 38989475764](https://github.com/NeverSight/NeverD/actions/runs/38989475764) and [LLVM Style 38989475655](https://github.com/NeverSight/NeverD/actions/runs/38989475655) queued at workflow level. 22 checks: 6 skipped, 15 queued, 1 in progress. Workflow/job aggregation can differ temporarily. |
+
+The [Python 3.11 log at 30661538](https://github.com/NeverSight/NeverD/actions/runs/38989232035/job/117267639145) identifies the exact source-patch options audit mismatch described above. Its first suite reports 213 tests with 113 skips and no failures; the separate audit suite then reports one failure among 10 cases. These are results of that existing external run, not this review's execution and not proof of the new fix. Native-EH and other skipped checks remain skipped. Neither older successes nor mergeability establish current acceptance. Later dev a35311af and the final documentation commit are not qualified by the older samples.
+
+## Suggested next priorities
+
+1. **Review and qualify the two bounded repairs.** Dependencies: maintainer review and exact-head automatic or separately authorized validation for #1212 and #1214. Acceptance: compressed-debug normal/refusal cases and the standalone SDK audit have explicit results on identified commits; failures/skips remain itemized. Do not transfer a pre-fix result to the repair.
+2. **Triage #1189's x86 lifting memory growth with bounded ownership evidence.** Dependencies: an approved, safely obtained reproducer and an explicitly authorized execution environment if dynamic evidence becomes necessary. Static next step: trace retained loader/lift/pipeline objects and the latest incoming changes without assuming a leak cause. Acceptance: identify a specific owning path and bounded criterion, or retain an explicit unresolved report; today's allocation guard alone does not close it.
+3. **Reconcile current integration and shared frontend acceptance.** Dependencies: current #1211 results and exact source/host evidence for the post-pin source-patch integration. Acceptance: record one identified integration head with terminal required results; retain shared first-party C++ semantic ownership across CLI/SDK/GUI and make unsupported/dependency-limited profiles explicit. Feature issue openings and documentation commits do not count as shipped capability.
+
+## Daily log — 2026-10-17
+
+- Inventoried 408 commits / 892 paths since the prior reviewed dev; reviewed the bounded debug discovery, compressed-section and selected frontend contracts above.
+- Published one six-line allocation-budget repair plus unexecuted regression in draft #1212, and a separate four-line SDK audit repair for the concurrent later integration in draft #1214.
+- Reconciled the external merge of prior #1109, four new ordinary issues, and the initial/final PR snapshots with explicit observation times.
+- Read the existing later-dev Python audit failure and distinguished it from both new PR heads and pending/skipped native checks.
+- Added this English snapshot and daily entry, preserving the complete prior document and human edits verbatim below. Documentation-only work is not implementation progress.
+
+## Collection and preservation limits
+
+- Initial open-issue endpoint returned 55 records (54 ordinary plus one PR), then empty. Updated-since pagination was 100 + 16 + 0. Initial and final all-state PR collections each read two 100-record pages, reaching before the cutoff; interval counts are complete for those snapshots.
+- Each sampled workflow/check collection returned its full declared total; second pages were empty. These are exact-head samples, not all historical CI or external status systems.
+- Counts can change after observation. The newly opened repair PRs are included only in the 01:07 publication queue, not the initial baseline.
+- Latest dev and target-branch PROGRESS were read in full immediately before replacement and matched; previous text is retained unchanged. The new documentation is proposed in #1212 and is not asserted to be merged.
+
+<details>
+<summary>Previous snapshots (preserved verbatim)</summary>
+
+# NeverD Daily Progress
+
 ## Current snapshot — 2026-10-16
 
 - Source pinned to dev [206fe6f1](https://github.com/NeverSight/NeverD/commit/206fe6f1a4ceec63aee93637238c24ce7579b7a1), verified unchanged at **01:08 UTC / 09:08 Asia/Shanghai**. Issue/PR activity was collected at 01:02–01:03 UTC; exact-head CI samples below retain their own observation times.
@@ -2316,5 +2418,7 @@ them are author reports unless separately confirmed by linked workflow results.
 
 </details>
 
+
+</details>
 
 </details>

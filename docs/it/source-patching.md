@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 Le opzioni di dipendenza, aggiunte in coda e verificate secondo la dimensione della struttura, valgono per sorgenti, IR fornito e oggetti nativi. La ricevuta include `added_imports`; dopo il ricaricamento si ricontrollano callback, importazioni, permessi e byte installati. Un errore preserva l'ingresso e ogni destinazione esistente.
+
+<!-- i18n-section: examples -->
+## Esempi eseguibili
+
+[Esempi completi per Windows/macOS/Linux](../../examples/source-patch/README.md) includono sorgenti del programma, della sostituzione e della libreria, comandi di compilazione e un vero plugin Python SDK ospitato in NeverD. Eseguire dalla radice del repository con una build di NeverD con Python e una nuova directory di output.
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+Per impostazione predefinita vengono eseguiti entrambi i percorsi; aggiungere `--api cli` o `--api sdk` per sceglierne uno. L’indirizzo di destinazione viene rilevato automaticamente. Con `7`, l’originale stampa `8` ed entrambe le patch stampano `36`. Il driver verifica esecuzioni, ricevute ed errori reali del loader senza libreria; i comandi completi sono salvati in `commands.json`.
 
 <!-- i18n-section: exceptions -->
 ## Eccezioni C++

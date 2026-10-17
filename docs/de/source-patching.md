@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 Die am Strukturende ergänzten, größenabhängig geprüften Abhängigkeitsoptionen gelten für Quelltext, gelieferte IR und native Objekte. Der Beleg enthält `added_imports`; nach erneutem Laden werden alle Rückrufe, Importe, Speicherrechte und installierten Bytes nochmals geprüft. Fehler bewahren Eingabe und bestehende Zieldateien.
+
+<!-- i18n-section: examples -->
+## Ausführbare Beispiele
+
+[Vollständige Beispiele für Windows/macOS/Linux](../../examples/source-patch/README.md) enthalten Quellcode für Original, Ersatz und Bibliothek, Build-Befehle und ein echtes Python-SDK-Plugin im Host. Aus dem Repository-Hauptverzeichnis mit einem Python-fähigen NeverD-Build und einem neuen Ausgabeverzeichnis ausführen.
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+Standardmäßig laufen beide Wege; mit `--api cli` oder `--api sdk` lässt sich einer wählen. Die Zieladresse wird automatisch ermittelt. Bei Eingabe `7` gibt das Original `8` und jeder Patch `36` aus. Der Treiber prüft Ausführung, Belege und echte Ladefehler bei fehlender Bibliothek; vollständige Build- und Patch-Befehle stehen in `commands.json`.
 
 <!-- i18n-section: exceptions -->
 ## C++-Ausnahmen

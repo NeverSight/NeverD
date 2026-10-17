@@ -3738,10 +3738,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</trans
         <translation>(padding)</translation>
     </message>
     <message>
-        <source>Double-click to open %1</source>
-        <translation>Double-click to open %1</translation>
-    </message>
-    <message>
         <source>Export local types</source>
         <translation>Export local types</translation>
     </message>
@@ -3932,6 +3928,29 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</trans
     <message>
         <source>Lua (*.lua)</source>
         <translation>Lua (*.lua)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n members</source>
+        <translation>
+            <numerusform>%n members</numerusform>
+            <numerusform>%n members</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Ctrl+click to open</source>
+        <translation>Ctrl+click to open</translation>
+    </message>
+    <message>
+        <source>Double-click or Ctrl+click to open %1</source>
+        <translation>Double-click or Ctrl+click to open %1</translation>
+    </message>
+    <message>
+        <source>bits %1 of the unit at %2</source>
+        <translation>bits %1 of the unit at %2</translation>
+    </message>
+    <message>
+        <source>at %1, %2 bytes</source>
+        <translation>at %1, %2 bytes</translation>
     </message>
 </context>
 <context>

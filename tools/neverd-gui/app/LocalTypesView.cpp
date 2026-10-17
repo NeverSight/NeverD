@@ -19,6 +19,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHelpEvent>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QLabel>
@@ -41,11 +42,14 @@
 #include <QStyledItemDelegate>
 #include <QTabBar>
 #include <QTextBlock>
+#include <QTextDocument>
+#include <QToolTip>
 #include <QToolButton>
 #include <QTreeView>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <functional>
 #include <span>
 #include <utility>
 
@@ -74,6 +78,34 @@ enum LayoutColumn {
 constexpr int SortRole = Qt::UserRole;
 constexpr int NameRole = Qt::UserRole + 1;
 constexpr int RefersRole = Qt::UserRole + 2;
+/// A member's name as the source declares it: empty for an anonymous
+/// record and for padding.
+constexpr int DeclaredRole = Qt::UserRole + 3;
+
+/// What each kind of type reads as, and the icon the list gives it.
+struct KindEntry {
+  const char *kind;
+  const char *title;
+  const char *icon;
+};
+constexpr KindEntry Kinds[] = {
+    {"struct", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "structure"),
+     "type_struct"},
+    {"union", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "union"),
+     "type_union"},
+    {"enum", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "enumeration"),
+     "type_enum"},
+    {"typedef", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "typedef"),
+     "type_typedef"},
+    {"function",
+     QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "function type"),
+     "functions"}};
+const KindEntry *kindEntry(const QString &kind) {
+  for (const KindEntry &entry : Kinds)
+    if (kind == QLatin1String(entry.kind))
+      return &entry;
+  return nullptr;
+}
 
 /// The languages a type renders in, in tab order after the layout, and
 /// whether their declarations read back as the engine's parseTypes reads.
@@ -354,6 +386,14 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   headingLayout->addWidget(heading_, 1);
   makeRowShrinkable(*headingRow);
   rightLayout->addWidget(headingRow);
+  // The breadcrumb of the member selected, each record a link.
+  path_ = new QLabel(right);
+  path_->setObjectName(QStringLiteral("localTypesPath"));
+  path_->setTextFormat(Qt::RichText);
+  path_->setTextInteractionFlags(Qt::LinksAccessibleByMouse |
+                                 Qt::LinksAccessibleByKeyboard);
+  path_->setVisible(false);
+  rightLayout->addWidget(path_);
 
   auto *tabRow = new QWidget(right);
   auto *tabLayout = new QHBoxLayout(tabRow);
@@ -427,12 +467,15 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   layout_->setFont(Theme::instance().codeFont());
   layout_->header()->setStretchLastSection(true);
   layout_->installEventFilter(this);
+  layout_->viewport()->installEventFilter(this);
   source_ = new QPlainTextEdit(pages_);
   source_->setObjectName(QStringLiteral("localTypesSource"));
   source_->setReadOnly(true);
   source_->setLineWrapMode(QPlainTextEdit::NoWrap);
   source_->setFont(Theme::instance().codeFont());
   source_->viewport()->installEventFilter(this);
+  // A type's name is a link while Ctrl is held over it.
+  source_->viewport()->setMouseTracking(true);
   source_->installEventFilter(this);
   highlighter_ = new TypeSourceHighlighter(source_->document());
   pages_->addWidget(layout_);
@@ -511,6 +554,7 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
       requestSource();
     else
       fitLayoutColumns();
+    showPath();
     updateActions();
   });
   connect(spelling_, &QComboBox::currentIndexChanged, this, [this] {
@@ -573,6 +617,29 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
             if (!refers.isEmpty())
               open(refers, true);
           });
+  connect(layout_, &QTreeWidget::currentItemChanged, this,
+          &LocalTypesView::showPath);
+  connect(path_, &QLabel::linkActivated, this, [this](const QString &link) {
+    // The type's crumb leads to its first member; a record's, to it.
+    QTreeWidgetItem *item = nullptr;
+    for (const QString &step : link.split(QLatin1Char('/'),
+                                          Qt::SkipEmptyParts)) {
+      const int row = step.toInt();
+      item = item ? item->child(row) : layout_->topLevelItem(row);
+      if (!item)
+        return;
+    }
+    if (!item) {
+      layout_->setCurrentItem(nullptr);
+      layout_->scrollToTop();
+      return;
+    }
+    layout_->setCurrentItem(item);
+    layout_->scrollToItem(item);
+    layout_->setFocus();
+  });
+  connect(source_, &QPlainTextEdit::cursorPositionChanged, this,
+          &LocalTypesView::highlightSourceLine);
   connect(&session_, &Session::opened, this, &LocalTypesView::reload);
   connect(&session_, &Session::revisionChanged, this, &LocalTypesView::reload);
   connect(&session_, &Session::unloaded, this, &LocalTypesView::reload);
@@ -580,6 +647,8 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
     layout_->setFont(Theme::instance().codeFont());
     source_->setFont(Theme::instance().codeFont());
     highlighter_->rehighlight();
+    highlightSourceLine();
+    showPath();
   });
   // The options the restored tab shows, before any type is read.
   updateActions();
@@ -674,6 +743,7 @@ void LocalTypesView::listed(const QJsonObject &payload) {
   const QString keep = current_;
   model_->removeRows(0, model_->rowCount());
   names_.clear();
+  cards_.clear();
   const QString origin = origin_->currentData().toString();
   const QJsonArray types = payload.value("types").toArray();
   qint64 fromPdb = 0, fromHeaders = 0, declared = 0;
@@ -699,7 +769,31 @@ void LocalTypesView::listed(const QJsonObject &payload) {
     const qint64 ordinal = type.value("ordinal").toInteger();
     cell(QString::number(ordinal), ordinal);
     cell(name, name.toLower());
-    cell(type.value("kind").toString(), type.value("kind").toString());
+    const QString kind = type.value("kind").toString();
+    const KindEntry *entry = kindEntry(kind);
+    if (entry)
+      row[NameColumn]->setIcon(icon(QString::fromLatin1(entry->icon)));
+    cell(kind, kind);
+    // What hovering the type shows, here and in the source: what it is,
+    // how big, and where it comes from.
+    QString card = QStringLiteral("<b>%1</b> %2")
+                       .arg(name.toHtmlEscaped(),
+                            entry ? tr(entry->title) : kind.toHtmlEscaped());
+    QStringList facts;
+    if (type.contains("size")) {
+      const qint64 size = type.value("size").toInteger();
+      facts << tr("%1 (%2) bytes").arg(hex(size)).arg(size);
+    }
+    if (type.contains("members"))
+      facts << tr("%n members", "", int(type.value("members").toInteger()));
+    for (const auto &choice : Origins)
+      if (*choice.id && from == QLatin1String(choice.id))
+        facts << tr(choice.title);
+    if (!facts.isEmpty())
+      card += QStringLiteral("<br>") +
+              facts.join(QStringLiteral(" · ")).toHtmlEscaped();
+    row[NameColumn]->setToolTip(card);
+    cards_.insert(name, card);
     if (type.contains("size")) {
       const qint64 size = type.value("size").toInteger();
       cell(hex(size), size);
@@ -883,6 +977,9 @@ void LocalTypesView::requestSource() {
         const int scroll = source_->verticalScrollBar()->value();
         source_->setPlainText(payload.value("source").toString());
         source_->verticalScrollBar()->setValue(scroll);
+        // The member selected in the layout shows where it is declared.
+        showMemberInSource();
+        highlightSourceLine();
       },
       [this, serial](const QString &, const QString &message) {
         if (serial == sourceSerial_)
@@ -892,8 +989,14 @@ void LocalTypesView::requestSource() {
 }
 
 void LocalTypesView::laidOut(const QJsonObject &type) {
+  // The member selected stays selected when the same type is laid out anew.
+  const QStringList selected =
+      type.value("name").toString() == type_.value("name").toString()
+          ? memberPath_
+          : QStringList();
   type_ = type;
   layout_->clear();
+  memberPath_.clear();
   if (type.isEmpty()) {
     // Where a type would be, what shows one.
     heading_->setText(
@@ -903,16 +1006,10 @@ void LocalTypesView::laidOut(const QJsonObject &type) {
                      .toHtmlEscaped()));
     return;
   }
-  const QString kind = type.value("kind").toString();
-  static const QHash<QString, const char *> kinds{
-      {"struct", QT_TR_NOOP("structure")},
-      {"union", QT_TR_NOOP("union")},
-      {"enum", QT_TR_NOOP("enumeration")},
-      {"typedef", QT_TR_NOOP("typedef")},
-      {"function", QT_TR_NOOP("function type")}};
+  const KindEntry *kind = kindEntry(type.value("kind").toString());
   QString heading = QStringLiteral("<b>%1</b> %2")
                         .arg(type.value("name").toString().toHtmlEscaped(),
-                             tr(kinds.value(kind, "")));
+                             kind ? tr(kind->title) : QString());
   if (type.contains("size")) {
     const qint64 size = type.value("size").toInteger();
     heading +=
@@ -964,6 +1061,142 @@ void LocalTypesView::laidOut(const QJsonObject &type) {
   }
   layout_->expandAll();
   fitLayoutColumns();
+  // The member selected before, found again by its names.
+  if (!selected.isEmpty()) {
+    QTreeWidgetItem *found = nullptr;
+    std::function<void(QTreeWidgetItem *, int)> find =
+        [&](QTreeWidgetItem *item, int depth) {
+          if (found || depth >= selected.size() ||
+              item->text(MemberColumn) != selected[depth])
+            return;
+          if (depth + 1 == selected.size()) {
+            found = item;
+            return;
+          }
+          for (int child = 0; child < item->childCount(); ++child)
+            find(item->child(child), depth + 1);
+        };
+    for (int row = 0; row < layout_->topLevelItemCount() && !found; ++row)
+      find(layout_->topLevelItem(row), 0);
+    if (found)
+      layout_->setCurrentItem(found);
+  }
+  showPath();
+}
+
+void LocalTypesView::showPath() {
+  QTreeWidgetItem *item = layout_->currentItem();
+  memberPath_.clear();
+  if (!item || type_.isEmpty()) {
+    path_->setVisible(false);
+    return;
+  }
+  // The records that hold the member, outermost first, each with the rows
+  // that lead to it.
+  std::vector<QTreeWidgetItem *> chain;
+  for (QTreeWidgetItem *at = item; at; at = at->parent())
+    chain.insert(chain.begin(), at);
+  const QString separator = QStringLiteral(" › ");
+  const QColor muted = Theme::instance().color(ColorRole::PrefixUnmapped);
+  QString text = QStringLiteral("<a href=\"\" style=\"text-decoration:none\">"
+                                "%1</a>")
+                     .arg(type_.value("name").toString().toHtmlEscaped());
+  QString rows;
+  for (QTreeWidgetItem *at : chain) {
+    QTreeWidgetItem *parent = at->parent();
+    const int row = parent ? parent->indexOfChild(at)
+                           : layout_->indexOfTopLevelItem(at);
+    rows += QString::number(row) + QLatin1Char('/');
+    memberPath_ << at->text(MemberColumn);
+    text += QStringLiteral("<span style=\"color:%1\">%2</span>")
+                .arg(muted.name(), separator.toHtmlEscaped());
+    if (at == item)
+      text += QStringLiteral("<b>%1</b>")
+                  .arg(at->text(MemberColumn).toHtmlEscaped());
+    else
+      text += QStringLiteral("<a href=\"%1\" style=\"text-decoration:none\">"
+                             "%2</a>")
+                  .arg(rows, at->text(MemberColumn).toHtmlEscaped());
+  }
+  // Where the member lies, as its row says.
+  const QString offset = item->text(OffsetColumn);
+  if (!offset.isEmpty())
+    text += QStringLiteral("<span style=\"color:%1\"> · %2</span>")
+                .arg(muted.name(), offset.toHtmlEscaped());
+  path_->setText(text);
+  path_->setVisible(tabs_->currentIndex() == 0 || !memberPath_.isEmpty());
+  if (tabs_->currentIndex() > 0)
+    showMemberInSource();
+}
+
+void LocalTypesView::highlightSourceLine() {
+  QTextEdit::ExtraSelection line;
+  line.format.setBackground(
+      Theme::instance().color(ColorRole::ListingCurrentLine));
+  line.format.setProperty(QTextFormat::FullWidthSelection, true);
+  line.cursor = source_->textCursor();
+  line.cursor.clearSelection();
+  source_->setExtraSelections({line});
+}
+
+void LocalTypesView::showMemberInSource() {
+  if (memberPath_.isEmpty() || tabs_->currentIndex() == 0 ||
+      source_->document()->isEmpty())
+    return;
+  // The declared name of the member: an anonymous record's line opens
+  // with its keyword, which names nothing.
+  QTreeWidgetItem *item = layout_->currentItem();
+  const QString member = item ? item->data(0, DeclaredRole).toString() : "";
+  if (member.isEmpty())
+    return;
+  QTextDocument *document = source_->document();
+  // The member's line follows the line that opens its type's definition,
+  // past the types the source declares or defines before it.
+  const QString type = QRegularExpression::escape(current_);
+  QTextCursor from(document);
+  const QTextCursor opens = document->find(
+      QRegularExpression(QStringLiteral("\\b(struct|union|class|type|enum)\\s+"
+                                        "%1\\b(?![^;]*;\\s*$)")
+                             .arg(type)),
+      from);
+  if (!opens.isNull())
+    from = opens;
+  // How each language declares a member: C's declarator and bit-field,
+  // Rust's and Go's fields and the methods that read what they cannot
+  // hold as one, Python's field list, JavaScript's getters, Lua's keys.
+  const QString name = QRegularExpression::escape(member);
+  const QRegularExpression declares(
+      QStringLiteral("(\\b%1\\s*(\\[[^\\]]*\\]\\s*)*(:\\s*\\d+\\s*)?;)|"
+                     "(\\bpub\\s+%1\\s*:)|(\\bfn\\s+%1\\s*\\()|"
+                     "(^\\s*%1\\s)|(\\)\\s*%1\\s*\\()|(\\(\\s*\"%1\")|"
+                     "(\\bget\\s+%1\\s*\\()|(\\b%1\\s*=)")
+          .arg(name));
+  QTextCursor found = document->find(declares, from);
+  if (found.isNull())
+    found = document->find(
+        QRegularExpression(QStringLiteral("\\b%1\\b").arg(name)), from);
+  if (found.isNull())
+    return;
+  QTextCursor cursor(found.block());
+  source_->setTextCursor(cursor);
+  source_->centerCursor();
+}
+
+QString LocalTypesView::typeAt(const QPoint &position) const {
+  QTextCursor cursor = source_->cursorForPosition(position);
+  cursor.select(QTextCursor::WordUnderCursor);
+  if (!cursor.hasSelection())
+    return {};
+  // A point past the word, as past a line's end, is on no word.
+  QTextCursor start(cursor), end(cursor);
+  start.setPosition(cursor.selectionStart());
+  end.setPosition(cursor.selectionEnd());
+  const int left = source_->cursorRect(start).left();
+  const int right = source_->cursorRect(end).right();
+  if (position.x() < left || position.x() > right)
+    return {};
+  const QString type = highlighter_->typeOf(cursor.selectedText());
+  return names_.contains(type) ? type : QString();
 }
 
 void LocalTypesView::fitLayoutColumns() {
@@ -979,7 +1212,8 @@ void LocalTypesView::fitLayoutColumns() {
 }
 
 void LocalTypesView::addMembers(QTreeWidgetItem *parent,
-                                const QJsonArray &members) {
+                                const QJsonArray &members,
+                                const QString &path) {
   const auto &theme = Theme::instance();
   for (const QJsonValue &value : members) {
     const QJsonObject member = value.toObject();
@@ -1008,6 +1242,27 @@ void LocalTypesView::addMembers(QTreeWidgetItem *parent,
         item->setForeground(column, theme.color(ColorRole::PrefixUnmapped));
       continue;
     }
+    // Where the member lies and what it is, as C reaches it: through the
+    // records that hold it, anonymous ones adding no name.
+    const QString reached =
+        name.isEmpty() ? path
+                       : (path.isEmpty() ? name : path + QLatin1Char('.') + name);
+    const auto card = [&] {
+      QString text = QStringLiteral("<b>%1</b>").arg(
+          (reached.isEmpty() ? kind : reached).toHtmlEscaped());
+      text += QStringLiteral("<br>") +
+              (kind == QLatin1String("bitfield")
+                   ? tr("bits %1 of the unit at %2")
+                         .arg(item->text(SizeOfColumn).mid(1),
+                              item->text(OffsetColumn))
+                   : tr("at %1, %2 bytes")
+                         .arg(item->text(OffsetColumn),
+                              item->text(SizeOfColumn)))
+                  .toHtmlEscaped();
+      if (const QString type = member.value("type").toString(); !type.isEmpty())
+        text += QStringLiteral("<br><code>%1</code>").arg(type.toHtmlEscaped());
+      item->setToolTip(MemberColumn, text);
+    };
     if (kind == QLatin1String("struct") || kind == QLatin1String("union")) {
       // An anonymous record reads as the keyword that opens it in source.
       if (name.isEmpty()) {
@@ -1016,20 +1271,25 @@ void LocalTypesView::addMembers(QTreeWidgetItem *parent,
                             theme.color(ColorRole::ListingKeyword));
       } else {
         item->setText(MemberColumn, name);
+        item->setData(0, DeclaredRole, name);
         item->setText(TypeColumn, member.value("type").toString());
         item->setForeground(TypeColumn, theme.color(ColorRole::ListingKeyword));
       }
-      addMembers(item, member.value("members").toArray());
+      card();
+      addMembers(item, member.value("members").toArray(), reached);
       continue;
     }
     item->setText(MemberColumn, name);
+    item->setData(0, DeclaredRole, name);
     item->setText(TypeColumn, member.value("type").toString());
+    card();
     if (const QString refers = member.value("refers").toString();
         !refers.isEmpty() && names_.contains(refers)) {
       item->setData(0, RefersRole, refers);
       item->setForeground(TypeColumn,
                           theme.color(ColorRole::ListingLibraryName));
-      item->setToolTip(TypeColumn, tr("Double-click to open %1").arg(refers));
+      item->setToolTip(TypeColumn,
+                       tr("Double-click or Ctrl+click to open %1").arg(refers));
     }
   }
 }
@@ -1265,6 +1525,80 @@ bool LocalTypesView::eventFilter(QObject *object, QEvent *event) {
     if (object == filter_ && key->key() == Qt::Key_Down) {
       list_->setFocus();
       return true;
+    }
+  }
+  // Ctrl+click follows a member's type, as an editor follows a definition.
+  if (object == layout_->viewport() &&
+      event->type() == QEvent::MouseButtonRelease) {
+    const auto *mouse = static_cast<QMouseEvent *>(event);
+    QTreeWidgetItem *item = layout_->itemAt(mouse->position().toPoint());
+    const QString refers =
+        item ? item->data(0, RefersRole).toString() : QString();
+    if (mouse->button() == Qt::LeftButton &&
+        mouse->modifiers().testFlag(Qt::ControlModifier) &&
+        !refers.isEmpty()) {
+      open(refers, true);
+      return true;
+    }
+  }
+  if (object == source_->viewport()) {
+    switch (event->type()) {
+    case QEvent::ToolTip: {
+      // Hovering a type's name shows what it is.
+      const auto *help = static_cast<QHelpEvent *>(event);
+      const QString type = typeAt(help->pos());
+      if (type.isEmpty() || !cards_.contains(type)) {
+        QToolTip::hideText();
+        event->ignore();
+        return true;
+      }
+      QToolTip::showText(
+          help->globalPos(),
+          cards_.value(type) + QStringLiteral("<br><i>%1</i>")
+                                   .arg(tr("Ctrl+click to open")
+                                            .toHtmlEscaped()),
+          source_->viewport());
+      return true;
+    }
+    case QEvent::MouseMove: {
+      // Ctrl over a type's name makes it a link.
+      const auto *mouse = static_cast<QMouseEvent *>(event);
+      const bool link =
+          mouse->modifiers().testFlag(Qt::ControlModifier) &&
+          mouse->buttons() == Qt::NoButton &&
+          !typeAt(mouse->position().toPoint()).isEmpty();
+      source_->viewport()->setCursor(link ? Qt::PointingHandCursor
+                                          : Qt::IBeamCursor);
+      break;
+    }
+    case QEvent::MouseButtonPress: {
+      // Ctrl+click on a type's name is a link's click, which selects no
+      // text: the press is the link's.
+      const auto *mouse = static_cast<QMouseEvent *>(event);
+      if (mouse->button() == Qt::LeftButton &&
+          mouse->modifiers().testFlag(Qt::ControlModifier)) {
+        pressedType_ = typeAt(mouse->position().toPoint());
+        if (!pressedType_.isEmpty())
+          return true;
+      }
+      break;
+    }
+    case QEvent::MouseButtonRelease: {
+      const auto *mouse = static_cast<QMouseEvent *>(event);
+      if (mouse->button() == Qt::LeftButton && !pressedType_.isEmpty()) {
+        // Released on the name it was pressed on, it opens.
+        const QString pressed = std::exchange(pressedType_, QString());
+        if (typeAt(mouse->position().toPoint()) == pressed &&
+            pressed != current_) {
+          source_->viewport()->setCursor(Qt::IBeamCursor);
+          open(pressed, true);
+        }
+        return true;
+      }
+      break;
+    }
+    default:
+      break;
     }
   }
   if (object == source_->viewport() &&

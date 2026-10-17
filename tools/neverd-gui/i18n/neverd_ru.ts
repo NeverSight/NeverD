@@ -3745,10 +3745,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>(заполнение)</translation>
     </message>
     <message>
-        <source>Double-click to open %1</source>
-        <translation>Дважды щёлкните, чтобы открыть %1</translation>
-    </message>
-    <message>
         <source>Export local types</source>
         <translation>Экспорт локальных типов</translation>
     </message>
@@ -3947,6 +3943,30 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>Lua (*.lua)</source>
         <translation>Lua (*.lua)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n members</source>
+        <translation>
+            <numerusform>членов: %n</numerusform>
+            <numerusform>членов: %n</numerusform>
+            <numerusform>членов: %n</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Ctrl+click to open</source>
+        <translation>Ctrl+щелчок — открыть</translation>
+    </message>
+    <message>
+        <source>Double-click or Ctrl+click to open %1</source>
+        <translation>Дважды щёлкните или Ctrl+щелчок, чтобы открыть %1</translation>
+    </message>
+    <message>
+        <source>bits %1 of the unit at %2</source>
+        <translation>биты %1 блока по адресу %2</translation>
+    </message>
+    <message>
+        <source>at %1, %2 bytes</source>
+        <translation>по адресу %1, байтов: %2</translation>
     </message>
 </context>
 <context>

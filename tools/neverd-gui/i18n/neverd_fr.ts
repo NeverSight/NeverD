@@ -3738,10 +3738,6 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         <translation>(remplissage)</translation>
     </message>
     <message>
-        <source>Double-click to open %1</source>
-        <translation>Double-cliquez pour ouvrir %1</translation>
-    </message>
-    <message>
         <source>Export local types</source>
         <translation>Exporter les types locaux</translation>
     </message>
@@ -3932,6 +3928,29 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
     <message>
         <source>Lua (*.lua)</source>
         <translation>Lua (*.lua)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n members</source>
+        <translation>
+            <numerusform>%n membres</numerusform>
+            <numerusform>%n membres</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Ctrl+click to open</source>
+        <translation>Ctrl+clic pour ouvrir</translation>
+    </message>
+    <message>
+        <source>Double-click or Ctrl+click to open %1</source>
+        <translation>Double-cliquez ou Ctrl+clic pour ouvrir %1</translation>
+    </message>
+    <message>
+        <source>bits %1 of the unit at %2</source>
+        <translation>bits %1 de l’unité à %2</translation>
+    </message>
+    <message>
+        <source>at %1, %2 bytes</source>
+        <translation>à %1, %2 octets</translation>
     </message>
 </context>
 <context>

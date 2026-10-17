@@ -3731,10 +3731,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>（パディング）</translation>
     </message>
     <message>
-        <source>Double-click to open %1</source>
-        <translation>ダブルクリックで %1 を開く</translation>
-    </message>
-    <message>
         <source>Export local types</source>
         <translation>ローカル型のエクスポート</translation>
     </message>
@@ -3917,6 +3913,28 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>Lua (*.lua)</source>
         <translation>Lua (*.lua)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n members</source>
+        <translation>
+            <numerusform>メンバー %n 個</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Ctrl+click to open</source>
+        <translation>Ctrl+クリックで開く</translation>
+    </message>
+    <message>
+        <source>Double-click or Ctrl+click to open %1</source>
+        <translation>ダブルクリックまたは Ctrl+クリックで %1 を開く</translation>
+    </message>
+    <message>
+        <source>bits %1 of the unit at %2</source>
+        <translation>%2 のユニットの %1 ビット</translation>
+    </message>
+    <message>
+        <source>at %1, %2 bytes</source>
+        <translation>%1、%2 バイト</translation>
     </message>
 </context>
 <context>

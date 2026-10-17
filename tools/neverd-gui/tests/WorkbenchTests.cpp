@@ -50,6 +50,7 @@
 #include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QHelpEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -69,9 +70,11 @@
 #include <QTabBar>
 #include <QTableView>
 #include <QTemporaryDir>
+#include <QTextBlock>
 #include <QTest>
 #include <QTimer>
 #include <QToolButton>
+#include <QToolTip>
 #include <QTranslator>
 #include <QTreeView>
 #include <QTreeWidget>
@@ -4749,6 +4752,105 @@ private slots:
     filter->setText(QStringLiteral("list"));
     QTRY_COMPARE(list->model()->rowCount(), 1);
     types->setPage(0);
+  }
+
+  void localTypesShowKindsPathsAndCards() {
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("local-types.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.action(ActionId::ViewLocalTypes)->trigger();
+    auto *types = bench.window->findChild<LocalTypesView *>();
+    QVERIFY(types);
+    auto *list =
+        types->findChild<QTreeView *>(QStringLiteral("localTypesList"));
+    auto *layout =
+        types->findChild<QTreeWidget *>(QStringLiteral("localTypesLayout"));
+    auto *source =
+        types->findChild<QPlainTextEdit *>(QStringLiteral("localTypesSource"));
+    auto *path = types->findChild<QLabel *>(QStringLiteral("localTypesPath"));
+    QVERIFY(list && layout && source && path);
+    QTRY_COMPARE(list->model()->rowCount(), 3);
+
+    // Each type shows the icon of its kind, and hovering its name says what
+    // it is, how big and where it comes from.
+    for (int row = 0; row < list->model()->rowCount(); ++row) {
+      const QModelIndex name = list->model()->index(row, 1);
+      QVERIFY2(!name.data(Qt::DecorationRole).value<QIcon>().isNull(),
+               qPrintable(name.data().toString()));
+      QVERIFY(name.data(Qt::ToolTipRole)
+                  .toString()
+                  .contains(QStringLiteral("<b>%1</b>")
+                                .arg(name.data().toString())));
+    }
+    const QModelIndexList device =
+        list->model()->match(list->model()->index(0, 1), Qt::DisplayRole,
+                             QStringLiteral("_DEVICE"), 1, Qt::MatchExactly);
+    QCOMPARE(device.size(), 1);
+    const QString card = device.first().data(Qt::ToolTipRole).toString();
+    QVERIFY2(card.contains(QStringLiteral("structure")) &&
+                 card.contains(QStringLiteral("bytes")),
+             qPrintable(card));
+
+    // The breadcrumb names the records that hold the member selected, and
+    // a crumb selects the record it names.
+    types->showType(QStringLiteral("_DEVICE"));
+    QTRY_COMPARE(layout->topLevelItemCount(), 4);
+    QTreeWidgetItem *bit = layout->topLevelItem(3)->child(1);
+    layout->setCurrentItem(bit);
+    QVERIFY(path->isVisibleTo(types));
+    QVERIFY2(path->text().contains(QStringLiteral("_DEVICE")) &&
+                 path->text().contains(QStringLiteral("union")) &&
+                 path->text().contains(bit->text(2)),
+             qPrintable(path->text()));
+    emit path->linkActivated(QStringLiteral("3/"));
+    QCOMPARE(layout->currentItem(), layout->topLevelItem(3));
+    emit path->linkActivated(QString());
+    QCOMPARE(layout->currentItem(), nullptr);
+    QVERIFY(!path->isVisibleTo(types));
+    // A member's row says where it lies.
+    QVERIFY2(bit->toolTip(2).contains(QStringLiteral("bits")),
+             qPrintable(bit->toolTip(2)));
+    QVERIFY(layout->topLevelItem(2)->toolTip(2).contains(
+        QStringLiteral("<b>Links</b>")));
+
+    // The member selected shows its line in the source, which marks the line
+    // its cursor is on.
+    layout->setCurrentItem(layout->topLevelItem(2));
+    types->setPage(1);
+    QTRY_VERIFY(source->textCursor().block().text().contains(
+        QStringLiteral("Links;")));
+    QCOMPARE(source->extraSelections().size(), 1);
+    QCOMPARE(source->extraSelections().first().cursor.block(),
+             source->textCursor().block());
+
+    // Hovering a type's name in the source says what it is; Ctrl+click opens
+    // it, as an editor follows a definition.
+    const QTextCursor word =
+        source->document()->find(QStringLiteral("_LIST_ENTRY"));
+    QVERIFY(!word.isNull());
+    QTextCursor inside(source->document());
+    inside.setPosition(word.selectionStart() + 3);
+    const QPoint point = source->cursorRect(inside).center();
+    QHelpEvent help(QEvent::ToolTip, point,
+                    source->viewport()->mapToGlobal(point));
+    QApplication::sendEvent(source->viewport(), &help);
+    QTRY_VERIFY(QToolTip::text().contains(QStringLiteral("_LIST_ENTRY")));
+    QTest::mouseClick(source->viewport(), Qt::LeftButton, Qt::ControlModifier,
+                      point);
+    QTRY_COMPARE(types->currentType(), QStringLiteral("_LIST_ENTRY"));
+    QTest::keyClick(source, Qt::Key_Escape);
+    QTRY_COMPARE(types->currentType(), QStringLiteral("_DEVICE"));
+
+    // So does Ctrl+click on a member's type in the layout.
+    types->setPage(0);
+    QTRY_COMPARE(layout->topLevelItemCount(), 4);
+    QTreeWidgetItem *links = layout->topLevelItem(2);
+    const QRect row = layout->visualItemRect(links);
+    QTest::mouseClick(layout->viewport(), Qt::LeftButton, Qt::ControlModifier,
+                      row.center());
+    QTRY_COMPARE(types->currentType(), QStringLiteral("_LIST_ENTRY"));
   }
 
   void structureOffsetsRankTypesByTheCodesAccesses() {

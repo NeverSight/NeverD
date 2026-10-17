@@ -3766,10 +3766,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>(حشو)</translation>
     </message>
     <message>
-        <source>Double-click to open %1</source>
-        <translation>انقر نقرًا مزدوجًا لفتح %1</translation>
-    </message>
-    <message>
         <source>Export local types</source>
         <translation>تصدير الأنواع المحلية</translation>
     </message>
@@ -3992,6 +3988,33 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>Lua (*.lua)</source>
         <translation>Lua ‎(*.lua)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n members</source>
+        <translation>
+            <numerusform>%n من الأعضاء</numerusform>
+            <numerusform>%n من الأعضاء</numerusform>
+            <numerusform>%n من الأعضاء</numerusform>
+            <numerusform>%n من الأعضاء</numerusform>
+            <numerusform>%n من الأعضاء</numerusform>
+            <numerusform>%n من الأعضاء</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Ctrl+click to open</source>
+        <translation>Ctrl+نقرة للفتح</translation>
+    </message>
+    <message>
+        <source>Double-click or Ctrl+click to open %1</source>
+        <translation>انقر نقرًا مزدوجًا أو Ctrl+نقرة لفتح %1</translation>
+    </message>
+    <message>
+        <source>bits %1 of the unit at %2</source>
+        <translation>البتات %1 من الوحدة عند %2</translation>
+    </message>
+    <message>
+        <source>at %1, %2 bytes</source>
+        <translation>عند %1، %2 بايت</translation>
     </message>
 </context>
 <context>

@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 3939548e7578565e45b3ed09f402c73232e4b5099c88f84723b13ca1886e4345 -->
+<!-- i18n-source: 1eae101089e730c29ba3fda92db515fe148fe41b758d6f5b69156252591d9b3f -->
 
 [← Documentation Index](README.md)
 
@@ -115,6 +115,23 @@ neverd patch app --from-source=replacement.c --entry=replacement --func=0x401140
 ```
 
 Las opciones de dependencia, añadidas al final y comprobadas según el tamaño de estructura, sirven para fuente, IR suministrado y objetos nativos. El recibo incluye `added_imports`; al recargar el candidato se vuelven a comprobar callbacks, importaciones, permisos y bytes instalados. Un fallo conserva la entrada y cualquier destino existente.
+
+<!-- i18n-section: examples -->
+## Ejemplos ejecutables
+
+[Ejemplos completos para Windows/macOS/Linux](../../examples/source-patch/README.md) incluyen el código del programa, el reemplazo y la biblioteca, comandos de compilación y un plugin real del SDK de Python alojado en NeverD. Ejecute desde la raíz del repositorio con un build de NeverD con Python y un directorio de salida nuevo.
+
+```sh
+# Linux / macOS
+python3 examples/source-patch/run.py --neverd build-example-host/bin/neverd --clang clang --output build-example-native
+```
+
+```powershell
+# Windows: Visual Studio developer PowerShell
+python examples/source-patch/run.py --neverd build-example-host/bin/neverd.exe --clang clang --output build-example-native
+```
+
+Se ejecutan ambas rutas por defecto; añada `--api cli` o `--api sdk` para elegir una. La dirección de destino se detecta automáticamente. Con `7`, el original imprime `8` y ambos parches imprimen `36`. El controlador comprueba ejecuciones, recibos y fallos reales del cargador sin la biblioteca; los comandos completos se guardan en `commands.json`.
 
 <!-- i18n-section: exceptions -->
 ## Excepciones C++
