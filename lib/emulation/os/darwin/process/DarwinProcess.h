@@ -72,6 +72,7 @@ struct ProcessImage {
   std::vector<ExecutableSpan> ExecutableSpans;
   std::vector<StartupCallback> Initializers;
   bool HasTLSCallbacks = false;
+  bool HasGlobalCallbacks = false;
 };
 struct InitialStack {
   uint64_t SP, Argc, Argv, Envp, Apple, ProgramVars = 0;

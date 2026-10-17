@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "DarwinCallbackTestData.h"
+#include "DarwinExitTestData.h"
 #include "DarwinLibSystemFileTestData.h"
 #include "DarwinLibSystemMemoryTestData.h"
 #include "gtest/gtest.h"
@@ -1504,6 +1505,58 @@ TEST(DarwinNative, ConstructorsAndTLSCallbacksMatchOriginalNativeImages) {
       ProcessOptions Options;
       Options.Backend = ExecutionBackendKind::Unicorn;
       darwin_test::callbackOptions(Options, Directory, Test.Mode);
+      auto Guest =
+          emulateProcess(Program, ProcessProfile::MacOSMachO64, Options);
+      ASSERT_TRUE(bool(Guest)) << llvm::toString(Guest.takeError());
+      EXPECT_EQ(Guest->Stop, ProcessStopReason::Exited) << Guest->Diagnostic;
+      EXPECT_EQ(Guest->ExitStatus, Status);
+      EXPECT_EQ(Guest->StandardOutput, (*Out)->getBuffer());
+      EXPECT_TRUE(Guest->StandardError.empty());
+    }
+  }
+  Passed = !HasFailure();
+#endif
+}
+TEST(DarwinNative, GlobalAndStaticDestructorsMatchOriginalNativeImages) {
+#if !defined(NEVERD_DARWIN_EXIT_NATIVE_CLASSIC) ||                             \
+    !defined(NEVERD_DARWIN_EXIT_NATIVE_CHAINED)
+  GTEST_SKIP() << "native Darwin reference requires a macOS build host";
+#else
+  llvm::SmallString<128> Temporary;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("neverd-global-exit", Temporary));
+  const std::filesystem::path Root(Temporary.str().str());
+  bool Passed = false;
+  auto Cleanup = llvm::scope_exit([&] {
+    if (Passed)
+      std::filesystem::remove_all(Root);
+  });
+  for (const std::string Program :
+       {NEVERD_DARWIN_EXIT_NATIVE_CLASSIC, NEVERD_DARWIN_EXIT_NATIVE_CHAINED}) {
+    const auto Directory = std::filesystem::path(Program).parent_path();
+    for (const auto &Test : darwin_test::GlobalExitCases) {
+      SCOPED_TRACE(Program + ":" + Test.Mode);
+      const auto Case = Directory.filename().string() + "-" + Test.Mode;
+      const auto Output = (Root / (Case + ".stdout")).string(),
+                 Error = (Root / (Case + ".stderr")).string();
+      const std::optional<llvm::StringRef> Redirects[] = {std::nullopt, Output,
+                                                          Error};
+      std::string LaunchError;
+      bool ExecutionFailed = false;
+      const auto Status = llvm::sys::ExecuteAndWait(
+          Program, {"different/argv-zero", Test.Mode}, std::nullopt, Redirects,
+          5, 0, &LaunchError, &ExecutionFailed);
+      ASSERT_FALSE(ExecutionFailed) << LaunchError;
+      auto Out = llvm::MemoryBuffer::getFile(Output),
+           Err = llvm::MemoryBuffer::getFile(Error);
+      ASSERT_TRUE(bool(Out));
+      ASSERT_TRUE(bool(Err));
+      ASSERT_EQ(Status, Test.Status) << (*Err)->getBuffer().str();
+      ASSERT_EQ((*Out)->getBuffer(), Test.Output);
+      ASSERT_TRUE((*Err)->getBuffer().empty());
+      ProcessOptions Options;
+      Options.Backend = ExecutionBackendKind::Unicorn;
+      darwin_test::globalExitOptions(Options, Directory, Test.Mode);
       auto Guest =
           emulateProcess(Program, ProcessProfile::MacOSMachO64, Options);
       ASSERT_TRUE(bool(Guest)) << llvm::toString(Guest.takeError());

@@ -467,9 +467,12 @@ public:
     RetainCallbacks = llvm::any_of(Nodes, [](const auto &N) {
       return N.Loaded.HasInitializers ||
              llvm::any_of(N.Linking.Fixups, [&](const auto &F) {
-               return F.Bind &&
-                      N.Dependencies[F.LibraryOrdinal - 1] == SystemProvider &&
-                      libSystemImport(F.Symbol) == LibSystemGateKind::TLVAtExit;
+               if (!F.Bind ||
+                   N.Dependencies[F.LibraryOrdinal - 1] != SystemProvider)
+                 return false;
+               const auto Kind = libSystemImport(F.Symbol);
+               return Kind && (*Kind == LibSystemGateKind::TLVAtExit ||
+                               isGlobalCallbackRegistration(*Kind));
              });
     });
     if (Imports) {
@@ -503,10 +506,14 @@ public:
     Out.HasTLSCallbacks = llvm::any_of(Out.Imports, [](const auto &I) {
       return I.second == LibSystemGateKind::TLVAtExit;
     });
+    Out.HasGlobalCallbacks = llvm::any_of(Out.Imports, [](const auto &I) {
+      return isGlobalCallbackRegistration(I.second);
+    });
     if (RetainCallbacks || llvm::any_of(Out.Imports, [](const auto &I) {
           return I.second == LibSystemGateKind::NormalExit;
         }))
-      if (auto E = charge(DarwinCallbacks::metadataBytes(Out.HasTLSCallbacks)))
+      if (auto E = charge(DarwinCallbacks::metadataBytes(
+              Out.HasTLSCallbacks, Out.HasGlobalCallbacks)))
         return std::move(E);
     if (Out.Plan.MappedBytes + ModelBytes > Available - Out.MetadataBytes)
       return failure(diagnostic::ProcessLimits);

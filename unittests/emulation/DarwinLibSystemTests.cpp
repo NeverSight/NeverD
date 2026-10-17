@@ -655,6 +655,196 @@ TEST_P(DarwinLibSystemTest,
   EXPECT_FALSE(Result.ReturnValue);
 }
 TEST_P(DarwinLibSystemTest,
+       GlobalRegistrationUsesExactCAndCxxArgumentsAndPreservesErrno) {
+  auto Stack = callbackStack();
+  Image.HasGlobalCallbacks = true;
+  const auto ABI = callbackABI();
+  for (const auto Kind :
+       {LibSystemGateKind::AtExit, LibSystemGateKind::CxaAtExit}) {
+    DarwinCallbacks Callbacks(Image, Options, Stack);
+    setArguments({Code + 4, 0xfedcba9876543210ULL, UINT64_MAX, 0, 0, 0});
+    if (Kind == LibSystemGateKind::AtExit)
+      CPU->FailedRegister = ABI.info().Arguments[1];
+    auto R = invoke(Kind, &Callbacks);
+    CPU->FailedRegister.reset();
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_TRUE(*R);
+    EXPECT_EQ(CPU->Registers[ABI.info().Result][0], 0u);
+    const auto &Call = Result.NativeCalls.back();
+    EXPECT_EQ(Call.Name,
+              Kind == LibSystemGateKind::AtExit ? "_atexit" : "___cxa_atexit");
+    EXPECT_EQ(Call.ArgumentCount, Kind == LibSystemGateKind::AtExit ? 1u : 3u);
+    EXPECT_EQ(Call.Arguments[0], Code + 4);
+    if (Kind == LibSystemGateKind::CxaAtExit) {
+      EXPECT_EQ(Call.Arguments[1], 0xfedcba9876543210ULL);
+      EXPECT_EQ(Call.Arguments[2], UINT64_MAX);
+    }
+    EXPECT_EQ(Call.Result, 0u);
+    EXPECT_TRUE(Call.ReturnAddress);
+    EXPECT_EQ(llvm::cantFail(Space->readInteger(Errno, 4)), 71u);
+    EXPECT_TRUE(Result.Services.empty());
+  }
+}
+TEST_P(DarwinLibSystemTest,
+       GlobalsInterleaveCAndCxxLIFOAfterExactlyOneTLSFinalization) {
+  auto Stack = callbackStack();
+  Image.HasGlobalCallbacks = true;
+  DarwinCallbacks Callbacks(Image, Options, Stack);
+  const auto ABI = callbackABI();
+  ASSERT_TRUE(bool(Callbacks.start(*CPU)));
+  llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 4, std::nullopt));
+  llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 8, 22));
+  llvm::cantFail(Callbacks.addTLS(*CPU, Code + 12, 11));
+  balanceCallback();
+  CPU->Registers[ABI.info().Result] = {0x125, 0};
+  auto Continue = Callbacks.returned(*CPU, value::ReturnGate, Result);
+  ASSERT_TRUE(bool(Continue));
+  ASSERT_TRUE(*Continue);
+  EXPECT_EQ(Result.PC, Code + 12);
+  EXPECT_EQ(CPU->Registers[ABI.info().Arguments[0]][0], 11u);
+  llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 4, 33));
+  balanceCallback();
+  Continue = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+  ASSERT_TRUE(bool(Continue));
+  ASSERT_TRUE(*Continue);
+  EXPECT_EQ(Result.PC, Code + 4);
+  EXPECT_EQ(CPU->Registers[ABI.info().Arguments[0]][0], 33u);
+  // Native exit already passed its TLS phase; this entry must stay pending.
+  llvm::cantFail(Callbacks.addTLS(*CPU, Code + 12, 44));
+  llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 8, UINT64_MAX));
+  const struct {
+    uint64_t Target;
+    std::optional<uint64_t> Object;
+  } Expected[] = {{Code + 8, UINT64_MAX},
+                  {Code + 8, uint64_t(22)},
+                  {Code + 4, std::nullopt}};
+  for (const auto &[Target, Object] : Expected) {
+    balanceCallback();
+    Continue = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+    ASSERT_TRUE(bool(Continue));
+    ASSERT_TRUE(*Continue);
+    EXPECT_EQ(Result.PC, Target);
+    // Only the C++ callbacks receive an object argument.
+    if (Object)
+      EXPECT_EQ(CPU->Registers[ABI.info().Arguments[0]][0], *Object);
+    EXPECT_FALSE(Result.ExitStatus);
+    EXPECT_FALSE(Result.ReturnValue);
+  }
+  balanceCallback();
+  Continue = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+  ASSERT_TRUE(bool(Continue));
+  EXPECT_FALSE(*Continue);
+  EXPECT_EQ(Result.Stop, ProcessStopReason::Exited);
+  EXPECT_EQ(Result.ExitStatus, 37);
+  EXPECT_EQ(Result.ReturnValue, 0x125u);
+}
+TEST_P(DarwinLibSystemTest,
+       GlobalQuotaCountsDuplicatesAndReleasesTheActiveEntryBeforeInvocation) {
+  auto Stack = callbackStack();
+  Image.HasGlobalCallbacks = true;
+  Image.HasTLSCallbacks = false;
+  DarwinCallbacks Callbacks(Image, Options, Stack);
+  ASSERT_TRUE(bool(Callbacks.start(*CPU)));
+  for (size_t I = 0; I < DarwinCallbacks::GlobalCallbackLimit; ++I)
+    llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 4, std::nullopt));
+  auto Overflow = Callbacks.addGlobal(*CPU, Code + 4, std::nullopt);
+  ASSERT_TRUE(bool(Overflow));
+  EXPECT_NE(llvm::toString(std::move(Overflow)).find("registration limit"),
+            std::string::npos);
+  balanceCallback();
+  auto Continue = Callbacks.returned(*CPU, value::ReturnGate, Result);
+  ASSERT_TRUE(bool(Continue));
+  ASSERT_TRUE(*Continue);
+  llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 8, 0));
+  balanceCallback();
+  Continue = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+  ASSERT_TRUE(bool(Continue));
+  ASSERT_TRUE(*Continue);
+  EXPECT_EQ(Result.PC, Code + 8);
+  EXPECT_EQ(CPU->Registers[callbackABI().info().Arguments[0]][0], 0u);
+  for (size_t I = 1; I < DarwinCallbacks::GlobalCallbackLimit; ++I) {
+    balanceCallback();
+    Continue = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+    ASSERT_TRUE(bool(Continue));
+    ASSERT_TRUE(*Continue);
+    EXPECT_EQ(Result.PC, Code + 4);
+  }
+  balanceCallback();
+  Continue = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+  ASSERT_TRUE(bool(Continue));
+  EXPECT_FALSE(*Continue);
+  auto Completed = Callbacks.addGlobal(*CPU, Code + 4, 0);
+  ASSERT_TRUE(bool(Completed));
+  EXPECT_NE(llvm::toString(std::move(Completed)).find("unavailable"),
+            std::string::npos);
+}
+TEST_P(DarwinLibSystemTest,
+       GlobalTargetsRejectNullPaddingForeignPrivateAndMisalignedEntries) {
+  auto Stack = callbackStack();
+  Image.HasGlobalCallbacks = true;
+  DarwinCallbacks Callbacks(Image, Options, Stack);
+  for (uint64_t Address : {uint64_t(0), Code + 16, Data, value::ReturnGate,
+                           value::LibSystemGate, UINT64_MAX}) {
+    auto E = Callbacks.addGlobal(*CPU, Address, std::nullopt);
+    ASSERT_TRUE(bool(E)) << Address;
+    llvm::consumeError(std::move(E));
+  }
+  if (!GetParam()) {
+    auto E = Callbacks.addGlobal(*CPU, Code + 1, 0);
+    ASSERT_TRUE(bool(E));
+    llvm::consumeError(std::move(E));
+  }
+  llvm::cantFail(
+      Space->protect(Code, Image.Memory.PageSize, Read | UserAccessible));
+  auto E = Callbacks.addGlobal(*CPU, Code + 4, UINT64_MAX);
+  ASSERT_TRUE(bool(E));
+  EXPECT_NE(llvm::toString(std::move(E)).find("no longer executable"),
+            std::string::npos);
+}
+TEST_P(DarwinLibSystemTest,
+       GlobalFramesRejectForgedReturnsAndRecheckActivePermissions) {
+  auto Stack = callbackStack();
+  Image.HasGlobalCallbacks = true;
+  DarwinCallbacks Callbacks(Image, Options, Stack);
+  ASSERT_TRUE(bool(Callbacks.start(*CPU)));
+  llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 4, UINT64_MAX));
+  balanceCallback();
+  auto Continue = Callbacks.returned(*CPU, value::ReturnGate, Result);
+  ASSERT_TRUE(bool(Continue));
+  ASSERT_TRUE(*Continue);
+  const auto Register = callbackABI().info().StackPointer;
+  balanceCallback();
+  const auto Balanced = CPU->Registers[Register];
+  CPU->Registers[Register][0] -= 16;
+  auto Forged = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+  ASSERT_FALSE(bool(Forged));
+  llvm::consumeError(Forged.takeError());
+  CPU->Registers[Register] = Balanced;
+  llvm::cantFail(
+      Space->protect(Code, Image.Memory.PageSize, Read | UserAccessible));
+  auto Revoked = Callbacks.returned(*CPU, DarwinCallbacks::ReturnGate, Result);
+  ASSERT_FALSE(bool(Revoked));
+  llvm::consumeError(Revoked.takeError());
+  EXPECT_FALSE(Result.ExitStatus);
+  EXPECT_FALSE(Result.ReturnValue);
+}
+TEST_P(DarwinLibSystemTest,
+       GlobalInvocationRechecksPermissionsAfterRegistration) {
+  auto Stack = callbackStack();
+  Image.HasGlobalCallbacks = true;
+  DarwinCallbacks Callbacks(Image, Options, Stack);
+  ASSERT_TRUE(bool(Callbacks.start(*CPU)));
+  llvm::cantFail(Callbacks.addGlobal(*CPU, Code + 4, 0));
+  balanceCallback();
+  llvm::cantFail(
+      Space->protect(Code, Image.Memory.PageSize, Read | UserAccessible));
+  auto Revoked = Callbacks.returned(*CPU, value::ReturnGate, Result);
+  ASSERT_FALSE(bool(Revoked));
+  llvm::consumeError(Revoked.takeError());
+  EXPECT_FALSE(Result.ExitStatus);
+  EXPECT_FALSE(Result.ReturnValue);
+}
+TEST_P(DarwinLibSystemTest,
        StartupCallbacksRecheckPendingTablesAndPrepareMainAfresh) {
   for (bool Mutate : {false, true}) {
     if (Mutate)

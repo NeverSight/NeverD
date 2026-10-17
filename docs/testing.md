@@ -84,7 +84,9 @@ generated C and generated Rust. Treat a missing compiler skip as missing
 backend evidence, not as semantic success.
 
 The native source dialect suite also uses `rustc` and `go` from `PATH`, or
-`NEVERD_TEST_RUSTC` and `NEVERD_TEST_GO`. It executes 32 Rust/C observations and
+`NEVERD_TEST_RUSTC` and `NEVERD_TEST_GO`. On Windows, its Rust executable
+fixtures select `lld-link` explicitly so Git Bash's POSIX `link.exe` cannot
+replace the COFF linker. It executes 32 Rust/C observations and
 12 Go/C observations covering integer promotion, narrowing, signed/unsigned
 comparison, arithmetic shifts and loops. The Go check compiles its generated
 scalar functions unchanged; it does not establish that every Go pseudocode
@@ -518,6 +520,13 @@ has the same early return beside a virtual tail call.
 Build and run `NeverDSessionLLVMTests` as well: its private Session queries
 link the actual local-type/debug implementations and shared atomic sidecar
 helper into the test executable. It must not acquire a libneverd dependency.
+This standalone link includes the real project-input recorder through the
+sidecar owner; information panels must not be required to resolve it. Run
+`SessionCAPITest.InputSha256IsTheHashOfTheLoadedFile` and the existing sidecar
+persistence/failure tests against the shared SDK when changing these owners.
+`SidecarWritesRecordInputAndKeepAMatchingManifest` checks that saving a sidecar
+records the real input, public queries agree, and recording the same input
+preserves other manifest fields and bytes.
 `scripts/compare_prototypes_with_ida.py` compares the signatures NeverD
 decompiles with the prototypes an IDA dump shows; it decompiles each
 function by address and resolves IDA's typedefs through the shipped headers:
@@ -3071,7 +3080,14 @@ address-size truncation before adding FS. Only TPIDR_EL0 and FPCR/FPSR system-re
 `ExecutionExitTests.cpp` exercises real x64/ARM64 software and checked runs:
 pre-effect stops, deadlines followed by clean resumption, faults overriding stop
 requests, retained recoverable faults, guest traps versus unsupported operations,
-observer failures and software HLT without a workload-completion claim.
+observer failures and software HLT without a workload-completion claim. The
+software deadline regression spends the budget inside an instruction observer
+and verifies that the following unmapped load never executes and a fresh run
+can stop normally. Keep native Windows repetition for the short-slice timer
+regression; a pass on another host does not qualify its timing behavior.
+The driver context fixture checks all 1296 guarded bytes at each of twelve
+captures. Constant-width copies and unrolled fixed loops reduce checked native
+instruction overhead while retaining every comparison and the existing budget.
 `AArch64ProjectionTests.cpp` executes through the ARM MMU using the actual
 native page-table projection, checking translations, remapping and write
 protection. These tests deliberately use Unicorn's architectural CPU TLB, not
@@ -7957,7 +7973,7 @@ target bounds. `DarwinLibSystemTest.Callback*`, `NormalExit*` and
 capacity/nulls, current-stack preservation, live permissions and pending tables.
 `DarwinProcess.DylibConstructorsAndTLSCallbacksKeepStartupAndExitOrder` repeats
 all exit paths, fresh processes and shared instruction/event limits. It adds
-one mandatory method: 102 per profile and 306 matching ARM64 identities.
+the constructor/TLS method in the mandatory native inventory.
 `DarwinNative.ConstructorsAndTLSCallbacksMatchOriginalNativeImages` compares
 both system-linked formats with actual macOS execution; independent original
 O0/O1/O2 controls disable stack protection, whose guard imports remain outside
@@ -7965,6 +7981,29 @@ this provider. `DarwinLibSystemPublic.ConstructorsAndTLSCallbacksKeepLifetimeAcr
 and genuine Python `test_darwin_constructors_and_tls_callbacks_keep_process_lifetime`
 check all five profiles, void JSON results and repeated session isolation.
 Native Intel and physical iOS remain unqualified. No guest budget is increased.
+
+### Darwin C/C++ global exit callbacks
+
+`DarwinExitFixtures.cmake` builds a real two-dylib C++ graph with compiler-emitted
+`__cxa_atexit` and local-static initialization using `-fno-threadsafe-statics`.
+`DarwinLibSystemTest.Global*` checks exact arity/int results, errno, mixed LIFO,
+quota retirement, full-width objects, original targets and active-frame permissions.
+`DarwinLinking.CallbackStorage*` and `RegistrationOnly*` protect the old base/TLS
+footprint and conditional global metadata charge; raw and constructor-only
+minimum-budget cases remain separate. Guard and selective-finalization imports
+remain refused.
+
+`DarwinProcess.DylibGlobalsAndLocalStaticsFinalizeAfterTLS` covers eight native
+outcomes, global raw exit, explicit reentrant-exit refusal, fresh processes and
+shared terminal event/instruction limits. It raises the mandatory inventory to
+103 methods per profile and 309 matching ARM64 HVF identities.
+`DarwinNative.GlobalAndStaticDestructorsMatchOriginalNativeImages` compares both
+system-linked formats with original macOS execution. Independent O0/O1/O2
+controls cover all eight outcomes. C/CLI
+`GlobalAndStaticDestructorsKeepLifetimeAcrossCAndCLI` and genuine Python
+`test_darwin_global_and_static_destructors_keep_process_lifetime` check all five
+profiles and existing JSON call records. Native Intel and physical iOS remain
+unqualified; all guest budgets remain unchanged.
 
 ### Imported Darwin data and TLS pointer offsets
 

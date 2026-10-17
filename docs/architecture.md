@@ -327,7 +327,11 @@ builtin spellings each language takes and which it takes unless asked;
 an agent reads one object.
 
 `SessionSidecar.cpp` owns the shared atomic write for Session sidecars. Type
-declaration and persistence adapters use that same private helper. Private
+declaration and persistence adapters use that same private helper. It also owns
+recording the project's input after a successful sidecar write.
+`SessionProjectInput.h` supplies the same private input/hash observations to
+that recorder and the information queries, without a dependency on UI adapters.
+Private
 Session LLVM tests compile their actual type/debug owners and sidecar helper
 directly; the shared SDK keeps its existing public C boundary.
 
@@ -4598,6 +4602,13 @@ LLVM Support. All transports share its physical x87 state and FXSAVE64 layout;
 Unicorn does not depend on KVM/WHP. KVM and WHP transfer the complete FP/SSE
 state through XSAVE packets; the ISA codec owns the shared layout and init-state
 rules. Unicorn converts its full tag word at its boundary.
+The portable Unicorn adapter enforces its admitted absolute deadline in the
+mandatory instruction hook, before observers and again before guest effects.
+It disables Unicorn's optional per-entry timer thread, so short scheduling
+slices do not wait for a host timer to retire. A timed-out CPU remains resumable
+under a newly admitted CPU budget; the owning workload still retains its
+original `ExecutionBudget`.
+
 CPU snapshots preserve x87 control/status, the physical nonempty `FPTag` mask,
 TOP, opcode,
 instruction/data pointers and all eight 80-bit payloads. This state contract
@@ -7464,12 +7475,23 @@ introduced. See [Darwin environments](darwin-emulation.md) for the finite contra
 `MachOExecutionImage` also retains original constructor section/routines facts.
 `DarwinImage` alone admits local executable targets after relocation and orders
 shared dependencies once in postorder. `DarwinCallbacks` owns startup, main and
-main-thread TLS termination, authenticated return frames and private pending
+main-thread TLS and global termination, authenticated return frames and private pending
 exit state. It reuses `IntegerABI`, the original process stack/return page and
 the existing `ExecutionSession` budget. `DarwinStack` owns bounded `ProgramVars`;
 `DarwinLibSystem` decodes the exact void TLS-registration and nonreturning exit
 ABIs before delegating their lifecycle effects. Runtime callback targets retain
 unrounded original executable spans, and termination preserves the current stack.
+`DarwinLibSystemCalls.def` declares C and C++ registration arities; one private
+classification is shared with image admission. Global registration returns int
+zero through the existing ABI owner and preserves errno. `DarwinCallbacks`
+interleaves C/C++ LIFO work after the TLS phase exactly once and removes each
+entry before invoking original code. The DSO carrier is event data only.
+An externally discriminated private union preserves the old callback base and
+TLS record stride: strong global imports select precharged combined storage
+with a separate 1,024-entry quota. Raw and constructor/TLS-only images retain
+their previous admission budgets. Selective finalization and guard-based local
+static initialization remain explicit unsupported imports.
+
 
 ### Sequential raw compare-and-exchange
 

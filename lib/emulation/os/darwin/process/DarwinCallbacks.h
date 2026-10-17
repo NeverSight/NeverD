@@ -3,7 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
-/// \file Private startup and main-thread TLS termination continuations.
+/// \file Private startup, TLS and process-exit callback continuations.
 #ifndef NEVERD_EMULATION_OS_DARWIN_DARWINCALLBACKS_H
 #define NEVERD_EMULATION_OS_DARWIN_DARWINCALLBACKS_H
 
@@ -11,9 +11,18 @@
 
 namespace neverd::emulation::darwin_model {
 class DarwinCallbacks {
-  enum class Phase { Startup, Main, Termination, Complete };
+  enum class Phase { Startup, Main, TLS, Global, Complete };
   struct TLSCallback {
     uint64_t Function, Object;
+  };
+  struct GlobalCallback {
+    uint64_t Function, Object;
+    bool HasObject;
+  };
+  using TLSCallbacks = std::vector<TLSCallback>;
+  struct CombinedCallbacks {
+    TLSCallbacks TLS;
+    std::vector<GlobalCallback> Global;
   };
   struct Frame {
     uint64_t Target, ReturnSP;
@@ -26,7 +35,14 @@ class DarwinCallbacks {
   std::optional<Frame> Active;
   uint64_t MainReturnSP = 0, TerminationTop = 0, ExitStatus = 0;
   std::optional<uint64_t> MainValue;
-  std::vector<TLSCallback> Pending;
+  // The immutable image fact selects the active member. Keep the old base
+  // footprint and TLS record stride for programs without global imports.
+  union {
+    TLSCallbacks Pending;
+    CombinedCallbacks *Combined;
+  };
+
+  TLSCallbacks &tls();
 
   llvm::Error target(ExecutionBackend &CPU, uint64_t Address) const;
   llvm::Error enter(ExecutionBackend &CPU, uint64_t Address, uint64_t Top,
@@ -36,15 +52,24 @@ class DarwinCallbacks {
 
 public:
   static constexpr size_t TLSCallbackLimit = 1024;
+  static constexpr size_t GlobalCallbackLimit = 1024;
   static constexpr uint64_t ReturnGate = value::ReturnGate + 16;
-  static uint64_t metadataBytes(bool TLS) {
+  static uint64_t metadataBytes(bool TLS, bool Global = false) {
     return sizeof(DarwinCallbacks) +
-           (TLS ? TLSCallbackLimit * sizeof(TLSCallback) : 0);
+           (TLS ? TLSCallbackLimit * sizeof(TLSCallback) : 0) +
+           (Global ? sizeof(CombinedCallbacks) +
+                         GlobalCallbackLimit * sizeof(GlobalCallback)
+                   : 0);
   }
   DarwinCallbacks(const ProcessImage &Image, const ProcessOptions &Options,
                   const InitialStack &Stack);
+  ~DarwinCallbacks();
+  DarwinCallbacks(const DarwinCallbacks &) = delete;
+  DarwinCallbacks &operator=(const DarwinCallbacks &) = delete;
   llvm::Expected<uint64_t> start(ExecutionBackend &CPU);
   llvm::Error addTLS(ExecutionBackend &CPU, uint64_t Function, uint64_t Object);
+  llvm::Error addGlobal(ExecutionBackend &CPU, uint64_t Function,
+                        std::optional<uint64_t> Object);
   llvm::Expected<bool> exit(ExecutionBackend &CPU, uint64_t Status,
                             ProcessResult &Result,
                             std::optional<uint64_t> ReturnValue = std::nullopt);

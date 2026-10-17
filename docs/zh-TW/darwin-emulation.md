@@ -1,6 +1,6 @@
 **語言**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: f85e400322f7b1abd9461fe80492cb140c811c56a1bb2f6c6685b72dee6c7364 -->
+<!-- i18n-source: 9fc13e22f8389ee3a151e7b2f022bbf58f728e5597159984b0585f1b88cbb48e -->
 
 [← 文件索引](README.md)
 
@@ -33,7 +33,7 @@ neverd emulate guest.macho --profile=ios-macho64-v1 \
 
 `LC_UNIXTHREAD` 要求恰好一份完整的原生 64 位元一般暫存器紀錄，只有 PC 已設定。起始堆疊含 argc、以零結尾的 argv/envp，以及含 `executable_path=<input filename>` 的零結尾 apple 向量。自訂 SP、旗標、其他暫存器、額外 flavor 或衝突進入點均拒絕。不繼承宿主環境或 Linux 輔助向量。參考 [dyld 架構](https://github.com/apple-oss-distributions/dyld/blob/main/doc/dyld4.md)。
 
-支援下述有限 libSystem、明確指定的啟動 dylib 和普通 C 主執行緒 TLS。全域解構與舊式 TLS 初始化段、arm64e/PAC、未支援子型別、加密內容及未建模命令仍在執行前失敗。主程式使用偏好位址，dylib 採確定性獨立配置；簽章資料不實作 AMFI 或 entitlement。
+支援下述有限 libSystem、明確指定的啟動 dylib、啟動建構函式、主執行緒 C/C++ TLS 與行程終止時的 C/C++ 解構。選擇性 DSO 終結、使用 guard 的區域靜態初始化、舊式 TLS 初始化段、arm64e/PAC、未支援子型別、加密內容及未建模命令仍在執行前失敗。主程式使用偏好位址，dylib 採確定性獨立配置；簽章資料不實作 AMFI 或 entitlement。
 
 ## Darwin 服務
 
@@ -1835,7 +1835,7 @@ classic lazy: eager stable slots; status 83; stdout_hex 41005a53; named calls/ev
 _exit: status 35; stdout_hex 58; named calls 2; events 2
 file calls: main status 73; stdout_hex 460044; named calls 40; events 41
 memory calls: main status 79; stdout_hex 4d0050; named calls 18; events 19
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 103; matching ARM64 identities: 309
 ```
 
 ```json
@@ -1846,7 +1846,7 @@ native common catalogue: 82; required methods/platform: 102; matching ARM64 iden
 
 `darwin.modules` 以精確且區分大小寫的安裝名稱指定原始 Mach-O 路徑，最多 32 項；只讀取可達依賴。`@loader_path` 按字面比對，不搜尋宿主函式庫。MH_DYLIB 必須具有相同 ISA/平台及相符身分、版本；一般依賴序號選擇實際提供者。同名匯出與共享依賴保持身分，完整檔案、映射、TLS 和中繼資料使用共同預算。
 
-支援普通 C 初始化/零初始化 TLS，對齊上限 16 位元組。準備時映射並計費每個模組的獨立儲存，首次存取複製重定位後的即時連續範本，保留先前對 BSS/間隙的修改。描述符與返回框架須通過驗證；TLS 頁不能被重新配置、解除映射或變更保護。原創樣例比較原生 O0/O1/O2 classic/chained 與五個平台的 C/CLI/Python。循環、弱/重匯出、全域解構與舊式 TLS 初始化段、dlopen/dlsym、執行緒與完整框架尚未實作；Intel 原生及實體 iOS 未驗證。
+支援普通 C 初始化/零初始化 TLS，對齊上限 16 位元組。準備時映射並計費每個模組的獨立儲存，首次存取複製重定位後的即時連續範本，保留先前對 BSS/間隙的修改。描述符與返回框架須通過驗證；TLS 頁不能被重新配置、解除映射或變更保護。原創樣例比較原生 O0/O1/O2 classic/chained 與五個平台的 C/CLI/Python。循環、弱/重匯出、選擇性 DSO 解構與舊式 TLS 初始化段、dlopen/dlsym、執行緒與完整框架尚未實作；Intel 原生及實體 iOS 未驗證。
 
 ```json
 {"backend":"unicorn","instruction_quantum":1024,"timeout_microseconds":5000000,"darwin":{"modules":[{"name":"@loader_path/libneverd-base.dylib","path":"/inputs/libneverd-base.dylib"},{"name":"@loader_path/libneverd-leaf.dylib","path":"/inputs/libneverd-leaf.dylib"}]}}
@@ -1861,9 +1861,9 @@ TLS: initialized / zero-only / alignment <=16; exact 24-byte descriptor; live co
 resolver: __tlv_get_addr; x64 RDI -> RAX; ARM64 X0 -> X0; one named event; errno preserved
 lifetime: one main-thread block/image/process; stable addresses; fresh subsequent processes
 addends: checked signed ordinary provider offsets; data/TLS initializers; original provider spans only
-unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; global destructors/legacy TLS init; dlopen/dlsym; threads
+unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; selective DSO finalization/legacy TLS init; dlopen/dlsym; threads
 workload: shared dependency; duplicate export spelling; TLS aliasing; template mutation; main 83; stdout 440054
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 103; matching ARM64 identities: 309
 ```
 
 ## Darwin dylib 匯入偏移
@@ -1876,4 +1876,10 @@ native common catalogue: 82; required methods/platform: 102; matching ARM64 iden
 
 原始 `S_MOD_INIT_FUNC_POINTERS`、唯讀 `S_INIT_FUNC_OFFSETS` 與單一 `LC_ROUTINES_64` 在 `LC_MAIN` 前執行；依賴依宣告順序後序初始化，共用映像只執行一次。入口限原始可執行段，ARM64 須有完整且對齊的四個位元組；待執行表異動會明確失敗。建構函式接收 argc/argv/envp/apple/`ProgramVars`，程式名取執行檔名稱而非自訂 argv0。C++ `thread_local` 包裝程式碼自行執行惰性建構。
 
-`__tlv_atexit` 使用兩參數 void ABI，忽略編譯器額外 DSO 參數，保留 errno 與結果暫存器；事件結果為 null。預先計費的佇列最多 1024 項，含空回呼與重複項，物件值保留 64 位元。main 返回與 C `exit` 逆序執行，新註冊項先於舊項。結束堆疊位於目前 SP 與 x64 red zone 下方，保留深層退出時的堆疊物件。所有工作共用原預算，完成回呼才發布退出結果；C `_exit` 與原始 BSD exit 立即終止。重入 exit、全域解構、舊式 TLS 初始化段與執行緒仍未支援。五種軟體設定、三種 ARM64 HVF 設定及獨立 O0/O1/O2 classic/chained 原生控制覆蓋這些路徑；控制樣本關閉堆疊保護，guard 資料匯入仍拒絕。Intel 原生與實體 iOS 未驗證。
+`__tlv_atexit` 使用兩參數 void ABI，忽略編譯器額外 DSO 參數，保留 errno 與結果暫存器；事件結果為 null。預先計費的佇列最多 1024 項，含空回呼與重複項，物件值保留 64 位元。main 返回與 C `exit` 逆序執行，新註冊項先於舊項。結束堆疊位於目前 SP 與 x64 red zone 下方，保留深層退出時的堆疊物件。所有工作共用原預算，完成回呼才發布退出結果；C `_exit` 與原始 BSD exit 立即終止。重入 exit、選擇性 DSO 解構、舊式 TLS 初始化段與執行緒仍未支援。五種軟體設定、三種 ARM64 HVF 設定及獨立 O0/O1/O2 classic/chained 原生控制覆蓋這些路徑；控制樣本關閉堆疊保護，guard 資料匯入仍拒絕。Intel 原生與實體 iOS 未驗證。
+
+## C/C++ 程序退出解構
+
+C `atexit` 與 C++ `__cxa_atexit` 回傳整數零並保留 errno。C 回呼無參數，C++ 回呼接收完整物件值，DSO 僅保留為不透明事件資料。正常退出先完成一次主執行緒 TLS 解構，再依統一註冊順序逆序執行全域回呼；新註冊項先於舊項，全域階段不會重新清空 TLS。只有強註冊匯入才預留獨立的 1024 項全域佇列，既有 raw、建構函式與 TLS 預算不變。
+
+原創雙 dylib 程式涵蓋編譯器產生的全域解構、重複存取區域 static、巢狀註冊、深層堆疊物件與解構中的直接 `_exit`。區域 static 控制使用 `-fno-threadsafe-statics`；`__cxa_guard_*`、`__cxa_finalize`、dlopen/dlclose、執行緒及完整框架仍明確拒絕。五種軟體設定、三種 ARM64 HVF 設定與 C/CLI/Python 沿用報告格式及預算；Intel 原生與實體 iOS 尚未驗證。

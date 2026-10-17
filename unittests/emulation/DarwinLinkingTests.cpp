@@ -9,11 +9,14 @@
 #include "os/darwin/kernel/DarwinEntropy.h"
 #include "os/darwin/kernel/DarwinFiles.h"
 #include "os/darwin/kernel/DarwinMemory.h"
+#include "os/darwin/process/DarwinCallbacks.h"
 #include "os/darwin/process/DarwinLibSystem.h"
 #include "os/darwin/process/DarwinProcess.h"
 
 #include "neverd/loader/MachO/MachOProgramLinking.h"
 
+#include <algorithm>
+#include <array>
 #include <set>
 
 namespace neverd::emulation {
@@ -431,6 +434,75 @@ TEST(DarwinLinking,
                     darwin_model::value::LibSystemGateStride);
   EXPECT_EQ(R->Imports.at(R->Fixups[2].Value),
             darwin_model::LibSystemGateKind::StubBinder);
+}
+TEST(DarwinLinking,
+     CallbackStoragePreservesPreviouslyAdmittedBaseAndTLSBudgets) {
+  using darwin_model::DarwinCallbacks;
+  // The previous 64-bit owner had 104 bytes before its one vector. Anchor
+  // that admitted footprint, including debug STL vector bookkeeping, rather
+  // than deriving the expected old budget from the new owner's sizeof.
+  static_assert(sizeof(void *) == 8);
+  const uint64_t Vector = sizeof(std::vector<std::array<uint64_t, 2>>);
+  const uint64_t Base = 104 + Vector;
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(false), Base);
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(true), Base + 1024 * 16);
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(false, true),
+            Base + 2 * Vector + 1024 * 24);
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(true, true),
+            Base + 2 * Vector + 1024 * (16 + 24));
+}
+TEST(DarwinLinking,
+     RegistrationOnlyImagesReserveOriginalTargetsAndExactBudgets) {
+  const std::vector<std::vector<llvm::StringRef>> Calls = {
+      {"_write"},        {"_exit"},
+      {"__tlv_atexit"},  {"_atexit"},
+      {"___cxa_atexit"}, {"__tlv_atexit", "_atexit", "___cxa_atexit"}};
+  for (bool X64 : {false, true}) {
+    for (const auto &Names : Calls) {
+      SCOPED_TRACE(Names.front().str());
+      LazyImage I(Names, true, X64);
+      darwin_test::TemporaryImage File(I);
+      ProcessOptions Options;
+      Options.StackSize = 16384;
+      auto R = darwin_model::loadImage(File.path(),
+                                       darwin_model::macOSProfile(), Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      const bool TLS =
+          std::find(Names.begin(), Names.end(), "__tlv_atexit") != Names.end();
+      const bool Global =
+          std::find(Names.begin(), Names.end(), "_atexit") != Names.end() ||
+          std::find(Names.begin(), Names.end(), "___cxa_atexit") != Names.end();
+      EXPECT_TRUE(R->Initializers.empty());
+      EXPECT_EQ(R->HasTLSCallbacks, TLS);
+      EXPECT_EQ(R->HasGlobalCallbacks, Global);
+      EXPECT_EQ(!R->ExecutableSpans.empty(), TLS || Global);
+      Options.MemoryLimit = R->MetadataBytes + R->Plan.MappedBytes +
+                            Options.StackSize + 3 * R->Memory.PageSize;
+      auto Exact = darwin_model::loadImage(
+          File.path(), darwin_model::macOSProfile(), Options);
+      ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+      --Options.MemoryLimit;
+      auto Under = darwin_model::loadImage(
+          File.path(), darwin_model::macOSProfile(), Options);
+      ASSERT_FALSE(bool(Under));
+      llvm::consumeError(Under.takeError());
+    }
+  }
+}
+TEST(DarwinLinking,
+     GlobalAdmissionDoesNotInventGuardOrSelectiveFinalizationCalls) {
+  for (const char *Name :
+       {"___cxa_guard_acquire", "___cxa_guard_release", "___cxa_guard_abort",
+        "___cxa_finalize", "___cxa_finalize_ranges", "_dlopen", "_dlclose"}) {
+    LazyImage I({Name});
+    darwin_test::TemporaryImage File(I);
+    auto R =
+        darwin_model::loadImage(File.path(), darwin_model::macOSProfile(), {});
+    ASSERT_FALSE(bool(R)) << Name;
+    EXPECT_NE(llvm::toString(R.takeError())
+                  .find(std::string("libSystem import: ") + Name),
+              std::string::npos);
+  }
 }
 TEST(DarwinLinking, BinderRefusalPrecedesCFrameDecodingAndPreservesErrno) {
   using namespace darwin_model;

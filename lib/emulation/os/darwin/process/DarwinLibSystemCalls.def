@@ -22,5 +22,7 @@ NEVERD_DARWIN_LIBSYSTEM_CALL(Mmap, "_mmap", 6, ServiceKind::Mmap)
 NEVERD_DARWIN_LIBSYSTEM_CALL(Mprotect, "_mprotect", 3, ServiceKind::Mprotect)
 NEVERD_DARWIN_LIBSYSTEM_CALL(Munmap, "_munmap", 2, ServiceKind::Munmap)
 NEVERD_DARWIN_LIBSYSTEM_CALL(TLVAtExit, "__tlv_atexit", 2, std::nullopt)
+NEVERD_DARWIN_LIBSYSTEM_CALL(AtExit, "_atexit", 1, std::nullopt)
+NEVERD_DARWIN_LIBSYSTEM_CALL(CxaAtExit, "___cxa_atexit", 3, std::nullopt)
 NEVERD_DARWIN_LIBSYSTEM_CALL(NormalExit, "_exit", 1, std::nullopt)
 #endif

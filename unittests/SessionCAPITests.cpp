@@ -3349,6 +3349,47 @@ TEST_F(SessionCAPITest, InputSha256IsTheHashOfTheLoadedFile) {
             Expected(Contract));
 }
 
+TEST_F(SessionCAPITest, SidecarWritesRecordInputAndKeepAMatchingManifest) {
+  const std::string Path = write("recorded.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  neverd_annotation_set(Session, 0, "persisted note");
+  ASSERT_EQ(neverd_annotations_save(Session), 0);
+  const auto ManifestPath = Path + ".neverd/project.json";
+  const auto ReadManifest = [&] {
+    std::ifstream Input(ManifestPath, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(Input),
+                       std::istreambuf_iterator<char>());
+  };
+  auto Manifest = llvm::json::parse(ReadManifest());
+  ASSERT_TRUE(bool(Manifest));
+  auto *Root = Manifest->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  const auto *Input = Root->getObject("input");
+  ASSERT_NE(Input, nullptr);
+  const auto Digest = takeString(neverd_session_input_sha256(Session));
+  ASSERT_FALSE(Digest.empty());
+  EXPECT_EQ(Input->getString("sha256"), Digest);
+  EXPECT_EQ(Input->getString("name"), "recorded.evm");
+  EXPECT_EQ(Input->getInteger("size"), 10);
+  auto View = llvm::json::parse(takeString(neverd_project_json(Session)));
+  ASSERT_TRUE(bool(View));
+  ASSERT_NE(View->getAsObject(), nullptr);
+  EXPECT_EQ(View->getAsObject()->getBoolean("matches"), true);
+  ASSERT_NE(View->getAsObject()->getObject("recorded"), nullptr);
+  EXPECT_EQ(View->getAsObject()->getObject("recorded")->getString("sha256"),
+            Digest);
+  // Recording the same input preserves other project metadata byte for byte.
+  (*Root)["extension"] = "retained";
+  {
+    std::ofstream Output(ManifestPath, std::ios::binary);
+    Output << llvm::formatv("{0:2}", *Manifest).str() << '\n';
+    ASSERT_TRUE(Output.good());
+  }
+  const auto Before = ReadManifest();
+  ASSERT_EQ(neverd_project_record(Session), 0);
+  EXPECT_EQ(ReadManifest(), Before);
+}
+
 TEST_F(SessionCAPITest, ReloadingRenamesRestoresNamesRemovedFromTheSidecar) {
   const std::string Original = write("original.evm", "6001600055");
   ASSERT_EQ(neverd_session_load(Session, Original.c_str()), 1);

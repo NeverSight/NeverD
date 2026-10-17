@@ -78,6 +78,30 @@ TEST(DarwinCallbacks, AllThreeOriginalFormsRequireStrongMainAdmission) {
       rejects(I);
     }
 }
+TEST(DarwinCallbacks, ConstructorOnlyImagesKeepTheirExistingExactBudget) {
+  for (bool X64 : {false, true})
+    for (unsigned Form = 0; Form != 3; ++Form) {
+      CallbackImage I(X64, Form);
+      TemporaryImage File(I);
+      ProcessOptions Options;
+      Options.StackSize = 16384;
+      auto Full = darwin_model::loadImage(
+          File.path(), darwin_model::macOSProfile(), Options);
+      ASSERT_TRUE(bool(Full)) << llvm::toString(Full.takeError());
+      EXPECT_FALSE(Full->HasTLSCallbacks);
+      EXPECT_FALSE(Full->HasGlobalCallbacks);
+      Options.MemoryLimit = Full->MetadataBytes + Full->Plan.MappedBytes +
+                            Options.StackSize + Full->Memory.PageSize;
+      auto Exact = darwin_model::loadImage(
+          File.path(), darwin_model::macOSProfile(), Options);
+      ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+      --Options.MemoryLimit;
+      auto Under = darwin_model::loadImage(
+          File.path(), darwin_model::macOSProfile(), Options);
+      ASSERT_FALSE(bool(Under));
+      llvm::consumeError(Under.takeError());
+    }
+}
 TEST(DarwinCallbacks,
      InitializerStorageRejectsPartialMisalignedOrWritableOffsets) {
   for (unsigned Form = 0; Form != 2; ++Form)

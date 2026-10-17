@@ -34,6 +34,10 @@ std::optional<LibSystemGateKind> libSystemImport(llvm::StringRef Symbol) {
       return LibSystemGateKind(I);
   return std::nullopt;
 }
+bool isGlobalCallbackRegistration(LibSystemGateKind Kind) {
+  return Kind == LibSystemGateKind::AtExit ||
+         Kind == LibSystemGateKind::CxaAtExit;
+}
 const LibSystemBinding &libSystemBinding(LibSystemGateKind Kind) {
   const auto Index = unsigned(Kind);
   assert(Index < std::size(Bindings));
@@ -152,26 +156,38 @@ invokeLibSystem(ExecutionBackend &CPU, DarwinMemory &Memory, DarwinFiles &Files,
       return failure(diagnostic::LibSystemFrame);
     Result.NativeCalls.back().ReturnAddress = ReturnPC;
   }
-  if (Binding == LibSystemGateKind::TLVAtExit ||
+  const bool GlobalRegistration = isGlobalCallbackRegistration(Binding);
+  if (Binding == LibSystemGateKind::TLVAtExit || GlobalRegistration ||
       Binding == LibSystemGateKind::NormalExit) {
     if (!Callbacks)
       return failure("Darwin callback lifecycle is unavailable");
     if (Binding == LibSystemGateKind::NormalExit)
       return Callbacks->exit(CPU, Arguments->Carriers[0], Result);
-    if (auto E = Callbacks->addTLS(CPU, Arguments->Carriers[0],
-                                   Arguments->Carriers[1]))
-      return std::move(E);
-    // The actual runtime entry is void(function, object). Clang can supply
-    // an unused third DSO carrier and an unused result; neither is consumed.
-    if (auto E = CPU.writeRegister(ABI->info().StackPointer, {*ReturnSP, 0}))
-      return std::move(E);
-    if (auto E = CPU.writeRegister(
-            X64 ? CPURegister::X64PC : CPURegister::AArch64PC, {ReturnPC, 0}))
-      return std::move(E);
-    Result.PC = ReturnPC;
-    return true;
+    if (GlobalRegistration) {
+      const auto Object = Binding == LibSystemGateKind::CxaAtExit
+                              ? std::optional<uint64_t>(Arguments->Carriers[1])
+                              : std::nullopt;
+      // The DSO carrier belongs to the event. Process exit does not interpret
+      // it as an address or admit selective DSO finalization.
+      if (auto E = Callbacks->addGlobal(CPU, Arguments->Carriers[0], Object))
+        return std::move(E);
+    } else {
+      if (auto E = Callbacks->addTLS(CPU, Arguments->Carriers[0],
+                                     Arguments->Carriers[1]))
+        return std::move(E);
+      // The actual runtime entry is void(function, object). Clang can supply
+      // an unused third DSO carrier and an unused result; neither is consumed.
+      if (auto E = CPU.writeRegister(ABI->info().StackPointer, {*ReturnSP, 0}))
+        return std::move(E);
+      if (auto E = CPU.writeRegister(
+              X64 ? CPURegister::X64PC : CPURegister::AArch64PC, {ReturnPC, 0}))
+        return std::move(E);
+      Result.PC = ReturnPC;
+      return true;
+    }
   }
-  uint64_t Value = value::LibSystemGate + Image.Memory.PageSize;
+  uint64_t Value =
+      GlobalRegistration ? 0 : value::LibSystemGate + Image.Memory.PageSize;
   if (Definition.Kernel) {
     ProcessServiceEvent Event{Request.PC, 0, Arguments->Kernel, std::nullopt};
     auto Invoke = [&]() -> llvm::Expected<std::optional<ServiceResult>> {
