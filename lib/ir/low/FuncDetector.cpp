@@ -53,8 +53,10 @@ bool isUnconditionalNoReturnCall(const BinaryImage &Img,
   for (const LowOp &Op : Ops) {
     if (Op.Opcode == NdOp::COND_BR)
       IsConditional = true;
-    else if (Op.Opcode == NdOp::CALL && Op.NumInputs > 0 &&
-             Op.Inputs[0].isConst())
+    // x86 lifts `call [slot]` as an INDIR_CALL of the slot address, which
+    // names the import the loader binds there, as the CFG builder reads it.
+    else if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+             Op.NumInputs > 0 && Op.Inputs[0].isConst())
       Target = Op.Inputs[0].Offset;
   }
   return !IsConditional && libc::isNoReturnTarget(Img, Target);

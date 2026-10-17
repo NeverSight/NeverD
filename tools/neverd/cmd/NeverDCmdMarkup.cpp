@@ -13,6 +13,8 @@
 
 #include "../NeverDCLI.h"
 
+#include "neverd/support/ProjectFiles.h"
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Format.h"
@@ -36,16 +38,26 @@ using namespace llvm;
 namespace neverd::cli {
 
 int runBookmarks() {
-  std::string BmPath = std::filesystem::path(InputFile.getValue()).string() +
-                       ".neverd-bookmarks.json";
+  // The project folder beside the input keeps the bookmarks, as the
+  // workbench keeps them; an older NeverD's file beside the input moves in.
+  const std::filesystem::path Input = InputFile.getValue();
+  project_files::migrate(Input);
+  const std::string BmPath =
+      project_files::path(Input, project_files::File::Bookmarks).string();
 
   using Bookmark = std::tuple<uint64_t, std::string, std::string>;
 
+  // By address, in lowercase hexadecimal, as the workbench keeps the same
+  // file: one order and one spelling under version control.
   auto toJson = [](ArrayRef<Bookmark> Bms) {
+    std::vector<Bookmark> Sorted(Bms.begin(), Bms.end());
+    llvm::stable_sort(Sorted, [](const Bookmark &A, const Bookmark &B) {
+      return std::get<0>(A) < std::get<0>(B);
+    });
     json::Array Arr;
-    for (const auto &[A, N, T] : Bms)
+    for (const auto &[A, N, T] : Sorted)
       Arr.push_back(json::Object{
-          {"addr", "0x" + utohexstr(A)}, {"name", N}, {"note", T}});
+          {"addr", "0x" + utohexstr(A, true)}, {"name", N}, {"note", T}});
     return json::Value(std::move(Arr));
   };
 
@@ -92,7 +104,12 @@ int runBookmarks() {
   };
 
   auto saveBm = [&](ArrayRef<Bookmark> Bms) -> bool {
-    std::error_code EC;
+    std::error_code EC = project_files::prepare(Input);
+    if (EC) {
+      WithColor::error() << "cannot create the project folder: " << EC.message()
+                         << "\n";
+      return false;
+    }
     raw_fd_ostream Out(BmPath, EC);
     if (EC) {
       WithColor::error() << "cannot write: " << EC.message() << "\n";

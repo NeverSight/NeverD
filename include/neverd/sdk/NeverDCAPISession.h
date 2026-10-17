@@ -135,7 +135,7 @@ NEVERD_API const char *neverd_symbol_table_reference_json(const char *Path);
 /// prologues preserve, the thread block and system calls the code reaches --
 /// and assumes System V when the code shows too little.  {"loader":"evm"}
 /// reads a file as EVM bytecode, and {"loader":"auto"} as its header or
-/// contents say, even when the input's `.neverd-load.json` says otherwise;
+/// contents say, even when `<input>.neverd/load.json` says otherwise;
 /// NULL drops the request, so a load reads that file when there is one.
 /// Returns 0, or -1 with neverd_last_error.
 NEVERD_API int neverd_session_set_load_options(neverd_session_t Sess,
@@ -145,7 +145,7 @@ NEVERD_API int neverd_session_set_load_options(neverd_session_t Sess,
 /// "platform_source": "detected" or "user", and with "platform_evidence",
 /// what detection read it from.  Free with neverd_free_string.
 NEVERD_API const char *neverd_session_load_options_json(neverd_session_t Sess);
-/// Keep how the image was read in `<input>.neverd-load.json` for later loads,
+/// Keep how the image was read in `<input>.neverd/load.json` for later loads,
 /// or remove that file when the header was read.  Returns 0, or -1 with
 /// neverd_last_error.
 NEVERD_API int neverd_load_options_save(neverd_session_t Sess);

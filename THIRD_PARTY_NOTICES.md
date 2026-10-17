@@ -226,11 +226,12 @@ encodings. Generated on 2026-10-06.
 
 ## Windows type libraries
 
-`lib/types/headers/WindowsKernelX64.h` holds the types and prototypes that
-`<ntifs.h>`, `<ntddk.h>` and `<wdm.h>` declare for x64 drivers of Windows 10
-2004, and `lib/types/headers/WindowsUserX64.h` those that `<windows.h>`,
-`<winternl.h>` and the headers of the libraries programs most often call
-declare for x64 programs of Windows 10 2004, as
+`lib/types/headers/WindowsKernelX64.h` and `WindowsKernelX86.h` hold the
+types and prototypes that `<ntifs.h>`, `<ntddk.h>` and `<wdm.h>` declare for
+x64 and x86 drivers of Windows 10 2004, and `lib/types/headers/WindowsUserX64.h`
+and `WindowsUserX86.h` those that `<windows.h>`, `<winternl.h>` and the
+headers of the libraries programs most often call declare for x64 and x86
+programs of Windows 10 2004, as
 `scripts/generate_windows_types.py` renders them from the headers of
 mingw-w64 13.0.0 (the Ubuntu package mingw-w64-common 13.0.0-2ubuntu1). The
 DDK and PSDK headers they read that come from ReactOS (contributors include

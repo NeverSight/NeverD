@@ -29,5 +29,9 @@ NEVERD_HEADER_LIBRARY(WindowsKernelX64, "windows-kernel-x64", WindowsKernelX64,
                       LLP64, Windows)
 NEVERD_HEADER_LIBRARY(WindowsUserX64, "windows-user-x64", WindowsUserX64, LLP64,
                       Windows)
+NEVERD_HEADER_LIBRARY(WindowsKernelX86, "windows-kernel-x86", WindowsKernelX86,
+                      ILP32, Windows)
+NEVERD_HEADER_LIBRARY(WindowsUserX86, "windows-user-x86", WindowsUserX86, ILP32,
+                      Windows)
 
 #undef NEVERD_HEADER_LIBRARY

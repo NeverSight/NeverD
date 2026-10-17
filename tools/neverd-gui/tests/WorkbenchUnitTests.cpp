@@ -614,18 +614,19 @@ private slots:
       byte = char(generator.bounded(256));
     const auto binary = directory.filePath(QStringLiteral("sample.bin"));
     const auto write = [](const QString &path, const QByteArray &bytes) {
+      QDir().mkpath(QFileInfo(path).absolutePath());
       QFile file(path);
       return file.open(QIODevice::WriteOnly) &&
              file.write(bytes) == bytes.size();
     };
     QVERIFY(write(binary, input));
-    QVERIFY(write(binary + ".neverd-annotations.json",
+    QVERIFY(write(binary + ".neverd/annotations.json",
                   R"([{"addr":"0x10","text":"one"}])"));
-    QVERIFY(write(binary + ".neverd-renames.json", "[]"));
+    QVERIFY(write(binary + ".neverd/renames.json", "[]"));
     // Every table the worker keeps, and how a binary file is read.
-    QVERIFY(write(binary + ".neverd-items.json",
+    QVERIFY(write(binary + ".neverd/items.json",
                   R"([{"addr":"0x20","kind":"data","size":4}])"));
-    QVERIFY(write(binary + ".neverd-load.json",
+    QVERIFY(write(binary + ".neverd/load.json",
                   R"({"loader":"binary","processor":"x86_64"})"));
     const auto database = ProjectDatabase::pathFor(binary);
     QCOMPARE(database, binary + QStringLiteral(".nddb"));
@@ -650,7 +651,7 @@ private slots:
              QByteArray(R"({"address":"0x10"})"));
 
     // A second save updates sidecars and state in place.
-    QVERIFY(write(binary + ".neverd-annotations.json",
+    QVERIFY(write(binary + ".neverd/annotations.json",
                   R"([{"addr":"0x10","text":"two"}])"));
     QCOMPARE(ProjectDatabase::saveState(database,
                                         {{QStringLiteral("bookmarks"), "[]"}}),
@@ -670,16 +671,16 @@ private slots:
     QFile copy(unpacked);
     QVERIFY(copy.open(QIODevice::ReadOnly));
     QCOMPARE(copy.readAll(), input);
-    QFile annotations(unpacked + ".neverd-annotations.json");
+    QFile annotations(unpacked + ".neverd/annotations.json");
     QVERIFY(annotations.open(QIODevice::ReadOnly));
     QVERIFY(annotations.readAll().contains("two"));
-    QFile items(unpacked + ".neverd-items.json");
+    QFile items(unpacked + ".neverd/items.json");
     QVERIFY(items.open(QIODevice::ReadOnly));
     QVERIFY(items.readAll().contains("0x20"));
-    QFile load(unpacked + ".neverd-load.json");
+    QFile load(unpacked + ".neverd/load.json");
     QVERIFY(load.open(QIODevice::ReadOnly));
     QVERIFY(load.readAll().contains("x86_64"));
-    QVERIFY(!QFileInfo::exists(unpacked + ".neverd-history.json"));
+    QVERIFY(!QFileInfo::exists(unpacked + ".neverd/local/history.json"));
 
     // Damage is reported, never unpacked as a different input.
     {
@@ -721,6 +722,7 @@ private slots:
     QVERIFY(directory.isValid());
     const auto binary = directory.filePath(QStringLiteral("sample.bin"));
     const auto write = [](const QString &path, const QByteArray &bytes) {
+      QDir().mkpath(QFileInfo(path).absolutePath());
       QFile file(path);
       return file.open(QIODevice::WriteOnly) &&
              file.write(bytes) == bytes.size();
@@ -732,31 +734,51 @@ private slots:
     QVERIFY(write(binary, "\x90\xc3"));
     // The project's own files read like the worker's: two-space indents,
     // keys sorted, one final line break.
+    // Bookmarks as the command line's bookmarks command keeps them: by
+    // address, one at each, addresses in lowercase.
+    const QJsonArray marks = ProjectDatabase::bookmarkFile(QJsonArray{
+        QJsonObject{{"address", "0x1A"}, {"text", "later"}},
+        QJsonObject{{"address", "0x9"}, {"text", QString::fromUtf8("标记")}},
+        QJsonObject{{"address", "0x1a"}, {"text", "last"}, {"note", "kept"}}});
+    QCOMPARE(ProjectDatabase::writeProjectFile(binary,
+                                               ProjectDatabase::BookmarksSuffix,
+                                               QJsonDocument(marks)),
+             QString());
+    QCOMPARE(read(binary + ".neverd/bookmarks.json"),
+             QByteArray("[\n  {\n    \"addr\": \"0x9\",\n    \"name\": \"") +
+                 QString::fromUtf8("标记").toUtf8() +
+                 "\",\n    \"note\": \"\"\n  },\n  {\n    \"addr\": \"0x1a\",\n"
+                 "    \"name\": \"last\",\n    \"note\": \"kept\"\n  }\n]\n");
+    const auto rows = ProjectDatabase::bookmarkRows(
+        ProjectDatabase::readProjectFile(binary,
+                                         ProjectDatabase::BookmarksSuffix)
+            ->array());
+    QCOMPARE(rows.size(), 2);
     QCOMPARE(
-        ProjectDatabase::writeProjectFile(
-            binary, ProjectDatabase::BookmarksSuffix,
-            QJsonDocument(QJsonArray{QJsonObject{
-                {"text", QString::fromUtf8("标记")}, {"address", "0x10"}}})),
-        QString());
-    QCOMPARE(
-        read(binary + ".neverd-bookmarks.json"),
-        QByteArray("[\n  {\n    \"address\": \"0x10\",\n    \"text\": \"") +
-            QString::fromUtf8("标记").toUtf8() + "\"\n  }\n]\n");
-    QCOMPARE(ProjectDatabase::readProjectFile(binary,
-                                              ProjectDatabase::BookmarksSuffix)
-                 ->array()
-                 .first()
-                 .toObject()
-                 .value("address")
-                 .toString(),
-             QStringLiteral("0x10"));
+        rows.at(1).toObject(),
+        (QJsonObject{{"address", "0x1a"}, {"text", "last"}, {"note", "kept"}}));
+    // No bookmarks read as the command line writes none, and an empty
+    // member closes where it opens.
+    const auto empty = directory.filePath(QStringLiteral("empty.bin"));
+    QCOMPARE(ProjectDatabase::writeProjectFile(empty,
+                                               ProjectDatabase::BookmarksSuffix,
+                                               QJsonDocument(QJsonArray())),
+             QString());
+    QCOMPARE(read(empty + ".neverd/bookmarks.json"), QByteArray("[]\n"));
+    QCOMPARE(ProjectDatabase::writeProjectFile(
+                 empty, ProjectDatabase::DebugFilesSuffix,
+                 QJsonDocument(QJsonObject{{"pdb", QJsonObject()},
+                                           {"paths", QJsonArray()}})),
+             QString());
+    QCOMPARE(read(empty + ".neverd/debug.json"),
+             QByteArray("{\n  \"paths\": [],\n  \"pdb\": {}\n}\n"));
     QVERIFY(!ProjectDatabase::readProjectFile(
         binary, ProjectDatabase::WorkbenchSuffix));
-    QVERIFY(write(binary + ".neverd-debug.json", R"({"pdb":{"mode":"none"}})"));
-    QVERIFY(write(binary + ".neverd-types.json", R"({"types":["struct T"]})"));
-    QVERIFY(write(binary + ".neverd-items.json", "[]"));
+    QVERIFY(write(binary + ".neverd/debug.json", R"({"pdb":{"mode":"none"}})"));
+    QVERIFY(write(binary + ".neverd/types.json", R"({"types":["struct T"]})"));
+    QVERIFY(write(binary + ".neverd/items.json", "[]"));
     // A workbench file is the user's own; a database keeps its own state.
-    QVERIFY(write(binary + ".neverd-workbench.json", "{}"));
+    QVERIFY(write(binary + ".neverd/local/workbench.json", "{}"));
 
     // Local types, bookmarks and debug files go into the database and come
     // back out of it.
@@ -776,12 +798,12 @@ private slots:
     const auto unpacked =
         ProjectDatabase::unpack(database, elsewhere.path(), &error);
     QVERIFY2(!unpacked.isEmpty(), qPrintable(error));
-    QCOMPARE(read(unpacked + ".neverd-types.json"),
-             read(binary + ".neverd-types.json"));
-    QCOMPARE(read(unpacked + ".neverd-bookmarks.json"),
-             read(binary + ".neverd-bookmarks.json"));
-    QCOMPARE(read(unpacked + ".neverd-debug.json"),
-             read(binary + ".neverd-debug.json"));
+    QCOMPARE(read(unpacked + ".neverd/types.json"),
+             read(binary + ".neverd/types.json"));
+    QCOMPARE(read(unpacked + ".neverd/bookmarks.json"),
+             read(binary + ".neverd/bookmarks.json"));
+    QCOMPARE(read(unpacked + ".neverd/debug.json"),
+             read(binary + ".neverd/debug.json"));
 
     // A database written before it named the files it packs packed no local
     // types: unpacking it keeps the types beside the input, while a table it
@@ -805,19 +827,20 @@ private slots:
     QVERIFY2(contents, qPrintable(error));
     QVERIFY(!contents->packedSuffixes.contains(
         QStringLiteral(".neverd-types.json")));
-    QVERIFY(write(unpacked + ".neverd-types.json", "only copy"));
-    QVERIFY(write(unpacked + ".neverd-items.json", "stale"));
+    QVERIFY(write(unpacked + ".neverd/types.json", "only copy"));
+    QVERIFY(write(unpacked + ".neverd/items.json", "stale"));
     QCOMPARE(ProjectDatabase::unpack(database, elsewhere.path(), &error),
              unpacked);
-    QCOMPARE(read(unpacked + ".neverd-types.json"), QByteArray("only copy"));
-    QVERIFY(!QFileInfo::exists(unpacked + ".neverd-items.json"));
-    QVERIFY(QFileInfo::exists(unpacked + ".neverd-bookmarks.json"));
+    QCOMPARE(read(unpacked + ".neverd/types.json"), QByteArray("only copy"));
+    QVERIFY(!QFileInfo::exists(unpacked + ".neverd/items.json"));
+    QVERIFY(QFileInfo::exists(unpacked + ".neverd/bookmarks.json"));
   }
 
   void projectDatabaseIdentity() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const auto write = [](const QString &path, const QByteArray &bytes) {
+      QDir().mkpath(QFileInfo(path).absolutePath());
       QFile file(path);
       return file.open(QIODevice::WriteOnly) &&
              file.write(bytes) == bytes.size();

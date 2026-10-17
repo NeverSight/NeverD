@@ -22,6 +22,7 @@
 #include "neverd/loader/LoadCandidate.h"
 #include "neverd/loader/Raw/ISAIdentify.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/support/ProjectFiles.h"
 #include "neverd/support/ProjectWriteLock.h"
 #include "neverd/support/StringScan.h"
 
@@ -46,9 +47,7 @@ using namespace neverd::sdk;
 // ===--------------------------------------------------------------------===//
 
 static std::filesystem::path annotationPath(const Session *S) {
-  auto Path = S->FilePath;
-  Path += ".neverd-annotations.json";
-  return Path;
+  return project_files::path(S->FilePath, project_files::File::Annotations);
 }
 
 static std::optional<va_t>
@@ -371,8 +370,8 @@ int neverd_renames_save(neverd_session_t Sess) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;
   }
-  auto Path = S->FilePath;
-  Path += ".neverd-renames.json";
+  const auto Path =
+      project_files::path(S->FilePath, project_files::File::Renames);
   llvm::json::Array Arr;
   for (const auto &[Addr, NewName] : S->Renames) {
     llvm::json::Object Obj;
@@ -392,8 +391,8 @@ int neverd_renames_load(neverd_session_t Sess) {
     return -1;
   if (!S->Loaded)
     return -1;
-  auto Path = S->FilePath;
-  Path += ".neverd-renames.json";
+  const auto Path =
+      project_files::path(S->FilePath, project_files::File::Renames);
   auto Reset = [&] {
     for (auto &F : S->Functions) {
       if (S->Renames.find(F.Entry) == S->Renames.end())
@@ -461,9 +460,7 @@ int neverd_renames_load(neverd_session_t Sess) {
 // ===--------------------------------------------------------------------===//
 
 static std::filesystem::path functionsPath(const Session *S) {
-  auto Path = S->FilePath;
-  Path += ".neverd-functions.json";
-  return Path;
+  return project_files::path(S->FilePath, project_files::File::Functions);
 }
 
 /// \p Color as "#RRGGBB".
@@ -946,9 +943,7 @@ uint64_t sizedItemBytes(llvm::StringRef Kind) {
 }
 
 std::filesystem::path itemsPath(const Session *S) {
-  auto Path = S->FilePath;
-  Path += ".neverd-items.json";
-  return Path;
+  return project_files::path(S->FilePath, project_files::File::Items);
 }
 
 #define NEVERD_OPERAND_BASE(Id, Spelling)                                      \
@@ -959,9 +954,7 @@ std::filesystem::path itemsPath(const Session *S) {
 constexpr int MaxFormattedOperands = 8;
 
 std::filesystem::path operandsPath(const Session *S) {
-  auto Path = S->FilePath;
-  Path += ".neverd-operands.json";
-  return Path;
+  return project_files::path(S->FilePath, project_files::File::Operands);
 }
 
 bool isOperandBase(llvm::StringRef Base) {
@@ -1496,9 +1489,7 @@ constexpr llvm::StringLiteral DetectedPlatformSource("detected");
 constexpr llvm::StringLiteral ChosenPlatformSource("user");
 
 std::filesystem::path loadOptionsPath(const std::filesystem::path &Input) {
-  auto Path = Input;
-  Path += ".neverd-load.json";
-  return Path;
+  return project_files::path(Input, project_files::File::Load);
 }
 
 llvm::Error loadOptionsError(const llvm::Twine &Message) {

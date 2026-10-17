@@ -6,7 +6,7 @@
 ///
 /// \file
 /// Per-address annotations and function renames, each persisted to a JSON
-/// sidecar file next to the analyzed binary.
+/// file in the analyzed binary's project folder, `<input>.neverd/`.
 ///
 /// All returned strings are heap-allocated via strdup(); callers must
 /// free them with neverd_free_string().
@@ -44,6 +44,23 @@ NEVERD_API const char *neverd_annotation_get(neverd_session_t Sess,
                                              neverd_va_t Addr);
 NEVERD_API const char *neverd_annotations_json(neverd_session_t Sess);
 NEVERD_API int neverd_annotations_save(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// The project folder: `<input>.neverd/` beside the input
+// ===--------------------------------------------------------------------===//
+
+/// The loaded input's project folder and which build of the input its files
+/// describe: {"folder","input":{"name","size","sha256"},"recorded":{"name",
+/// "size","sha256"} or null,"matches"}.  "recorded" is the project.json the
+/// folder keeps, null before the project has one; "matches" is false when it
+/// names another build, whose addresses may not be this one's.  NULL with
+/// neverd_last_error() when no file is loaded.
+NEVERD_API const char *neverd_project_json(neverd_session_t Sess);
+/// Records in the project folder's project.json that its files describe the
+/// loaded build of the input.  Each project file the C API writes records it;
+/// a writer of its own calls this after it writes.  0 on success, -1 with
+/// neverd_last_error().
+NEVERD_API int neverd_project_record(neverd_session_t Sess);
 NEVERD_API int neverd_annotations_load(neverd_session_t Sess);
 
 // ===--------------------------------------------------------------------===//
@@ -143,7 +160,7 @@ NEVERD_API const char *neverd_func_type_json(neverd_session_t Sess,
 /// order, where "state" is "created" or "deleted" and the attributes are
 /// neverd_func_edit's.  Free with neverd_free_string.
 NEVERD_API const char *neverd_functions_json(neverd_session_t Sess);
-/// Write or read the edits as `<input>.neverd-functions.json`, which
+/// Write or read the edits as `<input>.neverd/functions.json`, which
 /// neverd_session_load reads too.  Return 0, or -1 with neverd_last_error.
 NEVERD_API int neverd_functions_save(neverd_session_t Sess);
 NEVERD_API int neverd_functions_load(neverd_session_t Sess);
@@ -168,7 +185,7 @@ NEVERD_API int neverd_item_clear(neverd_session_t Sess, neverd_va_t Addr);
 /// The user's data items, [{"addr","kind","size","encoding"?}] in address
 /// order.  Free with neverd_free_string.
 NEVERD_API const char *neverd_items_json(neverd_session_t Sess);
-/// Write or read the items as `<input>.neverd-items.json`, which
+/// Write or read the items as `<input>.neverd/items.json`, which
 /// neverd_session_load reads too.  Return 0, or -1 with neverd_last_error.
 NEVERD_API int neverd_items_save(neverd_session_t Sess);
 NEVERD_API int neverd_items_load(neverd_session_t Sess);
@@ -192,7 +209,7 @@ NEVERD_API int neverd_operand_format_set(neverd_session_t Sess,
 /// "negate","invert","type"?,"delta"?},...]},...] in address order, "type"
 /// and "delta" a structure offset's.  Free with neverd_free_string.
 NEVERD_API const char *neverd_operand_formats_json(neverd_session_t Sess);
-/// Write or read the formats as `<input>.neverd-operands.json`, which
+/// Write or read the formats as `<input>.neverd/operands.json`, which
 /// neverd_session_load reads too.  Return 0, or -1 with neverd_last_error.
 NEVERD_API int neverd_operand_formats_save(neverd_session_t Sess);
 NEVERD_API int neverd_operand_formats_load(neverd_session_t Sess);

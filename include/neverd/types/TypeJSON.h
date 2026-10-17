@@ -20,6 +20,7 @@
 #include "neverd/types/TypeFit.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/JSON.h"
 
@@ -75,6 +76,12 @@ llvm::json::Object memberAtJSON(const TypeLibrary &Library, const MemberAt &At,
 /// `matchedName` with `matched` runs as [begin, length] in bytes, and
 /// `matchedMember` with `memberMatched` runs.
 llvm::json::Object typeFitJSON(const TypeLibrary &Library, const TypeFit &Fit,
+                               BuiltinSpelling Spelling);
+
+/// typeFitJSON of each type a search found, in order.  The names of the
+/// whole library are read once for all of them, not once a type.
+llvm::json::Array typeFitsJSON(const TypeLibrary &Library,
+                               llvm::ArrayRef<TypeFit> Fits,
                                BuiltinSpelling Spelling);
 
 } // namespace neverd::types

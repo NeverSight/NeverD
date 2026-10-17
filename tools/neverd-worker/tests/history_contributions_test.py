@@ -23,9 +23,9 @@ def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-history-test-") as directory:
         binary = Path(directory) / "fixture.bin"
         binary.write_bytes(b"history fixture")
-        annotations = Path(str(binary) + ".neverd-annotations.json")
-        history_path = Path(str(binary) + ".neverd-history.json")
-        journal_path = Path(str(binary) + ".neverd-journal.json")
+        annotations = Path(str(binary) + ".neverd/annotations.json")
+        history_path = Path(str(binary) + ".neverd/local/history.json")
+        journal_path = Path(str(binary) + ".neverd/local/journal.json")
         client = Client(executable)
         ok(client, "open", {"path": str(binary)})
         assert not ok(client, "history")["can_undo"]
@@ -153,7 +153,7 @@ def run(executable):
         fresh.write_bytes(b"fresh fixture")
         stale = Client(executable)
         ok(stale, "open", {"path": str(fresh)})
-        fresh_annotations = Path(str(fresh) + ".neverd-annotations.json")
+        fresh_annotations = Path(str(fresh) + ".neverd/annotations.json")
         fresh_annotations.write_text(json.dumps([dict(addr=BASE, text="external before first edit")]))
         assert not ok(stale, "history")["available"]
         assert stale.call("annotation_set", {"address": BASE, "text": "overwrite"})["error"]["code"] == "foreign_edits"
@@ -167,7 +167,9 @@ def run(executable):
         # reader limit after Save had already acknowledged success.
         large = Path(directory) / "large-state.bin"
         large.write_bytes(b"large user state fixture")
-        large_annotations = Path(str(large) + ".neverd-annotations.json")
+        large_annotations = Path(str(large) + ".neverd/annotations.json")
+        # Written before any tool opens the binary, so before its folder.
+        large_annotations.parent.mkdir(exist_ok=True)
         large_annotations.write_text(json.dumps(
             [dict(addr=hex(int(BASE, 16) + index), text="x" * 220) for index in range(29000)],
             separators=(",", ":")))
@@ -175,7 +177,7 @@ def run(executable):
         try:
             ok(large_client, "open", {"path": str(large)})
             ok(large_client, "save")
-            assert Path(str(large) + ".neverd-history.json").stat().st_size <= 8 * 1024 * 1024
+            assert Path(str(large) + ".neverd/local/history.json").stat().st_size <= 8 * 1024 * 1024
             ok(large_client, "reload")
             assert ok(large_client, "history")["available"], "Saved history must remain readable"
         finally:

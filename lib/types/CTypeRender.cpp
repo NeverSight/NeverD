@@ -15,6 +15,8 @@
 
 #include "TypeRenderShared.h"
 
+#include "neverd/types/TypeLayout.h"
+
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -346,6 +348,12 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
     std::string Type;
   };
   std::optional<Run> Bits;
+  // GNU's compilers pack a bit-field at the bit after the member before it,
+  // into the unit of its type that holds it, sharing bytes with members
+  // before it: the source gives the bits between, rather than storage
+  // units.  The bit after the last member, from the record.
+  const bool Gnu = defaultRules(Library.dataModel()) == LayoutRules::Itanium;
+  uint64_t EndBit = 0;
   uint64_t UnionSize = 0;
   uint32_t UnionAlign = 1;
   for (const Member &Field : Record.Members) {
@@ -358,6 +366,28 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
     if (Record.Union) {
       UnionSize = std::max(UnionSize, Size);
       UnionAlign = std::max(UnionAlign, Align);
+    } else if (Field.isBitfield() && Gnu) {
+      const std::string Type = declare(*Field.Type, "");
+      const uint64_t Unit = Size * 8;
+      // Where GNU puts the field: the bit after the last member, or the
+      // next unit of its type where it would cross one, unless packed.
+      uint64_t At = EndBit;
+      if (Unit && !Pack && At / Unit != (At + Field.BitWidth - 1) / Unit)
+        At = alignTo(At, Unit);
+      if (Field.BitOffset > At) {
+        // An unnamed field of width 0 moves to the next unit of its type;
+        // one of a width takes the bits between.
+        if (Unit && alignTo(EndBit, Unit) == Field.BitOffset) {
+          line(Indent, Type + " : 0;", "", Out);
+        } else {
+          const uint64_t Gap = Field.BitOffset - At;
+          line(Indent, Type + " : " + std::to_string(Gap) + ";",
+               offset((Base + At) / 8) + " " + bitText(At % 8, Gap) +
+                   " unnamed",
+               Out);
+        }
+      }
+      EndBit = Field.BitOffset + Field.BitWidth;
     } else if (Field.isBitfield()) {
       const uint64_t Storage = Field.StorageBitOffset;
       if (!Bits || Bits->Storage != Storage) {
@@ -385,9 +415,13 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
       Bits->Next = Position + Field.BitWidth;
     } else if (Field.BitOffset % 8 == 0) {
       Bits.reset();
+      // The bytes GNU's bit-fields before the member took.
+      if (Gnu)
+        Layout.cover((EndBit + 7) / 8);
       const uint64_t At = Layout.end();
       step(Layout.place(Field.BitOffset / 8, Size, Align), Base / 8 + At,
            Indent, Out);
+      EndBit = Field.BitOffset + Size * 8;
     }
 
     // An anonymous type is defined in place, an array of it too.
@@ -451,6 +485,8 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
   }
   if (!Outer)
     return;
+  if (Gnu)
+    Layout.cover((EndBit + 7) / 8);
   const uint64_t At = Layout.end();
   step(Layout.finish(Record.Size, Library.alignOf(Record)), Base / 8 + At,
        Indent, Out);

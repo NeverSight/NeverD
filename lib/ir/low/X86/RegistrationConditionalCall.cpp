@@ -74,7 +74,8 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
   if (!Dec.init(Image))
     return false;
   CFGBuilder Builder;
-  auto Callee = Builder.build(Image, Dec, Target, "bound-seh-call");
+  auto Callee =
+      Builder.buildIntegerFrameProof(Image, Dec, Target, "bound-seh-call");
   for (const auto &Block : Callee.Blocks)
     for (const auto &Insn : Block.InstructionBoundaries)
       if (!chargeCalleeWork(Work, 1) ||

@@ -46,11 +46,11 @@
 #include <QFileInfo>
 #include <QFontMetricsF>
 #include <QHeaderView>
+#include <QHelpEvent>
 #include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QHelpEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -60,6 +60,7 @@
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QScopeGuard>
 #include <QScrollBar>
 #include <QSettings>
@@ -70,8 +71,8 @@
 #include <QTabBar>
 #include <QTableView>
 #include <QTemporaryDir>
-#include <QTextBlock>
 #include <QTest>
+#include <QTextBlock>
 #include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
@@ -1971,8 +1972,8 @@ private slots:
     const auto unpacked = ProjectDatabase::unpack(
         path + ".nddb", restored.path(), &databaseError);
     QVERIFY2(!unpacked.isEmpty(), qPrintable(databaseError));
-    QCOMPARE(readAll(unpacked + ".neverd-code.json"),
-             readAll(path + ".neverd-code.json"));
+    QCOMPARE(readAll(unpacked + ".neverd/code.json"),
+             readAll(path + ".neverd/code.json"));
     bench.session.restart();
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.loaded(), OpenTimeoutMs);
     QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
@@ -2239,7 +2240,7 @@ private slots:
             view->text()->allText().contains("code line 699"),
         5000);
     QVERIFY(bench.session.dirty());
-    QVERIFY(!QFile::exists(path + ".neverd-annotations.json"));
+    QVERIFY(!QFile::exists(path + ".neverd/annotations.json"));
     // Tab changes focus without removing either side of the split.
     view->text()->setFocus();
     bench.action(ActionId::JumpPseudocode)->trigger();
@@ -3773,7 +3774,7 @@ private slots:
       // The answer is the project's as soon as it is given, in a file
       // beside the binary rather than a database.
       const auto debug =
-          QJsonDocument::fromJson(readAll(path + ".neverd-debug.json"))
+          QJsonDocument::fromJson(readAll(path + ".neverd/debug.json"))
               .object();
       QCOMPARE(debug.value("dwarf").toObject().value("mode").toString(),
                QStringLiteral("none"));
@@ -3958,7 +3959,7 @@ private slots:
       // The answer is the project's as soon as it is given, in a file
       // beside the binary rather than a database.
       const auto debug =
-          QJsonDocument::fromJson(readAll(path + ".neverd-debug.json"))
+          QJsonDocument::fromJson(readAll(path + ".neverd/debug.json"))
               .object();
       QCOMPARE(debug.value("map").toObject().value("mode").toString(),
                QStringLiteral("none"));
@@ -4118,7 +4119,7 @@ private slots:
       // The answer is the project's as soon as it is given, in a file
       // beside the binary rather than a database.
       const auto debug =
-          QJsonDocument::fromJson(readAll(path + ".neverd-debug.json"))
+          QJsonDocument::fromJson(readAll(path + ".neverd/debug.json"))
               .object();
       QCOMPARE(debug.value("symbols").toObject().value("mode").toString(),
                QStringLiteral("none"));
@@ -4450,7 +4451,7 @@ private slots:
     bench.session.setComment(Base, QStringLiteral("saved comment"));
     QTRY_VERIFY(bench.session.dirty());
     bench.session.save();
-    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(path + ".neverd-annotations.json"),
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(path + ".neverd/annotations.json"),
                              OpenTimeoutMs);
     QTRY_VERIFY(!bench.session.dirty());
     bench.session.setComment(Base + 0x140, QStringLiteral("unsaved comment"));
@@ -4475,7 +4476,7 @@ private slots:
                              OpenTimeoutMs);
     QCOMPARE(bench.session.filePath(), path);
     QVERIFY(!bench.session.dirty());
-    const auto saved = readAll(path + ".neverd-annotations.json");
+    const auto saved = readAll(path + ".neverd/annotations.json");
     QVERIFY(saved.contains("saved comment"));
     QVERIFY(!saved.contains("unsaved comment"));
     auto *log = bench.window->findChild<OutputWindow *>()
@@ -4528,9 +4529,9 @@ private slots:
     bench.session.setComment(Base, QStringLiteral("kept elsewhere"));
     QTRY_VERIFY(bench.session.dirty());
     bench.session.save();
-    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(copy + ".neverd-annotations.json"),
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(copy + ".neverd/annotations.json"),
                              OpenTimeoutMs);
-    QVERIFY(!QFile::exists(path + ".neverd-annotations.json"));
+    QVERIFY(!QFile::exists(path + ".neverd/annotations.json"));
     QTRY_VERIFY(!bench.session.dirty());
 
     // Reloading reads the file the user opened, with what was saved.
@@ -4543,7 +4544,7 @@ private slots:
     QCOMPARE(bench.session.projectPath(), path);
     QCOMPARE(bench.session.filePath(), copy);
     QVERIFY(
-        readAll(copy + ".neverd-annotations.json").contains("kept elsewhere"));
+        readAll(copy + ".neverd/annotations.json").contains("kept elsewhere"));
   }
 
   void fileDropKeepsUnsavedChangesWhenCancelled() {
@@ -4781,8 +4782,8 @@ private slots:
                qPrintable(name.data().toString()));
       QVERIFY(name.data(Qt::ToolTipRole)
                   .toString()
-                  .contains(QStringLiteral("<b>%1</b>")
-                                .arg(name.data().toString())));
+                  .contains(
+                      QStringLiteral("<b>%1</b>").arg(name.data().toString())));
     }
     const QModelIndexList device =
         list->model()->match(list->model()->index(0, 1), Qt::DisplayRole,
@@ -4819,8 +4820,8 @@ private slots:
     // its cursor is on.
     layout->setCurrentItem(layout->topLevelItem(2));
     types->setPage(1);
-    QTRY_VERIFY(source->textCursor().block().text().contains(
-        QStringLiteral("Links;")));
+    QTRY_VERIFY(
+        source->textCursor().block().text().contains(QStringLiteral("Links;")));
     QCOMPARE(source->extraSelections().size(), 1);
     QCOMPARE(source->extraSelections().first().cursor.block(),
              source->textCursor().block());
@@ -5713,10 +5714,10 @@ private slots:
     bench.session.setComment(Base + 0x140, QString::fromUtf8("中文 تعليق"));
     QTRY_VERIFY(bench.session.dirty());
     bench.session.save();
-    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(path + ".neverd-annotations.json"),
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(path + ".neverd/annotations.json"),
                              OpenTimeoutMs);
     QTRY_VERIFY(!bench.session.dirty());
-    QVERIFY(QString::fromUtf8(readAll(path + ".neverd-annotations.json"))
+    QVERIFY(QString::fromUtf8(readAll(path + ".neverd/annotations.json"))
                 .contains(QString::fromUtf8("中文 تعليق")));
 
     // Renames reach the function window.
@@ -5746,7 +5747,7 @@ private slots:
     QCOMPARE(disassembly->currentItem(), std::optional<Address>(loose));
     QTRY_VERIFY(bench.action(ActionId::EditDeleteFunction)->isEnabled());
     QVERIFY(!bench.action(ActionId::EditCreateFunction)->isEnabled());
-    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(path + ".neverd-functions.json"),
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(path + ".neverd/functions.json"),
                              OpenTimeoutMs);
     // Deleting it gives the instruction back to the function around it, and
     // undo brings the new function back.
@@ -5771,7 +5772,7 @@ private slots:
                               OpenTimeoutMs);
     QTRY_VERIFY(bench.action(ActionId::EditFunction)->isEnabled());
     const auto statedRows = [&] {
-      return QJsonDocument::fromJson(readAll(path + ".neverd-functions.json"))
+      return QJsonDocument::fromJson(readAll(path + ".neverd/functions.json"))
           .array();
     };
     const auto statesNoReturn = [&] {
@@ -5856,7 +5857,7 @@ private slots:
     // bytes, and undo takes U back.  Each commits at once.
     const Address object = Base + 0x3200;
     const auto items = [&] {
-      return QString::fromUtf8(readAll(path + ".neverd-items.json"));
+      return QString::fromUtf8(readAll(path + ".neverd/items.json"));
     };
     disassembly->navigate(object);
     disassembly->focusContent();
@@ -5881,7 +5882,7 @@ private slots:
     const Address instruction = Base + 0x51;
     const auto operandFormat = [&] {
       const auto rows =
-          QJsonDocument::fromJson(readAll(path + ".neverd-operands.json"))
+          QJsonDocument::fromJson(readAll(path + ".neverd/operands.json"))
               .array();
       for (const auto &row : rows)
         for (const auto &entry : row.toObject().value("operands").toArray())
@@ -5987,7 +5988,7 @@ private slots:
 
     const auto stated = [&] {
       for (const auto &row :
-           QJsonDocument::fromJson(readAll(path + ".neverd-functions.json"))
+           QJsonDocument::fromJson(readAll(path + ".neverd/functions.json"))
                .array())
         if (addressValue(row.toObject().value("addr")) == entry)
           return row.toObject();
@@ -6113,10 +6114,10 @@ private slots:
     session.setComment(Base, QStringLiteral("first revision"));
     session.setComment(Base, QStringLiteral("second revision"));
     session.save();
-    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(first + ".neverd-annotations.json"),
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(first + ".neverd/annotations.json"),
                              OpenTimeoutMs);
     QTRY_VERIFY(!session.dirty());
-    QVERIFY(readAll(first + ".neverd-annotations.json")
+    QVERIFY(readAll(first + ".neverd/annotations.json")
                 .contains("second revision"));
 
     // Opening another file with unsaved edits asks first.
@@ -6135,7 +6136,7 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
     QVERIFY(!session.dirty());
     QVERIFY(
-        readAll(first + ".neverd-annotations.json").contains("comment on A"));
+        readAll(first + ".neverd/annotations.json").contains("comment on A"));
 
     // An interrupted external read gets a terminal reply.
     QSignalSpy replies(&session, &Session::externalResponse);
@@ -6160,7 +6161,7 @@ private slots:
     session.resolveTransition(QStringLiteral("save"));
     QTRY_COMPARE_WITH_TIMEOUT(approved.size(), 1, OpenTimeoutMs);
     QVERIFY(!session.dirty());
-    QVERIFY(readAll(second + ".neverd-annotations.json")
+    QVERIFY(readAll(second + ".neverd/annotations.json")
                 .contains("keep before quit"));
   }
 
@@ -6273,7 +6274,7 @@ private slots:
                        QStringLiteral("late edit after save intent"));
     QTRY_COMPARE_WITH_TIMEOUT(approved.size(), 1, OpenTimeoutMs);
     QVERIFY(!session.dirty());
-    const auto bytes = readAll(path + ".neverd-annotations.json");
+    const auto bytes = readAll(path + ".neverd/annotations.json");
     QVERIFY(bytes.contains("accepted before quit"));
     QVERIFY(!bytes.contains("late edit after save intent"));
   }
@@ -6315,7 +6316,7 @@ private slots:
                QKeySequence("C"));
       QTest::keyClick(view->listing(), Qt::Key_C);
       const auto rows = [&] {
-        return QJsonDocument::fromJson(readAll(path + ".neverd-items.json"))
+        return QJsonDocument::fromJson(readAll(path + ".neverd/items.json"))
             .array();
       };
       QTRY_COMPARE_WITH_TIMEOUT(rows().size(), 3, OpenTimeoutMs);
@@ -6439,8 +6440,11 @@ private slots:
       QVERIFY(markPosition(bench, QString::fromUtf8("共享标记")));
       QCOMPARE(bookmarkTexts(bench),
                QStringList{QString::fromUtf8("共享标记")});
-      const auto bookmarks = readAll(path + ".neverd-bookmarks.json");
-      QVERIFY2(bookmarks.startsWith("[\n  {\n    \"address\": \""),
+      // The file the command line's bookmarks command keeps too.
+      const auto bookmarks = readAll(path + ".neverd/bookmarks.json");
+      QVERIFY2(bookmarks.startsWith("[\n  {\n    \"addr\": \"" +
+                                    hexAddress(Base + 0x140).toUtf8() +
+                                    "\",\n    \"name\": \""),
                bookmarks.constData());
       QVERIFY(bookmarks.contains(QString::fromUtf8("共享标记").toUtf8()));
       QVERIFY(!bench.action(ActionId::FileSave)->isEnabled());
@@ -6450,7 +6454,7 @@ private slots:
       bench.session.save();
       QTRY_VERIFY_WITH_TIMEOUT(!bench.session.dirty(), OpenTimeoutMs);
       QVERIFY(!bench.action(ActionId::FileSave)->isEnabled());
-      QVERIFY(readAll(path + ".neverd-annotations.json")
+      QVERIFY(readAll(path + ".neverd/annotations.json")
                   .startsWith("[\n  {\n    \"addr\": "));
       QVERIFY(bench.window->close());
     }
@@ -6458,26 +6462,34 @@ private slots:
                 .entryList({QStringLiteral("*.nddb")}, QDir::Files)
                 .isEmpty());
     const auto workbench =
-        QJsonDocument::fromJson(readAll(path + ".neverd-workbench.json"))
+        QJsonDocument::fromJson(readAll(path + ".neverd/local/workbench.json"))
             .object();
     QCOMPARE(workbench.value("location").toObject().value("address").toString(),
              hexAddress(Base + 0x140));
 
-    // The clone: the binary and the shared files, without history, journal
-    // or the user's own workbench.
+    // The project is one folder beside the binary.  It keeps each user's
+    // own files in local/, which its own .gitignore leaves out, and asks
+    // git to merge the rest row by row.
+    const QDir project(path + ".neverd");
+    QVERIFY(readAll(project.filePath(QStringLiteral(".gitignore")))
+                .contains("/local/"));
+    QVERIFY(readAll(project.filePath(QStringLiteral(".gitattributes")))
+                .contains("*.json merge=neverd"));
+    QVERIFY(QFileInfo(project.filePath(QStringLiteral("local"))).isDir());
+    QVERIFY(QDir(directory.path())
+                .entryList({QStringLiteral("shared.bin.neverd-*")}, QDir::Files)
+                .isEmpty());
+
+    // The clone: the binary and the project folder as git carries it,
+    // without local/.
     QTemporaryDir clone;
     const auto copy = clone.filePath(QStringLiteral("shared.bin"));
     QVERIFY(QFile::copy(path, copy));
+    QVERIFY(QDir().mkpath(copy + ".neverd"));
     for (const auto &name :
-         QDir(directory.path())
-             .entryList({QStringLiteral("shared.bin.neverd-*")}, QDir::Files)) {
-      if (name.endsWith(QLatin1String("-history.json")) ||
-          name.endsWith(QLatin1String("-journal.json")) ||
-          name.endsWith(QLatin1String("-workbench.json")) ||
-          name.endsWith(QLatin1String(".lock")))
-        continue;
-      QVERIFY(QFile::copy(directory.filePath(name), clone.filePath(name)));
-    }
+         project.entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot))
+      QVERIFY(QFile::copy(project.filePath(name),
+                          QDir(copy + ".neverd").filePath(name)));
     {
       Workbench bench;
       bench.window->openFile(copy);
@@ -6490,9 +6502,9 @@ private slots:
       QVERIFY(bench.window->close());
     }
     // With the user's own workbench file, the place comes back too.
-    QFile::remove(copy + ".neverd-workbench.json");
-    QVERIFY(QFile::copy(path + ".neverd-workbench.json",
-                        copy + ".neverd-workbench.json"));
+    QFile::remove(copy + ".neverd/local/workbench.json");
+    QVERIFY(QFile::copy(path + ".neverd/local/workbench.json",
+                        copy + ".neverd/local/workbench.json"));
     Workbench bench;
     bench.window->openFile(copy);
     QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
@@ -6568,6 +6580,110 @@ private slots:
     QVERIFY(!databaseRenames().contains("second_name"));
   }
 
+  void projectFilesChangedOnDiskAreTaken() {
+    // git pull, another tool or an AI agent changes the project's files
+    // while the project is open: the workbench takes them as they are, and
+    // a comment not saved yet stays on top of them.
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("pulled.bin"));
+    Workbench bench;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    // An edit of our own leaves the undo history that a pull overtakes.
+    bench.session.rename(Base + 0x140, QStringLiteral("ours"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        readAll(path + ".neverd/renames.json").contains("\"ours\""),
+        OpenTimeoutMs);
+    bench.session.setComment(Base, QStringLiteral("staged here"));
+    QTRY_VERIFY(bench.session.dirty());
+
+    // A teammate's rename and comment arrive, and a bookmark.
+    const auto replace = [](const QString &file, const QByteArray &text) {
+      QSaveFile out(file);
+      return out.open(QIODevice::WriteOnly) && out.write(text) == text.size() &&
+             out.commit();
+    };
+    const auto rows = [](const QJsonObject &row) {
+      return QJsonDocument(QJsonArray{row}).toJson();
+    };
+    const QString at = hexAddress(Base + 0x140);
+    QVERIFY(replace(path + ".neverd/renames.json",
+                    rows({{"addr", at},
+                          {"original", "function_20"},
+                          {"renamed", "theirs"}})));
+    QVERIFY(replace(path + ".neverd/annotations.json",
+                    rows({{"addr", at}, {"text", "their note"}})));
+    QVERIFY(
+        replace(path + ".neverd/bookmarks.json",
+                rows({{"addr", at}, {"name", "their mark"}, {"note", ""}})));
+    const auto resolved = [&](Address address) {
+      QJsonObject result;
+      bool read = false;
+      bench.session.read(QStringLiteral("resolve"),
+                         {{"query", hexAddress(address)}}, &bench.session,
+                         [&](const QJsonObject &payload) {
+                           result = payload;
+                           read = true;
+                         });
+      QTest::qWaitFor([&] { return read; }, OpenTimeoutMs);
+      return result;
+    };
+    QTRY_COMPARE_WITH_TIMEOUT(
+        resolved(Base + 0x140).value("comment").toString(),
+        QStringLiteral("their note"), OpenTimeoutMs);
+    QCOMPARE(resolved(Base).value("comment").toString(),
+             QStringLiteral("staged here"));
+    QVERIFY(bench.session.dirty());
+    QTRY_COMPARE(bookmarkTexts(bench),
+                 QStringList{QStringLiteral("their mark")});
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    QTRY_VERIFY(log->toPlainText().contains(
+        QStringLiteral("changed on disk and were loaded")));
+
+    // Edits go on from the files as they are now, and saving keeps both.
+    bench.session.save();
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.dirty(), OpenTimeoutMs);
+    const auto notes = readAll(path + ".neverd/annotations.json");
+    QVERIFY2(notes.contains("their note") && notes.contains("staged here"),
+             notes.constData());
+    bench.session.rename(Base + 0x140, QStringLiteral("after_pull"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        readAll(path + ".neverd/renames.json").contains("after_pull"),
+        OpenTimeoutMs);
+    QVERIFY2(bench.session.lastError().isEmpty(),
+             qPrintable(bench.session.lastError()));
+  }
+
+  void filesBesideTheBinaryMoveIntoItsProjectFolder() {
+    // An older NeverD kept the project as files beside the binary: opening
+    // it moves them into the binary's project folder, and they read as
+    // before.
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("older.bin"));
+    const auto rows = [](const QJsonObject &row) {
+      return QJsonDocument(QJsonArray{row}).toJson();
+    };
+    const QString at = hexAddress(Base + 0x140);
+    const auto write = [](const QString &file, const QByteArray &text) {
+      QFile out(file);
+      return out.open(QIODevice::WriteOnly) && out.write(text) == text.size();
+    };
+    QVERIFY(write(path + ".neverd-annotations.json",
+                  rows({{"addr", at}, {"text", "older note"}})));
+    QVERIFY(write(path + ".neverd-bookmarks.json",
+                  rows({{"addr", at}, {"name", "older mark"}, {"note", ""}})));
+    Workbench bench;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(!QFileInfo::exists(path + ".neverd-annotations.json"));
+    QVERIFY(!QFileInfo::exists(path + ".neverd-bookmarks.json"));
+    QVERIFY(readAll(path + ".neverd/annotations.json").contains("older note"));
+    QCOMPARE(commentAt(bench, Base + 0x140), QStringLiteral("older note"));
+    QCOMPARE(bookmarkTexts(bench), QStringList{QStringLiteral("older mark")});
+  }
+
   void bookmarksFromBeforeProjectsKeptThemStillShow() {
     QTemporaryDir directory;
     const auto path = writeFixture(directory, QStringLiteral("legacy.bin"));
@@ -6592,7 +6708,7 @@ private slots:
       // Its choices now have a file beside the unpacked copy too, which the
       // database lacks without anything to save: opening changed nothing.
       QCOMPARE(QJsonDocument::fromJson(
-                   readAll(bench.session.filePath() + ".neverd-debug.json"))
+                   readAll(bench.session.filePath() + ".neverd/debug.json"))
                    .object()
                    .value("dwarf")
                    .toObject()
@@ -6614,7 +6730,7 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
     QCOMPARE(bookmarkTexts(bench),
              QStringList{QStringLiteral("from the settings")});
-    QVERIFY(!QFileInfo::exists(path + ".neverd-bookmarks.json"));
+    QVERIFY(!QFileInfo::exists(path + ".neverd/bookmarks.json"));
     // The next mark keeps them all with the project.
     auto *view = bench.window->disassembly();
     view->navigate(Base + 0x140);
@@ -6622,13 +6738,18 @@ private slots:
     QTRY_COMPARE(view->currentItem(), std::optional<Address>(Base + 0x140));
     QVERIFY(markPosition(bench, QStringLiteral("made now")));
     const auto rows =
-        QJsonDocument::fromJson(readAll(path + ".neverd-bookmarks.json"))
+        QJsonDocument::fromJson(readAll(path + ".neverd/bookmarks.json"))
             .array();
     QCOMPARE(rows.size(), 2);
-    QCOMPARE(rows.at(0).toObject().value("text").toString(),
+    QCOMPARE(rows.at(0).toObject().value("name").toString(),
              QStringLiteral("from the settings"));
-    QCOMPARE(rows.at(1).toObject().value("text").toString(),
+    QCOMPARE(rows.at(1).toObject().value("name").toString(),
              QStringLiteral("made now"));
+    // Marking a marked address again renames its bookmark.
+    QVERIFY(markPosition(bench, QStringLiteral("renamed mark")));
+    QCOMPARE(bookmarkTexts(bench),
+             (QStringList{QStringLiteral("from the settings"),
+                          QStringLiteral("renamed mark")}));
   }
 
   void databaseCarriesTheProject() {

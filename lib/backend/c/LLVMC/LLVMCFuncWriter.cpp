@@ -2385,6 +2385,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   OmittedLeftoverNarrow.clear();
   LeftoverSiblingFill.clear();
   DebugFn.reset();
+  DebugPositional = true;
   DebugThisRecord = nullptr;
   DebugThisArg = nullptr;
   ParamDebugTypes.clear();
@@ -2425,7 +2426,17 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   if (Dbg && FunctionEntry) {
     if (auto FS = Dbg->resolveFunction(FunctionEntry)) {
       DebugFn = std::move(*FS);
-      if (!Fn.arg_empty() && !DebugFn->Params.empty() &&
+      // The declaration names the arguments by position.  An i386 function
+      // declared to take every argument on the stack takes no register: one
+      // recovered anyway, such as an ECX a call passes on, comes before the
+      // stack arguments and moves every name after it.  Where more arguments
+      // were recovered than declared, none is named.
+      DebugPositional = Opts.TheArch != Arch::X86 ||
+                        (DebugFn->CallConv != DebugCallConv::Cdecl &&
+                         DebugFn->CallConv != DebugCallConv::Stdcall &&
+                         DebugFn->CallConv != DebugCallConv::Unknown) ||
+                        Fn.arg_size() <= DebugFn->Params.size();
+      if (DebugPositional && !Fn.arg_empty() && !DebugFn->Params.empty() &&
           DebugFn->Params[0].second) {
         TypeRef Ty = DebugFn->Params[0].second;
         TypeRef Rec = Ty;
@@ -2462,7 +2473,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
       std::string Raw;
       if (Sret >= 0 && static_cast<int>(ParamIdx) == Sret)
         Raw = "result";
-      else if (DebugFn) {
+      else if (DebugFn && DebugPositional) {
         size_t DebugIdx = ParamIdx;
         if (Sret >= 0 && static_cast<int>(ParamIdx) > Sret)
           DebugIdx = static_cast<size_t>(ParamIdx - 1);
@@ -8555,10 +8566,10 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
               It->second->Kind == NdTypeKind::Ptr && It->second->Pointee &&
               It->second->Pointee->Kind == NdTypeKind::Struct &&
               !It->second->Pointee->SourceName.empty()) {
-            const std::string Tag =
-                cNamedTypeSpelling(It->second->Pointee->SourceName);
-            if (!Tag.empty()) {
-              OS << Tag << "* " << AllocName << ";\n";
+            if (std::string Pointer =
+                    recordPointerSpelling(*It->second->Pointee);
+                !Pointer.empty()) {
+              OS << Pointer << " " << AllocName << ";\n";
               continue;
             }
           }
@@ -8915,10 +8926,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                                                     Opts.TheArch, Opts.Format);
     if (!Record)
       return {};
-    const std::string Tag = cNamedTypeSpelling(Record->SourceName);
-    if (Tag.empty())
-      return {};
-    return Tag + "*";
+    return recordPointerSpelling(*Record);
   };
 
   auto BindParam = [&](llvm::Argument &Arg, unsigned) { return getName(&Arg); };
@@ -8937,11 +8945,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       if (Ty && Ty->Kind == NdTypeKind::Ptr && Ty->Pointee &&
           Ty->Pointee->Kind == NdTypeKind::Struct &&
           !Ty->Pointee->SourceName.empty()) {
-        const std::string Tag = cNamedTypeSpelling(Ty->Pointee->SourceName);
-        if (!Tag.empty()) {
+        if (std::string Pointer = recordPointerSpelling(*Ty->Pointee);
+            !Pointer.empty()) {
           if (Opts.RecordDefinitions && Arg.getType()->isIntegerTy())
             PointerParams.insert(&Arg);
-          return Tag + "*";
+          return Pointer;
         }
       }
       if (Ty && Ty->Kind == NdTypeKind::Struct && Ty->IsEnum &&
@@ -9772,10 +9780,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
               Found->second->Kind == NdTypeKind::Ptr &&
               Found->second->Pointee &&
               Found->second->Pointee->Kind == NdTypeKind::Struct) {
-            const std::string Tag =
-                cNamedTypeSpelling(Found->second->Pointee->SourceName);
-            if (!Tag.empty())
-              Type = Tag + "*";
+            if (std::string Pointer =
+                    recordPointerSpelling(*Found->second->Pointee);
+                !Pointer.empty())
+              Type = std::move(Pointer);
           }
           Declaration =
               "    " + allocaAlignment(*AI) + Type + " " + It->second + ";\n";

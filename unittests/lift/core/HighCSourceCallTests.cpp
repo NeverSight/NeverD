@@ -2250,6 +2250,15 @@ TEST(HighCSourceCalls, CallbackDeclaratorsPreserveArgumentsAndReturnTypes) {
   EXPECT_EQ(
       declarationToC(NdType::makePtr(NdType::makeFunc(Callback)), "factory"),
       "void (*(*factory)(void))(void*)");
+  // An i386 callback's pointers are four bytes: EnumDateFormatsExA's
+  // DATEFMT_ENUMPROCEXA takes a string and a calendar.
+  auto Narrow = NdType::makePtr(NdType::makeVoid());
+  Narrow->Size = 4;
+  auto Enumerator = NdType::makePtr(NdType::makeFunc(
+      NdType::makeInt(4, true), {Narrow, NdType::makeInt(4, false)}));
+  Enumerator->Size = 4;
+  EXPECT_EQ(declarationToC(Enumerator, "proc"),
+            "int32_t (*proc)(void*, uint32_t)");
   auto Cycle = NdType::makePtr();
   Cycle->Pointee = Cycle;
   EXPECT_THROW(typeToC(Cycle), std::invalid_argument);

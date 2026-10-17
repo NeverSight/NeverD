@@ -2440,6 +2440,7 @@ static bool hoistIdenticalIfElseSuffixes(std::vector<HighStmt> &Body,
               [](const HighStmt &) { return false; }))
         break;
       Joins.push_back(std::move(S.ElseBody.back()));
+      Joins.back().Val = withMergedCallSites(Joins.back().Val, ValA);
       S.Body.pop_back();
       S.ElseBody.pop_back();
     }
@@ -4942,10 +4943,12 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
         size_t ThenCut = ThenEnd;
         size_t ElseCut = ElseEnd;
         std::vector<size_t> Moved;
+        std::vector<size_t> Partners;
         while (ThenEnd > 0 && ElseEnd > 0) {
           if (pairs(ThenEnd - 1, ElseEnd - 1)) {
             Moved.push_back(--ElseEnd);
             ThenCut = --ThenEnd;
+            Partners.push_back(ThenEnd);
             ElseCut = ElseEnd;
             continue;
           }
@@ -4963,8 +4966,11 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
           Moved.clear();
         std::vector<HighStmt> Joins;
         if (!Moved.empty()) {
-          for (auto It = Moved.rbegin(); It != Moved.rend(); ++It)
-            Joins.push_back(std::move(Stmt.ElseBody[*It]));
+          for (size_t K = Moved.size(); K-- > 0;) {
+            Joins.push_back(std::move(Stmt.ElseBody[Moved[K]]));
+            Joins.back().Val = withMergedCallSites(Joins.back().Val,
+                                                   Stmt.Body[Partners[K]].Val);
+          }
           Stmt.Body.erase(Stmt.Body.begin() + static_cast<long>(ThenCut),
                           Stmt.Body.end());
           Stmt.ElseBody.erase(Stmt.ElseBody.begin() +

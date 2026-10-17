@@ -13,21 +13,21 @@
 #include "llvm/ADT/StringSet.h"
 
 #include <array>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 
 namespace neverd::types {
+/// lib/types/headers/<File>.h, as the build embeds it, each in a unit of its
+/// own (HeaderLibrarySource.cpp.in).
+namespace header_sources {
+#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling)                 \
+  extern const unsigned char File[];                                           \
+  extern const std::size_t File##Size;
+#include "neverd/types/HeaderLibraries.def"
+} // namespace header_sources
+
 namespace {
-
-/// lib/types/headers/WindowsKernelX64.h, as the build embeds it.
-constexpr unsigned char WindowsKernelX64Source[] = {
-#include "WindowsKernelX64.inc"
-};
-
-/// lib/types/headers/WindowsUserX64.h, as the build embeds it.
-constexpr unsigned char WindowsUserX64Source[] = {
-#include "WindowsUserX64.inc"
-};
 
 constexpr size_t LibraryCount = 0
 #define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling) +1
@@ -80,8 +80,9 @@ llvm::StringRef headerLibrarySource(HeaderLibrary Library) {
   switch (Library) {
 #define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling)                 \
   case HeaderLibrary::Id:                                                      \
-    return llvm::StringRef(reinterpret_cast<const char *>(File##Source),       \
-                           sizeof(File##Source));
+    return llvm::StringRef(                                                    \
+        reinterpret_cast<const char *>(header_sources::File),                  \
+        header_sources::File##Size);
 #include "neverd/types/HeaderLibraries.def"
   }
   return "";

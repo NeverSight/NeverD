@@ -25,6 +25,7 @@
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/support/ProjectFiles.h"
 #include "neverd/support/StringScan.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -891,6 +892,78 @@ static std::string inputSha256(Session &S) {
         (*Buffer)->getBufferSize()));
   }
   return llvm::toHex(*S.Img.InputFileSHA256, /*LowerCase=*/true);
+}
+
+/// The loaded input as a project's project.json names it.
+static llvm::json::Object projectInput(Session &S) {
+  std::error_code Error;
+  const auto Size = std::filesystem::file_size(S.FilePath, Error);
+  return llvm::json::Object{
+      {"name", jsonSafeText(pathToUTF8(S.FilePath.filename()))},
+      {"size", Error ? 0 : static_cast<int64_t>(Size)},
+      {"sha256", inputSha256(S)}};
+}
+
+/// The input the project's project.json names, if it names one.
+static std::optional<llvm::json::Object> recordedInput(const Session &S) {
+  auto Buffer = llvm::MemoryBuffer::getFile(pathToUTF8(
+      project_files::path(S.FilePath, project_files::File::Manifest)));
+  if (!Buffer)
+    return std::nullopt;
+  llvm::Expected<llvm::json::Value> Manifest =
+      llvm::json::parse((*Buffer)->getBuffer());
+  if (!Manifest) {
+    llvm::consumeError(Manifest.takeError());
+    return std::nullopt;
+  }
+  const llvm::json::Object *Object = Manifest->getAsObject();
+  const llvm::json::Object *Input =
+      Object ? Object->getObject("input") : nullptr;
+  if (!Input)
+    return std::nullopt;
+  return *Input;
+}
+
+bool neverd::sdk::recordProjectInput(Session *S) {
+  if (S->MemoryInputBytes)
+    return true;
+  llvm::json::Object Input = projectInput(*S);
+  if (Input.getString("sha256").value_or("").empty())
+    return true;
+  if (auto Recorded = recordedInput(*S);
+      Recorded && Recorded->getString("sha256") == Input.getString("sha256"))
+    return true;
+  return saveSidecar(
+      S, project_files::path(S->FilePath, project_files::File::Manifest),
+      llvm::json::Object{{"neverd_project", 1}, {"input", std::move(Input)}},
+      "project");
+}
+
+const char *neverd_project_json(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  S->clearError();
+  if (!S->Loaded || S->MemoryInputBytes) {
+    S->setError("no file is loaded");
+    return nullptr;
+  }
+  llvm::json::Object Input = projectInput(*S);
+  std::optional<llvm::json::Object> Recorded = recordedInput(*S);
+  const bool Matches =
+      !Recorded || Recorded->getString("sha256") == Input.getString("sha256");
+  return dupStr(jsonToString(llvm::json::Object{
+      {"folder", jsonSafeText(pathToUTF8(project_files::folder(S->FilePath)))},
+      {"input", std::move(Input)},
+      {"recorded", Recorded ? llvm::json::Value(std::move(*Recorded))
+                            : llvm::json::Value(nullptr)},
+      {"matches", Matches}}));
+}
+
+int neverd_project_record(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  S->clearError();
+  if (!S->Loaded || !S->requireFileBacked())
+    return -1;
+  return recordProjectInput(S) ? 0 : -1;
 }
 
 const char *neverd_session_input_sha256(neverd_session_t Sess) {

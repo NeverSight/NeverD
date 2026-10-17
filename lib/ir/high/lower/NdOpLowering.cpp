@@ -159,6 +159,7 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
                                 ConstantAddressProvenance::DataAddress);
     }
   auto CallExpr = HighExpr::makeCall(Callee, Target, std::move(Args));
+  CallExpr->CallSiteAddr = CurOp.Addr;
   CallExpr->SourceCallHint = CurOp.SourceCallHint;
   CallExpr->DoesNotReturn = CurOp.DoesNotReturn;
   const bool X87Result =

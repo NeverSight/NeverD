@@ -94,6 +94,10 @@ static int realMain(int Argc, char *Argv[]) {
     return runDiff();
   if (SimplifyCmd)
     return runSimplify();
+  if (MergeProjectCmd)
+    return runMergeProject();
+  if (SetupGitCmd)
+    return runSetupGit(Argv[0]);
   if (OptimizeIRCmd)
     return runOptimizeIR();
   if (TranslateObjectCmd)

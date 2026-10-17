@@ -91,33 +91,51 @@ class Target:
     output: Path
 
 
-TARGETS = {
-    "kernel-x64": Target(
-        "x86_64-w64-mingw32", "LLP64", ["#include <ntifs.h>"],
-        ["-D_KERNEL_MODE"] + VERSION, ["ddk", ""], KERNEL_RUNTIME, None,
-        "kernel's types and prototypes for x64 (LLP64), as a driver\n"
-        "// declares them with <ntifs.h>", HEADERS / "WindowsKernelX64.h"),
-    # What a program includes for the Win32 API and the native API ntdll
-    # exports, and for the libraries programs most often call: Winsock
-    # (before <windows.h>, which would include the old <winsock.h>),
-    # WinINet, the shell, process and module enumeration, debugging help,
-    # CNG, the IP helper, device setup, trust verification, user
-    # environments, terminal services, LAN Manager, security descriptors and
-    # policies, common controls, URL monikers and the event log.  WinHTTP is
-    # left out: it cannot be included with WinINet.
-    "user-x64": Target(
-        "x86_64-w64-mingw32", "LLP64",
-        [f"#include <{name}.h>" for name in (
-            "winsock2", "ws2tcpip", "windows", "winternl", "wininet",
-            "shellapi", "shlobj", "shlwapi", "psapi", "tlhelp32", "dbghelp",
-            "bcrypt", "ncrypt", "iphlpapi", "setupapi", "wintrust", "softpub",
-            "userenv", "wtsapi32", "lm", "sddl", "aclapi", "ntsecapi",
-            "commctrl", "urlmon", "winevt", "evntrace")],
+# The headers a program includes for the Win32 API and the native API ntdll
+# exports, and for the libraries programs most often call: Winsock (before
+# <windows.h>, which would include the old <winsock.h>), WinINet, the shell,
+# process and module enumeration, debugging help, CNG, the IP helper, device
+# setup, trust verification, user environments, terminal services, LAN
+# Manager, security descriptors and policies, common controls, URL monikers
+# and the event log.  WinHTTP is left out: it cannot be included with
+# WinINet.
+USER_HEADERS = (
+    "winsock2", "ws2tcpip", "windows", "winternl", "wininet", "shellapi",
+    "shlobj", "shlwapi", "psapi", "tlhelp32", "dbghelp", "bcrypt", "ncrypt",
+    "iphlpapi", "setupapi", "wintrust", "softpub", "userenv", "wtsapi32",
+    "lm", "sddl", "aclapi", "ntsecapi", "commctrl", "urlmon", "winevt",
+    "evntrace")
+
+
+def kernel(triple, model, arch, output):
+    """What a driver for the architecture includes: <ntifs.h>, which
+    brings <ntddk.h> and <wdm.h>, in kernel mode."""
+    return Target(
+        triple, model, ["#include <ntifs.h>"], ["-D_KERNEL_MODE"] + VERSION,
+        ["ddk", ""], KERNEL_RUNTIME, None,
+        f"kernel's types and prototypes for {arch} ({model}), as a driver\n"
+        "// declares them with <ntifs.h>", HEADERS / output)
+
+
+def user(triple, model, arch, output):
+    """What a program for the architecture includes (USER_HEADERS)."""
+    return Target(
+        triple, model, [f"#include <{name}.h>" for name in USER_HEADERS],
         VERSION + ["-DWINVER=0x0A00"], [""], USER_RUNTIME, USER_LEFT_OUT,
-        "user mode's types and prototypes for x64 (LLP64), as a\n"
+        f"user mode's types and prototypes for {arch} ({model}), as a\n"
         "// program declares them with <windows.h>, <winternl.h> and the "
         "headers of\n// the libraries programs most often call",
-        HEADERS / "WindowsUserX64.h"),
+        HEADERS / output)
+
+
+# mingw-w64's DDK declares no ARM64 kernel ("Unknown Architecture").
+TARGETS = {
+    "kernel-x64": kernel("x86_64-w64-mingw32", "LLP64", "x64",
+                         "WindowsKernelX64.h"),
+    "user-x64": user("x86_64-w64-mingw32", "LLP64", "x64", "WindowsUserX64.h"),
+    "kernel-x86": kernel("i686-w64-mingw32", "ILP32", "x86",
+                         "WindowsKernelX86.h"),
+    "user-x86": user("i686-w64-mingw32", "ILP32", "x86", "WindowsUserX86.h"),
 }
 
 # What the reader may refuse: the compiler's vector and tile types, and what

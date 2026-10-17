@@ -2644,6 +2644,22 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>Base de datos guardada: %1</translation>
     </message>
     <message>
+        <source>The project&apos;s files describe another build of %1 (SHA-256 %2…); their addresses may not match this one. The next edit records this build.</source>
+        <translation>Los archivos del proyecto describen otra compilación de %1 (SHA-256 %2…); sus direcciones pueden no coincidir con esta. La próxima edición registra esta compilación.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here.</source>
+        <translation>Los archivos del proyecto cambiaron en el disco y se cargaron; deshacer empieza aquí.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here. Unsaved comments kept on top: %1</source>
+        <translation>Los archivos del proyecto cambiaron en el disco y se cargaron; deshacer empieza aquí. Comentarios sin guardar conservados encima: %1</translation>
+    </message>
+    <message>
+        <source>The input file changed on disk; reload it to continue editing.</source>
+        <translation>El archivo de entrada cambió en el disco; vuelva a cargarlo para seguir editando.</translation>
+    </message>
+    <message>
         <source>Could not save the database: %1</source>
         <translation>No se pudo guardar la base de datos: %1</translation>
     </message>
@@ -3674,10 +3690,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>El PDB no define ningún tipo.</translation>
     </message>
     <message>
-        <source>No local types: this program has no PDB with types.</source>
-        <translation>No hay tipos locales: este programa no tiene un PDB con tipos.</translation>
-    </message>
-    <message>
         <source>Types that do not lay out as the PDB lists them: %1</source>
         <translation>Tipos cuya disposición no coincide con el PDB: %1</translation>
     </message>
@@ -3951,6 +3963,25 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>at %1, %2 bytes</source>
         <translation>en %1, %2 bytes</translation>
+    </message>
+    <message>
+        <source>From DWARF</source>
+        <translation>De DWARF</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n from DWARF</source>
+        <translation>
+            <numerusform>%n de DWARF</numerusform>
+            <numerusform>%n de DWARF</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The DWARF defines no types.</source>
+        <translation>El DWARF no define tipos.</translation>
+    </message>
+    <message>
+        <source>No local types: this program has no PDB or DWARF with types.</source>
+        <translation>No hay tipos locales: este programa no tiene un PDB ni DWARF con tipos.</translation>
     </message>
 </context>
 <context>

@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -48,22 +49,42 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
 
   const uint64_t SpOff = getTargetRegInfo(TargetArch).StackPointer;
 
-  auto findDef = [&](const MedVar &V) -> const MedOp * {
-    for (const auto &Blk : Func.Blocks)
+  // traceOff follows each link of an esp chain to its SSA definition. Index the
+  // definitions once instead of scanning every operation for each link: on a
+  // 10k-block i386 body the scan made the walk cubic in the function size.
+  // Each key keeps its first definition in block order, as the scan did. The
+  // index points into Func's operations, so inserting operations resets it.
+  using SSAKey = std::tuple<int, int, int>;
+  auto keyOf = [](const MedVar &V) {
+    return SSAKey{static_cast<int>(V.Kind), V.Id, V.SSAVer};
+  };
+  std::map<SSAKey, const MedOp *> DefIndex;
+  std::map<SSAKey, const PhiNode *> PhiIndex;
+  bool Indexed = false;
+  auto indexDefinitions = [&] {
+    if (Indexed)
+      return;
+    DefIndex.clear();
+    PhiIndex.clear();
+    for (const auto &Blk : Func.Blocks) {
       for (const auto &Op : Blk.Ops)
-        if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
-            Op.Output.SSAVer == V.SSAVer)
-          return &Op;
-    return nullptr;
+        DefIndex.emplace(keyOf(Op.Output), &Op);
+      for (const auto &Phi : Blk.Phis)
+        PhiIndex.emplace(keyOf(Phi.Output), &Phi);
+    }
+    Indexed = true;
+  };
+
+  auto findDef = [&](const MedVar &V) -> const MedOp * {
+    indexDefinitions();
+    const auto It = DefIndex.find(keyOf(V));
+    return It == DefIndex.end() ? nullptr : It->second;
   };
 
   auto findPhi = [&](const MedVar &V) -> const PhiNode * {
-    for (const auto &Blk : Func.Blocks)
-      for (const auto &Phi : Blk.Phis)
-        if (Phi.Output.Kind == V.Kind && Phi.Output.Id == V.Id &&
-            Phi.Output.SSAVer == V.SSAVer)
-          return &Phi;
-    return nullptr;
+    indexDefinitions();
+    const auto It = PhiIndex.find(keyOf(V));
+    return It == PhiIndex.end() ? nullptr : It->second;
   };
 
   // Offset of \p V relative to the *entry* stack pointer, or std::nullopt when
@@ -423,6 +444,7 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
     auto &Ops = Func.Blocks[It->first.first].Ops;
     Ops.insert(Ops.begin() + static_cast<std::ptrdiff_t>(It->first.second),
                It->second.begin(), It->second.end());
+    Indexed = false;
   }
   med_calling_conv_detail::recoverFPStackReads(
       Func, TargetArch, 4, 4, BaseIdx, rawStackArgOffset, MutableArgOffsets);

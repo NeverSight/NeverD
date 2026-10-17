@@ -8,6 +8,7 @@
 
 #include "neverd/support/AtomicOutput.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/support/ProjectFiles.h"
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -18,6 +19,18 @@ using namespace neverd::sdk;
 
 bool neverd::sdk::saveSidecar(Session *S, const std::filesystem::path &Path,
                               llvm::json::Value Values, llvm::StringRef Kind) {
+  // A row's address in lowercase hexadecimal, as the workbench writes it:
+  // one spelling, whichever tool wrote the file last.
+  if (llvm::json::Array *Rows = Values.getAsArray())
+    for (llvm::json::Value &Row : *Rows)
+      if (llvm::json::Object *Object = Row.getAsObject())
+        if (std::optional<llvm::StringRef> Address = Object->getString("addr"))
+          (*Object)["addr"] = Address->lower();
+  // The project's files live in its folder beside the input.
+  if (std::error_code Folder = project_files::prepare(S->FilePath)) {
+    S->setError("cannot create the project folder: " + Folder.message());
+    return false;
+  }
   const auto UTF8Path = pathToUTF8(Path);
   auto Temporary = llvm::sys::fs::TempFile::create(
       UTF8Path + ".tmp-%%%%%%",
@@ -52,5 +65,8 @@ bool neverd::sdk::saveSidecar(Session *S, const std::filesystem::path &Path,
                 llvm::toString(std::move(Error)));
     return false;
   }
-  return true;
+  // A file the project now has describes this build of the input.
+  return Path ==
+             project_files::path(S->FilePath, project_files::File::Manifest) ||
+         recordProjectInput(S);
 }

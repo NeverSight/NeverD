@@ -567,12 +567,28 @@ runOptimizationPipeline(llvm::Module &Mod,
       llvm::PreservedAnalyses ThinPA = ThinPipeline.run(Mod, MAM);
       Result->Changed |= !ThinPA.areAllPreserved();
     } else {
+      // A source view shows each function as the machine runs it.  The
+      // inliner would copy a callee's body into its callers, and only into
+      // those that share the callee's LLVM shard, so the C would change
+      // with how the module was split and lose the calls it observed.
+      llvm::SmallVector<llvm::WeakVH, 0> Pinned;
+      if (Options.KeepFunctionBoundaries)
+        for (llvm::Function &F : Mod)
+          if (!F.isDeclaration() &&
+              !F.hasFnAttribute(llvm::Attribute::NoInline) &&
+              !F.hasFnAttribute(llvm::Attribute::AlwaysInline)) {
+            F.addFnAttr(llvm::Attribute::NoInline);
+            Pinned.push_back(&F);
+          }
       llvm::ModulePassManager DefaultPipeline =
           Options.LLVMLevel == llvm::OptimizationLevel::O0
               ? PB.buildO0DefaultPipeline(Options.LLVMLevel)
               : PB.buildPerModuleDefaultPipeline(Options.LLVMLevel);
       llvm::PreservedAnalyses DefaultPA = DefaultPipeline.run(Mod, MAM);
       Result->Changed |= !DefaultPA.areAllPreserved();
+      for (llvm::WeakVH &Handle : Pinned)
+        if (auto *F = llvm::dyn_cast_or_null<llvm::Function>(Handle))
+          F->removeFnAttr(llvm::Attribute::NoInline);
     }
   }
 
@@ -682,6 +698,7 @@ Pipeline::optimizeOrPromoteModule(llvm::Module &Mod, LLVMSourceMap *Sources,
   Options.SourceMap = Sources;
   Options.EnableSemantic = View.Symbolic;
   Options.EnableControlFlowRecovery = View.RecoverControlFlow;
+  Options.KeepFunctionBoundaries = true;
   switch (View.LLVM) {
   case SourceViewOptions::LLVMOptimization::Basic:
   case SourceViewOptions::LLVMOptimization::Custom:

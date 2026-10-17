@@ -578,6 +578,35 @@ std::string extendedIntegerType(unsigned Bytes, bool Signed) {
          std::to_string(Bytes * 8) + ")";
 }
 
+/// Whether \p Type, which holds a function, spells as a C declarator: each
+/// function returns what C can and takes what C passes.  A pointer of any
+/// width spells alike, an i386 callback's four-byte ones too; every other
+/// part is a type a source signature holds (equalSourceTypes).
+bool spellsAsDeclarator(const TypeRef &Type, unsigned Depth,
+                        unsigned &Remaining) {
+  if (!Remaining || !Type || Depth > limits::kMaxCPointerNesting)
+    return false;
+  --Remaining;
+  switch (Type->Kind) {
+  case NdTypeKind::Ptr:
+    return (Type->Size == 4 || Type->Size == 8) &&
+           spellsAsDeclarator(Type->Pointee, Depth + 1, Remaining);
+  case NdTypeKind::Func:
+    if (Type->Size != 0 || !Type->RetType ||
+        Type->RetType->Kind == NdTypeKind::Func ||
+        !spellsAsDeclarator(Type->RetType, Depth + 1, Remaining))
+      return false;
+    for (const TypeRef &Param : Type->ParamTypes)
+      if (!Param || Param->Kind == NdTypeKind::Void ||
+          Param->Kind == NdTypeKind::Func ||
+          !spellsAsDeclarator(Param, Depth + 1, Remaining))
+        return false;
+    return true;
+  default:
+    return equalSourceTypes(Type, Type);
+  }
+}
+
 bool containsFunction(const TypeRef &Type) {
   auto Current = Type;
   for (unsigned Depth = 0; Current && Depth <= limits::kMaxCPointerNesting;
@@ -602,7 +631,8 @@ std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator) {
   }
   if (!containsFunction(Ty))
     return typeToC(Ty) + (Declarator.empty() ? "" : " " + Declarator.str());
-  if (!equalSourceTypes(Ty, Ty))
+  unsigned Remaining = 4096;
+  if (!spellsAsDeclarator(Ty, 0, Remaining))
     throw std::invalid_argument("C callback type has no supported signature");
   if (Ty->Kind == NdTypeKind::Ptr) {
     std::string Pointer = "*" + Declarator.str();

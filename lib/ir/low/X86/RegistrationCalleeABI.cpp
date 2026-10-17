@@ -198,7 +198,8 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   if (!Decoder.init(Image))
     return std::nullopt;
   CFGBuilder Builder;
-  LowFunc Callee = Builder.build(Image, Decoder, Target, "abi-leaf");
+  LowFunc Callee =
+      Builder.buildIntegerFrameProof(Image, Decoder, Target, "abi-leaf");
   const uint32_t Pop = Initializer      ? Initializer->StackPopBytes
                        : CopyObjectSize ? 4
                        : Callbacks      ? CallbackStackPopBytes

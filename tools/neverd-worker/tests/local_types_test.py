@@ -31,9 +31,14 @@ def run(executable):
             assert operation in owner.hello["capabilities"]
         ok(owner, "open", {"path": str(binary), "analysis": False})
 
-        listing = ok(owner, "local_types", {"filter": "device"})
+        # A console program also joins the user and kernel mode headers;
+        # the PDB's own types are those of origin "pdb".
+        listing = ok(owner, "local_types", {"filter": "device", "origin": "pdb"})
         assert listing["source"] == "pdb" and listing["dataModel"] == "LLP64"
         assert [row["name"] for row in listing["types"]] == ["_DEVICE"]
+        headers = ok(owner, "local_types", {"filter": "device"})
+        assert headers["types"][0]["name"] == "_DEVICE"
+        assert any(row["origin"] == "header" for row in headers["types"]), headers["types"][:3]
         assert listing["types"][0]["size"] == 0x58
 
         # Exact widths unless asked.
@@ -89,7 +94,7 @@ def run(executable):
         assert problem["problems"][0]["line"] == 2 and problem["problems"][0]["column"] == 3, problem
         forgot = ok(owner, "local_types_forget", {"names": ["_PACKED"]})
         assert forgot["removed"] == ["_PACKED"], forgot
-        sidecar = binary.with_name(binary.name + ".neverd-types.json")
+        sidecar = Path(str(binary) + ".neverd/types.json")
         assert sidecar.exists()
         rows = json.loads(sidecar.read_text())
         assert [row.get("language") for row in rows] == ["rust", None], rows
@@ -109,7 +114,9 @@ def run(executable):
         replica = clients.enter_context(Client(executable))
         ok(replica, "analysis_restore", ok(owner, "analysis_snapshot"))
         assert ok(replica, "local_type", {"name": "OWNER"})["size"] == 16
-        assert ok(replica, "local_types", {"filter": "packed"})["types"] == []
+        assert ok(replica, "local_types", {"filter": "packed", "origin": "pdb"})["types"] == []
+        assert "_PACKED" not in [row["name"] for row in
+                                 ok(replica, "local_types", {"filter": "packed"})["types"]]
         refused = replica.call("local_types_declare", {"source": "struct C { int c; };"})
         assert refused["error"]["code"] == "read_only", refused
 
@@ -126,9 +133,16 @@ def run(executable):
         best = fit["candidates"][0]
         assert best["name"] == "_DEVICE" and best["exact"] == 1, best
         assert best["fits"][0]["path"] == "Size" and best["fits"][0]["fit"] == "exact", best
-        assert fit["total"] >= 3 and all(c["exact"] == 0 for c in fit["candidates"][1:]), fit
+        # A record of the Windows headers the access fits as exactly, such as
+        # ACE_HEADER's AceSize, follows the program's own.
+        assert best["origin"] == "pdb", best
+        assert fit["total"] >= 3, fit
+        assert all(c["exact"] == 0 or c["origin"] == "header"
+                   for c in fit["candidates"][1:]), fit
         searched = ok(owner, "local_types_fit", {"text": "dev.lock.wait"})
-        assert [c["name"] for c in searched["candidates"]] == ["_DEVICE"], searched
+        # The program's own record first; the headers' after it.
+        assert searched["candidates"][0]["name"] == "_DEVICE", searched
+        assert all(c["origin"] == "header" for c in searched["candidates"][1:]), searched
         assert searched["candidates"][0]["matchedMember"] == "Lock.Waiting", searched
         no_pointer = owner.call("local_types_fit", {"function": use, "address": use})
         assert no_pointer["status"] == "error", no_pointer
@@ -166,13 +180,16 @@ def run(executable):
         assert "[rcx+2]" in line["text"], line
 
         # A number is an offset by itself: `cmp r9, 1` takes an address one
-        # byte in, where no member of these records begins.
+        # byte in, where no member of the program's records begins (some of
+        # the Windows headers' do).
         compare = next(line for line in lines if line["text"].lstrip().startswith("cmp"))
-        number = ok(owner, "local_types_fit", {"function": use, "address": compare["address"]})
+        number = ok(owner, "local_types_fit", {"function": use, "address": compare["address"],
+                                               "limit": 500})
         assert number["operand"] == 1 and "target" not in number, number
         assert number["accesses"] == [{"offset": 1, "size": 0, "use": "address"}], number
-        assert all(c["exact"] == 0 for c in number["candidates"]), number
-        assert number["candidates"][0]["fits"][0]["fit"] == "inside", number
+        own = [c for c in number["candidates"] if c["origin"] == "pdb"]
+        assert own and all(c["exact"] == 0 for c in own), number
+        assert own[0]["fits"][0]["fit"] == "inside", own[0]
         # Every access through a pointer at once, one step of the history.
         header = next(line for line in lines if "[r8+5]" in line["text"])
         flags = next(line for line in lines if "[rdx+8]" in line["text"])

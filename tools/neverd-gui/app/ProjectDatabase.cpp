@@ -1,11 +1,16 @@
 #include "ProjectDatabase.h"
 
+#include "Address.h"
+
+#include "neverd/support/ProjectFiles.h"
+
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonObject>
 #include <QSaveFile>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -15,6 +20,7 @@
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtEndian>
 #include <algorithm>
+#include <map>
 #include <vector>
 
 namespace neverd::gui {
@@ -23,7 +29,6 @@ constexpr int FormatVersion = 1;
 constexpr qint64 ChunkBytes = 8 * 1024 * 1024;
 constexpr int CompressionLevel = 6;
 constexpr char InputBlob[] = "input";
-constexpr char JournalSuffix[] = ".neverd-journal.json";
 constexpr char DatabasesDirectory[] = "databases";
 // A SQLite header starts with this string and its terminating NUL, and holds
 // the big-endian application id at ApplicationIdOffset.
@@ -196,27 +201,72 @@ namespace {
 /// is read.
 const QStringList &legacySidecarSuffixes() {
   static const QStringList suffixes = {
-#define NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional)                 \
-  QStringLiteral(Suffix),
+#define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional)                     \
+  QLatin1String(project_files::describe(project_files::File::Id).Legacy),
 #include "UserStateTables.def"
       QStringLiteral(".neverd-history.json"),
       QStringLiteral(".neverd-load.json")};
   return suffixes;
 }
+
+/// The key a database names a project file by: the suffix NeverD gave it
+/// beside the input before projects had a folder, else its path in the
+/// folder.  A database written before keeps reading.
+QString databaseKey(const project_files::Description &file) {
+  const std::string_view key = file.Legacy.empty() ? file.Path : file.Legacy;
+  return QString::fromLatin1(key.data(), static_cast<qsizetype>(key.size()));
+}
+
+/// \p path as the standard library names files, without a lossy encoding.
+std::filesystem::path filePath(const QString &path) {
+  return std::filesystem::path(path.toStdU16String());
+}
 } // namespace
 
 const QStringList &ProjectDatabase::sidecarSuffixes() {
-  static const QStringList suffixes =
-      legacySidecarSuffixes() +
-      QStringList{QStringLiteral(".neverd-types.json"),
-                  QLatin1String(BookmarksSuffix),
-                  QLatin1String(DebugFilesSuffix)};
+  // What a database packs: the project's shared files and its history; a
+  // save's journal, the desktop and the lock stay each user's own.
+  static const QStringList suffixes = [] {
+    QStringList keys = legacySidecarSuffixes();
+    for (const auto &file : project_files::Files)
+      if (const QString key = databaseKey(file);
+          !keys.contains(key) && file.Id != project_files::File::Journal &&
+          file.Id != project_files::File::Workbench &&
+          file.Id != project_files::File::WriterLock)
+        keys.append(key);
+    return keys;
+  }();
   return suffixes;
+}
+
+QString ProjectDatabase::projectFilePath(const QString &input,
+                                         const QString &key) {
+  for (const auto &file : project_files::Files)
+    if (databaseKey(file) == key)
+      return QDir(projectFolder(input))
+          .filePath(QString::fromLatin1(
+              file.Path.data(), static_cast<qsizetype>(file.Path.size())));
+  return input + key;
+}
+
+QString ProjectDatabase::projectFolder(const QString &input) {
+  return input + QStringLiteral(".neverd");
+}
+
+void ProjectDatabase::migrate(const QString &input) {
+  project_files::migrate(filePath(input));
+}
+
+QString ProjectDatabase::prepareFolder(const QString &input) {
+  if (const auto error = project_files::prepare(filePath(input)))
+    return QCoreApplication::translate("ProjectDatabase", "Cannot write %1: %2")
+        .arg(projectFolder(input), QString::fromStdString(error.message()));
+  return {};
 }
 
 std::optional<QJsonDocument>
 ProjectDatabase::readProjectFile(const QString &input, const char *suffix) {
-  QFile file(input + QLatin1String(suffix));
+  QFile file(projectFilePath(input, QLatin1String(suffix)));
   if (!file.open(QIODevice::ReadOnly))
     return std::nullopt;
   QJsonParseError error;
@@ -237,10 +287,22 @@ QString ProjectDatabase::writeProjectFile(const QString &input,
     qsizetype indent = 0;
     while (indent < line.size() && line[indent] == ' ')
       ++indent;
-    text += QByteArray(indent / 2, ' ') + line.mid(indent) + '\n';
+    const QByteArray content = line.mid(indent);
+    // An empty array or object closes on the line that opens it, as the
+    // engine and the command line write it ("[]", not "[\n]").  A string
+    // holds no raw line break, so the break before it is the writer's.
+    if ((content.startsWith(']') && text.endsWith("[\n")) ||
+        (content.startsWith('}') && text.endsWith("{\n"))) {
+      text.chop(1);
+      text += content + '\n';
+      continue;
+    }
+    text += QByteArray(indent / 2, ' ') + content + '\n';
   }
   text.chop(1);
-  QSaveFile file(input + QLatin1String(suffix));
+  if (const auto error = prepareFolder(input); !error.isEmpty())
+    return error;
+  QSaveFile file(projectFilePath(input, QLatin1String(suffix)));
   if (!file.open(QIODevice::WriteOnly) || file.write(text) != text.size() ||
       !file.commit())
     return QCoreApplication::translate("ProjectDatabase", "Cannot write %1: %2")
@@ -248,13 +310,47 @@ QString ProjectDatabase::writeProjectFile(const QString &input,
   return {};
 }
 
+QJsonArray ProjectDatabase::bookmarkRows(const QJsonArray &file) {
+  QJsonArray rows;
+  for (const auto &value : file) {
+    const auto row = value.toObject();
+    const auto address = parseAddress(row.value("addr").toString());
+    if (!address)
+      continue;
+    QJsonObject bookmark{{"address", hexAddress(*address)},
+                         {"text", row.value("name").toString()}};
+    if (const auto note = row.value("note").toString(); !note.isEmpty())
+      bookmark.insert(QStringLiteral("note"), note);
+    rows.append(bookmark);
+  }
+  return rows;
+}
+
+QJsonArray ProjectDatabase::bookmarkFile(const QJsonArray &rows) {
+  // The last bookmark at an address names it.
+  std::map<Address, QJsonObject> byAddress;
+  for (const auto &value : rows) {
+    const auto row = value.toObject();
+    if (const auto address = parseAddress(row.value("address").toString()))
+      byAddress[*address] = QJsonObject{{"addr", hexAddress(*address)},
+                                        {"name", row.value("text").toString()},
+                                        {"note", row.value("note").toString()}};
+  }
+  QJsonArray file;
+  for (const auto &[address, row] : byAddress)
+    file.append(row);
+  return file;
+}
+
 QString ProjectDatabase::pathFor(const QString &binary) {
   return binary + QLatin1String(Extension);
 }
 
 bool ProjectDatabase::hasState(const QString &path) {
-  if (isDatabase(path) || QFileInfo::exists(pathFor(path)))
+  if (isDatabase(path) || QFileInfo::exists(pathFor(path)) ||
+      QFileInfo::exists(projectFolder(path)))
     return true;
+  // A project an older NeverD kept as files beside the input.
   return std::any_of(
       sidecarSuffixes().cbegin(), sidecarSuffixes().cend(),
       [&](const QString &suffix) { return QFileInfo::exists(path + suffix); });
@@ -398,8 +494,10 @@ QString ProjectDatabase::save(const QString &database, const QString &binary,
     QSqlQuery clear(db);
     if (!clear.exec(QStringLiteral("DELETE FROM sidecars")))
       return fail(lastError(clear));
+    // A project an older NeverD kept beside the input packs from its folder.
+    migrate(binary);
     for (const auto &suffix : sidecarSuffixes()) {
-      QFile sidecar(binary + suffix);
+      QFile sidecar(projectFilePath(binary, suffix));
       if (!sidecar.exists())
         continue;
       if (!sidecar.open(QIODevice::ReadOnly))
@@ -597,9 +695,11 @@ QString ProjectDatabase::unpack(const QString &database,
               .arg(input));
   }
   // A pending journal means the worker will recover newer edits itself.
-  if (!QFileInfo::exists(input + QLatin1String(JournalSuffix)))
+  migrate(input);
+  if (!QFileInfo::exists(
+          projectFilePath(input, QStringLiteral(".neverd-journal.json"))))
     for (const auto &suffix : sidecarSuffixes()) {
-      const QString path = input + suffix;
+      const QString path = projectFilePath(input, suffix);
       const auto stored = contents->sidecars.constFind(suffix);
       if (stored == contents->sidecars.cend()) {
         // A file kind the database never packed may hold the only copy.
@@ -607,6 +707,8 @@ QString ProjectDatabase::unpack(const QString &database,
           QFile::remove(path);
         continue;
       }
+      if (const auto error = prepareFolder(input); !error.isEmpty())
+        return failed(error);
       QFile sidecar(path + QStringLiteral(".unpacking"));
       if (!sidecar.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
           sidecar.write(*stored) != stored->size()) {

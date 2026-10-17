@@ -13,9 +13,10 @@
 
 namespace neverd::registration_state {
 
-/// WAIT and checked FP arithmetic write no integer registers or frame memory.
-/// Their FP state effects and traps remain in LowIR. A memory arithmetic form
-/// reads its operand; it cannot grant memory privacy or arbitrary intrinsics.
+/// WAIT, FXAM and checked FP arithmetic write no integer registers or frame
+/// memory. Their FP state effects and traps remain in LowIR. A memory
+/// arithmetic form reads its operand; it cannot grant memory privacy or
+/// arbitrary intrinsics.
 inline bool isFramePreservingIntrinsic(const LowOp &Op) {
   return isX86FramePreservingIntrinsic(Op, Arch::X86);
 }

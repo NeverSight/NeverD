@@ -143,6 +143,28 @@ before nesting. It reports a record whose nesting does not flatten back to the
 stream's member list, or whose members cannot sit where they say
 (`layoutProblem`).
 
+`importDWARFTypes` reads every named structure, union, class, enumeration
+and typedef of a program's DWARF units, C's, C++'s, Rust's and Go's, which
+a session with DWARF reads as its local types (`DWARFDebugContext::
+withDWARFContext`). DWARF keeps a record as its source declares it, so
+nothing is rebuilt: anonymous members stay in place, bit-fields keep their
+bits, in the storage unit of their type that holds them as a declared
+record's layout gives it (`layOutRecord`), and a structure holds its members
+by offset, since Rust reorders its fields. Packing and a declared alignment
+are inferred from the offsets and the size, as for a PDB. Types are named as
+the DWARF debug context names the records the decompiler reads
+(`llvm::dumpTypeQualifiedName`): within their namespaces and records for C++
+and Rust (`crate::module::Type`), with their package for Go (`main.Point`).
+A typedef of an anonymous record names it, as C's declarations read; a
+typedef of a record of its own name is that record. The same name in many
+units, as a header's types are, is one type, the first definition, which a
+declaration elsewhere names; another unit's definition of another size is
+reported as a conflict. A record DWARF describes in a way local types do not
+hold, such as a Rust enumeration's variants or a virtual base, is left out
+with the reason (`DWARFTypeImportStats::Skipped`), as is one whose members
+cannot sit where they say. A base type local types do not spell, such as a
+complex number, holds its bytes.
+
 `renderType` and `renderTypes` spell types as C, C++, Rust, Go, Python,
 JavaScript or Lua (`TypeLanguages.def`), each member marked with its
 offset. Builtins take the spellings each language has (`TypeLanguages.def`
@@ -214,7 +236,7 @@ A source reads whole or not at all. The C API keeps the user's declarations
 in order and reads them again over the program's types whenever those are
 read anew, as after loading another PDB. A declaration that no longer reads
 is left out and reported (`declarationProblems`), never silently dropped.
-The worker writes the declarations to `<input>.neverd-types.json` at once;
+The worker writes the declarations to the project folder's `types.json` at once;
 they do not join undo history.
 
 Header libraries (`HeaderLibraries.def`, `HeaderLibrary.h`) give a program
@@ -231,14 +253,16 @@ its kind (a PE's subsystem), and the libraries an image of each kind and
 architecture joins, in order. Its calling convention's rules then place
 each parameter (`placeSourceParameters`, one file per convention).
 `scripts/generate_windows_types.py` renders, from mingw-w64's headers, what
-a driver's `<ntifs.h>` declares into `lib/types/headers/WindowsKernelX64.h`,
-and what a program's `<windows.h>`, `<winternl.h>` and the headers of the
-libraries programs most often call declare into `WindowsUserX64.h`. The
-build embeds the files, and `headerLibrary` reads each once. The C API joins
-the libraries the table names to an image (an x64 PE of the native
-subsystem joins the kernel's; one of the Windows GUI or console subsystem
-joins user mode's, then the kernel's for the native API ntdll exports)
-after the program's PDB and before the user's declarations:
+a driver's `<ntifs.h>` declares into `lib/types/headers/WindowsKernelX64.h`
+and `WindowsKernelX86.h`, and what a program's `<windows.h>`, `<winternl.h>`
+and the headers of the libraries programs most often call declare into
+`WindowsUserX64.h` and `WindowsUserX86.h`; mingw-w64's DDK declares no ARM64
+kernel. The build embeds each file in a unit of its own, and `headerLibrary`
+reads each once. The C API joins the libraries the table names to an image
+(an x64 or x86 PE of the native subsystem joins its kernel's; one of the
+Windows GUI or console subsystem joins its user mode's, then its kernel's
+for the native API ntdll exports) after the program's PDB and before the
+user's declarations:
 - a header type joins only where the program has no type of its name;
 - a typedef names the program's type, as C binds it;
 - a header record laid out with a type the program sizes otherwise is left
@@ -379,13 +403,33 @@ exports, whose name binds a prototype, is called with at least what the
 prototype declares, as its export fixes the convention for the callers within
 the image too: the declared parameters join what its body reads in its own
 summary, so that a system call stub's callers pass the stack arguments its
-dispatcher reads, and a body that reads past them keeps those. A callee the
+dispatcher reads, and a body that reads past them keeps those. Where every
+argument is on the stack (i386), each argument takes the slots it fills, a
+record's by value too (a `LONGLONG`, a `double` and a `POINT` take two), and
+a fastcall or thiscall prototype, which passes leading arguments in
+registers, gives no count. A call to an import such a prototype counts
+passes exactly those slots and no register (`CallEntryStackSlots`): a store
+above them, a local the caller keeps there, is no argument. The arity
+tables count a `long long` as one argument, so their counts bound no i386
+call's slots. Where no declaration gives an import's arguments, the thunk an
+import library links for a stdcall routine, and its slot, spell the bytes it
+pops (`_NlsValidateLocale@8`, `stdcallArgumentBytes`), which count them
+slot by slot. A call reaches the import through either. A stdcall import,
+by its prototype or its decoration, pops its arguments as it returns
+(`CallEntryStackPops`): LowToMed raises the caller's stack pointer after
+the call as for a callee of the image whose `ret` pops, so the caller's
+stack accesses after it read the right slots. An i386 extern declares the convention its prototype states,
+as WINAPI's `__attribute__((stdcall))`, whose callee pops its arguments.
+A callee the
 pipeline does not decompile returns what its declaration says, as the C
 writers read it, so that a caller returning what a `void` routine left in
 RAX returns nothing too. A routine never returns where its name says so, as
 the tables (`isNoReturnFunction`) or a `_Noreturn` prototype
 (`resolvePrototype`) do: an import, a symbol, or an export the image's own
-code calls (`NoReturnTargetIndex`). A whole program's output
+code calls (`NoReturnTargetIndex`). Function discovery reads no header, so
+the tables hold every routine a header library declares `_Noreturn`, as the
+SDK's `ExitProcess`, and its decode probe stops at a call through the import
+slot of one, as the CFG builder does. A whole program's output
 (`neverd_decompile_all`) reads the session's local types over its own image
 and debug information when the session holds the same file, as the command
 line loads it first. The prototype's types convert to the decompiler's
@@ -680,9 +724,17 @@ take their bodies from the landing pad, as the pad runs for each clause's
 selector (`attachItaniumHandlerBodies`); `__cxa_begin_catch` becomes the catch
 parameter and `__cxa_end_catch` the end of the catch. A pad whose code this
 cannot follow exactly, or that also dispatches an enclosing try's clause,
-keeps the region in its commented form with the pad in place. In C, every
-landing pad of the call-site table keeps its label, so a pad that only runs
-cleanups is not read as dead code after a return.
+keeps the region in its commented form with the pad in place. A pad that only
+cleans up, which every call site reaching it enters with no action, is such a
+scope around the calls of ordinary flow that its call sites cover. A call
+keeps the address of its call instruction (`HighExpr::CallSiteAddr`) when a
+tail is copied over a jump or into both arms of a branch, so the scopes hold
+exactly the covered calls and no other; a call that stands for the equal calls
+of two branches keeps none (`withMergedCallSites`). A call of no single
+instruction, a jump into a scope, or a covered call in a handler's code keeps
+the pad in place. In C, every landing pad of the
+call-site table keeps its label, so a pad that only runs cleanups is not read
+as dead code after a return.
 
 DWARF subprogram extents are collected, sorted and swept once before publication
 instead of comparing every pair during ingestion. Duplicate entries, overlaps
@@ -4694,6 +4746,12 @@ waits. Selection, context switching, wait resumption and result publication
 have separate helpers; wake never publishes a successful lock. Priority
 inheritance and external-process scheduling remain unsupported.
 
+`AndroidSemaphore` owns API 28 count-word validation and transitions in guest
+RAM. Static and dynamic import dispatch share it. `GuestThreads` retains only
+the suspended request, address, sharing bit and wake readiness; resumption
+reloads the word through Bionic. A wake does not allocate a token or publish a
+return. No host semaphore or second count registry participates.
+
 `LinuxMemory` owns anonymous placement, syscall errors and the process break.
 It queries `AddressSpace::mappings()` for current virtual ranges and permissions;
 it does not maintain another mapping table. The pure snapshot is sorted and
@@ -5024,6 +5082,15 @@ subset. CPU transport availability does not imply arbitrary OS compatibility.
 `driver-strict` supports KVM on matching Linux x64 hosts and WHP on matching Windows x64 hosts; `auto` selects that native transport, and cross-ISA execution selects Unicorn. Explicit Unicorn and the original V1 API retain the portable software profile. Native execution checks canonical addresses and instruction effects before entry; unavailable hardware fails without fallback. Unsupported instructions and OS behavior remain explicit errors. Native Windows x64 CI with Unicorn disabled passes all 359 required checks: 131 CPU checks, 224 driver outcomes from 26 built-in images, 46 WDK images and 40 scenario cases at both preferred and relocated bases, plus four SEH boundary checks ([`9d4c130c`](https://github.com/NeverSight/NeverD/actions/runs/36981864458)). Native ARM64 runtime evidence is still pending, and this does not establish arbitrary-driver or Android/Darwin compatibility.
 
 Use `executionCapabilities(Contract, ISA, Backend)` to query the selected profile. `NativeLegacyX64` describes native x64 driver execution. `NeverDNativeDriverTests` validates the original corpus and can run with Unicorn disabled.
+
+`UnicornStepper` invalidates translated blocks at each stopped entry because
+host backing writes can bypass the engine's store hooks. A one-instruction
+entry removes blocks covering its first byte through the current mapping;
+this also retires a cross-page instruction whose operand bytes changed. Each
+later entry performs the same check, including executable aliases. Direct
+runs and multi-instruction maintenance retain full invalidation, as does an
+entry whose exclusive invalidation end would wrap. This transport policy does
+not change instruction admission, memory transactions or stop/deadline checks.
 
 Checked ARM64 has one complete state boundary. `Registers.def` defines 39 scalar fields and 32 128-bit vectors; `captureAArch64State` stages every read, applies declared widths and NZCV normalization, then publishes once. Unicorn, KVM, WHP and HVF transfer the same inventory, including TPIDR_EL0, TPIDRRO_EL0, TPIDR_EL1, FPCR and FPSR. Native adapters enable FP/SIMD through CPACR_EL1. Any scalar/vector read failure or cancelled entry preserves all caller state.
 
@@ -6542,7 +6609,7 @@ HighIR tail copying consults `SourceCallTypeHint::requiresUniqueSourceOccurrence
 
 The shared `SourceABI` owner distinguishes a logical by-value record from its physical address carrier. Darwin ARM64 C declarations for six or sixteen doubles keep the complete record type and use an eight-byte integer-register or naturally aligned stack carrier, independently of floating argument registers and the x8 result pointer. ABI equality and projection batching retain this distinction, calling convention and parameter roles. Partial, overlapping, incompatible or stale carriers are rejected. This declaration alone does not bind LowIR calls, project entries, emit HighC calls or authorize frame borrows: those require a separate copy-storage proof. Compiler and native ABI tests cover register exhaustion, stack packing, arbitrary floating bits, copy mutation isolation and independent indirect results; they are not a complete `setTransform:` recovery test.
 
-Debug signatures name recovered parameters by where they arrive, never by position. `SourceParameterPlacement` places each source parameter under the ordinary convention of its target: System V x86-64, Microsoft x64, AAPCS64 and i386 cdecl/stdcall, each in its own file. It returns the registers and stack slots that hold each parameter's pieces, and the hidden result pointer. HighC binds a recovered parameter to the piece at its register or entry stack offset. A later piece is named after its parameter and byte offset (`p_8`), and the declared type applies only where the location holds the whole value as its bytes. Placement stops at the first parameter whose place the rules cannot be sure of: a record whose passing the source does not state, a scalar wider than a register, a memory record of unknown alignment, or Apple arm64 stack packing. Later parameters keep their machine names, and functions of languages with their own conventions, such as Go, bind nothing. The DWARF loader gives parameter and result types alone a passing mode and scalar layout: C records pass by value, C++ classes as `DW_AT_calling_convention` states, and `_Complex` values as complex numbers. Rust records stay unknown, because Rust's own ABI and `extern "C"` pass some records differently. PDB records follow the Microsoft C++ ABI: i386 passes them as their bytes, while x64 passes them as their bytes or as an address in the same position. Call prototypes and argument casts still come only from signatures that map by position, whose parameters are all integers or all floating values.
+Debug signatures name recovered parameters by where they arrive, never by position. `SourceParameterPlacement` places each source parameter under the ordinary convention of its target: System V x86-64, Microsoft x64, AAPCS64 and i386 cdecl/stdcall, each in its own file. It returns the registers and stack slots that hold each parameter's pieces, and the hidden result pointer. HighC binds a recovered parameter to the piece at its register or entry stack offset; an i386 stack parameter's offset counts from the lowest stack parameter number, since MedABIPass numbers the stack parameters before it promotes a register parameter a call passes on. LLVM-C, which does not know where each argument arrives, names the arguments by position, and names none of an i386 function declared to take every argument on the stack that has more recovered arguments than declared: a recovered register comes before its stack arguments. A later piece is named after its parameter and byte offset (`p_8`), and the declared type applies only where the location holds the whole value as its bytes. Placement stops at the first parameter whose place the rules cannot be sure of: a record whose passing the source does not state, a scalar wider than a register, a memory record of unknown alignment, or Apple arm64 stack packing. Later parameters keep their machine names, and functions of languages with their own conventions, such as Go, bind nothing. The DWARF loader gives parameter and result types alone a passing mode and scalar layout: C records pass by value, C++ classes as `DW_AT_calling_convention` states, and `_Complex` values as complex numbers. Rust records stay unknown, because Rust's own ABI and `extern "C"` pass some records differently. PDB records follow the Microsoft C++ ABI: i386 passes them as their bytes, while x64 passes them as their bytes or as an address in the same position. Call prototypes and argument casts still come only from signatures that map by position, whose parameters are all integers or all floating values.
 
 The shared `SourceFrameAnalysis` can check initialized private by-value copies at an original call when independent effect certificates describe the consumer and any complete indirect-result producer. It checks all reaching paths and loop backedges, exact active ranges, other argument aliases and later uses. Consuming a copy invalidates its initialization and saved-byte identities; a later read requires a new definite write. Initialization facts also expire on possible writes and frame release, while retained Swift scratch obligations remain intact. The query returns parameter extents only after complete frame restoration; it grants no machine identity, SDK effect, call binding or source-publication permission. Tests include branches, loops, partial writes, aliases and retained scratch; native ARM64 fixtures with real ObjC/CALayer reject reads of consumed copies and accept independently initialized disposable copies.
 
@@ -6918,6 +6985,22 @@ and cumulative work survive that boundary. Query-local registration graphs
 bypass the shared x87 graph cache and parallel prefetch. The ordinary x87
 projection leaves a registration language graph opaque before constructing its
 callback closure; that graph needs a separate dispatcher invocation domain.
+
+Every PE32 registration ABI proof builds its callee with the decoded x87 stack
+(`CFGBuilder::buildIntegerFrameProof`): returning-stack, leaf, member,
+initializer, throw, conditional-call and caller-frame proofs alike. These
+proofs read integer registers, frame and object memory and near-return
+cleanup, never x87 state, and a call clobbers the same integer registers
+whichever register carries its result. The caller's own registration analysis
+runs before its x87 normalization, so its calls keep their decoded EAX
+results; a leaf's scalar-return fact likewise describes EAX at its return,
+even when the leaf also leaves a value on the x87 stack. A normalized callee
+would start its own x87 call proof, whose graphs reach a registration index
+again with a fresh budget at every level. The only x87 operation these proofs
+previously gained through normalization was a proved FXAM lowered to ordinary
+operations; FXAM writes only the status word, so the shared frame-preserving
+intrinsic policy accepts it directly. Among nested proof builds, only
+`buildNoReturnProof`'s local-stack fallback still normalizes the x87 stack.
 
 `_local_unwind2` uses an unsigned stopping bound: it stops at the -1 sentinel or a level no greater than the requested bound, even when an enclosing link skips that index. The shared PE32 EH3 solver joins the actual stopping levels and only the effects of traversed finally callbacks; a zero-step unwind preserves the incoming registration level and frame-memory facts. Existing frame-argument, runtime-field and callback-stack proofs remain mandatory.
 

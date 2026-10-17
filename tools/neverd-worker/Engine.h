@@ -192,6 +192,14 @@ private:
   void invalidate();
   /// Read every user-edit sidecar into the Session; false when one fails.
   bool reloadUserState();
+  /// Whether the local types file holds other declarations than the
+  /// Session's: git, another tool or a person changed it.
+  bool localTypesChanged();
+  /// Record which build of the input the project's files describe, after
+  /// the worker wrote one of them.
+  void recordProject();
+  /// neverd_project_json, or null from an older engine.
+  Json projectJson() const;
   /// Read the function edits sidecar: true when it loaded or the engine keeps
   /// no function edits.  A changed function list restarts its analysis.
   bool reloadFunctionEdits();

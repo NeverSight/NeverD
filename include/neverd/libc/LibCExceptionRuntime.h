@@ -77,6 +77,7 @@ inline constexpr auto kItaniumRuntimePrototypes = std::to_array<LibCPrototype>({
     makeLibCPrototype("__cxa_rethrow", "void", {}),
     makeLibCPrototype("__cxa_begin_catch", "void *", {"void *"}),
     makeLibCPrototype("__cxa_end_catch", "void", {}),
+    makeLibCPrototype("__cxa_end_cleanup", "void", {}),
     makeLibCPrototype("__cxa_get_exception_ptr", "void *", {"void *"}),
     makeLibCPrototype("__cxa_current_exception_type", "void *", {}),
     makeLibCPrototype("__cxa_call_terminate", "void", {"void *"}),

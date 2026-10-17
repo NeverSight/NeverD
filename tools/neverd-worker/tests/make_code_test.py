@@ -32,7 +32,7 @@ def run(executable, real=False):
             START = entry + 6
         else:
             binary.write_bytes(b"fixture")
-        sidecar = Path(str(binary) + ".neverd-items.json")
+        sidecar = Path(str(binary) + ".neverd/items.json")
         rows = lambda: json.loads(sidecar.read_text()) if sidecar.exists() else []
         with Client(executable) as client:
             ok(client, "open", {"path": str(binary)})

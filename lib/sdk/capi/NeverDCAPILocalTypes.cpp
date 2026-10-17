@@ -15,9 +15,12 @@
 #include "JSONText.h"
 #include "SessionImpl.h"
 
+#include "neverd/debug/DWARFLoader.h"
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/support/ProjectFiles.h"
 #include "neverd/support/ProjectWriteLock.h"
+#include "neverd/types/DWARFTypeImport.h"
 #include "neverd/types/TypeJSON.h"
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
@@ -139,9 +142,7 @@ void redeclare(Session &S) {
 }
 
 std::filesystem::path declarationsPath(const Session &S) {
-  auto Path = S.FilePath;
-  Path += ".neverd-types.json";
-  return Path;
+  return project_files::path(S.FilePath, project_files::File::Types);
 }
 
 llvm::json::Array declarationRows(const Session &S) {
@@ -213,6 +214,34 @@ parseDeclarations(const llvm::json::Value &Rows, std::string &Error) {
 types::TypeLibrary *localTypes(Session &S) {
   if (S.LocalTypes)
     return S.LocalTypes.get();
+  if (S.DbgKind == DebugInfoKind::DWARF && S.Dbg) {
+    auto Library = std::make_unique<types::TypeLibrary>(dataModelOf(S.Img));
+    types::DWARFTypeImportStats Stats;
+    if (llvm::Error Err =
+            static_cast<const DWARFDebugContext &>(*S.Dbg).withDWARFContext(
+                [&](llvm::DWARFContext &Context) -> llvm::Error {
+                  auto Read = types::importDWARFTypes(Context, *Library);
+                  if (!Read)
+                    return Read.takeError();
+                  Stats = std::move(*Read);
+                  return llvm::Error::success();
+                })) {
+      S.setError("cannot read the DWARF's types: " +
+                 llvm::toString(std::move(Err)));
+      return nullptr;
+    }
+    S.LocalTypes = std::move(Library);
+    S.LocalTypeStats.Structs = Stats.Structs;
+    S.LocalTypeStats.Unions = Stats.Unions;
+    S.LocalTypeStats.Enums = Stats.Enums;
+    S.LocalTypeStats.DeclaredOnly = Stats.DeclaredOnly;
+    S.LocalTypeSkipped = std::move(Stats.Skipped);
+    S.LocalTypeConflicts = std::move(Stats.Conflicts);
+    S.LocalTypesSource = "dwarf";
+    joinHeaders(S);
+    redeclare(S);
+    return S.LocalTypes.get();
+  }
   if (S.DbgKind != DebugInfoKind::PDB || !S.Dbg) {
     S.LocalTypes = std::make_unique<types::TypeLibrary>(dataModelOf(S.Img));
     S.LocalTypesSource = "none";
@@ -536,8 +565,13 @@ const char *neverd_local_types_json(neverd_session_t Sess,
   std::string Origin;
   if (const llvm::json::Value *Value = Options->get("origin")) {
     std::optional<llvm::StringRef> Text = Value->getAsString();
-    if (!Text || (*Text != "pdb" && *Text != "header" && *Text != "user")) {
-      S->setError("\"origin\" must be pdb, header or user");
+    constexpr types::TypeOrigin Origins[] = {
+        types::TypeOrigin::PDB, types::TypeOrigin::DWARF,
+        types::TypeOrigin::Header, types::TypeOrigin::User};
+    if (!Text || llvm::none_of(Origins, [&](types::TypeOrigin Each) {
+          return *Text == types::originName(Each);
+        })) {
+      S->setError("\"origin\" must be pdb, dwarf, header or user");
       return nullptr;
     }
     Origin = Text->str();
@@ -577,6 +611,11 @@ const char *neverd_local_types_json(neverd_session_t Sess,
   llvm::json::Array Mismatches;
   for (const std::string &Name : S->LocalTypeStats.NestingMismatches)
     Mismatches.push_back(jsonSafeText(Name));
+  llvm::json::Array Skipped, Conflicts;
+  for (const std::string &Entry : S->LocalTypeSkipped)
+    Skipped.push_back(jsonSafeText(Entry));
+  for (const std::string &Name : S->LocalTypeConflicts)
+    Conflicts.push_back(jsonSafeText(Name));
   llvm::json::Object Result{
       {"source", S->LocalTypesSource},
       {"dataModel", types::dataModelName(Library->dataModel())},
@@ -586,6 +625,8 @@ const char *neverd_local_types_json(neverd_session_t Sess,
                           {"enums", S->LocalTypeStats.Enums},
                           {"declaredOnly", S->LocalTypeStats.DeclaredOnly},
                           {"nestingMismatches", std::move(Mismatches)},
+                          {"skipped", std::move(Skipped)},
+                          {"conflicts", std::move(Conflicts)},
                           {"origins", std::move(ByOrigin)}}},
       {"types", std::move(Types)}};
   if (!S->LocalTypeHeaders.empty()) {

@@ -192,6 +192,9 @@ const LocalType *TypeLibrary::resolve(llvm::StringRef Name) const {
        ++Steps) {
     if (!Type->Target || Type->Target->Kind != TypeExprKind::Named)
       return Type;
+    // A typedef of itself names nothing.
+    if (Type->Target->Name == Type->Name)
+      return nullptr;
     Type = find(Type->Target->Name);
   }
   return Type;

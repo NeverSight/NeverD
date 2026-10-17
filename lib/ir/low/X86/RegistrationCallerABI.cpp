@@ -319,7 +319,8 @@ bool hasRegistrationCallFrameABI(
           Effects.CallerPCWrites.emplace(Write.Begin, Write.End);
         continue;
       }
-    const LowFunc Callee = Builder.build(Image, Decoder, Target, "abi-callee");
+    const LowFunc Callee =
+        Builder.buildIntegerFrameProof(Image, Decoder, Target, "abi-callee");
     if (Callee.CalleePopBytes || !Callee.hasCompleteLiftCoverage() ||
         Callee.Blocks.empty() ||
         !hasPrivateCallerFrame(Callee, Image, Work, Effects))

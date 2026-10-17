@@ -53,6 +53,8 @@ public:
   void completeOnce(uint64_t Control);
   void waitMutex(uint64_t Address, uint16_t Attributes);
   void wakeMutex(uint64_t Address);
+  void waitSemaphore(uint64_t Address, bool Shared);
+  void wakeSemaphore(uint64_t Address);
   bool waitSleep();
   void suspend(const ServiceRequest &Request, size_t Event,
                WaitSource Source = WaitSource::NativeCall);
@@ -81,8 +83,12 @@ private:
   struct Sleep {
     uint64_t Deadline;
   };
+  struct Semaphore {
+    uint64_t Address;
+    bool Shared, Ready = false;
+  };
   struct Wait {
-    std::variant<Join, Once, Mutex, Sleep> Operation;
+    std::variant<Join, Once, Mutex, Sleep, Semaphore> Operation;
     std::optional<ServiceRequest> Request;
     size_t Event = 0;
     WaitSource Source = WaitSource::NativeCall;

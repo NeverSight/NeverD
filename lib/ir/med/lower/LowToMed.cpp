@@ -300,13 +300,20 @@ void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
     return;
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   // A convention without register summaries still knows how many stack
-  // arguments a prototyped import reads (CallEntryStackArgs).
+  // arguments a prototyped import reads (CallEntryStackArgs).  Where only
+  // internal calls take register arguments (i386), one a typed prototype
+  // counts slot by slot reads exactly those slots and no register: a
+  // fastcall or thiscall prototype gives no count.
   if (Convention && Convention->StackArgumentSummary &&
       !Convention->RegisterArgumentsFromCalleeSummary && CallEntryStackArgs)
     if (auto S = CallEntryStackArgs->find(ArgumentsKey);
-        S != CallEntryStackArgs->end())
+        S != CallEntryStackArgs->end()) {
       MOp.CalleeStackArgs = static_cast<int8_t>(std::min(
           S->second, static_cast<int>(std::numeric_limits<int8_t>::max())));
+      if (Convention->RegparmOnlyForInternalCalls && CallEntryStackSlots &&
+          CallEntryStackSlots->count(ArgumentsKey))
+        MOp.CalleeRegisterArgs = 0;
+    }
   const llvm::ArrayRef<uint64_t> ArgRegs = TRI.integerParamRegs(TargetFormat);
   const auto FPParamRegs = TRI.floatingParamRegs(TargetFormat);
   const int8_t Slots =
@@ -910,7 +917,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
           MOp.NumInputs >= 1 && MOp.Inputs[0].isConst()) {
         auto Pop = TheArch == Arch::X86 ? registrationCallStackPop(Low, LB, LOp)
                                         : std::nullopt;
-        if (!Pop && CalleePopMap && MOp.Opcode == NdOp::CALL) {
+        // A call through an import's slot (`call [__imp__Sleep@4]`) names
+        // the import as its stub does.
+        if (!Pop && CalleePopMap) {
           const auto It = CalleePopMap->find(MOp.Inputs[0].ConstVal);
           if (It != CalleePopMap->end())
             Pop = It->second;

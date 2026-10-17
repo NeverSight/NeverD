@@ -690,6 +690,12 @@ public:
   /// Build CFG for a single function starting at EntryAddr.
   LowFunc build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                 const std::string &FuncName = "");
+  /// Build a callee CFG for a proof about the integer frame, such as a PE32
+  /// registration ABI proof. The x87 stack keeps its decoded form, so the
+  /// build starts no floating call-effect proofs. Never emit the result as
+  /// the function's body.
+  LowFunc buildIntegerFrameProof(const BinaryImage &Img, Decoder &Dec,
+                                 va_t EntryAddr, const std::string &FuncName);
 
   /// Reuse only the inputs to an ordinary x64 call-register summary, under
   /// these exact immutable-image indexes and default CFG proof limits.

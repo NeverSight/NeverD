@@ -41,7 +41,8 @@ getCheckedX86RegistrationThrowCalleeABI(const BinaryImage &Image, va_t Target,
   if (!Decoder.init(Image))
     return std::nullopt;
   CFGBuilder Builder;
-  const LowFunc Callee = Builder.build(Image, Decoder, Target, "abi-throw");
+  const LowFunc Callee =
+      Builder.buildIntegerFrameProof(Image, Decoder, Target, "abi-throw");
   if (!chargeDecodedCallee(Work, Callee) || Callee.CalleePopBytes ||
       !Callee.hasCompleteLiftCoverage() || Callee.Blocks.empty() ||
       Callee.ExceptionMetadata || !lowFunctionNeverReturns(Callee, Arch::X86))

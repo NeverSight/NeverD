@@ -134,8 +134,10 @@ void HighCWriter::writeSourceRecordDeclarations(
         const char *Keyword = Tag != RecordDefinitions.Tags.end() && Tag->second
                                   ? "union"
                                   : "struct";
-        if (Declared.insert(Name).second)
+        if (Declared.insert(Name).second) {
           OS << "typedef " << Keyword << " " << Name << " " << Name << ";\n";
+          RecordTypedefs.insert(Name);
+        }
       }
       Visit(Record);
     }
@@ -157,6 +159,26 @@ void HighCWriter::writeSourceRecordDeclarations(
     Signature(Function);
   if (!Declared.empty())
     OS << "\n";
+}
+
+bool HighCWriter::spellsRecordPointer(const TypeRef &Type) const {
+  if (!Type || Type->Kind != NdTypeKind::Ptr || !Type->Pointee ||
+      Type->Pointee->Kind != NdTypeKind::Struct ||
+      Type->Pointee->SourceName.empty())
+    return false;
+  // Only the program's local types leave a record the unit names without a
+  // typedef; a unit without includes leaves its declarations to whoever
+  // builds it.
+  return !Opts.RecordDefinitions || !Opts.EmitIncludes ||
+         Type->Pointee->IsEnum ||
+         RecordTypedefs.count(cNamedTypeSpelling(Type->Pointee->SourceName));
+}
+
+bool HighCWriter::definesRecord(const TypeRef &Record) const {
+  return !Opts.RecordDefinitions || !Opts.EmitIncludes ||
+         (Record && !Record->SourceName.empty() &&
+          RecordDefinitions.Records.count(
+              cNamedTypeSpelling(Record->SourceName)));
 }
 
 void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {

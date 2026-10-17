@@ -2650,6 +2650,22 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>База данных сохранена: %1</translation>
     </message>
     <message>
+        <source>The project&apos;s files describe another build of %1 (SHA-256 %2…); their addresses may not match this one. The next edit records this build.</source>
+        <translation>Файлы проекта описывают другую сборку %1 (SHA-256 %2…); их адреса могут не совпадать с этой. Следующее изменение запишет эту сборку.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here.</source>
+        <translation>Файлы проекта изменились на диске и были загружены; отмена начинается отсюда.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here. Unsaved comments kept on top: %1</source>
+        <translation>Файлы проекта изменились на диске и были загружены; отмена начинается отсюда. Несохранённые комментарии, сохранённые поверх: %1</translation>
+    </message>
+    <message>
+        <source>The input file changed on disk; reload it to continue editing.</source>
+        <translation>Входной файл изменился на диске; перезагрузите его, чтобы продолжить редактирование.</translation>
+    </message>
+    <message>
         <source>Could not save the database: %1</source>
         <translation>Не удалось сохранить базу данных: %1</translation>
     </message>
@@ -3681,10 +3697,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>PDB не определяет типов.</translation>
     </message>
     <message>
-        <source>No local types: this program has no PDB with types.</source>
-        <translation>Нет локальных типов: у программы нет PDB с типами.</translation>
-    </message>
-    <message>
         <source>Types that do not lay out as the PDB lists them: %1</source>
         <translation>Типов, размещение которых не совпадает с PDB: %1</translation>
     </message>
@@ -3967,6 +3979,26 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>at %1, %2 bytes</source>
         <translation>по адресу %1, байтов: %2</translation>
+    </message>
+    <message>
+        <source>From DWARF</source>
+        <translation>Из DWARF</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n from DWARF</source>
+        <translation>
+            <numerusform>%n из DWARF</numerusform>
+            <numerusform>%n из DWARF</numerusform>
+            <numerusform>%n из DWARF</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The DWARF defines no types.</source>
+        <translation>DWARF не определяет типов.</translation>
+    </message>
+    <message>
+        <source>No local types: this program has no PDB or DWARF with types.</source>
+        <translation>Нет локальных типов: у этой программы нет PDB или DWARF с типами.</translation>
     </message>
 </context>
 <context>

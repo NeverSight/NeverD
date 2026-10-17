@@ -106,7 +106,7 @@ def run(executable):
             assert entry not in addresses(client)
         finally:
             client.close()
-        assert (Path(directory) / "edits.elf.neverd-functions.json").exists()
+        assert (Path(directory) / "edits.elf.neverd/functions.json").exists()
 
         # A later session reads the edits back.
         client = Client(executable)
@@ -120,7 +120,7 @@ def run(executable):
 
         # What the user states of a function (`neverd function-edits --edit`)
         # is a row of the same table, kept through the history of others.
-        sidecar = Path(directory) / "edits.elf.neverd-functions.json"
+        sidecar = Path(directory) / "edits.elf.neverd/functions.json"
         stated = {"addr": hex(entry), "color": "#204060", "noreturn": False}
         sidecar.write_text(json.dumps(
             [stated, {"addr": hex(second), "state": "created"}]))

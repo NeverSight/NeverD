@@ -2644,6 +2644,22 @@ Ihre Namen trotzdem laden? Namen an falschen Adressen führen die Analyse in die
         <translation>Datenbank gespeichert: %1</translation>
     </message>
     <message>
+        <source>The project&apos;s files describe another build of %1 (SHA-256 %2…); their addresses may not match this one. The next edit records this build.</source>
+        <translation>Die Projektdateien beschreiben einen anderen Build von %1 (SHA-256 %2…); ihre Adressen passen womöglich nicht zu diesem. Die nächste Bearbeitung hält diesen Build fest.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here.</source>
+        <translation>Die Projektdateien haben sich auf der Festplatte geändert und wurden geladen; Rückgängig beginnt hier.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here. Unsaved comments kept on top: %1</source>
+        <translation>Die Projektdateien haben sich auf der Festplatte geändert und wurden geladen; Rückgängig beginnt hier. Darüber behaltene ungespeicherte Kommentare: %1</translation>
+    </message>
+    <message>
+        <source>The input file changed on disk; reload it to continue editing.</source>
+        <translation>Die Eingabedatei hat sich auf der Festplatte geändert; laden Sie sie neu, um weiter zu bearbeiten.</translation>
+    </message>
+    <message>
         <source>Could not save the database: %1</source>
         <translation>Die Datenbank konnte nicht gespeichert werden: %1</translation>
     </message>
@@ -3674,10 +3690,6 @@ Ihre Namen trotzdem laden? Namen an falschen Adressen führen die Analyse in die
         <translation>Die PDB definiert keine Typen.</translation>
     </message>
     <message>
-        <source>No local types: this program has no PDB with types.</source>
-        <translation>Keine lokalen Typen: Dieses Programm hat keine PDB mit Typen.</translation>
-    </message>
-    <message>
         <source>Types that do not lay out as the PDB lists them: %1</source>
         <translation>Typen, deren Layout nicht der PDB entspricht: %1</translation>
     </message>
@@ -3951,6 +3963,25 @@ Ihre Namen trotzdem laden? Namen an falschen Adressen führen die Analyse in die
     <message>
         <source>at %1, %2 bytes</source>
         <translation>bei %1, %2 Bytes</translation>
+    </message>
+    <message>
+        <source>From DWARF</source>
+        <translation>Aus DWARF</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n from DWARF</source>
+        <translation>
+            <numerusform>%n aus DWARF</numerusform>
+            <numerusform>%n aus DWARF</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The DWARF defines no types.</source>
+        <translation>Das DWARF definiert keine Typen.</translation>
+    </message>
+    <message>
+        <source>No local types: this program has no PDB or DWARF with types.</source>
+        <translation>Keine lokalen Typen: Dieses Programm hat kein PDB oder DWARF mit Typen.</translation>
     </message>
 </context>
 <context>

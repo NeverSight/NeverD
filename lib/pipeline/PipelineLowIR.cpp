@@ -3121,6 +3121,12 @@ struct ImportPrototypeArguments {
   /// join what each body reads itself.
   std::map<va_t, GPRReadWidths> DeclaredReads;
   std::map<va_t, int> DeclaredStackArgs;
+  /// Where every argument is on the stack (i386), the StackArgs a typed
+  /// prototype counts slot by slot, unlike the arity tables, which count a
+  /// LONGLONG as one argument.
+  std::set<va_t> StackSlots;
+  /// The bytes of those slots a stdcall routine pops as it returns.
+  std::map<va_t, int> StackPops;
 };
 
 /// The arguments of the libc imports that \p Funcs and the callees
@@ -3176,6 +3182,10 @@ ImportPrototypeArguments importPrototypeArguments(
     /// The bytes each integer argument declares, in order, where a
     /// prototype gives them.
     std::vector<uint8_t> IntegerBytes;
+    /// Integers counts the stack slots every argument fills.
+    bool Slots = false;
+    /// The routine pops its stack arguments (stdcall).
+    bool CalleePops = false;
   };
   // The prototype the program's types declare for a routine of another
   // module.  A positional convention passes a record by value in an integer
@@ -3192,11 +3202,34 @@ ImportPrototypeArguments importPrototypeArguments(
   auto SignatureArguments =
       [&](const FunctionSym &Function) -> std::optional<Arguments> {
     const bool Positional = Convention && Convention->PositionalArgumentSlots;
+    // Where every argument is on the stack (i386), fastcall and thiscall
+    // pass leading ones in registers, which these positions do not describe.
+    if (!RegisterArguments && (Function.CallConv == DebugCallConv::Fastcall ||
+                               Function.CallConv == DebugCallConv::Thiscall))
+      return std::nullopt;
     Arguments Result;
+    Result.CalleePops = !RegisterArguments &&
+                        Function.CallConv == DebugCallConv::Stdcall &&
+                        !Function.Params.empty();
     for (const auto &[ParamName, Type] : Function.Params) {
       (void)ParamName;
       if (!Type)
         return std::nullopt;
+      // On the stack an argument takes the slots it fills, a record's by
+      // value too: a LONGLONG, a double and a POINT take two on i386.
+      if (!RegisterArguments) {
+        if (!Type->Size ||
+            (Type->Kind != NdTypeKind::Int && Type->Kind != NdTypeKind::Ptr &&
+             Type->Kind != NdTypeKind::Float &&
+             Type->Kind != NdTypeKind::Struct))
+          return std::nullopt;
+        Result.Integers += static_cast<int>((Type->Size + TRI.PointerSize - 1) /
+                                            TRI.PointerSize);
+        Result.Order.push_back(0);
+        Result.IntegerBytes.push_back(static_cast<uint8_t>(TRI.PointerSize));
+        Result.Slots = true;
+        continue;
+      }
       if (Type->Kind == NdTypeKind::Float &&
           (Type->Size == sizeof(float) || Type->Size == sizeof(double))) {
         Result.Floats.push_back(static_cast<uint8_t>(Type->Size));
@@ -3281,6 +3314,30 @@ ImportPrototypeArguments importPrototypeArguments(
     Result.Order.insert(Result.Order.end(), Rest.begin(), Rest.end());
     return Result;
   };
+  // Where every argument is on the stack (i386 Windows), the thunk an import
+  // library links for a stdcall routine, and its import slot, spell the
+  // bytes the routine pops (`_NlsValidateLocale@8`): its arguments, slot by
+  // slot, where no declaration gives them.
+  std::map<va_t, unsigned> DecoratedBytes;
+  if (!RegisterArguments)
+    for (const Symbol &Sym : Img.Symbols)
+      if (const std::optional<unsigned> Bytes =
+              stdcallArgumentBytes(Sym.Name, Img.abiFormat(), Img.Arch);
+          Bytes && *Bytes % TRI.PointerSize == 0)
+        DecoratedBytes.try_emplace(Sym.Addr, *Bytes);
+  auto DecoratedArguments = [&](va_t Addr) -> std::optional<Arguments> {
+    const auto It = DecoratedBytes.find(Addr);
+    if (It == DecoratedBytes.end())
+      return std::nullopt;
+    Arguments Result;
+    Result.Integers = static_cast<int>(It->second / TRI.PointerSize);
+    Result.Order.assign(static_cast<size_t>(Result.Integers), 0);
+    Result.IntegerBytes.assign(static_cast<size_t>(Result.Integers),
+                               static_cast<uint8_t>(TRI.PointerSize));
+    Result.Slots = true;
+    Result.CalleePops = true;
+    return Result;
+  };
   // The floating type the routine returns, by the same declarations.
   auto RoutineFloatReturn = [&](const std::string &Name) -> uint16_t {
     if (const libc::LibCPrototype *Prototype =
@@ -3318,6 +3375,8 @@ ImportPrototypeArguments importPrototypeArguments(
       if (const uint16_t Bytes = RoutineFloatReturn(Name))
         Result.FloatReturns[Addr] = Bytes;
       Routine = RoutineArguments(Name);
+      if (!Routine)
+        Routine = DecoratedArguments(Addr);
     } else {
       Routine = ExportedArguments(Addr);
       if (!Routine)
@@ -3365,6 +3424,12 @@ ImportPrototypeArguments importPrototypeArguments(
     if (StackArguments)
       (Joins ? Result.DeclaredStackArgs : Result.StackArgs)[Addr] =
           *Count > InRegisters ? *Count : 0;
+    if (StackArguments && !RegisterArguments && !Joins &&
+        (Routine->Slots || Routine->Order.empty())) {
+      Result.StackSlots.insert(Addr);
+      if (Routine->CalleePops && *Count > 0)
+        Result.StackPops[Addr] = *Count * static_cast<int>(TRI.PointerSize);
+    }
   };
   for (const LowFunc &F : Funcs)
     for (const LowBlock &Block : F.Blocks)
@@ -3426,12 +3491,14 @@ void computeCallRegisterEffects(
             callArgumentConvention(Img.Arch, Img.abiFormat());
         Convention && Convention->ImportArgumentsFromPrototype &&
         Convention->StackArgumentSummary &&
-        Convention->RegparmOnlyForInternalCalls)
-      Result.CallEntryStackArgs =
-          importPrototypeArguments(Img, Result.LowFuncs, {},
-                                   /*StackArguments=*/true, Dbg,
-                                   /*RegisterArguments=*/false, &PointerCallees)
-              .StackArgs;
+        Convention->RegparmOnlyForInternalCalls) {
+      ImportPrototypeArguments Prototyped = importPrototypeArguments(
+          Img, Result.LowFuncs, {}, /*StackArguments=*/true, Dbg,
+          /*RegisterArguments=*/false, &PointerCallees);
+      Result.CallEntryStackArgs = std::move(Prototyped.StackArgs);
+      Result.CallEntryStackSlots = std::move(Prototyped.StackSlots);
+      Result.CallEntryStackPops = std::move(Prototyped.StackPops);
+    }
     return;
   }
   std::map<va_t, LocalRegisterEffect> Effects;

@@ -340,6 +340,310 @@ TEST(ItaniumHandlerBodies, PlainCKeepsThePadAndItsUnwinderValues) {
   EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
 }
 
+constexpr va_t kOther = kEntry + 0x10;
+constexpr va_t kLater = kEntry + 0x20;
+constexpr va_t kRisky2 = 0x402200;
+constexpr va_t kRelease = 0x402300;
+
+/// A call the instruction at \p Site makes.
+ExprPtr callAt(const std::string &Name, va_t Target, va_t Site,
+               bool Void = false) {
+  ExprPtr E = call(Name, Target, {}, Void);
+  E->CallSiteAddr = Site;
+  return E;
+}
+
+/// Call sites [Site, Site + 5) landing on \p Pad with no action: a pad of 0
+/// is none, and kPad's sites only clean up.
+ItaniumEHInfo cleanupSites(const std::vector<std::pair<va_t, va_t>> &Sites) {
+  ItaniumEHInfo LSDA;
+  LSDA.IsCallSiteAddressForm = true;
+  for (const auto &[Begin, Pad] : Sites) {
+    ItaniumCallSite Site;
+    Site.GuardedRange = {Begin, Begin + 5};
+    Site.LandingPadVA = Pad;
+    LSDA.CallSites.push_back(Site);
+  }
+  return LSDA;
+}
+
+/// A function of \p Body followed by the pad at kPad: \p Pad, or by default
+/// one that destroys an object and resumes the unwind.
+HighFunc cleanupFunction(ItaniumEHInfo LSDA, std::vector<HighStmt> Body,
+                         std::vector<HighStmt> Pad = {}) {
+  HighFunc Func;
+  Func.Entry = kEntry;
+  Func.Name = "guarded";
+  Func.ReturnType = NdType::makeInt(8);
+  ExceptionFunction EH;
+  EH.CodeRange = {kEntry, kPad + 0x40};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::GxxPersonalityV0;
+  EH.Itanium = std::move(LSDA);
+  Func.ExceptionMetadata = std::move(EH);
+  Func.Body = std::move(Body);
+  Func.Body.push_back(anchor(kPad));
+  if (Pad.empty()) {
+    Pad.push_back(assign(6, exception()));
+    Pad.push_back(statement(call("held_dtor", kDtor, {}, true)));
+    Pad.push_back(resume(use(6)));
+  }
+  for (HighStmt &S : Pad)
+    Func.Body.push_back(std::move(S));
+  return Func;
+}
+
+/// Where \p Source's try at or after \p From opens, its catch-all opens,
+/// and that handler ends.
+struct Scope {
+  size_t Try = std::string::npos;
+  size_t Catch = std::string::npos;
+  size_t End = std::string::npos;
+};
+Scope scopeAfter(const std::string &Source, size_t From = 0) {
+  Scope S;
+  S.Try = Source.find("try {", From);
+  if (S.Try != std::string::npos)
+    S.Catch = Source.find("} catch (...) {", S.Try);
+  if (S.Catch != std::string::npos)
+    S.End = Source.find("throw;", S.Catch);
+  return S;
+}
+
+TEST(ItaniumHandlerBodies, ACleanupOnlyPadBecomesACatchAllThatRethrows) {
+  // v1 = risky(); return v1;  L_pad: v6 = exc; held_dtor(); resume(v6);
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func =
+      cleanupFunction(cleanupSites({{kCall, kPad}}), std::move(Body));
+  const std::string Source = body(emit(Func));
+  const Scope S = scopeAfter(Source);
+  ASSERT_NE(S.End, std::string::npos) << Source;
+  EXPECT_LT(Source.find("risky()"), S.Catch) << Source;
+  EXPECT_GT(Source.find("held_dtor("), S.Catch) << Source;
+  EXPECT_LT(Source.find("held_dtor("), S.End) << Source;
+  EXPECT_GT(Source.find("return v1;"), S.End) << Source;
+  EXPECT_EQ(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("L_401040"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("eh_exception"), std::string::npos) << Source;
+  // C has no try: the pad stays.
+  const std::string C = body(emit(Func, /*Structured=*/false));
+  EXPECT_NE(C.find("L_401040: /* landing pad"), std::string::npos) << C;
+}
+
+TEST(ItaniumHandlerBodies, ACleanupScopeHoldsNoCallItsPadDoesNotCover) {
+  // risky() and risky2() reach the pad; other() between them reaches none, so
+  // a handler must not destroy the object when it throws.
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(assign(2, callAt("other", kRelease, kOther), kOther));
+  Body.push_back(assign(3, callAt("risky2", kRisky2, kLater), kLater));
+  Body.push_back(ret(use(3)));
+  const HighFunc Func = cleanupFunction(
+      cleanupSites({{kCall, kPad}, {kOther, 0}, {kLater, kPad}}),
+      std::move(Body));
+  const std::string Source = body(emit(Func));
+  const Scope First = scopeAfter(Source);
+  ASSERT_NE(First.End, std::string::npos) << Source;
+  const Scope Second = scopeAfter(Source, First.End);
+  ASSERT_NE(Second.End, std::string::npos) << Source;
+  EXPECT_LT(Source.find("risky()"), First.Catch) << Source;
+  const size_t Other = Source.find("other()");
+  EXPECT_GT(Other, First.End) << Source;
+  EXPECT_LT(Other, Second.Try) << Source;
+  EXPECT_GT(Source.find("risky2()"), Second.Try) << Source;
+  EXPECT_LT(Source.find("risky2()"), Second.Catch) << Source;
+}
+
+TEST(ItaniumHandlerBodies, ACopiedCallKeepsTheCoverOfItsInstruction) {
+  // A tail duplicated over a jump takes the jump's address, here one the
+  // pad's call site covers; the call it copies is made at kOther, which no
+  // pad covers, so it stays out of the scope.
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(
+      statement(callAt("release", kRelease, kOther, true), kCall + 2));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func = cleanupFunction(
+      cleanupSites({{kCall, kPad}, {kOther, 0}}), std::move(Body));
+  const std::string Source = body(emit(Func));
+  const Scope S = scopeAfter(Source);
+  ASSERT_NE(S.End, std::string::npos) << Source;
+  EXPECT_LT(Source.find("risky()"), S.Catch) << Source;
+  EXPECT_GT(Source.find("release()"), S.End) << Source;
+  EXPECT_EQ(scopeAfter(Source, S.End).Try, std::string::npos) << Source;
+}
+
+TEST(ItaniumHandlerBodies, ACopyWithoutAnAddressKeepsItsCallsInstruction) {
+  // Work copied into both arms has no address of its own; its call is still
+  // the one instruction the pad covers.
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Addr = kEntry;
+  Branch.Cond = equals(use(4, 4), 0);
+  Branch.Body.push_back(assign(1, callAt("risky", kRisky, kCall), 0));
+  Branch.ElseBody.push_back(assign(1, callAt("risky", kRisky, kCall), 0));
+  Branch.ElseBody.push_back(
+      assign(2, callAt("other", kRelease, kOther), kOther));
+  std::vector<HighStmt> Body;
+  Body.push_back(std::move(Branch));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func = cleanupFunction(
+      cleanupSites({{kCall, kPad}, {kOther, 0}}), std::move(Body));
+  const std::string Source = body(emit(Func));
+  const Scope First = scopeAfter(Source);
+  ASSERT_NE(First.End, std::string::npos) << Source;
+  const Scope Second = scopeAfter(Source, First.End);
+  ASSERT_NE(Second.End, std::string::npos) << Source;
+  EXPECT_GT(Source.find("other()"), Second.End) << Source;
+  EXPECT_EQ(Source.find("L_401040"), std::string::npos) << Source;
+}
+
+TEST(ItaniumHandlerBodies, AnExceptionSpilledThroughAFrameAddressIsResumed) {
+  // A frame too large for an immediate offset keeps the address of the slot
+  // the pad spills the exception to in another slot:
+  //   *(*(fp + 0x40)) = exc; held_dtor(); v7 = *(fp + 0x40); v8 = *v7;
+  //   _Unwind_Resume(v8);
+  auto SlotAddress = [] {
+    return HighExpr::makeLoad(
+        HighExpr::makeBinop(NdOp::INT_ADD, use(10), constant(0x40)),
+        NdType::makeInt(8, false));
+  };
+  HighStmt Spill;
+  Spill.Kind = StmtKind::Store;
+  Spill.StoreAddr = SlotAddress();
+  Spill.StoreVal = exception();
+  std::vector<HighStmt> Pad;
+  Pad.push_back(std::move(Spill));
+  Pad.push_back(statement(call("held_dtor", kDtor, {}, true)));
+  Pad.push_back(assign(7, SlotAddress()));
+  Pad.push_back(
+      assign(8, HighExpr::makeLoad(use(7), NdType::makeInt(8, false))));
+  Pad.push_back(resume(use(8)));
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func = cleanupFunction(cleanupSites({{kCall, kPad}}),
+                                        std::move(Body), std::move(Pad));
+  const std::string Source = body(emit(Func));
+  const Scope S = scopeAfter(Source);
+  ASSERT_NE(S.End, std::string::npos) << Source;
+  EXPECT_GT(Source.find("held_dtor("), S.Catch) << Source;
+  EXPECT_EQ(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("eh_exception"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("v7 ="), std::string::npos) << Source;
+}
+
+TEST(ItaniumHandlerBodies, ACallOfNoInstructionKeepsTheCleanupPad) {
+  // A call no instruction makes cannot be told covered or not.
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(statement(call("release", kRelease, {}, true), kOther));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func =
+      cleanupFunction(cleanupSites({{kCall, kPad}}), std::move(Body));
+  const std::string Source = body(emit(Func));
+  EXPECT_EQ(Source.find("} catch (...) {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("L_401040: /* landing pad"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+}
+
+TEST(ItaniumHandlerBodies, ABranchWhoseArmsCallThroughThePadIsOneScope) {
+  // if (v4) v1 = risky(); else v1 = risky2();  Both calls reach the pad.
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Addr = kEntry;
+  Branch.Cond = equals(use(4, 4), 0);
+  Branch.Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Branch.ElseBody.push_back(
+      assign(1, callAt("risky2", kRisky2, kLater), kLater));
+  std::vector<HighStmt> Body;
+  Body.push_back(std::move(Branch));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func = cleanupFunction(
+      cleanupSites({{kCall, kPad}, {kLater, kPad}}), std::move(Body));
+  const std::string Source = body(emit(Func));
+  const Scope S = scopeAfter(Source);
+  ASSERT_NE(S.End, std::string::npos) << Source;
+  EXPECT_LT(S.Try, Source.find("if (")) << Source;
+  EXPECT_LT(Source.find("risky2()"), S.Catch) << Source;
+  EXPECT_EQ(scopeAfter(Source, S.End).Try, std::string::npos) << Source;
+}
+
+TEST(ItaniumHandlerBodies, AJumpIntoACleanupScopeKeepsThePad) {
+  // if (v4) goto L_later;  v1 = risky();  L_later: v2 = risky2();
+  // C++ jumps into no try block.
+  HighStmt Jump;
+  Jump.Kind = StmtKind::Goto;
+  Jump.GotoTarget = kLater;
+  std::vector<HighStmt> Body;
+  Body.push_back(branch(equals(use(4, 4), 0), {}));
+  Body.back().Body.push_back(std::move(Jump));
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(assign(2, callAt("risky2", kRisky2, kLater), kLater));
+  Body.push_back(ret(use(2)));
+  const HighFunc Func = cleanupFunction(
+      cleanupSites({{kCall, kPad}, {kLater, kPad}}), std::move(Body));
+  const std::string Source = body(emit(Func));
+  EXPECT_EQ(Source.find("} catch (...) {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("L_401040: /* landing pad"), std::string::npos)
+      << Source;
+}
+
+TEST(ItaniumHandlerBodies, ACoveredCallOnlyAJumpReachesKeepsThePad) {
+  // v2 = risky2(); goto L_call; if (v4 == 0) { L_call: v1 = risky(); }
+  // The branch is entered only by the jump to its body, so no walk over
+  // ordinary statements reaches the call in it; the pad stays.
+  HighStmt Jump;
+  Jump.Kind = StmtKind::Goto;
+  Jump.GotoTarget = kCall;
+  std::vector<HighStmt> Inside;
+  Inside.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(2, callAt("risky2", kRisky2, kLater), kLater));
+  Body.push_back(std::move(Jump));
+  Body.push_back(branch(equals(use(4, 4), 0), std::move(Inside)));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func = cleanupFunction(
+      cleanupSites({{kCall, kPad}, {kLater, kPad}}), std::move(Body));
+  const std::string Source = body(emit(Func));
+  EXPECT_EQ(Source.find("} catch (...) {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("L_401040: /* landing pad"), std::string::npos)
+      << Source;
+}
+
+TEST(ItaniumHandlerBodies, NothingFallsOutOfAnEndlessLoop) {
+  // while (1) { v1 = risky(); if (v1 == 0) return v1; }  return 7;
+  // With the pad gone the loop ends the function; the return after it, which
+  // nothing reaches, is not printed.  A loop a break leaves still continues.
+  for (const bool Breaks : {false, true}) {
+    HighStmt Loop;
+    Loop.Kind = StmtKind::While;
+    Loop.Addr = kEntry;
+    Loop.Cond = constant(1, 1);
+    Loop.Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+    std::vector<HighStmt> Leave;
+    if (Breaks) {
+      HighStmt Break;
+      Break.Kind = StmtKind::Break;
+      Leave.push_back(std::move(Break));
+    } else {
+      Leave.push_back(ret(use(1)));
+    }
+    Loop.Body.push_back(branch(equals(use(1), 0), std::move(Leave)));
+    std::vector<HighStmt> Body;
+    Body.push_back(std::move(Loop));
+    Body.push_back(ret(constant(7)));
+    const HighFunc Func =
+        cleanupFunction(cleanupSites({{kCall, kPad}}), std::move(Body));
+    const std::string Source = body(emit(Func));
+    EXPECT_NE(Source.find("} catch (...) {"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("return 7;") != std::string::npos, Breaks) << Source;
+  }
+}
+
 TEST(ItaniumHandlerBodies, ACatchParameterPointerIsItsValue) {
   std::vector<HighStmt> Pad;
   Pad.push_back(assign(2, beginCatch(exception())));

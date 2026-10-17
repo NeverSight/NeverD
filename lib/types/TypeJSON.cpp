@@ -284,8 +284,14 @@ llvm::json::Object memberAtJSON(const TypeLibrary &Library, const MemberAt &At,
   return landing(Builder(Library, Spelling), At);
 }
 
-llvm::json::Object typeFitJSON(const TypeLibrary &Library, const TypeFit &Fit,
-                               BuiltinSpelling Spelling) {
+namespace {
+
+/// typeFitJSON with the speller \p Build, which reads the whole library to
+/// spell its names: made by the first fit with landings to spell, and kept
+/// for the others of the same search.
+llvm::json::Object fitJSON(const TypeLibrary &Library, const TypeFit &Fit,
+                           BuiltinSpelling Spelling,
+                           std::optional<Builder> &Build) {
   const LocalType &Type = *Fit.Type;
   llvm::json::Object Out{{"name", text(Type.Name)},
                          {"kind", kindName(Type.Kind)},
@@ -325,10 +331,11 @@ llvm::json::Object typeFitJSON(const TypeLibrary &Library, const TypeFit &Fit,
   Out["padding"] = Fit.Padding;
   Out["outside"] = Fit.Outside;
   if (!Fit.Fits.empty()) {
-    const Builder Build(Library, Spelling);
+    if (!Build)
+      Build.emplace(Library, Spelling);
     llvm::json::Array Fits;
     for (const MemberAt &At : Fit.Fits)
-      Fits.push_back(landing(Build, At));
+      Fits.push_back(landing(*Build, At));
     Out["fits"] = std::move(Fits);
   }
   if (!Fit.MatchedName.empty()) {
@@ -339,6 +346,24 @@ llvm::json::Object typeFitJSON(const TypeLibrary &Library, const TypeFit &Fit,
     Out["matchedMember"] = text(memberPathText(Fit.MatchedMember));
     Out["memberMatched"] = Runs(Fit.MatchedMemberRuns);
   }
+  return Out;
+}
+
+} // namespace
+
+llvm::json::Object typeFitJSON(const TypeLibrary &Library, const TypeFit &Fit,
+                               BuiltinSpelling Spelling) {
+  std::optional<Builder> Build;
+  return fitJSON(Library, Fit, Spelling, Build);
+}
+
+llvm::json::Array typeFitsJSON(const TypeLibrary &Library,
+                               llvm::ArrayRef<TypeFit> Fits,
+                               BuiltinSpelling Spelling) {
+  std::optional<Builder> Build;
+  llvm::json::Array Out;
+  for (const TypeFit &Fit : Fits)
+    Out.push_back(fitJSON(Library, Fit, Spelling, Build));
   return Out;
 }
 

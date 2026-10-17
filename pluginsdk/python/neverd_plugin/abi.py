@@ -1682,6 +1682,13 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare("neverd_annotations_save", "int", ["neverd_session_t"])
+_declare(
+    "neverd_project_json",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare("neverd_project_record", "int", ["neverd_session_t"])
 _declare("neverd_annotations_load", "int", ["neverd_session_t"])
 _declare(
     "neverd_diff_functions",

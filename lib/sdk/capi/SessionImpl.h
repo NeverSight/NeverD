@@ -119,7 +119,11 @@ struct Session {
   /// asked for (NeverDCAPILocalTypes.cpp).  A new image or PDB drops them.
   std::unique_ptr<types::TypeLibrary> LocalTypes;
   types::PDBTypeImportStats LocalTypeStats;
-  /// Where they came from: "pdb", or "none" for an image without types.
+  /// The types DWARF describes that the import left out, each with why, and
+  /// the names its units define otherwise (DWARFTypeImportStats).
+  std::vector<std::string> LocalTypeSkipped, LocalTypeConflicts;
+  /// Where they came from: "pdb", "dwarf", or "none" for an image without
+  /// types.
   std::string LocalTypesSource;
   /// The declarations the user added, in order, read again over the
   /// program's types whenever those are read anew.
@@ -147,6 +151,8 @@ struct Session {
   void dropLocalTypes() {
     LocalTypes.reset();
     LocalTypeStats = {};
+    LocalTypeSkipped.clear();
+    LocalTypeConflicts.clear();
     LocalTypesSource.clear();
     DeclarationProblems.clear();
     LocalTypeHeaders.clear();
@@ -884,6 +890,7 @@ struct Session {
       Recovery.CallMayWriteGPRs = PipeResult.CallMayWriteGPRs;
       Recovery.CallEntryReadGPRs = PipeResult.CallEntryReadGPRs;
       Recovery.CallEntryStackArgs = PipeResult.CallEntryStackArgs;
+      Recovery.CallEntryStackSlots = PipeResult.CallEntryStackSlots;
       Recovery.CallArgumentSources = PipeResult.CallArgumentSources;
       Recovery.OmittedCallees = PipeResult.OmittedCallees;
       recoverModuleCallAbi(Img, Recovery, FuncNames);
@@ -1060,6 +1067,11 @@ struct PipelineRunner {
 /// naming \p Kind.
 bool saveSidecar(Session *S, const std::filesystem::path &Path,
                  llvm::json::Value Values, llvm::StringRef Kind);
+
+/// Records in the project folder's project.json which build of the input the
+/// project's files describe, when it names none or another; false with the
+/// session's error.
+bool recordProjectInput(Session *S);
 
 /// Read the session's input again as it was loaded and publish \p Request's
 /// debug information into it, in the order the names rank, so a file loaded

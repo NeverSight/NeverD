@@ -52,7 +52,7 @@ def run(executable):
         finally:
             client.close()
         # The kept choice reopens the file the same way.
-        kept = json.loads(Path(str(dump) + ".neverd-load.json").read_text())
+        kept = json.loads(Path(str(dump) + ".neverd/load.json").read_text())
         assert (kept["processor"], kept["processor_source"]) == (HOST, "detected"), kept
 
         # Stack in SRAM, Thumb handlers, reserved words zero, then bx lr.

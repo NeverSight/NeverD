@@ -225,6 +225,15 @@ void collectCallArgsX86(const CallArgScan &Scan, std::vector<ExprPtr> &Found,
   // double's `fstp tbyte`, to a callee in this image that reads more slots
   // than there are arguments: it passes the argument of each slot it fills.
   const int64_t SlotBytes = static_cast<int64_t>(Scan.TRI->PointerSize);
+  // A summarized callee, such as an import its prototype describes, reads
+  // no stack slot past its count: a store beyond is a local of this
+  // function or another call's.
+  const int64_t StackSlots =
+      Scan.Convention && Scan.Convention->StackArgumentSummary &&
+              Scan.CalleeRegisterArgs >= 0 &&
+              Scan.CalleeStackArgs >= Scan.CalleeRegisterArgs
+          ? Scan.CalleeStackArgs - Scan.CalleeRegisterArgs
+          : Scan.MaxArgs;
   size_t StoreCount = 0;
   bool WideStore = false;
   stores([&](const MedOp &Store) {
@@ -251,7 +260,7 @@ void collectCallArgsX86(const CallArgScan &Scan, std::vector<ExprPtr> &Found,
       const int64_t Pieces = slotsFilled(Width, Offset / SlotBytes, SlotBytes);
       for (int64_t Piece = 0; Piece < Pieces; ++Piece) {
         const int64_t Index = Offset / SlotBytes + Piece;
-        if (Index >= Scan.MaxArgs)
+        if (Index >= Scan.MaxArgs || Index >= StackSlots)
           break;
         ExprPtr &Slot = Slots[static_cast<size_t>(Index)];
         if (Slot)
@@ -309,6 +318,8 @@ void collectCallArgsX86(const CallArgScan &Scan, std::vector<ExprPtr> &Found,
       }
   if (Pushed.size() <= Args.size())
     return;
+  if (static_cast<int64_t>(Arguments.size()) > StackSlots)
+    Arguments.resize(static_cast<size_t>(StackSlots));
   for (size_t K = 0; K < Pushed.size() && K < Found.size(); ++K)
     Found[K] = K < Arguments.size() ? Arguments[K] : nullptr;
   Args = std::move(Arguments);

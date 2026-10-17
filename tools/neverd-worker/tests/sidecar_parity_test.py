@@ -16,8 +16,8 @@ def run(worker, cli):
     with tempfile.TemporaryDirectory(prefix="neverd-sidecar-parity-") as directory:
         binary = Path(directory) / "arithmetic.evm"
         binary.write_text("600160020100", encoding="ascii")
-        annotations = Path(str(binary) + ".neverd-annotations.json")
-        renames = Path(str(binary) + ".neverd-renames.json")
+        annotations = Path(str(binary) + ".neverd/annotations.json")
+        renames = Path(str(binary) + ".neverd/renames.json")
 
         def execute(args):
             return subprocess.run(args, capture_output=True, timeout=30)

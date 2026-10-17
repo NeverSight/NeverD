@@ -49,7 +49,12 @@ def run(worker, fixture, pack):
                 offset = page["next_offset"]
             if stage == "c":
                 assert source == before["payload"]["text"]
-        members = client.call("functions", {"filter": "std::__1::", "limit": 512})["payload"]["items"]
+        # A function view analyzes only its own entry; the whole image's
+        # analysis recognizes every published member.
+        analyzed = client.call("analyze")
+        assert analyzed["status"] == "ok", analyzed
+        reply = client.call("functions", {"limit": 512})
+        members = reply["payload"]["items"]
         supported = [f for f in members if any(a["scope"] == "whole-function" for a in f["library_annotations"])]
         assert len(supported) == 16, supported
         assert len({f["display_name"] for f in supported}) == 16

@@ -675,11 +675,23 @@ struct ExceptionTrack {
   std::vector<MedVar> Copies;
   SlotCopies Slots;
   std::vector<const HighExpr *> SpilledTo;
+  /// Variables holding the address of a slot the object was spilled to, as
+  /// clang computes one in a frame too large for an immediate offset.
+  std::vector<std::pair<MedVar, const HighExpr *>> SlotAddresses;
 
   bool isException(const HighExpr *E) const {
     if (Slots.holds(E))
       return true;
     E = peelViews(E);
+    if (E && E->Kind == ExprKind::Load && !E->Operands.empty() &&
+        isVariable(E->Operands[0].get()))
+      for (const auto &[Var, Address] : SlotAddresses)
+        if (Var == E->Operands[0]->Var &&
+            llvm::any_of(Slots.Slots, [&](const auto &Slot) {
+              return Slot.second == bytesOf(E) &&
+                     Slot.first->structuralEq(*Address);
+            }))
+          return true;
     return isVariable(E) && (E->Var.Kind == MedVar::EHException ||
                              llvm::is_contained(Copies, E->Var));
   }
@@ -701,10 +713,20 @@ struct ExceptionTrack {
       }
       // The spill slots are the compiler's temporaries, as for the selector.
       if (S.Kind == StmtKind::Assign && S.Dst && isVariable(S.Dst.get())) {
-        llvm::erase(Copies, S.Dst->Var);
+        const MedVar Var = S.Dst->Var;
+        llvm::erase(Copies, Var);
+        llvm::erase_if(SlotAddresses,
+                       [&](const auto &Known) { return Known.first == Var; });
         if (isException(S.Val.get())) {
-          Copies.push_back(S.Dst->Var);
+          Copies.push_back(Var);
           Copying[I] = true;
+        } else if (S.Val) {
+          for (const auto &Slot : Slots.Slots)
+            if (Slot.first->structuralEq(*S.Val)) {
+              SlotAddresses.push_back({Var, Slot.first});
+              Copying[I] = true;
+              break;
+            }
         }
       }
     }
@@ -746,6 +768,10 @@ struct ExceptionTrack {
                 llvm::any_of(Copies,
                              [&](const MedVar &Copy) {
                                return readsVariable(E, Copy);
+                             }) ||
+                llvm::any_of(SlotAddresses,
+                             [&](const auto &Known) {
+                               return readsVariable(E, Known.first);
                              }) ||
                 (E != S.Dst.get() && ReadsSpill(E, 0));
       });
@@ -933,8 +959,9 @@ const char *makeHandler(std::vector<HighStmt> &Body, bool CatchAll,
 /// Spell \p Body, the run of a pad that no clause matched, as cleanups: the
 /// statements before \p PrefixEnd, which the pad runs whatever the selector,
 /// into \p Prefix and the rest into \p Rest.  The `_Unwind_Resume` that
-/// ends the run is the rethrow a C++ cleanup ends with; the pad's copies of
-/// the exception and the selector go.
+/// ends the run, or ARM EHABI's `__cxa_end_cleanup`, which resumes the
+/// exception the runtime is propagating, is the rethrow a C++ cleanup ends
+/// with; the pad's copies of the exception and the selector go.
 const char *makeCleanup(std::vector<HighStmt> &Body,
                         const std::set<size_t> &SelectorWrites,
                         size_t PrefixEnd, std::vector<HighStmt> &Prefix,
@@ -943,11 +970,13 @@ const char *makeCleanup(std::vector<HighStmt> &Body,
   if (Body.empty())
     return "the cleanup run is empty";
   const HighExpr *Resume = runtimeCall(Body.back(), "_Unwind_Resume");
-  if (!Resume || Resume->Operands.size() != 1)
+  const HighExpr *EndCleanup = runtimeCall(Body.back(), "__cxa_end_cleanup");
+  if ((!Resume || Resume->Operands.size() != 1) &&
+      (!EndCleanup || !EndCleanup->Operands.empty()))
     return "the cleanup run does not end resuming the unwind";
   ExceptionTrack Track;
   const std::vector<bool> Copying = Track.scan(Body, Body.size() - 1);
-  if (!Track.isException(Resume->Operands[0].get()))
+  if (Resume && !Track.isException(Resume->Operands[0].get()))
     return "the cleanup resumes something other than the pad's exception";
   for (size_t I = 0; I + 1 < Body.size(); ++I) {
     if (Copying[I])
@@ -1112,22 +1141,334 @@ bool hasItaniumCxxRegions(const HighFunc &Func) {
          Func.ExceptionMetadata->Itanium->IsCallSiteAddressForm;
 }
 
-/// Remove the statements of \p Stmts in \p Gone, children with their parent.
+/// The landing pads that only clean up: every call site that reaches one
+/// enters it with selector 0, so it runs the destructors of the objects the
+/// throw leaves behind and resumes the unwind, whatever was thrown.
+std::vector<va_t> cleanupOnlyPads(const ItaniumEHInfo &LSDA) {
+  std::set<va_t> Pads;
+  for (const ItaniumCallSite &Site : LSDA.CallSites)
+    if (Site.LandingPadVA && Site.GuardedRange.isValid())
+      Pads.insert(Site.LandingPadVA);
+  std::vector<va_t> Cleanups;
+  for (va_t Pad : Pads)
+    if (padSelectors(LSDA, Pad) == std::set<int64_t>{0})
+      Cleanups.push_back(Pad);
+  return Cleanups;
+}
+
+/// Call \p Fn with the call instruction of each call \p E makes, intrinsics
+/// and the compiler builtins this spells operations as (`__builtin_alloca`)
+/// aside: none raises a C++ exception.  A call no instruction makes, or one
+/// too deep to reach, passes 0.
+void forEachCallSite(const HighExpr *E, llvm::function_ref<void(va_t)> Fn,
+                     unsigned Depth = 0) {
+  if (!E)
+    return;
+  if (Depth > 64) {
+    Fn(0);
+    return;
+  }
+  if (E->Kind == ExprKind::Call && E->IntrinsicId == Intrinsic::None &&
+      !llvm::StringRef(E->CallTarget).starts_with("__builtin_"))
+    Fn(E->CallSiteAddr);
+  E->forEachChildExpr([&](const ExprPtr &Child) {
+    forEachCallSite(Child.get(), Fn, Depth + 1);
+  });
+}
+
+/// The runs of statements the scopes of one cleanup-only landing pad wrap.
+/// Together they hold every call of the function's ordinary flow that the
+/// pad's call sites cover, and no call they do not cover: the C++ handler of
+/// the scope would run the cleanups for that call too.  Statements that make
+/// no call may go either way, as they cannot raise.  Code only the unwinder
+/// runs is no part of a scope; a call there that the merged call-site ranges
+/// happen to cover runs while another exception is unwinding.  A handler, and
+/// the code it goes on to once it caught the exception, run as ordinary code:
+/// a call there that the pad covers keeps the pad in place.
+class CleanupScopes {
+public:
+  struct Run {
+    const HighStmt *First = nullptr;
+    const HighStmt *Last = nullptr;
+  };
+  std::vector<Run> Runs;
+  /// Why no runs were found.
+  const char *Reason = nullptr;
+
+  /// \p Handlers holds the nodes of the code catch pads run.
+  CleanupScopes(const HighFlowGraph &G, const std::set<size_t> &Normal,
+                const std::set<size_t> &Handlers, const ItaniumEHInfo &LSDA,
+                va_t Pad)
+      : G(G), Normal(Normal), Handlers(Handlers), LSDA(LSDA), Pad(Pad) {}
+
+  /// Find the runs of \p Body.
+  bool find(const std::vector<HighStmt> &Body) {
+    walkStmts(Body, [&](const HighStmt &S) {
+      if (!Handlers.count(nodeOf(S)))
+        return;
+      forEachStatementExpr(S, [&](const HighExpr *E) {
+        forEachCallSite(E, [&](va_t Site) {
+          if (!Site || padAt(LSDA, Site) == Pad)
+            fail("a handler makes a call the pad may cover");
+        });
+      });
+    });
+    if (!Failed)
+      cover(Body);
+    if (!Failed && Runs.empty())
+      fail("no call of ordinary flow reaches the pad");
+    // Every covered call of ordinary flow sits in a run.  The walk passes
+    // over a statement only the unwinder enters, which may still hold one a
+    // jump reaches.
+    if (!Failed) {
+      std::set<const HighStmt *> Wrapped;
+      std::function<void(const HighStmt &)> Mark = [&](const HighStmt &S) {
+        Wrapped.insert(&S);
+        for (const auto *List : {&S.Body, &S.ElseBody, &S.DefaultBody})
+          for (const HighStmt &Child : *List)
+            Mark(Child);
+        for (const SwitchCase &Case : S.Cases)
+          for (const HighStmt &Child : Case.Body)
+            Mark(Child);
+        for (const auto &Clause : S.EHClauseBodies)
+          for (const HighStmt &Child : Clause)
+            Mark(Child);
+      };
+      // A run's statements are neighbours in one list.
+      for (const Run &R : Runs)
+        for (const HighStmt *S = R.First; S <= R.Last; ++S)
+          Mark(*S);
+      walkStmts(Body, [&](const HighStmt &S) {
+        if (Failed || !Normal.count(nodeOf(S)) || Wrapped.count(&S))
+          return;
+        forEachStatementExpr(S, [&](const HighExpr *E) {
+          forEachCallSite(E, [&](va_t Site) {
+            if (Site && padAt(LSDA, Site) == Pad)
+              fail("a covered call lies outside every scope");
+          });
+        });
+      });
+    }
+    return !Failed;
+  }
+
+private:
+  struct Calls {
+    /// A call the pad's call sites cover.
+    bool Covered = false;
+    /// A call they do not cover, or code a scope may not hold.
+    bool Other = false;
+  };
+
+  const HighFlowGraph &G;
+  const std::set<size_t> &Normal;
+  const std::set<size_t> &Handlers;
+  const ItaniumEHInfo &LSDA;
+  const va_t Pad;
+  std::map<const HighStmt *, Calls> Memo;
+  bool Failed = false;
+
+  void fail(const char *Why) {
+    if (!Failed)
+      Reason = Why;
+    Failed = true;
+  }
+
+  size_t nodeOf(const HighStmt &S) const {
+    const auto It = G.NodeOf.find(&S);
+    return It == G.NodeOf.end() ? 0 : It->second;
+  }
+
+  Calls classify(const HighStmt &S) {
+    if (const auto It = Memo.find(&S); It != Memo.end())
+      return It->second;
+    Calls C;
+    if (!Normal.count(nodeOf(S))) {
+      C.Other = true;
+      return Memo[&S] = C;
+    }
+    // A copy of a call keeps its instruction, whatever address its statement
+    // took; a call that stands for two instructions keeps none
+    // (withMergedCallSites).
+    forEachStatementExpr(S, [&](const HighExpr *E) {
+      forEachCallSite(E, [&](va_t Site) {
+        if (!Site)
+          fail("a call has no call instruction of its own");
+        else if (padAt(LSDA, Site) == Pad)
+          C.Covered = true;
+        else
+          C.Other = true;
+      });
+    });
+    const bool OwnCovered = C.Covered;
+    auto Add = [&](const std::vector<HighStmt> &List) {
+      for (const HighStmt &Child : List) {
+        const Calls Inner = classify(Child);
+        C.Covered |= Inner.Covered;
+        C.Other |= Inner.Other;
+      }
+    };
+    Add(S.Body);
+    Add(S.ElseBody);
+    for (const SwitchCase &Case : S.Cases)
+      Add(Case.Body);
+    Add(S.DefaultBody);
+    for (const auto &Clause : S.EHClauseBodies)
+      Add(Clause);
+    // A covered call of the statement's own, a condition's say, goes into a
+    // scope only with all of the statement.
+    if (OwnCovered && C.Other)
+      fail("a statement makes calls of the pad and calls of another");
+    return Memo[&S] = C;
+  }
+
+  /// Cover the calls of \p L: a run for each stretch of statements whose
+  /// calls the pad's call sites all cover, and the statements that make both
+  /// kinds of call looked into.
+  void cover(const std::vector<HighStmt> &L) {
+    std::optional<size_t> Open;
+    size_t Last = 0;
+    auto Close = [&] {
+      if (Open)
+        close(L, *Open, Last);
+      Open.reset();
+    };
+    for (size_t I = 0; I < L.size() && !Failed; ++I) {
+      const HighStmt &S = L[I];
+      const Calls C = classify(S);
+      if (C.Covered && !C.Other) {
+        if (!Open)
+          Open = I;
+        Last = I;
+        continue;
+      }
+      if (!C.Covered && !C.Other)
+        continue;
+      Close();
+      if (!C.Covered)
+        continue;
+      cover(S.Body);
+      cover(S.ElseBody);
+      for (const SwitchCase &Case : S.Cases)
+        cover(Case.Body);
+      cover(S.DefaultBody);
+      for (const auto &Clause : S.EHClauseBodies)
+        cover(Clause);
+    }
+    if (!Failed)
+      Close();
+  }
+
+  /// Make \p L's statements from \p Begin to \p End a run, unless a jump
+  /// enters them below the first: C++ jumps into no try block.
+  void close(const std::vector<HighStmt> &L, size_t Begin, size_t End) {
+    std::set<size_t> Inside;
+    std::function<void(const HighStmt &)> Add = [&](const HighStmt &S) {
+      Inside.insert(nodeOf(S));
+      for (const auto *List : {&S.Body, &S.ElseBody, &S.DefaultBody})
+        for (const HighStmt &Child : *List)
+          Add(Child);
+      for (const SwitchCase &Case : S.Cases)
+        for (const HighStmt &Child : Case.Body)
+          Add(Child);
+      for (const auto &Clause : S.EHClauseBodies)
+        for (const HighStmt &Child : Clause)
+          Add(Child);
+    };
+    for (size_t I = Begin; I <= End; ++I)
+      Add(L[I]);
+    // A do-while is entered at its body, as its label is.
+    const HighStmt *Top = &L[Begin];
+    while (Top->Kind == StmtKind::DoWhile && !Top->Body.empty())
+      Top = &Top->Body.front();
+    const size_t Entry = nodeOf(*Top);
+    for (size_t N = 0; N < G.Nodes.size(); ++N) {
+      if (Inside.count(N))
+        continue;
+      for (size_t Next : G.Nodes[N].Successors)
+        if (Next != Entry && Inside.count(Next)) {
+          fail("a jump enters the scope below its first statement");
+          return;
+        }
+    }
+    Runs.push_back({&L[Begin], &L[End]});
+  }
+};
+
+/// The cleanup scopes of one landing pad that only cleans up.
+struct CleanupPlan {
+  va_t Pad = 0;
+  ExceptionAddressRange Range;
+  std::vector<HighStmt> Actions;
+  std::vector<CleanupScopes::Run> Runs;
+};
+
+/// The cleanup scope that opens at a statement: the last statement it holds
+/// and the plan it belongs to.
+struct ScopeOpening {
+  const HighStmt *Last = nullptr;
+  const CleanupPlan *Plan = nullptr;
+};
+
 void removeStatements(std::vector<HighStmt> &Stmts,
-                      const std::set<const HighStmt *> &Gone) {
+                      const std::set<const HighStmt *> &Gone,
+                      const std::map<const HighStmt *, ScopeOpening> &Opens);
+
+void removeNestedStatements(
+    HighStmt &S, const std::set<const HighStmt *> &Gone,
+    const std::map<const HighStmt *, ScopeOpening> &Opens) {
+  removeStatements(S.Body, Gone, Opens);
+  removeStatements(S.ElseBody, Gone, Opens);
+  for (SwitchCase &C : S.Cases)
+    removeStatements(C.Body, Gone, Opens);
+  removeStatements(S.DefaultBody, Gone, Opens);
+  for (auto &Clause : S.EHClauseBodies)
+    removeStatements(Clause, Gone, Opens);
+}
+
+/// Remove the statements of \p Stmts in \p Gone, children with their parent,
+/// and wrap each run of \p Opens in its cleanup scope: a C++ try whose
+/// catch-all handler runs the pad's cleanups and rethrows.
+void removeStatements(std::vector<HighStmt> &Stmts,
+                      const std::set<const HighStmt *> &Gone,
+                      const std::map<const HighStmt *, ScopeOpening> &Opens) {
   std::vector<HighStmt> Kept;
   Kept.reserve(Stmts.size());
-  for (HighStmt &S : Stmts) {
+  for (size_t I = 0; I < Stmts.size(); ++I) {
+    HighStmt &S = Stmts[I];
     if (Gone.count(&S))
       continue;
-    removeStatements(S.Body, Gone);
-    removeStatements(S.ElseBody, Gone);
-    for (SwitchCase &C : S.Cases)
-      removeStatements(C.Body, Gone);
-    removeStatements(S.DefaultBody, Gone);
-    for (auto &Clause : S.EHClauseBodies)
-      removeStatements(Clause, Gone);
-    Kept.push_back(std::move(S));
+    const auto Open = Opens.find(&S);
+    if (Open == Opens.end()) {
+      removeNestedStatements(S, Gone, Opens);
+      Kept.push_back(std::move(S));
+      continue;
+    }
+    const CleanupPlan &Plan = *Open->second.Plan;
+    HighStmt Scope;
+    Scope.Kind = StmtKind::ItaniumTry;
+    // The scope opens where its first statement is, so a label there is the
+    // scope's.
+    Scope.Addr = S.Addr;
+    Scope.EHRange = Plan.Range;
+    Scope.EHIsReducible = true;
+    HighEHClause Clause;
+    Clause.Kind = HighEHClauseKind::CxxCleanup;
+    Clause.HandlerVA = Plan.Pad;
+    Clause.LandingPadVAs = {Plan.Pad};
+    Scope.EHClauses = {std::move(Clause)};
+    Scope.EHClauseBodies = {Plan.Actions};
+    for (; I < Stmts.size(); ++I) {
+      HighStmt &Held = Stmts[I];
+      const bool IsLast = &Held == Open->second.Last;
+      if (!Gone.count(&Held)) {
+        removeNestedStatements(Held, Gone, Opens);
+        Scope.Body.push_back(std::move(Held));
+      }
+      if (IsLast)
+        break;
+    }
+    Kept.push_back(std::move(Scope));
   }
   Stmts = std::move(Kept);
 }
@@ -1137,14 +1478,16 @@ void removeStatements(std::vector<HighStmt> &Stmts,
 void attachItaniumHandlerBodies(HighFunc &Func) {
   if (!hasItaniumCxxRegions(Func))
     return;
-  splitRegionsByPad(Func.Body, *Func.ExceptionMetadata->Itanium);
+  const ItaniumEHInfo &LSDA = *Func.ExceptionMetadata->Itanium;
+  splitRegionsByPad(Func.Body, LSDA);
   std::vector<HighStmt *> Regions;
   walkStmts(Func.Body, [&](HighStmt &S) {
     if (S.Kind == StmtKind::ItaniumTry && S.EHIsReducible &&
         !S.EHClauses.empty())
       Regions.push_back(&S);
   });
-  if (Regions.empty())
+  const std::vector<va_t> CleanupPads = cleanupOnlyPads(LSDA);
+  if (Regions.empty() && CleanupPads.empty())
     return;
   const HighFlowGraph G(Func.Body, endsPath);
   if (!G.Complete)
@@ -1277,7 +1620,72 @@ void attachItaniumHandlerBodies(HighFunc &Func) {
     DroppedPads.insert(Dropped.begin(), Dropped.end());
     Done.push_back(std::move(P));
   }
-  if (Done.empty())
+  // A pad that only cleans up is a scope of its own around the calls that
+  // reach it: `try { … } catch (...) { cleanups; throw; }`, as an MSVC
+  // object's unwind action reads.
+  std::vector<CleanupPlan> Cleanups;
+  Cleanups.reserve(CleanupPads.size());
+  std::vector<va_t> CleanupPadsKept;
+  // The code the other pads run: handlers, and what they continue to.
+  std::set<size_t> Handlers;
+  if (!CleanupPads.empty())
+    for (const ItaniumCallSite &Site : LSDA.CallSites) {
+      if (!Site.LandingPadVA ||
+          llvm::is_contained(CleanupPads, Site.LandingPadVA))
+        continue;
+      const auto Entry = G.LabelAt.find(Site.LandingPadVA);
+      if (Entry == G.LabelAt.end())
+        continue;
+      std::vector<size_t> Work{Entry->second};
+      while (!Work.empty()) {
+        const size_t N = Work.back();
+        Work.pop_back();
+        if (N == 0 || Normal.count(N) || !Handlers.insert(N).second)
+          continue;
+        Work.insert(Work.end(), G.Nodes[N].Successors.begin(),
+                    G.Nodes[N].Successors.end());
+      }
+    }
+  for (va_t Pad : CleanupPads) {
+    const char *Why = nullptr;
+    const auto Entry = G.LabelAt.find(Pad);
+    if (Entry == G.LabelAt.end() || Normal.count(Entry->second))
+      Why = "landing pad is no label of its own";
+    const std::vector<HighStmt> NoTry;
+    PadRun Run(G, Normal, Positions, NoTry, VoidFunction, 0);
+    std::optional<std::vector<HighStmt>> Body;
+    if (!Why && !(Body = Run.run(Entry->second)))
+      Why = Run.Reason;
+    CleanupPlan Plan;
+    Plan.Pad = Pad;
+    std::vector<HighStmt> Prefix;
+    if (!Why)
+      Why = makeCleanup(*Body, Run.SelectorWrites, 0, Prefix, Plan.Actions);
+    // A pad that runs nothing but the resume is no cleanup at all.
+    CleanupScopes Scopes(G, Normal, Handlers, LSDA, Pad);
+    if (!Why && !Plan.Actions.empty() && !Scopes.find(Func.Body))
+      Why = Scopes.Reason;
+    if (Why) {
+      note(Why, Pad);
+      CleanupPadsKept.push_back(Pad);
+      continue;
+    }
+    for (const ItaniumCallSite &Site : LSDA.CallSites)
+      if (Site.LandingPadVA == Pad && Site.GuardedRange.isValid())
+        Plan.Range =
+            Plan.Range.isValid()
+                ? ExceptionAddressRange{std::min(Plan.Range.Begin,
+                                                 Site.GuardedRange.Begin),
+                                        std::max(Plan.Range.End,
+                                                 Site.GuardedRange.End)}
+                : Site.GuardedRange;
+    if (!Plan.Actions.empty())
+      Plan.Runs = std::move(Scopes.Runs);
+    Consumed.insert(Run.Copied.begin(), Run.Copied.end());
+    DroppedPads.insert(Run.DroppedPads.begin(), Run.DroppedPads.end());
+    Cleanups.push_back(std::move(Plan));
+  }
+  if (Done.empty() && Cleanups.empty())
     return;
   // The pads of the regions the handlers no longer spell run nothing else.
   auto PadCode = [&](va_t Pad, llvm::function_ref<void(const HighStmt *)> Fn) {
@@ -1298,6 +1706,14 @@ void attachItaniumHandlerBodies(HighFunc &Func) {
   };
   for (va_t Pad : DroppedPads)
     PadCode(Pad, [&](const HighStmt *S) { Consumed.insert(S); });
+  // A cleanup pad left in place keeps the code it reaches, unless the run of
+  // a pad spelled above took its entry along: its code then goes on as that
+  // pad's tail.
+  for (va_t Pad : CleanupPadsKept)
+    if (const auto Entry = G.LabelAt.find(Pad);
+        Entry != G.LabelAt.end() &&
+        !Consumed.count(G.Nodes[Entry->second].Statement))
+      KeptPads.insert(Pad);
   // Pad code a region left alone still reaches stays where it is.
   for (va_t Kept : KeptPads)
     PadCode(Kept, [&](const HighStmt *S) { Consumed.erase(S); });
@@ -1358,7 +1774,13 @@ void attachItaniumHandlerBodies(HighFunc &Func) {
       *P.Region = std::move(Region);
     }
   }
-  removeStatements(Func.Body, Gone);
+  // The runs of the cleanup scopes hold no region's statements, which keep
+  // their places above, and no pad code.
+  std::map<const HighStmt *, ScopeOpening> Opens;
+  for (const CleanupPlan &Plan : Cleanups)
+    for (const CleanupScopes::Run &Run : Plan.Runs)
+      Opens[Run.First] = {Run.Last, &Plan};
+  removeStatements(Func.Body, Gone, Opens);
 }
 
 } // namespace neverd

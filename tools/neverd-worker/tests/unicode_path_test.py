@@ -63,14 +63,14 @@ def run(worker):
             note = "\u4e2d\u6587\u6ce8\u91ca \U0001f680"
             ok(client, "annotation_set", {"address": address, "text": note})
             assert ok(client, "save")["saved"]
-            annotations = Path(str(path) + ".neverd-annotations.json")
+            annotations = Path(str(path) + ".neverd/annotations.json")
             assert json.loads(annotations.read_text(encoding="utf-8"))[0]["text"] == note
             assert ok(client, "rename", {"address": address, "name": "unicode_entry"})["saved"]
-            renames = Path(str(path) + ".neverd-renames.json")
+            renames = Path(str(path) + ".neverd/renames.json")
             assert renames.exists()
             created_address = base + 0x1080
             ok(client, "function_create", {"address": hex(created_address)})
-            functions = Path(str(path) + ".neverd-functions.json")
+            functions = Path(str(path) + ".neverd/functions.json")
             assert functions.exists()
             assert any(int(row["addr"], 16) == created_address and row["state"] == "created"
                        for row in json.loads(functions.read_text(encoding="utf-8")))
@@ -78,14 +78,14 @@ def run(worker):
             defined = ok(client, "item_define", {"address": hex(item_address),
                                                 "action": "data", "size": 4})
             assert defined["kind"] == "dword" and defined["saved"], defined
-            items = Path(str(path) + ".neverd-items.json")
+            items = Path(str(path) + ".neverd/items.json")
             assert any(int(row["addr"], 16) == item_address and row["kind"] == "dword"
                        for row in json.loads(items.read_text(encoding="utf-8")))
             # mov rax, 2Ah shows its number in binary.
             formatted = ok(client, "operand_format", {"address": address, "operand": 1,
                                                       "action": "binary"})
             assert formatted["format"]["base"] == "binary" and formatted["saved"], formatted
-            operands = Path(str(path) + ".neverd-operands.json")
+            operands = Path(str(path) + ".neverd/operands.json")
             assert any(int(row["addr"], 16) == base + 0x1000
                        and row["operands"][0]["base"] == "binary"
                        for row in json.loads(operands.read_text(encoding="utf-8")))

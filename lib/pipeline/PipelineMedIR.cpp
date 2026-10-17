@@ -90,6 +90,11 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   for (const auto &LF : Result.LowFuncs)
     if (LF.CalleePopBytes > 0)
       CalleePop[LF.Entry] = LF.CalleePopBytes;
+  // A stdcall import pops its arguments too: through its stub or its slot,
+  // as its prototype or its stub's decoration counts them.  A stub lifted as
+  // a function keeps what its own code says.
+  for (const auto &[Address, Bytes] : Result.CallEntryStackPops)
+    CalleePop.try_emplace(Address, Bytes);
 
   // GOT/pointer-slot VAs holding a stack-probe import (____chkstk_darwin).
   // Apple clang guards a large frame with a GOT-indirect probe call in the
@@ -132,6 +137,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
     Local.setCallArgumentSources(&Result.CallArgumentSources);
     Local.setCallEntryStackArgs(&Result.CallEntryStackArgs);
+    Local.setCallEntryStackSlots(&Result.CallEntryStackSlots);
     Local.setCallDispatchThunks(&Result.CallDispatchThunks);
     Local.setCallVariadicFrom(&Result.CallVariadicFrom);
     Local.setFormattedCalls(&Result.FormattedCalls);

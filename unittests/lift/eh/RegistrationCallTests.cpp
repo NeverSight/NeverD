@@ -265,6 +265,34 @@ TEST(RegistrationCallABI, NestedReturningStackProofIsBoundedAndNonCircular) {
   }
 }
 
+TEST(RegistrationCallABI, ReturningStackProofDoesNotNormalizeTheX87Stack) {
+  // Normalization refuses the first three bodies: an unproved tag for FCHS or
+  // FXAM, or a return block split by TOP. The last FXAM has a proved tag.
+  const std::vector<uint8_t> Cases[] = {
+      {0xd9, 0xe0, 0xc3},
+      {0xd9, 0xe5, 0xc3},
+      {0x85, 0xc0, 0x74, 4, 0xd9, 0x44, 0x24, 4, 0xc3},
+      {0xd9, 0x44, 0x24, 4, 0xd9, 0xe5, 0xdd, 0xd8, 0xc3},
+  };
+  for (unsigned I = 0; I != std::size(Cases); ++I) {
+    SCOPED_TRACE(I);
+    ThrowImage F;
+    F.Image.Imports.clear();
+    auto &Text = F.Image.Segments[0];
+    Text.Data = Cases[I];
+    Text.Size = Text.FileSz = Text.Data.size();
+    Section Code;
+    Code.Name = ".text";
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    F.Image.Sections = {Code};
+    // The x87 stack is not an input to ESP or near-return cleanup.
+    EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, Text.VA),
+              std::optional<uint32_t>{0});
+  }
+}
+
 TEST(RegistrationCallABI, StackImportContractRequiresTheExactRuntimeProvider) {
   for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -1828,6 +1856,28 @@ TEST(RegistrationCallABI, PhysicalScalarReturnNeedsMoreThanFramePrivacy) {
       F.Image, CleanupRelayImage::RelayVA);
   ASSERT_TRUE(Relay);
   EXPECT_TRUE(Relay->Calls[0].Leaf.HasIndependentScalarReturn);
+}
+
+TEST(RegistrationCallABI, ScalarReturnDescribesEAXBesideAnX87Result) {
+  for (const bool Computes : {false, true}) {
+    SCOPED_TRACE(Computes);
+    CleanupRelayImage F;
+    auto &Text = F.Image.Segments.front();
+    // The leaf also returns the borrowed float on the x87 stack. The contract
+    // still describes EAX, which is what the caller holds after the call.
+    std::vector<uint8_t> Leaf = {0xd9, 0x01, 0xc3};
+    if (Computes)
+      Leaf.insert(Leaf.begin(), {0x31, 0xc0});
+    std::copy(Leaf.begin(), Leaf.end(), Text.Data.begin() + 0x40);
+    const auto P = getCheckedX86RegistrationLeafCalleeABI(
+        F.Image, CleanupRelayImage::LeafVA);
+    ASSERT_TRUE(P);
+    EXPECT_EQ(P->HasIndependentScalarReturn, Computes);
+    EXPECT_EQ(P->StackPopBytes, 0u);
+    ASSERT_EQ(P->ECXReads.size(), 1u);
+    EXPECT_EQ(P->ECXReads[0].Begin, 0);
+    EXPECT_EQ(P->ECXReads[0].End, 4);
+  }
 }
 
 TEST(RegistrationCallABI, PhysicalReturnRejectsCallerPCAndMixedPredecessors) {

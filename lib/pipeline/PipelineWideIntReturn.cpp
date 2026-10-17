@@ -27,6 +27,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <vector>
 
 namespace neverd {
@@ -199,15 +200,50 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
     // remainder) at its epilogue.
     std::map<va_t, std::set<va_t>> IndirectI64SitesByFunc;
     {
+      // Every call asks the same per-function question, and no function
+      // changes until the last query below. Index each function once: its
+      // blocks by id, and the blocks whose return-register PHIs take each
+      // non-constant value (equal exactly when Kind, Id and SSAVer are).
+      // Rebuilding the block map and scanning every PHI for each call was
+      // quadratic in a 12k-block function.
+      struct CarriedResultIndex {
+        std::map<int, const MedBlock *> ById;
+        std::map<std::tuple<int, int, int>, std::set<int>> PhiBlocksByArg;
+      };
+      std::map<const MedFunc *, CarriedResultIndex> CarriedResultIndexes;
+      auto carriedResultIndex =
+          [&](const MedFunc &MF) -> const CarriedResultIndex & {
+        auto [It, Inserted] = CarriedResultIndexes.try_emplace(&MF);
+        if (!Inserted)
+          return It->second;
+        for (const auto &Block : MF.Blocks) {
+          It->second.ById[Block.Id] = &Block;
+          for (const auto &Phi : Block.Phis) {
+            if (Phi.Output.Kind != MedVar::Reg ||
+                Phi.Output.RegOff != TRI.IntReturnReg)
+              continue;
+            for (const auto &A : Phi.Args)
+              if (!A.second.isConst())
+                It->second
+                    .PhiBlocksByArg[{static_cast<int>(A.second.Kind),
+                                     A.second.Id, A.second.SSAVer}]
+                    .insert(Block.Id);
+          }
+        }
+        return It->second;
+      };
       auto lowResultLoopCarried = [&](const MedFunc &MF, const MedBlock &B,
                                       const MedOp &Call) -> bool {
         if (Call.Output.Kind != MedVar::Reg ||
             Call.Output.RegOff != TRI.IntReturnReg)
           return false;
 
-        std::map<int, const MedBlock *> ById;
-        for (const auto &Block : MF.Blocks)
-          ById[Block.Id] = &Block;
+        const CarriedResultIndex &Index = carriedResultIndex(MF);
+        const auto PhiBlocks =
+            Index.PhiBlocksByArg.find({static_cast<int>(Call.Output.Kind),
+                                       Call.Output.Id, Call.Output.SSAVer});
+        if (PhiBlocks == Index.PhiBlocksByArg.end())
+          return false;
 
         // A loop header need not be an immediate successor of the call block:
         // size-oriented ARM code commonly branches through a separate latch.
@@ -223,25 +259,16 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
           Work.pop_back();
           if (!CanReachCall.insert(Id).second)
             continue;
-          auto It = ById.find(Id);
-          if (It == ById.end())
+          auto It = Index.ById.find(Id);
+          if (It == Index.ById.end())
             continue;
           Work.insert(Work.end(), It->second->Preds.begin(),
                       It->second->Preds.end());
         }
 
-        for (const auto &PhiBlock : MF.Blocks) {
-          if (!CanReachCall.count(PhiBlock.Id))
-            continue;
-          for (const auto &Phi : PhiBlock.Phis) {
-            if (Phi.Output.Kind != MedVar::Reg ||
-                Phi.Output.RegOff != TRI.IntReturnReg)
-              continue;
-            for (const auto &A : Phi.Args)
-              if (A.second == Call.Output)
-                return true;
-          }
-        }
+        for (int PhiBlock : PhiBlocks->second)
+          if (CanReachCall.count(PhiBlock))
+            return true;
         return false;
       };
 
@@ -428,6 +455,8 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
       for (const auto &LF : Result.LowFuncs)
         if (LF.CalleePopBytes > 0)
           CalleePop[LF.Entry] = LF.CalleePopBytes;
+      for (const auto &[Address, Bytes] : Result.CallEntryStackPops)
+        CalleePop.try_emplace(Address, Bytes);
 
       // Stack-probe slot set for the i64-caller re-conversion (mirrors
       // buildMedIR): keep the prologue chkstk call from killing the live-in
@@ -468,6 +497,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
         Reconv.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
         Reconv.setCallArgumentSources(&Result.CallArgumentSources);
         Reconv.setCallEntryStackArgs(&Result.CallEntryStackArgs);
+        Reconv.setCallEntryStackSlots(&Result.CallEntryStackSlots);
         Reconv.setCallDispatchThunks(&Result.CallDispatchThunks);
         Reconv.setCallVariadicFrom(&Result.CallVariadicFrom);
         Reconv.setFormattedCalls(&Result.FormattedCalls);

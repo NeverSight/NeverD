@@ -172,12 +172,41 @@ std::optional<MedVar> vtableCallObject(const MedBlock &Blk, int CallIdx,
 // Stack-pointer offset tracing
 //===----------------------------------------------------------------------===//
 
+/// Where a value is defined: its one operation or PHI anywhere in the
+/// function, or Ambiguous when more than one defines it.
+struct MedDefSite {
+  const MedBlock *Block = nullptr;
+  const MedOp *Op = nullptr;
+  const PhiNode *Phi = nullptr;
+  bool Ambiguous = false;
+};
+
+/// The definition site of each value of a function, as a scan of the whole
+/// function finds it, indexed on first use. Adding or moving operations or
+/// PHIs requires invalidate().
+class MedDefSiteIndex {
+public:
+  explicit MedDefSiteIndex(const MedFunc &Func) : Func(Func) {}
+  MedDefSite find(const MedVar &V);
+  void invalidate() {
+    Sites.clear();
+    Built = false;
+  }
+
+private:
+  const MedFunc &Func;
+  std::map<std::tuple<int, int, int, uint64_t>, MedDefSite> Sites;
+  bool Built = false;
+};
+
 /// Offset of \p V relative to the function-entry stack pointer, following the
 /// SP definition chain through constant add/sub decrements and width casts.
-/// nullopt when \p V does not derive from the SP.
+/// nullopt when \p V does not derive from the SP. \p Defs, when given, must
+/// index \p Func.
 std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
                                      const TargetRegInfo &TRI, const MedVar &V,
-                                     int Depth = 0);
+                                     int Depth = 0,
+                                     MedDefSiteIndex *Defs = nullptr);
 
 /// Whether \p V is, or derives from (through copies, width casts and a constant
 /// add/sub), a frame register -- the stack OR frame pointer.
@@ -193,14 +222,15 @@ using SpOffsetKey = std::tuple<int, int, uint64_t>;
 /// delta is unavailable.
 void buildCallSpOffsets(const MedFunc &Func, const TargetRegInfo &TRI,
                         const MedVar &V, int64_t Off,
-                        std::map<SpOffsetKey, int64_t> &Map, int Depth);
+                        std::map<SpOffsetKey, int64_t> &Map, int Depth,
+                        MedDefSiteIndex *Defs = nullptr);
 
 /// Offset of store-address \p V above the call SP, resolved against the call
 /// SP's offset map.  nullopt when the address is not stack-pointer derived.
 std::optional<int64_t> relStackOff(const MedFunc &Func,
                                    const TargetRegInfo &TRI, const MedVar &V,
                                    const std::map<SpOffsetKey, int64_t> &Map,
-                                   int Depth);
+                                   int Depth, MedDefSiteIndex *Defs = nullptr);
 
 //===----------------------------------------------------------------------===//
 // Argument-register recovery

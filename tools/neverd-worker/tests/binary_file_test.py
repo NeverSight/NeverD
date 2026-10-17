@@ -35,7 +35,7 @@ def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-binary-file-") as directory:
         firmware = Path(directory) / "firmware.bin"
         firmware.write_bytes(CODE)
-        sidecar = Path(str(firmware) + ".neverd-load.json")
+        sidecar = Path(str(firmware) + ".neverd/load.json")
         client = Client(executable)
         try:
             # Only the name ties these bytes to EVM bytecode, so that row is

@@ -23,8 +23,8 @@ llvm::Expected<LoaderChoice> parseLoadOptions(llvm::StringRef Text);
 /// The load options JSON of the loader \p Choice names.
 std::string loadOptionsJson(const LoaderChoice &Choice);
 
-/// The loader the input's `.neverd-load.json` keeps; the file's own format
-/// without one.
+/// The loader the input's `load.json` keeps (its project folder's); the file's
+/// own format without one.
 llvm::Expected<LoaderChoice>
 readLoadOptionsSidecar(const std::filesystem::path &Input);
 

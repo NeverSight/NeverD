@@ -1278,6 +1278,13 @@ target_include_directories(NeverDSysVCallContractTests PRIVATE
 target_compile_definitions(NeverDSysVCallContractTests PRIVATE
   NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
 
+add_neverd_unittest(NeverDAAPCS64CallContractTests
+  core/AAPCS64CallContractTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Loader Pipeline
+)
+target_include_directories(NeverDAAPCS64CallContractTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
 add_neverd_unittest(NeverDWin64CallContractTests
   core/Win64CallContractTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Pipeline

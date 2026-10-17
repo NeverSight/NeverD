@@ -20,6 +20,14 @@ LIBC_NO_RETURN_SYMBOL("amsg_exit")
 LIBC_NO_RETURN_SYMBOL("invoke_watson")
 LIBC_NO_RETURN_SYMBOL("invalid_parameter_noinfo_noreturn")
 LIBC_NO_RETURN_SYMBOL("std_terminate")
+// Windows API routines the SDK declares DECLSPEC_NORETURN, as the user mode
+// header libraries do: function discovery reads no header.
+// RtlRestoreContext resumes the context it is given.
+LIBC_NO_RETURN_SYMBOL("ExitProcess")
+LIBC_NO_RETURN_SYMBOL("ExitThread")
+LIBC_NO_RETURN_SYMBOL("FreeLibraryAndExitThread")
+LIBC_NO_RETURN_SYMBOL("RpcRaiseException")
+LIBC_NO_RETURN_SYMBOL("RtlRestoreContext")
 // Windows kernel routines the WDK declares DECLSPEC_NORETURN.  Routines that
 // can return (RtlRaiseException when the exception is continued,
 // PsTerminateSystemThread on failure) are deliberately absent.

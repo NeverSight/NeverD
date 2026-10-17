@@ -37389,7 +37389,7 @@ TEST(LLVMCPointerAddresses, IndirectCallPrintsLoadedCalleePlusOffset) {
       std::string::npos)
       << Source;
   EXPECT_NE(Source.find("this->m_pBadge.p"), std::string::npos) << Source;
-  EXPECT_NE(Source.find(" + 88))"), std::string::npos) << Source;
+  EXPECT_NE(Source.find(" + 0x58))"), std::string::npos) << Source;
   EXPECT_NE(Source.find("(this->m_pBadge.p, result)"), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("((void*)"), std::string::npos) << Source;

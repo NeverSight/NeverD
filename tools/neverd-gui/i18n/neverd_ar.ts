@@ -2668,6 +2668,22 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>تم حفظ قاعدة البيانات: %1</translation>
     </message>
     <message>
+        <source>The project&apos;s files describe another build of %1 (SHA-256 %2…); their addresses may not match this one. The next edit records this build.</source>
+        <translation>تصف ملفات المشروع إصدارًا آخر من %1 ‏(SHA-256 ‏%2…)؛ قد لا تطابق عناوينها هذا الإصدار. يسجّل التعديل التالي هذا الإصدار.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here.</source>
+        <translation>تغيّرت ملفات المشروع على القرص وتم تحميلها؛ يبدأ التراجع من هنا.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here. Unsaved comments kept on top: %1</source>
+        <translation>تغيّرت ملفات المشروع على القرص وتم تحميلها؛ يبدأ التراجع من هنا. التعليقات غير المحفوظة التي أُبقيت فوقها: %1</translation>
+    </message>
+    <message>
+        <source>The input file changed on disk; reload it to continue editing.</source>
+        <translation>تغيّر ملف الإدخال على القرص؛ أعد تحميله لمتابعة التحرير.</translation>
+    </message>
+    <message>
         <source>Could not save the database: %1</source>
         <translation>تعذّر حفظ قاعدة البيانات: %1</translation>
     </message>
@@ -3702,10 +3718,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>لا يعرّف ملف PDB أي أنواع.</translation>
     </message>
     <message>
-        <source>No local types: this program has no PDB with types.</source>
-        <translation>لا توجد أنواع محلية: لا يملك هذا البرنامج ملف PDB فيه أنواع.</translation>
-    </message>
-    <message>
         <source>Types that do not lay out as the PDB lists them: %1</source>
         <translation>أنواع لا يطابق تخطيطها ما يسرده PDB: %1</translation>
     </message>
@@ -4015,6 +4027,29 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>at %1, %2 bytes</source>
         <translation>عند %1، %2 بايت</translation>
+    </message>
+    <message>
+        <source>From DWARF</source>
+        <translation>من DWARF</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n from DWARF</source>
+        <translation>
+            <numerusform>%n من DWARF</numerusform>
+            <numerusform>%n من DWARF</numerusform>
+            <numerusform>%n من DWARF</numerusform>
+            <numerusform>%n من DWARF</numerusform>
+            <numerusform>%n من DWARF</numerusform>
+            <numerusform>%n من DWARF</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The DWARF defines no types.</source>
+        <translation>لا يعرّف DWARF أي أنواع.</translation>
+    </message>
+    <message>
+        <source>No local types: this program has no PDB or DWARF with types.</source>
+        <translation>لا توجد أنواع محلية: لا يحتوي هذا البرنامج على PDB أو DWARF بأنواع.</translation>
     </message>
 </context>
 <context>

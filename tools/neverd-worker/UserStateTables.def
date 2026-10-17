@@ -1,20 +1,20 @@
 // User edits the worker records, persists and can undo.
 //
-// NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional): the table of edits in
+// NEVERD_USER_STATE_TABLE(Table, Kind, File, Optional): the table of edits in
 // the history state, the history command kind that changes one of its rows,
-// the sidecar beside the input that holds it, and whether the table came after
-// the first history schema, so that a state without it holds none of its edits.
+// the project file that holds it (neverd/support/ProjectFiles.def), and
+// whether the table came after the first history schema, so that a state
+// without it holds none of its edits.
 // Annotation commands carry the text before and after; the other kinds carry
 // the row, or null for none.  Append new tables at the end, optional.
 
 #ifndef NEVERD_USER_STATE_TABLE
-#define NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional)
+#define NEVERD_USER_STATE_TABLE(Table, Kind, File, Optional)
 #endif
-NEVERD_USER_STATE_TABLE("annotations", "annotation", ".neverd-annotations.json",
-                        false)
-NEVERD_USER_STATE_TABLE("renames", "rename", ".neverd-renames.json", false)
-NEVERD_USER_STATE_TABLE("functions", "function", ".neverd-functions.json", true)
-NEVERD_USER_STATE_TABLE("items", "item", ".neverd-items.json", true)
-NEVERD_USER_STATE_TABLE("operands", "operand", ".neverd-operands.json", true)
-NEVERD_USER_STATE_TABLE("code_edits", "code", ".neverd-code.json", true)
+NEVERD_USER_STATE_TABLE("annotations", "annotation", Annotations, false)
+NEVERD_USER_STATE_TABLE("renames", "rename", Renames, false)
+NEVERD_USER_STATE_TABLE("functions", "function", Functions, true)
+NEVERD_USER_STATE_TABLE("items", "item", Items, true)
+NEVERD_USER_STATE_TABLE("operands", "operand", Operands, true)
+NEVERD_USER_STATE_TABLE("code_edits", "code", Code, true)
 #undef NEVERD_USER_STATE_TABLE

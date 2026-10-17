@@ -365,7 +365,10 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
     va_t CallTarget = 0;
     if (Op.NumInputs >= 1 && Op.Inputs[0].isConst())
       CallTarget = Op.Inputs[0].ConstVal;
-    return HighExpr::makeCall(calleeDisplayName(CallTarget), CallTarget, {});
+    auto Call =
+        HighExpr::makeCall(calleeDisplayName(CallTarget), CallTarget, {});
+    Call->CallSiteAddr = Op.Addr;
+    return Call;
   }
 
   case NdOp::INTRINSIC: {

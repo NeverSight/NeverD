@@ -2,6 +2,8 @@
 
 #include "CodeEdits.h"
 
+#include "neverd/support/ProjectFiles.h"
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -18,9 +20,8 @@ constexpr std::size_t MaxStateFileBytes = 16 * 1024 * 1024;
 std::string compactText(const Json &value) {
   return value.dump(-1, ' ', false, Json::error_handler_t::replace);
 }
-fs::path sidecar(fs::path binary, const char *suffix) {
-  binary += suffix;
-  return binary;
+fs::path sidecar(const fs::path &binary, project_files::File file) {
+  return project_files::path(binary, file);
 }
 Json read(const fs::path &path, std::size_t limit = MaxHistoryBytes) {
   std::error_code ec;
@@ -41,6 +42,13 @@ Json read(const fs::path &path, std::size_t limit = MaxHistoryBytes) {
   try {
     return parseJson(text, limit);
   } catch (const Error &) {
+    // A merge git could not finish leaves its markers in the file.
+    if (text.starts_with("<<<<<<< ") ||
+        text.find("\n<<<<<<< ") != std::string::npos)
+      throw Error("merge_conflict",
+                  path.filename().string() +
+                      " has unresolved merge conflicts; resolve them before "
+                      "opening the project");
     throw Error("history_invalid", "User state file is not valid bounded JSON");
   }
 }
@@ -172,7 +180,7 @@ void validateCommand(const Json &command) {
 } // namespace
 
 const char *ProjectHistory::tableOfKind(std::string_view kind) {
-#define NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional)                 \
+#define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional)                     \
   if (kind == Kind)                                                            \
     return Table;
 #include "UserStateTables.def"
@@ -182,8 +190,7 @@ const char *ProjectHistory::tableOfKind(std::string_view kind) {
 Json ProjectHistory::normalizedState(Json state) {
   if (!state.is_object())
     throw Error("history_invalid", "User state must be an object");
-#define NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional)                 \
-  {Table, Optional},
+#define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional) {Table, Optional},
   static constexpr std::pair<const char *, bool> Tables[] = {
 #include "UserStateTables.def"
   };
@@ -199,8 +206,11 @@ Json ProjectHistory::normalizedState(Json state) {
       item["addr"] = hexAddress(parseAddress(stringField(item, "addr")));
       validateRow(name, item);
     }
+    // By address, as the CLI orders the tables it writes: one order for
+    // both writers keeps a project's files from changing with the tool.
     std::sort(items.begin(), items.end(), [](const Json &a, const Json &b) {
-      return a.at("addr").get<std::string>() < b.at("addr").get<std::string>();
+      return parseAddress(a.at("addr").get<std::string>()) <
+             parseAddress(b.at("addr").get<std::string>());
     });
     for (std::size_t i = 1; i < items.size(); ++i)
       if (items[i - 1].at("addr") == items[i].at("addr"))
@@ -211,15 +221,15 @@ Json ProjectHistory::normalizedState(Json state) {
 }
 
 bool ProjectHistory::recoveryPending(const fs::path &binary) {
-  return fs::exists(sidecar(binary, ".neverd-journal.json"));
+  return fs::exists(sidecar(binary, project_files::File::Journal));
 }
 
 ProjectHistory::ProjectHistory(fs::path binary, std::string sourceHash,
                                std::string engineVersion, bool readOnly,
                                AtomicWriter writer)
     : binary_(std::move(binary)),
-      historyPath_(sidecar(binary_, ".neverd-history.json")),
-      journalPath_(sidecar(binary_, ".neverd-journal.json")),
+      historyPath_(sidecar(binary_, project_files::File::History)),
+      journalPath_(sidecar(binary_, project_files::File::Journal)),
       hash_(std::move(sourceHash)), engineVersion_(std::move(engineVersion)),
       readOnly_(readOnly), writer_(writer) {
   fileSize_ = fs::file_size(binary_);
@@ -258,8 +268,9 @@ ProjectHistory::ProjectHistory(fs::path binary, std::string sourceHash,
 
 Json ProjectHistory::diskState() const {
   Json state = Json::object();
-#define NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional)                 \
-  if (auto rows = read(sidecar(binary_, Suffix), MaxStateFileBytes);           \
+#define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional)                     \
+  if (auto rows =                                                              \
+          read(sidecar(binary_, project_files::File::Id), MaxStateFileBytes);  \
       rows.is_null())                                                          \
     state[Table] = Json::array();                                              \
   else                                                                         \
@@ -269,13 +280,14 @@ Json ProjectHistory::diskState() const {
 }
 
 void ProjectHistory::writeSidecars(const Json &state) const {
-#define NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional)                 \
-  writer_(sidecar(binary_, Suffix), sidecarText(state.at(Table)));
+#define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional)                     \
+  writer_(sidecar(binary_, project_files::File::Id),                           \
+          sidecarText(state.at(Table)));
 #include "UserStateTables.def"
 }
 
 void ProjectHistory::checkSidecarBudgets(const Json &state) {
-#define NEVERD_USER_STATE_TABLE(Table, Kind, Suffix, Optional)                 \
+#define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional)                     \
   if (sidecarText(state.at(Table)).size() > MaxStateFileBytes)                 \
     throw Error("history_budget_exceeded", "A user state file exceeds 16 "     \
                                            "MiB");
@@ -394,6 +406,9 @@ void ProjectHistory::persist(const Json &state) {
   if (compactText(journal).size() > MaxJournalBytes)
     throw Error("history_budget_exceeded", "Recovery journal exceeds 24 MiB");
   checkSidecarBudgets(after);
+  if (const auto error = project_files::prepare(binary_))
+    throw Error("save_failed",
+                "Cannot create the project folder: " + error.message());
   writer_(journalPath_, compactText(journal));
   // From this point any failure leaves a recoverable write-ahead journal.
   writeSidecars(after);
@@ -405,6 +420,8 @@ void ProjectHistory::persist(const Json &state) {
         "User edits were saved but journal cleanup failed; restart to recover");
   committedState_ = after;
   previousDocument_ = nextDocument;
+  if (committed_)
+    committed_();
 }
 
 void ProjectHistory::recover() {
@@ -454,6 +471,10 @@ void ProjectHistory::recover() {
   } catch (const Json::exception &) {
     throw Error("history_invalid", "Recovery journal is incomplete");
   }
+}
+
+bool ProjectHistory::current() const {
+  return blocked_.empty() && diskState() == committedState_;
 }
 
 void ProjectHistory::reset() {

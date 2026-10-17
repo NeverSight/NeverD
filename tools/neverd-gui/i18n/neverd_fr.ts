@@ -2644,6 +2644,22 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         <translation>Base de données enregistrée : %1</translation>
     </message>
     <message>
+        <source>The project&apos;s files describe another build of %1 (SHA-256 %2…); their addresses may not match this one. The next edit records this build.</source>
+        <translation>Les fichiers du projet décrivent une autre version de %1 (SHA-256 %2…) ; leurs adresses peuvent ne pas correspondre à celle-ci. La prochaine modification enregistre cette version.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here.</source>
+        <translation>Les fichiers du projet ont changé sur le disque et ont été chargés ; l’annulation commence ici.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here. Unsaved comments kept on top: %1</source>
+        <translation>Les fichiers du projet ont changé sur le disque et ont été chargés ; l’annulation commence ici. Commentaires non enregistrés conservés par-dessus : %1</translation>
+    </message>
+    <message>
+        <source>The input file changed on disk; reload it to continue editing.</source>
+        <translation>Le fichier d’entrée a changé sur le disque ; rechargez-le pour continuer à modifier.</translation>
+    </message>
+    <message>
         <source>Could not save the database: %1</source>
         <translation>Impossible d&apos;enregistrer la base de données : %1</translation>
     </message>
@@ -3674,10 +3690,6 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         <translation>Le PDB ne définit aucun type.</translation>
     </message>
     <message>
-        <source>No local types: this program has no PDB with types.</source>
-        <translation>Aucun type local : ce programme n'a pas de PDB avec des types.</translation>
-    </message>
-    <message>
         <source>Types that do not lay out as the PDB lists them: %1</source>
         <translation>Types dont la disposition ne suit pas le PDB : %1</translation>
     </message>
@@ -3951,6 +3963,25 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
     <message>
         <source>at %1, %2 bytes</source>
         <translation>à %1, %2 octets</translation>
+    </message>
+    <message>
+        <source>From DWARF</source>
+        <translation>Depuis DWARF</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n from DWARF</source>
+        <translation>
+            <numerusform>%n depuis DWARF</numerusform>
+            <numerusform>%n depuis DWARF</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The DWARF defines no types.</source>
+        <translation>Le DWARF ne définit aucun type.</translation>
+    </message>
+    <message>
+        <source>No local types: this program has no PDB or DWARF with types.</source>
+        <translation>Aucun type local : ce programme n’a ni PDB ni DWARF avec des types.</translation>
     </message>
 </context>
 <context>

@@ -196,6 +196,8 @@ extern llvm::cl::SubCommand TypesCmd;
 extern llvm::cl::SubCommand DashboardCmd;
 extern llvm::cl::SubCommand SigsCmd;
 extern llvm::cl::SubCommand SimplifyCmd;
+extern llvm::cl::SubCommand MergeProjectCmd;
+extern llvm::cl::SubCommand SetupGitCmd;
 extern llvm::cl::SubCommand SymbolicCmd;
 extern llvm::cl::SubCommand OptimizeIRCmd;
 extern llvm::cl::SubCommand TranslateObjectCmd;
@@ -420,6 +422,11 @@ extern llvm::cl::opt<bool> BookmarkList;
 extern llvm::cl::opt<std::string> BookmarkAdd;
 extern llvm::cl::opt<std::string> BookmarkName;
 extern llvm::cl::opt<std::string> BookmarkRemove;
+
+// merge-project and setup-git.
+extern llvm::cl::list<std::string> MergeProjectFiles;
+extern llvm::cl::opt<std::string> MergeProjectPath;
+extern llvm::cl::opt<std::string> SetupGitFolder;
 
 // Diff.
 extern llvm::cl::opt<std::string> DiffFileA;
@@ -671,6 +678,11 @@ int runIdentify();
 // NeverDCmdSimplify.cpp — semantic optimisation of a written expression.
 // Takes no session: its input is text, not a binary.
 int runSimplify();
+
+// NeverDCmdProject.cpp — a project's files under version control: git's
+// merge driver for them, and a repository's setup.
+int runMergeProject();
+int runSetupGit(const char *Argv0);
 
 // NeverDCmdOptimizeIR.cpp — transactional semantic + LLVM optimization.
 // Takes textual IR rather than a binary session.

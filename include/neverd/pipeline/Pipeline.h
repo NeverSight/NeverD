@@ -266,6 +266,13 @@ struct PipelineResult {
   /// reads, including through tail calls (0 when none), keyed by callee
   /// entry. Absent entries leave the stack arguments to the call-site scan.
   std::map<va_t, int> CallEntryStackArgs;
+  /// The callees in CallEntryStackArgs whose count a typed prototype gives
+  /// slot by slot where every argument is on the stack (i386): a call to one
+  /// passes those slots and no register.
+  std::set<va_t> CallEntryStackSlots;
+  /// The bytes each import of CallEntryStackSlots pops as it returns, by the
+  /// stub or slot a call names it by: a stdcall routine's arguments.
+  std::map<va_t, int> CallEntryStackPops;
   /// Entries of indirect-call dispatchers (`_guard_dispatch_icall`): a call to
   /// one passes the argument registers its caller set.
   std::set<va_t> CallDispatchThunks;
@@ -518,6 +525,9 @@ public:
     /// Conservative patch requests run neither transformation.
     bool EnableControlFlowRecovery = true;
     uint32_t SourcePasses = SourceViewOptions::BasicPasses;
+    /// Keep every function's body its own: an LLVM profile runs no inliner
+    /// over the module.  Source views set it.
+    bool KeepFunctionBoundaries = false;
     /// Per SemanticFixedPointPass invocation.  Deep has independent early and
     /// late invocations, so each receives this complete budget.  Zero means
     /// unlimited and still stops on a stable state or exact cycle.

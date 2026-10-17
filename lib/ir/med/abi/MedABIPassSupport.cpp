@@ -600,13 +600,6 @@ resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
 // outgoing call-frame base in a predecessor and emits the STOREs and CALL in a
 // successor.  Looking only in the use block loses that exact definition and
 // silently drops every cdecl argument.
-struct MedDefSite {
-  const MedBlock *Block = nullptr;
-  const MedOp *Op = nullptr;
-  const PhiNode *Phi = nullptr;
-  bool Ambiguous = false;
-};
-
 static bool sameDefIdentity(const MedVar &A, const MedVar &B) {
   return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer &&
          A.RegOff == B.RegOff;
@@ -641,6 +634,34 @@ static MedDefSite findFuncDef(const MedFunc &Func, const MedVar &V) {
       }
   }
   return Site;
+}
+
+// The same sites as findFuncDef, keyed by its identity, built in one scan.
+MedDefSite MedDefSiteIndex::find(const MedVar &V) {
+  auto key = [](const MedVar &X) {
+    return std::tuple<int, int, int, uint64_t>{static_cast<int>(X.Kind), X.Id,
+                                               X.SSAVer, X.RegOff};
+  };
+  if (!Built) {
+    for (const MedBlock &Block : Func.Blocks) {
+      auto Record = [&](const MedVar &Output, const MedOp *Op,
+                        const PhiNode *Phi) {
+        auto [It, Inserted] = Sites.try_emplace(key(Output));
+        if (Inserted)
+          It->second = {&Block, Op, Phi, false};
+        else
+          It->second = {nullptr, nullptr, nullptr, true};
+      };
+      for (const PhiNode &Phi : Block.Phis)
+        Record(Phi.Output, nullptr, &Phi);
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Output.Size > 0)
+          Record(Op.Output, &Op, nullptr);
+    }
+    Built = true;
+  }
+  const auto It = Sites.find(key(V));
+  return It == Sites.end() ? MedDefSite{} : It->second;
 }
 
 // Unlike the heuristic argument scanner, call-boundary alias proofs may not
@@ -803,11 +824,11 @@ static std::optional<StackAddressStep> parseStackAddressStep(const MedOp &Op) {
 
 std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
                                      const TargetRegInfo &TRI, const MedVar &V,
-                                     int Depth) {
+                                     int Depth, MedDefSiteIndex *Defs) {
   if (Depth > 128 || V.isConst())
     return std::nullopt;
 
-  const MedDefSite Site = findFuncDef(Func, V);
+  const MedDefSite Site = Defs ? Defs->find(V) : findFuncDef(Func, V);
   if (Site.Ambiguous)
     return std::nullopt;
   if (Site.Phi) {
@@ -816,7 +837,7 @@ std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
       (void)Pred;
       if (sameDefIdentity(Incoming, V))
         continue;
-      auto Delta = stackPtrDelta(Func, TRI, Incoming, Depth + 1);
+      auto Delta = stackPtrDelta(Func, TRI, Incoming, Depth + 1, Defs);
       if (!Delta || (Common && *Common != *Delta))
         return std::nullopt;
       Common = *Delta;
@@ -844,7 +865,7 @@ std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
       return 0;
   }
   if (auto Step = parseStackAddressStep(*Def)) {
-    auto Base = stackPtrDelta(Func, TRI, *Step->Base, Depth + 1);
+    auto Base = stackPtrDelta(Func, TRI, *Step->Base, Depth + 1, Defs);
     if (!Base)
       return std::nullopt;
     return safety::detail::checkedStackOffset(*Base, Step->Delta,
@@ -857,7 +878,7 @@ std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
       return std::nullopt;
     return stackPtrDelta(Func, TRI,
                          *safety::detail::storedValue(DefBlock.Ops[*Store]),
-                         Depth + 1);
+                         Depth + 1, Defs);
   }
   return std::nullopt;
 }
@@ -904,12 +925,13 @@ static SpOffsetKey spOffsetKey(const MedVar &V) {
 // constant).
 void buildCallSpOffsets(const MedFunc &Func, const TargetRegInfo &TRI,
                         const MedVar &V, int64_t Off,
-                        std::map<SpOffsetKey, int64_t> &Map, int Depth) {
+                        std::map<SpOffsetKey, int64_t> &Map, int Depth,
+                        MedDefSiteIndex *Defs) {
   if (Depth > 128 || V.isConst())
     return;
   if (!Map.emplace(spOffsetKey(V), Off).second)
     return; // already visited (e.g. the entry SP self-copy)
-  const MedDefSite Site = findFuncDef(Func, V);
+  const MedDefSite Site = Defs ? Defs->find(V) : findFuncDef(Func, V);
   if (Site.Ambiguous)
     return;
   // A PHI can merge different concrete stack deltas.  The relative fallback
@@ -929,7 +951,8 @@ void buildCallSpOffsets(const MedFunc &Func, const TargetRegInfo &TRI,
   auto BaseOffset =
       safety::detail::checkedStackOffset(Off, Step->Delta, !Step->Subtract);
   if (BaseOffset)
-    buildCallSpOffsets(Func, TRI, *Step->Base, *BaseOffset, Map, Depth + 1);
+    buildCallSpOffsets(Func, TRI, *Step->Base, *BaseOffset, Map, Depth + 1,
+                       Defs);
 }
 
 // Offset of store-address \p V above the call SP, resolved against the call
@@ -939,19 +962,19 @@ void buildCallSpOffsets(const MedFunc &Func, const TargetRegInfo &TRI,
 std::optional<int64_t> relStackOff(const MedFunc &Func,
                                    const TargetRegInfo &TRI, const MedVar &V,
                                    const std::map<SpOffsetKey, int64_t> &Map,
-                                   int Depth) {
+                                   int Depth, MedDefSiteIndex *Defs) {
   if (Depth > 128 || V.isConst())
     return std::nullopt;
   if (auto It = Map.find(spOffsetKey(V)); It != Map.end())
     return It->second;
-  const MedDefSite Site = findFuncDef(Func, V);
+  const MedDefSite Site = Defs ? Defs->find(V) : findFuncDef(Func, V);
   if (Site.Ambiguous)
     return std::nullopt;
   if (Site.Phi) {
     std::optional<int64_t> Common;
     for (const auto &[Pred, Incoming] : Site.Phi->Args) {
       (void)Pred;
-      auto Rel = relStackOff(Func, TRI, Incoming, Map, Depth + 1);
+      auto Rel = relStackOff(Func, TRI, Incoming, Map, Depth + 1, Defs);
       if (!Rel || (Common && *Common != *Rel))
         return std::nullopt;
       Common = *Rel;
@@ -964,7 +987,7 @@ std::optional<int64_t> relStackOff(const MedFunc &Func,
   auto Step = parseStackAddressStep(*Def);
   if (!Step)
     return std::nullopt;
-  auto Base = relStackOff(Func, TRI, *Step->Base, Map, Depth + 1);
+  auto Base = relStackOff(Func, TRI, *Step->Base, Map, Depth + 1, Defs);
   if (!Base)
     return std::nullopt;
   return safety::detail::checkedStackOffset(*Base, Step->Delta, Step->Subtract);

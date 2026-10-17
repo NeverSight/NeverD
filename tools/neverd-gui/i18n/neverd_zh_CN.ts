@@ -2638,6 +2638,22 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>数据库已保存：%1</translation>
     </message>
     <message>
+        <source>The project&apos;s files describe another build of %1 (SHA-256 %2…); their addresses may not match this one. The next edit records this build.</source>
+        <translation>项目文件描述的是 %1 的另一个构建（SHA-256 %2…），其中的地址可能与当前构建不一致。下一次编辑会记录当前构建。</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here.</source>
+        <translation>项目文件在磁盘上发生了变化，已重新载入；撤销从此处开始。</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here. Unsaved comments kept on top: %1</source>
+        <translation>项目文件在磁盘上发生了变化，已重新载入；撤销从此处开始。保留在其上的未保存注释：%1</translation>
+    </message>
+    <message>
+        <source>The input file changed on disk; reload it to continue editing.</source>
+        <translation>输入文件在磁盘上发生了变化；请重新加载后再继续编辑。</translation>
+    </message>
+    <message>
         <source>Could not save the database: %1</source>
         <translation>无法保存数据库：%1</translation>
     </message>
@@ -3667,10 +3683,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>该 PDB 未定义任何类型。</translation>
     </message>
     <message>
-        <source>No local types: this program has no PDB with types.</source>
-        <translation>没有本地类型：此程序没有包含类型的 PDB。</translation>
-    </message>
-    <message>
         <source>Types that do not lay out as the PDB lists them: %1</source>
         <translation>布局与 PDB 所列不一致的类型：%1</translation>
     </message>
@@ -3935,6 +3947,24 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>at %1, %2 bytes</source>
         <translation>位于 %1，%2 字节</translation>
+    </message>
+    <message>
+        <source>From DWARF</source>
+        <translation>来自 DWARF</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n from DWARF</source>
+        <translation>
+            <numerusform>%n 个来自 DWARF</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The DWARF defines no types.</source>
+        <translation>DWARF 中没有定义任何类型。</translation>
+    </message>
+    <message>
+        <source>No local types: this program has no PDB or DWARF with types.</source>
+        <translation>没有本地类型：此程序没有包含类型的 PDB 或 DWARF。</translation>
     </message>
 </context>
 <context>

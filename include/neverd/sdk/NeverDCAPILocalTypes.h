@@ -6,8 +6,8 @@
 ///
 /// \file
 /// The named types of a loaded program, as IDA's Local Types window lists
-/// them: read from its PDB when first asked for, laid out with every member's
-/// offset, and rendered as C, C++, Rust or Go source.
+/// them: read from its PDB or its DWARF when first asked for, laid out with
+/// every member's offset, and rendered as C, C++, Rust or Go source.
 ///
 /// All returned strings are heap-allocated via strdup(); callers must
 /// free them with neverd_free_string().
@@ -34,26 +34,30 @@ extern "C" {
 #endif
 
 /// The program's local types in brief:
-/// {"source":"pdb"|"none","dataModel":"LLP64"|"LP64"|"ILP32",
+/// {"source":"pdb"|"dwarf"|"none","dataModel":"LLP64"|"LP64"|"ILP32",
 /// "stats":{"structs","unions","enums","declaredOnly","nestingMismatches":
 /// [name,...]},"types":[{"ordinal","name","kind","size","members",
 /// "origin"},...]}.  "kind" is struct, union, enum, typedef or function;
 /// "size" is absent for a type without one, and "members" counts a record's
 /// named members, anonymous records' included, or an enumeration's values.
-/// "stats" adds "origins", how many types each origin gave: "pdb",
+/// "stats" adds "origins", how many types each origin gave: "pdb", "dwarf",
 /// "header" for a header library NeverD ships, "user" for the user's
 /// declarations; "headers" lists the libraries joined as
 /// [{"name","types","prototypes","conflicts":[name,...]} | {"name","error"}].
-/// An image without a PDB has none.  When a declaration of the user's no
-/// longer reads over the program's types, "declarationProblems" lists what
-/// it met: [{"declaration" (its index in neverd_type_declarations_json),
-/// "line","column","message"},...].  OptionsJson may be NULL or
-/// {"filter":"text","origin":"pdb"|"header"|"user","language":"c"|"cpp"|
-/// "rust"|"go"}: "filter" keeps the types whose name holds the text,
-/// ignoring the case of ASCII letters, "origin" those of one origin, and
-/// "language" adds "renamed":[[name,spelling],...], the names that language
-/// cannot spell as they are.  NULL with neverd_last_error() when no binary
-/// is loaded, the options are malformed or the PDB's types cannot be read.
+/// "skipped" lists the types of the DWARF left out, with why
+/// (["name: reason",...]), and "conflicts" the names two of its different
+/// types share, of which the first stays; a PDB leaves both empty.  An image
+/// with neither a PDB nor DWARF has none.  When a declaration of the user's
+/// no longer reads over the program's types, "declarationProblems" lists
+/// what it met: [{"declaration" (its index in
+/// neverd_type_declarations_json), "line","column","message"},...].
+/// OptionsJson may be NULL or {"filter":"text","origin":"pdb"|"dwarf"|
+/// "header"|"user","language":"c"|"cpp"|"rust"|"go"}: "filter" keeps the
+/// types whose name holds the text, ignoring the case of ASCII letters,
+/// "origin" those of one origin, and "language" adds
+/// "renamed":[[name,spelling],...], the names that language cannot spell as
+/// they are.  NULL with neverd_last_error() when no binary is loaded, the
+/// options are malformed or the debug information's types cannot be read.
 NEVERD_API const char *neverd_local_types_json(neverd_session_t Sess,
                                                const char *OptionsJson);
 
@@ -136,7 +140,7 @@ NEVERD_API const char *neverd_types_languages_json(void);
 /// The user's declarations in the order made:
 /// [{"language","source"} | {"forget":[name,...]}, ...].
 NEVERD_API const char *neverd_type_declarations_json(neverd_session_t Sess);
-/// Write or read the declarations as `<input>.neverd-types.json`, which
+/// Write or read the declarations as `<input>.neverd/types.json`, which
 /// neverd_session_load reads too.  Reading them reads the program's types
 /// anew.  Return 0, or -1 with neverd_last_error.
 NEVERD_API int neverd_type_declarations_save(neverd_session_t Sess);

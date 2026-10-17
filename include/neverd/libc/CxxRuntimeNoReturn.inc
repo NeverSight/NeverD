@@ -14,6 +14,8 @@ LIBC_NO_RETURN_SYMBOL("cxa_pure_virtual")
 LIBC_NO_RETURN_SYMBOL("cxa_deleted_virtual")
 LIBC_NO_RETURN_SYMBOL("cxa_throw_bad_array_new_length")
 LIBC_NO_RETURN_SYMBOL("Unwind_Resume")
+// ARM EHABI's end of a cleanup, which resumes the propagating exception.
+LIBC_NO_RETURN_SYMBOL("cxa_end_cleanup")
 // libstdc++'s [[noreturn]] exception helpers (bits/functexcept.h).
 LIBC_NO_RETURN_SYMBOL("ZSt22__throw_bad_exceptionv")
 LIBC_NO_RETURN_SYMBOL("ZSt17__throw_bad_allocv")

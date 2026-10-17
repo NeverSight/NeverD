@@ -210,6 +210,7 @@ Json hello() {
                 "undo",
                 "redo",
                 "history_reset",
+                "project_sync",
                 "contributions",
                 "contribution_register",
                 "contribution_unregister",

@@ -132,7 +132,8 @@ proveBoundSEHCallee(const BinaryImage &Image, const LowOp &Op,
   RegistrationCallCalleeIndex Index(Image, &Inputs.Work);
   CFGBuilder Builder;
   Builder.setRegistrationCalleeIndex(&Index);
-  const auto Function = Builder.build(Image, Dec, Target, "bound-seh-callee");
+  const auto Function =
+      Builder.buildIntegerFrameProof(Image, Dec, Target, "bound-seh-callee");
   if (!Function.hasCompleteLiftCoverage() ||
       !registration_abi::chargeDecodedCallee(Inputs.Work, Function))
     return std::nullopt;

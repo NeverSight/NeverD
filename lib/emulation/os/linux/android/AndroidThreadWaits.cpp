@@ -78,12 +78,34 @@ bool GuestThreads::waitSleep() {
   return true;
 }
 
+void GuestThreads::waitSemaphore(uint64_t Address, bool Shared) {
+  auto &Waiting = current().Waiting;
+  if (Waiting) {
+    auto &S = std::get<Semaphore>(Waiting->Operation);
+    assert(S.Address == Address && S.Shared == Shared);
+    S.Ready = false;
+    return;
+  }
+  Waiting = Wait{Semaphore{Address, Shared}, std::nullopt};
+}
+
+void GuestThreads::wakeSemaphore(uint64_t Address) {
+  // API 28 wakes all sleepers after posting to a contended word. They race
+  // for the one new token when each resumes; no ownership is assigned here.
+  for (auto &T : Threads)
+    if (T.Waiting)
+      if (auto *S = std::get_if<Semaphore>(&T.Waiting->Operation))
+        if (S->Address == Address)
+          S->Ready = true;
+}
+
 bool GuestThreads::ready(const Wait &Pending) const {
   return std::visit(
       llvm::makeVisitor(
           [&](const Join &J) { return Threads[J.Target].Report.Finished; },
           [](const Once &O) { return O.Ready; },
           [](const Mutex &M) { return M.Ready; },
+          [](const Semaphore &S) { return S.Ready; },
           [&](const Sleep &S) { return S.Deadline <= Clock.elapsed(); }),
       Pending.Operation);
 }
@@ -124,6 +146,9 @@ BionicResult GuestThreads::resumeWait(Bionic &LibC) {
           [&](const Once &O) { return resumeOnce(O); },
           [&](const Mutex &M) {
             return LibC.resumeMutex(M.Address, M.Attributes);
+          },
+          [&](const Semaphore &S) {
+            return LibC.resumeSemaphore(S.Address, S.Shared);
           },
           [&](const Sleep &) -> BionicResult { return value(0); }),
       Pending.Operation);

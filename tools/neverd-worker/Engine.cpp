@@ -13,6 +13,7 @@
 #include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/sdk/NeverDCAPIQuery.h"
 #include "neverd/sdk/NeverDCAPISigs.h"
+#include "neverd/support/ProjectFiles.h"
 #include "neverd/support/ProjectWriteLock.h"
 
 #include <algorithm>
@@ -240,7 +241,6 @@ const LoadOptionsFunctions &loadOptions() {
       engineSymbol<SessionJsonFunction>("neverd_session_load_options_json")};
   return functions;
 }
-constexpr std::string_view LoadOptionsSuffix = ".neverd-load.json";
 /// The PDB a PE names and where it is, before or after the PE is open.
 using PdbReferenceFunction = const char *(*)(const char *, const char *);
 // Additive C ABI capability: the program's local types.
@@ -253,7 +253,6 @@ constexpr std::size_t MaxDeclarationBytes = 4u << 20;
 // instruction's own row fill a history command.
 constexpr std::size_t MaxOperandFormatRows = 63;
 // The user's type declarations beside the input, as the engine reads them.
-constexpr std::string_view TypeDeclarationsSuffix = ".neverd-types.json";
 using LocalTypeFunction = const char *(*)(neverd_session_t, const char *,
                                           const char *);
 /// Whether the next load searches for the PDB a PE names.
@@ -542,6 +541,9 @@ void sortItems(Json &items, const Json &payload) {
 // spanning both files.
 void atomicWrite(const fs::path &path, const std::string &body) {
   static std::atomic<std::uint64_t> sequence{0};
+  // A project file's folder, which its first write creates.
+  std::error_code folder;
+  fs::create_directories(path.parent_path(), folder);
   fs::path temporary = path;
   temporary +=
       ".tmp-" +
@@ -1290,6 +1292,7 @@ ProjectHistory &Engine::history() {
     history_ = std::make_unique<ProjectHistory>(
         utf8Path(ownedString(neverd_session_file_path(session_))), hash,
         version(), readOnly_, atomicWrite);
+    history_->onCommit([this] { recordProject(); });
     if (history_->recovered()) {
       if (!reloadUserState())
         throw Error("recovery_required",
@@ -1338,6 +1341,9 @@ Json Engine::metadata() const {
           {"format", ownedString(neverd_session_format_name(session_))},
           {"bitness", neverd_session_bitness(session_)},
           {"file_size", std::to_string(neverd_session_file_size(session_))},
+          // The project folder beside the input, and which build its files
+          // describe: a project made for another build may not match.
+          {"project", projectJson()},
           {"base_address", hexAddress(neverd_session_base_addr(session_))},
           {"entry_address", hexAddress(neverd_session_entry_addr(session_))},
           {"loader_diagnostics", std::move(diagnostics)},
@@ -1391,8 +1397,59 @@ void Engine::reloadCodeEdits() {
   codeEdits_ = readCodeEdits(ownedString(neverd_session_file_path(session_)));
 }
 
+void Engine::recordProject() {
+  // The engine records which build of the input the project's files describe;
+  // an older engine keeps no record, and a record that fails fails no edit.
+  static const auto record =
+      engineSymbol<SessionLoadFunction>("neverd_project_record");
+  if (record)
+    (void)record(session_);
+}
+
+Json Engine::projectJson() const {
+  static const auto project =
+      engineSymbol<SessionJsonFunction>("neverd_project_json");
+  if (!project)
+    return nullptr;
+  const auto text = ownedString(project(session_));
+  if (text.empty())
+    return nullptr;
+  try {
+    return Json::parse(text);
+  } catch (const Json::exception &) {
+    return nullptr;
+  }
+}
+
+bool Engine::localTypesChanged() {
+  if (!declaresLocalTypes())
+    return false;
+  static const auto rows =
+      engineSymbol<SessionJsonFunction>("neverd_type_declarations_json");
+  const fs::path path = project_files::path(
+      utf8Path(ownedString(neverd_session_file_path(session_))),
+      project_files::File::Types);
+  Json onDisk = Json::array();
+  if (fs::exists(path)) {
+    if (fs::file_size(path) > MaxDeclarationBytes)
+      throw Error("resource_limit", "Local types sidecar exceeds 4 MiB");
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+      throw Error("load_failed", "Cannot read the local types sidecar");
+    const std::string text((std::istreambuf_iterator<char>(input)), {});
+    try {
+      onDisk = parseJson(text, MaxDeclarationBytes);
+    } catch (const Error &) {
+      // A file that does not parse differs; loading it reports why.
+      return true;
+    }
+  }
+  return onDisk != backendJson(rows(session_));
+}
+
 Json Engine::readCodeEdits(const std::string &binary) {
-  const auto path = utf8Path(binary + ".neverd-code.json");
+  const auto path =
+      project_files::path(utf8Path(binary), project_files::File::Code);
   if (!fs::exists(path))
     return Json::array();
   if (fs::file_size(path) > 16 * 1024 * 1024)
@@ -1933,10 +1990,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // lock this session holds covers the write.
     if (!chosenLoader.empty() && !readOnly) {
       try {
-        fs::path sidecar = path;
-        sidecar += std::string(LoadOptionsSuffix);
-        atomicWrite(sidecar,
+        atomicWrite(project_files::path(path, project_files::File::Load),
                     sidecarText(backendJson(loadOptions().json(session_))));
+        recordProject();
       } catch (const Error &failure) {
         warnings.push_back(std::string("Load options could not be saved: ") +
                            failure.what());
@@ -2196,6 +2252,73 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     ++revision_;
     return history().listing(0, 128);
   }
+  if (operation == "project_sync") {
+    requireWriter();
+    // The project's files changed outside this worker, as git pull, another
+    // tool or a person changes them: the Session takes them as they are now
+    // and its undo history starts there.  Comments staged here stay staged
+    // on top of them.  Files this worker wrote itself are no change.
+    auto &store = history();
+    const bool tables = !store.current();
+    const bool types = localTypesChanged();
+    std::size_t kept = 0;
+    if (tables) {
+      std::map<std::uint64_t, std::string> committed, staged;
+      if (dirty_) {
+        for (const auto &row : store.committedState().at("annotations"))
+          committed[parseAddress(row.at("addr").get<std::string>())] =
+              row.at("text").get<std::string>();
+        std::set<std::uint64_t> current;
+        for (const auto &row : backendJson(neverd_annotations_json(session_))) {
+          const auto address = parseAddress(row.at("addr").get<std::string>());
+          const auto text = row.at("text").get<std::string>();
+          current.insert(address);
+          if (const auto it = committed.find(address);
+              it == committed.end() || it->second != text)
+            staged[address] = text;
+        }
+        for (const auto &[address, text] : committed)
+          if (!current.contains(address))
+            staged[address] = std::string();
+      }
+      store.reset();
+      dirty_ = false;
+      if (!reloadUserState())
+        throw Error("reload_failed",
+                    "The project's files changed but could not be loaded",
+                    {{"state_changed", true}});
+      for (const auto &[address, text] : staged) {
+        // A comment the files now hold as staged here needs no save.
+        auto before = ownedString(neverd_annotation_get(session_, address));
+        if (before == text)
+          continue;
+        store.stage({{"kind", "annotation"},
+                     {"address", hexAddress(address)},
+                     {"before", std::move(before)},
+                     {"after", text}});
+        neverd_annotation_set(session_, address, text.c_str());
+        ++kept;
+      }
+      dirty_ = kept != 0;
+    }
+    if (types) {
+      static const auto load =
+          engineSymbol<SessionLoadFunction>("neverd_type_declarations_load");
+      if (load(session_) != 0)
+        throw Error("load_failed", error(), {{"state_changed", tables}});
+      analyzed_ = false;
+      preparedFunction_.reset();
+    }
+    if (tables || types) {
+      invalidate();
+      ++revision_;
+    }
+    return {{"changed", tables || types},
+            {"tables", tables},
+            {"local_types", types},
+            {"comments_kept", kept},
+            {"dirty", dirty_}};
+  }
   if (operation == "undo" || operation == "redo") {
     requireWriter();
     auto &store = history();
@@ -2450,10 +2573,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // types.
     if (result.value("problems", Json::array()).empty()) {
       try {
-        fs::path sidecar =
-            utf8Path(ownedString(neverd_session_file_path(session_)));
-        sidecar += std::string(TypeDeclarationsSuffix);
-        atomicWrite(sidecar, sidecarText(backendJson(rows(session_))));
+        atomicWrite(
+            project_files::path(
+                utf8Path(ownedString(neverd_session_file_path(session_))),
+                project_files::File::Types),
+            sidecarText(backendJson(rows(session_))));
+        recordProject();
       } catch (...) {
         (void)load(session_);
         throw;

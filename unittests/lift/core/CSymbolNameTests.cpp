@@ -102,6 +102,29 @@ TEST(CSymbolNames, ABIUnderscoreOnlyWhereTheFormatAddsOne) {
   EXPECT_EQ(symbolOfCName("_ZdlPv", BinaryFormat::ELF, Arch::X64), "_ZdlPv");
 }
 
+TEST(CSymbolNames, StdcallNamesSpellTheBytesTheirRoutinesPop) {
+  // An import library's thunk and its slot, as MinGW links
+  // NlsValidateLocale(lcid, flags).
+  const auto Bytes = [](llvm::StringRef Symbol) {
+    return stdcallArgumentBytes(Symbol, BinaryFormat::COFF, Arch::X86);
+  };
+  EXPECT_EQ(Bytes("_NlsValidateLocale@8"), 8u);
+  EXPECT_EQ(Bytes("__imp__NlsValidateLocale@8"), 8u);
+  EXPECT_EQ(Bytes("_GetLastError@0"), 0u);
+  // cdecl and fastcall names, a C++ one, a GCC clone and stray `@`s.
+  EXPECT_EQ(Bytes("_printf"), std::nullopt);
+  EXPECT_EQ(Bytes("@InterlockedIncrement@4"), std::nullopt);
+  EXPECT_EQ(Bytes("?f@@YGXH@Z"), std::nullopt);
+  EXPECT_EQ(Bytes("_RtlNtStatusToDosErrorNoTeb@4.part.0"), std::nullopt);
+  EXPECT_EQ(Bytes("_Name@"), std::nullopt);
+  EXPECT_EQ(Bytes("_@8"), std::nullopt);
+  // Only 32-bit Windows decorates stdcall names.
+  EXPECT_EQ(stdcallArgumentBytes("_Sleep@4", BinaryFormat::COFF, Arch::X64),
+            std::nullopt);
+  EXPECT_EQ(stdcallArgumentBytes("_Sleep@4", BinaryFormat::ELF, Arch::X86),
+            std::nullopt);
+}
+
 TEST(CSymbolNames, ElfCxxCallsReadByScopeAndLinkByMangledName) {
   const std::string Source =
       emitHighC(cxxCaller(""), BinaryFormat::ELF, Arch::X64);

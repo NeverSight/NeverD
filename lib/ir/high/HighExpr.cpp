@@ -19,6 +19,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <functional>
+#include <map>
+#include <set>
+
 namespace neverd {
 
 bool isSyntheticEntryStackPointer(const MedVar &Value, const HighFunc &Function,
@@ -247,6 +251,54 @@ bool isTerminatingHighCall(const ExprPtr &Expression) {
          Expression->Operands.empty() && Expression->IntrinsicOutputs.empty() &&
          Expression->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
          isUnconditionalTrapIntrinsic(Expression->IntrinsicId);
+}
+
+ExprPtr withMergedCallSites(const ExprPtr &Kept, const ExprPtr &Dropped) {
+  auto Sites = [](const ExprPtr &Root) {
+    std::set<va_t> Found;
+    HighExprSet Seen;
+    std::vector<const HighExpr *> Work{Root.get()};
+    while (!Work.empty()) {
+      const HighExpr *E = Work.back();
+      Work.pop_back();
+      if (!E || !Seen.insert(E).second)
+        continue;
+      if (E->Kind == ExprKind::Call)
+        Found.insert(E->CallSiteAddr);
+      E->forEachChildExpr([&](const ExprPtr &C) { Work.push_back(C.get()); });
+    }
+    return Found;
+  };
+  if (Sites(Kept) == Sites(Dropped))
+    return Kept;
+  // Copy the calls and what holds them; a node shared within the value stays
+  // shared.
+  std::map<const HighExpr *, ExprPtr> Copies;
+  std::function<ExprPtr(const ExprPtr &)> Forget = [&](const ExprPtr &E) {
+    if (!E)
+      return E;
+    if (const auto It = Copies.find(E.get()); It != Copies.end())
+      return It->second;
+    Copies.emplace(E.get(), E);
+    bool Changed = E->Kind == ExprKind::Call && E->CallSiteAddr != 0;
+    std::vector<ExprPtr> Operands;
+    Operands.reserve(E->Operands.size());
+    for (const ExprPtr &Operand : E->Operands) {
+      Operands.push_back(Forget(Operand));
+      Changed |= Operands.back() != Operand;
+    }
+    ExprPtr Target = Forget(E->IndirectTarget);
+    Changed |= Target != E->IndirectTarget;
+    if (!Changed)
+      return E;
+    auto Copy = std::make_shared<HighExpr>(*E);
+    Copy->Operands = std::move(Operands);
+    Copy->IndirectTarget = std::move(Target);
+    if (Copy->Kind == ExprKind::Call)
+      Copy->CallSiteAddr = 0;
+    return Copies[E.get()] = Copy;
+  };
+  return Forget(Kept);
 }
 
 static bool hasMemoryBoundary(const HighExpr &Expr) {

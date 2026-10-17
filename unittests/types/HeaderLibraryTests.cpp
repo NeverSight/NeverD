@@ -9,6 +9,8 @@
 #include "neverd/types/HeaderLibrary.h"
 #include "neverd/types/TypeParse.h"
 
+#include "llvm/ADT/StringSet.h"
+
 using namespace neverd::types;
 
 namespace {
@@ -79,6 +81,53 @@ TEST(HeaderLibrary, TheKernelsReadsAsADriverDeclaresIt) {
   ASSERT_NE(Kernel->findPrototype("KeBugCheckEx"), nullptr);
   EXPECT_TRUE(Kernel->findPrototype("KeBugCheckEx")->NoReturn);
   EXPECT_FALSE(Kernel->findPrototype("IoCreateDevice")->NoReturn);
+}
+
+TEST(HeaderLibrary, EveryLibraryReadsLaidOutForItsDataModel) {
+  // A pointer, and a SIZE_T, take what each data model gives them: a 32-bit
+  // library's handles and records are a 32-bit program's.
+  const HeaderLibrary Libraries[] = {
+#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling)                 \
+  HeaderLibrary::Id,
+#include "neverd/types/HeaderLibraries.def"
+  };
+  for (const HeaderLibrary Library : Libraries) {
+    SCOPED_TRACE(headerLibraryName(Library).str());
+    std::string Error;
+    const TypeLibrary *Types = headerLibrary(Library, &Error);
+    ASSERT_NE(Types, nullptr) << Error;
+    EXPECT_EQ(Types->dataModel(), headerLibraryModel(Library));
+    EXPECT_GT(Types->size(), 3000u);
+    EXPECT_GT(Types->prototypes().size(), 1500u);
+    const bool Wide = headerLibraryModel(Library) != DataModel::ILP32;
+    EXPECT_EQ(sizeOf(*Types, "HANDLE"), Wide ? 8u : 4u);
+    EXPECT_EQ(sizeOf(*Types, "SIZE_T"), Wide ? 8u : 4u);
+    EXPECT_EQ(sizeOf(*Types, "_UNICODE_STRING"), Wide ? 16u : 8u);
+  }
+}
+
+TEST(HeaderLibrary, TheNoReturnTablesHoldEveryNoReturnRoutine) {
+  // Function discovery and the call analysis read the tables, before any
+  // header: a routine the headers declare noreturn ends the code that calls
+  // it with or without them.
+  llvm::StringSet<> Tables;
+#define LIBC_NO_RETURN_SYMBOL(Name) Tables.insert(Name);
+#include "neverd/libc/WindowsNoReturn.inc"
+#undef LIBC_NO_RETURN_SYMBOL
+  const HeaderLibrary Libraries[] = {
+#define NEVERD_HEADER_LIBRARY(Id, Name, File, Model, Spelling)                 \
+  HeaderLibrary::Id,
+#include "neverd/types/HeaderLibraries.def"
+  };
+  for (const HeaderLibrary Library : Libraries) {
+    const TypeLibrary *Types = headerLibrary(Library);
+    ASSERT_NE(Types, nullptr);
+    for (const auto &Prototype : Types->prototypes())
+      if (Prototype.getValue()->NoReturn)
+        EXPECT_TRUE(Tables.contains(Prototype.getKey()))
+            << headerLibraryName(Library).str() << " "
+            << Prototype.getKey().str();
+  }
 }
 
 TEST(HeaderLibrary, JoinsWhereTheProgramHasNoTypeOfTheName) {

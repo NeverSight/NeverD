@@ -47,6 +47,16 @@ inline bool isX86FramePreservingIntrinsic(const LowOp &Op, Arch Architecture) {
       Id == Intrinsic::X86FPArithMemoryState)
     return NonIntegerOutput &&
            x86FPStateShapeIsValid(Id, x86FPStateLowShape(Op, Architecture));
+  // FXAM classifies one stack slot into the status word. It reads no memory
+  // and raises no floating-point exception.
+  const NdVar StatusWord = NdVar::reg(x86reg::FPU_SW, 2);
+  if (Id == Intrinsic::X87Fxam)
+    return Op.NumInputs == 3 && Op.Output == StatusWord &&
+           Op.Inputs[1].isReg() && Op.Inputs[1].Offset >= x86reg::ST0 &&
+           Op.Inputs[1].Offset <= x86reg::ST7 &&
+           (Op.Inputs[1].Offset - x86reg::ST0) % x86reg::FPURegStride == 0 &&
+           Op.Inputs[1].Size == x86reg::FPURegSize &&
+           Op.Inputs[2] == StatusWord;
   return Id == Intrinsic::X87Wait && Op.NumInputs == 1 && Op.Output == NdVar();
 }
 

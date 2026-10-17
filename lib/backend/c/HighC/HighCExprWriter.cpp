@@ -3266,7 +3266,7 @@ std::string HighCWriter::typedArgumentText(const HighExpr &E,
   }
   if (Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
       Inner->Operands[0]) {
-    if (auto Member = typedMemberAccess(*Inner->Operands[0]))
+    if (auto Member = loadedMemberAccess(*Inner))
       return *Member;
   }
   if (Expected && Expected->Kind == NdTypeKind::Struct && Expected->IsEnum) {
@@ -3486,6 +3486,10 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
        FS.CallConv == DebugCallConv::Thiscall ||
        FS.CallConv == DebugCallConv::Fastcall))
     Prefix += "__fastcall ";
+  // An i386 callee declares how it takes its arguments and who pops them,
+  // as its definition does: WINAPI's stdcall callee pops its own.
+  else if (Opts.TheArch == Arch::X86 && FS.CallConv != DebugCallConv::Cdecl)
+    Prefix += debugCallConvAttribute(FS.CallConv).str();
   return Prefix + declarationToC(ReturnType, Declarator + ")");
 }
 
@@ -3540,6 +3544,19 @@ void completeDisplayRecord(DebugContext *Dbg, const TypeRef &Ty) {
     if (Inner && Inner->Kind == NdTypeKind::Struct && !Inner->IsEnum)
       Dbg->completeType(Inner);
   }
+}
+
+/// Whether reading \p AccessSize bytes \p Offset into \p Record as a value
+/// would name a whole record no member of which holds them, as a union whose
+/// alternatives are all that wide is: no scalar is a record, though the
+/// address of one is.
+bool readsWholeRecord(const NdType &Record, uint64_t Offset,
+                      uint16_t AccessSize, bool EnterNestedAtZero) {
+  if (!EnterNestedAtZero || !AccessSize)
+    return false;
+  const TypeRef Type = Record.displayFieldTypeAt(Offset, AccessSize);
+  return Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum &&
+         !Type->displayFieldPathAt(0, AccessSize);
 }
 } // namespace
 
@@ -4198,12 +4215,13 @@ HighCWriter::typedMemberAccess(const HighExpr &Addr, uint16_t AccessSize,
     if (auto Overlay = frameTypedMemberAccess(*OverlayDisp, AccessSize))
       return Overlay;
   const TypeRef Record = declaredRecordPointee(*Base);
-  if (!Record)
+  if (!Record || !definesRecord(Record))
     return std::nullopt;
   completeDisplayRecord(Dbg, Record);
   const auto Field =
       Record->displayFieldPathAt(Peeled->second, AccessSize, EnterNestedAtZero);
-  if (!Field)
+  if (!Field ||
+      readsWholeRecord(*Record, Peeled->second, AccessSize, EnterNestedAtZero))
     return std::nullopt;
   auto Path = canonicalizeDisplayPath(*Field);
   if (!Path)
@@ -4252,6 +4270,19 @@ HighCWriter::typedMemberAddress(const HighExpr &Addr) const {
   return typedMemberAccess(Addr, 0, false);
 }
 
+std::optional<std::string>
+HighCWriter::loadedMemberAccess(const HighExpr &Load) const {
+  if (Load.Operands.empty() || !Load.Operands[0])
+    return std::nullopt;
+  const HighExpr &Addr = *Load.Operands[0];
+  if (auto Member = typedMemberAccess(Addr, Load.Type ? Load.Type->Size : 0))
+    return Member;
+  if (const TypeRef Type = typedMemberType(Addr);
+      Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum)
+    return std::nullopt;
+  return typedMemberAccess(Addr);
+}
+
 TypeRef HighCWriter::typedMemberType(const HighExpr &Addr,
                                      uint16_t AccessSize) const {
   if (const auto Disp = frameDisplacement(Addr))
@@ -4265,9 +4296,11 @@ TypeRef HighCWriter::typedMemberType(const HighExpr &Addr,
     if (TypeRef OverlayTy = frameTypedMemberType(*OverlayDisp, AccessSize))
       return OverlayTy;
   const TypeRef Record = declaredRecordPointee(*Peeled->first);
-  if (!Record)
+  if (!Record || !definesRecord(Record))
     return nullptr;
   completeDisplayRecord(Dbg, Record);
+  if (readsWholeRecord(*Record, Peeled->second, AccessSize, true))
+    return nullptr;
   return Record->displayFieldTypeAt(Peeled->second, AccessSize);
 }
 
@@ -4302,7 +4335,7 @@ std::string HighCWriter::pointerObjectStr(const HighExpr &E) {
   if (Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
       Inner->Operands[0] && Inner->MemoryOrdering == NdMemoryOrdering::None &&
       Inner->MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-    if (auto Member = typedMemberAccess(*Inner->Operands[0]))
+    if (auto Member = loadedMemberAccess(*Inner))
       return *Member;
   }
   if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
@@ -5711,7 +5744,7 @@ std::string HighCWriter::printedForwardedVar(const std::string &Name,
     const HighExpr *Inner = peelIntegerViewOps(Fwd->second);
     if (Inner && Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
         Inner->Operands[0]) {
-      if (auto Member = typedMemberAccess(*Inner->Operands[0]))
+      if (auto Member = loadedMemberAccess(*Inner))
         return SourceRecorder && CurrentFunc
                    ? SourceRecorder->expression(CurrentFunc->Entry,
                                                 *Fwd->second, *Member)
@@ -6487,10 +6520,7 @@ HighCWriter::preferGreaterIfElseCond(const HighExpr &E) {
       Inner = &Op;
     if (Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
         Inner->Operands[0]) {
-      if (auto Member = typedMemberAccess(*Inner->Operands[0],
-                                          Inner->Type ? Inner->Type->Size : 0))
-        return *Member;
-      if (auto Member = typedMemberAccess(*Inner->Operands[0]))
+      if (auto Member = loadedMemberAccess(*Inner))
         return *Member;
     }
     if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {

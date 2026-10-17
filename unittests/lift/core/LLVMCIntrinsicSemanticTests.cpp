@@ -2213,7 +2213,8 @@ int main(void) {
 )";
   for (const char *Level : {"-O0", "-O2"})
     compileAndCheck("#include <stdint.h>\n"
-                    "typedef struct { uint64_t value; } ParameterRecord;\n" +
+                    "typedef struct ParameterRecord { uint64_t value; } "
+                    "ParameterRecord;\n" +
                         Text + Main,
                     false, {}, Level);
 }
@@ -2450,11 +2451,11 @@ int main(void) {
               "&actual, values[i]) != &actual || actual.first != values[i] || "
               "actual.second != ~values[i]) return 1;\n  }\n return 0;\n}\n";
       for (const char *Level : {"-O0", "-O2"})
-        compileAndCheck(
-            "#include <stdint.h>\n"
-            "typedef struct { uint64_t first, second; } ResultRecord;\n" +
-                Text + Main,
-            false, {}, Level);
+        compileAndCheck("#include <stdint.h>\n"
+                        "typedef struct ResultRecord { uint64_t first, second; "
+                        "} ResultRecord;\n" +
+                            Text + Main,
+                        false, {}, Level);
     }
 }
 

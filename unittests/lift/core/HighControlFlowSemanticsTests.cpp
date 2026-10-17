@@ -1205,6 +1205,50 @@ TEST(HighControlFlowSemantics, SliceJoiningRejectsDifferentOrObservableValues) {
   }
 }
 
+TEST(HighControlFlowSemantics, AMergedCallKeepsAnInstructionOnlyIfItHadOne) {
+  auto Call = [](va_t Site) {
+    auto E = HighExpr::makeCall("release", 0x4000, {local(0)});
+    E->CallSiteAddr = Site;
+    return HighExpr::makeBinop(NdOp::INT_ADD, E, HighExpr::makeConst(1, 8));
+  };
+  // Copies of one statement: the same instruction stays.
+  const ExprPtr Copy = Call(0x1010);
+  EXPECT_EQ(withMergedCallSites(Copy, Call(0x1010)), Copy);
+  // Two instructions made one call: it keeps neither, and the value the
+  // other statement shared is not changed in place.
+  const ExprPtr Kept = Call(0x1010);
+  const ExprPtr Merged = withMergedCallSites(Kept, Call(0x1020));
+  ASSERT_NE(Merged, Kept);
+  EXPECT_EQ(Merged->Operands[0]->CallSiteAddr, 0U);
+  EXPECT_EQ(Kept->Operands[0]->CallSiteAddr, 0x1010U);
+  EXPECT_TRUE(Merged->structuralEq(*Kept));
+  // A value without calls is left as it is.
+  const ExprPtr Plain = local(1);
+  EXPECT_EQ(withMergedCallSites(Plain, local(1)), Plain);
+}
+
+TEST(HighControlFlowSemantics, AShiftByZeroIsItsOperand) {
+  // AArch64's `tbz w0, #0, L` tests bit 0 as `(w0 >> 0) & 1`.
+  for (const NdOp Shift : {NdOp::INT_LEFT, NdOp::INT_RIGHT, NdOp::INT_ASHR}) {
+    HighFunc F;
+    F.Body = {result(
+        0, HighExpr::makeBinop(
+               NdOp::INT_AND,
+               HighExpr::makeBinop(Shift, local(0), HighExpr::makeConst(0, 8)),
+               HighExpr::makeConst(1, 8)))};
+    simplifyAllExprs(F.Body);
+    const HighExpr &Bit = *F.Body[0].RetVal;
+    ASSERT_EQ(Bit.Op, NdOp::INT_AND) << ndOpName(Shift);
+    EXPECT_EQ(Bit.Operands[0]->Kind, ExprKind::Var) << ndOpName(Shift);
+  }
+  // A shift by a register or a nonzero amount stays.
+  HighFunc F;
+  F.Body = {result(0, HighExpr::makeBinop(NdOp::INT_RIGHT, local(0),
+                                          HighExpr::makeConst(3, 8)))};
+  simplifyAllExprs(F.Body);
+  EXPECT_EQ(F.Body[0].RetVal->Op, NdOp::INT_RIGHT);
+}
+
 TEST(HighControlFlowSemantics, MemoryBoundaryAncestorsMatchIndividualQueries) {
   for (const bool Atomic : {false, true}) {
     auto Memory = HighExpr::makeLoad(local(0), NdType::makeInt(8));
@@ -1641,7 +1685,8 @@ TEST(HighControlFlowSemantics, ShiftedMaskKeepsObservedOrEffectfulHigh) {
 
     simplifyAllExprs(Function.Body);
 
-    EXPECT_EQ(Masked->Operands[0], Shifted) << Case;
+    // A shift by zero is its operand; the high part stays either way.
+    EXPECT_EQ(Masked->Operands[0], Case == 2 ? Shifted : Joined) << Case;
   }
 }
 

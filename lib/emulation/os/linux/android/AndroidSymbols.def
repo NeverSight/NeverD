@@ -31,6 +31,12 @@ NEVERD_ANDROID_CALL(LoggerOpen, "android_logger_open", logCall)
 NEVERD_ANDROID_CALL(LoggerListRead, "android_logger_list_read", logCall)
 NEVERD_ANDROID_CALL(LoggerListFree, "android_logger_list_free", logCall)
 NEVERD_ANDROID_CALL(PthreadOnce, "pthread_once", once)
+NEVERD_ANDROID_CALL(SemaphoreInit, "sem_init", semaphore)
+NEVERD_ANDROID_CALL(SemaphoreDestroy, "sem_destroy", semaphore)
+NEVERD_ANDROID_CALL(SemaphorePost, "sem_post", semaphore)
+NEVERD_ANDROID_CALL(SemaphoreWait, "sem_wait", semaphore)
+NEVERD_ANDROID_CALL(SemaphoreTryWait, "sem_trywait", semaphore)
+NEVERD_ANDROID_CALL(SemaphoreGetValue, "sem_getvalue", semaphore)
 #define NEVERD_ANDROID_THREAD_CALL(Name, Text, Method)                         \
   NEVERD_ANDROID_CALL(Name, Text, threadCall)
 #include "AndroidThreads.def"

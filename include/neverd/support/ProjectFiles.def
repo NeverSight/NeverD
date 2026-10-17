@@ -1,0 +1,46 @@
+//===- ProjectFiles.def - The files of an input's project -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// NEVERD_PROJECT_FILE(Name, Path, Legacy, Shared): a file of the project folder
+// beside an input, `<input>.neverd/`: its path in the folder, the suffix an
+// older NeverD gave the same file beside the input (empty for a file it did
+// not keep), and whether the project shares it under version control or it
+// is each user's own, in local/, which the folder's .gitignore leaves out.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PROJECT_FILE
+#define NEVERD_PROJECT_FILE(Name, Path, Legacy, Shared)
+#endif
+
+// Which build of the input the files describe, and the folder's format.
+NEVERD_PROJECT_FILE(Manifest, "project.json", "", true)
+// The edit tables, one row per address.
+NEVERD_PROJECT_FILE(Annotations, "annotations.json", ".neverd-annotations.json",
+                    true)
+NEVERD_PROJECT_FILE(Renames, "renames.json", ".neverd-renames.json", true)
+NEVERD_PROJECT_FILE(Functions, "functions.json", ".neverd-functions.json", true)
+NEVERD_PROJECT_FILE(Items, "items.json", ".neverd-items.json", true)
+NEVERD_PROJECT_FILE(Operands, "operands.json", ".neverd-operands.json", true)
+NEVERD_PROJECT_FILE(Code, "code.json", ".neverd-code.json", true)
+// The declarations of the local types, in the order they read.
+NEVERD_PROJECT_FILE(Types, "types.json", ".neverd-types.json", true)
+// How a binary file is read: processor, placement and platform.
+NEVERD_PROJECT_FILE(Load, "load.json", ".neverd-load.json", true)
+NEVERD_PROJECT_FILE(Bookmarks, "bookmarks.json", ".neverd-bookmarks.json", true)
+// The PDB, DWARF, MAP and symbol table choices.
+NEVERD_PROJECT_FILE(DebugFiles, "debug.json", ".neverd-debug.json", true)
+// Each user's own: undo history, a save's write-ahead journal, where the
+// user was and how the desktop was laid out, and the writer lock.
+NEVERD_PROJECT_FILE(History, "local/history.json", ".neverd-history.json",
+                    false)
+NEVERD_PROJECT_FILE(Journal, "local/journal.json", ".neverd-journal.json",
+                    false)
+NEVERD_PROJECT_FILE(Workbench, "local/workbench.json", ".neverd-workbench.json",
+                    false)
+NEVERD_PROJECT_FILE(WriterLock, "local/writer.lock", ".neverd-gui.lock", false)
+
+#undef NEVERD_PROJECT_FILE

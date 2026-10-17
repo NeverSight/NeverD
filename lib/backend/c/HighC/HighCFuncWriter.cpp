@@ -60,22 +60,6 @@ uint64_t checkedStackAlign(uint64_t Size) {
   return checkedStackAdd(Size, Mask) & ~Mask;
 }
 
-llvm::StringRef debugCallConvAttribute(DebugCallConv CC) {
-  switch (CC) {
-  case DebugCallConv::Cdecl:
-    return "__attribute__((cdecl)) ";
-  case DebugCallConv::Stdcall:
-    return "__attribute__((stdcall)) ";
-  case DebugCallConv::Thiscall:
-    return "__attribute__((thiscall)) ";
-  case DebugCallConv::Fastcall:
-    return "__fastcall ";
-  case DebugCallConv::Unknown:
-    return "";
-  }
-  return "";
-}
-
 std::optional<FunctionSym> debugFunction(DebugContext *Dbg, va_t Entry) {
   if (!Dbg)
     return std::nullopt;
@@ -843,10 +827,10 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
       const TypeRef Fwd = It->second;
       // Map cursor: untyped `int64_t v1` from `bins[i]` is a node pointer.
       // A join dest (`v5 = p->field`) must stay the scalar, not the
-      // containing record FieldForwardTypes may have attached.
-      if (Fwd->Kind == NdTypeKind::Ptr && Fwd->Pointee &&
-          Fwd->Pointee->Kind == NdTypeKind::Struct &&
-          !Fwd->Pointee->SourceName.empty() &&
+      // containing record FieldForwardTypes may have attached.  A record
+      // the unit declares no typedef of keeps the scalar too: C spells it
+      // by its tag alone.
+      if (spellsRecordPointer(Fwd) &&
           (!Ty || Ty->Kind == NdTypeKind::Int ||
            Ty->Kind == NdTypeKind::Unknown ||
            (Ty->Kind == NdTypeKind::Ptr &&
@@ -1912,6 +1896,22 @@ bool fieldProjectionDoesNotNarrow(const HighExpr *Expr,
 }
 } // namespace
 
+llvm::StringRef debugCallConvAttribute(DebugCallConv CC) {
+  switch (CC) {
+  case DebugCallConv::Cdecl:
+    return "__attribute__((cdecl)) ";
+  case DebugCallConv::Stdcall:
+    return "__attribute__((stdcall)) ";
+  case DebugCallConv::Thiscall:
+    return "__attribute__((thiscall)) ";
+  case DebugCallConv::Fastcall:
+    return "__fastcall ";
+  case DebugCallConv::Unknown:
+    return "";
+  }
+  return "";
+}
+
 void HighCWriter::collectFieldLoadTypes(const HighFunc &Func) {
   FieldForwardTypes.clear();
   // A cursor can acquire its pointer type through bins[i] and a copy before
@@ -2187,7 +2187,7 @@ void HighCWriter::collectFieldLoadForward(const HighFunc &Func) {
     if (!E)
       return std::nullopt;
     if (E->Kind == ExprKind::Load && !E->Operands.empty() && E->Operands[0]) {
-      if (auto Path = typedMemberAccess(*E->Operands[0]))
+      if (auto Path = loadedMemberAccess(*E))
         return std::make_pair(*Path, typedMemberType(*E->Operands[0]));
       return std::nullopt;
     }
@@ -4538,15 +4538,19 @@ std::optional<int64_t> HighCWriter::stackParamOffset(const HighFunc &Func,
   if (!Layout.SlotBytes)
     return std::nullopt;
   // Stack arguments are numbered after every register position, or after the
-  // registers the function uses where they follow those (i386 regparm).
+  // registers the function uses where they follow those (i386 regparm): from
+  // the lowest stack number, the first slot's.  A register parameter MedIR
+  // promotes later, such as one a forwarder passes on, takes no number of
+  // the stack's.
   int First = static_cast<int>(Layout.Registers.size());
   if (const CallArgumentConvention *Convention =
           callArgumentConvention(Opts.TheArch, Opts.Format);
-      Convention && Convention->StackArgumentsFollowUsedRegisters)
-    First =
-        static_cast<int>(llvm::count_if(Func.Params, [](const HighParam &P) {
-          return P.RegOff != kNoParamReg;
-        }));
+      Convention && Convention->StackArgumentsFollowUsedRegisters) {
+    First = Param.MedIndex;
+    for (const HighParam &Other : Func.Params)
+      if (Other.RegOff == kNoParamReg && Other.MedIndex >= 0)
+        First = std::min(First, Other.MedIndex);
+  }
   if (Param.MedIndex < First)
     return std::nullopt;
   return Layout.EntryStackBase +

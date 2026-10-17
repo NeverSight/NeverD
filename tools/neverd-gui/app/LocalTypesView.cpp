@@ -43,8 +43,8 @@
 #include <QTabBar>
 #include <QTextBlock>
 #include <QTextDocument>
-#include <QToolTip>
 #include <QToolButton>
+#include <QToolTip>
 #include <QTreeView>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -247,6 +247,7 @@ struct OriginChoice {
 constexpr OriginChoice Origins[] = {
     {"", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "All types")},
     {"pdb", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "From the PDB")},
+    {"dwarf", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "From DWARF")},
     {"header",
      QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "From system headers")},
     {"user", QT_TRANSLATE_NOOP("neverd::gui::LocalTypesView", "Declared")}};
@@ -622,8 +623,8 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   connect(path_, &QLabel::linkActivated, this, [this](const QString &link) {
     // The type's crumb leads to its first member; a record's, to it.
     QTreeWidgetItem *item = nullptr;
-    for (const QString &step : link.split(QLatin1Char('/'),
-                                          Qt::SkipEmptyParts)) {
+    for (const QString &step :
+         link.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
       const int row = step.toInt();
       item = item ? item->child(row) : layout_->topLevelItem(row);
       if (!item)
@@ -746,7 +747,7 @@ void LocalTypesView::listed(const QJsonObject &payload) {
   cards_.clear();
   const QString origin = origin_->currentData().toString();
   const QJsonArray types = payload.value("types").toArray();
-  qint64 fromPdb = 0, fromHeaders = 0, declared = 0;
+  qint64 fromPdb = 0, fromDwarf = 0, fromHeaders = 0, declared = 0;
   for (const QJsonValue &value : types) {
     const QJsonObject type = value.toObject();
     const QString name = type.value("name").toString();
@@ -754,6 +755,7 @@ void LocalTypesView::listed(const QJsonObject &payload) {
     names_.insert(name);
     const QString from = type.value("origin").toString();
     fromPdb += from == QLatin1String("pdb");
+    fromDwarf += from == QLatin1String("dwarf");
     fromHeaders += from == QLatin1String("header");
     declared += from == QLatin1String("user");
     if (!origin.isEmpty() && from != origin)
@@ -818,8 +820,10 @@ void LocalTypesView::listed(const QJsonObject &payload) {
   if (types.isEmpty())
     summary_->setText(source == QLatin1String("pdb")
                           ? tr("The PDB defines no types.")
-                          : tr("No local types: this program has no PDB "
-                               "with types."));
+                      : source == QLatin1String("dwarf")
+                          ? tr("The DWARF defines no types.")
+                          : tr("No local types: this program has no PDB or "
+                               "DWARF with types."));
   else {
     // How many, from where: the program's PDB, the system's headers, the
     // user's declarations.
@@ -827,6 +831,8 @@ void LocalTypesView::listed(const QJsonObject &payload) {
         tr("Types: %1").arg(QLocale().toString(qlonglong(types.size())))};
     if (fromPdb)
       parts << tr("%n from the PDB", "", int(fromPdb));
+    if (fromDwarf)
+      parts << tr("%n from DWARF", "", int(fromDwarf));
     if (fromHeaders)
       parts << tr("%n from system headers", "", int(fromHeaders));
     if (declared)
@@ -1104,8 +1110,8 @@ void LocalTypesView::showPath() {
   QString rows;
   for (QTreeWidgetItem *at : chain) {
     QTreeWidgetItem *parent = at->parent();
-    const int row = parent ? parent->indexOfChild(at)
-                           : layout_->indexOfTopLevelItem(at);
+    const int row =
+        parent ? parent->indexOfChild(at) : layout_->indexOfTopLevelItem(at);
     rows += QString::number(row) + QLatin1Char('/');
     memberPath_ << at->text(MemberColumn);
     text += QStringLiteral("<span style=\"color:%1\">%2</span>")
@@ -1245,20 +1251,22 @@ void LocalTypesView::addMembers(QTreeWidgetItem *parent,
     // Where the member lies and what it is, as C reaches it: through the
     // records that hold it, anonymous ones adding no name.
     const QString reached =
-        name.isEmpty() ? path
-                       : (path.isEmpty() ? name : path + QLatin1Char('.') + name);
+        name.isEmpty()
+            ? path
+            : (path.isEmpty() ? name : path + QLatin1Char('.') + name);
     const auto card = [&] {
-      QString text = QStringLiteral("<b>%1</b>").arg(
-          (reached.isEmpty() ? kind : reached).toHtmlEscaped());
-      text += QStringLiteral("<br>") +
-              (kind == QLatin1String("bitfield")
-                   ? tr("bits %1 of the unit at %2")
-                         .arg(item->text(SizeOfColumn).mid(1),
-                              item->text(OffsetColumn))
-                   : tr("at %1, %2 bytes")
-                         .arg(item->text(OffsetColumn),
-                              item->text(SizeOfColumn)))
-                  .toHtmlEscaped();
+      QString text =
+          QStringLiteral("<b>%1</b>")
+              .arg((reached.isEmpty() ? kind : reached).toHtmlEscaped());
+      text +=
+          QStringLiteral("<br>") +
+          (kind == QLatin1String("bitfield")
+               ? tr("bits %1 of the unit at %2")
+                     .arg(item->text(SizeOfColumn).mid(1),
+                          item->text(OffsetColumn))
+               : tr("at %1, %2 bytes")
+                     .arg(item->text(OffsetColumn), item->text(SizeOfColumn)))
+              .toHtmlEscaped();
       if (const QString type = member.value("type").toString(); !type.isEmpty())
         text += QStringLiteral("<br><code>%1</code>").arg(type.toHtmlEscaped());
       item->setToolTip(MemberColumn, text);
@@ -1535,8 +1543,7 @@ bool LocalTypesView::eventFilter(QObject *object, QEvent *event) {
     const QString refers =
         item ? item->data(0, RefersRole).toString() : QString();
     if (mouse->button() == Qt::LeftButton &&
-        mouse->modifiers().testFlag(Qt::ControlModifier) &&
-        !refers.isEmpty()) {
+        mouse->modifiers().testFlag(Qt::ControlModifier) && !refers.isEmpty()) {
       open(refers, true);
       return true;
     }
@@ -1552,21 +1559,19 @@ bool LocalTypesView::eventFilter(QObject *object, QEvent *event) {
         event->ignore();
         return true;
       }
-      QToolTip::showText(
-          help->globalPos(),
-          cards_.value(type) + QStringLiteral("<br><i>%1</i>")
-                                   .arg(tr("Ctrl+click to open")
-                                            .toHtmlEscaped()),
-          source_->viewport());
+      QToolTip::showText(help->globalPos(),
+                         cards_.value(type) +
+                             QStringLiteral("<br><i>%1</i>")
+                                 .arg(tr("Ctrl+click to open").toHtmlEscaped()),
+                         source_->viewport());
       return true;
     }
     case QEvent::MouseMove: {
       // Ctrl over a type's name makes it a link.
       const auto *mouse = static_cast<QMouseEvent *>(event);
-      const bool link =
-          mouse->modifiers().testFlag(Qt::ControlModifier) &&
-          mouse->buttons() == Qt::NoButton &&
-          !typeAt(mouse->position().toPoint()).isEmpty();
+      const bool link = mouse->modifiers().testFlag(Qt::ControlModifier) &&
+                        mouse->buttons() == Qt::NoButton &&
+                        !typeAt(mouse->position().toPoint()).isEmpty();
       source_->viewport()->setCursor(link ? Qt::PointingHandCursor
                                           : Qt::IBeamCursor);
       break;

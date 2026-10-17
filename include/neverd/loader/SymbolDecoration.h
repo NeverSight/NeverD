@@ -20,6 +20,7 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <optional>
 #include <string>
 
 namespace neverd {
@@ -119,6 +120,37 @@ inline llvm::StringRef importNameOfSymbol(llvm::StringRef Symbol,
   Name = Name.take_front(At);
   Name.consume_front("@");
   return Name;
+}
+
+/// The bytes of arguments stdcall symbol \p Symbol says its routine takes
+/// and pops, on a format and architecture whose stdcall names carry them
+/// (SymbolDecorations.def): 8 for an import library's thunk
+/// `_NlsValidateLocale@8` and its slot `__imp__NlsValidateLocale@8`.  None
+/// for a cdecl name, a fastcall one (`@f@8`, whose leading arguments are in
+/// registers) or a C++ one.
+inline std::optional<unsigned>
+stdcallArgumentBytes(llvm::StringRef Symbol, BinaryFormat Format, Arch Target) {
+  bool ArgumentBytes = false;
+#define NEVERD_ABI_ARGUMENT_BYTES_SUFFIX(FormatId, ArchId)                     \
+  if (Format == BinaryFormat::FormatId && Target == Arch::ArchId)              \
+    ArgumentBytes = true;
+#include "neverd/loader/SymbolDecorations.def"
+  if (!ArgumentBytes || !hasABIUnderscore(Format, Target))
+    return std::nullopt;
+  Symbol.consume_front(importSlotPrefix(Format));
+  if (!Symbol.consume_front("_"))
+    return std::nullopt;
+  const size_t At = Symbol.rfind('@');
+  if (At == llvm::StringRef::npos || At == 0 ||
+      Symbol.take_front(At).find_first_of("@?") != llvm::StringRef::npos)
+    return std::nullopt;
+  const llvm::StringRef Digits = Symbol.drop_front(At + 1);
+  unsigned Bytes = 0;
+  if (Digits.empty() ||
+      Digits.find_first_not_of("0123456789") != llvm::StringRef::npos ||
+      Digits.getAsInteger(10, Bytes))
+    return std::nullopt;
+  return Bytes;
 }
 
 } // namespace neverd

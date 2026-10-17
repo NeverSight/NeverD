@@ -11,6 +11,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/lift/X86Regs.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -165,6 +166,58 @@ TEST(X86_32_DebugHighC, UnplacedParametersBindOnlyAnIntegerPrefix) {
       << C;
   EXPECT_EQ(C.find("scale_value"), std::string::npos) << C;
   EXPECT_EQ(C.find("item_count"), std::string::npos) << C;
+}
+
+TEST(X86_32_DebugHighC, StackParametersAfterAPromotedRegisterKeepTheirNames) {
+  // MedIR numbers the stack parameters 0, 1 and 2, then promotes in front
+  // of them the ECX a call passes on: each declared name stays on the slot
+  // its value arrives in, as kernel32's EnumDateFormatsExA(Proc, Locale,
+  // Flags) returns its Locale.
+  HighFunc Func;
+  Func.Name = "enum_formats";
+  Func.Entry = 0x401500;
+  Func.ReturnType = NdType::makeInt(4, true);
+  HighParam Forwarded;
+  Forwarded.Name = "arg0";
+  Forwarded.Type = NdType::makeInt(4, true);
+  Forwarded.RegOff = x86reg::RCX;
+  Func.Params.push_back(Forwarded);
+  for (int I = 0; I < 3; ++I) {
+    HighParam Param;
+    Param.Name = "arg" + std::to_string(I + 1);
+    Param.Type = NdType::makeInt(4, true);
+    Param.MedIndex = I;
+    Func.Params.push_back(Param);
+  }
+  MedVar Second;
+  Second.Kind = MedVar::Param;
+  Second.Id = 2;
+  Second.Size = 4;
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeVar(Second, Func.Params[2].Type);
+  Func.Body.push_back(Ret);
+
+  Vc6DebugContext Dbg;
+  Dbg.Function.Name = "enum_formats";
+  Dbg.Function.Addr = 0x401500;
+  Dbg.Function.Size = 0x20;
+  Dbg.Function.CallConv = DebugCallConv::Stdcall;
+  Dbg.Function.ReturnType = NdType::makeInt(4, true);
+  Dbg.Function.Params = {{"Proc", NdType::makeInt(4, true)},
+                         {"Locale", NdType::makeInt(4, true)},
+                         {"Flags", NdType::makeInt(4, true)}};
+
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Opts;
+  Opts.TheArch = Arch::X86;
+  Opts.Format = BinaryFormat::COFF;
+  ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Opts, &Dbg));
+  OS.flush();
+
+  EXPECT_NE(C.find("return Locale;"), std::string::npos) << C;
+  EXPECT_EQ(C.find("return Proc;"), std::string::npos) << C;
 }
 
 TEST(X86_32_DebugHighC, EmptyBodyEmitsTrapNotSilentBraces) {

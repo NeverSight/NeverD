@@ -1,4 +1,5 @@
 add_neverd_unittest(NeverDTypesTests
+  DWARFTypeImportTests.cpp
   HeaderLibraryTests.cpp
   LocalTypesTests.cpp
   PDBTypeImportTests.cpp

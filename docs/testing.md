@@ -14,6 +14,13 @@ pidfd lifetimes. `LinuxPIDFD.*` retains the fixed-catalogue kernel matrix.
 zero-size identities at O0/O2 across Android relocation formats and available
 Unicorn/HVF backends. `AndroidAllocationOptions.*` rejects non-byte inputs.
 
+`AndroidSemaphore.*` runs independently authored API 28 callers at O0/O2
+with ordinary, Android-packed and RELR relocations on available CPU backends.
+It checks full object bytes, reserved padding, errno, overflow, aliasing,
+read-only tails, dynamic provider lifetimes, multiple consumers, token
+competition after wake, deadlock and failed resumption. Timed waits remain an
+explicit unsupported boundary.
+
 ## MXCSR recovery checks
 
 `InterpreterSpecialization.MXCSR*` covers arbitrary entry state, exact memory values, reserved bits, DAZ, aliases, malformed forms, node projection and exact/short budgets. `PEFixedImageTest.RawMXCSR*` checks legacy/VEX native bytes and mask-bound receipts. The machine-state and native/LLVM refinement owners verify that unused capabilities cannot expand their interfaces.
@@ -426,6 +433,8 @@ python3 scripts/check_type_renders.py --neverd build/bin/neverd \
   --declare lib/types/headers/WindowsKernelX64.h --data-model LLP64
 python3 scripts/check_type_renders.py --neverd build/bin/neverd \
   --declare lib/types/headers/WindowsUserX64.h --data-model LLP64
+python3 scripts/check_type_renders.py --neverd build/bin/neverd \
+  --declare lib/types/headers/WindowsUserX86.h --data-model ILP32
 ```
 
 With `NEVERD_TYPES_NTOSKRNL` and `NEVERD_TYPES_NTKRNLMP` pointing at
@@ -468,6 +477,18 @@ that `ZwClose` takes the kernel headers' prototype, that a function stops at
 `ExitProcess` rather than running into the next one, that an export
 reading no parameter shows the one its prototype declares, and that LLVM-C
 declares the imports it calls and calls `GetLastError` with no argument.
+`SessionCAPITest.X86ImportsTakeTheirStdcallPrototypes` loads
+`user_imports_x86.exe`, the same program built for x86, and checks that it
+joins the x86 libraries in ILP32, that its externs declare
+`__attribute__((stdcall))` with their prototypes, and that a function stops
+at `ExitProcess`; it finds `Finish`, which only its export names, although
+Start inlines it and ends `.text` at that call; and that `SetFilePointerEx`
+takes its `LARGE_INTEGER` in two of its five slots, without the local stored
+above them.
+`HeaderLibrary.EveryLibraryReadsLaidOutForItsDataModel` reads every library
+the build embeds and checks its pointers' and records' sizes, and
+`HeaderLibrary.TheNoReturnTablesHoldEveryNoReturnRoutine` checks that the
+noreturn tables hold every routine a library declares `_Noreturn`.
 `SessionCAPITest.LocalTypesFitWhatTheCodeDoesThroughAPointer` checks that the
 program's own record ranks before a header record the accesses fit as
 exactly.
@@ -3041,6 +3062,9 @@ software deadline regression spends the budget inside an instruction observer
 and verifies that the following unmapped load never executes and a fresh run
 can stop normally. Keep native Windows repetition for the short-slice timer
 regression; a pass on another host does not qualify its timing behavior.
+The driver context fixture checks all 1296 guarded bytes at each of twelve
+captures. Constant-width copies and unrolled fixed loops reduce checked native
+instruction overhead while retaining every comparison and the existing budget.
 `AArch64ProjectionTests.cpp` executes through the ARM MMU using the actual
 native page-table projection, checking translations, remapping and write
 protection. These tests deliberately use Unicorn's architectural CPU TLB, not
@@ -6170,6 +6194,15 @@ Capture regressions: `NeverDUnicornStateTransferTests`, `NeverDUnicornMachineCon
 
 `RepeatedOperandsSurviveCodeWorkingSetEviction` repeats operand, memory-hook and relative-branch checks before and after a larger code working set. Checked execution retains bounded, owned Capstone metadata only while the current instruction bytes match; every step still fetches current bytes and checks execute permissions. Full operand details and decoder aliases remain available on cache hits.
 
+`HostOperandWriteRefreshesAnInstructionAtThePageTail` changes only operand
+bytes through another mapping, including a separately backed x64 page tail.
+`HostWriteAfterStopRefreshesAnUnexecutedInstruction` changes a potentially
+translated successor before its first execution. `RepeatedStepsRetainExactLoopAndStopState`
+checks loop results and the precise stopped PC under repeated checked entries.
+Together with the user-projection, RAM-transaction, code-alias and direct-run
+suites, these guard bounded Unicorn translation invalidation. Test duration
+is useful for local comparisons, not a portable throughput guarantee.
+
 `WhpStateTransferTests.cpp` checks both XSAVE API generations with injected register transfers: exact changed groups, complete capture, ignored padding, partial failures, cancellation, exception priority and partition replacement. `ContinuedStepsReuseCapturedRegistersAndFP` counts avoided installs; `PartialTransferFailuresPreserveStateAndForceFullRetry` requires complete restoration. These are protocol checks, not native execution evidence; existing native FP, state-transition, driver and ring3 suites remain required.
 
 `CancelledDirectRunPublishesACompleteBoundary` verifies complete state at an acknowledged direct-run cancellation. `FailedDirectCapturePreservesStateAndForcesFullRetry` requires unchanged caller state when register, XSAVE or metadata capture fails during cancellation, followed by a complete retry; neither API generation may publish a partial register prefix.
@@ -7082,7 +7115,11 @@ The source registration solver uses one administration-boundary check for object
 `NeverDRegistrationCalleeStackTests` runs the decoded PE32 call/return ABI
 controls, including a cycle between a registration parent and an ordinary
 wrapper. An unbalanced recursive wrapper cannot borrow its own pending ESP
-answer. `NeverDX87CallGraphTests` provides the focused `X87CallStack.*` and
+answer. `RegistrationCallABI.ReturningStackProofDoesNotNormalizeTheX87Stack`
+keeps the stack proof for bodies whose x87 normalization alone is incomplete
+or splits blocks by TOP, and for FXAM with a proved or unproved tag.
+`RegistrationCallABI.ScalarReturnDescribesEAXBesideAnX87Result` pins the leaf
+contract's EAX result for a leaf that also returns an x87 value. `NeverDX87CallGraphTests` provides the focused `X87CallStack.*` and
 `X87CallGraphCache.*` checks for the shared-cache and invocation boundaries.
 
 `MedCxxContinuationFrame.ProtectedSourcesFollowCompactedBlockIdentities` uses
@@ -7163,6 +7200,25 @@ MinGW-w64 GCC): GNU ld's section symbols stay as bounds that name nothing, its
 `HighControlFlowSemantics.SlotCallGoesThroughThePointerItHolds` calls through
 MinGW's `__imp_X` variables, which hold the image's own code, relocated or in
 a fixed image, rather than naming an import by their spelling.
+`HighControlFlowSemantics.AShiftByZeroIsItsOperand` reads AArch64's bit-0
+`tbz` test as `x & 1`.
+
+`NeverDItaniumHandlerTests` spells Itanium landing pads as C++ handlers.
+`ItaniumHandlerBodies.ACleanupOnlyPadBecomesACatchAllThatRethrows` prints a
+pad that only cleans up as `try { … } catch (...) { cleanup; throw; }` and
+keeps it labelled in C. `ACleanupScopeHoldsNoCallItsPadDoesNotCover` keeps a
+call that reaches no pad out of the scopes, and
+`ACopiedCallKeepsTheCoverOfItsInstruction` does so for a tail copy whose
+statement took a covered jump's address.
+`ABranchWhoseArmsCallThroughThePadIsOneScope` wraps the whole branch, and
+`ACopyWithoutAnAddressKeepsItsCallsInstruction` places calls copied into both
+arms by their instruction. `AnExceptionSpilledThroughAFrameAddressIsResumed`
+follows the exception through the slot address clang keeps for a large frame. `ACallOfNoInstructionKeepsTheCleanupPad`,
+`AJumpIntoACleanupScopeKeepsThePad` and
+`ACoveredCallOnlyAJumpReachesKeepsThePad` keep the pad where a scope cannot
+be proved. `NothingFallsOutOfAnEndlessLoop` prints no dead statement after a
+`while (1)` that only returns. `HighControlFlowSemantics.AMergedCallKeepsAnInstructionOnlyIfItHadOne`
+checks that merging two branches' equal calls forgets their instructions.
 Malformed unwind/prologue and converted-SP checks run with source projection
 enabled too. `WindowsEHModesCorpus.DecompileMatrixFailsClosedWithAuditableExceptionMetadata`
 runs the original eleven-case matrix, including the complete x64 xcpt4 image.

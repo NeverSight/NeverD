@@ -40,9 +40,9 @@ constexpr int Margin = 6;
 constexpr int WheelLines = 3;
 
 /// The goto label \p line defines and the block address it names: HighC
-/// labels a goto's block `L_` and the address in hexadecimal
-/// (HighCStmtWriter), defined as `L_140001010:` or, in Rust, as a loop's
-/// `'L_140001010: loop`.
+/// labels a goto's block `L_` and the address in hexadecimal (blockLabel in
+/// lib/backend/c/HighC/HighCStmtWriter.cpp), defined as `L_140001010:` or,
+/// in Rust, as a loop's `'L_140001010: loop`.
 std::optional<std::pair<QStringView, Address>>
 labelDefinition(QStringView line) {
   line = line.trimmed();

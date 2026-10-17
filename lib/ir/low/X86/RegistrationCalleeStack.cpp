@@ -442,7 +442,8 @@ public:
       if (Dec.init(Image)) {
         CFGBuilder Builder;
         Builder.setRegistrationCalleeIndex(&Owner);
-        const LowFunc Callee = Builder.build(Image, Dec, Target, "abi-stack");
+        const LowFunc Callee =
+            Builder.buildIntegerFrameProof(Image, Dec, Target, "abi-stack");
         StackBody Body(Image, Callee, Work);
         It->second = Callee.ExceptionMetadata
                          ? stackPopForRegistration(Body, Callee, Nested)

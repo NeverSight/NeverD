@@ -5,12 +5,14 @@
 #include "EngineClient.h"
 #include "QueryService.h"
 
+#include <QFileSystemWatcher>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointer>
 #include <QSet>
+#include <QTimer>
 #include <functional>
 #include <optional>
 
@@ -222,6 +224,9 @@ public:
   /// Keep \p rows as the project's bookmarks, shared with it beside the
   /// binary.
   void saveBookmarks(const QJsonArray &rows);
+  /// Take the project's files as they are on disk now, after git, another
+  /// tool or a person changed them.  It runs by itself when they change.
+  void syncProject();
   /// Whether the worker's engine keeps function edits.
   bool keepsFunctionEdits() const {
     return capabilities_.contains(QStringLiteral("function_create"));
@@ -360,6 +365,8 @@ signals:
   void contributionResult(const QJsonObject &result);
   /// The worker searches strings with new options; string views reload.
   void stringOptionsChanged();
+  /// The workbench's own project file \p suffix changed on disk.
+  void projectFileChanged(const QString &suffix);
 
 private:
   /// The operations the worker offers (its hello).
@@ -382,6 +389,12 @@ private:
   void requestTransition(const QString &action);
   void finishTransition();
   void refreshHistory();
+  /// Watch the project's files beside the input for changes on disk.
+  void watchProject();
+  QFileSystemWatcher projectWatcher_;
+  QTimer projectSync_;
+  /// Each project file's content when the workbench last looked at it.
+  QHash<QString, QByteArray> projectFiles_;
   void refreshContributions();
   /// Send the remembered string options, if any; \p announce reports them.
   void applyStringOptions(bool announce);

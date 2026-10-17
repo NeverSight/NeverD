@@ -1547,6 +1547,19 @@ bool CFGBuilder::buildNoReturnProof(const BinaryImage &Img, Decoder &Dec,
   return lowFunctionNeverReturns(Callee, Img.Arch, TailCalleeNeverReturns);
 }
 
+LowFunc CFGBuilder::buildIntegerFrameProof(const BinaryImage &Img, Decoder &Dec,
+                                           va_t Entry,
+                                           const std::string &Name) {
+  // Frame, stack-cleanup and integer-result proofs read no x87 state, and a
+  // call clobbers the same integer registers whichever register carries its
+  // result. The caller's registration analysis also runs before its own x87
+  // normalization, so its calls keep their decoded EAX results. Normalizing
+  // this callee would start a floating call proof whose graphs reach the
+  // caller's registration index again, with a fresh budget at each level.
+  llvm::SaveAndRestore<bool> RawStack(SkipX87StackFixup, true);
+  return build(Img, Dec, Entry, Name);
+}
+
 void CFGBuilder::recordSkippedFpuFixup(const LowFunc &Func) {
   if (!CollectCallRegisterBody || !CollectCallRegisterBody->Complete)
     return;

@@ -117,6 +117,10 @@ struct HighExpr {
   /// For Call
   std::string CallTarget;
   va_t CallAddr = 0;
+  /// The address of the call instruction this call is, which copies of it
+  /// keep: a tail duplicated over a jump takes the jump's address, and work
+  /// sunk into both arms has none.  0 for a call no instruction makes.
+  va_t CallSiteAddr = 0;
   bool IsIndirectCall = false;
   int IndirectParamIdx = -1;
   /// Unresolved `INDIR_CALL` callee.  Not a printed argument.
@@ -189,6 +193,12 @@ bool isNonReturningSourceCall(const ExprPtr &Expression);
 /// A bound noreturn call or an exact unconditional source trap. Resumable
 /// debugger traps and unbound call spellings do not terminate source flow.
 bool isTerminatingHighCall(const ExprPtr &Expression);
+
+/// \p Kept as the one value that a merge of two equal statements leaves for
+/// it and \p Dropped.  Copies of one statement make the same calls, which
+/// keep their call instructions; calls two instructions made keep none, as
+/// one call now stands for both (HighExpr::CallSiteAddr).
+ExprPtr withMergedCallSites(const ExprPtr &Kept, const ExprPtr &Dropped);
 
 //===----------------------------------------------------------------------===//
 // Statements (structured control flow)

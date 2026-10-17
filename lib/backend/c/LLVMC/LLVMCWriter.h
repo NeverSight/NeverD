@@ -110,8 +110,12 @@ public:
   void writeModuleBody(llvm::Module &Mod);
   /// The program's records \p Text names, as its local types define them
   /// (CEmitterOptions::RecordDefinitions), and the typedefs of their tags
-  /// it spells them by.
+  /// it spells them by; a record only a pointer names, which they do not
+  /// define, is declared incomplete.
   void writeRecordDefinitions(llvm::StringRef Text);
+  /// A pointer to \p Record, by its tag, which the unit then declares; empty
+  /// when the record has no C name.
+  std::string recordPointerSpelling(const NdType &Record);
   void writeStructDefs(llvm::Module &Mod);
   std::string aggregateMemberPath(llvm::Type *Ty,
                                   llvm::ArrayRef<unsigned> Indices);
@@ -239,6 +243,8 @@ public:
   /// information or the local types, which the code computes with as
   /// integers.
   std::set<const llvm::Argument *> PointerParams;
+  /// The tags recordPointerSpelling spelled.
+  std::set<std::string> RecordPointerTags;
   /// The pointer type the signature returns, where the code returns it as
   /// an integer; empty otherwise.
   std::string PointerReturnType;
@@ -791,6 +797,10 @@ public:
   /// Calls currently being printed as expressions, so a cyclic reprint
   /// falls back to the instruction name.
   std::vector<const llvm::CallBase *> RenderingCalls;
+  /// The records whose members the text reads, by their names in the
+  /// source, which writeRecordDefinitions has the local types define: the
+  /// text reaches them through members and need not spell them.
+  mutable std::set<std::string> MemberRecords;
   mutable std::map<const llvm::Value *, std::string> KnownImmediates;
   bool UseScalarExpressionTypes = false;
   std::set<std::string> ScopedScalarNames;
@@ -886,6 +896,8 @@ public:
   /// the same value. Survives per-block `AllocaImmediates` resets.
   std::map<const llvm::AllocaInst *, std::string> OmittedAllocaImmediates;
   std::optional<FunctionSym> DebugFn;
+  /// DebugFn's parameters are the function's arguments in order.
+  bool DebugPositional = true;
   TypeRef DebugThisRecord;
   const llvm::Argument *DebugThisArg = nullptr;
   /// The type the debug information gives each parameter.

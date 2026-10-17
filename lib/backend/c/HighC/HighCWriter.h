@@ -45,6 +45,9 @@
 
 namespace neverd {
 
+/// The attribute that spells \p CC on a declaration, empty for none.
+llvm::StringRef debugCallConvAttribute(DebugCallConv CC);
+
 /// Internal writer that converts HighIR functions to C source text.
 /// Split across HighCEmitter.cpp (module-level orchestration),
 /// HighCFuncWriter.cpp (function rendering), HighCStmtWriter.cpp (statement
@@ -121,6 +124,16 @@ public:
   /// (HighCSourceNames.cpp).
   void recordSourceNames(const std::vector<HighFunc> &Funcs);
   void writeSourceRecordDeclarations(const std::vector<HighFunc> &Funcs);
+  /// The records the unit declares a typedef of their own name for, which
+  /// it can spell by that name alone.
+  std::set<std::string> RecordTypedefs;
+  /// Whether the unit can spell \p Type, a pointer to a named record, by
+  /// the record's name alone.
+  bool spellsRecordPointer(const TypeRef &Type) const;
+  /// Whether the unit defines \p Record where code reads its members: the
+  /// program's local types define the records a unit names
+  /// (RecordDefinitions), and a record they leave out stays incomplete.
+  bool definesRecord(const TypeRef &Record) const;
   /// Asks the program's local types for the definitions of the records the
   /// unit names (CEmitterOptions::RecordDefinitions), and keeps the names
   /// they declare from the unit's own.
@@ -434,6 +447,9 @@ public:
     TypeRef ElemType;
   };
   std::optional<TypedIndexAccess> typedIndexAccess(const HighExpr &Addr);
+  /// The member \p Load reads: one of its width, else one of another width
+  /// it reads as it is, but never a whole record, whose bytes no scalar is.
+  std::optional<std::string> loadedMemberAccess(const HighExpr &Load) const;
   std::optional<std::string>
   typedMemberAccess(const HighExpr &Addr, uint16_t AccessSize = 0,
                     bool EnterNestedAtZero = true) const;

@@ -2,6 +2,7 @@
 #include "Protocol.h"
 
 #include <filesystem>
+#include <functional>
 #include <string_view>
 
 namespace neverd::worker {
@@ -27,7 +28,13 @@ public:
   Json next(bool redo) const;
   void advance(bool redo);
   void persist(const Json &state);
+  /// Called after each persist commits the project's files.
+  void onCommit(std::function<void()> hook) { committed_ = std::move(hook); }
   void reset();
+  /// Whether the project's files hold what this history last committed and
+  /// its commands describe them: false after git, another tool or a person
+  /// changed the files.
+  bool current() const;
   std::string blockedReason() const { return blocked_; }
   void verifyLoadedState(const Json &state);
   static Json normalizedState(Json state);
@@ -42,6 +49,7 @@ private:
   std::uintmax_t fileSize_ = 0;
   std::filesystem::file_time_type fileTime_;
   AtomicWriter writer_;
+  std::function<void()> committed_;
   Json commands_ = Json::array(), committedState_, previousDocument_;
   std::size_t cursor_ = 0;
   Json diskState() const;

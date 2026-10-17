@@ -122,6 +122,7 @@ omittedDirectCalleeSignatures(const BinaryImage &Img,
       Converter.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
       Converter.setCallArgumentSources(&Result.CallArgumentSources);
       Converter.setCallEntryStackArgs(&Result.CallEntryStackArgs);
+      Converter.setCallEntryStackSlots(&Result.CallEntryStackSlots);
       MedFunc Med = Converter.convert(Low, Img.Arch, Img.abiFormat());
       size_t MedOperations = 0;
       for (const auto &Block : Med.Blocks)

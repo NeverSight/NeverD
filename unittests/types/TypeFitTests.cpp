@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/types/TypeFit.h"
+#include "neverd/types/TypeJSON.h"
 #include "neverd/types/TypeParse.h"
 
 #include <gtest/gtest.h>
@@ -191,6 +192,25 @@ TEST(TypeFit, RanksRecordsByTheAccessesTheyHold) {
   EXPECT_EQ(memberPathText(Best.Fits[3].Path), "RundownRoutine");
   // A record too small for them comes after those that hold them.
   EXPECT_GT(Found.back().Outside, 0u);
+}
+
+TEST(TypeFit, ASearchSpellsEachTypeAsItAlone) {
+  // The types a search found share one reading of the library's names, and
+  // read as each does alone.
+  const TypeLibrary Library = kernel();
+  FitQuery Query;
+  Query.Accesses = initializeApc();
+  const std::vector<TypeFit> Found = fitTypes(Library, Query);
+  ASSERT_GT(Found.size(), 1u);
+  for (BuiltinSpelling Spelling :
+       {BuiltinSpelling::Portable, BuiltinSpelling::Windows}) {
+    const llvm::json::Array All = typeFitsJSON(Library, Found, Spelling);
+    ASSERT_EQ(All.size(), Found.size());
+    for (size_t I = 0; I < Found.size(); ++I)
+      EXPECT_EQ(All[I],
+                llvm::json::Value(typeFitJSON(Library, Found[I], Spelling)))
+          << Found[I].Type->Name;
+  }
 }
 
 TEST(TypeFit, FindsWhereAPointerIntoARecordPoints) {

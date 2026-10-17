@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -107,6 +108,9 @@ public:
   /// Closes a record of \p Size and \p Alignment.
   Step finish(uint64_t Size, uint32_t Alignment) const;
   uint64_t end() const { return End; }
+  /// Counts the bytes up to \p Byte as taken, as bit-fields packed into
+  /// them take them.
+  void cover(uint64_t Byte) { End = std::max(End, Byte); }
 
 private:
   uint32_t Pack;

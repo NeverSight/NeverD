@@ -123,6 +123,7 @@ public:
   BionicResult invoke(NativeCallEvent &Call);
   BionicResult finishCallback(const GuestCallback &Callback);
   BionicResult resumeMutex(uint64_t Address, uint16_t Attributes);
+  BionicResult resumeSemaphore(uint64_t Address, bool Shared);
   llvm::Error jniThreadExit();
   llvm::Error initializeDex();
 
@@ -302,6 +303,11 @@ private:
   class IntegerScanner;
   BionicResult scan(const NativeCallEvent &Call);
   class Mutex;
+  BionicResult semaphore(const NativeCallEvent &Call);
+  BionicResult semaphoreWait(uint64_t Address, uint32_t Word, bool TryOnly);
+  llvm::Error semaphoreAccess(uint64_t Address, unsigned Permissions);
+  llvm::Expected<uint32_t> readSemaphore(uint64_t Address);
+  llvm::Error writeSemaphore(uint64_t Address, uint32_t Word);
   BionicResult mutex(const NativeCallEvent &Call);
   BionicResult resetMutexAttribute(const NativeCallEvent &Call, uint64_t Value);
   BionicResult initializeMutexAttribute(const NativeCallEvent &Call);

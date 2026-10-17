@@ -403,6 +403,35 @@ TEST(X86_32_FunctionDiscovery, RecoversAlignedThiscallVtableStoreThunk) {
       << "expected 16-byte-aligned mov [ecx], imm32 destructor thunk";
 }
 
+TEST(X86_32_FunctionDiscovery, KeepsAnExportThatEndsAtANoReturnImport) {
+  // The entry returns.  Finish, which only its export names, ends at the
+  // last bytes of .text calling ExitProcess through its import slot:
+  //   mov eax, [esp+4]; cmp eax, 4; jge exit; inc eax; ret
+  //   exit: push eax; call dword ptr [0x402000]
+  std::vector<uint8_t> Bytes(0x10, 0xCC);
+  Bytes[0] = 0xC3;
+  const uint8_t Finish[] = {0x8B, 0x44, 0x24, 0x04, 0x83, 0xF8,
+                            0x04, 0x7D, 0x02, 0x40, 0xC3, 0x50,
+                            0xFF, 0x15, 0x00, 0x20, 0x40, 0x00};
+  Bytes.insert(Bytes.end(), std::begin(Finish), std::end(Finish));
+  BinaryImage Img = makePeText(std::move(Bytes));
+  Import Exit;
+  Exit.Name = "ExitProcess";
+  Exit.IATAddr = 0x402000;
+  Img.Imports.push_back(Exit);
+  Export Exp;
+  Exp.Name = "Finish";
+  Exp.Addr = 0x401010;
+  Img.Exports.push_back(Exp);
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X86));
+  FuncDetector Detector;
+  EXPECT_TRUE(hasEntry(Detector.detect(Img, Dec), 0x401010))
+      << "the call through ExitProcess's slot does not return to run past "
+         ".text";
+}
+
 TEST(X86_32_FunctionDiscovery, DecompileIncludesImportStubs) {
   std::vector<uint8_t> Bytes(0x20, 0xCC);
   // jmp dword ptr [0x402000]

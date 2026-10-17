@@ -373,12 +373,10 @@ const char *neverd_local_types_fit_json(neverd_session_t Sess,
     Accesses.push_back(llvm::json::Object{{"offset", Access.Offset},
                                           {"size", Access.Bytes},
                                           {"use", useName(Access.Use)}});
-  llvm::json::Array Candidates;
-  for (const types::TypeFit &Fit : Found)
-    Candidates.push_back(types::typeFitJSON(*Library, Fit, *Spelling));
-  llvm::json::Object Out{{"accesses", std::move(Accesses)},
-                         {"candidates", std::move(Candidates)},
-                         {"total", Total}};
+  llvm::json::Object Out{
+      {"accesses", std::move(Accesses)},
+      {"candidates", types::typeFitsJSON(*Library, Found, *Spelling)},
+      {"total", Total}};
   if (Target)
     Out["target"] = std::move(*Target);
   return dupStr(jsonToString(llvm::json::Value(std::move(Out))));

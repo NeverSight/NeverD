@@ -2144,6 +2144,7 @@ TEST_P(DarwinProcess, LoginBufferPreservesExactBytesZeroLengthAndAuthority) {
     EXPECT_EQ(Missing->Diagnostic,
               "Darwin login buffer observation is not configured");
     EXPECT_EQ(Missing->StandardOutput, "!");
+    ASSERT_FALSE(Missing->Services.empty()) << Missing->Diagnostic;
     EXPECT_EQ(Missing->Services.back().Number, Class + 49);
     EXPECT_FALSE(Missing->Services.back().Result);
   }

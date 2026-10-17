@@ -681,7 +681,7 @@ the status line names it. The file opens as one read and execute segment,
 `seg000`, with `start` at the entry point; idle-time function discovery finds
 the functions its calls reach and, in x86-64 code, the functions it takes the
 address of (`lea rdi, [rip+main]`). The engine keeps the choice, the detected
-platform with it, in `<input>.neverd-load.json` (packed into the `.nddb`), so
+platform with it, in the project folder's `load.json` (packed into the `.nddb`), so
 the file reopens the same way without the dialog. The command line takes the
 same choice with `--loader binary --processor aarch64 --load-base 0x80000`
 (plus `--load-offset`, `--load-size`, `--load-entry` and `--platform
@@ -837,50 +837,99 @@ command line, `--pdb <file> --pdb-unverified` makes the same choice for one run.
 
 ## Saving and sharing a project
 
-A binary's project is a set of JSON files beside it, named after it: `ls` keeps
-`ls.neverd-renames.json` and its siblings. Renames, function edits, data items,
-operand formats, code edits, local types, bookmarks and the debug files chosen
-are written as they are made; comments are staged until **File → Save**
-(Ctrl+W) writes them. Saving and quitting write no database.
+A binary's project is one folder beside it, named after it: `ls` keeps its
+project in `ls.neverd/`. Renames, function edits, data items, operand
+formats, code edits, local types, bookmarks and the debug files chosen are
+written as they are made; comments are staged until **File → Save** (Ctrl+W)
+writes them. Saving and quitting write no database.
 
-The files are meant for version control. A teammate who clones a repository
-holding the binary and its shared files opens the same analysis by opening the
-binary. Each table is written with two-space indentation and sorted keys, and
-the command line writes the same bytes as the workbench, so a diff shows only
-the edits. A table written by an older version is compact JSON, and its first
-change after an update rewrites it whole once.
-
-| File (`<input>` + suffix) | Holds | In version control |
-| --- | --- | --- |
-| `.neverd-annotations.json` | Comments | Commit |
-| `.neverd-renames.json` | Renames | Commit |
-| `.neverd-functions.json` | Created, deleted and edited functions | Commit |
-| `.neverd-items.json` | Code and data definitions | Commit |
-| `.neverd-operands.json` | Operand formats | Commit |
-| `.neverd-code.json` | Pseudocode edits, such as variable names and number bases | Commit |
-| `.neverd-types.json` | Local types | Commit |
-| `.neverd-load.json` | How a binary file is read | Commit |
-| `.neverd-bookmarks.json` | Bookmarks | Commit |
-| `.neverd-debug.json` | The PDB, DWARF, MAP and symbol table choices | Commit |
-| `.neverd-history.json` | Undo and redo history | Ignore |
-| `.neverd-journal.json` | The write-ahead journal of an interrupted save | Ignore |
-| `.neverd-workbench.json` | Your location, graph mode and desktop | Ignore |
-| `.neverd-gui.lock` | The writer lock | Ignore |
-
-A suitable `.gitignore`:
-
-```gitignore
-*.neverd-history.json
-*.neverd-journal.json
-*.neverd-workbench.json
-*.neverd-gui.lock
-*.nddb
+```text
+ls                      the binary
+ls.neverd/              its project: commit the folder
+  project.json          which build of the binary the files describe
+  annotations.json      comments
+  renames.json          renames
+  functions.json        created, deleted and edited functions
+  items.json            code and data definitions
+  operands.json         operand formats
+  code.json             pseudocode edits: local names, line comments, number bases
+  types.json            local types
+  load.json             how a binary file is read
+  bookmarks.json        bookmarks, as neverd bookmarks keeps them too
+  debug.json            the PDB, DWARF, MAP and symbol table choices
+  .gitattributes        *.json merge=neverd text eol=lf
+  .gitignore            /local/
+  local/                each user's own, outside version control
+    history.json        undo and redo history
+    journal.json        the write-ahead journal of an interrupted save
+    workbench.json      your location, graph mode and desktop
+    writer.lock         the writer lock
 ```
 
-A debug file inside the project's folder is recorded relative to it, so the
-choice holds in a clone that keeps the file. Bookmarks made before projects
-kept them stay in the machine's settings and still show; the next bookmark
-writes them all into the project.
+The folder is meant for version control: a team shares a project through git
+as it shares source, without a project server. It brings its own
+`.gitignore`, which leaves each user's `local/` out, and `.gitattributes`. A
+teammate who clones a repository holding the binary and its project folder
+opens the same analysis by opening the binary. Each table is written with
+two-space indentation, sorted keys and its rows by address, and the command
+line writes the same bytes as the workbench, so a diff shows only the edits.
+Files an older NeverD kept beside the binary (`ls.neverd-renames.json` and
+its siblings) move into the folder the first time the binary opens.
+
+`project.json` records which build of the binary the project describes: its
+name, size and SHA-256. A project opened with another build, as after a pull
+brought a new binary but not its project, says so in the output window: its
+addresses may not match. The next edit records the build it was made on.
+
+### Working in a team through git
+
+Run `neverd setup-git` once in each clone of the repository: it sets the
+clone's merge driver, `neverd merge-project`, which the folders'
+`.gitattributes` ask for, in its git configuration, which git does not share.
+Commit the binary with its project folder; a large binary suits Git LFS.
+
+- **Pulling while the project is open.** The workbench watches the project
+  folder. When git, another tool or a person changes its files, it loads them
+  as they are, says so in the output window, and starts the undo history
+  there. A comment not saved yet stays on top of what arrived. Files changed
+  while no workbench had the project open are taken the same way when it
+  opens.
+- **Merging.** Two people's edits at different addresses merge without a
+  conflict, whichever rows they are beside: the merge driver merges each table
+  row by row and a row field by field, and writes the result as the workbench
+  writes the file. Only a row both changed differently is a conflict, marked
+  as git marks one, both versions in full. Keep one, delete the markers and
+  commit. A project file that still holds markers is named when the project
+  opens or reloads, and is not loaded until it is resolved.
+- **Without the driver**, as in a clone that has not run `neverd setup-git`,
+  git merges the files line by line: rows added beside each other conflict.
+
+### The files for scripts and AI agents
+
+Each table is a JSON array of rows, one row per address, `"addr"` a
+lowercase hexadecimal string such as `"0x401a2c"`:
+
+| Table | A row's other fields |
+| --- | --- |
+| annotations | `text` |
+| renames | `original`, `renamed` |
+| functions | `state` (`created` or `deleted`), `noreturn`, `library`, `static`, `color`, `type` (a C declaration) |
+| items | `kind`, `size`, `encoding` |
+| operands | `operands`: `[{"operand", "base", "negate", "invert", "type", "delta"}]` |
+| code | `views`: per representation, local `names`, line `comments` and number bases |
+| bookmarks | `name`, `note` |
+
+`types.json` is a list of declarations, `{"language", "source"}` in the order
+they read, and `{"forget": [names]}` for types removed. A script or an agent
+can edit the files directly, and an open workbench takes the change at once;
+or it can use the command line (`neverd annotate`, `rename`, `function-edits`,
+`items`, `operands`, `bookmarks`) while no workbench holds the project, or the
+workbench's MCP connection while one does.
+
+A debug file in the binary's folder or below it is recorded relative to that
+folder, so the choice holds in a clone that keeps the file. Bookmarks made
+before projects kept them stay in the machine's settings and still show; the
+next bookmark writes them all into the project.
 
 ## Databases
 
@@ -936,7 +985,7 @@ through an operating-system advisory lock.
 inside another function or in code nothing reaches; **Delete function** stops
 treating the current function as one. The last edit at an address decides over
 symbols, the function detector and analysis, and the edits are kept in
-`<input>.neverd-functions.json`, which the command line reads too (`neverd
+the project folder's `functions.json`, which the command line reads too (`neverd
 function-edits <input> --create <address>`, `--delete <address>`, `--list`).
 A function edit drops whole-program analysis results: analysis continues
 function by function until **Analyze** runs again.
@@ -973,7 +1022,7 @@ as `sub_1234`; the engine keeps these rules for every front end
 (`neverd_name_check`), and the listing adds its own names, such as a string's.
 A local copy may take an import's name, as a PDB or a map file names one,
 although the listing, which jumps by name, refuses it. Names are kept in
-`<input>.neverd-renames.json`, which the command line reads and writes too
+the project folder's `renames.json`, which the command line reads and writes too
 (`neverd rename <input> --addr <address> --to <name>`, `--clear`).
 
 **Edit → Code** (C) defines native instructions from the selected byte through
@@ -993,7 +1042,7 @@ analysis reads in them. D or A inside undefined bytes takes just the bytes the
 new item needs and leaves the rest undefined, and each press is one step of
 undo history. Automatic code belongs to its function and cannot be made data
 without deleting that function; code defined with C can be replaced or undefined. The items
-are kept in `<input>.neverd-items.json`, which the command line reads and
+are kept in the project folder's `items.json`, which the command line reads and
 writes too (`neverd items <input> --data <address> --size 4`, `--string
 <address>`, `--undefine <address> --size <n>`, `--clear <address>`).
 
@@ -1007,7 +1056,7 @@ the cursor elsewhere on the line, the line's last number does, and a line
 without one is refused. Only x86 instructions show operand types so far. A form
 the value cannot take, such as characters for unprintable bytes or an offset to
 an address with no name, leaves the listing's number. Each change is one step
-of undo history and is kept in `<input>.neverd-operands.json`, which the command
+of undo history and is kept in the project folder's `operands.json`, which the command
 line reads and writes too (`neverd operands <input> --addr <address> --operand 1
 --base decimal`, `--negate`, `--invert`, `--clear`; the address lies in
 executable code).
@@ -1054,7 +1103,7 @@ pointer to a local type. The types are ranked by what the function does
 through the register the parameter arrives in, with the same preview of each
 access as a structure offset, and the parameter can take a new name in the
 same step. Either change is one step of undo history, kept in
-`<input>.neverd-functions.json`; callers see the new prototype. Names the user
+the project folder's `functions.json`; callers see the new prototype. Names the user
 gave the function's locals stay while the code keeps its locals. The command
 line does the same (`neverd function-edits <input> --declaration <entry>`,
 `--retype '0=struct _KAPC *Apc' --apply`, `--check '<declaration>'`,

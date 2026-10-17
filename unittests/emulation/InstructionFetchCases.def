@@ -20,6 +20,9 @@ NEVERD_FETCH_VALUE(X64PatchOffset, 3)
 NEVERD_FETCH_VALUE(ARMPatchOffset, 4)
 NEVERD_FETCH_VALUE(ARMReplacement, 0xd28002c0)
 NEVERD_FETCH_VALUE(CrossingPrefix, 4)
+NEVERD_FETCH_VALUE(LoopIterations, 4096)
+NEVERD_FETCH_VALUE(X64ChangedOperand, 0x1000b)
+NEVERD_FETCH_VALUE(ARMChangedOperand, 0x10b)
 #endif
 #ifdef NEVERD_FETCH_X64
 // movabs rax, 11; nop
@@ -34,6 +37,8 @@ NEVERD_FETCH_X64(Mixed, 0xb8, 0x78, 0x56, 0, 0, 0x89, 0x01, 0x0f, 0xb6, 0x11,
                  0x31, 0xc0, 0x85, 0xd2, 0x74, 0x05, 0x83, 0xc0, 0x07, 0xeb,
                  0x05, 0xb8, 0x63, 0, 0, 0, 0x90)
 NEVERD_FETCH_X64(Nop, 0x90)
+// inc rax; jmp back to inc
+NEVERD_FETCH_X64(Loop, 0x48, 0xff, 0xc0, 0xeb, 0xfb)
 // A truncated movabs has no immediate bytes on the following unmapped page.
 NEVERD_FETCH_X64(InvalidTail, 0x48, 0xb8)
 #endif
@@ -50,6 +55,8 @@ NEVERD_FETCH_ARM(Mixed, 0x528acf00, 0xb9000020, 0x39400022, 0x4a000000,
                  0x7100005f, 0x54000060, 0x11001c00, 0x14000002, 0x52800c60,
                  0xd503201f)
 NEVERD_FETCH_ARM(Nop, 0xd503201f)
+// add x0, x0, 1; b back to add
+NEVERD_FETCH_ARM(Loop, 0x91000400, 0x17ffffff)
 // Reserved encoding; unlike x64, aligned ARM64 fetches cannot straddle a page.
 NEVERD_FETCH_ARM(InvalidTail, 0xffffffff)
 #endif

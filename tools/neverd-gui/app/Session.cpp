@@ -93,7 +93,8 @@ void overlayProjectFiles(const QString &input,
           input, ProjectDatabase::BookmarksSuffix);
       bookmarks && bookmarks->isArray())
     state.insert(QLatin1String(ProjectDatabase::BookmarksState),
-                 compact(*bookmarks));
+                 compact(QJsonDocument(
+                     ProjectDatabase::bookmarkRows(bookmarks->array()))));
   if (const auto debug = ProjectDatabase::readProjectFile(
           input, ProjectDatabase::DebugFilesSuffix);
       debug && debug->isObject()) {
@@ -193,6 +194,15 @@ Session::Session(QString workerPath, QObject *parent)
                               total > 0 ? std::clamp(done / total, 0.0, 1.0)
                                         : -1.0);
           });
+  // A change on disk settles before the project takes it: git and editors
+  // write several files, some by replacing them.
+  projectSync_.setSingleShot(true);
+  projectSync_.setInterval(300);
+  connect(&projectSync_, &QTimer::timeout, this, &Session::syncProject);
+  connect(&projectWatcher_, &QFileSystemWatcher::directoryChanged,
+          &projectSync_, qOverload<>(&QTimer::start));
+  connect(&projectWatcher_, &QFileSystemWatcher::fileChanged, &projectSync_,
+          qOverload<>(&QTimer::start));
   startWorker();
 }
 
@@ -361,6 +371,10 @@ void Session::command(const QString &operation, const QJsonObject &payload,
           } else {
             const auto error = response.value("error").toObject();
             const auto code = error.value("code").toString(status);
+            // The project's files changed on disk before the workbench
+            // noticed: it takes them now, and the edit can be made again.
+            if (code == QLatin1String("foreign_edits"))
+              projectSync_.start();
             if (!silentFailure(status, code))
               setError(error.value("message").toString(code));
             if (failed)
@@ -376,6 +390,12 @@ void Session::command(const QString &operation, const QJsonObject &payload,
 }
 
 void Session::resetState() {
+  if (!projectWatcher_.directories().isEmpty())
+    projectWatcher_.removePaths(projectWatcher_.directories());
+  if (!projectWatcher_.files().isEmpty())
+    projectWatcher_.removePaths(projectWatcher_.files());
+  projectSync_.stop();
+  projectFiles_.clear();
   loaded_ = false;
   dirty_ = false;
   openedFromDatabase_ = false;
@@ -450,6 +470,9 @@ PreparedOpen unpackOrRestore(const QString &requested) {
                  QDir::toNativeSeparators(
                      QFileInfo(prepared.input).absolutePath())));
   }
+  // A project an older NeverD kept as files beside the input moves into its
+  // folder before anything reads it.
+  ProjectDatabase::migrate(prepared.input);
   prepared.database = ProjectDatabase::pathFor(prepared.input);
   if (!QFileInfo::exists(prepared.database))
     return prepared;
@@ -475,11 +498,18 @@ PreparedOpen unpackOrRestore(const QString &requested) {
   bool sidecarsPresent = false;
   for (const auto &suffix : ProjectDatabase::sidecarSuffixes())
     sidecarsPresent =
-        sidecarsPresent || QFileInfo::exists(prepared.input + suffix);
+        sidecarsPresent || QFileInfo::exists(ProjectDatabase::projectFilePath(
+                               prepared.input, suffix));
   if (!sidecarsPresent)
     for (auto it = contents->sidecars.cbegin(); it != contents->sidecars.cend();
          ++it) {
-      QSaveFile sidecar(prepared.input + it.key());
+      if (const auto error = ProjectDatabase::prepareFolder(prepared.input);
+          !error.isEmpty()) {
+        prepared.warnings.append(error);
+        break;
+      }
+      QSaveFile sidecar(
+          ProjectDatabase::projectFilePath(prepared.input, it.key()));
       if (!sidecar.open(QIODevice::WriteOnly) ||
           sidecar.write(it.value()) != it.value().size() || !sidecar.commit())
         prepared.warnings.append(QCoreApplication::translate(
@@ -594,6 +624,26 @@ void Session::sendOpen(const QString &requested, const QString &path,
         loaded_ = true;
         openedFromDatabase_ = ProjectDatabase::isDatabase(requested);
         recordDebugChoices(false);
+        // A project made for another build of the input, as after a pull
+        // brought a new binary but not its project, may not match it.
+        if (const auto project = payload.value("project").toObject();
+            project.value("recorded").isObject() &&
+            !project.value("matches").toBool(true))
+          emit message(
+              tr("The project's files describe another build of %1 (SHA-256 "
+                 "%2…); their addresses may not match this one. The next "
+                 "edit records this build.")
+                  .arg(QFileInfo(projectPath_).fileName(),
+                       project.value("recorded")
+                           .toObject()
+                           .value("sha256")
+                           .toString()
+                           .left(12)),
+              1);
+        // Files a pull or another tool changed since the last session leave
+        // the undo history behind them; the project takes them as they are,
+        // and watches them from now on.
+        syncProject();
         QSettings store;
         auto recent = store.value(settings::RecentFiles).toStringList();
         recent.removeAll(requested);
@@ -908,7 +958,8 @@ void Session::saveBookmarks(const QJsonArray &rows) {
   if (!loaded_ || readOnly())
     return;
   if (const auto error = ProjectDatabase::writeProjectFile(
-          filePath_, ProjectDatabase::BookmarksSuffix, QJsonDocument(rows));
+          filePath_, ProjectDatabase::BookmarksSuffix,
+          QJsonDocument(ProjectDatabase::bookmarkFile(rows)));
       !error.isEmpty()) {
     setError(error);
     return;
@@ -917,6 +968,69 @@ void Session::saveBookmarks(const QJsonArray &rows) {
     databaseDirty_ = true;
     emit stateChanged();
   }
+}
+
+void Session::watchProject() {
+  // The input's folder shows the project folder appear, as a pull or a
+  // first edit makes it; the project folder shows its files replaced.
+  projectWatcher_.addPath(QFileInfo(filePath_).absolutePath());
+  if (const QString folder = ProjectDatabase::projectFolder(filePath_);
+      QFileInfo(folder).isDir() &&
+      !projectWatcher_.directories().contains(folder))
+    projectWatcher_.addPath(folder);
+  const auto current = projectWatcher_.files();
+  for (const auto &suffix : ProjectDatabase::sidecarSuffixes()) {
+    const QString path = ProjectDatabase::projectFilePath(filePath_, suffix);
+    QFile file(path);
+    projectFiles_.insert(suffix, file.open(QIODevice::ReadOnly) ? file.readAll()
+                                                                : QByteArray());
+    // A file replaced as a whole is a new file to watch.
+    if (file.exists() && !current.contains(path))
+      projectWatcher_.addPath(path);
+  }
+}
+
+void Session::syncProject() {
+  if (!loaded_ || opening_ || !transition_.isEmpty())
+    return;
+  const auto before = std::exchange(projectFiles_, {});
+  watchProject();
+  if (projectFiles_ == before && !before.isEmpty())
+    return;
+  if (!before.isEmpty() &&
+      projectFiles_.value(QLatin1String(ProjectDatabase::BookmarksSuffix)) !=
+          before.value(QLatin1String(ProjectDatabase::BookmarksSuffix)))
+    emit projectFileChanged(QLatin1String(ProjectDatabase::BookmarksSuffix));
+  // A read-only project follows the writer's files as they are.
+  if (readOnly()) {
+    if (!before.isEmpty())
+      command(QStringLiteral("reload"), {}, {});
+    return;
+  }
+  if (!capabilities_.contains(QStringLiteral("project_sync")))
+    return;
+  command(
+      QStringLiteral("project_sync"), {},
+      [this](const QJsonObject &result) {
+        if (!result.value("changed").toBool())
+          return;
+        refreshHistory();
+        emit functionsChanged();
+        const qint64 kept = result.value("comments_kept").toInteger();
+        emit message(
+            kept ? tr("The project's files changed on disk and were loaded; "
+                      "undo starts here. Unsaved comments kept on top: %1")
+                       .arg(kept)
+                 : tr("The project's files changed on disk and were loaded; "
+                      "undo starts here."),
+            0);
+      },
+      [this](const QString &code, const QString &) {
+        if (code == QLatin1String("input_changed"))
+          emit message(tr("The input file changed on disk; reload it to "
+                          "continue editing."),
+                       1);
+      });
 }
 
 void Session::recordDebugChoices(bool loadedNow) {

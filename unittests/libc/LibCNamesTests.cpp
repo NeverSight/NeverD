@@ -817,22 +817,23 @@ TEST(IsNoReturnTarget, RestrictedLoadAnswersEachTargetOnDemand) {
 
 TEST(IsNoReturnTarget, ExportsAndDeclaredPrototypesNameNoReturnRoutines) {
   // The kernel calls the ExRaiseStatus it exports, which no symbol names
-  // without its PDB; a header library declares ExitProcess _Noreturn.
+  // without its PDB; the user declares AbandonRequest and PluginPanic
+  // _Noreturn, which no table names.
   BinaryImage Img;
   Export Raise;
   Raise.Name = "ExRaiseStatus";
   Raise.Addr = 0x1000;
   Img.Exports.push_back(Raise);
   Export Exit;
-  Exit.Name = "ExitProcess";
+  Exit.Name = "AbandonRequest";
   Exit.Addr = 0x2000;
   Img.Exports.push_back(Exit);
   Import Imported;
-  Imported.Name = "ExitThread";
+  Imported.Name = "PluginPanic";
   Imported.IATAddr = 0x3000;
   Img.Imports.push_back(Imported);
   const auto Declared = [](llvm::StringRef Name) {
-    return Name == "ExitProcess" || Name == "ExitThread";
+    return Name == "AbandonRequest" || Name == "PluginPanic";
   };
   const NoReturnTargetIndex Tables(Img);
   EXPECT_TRUE(Tables.contains(Img, 0x1000));

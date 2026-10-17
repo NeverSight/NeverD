@@ -8,10 +8,11 @@ of their own, and compiles each with clang, rustc and go, or runs it with
 python3, node or Lua 5.3+, tsc checking JavaScript's JSDoc too, so that a
 layout NeverD gets wrong, or source that does not compile, fails.  The C header, which the workbench shows as
 C/C++, compiles as C++ as well.  Without --binary it checks the fixture PDB
-the unit tests use; with --declare it checks the types C, C++, Rust or Go
-files declare, laid out for --data-model, such as a type library NeverD
-ships, and the prototypes they declare too.  A toolchain that is missing is
-reported and skipped.
+the unit tests use; with --binary, a program's own types, from its PDB or
+its DWARF; with --declare, the types C, C++, Rust or Go files declare, laid
+out for --data-model, such as a type library NeverD ships, and the
+prototypes they declare too.  A toolchain that is missing is reported and
+skipped.
 """
 from __future__ import annotations
 
@@ -297,13 +298,19 @@ def main():
         else:
             listing = json.loads(checker.neverd("--json"))
             model = listing.get("dataModel", "LLP64")
-            if listing.get("source") != "pdb" or not listing.get("types"):
+            if listing.get("source") not in ("pdb", "dwarf") or \
+                    not listing.get("types"):
                 sys.exit(f"{arguments.binary} has no local types to check")
-            mismatches = listing.get("stats", {}).get("nestingMismatches", [])
+            stats = listing.get("stats", {})
+            mismatches = stats.get("nestingMismatches", [])
             prototypes = 0
-            checker.report(f"{len(listing['types'])} types read, nesting holds",
+            checker.report(f"{len(listing['types'])} types read from "
+                           f"{listing['source']}, nesting holds",
                            "\n".join(f"{name} does not lay out as listed"
                                      for name in mismatches))
+            # What DWARF describes that local types leave out, with why.
+            for entry in stats.get("skipped", []):
+                print(f"left out {entry}")
         checker.c_family(model)
         if prototypes:
             checker.prototypes(model)

@@ -920,6 +920,12 @@ static void simplifyExprRecursive(ExprPtr &E, HighExprSet &Seen,
   else if (E->Op == NdOp::INT_MULT && E->Operands[1]->Kind == ExprKind::Const &&
            E->Operands[1]->ConstVal == 1)
     Replace(E->Operands[0]);
+  // A shift by zero, as AArch64's `tbz x, #0` tests bit 0 as `(x >> 0) & 1`.
+  else if ((E->Op == NdOp::INT_LEFT || E->Op == NdOp::INT_RIGHT ||
+            E->Op == NdOp::INT_ASHR) &&
+           isZeroConst(E->Operands[1]) && E->Type && E->Operands[0]->Type &&
+           E->Operands[0]->Type->Size == E->Type->Size)
+    Replace(E->Operands[0]);
 }
 
 bool simplifyAllExprs(std::vector<HighStmt> &Stmts) {

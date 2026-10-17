@@ -26,6 +26,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <optional>
 #include <set>
 #include <string>
@@ -191,6 +192,83 @@ TEST(I386CallContract, AThunkJumpingThroughTheSlotForwardsItsArguments) {
   EXPECT_NE(Call.find("arg0"), std::string::npos) << Call;
   EXPECT_NE(Call.find("arg1"), std::string::npos) << Call;
   EXPECT_EQ(Call.find("unknown value"), std::string::npos) << Call;
+}
+
+namespace {
+/// \p Code, at most 0x10 bytes at Text, which calls the thunk `_Validate@8`
+/// an import library links at Text + 0x10, `jmp dword ptr
+/// [__imp__Validate@8]`.
+BinaryImage imageWithStdcallThunk(std::vector<uint8_t> Code) {
+  EXPECT_LE(Code.size(), 0x10u);
+  Code.resize(0x10, 0xCC);
+  for (uint8_t B : {0xFF, 0x25, // jmp dword ptr [slot]
+                    static_cast<int>(slot(0) & 0xFF),
+                    static_cast<int>((slot(0) >> 8) & 0xFF),
+                    static_cast<int>((slot(0) >> 16) & 0xFF),
+                    static_cast<int>(slot(0) >> 24)})
+    Code.push_back(B);
+  BinaryImage Img = makeImage(std::move(Code), {"Validate"});
+  Img.Imports[0].Module = "kernelbase.dll";
+  Symbol Thunk = Symbol::makeFunc(Text + 0x10);
+  Thunk.Name = "_Validate@8";
+  Img.Symbols.push_back(std::move(Thunk));
+  return Img;
+}
+
+/// The HighC of `wrap` in \p Img.
+std::string wrapSource(const BinaryImage &Img) {
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries = {Text};
+  const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+  EXPECT_TRUE(Result.Success) << Result.Error;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Img.Arch;
+  Options.Format = Img.Format;
+  Options.Image = &Img;
+  EXPECT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  return Source.substr(std::min(Source.size(), Source.find(" wrap(")));
+}
+} // namespace
+
+TEST(I386CallContract, AStdcallThunkTakesTheSlotsItsNameSpells) {
+  // GCC loads an argument into EDX before it stores it, as MinGW's kernel32
+  // calls kernelbase's undocumented NlsValidateLocale: no header declares
+  // Validate, but its thunk's decoration says it pops two slots, so the
+  // call passes those and no register.
+  const std::string Call =
+      callIn(imageWithStdcallThunk({0x8B, 0x54, 0x24, 0x04, // mov edx, [esp+4]
+                                    0x6A, 0x00,             // push 0
+                                    0x52,                   // push edx
+                                    0xE8, 0x04, 0x00, 0x00,
+                                    0x00,   // call Text + 0x10
+                                    0xC3}), // ret
+             "Validate");
+  EXPECT_NE(Call.find("Validate(arg0, 0)"), std::string::npos) << Call;
+}
+
+TEST(I386CallContract, AStdcallImportPopsItsArguments) {
+  // The caller reads its own argument at [esp+4] after the call: the stack
+  // pointer is where it was before the pushes, since Validate popped them.
+  const std::string Source = wrapSource(
+      imageWithStdcallThunk({0x6A, 0x07,             // push 7
+                             0xFF, 0x74, 0x24, 0x08, // push [esp+8]
+                             0xE8, 0x05, 0x00, 0x00,
+                             0x00,                   // call Text + 0x10
+                             0x03, 0x44, 0x24, 0x04, // add eax, [esp+4]
+                             0xC3}));                // ret
+  EXPECT_NE(Source.find("Validate(arg0, 7)"), std::string::npos) << Source;
+  const size_t Return = Source.find("return ");
+  ASSERT_NE(Return, std::string::npos) << Source;
+  const std::string Result =
+      Source.substr(Return, Source.find(';', Return) - Return);
+  // Without the pop the read lands on the pushed 7.
+  EXPECT_NE(Result.find("arg0"), std::string::npos) << Source;
+  EXPECT_EQ(Result.find("+ 7"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
 }
 
 TEST(I386CallContract, ArgumentsStoredBelowOneAdjustmentAreAllPassed) {

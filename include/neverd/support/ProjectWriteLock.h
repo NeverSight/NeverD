@@ -2,6 +2,8 @@
 //-*-===//
 #pragma once
 
+#include "neverd/support/ProjectFiles.h"
+
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -18,18 +20,24 @@
 
 namespace neverd {
 // Writers use the same canonical input path, including short-lived CLI writes.
-// The lock file stays in place: removing it could split ownership across
-// inodes.
+// The lock file stays in place, in the project folder's local/: removing it
+// could split ownership across inodes.
 class ProjectWriteLock {
 public:
   explicit ProjectWriteLock(const std::filesystem::path &Binary) {
     std::error_code EC;
-    auto Path = std::filesystem::canonical(Binary, EC);
+    const auto Input = std::filesystem::canonical(Binary, EC);
     if (EC) {
       Error = EC.message();
       return;
     }
-    Path += ".neverd-gui.lock";
+    project_files::migrate(Input);
+    if (EC = project_files::prepare(Input); EC) {
+      Error = EC.message();
+      return;
+    }
+    const auto Path =
+        project_files::path(Input, project_files::File::WriterLock);
 #ifdef _WIN32
     Handle = CreateFileW(Path.c_str(), GENERIC_READ | GENERIC_WRITE,
                          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,

@@ -404,10 +404,11 @@ TEST(ELFARMEHABIPatch, LeavesImageAloneWithoutTableWhenModelNeedsOne) {
 
   const ELFARMEHABIRecord Record =
       makeGenericRecord(kFunc1VA, {0xA9, kFinish, kFinish});
+  // The index's own descriptors read from their LOAD mapping; the record's
+  // generic model needs a table to append its descriptor to.
   const std::string Text =
       errorText(installELFARMEHABIRecords(Bin, *Region, Record));
-  EXPECT_NE(Text.find("authenticated storage owner"), std::string::npos)
-      << Text;
+  EXPECT_NE(Text.find("declares no .ARM.extab"), std::string::npos) << Text;
   // A rejected install leaves the image exactly as it was.
   EXPECT_EQ(Bin, Before);
 }

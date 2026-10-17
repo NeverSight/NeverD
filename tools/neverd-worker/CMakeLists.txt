@@ -192,6 +192,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/function_edits_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerFunctionEdits PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+      add_test(NAME NeverDWorkerGitCollaboration
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/git_collaboration_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerGitCollaboration PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
       set(NEVERD_WORKER_CLI_EXECUTABLE "" CACHE FILEPATH "Optional real CLI for cross-process writer tests")
       if(TARGET neverd)
         set(_neverd_worker_test_cli "$<TARGET_FILE:neverd>")
@@ -207,6 +211,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
           COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/sidecar_parity_test.py"
                   "$<TARGET_FILE:neverd-worker>" "${_neverd_worker_test_cli}")
         set_tests_properties(NeverDWorkerCLISidecarParity PROPERTIES TIMEOUT 60)
+        add_test(NAME NeverDWorkerCLIGitMerge
+          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/git_collaboration_test.py"
+                  "$<TARGET_FILE:neverd-worker>" "${_neverd_worker_test_cli}")
+        set_tests_properties(NeverDWorkerCLIGitMerge PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
       endif()
     endif()
   endif()

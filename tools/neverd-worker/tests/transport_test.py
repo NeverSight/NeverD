@@ -146,10 +146,10 @@ def run(executable):
             assert refused["error"]["code"] == code, (wrong, refused)
         assert placed.call("open", {"path": str(firmware), "loader": "binary", "processor": "x86_64",
                                     "base": "0x400000"})["status"] == "ok"
-        kept = json.loads(Path(str(firmware) + ".neverd-load.json").read_text())
+        kept = json.loads(Path(str(firmware) + ".neverd/load.json").read_text())
         assert kept == {"loader": "binary", "processor": "x86_64", "base": "0x400000"}, kept
         assert placed.call("open", {"path": str(firmware), "loader": "evm"})["status"] == "ok"
-        assert json.loads(Path(str(firmware) + ".neverd-load.json").read_text()) == {"loader": "evm"}
+        assert json.loads(Path(str(firmware) + ".neverd/load.json").read_text()) == {"loader": "evm"}
         flag = client.call("open", {"path": str(binary), "analysis": "yes"})
         assert flag["error"]["code"] == "invalid_request", flag
         open_id = client.send("open", {"path": str(binary)}, fragmented=True)
@@ -194,9 +194,9 @@ def run(executable):
         note = "中文 تعليق 日本語 test"
         edit = client.call("annotation_set", {"address": BASE, "text": note}, revision=revision)
         assert edit["payload"]["dirty"] and not edit["payload"]["saved"]
-        assert not Path(str(binary) + ".neverd-annotations.json").exists()
+        assert not Path(str(binary) + ".neverd/annotations.json").exists()
         assert client.call("save")["payload"]["saved"]
-        saved = json.loads(Path(str(binary) + ".neverd-annotations.json").read_text(encoding="utf-8"))
+        saved = json.loads(Path(str(binary) + ".neverd/annotations.json").read_text(encoding="utf-8"))
         assert saved == [dict(addr=BASE, text=note)]
         renamed = client.call("rename", {"address": BASE, "name": "renamed_function"})
         assert renamed["payload"]["saved"]

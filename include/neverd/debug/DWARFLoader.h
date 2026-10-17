@@ -15,6 +15,8 @@
 
 #include "neverd/debug/DebugContext.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/Support/Error.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <cstdint>
@@ -25,6 +27,10 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+namespace llvm {
+class DWARFContext;
+} // namespace llvm
 
 namespace neverd {
 
@@ -147,6 +153,12 @@ public:
   std::vector<AuthenticatedRecordParameter>
   resolveAuthenticatedRecordParameters(va_t Entry) const override;
   bool hasInfo() const override;
+
+  /// Runs \p Use on the DWARF this context read, for a reader that walks
+  /// its units whole, such as the local type import; no other query reads
+  /// it meanwhile.  An error when the context read none.
+  llvm::Error withDWARFContext(
+      llvm::function_ref<llvm::Error(llvm::DWARFContext &)> Use) const;
 
 private:
   DWARFDebugContext() = default;

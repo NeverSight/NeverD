@@ -197,10 +197,15 @@ TEST_F(WebNative, CapturedBytesSurviveInputChangeAndWebSessionDestruction) {
 
 TEST_F(WebNative, NoCompanionDiscoveryOrPathDependentPersistence) {
   capture(nativeELF());
-  std::ofstream(Path + ".neverd-annotations.json")
-      << R"([{"addr":"400100","text":"SIDECAR_CANARY"}])";
-  std::ofstream(Path + ".neverd-renames.json")
-      << R"([{"addr":"400100","renamed":"SIDECAR_CANARY"}])";
+  // Canaries where a project keeps its files, and where an older NeverD did.
+  std::filesystem::create_directories(Path + ".neverd");
+  for (const char *Annotations :
+       {".neverd/annotations.json", ".neverd-annotations.json"})
+    std::ofstream(Path + Annotations)
+        << R"([{"addr":"400100","text":"SIDECAR_CANARY"}])";
+  for (const char *Renames : {".neverd/renames.json", ".neverd-renames.json"})
+    std::ofstream(Path + Renames)
+        << R"([{"addr":"400100","renamed":"SIDECAR_CANARY"}])";
   Native N;
   ASSERT_EQ(field(open(N), "status"), "ok");
   EXPECT_EQ(text(neverd_annotations_json(N.Handle)), "[]");

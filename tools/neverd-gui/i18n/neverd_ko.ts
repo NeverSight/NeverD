@@ -2638,6 +2638,22 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>데이터베이스를 저장했습니다: %1</translation>
     </message>
     <message>
+        <source>The project&apos;s files describe another build of %1 (SHA-256 %2…); their addresses may not match this one. The next edit records this build.</source>
+        <translation>프로젝트 파일이 %1의 다른 빌드(SHA-256 %2…)를 설명합니다. 주소가 이 빌드와 맞지 않을 수 있습니다. 다음 편집에서 이 빌드를 기록합니다.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here.</source>
+        <translation>프로젝트 파일이 디스크에서 변경되어 불러왔습니다. 실행 취소는 여기서부터 시작됩니다.</translation>
+    </message>
+    <message>
+        <source>The project&apos;s files changed on disk and were loaded; undo starts here. Unsaved comments kept on top: %1</source>
+        <translation>프로젝트 파일이 디스크에서 변경되어 불러왔습니다. 실행 취소는 여기서부터 시작됩니다. 그 위에 유지한 저장되지 않은 주석: %1</translation>
+    </message>
+    <message>
+        <source>The input file changed on disk; reload it to continue editing.</source>
+        <translation>입력 파일이 디스크에서 변경되었습니다. 계속 편집하려면 다시 불러오세요.</translation>
+    </message>
+    <message>
         <source>Could not save the database: %1</source>
         <translation>데이터베이스를 저장할 수 없습니다: %1</translation>
     </message>
@@ -3667,10 +3683,6 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
         <translation>이 PDB에는 정의된 형식이 없습니다.</translation>
     </message>
     <message>
-        <source>No local types: this program has no PDB with types.</source>
-        <translation>로컬 형식이 없습니다. 이 프로그램에는 형식이 있는 PDB가 없습니다.</translation>
-    </message>
-    <message>
         <source>Types that do not lay out as the PDB lists them: %1</source>
         <translation>PDB에 나열된 대로 배치되지 않는 형식: %1</translation>
     </message>
@@ -3935,6 +3947,24 @@ Load its names anyway? Names at the wrong addresses mislead the analysis.</sourc
     <message>
         <source>at %1, %2 bytes</source>
         <translation>%1, %2바이트</translation>
+    </message>
+    <message>
+        <source>From DWARF</source>
+        <translation>DWARF에서</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n from DWARF</source>
+        <translation>
+            <numerusform>DWARF에서 %n개</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The DWARF defines no types.</source>
+        <translation>DWARF에 정의된 타입이 없습니다.</translation>
+    </message>
+    <message>
+        <source>No local types: this program has no PDB or DWARF with types.</source>
+        <translation>로컬 타입 없음: 이 프로그램에는 타입이 있는 PDB나 DWARF가 없습니다.</translation>
     </message>
 </context>
 <context>

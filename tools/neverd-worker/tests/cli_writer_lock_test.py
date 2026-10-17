@@ -12,8 +12,8 @@ def run(worker, cli):
     with tempfile.TemporaryDirectory(prefix="neverd-cli-writer-lock-") as directory:
         binary = Path(directory) / "arithmetic.evm"
         binary.write_text("600160020100", encoding="ascii")
-        annotations = Path(str(binary) + ".neverd-annotations.json")
-        renames = Path(str(binary) + ".neverd-renames.json")
+        annotations = Path(str(binary) + ".neverd/annotations.json")
+        renames = Path(str(binary) + ".neverd/renames.json")
         commands = [[cli, "annotate", str(binary), "--add=0x0", "--text=CLI note"],
                     [cli, "rename", str(binary), "--func=evm_entry", "--to=reviewed_entry"]]
         def execute(args):

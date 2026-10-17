@@ -41,6 +41,7 @@
 #include <array>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <set>
 #include <span>
 
@@ -295,9 +296,15 @@ using dwarf_loader_detail::StrictAttributeLookup;
 struct DWARFDebugContext::Impl {
   std::unique_ptr<llvm::MemoryBuffer> BinaryBuf;
   std::unique_ptr<llvm::MemoryBuffer> DSYMBuf;
+  /// Held by the queries that read DwarfCtx after loading, whose lazy
+  /// caches no two readers may fill at once.
+  mutable std::mutex ContextMutex;
   /// The object's bytes with its compressed sections expanded, which the
   /// DWARF reader reads in its place (CompressedSections.h).
   std::vector<uint8_t> ExpandedBytes;
+  /// The object DwarfCtx reads, which it resolves a relocatable object's
+  /// relocations through whenever it reads a value: it outlives DwarfCtx.
+  std::unique_ptr<llvm::object::ObjectFile> Object;
   std::unique_ptr<llvm::DWARFContext> DwarfCtx;
 
   std::map<va_t, FunctionSym> FuncMap;
@@ -626,6 +633,7 @@ DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
                           << Ctx->PImpl->DwarfCtx->getNumCompileUnits()
                           << " compile units found" << "\n");
   Ctx->PImpl->parseCompileUnits(*Obj);
+  Ctx->PImpl->Object = std::move(Obj);
   Ctx->PImpl->Loaded = true;
 
   LLVM_DEBUG(llvm::dbgs() << "debug: loaded " << Ctx->PImpl->FuncList.size()
@@ -2047,6 +2055,7 @@ std::optional<SourceLoc> DWARFDebugContext::sourceLocation(va_t Addr) const {
   if (!PImpl || !PImpl->Loaded || !PImpl->DwarfCtx)
     return std::nullopt;
 
+  std::lock_guard<std::mutex> Guard(PImpl->ContextMutex);
   auto Info = PImpl->DwarfCtx->getLineInfoForAddress(
       {Addr, llvm::object::SectionedAddress::UndefSection});
   if (!Info || (Info->FileName.empty() && Info->Line == 0))
@@ -2057,6 +2066,15 @@ std::optional<SourceLoc> DWARFDebugContext::sourceLocation(va_t Addr) const {
   Loc.Line = Info->Line;
   Loc.Col = Info->Column;
   return Loc;
+}
+
+llvm::Error DWARFDebugContext::withDWARFContext(
+    llvm::function_ref<llvm::Error(llvm::DWARFContext &)> Use) const {
+  if (!PImpl || !PImpl->Loaded || !PImpl->DwarfCtx)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "no DWARF was read");
+  std::lock_guard<std::mutex> Guard(PImpl->ContextMutex);
+  return Use(*PImpl->DwarfCtx);
 }
 
 std::vector<FunctionSym> DWARFDebugContext::allFunctions() const {

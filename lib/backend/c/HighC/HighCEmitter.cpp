@@ -1683,6 +1683,22 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     OS << "typedef enum " << Name << " " << Name << ";\n";
   if (!RecordDefinitions.Enumerations.empty())
     OS << "\n";
+  // The unit spells the records the definitions name by their names alone
+  // too, as where a member it reads gives a local its type, unless an
+  // ordinary identifier of the unit's holds the name.
+  bool Typedefs = false;
+  for (const auto &[Tag, Union] : RecordDefinitions.Tags) {
+    const std::string Name = cNamedTypeSpelling(Tag);
+    if (Name.empty() || RecordTypedefs.count(Name) ||
+        GlobalIdentifierAllocator.holds(Name) || CallTargets.count(Name))
+      continue;
+    OS << "typedef " << (Union ? "union " : "struct ") << Name << " " << Name
+       << ";\n";
+    RecordTypedefs.insert(Name);
+    Typedefs = true;
+  }
+  if (Typedefs)
+    OS << "\n";
 }
 
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
@@ -1939,6 +1955,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         !DeclaredSyntheticRecords.insert(Record).second)
       return;
     OS << "typedef struct " << Record << " " << Record << ";\n";
+    RecordTypedefs.insert(Record);
   };
   for (const std::string &Name : ExternFuncs) {
     // CallTargets already contains the C identifier returned by

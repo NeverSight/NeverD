@@ -908,6 +908,18 @@ void MainWindow::connectSession() {
                                                  : QStringLiteral("cancel"));
             Q_UNUSED(action);
           });
+  // Bookmarks a pull or another tool changed show as the file has them.
+  connect(&session_, &Session::projectFileChanged, this,
+          [this](const QString &suffix) {
+            if (suffix != QLatin1String(ProjectDatabase::BookmarksSuffix))
+              return;
+            const auto file = ProjectDatabase::readProjectFile(
+                session_.filePath(), ProjectDatabase::BookmarksSuffix);
+            const auto rows = ProjectDatabase::bookmarkRows(
+                file ? file->array() : QJsonArray());
+            if (rows != bookmarks_)
+              showBookmarks(rows);
+          });
   connect(&session_, &Session::quitApproved, this, [this] {
     quitting_ = true;
     close();
@@ -1187,8 +1199,19 @@ void MainWindow::connectActions() {
                               QLineEdit::Normal, displayAddress(*address), &ok);
     if (!ok)
       return;
+    // Marking a marked address again renames its bookmark.
     auto rows = bookmarks();
-    rows.append(QJsonObject{{"address", hexAddress(*address)}, {"text", text}});
+    bool renamed = false;
+    for (auto &&value : rows)
+      if (auto row = value.toObject();
+          row.value("address").toString() == hexAddress(*address)) {
+        row.insert(QStringLiteral("text"), text);
+        value = row;
+        renamed = true;
+      }
+    if (!renamed)
+      rows.append(
+          QJsonObject{{"address", hexAddress(*address)}, {"text", text}});
     setBookmarks(rows);
   });
 

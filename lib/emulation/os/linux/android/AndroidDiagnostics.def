@@ -105,6 +105,12 @@ NEVERD_ANDROID_DIAGNOSTIC(ReallocationOwnership,
                           "realloc does not name a live allocation")
 NEVERD_ANDROID_DIAGNOSTIC(ImportPrefix, "unmodeled Android import: ")
 NEVERD_ANDROID_DIAGNOSTIC(PthreadAlignment, "unaligned pthread object")
+NEVERD_ANDROID_DIAGNOSTIC(SemaphoreAlignment, "unaligned semaphore word")
+NEVERD_ANDROID_DIAGNOSTIC(SemaphoreState, "invalid semaphore count state")
+NEVERD_ANDROID_DIAGNOSTIC(
+    SemaphoreBlocking, "sem_wait requires enabled guest-thread scheduling")
+NEVERD_ANDROID_DIAGNOSTIC(
+    SemaphoreWaitState, "semaphore sharing changed before waiter resumed")
 NEVERD_ANDROID_DIAGNOSTIC(MutexAttributeOperation,
                           "unmodeled mutex attribute operation")
 NEVERD_ANDROID_DIAGNOSTIC(MutexOperation, "unmodeled mutex operation")

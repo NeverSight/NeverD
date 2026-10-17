@@ -80,6 +80,7 @@ bool command(const QString &operation) {
                                         "undo",
                                         "redo",
                                         "history_reset",
+                                        "project_sync",
                                         "string_options",
                                         "contribution_register",
                                         "contribution_unregister",
