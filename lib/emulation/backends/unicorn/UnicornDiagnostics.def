@@ -103,7 +103,6 @@ NEVERD_UNICORN_DIAGNOSTIC(CannotRecursivelyExecuteACPUInstance,
                           "cannot recursively execute a CPU instance")
 NEVERD_UNICORN_DIAGNOSTIC(ExecuteGuestAfterException,
                           "execute guest after synchronous exception")
-NEVERD_UNICORN_DIAGNOSTIC(QueryCPUTimeout, "query CPU timeout")
 NEVERD_UNICORN_DIAGNOSTIC(ExecuteGuest, "execute guest")
 NEVERD_UNICORN_DIAGNOSTIC(InvalidateCPUTranslations,
                           "invalidate CPU translations")
