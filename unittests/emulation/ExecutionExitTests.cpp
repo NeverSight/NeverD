@@ -153,7 +153,7 @@ TEST(ExecutionExit, InstructionObserverCannotAdmitEffectsAfterDeadline) {
     };
     llvm::cantFail(CPU->installHooks(std::move(Hooks)));
     const auto Exit = llvm::cantFail(CPU->runUntilExit(Code, ShortTimeout));
-    EXPECT_EQ(Exit.Kind, ExecutionExitKind::Deadline);
+    ASSERT_EQ(Exit.Kind, ExecutionExitKind::Deadline);
     EXPECT_TRUE(Exit.DeadlineReached);
     EXPECT_FALSE(Exit.Fault);
     EXPECT_FALSE(CPU->fault());

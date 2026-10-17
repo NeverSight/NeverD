@@ -14,7 +14,7 @@ try:
   run('inventory-'+name,[J/'bin'/(name+'.exe'),'--gtest_list_tests'])
  run('deadline-boundary-baseline',[J/'bin/NeverDCPUEmulationTests.exe','--gtest_filter=ExecutionExit.InstructionObserverCannotAdmitEffectsAfterDeadline','--gtest_output=xml:'+str(E/'deadline-boundary-baseline.xml')])
  run('rust-baseline',[J/'bin/NeverDSourceDialectTests.exe','--gtest_filter=SourceDialect.RustViewComputesWhatCComputes:SourceDialect.BitFieldsOfTheProgramsTypesComputeWhatCComputes','--gtest_output=xml:'+str(E/'rust-baseline.xml')],300)
- selection='|'.join(re.escape(n)+'(?:  #.*)?$' for n in patterns)
+ selection='|'.join(re.escape(n)+'(  #.*)?$' for n in patterns)
  for threads in ['1',None]:
   env=dict(os.environ)
   if threads is None:env.pop('NEVERD_THREADS',None)

@@ -64,6 +64,13 @@ jobs:
       - name: Measure per-entry Unicorn timer retirement
         shell: bash
         run: build-windows-runtime/bin/NeverDWindowsTimerProbe.exe | tee build-windows-runtime/evidence/raw-timer.jsonl
+      - name: Preserve timer measurements before the C++ build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-runtime-baseline-timer-probe
+          path: build-windows-runtime/evidence/
+          if-no-files-found: error
+          retention-days: 14
       - name: Build the original failing owners
         shell: pwsh
         run: |
