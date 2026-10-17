@@ -270,3 +270,8 @@ endif()
 if(BUILD_TESTING)
     add_subdirectory(unittests)
 endif()
+
+# Disposable native timer diagnostic; never proposed for dev.
+add_executable(NeverDWindowsTimerProbe scripts/windows-runtime-timer-probe.c)
+target_link_libraries(NeverDWindowsTimerProbe PRIVATE unicorn)
+set_target_properties(NeverDWindowsTimerProbe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
