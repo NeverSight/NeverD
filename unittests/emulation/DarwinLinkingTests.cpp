@@ -9,11 +9,15 @@
 #include "os/darwin/kernel/DarwinEntropy.h"
 #include "os/darwin/kernel/DarwinFiles.h"
 #include "os/darwin/kernel/DarwinMemory.h"
+#include "os/darwin/process/DarwinCallbacks.h"
 #include "os/darwin/process/DarwinLibSystem.h"
 #include "os/darwin/process/DarwinProcess.h"
 
 #include "neverd/loader/MachO/MachOProgramLinking.h"
 
+#include <algorithm>
+#include <array>
+#include <map>
 #include <set>
 
 namespace neverd::emulation {
@@ -99,6 +103,249 @@ void appendULEB(std::vector<uint8_t> &Bytes, uint64_t Value) {
     Value >>= 7;
     Bytes.push_back(Byte | (Value ? 128 : 0));
   } while (Value);
+}
+struct BuiltinCall {
+  llvm::StringRef Name;
+  uint8_t Ordinal = 1;
+  int8_t Addend = 0;
+  bool Weak = false;
+};
+llvm::Expected<MachOProgramLinking> linking(const LinkingImage &I);
+// Ordinary eager imports with independently written symbol and binding tables.
+// No production writer, runtime gate address, or callback metadata is used.
+struct BuiltinImage : LinkingImage {
+  static constexpr size_t Strings = 33792, Payload = 34816;
+  BuiltinImage(bool Chained, bool X64, llvm::ArrayRef<BuiltinCall> Calls,
+               bool System = false)
+      : LinkingImage(Chained, X64) {
+    provider(darwin_model::value::LibCxxPath);
+    u32(Dependency + 20, 0x10000);
+    if (System) {
+      const auto At = command(LC_LOAD_DYLIB, 56);
+      u32(At + 8, 24);
+      const llvm::StringRef Name = darwin_model::value::LibSystemPath;
+      std::copy(Name.begin(), Name.end(), Bytes.begin() + At + 24);
+    }
+    std::fill(Bytes.begin() + 16384, Bytes.begin() + 16512, 0);
+    std::fill(Bytes.begin() + 32768, Bytes.end(), 0);
+    std::map<std::pair<std::string, unsigned>, unsigned> Names;
+    for (const auto &C : Calls)
+      Names.emplace(std::pair{C.Name.str(), unsigned(C.Ordinal)}, 0);
+    unsigned Index = 0, StringOffset = 1;
+    for (auto &[Identity, N] : Names) {
+      N = Index++;
+      const auto At = 32768 + N * 16;
+      u32(At, StringOffset);
+      Bytes[At + 4] = uint8_t(N_EXT) | uint8_t(N_UNDF);
+      Bytes[At + 7] = Identity.second;
+      for (const auto &C : Calls)
+        if (C.Name == Identity.first && C.Ordinal == Identity.second && C.Weak)
+          Bytes[At + 6] |= N_WEAK_REF;
+      std::copy(Identity.first.begin(), Identity.first.end(),
+                Bytes.begin() + Strings + StringOffset);
+      StringOffset += Identity.first.size() + 1;
+    }
+    u32(Symbols + 8, 32768);
+    u32(Symbols + 12, Names.size());
+    u32(Symbols + 16, Strings);
+    u32(Symbols + 20, StringOffset);
+    u32(Dynamic + 28, Names.size());
+    if (!Chained) {
+      u32(Fixups + 8, 0);
+      u32(Fixups + 12, 0);
+      std::vector<uint8_t> Program;
+      for (size_t I = 0; I < Calls.size(); ++I) {
+        const auto &C = Calls[I];
+        Program.push_back(0x10 | C.Ordinal);
+        Program.push_back(C.Weak ? 0x41 : 0x40);
+        Program.insert(Program.end(), C.Name.begin(), C.Name.end());
+        Program.insert(Program.end(), {0, 0x51, 0x72});
+        appendULEB(Program, I * 8);
+        // The fixture's signed addends fit one SLEB128 byte.
+        Program.insert(Program.end(), {0x60, uint8_t(C.Addend & 0x7f), 0x90});
+      }
+      Program.push_back(0);
+      std::copy(Program.begin(), Program.end(), Bytes.begin() + Payload);
+      u32(Fixups + 16, Payload);
+      u32(Fixups + 20, Program.size());
+    } else {
+      u32(Fixups + 8, Payload);
+      u32(Payload + 4, 32);
+      u32(Payload + 8, 72);
+      const auto NameStart = 72 + Calls.size() * 4;
+      u32(Payload + 12, NameStart);
+      u32(Payload + 16, Calls.size());
+      u32(Payload + 20, 1);
+      u32(Payload + 32, 3);
+      u32(Payload + 44, 16);
+      u32(Payload + 48, 24);
+      Bytes[Payload + 53] = 0x40;
+      Bytes[Payload + 54] = 2;
+      u64(Payload + 56, 16384);
+      Bytes[Payload + 68] = 1;
+      unsigned Offset = 0;
+      for (size_t I = 0; I < Calls.size(); ++I) {
+        const auto &C = Calls[I];
+        u32(Payload + 72 + I * 4,
+            C.Ordinal | (unsigned(C.Weak) << 8) | (Offset << 9));
+        std::copy(C.Name.begin(), C.Name.end(),
+                  Bytes.begin() + Payload + NameStart + Offset);
+        Offset += C.Name.size() + 1;
+        const uint64_t Next = I + 1 == Calls.size() ? 0 : 2;
+        u64(16384 + I * 8, (1ULL << 63) | (Next << 51) |
+                               (uint64_t(uint8_t(C.Addend)) << 24) | I);
+      }
+      u32(Fixups + 12, NameStart + Offset);
+    }
+  }
+  void provider(llvm::StringRef Name) {
+    assert(Name.size() < 32);
+    std::fill_n(Bytes.begin() + Dependency + 24, 32, 0);
+    std::copy(Name.begin(), Name.end(), Bytes.begin() + Dependency + 24);
+  }
+  void unbound(llvm::StringRef Name) {
+    const auto Count =
+        llvm::support::endian::read32le(Bytes.data() + Symbols + 12);
+    const auto Offset =
+        llvm::support::endian::read32le(Bytes.data() + Symbols + 20);
+    u32(32768 + Count * 16, Offset);
+    Bytes[32768 + Count * 16 + 4] = uint8_t(N_EXT) | uint8_t(N_UNDF);
+    Bytes[32768 + Count * 16 + 7] = 1;
+    std::copy(Name.begin(), Name.end(), Bytes.begin() + Strings + Offset);
+    u32(Symbols + 12, Count + 1);
+    u32(Symbols + 20, Offset + Name.size() + 1);
+    u32(Dynamic + 28, Count + 1);
+  }
+};
+void refusedBuiltin(const BuiltinImage &I, llvm::StringRef Reason,
+                    const ProcessOptions &Options = {}) {
+  darwin_test::TemporaryImage File(I);
+  auto R = darwin_model::loadImage(File.path(), darwin_model::macOSProfile(),
+                                   Options);
+  ASSERT_FALSE(bool(R));
+  const auto Message = llvm::toString(R.takeError());
+  EXPECT_NE(Message.find(Reason.str()), std::string::npos) << Message;
+}
+TEST(DarwinLinking, GuardProvidersShareTransportAndChargeExactMetadata) {
+  using namespace darwin_model;
+  const std::vector<std::vector<BuiltinCall>> Cases = {
+      {{"___cxa_guard_acquire"}},
+      {{"___cxa_guard_release"}, {"___cxa_guard_release"}},
+      {{"___cxa_guard_acquire"},
+       {"___cxa_guard_release"},
+       {"___cxa_guard_abort"}},
+      {{"___cxa_guard_acquire"}, {"___cxa_guard_acquire"}, {"_write", 2}}};
+  for (bool X64 : {false, true})
+    for (bool Chained : {false, true})
+      for (const auto &Calls : Cases) {
+        SCOPED_TRACE(testing::Message()
+                     << X64 << ':' << Chained << ':' << Calls.size());
+        const bool System = Calls.back().Ordinal == 2;
+        BuiltinImage I(Chained, X64, Calls, System);
+        auto Raw = linking(I);
+        ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+        ASSERT_EQ(Raw->Fixups.size(), Calls.size());
+        std::set<std::pair<std::string, unsigned>> Unique;
+        for (const auto &C : Calls)
+          Unique.emplace(C.Name.str(), C.Ordinal);
+        const uint64_t Metadata =
+            Raw->MetadataBytes + 256 + 16 * Calls.size() + 128 * Unique.size();
+        darwin_test::TemporaryImage File(I);
+        ProcessOptions Options;
+        Options.StackSize = 16384;
+        auto R = loadImage(File.path(), macOSProfile(), Options);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        EXPECT_EQ(R->MetadataBytes, Metadata);
+        EXPECT_EQ(R->Imports.size(), Unique.size());
+        ASSERT_EQ(R->Fixups.size(), Calls.size());
+        if (Calls.size() > 1 && Calls[0].Name == Calls[1].Name)
+          EXPECT_EQ(R->Fixups[0].Value, R->Fixups[1].Value);
+        ASSERT_EQ(R->Memory.Reserved.size(), 2u);
+        EXPECT_EQ(R->Memory.Reserved[0].Address, value::LibSystemGate);
+        EXPECT_EQ(R->Memory.Reserved[1].Address,
+                  value::LibSystemGate + R->Memory.PageSize);
+        EXPECT_EQ(R->Memory.Reserved[0].Size, R->Memory.PageSize);
+        EXPECT_EQ(R->Memory.Reserved[1].Size, R->Memory.PageSize);
+        EXPECT_FALSE(R->HasTLSCallbacks);
+        EXPECT_FALSE(R->HasGlobalCallbacks);
+        EXPECT_TRUE(R->ExecutableSpans.empty());
+        EXPECT_TRUE(R->Initializers.empty());
+        EXPECT_TRUE(R->TLS.empty());
+        Options.MemoryLimit = Metadata + R->Plan.MappedBytes +
+                              Options.StackSize + 3 * R->Memory.PageSize;
+        auto Exact = loadImage(File.path(), macOSProfile(), Options);
+        ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+        --Options.MemoryLimit;
+        auto Under = loadImage(File.path(), macOSProfile(), Options);
+        ASSERT_FALSE(bool(Under));
+        llvm::consumeError(Under.takeError());
+      }
+}
+TEST(DarwinLinking, GuardProviderIdentityAndCompatibilityAreClosed) {
+  for (bool X64 : {false, true})
+    for (bool Chained : {false, true}) {
+      for (const char *Name :
+           {"/usr/lib/libc++.dylib", "/usr/lib/libc++abi.dylib",
+            "@rpath/libc++.1.dylib"}) {
+        BuiltinImage I(Chained, X64, {{"___cxa_guard_acquire"}});
+        I.provider(Name);
+        refusedBuiltin(I, "provider");
+      }
+      for (auto Command : {LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB}) {
+        BuiltinImage I(Chained, X64, {{"___cxa_guard_acquire"}});
+        I.u32(I.Dependency, Command);
+        refusedBuiltin(I, "provider");
+      }
+      BuiltinImage Newer(Chained, X64, {{"___cxa_guard_acquire"}});
+      Newer.u32(Newer.Dependency + 20, 0x10001);
+      refusedBuiltin(Newer, "provider");
+      BuiltinImage Current(Chained, X64, {{"___cxa_guard_acquire"}});
+      Current.u32(Current.Dependency + 16, 0x7fff0102);
+      darwin_test::TemporaryImage File(Current);
+      auto R = darwin_model::loadImage(File.path(),
+                                       darwin_model::macOSProfile(), {});
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      for (const char *Name :
+           {"/usr/lib/libc++.1.dylib", "/usr/lib/libSystem.B.dylib"}) {
+        ProcessOptions Options;
+        Options.Darwin = DarwinProcessOptions{{{Name, File.path()}}};
+        refusedBuiltin(Current, "module catalogue", Options);
+      }
+    }
+}
+TEST(DarwinLinking, GuardClosureRejectsWrongProvidersAndUnboundSymbols) {
+  for (bool X64 : {false, true})
+    for (bool Chained : {false, true}) {
+      for (const char *Name : {"_read", "___cxa_finalize", "_dlopen",
+                               "dyld_stub_binder", "__tlv_bootstrap"}) {
+        BuiltinImage I(Chained, X64, {{Name}});
+        refusedBuiltin(I, std::string("libc++ import: ") + Name);
+      }
+      for (const char *Name : {"___cxa_guard_acquire", "___cxa_guard_release",
+                               "___cxa_guard_abort"}) {
+        BuiltinImage I(Chained, X64, {{Name}});
+        I.provider(darwin_model::value::LibSystemPath);
+        refusedBuiltin(I, std::string("libSystem import: ") + Name);
+      }
+      BuiltinImage Unbound(Chained, X64, {{"___cxa_guard_acquire"}});
+      Unbound.unbound("___cxa_guard_unexecuted");
+      refusedBuiltin(Unbound, "complete binding closure");
+      BuiltinImage Ordinal(Chained, X64, {{"___cxa_guard_acquire", 2}});
+      refusedBuiltin(Ordinal, "ordinal");
+    }
+}
+TEST(DarwinLinking, GuardFixupsRefuseWeakImportsAndNonzeroAddends) {
+  for (bool X64 : {false, true})
+    for (bool Chained : {false, true})
+      for (const char *Name : {"___cxa_guard_acquire", "___cxa_guard_release",
+                               "___cxa_guard_abort"}) {
+        BuiltinImage Weak(Chained, X64, {{Name, 1, 0, true}});
+        refusedBuiltin(Weak, std::string("libc++ import: ") + Name);
+        for (int8_t Addend : {-1, 1}) {
+          BuiltinImage I(Chained, X64, {{Name, 1, Addend}});
+          refusedBuiltin(I, std::string("libc++ import: ") + Name);
+        }
+      }
 }
 std::vector<uint8_t> lazyProgram(uint64_t Offset, llvm::StringRef Name,
                                  unsigned Fields = 7) {
@@ -431,6 +678,75 @@ TEST(DarwinLinking,
                     darwin_model::value::LibSystemGateStride);
   EXPECT_EQ(R->Imports.at(R->Fixups[2].Value),
             darwin_model::LibSystemGateKind::StubBinder);
+}
+TEST(DarwinLinking,
+     CallbackStoragePreservesPreviouslyAdmittedBaseAndTLSBudgets) {
+  using darwin_model::DarwinCallbacks;
+  // The previous 64-bit owner had 104 bytes before its one vector. Anchor
+  // that admitted footprint, including debug STL vector bookkeeping, rather
+  // than deriving the expected old budget from the new owner's sizeof.
+  static_assert(sizeof(void *) == 8);
+  const uint64_t Vector = sizeof(std::vector<std::array<uint64_t, 2>>);
+  const uint64_t Base = 104 + Vector;
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(false), Base);
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(true), Base + 1024 * 16);
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(false, true),
+            Base + 2 * Vector + 1024 * 24);
+  EXPECT_EQ(DarwinCallbacks::metadataBytes(true, true),
+            Base + 2 * Vector + 1024 * (16 + 24));
+}
+TEST(DarwinLinking,
+     RegistrationOnlyImagesReserveOriginalTargetsAndExactBudgets) {
+  const std::vector<std::vector<llvm::StringRef>> Calls = {
+      {"_write"},        {"_exit"},
+      {"__tlv_atexit"},  {"_atexit"},
+      {"___cxa_atexit"}, {"__tlv_atexit", "_atexit", "___cxa_atexit"}};
+  for (bool X64 : {false, true}) {
+    for (const auto &Names : Calls) {
+      SCOPED_TRACE(Names.front().str());
+      LazyImage I(Names, true, X64);
+      darwin_test::TemporaryImage File(I);
+      ProcessOptions Options;
+      Options.StackSize = 16384;
+      auto R = darwin_model::loadImage(File.path(),
+                                       darwin_model::macOSProfile(), Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      const bool TLS =
+          std::find(Names.begin(), Names.end(), "__tlv_atexit") != Names.end();
+      const bool Global =
+          std::find(Names.begin(), Names.end(), "_atexit") != Names.end() ||
+          std::find(Names.begin(), Names.end(), "___cxa_atexit") != Names.end();
+      EXPECT_TRUE(R->Initializers.empty());
+      EXPECT_EQ(R->HasTLSCallbacks, TLS);
+      EXPECT_EQ(R->HasGlobalCallbacks, Global);
+      EXPECT_EQ(!R->ExecutableSpans.empty(), TLS || Global);
+      Options.MemoryLimit = R->MetadataBytes + R->Plan.MappedBytes +
+                            Options.StackSize + 3 * R->Memory.PageSize;
+      auto Exact = darwin_model::loadImage(
+          File.path(), darwin_model::macOSProfile(), Options);
+      ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+      --Options.MemoryLimit;
+      auto Under = darwin_model::loadImage(
+          File.path(), darwin_model::macOSProfile(), Options);
+      ASSERT_FALSE(bool(Under));
+      llvm::consumeError(Under.takeError());
+    }
+  }
+}
+TEST(DarwinLinking,
+     GlobalAdmissionDoesNotInventGuardOrSelectiveFinalizationCalls) {
+  for (const char *Name :
+       {"___cxa_guard_acquire", "___cxa_guard_release", "___cxa_guard_abort",
+        "___cxa_finalize", "___cxa_finalize_ranges", "_dlopen", "_dlclose"}) {
+    LazyImage I({Name});
+    darwin_test::TemporaryImage File(I);
+    auto R =
+        darwin_model::loadImage(File.path(), darwin_model::macOSProfile(), {});
+    ASSERT_FALSE(bool(R)) << Name;
+    EXPECT_NE(llvm::toString(R.takeError())
+                  .find(std::string("libSystem import: ") + Name),
+              std::string::npos);
+  }
 }
 TEST(DarwinLinking, BinderRefusalPrecedesCFrameDecodingAndPreservesErrno) {
   using namespace darwin_model;

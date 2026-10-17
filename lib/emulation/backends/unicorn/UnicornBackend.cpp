@@ -104,6 +104,7 @@ struct UnicornBackend::Impl {
   bool InstructionRejected = false;
   uint64_t InstructionPC = 0;
   bool Timeout = false;
+  std::chrono::steady_clock::time_point Deadline;
   bool CallbackFailed = false;
   std::atomic<bool> Running{false}, StopRequested{false};
   bool DeviceCallbackActive = false;
@@ -207,7 +208,19 @@ struct UnicornBackend::Impl {
 
   bool effectsStopped() const {
     return MMIOFailed || CallbackFailed || FirstFault ||
-           (Running && StopRequested);
+           (Running && (StopRequested || Timeout));
+  }
+
+  bool interruptEntry() {
+    if (StopRequested) {
+      uc_emu_stop(Engine);
+      return true;
+    }
+    if (std::chrono::steady_clock::now() < Deadline)
+      return false;
+    Timeout = true;
+    uc_emu_stop(Engine);
+    return true;
   }
 
   llvm::Error deviceError() const {
@@ -341,6 +354,8 @@ struct UnicornBackend::Impl {
   static void code(uc_engine *, uint64_t Address, uint32_t Size, void *Opaque) {
     auto &S = *static_cast<Impl *>(Opaque);
     S.InstructionPC = Address;
+    if (S.interruptEntry())
+      return;
     S.invoke([&] {
       // Only a completed RAM store arms this notification: a pre-store hook
       // can be followed by a self-modifying-code retry at the same PC.
@@ -348,13 +363,14 @@ struct UnicornBackend::Impl {
       // fault or service request before this boundary keeps exit priority.
       if (std::exchange(S.PendingWriteWatch, false) && S.Hooks.MemoryWritten) {
         S.Hooks.MemoryWritten();
-        if (S.effectsStopped() || S.RecoverableFault)
+        if (S.effectsStopped() || S.RecoverableFault || S.interruptEntry())
           return;
       }
       if (S.Hooks.Instruction)
         S.Hooks.Instruction(Address, Size);
-      if (S.Architecture != GuestArchitecture::AArch64 || S.effectsStopped() ||
-          S.RecoverableFault)
+      if (S.effectsStopped() || S.RecoverableFault || S.interruptEntry())
+        return;
+      if (S.Architecture != GuestArchitecture::AArch64)
         return;
       auto E = executeUnicornAArch64Atomic(
           S.Engine, Address, *S.Memory, S.Exclusive,
@@ -1019,7 +1035,6 @@ llvm::Error UnicornBackend::runImpl(uint64_t PC, uint64_t TimeoutMicroseconds,
     return failure(unicornDiagnostic::CannotResumeAFaultedCPUInstance);
   if (State->Running)
     return failure(unicornDiagnostic::CannotRecursivelyExecuteACPUInstance);
-  // Unicorn treats zero as unbounded and converts microseconds to nanoseconds.
   // Apply the same finite budget admission as checked/native execution before
   // changing projections, registers or observations.
   auto Limit = makeExecutionDeadline(TimeoutMicroseconds);
@@ -1047,8 +1062,12 @@ llvm::Error UnicornBackend::runImpl(uint64_t PC, uint64_t TimeoutMicroseconds,
   State->StopRequested = false;
   State->Running = true;
   Started = true;
-  uc_err Status =
-      uc_emu_start(State->Engine, PC, UINT64_MAX, TimeoutMicroseconds, 0);
+  State->Deadline = *Limit;
+  // The mandatory instruction hook checks this absolute deadline, including
+  // time spent preparing entry or in observers. Unicorn's optional timer
+  // creates and joins a sleeping host thread for every short scheduling slice.
+  // Its zero timeout disables that second timer, not this adapter's budget.
+  const uc_err Status = uc_emu_start(State->Engine, PC, UINT64_MAX, 0, 0);
   State->Running = false;
   if (!State->InstructionFailure.empty())
     return failure(State->InstructionFailure);
@@ -1088,11 +1107,6 @@ llvm::Error UnicornBackend::runImpl(uint64_t PC, uint64_t TimeoutMicroseconds,
                        : BackendFaultKind::UnhandledException,
                    State->currentPC(), std::nullopt, std::nullopt, std::nullopt,
                    std::nullopt});
-  size_t TimedOut = 0;
-  if (auto E = check(uc_query(State->Engine, UC_QUERY_TIMEOUT, &TimedOut),
-                     unicornDiagnostic::QueryCPUTimeout))
-    return E;
-  State->Timeout = TimedOut != 0;
   if (State->CallbackFailed)
     return failure(unicornDiagnostic::ExceptionInEmulatorHook);
   return check(Status, unicornDiagnostic::ExecuteGuest);

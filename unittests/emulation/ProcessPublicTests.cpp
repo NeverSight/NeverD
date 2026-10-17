@@ -14,8 +14,10 @@
 #include "DarwinDirectoryOwnershipTestData.h"
 #include "DarwinDirectoryTimestampTestData.h"
 #include "DarwinEntropyTestData.h"
+#include "DarwinExitTestData.h"
 #include "DarwinFileTestData.h"
 #include "DarwinFullSynchronizationTestData.h"
+#include "DarwinGuardTestData.h"
 #include "DarwinLibSystemFileTestData.h"
 #include "DarwinLibSystemMemoryTestData.h"
 #include "DarwinModeTestData.h"
@@ -5144,6 +5146,182 @@ TEST_P(DarwinLibSystemPublic,
           EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
         }
         EXPECT_GE(Registrations, 2u);
+        EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+        if (!Repeat) {
+          EXPECT_EQ(runCLIRequest(Path, Profile, Options, Output),
+                    process_cli::GuestFailure);
+          ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, *Report));
+        }
+      }
+    }
+  }
+#endif
+}
+TEST_P(DarwinLibSystemPublic,
+       GlobalAndStaticDestructorsKeepLifetimeAcrossCAndCLI) {
+#ifndef NEVERD_DARWIN_FIXTURE_DIR
+  GTEST_SKIP() << "Clang and ld64.lld Darwin fixtures unavailable";
+#else
+  llvm::SmallString<128> Temporary;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Temporary));
+  const std::filesystem::path Root(Temporary.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  const auto &[File, Profile] = GetParam();
+  for (const char *Kind : {"classic", "chained"}) {
+    const auto Directory = std::filesystem::path(NEVERD_DARWIN_FIXTURE_DIR) /
+                           (std::string(File) + "-exit-" + Kind);
+    Path = (Directory / "main").string();
+    for (const auto &Test : neverd::emulation::darwin_test::GlobalExitCases) {
+      SCOPED_TRACE(std::string(Kind) + ":" + Test.Mode);
+      llvm::json::Array Modules;
+      for (const char *Name : {"libleaf.dylib", "libparent.dylib"})
+        Modules.push_back(
+            llvm::json::Object{{"name", std::string("@loader_path/") + Name},
+                               {"path", (Directory / Name).string()}});
+      const auto Options = jsonText(llvm::json::Object{
+          {"backend", "unicorn"},
+          {"instruction_quantum", 1024},
+          {"timeout_microseconds", 5000000},
+          {"arguments", llvm::json::Array{"different/argv-zero", Test.Mode}},
+          {"darwin", llvm::json::Object{{"modules", std::move(Modules)}}}});
+      for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+        auto Text = takeString(neverd_emulate_process_json(
+            Session, Path.c_str(), Profile, Options.c_str()));
+        ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+        auto Report = llvm::json::parse(Text);
+        ASSERT_TRUE(bool(Report));
+        const auto *O = Report->getAsObject();
+        ASSERT_NE(O, nullptr);
+        EXPECT_EQ(O->getInteger(field::Version), 1);
+        EXPECT_EQ(O->getString(field::Stop), "exited")
+            << O->getString(field::Diagnostic).value_or("").str();
+        EXPECT_EQ(O->getInteger(field::ExitStatus), Test.Status);
+        EXPECT_EQ(O->getString(field::Stdout), llvm::toHex(Test.Output, true));
+        EXPECT_EQ(O->getString(field::Stderr), "");
+        ASSERT_NE(O->getArray(field::Services), nullptr);
+        EXPECT_TRUE(O->getArray(field::Services)->empty());
+        const auto *Darwin = O->getObject(field::Darwin);
+        ASSERT_NE(Darwin, nullptr);
+        const auto *Calls = Darwin->getArray(field::NativeCalls);
+        ASSERT_NE(Calls, nullptr);
+        unsigned C = 0, Cxx = 0;
+        bool HighObject = false, NullObject = false;
+        for (const auto &V : *Calls) {
+          const auto *Call = V.getAsObject();
+          ASSERT_NE(Call, nullptr);
+          EXPECT_EQ(Call->getString(field::Module),
+                    "/usr/lib/libSystem.B.dylib");
+          const bool Object = Call->getString(field::Name) == "___cxa_atexit";
+          if (!Object && Call->getString(field::Name) != "_atexit")
+            continue;
+          Cxx += Object;
+          C += !Object;
+          const auto *Args = Call->getArray(field::Arguments);
+          ASSERT_NE(Args, nullptr);
+          ASSERT_EQ(Args->size(), Object ? 3u : 1u);
+          EXPECT_EQ(Call->getString(field::Result), "0");
+          if (Object) {
+            HighObject |= (*Args)[1].getAsString() == "fedcba9876543210" &&
+                          (*Args)[2].getAsString() == "ffffffffffffffff";
+            NullObject |= (*Args)[1].getAsString() == "0" &&
+                          (*Args)[2].getAsString() == "fedcba9876543210";
+          }
+        }
+        EXPECT_GE(C, 3u);
+        EXPECT_GE(Cxx, 2u);
+        EXPECT_EQ(HighObject, llvm::StringRef(Test.Mode) == "opaque");
+        EXPECT_EQ(NullObject, llvm::StringRef(Test.Mode) == "opaque");
+        EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+        if (!Repeat) {
+          EXPECT_EQ(runCLIRequest(Path, Profile, Options, Output),
+                    process_cli::GuestFailure);
+          ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, *Report));
+        }
+      }
+    }
+  }
+#endif
+}
+TEST_P(DarwinLibSystemPublic, DefaultStaticGuardsKeepLifetimeAcrossCAndCLI) {
+#ifndef NEVERD_DARWIN_FIXTURE_DIR
+  GTEST_SKIP() << "Clang and ld64.lld Darwin fixtures unavailable";
+#else
+  llvm::SmallString<128> Temporary;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Temporary));
+  const std::filesystem::path Root(Temporary.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  const auto &[File, Profile] = GetParam();
+  for (const char *Kind : {"classic", "chained"}) {
+    const auto Directory = std::filesystem::path(NEVERD_DARWIN_FIXTURE_DIR) /
+                           (std::string(File) + "-guard-" + Kind);
+    Path = (Directory / "main").string();
+    for (const auto &Test : neverd::emulation::darwin_test::GuardCases) {
+      SCOPED_TRACE(std::string(Kind) + ':' + Test.Mode);
+      llvm::json::Array Modules;
+      for (const char *Name : {"libleaf.dylib", "libparent.dylib"})
+        Modules.push_back(
+            llvm::json::Object{{"name", std::string("@loader_path/") + Name},
+                               {"path", (Directory / Name).string()}});
+      const auto Options = jsonText(llvm::json::Object{
+          {"backend", "unicorn"},
+          {"instruction_quantum", 1024},
+          {"timeout_microseconds", 5000000},
+          {"arguments", llvm::json::Array{"different/argv-zero", Test.Mode}},
+          {"darwin_system",
+           llvm::json::Object{{"thread_self_port", 0xf1234567LL}}},
+          {"darwin", llvm::json::Object{{"modules", std::move(Modules)}}}});
+      for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+        auto Text = takeString(neverd_emulate_process_json(
+            Session, Path.c_str(), Profile, Options.c_str()));
+        ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+        auto Report = llvm::json::parse(Text);
+        ASSERT_TRUE(bool(Report));
+        const auto *O = Report->getAsObject();
+        ASSERT_NE(O, nullptr);
+        EXPECT_EQ(O->getInteger(field::Version), 1);
+        ASSERT_EQ(O->getString(field::Stop), "exited")
+            << O->getString(field::Diagnostic).value_or("").str();
+        EXPECT_EQ(O->getInteger(field::ExitStatus), Test.Status);
+        EXPECT_EQ(O->getString(field::Stdout), llvm::toHex(Test.Output, true));
+        EXPECT_EQ(O->getString(field::Stderr), "");
+        ASSERT_NE(O->getArray(field::Services), nullptr);
+        EXPECT_TRUE(O->getArray(field::Services)->empty());
+        const auto *Darwin = O->getObject(field::Darwin);
+        ASSERT_NE(Darwin, nullptr);
+        const auto *Calls = Darwin->getArray(field::NativeCalls);
+        ASSERT_NE(Calls, nullptr);
+        unsigned Guards = 0, Aborts = 0, Zero = 0;
+        for (const auto &V : *Calls) {
+          const auto *Call = V.getAsObject();
+          ASSERT_NE(Call, nullptr);
+          const auto Name = Call->getString(field::Name).value_or("");
+          const bool Guard = Name.starts_with("___cxa_guard_");
+          EXPECT_EQ(Call->getString(field::Module),
+                    Guard ? "/usr/lib/libc++.1.dylib"
+                          : "/usr/lib/libSystem.B.dylib");
+          if (!Guard)
+            continue;
+          ++Guards;
+          const auto *Args = Call->getArray(field::Arguments);
+          ASSERT_NE(Args, nullptr);
+          EXPECT_EQ(Args->size(), 1u);
+          if (Name == "___cxa_guard_acquire") {
+            const auto Value = Call->getString(field::Result);
+            EXPECT_TRUE(Value == "0" || Value == "1");
+            Zero += Value == "0";
+          } else {
+            ASSERT_NE(Call->get(field::Result), nullptr);
+            EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
+            Aborts += Name == "___cxa_guard_abort";
+          }
+        }
+        const bool Constructor =
+            llvm::StringRef(Test.Mode).starts_with("ctor-");
+        EXPECT_GE(Guards, 6u);
+        EXPECT_EQ(Aborts, Constructor ? 0u : 1u);
+        EXPECT_EQ(Zero, Constructor ? 0u : 1u);
         EXPECT_EQ(neverd_session_is_loaded(Session), 0);
         if (!Repeat) {
           EXPECT_EQ(runCLIRequest(Path, Profile, Options, Output),

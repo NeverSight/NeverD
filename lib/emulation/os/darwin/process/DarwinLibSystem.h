@@ -17,8 +17,12 @@ struct LibSystemBinding {
   llvm::StringLiteral Symbol;
   unsigned Arguments;
   std::optional<ServiceKind> Kernel;
+  llvm::StringLiteral Provider;
 };
-std::optional<LibSystemGateKind> libSystemImport(llvm::StringRef Symbol);
+std::optional<LibSystemGateKind>
+libSystemImport(llvm::StringRef Symbol,
+                llvm::StringRef Provider = value::LibSystemPath);
+bool isGlobalCallbackRegistration(LibSystemGateKind Kind);
 const LibSystemBinding &libSystemBinding(LibSystemGateKind Kind);
 struct LibSystemArguments {
   std::array<uint64_t, 6> Carriers{}, Kernel{};

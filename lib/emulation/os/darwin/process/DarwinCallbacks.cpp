@@ -8,6 +8,9 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+#include <memory>
+#include <utility>
+
 namespace neverd::emulation::darwin_model {
 namespace {
 llvm::Expected<IntegerABI> abi(const ProcessImage &Image) {
@@ -25,8 +28,27 @@ DarwinCallbacks::DarwinCallbacks(const ProcessImage &Image,
                                  const InitialStack &Stack)
     : Image(Image), Stack(Stack),
       StackBase(value::StackTop - Options.StackSize) {
-  if (Image.HasTLSCallbacks)
-    Pending.reserve(TLSCallbackLimit);
+  if (Image.HasGlobalCallbacks) {
+    auto Owner = std::make_unique<CombinedCallbacks>();
+    Owner->Global.reserve(GlobalCallbackLimit);
+    if (Image.HasTLSCallbacks)
+      Owner->TLS.reserve(TLSCallbackLimit);
+    Combined = Owner.release();
+  } else {
+    TLSCallbacks Owner;
+    if (Image.HasTLSCallbacks)
+      Owner.reserve(TLSCallbackLimit);
+    std::construct_at(&Pending, std::move(Owner));
+  }
+}
+DarwinCallbacks::~DarwinCallbacks() {
+  if (Image.HasGlobalCallbacks)
+    delete Combined;
+  else
+    std::destroy_at(&Pending);
+}
+DarwinCallbacks::TLSCallbacks &DarwinCallbacks::tls() {
+  return Image.HasGlobalCallbacks ? Combined->TLS : Pending;
 }
 llvm::Error DarwinCallbacks::target(ExecutionBackend &CPU,
                                     uint64_t Address) const {
@@ -106,23 +128,50 @@ llvm::Error DarwinCallbacks::addTLS(ExecutionBackend &CPU, uint64_t Function,
                                     uint64_t Object) {
   if (!Image.HasTLSCallbacks || State == Phase::Complete)
     return failure("Darwin TLS callback registration is unavailable");
-  if (Pending.size() == TLSCallbackLimit)
+  if (tls().size() == TLSCallbackLimit)
     return failure("Darwin TLS callback registration limit exceeded");
   if (Function)
     if (auto E = target(CPU, Function))
       return E;
-  Pending.push_back({Function, Object});
+  tls().push_back({Function, Object});
+  return llvm::Error::success();
+}
+llvm::Error DarwinCallbacks::addGlobal(ExecutionBackend &CPU, uint64_t Function,
+                                       std::optional<uint64_t> Object) {
+  if (!Image.HasGlobalCallbacks || State == Phase::Complete)
+    return failure("Darwin global callback registration is unavailable");
+  if (Combined->Global.size() == GlobalCallbackLimit)
+    return failure("Darwin global callback registration limit exceeded");
+  if (auto E = target(CPU, Function))
+    return E;
+  Combined->Global.push_back(
+      {Function, Object.value_or(0), Object.has_value()});
   return llvm::Error::success();
 }
 llvm::Expected<bool> DarwinCallbacks::terminate(ExecutionBackend &CPU,
                                                 ProcessResult &Result) {
-  while (!Pending.empty()) {
-    const auto Callback = Pending.back();
-    Pending.pop_back(); // A callback can register another before older entries.
-    if (!Callback.Function)
-      continue;
+  if (State == Phase::TLS) {
+    while (!tls().empty()) {
+      const auto Callback = tls().back();
+      tls().pop_back(); // Nested registration precedes older pending work.
+      if (!Callback.Function)
+        continue;
+      const uint64_t Args[] = {Callback.Object};
+      if (auto E = enter(CPU, Callback.Function, TerminationTop, Args, true))
+        return std::move(E);
+      Result.PC = Callback.Function;
+      return true;
+    }
+    State = Phase::Global; // Native normal exit finalizes TLS exactly once.
+  }
+  if (Image.HasGlobalCallbacks && !Combined->Global.empty()) {
+    const auto Callback = Combined->Global.back();
+    Combined->Global.pop_back();
     const uint64_t Args[] = {Callback.Object};
-    if (auto E = enter(CPU, Callback.Function, TerminationTop, Args, true))
+    if (auto E = enter(CPU, Callback.Function, TerminationTop,
+                       llvm::ArrayRef<uint64_t>(Args).take_front(
+                           Callback.HasObject ? 1 : 0),
+                       true))
       return std::move(E);
     Result.PC = Callback.Function;
     return true;
@@ -137,9 +186,8 @@ llvm::Expected<bool>
 DarwinCallbacks::exit(ExecutionBackend &CPU, uint64_t Status,
                       ProcessResult &Result,
                       std::optional<uint64_t> ReturnValue) {
-  if (State == Phase::Termination || State == Phase::Complete)
-    return failure(
-        "reentrant Darwin exit during TLS termination is unsupported");
+  if (State == Phase::TLS || State == Phase::Global || State == Phase::Complete)
+    return failure("reentrant Darwin exit during termination is unsupported");
   auto ABI = abi(Image);
   if (!ABI)
     return ABI.takeError();
@@ -154,7 +202,7 @@ DarwinCallbacks::exit(ExecutionBackend &CPU, uint64_t Status,
   ExitStatus = Status & 0xff;
   MainValue = ReturnValue;
   Active.reset();
-  State = Phase::Termination;
+  State = Phase::TLS;
   return terminate(CPU, Result);
 }
 llvm::Expected<bool> DarwinCallbacks::returned(ExecutionBackend &CPU,
@@ -176,12 +224,13 @@ llvm::Expected<bool> DarwinCallbacks::returned(ExecutionBackend &CPU,
     return exit(CPU, (*Value)[0], Result, (*Value)[0]);
   }
   if (Gate != ReturnGate || !Active || (*SP)[0] != Active->ReturnSP ||
-      (State != Phase::Startup && State != Phase::Termination))
+      (State != Phase::Startup && State != Phase::TLS &&
+       State != Phase::Global))
     return failure("invalid Darwin callback return frame");
   if (auto E = target(CPU, Active->Target))
     return std::move(E);
   Active.reset();
-  if (State == Phase::Termination)
+  if (State == Phase::TLS || State == Phase::Global)
     return terminate(CPU, Result);
   ++NextInitializer;
   if (auto E = startup(CPU))

@@ -1341,6 +1341,153 @@ class ProcessIntegrationTests(unittest.TestCase):
                             self.assertEqual(result["events"], len(calls) + returns)
                             self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
 
+    def test_darwin_global_and_static_destructors_keep_process_lifetime(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory_handle = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory_handle.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+        modes = {"return": (37, "LPBTGMStvUYLns4Ng30p2l1", 10, 4),
+                 "exit": (37, "LPBTGMStvUYLns4Ng30p2l1", 10, 4),
+                 "raw": (38, "LPBTGMS", 7, 4),
+                 "global-raw": (38, "LPBTGMStvUYR", 10, 4),
+                 "deep-exit": (37, "LPBTGMStvUYKLns4Ng30p2l1", 10, 5),
+                 "ctor-exit": (37, "LPBTtvUY0p2l1", 5, 2),
+                 "ctor-raw": (38, "LPBT", 3, 2),
+                 "opaque": (37, "LPBTGMStvUYnnZILns4Ng30p2l1", 12, 6)}
+        for platform, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                       ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                       ("ios-simulator", "arm64")):
+            for kind in ("classic", "chained"):
+                directory = (Path(fixtures) / f"{platform}-{architecture}-exit-{kind}").resolve(strict=True)
+                modules = [{"name": f"@loader_path/{name}", "path": str(directory / name)}
+                           for name in ("libleaf.dylib", "libparent.dylib")]
+                options = {"backend": "unicorn", "instruction_quantum": 1024,
+                           "timeout_microseconds": 5000000, "darwin": {"modules": modules}}
+                for mode, (status, output, count_c, count_cxx) in modes.items():
+                    options["arguments"] = ["different/argv-zero", mode]
+                    for repeat in range(2):
+                        with self.subTest(platform=platform, architecture=architecture,
+                                          kind=kind, mode=mode, repeat=repeat):
+                            result = session.emulate_process(str(directory / "main"),
+                                                             f"{platform}-macho64-v1", json.dumps(options))
+                            self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                            self.assertEqual(result["exit_status"], status)
+                            self.assertEqual(result["stdout_hex"], output.encode().hex())
+                            self.assertEqual(result["stderr_hex"], "")
+                            self.assertEqual(result["services"], [])
+                            self.assertEqual(result["schema_version"], 1)
+                            calls = result["darwin"]["native_calls"]
+                            ordinary = [c for c in calls if c["name"] == "_atexit"]
+                            objects = [c for c in calls if c["name"] == "___cxa_atexit"]
+                            self.assertEqual(len(ordinary), count_c)
+                            self.assertEqual(len(objects), count_cxx)
+                            self.assertTrue(all(c["result"] == "0" for c in ordinary + objects))
+                            self.assertTrue(all(len(c["arguments"]) == 1 for c in ordinary))
+                            self.assertTrue(all(len(c["arguments"]) == 3 for c in objects))
+                            self.assertTrue(all(c["module"] == "/usr/lib/libSystem.B.dylib" for c in calls))
+                            if mode == "opaque":
+                                self.assertEqual(sum(c["arguments"][1:] ==
+                                                     ["fedcba9876543210", "ffffffffffffffff"]
+                                                     for c in objects), 1)
+                                self.assertEqual(sum(c["arguments"][1:] ==
+                                                     ["0", "fedcba9876543210"]
+                                                     for c in objects), 1)
+                            self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+
+    def test_darwin_default_static_guards_keep_process_lifetime(self) -> None:
+        library = os.environ.get("NEVERD_TEST_LIBNEVERD")
+        fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")
+        if not library or not fixtures:
+            self.skipTest("built libneverd and Darwin fixtures are not configured")
+        from neverd_plugin import Session
+        from neverd_plugin.ffi import HostAPI
+
+        library_path = Path(library).resolve(strict=True)
+        if hasattr(os, "add_dll_directory"):
+            directory_handle = os.add_dll_directory(str(library_path.parent))
+            self.addCleanup(directory_handle.close)
+        host = HostAPI(ctypes.CDLL(str(library_path)))
+        address = int(host.call("neverd_session_create") or 0)
+        self.assertGreater(address, 0)
+        handle = ctypes.c_void_p(address)
+        self.addCleanup(host.call, "neverd_session_destroy", handle)
+        session = Session(handle, _native=SimpleNamespace(session_address=lambda _: address), _host=host)
+        modes = {"return": (37, "LAPBCSMTHRtUYuXVvhspbla"),
+                 "exit": (37, "LAPBCSMTHRtUYuXVvhspbla"),
+                 "raw": (38, "LAPBCSMTHR"),
+                 "global-raw": (38, "LAPBCSMTHRtUYuQ"),
+                 "ctor-exit": (37, "LAPBCSspbla"),
+                 "ctor-raw": (38, "LAPBCS")}
+        for platform, architecture in (("macos", "x86_64"), ("macos", "arm64"),
+                                       ("ios", "arm64"), ("ios-simulator", "x86_64"),
+                                       ("ios-simulator", "arm64")):
+            for kind in ("classic", "chained"):
+                directory = (Path(fixtures) / f"{platform}-{architecture}-guard-{kind}").resolve(strict=True)
+                modules = [{"name": f"@loader_path/{name}", "path": str(directory / name)}
+                           for name in ("libleaf.dylib", "libparent.dylib")]
+                options = {"backend": "unicorn", "instruction_quantum": 1024,
+                           "timeout_microseconds": 5000000, "darwin": {"modules": modules},
+                           "darwin_system": {"thread_self_port": 0xf1234567}}
+                for mode, (status, output) in modes.items():
+                    options["arguments"] = ["different/argv-zero", mode]
+                    for repeat in range(2):
+                        with self.subTest(platform=platform, architecture=architecture,
+                                          kind=kind, mode=mode, repeat=repeat):
+                            result = session.emulate_process(str(directory / "main"),
+                                                             f"{platform}-macho64-v1", json.dumps(options))
+                            self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                            self.assertEqual(result["exit_status"], status)
+                            self.assertEqual(result["stdout_hex"], output.encode().hex())
+                            self.assertEqual(result["stderr_hex"], "")
+                            self.assertEqual(result["services"], [])
+                            self.assertEqual(result["schema_version"], 1)
+                            calls = result["darwin"]["native_calls"]
+                            guards = [c for c in calls if c["name"].startswith("___cxa_guard_")]
+                            self.assertGreaterEqual(len(guards), 6)
+                            self.assertTrue(all(c["module"] == "/usr/lib/libc++.1.dylib" and
+                                                len(c["arguments"]) == 1 for c in guards))
+                            self.assertTrue(all(c["module"] == "/usr/lib/libSystem.B.dylib"
+                                                for c in calls if c not in guards))
+                            acquire = [c for c in guards if c["name"] == "___cxa_guard_acquire"]
+                            self.assertTrue(all(c["result"] in ("0", "1") for c in acquire))
+                            self.assertTrue(all(c["result"] is None for c in guards if c not in acquire))
+                            constructor = mode.startswith("ctor-")
+                            self.assertEqual(sum(c["name"] == "___cxa_guard_abort" for c in guards),
+                                             0 if constructor else 1)
+                            self.assertEqual(sum(c["result"] == "0" for c in acquire),
+                                             0 if constructor else 1)
+                            self.assertEqual(host.call("neverd_session_is_loaded", handle), 0)
+                for mode, output, diagnostic in (
+                        ("recursive", "LAPBCSMTH", "recursive Darwin static initialization is unsupported"),
+                        ("foreign", "LAPBCSMTH", "unsupported Darwin C++ guard state"),
+                        ("global-reentrant", "LAPBCSMTHRtUYuE",
+                         "reentrant Darwin exit during termination is unsupported")):
+                    options["arguments"] = ["different/argv-zero", mode]
+                    result = session.emulate_process(str(directory / "main"),
+                                                     f"{platform}-macho64-v1", json.dumps(options))
+                    self.assertEqual(result["stop_reason"], "runtime_failure")
+                    self.assertEqual(result["diagnostic"], diagnostic)
+                    self.assertEqual(result["stdout_hex"], output.encode().hex())
+                    self.assertIsNone(result["exit_status"])
+                options["arguments"] = ["different/argv-zero", "return"]
+                result = session.emulate_process(str(directory / "main"),
+                                                 f"{platform}-macho64-v1", json.dumps(options))
+                self.assertEqual(result["stop_reason"], "exited", result["diagnostic"])
+                self.assertEqual(result["stdout_hex"], modes["return"][1].encode().hex())
+
     def test_darwin_startup_dylibs_share_data_and_isolate_tls(self) -> None:
         library = os.environ.get("NEVERD_TEST_LIBNEVERD")
         fixtures = os.environ.get("NEVERD_TEST_DARWIN_FIXTURES")

@@ -1,6 +1,6 @@
 **语言**: [English](../darwin-emulation.md) | [简体中文](darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](../de/darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: f85e400322f7b1abd9461fe80492cb140c811c56a1bb2f6c6685b72dee6c7364 -->
+<!-- i18n-source: 26e0c6dba6d3b863bb8dc0c4690bbc6ea61bbe5dd2accd19643847c8968fc13e -->
 
 [← 文档索引](README.md)
 
@@ -46,7 +46,7 @@ BSD 系统调用遵循 Darwin ABI。ARM64 从 X16 读取服务号，x64 使用 B
 旧式原始 mmap 的零长度请求返回零而不分配内存；`MAP_UNIX03` 已支持，零长度返回 EINVAL。
 Unmap/protect 地址必须对齐；允许 NONE/READ/WRITE，WRITE 隐含 READ，不接受匿名可执行映射。
 
-设备与模拟器的平台必须分别匹配。支持下述有限 libSystem、显式启动 dylib 和普通 C 主线程 TLS 契约。全局析构回调、旧式 TLS 初始化段、其他未建模 dyld 行为、Mach IPC、线程、Objective-C/Swift 框架、arm64e/PAC、加密内容和未建模命令仍明确拒绝。主程序保持偏好地址，dylib 使用确定性独立地址；签名数据不提供 AMFI 或 entitlement 实现。
+设备与模拟器的平台必须分别匹配。支持下述有限 libSystem、显式启动 dylib、启动构造函数、主线程 C/C++ TLS 和进程终止时的 C/C++ 析构。选择性 DSO 终结、旧式 TLS 初始化段、其他未建模 dyld 行为、Mach IPC、线程、Objective-C/Swift 框架、arm64e/PAC、加密内容和未建模命令仍明确拒绝。主程序保持偏好地址，dylib 使用确定性独立地址；签名数据不提供 AMFI 或 entitlement 实现。
 
 测试使用自行编写、由 Clang/LLD 生成的五种 Mach-O 平台/架构用例，另有独立构造的
 线程入口和畸形文件测试、4 KiB/16 KiB 内存测试，以及 C API/CLI 报告一致性测试。
@@ -1936,7 +1936,7 @@ classic lazy: eager stable slots; status 83; stdout_hex 41005a53; named calls/ev
 _exit: status 35; stdout_hex 58; named calls 2; events 2
 file calls: main status 73; stdout_hex 460044; named calls 40; events 41
 memory calls: main status 79; stdout_hex 4d0050; named calls 18; events 19
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 104; matching ARM64 identities: 312
 ```
 
 ```json
@@ -1949,7 +1949,7 @@ native common catalogue: 82; required methods/platform: 102; matching ARM64 iden
 
 支持初始化、零初始化和不超过 16 字节对齐的普通 C TLS。准备阶段实际映射并计费每个模块的独立存储；首次访问复制已重定位的实时连续模板，包括此前对 BSS/间隙的修改。后续写入、跨库指针身份和每次进程的新状态保持稳定。24 字节描述符的 thunk/key/offset 和返回帧均须有效；TLS 页面不能被 mmap 借用或被 munmap/mprotect 改变。
 
-原创样例覆盖两个同名数据导出、共享依赖、跨库 TLS、模板修改及重复执行。原生 O0/O1/O2 classic/chained 对照与五个平台的 C/CLI/Python 测试保持独立。循环、弱导出、重导出、全局析构与旧式 TLS 初始化段、dlopen/dlsym、线程和完整 Apple 框架仍未实现；Intel 原生和实体 iOS 尚未验证。
+原创样例覆盖两个同名数据导出、共享依赖、跨库 TLS、模板修改及重复执行。原生 O0/O1/O2 classic/chained 对照与五个平台的 C/CLI/Python 测试保持独立。循环、弱导出、重导出、选择性 DSO 析构与旧式 TLS 初始化段、dlopen/dlsym、线程和完整 Apple 框架仍未实现；Intel 原生和实体 iOS 尚未验证。
 
 ```json
 {"backend":"unicorn","instruction_quantum":1024,"timeout_microseconds":5000000,"darwin":{"modules":[{"name":"@loader_path/libneverd-base.dylib","path":"/inputs/libneverd-base.dylib"},{"name":"@loader_path/libneverd-leaf.dylib","path":"/inputs/libneverd-leaf.dylib"}]}}
@@ -1964,9 +1964,9 @@ TLS: initialized / zero-only / alignment <=16; exact 24-byte descriptor; live co
 resolver: __tlv_get_addr; x64 RDI -> RAX; ARM64 X0 -> X0; one named event; errno preserved
 lifetime: one main-thread block/image/process; stable addresses; fresh subsequent processes
 addends: checked signed ordinary provider offsets; data/TLS initializers; original provider spans only
-unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; global destructors/legacy TLS init; dlopen/dlsym; threads
+unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; selective DSO finalization/legacy TLS init; dlopen/dlsym; threads
 workload: shared dependency; duplicate export spelling; TLS aliasing; template mutation; main 83; stdout 440054
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 104; matching ARM64 identities: 312
 ```
 
 ## Darwin dylib 导入偏移
@@ -1979,4 +1979,18 @@ native common catalogue: 82; required methods/platform: 102; matching ARM64 iden
 
 原始 `S_MOD_INIT_FUNC_POINTERS`、只读 `S_INIT_FUNC_OFFSETS` 和单个 `LC_ROUTINES_64` 在 `LC_MAIN` 前执行；依赖按声明顺序后序初始化，共享库只执行一次。入口必须属于当前映像原始可执行段，ARM64 要求完整且对齐的四字节；待执行表被修改会明确失败。构造函数接收 argc/argv/envp/apple/`ProgramVars`，程序名取可执行文件名，与自定义 argv0 无关。C++ `thread_local` 包装代码自行完成惰性构造。
 
-`__tlv_atexit` 采用真实的两参数 void ABI，忽略编译器额外的 DSO 参数，保留 errno 与结果寄存器；事件结果为 null。预先计费的队列最多容纳 1024 项，包括空回调和重复项，对象值按完整 64 位保留。main 返回及 C `exit` 逆序执行，析构中新注册的项先于旧项。回调栈位于当前 SP 与 x64 red zone 下方，以保留深层退出时仍有效的栈对象。所有调用、返回和指令沿用原预算，回调结束后才发布退出结果；C `_exit` 和原始 BSD exit 立即终止。重入 exit、全局析构、旧式 TLS 初始化段和线程仍不支持。五种软件配置、三种 ARM64 HVF 配置及独立 O0/O1/O2 classic/chained 原生控制覆盖这些路径；控制样本关闭栈保护，guard 数据导入仍拒绝。Intel 原生与 iOS 真机仍未验证。
+`__tlv_atexit` 采用真实的两参数 void ABI，忽略编译器额外的 DSO 参数，保留 errno 与结果寄存器；事件结果为 null。预先计费的队列最多容纳 1024 项，包括空回调和重复项，对象值按完整 64 位保留。main 返回及 C `exit` 逆序执行，析构中新注册的项先于旧项。回调栈位于当前 SP 与 x64 red zone 下方，以保留深层退出时仍有效的栈对象。所有调用、返回和指令沿用原预算，回调结束后才发布退出结果；C `_exit` 和原始 BSD exit 立即终止。重入 exit、选择性 DSO 析构、旧式 TLS 初始化段和线程仍不支持。五种软件配置、三种 ARM64 HVF 配置及独立 O0/O1/O2 classic/chained 原生控制覆盖这些路径；控制样本关闭栈保护，guard 数据导入仍拒绝。Intel 原生与 iOS 真机仍未验证。
+
+## C/C++ 进程退出析构
+
+C `atexit` 与 C++ `__cxa_atexit` 返回整数零并保留 errno；C 回调没有参数，C++ 回调接收完整对象值，DSO 只作为不透明事件数据保留。正常退出先完成一次主线程 TLS 析构，再按统一注册顺序逆序调用全局析构；新注册的全局项先于旧项，全局阶段不会重新排空 TLS。只有强注册导入才预留独立的 1024 项全局队列，原有 raw、构造函数和 TLS 预算保持不变。
+
+原创双 dylib 程序覆盖编译器生成的全局析构、重复访问局部 static、嵌套注册、深层栈对象及析构中的直接 `_exit`。局部 static 控制使用 `-fno-threadsafe-statics`；`__cxa_finalize`、dlopen/dlclose、线程和完整框架仍明确拒绝。五种软件配置、三种 ARM64 HVF 配置及 C/CLI/Python 共用原有报告格式与预算；Intel 原生与实体 iOS 尚未验证。
+
+## 主线程 C++ 静态初始化保护
+
+仅接纳 `/usr/lib/libc++.1.dylib`（兼容版本不高于 1.0.0）的精确强导入 `___cxa_guard_acquire`、`___cxa_guard_release`、`___cxa_guard_abort`，加数须为零。其他 C++ 符号、libc++abi、别名、弱导入、重导出和覆盖内建库仍拒绝；libc++ 与 libSystem 共用两页，guard 单独存在时不预留回调队列。
+
+八字节 guard 必须非空且自然对齐。初始化字节非零时 acquire 只读这一字节并返回整数零，不要求写权限或线程端口。零状态需要显式非零 `darwin_system.thread_self_port`（`DarwinSystemOptions::ThreadSelfPort`）；端口 P 对应 pending `(uint64_t(P)<<32)|0x200`，acquire 返回一，abort 恢复零，release 写入 `(uint64_t(P)<<32)|0x101`。两个 void 调用保留 errno/结果寄存器，报告结果为 null。递归、其他所有者、等待位、未知状态及无效存储在修改前明确失败，不推断宿主线程。
+
+默认线程安全 static 双 dylib 样例验证启动、TLS/全局析构中新建对象、重复访问、修改、完整 guard/哨兵、abort/retry 和正常/raw 退出；沿用全局 LIFO、预算与新进程隔离。覆盖五种软件与三种 ARM64 HVF 配置、C/CLI/Python，以及 O0/O1/O2 classic/chained 原生控制。ARM64 必须使用 `-march=armv8-a -mcpu=generic` 并检查最终成品为 LDARB、无 LDAPR；仅指定 march 仍可能生成 LDAPRB。RCpc、并发初始化、异常和选择性 DSO 终结仍未支持；x64 原生控制使用 Rosetta，实体 Intel/iOS 尚未验证。

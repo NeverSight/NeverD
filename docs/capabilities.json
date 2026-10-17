@@ -14148,7 +14148,7 @@
         "Explicit macos-macho64-v1, ios-macho64-v1 and ios-simulator-macho64-v1 execute bounded thin freestanding Mach-O processes. macOS and Simulator admit baseline x64/ARM64; devices require ARM64. Platform metadata is validated independently of the host backend.",
         "Original segments, zero fill, pagezero reservation and maximum protection feed one private address space. LC_MAIN receives argc/argv/envp/apple and a bounded return gate; LC_UNIXTHREAD accepts only a complete PC-only native state. ARM64 OS pages are 16 KiB over 4 KiB CPU mappings; x64 pages are 4 KiB.",
         "Darwin BSD carry and positive errno, secondary result registers, byte output, exit, deterministic identity and private anonymous data mmap/mprotect/munmap are modeled. Raw write lengths above INT_MAX return EINVAL before descriptor, pointer and output-budget checks, with an original native macOS oracle. Private regular-file mappings and explicit bounded file catalogues are modeled. Executable anonymous/JIT/shared/fixed mappings, Mach IPC, indirect syscalls, threads, signals and host filesystem/network services remain unsupported.",
-        "Libraries, symbols and fixups outside the finite libSystem contract, global destruction/legacy TLS initialization, encrypted payloads, arm64e/PAC and unmodeled image contracts fail explicitly. No arbitrary dyld loading, Objective-C/Swift runtime, Foundation/UIKit, AMFI, full application compatibility or native iOS-host HVF support is claimed.",
+        "Libraries, symbols and fixups outside the finite libSystem contract, selective global finalization/legacy TLS initialization, encrypted payloads, arm64e/PAC and unmodeled image contracts fail explicitly. No arbitrary dyld loading, Objective-C/Swift runtime, Foundation/UIKit, AMFI, full application compatibility or native iOS-host HVF support is claimed.",
         "The complete regular input file, including unmapped metadata and trailing bytes, must fit memory_limit before parsing or copying. Reads use a bounded private snapshot; embedded-NUL paths, short reads and file-size changes are rejected. Host filesystem I/O has no hard wall-clock guarantee.",
         "Each available matching native backend is tested separately. Cross-ISA software execution and compilation cannot establish Intel HVF, Linux KVM or Windows WHP runtime coverage.",
         "Fixed initial symbolic_links with raw target_hex share bounded guest namei, readlink/readlinkat and own metadata/snapshot admission.32 expansions and terminator-inclusive1024-byte paths are enforced. Without per-link mutable grants, mutable directory names cannot contain protected initial link names; separate mutable domains may contain targets created, moved, deleted or replaced at runtime. Existing grants and metadata policy apply; resolved FDs/CWD/mapping leases retain object ownership. Raw symlink57/symlinkat474 create bounded process-local links in admitted mutable parents with target-first import, empty-target readlink/follow boundaries and shared budgets. Without creation_policy.namespace_policy, created-link complete metadata stays unknown and link/directory creation does not consume regular-file inodes. With the strict explicit namespace policy, regular files/links/directories share one successful-creation inode allocator and permanent exhaustion. New links use umask, actual-parent Device/GID and effective UID with exact raw-target size and declared allocation; created-directory counts/sizes/blocks and namespace timestamps follow the declared virtual contract. Object-owned complete stat64 metadata survives held FDs/CWD, mixed SWAP, ancestor moves, removal and name reuse; refusals consume no inode. Without per-directory mutation_policy, initial-parent stat still invalidates; fixed snapshots always invalidate. Explicit per-directory enumeration_policy admits live getdirentries64 views with observed/created nonzero inodes, actual parents, unsigned-byte name order, ordinal cookies and declared constant d_seekoff. Initial directories retain own declarations; mkdir inherits the actual-parent policy. Dup shares cursor/version; committed changes and direct directory moves require zero rewind, while refusals/no-ops and ancestor moves preserve the relevant cursors. Version saturation refuses explicitly. Held removed empty directories emit zero records across name reuse. Missing identity stops before output; when full stat is invalidated, only inode is reused. The existing encoder, bounds, EOF suffix and ordered copies are shared. Snapshot/policy conflicts and strict three-field lossless JSON are rejected, and each policy reference has a fixed path/NUL cost. Omission retains legacy refusal. APFS generations remain unsupported. Strict per-initial-directory mutation_policy declares directory_entry_size and mutation_time with own complete nonzero-inode metadata, a fixed path/NUL reference charge and no namespace grant. The first committed change copies the observed record without allocation. Child-name changes project nlink as two plus all linked immediate names, size as nlink times entry size and mtime/ctime as the declared time. Direct moves/SWAP/removal change only ctime; refusals, same-object no-ops and ancestor moves preserve the relevant records. Blocks and all other observed fields stay object-owned across held FD/dup/CWD/removal/name reuse. New mkdir objects use the separate creation policy and do not inherit initial stat policies. Immutable snapshots still invalidate; stat and live enumeration declarations are independent. Omitting the stat policy retains unknown mutated initial metadata. Native observations do not infer general APFS allocation or timestamp rules. Resolved object ownership is preserved. Rmdir/replacement detect link children; moving/SWAP subtrees containing protected initial links remain explicit unsupported. Runtime link descendants participate in ordinary/EXCL directory moves and directory/directory or directory/file SWAP. All directory/file/link paths and keys are preflighted and all three maps extracted before publication. Current link name/NUL charges are replaced once; raw target charges persist, with no SWAP replacement credit. Actual parent objects, relative rebinding, held descriptions/cursors/CWD/orphan nodes/mapping leases are retained. No additional entry, FD or inode is consumed. Unlink/unlinkat remove runtime-created links under actual-parent authority; dynamic name/NUL/target costs remain while descriptions retain them and refund once at actual final release. Bare NOFOLLOW_ANY retains a final link; required intermediate/trailing expansion returns ELOOP. Protected initial links remain immutable; target descriptors, CWD and mappings retain their objects. Ordinary/EXCL leaf rename admits runtime link/missing, link/link, link/file and file/link pairs under both actual-parent grants in one established mount. Relative raw targets rebind at the new parent; replaced links retain description-owned name/target costs until final release, while regular-file descriptor/mapping leases retain their bytes. Rename consumes no additional entry/FD/file inode. Leaf link/link, link/file and file/link SWAP is admitted with actual-parent mutation/SWAP authority in one established mount. Both nodes stay linked; both name/NUL charges are reserved without replacement credit, preserving raw targets, relative rebinding, nlink, descriptions, cursors, CWD and mapping leases. Same-name SWAP succeeds; missing targets give ENOENT, intermediate NOFOLLOW_ANY gives ELOOP, SWAP|EXCL gives EINVAL before path input. Same-object EXCL remains unsupported; ordinary admitted directory/link pairs retain ENOTDIR/EISDIR and EXCL existence errors. Initial symbolic_links[].mutable grants admit ordinary unique initial links with separately mutable actual parents; known flags/special mode/alias/link-count/device contradictions refuse. Each grant fixes one path/NUL reference and consumes no created entry/inode. Initial raw-target/name/reference costs remain reserved after unlink/replacement; rekey owns a separate dynamic name and refunds only dynamically owned name/created-target costs. Only created links count as dynamic entries. Existing parent/mount/SWAP/lookup transactions admit granted initial leaves and subtree descendants. Strict optional initial-link mutation_policy has exactly mutation_time with complete nonzero-inode metadata and the grant; first direct move/SWAP copies scalar observations without allocation and changes only ctime. All other stat fields stay observed; failures/no-ops and ancestor moves retain the record. Without policy, complete moved-link stat is unknown while enumeration inode and known device contradictions remain authoritative. Initial policies follow objects; reused names/new symlinks never inherit old metadata or policies. Actual directory/link root SWAP is admitted in both orders, including nonempty trees, under existing object grants and actual-parent mutation/SWAP authority in one established mount. Direct root links join the same three-map preflight/extraction/publication as directory descendants. Both canonical paths and all linked/held descendants are checked atomically; only dynamic name costs are replaced, with no fixed-input/content/target/lease credit or new entry/FD/inode. Actual-object parents decide membership across reused names and retained orphans. Raw targets rebind relatively; FD/dup/CWD/referents/mappings retain their objects. Direct roots apply their own existing ctime policies, while ancestor descendants retain full records. Unknown full stat and known enumeration identities remain independent. Both directory/descendant-link cycle orders return EINVAL; self-referent-link creation by successful exchange remains allowed and later follow returns ELOOP. General APFS alias-cache semantics and ACL enforcement remain unsupported. Native ARM64 macOS observations do not establish physical iOS acceptance.",
@@ -14194,7 +14194,9 @@
         "Ordinary open/lseek/pread/pwrite/dup/dup2 reuse the existing file authority and cursor owner. open records two arguments, or three for low32 O_CREAT; ARM64 reads only the four defined bytes of the promoted int at entry SP, while x64 uses the third GP argument. Original carrier evidence remains separate from zero/default or uint16 mode_t kernel arguments. Failed argument reads precede native-call, errno and file effects; existing return-frame failure records remain distinct. Native O0/O1/O2 controls check shared/independent offsets, positioned IO, dup2 self/replacement/failed-source preservation, offsets above 4GiB, mode and binary bytes. The ordinary C workload exits73, emits460044, and retains40 named calls plus the main-return event. Thread cancellation and compatibility path shims remain unsupported.",
         "Ordinary mmap/mprotect/munmap share DarwinMemory effects. C int protection, flags and FD narrow to 32 bits while full carriers remain observable. mmap rejects zero length or a missing MAP_PRIVATE/MAP_SHARED with MAP_FAILED/EINVAL before kernel effects, then supplies MAP_UNIX03. The raw BSD path retains its semantics. Independent C controls cover anonymous zeroing, rights transitions, error order, mapping lifetime after close, private writes and EOF tails. General shared/fixed/executable mappings and allocators remain unsupported.",
         "Explicit darwin.modules admits at most 32 exact case-sensitive install names and original input paths for a same-ISA/platform strong acyclic startup MH_DYLIB graph. LC_ID_DYLIB identity and compatibility are checked on every edge; reachable nodes share full-file, resident, metadata, deadline and 65536-record budgets. Ordinary ordinals select actual regular/thread-local exports, including identical names in different providers. No host search or @ expansion occurs. Exact 24-byte TLV descriptors require supported bootstrap fixups, zero input keys, bounded offsets and <=16-byte alignment. TLS storage is physically mapped and charged during preparation; first access copies live relocated contiguous template bytes, preserving prior BSS/gap changes. Every call validates descriptor identity and return frame, preserves non-result GP/vector state and errno, and reports one __tlv_get_addr event. mmap/munmap/mprotect cannot borrow or alter TLS reservations. The original shared-dependency fixture covers rebased data, equal export spellings, initialized/zero-only TLS, cross-image identity, pre-access mutation and fresh process state across five portable profiles and matching ARM64 HVF. Native O0/O1/O2 classic/chained controls compare exit83/stdout440054. Ordinary strong dylib addends use checked signed arithmetic and retain one-byte membership in the selected provider's original mapped segment spans, including global and TLS-template pointer initializers. The +8/-4 alias and volatile TLS-pointer fixture checks shared data and fresh process state with native O0/O1/O2 classic/chained controls returning 78. Nonzero libSystem gate, imported TLV descriptor and classic lazy addends remain unsupported. Weak/reexport/resolver exports, cycles, global destructors/legacy TLS initializers, dlopen/dlsym, threads and complete Apple frameworks remain unsupported; native Intel and physical iOS remain unqualified.",
-        "Original S_MOD_INIT_FUNC_POINTERS, read-only S_INIT_FUNC_OFFSETS and one LC_ROUTINES_64 run in dependency postorder once per shared image, before LC_MAIN. Original executable spans and four aligned ARM64 entry bytes bound targets; live pending slot changes refuse. Constructors receive argc/argv/envp/apple/ProgramVars with process-owned variable pointers and the executable basename independent of argv0. Original C++ thread_local wrappers perform lazy initialization. Mach-O __tlv_atexit uses the actual runtime void(function, object) ABI, ignores the compiler DSO carrier, preserves errno/result registers and reports two arguments with null result. Precharged storage holds at most1024 pending registrations including nulls and duplicates; opaque objects retain64 bits. Main return and C exit (_exit) drain LIFO; new registrations run before older pending entries. Frames use the current SP below the x64 red zone, retaining live stack objects. Separate authenticated returns share one ExecutionSession/instruction/event/deadline budget; exit fields publish only after successful termination. C _exit (__exit) and raw BSD exit terminate immediately. Reentrant normal exit, atexit/__cxa_atexit/global destructors, legacy S_THREAD_LOCAL_INIT_FUNCTION_POINTERS, threads and exception/framework runtimes remain unsupported. Original header-free C/C++ classic/chained controls cover all five software profiles and three actual ARM64 HVF profiles, with early constructor exit, nested destruction, deep stack canaries, budget stops and fresh processes. Original macOS O0/O1/O2 controls disable stack-protector imports, whose guard data remain outside the provider. Native Intel and physical iOS remain unqualified; mandatory102 methods/profile require306 matching ARM64 executions."
+        "Original S_MOD_INIT_FUNC_POINTERS, read-only S_INIT_FUNC_OFFSETS and one LC_ROUTINES_64 run in dependency postorder once per shared image, before LC_MAIN. Original executable spans and four aligned ARM64 entry bytes bound targets; live pending slot changes refuse. Constructors receive argc/argv/envp/apple/ProgramVars with process-owned variable pointers and the executable basename independent of argv0. Original C++ thread_local wrappers perform lazy initialization. Mach-O __tlv_atexit uses the actual runtime void(function, object) ABI, ignores the compiler DSO carrier, preserves errno/result registers and reports two arguments with null result. Precharged storage holds at most1024 pending registrations including nulls and duplicates; opaque objects retain64 bits. Main return and C exit (_exit) drain LIFO; new registrations run before older pending entries. Frames use the current SP below the x64 red zone, retaining live stack objects. Separate authenticated returns share one ExecutionSession/instruction/event/deadline budget; exit fields publish only after successful termination. C _exit (__exit) and raw BSD exit terminate immediately. Reentrant normal exit, selective __cxa_finalize, __cxa_guard_*, legacy S_THREAD_LOCAL_INIT_FUNCTION_POINTERS, threads and exception/framework runtimes remain unsupported. Original header-free C/C++ classic/chained controls cover all five software profiles and three actual ARM64 HVF profiles, with early constructor exit, nested destruction, deep stack canaries, budget stops and fresh processes. Original macOS O0/O1/O2 controls disable stack-protector imports, whose guard data remain outside the provider. Native Intel and physical iOS remain unqualified; mandatory103 methods/profile require309 matching ARM64 executions.",
+        "C atexit(function) and C++ __cxa_atexit(function,object,dso) return int zero and preserve errno. One bounded global LIFO interleaves both kinds after main-thread TLS finalization exactly once. C callbacks have no arguments; C++ callbacks receive the original full-width object including null. DSO is opaque event data only. Pop-before-entry admits nested globals before older work; globals do not restart a completed TLS phase. Nonnull targets require original executable spans and live execute permission at registration/invocation. Strong global imports alone reserve a separate1024-entry global quota and combined storage, preserving previous raw/constructor/TLS-only base and record charges. All phases share authenticated current-stack frames and original execution budgets; pending exit values publish only on completion, while raw exit inside a destructor retains its actual status/output. The earlier global/static graph uses -fno-threadsafe-statics; the separate default-guard graph retains compiler guards; __cxa_finalize, dlopen/dlclose, terminator sections, threads, exceptions and complete Apple runtimes remain unsupported. Original macOS ARM64 O0/O1/O2 classic/chained controls cover eight outcomes; five software and three mandatory ARM64 HVF profiles plus C/CLI/Python cover the guest graph. Native Intel and physical iOS remain unqualified.",
+        "Exact strong zero-addend ___cxa_guard_acquire/release/abort imports belong only to /usr/lib/libc++.1.dylib with compatibility <=1.0.0; aliases, libc++abi, other C++ symbols, weak/reexports and builtin overrides refuse. Builtins share two pages with existing per-fixup/gate charges; guards alone do not reserve callbacks. Naturally aligned eight-byte guest guards use explicit nonzero DarwinSystem.ThreadSelfPort P: acquire zero -> (P<<32)|0x200/int1, abort ->0, release ->(P<<32)|0x101/void. Completed acquire reads only one initialized byte/int0 without a port or write access. Errno/non-result state and provider event identity are preserved. Recursive, foreign/waiting, unknown and inaccessible states fail before mutation. Default C++ static graphs cover startup/TLS/global finalization, complete guard/sentinel bytes, abort/retry, fresh processes and terminal budgets through five software and three matching ARM64 HVF profiles plus C/CLI/Python. Baseline ARM64 needs verified -march=armv8-a -mcpu=generic final LDARB/no LDAPR; modern-host RCpc remains unsupported. Native x64 uses Rosetta; physical Intel/iOS, concurrency, exceptions and selective DSO finalization remain unqualified or unsupported."
       ],
       "tests": [
         {
@@ -22084,6 +22086,288 @@
           "target": "NeverDDarwinProcessTests",
           "source": "unittests/emulation/DarwinLibSystemTests.cpp",
           "filter": "*/DarwinLibSystemTest.StartupCallbacksRecheckPendingTablesAndPrepareMainAfresh/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GlobalRegistrationUsesExactCAndCxxArgumentsAndPreservesErrno/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GlobalsInterleaveCAndCxxLIFOAfterExactlyOneTLSFinalization/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GlobalQuotaCountsDuplicatesAndReleasesTheActiveEntryBeforeInvocation/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GlobalTargetsRejectNullPaddingForeignPrivateAndMisalignedEntries/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GlobalFramesRejectForgedReturnsAndRecheckActivePermissions/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GlobalInvocationRechecksPermissionsAfterRegistration/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLinkingTests.cpp",
+          "filter": "DarwinLinking.CallbackStoragePreservesPreviouslyAdmittedBaseAndTLSBudgets",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLinkingTests.cpp",
+          "filter": "DarwinLinking.RegistrationOnlyImagesReserveOriginalTargetsAndExactBudgets",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLinkingTests.cpp",
+          "filter": "DarwinLinking.GlobalAdmissionDoesNotInventGuardOrSelectiveFinalizationCalls",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinCallbackTests.cpp",
+          "filter": "DarwinCallbacks.ConstructorOnlyImagesKeepTheirExistingExactBudget",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinImageTests.cpp",
+          "filter": "DarwinImage.RawThreadEntryKeepsItsExistingMinimumBudget",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.DylibGlobalsAndLocalStaticsFinalizeAfterTLS/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinNativeTests.cpp",
+          "filter": "DarwinNative.GlobalAndStaticDestructorsMatchOriginalNativeImages",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "*/DarwinLibSystemPublic.GlobalAndStaticDestructorsKeepLifetimeAcrossCAndCLI/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "DarwinLibSystemBindings.GuardCallsKeepTheirExactCxxProvider",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GuardsKeepExactOwnerWordsVoidReturnsAndIndependentObjects/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.CompletedGuardsReadOnlyTheirInitializedByte/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.InvalidGuardsRefuseBeforeMemoryAndReturnEffects/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLibSystemTests.cpp",
+          "filter": "*/DarwinLibSystemTest.GuardArgumentAndFrameChecksPrecedeStorage/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLinkingTests.cpp",
+          "filter": "DarwinLinking.GuardProvidersShareTransportAndChargeExactMetadata",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLinkingTests.cpp",
+          "filter": "DarwinLinking.GuardProviderIdentityAndCompatibilityAreClosed",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLinkingTests.cpp",
+          "filter": "DarwinLinking.GuardClosureRejectsWrongProvidersAndUnboundSymbols",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinLinkingTests.cpp",
+          "filter": "DarwinLinking.GuardFixupsRefuseWeakImportsAndNonzeroAddends",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinProcessTests.cpp",
+          "filter": "*/DarwinProcess.DefaultStaticGuardsKeepDylibTLSAndExitLifetime/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinProcessTests",
+          "source": "unittests/emulation/DarwinNativeTests.cpp",
+          "filter": "DarwinNative.DefaultStaticGuardsMatchOriginalNativeImages",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDProcessPublicTests",
+          "source": "unittests/emulation/ProcessPublicTests.cpp",
+          "filter": "*/DarwinLibSystemPublic.DefaultStaticGuardsKeepLifetimeAcrossCAndCLI/*",
           "platforms": [
             "darwin",
             "linux",

@@ -17,22 +17,109 @@
 namespace neverd::emulation::darwin_model {
 namespace {
 constexpr LibSystemBinding Bindings[] = {
-#define NEVERD_DARWIN_LIBSYSTEM_CALL(Name, Symbol, Count, Kernel)              \
-  {Symbol, Count, Kernel},
+#define NEVERD_DARWIN_LIBSYSTEM_CALL(Name, Symbol, Count, Kernel, Provider)    \
+  {Symbol, Count, Kernel, Provider},
 #include "DarwinLibSystemCalls.def"
 #undef NEVERD_DARWIN_LIBSYSTEM_CALL
 };
 static_assert(unsigned(LibSystemGateKind::StubBinder) == std::size(Bindings));
+
+bool isGuard(LibSystemGateKind Kind) {
+  return Kind == LibSystemGateKind::GuardAcquire ||
+         Kind == LibSystemGateKind::GuardRelease ||
+         Kind == LibSystemGateKind::GuardAbort;
+}
+
+llvm::Expected<std::optional<uint64_t>>
+invokeGuard(ExecutionBackend &CPU, LibSystemGateKind Kind, uint64_t Address,
+            const ProcessOptions &Options) {
+  if (!Address || Address % 8)
+    return failure("Darwin C++ guard requires an aligned nonnull pointer");
+  const bool Acquire = Kind == LibSystemGateKind::GuardAcquire;
+  if (Acquire) {
+    auto Readable = CPU.canAccess(Address, 1, Read | UserAccessible);
+    if (!Readable)
+      return Readable.takeError();
+    if (!*Readable)
+      return failure("Darwin C++ guard storage is not readable");
+    auto Initialized = CPU.readInteger(Address, 1);
+    if (!Initialized)
+      return Initialized.takeError();
+    // The completed ABI path consumes only the initialized byte. It neither
+    // examines private bookkeeping nor needs mutation or thread observations.
+    if (*Initialized)
+      return std::optional<uint64_t>(0);
+  }
+  auto Readable = CPU.canAccess(Address, 8, Read | UserAccessible);
+  if (!Readable)
+    return Readable.takeError();
+  if (!*Readable)
+    return failure("Darwin C++ guard storage is not readable");
+  auto Word = CPU.readInteger(Address, 8);
+  if (!Word)
+    return Word.takeError();
+  if (!Options.DarwinSystem || !Options.DarwinSystem->ThreadSelfPort ||
+      !*Options.DarwinSystem->ThreadSelfPort)
+    return failure(
+        "Darwin C++ guard requires a known nonzero thread self port");
+  const uint64_t Owner = uint64_t(*Options.DarwinSystem->ThreadSelfPort) << 32;
+  const uint64_t Pending = Owner | 0x200;
+  if (Acquire ? *Word != 0 : *Word != Pending) {
+    if (Acquire && *Word == Pending)
+      return failure("recursive Darwin static initialization is unsupported");
+    return failure("unsupported Darwin C++ guard state");
+  }
+  auto Writable = CPU.canAccess(Address, 8, Write | UserAccessible);
+  if (!Writable)
+    return Writable.takeError();
+  if (!*Writable)
+    return failure("Darwin C++ guard storage is not writable");
+  // Native macOS x64/ARM64 controls compare all eight bytes, including the
+  // Mach owner retained by release. Only this single-main-thread protocol is
+  // admitted; waiting/concurrent and arbitrary runtime-private states refuse.
+  const uint64_t Value = Acquire ? Pending
+                         : Kind == LibSystemGateKind::GuardRelease
+                             ? Owner | 0x101
+                             : 0;
+  if (auto E = CPU.writeInteger(Address, Value, 8))
+    return std::move(E);
+  return Acquire ? std::optional<uint64_t>(1) : std::nullopt;
+}
+
+llvm::Expected<bool> publishReturn(ExecutionBackend &CPU, const IntegerABI &ABI,
+                                   uint64_t SP, uint64_t PC,
+                                   std::optional<uint64_t> Value,
+                                   ProcessResult &Result) {
+  if (Value)
+    if (auto E = CPU.writeRegister(ABI.info().Result, {*Value, 0}))
+      return std::move(E);
+  if (auto E = CPU.writeRegister(ABI.info().StackPointer, {SP, 0}))
+    return std::move(E);
+  if (auto E =
+          CPU.writeRegister(ABI.info().Architecture == GuestArchitecture::X64
+                                ? CPURegister::X64PC
+                                : CPURegister::AArch64PC,
+                            {PC, 0}))
+    return std::move(E);
+  Result.NativeCalls.back().Result = Value;
+  Result.PC = PC;
+  return true;
+}
 } // namespace
-std::optional<LibSystemGateKind> libSystemImport(llvm::StringRef Symbol) {
-  if (Symbol == "__tlv_bootstrap")
+std::optional<LibSystemGateKind> libSystemImport(llvm::StringRef Symbol,
+                                                 llvm::StringRef Provider) {
+  if (Provider == value::LibSystemPath && Symbol == "__tlv_bootstrap")
     return LibSystemGateKind::TLVBootstrap;
-  if (Symbol == "dyld_stub_binder")
+  if (Provider == value::LibSystemPath && Symbol == "dyld_stub_binder")
     return LibSystemGateKind::StubBinder;
   for (unsigned I = 0; I < std::size(Bindings); ++I)
-    if (Bindings[I].Symbol == Symbol)
+    if (Bindings[I].Symbol == Symbol && Bindings[I].Provider == Provider)
       return LibSystemGateKind(I);
   return std::nullopt;
+}
+bool isGlobalCallbackRegistration(LibSystemGateKind Kind) {
+  return Kind == LibSystemGateKind::AtExit ||
+         Kind == LibSystemGateKind::CxaAtExit;
 }
 const LibSystemBinding &libSystemBinding(LibSystemGateKind Kind) {
   const auto Index = unsigned(Kind);
@@ -132,7 +219,7 @@ invokeLibSystem(ExecutionBackend &CPU, DarwinMemory &Memory, DarwinFiles &Files,
   NativeCallEvent Call;
   Call.PC = Request.PC;
   Call.Name = Definition.Symbol.str();
-  Call.Module = value::LibSystemPath;
+  Call.Module = Definition.Provider.str();
   Call.ArgumentCount = Arguments->Count;
   std::copy_n(Arguments->Carriers.begin(), Arguments->Count,
               Call.Arguments.begin());
@@ -152,26 +239,39 @@ invokeLibSystem(ExecutionBackend &CPU, DarwinMemory &Memory, DarwinFiles &Files,
       return failure(diagnostic::LibSystemFrame);
     Result.NativeCalls.back().ReturnAddress = ReturnPC;
   }
-  if (Binding == LibSystemGateKind::TLVAtExit ||
+  const bool GlobalRegistration = isGlobalCallbackRegistration(Binding);
+  if (Binding == LibSystemGateKind::TLVAtExit || GlobalRegistration ||
       Binding == LibSystemGateKind::NormalExit) {
     if (!Callbacks)
       return failure("Darwin callback lifecycle is unavailable");
     if (Binding == LibSystemGateKind::NormalExit)
       return Callbacks->exit(CPU, Arguments->Carriers[0], Result);
-    if (auto E = Callbacks->addTLS(CPU, Arguments->Carriers[0],
-                                   Arguments->Carriers[1]))
-      return std::move(E);
-    // The actual runtime entry is void(function, object). Clang can supply
-    // an unused third DSO carrier and an unused result; neither is consumed.
-    if (auto E = CPU.writeRegister(ABI->info().StackPointer, {*ReturnSP, 0}))
-      return std::move(E);
-    if (auto E = CPU.writeRegister(
-            X64 ? CPURegister::X64PC : CPURegister::AArch64PC, {ReturnPC, 0}))
-      return std::move(E);
-    Result.PC = ReturnPC;
-    return true;
+    if (GlobalRegistration) {
+      const auto Object = Binding == LibSystemGateKind::CxaAtExit
+                              ? std::optional<uint64_t>(Arguments->Carriers[1])
+                              : std::nullopt;
+      // The DSO carrier belongs to the event. Process exit does not interpret
+      // it as an address or admit selective DSO finalization.
+      if (auto E = Callbacks->addGlobal(CPU, Arguments->Carriers[0], Object))
+        return std::move(E);
+    } else {
+      if (auto E = Callbacks->addTLS(CPU, Arguments->Carriers[0],
+                                     Arguments->Carriers[1]))
+        return std::move(E);
+      // The actual runtime entry is void(function, object). Clang can supply
+      // an unused third DSO carrier and an unused result; neither is consumed.
+      return publishReturn(CPU, *ABI, *ReturnSP, ReturnPC, std::nullopt,
+                           Result);
+    }
   }
-  uint64_t Value = value::LibSystemGate + Image.Memory.PageSize;
+  if (isGuard(Binding)) {
+    auto Value = invokeGuard(CPU, Binding, Arguments->Carriers[0], Options);
+    if (!Value)
+      return Value.takeError();
+    return publishReturn(CPU, *ABI, *ReturnSP, ReturnPC, *Value, Result);
+  }
+  uint64_t Value =
+      GlobalRegistration ? 0 : value::LibSystemGate + Image.Memory.PageSize;
   if (Definition.Kernel) {
     ProcessServiceEvent Event{Request.PC, 0, Arguments->Kernel, std::nullopt};
     auto Invoke = [&]() -> llvm::Expected<std::optional<ServiceResult>> {
@@ -193,15 +293,6 @@ invokeLibSystem(ExecutionBackend &CPU, DarwinMemory &Memory, DarwinFiles &Files,
       Value = UINT64_MAX;
     }
   }
-  if (auto E = CPU.writeRegister(ABI->info().Result, {Value, 0}))
-    return std::move(E);
-  if (auto E = CPU.writeRegister(ABI->info().StackPointer, {*ReturnSP, 0}))
-    return std::move(E);
-  if (auto E = CPU.writeRegister(
-          X64 ? CPURegister::X64PC : CPURegister::AArch64PC, {ReturnPC, 0}))
-    return std::move(E);
-  Result.NativeCalls.back().Result = Value;
-  Result.PC = ReturnPC;
-  return true;
+  return publishReturn(CPU, *ABI, *ReturnSP, ReturnPC, Value, Result);
 }
 } // namespace neverd::emulation::darwin_model

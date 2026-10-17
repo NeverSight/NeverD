@@ -36,6 +36,31 @@ TEST(DarwinImage, OriginalBytesAndPageZeroHaveSeparateMappingOwnership) {
     EXPECT_EQ(Loaded->Plan.Regions.front().Bytes, I.Bytes);
   }
 }
+TEST(DarwinImage, RawThreadEntryKeepsItsExistingMinimumBudget) {
+  for (bool X64 : {false, true}) {
+    Image I(X64);
+    TemporaryImage File(I);
+    ProcessOptions Options;
+    Options.StackSize = 16384;
+    auto Full = darwin_model::loadImage(File.path(),
+                                        darwin_model::macOSProfile(), Options);
+    ASSERT_TRUE(bool(Full)) << llvm::toString(Full.takeError());
+    EXPECT_EQ(Full->MetadataBytes, 0u);
+    EXPECT_FALSE(Full->HasTLSCallbacks);
+    EXPECT_FALSE(Full->HasGlobalCallbacks);
+    EXPECT_TRUE(Full->ExecutableSpans.empty());
+    Options.MemoryLimit =
+        Full->Plan.MappedBytes + Options.StackSize + Full->Memory.PageSize;
+    auto Exact = darwin_model::loadImage(File.path(),
+                                         darwin_model::macOSProfile(), Options);
+    ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+    --Options.MemoryLimit;
+    auto Under = darwin_model::loadImage(File.path(),
+                                         darwin_model::macOSProfile(), Options);
+    ASSERT_FALSE(bool(Under));
+    llvm::consumeError(Under.takeError());
+  }
+}
 TEST(DarwinImage, FileBudgetIncludesBytesOutsideMappedSegments) {
   for (bool X64 : {false, true}) {
     SCOPED_TRACE(X64);

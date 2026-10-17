@@ -1,0 +1,10 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: [ x86_64-macos, arm64-macos, arm64-ios, x86_64-ios-simulator, arm64-ios-simulator ]
+install-name: '/usr/lib/libc++.1.dylib'
+current-version: 1.0
+compatibility-version: 1.0
+exports:
+  - targets: [ x86_64-macos, arm64-macos, arm64-ios, x86_64-ios-simulator, arm64-ios-simulator ]
+    symbols: [ ___cxa_guard_acquire, ___cxa_guard_release, ___cxa_guard_abort ]
+...

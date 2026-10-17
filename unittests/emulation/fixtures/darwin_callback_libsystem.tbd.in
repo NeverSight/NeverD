@@ -6,5 +6,5 @@ current-version: 1.0
 compatibility-version: 1.0
 exports:
   - targets: [ x86_64-macos, arm64-macos, arm64-ios, x86_64-ios-simulator, arm64-ios-simulator ]
-    symbols: [ _write, _getpid, __tlv_bootstrap, __tlv_atexit, _exit, __exit@_darwin_files_binder@ ]
+    symbols: [ _write, _getpid, __tlv_bootstrap, __tlv_atexit, _exit, __exit, _atexit, ___cxa_atexit, ___error@_darwin_files_binder@ ]
 ...

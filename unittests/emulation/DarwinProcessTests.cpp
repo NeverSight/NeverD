@@ -13,8 +13,10 @@
 #include "DarwinDirectoryOwnershipTestData.h"
 #include "DarwinDirectoryTimestampTestData.h"
 #include "DarwinEntropyTestData.h"
+#include "DarwinExitTestData.h"
 #include "DarwinFileTestData.h"
 #include "DarwinFullSynchronizationTestData.h"
+#include "DarwinGuardTestData.h"
 #include "DarwinLibSystemFileTestData.h"
 #include "DarwinLibSystemMemoryTestData.h"
 #include "DarwinModeTestData.h"
@@ -34,6 +36,8 @@
 #include "neverd/emulation/ProcessSession.h"
 
 #include "llvm/ADT/StringExtras.h"
+
+#include <tuple>
 
 namespace neverd::emulation {
 namespace {
@@ -2144,6 +2148,7 @@ TEST_P(DarwinProcess, LoginBufferPreservesExactBytesZeroLengthAndAuthority) {
     EXPECT_EQ(Missing->Diagnostic,
               "Darwin login buffer observation is not configured");
     EXPECT_EQ(Missing->StandardOutput, "!");
+    ASSERT_FALSE(Missing->Services.empty()) << Missing->Diagnostic;
     EXPECT_EQ(Missing->Services.back().Number, Class + 49);
     EXPECT_FALSE(Missing->Services.back().Result);
   }
@@ -4588,6 +4593,189 @@ TEST_P(DarwinProcess, DylibConstructorsAndTLSCallbacksKeepStartupAndExitOrder) {
     Options.Limits.Instructions = Reference->Instructions - 1;
     Limited = emulateProcess(Directory / "main", GetParam().OS, Options);
     ASSERT_TRUE(bool(Limited)) << llvm::toString(Limited.takeError());
+    EXPECT_EQ(Limited->Stop, ProcessStopReason::InstructionLimit);
+    EXPECT_FALSE(Limited->ExitStatus);
+    EXPECT_FALSE(Limited->ReturnValue);
+    Options.Limits.Instructions = process_defaults::Instructions;
+  }
+}
+TEST_P(DarwinProcess, DylibGlobalsAndLocalStaticsFinalizeAfterTLS) {
+  for (const char *Kind : {"classic", "chained"}) {
+    const auto Directory =
+        std::filesystem::path(Path.string() + "-exit-" + Kind);
+    for (const auto &Test : darwin_test::GlobalExitCases) {
+      SCOPED_TRACE(std::string(Kind) + ":" + Test.Mode);
+      darwin_test::globalExitOptions(Options, Directory, Test.Mode);
+      const llvm::StringRef Mode(Test.Mode);
+      const bool Constructor = Mode.starts_with("ctor-");
+      const bool Raw = Mode.ends_with("raw");
+      const unsigned CRegistrations = Constructor            ? (Raw ? 3 : 5)
+                                      : Mode == "global-raw" ? 10
+                                      : Raw                  ? 7
+                                      : Mode == "opaque"     ? 12
+                                                             : 10;
+      const unsigned CxxRegistrations = Constructor           ? 2
+                                        : Mode == "opaque"    ? 6
+                                        : Mode == "deep-exit" ? 5
+                                                              : 4;
+      for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+        auto R = emulateProcess(Directory / "main", GetParam().OS, Options);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        EXPECT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+        EXPECT_EQ(R->ExitStatus, Test.Status);
+        EXPECT_EQ(R->StandardOutput, Test.Output);
+        EXPECT_TRUE(R->StandardError.empty());
+        EXPECT_TRUE(R->Services.empty());
+        EXPECT_EQ(bool(R->ReturnValue), Mode == "return" || Mode == "opaque");
+        unsigned C = 0, Cxx = 0, TLS = 0;
+        bool HighObject = false, NullObject = false;
+        for (const auto &Call : R->NativeCalls) {
+          if (Call.Name == "_atexit" || Call.Name == "___cxa_atexit") {
+            const bool Object = Call.Name == "___cxa_atexit";
+            Cxx += Object;
+            C += !Object;
+            EXPECT_EQ(Call.ArgumentCount, Object ? 3u : 1u);
+            EXPECT_EQ(Call.Result, 0u);
+            EXPECT_TRUE(Call.ReturnAddress);
+            HighObject |= Object &&
+                          Call.Arguments[1] == 0xfedcba9876543210ULL &&
+                          Call.Arguments[2] == UINT64_MAX;
+            NullObject |= Object && !Call.Arguments[1] &&
+                          Call.Arguments[2] == 0xfedcba9876543210ULL;
+          } else if (Call.Name == "__tlv_atexit") {
+            ++TLS;
+            EXPECT_EQ(Call.ArgumentCount, 2u);
+            EXPECT_FALSE(Call.Result);
+          }
+        }
+        EXPECT_EQ(C, CRegistrations);
+        EXPECT_EQ(Cxx, CxxRegistrations);
+        EXPECT_EQ(TLS, Constructor || Raw ? 2u : 3u);
+        EXPECT_EQ(HighObject, Mode == "opaque");
+        EXPECT_EQ(NullObject, Mode == "opaque");
+      }
+    }
+    darwin_test::globalExitOptions(Options, Directory, "global-reentrant");
+    auto Reentrant = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Reentrant)) << llvm::toString(Reentrant.takeError());
+    EXPECT_EQ(Reentrant->Stop, ProcessStopReason::RuntimeFailure);
+    EXPECT_EQ(Reentrant->Diagnostic,
+              "reentrant Darwin exit during termination is unsupported");
+    EXPECT_EQ(Reentrant->StandardOutput, "LPBTGMStvUYE");
+    EXPECT_FALSE(Reentrant->ExitStatus);
+    EXPECT_FALSE(Reentrant->ReturnValue);
+    darwin_test::globalExitOptions(Options, Directory, "return");
+    auto Reference = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Reference));
+    ASSERT_EQ(Reference->Stop, ProcessStopReason::Exited);
+    Options.Limits.Events = Reference->Events - 1;
+    auto Limited = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Limited));
+    EXPECT_EQ(Limited->Stop, ProcessStopReason::EventLimit);
+    EXPECT_FALSE(Limited->ExitStatus);
+    EXPECT_FALSE(Limited->ReturnValue);
+    Options.Limits.Events = process_defaults::Events;
+    Options.Limits.Instructions = Reference->Instructions - 1;
+    Limited = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Limited));
+    EXPECT_EQ(Limited->Stop, ProcessStopReason::InstructionLimit);
+    EXPECT_FALSE(Limited->ExitStatus);
+    EXPECT_FALSE(Limited->ReturnValue);
+    Options.Limits.Instructions = process_defaults::Instructions;
+  }
+}
+TEST_P(DarwinProcess, DefaultStaticGuardsKeepDylibTLSAndExitLifetime) {
+  for (const char *Kind : {"classic", "chained"}) {
+    const auto Directory =
+        std::filesystem::path(Path.string() + "-guard-" + Kind);
+    for (const auto &Test : darwin_test::GuardCases) {
+      SCOPED_TRACE(std::string(Kind) + ':' + Test.Mode);
+      darwin_test::guardOptions(Options, Directory, Test.Mode);
+      const llvm::StringRef Mode(Test.Mode);
+      const bool Constructor = Mode.starts_with("ctor-");
+      const unsigned Statics = Constructor            ? 3
+                               : Mode == "raw"        ? 4
+                               : Mode == "global-raw" ? 5
+                                                      : 6;
+      for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+        auto R = emulateProcess(Directory / "main", GetParam().OS, Options);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        ASSERT_EQ(R->Stop, ProcessStopReason::Exited) << R->Diagnostic;
+        EXPECT_EQ(R->SelectedBackend, GetParam().Backend);
+        EXPECT_EQ(R->ExitStatus, Test.Status);
+        EXPECT_EQ(R->ReturnValue, Mode == "return" ? std::optional<uint64_t>(37)
+                                                   : std::nullopt);
+        EXPECT_EQ(R->StandardOutput, Test.Output);
+        EXPECT_TRUE(R->StandardError.empty());
+        EXPECT_TRUE(R->Services.empty());
+        unsigned Acquire = 0, Release = 0, Abort = 0;
+        for (const auto &Call : R->NativeCalls) {
+          const bool Guard =
+              llvm::StringRef(Call.Name).starts_with("___cxa_guard_");
+          EXPECT_EQ(Call.Module, Guard ? "/usr/lib/libc++.1.dylib"
+                                       : "/usr/lib/libSystem.B.dylib");
+          if (!Guard)
+            continue;
+          EXPECT_EQ(Call.ArgumentCount, 1u);
+          EXPECT_NE(Call.Arguments[0], 0u);
+          EXPECT_EQ(Call.Arguments[0] % 8, 0u);
+          EXPECT_TRUE(Call.ReturnAddress);
+          if (Call.Name == "___cxa_guard_acquire") {
+            ++Acquire;
+            ASSERT_TRUE(Call.Result);
+            EXPECT_LE(*Call.Result, 1u);
+          } else {
+            EXPECT_FALSE(Call.Result);
+            Release += Call.Name == "___cxa_guard_release";
+            Abort += Call.Name == "___cxa_guard_abort";
+          }
+        }
+        EXPECT_EQ(Acquire, Statics + (Constructor ? 0 : 3));
+        EXPECT_EQ(Release, Statics + (Constructor ? 0 : 1));
+        EXPECT_EQ(Abort, Constructor ? 0u : 1u);
+      }
+    }
+    for (const auto &[Mode, Output, Diagnostic] :
+         {std::tuple{"recursive", "LAPBCSMTH",
+                     "recursive Darwin static initialization is unsupported"},
+          std::tuple{"foreign", "LAPBCSMTH",
+                     "unsupported Darwin C++ guard state"},
+          std::tuple{
+              "global-reentrant", "LAPBCSMTHRtUYuE",
+              "reentrant Darwin exit during termination is unsupported"}}) {
+      darwin_test::guardOptions(Options, Directory, Mode);
+      auto R = emulateProcess(Directory / "main", GetParam().OS, Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      EXPECT_EQ(R->Stop, ProcessStopReason::RuntimeFailure);
+      EXPECT_EQ(R->Diagnostic, Diagnostic);
+      EXPECT_EQ(R->StandardOutput, Output);
+      EXPECT_FALSE(R->ExitStatus);
+      EXPECT_FALSE(R->ReturnValue);
+    }
+    darwin_test::guardOptions(Options, Directory, "return");
+    Options.DarwinSystem->ThreadSelfPort.reset();
+    auto Missing = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Missing)) << llvm::toString(Missing.takeError());
+    EXPECT_EQ(Missing->Stop, ProcessStopReason::RuntimeFailure);
+    EXPECT_EQ(Missing->Diagnostic,
+              "Darwin C++ guard requires a known nonzero thread self port");
+    EXPECT_EQ(Missing->StandardOutput, "L");
+    EXPECT_FALSE(Missing->ExitStatus);
+    EXPECT_FALSE(Missing->ReturnValue);
+    darwin_test::guardOptions(Options, Directory, "return");
+    auto Reference = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Reference)) << llvm::toString(Reference.takeError());
+    ASSERT_EQ(Reference->Stop, ProcessStopReason::Exited);
+    Options.Limits.Events = Reference->Events - 1;
+    auto Limited = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Limited));
+    EXPECT_EQ(Limited->Stop, ProcessStopReason::EventLimit);
+    EXPECT_FALSE(Limited->ExitStatus);
+    EXPECT_FALSE(Limited->ReturnValue);
+    Options.Limits.Events = process_defaults::Events;
+    Options.Limits.Instructions = Reference->Instructions - 1;
+    Limited = emulateProcess(Directory / "main", GetParam().OS, Options);
+    ASSERT_TRUE(bool(Limited));
     EXPECT_EQ(Limited->Stop, ProcessStopReason::InstructionLimit);
     EXPECT_FALSE(Limited->ExitStatus);
     EXPECT_FALSE(Limited->ReturnValue);

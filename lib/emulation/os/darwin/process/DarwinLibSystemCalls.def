@@ -5,22 +5,49 @@
 //===----------------------------------------------------------------------===//
 // Mach-O linkage spellings. __exit is C _exit; _exit is normal C exit.
 #ifdef NEVERD_DARWIN_LIBSYSTEM_CALL
-NEVERD_DARWIN_LIBSYSTEM_CALL(Read, "_read", 3, ServiceKind::Read)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Write, "_write", 3, ServiceKind::Write)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Close, "_close", 1, ServiceKind::Close)
-NEVERD_DARWIN_LIBSYSTEM_CALL(GetPID, "_getpid", 0, ServiceKind::GetPID)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Exit, "__exit", 1, ServiceKind::Exit)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Error, "___error", 0, std::nullopt)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Read, "_read", 3, ServiceKind::Read,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Write, "_write", 3, ServiceKind::Write,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Close, "_close", 1, ServiceKind::Close,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(GetPID, "_getpid", 0, ServiceKind::GetPID,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Exit, "__exit", 1, ServiceKind::Exit,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Error, "___error", 0, std::nullopt,
+                             value::LibSystemPath)
 // open's optional mode is decoded separately only for O_CREAT.
-NEVERD_DARWIN_LIBSYSTEM_CALL(Open, "_open", 2, ServiceKind::Open)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Dup, "_dup", 1, ServiceKind::Dup)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Dup2, "_dup2", 2, ServiceKind::Dup2)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Lseek, "_lseek", 3, ServiceKind::Lseek)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Pread, "_pread", 4, ServiceKind::Pread)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Pwrite, "_pwrite", 4, ServiceKind::Pwrite)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Mmap, "_mmap", 6, ServiceKind::Mmap)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Mprotect, "_mprotect", 3, ServiceKind::Mprotect)
-NEVERD_DARWIN_LIBSYSTEM_CALL(Munmap, "_munmap", 2, ServiceKind::Munmap)
-NEVERD_DARWIN_LIBSYSTEM_CALL(TLVAtExit, "__tlv_atexit", 2, std::nullopt)
-NEVERD_DARWIN_LIBSYSTEM_CALL(NormalExit, "_exit", 1, std::nullopt)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Open, "_open", 2, ServiceKind::Open,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Dup, "_dup", 1, ServiceKind::Dup,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Dup2, "_dup2", 2, ServiceKind::Dup2,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Lseek, "_lseek", 3, ServiceKind::Lseek,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Pread, "_pread", 4, ServiceKind::Pread,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Pwrite, "_pwrite", 4, ServiceKind::Pwrite,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Mmap, "_mmap", 6, ServiceKind::Mmap,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Mprotect, "_mprotect", 3, ServiceKind::Mprotect,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(Munmap, "_munmap", 2, ServiceKind::Munmap,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(TLVAtExit, "__tlv_atexit", 2, std::nullopt,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(AtExit, "_atexit", 1, std::nullopt,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(CxaAtExit, "___cxa_atexit", 3, std::nullopt,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(NormalExit, "_exit", 1, std::nullopt,
+                             value::LibSystemPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(GuardAcquire, "___cxa_guard_acquire", 1,
+                             std::nullopt, value::LibCxxPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(GuardRelease, "___cxa_guard_release", 1,
+                             std::nullopt, value::LibCxxPath)
+NEVERD_DARWIN_LIBSYSTEM_CALL(GuardAbort, "___cxa_guard_abort", 1, std::nullopt,
+                             value::LibCxxPath)
 #endif

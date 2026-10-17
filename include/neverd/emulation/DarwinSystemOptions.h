@@ -127,6 +127,8 @@ struct DarwinSystemOptions {
   /// Missing is unknown; every uint32 pattern, including zero, is explicit.
   /// Raw trap returns sign-extend the name through the native int32 carrier.
   /// No host/PID/thread identity, reference allocation or lifetime is inferred.
+  /// Bounded C++ guards additionally use a known nonzero ThreadSelfPort as
+  /// their owner word. This does not narrow the raw trap's explicit values.
   std::optional<uint32_t> ThreadSelfPort;
   std::optional<uint32_t> TaskSelfPort;
   std::optional<uint32_t> HostSelfPort;

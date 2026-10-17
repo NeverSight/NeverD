@@ -331,9 +331,13 @@ protected:
     // grows main deliberately, while a compact-unwind record has a fixed
     // authenticated range and the Mach-O patcher correctly refuses to invent
     // capacity beyond it.
-    const ProcessResult Linked = RunClang(
-        {Object.string(), "-o", runtimeFixtureBinary().string(), "-arch",
-         Architecture, "-Wl,-adhoc_codesign", "-Wl,-no_compact_unwind"});
+    // Reserve load-command space for the added executable segment. Native ld
+    // can leave only 32 padding bytes; removing the 16-byte signature
+    // command still cannot fit the new 72-byte segment command.
+    const ProcessResult Linked =
+        RunClang({Object.string(), "-o", runtimeFixtureBinary().string(),
+                  "-arch", Architecture, "-Wl,-adhoc_codesign",
+                  "-Wl,-no_compact_unwind", "-Wl,-headerpad,0x100"});
     if (Linked.ExitCode != 0)
       return Linked;
 

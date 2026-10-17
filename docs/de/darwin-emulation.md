@@ -1,6 +1,6 @@
 **Sprachen**: [English](../darwin-emulation.md) | [简体中文](../zh-CN/darwin-emulation.md) | [繁體中文](../zh-TW/darwin-emulation.md) | [日本語](../ja/darwin-emulation.md) | [한국어](../ko/darwin-emulation.md) | [Français](../fr/darwin-emulation.md) | [Deutsch](darwin-emulation.md) | [Español](../es/darwin-emulation.md) | [Italiano](../it/darwin-emulation.md) | [Русский](../ru/darwin-emulation.md) | [العربية](../ar/darwin-emulation.md)
 
-<!-- i18n-source: f85e400322f7b1abd9461fe80492cb140c811c56a1bb2f6c6685b72dee6c7364 -->
+<!-- i18n-source: 26e0c6dba6d3b863bb8dc0c4690bbc6ea61bbe5dd2accd19643847c8968fc13e -->
 
 [← Dokumentationsübersicht](README.md)
 
@@ -33,7 +33,7 @@ Segmente behalten aktuelle/maximale Rechte und Nullfüllung. `__PAGEZERO` reserv
 
 `LC_UNIXTHREAD` verlangt genau einen vollständigen nativen 64-Bit-Allgemeinregistersatz, in dem nur PC belegt ist. Der Startstack enthält argc, terminierte argv/envp und einen terminierten apple-Vektor mit `executable_path=<input filename>`. Eigene SP/Flags, andere Register, zusätzliche Flavors und widersprüchliche Eintritte sind unzulässig. Hostumgebung und Linux-Hilfsvektor werden nicht übernommen. Grundlage: [dyld-Architektur](https://github.com/apple-oss-distributions/dyld/blob/main/doc/dyld4.md).
 
-Der folgende begrenzte Vertrag unterstützt libSystem, explizite Start-dylibs und gewöhnliches C-TLS des Hauptthreads. Globale Destruktoren, alte TLS-Initialisierer, arm64e/PAC, nicht unterstützte CPU-Untertypen, Verschlüsselung und nicht modellierte Befehle scheitern weiterhin vor Ausführung. Das Hauptprogramm behält seine bevorzugte Adresse; dylibs erhalten getrennte deterministische Adressen. Signaturmetadaten implementieren weder AMFI noch Entitlements.
+Der folgende begrenzte Vertrag unterstützt libSystem, explizite Start-dylibs, Startkonstruktoren, C/C++-TLS des Hauptthreads und C/C++-Destruktoren beim Prozessende. Selektive DSO-Finalisierung, alte TLS-Initialisierer, arm64e/PAC, nicht unterstützte CPU-Untertypen, Verschlüsselung und nicht modellierte Befehle scheitern weiterhin vor Ausführung. Das Hauptprogramm behält seine bevorzugte Adresse; dylibs erhalten getrennte deterministische Adressen. Signaturmetadaten implementieren weder AMFI noch Entitlements.
 
 ## Darwin-Dienste
 
@@ -1833,7 +1833,7 @@ classic lazy: eager stable slots; status 83; stdout_hex 41005a53; named calls/ev
 _exit: status 35; stdout_hex 58; named calls 2; events 2
 file calls: main status 73; stdout_hex 460044; named calls 40; events 41
 memory calls: main status 79; stdout_hex 4d0050; named calls 18; events 19
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 104; matching ARM64 identities: 312
 ```
 
 ```json
@@ -1844,7 +1844,7 @@ native common catalogue: 82; required methods/platform: 102; matching ARM64 iden
 
 `darwin.modules` ordnet bis zu 32 exakten, groß-/kleinschreibungsabhängigen Installationsnamen originale Mach-O-Pfade zu. Nur erreichbare Abhängigkeiten werden gelesen; `@loader_path` wird wörtlich verglichen, ohne Host-Bibliothekssuche. ISA, Plattform, Identität und Version jeder MH_DYLIB werden geprüft; gewöhnliche Ordinale wählen den tatsächlichen Anbieter. Gleichnamige Exporte und gemeinsame Abhängigkeiten behalten ihre Identität. Vollständige Eingaben und residente Daten teilen jeweils ein Budget.
 
-Initialisiertes und nullinitialisiertes C-TLS unterstützt bis zu 16 Byte Ausrichtung. Der Speicher jedes Moduls wird bei der Vorbereitung gemappt und berechnet. Der erste Zugriff kopiert die zusammenhängende, bereits relocierte Live-Vorlage samt vorherigen BSS-/Lückenänderungen. Deskriptoren und Rückkehrrahmen werden geprüft; TLS-Seiten lassen sich weder wiederverwenden noch entmappen oder umschützen. Originale native O0/O1/O2-classic/chained-Kontrollen vergleichen fünf C/CLI/Python-Profile. Zyklen, schwache/Reexports, globale Destruktoren/alte TLS-Initialisierer, dlopen/dlsym, Threads und vollständige Frameworks bleiben unimplementiert; natives Intel und physisches iOS sind unqualifiziert.
+Initialisiertes und nullinitialisiertes C-TLS unterstützt bis zu 16 Byte Ausrichtung. Der Speicher jedes Moduls wird bei der Vorbereitung gemappt und berechnet. Der erste Zugriff kopiert die zusammenhängende, bereits relocierte Live-Vorlage samt vorherigen BSS-/Lückenänderungen. Deskriptoren und Rückkehrrahmen werden geprüft; TLS-Seiten lassen sich weder wiederverwenden noch entmappen oder umschützen. Originale native O0/O1/O2-classic/chained-Kontrollen vergleichen fünf C/CLI/Python-Profile. Zyklen, schwache/Reexports, selektive DSO-Finalisierung/alte TLS-Initialisierer, dlopen/dlsym, Threads und vollständige Frameworks bleiben unimplementiert; natives Intel und physisches iOS sind unqualifiziert.
 
 ```json
 {"backend":"unicorn","instruction_quantum":1024,"timeout_microseconds":5000000,"darwin":{"modules":[{"name":"@loader_path/libneverd-base.dylib","path":"/inputs/libneverd-base.dylib"},{"name":"@loader_path/libneverd-leaf.dylib","path":"/inputs/libneverd-leaf.dylib"}]}}
@@ -1859,9 +1859,9 @@ TLS: initialized / zero-only / alignment <=16; exact 24-byte descriptor; live co
 resolver: __tlv_get_addr; x64 RDI -> RAX; ARM64 X0 -> X0; one named event; errno preserved
 lifetime: one main-thread block/image/process; stable addresses; fresh subsequent processes
 addends: checked signed ordinary provider offsets; data/TLS initializers; original provider spans only
-unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; global destructors/legacy TLS init; dlopen/dlsym; threads
+unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; selective DSO finalization/legacy TLS init; dlopen/dlsym; threads
 workload: shared dependency; duplicate export spelling; TLS aliasing; template mutation; main 83; stdout 440054
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 104; matching ARM64 identities: 312
 ```
 
 ## Darwin dylib Importoffsets
@@ -1874,4 +1874,18 @@ Originale native O0/O1/O2-Kontrollen mit classic/chained liefern Status 78 ohne 
 
 Originale `S_MOD_INIT_FUNC_POINTERS`, schreibgeschützte `S_INIT_FUNC_OFFSETS` und ein `LC_ROUTINES_64` laufen vor `LC_MAIN`. Die deklarierte Abhängigkeitsreihenfolge wird in Postorder durchlaufen; gemeinsame Images starten einmal. Ziele benötigen ursprünglichen ausführbaren Speicher, auf ARM64 vier ausgerichtete Bytes. Geänderte ausstehende Tabellen werden abgelehnt. Fünf Parameter umfassen `ProgramVars`; der Programmname stammt unabhängig von argv0 aus dem Dateinamen. C++ `thread_local` führt die verzögerte Konstruktion im originalen Gastcode aus.
 
-`__tlv_atexit` nutzt die void-ABI mit zwei Argumenten, ignoriert den zusätzlichen DSO-Träger und erhält errno und Ergebnisregister; das Ereignisergebnis ist null. Vorab berechneter Speicher fasst1024 Einträge einschließlich Nullfunktionen und Duplikaten mit opaken64-Bit-Objekten. main-Rückkehr und C `exit` arbeiten rückwärts; neue Registrierungen kommen vor älteren. Frames unter dem aktuellen SP und der x64-Red-Zone erhalten lebende Stackobjekte. Alle Schritte teilen das bestehende Budget; Exit-Ergebnisse erscheinen erst nach Abschluss. C `_exit` und rohes BSD exit beenden sofort. Reentrantes exit, globale Destruktoren, alte TLS-Abschnitte und Threads bleiben abgelehnt. Fünf Softwareprofile, drei ARM64-HVF-Profile und originale O0/O1/O2-classic/chained-Kontrollen prüfen die Pfade ohne Stackschutz in den Kontrollen; Guard-Datenimporte bleiben abgelehnt. Natives Intel und physisches iOS sind unqualifiziert.
+`__tlv_atexit` nutzt die void-ABI mit zwei Argumenten, ignoriert den zusätzlichen DSO-Träger und erhält errno und Ergebnisregister; das Ereignisergebnis ist null. Vorab berechneter Speicher fasst1024 Einträge einschließlich Nullfunktionen und Duplikaten mit opaken64-Bit-Objekten. main-Rückkehr und C `exit` arbeiten rückwärts; neue Registrierungen kommen vor älteren. Frames unter dem aktuellen SP und der x64-Red-Zone erhalten lebende Stackobjekte. Alle Schritte teilen das bestehende Budget; Exit-Ergebnisse erscheinen erst nach Abschluss. C `_exit` und rohes BSD exit beenden sofort. Reentrantes exit, selektive DSO-Finalisierung, alte TLS-Abschnitte und Threads bleiben abgelehnt. Fünf Softwareprofile, drei ARM64-HVF-Profile und originale O0/O1/O2-classic/chained-Kontrollen prüfen die Pfade ohne Stackschutz in den Kontrollen; Guard-Datenimporte bleiben abgelehnt. Natives Intel und physisches iOS sind unqualifiziert.
+
+## C/C++ Destruktoren beim Prozessende
+
+C `atexit` und C++ `__cxa_atexit` liefern die Ganzzahl null und erhalten errno. C Rückrufe haben keine Argumente; C++ Rückrufe erhalten das ursprüngliche Objekt, DSO bleibt ein opaker Ereigniswert. Normales Beenden verarbeitet Hauptthread-TLS genau einmal und danach die gemeinsame C/C++ Liste in umgekehrter Reihenfolge. Neue globale Einträge kommen vor älteren; TLS wird nicht erneut abgearbeitet. Nur starke Registrierungsimporte reservieren eine eigene Liste mit 1024 Einträgen. Bestehende raw-, Konstruktor- und TLS-Budgets bleiben erhalten.
+
+Das Original mit zwei dylibs prüft Compiler-Destruktoren, wiederholte lokale static-Zugriffe, verschachtelte Registrierung, Stackobjekte und `_exit` aus einem Destruktor. Lokale statics verwenden `-fno-threadsafe-statics`. `__cxa_finalize`, dlopen/dlclose, Threads und vollständige Frameworks bleiben abgelehnt. Fünf Softwareprofile, drei ARM64 HVF Profile und C/CLI/Python teilen bisherige Formate und Budgets. Natives Intel und physisches iOS bleiben ungeprüft.
+
+## C++ static guards im Hauptthread
+
+Nur starke Imports ohne Addend `___cxa_guard_acquire`, `___cxa_guard_release` und `___cxa_guard_abort` aus `/usr/lib/libc++.1.dylib` (Kompatibilität höchstens 1.0.0) sind zugelassen. Andere C++-Symbole, libc++abi, Aliase, weak/reexport und Überschreibungen bleiben abgelehnt. libSystem teilt dieselben zwei Seiten; Guards allein reservieren keine Callback-Warteschlange.
+
+Der Guard ist acht Byte groß, nicht null und natürlich ausgerichtet. Ein gesetztes Initialisierungsbyte wird allein gelesen: acquire liefert int 0 ohne Schreibrecht oder Port. Sonst wird der explizite Port P ungleich null `darwin_system.thread_self_port` (`DarwinSystemOptions::ThreadSelfPort`) benötigt: pending `(uint64_t(P)<<32)|0x200`, acquire 1, abort setzt null, release schreibt `(uint64_t(P)<<32)|0x101`. void-Aufrufe erhalten errno und Ergebnisregister, JSON-Ergebnis null. Rekursion, fremder Besitzer, Wartebits, unbekannte Zustände und ungültiger Speicher scheitern vor Änderungen; keine Host-ID wird abgeleitet.
+
+Zwei originale dylibs mit Standard-statics prüfen Start, Konstruktion während TLS/globaler Destruktoren, wiederholte Zugriffe, alle Guard-Bytes und Wächter, abort/retry sowie normal/raw exit. LIFO, Budgets und frische Prozesse bleiben gemeinsam. Fünf Softwareprofile, drei ARM64-HVF-Profile, C/CLI/Python und O0/O1/O2 classic/chained werden geprüft. ARM64 verlangt `-march=armv8-a -mcpu=generic` und finale LDARB/kein LDAPR-Kontrolle; march allein kann LDAPRB erzeugen. RCpc, Nebenläufigkeit, Ausnahmen und selektive DSO-Finalisierung bleiben offen. x64 nutzt Rosetta; physisches Intel/iOS ist unqualifiziert.

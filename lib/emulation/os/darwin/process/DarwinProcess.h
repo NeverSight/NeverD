@@ -36,7 +36,8 @@ struct ProfileSpec {
 ProfileSpec macOSProfile();
 ProfileSpec iOSProfile(bool Simulator);
 enum class LibSystemGateKind {
-#define NEVERD_DARWIN_LIBSYSTEM_CALL(Name, Symbol, Count, Kernel) Name,
+#define NEVERD_DARWIN_LIBSYSTEM_CALL(Name, Symbol, Count, Kernel, Provider)    \
+  Name,
 #include "DarwinLibSystemCalls.def"
 #undef NEVERD_DARWIN_LIBSYSTEM_CALL
   StubBinder,
@@ -72,6 +73,7 @@ struct ProcessImage {
   std::vector<ExecutableSpan> ExecutableSpans;
   std::vector<StartupCallback> Initializers;
   bool HasTLSCallbacks = false;
+  bool HasGlobalCallbacks = false;
 };
 struct InitialStack {
   uint64_t SP, Argc, Argv, Envp, Apple, ProgramVars = 0;

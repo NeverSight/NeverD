@@ -25,6 +25,27 @@ using namespace value;
 namespace {
 using namespace llvm::MachO;
 constexpr size_t SystemProvider = SIZE_MAX;
+constexpr size_t CxxProvider = SIZE_MAX - 1;
+struct BuiltinProvider {
+  llvm::StringLiteral Name;
+  uint32_t CompatibilityVersion;
+  size_t Index;
+};
+constexpr BuiltinProvider BuiltinProviders[] = {
+    {LibSystemPath, LibSystemCompatibilityVersion, SystemProvider},
+    {LibCxxPath, LibCxxCompatibilityVersion, CxxProvider}};
+const BuiltinProvider *builtinProvider(llvm::StringRef Name) {
+  for (const auto &P : BuiltinProviders)
+    if (P.Name == Name)
+      return &P;
+  return nullptr;
+}
+const BuiltinProvider *builtinProvider(size_t Index) {
+  for (const auto &P : BuiltinProviders)
+    if (P.Index == Index)
+      return &P;
+  return nullptr;
+}
 constexpr uint64_t DylibBase = 0x200000000ULL;
 struct Node {
   MachOExecutionImage Loaded;
@@ -123,10 +144,10 @@ class ImageGraph {
         return E;
       if (D.Command != LC_LOAD_DYLIB)
         return failure(diagnostic::LibSystemProvider);
-      if (D.Name == LibSystemPath) {
-        if (D.CompatibilityVersion > LibSystemCompatibilityVersion)
+      if (const auto *Provider = builtinProvider(D.Name)) {
+        if (D.CompatibilityVersion > Provider->CompatibilityVersion)
           return failure(diagnostic::LibSystemProvider);
-        N.Dependencies.push_back(SystemProvider);
+        N.Dependencies.push_back(Provider->Index);
         continue;
       }
       size_t Target = 0;
@@ -263,14 +284,17 @@ class ImageGraph {
       uint64_t Target = F.Target + N.Bias;
       if (F.Bind) {
         const auto Provider = N.Dependencies[F.LibraryOrdinal - 1];
-        if (Provider == SystemProvider) {
-          auto Binding = libSystemImport(F.Symbol);
+        if (const auto *Builtin = builtinProvider(Provider)) {
+          auto Binding = libSystemImport(F.Symbol, Builtin->Name);
           if (!Binding || F.WeakImport || F.Addend ||
               (*Binding == LibSystemGateKind::StubBinder &&
                (!Lazy || F.Origin != MachOProgramFixupOrigin::ClassicBind)))
             return llvm::createStringError(
                 llvm::inconvertibleErrorCode(),
-                llvm::Twine(diagnostic::LibSystemImport) + F.Symbol);
+                llvm::Twine(Provider == SystemProvider
+                                ? diagnostic::LibSystemImport
+                                : "unsupported Darwin libc++ import: ") +
+                    F.Symbol);
           if (*Binding == LibSystemGateKind::TLVBootstrap &&
               !Out.TLSDescriptors.contains(F.Address + N.Bias))
             return failure(
@@ -447,7 +471,7 @@ public:
       for (const auto &M : Options.Darwin->Modules) {
         const auto PathText = pathToUTF8(M.Path);
         if (M.Name.empty() || M.Name.size() > DarwinModuleNameLimit ||
-            M.Name.find('\0') != std::string::npos || M.Name == LibSystemPath ||
+            M.Name.find('\0') != std::string::npos || builtinProvider(M.Name) ||
             PathText.empty() || PathText.find('\0') != std::string::npos ||
             !Catalogue.emplace(M.Name, &M).second)
           return failure(
@@ -461,15 +485,18 @@ public:
     // Reserve both provider pages before allowing any image to consume them.
     const bool Imports = llvm::any_of(Nodes, [](const auto &N) {
       return llvm::any_of(N.Linking.Fixups, [&](const auto &F) {
-        return F.Bind && N.Dependencies[F.LibraryOrdinal - 1] == SystemProvider;
+        return F.Bind && builtinProvider(N.Dependencies[F.LibraryOrdinal - 1]);
       });
     });
     RetainCallbacks = llvm::any_of(Nodes, [](const auto &N) {
       return N.Loaded.HasInitializers ||
              llvm::any_of(N.Linking.Fixups, [&](const auto &F) {
-               return F.Bind &&
-                      N.Dependencies[F.LibraryOrdinal - 1] == SystemProvider &&
-                      libSystemImport(F.Symbol) == LibSystemGateKind::TLVAtExit;
+               if (!F.Bind ||
+                   N.Dependencies[F.LibraryOrdinal - 1] != SystemProvider)
+                 return false;
+               const auto Kind = libSystemImport(F.Symbol);
+               return Kind && (*Kind == LibSystemGateKind::TLVAtExit ||
+                               isGlobalCallbackRegistration(*Kind));
              });
     });
     if (Imports) {
@@ -503,10 +530,14 @@ public:
     Out.HasTLSCallbacks = llvm::any_of(Out.Imports, [](const auto &I) {
       return I.second == LibSystemGateKind::TLVAtExit;
     });
+    Out.HasGlobalCallbacks = llvm::any_of(Out.Imports, [](const auto &I) {
+      return isGlobalCallbackRegistration(I.second);
+    });
     if (RetainCallbacks || llvm::any_of(Out.Imports, [](const auto &I) {
           return I.second == LibSystemGateKind::NormalExit;
         }))
-      if (auto E = charge(DarwinCallbacks::metadataBytes(Out.HasTLSCallbacks)))
+      if (auto E = charge(DarwinCallbacks::metadataBytes(
+              Out.HasTLSCallbacks, Out.HasGlobalCallbacks)))
         return std::move(E);
     if (Out.Plan.MappedBytes + ModelBytes > Available - Out.MetadataBytes)
       return failure(diagnostic::ProcessLimits);

@@ -704,6 +704,25 @@ llvm::Expected<std::string> run(llvm::StringRef Program,
   return Text ? (*Text)->getBuffer().str() : std::string();
 }
 
+/// Keep the Windows COFF linker independent of Git Bash's POSIX link.exe.
+llvm::Expected<std::string> compileRust(llvm::StringRef Rustc,
+                                        llvm::StringRef Source,
+                                        llvm::StringRef Binary,
+                                        llvm::StringRef Dir) {
+  llvm::SmallVector<llvm::StringRef, 12> Args{"--edition=2021", "-O", "-C",
+                                              "overflow-checks=off"};
+#ifdef _WIN32
+  auto Linker = llvm::sys::findProgramByName("lld-link");
+  if (!Linker)
+    return llvm::createStringError(Linker.getError(),
+                                   "Rust fixture requires lld-link");
+  const std::string LinkerArgument = "linker=" + *Linker;
+  Args.append({"-C", LinkerArgument});
+#endif
+  Args.append({"-o", Binary, Source});
+  return run(Rustc, Args, Dir);
+}
+
 std::string normalizeLineEndings(std::string Text) {
   for (size_t At = 0; (At = Text.find("\r\n", At)) != std::string::npos;)
     Text.erase(At, 1);
@@ -1376,10 +1395,7 @@ TEST(SourceDialect, RustViewComputesWhatCComputes) {
       {"-O1", "-fwrapv", "-fno-strict-aliasing", "-o", CBinary.str(), CSource},
       Dir);
   ASSERT_TRUE(bool(CBuild)) << llvm::toString(CBuild.takeError());
-  auto RustBuild = run(Rustc,
-                       {"--edition=2021", "-O", "-C", "overflow-checks=off",
-                        "-o", RustBinary.str(), RustSource},
-                       Dir);
+  auto RustBuild = compileRust(Rustc, RustSource, RustBinary, Dir);
   ASSERT_TRUE(bool(RustBuild)) << llvm::toString(RustBuild.takeError()) << "\n"
                                << Rust.Text;
   auto CResult = run(CBinary, {}, Dir);
@@ -1613,10 +1629,8 @@ TEST(SourceDialect, BitFieldsOfTheProgramsTypesComputeWhatCComputes) {
   if (!Rustc.empty()) {
     llvm::SmallString<128> RustBinary(Dir);
     llvm::sys::path::append(RustBinary, "rust.out");
-    auto Build = run(Rustc,
-                     {"--edition=2021", "-O", "-C", "overflow-checks=off", "-o",
-                      RustBinary.str(), Write("program.rs", Programs.Rust)},
-                     Dir);
+    auto Build =
+        compileRust(Rustc, Write("program.rs", Programs.Rust), RustBinary, Dir);
     ASSERT_TRUE(bool(Build)) << llvm::toString(Build.takeError()) << "\n"
                              << Programs.Rust;
     auto Result = run(RustBinary, {}, Dir);

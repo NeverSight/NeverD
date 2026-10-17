@@ -225,3 +225,5 @@ include(DarwinDylibFixtures.cmake)
 include(DarwinAddendFixtures.cmake)
 
 include(DarwinCallbackFixtures.cmake)
+
+include(DarwinGuardFixtures.cmake)

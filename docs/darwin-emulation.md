@@ -73,7 +73,7 @@ extra flavors and conflicting entries are rejected. No host environment or
 auxiliary Linux vector is inherited. Startup follows the distinction described
 in Apple's [dyld architecture](https://github.com/apple-oss-distributions/dyld/blob/main/doc/dyld4.md).
 
-The finite contracts below admit libSystem, explicit startup dylibs, startup constructors and main-thread C/C++ TLS. Global destructors, legacy TLS initializer sections, arm64e/PAC, unsupported CPU subtypes, encrypted payloads and unmodeled load commands fail explicitly. Main executables retain their preferred addresses and dylibs receive disjoint deterministic placements. Code-signing blobs are metadata, without AMFI or entitlement policy.
+The finite contracts below admit libSystem, explicit startup dylibs, startup constructors, main-thread C/C++ TLS and process-lifetime C/C++ destruction. Selective DSO finalization, legacy TLS initializer sections, arm64e/PAC, unsupported CPU subtypes, encrypted payloads and unmodeled load commands fail explicitly. Main executables retain their preferred addresses and dylibs receive disjoint deterministic placements. Code-signing blobs are metadata, without AMFI or entitlement policy.
 
 ## Darwin services
 
@@ -2723,7 +2723,7 @@ classic lazy: eager stable slots; status 83; stdout_hex 41005a53; named calls/ev
 _exit: status 35; stdout_hex 58; named calls 2; events 2
 file calls: main status 73; stdout_hex 460044; named calls 40; events 41
 memory calls: main status 79; stdout_hex 4d0050; named calls 18; events 19
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 104; matching ARM64 identities: 312
 ```
 
 ```json
@@ -2792,7 +2792,7 @@ Independent native O0/O1/O2 classic/chained controls retain status 83 and
 binary stdout `440054`; portable C/CLI/Python checks cover all five profiles.
 
 Nonzero libSystem gate, imported TLV descriptor and classic lazy addends,
-weak/reexport/resolver exports, global destructors,
+weak/reexport/resolver exports, selective DSO finalization,
 legacy TLS initialization sections, runtime dlopen/dlsym, threads and
 complete Apple frameworks remain unsupported. Native Intel and physical iOS
 execution remain unqualified.
@@ -2835,9 +2835,39 @@ All guest instructions, calls and returns share the original session and
 instruction/event/deadline budget. Exit status and a main return value become
 final only after callbacks finish. C `_exit` (Mach-O `__exit`) and raw BSD exit
 terminate immediately, including from a constructor or destructor.
-Reentrant normal `exit` during termination fails explicitly. C `atexit`,
-`__cxa_atexit`, global destructors, legacy `S_THREAD_LOCAL_INIT_FUNCTION_POINTERS`,
+Reentrant normal `exit` during termination fails explicitly. Explicit
+`__cxa_finalize`, legacy `S_THREAD_LOCAL_INIT_FUNCTION_POINTERS`,
 threads, exception runtimes and complete Apple frameworks remain unsupported.
+
+### C and C++ process exit registrations
+
+C `atexit(function)` and C++ `__cxa_atexit(function, object, dso)` register
+original guest callbacks and return int zero while preserving errno. C callbacks
+receive no arguments; C++ destructors receive their original full-width object,
+including null. The DSO value is opaque and retained in the native-call event;
+it does not enable selective finalization or library unloading.
+
+Normal main return and C `exit` finalize main-thread TLS exactly once, then
+interleave C and C++ registrations in reverse registration order. A callback
+is removed before invocation, so new global registrations precede older work.
+TLS callbacks may register globals; globals may register TLS, but the completed
+TLS phase is not restarted. Nonnull targets require original executable storage
+and current execution permission at registration and invocation. A separate
+1,024-entry global quota is reserved only for images with strong registration
+imports; unrelated images retain their previous base and TLS metadata charges.
+All phases share the same stack authentication, instruction/event/deadline
+budget and delayed exit-result publication. Raw exit from a global destructor
+ends the process immediately, preserving its actual status and partial output.
+
+The original two-dylib C++ graph includes compiler-generated global destruction,
+repeated local-static access, mixed C/C++ registration, opaque carriers, deep
+stack objects and fresh processes. Its single-thread local-static controls use
+`-fno-threadsafe-statics`; a separate default-guard graph covers the protocol below. Independent
+O0/O1/O2 classic/chained macOS controls cover eight normal/raw outcomes. Five
+software profiles and three matching ARM64 HVF profiles exercise the same guest
+programs; C/CLI and genuine Python checks retain the existing version 1 schema.
+The ordering follows [Apple's exit registration owner](https://github.com/apple-oss-distributions/Libc/blob/Libc-1698.140.3/stdlib/FreeBSD/atexit.c)
+and the [Itanium termination ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi.html#dso-dtor-runtime-api).
 
 The original C/C++ graph checks dependency order, startup arguments,
 constructor TLS access, lazy TLS construction once, nested LIFO destruction,
@@ -2860,7 +2890,45 @@ TLS: initialized / zero-only / alignment <=16; exact 24-byte descriptor; live co
 resolver: __tlv_get_addr; x64 RDI -> RAX; ARM64 X0 -> X0; one named event; errno preserved
 lifetime: one main-thread block/image/process; stable addresses; fresh subsequent processes
 addends: checked signed ordinary provider offsets; data/TLS initializers; original provider spans only
-unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; global destructors/legacy TLS init; dlopen/dlsym; threads
+unsupported: cycles; weak/reexports/resolvers; gate/TLV/lazy addends; selective DSO finalization/legacy TLS init; dlopen/dlsym; threads
 workload: shared dependency; duplicate export spelling; TLS aliasing; template mutation; main 83; stdout 440054
-native common catalogue: 82; required methods/platform: 102; matching ARM64 identities: 306
+native common catalogue: 82; required methods/platform: 104; matching ARM64 identities: 312
 ```
+
+### Main-thread C++ static initialization guards
+
+Default compiler-generated local statics use the exact strong, zero-addend
+`___cxa_guard_acquire`, `___cxa_guard_release` and `___cxa_guard_abort` imports
+from `/usr/lib/libc++.1.dylib`, compatibility at most 1.0.0. Current version does
+not select behavior. Other libc++ symbols, libc++abi identities, aliases,
+weak/reexport providers and caller overrides remain refused, including imports
+in unexecuted branches. libSystem and libc++ share the same two runtime pages;
+each prepared fixup and unique gate retains its charge. Guard-only imports
+reserve no callback queue or executable callback spans.
+
+Guards have a nonnull, naturally aligned eight-byte guest address. Acquire
+reads only the initialized byte when nonzero and returns int zero, without a
+thread observation, writable storage or bookkeeping reads. Starting from zero
+requires the existing explicit, known nonzero `darwin_system.thread_self_port`
+(C++ `DarwinSystemOptions::ThreadSelfPort`). For that 32-bit port P, acquire
+writes `(uint64_t(P) << 32) | 0x200` and returns int one. Abort restores zero;
+release writes `(uint64_t(P) << 32) | 0x101`. Both are void, preserve errno and
+integer result registers, and report a null result. Same-owner recursive
+initialization, foreign/waiting or unknown states, invalid pointers and failed
+permissions refuse before mutation. No host thread identity is inferred.
+
+This is a single-main-thread protocol. A static created during startup, TLS
+finalization or a global destructor uses the existing global LIFO and shared
+execution budgets. Fresh processes restore original guards. The independent
+two-dylib default-guard graph covers repeated access/mutation, full guard bytes
+and sentinels, abort/retry, errno and normal/raw exits through five software
+profiles, three matching ARM64 HVF profiles, C/CLI and genuine Python. Native
+O0/O1/O2 classic/chained controls use real libc++; x64 controls run through
+Rosetta on the ARM64 host. Physical Intel and iOS remain unqualified.
+
+ARM64 controls explicitly use `-march=armv8-a -mcpu=generic`; final images must
+contain LDARB and no LDAPR family instruction while retaining real guard calls.
+Apple clang's `-march=armv8-a` alone still selects its modern host CPU and can
+emit LDAPRB. The checked CPU contract continues to refuse RCpc; modern default
+Mac instruction output, concurrent initialization, exceptions and selective DSO
+finalization require separate support.

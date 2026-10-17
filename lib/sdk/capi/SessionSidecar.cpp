@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 /// \file Shared atomic write owner for Session metadata adapters.
 #include "SessionImpl.h"
+#include "SessionProjectInput.h"
 
 #include "neverd/support/AtomicOutput.h"
 #include "neverd/support/FilePath.h"
@@ -69,4 +70,19 @@ bool neverd::sdk::saveSidecar(Session *S, const std::filesystem::path &Path,
   return Path ==
              project_files::path(S->FilePath, project_files::File::Manifest) ||
          recordProjectInput(S);
+}
+
+bool neverd::sdk::recordProjectInput(Session *S) {
+  if (S->MemoryInputBytes)
+    return true;
+  llvm::json::Object Input = projectInput(*S);
+  if (Input.getString("sha256").value_or("").empty())
+    return true;
+  if (auto Recorded = recordedInput(*S);
+      Recorded && Recorded->getString("sha256") == Input.getString("sha256"))
+    return true;
+  return saveSidecar(
+      S, project_files::path(S->FilePath, project_files::File::Manifest),
+      llvm::json::Object{{"neverd_project", 1}, {"input", std::move(Input)}},
+      "project");
 }
