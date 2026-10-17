@@ -580,6 +580,21 @@ runOptimizationPipeline(llvm::Module &Mod,
             F.addFnAttr(llvm::Attribute::NoInline);
             Pinned.push_back(&F);
           }
+      // A view's module holds some of the image's functions, so it does not
+      // see every store to a writable table of code pointers: what a load
+      // finds is not its initializer.  GlobalOpt would otherwise take a
+      // function pointer no function here writes for a constant, and turn a
+      // call through it into a call to the first function it held, as of a
+      // lazily bound `__imp_X` its binder rewrites.
+      llvm::SmallVector<llvm::WeakVH, 0> Unsettled;
+      if (Options.KeepFunctionBoundaries)
+        for (llvm::GlobalVariable &G : Mod.globals())
+          if (G.hasLocalLinkage() && G.hasInitializer() && !G.isConstant() &&
+              !G.isExternallyInitialized() &&
+              parseNdCodePtrSymbol(G.getName())) {
+            G.setExternallyInitialized(true);
+            Unsettled.push_back(&G);
+          }
       llvm::ModulePassManager DefaultPipeline =
           Options.LLVMLevel == llvm::OptimizationLevel::O0
               ? PB.buildO0DefaultPipeline(Options.LLVMLevel)
@@ -589,6 +604,9 @@ runOptimizationPipeline(llvm::Module &Mod,
       for (llvm::WeakVH &Handle : Pinned)
         if (auto *F = llvm::dyn_cast_or_null<llvm::Function>(Handle))
           F->removeFnAttr(llvm::Attribute::NoInline);
+      for (llvm::WeakVH &Handle : Unsettled)
+        if (auto *G = llvm::dyn_cast_or_null<llvm::GlobalVariable>(Handle))
+          G->setExternallyInitialized(false);
     }
   }
 

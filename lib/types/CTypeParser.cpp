@@ -441,12 +441,23 @@ bool ignoredWord(llvm::StringRef Word) {
 /// Whether a target with 64-bit pointers keeps \p Convention.
 bool keptWide(CallingConvention Convention) {
   switch (Convention) {
-#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide)                    \
+#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops)              \
   case CallingConvention::Name:                                                \
     return Wide;
 #include "neverd/types/CallingConventions.def"
   }
   return true;
+}
+
+/// Whether the callee of \p Convention pops its stack arguments.
+bool calleePops(CallingConvention Convention) {
+  switch (Convention) {
+#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops)              \
+  case CallingConvention::Name:                                                \
+    return Pops;
+#include "neverd/types/CallingConventions.def"
+  }
+  return false;
 }
 
 /// const and volatile in GNU's spellings too.
@@ -1620,6 +1631,11 @@ private:
     while (!Failed) {
       if (accept("...")) {
         Function->Variadic = true;
+        // Only the caller knows what a variadic call pushes: compilers take
+        // a convention whose callee pops, as phnt's NTAPI
+        // RtlInitializeSidEx, as cdecl.
+        if (calleePops(Function->Convention))
+          Function->Convention = CallingConvention::Cdecl;
         expect(")", "after '...'");
         return Function;
       }
@@ -1783,6 +1799,11 @@ private:
           At.Text == "_Alignof" || At.Text == "__alignof" ||
           At.Text == "__alignof__") {
         take();
+        // The size of a member reached through a null pointer to its
+        // record, as RTL_FIELD_SIZE spells it: sizeof(((T *)0)->Member).
+        if (At.Text == "sizeof" && isPunct("(") && isPunct("(", 1) &&
+            isPunct("(", 2) && startsType(3))
+          return memberSize(At);
         // The size of a string literal is its bytes and the terminator's,
         // as INTERNET_MAX_URL_LENGTH counts sizeof("://").
         if (At.Text == "sizeof" &&
@@ -1871,6 +1892,50 @@ private:
       return std::nullopt;
     (void)At;
     return int64_t(Bits / 8);
+  }
+
+  /// sizeof(((type *)0)->member.member...), anonymous records looked
+  /// through: the size of the member.
+  std::optional<int64_t> memberSize(const Token &At) {
+    take();
+    take();
+    const TypeExprRef Pointer = typeInParentheses();
+    if (!Pointer)
+      return std::nullopt;
+    if (Pointer->Kind != TypeExprKind::Pointer || !Pointer->Element ||
+        peek().Kind != TokenKind::Number || peek().Value != 0) {
+      fail(peek(), "expected a null pointer to a record");
+      return std::nullopt;
+    }
+    take();
+    if (!expect(")", "after the null pointer") ||
+        !expect("->", "after the null pointer"))
+      return std::nullopt;
+    const RecordDef *Record = recordOf(*Pointer->Element);
+    const neverd::types::Member *Found = nullptr;
+    uint64_t Bits = 0;
+    do {
+      if (peek().Kind != TokenKind::Word) {
+        fail(peek(), "expected a member's name");
+        return std::nullopt;
+      }
+      const Token Name = take();
+      Found = Record ? find(*Record, Name.Text, Bits) : nullptr;
+      if (!Found) {
+        fail(Name, "no member '" + Name.Text + "' to take the size of");
+        return std::nullopt;
+      }
+      Record = recordOf(*Found->Type);
+    } while (accept("."));
+    if (!expect(")", "after the member"))
+      return std::nullopt;
+    const std::optional<uint64_t> Size =
+        Found->isBitfield() ? std::nullopt : Library.sizeOf(*Found->Type);
+    if (!Size) {
+      fail(At, "sizeof a member whose size is unknown");
+      return std::nullopt;
+    }
+    return int64_t(*Size);
   }
 
   const RecordDef *recordOf(const TypeExpr &Type) const {

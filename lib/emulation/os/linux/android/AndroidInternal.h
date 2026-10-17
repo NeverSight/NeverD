@@ -72,6 +72,11 @@ struct LinkedImage {
   std::vector<uint8_t> JNIImage;
   uint64_t JNIThunkBegin = 0, JNIThunkEnd = 0;
 };
+llvm::Error validateAuxiliaryVector(const AndroidNativeOptions &Options);
+llvm::Error validateCalendar(const AndroidNativeOptions &Options);
+llvm::Error initializeCalendar(AddressSpace &Space,
+                               const AndroidNativeOptions &Options,
+                               const LinkedImage &Linked);
 llvm::Error initializeJNI(AddressSpace &Space, LinkedImage &Linked);
 llvm::Expected<PropertyTable>
 initializeProperties(AddressSpace &Space, const ProcessOptions &Options,
@@ -281,7 +286,9 @@ private:
   BionicResult getPageSize(const NativeCallEvent &Call);
   BionicResult getAPILevel(const NativeCallEvent &Call);
   BionicResult queryConfiguration(const NativeCallEvent &Call);
+  BionicResult queryAuxiliaryVector(const NativeCallEvent &Call);
   BionicResult getTime(const NativeCallEvent &Call);
+  BionicResult calendarTime(const NativeCallEvent &Call);
   BionicResult getProperty(const NativeCallEvent &Call);
   llvm::Expected<const PropertyRecord *> propertyAt(uint64_t Address);
   llvm::Expected<const PropertyRecord *> propertyNamed(llvm::StringRef Name);

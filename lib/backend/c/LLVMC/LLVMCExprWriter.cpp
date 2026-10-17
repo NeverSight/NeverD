@@ -3392,6 +3392,14 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
   }
 }
 
+std::string LLVMCWriter::castOfText(const llvm::CastInst &Cast,
+                                    const std::string &Text) {
+  if (!llvm::isa<llvm::IntToPtrInst, llvm::PtrToIntInst>(&Cast))
+    return Text;
+  return castStr(Cast.getOpcode(), "(" + Text + ")", Cast.getSrcTy(),
+                 Cast.getDestTy());
+}
+
 bool LLVMCWriter::operandIsUnsignedWidth(const llvm::Value *V,
                                          unsigned Bits) const {
   if (!V || Bits == 0 || Bits % 8 != 0 || Bits > 128)

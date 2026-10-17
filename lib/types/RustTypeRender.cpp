@@ -171,7 +171,7 @@ std::string RustWriter::abi(CallingConvention Convention) const {
       Library.dataModel() == DataModel::LLP64)
     return "system";
   switch (Convention) {
-#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide)                    \
+#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops)              \
   case CallingConvention::Name:                                                \
     return Rust;
 #include "neverd/types/CallingConventions.def"

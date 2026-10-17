@@ -660,6 +660,22 @@ bool readsExceptionState(const HighExpr *E, unsigned Depth = 0) {
   return Reads;
 }
 
+/// Whether \p E reads memory that a write of \p Bytes at \p Address may
+/// change.
+bool readsMemoryAt(const HighExpr *E, const HighExpr &Address, uint16_t Bytes,
+                   unsigned Depth = 0) {
+  if (!E || Depth > 64)
+    return false;
+  if (E->Kind == ExprKind::Load && !E->Operands.empty() && E->Operands[0] &&
+      !apart(*E->Operands[0], bytesOf(E), Address, Bytes))
+    return true;
+  bool Reads = false;
+  E->forEachChildExpr([&](const ExprPtr &Child) {
+    Reads = Reads || readsMemoryAt(Child.get(), Address, Bytes, Depth + 1);
+  });
+  return Reads;
+}
+
 void forEachStatementExpr(const HighStmt &S,
                           llvm::function_ref<void(const HighExpr *)> Fn) {
   for (const ExprPtr *E : {&S.Cond, &S.Dst, &S.Val, &S.CallExpr, &S.RetVal,
@@ -678,8 +694,49 @@ struct ExceptionTrack {
   /// Variables holding the address of a slot the object was spilled to, as
   /// clang computes one in a frame too large for an immediate offset.
   std::vector<std::pair<MedVar, const HighExpr *>> SlotAddresses;
+  /// Variables holding a copy of a base, another variable or what a frame
+  /// slot holds, plus a displacement, with the statement that copied it:
+  /// clang reaches the far slots of a frame too large for an immediate
+  /// offset from a base it keeps in a slot, and reloads the object through
+  /// a copy of that base.
+  struct BaseCopy {
+    MedVar Var;
+    const HighExpr *Value = nullptr;
+    size_t Index = 0;
+  };
+  std::vector<BaseCopy> BaseCopies;
+  /// Slots the object was spilled to through such a copy, by the base it
+  /// copied and the displacement: the copy may be gone when the object is
+  /// read back through another.
+  struct BaseSpill {
+    const HighExpr *Base = nullptr;
+    int64_t Offset = 0;
+    uint16_t Bytes = 0;
+  };
+  std::vector<BaseSpill> BaseSpills;
 
-  bool isException(const HighExpr *E) const {
+  /// \p Address as a base and a displacement, the base taken through the
+  /// variable it copies (BaseCopies), one level deep; \p Through names the
+  /// copy's statement.
+  std::pair<const HighExpr *, int64_t>
+  copiedAddress(const HighExpr *Address,
+                std::optional<size_t> *Through = nullptr) const {
+    const auto [Base, Offset] = baseAndOffset(Address);
+    if (isVariable(Base))
+      for (const BaseCopy &Copy : BaseCopies)
+        if (Copy.Var == Base->Var) {
+          const auto [Inner, InnerOffset] = baseAndOffset(Copy.Value);
+          if (Through)
+            *Through = Copy.Index;
+          return {Inner, InnerOffset + Offset};
+        }
+    return {Base, Offset};
+  }
+
+  /// Whether \p E is the object or a copy of it; \p Through collects the
+  /// statements copying a base the copy was read through.
+  bool isException(const HighExpr *E,
+                   std::set<size_t> *Through = nullptr) const {
     if (Slots.holds(E))
       return true;
     E = peelViews(E);
@@ -692,6 +749,35 @@ struct ExceptionTrack {
                      Slot.first->structuralEq(*Address);
             }))
           return true;
+    if (E && E->Kind == ExprKind::Load && !E->Operands.empty() &&
+        E->Operands[0]) {
+      std::optional<size_t> Copy;
+      const auto Read = copiedAddress(E->Operands[0].get(), &Copy);
+      const HighExpr *Base = Read.first;
+      const int64_t Offset = Read.second;
+      const uint16_t Bytes = bytesOf(E);
+      auto Same = [&](const HighExpr *SlotBase, int64_t SlotOffset,
+                      uint16_t SlotBytes) {
+        return Base && SlotBase && SlotBytes == Bytes && SlotOffset == Offset &&
+               SlotBase->structuralEq(*Base);
+      };
+      const bool Found =
+          (Copy && llvm::any_of(Slots.Slots,
+                                [&](const auto &Slot) {
+                                  const auto [SlotBase, SlotOffset] =
+                                      baseAndOffset(Slot.first);
+                                  return Same(SlotBase, SlotOffset,
+                                              Slot.second);
+                                })) ||
+          llvm::any_of(BaseSpills, [&](const BaseSpill &Spill) {
+            return Same(Spill.Base, Spill.Offset, Spill.Bytes);
+          });
+      if (Found) {
+        if (Through && Copy)
+          Through->insert(*Copy);
+        return true;
+      }
+    }
     return isVariable(E) && (E->Var.Kind == MedVar::EHException ||
                              llvm::is_contained(Copies, E->Var));
   }
@@ -699,14 +785,40 @@ struct ExceptionTrack {
   /// Follow \p Body's statements before \p End; which only copy the object.
   std::vector<bool> scan(const std::vector<HighStmt> &Body, size_t End) {
     std::vector<bool> Copying(Body.size(), false);
+    // The statements copying a base the object was read through.
+    std::set<size_t> Through;
     for (size_t I = 0; I < End && I < Body.size(); ++I) {
       const HighStmt &S = Body[I];
       if (const auto Write = memoryWrite(S)) {
-        const bool Spill = isException(Write->second);
-        Slots.write(*Write->first, bytesOf(Write->second));
+        const bool Spill = isException(Write->second, &Through);
+        const uint16_t Bytes = bytesOf(Write->second);
+        std::optional<size_t> SpillCopy;
+        const auto Written = copiedAddress(Write->first, &SpillCopy);
+        const HighExpr *WriteBase = Written.first;
+        const int64_t WriteOffset = Written.second;
+        Slots.write(*Write->first, Bytes);
+        // A slot or a copy whose address reads what the write may change no
+        // longer names what it did, nor does a slot it may overlap.
+        llvm::erase_if(Slots.Slots, [&](const auto &Slot) {
+          return readsMemoryAt(Slot.first, *Write->first, Bytes);
+        });
+        llvm::erase_if(BaseCopies, [&](const BaseCopy &Copy) {
+          return readsMemoryAt(Copy.Value, *Write->first, Bytes);
+        });
+        llvm::erase_if(BaseSpills, [&](const BaseSpill &Known) {
+          const bool Apart = WriteBase &&
+                             Known.Base->structuralEq(*WriteBase) &&
+                             (WriteOffset + Bytes <= Known.Offset ||
+                              Known.Offset + Known.Bytes <= WriteOffset);
+          return !Apart || readsMemoryAt(Known.Base, *Write->first, Bytes);
+        });
         if (Spill) {
-          Slots.Slots.push_back({Write->first, bytesOf(Write->second)});
+          Slots.Slots.push_back({Write->first, Bytes});
           SpilledTo.push_back(Write->first);
+          if (SpillCopy && WriteBase) {
+            BaseSpills.push_back({WriteBase, WriteOffset, Bytes});
+            Through.insert(*SpillCopy);
+          }
           Copying[I] = true;
         }
         continue;
@@ -717,7 +829,14 @@ struct ExceptionTrack {
         llvm::erase(Copies, Var);
         llvm::erase_if(SlotAddresses,
                        [&](const auto &Known) { return Known.first == Var; });
-        if (isException(S.Val.get())) {
+        // A copy holds what its variable held when it was made.
+        llvm::erase_if(BaseCopies, [&](const BaseCopy &Copy) {
+          return Copy.Var == Var || readsVariable(Copy.Value, Var);
+        });
+        llvm::erase_if(BaseSpills, [&](const BaseSpill &Known) {
+          return readsVariable(Known.Base, Var);
+        });
+        if (isException(S.Val.get(), &Through)) {
           Copies.push_back(Var);
           Copying[I] = true;
         } else if (S.Val) {
@@ -727,8 +846,28 @@ struct ExceptionTrack {
               Copying[I] = true;
               break;
             }
+          if (const HighExpr *Base = baseAndOffset(S.Val.get()).first;
+              !Copying[I] && Base &&
+              (isVariable(Base) || Base->Kind == ExprKind::Load))
+            BaseCopies.push_back({Var, S.Val.get(), I});
         }
       }
+    }
+    // A base copied only to reach the object goes with the reads of it.
+    for (const size_t Index : Through) {
+      const MedVar Var = Body[Index].Dst->Var;
+      bool Read = false;
+      for (size_t J = 0; J < Body.size() && !Read; ++J) {
+        if (J == Index || (J < End && Copying[J]))
+          continue;
+        walkStmts(std::vector<HighStmt>{Body[J]}, [&](const HighStmt &N) {
+          forEachStatementExpr(N, [&](const HighExpr *E) {
+            Read = Read || readsVariable(E, Var);
+          });
+        });
+      }
+      if (!Read)
+        Copying[Index] = true;
     }
     return Copying;
   }
@@ -748,11 +887,32 @@ struct ExceptionTrack {
                 const HighExpr *SlotBase = baseAndOffset(Slot).first;
                 const HighExpr *ReadBase =
                     baseAndOffset(E->Operands[0].get()).first;
-                return SlotBase && ReadBase &&
-                       SlotBase->structuralEq(*ReadBase) &&
-                       !apart(*Slot, 8, *E->Operands[0], bytesOf(E));
+                if (SlotBase && ReadBase && SlotBase->structuralEq(*ReadBase) &&
+                    !apart(*Slot, 8, *E->Operands[0], bytesOf(E)))
+                  return true;
+                // A read through a copy of the slot's base.
+                const auto [CopyBase, CopyOffset] =
+                    copiedAddress(E->Operands[0].get());
+                const int64_t SlotOffset = baseAndOffset(Slot).second;
+                return SlotBase && CopyBase &&
+                       SlotBase->structuralEq(*CopyBase) &&
+                       CopyOffset < SlotOffset + 8 &&
+                       SlotOffset < CopyOffset + bytesOf(E);
               }))
             return true;
+          if (E->Kind == ExprKind::Load && !E->Operands.empty() &&
+              E->Operands[0]) {
+            const auto Read = copiedAddress(E->Operands[0].get());
+            const HighExpr *ReadBase = Read.first;
+            const int64_t ReadOffset = Read.second;
+            if (ReadBase &&
+                llvm::any_of(BaseSpills, [&](const BaseSpill &Known) {
+                  return Known.Base->structuralEq(*ReadBase) &&
+                         ReadOffset < Known.Offset + Known.Bytes &&
+                         Known.Offset < ReadOffset + bytesOf(E);
+                }))
+              return true;
+          }
           bool Found = false;
           E->forEachChildExpr([&](const ExprPtr &C) {
             Found = Found || ReadsSpill(C.get(), Depth + 1);

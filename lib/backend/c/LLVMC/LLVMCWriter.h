@@ -557,10 +557,16 @@ public:
     explicit operator bool() const { return !Name.empty(); }
   };
   LibraryCallee libraryCallee(const llvm::CallBase &Call) const;
+  /// Whether the unit declares \p Call's callee to return nothing where the
+  /// call's own type returns a value: a routine declared void, or the
+  /// module's definition whose result is settled as none, which prints as
+  /// returning void (analyzeVoidReturn) unless it returns a record's address
+  /// as an MSVC indirect result.
+  bool calleeReturnsNothing(const llvm::CallBase &Call) const;
   /// \p Call's text \p Expr as a value of the call's own type: the pointer a
-  /// library routine returns as the integer that holds it, and the result one
-  /// that returns nothing leaves undefined as zero.
-  std::string libraryResult(const llvm::CallBase &Call, std::string Expr) const;
+  /// library routine returns as the integer that holds it, and the result a
+  /// callee that returns nothing leaves undefined as zero.
+  std::string callResult(const llvm::CallBase &Call, std::string Expr) const;
   /// MSVC ctor/dtor that returns `this` and whose result is unread. A store
   /// into an alloca that nothing loads does not count. Print the call as a
   /// statement in a non-void function too.
@@ -732,6 +738,10 @@ public:
   std::optional<std::string> lowBitsMaskCast(const llvm::BinaryOperator &Op);
   std::string castStr(unsigned Opcode, const std::string &Src,
                       llvm::Type *SrcTy, llvm::Type *DstTy);
+  /// The text \p Cast reads as where its operand reads as \p Text: the
+  /// same, unless the cast moves between an integer and a pointer, whose C
+  /// types differ.
+  std::string castOfText(const llvm::CastInst &Cast, const std::string &Text);
   std::string cmpStr(llvm::CmpInst::Predicate Pred, const std::string &LHS,
                      const std::string &RHS, bool IsFP,
                      bool CastUnsigned = true);

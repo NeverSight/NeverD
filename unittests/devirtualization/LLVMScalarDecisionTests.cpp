@@ -438,6 +438,51 @@ declare void @llvm.lifetime.end.p5(ptr addrspace(5))
   EXPECT_EQ(Boundaries, 6u);
 }
 
+TEST(LLVMScalarDecision, HostCompilerCopyKeepsBinary80BitsAndNamedText) {
+  Source Input(R"(
+@f0x3FFF8000000000000008 = global x86_fp80 f0x3FFF8000000000000008
+@text = constant [24 x i8] c"f0x3FFF8000000000000008\00"
+define x86_fp80 @f(i1 %choose) {
+entry:
+  br i1 %choose, label %f0x3FFF8000000000000008, label %other
+f0x3FFF8000000000000008:
+  br label %join
+other:
+  br label %join
+join:
+  %v = phi x86_fp80 [ f0x3FFF8000000000000008, %f0x3FFF8000000000000008 ],
+                    [ f0xBFFF8000000000000008, %other ]
+  ret x86_fp80 %v
+}
+!named = !{!0}
+!0 = !{!"f0x3FFF8000000000000008"}
+)");
+  ASSERT_TRUE(Input.Module);
+  ASSERT_FALSE(llvm::verifyModule(*Input.Module, &llvm::errs()));
+  const auto Before = Input.text();
+  const auto Text = neverd::test::printHostCompilerFixture(*Input.Module);
+  EXPECT_EQ(Input.text(), Before);
+  EXPECT_NE(Text.find("x86_fp80 0xK3FFF8000000000000008"), std::string::npos);
+  EXPECT_NE(Text.find("0xKBFFF8000000000000008"), std::string::npos);
+  for (llvm::StringRef Named :
+       {"@f0x3FFF8000000000000008",
+        "f0x3FFF8000000000000008:", "%f0x3FFF8000000000000008",
+        "c\"f0x3FFF8000000000000008\\00\"", "!\"f0x3FFF8000000000000008\""})
+    EXPECT_NE(Text.find(Named.str()), std::string::npos) << Named.str();
+  Source Copy(Text);
+  ASSERT_TRUE(Copy.Module);
+  ASSERT_FALSE(llvm::verifyModule(*Copy.Module, &llvm::errs()));
+  auto *Original = llvm::cast<llvm::PHINode>(&Input.function().back().front());
+  auto *Roundtrip = llvm::cast<llvm::PHINode>(&Copy.function().back().front());
+  for (unsigned I = 0; I != 2; ++I)
+    EXPECT_EQ(llvm::cast<llvm::ConstantFP>(Original->getIncomingValue(I))
+                  ->getValueAPF()
+                  .bitcastToAPInt(),
+              llvm::cast<llvm::ConstantFP>(Roundtrip->getIncomingValue(I))
+                  ->getValueAPF()
+                  .bitcastToAPInt());
+}
+
 TEST(LLVMScalarDecision, HostCompilerCopyPreservesScalarConversionPoison) {
   auto Evaluate = [](Source &Input, uint64_t Word) {
     auto *Argument = Input.function().getArg(0);

@@ -4818,14 +4818,15 @@ void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
     ResultLive = false;
   if (ResultLive && unreadMsvcThisReturn(Call))
     ResultLive = false;
-  // A library routine that returns nothing, whose result nothing reads, is
-  // called alone.
-  if (const LibraryCallee Library =
-          ResultLive ? libraryCallee(Call) : LibraryCallee();
-      Library &&
-      libc::libcResult(Library.Name, Opts.Format) == libc::LibCResult::Void &&
-      !valueFeedsPrintedUse(&Call))
-    ResultLive = false;
+  // A library routine or another callee that returns nothing, whose result
+  // nothing reads, is called alone.
+  if (ResultLive && !valueFeedsPrintedUse(&Call)) {
+    const LibraryCallee Library = libraryCallee(Call);
+    if (calleeReturnsNothing(Call) ||
+        (Library &&
+         libc::libcResult(Library.Name, Opts.Format) == libc::LibCResult::Void))
+      ResultLive = false;
+  }
   if (ResultLive)
     OS << Name << " = ";
   OS << callExpr(Call, /*Statement=*/!ResultLive) << ";\n";
@@ -5046,7 +5047,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   }
   Expr += ")";
   RenderingCalls.pop_back();
-  return Statement ? Expr : libraryResult(Call, std::move(Expr));
+  return Statement ? Expr : callResult(Call, std::move(Expr));
 }
 
 namespace {

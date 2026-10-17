@@ -228,6 +228,18 @@ NEVERD_ANDROID_DIAGNOSTIC(ArgumentInputLimit,
 NEVERD_ANDROID_DIAGNOSTIC(
     SysconfSelector,
     "sysconf selector requires an unmodeled configuration query")
+NEVERD_ANDROID_DIAGNOSTIC(AuxiliaryVectorInput,
+                          "invalid or excessive auxiliary vector entries")
+NEVERD_ANDROID_DIAGNOSTIC(AuxiliaryVectorUnspecified,
+                          "getauxval requires an explicit auxiliary vector")
+NEVERD_ANDROID_DIAGNOSTIC(CalendarZoneInput,
+                          "invalid fixed calendar time zone")
+NEVERD_ANDROID_DIAGNOSTIC(CalendarZoneUnspecified,
+                          "localtime requires an explicit fixed time zone")
+NEVERD_ANDROID_DIAGNOSTIC(CalendarRange,
+                          "calendar conversion supports years 1 through 9999")
+NEVERD_ANDROID_DIAGNOSTIC(CalendarZoneChanged,
+                          "calendar time zone storage was modified")
 NEVERD_ANDROID_DIAGNOSTIC(ScanFormat, "unsupported integer scan format")
 NEVERD_ANDROID_DIAGNOSTIC(ScanLimit, "integer scan exceeds memory limit")
 NEVERD_ANDROID_DIAGNOSTIC(ScanOverflow,

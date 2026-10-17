@@ -3767,7 +3767,10 @@ struct PipelineAnalysisCache::Impl {
                     : libc::NoReturnTargetIndex::DeclaredNoReturn()),
         Roots(Img), Owners(Img),
         Callees(Img, &this->Entries, &Targets, &Roots, &Owners),
-        Graphs(createX87CallGraphCache(&Callees, &Targets, RetainBodies)) {}
+        Graphs(createX87CallGraphCache(&Callees, &Targets, RetainBodies,
+                                       {limits::kMaxPipelineCallGraphEntries,
+                                        limits::kMaxPipelineCallGraphBytes,
+                                        limits::kMaxPipelineCallBodyBytes})) {}
 
   bool matches(const BinaryImage &Img, DebugContext *Dbg,
                const std::set<va_t> &CandidateEntries) const {

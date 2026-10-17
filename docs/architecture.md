@@ -262,15 +262,20 @@ architecture joins, in order. Its calling convention's rules then place
 each parameter (`placeSourceParameters`, one file per convention).
 `scripts/generate_windows_types.py` renders, from mingw-w64's headers, what
 a driver's `<ntifs.h>` declares into `lib/types/headers/WindowsKernelX64.h`
-and `WindowsKernelX86.h`, and what a program's `<windows.h>`, `<winternl.h>`
-and the headers of the libraries programs most often call declare into
-`WindowsUserX64.h`, `WindowsUserX86.h` and `WindowsUserARM64.h`; mingw-w64's
-DDK declares no ARM64 kernel. The build embeds each file in a unit of its
-own, and `headerLibrary` reads each once. The C API joins the libraries the
-table names to an image (an x64 or x86 PE of the native subsystem joins its
+and `WindowsKernelX86.h`, and what a program's `<windows.h>`, the headers of
+the libraries programs most often call and phnt's native API (the `Nt`,
+`Zw`, `Rtl` and `Ldr` routines ntdll exports, the PEB and the TEB) declare
+into `WindowsUserX64.h`, `WindowsUserX86.h` and `WindowsUserARM64.h`;
+mingw-w64's DDK declares no ARM64 kernel. phnt is read with mingw-w64's SDK
+for Windows 11 24H2, in place of `<winternl.h>`; `scripts/windows_types`
+supplies what it takes from Microsoft's SDK that mingw-w64 lacks or spells
+otherwise. The build embeds each file in a unit of its own, and
+`headerLibrary` reads each once. The C API joins the libraries the table
+names to an image (an x64 or x86 PE of the native subsystem joins its
 kernel's; one of the Windows GUI or console subsystem joins its user mode's,
-then its kernel's for the native API ntdll exports, which an ARM64 one has
-none of) after the program's PDB and before the user's declarations:
+then, on x64 and x86, its kernel's for the few ntdll exports only the
+kernel's headers declare, such as `RtlIsNameLegalDOS8Dot3`) after the
+program's PDB and before the user's declarations:
 - a header type joins only where the program has no type of its name;
 - a typedef names the program's type, as C binds it;
 - a header record laid out with a type the program sizes otherwise is left
@@ -415,20 +420,27 @@ entry alike): those bodies print as code. A C library routine the code calls,
 directly or through the slot or symbol the loader binds for its import
 (`libraryCallee`), takes the declaration a header gives it, or the prototype
 the runtime's tables give it, which the unit declares itself, weak where the
-image's reference is weak (`__gmon_start__`). Its arguments convert to the
-parameter types; a pointer it returns converts to the integer that holds it;
-the result of one that returns nothing is never read, and where code reads
-the register it left that is zero, as for any undefined value
-(`libraryResult`; `LibCReturnKinds.inc` records pointer results). A
-definition named like such a routine is the image's own copy and takes its
-address (`atexit_140001234`), as a body lifted under an import's name does.
+image's reference is weak (`__gmon_start__`). A call passes the parameters
+that declaration has, and its arguments convert to their types; a pointer it
+returns converts to the integer that holds it (`LibCReturnKinds.inc` records
+pointer results). The result of a callee the unit declares to return
+nothing, such a routine or a definition whose result MedIR settled as none,
+is never read, and where code reads the register it left that is zero, as
+for any undefined value (`callResult`). A definition named like such a
+routine is the image's own copy and takes its address (`atexit_140001234`),
+as a body lifted under an import's name does; in a Windows program so does
+one named like a routine the mingw-w64 headers declare (`__mingw_printf`,
+`MinGWHeaderFunctions.inc`), and in a whole module `main`, which C holds to
+the signature it gives main.
 An address into a byte array the module defines is an offset into it, in a
 global's initializer as in code, and an import a global names is declared
 before the globals. A function with Windows exception handling includes
-`<excpt.h>`, which names what its filters print. `rep movs` copies element
-by element in its direction, as `rep stos` stores; a shape the lifter does
-not emit is refused, since an intrinsic would take its operands in the
-constraints' order.
+`<excpt.h>`, which names what its filters print. A value the writer spells
+by a cached text, as a volatile read by its own name, keeps its conversion
+where a cast moves it between an integer and a pointer (`castOfText`).
+`rep movs` copies element by element in its direction, as `rep stos`
+stores; a shape the lifter does not emit is refused, since an intrinsic
+would take its operands in the constraints' order.
 Where a linker folded identical
 functions, one entry carries
 the names of each (`statedFunctionNamesAt`), and it takes the shown name's
@@ -643,6 +655,10 @@ never change the lifting, patching or general module optimizer defaults.
 
 LLVMC defaults to LLVM O2 after ordinary frame and SSA promotion. Basic scalar
 cleanup, O0, O1, O3 and a bounded custom pass selection are explicit alternatives.
+A view's module holds some of the image's functions, so a writable table of
+code pointers is externally initialized while LLVM optimizes it: a call
+through a function pointer that code outside the module may rewrite, as a
+lazily bound `__imp_X`, stays a call through it.
 LLVM dispatcher recovery defaults on independently of the compiler level and
 optional symbolic fixed-point expression rewriting. Recovery retains its
 targeted constant proofs; `llvm_control_flow: false` explicitly disables that
@@ -796,7 +812,12 @@ take their bodies from the landing pad, as the pad runs for each clause's
 selector (`attachItaniumHandlerBodies`); `__cxa_begin_catch` becomes the catch
 parameter and `__cxa_end_catch` the end of the catch. A pad whose code this
 cannot follow exactly, or that also dispatches an enclosing try's clause,
-keeps the region in its commented form with the pad in place. A pad that only
+keeps the region in its commented form with the pad in place. The pad's
+copies of the exception are followed through the frame (`ExceptionTrack`): to
+a slot it is spilled to, through a variable holding that slot's address, and,
+in a frame too large for an immediate offset, through a copy of the base
+clang keeps in a slot; a write that may change what such an address reads
+ends the copy. A pad that only
 cleans up, which every call site reaching it enters with no action, is such a
 scope around the calls of ordinary flow that its call sites cover. A call
 keeps the address of its call instruction (`HighExpr::CallSiteAddr`) when a
@@ -4793,6 +4814,22 @@ the Android adapter owns LP64 field order, reserved-mask filtering and errno.
 The kernel owner installs a new action before copying the old action out, so a
 copy fault does not undo the installation. No CPU backend or SDK interprets a
 handler address, queues a signal or delivers one.
+`AndroidAuxv` owns admission and lookup of the native workload's explicit,
+complete auxiliary vector. Bionic alone applies `getauxval`'s full-width
+lookup and thread-local errno behavior; constructors and dynamic imports use
+that same owner. This does not replace Linux process startup's synthesized
+stack vector or expose host capability state. Supplied feature bits do not
+authorize instructions outside the checked CPU contract.
+
+`AndroidCalendar` owns fixed-zone admission, Gregorian conversion and the LP64
+`tm` layout. It initializes a dedicated process-owned guest arena only when a
+calendar import is present, including named dynamic providers. The shared
+non-reentrant result is separate from caller-owned `_r` storage, TLS, malloc
+ownership and immutable zone names. Backend selection and thread scheduling
+do not change that identity. Its explicit fixed zone is independent of the
+kernel's legacy `gettimeofday` timezone pair; neither inherits host tzdata.
+Calendar conversion reads caller timestamps and does not advance guest clocks.
+
 Bionic also owns the API 28 `pthread_once` control state. It requests guest
 initialization through an internal callback result; the native runner suspends
 the import and runs the callback on the same CPU and live stack. Pending

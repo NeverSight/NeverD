@@ -1085,10 +1085,25 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (Target && Callee && CI && CI->IntegerRegisterArgCount >= 0 &&
       CI->FloatingRegisterArgCount >= 0 && argumentBanks(*Callee) &&
       !Callee->isVarArg()) {
+    // Recovery ends the register arguments at the register that holds the
+    // call's own target (MedCallInfo::TargetRegisterArgIdx): no argument is
+    // set there.  A routine whose parameters continue on the stack still
+    // names that register before them (AAPCS skips r3 for a 64-bit argument
+    // that does not fit), so it receives the target, as the machine passes
+    // it.
+    unsigned Integers = CI->IntegerRegisterArgCount;
+    std::vector<llvm::Value *> Values = Args;
+    std::optional<unsigned> HeldTarget;
+    if (CI->TargetRegisterArgIdx >= 0 &&
+        static_cast<unsigned>(CI->TargetRegisterArgIdx) == Integers &&
+        argumentBanks(*Callee)->first > Integers && Integers <= Values.size()) {
+      HeldTarget = Integers;
+      Values.insert(Values.begin() + Integers, GetInput(0));
+      ++Integers;
+    }
     auto Bound = bindResolvedLLVMArguments(
-        *Callee, Args, CI->IntegerRegisterArgCount,
-        CI->FloatingRegisterArgCount, Builder, CI->StackArgumentOffsets,
-        CI->StackArgumentSlotBytes);
+        *Callee, Values, Integers, CI->FloatingRegisterArgCount, Builder,
+        CI->StackArgumentOffsets, CI->StackArgumentSlotBytes);
     if (!Bound) {
       syncError() << "med_llvm_emitter: resolved indirect call to "
                   << Callee->getName()
@@ -1097,6 +1112,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       return;
     }
     ArgumentIndices = std::move(Bound->SourceIndices);
+    // Source indices name CI->Args, which holds no value for the target.
+    if (HeldTarget) {
+      for (int &Index : ArgumentIndices) {
+        if (Index == static_cast<int>(*HeldTarget))
+          Index = -1;
+        else if (Index > static_cast<int>(*HeldTarget))
+          --Index;
+      }
+    }
     Args = std::move(Bound->Values);
     BoundArgumentBanks = true;
   }

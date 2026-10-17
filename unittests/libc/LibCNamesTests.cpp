@@ -9,6 +9,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCResult.h"
 #include "neverd/libc/LibCStartup.h"
+#include "neverd/libc/MinGWHeaderFunctions.h"
 #include "neverd/libc/WindowsCRT.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -543,6 +544,18 @@ TEST(LibCReturnsValue, TheGeneratedTableNamesOnlyKnownRoutines) {
 #define NEVERD_LIBC_RETURN_KIND(NAME, KIND) EXPECT_TRUE(isKnownFunction(NAME));
 #include "neverd/libc/LibCReturnKinds.inc"
 #undef NEVERD_LIBC_RETURN_KIND
+}
+
+TEST(MinGWHeaderFunctions, NamesWhatTheHeadersDeclare) {
+  // mingw-w64's own routines, the runtime's and the C library's.
+  EXPECT_TRUE(mingwHeadersDeclare("__mingw_printf"));
+  EXPECT_TRUE(mingwHeadersDeclare("_lock_file"));
+  EXPECT_TRUE(mingwHeadersDeclare("_onexit"));
+  EXPECT_TRUE(mingwHeadersDeclare("printf"));
+  // The start-up code's internals and a program's own names are not.
+  EXPECT_FALSE(mingwHeadersDeclare("_pei386_runtime_relocator"));
+  EXPECT_FALSE(mingwHeadersDeclare("main"));
+  EXPECT_FALSE(mingwHeadersDeclare("sub_140001000"));
 }
 
 TEST(VarArgFixedCount, IsoAliasesTakeTheStandardRoutinesArguments) {

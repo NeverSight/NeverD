@@ -7,14 +7,44 @@
 #pragma once
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/AsmParser/LLLexer.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 namespace neverd::test {
+
+inline void printHostX87Literals(llvm::StringRef Text,
+                                 llvm::LLVMContext &Context,
+                                 llvm::raw_ostream &Out) {
+  // New LLVM prints binary80 bit patterns as f0x followed by 20 hex digits.
+  // Older readers require 0xK with the identical bits. Use LLVM's lexer so
+  // names, block labels, inline assembly and metadata strings stay intact.
+  llvm::SourceMgr Sources;
+  llvm::SMDiagnostic Diagnostic;
+  auto Buffer = llvm::MemoryBuffer::getMemBufferCopy(Text, "host-fixture");
+  const auto Bytes = Buffer->getBuffer();
+  Sources.AddNewSourceBuffer(std::move(Buffer), llvm::SMLoc());
+  llvm::LLLexer Lexer(Bytes, Sources, Diagnostic, Context);
+  size_t Copied = 0;
+  for (auto Kind = Lexer.Lex(); Kind != llvm::lltok::Eof; Kind = Lexer.Lex()) {
+    if (Kind == llvm::lltok::Error)
+      llvm::report_fatal_error("host compiler fixture has invalid LLVM tokens");
+    if (Kind != llvm::lltok::FloatHexLiteral ||
+        Lexer.getAPSIntVal().getBitWidth() != 80)
+      continue;
+    const size_t Start = Lexer.getLoc().getPointer() - Bytes.data();
+    Out << Text.slice(Copied, Start) << "0xK" << Text.substr(Start + 3, 20);
+    Copied = Start + 23;
+  }
+  Out << Text.drop_front(Copied);
+}
 
 inline void lowerHostLifetimeSignatures(llvm::Module &Module) {
   // LLVM 18 expects (i64 size, ptr), whereas the embedded LLVM spells a
@@ -123,7 +153,10 @@ inline void printHostCompilerFixture(const llvm::Module &Module,
       }
   }
   lowerHostLifetimeSignatures(*Fixture);
-  Fixture->print(Out, nullptr);
+  std::string Text;
+  llvm::raw_string_ostream Buffer(Text);
+  Fixture->print(Buffer, nullptr);
+  printHostX87Literals(Text, Fixture->getContext(), Out);
 }
 
 inline std::string printHostCompilerFixture(const llvm::Module &Module) {

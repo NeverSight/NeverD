@@ -680,6 +680,19 @@ std::shared_ptr<X87CallGraphCache>
 createX87CallGraphCache(const NoReturnCalleeProver *NonReentrantProver,
                         const libc::NoReturnTargetIndex *NonReentrantTargets,
                         bool RetainCallRegisterBodies);
+/// The least recently used graphs and bodies leave the cache beyond these
+/// bounds; the defaults are the bounds of the caches above.
+struct X87CallGraphCacheLimits {
+  /// Graphs, and separately bodies, retained.
+  size_t Entries = 128;
+  size_t GraphBytes = 8 * 1024 * 1024;
+  size_t BodyBytes = 32 * 1024 * 1024;
+};
+std::shared_ptr<X87CallGraphCache>
+createX87CallGraphCache(const NoReturnCalleeProver *NonReentrantProver,
+                        const libc::NoReturnTargetIndex *NonReentrantTargets,
+                        bool RetainCallRegisterBodies,
+                        const X87CallGraphCacheLimits &Limits);
 
 class CFGBuilder {
   friend class X87CallEffectIndex;

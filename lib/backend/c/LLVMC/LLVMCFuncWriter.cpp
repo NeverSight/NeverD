@@ -19,6 +19,7 @@
 #include "LLVMCWriter.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/ParameterSites.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/MsvcCallee.h"
@@ -2759,6 +2760,23 @@ LLVMCWriter::debugFunction(const llvm::Function &Callee) const {
   return std::nullopt;
 }
 
+bool LLVMCWriter::calleeReturnsNothing(const llvm::CallBase &Call) const {
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (!Callee || Callee->isIntrinsic() || Call.getType()->isVoidTy() ||
+      Opts.PreserveLLVMFunctionTypes)
+    return false;
+  if (Callee->getReturnType()->isVoidTy())
+    return true;
+  // A definition prints its settled result (setupFunction's InferredVoid);
+  // another the unit only declares keeps the type its LLVM declaration has.
+  if (Callee->isDeclaration() || (OnlyFunction && Callee != OnlyFunction) ||
+      !llvm_value_provenance::returnsNoValue(*Callee))
+    return false;
+  const std::optional<FunctionSym> Debug = debugFunction(*Callee);
+  return !Debug ||
+         !isMsvcIndirectReturn(Debug->ReturnType, Opts.TheArch, Opts.Format);
+}
+
 std::optional<FunctionSym>
 LLVMCWriter::debugCallee(const llvm::CallBase &Call) const {
   if (!Dbg)
@@ -3053,6 +3071,11 @@ unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
     }
     return false;
   };
+  // A routine the runtime's tables type takes the parameters the unit
+  // declares for it.
+  if (const LibraryCallee Library = libraryCallee(Call);
+      Library.Prototype && !Library.Prototype->Variadic)
+    return Clamp(Library.Prototype->ParamCount);
   if (auto FS = debugCallee(Call)) {
     // A pointer-encoded class return may be a real RAX pointer rather than
     // an indirect result. With no debug parameters, live integer machine
@@ -3328,12 +3351,12 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         }
         continue;
       }
-      if (llvm::isa<llvm::CastInst>(&Inst)) {
+      if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(&Inst)) {
         if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty())
-          ValueTexts[&Inst] = Text->second;
+          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
         continue;
       }
       if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
@@ -3474,12 +3497,13 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
   }
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
-      if (!llvm::isa<llvm::CastInst>(&Inst) ||
+      const auto *Cast = llvm::dyn_cast<llvm::CastInst>(&Inst);
+      if (!Cast ||
           llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
         continue;
       if (auto Text = ValueTexts.find(Inst.getOperand(0));
           Text != ValueTexts.end() && !Text->second.empty())
-        ValueTexts[&Inst] = Text->second;
+        ValueTexts[&Inst] = castOfText(*Cast, Text->second);
     }
   }
 
@@ -3731,12 +3755,12 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
       if (auto Text = ValueTexts.find(&Inst);
           Text != ValueTexts.end() && !Text->second.empty())
         Mark(Inst);
-      if (llvm::isa<llvm::CastInst>(&Inst)) {
+      if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(&Inst)) {
         if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty()) {
-          ValueTexts[&Inst] = Text->second;
+          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
           Mark(Inst);
         }
       }

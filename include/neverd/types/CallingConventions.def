@@ -7,30 +7,35 @@
 /// \file
 /// The calling conventions a local function type records.
 ///
-/// NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide)
+/// NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops)
 ///   C     Its MSVC or GNU spelling in a C declaration; empty for none.
 ///   Rust  Its extern ABI string in Rust.
 ///   IDA   Its spelling in IDA's local types; empty for none.
 ///   Wide  Whether a target with 64-bit pointers keeps it: compilers accept
 ///         x86's 32-bit conventions there and ignore them.
+///   Pops  Whether the callee pops its stack arguments, which only the
+///         caller of a variadic function knows: compilers take such a
+///         function as cdecl.
 ///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_CALLING_CONVENTION
-#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide)
+#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops)
 #endif
 
-NEVERD_CALLING_CONVENTION(Unspecified, "", "C", "", true)
-NEVERD_CALLING_CONVENTION(Cdecl, "__cdecl", "cdecl", "__cdecl", false)
-NEVERD_CALLING_CONVENTION(Stdcall, "__stdcall", "stdcall", "__stdcall", false)
+NEVERD_CALLING_CONVENTION(Unspecified, "", "C", "", true, false)
+NEVERD_CALLING_CONVENTION(Cdecl, "__cdecl", "cdecl", "__cdecl", false, false)
+NEVERD_CALLING_CONVENTION(Stdcall, "__stdcall", "stdcall", "__stdcall", false,
+                          true)
 NEVERD_CALLING_CONVENTION(Fastcall, "__fastcall", "fastcall", "__fastcall",
-                          false)
+                          false, true)
 NEVERD_CALLING_CONVENTION(Thiscall, "__thiscall", "thiscall", "__thiscall",
-                          false)
+                          false, true)
 NEVERD_CALLING_CONVENTION(Vectorcall, "__vectorcall", "vectorcall",
-                          "__vectorcall", true)
+                          "__vectorcall", true, true)
 NEVERD_CALLING_CONVENTION(Win64, "__attribute__((ms_abi))", "win64",
-                          "__fastcall", true)
-NEVERD_CALLING_CONVENTION(SysV, "__attribute__((sysv_abi))", "sysv64", "", true)
+                          "__fastcall", true, false)
+NEVERD_CALLING_CONVENTION(SysV, "__attribute__((sysv_abi))", "sysv64", "", true,
+                          false)
 
 #undef NEVERD_CALLING_CONVENTION

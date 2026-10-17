@@ -3633,8 +3633,9 @@ TEST_F(SessionCAPITest, LocalTypesComeFromThePDB) {
             "_THREAD_LIKE");
   EXPECT_EQ(List.getObject("stats")->getArray("nestingMismatches")->size(), 0u);
   // A console program joins the user mode headers after its PDB, then the
-  // kernel's for the native API: the kernel's KUSER_SHARED_DATA holds a
-  // record user mode lays out otherwise, and is left out.
+  // kernel's for the few native routines only it declares.  phnt's native
+  // API declares KUSER_SHARED_DATA in user mode, so the kernel's, laid out
+  // with records user mode lays out otherwise, does not join.
   const llvm::json::Array *Headers = List.getArray("headers");
   ASSERT_TRUE(Headers && Headers->size() == 2u);
   const llvm::json::Object &User = *(*Headers)[0].getAsObject();
@@ -3642,7 +3643,7 @@ TEST_F(SessionCAPITest, LocalTypesComeFromThePDB) {
   EXPECT_EQ(User.getArray("conflicts")->size(), 0u);
   const llvm::json::Object &Native = *(*Headers)[1].getAsObject();
   EXPECT_EQ(Native.getString("name"), "windows-kernel-x64");
-  EXPECT_EQ(Native.getArray("conflicts")->size(), 2u);
+  EXPECT_EQ(Native.getArray("conflicts")->size(), 0u);
 
   llvm::json::Object Thread =
       parse(neverd_local_type_json(Session, "_THREAD_LIKE", nullptr));
@@ -4789,8 +4790,8 @@ TEST_F(SessionCAPITest, UserImportsPassWhatTheirPrototypesTake) {
                       "1, 0, 3, 0, 0)"),
             std::string::npos)
       << Open;
-  // GetLastError takes nothing; CloseHandle and ZwClose, which only the
-  // kernel's headers declare, take the handle.
+  // GetLastError takes nothing; CloseHandle and ZwClose, which phnt's
+  // native API declares, take the handle.
   const std::string Probe = decompile("Probe");
   EXPECT_NE(Probe.find(" = GetLastError();"), std::string::npos) << Probe;
   EXPECT_NE(Probe.find("extern int32_t ZwClose(void* Handle);"),
@@ -4928,9 +4929,13 @@ TEST_F(SessionCAPITest, ARM64ImportsPassWhatTheirPrototypesCount) {
             std::string::npos)
       << Open;
   // GetLastError takes nothing: the x0 Probe was called with is none.
+  // ZwClose takes the handle, as phnt's native API declares it.
   const std::string Probe = decompile("Probe");
   EXPECT_NE(Probe.find("GetLastError()"), std::string::npos) << Probe;
   EXPECT_EQ(Probe.find("GetLastError(arg0"), std::string::npos) << Probe;
+  EXPECT_NE(Probe.find("extern int32_t ZwClose(void* Handle);"),
+            std::string::npos)
+      << Probe;
   // ExitProcess takes the code and returns to no caller.
   const std::string Finish = decompile("Finish");
   EXPECT_NE(Finish.find("ExitProcess(uint32_t uExitCode) "

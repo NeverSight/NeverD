@@ -48,6 +48,7 @@
 #include "neverd/backend/llvm/LLVMX86ShadowStackAsm.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/libc/LibCResult.h"
+#include "neverd/libc/MinGWHeaderFunctions.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -339,9 +340,15 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
       // The image's own copy of a C library routine, as a statically linked
       // `atexit`, is not the routine a header or the runtime's tables
       // declare the name for, and takes its address as a body lifted under
-      // an import's name does (`fprintf_1400014B0`).
+      // an import's name does (`fprintf_1400014B0`), one of mingw-w64's
+      // own routines a Windows program links too (`__mingw_printf`).  So
+      // does a whole module's `main`, which C holds to the parameters and
+      // result it gives main, not those the code has.
       if (libc::isKnownFunction(CName) ||
-          libc::libcPrototype(CName, Opts.Format)) {
+          libc::libcPrototype(CName, Opts.Format) ||
+          (Opts.Format == BinaryFormat::COFF &&
+           libc::mingwHeadersDeclare(CName)) ||
+          (!OnlyFunction && CName == "main")) {
         auto VA = rewrite_source::getOriginalVA(Fn);
         if (!VA)
           llvm::consumeError(VA.takeError());
@@ -1454,9 +1461,17 @@ LLVMCWriter::libraryCallee(const llvm::CallBase &Call) const {
     else if (const char *Mapped =
                  llvmIntrinsicToCName(Callee->getName().str().c_str()))
       Name = Mapped;
-    if (Name.empty() || !libc::headerFor(Name))
+    if (Name.empty())
       return {};
-    return {std::move(Name), nullptr};
+    if (libc::headerFor(Name))
+      return {std::move(Name), nullptr};
+    // A routine the runtime's tables type is declared from them, as its
+    // import is (writeForwardDecls, writeImportCalleeDecls).
+    if (!Callee->isIntrinsic())
+      if (const libc::LibCPrototype *Prototype =
+              libc::libcPrototype(Name, Opts.Format))
+        return {std::move(Name), Prototype};
+    return {};
   }
   if (llvm::isa<llvm::InlineAsm>(Call.getCalledOperand()))
     return {};
@@ -1475,12 +1490,17 @@ LLVMCWriter::libraryCallee(const llvm::CallBase &Call) const {
   return {};
 }
 
-std::string LLVMCWriter::libraryResult(const llvm::CallBase &Call,
-                                       std::string Expr) const {
+std::string LLVMCWriter::callResult(const llvm::CallBase &Call,
+                                    std::string Expr) const {
   llvm::Type *Type = Call.getType();
   if (!Type->isIntegerTy() && !Type->isPointerTy() &&
       !Type->isFloatingPointTy())
     return Expr;
+  // A callee that returns nothing leaves its result register undefined, of
+  // which zero is a stable choice, as an undefined value's is.
+  const std::string Undefined = "(" + Expr + ", (" + typeToCLLVM(Type) + ")0)";
+  if (calleeReturnsNothing(Call))
+    return Undefined;
   const LibraryCallee Library = libraryCallee(Call);
   if (!Library)
     return Expr;
@@ -1492,10 +1512,8 @@ std::string LLVMCWriter::libraryResult(const llvm::CallBase &Call,
   // machine holds it in.
   if (*Result == libc::LibCResult::Pointer && Type->isIntegerTy())
     return "((" + typeToCLLVM(Type) + ")(uintptr_t)" + Expr + ")";
-  // A routine that returns nothing leaves its result register undefined, of
-  // which zero is a stable choice, as an undefined value's is.
   if (*Result == libc::LibCResult::Void)
-    return "(" + Expr + ", (" + typeToCLLVM(Type) + ")0)";
+    return Undefined;
   return Expr;
 }
 
@@ -1670,6 +1688,16 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
 
     if (libc::isKnownFunction(Name))
       continue;
+    // A routine the runtime's tables type takes their declaration, as its
+    // calls take their conversions (libraryCallee).
+    if (Fn.isDeclaration())
+      if (const libc::LibCPrototype *Prototype =
+              libc::libcPrototype(Name, Opts.Format)) {
+        OS << (Fn.hasExternalWeakLinkage() ? "extern __attribute__((weak)) "
+                                           : "extern ")
+           << c_library::declaration(*Prototype, Name, Opts.TheArch) << ";\n";
+        continue;
+      }
     if (const MsvcCallee *Msvc = msvcCallee(Name, Opts.Format)) {
       OS << msvcSyntheticPrototype(Name, *Msvc,
                                    Opts.TheArch == Arch::X64 && Msvc->FastCall)

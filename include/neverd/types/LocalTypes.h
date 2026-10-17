@@ -115,7 +115,7 @@ enum class TypeOrigin : uint8_t {
 
 /// How a function takes its arguments (CallingConventions.def).
 enum class CallingConvention : uint8_t {
-#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide) Name,
+#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops) Name,
 #include "neverd/types/CallingConventions.def"
 };
 

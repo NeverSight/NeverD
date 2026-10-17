@@ -3211,7 +3211,7 @@ TEST_P(DarwinProcess,
 TEST_P(DarwinProcess,
        CreatedDirectoryFileSystemsKeepActualParentAndHeldLifetime) {
   Options.InstructionQuantum = 1024;
-  Options.Limits.TimeoutMicroseconds = 5000000;
+  Options.Limits.TimeoutMicroseconds = BatchedProcessTimeoutMicroseconds;
   Options.Arguments[2] = "/child";
   Options.DarwinSystem.emplace().Credentials = darwin_test::modeCredentials();
   Options.DarwinTime.reset();

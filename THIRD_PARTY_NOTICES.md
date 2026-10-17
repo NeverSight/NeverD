@@ -229,11 +229,12 @@ encodings. Generated on 2026-10-06.
 `lib/types/headers/WindowsKernelX64.h` and `WindowsKernelX86.h` hold the
 types and prototypes that `<ntifs.h>`, `<ntddk.h>` and `<wdm.h>` declare for
 x64 and x86 drivers of Windows 10 2004, and `lib/types/headers/WindowsUserX64.h`,
-`WindowsUserX86.h` and `WindowsUserARM64.h` those that `<windows.h>`,
-`<winternl.h>` and the headers of the libraries programs most often call
-declare for x64, x86 and ARM64 programs of Windows 10 2004, as
+`WindowsUserX86.h` and `WindowsUserARM64.h` those that `<windows.h>`, the
+headers of the libraries programs most often call and phnt's native API
+declare for x64, x86 and ARM64 programs of Windows 11 24H2, as
 `scripts/generate_windows_types.py` renders them from the headers of
-mingw-w64 13.0.0 (the Ubuntu package mingw-w64-common 13.0.0-2ubuntu1). The
+mingw-w64 13.0.0 (the Ubuntu package mingw-w64-common 13.0.0-2ubuntu1) and,
+for the native API, of phnt (below). The
 DDK and PSDK headers they read that come from ReactOS (contributors include
 Amine Khaldi and Timo Kreuzer) state that they are not copyrighted and
 offered for use in the public domain; `ddk/csq.h` (Copyright 2004 Vizzini)
@@ -251,6 +252,18 @@ or the LGPL, are left out, and so are the SDK headers mingw-w64 takes from
 Wine under the LGPL (`msxml.h`, `propsys.h`, `objectarray.h`,
 `structuredquerycondition.h`, `knownfolders.h`, `devpkey.h`) with the
 declarations that name their types. Generated on 2026-10-16.
+
+The user mode libraries' native API -- the `Nt`, `Zw`, `Rtl` and `Ldr`
+routines ntdll exports and the records they take, the PEB and the TEB among
+them -- is rendered from the headers of
+[phnt](https://github.com/winsiderss/phnt) at commit
+53fbbdc5b5d2b08761db1c7b26bfa8c820924356, Copyright (c) 2022 Winsider
+Seminars & Solutions, Inc., under the MIT License, which is preserved in
+[LICENSES/phnt.txt](LICENSES/phnt.txt). The generated files are changed
+from them as from mingw-w64's headers. phnt's `ntintsafe.h` and
+`ntstrsafe.h`, which are Microsoft's, are left out;
+`scripts/windows_types` holds the few macros and types phnt takes from
+Microsoft's SDK that mingw-w64 lacks. Generated on 2026-10-17.
 
 ## FPREM anti-emulation regression
 

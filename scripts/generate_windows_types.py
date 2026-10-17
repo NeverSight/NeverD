@@ -6,13 +6,20 @@ program's imports name routines no debug information of its own declares, so
 their parameters would show as no reader knows them.  This reads the headers
 that declare them, from mingw-w64, whose DDK headers come from the ReactOS
 DDK and are in the public domain and whose SDK headers are in the public
-domain or under the Zope Public License, and renders the types and
+domain or under the Zope Public License, and in user mode from phnt, whose
+native API headers are under the MIT License, and renders the types and
 prototypes they declare as the C NeverD reads back:
 
-1. clang preprocesses what the target's code includes, for Windows 10 2004
-   (NTDDI_WIN10_VB): a driver's <ntifs.h>, which brings <ntddk.h> and
-   <wdm.h>, in kernel mode; a program's <windows.h> and the headers of the
-   libraries programs most often call in user mode.
+1. clang preprocesses what the target's code includes: a driver's
+   <ntifs.h>, which brings <ntddk.h> and <wdm.h>, in kernel mode, for
+   Windows 10 2004 (NTDDI_WIN10_VB); in user mode, for Windows 11 24H2
+   (NTDDI_WIN11_GE), the version mingw-w64's SDK headers describe, a
+   program's <windows.h>, the native API ntdll exports as phnt declares it
+   in place of <winternl.h>, and the headers of the libraries programs most
+   often call.  What phnt takes from Microsoft's SDK that mingw-w64 spells
+   otherwise or lacks comes from scripts/windows_types (PHNT_SHIMS), which
+   also stands in for phnt's copy of Microsoft's <ntintsafe.h>, whose
+   helpers the native API needs none of.
 2. The lines of the compiler's own headers (intrinsics, <stddef.h>) and of
    the C runtime's are dropped: the library describes the system's API, and
    C++ would see the runtime's names twice.  So are the few SDK headers
@@ -41,13 +48,26 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 
 HEADERS = REPOSITORY / "lib" / "types" / "headers"
 
-# Windows 10 2004 (19041), as the system the libraries describe.
+# Windows 10 2004 (19041), as the system the kernel's libraries describe.
 VERSION = ["-DNTDDI_VERSION=0x0A000008", "-D_WIN32_WINNT=0x0A00"]
+
+# Windows 11 24H2 (26100), the version mingw-w64's SDK headers describe:
+# phnt declares what an older SDK lacks, which mingw-w64's headers declare
+# whatever the version, and the native API of that version.
+USER_VERSION = ["-DNTDDI_VERSION=0x0A000010", "-D_WIN32_WINNT=0x0A00",
+                "-DWINVER=0x0A00", "-DPHNT_MODE=PHNT_MODE_USER",
+                "-DPHNT_VERSION=PHNT_WINDOWS_11_24H2", "-DWIN32_NO_STATUS"]
+
+# What phnt takes from Microsoft's SDK: the macros mingw-w64 spells otherwise
+# or lacks (phnt_prelude.h, included first), the types it lacks
+# (phnt_sdk_types.h) and the headers it names otherwise.
+PHNT_SHIMS = REPOSITORY / "scripts" / "windows_types"
 
 # Headers whose declarations are the C runtime's, not the kernel's.
 KERNEL_RUNTIME = re.compile(
@@ -58,13 +78,15 @@ KERNEL_RUNTIME = re.compile(
 # The C runtime's routines, which the C library tables describe, and
 # winpthreads' POSIX ones.  The runtime's types stay where the system's
 # records hold them, as IP_ADAPTER_INFO holds a time_t (<corecrt.h>), and so
-# do Winsock's, which psdk_inc declares.
+# do Winsock's, which psdk_inc declares.  <stdint.h>, which phnt includes,
+# is the runtime's: its int_fast16_t is mingw-w64's short, the Microsoft
+# runtime's int.
 USER_RUNTIME = re.compile(
-    r"/(?:corecrt_[^/]*|crtdefs|_mingw[^/]*|stddef|stdarg|stdlib|stdio|"
-    r"string|wchar|ctype|errno|limits|malloc|mm_malloc|vadefs|excpt|intrin|"
-    r"setjmp|x86intrin|swprintf|time|sys/timeb|pthread_[^/]*|sec_api/[^/]*|"
-    r"sec_api/sys/[^/]*|psdk_inc/(?!_socket_types|_fd_types|_ip_types|"
-    r"_wsadata|_xmitfile|_ip_mreq1|_wsa_errnos)[^/]*)\.(?:h|inl)$")
+    r"/(?:corecrt_[^/]*|crtdefs|_mingw[^/]*|stddef|stdarg|stdint|stdlib|"
+    r"stdio|string|wchar|ctype|errno|limits|malloc|mm_malloc|vadefs|excpt|"
+    r"intrin|setjmp|x86intrin|swprintf|time|sys/timeb|pthread_[^/]*|"
+    r"sec_api/[^/]*|sec_api/sys/[^/]*|psdk_inc/(?!_socket_types|_fd_types|"
+    r"_ip_types|_wsadata|_xmitfile|_ip_mreq1|_wsa_errnos)[^/]*)\.(?:h|inl)$")
 
 # The SDK headers mingw-w64 takes from Wine under the LGPL 2.1 or later
 # (the Debian package's copyright file lists them): COM interfaces of MSXML,
@@ -89,22 +111,53 @@ class Target:
     left_out: re.Pattern | None
     describes: str
     output: Path
+    # Whether it reads phnt's native API (--phnt).
+    phnt: bool = False
 
 
-# The headers a program includes for the Win32 API and the native API ntdll
-# exports, and for the libraries programs most often call: Winsock (before
-# <windows.h>, which would include the old <winsock.h>), WinINet, the shell,
+# The headers a program includes for the libraries programs most often call,
+# after <windows.h> and the native API (USER_UNIT): WinINet, the shell,
 # process and module enumeration, debugging help, CNG, the IP helper, device
 # setup, trust verification, user environments, terminal services, LAN
 # Manager, security descriptors and policies, common controls, URL monikers
 # and the event log.  WinHTTP is left out: it cannot be included with
 # WinINet.
 USER_HEADERS = (
-    "winsock2", "ws2tcpip", "windows", "winternl", "wininet", "shellapi",
-    "shlobj", "shlwapi", "psapi", "tlhelp32", "dbghelp", "bcrypt", "ncrypt",
-    "iphlpapi", "setupapi", "wintrust", "softpub", "userenv", "wtsapi32",
-    "lm", "sddl", "aclapi", "ntsecapi", "commctrl", "urlmon", "winevt",
-    "evntrace")
+    "wininet", "shellapi", "shlobj", "shlwapi", "psapi", "tlhelp32",
+    "dbghelp", "bcrypt", "ncrypt", "iphlpapi", "setupapi", "wintrust",
+    "softpub", "userenv", "wtsapi32", "lm", "sddl", "aclapi", "ntsecapi",
+    "commctrl", "urlmon", "winevt", "evntrace")
+
+# The phnt headers that <phnt.h> leaves for a program to include: the Zw
+# routines, WinStations, the session manager, win32k's GDI calls, service
+# tags, the user manager and SMBIOS.  Not <ntd3dkmt.h> and <ntafd.h>, which
+# need the DDK's <dxmini.h> and <tdi.h>, nor phnt's copies of Microsoft's
+# <ntintsafe.h> and <ntstrsafe.h>.
+PHNT_HEADERS = ("ntzwapi", "winsta", "ntsmss", "ntgdi", "subprocesstag",
+                "usermgr", "smbios")
+
+# Routines phnt declares DECLSPEC_NORETURN that return to their caller:
+# NtRaiseHardError returns the user's response, LdrShutdownProcess and
+# LdrShutdownThread end the process or thread only from a loader callout
+# (RtlExitUserProcess calls the first and goes on), and RtlAssert returns
+# when the assertion is ignored.  The libraries declare them returning.
+RETURNING = ("NtRaiseHardError", "LdrShutdownProcess", "LdrShutdownThread",
+             "RtlAssert")
+
+# Winsock first, which <windows.h> would otherwise include as the old
+# <winsock.h>; <windows.h> whole, before phnt's <phnt_windows.h> asks for
+# the lean one; then phnt's native API, before the headers that declare
+# UNICODE_STRING themselves where no native API has (<ntsecapi.h>).
+# <phnt_windows.h> asks what follows for Unicode, for the GUIDs defined and
+# for COM's macros, which would leave out the ANSI routines WinINet names
+# without a suffix, the shell's automation interfaces and shlwapi's
+# IStream_Read: the library keeps what the headers declare without them.
+USER_UNIT = (["#include <winsock2.h>", "#include <ws2tcpip.h>",
+              "#include <windows.h>", "#include <phnt_windows.h>",
+              "#undef UNICODE", "#undef INITGUID", "#undef COBJMACROS",
+              "#include <phnt_sdk_types.h>", "#include <phnt.h>"] +
+             [f"#include <{name}.h>" for name in PHNT_HEADERS] +
+             [f"#include <{name}.h>" for name in USER_HEADERS])
 
 
 def kernel(triple, model, arch, output):
@@ -118,14 +171,14 @@ def kernel(triple, model, arch, output):
 
 
 def user(triple, model, arch, output):
-    """What a program for the architecture includes (USER_HEADERS)."""
+    """What a program for the architecture includes (USER_UNIT)."""
     return Target(
-        triple, model, [f"#include <{name}.h>" for name in USER_HEADERS],
-        VERSION + ["-DWINVER=0x0A00"], [""], USER_RUNTIME, USER_LEFT_OUT,
+        triple, model, USER_UNIT, USER_VERSION, [""], USER_RUNTIME,
+        USER_LEFT_OUT,
         f"user mode's types and prototypes for {arch} ({model}), as a\n"
-        "// program declares them with <windows.h>, <winternl.h> and the "
-        "headers of\n// the libraries programs most often call",
-        HEADERS / output)
+        "// program declares them with <windows.h>, phnt's native API and "
+        "the\n// headers of the libraries programs most often call",
+        HEADERS / output, phnt=True)
 
 
 # mingw-w64's DDK declares no ARM64 kernel ("Unknown Architecture").
@@ -243,6 +296,9 @@ def check(neverd, target, text, defined, work):
 def generate(arguments, name, target, version):
     include = [option for directory in target.directories
                for option in ("-I", str(Path(arguments.mingw) / directory))]
+    if target.phnt:
+        include = ["-include", str(PHNT_SHIMS / "phnt_prelude.h"), "-I",
+                   str(PHNT_SHIMS), "-I", str(arguments.phnt)] + include
     output = Path(arguments.output) if arguments.output else target.output
     with tempfile.TemporaryDirectory(prefix="neverd-windows-types-") as scratch:
         work = Path(scratch)
@@ -258,15 +314,39 @@ def generate(arguments, name, target, version):
              "--prototypes", "--spelling", "windows", "--no-offsets", "-o",
              str(rendered)])
         body = rendered.read_text(encoding="utf-8")
+    for routine in RETURNING if target.phnt else ():
+        body, count = re.subn(rf"^_Noreturn ((?:.*\W)?{routine}\()", r"\1",
+                              body, flags=re.MULTILINE)
+        if count != 1:
+            sys.exit(f"{count} noreturn prototypes of {routine}, not one")
 
-    header = (
-        f"// The Windows {target.describes} for Windows 10 2004.  Generated\n"
-        f"// on {datetime.date.today().isoformat()} by "
-        f"scripts/generate_windows_types.py --target {name}\n"
-        f"// from the DDK and SDK headers of mingw-w64 {version}: changed from\n"
-        "// them, as NeverD reads and renders their declarations again.  The\n"
-        "// headers' notices are in LICENSES/mingw-w64-headers.txt.  Do not\n"
-        "// edit; generate it again.\n")
+    if target.phnt:
+        commit = run(["git", "-C", str(arguments.phnt), "rev-parse",
+                      "HEAD"]).strip()
+        text = (
+            f"The Windows {target.describes.replace(chr(10) + '// ', ' ')}, "
+            "for Windows 11 24H2.  Generated on "
+            f"{datetime.date.today().isoformat()} by "
+            f"scripts/generate_windows_types.py --target {name} from the SDK "
+            f"headers of mingw-w64 {version} and the native API headers of "
+            f"phnt at commit {commit}: changed from them, as NeverD reads and "
+            "renders their declarations again.  The headers' notices are in "
+            "LICENSES/mingw-w64-headers.txt and LICENSES/phnt.txt.  Do not "
+            "edit; generate it again.")
+        header = "".join(f"// {line}\n" for line in textwrap.wrap(
+            text, 77, break_long_words=False, break_on_hyphens=False))
+    else:
+        header = (
+            f"// The Windows {target.describes} for Windows 10 2004.  "
+            "Generated\n"
+            f"// on {datetime.date.today().isoformat()} by "
+            f"scripts/generate_windows_types.py --target {name}\n"
+            f"// from the DDK and SDK headers of mingw-w64 {version}: changed "
+            "from\n"
+            "// them, as NeverD reads and renders their declarations again.  "
+            "The\n"
+            "// headers' notices are in LICENSES/mingw-w64-headers.txt.  Do "
+            "not\n// edit; generate it again.\n")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(header + body, encoding="utf-8")
     shown = (output.relative_to(REPOSITORY)
@@ -281,6 +361,10 @@ def main():
     parser.add_argument("--clang", default="clang")
     parser.add_argument("--mingw", default="/usr/share/mingw-w64/include",
                         help="mingw-w64's include directory")
+    parser.add_argument("--phnt", default=None,
+                        help="a checkout of https://github.com/winsiderss/"
+                             "phnt, whose native API the user mode libraries "
+                             "declare")
     parser.add_argument("--target", action="append", choices=sorted(TARGETS),
                         help="the library to generate; repeat for more "
                              "(default: every library)")
@@ -291,6 +375,8 @@ def main():
     names = arguments.target or sorted(TARGETS)
     if arguments.output and len(names) != 1:
         parser.error("--output takes one --target")
+    if not arguments.phnt and any(TARGETS[name].phnt for name in names):
+        parser.error("the user mode libraries read phnt: give --phnt")
     version = run(["dpkg-query", "-W", "-f=${Version}", "mingw-w64-common"]
                   ).strip() if Path("/usr/bin/dpkg-query").exists() else "?"
     for name in names:

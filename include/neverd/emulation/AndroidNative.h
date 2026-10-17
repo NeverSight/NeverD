@@ -40,6 +40,17 @@ struct NativeMemorySnapshot {
   std::vector<uint8_t> Bytes;
 };
 
+struct AndroidAuxiliaryValue {
+  uint64_t Type = 0, Value = 0;
+};
+
+/// A complete fixed zone with no transitions or leap-second corrections.
+/// OffsetSeconds is east of UTC; Name is an abbreviation, not a tzdb lookup.
+struct AndroidFixedTimeZone {
+  int32_t OffsetSeconds = 0;
+  std::string Name;
+};
+
 /// Read-only observations immediately before selected guest instructions.
 /// PCs are absolute guest addresses, not image-relative offsets. At most 64
 /// distinct aligned PCs; Limit bounds the retained records across all threads.
@@ -75,6 +86,15 @@ struct AndroidNativeOptions {
   /// Find/read/enumeration share stable guest records with generation zero;
   /// enumeration uses name order, not an inferred device-area traversal order.
   std::map<std::string, std::string> Properties;
+  /// Complete immutable getauxval input, excluding the implicit AT_NULL
+  /// terminator. Absent means unknown; empty means no entries. At most 128
+  /// unique nonzero types. Values are guest bits, never host pointers or CPU
+  /// capability queries, and do not authorize otherwise unsupported execution.
+  std::optional<std::vector<AndroidAuxiliaryValue>> AuxiliaryVector;
+  /// localtime requires this explicit fixed zone. gmtime uses GMT without
+  /// consulting it. Neither queries host time, TZ, properties or tzdata.
+  /// The admitted calendar range is years 1..9999; other years stop clearly.
+  std::optional<AndroidFixedTimeZone> FixedTimeZone;
   /// Exact offline getaddrinfo observations. Missing queries remain unknown.
   std::optional<std::vector<AndroidResolverQuery>> ResolverQueries;
   /// Complete, timestamp-ordered visible snapshot for the bounded liblog

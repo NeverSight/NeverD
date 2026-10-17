@@ -130,6 +130,58 @@ TEST(HeaderLibrary, TheNoReturnTablesHoldEveryNoReturnRoutine) {
   }
 }
 
+TEST(HeaderLibrary, TheUserLibrariesDeclareNtdllsNativeAPI) {
+  // phnt's native API: the routines ntdll exports, and the records a
+  // program reaches from its TEB, laid out as each architecture's ntdll
+  // reads them (ARM64's as x64's).
+  struct Offset {
+    const char *Record;
+    const char *Member;
+    uint64_t Wide, Narrow;
+  };
+  const Offset Offsets[] = {
+      {"TEB", "ProcessEnvironmentBlock", 0x60, 0x30},
+      {"TEB", "LastErrorValue", 0x68, 0x34},
+      {"PEB", "Ldr", 0x18, 0x0c},
+      {"PEB", "ProcessParameters", 0x20, 0x10},
+      {"PEB_LDR_DATA", "InMemoryOrderModuleList", 0x20, 0x14},
+      {"LDR_DATA_TABLE_ENTRY", "DllBase", 0x30, 0x18},
+      {"RTL_USER_PROCESS_PARAMETERS", "ImagePathName", 0x60, 0x38},
+  };
+  for (const HeaderLibrary Library :
+       {HeaderLibrary::WindowsUserX64, HeaderLibrary::WindowsUserX86,
+        HeaderLibrary::WindowsUserARM64}) {
+    SCOPED_TRACE(headerLibraryName(Library).str());
+    std::string Error;
+    const TypeLibrary *Types = headerLibrary(Library, &Error);
+    ASSERT_NE(Types, nullptr) << Error;
+    const FunctionDef *Load = Types->findPrototype("LdrLoadDll");
+    ASSERT_NE(Load, nullptr);
+    ASSERT_EQ(Load->Params.size(), 4u);
+    EXPECT_EQ(Load->Params[3].Name, "DllHandle");
+    const FunctionDef *Query = Types->findPrototype("NtQuerySystemInformation");
+    ASSERT_NE(Query, nullptr);
+    EXPECT_EQ(Query->Params.size(), 4u);
+    EXPECT_EQ(Query->Return->Name, "NTSTATUS");
+    // phnt's <ntzwapi.h> declares the Zw routines <winternl.h> does not.
+    const FunctionDef *Close = Types->findPrototype("ZwClose");
+    ASSERT_NE(Close, nullptr);
+    EXPECT_EQ(Close->Params.size(), 1u);
+
+    const bool Wide = headerLibraryModel(Library) != DataModel::ILP32;
+    std::string Assertions;
+    for (const Offset &O : Offsets)
+      Assertions += std::string("_Static_assert(__builtin_offsetof(") +
+                    O.Record + ", " + O.Member +
+                    ") == " + std::to_string(Wide ? O.Wide : O.Narrow) +
+                    ", \"" + O.Record + "." + O.Member + "\");\n";
+    // A copy, which the assertions read without changing the library.
+    TypeLibrary Layout = *Types;
+    const ParseResult Laid = parseCTypes(Assertions, Layout);
+    EXPECT_TRUE(Laid.Problems.empty()) << Laid.Problems.front().Message;
+  }
+}
+
 TEST(HeaderLibrary, JoinsWhereTheProgramHasNoTypeOfTheName) {
   TypeLibrary Headers;
   ParseOptions Options;

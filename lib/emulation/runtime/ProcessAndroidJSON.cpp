@@ -234,6 +234,38 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
           return invalid(Name);
         Out.Properties.emplace(Key.str(), std::move(*S));
       }
+    } else if (Name == field::AuxiliaryVector) {
+      const auto *Entries = V.getAsArray();
+      if (!Entries)
+        return invalid(Name);
+      Out.AuxiliaryVector.emplace();
+      for (const auto &Entry : *Entries) {
+        const auto *O = Entry.getAsObject();
+        if (!O || O->size() != 2 || !O->get(field::AuxiliaryType) ||
+            !O->get(field::AuxiliaryValue))
+          return invalid(Name);
+        auto Type = number(*O->get(field::AuxiliaryType), field::AuxiliaryType);
+        if (!Type)
+          return Type.takeError();
+        auto Value =
+            number(*O->get(field::AuxiliaryValue), field::AuxiliaryValue);
+        if (!Value)
+          return Value.takeError();
+        Out.AuxiliaryVector->push_back({*Type, *Value});
+      }
+    } else if (Name == field::FixedTimeZone) {
+      const auto *Zone = V.getAsObject();
+      if (!Zone || Zone->size() != 2)
+        return invalid(Name);
+      auto Offset = Zone->getInteger(field::ZoneOffsetSeconds);
+      const auto *Text = Zone->get(field::ZoneName);
+      if (!Offset || !Text || *Offset < INT32_MIN || *Offset > INT32_MAX)
+        return invalid(Name);
+      auto Label = string(*Text, field::ZoneName);
+      if (!Label)
+        return Label.takeError();
+      Out.FixedTimeZone =
+          AndroidFixedTimeZone{int32_t(*Offset), std::move(*Label)};
     } else if (Name == field::DefaultScope) {
       const auto *Scope = V.getAsArray();
       if (!Scope)

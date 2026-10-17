@@ -45,8 +45,8 @@ NEVERD_HEADER_PE_SUBSYSTEM(3, WindowsUser)   // IMAGE_SUBSYSTEM_WINDOWS_CUI
 
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsKernel, X64, WindowsKernelX64)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X64, WindowsUserX64)
-// The native API ntdll exports, which the user mode headers declare few of:
-// the kernel's headers declare its Zw and Rtl routines.
+// The few routines ntdll exports that the kernel's headers declare and
+// phnt's native API, in the user mode library, does not.
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X64, WindowsKernelX64)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsKernel, X86, WindowsKernelX86)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X86, WindowsUserX86)

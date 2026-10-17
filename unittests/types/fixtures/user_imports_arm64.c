@@ -2,7 +2,7 @@
 // NeverD's windows-user-arm64 library declares the prototypes of: their
 // calls pass what the prototypes take, a register the caller passes on
 // untouched included and a register an earlier call clobbered not, and
-// ExitProcess returns to no caller.  No library declares ZwClose for ARM64.
+// ExitProcess returns to no caller.  ZwClose's comes from phnt.
 // Regenerate user_imports_arm64.exe with:
 //   printf 'LIBRARY kernel32.dll\nEXPORTS\n%s\n%s\n%s\n%s\n' CreateFileW \
 //     CloseHandle GetLastError ExitProcess > kernel32.def

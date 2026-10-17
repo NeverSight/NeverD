@@ -49,6 +49,7 @@
 #include <new>
 #include <queue>
 #include <set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -334,11 +335,14 @@ class X87CallGraphCache {
   };
   static constexpr size_t MaxPendingGraphs = 32;
   static constexpr size_t MaxPendingBytes = 1024 * 1024;
-  static constexpr size_t MaxGraphs = 128;
-  static constexpr size_t MaxBytes = 8 * 1024 * 1024;
+  // Entries in each of Graphs and Summaries, and the retained bytes of each.
+  const size_t MaxGraphs;
+  const size_t MaxBytes;
+  const size_t MaxSummaryBytes;
   std::mutex Mutex;
   std::optional<Context> Inputs;
   std::list<Entry> Graphs;
+  std::unordered_map<va_t, std::list<Entry>::iterator> GraphIndex;
   size_t RetainedBytes = 0;
   size_t Hits = 0;
   const NoReturnCalleeProver *NonReentrantProver;
@@ -363,17 +367,19 @@ class X87CallGraphCache {
     std::shared_ptr<const SummaryFacts> Facts;
     size_t Bytes;
   };
-  static constexpr size_t MaxSummaryBytes = 32 * 1024 * 1024;
   bool RetainCallRegisterBodies;
   std::optional<Context> SummaryInputs;
   std::list<SummaryEntry> Summaries;
+  std::unordered_map<va_t, std::list<SummaryEntry>::iterator> SummaryIndex;
   size_t SummaryBytes = 0;
 
 public:
   X87CallGraphCache(const NoReturnCalleeProver *Prover,
-                    const libc::NoReturnTargetIndex *Targets, bool RetainBodies)
-      : NonReentrantProver(Prover), NonReentrantTargets(Targets),
-        RetainCallRegisterBodies(RetainBodies) {}
+                    const libc::NoReturnTargetIndex *Targets, bool RetainBodies,
+                    const X87CallGraphCacheLimits &Limits)
+      : MaxGraphs(Limits.Entries), MaxBytes(Limits.GraphBytes),
+        MaxSummaryBytes(Limits.BodyBytes), NonReentrantProver(Prover),
+        NonReentrantTargets(Targets), RetainCallRegisterBodies(RetainBodies) {}
 
 private:
   bool canRetainSummary(const CFGBuilder &B) const {
@@ -383,9 +389,9 @@ private:
            (!B.NoReturnCallees || B.NoReturnCallees == NonReentrantProver) &&
            (!B.NoReturnTargets || B.NoReturnTargets == NonReentrantTargets);
   }
-  static std::optional<size_t> summaryBytes(llvm::ArrayRef<LowBlock> Blocks,
-                                            size_t BlockCapacity, size_t Calls,
-                                            size_t Answers) {
+  std::optional<size_t> summaryBytes(llvm::ArrayRef<LowBlock> Blocks,
+                                     size_t BlockCapacity, size_t Calls,
+                                     size_t Answers) const {
     size_t Bytes =
         sizeof(SummaryEntry) + sizeof(SummaryFacts) + 16 * sizeof(void *);
     auto Allocation = [&](size_t Count, size_t Width) {
@@ -415,7 +421,7 @@ private:
         return std::nullopt;
     return Bytes;
   }
-  static std::optional<size_t> functionMetadataBytes(const LowFunc &F) {
+  std::optional<size_t> functionMetadataBytes(const LowFunc &F) const {
     // Registration states have independent callback/proof ownership. Leave
     // those functions on the ordinary construction path.
     if (F.RegistrationStates)
@@ -557,23 +563,26 @@ private:
         if (!NextBytes || *Bytes > MaxSummaryBytes - *NextBytes)
           return;
         Summaries.clear();
+        SummaryIndex.clear();
         SummaryInputs = std::move(Next);
         SummaryBytes = *NextBytes;
       }
       const auto InputBytes = contextBytes(*SummaryInputs);
       if (!InputBytes || *Bytes > MaxSummaryBytes - *InputBytes)
         return;
-      for (auto It = Summaries.begin(); It != Summaries.end(); ++It)
-        if (It->Address == Address) {
-          Summaries.splice(Summaries.begin(), Summaries, It);
-          return;
-        }
+      if (const auto Found = SummaryIndex.find(Address);
+          Found != SummaryIndex.end()) {
+        Summaries.splice(Summaries.begin(), Summaries, Found->second);
+        return;
+      }
       while (!Summaries.empty() && (Summaries.size() >= MaxGraphs ||
                                     *Bytes > MaxSummaryBytes - SummaryBytes)) {
         SummaryBytes -= Summaries.back().Bytes;
+        SummaryIndex.erase(Summaries.back().Address);
         Summaries.pop_back();
       }
       Summaries.push_front({Address, std::move(Facts), *Bytes});
+      SummaryIndex[Address] = Summaries.begin();
       SummaryBytes += *Bytes;
     } catch (const std::bad_alloc &) {
       // The ordinary build remains authoritative when retention is unavailable.
@@ -586,11 +595,11 @@ private:
     std::lock_guard<std::mutex> Lock(Mutex);
     if (!SummaryInputs || !matches(*SummaryInputs, B))
       return {};
-    for (auto It = Summaries.begin(); It != Summaries.end(); ++It)
-      if (It->Address == Address) {
-        Summaries.splice(Summaries.begin(), Summaries, It);
-        return Summaries.front().Facts;
-      }
+    if (const auto Found = SummaryIndex.find(Address);
+        Found != SummaryIndex.end()) {
+      Summaries.splice(Summaries.begin(), Summaries, Found->second);
+      return Summaries.front().Facts;
+    }
     return {};
   }
   std::shared_ptr<const SummaryFacts> validatedSummary(
@@ -600,13 +609,13 @@ private:
       const NoReturnCalleeProver *NoReturnCallees,
       const detail::AbsoluteRelocationRootIndex *RelocationRoots,
       const ExecutableCodeOwnerIndex *CodeOwners, bool RequireFunction);
-  static bool account(size_t &Bytes, size_t Count, size_t Width) {
+  bool account(size_t &Bytes, size_t Count, size_t Width) const {
     if (Bytes > MaxBytes || Count > (MaxBytes - Bytes) / Width)
       return false;
     Bytes += Count * Width;
     return true;
   }
-  static bool accountAllocation(size_t &Bytes, size_t Count, size_t Width) {
+  bool accountAllocation(size_t &Bytes, size_t Count, size_t Width) const {
     return !Count ||
            (account(Bytes, 8, sizeof(void *)) && account(Bytes, Count, Width));
   }
@@ -634,7 +643,7 @@ private:
   bool matches(const CFGBuilder &B) const {
     return Inputs && matches(*Inputs, B);
   }
-  static std::optional<size_t> graphBytes(const X87CallGraph &Graph) {
+  std::optional<size_t> graphBytes(const X87CallGraph &Graph) const {
     size_t Bytes = sizeof(Entry) + sizeof(X87CallGraph) + 16 * sizeof(void *);
     if (!accountAllocation(Bytes, Graph.Blocks.capacity(),
                            sizeof(X87CallGraphBlock)))
@@ -651,7 +660,7 @@ private:
       return std::nullopt;
     return std::vector<va_t>(Values->begin(), Values->end());
   }
-  static std::optional<size_t> contextBytes(const Context &C) {
+  std::optional<size_t> contextBytes(const Context &C) const {
     size_t Bytes = sizeof(Context);
     for (const auto *Values :
          {&C.Entries, &C.ProtectedSlots, &C.UnsafeBranches})
@@ -679,12 +688,12 @@ private:
   Request acquire(const CFGBuilder &B, va_t Address) {
     std::unique_lock<std::mutex> Lock(Mutex);
     if (matches(B))
-      for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
-        if (It->Address == Address) {
-          Graphs.splice(Graphs.begin(), Graphs, It);
-          ++Hits;
-          return {Graphs.front().Value, {}};
-        }
+      if (const auto Found = GraphIndex.find(Address);
+          Found != GraphIndex.end()) {
+        Graphs.splice(Graphs.begin(), Graphs, Found->second);
+        ++Hits;
+        return {Graphs.front().Value, {}};
+      }
     // Arbitrary prover/name-resolver callbacks may dispatch a request to
     // another thread and wait for it. Only explicitly registered callback
     // owners permit waiting. Nested construction never waits on any cache.
@@ -790,9 +799,9 @@ private:
           (!Graph->Complete &&
            Graph->Rejection == X87CallGraph::ProjectionRejection::None))
         return;
-      const auto Bytes = graphBytes(*Graph);
-      const auto ContextSize = contextBytes(Flight->Inputs);
-      if (Bytes && ContextSize && *Bytes <= MaxBytes - *ContextSize)
+      const auto Bytes = Cache->graphBytes(*Graph);
+      const auto ContextSize = Cache->contextBytes(Flight->Inputs);
+      if (Bytes && ContextSize && *Bytes <= Cache->MaxBytes - *ContextSize)
         Value = std::move(Graph);
     }
   };
@@ -823,6 +832,7 @@ private:
       if (!NextBytes || *Bytes > MaxBytes - *NextBytes)
         return Graph;
       Graphs.clear();
+      GraphIndex.clear();
       Inputs = std::move(Next);
       RetainedBytes = *NextBytes;
     }
@@ -831,17 +841,19 @@ private:
       return Graph;
     // Another worker may have published while this worker built outside the
     // lock. Use its identical immutable projection without waiting on builds.
-    for (auto It = Graphs.begin(); It != Graphs.end(); ++It)
-      if (It->Address == Address) {
-        Graphs.splice(Graphs.begin(), Graphs, It);
-        return Graphs.front().Value;
-      }
+    if (const auto Found = GraphIndex.find(Address);
+        Found != GraphIndex.end()) {
+      Graphs.splice(Graphs.begin(), Graphs, Found->second);
+      return Graphs.front().Value;
+    }
     while (!Graphs.empty() &&
            (Graphs.size() >= MaxGraphs || *Bytes > MaxBytes - RetainedBytes)) {
       RetainedBytes -= Graphs.back().Bytes;
+      GraphIndex.erase(Graphs.back().Address);
       Graphs.pop_back();
     }
     Graphs.push_front({Address, Graph, *Bytes});
+    GraphIndex[Address] = Graphs.begin();
     RetainedBytes += *Bytes;
     return Graph;
   }
@@ -862,8 +874,19 @@ std::shared_ptr<X87CallGraphCache>
 createX87CallGraphCache(const NoReturnCalleeProver *NonReentrantProver,
                         const libc::NoReturnTargetIndex *NonReentrantTargets,
                         bool RetainCallRegisterBodies) {
-  return std::make_shared<X87CallGraphCache>(
-      NonReentrantProver, NonReentrantTargets, RetainCallRegisterBodies);
+  return createX87CallGraphCache(NonReentrantProver, NonReentrantTargets,
+                                 RetainCallRegisterBodies,
+                                 X87CallGraphCacheLimits());
+}
+
+std::shared_ptr<X87CallGraphCache>
+createX87CallGraphCache(const NoReturnCalleeProver *NonReentrantProver,
+                        const libc::NoReturnTargetIndex *NonReentrantTargets,
+                        bool RetainCallRegisterBodies,
+                        const X87CallGraphCacheLimits &Limits) {
+  return std::make_shared<X87CallGraphCache>(NonReentrantProver,
+                                             NonReentrantTargets,
+                                             RetainCallRegisterBodies, Limits);
 }
 
 std::array<size_t, 3> CFGBuilder::x87CallGraphCacheStatsForTesting() const {

@@ -28,6 +28,18 @@ LIBC_NO_RETURN_SYMBOL("ExitThread")
 LIBC_NO_RETURN_SYMBOL("FreeLibraryAndExitThread")
 LIBC_NO_RETURN_SYMBOL("RpcRaiseException")
 LIBC_NO_RETURN_SYMBOL("RtlRestoreContext")
+// The native API routines phnt declares DECLSPEC_NORETURN, as the user mode
+// libraries do: those that end the process or the thread, and an exception
+// no handler may continue.  NtRaiseHardError, LdrShutdownProcess,
+// LdrShutdownThread and RtlAssert, which phnt declares so as well, return
+// (RETURNING in scripts/generate_windows_types.py).
+LIBC_NO_RETURN_SYMBOL("RtlExitUserProcess")
+LIBC_NO_RETURN_SYMBOL("RtlExitUserThread")
+LIBC_NO_RETURN_SYMBOL("RtlRaiseNoncontinuableException")
+// RtlFailFast and RtlFatalListEntryError, which phnt defines inline over
+// __fastfail, end the process as a copy a build leaves uninlined does.
+LIBC_NO_RETURN_SYMBOL("RtlFailFast")
+LIBC_NO_RETURN_SYMBOL("RtlFatalListEntryError")
 // Windows kernel routines the WDK declares DECLSPEC_NORETURN.  Routines that
 // can return (RtlRaiseException when the exception is continued,
 // PsTerminateSystemThread on failure) are deliberately absent.

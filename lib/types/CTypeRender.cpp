@@ -39,7 +39,7 @@ std::string hex(uint64_t Value) {
 
 const char *conventionSpelling(CallingConvention Convention) {
   switch (Convention) {
-#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide)                    \
+#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops)              \
   case CallingConvention::Name:                                                \
     return C;
 #include "neverd/types/CallingConventions.def"
@@ -584,11 +584,20 @@ void CWriter::enumeration(const LocalType &Type, std::string &Out) {
   Out += "// " + Type.Name + ": " +
          std::to_string(builtinBytes(Enum.Underlying, Library.dataModel())) +
          " bytes\n";
-  std::string Head = enumHead(Enum);
-  Head.insert(4, " " + Names.type(Type.Name));
-  Out += Head + "\n{\n";
-  enumerators(Enum, 4, Out);
-  Out += "};\n";
+  // An enumeration no declaration lists the values of, as Microsoft's
+  // compilers take `typedef enum _X X;` alone, has its underlying type
+  // stated: C has no enumeration without enumerators, and C23 and C++ take
+  // the type as complete.
+  if (Enum.Values.empty()) {
+    Out += "enum " + Names.type(Type.Name) + " : " + builtin(Enum.Underlying) +
+           ";\n";
+  } else {
+    std::string Head = enumHead(Enum);
+    Head.insert(4, " " + Names.type(Type.Name));
+    Out += Head + "\n{\n";
+    enumerators(Enum, 4, Out);
+    Out += "};\n";
+  }
   if (Options.Asserts)
     asserts(Type, Out);
 }

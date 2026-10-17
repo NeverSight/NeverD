@@ -20,6 +20,7 @@
 
 #include "llvm/Support/raw_ostream.h"
 
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -533,6 +534,125 @@ TEST(ItaniumHandlerBodies, AnExceptionSpilledThroughAFrameAddressIsResumed) {
   EXPECT_EQ(Source.find("_Unwind_Resume"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("eh_exception"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v7 ="), std::string::npos) << Source;
+}
+
+TEST(ItaniumHandlerBodies, AnExceptionSpilledOffACopiedFrameBaseIsResumed) {
+  // clang -O0 reaches the far slots of a frame too large for an immediate
+  // offset from a base it keeps in a slot, and reloads the exception through
+  // a copy of that base:
+  //   *(*(v10 + 296) + 56) = exc; held_dtor(); v7 = *(v10 + 296);
+  //   v8 = *(v7 + 56); _Unwind_Resume(v8);
+  // A base held in a variable reads the same way.
+  const std::function<ExprPtr()> Bases[] = {
+      [] {
+        return HighExpr::makeLoad(
+            HighExpr::makeBinop(NdOp::INT_ADD, use(10), constant(296)),
+            NdType::makeInt(8, false));
+      },
+      [] { return use(10); }};
+  for (const auto &Base : Bases) {
+    HighStmt Spill;
+    Spill.Kind = StmtKind::Store;
+    Spill.StoreAddr = HighExpr::makeBinop(NdOp::INT_ADD, Base(), constant(56));
+    Spill.StoreVal = exception();
+    std::vector<HighStmt> Pad;
+    Pad.push_back(std::move(Spill));
+    Pad.push_back(statement(call("held_dtor", kDtor, {}, true)));
+    Pad.push_back(assign(7, Base()));
+    Pad.push_back(
+        assign(8, HighExpr::makeLoad(
+                      HighExpr::makeBinop(NdOp::INT_ADD, use(7), constant(56)),
+                      NdType::makeInt(8, false))));
+    Pad.push_back(resume(use(8)));
+    std::vector<HighStmt> Body;
+    Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+    Body.push_back(ret(use(1)));
+    const HighFunc Func = cleanupFunction(cleanupSites({{kCall, kPad}}),
+                                          std::move(Body), std::move(Pad));
+    const std::string Source = body(emit(Func));
+    const Scope S = scopeAfter(Source);
+    ASSERT_NE(S.End, std::string::npos) << Source;
+    EXPECT_GT(Source.find("held_dtor("), S.Catch) << Source;
+    EXPECT_EQ(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("eh_exception"), std::string::npos) << Source;
+    // The copy of the base served the reload alone.
+    EXPECT_EQ(Source.find("v7 ="), std::string::npos) << Source;
+  }
+}
+
+TEST(ItaniumHandlerBodies, ASpillAndAReloadThroughTwoBaseCopiesMatch) {
+  // The pad copies the base before the spill and again before the reload:
+  //   v5 = *(v10 + 1552); *(v5 + 208) = exc; held_dtor();
+  //   v7 = *(v10 + 1552); v8 = *(v7 + 208); _Unwind_Resume(v8);
+  auto Base = [] {
+    return HighExpr::makeLoad(
+        HighExpr::makeBinop(NdOp::INT_ADD, use(10), constant(1552)),
+        NdType::makeInt(8, false));
+  };
+  HighStmt Spill;
+  Spill.Kind = StmtKind::Store;
+  Spill.StoreAddr = HighExpr::makeBinop(NdOp::INT_ADD, use(5), constant(208));
+  Spill.StoreVal = exception();
+  std::vector<HighStmt> Pad;
+  Pad.push_back(assign(5, Base()));
+  Pad.push_back(std::move(Spill));
+  Pad.push_back(statement(call("held_dtor", kDtor, {}, true)));
+  Pad.push_back(assign(7, Base()));
+  Pad.push_back(
+      assign(8, HighExpr::makeLoad(
+                    HighExpr::makeBinop(NdOp::INT_ADD, use(7), constant(208)),
+                    NdType::makeInt(8, false))));
+  Pad.push_back(resume(use(8)));
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func = cleanupFunction(cleanupSites({{kCall, kPad}}),
+                                        std::move(Body), std::move(Pad));
+  const std::string Source = body(emit(Func));
+  const Scope S = scopeAfter(Source);
+  ASSERT_NE(S.End, std::string::npos) << Source;
+  EXPECT_GT(Source.find("held_dtor("), S.Catch) << Source;
+  EXPECT_EQ(Source.find("_Unwind_Resume"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("v5 ="), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("v7 ="), std::string::npos) << Source;
+}
+
+TEST(ItaniumHandlerBodies, AReadThroughABaseRewrittenAfterTheSpillKeepsThePad) {
+  // The slot holding the base changes between the spill and its copy, so
+  // the reload through the copy reads another slot: the pad keeps its place.
+  //   *(*(v10 + 296) + 56) = exc; *(v10 + 296) = v11; v7 = *(v10 + 296);
+  //   v8 = *(v7 + 56); _Unwind_Resume(v8);
+  auto BaseSlot = [] {
+    return HighExpr::makeBinop(NdOp::INT_ADD, use(10), constant(296));
+  };
+  auto Base = [&] {
+    return HighExpr::makeLoad(BaseSlot(), NdType::makeInt(8, false));
+  };
+  HighStmt Spill;
+  Spill.Kind = StmtKind::Store;
+  Spill.StoreAddr = HighExpr::makeBinop(NdOp::INT_ADD, Base(), constant(56));
+  Spill.StoreVal = exception();
+  HighStmt Rebase;
+  Rebase.Kind = StmtKind::Store;
+  Rebase.StoreAddr = BaseSlot();
+  Rebase.StoreVal = use(11);
+  std::vector<HighStmt> Pad;
+  Pad.push_back(std::move(Spill));
+  Pad.push_back(std::move(Rebase));
+  Pad.push_back(assign(7, Base()));
+  Pad.push_back(
+      assign(8, HighExpr::makeLoad(
+                    HighExpr::makeBinop(NdOp::INT_ADD, use(7), constant(56)),
+                    NdType::makeInt(8, false))));
+  Pad.push_back(resume(use(8)));
+  std::vector<HighStmt> Body;
+  Body.push_back(assign(1, callAt("risky", kRisky, kCall), kCall));
+  Body.push_back(ret(use(1)));
+  const HighFunc Func = cleanupFunction(cleanupSites({{kCall, kPad}}),
+                                        std::move(Body), std::move(Pad));
+  const std::string Source = body(emit(Func));
+  EXPECT_NE(Source.find("L_401040: /* landing pad"), std::string::npos)
+      << Source;
 }
 
 TEST(ItaniumHandlerBodies, ACallOfNoInstructionKeepsTheCleanupPad) {
