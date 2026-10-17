@@ -7,6 +7,8 @@
 /// Verify original and genuine WDK formatting in entry, worker and unload.
 
 #include "gtest/gtest.h"
+#include <chrono>
+#include <iostream>
 
 #include "neverd/emulation/CPU.h"
 #include "neverd/emulation/DriverSession.h"
@@ -51,7 +53,13 @@ protected:
           Options.LoadAddress = 0x1c0000000;
         if (Scheduled)
           Options.Scheduling = DriverScheduling{17, 10};
+        std::cerr << "DIAG begin mode=" << Mode << " scheduled=" << Scheduled << std::endl;
+        const auto DiagStart = std::chrono::steady_clock::now();
         auto Result = emulateDriver(Image, Options);
+        std::cerr << "DIAG end mode=" << Mode << " scheduled=" << Scheduled
+                  << " seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-DiagStart).count();
+        if (Result) std::cerr << " stop=" << unsigned(Result->Stop) << " instructions=" << Result->Instructions << " diagnostic=" << Result->Diagnostic;
+        std::cerr << std::endl;
         ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
         if (Mode == 'H') {
           EXPECT_EQ(Result->Stop, DriverStopReason::ModelError)

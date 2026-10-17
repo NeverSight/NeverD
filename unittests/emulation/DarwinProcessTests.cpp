@@ -28,6 +28,8 @@
 #include "DarwinTimestampMutationTestData.h"
 #include "HvfTestPolicy.h"
 #include "gtest/gtest.h"
+#include <chrono>
+#include <iostream>
 #include "os/darwin/process/DarwinProcess.h"
 
 #include "neverd/emulation/ExecutionConfiguration.h"
@@ -96,7 +98,13 @@ protected:
   }
   llvm::Expected<ProcessResult> run(llvm::StringRef Mode) {
     Options.Arguments[1] = Mode.str();
-    return emulateProcess(Path, GetParam().OS, Options);
+    std::cerr << "DIAG begin mode=" << Mode.str() << std::endl;
+    const auto Start = std::chrono::steady_clock::now();
+    auto Result = emulateProcess(Path, GetParam().OS, Options);
+    std::cerr << "DIAG end mode=" << Mode.str() << " seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-Start).count();
+    if (Result) std::cerr << " stop=" << unsigned(Result->Stop) << " instructions=" << Result->Instructions << " services=" << Result->Services.size() << " diagnostic=" << Result->Diagnostic;
+    std::cerr << std::endl;
+    return Result;
   }
 };
 // These semantic batches make repeated bounded guest runs. Their host allowance
