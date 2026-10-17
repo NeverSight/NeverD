@@ -12,6 +12,7 @@ patterns=['ExplicitBackends/X64StatusFlags.CarryInstructionsPreserveAllOtherFlag
 try:
  for name in ['NeverDX64IntegerTests','NeverDNativeDriverTests','NeverDSourceDialectTests']:
   run('inventory-'+name,[J/'bin'/(name+'.exe'),'--gtest_list_tests'])
+ run('deadline-boundary-baseline',[J/'bin/NeverDCPUEmulationTests.exe','--gtest_filter=ExecutionExit.InstructionObserverCannotAdmitEffectsAfterDeadline','--gtest_output=xml:'+str(E/'deadline-boundary-baseline.xml')])
  run('rust-baseline',[J/'bin/NeverDSourceDialectTests.exe','--gtest_filter=SourceDialect.RustViewComputesWhatCComputes:SourceDialect.BitFieldsOfTheProgramsTypesComputeWhatCComputes','--gtest_output=xml:'+str(E/'rust-baseline.xml')],300)
  selection='|'.join(re.escape(n)+'(?:  #.*)?$' for n in patterns)
  for threads in ['1',None]:

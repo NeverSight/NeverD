@@ -10,6 +10,7 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <chrono>
 #include <stdexcept>
 
 namespace neverd::emulation {
@@ -132,6 +133,35 @@ TEST(ExecutionExit, DeadlineIsIndependentOfTheNextRun) {
     Exit = llvm::cantFail(CPU->runUntilExit(Code, Timeout));
     EXPECT_EQ(Exit.Kind, ExecutionExitKind::Stopped);
     EXPECT_FALSE(Exit.DeadlineReached);
+  }
+}
+
+TEST(ExecutionExit, InstructionObserverCannotAdmitEffectsAfterDeadline) {
+  for (const auto Profile : Profiles) {
+    if (Profile.Contract != ExecutionContract::Software)
+      continue;
+    SCOPED_TRACE(guestArchitectureName(Profile.ISA));
+    auto CPU = cpu(Profile);
+    // The unmapped load must not execute after an observer spends the budget.
+    code(*CPU, LoadDeviceX64, LoadDeviceARM);
+    BackendHooks Hooks;
+    Hooks.Instruction = [](uint64_t, uint32_t) {
+      const auto Until = std::chrono::steady_clock::now() +
+                         std::chrono::microseconds(2 * ShortTimeout);
+      while (std::chrono::steady_clock::now() < Until) {
+      }
+    };
+    llvm::cantFail(CPU->installHooks(std::move(Hooks)));
+    const auto Exit = llvm::cantFail(CPU->runUntilExit(Code, ShortTimeout));
+    EXPECT_EQ(Exit.Kind, ExecutionExitKind::Deadline);
+    EXPECT_TRUE(Exit.DeadlineReached);
+    EXPECT_FALSE(Exit.Fault);
+    EXPECT_FALSE(CPU->fault());
+    Hooks.Instruction = [&](uint64_t, uint32_t) { CPU->stop(); };
+    llvm::cantFail(CPU->installHooks(std::move(Hooks)));
+    const auto Next = llvm::cantFail(CPU->runUntilExit(Code, Timeout));
+    EXPECT_EQ(Next.Kind, ExecutionExitKind::Stopped);
+    EXPECT_FALSE(Next.DeadlineReached);
   }
 }
 
