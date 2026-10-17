@@ -99,10 +99,18 @@ public:
       Cancelled = true;
       return diagnostic::interrupted(diagnostic::UnicornRun, *Control);
     }
-    // Host backing writes bypass Unicorn's code-write invalidation. Discard
-    // translated blocks before entering so aliases and self-modifying code
-    // observe current authoritative bytes.
-    if (auto E = check(uc_ctl_flush_tb(Engine)))
+    // Host backing writes bypass Unicorn's code-write invalidation. A checked
+    // step can execute only the instruction at PC: invalidating its first
+    // byte retires every block covering that entry, including an instruction
+    // whose operands cross into another physical page. Later entries each
+    // perform their own invalidation, so writes through aliases stay visible.
+    // Direct runs and multi-instruction maintenance can visit other cached
+    // entries and still need a full flush. Avoid wrapping the exclusive end.
+    const auto CacheStatus =
+        Count == 1 && PC != std::numeric_limits<uint64_t>::max()
+            ? uc_ctl_remove_cache(Engine, PC, PC + 1)
+            : uc_ctl_flush_tb(Engine);
+    if (auto E = check(CacheStatus))
       return E;
     if (interrupted()) {
       Cancelled = true;

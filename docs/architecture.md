@@ -5018,6 +5018,15 @@ subset. CPU transport availability does not imply arbitrary OS compatibility.
 
 Use `executionCapabilities(Contract, ISA, Backend)` to query the selected profile. `NativeLegacyX64` describes native x64 driver execution. `NeverDNativeDriverTests` validates the original corpus and can run with Unicorn disabled.
 
+`UnicornStepper` invalidates translated blocks at each stopped entry because
+host backing writes can bypass the engine's store hooks. A one-instruction
+entry removes blocks covering its first byte through the current mapping;
+this also retires a cross-page instruction whose operand bytes changed. Each
+later entry performs the same check, including executable aliases. Direct
+runs and multi-instruction maintenance retain full invalidation, as does an
+entry whose exclusive invalidation end would wrap. This transport policy does
+not change instruction admission, memory transactions or stop/deadline checks.
+
 Checked ARM64 has one complete state boundary. `Registers.def` defines 39 scalar fields and 32 128-bit vectors; `captureAArch64State` stages every read, applies declared widths and NZCV normalization, then publishes once. Unicorn, KVM, WHP and HVF transfer the same inventory, including TPIDR_EL0, TPIDRRO_EL0, TPIDR_EL1, FPCR and FPSR. Native adapters enable FP/SIMD through CPACR_EL1. Any scalar/vector read failure or cancelled entry preserves all caller state.
 
 ARM64 KVM/WHP/HVF startup executes the private `AArch64MachineProbe.def` program: NOP, FP32 addition rounded toward positive infinity, a two-lane SIMD addition, and A/B return-address signing/authentication with the keys disabled. Each step compares all 39 scalar fields and 32 vectors, including TLS, NZCV, cleared upper destination bits and retained/cumulative FPCR/FPSR state. The probe uses supervisor monitor storage and one overall deadline. The probes establish bounded initialization only. Linux ARM64 KVM and Windows ARM64 WHP workload validation remains pending; native macOS results are recorded in the [HVF guide](macos-hvf.md). The program also executes all four BTI forms on unguarded pages.

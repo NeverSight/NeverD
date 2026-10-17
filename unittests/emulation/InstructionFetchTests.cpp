@@ -265,6 +265,69 @@ TEST_P(InstructionFetch, InvalidTailNeverExecutesThePreviousInstruction) {
   EXPECT_EQ(Seen, 0u);
 }
 
+TEST_P(InstructionFetch, HostOperandWriteRefreshesAnInstructionAtThePageTail) {
+  // The x64 immediate crosses into a separately backed page. Changing only
+  // its tail must retire the whole cached instruction at its original start.
+  llvm::cantFail(CPU->mapAlias(Code + PageSize, Data, PageSize,
+                               Read | Write | Execute | UserAccessible));
+  const auto Program = bytes(FirstX64, FirstARM);
+  const uint64_t Start = Code + PageSize - CrossingPrefix;
+  llvm::cantFail(CPU->write(Start, Program));
+  const uint64_t End = Start + Program.size() - nopSize();
+  auto Exit = run(Start, End);
+  ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+  EXPECT_EQ(value(Result), FirstValue);
+
+  // Both changes leave the first byte of the instruction untouched. The ARM
+  // instruction is aligned and stays wholly on the first page.
+  const uint8_t Replacement = X64 ? 1 : 0x21;
+  const uint64_t Patch = X64 ? Data : Alias + PageSize - CrossingPrefix + 1;
+  llvm::cantFail(CPU->write(Patch, {Replacement}));
+  Exit = run(Start, End);
+  ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+  EXPECT_EQ(value(Result), X64 ? X64ChangedOperand : ARMChangedOperand);
+  EXPECT_EQ(value(PCRegister), End);
+}
+
+TEST_P(InstructionFetch, HostWriteAfterStopRefreshesAnUnexecutedInstruction) {
+  auto Program = bytes(FirstX64, FirstARM);
+  Program.resize(Program.size() - nopSize());
+  const uint64_t Next = Code + Program.size();
+  const auto Second = bytes(SecondX64, SecondARM);
+  Program.insert(Program.end(), Second.begin(), Second.end());
+  llvm::cantFail(CPU->write(Code, Program));
+  auto Exit = run(Code, Next);
+  ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+  EXPECT_EQ(value(Result), FirstValue);
+  // The preceding translation may have decoded this address, but it has not
+  // executed. A stopped host write can change its opcode and length as well.
+  const auto Replacement = bytes(FirstX64, FirstARM);
+  llvm::cantFail(CPU->write(Alias + Next - Code, Replacement));
+  llvm::cantFail(CPU->writeRegister(Result, {0, 0}));
+  Exit = run(Next, Next + Replacement.size() - nopSize());
+  ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+  EXPECT_EQ(value(Result), FirstValue);
+}
+
+TEST_P(InstructionFetch, RepeatedStepsRetainExactLoopAndStopState) {
+  const auto Program = bytes(LoopX64, LoopARM);
+  llvm::cantFail(CPU->write(Code, Program));
+  llvm::cantFail(CPU->writeRegister(Result, {0, 0}));
+  unsigned Seen = 0;
+  BackendHooks Hooks;
+  Hooks.Instruction = [&](uint64_t PC, uint32_t) {
+    if (++Seen == 2 * LoopIterations + 1) {
+      EXPECT_EQ(PC, Code);
+      CPU->stop();
+    }
+  };
+  const auto Exit = run(Code, Code + Program.size(), std::move(Hooks));
+  ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+  EXPECT_EQ(value(Result), LoopIterations);
+  EXPECT_EQ(value(PCRegister), Code);
+  EXPECT_EQ(Seen, 2 * LoopIterations + 1);
+}
+
 TEST_P(InstructionFetch, ReentrantRunCannotOverwriteTheOuterInstruction) {
   const auto Nested = bytes(SecondX64, SecondARM);
   llvm::cantFail(CPU->write(Data, Nested));
