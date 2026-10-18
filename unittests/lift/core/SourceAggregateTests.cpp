@@ -116,6 +116,33 @@ TEST(SourceAggregate, RecordTagsKeepWordAndPointeeTypeIdentity) {
   }
 }
 
+TEST(SourceAggregate, SourceNamesAreSpelledAsC) {
+  // A debug record's C++ name is the identifier its unit declares it under,
+  // which the C++ view names back; a record that shares a C library
+  // function's name has no typedef beside it, so C spells its tag.
+  auto Named = [](llvm::StringRef Name) {
+    auto Type = std::make_shared<NdType>();
+    Type->Kind = NdTypeKind::Struct;
+    Type->SourceName = Name.str();
+    return NdType::makePtr(Type);
+  };
+  EXPECT_EQ(typeToC(Named("std::__ndk1::__sp_mut")), "__sp_mut*");
+  EXPECT_EQ(typeToC(Named("(anonymous namespace)::Node")), "Node*");
+  EXPECT_EQ(typeToC(Named("__cxxabiv1::__cxa_eh_globals")),
+            "__cxa_eh_globals*");
+  EXPECT_EQ(typeToC(Named("stat")), "struct stat*");
+  EXPECT_EQ(typeToC(Named("sigaction")), "struct sigaction*");
+  EXPECT_EQ(typeToC(Named("z_stream_s")), "z_stream_s*");
+  auto Size = NdType::makeInt(4, false);
+  Size->SourceName = "std::size_t";
+  EXPECT_EQ(typeToC(Size), "size_t");
+  Size->SourceName = "unsigned int";
+  EXPECT_EQ(typeToC(Size), "unsigned int");
+  auto Vector = NdType::makeInt(16, false);
+  Vector->SourceName = "uint8_t __attribute__((vector_size(16)))";
+  EXPECT_EQ(typeToC(Vector), Vector->SourceName);
+}
+
 TEST(SourceAggregate, FixedCEncodingRejectsUnknownCallbackPrototypes) {
   for (const char *Encoding :
        {"^?0", "^r?0", "v8^?0", "v8r^?0", "v8^r?0", "v8^^?0", "{Callback=^?}0",

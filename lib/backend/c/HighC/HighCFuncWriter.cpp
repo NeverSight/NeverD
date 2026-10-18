@@ -4456,7 +4456,11 @@ void HighCWriter::collectCallResultNames(const HighFunc &Func) {
     if (ReturnType)
       CallResultTypes[Name] = ReturnType;
     std::string Stem = callResultStem(callIdentifier(*S.Val));
-    if (Stem.empty() || isReservedParamDisplayName(Stem))
+    // A local of a file-scope name would hide it from the code: `msg` for
+    // td_ta_event_getmsg's result where it calls msg(), or `addrinfo` for
+    // getaddrinfo's where it casts to the record's typedef.
+    if (Stem.empty() || isReservedParamDisplayName(Stem) ||
+        namesFileScope(Stem))
       return;
     if (Taken.count(Stem)) {
       auto Mentions = [&](const HighExpr *E, const std::string &Want) {

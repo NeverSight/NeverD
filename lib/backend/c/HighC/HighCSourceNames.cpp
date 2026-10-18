@@ -156,7 +156,9 @@ void HighCWriter::writeSourceRecordDeclarations(
         const bool Ordinary =
             CallTargets.count(Name) || AddressTakenFunctions.count(Name) ||
             Defined.count(Name) || GlobalIdentifierAllocator.holds(Name);
-        if (!Ordinary && Declared.insert(Name).second) {
+        if (Ordinary)
+          TagRecords.emplace(Name, Keyword == llvm::StringRef("union"));
+        else if (Declared.insert(Name).second) {
           OS << "typedef " << Keyword << " " << Name << " " << Name << ";\n";
           RecordTypedefs.insert(Name);
         }
@@ -181,8 +183,18 @@ void HighCWriter::writeSourceRecordDeclarations(
     if (!CallTargets.count(Name) || isOwnFunctionName(Name, Funcs) ||
         calleeHeaders(Name).empty())
       Signature(Function);
+  // And those its objects point to.
+  for (const auto &[Address, Object] : ImageObjects)
+    Visit(Object.Type);
   if (!Declared.empty())
     OS << "\n";
+}
+
+const char *HighCWriter::recordTagKeyword(llvm::StringRef Name) const {
+  const auto Tag = TagRecords.find(Name.str());
+  if (Tag == TagRecords.end())
+    return nullptr;
+  return Tag->second ? "union" : "struct";
 }
 
 bool HighCWriter::spellsRecordPointer(const TypeRef &Type) const {

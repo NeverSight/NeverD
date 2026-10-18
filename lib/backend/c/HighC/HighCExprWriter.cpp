@@ -259,6 +259,17 @@ std::string castOperand(const std::string &Text) {
   }
   return Text;
 }
+
+/// Whether \p Text reads a member through a pointer or of a record, and
+/// nothing else: `state->prev`, `s.hdr.len`.
+bool isMemberAccessText(llvm::StringRef Text) {
+  if (Text.empty() || !(llvm::isAlpha(Text.front()) || Text.front() == '_') ||
+      (!Text.contains("->") && !Text.contains('.')))
+    return false;
+  return llvm::all_of(Text, [](char C) {
+    return llvm::isAlnum(C) || C == '_' || C == '-' || C == '>' || C == '.';
+  });
+}
 } // namespace
 
 std::string HighCWriter::constStr(uint64_t Val, TypeRef Type) {
@@ -5190,6 +5201,22 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec,
   UntypedArithmeticTexts.erase(&E);
   UnsignedCarrierTexts.erase(&E);
   std::string Text = exprStrImpl(E, ParentPrec, Destination);
+  // C has no bitwise, shift, multiplicative or remainder operator on a
+  // pointer: a local the text declares one, or a pointer member, is the
+  // address it holds as an integer there.
+  const HighExpr *Shown =
+      IntegerViewOperands.count(&E) ? forwardedExpr(&E) : nullptr;
+  if (Shown && (isBarePointerName(*Shown, Text) ||
+                (Shown->Kind == ExprKind::Load &&
+                 typedPointerMemberLoad(*Shown) && isMemberAccessText(Text)))) {
+    Text = "(uintptr_t)" + castOperand(Text);
+    if (getTargetRegInfo(Opts.TheArch).PointerSize == sizeof(uint64_t))
+      PrintedIntegerTypes[&E] = {sizeof(uint64_t), false};
+    return SourceRecorder && CurrentFunc
+               ? SourceRecorder->expression(CurrentFunc->Entry, E,
+                                            std::move(Text))
+               : Text;
+  }
   // A local's name has its declared type.
   std::string Storage;
   if (const llvm::StringRef Name = plainText(Text, Storage);
@@ -6465,6 +6492,13 @@ bool HighCWriter::isEmittedParamName(llvm::StringRef Name) const {
       }))
     return true;
   return false;
+}
+
+bool HighCWriter::namesFileScope(llvm::StringRef Name) const {
+  const std::string Key = Name.str();
+  return GlobalIdentifierAllocator.holds(Name) || UnitCallTargets.count(Key) ||
+         ExternFuncs.count(Key) || DefinedFuncs.count(Key) ||
+         RecordTypedefs.count(Key);
 }
 
 bool HighCWriter::isReservedParamDisplayName(llvm::StringRef Name) const {

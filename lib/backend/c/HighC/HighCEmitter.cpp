@@ -1705,9 +1705,12 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   bool Typedefs = false;
   for (const auto &[Tag, Union] : RecordDefinitions.Tags) {
     const std::string Name = cNamedTypeSpelling(Tag);
-    if (Name.empty() || RecordTypedefs.count(Name) ||
-        GlobalIdentifierAllocator.holds(Name) || CallTargets.count(Name))
+    if (Name.empty() || RecordTypedefs.count(Name))
       continue;
+    if (GlobalIdentifierAllocator.holds(Name) || CallTargets.count(Name)) {
+      TagRecords.emplace(Name, Union);
+      continue;
+    }
     OS << "typedef " << (Union ? "union " : "struct ") << Name << " " << Name
        << ";\n";
     RecordTypedefs.insert(Name);
@@ -1772,6 +1775,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   // A function whose address the code takes is declared as a callee is.
   CallTargets.insert(AddressTakenFunctions.begin(),
                      AddressTakenFunctions.end());
+  UnitCallTargets = CallTargets;
 
   for (const auto &[Name, Identifier] : SourceRuntimeDataIdentifiers) {
     if (ConflictingSourceRuntimeDataIdentities.count(Name))
@@ -1963,10 +1967,12 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       return;
     const std::string Record =
         cNamedTypeSpelling(msvcSyntheticRecord(Identifier, *Msvc));
-    if (Record.empty() || ExternFuncs.count(Record) ||
-        isOwnFunctionName(Record, Funcs) ||
-        !DeclaredSyntheticRecords.insert(Record).second)
+    if (Record.empty() || !DeclaredSyntheticRecords.insert(Record).second)
       return;
+    if (ExternFuncs.count(Record) || isOwnFunctionName(Record, Funcs)) {
+      TagRecords.emplace(Record, false);
+      return;
+    }
     OS << "typedef struct " << Record << " " << Record << ";\n";
     RecordTypedefs.insert(Record);
   };
@@ -3554,6 +3560,12 @@ void HighCWriter::writeX64WindowsSyscallHelper() {
 }
 
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
+  // The unit spells the records it declares no typedef of, as a function or
+  // an object has the name, by their tags.
+  const auto TagKeyword = [this](llvm::StringRef Name) {
+    return recordTagKeyword(Name);
+  };
+  CRecordTagSpelling Tags(TagKeyword);
   prepareRecordDefinitions(Funcs);
   prepareFunctionIdentifiers(Funcs);
   collectImageObjects(Funcs);

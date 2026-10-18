@@ -1002,8 +1002,17 @@ template arguments and explicit ABI arguments remain visible. DWARF record
 identities supply type spellings, not guessed layouts or implicit member-call
 conventions. Overloads that C numbers apart (`f` and `f_2`) read by their one
 C++ name, each linking its own symbol; two functions of one symbol, or a
-function and an object of one name, keep their C identifiers. The GUI offers a
-separate C choice for non-C images and omits it when only C is offered.
+function and an object of one name, keep their C identifiers. C declares a
+record by the last component of its C++ name (`std::__ndk1::__sp_mut` is
+`__sp_mut`), which the C++ view names back, and spells one whose name a
+function of the unit or of the C library has by its tag (`struct stat`,
+`struct stat64`): no typedef can declare the name beside the function. The C
+the views read is C a compiler accepts. A local takes no name the unit gives
+a function, an object or a typedef at file scope (`td_ta_event_getmsg`'s
+result is no `msg` where the code calls `msg()`), and a bitwise, shift or
+multiplicative operator takes a pointer as its address, an integer
+(`(uintptr_t)p & ~0xFF`). The GUI offers a separate C choice for non-C images
+and omits it when only C is offered.
 
 The reader reads the definitions a unit holds of the program's local types:
 unions, anonymous structures and unions, bit-fields, enumerations,

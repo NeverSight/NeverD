@@ -15,6 +15,7 @@
 #include "neverd/ir/NdTypes.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
@@ -36,6 +37,22 @@ class DebugContext;
 /// \p Ty as C.  Throws std::invalid_argument for a type C cannot spell, such
 /// as a record with neither a source name nor a supported layout.
 std::string typeToC(const TypeRef &Ty);
+
+/// While one lives, typeToC spells a named record by its tag where
+/// \p Keyword gives the tag's keyword for the record's name (`struct stat`):
+/// a C emitter holds one for the unit it writes, whose functions or objects
+/// may have the names of records, which then have no typedef beside them.
+class CRecordTagSpelling {
+public:
+  explicit CRecordTagSpelling(
+      llvm::function_ref<const char *(llvm::StringRef)> Keyword);
+  ~CRecordTagSpelling();
+  CRecordTagSpelling(const CRecordTagSpelling &) = delete;
+  CRecordTagSpelling &operator=(const CRecordTagSpelling &) = delete;
+
+private:
+  llvm::function_ref<const char *(llvm::StringRef)> Outer;
+};
 
 /// Whether typeToC spells \p Ty, for a caller that has another type to use
 /// when it does not, such as the machine type of a debug parameter.

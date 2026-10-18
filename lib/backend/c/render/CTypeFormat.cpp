@@ -11,9 +11,12 @@
 
 #include "neverd/backend/c/render/CTypeFormat.h"
 
+#include "../CIdentifier.h"
+
 #include "neverd/Limits.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -651,6 +654,33 @@ std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator) {
   return declarationToC(Ty->RetType, Function + ")");
 }
 
+namespace {
+
+/// The keywords of the records the unit being written spells by their tags
+/// (CRecordTagSpelling).
+thread_local llvm::function_ref<const char *(llvm::StringRef)> RecordTags;
+
+/// The C spelling of source name \p Name: a scoped or template C++ name is
+/// the identifier the unit declares its record or typedef under, as
+/// cNamedTypeSpelling projects it (`std::__ndk1::__sp_mut` is `__sp_mut`,
+/// `(anonymous namespace)::Node` is `Node`), which the C++ view names back.
+/// Any other name is C's own spelling (`size_t`, `unsigned int`,
+/// `uint8_t __attribute__((vector_size(16)))`).
+std::string sourceNameToC(llvm::StringRef Name) {
+  return Name.contains("::") || Name.contains('<') ? cNamedTypeSpelling(Name)
+                                                   : Name.str();
+}
+
+} // namespace
+
+CRecordTagSpelling::CRecordTagSpelling(
+    llvm::function_ref<const char *(llvm::StringRef)> Keyword)
+    : Outer(RecordTags) {
+  RecordTags = Keyword;
+}
+
+CRecordTagSpelling::~CRecordTagSpelling() { RecordTags = Outer; }
+
 std::string typeToC(const TypeRef &Ty) {
   if (!Ty)
     return "uint32_t";
@@ -661,7 +691,7 @@ std::string typeToC(const TypeRef &Ty) {
     return "void";
   case NdTypeKind::Int:
     if (!Ty->SourceName.empty())
-      return Ty->SourceName;
+      return sourceNameToC(Ty->SourceName);
     if (Ty->IsSigned) {
       switch (Ty->Size) {
       case 1:
@@ -695,7 +725,7 @@ std::string typeToC(const TypeRef &Ty) {
     }
   case NdTypeKind::Float:
     if (!Ty->SourceName.empty())
-      return Ty->SourceName;
+      return sourceNameToC(Ty->SourceName);
 #define NEVERD_C_FLOAT_TYPE(Bytes, Spelling, FusedMultiplyAdd, ComputesWider)  \
   if (Ty->Size == Bytes)                                                       \
     return Spelling;
@@ -706,8 +736,20 @@ std::string typeToC(const TypeRef &Ty) {
       return "void*";
     return typeToC(Ty->Pointee) + "*";
   case NdTypeKind::Struct: {
-    if (!Ty->SourceName.empty())
-      return Ty->SourceName;
+    if (!Ty->SourceName.empty()) {
+      const std::string Name = sourceNameToC(Ty->SourceName);
+      if (Name.find(' ') != std::string::npos)
+        return Name;
+      // A record a function shares the name of has no typedef beside the
+      // function, a C library one (`struct stat` and `stat()`) or one of the
+      // unit's (CRecordTagSpelling): C spells its tag.
+      const char *Keyword = RecordTags ? RecordTags(Name) : nullptr;
+      if (!Keyword && libc::isKnownFunction(Name))
+        Keyword = "struct";
+      if (Keyword)
+        return std::string(Ty->IsEnum ? "enum" : Keyword) + " " + Name;
+      return Name;
+    }
     if (sourceAggregateMembers(Ty).empty())
       throw std::invalid_argument("C record has no supported source layout");
     std::function<std::string(const TypeRef &)> Code = [&](const TypeRef &T) {

@@ -46375,3 +46375,90 @@ TEST(HighCPointerAddresses, LinkRegisterHoldsAValueOnceSaved) {
 int main(void) { return triple(14) != 42 || triple(-5) != -15; }
 )");
 }
+
+TEST(HighCPointerAddresses, IntegerOperatorsTakePointerLocalsAsIntegers) {
+  // x86's setcc writes the low byte of a register that holds a pointer:
+  // `(p & ~0xFF) | flag`, which C computes on the address as an integer.
+  HighFunc Func;
+  Func.Name = "low_flag";
+  Func.Entry = 0x140001000;
+  Func.ReturnType = NdType::makeInt(8);
+  const TypeRef Pointer = NdType::makePtr(NdType::makeInt(4));
+  MedVar Node = temporary(7);
+  auto Made = HighExpr::makeCall("make_node", 0x140002000, {});
+  Made->Type = Pointer;
+  auto Masked =
+      HighExpr::makeBinop(NdOp::INT_AND, HighExpr::makeVar(Node, Pointer),
+                          HighExpr::makeConst(0xFFFFFFFFFFFFFF00ULL, 8));
+  Masked->Type = NdType::makeInt(8);
+  auto Flagged =
+      HighExpr::makeBinop(NdOp::INT_OR, Masked, HighExpr::makeConst(1, 8));
+  Flagged->Type = NdType::makeInt(8);
+  HighStmt Assign = assignTo(Node, Made);
+  Assign.Dst->Type = Pointer;
+  Func.Body = {Assign, callStmt("keep_node", 0x140002100,
+                                {HighExpr::makeVar(Node, Pointer)})};
+  returnValue(Func, Flagged);
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("(uintptr_t)t7 & "), std::string::npos) << Source;
+  expectCSyntax(Source);
+}
+
+TEST(HighCPointerAddresses, CallResultsTakeNoFileScopeName) {
+  // td_ta_event_getmsg's result would read as `msg`, which hides the msg()
+  // the function calls; getaddrinfo's as `addrinfo`, which hides the
+  // record's typedef a cast names.
+  HighFunc Func;
+  Func.Name = "handle_messages";
+  Func.Entry = 0x140001000;
+  Func.ReturnType = NdType::makeInt(4);
+  MedVar Message = temporary(3, 0, 4);
+  auto Get = HighExpr::makeCall("td_ta_event_getmsg", 0x140002000, {});
+  Get->Type = NdType::makeInt(4);
+  MedVar Shown = temporary(4, 0, 4);
+  auto Show = HighExpr::makeCall("msg", 0x140002100,
+                                 {HighExpr::makeVar(Message, Get->Type)});
+  Show->Type = NdType::makeInt(4);
+  auto Sum =
+      HighExpr::makeBinop(NdOp::INT_ADD, HighExpr::makeVar(Message, Get->Type),
+                          HighExpr::makeVar(Shown, Show->Type));
+  Sum->Type = NdType::makeInt(4);
+  Func.Body = {assignTo(Message, Get), assignTo(Shown, Show)};
+  returnValue(Func, Sum);
+  const std::string Source = emitFunctions({Func});
+  EXPECT_EQ(Source.find("msg = td_ta_event_getmsg("), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("msg(t3)"), std::string::npos) << Source;
+  expectCSyntax(Source);
+}
+
+TEST(HighCPointerAddresses, RecordsNamedLikeFunctionsAreSpelledByTheirTags) {
+  // glibc's stat64() and statx() take records of their own names, which no
+  // typedef can declare beside the functions: C spells their tags, in the
+  // signatures and in the casts alike.
+  HighFunc Func;
+  Func.Name = "probe_stat";
+  Func.Entry = 0x140001000;
+  Func.ReturnType = NdType::makeInt(4);
+  auto Record = std::make_shared<NdType>();
+  Record->Kind = NdTypeKind::Struct;
+  Record->SourceName = "stat64";
+  Func.Params = {{"buffer", NdType::makePtr(Record)}};
+  MedVar Buffer;
+  Buffer.Kind = MedVar::Param;
+  Buffer.Id = 0;
+  Buffer.Size = 8;
+  Buffer.TheArch = Arch::X64;
+  auto Call =
+      HighExpr::makeCall("stat64", 0x140002000,
+                         {HighExpr::makeConst(0, 8),
+                          HighExpr::makeVar(Buffer, Func.Params[0].Type)});
+  Call->Type = NdType::makeInt(4);
+  returnValue(Func, Call);
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("probe_stat(struct stat64* buffer)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("typedef struct stat64 stat64;"), std::string::npos)
+      << Source;
+  expectCSyntax(Source);
+}
