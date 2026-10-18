@@ -543,7 +543,9 @@ names and of records that share a C library function's name;
 `CallResultsTakeNoFileScopeName` and
 `IntegerOperatorsTakePointerLocalsAsIntegers` check that HighC writes such a
 record, a call's result and a pointer operand as C a compiler accepts.
-`ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
+`X86_32_DebugParams.ParametersAfterAPointerTakeTheNextSlot` decompiles
+`test_debug_params32.o`, built with `-g`, whose parameters follow a pointer of
+four bytes. `ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
 local types definitions back in C as written, whole in C++, and in Rust and
 Go as far as their structures lay them out, saying why for the rest.
 `TheProgramsTypesSpellTheirRecordsAndTheirMembers` gives Rust and Go the

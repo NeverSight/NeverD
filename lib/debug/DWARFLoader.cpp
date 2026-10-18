@@ -1174,7 +1174,18 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
         Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
     auto PT = PointeeDie.isValid() ? convertDwarfType(PointeeDie, Depth + 1)
                                    : NdType::makeVoid();
-    return NdType::makePtr(PT);
+    // A pointer is as wide as its unit's addresses unless it says otherwise:
+    // four bytes on i386 and 32-bit ARM, where a parameter after it is the
+    // next slot's.
+    TypeRef Pointer = NdType::makePtr(PT);
+    const auto Bytes = Die.find(llvm::dwarf::DW_AT_byte_size);
+    const uint64_t Size =
+        Bytes ? Bytes->getAsUnsignedConstant().value_or(0)
+              : (Die.getDwarfUnit() ? Die.getDwarfUnit()->getAddressByteSize()
+                                    : 0);
+    if (Size == 4 || Size == 8)
+      Pointer->Size = static_cast<uint16_t>(Size);
+    return Pointer;
   }
   case llvm::dwarf::DW_TAG_typedef:
   case llvm::dwarf::DW_TAG_const_type:
